@@ -173,3 +173,156 @@ func TestHandlePlaytimeLimitsUpdate_ReEnableWithNoActiveMedia(t *testing.T) {
 	assert.Equal(t, "reset", status.State, "session should be reset when no game is running")
 	assert.False(t, status.SessionActive, "session should not be marked as active")
 }
+
+// TestHandleSettings_ReaderConnections tests that HandleSettings returns
+// reader connection configuration in the response.
+func TestHandleSettings_ReaderConnections(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{
+		Readers: config.Readers{
+			Connect: []config.ReadersConnect{
+				{Driver: "pn532", Path: "/dev/ttyUSB0"},
+				{Driver: "libnfc", Path: ""},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	}
+
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok, "result should be SettingsResponse")
+
+	assert.Len(t, resp.ReadersConnect, 2)
+	assert.Equal(t, "pn532", resp.ReadersConnect[0].Driver)
+	assert.Equal(t, "/dev/ttyUSB0", resp.ReadersConnect[0].Path)
+	assert.Equal(t, "libnfc", resp.ReadersConnect[1].Driver)
+	assert.Empty(t, resp.ReadersConnect[1].Path)
+}
+
+// TestHandleSettings_EmptyReaderConnections tests that HandleSettings returns
+// an empty slice when no reader connections are configured.
+func TestHandleSettings_EmptyReaderConnections(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	}
+
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok, "result should be SettingsResponse")
+
+	assert.Empty(t, resp.ReadersConnect)
+}
+
+// TestHandleSettingsUpdate_ReaderConnections tests that HandleSettingsUpdate
+// properly updates reader connection configuration.
+func TestHandleSettingsUpdate_ReaderConnections(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	params := models.UpdateSettingsParams{
+		ReadersConnect: &[]models.ReaderConnection{
+			{Driver: "pn532", Path: "/dev/ttyUSB0"},
+			{Driver: "libnfc", Path: ""},
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	// Verify config was updated
+	readers := cfg.Readers().Connect
+	assert.Len(t, readers, 2)
+	assert.Equal(t, "pn532", readers[0].Driver)
+	assert.Equal(t, "/dev/ttyUSB0", readers[0].Path)
+	assert.Equal(t, "libnfc", readers[1].Driver)
+	assert.Empty(t, readers[1].Path)
+}
+
+// TestHandleSettingsUpdate_ReaderConnectionsWithIDSource tests that IDSource
+// field is preserved when updating reader connections.
+func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	params := models.UpdateSettingsParams{
+		ReadersConnect: &[]models.ReaderConnection{
+			{Driver: "pn532", Path: "/dev/ttyUSB0", IDSource: "uid"},
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	// Verify config was updated with IDSource
+	readers := cfg.Readers().Connect
+	assert.Len(t, readers, 1)
+	assert.Equal(t, "pn532", readers[0].Driver)
+	assert.Equal(t, "/dev/ttyUSB0", readers[0].Path)
+	assert.Equal(t, "uid", readers[0].IDSource)
+}

@@ -82,14 +82,21 @@ type ReaderWriteCancelParams struct {
 	ReaderID *string `json:"readerId,omitempty"`
 }
 
+type ReaderConnection struct {
+	Driver   string `json:"driver" validate:"required,min=1"`
+	Path     string `json:"path"`
+	IDSource string `json:"idSource,omitempty"`
+}
+
 type UpdateSettingsParams struct {
-	RunZapScript            *bool     `json:"runZapScript"`
-	DebugLogging            *bool     `json:"debugLogging"`
-	AudioScanFeedback       *bool     `json:"audioScanFeedback"`
-	ReadersAutoDetect       *bool     `json:"readersAutoDetect"`
-	ReadersScanMode         *string   `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
-	ReadersScanExitDelay    *float32  `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
-	ReadersScanIgnoreSystem *[]string `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
+	RunZapScript            *bool               `json:"runZapScript"`
+	DebugLogging            *bool               `json:"debugLogging"`
+	AudioScanFeedback       *bool               `json:"audioScanFeedback"`
+	ReadersAutoDetect       *bool               `json:"readersAutoDetect"`
+	ReadersScanMode         *string             `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
+	ReadersScanExitDelay    *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
+	ReadersScanIgnoreSystem *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
+	ReadersConnect          *[]ReaderConnection `json:"readersConnect,omitempty"`
 }
 
 type UpdatePlaytimeLimitsParams struct {

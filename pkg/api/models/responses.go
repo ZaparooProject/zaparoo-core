@@ -53,13 +53,14 @@ type TagsResponse struct {
 }
 
 type SettingsResponse struct {
-	ReadersScanMode         string   `json:"readersScanMode"`
-	ReadersScanIgnoreSystem []string `json:"readersScanIgnoreSystems"`
-	ReadersScanExitDelay    float32  `json:"readersScanExitDelay"`
-	RunZapScript            bool     `json:"runZapScript"`
-	DebugLogging            bool     `json:"debugLogging"`
-	AudioScanFeedback       bool     `json:"audioScanFeedback"`
-	ReadersAutoDetect       bool     `json:"readersAutoDetect"`
+	ReadersScanMode         string             `json:"readersScanMode"`
+	ReadersScanIgnoreSystem []string           `json:"readersScanIgnoreSystems"`
+	ReadersConnect          []ReaderConnection `json:"readersConnect"`
+	ReadersScanExitDelay    float32            `json:"readersScanExitDelay"`
+	RunZapScript            bool               `json:"runZapScript"`
+	DebugLogging            bool               `json:"debugLogging"`
+	AudioScanFeedback       bool               `json:"audioScanFeedback"`
+	ReadersAutoDetect       bool               `json:"readersAutoDetect"`
 }
 
 type PlaytimeLimitsResponse struct {

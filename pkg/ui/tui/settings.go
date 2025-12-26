@@ -22,6 +22,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,13 +36,47 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// getSettings fetches current settings from the API.
+func getSettings(ctx context.Context, cfg *config.Instance) (*models.SettingsResponse, error) {
+	resp, err := client.LocalClient(ctx, cfg, models.MethodSettings, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get settings: %w", err)
+	}
+	var settings models.SettingsResponse
+	if err := json.Unmarshal([]byte(resp), &settings); err != nil {
+		return nil, fmt.Errorf("failed to parse settings: %w", err)
+	}
+	return &settings, nil
+}
+
+// updateSettings sends a settings update to the API.
+func updateSettings(ctx context.Context, cfg *config.Instance, params models.UpdateSettingsParams) error {
+	data, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("failed to marshal params: %w", err)
+	}
+	_, err = client.LocalClient(ctx, cfg, models.MethodSettingsUpdate, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to update settings: %w", err)
+	}
+	return nil
+}
+
 func BuildSettingsMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+	// Fetch current settings from API
+	settings, err := getSettings(context.Background(), cfg)
+	if err != nil {
+		log.Error().Err(err).Msg("error fetching settings")
+		settings = &models.SettingsResponse{}
+	}
+
+	debugLogging := settings.DebugLogging
+
 	debugLabel := func() string {
-		debugLogging := "Enable"
-		if cfg.DebugLogging() {
-			debugLogging = "Disable"
+		if debugLogging {
+			return "Disable"
 		}
-		return debugLogging
+		return "Enable"
 	}
 
 	mainMenu := tview.NewList().
@@ -56,15 +91,16 @@ func BuildSettingsMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.
 		})
 
 	mainMenu.AddItem("Debug", debugLabel()+" debug logging mode", '4', func() {
-		cfg.SetDebugLogging(!cfg.DebugLogging())
-		mainMenu.SetItemText(3, "Debug", debugLabel()+" debug logging mode")
-	})
-
-	mainMenu.AddItem("Save", "Save changes", 's', func() {
-		err := cfg.Save()
+		newValue := !debugLogging
+		err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+			DebugLogging: &newValue,
+		})
 		if err != nil {
-			log.Error().Err(err).Msg("error saving config")
+			log.Error().Err(err).Msg("error updating debug logging")
+			return
 		}
+		debugLogging = newValue
+		mainMenu.SetItemText(3, "Debug", debugLabel()+" debug logging mode")
 	})
 
 	mainMenu.AddItem("Go back", "Back to main menu", 'b', func() {
@@ -129,14 +165,32 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 }
 
 func BuildAudioMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
-	audioFeedback := " "
-	if cfg.AudioFeedback() {
-		audioFeedback = "X"
+	// Fetch current settings from API
+	settings, err := getSettings(context.Background(), cfg)
+	if err != nil {
+		log.Error().Err(err).Msg("error fetching settings")
+		settings = &models.SettingsResponse{}
+	}
+
+	audioFeedback := settings.AudioScanFeedback
+
+	checkMark := func() string {
+		if audioFeedback {
+			return "X"
+		}
+		return " "
 	}
 
 	audioMenu := tview.NewList().
-		AddItem("["+audioFeedback+"] Audio feedback", "Enable or disable the audio notification on scan", '1', func() {
-			cfg.SetAudioFeedback(!cfg.AudioFeedback())
+		AddItem("["+checkMark()+"] Audio feedback", "Enable or disable the audio notification on scan", '1', func() {
+			newValue := !audioFeedback
+			err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+				AudioScanFeedback: &newValue,
+			})
+			if err != nil {
+				log.Error().Err(err).Msg("error updating audio feedback")
+				return
+			}
 			BuildAudioMenu(cfg, pages, app)
 		}).
 		AddItem("Go back", "Back to main menu", 'b', func() {
@@ -158,10 +212,15 @@ func BuildAudioMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applica
 }
 
 func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
-	autoDetect := cfg.AutoDetect()
+	// Fetch current settings from API
+	settings, err := getSettings(context.Background(), cfg)
+	if err != nil {
+		log.Error().Err(err).Msg("error fetching settings")
+		settings = &models.SettingsResponse{}
+	}
 
-	connectionStrings := make([]string, 0, len(cfg.Readers().Connect))
-	for _, item := range cfg.Readers().Connect {
+	connectionStrings := make([]string, 0, len(settings.ReadersConnect))
+	for _, item := range settings.ReadersConnect {
 		connectionStrings = append(connectionStrings, item.Driver+":"+item.Path)
 	}
 
@@ -172,21 +231,35 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Applica
 		SetMaxLength(200)
 
 	readersMenu := tview.NewForm()
-	readersMenu.AddCheckbox("Auto-detect readers", autoDetect, func(checked bool) {
-		cfg.SetAutoDetect(checked)
+	readersMenu.AddCheckbox("Auto-detect readers", settings.ReadersAutoDetect, func(checked bool) {
+		err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+			ReadersAutoDetect: &checked,
+		})
+		if err != nil {
+			log.Error().Err(err).Msg("error updating auto-detect")
+		}
 	}).
 		AddFormItem(textArea).
 		AddButton("Go back", func() {
-			var newConnect []config.ReadersConnect
+			// Parse and save reader connections via API
+			var newConnect []models.ReaderConnection
 			connStrings := strings.Split(textArea.GetText(), "\n")
 			for _, item := range connStrings {
 				couple := strings.SplitN(item, ":", 2)
 				if len(couple) == 2 {
-					newConnect = append(newConnect, config.ReadersConnect{Driver: couple[0], Path: couple[1]})
+					newConnect = append(newConnect, models.ReaderConnection{
+						Driver: couple[0],
+						Path:   couple[1],
+					})
 				}
 			}
 
-			cfg.SetReaderConnections(newConnect)
+			err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+				ReadersConnect: &newConnect,
+			})
+			if err != nil {
+				log.Error().Err(err).Msg("error updating reader connections")
+			}
 			pages.SwitchToPage(PageSettingsMain)
 		})
 
@@ -204,8 +277,15 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Applica
 }
 
 func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
+	// Fetch current settings from API
+	settings, err := getSettings(context.Background(), cfg)
+	if err != nil {
+		log.Error().Err(err).Msg("error fetching settings")
+		settings = &models.SettingsResponse{}
+	}
+
 	scanMode := 0
-	if cfg.ReadersScan().Mode == config.ScanModeHold {
+	if settings.ReadersScanMode == config.ScanModeHold {
 		scanMode = 1
 	}
 
@@ -218,33 +298,50 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 		allSystems = append(allSystems, item.ID)
 	}
 
-	exitDelay := cfg.ReadersScan().ExitDelay
+	// Local copy of ignored systems for UI updates
+	ignoredSystems := make([]string, 0, len(settings.ReadersScanIgnoreSystem))
+	ignoredSystems = append(ignoredSystems, settings.ReadersScanIgnoreSystem...)
 
 	scanMenu := tview.NewForm()
 	scanMenu.AddDropDown("Scan mode", scanModes, scanMode, func(option string, _ int) {
-		cfg.SetScanMode(strings.ToLower(option))
+		mode := strings.ToLower(option)
+		err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+			ReadersScanMode: &mode,
+		})
+		if err != nil {
+			log.Error().Err(err).Msg("error updating scan mode")
+		}
 	}).
-		AddInputField("Exit delay", strconv.FormatFloat(float64(exitDelay), 'f', 0, 32), 2,
+		AddInputField("Exit delay", strconv.FormatFloat(float64(settings.ReadersScanExitDelay), 'f', 0, 32), 2,
 			tview.InputFieldInteger, func(value string) {
 				delay, _ := strconv.ParseFloat(value, 32)
-				cfg.SetScanExitDelay(float32(delay))
+				delayFloat := float32(delay)
+				err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+					ReadersScanExitDelay: &delayFloat,
+				})
+				if err != nil {
+					log.Error().Err(err).Msg("error updating exit delay")
+				}
 			}).
 		AddDropDown("Ignore systems", allSystems, 0, func(option string, optionIndex int) {
-			currentSystems := cfg.ReadersScan().IgnoreSystem
 			if optionIndex > 0 {
-				if !slices.Contains(currentSystems, option) {
-					currentSystems = append(currentSystems, option)
-					cfg.SetScanIgnoreSystem(currentSystems)
+				if !slices.Contains(ignoredSystems, option) {
+					ignoredSystems = append(ignoredSystems, option)
 				} else {
-					index := slices.Index(currentSystems, option)
-					newSystems := slices.Delete(currentSystems, index, index+1)
-					cfg.SetScanIgnoreSystem(newSystems)
+					index := slices.Index(ignoredSystems, option)
+					ignoredSystems = slices.Delete(ignoredSystems, index, index+1)
+				}
+				err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+					ReadersScanIgnoreSystem: &ignoredSystems,
+				})
+				if err != nil {
+					log.Error().Err(err).Msg("error updating ignored systems")
 				}
 				BuildScanModeMenu(cfg, pages, app)
 				scanMenu.SetFocus(scanMenu.GetFormItemIndex("Ignore systems"))
 			}
 		}).
-		AddTextView("Ignored system list", strings.Join(cfg.ReadersScan().IgnoreSystem, ", "), 30, 2, false, false).
+		AddTextView("Ignored system list", strings.Join(ignoredSystems, ", "), 30, 2, false, false).
 		AddButton("Go back", func() {
 			pages.SwitchToPage(PageSettingsMain)
 		})

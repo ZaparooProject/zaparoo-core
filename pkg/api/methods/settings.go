@@ -35,6 +35,17 @@ import (
 func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received settings request")
 
+	// Build reader connections from config
+	connectCfg := env.Config.Readers().Connect
+	readersConnect := make([]models.ReaderConnection, 0, len(connectCfg))
+	for _, rc := range connectCfg {
+		readersConnect = append(readersConnect, models.ReaderConnection{
+			Driver:   rc.Driver,
+			Path:     rc.Path,
+			IDSource: rc.IDSource,
+		})
+	}
+
 	resp := models.SettingsResponse{
 		RunZapScript:            env.State.RunZapScriptEnabled(),
 		DebugLogging:            env.Config.DebugLogging(),
@@ -43,6 +54,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		ReadersScanMode:         env.Config.ReadersScan().Mode,
 		ReadersScanExitDelay:    env.Config.ReadersScan().ExitDelay,
 		ReadersScanIgnoreSystem: make([]string, 0),
+		ReadersConnect:          readersConnect,
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
@@ -125,6 +137,19 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.ReadersScanIgnoreSystem != nil {
 		log.Info().Strs("readsScanIgnoreSystem", *params.ReadersScanIgnoreSystem).Msg("update")
 		env.Config.SetScanIgnoreSystem(*params.ReadersScanIgnoreSystem)
+	}
+
+	if params.ReadersConnect != nil {
+		log.Info().Int("count", len(*params.ReadersConnect)).Msg("updating readers.connect")
+		connections := make([]config.ReadersConnect, 0, len(*params.ReadersConnect))
+		for _, rc := range *params.ReadersConnect {
+			connections = append(connections, config.ReadersConnect{
+				Driver:   rc.Driver,
+				Path:     rc.Path,
+				IDSource: rc.IDSource,
+			})
+		}
+		env.Config.SetReaderConnections(connections)
 	}
 
 	err := env.Config.Save()
