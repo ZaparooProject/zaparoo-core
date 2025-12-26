@@ -273,8 +273,9 @@ func RunCommand(
 
 	linkValue, err := checkZapLink(cfg, pl, db, cmd)
 	if err != nil {
-		log.Error().Err(err).Msgf("error checking link, continuing")
-	} else if linkValue != "" {
+		return platforms.CmdResult{}, fmt.Errorf("zap link error: %w", err)
+	}
+	if linkValue != "" {
 		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
 		reader := parser.NewParser(linkValue)
 		script, parseErr := reader.ParseScript()

@@ -119,8 +119,14 @@ func queryZapLinkSupport(u *url.URL, platform string) (int, error) {
 		}
 	}()
 
+	// 404 = definitive "not supported", return (0, nil) so it gets cached
+	if resp.StatusCode == http.StatusNotFound {
+		return 0, nil
+	}
+
+	// Other non-200 = transient failure, return error so it's NOT cached
 	if resp.StatusCode != http.StatusOK {
-		return 0, errors.New("invalid status code")
+		return 0, fmt.Errorf("server returned status %d", resp.StatusCode)
 	}
 
 	var wellKnown WellKnown
@@ -156,10 +162,8 @@ func isZapLink(link string, db *database.Database, platform string) bool {
 			return false
 		}
 		if err != nil {
-			log.Debug().Err(err).Msgf("error querying zap link support: %s", link)
-			if updateErr := db.UserDB.UpdateZapLinkHost(baseURL, result); updateErr != nil {
-				log.Error().Err(updateErr).Msgf("error updating zap link support: %s", link)
-			}
+			// Transient error - don't cache, just return false and retry next time
+			log.Debug().Err(err).Msgf("transient error querying zap link support: %s", link)
 			return false
 		}
 		err = db.UserDB.UpdateZapLinkHost(baseURL, result)
@@ -290,7 +294,7 @@ func checkZapLink(
 	cmd parser.Command,
 ) (string, error) {
 	if len(cmd.Args) == 0 {
-		return "", errors.New("no args")
+		return "", nil
 	}
 	value := cmd.Args[0]
 	platform := pl.ID()
