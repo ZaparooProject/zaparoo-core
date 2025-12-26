@@ -85,7 +85,9 @@ func TestServerStartupConcurrency(t *testing.T) {
 			// Test that server becomes available and responds correctly
 			// The server should properly synchronize startup internally
 			port := cfg.APIPort()
-			client := &http.Client{Timeout: 50 * time.Millisecond}
+			transport := &http.Transport{}
+			client := &http.Client{Timeout: 50 * time.Millisecond, Transport: transport}
+			defer transport.CloseIdleConnections()
 			url := fmt.Sprintf("http://localhost:%d/api/v0.1", port)
 
 			// Give server reasonable time to start (should be very quick due to internal sync)
@@ -151,10 +153,14 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	// Create connection attempt channel
 	connectionResult := make(chan error, 1)
 
+	// Create transport that we can close to cancel in-flight dials
+	transport := &http.Transport{}
+	defer transport.CloseIdleConnections()
+
 	// Immediately try to connect (no delay)
 	go func() {
 		port := cfg.APIPort()
-		client := &http.Client{Timeout: 10 * time.Millisecond}
+		client := &http.Client{Timeout: 10 * time.Millisecond, Transport: transport}
 		url := fmt.Sprintf("http://localhost:%d/api/v0.1", port)
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
 		if err != nil {
@@ -168,7 +174,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 		connectionResult <- err
 	}()
 
-	// Wait for connection result
+	// Wait for connection result - always wait for the goroutine to complete
 	select {
 	case err := <-connectionResult:
 		if err != nil && strings.Contains(err.Error(), "connection refused") {
@@ -178,6 +184,8 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		// Connection attempt timed out - this is fine
 		t.Log("Connection attempt timed out - server may not have started yet")
+		// Wait for the goroutine to finish to avoid leaking it
+		<-connectionResult
 	}
 }
 

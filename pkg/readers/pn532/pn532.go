@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/go-pn532/detection"
 	_ "github.com/ZaparooProject/go-pn532/detection/uart"
 	"github.com/ZaparooProject/go-pn532/polling"
+	"github.com/ZaparooProject/go-pn532/tagops"
 	"github.com/ZaparooProject/go-pn532/transport/i2c"
 	"github.com/ZaparooProject/go-pn532/transport/spi"
 	"github.com/ZaparooProject/go-pn532/transport/uart"
@@ -235,6 +236,7 @@ type Reader struct {
 	lastToken        *tokens.Token
 	cancel           context.CancelFunc
 	realDevice       *pn532.Device
+	tagOps           *tagops.TagOperations
 	transportFactory TransportFactory
 	deviceFactory    DeviceFactory
 	sessionFactory   SessionFactory
@@ -320,6 +322,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	// Store real device if it's a *pn532.Device (for tag operations)
 	if realDev, ok := r.device.(*pn532.Device); ok {
 		r.realDevice = realDev
+		r.tagOps = tagops.New(realDev)
 	}
 
 	// Initialize device

@@ -48,31 +48,35 @@ func (*Reader) convertTagType(tagType pn532.TagType) string {
 func (r *Reader) readNDEFData(detectedTag *pn532.DetectedTag) (uid string, data []byte) {
 	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting readNDEFData")
 
-	// Use realDevice for tag operations (mocks won't reach here in tests)
-	if r.realDevice == nil {
-		log.Debug().Str("uid", detectedTag.UID).Msg("real device not available, returning target data")
+	// Use tagOps for tag operations (mocks won't reach here in tests)
+	if r.tagOps == nil {
+		log.Debug().Str("uid", detectedTag.UID).Msg("tagOps not available, returning target data")
 		return "", detectedTag.TargetData
 	}
 
-	tagOps := tagops.New(r.realDevice)
-
-	// Detect tag first - use reader's context to ensure proper cancellation
+	// Use reader's context with timeout to ensure proper cancellation
 	ctx, cancel := context.WithTimeout(r.ctx, ndefReadTimeout)
 	defer cancel()
 
-	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting tagOps.DetectTag")
-	if err := tagOps.DetectTag(ctx); err != nil {
-		logTraceableError(err, "detect tag for NDEF")
+	// Initialize tagops from the already-detected tag.
+	// We use InitFromDetectedTag instead of DetectTag because the polling loop
+	// already detected the tag via InListPassiveTarget. Calling DetectTag would
+	// perform a redundant detection with InRelease(0) which can corrupt tag state.
+	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting tagOps.InitFromDetectedTag")
+	if err := r.tagOps.InitFromDetectedTag(ctx, detectedTag); err != nil {
+		logTraceableError(err, "init tag for NDEF")
 		log.Warn().Err(err).
 			Str("uid", detectedTag.UID).
 			Str("tagType", string(detectedTag.Type)).
-			Msg("failed to detect tag for NDEF reading")
+			Msg("failed to initialize tag for NDEF reading")
 		return "", detectedTag.TargetData
 	}
-	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: tagOps.DetectTag completed")
+	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: tagOps.InitFromDetectedTag completed")
+
+	r.logTagInfo(detectedTag)
 
 	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting tagOps.ReadNDEF")
-	ndefMessage, err := tagOps.ReadNDEF(ctx)
+	ndefMessage, err := r.tagOps.ReadNDEF(ctx)
 	log.Debug().Err(err).Str("uid", detectedTag.UID).Msg("NDEF: tagOps.ReadNDEF completed")
 	if err != nil {
 		logTraceableError(err, "read NDEF")
@@ -246,4 +250,60 @@ func convertGenericRecordToJSON(recordType string, payload []byte) string {
 		return ""
 	}
 	return string(jsonBytes)
+}
+
+// logTagInfo logs detailed tag information including manufacturer and type details.
+// This helps identify clone tags and provides useful debugging information.
+func (r *Reader) logTagInfo(detectedTag *pn532.DetectedTag) {
+	mfr := detectedTag.Manufacturer()
+	displayName := tagops.TagTypeDisplayName(detectedTag.Type)
+
+	if !detectedTag.IsGenuine() {
+		log.Warn().
+			Str("uid", detectedTag.UID).
+			Str("manufacturer", string(mfr)).
+			Msg("tag appears to be a clone (unknown manufacturer)")
+	} else {
+		log.Debug().
+			Str("uid", detectedTag.UID).
+			Str("manufacturer", string(mfr)).
+			Msg("tag manufacturer identified")
+	}
+
+	if r.tagOps == nil {
+		return
+	}
+
+	info, err := r.tagOps.GetTagInfo()
+	if err != nil {
+		log.Debug().Err(err).Str("uid", detectedTag.UID).Msg("failed to get detailed tag info")
+		return
+	}
+
+	switch info.Type {
+	case pn532.TagTypeNTAG:
+		log.Info().
+			Str("uid", detectedTag.UID).
+			Str("type", displayName).
+			Str("variant", info.NTAGType).
+			Int("totalPages", info.TotalPages).
+			Int("userMemory", info.UserMemory).
+			Str("manufacturer", string(mfr)).
+			Msg("NTAG tag details")
+	case pn532.TagTypeMIFARE:
+		log.Info().
+			Str("uid", detectedTag.UID).
+			Str("type", displayName).
+			Str("variant", info.MIFAREType).
+			Int("sectors", info.Sectors).
+			Int("totalMemory", info.TotalMemory).
+			Str("manufacturer", string(mfr)).
+			Msg("MIFARE tag details")
+	default:
+		log.Info().
+			Str("uid", detectedTag.UID).
+			Str("type", displayName).
+			Str("manufacturer", string(mfr)).
+			Msg("tag details")
+	}
 }

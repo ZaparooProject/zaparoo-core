@@ -174,6 +174,67 @@ func TestCreateTransport_InvalidType(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported transport type")
 }
 
+func TestDevice(t *testing.T) {
+	t.Parallel()
+
+	reader := &Reader{
+		deviceInfo: config.ReadersConnect{
+			Driver: "pn532uart",
+			Path:   "/dev/ttyUSB0",
+		},
+	}
+
+	result := reader.Device()
+
+	assert.Equal(t, "pn532uart:/dev/ttyUSB0", result)
+}
+
+func TestInfo(t *testing.T) {
+	t.Parallel()
+
+	reader := &Reader{
+		name: "uart:/dev/ttyUSB0",
+	}
+
+	result := reader.Info()
+
+	assert.Equal(t, "PN532 (uart:/dev/ttyUSB0)", result)
+}
+
+func TestCancelWrite_WithActiveWrite(t *testing.T) {
+	t.Parallel()
+
+	reader := NewReader(&config.Instance{})
+
+	// Simulate an active write by setting up a cancel function
+	ctx, cancel := context.WithCancel(context.Background())
+	reader.writeCtx = ctx
+	reader.writeCancel = cancel
+
+	// Should cancel without panic
+	reader.CancelWrite()
+
+	// Verify the context was cancelled
+	assert.Error(t, ctx.Err(), "context should be cancelled")
+}
+
+func TestCreateVIDPIDBlocklist(t *testing.T) {
+	t.Parallel()
+
+	blocklist := createVIDPIDBlocklist()
+
+	// Should contain Sinden Lightgun VID:PIDs
+	assert.NotEmpty(t, blocklist)
+	assert.Contains(t, blocklist, "16C0:0F38")
+	assert.Contains(t, blocklist, "16D0:1094")
+
+	// All entries should be in VID:PID format
+	for _, entry := range blocklist {
+		assert.Regexp(t, `^[0-9A-F]{4}:[0-9A-F]{4}$`, entry,
+			"blocklist entry should be in VID:PID format")
+	}
+}
+
 func TestConvertTagType(t *testing.T) {
 	t.Parallel()
 
