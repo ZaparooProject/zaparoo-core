@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"runtime"
 	"strings"
 	"testing"
@@ -375,4 +376,187 @@ func TestPreWarmHost_VerifiesHeaders(t *testing.T) {
 	assert.Equal(t, runtime.GOOS, capturedReq.Header.Get(HeaderZaparooOS))
 	assert.Equal(t, runtime.GOARCH, capturedReq.Header.Get(HeaderZaparooArch))
 	assert.Equal(t, "batocera", capturedReq.Header.Get(HeaderZaparooPlatform))
+}
+
+// queryZapLinkSupport Tests
+
+func TestQueryZapLinkSupport_404ReturnsZeroNoError(t *testing.T) {
+	t.Parallel()
+
+	// 404 means the host definitively doesn't support zap links
+	// Should return (0, nil) so it gets cached as "not supported"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	result, err := queryZapLinkSupport(u, "mister")
+	require.NoError(t, err, "404 should not return an error")
+	assert.Equal(t, 0, result, "404 should return 0 (not supported)")
+}
+
+func TestQueryZapLinkSupport_500ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	// 500 is a transient failure - should return an error so it's NOT cached
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	result, err := queryZapLinkSupport(u, "mister")
+	require.Error(t, err, "500 should return an error")
+	assert.Contains(t, err.Error(), "500")
+	assert.Equal(t, 0, result)
+}
+
+func TestQueryZapLinkSupport_503ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	// 503 is a transient failure - should return an error so it's NOT cached
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	result, err := queryZapLinkSupport(u, "mister")
+	require.Error(t, err, "503 should return an error")
+	assert.Contains(t, err.Error(), "503")
+	assert.Equal(t, 0, result)
+}
+
+func TestQueryZapLinkSupport_200WithZapScript0(t *testing.T) {
+	t.Parallel()
+
+	// 200 with zapscript: 0 means explicitly not supported
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"zapscript": 0}`))
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	result, err := queryZapLinkSupport(u, "mister")
+	require.NoError(t, err)
+	assert.Equal(t, 0, result)
+}
+
+func TestQueryZapLinkSupport_200WithZapScript1(t *testing.T) {
+	t.Parallel()
+
+	// 200 with zapscript: 1 means supported
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"zapscript": 1}`))
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	result, err := queryZapLinkSupport(u, "mister")
+	require.NoError(t, err)
+	assert.Equal(t, 1, result)
+}
+
+// isZapLink Tests
+
+func TestIsZapLink_TransientErrorNotCached(t *testing.T) {
+	t.Parallel()
+
+	// Server returns 500 (transient error)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	// GetZapLinkHost returns not found, so it queries the server
+	mockUserDB.On("GetZapLinkHost", server.URL).Return(false, false, nil)
+
+	// UpdateZapLinkHost should NOT be called for transient errors
+	// (We don't set an expectation, so if it's called, the test will fail)
+
+	result := isZapLink(server.URL+"/test", db, "mister")
+	assert.False(t, result)
+
+	mockUserDB.AssertExpectations(t)
+	mockUserDB.AssertNotCalled(t, "UpdateZapLinkHost")
+}
+
+func TestIsZapLink_404IsCached(t *testing.T) {
+	t.Parallel()
+
+	// Server returns 404 (definitive "not supported")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	// GetZapLinkHost returns not found, so it queries the server
+	mockUserDB.On("GetZapLinkHost", server.URL).Return(false, false, nil)
+
+	// 404 should be cached as ZapScript=0
+	mockUserDB.On("UpdateZapLinkHost", server.URL, 0).Return(nil)
+
+	result := isZapLink(server.URL+"/test", db, "mister")
+	assert.False(t, result)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestIsZapLink_SuccessIsCached(t *testing.T) {
+	t.Parallel()
+
+	// Server returns 200 with zapscript: 1
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"zapscript": 1}`))
+	}))
+	defer server.Close()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	// GetZapLinkHost returns not found, so it queries the server
+	mockUserDB.On("GetZapLinkHost", server.URL).Return(false, false, nil)
+
+	// Success should be cached as ZapScript=1
+	mockUserDB.On("UpdateZapLinkHost", server.URL, 1).Return(nil)
+
+	result := isZapLink(server.URL+"/test", db, "mister")
+	assert.True(t, result)
+
+	mockUserDB.AssertExpectations(t)
 }

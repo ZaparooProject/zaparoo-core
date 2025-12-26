@@ -525,7 +525,9 @@ func sqlGetZapLinkCache(ctx context.Context, db *sql.DB, url string) (string, er
 
 func sqlGetSupportedZapLinkHosts(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT Host FROM ZapLinkHosts WHERE ZapScript > 0;`,
+		`SELECT Host FROM ZapLinkHosts
+		 WHERE ZapScript > 0
+		   AND (Host LIKE 'http://%' OR Host LIKE 'https://%');`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query supported zap link hosts: %w", err)
@@ -555,7 +557,9 @@ func sqlGetSupportedZapLinkHosts(ctx context.Context, db *sql.DB) ([]string, err
 func sqlPruneExpiredZapLinkHosts(ctx context.Context, db *sql.DB, olderThan time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-olderThan).Format(time.RFC3339)
 	result, err := db.ExecContext(ctx,
-		`DELETE FROM ZapLinkHosts WHERE ZapScript = 0 AND datetime(CheckedAt) < datetime(?);`,
+		`DELETE FROM ZapLinkHosts
+		 WHERE (ZapScript = 0 AND datetime(CheckedAt) < datetime(?))
+		    OR (Host NOT LIKE 'http://%' AND Host NOT LIKE 'https://%');`,
 		cutoff,
 	)
 	if err != nil {

@@ -854,8 +854,10 @@ func TestSqlGetSupportedZapLinkHosts_Success(t *testing.T) {
 		rows.AddRow(host)
 	}
 
-	mock.ExpectQuery(`SELECT Host FROM ZapLinkHosts WHERE ZapScript > 0`).
-		WillReturnRows(rows)
+	mock.ExpectQuery(
+		`SELECT Host FROM ZapLinkHosts\s+WHERE ZapScript > 0\s+` +
+			`AND \(Host LIKE 'http://%' OR Host LIKE 'https://%'\)`,
+	).WillReturnRows(rows)
 
 	result, err := sqlGetSupportedZapLinkHosts(context.Background(), db)
 	require.NoError(t, err)
@@ -872,8 +874,10 @@ func TestSqlGetSupportedZapLinkHosts_Empty(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{"Host"})
 
-	mock.ExpectQuery(`SELECT Host FROM ZapLinkHosts WHERE ZapScript > 0`).
-		WillReturnRows(rows)
+	mock.ExpectQuery(
+		`SELECT Host FROM ZapLinkHosts\s+WHERE ZapScript > 0\s+` +
+			`AND \(Host LIKE 'http://%' OR Host LIKE 'https://%'\)`,
+	).WillReturnRows(rows)
 
 	result, err := sqlGetSupportedZapLinkHosts(context.Background(), db)
 	require.NoError(t, err)
@@ -887,8 +891,10 @@ func TestSqlGetSupportedZapLinkHosts_DatabaseError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectQuery(`SELECT Host FROM ZapLinkHosts WHERE ZapScript > 0`).
-		WillReturnError(sqlmock.ErrCancelled)
+	mock.ExpectQuery(
+		`SELECT Host FROM ZapLinkHosts\s+WHERE ZapScript > 0\s+` +
+			`AND \(Host LIKE 'http://%' OR Host LIKE 'https://%'\)`,
+	).WillReturnError(sqlmock.ErrCancelled)
 
 	result, err := sqlGetSupportedZapLinkHosts(context.Background(), db)
 	require.Error(t, err)
@@ -907,8 +913,10 @@ func TestSqlGetSupportedZapLinkHosts_ScanError(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"Host"}).
 		AddRow(nil) // NULL value will cause scan error for string
 
-	mock.ExpectQuery(`SELECT Host FROM ZapLinkHosts WHERE ZapScript > 0`).
-		WillReturnRows(rows)
+	mock.ExpectQuery(
+		`SELECT Host FROM ZapLinkHosts\s+WHERE ZapScript > 0\s+` +
+			`AND \(Host LIKE 'http://%' OR Host LIKE 'https://%'\)`,
+	).WillReturnRows(rows)
 
 	result, err := sqlGetSupportedZapLinkHosts(context.Background(), db)
 	require.Error(t, err)
@@ -927,8 +935,10 @@ func TestSqlGetSupportedZapLinkHosts_RowsError(t *testing.T) {
 		AddRow("https://example.com").
 		RowError(0, sqlmock.ErrCancelled)
 
-	mock.ExpectQuery(`SELECT Host FROM ZapLinkHosts WHERE ZapScript > 0`).
-		WillReturnRows(rows)
+	mock.ExpectQuery(
+		`SELECT Host FROM ZapLinkHosts\s+WHERE ZapScript > 0\s+` +
+			`AND \(Host LIKE 'http://%' OR Host LIKE 'https://%'\)`,
+	).WillReturnRows(rows)
 
 	result, err := sqlGetSupportedZapLinkHosts(context.Background(), db)
 	require.Error(t, err)
@@ -948,8 +958,11 @@ func TestSqlPruneExpiredZapLinkHosts_Success(t *testing.T) {
 	rowsDeleted := int64(5)
 	olderThan := 30 * 24 * time.Hour
 
-	mock.ExpectExec(`DELETE FROM ZapLinkHosts WHERE ZapScript = 0 AND datetime\(CheckedAt\) < datetime\(\?\)`).
-		WithArgs(sqlmock.AnyArg()).
+	mock.ExpectExec(
+		`DELETE FROM ZapLinkHosts\s+` +
+			`WHERE \(ZapScript = 0 AND datetime\(CheckedAt\) < datetime\(\?\)\)\s+` +
+			`OR \(Host NOT LIKE 'http://%' AND Host NOT LIKE 'https://%'\)`,
+	).WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
 
 	result, err := sqlPruneExpiredZapLinkHosts(context.Background(), db, olderThan)
@@ -966,8 +979,11 @@ func TestSqlPruneExpiredZapLinkHosts_NoRowsToDelete(t *testing.T) {
 
 	olderThan := 30 * 24 * time.Hour
 
-	mock.ExpectExec(`DELETE FROM ZapLinkHosts WHERE ZapScript = 0 AND datetime\(CheckedAt\) < datetime\(\?\)`).
-		WithArgs(sqlmock.AnyArg()).
+	mock.ExpectExec(
+		`DELETE FROM ZapLinkHosts\s+` +
+			`WHERE \(ZapScript = 0 AND datetime\(CheckedAt\) < datetime\(\?\)\)\s+` +
+			`OR \(Host NOT LIKE 'http://%' AND Host NOT LIKE 'https://%'\)`,
+	).WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	result, err := sqlPruneExpiredZapLinkHosts(context.Background(), db, olderThan)
@@ -984,8 +1000,11 @@ func TestSqlPruneExpiredZapLinkHosts_DatabaseError(t *testing.T) {
 
 	olderThan := 30 * 24 * time.Hour
 
-	mock.ExpectExec(`DELETE FROM ZapLinkHosts WHERE ZapScript = 0 AND datetime\(CheckedAt\) < datetime\(\?\)`).
-		WithArgs(sqlmock.AnyArg()).
+	mock.ExpectExec(
+		`DELETE FROM ZapLinkHosts\s+` +
+			`WHERE \(ZapScript = 0 AND datetime\(CheckedAt\) < datetime\(\?\)\)\s+` +
+			`OR \(Host NOT LIKE 'http://%' AND Host NOT LIKE 'https://%'\)`,
+	).WithArgs(sqlmock.AnyArg()).
 		WillReturnError(sqlmock.ErrCancelled)
 
 	result, err := sqlPruneExpiredZapLinkHosts(context.Background(), db, olderThan)
