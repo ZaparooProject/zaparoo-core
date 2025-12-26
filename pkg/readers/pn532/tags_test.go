@@ -517,12 +517,12 @@ func TestConvertGenericRecordToJSON(t *testing.T) {
 	}
 }
 
-func TestReadNDEFData_NoRealDevice(t *testing.T) {
+func TestReadNDEFData_NoTagOps(t *testing.T) {
 	t.Parallel()
 
-	// Test the early return path when realDevice is nil
+	// Test the early return path when tagOps is nil (no real device available)
 	reader := &Reader{
-		realDevice: nil,
+		tagOps: nil,
 	}
 
 	detectedTag := &pn532.DetectedTag{
@@ -532,6 +532,6 @@ func TestReadNDEFData_NoRealDevice(t *testing.T) {
 
 	uid, data := reader.readNDEFData(detectedTag)
 
-	assert.Empty(t, uid, "uid should be empty when realDevice is nil")
+	assert.Empty(t, uid, "uid should be empty when tagOps is nil")
 	assert.Equal(t, detectedTag.TargetData, data, "should return original target data")
 }
