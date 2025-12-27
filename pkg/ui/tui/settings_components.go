@@ -26,19 +26,23 @@ import (
 	"github.com/rivo/tview"
 )
 
-// Available reader driver IDs for the driver selector.
-var AvailableDrivers = []string{
-	"acr122pcsc",
-	"externaldrive",
-	"file",
-	"libnfc",
-	"mqtt",
-	"opticaldrive",
-	"pn532",
-	"pn532uart",
-	"rs232barcode",
-	"simpleserial",
-	"tty2oled",
+// ExitDelayOption pairs a display label with its numeric value.
+type ExitDelayOption struct {
+	Label string
+	Value float32
+}
+
+// ExitDelayOptions provides structured exit delay choices.
+var ExitDelayOptions = []ExitDelayOption{
+	{Label: "0 seconds", Value: 0},
+	{Label: "1 second", Value: 1},
+	{Label: "2 seconds", Value: 2},
+	{Label: "3 seconds", Value: 3},
+	{Label: "5 seconds", Value: 5},
+	{Label: "10 seconds", Value: 10},
+	{Label: "15 seconds", Value: 15},
+	{Label: "20 seconds", Value: 20},
+	{Label: "30 seconds", Value: 30},
 }
 
 // errorModalPage is the page name for the error modal overlay.

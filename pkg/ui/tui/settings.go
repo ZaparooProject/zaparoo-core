@@ -23,70 +23,48 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )
 
-// getSettings fetches current settings from the API.
-func getSettings(ctx context.Context, cfg *config.Instance) (*models.SettingsResponse, error) {
-	resp, err := client.LocalClient(ctx, cfg, models.MethodSettings, "")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get settings: %w", err)
-	}
-	var settings models.SettingsResponse
-	if err := json.Unmarshal([]byte(resp), &settings); err != nil {
-		return nil, fmt.Errorf("failed to parse settings: %w", err)
-	}
-	return &settings, nil
-}
-
-// updateSettings sends a settings update to the API.
-func updateSettings(ctx context.Context, cfg *config.Instance, params models.UpdateSettingsParams) error {
-	data, err := json.Marshal(params)
-	if err != nil {
-		return fmt.Errorf("failed to marshal params: %w", err)
-	}
-	_, err = client.LocalClient(ctx, cfg, models.MethodSettingsUpdate, string(data))
-	if err != nil {
-		return fmt.Errorf("failed to update settings: %w", err)
-	}
-	return nil
-}
-
-// getSystems fetches available systems from the API.
-func getSystems(ctx context.Context, cfg *config.Instance) ([]models.System, error) {
-	resp, err := client.LocalClient(ctx, cfg, models.MethodSystems, "")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get systems: %w", err)
-	}
-	var systems models.SystemsResponse
-	if err := json.Unmarshal([]byte(resp), &systems); err != nil {
-		return nil, fmt.Errorf("failed to parse systems: %w", err)
-	}
-	return systems.Systems, nil
-}
-
 // BuildSettingsMainMenu creates the top-level settings menu with Audio, Readers, and Advanced options.
-func BuildSettingsMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+func BuildSettingsMainMenu(
+	cfg *config.Instance,
+	pages *tview.Pages,
+	app *tview.Application,
+	pl platforms.Platform,
+) *tview.List {
+	svc := NewSettingsService(client.NewLocalAPIClient(cfg))
+	return BuildSettingsMainMenuWithService(cfg, svc, pages, app, pl)
+}
+
+// BuildSettingsMainMenuWithService creates the settings menu using the given SettingsService.
+func BuildSettingsMainMenuWithService(
+	cfg *config.Instance,
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	pl platforms.Platform,
+) *tview.List {
 	mainMenu := NewSettingsList(pages, PageMain)
 	mainMenu.SetTitle("Settings")
 
 	mainMenu.
 		AddAction("Readers", "Reader connections and scanning", func() {
-			BuildReadersSettingsMenu(cfg, pages, app)
+			buildReadersSettingsMenu(cfg, svc, pages, app, pl)
 		}).
 		AddAction("Audio", "Sound and feedback settings", func() {
-			BuildAudioSettingsMenu(cfg, pages, app)
+			buildAudioSettingsMenu(svc, pages, app)
 		}).
 		AddAction("Advanced", "Debug and system options", func() {
-			BuildAdvancedSettingsMenu(cfg, pages, app)
+			buildAdvancedSettingsMenu(svc, pages, app)
 		}).
 		AddBackWithDesc("Back to main menu")
 
@@ -94,12 +72,14 @@ func BuildSettingsMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.
 	return mainMenu.List
 }
 
-// BuildAudioSettingsMenu creates the audio settings submenu.
-func BuildAudioSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
-	settings, err := getSettings(context.Background(), cfg)
+// buildAudioSettingsMenu creates the audio settings submenu.
+func buildAudioSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.Application) *tview.List {
+	settings, err := svc.GetSettings(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
-		settings = &models.SettingsResponse{}
+		showErrorModal(pages, app, "Failed to load audio settings")
+		pages.SwitchToPage(PageSettingsMain)
+		return nil
 	}
 
 	audioFeedback := settings.AudioScanFeedback
@@ -108,7 +88,7 @@ func BuildAudioSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tview
 	menu.SetTitle("Settings - Audio")
 
 	menu.AddToggle("Audio feedback on scan", "Play sound when token is scanned", &audioFeedback, func(value bool) {
-		err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
 			AudioScanFeedback: &value,
 		})
 		if err != nil {
@@ -123,18 +103,39 @@ func BuildAudioSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tview
 	return menu.List
 }
 
-// Exit delay options with seconds suffix for display.
-var exitDelayOptions = []string{
-	"0 seconds", "1 second", "2 seconds", "3 seconds", "5 seconds",
-	"10 seconds", "15 seconds", "20 seconds", "30 seconds",
+// exitDelayLabels extracts display labels from ExitDelayOptions.
+func exitDelayLabels() []string {
+	labels := make([]string, len(ExitDelayOptions))
+	for i, opt := range ExitDelayOptions {
+		labels[i] = opt.Label
+	}
+	return labels
 }
 
-// BuildReadersSettingsMenu creates the readers settings submenu.
-func BuildReadersSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
-	settings, err := getSettings(context.Background(), cfg)
+// findExitDelayIndex finds the index of the given delay value in ExitDelayOptions.
+func findExitDelayIndex(delay float32) int {
+	for i, opt := range ExitDelayOptions {
+		if opt.Value == delay {
+			return i
+		}
+	}
+	return 0
+}
+
+// buildReadersSettingsMenu creates the readers settings submenu.
+func buildReadersSettingsMenu(
+	cfg *config.Instance,
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	pl platforms.Platform,
+) *tview.List {
+	settings, err := svc.GetSettings(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
-		settings = &models.SettingsResponse{}
+		showErrorModal(pages, app, "Failed to load reader settings")
+		pages.SwitchToPage(PageSettingsMain)
+		return nil
 	}
 
 	autoDetect := settings.ReadersAutoDetect
@@ -145,15 +146,7 @@ func BuildReadersSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tvi
 		scanModeIndex = 1
 	}
 
-	// Find current exit delay index by matching the number prefix
-	exitDelayIndex := 0
-	currentDelay := strconv.Itoa(int(settings.ReadersScanExitDelay))
-	for i, opt := range exitDelayOptions {
-		if strings.HasPrefix(opt, currentDelay+" ") {
-			exitDelayIndex = i
-			break
-		}
-	}
+	exitDelayIndex := findExitDelayIndex(settings.ReadersScanExitDelay)
 
 	menu := NewSettingsList(pages, PageSettingsMain)
 	menu.SetTitle("Settings - Readers")
@@ -162,7 +155,7 @@ func BuildReadersSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tvi
 	scanModeDesc := "Tap: tap to launch, Hold: exits when removed"
 	menu.AddCycle("Scan mode", scanModeDesc, scanModeOptions, &scanModeIndex, func(option string, _ int) {
 		mode := strings.ToLower(option)
-		err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
 			ReadersScanMode: &mode,
 		})
 		if err != nil {
@@ -172,7 +165,7 @@ func BuildReadersSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tvi
 	})
 
 	menu.AddToggle("Auto-detect readers", "Automatically find connected readers", &autoDetect, func(value bool) {
-		err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
 			ReadersAutoDetect: &value,
 		})
 		if err != nil {
@@ -183,16 +176,10 @@ func BuildReadersSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tvi
 
 	exitDelayIdx := menu.GetItemCount()
 	exitDelayDesc := "Time to wait before exiting in Hold mode"
-	menu.AddCycle("Exit delay", exitDelayDesc, exitDelayOptions, &exitDelayIndex, func(option string, _ int) {
-		// Parse just the number from "X seconds"
-		numStr := strings.Split(option, " ")[0]
-		delay, err := strconv.ParseFloat(numStr, 32)
-		if err != nil {
-			log.Error().Err(err).Str("value", numStr).Msg("failed to parse exit delay")
-			return
-		}
-		delayF := float32(delay)
-		err = updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+	exitLabels := exitDelayLabels()
+	menu.AddCycle("Exit delay", exitDelayDesc, exitLabels, &exitDelayIndex, func(_ string, idx int) {
+		delayF := ExitDelayOptions[idx].Value
+		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
 			ReadersScanExitDelay: &delayF,
 		})
 		if err != nil {
@@ -202,7 +189,7 @@ func BuildReadersSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tvi
 	})
 
 	menu.AddAction("Manage readers", "Add, edit, or remove manual reader connections", func() {
-		BuildReaderListPage(cfg, pages, app)
+		buildReaderListPage(cfg, svc, pages, app, pl)
 	})
 
 	menu.AddBack()
@@ -212,7 +199,7 @@ func BuildReadersSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tvi
 		scanModeIdx: func(delta int) {
 			scanModeIndex = (scanModeIndex + delta + len(scanModeOptions)) % len(scanModeOptions)
 			mode := strings.ToLower(scanModeOptions[scanModeIndex])
-			err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+			err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
 				ReadersScanMode: &mode,
 			})
 			if err != nil {
@@ -222,16 +209,9 @@ func BuildReadersSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tvi
 			menu.refreshAllItems(menu.GetCurrentItem())
 		},
 		exitDelayIdx: func(delta int) {
-			exitDelayIndex = (exitDelayIndex + delta + len(exitDelayOptions)) % len(exitDelayOptions)
-			// Parse just the number from "X seconds"
-			numStr := strings.Split(exitDelayOptions[exitDelayIndex], " ")[0]
-			delay, err := strconv.ParseFloat(numStr, 32)
-			if err != nil {
-				log.Error().Err(err).Str("value", numStr).Msg("failed to parse exit delay")
-				return
-			}
-			delayF := float32(delay)
-			err = updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+			exitDelayIndex = (exitDelayIndex + delta + len(ExitDelayOptions)) % len(ExitDelayOptions)
+			delayF := ExitDelayOptions[exitDelayIndex].Value
+			err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
 				ReadersScanExitDelay: &delayF,
 			})
 			if err != nil {
@@ -248,12 +228,14 @@ func BuildReadersSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tvi
 	return menu.List
 }
 
-// BuildAdvancedSettingsMenu creates the advanced settings menu.
-func BuildAdvancedSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
-	settings, err := getSettings(context.Background(), cfg)
+// buildAdvancedSettingsMenu creates the advanced settings menu.
+func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.Application) *tview.List {
+	settings, err := svc.GetSettings(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
-		settings = &models.SettingsResponse{}
+		showErrorModal(pages, app, "Failed to load advanced settings")
+		pages.SwitchToPage(PageSettingsMain)
+		return nil
 	}
 
 	debugLogging := settings.DebugLogging
@@ -269,11 +251,11 @@ func BuildAdvancedSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tv
 	menu.SetTitle("Settings - Advanced")
 
 	menu.AddAction(ignoreLabel, "Systems to ignore exiting in Hold mode", func() {
-		BuildIgnoreSystemsPage(cfg, pages, app)
+		buildIgnoreSystemsPage(svc, pages, app)
 	})
 
 	menu.AddToggle("Debug logging", "Enable verbose debug output", &debugLogging, func(value bool) {
-		err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
 			DebugLogging: &value,
 		})
 		if err != nil {
@@ -288,12 +270,20 @@ func BuildAdvancedSettingsMenu(cfg *config.Instance, pages *tview.Pages, app *tv
 	return menu.List
 }
 
-// BuildReaderListPage creates the reader list management page.
-func BuildReaderListPage(cfg *config.Instance, pages *tview.Pages, app *tview.Application) tview.Primitive {
-	settings, err := getSettings(context.Background(), cfg)
+// buildReaderListPage creates the reader list management page.
+func buildReaderListPage(
+	cfg *config.Instance,
+	svc SettingsService,
+	pages *tview.Pages,
+	app *tview.Application,
+	pl platforms.Platform,
+) tview.Primitive {
+	settings, err := svc.GetSettings(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
-		settings = &models.SettingsResponse{}
+		showErrorModal(pages, app, "Failed to load reader list")
+		pages.SwitchToPage(PageSettingsReadersMenu)
+		return nil
 	}
 
 	readers := settings.ReadersConnect
@@ -321,7 +311,7 @@ func BuildReaderListPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 				secondary = "ID Source: " + reader.IDSource
 			}
 			readerList.AddItem(display, secondary, 0, func() {
-				BuildReaderEditPage(cfg, pages, app, &readers, idx)
+				buildReaderEditPage(cfg, svc, pages, app, pl, &readers, idx)
 			})
 		}
 		if len(readers) == 0 {
@@ -336,7 +326,7 @@ func BuildReaderListPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 	buttonBar.AddButton("Add", func() {
 		// Add a new empty reader
 		readers = append(readers, models.ReaderConnection{Driver: "pn532"})
-		BuildReaderEditPage(cfg, pages, app, &readers, len(readers)-1)
+		buildReaderEditPage(cfg, svc, pages, app, pl, &readers, len(readers)-1)
 	})
 
 	buttonBar.AddButton("Delete", func() {
@@ -346,7 +336,7 @@ func BuildReaderListPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 		idx := readerList.GetCurrentItem()
 		if idx >= 0 && idx < len(readers) {
 			readers = append(readers[:idx], readers[idx+1:]...)
-			err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+			err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
 				ReadersConnect: &readers,
 			})
 			if err != nil {
@@ -410,11 +400,13 @@ func BuildReaderListPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 	return layout
 }
 
-// BuildReaderEditPage creates the reader edit form.
-func BuildReaderEditPage(
+// buildReaderEditPage creates the reader edit form.
+func buildReaderEditPage(
 	cfg *config.Instance,
+	svc SettingsService,
 	pages *tview.Pages,
 	app *tview.Application,
+	pl platforms.Platform,
 	readers *[]models.ReaderConnection,
 	index int,
 ) tview.Primitive {
@@ -424,6 +416,13 @@ func BuildReaderEditPage(
 		reader = (*readers)[index]
 	} else {
 		reader = models.ReaderConnection{Driver: "pn532"}
+	}
+
+	// Get available drivers from platform
+	supportedReaders := pl.SupportedReaders(cfg)
+	availableDrivers := make([]string, 0, len(supportedReaders))
+	for _, r := range supportedReaders {
+		availableDrivers = append(availableDrivers, r.Metadata().ID)
 	}
 
 	layout := tview.NewFlex().SetDirection(tview.FlexRow)
@@ -436,7 +435,7 @@ func BuildReaderEditPage(
 
 	// Driver selector (as a list for easy cycling)
 	driverIndex := 0
-	for i, d := range AvailableDrivers {
+	for i, d := range availableDrivers {
 		if d == reader.Driver {
 			driverIndex = i
 			break
@@ -445,7 +444,7 @@ func BuildReaderEditPage(
 
 	driverDisplay := tview.NewTextView().SetDynamicColors(true)
 	updateDriverDisplay := func() {
-		driverDisplay.SetText(fmt.Sprintf("[yellow]Driver:[white] < %s >", AvailableDrivers[driverIndex]))
+		driverDisplay.SetText(fmt.Sprintf("[yellow]Driver:[white] < %s >", availableDrivers[driverIndex]))
 	}
 	updateDriverDisplay()
 
@@ -463,7 +462,7 @@ func BuildReaderEditPage(
 	buttonBar := NewButtonBar(app)
 
 	buttonBar.AddButton("Save", func() {
-		reader.Driver = AvailableDrivers[driverIndex]
+		reader.Driver = availableDrivers[driverIndex]
 		reader.Path = pathInput.GetText()
 		reader.IDSource = idSourceInput.GetText()
 
@@ -473,7 +472,7 @@ func BuildReaderEditPage(
 			(*readers)[index] = reader
 		}
 
-		err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
 			ReadersConnect: readers,
 		})
 		if err != nil {
@@ -481,7 +480,7 @@ func BuildReaderEditPage(
 			showErrorModal(pages, app, "Failed to save reader")
 			return
 		}
-		BuildReaderListPage(cfg, pages, app)
+		buildReaderListPage(cfg, svc, pages, app, pl)
 	})
 
 	buttonBar.AddButton("Cancel", func() {
@@ -489,14 +488,14 @@ func BuildReaderEditPage(
 		if isNew && index < len(*readers) {
 			*readers = (*readers)[:index]
 		}
-		BuildReaderListPage(cfg, pages, app)
+		buildReaderListPage(cfg, svc, pages, app, pl)
 	})
 
 	buttonBar.SetupNavigation(func() {
 		if isNew && index < len(*readers) {
 			*readers = (*readers)[:index]
 		}
-		BuildReaderListPage(cfg, pages, app)
+		buildReaderListPage(cfg, svc, pages, app, pl)
 	})
 
 	// Focus navigation order: driver -> path -> idSource -> buttons
@@ -514,11 +513,11 @@ func BuildReaderEditPage(
 	driverDisplay.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyLeft:
-			driverIndex = (driverIndex - 1 + len(AvailableDrivers)) % len(AvailableDrivers)
+			driverIndex = (driverIndex - 1 + len(availableDrivers)) % len(availableDrivers)
 			updateDriverDisplay()
 			return nil
 		case tcell.KeyRight:
-			driverIndex = (driverIndex + 1) % len(AvailableDrivers)
+			driverIndex = (driverIndex + 1) % len(availableDrivers)
 			updateDriverDisplay()
 			return nil
 		case tcell.KeyDown, tcell.KeyEnter, tcell.KeyTab:
@@ -528,7 +527,7 @@ func BuildReaderEditPage(
 			if isNew && index < len(*readers) {
 				*readers = (*readers)[:index]
 			}
-			BuildReaderListPage(cfg, pages, app)
+			buildReaderListPage(cfg, svc, pages, app, pl)
 			return nil
 		default:
 			return event
@@ -547,7 +546,7 @@ func BuildReaderEditPage(
 			if isNew && index < len(*readers) {
 				*readers = (*readers)[:index]
 			}
-			BuildReaderListPage(cfg, pages, app)
+			buildReaderListPage(cfg, svc, pages, app, pl)
 			return nil
 		default:
 			return event
@@ -566,7 +565,7 @@ func BuildReaderEditPage(
 			if isNew && index < len(*readers) {
 				*readers = (*readers)[:index]
 			}
-			BuildReaderListPage(cfg, pages, app)
+			buildReaderListPage(cfg, svc, pages, app, pl)
 			return nil
 		default:
 			return event
@@ -599,19 +598,23 @@ func BuildReaderEditPage(
 	return layout
 }
 
-// BuildIgnoreSystemsPage creates the ignore systems multi-select page.
-func BuildIgnoreSystemsPage(cfg *config.Instance, pages *tview.Pages, app *tview.Application) tview.Primitive {
-	settings, err := getSettings(context.Background(), cfg)
+// buildIgnoreSystemsPage creates the ignore systems multi-select page.
+func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.Application) tview.Primitive {
+	settings, err := svc.GetSettings(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
-		settings = &models.SettingsResponse{}
+		showErrorModal(pages, app, "Failed to load settings")
+		pages.SwitchToPage(PageSettingsAdvanced)
+		return nil
 	}
 
 	// Get systems from API (filtered for platform)
-	systems, err := getSystems(context.Background(), cfg)
+	systems, err := svc.GetSystems(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching systems")
-		systems = []models.System{}
+		showErrorModal(pages, app, "Failed to load systems list")
+		pages.SwitchToPage(PageSettingsAdvanced)
+		return nil
 	}
 
 	// Build items with display name and system ID
@@ -634,7 +637,7 @@ func BuildIgnoreSystemsPage(cfg *config.Instance, pages *tview.Pages, app *tview
 	// Done button saves and navigates back
 	doneBtn := tview.NewButton("Done").SetSelectedFunc(func() {
 		selected := checkList.GetSelected()
-		err := updateSettings(context.Background(), cfg, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
 			ReadersScanIgnoreSystem: &selected,
 		})
 		if err != nil {
@@ -699,7 +702,7 @@ func BuildIgnoreSystemsPage(cfg *config.Instance, pages *tview.Pages, app *tview
 	return layout
 }
 
-// BuildTagsReadMenu creates the NFC tag read menu (unchanged from original).
+// BuildTagsReadMenu creates the NFC tag read menu.
 func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
 	topTextView := tview.NewTextView().
 		SetLabel("").

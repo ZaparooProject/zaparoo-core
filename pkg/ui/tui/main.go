@@ -231,7 +231,7 @@ func BuildMainPage(
 	})
 
 	settingsButton := tview.NewButton("Settings").SetSelectedFunc(func() {
-		BuildSettingsMainMenu(cfg, pages, app)
+		BuildSettingsMainMenu(cfg, pages, app, pl)
 	})
 	settingsButton.SetFocusFunc(func() {
 		helpText.SetText("Manage settings for Core service.")
