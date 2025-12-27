@@ -23,6 +23,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -46,6 +47,13 @@ func tagReadContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), TagReadTimeout)
 }
 
+// DefaultMaxWidth is the default maximum width for the TUI in non-CRT mode.
+const DefaultMaxWidth = 100
+
+// DefaultMaxHeight is the default maximum height for the TUI in non-CRT mode.
+const DefaultMaxHeight = 30
+
+// CenterWidget creates a fixed-size centered layout for CRT displays.
 func CenterWidget(width, height int, p tview.Primitive) tview.Primitive {
 	return tview.NewFlex().
 		AddItem(nil, 0, 1, false).
@@ -55,6 +63,71 @@ func CenterWidget(width, height int, p tview.Primitive) tview.Primitive {
 			AddItem(p, height, 1, true).
 			AddItem(nil, 0, 1, false), width, 1, true).
 		AddItem(nil, 0, 1, false)
+}
+
+// responsiveWrapper wraps a primitive with max width/height constraints.
+type responsiveWrapper struct {
+	*tview.Box
+	child     tview.Primitive
+	maxWidth  int
+	maxHeight int
+}
+
+// ResponsiveMaxWidget creates a centered layout that respects max width/height
+// but clamps to terminal size when smaller. This prevents clipping on small terminals.
+func ResponsiveMaxWidget(maxWidth, maxHeight int, p tview.Primitive) tview.Primitive {
+	return &responsiveWrapper{
+		Box:       tview.NewBox(),
+		child:     p,
+		maxWidth:  maxWidth,
+		maxHeight: maxHeight,
+	}
+}
+
+// Draw implements tview.Primitive.
+func (r *responsiveWrapper) Draw(screen tcell.Screen) {
+	r.DrawForSubclass(screen, r)
+	x, y, width, height := r.GetInnerRect()
+
+	// Calculate actual dimensions (clamped to available space)
+	actualWidth := r.maxWidth
+	if width < r.maxWidth {
+		actualWidth = width
+	}
+	actualHeight := r.maxHeight
+	if height < r.maxHeight {
+		actualHeight = height
+	}
+
+	// Calculate centered position
+	offsetX := (width - actualWidth) / 2
+	offsetY := (height - actualHeight) / 2
+
+	// Set the child's position and draw it
+	r.child.SetRect(x+offsetX, y+offsetY, actualWidth, actualHeight)
+	r.child.Draw(screen)
+}
+
+// Focus implements tview.Primitive.
+func (r *responsiveWrapper) Focus(delegate func(p tview.Primitive)) {
+	delegate(r.child)
+}
+
+// HasFocus implements tview.Primitive.
+func (r *responsiveWrapper) HasFocus() bool {
+	return r.child.HasFocus()
+}
+
+// MouseHandler implements tview.Primitive.
+func (r *responsiveWrapper) MouseHandler() func(
+	action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive),
+) (consumed bool, capture tview.Primitive) {
+	return r.child.MouseHandler()
+}
+
+// InputHandler implements tview.Primitive.
+func (r *responsiveWrapper) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	return r.child.InputHandler()
 }
 
 func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, widget S) tview.Primitive {

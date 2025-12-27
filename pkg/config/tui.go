@@ -34,6 +34,7 @@ type TUIConfig struct {
 	Theme       string `toml:"theme"`
 	WriteFormat string `toml:"write_format"`
 	Mouse       bool   `toml:"mouse"`
+	CRTMode     bool   `toml:"crt_mode"`
 }
 
 var tuiCfg atomic.Value

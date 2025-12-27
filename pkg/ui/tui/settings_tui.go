@@ -72,6 +72,18 @@ func buildTUISettingsMenu(
 		}()
 	})
 
+	crtModeEnabled := config.GetTUIConfig().CRTMode
+	menu.AddToggle("CRT mode", "Fixed 75x15 window (restart required)", &crtModeEnabled, func(value bool) {
+		tuiCfg := config.GetTUIConfig()
+		tuiCfg.CRTMode = value
+		config.SetTUIConfig(tuiCfg)
+		go func() {
+			if err := config.SaveTUIConfig(helpers.ConfigDir(pl)); err != nil {
+				log.Error().Err(err).Msg("failed to save TUI config")
+			}
+		}()
+	})
+
 	writeFormatIdx := menu.GetItemCount()
 	writeFormatOptions := []string{"ZapScript", "File path"}
 	writeFormatValues := []string{"zapscript", "path"}

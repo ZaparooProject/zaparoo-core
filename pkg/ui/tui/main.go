@@ -404,6 +404,11 @@ func BuildMain(
 	pages := tview.NewPages()
 	BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName)
 
-	centeredPages := CenterWidget(75, 15, pages)
-	return app.SetRoot(centeredPages, true), nil
+	var rootWidget tview.Primitive
+	if tuiCfg.CRTMode {
+		rootWidget = CenterWidget(75, 15, pages)
+	} else {
+		rootWidget = ResponsiveMaxWidget(DefaultMaxWidth, DefaultMaxHeight, pages)
+	}
+	return app.SetRoot(rootWidget, true), nil
 }
