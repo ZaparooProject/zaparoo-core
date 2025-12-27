@@ -20,9 +20,32 @@
 package tui
 
 import (
+	"context"
+	"time"
+
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
+
+// TUIRequestTimeout is the timeout for API requests from the TUI.
+// This is shorter than the default API timeout since TUI calls are to localhost.
+const TUIRequestTimeout = 5 * time.Second
+
+// TagReadTimeout is the timeout for tag read operations.
+// This is longer than TUIRequestTimeout to give users time to physically tap a tag.
+const TagReadTimeout = 30 * time.Second
+
+// tuiContext creates a context with the TUI request timeout.
+// Use this for API calls from the TUI to avoid long hangs.
+func tuiContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), TUIRequestTimeout)
+}
+
+// tagReadContext creates a context with the tag read timeout.
+// Use this for operations where the user needs to physically interact with a tag.
+func tagReadContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), TagReadTimeout)
+}
 
 func CenterWidget(width, height int, p tview.Primitive) tview.Primitive {
 	return tview.NewFlex().

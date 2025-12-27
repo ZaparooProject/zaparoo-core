@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -103,6 +104,9 @@ func BuildMainPage(
 	logDestPath string,
 	logDestName string,
 ) tview.Primitive {
+	// Create cancellable context for notification goroutine cleanup
+	notifyCtx, notifyCancel := context.WithCancel(context.Background())
+
 	main := tview.NewFlex()
 
 	introText := tview.NewTextView().SetText(
@@ -111,6 +115,7 @@ func BuildMainPage(
 	statusText := tview.NewTextView().SetDynamicColors(true)
 
 	svcRunning := isRunning()
+	log.Debug().Bool("svcRunning", svcRunning).Msg("TUI: service status check")
 	var svcStatus string
 	if svcRunning {
 		svcStatus = "RUNNING"
@@ -143,7 +148,9 @@ func BuildMainPage(
 	lastScanned.SetBorder(true).SetTitle("Last Scanned")
 
 	if svcRunning {
-		tokens, err := getTokens(context.Background(), cfg)
+		ctx, cancel := tuiContext()
+		tokens, err := getTokens(ctx, cfg)
+		cancel()
 		switch {
 		case err != nil:
 			lastScanned.SetText("Error checking last scanned:\n" + err.Error())
@@ -159,23 +166,39 @@ func BuildMainPage(
 		}
 
 		go func() {
+			log.Debug().Msg("starting notification listener for last scanned updates")
 			for {
+				select {
+				case <-notifyCtx.Done():
+					log.Debug().Msg("notification listener cancelled")
+					return
+				default:
+				}
+
 				resp, err := client.WaitNotification(
-					context.Background(), -1,
+					notifyCtx, -1,
 					cfg, models.NotificationTokensAdded,
 				)
-				if errors.Is(err, client.ErrRequestTimeout) {
+				switch {
+				case errors.Is(err, client.ErrRequestTimeout):
 					continue
-				} else if err != nil {
+				case errors.Is(err, client.ErrRequestCancelled):
+					log.Debug().Msg("notification listener: request cancelled")
+					return
+				case err != nil:
+					log.Error().Err(err).Msg("notification listener error")
 					app.QueueUpdateDraw(func() {
 						lastScanned.SetText("Error checking last scanned:\n" + err.Error())
 					})
 					return
 				}
 
+				log.Debug().Str("resp", resp).Msg("received token notification")
+
 				var token models.TokenResponse
 				err = json.Unmarshal([]byte(resp), &token)
 				if err != nil {
+					log.Error().Err(err).Str("resp", resp).Msg("error unmarshalling token notification")
 					app.QueueUpdateDraw(func() {
 						lastScanned.SetText("Error checking last scanned:\n" + err.Error())
 					})
@@ -238,13 +261,14 @@ func BuildMainPage(
 	})
 
 	exportButton := tview.NewButton("Logs").SetSelectedFunc(func() {
-		BuildExportLogModal(pl, app, pages, logDestPath, logDestName)
+		BuildExportLogModal(pages, app, pl, logDestPath, logDestName)
 	})
 	exportButton.SetFocusFunc(func() {
 		helpText.SetText("View and export Core log file.")
 	})
 
 	exitButton := tview.NewButton("Exit").SetSelectedFunc(func() {
+		notifyCancel() // Cancel notification goroutine before exiting
 		app.Stop()
 	})
 	exitButton.SetFocusFunc(func() {

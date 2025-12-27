@@ -374,7 +374,9 @@ func BuildGenerateDBPage(
 		})
 	}
 
-	media, err := getMediaState(context.Background(), cfg)
+	mediaCtx, mediaCancel := tuiContext()
+	defer mediaCancel()
+	media, err := getMediaState(mediaCtx, cfg)
 	switch {
 	case err != nil:
 		log.Debug().Err(err).Msg("failed to get media state")

@@ -26,6 +26,25 @@ import (
 	"github.com/rivo/tview"
 )
 
+// Focus styling colors for input fields.
+var (
+	fieldFocusedBgColor   = tcell.ColorBlue
+	fieldUnfocusedBgColor = tcell.ColorDarkBlue
+)
+
+// setupInputFieldFocus adds focus/blur handlers to style the input field.
+// When focused, the field has a brighter background for visibility.
+func setupInputFieldFocus(field *tview.InputField) *tview.InputField {
+	field.SetFieldBackgroundColor(fieldUnfocusedBgColor)
+	field.SetFocusFunc(func() {
+		field.SetFieldBackgroundColor(fieldFocusedBgColor)
+	})
+	field.SetBlurFunc(func() {
+		field.SetFieldBackgroundColor(fieldUnfocusedBgColor)
+	})
+	return field
+}
+
 // ExitDelayOption pairs a display label with its numeric value.
 type ExitDelayOption struct {
 	Label string
@@ -46,7 +65,10 @@ var ExitDelayOptions = []ExitDelayOption{
 }
 
 // errorModalPage is the page name for the error modal overlay.
-const errorModalPage = "errorModal"
+const errorModalPage = "error_modal"
+
+// confirmModalPage is the page name for the confirmation modal overlay.
+const confirmModalPage = "confirm_modal"
 
 // showErrorModal displays an error message modal to the user.
 func showErrorModal(pages *tview.Pages, app *tview.Application, message string) {
@@ -58,6 +80,23 @@ func showErrorModal(pages *tview.Pages, app *tview.Application, message string) 
 			pages.RemovePage(errorModalPage)
 		})
 	pages.AddPage(errorModalPage, modal, false, true)
+	app.SetFocus(modal)
+}
+
+// showConfirmModal displays a confirmation dialog with Yes/No buttons.
+// onConfirm is called when the user clicks "Yes".
+func showConfirmModal(pages *tview.Pages, app *tview.Application, message string, onConfirm func()) {
+	modal := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"Yes", "No"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			pages.HidePage(confirmModalPage)
+			pages.RemovePage(confirmModalPage)
+			if buttonIndex == 0 {
+				onConfirm()
+			}
+		})
+	pages.AddPage(confirmModalPage, modal, false, true)
 	app.SetFocus(modal)
 }
 
@@ -480,4 +519,236 @@ func (cl *CheckList) SetupNavigation(pages *tview.Pages, previousPage string) *C
 		return event
 	})
 	return cl
+}
+
+// SystemItem represents a system with ID and display name.
+type SystemItem struct {
+	ID   string
+	Name string
+}
+
+// SystemSelectorMode defines whether the selector allows single or multiple selections.
+type SystemSelectorMode int
+
+const (
+	// SystemSelectorSingle allows selecting one system (with optional "All" option).
+	SystemSelectorSingle SystemSelectorMode = iota
+	// SystemSelectorMulti allows selecting multiple systems (checkbox style).
+	SystemSelectorMulti
+)
+
+// SystemSelector is a reusable system selection component.
+// It can operate in single-select or multi-select mode.
+type SystemSelector struct {
+	*tview.List
+	selected    map[int]bool
+	onMulti     func(selected []string)
+	onSingle    func(systemID string)
+	items       []SystemItem
+	singleIndex int
+	mode        SystemSelectorMode
+	includeAll  bool
+	autoConfirm bool
+}
+
+// SystemSelectorConfig configures a new SystemSelector.
+type SystemSelectorConfig struct {
+	OnMulti     func(selected []string)
+	OnSingle    func(systemID string)
+	Systems     []SystemItem
+	Selected    []string
+	Mode        SystemSelectorMode
+	IncludeAll  bool
+	AutoConfirm bool // Single-select only: auto-close on selection
+}
+
+// NewSystemSelector creates a new system selector with the given configuration.
+func NewSystemSelector(cfg *SystemSelectorConfig) *SystemSelector {
+	list := tview.NewList()
+	list.SetSecondaryTextColor(tcell.ColorYellow)
+	list.ShowSecondaryText(false)
+	list.SetWrapAround(false)
+
+	selectedMap := make(map[int]bool)
+	singleIndex := 0
+
+	// For multi-select, build the selected map
+	if cfg.Mode == SystemSelectorMulti {
+		for i, item := range cfg.Systems {
+			for _, sel := range cfg.Selected {
+				if item.ID == sel {
+					selectedMap[i] = true
+					break
+				}
+			}
+		}
+	} else if len(cfg.Selected) > 0 && cfg.Selected[0] != "" {
+		// For single-select, find the index of the selected system
+		for i, item := range cfg.Systems {
+			if item.ID == cfg.Selected[0] {
+				if cfg.IncludeAll {
+					singleIndex = i + 1 // +1 because "All" is at index 0
+				} else {
+					singleIndex = i
+				}
+				break
+			}
+		}
+	}
+
+	ss := &SystemSelector{
+		List:        list,
+		items:       cfg.Systems,
+		selected:    selectedMap,
+		singleIndex: singleIndex,
+		mode:        cfg.Mode,
+		includeAll:  cfg.IncludeAll,
+		autoConfirm: cfg.AutoConfirm,
+		onMulti:     cfg.OnMulti,
+		onSingle:    cfg.OnSingle,
+	}
+
+	ss.refresh()
+
+	return ss
+}
+
+func (ss *SystemSelector) refresh() {
+	ss.Clear()
+
+	if ss.mode == SystemSelectorSingle {
+		// Single-select mode
+		if ss.includeAll {
+			ss.AddItem(ss.formatSingleItem(0, "All"), "", 0, func() {
+				ss.selectSingle(-1)
+			})
+		}
+		for i, item := range ss.items {
+			index := i
+			displayIndex := i
+			if ss.includeAll {
+				displayIndex = i + 1
+			}
+			ss.AddItem(ss.formatSingleItem(displayIndex, item.Name), "", 0, func() {
+				ss.selectSingle(index)
+			})
+		}
+		ss.SetCurrentItem(ss.singleIndex)
+	} else {
+		// Multi-select mode
+		for i, item := range ss.items {
+			index := i
+			ss.AddItem(ss.formatMultiItem(index, item.Name), "", 0, func() {
+				ss.toggleMulti(index)
+			})
+		}
+	}
+}
+
+func (ss *SystemSelector) formatSingleItem(displayIndex int, label string) string {
+	if displayIndex == ss.singleIndex {
+		return "(*) " + label
+	}
+	return "( ) " + label
+}
+
+func (ss *SystemSelector) formatMultiItem(index int, label string) string {
+	if ss.selected[index] {
+		return "[*] " + label
+	}
+	return "[ ] " + label
+}
+
+func (ss *SystemSelector) selectSingle(itemIndex int) {
+	ss.singleIndex = ss.GetCurrentItem()
+
+	// Refresh all items to update radio button display
+	if ss.includeAll {
+		ss.SetItemText(0, ss.formatSingleItem(0, "All"), "")
+	}
+	for i, item := range ss.items {
+		displayIndex := i
+		if ss.includeAll {
+			displayIndex = i + 1
+		}
+		ss.SetItemText(displayIndex, ss.formatSingleItem(displayIndex, item.Name), "")
+	}
+
+	if ss.onSingle != nil {
+		if itemIndex < 0 {
+			ss.onSingle("")
+		} else {
+			ss.onSingle(ss.items[itemIndex].ID)
+		}
+	}
+}
+
+func (ss *SystemSelector) toggleMulti(index int) {
+	ss.selected[index] = !ss.selected[index]
+	ss.SetItemText(index, ss.formatMultiItem(index, ss.items[index].Name), "")
+	if ss.onMulti != nil {
+		ss.onMulti(ss.GetSelected())
+	}
+}
+
+// GetSelected returns the list of selected system IDs.
+func (ss *SystemSelector) GetSelected() []string {
+	if ss.mode == SystemSelectorSingle {
+		if ss.includeAll && ss.singleIndex == 0 {
+			return []string{}
+		}
+		idx := ss.singleIndex
+		if ss.includeAll {
+			idx--
+		}
+		if idx >= 0 && idx < len(ss.items) {
+			return []string{ss.items[idx].ID}
+		}
+		return []string{}
+	}
+
+	// Multi-select mode
+	result := make([]string, 0)
+	for i, item := range ss.items {
+		if ss.selected[i] {
+			result = append(result, item.ID)
+		}
+	}
+	return result
+}
+
+// GetSelectedCount returns the number of selected items.
+func (ss *SystemSelector) GetSelectedCount() int {
+	if ss.mode == SystemSelectorSingle {
+		if ss.includeAll && ss.singleIndex == 0 {
+			return 0
+		}
+		return 1
+	}
+	count := 0
+	for _, selected := range ss.selected {
+		if selected {
+			count++
+		}
+	}
+	return count
+}
+
+// GetSelectedSingle returns the currently selected system ID (single-select mode).
+// Returns empty string if "All" is selected or in multi-select mode.
+func (ss *SystemSelector) GetSelectedSingle() string {
+	if ss.mode != SystemSelectorSingle {
+		return ""
+	}
+	if ss.includeAll && ss.singleIndex == 0 {
+		return ""
+	}
+	idx := ss.singleIndex
+	if ss.includeAll {
+		idx--
+	}
+	if idx >= 0 && idx < len(ss.items) {
+		return ss.items[idx].ID
+	}
+	return ""
 }

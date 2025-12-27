@@ -39,9 +39,9 @@ import (
 )
 
 func BuildExportLogModal(
-	pl platforms.Platform,
-	app *tview.Application,
 	pages *tview.Pages,
+	app *tview.Application,
+	pl platforms.Platform,
 	logDestPath string,
 	logDestName string,
 ) tview.Primitive {

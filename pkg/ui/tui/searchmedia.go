@@ -1,5 +1,5 @@
 // Zaparoo Core
-// Copyright (c) 2026 The Zaparoo Project Contributors.
+// Copyright (c) 2025 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // This file is part of Zaparoo Core.
@@ -39,10 +39,10 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	statusText := tview.NewTextView().
 		SetTextAlign(tview.AlignCenter).
 		SetText("Search and select media to write. ESC to exit.")
-	systemDropdown := tview.NewDropDown()
 
 	name := ""
 	filterSystem := ""
+	filterSystemName := "All"
 	searching := false
 
 	tsm := tview.NewFlex()
@@ -55,14 +55,17 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	searchInput.SetChangedFunc(func(value string) {
 		name = value
 	})
+	setupInputFieldFocus(searchInput)
 
-	systemDropdown.SetLabel("System")
-	systemDropdown.AddOption("All", func() {
-		filterSystem = ""
-	})
-	systemDropdown.SetLabelWidth(7)
+	// System selector: label + button
+	systemLabel := tview.NewTextView().SetText("System ")
+	systemButton := tview.NewButton(filterSystemName)
 
-	resp, err := client.LocalClient(context.Background(), cfg, models.MethodSystems, "")
+	// Load systems for the selector
+	var systemItems []SystemItem
+	ctx, cancel := tuiContext()
+	resp, err := client.LocalClient(ctx, cfg, models.MethodSystems, "")
+	cancel()
 	if err != nil {
 		log.Error().Err(err).Msg("error getting system list")
 	} else {
@@ -74,16 +77,59 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 			sort.Slice(results.Systems, func(i, j int) bool {
 				return results.Systems[i].Name < results.Systems[j].Name
 			})
-			for _, v := range results.Systems {
-				systemDropdown.AddOption(v.Name, func() {
-					filterSystem = v.ID
-				})
+			systemItems = make([]SystemItem, len(results.Systems))
+			for i, v := range results.Systems {
+				systemItems[i] = SystemItem{ID: v.ID, Name: v.Name}
 			}
 		}
 	}
 
-	systemDropdown.SetCurrentOption(0)
-	systemDropdown.SetFieldWidth(0)
+	// Function to open system selector modal
+	openSystemSelector := func() {
+		selectorPage := "search_system_selector"
+
+		layout := tview.NewFlex().SetDirection(tview.FlexRow)
+		layout.SetTitle("Select System")
+		layout.SetBorder(true)
+
+		selector := NewSystemSelector(&SystemSelectorConfig{
+			Mode:        SystemSelectorSingle,
+			IncludeAll:  true,
+			AutoConfirm: true,
+			Systems:     systemItems,
+			Selected:    []string{filterSystem},
+			OnSingle: func(systemID string) {
+				filterSystem = systemID
+				if filterSystem == "" {
+					filterSystemName = "All"
+				} else {
+					for _, item := range systemItems {
+						if item.ID == filterSystem {
+							filterSystemName = item.Name
+							break
+						}
+					}
+				}
+				systemButton.SetLabel(filterSystemName)
+				pages.RemovePage(selectorPage)
+				app.SetFocus(systemButton)
+			},
+		})
+
+		selector.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			if event.Key() == tcell.KeyEscape {
+				pages.RemovePage(selectorPage)
+				app.SetFocus(systemButton)
+				return nil
+			}
+			return event
+		})
+
+		layout.AddItem(selector, 0, 1, true)
+
+		pages.AddPage(selectorPage, CenterWidget(40, 12, layout), true, true)
+		app.SetFocus(selector)
+	}
 
 	mediaList.SetWrapAround(false)
 	mediaList.SetSelectedFocusOnly(true)
@@ -92,7 +138,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		k := event.Key()
 		switch k {
 		case tcell.KeyTab, tcell.KeyDown:
-			app.SetFocus(systemDropdown)
+			app.SetFocus(systemButton)
 			return nil
 		case tcell.KeyBacktab, tcell.KeyUp:
 			if mediaList.GetItemCount() > 0 {
@@ -105,21 +151,25 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		case tcell.KeyEnter:
 			app.SetFocus(searchButton)
 			return nil
+		case tcell.KeyEscape:
+			pages.SwitchToPage(PageMain)
+			return nil
 		default:
 			return event
 		}
 	})
-	systemDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if systemDropdown.IsOpen() {
-			return event
-		}
+	systemButton.SetSelectedFunc(openSystemSelector)
+	systemButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		switch k {
-		case tcell.KeyTab, tcell.KeyRight, tcell.KeyDown:
+		case tcell.KeyTab, tcell.KeyDown:
 			app.SetFocus(searchButton)
 			return nil
-		case tcell.KeyBacktab, tcell.KeyLeft, tcell.KeyUp:
+		case tcell.KeyBacktab, tcell.KeyUp:
 			app.SetFocus(searchInput)
+			return nil
+		case tcell.KeyEscape:
+			pages.SwitchToPage(PageMain)
 			return nil
 		default:
 			return event
@@ -128,7 +178,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	searchButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		switch k {
-		case tcell.KeyTab, tcell.KeyRight, tcell.KeyDown:
+		case tcell.KeyTab, tcell.KeyDown:
 			if mediaList.GetItemCount() > 0 {
 				mediaList.SetCurrentItem(0)
 				app.SetFocus(mediaList)
@@ -136,8 +186,11 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 				app.SetFocus(searchInput)
 			}
 			return nil
-		case tcell.KeyBacktab, tcell.KeyUp, tcell.KeyLeft:
-			app.SetFocus(systemDropdown)
+		case tcell.KeyBacktab, tcell.KeyUp:
+			app.SetFocus(systemButton)
+			return nil
+		case tcell.KeyEscape:
+			pages.SwitchToPage(PageMain)
 			return nil
 		default:
 			return event
@@ -146,10 +199,13 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	mediaList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		switch {
-		case k == tcell.KeyRight:
+		case k == tcell.KeyEscape:
+			pages.SwitchToPage(PageMain)
+			return nil
+		case k == tcell.KeyTab:
 			app.SetFocus(searchInput)
 			return nil
-		case k == tcell.KeyLeft:
+		case k == tcell.KeyBacktab:
 			app.SetFocus(searchButton)
 			return nil
 		case k == tcell.KeyUp && mediaList.GetCurrentItem() == 0:
@@ -168,8 +224,12 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	searchForm := tview.NewFlex()
 	searchForm.SetDirection(tview.FlexRow)
 
+	systemRow := tview.NewFlex().SetDirection(tview.FlexColumn)
+	systemRow.AddItem(systemLabel, 7, 0, false)
+	systemRow.AddItem(systemButton, 0, 1, false)
+
 	searchForm.AddItem(searchInput, 1, 1, true)
-	searchForm.AddItem(systemDropdown, 1, 1, false)
+	searchForm.AddItem(systemRow, 1, 1, false)
 
 	searchArea.AddItem(searchForm, 0, 2, true)
 	searchArea.AddItem(statusText, 0, 1, false)
@@ -212,7 +272,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	tsm.AddItem(mediaPages, 0, 1, false)
 
 	writeTag := func(value string) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := tagReadContext()
 		writeModal.SetDoneFunc(func(_ int, _ string) {
 			log.Info().Msg("user cancelled write")
 			cancel()
@@ -228,31 +288,39 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		app.SetFocus(writeModal)
 
 		go func() {
+			defer cancel()
+
 			data, err := json.Marshal(&models.ReaderWriteParams{
 				Text: value,
 			})
 			if err != nil {
 				log.Error().Err(err).Msg("error marshalling write params")
-				errorModal.SetText("Error writing to tag.")
-				mediaPages.HidePage("write_modal")
-				mediaPages.ShowPage("error_modal")
-				app.SetFocus(errorModal).ForceDraw()
+				app.QueueUpdateDraw(func() {
+					errorModal.SetText("Error writing to tag.")
+					mediaPages.HidePage("write_modal")
+					mediaPages.ShowPage("error_modal")
+					app.SetFocus(errorModal)
+				})
 				return
 			}
 
 			_, err = client.LocalClient(ctx, cfg, models.MethodReadersWrite, string(data))
 			if err != nil {
-				log.Warn().Err(err).Msg("error writing tag")
-				errorModal.SetText("Error writing to tag:\n" + err.Error())
-				mediaPages.HidePage("write_modal")
-				mediaPages.ShowPage("error_modal")
-				app.SetFocus(errorModal).ForceDraw()
+				log.Error().Err(err).Msg("error writing tag")
+				app.QueueUpdateDraw(func() {
+					errorModal.SetText("Error writing to tag:\n" + err.Error())
+					mediaPages.HidePage("write_modal")
+					mediaPages.ShowPage("error_modal")
+					app.SetFocus(errorModal)
+				})
 				return
 			}
 
-			mediaPages.HidePage("write_modal")
-			mediaPages.ShowPage("success_modal")
-			app.SetFocus(successModal).ForceDraw()
+			app.QueueUpdateDraw(func() {
+				mediaPages.HidePage("write_modal")
+				mediaPages.ShowPage("success_modal")
+				app.SetFocus(successModal)
+			})
 		}()
 	}
 
@@ -314,14 +382,6 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	}
 
 	searchButton.SetSelectedFunc(search)
-
-	tsm.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEscape && !systemDropdown.IsOpen() {
-			pages.SwitchToPage(PageMain)
-		}
-		return event
-	})
 
 	pageDefaults(PageSearchMedia, pages, tsm)
 }

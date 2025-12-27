@@ -40,9 +40,9 @@ func BuildSettingsMainMenu(
 	pages *tview.Pages,
 	app *tview.Application,
 	pl platforms.Platform,
-) *tview.List {
+) {
 	svc := NewSettingsService(client.NewLocalAPIClient(cfg))
-	return BuildSettingsMainMenuWithService(cfg, svc, pages, app, pl)
+	BuildSettingsMainMenuWithService(cfg, svc, pages, app, pl)
 }
 
 // BuildSettingsMainMenuWithService creates the settings menu using the given SettingsService.
@@ -52,7 +52,7 @@ func BuildSettingsMainMenuWithService(
 	pages *tview.Pages,
 	app *tview.Application,
 	pl platforms.Platform,
-) *tview.List {
+) {
 	mainMenu := NewSettingsList(pages, PageMain)
 	mainMenu.SetTitle("Settings")
 
@@ -69,12 +69,13 @@ func BuildSettingsMainMenuWithService(
 		AddBackWithDesc("Back to main menu")
 
 	pageDefaults(PageSettingsMain, pages, mainMenu.List)
-	return mainMenu.List
 }
 
 // buildAudioSettingsMenu creates the audio settings submenu.
 func buildAudioSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.Application) *tview.List {
-	settings, err := svc.GetSettings(context.Background())
+	ctx, cancel := tuiContext()
+	defer cancel()
+	settings, err := svc.GetSettings(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
 		showErrorModal(pages, app, "Failed to load audio settings")
@@ -88,7 +89,9 @@ func buildAudioSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.
 	menu.SetTitle("Settings - Audio")
 
 	menu.AddToggle("Audio feedback on scan", "Play sound when token is scanned", &audioFeedback, func(value bool) {
-		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+		ctx, cancel := tuiContext()
+		defer cancel()
+		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
 			AudioScanFeedback: &value,
 		})
 		if err != nil {
@@ -130,7 +133,9 @@ func buildReadersSettingsMenu(
 	app *tview.Application,
 	pl platforms.Platform,
 ) *tview.List {
-	settings, err := svc.GetSettings(context.Background())
+	ctx, cancel := tuiContext()
+	defer cancel()
+	settings, err := svc.GetSettings(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
 		showErrorModal(pages, app, "Failed to load reader settings")
@@ -155,7 +160,9 @@ func buildReadersSettingsMenu(
 	scanModeDesc := "Tap: tap to launch, Hold: exits when removed"
 	menu.AddCycle("Scan mode", scanModeDesc, scanModeOptions, &scanModeIndex, func(option string, _ int) {
 		mode := strings.ToLower(option)
-		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+		ctx, cancel := tuiContext()
+		defer cancel()
+		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
 			ReadersScanMode: &mode,
 		})
 		if err != nil {
@@ -165,7 +172,9 @@ func buildReadersSettingsMenu(
 	})
 
 	menu.AddToggle("Auto-detect readers", "Automatically find connected readers", &autoDetect, func(value bool) {
-		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+		ctx, cancel := tuiContext()
+		defer cancel()
+		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
 			ReadersAutoDetect: &value,
 		})
 		if err != nil {
@@ -179,7 +188,9 @@ func buildReadersSettingsMenu(
 	exitLabels := exitDelayLabels()
 	menu.AddCycle("Exit delay", exitDelayDesc, exitLabels, &exitDelayIndex, func(_ string, idx int) {
 		delayF := ExitDelayOptions[idx].Value
-		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+		ctx, cancel := tuiContext()
+		defer cancel()
+		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
 			ReadersScanExitDelay: &delayF,
 		})
 		if err != nil {
@@ -199,7 +210,9 @@ func buildReadersSettingsMenu(
 		scanModeIdx: func(delta int) {
 			scanModeIndex = (scanModeIndex + delta + len(scanModeOptions)) % len(scanModeOptions)
 			mode := strings.ToLower(scanModeOptions[scanModeIndex])
-			err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+			ctx, cancel := tuiContext()
+			defer cancel()
+			err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
 				ReadersScanMode: &mode,
 			})
 			if err != nil {
@@ -211,7 +224,9 @@ func buildReadersSettingsMenu(
 		exitDelayIdx: func(delta int) {
 			exitDelayIndex = (exitDelayIndex + delta + len(ExitDelayOptions)) % len(ExitDelayOptions)
 			delayF := ExitDelayOptions[exitDelayIndex].Value
-			err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+			ctx, cancel := tuiContext()
+			defer cancel()
+			err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
 				ReadersScanExitDelay: &delayF,
 			})
 			if err != nil {
@@ -230,7 +245,9 @@ func buildReadersSettingsMenu(
 
 // buildAdvancedSettingsMenu creates the advanced settings menu.
 func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.Application) *tview.List {
-	settings, err := svc.GetSettings(context.Background())
+	ctx, cancel := tuiContext()
+	defer cancel()
+	settings, err := svc.GetSettings(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
 		showErrorModal(pages, app, "Failed to load advanced settings")
@@ -255,7 +272,9 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 	})
 
 	menu.AddToggle("Debug logging", "Enable verbose debug output", &debugLogging, func(value bool) {
-		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+		ctx, cancel := tuiContext()
+		defer cancel()
+		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
 			DebugLogging: &value,
 		})
 		if err != nil {
@@ -278,7 +297,9 @@ func buildReaderListPage(
 	app *tview.Application,
 	pl platforms.Platform,
 ) tview.Primitive {
-	settings, err := svc.GetSettings(context.Background())
+	ctx, cancel := tuiContext()
+	defer cancel()
+	settings, err := svc.GetSettings(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
 		showErrorModal(pages, app, "Failed to load reader list")
@@ -324,9 +345,8 @@ func buildReaderListPage(
 	buttonBar := NewButtonBar(app)
 
 	buttonBar.AddButton("Add", func() {
-		// Add a new empty reader
-		readers = append(readers, models.ReaderConnection{Driver: "pn532"})
-		buildReaderEditPage(cfg, svc, pages, app, pl, &readers, len(readers)-1)
+		// Open edit page for a new reader (will be added on Save)
+		buildReaderEditPage(cfg, svc, pages, app, pl, &readers, len(readers))
 	})
 
 	buttonBar.AddButton("Delete", func() {
@@ -335,15 +355,23 @@ func buildReaderListPage(
 		}
 		idx := readerList.GetCurrentItem()
 		if idx >= 0 && idx < len(readers) {
-			readers = append(readers[:idx], readers[idx+1:]...)
-			err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
-				ReadersConnect: &readers,
-			})
-			if err != nil {
-				log.Error().Err(err).Msg("error deleting reader")
-				showErrorModal(pages, app, "Failed to delete reader")
+			readerName := readers[idx].Driver
+			if readers[idx].Path != "" {
+				readerName += ":" + readers[idx].Path
 			}
-			refreshList()
+			showConfirmModal(pages, app, "Delete reader "+readerName+"?", func() {
+				readers = append(readers[:idx], readers[idx+1:]...)
+				ctx, cancel := tuiContext()
+				defer cancel()
+				err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+					ReadersConnect: &readers,
+				})
+				if err != nil {
+					log.Error().Err(err).Msg("error deleting reader")
+					showErrorModal(pages, app, "Failed to delete reader")
+				}
+				refreshList()
+			})
 		}
 	})
 
@@ -425,6 +453,13 @@ func buildReaderEditPage(
 		availableDrivers = append(availableDrivers, r.Metadata().ID)
 	}
 
+	// Handle case where no drivers are available
+	if len(availableDrivers) == 0 {
+		showErrorModal(pages, app, "No reader drivers available for this platform")
+		buildReaderListPage(cfg, svc, pages, app, pl)
+		return nil
+	}
+
 	layout := tview.NewFlex().SetDirection(tview.FlexRow)
 	if isNew {
 		layout.SetTitle("Add Reader")
@@ -452,11 +487,13 @@ func buildReaderEditPage(
 		SetLabel("Path: ").
 		SetText(reader.Path).
 		SetFieldWidth(30)
+	setupInputFieldFocus(pathInput)
 
 	idSourceInput := tview.NewInputField().
 		SetLabel("ID Source: ").
 		SetText(reader.IDSource).
 		SetFieldWidth(20)
+	setupInputFieldFocus(idSourceInput)
 
 	// Button bar
 	buttonBar := NewButtonBar(app)
@@ -472,7 +509,9 @@ func buildReaderEditPage(
 			(*readers)[index] = reader
 		}
 
-		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+		ctx, cancel := tuiContext()
+		defer cancel()
+		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
 			ReadersConnect: readers,
 		})
 		if err != nil {
@@ -484,17 +523,10 @@ func buildReaderEditPage(
 	})
 
 	buttonBar.AddButton("Cancel", func() {
-		// If we added a new reader but cancelled, remove it
-		if isNew && index < len(*readers) {
-			*readers = (*readers)[:index]
-		}
 		buildReaderListPage(cfg, svc, pages, app, pl)
 	})
 
 	buttonBar.SetupNavigation(func() {
-		if isNew && index < len(*readers) {
-			*readers = (*readers)[:index]
-		}
 		buildReaderListPage(cfg, svc, pages, app, pl)
 	})
 
@@ -524,9 +556,6 @@ func buildReaderEditPage(
 			setFocus(1)
 			return nil
 		case tcell.KeyEscape:
-			if isNew && index < len(*readers) {
-				*readers = (*readers)[:index]
-			}
 			buildReaderListPage(cfg, svc, pages, app, pl)
 			return nil
 		default:
@@ -543,9 +572,6 @@ func buildReaderEditPage(
 			setFocus(2)
 			return nil
 		case tcell.KeyEscape:
-			if isNew && index < len(*readers) {
-				*readers = (*readers)[:index]
-			}
 			buildReaderListPage(cfg, svc, pages, app, pl)
 			return nil
 		default:
@@ -562,9 +588,6 @@ func buildReaderEditPage(
 			setFocus(3)
 			return nil
 		case tcell.KeyEscape:
-			if isNew && index < len(*readers) {
-				*readers = (*readers)[:index]
-			}
 			buildReaderListPage(cfg, svc, pages, app, pl)
 			return nil
 		default:
@@ -600,7 +623,9 @@ func buildReaderEditPage(
 
 // buildIgnoreSystemsPage creates the ignore systems multi-select page.
 func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.Application) tview.Primitive {
-	settings, err := svc.GetSettings(context.Background())
+	ctx, cancel := tuiContext()
+	defer cancel()
+	settings, err := svc.GetSettings(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
 		showErrorModal(pages, app, "Failed to load settings")
@@ -609,7 +634,7 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 	}
 
 	// Get systems from API (filtered for platform)
-	systems, err := svc.GetSystems(context.Background())
+	systems, err := svc.GetSystems(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching systems")
 		showErrorModal(pages, app, "Failed to load systems list")
@@ -618,26 +643,44 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 	}
 
 	// Build items with display name and system ID
-	checkItems := make([]CheckListItem, len(systems))
+	items := make([]SystemItem, len(systems))
 	for i, sys := range systems {
 		label := sys.Name
 		if label == "" {
 			label = sys.ID
 		}
-		checkItems[i] = CheckListItem{Label: label, Value: sys.ID}
+		items[i] = SystemItem{ID: sys.ID, Name: label}
 	}
 
 	layout := tview.NewFlex().SetDirection(tview.FlexRow)
 	layout.SetTitle("Ignore Systems")
 	layout.SetBorder(true)
 
-	// Create checklist - no onChange callback (save on Done instead)
-	checkList := NewCheckListWithValues(checkItems, settings.ReadersScanIgnoreSystem, nil)
-
 	// Done button saves and navigates back
-	doneBtn := tview.NewButton("Done").SetSelectedFunc(func() {
-		selected := checkList.GetSelected()
-		err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+	doneBtn := tview.NewButton("Done")
+
+	// Create system selector in multi-select mode
+	var systemSelector *SystemSelector
+	systemSelector = NewSystemSelector(&SystemSelectorConfig{
+		Mode:     SystemSelectorMulti,
+		Systems:  items,
+		Selected: settings.ReadersScanIgnoreSystem,
+		OnMulti: func(_ []string) {
+			// Update button label when selection changes
+			count := systemSelector.GetSelectedCount()
+			if count > 0 {
+				doneBtn.SetLabel(fmt.Sprintf("Done (%d selected)", count))
+			} else {
+				doneBtn.SetLabel("Done")
+			}
+		},
+	})
+
+	doneBtn.SetSelectedFunc(func() {
+		selected := systemSelector.GetSelected()
+		ctx, cancel := tuiContext()
+		defer cancel()
+		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
 			ReadersScanIgnoreSystem: &selected,
 		})
 		if err != nil {
@@ -645,34 +688,27 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 			showErrorModal(pages, app, "Failed to save ignored systems")
 			return
 		}
-		pages.SwitchToPage(PageSettingsAdvanced)
+		// Rebuild Advanced page to update the count display (also switches to it)
+		buildAdvancedSettingsMenu(svc, pages, app)
 	})
 
-	updateDoneLabel := func(count int) {
-		if count > 0 {
-			doneBtn.SetLabel(fmt.Sprintf("Done (%d selected)", count))
-		} else {
-			doneBtn.SetLabel("Done")
-		}
+	// Initialize button label
+	count := systemSelector.GetSelectedCount()
+	if count > 0 {
+		doneBtn.SetLabel(fmt.Sprintf("Done (%d selected)", count))
 	}
 
-	// Sync button label with selection count
-	checkList.SetSelectionSyncFunc(updateDoneLabel)
-	updateDoneLabel(checkList.GetSelectedCount())
-
-	checkList.SetupNavigation(pages, PageSettingsAdvanced)
-
-	checkList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	systemSelector.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEscape:
 			pages.SwitchToPage(PageSettingsAdvanced)
 			return nil
-		case tcell.KeyTab, tcell.KeyLeft, tcell.KeyRight:
+		case tcell.KeyTab:
 			app.SetFocus(doneBtn)
 			return nil
 		case tcell.KeyDown:
 			// If at last item, navigate to Done button
-			if checkList.GetCurrentItem() == checkList.GetItemCount()-1 {
+			if systemSelector.GetCurrentItem() == systemSelector.GetItemCount()-1 {
 				app.SetFocus(doneBtn)
 				return nil
 			}
@@ -685,7 +721,7 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 	doneBtn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyUp, tcell.KeyBacktab:
-			app.SetFocus(checkList)
+			app.SetFocus(systemSelector)
 			return nil
 		case tcell.KeyEscape:
 			pages.SwitchToPage(PageSettingsAdvanced)
@@ -695,7 +731,7 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 		}
 	})
 
-	layout.AddItem(checkList, 0, 1, true)
+	layout.AddItem(systemSelector, 0, 1, true)
 	layout.AddItem(doneBtn, 1, 0, false)
 
 	pageDefaults(PageSettingsIgnoreSystems, pages, layout)
@@ -703,7 +739,7 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 }
 
 // BuildTagsReadMenu creates the NFC tag read menu.
-func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
+func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) {
 	topTextView := tview.NewTextView().
 		SetLabel("").
 		SetText("Press Enter to scan a card, Esc to Exit")
@@ -712,33 +748,67 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 		AddFormItem(topTextView)
 	tagsReadMenu.SetTitle("Settings - NFC Tags - Read")
 
+	// Track if we're currently waiting for a tag (only accessed via QueueUpdateDraw)
+	var readCancel context.CancelFunc
+	reading := false
+
 	tagsReadMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
-		if k == tcell.KeyEnter {
+		if k == tcell.KeyEnter && !reading {
 			tagsReadMenu.Clear(false).AddFormItem(topTextView)
-			topTextView.SetText("Tap a card to read content")
-			app.ForceDraw()
-			resp, _ := client.WaitNotification(
-				context.Background(), 0,
-				cfg, models.NotificationTokensAdded,
-			)
-			var data models.TokenResponse
-			err := json.Unmarshal([]byte(resp), &data)
-			if err != nil {
-				log.Error().Err(err).Msg("error unmarshalling token")
-				return nil
-			}
-			tagsReadMenu.AddTextView("ID", data.UID, 50, 1, true, false)
-			tagsReadMenu.AddTextView("Data", data.Data, 50, 1, true, false)
-			tagsReadMenu.AddTextView("Value", data.Text, 50, 4, true, false)
-			topTextView.SetText("Press ENTER to scan another card. ESC to exit")
+			topTextView.SetText("Tap a card to read content... (ESC to cancel)")
+			reading = true
+
+			var ctx context.Context
+			ctx, readCancel = tagReadContext()
+
+			go func() {
+				resp, err := client.WaitNotification(
+					ctx, 0,
+					cfg, models.NotificationTokensAdded,
+				)
+				if err != nil {
+					log.Error().Err(err).Msg("error waiting for tag")
+					app.QueueUpdateDraw(func() {
+						reading = false
+						readCancel = nil
+						topTextView.SetText("Failed to read tag. Press ENTER to try again, ESC to exit")
+					})
+					return
+				}
+
+				var data models.TokenResponse
+				err = json.Unmarshal([]byte(resp), &data)
+				if err != nil {
+					log.Error().Err(err).Msg("error unmarshalling token")
+					app.QueueUpdateDraw(func() {
+						reading = false
+						readCancel = nil
+						topTextView.SetText("Failed to parse tag data. Press ENTER to try again, ESC to exit")
+					})
+					return
+				}
+
+				app.QueueUpdateDraw(func() {
+					reading = false
+					readCancel = nil
+					tagsReadMenu.AddTextView("ID", data.UID, 50, 1, true, false)
+					tagsReadMenu.AddTextView("Data", data.Data, 50, 1, true, false)
+					tagsReadMenu.AddTextView("Value", data.Text, 50, 4, true, false)
+					topTextView.SetText("Press ENTER to scan another card. ESC to exit")
+				})
+			}()
+			return nil
 		}
 		if k == tcell.KeyEscape {
+			if readCancel != nil {
+				readCancel()
+			}
 			pages.SwitchToPage(PageSettingsMain)
+			return nil
 		}
 		return event
 	})
 
 	pageDefaults(PageSettingsTagsRead, pages, tagsReadMenu)
-	return tagsReadMenu
 }
