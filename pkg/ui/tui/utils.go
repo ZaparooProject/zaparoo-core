@@ -41,11 +41,15 @@ func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, wid
 	return widget
 }
 
+// ThemeBgColor is the background color name for use in tview color tags.
+// Must match the PrimitiveBackgroundColor set in SetTheme.
+const ThemeBgColor = "darkblue"
+
 func SetTheme(theme *tview.Theme) {
 	theme.BorderColor = tcell.ColorLightYellow
 	theme.PrimaryTextColor = tcell.ColorWhite
 	theme.ContrastSecondaryTextColor = tcell.ColorFuchsia
-	theme.PrimitiveBackgroundColor = tcell.ColorDarkBlue
+	theme.PrimitiveBackgroundColor = tcell.ColorDarkBlue // matches ThemeBgColor
 	theme.ContrastBackgroundColor = tcell.ColorBlue
 	theme.InverseTextColor = tcell.ColorDarkBlue
 }

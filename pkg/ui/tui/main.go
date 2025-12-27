@@ -35,16 +35,23 @@ import (
 )
 
 const (
-	PageMain              = "main"
-	PageSettingsMain      = "settings_main"
-	PageSettingsTagsRead  = "settings_tags_read"
-	PageSettingsTagsWrite = "settings_tags_write"
-	PageSettingsAudio     = "settings_audio"
-	PageSettingsReaders   = "settings_readers"
-	PageSettingsScanMode  = "settings_readers_scanMode"
-	PageSearchMedia       = "search_media"
-	PageExportLog         = "export_log"
-	PageGenerateDB        = "generate_db"
+	PageMain                  = "main"
+	PageSettingsMain          = "settings_main"
+	PageSettingsBasic         = "settings_basic" // Kept for compatibility
+	PageSettingsAdvanced      = "settings_advanced"
+	PageSettingsReaderList    = "settings_reader_list"
+	PageSettingsReaderEdit    = "settings_reader_edit"
+	PageSettingsIgnoreSystems = "settings_ignore_systems"
+	PageSettingsTagsRead      = "settings_tags_read"
+	PageSettingsTagsWrite     = "settings_tags_write"
+	PageSettingsAudio         = "settings_audio"
+	PageSettingsReaders       = "settings_readers"
+	PageSettingsScanMode      = "settings_readers_scanMode"
+	PageSettingsAudioMenu     = "settings_audio_menu"
+	PageSettingsReadersMenu   = "settings_readers_menu"
+	PageSearchMedia           = "search_media"
+	PageExportLog             = "export_log"
+	PageGenerateDB            = "generate_db"
 )
 
 func getTokens(ctx context.Context, cfg *config.Instance) (models.TokensResponse, error) {
