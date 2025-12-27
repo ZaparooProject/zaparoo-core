@@ -32,6 +32,7 @@ import (
 // TUIConfig holds TUI-specific configuration.
 type TUIConfig struct {
 	Theme string `toml:"theme"`
+	Mouse bool   `toml:"mouse"`
 }
 
 var tuiCfg atomic.Value
@@ -40,6 +41,7 @@ var tuiCfg atomic.Value
 func DefaultTUIConfig() TUIConfig {
 	return TUIConfig{
 		Theme: "default",
+		Mouse: true,
 	}
 }
 

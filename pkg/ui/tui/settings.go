@@ -73,7 +73,7 @@ func BuildSettingsMainMenuWithService(
 			buildAudioSettingsMenu(svc, pages, app)
 		}).
 		AddAction("TUI", "Theme and display preferences", func() {
-			buildTUISettingsMenu(pages, pl, rebuildSettingsMain)
+			buildTUISettingsMenu(pages, app, pl, rebuildSettingsMain)
 		}).
 		AddAction("Advanced", "Debug and system options", func() {
 			buildAdvancedSettingsMenu(svc, pages, app)

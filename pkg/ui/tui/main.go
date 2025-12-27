@@ -351,6 +351,7 @@ func BuildMain(
 	}
 
 	app := tview.NewApplication()
+	app.EnableMouse(tuiCfg.Mouse)
 
 	pages := tview.NewPages()
 	BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName)

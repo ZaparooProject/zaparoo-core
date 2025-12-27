@@ -27,9 +27,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// buildTUISettingsMenu creates the TUI settings menu with theme selection.
+// buildTUISettingsMenu creates the TUI settings menu with theme and mouse settings.
 func buildTUISettingsMenu(
 	pages *tview.Pages,
+	app *tview.Application,
 	pl platforms.Platform,
 	rebuildPrevious func(),
 ) {
@@ -51,11 +52,24 @@ func buildTUISettingsMenu(
 	themeIdx := menu.GetItemCount()
 
 	applyTheme := func() {
-		applyAndSaveTheme(ThemeNames[themeIndex], pages, pl, rebuildPrevious)
+		applyAndSaveTheme(ThemeNames[themeIndex], pages, app, pl, rebuildPrevious)
 	}
 
 	menu.AddCycle("Theme", "Visual theme for the TUI", themeDisplayNames(), &themeIndex, func(_ string, _ int) {
 		applyTheme()
+	})
+
+	mouseEnabled := config.GetTUIConfig().Mouse
+	menu.AddToggle("Mouse support", "Enable mouse input in TUI", &mouseEnabled, func(value bool) {
+		app.EnableMouse(value)
+		tuiCfg := config.GetTUIConfig()
+		tuiCfg.Mouse = value
+		config.SetTUIConfig(tuiCfg)
+		go func() {
+			if err := config.SaveTUIConfig(helpers.ConfigDir(pl)); err != nil {
+				log.Error().Err(err).Msg("failed to save TUI config")
+			}
+		}()
 	})
 
 	menu.AddBack()
@@ -114,6 +128,7 @@ func clearPagesForThemeChange(pages *tview.Pages, exceptPage string) {
 func applyAndSaveTheme(
 	themeName string,
 	pages *tview.Pages,
+	app *tview.Application,
 	pl platforms.Platform,
 	rebuildPrevious func(),
 ) {
@@ -123,7 +138,7 @@ func applyAndSaveTheme(
 	SetCurrentTheme(themeName)
 
 	clearPagesForThemeChange(pages, "")
-	buildTUISettingsMenu(pages, pl, rebuildPrevious)
+	buildTUISettingsMenu(pages, app, pl, rebuildPrevious)
 
 	go func() {
 		if err := config.SaveTUIConfig(helpers.ConfigDir(pl)); err != nil {
