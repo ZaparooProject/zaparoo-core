@@ -82,12 +82,13 @@ func getReaders(ctx context.Context, cfg *config.Instance) (models.ReadersRespon
 	return readers, nil
 }
 
-func formatReaderStatus(count int) string {
+func formatReaderStatus(readers []models.ReaderInfo) string {
+	count := len(readers)
 	if count == 0 {
 		return "No readers connected"
 	}
 	if count == 1 {
-		return "1 reader connected"
+		return fmt.Sprintf("1 reader connected (%s)", readers[0].Driver)
 	}
 	return fmt.Sprintf("%d readers connected", count)
 }
@@ -172,7 +173,7 @@ func BuildMainPage(
 			log.Error().Err(err).Msg("failed to get readers")
 			readerStatus = "-"
 		} else {
-			readerStatus = formatReaderStatus(len(readers.Readers))
+			readerStatus = formatReaderStatus(readers.Readers)
 		}
 	} else {
 		readerStatus = "-"
@@ -263,7 +264,7 @@ func BuildMainPage(
 						log.Error().Err(err).Msg("failed to refresh reader status")
 						continue
 					}
-					newStatus := formatReaderStatus(len(readers.Readers))
+					newStatus := formatReaderStatus(readers.Readers)
 					app.QueueUpdateDraw(func() {
 						updateStatusText(newStatus)
 					})
