@@ -44,22 +44,18 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 
 	writeButton := tview.NewButton("Write")
 
-	// Main flex container - this is the page
 	writeMenu := tview.NewFlex()
 	writeMenu.SetTitle("Settings - NFC Tags - Write")
 	writeMenu.SetDirection(tview.FlexRow)
 
-	// Add UI elements to main container
 	writeMenu.AddItem(statusText, 1, 0, false)
-	writeMenu.AddItem(nil, 1, 0, false)
+	writeMenu.AddItem(tview.NewBox(), 1, 0, false)
 	writeMenu.AddItem(zapScriptInput, 1, 0, true)
-	writeMenu.AddItem(nil, 1, 0, false)
+	writeMenu.AddItem(tview.NewBox(), 1, 0, false)
 	writeMenu.AddItem(writeButton, 1, 0, false)
 
-	// Create pages for modals (this goes inside the main container)
 	modalPages := tview.NewPages()
 
-	// Create modals for feedback
 	writeModal := tview.NewModal().
 		SetText("Writing to tag...\nPlace your card on the reader.").
 		AddButtons([]string{"Cancel"})
@@ -84,8 +80,6 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 	modalPages.AddPage("write_modal", writeModal, true, false)
 	modalPages.AddPage("success_modal", successModal, true, false)
 	modalPages.AddPage("error_modal", errorModal, true, false)
-
-	// Add modal pages to main container
 	writeMenu.AddItem(modalPages, 0, 1, false)
 
 	writeTag := func(text string) {
@@ -141,7 +135,6 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 		app.SetFocus(errorModal)
 	}
 
-	// Input field handling
 	zapScriptInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		switch k { //nolint:exhaustive // only handling navigation keys
@@ -163,7 +156,6 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 		return event
 	})
 
-	// Button handling
 	writeButton.SetSelectedFunc(func() {
 		text := strings.TrimSpace(zapScriptInput.GetText())
 		if text == "" {
@@ -186,7 +178,6 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 		return event
 	})
 
-	// Main page input handling
 	writeMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
 			pages.SwitchToPage(PageMain)

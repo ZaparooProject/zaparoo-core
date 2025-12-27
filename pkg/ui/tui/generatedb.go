@@ -101,13 +101,14 @@ func (p *ProgressBar) Draw(screen tcell.Screen) {
 	if height > 0 {
 		barWidth := width
 		filled := int(float64(barWidth) * p.progress)
+		t := CurrentTheme()
 
 		for i := range filled {
-			screen.SetContent(x+i, y, p.filledRune, nil, tcell.StyleDefault.Foreground(tcell.ColorGreen))
+			screen.SetContent(x+i, y, p.filledRune, nil, tcell.StyleDefault.Foreground(t.ProgressFillColor))
 		}
 
 		for i := filled; i < barWidth; i++ {
-			screen.SetContent(x+i, y, p.emptyRune, nil, tcell.StyleDefault.Foreground(tcell.ColorGray))
+			screen.SetContent(x+i, y, p.emptyRune, nil, tcell.StyleDefault.Foreground(t.ProgressEmptyColor))
 		}
 	}
 }
@@ -340,7 +341,6 @@ func BuildGenerateDBPage(
 	pages *tview.Pages,
 	app *tview.Application,
 ) tview.Primitive {
-	// Create a cancellable context for the goroutine
 	ctx, cancel := context.WithCancel(context.Background())
 
 	generateDB := tview.NewPages()
@@ -382,13 +382,11 @@ func BuildGenerateDBPage(
 		log.Debug().Err(err).Msg("failed to get media state")
 		generateDB.SwitchToPage("error")
 	case media.Database.Indexing:
-		// Check for nil pointers before dereferencing
 		if media.Database.CurrentStep == nil ||
 			media.Database.TotalSteps == nil ||
 			media.Database.CurrentStepDisplay == nil {
 			generateDB.SwitchToPage("initial")
 		} else {
-			// Set progress directly to avoid nested QueueUpdateDraw calls
 			progressBar.SetProgress(float64(*media.Database.CurrentStep) / float64(*media.Database.TotalSteps))
 			statusText.SetText(*media.Database.CurrentStepDisplay)
 			generateDB.SwitchToPage("progress")
@@ -398,14 +396,12 @@ func BuildGenerateDBPage(
 	}
 
 	go func() {
-		defer cancel() // Ensure cleanup on goroutine exit
+		defer cancel()
 
-		// Continue with normal notification loop
 		var lastUpdate *models.IndexingStatusResponse
 		for {
 			select {
 			case <-ctx.Done():
-				// Context cancelled, clean exit
 				return
 			default:
 				indexing, err := waitGenerateUpdate(ctx, cfg)
@@ -413,7 +409,6 @@ func BuildGenerateDBPage(
 					continue
 				} else if err != nil {
 					if errors.Is(err, client.ErrRequestCancelled) {
-						// Context cancelled during request, clean exit
 						return
 					}
 					log.Error().Err(err).Msg("error waiting for indexing update")
@@ -435,7 +430,6 @@ func BuildGenerateDBPage(
 						*indexing.TotalSteps,
 						*indexing.CurrentStepDisplay,
 					)
-					// Switch to progress page if we're not already there
 					app.QueueUpdateDraw(func() {
 						generateDB.SwitchToPage("progress")
 					})

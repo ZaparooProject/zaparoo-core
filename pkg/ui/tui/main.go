@@ -38,7 +38,7 @@ import (
 const (
 	PageMain                  = "main"
 	PageSettingsMain          = "settings_main"
-	PageSettingsBasic         = "settings_basic" // Kept for compatibility
+	PageSettingsBasic         = "settings_basic"
 	PageSettingsAdvanced      = "settings_advanced"
 	PageSettingsReaderList    = "settings_reader_list"
 	PageSettingsReaderEdit    = "settings_reader_edit"
@@ -50,6 +50,7 @@ const (
 	PageSettingsScanMode      = "settings_readers_scanMode"
 	PageSettingsAudioMenu     = "settings_audio_menu"
 	PageSettingsReadersMenu   = "settings_readers_menu"
+	PageSettingsTUI           = "settings_tui"
 	PageSearchMedia           = "search_media"
 	PageExportLog             = "export_log"
 	PageGenerateDB            = "generate_db"
@@ -95,6 +96,8 @@ func setupButtonNavigation(
 	}
 }
 
+var mainPageNotifyCancel context.CancelFunc
+
 func BuildMainPage(
 	cfg *config.Instance,
 	pages *tview.Pages,
@@ -104,8 +107,12 @@ func BuildMainPage(
 	logDestPath string,
 	logDestName string,
 ) tview.Primitive {
-	// Create cancellable context for notification goroutine cleanup
+	if mainPageNotifyCancel != nil {
+		mainPageNotifyCancel()
+	}
+
 	notifyCtx, notifyCancel := context.WithCancel(context.Background())
+	mainPageNotifyCancel = notifyCancel
 
 	main := tview.NewFlex()
 
@@ -225,7 +232,6 @@ func BuildMainPage(
 	displayCol.AddItem(lastScanned, 6, 1, false)
 	displayCol.AddItem(helpText, 1, 1, false)
 
-	// create the main modal
 	main.SetTitle("Zaparoo Core v" + config.AppVersion + " (" + pl.ID() + ")").
 		SetBorder(true).
 		SetTitleAlign(tview.AlignCenter)
@@ -253,8 +259,12 @@ func BuildMainPage(
 		helpText.SetText("Scan disk to create index of games.")
 	})
 
+	rebuildMainPage := func() {
+		BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName)
+	}
+
 	settingsButton := tview.NewButton("Settings").SetSelectedFunc(func() {
-		BuildSettingsMainMenu(cfg, pages, app, pl)
+		BuildSettingsMainMenu(cfg, pages, app, pl, rebuildMainPage)
 	})
 	settingsButton.SetFocusFunc(func() {
 		helpText.SetText("Manage settings for Core service.")
@@ -280,7 +290,6 @@ func BuildMainPage(
 	})
 
 	if svcRunning {
-		// Service running: navigate all buttons
 		setupButtonNavigation(
 			app,
 			searchButton,
@@ -291,13 +300,11 @@ func BuildMainPage(
 			exitButton,
 		)
 	} else {
-		// Service down: only navigate Logs and Exit
 		setupButtonNavigation(
 			app,
 			exportButton,
 			exitButton,
 		)
-		// Disable the other buttons
 		searchButton.SetDisabled(true)
 		writeButton.SetDisabled(true)
 		updateDBButton.SetDisabled(true)
@@ -333,8 +340,17 @@ func BuildMain(
 	logDestPath string,
 	logDestName string,
 ) (*tview.Application, error) {
+	if err := config.LoadTUIConfig(helpers.ConfigDir(pl)); err != nil {
+		log.Warn().Err(err).Msg("failed to load TUI config, using defaults")
+	}
+
+	tuiCfg := config.GetTUIConfig()
+	if !SetCurrentTheme(tuiCfg.Theme) {
+		log.Warn().Str("theme", tuiCfg.Theme).Msg("unknown theme, using default")
+		SetCurrentTheme("default")
+	}
+
 	app := tview.NewApplication()
-	SetTheme(&tview.Styles)
 
 	pages := tview.NewPages()
 	BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName)

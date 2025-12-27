@@ -107,26 +107,61 @@ func TestPageDefaults_MultiplePAges(t *testing.T) {
 	assert.True(t, pages.HasPage("page2"))
 }
 
-func TestSetTheme(t *testing.T) {
+func TestCurrentTheme(t *testing.T) {
 	t.Parallel()
 
-	theme := &tview.Theme{}
+	theme := CurrentTheme()
 
-	SetTheme(theme)
+	require.NotNil(t, theme)
+	assert.NotEmpty(t, theme.Name)
+	assert.NotEmpty(t, theme.DisplayName)
+	assert.NotEmpty(t, theme.BgColorName)
+	assert.NotEmpty(t, theme.AccentColorName)
+	assert.NotEmpty(t, theme.TextColorName)
+}
+
+func TestSetCurrentTheme(t *testing.T) {
+	// Not parallel - modifies global tview.Styles which races with widget creation in other tests
+
+	// Setting a valid theme should return true
+	ok := SetCurrentTheme("default")
+	assert.True(t, ok)
+	assert.Equal(t, "default", CurrentTheme().Name)
+
+	// Setting an invalid theme should return false
+	ok = SetCurrentTheme("nonexistent_theme")
+	assert.False(t, ok)
+
+	// Theme should still be the last valid one
+	assert.Equal(t, "default", CurrentTheme().Name)
+}
+
+func TestAvailableThemes(t *testing.T) {
+	t.Parallel()
+
+	assert.NotEmpty(t, AvailableThemes)
+	assert.NotEmpty(t, ThemeNames)
+
+	// All names in ThemeNames should exist in AvailableThemes
+	for _, name := range ThemeNames {
+		theme, ok := AvailableThemes[name]
+		assert.True(t, ok, "Theme %s should exist in AvailableThemes", name)
+		assert.NotNil(t, theme)
+		assert.Equal(t, name, theme.Name)
+	}
+}
+
+func TestThemeDefaultColors(t *testing.T) {
+	t.Parallel()
+
+	theme := &ThemeDefault
 
 	assert.Equal(t, tcell.ColorLightYellow, theme.BorderColor)
 	assert.Equal(t, tcell.ColorWhite, theme.PrimaryTextColor)
-	assert.Equal(t, tcell.ColorFuchsia, theme.ContrastSecondaryTextColor)
 	assert.Equal(t, tcell.ColorDarkBlue, theme.PrimitiveBackgroundColor)
 	assert.Equal(t, tcell.ColorBlue, theme.ContrastBackgroundColor)
-	assert.Equal(t, tcell.ColorDarkBlue, theme.InverseTextColor)
-}
-
-func TestThemeBgColorConstant(t *testing.T) {
-	t.Parallel()
-
-	// ThemeBgColor should match what SetTheme sets for PrimitiveBackgroundColor
-	assert.Equal(t, "darkblue", ThemeBgColor)
+	assert.Equal(t, "darkblue", theme.BgColorName)
+	assert.Equal(t, "yellow", theme.AccentColorName)
 }
 
 func TestGenericModal_WithButton(t *testing.T) {

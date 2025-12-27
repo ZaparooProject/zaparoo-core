@@ -40,9 +40,10 @@ func BuildSettingsMainMenu(
 	pages *tview.Pages,
 	app *tview.Application,
 	pl platforms.Platform,
+	rebuildMainPage func(),
 ) {
 	svc := NewSettingsService(client.NewLocalAPIClient(cfg))
-	BuildSettingsMainMenuWithService(cfg, svc, pages, app, pl)
+	BuildSettingsMainMenuWithService(cfg, svc, pages, app, pl, rebuildMainPage)
 }
 
 // BuildSettingsMainMenuWithService creates the settings menu using the given SettingsService.
@@ -52,9 +53,17 @@ func BuildSettingsMainMenuWithService(
 	pages *tview.Pages,
 	app *tview.Application,
 	pl platforms.Platform,
+	rebuildMainPage func(),
 ) {
 	mainMenu := NewSettingsList(pages, PageMain)
 	mainMenu.SetTitle("Settings")
+	if rebuildMainPage != nil {
+		mainMenu.SetRebuildPrevious(rebuildMainPage)
+	}
+
+	rebuildSettingsMain := func() {
+		BuildSettingsMainMenuWithService(cfg, svc, pages, app, pl, rebuildMainPage)
+	}
 
 	mainMenu.
 		AddAction("Readers", "Reader connections and scanning", func() {
@@ -62,6 +71,9 @@ func BuildSettingsMainMenuWithService(
 		}).
 		AddAction("Audio", "Sound and feedback settings", func() {
 			buildAudioSettingsMenu(svc, pages, app)
+		}).
+		AddAction("TUI", "Theme and display preferences", func() {
+			buildTUISettingsMenu(pages, pl, rebuildSettingsMain)
 		}).
 		AddAction("Advanced", "Debug and system options", func() {
 			buildAdvancedSettingsMenu(svc, pages, app)
@@ -205,7 +217,6 @@ func buildReadersSettingsMenu(
 
 	menu.AddBack()
 
-	// Set up Left/Right key handling for cycles only
 	cycleIndices := map[int]func(delta int){
 		scanModeIdx: func(delta int) {
 			scanModeIndex = (scanModeIndex + delta + len(scanModeOptions)) % len(scanModeOptions)
@@ -309,14 +320,12 @@ func buildReaderListPage(
 
 	readers := settings.ReadersConnect
 
-	// Create the main layout
 	layout := tview.NewFlex().SetDirection(tview.FlexRow)
 	layout.SetTitle("Manage Readers")
 	layout.SetBorder(true)
 
-	// Reader list
 	readerList := tview.NewList()
-	readerList.SetSecondaryTextColor(tcell.ColorYellow)
+	readerList.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
 	readerList.ShowSecondaryText(true)
 
 	refreshList := func() {
@@ -341,11 +350,9 @@ func buildReaderListPage(
 	}
 	refreshList()
 
-	// Button bar
 	buttonBar := NewButtonBar(app)
 
 	buttonBar.AddButton("Add", func() {
-		// Open edit page for a new reader (will be added on Save)
 		buildReaderEditPage(cfg, svc, pages, app, pl, &readers, len(readers))
 	})
 
@@ -383,7 +390,6 @@ func buildReaderListPage(
 		pages.SwitchToPage(PageSettingsReadersMenu)
 	})
 
-	// Navigation between list and buttons
 	inButtonBar := false
 
 	readerList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -403,7 +409,6 @@ func buildReaderListPage(
 		return event
 	})
 
-	// Allow going back to list from button bar
 	for _, btn := range buttonBar.buttons {
 		originalCapture := btn.GetInputCapture()
 		btn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -453,7 +458,6 @@ func buildReaderEditPage(
 		availableDrivers = append(availableDrivers, r.Metadata().ID)
 	}
 
-	// Handle case where no drivers are available
 	if len(availableDrivers) == 0 {
 		showErrorModal(pages, app, "No reader drivers available for this platform")
 		buildReaderListPage(cfg, svc, pages, app, pl)
@@ -468,7 +472,6 @@ func buildReaderEditPage(
 	}
 	layout.SetBorder(true)
 
-	// Driver selector (as a list for easy cycling)
 	driverIndex := 0
 	for i, d := range availableDrivers {
 		if d == reader.Driver {
@@ -479,7 +482,11 @@ func buildReaderEditPage(
 
 	driverDisplay := tview.NewTextView().SetDynamicColors(true)
 	updateDriverDisplay := func() {
-		driverDisplay.SetText(fmt.Sprintf("[yellow]Driver:[white] < %s >", availableDrivers[driverIndex]))
+		t := CurrentTheme()
+		driverDisplay.SetText(fmt.Sprintf(
+			"[%s]Driver:[%s] < %s >",
+			t.AccentColorName, t.TextColorName, availableDrivers[driverIndex],
+		))
 	}
 	updateDriverDisplay()
 
@@ -495,7 +502,6 @@ func buildReaderEditPage(
 		SetFieldWidth(20)
 	setupInputFieldFocus(idSourceInput)
 
-	// Button bar
 	buttonBar := NewButtonBar(app)
 
 	buttonBar.AddButton("Save", func() {
@@ -530,7 +536,6 @@ func buildReaderEditPage(
 		buildReaderListPage(cfg, svc, pages, app, pl)
 	})
 
-	// Focus navigation order: driver -> path -> idSource -> buttons
 	focusOrder := []tview.Primitive{driverDisplay, pathInput, idSourceInput, buttonBar.GetFirstButton()}
 
 	setFocus := func(idx int) {
@@ -595,7 +600,6 @@ func buildReaderEditPage(
 		}
 	})
 
-	// Update button bar to go back to inputs on Up
 	for _, btn := range buttonBar.buttons {
 		originalCapture := btn.GetInputCapture()
 		btn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -633,7 +637,6 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 		return nil
 	}
 
-	// Get systems from API (filtered for platform)
 	systems, err := svc.GetSystems(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching systems")
@@ -642,7 +645,6 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 		return nil
 	}
 
-	// Build items with display name and system ID
 	items := make([]SystemItem, len(systems))
 	for i, sys := range systems {
 		label := sys.Name
@@ -656,10 +658,8 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 	layout.SetTitle("Ignore Systems")
 	layout.SetBorder(true)
 
-	// Done button saves and navigates back
 	doneBtn := tview.NewButton("Done")
 
-	// Create system selector in multi-select mode
 	var systemSelector *SystemSelector
 	systemSelector = NewSystemSelector(&SystemSelectorConfig{
 		Mode:     SystemSelectorMulti,
@@ -688,11 +688,9 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 			showErrorModal(pages, app, "Failed to save ignored systems")
 			return
 		}
-		// Rebuild Advanced page to update the count display (also switches to it)
 		buildAdvancedSettingsMenu(svc, pages, app)
 	})
 
-	// Initialize button label
 	count := systemSelector.GetSelectedCount()
 	if count > 0 {
 		doneBtn.SetLabel(fmt.Sprintf("Done (%d selected)", count))
@@ -748,7 +746,6 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 		AddFormItem(topTextView)
 	tagsReadMenu.SetTitle("Settings - NFC Tags - Read")
 
-	// Track if we're currently waiting for a tag (only accessed via QueueUpdateDraw)
 	var readCancel context.CancelFunc
 	reading := false
 

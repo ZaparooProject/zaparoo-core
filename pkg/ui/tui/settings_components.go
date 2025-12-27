@@ -26,21 +26,13 @@ import (
 	"github.com/rivo/tview"
 )
 
-// Focus styling colors for input fields.
-var (
-	fieldFocusedBgColor   = tcell.ColorBlue
-	fieldUnfocusedBgColor = tcell.ColorDarkBlue
-)
-
-// setupInputFieldFocus adds focus/blur handlers to style the input field.
-// When focused, the field has a brighter background for visibility.
 func setupInputFieldFocus(field *tview.InputField) *tview.InputField {
-	field.SetFieldBackgroundColor(fieldUnfocusedBgColor)
+	field.SetFieldBackgroundColor(CurrentTheme().FieldUnfocusedBg)
 	field.SetFocusFunc(func() {
-		field.SetFieldBackgroundColor(fieldFocusedBgColor)
+		field.SetFieldBackgroundColor(CurrentTheme().FieldFocusedBg)
 	})
 	field.SetBlurFunc(func() {
-		field.SetFieldBackgroundColor(fieldUnfocusedBgColor)
+		field.SetFieldBackgroundColor(CurrentTheme().FieldUnfocusedBg)
 	})
 	return field
 }
@@ -102,31 +94,45 @@ func showConfirmModal(pages *tview.Pages, app *tview.Application, message string
 
 // formatToggle renders a toggle value. When selected, label is highlighted.
 func formatToggle(value bool, label string, selected bool) string {
+	t := CurrentTheme()
 	checkbox := "[ ]"
 	if value {
 		checkbox = "[*]"
 	}
 	if selected {
-		return fmt.Sprintf("[yellow:%s]- %s [black:yellow]%s[-:%s]", ThemeBgColor, checkbox, label, ThemeBgColor)
+		return fmt.Sprintf("[%s:%s]- %s [%s:%s]%s[-:%s]",
+			t.AccentColorName, t.BgColorName, checkbox,
+			t.HighlightFgName, t.HighlightBgName, label, t.BgColorName)
 	}
-	return fmt.Sprintf("[yellow:%s]- %s [white:%s]%s[-:-]", ThemeBgColor, checkbox, ThemeBgColor, label)
+	return fmt.Sprintf("[%s:%s]- %s [%s:%s]%s[-:-]",
+		t.AccentColorName, t.BgColorName, checkbox,
+		t.TextColorName, t.BgColorName, label)
 }
 
 // formatCycle renders a cycle value. When selected, label and value are highlighted.
 func formatCycle(label, currentValue string, selected bool) string {
-	bg := ThemeBgColor
+	t := CurrentTheme()
 	if selected {
-		return fmt.Sprintf("[yellow:%s]- [black:yellow]%s: < %s >[-:%s]", bg, label, currentValue, bg)
+		return fmt.Sprintf("[%s:%s]- [%s:%s]%s: < %s >[-:%s]",
+			t.AccentColorName, t.BgColorName,
+			t.HighlightFgName, t.HighlightBgName, label, currentValue, t.BgColorName)
 	}
-	return fmt.Sprintf("[yellow:%s]- [white:%s]%s: < %s >[-:-]", bg, bg, label, currentValue)
+	return fmt.Sprintf("[%s:%s]- [%s:%s]%s: < %s >[-:-]",
+		t.AccentColorName, t.BgColorName,
+		t.TextColorName, t.BgColorName, label, currentValue)
 }
 
 // formatAction renders an action item. When selected, label is highlighted.
 func formatAction(label string, selected bool) string {
+	t := CurrentTheme()
 	if selected {
-		return "[yellow:" + ThemeBgColor + "]- [black:yellow]" + label + "[-:" + ThemeBgColor + "]"
+		return fmt.Sprintf("[%s:%s]- [%s:%s]%s[-:%s]",
+			t.AccentColorName, t.BgColorName,
+			t.HighlightFgName, t.HighlightBgName, label, t.BgColorName)
 	}
-	return "[yellow:" + ThemeBgColor + "]- [white:" + ThemeBgColor + "]" + label + "[-:-]"
+	return fmt.Sprintf("[%s:%s]- [%s:%s]%s[-:-]",
+		t.AccentColorName, t.BgColorName,
+		t.TextColorName, t.BgColorName, label)
 }
 
 // formatDesc renders a description with 2-space indent.
@@ -144,24 +150,21 @@ type settingsItem struct {
 	cycleOptions []string
 }
 
-// SettingsList wraps a tview.List with consistent game-like navigation.
-// It handles arrow keys for navigation and Escape to go back.
-// It manually manages selection highlighting so only the label is highlighted.
+// SettingsList wraps a tview.List with consistent navigation and manual highlight management.
 type SettingsList struct {
 	*tview.List
-	pages        *tview.Pages
-	previousPage string
-	items        []settingsItem
+	pages           *tview.Pages
+	rebuildPrevious func()
+	previousPage    string
+	items           []settingsItem
 }
 
-// NewSettingsList creates a new settings list with game-like navigation.
+// NewSettingsList creates a new settings list with arrow key navigation.
 func NewSettingsList(pages *tview.Pages, previousPage string) *SettingsList {
 	list := tview.NewList()
-	list.SetSecondaryTextColor(tcell.ColorGray)
+	list.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
 	list.ShowSecondaryText(true)
 	list.SetHighlightFullLine(false)
-
-	// Disable built-in selection highlighting - we manage it manually
 	list.SetSelectedStyle(tcell.StyleDefault)
 	list.SetMainTextStyle(tcell.StyleDefault)
 
@@ -172,20 +175,35 @@ func NewSettingsList(pages *tview.Pages, previousPage string) *SettingsList {
 		items:        make([]settingsItem, 0),
 	}
 
-	// Update item styling when selection changes
 	list.SetChangedFunc(func(index int, _, _ string, _ rune) {
 		sl.refreshAllItems(index)
 	})
 
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
-			pages.SwitchToPage(previousPage)
+			sl.goBack()
 			return nil
 		}
 		return event
 	})
 
 	return sl
+}
+
+// SetRebuildPrevious sets a callback to rebuild the previous page on Back navigation.
+// When set, going back will call this function instead of just switching to the cached page.
+func (sl *SettingsList) SetRebuildPrevious(fn func()) *SettingsList {
+	sl.rebuildPrevious = fn
+	return sl
+}
+
+// goBack navigates to the previous page, rebuilding it if a rebuild callback is set.
+func (sl *SettingsList) goBack() {
+	if sl.rebuildPrevious != nil {
+		sl.rebuildPrevious()
+	} else {
+		sl.pages.SwitchToPage(sl.previousPage)
+	}
 }
 
 // refreshAllItems updates all items to reflect current selection state.
@@ -298,13 +316,12 @@ func (sl *SettingsList) AddBackWithDesc(description string) *SettingsList {
 	})
 
 	sl.AddItem(formatAction("Go back", selected), formatDesc(description), 0, func() {
-		sl.pages.SwitchToPage(sl.previousPage)
+		sl.goBack()
 	})
 	return sl
 }
 
-// SetupCycleKeys adds input capture to handle Left/Right keys for cycle selectors only.
-// Toggles use Enter only. This should be called after all items are added.
+// SetupCycleKeys adds Left/Right key handling for cycle items.
 func (sl *SettingsList) SetupCycleKeys(
 	cycleIndices map[int]func(delta int),
 ) *SettingsList {
@@ -429,7 +446,7 @@ func NewCheckListWithValues(
 	onChange func(selected []string),
 ) *CheckList {
 	list := tview.NewList()
-	list.SetSecondaryTextColor(tcell.ColorYellow)
+	list.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
 	list.ShowSecondaryText(false)
 
 	selectedMap := make(map[int]bool)
@@ -509,7 +526,7 @@ func (cl *CheckList) SetSelectionSyncFunc(fn func(count int)) {
 	cl.onSelectionSync = fn
 }
 
-// SetupNavigation adds escape key handling. Toggles use Enter only.
+// SetupNavigation adds escape key handling.
 func (cl *CheckList) SetupNavigation(pages *tview.Pages, previousPage string) *CheckList {
 	cl.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
@@ -565,14 +582,13 @@ type SystemSelectorConfig struct {
 // NewSystemSelector creates a new system selector with the given configuration.
 func NewSystemSelector(cfg *SystemSelectorConfig) *SystemSelector {
 	list := tview.NewList()
-	list.SetSecondaryTextColor(tcell.ColorYellow)
+	list.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
 	list.ShowSecondaryText(false)
 	list.SetWrapAround(false)
 
 	selectedMap := make(map[int]bool)
 	singleIndex := 0
 
-	// For multi-select, build the selected map
 	if cfg.Mode == SystemSelectorMulti {
 		for i, item := range cfg.Systems {
 			for _, sel := range cfg.Selected {
@@ -583,7 +599,6 @@ func NewSystemSelector(cfg *SystemSelectorConfig) *SystemSelector {
 			}
 		}
 	} else if len(cfg.Selected) > 0 && cfg.Selected[0] != "" {
-		// For single-select, find the index of the selected system
 		for i, item := range cfg.Systems {
 			if item.ID == cfg.Selected[0] {
 				if cfg.IncludeAll {
@@ -617,7 +632,6 @@ func (ss *SystemSelector) refresh() {
 	ss.Clear()
 
 	if ss.mode == SystemSelectorSingle {
-		// Single-select mode
 		if ss.includeAll {
 			ss.AddItem(ss.formatSingleItem(0, "All"), "", 0, func() {
 				ss.selectSingle(-1)
@@ -635,7 +649,6 @@ func (ss *SystemSelector) refresh() {
 		}
 		ss.SetCurrentItem(ss.singleIndex)
 	} else {
-		// Multi-select mode
 		for i, item := range ss.items {
 			index := i
 			ss.AddItem(ss.formatMultiItem(index, item.Name), "", 0, func() {
@@ -707,7 +720,6 @@ func (ss *SystemSelector) GetSelected() []string {
 		return []string{}
 	}
 
-	// Multi-select mode
 	result := make([]string, 0)
 	for i, item := range ss.items {
 		if ss.selected[i] {
