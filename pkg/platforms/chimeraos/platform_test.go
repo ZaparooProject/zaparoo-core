@@ -26,7 +26,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,7 +39,7 @@ func TestNewPlatform(t *testing.T) {
 
 	assert.NotNil(t, p)
 	assert.NotNil(t, p.Base)
-	assert.Equal(t, platforms.PlatformIDChimeraOS, p.ID())
+	assert.Equal(t, platformids.ChimeraOS, p.ID())
 }
 
 func TestPlatformID(t *testing.T) {
@@ -47,7 +47,7 @@ func TestPlatformID(t *testing.T) {
 
 	p := NewPlatform()
 
-	assert.Equal(t, platforms.PlatformIDChimeraOS, p.ID())
+	assert.Equal(t, platformids.ChimeraOS, p.ID())
 }
 
 func TestPlatformSettings(t *testing.T) {

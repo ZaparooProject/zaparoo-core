@@ -19,6 +19,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
@@ -66,7 +67,7 @@ type Platform struct {
 }
 
 func (*Platform) ID() string {
-	return platforms.PlatformIDBatocera
+	return platformids.Batocera
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {

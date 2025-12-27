@@ -389,7 +389,7 @@ func BuildMain(
 	logDestPath string,
 	logDestName string,
 ) (*tview.Application, error) {
-	if err := config.LoadTUIConfig(helpers.ConfigDir(pl)); err != nil {
+	if err := config.LoadTUIConfig(helpers.ConfigDir(pl), pl.ID()); err != nil {
 		log.Warn().Err(err).Msg("failed to load TUI config, using defaults")
 	}
 

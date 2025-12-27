@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog/log"
 )
@@ -37,15 +38,62 @@ type TUIConfig struct {
 	CRTMode     bool   `toml:"crt_mode"`
 }
 
+// tuiConfigRaw is used for TOML unmarshalling with pointer fields
+// to distinguish between missing values and explicit false/empty.
+type tuiConfigRaw struct {
+	Theme       *string `toml:"theme"`
+	WriteFormat *string `toml:"write_format"`
+	Mouse       *bool   `toml:"mouse"`
+	CRTMode     *bool   `toml:"crt_mode"`
+}
+
+const (
+	defaultTUITheme       = "default"
+	defaultTUIWriteFormat = "zapscript"
+	defaultTUIMouse       = true
+	defaultTUICRTMode     = false
+)
+
 var tuiCfg atomic.Value
 
 // DefaultTUIConfig returns the default TUI configuration.
 func DefaultTUIConfig() TUIConfig {
 	return TUIConfig{
-		Theme:       "default",
-		Mouse:       true,
-		WriteFormat: "zapscript",
+		Theme:       defaultTUITheme,
+		WriteFormat: defaultTUIWriteFormat,
+		Mouse:       defaultTUIMouse,
+		CRTMode:     defaultTUICRTMode,
 	}
+}
+
+// isCRTPlatform returns true for platforms that default to CRT mode.
+func isCRTPlatform(platformID string) bool {
+	return platformID == platformids.Mister || platformID == platformids.Mistex
+}
+
+// applyTUIDefaults merges raw config with defaults for any missing values.
+// Platform ID is used to apply platform-specific defaults (e.g., CRT mode on MiSTer).
+func applyTUIDefaults(raw tuiConfigRaw, platformID string) TUIConfig {
+	cfg := DefaultTUIConfig()
+
+	// Apply platform-specific defaults before user overrides
+	if isCRTPlatform(platformID) {
+		cfg.CRTMode = true
+	}
+
+	if raw.Theme != nil {
+		cfg.Theme = *raw.Theme
+	}
+	if raw.WriteFormat != nil {
+		cfg.WriteFormat = *raw.WriteFormat
+	}
+	if raw.Mouse != nil {
+		cfg.Mouse = *raw.Mouse
+	}
+	if raw.CRTMode != nil {
+		cfg.CRTMode = *raw.CRTMode
+	}
+	return cfg
 }
 
 // GetTUIConfig returns the current TUI configuration.
@@ -68,16 +116,18 @@ func SetTUIConfig(cfg TUIConfig) {
 
 // LoadTUIConfig loads the TUI configuration from disk.
 // If the file doesn't exist, it creates one with default values.
-func LoadTUIConfig(configDir string) error {
+// Missing values in the file are filled with defaults.
+// Platform ID is used to apply platform-specific defaults (e.g., CRT mode on MiSTer).
+func LoadTUIConfig(configDir, platformID string) error {
 	tuiPath := filepath.Clean(filepath.Join(configDir, TUIFile))
 
 	if _, err := os.Stat(tuiPath); os.IsNotExist(err) {
 		log.Info().Str("path", tuiPath).Msg("creating default TUI config")
-		cfg := DefaultTUIConfig()
+		cfg := applyTUIDefaults(tuiConfigRaw{}, platformID)
+		tuiCfg.Store(cfg)
 		if err := SaveTUIConfig(configDir); err != nil {
 			return fmt.Errorf("failed to create TUI config: %w", err)
 		}
-		tuiCfg.Store(cfg)
 		return nil
 	}
 
@@ -87,11 +137,12 @@ func LoadTUIConfig(configDir string) error {
 		return fmt.Errorf("failed to read TUI config: %w", err)
 	}
 
-	var cfg TUIConfig
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	var raw tuiConfigRaw
+	if err := toml.Unmarshal(data, &raw); err != nil {
 		return fmt.Errorf("failed to unmarshal TUI config: %w", err)
 	}
 
+	cfg := applyTUIDefaults(raw, platformID)
 	tuiCfg.Store(cfg)
 	return nil
 }
