@@ -69,6 +69,29 @@ func getTokens(ctx context.Context, cfg *config.Instance) (models.TokensResponse
 	return tokens, nil
 }
 
+func getReaders(ctx context.Context, cfg *config.Instance) (models.ReadersResponse, error) {
+	resp, err := client.LocalClient(ctx, cfg, models.MethodReaders, "")
+	if err != nil {
+		return models.ReadersResponse{}, fmt.Errorf("failed to get readers from local client: %w", err)
+	}
+	var readers models.ReadersResponse
+	err = json.Unmarshal([]byte(resp), &readers)
+	if err != nil {
+		return models.ReadersResponse{}, fmt.Errorf("failed to unmarshal readers response: %w", err)
+	}
+	return readers, nil
+}
+
+func formatReaderStatus(count int) string {
+	if count == 0 {
+		return "No readers connected"
+	}
+	if count == 1 {
+		return "1 reader connected"
+	}
+	return fmt.Sprintf("%d readers connected", count)
+}
+
 func setupButtonNavigation(
 	app *tview.Application,
 	buttons ...*tview.Button,
@@ -140,14 +163,29 @@ func BuildMainPage(
 
 	webUI := fmt.Sprintf("http://%s:%d/app/", ip, cfg.APIPort())
 
-	statusText.SetText(
-		fmt.Sprintf(
-			"[::b]Status:[::-]  %s\n[::b]Address:[::-] %s\n[::b]Web UI:[::-]  [:::%s]%s[:::-]",
-			svcStatus,
-			ipDisplay,
-			webUI, webUI,
-		),
-	)
+	var readerStatus string
+	if svcRunning {
+		ctx, cancel := tuiContext()
+		readers, err := getReaders(ctx, cfg)
+		cancel()
+		if err != nil {
+			log.Error().Err(err).Msg("failed to get readers")
+			readerStatus = "-"
+		} else {
+			readerStatus = formatReaderStatus(len(readers.Readers))
+		}
+	} else {
+		readerStatus = "-"
+	}
+
+	updateStatusText := func(readerStatus string) {
+		statusText.SetText(fmt.Sprintf(
+			"[::b]Status:[::-]  %s\n[::b]Address:[::-] %s\n[::b]Web UI:[::-]  [:::%s]%s[:::-]\n"+
+				"[::b]Readers:[::-] %s",
+			svcStatus, ipDisplay, webUI, webUI, readerStatus,
+		))
+	}
+	updateStatusText(readerStatus)
 
 	helpText := tview.NewTextView()
 	lastScanned := tview.NewTextView()
@@ -173,7 +211,7 @@ func BuildMainPage(
 		}
 
 		go func() {
-			log.Debug().Msg("starting notification listener for last scanned updates")
+			log.Debug().Msg("starting notification listener")
 			for {
 				select {
 				case <-notifyCtx.Done():
@@ -182,9 +220,11 @@ func BuildMainPage(
 				default:
 				}
 
-				resp, err := client.WaitNotification(
-					notifyCtx, -1,
-					cfg, models.NotificationTokensAdded,
+				notifyType, resp, err := client.WaitNotifications(
+					notifyCtx, -1, cfg,
+					models.NotificationTokensAdded,
+					models.NotificationReadersConnected,
+					models.NotificationReadersDisconnected,
 				)
 				switch {
 				case errors.Is(err, client.ErrRequestTimeout):
@@ -194,32 +234,40 @@ func BuildMainPage(
 					return
 				case err != nil:
 					log.Error().Err(err).Msg("notification listener error")
-					app.QueueUpdateDraw(func() {
-						lastScanned.SetText("Error checking last scanned:\n" + err.Error())
-					})
 					return
 				}
 
-				log.Debug().Str("resp", resp).Msg("received token notification")
+				log.Debug().Str("type", notifyType).Msg("received notification")
 
-				var token models.TokenResponse
-				err = json.Unmarshal([]byte(resp), &token)
-				if err != nil {
-					log.Error().Err(err).Str("resp", resp).Msg("error unmarshalling token notification")
+				switch notifyType {
+				case models.NotificationTokensAdded:
+					var token models.TokenResponse
+					if err := json.Unmarshal([]byte(resp), &token); err != nil {
+						log.Error().Err(err).Str("resp", resp).Msg("error unmarshalling token notification")
+						continue
+					}
 					app.QueueUpdateDraw(func() {
-						lastScanned.SetText("Error checking last scanned:\n" + err.Error())
+						lastScanned.SetText(fmt.Sprintf(
+							"[::b]Time:[::-]  %s\n[::b]ID:[::-]    %s\n[::b]Value:[::-] %s",
+							token.ScanTime.Format("2006-01-02 15:04:05"),
+							token.UID,
+							token.Text,
+						))
 					})
-					return
-				}
 
-				app.QueueUpdateDraw(func() {
-					lastScanned.SetText(fmt.Sprintf(
-						"[::b]Time:[::-]  %s\n[::b]ID:[::-]    %s\n[::b]Value:[::-] %s",
-						token.ScanTime.Format("2006-01-02 15:04:05"),
-						token.UID,
-						token.Text,
-					))
-				})
+				case models.NotificationReadersConnected, models.NotificationReadersDisconnected:
+					ctx, cancel := tuiContext()
+					readers, err := getReaders(ctx, cfg)
+					cancel()
+					if err != nil {
+						log.Error().Err(err).Msg("failed to refresh reader status")
+						continue
+					}
+					newStatus := formatReaderStatus(len(readers.Readers))
+					app.QueueUpdateDraw(func() {
+						updateStatusText(newStatus)
+					})
+				}
 			}
 		}()
 	} else {
