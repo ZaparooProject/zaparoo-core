@@ -23,7 +23,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -370,10 +372,21 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 
 		mediaList.Clear()
 		mediaList.SetCurrentItem(0)
+		tuiCfg := config.GetTUIConfig()
 		for i := range results.Results {
 			result := &results.Results[i]
-			mediaList.AddItem(result.Name, result.System.Name, 0, func() {
-				writeTag(result.Path)
+			var displayName, writeValue string
+			if tuiCfg.WriteFormat == "path" {
+				base := filepath.Base(result.Path)
+				ext := filepath.Ext(base)
+				displayName = strings.TrimSuffix(base, ext)
+				writeValue = result.Path
+			} else {
+				displayName = result.Name
+				writeValue = result.ZapScript
+			}
+			mediaList.AddItem(displayName, result.System.Name, 0, func() {
+				writeTag(writeValue)
 			})
 		}
 

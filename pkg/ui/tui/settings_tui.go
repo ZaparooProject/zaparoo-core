@@ -72,12 +72,48 @@ func buildTUISettingsMenu(
 		}()
 	})
 
+	writeFormatIdx := menu.GetItemCount()
+	writeFormatOptions := []string{"ZapScript", "File path"}
+	writeFormatValues := []string{"zapscript", "path"}
+	writeFormatIndex := 0
+	currentWriteFormat := config.GetTUIConfig().WriteFormat
+	for i, v := range writeFormatValues {
+		if v == currentWriteFormat {
+			writeFormatIndex = i
+			break
+		}
+	}
+	menu.AddCycle(
+		"Write format", "Format for tag writes from search",
+		writeFormatOptions, &writeFormatIndex, func(_ string, _ int) {
+			tuiCfg := config.GetTUIConfig()
+			tuiCfg.WriteFormat = writeFormatValues[writeFormatIndex]
+			config.SetTUIConfig(tuiCfg)
+			go func() {
+				if err := config.SaveTUIConfig(helpers.ConfigDir(pl)); err != nil {
+					log.Error().Err(err).Msg("failed to save TUI config")
+				}
+			}()
+		})
+
 	menu.AddBack()
 
 	cycleIndices := map[int]func(delta int){
 		themeIdx: func(delta int) {
 			themeIndex = (themeIndex + delta + len(ThemeNames)) % len(ThemeNames)
 			applyTheme()
+		},
+		writeFormatIdx: func(delta int) {
+			writeFormatIndex = (writeFormatIndex + delta + len(writeFormatValues)) % len(writeFormatValues)
+			tuiCfg := config.GetTUIConfig()
+			tuiCfg.WriteFormat = writeFormatValues[writeFormatIndex]
+			config.SetTUIConfig(tuiCfg)
+			go func() {
+				if err := config.SaveTUIConfig(helpers.ConfigDir(pl)); err != nil {
+					log.Error().Err(err).Msg("failed to save TUI config")
+				}
+			}()
+			menu.refreshAllItems(menu.GetCurrentItem())
 		},
 	}
 

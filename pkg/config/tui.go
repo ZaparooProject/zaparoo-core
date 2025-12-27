@@ -31,8 +31,9 @@ import (
 
 // TUIConfig holds TUI-specific configuration.
 type TUIConfig struct {
-	Theme string `toml:"theme"`
-	Mouse bool   `toml:"mouse"`
+	Theme       string `toml:"theme"`
+	WriteFormat string `toml:"write_format"`
+	Mouse       bool   `toml:"mouse"`
 }
 
 var tuiCfg atomic.Value
@@ -40,8 +41,9 @@ var tuiCfg atomic.Value
 // DefaultTUIConfig returns the default TUI configuration.
 func DefaultTUIConfig() TUIConfig {
 	return TUIConfig{
-		Theme: "default",
-		Mouse: true,
+		Theme:       "default",
+		Mouse:       true,
+		WriteFormat: "zapscript",
 	}
 }
 
