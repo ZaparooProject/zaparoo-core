@@ -22,32 +22,79 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
+
+// validateZapScript parses the input and returns a validation status message.
+func validateZapScript(text string) (valid bool, message string) {
+	if strings.TrimSpace(text) == "" {
+		return false, ""
+	}
+
+	reader := parser.NewParser(text)
+	script, err := reader.ParseScript()
+	if err != nil {
+		return false, fmt.Sprintf("[red]Error: %s[-]", err.Error())
+	}
+
+	if len(script.Cmds) == 0 {
+		return false, "[yellow]No commands found[-]"
+	}
+
+	// Validate all command names are known
+	for _, cmd := range script.Cmds {
+		if !zapscript.IsValidCommand(cmd.Name) {
+			return false, fmt.Sprintf("[red]Unknown command: %s[-]", cmd.Name)
+		}
+	}
+
+	if len(script.Cmds) == 1 {
+		return true, fmt.Sprintf("[green]Valid: %s[-]", script.Cmds[0].Name)
+	}
+
+	return true, fmt.Sprintf("[green]Valid: %d commands[-]", len(script.Cmds))
+}
 
 // BuildTagsWriteMenu creates the tag write menu.
 func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) {
 	// Create page frame
 	frame := NewPageFrame(app).
 		SetTitle("Write Tag").
-		SetHelpText("Enter ZapScript and press Enter or Write button")
+		SetHelpText("Enter ZapScript and press Write button")
 
 	goBack := func() {
 		pages.SwitchToPage(PageMain)
 	}
 	frame.SetOnEscape(goBack)
 
-	// Create ZapScript input
-	zapScriptInput := tview.NewInputField()
-	zapScriptInput.SetLabel("ZapScript: ")
-	zapScriptInput.SetLabelWidth(11)
-	setupInputFieldFocus(zapScriptInput)
+	// Create label
+	zapScriptLabel := tview.NewTextView().SetText("ZapScript:")
+
+	// Create multiline text area for ZapScript input
+	zapScriptInput := tview.NewTextArea()
+	zapScriptInput.SetBorder(true)
+	zapScriptInput.SetBorderPadding(0, 0, 1, 1)
+
+	// Create validation status display
+	validationStatus := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText("")
+
+	// Update validation on text change
+	zapScriptInput.SetChangedFunc(func() {
+		text := zapScriptInput.GetText()
+		_, message := validateZapScript(text)
+		validationStatus.SetText(message)
+	})
 
 	var writeCancel context.CancelFunc
 
@@ -106,7 +153,6 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 					AddButtons([]string{"OK"}).
 					SetDoneFunc(func(_ int, _ string) {
 						pages.RemovePage("success_modal")
-						zapScriptInput.SetText("")
 						app.SetFocus(zapScriptInput)
 					})
 				pages.AddPage("success_modal", successModal, true, true)
@@ -121,24 +167,77 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 			showErrorModal(pages, app, "Please enter ZapScript before writing")
 			return
 		}
+		valid, _ := validateZapScript(text)
+		if !valid {
+			showErrorModal(pages, app, "Please fix ZapScript errors before writing")
+			return
+		}
 		writeTag(text)
 	}
 
-	// Button bar with Write and Back
+	doClear := func() {
+		zapScriptInput.SetText("", true)
+		validationStatus.SetText("")
+		app.SetFocus(zapScriptInput)
+	}
+
+	// Button bar with Write, Clear, and Back
 	buttonBar := NewButtonBar(app)
 	buttonBar.AddButton("Write", doWrite).
+		AddButton("Clear", doClear).
 		AddButton("Back", goBack).
 		SetupNavigation(goBack)
 	frame.SetButtonBar(buttonBar)
 
-	// Navigation from input
+	// Up from button bar goes to text area
+	buttonBar.SetOnUp(func() {
+		app.SetFocus(zapScriptInput)
+	})
+	// Down from button bar wraps to text area
+	buttonBar.SetOnDown(func() {
+		app.SetFocus(zapScriptInput)
+	})
+	// Left from button bar goes to text area
+	buttonBar.SetOnLeft(func() {
+		app.SetFocus(zapScriptInput)
+	})
+	// Right from last button wraps to text area
+	buttonBar.SetOnRight(func() {
+		app.SetFocus(zapScriptInput)
+	})
+
+	// Helper to count lines in text (0-indexed last line)
+	getLastLineIndex := func() int {
+		text := zapScriptInput.GetText()
+		if text == "" {
+			return 0
+		}
+		return strings.Count(text, "\n")
+	}
+
+	// Navigation from text area - intercept Up/Down at boundaries
 	zapScriptInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
-		case tcell.KeyTab, tcell.KeyDown:
+		case tcell.KeyUp:
+			// Get cursor position (fromRow, fromCol, toRow, toCol)
+			_, _, cursorRow, _ := zapScriptInput.GetCursor()
+			if cursorRow == 0 {
+				// On first line, navigate away
+				frame.FocusButtonBar()
+				return nil
+			}
+			return event
+		case tcell.KeyDown:
+			_, _, cursorRow, _ := zapScriptInput.GetCursor()
+			lastLine := getLastLineIndex()
+			if cursorRow >= lastLine {
+				// On last line, navigate away
+				frame.FocusButtonBar()
+				return nil
+			}
+			return event
+		case tcell.KeyTab:
 			frame.FocusButtonBar()
-			return nil
-		case tcell.KeyEnter:
-			doWrite()
 			return nil
 		case tcell.KeyEscape:
 			goBack()
@@ -148,10 +247,11 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 		}
 	})
 
-	// Main content layout - just the input field
+	// Main content layout
 	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
-	contentFlex.AddItem(zapScriptInput, 1, 0, true)
-	contentFlex.AddItem(tview.NewBox(), 0, 1, false) // spacer to push input to top
+	contentFlex.AddItem(zapScriptLabel, 1, 0, false)
+	contentFlex.AddItem(zapScriptInput, 0, 1, true)
+	contentFlex.AddItem(validationStatus, 1, 0, false)
 
 	frame.SetContent(contentFlex)
 	pages.AddAndSwitchToPage(PageSettingsTagsWrite, frame, true)

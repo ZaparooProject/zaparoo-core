@@ -285,7 +285,7 @@ func (pf *PageFrame) FocusButtonBar() {
 	}
 }
 
-// SetupContentToButtonNavigation sets up Tab/Down navigation from content to button bar.
+// SetupContentToButtonNavigation sets up full wrap navigation between content and button bar.
 // This should be called after setting content and button bar.
 func (pf *PageFrame) SetupContentToButtonNavigation() {
 	if pf.content == nil || pf.buttonBar == nil || pf.app == nil {
@@ -301,7 +301,13 @@ func (pf *PageFrame) SetupContentToButtonNavigation() {
 				pf.FocusButtonBar()
 				return nil
 			}
+			// Down on last item → button bar
 			if key == tcell.KeyDown && list.GetCurrentItem() == list.GetItemCount()-1 {
+				pf.FocusButtonBar()
+				return nil
+			}
+			// Up on first item → button bar (wrap)
+			if key == tcell.KeyUp && list.GetCurrentItem() == 0 {
 				pf.FocusButtonBar()
 				return nil
 			}
@@ -318,4 +324,5 @@ func (pf *PageFrame) SetupContentToButtonNavigation() {
 
 	// Set up button bar to navigate back to content
 	pf.buttonBar.SetOnUp(pf.FocusContent)
+	pf.buttonBar.SetOnDown(pf.FocusContent)
 }

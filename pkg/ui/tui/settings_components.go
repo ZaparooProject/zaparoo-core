@@ -159,6 +159,7 @@ type SettingsList struct {
 	previousPage    string
 	items           []settingsItem
 	dynamicHelpMode bool
+	hasFocus        bool
 }
 
 // NewSettingsList creates a new settings list with arrow key navigation.
@@ -175,10 +176,21 @@ func NewSettingsList(pages *tview.Pages, previousPage string) *SettingsList {
 		pages:        pages,
 		previousPage: previousPage,
 		items:        make([]settingsItem, 0),
+		hasFocus:     true,
 	}
 
 	list.SetChangedFunc(func(index int, _, _ string, _ rune) {
 		sl.refreshAllItems(index)
+	})
+
+	list.SetFocusFunc(func() {
+		sl.hasFocus = true
+		sl.refreshAllItems(sl.GetCurrentItem())
+	})
+
+	list.SetBlurFunc(func() {
+		sl.hasFocus = false
+		sl.refreshAllItems(-1)
 	})
 
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -245,7 +257,8 @@ func (sl *SettingsList) goBack() {
 // refreshAllItems updates all items to reflect current selection state.
 func (sl *SettingsList) refreshAllItems(selectedIndex int) {
 	for i, item := range sl.items {
-		selected := i == selectedIndex
+		// Only show highlight when the list has focus
+		selected := sl.hasFocus && i == selectedIndex
 		desc := formatDesc(item.description)
 
 		var mainText string
@@ -404,6 +417,7 @@ type ButtonBar struct {
 	onDown       func()
 	onWrap       func()
 	onLeft       func()
+	onRight      func()
 	buttons      []*tview.Button
 	focusedIndex int
 }
@@ -451,6 +465,12 @@ func (bb *ButtonBar) SetOnWrap(fn func()) *ButtonBar {
 // SetOnLeft sets the callback for when Left is pressed on the first button.
 func (bb *ButtonBar) SetOnLeft(fn func()) *ButtonBar {
 	bb.onLeft = fn
+	return bb
+}
+
+// SetOnRight sets the callback for when Right is pressed on the last button.
+func (bb *ButtonBar) SetOnRight(fn func()) *ButtonBar {
+	bb.onRight = fn
 	return bb
 }
 
@@ -518,7 +538,13 @@ func (bb *ButtonBar) InputHandler() func(event *tcell.EventKey, setFocus func(p 
 			} else {
 				bb.focusedIndex = (bb.focusedIndex - 1 + len(bb.buttons)) % len(bb.buttons)
 			}
-		case tcell.KeyRight, tcell.KeyTab:
+		case tcell.KeyRight:
+			if bb.focusedIndex == len(bb.buttons)-1 && bb.onRight != nil {
+				bb.onRight()
+			} else {
+				bb.focusedIndex = (bb.focusedIndex + 1) % len(bb.buttons)
+			}
+		case tcell.KeyTab:
 			if bb.focusedIndex == len(bb.buttons)-1 && bb.onWrap != nil {
 				bb.onWrap()
 			} else {
@@ -896,6 +922,7 @@ func NewSystemSelector(cfg *SystemSelectorConfig) *SystemSelector {
 	list := scrollList.GetList()
 	list.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
 	list.ShowSecondaryText(false)
+	list.SetSelectedFocusOnly(true)
 	// Enable wrap around in single select mode for easier navigation
 	list.SetWrapAround(cfg.Mode == SystemSelectorSingle)
 

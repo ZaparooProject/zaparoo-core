@@ -20,8 +20,6 @@
 package tui
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -428,6 +426,7 @@ func buildReaderListPage(
 	readerList := tview.NewList()
 	readerList.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
 	readerList.ShowSecondaryText(true)
+	readerList.SetSelectedFocusOnly(true)
 
 	refreshList := func() {
 		readerList.Clear()
@@ -633,6 +632,10 @@ func buildReaderEditPage(
 			setFocus(1)
 			return nil
 		}
+		if key == tcell.KeyUp || key == tcell.KeyBacktab {
+			frame.FocusButtonBar()
+			return nil
+		}
 		if key == tcell.KeyEscape {
 			goBack()
 			return nil
@@ -674,19 +677,12 @@ func buildReaderEditPage(
 		return event
 	})
 
-	for _, btn := range buttonBar.buttons {
-		originalCapture := btn.GetInputCapture()
-		btn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			if event.Key() == tcell.KeyUp || event.Key() == tcell.KeyBacktab {
-				setFocus(2)
-				return nil
-			}
-			if originalCapture != nil {
-				return originalCapture(event)
-			}
-			return event
-		})
-	}
+	buttonBar.SetOnUp(func() {
+		setFocus(2) // idSourceInput
+	})
+	buttonBar.SetOnDown(func() {
+		setFocus(0) // driverDisplay (wrap)
+	})
 
 	frame.SetContent(formContent)
 	frame.SetButtonBar(buttonBar)
@@ -780,7 +776,7 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 		SetupNavigation(goBack)
 	frame.SetButtonBar(buttonBar)
 
-	// Setup navigation from list to button bar
+	// Setup navigation from list to button bar (with wrap)
 	systemSelector.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		key := event.Key()
 		if key == tcell.KeyTab {
@@ -793,122 +789,23 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 				return nil
 			}
 		}
+		if key == tcell.KeyUp {
+			if systemSelector.GetCurrentItem() == 0 {
+				frame.FocusButtonBar()
+				return nil
+			}
+		}
 		return event
 	})
 
-	// Setup navigation from button bar back to list
-	for _, btn := range buttonBar.buttons {
-		btn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			key := event.Key()
-			if key == tcell.KeyUp || key == tcell.KeyBacktab {
-				app.SetFocus(systemSelector)
-				return nil
-			}
-			return event
-		})
-	}
+	// Setup navigation from button bar back to list (with wrap)
+	buttonBar.SetOnUp(func() {
+		app.SetFocus(systemSelector)
+	})
+	buttonBar.SetOnDown(func() {
+		app.SetFocus(systemSelector)
+	})
 
 	frame.SetContent(systemSelector)
 	pages.AddAndSwitchToPage(PageSettingsIgnoreSystems, frame, true)
-}
-
-// BuildTagsReadMenu creates the NFC tag read menu.
-func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) {
-	// Create page frame
-	frame := NewPageFrame(app).
-		SetTitle("Settings", "Tags", "Read").
-		SetHelpText("Press Enter to scan, results appear below")
-
-	var readCancel context.CancelFunc
-	reading := false
-
-	goBack := func() {
-		if readCancel != nil {
-			readCancel()
-		}
-		pages.SwitchToPage(PageSettingsMain)
-	}
-	frame.SetOnEscape(goBack)
-
-	// Create button bar
-	buttonBar := NewButtonBar(app).
-		AddButton("Back", goBack).
-		SetupNavigation(goBack)
-	frame.SetButtonBar(buttonBar)
-
-	topTextView := tview.NewTextView().
-		SetText("Press Enter to scan a card")
-
-	tagsReadMenu := tview.NewForm().
-		AddFormItem(topTextView)
-
-	tagsReadMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEnter && !reading {
-			tagsReadMenu.Clear(false).AddFormItem(topTextView)
-			topTextView.SetText("Tap a card to read content... (ESC to cancel)")
-			reading = true
-
-			var ctx context.Context
-			ctx, readCancel = tagReadContext()
-
-			go func() {
-				resp, err := client.WaitNotification(
-					ctx, 0,
-					cfg, models.NotificationTokensAdded,
-				)
-				if err != nil {
-					log.Error().Err(err).Msg("error waiting for tag")
-					app.QueueUpdateDraw(func() {
-						reading = false
-						readCancel = nil
-						topTextView.SetText("Failed to read tag. Press ENTER to try again")
-					})
-					return
-				}
-
-				var data models.TokenResponse
-				err = json.Unmarshal([]byte(resp), &data)
-				if err != nil {
-					log.Error().Err(err).Msg("error unmarshalling token")
-					app.QueueUpdateDraw(func() {
-						reading = false
-						readCancel = nil
-						topTextView.SetText("Failed to parse tag data. Press ENTER to try again")
-					})
-					return
-				}
-
-				app.QueueUpdateDraw(func() {
-					reading = false
-					readCancel = nil
-					tagsReadMenu.AddTextView("ID", data.UID, 50, 1, true, false)
-					tagsReadMenu.AddTextView("Data", data.Data, 50, 1, true, false)
-					tagsReadMenu.AddTextView("Value", data.Text, 50, 4, true, false)
-					topTextView.SetText("Press ENTER to scan another card")
-				})
-			}()
-			return nil
-		}
-		if k == tcell.KeyTab {
-			frame.FocusButtonBar()
-			return nil
-		}
-		return event
-	})
-
-	// Setup navigation from button bar back to form
-	for _, btn := range buttonBar.buttons {
-		btn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			key := event.Key()
-			if key == tcell.KeyUp || key == tcell.KeyBacktab {
-				app.SetFocus(tagsReadMenu)
-				return nil
-			}
-			return event
-		})
-	}
-
-	frame.SetContent(tagsReadMenu)
-	pages.AddAndSwitchToPage(PageSettingsTagsRead, frame, true)
 }

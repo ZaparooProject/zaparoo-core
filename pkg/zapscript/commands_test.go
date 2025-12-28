@@ -471,3 +471,39 @@ func TestGetExprEnv_NoActiveMedia(t *testing.T) {
 	assert.Empty(t, env.ActiveMedia.SystemID)
 	assert.Empty(t, env.ActiveMedia.Path)
 }
+
+func TestIsValidCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		cmdName string
+		want    bool
+	}{
+		// Valid commands
+		{name: "launch", cmdName: models.ZapScriptCmdLaunch, want: true},
+		{name: "launch.system", cmdName: models.ZapScriptCmdLaunchSystem, want: true},
+		{name: "launch.random", cmdName: models.ZapScriptCmdLaunchRandom, want: true},
+		{name: "launch.search", cmdName: models.ZapScriptCmdLaunchSearch, want: true},
+		{name: "launch.title", cmdName: models.ZapScriptCmdLaunchTitle, want: true},
+		{name: "playlist.play", cmdName: models.ZapScriptCmdPlaylistPlay, want: true},
+		{name: "execute", cmdName: models.ZapScriptCmdExecute, want: true},
+		{name: "delay", cmdName: models.ZapScriptCmdDelay, want: true},
+		{name: "stop", cmdName: models.ZapScriptCmdStop, want: true},
+		{name: "http.get", cmdName: models.ZapScriptCmdHTTPGet, want: true},
+		{name: "input.keyboard", cmdName: models.ZapScriptCmdInputKeyboard, want: true},
+		// Invalid commands
+		{name: "unknown command", cmdName: "unknown.cmd", want: false},
+		{name: "empty string", cmdName: "", want: false},
+		{name: "typo", cmdName: "launh.system", want: false},
+		{name: "random string", cmdName: "foobar", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := IsValidCommand(tt.cmdName)
+			assert.Equal(t, tt.want, got, "IsValidCommand(%q) = %v, want %v", tt.cmdName, got, tt.want)
+		})
+	}
+}

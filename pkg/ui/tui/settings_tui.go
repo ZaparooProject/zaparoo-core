@@ -181,7 +181,6 @@ var pagesToClearOnThemeChange = []string{
 	PageSettingsReaderList,
 	PageSettingsReaderEdit,
 	PageSettingsIgnoreSystems,
-	PageSettingsTagsRead,
 	PageSettingsTagsWrite,
 	PageSettingsAudio,
 	PageSettingsReaders,

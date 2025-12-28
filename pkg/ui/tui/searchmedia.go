@@ -80,9 +80,6 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	// System selector button
 	systemButton := tview.NewButton(truncateSystemName(filterSystemName))
 
-	// Search button (in form area, not button bar)
-	searchButton := tview.NewButton("Search")
-
 	// Load systems for the selector
 	var systemItems []SystemItem
 	ctx, cancel := tuiContext()
@@ -241,12 +238,10 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 			return
 		}
 
-		searchButton.SetLabel("Searching...")
 		frame.SetHelpText("Searching...")
 		searching = true
 		app.ForceDraw()
 		defer func() {
-			searchButton.SetLabel("Search")
 			searching = false
 		}()
 
@@ -301,10 +296,12 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	// Track last focused left column item for returning from results
 	var lastLeftFocus tview.Primitive = searchInput
 
-	// Helper to focus results column
+	// Helper to focus results column, or button bar if no results
 	focusResults := func() {
 		if mediaList.GetItemCount() > 0 {
 			app.SetFocus(mediaList)
+		} else {
+			frame.FocusButtonBar()
 		}
 	}
 
@@ -347,37 +344,10 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		lastLeftFocus = systemButton
 		switch event.Key() {
 		case tcell.KeyDown:
-			app.SetFocus(searchButton)
+			frame.FocusButtonBar()
 			return nil
 		case tcell.KeyUp:
 			app.SetFocus(searchInput)
-			return nil
-		case tcell.KeyRight, tcell.KeyTab:
-			focusResults()
-			return nil
-		case tcell.KeyLeft, tcell.KeyBacktab:
-			frame.FocusButtonBar()
-			return nil
-		case tcell.KeyEscape:
-			goBack()
-			return nil
-		default:
-			return event
-		}
-	})
-
-	searchButton.SetSelectedFunc(search)
-	searchButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		lastLeftFocus = searchButton
-		switch event.Key() {
-		case tcell.KeyEnter:
-			search()
-			return nil
-		case tcell.KeyDown:
-			frame.FocusButtonBar()
-			return nil
-		case tcell.KeyUp:
-			app.SetFocus(systemButton)
 			return nil
 		case tcell.KeyRight, tcell.KeyTab:
 			focusResults()
@@ -410,15 +380,20 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		}
 	})
 
-	// Button bar: only Back button with custom navigation
+	// Button bar with Search and Back
 	buttonBar := NewButtonBar(app)
-	buttonBar.AddButton("Back", goBack).
+	buttonBar.AddButton("Search", search).
+		AddButton("Back", goBack).
 		SetupNavigation(goBack)
 	frame.SetButtonBar(buttonBar)
 
-	// Up from button bar goes to search button (bottom of left column)
+	// Up from button bar goes to results if any, otherwise left column
 	buttonBar.SetOnUp(func() {
-		app.SetFocus(searchButton)
+		if mediaList.GetItemCount() > 0 {
+			app.SetFocus(mediaList)
+		} else {
+			app.SetFocus(systemButton)
+		}
 	})
 	// Down from button bar wraps to name input (top of left column)
 	buttonBar.SetOnDown(func() {
@@ -428,10 +403,12 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	buttonBar.SetOnWrap(func() {
 		app.SetFocus(searchInput)
 	})
-	// Left from button bar goes to results if any
+	// Left from button bar goes to results if any, otherwise left column
 	buttonBar.SetOnLeft(func() {
 		if mediaList.GetItemCount() > 0 {
 			app.SetFocus(mediaList)
+		} else {
+			app.SetFocus(systemButton)
 		}
 	})
 
@@ -441,7 +418,6 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	leftColumn.AddItem(searchInput, 1, 0, true)
 	leftColumn.AddItem(systemLabel, 1, 0, false)
 	leftColumn.AddItem(systemButton, 1, 0, false)
-	leftColumn.AddItem(searchButton, 1, 0, false)
 	leftColumn.AddItem(tview.NewBox(), 0, 1, false) // spacer
 
 	// Vertical divider between columns

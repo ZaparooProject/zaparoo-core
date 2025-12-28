@@ -43,7 +43,6 @@ const (
 	PageSettingsReaderList    = "settings_reader_list"
 	PageSettingsReaderEdit    = "settings_reader_edit"
 	PageSettingsIgnoreSystems = "settings_ignore_systems"
-	PageSettingsTagsRead      = "settings_tags_read"
 	PageSettingsTagsWrite     = "settings_tags_write"
 	PageSettingsAudio         = "settings_audio"
 	PageSettingsReaders       = "settings_readers"
