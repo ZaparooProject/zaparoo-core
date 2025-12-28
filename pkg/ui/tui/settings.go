@@ -280,7 +280,7 @@ func buildReadersSettingsMenu(
 		}
 	})
 
-	menu.AddAction("Manage readers", "Add, edit, or remove manual reader connections", func() {
+	menu.AddNavAction("Manage readers", "Add, edit, or remove manual reader connections", func() {
 		buildReaderListPage(cfg, svc, pages, app, pl)
 	})
 
@@ -369,7 +369,7 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 			frame.SetHelpText(desc)
 		})
 
-	menu.AddAction(ignoreLabel, "Systems to ignore exiting in Hold mode", func() {
+	menu.AddNavAction(ignoreLabel, "Systems to ignore exiting in Hold mode", func() {
 		buildIgnoreSystemsPage(svc, pages, app)
 	})
 
@@ -427,6 +427,12 @@ func buildReaderListPage(
 	readerList.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
 	readerList.ShowSecondaryText(true)
 	readerList.SetSelectedFocusOnly(true)
+	readerList.SetFocusFunc(func() {
+		frame.SetHelpText("Select a reader to edit, or use Add/Delete")
+	})
+	readerList.SetBlurFunc(func() {
+		// Keep help text visible when moving to buttons
+	})
 
 	refreshList := func() {
 		readerList.Clear()
@@ -452,11 +458,11 @@ func buildReaderListPage(
 
 	buttonBar := NewButtonBar(app)
 
-	buttonBar.AddButton("Add", func() {
+	buttonBar.AddButtonWithHelp("Add", "Add a new reader connection", func() {
 		buildReaderEditPage(cfg, svc, pages, app, pl, &readers, len(readers))
 	})
 
-	buttonBar.AddButton("Delete", func() {
+	buttonBar.AddButtonWithHelp("Delete", "Remove the selected reader", func() {
 		if len(readers) == 0 {
 			return
 		}
@@ -482,8 +488,11 @@ func buildReaderListPage(
 		}
 	})
 
-	buttonBar.AddButton("Back", goBack)
+	buttonBar.AddButtonWithHelp("Back", "Return to reader settings", goBack)
 	buttonBar.SetupNavigation(goBack)
+	buttonBar.SetHelpCallback(func(help string) {
+		frame.SetHelpText(help)
+	})
 
 	frame.SetContent(readerList)
 	frame.SetButtonBar(buttonBar)
@@ -572,7 +581,7 @@ func buildReaderEditPage(
 
 	buttonBar := NewButtonBar(app)
 
-	buttonBar.AddButton("Save", func() {
+	buttonBar.AddButtonWithHelp("Save", "Save reader configuration", func() {
 		reader.Driver = availableDrivers[driverIndex]
 		reader.Path = pathInput.GetText()
 		reader.IDSource = idSourceInput.GetText()
@@ -596,8 +605,11 @@ func buildReaderEditPage(
 		goBack()
 	})
 
-	buttonBar.AddButton("Cancel", goBack)
+	buttonBar.AddButtonWithHelp("Cancel", "Discard changes and go back", goBack)
 	buttonBar.SetupNavigation(goBack)
+	buttonBar.SetHelpCallback(func(help string) {
+		frame.SetHelpText(help)
+	})
 
 	// Create form content wrapper
 	formContent := tview.NewFlex().SetDirection(tview.FlexRow)
@@ -771,9 +783,12 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 		initialLabel = fmt.Sprintf("Done (%d)", count)
 	}
 
-	buttonBar.AddButton(initialLabel, saveAndExit).
-		AddButton("Back", goBack).
+	buttonBar.AddButtonWithHelp(initialLabel, "Save ignored systems and return", saveAndExit).
+		AddButtonWithHelp("Back", "Discard changes and return", goBack).
 		SetupNavigation(goBack)
+	buttonBar.SetHelpCallback(func(help string) {
+		frame.SetHelpText(help)
+	})
 	frame.SetButtonBar(buttonBar)
 
 	// Setup navigation from list to button bar (with wrap)
@@ -798,11 +813,13 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 		return event
 	})
 
-	// Setup navigation from button bar back to list (with wrap)
+	// Setup navigation from button bar back to list (with wrap and correct position)
 	buttonBar.SetOnUp(func() {
+		systemSelector.SetCurrentItem(systemSelector.GetItemCount() - 1) // Last item
 		app.SetFocus(systemSelector)
 	})
 	buttonBar.SetOnDown(func() {
+		systemSelector.SetCurrentItem(0) // First item (wrap)
 		app.SetFocus(systemSelector)
 	})
 

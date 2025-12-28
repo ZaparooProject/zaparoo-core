@@ -135,6 +135,19 @@ func formatAction(label string, selected bool) string {
 		t.TextColorName, t.BgColorName, label)
 }
 
+// formatNavAction renders a navigation action with arrow indicator.
+func formatNavAction(label string, selected bool) string {
+	t := CurrentTheme()
+	if selected {
+		return fmt.Sprintf("[%s:%s]→ [%s:%s]%s[-:%s]",
+			t.AccentColorName, t.BgColorName,
+			t.HighlightFgName, t.HighlightBgName, label, t.BgColorName)
+	}
+	return fmt.Sprintf("[%s:%s]→ [%s:%s]%s[-:-]",
+		t.AccentColorName, t.BgColorName,
+		t.TextColorName, t.BgColorName, label)
+}
+
 // formatDesc renders a description with 2-space indent.
 func formatDesc(desc string) string {
 	return "  " + desc
@@ -269,6 +282,8 @@ func (sl *SettingsList) refreshAllItems(selectedIndex int) {
 			mainText = formatCycle(item.label, item.cycleOptions[*item.cycleIndex], selected)
 		case "action":
 			mainText = formatAction(item.label, selected)
+		case "nav":
+			mainText = formatNavAction(item.label, selected)
 		}
 
 		sl.SetItemText(i, mainText, desc)
@@ -353,6 +368,26 @@ func (sl *SettingsList) AddAction(
 	return sl
 }
 
+// AddNavAction adds a navigation action that opens a submenu or new page.
+// Displays with a ">" prefix to indicate navigation.
+func (sl *SettingsList) AddNavAction(
+	label string,
+	description string,
+	action func(),
+) *SettingsList {
+	index := sl.GetItemCount()
+	selected := index == 0
+
+	sl.items = append(sl.items, settingsItem{
+		itemType:    "nav",
+		label:       label,
+		description: description,
+	})
+
+	sl.AddItem(formatNavAction(label, selected), formatDesc(description), 0, action)
+	return sl
+}
+
 // AddBack adds a "Back" action item with default description.
 func (sl *SettingsList) AddBack() *SettingsList {
 	return sl.AddBackWithDesc("Return to previous menu")
@@ -418,7 +453,9 @@ type ButtonBar struct {
 	onWrap       func()
 	onLeft       func()
 	onRight      func()
+	helpCallback func(string)
 	buttons      []*tview.Button
+	helpTexts    []string
 	focusedIndex int
 }
 
@@ -435,7 +472,29 @@ func NewButtonBar(app *tview.Application) *ButtonBar {
 func (bb *ButtonBar) AddButton(label string, action func()) *ButtonBar {
 	btn := tview.NewButton(label).SetSelectedFunc(action)
 	bb.buttons = append(bb.buttons, btn)
+	bb.helpTexts = append(bb.helpTexts, "")
 	return bb
+}
+
+// AddButtonWithHelp adds a button with associated help text.
+func (bb *ButtonBar) AddButtonWithHelp(label, helpText string, action func()) *ButtonBar {
+	btn := tview.NewButton(label).SetSelectedFunc(action)
+	bb.buttons = append(bb.buttons, btn)
+	bb.helpTexts = append(bb.helpTexts, helpText)
+	return bb
+}
+
+// SetHelpCallback sets the callback for when button focus changes.
+func (bb *ButtonBar) SetHelpCallback(fn func(string)) *ButtonBar {
+	bb.helpCallback = fn
+	return bb
+}
+
+// triggerHelp calls the help callback with the current button's help text.
+func (bb *ButtonBar) triggerHelp() {
+	if bb.helpCallback != nil && bb.focusedIndex < len(bb.helpTexts) {
+		bb.helpCallback(bb.helpTexts[bb.focusedIndex])
+	}
 }
 
 // SetupNavigation sets up the escape callback.
@@ -531,24 +590,28 @@ func (bb *ButtonBar) InputHandler() func(event *tcell.EventKey, setFocus func(p 
 				bb.onLeft()
 			} else {
 				bb.focusedIndex = (bb.focusedIndex - 1 + len(bb.buttons)) % len(bb.buttons)
+				bb.triggerHelp()
 			}
 		case tcell.KeyBacktab:
 			if bb.focusedIndex == 0 && bb.onWrap != nil {
 				bb.onWrap()
 			} else {
 				bb.focusedIndex = (bb.focusedIndex - 1 + len(bb.buttons)) % len(bb.buttons)
+				bb.triggerHelp()
 			}
 		case tcell.KeyRight:
 			if bb.focusedIndex == len(bb.buttons)-1 && bb.onRight != nil {
 				bb.onRight()
 			} else {
 				bb.focusedIndex = (bb.focusedIndex + 1) % len(bb.buttons)
+				bb.triggerHelp()
 			}
 		case tcell.KeyTab:
 			if bb.focusedIndex == len(bb.buttons)-1 && bb.onWrap != nil {
 				bb.onWrap()
 			} else {
 				bb.focusedIndex = (bb.focusedIndex + 1) % len(bb.buttons)
+				bb.triggerHelp()
 			}
 		case tcell.KeyUp:
 			if bb.onUp != nil {
@@ -588,17 +651,20 @@ func (bb *ButtonBar) MouseHandler() func(
 		event *tcell.EventMouse,
 		setFocus func(p tview.Primitive),
 	) (consumed bool, capture tview.Primitive) {
-		if action == tview.MouseLeftClick {
-			for i, btn := range bb.buttons {
-				if btn.InRect(event.Position()) {
-					bb.focusedIndex = i
-					setFocus(bb)
-					if handler := btn.MouseHandler(); handler != nil {
-						return handler(action, event, setFocus)
-					}
-					return true, nil
-				}
+		if action != tview.MouseLeftClick {
+			return false, nil
+		}
+		for i, btn := range bb.buttons {
+			if !btn.InRect(event.Position()) {
+				continue
 			}
+			bb.focusedIndex = i
+			bb.triggerHelp()
+			setFocus(bb)
+			if handler := btn.MouseHandler(); handler != nil {
+				return handler(action, event, setFocus)
+			}
+			return true, nil
 		}
 		return false, nil
 	})
@@ -608,6 +674,7 @@ func (bb *ButtonBar) MouseHandler() func(
 func (bb *ButtonBar) Focus(delegate func(p tview.Primitive)) {
 	if len(bb.buttons) > 0 {
 		bb.Box.Focus(delegate)
+		bb.triggerHelp()
 	}
 }
 
@@ -1090,6 +1157,11 @@ func (ss *SystemSelector) GetSelectedCount() int {
 // GetCurrentItem returns the index of the currently selected list item.
 func (ss *SystemSelector) GetCurrentItem() int {
 	return ss.list.GetCurrentItem()
+}
+
+// SetCurrentItem sets the currently selected list item.
+func (ss *SystemSelector) SetCurrentItem(index int) {
+	ss.list.SetCurrentItem(index)
 }
 
 // GetItemCount returns the number of items in the list.

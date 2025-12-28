@@ -91,10 +91,9 @@ func (pf *PageFrame) SetHelpText(text string) *PageFrame {
 }
 
 // SetButtonBar sets the button bar at the bottom of the frame.
-// Automatically sets up Up/Down navigation to return focus to content.
+// Call SetupContentToButtonNavigation after this for list content navigation.
 func (pf *PageFrame) SetButtonBar(bar *ButtonBar) *PageFrame {
 	pf.buttonBar = bar
-	bar.SetOnUp(pf.FocusContent)
 	return pf
 }
 
@@ -278,6 +277,28 @@ func (pf *PageFrame) FocusContent() {
 	}
 }
 
+// FocusContentFirst sets focus to the content and selects the first item (for wrap from bottom).
+func (pf *PageFrame) FocusContentFirst() {
+	if pf.content == nil || pf.app == nil {
+		return
+	}
+	if list, ok := pf.content.(*tview.List); ok {
+		list.SetCurrentItem(0)
+	}
+	pf.app.SetFocus(pf.content)
+}
+
+// FocusContentLast sets focus to the content and selects the last item (for wrap from top).
+func (pf *PageFrame) FocusContentLast() {
+	if pf.content == nil || pf.app == nil {
+		return
+	}
+	if list, ok := pf.content.(*tview.List); ok {
+		list.SetCurrentItem(list.GetItemCount() - 1)
+	}
+	pf.app.SetFocus(pf.content)
+}
+
 // FocusButtonBar sets focus to the button bar.
 func (pf *PageFrame) FocusButtonBar() {
 	if pf.buttonBar != nil && pf.app != nil {
@@ -322,7 +343,7 @@ func (pf *PageFrame) SetupContentToButtonNavigation() {
 		})
 	}
 
-	// Set up button bar to navigate back to content
-	pf.buttonBar.SetOnUp(pf.FocusContent)
-	pf.buttonBar.SetOnDown(pf.FocusContent)
+	// Set up button bar to navigate back to content with proper wrap positions
+	pf.buttonBar.SetOnUp(pf.FocusContentLast)    // Up from bar → last item (continuing upward)
+	pf.buttonBar.SetOnDown(pf.FocusContentFirst) // Down from bar → first item (wrapping around)
 }

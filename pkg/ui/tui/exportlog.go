@@ -79,15 +79,25 @@ func BuildExportLogModal(
 	}
 	loadLogContent()
 
+	// Build help texts array (must match button order)
+	helpTexts := []string{
+		"Reload log contents from disk",
+		"Upload log file to termbin.com and display URL",
+	}
+	if logDestPath != "" {
+		helpTexts = append(helpTexts, "Copy log file to "+logDestName)
+	}
+	helpTexts = append(helpTexts, "Return to main screen")
+
 	// Create button bar with dynamic help
 	buttonBar := NewButtonBar(app)
 
-	buttonBar.AddButton("Refresh", func() {
+	buttonBar.AddButtonWithHelp("Refresh", helpTexts[0], func() {
 		loadLogContent()
 		frame.SetHelpText("Log refreshed")
 	})
 
-	buttonBar.AddButton("Upload", func() {
+	buttonBar.AddButtonWithHelp("Upload", helpTexts[1], func() {
 		outcome := uploadLog(pl, exportPages, app)
 		resultModal := genericModal(outcome, "Upload Log File",
 			func(_ int, _ string) {
@@ -98,8 +108,9 @@ func BuildExportLogModal(
 		app.SetFocus(resultModal)
 	})
 
+	helpIdx := 2
 	if logDestPath != "" {
-		buttonBar.AddButton("Copy", func() {
+		buttonBar.AddButtonWithHelp("Copy", helpTexts[helpIdx], func() {
 			outcome := copyLogToSd(pl, logDestPath, logDestName)
 			resultModal := genericModal(outcome, "Copy Log File",
 				func(_ int, _ string) {
@@ -109,31 +120,20 @@ func BuildExportLogModal(
 			exportPages.AddPage("copy", resultModal, true, true)
 			app.SetFocus(resultModal)
 		})
+		helpIdx++
 	}
 
-	buttonBar.AddButton("Back", goBack)
+	buttonBar.AddButtonWithHelp("Back", helpTexts[helpIdx], goBack)
 	buttonBar.SetupNavigation(goBack)
-
-	// Set up help text updates when buttons receive focus
-	for i, btn := range buttonBar.buttons {
-		idx := i
-		btn.SetFocusFunc(func() {
-			helpTexts := []string{
-				"Reload log contents from disk",
-				"Upload log file to termbin.com and display URL",
-			}
-			if logDestPath != "" {
-				helpTexts = append(helpTexts, "Copy log file to "+logDestName)
-			}
-			helpTexts = append(helpTexts, "Return to main screen")
-
-			if idx < len(helpTexts) {
-				frame.SetHelpText(helpTexts[idx])
-			}
-		})
-	}
+	buttonBar.SetHelpCallback(func(help string) {
+		frame.SetHelpText(help)
+	})
 
 	frame.SetButtonBar(buttonBar)
+
+	// Disable Up/Down navigation to content - log viewer is scroll-only, not focusable
+	buttonBar.SetOnUp(nil)
+	buttonBar.SetOnDown(nil)
 
 	// Build content layout
 	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)

@@ -387,9 +387,10 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		SetupNavigation(goBack)
 	frame.SetButtonBar(buttonBar)
 
-	// Up from button bar goes to results if any, otherwise left column
+	// Up from button bar goes to results if any (at last item), otherwise left column
 	buttonBar.SetOnUp(func() {
 		if mediaList.GetItemCount() > 0 {
+			mediaList.SetCurrentItem(mediaList.GetItemCount() - 1)
 			app.SetFocus(mediaList)
 		} else {
 			app.SetFocus(systemButton)
