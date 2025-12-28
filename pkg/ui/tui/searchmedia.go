@@ -35,6 +35,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// truncateSystemName truncates a system name to fit in the left column.
+func truncateSystemName(name string) string {
+	const maxLen = 18
+	if len(name) <= maxLen {
+		return name
+	}
+	return name[:maxLen-3] + "..."
+}
+
 // BuildSearchMedia creates the search media page.
 func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Application) {
 	// Create page frame
@@ -54,11 +63,9 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	searching := false
 
 	// Create components
-	mediaList := tview.NewList()
-	mediaList.SetWrapAround(false)
-	mediaList.SetSelectedFocusOnly(true)
+	scrollList := NewScrollIndicatorList()
+	mediaList := scrollList.GetList()
 	mediaList.SetMainTextColor(tcell.ColorWhite)
-	mediaList.ShowSecondaryText(false)
 
 	nameLabel := tview.NewTextView().SetText("Name:")
 
@@ -68,8 +75,10 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	})
 	setupInputFieldFocus(searchInput)
 
-	// System selector button (will be on same row as name input)
-	systemButton := tview.NewButton("System: " + filterSystemName)
+	systemLabel := tview.NewTextView().SetText("System:")
+
+	// System selector button
+	systemButton := tview.NewButton(truncateSystemName(filterSystemName))
 
 	// Search button (in form area, not button bar)
 	searchButton := tview.NewButton("Search")
@@ -123,7 +132,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 						}
 					}
 				}
-				systemButton.SetLabel("System: " + filterSystemName)
+				systemButton.SetLabel(truncateSystemName(filterSystemName))
 				pages.RemovePage(selectorPage)
 				app.SetFocus(systemButton)
 			},
@@ -384,6 +393,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		}
 	})
 
+	mediaList.SetWrapAround(true)
 	mediaList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyLeft, tcell.KeyBacktab:
@@ -392,18 +402,6 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		case tcell.KeyRight, tcell.KeyTab:
 			frame.FocusButtonBar()
 			return nil
-		case tcell.KeyUp:
-			if mediaList.GetCurrentItem() == 0 {
-				frame.FocusButtonBar()
-				return nil
-			}
-			return event
-		case tcell.KeyDown:
-			if mediaList.GetCurrentItem() == mediaList.GetItemCount()-1 {
-				frame.FocusButtonBar()
-				return nil
-			}
-			return event
 		case tcell.KeyEscape:
 			goBack()
 			return nil
@@ -441,6 +439,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	leftColumn := tview.NewFlex().SetDirection(tview.FlexRow)
 	leftColumn.AddItem(nameLabel, 1, 0, false)
 	leftColumn.AddItem(searchInput, 1, 0, true)
+	leftColumn.AddItem(systemLabel, 1, 0, false)
 	leftColumn.AddItem(systemButton, 1, 0, false)
 	leftColumn.AddItem(searchButton, 1, 0, false)
 	leftColumn.AddItem(tview.NewBox(), 0, 1, false) // spacer
@@ -449,7 +448,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	divider := NewVerticalDivider()
 
 	rightColumn := tview.NewFlex().SetDirection(tview.FlexRow)
-	rightColumn.AddItem(mediaList, 0, 1, true)
+	rightColumn.AddItem(scrollList, 0, 1, true)
 
 	// Main content: 1/3 left, divider, 2/3 right
 	contentFlex := tview.NewFlex().SetDirection(tview.FlexColumn)

@@ -632,6 +632,99 @@ func (vd *VerticalDivider) Draw(screen tcell.Screen) {
 	}
 }
 
+// ScrollIndicatorList wraps a tview.List and draws scroll indicators.
+type ScrollIndicatorList struct {
+	*tview.Box
+	list   *tview.List
+	offset int
+}
+
+// NewScrollIndicatorList creates a new list with scroll indicators.
+func NewScrollIndicatorList() *ScrollIndicatorList {
+	sil := &ScrollIndicatorList{
+		Box:  tview.NewBox(),
+		list: tview.NewList(),
+	}
+	sil.list.SetWrapAround(false)
+	sil.list.SetSelectedFocusOnly(true)
+	sil.list.ShowSecondaryText(false)
+	return sil
+}
+
+// GetList returns the underlying tview.List for configuration.
+func (sil *ScrollIndicatorList) GetList() *tview.List {
+	return sil.list
+}
+
+// Draw renders the list with scroll indicators.
+func (sil *ScrollIndicatorList) Draw(screen tcell.Screen) {
+	sil.DrawForSubclass(screen, sil)
+
+	x, y, width, height := sil.GetInnerRect()
+	if width <= 0 || height <= 0 {
+		return
+	}
+
+	// Draw the list (reserve 1 column for indicators)
+	listWidth := width - 1
+	if listWidth < 1 {
+		listWidth = width
+	}
+	sil.list.SetRect(x, y, listWidth, height)
+	sil.list.Draw(screen)
+
+	// Calculate scroll state
+	itemCount := sil.list.GetItemCount()
+	currentItem := sil.list.GetCurrentItem()
+
+	if itemCount == 0 || itemCount <= height {
+		return // No scrolling needed
+	}
+
+	// Estimate offset based on current item
+	sil.offset = currentItem - height/2
+	if sil.offset < 0 {
+		sil.offset = 0
+	}
+	if sil.offset > itemCount-height {
+		sil.offset = itemCount - height
+	}
+
+	// Draw arrow indicators in the corner
+	scrollX := x + width - 1
+	t := CurrentTheme()
+	arrowStyle := tcell.StyleDefault.Foreground(t.ContrastBackgroundColor)
+
+	if sil.offset > 0 {
+		screen.SetContent(scrollX, y, tcell.RuneUArrow, nil, arrowStyle)
+	}
+	if sil.offset+height < itemCount {
+		screen.SetContent(scrollX, y+height-1, tcell.RuneDArrow, nil, arrowStyle)
+	}
+}
+
+// Focus delegates focus to the underlying list.
+func (sil *ScrollIndicatorList) Focus(delegate func(p tview.Primitive)) {
+	delegate(sil.list)
+}
+
+// HasFocus returns whether the list has focus.
+func (sil *ScrollIndicatorList) HasFocus() bool {
+	return sil.list.HasFocus()
+}
+
+// InputHandler returns the list's input handler.
+func (sil *ScrollIndicatorList) InputHandler() func(*tcell.EventKey, func(tview.Primitive)) {
+	return sil.list.InputHandler()
+}
+
+// MouseHandler returns the list's mouse handler.
+func (sil *ScrollIndicatorList) MouseHandler() func(
+	tview.MouseAction, *tcell.EventMouse, func(tview.Primitive),
+) (bool, tview.Primitive) {
+	return sil.list.MouseHandler()
+}
+
 // CheckListItem represents an item with separate display label and value.
 type CheckListItem struct {
 	Label string
@@ -774,7 +867,8 @@ const (
 // SystemSelector is a reusable system selection component.
 // It can operate in single-select or multi-select mode.
 type SystemSelector struct {
-	*tview.List
+	*ScrollIndicatorList
+	list        *tview.List
 	selected    map[int]bool
 	onMulti     func(selected []string)
 	onSingle    func(systemID string)
@@ -798,10 +892,12 @@ type SystemSelectorConfig struct {
 
 // NewSystemSelector creates a new system selector with the given configuration.
 func NewSystemSelector(cfg *SystemSelectorConfig) *SystemSelector {
-	list := tview.NewList()
+	scrollList := NewScrollIndicatorList()
+	list := scrollList.GetList()
 	list.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
 	list.ShowSecondaryText(false)
-	list.SetWrapAround(false)
+	// Enable wrap around in single select mode for easier navigation
+	list.SetWrapAround(cfg.Mode == SystemSelectorSingle)
 
 	selectedMap := make(map[int]bool)
 	singleIndex := 0
@@ -829,15 +925,16 @@ func NewSystemSelector(cfg *SystemSelectorConfig) *SystemSelector {
 	}
 
 	ss := &SystemSelector{
-		List:        list,
-		items:       cfg.Systems,
-		selected:    selectedMap,
-		singleIndex: singleIndex,
-		mode:        cfg.Mode,
-		includeAll:  cfg.IncludeAll,
-		autoConfirm: cfg.AutoConfirm,
-		onMulti:     cfg.OnMulti,
-		onSingle:    cfg.OnSingle,
+		ScrollIndicatorList: scrollList,
+		list:                list,
+		items:               cfg.Systems,
+		selected:            selectedMap,
+		singleIndex:         singleIndex,
+		mode:                cfg.Mode,
+		includeAll:          cfg.IncludeAll,
+		autoConfirm:         cfg.AutoConfirm,
+		onMulti:             cfg.OnMulti,
+		onSingle:            cfg.OnSingle,
 	}
 
 	ss.refresh()
@@ -846,11 +943,11 @@ func NewSystemSelector(cfg *SystemSelectorConfig) *SystemSelector {
 }
 
 func (ss *SystemSelector) refresh() {
-	ss.Clear()
+	ss.list.Clear()
 
 	if ss.mode == SystemSelectorSingle {
 		if ss.includeAll {
-			ss.AddItem(ss.formatSingleItem(0, "All"), "", 0, func() {
+			ss.list.AddItem(ss.formatSingleItem(0, "All"), "", 0, func() {
 				ss.selectSingle(-1)
 			})
 		}
@@ -860,15 +957,15 @@ func (ss *SystemSelector) refresh() {
 			if ss.includeAll {
 				displayIndex = i + 1
 			}
-			ss.AddItem(ss.formatSingleItem(displayIndex, item.Name), "", 0, func() {
+			ss.list.AddItem(ss.formatSingleItem(displayIndex, item.Name), "", 0, func() {
 				ss.selectSingle(index)
 			})
 		}
-		ss.SetCurrentItem(ss.singleIndex)
+		ss.list.SetCurrentItem(ss.singleIndex)
 	} else {
 		for i, item := range ss.items {
 			index := i
-			ss.AddItem(ss.formatMultiItem(index, item.Name), "", 0, func() {
+			ss.list.AddItem(ss.formatMultiItem(index, item.Name), "", 0, func() {
 				ss.toggleMulti(index)
 			})
 		}
@@ -890,18 +987,18 @@ func (ss *SystemSelector) formatMultiItem(index int, label string) string {
 }
 
 func (ss *SystemSelector) selectSingle(itemIndex int) {
-	ss.singleIndex = ss.GetCurrentItem()
+	ss.singleIndex = ss.list.GetCurrentItem()
 
 	// Refresh all items to update radio button display
 	if ss.includeAll {
-		ss.SetItemText(0, ss.formatSingleItem(0, "All"), "")
+		ss.list.SetItemText(0, ss.formatSingleItem(0, "All"), "")
 	}
 	for i, item := range ss.items {
 		displayIndex := i
 		if ss.includeAll {
 			displayIndex = i + 1
 		}
-		ss.SetItemText(displayIndex, ss.formatSingleItem(displayIndex, item.Name), "")
+		ss.list.SetItemText(displayIndex, ss.formatSingleItem(displayIndex, item.Name), "")
 	}
 
 	if ss.onSingle != nil {
@@ -915,7 +1012,7 @@ func (ss *SystemSelector) selectSingle(itemIndex int) {
 
 func (ss *SystemSelector) toggleMulti(index int) {
 	ss.selected[index] = !ss.selected[index]
-	ss.SetItemText(index, ss.formatMultiItem(index, ss.items[index].Name), "")
+	ss.list.SetItemText(index, ss.formatMultiItem(index, ss.items[index].Name), "")
 	if ss.onMulti != nil {
 		ss.onMulti(ss.GetSelected())
 	}
@@ -961,6 +1058,21 @@ func (ss *SystemSelector) GetSelectedCount() int {
 		}
 	}
 	return count
+}
+
+// GetCurrentItem returns the index of the currently selected list item.
+func (ss *SystemSelector) GetCurrentItem() int {
+	return ss.list.GetCurrentItem()
+}
+
+// GetItemCount returns the number of items in the list.
+func (ss *SystemSelector) GetItemCount() int {
+	return ss.list.GetItemCount()
+}
+
+// SetInputCapture sets the input capture function on the underlying list.
+func (ss *SystemSelector) SetInputCapture(capture func(event *tcell.EventKey) *tcell.EventKey) {
+	ss.list.SetInputCapture(capture)
 }
 
 // GetSelectedSingle returns the currently selected system ID (single-select mode).
