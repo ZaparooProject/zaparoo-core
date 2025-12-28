@@ -143,7 +143,7 @@ func genericModal(
 	withButton bool,
 ) *tview.Modal {
 	modal := tview.NewModal()
-	modal.SetTitle(title).
+	modal.SetTitle(" " + title + " ").
 		SetBorder(true).
 		SetTitleAlign(tview.AlignCenter)
 	modal.SetText(message)

@@ -43,11 +43,36 @@ func buildTUISettingsMenu(
 		}
 	}
 
+	// Create page frame
+	frame := NewPageFrame(app).
+		SetTitle("Settings", "TUI")
+
+	goBack := func() {
+		if rebuildPrevious != nil {
+			rebuildPrevious()
+		} else {
+			pages.SwitchToPage(PageSettingsMain)
+		}
+	}
+	frame.SetOnEscape(goBack)
+
+	// Create button bar
+	buttonBar := NewButtonBar(app).
+		AddButton("Back", goBack).
+		SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
+
+	// Create settings list (without AddBack since we have ButtonBar)
 	menu := NewSettingsList(pages, PageSettingsMain)
-	menu.SetTitle("Settings - TUI")
 	if rebuildPrevious != nil {
 		menu.SetRebuildPrevious(rebuildPrevious)
 	}
+
+	// Enable dynamic help mode
+	menu.SetDynamicHelpMode(true).
+		SetHelpCallback(func(desc string) {
+			frame.SetHelpText(desc)
+		})
 
 	themeIdx := menu.GetItemCount()
 
@@ -108,8 +133,6 @@ func buildTUISettingsMenu(
 			}()
 		})
 
-	menu.AddBack()
-
 	cycleIndices := map[int]func(delta int){
 		themeIdx: func(delta int) {
 			themeIndex = (themeIndex + delta + len(ThemeNames)) % len(ThemeNames)
@@ -131,7 +154,12 @@ func buildTUISettingsMenu(
 
 	menu.SetupCycleKeys(cycleIndices)
 
-	pageDefaults(PageSettingsTUI, pages, menu.List)
+	// Set content and trigger initial help
+	frame.SetContent(menu.List)
+	menu.TriggerInitialHelp()
+	frame.SetupContentToButtonNavigation()
+
+	pages.AddAndSwitchToPage(PageSettingsTUI, frame, true)
 }
 
 // themeDisplayNames returns display names for all available themes.

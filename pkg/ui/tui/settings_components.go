@@ -155,8 +155,10 @@ type SettingsList struct {
 	*tview.List
 	pages           *tview.Pages
 	rebuildPrevious func()
+	helpCallback    func(string)
 	previousPage    string
 	items           []settingsItem
+	dynamicHelpMode bool
 }
 
 // NewSettingsList creates a new settings list with arrow key navigation.
@@ -197,6 +199,40 @@ func (sl *SettingsList) SetRebuildPrevious(fn func()) *SettingsList {
 	return sl
 }
 
+// SetHelpCallback sets a callback that fires when selection changes.
+// The callback receives the description of the currently selected item.
+// Use this with PageFrame's SetHelpText for dynamic help.
+func (sl *SettingsList) SetHelpCallback(fn func(string)) *SettingsList {
+	sl.helpCallback = fn
+	return sl
+}
+
+// SetDynamicHelpMode enables or disables dynamic help mode.
+// When enabled, inline descriptions are hidden and the help callback is used instead.
+func (sl *SettingsList) SetDynamicHelpMode(enabled bool) *SettingsList {
+	sl.dynamicHelpMode = enabled
+	sl.ShowSecondaryText(!enabled)
+	return sl
+}
+
+// TriggerInitialHelp calls the help callback with the first item's description.
+// Call this after adding all items to set the initial help text.
+func (sl *SettingsList) TriggerInitialHelp() *SettingsList {
+	if sl.helpCallback != nil && len(sl.items) > 0 {
+		sl.helpCallback(sl.items[0].description)
+	}
+	return sl
+}
+
+// GetCurrentDescription returns the description of the currently selected item.
+func (sl *SettingsList) GetCurrentDescription() string {
+	idx := sl.GetCurrentItem()
+	if idx >= 0 && idx < len(sl.items) {
+		return sl.items[idx].description
+	}
+	return ""
+}
+
 // goBack navigates to the previous page, rebuilding it if a rebuild callback is set.
 func (sl *SettingsList) goBack() {
 	if sl.rebuildPrevious != nil {
@@ -223,6 +259,11 @@ func (sl *SettingsList) refreshAllItems(selectedIndex int) {
 		}
 
 		sl.SetItemText(i, mainText, desc)
+	}
+
+	// Call help callback with selected item's description
+	if sl.helpCallback != nil && selectedIndex >= 0 && selectedIndex < len(sl.items) {
+		sl.helpCallback(sl.items[selectedIndex].description)
 	}
 }
 
@@ -299,23 +340,23 @@ func (sl *SettingsList) AddAction(
 	return sl
 }
 
-// AddBack adds a "Go back" action item with default description.
+// AddBack adds a "Back" action item with default description.
 func (sl *SettingsList) AddBack() *SettingsList {
 	return sl.AddBackWithDesc("Return to previous menu")
 }
 
-// AddBackWithDesc adds a "Go back" action item with custom description.
+// AddBackWithDesc adds a "Back" action item with custom description.
 func (sl *SettingsList) AddBackWithDesc(description string) *SettingsList {
 	index := sl.GetItemCount()
 	selected := index == 0
 
 	sl.items = append(sl.items, settingsItem{
 		itemType:    "action",
-		label:       "Go back",
+		label:       "Back",
 		description: description,
 	})
 
-	sl.AddItem(formatAction("Go back", selected), formatDesc(description), 0, func() {
+	sl.AddItem(formatAction("Back", selected), formatDesc(description), 0, func() {
 		sl.goBack()
 	})
 	return sl
@@ -356,16 +397,21 @@ func (sl *SettingsList) SetupCycleKeys(
 
 // ButtonBar creates a horizontal bar of buttons with arrow key navigation.
 type ButtonBar struct {
-	*tview.Flex
-	app     *tview.Application
-	buttons []*tview.Button
+	*tview.Box
+	app          *tview.Application
+	onEscape     func()
+	onUp         func()
+	onDown       func()
+	onWrap       func()
+	onLeft       func()
+	buttons      []*tview.Button
+	focusedIndex int
 }
 
 // NewButtonBar creates a new button bar.
 func NewButtonBar(app *tview.Application) *ButtonBar {
-	flex := tview.NewFlex().SetDirection(tview.FlexColumn)
 	return &ButtonBar{
-		Flex:    flex,
+		Box:     tview.NewBox(),
 		buttons: make([]*tview.Button, 0),
 		app:     app,
 	}
@@ -375,36 +421,173 @@ func NewButtonBar(app *tview.Application) *ButtonBar {
 func (bb *ButtonBar) AddButton(label string, action func()) *ButtonBar {
 	btn := tview.NewButton(label).SetSelectedFunc(action)
 	bb.buttons = append(bb.buttons, btn)
-	bb.AddItem(btn, 0, 1, len(bb.buttons) == 1)
-	bb.AddItem(tview.NewBox(), 1, 0, false) // spacer
 	return bb
 }
 
-// SetupNavigation sets up Left/Right arrow navigation between buttons.
+// SetupNavigation sets up the escape callback.
 func (bb *ButtonBar) SetupNavigation(onEscape func()) *ButtonBar {
-	for i, btn := range bb.buttons {
-		prevIndex := (i - 1 + len(bb.buttons)) % len(bb.buttons)
-		nextIndex := (i + 1) % len(bb.buttons)
-
-		btn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			switch event.Key() {
-			case tcell.KeyLeft:
-				bb.app.SetFocus(bb.buttons[prevIndex])
-				return nil
-			case tcell.KeyRight:
-				bb.app.SetFocus(bb.buttons[nextIndex])
-				return nil
-			case tcell.KeyEscape:
-				if onEscape != nil {
-					onEscape()
-				}
-				return nil
-			default:
-				return event
-			}
-		})
-	}
+	bb.onEscape = onEscape
 	return bb
+}
+
+// SetOnUp sets the callback for when Up is pressed (to navigate back to content).
+func (bb *ButtonBar) SetOnUp(fn func()) *ButtonBar {
+	bb.onUp = fn
+	return bb
+}
+
+// SetOnDown sets the callback for when Down is pressed (to wrap to top of content).
+func (bb *ButtonBar) SetOnDown(fn func()) *ButtonBar {
+	bb.onDown = fn
+	return bb
+}
+
+// SetOnWrap sets the callback for when Tab is pressed on the last button (to wrap to top).
+func (bb *ButtonBar) SetOnWrap(fn func()) *ButtonBar {
+	bb.onWrap = fn
+	return bb
+}
+
+// SetOnLeft sets the callback for when Left is pressed on the first button.
+func (bb *ButtonBar) SetOnLeft(fn func()) *ButtonBar {
+	bb.onLeft = fn
+	return bb
+}
+
+// Draw renders the button bar.
+func (bb *ButtonBar) Draw(screen tcell.Screen) {
+	bb.DrawForSubclass(screen, bb)
+
+	x, y, width, _ := bb.GetInnerRect()
+	if len(bb.buttons) == 0 || width <= 0 {
+		return
+	}
+
+	// Calculate button widths - distribute evenly with spacing
+	totalButtons := len(bb.buttons)
+	spacing := 2
+	totalSpacing := spacing * (totalButtons - 1)
+	buttonWidth := (width - totalSpacing) / totalButtons
+	if buttonWidth < 6 {
+		buttonWidth = 6
+	}
+
+	hasFocus := bb.HasFocus()
+
+	currentX := x
+	for i, btn := range bb.buttons {
+		btnWidth := buttonWidth
+		if currentX+btnWidth > x+width {
+			btnWidth = x + width - currentX
+		}
+		if btnWidth <= 0 {
+			break
+		}
+
+		btn.SetRect(currentX, y, btnWidth, 1)
+
+		// Show focus state on the currently selected button
+		if hasFocus && i == bb.focusedIndex {
+			btn.Focus(func(_ tview.Primitive) {})
+		} else {
+			btn.Blur()
+		}
+
+		btn.Draw(screen)
+		currentX += btnWidth + spacing
+	}
+}
+
+// InputHandler handles keyboard input for the button bar.
+func (bb *ButtonBar) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	return bb.WrapInputHandler(func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+		if len(bb.buttons) == 0 {
+			return
+		}
+
+		switch event.Key() {
+		case tcell.KeyLeft:
+			if bb.focusedIndex == 0 && bb.onLeft != nil {
+				bb.onLeft()
+			} else {
+				bb.focusedIndex = (bb.focusedIndex - 1 + len(bb.buttons)) % len(bb.buttons)
+			}
+		case tcell.KeyBacktab:
+			if bb.focusedIndex == 0 && bb.onWrap != nil {
+				bb.onWrap()
+			} else {
+				bb.focusedIndex = (bb.focusedIndex - 1 + len(bb.buttons)) % len(bb.buttons)
+			}
+		case tcell.KeyRight, tcell.KeyTab:
+			if bb.focusedIndex == len(bb.buttons)-1 && bb.onWrap != nil {
+				bb.onWrap()
+			} else {
+				bb.focusedIndex = (bb.focusedIndex + 1) % len(bb.buttons)
+			}
+		case tcell.KeyUp:
+			if bb.onUp != nil {
+				bb.onUp()
+			}
+		case tcell.KeyDown:
+			if bb.onDown != nil {
+				bb.onDown()
+			} else if bb.onUp != nil {
+				bb.onUp()
+			}
+		case tcell.KeyEnter:
+			if bb.focusedIndex < len(bb.buttons) {
+				btn := bb.buttons[bb.focusedIndex]
+				if handler := btn.InputHandler(); handler != nil {
+					handler(event, setFocus)
+				}
+			}
+		case tcell.KeyEscape:
+			if bb.onEscape != nil {
+				bb.onEscape()
+			}
+		default:
+			// Ignore other keys
+		}
+	})
+}
+
+// MouseHandler handles mouse input for the button bar.
+func (bb *ButtonBar) MouseHandler() func(
+	action tview.MouseAction,
+	event *tcell.EventMouse,
+	setFocus func(p tview.Primitive),
+) (consumed bool, capture tview.Primitive) {
+	return bb.WrapMouseHandler(func(
+		action tview.MouseAction,
+		event *tcell.EventMouse,
+		setFocus func(p tview.Primitive),
+	) (consumed bool, capture tview.Primitive) {
+		if action == tview.MouseLeftClick {
+			for i, btn := range bb.buttons {
+				if btn.InRect(event.Position()) {
+					bb.focusedIndex = i
+					setFocus(bb)
+					if handler := btn.MouseHandler(); handler != nil {
+						return handler(action, event, setFocus)
+					}
+					return true, nil
+				}
+			}
+		}
+		return false, nil
+	})
+}
+
+// Focus is called when the button bar receives focus.
+func (bb *ButtonBar) Focus(delegate func(p tview.Primitive)) {
+	if len(bb.buttons) > 0 {
+		bb.Box.Focus(delegate)
+	}
+}
+
+// HasFocus returns whether the button bar has focus.
+func (bb *ButtonBar) HasFocus() bool {
+	return bb.Box.HasFocus()
 }
 
 // GetFirstButton returns the first button for focus purposes.
@@ -413,6 +596,40 @@ func (bb *ButtonBar) GetFirstButton() *tview.Button {
 		return bb.buttons[0]
 	}
 	return nil
+}
+
+// UpdateButtonLabel updates the label of a button at the given index.
+func (bb *ButtonBar) UpdateButtonLabel(index int, label string) {
+	if index >= 0 && index < len(bb.buttons) {
+		bb.buttons[index].SetLabel(label)
+	}
+}
+
+// VerticalDivider draws a vertical line for separating columns.
+type VerticalDivider struct {
+	*tview.Box
+}
+
+// NewVerticalDivider creates a new vertical divider.
+func NewVerticalDivider() *VerticalDivider {
+	return &VerticalDivider{
+		Box: tview.NewBox(),
+	}
+}
+
+// Draw renders the vertical divider.
+func (vd *VerticalDivider) Draw(screen tcell.Screen) {
+	vd.DrawForSubclass(screen, vd)
+
+	x, y, _, height := vd.GetInnerRect()
+	if height <= 0 {
+		return
+	}
+
+	style := tcell.StyleDefault.Foreground(CurrentTheme().BorderColor)
+	for row := range height {
+		screen.SetContent(x, y+row, tcell.RuneVLine, nil, style)
+	}
 }
 
 // CheckListItem represents an item with separate display label and value.

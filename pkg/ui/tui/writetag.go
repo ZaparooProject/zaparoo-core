@@ -31,81 +31,61 @@ import (
 	"github.com/rivo/tview"
 )
 
+// BuildTagsWriteMenu creates the tag write menu.
 func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) {
-	statusText := tview.NewTextView().
-		SetTextAlign(tview.AlignCenter).
-		SetText("Enter your ZapScript and press the Write button. ESC to exit.")
+	// Create page frame
+	frame := NewPageFrame(app).
+		SetTitle("Write Tag").
+		SetHelpText("Enter ZapScript and press Enter or Write button")
 
+	goBack := func() {
+		pages.SwitchToPage(PageMain)
+	}
+	frame.SetOnEscape(goBack)
+
+	// Create ZapScript input
 	zapScriptInput := tview.NewInputField()
-	zapScriptInput.SetLabel("ZapScript")
-	zapScriptInput.SetLabelWidth(10)
-	zapScriptInput.SetFieldWidth(50)
+	zapScriptInput.SetLabel("ZapScript: ")
+	zapScriptInput.SetLabelWidth(11)
 	setupInputFieldFocus(zapScriptInput)
 
-	writeButton := tview.NewButton("Write")
-
-	writeMenu := tview.NewFlex()
-	writeMenu.SetTitle("Settings - NFC Tags - Write")
-	writeMenu.SetDirection(tview.FlexRow)
-
-	writeMenu.AddItem(statusText, 1, 0, false)
-	writeMenu.AddItem(tview.NewBox(), 1, 0, false)
-	writeMenu.AddItem(zapScriptInput, 1, 0, true)
-	writeMenu.AddItem(tview.NewBox(), 1, 0, false)
-	writeMenu.AddItem(writeButton, 1, 0, false)
-
-	modalPages := tview.NewPages()
-
-	writeModal := tview.NewModal().
-		SetText("Writing to tag...\nPlace your card on the reader.").
-		AddButtons([]string{"Cancel"})
-
-	successModal := tview.NewModal().
-		SetText("Tag written successfully!").
-		AddButtons([]string{"OK"}).
-		SetDoneFunc(func(_ int, _ string) {
-			modalPages.HidePage("success_modal")
-			zapScriptInput.SetText("")
-			app.SetFocus(zapScriptInput)
-		})
-
-	errorModal := tview.NewModal().
-		SetText("Error writing to tag.").
-		AddButtons([]string{"OK"}).
-		SetDoneFunc(func(_ int, _ string) {
-			modalPages.HidePage("error_modal")
-			app.SetFocus(zapScriptInput)
-		})
-
-	modalPages.AddPage("write_modal", writeModal, true, false)
-	modalPages.AddPage("success_modal", successModal, true, false)
-	modalPages.AddPage("error_modal", errorModal, true, false)
-	writeMenu.AddItem(modalPages, 0, 1, false)
+	var writeCancel context.CancelFunc
 
 	writeTag := func(text string) {
-		ctx, cancel := tagReadContext()
-		writeModal.SetDoneFunc(func(_ int, _ string) {
-			cancel()
-			_, _ = client.LocalClient(context.Background(), cfg, models.MethodReadersWriteCancel, "")
-			modalPages.HidePage("write_modal")
-			app.SetFocus(zapScriptInput)
-		})
+		writeModalPage := "write_modal"
 
-		modalPages.ShowPage("write_modal")
-		app.SetFocus(writeModal)
+		ctx, ctxCancel := tagReadContext()
+		writeCancel = ctxCancel
+
+		// Create waiting modal
+		modal := tview.NewModal().
+			SetText("Place tag on the reader...").
+			AddButtons([]string{"Cancel"}).
+			SetDoneFunc(func(_ int, _ string) {
+				if writeCancel != nil {
+					writeCancel()
+					writeCancel = nil
+				}
+				_, _ = client.LocalClient(context.Background(), cfg, models.MethodReadersWriteCancel, "")
+				pages.RemovePage(writeModalPage)
+				app.SetFocus(zapScriptInput)
+			})
+
+		pages.AddPage(writeModalPage, modal, true, true)
+		app.SetFocus(modal)
 
 		go func() {
-			defer cancel()
+			defer func() {
+				writeCancel = nil
+			}()
 
 			data, err := json.Marshal(&models.ReaderWriteParams{
 				Text: text,
 			})
 			if err != nil {
 				app.QueueUpdateDraw(func() {
-					errorModal.SetText("Error preparing write request:\n" + err.Error())
-					modalPages.HidePage("write_modal")
-					modalPages.ShowPage("error_modal")
-					app.SetFocus(errorModal)
+					pages.RemovePage(writeModalPage)
+					showErrorModal(pages, app, "Error: "+err.Error())
 				})
 				return
 			}
@@ -113,78 +93,66 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 			_, err = client.LocalClient(ctx, cfg, models.MethodReadersWrite, string(data))
 			if err != nil {
 				app.QueueUpdateDraw(func() {
-					errorModal.SetText("Error writing to tag:\n" + err.Error())
-					modalPages.HidePage("write_modal")
-					modalPages.ShowPage("error_modal")
-					app.SetFocus(errorModal)
+					pages.RemovePage(writeModalPage)
+					showErrorModal(pages, app, "Write failed: "+err.Error())
 				})
 				return
 			}
 
 			app.QueueUpdateDraw(func() {
-				modalPages.HidePage("write_modal")
-				modalPages.ShowPage("success_modal")
+				pages.RemovePage(writeModalPage)
+				successModal := tview.NewModal().
+					SetText("Tag written successfully!").
+					AddButtons([]string{"OK"}).
+					SetDoneFunc(func(_ int, _ string) {
+						pages.RemovePage("success_modal")
+						zapScriptInput.SetText("")
+						app.SetFocus(zapScriptInput)
+					})
+				pages.AddPage("success_modal", successModal, true, true)
 				app.SetFocus(successModal)
 			})
 		}()
 	}
 
-	showValidationError := func() {
-		errorModal.SetText("Please enter ZapScript before writing.")
-		modalPages.ShowPage("error_modal")
-		app.SetFocus(errorModal)
-	}
-
-	zapScriptInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		switch k { //nolint:exhaustive // only handling navigation keys
-		case tcell.KeyTab, tcell.KeyDown:
-			app.SetFocus(writeButton)
-			return nil
-		case tcell.KeyBacktab, tcell.KeyUp:
-			app.SetFocus(writeButton)
-			return nil
-		case tcell.KeyEnter:
-			text := strings.TrimSpace(zapScriptInput.GetText())
-			if text == "" {
-				showValidationError()
-				return nil
-			}
-			writeTag(text)
-			return nil
-		}
-		return event
-	})
-
-	writeButton.SetSelectedFunc(func() {
+	doWrite := func() {
 		text := strings.TrimSpace(zapScriptInput.GetText())
 		if text == "" {
-			showValidationError()
+			showErrorModal(pages, app, "Please enter ZapScript before writing")
 			return
 		}
 		writeTag(text)
-	})
+	}
 
-	writeButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		switch k { //nolint:exhaustive // only handling navigation keys
+	// Button bar with Write and Back
+	buttonBar := NewButtonBar(app)
+	buttonBar.AddButton("Write", doWrite).
+		AddButton("Back", goBack).
+		SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
+
+	// Navigation from input
+	zapScriptInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
 		case tcell.KeyTab, tcell.KeyDown:
-			app.SetFocus(zapScriptInput)
+			frame.FocusButtonBar()
 			return nil
-		case tcell.KeyBacktab, tcell.KeyUp:
-			app.SetFocus(zapScriptInput)
+		case tcell.KeyEnter:
+			doWrite()
 			return nil
+		case tcell.KeyEscape:
+			goBack()
+			return nil
+		default:
+			return event
 		}
-		return event
 	})
 
-	writeMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			pages.SwitchToPage(PageMain)
-			return nil
-		}
-		return event
-	})
+	// Main content layout - just the input field
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.AddItem(zapScriptInput, 1, 0, true)
+	contentFlex.AddItem(tview.NewBox(), 0, 1, false) // spacer to push input to top
 
-	pageDefaults(PageSettingsTagsWrite, pages, writeMenu)
+	frame.SetContent(contentFlex)
+	pages.AddAndSwitchToPage(PageSettingsTagsWrite, frame, true)
 }

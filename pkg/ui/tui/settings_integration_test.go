@@ -166,8 +166,8 @@ func TestButtonBar_Navigation_Integration(t *testing.T) {
 	bb.AddButton("Button 2", func() { button2Pressed.Store(true) })
 	bb.SetupNavigation(nil)
 
-	runner.Start(bb.Flex)
-	runner.SetFocus(bb.GetFirstButton())
+	runner.Start(bb)
+	runner.SetFocus(bb)
 
 	// Press Enter on first button
 	runner.Screen().InjectEnter()
@@ -203,8 +203,8 @@ func TestButtonBar_EscapeCallback_Integration(t *testing.T) {
 		escapeCalled.Store(true)
 	})
 
-	runner.Start(bb.Flex)
-	runner.SetFocus(bb.GetFirstButton())
+	runner.Start(bb)
+	runner.SetFocus(bb)
 
 	// Press Escape
 	runner.Screen().InjectEscape()

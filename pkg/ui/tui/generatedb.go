@@ -113,288 +113,139 @@ func (p *ProgressBar) Draw(screen tcell.Screen) {
 	}
 }
 
-func initStatePage(
+// BuildGenerateDBPage creates the media database update page with PageFrame.
+func BuildGenerateDBPage(
 	cfg *config.Instance,
+	pages *tview.Pages,
 	app *tview.Application,
-	appPages *tview.Pages,
-	parentPages *tview.Pages,
-	cancel context.CancelFunc,
-) tview.Primitive {
-	initialState := tview.NewFlex().SetDirection(tview.FlexRow)
-	explanationText := tview.NewTextView().
-		SetText("Update Core's internal database of media files.").
+) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Create page frame
+	frame := NewPageFrame(app).
+		SetTitle("Update Media DB").
+		SetHelpText("Update Core's internal database of media files")
+
+	goBack := func() {
+		cancel()
+		pages.SwitchToPage(PageMain)
+	}
+	frame.SetOnEscape(goBack)
+
+	// Internal pages for different states
+	statePages := tview.NewPages()
+
+	// State components
+	progressBar := NewProgressBar()
+	progressBar.SetBorder(true)
+	progressStatusText := tview.NewTextView().
 		SetTextAlign(tview.AlignCenter).
-		SetWordWrap(true)
+		SetText("Starting scan...")
+	completeText := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter)
 
-	buttonFlex := tview.NewFlex().
-		SetDirection(tview.FlexColumn)
-
-	startButton := tview.NewButton("Update")
-
-	backButton := tview.NewButton("Go back").
-		SetSelectedFunc(func() {
-			cancel() // Cancel the goroutine
-			appPages.SwitchToPage(PageMain)
-		})
-
-	backButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyRight || k == tcell.KeyLeft || k == tcell.KeyTab || k == tcell.KeyBacktab {
-			app.SetFocus(startButton)
-			return nil
-		}
-		return event
-	})
-	startButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyRight || k == tcell.KeyLeft || k == tcell.KeyTab || k == tcell.KeyBacktab {
-			app.SetFocus(backButton)
-			return nil
-		}
-		return event
-	})
-
-	startButton.SetSelectedFunc(func() {
+	// === INITIAL STATE ===
+	initialButtonBar := NewButtonBar(app)
+	initialButtonBar.AddButton("Update", func() {
 		_, err := client.LocalClient(context.Background(), cfg, models.MethodMediaGenerate, "")
 		if err != nil {
 			log.Error().Err(err).Msg("error generating media db")
 			return
 		}
-		parentPages.SwitchToPage("progress")
+		statePages.SwitchToPage("progress")
+		frame.SetHelpText("Scanning media files...")
 	})
+	initialButtonBar.AddButton("Back", goBack)
+	initialButtonBar.SetupNavigation(goBack)
 
-	buttonFlex.AddItem(nil, 0, 1, false)
-	buttonFlex.AddItem(startButton, 0, 1, true)
-	buttonFlex.AddItem(nil, 1, 0, false)
-	buttonFlex.AddItem(backButton, 0, 1, false)
-	buttonFlex.AddItem(nil, 0, 1, false)
-
-	initialState.AddItem(nil, 0, 1, false)
-	initialState.AddItem(explanationText, 0, 2, false)
-	initialState.AddItem(buttonFlex, 1, 1, true)
-	initialState.AddItem(nil, 0, 1, false)
-
-	initialState.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEscape {
-			cancel() // Cancel the goroutine
-			appPages.SwitchToPage(PageMain)
-			return nil
-		}
-		return event
-	})
-
-	return initialState
-}
-
-func progressStatePage(
-	_ *tview.Application,
-	appPages *tview.Pages,
-	_ *tview.Pages,
-	cancel context.CancelFunc,
-) (tview.Primitive, *ProgressBar, *tview.TextView) {
-	progressState := tview.NewFlex().SetDirection(tview.FlexRow)
-	progressText := tview.NewTextView().
-		SetText("Scanning media files...").
-		SetTextAlign(tview.AlignCenter)
-
-	progress := NewProgressBar()
-	progress.SetBorder(true)
-
-	statusText := tview.NewTextView().
-		SetTextAlign(tview.AlignCenter).
-		SetText("Starting scan...")
-
-	hideButton := tview.NewButton("Hide").
-		SetSelectedFunc(func() {
-			cancel() // Cancel the goroutine
-			appPages.SwitchToPage(PageMain)
-		})
-
-	progressState.AddItem(nil, 0, 1, false)
-	progressState.AddItem(progressText, 2, 0, false)
-	progressState.AddItem(nil, 1, 0, false)
-	progressState.AddItem(progress, 3, 0, false)
-	progressState.AddItem(nil, 1, 0, false)
-	progressState.AddItem(statusText, 2, 0, false)
-	progressState.AddItem(nil, 1, 0, false)
-
-	buttonFlex := tview.NewFlex().
-		SetDirection(tview.FlexColumn).
-		AddItem(nil, 0, 1, false).
-		AddItem(hideButton, 0, 1, true).
-		AddItem(nil, 0, 1, false)
-	progressState.AddItem(buttonFlex, 1, 0, true)
-
-	progressState.AddItem(nil, 0, 1, false)
-
-	layout := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(nil, 5, 0, false).
-		AddItem(progressState, 0, 1, true).
-		AddItem(nil, 5, 0, false)
-
-	layout.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEscape {
-			cancel() // Cancel the goroutine
-			appPages.SwitchToPage(PageMain)
-			return nil
-		}
-		return event
-	})
-
-	return layout, progress, statusText
-}
-
-func completeStatePage(
-	_ *tview.Application,
-	appPages *tview.Pages,
-	parentPages *tview.Pages,
-	cancel context.CancelFunc,
-) (tview.Primitive, *tview.TextView) {
-	completeState := tview.NewFlex().SetDirection(tview.FlexRow)
-	completeText := tview.NewTextView().
-		SetTextAlign(tview.AlignCenter)
-
-	doneButton := tview.NewButton("Done").
-		SetSelectedFunc(func() {
-			cancel() // Cancel the goroutine
-			appPages.SwitchToPage(PageMain)
-			parentPages.SwitchToPage("initial")
-		})
-
-	completeState.AddItem(nil, 0, 1, false)
-	completeState.AddItem(completeText, 0, 2, false)
-	completeState.AddItem(nil, 1, 0, false)
-
-	buttonFlex := tview.NewFlex().
-		SetDirection(tview.FlexColumn).
-		AddItem(nil, 0, 1, false).
-		AddItem(doneButton, 0, 1, true).
-		AddItem(nil, 0, 1, false)
-	completeState.AddItem(buttonFlex, 1, 0, true)
-
-	completeState.AddItem(nil, 0, 1, false)
-
-	layout := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(nil, 5, 0, false).
-		AddItem(completeState, 0, 1, true).
-		AddItem(nil, 5, 0, false)
-
-	layout.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEscape {
-			cancel() // Cancel the goroutine
-			appPages.SwitchToPage(PageMain)
-			return nil
-		}
-		return event
-	})
-
-	return layout, completeText
-}
-
-func errorStatePage(
-	_ *tview.Application,
-	appPages *tview.Pages,
-	_ *tview.Pages,
-	cancel context.CancelFunc,
-	message string,
-) tview.Primitive {
-	errorState := tview.NewFlex().SetDirection(tview.FlexRow)
-	errorText := tview.NewTextView().
-		SetText(message).
+	initialContent := tview.NewFlex().SetDirection(tview.FlexRow)
+	explanationMsg := "Update Core's internal database of media files.\n\n" +
+		"This scans your media folders and updates the searchable index."
+	initialExplanation := tview.NewTextView().
+		SetText(explanationMsg).
 		SetTextAlign(tview.AlignCenter).
 		SetWordWrap(true)
+	initialContent.AddItem(nil, 0, 1, false)
+	initialContent.AddItem(initialExplanation, 0, 1, false)
+	initialContent.AddItem(nil, 0, 1, false)
+	initialContent.AddItem(initialButtonBar, 1, 0, true)
 
-	backButton := tview.NewButton("Go back").
-		SetSelectedFunc(func() {
-			cancel()
-			appPages.SwitchToPage(PageMain)
-		})
+	// === PROGRESS STATE ===
+	progressButtonBar := NewButtonBar(app)
+	progressButtonBar.AddButton("Hide", goBack)
+	progressButtonBar.SetupNavigation(goBack)
 
-	buttonFlex := tview.NewFlex().SetDirection(tview.FlexColumn)
-	buttonFlex.AddItem(nil, 0, 1, false)
-	buttonFlex.AddItem(backButton, 0, 1, true)
-	buttonFlex.AddItem(nil, 0, 1, false)
+	progressContent := tview.NewFlex().SetDirection(tview.FlexRow)
+	progressTitle := tview.NewTextView().
+		SetText("Scanning media files...").
+		SetTextAlign(tview.AlignCenter)
+	progressContent.AddItem(nil, 0, 1, false)
+	progressContent.AddItem(progressTitle, 1, 0, false)
+	progressContent.AddItem(progressBar, 3, 0, false)
+	progressContent.AddItem(progressStatusText, 1, 0, false)
+	progressContent.AddItem(nil, 0, 1, false)
+	progressContent.AddItem(progressButtonBar, 1, 0, true)
 
-	errorState.AddItem(nil, 0, 1, false)
-	errorState.AddItem(errorText, 0, 2, false)
-	errorState.AddItem(buttonFlex, 1, 1, true)
-	errorState.AddItem(nil, 0, 1, false)
-
-	errorState.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEscape {
-			cancel()
-			appPages.SwitchToPage(PageMain)
-			return nil
-		}
-		return event
+	// === COMPLETE STATE ===
+	completeButtonBar := NewButtonBar(app)
+	completeButtonBar.AddButton("Done", func() {
+		cancel()
+		statePages.SwitchToPage("initial")
+		frame.SetHelpText("Update Core's internal database of media files")
+		pages.SwitchToPage(PageMain)
 	})
+	completeButtonBar.SetupNavigation(goBack)
 
-	return errorState
-}
+	completeContent := tview.NewFlex().SetDirection(tview.FlexRow)
+	completeContent.AddItem(nil, 0, 1, false)
+	completeContent.AddItem(completeText, 0, 1, false)
+	completeContent.AddItem(nil, 0, 1, false)
+	completeContent.AddItem(completeButtonBar, 1, 0, true)
 
-func BuildGenerateDBPage(
-	cfg *config.Instance,
-	pages *tview.Pages,
-	app *tview.Application,
-) tview.Primitive {
-	ctx, cancel := context.WithCancel(context.Background())
+	// Add pages
+	statePages.AddPage("initial", initialContent, true, true)
+	statePages.AddPage("progress", progressContent, true, false)
+	statePages.AddPage("complete", completeContent, true, false)
 
-	generateDB := tview.NewPages()
-	generateDB.SetTitle("Update Media DB")
-	generateDB.SetBorder(true)
-
-	progressState, progressBar, statusText := progressStatePage(app, pages, generateDB, cancel)
-	generateDB.AddPage("progress", progressState, true, false)
-
-	initialState := initStatePage(cfg, app, pages, generateDB, cancel)
-	generateDB.AddPage("initial", initialState, true, false)
-
-	completeState, completeText := completeStatePage(app, pages, generateDB, cancel)
-	generateDB.AddPage("complete", completeState, true, false)
-
-	errorMsg := "Could not connect to Core service.\nPlease ensure it is running."
-	errorPage := errorStatePage(app, pages, generateDB, cancel, errorMsg)
-	generateDB.AddPage("error", errorPage, true, false)
-
+	// Update functions
 	updateProgress := func(current, total int, status string) {
 		app.QueueUpdateDraw(func() {
 			progressBar.SetProgress(float64(current) / float64(total))
-			statusText.SetText(status)
+			progressStatusText.SetText(status)
 		})
 	}
 
 	showComplete := func(filesFound int) {
 		app.QueueUpdateDraw(func() {
-			completeText.SetText(fmt.Sprintf("Database update complete!\n%d files processed.", filesFound))
-			generateDB.SwitchToPage("complete")
+			completeText.SetText(fmt.Sprintf("Database update complete!\n\n%d files processed.", filesFound))
+			statePages.SwitchToPage("complete")
+			frame.SetHelpText("Database update finished")
 		})
 	}
 
+	// Check initial state
 	mediaCtx, mediaCancel := tuiContext()
 	defer mediaCancel()
 	media, err := getMediaState(mediaCtx, cfg)
 	switch {
 	case err != nil:
-		log.Debug().Err(err).Msg("failed to get media state")
-		generateDB.SwitchToPage("error")
+		statePages.SwitchToPage("initial")
 	case media.Database.Indexing:
 		if media.Database.CurrentStep == nil ||
 			media.Database.TotalSteps == nil ||
 			media.Database.CurrentStepDisplay == nil {
-			generateDB.SwitchToPage("initial")
+			statePages.SwitchToPage("initial")
 		} else {
 			progressBar.SetProgress(float64(*media.Database.CurrentStep) / float64(*media.Database.TotalSteps))
-			statusText.SetText(*media.Database.CurrentStepDisplay)
-			generateDB.SwitchToPage("progress")
+			progressStatusText.SetText(*media.Database.CurrentStepDisplay)
+			statePages.SwitchToPage("progress")
+			frame.SetHelpText("Scanning media files...")
 		}
 	default:
-		generateDB.SwitchToPage("initial")
+		statePages.SwitchToPage("initial")
 	}
 
+	// Background worker for progress updates
 	go func() {
 		defer cancel()
 
@@ -431,7 +282,8 @@ func BuildGenerateDBPage(
 						*indexing.CurrentStepDisplay,
 					)
 					app.QueueUpdateDraw(func() {
-						generateDB.SwitchToPage("progress")
+						statePages.SwitchToPage("progress")
+						frame.SetHelpText("Scanning media files...")
 					})
 				}
 				lastUpdate = &indexing
@@ -439,6 +291,6 @@ func BuildGenerateDBPage(
 		}
 	}()
 
-	pageDefaults(PageGenerateDB, pages, generateDB)
-	return generateDB
+	frame.SetContent(statePages)
+	pages.AddAndSwitchToPage(PageGenerateDB, frame, true)
 }

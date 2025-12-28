@@ -55,11 +55,36 @@ func BuildSettingsMainMenuWithService(
 	pl platforms.Platform,
 	rebuildMainPage func(),
 ) {
+	// Create page frame
+	frame := NewPageFrame(app).
+		SetTitle("Settings")
+
+	goBack := func() {
+		if rebuildMainPage != nil {
+			rebuildMainPage()
+		} else {
+			pages.SwitchToPage(PageMain)
+		}
+	}
+	frame.SetOnEscape(goBack)
+
+	// Create button bar
+	buttonBar := NewButtonBar(app).
+		AddButton("Back", goBack).
+		SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
+
+	// Create settings list
 	mainMenu := NewSettingsList(pages, PageMain)
-	mainMenu.SetTitle("Settings")
 	if rebuildMainPage != nil {
 		mainMenu.SetRebuildPrevious(rebuildMainPage)
 	}
+
+	// Enable dynamic help mode
+	mainMenu.SetDynamicHelpMode(true).
+		SetHelpCallback(func(desc string) {
+			frame.SetHelpText(desc)
+		})
 
 	rebuildSettingsMain := func() {
 		BuildSettingsMainMenuWithService(cfg, svc, pages, app, pl, rebuildMainPage)
@@ -77,14 +102,18 @@ func BuildSettingsMainMenuWithService(
 		}).
 		AddAction("Advanced", "Debug and system options", func() {
 			buildAdvancedSettingsMenu(svc, pages, app)
-		}).
-		AddBackWithDesc("Back to main menu")
+		})
 
-	pageDefaults(PageSettingsMain, pages, mainMenu.List)
+	// Set content and trigger initial help
+	frame.SetContent(mainMenu.List)
+	mainMenu.TriggerInitialHelp()
+	frame.SetupContentToButtonNavigation()
+
+	pages.AddAndSwitchToPage(PageSettingsMain, frame, true)
 }
 
 // buildAudioSettingsMenu creates the audio settings submenu.
-func buildAudioSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.Application) *tview.List {
+func buildAudioSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.Application) {
 	ctx, cancel := tuiContext()
 	defer cancel()
 	settings, err := svc.GetSettings(ctx)
@@ -92,13 +121,33 @@ func buildAudioSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.
 		log.Error().Err(err).Msg("error fetching settings")
 		showErrorModal(pages, app, "Failed to load audio settings")
 		pages.SwitchToPage(PageSettingsMain)
-		return nil
+		return
 	}
+
+	// Create page frame
+	frame := NewPageFrame(app).
+		SetTitle("Settings", "Audio")
+
+	goBack := func() {
+		pages.SwitchToPage(PageSettingsMain)
+	}
+	frame.SetOnEscape(goBack)
+
+	// Create button bar
+	buttonBar := NewButtonBar(app).
+		AddButton("Back", goBack).
+		SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
 
 	audioFeedback := settings.AudioScanFeedback
 
 	menu := NewSettingsList(pages, PageSettingsMain)
-	menu.SetTitle("Settings - Audio")
+
+	// Enable dynamic help mode
+	menu.SetDynamicHelpMode(true).
+		SetHelpCallback(func(desc string) {
+			frame.SetHelpText(desc)
+		})
 
 	menu.AddToggle("Audio feedback on scan", "Play sound when token is scanned", &audioFeedback, func(value bool) {
 		ctx, cancel := tuiContext()
@@ -112,10 +161,12 @@ func buildAudioSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.
 		}
 	})
 
-	menu.AddBack()
+	// Set content and trigger initial help
+	frame.SetContent(menu.List)
+	menu.TriggerInitialHelp()
+	frame.SetupContentToButtonNavigation()
 
-	pageDefaults(PageSettingsAudioMenu, pages, menu.List)
-	return menu.List
+	pages.AddAndSwitchToPage(PageSettingsAudioMenu, frame, true)
 }
 
 // exitDelayLabels extracts display labels from ExitDelayOptions.
@@ -144,7 +195,7 @@ func buildReadersSettingsMenu(
 	pages *tview.Pages,
 	app *tview.Application,
 	pl platforms.Platform,
-) *tview.List {
+) {
 	ctx, cancel := tuiContext()
 	defer cancel()
 	settings, err := svc.GetSettings(ctx)
@@ -152,8 +203,23 @@ func buildReadersSettingsMenu(
 		log.Error().Err(err).Msg("error fetching settings")
 		showErrorModal(pages, app, "Failed to load reader settings")
 		pages.SwitchToPage(PageSettingsMain)
-		return nil
+		return
 	}
+
+	// Create page frame
+	frame := NewPageFrame(app).
+		SetTitle("Settings", "Readers")
+
+	goBack := func() {
+		pages.SwitchToPage(PageSettingsMain)
+	}
+	frame.SetOnEscape(goBack)
+
+	// Create button bar
+	buttonBar := NewButtonBar(app).
+		AddButton("Back", goBack).
+		SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
 
 	autoDetect := settings.ReadersAutoDetect
 
@@ -166,7 +232,12 @@ func buildReadersSettingsMenu(
 	exitDelayIndex := findExitDelayIndex(settings.ReadersScanExitDelay)
 
 	menu := NewSettingsList(pages, PageSettingsMain)
-	menu.SetTitle("Settings - Readers")
+
+	// Enable dynamic help mode
+	menu.SetDynamicHelpMode(true).
+		SetHelpCallback(func(desc string) {
+			frame.SetHelpText(desc)
+		})
 
 	scanModeIdx := menu.GetItemCount()
 	scanModeDesc := "Tap: tap to launch, Hold: exits when removed"
@@ -215,8 +286,6 @@ func buildReadersSettingsMenu(
 		buildReaderListPage(cfg, svc, pages, app, pl)
 	})
 
-	menu.AddBack()
-
 	cycleIndices := map[int]func(delta int){
 		scanModeIdx: func(delta int) {
 			scanModeIndex = (scanModeIndex + delta + len(scanModeOptions)) % len(scanModeOptions)
@@ -250,12 +319,16 @@ func buildReadersSettingsMenu(
 
 	menu.SetupCycleKeys(cycleIndices)
 
-	pageDefaults(PageSettingsReadersMenu, pages, menu.List)
-	return menu.List
+	// Set content and trigger initial help
+	frame.SetContent(menu.List)
+	menu.TriggerInitialHelp()
+	frame.SetupContentToButtonNavigation()
+
+	pages.AddAndSwitchToPage(PageSettingsReadersMenu, frame, true)
 }
 
 // buildAdvancedSettingsMenu creates the advanced settings menu.
-func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.Application) *tview.List {
+func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.Application) {
 	ctx, cancel := tuiContext()
 	defer cancel()
 	settings, err := svc.GetSettings(ctx)
@@ -263,8 +336,23 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 		log.Error().Err(err).Msg("error fetching settings")
 		showErrorModal(pages, app, "Failed to load advanced settings")
 		pages.SwitchToPage(PageSettingsMain)
-		return nil
+		return
 	}
+
+	// Create page frame
+	frame := NewPageFrame(app).
+		SetTitle("Settings", "Advanced")
+
+	goBack := func() {
+		pages.SwitchToPage(PageSettingsMain)
+	}
+	frame.SetOnEscape(goBack)
+
+	// Create button bar
+	buttonBar := NewButtonBar(app).
+		AddButton("Back", goBack).
+		SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
 
 	debugLogging := settings.DebugLogging
 
@@ -276,7 +364,12 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 	}
 
 	menu := NewSettingsList(pages, PageSettingsMain)
-	menu.SetTitle("Settings - Advanced")
+
+	// Enable dynamic help mode
+	menu.SetDynamicHelpMode(true).
+		SetHelpCallback(func(desc string) {
+			frame.SetHelpText(desc)
+		})
 
 	menu.AddAction(ignoreLabel, "Systems to ignore exiting in Hold mode", func() {
 		buildIgnoreSystemsPage(svc, pages, app)
@@ -294,10 +387,12 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 		}
 	})
 
-	menu.AddBack()
+	// Set content and trigger initial help
+	frame.SetContent(menu.List)
+	menu.TriggerInitialHelp()
+	frame.SetupContentToButtonNavigation()
 
-	pageDefaults(PageSettingsAdvanced, pages, menu.List)
-	return menu.List
+	pages.AddAndSwitchToPage(PageSettingsAdvanced, frame, true)
 }
 
 // buildReaderListPage creates the reader list management page.
@@ -307,7 +402,7 @@ func buildReaderListPage(
 	pages *tview.Pages,
 	app *tview.Application,
 	pl platforms.Platform,
-) tview.Primitive {
+) {
 	ctx, cancel := tuiContext()
 	defer cancel()
 	settings, err := svc.GetSettings(ctx)
@@ -315,14 +410,20 @@ func buildReaderListPage(
 		log.Error().Err(err).Msg("error fetching settings")
 		showErrorModal(pages, app, "Failed to load reader list")
 		pages.SwitchToPage(PageSettingsReadersMenu)
-		return nil
+		return
 	}
 
 	readers := settings.ReadersConnect
 
-	layout := tview.NewFlex().SetDirection(tview.FlexRow)
-	layout.SetTitle("Manage Readers")
-	layout.SetBorder(true)
+	// Create page frame
+	frame := NewPageFrame(app).
+		SetTitle("Settings", "Readers", "Manage").
+		SetHelpText("Select a reader to edit, or use Add/Delete")
+
+	goBack := func() {
+		pages.SwitchToPage(PageSettingsReadersMenu)
+	}
+	frame.SetOnEscape(goBack)
 
 	readerList := tview.NewList()
 	readerList.SetSecondaryTextColor(CurrentTheme().SecondaryTextColor)
@@ -382,55 +483,14 @@ func buildReaderListPage(
 		}
 	})
 
-	buttonBar.AddButton("Back", func() {
-		pages.SwitchToPage(PageSettingsReadersMenu)
-	})
+	buttonBar.AddButton("Back", goBack)
+	buttonBar.SetupNavigation(goBack)
 
-	buttonBar.SetupNavigation(func() {
-		pages.SwitchToPage(PageSettingsReadersMenu)
-	})
+	frame.SetContent(readerList)
+	frame.SetButtonBar(buttonBar)
+	frame.SetupContentToButtonNavigation()
 
-	inButtonBar := false
-
-	readerList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Key() {
-		case tcell.KeyEscape:
-			pages.SwitchToPage(PageSettingsReadersMenu)
-			return nil
-		case tcell.KeyTab, tcell.KeyDown:
-			if readerList.GetCurrentItem() == readerList.GetItemCount()-1 || event.Key() == tcell.KeyTab {
-				inButtonBar = true
-				app.SetFocus(buttonBar.GetFirstButton())
-				return nil
-			}
-		default:
-			// Let other keys pass through
-		}
-		return event
-	})
-
-	for _, btn := range buttonBar.buttons {
-		originalCapture := btn.GetInputCapture()
-		btn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			if event.Key() == tcell.KeyUp || event.Key() == tcell.KeyBacktab {
-				if inButtonBar {
-					inButtonBar = false
-					app.SetFocus(readerList)
-					return nil
-				}
-			}
-			if originalCapture != nil {
-				return originalCapture(event)
-			}
-			return event
-		})
-	}
-
-	layout.AddItem(readerList, 0, 1, true)
-	layout.AddItem(buttonBar.Flex, 1, 0, false)
-
-	pageDefaults(PageSettingsReaderList, pages, layout)
-	return layout
+	pages.AddAndSwitchToPage(PageSettingsReaderList, frame, true)
 }
 
 // buildReaderEditPage creates the reader edit form.
@@ -442,7 +502,7 @@ func buildReaderEditPage(
 	pl platforms.Platform,
 	readers *[]models.ReaderConnection,
 	index int,
-) tview.Primitive {
+) {
 	isNew := index >= len(*readers)
 	var reader models.ReaderConnection
 	if !isNew {
@@ -461,16 +521,25 @@ func buildReaderEditPage(
 	if len(availableDrivers) == 0 {
 		showErrorModal(pages, app, "No reader drivers available for this platform")
 		buildReaderListPage(cfg, svc, pages, app, pl)
-		return nil
+		return
 	}
 
-	layout := tview.NewFlex().SetDirection(tview.FlexRow)
-	if isNew {
-		layout.SetTitle("Add Reader")
-	} else {
-		layout.SetTitle("Edit Reader")
+	goBack := func() {
+		buildReaderListPage(cfg, svc, pages, app, pl)
 	}
-	layout.SetBorder(true)
+
+	// Create page frame
+	var titlePart string
+	if isNew {
+		titlePart = "Add"
+	} else {
+		titlePart = "Edit"
+	}
+	frame := NewPageFrame(app).
+		SetTitle("Settings", "Readers", titlePart).
+		SetHelpText("Use ←→ to change driver, Tab to move between fields")
+
+	frame.SetOnEscape(goBack)
 
 	driverIndex := 0
 	for i, d := range availableDrivers {
@@ -525,16 +594,17 @@ func buildReaderEditPage(
 			showErrorModal(pages, app, "Failed to save reader")
 			return
 		}
-		buildReaderListPage(cfg, svc, pages, app, pl)
+		goBack()
 	})
 
-	buttonBar.AddButton("Cancel", func() {
-		buildReaderListPage(cfg, svc, pages, app, pl)
-	})
+	buttonBar.AddButton("Cancel", goBack)
+	buttonBar.SetupNavigation(goBack)
 
-	buttonBar.SetupNavigation(func() {
-		buildReaderListPage(cfg, svc, pages, app, pl)
-	})
+	// Create form content wrapper
+	formContent := tview.NewFlex().SetDirection(tview.FlexRow)
+	formContent.AddItem(driverDisplay, 1, 0, true)
+	formContent.AddItem(pathInput, 1, 0, false)
+	formContent.AddItem(idSourceInput, 1, 0, false)
 
 	focusOrder := []tview.Primitive{driverDisplay, pathInput, idSourceInput, buttonBar.GetFirstButton()}
 
@@ -548,56 +618,60 @@ func buildReaderEditPage(
 	}
 
 	driverDisplay.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Key() {
-		case tcell.KeyLeft:
+		key := event.Key()
+		if key == tcell.KeyLeft {
 			driverIndex = (driverIndex - 1 + len(availableDrivers)) % len(availableDrivers)
 			updateDriverDisplay()
 			return nil
-		case tcell.KeyRight:
+		}
+		if key == tcell.KeyRight {
 			driverIndex = (driverIndex + 1) % len(availableDrivers)
 			updateDriverDisplay()
 			return nil
-		case tcell.KeyDown, tcell.KeyEnter, tcell.KeyTab:
+		}
+		if key == tcell.KeyDown || key == tcell.KeyEnter || key == tcell.KeyTab {
 			setFocus(1)
 			return nil
-		case tcell.KeyEscape:
-			buildReaderListPage(cfg, svc, pages, app, pl)
-			return nil
-		default:
-			return event
 		}
+		if key == tcell.KeyEscape {
+			goBack()
+			return nil
+		}
+		return event
 	})
 
 	pathInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Key() {
-		case tcell.KeyUp, tcell.KeyBacktab:
+		key := event.Key()
+		if key == tcell.KeyUp || key == tcell.KeyBacktab {
 			setFocus(0)
 			return nil
-		case tcell.KeyDown, tcell.KeyTab:
+		}
+		if key == tcell.KeyDown || key == tcell.KeyTab {
 			setFocus(2)
 			return nil
-		case tcell.KeyEscape:
-			buildReaderListPage(cfg, svc, pages, app, pl)
-			return nil
-		default:
-			return event
 		}
+		if key == tcell.KeyEscape {
+			goBack()
+			return nil
+		}
+		return event
 	})
 
 	idSourceInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Key() {
-		case tcell.KeyUp, tcell.KeyBacktab:
+		key := event.Key()
+		if key == tcell.KeyUp || key == tcell.KeyBacktab {
 			setFocus(1)
 			return nil
-		case tcell.KeyDown, tcell.KeyTab:
+		}
+		if key == tcell.KeyDown || key == tcell.KeyTab {
 			setFocus(3)
 			return nil
-		case tcell.KeyEscape:
-			buildReaderListPage(cfg, svc, pages, app, pl)
-			return nil
-		default:
-			return event
 		}
+		if key == tcell.KeyEscape {
+			goBack()
+			return nil
+		}
+		return event
 	})
 
 	for _, btn := range buttonBar.buttons {
@@ -614,19 +688,15 @@ func buildReaderEditPage(
 		})
 	}
 
-	layout.AddItem(driverDisplay, 1, 0, true)
-	layout.AddItem(pathInput, 1, 0, false)
-	layout.AddItem(idSourceInput, 1, 0, false)
-	layout.AddItem(tview.NewBox(), 0, 1, false) // spacer
-	layout.AddItem(buttonBar.Flex, 1, 0, false)
+	frame.SetContent(formContent)
+	frame.SetButtonBar(buttonBar)
 
-	pageDefaults(PageSettingsReaderEdit, pages, layout)
+	pages.AddAndSwitchToPage(PageSettingsReaderEdit, frame, true)
 	app.SetFocus(driverDisplay)
-	return layout
 }
 
 // buildIgnoreSystemsPage creates the ignore systems multi-select page.
-func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.Application) tview.Primitive {
+func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.Application) {
 	ctx, cancel := tuiContext()
 	defer cancel()
 	settings, err := svc.GetSettings(ctx)
@@ -634,7 +704,7 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 		log.Error().Err(err).Msg("error fetching settings")
 		showErrorModal(pages, app, "Failed to load settings")
 		pages.SwitchToPage(PageSettingsAdvanced)
-		return nil
+		return
 	}
 
 	systems, err := svc.GetSystems(ctx)
@@ -642,7 +712,7 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 		log.Error().Err(err).Msg("error fetching systems")
 		showErrorModal(pages, app, "Failed to load systems list")
 		pages.SwitchToPage(PageSettingsAdvanced)
-		return nil
+		return
 	}
 
 	items := make([]SystemItem, len(systems))
@@ -654,11 +724,18 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 		items[i] = SystemItem{ID: sys.ID, Name: label}
 	}
 
-	layout := tview.NewFlex().SetDirection(tview.FlexRow)
-	layout.SetTitle("Ignore Systems")
-	layout.SetBorder(true)
+	// Create page frame
+	frame := NewPageFrame(app).
+		SetTitle("Settings", "Advanced", "Ignore Systems").
+		SetHelpText("Select systems to ignore during media scanning")
 
-	doneBtn := tview.NewButton("Done")
+	goBack := func() {
+		buildAdvancedSettingsMenu(svc, pages, app)
+	}
+	frame.SetOnEscape(goBack)
+
+	// Create button bar
+	buttonBar := NewButtonBar(app)
 
 	var systemSelector *SystemSelector
 	systemSelector = NewSystemSelector(&SystemSelectorConfig{
@@ -669,14 +746,14 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 			// Update button label when selection changes
 			count := systemSelector.GetSelectedCount()
 			if count > 0 {
-				doneBtn.SetLabel(fmt.Sprintf("Done (%d selected)", count))
+				buttonBar.UpdateButtonLabel(0, fmt.Sprintf("Done (%d)", count))
 			} else {
-				doneBtn.SetLabel("Done")
+				buttonBar.UpdateButtonLabel(0, "Done")
 			}
 		},
 	})
 
-	doneBtn.SetSelectedFunc(func() {
+	saveAndExit := func() {
 		selected := systemSelector.GetSelected()
 		ctx, cancel := tuiContext()
 		defer cancel()
@@ -689,65 +766,81 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 			return
 		}
 		buildAdvancedSettingsMenu(svc, pages, app)
-	})
-
-	count := systemSelector.GetSelectedCount()
-	if count > 0 {
-		doneBtn.SetLabel(fmt.Sprintf("Done (%d selected)", count))
 	}
 
+	// Update initial button label if items are selected
+	count := systemSelector.GetSelectedCount()
+	initialLabel := "Done"
+	if count > 0 {
+		initialLabel = fmt.Sprintf("Done (%d)", count)
+	}
+
+	buttonBar.AddButton(initialLabel, saveAndExit).
+		AddButton("Back", goBack).
+		SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
+
+	// Setup navigation from list to button bar
 	systemSelector.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Key() {
-		case tcell.KeyEscape:
-			pages.SwitchToPage(PageSettingsAdvanced)
+		key := event.Key()
+		if key == tcell.KeyTab {
+			frame.FocusButtonBar()
 			return nil
-		case tcell.KeyTab:
-			app.SetFocus(doneBtn)
-			return nil
-		case tcell.KeyDown:
-			// If at last item, navigate to Done button
+		}
+		if key == tcell.KeyDown {
 			if systemSelector.GetCurrentItem() == systemSelector.GetItemCount()-1 {
-				app.SetFocus(doneBtn)
+				frame.FocusButtonBar()
 				return nil
 			}
-		default:
-			// Let other keys pass through
 		}
 		return event
 	})
 
-	doneBtn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Key() {
-		case tcell.KeyUp, tcell.KeyBacktab:
-			app.SetFocus(systemSelector)
-			return nil
-		case tcell.KeyEscape:
-			pages.SwitchToPage(PageSettingsAdvanced)
-			return nil
-		default:
+	// Setup navigation from button bar back to list
+	for _, btn := range buttonBar.buttons {
+		btn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			key := event.Key()
+			if key == tcell.KeyUp || key == tcell.KeyBacktab {
+				app.SetFocus(systemSelector)
+				return nil
+			}
 			return event
-		}
-	})
+		})
+	}
 
-	layout.AddItem(systemSelector, 0, 1, true)
-	layout.AddItem(doneBtn, 1, 0, false)
-
-	pageDefaults(PageSettingsIgnoreSystems, pages, layout)
-	return layout
+	frame.SetContent(systemSelector)
+	pages.AddAndSwitchToPage(PageSettingsIgnoreSystems, frame, true)
 }
 
 // BuildTagsReadMenu creates the NFC tag read menu.
 func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) {
-	topTextView := tview.NewTextView().
-		SetLabel("").
-		SetText("Press Enter to scan a card, Esc to Exit")
-
-	tagsReadMenu := tview.NewForm().
-		AddFormItem(topTextView)
-	tagsReadMenu.SetTitle("Settings - NFC Tags - Read")
+	// Create page frame
+	frame := NewPageFrame(app).
+		SetTitle("Settings", "Tags", "Read").
+		SetHelpText("Press Enter to scan, results appear below")
 
 	var readCancel context.CancelFunc
 	reading := false
+
+	goBack := func() {
+		if readCancel != nil {
+			readCancel()
+		}
+		pages.SwitchToPage(PageSettingsMain)
+	}
+	frame.SetOnEscape(goBack)
+
+	// Create button bar
+	buttonBar := NewButtonBar(app).
+		AddButton("Back", goBack).
+		SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
+
+	topTextView := tview.NewTextView().
+		SetText("Press Enter to scan a card")
+
+	tagsReadMenu := tview.NewForm().
+		AddFormItem(topTextView)
 
 	tagsReadMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
@@ -769,7 +862,7 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 					app.QueueUpdateDraw(func() {
 						reading = false
 						readCancel = nil
-						topTextView.SetText("Failed to read tag. Press ENTER to try again, ESC to exit")
+						topTextView.SetText("Failed to read tag. Press ENTER to try again")
 					})
 					return
 				}
@@ -781,7 +874,7 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 					app.QueueUpdateDraw(func() {
 						reading = false
 						readCancel = nil
-						topTextView.SetText("Failed to parse tag data. Press ENTER to try again, ESC to exit")
+						topTextView.SetText("Failed to parse tag data. Press ENTER to try again")
 					})
 					return
 				}
@@ -792,20 +885,30 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 					tagsReadMenu.AddTextView("ID", data.UID, 50, 1, true, false)
 					tagsReadMenu.AddTextView("Data", data.Data, 50, 1, true, false)
 					tagsReadMenu.AddTextView("Value", data.Text, 50, 4, true, false)
-					topTextView.SetText("Press ENTER to scan another card. ESC to exit")
+					topTextView.SetText("Press ENTER to scan another card")
 				})
 			}()
 			return nil
 		}
-		if k == tcell.KeyEscape {
-			if readCancel != nil {
-				readCancel()
-			}
-			pages.SwitchToPage(PageSettingsMain)
+		if k == tcell.KeyTab {
+			frame.FocusButtonBar()
 			return nil
 		}
 		return event
 	})
 
-	pageDefaults(PageSettingsTagsRead, pages, tagsReadMenu)
+	// Setup navigation from button bar back to form
+	for _, btn := range buttonBar.buttons {
+		btn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			key := event.Key()
+			if key == tcell.KeyUp || key == tcell.KeyBacktab {
+				app.SetFocus(tagsReadMenu)
+				return nil
+			}
+			return event
+		})
+	}
+
+	frame.SetContent(tagsReadMenu)
+	pages.AddAndSwitchToPage(PageSettingsTagsRead, frame, true)
 }

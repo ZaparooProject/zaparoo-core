@@ -301,7 +301,7 @@ func TestSettingsList_AddBack(t *testing.T) {
 	assert.Equal(t, 1, sl.GetItemCount())
 	assert.Len(t, sl.items, 1)
 	assert.Equal(t, "action", sl.items[0].itemType)
-	assert.Equal(t, "Go back", sl.items[0].label)
+	assert.Equal(t, "Back", sl.items[0].label)
 	assert.Equal(t, "Return to previous menu", sl.items[0].description)
 }
 
@@ -342,7 +342,7 @@ func TestButtonBar_Creation(t *testing.T) {
 	bb := NewButtonBar(app)
 
 	require.NotNil(t, bb)
-	require.NotNil(t, bb.Flex)
+	require.NotNil(t, bb.Box)
 	assert.Empty(t, bb.buttons)
 }
 

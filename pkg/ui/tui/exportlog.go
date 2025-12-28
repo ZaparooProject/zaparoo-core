@@ -33,21 +33,32 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )
 
+// BuildExportLogModal creates the log export page with PageFrame.
 func BuildExportLogModal(
 	pages *tview.Pages,
 	app *tview.Application,
 	pl platforms.Platform,
 	logDestPath string,
 	logDestName string,
-) tview.Primitive {
+) {
+	// Create page frame
+	frame := NewPageFrame(app).
+		SetTitle("Export Logs").
+		SetHelpText("View, upload, or copy log files")
+
+	goBack := func() {
+		pages.SwitchToPage(PageMain)
+	}
+	frame.SetOnEscape(goBack)
+
+	// Create pages for modals
 	exportPages := tview.NewPages()
 
-	// Create log viewer (top section)
+	// Create log viewer
 	logViewer := tview.NewTextView().
 		SetDynamicColors(true).
 		SetScrollable(true).
@@ -68,108 +79,71 @@ func BuildExportLogModal(
 	}
 	loadLogContent()
 
-	// Create horizontal button bar (bottom section)
-	refreshBtn := tview.NewButton("Refresh").SetSelectedFunc(func() {
+	// Create button bar with dynamic help
+	buttonBar := NewButtonBar(app)
+
+	buttonBar.AddButton("Refresh", func() {
 		loadLogContent()
+		frame.SetHelpText("Log refreshed")
 	})
-	uploadBtn := tview.NewButton("Upload").SetSelectedFunc(func() {
+
+	buttonBar.AddButton("Upload", func() {
 		outcome := uploadLog(pl, exportPages, app)
 		resultModal := genericModal(outcome, "Upload Log File",
 			func(_ int, _ string) {
 				exportPages.RemovePage("upload")
+				frame.FocusButtonBar()
 			}, true)
 		exportPages.AddPage("upload", resultModal, true, true)
 		app.SetFocus(resultModal)
 	})
-	copyBtn := tview.NewButton("Copy").SetSelectedFunc(func() {
-		outcome := copyLogToSd(pl, logDestPath, logDestName)
-		resultModal := genericModal(outcome, "Copy Log File",
-			func(_ int, _ string) {
-				exportPages.RemovePage("copy")
-			}, true)
-		exportPages.AddPage("copy", resultModal, true, true)
-		app.SetFocus(resultModal)
-	})
-	backBtn := tview.NewButton("Go back").SetSelectedFunc(func() {
-		pages.SwitchToPage(PageMain)
-	})
 
-	// Create help text view
-	helpText := tview.NewTextView().
-		SetTextAlign(tview.AlignCenter)
+	if logDestPath != "" {
+		buttonBar.AddButton("Copy", func() {
+			outcome := copyLogToSd(pl, logDestPath, logDestName)
+			resultModal := genericModal(outcome, "Copy Log File",
+				func(_ int, _ string) {
+					exportPages.RemovePage("copy")
+					frame.FocusButtonBar()
+				}, true)
+			exportPages.AddPage("copy", resultModal, true, true)
+			app.SetFocus(resultModal)
+		})
+	}
+
+	buttonBar.AddButton("Back", goBack)
+	buttonBar.SetupNavigation(goBack)
 
 	// Set up help text updates when buttons receive focus
-	refreshBtn.SetFocusFunc(func() {
-		helpText.SetText("Reload log contents from disk.")
-	})
-	uploadBtn.SetFocusFunc(func() {
-		helpText.SetText("Upload log file to termbin.com and display URL.")
-	})
-	copyBtn.SetFocusFunc(func() {
-		helpText.SetText("Copy log file to " + logDestName + ".")
-	})
-	backBtn.SetFocusFunc(func() {
-		helpText.SetText("Return to main screen.")
-	})
+	for i, btn := range buttonBar.buttons {
+		idx := i
+		btn.SetFocusFunc(func() {
+			helpTexts := []string{
+				"Reload log contents from disk",
+				"Upload log file to termbin.com and display URL",
+			}
+			if logDestPath != "" {
+				helpTexts = append(helpTexts, "Copy log file to "+logDestName)
+			}
+			helpTexts = append(helpTexts, "Return to main screen")
 
-	// Build button list based on whether copy destination exists
-	buttons := []*tview.Button{refreshBtn, uploadBtn}
-	if logDestPath != "" {
-		buttons = append(buttons, copyBtn)
-	}
-	buttons = append(buttons, backBtn)
-
-	// Create horizontal button bar with spacers
-	buttonBar := tview.NewFlex().
-		AddItem(tview.NewTextView(), 0, 1, false) // Left spacer
-	for i, btn := range buttons {
-		buttonBar.AddItem(btn, 15, 1, i == len(buttons)-1) // Last button (Back) gets focus
-		if i < len(buttons)-1 {
-			buttonBar.AddItem(tview.NewTextView(), 1, 0, false) // Small gap between buttons
-		}
-	}
-	buttonBar.AddItem(tview.NewTextView(), 0, 1, false) // Right spacer
-
-	// Set up left/right navigation between buttons with wrap-around
-	for i, btn := range buttons {
-		idx := i // Capture for closure
-		btn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			switch event.Key() {
-			case tcell.KeyLeft:
-				prevIdx := (idx - 1 + len(buttons)) % len(buttons)
-				app.SetFocus(buttons[prevIdx])
-				return nil
-			case tcell.KeyRight:
-				nextIdx := (idx + 1) % len(buttons)
-				app.SetFocus(buttons[nextIdx])
-				return nil
-			case tcell.KeyEscape:
-				pages.SwitchToPage(PageMain)
-				return nil
-			default:
-				return event
+			if idx < len(helpTexts) {
+				frame.SetHelpText(helpTexts[idx])
 			}
 		})
 	}
 
-	// Create layout with log viewer on top, buttons, then help text on bottom
-	layout := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(logViewer, 0, 1, false).
-		AddItem(buttonBar, 1, 1, true).
-		AddItem(helpText, 1, 1, false)
+	frame.SetButtonBar(buttonBar)
 
-	exportPages.AddAndSwitchToPage("export", layout, true)
+	// Build content layout
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.AddItem(logViewer, 0, 1, false)
 
-	exportPages.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			pages.SwitchToPage(PageMain)
-			return nil
-		}
-		return event
-	})
+	exportPages.AddPage("main", contentFlex, true, true)
+	frame.SetContent(exportPages)
 
-	pageDefaults(PageExportLog, pages, exportPages)
-	return exportPages
+	pages.AddAndSwitchToPage(PageExportLog, frame, true)
+	frame.FocusButtonBar()
 }
 
 func copyLogToSd(pl platforms.Platform, logDestPath, logDestName string) string {

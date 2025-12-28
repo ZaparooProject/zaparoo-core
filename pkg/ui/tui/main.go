@@ -120,6 +120,96 @@ func setupButtonNavigation(
 	}
 }
 
+// MainFrame wraps the main page content and adds keyboard hints to the bottom border.
+type MainFrame struct {
+	*tview.Box
+	content tview.Primitive
+}
+
+// NewMainFrame creates a wrapper that adds hints to the main page.
+func NewMainFrame(content tview.Primitive) *MainFrame {
+	return &MainFrame{
+		Box:     tview.NewBox(),
+		content: content,
+	}
+}
+
+// Draw renders the wrapped content and adds hints to the bottom border.
+func (mf *MainFrame) Draw(screen tcell.Screen) {
+	x, y, width, height := mf.GetRect()
+	if mf.content != nil {
+		mf.content.SetRect(x, y, width, height)
+		mf.content.Draw(screen)
+	}
+
+	// Draw hints in the bottom border
+	if height > 2 && width > 4 {
+		bottomY := y + height - 1
+
+		// Get hints runes and calculate centering
+		hints := defaultHintsRunes()
+		availableWidth := width - 4
+		if len(hints) > availableWidth {
+			hints = hints[:availableWidth]
+		}
+
+		startX := x + (width-len(hints))/2
+
+		// Get theme colors - use border color (same as title) on primitive background
+		t := CurrentTheme()
+		style := tcell.StyleDefault.
+			Foreground(t.BorderColor).
+			Background(t.PrimitiveBackgroundColor)
+
+		// Clear just the text area with padding
+		clearStart := startX - 1
+		clearEnd := startX + len(hints) + 1
+		for i := clearStart; i < clearEnd; i++ {
+			screen.SetContent(i, bottomY, ' ', nil, style)
+		}
+
+		// Draw the hints
+		for i, r := range hints {
+			screen.SetContent(startX+i, bottomY, r, nil, style)
+		}
+	}
+}
+
+// Focus delegates to the wrapped content.
+func (mf *MainFrame) Focus(delegate func(p tview.Primitive)) {
+	if mf.content != nil {
+		delegate(mf.content)
+	}
+}
+
+// HasFocus returns whether the wrapped content has focus.
+func (mf *MainFrame) HasFocus() bool {
+	if mf.content != nil {
+		return mf.content.HasFocus()
+	}
+	return false
+}
+
+// InputHandler delegates to the wrapped content.
+func (mf *MainFrame) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	if mf.content != nil {
+		return mf.content.InputHandler()
+	}
+	return nil
+}
+
+// MouseHandler delegates to the wrapped content.
+func (mf *MainFrame) MouseHandler() func(
+	action tview.MouseAction,
+	event *tcell.EventMouse,
+	setFocus func(p tview.Primitive),
+) (bool, tview.Primitive) {
+	if mf.content != nil {
+		return mf.content.MouseHandler()
+	}
+	return nil
+}
+
 var mainPageNotifyCancel context.CancelFunc
 
 func BuildMainPage(
@@ -191,7 +281,7 @@ func BuildMainPage(
 	helpText := tview.NewTextView()
 	lastScanned := tview.NewTextView()
 	lastScanned.SetDynamicColors(true)
-	lastScanned.SetBorder(true).SetTitle("Last Scanned")
+	lastScanned.SetBorder(true).SetTitle(" Last Scanned ")
 
 	if svcRunning {
 		ctx, cancel := tuiContext()
@@ -281,7 +371,7 @@ func BuildMainPage(
 	displayCol.AddItem(lastScanned, 6, 1, false)
 	displayCol.AddItem(helpText, 1, 1, false)
 
-	main.SetTitle("Zaparoo Core v" + config.AppVersion + " (" + pl.ID() + ")").
+	main.SetTitle(" Zaparoo Core v" + config.AppVersion + " (" + pl.ID() + ") ").
 		SetBorder(true).
 		SetTitleAlign(tview.AlignCenter)
 
@@ -378,8 +468,9 @@ func BuildMainPage(
 		AddItem(tview.NewTextView(), 0, 1, false)
 	main.AddItem(buttonNav, 20, 1, true)
 
-	pageDefaults(PageMain, pages, main)
-	return main
+	wrappedMain := NewMainFrame(main)
+	pageDefaults(PageMain, pages, wrappedMain)
+	return wrappedMain
 }
 
 func BuildMain(
