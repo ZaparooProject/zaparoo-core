@@ -136,6 +136,94 @@ func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, wid
 	return widget
 }
 
+// Modal page name constants for consistent overlay management.
+const (
+	infoModalPage    = "info_modal"
+	errorModalPage   = "error_modal"
+	confirmModalPage = "confirm_modal"
+	waitingModalPage = "waiting_modal"
+)
+
+// ShowInfoModal displays an informational modal with a title and OK button.
+func ShowInfoModal(pages *tview.Pages, app *tview.Application, title, message string) {
+	modal := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"OK"}).
+		SetDoneFunc(func(_ int, _ string) {
+			pages.HidePage(infoModalPage)
+			pages.RemovePage(infoModalPage)
+		})
+	modal.SetTitle(" " + title + " ").
+		SetBorder(true).
+		SetTitleAlign(tview.AlignCenter)
+	pages.AddPage(infoModalPage, modal, false, true)
+	app.SetFocus(modal)
+}
+
+// ShowErrorModal displays an error message modal to the user.
+func ShowErrorModal(pages *tview.Pages, app *tview.Application, message string) {
+	modal := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"OK"}).
+		SetDoneFunc(func(_ int, _ string) {
+			pages.HidePage(errorModalPage)
+			pages.RemovePage(errorModalPage)
+		})
+	pages.AddPage(errorModalPage, modal, false, true)
+	app.SetFocus(modal)
+}
+
+// ShowConfirmModal displays a confirmation dialog with Yes/No buttons.
+// onYes is called when the user clicks "Yes", onNo is called for "No" or Escape.
+func ShowConfirmModal(pages *tview.Pages, app *tview.Application, message string, onYes, onNo func()) {
+	modal := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"Yes", "No"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			pages.HidePage(confirmModalPage)
+			pages.RemovePage(confirmModalPage)
+			if buttonIndex == 0 {
+				if onYes != nil {
+					onYes()
+				}
+			} else {
+				if onNo != nil {
+					onNo()
+				}
+			}
+		})
+	pages.AddPage(confirmModalPage, modal, false, true)
+	app.SetFocus(modal)
+}
+
+// ShowWaitingModal displays a modal while waiting for user action (like placing a tag).
+// Returns a cleanup function that removes the modal.
+func ShowWaitingModal(pages *tview.Pages, app *tview.Application, message string, onCancel func()) func() {
+	modal := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"Cancel"}).
+		SetDoneFunc(func(_ int, _ string) {
+			pages.HidePage(waitingModalPage)
+			pages.RemovePage(waitingModalPage)
+			if onCancel != nil {
+				onCancel()
+			}
+		})
+	pages.AddPage(waitingModalPage, modal, false, true)
+	app.SetFocus(modal)
+
+	return func() {
+		pages.HidePage(waitingModalPage)
+		pages.RemovePage(waitingModalPage)
+	}
+}
+
+// SetBoxTitle sets a box title with consistent padding.
+func SetBoxTitle(box interface{ SetTitle(string) *tview.Box }, title string) {
+	box.SetTitle(" " + title + " ")
+}
+
+// genericModal is deprecated. Use ShowInfoModal, ShowErrorModal, ShowConfirmModal instead.
 func genericModal(
 	message string,
 	title string,

@@ -40,28 +40,29 @@ func validateZapScript(text string) (valid bool, message string) {
 		return false, ""
 	}
 
+	t := CurrentTheme()
 	reader := parser.NewParser(text)
 	script, err := reader.ParseScript()
 	if err != nil {
-		return false, fmt.Sprintf("[red]Error: %s[-]", err.Error())
+		return false, fmt.Sprintf("[%s]Error: %s[-]", t.ErrorColorName, err.Error())
 	}
 
 	if len(script.Cmds) == 0 {
-		return false, "[yellow]No commands found[-]"
+		return false, fmt.Sprintf("[%s]No commands found[-]", t.WarningColorName)
 	}
 
 	// Validate all command names are known
 	for _, cmd := range script.Cmds {
 		if !zapscript.IsValidCommand(cmd.Name) {
-			return false, fmt.Sprintf("[red]Unknown command: %s[-]", cmd.Name)
+			return false, fmt.Sprintf("[%s]Unknown command: %s[-]", t.ErrorColorName, cmd.Name)
 		}
 	}
 
 	if len(script.Cmds) == 1 {
-		return true, fmt.Sprintf("[green]Valid: %s[-]", script.Cmds[0].Name)
+		return true, fmt.Sprintf("[%s]Valid: %s[-]", t.SuccessColorName, script.Cmds[0].Name)
 	}
 
-	return true, fmt.Sprintf("[green]Valid: %d commands[-]", len(script.Cmds))
+	return true, fmt.Sprintf("[%s]Valid: %d commands[-]", t.SuccessColorName, len(script.Cmds))
 }
 
 // BuildTagsWriteMenu creates the tag write menu.
@@ -132,7 +133,7 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 			if err != nil {
 				app.QueueUpdateDraw(func() {
 					pages.RemovePage(writeModalPage)
-					showErrorModal(pages, app, "Error: "+err.Error())
+					ShowErrorModal(pages, app, "Error: "+err.Error())
 				})
 				return
 			}
@@ -141,7 +142,7 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 			if err != nil {
 				app.QueueUpdateDraw(func() {
 					pages.RemovePage(writeModalPage)
-					showErrorModal(pages, app, "Write failed: "+err.Error())
+					ShowErrorModal(pages, app, "Write failed: "+err.Error())
 				})
 				return
 			}
@@ -164,12 +165,12 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 	doWrite := func() {
 		text := strings.TrimSpace(zapScriptInput.GetText())
 		if text == "" {
-			showErrorModal(pages, app, "Please enter ZapScript before writing")
+			ShowErrorModal(pages, app, "Please enter ZapScript before writing")
 			return
 		}
 		valid, _ := validateZapScript(text)
 		if !valid {
-			showErrorModal(pages, app, "Please fix ZapScript errors before writing")
+			ShowErrorModal(pages, app, "Please fix ZapScript errors before writing")
 			return
 		}
 		writeTag(text)

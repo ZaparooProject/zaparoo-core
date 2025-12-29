@@ -99,26 +99,14 @@ func BuildExportLogModal(
 
 	buttonBar.AddButtonWithHelp("Upload", helpTexts[1], func() {
 		outcome := uploadLog(pl, exportPages, app)
-		resultModal := genericModal(outcome, "Upload Log File",
-			func(_ int, _ string) {
-				exportPages.RemovePage("upload")
-				frame.FocusButtonBar()
-			}, true)
-		exportPages.AddPage("upload", resultModal, true, true)
-		app.SetFocus(resultModal)
+		ShowInfoModal(exportPages, app, "Upload Log File", outcome)
 	})
 
 	helpIdx := 2
 	if logDestPath != "" {
 		buttonBar.AddButtonWithHelp("Copy", helpTexts[helpIdx], func() {
 			outcome := copyLogToSd(pl, logDestPath, logDestName)
-			resultModal := genericModal(outcome, "Copy Log File",
-				func(_ int, _ string) {
-					exportPages.RemovePage("copy")
-					frame.FocusButtonBar()
-				}, true)
-			exportPages.AddPage("copy", resultModal, true, true)
-			app.SetFocus(resultModal)
+			ShowInfoModal(exportPages, app, "Copy Log File", outcome)
 		})
 		helpIdx++
 	}
@@ -162,9 +150,13 @@ func copyLogToSd(pl platforms.Platform, logDestPath, logDestName string) string 
 
 func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
 	logPath := path.Join(pl.Settings().LogDir, config.LogFile)
-	modal := genericModal("Uploading log file...", "Log upload", func(_ int, _ string) {}, false)
-	pages.AddPage("temp_upload", modal, true, true)
-	app.SetFocus(modal)
+
+	// Show a loading indicator (non-interactive modal)
+	loadingModal := tview.NewModal().SetText("Uploading log file...")
+	SetBoxTitle(loadingModal, "Log upload")
+	loadingModal.SetBorder(true)
+	pages.AddPage("temp_upload", loadingModal, true, true)
+	app.SetFocus(loadingModal)
 	app.ForceDraw()
 
 	// Create a pipe to safely pass file content to nc without shell injection
@@ -230,17 +222,18 @@ func formatLogEntry(line string) string {
 		return line
 	}
 
-	// Map log levels to colors
+	// Map log levels to theme colors
+	t := CurrentTheme()
 	levelColors := map[string]string{
-		"error": "red",
-		"warn":  "yellow",
-		"info":  "green",
-		"debug": "gray",
+		"error": t.ErrorColorName,
+		"warn":  t.WarningColorName,
+		"info":  t.SuccessColorName,
+		"debug": t.SecondaryColor,
 	}
 
 	color, exists := levelColors[entry.Level]
 	if !exists {
-		color = "white"
+		color = t.TextColorName
 	}
 
 	// Shorten timestamp (from "2025-11-20T13:04:23Z" to "13:04:23")

@@ -280,7 +280,8 @@ func BuildMainPage(
 	helpText := tview.NewTextView()
 	lastScanned := tview.NewTextView()
 	lastScanned.SetDynamicColors(true)
-	lastScanned.SetBorder(true).SetTitle(" Last Scanned ")
+	lastScanned.SetBorder(true)
+	SetBoxTitle(lastScanned, "Last Scanned")
 
 	if svcRunning {
 		ctx, cancel := tuiContext()
@@ -380,21 +381,21 @@ func BuildMainPage(
 		BuildSearchMedia(cfg, pages, app)
 	})
 	searchButton.SetFocusFunc(func() {
-		helpText.SetText("Search for media and write to an NFC tag.")
+		helpText.SetText("Search for media and write to an NFC tag")
 	})
 
 	writeButton := tview.NewButton("Custom write").SetSelectedFunc(func() {
 		BuildTagsWriteMenu(cfg, pages, app)
 	})
 	writeButton.SetFocusFunc(func() {
-		helpText.SetText("Write custom ZapScript to an NFC tag.")
+		helpText.SetText("Write custom ZapScript to an NFC tag")
 	})
 
 	updateDBButton := tview.NewButton("Update media DB").SetSelectedFunc(func() {
 		BuildGenerateDBPage(cfg, pages, app)
 	})
 	updateDBButton.SetFocusFunc(func() {
-		helpText.SetText("Scan disk to create index of games.")
+		helpText.SetText("Scan disk to create index of games")
 	})
 
 	rebuildMainPage := func() {
@@ -405,14 +406,14 @@ func BuildMainPage(
 		BuildSettingsMainMenu(cfg, pages, app, pl, rebuildMainPage)
 	})
 	settingsButton.SetFocusFunc(func() {
-		helpText.SetText("Manage settings for Core service.")
+		helpText.SetText("Manage settings for Core service")
 	})
 
 	exportButton := tview.NewButton("Logs").SetSelectedFunc(func() {
 		BuildExportLogModal(pages, app, pl, logDestPath, logDestName)
 	})
 	exportButton.SetFocusFunc(func() {
-		helpText.SetText("View and export Core log file.")
+		helpText.SetText("View and export Core log file")
 	})
 
 	exitButton := tview.NewButton("Exit").SetSelectedFunc(func() {
@@ -421,9 +422,9 @@ func BuildMainPage(
 	})
 	exitButton.SetFocusFunc(func() {
 		if svcRunning {
-			helpText.SetText("Exit TUI app. (service will continue running)")
+			helpText.SetText("Exit TUI app (service will continue running)")
 		} else {
-			helpText.SetText("Exit TUI app.")
+			helpText.SetText("Exit TUI app")
 		}
 	})
 

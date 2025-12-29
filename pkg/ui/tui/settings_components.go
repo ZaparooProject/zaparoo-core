@@ -56,42 +56,6 @@ var ExitDelayOptions = []ExitDelayOption{
 	{Label: "30 seconds", Value: 30},
 }
 
-// errorModalPage is the page name for the error modal overlay.
-const errorModalPage = "error_modal"
-
-// confirmModalPage is the page name for the confirmation modal overlay.
-const confirmModalPage = "confirm_modal"
-
-// showErrorModal displays an error message modal to the user.
-func showErrorModal(pages *tview.Pages, app *tview.Application, message string) {
-	modal := tview.NewModal().
-		SetText(message).
-		AddButtons([]string{"OK"}).
-		SetDoneFunc(func(_ int, _ string) {
-			pages.HidePage(errorModalPage)
-			pages.RemovePage(errorModalPage)
-		})
-	pages.AddPage(errorModalPage, modal, false, true)
-	app.SetFocus(modal)
-}
-
-// showConfirmModal displays a confirmation dialog with Yes/No buttons.
-// onConfirm is called when the user clicks "Yes".
-func showConfirmModal(pages *tview.Pages, app *tview.Application, message string, onConfirm func()) {
-	modal := tview.NewModal().
-		SetText(message).
-		AddButtons([]string{"Yes", "No"}).
-		SetDoneFunc(func(buttonIndex int, _ string) {
-			pages.HidePage(confirmModalPage)
-			pages.RemovePage(confirmModalPage)
-			if buttonIndex == 0 {
-				onConfirm()
-			}
-		})
-	pages.AddPage(confirmModalPage, modal, false, true)
-	app.SetFocus(modal)
-}
-
 // formatToggle renders a toggle value. When selected, label is highlighted.
 func formatToggle(value bool, label string, selected bool) string {
 	t := CurrentTheme()

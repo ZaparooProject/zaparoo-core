@@ -35,16 +35,22 @@ type Theme struct {
 	AccentColorName          string
 	TextColorName            string
 	DisplayName              string
-	InverseTextColor         tcell.Color
-	SecondaryTextColor       tcell.Color
-	PrimaryTextColor         tcell.Color
-	BorderColor              tcell.Color
+	SuccessColorName         string
+	WarningColorName         string
+	ErrorColorName           string
 	ContrastBackgroundColor  tcell.Color
+	BorderColor              tcell.Color
 	PrimitiveBackgroundColor tcell.Color
 	FieldFocusedBg           tcell.Color
 	FieldUnfocusedBg         tcell.Color
 	ProgressFillColor        tcell.Color
 	ProgressEmptyColor       tcell.Color
+	ErrorColor               tcell.Color
+	PrimaryTextColor         tcell.Color
+	WarningColor             tcell.Color
+	SecondaryTextColor       tcell.Color
+	SuccessColor             tcell.Color
+	InverseTextColor         tcell.Color
 }
 
 // ThemeDefault is the original dark blue/yellow theme.
@@ -70,6 +76,13 @@ var ThemeDefault = Theme{
 	FieldUnfocusedBg:   tcell.ColorDarkBlue,
 	ProgressFillColor:  tcell.ColorGreen,
 	ProgressEmptyColor: tcell.ColorGray,
+
+	ErrorColor:       tcell.ColorRed,
+	ErrorColorName:   "red",
+	WarningColor:     tcell.ColorYellow,
+	WarningColorName: "yellow",
+	SuccessColor:     tcell.ColorGreen,
+	SuccessColorName: "green",
 }
 
 // ThemeHighContrast uses true black background with bright yellow for accessibility.
@@ -95,6 +108,13 @@ var ThemeHighContrast = Theme{
 	FieldUnfocusedBg:   tcell.NewHexColor(0x000000),
 	ProgressFillColor:  tcell.ColorYellow,
 	ProgressEmptyColor: tcell.ColorWhite,
+
+	ErrorColor:       tcell.ColorRed,
+	ErrorColorName:   "red",
+	WarningColor:     tcell.ColorYellow,
+	WarningColorName: "yellow",
+	SuccessColor:     tcell.ColorLime,
+	SuccessColorName: "lime",
 }
 
 // ThemeDracula uses the Dracula color scheme with purple accents.
@@ -120,6 +140,13 @@ var ThemeDracula = Theme{
 	FieldUnfocusedBg:   tcell.NewHexColor(0x282A36),
 	ProgressFillColor:  tcell.NewHexColor(0x50FA7B),
 	ProgressEmptyColor: tcell.NewHexColor(0x44475A),
+
+	ErrorColor:       tcell.NewHexColor(0xFF5555), // Dracula red
+	ErrorColorName:   "#ff5555",
+	WarningColor:     tcell.NewHexColor(0xF1FA8C), // Dracula yellow
+	WarningColorName: "#f1fa8c",
+	SuccessColor:     tcell.NewHexColor(0x50FA7B), // Dracula green
+	SuccessColorName: "#50fa7b",
 }
 
 // ThemeNord uses the Nord arctic color palette with cool blue tones.
@@ -145,6 +172,13 @@ var ThemeNord = Theme{
 	FieldUnfocusedBg:   tcell.NewHexColor(0x2E3440),
 	ProgressFillColor:  tcell.NewHexColor(0xA3BE8C),
 	ProgressEmptyColor: tcell.NewHexColor(0x4C566A),
+
+	ErrorColor:       tcell.NewHexColor(0xBF616A), // Nord red
+	ErrorColorName:   "#bf616a",
+	WarningColor:     tcell.NewHexColor(0xEBCB8B), // Nord yellow
+	WarningColorName: "#ebcb8b",
+	SuccessColor:     tcell.NewHexColor(0xA3BE8C), // Nord green
+	SuccessColorName: "#a3be8c",
 }
 
 // ThemeGruvbox uses the Gruvbox retro groove color scheme with warm, earthy tones.
@@ -170,6 +204,13 @@ var ThemeGruvbox = Theme{
 	FieldUnfocusedBg:   tcell.NewHexColor(0x282828),
 	ProgressFillColor:  tcell.NewHexColor(0xB8BB26),
 	ProgressEmptyColor: tcell.NewHexColor(0x504945),
+
+	ErrorColor:       tcell.NewHexColor(0xFB4934), // Gruvbox red
+	ErrorColorName:   "#fb4934",
+	WarningColor:     tcell.NewHexColor(0xFABD2F), // Gruvbox yellow
+	WarningColorName: "#fabd2f",
+	SuccessColor:     tcell.NewHexColor(0xB8BB26), // Gruvbox green
+	SuccessColorName: "#b8bb26",
 }
 
 // ThemeMonogreen is a retro green-on-black theme inspired by classic CRT monitors.
@@ -195,6 +236,13 @@ var ThemeMonogreen = Theme{
 	FieldUnfocusedBg:   tcell.ColorBlack,
 	ProgressFillColor:  tcell.ColorLime,
 	ProgressEmptyColor: tcell.ColorDarkGreen,
+
+	ErrorColor:       tcell.ColorRed,
+	ErrorColorName:   "red",
+	WarningColor:     tcell.ColorYellow,
+	WarningColorName: "yellow",
+	SuccessColor:     tcell.ColorLime,
+	SuccessColorName: "lime",
 }
 
 // AvailableThemes maps theme names to theme definitions.

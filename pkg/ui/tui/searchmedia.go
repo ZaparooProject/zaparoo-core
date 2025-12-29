@@ -65,7 +65,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	// Create components
 	scrollList := NewScrollIndicatorList()
 	mediaList := scrollList.GetList()
-	mediaList.SetMainTextColor(tcell.ColorWhite)
+	mediaList.SetMainTextColor(CurrentTheme().PrimaryTextColor)
 
 	nameLabel := tview.NewTextView().SetText("Name:")
 
@@ -108,8 +108,8 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		selectorPage := "search_system_selector"
 
 		layout := tview.NewFlex().SetDirection(tview.FlexRow)
-		layout.SetTitle(" Select System ")
 		layout.SetBorder(true)
+		SetBoxTitle(layout, "Select System")
 
 		selector := NewSystemSelector(&SystemSelectorConfig{
 			Mode:        SystemSelectorSingle,
@@ -187,7 +187,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 				log.Error().Err(err).Msg("error marshalling write params")
 				app.QueueUpdateDraw(func() {
 					pages.RemovePage(writeModalPage)
-					showErrorModal(pages, app, "Error: "+err.Error())
+					ShowErrorModal(pages, app, "Error: "+err.Error())
 				})
 				return
 			}
@@ -197,7 +197,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 				log.Error().Err(err).Msg("error writing tag")
 				app.QueueUpdateDraw(func() {
 					pages.RemovePage(writeModalPage)
-					showErrorModal(pages, app, "Write failed: "+err.Error())
+					ShowErrorModal(pages, app, "Write failed: "+err.Error())
 				})
 				return
 			}
@@ -281,7 +281,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 				displayName = result.Name
 				writeValue = result.ZapScript
 			}
-			displayText := fmt.Sprintf("%s [gray](%s)[-]", displayName, result.System.Name)
+			displayText := fmt.Sprintf("%s [%s](%s)[-]", displayName, CurrentTheme().SecondaryColor, result.System.Name)
 			mediaList.AddItem(displayText, "", 0, func() {
 				writeTag(writeValue)
 			})
