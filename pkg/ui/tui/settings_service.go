@@ -38,6 +38,21 @@ type SettingsService interface {
 
 	// GetSystems fetches available systems from the API.
 	GetSystems(ctx context.Context) ([]models.System, error)
+
+	// GetTokens fetches currently active tokens from the API.
+	GetTokens(ctx context.Context) (*models.TokensResponse, error)
+
+	// GetReaders fetches connected readers from the API.
+	GetReaders(ctx context.Context) (*models.ReadersResponse, error)
+
+	// WriteTag writes text to a tag via the reader.
+	WriteTag(ctx context.Context, text string) error
+
+	// CancelWriteTag cancels a pending write operation.
+	CancelWriteTag(ctx context.Context) error
+
+	// SearchMedia searches for media matching the given parameters.
+	SearchMedia(ctx context.Context, params models.SearchParams) (*models.SearchResults, error)
 }
 
 // DefaultSettingsService implements SettingsService using an APIClient.
@@ -87,4 +102,73 @@ func (s *DefaultSettingsService) GetSystems(ctx context.Context) ([]models.Syste
 		return nil, fmt.Errorf("failed to parse systems: %w", err)
 	}
 	return systems.Systems, nil
+}
+
+// GetTokens fetches currently active tokens from the API.
+func (s *DefaultSettingsService) GetTokens(ctx context.Context) (*models.TokensResponse, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodTokens, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tokens: %w", err)
+	}
+	var tokens models.TokensResponse
+	if err := json.Unmarshal([]byte(resp), &tokens); err != nil {
+		return nil, fmt.Errorf("failed to parse tokens: %w", err)
+	}
+	return &tokens, nil
+}
+
+// GetReaders fetches connected readers from the API.
+func (s *DefaultSettingsService) GetReaders(ctx context.Context) (*models.ReadersResponse, error) {
+	resp, err := s.apiClient.Call(ctx, models.MethodReaders, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get readers: %w", err)
+	}
+	var readers models.ReadersResponse
+	if err := json.Unmarshal([]byte(resp), &readers); err != nil {
+		return nil, fmt.Errorf("failed to parse readers: %w", err)
+	}
+	return &readers, nil
+}
+
+// WriteTag writes text to a tag via the reader.
+func (s *DefaultSettingsService) WriteTag(ctx context.Context, text string) error {
+	params := models.ReaderWriteParams{Text: text}
+	data, err := json.Marshal(&params)
+	if err != nil {
+		return fmt.Errorf("failed to marshal write params: %w", err)
+	}
+	_, err = s.apiClient.Call(ctx, models.MethodReadersWrite, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to write tag: %w", err)
+	}
+	return nil
+}
+
+// CancelWriteTag cancels a pending write operation.
+func (s *DefaultSettingsService) CancelWriteTag(ctx context.Context) error {
+	_, err := s.apiClient.Call(ctx, models.MethodReadersWriteCancel, "")
+	if err != nil {
+		return fmt.Errorf("failed to cancel write: %w", err)
+	}
+	return nil
+}
+
+// SearchMedia searches for media matching the given parameters.
+func (s *DefaultSettingsService) SearchMedia(
+	ctx context.Context,
+	params models.SearchParams,
+) (*models.SearchResults, error) {
+	data, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal search params: %w", err)
+	}
+	resp, err := s.apiClient.Call(ctx, models.MethodMediaSearch, string(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to search media: %w", err)
+	}
+	var results models.SearchResults
+	if err := json.Unmarshal([]byte(resp), &results); err != nil {
+		return nil, fmt.Errorf("failed to parse search results: %w", err)
+	}
+	return &results, nil
 }

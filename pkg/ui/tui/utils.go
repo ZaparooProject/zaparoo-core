@@ -25,6 +25,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"github.com/rs/zerolog/log"
 )
 
 // TUIRequestTimeout is the timeout for API requests from the TUI.
@@ -89,7 +90,6 @@ func (r *responsiveWrapper) Draw(screen tcell.Screen) {
 	r.DrawForSubclass(screen, r)
 	x, y, width, height := r.GetInnerRect()
 
-	// Calculate actual dimensions (clamped to available space)
 	actualWidth := r.maxWidth
 	if width < r.maxWidth {
 		actualWidth = width
@@ -99,11 +99,9 @@ func (r *responsiveWrapper) Draw(screen tcell.Screen) {
 		actualHeight = height
 	}
 
-	// Calculate centered position
 	offsetX := (width - actualWidth) / 2
 	offsetY := (height - actualHeight) / 2
 
-	// Set the child's position and draw it
 	r.child.SetRect(x+offsetX, y+offsetY, actualWidth, actualHeight)
 	r.child.Draw(screen)
 }
@@ -261,23 +259,73 @@ func rgbToHex(v int32) string {
 	return string(hexChars[(v>>4)&0xf]) + string(hexChars[v&0xf])
 }
 
-// genericModal is deprecated. Use ShowInfoModal, ShowErrorModal, ShowConfirmModal instead.
-func genericModal(
-	message string,
-	title string,
-	action func(buttonIndex int, buttonLabel string),
-	withButton bool,
-) *tview.Modal {
-	modal := tview.NewModal()
-	modal.SetTitle(" " + title + " ").
-		SetBorder(true).
-		SetTitleAlign(tview.AlignCenter)
-	modal.SetText(message)
-	if withButton {
-		modal.AddButtons([]string{"OK"}).
-			SetDoneFunc(action)
-	}
-	return modal
+// WriteTagWithModal displays a waiting modal while writing to a tag.
+// It handles the full flow: show waiting modal -> call API -> show result.
+// onComplete is called after the operation completes (success or failure) with the focus target.
+func WriteTagWithModal(
+	pages *tview.Pages,
+	app *tview.Application,
+	svc SettingsService,
+	text string,
+	onComplete func(success bool),
+) {
+	writeModalPage := "write_modal"
+	successModalPage := "write_success_modal"
+
+	ctx, ctxCancel := tagReadContext()
+
+	modal := tview.NewModal().
+		SetText("Place token on reader...").
+		AddButtons([]string{"Cancel"}).
+		SetDoneFunc(func(_ int, _ string) {
+			ctxCancel()
+			// Cancel the write operation on the server (fire and forget)
+			go func() {
+				cancelCtx, cancel := tuiContext()
+				defer cancel()
+				_ = svc.CancelWriteTag(cancelCtx)
+			}()
+			pages.RemovePage(writeModalPage)
+			if onComplete != nil {
+				onComplete(false)
+			}
+		})
+
+	pages.AddPage(writeModalPage, modal, true, true)
+	app.SetFocus(modal)
+
+	go func() {
+		err := svc.WriteTag(ctx, text)
+		if err != nil {
+			if ctx.Err() == context.Canceled {
+				return
+			}
+			log.Error().Err(err).Msg("error writing tag")
+			app.QueueUpdateDraw(func() {
+				pages.RemovePage(writeModalPage)
+				ShowErrorModal(pages, app, "Write failed: "+err.Error())
+				if onComplete != nil {
+					onComplete(false)
+				}
+			})
+			return
+		}
+
+		app.QueueUpdateDraw(func() {
+			pages.RemovePage(writeModalPage)
+			successModal := tview.NewModal().
+				SetText("Token written successfully!").
+				AddButtons([]string{"OK"}).
+				SetDoneFunc(func(_ int, _ string) {
+					pages.RemovePage(successModalPage)
+					if onComplete != nil {
+						onComplete(true)
+					}
+				})
+			pages.AddPage(successModalPage, successModal, true, true)
+			app.SetFocus(successModal)
+		})
+	}()
 }
 
 type PrimitiveWithSetBorder interface {

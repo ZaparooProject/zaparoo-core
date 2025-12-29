@@ -97,3 +97,102 @@ func (m *MockSettingsService) SetupGetSystems(systems []models.System) {
 func (m *MockSettingsService) SetupGetSystemsError(err error) {
 	m.On("GetSystems", mock.Anything).Return(nil, err)
 }
+
+// GetTokens mocks fetching tokens.
+func (m *MockSettingsService) GetTokens(ctx context.Context) (*models.TokensResponse, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	tokens, ok := args.Get(0).(*models.TokensResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return tokens, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// GetReaders mocks fetching readers.
+func (m *MockSettingsService) GetReaders(ctx context.Context) (*models.ReadersResponse, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	readers, ok := args.Get(0).(*models.ReadersResponse)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return readers, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// SetupGetTokens configures the mock to return tokens.
+func (m *MockSettingsService) SetupGetTokens(tokens *models.TokensResponse) {
+	m.On("GetTokens", mock.Anything).Return(tokens, nil)
+}
+
+// SetupGetTokensError configures the mock to return an error.
+func (m *MockSettingsService) SetupGetTokensError(err error) {
+	m.On("GetTokens", mock.Anything).Return(nil, err)
+}
+
+// SetupGetReaders configures the mock to return readers.
+func (m *MockSettingsService) SetupGetReaders(readers *models.ReadersResponse) {
+	m.On("GetReaders", mock.Anything).Return(readers, nil)
+}
+
+// SetupGetReadersError configures the mock to return an error.
+func (m *MockSettingsService) SetupGetReadersError(err error) {
+	m.On("GetReaders", mock.Anything).Return(nil, err)
+}
+
+// WriteTag mocks writing to a tag.
+func (m *MockSettingsService) WriteTag(ctx context.Context, text string) error {
+	args := m.Called(ctx, text)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// CancelWriteTag mocks canceling a write operation.
+func (m *MockSettingsService) CancelWriteTag(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// SearchMedia mocks searching for media.
+func (m *MockSettingsService) SearchMedia(
+	ctx context.Context,
+	params models.SearchParams,
+) (*models.SearchResults, error) {
+	args := m.Called(ctx, params)
+	if args.Get(0) == nil {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	results, ok := args.Get(0).(*models.SearchResults)
+	if !ok {
+		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+	}
+	return results, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors
+}
+
+// SetupWriteTagSuccess configures the mock to accept write operations.
+func (m *MockSettingsService) SetupWriteTagSuccess() {
+	m.On("WriteTag", mock.Anything, mock.Anything).Return(nil)
+}
+
+// SetupWriteTagError configures the mock to return an error on write.
+func (m *MockSettingsService) SetupWriteTagError(err error) {
+	m.On("WriteTag", mock.Anything, mock.Anything).Return(err)
+}
+
+// SetupCancelWriteTagSuccess configures the mock to accept cancel operations.
+func (m *MockSettingsService) SetupCancelWriteTagSuccess() {
+	m.On("CancelWriteTag", mock.Anything).Return(nil)
+}
+
+// SetupSearchMedia configures the mock to return search results.
+func (m *MockSettingsService) SetupSearchMedia(results *models.SearchResults) {
+	m.On("SearchMedia", mock.Anything, mock.Anything).Return(results, nil)
+}
+
+// SetupSearchMediaError configures the mock to return an error on search.
+func (m *MockSettingsService) SetupSearchMediaError(err error) {
+	m.On("SearchMedia", mock.Anything, mock.Anything).Return(nil, err)
+}

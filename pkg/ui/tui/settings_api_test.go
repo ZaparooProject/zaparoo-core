@@ -290,3 +290,121 @@ func TestSettingsService_EmptySystemsList(t *testing.T) {
 
 	mockClient.AssertExpectations(t)
 }
+
+func TestDefaultSettingsService_GetTokens(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupTokensResponse(&models.TokensResponse{
+		Active: []models.TokenResponse{
+			{UID: "12345678", Text: "Super Mario Bros"},
+		},
+		Last: &models.TokenResponse{
+			UID: "87654321", Text: "Sonic the Hedgehog",
+		},
+	})
+
+	svc := NewSettingsService(mockClient)
+	tokens, err := svc.GetTokens(context.Background())
+
+	require.NoError(t, err)
+	require.NotNil(t, tokens)
+	require.Len(t, tokens.Active, 1)
+	assert.Equal(t, "12345678", tokens.Active[0].UID)
+	assert.Equal(t, "Super Mario Bros", tokens.Active[0].Text)
+	require.NotNil(t, tokens.Last)
+	assert.Equal(t, "87654321", tokens.Last.UID)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_GetTokens_Error(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupTokensError(errors.New("tokens unavailable"))
+
+	svc := NewSettingsService(mockClient)
+	tokens, err := svc.GetTokens(context.Background())
+
+	require.Error(t, err)
+	assert.Nil(t, tokens)
+	assert.Contains(t, err.Error(), "failed to get tokens")
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_GetReaders(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupReadersResponse(&models.ReadersResponse{
+		Readers: []models.ReaderInfo{
+			{Driver: "libnfc", ID: "pn532-1", Connected: true},
+			{Driver: "acr122pcsc", ID: "acr122-1", Connected: true},
+		},
+	})
+
+	svc := NewSettingsService(mockClient)
+	readers, err := svc.GetReaders(context.Background())
+
+	require.NoError(t, err)
+	require.NotNil(t, readers)
+	require.Len(t, readers.Readers, 2)
+	assert.Equal(t, "libnfc", readers.Readers[0].Driver)
+	assert.True(t, readers.Readers[0].Connected)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_GetReaders_Error(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupReadersError(errors.New("readers unavailable"))
+
+	svc := NewSettingsService(mockClient)
+	readers, err := svc.GetReaders(context.Background())
+
+	require.Error(t, err)
+	assert.Nil(t, readers)
+	assert.Contains(t, err.Error(), "failed to get readers")
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_GetTokens_Empty(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupTokensResponse(&models.TokensResponse{
+		Active: []models.TokenResponse{},
+	})
+
+	svc := NewSettingsService(mockClient)
+	tokens, err := svc.GetTokens(context.Background())
+
+	require.NoError(t, err)
+	require.NotNil(t, tokens)
+	assert.Empty(t, tokens.Active)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_GetReaders_Empty(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupReadersResponse(&models.ReadersResponse{
+		Readers: []models.ReaderInfo{},
+	})
+
+	svc := NewSettingsService(mockClient)
+	readers, err := svc.GetReaders(context.Background())
+
+	require.NoError(t, err)
+	require.NotNil(t, readers)
+	assert.Empty(t, readers.Readers)
+
+	mockClient.AssertExpectations(t)
+}

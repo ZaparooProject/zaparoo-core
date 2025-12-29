@@ -20,14 +20,9 @@
 package tui
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/gdamore/tcell/v2"
@@ -66,8 +61,7 @@ func validateZapScript(text string) (valid bool, message string) {
 }
 
 // BuildTagsWriteMenu creates the tag write menu.
-func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) {
-	// Create page frame
+func BuildTagsWriteMenu(svc SettingsService, pages *tview.Pages, app *tview.Application) {
 	frame := NewPageFrame(app).
 		SetTitle("Write Token").
 		SetHelpText("Enter ZapScript and press Write button")
@@ -77,90 +71,20 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 	}
 	frame.SetOnEscape(goBack)
 
-	// Create label
 	zapScriptLabel := NewLabel("ZapScript")
-
-	// Create multiline text area for ZapScript input
 	zapScriptInput := tview.NewTextArea()
 	zapScriptInput.SetBorder(true)
 	zapScriptInput.SetBorderPadding(0, 0, 1, 1)
 
-	// Create validation status display
 	validationStatus := tview.NewTextView().
 		SetDynamicColors(true).
 		SetText("")
 
-	// Update validation on text change
 	zapScriptInput.SetChangedFunc(func() {
 		text := zapScriptInput.GetText()
 		_, message := validateZapScript(text)
 		validationStatus.SetText(message)
 	})
-
-	var writeCancel context.CancelFunc
-
-	writeTag := func(text string) {
-		writeModalPage := "write_modal"
-
-		ctx, ctxCancel := tagReadContext()
-		writeCancel = ctxCancel
-
-		// Create waiting modal
-		modal := tview.NewModal().
-			SetText("Place token on reader...").
-			AddButtons([]string{"Cancel"}).
-			SetDoneFunc(func(_ int, _ string) {
-				if writeCancel != nil {
-					writeCancel()
-					writeCancel = nil
-				}
-				_, _ = client.LocalClient(context.Background(), cfg, models.MethodReadersWriteCancel, "")
-				pages.RemovePage(writeModalPage)
-				app.SetFocus(zapScriptInput)
-			})
-
-		pages.AddPage(writeModalPage, modal, true, true)
-		app.SetFocus(modal)
-
-		go func() {
-			defer func() {
-				writeCancel = nil
-			}()
-
-			data, err := json.Marshal(&models.ReaderWriteParams{
-				Text: text,
-			})
-			if err != nil {
-				app.QueueUpdateDraw(func() {
-					pages.RemovePage(writeModalPage)
-					ShowErrorModal(pages, app, "Error: "+err.Error())
-				})
-				return
-			}
-
-			_, err = client.LocalClient(ctx, cfg, models.MethodReadersWrite, string(data))
-			if err != nil {
-				app.QueueUpdateDraw(func() {
-					pages.RemovePage(writeModalPage)
-					ShowErrorModal(pages, app, "Write failed: "+err.Error())
-				})
-				return
-			}
-
-			app.QueueUpdateDraw(func() {
-				pages.RemovePage(writeModalPage)
-				successModal := tview.NewModal().
-					SetText("Token written successfully!").
-					AddButtons([]string{"OK"}).
-					SetDoneFunc(func(_ int, _ string) {
-						pages.RemovePage("success_modal")
-						app.SetFocus(zapScriptInput)
-					})
-				pages.AddPage("success_modal", successModal, true, true)
-				app.SetFocus(successModal)
-			})
-		}()
-	}
 
 	doWrite := func() {
 		text := strings.TrimSpace(zapScriptInput.GetText())
@@ -173,7 +97,9 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 			ShowErrorModal(pages, app, "Please fix ZapScript errors before writing")
 			return
 		}
-		writeTag(text)
+		WriteTagWithModal(pages, app, svc, text, func(_ bool) {
+			app.SetFocus(zapScriptInput)
+		})
 	}
 
 	doClear := func() {
@@ -182,7 +108,6 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 		app.SetFocus(zapScriptInput)
 	}
 
-	// Button bar with Write, Clear, and Back
 	buttonBar := NewButtonBar(app)
 	buttonBar.AddButton("Write", doWrite).
 		AddButton("Clear", doClear).
@@ -190,24 +115,11 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 		SetupNavigation(goBack)
 	frame.SetButtonBar(buttonBar)
 
-	// Up from button bar goes to text area
-	buttonBar.SetOnUp(func() {
-		app.SetFocus(zapScriptInput)
-	})
-	// Down from button bar wraps to text area
-	buttonBar.SetOnDown(func() {
-		app.SetFocus(zapScriptInput)
-	})
-	// Left from button bar goes to text area
-	buttonBar.SetOnLeft(func() {
-		app.SetFocus(zapScriptInput)
-	})
-	// Right from last button wraps to text area
-	buttonBar.SetOnRight(func() {
-		app.SetFocus(zapScriptInput)
-	})
+	buttonBar.SetOnUp(func() { app.SetFocus(zapScriptInput) })
+	buttonBar.SetOnDown(func() { app.SetFocus(zapScriptInput) })
+	buttonBar.SetOnLeft(func() { app.SetFocus(zapScriptInput) })
+	buttonBar.SetOnRight(func() { app.SetFocus(zapScriptInput) })
 
-	// Helper to count lines in text (0-indexed last line)
 	getLastLineIndex := func() int {
 		text := zapScriptInput.GetText()
 		if text == "" {
@@ -216,14 +128,11 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 		return strings.Count(text, "\n")
 	}
 
-	// Navigation from text area - intercept Up/Down at boundaries
 	zapScriptInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyUp:
-			// Get cursor position (fromRow, fromCol, toRow, toCol)
 			_, _, cursorRow, _ := zapScriptInput.GetCursor()
 			if cursorRow == 0 {
-				// On first line, navigate away
 				frame.FocusButtonBar()
 				return nil
 			}
@@ -232,7 +141,6 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 			_, _, cursorRow, _ := zapScriptInput.GetCursor()
 			lastLine := getLastLineIndex()
 			if cursorRow >= lastLine {
-				// On last line, navigate away
 				frame.FocusButtonBar()
 				return nil
 			}
@@ -248,7 +156,6 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 		}
 	})
 
-	// Main content layout
 	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
 	contentFlex.AddItem(zapScriptLabel, 1, 0, false)
 	contentFlex.AddItem(zapScriptInput, 0, 1, true)

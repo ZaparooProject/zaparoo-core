@@ -164,50 +164,6 @@ func TestThemeDefaultColors(t *testing.T) {
 	assert.Equal(t, "yellow", theme.AccentColorName)
 }
 
-func TestGenericModal_WithButton(t *testing.T) {
-	t.Parallel()
-
-	var callbackCalled bool
-	var callbackIndex int
-	var callbackLabel string
-
-	modal := genericModal(
-		"Test message",
-		"Test Title",
-		func(buttonIndex int, buttonLabel string) {
-			callbackCalled = true
-			callbackIndex = buttonIndex
-			callbackLabel = buttonLabel
-		},
-		true,
-	)
-
-	require.NotNil(t, modal)
-	assert.False(t, callbackCalled, "callback should not be called on creation")
-	_ = callbackIndex
-	_ = callbackLabel
-}
-
-func TestGenericModal_WithoutButton(t *testing.T) {
-	t.Parallel()
-
-	modal := genericModal(
-		"Message without button",
-		"Title",
-		nil,
-		false,
-	)
-
-	require.NotNil(t, modal)
-}
-
-func TestGenericModal_EmptyMessage(t *testing.T) {
-	t.Parallel()
-
-	modal := genericModal("", "Empty Message", nil, true)
-	require.NotNil(t, modal)
-}
-
 func TestExitDelayOptions(t *testing.T) {
 	t.Parallel()
 

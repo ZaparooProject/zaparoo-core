@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -56,32 +57,6 @@ const (
 	PageExportLog             = "export_log"
 	PageGenerateDB            = "generate_db"
 )
-
-func getTokens(ctx context.Context, cfg *config.Instance) (models.TokensResponse, error) {
-	resp, err := client.LocalClient(ctx, cfg, models.MethodTokens, "")
-	if err != nil {
-		return models.TokensResponse{}, fmt.Errorf("failed to get tokens from local client: %w", err)
-	}
-	var tokens models.TokensResponse
-	err = json.Unmarshal([]byte(resp), &tokens)
-	if err != nil {
-		return models.TokensResponse{}, fmt.Errorf("failed to unmarshal tokens response: %w", err)
-	}
-	return tokens, nil
-}
-
-func getReaders(ctx context.Context, cfg *config.Instance) (models.ReadersResponse, error) {
-	resp, err := client.LocalClient(ctx, cfg, models.MethodReaders, "")
-	if err != nil {
-		return models.ReadersResponse{}, fmt.Errorf("failed to get readers from local client: %w", err)
-	}
-	var readers models.ReadersResponse
-	err = json.Unmarshal([]byte(resp), &readers)
-	if err != nil {
-		return models.ReadersResponse{}, fmt.Errorf("failed to unmarshal readers response: %w", err)
-	}
-	return readers, nil
-}
 
 // ButtonGridItem represents a button in the grid with its help text.
 type ButtonGridItem struct {
@@ -148,7 +123,6 @@ func (bg *ButtonGrid) triggerHelp() {
 func (bg *ButtonGrid) FocusFirst() {
 	bg.focusedRow = 0
 	bg.focusedCol = 0
-	// Only search for next enabled if current position is disabled
 	if !bg.isCurrentEnabled() {
 		bg.findNextEnabled(1, 0)
 	}
@@ -162,7 +136,6 @@ func (bg *ButtonGrid) findNextEnabled(colDir, rowDir int) bool {
 		bg.focusedCol += colDir
 		bg.focusedRow += rowDir
 
-		// Wrap columns
 		if bg.focusedCol >= bg.cols {
 			bg.focusedCol = 0
 			bg.focusedRow++
@@ -171,19 +144,16 @@ func (bg *ButtonGrid) findNextEnabled(colDir, rowDir int) bool {
 			bg.focusedRow--
 		}
 
-		// Wrap rows
 		if bg.focusedRow >= 2 {
 			bg.focusedRow = 0
 		} else if bg.focusedRow < 0 {
 			bg.focusedRow = 1
 		}
 
-		// Check if we've wrapped around completely
 		if bg.focusedRow == startRow && bg.focusedCol == startCol {
 			return false
 		}
 
-		// Check if current button is enabled
 		if len(bg.buttons) > bg.focusedRow && len(bg.buttons[bg.focusedRow]) > bg.focusedCol {
 			item := bg.buttons[bg.focusedRow][bg.focusedCol]
 			if item != nil && !item.Disabled {
@@ -223,13 +193,11 @@ func (bg *ButtonGrid) Draw(screen tcell.Screen) {
 			btnX := x + colIdx*(buttonWidth+spacing)
 			btnWidth := buttonWidth
 			if colIdx == len(row)-1 {
-				// Last button in row takes remaining space
 				btnWidth = width - colIdx*(buttonWidth+spacing)
 			}
 
 			item.Button.SetRect(btnX, rowY, btnWidth, 1)
 
-			// Show focus state
 			if hasFocus && rowIdx == bg.focusedRow && colIdx == bg.focusedCol {
 				item.Button.Focus(func(_ tview.Primitive) {})
 			} else {
@@ -311,7 +279,6 @@ func (bg *ButtonGrid) InputHandler() func(event *tcell.EventKey, setFocus func(p
 			}
 
 		default:
-			// Ignore other keys
 		}
 	})
 }
@@ -383,11 +350,9 @@ func (mf *MainFrame) Draw(screen tcell.Screen) {
 		mf.content.Draw(screen)
 	}
 
-	// Draw hints in the bottom border
 	if height > 2 && width > 4 {
 		bottomY := y + height - 1
 
-		// Get hints runes and calculate centering
 		hints := defaultHintsRunes()
 		availableWidth := width - 4
 		if len(hints) > availableWidth {
@@ -395,21 +360,17 @@ func (mf *MainFrame) Draw(screen tcell.Screen) {
 		}
 
 		startX := x + (width-len(hints))/2
-
-		// Get theme colors - use border color (same as title) on primitive background
 		t := CurrentTheme()
 		style := tcell.StyleDefault.
 			Foreground(t.BorderColor).
 			Background(t.PrimitiveBackgroundColor)
 
-		// Clear just the text area with padding
 		clearStart := startX - 1
 		clearEnd := startX + len(hints) + 1
 		for i := clearStart; i < clearEnd; i++ {
 			screen.SetContent(i, bottomY, ' ', nil, style)
 		}
 
-		// Draw the hints
 		for i, r := range hints {
 			screen.SetContent(startX+i, bottomY, r, nil, style)
 		}
@@ -451,7 +412,35 @@ func (mf *MainFrame) MouseHandler() func(
 	return nil
 }
 
-var mainPageNotifyCancel context.CancelFunc
+// mainPageState manages the notification listener lifecycle for the main page.
+// This encapsulates the cancel function to prevent race conditions when
+// the main page is rebuilt.
+type mainPageState struct {
+	cancel context.CancelFunc
+	mu     syncutil.Mutex
+}
+
+// Cancel cancels any running notification listener.
+func (s *mainPageState) Cancel() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+}
+
+// SetCancel stores a new cancel function, canceling any previous one first.
+func (s *mainPageState) SetCancel(cancel context.CancelFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.cancel = cancel
+}
+
+var mainPageNotifyState = &mainPageState{}
 
 func BuildMainPage(
 	cfg *config.Instance,
@@ -462,31 +451,30 @@ func BuildMainPage(
 	logDestPath string,
 	logDestName string,
 ) tview.Primitive {
-	if mainPageNotifyCancel != nil {
-		mainPageNotifyCancel()
-	}
+	mainPageNotifyState.Cancel()
 
 	notifyCtx, notifyCancel := context.WithCancel(context.Background())
-	mainPageNotifyCancel = notifyCancel
+	mainPageNotifyState.SetCancel(notifyCancel)
 
 	svcRunning := isRunning()
 	log.Debug().Bool("svcRunning", svcRunning).Msg("TUI: service status check")
 
-	// Create main container
+	apiClient := client.NewLocalAPIClient(cfg)
+	svc := NewSettingsService(apiClient)
+
 	main := tview.NewFlex().SetDirection(tview.FlexRow)
 	main.SetTitle(" Zaparoo Core v" + config.AppVersion + " (" + pl.ID() + ") ").
 		SetBorder(true).
 		SetTitleAlign(tview.AlignCenter)
 
-	// Left column: intro + status
+	t := CurrentTheme()
+
 	introText := tview.NewTextView().
 		SetText("Visit [::bu:https://zaparoo.org]zaparoo.org[::-:-] for guides and support.\n").
 		SetDynamicColors(true).
 		SetWordWrap(true)
 
 	statusText := tview.NewTextView().SetDynamicColors(true)
-
-	t := CurrentTheme()
 	var svcStatus string
 	if svcRunning {
 		svcStatus = fmt.Sprintf("[%s]✓ RUNNING[-]", t.SuccessColorName)
@@ -517,13 +505,11 @@ func BuildMainPage(
 	leftColumn.AddItem(introText, 3, 0, false)
 	leftColumn.AddItem(statusText, 0, 1, false)
 
-	// Right column: Scanning Area with animation
 	scanningArea := NewScanningArea(app)
 
 	if svcRunning {
-		// Get initial reader count
 		ctx, cancel := tuiContext()
-		readers, err := getReaders(ctx, cfg)
+		readers, err := svc.GetReaders(ctx)
 		cancel()
 		if err != nil {
 			log.Error().Err(err).Msg("failed to get readers")
@@ -535,9 +521,8 @@ func BuildMainPage(
 			scanningArea.SetReaderInfo(len(readers.Readers), driver)
 		}
 
-		// Check for active token currently on reader
 		ctx, cancel = tuiContext()
-		tokens, err := getTokens(ctx, cfg)
+		tokens, err := svc.GetTokens(ctx)
 		cancel()
 		if err == nil && len(tokens.Active) > 0 {
 			scanningArea.SetTokenInfo(
@@ -615,7 +600,7 @@ func BuildMainPage(
 
 				case models.NotificationReadersConnected, models.NotificationReadersDisconnected:
 					ctx, cancel := tuiContext()
-					readers, err := getReaders(ctx, cfg)
+					readers, err := svc.GetReaders(ctx)
 					cancel()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to refresh reader status")
@@ -636,26 +621,23 @@ func BuildMainPage(
 	rightColumn := tview.NewFlex().SetDirection(tview.FlexRow)
 	rightColumn.AddItem(scanningArea, 0, 1, false)
 
-	// 2-column content layout
 	divider := NewVerticalDivider()
 	contentFlex := tview.NewFlex().SetDirection(tview.FlexColumn)
 	contentFlex.AddItem(leftColumn, 0, 1, false)
 	contentFlex.AddItem(divider, 1, 0, false)
 	contentFlex.AddItem(rightColumn, 0, 1, false)
 
-	// Help text (centered like other pages)
 	helpText := tview.NewTextView().SetTextAlign(tview.AlignCenter)
 
-	// Create buttons
 	rebuildMainPage := func() {
 		BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName)
 	}
 
 	searchButton := tview.NewButton("Search media").SetSelectedFunc(func() {
-		BuildSearchMedia(cfg, pages, app)
+		BuildSearchMedia(svc, pages, app)
 	})
 	writeButton := tview.NewButton("Custom write").SetSelectedFunc(func() {
-		BuildTagsWriteMenu(cfg, pages, app)
+		BuildTagsWriteMenu(svc, pages, app)
 	})
 	updateDBButton := tview.NewButton("Update media").SetSelectedFunc(func() {
 		BuildGenerateDBPage(cfg, pages, app)
@@ -668,7 +650,6 @@ func BuildMainPage(
 		app.Stop()
 	})
 
-	// Disable buttons when service not running
 	disableRow1 := !svcRunning
 	if disableRow1 {
 		searchButton.SetDisabled(true)
@@ -677,13 +658,11 @@ func BuildMainPage(
 		settingsButton.SetDisabled(true)
 	}
 
-	// Help text for each button
 	exitHelpText := "Exit TUI app"
 	if svcRunning {
 		exitHelpText = "Exit TUI app (service will continue running)"
 	}
 
-	// Create button grid (2 rows x 3 cols)
 	buttonGrid := NewButtonGrid(app, 3)
 	buttonGrid.AddRow(
 		&ButtonGridItem{searchButton, "Search for media and write to a token", disableRow1},
@@ -704,7 +683,6 @@ func BuildMainPage(
 	})
 	buttonGrid.FocusFirst()
 
-	// Assemble main layout
 	main.AddItem(contentFlex, 0, 1, false)
 	main.AddItem(helpText, 1, 0, false)
 	main.AddItem(buttonGrid, 2, 0, true)

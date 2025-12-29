@@ -92,3 +92,25 @@ func (m *MockAPIClient) SetupTokenNotification(token *models.TokenResponse) {
 	data, _ := json.Marshal(token)
 	m.On("WaitNotification", mock.Anything, mock.Anything, models.NotificationTokensAdded).Return(string(data), nil)
 }
+
+// SetupTokensResponse configures the mock to return a tokens response.
+func (m *MockAPIClient) SetupTokensResponse(tokens *models.TokensResponse) {
+	data, _ := json.Marshal(tokens)
+	m.On("Call", mock.Anything, models.MethodTokens, "").Return(string(data), nil)
+}
+
+// SetupTokensError configures the mock to return an error for tokens.
+func (m *MockAPIClient) SetupTokensError(err error) {
+	m.On("Call", mock.Anything, models.MethodTokens, "").Return("", err)
+}
+
+// SetupReadersResponse configures the mock to return a readers response.
+func (m *MockAPIClient) SetupReadersResponse(readers *models.ReadersResponse) {
+	data, _ := json.Marshal(readers)
+	m.On("Call", mock.Anything, models.MethodReaders, "").Return(string(data), nil)
+}
+
+// SetupReadersError configures the mock to return an error for readers.
+func (m *MockAPIClient) SetupReadersError(err error) {
+	m.On("Call", mock.Anything, models.MethodReaders, "").Return("", err)
+}

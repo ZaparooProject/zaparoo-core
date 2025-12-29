@@ -20,12 +20,12 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"os"
-	"os/exec"
 	"path"
 	"strings"
 	"time"
@@ -45,7 +45,6 @@ func BuildExportLogModal(
 	logDestPath string,
 	logDestName string,
 ) {
-	// Create page frame
 	frame := NewPageFrame(app).
 		SetTitle("Export Logs").
 		SetHelpText("View, upload, or copy log files")
@@ -55,17 +54,14 @@ func BuildExportLogModal(
 	}
 	frame.SetOnEscape(goBack)
 
-	// Create pages for modals
 	exportPages := tview.NewPages()
 
-	// Create log viewer
 	logViewer := tview.NewTextView().
 		SetDynamicColors(true).
 		SetScrollable(true).
 		SetWrap(true).
 		SetWordWrap(true)
 
-	// Load log content
 	loadLogContent := func() {
 		logPath := path.Join(pl.Settings().LogDir, config.LogFile)
 		content, err := readLastLines(logPath, 50)
@@ -79,7 +75,6 @@ func BuildExportLogModal(
 	}
 	loadLogContent()
 
-	// Build help texts array (must match button order)
 	helpTexts := []string{
 		"Reload log contents from disk",
 		"Upload log file to termbin.com and display URL",
@@ -89,7 +84,6 @@ func BuildExportLogModal(
 	}
 	helpTexts = append(helpTexts, "Return to main screen")
 
-	// Create button bar with dynamic help
 	buttonBar := NewButtonBar(app)
 
 	buttonBar.AddButtonWithHelp("Refresh", helpTexts[0], func() {
@@ -119,11 +113,10 @@ func BuildExportLogModal(
 
 	frame.SetButtonBar(buttonBar)
 
-	// Disable Up/Down navigation to content - log viewer is scroll-only, not focusable
+	// Log viewer is scroll-only, not focusable
 	buttonBar.SetOnUp(nil)
 	buttonBar.SetOnDown(nil)
 
-	// Build content layout
 	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
 	contentFlex.AddItem(logViewer, 0, 1, false)
 
@@ -151,7 +144,6 @@ func copyLogToSd(pl platforms.Platform, logDestPath, logDestName string) string 
 func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
 	logPath := path.Join(pl.Settings().LogDir, config.LogFile)
 
-	// Show a loading indicator (non-interactive modal)
 	loadingModal := tview.NewModal().SetText("Uploading log file...")
 	SetBoxTitle(loadingModal, "Log upload")
 	loadingModal.SetBorder(true)
@@ -159,28 +151,52 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 	app.SetFocus(loadingModal)
 	app.ForceDraw()
 
-	// Create a pipe to safely pass file content to nc without shell injection
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Read the log file
-	//nolint:gosec // Safe: logPath is from internal platform settings, not user input
+	//nolint:gosec // logPath is from internal platform settings, not user input
 	logContent, err := os.ReadFile(logPath)
 	if err != nil {
+		pages.RemovePage("temp_upload")
 		log.Error().Err(err).Msg("failed to read log file")
 		return "Error reading log file."
 	}
 
-	// Execute nc command with stdin pipe
-	cmd := exec.CommandContext(ctx, "nc", "termbin.com", "9999")
-	cmd.Stdin = bytes.NewReader(logContent)
-	out, err := cmd.Output()
-	pages.RemovePage("temp_upload")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", "termbin.com:9999")
 	if err != nil {
-		log.Error().Err(err).Msgf("error uploading log file to termbin")
+		pages.RemovePage("temp_upload")
+		log.Error().Err(err).Msg("failed to connect to termbin.com")
+		return "Error connecting to upload service."
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Debug().Err(closeErr).Msg("failed to close connection")
+		}
+	}()
+
+	deadlineErr := conn.SetDeadline(time.Now().Add(30 * time.Second))
+	if deadlineErr != nil {
+		pages.RemovePage("temp_upload")
+		log.Error().Err(deadlineErr).Msg("failed to set connection deadline")
 		return "Error uploading log file."
 	}
-	return "Log file URL:\n\n" + strings.TrimSpace(string(out))
+
+	_, err = conn.Write(logContent)
+	if err != nil {
+		pages.RemovePage("temp_upload")
+		log.Error().Err(err).Msg("failed to send log content")
+		return "Error uploading log file."
+	}
+
+	response, err := io.ReadAll(conn)
+	pages.RemovePage("temp_upload")
+	if err != nil {
+		log.Error().Err(err).Msg("failed to read upload response")
+		return "Error reading upload response."
+	}
+
+	return "Log file URL:\n\n" + strings.TrimSpace(string(response))
 }
 
 // readLastLines reads the last n lines from a file
@@ -193,12 +209,10 @@ func readLastLines(filePath string, n int) (string, error) {
 
 	lines := strings.Split(string(content), "\n")
 
-	// Remove empty last line if present
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 
-	// Get last n lines
 	start := 0
 	if len(lines) > n {
 		start = len(lines) - n
@@ -222,7 +236,6 @@ func formatLogEntry(line string) string {
 		return line
 	}
 
-	// Map log levels to theme colors
 	t := CurrentTheme()
 	levelColors := map[string]string{
 		"error": t.ErrorColorName,
@@ -236,13 +249,11 @@ func formatLogEntry(line string) string {
 		color = t.TextColorName
 	}
 
-	// Shorten timestamp (from "2025-11-20T13:04:23Z" to "13:04:23")
 	timestamp := entry.Time
 	if t, err := time.Parse(time.RFC3339, entry.Time); err == nil {
 		timestamp = t.Format("15:04:05")
 	}
 
-	// Format: [color]LEVEL[-] timestamp message
 	levelUpper := strings.ToUpper(entry.Level)
 	return fmt.Sprintf("[%s::b]%5s[-:-:-] %s %s",
 		color, levelUpper, timestamp, entry.Message)
@@ -252,7 +263,6 @@ func formatLogEntry(line string) string {
 func formatLogContent(content string) string {
 	lines := strings.Split(content, "\n")
 
-	// Remove empty lines
 	var nonEmpty []string
 	for _, line := range lines {
 		if strings.TrimSpace(line) != "" {
@@ -260,12 +270,10 @@ func formatLogContent(content string) string {
 		}
 	}
 
-	// Reverse to show newest first
 	for i, j := 0, len(nonEmpty)-1; i < j; i, j = i+1, j-1 {
 		nonEmpty[i], nonEmpty[j] = nonEmpty[j], nonEmpty[i]
 	}
 
-	// Format each line
 	formatted := make([]string, 0, len(nonEmpty))
 	for _, line := range nonEmpty {
 		formatted = append(formatted, formatLogEntry(line))

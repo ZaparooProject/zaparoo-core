@@ -20,20 +20,30 @@
 package tui
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )
+
+// writeTagForMedia is a helper for writing media search results to tags.
+func writeTagForMedia(
+	pages *tview.Pages,
+	app *tview.Application,
+	svc SettingsService,
+	writeValue string,
+	mediaList *tview.List,
+) {
+	WriteTagWithModal(pages, app, svc, writeValue, func(_ bool) {
+		app.SetFocus(mediaList)
+	})
+}
 
 // truncateSystemName truncates a system name to fit in the left column.
 func truncateSystemName(name string) string {
@@ -45,8 +55,7 @@ func truncateSystemName(name string) string {
 }
 
 // BuildSearchMedia creates the search media page.
-func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Application) {
-	// Create page frame
+func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Application) {
 	frame := NewPageFrame(app).
 		SetTitle("Search Media").
 		SetHelpText("Type query and press Enter to search")
@@ -56,13 +65,11 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	}
 	frame.SetOnEscape(goBack)
 
-	// State variables
 	name := ""
 	filterSystem := ""
 	filterSystemName := "All"
 	searching := false
 
-	// Create components
 	scrollList := NewScrollIndicatorList()
 	mediaList := scrollList.GetList()
 	mediaList.SetMainTextColor(CurrentTheme().PrimaryTextColor)
@@ -77,33 +84,24 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 
 	systemLabel := NewLabel("System")
 
-	// System selector button
 	systemButton := tview.NewButton(truncateSystemName(filterSystemName))
 
-	// Load systems for the selector
 	var systemItems []SystemItem
 	ctx, cancel := tuiContext()
-	resp, err := client.LocalClient(ctx, cfg, models.MethodSystems, "")
+	systems, err := svc.GetSystems(ctx)
 	cancel()
 	if err != nil {
 		log.Error().Err(err).Msg("error getting system list")
 	} else {
-		var results models.SystemsResponse
-		err = json.Unmarshal([]byte(resp), &results)
-		if err != nil {
-			log.Error().Err(err).Msg("error unmarshalling system results")
-		} else {
-			sort.Slice(results.Systems, func(i, j int) bool {
-				return results.Systems[i].Name < results.Systems[j].Name
-			})
-			systemItems = make([]SystemItem, len(results.Systems))
-			for i, v := range results.Systems {
-				systemItems[i] = SystemItem{ID: v.ID, Name: v.Name}
-			}
+		sort.Slice(systems, func(i, j int) bool {
+			return systems[i].Name < systems[j].Name
+		})
+		systemItems = make([]SystemItem, len(systems))
+		for i, v := range systems {
+			systemItems[i] = SystemItem{ID: v.ID, Name: v.Name}
 		}
 	}
 
-	// Function to open system selector modal
 	openSystemSelector := func() {
 		selectorPage := "search_system_selector"
 
@@ -149,74 +147,6 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		app.SetFocus(selector)
 	}
 
-	var writeCancel context.CancelFunc
-
-	// Write tag with modal status
-	writeTag := func(value string) {
-		writeModalPage := "write_modal"
-
-		ctx, ctxCancel := tagReadContext()
-		writeCancel = ctxCancel
-
-		// Create waiting modal
-		modal := tview.NewModal().
-			SetText("Place token on reader...").
-			AddButtons([]string{"Cancel"}).
-			SetDoneFunc(func(_ int, _ string) {
-				if writeCancel != nil {
-					writeCancel()
-					writeCancel = nil
-				}
-				_, _ = client.LocalClient(context.Background(), cfg, models.MethodReadersWriteCancel, "")
-				pages.RemovePage(writeModalPage)
-				app.SetFocus(mediaList)
-			})
-
-		pages.AddPage(writeModalPage, modal, true, true)
-		app.SetFocus(modal)
-
-		go func() {
-			defer func() {
-				writeCancel = nil
-			}()
-
-			data, err := json.Marshal(&models.ReaderWriteParams{
-				Text: value,
-			})
-			if err != nil {
-				log.Error().Err(err).Msg("error marshalling write params")
-				app.QueueUpdateDraw(func() {
-					pages.RemovePage(writeModalPage)
-					ShowErrorModal(pages, app, "Error: "+err.Error())
-				})
-				return
-			}
-
-			_, err = client.LocalClient(ctx, cfg, models.MethodReadersWrite, string(data))
-			if err != nil {
-				log.Error().Err(err).Msg("error writing tag")
-				app.QueueUpdateDraw(func() {
-					pages.RemovePage(writeModalPage)
-					ShowErrorModal(pages, app, "Write failed: "+err.Error())
-				})
-				return
-			}
-
-			app.QueueUpdateDraw(func() {
-				pages.RemovePage(writeModalPage)
-				successModal := tview.NewModal().
-					SetText("Token written successfully!").
-					AddButtons([]string{"OK"}).
-					SetDoneFunc(func(_ int, _ string) {
-						pages.RemovePage("success_modal")
-						app.SetFocus(mediaList)
-					})
-				pages.AddPage("success_modal", successModal, true, true)
-				app.SetFocus(successModal)
-			})
-		}()
-	}
-
 	search := func() {
 		if searching {
 			return
@@ -227,15 +157,8 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		}
 
 		if filterSystem != "" {
-			systems := []string{filterSystem}
-			params.Systems = &systems
-		}
-
-		payload, err := json.Marshal(params)
-		if err != nil {
-			log.Error().Err(err).Msg("error marshalling search params")
-			frame.SetHelpText("An error occurred during search")
-			return
+			systemsFilter := []string{filterSystem}
+			params.Systems = &systemsFilter
 		}
 
 		frame.SetHelpText("Searching...")
@@ -245,17 +168,11 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 			searching = false
 		}()
 
-		resp, err := client.LocalClient(context.Background(), cfg, models.MethodMediaSearch, string(payload))
+		searchCtx, searchCancel := tuiContext()
+		results, err := svc.SearchMedia(searchCtx, params)
+		searchCancel()
 		if err != nil {
 			log.Error().Err(err).Msg("error executing search query")
-			frame.SetHelpText("An error occurred during search")
-			return
-		}
-
-		var results models.SearchResults
-		err = json.Unmarshal([]byte(resp), &results)
-		if err != nil {
-			log.Error().Err(err).Msg("error unmarshalling search results")
 			frame.SetHelpText("An error occurred during search")
 			return
 		}
@@ -282,8 +199,9 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 				writeValue = result.ZapScript
 			}
 			displayText := fmt.Sprintf("%s [%s](%s)[-]", displayName, CurrentTheme().SecondaryColor, result.System.Name)
+			value := writeValue // capture for closure
 			mediaList.AddItem(displayText, "", 0, func() {
-				writeTag(writeValue)
+				writeTagForMedia(pages, app, svc, value, mediaList)
 			})
 		}
 
@@ -293,10 +211,8 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		}
 	}
 
-	// Track last focused left column item for returning from results
 	var lastLeftFocus tview.Primitive = searchInput
 
-	// Helper to focus results column, or button bar if no results
 	focusResults := func() {
 		if mediaList.GetItemCount() > 0 {
 			app.SetFocus(mediaList)
@@ -305,17 +221,9 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		}
 	}
 
-	// Helper to focus left column (returns to last focused item)
 	focusLeftColumn := func() {
 		app.SetFocus(lastLeftFocus)
 	}
-
-	// Navigation: 2-column layout
-	// Left column: name → system → search (vertical with Up/Down)
-	// Right column: results list
-	// Right arrow from system/search → results
-	// Left arrow from results → left column
-	// Tab/Shift+Tab also switch columns
 
 	searchInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
@@ -380,14 +288,12 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		}
 	})
 
-	// Button bar with Search and Back
 	buttonBar := NewButtonBar(app)
 	buttonBar.AddButton("Search", search).
 		AddButton("Back", goBack).
 		SetupNavigation(goBack)
 	frame.SetButtonBar(buttonBar)
 
-	// Up from button bar goes to results if any (at last item), otherwise left column
 	buttonBar.SetOnUp(func() {
 		if mediaList.GetItemCount() > 0 {
 			mediaList.SetCurrentItem(mediaList.GetItemCount() - 1)
@@ -396,15 +302,12 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 			app.SetFocus(systemButton)
 		}
 	})
-	// Down from button bar wraps to name input (top of left column)
 	buttonBar.SetOnDown(func() {
 		app.SetFocus(searchInput)
 	})
-	// Tab wrap from button bar back to search input
 	buttonBar.SetOnWrap(func() {
 		app.SetFocus(searchInput)
 	})
-	// Left from button bar goes to results if any, otherwise left column
 	buttonBar.SetOnLeft(func() {
 		if mediaList.GetItemCount() > 0 {
 			app.SetFocus(mediaList)
