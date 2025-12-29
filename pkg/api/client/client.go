@@ -178,16 +178,8 @@ func LocalClient(
 	case <-done:
 
 	case <-timer.C:
-		closeErr := c.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing websocket")
-		}
 		return "", ErrRequestTimeout
 	case <-ctx.Done():
-		closeErr := c.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing websocket")
-		}
 		return "", ErrRequestCancelled
 	}
 
@@ -308,16 +300,8 @@ func WaitNotification(
 	case <-done:
 
 	case <-timerChan:
-		closeErr := c.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing websocket")
-		}
 		return "", ErrRequestTimeout
 	case <-ctx.Done():
-		closeErr := c.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing websocket")
-		}
 		return "", ErrRequestCancelled
 	}
 
@@ -435,16 +419,8 @@ func WaitNotifications(
 	case <-done:
 
 	case <-timerChan:
-		closeErr := c.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing websocket")
-		}
 		return "", "", ErrRequestTimeout
 	case <-ctx.Done():
-		closeErr := c.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing websocket")
-		}
 		return "", "", ErrRequestCancelled
 	}
 

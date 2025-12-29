@@ -39,9 +39,11 @@ func BuildSettingsMainMenu(
 	app *tview.Application,
 	pl platforms.Platform,
 	rebuildMainPage func(),
+	logDestPath string,
+	logDestName string,
 ) {
 	svc := NewSettingsService(client.NewLocalAPIClient(cfg))
-	BuildSettingsMainMenuWithService(cfg, svc, pages, app, pl, rebuildMainPage)
+	BuildSettingsMainMenuWithService(cfg, svc, pages, app, pl, rebuildMainPage, logDestPath, logDestName)
 }
 
 // BuildSettingsMainMenuWithService creates the settings menu using the given SettingsService.
@@ -52,6 +54,8 @@ func BuildSettingsMainMenuWithService(
 	app *tview.Application,
 	pl platforms.Platform,
 	rebuildMainPage func(),
+	logDestPath string,
+	logDestName string,
 ) {
 	// Create page frame
 	frame := NewPageFrame(app).
@@ -85,21 +89,27 @@ func BuildSettingsMainMenuWithService(
 		})
 
 	rebuildSettingsMain := func() {
-		BuildSettingsMainMenuWithService(cfg, svc, pages, app, pl, rebuildMainPage)
+		BuildSettingsMainMenuWithService(cfg, svc, pages, app, pl, rebuildMainPage, logDestPath, logDestName)
 	}
 
 	mainMenu.
-		AddAction("Readers", "Reader connections and scanning", func() {
+		AddNavAction("Readers", "Reader connections and scanning", func() {
 			buildReadersSettingsMenu(cfg, svc, pages, app, pl)
 		}).
-		AddAction("Audio", "Sound and feedback settings", func() {
+		AddNavAction("Audio", "Sound and feedback settings", func() {
 			buildAudioSettingsMenu(svc, pages, app)
 		}).
-		AddAction("TUI", "Theme and display preferences", func() {
+		AddNavAction("TUI", "Theme and display preferences", func() {
 			buildTUISettingsMenu(pages, app, pl, rebuildSettingsMain)
 		}).
-		AddAction("Advanced", "Debug and system options", func() {
+		AddNavAction("Advanced", "Debug and system options", func() {
 			buildAdvancedSettingsMenu(svc, pages, app)
+		}).
+		AddNavAction("Logs", "View and export log files", func() {
+			BuildExportLogModal(pages, app, pl, logDestPath, logDestName)
+		}).
+		AddNavAction("About", "Version, license, and credits", func() {
+			buildAboutPage(pages, app)
 		})
 
 	// Set content and trigger initial help
@@ -444,7 +454,8 @@ func buildReaderListPage(
 			}
 			secondary := ""
 			if reader.IDSource != "" {
-				secondary = "ID Source: " + reader.IDSource
+				t := CurrentTheme()
+				secondary = fmt.Sprintf("[%s::b]ID Source:[-::-] %s", t.LabelColorName, reader.IDSource)
 			}
 			readerList.AddItem(display, secondary, 0, func() {
 				buildReaderEditPage(cfg, svc, pages, app, pl, &readers, idx)
@@ -561,22 +572,22 @@ func buildReaderEditPage(
 	updateDriverDisplay := func() {
 		t := CurrentTheme()
 		driverDisplay.SetText(fmt.Sprintf(
-			"[%s]Driver:[%s] < %s >",
-			t.AccentColorName, t.TextColorName, availableDrivers[driverIndex],
+			"[%s::b]Driver:[-::-] < %s >",
+			t.LabelColorName, availableDrivers[driverIndex],
 		))
 	}
 	updateDriverDisplay()
 
 	pathInput := tview.NewInputField().
-		SetLabel("Path: ").
 		SetText(reader.Path).
 		SetFieldWidth(30)
+	SetInputLabel(pathInput, "Path")
 	setupInputFieldFocus(pathInput)
 
 	idSourceInput := tview.NewInputField().
-		SetLabel("ID Source: ").
 		SetText(reader.IDSource).
 		SetFieldWidth(20)
+	SetInputLabel(idSourceInput, "ID Source")
 	setupInputFieldFocus(idSourceInput)
 
 	buttonBar := NewButtonBar(app)
@@ -825,4 +836,49 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 
 	frame.SetContent(systemSelector)
 	pages.AddAndSwitchToPage(PageSettingsIgnoreSystems, frame, true)
+}
+
+// buildAboutPage creates the About page with version, license, and credits.
+func buildAboutPage(pages *tview.Pages, app *tview.Application) {
+	frame := NewPageFrame(app).
+		SetTitle("About")
+
+	goBack := func() {
+		pages.SwitchToPage(PageSettingsMain)
+	}
+	frame.SetOnEscape(goBack)
+
+	buttonBar := NewButtonBar(app).
+		AddButton("Back", goBack).
+		SetupNavigation(goBack)
+	frame.SetButtonBar(buttonBar)
+
+	t := CurrentTheme()
+
+	content := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(false)
+
+	aboutText := fmt.Sprintf(`[%s::b]Zaparoo Core[-::-]
+Version %s
+
+[%s::b]Copyright[-::-]
+© 2025 The Zaparoo Project Contributors
+
+[%s::b]License[-::-]
+GNU General Public License v3.0 or later (GPL-3.0-or-later)
+
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.`,
+		t.AccentColorName,
+		config.AppVersion,
+		t.AccentColorName,
+		t.AccentColorName,
+	)
+
+	content.SetText(aboutText)
+
+	frame.SetContent(content)
+	pages.AddAndSwitchToPage(PageSettingsAbout, frame, true)
+	app.SetFocus(buttonBar)
 }

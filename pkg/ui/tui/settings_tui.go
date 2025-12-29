@@ -188,6 +188,7 @@ var pagesToClearOnThemeChange = []string{
 	PageSettingsAudioMenu,
 	PageSettingsReadersMenu,
 	PageSettingsTUI,
+	PageSettingsAbout,
 	PageSearchMedia,
 	PageGenerateDB,
 }

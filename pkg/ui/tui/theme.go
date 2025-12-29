@@ -38,6 +38,7 @@ type Theme struct {
 	SuccessColorName         string
 	WarningColorName         string
 	ErrorColorName           string
+	LabelColorName           string
 	ContrastBackgroundColor  tcell.Color
 	BorderColor              tcell.Color
 	PrimitiveBackgroundColor tcell.Color
@@ -51,6 +52,7 @@ type Theme struct {
 	SecondaryTextColor       tcell.Color
 	SuccessColor             tcell.Color
 	InverseTextColor         tcell.Color
+	LabelColor               tcell.Color
 }
 
 // ThemeDefault is the original dark blue/yellow theme.
@@ -83,6 +85,9 @@ var ThemeDefault = Theme{
 	WarningColorName: "yellow",
 	SuccessColor:     tcell.ColorGreen,
 	SuccessColorName: "green",
+
+	LabelColor:     tcell.ColorGray,
+	LabelColorName: "gray",
 }
 
 // ThemeHighContrast uses true black background with bright yellow for accessibility.
@@ -115,6 +120,9 @@ var ThemeHighContrast = Theme{
 	WarningColorName: "yellow",
 	SuccessColor:     tcell.ColorLime,
 	SuccessColorName: "lime",
+
+	LabelColor:     tcell.ColorWhite,
+	LabelColorName: "white",
 }
 
 // ThemeDracula uses the Dracula color scheme with purple accents.
@@ -147,6 +155,9 @@ var ThemeDracula = Theme{
 	WarningColorName: "#f1fa8c",
 	SuccessColor:     tcell.NewHexColor(0x50FA7B), // Dracula green
 	SuccessColorName: "#50fa7b",
+
+	LabelColor:     tcell.NewHexColor(0x6272A4),
+	LabelColorName: "#6272a4",
 }
 
 // ThemeNord uses the Nord arctic color palette with cool blue tones.
@@ -179,6 +190,9 @@ var ThemeNord = Theme{
 	WarningColorName: "#ebcb8b",
 	SuccessColor:     tcell.NewHexColor(0xA3BE8C), // Nord green
 	SuccessColorName: "#a3be8c",
+
+	LabelColor:     tcell.NewHexColor(0x4C566A),
+	LabelColorName: "#4c566a",
 }
 
 // ThemeGruvbox uses the Gruvbox retro groove color scheme with warm, earthy tones.
@@ -211,6 +225,9 @@ var ThemeGruvbox = Theme{
 	WarningColorName: "#fabd2f",
 	SuccessColor:     tcell.NewHexColor(0xB8BB26), // Gruvbox green
 	SuccessColorName: "#b8bb26",
+
+	LabelColor:     tcell.NewHexColor(0xA89984),
+	LabelColorName: "#a89984",
 }
 
 // ThemeMonogreen is a retro green-on-black theme inspired by classic CRT monitors.
@@ -243,6 +260,9 @@ var ThemeMonogreen = Theme{
 	WarningColorName: "yellow",
 	SuccessColor:     tcell.ColorLime,
 	SuccessColorName: "lime",
+
+	LabelColor:     tcell.ColorDarkGreen,
+	LabelColorName: "darkgreen",
 }
 
 // AvailableThemes maps theme names to theme definitions.

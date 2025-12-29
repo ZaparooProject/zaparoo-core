@@ -223,6 +223,44 @@ func SetBoxTitle(box interface{ SetTitle(string) *tview.Box }, title string) {
 	box.SetTitle(" " + title + " ")
 }
 
+// NewLabel creates a consistently styled label TextView.
+// Labels use LabelColor, are bold, and have a colon suffix.
+func NewLabel(text string) *tview.TextView {
+	t := CurrentTheme()
+	return tview.NewTextView().
+		SetText(text + ":").
+		SetTextColor(t.LabelColor).
+		SetTextStyle(tcell.StyleDefault.Bold(true))
+}
+
+// SetInputLabel configures an InputField's label with consistent styling.
+// Labels use LabelColor, are bold, and have a colon suffix with trailing space.
+func SetInputLabel(input *tview.InputField, text string) *tview.InputField {
+	t := CurrentTheme()
+	return input.
+		SetLabel(text + ": ").
+		SetLabelColor(t.LabelColor).
+		SetLabelStyle(tcell.StyleDefault.Bold(true))
+}
+
+// FormatLabel returns a tview color markup string for a label.
+// Use this for inline labels in dynamic text (e.g., status displays).
+func FormatLabel(text string) string {
+	t := CurrentTheme()
+	return "[" + colorToHex(t.LabelColor) + "::b]" + text + ":[-::-]"
+}
+
+// colorToHex converts a tcell.Color to a hex string for tview markup.
+func colorToHex(c tcell.Color) string {
+	r, g, b := c.RGB()
+	return "#" + rgbToHex(r) + rgbToHex(g) + rgbToHex(b)
+}
+
+func rgbToHex(v int32) string {
+	const hexChars = "0123456789abcdef"
+	return string(hexChars[(v>>4)&0xf]) + string(hexChars[v&0xf])
+}
+
 // genericModal is deprecated. Use ShowInfoModal, ShowErrorModal, ShowConfirmModal instead.
 func genericModal(
 	message string,

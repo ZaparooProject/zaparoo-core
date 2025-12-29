@@ -67,7 +67,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	mediaList := scrollList.GetList()
 	mediaList.SetMainTextColor(CurrentTheme().PrimaryTextColor)
 
-	nameLabel := tview.NewTextView().SetText("Name:")
+	nameLabel := NewLabel("Name")
 
 	searchInput := tview.NewInputField()
 	searchInput.SetChangedFunc(func(value string) {
@@ -75,7 +75,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	})
 	setupInputFieldFocus(searchInput)
 
-	systemLabel := tview.NewTextView().SetText("System:")
+	systemLabel := NewLabel("System")
 
 	// System selector button
 	systemButton := tview.NewButton(truncateSystemName(filterSystemName))

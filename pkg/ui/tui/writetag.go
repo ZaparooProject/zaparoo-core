@@ -78,7 +78,7 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 	frame.SetOnEscape(goBack)
 
 	// Create label
-	zapScriptLabel := tview.NewTextView().SetText("ZapScript:")
+	zapScriptLabel := NewLabel("ZapScript")
 
 	// Create multiline text area for ZapScript input
 	zapScriptInput := tview.NewTextArea()

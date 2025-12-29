@@ -51,7 +51,7 @@ func BuildExportLogModal(
 		SetHelpText("View, upload, or copy log files")
 
 	goBack := func() {
-		pages.SwitchToPage(PageMain)
+		pages.SwitchToPage(PageSettingsMain)
 	}
 	frame.SetOnEscape(goBack)
 
