@@ -69,7 +69,7 @@ func validateZapScript(text string) (valid bool, message string) {
 func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) {
 	// Create page frame
 	frame := NewPageFrame(app).
-		SetTitle("Write Tag").
+		SetTitle("Write Token").
 		SetHelpText("Enter ZapScript and press Write button")
 
 	goBack := func() {
@@ -107,7 +107,7 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 
 		// Create waiting modal
 		modal := tview.NewModal().
-			SetText("Place tag on the reader...").
+			SetText("Place token on reader...").
 			AddButtons([]string{"Cancel"}).
 			SetDoneFunc(func(_ int, _ string) {
 				if writeCancel != nil {
@@ -150,7 +150,7 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 			app.QueueUpdateDraw(func() {
 				pages.RemovePage(writeModalPage)
 				successModal := tview.NewModal().
-					SetText("Tag written successfully!").
+					SetText("Token written successfully!").
 					AddButtons([]string{"OK"}).
 					SetDoneFunc(func(_ int, _ string) {
 						pages.RemovePage("success_modal")

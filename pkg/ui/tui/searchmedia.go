@@ -160,7 +160,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 
 		// Create waiting modal
 		modal := tview.NewModal().
-			SetText("Place tag on the reader...").
+			SetText("Place token on reader...").
 			AddButtons([]string{"Cancel"}).
 			SetDoneFunc(func(_ int, _ string) {
 				if writeCancel != nil {
@@ -205,7 +205,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 			app.QueueUpdateDraw(func() {
 				pages.RemovePage(writeModalPage)
 				successModal := tview.NewModal().
-					SetText("Tag written successfully!").
+					SetText("Token written successfully!").
 					AddButtons([]string{"OK"}).
 					SetDoneFunc(func(_ int, _ string) {
 						pages.RemovePage("success_modal")
@@ -287,7 +287,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 			})
 		}
 
-		frame.SetHelpText(fmt.Sprintf("Found %d results. Select to write tag", len(results.Results)))
+		frame.SetHelpText(fmt.Sprintf("Found %d results. Select to write token", len(results.Results)))
 		if results.Total > 0 {
 			app.SetFocus(mediaList)
 		}

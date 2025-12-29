@@ -316,7 +316,7 @@ func drawWaiting(
 	textStyle := tcell.StyleDefault.
 		Foreground(t.PrimaryTextColor).
 		Background(t.PrimitiveBackgroundColor)
-	drawCenteredText(screen, x, centerY+2, width, "Place tag on reader", textStyle)
+	drawCenteredText(screen, x, centerY+2, width, "Place token on reader", textStyle)
 }
 
 // drawWaveFrame draws a single frame of the wave animation with gradient colors.

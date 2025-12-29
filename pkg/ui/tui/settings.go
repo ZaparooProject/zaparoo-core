@@ -247,6 +247,18 @@ func buildReadersSettingsMenu(
 			frame.SetHelpText(desc)
 		})
 
+	menu.AddToggle("Auto-detect readers", "Automatically find connected readers", &autoDetect, func(value bool) {
+		ctx, cancel := tuiContext()
+		defer cancel()
+		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+			ReadersAutoDetect: &value,
+		})
+		if err != nil {
+			log.Error().Err(err).Msg("error updating auto-detect")
+			ShowErrorModal(pages, app, "Failed to save auto-detect setting")
+		}
+	})
+
 	scanModeIdx := menu.GetItemCount()
 	scanModeDesc := "Tap: tap to launch, Hold: exits when removed"
 	menu.AddCycle("Scan mode", scanModeDesc, scanModeOptions, &scanModeIndex, func(option string, _ int) {
@@ -259,18 +271,6 @@ func buildReadersSettingsMenu(
 		if err != nil {
 			log.Error().Err(err).Msg("error updating scan mode")
 			ShowErrorModal(pages, app, "Failed to save scan mode")
-		}
-	})
-
-	menu.AddToggle("Auto-detect readers", "Automatically find connected readers", &autoDetect, func(value bool) {
-		ctx, cancel := tuiContext()
-		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
-			ReadersAutoDetect: &value,
-		})
-		if err != nil {
-			log.Error().Err(err).Msg("error updating auto-detect")
-			ShowErrorModal(pages, app, "Failed to save auto-detect setting")
 		}
 	})
 

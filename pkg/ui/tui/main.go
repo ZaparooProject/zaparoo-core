@@ -686,8 +686,8 @@ func BuildMainPage(
 	// Create button grid (2 rows x 3 cols)
 	buttonGrid := NewButtonGrid(app, 3)
 	buttonGrid.AddRow(
-		&ButtonGridItem{searchButton, "Search for media and write to an NFC tag", disableRow1},
-		&ButtonGridItem{writeButton, "Write custom ZapScript to an NFC tag", disableRow1},
+		&ButtonGridItem{searchButton, "Search for media and write to a token", disableRow1},
+		&ButtonGridItem{writeButton, "Write custom ZapScript to a token", disableRow1},
 		&ButtonGridItem{updateDBButton, "Scan disk to create index of games", disableRow1},
 	)
 	buttonGrid.AddRow(

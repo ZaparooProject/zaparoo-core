@@ -121,7 +121,7 @@ func buildTUISettingsMenu(
 		}
 	}
 	menu.AddCycle(
-		"Write format", "Format for tag writes from search",
+		"Write format", "Format for token writes from search",
 		writeFormatOptions, &writeFormatIndex, func(_ string, _ int) {
 			tuiCfg := config.GetTUIConfig()
 			tuiCfg.WriteFormat = writeFormatValues[writeFormatIndex]
