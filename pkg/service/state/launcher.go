@@ -21,9 +21,13 @@ package state
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
+
+// ErrLaunchInProgress is returned when a launch is attempted while another is in progress.
+var ErrLaunchInProgress = errors.New("launch already in progress")
 
 // LauncherManager manages the lifecycle of launcher contexts across the application.
 // It provides thread-safe access to a shared context that gets canceled whenever
@@ -33,6 +37,9 @@ type LauncherManager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	mu     syncutil.RWMutex
+
+	launchMu  syncutil.Mutex
+	launching bool
 }
 
 func NewLauncherManager() *LauncherManager {
@@ -65,4 +72,26 @@ func (lm *LauncherManager) NewContext() context.Context {
 
 	lm.ctx, lm.cancel = context.WithCancel(context.Background())
 	return lm.ctx
+}
+
+// TryStartLaunch attempts to acquire the launch lock.
+// Returns ErrLaunchInProgress if a launch is already in progress.
+func (lm *LauncherManager) TryStartLaunch() error {
+	lm.launchMu.Lock()
+	defer lm.launchMu.Unlock()
+
+	if lm.launching {
+		return ErrLaunchInProgress
+	}
+
+	lm.launching = true
+	return nil
+}
+
+// EndLaunch releases the launch lock.
+func (lm *LauncherManager) EndLaunch() {
+	lm.launchMu.Lock()
+	defer lm.launchMu.Unlock()
+
+	lm.launching = false
 }
