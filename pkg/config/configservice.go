@@ -20,11 +20,21 @@
 package config
 
 import (
+	"fmt"
+	"net"
 	"regexp"
 	"strconv"
 )
 
-const DefaultAPIPort = 7497
+const (
+	DefaultAPIPort = 7497
+	MinAPIPort     = 1024
+	MaxAPIPort     = 65535
+)
+
+func isValidAPIPort(port int) bool {
+	return port >= MinAPIPort && port <= MaxAPIPort
+}
 
 type Service struct {
 	APIPort        *int      `toml:"api_port,omitempty"`
@@ -60,18 +70,27 @@ func (c *Instance) APIPort() int {
 	return c.apiPortLocked()
 }
 
-// apiPortLocked returns the API port. Caller must hold mu (read or write).
+// apiPortLocked returns the API port. Caller must hold mu.
 func (c *Instance) apiPortLocked() int {
 	if c.vals.Service.APIPort == nil {
 		return DefaultAPIPort
 	}
-	return *c.vals.Service.APIPort
+	port := *c.vals.Service.APIPort
+	if !isValidAPIPort(port) {
+		return DefaultAPIPort
+	}
+	return port
 }
 
-func (c *Instance) SetAPIPort(port int) {
+func (c *Instance) SetAPIPort(port int) error {
+	if !isValidAPIPort(port) {
+		return fmt.Errorf("invalid API port %d: must be between %d and %d",
+			port, MinAPIPort, MaxAPIPort)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Service.APIPort = &port
+	return nil
 }
 
 func (c *Instance) AllowedOrigins() []string {
@@ -95,10 +114,22 @@ func (c *Instance) GetMQTTPublishers() []MQTTPublisher {
 func (c *Instance) APIListen() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	return c.apiListenLocked()
+}
+
+// apiListenLocked returns the full listen address. Caller must hold mu.
+func (c *Instance) apiListenLocked() string {
+	port := strconv.Itoa(c.apiPortLocked())
+
 	if c.vals.Service.APIListen == "" {
-		return ":" + strconv.Itoa(c.apiPortLocked())
+		return ":" + port
 	}
-	return c.vals.Service.APIListen
+
+	if _, _, err := net.SplitHostPort(c.vals.Service.APIListen); err == nil {
+		return ":" + port
+	}
+
+	return net.JoinHostPort(c.vals.Service.APIListen, port)
 }
 
 func (c *Instance) AllowedIPs() []string {

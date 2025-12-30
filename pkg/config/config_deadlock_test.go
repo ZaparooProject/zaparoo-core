@@ -97,11 +97,13 @@ func TestAPIListen_CustomPort(t *testing.T) {
 	assert.Equal(t, ":8080", cfg.APIListen())
 }
 
-// TestAPIListen_CustomListen verifies APIListen returns custom listen address.
+// TestAPIListen_CustomListen verifies APIListen combines host with port.
 func TestAPIListen_CustomListen(t *testing.T) {
 	t.Parallel()
 
 	cfg := &Instance{}
-	cfg.vals.Service.APIListen = "127.0.0.1:9000"
+	cfg.vals.Service.APIListen = "127.0.0.1"
+	port := 9000
+	cfg.vals.Service.APIPort = &port
 	assert.Equal(t, "127.0.0.1:9000", cfg.APIListen())
 }
