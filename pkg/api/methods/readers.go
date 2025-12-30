@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -86,7 +87,11 @@ func HandleReaderWrite(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	t, err := reader.Write(params.Text)
 	if err != nil {
-		log.Error().Err(err).Msg("error writing to reader")
+		if errors.Is(err, context.Canceled) {
+			log.Debug().Err(err).Msg("tag write cancelled")
+		} else {
+			log.Error().Err(err).Msg("error writing to reader")
+		}
 		return nil, errors.New("error writing to reader")
 	}
 

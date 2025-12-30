@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -190,8 +191,14 @@ func DefaultSessionFactory(device PN532Device, sessionConfig *polling.Config) Po
 // logTraceableError logs PN532 errors with wire trace data if available.
 // This helps with debugging hardware communication issues by showing TX/RX data.
 // Logs at Error level so traces are captured by Sentry for remote debugging.
+// Context cancellation errors are logged at Debug level since they're expected.
 func logTraceableError(err error, operation string) {
-	event := log.Error().Err(err).Str("operation", operation)
+	var event *zerolog.Event
+	if errors.Is(err, context.Canceled) {
+		event = log.Debug().Err(err).Str("operation", operation)
+	} else {
+		event = log.Error().Err(err).Str("operation", operation)
+	}
 
 	if trace := pn532.GetTrace(err); trace != nil {
 		event = event.
