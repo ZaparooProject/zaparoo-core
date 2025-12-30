@@ -22,7 +22,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -78,16 +77,6 @@ type Input struct {
 	GamepadEnabled *bool `toml:"gamepad_enabled,omitempty"`
 }
 
-type Auth struct {
-	Creds map[string]CredentialEntry `toml:"creds,omitempty"`
-}
-
-type CredentialEntry struct {
-	Username string `toml:"username"`
-	Password string `toml:"password"`
-	Bearer   string `toml:"bearer"`
-}
-
 var BaseDefaults = Values{
 	ConfigSchema: SchemaVersion,
 	Audio: Audio{
@@ -112,16 +101,16 @@ type Instance struct {
 
 var authCfg atomic.Value
 
-func GetAuthCfg() Auth {
+func GetAuthCfg() map[string]CredentialEntry {
 	val := authCfg.Load()
 	if val == nil {
-		return Auth{}
+		return nil
 	}
-	auth, ok := val.(Auth)
+	creds, ok := val.(map[string]CredentialEntry)
 	if !ok {
-		return Auth{}
+		return nil
 	}
-	return auth
+	return creds
 }
 
 //nolint:gocritic // config struct copied for immutability
@@ -209,15 +198,10 @@ func (c *Instance) Load() error {
 			return fmt.Errorf("failed to read auth file: %w", err)
 		}
 
-		var authVals Auth
-		err = toml.Unmarshal(authData, &authVals)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal auth file: %w", err)
-		}
+		authEntries := LoadAuthFromData(authData)
+		log.Info().Msgf("loaded %d auth entries", len(authEntries))
 
-		log.Info().Msgf("loaded %d auth entries", len(authVals.Creds))
-
-		authCfg.Store(authVals)
+		authCfg.Store(authEntries)
 	}
 
 	// prepare allow files regexes
@@ -467,50 +451,14 @@ func (c *Instance) IsExecuteAllowed(s string) bool {
 	return checkAllow(c.vals.ZapScript.AllowExecute, c.vals.ZapScript.allowExecuteRe, s)
 }
 
-func LookupAuth(authCfg Auth, reqURL string) *CredentialEntry {
-	if len(authCfg.Creds) == 0 {
-		return nil
-	}
-
-	u, err := url.Parse(reqURL)
-	if err != nil {
-		log.Warn().Msgf("invalid auth request url: %s", reqURL)
-		return nil
-	}
-
-	for k, v := range authCfg.Creds {
-		defURL, err := url.Parse(k)
-		if err != nil {
-			log.Error().Msgf("invalid auth config url: %s", k)
-			continue
-		}
-
-		if !strings.EqualFold(defURL.Scheme, u.Scheme) {
-			continue
-		}
-
-		if !strings.EqualFold(defURL.Host, u.Host) {
-			continue
-		}
-
-		if !strings.HasPrefix(u.Path, defURL.Path) {
-			continue
-		}
-
-		return &v
-	}
-
-	return nil
-}
-
 // SetAuthCfgForTesting sets the global auth config for testing purposes
-func SetAuthCfgForTesting(auth Auth) {
-	authCfg.Store(auth)
+func SetAuthCfgForTesting(creds map[string]CredentialEntry) {
+	authCfg.Store(creds)
 }
 
 // ClearAuthCfgForTesting clears the global auth config for testing purposes
 func ClearAuthCfgForTesting() {
-	authCfg.Store(Auth{})
+	authCfg.Store(map[string]CredentialEntry{})
 }
 
 // SetExecuteAllowListForTesting configures the execute allow list for tests.

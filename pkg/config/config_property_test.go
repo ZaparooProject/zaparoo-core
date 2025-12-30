@@ -37,7 +37,7 @@ func TestPropertyLookupAuthEmptyAlwaysNil(t *testing.T) {
 		// Generate any URL-like string
 		url := rapid.StringMatching(`https?://[a-z]+\.[a-z]+(/[a-z]*)?`).Draw(t, "url")
 
-		result := LookupAuth(Auth{}, url)
+		result := LookupAuth(nil, url)
 		if result != nil {
 			t.Fatalf("Empty auth should return nil, got %v for URL %q", result, url)
 		}
@@ -55,13 +55,11 @@ func TestPropertyLookupAuthExactMatchReturns(t *testing.T) {
 		configURL := "https://" + host + ".com"
 		cred := CredentialEntry{Username: user, Password: pass}
 
-		authCfg := Auth{
-			Creds: map[string]CredentialEntry{
-				configURL: cred,
-			},
+		creds := map[string]CredentialEntry{
+			configURL: cred,
 		}
 
-		result := LookupAuth(authCfg, configURL)
+		result := LookupAuth(creds, configURL)
 		if result == nil {
 			t.Fatalf("Expected match for URL %q", configURL)
 			return
@@ -83,13 +81,11 @@ func TestPropertyLookupAuthCaseInsensitiveHost(t *testing.T) {
 		requestURL := "https://" + strings.ToUpper(host) + ".com"
 
 		cred := CredentialEntry{Username: "user", Password: "pass"}
-		authCfg := Auth{
-			Creds: map[string]CredentialEntry{
-				configURL: cred,
-			},
+		creds := map[string]CredentialEntry{
+			configURL: cred,
 		}
 
-		result := LookupAuth(authCfg, requestURL)
+		result := LookupAuth(creds, requestURL)
 		if result == nil {
 			t.Fatalf("Case-insensitive host match failed: config=%q, request=%q",
 				configURL, requestURL)
@@ -109,13 +105,11 @@ func TestPropertyLookupAuthPathPrefixMatch(t *testing.T) {
 		requestURL := "https://" + host + ".com" + basePath + subPath
 
 		cred := CredentialEntry{Username: "user", Password: "pass"}
-		authCfg := Auth{
-			Creds: map[string]CredentialEntry{
-				configURL: cred,
-			},
+		creds := map[string]CredentialEntry{
+			configURL: cred,
 		}
 
-		result := LookupAuth(authCfg, requestURL)
+		result := LookupAuth(creds, requestURL)
 		if result == nil {
 			t.Fatalf("Path prefix match failed: config=%q, request=%q",
 				configURL, requestURL)
@@ -133,13 +127,11 @@ func TestPropertyLookupAuthSchemeMismatchReturnsNil(t *testing.T) {
 		requestURL := "http://" + host + ".com" // Different scheme
 
 		cred := CredentialEntry{Username: "user", Password: "pass"}
-		authCfg := Auth{
-			Creds: map[string]CredentialEntry{
-				configURL: cred,
-			},
+		creds := map[string]CredentialEntry{
+			configURL: cred,
 		}
 
-		result := LookupAuth(authCfg, requestURL)
+		result := LookupAuth(creds, requestURL)
 		if result != nil {
 			t.Fatalf("Scheme mismatch should return nil: config=%q, request=%q",
 				configURL, requestURL)
