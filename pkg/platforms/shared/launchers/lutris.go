@@ -51,7 +51,7 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 	// Open the SQLite database
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to open Lutris database")
+		log.Warn().Err(err).Msg("failed to open Lutris database")
 		return results, nil
 	}
 	defer func() {
@@ -64,7 +64,7 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 	query := "SELECT name, slug FROM games WHERE installed = 1"
 	rows, err := db.QueryContext(context.Background(), query)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to query Lutris games")
+		log.Warn().Err(err).Msg("failed to query Lutris games")
 		return results, nil
 	}
 	defer func() {
@@ -95,7 +95,7 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 
 	// Check for errors during iteration
 	if err := rows.Err(); err != nil {
-		log.Error().Err(err).Msg("error iterating Lutris game rows")
+		log.Warn().Err(err).Msg("error iterating Lutris game rows")
 		return results, nil
 	}
 

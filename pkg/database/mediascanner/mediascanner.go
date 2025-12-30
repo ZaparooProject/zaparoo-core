@@ -1104,7 +1104,7 @@ func NewNamesIndex(
 					return handleCancellationWithRollback(ctx, db,
 						"Media indexing cancelled during second round custom scanner")
 				}
-				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
+				log.Warn().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 				continue
 			}
 

@@ -304,7 +304,7 @@ func processTokenQueue(
 			reader := parser.NewParser(scriptText)
 			script, parseErr := reader.ParseScript()
 			if parseErr != nil {
-				log.Error().Err(parseErr).Msg("failed to parse script for playtime check")
+				log.Debug().Err(parseErr).Msg("failed to parse script for playtime check")
 				// Continue anyway - the error will be caught in runTokenZapScript
 			}
 
