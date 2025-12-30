@@ -293,6 +293,48 @@ func completeStatePage(
 	return layout, completeText
 }
 
+func errorStatePage(
+	_ *tview.Application,
+	appPages *tview.Pages,
+	_ *tview.Pages,
+	cancel context.CancelFunc,
+	message string,
+) tview.Primitive {
+	errorState := tview.NewFlex().SetDirection(tview.FlexRow)
+	errorText := tview.NewTextView().
+		SetText(message).
+		SetTextAlign(tview.AlignCenter).
+		SetWordWrap(true)
+
+	backButton := tview.NewButton("Go back").
+		SetSelectedFunc(func() {
+			cancel()
+			appPages.SwitchToPage(PageMain)
+		})
+
+	buttonFlex := tview.NewFlex().SetDirection(tview.FlexColumn)
+	buttonFlex.AddItem(nil, 0, 1, false)
+	buttonFlex.AddItem(backButton, 0, 1, true)
+	buttonFlex.AddItem(nil, 0, 1, false)
+
+	errorState.AddItem(nil, 0, 1, false)
+	errorState.AddItem(errorText, 0, 2, false)
+	errorState.AddItem(buttonFlex, 1, 1, true)
+	errorState.AddItem(nil, 0, 1, false)
+
+	errorState.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyEscape {
+			cancel()
+			appPages.SwitchToPage(PageMain)
+			return nil
+		}
+		return event
+	})
+
+	return errorState
+}
+
 func BuildGenerateDBPage(
 	cfg *config.Instance,
 	pages *tview.Pages,
@@ -314,6 +356,10 @@ func BuildGenerateDBPage(
 	completeState, completeText := completeStatePage(app, pages, generateDB, cancel)
 	generateDB.AddPage("complete", completeState, true, false)
 
+	errorMsg := "Could not connect to Core service.\nPlease ensure it is running."
+	errorPage := errorStatePage(app, pages, generateDB, cancel, errorMsg)
+	generateDB.AddPage("error", errorPage, true, false)
+
 	updateProgress := func(current, total int, status string) {
 		app.QueueUpdateDraw(func() {
 			progressBar.SetProgress(float64(current) / float64(total))
@@ -331,7 +377,8 @@ func BuildGenerateDBPage(
 	media, err := getMediaState(context.Background(), cfg)
 	switch {
 	case err != nil:
-		generateDB.SwitchToPage("initial")
+		log.Debug().Err(err).Msg("failed to get media state")
+		generateDB.SwitchToPage("error")
 	case media.Database.Indexing:
 		// Check for nil pointers before dereferencing
 		if media.Database.CurrentStep == nil ||

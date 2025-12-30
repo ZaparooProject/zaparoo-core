@@ -242,7 +242,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 
 			_, err = client.LocalClient(ctx, cfg, models.MethodReadersWrite, string(data))
 			if err != nil {
-				log.Error().Err(err).Msg("error writing tag")
+				log.Warn().Err(err).Msg("error writing tag")
 				errorModal.SetText("Error writing to tag:\n" + err.Error())
 				mediaPages.HidePage("write_modal")
 				mediaPages.ShowPage("error_modal")

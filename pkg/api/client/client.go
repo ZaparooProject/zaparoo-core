@@ -83,7 +83,7 @@ func LocalClient(
 ) (string, error) {
 	localWebsocketURL := url.URL{
 		Scheme: "ws",
-		Host:   "localhost:" + strconv.Itoa(cfg.APIPort()),
+		Host:   "127.0.0.1:" + strconv.Itoa(cfg.APIPort()),
 		Path:   APIPath,
 	}
 
@@ -133,7 +133,11 @@ func LocalClient(
 		for {
 			_, message, readErr := c.ReadMessage()
 			if readErr != nil {
-				log.Error().Err(readErr).Msg("error reading message")
+				if ctx.Err() != nil || errors.Is(readErr, net.ErrClosed) {
+					log.Debug().Err(readErr).Msg("connection closed")
+				} else {
+					log.Error().Err(readErr).Msg("error reading message")
+				}
 				return
 			}
 
@@ -212,7 +216,7 @@ func WaitNotification(
 ) (string, error) {
 	u := url.URL{
 		Scheme: "ws",
-		Host:   "localhost:" + strconv.Itoa(cfg.APIPort()),
+		Host:   "127.0.0.1:" + strconv.Itoa(cfg.APIPort()),
 		Path:   APIPath,
 	}
 
@@ -250,7 +254,11 @@ func WaitNotification(
 		for {
 			_, message, readErr := c.ReadMessage()
 			if readErr != nil {
-				log.Error().Err(readErr).Msg("error reading message")
+				if ctx.Err() != nil || errors.Is(readErr, net.ErrClosed) {
+					log.Debug().Err(readErr).Msg("connection closed")
+				} else {
+					log.Error().Err(readErr).Msg("error reading message")
+				}
 				return
 			}
 
