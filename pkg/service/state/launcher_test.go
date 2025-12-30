@@ -21,6 +21,7 @@ package state
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,18 +34,11 @@ func TestLauncherManager_NewContext(t *testing.T) {
 
 	lm := NewLauncherManager()
 	ctx1 := lm.GetContext()
-
-	// Create new context
 	ctx2 := lm.NewContext()
 
-	// Should be different contexts
 	assert.NotEqual(t, ctx1, ctx2)
-
-	// Old context should be cancelled
 	require.Error(t, ctx1.Err())
 	assert.Equal(t, context.Canceled, ctx1.Err())
-
-	// New context should not be cancelled
 	assert.NoError(t, ctx2.Err())
 }
 
@@ -56,11 +50,8 @@ func TestLauncherManager_NewContext_CancelsMultipleTimes(t *testing.T) {
 	ctx2 := lm.NewContext()
 	ctx3 := lm.NewContext()
 
-	// All old contexts should be cancelled
 	require.Error(t, ctx1.Err())
 	require.Error(t, ctx2.Err())
-
-	// Latest context should not be cancelled
 	assert.NoError(t, ctx3.Err())
 }
 
@@ -70,7 +61,6 @@ func TestLauncherManager_ConcurrentAccess(t *testing.T) {
 	lm := NewLauncherManager()
 	done := make(chan bool)
 
-	// Concurrent readers
 	for range 10 {
 		go func() {
 			defer func() { done <- true }()
@@ -80,7 +70,6 @@ func TestLauncherManager_ConcurrentAccess(t *testing.T) {
 		}()
 	}
 
-	// Concurrent writers
 	for range 5 {
 		go func() {
 			defer func() { done <- true }()
@@ -91,7 +80,6 @@ func TestLauncherManager_ConcurrentAccess(t *testing.T) {
 		}()
 	}
 
-	// Wait for all goroutines
 	for range 15 {
 		<-done
 	}
@@ -103,20 +91,16 @@ func TestLauncherManager_ContextCancellationSignaling(t *testing.T) {
 	lm := NewLauncherManager()
 	ctx := lm.GetContext()
 
-	// Goroutine waiting on context
 	cancelled := make(chan bool)
 	go func() {
 		<-ctx.Done()
 		cancelled <- true
 	}()
 
-	// Create new context (should cancel old one)
 	_ = lm.NewContext()
 
-	// Wait for cancellation signal
 	select {
 	case <-cancelled:
-		// Success - context was cancelled
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("context was not cancelled")
 	}
@@ -125,22 +109,58 @@ func TestLauncherManager_ContextCancellationSignaling(t *testing.T) {
 func TestLauncherManager_LauncherSupersession(t *testing.T) {
 	t.Parallel()
 
-	// Simulate launcher lifecycle
 	lm := NewLauncherManager()
 
-	// First launcher starts
 	launcher1Ctx := lm.GetContext()
 	require.NoError(t, launcher1Ctx.Err())
 
-	// Launcher 1 is running...
 	time.Sleep(10 * time.Millisecond)
 
-	// Second launcher starts (supersedes first)
+	// New launcher supersedes previous one
 	launcher2Ctx := lm.NewContext()
 
-	// Launcher 1 context should be cancelled (cleanup can detect staleness)
+	// Previous context is cancelled so cleanup routines can detect staleness
 	require.Error(t, launcher1Ctx.Err())
-
-	// Launcher 2 context should be active
 	assert.NoError(t, launcher2Ctx.Err())
+}
+
+func TestLauncherManager_TryStartLaunch(t *testing.T) {
+	t.Parallel()
+
+	lm := NewLauncherManager()
+
+	err := lm.TryStartLaunch()
+	require.NoError(t, err)
+
+	err = lm.TryStartLaunch()
+	require.ErrorIs(t, err, ErrLaunchInProgress)
+
+	lm.EndLaunch()
+	err = lm.TryStartLaunch()
+	require.NoError(t, err)
+}
+
+func TestLauncherManager_LaunchGuardConcurrent(t *testing.T) {
+	t.Parallel()
+
+	lm := NewLauncherManager()
+	var successCount atomic.Int32
+	done := make(chan bool)
+
+	for range 10 {
+		go func() {
+			defer func() { done <- true }()
+			if err := lm.TryStartLaunch(); err == nil {
+				successCount.Add(1)
+				time.Sleep(10 * time.Millisecond)
+				lm.EndLaunch()
+			}
+		}()
+	}
+
+	for range 10 {
+		<-done
+	}
+
+	assert.GreaterOrEqual(t, successCount.Load(), int32(1))
 }

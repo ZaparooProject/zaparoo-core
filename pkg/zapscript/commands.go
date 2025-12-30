@@ -344,6 +344,14 @@ func RunCommand(
 		return platforms.CmdResult{}, fmt.Errorf("unknown command: %s", cmd)
 	}
 
+	// Acquire launch guard for media-launching commands to prevent concurrent launches
+	if IsMediaLaunchingCommand(cmd.Name) {
+		if guardErr := st.LauncherManager().TryStartLaunch(); guardErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
+		}
+		defer st.LauncherManager().EndLaunch()
+	}
+
 	log.Info().Msgf("running command: %s", cmd)
 	res, err := cmdFunc(pl, env)
 	if err != nil {
