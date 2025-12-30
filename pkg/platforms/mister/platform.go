@@ -556,6 +556,9 @@ func (p *Platform) LaunchMedia(
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
 
+	// Allow core to settle before accepting another launch
+	time.Sleep(2 * time.Second)
+
 	p.setLastLauncher(launcher)
 	return nil
 }

@@ -490,9 +490,9 @@ func (p *Platform) LaunchMedia(
 			if err != nil {
 				return fmt.Errorf("failed to stop active launcher: %w", err)
 			}
-			// Brief delay to allow EmulationStation to settle
+			// Delay to allow EmulationStation to settle
 			// (Kodi stop already includes process verification polling)
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(2 * time.Second)
 		} else {
 			// We're keeping the running instance (e.g., switching between Kodi movies)
 			// Clear the old activeMedia first to trigger media.stopped, then DoLaunch will set the new one
@@ -513,6 +513,11 @@ func (p *Platform) LaunchMedia(
 	}, helpers.GetPathName)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
+	}
+
+	// Delay for non-Kodi launches (ES API needs settling time)
+	if !isKodiLauncher(launcher.ID) {
+		time.Sleep(2 * time.Second)
 	}
 
 	// Update Kodi tracking state for background tracker
