@@ -668,6 +668,21 @@ func buildReaderEditPage(
 
 	pathInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		key := event.Key()
+		if key == tcell.KeyEnter && config.GetTUIConfig().OnScreenKeyboard {
+			ShowOSKModal(
+				pages,
+				app,
+				pathInput.GetText(),
+				func(text string) {
+					pathInput.SetText(text)
+					app.SetFocus(pathInput)
+				},
+				func() {
+					app.SetFocus(pathInput)
+				},
+			)
+			return nil
+		}
 		if key == tcell.KeyUp || key == tcell.KeyBacktab {
 			setFocus(0)
 			return nil
@@ -685,6 +700,21 @@ func buildReaderEditPage(
 
 	idSourceInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		key := event.Key()
+		if key == tcell.KeyEnter && config.GetTUIConfig().OnScreenKeyboard {
+			ShowOSKModal(
+				pages,
+				app,
+				idSourceInput.GetText(),
+				func(text string) {
+					idSourceInput.SetText(text)
+					app.SetFocus(idSourceInput)
+				},
+				func() {
+					app.SetFocus(idSourceInput)
+				},
+			)
+			return nil
+		}
 		if key == tcell.KeyUp || key == tcell.KeyBacktab {
 			setFocus(1)
 			return nil

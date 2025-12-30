@@ -140,6 +140,7 @@ const (
 	errorModalPage   = "error_modal"
 	confirmModalPage = "confirm_modal"
 	waitingModalPage = "waiting_modal"
+	oskModalPage     = "osk_modal"
 )
 
 // ShowInfoModal displays an informational modal with a title and OK button.
@@ -214,6 +215,46 @@ func ShowWaitingModal(pages *tview.Pages, app *tview.Application, message string
 		pages.HidePage(waitingModalPage)
 		pages.RemovePage(waitingModalPage)
 	}
+}
+
+// ShowOSKModal displays an on-screen keyboard modal for text input.
+// The keyboard is sized to fit within CRT mode constraints (75x15).
+// onSubmit is called with the final text when the user confirms.
+// onCancel is called when the user cancels (Escape or Cancel button).
+func ShowOSKModal(
+	pages *tview.Pages,
+	app *tview.Application,
+	initialValue string,
+	onSubmit func(string),
+	onCancel func(),
+) {
+	var osk *OnScreenKeyboard
+
+	cleanup := func() {
+		pages.HidePage(oskModalPage)
+		pages.RemovePage(oskModalPage)
+	}
+
+	osk = NewOnScreenKeyboard(
+		initialValue,
+		func(text string) {
+			cleanup()
+			if onSubmit != nil {
+				onSubmit(text)
+			}
+		},
+		func() {
+			cleanup()
+			if onCancel != nil {
+				onCancel()
+			}
+		},
+	)
+
+	// Size keyboard to fit content: 41x8 (39 char grid + 2 border)
+	centered := CenterWidget(41, 8, osk)
+	pages.AddPage(oskModalPage, centered, true, true)
+	app.SetFocus(osk)
 }
 
 // SetBoxTitle sets a box title with consistent padding.

@@ -32,26 +32,29 @@ import (
 
 // TUIConfig holds TUI-specific configuration.
 type TUIConfig struct {
-	Theme       string `toml:"theme"`
-	WriteFormat string `toml:"write_format"`
-	Mouse       bool   `toml:"mouse"`
-	CRTMode     bool   `toml:"crt_mode"`
+	Theme            string `toml:"theme"`
+	WriteFormat      string `toml:"write_format"`
+	Mouse            bool   `toml:"mouse"`
+	CRTMode          bool   `toml:"crt_mode"`
+	OnScreenKeyboard bool   `toml:"on_screen_keyboard"`
 }
 
 // tuiConfigRaw is used for TOML unmarshalling with pointer fields
 // to distinguish between missing values and explicit false/empty.
 type tuiConfigRaw struct {
-	Theme       *string `toml:"theme"`
-	WriteFormat *string `toml:"write_format"`
-	Mouse       *bool   `toml:"mouse"`
-	CRTMode     *bool   `toml:"crt_mode"`
+	Theme            *string `toml:"theme"`
+	WriteFormat      *string `toml:"write_format"`
+	Mouse            *bool   `toml:"mouse"`
+	CRTMode          *bool   `toml:"crt_mode"`
+	OnScreenKeyboard *bool   `toml:"on_screen_keyboard"`
 }
 
 const (
-	defaultTUITheme       = "default"
-	defaultTUIWriteFormat = "zapscript"
-	defaultTUIMouse       = true
-	defaultTUICRTMode     = false
+	defaultTUITheme            = "default"
+	defaultTUIWriteFormat      = "zapscript"
+	defaultTUIMouse            = true
+	defaultTUICRTMode          = false
+	defaultTUIOnScreenKeyboard = false
 )
 
 var tuiCfg atomic.Value
@@ -59,15 +62,22 @@ var tuiCfg atomic.Value
 // DefaultTUIConfig returns the default TUI configuration.
 func DefaultTUIConfig() TUIConfig {
 	return TUIConfig{
-		Theme:       defaultTUITheme,
-		WriteFormat: defaultTUIWriteFormat,
-		Mouse:       defaultTUIMouse,
-		CRTMode:     defaultTUICRTMode,
+		Theme:            defaultTUITheme,
+		WriteFormat:      defaultTUIWriteFormat,
+		Mouse:            defaultTUIMouse,
+		CRTMode:          defaultTUICRTMode,
+		OnScreenKeyboard: defaultTUIOnScreenKeyboard,
 	}
 }
 
 // isCRTPlatform returns true for platforms that default to CRT mode.
 func isCRTPlatform(platformID string) bool {
+	return platformID == platformids.Mister || platformID == platformids.Mistex
+}
+
+// isOSKPlatform returns true for platforms that default to on-screen keyboard.
+// These are typically controller-based devices without easy keyboard access.
+func isOSKPlatform(platformID string) bool {
 	return platformID == platformids.Mister || platformID == platformids.Mistex
 }
 
@@ -79,6 +89,9 @@ func applyTUIDefaults(raw tuiConfigRaw, platformID string) TUIConfig {
 	// Apply platform-specific defaults before user overrides
 	if isCRTPlatform(platformID) {
 		cfg.CRTMode = true
+	}
+	if isOSKPlatform(platformID) {
+		cfg.OnScreenKeyboard = true
 	}
 
 	if raw.Theme != nil {
@@ -92,6 +105,9 @@ func applyTUIDefaults(raw tuiConfigRaw, platformID string) TUIConfig {
 	}
 	if raw.CRTMode != nil {
 		cfg.CRTMode = *raw.CRTMode
+	}
+	if raw.OnScreenKeyboard != nil {
+		cfg.OnScreenKeyboard = *raw.OnScreenKeyboard
 	}
 	return cfg
 }

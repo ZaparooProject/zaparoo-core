@@ -109,6 +109,19 @@ func buildTUISettingsMenu(
 		}()
 	})
 
+	oskEnabled := config.GetTUIConfig().OnScreenKeyboard
+	oskDesc := "Show virtual keyboard on Enter (for controllers)"
+	menu.AddToggle("On-screen keyboard", oskDesc, &oskEnabled, func(value bool) {
+		tuiCfg := config.GetTUIConfig()
+		tuiCfg.OnScreenKeyboard = value
+		config.SetTUIConfig(tuiCfg)
+		go func() {
+			if err := config.SaveTUIConfig(helpers.ConfigDir(pl)); err != nil {
+				log.Error().Err(err).Msg("failed to save TUI config")
+			}
+		}()
+	})
+
 	writeFormatIdx := menu.GetItemCount()
 	writeFormatOptions := []string{"ZapScript", "File path"}
 	writeFormatValues := []string{"zapscript", "path"}

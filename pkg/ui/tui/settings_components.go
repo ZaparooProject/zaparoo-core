@@ -22,6 +22,7 @@ package tui
 import (
 	"fmt"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -33,6 +34,46 @@ func setupInputFieldFocus(field *tview.InputField) *tview.InputField {
 	})
 	field.SetBlurFunc(func() {
 		field.SetFieldBackgroundColor(CurrentTheme().FieldUnfocusedBg)
+	})
+	return field
+}
+
+// SetupOSKInputField configures an InputField to open the on-screen keyboard
+// when Enter is pressed (if OSK is enabled in settings). The onUpdate callback
+// is called when the text changes via OSK, allowing the caller to update state.
+func SetupOSKInputField(
+	field *tview.InputField,
+	pages *tview.Pages,
+	app *tview.Application,
+	onUpdate func(string),
+) *tview.InputField {
+	// Wrap any existing input handler
+	existingHandler := field.InputHandler()
+
+	field.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEnter && config.GetTUIConfig().OnScreenKeyboard {
+			ShowOSKModal(
+				pages,
+				app,
+				field.GetText(),
+				func(text string) {
+					field.SetText(text)
+					if onUpdate != nil {
+						onUpdate(text)
+					}
+					app.SetFocus(field)
+				},
+				func() {
+					app.SetFocus(field)
+				},
+			)
+			return nil
+		}
+		// Pass to existing handler if any
+		if existingHandler != nil {
+			existingHandler(event, func(p tview.Primitive) { app.SetFocus(p) })
+		}
+		return event
 	})
 	return field
 }

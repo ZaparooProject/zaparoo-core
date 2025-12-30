@@ -228,7 +228,23 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 	searchInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEnter:
-			search()
+			if config.GetTUIConfig().OnScreenKeyboard {
+				ShowOSKModal(
+					pages,
+					app,
+					searchInput.GetText(),
+					func(text string) {
+						searchInput.SetText(text)
+						name = text
+						app.SetFocus(searchInput)
+					},
+					func() {
+						app.SetFocus(searchInput)
+					},
+				)
+			} else {
+				search()
+			}
 			return nil
 		case tcell.KeyDown:
 			app.SetFocus(systemButton)
