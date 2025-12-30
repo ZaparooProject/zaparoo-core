@@ -482,7 +482,8 @@ func TestSetAPIPort(t *testing.T) {
 		assert.Nil(t, cfg.vals.Service.APIPort, "APIPort should start as nil")
 		assert.Equal(t, DefaultAPIPort, cfg.APIPort(), "Getter should return default")
 
-		cfg.SetAPIPort(8080)
+		err := cfg.SetAPIPort(8080)
+		require.NoError(t, err)
 
 		require.NotNil(t, cfg.vals.Service.APIPort, "APIPort should be set after SetAPIPort")
 		assert.Equal(t, 8080, *cfg.vals.Service.APIPort, "APIPort value should be 8080")
@@ -501,7 +502,8 @@ func TestSetAPIPort(t *testing.T) {
 			},
 		}
 
-		cfg.SetAPIPort(7777)
+		err := cfg.SetAPIPort(7777)
+		require.NoError(t, err)
 
 		assert.Equal(t, 7777, *cfg.vals.Service.APIPort, "APIPort should be overwritten")
 		assert.Equal(t, 7777, cfg.APIPort(), "Getter should return new value")
@@ -521,7 +523,8 @@ func TestAPIPort_SaveLoadRoundTrip(t *testing.T) {
 	assert.Equal(t, DefaultAPIPort, cfg.APIPort(), "Should return default port initially")
 
 	// Set a custom port
-	cfg.SetAPIPort(9999)
+	err = cfg.SetAPIPort(9999)
+	require.NoError(t, err)
 	assert.Equal(t, 9999, cfg.APIPort(), "Should return custom port after setting")
 
 	// Save and reload
