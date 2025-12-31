@@ -125,6 +125,19 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, fmt.Errorf("failed to read response body: %w", err)
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		bodyPreview := string(body)
+		if len(bodyPreview) > 200 {
+			bodyPreview = bodyPreview[:200] + "..."
+		}
+		if resp.StatusCode == http.StatusForbidden {
+			return false, fmt.Errorf(
+				"GitHub API returned %d (forbidden, probably rate limited): %s",
+				resp.StatusCode, bodyPreview)
+		}
+		return false, fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, bodyPreview)
+	}
+
 	var contents []GithubContentsItem
 	err = json.Unmarshal(body, &contents)
 	if err != nil {

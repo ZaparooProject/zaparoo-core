@@ -105,10 +105,11 @@ func run() error {
 	flags.Post(cfg, pl)
 
 	var stopSvc func() error
+	var svcDone <-chan struct{}
 	if !helpers.IsServiceRunning(cfg) {
 		log.Info().Msg("starting new service instance")
 		var err error
-		stopSvc, err = service.Start(pl, cfg)
+		stopSvc, svcDone, err = service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
 			return fmt.Errorf("error starting service: %w", err)
@@ -166,6 +167,8 @@ func run() error {
 	select {
 	case <-sigs:
 	case <-exit:
+	case <-svcDone:
+		log.Info().Msg("service shut down internally")
 	}
 
 	return nil

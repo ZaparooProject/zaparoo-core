@@ -1008,7 +1008,8 @@ func Start(
 		log.Debug().Msg("HTTP server is ready to accept connections")
 	case err := <-serverDone:
 		if err != nil {
-			log.Error().Err(err).Msg("server failed to start")
+			log.Error().Err(err).Msg("API server failed to start, stopping service")
+			st.StopService()
 			return
 		}
 	}
@@ -1018,7 +1019,8 @@ func Start(
 		log.Info().Msg("initiating HTTP server graceful shutdown")
 	case err := <-serverDone:
 		if err != nil {
-			log.Error().Err(err).Msg("HTTP server failed to start")
+			log.Error().Err(err).Msg("API server failed during operation, stopping service")
+			st.StopService()
 			return
 		}
 		return

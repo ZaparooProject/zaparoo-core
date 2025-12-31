@@ -95,13 +95,18 @@ func run() error {
 
 	flags.Post(cfg, pl)
 
-	stop, err := service.Start(pl, cfg)
+	stop, done, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("error starting service")
 		return fmt.Errorf("error starting service: %w", err)
 	}
 
-	<-sigs
+	select {
+	case <-sigs:
+	case <-done:
+		log.Info().Msg("service shut down internally")
+	}
+
 	err = stop()
 	if err != nil {
 		log.Error().Err(err).Msg("error stopping service")

@@ -70,7 +70,7 @@ func run() error {
 	cfg := cli.Setup(pl, config.BaseDefaults, nil)
 
 	svc, err := helpers.NewService(helpers.ServiceArgs{
-		Entry: func() (func() error, error) {
+		Entry: func() (func() error, <-chan struct{}, error) {
 			return service.Start(pl, cfg)
 		},
 		Platform: pl,
