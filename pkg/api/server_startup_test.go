@@ -486,6 +486,96 @@ func TestBuildDynamicAllowedOrigins(t *testing.T) {
 	require.NotContains(t, result, "http://trailing.local/")
 }
 
+// TestServerBindFailureStopsService verifies that when the API server fails to bind
+// to its port (e.g., port already in use), it calls StopService() to trigger a
+// graceful shutdown of the entire service. This is a regression test for issue #448.
+func TestServerBindFailureStopsService(t *testing.T) {
+	t.Parallel()
+
+	// Setup first server that will occupy the port
+	platform1 := mocks.NewMockPlatform()
+	platform1.SetupBasicMock()
+
+	testPort := 9100 // Use a fixed port for this test
+	fs1 := helpers.NewMemoryFS()
+	configDir1 := t.TempDir()
+	cfg1, err := helpers.NewTestConfigWithPort(fs1, configDir1, testPort)
+	require.NoError(t, err)
+
+	st1, notifications1 := state.NewState(platform1, "test-boot-uuid-1")
+	db1 := &database.Database{
+		UserDB:  helpers.NewMockUserDBI(),
+		MediaDB: helpers.NewMockMediaDBI(),
+	}
+	tokenQueue1 := make(chan tokens.Token, 1)
+
+	// Start first server
+	server1Done := make(chan struct{})
+	go func() {
+		defer close(server1Done)
+		Start(platform1, cfg1, st1, tokenQueue1, db1, nil, notifications1, "")
+	}()
+
+	// Wait for first server to be ready
+	client := &http.Client{Timeout: 100 * time.Millisecond}
+	url := fmt.Sprintf("http://localhost:%d/api/v0.1", testPort)
+	var server1Ready bool
+	for range 50 {
+		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
+		if reqErr != nil {
+			continue
+		}
+		resp, connErr := client.Do(req)
+		if connErr == nil {
+			_ = resp.Body.Close()
+			server1Ready = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.True(t, server1Ready, "First server should start successfully")
+
+	// Now try to start second server on the same port - this should fail
+	platform2 := mocks.NewMockPlatform()
+	platform2.SetupBasicMock()
+
+	fs2 := helpers.NewMemoryFS()
+	configDir2 := t.TempDir()
+	cfg2, err := helpers.NewTestConfigWithPort(fs2, configDir2, testPort) // Same port!
+	require.NoError(t, err)
+
+	st2, notifications2 := state.NewState(platform2, "test-boot-uuid-2")
+	db2 := &database.Database{
+		UserDB:  helpers.NewMockUserDBI(),
+		MediaDB: helpers.NewMockMediaDBI(),
+	}
+	tokenQueue2 := make(chan tokens.Token, 1)
+
+	// Start second server - it should fail to bind and call StopService
+	server2Done := make(chan struct{})
+	go func() {
+		defer close(server2Done)
+		Start(platform2, cfg2, st2, tokenQueue2, db2, nil, notifications2, "")
+	}()
+
+	// Wait for the second server's context to be cancelled (StopService called)
+	// or timeout if it doesn't happen
+	select {
+	case <-st2.GetContext().Done():
+		// Success - StopService was called due to bind failure
+		t.Log("StopService was called after bind failure - test passed")
+	case <-time.After(5 * time.Second):
+		t.Fatal("StopService was not called after bind failure - expected service to stop")
+	}
+
+	// Cleanup
+	st1.StopService()
+	close(tokenQueue1)
+	close(tokenQueue2)
+	<-server1Done
+	<-server2Done
+}
+
 // TestBuildDynamicAllowedOrigins_HTTPURLWithoutPortAddsPortVariant is a regression
 // test for GitHub issue #371 where users couldn't connect from .local DNS hostnames
 // like batocera.local because the browser sends origin with port but users configure

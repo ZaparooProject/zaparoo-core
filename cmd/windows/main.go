@@ -154,7 +154,7 @@ func run() error {
 		return errors.New("zaparoo is already running")
 	}
 
-	stopSvc, err := service.Start(pl, cfg)
+	stopSvc, svcDone, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Msgf("error starting service: %s", err)
 		return fmt.Errorf("error starting service: %w", err)
@@ -179,6 +179,8 @@ func run() error {
 	select {
 	case <-sigs:
 	case <-exit:
+	case <-svcDone:
+		log.Info().Msg("service shut down internally")
 	}
 
 	err = stopSvc()

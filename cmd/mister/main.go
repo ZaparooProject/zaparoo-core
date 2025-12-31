@@ -184,7 +184,7 @@ func run() error {
 	}
 
 	svc, err := helpers.NewService(helpers.ServiceArgs{
-		Entry: func() (func() error, error) {
+		Entry: func() (func() error, <-chan struct{}, error) {
 			return service.Start(pl, cfg)
 		},
 		Platform: pl,

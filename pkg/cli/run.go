@@ -244,6 +244,7 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 	defer signal.Stop(sigs)
 
 	exit := make(chan bool, 1)
+	var svcDone <-chan struct{}
 
 	switch {
 	case daemonMode:
@@ -255,11 +256,12 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 		}
 
 		log.Info().Msg("starting service in daemon mode")
-		stopSvc, err := service.Start(pl, cfg)
+		stopSvc, done, err := service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
 			return fmt.Errorf("error starting service: %w", err)
 		}
+		svcDone = done
 		defer func() {
 			if err := stopSvc(); err != nil {
 				log.Error().Msgf("error stopping service: %s", err)
@@ -301,6 +303,8 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 	select {
 	case <-sigs:
 	case <-exit:
+	case <-svcDone:
+		log.Info().Msg("service shut down internally")
 	}
 
 	return nil

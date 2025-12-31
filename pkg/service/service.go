@@ -189,7 +189,7 @@ func pruneExpiredZapLinkHosts(db *database.Database) {
 func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
-) (func() error, error) {
+) (stop func() error, done <-chan struct{}, err error) {
 	log.Info().Msgf("version: %s", config.AppVersion)
 
 	// Generate boot UUID for this session (for timestamp healing on MiSTer)
@@ -208,24 +208,24 @@ func Start(
 	lsq := make(chan *tokens.Token)       // launch software queue
 	plq := make(chan *playlists.Playlist) // playlist event queue
 
-	err := setupEnvironment(pl)
+	err = setupEnvironment(pl)
 	if err != nil {
 		log.Error().Err(err).Msg("error setting up environment")
-		return nil, err
+		return nil, nil, err
 	}
 
 	log.Info().Msg("running platform pre start")
 	err = pl.StartPre(cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
-		return nil, fmt.Errorf("platform start pre failed: %w", err)
+		return nil, nil, fmt.Errorf("platform start pre failed: %w", err)
 	}
 
 	log.Info().Msg("opening databases")
 	db, err := makeDatabase(st.GetContext(), pl)
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening databases")
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Perform all history cleanup operations
@@ -321,27 +321,39 @@ func Start(
 	err = pl.StartPost(cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia, db)
 	if err != nil {
 		log.Error().Err(err).Msg("platform post start error")
-		return nil, fmt.Errorf("platform start post failed: %w", err)
+		return nil, nil, fmt.Errorf("platform start post failed: %w", err)
 	}
 	log.Info().Msg("platform post start completed, service fully initialized")
 
-	return func() error {
+	doneCh := make(chan struct{})
+	go func() {
+		<-st.GetContext().Done()
+		log.Info().Msg("service context cancelled, running cleanup")
+
 		discoveryService.Stop()
 		cancelPublisherFanOut()
 		for _, publisher := range activePublishers {
 			publisher.Stop()
 		}
-		err = pl.Stop()
-		if err != nil {
-			log.Warn().Msgf("error stopping platform: %s", err)
+		if stopErr := pl.Stop(); stopErr != nil {
+			log.Warn().Msgf("error stopping platform: %s", stopErr)
 		}
 		notifBroker.Stop()
-		st.StopService()
 		close(plq)
 		close(lsq)
 		close(itq)
+
+		log.Info().Msg("service cleanup completed")
+		close(doneCh)
+	}()
+
+	stop = func() error {
+		st.StopService()
+		<-doneCh
 		return nil
-	}, nil
+	}
+	done = doneCh
+	return stop, done, nil
 }
 
 // monitorClockAndHealTimestamps monitors the system clock and heals timestamps when NTP syncs.

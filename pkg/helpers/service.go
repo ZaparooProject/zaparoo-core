@@ -21,12 +21,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type ServiceEntry func() (func() error, error)
+type ServiceEntry func() (func() error, <-chan struct{}, error)
 
 type Service struct {
 	pl     platforms.Platform
 	start  ServiceEntry
 	stop   func() error
+	done   <-chan struct{}
 	daemon bool
 }
 
@@ -179,7 +180,7 @@ func (s *Service) startService() {
 		log.Error().Err(err).Msg("error setting nice level")
 	}
 
-	stop, err := s.start()
+	stop, done, err := s.start()
 	if err != nil {
 		log.Error().Err(err).Msg("error starting service")
 
@@ -193,15 +194,24 @@ func (s *Service) startService() {
 
 	s.setupStopService()
 	s.stop = stop
+	s.done = done
 
 	if !s.daemon {
-		err := s.stopService()
-		if err != nil {
+		if stopErr := s.stopService(); stopErr != nil {
 			os.Exit(1)
 		}
 		os.Exit(0)
 	}
-	<-make(chan struct{})
+
+	<-done
+	log.Info().Msg("service shut down internally")
+
+	err = s.removePidFile()
+	if err != nil {
+		log.Error().Err(err).Msg("error removing pid file")
+	}
+
+	os.Exit(0)
 }
 
 // Start a new service daemon in the background.

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -21,7 +20,28 @@ import (
 	config2 "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/gocarina/gocsv"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
+
+type Client struct {
+	httpClient *http.Client
+	fs         afero.Fs
+	apiURL     string
+	filename   string
+}
+
+func NewClient(httpClient *http.Client, fs afero.Fs, apiURL, filename string) *Client {
+	return &Client{
+		httpClient: httpClient,
+		fs:         fs,
+		apiURL:     apiURL,
+		filename:   filename,
+	}
+}
+
+func defaultClient() *Client {
+	return NewClient(http.DefaultClient, afero.NewOsFs(), config2.ArcadeDbURL, config2.ArcadeDbFile)
+}
 
 type GithubLinks struct {
 	Self string `json:"self"`
@@ -66,17 +86,37 @@ type ArcadeDbEntry struct {
 	NumButtons      string `csv:"num_buttons"`
 }
 
-func getGitBlobSha1(filePath string) (string, error) {
-	file, err := os.Open(filePath) //nolint:gosec // Internal path for arcade DB verification
+func parseGitHubContentsResponse(statusCode int, body []byte) ([]GithubContentsItem, error) {
+	if statusCode != http.StatusOK {
+		bodyPreview := string(body)
+		if len(bodyPreview) > 200 {
+			bodyPreview = bodyPreview[:200] + "..."
+		}
+		if statusCode == http.StatusForbidden {
+			return nil, fmt.Errorf(
+				"GitHub API returned %d (forbidden, probably rate limited): %s",
+				statusCode, bodyPreview)
+		}
+		return nil, fmt.Errorf("GitHub API returned %d: %s", statusCode, bodyPreview)
+	}
+
+	var contents []GithubContentsItem
+	if err := json.Unmarshal(body, &contents); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
+	}
+	return contents, nil
+}
+
+func (c *Client) getGitBlobSha1(filePath string) (string, error) {
+	file, err := c.fs.Open(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open file: %w", err)
 	}
-	defer func(file *os.File) {
-		closeErr := file.Close()
-		if closeErr != nil {
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close file")
 		}
-	}(file)
+	}()
 
 	info, err := file.Stat()
 	if err != nil {
@@ -94,81 +134,18 @@ func getGitBlobSha1(filePath string) (string, error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
-	arcadeDBPath := filepath.Join(
-		helpers.DataDir(pl),
-		config.AssetsDir,
-		config2.ArcadeDbFile,
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config2.ArcadeDbURL, http.NoBody)
+func (c *Client) doRequest(ctx context.Context, url string) (statusCode int, body []byte, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return false, fmt.Errorf("failed to create HTTP request: %w", err)
+		return 0, nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("failed to execute HTTP request: %w", err)
+		return 0, nil, fmt.Errorf("failed to execute HTTP request: %w", err)
 	}
 	if resp == nil {
-		return false, errors.New("received nil response")
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close response body")
-		}
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return false, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	var contents []GithubContentsItem
-	err = json.Unmarshal(body, &contents)
-	if err != nil {
-		return false, fmt.Errorf("failed to unmarshal JSON: %w", err)
-	} else if len(contents) == 0 {
-		return false, nil
-	}
-
-	err = os.MkdirAll(filepath.Dir(arcadeDBPath), 0o750)
-	if err != nil {
-		return false, fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	// Find the ArcadeDatabase.csv file in the contents
-	var arcadeDbFile *GithubContentsItem
-	for i := range contents {
-		if contents[i].Name == config2.ArcadeDbFile && contents[i].Type == "file" {
-			arcadeDbFile = &contents[i]
-			break
-		}
-	}
-	if arcadeDbFile == nil {
-		return false, fmt.Errorf("file %s not found in repository", config2.ArcadeDbFile)
-	}
-
-	latestSha := arcadeDbFile.Sha
-
-	localSha, err := getGitBlobSha1(arcadeDBPath)
-	if err == nil && localSha == latestSha {
-		return false, nil
-	}
-
-	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, arcadeDbFile.DownloadURL, http.NoBody)
-	if err != nil {
-		return false, fmt.Errorf("failed to create download request: %w", err)
-	}
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		return false, fmt.Errorf("failed to download arcadedb: %w", err)
-	}
-	if resp == nil {
-		return false, errors.New("received nil response")
+		return 0, nil, errors.New("received nil response")
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -178,10 +155,64 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 
 	body, err = io.ReadAll(resp.Body)
 	if err != nil {
-		return false, fmt.Errorf("failed to read download body: %w", err)
+		return 0, nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	err = os.WriteFile(arcadeDBPath, body, 0o600)
+	return resp.StatusCode, body, nil
+}
+
+func (c *Client) Update(arcadeDBPath string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	statusCode, body, err := c.doRequest(ctx, c.apiURL)
+	if err != nil {
+		return false, err
+	}
+
+	contents, err := parseGitHubContentsResponse(statusCode, body)
+	if err != nil {
+		return false, err
+	}
+	if len(contents) == 0 {
+		return false, nil
+	}
+
+	err = c.fs.MkdirAll(filepath.Dir(arcadeDBPath), 0o750)
+	if err != nil {
+		return false, fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	var arcadeDbFile *GithubContentsItem
+	for i := range contents {
+		if contents[i].Name == c.filename && contents[i].Type == "file" {
+			arcadeDbFile = &contents[i]
+			break
+		}
+	}
+	if arcadeDbFile == nil {
+		return false, fmt.Errorf("file %s not found in repository", c.filename)
+	}
+
+	latestSha := arcadeDbFile.Sha
+
+	localSha, err := c.getGitBlobSha1(arcadeDBPath)
+	if err == nil && localSha == latestSha {
+		return false, nil
+	}
+
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	statusCode, body, err = c.doRequest(ctx, arcadeDbFile.DownloadURL)
+	if err != nil {
+		return false, fmt.Errorf("failed to download arcadedb: %w", err)
+	}
+	if statusCode != http.StatusOK {
+		return false, fmt.Errorf("download failed with status %d", statusCode)
+	}
+
+	err = afero.WriteFile(c.fs, arcadeDBPath, body, 0o600)
 	if err != nil {
 		return false, fmt.Errorf("failed to write arcadedb file: %w", err)
 	}
@@ -189,30 +220,50 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 	return true, nil
 }
 
+func (c *Client) Read(arcadeDBPath string) ([]ArcadeDbEntry, error) {
+	exists, err := afero.Exists(c.fs, arcadeDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check arcadedb file: %w", err)
+	}
+	if !exists {
+		return nil, fmt.Errorf("arcadedb file does not exist: %s", arcadeDBPath)
+	}
+
+	file, err := c.fs.Open(arcadeDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open arcadedb file: %w", err)
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+
+	entries := make([]ArcadeDbEntry, 0)
+	err = gocsv.Unmarshal(file, &entries)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal arcadedb CSV: %w", err)
+	}
+
+	return entries, nil
+}
+
+// UpdateArcadeDb checks for and downloads arcade database updates.
+// This is the public API that uses default HTTP client and OS filesystem.
+func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
+	arcadeDBPath := filepath.Join(
+		helpers.DataDir(pl),
+		config.AssetsDir,
+		config2.ArcadeDbFile,
+	)
+	return defaultClient().Update(arcadeDBPath)
+}
+
+// ReadArcadeDb reads and parses the arcade database CSV file.
+// This is the public API that uses the OS filesystem.
 func ReadArcadeDb(pl platforms.Platform) ([]ArcadeDbEntry, error) {
 	arcadeDBPath := filepath.Join(
 		helpers.DataDir(pl),
 		config.AssetsDir,
 		config2.ArcadeDbFile,
 	)
-
-	if _, err := os.Stat(arcadeDBPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("arcadedb file does not exist: %w", err)
-	}
-
-	dbFile, err := os.Open(arcadeDBPath) //nolint:gosec // Internal path for arcade DB reading
-	if err != nil {
-		return nil, fmt.Errorf("failed to open arcadedb file: %w", err)
-	}
-	defer func(c io.Closer) {
-		_ = c.Close()
-	}(dbFile)
-
-	entries := make([]ArcadeDbEntry, 0)
-	err = gocsv.Unmarshal(dbFile, &entries)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal arcadedb CSV: %w", err)
-	}
-
-	return entries, nil
+	return defaultClient().Read(arcadeDBPath)
 }
