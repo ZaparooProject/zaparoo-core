@@ -9,6 +9,10 @@ linters:
       - linters:
           - revive
         text: "avoid meaningless package names"
+      # Vendored MIT-licensed library - cannot use GPL header
+      - linters:
+          - goheader
+        path: internal/vdfbinary/
   enable:
     - staticcheck
     - errcheck

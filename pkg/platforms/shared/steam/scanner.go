@@ -26,7 +26,7 @@ import (
 	"strconv"
 	"strings"
 
-	valvevdfbinary "github.com/TimDeve/valve-vdf-binary"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/vdfbinary"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/andygrunwald/vdf"
@@ -202,7 +202,7 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 			continue
 		}
 
-		shortcuts, err := valvevdfbinary.ParseShortcuts(bytes.NewReader(shortcutsData))
+		shortcuts, err := vdfbinary.ParseShortcuts(bytes.NewReader(shortcutsData))
 		if err != nil {
 			log.Error().Err(err).Msgf("error parsing shortcuts.vdf: %s", shortcutsPath)
 			continue
@@ -219,9 +219,9 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 			}
 
 			// Non-Steam games require a "Big Picture ID" (BPID) for launching.
-			// BPID = (AppId << 32) | 0x02000000
-			// This converts the 32-bit shortcut AppId to the 64-bit ID Steam uses for shortcuts.
-			bpid := (uint64(shortcut.AppId) << 32) | 0x02000000
+			// BPID = (AppID << 32) | 0x02000000
+			// This converts the 32-bit shortcut AppID to the 64-bit ID Steam uses for shortcuts.
+			bpid := (uint64(shortcut.AppID) << 32) | 0x02000000
 
 			results = append(results, platforms.ScanResult{
 				Path:  virtualpath.CreateVirtualPath("steam", strconv.FormatUint(bpid, 10), shortcut.AppName),
