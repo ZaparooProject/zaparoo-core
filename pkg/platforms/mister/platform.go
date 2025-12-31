@@ -733,6 +733,55 @@ func filterNeoGeoGameContents(
 	return filtered
 }
 
+// filterNeoGeoZipToNeoOnly filters results when no romsets.xml is available.
+// Only keeps:
+// - Files NOT inside zips (top-level .neo files, folders)
+// - Files inside zips that end with .neo extension
+// - Zip files themselves if they contain no .neo files (likely game ROM sets)
+//
+// This provides graceful degradation when romsets.xml is missing or invalid.
+func filterNeoGeoZipToNeoOnly(results []platforms.ScanResult) []platforms.ScanResult {
+	// First pass: identify which zips contain .neo files
+	zipsWithNeo := make(map[string]bool)
+	allZips := make(map[string]bool)
+
+	for _, r := range results {
+		lowerPath := strings.ToLower(r.Path)
+		if idx := strings.Index(lowerPath, ".zip/"); idx != -1 {
+			zipPath := r.Path[:idx+4]
+			allZips[zipPath] = true
+			if strings.HasSuffix(lowerPath, ".neo") {
+				zipsWithNeo[zipPath] = true
+			}
+		}
+	}
+
+	// Second pass: filter and collect results
+	filtered := make([]platforms.ScanResult, 0, len(results))
+	for _, r := range results {
+		lowerPath := strings.ToLower(r.Path)
+
+		if idx := strings.Index(lowerPath, ".zip/"); idx != -1 {
+			zipPath := r.Path[:idx+4]
+			if zipsWithNeo[zipPath] && strings.HasSuffix(lowerPath, ".neo") {
+				filtered = append(filtered, r)
+			}
+			continue
+		}
+
+		filtered = append(filtered, r)
+	}
+
+	// Add zips that don't contain .neo files as launchable games
+	for zipPath := range allZips {
+		if !zipsWithNeo[zipPath] {
+			filtered = append(filtered, platforms.ScanResult{Path: zipPath})
+		}
+	}
+
+	return filtered
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	cores.GlobalRBFCache.Refresh()
 
@@ -888,8 +937,12 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				}
 			}
 
-			// Filter out paths inside games that match romsets.xml
-			results = filterNeoGeoGameContents(results, names, neogeoPaths)
+			if len(names) == 0 {
+				log.Warn().Msg("no valid romsets.xml found, applying fallback filter for zip contents")
+				results = filterNeoGeoZipToNeoOnly(results)
+			} else {
+				results = filterNeoGeoGameContents(results, names, neogeoPaths)
+			}
 
 			// Second pass: read directories and add games
 			for _, sf := range sfs {

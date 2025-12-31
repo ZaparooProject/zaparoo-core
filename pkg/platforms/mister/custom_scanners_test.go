@@ -558,3 +558,112 @@ func TestFilterNeoGeoGameContents_CommaSeparatedRomsets(t *testing.T) {
 		assert.Equal(t, "/media/fat/games/NEOGEO/game.neo", result[1].Path)
 	})
 }
+
+func TestFilterNeoGeoZipToNeoOnly(t *testing.T) {
+	t.Parallel()
+
+	t.Run("keeps .neo files from zips and adds zips without .neo as games", func(t *testing.T) {
+		t.Parallel()
+
+		input := []platforms.ScanResult{
+			// mslug.zip has no .neo files - zip itself should be added
+			{Path: "/media/fat/NEOGEO/mslug.zip/crom0", Name: ""},
+			{Path: "/media/fat/NEOGEO/mslug.zip/prom", Name: ""},
+			{Path: "/media/fat/NEOGEO/mslug.zip/srom", Name: ""},
+			// collection.zip has .neo files - only keep the .neo files
+			{Path: "/media/fat/NEOGEO/collection.zip/game1.neo", Name: ""},
+			{Path: "/media/fat/NEOGEO/collection.zip/game2.neo", Name: ""},
+		}
+
+		result := filterNeoGeoZipToNeoOnly(input)
+
+		assert.Len(t, result, 3)
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/collection.zip/game1.neo"})
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/collection.zip/game2.neo"})
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/mslug.zip"})
+	})
+
+	t.Run("keeps all top-level files", func(t *testing.T) {
+		t.Parallel()
+
+		input := []platforms.ScanResult{
+			{Path: "/media/fat/NEOGEO/game.neo", Name: ""},
+			{Path: "/media/fat/NEOGEO/mslug.zip", Name: ""},
+			{Path: "/media/fat/NEOGEO/mslug/crom0", Name: ""},
+		}
+
+		result := filterNeoGeoZipToNeoOnly(input)
+
+		assert.Len(t, result, 3)
+		assert.Equal(t, "/media/fat/NEOGEO/game.neo", result[0].Path)
+		assert.Equal(t, "/media/fat/NEOGEO/mslug.zip", result[1].Path)
+		assert.Equal(t, "/media/fat/NEOGEO/mslug/crom0", result[2].Path)
+	})
+
+	t.Run("handles case-insensitive path matching", func(t *testing.T) {
+		t.Parallel()
+
+		input := []platforms.ScanResult{
+			// MSLUG.ZIP has no .neo - zip itself added
+			{Path: "/media/fat/NEOGEO/MSLUG.ZIP/crom0", Name: ""},
+			// collection zips have .neo - keep the .neo files
+			{Path: "/media/fat/NEOGEO/collection.ZIP/GAME.NEO", Name: ""},
+			{Path: "/media/fat/NEOGEO/collection.zip/Game.Neo", Name: ""},
+		}
+
+		result := filterNeoGeoZipToNeoOnly(input)
+
+		assert.Len(t, result, 3)
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/collection.ZIP/GAME.NEO"})
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/collection.zip/Game.Neo"})
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/MSLUG.ZIP"})
+	})
+
+	t.Run("handles mixed paths correctly", func(t *testing.T) {
+		t.Parallel()
+
+		input := []platforms.ScanResult{
+			// mslug.zip has no .neo - zip itself added
+			{Path: "/media/fat/NEOGEO/mslug.zip/mslug.rom", Name: ""},
+			// collection.zip has .neo - keep the .neo
+			{Path: "/media/fat/NEOGEO/collection.zip/game.neo", Name: ""},
+			// Top-level files - kept
+			{Path: "/media/fat/NEOGEO/standalone.neo", Name: ""},
+			{Path: "/media/fat/NEOGEO/kof98.zip", Name: ""},
+			{Path: "/media/fat/NEOGEO/mslug/crom0", Name: ""},
+		}
+
+		result := filterNeoGeoZipToNeoOnly(input)
+
+		assert.Len(t, result, 5)
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/collection.zip/game.neo"})
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/standalone.neo"})
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/kof98.zip"})
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/mslug/crom0"})
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/mslug.zip"})
+	})
+
+	t.Run("handles empty input", func(t *testing.T) {
+		t.Parallel()
+
+		input := []platforms.ScanResult{}
+		result := filterNeoGeoZipToNeoOnly(input)
+		assert.Empty(t, result)
+	})
+
+	t.Run("adds zips without .neo files as launchable games", func(t *testing.T) {
+		t.Parallel()
+
+		input := []platforms.ScanResult{
+			// Both zips have no .neo - both should be added as games
+			{Path: "/media/fat/NEOGEO/mslug.zip/crom0", Name: ""},
+			{Path: "/media/fat/NEOGEO/kof98.zip/prom", Name: ""},
+		}
+
+		result := filterNeoGeoZipToNeoOnly(input)
+
+		assert.Len(t, result, 2)
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/mslug.zip"})
+		assert.Contains(t, result, platforms.ScanResult{Path: "/media/fat/NEOGEO/kof98.zip"})
+	})
+}
