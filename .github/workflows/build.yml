@@ -328,13 +328,12 @@ jobs:
             cp "_unsigned/${arch}/Zaparoo.exe" "_signing_bundle/${arch}/Zaparoo.exe"
             cp "_unsigned/${arch}/zaparoo-setup.exe" "_signing_bundle/${arch}/zaparoo-setup.exe"
           done
-          cd _signing_bundle && zip -r ../windows-bundle.zip .
       - name: Upload signing bundle
         id: upload-bundle
         uses: actions/upload-artifact@v4
         with:
           name: unsigned-windows-bundle
-          path: windows-bundle.zip
+          path: _signing_bundle/
           retention-days: 30
       - name: Sign all Windows binaries
         uses: signpath/github-action-submit-signing-request@v2
@@ -347,9 +346,6 @@ jobs:
           github-artifact-id: "${{ steps.upload-bundle.outputs.artifact-id }}"
           wait-for-completion: true
           output-artifact-directory: "_signed"
-      - name: Extract signed binaries
-        run: |
-          cd _signed && unzip -o windows-bundle.zip
       - name: Repackage and upload releases
         if: ${{ !inputs.test_build }}
         env:
