@@ -1,5 +1,5 @@
 // Zaparoo Core
-// Copyright (c) 2025 The Zaparoo Project Contributors.
+// Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // This file is part of Zaparoo Core.

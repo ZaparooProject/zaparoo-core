@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Zaparoo Core Universal Installer
-# Copyright (c) 2025 The Zaparoo Project Contributors.
+# Copyright (c) 2026 The Zaparoo Project Contributors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 set -e          # Exit on error
