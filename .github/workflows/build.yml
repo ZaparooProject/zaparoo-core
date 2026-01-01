@@ -6,28 +6,28 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag/version to build (e.g. v2.7.0). Leave empty for commit-based version.'
+        description: "Tag/version to build (e.g. v2.7.0). Leave empty for commit-based version."
         required: false
         type: string
-        default: ''
+        default: ""
       test_build:
-        description: 'Test build only (no release created, uses test-signing)'
+        description: "Test build only (no release created, uses test-signing)"
         required: false
         type: boolean
         default: false
   workflow_call:
     inputs:
       tag:
-        description: 'Tag to build (e.g. v2.7.0)'
+        description: "Tag to build (e.g. v2.7.0)"
         required: true
         type: string
       is_nightly:
-        description: 'Is this a nightly build?'
+        description: "Is this a nightly build?"
         required: false
         type: boolean
         default: false
       test_build:
-        description: 'Test build only (no release created)'
+        description: "Test build only (no release created)"
         required: false
         type: boolean
         default: false
@@ -37,7 +37,7 @@ permissions:
 
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
-  cancel-in-progress: false  # Never cancel releases
+  cancel-in-progress: false # Never cancel releases
 
 env:
   BUILD_TAG: ${{ inputs.tag || github.ref_name }}
@@ -83,9 +83,9 @@ jobs:
     needs: [create-release, ensure-zigcc]
     if: ${{ !cancelled() && needs.ensure-zigcc.result == 'success' }}
     permissions:
-      contents: write  # Needed for uploading release assets
-      packages: read   # Needed for pulling Docker images from ghcr.io
-      actions: read    # Needed for SignPath to read artifacts
+      contents: write # Needed for uploading release assets
+      packages: read # Needed for pulling Docker images from ghcr.io
+      actions: read # Needed for SignPath to read artifacts
     strategy:
       fail-fast: false
       matrix:
@@ -173,79 +173,35 @@ jobs:
         env:
           GOFLAGS: "-buildvcs=false"
         run: APP_VERSION=${VERSION} task ${{matrix.platform}}:build-${{matrix.arch}}
-      - name: Upload unsigned exe artifact
+      - name: Upload unsigned Windows exe
         if: matrix.platform == 'windows'
-        id: upload-unsigned-exe
         uses: actions/upload-artifact@v4
         with:
-          name: unsigned-exe-${{matrix.arch}}
-          path: _build/${{matrix.platform}}_${{matrix.arch}}/Zaparoo.exe
+          name: unsigned-windows-exe-${{matrix.arch}}
+          path: _build/windows_${{matrix.arch}}/Zaparoo.exe
           retention-days: 30
-      - name: Copy installer to consistent name for signing
+      - name: Copy installer to consistent name
         if: matrix.platform == 'windows'
         run: |
           cp "_build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe" \
              "_build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe"
-      - name: Upload unsigned installer artifact
+      - name: Upload unsigned Windows installer
         if: matrix.platform == 'windows'
-        id: upload-unsigned-installer
         uses: actions/upload-artifact@v4
         with:
-          name: unsigned-installer-${{matrix.arch}}
+          name: unsigned-windows-installer-${{matrix.arch}}
           path: _build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe
           retention-days: 30
-      - name: Sign exe file
+      - name: Upload Windows distribution files
         if: matrix.platform == 'windows'
-        uses: signpath/github-action-submit-signing-request@v2
+        uses: actions/upload-artifact@v4
         with:
-          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
-          organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
-          project-slug: 'zaparoo-core'
-          signing-policy-slug: 'release-signing'
-          artifact-configuration-slug: 'windows-zip'
-          github-artifact-id: '${{ steps.upload-unsigned-exe.outputs.artifact-id }}'
-          wait-for-completion: true
-          output-artifact-directory: '_build/signed/exe_${{matrix.arch}}'
-      - name: Sign installer EXE
-        if: matrix.platform == 'windows'
-        uses: signpath/github-action-submit-signing-request@v2
-        with:
-          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
-          organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
-          project-slug: 'zaparoo-core'
-          signing-policy-slug: 'release-signing'
-          artifact-configuration-slug: 'windows-installer'
-          github-artifact-id: '${{ steps.upload-unsigned-installer.outputs.artifact-id }}'
-          wait-for-completion: true
-          output-artifact-directory: '_build/signed/installer_${{matrix.arch}}'
-      - name: Rename signed installer back to versioned name
-        if: matrix.platform == 'windows'
-        run: |
-          mv "_build/signed/installer_${{matrix.arch}}/zaparoo-setup.exe" \
-             "_build/signed/installer_${{matrix.arch}}/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe"
-      - name: Repackage distribution ZIP with signed exe
-        if: matrix.platform == 'windows'
-        run: |
-          # Replace unsigned exe with signed exe in build directory
-          cp "_build/signed/exe_${{matrix.arch}}/Zaparoo.exe" "_build/${{matrix.platform}}_${{matrix.arch}}/Zaparoo.exe"
-          # Recreate the distribution ZIP
-          APP_VERSION=${VERSION} go run scripts/tasks/utils/makezip/main.go \
-            ${{matrix.platform}} "_build/${{matrix.platform}}_${{matrix.arch}}" Zaparoo.exe \
-            "zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip"
-      - name: Add signed ZIP to release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ env.BUILD_TAG }}
-        if: matrix.platform == 'windows' && !inputs.test_build
-        run: |
-          gh release upload "$tag" "_build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip" --clobber
-      - name: Add signed Windows installer to release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ env.BUILD_TAG }}
-        if: matrix.platform == 'windows' && !inputs.test_build
-        run: |
-          gh release upload "$tag" "_build/signed/installer_${{matrix.arch}}/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe" --clobber
+          name: windows-dist-${{matrix.arch}}
+          path: |
+            _build/windows_${{matrix.arch}}/
+            !_build/windows_${{matrix.arch}}/Zaparoo.exe
+            !_build/windows_${{matrix.arch}}/Output/
+          retention-days: 30
       - name: Add release (non-Windows)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -286,6 +242,133 @@ jobs:
           name: batocera-binary-${{matrix.arch}}
           path: _build/batocera_${{matrix.arch}}/zaparoo
           retention-days: 30
+
+  sign-windows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: Sign all Windows binaries
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts/
+            go.mod
+          sparse-checkout-cone-mode: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Write release version
+        run: |
+          VERSION="${BUILD_TAG#v}"
+          if [[ ! "$VERSION" =~ ^[0-9] ]]; then
+            VERSION="$(git rev-parse --short HEAD)-dev"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: Download unsigned exe (amd64)
+        uses: actions/download-artifact@v4
+        with:
+          name: unsigned-windows-exe-amd64
+          path: _unsigned/amd64/
+      - name: Download unsigned exe (arm64)
+        uses: actions/download-artifact@v4
+        with:
+          name: unsigned-windows-exe-arm64
+          path: _unsigned/arm64/
+      - name: Download unsigned exe (386)
+        uses: actions/download-artifact@v4
+        with:
+          name: unsigned-windows-exe-386
+          path: _unsigned/386/
+      - name: Download unsigned installer (amd64)
+        uses: actions/download-artifact@v4
+        with:
+          name: unsigned-windows-installer-amd64
+          path: _unsigned/amd64/
+      - name: Download unsigned installer (arm64)
+        uses: actions/download-artifact@v4
+        with:
+          name: unsigned-windows-installer-arm64
+          path: _unsigned/arm64/
+      - name: Download unsigned installer (386)
+        uses: actions/download-artifact@v4
+        with:
+          name: unsigned-windows-installer-386
+          path: _unsigned/386/
+      - name: Download distribution files (amd64)
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-dist-amd64
+          path: _dist/amd64/
+      - name: Download distribution files (arm64)
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-dist-arm64
+          path: _dist/arm64/
+      - name: Download distribution files (386)
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-dist-386
+          path: _dist/386/
+      - name: Prepare signing bundle
+        run: |
+          mkdir -p _signing_bundle/{amd64,arm64,386}
+          for arch in amd64 arm64 386; do
+            cp "_unsigned/${arch}/Zaparoo.exe" "_signing_bundle/${arch}/Zaparoo.exe"
+            cp "_unsigned/${arch}/zaparoo-setup.exe" "_signing_bundle/${arch}/zaparoo-setup.exe"
+          done
+          cd _signing_bundle && zip -r ../windows-bundle.zip .
+      - name: Upload signing bundle
+        id: upload-bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-windows-bundle
+          path: windows-bundle.zip
+          retention-days: 30
+      - name: Sign all Windows binaries
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: "${{ secrets.SIGNPATH_API_TOKEN }}"
+          organization-id: "${{ secrets.SIGNPATH_ORGANIZATION_ID }}"
+          project-slug: "zaparoo-core"
+          signing-policy-slug: "release-signing"
+          artifact-configuration-slug: "windows-bundle"
+          github-artifact-id: "${{ steps.upload-bundle.outputs.artifact-id }}"
+          wait-for-completion: true
+          output-artifact-directory: "_signed"
+      - name: Extract signed binaries
+        run: |
+          cd _signed && unzip -o windows-bundle.zip
+      - name: Repackage and upload releases
+        if: ${{ !inputs.test_build }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ env.BUILD_TAG }}
+        run: |
+          for arch in amd64 arm64 386; do
+            # Copy signed exe into distribution folder
+            cp "_signed/${arch}/Zaparoo.exe" "_dist/${arch}/Zaparoo.exe"
+
+            # Create distribution ZIP
+            go run scripts/tasks/utils/makezip/main.go \
+              windows "_dist/${arch}" Zaparoo.exe \
+              "zaparoo-windows_${arch}-${VERSION}.zip"
+
+            # Upload distribution ZIP
+            gh release upload "$tag" "_dist/${arch}/zaparoo-windows_${arch}-${VERSION}.zip" --clobber
+
+            # Upload signed installer
+            mv "_signed/${arch}/zaparoo-setup.exe" \
+               "_signed/${arch}/zaparoo-${arch}-${VERSION}-setup.exe"
+            gh release upload "$tag" \
+               "_signed/${arch}/zaparoo-${arch}-${VERSION}-setup.exe" --clobber
+          done
 
   build-batocera-any:
     runs-on: ubuntu-latest
