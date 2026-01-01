@@ -321,7 +321,8 @@ jobs:
         run: go test -tags=deadlock -race -count=1 ./...
 
       - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-latest' # Only upload coverage once
+        # Skip on tag pushes
+        if: matrix.os == 'ubuntu-latest' && !startsWith(github.ref, 'refs/tags/')
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
