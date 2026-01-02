@@ -77,7 +77,7 @@ func TestGenerateReaderID(t *testing.T) {
 			require.Len(t, parts, 2, "ID should have format driver-hash")
 
 			hash := parts[1]
-			assert.Len(t, hash, 26, "Hash should be 26 base32 chars")
+			assert.Len(t, hash, 8, "Hash should be 8 base32 chars")
 
 			// Verify hash contains only lowercase base32 characters (a-z, 2-7)
 			for _, c := range hash {

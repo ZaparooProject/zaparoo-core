@@ -27,8 +27,8 @@ import (
 )
 
 // GenerateReaderID creates a deterministic reader ID from driver name and a
-// stable path. The ID format is "{driver}-{base32hash}" where base32hash is
-// 26 lowercase base32 characters (128 bits) derived from SHA-256.
+// stable path. The ID format is "{driver}-{hash}" where hash is 8 lowercase
+// base32 characters (40 bits) derived from SHA-256.
 //
 // The stablePath should be something that persists across reboots when the
 // hardware stays in the same port, such as:
@@ -47,7 +47,7 @@ func GenerateReaderID(driverName, stablePath string) string {
 	input := fmt.Sprintf("%s\x00%s", normalizedDriver, normalizedPath)
 	hash := sha256.Sum256([]byte(input))
 
-	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:16])
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:5])
 	encoded = strings.ToLower(encoded)
 
 	return fmt.Sprintf("%s-%s", normalizedDriver, encoded)
