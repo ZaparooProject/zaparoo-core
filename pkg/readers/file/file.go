@@ -128,7 +128,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 					// Send ReaderError scan if there was an active token
 					if token != nil {
 						iq <- readers.Scan{
-							Source:      r.device.ConnectionString(),
+							Source:      tokens.SourceReader,
 							ReaderError: true,
 						}
 					}
@@ -139,7 +139,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 					break
 				}
 				iq <- readers.Scan{
-					Source: r.device.ConnectionString(),
+					Source: tokens.SourceReader,
 					Error:  err,
 				}
 				continue
@@ -153,7 +153,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 				log.Debug().Msg("file is empty, removing token")
 				token = nil
 				iq <- readers.Scan{
-					Source: r.device.ConnectionString(),
+					Source: tokens.SourceReader,
 					Token:  nil,
 				}
 				continue
@@ -172,12 +172,12 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 				Text:     text,
 				Data:     hex.EncodeToString(contents),
 				ScanTime: time.Now(),
-				Source:   r.device.ConnectionString(),
+				Source:   tokens.SourceReader,
 			}
 
 			log.Debug().Msgf("new token: %s", token.Text)
 			iq <- readers.Scan{
-				Source: r.device.ConnectionString(),
+				Source: tokens.SourceReader,
 				Token:  token,
 			}
 		}
@@ -205,6 +205,10 @@ func (r *Reader) Device() string {
 	return r.device.ConnectionString()
 }
 
+func (r *Reader) ReaderID() string {
+	return readers.GenerateReaderID(r.Metadata().ID, r.path)
+}
+
 func (r *Reader) Connected() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -224,7 +228,7 @@ func (*Reader) CancelWrite() {
 }
 
 func (*Reader) Capabilities() []readers.Capability {
-	return []readers.Capability{}
+	return []readers.Capability{readers.CapabilityRemovable}
 }
 
 func (*Reader) OnMediaChange(*models.ActiveMedia) error {

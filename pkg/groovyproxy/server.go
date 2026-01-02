@@ -136,6 +136,7 @@ func Start(
 				t := tokens.Token{
 					Text:     norm.NFC.String(text),
 					ScanTime: time.Now(),
+					Source:   tokens.SourceGMC,
 				}
 				st.SetActiveCard(t)
 				itq <- t

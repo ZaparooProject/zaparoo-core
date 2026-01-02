@@ -31,7 +31,15 @@ const (
 	TypeFeliCa         = "FeliCa"
 	TypeBarcode        = "Barcode"
 	TypeUnknown        = "Unknown"
-	SourcePlaylist     = "Playlist"
+)
+
+// Source constants for token origins.
+const (
+	SourceReader   = "Reader"   // Hardware reader (NFC, barcode, etc.)
+	SourceAPI      = "API"      // JSON-RPC or REST run API
+	SourcePlaylist = "Playlist" // Playlist-triggered launch
+	SourceHook     = "Hook"     // Hook-generated token
+	SourceGMC      = "GMC"      // Groovy Media Center proxy
 )
 
 type Token struct {
@@ -41,6 +49,6 @@ type Token struct {
 	Text     string
 	Data     string
 	Source   string
-	FromAPI  bool
+	ReaderID string // Deterministic ID of the source reader
 	Unsafe   bool
 }

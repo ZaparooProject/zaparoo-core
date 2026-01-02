@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -114,10 +115,11 @@ func runTokenZapScript(
 			return fmt.Errorf("failed to run zapscript command: %w", err)
 		}
 
-		if result.MediaChanged && !token.FromAPI {
-			log.Debug().Any("token", token).Msg("media changed, updating token")
-			log.Info().Msgf("current media launched set to: %s", token.UID)
-			lsq <- &token
+		if result.MediaChanged && token.ReaderID != "" {
+			if r, ok := st.GetReader(token.ReaderID); ok && readers.HasCapability(r, readers.CapabilityRemovable) {
+				log.Debug().Any("token", token).Msg("media changed, updating software token")
+				lsq <- &token
+			}
 		}
 
 		if result.PlaylistChanged {

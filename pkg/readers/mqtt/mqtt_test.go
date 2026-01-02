@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -354,7 +355,7 @@ func TestCreateMessageHandler(t *testing.T) {
 		// Should send scan to channel
 		select {
 		case scan := <-scanQueue:
-			assert.Equal(t, device.ConnectionString(), scan.Source)
+			assert.Equal(t, tokens.SourceReader, scan.Source)
 			assert.NotNil(t, scan.Token)
 			assert.Equal(t, TokenType, scan.Token.Type)
 			assert.Equal(t, "**launch.system:nes", scan.Token.Text)

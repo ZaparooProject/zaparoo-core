@@ -82,7 +82,7 @@ func HandleReaderWriteCancel(
 	allReaders []readers.Reader,
 ) (any, error) {
 	var p models.ReaderWriteCancelParams
-	if err := json.Unmarshal(params, &p); err != nil {
+	if err := validation.ValidateAndUnmarshal(params, &p); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
