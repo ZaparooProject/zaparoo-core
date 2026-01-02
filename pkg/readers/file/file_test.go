@@ -495,17 +495,18 @@ func TestInfo_ReturnsPath(t *testing.T) {
 	assert.Equal(t, "/test/path/token.txt", reader.Info())
 }
 
-func TestDevice_ReturnsConnectionString(t *testing.T) {
+func TestPath_ReturnsPath(t *testing.T) {
 	t.Parallel()
 
 	reader := &Reader{
+		path: "/test/path/token.txt",
 		device: config.ReadersConnect{
 			Driver: "file",
 			Path:   "/test/path/token.txt",
 		},
 	}
 
-	assert.Equal(t, "file:/test/path/token.txt", reader.Device())
+	assert.Equal(t, "/test/path/token.txt", reader.Path())
 }
 
 func TestOpen_ConsecutiveReadErrors_SendsReaderError(t *testing.T) {

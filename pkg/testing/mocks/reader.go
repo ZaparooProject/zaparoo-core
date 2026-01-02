@@ -68,8 +68,8 @@ func (m *MockReader) Detect(devices []string) string {
 	return args.String(0)
 }
 
-// Device returns the device connection string
-func (m *MockReader) Device() string {
+// Path returns the connection path used to open this reader
+func (m *MockReader) Path() string {
 	args := m.Called()
 	return args.String(0)
 }
@@ -158,7 +158,7 @@ func (m *MockReader) SetupBasicMock() {
 	})
 	m.On("IDs").Return([]string{"mock:", "test:"})
 	m.On("Connected").Return(true)
-	m.On("Device").Return("mock://test-device")
+	m.On("Path").Return("/dev/mock-device")
 	m.On("Info").Return("Mock Reader Test Device")
 	m.On("Capabilities").Return([]readers.Capability{readers.CapabilityWrite})
 	m.On("ReaderID").Return("mock-reader-0123456789abcdef")

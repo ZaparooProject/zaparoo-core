@@ -63,8 +63,11 @@ type Reader interface {
 	// connection string. If no device is found, an empty string is returned.
 	// Takes a list of currently connected device strings.
 	Detect([]string) string
-	// Device returns the device connection string.
-	Device() string
+	// Path returns the connection path used to open this reader.
+	// This is the physical resource identifier (e.g., "/dev/ttyUSB0", PCSC
+	// reader name, MQTT broker URL) used to prevent multiple drivers from
+	// competing for the same device.
+	Path() string
 	// Connected returns true if the device is connected and active.
 	Connected() bool
 	// Info returns a string with information about the connected device.

@@ -275,8 +275,8 @@ func (*FileReader) Detect(_ []string) string {
 	return ""
 }
 
-func (r *FileReader) Device() string {
-	return r.device.ConnectionString()
+func (r *FileReader) Path() string {
+	return r.path
 }
 
 func (r *FileReader) Connected() bool {

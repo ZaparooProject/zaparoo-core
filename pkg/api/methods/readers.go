@@ -117,7 +117,7 @@ func HandleReaders(allReaders []readers.Reader) (any, error) {
 		}
 
 		readerInfo := models.ReaderInfo{
-			ID:           r.Device(), // TODO: replace with ReaderID field in next major version
+			ID:           r.Path(), // Legacy field, prefer ReaderID for stable identification
 			ReaderID:     r.ReaderID(),
 			Driver:       r.Metadata().ID,
 			Info:         r.Info(),

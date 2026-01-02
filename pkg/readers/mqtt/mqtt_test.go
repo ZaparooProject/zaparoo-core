@@ -269,8 +269,8 @@ func TestDeviceInfo(t *testing.T) {
 		topic: "zaparoo/tokens",
 	}
 
-	device := reader.Device()
-	assert.Equal(t, "mqtt:broker:1883/topic", device)
+	path := reader.Path()
+	assert.Equal(t, "broker:1883/topic", path)
 
 	info := reader.Info()
 	assert.Equal(t, "MQTT: zaparoo/tokens", info)

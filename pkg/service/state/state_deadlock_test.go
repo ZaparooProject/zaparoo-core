@@ -288,7 +288,7 @@ func (*mockPanicReader) IDs() []string                                          
 func (*mockPanicReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan) error { return nil }
 func (m *mockPanicReader) Close() error                                            { m.closed.Store(true); return nil }
 func (*mockPanicReader) Detect(_ []string) string                                  { return "" }
-func (*mockPanicReader) Device() string                                            { return "mock:panic" }
+func (*mockPanicReader) Path() string                                              { return "/dev/mock-panic" }
 func (*mockPanicReader) ReaderID() string                                          { return "mock-panic-test" }
 func (m *mockPanicReader) Connected() bool                                         { return !m.closed.Load() }
 func (*mockPanicReader) Info() string                                              { return "mock panic reader" }
@@ -356,7 +356,7 @@ func (*mockRacyReader) IDs() []string                                           
 func (*mockRacyReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan) error { return nil }
 func (*mockRacyReader) Close() error                                              { return nil }
 func (*mockRacyReader) Detect(_ []string) string                                  { return "" }
-func (*mockRacyReader) Device() string                                            { return "mock:racy" }
+func (*mockRacyReader) Path() string                                              { return "/dev/mock-racy" }
 func (*mockRacyReader) ReaderID() string                                          { return "mock-racy-test" }
 func (*mockRacyReader) Connected() bool                                           { return true } // Lies!
 func (*mockRacyReader) Info() string                                              { return "mock racy reader" }
@@ -425,7 +425,7 @@ func (m *mockClosableReader) Close() error {
 	return m.closeErr
 }
 func (*mockClosableReader) Detect(_ []string) string           { return "" }
-func (*mockClosableReader) Device() string                     { return "closable:test" }
+func (*mockClosableReader) Path() string                       { return "/dev/closable-test" }
 func (*mockClosableReader) ReaderID() string                   { return "closable-test" }
 func (m *mockClosableReader) Connected() bool                  { return !m.closeCalled.Load() }
 func (*mockClosableReader) Info() string                       { return "mock closable reader" }
@@ -489,7 +489,7 @@ func TestRemoveReader_ClosesAndNotifies(t *testing.T) {
 	lastNotification := received[len(received)-1]
 	assert.Equal(t, models.NotificationReadersDisconnected, lastNotification.Method)
 	assert.Contains(t, string(lastNotification.Params), "closable")
-	assert.Contains(t, string(lastNotification.Params), "closable:test")
+	assert.Contains(t, string(lastNotification.Params), "/dev/closable-test")
 }
 
 // TestRemoveReader_NonExistent verifies RemoveReader handles non-existent readers gracefully.

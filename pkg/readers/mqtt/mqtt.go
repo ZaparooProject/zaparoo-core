@@ -150,8 +150,8 @@ func (*Reader) Detect(_ []string) string {
 	return "" // MQTT doesn't support auto-detection
 }
 
-func (r *Reader) Device() string {
-	return r.device.ConnectionString()
+func (r *Reader) Path() string {
+	return r.device.Path
 }
 
 func (r *Reader) ReaderID() string {

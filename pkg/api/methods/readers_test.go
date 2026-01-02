@@ -450,7 +450,7 @@ func TestHandleReaders(t *testing.T) {
 		t.Parallel()
 
 		m := mocks.NewMockReader()
-		m.On("Device").Return("pn532:/dev/ttyUSB0")
+		m.On("Path").Return("/dev/ttyUSB0")
 		m.On("ReaderID").Return("pn532-a1b2c3d4e5f67890")
 		m.On("Metadata").Return(readers.DriverMetadata{ID: "pn532"})
 		m.On("Info").Return("PN532 on /dev/ttyUSB0")
@@ -469,7 +469,7 @@ func TestHandleReaders(t *testing.T) {
 		require.Len(t, resp.Readers, 1)
 
 		info := resp.Readers[0]
-		assert.Equal(t, "pn532:/dev/ttyUSB0", info.ID)
+		assert.Equal(t, "/dev/ttyUSB0", info.ID)
 		assert.Equal(t, "pn532-a1b2c3d4e5f67890", info.ReaderID)
 		assert.Equal(t, "pn532", info.Driver)
 		assert.Equal(t, "PN532 on /dev/ttyUSB0", info.Info)
@@ -481,7 +481,7 @@ func TestHandleReaders(t *testing.T) {
 		t.Parallel()
 
 		m1 := mocks.NewMockReader()
-		m1.On("Device").Return("pn532:/dev/ttyUSB0")
+		m1.On("Path").Return("/dev/ttyUSB0")
 		m1.On("ReaderID").Return("pn532-a1b2c3d4e5f67890")
 		m1.On("Metadata").Return(readers.DriverMetadata{ID: "pn532"})
 		m1.On("Info").Return("PN532 on /dev/ttyUSB0")
@@ -489,7 +489,7 @@ func TestHandleReaders(t *testing.T) {
 		m1.On("Capabilities").Return([]readers.Capability{readers.CapabilityWrite})
 
 		m2 := mocks.NewMockReader()
-		m2.On("Device").Return("mqtt:localhost:1883/zaparoo/tokens")
+		m2.On("Path").Return("localhost:1883/zaparoo/tokens")
 		m2.On("ReaderID").Return("mqtt-f8e7d6c5b4a39281")
 		m2.On("Metadata").Return(readers.DriverMetadata{ID: "mqtt"})
 		m2.On("Info").Return("MQTT localhost:1883/zaparoo/tokens")
@@ -513,7 +513,7 @@ func TestHandleReaders(t *testing.T) {
 		t.Parallel()
 
 		m := mocks.NewMockReader()
-		m.On("Device").Return("pn532:/dev/ttyUSB0")
+		m.On("Path").Return("/dev/ttyUSB0")
 		m.On("ReaderID").Return("pn532-a1b2c3d4e5f67890")
 		m.On("Metadata").Return(readers.DriverMetadata{ID: "pn532"})
 		m.On("Info").Return("PN532 on /dev/ttyUSB0")
@@ -535,7 +535,7 @@ func TestHandleReaders(t *testing.T) {
 		t.Parallel()
 
 		m := mocks.NewMockReader()
-		m.On("Device").Return("file:/tmp/zaparoo/tokens.txt")
+		m.On("Path").Return("/tmp/zaparoo/tokens.txt")
 		m.On("ReaderID").Return("file-1029384756abcdef")
 		m.On("Metadata").Return(readers.DriverMetadata{ID: "file"})
 		m.On("Info").Return("/tmp/zaparoo/tokens.txt")

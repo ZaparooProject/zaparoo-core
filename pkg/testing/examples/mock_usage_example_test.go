@@ -55,8 +55,8 @@ func TestMockReaderUsage(t *testing.T) {
 	connected := mockReader.Connected()
 	assert.True(t, connected)
 
-	device := mockReader.Device()
-	assert.Equal(t, "mock://test-device", device)
+	path := mockReader.Path()
+	assert.Equal(t, "/dev/mock-device", path)
 
 	info := mockReader.Info()
 	assert.Equal(t, "Mock Reader Test Device", info)

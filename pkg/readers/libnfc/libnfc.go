@@ -403,8 +403,8 @@ func (r *Reader) Detect(connected []string) string {
 	return ""
 }
 
-func (r *Reader) Device() string {
-	return r.conn.ConnectionString()
+func (r *Reader) Path() string {
+	return r.conn.Path
 }
 
 func (r *Reader) Connected() bool {

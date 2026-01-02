@@ -201,8 +201,8 @@ func (*Reader) Detect(_ []string) string {
 	return ""
 }
 
-func (r *Reader) Device() string {
-	return r.device.ConnectionString()
+func (r *Reader) Path() string {
+	return r.path
 }
 
 func (r *Reader) ReaderID() string {
