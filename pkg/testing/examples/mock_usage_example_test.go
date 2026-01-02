@@ -64,6 +64,9 @@ func TestMockReaderUsage(t *testing.T) {
 	capabilities := mockReader.Capabilities()
 	assert.Contains(t, capabilities, readers.CapabilityWrite)
 
+	readerID := mockReader.ReaderID()
+	assert.Contains(t, readerID, "mock-reader")
+
 	// Test with fixtures
 	testToken := fixtures.NewNFCToken()
 
@@ -140,7 +143,7 @@ func TestFixtureCollections(t *testing.T) {
 
 	// Verify the unsafe token is properly marked
 	assert.True(t, tokenCollection.Unsafe.Unsafe)
-	assert.True(t, tokenCollection.API.FromAPI)
+	assert.Empty(t, tokenCollection.API.ReaderID) // API tokens have no ReaderID
 
 	// Test media collections
 	mediaCollection := fixtures.NewMediaCollection()

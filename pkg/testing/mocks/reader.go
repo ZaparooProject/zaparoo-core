@@ -20,9 +20,6 @@
 package mocks
 
 import (
-	"errors"
-	"fmt"
-
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -56,19 +53,13 @@ func (m *MockReader) IDs() []string {
 // Open any necessary connections to the device and start polling
 func (m *MockReader) Open(readerConfig config.ReadersConnect, scanChan chan<- readers.Scan) error {
 	args := m.Called(readerConfig, scanChan)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
+	return args.Error(0) //nolint:wrapcheck // mock returns configured error directly
 }
 
 // Close any open connections to the device and stop polling
 func (m *MockReader) Close() error {
 	args := m.Called()
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
+	return args.Error(0) //nolint:wrapcheck // mock returns configured error directly
 }
 
 // Detect attempts to search for a connected device and returns the device connection string
@@ -98,16 +89,8 @@ func (m *MockReader) Info() string {
 // Write sends a string to the device to be written to a token
 func (m *MockReader) Write(data string) (*tokens.Token, error) {
 	args := m.Called(data)
-	if token, ok := args.Get(0).(*tokens.Token); ok {
-		if err := args.Error(1); err != nil {
-			return token, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return token, nil
-	}
-	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil, errors.New("mock operation failed: no token provided")
+	token, _ := args.Get(0).(*tokens.Token) //nolint:revive // nil is valid when assertion fails
+	return token, args.Error(1)             //nolint:wrapcheck // mock returns configured error directly
 }
 
 // CancelWrite sends a request to cancel an active write request
@@ -127,10 +110,13 @@ func (m *MockReader) Capabilities() []readers.Capability {
 // OnMediaChange is called when the active media changes
 func (m *MockReader) OnMediaChange(media *models.ActiveMedia) error {
 	args := m.Called(media)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
+	return args.Error(0) //nolint:wrapcheck // mock returns configured error directly
+}
+
+// ReaderID returns a deterministic identifier for this reader instance
+func (m *MockReader) ReaderID() string {
+	args := m.Called()
+	return args.String(0)
 }
 
 // Helper methods for testing
@@ -175,4 +161,5 @@ func (m *MockReader) SetupBasicMock() {
 	m.On("Device").Return("mock://test-device")
 	m.On("Info").Return("Mock Reader Test Device")
 	m.On("Capabilities").Return([]readers.Capability{readers.CapabilityWrite})
+	m.On("ReaderID").Return("mock-reader-0123456789abcdef")
 }

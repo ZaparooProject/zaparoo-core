@@ -130,6 +130,7 @@ type TokenResponse struct {
 	UID      string    `json:"uid"`
 	Text     string    `json:"text"`
 	Data     string    `json:"data"`
+	ReaderID string    `json:"readerId,omitempty"`
 }
 
 type PlaytimeLimitReachedParams struct {
@@ -260,6 +261,8 @@ type LogDownloadResponse struct {
 
 type ReaderInfo struct {
 	ID           string   `json:"id"`
+	ReaderID     string   `json:"readerId"`
+	Driver       string   `json:"driver"`
 	Info         string   `json:"info"`
 	Capabilities []string `json:"capabilities"`
 	Connected    bool     `json:"connected"`

@@ -132,7 +132,7 @@ func TestTokensEqual(t *testing.T) {
 				Text:     "Mario Bros",
 				Data:     "extra_data_a",
 				Source:   "reader_a",
-				FromAPI:  true,
+				ReaderID: "",
 				Unsafe:   false,
 			},
 			b: &tokens.Token{
@@ -142,7 +142,7 @@ func TestTokensEqual(t *testing.T) {
 				Text:     "Mario Bros",            // Same Text
 				Data:     "extra_data_b",          // Different data
 				Source:   "reader_b",              // Different source
-				FromAPI:  false,                   // Different FromAPI
+				ReaderID: "pn532-abc123",          // Different ReaderID
 				Unsafe:   true,                    // Different Unsafe
 			},
 			expected: true, // Only UID and Text matter

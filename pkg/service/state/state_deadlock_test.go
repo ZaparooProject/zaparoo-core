@@ -289,6 +289,7 @@ func (*mockPanicReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan) err
 func (m *mockPanicReader) Close() error                                            { m.closed.Store(true); return nil }
 func (*mockPanicReader) Detect(_ []string) string                                  { return "" }
 func (*mockPanicReader) Device() string                                            { return "mock:panic" }
+func (*mockPanicReader) ReaderID() string                                          { return "mock-panic-test" }
 func (m *mockPanicReader) Connected() bool                                         { return !m.closed.Load() }
 func (*mockPanicReader) Info() string                                              { return "mock panic reader" }
 
@@ -329,7 +330,7 @@ func TestNotifyDisplayReaders_SkipsDisconnected(t *testing.T) {
 
 	// Add a mock reader that panics when called after close
 	mockReader := &mockPanicReader{}
-	state.SetReader("mock:panic", mockReader)
+	state.SetReader(mockReader)
 
 	// Close the reader - Connected() will now return false
 	mockReader.closed.Store(true)
@@ -356,6 +357,7 @@ func (*mockRacyReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan) erro
 func (*mockRacyReader) Close() error                                              { return nil }
 func (*mockRacyReader) Detect(_ []string) string                                  { return "" }
 func (*mockRacyReader) Device() string                                            { return "mock:racy" }
+func (*mockRacyReader) ReaderID() string                                          { return "mock-racy-test" }
 func (*mockRacyReader) Connected() bool                                           { return true } // Lies!
 func (*mockRacyReader) Info() string                                              { return "mock racy reader" }
 
@@ -395,7 +397,7 @@ func TestNotifyDisplayReaders_PanicRecovery(t *testing.T) {
 	}()
 
 	// Add a mock reader that lies about Connected() and panics
-	state.SetReader("mock:racy", &mockRacyReader{})
+	state.SetReader(&mockRacyReader{})
 
 	// This should NOT panic - the panic should be recovered
 	assert.NotPanics(t, func() {
@@ -424,6 +426,7 @@ func (m *mockClosableReader) Close() error {
 }
 func (*mockClosableReader) Detect(_ []string) string           { return "" }
 func (*mockClosableReader) Device() string                     { return "closable:test" }
+func (*mockClosableReader) ReaderID() string                   { return "closable-test" }
 func (m *mockClosableReader) Connected() bool                  { return !m.closeCalled.Load() }
 func (*mockClosableReader) Info() string                       { return "mock closable reader" }
 func (*mockClosableReader) Capabilities() []readers.Capability { return nil }
@@ -461,10 +464,11 @@ func TestRemoveReader_ClosesAndNotifies(t *testing.T) {
 
 	// Add a reader
 	mockReader := &mockClosableReader{}
-	state.SetReader("pn532:/dev/ttyUSB0", mockReader)
+	state.SetReader(mockReader)
+	readerID := mockReader.ReaderID()
 
 	// Remove it
-	state.RemoveReader("pn532:/dev/ttyUSB0")
+	state.RemoveReader(readerID)
 
 	// Give notification time to be received
 	time.Sleep(50 * time.Millisecond)
@@ -473,7 +477,7 @@ func TestRemoveReader_ClosesAndNotifies(t *testing.T) {
 	assert.True(t, mockReader.closeCalled.Load(), "reader should have been closed")
 
 	// Verify reader is no longer in state
-	_, exists := state.GetReader("pn532:/dev/ttyUSB0")
+	_, exists := state.GetReader(readerID)
 	assert.False(t, exists, "reader should have been removed from state")
 
 	// Verify notifications were sent (added + removed)
@@ -484,8 +488,8 @@ func TestRemoveReader_ClosesAndNotifies(t *testing.T) {
 	// Last notification should be the removal
 	lastNotification := received[len(received)-1]
 	assert.Equal(t, models.NotificationReadersDisconnected, lastNotification.Method)
-	assert.Contains(t, string(lastNotification.Params), "pn532")
-	assert.Contains(t, string(lastNotification.Params), "/dev/ttyUSB0")
+	assert.Contains(t, string(lastNotification.Params), "closable")
+	assert.Contains(t, string(lastNotification.Params), "closable:test")
 }
 
 // TestRemoveReader_NonExistent verifies RemoveReader handles non-existent readers gracefully.
@@ -538,16 +542,16 @@ func TestRemoveReader_NoDeadlockWithSlowConsumer(t *testing.T) {
 
 	// Add and remove readers rapidly
 	var wg sync.WaitGroup
-	for i := range 5 {
+	for range 5 {
 		wg.Add(1)
-		go func(id int) {
+		go func() {
 			defer wg.Done()
-			device := "test:" + string(rune('A'+id))
 			for range 10 {
-				state.SetReader(device, &mockClosableReader{})
-				state.RemoveReader(device)
+				reader := &mockClosableReader{}
+				state.SetReader(reader)
+				state.RemoveReader(reader.ReaderID())
 			}
-		}(i)
+		}()
 	}
 
 	// Wait with timeout

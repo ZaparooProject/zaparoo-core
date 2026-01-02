@@ -219,9 +219,24 @@ func NewMethodMap() *MethodMap {
 		models.MethodMappingsUpdate: methods.HandleUpdateMapping,
 		models.MethodMappingsReload: methods.HandleReloadMappings,
 		// readers
-		models.MethodReaders:            methods.HandleReaders,
-		models.MethodReadersWrite:       methods.HandleReaderWrite,
-		models.MethodReadersWriteCancel: methods.HandleReaderWriteCancel,
+		models.MethodReaders: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleReaders(env.State.ListReaders())
+		},
+		models.MethodReadersWrite: func(env requests.RequestEnv) (any, error) {
+			ls := env.State.GetLastScanned()
+			return methods.HandleReaderWrite(
+				env.Params,
+				env.State.ListReaders(),
+				&ls,
+				env.State.SetWroteToken,
+			)
+		},
+		models.MethodReadersWriteCancel: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleReaderWriteCancel(
+				env.Params,
+				env.State.ListReaders(),
+			)
+		},
 		// utils
 		models.MethodVersion:     methods.HandleVersion,
 		models.MethodHealthCheck: methods.HandleHealthCheck,
