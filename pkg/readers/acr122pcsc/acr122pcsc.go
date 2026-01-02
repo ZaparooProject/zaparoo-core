@@ -402,8 +402,8 @@ func (r *ACR122PCSC) Detect(connected []string) string {
 	return "acr122pcsc:" + acrs[0]
 }
 
-func (r *ACR122PCSC) Device() string {
-	return r.device.ConnectionString()
+func (r *ACR122PCSC) Path() string {
+	return r.name
 }
 
 func (r *ACR122PCSC) Connected() bool {

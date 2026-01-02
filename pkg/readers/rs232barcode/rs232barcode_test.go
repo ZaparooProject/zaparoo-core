@@ -252,7 +252,7 @@ func TestParseLine(t *testing.T) {
 			assert.Equal(t, tt.expectedUID, token.UID)
 			assert.Equal(t, tt.expectedText, token.Text)
 			assert.Equal(t, tt.expectedUID, token.Data)
-			assert.Equal(t, "rs232barcode:/dev/ttyUSB0", token.Source)
+			assert.Equal(t, tokens.SourceReader, token.Source)
 		})
 	}
 }

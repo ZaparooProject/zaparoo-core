@@ -705,8 +705,7 @@ func TestWriteWithContext_Success(t *testing.T) {
 	assert.Equal(t, text, token.Text, "token should have the written text")
 
 	// Verify token has correct source
-	expectedSource := reader.deviceInfo.ConnectionString()
-	assert.Equal(t, expectedSource, token.Source, "token should have correct source")
+	assert.Equal(t, tokens.SourceReader, token.Source, "token should have correct source")
 
 	// Verify NDEF was written to tag
 	assert.True(t, mockNTAGTag.writeNDEFCalled, "WriteNDEFWithContext should be called")

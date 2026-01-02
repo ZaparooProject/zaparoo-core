@@ -79,8 +79,9 @@ func TestCapabilities(t *testing.T) {
 	reader := &Reader{}
 	capabilities := reader.Capabilities()
 
-	require.Len(t, capabilities, 1)
-	assert.Equal(t, readers.CapabilityWrite, capabilities[0])
+	require.Len(t, capabilities, 2)
+	assert.Contains(t, capabilities, readers.CapabilityWrite)
+	assert.Contains(t, capabilities, readers.CapabilityRemovable)
 }
 
 func TestOnMediaChange(t *testing.T) {
@@ -184,9 +185,9 @@ func TestDevice(t *testing.T) {
 		},
 	}
 
-	result := reader.Device()
+	result := reader.Path()
 
-	assert.Equal(t, "pn532uart:/dev/ttyUSB0", result)
+	assert.Equal(t, "/dev/ttyUSB0", result)
 }
 
 func TestInfo(t *testing.T) {

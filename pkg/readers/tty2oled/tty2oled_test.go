@@ -82,8 +82,9 @@ func TestCapabilities(t *testing.T) {
 	reader := &Reader{}
 	capabilities := reader.Capabilities()
 
-	require.Len(t, capabilities, 1)
-	assert.Equal(t, readers.CapabilityDisplay, capabilities[0])
+	require.Len(t, capabilities, 2)
+	assert.Contains(t, capabilities, readers.CapabilityDisplay)
+	assert.Contains(t, capabilities, readers.CapabilityRemovable)
 }
 
 func TestWrite_NotSupported(t *testing.T) {
@@ -113,7 +114,7 @@ func TestDevice(t *testing.T) {
 		path: "/dev/ttyUSB0",
 	}
 
-	assert.Equal(t, "/dev/ttyUSB0", reader.Device())
+	assert.Equal(t, "/dev/ttyUSB0", reader.Path())
 }
 
 func TestInfo_NotConnected(t *testing.T) {
