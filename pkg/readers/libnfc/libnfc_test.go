@@ -196,8 +196,9 @@ func TestCapabilities(t *testing.T) {
 	reader := NewReader(&config.Instance{})
 	capabilities := reader.Capabilities()
 
-	require.Len(t, capabilities, 1)
-	assert.Equal(t, readers.CapabilityWrite, capabilities[0])
+	require.Len(t, capabilities, 2)
+	assert.Contains(t, capabilities, readers.CapabilityWrite)
+	assert.Contains(t, capabilities, readers.CapabilityRemovable)
 }
 
 func TestOnMediaChange(t *testing.T) {

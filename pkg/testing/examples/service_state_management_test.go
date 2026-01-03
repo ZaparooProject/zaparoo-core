@@ -92,10 +92,11 @@ func TestApplicationStateTransitions(t *testing.T) {
 			},
 			action: func(st *state.State) {
 				mockReader := mocks.NewMockReader()
-				st.SetReader("nfc_reader", mockReader)
+				mockReader.SetupBasicMock()
+				st.SetReader(mockReader)
 			},
 			expectedResult: func(st *state.State) bool {
-				_, exists := st.GetReader("nfc_reader")
+				_, exists := st.GetReader("mock-reader-0123456789abcdef")
 				return exists
 			},
 			description: "Reader connection status should be tracked",
@@ -105,14 +106,15 @@ func TestApplicationStateTransitions(t *testing.T) {
 			setupState: func() *state.State {
 				st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 				mockReader := mocks.NewMockReader()
-				st.SetReader("nfc_reader", mockReader)
+				mockReader.SetupBasicMock()
+				st.SetReader(mockReader)
 				return st
 			},
 			action: func(st *state.State) {
-				st.RemoveReader("nfc_reader")
+				st.RemoveReader("mock-reader-0123456789abcdef")
 			},
 			expectedResult: func(st *state.State) bool {
-				_, exists := st.GetReader("nfc_reader")
+				_, exists := st.GetReader("mock-reader-0123456789abcdef")
 				return !exists
 			},
 			description: "Reader disconnection should be tracked",
@@ -170,9 +172,13 @@ func TestConcurrentStateAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := range 3 {
-				readerName := fmt.Sprintf("reader_%d", i)
+				readerID := fmt.Sprintf("mock-reader-%d", i)
 				mockReader := mocks.NewMockReader()
-				st.SetReader(readerName, mockReader)
+				mockReader.SetupBasicMock()
+				// Override the default ReaderID with a unique one
+				mockReader.On("ReaderID").Unset()
+				mockReader.On("ReaderID").Return(readerID)
+				st.SetReader(mockReader)
 			}
 		}()
 
@@ -218,8 +224,11 @@ func TestConcurrentStateAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			mockReader := mocks.NewMockReader()
-			st.SetReader("concurrent_reader", mockReader)
-			st.RemoveReader("concurrent_reader")
+			mockReader.SetupBasicMock()
+			mockReader.On("ReaderID").Unset()
+			mockReader.On("ReaderID").Return("concurrent-reader")
+			st.SetReader(mockReader)
+			st.RemoveReader("concurrent-reader")
 		}()
 
 		wg.Wait()
@@ -229,7 +238,7 @@ func TestConcurrentStateAccess(t *testing.T) {
 		require.NotNil(t, playlist)
 		assert.Equal(t, playlists[0].Name, playlist.Name)
 
-		_, exists := st.GetReader("concurrent_reader")
+		_, exists := st.GetReader("concurrent-reader")
 		assert.False(t, exists)
 	})
 }
@@ -247,7 +256,8 @@ func TestStateNotificationSystem(t *testing.T) {
 			name: "Reader connected notification",
 			action: func(st *state.State) {
 				mockReader := mocks.NewMockReader()
-				st.SetReader("test_reader", mockReader)
+				mockReader.SetupBasicMock()
+				st.SetReader(mockReader)
 			},
 			description: "Should notify when reader connects",
 		},
@@ -256,9 +266,10 @@ func TestStateNotificationSystem(t *testing.T) {
 			action: func(st *state.State) {
 				// First connect, then disconnect to test the notification
 				mockReader := mocks.NewMockReader()
-				st.SetReader("test_reader", mockReader)
+				mockReader.SetupBasicMock()
+				st.SetReader(mockReader)
 				time.Sleep(5 * time.Millisecond) // Let connect notification process
-				st.RemoveReader("test_reader")
+				st.RemoveReader("mock-reader-0123456789abcdef")
 			},
 			description: "Should notify when reader disconnects",
 		},
@@ -347,13 +358,14 @@ func TestStateValidationAndErrorHandling(t *testing.T) {
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	t.Cleanup(func() { st.StopService() })
 
-	t.Run("Empty reader name handling", func(t *testing.T) {
+	t.Run("Empty reader ID handling", func(t *testing.T) {
 		t.Parallel()
-		// Test with empty reader name
+		// Test with empty reader ID - the mock returns a non-empty ID
 		mockReader := mocks.NewMockReader()
-		st.SetReader("", mockReader)
+		mockReader.SetupBasicMock()
+		st.SetReader(mockReader)
 
-		_, exists := st.GetReader("")
+		_, exists := st.GetReader("mock-reader-0123456789abcdef")
 		// The behavior depends on implementation - just verify it works without crashing
 		assert.IsType(t, true, exists) // Just verify it returns a boolean
 	})
@@ -416,8 +428,10 @@ func TestStateIntegrationWithServices(t *testing.T) {
 
 		// 1. Set reader as connected
 		mockReader := mocks.NewMockReader()
-		st.SetReader("nfc_reader", mockReader)
-		_, exists := st.GetReader("nfc_reader")
+		mockReader.SetupBasicMock()
+		st.SetReader(mockReader)
+		readerID := "mock-reader-0123456789abcdef"
+		_, exists := st.GetReader(readerID)
 		assert.True(t, exists)
 
 		// 2. Process token and update last scanned
@@ -467,22 +481,24 @@ func TestStateIntegrationWithServices(t *testing.T) {
 
 		// Start with connected reader and active token
 		mockReader := mocks.NewMockReader()
-		st.SetReader("nfc_reader", mockReader)
+		mockReader.SetupBasicMock()
+		st.SetReader(mockReader)
+		readerID := "mock-reader-0123456789abcdef"
 		sampleTokens := fixtures.SampleTokens()
 		token := sampleTokens[0]
 		st.SetActiveCard(*token)
 
 		// Verify initial state
-		_, exists := st.GetReader("nfc_reader")
+		_, exists := st.GetReader(readerID)
 		assert.True(t, exists)
 		lastToken := st.GetLastScanned()
 		assert.Equal(t, token.UID, lastToken.UID)
 
 		// Simulate reader disconnection
-		st.RemoveReader("nfc_reader")
+		st.RemoveReader(readerID)
 
 		// Verify disconnection is tracked
-		_, exists = st.GetReader("nfc_reader")
+		_, exists = st.GetReader(readerID)
 		assert.False(t, exists)
 
 		// Token should still be in last scanned (implementation dependent)

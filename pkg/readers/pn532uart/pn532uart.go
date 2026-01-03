@@ -191,7 +191,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 				if r.lastToken != nil {
 					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
 					iq <- readers.Scan{
-						Source:      r.device.ConnectionString(),
+						Source:      tokens.SourceReader,
 						Token:       nil,
 						ReaderError: true,
 					}
@@ -219,7 +219,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 				if zeroScans == maxZeroScans && r.lastToken != nil {
 					if r.lastToken != nil {
 						iq <- readers.Scan{
-							Source: r.device.ConnectionString(),
+							Source: tokens.SourceReader,
 							Token:  nil,
 						}
 						r.lastToken = nil
@@ -312,12 +312,12 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 				Text:     tagText,
 				Data:     hex.EncodeToString(data),
 				ScanTime: time.Now(),
-				Source:   r.device.ConnectionString(),
+				Source:   tokens.SourceReader,
 			}
 
 			if !helpers.TokensEqual(token, r.lastToken) {
 				iq <- readers.Scan{
-					Source: r.device.ConnectionString(),
+					Source: tokens.SourceReader,
 					Token:  token,
 				}
 			}
@@ -428,8 +428,16 @@ func (*PN532UARTReader) Detect(connected []string) string {
 	return ""
 }
 
-func (r *PN532UARTReader) Device() string {
-	return r.device.ConnectionString()
+func (r *PN532UARTReader) Path() string {
+	return r.device.Path
+}
+
+func (r *PN532UARTReader) ReaderID() string {
+	stablePath := helpers.GetUSBTopologyPath(r.device.Path)
+	if stablePath == "" {
+		stablePath = r.device.ConnectionString()
+	}
+	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
 }
 
 func (r *PN532UARTReader) Connected() bool {
@@ -451,7 +459,7 @@ func (*PN532UARTReader) CancelWrite() {
 }
 
 func (*PN532UARTReader) Capabilities() []readers.Capability {
-	return []readers.Capability{}
+	return []readers.Capability{readers.CapabilityRemovable}
 }
 
 func (*PN532UARTReader) OnMediaChange(*models.ActiveMedia) error {

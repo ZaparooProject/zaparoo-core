@@ -25,7 +25,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.bug.st/serial"
@@ -96,10 +98,12 @@ func TestCancelWrite(t *testing.T) {
 func TestCapabilities(t *testing.T) {
 	t.Parallel()
 
-	reader := &SimpleSerialReader{}
+	// Default reader has removable capability enabled
+	reader := NewReader(&config.Instance{})
 	capabilities := reader.Capabilities()
 
-	assert.Empty(t, capabilities, "simpleserial reader has no special capabilities")
+	require.Len(t, capabilities, 1)
+	assert.Contains(t, capabilities, readers.CapabilityRemovable)
 }
 
 func TestOnMediaChange(t *testing.T) {
@@ -137,12 +141,12 @@ func TestParseLine(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name            string
-		line            string
-		expectedUID     string
-		expectedText    string
-		expectToken     bool
-		expectedFromAPI bool
+		name              string
+		line              string
+		expectedUID       string
+		expectedText      string
+		expectToken       bool
+		expectedRemovable bool
 	}{
 		{
 			name:        "empty line",
@@ -165,51 +169,55 @@ func TestParseLine(t *testing.T) {
 			expectToken: false,
 		},
 		{
-			name:         "SCAN with text only (no named args)",
-			line:         "SCAN\t**launch.system:nes",
-			expectToken:  true,
-			expectedText: "**launch.system:nes",
+			name:              "SCAN with text only (no named args)",
+			line:              "SCAN\t**launch.system:nes",
+			expectToken:       true,
+			expectedText:      "**launch.system:nes",
+			expectedRemovable: true,
 		},
 		{
-			name:        "SCAN with uid",
-			line:        "SCAN\tuid=abc123",
-			expectToken: true,
-			expectedUID: "abc123",
+			name:              "SCAN with uid",
+			line:              "SCAN\tuid=abc123",
+			expectToken:       true,
+			expectedUID:       "abc123",
+			expectedRemovable: true,
 		},
 		{
-			name:         "SCAN with text",
-			line:         "SCAN\ttext=hello",
-			expectToken:  true,
-			expectedText: "hello",
+			name:              "SCAN with text",
+			line:              "SCAN\ttext=hello",
+			expectToken:       true,
+			expectedText:      "hello",
+			expectedRemovable: true,
 		},
 		{
-			name:         "SCAN with uid and text",
-			line:         "SCAN\tuid=abc123\ttext=hello world",
-			expectToken:  true,
-			expectedUID:  "abc123",
-			expectedText: "hello world",
+			name:              "SCAN with uid and text",
+			line:              "SCAN\tuid=abc123\ttext=hello world",
+			expectToken:       true,
+			expectedUID:       "abc123",
+			expectedText:      "hello world",
+			expectedRemovable: true,
 		},
 		{
-			name:            "SCAN with removable=no",
-			line:            "SCAN\tuid=abc123\tremovable=no",
-			expectToken:     true,
-			expectedUID:     "abc123",
-			expectedFromAPI: true,
+			name:              "SCAN with removable=no",
+			line:              "SCAN\tuid=abc123\tremovable=no",
+			expectToken:       true,
+			expectedUID:       "abc123",
+			expectedRemovable: false,
 		},
 		{
-			name:            "SCAN with removable=yes",
-			line:            "SCAN\tuid=abc123\tremovable=yes",
-			expectToken:     true,
-			expectedUID:     "abc123",
-			expectedFromAPI: false,
+			name:              "SCAN with removable=yes",
+			line:              "SCAN\tuid=abc123\tremovable=yes",
+			expectToken:       true,
+			expectedUID:       "abc123",
+			expectedRemovable: true,
 		},
 		{
-			name:            "SCAN with all args",
-			line:            "SCAN\tuid=xyz789\ttext=test message\tremovable=no",
-			expectToken:     true,
-			expectedUID:     "xyz789",
-			expectedText:    "test message",
-			expectedFromAPI: true,
+			name:              "SCAN with all args",
+			line:              "SCAN\tuid=xyz789\ttext=test message\tremovable=no",
+			expectToken:       true,
+			expectedUID:       "xyz789",
+			expectedText:      "test message",
+			expectedRemovable: false,
 		},
 	}
 
@@ -223,6 +231,7 @@ func TestParseLine(t *testing.T) {
 					Driver: "simple_serial",
 					Path:   "/dev/ttyUSB0",
 				},
+				removable: true, // default
 			}
 
 			token, err := r.parseLine(tt.line)
@@ -237,8 +246,11 @@ func TestParseLine(t *testing.T) {
 			require.NotNil(t, token)
 			assert.Equal(t, tt.expectedUID, token.UID)
 			assert.Equal(t, tt.expectedText, token.Text)
-			assert.Equal(t, tt.expectedFromAPI, token.FromAPI)
-			assert.Equal(t, "simpleserial:/dev/ttyUSB0", token.Source)
+			assert.Equal(t, tokens.SourceReader, token.Source)
+
+			// Check reader's removable capability was updated
+			hasRemovable := readers.HasCapability(r, readers.CapabilityRemovable)
+			assert.Equal(t, tt.expectedRemovable, hasRemovable)
 		})
 	}
 }
@@ -366,7 +378,7 @@ func TestOpen_ReaderErrorWithActiveToken(t *testing.T) {
 	scan2 := testutils.AssertScanReceived(t, scanQueue, 500*time.Millisecond)
 	assert.Nil(t, scan2.Token, "token should be nil on reader error")
 	assert.True(t, scan2.ReaderError, "ReaderError should be true to prevent on_remove execution")
-	assert.Equal(t, "simpleserial:"+devicePath, scan2.Source)
+	assert.Equal(t, tokens.SourceReader, scan2.Source)
 
 	// Verify reader auto-closed after error
 	time.Sleep(50 * time.Millisecond)
@@ -458,15 +470,15 @@ func TestOpen_MultipleTokens(t *testing.T) {
 
 	// Use custom read function to control timing and avoid token timeout
 	tokenIndex := 0
-	tokens := []string{
+	testTokens := []string{
 		"SCAN\tuid=token1\n",
 		"SCAN\tuid=token2\ttext=second\n",
 		"SCAN\tuid=token1\n", // Same as first, should be deduplicated
 	}
 
 	mockPort.ReadFunc = func(p []byte) (int, error) {
-		if tokenIndex < len(tokens) {
-			data := []byte(tokens[tokenIndex])
+		if tokenIndex < len(testTokens) {
+			data := []byte(testTokens[tokenIndex])
 			tokenIndex++
 			// Small delay to allow processing between tokens
 			time.Sleep(10 * time.Millisecond)
@@ -520,14 +532,14 @@ func TestOpen_DuplicateTokenIgnored(t *testing.T) {
 
 	// Use custom read function to send the same token twice in a row
 	tokenIndex := 0
-	tokens := []string{
+	testTokens := []string{
 		"SCAN\tuid=token1\ttext=first\n",
 		"SCAN\tuid=token1\ttext=first\n", // Exact duplicate, should be ignored
 	}
 
 	mockPort.ReadFunc = func(p []byte) (int, error) {
-		if tokenIndex < len(tokens) {
-			data := []byte(tokens[tokenIndex])
+		if tokenIndex < len(testTokens) {
+			data := []byte(testTokens[tokenIndex])
 			tokenIndex++
 			// Small delay to allow processing between tokens
 			time.Sleep(10 * time.Millisecond)

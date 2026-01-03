@@ -21,7 +21,6 @@ package state
 
 import (
 	"context"
-	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
@@ -152,37 +151,36 @@ func (s *State) SetOnMediaStartHook(hook func(*models.ActiveMedia)) {
 	s.onMediaStartHook = hook
 }
 
-func (s *State) GetReader(device string) (readers.Reader, bool) {
+// GetReader returns the Reader for a given ReaderID.
+func (s *State) GetReader(readerID string) (readers.Reader, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r, ok := s.readers[device]
+	r, ok := s.readers[readerID]
 	return r, ok
 }
 
-func (s *State) SetReader(device string, reader readers.Reader) {
+// SetReader registers a reader using its ReaderID as the key.
+// If a reader with the same ReaderID exists, it is closed first.
+func (s *State) SetReader(reader readers.Reader) {
+	readerID := reader.ReaderID()
+
 	s.mu.Lock()
 
-	r, ok := s.readers[device]
-	if ok {
-		err := r.Close()
+	existing, ok := s.readers[readerID]
+	if ok && existing != nil {
+		err := existing.Close()
 		if err != nil {
-			log.Warn().Err(err).Msg("error closing reader")
+			log.Warn().Err(err).Msg("error closing existing reader")
 		}
 	}
-	s.readers[device] = reader
 
-	ps := strings.SplitN(device, ":", 2)
-	driver := ps[0]
-	var path string
-	if len(ps) > 1 {
-		path = ps[1]
-	}
+	s.readers[readerID] = reader
 
 	// Prepare payload inside lock
 	payload := models.ReaderResponse{
 		Connected: true,
-		Driver:    driver,
-		Path:      path,
+		Driver:    reader.Metadata().ID,
+		Path:      reader.Path(),
 	}
 
 	s.mu.Unlock()
@@ -191,28 +189,26 @@ func (s *State) SetReader(device string, reader readers.Reader) {
 	notifications.ReadersAdded(s.Notifications, payload)
 }
 
-func (s *State) RemoveReader(device string) {
+// RemoveReader removes a reader by its ReaderID and closes it.
+func (s *State) RemoveReader(readerID string) {
 	s.mu.Lock()
 
-	r, ok := s.readers[device]
+	r, ok := s.readers[readerID]
+	var driverID, path string
 	if ok && r != nil {
+		driverID = r.Metadata().ID
+		path = r.Path()
 		err := r.Close()
 		if err != nil {
 			log.Warn().Err(err).Msg("error closing reader")
 		}
 	}
-	ps := strings.SplitN(device, ":", 2)
-	driver := ps[0]
-	var path string
-	if len(ps) > 1 {
-		path = ps[1]
-	}
-	delete(s.readers, device)
+	delete(s.readers, readerID)
 
 	// Prepare payload inside lock
 	payload := models.ReaderResponse{
 		Connected: false,
-		Driver:    driver,
+		Driver:    driverID,
 		Path:      path,
 	}
 
@@ -222,13 +218,14 @@ func (s *State) RemoveReader(device string) {
 	notifications.ReadersRemoved(s.Notifications, payload)
 }
 
-func (s *State) ListReaders() []string {
+// ListReaders returns all registered Reader instances.
+func (s *State) ListReaders() []readers.Reader {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rs := make([]string, 0, len(s.readers))
-	for k := range s.readers {
-		rs = append(rs, k)
+	rs := make([]readers.Reader, 0, len(s.readers))
+	for _, r := range s.readers {
+		rs = append(rs, r)
 	}
 
 	return rs
@@ -360,9 +357,9 @@ func (s *State) notifyDisplayReaders(media *models.ActiveMedia) {
 	// Copy readers list inside lock to avoid holding lock during external calls
 	s.mu.RLock()
 	readersToNotify := make([]readers.Reader, 0, len(s.readers))
-	for _, reader := range s.readers {
-		if reader != nil {
-			readersToNotify = append(readersToNotify, reader)
+	for _, r := range s.readers {
+		if r != nil {
+			readersToNotify = append(readersToNotify, r)
 		}
 	}
 	s.mu.RUnlock()

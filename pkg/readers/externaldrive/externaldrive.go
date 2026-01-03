@@ -492,7 +492,7 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 		Text:     text,
 		Data:     hex.EncodeToString(contents),
 		ScanTime: time.Now(),
-		Source:   r.device.ConnectionString(),
+		Source:   tokens.SourceReader,
 	}
 
 	// Before adding token, verify device is still mounted (race condition protection)
@@ -522,7 +522,7 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 	// Emit scan event
 	select {
 	case r.scanChan <- readers.Scan{
-		Source: r.device.ConnectionString(),
+		Source: tokens.SourceReader,
 		Token:  token,
 	}:
 		log.Info().
@@ -553,7 +553,7 @@ func (r *Reader) handleUnmountEvent(deviceID string) {
 	// Emit removal scan
 	select {
 	case r.scanChan <- readers.Scan{
-		Source: r.device.ConnectionString(),
+		Source: tokens.SourceReader,
 		Token:  nil,
 	}:
 		log.Info().
@@ -587,8 +587,8 @@ func (*Reader) Detect(_ []string) string {
 	return DriverID + ":"
 }
 
-func (r *Reader) Device() string {
-	return r.device.ConnectionString()
+func (r *Reader) Path() string {
+	return r.device.Path
 }
 
 func (r *Reader) Connected() bool {
@@ -612,9 +612,14 @@ func (*Reader) CancelWrite() {
 }
 
 func (*Reader) Capabilities() []readers.Capability {
-	return []readers.Capability{}
+	return []readers.Capability{readers.CapabilityRemovable}
 }
 
 func (*Reader) OnMediaChange(*models.ActiveMedia) error {
 	return nil
+}
+
+func (r *Reader) ReaderID() string {
+	// External drive reader monitors all mounts, use driver ID as stable identifier
+	return readers.GenerateReaderID(r.Metadata().ID, DriverID)
 }

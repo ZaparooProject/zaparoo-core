@@ -30,8 +30,9 @@ import (
 type Capability string
 
 const (
-	CapabilityWrite   Capability = "write"
-	CapabilityDisplay Capability = "display"
+	CapabilityWrite     Capability = "write"
+	CapabilityDisplay   Capability = "display"
+	CapabilityRemovable Capability = "removable"
 )
 
 type DriverMetadata struct {
@@ -62,8 +63,11 @@ type Reader interface {
 	// connection string. If no device is found, an empty string is returned.
 	// Takes a list of currently connected device strings.
 	Detect([]string) string
-	// Device returns the device connection string.
-	Device() string
+	// Path returns the connection path used to open this reader.
+	// This is the physical resource identifier (e.g., "/dev/ttyUSB0", PCSC
+	// reader name, MQTT broker URL) used to prevent multiple drivers from
+	// competing for the same device.
+	Path() string
 	// Connected returns true if the device is connected and active.
 	Connected() bool
 	// Info returns a string with information about the connected device.
@@ -77,6 +81,11 @@ type Reader interface {
 	Capabilities() []Capability
 	// OnMediaChange is called when the active media changes.
 	OnMediaChange(*models.ActiveMedia) error
+	// ReaderID returns a deterministic identifier for this reader instance.
+	// The ID is stable across service restarts when the hardware stays in
+	// the same port. Format: "{driver}-{hash16}" where hash16 is derived
+	// from stable hardware attributes like USB topology path.
+	ReaderID() string
 }
 
 // NormalizeDriverID removes underscores from driver IDs to provide backwards

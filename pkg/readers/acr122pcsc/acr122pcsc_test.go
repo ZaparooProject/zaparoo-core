@@ -24,6 +24,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,7 +88,8 @@ func TestCapabilities(t *testing.T) {
 	reader := &ACR122PCSC{}
 	capabilities := reader.Capabilities()
 
-	assert.Empty(t, capabilities, "ACR122 PC/SC reader has no special capabilities")
+	require.Len(t, capabilities, 1)
+	assert.Contains(t, capabilities, readers.CapabilityRemovable)
 }
 
 func TestOnMediaChange(t *testing.T) {

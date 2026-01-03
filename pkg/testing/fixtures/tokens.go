@@ -36,7 +36,7 @@ func NewNFCToken() *tokens.Token {
 		Text:     "zelda:botw",
 		Data:     "",
 		Source:   "nfc",
-		FromAPI:  false,
+		ReaderID: "pn532-test0123456789ab",
 		Unsafe:   false,
 	}
 }
@@ -50,7 +50,7 @@ func NewMifareToken() *tokens.Token {
 		Text:     "mario:odyssey",
 		Data:     "",
 		Source:   "nfc",
-		FromAPI:  false,
+		ReaderID: "pn532-test0123456789ab",
 		Unsafe:   false,
 	}
 }
@@ -64,7 +64,7 @@ func NewAmiiboToken() *tokens.Token {
 		Text:     "link:amiibo",
 		Data:     "amiibo_data_here",
 		Source:   "nfc",
-		FromAPI:  false,
+		ReaderID: "pn532-test0123456789ab",
 		Unsafe:   false,
 	}
 }
@@ -78,7 +78,7 @@ func NewEmptyToken() *tokens.Token {
 		Text:     "",
 		Data:     "",
 		Source:   "nfc",
-		FromAPI:  false,
+		ReaderID: "pn532-test0123456789ab",
 		Unsafe:   false,
 	}
 }
@@ -92,7 +92,7 @@ func NewAPIToken() *tokens.Token {
 		Text:     "pokemon:emerald",
 		Data:     "",
 		Source:   "api",
-		FromAPI:  true,
+		ReaderID: "", // empty ReaderID indicates API origin
 		Unsafe:   false,
 	}
 }
@@ -106,13 +106,13 @@ func NewUnsafeToken() *tokens.Token {
 		Text:     "../../dangerous/path",
 		Data:     "",
 		Source:   "nfc",
-		FromAPI:  false,
+		ReaderID: "pn532-test0123456789ab",
 		Unsafe:   true,
 	}
 }
 
 // NewCustomToken creates a token with custom values for specific test scenarios
-func NewCustomToken(tokenType, uid, text, source string, fromAPI, unsafe bool) *tokens.Token {
+func NewCustomToken(tokenType, uid, text, source, readerID string, unsafe bool) *tokens.Token {
 	return &tokens.Token{
 		ScanTime: time.Now(),
 		Type:     tokenType,
@@ -120,7 +120,7 @@ func NewCustomToken(tokenType, uid, text, source string, fromAPI, unsafe bool) *
 		Text:     text,
 		Data:     "",
 		Source:   source,
-		FromAPI:  fromAPI,
+		ReaderID: readerID,
 		Unsafe:   unsafe,
 	}
 }

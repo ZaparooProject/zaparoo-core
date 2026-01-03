@@ -55,6 +55,7 @@ func runHook(
 	t := tokens.Token{
 		ScanTime: time.Now(),
 		Text:     script,
+		Source:   tokens.SourceHook,
 	}
 
 	// Ensure InHookContext is set to prevent recursive hook execution

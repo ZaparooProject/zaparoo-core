@@ -103,7 +103,7 @@ func (r *Reader) Open(device config.ReadersConnect, scanQueue chan<- readers.Sca
 		if token.Wait() && token.Error() != nil {
 			log.Error().Err(token.Error()).Msgf("mqtt reader: failed to subscribe to %s", topic)
 			scanQueue <- readers.Scan{
-				Source: device.ConnectionString(),
+				Source: tokens.SourceReader,
 				Error:  fmt.Errorf("failed to subscribe to topic: %w", token.Error()),
 			}
 			return
@@ -150,8 +150,13 @@ func (*Reader) Detect(_ []string) string {
 	return "" // MQTT doesn't support auto-detection
 }
 
-func (r *Reader) Device() string {
-	return r.device.ConnectionString()
+func (r *Reader) Path() string {
+	return r.device.Path
+}
+
+func (r *Reader) ReaderID() string {
+	stablePath := r.broker + "/" + r.topic
+	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
 }
 
 func (r *Reader) Connected() bool {
@@ -197,12 +202,12 @@ func (r *Reader) createMessageHandler() mqtt.MessageHandler {
 			UID:      uuid.New().String(), // Generate unique ID for each message
 			Text:     payload,             // ZapScript content
 			ScanTime: time.Now(),
-			Source:   r.device.ConnectionString(),
+			Source:   tokens.SourceReader,
 		}
 
 		// Send to scan channel
 		r.scanCh <- readers.Scan{
-			Source: r.device.ConnectionString(),
+			Source: tokens.SourceReader,
 			Token:  token,
 		}
 	}

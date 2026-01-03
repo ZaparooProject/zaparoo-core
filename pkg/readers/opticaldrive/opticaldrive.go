@@ -187,7 +187,7 @@ func (r *FileReader) Open(
 						"sending error signal to keep media running")
 					token = nil
 					iq <- readers.Scan{
-						Source:      r.device.ConnectionString(),
+						Source:      tokens.SourceReader,
 						Token:       nil,
 						ReaderError: true,
 					}
@@ -206,7 +206,7 @@ func (r *FileReader) Open(
 				log.Debug().Err(err).Msg("error identifying optical media, removing token")
 				token = nil
 				iq <- readers.Scan{
-					Source: r.device.ConnectionString(),
+					Source: tokens.SourceReader,
 					Token:  nil,
 				}
 			}
@@ -221,7 +221,7 @@ func (r *FileReader) Open(
 				log.Debug().Err(err).Msg("error identifying optical media, removing token")
 				token = nil
 				iq <- readers.Scan{
-					Source: r.device.ConnectionString(),
+					Source: tokens.SourceReader,
 					Token:  nil,
 				}
 			}
@@ -233,7 +233,7 @@ func (r *FileReader) Open(
 				log.Debug().Msg("id is empty, removing token")
 				token = nil
 				iq <- readers.Scan{
-					Source: r.device.ConnectionString(),
+					Source: tokens.SourceReader,
 					Token:  nil,
 				}
 				continue
@@ -254,7 +254,7 @@ func (r *FileReader) Open(
 
 			log.Debug().Msgf("new token: %s", token.UID)
 			iq <- readers.Scan{
-				Source: r.device.ConnectionString(),
+				Source: tokens.SourceReader,
 				Token:  token,
 			}
 		}
@@ -275,8 +275,8 @@ func (*FileReader) Detect(_ []string) string {
 	return ""
 }
 
-func (r *FileReader) Device() string {
-	return r.device.ConnectionString()
+func (r *FileReader) Path() string {
+	return r.path
 }
 
 func (r *FileReader) Connected() bool {
@@ -298,9 +298,13 @@ func (*FileReader) CancelWrite() {
 }
 
 func (*FileReader) Capabilities() []readers.Capability {
-	return []readers.Capability{}
+	return []readers.Capability{readers.CapabilityRemovable}
 }
 
 func (*FileReader) OnMediaChange(*models.ActiveMedia) error {
 	return nil
+}
+
+func (r *FileReader) ReaderID() string {
+	return readers.GenerateReaderID(r.Metadata().ID, r.path)
 }

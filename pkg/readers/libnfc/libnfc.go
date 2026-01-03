@@ -241,7 +241,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 				if r.prevToken != nil {
 					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
 					iq <- readers.Scan{
-						Source:      r.conn.ConnectionString(),
+						Source:      tokens.SourceReader,
 						Token:       nil,
 						ReaderError: true,
 					}
@@ -262,7 +262,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 			if removed {
 				log.Info().Msg("token removed, sending to input queue")
 				iq <- readers.Scan{
-					Source: r.conn.ConnectionString(),
+					Source: tokens.SourceReader,
 					Token:  nil,
 				}
 				r.prevToken = nil
@@ -273,7 +273,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 
 				log.Info().Msg("new token detected, sending to input queue")
 				iq <- readers.Scan{
-					Source: r.conn.ConnectionString(),
+					Source: tokens.SourceReader,
 					Token:  token,
 				}
 				r.prevToken = token
@@ -403,12 +403,12 @@ func (r *Reader) Detect(connected []string) string {
 	return ""
 }
 
-func (r *Reader) Device() string {
-	return r.conn.ConnectionString()
+func (r *Reader) Path() string {
+	return r.conn.Path
 }
 
 func (r *Reader) Connected() bool {
-	return r.pnd != nil && r.pnd.Connection() != ""
+	return r.polling && r.pnd != nil
 }
 
 func (r *Reader) Info() string {
@@ -464,11 +464,21 @@ func (r *Reader) CancelWrite() {
 }
 
 func (*Reader) Capabilities() []readers.Capability {
-	return []readers.Capability{readers.CapabilityWrite}
+	return []readers.Capability{readers.CapabilityWrite, readers.CapabilityRemovable}
 }
 
 func (*Reader) OnMediaChange(*models.ActiveMedia) error {
 	return nil
+}
+
+func (r *Reader) ReaderID() string {
+	connStr := r.conn.ConnectionString()
+	if connStr == "" || connStr == autoConnStr {
+		if r.pnd != nil && r.pnd.Connection() != "" {
+			connStr = r.pnd.Connection()
+		}
+	}
+	return readers.GenerateReaderID(r.Metadata().ID, connStr)
 }
 
 // keep track of serial devices that had failed opens
@@ -667,7 +677,7 @@ func openDeviceWithRetries(device string) (nfc.Device, error) {
 	}
 }
 
-func (r *Reader) pollDevice(
+func (*Reader) pollDevice(
 	pnd *nfc.Device,
 	activeToken *tokens.Token,
 	ttp int,
@@ -747,7 +757,7 @@ func (r *Reader) pollDevice(
 		Text:     tagText,
 		Data:     hex.EncodeToString(record.Bytes),
 		ScanTime: time.Now(),
-		Source:   r.conn.ConnectionString(),
+		Source:   tokens.SourceReader,
 	}
 
 	return card, removed, nil

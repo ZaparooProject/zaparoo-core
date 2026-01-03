@@ -252,6 +252,7 @@ type Reader struct {
 	wg               sync.WaitGroup
 	mutex            syncutil.RWMutex
 	writeMutex       syncutil.Mutex
+	connected        bool
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -375,9 +376,15 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	})
 
 	// Start session
+	r.connected = true
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
+		defer func() {
+			r.mutex.Lock()
+			r.connected = false
+			r.mutex.Unlock()
+		}()
 		if err := r.session.Start(r.ctx); err != nil {
 			if !errors.Is(err, context.Canceled) {
 				logTraceableError(err, "session polling")
@@ -389,7 +396,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 					log.Warn().Msg("reader session error with active token - " +
 						"sending error signal to keep media running")
 					iq <- readers.Scan{
-						Source:      r.deviceInfo.ConnectionString(),
+						Source:      tokens.SourceReader,
 						Token:       nil,
 						ReaderError: true,
 					}
@@ -413,7 +420,7 @@ func (r *Reader) handleTagDetected(detectedTag *pn532.DetectedTag, iq chan<- rea
 func (r *Reader) handleTagRemoved(iq chan<- readers.Scan) {
 	log.Info().Msg("tag removed")
 	iq <- readers.Scan{
-		Source: r.deviceInfo.ConnectionString(),
+		Source: tokens.SourceReader,
 		Token:  nil,
 	}
 
@@ -432,7 +439,7 @@ func (r *Reader) processNewTag(detectedTag *pn532.DetectedTag, iq chan<- readers
 		Text:     ndefText,
 		Data:     hex.EncodeToString(rawData),
 		ScanTime: time.Now(),
-		Source:   r.deviceInfo.ConnectionString(),
+		Source:   tokens.SourceReader,
 	}
 
 	log.Info().Msgf("detected %s tag: %s", token.Type, token.UID)
@@ -441,7 +448,7 @@ func (r *Reader) processNewTag(detectedTag *pn532.DetectedTag, iq chan<- readers
 	}
 
 	iq <- readers.Scan{
-		Source: r.deviceInfo.ConnectionString(),
+		Source: tokens.SourceReader,
 		Token:  token,
 	}
 
@@ -452,6 +459,8 @@ func (r *Reader) processNewTag(detectedTag *pn532.DetectedTag, iq chan<- readers
 
 func (r *Reader) Close() error {
 	r.mutex.Lock()
+
+	r.connected = false
 
 	if r.cancel != nil {
 		r.cancel()
@@ -544,16 +553,28 @@ func (*Reader) Detect(connected []string) string {
 	return ""
 }
 
-func (r *Reader) Device() string {
+func (r *Reader) Path() string {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	return r.deviceInfo.ConnectionString()
+	return r.deviceInfo.Path
+}
+
+func (r *Reader) ReaderID() string {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	stablePath := helpers.GetUSBTopologyPath(r.deviceInfo.Path)
+	if stablePath == "" {
+		stablePath = r.deviceInfo.ConnectionString()
+	}
+
+	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
 }
 
 func (r *Reader) Connected() bool {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	return r.device != nil && r.ctx != nil && r.ctx.Err() == nil
+	return r.connected && r.device != nil
 }
 
 func (r *Reader) Info() string {
@@ -626,7 +647,7 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 				Text:     text,
 				Type:     r.convertTagType(tagType),
 				ScanTime: time.Now(),
-				Source:   r.deviceInfo.ConnectionString(),
+				Source:   tokens.SourceReader,
 			}
 
 			return nil
@@ -653,7 +674,7 @@ func (r *Reader) CancelWrite() {
 }
 
 func (*Reader) Capabilities() []readers.Capability {
-	return []readers.Capability{readers.CapabilityWrite}
+	return []readers.Capability{readers.CapabilityWrite, readers.CapabilityRemovable}
 }
 
 func (*Reader) OnMediaChange(*models.ActiveMedia) error {

@@ -144,7 +144,8 @@ func TestCapabilities(t *testing.T) {
 	reader := &Reader{}
 	capabilities := reader.Capabilities()
 
-	assert.Empty(t, capabilities, "externaldrive reader has no special capabilities")
+	require.Len(t, capabilities, 1)
+	assert.Contains(t, capabilities, readers.CapabilityRemovable)
 }
 
 func TestWrite_NotSupported(t *testing.T) {
@@ -787,10 +788,11 @@ func TestDevice(t *testing.T) {
 	reader := NewReader(&config.Instance{})
 	reader.device = config.ReadersConnect{
 		Driver: DriverID,
+		Path:   "/mnt/usb",
 	}
 
-	device := reader.Device()
-	assert.Contains(t, device, DriverID)
+	path := reader.Path()
+	assert.Equal(t, "/mnt/usb", path)
 }
 
 func TestRetryConfiguration(t *testing.T) {

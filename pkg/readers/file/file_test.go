@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,7 +71,8 @@ func TestCapabilities(t *testing.T) {
 	reader := &Reader{}
 	capabilities := reader.Capabilities()
 
-	assert.Empty(t, capabilities, "file reader has no special capabilities")
+	require.Len(t, capabilities, 1)
+	assert.Contains(t, capabilities, readers.CapabilityRemovable)
 }
 
 func TestWrite_NotSupported(t *testing.T) {
@@ -493,17 +495,18 @@ func TestInfo_ReturnsPath(t *testing.T) {
 	assert.Equal(t, "/test/path/token.txt", reader.Info())
 }
 
-func TestDevice_ReturnsConnectionString(t *testing.T) {
+func TestPath_ReturnsPath(t *testing.T) {
 	t.Parallel()
 
 	reader := &Reader{
+		path: "/test/path/token.txt",
 		device: config.ReadersConnect{
 			Driver: "file",
 			Path:   "/test/path/token.txt",
 		},
 	}
 
-	assert.Equal(t, "file:/test/path/token.txt", reader.Device())
+	assert.Equal(t, "/test/path/token.txt", reader.Path())
 }
 
 func TestOpen_ConsecutiveReadErrors_SendsReaderError(t *testing.T) {

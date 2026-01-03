@@ -117,7 +117,7 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 	}
 
 	t.ScanTime = time.Now()
-	t.FromAPI = true
+	t.Source = tokens.SourceAPI
 
 	// TODO: how do we report back errors? put channel in queue
 	env.State.SetActiveCard(t)
@@ -161,7 +161,7 @@ func HandleRunRest(
 		t := tokens.Token{
 			Text:     norm.NFC.String(text),
 			ScanTime: time.Now(),
-			FromAPI:  true,
+			Source:   tokens.SourceAPI,
 		}
 
 		st.SetActiveCard(t)

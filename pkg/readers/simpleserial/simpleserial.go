@@ -46,13 +46,15 @@ type SimpleSerialReader struct {
 	device      config.ReadersConnect
 	path        string
 	polling     bool
-	mu          syncutil.RWMutex // protects polling and port
+	removable   bool             // whether removal detection is supported, updated per-scan
+	mu          syncutil.RWMutex // protects polling, port, and removable
 }
 
 func NewReader(cfg *config.Instance) *SimpleSerialReader {
 	return &SimpleSerialReader{
 		cfg:         cfg,
 		portFactory: testutils.DefaultSerialPortFactory,
+		removable:   true, // default to removable unless explicitly set to no
 	}
 }
 
@@ -89,7 +91,7 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 	t := tokens.Token{
 		Data:     line,
 		ScanTime: time.Now(),
-		Source:   r.device.ConnectionString(),
+		Source:   tokens.SourceReader,
 	}
 
 	ps := strings.Split(args, "\t")
@@ -104,9 +106,9 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 			t.Text = ps[i][5:]
 			hasArg = true
 		case strings.HasPrefix(ps[i], "removable="):
-			// TODO: this isn't really what removable means, but it works
-			//		 for now. it will block shell commands though
-			t.FromAPI = ps[i][10:] == "no"
+			r.mu.Lock()
+			r.removable = ps[i][10:] != "no"
+			r.mu.Unlock()
 			hasArg = true
 		}
 	}
@@ -171,7 +173,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 				if r.lastToken != nil {
 					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
 					iq <- readers.Scan{
-						Source:      r.device.ConnectionString(),
+						Source:      tokens.SourceReader,
 						Token:       nil,
 						ReaderError: true,
 					}
@@ -198,7 +200,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 
 					if t != nil && !helpers.TokensEqual(t, r.lastToken) {
 						iq <- readers.Scan{
-							Source: r.device.ConnectionString(),
+							Source: tokens.SourceReader,
 							Token:  t,
 						}
 					}
@@ -217,7 +219,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 			// systems, serial data processing delays could cause spurious token removal events.
 			if r.lastToken != nil && time.Since(r.lastToken.ScanTime) > 1*time.Second {
 				iq <- readers.Scan{
-					Source: r.device.ConnectionString(),
+					Source: tokens.SourceReader,
 					Token:  nil,
 				}
 				r.lastToken = nil
@@ -247,8 +249,16 @@ func (*SimpleSerialReader) Detect(_ []string) string {
 	return ""
 }
 
-func (r *SimpleSerialReader) Device() string {
-	return r.device.ConnectionString()
+func (r *SimpleSerialReader) Path() string {
+	return r.path
+}
+
+func (r *SimpleSerialReader) ReaderID() string {
+	stablePath := helpers.GetUSBTopologyPath(r.path)
+	if stablePath == "" {
+		stablePath = r.device.ConnectionString()
+	}
+	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
 }
 
 func (r *SimpleSerialReader) Connected() bool {
@@ -269,7 +279,12 @@ func (*SimpleSerialReader) CancelWrite() {
 	// no-op, writing not supported
 }
 
-func (*SimpleSerialReader) Capabilities() []readers.Capability {
+func (r *SimpleSerialReader) Capabilities() []readers.Capability {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.removable {
+		return []readers.Capability{readers.CapabilityRemovable}
+	}
 	return []readers.Capability{}
 }
 

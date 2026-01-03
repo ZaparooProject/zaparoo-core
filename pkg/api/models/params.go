@@ -74,7 +74,12 @@ type UpdateMappingParams struct {
 }
 
 type ReaderWriteParams struct {
-	Text string `json:"text" validate:"required"`
+	ReaderID *string `json:"readerId,omitempty"`
+	Text     string  `json:"text" validate:"required"`
+}
+
+type ReaderWriteCancelParams struct {
+	ReaderID *string `json:"readerId,omitempty"`
 }
 
 type UpdateSettingsParams struct {

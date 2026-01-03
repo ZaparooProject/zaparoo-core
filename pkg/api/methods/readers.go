@@ -21,71 +21,46 @@ package methods
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
-func HandleReaderWrite(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
-	log.Info().Msg("received reader write request")
-
-	var params models.ReaderWriteParams
-	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		log.Warn().Err(err).Msg("invalid params")
+func HandleReaderWrite(
+	params json.RawMessage,
+	allReaders []readers.Reader,
+	lastScanned *tokens.Token,
+	setWroteToken func(*tokens.Token),
+) (any, error) {
+	var p models.ReaderWriteParams
+	if err := validation.ValidateAndUnmarshal(params, &p); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
-	rs := env.State.ListReaders()
-	if len(rs) == 0 {
-		return nil, errors.New("no readers connected")
-	}
+	var r readers.Reader
+	var err error
 
-	// Filter readers that have write capability
-	var writeCapableReaders []string
-	for _, readerID := range rs {
-		reader, ok := env.State.GetReader(readerID)
-		if !ok || reader == nil {
-			continue
+	if p.ReaderID != nil && *p.ReaderID != "" {
+		r, err = readers.SelectWriterStrict(allReaders, *p.ReaderID)
+	} else {
+		var prefs []string
+		// TODO: remove IsZero check when lastScanned is token pointer in state
+		if lastScanned != nil && !lastScanned.ScanTime.IsZero() && lastScanned.ReaderID != "" {
+			prefs = []string{lastScanned.ReaderID}
 		}
-
-		capabilities := reader.Capabilities()
-		for _, capability := range capabilities {
-			if capability == readers.CapabilityWrite {
-				writeCapableReaders = append(writeCapableReaders, readerID)
-				break
-			}
-		}
+		r, err = readers.SelectWriterPreferred(allReaders, prefs)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to select writer: %w", err)
 	}
 
-	if len(writeCapableReaders) == 0 {
-		return nil, errors.New("no readers with write capability connected")
-	}
-
-	// Select the last used reader from the write-capable list
-	rid := writeCapableReaders[0]
-	lt := env.State.GetLastScanned()
-
-	if !lt.ScanTime.IsZero() && !lt.FromAPI {
-		// Check if the last used reader is in our write-capable list
-		for _, writeReader := range writeCapableReaders {
-			if writeReader == lt.Source {
-				rid = lt.Source
-				break
-			}
-		}
-	}
-
-	reader, ok := env.State.GetReader(rid)
-	if !ok || reader == nil {
-		return nil, errors.New("reader not connected: " + rid)
-	}
-
-	t, err := reader.Write(params.Text)
+	t, err := r.Write(p.Text)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			log.Debug().Err(err).Msg("tag write cancelled")
@@ -96,54 +71,57 @@ func HandleReaderWrite(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	if t != nil {
-		env.State.SetWroteToken(t)
+		setWroteToken(t)
 	}
 
 	return NoContent{}, nil
 }
 
-//nolint:gocritic // single-use parameter in API handler
-func HandleReaderWriteCancel(env requests.RequestEnv) (any, error) {
-	log.Info().Msg("received reader write cancel request")
-
-	rs := env.State.ListReaders()
-	if len(rs) == 0 {
-		return nil, errors.New("no readers connected")
+func HandleReaderWriteCancel(
+	params json.RawMessage,
+	allReaders []readers.Reader,
+) (any, error) {
+	var p models.ReaderWriteCancelParams
+	if err := validation.ValidateAndUnmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
-	rid := rs[0]
-	reader, ok := env.State.GetReader(rid)
-	if !ok || reader == nil {
-		return nil, errors.New("reader not connected: " + rs[0])
+	if p.ReaderID != nil && *p.ReaderID != "" {
+		r, err := readers.SelectWriterStrict(allReaders, *p.ReaderID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to select reader: %w", err)
+		}
+		r.CancelWrite()
+	} else {
+		writeCapable := readers.FilterByCapability(allReaders, readers.CapabilityWrite)
+		for _, r := range writeCapable {
+			r.CancelWrite()
+		}
 	}
-
-	reader.CancelWrite()
 
 	return NoContent{}, nil
 }
 
-func HandleReaders(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
-	log.Info().Msg("received readers request")
+func HandleReaders(allReaders []readers.Reader) (any, error) {
+	readerInfos := make([]models.ReaderInfo, 0, len(allReaders))
 
-	readerIDs := env.State.ListReaders()
-	readerInfos := make([]models.ReaderInfo, 0, len(readerIDs))
-
-	for _, readerID := range readerIDs {
-		reader, ok := env.State.GetReader(readerID)
-		if !ok || reader == nil {
+	for _, r := range allReaders {
+		if r == nil {
 			continue
 		}
 
-		capabilities := reader.Capabilities()
+		capabilities := r.Capabilities()
 		capabilityStrings := make([]string, len(capabilities))
 		for i, capability := range capabilities {
 			capabilityStrings[i] = string(capability)
 		}
 
 		readerInfo := models.ReaderInfo{
-			ID:           readerID,
-			Info:         reader.Info(),
-			Connected:    reader.Connected(),
+			ID:           r.Path(), // Legacy field, prefer ReaderID for stable identification
+			ReaderID:     r.ReaderID(),
+			Driver:       r.Metadata().ID,
+			Info:         r.Info(),
+			Connected:    r.Connected(),
 			Capabilities: capabilityStrings,
 		}
 

@@ -445,7 +445,7 @@ func (r *Reader) Detect(connected []string) string {
 	return ""
 }
 
-func (r *Reader) Device() string {
+func (r *Reader) Path() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.path
@@ -477,7 +477,15 @@ func (*Reader) CancelWrite() {
 }
 
 func (*Reader) Capabilities() []readers.Capability {
-	return []readers.Capability{readers.CapabilityDisplay}
+	return []readers.Capability{readers.CapabilityDisplay, readers.CapabilityRemovable}
+}
+
+func (r *Reader) ReaderID() string {
+	stablePath := helpers.GetUSBTopologyPath(r.getDevicePath())
+	if stablePath == "" {
+		stablePath = r.getDevicePath()
+	}
+	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
 }
 
 func (r *Reader) OnMediaChange(media *models.ActiveMedia) error {

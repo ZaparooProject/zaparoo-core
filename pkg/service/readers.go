@@ -21,7 +21,6 @@ package service
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -45,6 +44,16 @@ type toConnectDevice struct {
 	device           config.ReadersConnect
 }
 
+// isPathConnected checks if any connected reader is using the given path.
+func isPathConnected(rs []readers.Reader, path string) bool {
+	for _, r := range rs {
+		if r != nil && r.Path() == path {
+			return true
+		}
+	}
+	return false
+}
+
 func connectReaders(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -63,7 +72,7 @@ func connectReaders(
 	}
 
 	for _, device := range cfg.Readers().Connect {
-		if !helpers.Contains(rs, device.ConnectionString()) &&
+		if !isPathConnected(rs, device.Path) &&
 			!helpers.Contains(toConnectStrs(), device.ConnectionString()) {
 			log.Debug().Msgf("config device not connected, adding: %s", device)
 			toConnect = append(toConnect, toConnectDevice{
@@ -91,7 +100,7 @@ func connectReaders(
 
 	// user defined readers
 	for _, device := range validToConnect {
-		if _, ok := st.GetReader(device.connectionString); !ok {
+		if !isPathConnected(st.ListReaders(), device.device.Path) {
 			rt := readers.NormalizeDriverID(device.device.Driver)
 			for _, r := range pl.SupportedReaders(cfg) {
 				metadata := r.Metadata()
@@ -120,7 +129,7 @@ func connectReaders(
 						log.Warn().Msgf("error opening reader: %s", err)
 						continue
 					}
-					st.SetReader(device.connectionString, r)
+					st.SetReader(r)
 					log.Info().Msgf("opened reader: %s", device)
 					break
 				}
@@ -132,16 +141,6 @@ func connectReaders(
 	if cfg.AutoDetect() && autoDetector != nil {
 		if err := autoDetector.DetectReaders(pl, cfg, st, iq); err != nil {
 			return fmt.Errorf("auto-detect failed: %w", err)
-		}
-	}
-
-	// list readers for update hook
-	ids := st.ListReaders()
-	rsm := make(map[string]*readers.Reader)
-	for _, id := range ids {
-		r, ok := st.GetReader(id)
-		if ok && r != nil {
-			rsm[id] = &r
 		}
 	}
 
@@ -203,7 +202,17 @@ func timedExit(
 		}
 	}
 
-	if !cfg.HoldModeEnabled() || st.GetLastScanned().FromAPI {
+	if !cfg.HoldModeEnabled() {
+		return exitTimer
+	}
+
+	// Check if the reader supports removal detection
+	lastToken := st.GetLastScanned()
+	if lastToken.ReaderID == "" {
+		return exitTimer
+	}
+	r, ok := st.GetReader(lastToken.ReaderID)
+	if !ok || !readers.HasCapability(r, readers.CapabilityRemovable) {
 		return exitTimer
 	}
 
@@ -304,13 +313,10 @@ func readerManager(
 				// Check for wake from sleep and reconnect all readers if detected
 				if sleepMonitor.Check() {
 					log.Info().Msg("detected wake from sleep, reconnecting all readers")
-					for _, device := range st.ListReaders() {
-						if r, ok := st.GetReader(device); ok && r != nil {
-							if closeErr := r.Close(); closeErr != nil {
-								log.Error().Err(closeErr).Str("device", device).Msg("error closing reader after sleep")
-							}
+					for _, r := range st.ListReaders() {
+						if r != nil {
+							st.RemoveReader(r.ReaderID())
 						}
-						st.RemoveReader(device)
 					}
 					lastReaderCount = 0
 				}
@@ -331,16 +337,14 @@ func readerManager(
 						readerConnectAttempts, cfg.AutoDetect())
 				}
 
-				for _, device := range rs {
-					r, ok := st.GetReader(device)
-					if ok && r != nil && !r.Connected() {
-						log.Debug().Msgf("pruning disconnected reader: %s", device)
-						st.RemoveReader(device)
+				for _, r := range rs {
+					if r != nil && !r.Connected() {
+						readerID := r.ReaderID()
+						log.Debug().Msgf("pruning disconnected reader: %s", readerID)
+						st.RemoveReader(readerID)
 						if autoDetector != nil {
-							if parts := strings.SplitN(device, ":", 2); len(parts) == 2 {
-								autoDetector.ClearDevice(parts[1])
-							}
-							autoDetector.ClearFailedConnection(device)
+							autoDetector.ClearPath(r.Path())
+							autoDetector.ClearFailedConnection(readerID)
 						}
 					}
 				}
@@ -467,9 +471,8 @@ preprocessing:
 
 	// daemon shutdown
 	rs := st.ListReaders()
-	for _, device := range rs {
-		r, ok := st.GetReader(device)
-		if ok && r != nil {
+	for _, r := range rs {
+		if r != nil {
 			err := r.Close()
 			if err != nil {
 				log.Warn().Msg("error closing reader")

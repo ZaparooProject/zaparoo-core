@@ -59,7 +59,7 @@ func (ad *AutoDetector) DetectReaders(
 	}
 
 	connectedReaders := st.ListReaders()
-	ad.updateConnected(connectedReaders)
+	ad.updateConnectedFromReaders(connectedReaders)
 
 	var detectedDevices []string
 	var detectionErrors []string
@@ -83,8 +83,16 @@ func (ad *AutoDetector) DetectReaders(
 
 		readerFailedConnections := ad.getFailedConnectionsForReader(reader.IDs())
 
+		// Build exclude list from connected reader paths and failed connections.
+		// The exclude list uses "driver:path" format for compatibility with Detect()
+		// implementations that parse connection strings.
 		excludeList := make([]string, 0, len(connectedReaders)+len(readerFailedConnections))
-		excludeList = append(excludeList, connectedReaders...)
+		for _, r := range connectedReaders {
+			if r != nil {
+				// Reconstruct connection string format from reader metadata and path
+				excludeList = append(excludeList, r.Metadata().ID+":"+r.Path())
+			}
+		}
 		excludeList = append(excludeList, readerFailedConnections...)
 		detect := reader.Detect(excludeList)
 		if detect == "" {
@@ -102,17 +110,17 @@ func (ad *AutoDetector) DetectReaders(
 			detectedDevices = append(detectedDevices, detect)
 		}
 
-		devicePath := parts[1]
-		driverType := parts[0]
+		path := parts[1]
+		driverID := parts[0]
 
-		if ad.isConnected(devicePath) {
+		if ad.isConnected(path) {
 			if closeErr := reader.Close(); closeErr != nil {
 				log.Debug().Err(closeErr).Msg("error closing unused reader")
 			}
 			continue
 		}
 
-		if err := ad.connectReader(reader, driverType, devicePath, detect, st, iq); err != nil {
+		if err := ad.connectReader(reader, driverID, path, detect, st, iq); err != nil {
 			log.Trace().
 				Str("device", detect).
 				Err(err).
@@ -122,14 +130,14 @@ func (ad *AutoDetector) DetectReaders(
 		}
 	}
 
-	ad.logDetectionResults(detectedDevices, connectedReaders, detectionErrors)
+	ad.logDetectionResults(detectedDevices, detectionErrors)
 
 	return nil
 }
 
 // logDetectionResults provides intelligent logging that only logs when detection state changes
 // or when a heartbeat is needed to show auto-detect is still active
-func (ad *AutoDetector) logDetectionResults(detectedDevices, _, _ []string) {
+func (ad *AutoDetector) logDetectionResults(detectedDevices, _ []string) {
 	// Create a summary of the current detection state (only track what's relevant for changes)
 	summary := fmt.Sprintf("new_detected:%d total_failed:%d",
 		len(detectedDevices), len(ad.failed))
@@ -161,13 +169,13 @@ func (ad *AutoDetector) logDetectionResults(detectedDevices, _, _ []string) {
 
 func (ad *AutoDetector) connectReader(
 	reader readers.Reader,
-	driverType, devicePath, connectionString string,
+	driverID, path, connectionString string,
 	st *state.State,
 	iq chan<- readers.Scan,
 ) error {
 	device := config.ReadersConnect{
-		Driver: driverType,
-		Path:   devicePath,
+		Driver: driverID,
+		Path:   path,
 	}
 
 	err := reader.Open(device, iq)
@@ -176,11 +184,11 @@ func (ad *AutoDetector) connectReader(
 	}
 
 	if reader.Connected() {
-		st.SetReader(connectionString, reader)
-		ad.setConnected(devicePath)
+		st.SetReader(reader)
+		ad.setConnected(path)
 		// Clear any previous failed attempts for this connection
 		ad.ClearFailedConnection(connectionString)
-		log.Info().Msgf("successfully connected auto-detected reader: %s", connectionString)
+		log.Info().Msgf("successfully connected auto-detected reader: %s", reader.ReaderID())
 		return nil
 	}
 
@@ -191,35 +199,34 @@ func (ad *AutoDetector) connectReader(
 	return fmt.Errorf("reader failed to connect: %s", connectionString)
 }
 
-func (ad *AutoDetector) updateConnected(connectedReaders []string) {
+func (ad *AutoDetector) updateConnectedFromReaders(connectedReaders []readers.Reader) {
 	ad.mu.Lock()
 	defer ad.mu.Unlock()
 
 	ad.connected = make(map[string]bool)
-	for _, connStr := range connectedReaders {
-		parts := strings.SplitN(connStr, ":", 2)
-		if len(parts) == 2 {
-			ad.connected[parts[1]] = true
+	for _, r := range connectedReaders {
+		if r != nil {
+			ad.connected[r.Path()] = true
 		}
 	}
 }
 
-func (ad *AutoDetector) isConnected(devicePath string) bool {
+func (ad *AutoDetector) isConnected(path string) bool {
 	ad.mu.RLock()
 	defer ad.mu.RUnlock()
-	return ad.connected[devicePath]
+	return ad.connected[path]
 }
 
-func (ad *AutoDetector) setConnected(devicePath string) {
+func (ad *AutoDetector) setConnected(path string) {
 	ad.mu.Lock()
 	defer ad.mu.Unlock()
-	ad.connected[devicePath] = true
+	ad.connected[path] = true
 }
 
-func (ad *AutoDetector) ClearDevice(devicePath string) {
+func (ad *AutoDetector) ClearPath(path string) {
 	ad.mu.Lock()
 	defer ad.mu.Unlock()
-	delete(ad.connected, devicePath)
+	delete(ad.connected, path)
 }
 
 func (ad *AutoDetector) setFailed(connectionString string) {

@@ -185,7 +185,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 				if r.lastToken != nil {
 					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
 					iq <- readers.Scan{
-						Source:      r.device.ConnectionString(),
+						Source:      tokens.SourceReader,
 						Token:       nil,
 						ReaderError: true,
 					}
@@ -205,7 +205,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 				if r.lastToken != nil {
 					log.Warn().Msg("reader disconnected with active token - sending error signal to keep media running")
 					iq <- readers.Scan{
-						Source:      r.device.ConnectionString(),
+						Source:      tokens.SourceReader,
 						Token:       nil,
 						ReaderError: true,
 					}
@@ -304,11 +304,11 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 				UID:      hex.EncodeToString(uid),
 				Text:     text,
 				ScanTime: time.Now(),
-				Source:   r.device.ConnectionString(),
+				Source:   tokens.SourceReader,
 			}
 
 			iq <- readers.Scan{
-				Source: r.device.ConnectionString(),
+				Source: tokens.SourceReader,
 				Token:  token,
 			}
 
@@ -340,7 +340,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 			}
 
 			iq <- readers.Scan{
-				Source: r.device.ConnectionString(),
+				Source: tokens.SourceReader,
 				Token:  nil,
 			}
 
@@ -402,8 +402,8 @@ func (r *ACR122PCSC) Detect(connected []string) string {
 	return "acr122pcsc:" + acrs[0]
 }
 
-func (r *ACR122PCSC) Device() string {
-	return r.device.ConnectionString()
+func (r *ACR122PCSC) Path() string {
+	return r.name
 }
 
 func (r *ACR122PCSC) Connected() bool {
@@ -425,9 +425,13 @@ func (*ACR122PCSC) CancelWrite() {
 }
 
 func (*ACR122PCSC) Capabilities() []readers.Capability {
-	return []readers.Capability{}
+	return []readers.Capability{readers.CapabilityRemovable}
 }
 
 func (*ACR122PCSC) OnMediaChange(*models.ActiveMedia) error {
 	return nil
+}
+
+func (r *ACR122PCSC) ReaderID() string {
+	return readers.GenerateReaderID(r.Metadata().ID, r.name)
 }

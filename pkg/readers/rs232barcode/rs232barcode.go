@@ -70,7 +70,7 @@ func (*Reader) IDs() []string {
 	return []string{"rs232barcode", "rs232_barcode"}
 }
 
-func (r *Reader) parseLine(line string) (*tokens.Token, error) {
+func (*Reader) parseLine(line string) (*tokens.Token, error) {
 	line = strings.TrimSpace(line)
 	line = strings.Trim(line, "\r")
 
@@ -89,7 +89,7 @@ func (r *Reader) parseLine(line string) (*tokens.Token, error) {
 		Text:     line,
 		Data:     line,
 		ScanTime: time.Now(),
-		Source:   r.device.ConnectionString(),
+		Source:   tokens.SourceReader,
 	}
 
 	return &t, nil
@@ -175,7 +175,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 							if t != nil {
 								log.Debug().Msgf("barcode scanned: %s", t.UID)
 								iq <- readers.Scan{
-									Source: r.device.ConnectionString(),
+									Source: tokens.SourceReader,
 									Token:  t,
 								}
 							}
@@ -231,8 +231,16 @@ func (*Reader) Detect(_ []string) string {
 	return ""
 }
 
-func (r *Reader) Device() string {
-	return r.device.ConnectionString()
+func (r *Reader) Path() string {
+	return r.path
+}
+
+func (r *Reader) ReaderID() string {
+	stablePath := helpers.GetUSBTopologyPath(r.path)
+	if stablePath == "" {
+		stablePath = r.device.ConnectionString()
+	}
+	return readers.GenerateReaderID(r.Metadata().ID, stablePath)
 }
 
 func (r *Reader) Connected() bool {
