@@ -252,6 +252,7 @@ type Reader struct {
 	wg               sync.WaitGroup
 	mutex            syncutil.RWMutex
 	writeMutex       syncutil.Mutex
+	connected        bool
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -375,9 +376,15 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	})
 
 	// Start session
+	r.connected = true
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
+		defer func() {
+			r.mutex.Lock()
+			r.connected = false
+			r.mutex.Unlock()
+		}()
 		if err := r.session.Start(r.ctx); err != nil {
 			if !errors.Is(err, context.Canceled) {
 				logTraceableError(err, "session polling")
@@ -452,6 +459,8 @@ func (r *Reader) processNewTag(detectedTag *pn532.DetectedTag, iq chan<- readers
 
 func (r *Reader) Close() error {
 	r.mutex.Lock()
+
+	r.connected = false
 
 	if r.cancel != nil {
 		r.cancel()
@@ -565,7 +574,7 @@ func (r *Reader) ReaderID() string {
 func (r *Reader) Connected() bool {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	return r.device != nil && r.ctx != nil && r.ctx.Err() == nil
+	return r.connected && r.device != nil
 }
 
 func (r *Reader) Info() string {

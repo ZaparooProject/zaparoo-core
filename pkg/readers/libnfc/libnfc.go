@@ -408,7 +408,7 @@ func (r *Reader) Path() string {
 }
 
 func (r *Reader) Connected() bool {
-	return r.pnd != nil && r.pnd.Connection() != ""
+	return r.polling && r.pnd != nil
 }
 
 func (r *Reader) Info() string {
