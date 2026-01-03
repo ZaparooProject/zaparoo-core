@@ -25,6 +25,7 @@ package helpers
 
 /*
 #cgo LDFLAGS: -framework IOKit -framework CoreFoundation
+#include <stdlib.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/serial/IOSerialKeys.h>
 #include <IOKit/IOBSD.h>
@@ -106,13 +107,13 @@ static unsigned int getLocationIDForDevice(const char* bsdPath) {
     return 0;
 }
 */
-import "C"
+import "C" //nolint:gocritic // cgo requires separate import block
 
 import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"unsafe"
+	"unsafe" //nolint:gocritic // required for C.free
 
 	"github.com/rs/zerolog/log"
 )
@@ -164,10 +165,10 @@ func FormatLocationID(locationID uint32) string {
 
 	// Extract port path from remaining 24 bits (6 nibbles, each 4 bits)
 	// Each nibble represents a port number (0 = end of path)
-	var ports []string
+	ports := make([]string, 0, 6)
 	remaining := locationID & 0x00FFFFFF
 
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		// Extract each 4-bit nibble from high to low
 		shift := uint(20 - i*4)
 		port := (remaining >> shift) & 0x0F

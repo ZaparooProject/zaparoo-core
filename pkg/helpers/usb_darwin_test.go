@@ -32,8 +32,8 @@ func TestFormatLocationID(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		locationID uint32
 		expected   string
+		locationID uint32
 	}{
 		{
 			name:       "single port on bus 20",

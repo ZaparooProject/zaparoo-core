@@ -140,7 +140,7 @@ func getDevicePortName(devInfo windows.DevInfo, deviceInfoData *windows.DevInfoD
 		windows.StringToUTF16Ptr("PortName"),
 		nil,
 		&valType,
-		(*byte)(unsafe.Pointer(&buf[0])),
+		(*byte)(unsafe.Pointer(&buf[0])), //nolint:gosec // required for Windows API
 		&bufLen,
 	)
 	if err != nil {

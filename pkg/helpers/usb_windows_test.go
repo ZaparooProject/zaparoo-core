@@ -117,16 +117,16 @@ func TestUSBPortPattern(t *testing.T) {
 
 	tests := []struct {
 		input       string
-		shouldMatch bool
 		captured    string
+		shouldMatch bool
 	}{
-		{"USB(1)", true, "1"},
-		{"USB(10)", true, "10"},
-		{"USB(123)", true, "123"},
-		{"USBROOT(0)", false, ""},
-		{"PCI(1400)", false, ""},
-		{"USB()", false, ""},
-		{"USB(a)", false, ""},
+		{"USB(1)", "1", true},
+		{"USB(10)", "10", true},
+		{"USB(123)", "123", true},
+		{"USBROOT(0)", "", false},
+		{"PCI(1400)", "", false},
+		{"USB()", "", false},
+		{"USB(a)", "", false},
 	}
 
 	for _, tt := range tests {
