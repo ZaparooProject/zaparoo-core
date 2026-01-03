@@ -223,3 +223,7 @@ formatters:
   enable:
     - gofumpt
     - gci
+  exclusions:
+    paths:
+      # cgo files trigger gci bug: https://github.com/daixiang0/gci/issues/166
+      - "pkg/helpers/usb_darwin\\.go"

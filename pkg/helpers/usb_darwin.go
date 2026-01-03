@@ -107,13 +107,13 @@ static unsigned int getLocationIDForDevice(const char* bsdPath) {
     return 0;
 }
 */
-import "C" //nolint:gocritic // cgo requires separate import block
+import "C"
 
 import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"unsafe" //nolint:gocritic // required for C.free
+	"unsafe"
 
 	"github.com/rs/zerolog/log"
 )
