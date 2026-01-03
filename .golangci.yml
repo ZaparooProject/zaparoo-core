@@ -13,6 +13,10 @@ linters:
       - linters:
           - goheader
         path: internal/vdfbinary/
+      # cgo files trigger gocritic dupImport false positive: https://github.com/go-critic/go-critic/issues/845
+      - linters:
+          - gocritic
+        path: pkg/helpers/usb_darwin\.go
   enable:
     - staticcheck
     - errcheck
