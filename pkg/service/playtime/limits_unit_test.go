@@ -302,10 +302,14 @@ func TestCooldownTimer_AutomaticReset(t *testing.T) {
 	// Advance clock past timeout
 	clock.Advance(21 * time.Minute)
 
-	// Give goroutine time to process
-	time.Sleep(10 * time.Millisecond)
+	// Wait for state transition with timeout
+	assert.Eventually(t, func() bool {
+		tm.mu.Lock()
+		defer tm.mu.Unlock()
+		return tm.state == StateReset
+	}, 100*time.Millisecond, 5*time.Millisecond, "state should be reset after timer expires")
 
-	// Verify transitioned to reset
+	// Verify final state
 	tm.mu.Lock()
 	assert.Equal(t, StateReset, tm.state, "state should be reset after timer expires")
 	assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime, "cumulative time should be cleared")
