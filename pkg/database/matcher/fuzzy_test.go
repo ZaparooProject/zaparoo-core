@@ -70,7 +70,7 @@ func TestFindFuzzyMatches_PreFilter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			matches := FindFuzzyMatches(tt.query, tt.candidates, tt.maxDistance, tt.minSimilarity)
 
-			var gotSlugs []string
+			gotSlugs := make([]string, 0, len(matches))
 			for _, m := range matches {
 				gotSlugs = append(gotSlugs, m.Slug)
 			}
@@ -171,7 +171,7 @@ func TestFindFuzzyMatches_ExactMatchSkipped(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			matches := FindFuzzyMatches(tt.query, tt.candidates, 2, 0.70)
 
-			var gotSlugs []string
+			gotSlugs := make([]string, 0, len(matches))
 			for _, m := range matches {
 				gotSlugs = append(gotSlugs, m.Slug)
 			}

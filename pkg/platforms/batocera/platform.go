@@ -537,7 +537,8 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	launchers := []platforms.Launcher{
+	launchers := make([]platforms.Launcher, 0, 9+len(esde.SystemMap))
+	launchers = append(launchers,
 		kodi.NewKodiLocalLauncher(),
 		kodi.NewKodiMovieLauncher(),
 		kodi.NewKodiTVLauncher(),
@@ -546,7 +547,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
-		{
+		platforms.Launcher{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
@@ -558,7 +559,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return nil, nil //nolint:nilnil // Command launches don't return a process handle
 			},
 		},
-	}
+	)
 
 	for folder, info := range esde.SystemMap {
 		launchers = append(launchers, platforms.Launcher{

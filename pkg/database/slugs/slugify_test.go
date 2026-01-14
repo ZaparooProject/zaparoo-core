@@ -1728,7 +1728,7 @@ func TestSlugifyMediaType_TVShowMatching(t *testing.T) {
 			t.Parallel()
 
 			// Slugify all inputs
-			var slugs []string
+			slugs := make([]string, 0, len(tt.inputs))
 			for _, input := range tt.inputs {
 				slug := Slugify(MediaType(tt.mediaType), input)
 				slugs = append(slugs, slug)

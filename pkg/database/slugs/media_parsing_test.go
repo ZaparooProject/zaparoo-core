@@ -967,7 +967,7 @@ func TestParseTVShow_ComponentReordering(t *testing.T) {
 			t.Parallel()
 
 			// All inputs should produce the same result
-			var results []string
+			results := make([]string, 0, len(tt.inputs))
 			for _, input := range tt.inputs {
 				result := ParseTVShow(input)
 				results = append(results, result)
@@ -1050,7 +1050,7 @@ func TestParseTVShow_RealWorldIntegration(t *testing.T) {
 			t.Parallel()
 
 			// All inputs should produce the same result
-			var results []string
+			results := make([]string, 0, len(tt.inputs))
 			for _, input := range tt.inputs {
 				result := ParseTVShow(input)
 				results = append(results, result)
