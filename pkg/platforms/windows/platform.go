@@ -251,7 +251,10 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	launchers := []platforms.Launcher{
+	// Get RetroBat launchers count for preallocation
+	retroBatLaunchers := getRetroBatLaunchers(cfg)
+	launchers := make([]platforms.Launcher, 0, 15+len(retroBatLaunchers))
+	launchers = append(launchers,
 		kodi.NewKodiLocalLauncher(),
 		kodi.NewKodiMovieLauncher(),
 		kodi.NewKodiTVLauncher(),
@@ -261,7 +264,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
 		steam.NewSteamLauncher(steam.DefaultWindowsOptions()),
-		{
+		platforms.Launcher{
 			ID:       "Flashpoint",
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{shared.SchemeFlashpoint},
@@ -291,7 +294,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return nil, nil //nolint:nilnil // Flashpoint launches don't return a process handle
 			},
 		},
-		{
+		platforms.Launcher{
 			ID:        "WebBrowser",
 			Schemes:   []string{"http", "https"},
 			Lifecycle: platforms.LifecycleFireAndForget,
@@ -309,7 +312,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return nil, nil //nolint:nilnil // Browser launches don't return a process handle
 			},
 		},
-		{
+		platforms.Launcher{
 			ID:            "GenericExecutable",
 			Extensions:    []string{".exe"},
 			AllowListOnly: true,
@@ -323,7 +326,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return cmd.Process, nil
 			},
 		},
-		{
+		platforms.Launcher{
 			ID:            "GenericScript",
 			Extensions:    []string{".bat", ".cmd", ".lnk", ".a3x", ".ahk"},
 			AllowListOnly: true,
@@ -347,10 +350,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			},
 		},
 		p.NewLaunchBoxLauncher(),
-	}
+	)
 
 	// Add RetroBat launchers if available
-	retroBatLaunchers := getRetroBatLaunchers(cfg)
 	launchers = append(launchers, retroBatLaunchers...)
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)

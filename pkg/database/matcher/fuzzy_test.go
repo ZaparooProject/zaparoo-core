@@ -163,7 +163,7 @@ func TestFindFuzzyMatches_ExactMatchSkipped(t *testing.T) {
 			name:          "only exact match candidate",
 			query:         "zelda",
 			candidates:    []string{"zelda"},
-			expectedSlugs: nil, // nil or empty, exact match excluded
+			expectedSlugs: []string{}, // empty, exact match excluded
 		},
 	}
 
