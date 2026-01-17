@@ -524,3 +524,98 @@ func TestParse_MisterScriptArgs(t *testing.T) {
 		})
 	}
 }
+
+// TestParse_LaunchTitleArgs_Action is a regression test for GitHub Issue 462.
+// Before the fix, LaunchTitleArgs was missing the Action field, which caused
+// parsing to fail with "unknown key" when using ?action=details with title format.
+// Example: @PC/UFO 50?action=details would fail to parse.
+func TestParse_LaunchTitleArgs_Action(t *testing.T) {
+	t.Parallel()
+
+	ctx := NewParseContext([]string{"Steam", "RetroArch"})
+
+	tests := []struct {
+		raw        map[string]string
+		check      func(t *testing.T, args *advargtypes.LaunchTitleArgs)
+		name       string
+		errContain string
+		wantErr    bool
+	}{
+		{
+			name:    "empty args",
+			raw:     map[string]string{},
+			wantErr: false,
+			check: func(t *testing.T, args *advargtypes.LaunchTitleArgs) {
+				assert.Empty(t, args.Launcher)
+				assert.Empty(t, args.Action)
+				assert.Nil(t, args.Tags)
+			},
+		},
+		{
+			// This is the exact scenario from GitHub Issue 462
+			name:    "action=details (regression test for GH-462)",
+			raw:     map[string]string{"action": "details"},
+			wantErr: false,
+			check: func(t *testing.T, args *advargtypes.LaunchTitleArgs) {
+				assert.Equal(t, "details", args.Action)
+			},
+		},
+		{
+			name:    "action=run",
+			raw:     map[string]string{"action": "run"},
+			wantErr: false,
+			check: func(t *testing.T, args *advargtypes.LaunchTitleArgs) {
+				assert.Equal(t, "run", args.Action)
+			},
+		},
+		{
+			name:       "invalid action value",
+			raw:        map[string]string{"action": "invalid"},
+			wantErr:    true,
+			errContain: "action must be one of",
+		},
+		{
+			name:    "launcher with action",
+			raw:     map[string]string{"launcher": "Steam", "action": "details"},
+			wantErr: false,
+			check: func(t *testing.T, args *advargtypes.LaunchTitleArgs) {
+				assert.Equal(t, "Steam", args.Launcher)
+				assert.Equal(t, "details", args.Action)
+			},
+		},
+		{
+			name:    "all fields combined",
+			raw:     map[string]string{"launcher": "Steam", "action": "details", "tags": "region:usa"},
+			wantErr: false,
+			check: func(t *testing.T, args *advargtypes.LaunchTitleArgs) {
+				assert.Equal(t, "Steam", args.Launcher)
+				assert.Equal(t, "details", args.Action)
+				require.Len(t, args.Tags, 1)
+				assert.Equal(t, "region", args.Tags[0].Type)
+				assert.Equal(t, "usa", args.Tags[0].Value)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var args advargtypes.LaunchTitleArgs
+			err := Parse(tt.raw, &args, ctx)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContain != "" {
+					assert.Contains(t, err.Error(), tt.errContain)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			if tt.check != nil {
+				tt.check(t, &args)
+			}
+		})
+	}
+}

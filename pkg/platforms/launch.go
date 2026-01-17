@@ -48,14 +48,31 @@ type LaunchParams struct {
 // 2. Config default for the launcher
 // 3. Empty string (default "run" behavior)
 func ResolveAction(opts *LaunchOptions, cfg *config.Instance, launcherID string) string {
+	log.Debug().
+		Str("launcherID", launcherID).
+		Bool("optsNil", opts == nil).
+		Bool("cfgNil", cfg == nil).
+		Msg("ResolveAction called")
+
 	if opts != nil && opts.Action != "" {
+		log.Debug().
+			Str("action", opts.Action).
+			Msg("ResolveAction: using explicit action from LaunchOptions")
 		return opts.Action
 	}
 	if cfg != nil && launcherID != "" {
 		if def, ok := cfg.LookupLauncherDefaults(launcherID); ok {
+			log.Debug().
+				Str("action", def.Action).
+				Str("launcherID", launcherID).
+				Msg("ResolveAction: using config default action")
 			return def.Action
 		}
+		log.Debug().
+			Str("launcherID", launcherID).
+			Msg("ResolveAction: no config default found for launcher")
 	}
+	log.Debug().Msg("ResolveAction: returning empty (default run behavior)")
 	return ""
 }
 

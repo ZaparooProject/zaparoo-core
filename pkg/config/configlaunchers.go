@@ -86,11 +86,31 @@ func (c *Instance) IsLauncherFileAllowed(s string) bool {
 func (c *Instance) LookupLauncherDefaults(launcherID string) (LaunchersDefault, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, defaultLauncher := range c.vals.Launchers.Default {
+
+	log.Debug().
+		Str("launcherID", launcherID).
+		Int("defaultsCount", len(c.vals.Launchers.Default)).
+		Msg("LookupLauncherDefaults: searching for launcher defaults")
+
+	for i, defaultLauncher := range c.vals.Launchers.Default {
+		log.Debug().
+			Int("index", i).
+			Str("configLauncher", defaultLauncher.Launcher).
+			Str("configAction", defaultLauncher.Action).
+			Msg("LookupLauncherDefaults: checking entry")
+
 		if strings.EqualFold(defaultLauncher.Launcher, launcherID) {
+			log.Debug().
+				Str("launcherID", launcherID).
+				Str("action", defaultLauncher.Action).
+				Msg("LookupLauncherDefaults: found matching default")
 			return defaultLauncher, true
 		}
 	}
+
+	log.Debug().
+		Str("launcherID", launcherID).
+		Msg("LookupLauncherDefaults: no matching default found")
 	return LaunchersDefault{}, false
 }
 
