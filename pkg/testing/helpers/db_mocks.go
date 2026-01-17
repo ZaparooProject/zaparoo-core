@@ -1503,6 +1503,14 @@ func (m *MockMediaDBI) GetMediaByDBID(ctx context.Context, mediaDBID int64) (dat
 	return database.SearchResultWithCursor{}, nil
 }
 
+func (m *MockMediaDBI) GetYearBySystemAndPath(ctx context.Context, systemID, path string) (string, error) {
+	args := m.Called(ctx, systemID, path)
+	if err := args.Error(1); err != nil {
+		return "", fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.String(0), nil
+}
+
 func (m *MockMediaDBI) RandomGameWithQuery(query *database.MediaQuery) (database.SearchResult, error) {
 	args := m.Called(query)
 	if result, ok := args.Get(0).(database.SearchResult); ok {

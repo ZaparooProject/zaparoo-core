@@ -260,3 +260,43 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 
 	return result, nil
 }
+
+// GetYearBySystemAndPath retrieves the year tag for a media item in a single query.
+// Returns empty string if no year tag exists or media not found.
+func (db *MediaDB) GetYearBySystemAndPath(ctx context.Context, systemID, path string) (string, error) {
+	if db.sql == nil {
+		return "", ErrNullSQL
+	}
+
+	var year string
+	err := db.sql.QueryRowContext(ctx, `
+		SELECT Tags.Tag
+		FROM Media
+		INNER JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
+		INNER JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
+		INNER JOIN MediaTags ON Media.DBID = MediaTags.MediaDBID
+		INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+		INNER JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE Systems.SystemID = ?
+		  AND Media.Path = ?
+		  AND TagTypes.Type = 'year'
+		  AND length(Tags.Tag) = 4
+		LIMIT 1
+	`, systemID, path).Scan(&year)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get year by system and path: %w", err)
+	}
+
+	// Validate it's actually 4 digits
+	for _, ch := range year {
+		if ch < '0' || ch > '9' {
+			return "", nil
+		}
+	}
+
+	return year, nil
+}
