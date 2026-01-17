@@ -41,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
@@ -251,7 +252,10 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	launchers := []platforms.Launcher{
+	const staticLauncherCount = 14
+	launchers := make([]platforms.Launcher, 0, staticLauncherCount+len(esde.SystemMap))
+
+	launchers = append(launchers,
 		kodi.NewKodiLocalLauncher(),
 		kodi.NewKodiMovieLauncher(),
 		kodi.NewKodiTVLauncher(),
@@ -261,7 +265,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
 		steam.NewSteamLauncher(steam.DefaultWindowsOptions()),
-		{
+		platforms.Launcher{
 			ID:       "Flashpoint",
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{shared.SchemeFlashpoint},
@@ -291,7 +295,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return nil, nil //nolint:nilnil // Flashpoint launches don't return a process handle
 			},
 		},
-		{
+		platforms.Launcher{
 			ID:        "WebBrowser",
 			Schemes:   []string{"http", "https"},
 			Lifecycle: platforms.LifecycleFireAndForget,
@@ -309,11 +313,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return nil, nil //nolint:nilnil // Browser launches don't return a process handle
 			},
 		},
-		{
+		platforms.Launcher{
 			ID:            "GenericExecutable",
 			Extensions:    []string{".exe"},
 			AllowListOnly: true,
-			Lifecycle:     platforms.LifecycleBlocking, // Block for executables to track completion
+			Lifecycle:     platforms.LifecycleBlocking,
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				cmd := exec.CommandContext(context.Background(), path)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -323,11 +327,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return cmd.Process, nil
 			},
 		},
-		{
+		platforms.Launcher{
 			ID:            "GenericScript",
 			Extensions:    []string{".bat", ".cmd", ".lnk", ".a3x", ".ahk"},
 			AllowListOnly: true,
-			Lifecycle:     platforms.LifecycleFireAndForget, // Fire-and-forget for scripts
+			Lifecycle:     platforms.LifecycleFireAndForget,
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				ext := strings.ToLower(filepath.Ext(path))
 				var cmd *exec.Cmd
@@ -347,11 +351,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			},
 		},
 		p.NewLaunchBoxLauncher(),
-	}
+	)
 
-	// Add RetroBat launchers if available
-	retroBatLaunchers := getRetroBatLaunchers(cfg)
-	launchers = append(launchers, retroBatLaunchers...)
+	launchers = append(launchers, getRetroBatLaunchers()...)
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }
