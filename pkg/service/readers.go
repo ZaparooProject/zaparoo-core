@@ -353,7 +353,7 @@ func readerManager(
 						st.RemoveReader(readerID)
 						if autoDetector != nil {
 							autoDetector.ClearPath(r.Path())
-							autoDetector.ClearFailedConnection(readerID)
+							autoDetector.ClearFailedPath(r.Path())
 						}
 					}
 				}

@@ -66,49 +66,45 @@ func TestAutoDetector_ConnectedMapOperations(t *testing.T) {
 	assert.False(t, ad.isConnected("/dev/ttyUSB0"))
 }
 
-func TestAutoDetector_FailedConnectionOperations(t *testing.T) {
+func TestAutoDetector_FailedPathOperations(t *testing.T) {
 	t.Parallel()
 
 	ad := NewAutoDetector(nil)
 
-	// Set failed
-	ad.setFailed("simpleserial:/dev/ttyUSB0")
-	ad.setFailed("pn532:/dev/ttyUSB1")
+	// Set failed paths
+	ad.setFailed("/dev/ttyUSB0")
+	ad.setFailed("/dev/ttyUSB1")
 
-	// Get failed for simpleserial reader
-	failed := ad.getFailedConnectionsForReader([]string{"simpleserial"})
+	// Get all failed paths
+	failed := ad.getFailedPaths()
+	assert.Len(t, failed, 2)
+	assert.Contains(t, failed, "/dev/ttyUSB0")
+	assert.Contains(t, failed, "/dev/ttyUSB1")
+
+	// Clear failed path
+	ad.ClearFailedPath("/dev/ttyUSB0")
+	failed = ad.getFailedPaths()
 	assert.Len(t, failed, 1)
-	assert.Contains(t, failed, "simpleserial:/dev/ttyUSB0")
-
-	// Get failed for pn532 reader
-	failed = ad.getFailedConnectionsForReader([]string{"pn532"})
-	assert.Len(t, failed, 1)
-	assert.Contains(t, failed, "pn532:/dev/ttyUSB1")
-
-	// Clear failed connection
-	ad.ClearFailedConnection("simpleserial:/dev/ttyUSB0")
-	failed = ad.getFailedConnectionsForReader([]string{"simpleserial"})
-	assert.Empty(t, failed)
+	assert.Contains(t, failed, "/dev/ttyUSB1")
 }
 
-func TestAutoDetector_GetFailedConnectionsNormalizesDriverIDs(t *testing.T) {
+func TestAutoDetector_FailedPathsAreSharedAcrossDrivers(t *testing.T) {
 	t.Parallel()
 
 	ad := NewAutoDetector(nil)
 
-	// Legacy format with underscore
-	ad.setFailed("simple_serial:/dev/ttyUSB0")
+	// A failed path is shared across all drivers - if a path fails,
+	// no driver should retry it until it's cleared
+	ad.setFailed("/dev/ttyUSB0")
 
-	// Should match normalized version
-	failed := ad.getFailedConnectionsForReader([]string{"simpleserial"})
+	failed := ad.getFailedPaths()
 	assert.Len(t, failed, 1)
-	assert.Contains(t, failed, "simple_serial:/dev/ttyUSB0")
+	assert.Contains(t, failed, "/dev/ttyUSB0")
 
-	// And vice versa
-	ad.setFailed("pn532uart:/dev/ttyUSB1")
-	failed = ad.getFailedConnectionsForReader([]string{"pn532_uart"})
-	assert.Len(t, failed, 1)
-	assert.Contains(t, failed, "pn532uart:/dev/ttyUSB1")
+	// Clear and verify
+	ad.ClearFailedPath("/dev/ttyUSB0")
+	failed = ad.getFailedPaths()
+	assert.Empty(t, failed)
 }
 
 func TestAutoDetector_UpdateConnectedFromReaders(t *testing.T) {
@@ -236,7 +232,7 @@ func TestAutoDetector_DetectReaders_NoDeviceDetected(t *testing.T) {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 	})
-	mockReader.On("IDs").Return([]string{"simpleserial"})
+	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	mockReader.On("Detect", mock.Anything).Return("") // No device found
 
 	mockPlatform := mocks.NewMockPlatform()
@@ -264,7 +260,7 @@ func TestAutoDetector_DetectReaders_InvalidDetectString(t *testing.T) {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 	})
-	mockReader.On("IDs").Return([]string{"simpleserial"})
+	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	mockReader.On("Detect", mock.Anything).Return("invalid-string-no-colon")
 
 	mockPlatform := mocks.NewMockPlatform()
@@ -299,7 +295,7 @@ func TestAutoDetector_DetectReaders_AlreadyConnected(t *testing.T) {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 	})
-	mockReader.On("IDs").Return([]string{"simpleserial"})
+	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	mockReader.On("Detect", mock.Anything).Return("simpleserial:/dev/ttyUSB0")
 	mockReader.On("Close").Return(nil)
 
@@ -343,7 +339,7 @@ func TestAutoDetector_DetectReaders_SuccessfulConnection(t *testing.T) {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 	})
-	mockReader.On("IDs").Return([]string{"simpleserial"})
+	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	mockReader.On("Detect", mock.Anything).Return("simpleserial:/dev/ttyUSB0")
 	mockReader.On("Open", mock.Anything, mock.Anything).Return(nil)
 	mockReader.On("Connected").Return(true)
@@ -394,7 +390,7 @@ func TestAutoDetector_DetectReaders_OpenError(t *testing.T) {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 	})
-	mockReader.On("IDs").Return([]string{"simpleserial"})
+	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	mockReader.On("Detect", mock.Anything).Return("simpleserial:/dev/ttyUSB0")
 	mockReader.On("Open", mock.Anything, mock.Anything).Return(errors.New("open failed"))
 
@@ -407,9 +403,9 @@ func TestAutoDetector_DetectReaders_OpenError(t *testing.T) {
 	err := ad.DetectReaders(mockPlatform, cfg, st, scanChan)
 
 	require.NoError(t, err) // DetectReaders doesn't return errors for individual failures
-	// Connection should be marked as failed
-	failed := ad.getFailedConnectionsForReader([]string{"simpleserial"})
-	assert.Contains(t, failed, "simpleserial:/dev/ttyUSB0")
+	// Path should be marked as failed
+	failed := ad.getFailedPaths()
+	assert.Contains(t, failed, "/dev/ttyUSB0")
 }
 
 func TestAutoDetector_DetectReaders_ConnectedReturnsFalse(t *testing.T) {
@@ -425,7 +421,7 @@ func TestAutoDetector_DetectReaders_ConnectedReturnsFalse(t *testing.T) {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 	})
-	mockReader.On("IDs").Return([]string{"simpleserial"})
+	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	mockReader.On("Detect", mock.Anything).Return("simpleserial:/dev/ttyUSB0")
 	mockReader.On("Open", mock.Anything, mock.Anything).Return(nil)
 	mockReader.On("Connected").Return(false) // Connection failed
@@ -440,9 +436,9 @@ func TestAutoDetector_DetectReaders_ConnectedReturnsFalse(t *testing.T) {
 	err := ad.DetectReaders(mockPlatform, cfg, st, scanChan)
 
 	require.NoError(t, err)
-	// Connection should be marked as failed
-	failed := ad.getFailedConnectionsForReader([]string{"simpleserial"})
-	assert.Contains(t, failed, "simpleserial:/dev/ttyUSB0")
+	// Path should be marked as failed
+	failed := ad.getFailedPaths()
+	assert.Contains(t, failed, "/dev/ttyUSB0")
 	mockReader.AssertCalled(t, "Close")
 }
 
@@ -582,8 +578,8 @@ func TestAutoDetector_LogDetectionResults_WithFailedAttempts(t *testing.T) {
 	ad := NewAutoDetector(nil)
 
 	// Add some failed attempts
-	ad.setFailed("simpleserial:/dev/ttyUSB0")
-	ad.setFailed("pn532:/dev/ttyUSB1")
+	ad.setFailed("/dev/ttyUSB0")
+	ad.setFailed("/dev/ttyUSB1")
 
 	// Log with no new devices
 	ad.logDetectionResults(nil, nil)
@@ -611,7 +607,7 @@ func TestAutoDetector_ConcurrentAccess(t *testing.T) {
 
 	go func() {
 		for i := range 100 {
-			ad.setFailed("simpleserial:/dev/ttyUSB" + string(rune('0'+i%10)))
+			ad.setFailed("/dev/ttyUSB" + string(rune('0'+i%10)))
 		}
 		done <- struct{}{}
 	}()
@@ -620,7 +616,7 @@ func TestAutoDetector_ConcurrentAccess(t *testing.T) {
 	go func() {
 		for range 100 {
 			_ = ad.isConnected("/dev/ttyUSB0")
-			_ = ad.getFailedConnectionsForReader([]string{"simpleserial"})
+			_ = ad.getFailedPaths()
 		}
 		done <- struct{}{}
 	}()
@@ -653,8 +649,10 @@ func TestAutoDetector_DetectReaders_ExcludesConnectedReaderPaths(t *testing.T) {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 	})
-	newReader.On("IDs").Return([]string{"simpleserial"})
-	// Detect is called with exclude list containing existing reader's path
+	newReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
+	// Detect is called with exclude list containing existing reader's connection string.
+	// IMPORTANT: The format MUST be "driver:path" because Detect() implementations parse
+	// this format to extract the path. Using just the path would break detection.
 	newReader.On("Detect", mock.MatchedBy(func(exclude []string) bool {
 		for _, e := range exclude {
 			if e == "simpleserial:/dev/ttyUSB0" {
@@ -697,8 +695,8 @@ func TestAutoDetector_DetectReaders_ClearsFailedOnSuccess(t *testing.T) {
 	cfg.SetAutoDetect(true)
 
 	// Pre-mark as failed
-	ad.setFailed("simpleserial:/dev/ttyUSB0")
-	require.Len(t, ad.getFailedConnectionsForReader([]string{"simpleserial"}), 1)
+	ad.setFailed("/dev/ttyUSB0")
+	require.Len(t, ad.getFailedPaths(), 1)
 
 	mockReader := mocks.NewMockReader()
 	mockReader.On("Metadata").Return(readers.DriverMetadata{
@@ -706,7 +704,7 @@ func TestAutoDetector_DetectReaders_ClearsFailedOnSuccess(t *testing.T) {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 	})
-	mockReader.On("IDs").Return([]string{"simpleserial"})
+	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	mockReader.On("Detect", mock.Anything).Return("simpleserial:/dev/ttyUSB0")
 	mockReader.On("Open", mock.Anything, mock.Anything).Return(nil)
 	mockReader.On("Connected").Return(true)
@@ -731,24 +729,26 @@ func TestAutoDetector_DetectReaders_ClearsFailedOnSuccess(t *testing.T) {
 
 	require.NoError(t, err)
 	// Failed should be cleared after successful connection
-	assert.Empty(t, ad.getFailedConnectionsForReader([]string{"simpleserial"}))
+	assert.Empty(t, ad.getFailedPaths())
 
 	st.StopService()
 	close(st.Notifications)
 	<-done
 }
 
-func TestAutoDetector_GetFailedConnections_InvalidFormat(t *testing.T) {
+func TestAutoDetector_GetFailedPaths_AnyPath(t *testing.T) {
 	t.Parallel()
 
 	ad := NewAutoDetector(nil)
 
-	// Add an invalid format (no colon)
-	ad.setFailed("invalid-format")
+	// Any string can be stored as a path
+	ad.setFailed("some-path")
+	ad.setFailed("/dev/ttyUSB0")
 
-	// Should not panic and should return empty
-	failed := ad.getFailedConnectionsForReader([]string{"simpleserial"})
-	assert.Empty(t, failed)
+	failed := ad.getFailedPaths()
+	assert.Len(t, failed, 2)
+	assert.Contains(t, failed, "some-path")
+	assert.Contains(t, failed, "/dev/ttyUSB0")
 }
 
 func TestAutoDetector_DetectReaders_AlreadyConnected_CloseError(t *testing.T) {
@@ -772,7 +772,7 @@ func TestAutoDetector_DetectReaders_AlreadyConnected_CloseError(t *testing.T) {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 	})
-	mockReader.On("IDs").Return([]string{"simpleserial"})
+	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	mockReader.On("Detect", mock.Anything).Return("simpleserial:/dev/ttyUSB0")
 	mockReader.On("Close").Return(errors.New("close failed"))
 
@@ -838,7 +838,7 @@ func TestAutoDetector_DetectReaders_EmptyPath(t *testing.T) {
 		DefaultEnabled:    true,
 		DefaultAutoDetect: true,
 	})
-	mockReader.On("IDs").Return([]string{"mqtt"})
+	mockReader.On("IDs").Return([]string{"mqtt"}).Maybe()
 	// MQTT returns driver with empty path
 	mockReader.On("Detect", mock.Anything).Return("mqtt:")
 	mockReader.On("Open", mock.Anything, mock.Anything).Return(nil)
@@ -863,6 +863,122 @@ func TestAutoDetector_DetectReaders_EmptyPath(t *testing.T) {
 	err := ad.DetectReaders(mockPlatform, cfg, st, scanChan)
 
 	require.NoError(t, err)
+
+	st.StopService()
+	close(st.Notifications)
+	<-done
+}
+
+// TestAutoDetector_ReconnectAfterUnplugReplug is a regression test for the bug where
+// readers would never reconnect after being unplugged and replugged. The bug was caused
+// by a key mismatch: failed connections were stored by path (e.g., "/dev/ttyUSB0") but
+// the code tried to clear them using the hashed reader ID (e.g., "pn532-a1b2c3d4").
+// This test ensures that after a reader disconnects, its path is properly cleared from
+// the failed list, allowing it to reconnect when plugged back in.
+func TestAutoDetector_ReconnectAfterUnplugReplug(t *testing.T) {
+	t.Parallel()
+
+	ad := NewAutoDetector(nil)
+	path := "/dev/ttyUSB0"
+
+	// Simulate a failed connection attempt (e.g., device briefly unavailable during plug-in)
+	ad.setFailed(path)
+	require.Contains(t, ad.getFailedPaths(), path, "path should be in failed list after failed connection")
+
+	// Simulate reader disconnect (unplug) - this is what readers.go does when pruning
+	// disconnected readers. Previously this used ClearFailedConnection(readerID) with
+	// the hashed reader ID, which never matched the path-based key.
+	ad.ClearPath(path)
+	ad.ClearFailedPath(path)
+
+	// Verify the path is cleared from failed list
+	assert.NotContains(t, ad.getFailedPaths(), path,
+		"path should be cleared from failed list after disconnect, allowing reconnection on replug")
+
+	// Simulate replug - a new detection cycle should be able to try this path again
+	// If the bug were present, the path would still be in the failed list and
+	// auto-detect would skip it forever
+	failedPaths := ad.getFailedPaths()
+	for _, p := range failedPaths {
+		if p == path {
+			t.Fatal("REGRESSION: path still in failed list after disconnect - reader would never reconnect")
+		}
+	}
+}
+
+// TestAutoDetector_ExcludeListFormat_Regression is a regression test that verifies
+// the exclude list passed to Detect() uses the "driver:path" format.
+//
+// CRITICAL: Detect() implementations parse this format with strings.SplitN(":", 2)
+// to extract the path. If the exclude list contains just paths (e.g., "/dev/ttyUSB0"
+// instead of "simpleserial:/dev/ttyUSB0"), the parsing will fail and connected
+// devices will be repeatedly "detected" as new, causing reconnection loops.
+func TestAutoDetector_ExcludeListFormat_Regression(t *testing.T) {
+	t.Parallel()
+
+	ad := NewAutoDetector(nil)
+	cfg := &config.Instance{}
+	cfg.SetAutoDetect(true)
+
+	// Create an existing connected reader
+	existingReader := mocks.NewMockReader()
+	existingReader.On("Path").Return("/dev/ttyUSB0")
+	existingReader.On("Metadata").Return(readers.DriverMetadata{ID: "pn532_uart"})
+	existingReader.On("ReaderID").Return("pn532-abc123")
+
+	// Create a new reader for detection that captures the exclude list
+	var capturedExcludeList []string
+	newReader := mocks.NewMockReader()
+	newReader.On("Metadata").Return(readers.DriverMetadata{
+		ID:                "pn532_uart",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+	})
+	newReader.On("IDs").Return([]string{"pn532_uart"}).Maybe()
+	newReader.On("Detect", mock.Anything).Run(func(args mock.Arguments) {
+		if list, ok := args.Get(0).([]string); ok {
+			capturedExcludeList = list
+		}
+	}).Return("")
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", cfg).Return([]readers.Reader{newReader})
+
+	st, notifCh := state.NewState(mockPlatform, "test-uuid")
+	st.SetReader(existingReader)
+	scanChan := make(chan readers.Scan, 10)
+
+	// Drain notifications
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range notifCh { //nolint:revive // drain channel
+		}
+	}()
+
+	err := ad.DetectReaders(mockPlatform, cfg, st, scanChan)
+	require.NoError(t, err)
+
+	// CRITICAL CHECK: Verify exclude list uses "driver:path" format
+	require.NotEmpty(t, capturedExcludeList, "exclude list should not be empty")
+
+	foundCorrectFormat := false
+	for _, entry := range capturedExcludeList {
+		// Each entry MUST contain a colon separating driver from path
+		if entry == "pn532_uart:/dev/ttyUSB0" {
+			foundCorrectFormat = true
+			break
+		}
+		// REGRESSION: If we find just the path without driver prefix, fail immediately
+		if entry == "/dev/ttyUSB0" {
+			t.Fatal("REGRESSION: exclude list contains path without driver prefix - " +
+				"this will break Detect() implementations that parse 'driver:path' format, " +
+				"causing connected devices to be repeatedly detected as new")
+		}
+	}
+
+	assert.True(t, foundCorrectFormat,
+		"exclude list should contain 'pn532_uart:/dev/ttyUSB0', got: %v", capturedExcludeList)
 
 	st.StopService()
 	close(st.Notifications)

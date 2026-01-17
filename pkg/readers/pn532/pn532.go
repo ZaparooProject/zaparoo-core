@@ -47,7 +47,7 @@ import (
 )
 
 const (
-	quickDetectionTimeout = 5 * time.Second
+	quickDetectionTimeout = 15 * time.Second
 	ndefReadTimeout       = 5 * time.Second
 	writeTimeout          = 30 * time.Second
 	deviceTimeout         = 5 * time.Second
