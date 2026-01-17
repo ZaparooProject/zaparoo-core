@@ -81,19 +81,16 @@ func (ad *AutoDetector) DetectReaders(
 			continue
 		}
 
-		readerFailedConnections := ad.getFailedConnectionsForReader(reader.IDs())
+		failedPaths := ad.getFailedPaths()
 
-		// Build exclude list from connected reader paths and failed connections.
-		// The exclude list uses "driver:path" format for compatibility with Detect()
-		// implementations that parse connection strings.
-		excludeList := make([]string, 0, len(connectedReaders)+len(readerFailedConnections))
+		// Build exclude list from connected reader paths and failed paths.
+		excludeList := make([]string, 0, len(connectedReaders)+len(failedPaths))
 		for _, r := range connectedReaders {
 			if r != nil {
-				// Reconstruct connection string format from reader metadata and path
-				excludeList = append(excludeList, r.Metadata().ID+":"+r.Path())
+				excludeList = append(excludeList, r.Path())
 			}
 		}
-		excludeList = append(excludeList, readerFailedConnections...)
+		excludeList = append(excludeList, failedPaths...)
 		detect := reader.Detect(excludeList)
 		if detect == "" {
 			continue
@@ -126,7 +123,7 @@ func (ad *AutoDetector) DetectReaders(
 				Err(err).
 				Msg("failed to connect detected reader")
 
-			ad.setFailed(detect)
+			ad.setFailed(path)
 		}
 	}
 
@@ -186,8 +183,8 @@ func (ad *AutoDetector) connectReader(
 	if reader.Connected() {
 		st.SetReader(reader)
 		ad.setConnected(path)
-		// Clear any previous failed attempts for this connection
-		ad.ClearFailedConnection(connectionString)
+		// Clear any previous failed attempts for this path
+		ad.ClearFailedPath(path)
 		log.Info().Msgf("successfully connected auto-detected reader: %s", reader.ReaderID())
 		return nil
 	}
@@ -229,41 +226,25 @@ func (ad *AutoDetector) ClearPath(path string) {
 	delete(ad.connected, path)
 }
 
-func (ad *AutoDetector) setFailed(connectionString string) {
+func (ad *AutoDetector) setFailed(path string) {
 	ad.mu.Lock()
 	defer ad.mu.Unlock()
-	ad.failed[connectionString] = true
+	ad.failed[path] = true
 }
 
-func (ad *AutoDetector) getFailedConnectionsForReader(readerIDs []string) []string {
+func (ad *AutoDetector) getFailedPaths() []string {
 	ad.mu.RLock()
 	defer ad.mu.RUnlock()
 
-	failed := make([]string, 0)
-	for connectionString := range ad.failed {
-		// Extract the driver type from the connection string
-		parts := strings.SplitN(connectionString, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		driverType := parts[0]
-
-		// Check if this driver type matches any of the reader's IDs
-		// Normalize both sides for comparison to support both old and new formats
-		normalizedDriverType := readers.NormalizeDriverID(driverType)
-		for _, readerID := range readerIDs {
-			normalizedReaderID := readers.NormalizeDriverID(readerID)
-			if normalizedDriverType == normalizedReaderID {
-				failed = append(failed, connectionString)
-				break
-			}
-		}
+	paths := make([]string, 0, len(ad.failed))
+	for path := range ad.failed {
+		paths = append(paths, path)
 	}
-	return failed
+	return paths
 }
 
-func (ad *AutoDetector) ClearFailedConnection(connectionString string) {
+func (ad *AutoDetector) ClearFailedPath(path string) {
 	ad.mu.Lock()
 	defer ad.mu.Unlock()
-	delete(ad.failed, connectionString)
+	delete(ad.failed, path)
 }
