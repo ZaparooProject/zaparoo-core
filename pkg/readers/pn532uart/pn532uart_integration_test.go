@@ -147,8 +147,8 @@ func TestOpen_ErrorCountExceedsMaxWithActiveToken(t *testing.T) {
 	assert.False(t, reader.Connected(), "reader should have stopped after max errors")
 }
 
-// TestOpen_ErrorCountExceedsMaxWithoutActiveToken verifies that when error count
-// exceeds maxErrors but there's NO active token, no scan is sent (no ReaderError needed).
+// TestOpen_ErrorCountExceedsMaxWithoutActiveToken verifies that ReaderError is sent
+// even when there's no active token, to cancel any pending exit timers.
 func TestOpen_ErrorCountExceedsMaxWithoutActiveToken(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -185,11 +185,10 @@ func TestOpen_ErrorCountExceedsMaxWithoutActiveToken(t *testing.T) {
 		_ = reader.Close()
 	}()
 
-	// Wait for error count to exceed maxErrors
-	time.Sleep(3 * time.Second)
-
-	// No scan should be sent since there was no active token
-	testutils.AssertNoScan(t, scanQueue, 500*time.Millisecond)
+	// ReaderError should still be sent to cancel any pending exit timers
+	scan := testutils.AssertScanReceived(t, scanQueue, 5*time.Second)
+	assert.Nil(t, scan.Token)
+	assert.True(t, scan.ReaderError, "ReaderError should be sent even without active token")
 
 	// Reader should have stopped polling
 	assert.False(t, reader.Connected(), "reader should have stopped after max errors")

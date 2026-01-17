@@ -294,8 +294,8 @@ func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
 	assert.True(t, mockSession.setCallbacksCalled, "session callbacks should be set")
 }
 
-// TestOpen_SessionErrorWithoutActiveToken verifies that when session errors
-// but there's NO active token, no ReaderError scan is sent.
+// TestOpen_SessionErrorWithoutActiveToken verifies that ReaderError is sent
+// even when there's no active token, to cancel any pending exit timers.
 func TestOpen_SessionErrorWithoutActiveToken(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -341,11 +341,90 @@ func TestOpen_SessionErrorWithoutActiveToken(t *testing.T) {
 		_ = reader.Close()
 	}()
 
-	// Wait for session error
-	time.Sleep(500 * time.Millisecond)
+	// ReaderError should still be sent to cancel any pending exit timers
+	scan := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	assert.Nil(t, scan.Token)
+	assert.True(t, scan.ReaderError, "ReaderError should be sent even without active token")
+}
 
-	// No scan should be sent since there was no active token
-	testutils.AssertNoScan(t, scanQueue, 500*time.Millisecond)
+// TestOpen_SessionErrorAfterRemoval is a regression test for the race condition
+// where unplugging the reader causes: 1) card removal callback, 2) session error.
+// ReaderError must be sent to cancel the exit timer started by the removal.
+func TestOpen_SessionErrorAfterRemoval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	scanQueue := testutils.CreateTestScanChannel(t)
+
+	mockDevice := &mockPN532Device{}
+	mockSession := &mockPollingSession{}
+
+	// Simulate the race condition:
+	// 1. Tag detected
+	// 2. Tag removal callback fires (clears lastToken)
+	// 3. Session error occurs
+	mockSession.startFunc = func(ctx context.Context) error {
+		if mockSession.onCardDetected != nil {
+			tag := &pn532.DetectedTag{
+				Type:       pn532.TagTypeNTAG,
+				UID:        "race-condition-uid",
+				TargetData: []byte{0x01},
+			}
+			_ = mockSession.onCardDetected(ctx, tag)
+		}
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Card removal fires first (simulates go-pn532 interpreting disconnect as removal)
+		if mockSession.onCardRemoved != nil {
+			mockSession.onCardRemoved()
+		}
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Then session error occurs
+		return assert.AnError
+	}
+
+	reader.transportFactory = func(_ detection.DeviceInfo) (pn532.Transport, error) {
+		return &mockTransport{}, nil
+	}
+	reader.deviceFactory = func(_ pn532.Transport) (PN532Device, error) {
+		return mockDevice, nil
+	}
+	reader.sessionFactory = func(_ PN532Device, _ *polling.Config) PollingSession {
+		return mockSession
+	}
+
+	device := config.ReadersConnect{
+		Driver: "pn532",
+		Path:   "/dev/test",
+	}
+
+	err := reader.Open(device, scanQueue)
+	require.NoError(t, err)
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	// 1. Token detected
+	scan1 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	assert.NotNil(t, scan1.Token)
+	assert.Equal(t, "race-condition-uid", scan1.Token.UID)
+
+	// 2. Normal removal (would start exit timer in hold mode)
+	scan2 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	assert.Nil(t, scan2.Token)
+	assert.False(t, scan2.ReaderError)
+
+	// 3. Session error sends ReaderError to cancel exit timer
+	scan3 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	assert.Nil(t, scan3.Token)
+	assert.True(t, scan3.ReaderError, "ReaderError must be sent to cancel pending exit timer")
 }
 
 // TestOpen_SessionContextCanceled verifies that context.Canceled errors

@@ -456,9 +456,13 @@ preprocessing:
 		} else {
 			log.Info().Msg("token was removed")
 
-			// If removal was due to reader error, skip on_remove and exit to keep media running
 			if readerError {
-				log.Warn().Msg("token removal due to reader error - skipping on_remove and exit to keep media running")
+				log.Warn().Msg("token removal due to reader error, keeping media running")
+				if exitTimer != nil {
+					if stopped := exitTimer.Stop(); stopped {
+						log.Debug().Msg("cancelled exit timer due to reader error")
+					}
+				}
 				st.SetActiveCard(tokens.Token{})
 				continue preprocessing
 			}

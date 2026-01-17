@@ -48,7 +48,7 @@ import (
 
 const (
 	quickDetectionTimeout = 5 * time.Second
-	ndefReadTimeout       = 2 * time.Second
+	ndefReadTimeout       = 5 * time.Second
 	writeTimeout          = 30 * time.Second
 	deviceTimeout         = 5 * time.Second
 	writeRetryCount       = 3
@@ -391,19 +391,14 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 			if !errors.Is(err, context.Canceled) {
 				logTraceableError(err, "session polling")
 
-				// Send reader error notification to prevent triggering on_remove/exit
 				r.mutex.Lock()
-				hasActiveToken := r.lastToken != nil
-				if hasActiveToken {
-					log.Warn().Msg("reader session error with active token - " +
-						"sending error signal to keep media running")
-					iq <- readers.Scan{
-						Source:      tokens.SourceReader,
-						Token:       nil,
-						ReaderError: true,
-					}
-					r.lastToken = nil
+				log.Warn().Msg("reader session error, sending error signal")
+				iq <- readers.Scan{
+					Source:      tokens.SourceReader,
+					Token:       nil,
+					ReaderError: true,
 				}
+				r.lastToken = nil
 				r.mutex.Unlock()
 			}
 		}
