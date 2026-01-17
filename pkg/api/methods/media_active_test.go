@@ -22,6 +22,7 @@ package methods
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -139,6 +140,135 @@ func TestHandleActiveMedia_WithZapScript(t *testing.T) {
 				assert.Equal(t, tt.activeMedia.SystemID, response.SystemID)
 				assert.Equal(t, tt.activeMedia.Name, response.Name)
 				assert.Equal(t, tt.activeMedia.Path, response.Path)
+			}
+
+			mockMediaDB.AssertExpectations(t)
+		})
+	}
+}
+
+func TestHandleMedia_WithActiveMediaZapScript(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		activeMedia       *models.ActiveMedia
+		setupMock         func(*helpers.MockMediaDBI)
+		expectedZapScript string
+		expectedSystemID  string
+		expectActiveMedia bool
+	}{
+		{
+			name:              "returns empty active array when no active media",
+			activeMedia:       nil,
+			setupMock:         nil,
+			expectedZapScript: "",
+			expectedSystemID:  "",
+			expectActiveMedia: false,
+		},
+		{
+			name: "returns zapScript with year in Active array when available",
+			activeMedia: models.NewActiveMedia(
+				"snes",
+				"Super Nintendo",
+				"/roms/snes/Super Mario World.sfc",
+				"Super Mario World",
+				"launcher1",
+			),
+			setupMock: func(m *helpers.MockMediaDBI) {
+				// HandleMedia uses system.ID from GetSystemMetadata which returns uppercase "SNES"
+				m.On("GetYearBySystemAndPath", mock.Anything, "SNES", "/roms/snes/Super Mario World.sfc").
+					Return("1990", nil)
+			},
+			expectedZapScript: "@SNES/Super Mario World (year:1990)",
+			expectedSystemID:  "SNES",
+			expectActiveMedia: true,
+		},
+		{
+			name: "returns zapScript without year in Active when not found",
+			activeMedia: models.NewActiveMedia(
+				"snes",
+				"Super Nintendo",
+				"/roms/snes/Unknown Game.sfc",
+				"Unknown Game",
+				"launcher1",
+			),
+			setupMock: func(m *helpers.MockMediaDBI) {
+				// HandleMedia uses system.ID from GetSystemMetadata which returns uppercase "SNES"
+				m.On("GetYearBySystemAndPath", mock.Anything, "SNES", "/roms/snes/Unknown Game.sfc").
+					Return("", nil)
+			},
+			expectedZapScript: "@SNES/Unknown Game",
+			expectedSystemID:  "SNES",
+			expectActiveMedia: true,
+		},
+		{
+			name: "returns zapScript without year in Active on db error",
+			activeMedia: models.NewActiveMedia(
+				"snes",
+				"Super Nintendo",
+				"/roms/snes/Error Game.sfc",
+				"Error Game",
+				"launcher1",
+			),
+			setupMock: func(m *helpers.MockMediaDBI) {
+				// HandleMedia uses system.ID from GetSystemMetadata which returns uppercase "SNES"
+				m.On("GetYearBySystemAndPath", mock.Anything, "SNES", "/roms/snes/Error Game.sfc").
+					Return("", errors.New("db error"))
+			},
+			expectedZapScript: "@SNES/Error Game",
+			expectedSystemID:  "SNES",
+			expectActiveMedia: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockMediaDB := helpers.NewMockMediaDBI()
+
+			if tt.setupMock != nil {
+				tt.setupMock(mockMediaDB)
+			}
+
+			// Standard mocks needed for HandleMedia to work
+			mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+			mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
+			mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
+
+			// Clear indexing status
+			ClearIndexingStatus()
+
+			// Create state and set active media
+			appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+			if tt.activeMedia != nil {
+				appState.SetActiveMedia(tt.activeMedia)
+			}
+
+			env := requests.RequestEnv{
+				Database: &database.Database{
+					MediaDB: mockMediaDB,
+				},
+				Platform: mockPlatform,
+				State:    appState,
+			}
+
+			result, err := HandleMedia(env)
+			require.NoError(t, err)
+
+			response, ok := result.(models.MediaResponse)
+			require.True(t, ok, "Should return MediaResponse")
+
+			if tt.expectActiveMedia {
+				require.Len(t, response.Active, 1, "Should have one active media")
+				assert.Equal(t, tt.expectedZapScript, response.Active[0].ZapScript)
+				assert.Equal(t, tt.expectedSystemID, response.Active[0].SystemID)
+				assert.Equal(t, tt.activeMedia.Name, response.Active[0].Name)
+				assert.Equal(t, tt.activeMedia.Path, response.Active[0].Path)
+			} else {
+				assert.Empty(t, response.Active, "Active array should be empty")
 			}
 
 			mockMediaDB.AssertExpectations(t)

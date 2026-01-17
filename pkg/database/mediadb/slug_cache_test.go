@@ -750,3 +750,258 @@ func TestSlugCache_CascadeDelete_Integration(t *testing.T) {
 	_, _, foundAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "testgame", nil)
 	assert.False(t, foundAfter, "cache entry should be deleted via CASCADE when media is deleted")
 }
+
+// TestGetYearBySystemAndPath_WithYear verifies year retrieval when media has a year tag
+func TestGetYearBySystemAndPath_WithYear_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create year tag type BEFORE transaction
+	yearTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "year"})
+	require.NoError(t, err)
+
+	// Insert test data
+	err = mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	system := database.System{
+		SystemID: nesSystem.ID,
+		Name:     "NES",
+	}
+	insertedSystem, err := mediaDB.InsertSystem(system)
+	require.NoError(t, err)
+
+	title := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Super Mario Bros"),
+		Name:       "Super Mario Bros",
+	}
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
+	require.NoError(t, err)
+
+	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/nes/mario.nes",
+	}
+	insertedMedia, err := mediaDB.InsertMedia(media)
+	require.NoError(t, err)
+
+	// Add year tag "1985"
+	yearTag := database.Tag{
+		TypeDBID: yearTagType.DBID,
+		Tag:      "1985",
+	}
+	insertedYearTag, err := mediaDB.FindOrInsertTag(yearTag)
+	require.NoError(t, err)
+
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{
+		MediaDBID: insertedMedia.DBID,
+		TagDBID:   insertedYearTag.DBID,
+	})
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Test GetYearBySystemAndPath
+	year, err := mediaDB.GetYearBySystemAndPath(ctx, nesSystem.ID, "/roms/nes/mario.nes")
+	require.NoError(t, err)
+	assert.Equal(t, "1985", year)
+}
+
+// TestGetYearBySystemAndPath_NoYear verifies empty string returned when media has no year tag
+func TestGetYearBySystemAndPath_NoYear_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Insert test data without year tag
+	err := mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	system := database.System{
+		SystemID: nesSystem.ID,
+		Name:     "NES",
+	}
+	insertedSystem, err := mediaDB.InsertSystem(system)
+	require.NoError(t, err)
+
+	title := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Test Game"),
+		Name:       "Test Game",
+	}
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
+	require.NoError(t, err)
+
+	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/test.nes",
+	}
+	_, err = mediaDB.InsertMedia(media)
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Test GetYearBySystemAndPath - should return empty string
+	year, err := mediaDB.GetYearBySystemAndPath(ctx, nesSystem.ID, "/roms/test.nes")
+	require.NoError(t, err)
+	assert.Empty(t, year, "should return empty string when no year tag exists")
+}
+
+// TestGetYearBySystemAndPath_MediaNotFound verifies empty string returned for non-existent media
+func TestGetYearBySystemAndPath_MediaNotFound_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Test with non-existent media
+	year, err := mediaDB.GetYearBySystemAndPath(ctx, "NES", "/nonexistent/path.nes")
+	require.NoError(t, err)
+	assert.Empty(t, year, "should return empty string for non-existent media")
+}
+
+// TestGetYearBySystemAndPath_InvalidYear verifies non-digit years are rejected
+func TestGetYearBySystemAndPath_InvalidYear_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create year tag type
+	yearTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "year"})
+	require.NoError(t, err)
+
+	// Insert test data
+	err = mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	system := database.System{
+		SystemID: nesSystem.ID,
+		Name:     "NES",
+	}
+	insertedSystem, err := mediaDB.InsertSystem(system)
+	require.NoError(t, err)
+
+	title := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Bad Year Game"),
+		Name:       "Bad Year Game",
+	}
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
+	require.NoError(t, err)
+
+	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/badyear.nes",
+	}
+	insertedMedia, err := mediaDB.InsertMedia(media)
+	require.NoError(t, err)
+
+	// Add invalid year tag "ABCD" (4 chars but not digits)
+	badYearTag := database.Tag{
+		TypeDBID: yearTagType.DBID,
+		Tag:      "ABCD",
+	}
+	insertedBadTag, err := mediaDB.FindOrInsertTag(badYearTag)
+	require.NoError(t, err)
+
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{
+		MediaDBID: insertedMedia.DBID,
+		TagDBID:   insertedBadTag.DBID,
+	})
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Test - should return empty string because ABCD fails digit validation
+	year, err := mediaDB.GetYearBySystemAndPath(ctx, nesSystem.ID, "/roms/badyear.nes")
+	require.NoError(t, err)
+	assert.Empty(t, year, "should return empty for non-digit year tag")
+}
+
+// TestGetYearBySystemAndPath_WrongSystem verifies empty string for correct path but wrong system
+func TestGetYearBySystemAndPath_WrongSystem_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create year tag type
+	yearTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "year"})
+	require.NoError(t, err)
+
+	// Insert test data for NES
+	err = mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	system := database.System{
+		SystemID: nesSystem.ID,
+		Name:     "NES",
+	}
+	insertedSystem, err := mediaDB.InsertSystem(system)
+	require.NoError(t, err)
+
+	title := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "NES Game"),
+		Name:       "NES Game",
+	}
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
+	require.NoError(t, err)
+
+	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/game.nes",
+	}
+	insertedMedia, err := mediaDB.InsertMedia(media)
+	require.NoError(t, err)
+
+	yearTag := database.Tag{
+		TypeDBID: yearTagType.DBID,
+		Tag:      "1990",
+	}
+	insertedYearTag, err := mediaDB.FindOrInsertTag(yearTag)
+	require.NoError(t, err)
+
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{
+		MediaDBID: insertedMedia.DBID,
+		TagDBID:   insertedYearTag.DBID,
+	})
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Query with SNES instead of NES - should not find media
+	year, err := mediaDB.GetYearBySystemAndPath(ctx, "SNES", "/roms/game.nes")
+	require.NoError(t, err)
+	assert.Empty(t, year, "should return empty for wrong system")
+}
