@@ -584,12 +584,18 @@ func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFil
 	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(tagFilters)
 
 	// Check AND filters
+	yearConflicts := 0
 	for _, requiredTag := range andFilters {
 		if value, exists := resultTags[requiredTag.Type]; exists && value == requiredTag.Value {
 			matched++
 		} else if exists {
 			// Has a different value for this tag type (e.g., wants USA, has Japan)
-			conflicts++
+			if requiredTag.Type == string(tags.TagTypeYear) {
+				// Year tags get a smaller penalty - they're soft preferences
+				yearConflicts++
+			} else {
+				conflicts++
+			}
 		}
 	}
 
@@ -629,8 +635,10 @@ func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFil
 	}
 
 	// Calculate confidence: matched ratio minus conflict penalty
+	// Year conflicts use a smaller penalty (0.05) than other tags (0.2)
+	// so year acts as a soft preference rather than a hard filter
 	matchRatio := float64(matched) / float64(totalFilters)
-	conflictPenalty := float64(conflicts) * 0.2
+	conflictPenalty := float64(conflicts)*0.2 + float64(yearConflicts)*0.05
 
 	confidence := matchRatio - conflictPenalty
 	if confidence < 0.0 {

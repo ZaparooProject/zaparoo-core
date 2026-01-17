@@ -1209,6 +1209,46 @@ func TestSelectBestResult(t *testing.T) {
 			expectedName: "Game",
 			description:  "should pick alphabetically first filename",
 		},
+		{
+			name: "year mismatch with region match has acceptable confidence",
+			results: []database.SearchResultWithCursor{
+				{Name: "Game (USA, 1992)", Tags: []database.TagInfo{
+					{Type: "region", Tag: "us"},
+					{Type: "year", Tag: "1992"},
+				}},
+			},
+			tagFilters: []database.TagFilter{
+				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
+			},
+			expectedName: "Game (USA, 1992)",
+			description:  "year mismatch with matching region should have acceptable confidence (>0.40)",
+		},
+		{
+			name: "exact year match preferred over mismatch",
+			results: []database.SearchResultWithCursor{
+				{Name: "Game (1992)", Tags: []database.TagInfo{{Type: "year", Tag: "1992"}}},
+				{Name: "Game (1991)", Tags: []database.TagInfo{{Type: "year", Tag: "1991"}}},
+			},
+			tagFilters:   []database.TagFilter{{Type: "year", Value: "1991", Operator: database.TagOperatorAND}},
+			expectedName: "Game (1991)",
+			description:  "exact year match should be preferred",
+		},
+		{
+			name: "region mismatch has harsh penalty vs year soft penalty",
+			results: []database.SearchResultWithCursor{
+				{Name: "Game (Japan, 1991)", Tags: []database.TagInfo{
+					{Type: "region", Tag: "jp"},
+					{Type: "year", Tag: "1991"},
+				}},
+			},
+			tagFilters: []database.TagFilter{
+				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
+			},
+			expectedName: "Game (Japan, 1991)",
+			description:  "region mismatch with year match gets lower confidence than year mismatch with region match",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1216,9 +1256,11 @@ func TestSelectBestResult(t *testing.T) {
 			mockConfig := &config.Instance{}
 			const matchQuality = 1.0 // Exact match for test purposes
 			emptyLaunchers := []platforms.Launcher{}
-			result, _ := titleshelper.SelectBestResult(
+			result, confidence := titleshelper.SelectBestResult(
 				tt.results, tt.tagFilters, mockConfig, matchQuality, emptyLaunchers)
 			assert.Equal(t, tt.expectedName, result.Name, tt.description)
+			// Verify that the result was actually selected (non-zero confidence)
+			assert.Greater(t, confidence, 0.0, "%s: expected non-zero confidence", tt.description)
 		})
 	}
 }

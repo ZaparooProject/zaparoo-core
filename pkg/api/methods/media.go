@@ -625,7 +625,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 	log.Info().Msg("received media request")
 
 	resp := models.MediaResponse{
-		Active: make([]models.ActiveMedia, 0),
+		Active: make([]models.ActiveMediaResponse, 0),
 	}
 
 	activeMedia := env.State.ActiveMedia()
@@ -635,13 +635,31 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			return nil, fmt.Errorf("error getting system metadata: %w", err)
 		}
 
-		resp.Active = append(resp.Active, models.ActiveMedia{
-			Started:    activeMedia.Started,
-			LauncherID: activeMedia.LauncherID,
-			SystemID:   system.ID,
-			SystemName: system.Name,
-			Name:       activeMedia.Name,
-			Path:       activeMedia.Path,
+		// Build zapScript: @{systemId}/{mediaName}
+		zapScript := fmt.Sprintf("@%s/%s", system.ID, activeMedia.Name)
+
+		// Try to look up year from MediaDB
+		if env.Database.MediaDB != nil {
+			year, yearErr := env.Database.MediaDB.GetYearBySystemAndPath(
+				env.State.GetContext(), system.ID, activeMedia.Path,
+			)
+			if yearErr != nil {
+				log.Debug().Err(yearErr).Msgf("could not get year for %s:%s", system.ID, activeMedia.Path)
+			} else if year != "" {
+				zapScript = fmt.Sprintf("%s (year:%s)", zapScript, year)
+			}
+		}
+
+		resp.Active = append(resp.Active, models.ActiveMediaResponse{
+			ActiveMedia: models.ActiveMedia{
+				Started:    activeMedia.Started,
+				LauncherID: activeMedia.LauncherID,
+				SystemID:   system.ID,
+				SystemName: system.Name,
+				Name:       activeMedia.Name,
+				Path:       activeMedia.Path,
+			},
+			ZapScript: zapScript,
 		})
 	}
 
@@ -749,13 +767,31 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, nil //nolint:nilnil // nil response means no active media
 	}
 
-	return models.ActiveMedia{
-		Started:    media.Started,
-		LauncherID: media.LauncherID,
-		SystemID:   media.SystemID,
-		SystemName: media.SystemName,
-		Name:       media.Name,
-		Path:       media.Path,
+	// Build zapScript: @{systemId}/{mediaName}
+	zapScript := fmt.Sprintf("@%s/%s", media.SystemID, media.Name)
+
+	// Try to look up year from MediaDB
+	if env.Database.MediaDB != nil {
+		year, err := env.Database.MediaDB.GetYearBySystemAndPath(
+			env.State.GetContext(), media.SystemID, media.Path,
+		)
+		if err != nil {
+			log.Debug().Err(err).Msgf("could not get year for %s:%s", media.SystemID, media.Path)
+		} else if year != "" {
+			zapScript = fmt.Sprintf("%s (year:%s)", zapScript, year)
+		}
+	}
+
+	return models.ActiveMediaResponse{
+		ActiveMedia: models.ActiveMedia{
+			Started:    media.Started,
+			LauncherID: media.LauncherID,
+			SystemID:   media.SystemID,
+			SystemName: media.SystemName,
+			Name:       media.Name,
+			Path:       media.Path,
+		},
+		ZapScript: zapScript,
 	}, nil
 }
 

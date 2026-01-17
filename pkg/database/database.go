@@ -340,6 +340,7 @@ type MediaDBI interface {
 	InvalidateSlugCache(ctx context.Context) error
 	InvalidateSlugCacheForSystems(ctx context.Context, systemIDs []string) error
 	GetMediaByDBID(ctx context.Context, mediaDBID int64) (SearchResultWithCursor, error)
+	GetYearBySystemAndPath(ctx context.Context, systemID, path string) (string, error)
 
 	SetIndexingStatus(status string) error
 	GetIndexingStatus() (string, error)
