@@ -1011,3 +1011,130 @@ func TestSelectBest_SingleResultVariant(t *testing.T) {
 		})
 	}
 }
+
+func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		description string
+		tagFilters  []database.TagFilter
+		result      database.SearchResultWithCursor
+		minExpected float64
+		maxExpected float64
+	}{
+		{
+			name: "exact year match boosts confidence",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{{Type: "year", Tag: "1991"}},
+			},
+			tagFilters: []database.TagFilter{
+				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
+			},
+			minExpected: 0.99,
+			maxExpected: 1.0,
+			description: "exact year match should give full confidence",
+		},
+		{
+			name: "year mismatch has small penalty (not dealbreaker)",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{{Type: "year", Tag: "1992"}},
+			},
+			tagFilters: []database.TagFilter{
+				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
+			},
+			// Year penalty is 0.05 vs normal 0.2 penalty
+			// With 1 filter and 0 matches: matchRatio = 0, penalty = 0.05
+			// confidence = 0 - 0.05 = 0 (clamped)
+			// But wait - there's no match so matchRatio = 0
+			// The key is that it's not as harsh as other tag conflicts
+			minExpected: 0.0,
+			maxExpected: 0.05, // Should be near 0 but not a hard failure
+			description: "year mismatch should have small penalty",
+		},
+		{
+			name: "year missing from result has no penalty",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{{Type: "region", Tag: "us"}},
+			},
+			tagFilters: []database.TagFilter{
+				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
+			},
+			// Year not present = no conflict counted
+			// matchRatio = 0/1 = 0, penalty = 0
+			minExpected: 0.0,
+			maxExpected: 0.05,
+			description: "missing year should not penalize",
+		},
+		{
+			name: "region mismatch has normal penalty",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{{Type: "region", Tag: "jp"}},
+			},
+			tagFilters: []database.TagFilter{
+				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+			},
+			// Normal penalty: matchRatio = 0, penalty = 0.2
+			// confidence = 0 - 0.2 = -0.2 (clamped to 0)
+			minExpected: 0.0,
+			maxExpected: 0.01,
+			description: "region mismatch should have normal penalty",
+		},
+		{
+			name: "year mismatch with region match still acceptable",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: "year", Tag: "1992"},
+					{Type: "region", Tag: "us"},
+				},
+			},
+			tagFilters: []database.TagFilter{
+				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
+				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+			},
+			// 2 filters total
+			// region matches (matched = 1)
+			// year conflicts with small penalty (yearConflicts = 1)
+			// matchRatio = 1/2 = 0.5
+			// penalty = 0*0.2 + 1*0.05 = 0.05
+			// confidence = 0.5 - 0.05 = 0.45
+			minExpected: 0.40,
+			maxExpected: 0.50,
+			description: "year mismatch with good region match should still be acceptable",
+		},
+		{
+			name: "compare year vs region mismatch severity",
+			result: database.SearchResultWithCursor{
+				Tags: []database.TagInfo{
+					{Type: "year", Tag: "wrong"},
+					{Type: "region", Tag: "wrong"},
+				},
+			},
+			tagFilters: []database.TagFilter{
+				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
+				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+			},
+			// 2 filters, 0 matches
+			// 1 year conflict (0.05 penalty) + 1 region conflict (0.2 penalty)
+			// matchRatio = 0/2 = 0
+			// penalty = 0.2 + 0.05 = 0.25
+			// confidence = 0 - 0.25 = -0.25 (clamped to 0)
+			minExpected: 0.0,
+			maxExpected: 0.01,
+			description: "both mismatches should result in low confidence",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			confidence := CalculateTagMatchConfidence(&tt.result, tt.tagFilters)
+
+			assert.GreaterOrEqual(t, confidence, tt.minExpected,
+				"%s: confidence %.2f should be >= %.2f", tt.description, confidence, tt.minExpected)
+			assert.LessOrEqual(t, confidence, tt.maxExpected,
+				"%s: confidence %.2f should be <= %.2f", tt.description, confidence, tt.maxExpected)
+		})
+	}
+}

@@ -180,6 +180,17 @@ func NewActiveMedia(systemID, systemName, path, name, launcherID string) *Active
 	}
 }
 
+// ActiveMediaResponse is the API response type for active media, including ZapScript.
+type ActiveMediaResponse struct {
+	Started    time.Time `json:"started"`
+	LauncherID string    `json:"launcherId"`
+	SystemID   string    `json:"systemId"`
+	SystemName string    `json:"systemName"`
+	Path       string    `json:"mediaPath"`
+	Name       string    `json:"mediaName"`
+	ZapScript  string    `json:"zapScript"`
+}
+
 func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
 	if with == nil {
 		return false

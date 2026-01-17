@@ -749,14 +749,62 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, nil //nolint:nilnil // nil response means no active media
 	}
 
-	return models.ActiveMedia{
+	// Build zapScript: @{systemId}/{mediaName}
+	zapScript := fmt.Sprintf("@%s/%s", media.SystemID, media.Name)
+
+	// Try to look up year from MediaDB
+	year := lookupYearForMedia(env.State.GetContext(), env.Database.MediaDB, media.SystemID, media.Path)
+	if year != "" {
+		zapScript = fmt.Sprintf("%s (year:%s)", zapScript, year)
+	}
+
+	return models.ActiveMediaResponse{
 		Started:    media.Started,
 		LauncherID: media.LauncherID,
 		SystemID:   media.SystemID,
 		SystemName: media.SystemName,
 		Name:       media.Name,
 		Path:       media.Path,
+		ZapScript:  zapScript,
 	}, nil
+}
+
+// lookupYearForMedia attempts to find the year tag for a media item by path.
+// Returns empty string if year cannot be found (DB not available, media not indexed, etc.)
+func lookupYearForMedia(ctx context.Context, mediaDB database.MediaDBI, systemID, path string) string {
+	if mediaDB == nil {
+		return ""
+	}
+
+	// Look up system to get its DBID
+	system, err := mediaDB.FindSystemBySystemID(systemID)
+	if err != nil {
+		log.Debug().Err(err).Msgf("could not find system %s for year lookup", systemID)
+		return ""
+	}
+
+	// Look up media by system and path to get its DBID
+	media, err := mediaDB.FindMedia(database.Media{
+		SystemDBID: system.DBID,
+		Path:       path,
+	})
+	if err != nil {
+		log.Debug().Err(err).Msgf("could not find media for path %s", path)
+		return ""
+	}
+
+	// Get full media info including year
+	result, err := mediaDB.GetMediaByDBID(ctx, media.DBID)
+	if err != nil {
+		log.Debug().Err(err).Msgf("could not get media info for DBID %d", media.DBID)
+		return ""
+	}
+
+	if result.Year != nil && *result.Year != "" {
+		return *result.Year
+	}
+
+	return ""
 }
 
 //nolint:gocritic,revive // single-use parameter in API handler
