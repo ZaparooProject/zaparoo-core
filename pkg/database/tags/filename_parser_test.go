@@ -566,6 +566,31 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 			filename: "Legend of Zelda, The - Ocarina of Time (v1.2)(USA)(En)[!].z64",
 			wantTags: []string{"rev:1-2", "region:us", "lang:en", "dump:verified"},
 		},
+		{
+			name:     "single language in square brackets",
+			filename: "Game [en].rom",
+			wantTags: []string{"lang:en"},
+		},
+		{
+			name:     "single language de in square brackets",
+			filename: "Game [de].rom",
+			wantTags: []string{"lang:de"},
+		},
+		{
+			name:     "single language fr in square brackets",
+			filename: "Game [fr].rom",
+			wantTags: []string{"lang:fr"},
+		},
+		{
+			name:     "language in square brackets with region in parentheses",
+			filename: "Game (USA)[en].rom",
+			wantTags: []string{"region:us", "lang:en"},
+		},
+		{
+			name:     "language and dump tag in square brackets",
+			filename: "Game (Japan)[ja][!].rom",
+			wantTags: []string{"region:jp", "lang:ja", "dump:verified"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1286,9 +1311,9 @@ func TestParseTitleFromFilename_SceneReleases(t *testing.T) {
 			expected: "Super Mario Bros",
 		},
 		{
-			name:     "Game with year shouldn't strip it",
+			name:     "Game with year in parentheses strips the year",
 			input:    "Elden Ring (2022).exe",
-			expected: "Elden Ring 2022",
+			expected: "Elden Ring",
 		},
 		{
 			name:     "Filename with spaces (no scene tags)",
@@ -1580,6 +1605,145 @@ func TestStripSceneArtifacts(t *testing.T) {
 			t.Parallel()
 			got := stripSceneArtifacts(tt.input)
 			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestParseCommaSeparatedTags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		tag      string
+		wantTags []CanonicalTag
+		wantNil  bool
+	}{
+		{
+			name: "mixed region and revision (JP, Rev B)",
+			tag:  "jp,-rev-b",
+			wantTags: []CanonicalTag{
+				{Type: TagTypeRegion, Value: TagRegionJP, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangJA, Source: TagSourceBracketed},
+				{Type: TagTypeRev, Value: TagRevB, Source: TagSourceBracketed},
+			},
+		},
+		{
+			name: "multi-region USA and Europe",
+			tag:  "usa,-europe",
+			wantTags: []CanonicalTag{
+				{Type: TagTypeRegion, Value: TagRegionUS, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+				{Type: TagTypeRegion, Value: TagRegionEU, Source: TagSourceBracketed},
+			},
+		},
+		{
+			name: "region and language (Europe, En)",
+			tag:  "europe,-en",
+			wantTags: []CanonicalTag{
+				{Type: TagTypeRegion, Value: TagRegionEU, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+			},
+		},
+		{
+			name: "dash-separated regions (EU-US)",
+			tag:  "eu-us",
+			wantTags: []CanonicalTag{
+				{Type: TagTypeRegion, Value: TagRegionEU, Source: TagSourceBracketed},
+				{Type: TagTypeRegion, Value: TagRegionUS, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+			},
+		},
+		{
+			name: "revision with number (USA, Rev 1)",
+			tag:  "usa,-rev-1",
+			wantTags: []CanonicalTag{
+				{Type: TagTypeRegion, Value: TagRegionUS, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+				{Type: TagTypeRev, Value: TagRev1, Source: TagSourceBracketed},
+			},
+		},
+		{
+			name:    "single value returns nil",
+			tag:     "usa",
+			wantNil: true,
+		},
+		{
+			name:    "empty tag returns nil",
+			tag:     "",
+			wantNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := parseCommaSeparatedTags(tt.tag)
+			if tt.wantNil {
+				assert.Nil(t, got)
+			} else {
+				assert.Equal(t, tt.wantTags, got)
+			}
+		})
+	}
+}
+
+func TestParseFilenameToCanonicalTags_MixedTagTypes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		filename     string
+		wantContains []string
+	}{
+		{
+			name:         "1943 Midway Kaisen with JP and Rev B",
+			filename:     "1943- Midway Kaisen (JP, Rev B).mra",
+			wantContains: []string{"region:jp", "rev:b"},
+		},
+		{
+			name:         "Game with USA and Rev 1",
+			filename:     "Game (USA, Rev 1).rom",
+			wantContains: []string{"region:us", "rev:1"},
+		},
+		{
+			name:         "Game with Europe and English",
+			filename:     "Game (Europe, En).rom",
+			wantContains: []string{"region:eu", "lang:en"},
+		},
+		{
+			name:         "Multi-region still works",
+			filename:     "Game (USA, Europe).rom",
+			wantContains: []string{"region:us", "region:eu"},
+		},
+		{
+			name:         "Dash-separated regions still work",
+			filename:     "Game (EU-US).rom",
+			wantContains: []string{"region:eu", "region:us"},
+		},
+		{
+			name:         "Japan with revision letter",
+			filename:     "Sonic (Japan, Rev A).md",
+			wantContains: []string{"region:jp", "rev:a"},
+		},
+		{
+			name:         "Single region still works",
+			filename:     "Mario (USA).nes",
+			wantContains: []string{"region:us"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+
+			for _, want := range tt.wantContains {
+				assert.Contains(t, gotStrings, want, "Expected tag %s not found in %v", want, gotStrings)
+			}
 		})
 	}
 }
