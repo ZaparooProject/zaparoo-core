@@ -8,8 +8,8 @@ github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERo
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d h1:2xp1BQbqcDDaikHnASWpVZRjibOxu7y9LhAv04whugI=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d/go.mod h1:peYoMncQljjNS6tZwI9WVyQB3qZS6u79/N3mBOcnd3I=
-github.com/ZaparooProject/go-pn532 v0.17.0 h1:+wbaTK7KXrR4ktwvMST/1wHpg5W3fMYHUFcwyF9sJoc=
-github.com/ZaparooProject/go-pn532 v0.17.0/go.mod h1:38r+NvAyNsUa/McJC4FEk2+uxOzrN1AUgrh/fpc0oLk=
+github.com/ZaparooProject/go-pn532 v0.18.0 h1:PciSeVsjXzSJ8P8sWkAmQJ18FGhHYeKqIFdsVXOxb38=
+github.com/ZaparooProject/go-pn532 v0.18.0/go.mod h1:38r+NvAyNsUa/McJC4FEk2+uxOzrN1AUgrh/fpc0oLk=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/andygrunwald/vdf v1.1.0 h1:gmstp0R7DOepIZvWoSJY97ix7QOrsxpGPU6KusKXqvw=
