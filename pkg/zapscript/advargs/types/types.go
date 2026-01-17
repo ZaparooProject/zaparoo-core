@@ -103,6 +103,8 @@ type LaunchTitleArgs struct {
 	GlobalArgs
 	// Launcher overrides the default launcher by ID.
 	Launcher string `advarg:"launcher" validate:"omitempty,launcher"` //nolint:revive // custom validator
+	// Action specifies the launch action (run, details).
+	Action string `advarg:"action" validate:"omitempty,oneof=run details"`
 	// Tags filters results by tag criteria.
 	Tags []database.TagFilter `advarg:"tags"`
 }
