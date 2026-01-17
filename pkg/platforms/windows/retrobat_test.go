@@ -50,12 +50,11 @@ func TestFindRetroBatDir(t *testing.T) {
 
 func TestCreateRetroBatLauncher(t *testing.T) {
 	t.Parallel()
-	tempDir := t.TempDir()
 	systemFolder := "snes"
 	info, exists := esde.LookupByFolderName(systemFolder)
 	require.True(t, exists, "snes should exist in esde.SystemMap")
 
-	launcher := createRetroBatLauncher(systemFolder, info, tempDir)
+	launcher := createRetroBatLauncher(systemFolder, info)
 
 	assert.Equal(t, "RetroBatSNES", launcher.ID)
 	assert.Equal(t, "SNES", launcher.SystemID)
@@ -69,28 +68,21 @@ func TestCreateRetroBatLauncher(t *testing.T) {
 	assert.NotNil(t, launcher.Scanner)
 }
 
-func TestRetroBatLauncherTest(t *testing.T) {
+func TestRetroBatLauncherHasRequiredFunctions(t *testing.T) {
 	t.Parallel()
-	tempDir := t.TempDir()
 	systemFolder := "snes"
 	info, exists := esde.LookupByFolderName(systemFolder)
 	require.True(t, exists, "snes should exist in esde.SystemMap")
 
-	// Create mock RetroBat directory structure
-	romsDir := filepath.Join(tempDir, "roms", "snes")
-	err := os.MkdirAll(romsDir, 0o750)
-	require.NoError(t, err)
+	launcher := createRetroBatLauncher(systemFolder, info)
 
-	// Create mock retrobat.exe
-	retroBatExe := filepath.Join(tempDir, "retrobat.exe")
-	err = os.WriteFile(retroBatExe, []byte("mock"), 0o600)
-	require.NoError(t, err)
-
-	launcher := createRetroBatLauncher(systemFolder, info, tempDir)
-
-	// Test the launcher creation itself
+	// Verify launcher has all required functions set
 	assert.Equal(t, "RetroBatSNES", launcher.ID)
 	assert.Equal(t, "SNES", launcher.SystemID)
+	assert.NotNil(t, launcher.Test, "Test function should be set")
+	assert.NotNil(t, launcher.Launch, "Launch function should be set")
+	assert.NotNil(t, launcher.Kill, "Kill function should be set")
+	assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
 }
 
 func TestRetroBatLauncherScanner(t *testing.T) {
@@ -180,7 +172,7 @@ func TestRetroBatLauncherCreation(t *testing.T) {
 			info, exists := esde.LookupByFolderName(tc.folder)
 			require.True(t, exists, "System %s should exist in esde.SystemMap", tc.folder)
 
-			launcher := createRetroBatLauncher(tc.folder, info, "/tmp")
+			launcher := createRetroBatLauncher(tc.folder, info)
 
 			assert.Equal(t, tc.expectID, launcher.ID, "Launcher ID mismatch for %s", tc.folder)
 			assert.Equal(t, tc.expectSysID, launcher.SystemID, "SystemID mismatch for %s", tc.folder)

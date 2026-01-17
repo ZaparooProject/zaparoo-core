@@ -45,7 +45,7 @@ func (*Reader) convertTagType(tagType pn532.TagType) string {
 	}
 }
 
-func (r *Reader) readNDEFData(detectedTag *pn532.DetectedTag) (uid string, data []byte) {
+func (r *Reader) readNDEFData(ctx context.Context, detectedTag *pn532.DetectedTag) (uid string, data []byte) {
 	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting readNDEFData")
 
 	// Use tagOps for tag operations (mocks won't reach here in tests)
@@ -54,8 +54,8 @@ func (r *Reader) readNDEFData(detectedTag *pn532.DetectedTag) (uid string, data 
 		return "", detectedTag.TargetData
 	}
 
-	// Use reader's context with timeout to ensure proper cancellation
-	ctx, cancel := context.WithTimeout(r.ctx, ndefReadTimeout)
+	// Apply timeout to the passed context for NDEF operations
+	ctx, cancel := context.WithTimeout(ctx, ndefReadTimeout)
 	defer cancel()
 
 	// Initialize tagops from the already-detected tag.

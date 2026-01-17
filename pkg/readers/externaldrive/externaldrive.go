@@ -493,6 +493,7 @@ func (r *Reader) handleMountEvent(event *MountEvent) {
 		Data:     hex.EncodeToString(contents),
 		ScanTime: time.Now(),
 		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
 	}
 
 	// Before adding token, verify device is still mounted (race condition protection)

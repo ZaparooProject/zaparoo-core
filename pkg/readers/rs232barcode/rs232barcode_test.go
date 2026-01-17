@@ -328,6 +328,7 @@ func TestOpen_SuccessfulConnection(t *testing.T) {
 	assert.Equal(t, tokens.TypeBarcode, scan.Token.Type)
 	assert.Equal(t, "1234567890", scan.Token.UID)
 	assert.Equal(t, "1234567890", scan.Token.Text)
+	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan.ReaderError)
 
 	// Clean up
@@ -374,6 +375,7 @@ func TestOpen_ReaderError(t *testing.T) {
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "TEST-BARCODE-123", scan1.Token.UID)
 	assert.Equal(t, tokens.TypeBarcode, scan1.Token.Type)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan1.ReaderError)
 
 	// Reader error should close the reader but not send any additional scans
@@ -430,12 +432,14 @@ func TestOpen_MultipleBarcodes(t *testing.T) {
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "BARCODE-001", scan1.Token.UID)
 	assert.Equal(t, tokens.TypeBarcode, scan1.Token.Type)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Second barcode (different from first)
 	scan2 := testutils.AssertScanReceived(t, scanQueue, 500*time.Millisecond)
 	assert.NotNil(t, scan2.Token)
 	assert.Equal(t, "BARCODE-002", scan2.Token.UID)
 	assert.Equal(t, tokens.TypeBarcode, scan2.Token.Type)
+	assert.NotEmpty(t, scan2.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Third barcode (duplicate of first) - should still be sent
 	// Each barcode scan is independent; no deduplication
@@ -443,6 +447,7 @@ func TestOpen_MultipleBarcodes(t *testing.T) {
 	assert.NotNil(t, scan3.Token)
 	assert.Equal(t, "BARCODE-001", scan3.Token.UID)
 	assert.Equal(t, tokens.TypeBarcode, scan3.Token.Type)
+	assert.NotEmpty(t, scan3.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Clean up
 	err = reader.Close()
@@ -493,6 +498,7 @@ func TestOpen_SplitReads(t *testing.T) {
 	scan := testutils.AssertScanReceived(t, scanQueue, 500*time.Millisecond)
 	assert.NotNil(t, scan.Token)
 	assert.Equal(t, "SPLIT-BARCODE-123", scan.Token.UID)
+	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Clean up
 	err = reader.Close()
@@ -533,6 +539,7 @@ func TestOpen_BufferOverflow(t *testing.T) {
 	scan := testutils.AssertScanReceived(t, scanQueue, 500*time.Millisecond)
 	assert.NotNil(t, scan.Token)
 	assert.Equal(t, "VALID-BARCODE", scan.Token.UID)
+	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Clean up
 	err = reader.Close()
@@ -571,6 +578,7 @@ func TestOpen_LargeQRCode(t *testing.T) {
 	assert.NotNil(t, scan.Token)
 	assert.Len(t, scan.Token.UID, 7000)
 	assert.Equal(t, tokens.TypeBarcode, scan.Token.Type)
+	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Clean up
 	err = reader.Close()
@@ -660,16 +668,19 @@ func TestOpen_CarriageReturnDelimiter(t *testing.T) {
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 500*time.Millisecond)
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "BARCODE-WITH-CR", scan1.Token.UID)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Second barcode with \n
 	scan2 := testutils.AssertScanReceived(t, scanQueue, 500*time.Millisecond)
 	assert.NotNil(t, scan2.Token)
 	assert.Equal(t, "BARCODE-WITH-LF", scan2.Token.UID)
+	assert.NotEmpty(t, scan2.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Third barcode with \r\n (should only trigger once, not twice)
 	scan3 := testutils.AssertScanReceived(t, scanQueue, 500*time.Millisecond)
 	assert.NotNil(t, scan3.Token)
 	assert.Equal(t, "BARCODE-WITH-CRLF", scan3.Token.UID)
+	assert.NotEmpty(t, scan3.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// No additional scans from the extra line delimiter
 	time.Sleep(100 * time.Millisecond)
@@ -706,6 +717,7 @@ func TestOpen_EmptyLinesIgnored(t *testing.T) {
 	scan := testutils.AssertScanReceived(t, scanQueue, 500*time.Millisecond)
 	assert.NotNil(t, scan.Token)
 	assert.Equal(t, "VALID-BARCODE", scan.Token.UID)
+	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// No additional scans from empty lines
 	time.Sleep(100 * time.Millisecond)

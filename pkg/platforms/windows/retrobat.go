@@ -86,7 +86,7 @@ func isRetroBatRunning() bool {
 }
 
 // createRetroBatLauncher creates a launcher for a specific RetroBat system.
-func createRetroBatLauncher(systemFolder string, info esde.SystemInfo, _ string) platforms.Launcher {
+func createRetroBatLauncher(systemFolder string, info esde.SystemInfo) platforms.Launcher {
 	launcherID := info.GetLauncherID()
 	systemID := info.SystemID
 	return platforms.Launcher{
@@ -188,46 +188,12 @@ func createRetroBatLauncher(systemFolder string, info esde.SystemInfo, _ string)
 	}
 }
 
-// getRetroBatLaunchers returns all available RetroBat launchers
-func getRetroBatLaunchers(cfg *config.Instance) []platforms.Launcher {
-	log.Info().Msg("initializing RetroBat launchers")
-
-	retroBatDir, err := findRetroBatDir(cfg)
-	if err != nil {
-		log.Info().Msgf("RetroBat not found: %s", err)
-		return nil
+// getRetroBatLaunchers returns RetroBat launchers for all known ES-DE systems.
+// Launchers are registered statically; the Test function handles runtime detection.
+func getRetroBatLaunchers() []platforms.Launcher {
+	launchers := make([]platforms.Launcher, 0, len(esde.SystemMap))
+	for folder, info := range esde.SystemMap {
+		launchers = append(launchers, createRetroBatLauncher(folder, info))
 	}
-
-	// Always register launchers if RetroBat directory is found
-	log.Info().Msgf("found RetroBat at %s, registering launchers", retroBatDir)
-
-	var launchers []platforms.Launcher
-
-	romsDir := filepath.Join(retroBatDir, "roms")
-	entries, err := os.ReadDir(romsDir)
-	if err != nil {
-		log.Warn().Msgf("error reading RetroBat roms directory at %s: %s", romsDir, err)
-		return nil
-	}
-
-	log.Info().Msgf("found %d directories in roms folder", len(entries))
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			systemFolder := entry.Name()
-			if info, exists := esde.LookupByFolderName(systemFolder); exists {
-				log.Info().
-					Str("folder", systemFolder).
-					Str("systemID", info.SystemID).
-					Msg("registering RetroBat launcher")
-				launcher := createRetroBatLauncher(systemFolder, info, retroBatDir)
-				launchers = append(launchers, launcher)
-			} else {
-				log.Debug().Msgf("unmapped RetroBat system folder: %s", systemFolder)
-			}
-		}
-	}
-
-	log.Info().Msgf("successfully registered %d RetroBat launchers", len(launchers))
 	return launchers
 }

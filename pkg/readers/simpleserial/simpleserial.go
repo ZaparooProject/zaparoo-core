@@ -92,6 +92,7 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 		Data:     line,
 		ScanTime: time.Now(),
 		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
 	}
 
 	ps := strings.Split(args, "\t")

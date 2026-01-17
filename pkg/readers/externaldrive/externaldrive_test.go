@@ -380,6 +380,7 @@ func TestProcessEvents_MountEvent(t *testing.T) {
 		assert.NotNil(t, scan.Token, "Should receive token from mount event")
 		assert.Equal(t, TokenType, scan.Token.Type)
 		assert.Contains(t, scan.Token.Text, tokenContents)
+		assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	case <-ctx.Done():
 		t.Fatal("Timeout waiting for scan event")
 	}
@@ -517,6 +518,7 @@ func TestHandleMountEvent_WithValidToken(t *testing.T) {
 		assert.NotNil(t, scan.Token)
 		assert.Equal(t, TokenType, scan.Token.Type)
 		assert.Contains(t, scan.Token.Text, "**launch.system:nes")
+		assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	case <-ctx.Done():
 		t.Fatal("Timeout waiting for scan event")
 	}
@@ -848,6 +850,7 @@ func TestHandleMountEvent_CaseInsensitiveTokenFile(t *testing.T) {
 	case scan := <-scanChan:
 		assert.NotNil(t, scan.Token, "Should detect token with case-insensitive filename")
 		assert.Contains(t, scan.Token.Text, "**launch.system:nes")
+		assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	case <-ctx.Done():
 		t.Fatal("Timeout waiting for scan event - case insensitive matching may be broken")
 	}
@@ -1364,6 +1367,7 @@ func TestHandleMountEvent_DuplicateTokenPrevention(t *testing.T) {
 	select {
 	case scan := <-scanChan:
 		assert.NotNil(t, scan.Token)
+		assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	case <-ctx.Done():
 		t.Fatal("Timeout waiting for first scan event")
 	}

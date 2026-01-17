@@ -260,6 +260,7 @@ func TestOpen_InitialFileContent_TokenDetected(t *testing.T) {
 	assert.NotNil(t, scan.Token)
 	assert.Equal(t, "**LAUNCH.CMD:test_game", scan.Token.Text)
 	assert.Equal(t, TokenType, scan.Token.Type)
+	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan.ReaderError)
 }
 
@@ -291,6 +292,7 @@ func TestOpen_FileContentChange_NewToken(t *testing.T) {
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 1*time.Second)
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "token1", scan1.Token.Text)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Change file content
 	err = os.WriteFile(tokenFile, []byte("token2"), 0o600)
@@ -300,6 +302,7 @@ func TestOpen_FileContentChange_NewToken(t *testing.T) {
 	scan2 := testutils.AssertScanReceived(t, scanQueue, 1*time.Second)
 	assert.NotNil(t, scan2.Token)
 	assert.Equal(t, "token2", scan2.Token.Text)
+	assert.NotEmpty(t, scan2.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan2.ReaderError)
 }
 
@@ -331,6 +334,7 @@ func TestOpen_FileBecomesEmpty_TokenRemoval(t *testing.T) {
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 1*time.Second)
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "active_token", scan1.Token.Text)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Empty the file
 	err = os.WriteFile(tokenFile, []byte(""), 0o600)
@@ -370,6 +374,7 @@ func TestOpen_DuplicateContent_Ignored(t *testing.T) {
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 1*time.Second)
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "same_token", scan1.Token.Text)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Write the same content again
 	err = os.WriteFile(tokenFile, []byte("same_token"), 0o600)
@@ -414,6 +419,7 @@ func TestOpen_EmptyFileInitially_NoToken(t *testing.T) {
 	scan := testutils.AssertScanReceived(t, scanQueue, 1*time.Second)
 	assert.NotNil(t, scan.Token)
 	assert.Equal(t, "new_token", scan.Token.Text)
+	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 }
 
 func TestOpen_WhitespaceHandling(t *testing.T) {
@@ -444,6 +450,7 @@ func TestOpen_WhitespaceHandling(t *testing.T) {
 	scan := testutils.AssertScanReceived(t, scanQueue, 1*time.Second)
 	assert.NotNil(t, scan.Token)
 	assert.Equal(t, "token_with_spaces", scan.Token.Text, "whitespace should be trimmed")
+	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 }
 
 func TestClose_StopsPolling(t *testing.T) {
@@ -534,6 +541,7 @@ func TestOpen_ConsecutiveReadErrors_SendsReaderError(t *testing.T) {
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 1*time.Second)
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "active_token", scan1.Token.Text)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan1.ReaderError)
 
 	// Delete the file to cause consecutive read errors

@@ -133,6 +133,7 @@ func TestOpen_ErrorCountExceedsMaxWithActiveToken(t *testing.T) {
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "test-uid-123", scan1.Token.UID)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan1.ReaderError)
 
 	// Wait for error count to exceed maxErrors (5) and ReaderError scan to be sent
@@ -146,8 +147,8 @@ func TestOpen_ErrorCountExceedsMaxWithActiveToken(t *testing.T) {
 	assert.False(t, reader.Connected(), "reader should have stopped after max errors")
 }
 
-// TestOpen_ErrorCountExceedsMaxWithoutActiveToken verifies that when error count
-// exceeds maxErrors but there's NO active token, no scan is sent (no ReaderError needed).
+// TestOpen_ErrorCountExceedsMaxWithoutActiveToken verifies that ReaderError is sent
+// even when there's no active token, to cancel any pending exit timers.
 func TestOpen_ErrorCountExceedsMaxWithoutActiveToken(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -184,11 +185,10 @@ func TestOpen_ErrorCountExceedsMaxWithoutActiveToken(t *testing.T) {
 		_ = reader.Close()
 	}()
 
-	// Wait for error count to exceed maxErrors
-	time.Sleep(3 * time.Second)
-
-	// No scan should be sent since there was no active token
-	testutils.AssertNoScan(t, scanQueue, 500*time.Millisecond)
+	// ReaderError should still be sent to cancel any pending exit timers
+	scan := testutils.AssertScanReceived(t, scanQueue, 5*time.Second)
+	assert.Nil(t, scan.Token)
+	assert.True(t, scan.ReaderError, "ReaderError should be sent even without active token")
 
 	// Reader should have stopped polling
 	assert.False(t, reader.Connected(), "reader should have stopped after max errors")
@@ -254,6 +254,7 @@ func TestOpen_TokenDetectionAndRemoval(t *testing.T) {
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "ntag-uid-456", scan1.Token.UID)
 	assert.Equal(t, tokens.TypeNTAG, scan1.Token.Type)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan1.ReaderError)
 
 	// Wait for token removal (maxZeroScans = 3)
@@ -364,6 +365,7 @@ func TestOpen_DuplicateTokenIgnored(t *testing.T) {
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "same-uid-999", scan1.Token.UID)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// No additional scans should be sent for the same token
 	testutils.AssertNoScan(t, scanQueue, 2*time.Second)

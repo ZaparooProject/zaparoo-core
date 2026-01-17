@@ -237,16 +237,13 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 				log.Warn().Msgf("error during poll: %s", err)
 				log.Warn().Msg("fatal IO error, device was possibly unplugged")
 
-				// Send reader error notification to prevent triggering on_remove/exit
-				if r.prevToken != nil {
-					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
-					iq <- readers.Scan{
-						Source:      tokens.SourceReader,
-						Token:       nil,
-						ReaderError: true,
-					}
-					r.prevToken = nil
+				log.Warn().Msg("reader error, sending error signal")
+				iq <- readers.Scan{
+					Source:      tokens.SourceReader,
+					Token:       nil,
+					ReaderError: true,
 				}
+				r.prevToken = nil
 
 				err = r.Close()
 				if err != nil {
@@ -677,7 +674,7 @@ func openDeviceWithRetries(device string) (nfc.Device, error) {
 	}
 }
 
-func (*Reader) pollDevice(
+func (r *Reader) pollDevice(
 	pnd *nfc.Device,
 	activeToken *tokens.Token,
 	ttp int,
@@ -758,6 +755,7 @@ func (*Reader) pollDevice(
 		Data:     hex.EncodeToString(record.Bytes),
 		ScanTime: time.Now(),
 		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
 	}
 
 	return card, removed, nil

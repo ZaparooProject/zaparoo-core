@@ -181,16 +181,13 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 			if err != nil {
 				log.Debug().Msgf("error listing pcsc readers: %s", err)
 
-				// Send reader error notification to prevent triggering on_remove/exit
-				if r.lastToken != nil {
-					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
-					iq <- readers.Scan{
-						Source:      tokens.SourceReader,
-						Token:       nil,
-						ReaderError: true,
-					}
-					r.lastToken = nil
+				log.Warn().Msg("reader error, sending error signal")
+				iq <- readers.Scan{
+					Source:      tokens.SourceReader,
+					Token:       nil,
+					ReaderError: true,
 				}
+				r.lastToken = nil
 
 				r.mu.Lock()
 				r.polling = false
@@ -201,16 +198,13 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 			if !helpers.Contains(rls, r.name) {
 				log.Debug().Msgf("reader not found: %s", r.name)
 
-				// Send reader error notification to prevent triggering on_remove/exit
-				if r.lastToken != nil {
-					log.Warn().Msg("reader disconnected with active token - sending error signal to keep media running")
-					iq <- readers.Scan{
-						Source:      tokens.SourceReader,
-						Token:       nil,
-						ReaderError: true,
-					}
-					r.lastToken = nil
+				log.Warn().Msg("reader disconnected, sending error signal")
+				iq <- readers.Scan{
+					Source:      tokens.SourceReader,
+					Token:       nil,
+					ReaderError: true,
 				}
+				r.lastToken = nil
 
 				r.mu.Lock()
 				r.polling = false
@@ -305,6 +299,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 				Text:     text,
 				ScanTime: time.Now(),
 				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
 			}
 
 			iq <- readers.Scan{

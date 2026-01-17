@@ -46,11 +46,7 @@ func (*mockTransport) IsConnected() bool {
 	return true
 }
 
-func (*mockTransport) SendCommand(_ byte, _ []byte) ([]byte, error) {
-	return []byte{}, nil
-}
-
-func (*mockTransport) SendCommandWithContext(_ context.Context, _ byte, _ []byte) ([]byte, error) {
+func (*mockTransport) SendCommand(_ context.Context, _ byte, _ []byte) ([]byte, error) {
 	return []byte{}, nil
 }
 
@@ -72,7 +68,7 @@ type mockPN532Device struct {
 	closeCalled   bool
 }
 
-func (m *mockPN532Device) Init() error {
+func (m *mockPN532Device) Init(_ context.Context) error {
 	m.initCalled = true
 	return m.initErr
 }
@@ -134,7 +130,7 @@ func (*mockTag) WriteText(_ context.Context, _ string) error {
 	return nil
 }
 
-func (*mockTag) DebugInfo() string {
+func (*mockTag) DebugInfo(_ context.Context) string {
 	return "mockTag"
 }
 
@@ -148,9 +144,9 @@ type mockPollingSession struct {
 	writeToNextTagWithRetryErr error // Error to return before invoking callback
 	startFunc                  func(ctx context.Context) error
 	closeFunc                  func() error
-	onCardDetected             func(*pn532.DetectedTag) error
+	onCardDetected             func(context.Context, *pn532.DetectedTag) error
 	onCardRemoved              func()
-	onCardChanged              func(*pn532.DetectedTag) error
+	onCardChanged              func(context.Context, *pn532.DetectedTag) error
 	closeCalled                bool
 	setCallbacksCalled         bool
 }
@@ -171,7 +167,7 @@ func (m *mockPollingSession) Close() error {
 	return nil
 }
 
-func (m *mockPollingSession) SetOnCardDetected(callback func(*pn532.DetectedTag) error) {
+func (m *mockPollingSession) SetOnCardDetected(callback func(context.Context, *pn532.DetectedTag) error) {
 	m.onCardDetected = callback
 	m.setCallbacksCalled = true
 }
@@ -180,7 +176,7 @@ func (m *mockPollingSession) SetOnCardRemoved(callback func()) {
 	m.onCardRemoved = callback
 }
 
-func (m *mockPollingSession) SetOnCardChanged(callback func(*pn532.DetectedTag) error) {
+func (m *mockPollingSession) SetOnCardChanged(callback func(context.Context, *pn532.DetectedTag) error) {
 	m.onCardChanged = callback
 }
 
@@ -237,7 +233,7 @@ func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
 	// Session start function:
 	// 1. Trigger onCardDetected callback to set active token
 	// 2. Return error to simulate session failure
-	mockSession.startFunc = func(_ context.Context) error {
+	mockSession.startFunc = func(ctx context.Context) error {
 		if mockSession.onCardDetected != nil && !tagDetected {
 			tagDetected = true
 			// Simulate tag detection
@@ -246,7 +242,7 @@ func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
 				UID:        "test-uid-session-error",
 				TargetData: []byte{0x01, 0x02, 0x03},
 			}
-			_ = mockSession.onCardDetected(tag)
+			_ = mockSession.onCardDetected(ctx, tag)
 		}
 		// Wait a bit then return error (not context.Canceled)
 		time.Sleep(100 * time.Millisecond)
@@ -283,6 +279,7 @@ func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "test-uid-session-error", scan1.Token.UID)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan1.ReaderError)
 
 	// Second scan: session error with active token
@@ -297,8 +294,8 @@ func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
 	assert.True(t, mockSession.setCallbacksCalled, "session callbacks should be set")
 }
 
-// TestOpen_SessionErrorWithoutActiveToken verifies that when session errors
-// but there's NO active token, no ReaderError scan is sent.
+// TestOpen_SessionErrorWithoutActiveToken verifies that ReaderError is sent
+// even when there's no active token, to cancel any pending exit timers.
 func TestOpen_SessionErrorWithoutActiveToken(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -344,11 +341,90 @@ func TestOpen_SessionErrorWithoutActiveToken(t *testing.T) {
 		_ = reader.Close()
 	}()
 
-	// Wait for session error
-	time.Sleep(500 * time.Millisecond)
+	// ReaderError should still be sent to cancel any pending exit timers
+	scan := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	assert.Nil(t, scan.Token)
+	assert.True(t, scan.ReaderError, "ReaderError should be sent even without active token")
+}
 
-	// No scan should be sent since there was no active token
-	testutils.AssertNoScan(t, scanQueue, 500*time.Millisecond)
+// TestOpen_SessionErrorAfterRemoval is a regression test for the race condition
+// where unplugging the reader causes: 1) card removal callback, 2) session error.
+// ReaderError must be sent to cancel the exit timer started by the removal.
+func TestOpen_SessionErrorAfterRemoval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	scanQueue := testutils.CreateTestScanChannel(t)
+
+	mockDevice := &mockPN532Device{}
+	mockSession := &mockPollingSession{}
+
+	// Simulate the race condition:
+	// 1. Tag detected
+	// 2. Tag removal callback fires (clears lastToken)
+	// 3. Session error occurs
+	mockSession.startFunc = func(ctx context.Context) error {
+		if mockSession.onCardDetected != nil {
+			tag := &pn532.DetectedTag{
+				Type:       pn532.TagTypeNTAG,
+				UID:        "race-condition-uid",
+				TargetData: []byte{0x01},
+			}
+			_ = mockSession.onCardDetected(ctx, tag)
+		}
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Card removal fires first (simulates go-pn532 interpreting disconnect as removal)
+		if mockSession.onCardRemoved != nil {
+			mockSession.onCardRemoved()
+		}
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Then session error occurs
+		return assert.AnError
+	}
+
+	reader.transportFactory = func(_ detection.DeviceInfo) (pn532.Transport, error) {
+		return &mockTransport{}, nil
+	}
+	reader.deviceFactory = func(_ pn532.Transport) (PN532Device, error) {
+		return mockDevice, nil
+	}
+	reader.sessionFactory = func(_ PN532Device, _ *polling.Config) PollingSession {
+		return mockSession
+	}
+
+	device := config.ReadersConnect{
+		Driver: "pn532",
+		Path:   "/dev/test",
+	}
+
+	err := reader.Open(device, scanQueue)
+	require.NoError(t, err)
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	// 1. Token detected
+	scan1 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	assert.NotNil(t, scan1.Token)
+	assert.Equal(t, "race-condition-uid", scan1.Token.UID)
+
+	// 2. Normal removal (would start exit timer in hold mode)
+	scan2 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	assert.Nil(t, scan2.Token)
+	assert.False(t, scan2.ReaderError)
+
+	// 3. Session error sends ReaderError to cancel exit timer
+	scan3 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
+	assert.Nil(t, scan3.Token)
+	assert.True(t, scan3.ReaderError, "ReaderError must be sent to cancel pending exit timer")
 }
 
 // TestOpen_SessionContextCanceled verifies that context.Canceled errors
@@ -429,7 +505,7 @@ func TestOpen_TagDetectionAndRemoval(t *testing.T) {
 				UID:        "ntag-uid-123",
 				TargetData: []byte{0x01, 0x02, 0x03},
 			}
-			_ = mockSession.onCardDetected(tag)
+			_ = mockSession.onCardDetected(ctx, tag)
 
 			// Wait a bit then simulate tag removal
 			time.Sleep(100 * time.Millisecond)
@@ -474,6 +550,7 @@ func TestOpen_TagDetectionAndRemoval(t *testing.T) {
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "ntag-uid-123", scan1.Token.UID)
 	assert.Equal(t, tokens.TypeNTAG, scan1.Token.Type)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan1.ReaderError)
 
 	// Second scan: token removed
@@ -505,7 +582,7 @@ func TestOpen_TagChanged(t *testing.T) {
 				UID:        "ntag-uid-first",
 				TargetData: []byte{0x01, 0x02, 0x03},
 			}
-			_ = mockSession.onCardDetected(tag1)
+			_ = mockSession.onCardDetected(ctx, tag1)
 
 			// Wait a bit then simulate tag change
 			time.Sleep(100 * time.Millisecond)
@@ -515,7 +592,7 @@ func TestOpen_TagChanged(t *testing.T) {
 					UID:        "mifare-uid-second",
 					TargetData: []byte{0x04, 0x05, 0x06},
 				}
-				_ = mockSession.onCardChanged(tag2)
+				_ = mockSession.onCardChanged(ctx, tag2)
 			}
 		}
 

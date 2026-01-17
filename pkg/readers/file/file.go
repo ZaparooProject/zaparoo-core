@@ -173,6 +173,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 				Data:     hex.EncodeToString(contents),
 				ScanTime: time.Now(),
 				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
 			}
 
 			log.Debug().Msgf("new token: %s", token.Text)

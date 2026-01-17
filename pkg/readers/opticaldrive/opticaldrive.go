@@ -250,6 +250,8 @@ func (r *FileReader) Open(
 				Type:     TokenType,
 				ScanTime: time.Now(),
 				UID:      id,
+				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
 			}
 
 			log.Debug().Msgf("new token: %s", token.UID)

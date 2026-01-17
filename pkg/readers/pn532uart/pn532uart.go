@@ -187,16 +187,13 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 			if errCount >= maxErrors {
 				log.Warn().Msg("too many errors, exiting")
 
-				// Send reader error notification to prevent triggering on_remove/exit
-				if r.lastToken != nil {
-					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
-					iq <- readers.Scan{
-						Source:      tokens.SourceReader,
-						Token:       nil,
-						ReaderError: true,
-					}
-					r.lastToken = nil
+				log.Warn().Msg("reader error, sending error signal")
+				iq <- readers.Scan{
+					Source:      tokens.SourceReader,
+					Token:       nil,
+					ReaderError: true,
 				}
+				r.lastToken = nil
 
 				err := r.Close()
 				if err != nil {
@@ -313,6 +310,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 				Data:     hex.EncodeToString(data),
 				ScanTime: time.Now(),
 				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
 			}
 
 			if !helpers.TokensEqual(token, r.lastToken) {

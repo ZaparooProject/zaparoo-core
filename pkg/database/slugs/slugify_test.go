@@ -1728,15 +1728,15 @@ func TestSlugifyMediaType_TVShowMatching(t *testing.T) {
 			t.Parallel()
 
 			// Slugify all inputs
-			var slugs []string
+			slugResults := make([]string, 0, len(tt.inputs))
 			for _, input := range tt.inputs {
 				slug := Slugify(MediaType(tt.mediaType), input)
-				slugs = append(slugs, slug)
+				slugResults = append(slugResults, slug)
 			}
 
 			// All slugs should be identical
-			firstSlug := slugs[0]
-			for i, slug := range slugs[1:] {
+			firstSlug := slugResults[0]
+			for i, slug := range slugResults[1:] {
 				assert.Equal(t, firstSlug, slug,
 					"Slug mismatch:\n  Input[0]: %q → %q\n  Input[%d]: %q → %q",
 					tt.inputs[0], firstSlug, i+1, tt.inputs[i+1], slug)

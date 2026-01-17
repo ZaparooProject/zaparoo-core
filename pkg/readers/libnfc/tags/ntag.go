@@ -135,7 +135,8 @@ func WriteNtag(pnd nfc.Device, text string) ([]byte, error) {
 		for len(chunk) < 4 {
 			chunk = append(chunk, []byte{0x00}...)
 		}
-		tx := []byte{WriteCommand, startingBlock + byte(i)}
+		tx := make([]byte, 0, 2+len(chunk))
+		tx = append(tx, WriteCommand, startingBlock+byte(i))
 		tx = append(tx, chunk...)
 		_, err := comm(pnd, tx, 1)
 		if err != nil {

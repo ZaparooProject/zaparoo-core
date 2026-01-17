@@ -64,7 +64,7 @@ func connectReaders(
 	rs := st.ListReaders()
 	var toConnect []toConnectDevice
 	toConnectStrs := func() []string {
-		var tc []string
+		tc := make([]string, 0, len(toConnect))
 		for _, device := range toConnect {
 			tc = append(tc, device.connectionString)
 		}
@@ -203,16 +203,25 @@ func timedExit(
 	}
 
 	if !cfg.HoldModeEnabled() {
+		log.Debug().Msg("hold mode not enabled, skipping exit timer")
+		return exitTimer
+	}
+
+	// Only hardware readers support hold mode exit
+	lastToken := st.GetLastScanned()
+	if lastToken.Source != tokens.SourceReader {
+		log.Debug().Str("source", lastToken.Source).Msg("skipping exit timer for non-reader source")
 		return exitTimer
 	}
 
 	// Check if the reader supports removal detection
-	lastToken := st.GetLastScanned()
-	if lastToken.ReaderID == "" {
+	r, ok := st.GetReader(lastToken.ReaderID)
+	if !ok {
+		log.Debug().Str("readerID", lastToken.ReaderID).Msg("reader not found in state, skipping exit timer")
 		return exitTimer
 	}
-	r, ok := st.GetReader(lastToken.ReaderID)
-	if !ok || !readers.HasCapability(r, readers.CapabilityRemovable) {
+	if !readers.HasCapability(r, readers.CapabilityRemovable) {
+		log.Debug().Str("readerID", lastToken.ReaderID).Msg("reader lacks removable capability, skipping exit timer")
 		return exitTimer
 	}
 
@@ -447,9 +456,13 @@ preprocessing:
 		} else {
 			log.Info().Msg("token was removed")
 
-			// If removal was due to reader error, skip on_remove and exit to keep media running
 			if readerError {
-				log.Warn().Msg("token removal due to reader error - skipping on_remove and exit to keep media running")
+				log.Warn().Msg("token removal due to reader error, keeping media running")
+				if exitTimer != nil {
+					if stopped := exitTimer.Stop(); stopped {
+						log.Debug().Msg("cancelled exit timer due to reader error")
+					}
+				}
 				st.SetActiveCard(tokens.Token{})
 				continue preprocessing
 			}
