@@ -28,11 +28,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// RBFCache provides O(1) lookups of RBF paths by system ID or short name.
+// RBFCache provides O(1) lookups of RBF paths by system ID, short name, or launcher ID.
 type RBFCache struct {
-	bySystemID  map[string]RBFInfo
-	byShortName map[string]RBFInfo
-	mu          syncutil.RWMutex
+	bySystemID   map[string]RBFInfo
+	byShortName  map[string]RBFInfo
+	byLauncherID map[string]string // launcherID → rbfPath (unresolved)
+	mu           syncutil.RWMutex
 }
 
 // GlobalRBFCache is the singleton instance for the MiSTer platform.
@@ -99,6 +100,37 @@ func (c *RBFCache) GetByShortName(shortName string) (RBFInfo, bool) {
 	return rbf, ok
 }
 
+// RegisterAltCore registers an alt core's expected RBF path.
+// Called during launcher creation.
+func (c *RBFCache) RegisterAltCore(launcherID, rbfPath string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byLauncherID == nil {
+		c.byLauncherID = make(map[string]string)
+	}
+	c.byLauncherID[launcherID] = rbfPath
+}
+
+// GetByLauncherID returns the resolved RBF path for an alt core launcher.
+func (c *RBFCache) GetByLauncherID(launcherID string) (RBFInfo, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	rbfPath, ok := c.byLauncherID[launcherID]
+	if !ok {
+		return RBFInfo{}, false
+	}
+
+	// Extract short name and look up in byShortName
+	shortName := rbfPath
+	if idx := strings.LastIndex(rbfPath, "/"); idx >= 0 {
+		shortName = rbfPath[idx+1:]
+	}
+
+	info, ok := c.byShortName[strings.ToLower(shortName)]
+	return info, ok
+}
+
 // ResolveRBFPath returns the cached RBF path for a system, or falls back to
 // the hardcoded path if not cached.
 func ResolveRBFPath(systemID, hardcodedRBF string) string {
@@ -111,6 +143,33 @@ func ResolveRBFPath(systemID, hardcodedRBF string) string {
 		return cached.MglName
 	}
 
+	return hardcodedRBF
+}
+
+// ResolveRBFPathForLauncher resolves RBF path using launcherID if available,
+// falling back to systemID lookup for main cores.
+func ResolveRBFPathForLauncher(launcherID, systemID, hardcodedRBF string) string {
+	// Try launcherID first (for alt cores)
+	if launcherID != "" {
+		if cached, ok := GlobalRBFCache.GetByLauncherID(launcherID); ok {
+			log.Debug().
+				Str("launcher", launcherID).
+				Str("cached_path", cached.MglName).
+				Msg("RBF resolved by launcher ID")
+			return cached.MglName
+		}
+	}
+
+	// Fall back to systemID lookup (for main cores)
+	if cached, ok := GlobalRBFCache.GetBySystemID(systemID); ok {
+		log.Debug().
+			Str("system", systemID).
+			Str("cached_path", cached.MglName).
+			Msg("RBF resolved by system ID")
+		return cached.MglName
+	}
+
+	// Final fallback to hardcoded path
 	return hardcodedRBF
 }
 
