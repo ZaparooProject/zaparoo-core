@@ -75,7 +75,7 @@ func GenerateMgl(core *cores.Core, path, override string) (string, error) {
 		return "", errors.New("no core supplied for MGL generation")
 	}
 
-	rbfPath := cores.ResolveRBFPath(core.ID, core.RBF)
+	rbfPath := cores.ResolveRBFPathForLauncher(core.LauncherID, core.ID, core.RBF)
 	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", rbfPath)
 
 	if core.SetName != "" {

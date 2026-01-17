@@ -40,6 +40,7 @@ type Slot struct {
 
 type Core struct {
 	ID             string
+	LauncherID     string // Set for alt cores, empty for main cores
 	SetName        string
 	RBF            string
 	Slots          []Slot

@@ -244,9 +244,13 @@ func launchAggGnw(cfg *config.Instance, path string, _ *platforms.LaunchOptions)
 }
 
 func launchAltCore(
+	launcherID string,
 	systemID string,
 	rbfPath string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	// Register alt core during launcher creation
+	cores.GlobalRBFCache.RegisterAltCore(launcherID, rbfPath)
+
 	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		s, err := cores.GetCore(systemID)
 		if err != nil {
@@ -255,9 +259,10 @@ func launchAltCore(
 		path = checkInZip(path)
 
 		sn := *s
+		sn.LauncherID = launcherID
 		sn.RBF = rbfPath
 
-		log.Debug().Str("rbf", sn.RBF).Msgf("launching alt core: %v", sn)
+		log.Debug().Str("rbf", sn.RBF).Str("launcher", launcherID).Msgf("launching alt core: %v", sn)
 
 		err = mgls.LaunchGame(cfg, &sn, path)
 		if err != nil {
@@ -649,7 +654,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPIAtari2600",
 			SystemID: systemdefs.SystemAtari2600,
-			Launch:   launchAltCore(systemdefs.SystemAtari2600, "_LLAPI/Atari7800_LLAPI"),
+			Launch:   launchAltCore("LLAPIAtari2600", systemdefs.SystemAtari2600, "_LLAPI/Atari7800_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemAtari5200,
@@ -668,7 +673,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPIAtari7800",
 			SystemID: systemdefs.SystemAtari7800,
-			Launch:   launchAltCore(systemdefs.SystemAtari7800, "_LLAPI/Atari7800_LLAPI"),
+			Launch:   launchAltCore("LLAPIAtari7800", systemdefs.SystemAtari7800, "_LLAPI/Atari7800_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemAtariLynx,
@@ -736,7 +741,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPIGameboy",
 			SystemID: systemdefs.SystemGameboy,
-			Launch:   launchAltCore(systemdefs.SystemGameboy, "_LLAPI/Gameboy_LLAPI"),
+			Launch:   launchAltCore("LLAPIGameboy", systemdefs.SystemGameboy, "_LLAPI/Gameboy_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemGameboyColor,
@@ -783,7 +788,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPIGBA",
 			SystemID: systemdefs.SystemGBA,
-			Launch:   launchAltCore(systemdefs.SystemGBA, "_LLAPI/GBA_LLAPI"),
+			Launch:   launchAltCore("LLAPIGBA", systemdefs.SystemGBA, "_LLAPI/GBA_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemGBA2P,
@@ -812,7 +817,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPIMegaDrive",
 			SystemID: systemdefs.SystemGenesis,
-			Launch:   launchAltCore(systemdefs.SystemGenesis, "_LLAPI/MegaDrive_LLAPI"),
+			Launch:   launchAltCore("LLAPIMegaDrive", systemdefs.SystemGenesis, "_LLAPI/MegaDrive_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemIntellivision,
@@ -843,7 +848,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPISMS",
 			SystemID: systemdefs.SystemMasterSystem,
-			Launch:   launchAltCore(systemdefs.SystemMasterSystem, "_LLAPI/SMS_LLAPI"),
+			Launch:   launchAltCore("LLAPISMS", systemdefs.SystemMasterSystem, "_LLAPI/SMS_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemMegaCD,
@@ -860,7 +865,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPIMegaCD",
 			SystemID: systemdefs.SystemMegaCD,
-			Launch:   launchAltCore(systemdefs.SystemMegaCD, "_LLAPI/MegaCD_LLAPI"),
+			Launch:   launchAltCore("LLAPIMegaCD", systemdefs.SystemMegaCD, "_LLAPI/MegaCD_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemMegaDuck,
@@ -872,7 +877,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPINeoGeo",
 			SystemID: systemdefs.SystemNeoGeo,
-			Launch:   launchAltCore(systemdefs.SystemNeoGeo, "_LLAPI/NeoGeo_LLAPI"),
+			Launch:   launchAltCore("LLAPINeoGeo", systemdefs.SystemNeoGeo, "_LLAPI/NeoGeo_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemNeoGeoCD,
@@ -917,7 +922,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPINES",
 			SystemID: systemdefs.SystemNES,
-			Launch:   launchAltCore(systemdefs.SystemNES, "_LLAPI/NES_LLAPI"),
+			Launch:   launchAltCore("LLAPINES", systemdefs.SystemNES, "_LLAPI/NES_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemNintendo64,
@@ -929,27 +934,29 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPINintendo64",
 			SystemID: systemdefs.SystemNintendo64,
-			Launch:   launchAltCore(systemdefs.SystemNintendo64, "_LLAPI/N64_LLAPI"),
+			Launch:   launchAltCore("LLAPINintendo64", systemdefs.SystemNintendo64, "_LLAPI/N64_LLAPI"),
 		},
 		{
 			ID:       "LLAPI80MHzNintendo64",
 			SystemID: systemdefs.SystemNintendo64,
-			Launch:   launchAltCore(systemdefs.SystemNintendo64, "_LLAPI/N64_80MHz_LLAPI"),
+			Launch:   launchAltCore("LLAPI80MHzNintendo64", systemdefs.SystemNintendo64, "_LLAPI/N64_80MHz_LLAPI"),
 		},
 		{
 			ID:       "80MHzNintendo64",
 			SystemID: systemdefs.SystemNintendo64,
-			Launch:   launchAltCore(systemdefs.SystemNintendo64, "_Other/N64_80MHz"),
+			Launch:   launchAltCore("80MHzNintendo64", systemdefs.SystemNintendo64, "_Other/N64_80MHz"),
 		},
 		{
 			ID:       "PWMNintendo64",
 			SystemID: systemdefs.SystemNintendo64,
-			Launch:   launchAltCore(systemdefs.SystemNintendo64, "_ConsolePWM/N64_PWM"),
+			Launch:   launchAltCore("PWMNintendo64", systemdefs.SystemNintendo64, "_ConsolePWM/N64_PWM"),
 		},
 		{
 			ID:       "PWM80MHzNintendo64",
 			SystemID: systemdefs.SystemNintendo64,
-			Launch:   launchAltCore(systemdefs.SystemNintendo64, "_ConsolePWM/_Turbo/N64_80MHz_PWM"),
+			Launch: launchAltCore(
+				"PWM80MHzNintendo64", systemdefs.SystemNintendo64, "_ConsolePWM/_Turbo/N64_80MHz_PWM",
+			),
 		},
 		{
 			ID:         systemdefs.SystemOdyssey2,
@@ -982,7 +989,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPIPSX",
 			SystemID: systemdefs.SystemPSX,
-			Launch:   launchAltCore(systemdefs.SystemPSX, "_LLAPI/PSX_LLAPI"),
+			Launch:   launchAltCore("LLAPIPSX", systemdefs.SystemPSX, "_LLAPI/PSX_LLAPI"),
 		},
 		{
 			ID:       "SindenPSX",
@@ -992,17 +999,17 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "2XPSX",
 			SystemID: systemdefs.SystemPSX,
-			Launch:   launchAltCore(systemdefs.SystemPSX, "_Other/PSX2XCPU"),
+			Launch:   launchAltCore("2XPSX", systemdefs.SystemPSX, "_Other/PSX2XCPU"),
 		},
 		{
 			ID:       "PWMPSX",
 			SystemID: systemdefs.SystemPSX,
-			Launch:   launchAltCore(systemdefs.SystemPSX, "_ConsolePWM/PSX_PWM"),
+			Launch:   launchAltCore("PWMPSX", systemdefs.SystemPSX, "_ConsolePWM/PSX_PWM"),
 		},
 		{
 			ID:       "PWM2XPSX",
 			SystemID: systemdefs.SystemPSX,
-			Launch:   launchAltCore(systemdefs.SystemPSX, "_ConsolePWM/_Turbo/PSX2XCPU_PWM"),
+			Launch:   launchAltCore("PWM2XPSX", systemdefs.SystemPSX, "_ConsolePWM/_Turbo/PSX2XCPU_PWM"),
 		},
 		{
 			ID:         systemdefs.SystemSega32X,
@@ -1014,7 +1021,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPIS32X",
 			SystemID: systemdefs.SystemSega32X,
-			Launch:   launchAltCore(systemdefs.SystemPSX, "_LLAPI/S32X_LLAPI"),
+			Launch:   launchAltCore("LLAPIS32X", systemdefs.SystemSega32X, "_LLAPI/S32X_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemSG1000,
@@ -1033,7 +1040,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPISuperGameboy",
 			SystemID: systemdefs.SystemSuperGameboy,
-			Launch:   launchAltCore(systemdefs.SystemSuperGameboy, "_LLAPI/SGB_LLAPI"),
+			Launch:   launchAltCore("LLAPISuperGameboy", systemdefs.SystemSuperGameboy, "_LLAPI/SGB_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemSuperVision,
@@ -1052,12 +1059,12 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPISaturn",
 			SystemID: systemdefs.SystemSaturn,
-			Launch:   launchAltCore(systemdefs.SystemSaturn, "_LLAPI/Saturn_LLAPI"),
+			Launch:   launchAltCore("LLAPISaturn", systemdefs.SystemSaturn, "_LLAPI/Saturn_LLAPI"),
 		},
 		{
 			ID:       "PWMSaturn",
-			SystemID: systemdefs.SystemPSX,
-			Launch:   launchAltCore(systemdefs.SystemPSX, "_ConsolePWM/Saturn_PWM"),
+			SystemID: systemdefs.SystemSaturn,
+			Launch:   launchAltCore("PWMSaturn", systemdefs.SystemSaturn, "_ConsolePWM/Saturn_PWM"),
 		},
 		{
 			ID:         systemdefs.SystemSNES,
@@ -1069,7 +1076,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPISNES",
 			SystemID: systemdefs.SystemSNES,
-			Launch:   launchAltCore(systemdefs.SystemSNES, "_LLAPI/SNES_LLAPI"),
+			Launch:   launchAltCore("LLAPISNES", systemdefs.SystemSNES, "_LLAPI/SNES_LLAPI"),
 		},
 		{
 			ID:       "SindenSNES",
@@ -1100,7 +1107,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "LLAPITurboGrafx16",
 			SystemID: systemdefs.SystemTurboGrafx16,
-			Launch:   launchAltCore(systemdefs.SystemTurboGrafx16, "_LLAPI/TurboGrafx16_LLAPI"),
+			Launch:   launchAltCore("LLAPITurboGrafx16", systemdefs.SystemTurboGrafx16, "_LLAPI/TurboGrafx16_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemTurboGrafx16CD,
