@@ -248,19 +248,24 @@ func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 		return p.stopKodi(p.cfg, reason)
 	}
 
-	// Use EmulationStation API for games/emulators
+	// Try hotkeygen first - this is the universal/recommended way to exit on Batocera
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := hotkeygenExit(ctx); err != nil {
+		log.Debug().Err(err).Msg("hotkeygen exit failed, will verify and fall back to ES API if needed")
+	} else {
+		log.Debug().Msg("hotkeygen exit signal sent successfully")
+	}
+	cancel()
+
+	// Wait for exit signal to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify with ES API and fall back to esapi.APIEmuKill() if still running
 	tries := 0
 	maxTries := 10
 
 	killed := false
 	for tries < maxTries {
-		log.Debug().Msgf("trying to kill launcher: try #%d", tries+1)
-		err := esapi.APIEmuKill()
-		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			// ES API might be unavailable - log and check if we can verify it's killed
-			log.Debug().Err(err).Msg("failed to send kill command to ES API")
-		}
-
 		_, running, err := esapi.APIRunningGame()
 		if err != nil {
 			// ES API is unavailable - assume kill succeeded
@@ -270,6 +275,13 @@ func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 		} else if !running {
 			killed = true
 			break
+		}
+
+		// Game still running, try ES API kill as fallback
+		log.Debug().Msgf("game still running, trying ES API kill: try #%d", tries+1)
+		err = esapi.APIEmuKill()
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			log.Debug().Err(err).Msg("failed to send kill command to ES API")
 		}
 
 		tries++
@@ -363,6 +375,16 @@ func isKodiLauncher(launcherID string) bool {
 		}
 	}
 	return false
+}
+
+// hotkeygenExit sends the universal exit signal via Batocera's hotkeygen utility.
+// This is the recommended way to exit games/emulators on Batocera systems.
+func hotkeygenExit(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "hotkeygen", "--send", "exit")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("hotkeygen exit failed: %w", err)
+	}
+	return nil
 }
 
 // stopKodi stops Kodi based on the stop intent:
