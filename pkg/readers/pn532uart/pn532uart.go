@@ -313,6 +313,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 				Data:     hex.EncodeToString(data),
 				ScanTime: time.Now(),
 				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
 			}
 
 			if !helpers.TokensEqual(token, r.lastToken) {

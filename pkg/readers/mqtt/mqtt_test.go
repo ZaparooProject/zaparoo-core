@@ -359,6 +359,7 @@ func TestCreateMessageHandler(t *testing.T) {
 			assert.NotNil(t, scan.Token)
 			assert.Equal(t, TokenType, scan.Token.Type)
 			assert.Equal(t, "**launch.system:nes", scan.Token.Text)
+			assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 			assert.WithinDuration(t, time.Now(), scan.Token.ScanTime, time.Second)
 		case <-time.After(100 * time.Millisecond):
 			t.Fatal("Expected scan message on channel")

@@ -325,6 +325,7 @@ func TestOpen_SuccessfulConnection(t *testing.T) {
 	assert.NotNil(t, scan.Token)
 	assert.Equal(t, "test123", scan.Token.UID)
 	assert.Equal(t, "hello", scan.Token.Text)
+	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan.ReaderError)
 
 	// Clean up
@@ -370,6 +371,7 @@ func TestOpen_ReaderErrorWithActiveToken(t *testing.T) {
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 500*time.Millisecond)
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "active-token", scan1.Token.UID)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan1.ReaderError)
 
 	// Second scan: reader error with active token

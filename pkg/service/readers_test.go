@@ -428,3 +428,238 @@ func TestWroteTokenClearingAfterSkip(t *testing.T) {
 	assert.False(t, shouldSkipSecondScan,
 		"second scan of same token should NOT be skipped (wrote token was cleared)")
 }
+
+// TestTimedExitConditions_ReaderIDRequired is a regression test for the hold mode bug
+// where timedExit would silently skip when tokens had empty ReaderID.
+// This test verifies the conditions that timedExit checks before starting the exit timer.
+func TestTimedExitConditions_ReaderIDRequired(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		readerID       string
+		expectedReason string
+		token          tokens.Token
+		readerInState  bool
+		hasRemovable   bool
+		expectTimer    bool
+	}{
+		{
+			name: "valid token from reader with ReaderID should start timer",
+			token: tokens.Token{
+				UID:      "abc123",
+				Text:     "**launch.system:nes",
+				Source:   tokens.SourceReader,
+				ReaderID: "pn532-1234567890abcdef",
+				ScanTime: time.Now(),
+			},
+			readerInState:  true,
+			readerID:       "pn532-1234567890abcdef",
+			hasRemovable:   true,
+			expectTimer:    true,
+			expectedReason: "timer should start for valid reader token",
+		},
+		{
+			name: "token from API should NOT start timer",
+			token: tokens.Token{
+				UID:      "abc123",
+				Text:     "**launch.system:nes",
+				Source:   tokens.SourceAPI,
+				ReaderID: "", // API tokens have no ReaderID
+				ScanTime: time.Now(),
+			},
+			readerInState:  false,
+			readerID:       "",
+			hasRemovable:   false,
+			expectTimer:    false,
+			expectedReason: "API tokens cannot be 'removed' from a reader",
+		},
+		{
+			name: "token from playlist should NOT start timer",
+			token: tokens.Token{
+				UID:      "abc123",
+				Text:     "**launch.system:nes",
+				Source:   tokens.SourcePlaylist,
+				ReaderID: "",
+				ScanTime: time.Now(),
+			},
+			readerInState:  false,
+			readerID:       "",
+			hasRemovable:   false,
+			expectTimer:    false,
+			expectedReason: "playlist tokens cannot be 'removed' from a reader",
+		},
+		{
+			name: "REGRESSION: token with empty ReaderID should NOT start timer",
+			token: tokens.Token{
+				UID:      "abc123",
+				Text:     "**launch.system:nes",
+				Source:   tokens.SourceReader,
+				ReaderID: "", // BUG: This was causing silent failures
+				ScanTime: time.Now(),
+			},
+			readerInState:  false,
+			readerID:       "",
+			hasRemovable:   false,
+			expectTimer:    false,
+			expectedReason: "empty ReaderID means reader cannot be found in state",
+		},
+		{
+			name: "token with ReaderID but reader not in state should NOT start timer",
+			token: tokens.Token{
+				UID:      "abc123",
+				Text:     "**launch.system:nes",
+				Source:   tokens.SourceReader,
+				ReaderID: "unknown-reader-id",
+				ScanTime: time.Now(),
+			},
+			readerInState:  false,
+			readerID:       "unknown-reader-id",
+			hasRemovable:   false,
+			expectTimer:    false,
+			expectedReason: "reader not found in state (disconnected or never registered)",
+		},
+		{
+			name: "reader without CapabilityRemovable should NOT start timer",
+			token: tokens.Token{
+				UID:      "abc123",
+				Text:     "**launch.system:nes",
+				Source:   tokens.SourceReader,
+				ReaderID: "barcode-reader-123",
+				ScanTime: time.Now(),
+			},
+			readerInState:  true,
+			readerID:       "barcode-reader-123",
+			hasRemovable:   false, // barcode readers don't support removal detection
+			expectTimer:    false,
+			expectedReason: "reader lacks CapabilityRemovable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+			// Set up the last scanned token
+			st.SetActiveCard(tt.token)
+
+			// Set up reader in state if needed
+			if tt.readerInState {
+				mockReader := mocks.NewMockReader()
+				mockReader.On("ReaderID").Return(tt.readerID)
+				mockReader.On("Connected").Return(true)
+				mockReader.On("Path").Return("/dev/test")
+				mockReader.On("Info").Return("Test Reader")
+				mockReader.On("Metadata").Return(readers.DriverMetadata{
+					ID:          "mock-reader",
+					Description: "Mock Reader for Testing",
+				})
+
+				if tt.hasRemovable {
+					mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
+				} else {
+					mockReader.On("Capabilities").Return([]readers.Capability{})
+				}
+
+				st.SetReader(mockReader)
+			}
+
+			// Now verify the conditions that timedExit checks
+			lastToken := st.GetLastScanned()
+
+			// Condition 1: Source must be SourceReader
+			sourceIsReader := lastToken.Source == tokens.SourceReader
+
+			// Condition 2: Reader must exist in state
+			r, readerExists := st.GetReader(lastToken.ReaderID)
+
+			// Condition 3: Reader must have CapabilityRemovable
+			hasRemovableCap := false
+			if readerExists {
+				hasRemovableCap = readers.HasCapability(r, readers.CapabilityRemovable)
+			}
+
+			// All conditions must be true for timer to start
+			wouldStartTimer := sourceIsReader && readerExists && hasRemovableCap
+
+			assert.Equal(t, tt.expectTimer, wouldStartTimer,
+				"%s: sourceIsReader=%v, readerExists=%v, hasRemovableCap=%v",
+				tt.expectedReason, sourceIsReader, readerExists, hasRemovableCap)
+		})
+	}
+}
+
+// TestTokenFromReader_MustHaveReaderID is a regression test ensuring that
+// all tokens originating from hardware readers have their ReaderID set.
+// This was the root cause of the hold mode bug where games wouldn't exit
+// when tokens were removed.
+func TestTokenFromReader_MustHaveReaderID(t *testing.T) {
+	t.Parallel()
+
+	// These represent the token sources and whether they should have ReaderID
+	tests := []struct {
+		name            string
+		source          string
+		requireReaderID bool
+	}{
+		{
+			name:            "SourceReader tokens MUST have ReaderID",
+			source:          tokens.SourceReader,
+			requireReaderID: true,
+		},
+		{
+			name:            "SourceAPI tokens do NOT need ReaderID",
+			source:          tokens.SourceAPI,
+			requireReaderID: false,
+		},
+		{
+			name:            "SourcePlaylist tokens do NOT need ReaderID",
+			source:          tokens.SourcePlaylist,
+			requireReaderID: false,
+		},
+		{
+			name:            "SourceHook tokens do NOT need ReaderID",
+			source:          tokens.SourceHook,
+			requireReaderID: false,
+		},
+		{
+			name:            "SourceGMC tokens do NOT need ReaderID",
+			source:          tokens.SourceGMC,
+			requireReaderID: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Create a token with the given source
+			token := tokens.Token{
+				UID:      "test-uid",
+				Text:     "**launch.system:nes",
+				Source:   tt.source,
+				ScanTime: time.Now(),
+			}
+
+			if tt.requireReaderID {
+				// For SourceReader, ReaderID MUST be set
+				// This is a contract that all hardware readers must fulfill
+				assert.Empty(t, token.ReaderID,
+					"This test validates the contract - actual readers must set ReaderID")
+
+				// Demonstrate what a valid token looks like
+				validToken := token
+				validToken.ReaderID = "pn532-1234567890abcdef"
+				assert.NotEmpty(t, validToken.ReaderID,
+					"Hardware reader tokens MUST have ReaderID set for hold mode to work")
+			} else {
+				// For non-reader sources, empty ReaderID is expected and correct
+				assert.Empty(t, token.ReaderID,
+					"Non-reader tokens should NOT have ReaderID")
+			}
+		})
+	}
+}

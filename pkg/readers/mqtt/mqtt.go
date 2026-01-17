@@ -203,6 +203,7 @@ func (r *Reader) createMessageHandler() mqtt.MessageHandler {
 			Text:     payload,             // ZapScript content
 			ScanTime: time.Now(),
 			Source:   tokens.SourceReader,
+			ReaderID: r.ReaderID(),
 		}
 
 		// Send to scan channel

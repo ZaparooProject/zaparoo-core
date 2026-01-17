@@ -677,7 +677,7 @@ func openDeviceWithRetries(device string) (nfc.Device, error) {
 	}
 }
 
-func (*Reader) pollDevice(
+func (r *Reader) pollDevice(
 	pnd *nfc.Device,
 	activeToken *tokens.Token,
 	ttp int,
@@ -758,6 +758,7 @@ func (*Reader) pollDevice(
 		Data:     hex.EncodeToString(record.Bytes),
 		ScanTime: time.Now(),
 		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
 	}
 
 	return card, removed, nil

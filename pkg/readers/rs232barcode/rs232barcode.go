@@ -70,7 +70,7 @@ func (*Reader) IDs() []string {
 	return []string{"rs232barcode", "rs232_barcode"}
 }
 
-func (*Reader) parseLine(line string) (*tokens.Token, error) {
+func (r *Reader) parseLine(line string) (*tokens.Token, error) {
 	line = strings.TrimSpace(line)
 	line = strings.Trim(line, "\r")
 
@@ -90,6 +90,7 @@ func (*Reader) parseLine(line string) (*tokens.Token, error) {
 		Data:     line,
 		ScanTime: time.Now(),
 		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
 	}
 
 	return &t, nil

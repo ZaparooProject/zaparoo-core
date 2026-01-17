@@ -442,6 +442,7 @@ func (r *Reader) processNewTag(ctx context.Context, detectedTag *pn532.DetectedT
 		Data:     hex.EncodeToString(rawData),
 		ScanTime: time.Now(),
 		Source:   tokens.SourceReader,
+		ReaderID: r.ReaderID(),
 	}
 
 	log.Info().Msgf("detected %s tag: %s", token.Type, token.UID)
@@ -596,6 +597,9 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 		return nil, errors.New("text cannot be empty")
 	}
 
+	// Capture readerID before acquiring lock to avoid deadlock in callback
+	readerID := r.ReaderID()
+
 	// Lock for the entire write operation
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
@@ -652,6 +656,7 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 				Type:     r.convertTagType(tagType),
 				ScanTime: time.Now(),
 				Source:   tokens.SourceReader,
+				ReaderID: readerID,
 			}
 
 			return nil

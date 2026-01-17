@@ -305,6 +305,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 				Text:     text,
 				ScanTime: time.Now(),
 				Source:   tokens.SourceReader,
+				ReaderID: r.ReaderID(),
 			}
 
 			iq <- readers.Scan{

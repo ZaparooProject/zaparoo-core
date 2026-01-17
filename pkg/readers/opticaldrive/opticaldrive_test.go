@@ -369,6 +369,7 @@ func TestOpen_SuccessfulDiscDetection(t *testing.T) {
 	assert.NotNil(t, scan.Token)
 	assert.Equal(t, "abc-123-uuid/My Disc", scan.Token.UID)
 	assert.Equal(t, "disc", scan.Token.Type)
+	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan.ReaderError)
 
 	// Clean up
@@ -419,6 +420,7 @@ func TestOpen_DeviceDisappearsWithActiveToken(t *testing.T) {
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "test-uuid/test-label", scan1.Token.UID)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan1.ReaderError)
 
 	// Wait for device to disappear and ReaderError scan to be sent
@@ -475,6 +477,7 @@ func TestOpen_BlkidFailsNormalDiscRemoval(t *testing.T) {
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "test-uuid/test-label", scan1.Token.UID)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Second scan: disc removed (blkid fails but device exists)
 	// This should be a normal removal, NOT a ReaderError
@@ -528,6 +531,7 @@ func TestOpen_EmptyUUIDAndLabel_RemovesToken(t *testing.T) {
 	// First scan: disc detected
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
 	assert.NotNil(t, scan1.Token)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Second scan: empty UUID/LABEL removes token
 	scan2 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
@@ -574,6 +578,7 @@ func TestOpen_IDSourceUUID(t *testing.T) {
 	scan := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
 	assert.NotNil(t, scan.Token)
 	assert.Equal(t, "my-uuid", scan.Token.UID, "should use UUID only")
+	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Clean up
 	err = reader.Close()
@@ -615,6 +620,7 @@ func TestOpen_IDSourceLabel(t *testing.T) {
 	scan := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
 	assert.NotNil(t, scan.Token)
 	assert.Equal(t, "my-label", scan.Token.UID, "should use LABEL only")
+	assert.NotEmpty(t, scan.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 
 	// Clean up
 	err = reader.Close()

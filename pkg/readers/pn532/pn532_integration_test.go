@@ -279,6 +279,7 @@ func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
 	scan1 := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "test-uid-session-error", scan1.Token.UID)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan1.ReaderError)
 
 	// Second scan: session error with active token
@@ -470,6 +471,7 @@ func TestOpen_TagDetectionAndRemoval(t *testing.T) {
 	assert.NotNil(t, scan1.Token)
 	assert.Equal(t, "ntag-uid-123", scan1.Token.UID)
 	assert.Equal(t, tokens.TypeNTAG, scan1.Token.Type)
+	assert.NotEmpty(t, scan1.Token.ReaderID, "ReaderID must be set on tokens from hardware readers")
 	assert.False(t, scan1.ReaderError)
 
 	// Second scan: token removed
