@@ -624,17 +624,20 @@ func parseMultiLanguageTag(tag string) []CanonicalTag {
 	return nil
 }
 
-// parseMultiRegionTag handles multi-region tags in various formats:
-//   - Comma-separated: "(USA, Europe)" → region:us + lang:en, region:eu
-//   - Dash-separated: "(EU-US)" → region:eu, region:us + lang:en
-//   - Comma-dash: "(USA,-Europe)" → region:us + lang:en, region:eu
+// parseCommaSeparatedTags handles comma-separated tags in parentheses that may
+// contain mixed types (region, language, revision, etc.).
+// Examples:
+//   - "(USA, Europe)" → region:us, region:eu
+//   - "(JP, Rev B)" → region:jp, rev:b
+//   - "(Europe, En)" → region:eu, lang:en
+//   - "(EU-US)" → region:eu, region:us (dash-separated regions)
 //
-// Returns individual region (and associated language) tags or nil if not a multi-region tag.
-func parseMultiRegionTag(tag string) []CanonicalTag {
-	// Multi-region tags can use commas, dashes, or combinations
+// Returns individual tags of any type, or nil if not a comma/dash-separated tag.
+func parseCommaSeparatedTags(tag string) []CanonicalTag {
+	// Multi-value tags can use commas, dashes, or combinations
 	var parts []string
 
-	// First, try splitting by comma (handles "USA, Europe" and "USA,-Europe")
+	// First, try splitting by comma (handles "USA, Europe" and "JP, Rev B")
 	switch {
 	case strings.Contains(tag, ","):
 		parts = strings.Split(tag, ",")
@@ -642,10 +645,10 @@ func parseMultiRegionTag(tag string) []CanonicalTag {
 		// Split by dash (handles "EU-US")
 		parts = strings.Split(tag, "-")
 	default:
-		return nil // Single region
+		return nil // Single value
 	}
 
-	var regions []CanonicalTag
+	var results []CanonicalTag
 
 	for _, part := range parts {
 		// Clean up the part (remove leading/trailing whitespace and dashes)
@@ -656,26 +659,18 @@ func parseMultiRegionTag(tag string) []CanonicalTag {
 		}
 
 		normalized := NormalizeTag(part)
-		// Try to map as region
 		mapped := mapFilenameTagToCanonical(normalized)
+
 		for _, ct := range mapped {
-			if ct.Type == TagTypeRegion || ct.Type == TagTypeLang {
+			if ct.Type != TagTypeUnknown {
 				ct.Source = TagSourceBracketed
-				regions = append(regions, ct)
+				results = append(results, ct)
 			}
 		}
 	}
 
-	// Only return if we found at least 2 region-related tags
-	// (regions may also include their associated languages, so we check for any region/lang tags)
-	regionCount := 0
-	for _, ct := range regions {
-		if ct.Type == TagTypeRegion {
-			regionCount++
-		}
-	}
-	if regionCount >= 2 {
-		return regions
+	if len(results) > 0 {
+		return results
 	}
 	return nil
 }
@@ -700,9 +695,9 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 		return multiLang
 	}
 
-	// Check if it's a multi-region tag (USA, Europe or EU-US)
-	if multiRegion := parseMultiRegionTag(normalized); multiRegion != nil {
-		return multiRegion
+	// Check if it's comma-separated mixed tags (JP, Rev B) or (USA, Europe)
+	if mixedTags := parseCommaSeparatedTags(normalized); mixedTags != nil {
+		return mixedTags
 	}
 
 	// For parentheses tags, use position and context
@@ -752,17 +747,19 @@ func mapBracketTag(tag string) []CanonicalTag {
 	case "t":
 		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpTrained, Source: TagSourceBracketed}}
 	default:
-		// Try default mapping, filtering for dump-related tags only
+		// Try default mapping, filtering for known tag types
+		// Allow dump, unlicensed, language, and region tags through
 		mapped := mapFilenameTagToCanonical(normalized)
-		var dumpTags []CanonicalTag
+		var knownTags []CanonicalTag
 		for _, ct := range mapped {
-			if ct.Type == TagTypeDump || ct.Type == TagTypeUnlicensed {
+			if ct.Type == TagTypeDump || ct.Type == TagTypeUnlicensed ||
+				ct.Type == TagTypeLang || ct.Type == TagTypeRegion {
 				ct.Source = TagSourceBracketed
-				dumpTags = append(dumpTags, ct)
+				knownTags = append(knownTags, ct)
 			}
 		}
-		if len(dumpTags) > 0 {
-			return dumpTags
+		if len(knownTags) > 0 {
+			return knownTags
 		}
 		return []CanonicalTag{{Type: TagTypeDump, Value: TagValue(normalized), Source: TagSourceBracketed}}
 	}
@@ -1127,25 +1124,12 @@ func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
 		title = strings.TrimSpace(title)
 	}
 
-	// Step 7: Extract year from brackets BEFORE removing brackets (for preservation)
-	// Years are useful in display titles, so we extract them and re-append after bracket removal
-	var extractedYear string
-	if yearMatches := reYear.FindStringSubmatch(title); len(yearMatches) > 1 {
-		extractedYear = yearMatches[1]
-	}
-
-	// Step 8: Remove all bracket content using shared function from slugs package
-	// This replaces the previous regex-based extraction with a more robust implementation
-	// that handles nested brackets and all bracket types uniformly
+	// Step 7: Remove all bracket content using shared function from slugs package
+	// This handles nested brackets and all bracket types uniformly
 	title = slugs.StripMetadataBrackets(title)
 	title = strings.TrimSpace(title)
 
-	// Step 9: Re-append extracted year if it was removed by bracket stripping
-	if extractedYear != "" && !strings.Contains(title, extractedYear) {
-		title = title + " " + extractedYear
-	}
-
-	// Step 10: Normalize multiple spaces to single space
+	// Step 8: Normalize multiple spaces to single space
 	// This handles cases where bracket removal creates gaps like "Game [USA] [!]" → "Game  "
 	title = reMultiSpace.ReplaceAllString(title, " ")
 
