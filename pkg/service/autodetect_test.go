@@ -650,10 +650,12 @@ func TestAutoDetector_DetectReaders_ExcludesConnectedReaderPaths(t *testing.T) {
 		DefaultAutoDetect: true,
 	})
 	newReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
-	// Detect is called with exclude list containing existing reader's path
+	// Detect is called with exclude list containing existing reader's connection string.
+	// IMPORTANT: The format MUST be "driver:path" because Detect() implementations parse
+	// this format to extract the path. Using just the path would break detection.
 	newReader.On("Detect", mock.MatchedBy(func(exclude []string) bool {
 		for _, e := range exclude {
-			if e == "/dev/ttyUSB0" {
+			if e == "simpleserial:/dev/ttyUSB0" {
 				return true
 			}
 		}
@@ -902,4 +904,83 @@ func TestAutoDetector_ReconnectAfterUnplugReplug(t *testing.T) {
 			t.Fatal("REGRESSION: path still in failed list after disconnect - reader would never reconnect")
 		}
 	}
+}
+
+// TestAutoDetector_ExcludeListFormat_Regression is a regression test that verifies
+// the exclude list passed to Detect() uses the "driver:path" format.
+//
+// CRITICAL: Detect() implementations parse this format with strings.SplitN(":", 2)
+// to extract the path. If the exclude list contains just paths (e.g., "/dev/ttyUSB0"
+// instead of "simpleserial:/dev/ttyUSB0"), the parsing will fail and connected
+// devices will be repeatedly "detected" as new, causing reconnection loops.
+func TestAutoDetector_ExcludeListFormat_Regression(t *testing.T) {
+	t.Parallel()
+
+	ad := NewAutoDetector(nil)
+	cfg := &config.Instance{}
+	cfg.SetAutoDetect(true)
+
+	// Create an existing connected reader
+	existingReader := mocks.NewMockReader()
+	existingReader.On("Path").Return("/dev/ttyUSB0")
+	existingReader.On("Metadata").Return(readers.DriverMetadata{ID: "pn532_uart"})
+	existingReader.On("ReaderID").Return("pn532-abc123")
+
+	// Create a new reader for detection that captures the exclude list
+	var capturedExcludeList []string
+	newReader := mocks.NewMockReader()
+	newReader.On("Metadata").Return(readers.DriverMetadata{
+		ID:                "pn532_uart",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+	})
+	newReader.On("IDs").Return([]string{"pn532_uart"}).Maybe()
+	newReader.On("Detect", mock.Anything).Run(func(args mock.Arguments) {
+		if list, ok := args.Get(0).([]string); ok {
+			capturedExcludeList = list
+		}
+	}).Return("")
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", cfg).Return([]readers.Reader{newReader})
+
+	st, notifCh := state.NewState(mockPlatform, "test-uuid")
+	st.SetReader(existingReader)
+	scanChan := make(chan readers.Scan, 10)
+
+	// Drain notifications
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range notifCh { //nolint:revive // drain channel
+		}
+	}()
+
+	err := ad.DetectReaders(mockPlatform, cfg, st, scanChan)
+	require.NoError(t, err)
+
+	// CRITICAL CHECK: Verify exclude list uses "driver:path" format
+	require.NotEmpty(t, capturedExcludeList, "exclude list should not be empty")
+
+	foundCorrectFormat := false
+	for _, entry := range capturedExcludeList {
+		// Each entry MUST contain a colon separating driver from path
+		if entry == "pn532_uart:/dev/ttyUSB0" {
+			foundCorrectFormat = true
+			break
+		}
+		// REGRESSION: If we find just the path without driver prefix, fail immediately
+		if entry == "/dev/ttyUSB0" {
+			t.Fatal("REGRESSION: exclude list contains path without driver prefix - " +
+				"this will break Detect() implementations that parse 'driver:path' format, " +
+				"causing connected devices to be repeatedly detected as new")
+		}
+	}
+
+	assert.True(t, foundCorrectFormat,
+		"exclude list should contain 'pn532_uart:/dev/ttyUSB0', got: %v", capturedExcludeList)
+
+	st.StopService()
+	close(st.Notifications)
+	<-done
 }

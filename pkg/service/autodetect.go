@@ -84,13 +84,21 @@ func (ad *AutoDetector) DetectReaders(
 		failedPaths := ad.getFailedPaths()
 
 		// Build exclude list from connected reader paths and failed paths.
+		// The exclude list uses "driver:path" format for compatibility with Detect()
+		// implementations that parse connection strings.
+		// TODO: refactor Detect() interface to accept just paths instead of connection strings.
 		excludeList := make([]string, 0, len(connectedReaders)+len(failedPaths))
 		for _, r := range connectedReaders {
 			if r != nil {
-				excludeList = append(excludeList, r.Path())
+				excludeList = append(excludeList, r.Metadata().ID+":"+r.Path())
 			}
 		}
-		excludeList = append(excludeList, failedPaths...)
+		// Failed paths are stored as just paths, but Detect() implementations
+		// extract the path portion, so we need to format them as "driver:path".
+		// We use the current reader's ID since we're building an exclude list for it.
+		for _, path := range failedPaths {
+			excludeList = append(excludeList, metadata.ID+":"+path)
+		}
 		detect := reader.Detect(excludeList)
 		if detect == "" {
 			continue
