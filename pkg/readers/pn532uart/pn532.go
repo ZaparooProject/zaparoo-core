@@ -151,7 +151,8 @@ func sendFrame(port serial.Port, cmd byte, args []byte) ([]byte, error) {
 	// create frame
 	frm := []byte{0x00, 0x00, 0xFF} // preamble and start code
 
-	data := []byte{hostToPn532, cmd}
+	data := make([]byte, 0, 2+len(args))
+	data = append(data, hostToPn532, cmd)
 	data = append(data, args...)
 
 	if len(data) > 255 {

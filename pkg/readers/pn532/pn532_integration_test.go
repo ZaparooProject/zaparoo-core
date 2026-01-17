@@ -46,11 +46,7 @@ func (*mockTransport) IsConnected() bool {
 	return true
 }
 
-func (*mockTransport) SendCommand(_ byte, _ []byte) ([]byte, error) {
-	return []byte{}, nil
-}
-
-func (*mockTransport) SendCommandWithContext(_ context.Context, _ byte, _ []byte) ([]byte, error) {
+func (*mockTransport) SendCommand(_ context.Context, _ byte, _ []byte) ([]byte, error) {
 	return []byte{}, nil
 }
 
@@ -72,7 +68,7 @@ type mockPN532Device struct {
 	closeCalled   bool
 }
 
-func (m *mockPN532Device) Init() error {
+func (m *mockPN532Device) Init(_ context.Context) error {
 	m.initCalled = true
 	return m.initErr
 }
@@ -134,7 +130,7 @@ func (*mockTag) WriteText(_ context.Context, _ string) error {
 	return nil
 }
 
-func (*mockTag) DebugInfo() string {
+func (*mockTag) DebugInfo(_ context.Context) string {
 	return "mockTag"
 }
 
@@ -148,9 +144,9 @@ type mockPollingSession struct {
 	writeToNextTagWithRetryErr error // Error to return before invoking callback
 	startFunc                  func(ctx context.Context) error
 	closeFunc                  func() error
-	onCardDetected             func(*pn532.DetectedTag) error
+	onCardDetected             func(context.Context, *pn532.DetectedTag) error
 	onCardRemoved              func()
-	onCardChanged              func(*pn532.DetectedTag) error
+	onCardChanged              func(context.Context, *pn532.DetectedTag) error
 	closeCalled                bool
 	setCallbacksCalled         bool
 }
@@ -171,7 +167,7 @@ func (m *mockPollingSession) Close() error {
 	return nil
 }
 
-func (m *mockPollingSession) SetOnCardDetected(callback func(*pn532.DetectedTag) error) {
+func (m *mockPollingSession) SetOnCardDetected(callback func(context.Context, *pn532.DetectedTag) error) {
 	m.onCardDetected = callback
 	m.setCallbacksCalled = true
 }
@@ -180,7 +176,7 @@ func (m *mockPollingSession) SetOnCardRemoved(callback func()) {
 	m.onCardRemoved = callback
 }
 
-func (m *mockPollingSession) SetOnCardChanged(callback func(*pn532.DetectedTag) error) {
+func (m *mockPollingSession) SetOnCardChanged(callback func(context.Context, *pn532.DetectedTag) error) {
 	m.onCardChanged = callback
 }
 
@@ -237,7 +233,7 @@ func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
 	// Session start function:
 	// 1. Trigger onCardDetected callback to set active token
 	// 2. Return error to simulate session failure
-	mockSession.startFunc = func(_ context.Context) error {
+	mockSession.startFunc = func(ctx context.Context) error {
 		if mockSession.onCardDetected != nil && !tagDetected {
 			tagDetected = true
 			// Simulate tag detection
@@ -246,7 +242,7 @@ func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
 				UID:        "test-uid-session-error",
 				TargetData: []byte{0x01, 0x02, 0x03},
 			}
-			_ = mockSession.onCardDetected(tag)
+			_ = mockSession.onCardDetected(ctx, tag)
 		}
 		// Wait a bit then return error (not context.Canceled)
 		time.Sleep(100 * time.Millisecond)
@@ -429,7 +425,7 @@ func TestOpen_TagDetectionAndRemoval(t *testing.T) {
 				UID:        "ntag-uid-123",
 				TargetData: []byte{0x01, 0x02, 0x03},
 			}
-			_ = mockSession.onCardDetected(tag)
+			_ = mockSession.onCardDetected(ctx, tag)
 
 			// Wait a bit then simulate tag removal
 			time.Sleep(100 * time.Millisecond)
@@ -505,7 +501,7 @@ func TestOpen_TagChanged(t *testing.T) {
 				UID:        "ntag-uid-first",
 				TargetData: []byte{0x01, 0x02, 0x03},
 			}
-			_ = mockSession.onCardDetected(tag1)
+			_ = mockSession.onCardDetected(ctx, tag1)
 
 			// Wait a bit then simulate tag change
 			time.Sleep(100 * time.Millisecond)
@@ -515,7 +511,7 @@ func TestOpen_TagChanged(t *testing.T) {
 					UID:        "mifare-uid-second",
 					TargetData: []byte{0x04, 0x05, 0x06},
 				}
-				_ = mockSession.onCardChanged(tag2)
+				_ = mockSession.onCardChanged(ctx, tag2)
 			}
 		}
 

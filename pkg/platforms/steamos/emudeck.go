@@ -404,7 +404,8 @@ func LaunchViaEmuDeck(ctx context.Context, romPath, systemFolder string) (*os.Pr
 		coresPath := getRetroArchCoresPath()
 		corePath := filepath.Join(coresPath, emulator.Core+".so")
 
-		args := []string{"run", emulator.FlatpakID, "-L", corePath}
+		args := make([]string, 0, 4+len(emulator.Args)+1)
+		args = append(args, "run", emulator.FlatpakID, "-L", corePath)
 		args = append(args, emulator.Args...)
 		args = append(args, romPath)
 
@@ -418,7 +419,8 @@ func LaunchViaEmuDeck(ctx context.Context, romPath, systemFolder string) (*os.Pr
 
 	case EmulatorStandalone:
 		// Build standalone emulator command
-		args := []string{"run", emulator.FlatpakID}
+		args := make([]string, 0, 2+len(emulator.Args)+1)
+		args = append(args, "run", emulator.FlatpakID)
 		args = append(args, emulator.Args...)
 		args = append(args, romPath)
 

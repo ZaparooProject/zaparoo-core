@@ -946,14 +946,15 @@ func selectBestMapping(options []CanonicalTag, hasRegion, hasLanguage, hasVersio
 // It extracts and disambiguates tags following No-Intro/TOSEC conventions.
 // Returns a slice of canonical tags ready for database insertion.
 func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
-	var allTags []CanonicalTag
-
 	// Step 1: Extract special patterns first
 	specialTags, remaining := extractSpecialPatterns(filename)
-	allTags = append(allTags, specialTags...)
 
 	// Step 2: Extract parentheses and bracket tags
 	parenTags, bracketTags := extractTags(remaining)
+
+	// Preallocate with estimated capacity
+	allTags := make([]CanonicalTag, 0, len(specialTags)+len(parenTags)+len(bracketTags))
+	allTags = append(allTags, specialTags...)
 
 	// Step 3: Process parentheses tags (region, language, version, dev status)
 	ctx := &ParseContext{

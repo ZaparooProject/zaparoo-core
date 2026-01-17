@@ -201,10 +201,11 @@ func TestNoSlugCollisions(t *testing.T) {
 
 	// Collect all possible lookup keys for each system
 	for sysID, sys := range Systems {
-		keys := []string{
+		keys := make([]string, 0, 2+len(sys.Aliases)*2)
+		keys = append(keys,
 			strings.ToLower(sys.ID),
 			slugs.Slugify(slugs.MediaTypeGame, sys.ID),
-		}
+		)
 
 		for _, alias := range sys.Aliases {
 			keys = append(keys,

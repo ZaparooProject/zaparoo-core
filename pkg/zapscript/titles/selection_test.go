@@ -901,7 +901,7 @@ func TestFilterByFileTypePriority(t *testing.T) {
 			filtered := FilterByFileTypePriority(tt.results, tt.launchers)
 
 			// Extract paths from filtered results
-			var actualPaths []string
+			actualPaths := make([]string, 0, len(filtered))
 			for _, r := range filtered {
 				actualPaths = append(actualPaths, r.Path)
 			}

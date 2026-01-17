@@ -188,8 +188,9 @@ func getProcessTree(pid int32) []*process.Process {
 		return nil
 	}
 
-	var result []*process.Process
-	result = append(result, getAllDescendants(proc)...)
+	descendants := getAllDescendants(proc)
+	result := make([]*process.Process, 0, len(descendants)+1)
+	result = append(result, descendants...)
 	result = append(result, proc)
 	return result
 }

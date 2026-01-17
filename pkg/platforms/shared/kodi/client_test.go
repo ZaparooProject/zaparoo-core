@@ -730,7 +730,7 @@ func TestNewClient_HierarchicalConfigLookup(t *testing.T) {
 			var cfg *config.Instance
 			if len(tt.configDefaults) > 0 {
 				configDir := t.TempDir()
-				var launcherDefaults []config.LaunchersDefault
+				launcherDefaults := make([]config.LaunchersDefault, 0, len(tt.configDefaults))
 
 				for launcherID, serverURL := range tt.configDefaults {
 					launcherDefaults = append(launcherDefaults, config.LaunchersDefault{

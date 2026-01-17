@@ -506,12 +506,9 @@ func sqlSearchMediaBySlug(
 	slugified := slugs.Slugify(mediaType, slug)
 	args = append(args, systemID, slugified)
 
-	whereConditions := []string{
-		"Systems.SystemID = ?",
-		"MediaTitles.Slug = ?",
-	}
-
 	tagClauses, tagArgs := BuildTagFilterSQL(tags)
+	whereConditions := make([]string, 0, 2+len(tagClauses))
+	whereConditions = append(whereConditions, "Systems.SystemID = ?", "MediaTitles.Slug = ?")
 	whereConditions = append(whereConditions, tagClauses...)
 	args = append(args, tagArgs...)
 
@@ -594,12 +591,9 @@ func sqlSearchMediaBySecondarySlug(
 	slugified := slugs.Slugify(mediaType, secondarySlug)
 	args = append(args, systemID, slugified)
 
-	whereConditions := []string{
-		"Systems.SystemID = ?",
-		"MediaTitles.SecondarySlug = ?",
-	}
-
 	tagClauses, tagArgs := BuildTagFilterSQL(tags)
+	whereConditions := make([]string, 0, 2+len(tagClauses))
+	whereConditions = append(whereConditions, "Systems.SystemID = ?", "MediaTitles.SecondarySlug = ?")
 	whereConditions = append(whereConditions, tagClauses...)
 	args = append(args, tagArgs...)
 
@@ -682,12 +676,9 @@ func sqlSearchMediaBySlugPrefix(
 	slugified := slugs.Slugify(mediaType, slugPrefix)
 	args = append(args, systemID, slugified+"%")
 
-	whereConditions := []string{
-		"Systems.SystemID = ?",
-		"MediaTitles.Slug LIKE ?",
-	}
-
 	tagClauses, tagArgs := BuildTagFilterSQL(tags)
+	whereConditions := make([]string, 0, 2+len(tagClauses))
+	whereConditions = append(whereConditions, "Systems.SystemID = ?", "MediaTitles.Slug LIKE ?")
 	whereConditions = append(whereConditions, tagClauses...)
 	args = append(args, tagArgs...)
 
@@ -789,12 +780,12 @@ func sqlSearchMediaBySlugIn(
 		args = append(args, slug)
 	}
 
-	whereConditions := []string{
-		"Systems.SystemID = ?",
-		"MediaTitles.Slug IN (" + prepareVariadic("?", ",", len(slugified)) + ")",
-	}
-
 	tagClauses, tagArgs := BuildTagFilterSQL(tags)
+	whereConditions := make([]string, 0, 2+len(tagClauses))
+	whereConditions = append(whereConditions,
+		"Systems.SystemID = ?",
+		"MediaTitles.Slug IN ("+prepareVariadic("?", ",", len(slugified))+")",
+	)
 	whereConditions = append(whereConditions, tagClauses...)
 	args = append(args, tagArgs...)
 

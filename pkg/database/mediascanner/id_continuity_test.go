@@ -494,8 +494,8 @@ func TestConcurrentIDGeneration(t *testing.T) {
 
 		// Add multiple entries in sequence
 		generator := testdata.NewTestDataGenerator(5000)
-		expectedTitleIDs := []int{}
-		expectedMediaIDs := []int{}
+		expectedTitleIDs := make([]int, 0, 5)
+		expectedMediaIDs := make([]int, 0, 5)
 
 		for i := range 5 {
 			entry := generator.GenerateMediaEntry("NES")

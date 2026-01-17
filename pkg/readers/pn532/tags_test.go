@@ -20,6 +20,7 @@
 package pn532
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -530,7 +531,7 @@ func TestReadNDEFData_NoTagOps(t *testing.T) {
 		TargetData: []byte{0x01, 0x02, 0x03},
 	}
 
-	uid, data := reader.readNDEFData(detectedTag)
+	uid, data := reader.readNDEFData(context.Background(), detectedTag)
 
 	assert.Empty(t, uid, "uid should be empty when tagOps is nil")
 	assert.Equal(t, detectedTag.TargetData, data, "should return original target data")

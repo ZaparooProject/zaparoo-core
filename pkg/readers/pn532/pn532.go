@@ -56,7 +56,7 @@ const (
 
 // PN532Device abstracts the pn532.Device for testing.
 type PN532Device interface {
-	Init() error
+	Init(ctx context.Context) error
 	SetTimeout(timeout time.Duration) error
 	Close() error
 }
@@ -65,9 +65,9 @@ type PN532Device interface {
 type PollingSession interface {
 	Start(ctx context.Context) error
 	Close() error
-	SetOnCardDetected(callback func(*pn532.DetectedTag) error)
+	SetOnCardDetected(callback func(context.Context, *pn532.DetectedTag) error)
 	SetOnCardRemoved(callback func())
-	SetOnCardChanged(callback func(*pn532.DetectedTag) error)
+	SetOnCardChanged(callback func(context.Context, *pn532.DetectedTag) error)
 	WriteToNextTag(
 		ctx, writeCtx context.Context,
 		timeout time.Duration,
@@ -144,7 +144,7 @@ func (s *realSession) Close() error {
 	return nil
 }
 
-func (s *realSession) SetOnCardDetected(callback func(*pn532.DetectedTag) error) {
+func (s *realSession) SetOnCardDetected(callback func(context.Context, *pn532.DetectedTag) error) {
 	s.session.SetOnCardDetected(callback)
 }
 
@@ -152,7 +152,7 @@ func (s *realSession) SetOnCardRemoved(callback func()) {
 	s.session.SetOnCardRemoved(callback)
 }
 
-func (s *realSession) SetOnCardChanged(callback func(*pn532.DetectedTag) error) {
+func (s *realSession) SetOnCardChanged(callback func(context.Context, *pn532.DetectedTag) error) {
 	s.session.SetOnCardChanged(callback)
 }
 
@@ -334,7 +334,9 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	}
 
 	// Initialize device
-	err = r.device.Init()
+	initCtx, initCancel := context.WithTimeout(context.Background(), deviceTimeout)
+	defer initCancel()
+	err = r.device.Init(initCtx)
 	if err != nil {
 		logTraceableError(err, "device init")
 		_ = r.device.Close()
@@ -363,16 +365,16 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	}
 
 	// Set up callbacks
-	r.session.SetOnCardDetected(func(detectedTag *pn532.DetectedTag) error {
-		return r.handleTagDetected(detectedTag, iq)
+	r.session.SetOnCardDetected(func(ctx context.Context, detectedTag *pn532.DetectedTag) error {
+		return r.handleTagDetected(ctx, detectedTag, iq)
 	})
 
 	r.session.SetOnCardRemoved(func() {
 		r.handleTagRemoved(iq)
 	})
 
-	r.session.SetOnCardChanged(func(detectedTag *pn532.DetectedTag) error {
-		return r.handleTagDetected(detectedTag, iq)
+	r.session.SetOnCardChanged(func(ctx context.Context, detectedTag *pn532.DetectedTag) error {
+		return r.handleTagDetected(ctx, detectedTag, iq)
 	})
 
 	// Start session
@@ -411,9 +413,9 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	return nil
 }
 
-func (r *Reader) handleTagDetected(detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) error {
+func (r *Reader) handleTagDetected(ctx context.Context, detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) error {
 	log.Info().Msgf("new tag detected: %s (%s)", detectedTag.Type, detectedTag.UID)
-	r.processNewTag(detectedTag, iq)
+	r.processNewTag(ctx, detectedTag, iq)
 	return nil
 }
 
@@ -429,9 +431,9 @@ func (r *Reader) handleTagRemoved(iq chan<- readers.Scan) {
 	r.mutex.Unlock()
 }
 
-func (r *Reader) processNewTag(detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) {
+func (r *Reader) processNewTag(ctx context.Context, detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) {
 	tokenType := r.convertTagType(detectedTag.Type)
-	ndefText, rawData := r.readNDEFData(detectedTag)
+	ndefText, rawData := r.readNDEFData(ctx, detectedTag)
 
 	token := &tokens.Token{
 		Type:     tokenType,
@@ -512,7 +514,9 @@ func (*Reader) Detect(connected []string) string {
 	opts.Blocklist = createVIDPIDBlocklist()
 	opts.IgnorePaths = ignorePaths
 
-	devices, err := detection.DetectAll(&opts)
+	ctx, cancel := context.WithTimeout(context.Background(), quickDetectionTimeout)
+	defer cancel()
+	devices, err := detection.DetectAll(ctx, &opts)
 	if err != nil {
 		log.Trace().Err(err).Msg("PN532 detection failed")
 		return ""

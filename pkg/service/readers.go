@@ -64,7 +64,7 @@ func connectReaders(
 	rs := st.ListReaders()
 	var toConnect []toConnectDevice
 	toConnectStrs := func() []string {
-		var tc []string
+		tc := make([]string, 0, len(toConnect))
 		for _, device := range toConnect {
 			tc = append(tc, device.connectionString)
 		}

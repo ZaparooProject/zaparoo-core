@@ -211,8 +211,10 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 
 	scanModes := []string{"Tap", "Hold"}
 
-	allSystems := []string{""}
-	for _, item := range systemdefs.AllSystems() {
+	systems := systemdefs.AllSystems()
+	allSystems := make([]string, 0, len(systems)+1)
+	allSystems = append(allSystems, "")
+	for _, item := range systems {
 		allSystems = append(allSystems, item.ID)
 	}
 
