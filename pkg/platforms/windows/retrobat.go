@@ -120,25 +120,35 @@ func createRetroBatLauncher(systemFolder string, info esde.SystemInfo) platforms
 		Kill: func(_ *config.Instance) error {
 			log.Debug().Msg("killing game via EmulationStation API")
 
-			// Try to kill via API with retries (like Batocera does)
-			maxRetries := 3
+			// Try to kill via API with retries and verification (like Batocera does)
+			maxRetries := 5
 			for i := range maxRetries {
-				err := esapi.APIEmuKill()
-				if err == nil {
-					log.Info().Msg("emulator killed successfully via ES API")
+				// Check if game is still running
+				_, running, err := esapi.APIRunningGame()
+				if err != nil {
+					log.Debug().Err(err).Msg("ES API unavailable while checking running game")
+				} else if !running {
+					log.Info().Msg("game no longer running")
 					return nil
 				}
 
-				if errors.Is(err, context.DeadlineExceeded) {
-					log.Debug().Msg("ES API timeout, assuming kill succeeded")
-					return nil
+				// Game still running, try to kill
+				log.Debug().Msgf("game still running, attempting ES API kill: %d/%d", i+1, maxRetries)
+				err = esapi.APIEmuKill()
+				if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+					log.Debug().Err(err).Msg("ES API kill attempt failed")
 				}
-
-				log.Debug().Err(err).Msgf("ES API kill attempt %d/%d failed", i+1, maxRetries)
 
 				if i < maxRetries-1 {
 					time.Sleep(500 * time.Millisecond)
 				}
+			}
+
+			// Final verification
+			_, running, _ := esapi.APIRunningGame()
+			if !running {
+				log.Info().Msg("game stopped after retries")
+				return nil
 			}
 
 			return fmt.Errorf("failed to kill game via RetroBat ES API after %d retries", maxRetries)
