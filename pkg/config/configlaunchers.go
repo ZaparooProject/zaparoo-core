@@ -83,35 +83,69 @@ func (c *Instance) IsLauncherFileAllowed(s string) bool {
 	return checkAllow(c.vals.Launchers.AllowFile, c.vals.Launchers.allowFileRe, s)
 }
 
-func (c *Instance) LookupLauncherDefaults(launcherID string) (LaunchersDefault, bool) {
+// LookupLauncherDefaults merges configuration defaults for a launcher by iterating
+// through config entries in order. Entries match if their launcher field equals
+// either the launcher ID or any of the launcher's groups (case-insensitive).
+// Later matching entries override earlier ones, allowing hierarchical configuration
+// like: set defaults for all "Kodi" launchers, then override for specific "KodiTV" group.
+func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) LaunchersDefault {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	var result LaunchersDefault
+	result.Launcher = launcherID
+
 	log.Debug().
 		Str("launcherID", launcherID).
+		Strs("groups", groups).
 		Int("defaultsCount", len(c.vals.Launchers.Default)).
-		Msg("LookupLauncherDefaults: searching for launcher defaults")
+		Msg("LookupLauncherDefaults: resolving launcher defaults")
 
-	for i, defaultLauncher := range c.vals.Launchers.Default {
-		log.Debug().
-			Int("index", i).
-			Str("configLauncher", defaultLauncher.Launcher).
-			Str("configAction", defaultLauncher.Action).
-			Msg("LookupLauncherDefaults: checking entry")
+	for _, entry := range c.vals.Launchers.Default {
+		matches := false
 
-		if strings.EqualFold(defaultLauncher.Launcher, launcherID) {
+		// Check if entry matches the exact launcher ID
+		if strings.EqualFold(entry.Launcher, launcherID) {
+			matches = true
+		}
+
+		// Check if entry matches any of the launcher's groups
+		if !matches {
+			for _, group := range groups {
+				if strings.EqualFold(entry.Launcher, group) {
+					matches = true
+					break
+				}
+			}
+		}
+
+		if matches {
 			log.Debug().
+				Str("configLauncher", entry.Launcher).
 				Str("launcherID", launcherID).
-				Str("action", defaultLauncher.Action).
-				Msg("LookupLauncherDefaults: found matching default")
-			return defaultLauncher, true
+				Msg("LookupLauncherDefaults: merging matching entry")
+
+			// Merge non-empty fields (later entries override earlier ones)
+			if entry.InstallDir != "" {
+				result.InstallDir = entry.InstallDir
+			}
+			if entry.ServerURL != "" {
+				result.ServerURL = entry.ServerURL
+			}
+			if entry.Action != "" {
+				result.Action = entry.Action
+			}
 		}
 	}
 
 	log.Debug().
 		Str("launcherID", launcherID).
-		Msg("LookupLauncherDefaults: no matching default found")
-	return LaunchersDefault{}, false
+		Str("resolvedServerURL", result.ServerURL).
+		Str("resolvedAction", result.Action).
+		Str("resolvedInstallDir", result.InstallDir).
+		Msg("LookupLauncherDefaults: resolution complete")
+
+	return result
 }
 
 // SetLauncherDefaultsForTesting sets launcher defaults for testing purposes.

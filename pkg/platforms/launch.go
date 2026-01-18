@@ -47,9 +47,9 @@ type LaunchParams struct {
 // 1. Explicit action from LaunchOptions (from advargs)
 // 2. Config default for the launcher
 // 3. Empty string (default "run" behavior)
-func ResolveAction(opts *LaunchOptions, cfg *config.Instance, launcherID string) string {
+func ResolveAction(opts *LaunchOptions, cfg *config.Instance, launcher *Launcher) string {
 	log.Debug().
-		Str("launcherID", launcherID).
+		Str("launcherID", launcher.ID).
 		Bool("optsNil", opts == nil).
 		Bool("cfgNil", cfg == nil).
 		Msg("ResolveAction called")
@@ -60,16 +60,17 @@ func ResolveAction(opts *LaunchOptions, cfg *config.Instance, launcherID string)
 			Msg("ResolveAction: using explicit action from LaunchOptions")
 		return opts.Action
 	}
-	if cfg != nil && launcherID != "" {
-		if def, ok := cfg.LookupLauncherDefaults(launcherID); ok {
+	if cfg != nil && launcher.ID != "" {
+		def := cfg.LookupLauncherDefaults(launcher.ID, launcher.Groups)
+		if def.Action != "" {
 			log.Debug().
 				Str("action", def.Action).
-				Str("launcherID", launcherID).
+				Str("launcherID", launcher.ID).
 				Msg("ResolveAction: using config default action")
 			return def.Action
 		}
 		log.Debug().
-			Str("launcherID", launcherID).
+			Str("launcherID", launcher.ID).
 			Msg("ResolveAction: no config default found for launcher")
 	}
 	log.Debug().Msg("ResolveAction: returning empty (default run behavior)")
@@ -86,7 +87,7 @@ func IsActionDetails(action string) bool {
 func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	log.Debug().Msgf("launching with: %v", params.Launcher)
 
-	action := ResolveAction(params.Options, params.Config, params.Launcher.ID)
+	action := ResolveAction(params.Options, params.Config, params.Launcher)
 
 	// Populate resolved action into Options for launcher to use
 	if params.Options == nil {

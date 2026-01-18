@@ -155,72 +155,170 @@ func TestLookupLauncherDefaults(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		launcherID     string
-		expectedAction string
-		defaults       []LaunchersDefault
-		expectFound    bool
+		name              string
+		launcherID        string
+		expectedServerURL string
+		expectedAction    string
+		expectedInstall   string
+		groups            []string
+		defaults          []LaunchersDefault
 	}{
 		{
-			name:        "no defaults configured",
-			launcherID:  "Steam",
-			defaults:    nil,
-			expectFound: false,
+			name:       "no defaults configured",
+			launcherID: "Steam",
+			groups:     nil,
+			defaults:   nil,
 		},
 		{
 			name:       "launcher found with action",
 			launcherID: "Steam",
+			groups:     nil,
 			defaults: []LaunchersDefault{
 				{Launcher: "Steam", Action: "details"},
 			},
-			expectFound:    true,
 			expectedAction: "details",
 		},
 		{
 			name:       "launcher found with empty action",
 			launcherID: "Steam",
+			groups:     nil,
 			defaults: []LaunchersDefault{
 				{Launcher: "Steam", Action: ""},
 			},
-			expectFound:    true,
-			expectedAction: "",
 		},
 		{
-			name:       "launcher not found",
+			name:       "launcher not found returns empty result",
 			launcherID: "Epic",
+			groups:     nil,
 			defaults: []LaunchersDefault{
 				{Launcher: "Steam", Action: "details"},
 			},
-			expectFound: false,
 		},
 		{
 			name:       "case insensitive match",
 			launcherID: "steam",
+			groups:     nil,
 			defaults: []LaunchersDefault{
 				{Launcher: "Steam", Action: "details"},
 			},
-			expectFound:    true,
-			expectedAction: "details",
-		},
-		{
-			name:       "multiple defaults - finds first match",
-			launcherID: "Steam",
-			defaults: []LaunchersDefault{
-				{Launcher: "GOG", Action: "run"},
-				{Launcher: "Steam", Action: "details"},
-				{Launcher: "Epic", Action: "run"},
-			},
-			expectFound:    true,
 			expectedAction: "details",
 		},
 		{
 			name:       "launcher found with install_dir",
 			launcherID: "Steam",
+			groups:     nil,
 			defaults: []LaunchersDefault{
 				{Launcher: "Steam", Action: "details", InstallDir: "/opt/steam"},
 			},
-			expectFound:    true,
-			expectedAction: "details",
+			expectedAction:  "details",
+			expectedInstall: "/opt/steam",
+		},
+		{
+			name:       "exact launcher ID match",
+			launcherID: "KodiTVShow",
+			groups:     []string{"Kodi", "KodiTV"},
+			defaults: []LaunchersDefault{
+				{Launcher: "KodiTVShow", ServerURL: "http://exact:8080", Action: "details"},
+			},
+			expectedServerURL: "http://exact:8080",
+			expectedAction:    "details",
+		},
+		{
+			name:       "group match",
+			launcherID: "KodiTVShow",
+			groups:     []string{"Kodi", "KodiTV"},
+			defaults: []LaunchersDefault{
+				{Launcher: "Kodi", ServerURL: "http://group:8080"},
+			},
+			expectedServerURL: "http://group:8080",
+		},
+		{
+			name:       "case insensitive group match",
+			launcherID: "KodiTVShow",
+			groups:     []string{"Kodi", "KodiTV"},
+			defaults: []LaunchersDefault{
+				{Launcher: "kodi", ServerURL: "http://lowercase:8080"},
+			},
+			expectedServerURL: "http://lowercase:8080",
+		},
+		{
+			name:       "later entries override earlier ones",
+			launcherID: "KodiTVShow",
+			groups:     []string{"Kodi", "KodiTV"},
+			defaults: []LaunchersDefault{
+				{Launcher: "Kodi", ServerURL: "http://first:8080", Action: "run"},
+				{Launcher: "Kodi", ServerURL: "http://second:8080"},
+			},
+			expectedServerURL: "http://second:8080",
+			expectedAction:    "run", // first entry's action persists since second didn't override
+		},
+		{
+			name:       "hierarchical config - group then specific group",
+			launcherID: "KodiTVShow",
+			groups:     []string{"Kodi", "KodiTV"},
+			defaults: []LaunchersDefault{
+				{Launcher: "Kodi", ServerURL: "http://all-kodi:8080"},
+				{Launcher: "KodiTV", Action: "details"},
+			},
+			expectedServerURL: "http://all-kodi:8080",
+			expectedAction:    "details",
+		},
+		{
+			name:       "hierarchical config - group then exact ID",
+			launcherID: "KodiTVShow",
+			groups:     []string{"Kodi", "KodiTV"},
+			defaults: []LaunchersDefault{
+				{Launcher: "Kodi", ServerURL: "http://all-kodi:8080", Action: "run"},
+				{Launcher: "KodiTVShow", Action: "details"},
+			},
+			expectedServerURL: "http://all-kodi:8080",
+			expectedAction:    "details",
+		},
+		{
+			name:       "full hierarchical override chain",
+			launcherID: "KodiTVShow",
+			groups:     []string{"Kodi", "KodiTV"},
+			defaults: []LaunchersDefault{
+				{Launcher: "Kodi", ServerURL: "http://base:8080", Action: "run", InstallDir: "/base"},
+				{Launcher: "KodiTV", Action: "browse", InstallDir: "/tv"},
+				{Launcher: "KodiTVShow", Action: "details"},
+			},
+			expectedServerURL: "http://base:8080",
+			expectedAction:    "details",
+			expectedInstall:   "/tv",
+		},
+		{
+			name:       "non-matching entries ignored",
+			launcherID: "KodiTVShow",
+			groups:     []string{"Kodi", "KodiTV"},
+			defaults: []LaunchersDefault{
+				{Launcher: "Steam", ServerURL: "http://steam:8080"},
+				{Launcher: "Kodi", ServerURL: "http://kodi:8080"},
+				{Launcher: "Epic", Action: "run"},
+			},
+			expectedServerURL: "http://kodi:8080",
+		},
+		{
+			name:       "empty groups only matches exact ID",
+			launcherID: "Steam",
+			groups:     nil,
+			defaults: []LaunchersDefault{
+				{Launcher: "Steam", ServerURL: "http://steam:8080"},
+				{Launcher: "Kodi", ServerURL: "http://kodi:8080"},
+			},
+			expectedServerURL: "http://steam:8080",
+		},
+		{
+			name:       "partial field merging",
+			launcherID: "KodiMovie",
+			groups:     []string{"Kodi"},
+			defaults: []LaunchersDefault{
+				{Launcher: "Kodi", ServerURL: "http://server:8080"},
+				{Launcher: "KodiMovie", Action: "details", InstallDir: "/movies"},
+			},
+			expectedServerURL: "http://server:8080",
+			expectedAction:    "details",
+			expectedInstall:   "/movies",
 		},
 	}
 
@@ -236,12 +334,12 @@ func TestLookupLauncherDefaults(t *testing.T) {
 				},
 			}
 
-			result, found := cfg.LookupLauncherDefaults(tt.launcherID)
+			result := cfg.LookupLauncherDefaults(tt.launcherID, tt.groups)
 
-			assert.Equal(t, tt.expectFound, found, "found mismatch")
-			if tt.expectFound {
-				assert.Equal(t, tt.expectedAction, result.Action, "action mismatch")
-			}
+			assert.Equal(t, tt.launcherID, result.Launcher, "launcher ID should be preserved")
+			assert.Equal(t, tt.expectedServerURL, result.ServerURL, "ServerURL mismatch")
+			assert.Equal(t, tt.expectedAction, result.Action, "Action mismatch")
+			assert.Equal(t, tt.expectedInstall, result.InstallDir, "InstallDir mismatch")
 		})
 	}
 }
@@ -262,13 +360,11 @@ func TestSetLauncherDefaultsForTesting(t *testing.T) {
 	assert.Len(t, cfg.vals.Launchers.Default, 2)
 
 	// Verify Steam default
-	steamDefault, found := cfg.LookupLauncherDefaults("Steam")
-	assert.True(t, found)
+	steamDefault := cfg.LookupLauncherDefaults("Steam", nil)
 	assert.Equal(t, "details", steamDefault.Action)
 
 	// Verify GOG default
-	gogDefault, found := cfg.LookupLauncherDefaults("GOG")
-	assert.True(t, found)
+	gogDefault := cfg.LookupLauncherDefaults("GOG", nil)
 	assert.Equal(t, "run", gogDefault.Action)
 	assert.Equal(t, "/opt/gog", gogDefault.InstallDir)
 }
@@ -309,22 +405,19 @@ server_url = "http://localhost:8080"
 	require.NoError(t, err)
 
 	// Verify Steam default with action
-	steamDefault, found := cfg.LookupLauncherDefaults("Steam")
-	require.True(t, found, "Steam default should be found")
+	steamDefault := cfg.LookupLauncherDefaults("Steam", nil)
 	assert.Equal(t, "Steam", steamDefault.Launcher)
 	assert.Equal(t, "details", steamDefault.Action)
 	assert.Empty(t, steamDefault.InstallDir)
 
 	// Verify GOG default without action
-	gogDefault, found := cfg.LookupLauncherDefaults("GOG")
-	require.True(t, found, "GOG default should be found")
+	gogDefault := cfg.LookupLauncherDefaults("GOG", nil)
 	assert.Equal(t, "GOG", gogDefault.Launcher)
 	assert.Empty(t, gogDefault.Action)
 	assert.Equal(t, "/opt/gog", gogDefault.InstallDir)
 
 	// Verify Epic default with action and server_url
-	epicDefault, found := cfg.LookupLauncherDefaults("Epic")
-	require.True(t, found, "Epic default should be found")
+	epicDefault := cfg.LookupLauncherDefaults("Epic", nil)
 	assert.Equal(t, "Epic", epicDefault.Launcher)
 	assert.Equal(t, "run", epicDefault.Action)
 	assert.Equal(t, "http://localhost:8080", epicDefault.ServerURL)
@@ -353,12 +446,10 @@ func TestLauncherDefaults_SaveLoadRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify defaults persist after save/load
-	steamDefault, found := cfg.LookupLauncherDefaults("Steam")
-	require.True(t, found)
+	steamDefault := cfg.LookupLauncherDefaults("Steam", nil)
 	assert.Equal(t, "details", steamDefault.Action)
 
-	gogDefault, found := cfg.LookupLauncherDefaults("GOG")
-	require.True(t, found)
+	gogDefault := cfg.LookupLauncherDefaults("GOG", nil)
 	assert.Equal(t, "run", gogDefault.Action)
 	assert.Equal(t, "/games/gog", gogDefault.InstallDir)
 }
