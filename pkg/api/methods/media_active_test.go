@@ -234,9 +234,12 @@ func TestHandleMedia_WithActiveMediaZapScript(t *testing.T) {
 			}
 
 			// Standard mocks needed for HandleMedia to work
+			// GetOptimizationStatus is always called
 			mockMediaDB.On("GetOptimizationStatus").Return("", nil)
-			mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
-			mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
+			// These may not be called if another parallel test is running indexing
+			// (which sets global statusInstance.indexing = true)
+			mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil).Maybe()
+			mockMediaDB.On("GetTotalMediaCount").Return(100, nil).Maybe()
 
 			// Clear indexing status
 			ClearIndexingStatus()

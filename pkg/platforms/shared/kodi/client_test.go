@@ -660,60 +660,88 @@ func TestNewClient_HierarchicalConfigLookup(t *testing.T) {
 	t.Parallel()
 
 	// Test the hierarchical config lookup for Kodi client
-	// Should use: specific launcher ID → "Kodi" generic → hardcoded localhost fallback
+	// Uses LookupLauncherDefaults to merge settings from groups and exact launcher ID
+	// NOTE: Config order matters - later entries override earlier ones
 
 	tests := []struct {
 		name           string
 		launcherID     string
-		configDefaults map[string]string
 		expectedURL    string
+		groups         []string
+		configDefaults []config.LaunchersDefault // Ordered slice for deterministic behavior
 	}{
 		{
-			name:       "uses specific launcher ID configuration",
+			name:       "later config entry overrides earlier (exact ID after group)",
 			launcherID: "KodiSpecific",
-			configDefaults: map[string]string{
-				"KodiSpecific": "http://specific-kodi:8080/jsonrpc",
-				"Kodi":         "http://generic-kodi:8080/jsonrpc",
+			groups:     []string{"Kodi"},
+			configDefaults: []config.LaunchersDefault{
+				{Launcher: "Kodi", ServerURL: "http://generic-kodi:8080/jsonrpc"},
+				{Launcher: "KodiSpecific", ServerURL: "http://specific-kodi:8080/jsonrpc"},
 			},
 			expectedURL: "http://specific-kodi:8080/jsonrpc",
 		},
 		{
-			name:       "falls back to Kodi generic when specific not found",
+			name:       "falls back to group when specific not found",
 			launcherID: "KodiSpecific",
-			configDefaults: map[string]string{
-				"Kodi": "http://generic-kodi:8080/jsonrpc",
+			groups:     []string{"Kodi"},
+			configDefaults: []config.LaunchersDefault{
+				{Launcher: "Kodi", ServerURL: "http://generic-kodi:8080/jsonrpc"},
 			},
 			expectedURL: "http://generic-kodi:8080/jsonrpc",
 		},
 		{
 			name:           "falls back to hardcoded localhost when no config found",
 			launcherID:     "KodiSpecific",
-			configDefaults: map[string]string{},
+			groups:         []string{"Kodi"},
+			configDefaults: nil,
 			expectedURL:    "http://localhost:8080/jsonrpc",
 		},
 		{
 			name:       "handles trailing slashes in ServerURL",
 			launcherID: "KodiSpecific",
-			configDefaults: map[string]string{
-				"KodiSpecific": "http://specific-kodi:8080/",
+			groups:     []string{"Kodi"},
+			configDefaults: []config.LaunchersDefault{
+				{Launcher: "KodiSpecific", ServerURL: "http://specific-kodi:8080/"},
 			},
 			expectedURL: "http://specific-kodi:8080/jsonrpc",
 		},
 		{
 			name:       "adds http scheme when missing in launcher config",
 			launcherID: "KodiSpecific",
-			configDefaults: map[string]string{
-				"KodiSpecific": "specific-kodi:8080",
+			groups:     []string{"Kodi"},
+			configDefaults: []config.LaunchersDefault{
+				{Launcher: "KodiSpecific", ServerURL: "specific-kodi:8080"},
 			},
 			expectedURL: "http://specific-kodi:8080/jsonrpc",
 		},
 		{
 			name:       "preserves https scheme in launcher config",
 			launcherID: "KodiSpecific",
-			configDefaults: map[string]string{
-				"KodiSpecific": "https://specific-kodi:8080",
+			groups:     []string{"Kodi"},
+			configDefaults: []config.LaunchersDefault{
+				{Launcher: "KodiSpecific", ServerURL: "https://specific-kodi:8080"},
 			},
 			expectedURL: "https://specific-kodi:8080/jsonrpc",
+		},
+		{
+			name:       "group config is merged with launcher ID override",
+			launcherID: "KodiTVShow",
+			groups:     []string{"Kodi", "KodiTV"},
+			configDefaults: []config.LaunchersDefault{
+				{Launcher: "Kodi", ServerURL: "http://base-kodi:8080"},
+				{Launcher: "KodiTVShow", ServerURL: "http://tvshow-kodi:9090"},
+			},
+			expectedURL: "http://tvshow-kodi:9090/jsonrpc",
+		},
+		{
+			name:       "multiple groups - later group in config order wins",
+			launcherID: "KodiTVEpisode",
+			groups:     []string{"Kodi", "KodiTV"},
+			configDefaults: []config.LaunchersDefault{
+				{Launcher: "Kodi", ServerURL: "http://base-kodi:8080"},
+				{Launcher: "KodiTV", ServerURL: "http://tv-kodi:9090"},
+			},
+			expectedURL: "http://tv-kodi:9090/jsonrpc",
 		},
 	}
 
@@ -721,27 +749,12 @@ func TestNewClient_HierarchicalConfigLookup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			// This test should drive the implementation to accept a launcher ID
-			// and perform hierarchical configuration lookup
-
-			// For now, the test will fail because NewClient doesn't accept launcher ID
-			// This drives us to modify the NewClient signature and implementation
-			// Create config with the test defaults
 			var cfg *config.Instance
 			if len(tt.configDefaults) > 0 {
 				configDir := t.TempDir()
-				launcherDefaults := make([]config.LaunchersDefault, 0, len(tt.configDefaults))
-
-				for launcherID, serverURL := range tt.configDefaults {
-					launcherDefaults = append(launcherDefaults, config.LaunchersDefault{
-						Launcher:  launcherID,
-						ServerURL: serverURL,
-					})
-				}
-
 				values := config.Values{
 					Launchers: config.Launchers{
-						Default: launcherDefaults,
+						Default: tt.configDefaults,
 					},
 				}
 
@@ -750,7 +763,7 @@ func TestNewClient_HierarchicalConfigLookup(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			client := kodi.NewClientWithLauncherID(cfg, tt.launcherID)
+			client := kodi.NewClientWithLauncherID(cfg, tt.launcherID, tt.groups)
 
 			actualURL := client.GetURL()
 			assert.Equal(t, tt.expectedURL, actualURL)

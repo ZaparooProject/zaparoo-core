@@ -45,22 +45,21 @@ type Client struct {
 // Ensure Client implements KodiClient at compile time
 var _ KodiClient = (*Client)(nil)
 
-// NewClient creates a new Kodi client with configuration-based URL
+// NewClient creates a new Kodi client with configuration-based URL.
+// Uses "Kodi" as the default group for configuration lookup.
 func NewClient(cfg *config.Instance) KodiClient {
-	return NewClientWithLauncherID(cfg, "Kodi")
+	return NewClientWithLauncherID(cfg, shared.GroupKodi, []string{shared.GroupKodi})
 }
 
-// NewClientWithLauncherID creates a new Kodi client with hierarchical configuration lookup
-func NewClientWithLauncherID(cfg *config.Instance, launcherID string) KodiClient {
+// NewClientWithLauncherID creates a new Kodi client with group-aware configuration lookup.
+// Uses LookupLauncherDefaults to merge settings from matching groups and exact launcher ID.
+func NewClientWithLauncherID(cfg *config.Instance, launcherID string, groups []string) KodiClient {
 	var serverURL string
 
-	// Try specific launcher ID first, then fall back to generic "Kodi"
+	// Use LookupLauncherDefaults to get merged configuration from groups and launcher ID
 	if cfg != nil {
-		if defaults, found := cfg.LookupLauncherDefaults(launcherID); found && defaults.ServerURL != "" {
-			serverURL = defaults.ServerURL
-		} else if defaults, found := cfg.LookupLauncherDefaults("Kodi"); found && defaults.ServerURL != "" {
-			serverURL = defaults.ServerURL
-		}
+		defaults := cfg.LookupLauncherDefaults(launcherID, groups)
+		serverURL = defaults.ServerURL
 	}
 
 	// Fall back to hardcoded localhost if no config found

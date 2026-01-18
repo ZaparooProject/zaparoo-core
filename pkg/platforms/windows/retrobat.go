@@ -43,7 +43,7 @@ import (
 // issues with EmulationStation's path comparisons.
 func findRetroBatDir(cfg *config.Instance) (string, error) {
 	// Check user-configured directory first
-	if def, ok := cfg.LookupLauncherDefaults("RetroBat"); ok && def.InstallDir != "" {
+	if def := cfg.LookupLauncherDefaults("RetroBat", nil); def.InstallDir != "" {
 		if normalizedPath, err := mediascanner.FindPath(def.InstallDir); err == nil {
 			log.Debug().Msgf("using user-configured RetroBat directory: %s", normalizedPath)
 			return normalizedPath, nil

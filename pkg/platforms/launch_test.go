@@ -36,6 +36,10 @@ import (
 func TestResolveAction(t *testing.T) {
 	t.Parallel()
 
+	steamLauncher := &platforms.Launcher{ID: "Steam"}
+	steamWithGroups := &platforms.Launcher{ID: "Steam", Groups: []string{"PC"}}
+	emptyLauncher := &platforms.Launcher{ID: ""}
+
 	t.Run("opts_action_takes_precedence", func(t *testing.T) {
 		t.Parallel()
 
@@ -50,7 +54,7 @@ func TestResolveAction(t *testing.T) {
 
 		// Opts specifies action=run, should override config
 		opts := &platforms.LaunchOptions{Action: "run"}
-		action := platforms.ResolveAction(opts, cfg, "Steam")
+		action := platforms.ResolveAction(opts, cfg, steamLauncher)
 
 		assert.Equal(t, "run", action, "Options action should override config")
 	})
@@ -69,7 +73,7 @@ func TestResolveAction(t *testing.T) {
 
 		// Opts has empty action
 		opts := &platforms.LaunchOptions{Action: ""}
-		action := platforms.ResolveAction(opts, cfg, "Steam")
+		action := platforms.ResolveAction(opts, cfg, steamLauncher)
 
 		assert.Equal(t, "details", action, "Should use config action when opts.Action is empty")
 	})
@@ -86,7 +90,7 @@ func TestResolveAction(t *testing.T) {
 			{Launcher: "Steam", Action: "details"},
 		})
 
-		action := platforms.ResolveAction(nil, cfg, "Steam")
+		action := platforms.ResolveAction(nil, cfg, steamLauncher)
 
 		assert.Equal(t, "details", action, "Should use config action when opts is nil")
 	})
@@ -99,7 +103,7 @@ func TestResolveAction(t *testing.T) {
 		require.NoError(t, err)
 
 		// No launcher defaults configured
-		action := platforms.ResolveAction(nil, cfg, "Steam")
+		action := platforms.ResolveAction(nil, cfg, steamLauncher)
 
 		assert.Empty(t, action, "Should return empty when no action configured")
 	})
@@ -107,7 +111,7 @@ func TestResolveAction(t *testing.T) {
 	t.Run("returns_empty_when_cfg_is_nil", func(t *testing.T) {
 		t.Parallel()
 
-		action := platforms.ResolveAction(nil, nil, "Steam")
+		action := platforms.ResolveAction(nil, nil, steamLauncher)
 
 		assert.Empty(t, action, "Should return empty when cfg is nil")
 	})
@@ -123,9 +127,26 @@ func TestResolveAction(t *testing.T) {
 			{Launcher: "Steam", Action: "details"},
 		})
 
-		action := platforms.ResolveAction(nil, cfg, "")
+		action := platforms.ResolveAction(nil, cfg, emptyLauncher)
 
 		assert.Empty(t, action, "Should return empty when launcherID is empty")
+	})
+
+	t.Run("uses_group_based_config_lookup", func(t *testing.T) {
+		t.Parallel()
+
+		fs := helpers.NewMemoryFS()
+		cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+		require.NoError(t, err)
+
+		// Configure action for "PC" group, not specific launcher ID
+		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
+			{Launcher: "PC", Action: "browse"},
+		})
+
+		action := platforms.ResolveAction(nil, cfg, steamWithGroups)
+
+		assert.Equal(t, "browse", action, "Should match group in config")
 	})
 }
 
