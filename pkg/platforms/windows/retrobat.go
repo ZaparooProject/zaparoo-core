@@ -80,11 +80,6 @@ func findRetroBatDir(cfg *config.Instance) (string, error) {
 	return "", errors.New("RetroBat installation directory not found")
 }
 
-// isRetroBatRunning checks if RetroBat (EmulationStation) is running and API is accessible
-func isRetroBatRunning() bool {
-	return esapi.IsAvailable()
-}
-
 // createRetroBatLauncher creates a launcher for a specific RetroBat system.
 func createRetroBatLauncher(systemFolder string, info esde.SystemInfo) platforms.Launcher {
 	launcherID := info.GetLauncherID()
@@ -113,24 +108,16 @@ func createRetroBatLauncher(systemFolder string, info esde.SystemInfo) platforms
 			return false
 		},
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			if !isRetroBatRunning() {
-				return nil, errors.New("RetroBat is not running")
-			}
-
 			log.Debug().Str("path", path).Msg("launching game via EmulationStation API")
 			err := esapi.APILaunch(path)
 			if err != nil {
-				return nil, fmt.Errorf("RetroBat API request failed: %w", err)
+				return nil, fmt.Errorf("RetroBat ES API launch failed: %w", err)
 			}
 
 			log.Info().Str("path", path).Msg("game launched successfully via ES API")
-			return nil, nil
+			return nil, nil //nolint:nilnil // API launches don't return a process handle
 		},
 		Kill: func(_ *config.Instance) error {
-			if !isRetroBatRunning() {
-				return errors.New("RetroBat is not running")
-			}
-
 			log.Debug().Msg("killing game via EmulationStation API")
 
 			// Try to kill via API with retries (like Batocera does)
@@ -154,7 +141,7 @@ func createRetroBatLauncher(systemFolder string, info esde.SystemInfo) platforms
 				}
 			}
 
-			return fmt.Errorf("failed to kill game via RetroBat API after %d retries", maxRetries)
+			return fmt.Errorf("failed to kill game via RetroBat ES API after %d retries", maxRetries)
 		},
 		Scanner: func(
 			_ context.Context,
