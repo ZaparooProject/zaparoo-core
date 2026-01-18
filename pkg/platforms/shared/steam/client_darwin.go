@@ -35,7 +35,7 @@ import (
 // FindSteamDir locates the Steam installation directory on macOS.
 func (c *Client) FindSteamDir(cfg *config.Instance) string {
 	// Check for user-configured Steam install directory first
-	if def, ok := cfg.LookupLauncherDefaults("Steam"); ok && def.InstallDir != "" {
+	if def := cfg.LookupLauncherDefaults("Steam", nil); def.InstallDir != "" {
 		if _, err := os.Stat(def.InstallDir); err == nil {
 			log.Debug().Msgf("using user-configured Steam directory: %s", def.InstallDir)
 			return def.InstallDir

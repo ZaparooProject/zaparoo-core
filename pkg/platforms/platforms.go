@@ -182,6 +182,11 @@ type Launcher struct {
 	UsesRunningInstance string
 	// Unique ID of the launcher, visible to user.
 	ID string
+	// Groups this launcher belongs to. Used for configuration lookup - when a config
+	// entry's launcher field matches a group name, it applies to all launchers in that
+	// group. Example: ["Kodi", "KodiTV"] means this launcher matches config entries for
+	// both "Kodi" and "KodiTV".
+	Groups []string
 	// System associated with this launcher.
 	SystemID string
 	// Folders to scan for files, relative to the root folders of the platform.

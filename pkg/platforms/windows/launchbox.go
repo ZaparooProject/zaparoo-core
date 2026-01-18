@@ -288,8 +288,7 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 		"E:\\LaunchBox",
 	}
 
-	def, ok := cfg.LookupLauncherDefaults("LaunchBox")
-	if ok && def.InstallDir != "" {
+	if def := cfg.LookupLauncherDefaults("LaunchBox", nil); def.InstallDir != "" {
 		dirs = append([]string{def.InstallDir}, dirs...)
 	}
 

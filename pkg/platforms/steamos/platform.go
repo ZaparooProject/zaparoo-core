@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
@@ -160,6 +161,16 @@ func (p *Platform) LaunchMedia(
 // SteamOS uses direct steam command (not xdg-open) for better Game Mode integration.
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	ls := []platforms.Launcher{
+		// Kodi launchers (8 types)
+		kodi.NewKodiLocalLauncher(),
+		kodi.NewKodiMovieLauncher(),
+		kodi.NewKodiTVLauncher(),
+		kodi.NewKodiMusicLauncher(),
+		kodi.NewKodiSongLauncher(),
+		kodi.NewKodiAlbumLauncher(),
+		kodi.NewKodiArtistLauncher(),
+		kodi.NewKodiTVShowLauncher(),
+
 		// Steam with Steam Deck optimizations
 		steam.NewSteamLauncher(steam.DefaultSteamOSOptions()),
 
