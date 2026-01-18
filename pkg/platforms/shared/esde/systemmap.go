@@ -1256,12 +1256,12 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"windows": {
 		SystemID:   systemdefs.SystemWindows,
-		Extensions: []string{".wine", ".exe", ".bat"},
+		Extensions: []string{".pc", ".exe", ".wine", ".wsquashfs", ".wtgz"},
 		LauncherID: "Windows",
 	},
 	"windows_installers": {
 		SystemID:   systemdefs.SystemWindows,
-		Extensions: []string{".exe", ".msi"},
+		Extensions: []string{".exe", ".iso", ".msi"},
 		LauncherID: "WindowsInstallers",
 	},
 	"wine": {
