@@ -1114,3 +1114,77 @@ func TestHotkeygenExit_RespectsContextTimeout(t *testing.T) {
 	// Should fail due to context cancellation
 	require.Error(t, err)
 }
+
+// TestRootDirs_AlwaysIncludesDefaultPath verifies that /userdata/roms is always
+// included in RootDirs output, even when ES config parsing fails or returns no paths.
+func TestRootDirs_AlwaysIncludesDefaultPath(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := &Platform{}
+
+	roots := platform.RootDirs(cfg)
+
+	assert.Contains(t, roots, "/userdata/roms", "default ROM path must always be included")
+}
+
+// TestRootDirs_IncludesESDiscoveredPaths verifies that paths from ES config
+// are included alongside the default path.
+func TestRootDirs_IncludesESDiscoveredPaths(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := &Platform{}
+
+	// Pre-populate the ES config cache with test data
+	platform.esConfigCache = &ESSystemConfig{
+		Systems: map[string]ESSystem{
+			"nes":  {Name: "nes", Path: "/media/SHARE/roms/nes"},
+			"snes": {Name: "snes", Path: "/media/USB/roms/snes"},
+		},
+	}
+
+	roots := platform.RootDirs(cfg)
+
+	// Should include both ES-discovered paths and the default
+	assert.Contains(t, roots, "/userdata/roms", "default ROM path must always be included")
+	assert.Contains(t, roots, "/media/SHARE/roms", "ES-discovered path should be included")
+	assert.Contains(t, roots, "/media/USB/roms", "ES-discovered path should be included")
+}
+
+// TestRootDirs_DeduplicatesPaths verifies that duplicate paths are removed.
+func TestRootDirs_DeduplicatesPaths(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := &Platform{}
+
+	// Pre-populate with paths that will duplicate the default
+	platform.esConfigCache = &ESSystemConfig{
+		Systems: map[string]ESSystem{
+			"nes":  {Name: "nes", Path: "/userdata/roms/nes"},
+			"snes": {Name: "snes", Path: "/userdata/roms/snes"},
+		},
+	}
+
+	roots := platform.RootDirs(cfg)
+
+	// Count occurrences of /userdata/roms
+	count := 0
+	for _, r := range roots {
+		if r == "/userdata/roms" {
+			count++
+		}
+	}
+
+	assert.Equal(t, 1, count, "/userdata/roms should appear exactly once (deduplicated)")
+}

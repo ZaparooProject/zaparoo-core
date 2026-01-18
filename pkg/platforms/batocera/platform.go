@@ -50,16 +50,18 @@ const (
 
 type Platform struct {
 	clock          clockwork.Clock
-	cfg            *config.Instance
+	lastKnownGame  *models.ActiveMedia
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
 	trackedProcess *os.Process
 	stopTracker    func() error
-	lastKnownGame  *models.ActiveMedia
+	cfg            *config.Instance
+	esConfigCache  *ESSystemConfig
 	shared.LinuxInput
 	maxStartupRetries int
 	processMu         syncutil.RWMutex
 	trackerMu         syncutil.RWMutex
+	esConfigMu        syncutil.RWMutex
 	kodiActive        bool
 }
 
@@ -220,8 +222,58 @@ func (*Platform) ScanHook(_ *tokens.Token) error {
 	return nil
 }
 
-func (*Platform) RootDirs(cfg *config.Instance) []string {
-	return append(cfg.IndexRoots(), "/userdata/roms")
+func (p *Platform) RootDirs(cfg *config.Instance) []string {
+	roots := cfg.IndexRoots()
+
+	// Auto-discover ROM paths from EmulationStation config
+	esConfig := p.getESConfig()
+	if esConfig != nil {
+		roots = append(roots, esConfig.GetROMPaths()...)
+	}
+
+	// Always include default Batocera ROM path
+	roots = append(roots, "/userdata/roms")
+
+	// Deduplicate paths, preserving order of first occurrence
+	seen := make(map[string]struct{})
+	result := make([]string, 0, len(roots))
+	for _, path := range roots {
+		normalized := filepath.Clean(path)
+		if _, exists := seen[normalized]; !exists {
+			seen[normalized] = struct{}{}
+			result = append(result, normalized)
+		}
+	}
+
+	return result
+}
+
+// getESConfig returns cached ES system config, parsing it on first access.
+func (p *Platform) getESConfig() *ESSystemConfig {
+	p.esConfigMu.RLock()
+	cached := p.esConfigCache
+	p.esConfigMu.RUnlock()
+
+	if cached != nil {
+		return cached
+	}
+
+	p.esConfigMu.Lock()
+	defer p.esConfigMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if p.esConfigCache != nil {
+		return p.esConfigCache
+	}
+
+	esCfg, err := ParseESSystemsConfig(ESConfigDir)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to parse ES systems config")
+		return nil
+	}
+
+	p.esConfigCache = esCfg
+	return esCfg
 }
 
 func (*Platform) Settings() platforms.Settings {
