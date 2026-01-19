@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
-	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/rs/zerolog/log"
 )
 
@@ -83,7 +83,7 @@ func CmdLaunchCore(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRe
 
 func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error) {
 	return func(pl platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
-		var advArgs advargtypes.MisterScriptArgs
+		var advArgs gozapscript.MisterScriptArgs
 		if err := zapscript.ParseAdvArgs(pl, env, &advArgs); err != nil {
 			return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
 		}

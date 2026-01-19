@@ -22,7 +22,7 @@ package filters
 import (
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,28 +31,28 @@ func TestParseTagFilters_ANDOperator(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []string
-		expected []database.TagFilter
+		expected []zapscript.TagFilter
 	}{
 		{
 			name:  "AND with + prefix",
 			input: []string{"+region:usa"},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "AND without prefix (default)",
 			input: []string{"region:usa"},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Multiple AND tags",
 			input: []string{"region:usa", "+lang:en"},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-				{Type: "lang", Value: "en", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorAND},
 			},
 		},
 	}
@@ -70,21 +70,21 @@ func TestParseTagFilters_NOTOperator(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []string
-		expected []database.TagFilter
+		expected []zapscript.TagFilter
 	}{
 		{
 			name:  "NOT with - prefix",
 			input: []string{"-unfinished:demo"},
-			expected: []database.TagFilter{
-				{Type: "unfinished", Value: "demo", Operator: database.TagOperatorNOT},
+			expected: []zapscript.TagFilter{
+				{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
 			},
 		},
 		{
 			name:  "Multiple NOT tags",
 			input: []string{"-unfinished:demo", "-unfinished:beta"},
-			expected: []database.TagFilter{
-				{Type: "unfinished", Value: "demo", Operator: database.TagOperatorNOT},
-				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
+			expected: []zapscript.TagFilter{
+				{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
+				{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
 			},
 		},
 	}
@@ -102,22 +102,22 @@ func TestParseTagFilters_OROperator(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []string
-		expected []database.TagFilter
+		expected []zapscript.TagFilter
 	}{
 		{
 			name:  "OR with ~ prefix",
 			input: []string{"~lang:en"},
-			expected: []database.TagFilter{
-				{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
+			expected: []zapscript.TagFilter{
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
 			},
 		},
 		{
 			name:  "Multiple OR tags",
 			input: []string{"~lang:en", "~lang:es", "~lang:fr"},
-			expected: []database.TagFilter{
-				{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
-				{Type: "lang", Value: "es", Operator: database.TagOperatorOR},
-				{Type: "lang", Value: "fr", Operator: database.TagOperatorOR},
+			expected: []zapscript.TagFilter{
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
+				{Type: "lang", Value: "es", Operator: zapscript.TagOperatorOR},
+				{Type: "lang", Value: "fr", Operator: zapscript.TagOperatorOR},
 			},
 		},
 	}
@@ -135,27 +135,27 @@ func TestParseTagFilters_MixedOperators(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []string
-		expected []database.TagFilter
+		expected []zapscript.TagFilter
 	}{
 		{
 			name:  "AND, NOT, and OR mixed",
 			input: []string{"region:usa", "-unfinished:demo", "~lang:en", "~lang:es"},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-				{Type: "unfinished", Value: "demo", Operator: database.TagOperatorNOT},
-				{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
-				{Type: "lang", Value: "es", Operator: database.TagOperatorOR},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+				{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
+				{Type: "lang", Value: "es", Operator: zapscript.TagOperatorOR},
 			},
 		},
 		{
 			name:  "Complex mix with multiple types",
 			input: []string{"+region:usa", "genre:action", "-unfinished:beta", "~players:2", "~players:4"},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-				{Type: "genre", Value: "action", Operator: database.TagOperatorAND},
-				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
-				{Type: "players", Value: "2", Operator: database.TagOperatorOR},
-				{Type: "players", Value: "4", Operator: database.TagOperatorOR},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+				{Type: "genre", Value: "action", Operator: zapscript.TagOperatorAND},
+				{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
+				{Type: "players", Value: "2", Operator: zapscript.TagOperatorOR},
+				{Type: "players", Value: "4", Operator: zapscript.TagOperatorOR},
 			},
 		},
 	}
@@ -173,27 +173,27 @@ func TestParseTagFilters_Normalization(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []string
-		expected []database.TagFilter
+		expected []zapscript.TagFilter
 	}{
 		{
 			name:  "Uppercase to lowercase",
 			input: []string{"Region:USA"},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Whitespace trimming",
 			input: []string{"  region : usa  "},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Mixed case with operator",
 			input: []string{"-Unfinished:DEMO"},
-			expected: []database.TagFilter{
-				{Type: "unfinished", Value: "demo", Operator: database.TagOperatorNOT},
+			expected: []zapscript.TagFilter{
+				{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
 			},
 		},
 	}
@@ -419,7 +419,7 @@ func TestParseTagFilters_Unicode(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       []string
-		expected    []database.TagFilter
+		expected    []zapscript.TagFilter
 		expectError bool
 	}{
 		{
@@ -446,24 +446,24 @@ func TestParseTagFilters_Unicode(t *testing.T) {
 		{
 			name:  "Mixed scripts - only ASCII kept",
 			input: []string{"game:ファイナルFantasy"},
-			expected: []database.TagFilter{
-				{Type: "game", Value: "fantasy", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "game", Value: "fantasy", Operator: zapscript.TagOperatorAND},
 			},
 			expectError: false,
 		},
 		{
 			name:  "Combining diacritics removed",
 			input: []string{"name:café"},
-			expected: []database.TagFilter{
-				{Type: "name", Value: "caf", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "name", Value: "caf", Operator: zapscript.TagOperatorAND},
 			},
 			expectError: false,
 		},
 		{
 			name:  "Zero-width characters removed",
 			input: []string{"text:hello\u200Bworld"}, // Zero-width space
-			expected: []database.TagFilter{
-				{Type: "text", Value: "helloworld", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "text", Value: "helloworld", Operator: zapscript.TagOperatorAND},
 			},
 			expectError: false,
 		},
@@ -487,41 +487,41 @@ func TestParseTagFilters_Whitespace(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []string
-		expected []database.TagFilter
+		expected []zapscript.TagFilter
 	}{
 		{
 			name:  "Tab characters",
 			input: []string{"region:\tusa"},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Newline characters",
 			input: []string{"region:\nusa"},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Multiple spaces become multiple hyphens",
 			input: []string{"name:super  mario  world"},
-			expected: []database.TagFilter{
-				{Type: "name", Value: "super--mario--world", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "name", Value: "super--mario--world", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Leading and trailing spaces",
 			input: []string{"  +region:usa  "},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Mixed whitespace around colon",
 			input: []string{"region \t:\n usa"},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 			},
 		},
 	}
@@ -585,55 +585,55 @@ func TestParseTagFilters_SpecialCharacters(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []string
-		expected []database.TagFilter
+		expected []zapscript.TagFilter
 	}{
 		{
 			name:  "Ampersand removed by normalization (spaces to hyphen first)",
 			input: []string{"game:sonic & knuckles"},
-			expected: []database.TagFilter{
-				{Type: "game", Value: "sonic--knuckles", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "game", Value: "sonic--knuckles", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Parentheses removed by normalization",
 			input: []string{"game:zelda (usa)"},
-			expected: []database.TagFilter{
-				{Type: "game", Value: "zelda-usa", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "game", Value: "zelda-usa", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Brackets removed by normalization",
 			input: []string{"game:game [beta]"},
-			expected: []database.TagFilter{
-				{Type: "game", Value: "game-beta", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "game", Value: "game-beta", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Underscore removed, hyphen preserved",
 			input: []string{"system:retro_gaming-console"},
-			expected: []database.TagFilter{
-				{Type: "system", Value: "retrogaming-console", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "system", Value: "retrogaming-console", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Period converted to hyphen",
 			input: []string{"version:v1.2.3"},
-			expected: []database.TagFilter{
-				{Type: "version", Value: "v1-2-3", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "version", Value: "v1-2-3", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Plus sign preserved",
 			input: []string{"game:c++"},
-			expected: []database.TagFilter{
-				{Type: "game", Value: "c++", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "game", Value: "c++", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:  "Comma and colon preserved",
 			input: []string{"list:a,b,c:d"},
-			expected: []database.TagFilter{
-				{Type: "list", Value: "a,b,c:d", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "list", Value: "a,b,c:d", Operator: zapscript.TagOperatorAND},
 			},
 		},
 	}
@@ -653,15 +653,15 @@ func TestParseTagFilters_Regression(t *testing.T) {
 		name        string
 		description string
 		input       []string
-		expected    []database.TagFilter
+		expected    []zapscript.TagFilter
 		expectError bool
 	}{
 		{
 			name:  "Empty strings mixed with valid tags",
 			input: []string{"", "region:usa", "", "lang:en", ""},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-				{Type: "lang", Value: "en", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorAND},
 			},
 			expectError: false,
 			description: "Empty strings should be skipped",
@@ -669,8 +669,8 @@ func TestParseTagFilters_Regression(t *testing.T) {
 		{
 			name:  "Only operator prefix with spaces",
 			input: []string{"+   "},
-			expected: []database.TagFilter{
-				{Type: "", Value: "", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "", Value: "", Operator: zapscript.TagOperatorAND},
 			},
 			expectError: true,
 			description: "Operator with only spaces should error",
@@ -678,8 +678,8 @@ func TestParseTagFilters_Regression(t *testing.T) {
 		{
 			name:  "Colon at end after operator",
 			input: []string{"+region:"},
-			expected: []database.TagFilter{
-				{Type: "region", Value: "", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "region", Value: "", Operator: zapscript.TagOperatorAND},
 			},
 			expectError: true,
 			description: "Operator with empty value should error",
@@ -687,8 +687,8 @@ func TestParseTagFilters_Regression(t *testing.T) {
 		{
 			name:  "Multiple colons with operators - normalized",
 			input: []string{"+url:https://example.com:8080"},
-			expected: []database.TagFilter{
-				{Type: "url", Value: "https:example-com:8080", Operator: database.TagOperatorAND},
+			expected: []zapscript.TagFilter{
+				{Type: "url", Value: "https:example-com:8080", Operator: zapscript.TagOperatorAND},
 			},
 			expectError: false,
 			description: "Multiple colons should parse correctly (slashes normalized to hyphens)",

@@ -17,27 +17,23 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-// Package advargs provides type-safe parsing and validation for ZapScript
-// advanced arguments using struct tags and the go-playground/validator library.
 package advargs
 
 import (
-	"strings"
-
-	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
+	"github.com/ZaparooProject/go-zapscript"
 )
 
-// IsActionDetails returns true if the action is "details" (case-insensitive).
+// IsActionDetails returns true if action is "details" (case-insensitive).
 func IsActionDetails(action string) bool {
-	return strings.EqualFold(action, advargtypes.ActionDetails)
+	return zapscript.IsActionDetails(action)
 }
 
-// IsActionRun returns true if the action is "run" or empty (case-insensitive).
+// IsActionRun returns true if action is "run" or empty (case-insensitive).
 func IsActionRun(action string) bool {
-	return action == "" || strings.EqualFold(action, advargtypes.ActionRun)
+	return zapscript.IsActionRun(action)
 }
 
-// IsModeShuffle returns true if the mode is "shuffle" (case-insensitive).
+// IsModeShuffle returns true if mode is "shuffle" (case-insensitive).
 func IsModeShuffle(mode string) bool {
-	return strings.EqualFold(mode, advargtypes.ModeShuffle)
+	return zapscript.IsModeShuffle(mode)
 }

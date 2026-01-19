@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -37,7 +38,7 @@ import (
 // launchers is used to prioritize file types based on launcher extension order (earlier = better).
 func SelectBestResult(
 	results []database.SearchResultWithCursor,
-	tagFilters []database.TagFilter,
+	tagFilters []zapscript.TagFilter,
 	cfg *config.Instance,
 	matchQuality float64,
 	launchers []platforms.Launcher,
@@ -159,7 +160,7 @@ func SelectBestResult(
 
 // FilterByTags filters results that match all specified tags
 func FilterByTags(
-	results []database.SearchResultWithCursor, tagFilters []database.TagFilter,
+	results []database.SearchResultWithCursor, tagFilters []zapscript.TagFilter,
 ) []database.SearchResultWithCursor {
 	var filtered []database.SearchResultWithCursor
 
@@ -174,7 +175,7 @@ func FilterByTags(
 
 // HasAllTags checks if a result matches the specified tag filters
 // Respects operator logic: AND (must have), NOT (must not have), OR (at least one)
-func HasAllTags(result *database.SearchResultWithCursor, tagFilters []database.TagFilter) bool {
+func HasAllTags(result *database.SearchResultWithCursor, tagFilters []zapscript.TagFilter) bool {
 	if len(tagFilters) == 0 {
 		return true
 	}
@@ -266,10 +267,10 @@ func IsVariant(result *database.SearchResultWithCursor) bool {
 }
 
 // hasVariantTagFilter checks if the user explicitly requested a variant via tag filters
-func hasVariantTagFilter(tagFilters []database.TagFilter) bool {
+func hasVariantTagFilter(tagFilters []zapscript.TagFilter) bool {
 	for _, filter := range tagFilters {
 		// Only consider AND filters (not NOT filters)
-		if filter.Operator != database.TagOperatorNOT {
+		if filter.Operator != zapscript.TagOperatorNOT {
 			if filter.Type == string(tags.TagTypeUnfinished) ||
 				filter.Type == string(tags.TagTypeUnlicensed) {
 				return true
@@ -559,7 +560,7 @@ func selectByQualityScore(results []database.SearchResultWithCursor) database.Se
 // - 0.7-0.9 = good match (most tags match)
 // - 0.5-0.7 = partial match (some tags match or no tags on result)
 // - <0.5 = poor match (few tags match or conflicts exist)
-func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFilters []database.TagFilter) float64 {
+func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFilters []zapscript.TagFilter) float64 {
 	// No tag requirements = perfect match
 	if len(tagFilters) == 0 {
 		return 1.0

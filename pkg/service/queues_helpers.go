@@ -20,10 +20,9 @@
 package service
 
 import (
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
-	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
+	zscript "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 )
 
 // shouldRunBeforeMediaStartHook determines if the before_media_start hook should run.
@@ -32,19 +31,19 @@ import (
 // - A hook script is configured (non-empty)
 // - The command is a media-launching command
 func shouldRunBeforeMediaStartHook(
-	exprOpts *zapscript.ExprEnvOptions,
+	exprOpts *zscript.ExprEnvOptions,
 	hookScript string,
 	cmdName string,
 ) bool {
 	inHookContext := exprOpts != nil && exprOpts.InHookContext
-	return !inHookContext && hookScript != "" && zapscript.IsMediaLaunchingCommand(cmdName)
+	return !inHookContext && hookScript != "" && zscript.IsMediaLaunchingCommand(cmdName)
 }
 
 // buildLaunchingExprOpts creates ExprEnvOptions for the before_media_start hook.
 // Extracts path, system ID, and launcher ID from the command being launched.
-func buildLaunchingExprOpts(cmd parser.Command) *zapscript.ExprEnvOptions {
-	opts := &zapscript.ExprEnvOptions{
-		Launching:     &parser.ExprEnvLaunching{},
+func buildLaunchingExprOpts(cmd zapscript.Command) *zscript.ExprEnvOptions {
+	opts := &zscript.ExprEnvOptions{
+		Launching:     &zapscript.ExprEnvLaunching{},
 		InHookContext: true,
 	}
 
@@ -52,11 +51,11 @@ func buildLaunchingExprOpts(cmd parser.Command) *zapscript.ExprEnvOptions {
 		opts.Launching.Path = cmd.Args[0]
 	}
 
-	if sysID := cmd.AdvArgs.Get(advargtypes.KeySystem); sysID != "" {
+	if sysID := cmd.AdvArgs.Get(zapscript.KeySystem); sysID != "" {
 		opts.Launching.SystemID = sysID
 	}
 
-	if launcherID := cmd.AdvArgs.Get(advargtypes.KeyLauncher); launcherID != "" {
+	if launcherID := cmd.AdvArgs.Get(zapscript.KeyLauncher); launcherID != "" {
 		opts.Launching.LauncherID = launcherID
 	}
 
@@ -65,12 +64,12 @@ func buildLaunchingExprOpts(cmd parser.Command) *zapscript.ExprEnvOptions {
 
 // scriptHasMediaLaunchingCommand checks if any command in the script launches media.
 // Used to determine if playtime limits should be checked.
-func scriptHasMediaLaunchingCommand(script *parser.Script) bool {
+func scriptHasMediaLaunchingCommand(script *zapscript.Script) bool {
 	if script == nil {
 		return false
 	}
 	for _, cmd := range script.Cmds {
-		if zapscript.IsMediaLaunchingCommand(cmd.Name) {
+		if zscript.IsMediaLaunchingCommand(cmd.Name) {
 			return true
 		}
 	}
@@ -79,12 +78,12 @@ func scriptHasMediaLaunchingCommand(script *parser.Script) bool {
 
 // injectCommands inserts new commands into the command slice after the given index.
 // Returns the updated slice with new commands injected.
-func injectCommands(cmds []parser.Command, afterIndex int, newCmds []parser.Command) []parser.Command {
+func injectCommands(cmds []zapscript.Command, afterIndex int, newCmds []zapscript.Command) []zapscript.Command {
 	if len(newCmds) == 0 {
 		return cmds
 	}
 	// Create a new slice to avoid aliasing issues when appending
-	result := make([]parser.Command, 0, len(cmds)+len(newCmds))
+	result := make([]zapscript.Command, 0, len(cmds)+len(newCmds))
 	result = append(result, cmds[:afterIndex+1]...)
 	result = append(result, newCmds...)
 	result = append(result, cmds[afterIndex+1:]...)

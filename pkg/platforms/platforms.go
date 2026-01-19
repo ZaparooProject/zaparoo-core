@@ -25,6 +25,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -32,7 +33,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 )
 
 var ErrNotSupported = errors.New("operation not supported on this platform")
@@ -99,8 +99,8 @@ type CmdEnv struct {
 	Playlist      playlists.PlaylistController
 	Cfg           *config.Instance
 	Database      *database.Database
-	ExprEnv       *parser.ArgExprEnv
-	Cmd           parser.Command
+	ExprEnv       *zapscript.ArgExprEnv
+	Cmd           zapscript.Command
 	TotalCommands int
 	CurrentIndex  int
 	Unsafe        bool
@@ -116,7 +116,7 @@ type CmdResult struct {
 	Strategy string
 	// NewCommands instructs the script runner to prepend these additional
 	// commands to the current script's remaining command list.
-	NewCommands []parser.Command
+	NewCommands []zapscript.Command
 	// Confidence is a float from 0.0 to 1.0 indicating how confident the
 	// a launch command was in its media resolution.
 	Confidence float64

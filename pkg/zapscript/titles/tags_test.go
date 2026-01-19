@@ -22,7 +22,7 @@ package titles
 import (
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,56 +32,56 @@ func TestMergeTagFilters(t *testing.T) {
 
 	tests := []struct {
 		name            string
-		extracted       []database.TagFilter
-		advArgs         []database.TagFilter
-		expectedTags    []database.TagFilter
+		extracted       []zapscript.TagFilter
+		advArgs         []zapscript.TagFilter
+		expectedTags    []zapscript.TagFilter
 		expectedCount   int
 		shouldReturnNil bool
 	}{
 		{
 			name:            "both empty - returns nil",
-			extracted:       []database.TagFilter{},
-			advArgs:         []database.TagFilter{},
+			extracted:       []zapscript.TagFilter{},
+			advArgs:         []zapscript.TagFilter{},
 			shouldReturnNil: true,
 		},
 		{
 			name: "only extracted tags",
-			extracted: []database.TagFilter{
+			extracted: []zapscript.TagFilter{
 				{Type: "region", Value: "us"},
 				{Type: "lang", Value: "en"},
 			},
-			advArgs:       []database.TagFilter{},
+			advArgs:       []zapscript.TagFilter{},
 			expectedCount: 2,
-			expectedTags: []database.TagFilter{
+			expectedTags: []zapscript.TagFilter{
 				{Type: "region", Value: "us"},
 				{Type: "lang", Value: "en"},
 			},
 		},
 		{
 			name:      "only advArgs tags",
-			extracted: []database.TagFilter{},
-			advArgs: []database.TagFilter{
+			extracted: []zapscript.TagFilter{},
+			advArgs: []zapscript.TagFilter{
 				{Type: "region", Value: "jp"},
 				{Type: "year", Value: "1994"},
 			},
 			expectedCount: 2,
-			expectedTags: []database.TagFilter{
+			expectedTags: []zapscript.TagFilter{
 				{Type: "region", Value: "jp"},
 				{Type: "year", Value: "1994"},
 			},
 		},
 		{
 			name: "no overlap - both included",
-			extracted: []database.TagFilter{
+			extracted: []zapscript.TagFilter{
 				{Type: "region", Value: "us"},
 				{Type: "lang", Value: "en"},
 			},
-			advArgs: []database.TagFilter{
+			advArgs: []zapscript.TagFilter{
 				{Type: "year", Value: "1994"},
 				{Type: "genre", Value: "rpg"},
 			},
 			expectedCount: 4,
-			expectedTags: []database.TagFilter{
+			expectedTags: []zapscript.TagFilter{
 				{Type: "year", Value: "1994"},
 				{Type: "genre", Value: "rpg"},
 				{Type: "region", Value: "us"},
@@ -90,32 +90,32 @@ func TestMergeTagFilters(t *testing.T) {
 		},
 		{
 			name: "advArgs takes precedence over extracted",
-			extracted: []database.TagFilter{
+			extracted: []zapscript.TagFilter{
 				{Type: "region", Value: "us"},
 				{Type: "lang", Value: "en"},
 			},
-			advArgs: []database.TagFilter{
+			advArgs: []zapscript.TagFilter{
 				{Type: "region", Value: "jp"}, // Overrides "us"
 			},
 			expectedCount: 2,
-			expectedTags: []database.TagFilter{
+			expectedTags: []zapscript.TagFilter{
 				{Type: "region", Value: "jp"}, // advArgs value
 				{Type: "lang", Value: "en"},   // extracted value (no conflict)
 			},
 		},
 		{
 			name: "multiple conflicts - advArgs wins all",
-			extracted: []database.TagFilter{
+			extracted: []zapscript.TagFilter{
 				{Type: "region", Value: "us"},
 				{Type: "lang", Value: "en"},
 				{Type: "year", Value: "1990"},
 			},
-			advArgs: []database.TagFilter{
+			advArgs: []zapscript.TagFilter{
 				{Type: "region", Value: "jp"},
 				{Type: "lang", Value: "ja"},
 			},
 			expectedCount: 3,
-			expectedTags: []database.TagFilter{
+			expectedTags: []zapscript.TagFilter{
 				{Type: "region", Value: "jp"}, // advArgs wins
 				{Type: "lang", Value: "ja"},   // advArgs wins
 				{Type: "year", Value: "1990"}, // no conflict
@@ -123,31 +123,31 @@ func TestMergeTagFilters(t *testing.T) {
 		},
 		{
 			name: "different operators preserved",
-			extracted: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
-				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
+			extracted: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
 			},
-			advArgs: []database.TagFilter{
-				{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
+			advArgs: []zapscript.TagFilter{
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
 			},
 			expectedCount: 3,
-			expectedTags: []database.TagFilter{
-				{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
-				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
+			expectedTags: []zapscript.TagFilter{
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
 			},
 		},
 		{
 			name: "advArgs operators override extracted operators",
-			extracted: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+			extracted: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
 			},
-			advArgs: []database.TagFilter{
-				{Type: "region", Value: "jp", Operator: database.TagOperatorOR},
+			advArgs: []zapscript.TagFilter{
+				{Type: "region", Value: "jp", Operator: zapscript.TagOperatorOR},
 			},
 			expectedCount: 1,
-			expectedTags: []database.TagFilter{
-				{Type: "region", Value: "jp", Operator: database.TagOperatorOR}, // advArgs wins completely
+			expectedTags: []zapscript.TagFilter{
+				{Type: "region", Value: "jp", Operator: zapscript.TagOperatorOR}, // advArgs wins completely
 			},
 		},
 	}
@@ -187,12 +187,12 @@ func TestMergeTagFilters(t *testing.T) {
 func TestMergeTagFiltersPreservesAdvArgsOrder(t *testing.T) {
 	t.Parallel()
 
-	extracted := []database.TagFilter{
+	extracted := []zapscript.TagFilter{
 		{Type: "region", Value: "us"},
 		{Type: "lang", Value: "en"},
 	}
 
-	advArgs := []database.TagFilter{
+	advArgs := []zapscript.TagFilter{
 		{Type: "year", Value: "1994"},
 		{Type: "genre", Value: "rpg"},
 		{Type: "platform", Value: "snes"},
@@ -327,27 +327,27 @@ func TestExtractCanonicalTagsFromParensOperators(t *testing.T) {
 	tests := []struct {
 		name             string
 		input            string
-		expectedOperator database.TagOperator
+		expectedOperator zapscript.TagOperator
 	}{
 		{
 			name:             "AND operator explicit",
 			input:            "Game (+region:us)",
-			expectedOperator: database.TagOperatorAND,
+			expectedOperator: zapscript.TagOperatorAND,
 		},
 		{
 			name:             "NOT operator",
 			input:            "Game (-unfinished:beta)",
-			expectedOperator: database.TagOperatorNOT,
+			expectedOperator: zapscript.TagOperatorNOT,
 		},
 		{
 			name:             "OR operator",
 			input:            "Game (~lang:en)",
-			expectedOperator: database.TagOperatorOR,
+			expectedOperator: zapscript.TagOperatorOR,
 		},
 		{
 			name:             "default to AND when no operator",
 			input:            "Game (region:us)",
-			expectedOperator: database.TagOperatorAND,
+			expectedOperator: zapscript.TagOperatorAND,
 		},
 	}
 

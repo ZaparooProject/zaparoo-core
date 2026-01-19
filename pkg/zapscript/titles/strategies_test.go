@@ -24,6 +24,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
@@ -56,7 +57,7 @@ func TestTryMainTitleOnly(t *testing.T) {
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
 				// Searches with MainTitleSlug, not full slug
-				m.On("SearchMediaBySlugPrefix", mock.Anything, "SNES", "somegame", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "SNES", "somegame", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
 						{SystemID: "SNES", Name: "Some Game", Path: "/somegame.rom"},
 					}, nil)
@@ -75,7 +76,7 @@ func TestTryMainTitleOnly(t *testing.T) {
 			slug:     "somegame",
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlugPrefix", mock.Anything, "SNES", "somegame", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "SNES", "somegame", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
 						{SystemID: "SNES", Name: "Some Game: The Next Gen", Path: "/somegame2.rom"},
 					}, nil)
@@ -95,7 +96,7 @@ func TestTryMainTitleOnly(t *testing.T) {
 			slug:     "mariobros",
 			systemID: "NES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlugPrefix", mock.Anything, "NES", "mario", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "NES", "mario", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
 						{SystemID: "NES", Name: "Mario", Path: "/mario.rom"},                 // Exact match
 						{SystemID: "NES", Name: "Mario: Lost Levels", Path: "/mario2.rom"},   // Partial match
@@ -117,7 +118,7 @@ func TestTryMainTitleOnly(t *testing.T) {
 			slug:     "nonexistentgame",
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlugPrefix", mock.Anything, "SNES", "nonexistent", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "SNES", "nonexistent", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
 			},
 			expectedCount:    0,
@@ -135,7 +136,7 @@ func TestTryMainTitleOnly(t *testing.T) {
 			slug:     "errortest",
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlugPrefix", mock.Anything, "SNES", "error", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "SNES", "error", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, errors.New("database error"))
 			},
 			expectedCount:    0,
@@ -152,7 +153,7 @@ func TestTryMainTitleOnly(t *testing.T) {
 			slug:     "mario",
 			systemID: "NES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlugPrefix", mock.Anything, "NES", "mario", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "NES", "mario", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
 						// This matches the prefix but is not a valid match:
 						// Query is simple "mario", DB is "MarioKart" which also has no secondary
@@ -221,7 +222,7 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			systemID: "Nintendo64",
 			setupMock: func(m *helpers.MockMediaDBI) {
 				// Searches with SecondaryTitleSlug
-				m.On("SearchMediaBySlug", mock.Anything, "Nintendo64", "ocarinaoftime", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlug", mock.Anything, "Nintendo64", "ocarinaoftime", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
 						{SystemID: "Nintendo64", Name: "Ocarina of Time", Path: "/oot.rom"},
 					}, nil)
@@ -242,7 +243,7 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			setupMock: func(m *helpers.MockMediaDBI) {
 				// First tries exact match (SearchMediaBySlug)
 				m.On(
-					"SearchMediaBySlug", mock.Anything, "Nintendo64", "ocarinaoftime", []database.TagFilter(nil),
+					"SearchMediaBySlug", mock.Anything, "Nintendo64", "ocarinaoftime", []zapscript.TagFilter(nil),
 				).Return([]database.SearchResultWithCursor{}, nil)
 				// Then tries partial match (SearchMediaBySecondarySlug)
 				m.On(
@@ -250,7 +251,7 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 					mock.Anything,
 					"Nintendo64",
 					"ocarinaoftime",
-					[]database.TagFilter(nil),
+					[]zapscript.TagFilter(nil),
 				).Return([]database.SearchResultWithCursor{
 					{SystemID: "Nintendo64", Name: "Legend of Zelda: Ocarina of Time", Path: "/zelda-oot.rom"},
 				}, nil)
@@ -271,7 +272,7 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
 				// Exact match search finds simple "Turbo" game
-				m.On("SearchMediaBySlug", mock.Anything, "SNES", "turbo", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlug", mock.Anything, "SNES", "turbo", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
 						{SystemID: "SNES", Name: "Turbo", Path: "/turbo.rom"}, // Exact match
 					}, nil)
@@ -292,9 +293,9 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			slug:     "gameii",
 			systemID: "NES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlug", mock.Anything, "NES", "ii", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlug", mock.Anything, "NES", "ii", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
-				m.On("SearchMediaBySecondarySlug", mock.Anything, "NES", "ii", []database.TagFilter(nil)).
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "NES", "ii", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
 			},
 			expectedCount:    0,
@@ -311,9 +312,9 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			slug:     "wwe", // Very short slug
 			systemID: "NES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlug", mock.Anything, "NES", "wwe", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlug", mock.Anything, "NES", "wwe", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
-				m.On("SearchMediaBySecondarySlug", mock.Anything, "NES", "wwe", []database.TagFilter(nil)).
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "NES", "wwe", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
 			},
 			expectedCount:    0,
@@ -330,9 +331,9 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			slug:     "nonexistent",
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlug", mock.Anything, "SNES", "nonexistent", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlug", mock.Anything, "SNES", "nonexistent", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
-				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "nonexistent", []database.TagFilter(nil)).
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "nonexistent", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
 			},
 			expectedCount:    0,
@@ -349,10 +350,10 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			slug:     "testgame",
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlug", mock.Anything, "SNES", "testgame", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlug", mock.Anything, "SNES", "testgame", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, errors.New("database error"))
 				// Should still try partial search
-				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "testgame", []database.TagFilter(nil)).
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "testgame", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
 						{SystemID: "SNES", Name: "Some Game: Test Game", Path: "/test.rom"},
 					}, nil)
@@ -371,9 +372,9 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			slug:     "errorgame",
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlug", mock.Anything, "SNES", "errorgame", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlug", mock.Anything, "SNES", "errorgame", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
-				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "errorgame", []database.TagFilter(nil)).
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "errorgame", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, errors.New("database error"))
 			},
 			expectedCount:    0,
@@ -447,7 +448,7 @@ func TestTryAdvancedFuzzyMatching(t *testing.T) {
 					Return([]database.MediaTitle{
 						{Slug: "supermarioworld"},
 					}, nil)
-				m.On("SearchMediaBySlug", mock.Anything, "SNES", "supermarioworld", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlug", mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
 						{SystemID: "SNES", Name: "Super Mario World", Path: "/smw.smc"},
 					}, nil)
@@ -469,7 +470,7 @@ func TestTryAdvancedFuzzyMatching(t *testing.T) {
 						{Slug: "zelda"},
 						{Slug: "zeldaii"},
 					}, nil)
-				m.On("SearchMediaBySlug", mock.Anything, "NES", "zelda", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlug", mock.Anything, "NES", "zelda", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
 						{SystemID: "NES", Name: "Zelda", Path: "/zelda.rom"},
 					}, nil)
@@ -560,7 +561,7 @@ func TestTryProgressiveTrim(t *testing.T) {
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
 				m.On("SearchMediaBySlugIn", mock.Anything, "SNES",
-					mock.AnythingOfType("[]string"), []database.TagFilter(nil)).
+					mock.AnythingOfType("[]string"), []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
 						{SystemID: "SNES", Name: "Super Mario World", Path: "/smw.smc"},
 					}, nil)
@@ -596,7 +597,7 @@ func TestTryProgressiveTrim(t *testing.T) {
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
 				m.On("SearchMediaBySlugIn", mock.Anything, "SNES",
-					mock.AnythingOfType("[]string"), []database.TagFilter(nil)).
+					mock.AnythingOfType("[]string"), []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
 			},
 			expectedCount:    0,
@@ -610,7 +611,7 @@ func TestTryProgressiveTrim(t *testing.T) {
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
 				m.On("SearchMediaBySlugIn", mock.Anything, "SNES",
-					mock.AnythingOfType("[]string"), []database.TagFilter(nil)).
+					mock.AnythingOfType("[]string"), []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, errors.New("database error"))
 			},
 			expectedCount:    0,
@@ -658,8 +659,8 @@ func TestTryWithoutAutoTags(t *testing.T) {
 		slug              string
 		systemID          string
 		expectedStrategy  string
-		autoExtractedTags []database.TagFilter
-		advArgsTags       []database.TagFilter
+		autoExtractedTags []zapscript.TagFilter
+		advArgsTags       []zapscript.TagFilter
 		expectedCount     int
 		shouldError       bool
 	}{
@@ -667,8 +668,8 @@ func TestTryWithoutAutoTags(t *testing.T) {
 			name:              "no auto-extracted tags - returns nil",
 			slug:              "mario",
 			systemID:          "NES",
-			autoExtractedTags: []database.TagFilter{},
-			advArgsTags:       []database.TagFilter{},
+			autoExtractedTags: []zapscript.TagFilter{},
+			advArgsTags:       []zapscript.TagFilter{},
 			setupMock:         func(_ *helpers.MockMediaDBI) {},
 			expectedCount:     0,
 			expectedStrategy:  "",
@@ -678,10 +679,10 @@ func TestTryWithoutAutoTags(t *testing.T) {
 			name:     "exact match without auto tags succeeds",
 			slug:     "mario",
 			systemID: "NES",
-			autoExtractedTags: []database.TagFilter{
+			autoExtractedTags: []zapscript.TagFilter{
 				{Type: "region", Value: "us"},
 			},
-			advArgsTags: []database.TagFilter{},
+			advArgsTags: []zapscript.TagFilter{},
 			setupMock: func(m *helpers.MockMediaDBI) {
 				m.On("SearchMediaBySlug", mock.Anything, "NES", "mario", mock.Anything).
 					Return([]database.SearchResultWithCursor{
@@ -696,10 +697,10 @@ func TestTryWithoutAutoTags(t *testing.T) {
 			name:     "prefix match without auto tags succeeds",
 			slug:     "mario",
 			systemID: "NES",
-			autoExtractedTags: []database.TagFilter{
+			autoExtractedTags: []zapscript.TagFilter{
 				{Type: "region", Value: "us"},
 			},
-			advArgsTags: []database.TagFilter{},
+			advArgsTags: []zapscript.TagFilter{},
 			setupMock: func(m *helpers.MockMediaDBI) {
 				// Exact match fails
 				m.On("SearchMediaBySlug", mock.Anything, "NES", "mario", mock.Anything).
@@ -718,10 +719,10 @@ func TestTryWithoutAutoTags(t *testing.T) {
 			name:     "both searches fail - returns nil",
 			slug:     "nonexistent",
 			systemID: "NES",
-			autoExtractedTags: []database.TagFilter{
+			autoExtractedTags: []zapscript.TagFilter{
 				{Type: "region", Value: "us"},
 			},
-			advArgsTags: []database.TagFilter{},
+			advArgsTags: []zapscript.TagFilter{},
 			setupMock: func(m *helpers.MockMediaDBI) {
 				m.On("SearchMediaBySlug", mock.Anything, "NES", "nonexistent", mock.Anything).
 					Return([]database.SearchResultWithCursor{}, nil)
@@ -736,15 +737,15 @@ func TestTryWithoutAutoTags(t *testing.T) {
 			name:     "uses advArgs tags when provided",
 			slug:     "mario",
 			systemID: "NES",
-			autoExtractedTags: []database.TagFilter{
+			autoExtractedTags: []zapscript.TagFilter{
 				{Type: "region", Value: "us"},
 			},
-			advArgsTags: []database.TagFilter{
+			advArgsTags: []zapscript.TagFilter{
 				{Type: "lang", Value: "en"},
 			},
 			setupMock: func(m *helpers.MockMediaDBI) {
 				m.On("SearchMediaBySlug", mock.Anything, "NES", "mario",
-					[]database.TagFilter{{Type: "lang", Value: "en"}}).
+					[]zapscript.TagFilter{{Type: "lang", Value: "en"}}).
 					Return([]database.SearchResultWithCursor{
 						{SystemID: "NES", Name: "Mario (English)", Path: "/mario.rom"},
 					}, nil)

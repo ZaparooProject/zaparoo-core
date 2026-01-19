@@ -22,10 +22,10 @@ package zapscript
 import (
 	"testing"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -42,10 +42,10 @@ func TestCmdSystem_Menu(t *testing.T) {
 	mockPlatform.On("ReturnToMenu").Return(nil).Once()
 
 	env := platforms.CmdEnv{
-		Cmd: parser.Command{
+		Cmd: zapscript.Command{
 			Name:    "launch.system",
 			Args:    []string{"menu"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 		},
 		Cfg: cfg,
 	}
@@ -70,10 +70,10 @@ func TestCmdSystem_MenuReturnFails(t *testing.T) {
 	mockPlatform.On("ReturnToMenu").Return(assert.AnError).Once()
 
 	env := platforms.CmdEnv{
-		Cmd: parser.Command{
+		Cmd: zapscript.Command{
 			Name:    "launch.system",
 			Args:    []string{"menu"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 		},
 		Cfg: cfg,
 	}
@@ -98,10 +98,10 @@ func TestCmdSystem_RegularSystem(t *testing.T) {
 	mockPlatform.On("LaunchSystem", cfg, "NES").Return(nil).Once()
 
 	env := platforms.CmdEnv{
-		Cmd: parser.Command{
+		Cmd: zapscript.Command{
 			Name:    "launch.system",
 			Args:    []string{"NES"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 		},
 		Cfg: cfg,
 	}
@@ -124,10 +124,10 @@ func TestCmdSystem_InvalidArgCount(t *testing.T) {
 	cfg := &config.Instance{}
 
 	env := platforms.CmdEnv{
-		Cmd: parser.Command{
+		Cmd: zapscript.Command{
 			Name:    "launch.system",
 			Args:    []string{}, // No args
-			AdvArgs: parser.NewAdvArgs(map[string]string{}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 		},
 		Cfg: cfg,
 	}
@@ -153,10 +153,10 @@ func TestCmdSystem_MenuCaseInsensitive(t *testing.T) {
 			mockPlatform.On("ReturnToMenu").Return(nil).Once()
 
 			env := platforms.CmdEnv{
-				Cmd: parser.Command{
+				Cmd: zapscript.Command{
 					Name:    "launch.system",
 					Args:    []string{menuVariant},
-					AdvArgs: parser.NewAdvArgs(map[string]string{}),
+					AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 				},
 				Cfg: cfg,
 			}

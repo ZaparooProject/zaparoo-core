@@ -22,7 +22,7 @@ package advargs
 import (
 	"testing"
 
-	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -108,6 +108,6 @@ func TestIsModeShuffle(t *testing.T) {
 func TestShouldRun_EmptyWhen(t *testing.T) {
 	t.Parallel()
 
-	args := advargtypes.GlobalArgs{When: ""}
+	args := zapscript.GlobalArgs{When: ""}
 	assert.True(t, ShouldRun(args))
 }

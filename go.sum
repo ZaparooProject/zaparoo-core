@@ -10,6 +10,8 @@ github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d h1:2xp1BQbqcDDaik
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d/go.mod h1:peYoMncQljjNS6tZwI9WVyQB3qZS6u79/N3mBOcnd3I=
 github.com/ZaparooProject/go-pn532 v0.20.1 h1:jdr2Eu7A8rhlp2+xBarUxeQTryDpx5jIOM1TomU2hbk=
 github.com/ZaparooProject/go-pn532 v0.20.1/go.mod h1:38r+NvAyNsUa/McJC4FEk2+uxOzrN1AUgrh/fpc0oLk=
+github.com/ZaparooProject/go-zapscript v0.1.0 h1:IlDzx4WsYOy17cADbWyegIjB7wprAy6dNr6WsXyx/Ts=
+github.com/ZaparooProject/go-zapscript v0.1.0/go.mod h1:mXkIhNUoWCdsoUkjFPmbVba9PTkzD5H4ntmIxnNNSD0=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/andygrunwald/vdf v1.1.0 h1:gmstp0R7DOepIZvWoSJY97ix7QOrsxpGPU6KusKXqvw=

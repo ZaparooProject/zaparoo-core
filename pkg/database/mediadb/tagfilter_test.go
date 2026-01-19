@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,15 +33,15 @@ func TestBuildTagFilterSQL_Empty(t *testing.T) {
 	assert.Empty(t, clauses)
 	assert.Empty(t, args)
 
-	clauses, args = BuildTagFilterSQL([]database.TagFilter{})
+	clauses, args = BuildTagFilterSQL([]zapscript.TagFilter{})
 	assert.Empty(t, clauses)
 	assert.Empty(t, args)
 }
 
 func TestBuildTagFilterSQL_ANDOnly(t *testing.T) {
 	t.Run("Single AND filter", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+		filters := []zapscript.TagFilter{
+			{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
@@ -57,9 +57,9 @@ func TestBuildTagFilterSQL_ANDOnly(t *testing.T) {
 	})
 
 	t.Run("Multiple AND filters", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-			{Type: "lang", Value: "en", Operator: database.TagOperatorAND},
+		filters := []zapscript.TagFilter{
+			{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorAND},
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
@@ -78,10 +78,10 @@ func TestBuildTagFilterSQL_ANDOnly(t *testing.T) {
 	})
 
 	t.Run("Three AND filters", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-			{Type: "lang", Value: "en", Operator: database.TagOperatorAND},
-			{Type: "genre", Value: "action", Operator: database.TagOperatorAND},
+		filters := []zapscript.TagFilter{
+			{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorAND},
+			{Type: "genre", Value: "action", Operator: zapscript.TagOperatorAND},
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
@@ -96,8 +96,8 @@ func TestBuildTagFilterSQL_ANDOnly(t *testing.T) {
 
 func TestBuildTagFilterSQL_NOTOnly(t *testing.T) {
 	t.Run("Single NOT filter", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "unfinished", Value: "demo", Operator: database.TagOperatorNOT},
+		filters := []zapscript.TagFilter{
+			{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
@@ -112,9 +112,9 @@ func TestBuildTagFilterSQL_NOTOnly(t *testing.T) {
 	})
 
 	t.Run("Multiple NOT filters", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "unfinished", Value: "demo", Operator: database.TagOperatorNOT},
-			{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
+		filters := []zapscript.TagFilter{
+			{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
+			{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
@@ -129,8 +129,8 @@ func TestBuildTagFilterSQL_NOTOnly(t *testing.T) {
 
 func TestBuildTagFilterSQL_OROnly(t *testing.T) {
 	t.Run("Single OR filter", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
+		filters := []zapscript.TagFilter{
+			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
@@ -144,10 +144,10 @@ func TestBuildTagFilterSQL_OROnly(t *testing.T) {
 	})
 
 	t.Run("Multiple OR filters", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
-			{Type: "lang", Value: "es", Operator: database.TagOperatorOR},
-			{Type: "lang", Value: "fr", Operator: database.TagOperatorOR},
+		filters := []zapscript.TagFilter{
+			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
+			{Type: "lang", Value: "es", Operator: zapscript.TagOperatorOR},
+			{Type: "lang", Value: "fr", Operator: zapscript.TagOperatorOR},
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
@@ -163,9 +163,9 @@ func TestBuildTagFilterSQL_OROnly(t *testing.T) {
 
 func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 	t.Run("AND + NOT", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-			{Type: "unfinished", Value: "demo", Operator: database.TagOperatorNOT},
+		filters := []zapscript.TagFilter{
+			{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+			{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
@@ -180,10 +180,10 @@ func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 	})
 
 	t.Run("AND + OR", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-			{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
-			{Type: "lang", Value: "es", Operator: database.TagOperatorOR},
+		filters := []zapscript.TagFilter{
+			{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
+			{Type: "lang", Value: "es", Operator: zapscript.TagOperatorOR},
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
@@ -199,10 +199,10 @@ func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 	})
 
 	t.Run("NOT + OR", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "unfinished", Value: "demo", Operator: database.TagOperatorNOT},
-			{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
-			{Type: "lang", Value: "es", Operator: database.TagOperatorOR},
+		filters := []zapscript.TagFilter{
+			{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
+			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
+			{Type: "lang", Value: "es", Operator: zapscript.TagOperatorOR},
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
@@ -218,13 +218,13 @@ func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 	})
 
 	t.Run("AND + NOT + OR", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-			{Type: "genre", Value: "action", Operator: database.TagOperatorAND},
-			{Type: "unfinished", Value: "demo", Operator: database.TagOperatorNOT},
-			{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
-			{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
-			{Type: "lang", Value: "es", Operator: database.TagOperatorOR},
+		filters := []zapscript.TagFilter{
+			{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+			{Type: "genre", Value: "action", Operator: zapscript.TagOperatorAND},
+			{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
+			{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
+			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
+			{Type: "lang", Value: "es", Operator: zapscript.TagOperatorOR},
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
@@ -247,11 +247,11 @@ func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 
 func TestBuildTagFilterSQL_ArgumentOrder(t *testing.T) {
 	t.Run("Arguments match clause order", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-			{Type: "lang", Value: "en", Operator: database.TagOperatorAND},
-			{Type: "unfinished", Value: "demo", Operator: database.TagOperatorNOT},
-			{Type: "players", Value: "2", Operator: database.TagOperatorOR},
+		filters := []zapscript.TagFilter{
+			{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorAND},
+			{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
+			{Type: "players", Value: "2", Operator: zapscript.TagOperatorOR},
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
@@ -275,33 +275,33 @@ func TestBuildTagFilterSQL_SQLInjectionSafety(t *testing.T) {
 	tests := []struct {
 		name        string
 		description string
-		filters     []database.TagFilter
+		filters     []zapscript.TagFilter
 	}{
 		{
 			name: "SQL injection in type",
-			filters: []database.TagFilter{
-				{Type: "region'; DROP TABLE Media; --", Value: "usa", Operator: database.TagOperatorAND},
+			filters: []zapscript.TagFilter{
+				{Type: "region'; DROP TABLE Media; --", Value: "usa", Operator: zapscript.TagOperatorAND},
 			},
 			description: "SQL injection attempts in type should be parameterized",
 		},
 		{
 			name: "SQL injection in value",
-			filters: []database.TagFilter{
-				{Type: "region", Value: "usa' OR '1'='1", Operator: database.TagOperatorAND},
+			filters: []zapscript.TagFilter{
+				{Type: "region", Value: "usa' OR '1'='1", Operator: zapscript.TagOperatorAND},
 			},
 			description: "SQL injection attempts in value should be parameterized",
 		},
 		{
 			name: "SQL comment injection",
-			filters: []database.TagFilter{
-				{Type: "region", Value: "usa--", Operator: database.TagOperatorNOT},
+			filters: []zapscript.TagFilter{
+				{Type: "region", Value: "usa--", Operator: zapscript.TagOperatorNOT},
 			},
 			description: "SQL comments should be parameterized",
 		},
 		{
 			name: "UNION injection attempt",
-			filters: []database.TagFilter{
-				{Type: "region", Value: "usa' UNION SELECT * FROM tags", Operator: database.TagOperatorOR},
+			filters: []zapscript.TagFilter{
+				{Type: "region", Value: "usa' UNION SELECT * FROM tags", Operator: zapscript.TagOperatorOR},
 			},
 			description: "UNION injection should be parameterized",
 		},
@@ -338,31 +338,31 @@ func TestBuildTagFilterSQL_SQLInjectionSafety(t *testing.T) {
 func TestBuildTagFilterSQL_SpecialCharacters(t *testing.T) {
 	tests := []struct {
 		name    string
-		filters []database.TagFilter
+		filters []zapscript.TagFilter
 	}{
 		{
 			name: "Unicode characters",
 			//nolint:gosmopolitan // Test requires non-ASCII to verify SQL parameterization
-			filters: []database.TagFilter{
-				{Type: "lang", Value: "日本語", Operator: database.TagOperatorAND},
+			filters: []zapscript.TagFilter{
+				{Type: "lang", Value: "日本語", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name: "Emoji",
-			filters: []database.TagFilter{
-				{Type: "mood", Value: "😀", Operator: database.TagOperatorOR},
+			filters: []zapscript.TagFilter{
+				{Type: "mood", Value: "😀", Operator: zapscript.TagOperatorOR},
 			},
 		},
 		{
 			name: "Special SQL characters",
-			filters: []database.TagFilter{
-				{Type: "name", Value: "it's a game (beta) [usa]", Operator: database.TagOperatorAND},
+			filters: []zapscript.TagFilter{
+				{Type: "name", Value: "it's a game (beta) [usa]", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name: "Newlines and tabs",
-			filters: []database.TagFilter{
-				{Type: "text", Value: "line1\nline2\ttab", Operator: database.TagOperatorNOT},
+			filters: []zapscript.TagFilter{
+				{Type: "text", Value: "line1\nline2\ttab", Operator: zapscript.TagOperatorNOT},
 			},
 		},
 	}
@@ -384,12 +384,12 @@ func TestBuildTagFilterSQL_SpecialCharacters(t *testing.T) {
 // TestBuildTagFilterSQL_LargeScale tests handling of large numbers of filters
 func TestBuildTagFilterSQL_LargeScale(t *testing.T) {
 	t.Run("Many AND filters", func(t *testing.T) {
-		filters := make([]database.TagFilter, 20)
+		filters := make([]zapscript.TagFilter, 20)
 		for i := range filters {
-			filters[i] = database.TagFilter{
+			filters[i] = zapscript.TagFilter{
 				Type:     "tag",
 				Value:    "value",
-				Operator: database.TagOperatorAND,
+				Operator: zapscript.TagOperatorAND,
 			}
 		}
 
@@ -399,12 +399,12 @@ func TestBuildTagFilterSQL_LargeScale(t *testing.T) {
 	})
 
 	t.Run("Many OR filters", func(t *testing.T) {
-		filters := make([]database.TagFilter, 15)
+		filters := make([]zapscript.TagFilter, 15)
 		for i := range filters {
-			filters[i] = database.TagFilter{
+			filters[i] = zapscript.TagFilter{
 				Type:     "lang",
 				Value:    "en",
-				Operator: database.TagOperatorOR,
+				Operator: zapscript.TagOperatorOR,
 			}
 		}
 
@@ -414,12 +414,12 @@ func TestBuildTagFilterSQL_LargeScale(t *testing.T) {
 	})
 
 	t.Run("Many NOT filters", func(t *testing.T) {
-		filters := make([]database.TagFilter, 10)
+		filters := make([]zapscript.TagFilter, 10)
 		for i := range filters {
-			filters[i] = database.TagFilter{
+			filters[i] = zapscript.TagFilter{
 				Type:     "unfinished",
 				Value:    "demo",
-				Operator: database.TagOperatorNOT,
+				Operator: zapscript.TagOperatorNOT,
 			}
 		}
 
@@ -434,16 +434,16 @@ func TestBuildTagFilterSQL_EdgeCases(t *testing.T) {
 	tests := []struct {
 		name            string
 		description     string
-		filters         []database.TagFilter
+		filters         []zapscript.TagFilter
 		expectedClauses int
 		expectedArgsMin int
 	}{
 		{
 			name: "Single filter of each operator type",
-			filters: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-				{Type: "unfinished", Value: "demo", Operator: database.TagOperatorNOT},
-				{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
+			filters: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+				{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
 			},
 			expectedClauses: 3,
 			expectedArgsMin: 6,
@@ -451,8 +451,8 @@ func TestBuildTagFilterSQL_EdgeCases(t *testing.T) {
 		},
 		{
 			name: "Very long tag values",
-			filters: []database.TagFilter{
-				{Type: "description", Value: string(make([]byte, 500)), Operator: database.TagOperatorAND},
+			filters: []zapscript.TagFilter{
+				{Type: "description", Value: string(make([]byte, 500)), Operator: zapscript.TagOperatorAND},
 			},
 			expectedClauses: 1,
 			expectedArgsMin: 2,
@@ -460,8 +460,8 @@ func TestBuildTagFilterSQL_EdgeCases(t *testing.T) {
 		},
 		{
 			name: "Empty string values (after normalization)",
-			filters: []database.TagFilter{
-				{Type: "tag", Value: "", Operator: database.TagOperatorAND},
+			filters: []zapscript.TagFilter{
+				{Type: "tag", Value: "", Operator: zapscript.TagOperatorAND},
 			},
 			expectedClauses: 1,
 			expectedArgsMin: 2,
@@ -481,9 +481,9 @@ func TestBuildTagFilterSQL_EdgeCases(t *testing.T) {
 // TestBuildTagFilterSQL_SQLStructure tests the structure of generated SQL
 func TestBuildTagFilterSQL_SQLStructure(t *testing.T) {
 	t.Run("AND filters use INTERSECT pattern", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-			{Type: "lang", Value: "en", Operator: database.TagOperatorAND},
+		filters := []zapscript.TagFilter{
+			{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorAND},
 		}
 
 		clauses, _ := BuildTagFilterSQL(filters)
@@ -496,8 +496,8 @@ func TestBuildTagFilterSQL_SQLStructure(t *testing.T) {
 	})
 
 	t.Run("NOT filters use NOT EXISTS pattern", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "unfinished", Value: "demo", Operator: database.TagOperatorNOT},
+		filters := []zapscript.TagFilter{
+			{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
 		}
 
 		clauses, _ := BuildTagFilterSQL(filters)
@@ -509,9 +509,9 @@ func TestBuildTagFilterSQL_SQLStructure(t *testing.T) {
 	})
 
 	t.Run("OR filters use EXISTS with OR pattern", func(t *testing.T) {
-		filters := []database.TagFilter{
-			{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
-			{Type: "lang", Value: "es", Operator: database.TagOperatorOR},
+		filters := []zapscript.TagFilter{
+			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
+			{Type: "lang", Value: "es", Operator: zapscript.TagOperatorOR},
 		}
 
 		clauses, _ := BuildTagFilterSQL(filters)
@@ -529,12 +529,12 @@ func TestBuildTagFilterSQL_Regression(t *testing.T) {
 		validate    func(t *testing.T, clauses []string, args []any)
 		name        string
 		description string
-		filters     []database.TagFilter
+		filters     []zapscript.TagFilter
 	}{
 		{
 			name: "Single AND filter should not have INTERSECT",
-			filters: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+			filters: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 			},
 			description: "Single AND filter doesn't need INTERSECT operator",
 			validate: func(t *testing.T, clauses []string, _ []any) {
@@ -545,8 +545,8 @@ func TestBuildTagFilterSQL_Regression(t *testing.T) {
 		},
 		{
 			name: "Single OR filter should not have OR operator",
-			filters: []database.TagFilter{
-				{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
+			filters: []zapscript.TagFilter{
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
 			},
 			description: "Single OR filter doesn't need OR operator",
 			validate: func(t *testing.T, clauses []string, _ []any) {
@@ -557,10 +557,10 @@ func TestBuildTagFilterSQL_Regression(t *testing.T) {
 		},
 		{
 			name: "All args must be used in order",
-			filters: []database.TagFilter{
-				{Type: "a", Value: "1", Operator: database.TagOperatorAND},
-				{Type: "b", Value: "2", Operator: database.TagOperatorNOT},
-				{Type: "c", Value: "3", Operator: database.TagOperatorOR},
+			filters: []zapscript.TagFilter{
+				{Type: "a", Value: "1", Operator: zapscript.TagOperatorAND},
+				{Type: "b", Value: "2", Operator: zapscript.TagOperatorNOT},
+				{Type: "c", Value: "3", Operator: zapscript.TagOperatorOR},
 			},
 			description: "Arguments must match SQL clause order",
 			validate: func(t *testing.T, _ []string, args []any) {

@@ -20,7 +20,7 @@
 //nolint:revive // custom validation tags (letter, duration, etc.) are unknown to revive
 package models
 
-import "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
+import "github.com/ZaparooProject/go-zapscript"
 
 type SearchParams struct {
 	Systems    *[]string `json:"systems" validate:"omitempty,dive,system"`
@@ -44,10 +44,10 @@ type RunParams struct {
 }
 
 type RunScriptParams struct {
-	Name      *string               `json:"name"`
-	Cmds      []models.ZapScriptCmd `json:"cmds"`
-	ZapScript int                   `json:"zapscript"`
-	Unsafe    bool                  `json:"unsafe"`
+	Name      *string                  `json:"name"`
+	Cmds      []zapscript.ZapScriptCmd `json:"cmds"`
+	ZapScript int                      `json:"zapscript"`
+	Unsafe    bool                     `json:"unsafe"`
 }
 
 type AddMappingParams struct {

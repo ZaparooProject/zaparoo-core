@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -49,7 +50,7 @@ func TryMainTitleOnly(
 	systemID string,
 	slug string,
 	matchInfo GameMatchInfo,
-	tagFilters []database.TagFilter,
+	tagFilters []zapscript.TagFilter,
 	mediaType slugs.MediaType,
 ) ([]database.SearchResultWithCursor, string, error) {
 	// Search using the main title slug (not the full slug)
@@ -133,7 +134,7 @@ func TrySecondaryTitleExact(
 	systemID string,
 	slug string,
 	matchInfo GameMatchInfo,
-	tagFilters []database.TagFilter,
+	tagFilters []zapscript.TagFilter,
 	mediaType slugs.MediaType,
 ) ([]database.SearchResultWithCursor, string, error) {
 	// Determine search slug: use secondary title slug if input has one, otherwise use full slug
@@ -219,7 +220,7 @@ func TryAdvancedFuzzyMatching(
 	systemID string,
 	gameName string,
 	slug string,
-	tagFilters []database.TagFilter,
+	tagFilters []zapscript.TagFilter,
 	mediaType slugs.MediaType,
 ) (FuzzyMatchResult, error) {
 	if len(slug) < MinSlugLengthForFuzzy {
@@ -353,7 +354,7 @@ func TryProgressiveTrim(
 	systemID string,
 	gameName string,
 	slug string,
-	tagFilters []database.TagFilter,
+	tagFilters []zapscript.TagFilter,
 	mediaType slugs.MediaType,
 ) ([]database.SearchResultWithCursor, string, error) {
 	log.Info().Msgf("all advanced strategies failed, trying progressive truncation as last resort")
@@ -406,8 +407,8 @@ func TryWithoutAutoTags(
 	gamesdb database.MediaDBI,
 	systemID string,
 	slug string,
-	autoExtractedTags []database.TagFilter,
-	advArgsTagFilters []database.TagFilter,
+	autoExtractedTags []zapscript.TagFilter,
+	advArgsTagFilters []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, string, error) {
 	if len(autoExtractedTags) == 0 {
 		return nil, "", nil

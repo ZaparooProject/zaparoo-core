@@ -29,6 +29,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -37,9 +38,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
-	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
 )
 
@@ -74,49 +72,49 @@ var cmdMap = map[string]func(
 	platforms.Platform,
 	platforms.CmdEnv,
 ) (platforms.CmdResult, error){
-	models.ZapScriptCmdLaunch:       cmdLaunch,
-	models.ZapScriptCmdLaunchSystem: cmdSystem,
-	models.ZapScriptCmdLaunchRandom: cmdRandom,
-	models.ZapScriptCmdLaunchSearch: cmdSearch,
-	models.ZapScriptCmdLaunchTitle:  cmdTitle,
+	zapscript.ZapScriptCmdLaunch:       cmdLaunch,
+	zapscript.ZapScriptCmdLaunchSystem: cmdSystem,
+	zapscript.ZapScriptCmdLaunchRandom: cmdRandom,
+	zapscript.ZapScriptCmdLaunchSearch: cmdSearch,
+	zapscript.ZapScriptCmdLaunchTitle:  cmdTitle,
 
-	models.ZapScriptCmdPlaylistPlay:     cmdPlaylistPlay,
-	models.ZapScriptCmdPlaylistStop:     cmdPlaylistStop,
-	models.ZapScriptCmdPlaylistNext:     cmdPlaylistNext,
-	models.ZapScriptCmdPlaylistPrevious: cmdPlaylistPrevious,
-	models.ZapScriptCmdPlaylistGoto:     cmdPlaylistGoto,
-	models.ZapScriptCmdPlaylistPause:    cmdPlaylistPause,
-	models.ZapScriptCmdPlaylistLoad:     cmdPlaylistLoad,
-	models.ZapScriptCmdPlaylistOpen:     cmdPlaylistOpen,
+	zapscript.ZapScriptCmdPlaylistPlay:     cmdPlaylistPlay,
+	zapscript.ZapScriptCmdPlaylistStop:     cmdPlaylistStop,
+	zapscript.ZapScriptCmdPlaylistNext:     cmdPlaylistNext,
+	zapscript.ZapScriptCmdPlaylistPrevious: cmdPlaylistPrevious,
+	zapscript.ZapScriptCmdPlaylistGoto:     cmdPlaylistGoto,
+	zapscript.ZapScriptCmdPlaylistPause:    cmdPlaylistPause,
+	zapscript.ZapScriptCmdPlaylistLoad:     cmdPlaylistLoad,
+	zapscript.ZapScriptCmdPlaylistOpen:     cmdPlaylistOpen,
 
-	models.ZapScriptCmdExecute: cmdExecute,
-	models.ZapScriptCmdDelay:   cmdDelay,
-	models.ZapScriptCmdStop:    cmdStop,
-	models.ZapScriptCmdEcho:    cmdEcho,
+	zapscript.ZapScriptCmdExecute: cmdExecute,
+	zapscript.ZapScriptCmdDelay:   cmdDelay,
+	zapscript.ZapScriptCmdStop:    cmdStop,
+	zapscript.ZapScriptCmdEcho:    cmdEcho,
 
-	models.ZapScriptCmdMisterINI:    forwardCmd,
-	models.ZapScriptCmdMisterCore:   forwardCmd,
-	models.ZapScriptCmdMisterScript: forwardCmd,
-	models.ZapScriptCmdMisterMGL:    forwardCmd,
+	zapscript.ZapScriptCmdMisterINI:    forwardCmd,
+	zapscript.ZapScriptCmdMisterCore:   forwardCmd,
+	zapscript.ZapScriptCmdMisterScript: forwardCmd,
+	zapscript.ZapScriptCmdMisterMGL:    forwardCmd,
 
-	models.ZapScriptCmdHTTPGet:  cmdHTTPGet,
-	models.ZapScriptCmdHTTPPost: cmdHTTPPost,
+	zapscript.ZapScriptCmdHTTPGet:  cmdHTTPGet,
+	zapscript.ZapScriptCmdHTTPPost: cmdHTTPPost,
 
-	models.ZapScriptCmdInputKeyboard: cmdKeyboard,
-	models.ZapScriptCmdInputGamepad:  cmdGamepad,
-	models.ZapScriptCmdInputCoinP1:   cmdCoinP1,
-	models.ZapScriptCmdInputCoinP2:   cmdCoinP2,
+	zapscript.ZapScriptCmdInputKeyboard: cmdKeyboard,
+	zapscript.ZapScriptCmdInputGamepad:  cmdGamepad,
+	zapscript.ZapScriptCmdInputCoinP1:   cmdCoinP1,
+	zapscript.ZapScriptCmdInputCoinP2:   cmdCoinP2,
 
-	models.ZapScriptCmdInputKey: cmdKey,     // DEPRECATED
-	models.ZapScriptCmdKey:      cmdKey,     // DEPRECATED
-	models.ZapScriptCmdCoinP1:   cmdCoinP1,  // DEPRECATED
-	models.ZapScriptCmdCoinP2:   cmdCoinP2,  // DEPRECATED
-	models.ZapScriptCmdRandom:   cmdRandom,  // DEPRECATED
-	models.ZapScriptCmdShell:    cmdExecute, // DEPRECATED
-	models.ZapScriptCmdCommand:  cmdExecute, // DEPRECATED
-	models.ZapScriptCmdINI:      forwardCmd, // DEPRECATED
-	models.ZapScriptCmdSystem:   cmdSystem,  // DEPRECATED
-	models.ZapScriptCmdGet:      cmdHTTPGet, // DEPRECATED
+	zapscript.ZapScriptCmdInputKey: cmdKey,     // DEPRECATED
+	zapscript.ZapScriptCmdKey:      cmdKey,     // DEPRECATED
+	zapscript.ZapScriptCmdCoinP1:   cmdCoinP1,  // DEPRECATED
+	zapscript.ZapScriptCmdCoinP2:   cmdCoinP2,  // DEPRECATED
+	zapscript.ZapScriptCmdRandom:   cmdRandom,  // DEPRECATED
+	zapscript.ZapScriptCmdShell:    cmdExecute, // DEPRECATED
+	zapscript.ZapScriptCmdCommand:  cmdExecute, // DEPRECATED
+	zapscript.ZapScriptCmdINI:      forwardCmd, // DEPRECATED
+	zapscript.ZapScriptCmdSystem:   cmdSystem,  // DEPRECATED
+	zapscript.ZapScriptCmdGet:      cmdHTTPGet, // DEPRECATED
 }
 
 // IsMediaLaunchingCommand returns true if the command launches media and should be subject to playtime limits.
@@ -124,29 +122,29 @@ var cmdMap = map[string]func(
 func IsMediaLaunchingCommand(cmdName string) bool {
 	switch cmdName {
 	// Launch commands
-	case models.ZapScriptCmdLaunch,
-		models.ZapScriptCmdLaunchSystem,
-		models.ZapScriptCmdLaunchRandom,
-		models.ZapScriptCmdLaunchSearch,
-		models.ZapScriptCmdLaunchTitle:
+	case zapscript.ZapScriptCmdLaunch,
+		zapscript.ZapScriptCmdLaunchSystem,
+		zapscript.ZapScriptCmdLaunchRandom,
+		zapscript.ZapScriptCmdLaunchSearch,
+		zapscript.ZapScriptCmdLaunchTitle:
 		return true
 
 	// Playlist commands that launch or load media
-	case models.ZapScriptCmdPlaylistPlay,
-		models.ZapScriptCmdPlaylistNext,
-		models.ZapScriptCmdPlaylistPrevious,
-		models.ZapScriptCmdPlaylistGoto,
-		models.ZapScriptCmdPlaylistLoad,
-		models.ZapScriptCmdPlaylistOpen:
+	case zapscript.ZapScriptCmdPlaylistPlay,
+		zapscript.ZapScriptCmdPlaylistNext,
+		zapscript.ZapScriptCmdPlaylistPrevious,
+		zapscript.ZapScriptCmdPlaylistGoto,
+		zapscript.ZapScriptCmdPlaylistLoad,
+		zapscript.ZapScriptCmdPlaylistOpen:
 		return true
 
 	// MiSTer MGL launches games
-	case models.ZapScriptCmdMisterMGL:
+	case zapscript.ZapScriptCmdMisterMGL:
 		return true
 
 	// Deprecated aliases
-	case models.ZapScriptCmdRandom, // alias for launch.random
-		models.ZapScriptCmdSystem: // alias for launch.system
+	case zapscript.ZapScriptCmdRandom, // alias for launch.random
+		zapscript.ZapScriptCmdSystem: // alias for launch.system
 		return true
 
 	default:
@@ -198,8 +196,8 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 
 // ExprEnvOptions provides optional context for expression environment.
 type ExprEnvOptions struct {
-	Scanned       *parser.ExprEnvScanned
-	Launching     *parser.ExprEnvLaunching
+	Scanned       *zapscript.ExprEnvScanned
+	Launching     *zapscript.ExprEnvLaunching
 	InHookContext bool // prevents recursive hook execution
 }
 
@@ -208,7 +206,7 @@ func getExprEnv(
 	cfg *config.Instance,
 	st *state.State,
 	opts *ExprEnvOptions,
-) parser.ArgExprEnv {
+) zapscript.ArgExprEnv {
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Debug().Err(err).Msgf("error getting hostname, continuing")
@@ -217,22 +215,22 @@ func getExprEnv(
 	lastScanned := st.GetLastScanned()
 	activeMedia := st.ActiveMedia()
 
-	env := parser.ArgExprEnv{
+	env := zapscript.ArgExprEnv{
 		Platform: pl.ID(),
 		Version:  config.AppVersion,
 		ScanMode: strings.ToLower(cfg.ReadersScan().Mode),
-		Device: parser.ExprEnvDevice{
+		Device: zapscript.ExprEnvDevice{
 			Hostname: hostname,
 			OS:       runtime.GOOS,
 			Arch:     runtime.GOARCH,
 		},
-		LastScanned: parser.ExprEnvLastScanned{
+		LastScanned: zapscript.ExprEnvLastScanned{
 			ID:    lastScanned.UID,
 			Value: lastScanned.Text,
 			Data:  lastScanned.Data,
 		},
 		MediaPlaying: activeMedia != nil,
-		ActiveMedia:  parser.ExprEnvActiveMedia{},
+		ActiveMedia:  zapscript.ExprEnvActiveMedia{},
 	}
 
 	if activeMedia != nil {
@@ -261,7 +259,7 @@ func RunCommand(
 	cfg *config.Instance,
 	plsc playlists.PlaylistController,
 	token tokens.Token, //nolint:gocritic // single-use parameter in command handler
-	cmd parser.Command,
+	cmd zapscript.Command,
 	totalCmds int,
 	currentIndex int,
 	db *database.Database,
@@ -269,7 +267,7 @@ func RunCommand(
 	exprOpts *ExprEnvOptions,
 ) (platforms.CmdResult, error) {
 	unsafe := token.Unsafe
-	newCmds := make([]parser.Command, 0)
+	newCmds := make([]zapscript.Command, 0)
 
 	linkValue, err := checkZapLink(cfg, pl, db, cmd)
 	if err != nil {
@@ -277,7 +275,7 @@ func RunCommand(
 	}
 	if linkValue != "" {
 		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
-		reader := parser.NewParser(linkValue)
+		reader := zapscript.NewParser(linkValue)
 		script, parseErr := reader.ParseScript()
 		switch {
 		case parseErr != nil:
@@ -297,7 +295,7 @@ func RunCommand(
 	exprEnv := getExprEnv(pl, cfg, st, exprOpts)
 
 	for i, arg := range cmd.Args {
-		reader := parser.NewParser(arg)
+		reader := zapscript.NewParser(arg)
 		output, evalErr := reader.EvalExpressions(exprEnv)
 		if evalErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("error evaluating arg expression: %w", evalErr)
@@ -306,8 +304,8 @@ func RunCommand(
 	}
 
 	var advArgEvalErr error
-	cmd.AdvArgs.Range(func(k advargtypes.Key, arg string) bool {
-		reader := parser.NewParser(arg)
+	cmd.AdvArgs.Range(func(k zapscript.Key, arg string) bool {
+		reader := zapscript.NewParser(arg)
 		output, evalErr := reader.EvalExpressions(exprEnv)
 		if evalErr != nil {
 			advArgEvalErr = fmt.Errorf("error evaluating advanced arg expression: %w", evalErr)

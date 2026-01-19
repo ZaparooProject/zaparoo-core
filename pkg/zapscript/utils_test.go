@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,22 +40,22 @@ func TestCmdExecute_ZaparooEnvironmentSet(t *testing.T) {
 	cfg.SetExecuteAllowListForTesting([]string{".*"})
 
 	// Create expression env
-	exprEnv := &parser.ArgExprEnv{
+	exprEnv := &zapscript.ArgExprEnv{
 		Platform: "test",
 		Version:  "1.0.0",
 		ScanMode: "tap",
-		Device: parser.ExprEnvDevice{
+		Device: zapscript.ExprEnvDevice{
 			Hostname: "testhost",
 			OS:       "linux",
 			Arch:     "amd64",
 		},
-		LastScanned: parser.ExprEnvLastScanned{
+		LastScanned: zapscript.ExprEnvLastScanned{
 			ID:    "test-id",
 			Value: "test-value",
 			Data:  "test-data",
 		},
 		MediaPlaying: true,
-		ActiveMedia: parser.ExprEnvActiveMedia{
+		ActiveMedia: zapscript.ExprEnvActiveMedia{
 			LauncherID: "retroarch",
 			SystemID:   "snes",
 			SystemName: "Super Nintendo",
@@ -65,7 +65,7 @@ func TestCmdExecute_ZaparooEnvironmentSet(t *testing.T) {
 	}
 
 	// Use printenv which returns non-zero if var doesn't exist
-	cmd := parser.Command{
+	cmd := zapscript.Command{
 		Name: "execute",
 		Args: []string{"printenv ZAPAROO_ENVIRONMENT"},
 	}
@@ -91,17 +91,17 @@ func TestCmdExecute_ZaparooEnvironmentContainsExpectedFields(t *testing.T) {
 	cfg := &config.Instance{}
 	cfg.SetExecuteAllowListForTesting([]string{".*"})
 
-	exprEnv := &parser.ArgExprEnv{
+	exprEnv := &zapscript.ArgExprEnv{
 		Platform: "mister",
 		Version:  "2.0.0",
 		ScanMode: "hold",
-		Device: parser.ExprEnvDevice{
+		Device: zapscript.ExprEnvDevice{
 			Hostname: "mister",
 			OS:       "linux",
 			Arch:     "arm",
 		},
 		MediaPlaying: true,
-		ActiveMedia: parser.ExprEnvActiveMedia{
+		ActiveMedia: zapscript.ExprEnvActiveMedia{
 			SystemID: "genesis",
 			Path:     "/games/genesis/sonic.bin",
 		},
@@ -109,7 +109,7 @@ func TestCmdExecute_ZaparooEnvironmentContainsExpectedFields(t *testing.T) {
 
 	// Simply check that ZAPAROO_ENVIRONMENT is set with valid JSON
 	// The actual JSON structure is verified by unit tests of the types
-	cmd := parser.Command{
+	cmd := zapscript.Command{
 		Name: "execute",
 		Args: []string{"printenv ZAPAROO_ENVIRONMENT"},
 	}
@@ -136,7 +136,7 @@ func TestCmdExecute_StderrCapture(t *testing.T) {
 
 	// Create a command that writes to stderr and exits with error
 	// Use bash with proper quoting
-	cmd := parser.Command{
+	cmd := zapscript.Command{
 		Name: "execute",
 		Args: []string{`bash -c "echo 'stderr_test_message' >&2; exit 1"`},
 	}
@@ -168,7 +168,7 @@ func TestCmdExecute_UnsafeBlocked(t *testing.T) {
 	cfg := &config.Instance{}
 	cfg.SetExecuteAllowListForTesting([]string{".*"})
 
-	cmd := parser.Command{
+	cmd := zapscript.Command{
 		Name: "execute",
 		Args: []string{"echo hello"},
 	}
@@ -192,7 +192,7 @@ func TestCmdExecute_NotInAllowList(t *testing.T) {
 	cfg := &config.Instance{}
 	// Don't set any allow list - commands should be blocked
 
-	cmd := parser.Command{
+	cmd := zapscript.Command{
 		Name: "execute",
 		Args: []string{"echo hello"},
 	}
@@ -216,7 +216,7 @@ func TestCmdExecute_EmptyArgs(t *testing.T) {
 	cfg := &config.Instance{}
 	cfg.SetExecuteAllowListForTesting([]string{".*"})
 
-	cmd := parser.Command{
+	cmd := zapscript.Command{
 		Name: "execute",
 		Args: []string{}, // No args
 	}
@@ -236,7 +236,7 @@ func TestCmdExecute_EmptyArgs(t *testing.T) {
 func TestCmdDelay(t *testing.T) {
 	t.Parallel()
 
-	cmd := parser.Command{
+	cmd := zapscript.Command{
 		Name: "delay",
 		Args: []string{"50"}, // 50ms delay
 	}
@@ -258,7 +258,7 @@ func TestCmdDelay(t *testing.T) {
 func TestCmdDelay_InvalidAmount(t *testing.T) {
 	t.Parallel()
 
-	cmd := parser.Command{
+	cmd := zapscript.Command{
 		Name: "delay",
 		Args: []string{"notanumber"},
 	}
@@ -276,7 +276,7 @@ func TestCmdDelay_InvalidAmount(t *testing.T) {
 func TestCmdDelay_NoArgs(t *testing.T) {
 	t.Parallel()
 
-	cmd := parser.Command{
+	cmd := zapscript.Command{
 		Name: "delay",
 		Args: []string{},
 	}
@@ -294,7 +294,7 @@ func TestCmdDelay_NoArgs(t *testing.T) {
 func TestCmdEcho(t *testing.T) {
 	t.Parallel()
 
-	cmd := parser.Command{
+	cmd := zapscript.Command{
 		Name: "echo",
 		Args: []string{"hello", "world"},
 	}

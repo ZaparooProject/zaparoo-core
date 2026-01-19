@@ -35,12 +35,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
 )
 
@@ -291,7 +291,7 @@ func checkZapLink(
 	_ *config.Instance,
 	pl platforms.Platform,
 	db *database.Database,
-	cmd parser.Command,
+	cmd zapscript.Command,
 ) (string, error) {
 	if len(cmd.Args) == 0 {
 		return "", nil
@@ -306,12 +306,12 @@ func checkZapLink(
 	log.Info().Msgf("checking zap link: %s", value)
 	body, err := getRemoteZapScript(value, platform)
 	if isOfflineError(err) {
-		zapscript, cacheErr := db.UserDB.GetZapLinkCache(value)
+		cachedScript, cacheErr := db.UserDB.GetZapLinkCache(value)
 		if cacheErr != nil {
 			return "", fmt.Errorf("failed to get zaplink cache for '%s': %w", value, cacheErr)
 		}
-		if zapscript != "" {
-			return zapscript, nil
+		if cachedScript != "" {
+			return cachedScript, nil
 		}
 	}
 	if err != nil {

@@ -23,7 +23,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/rs/zerolog/log"
 )
@@ -43,8 +43,8 @@ var reCanonicalTag = regexp.MustCompile(`\(([+~-]?)([a-zA-Z][a-zA-Z0-9_-]*):([^)
 // filename metadata tags which don't support operators.
 //
 // Returns the extracted tag filters and the input string with matched tags removed.
-func ExtractCanonicalTagsFromParens(input string) (tagFilters []database.TagFilter, remaining string) {
-	var extractedTags []database.TagFilter
+func ExtractCanonicalTagsFromParens(input string) (tagFilters []zapscript.TagFilter, remaining string) {
+	var extractedTags []zapscript.TagFilter
 	remaining = input
 
 	// Find all matches
@@ -85,7 +85,7 @@ func ExtractCanonicalTagsFromParens(input string) (tagFilters []database.TagFilt
 // Advanced args tags take precedence - if the same tag type exists in both,
 // the advanced args value is used.
 // Returns nil if the result would be empty.
-func MergeTagFilters(extracted, advArgs []database.TagFilter) []database.TagFilter {
+func MergeTagFilters(extracted, advArgs []zapscript.TagFilter) []zapscript.TagFilter {
 	if len(advArgs) == 0 && len(extracted) == 0 {
 		return nil
 	}
@@ -99,13 +99,13 @@ func MergeTagFilters(extracted, advArgs []database.TagFilter) []database.TagFilt
 	}
 
 	// Create a map of advanced args tags by type for quick lookup
-	advArgsMap := make(map[string]database.TagFilter)
+	advArgsMap := make(map[string]zapscript.TagFilter)
 	for _, tag := range advArgs {
 		advArgsMap[tag.Type] = tag
 	}
 
 	// Start with advanced args tags (they take precedence)
-	result := make([]database.TagFilter, 0, len(extracted)+len(advArgs))
+	result := make([]zapscript.TagFilter, 0, len(extracted)+len(advArgs))
 	result = append(result, advArgs...)
 
 	// Add extracted tags that don't conflict with advanced args

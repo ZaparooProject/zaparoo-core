@@ -53,6 +53,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/mock"
@@ -226,8 +227,8 @@ func (m *MockUserDBI) GetEnabledMappings() ([]database.Mapping, error) {
 	return nil, nil
 }
 
-func (m *MockUserDBI) UpdateZapLinkHost(host string, zapscript int) error {
-	args := m.Called(host, zapscript)
+func (m *MockUserDBI) UpdateZapLinkHost(host string, isZapScript int) error {
+	args := m.Called(host, isZapScript)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
@@ -265,8 +266,8 @@ func (m *MockUserDBI) PruneExpiredZapLinkHosts(olderThan time.Duration) (int64, 
 	return rowsDeleted, nil
 }
 
-func (m *MockUserDBI) UpdateZapLinkCache(url, zapscript string) error {
-	args := m.Called(url, zapscript)
+func (m *MockUserDBI) UpdateZapLinkCache(url, zs string) error {
+	args := m.Called(url, zs)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
@@ -586,7 +587,7 @@ func (m *MockMediaDBI) SearchMediaWithFilters(
 }
 
 func (m *MockMediaDBI) SearchMediaBySlug(
-	ctx context.Context, systemID string, slug string, tags []database.TagFilter,
+	ctx context.Context, systemID string, slug string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	args := m.Called(ctx, systemID, slug, tags)
 	if results, ok := args.Get(0).([]database.SearchResultWithCursor); ok {
@@ -602,7 +603,7 @@ func (m *MockMediaDBI) SearchMediaBySlug(
 }
 
 func (m *MockMediaDBI) SearchMediaBySecondarySlug(
-	ctx context.Context, systemID string, secondarySlug string, tags []database.TagFilter,
+	ctx context.Context, systemID string, secondarySlug string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	args := m.Called(ctx, systemID, secondarySlug, tags)
 	if results, ok := args.Get(0).([]database.SearchResultWithCursor); ok {
@@ -618,7 +619,7 @@ func (m *MockMediaDBI) SearchMediaBySecondarySlug(
 }
 
 func (m *MockMediaDBI) SearchMediaBySlugPrefix(
-	ctx context.Context, systemID string, slugPrefix string, tags []database.TagFilter,
+	ctx context.Context, systemID string, slugPrefix string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	args := m.Called(ctx, systemID, slugPrefix, tags)
 	if results, ok := args.Get(0).([]database.SearchResultWithCursor); ok {
@@ -634,7 +635,7 @@ func (m *MockMediaDBI) SearchMediaBySlugPrefix(
 }
 
 func (m *MockMediaDBI) SearchMediaBySlugIn(
-	ctx context.Context, systemID string, slugs []string, tags []database.TagFilter,
+	ctx context.Context, systemID string, slugs []string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	args := m.Called(ctx, systemID, slugs, tags)
 	if results, ok := args.Get(0).([]database.SearchResultWithCursor); ok {
@@ -1450,7 +1451,7 @@ func (m *MockMediaDBI) InvalidateCountCache() error {
 
 // Slug resolution cache methods
 func (m *MockMediaDBI) GetCachedSlugResolution(
-	ctx context.Context, systemID, slug string, tagFilters []database.TagFilter,
+	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
 ) (mediaDBID int64, strategy string, found bool) {
 	args := m.Called(ctx, systemID, slug, tagFilters)
 	if mediaID, ok := args.Get(0).(int64); ok {
@@ -1464,7 +1465,7 @@ func (m *MockMediaDBI) GetCachedSlugResolution(
 }
 
 func (m *MockMediaDBI) SetCachedSlugResolution(
-	ctx context.Context, systemID, slug string, tagFilters []database.TagFilter, mediaDBID int64, strategy string,
+	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter, mediaDBID int64, strategy string,
 ) error {
 	args := m.Called(ctx, systemID, slug, tagFilters, mediaDBID, strategy)
 	if err := args.Error(0); err != nil {

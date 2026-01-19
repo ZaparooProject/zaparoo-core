@@ -24,6 +24,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -645,7 +646,7 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 	filters := &database.SearchFilters{
 		Systems: []systemdefs.System{*nesSystem},
 		Query:   "mario",
-		Tags:    []database.TagFilter{{Type: "Genre", Value: "Action"}},
+		Tags:    []zapscript.TagFilter{{Type: "Genre", Value: "Action"}},
 		Limit:   10,
 	}
 	results, err := mediaDB.SearchMediaWithFilters(ctx, filters)
@@ -918,19 +919,19 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	assert.Len(t, results, 1) // Only Super Mario World (exact match)
 
 	// Test 3: Slug search with tag filtering
-	tags := []database.TagFilter{{Type: "region", Value: "usa"}}
+	tags := []zapscript.TagFilter{{Type: "region", Value: "usa"}}
 	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
 	require.NoError(t, err)
 	assert.Len(t, results, 1) // Only Super Mario World (exact match) and it's USA region
 
 	// Test 4: Slug search with restrictive tag filtering
-	tags = []database.TagFilter{{Type: "region", Value: "japan"}}
+	tags = []zapscript.TagFilter{{Type: "region", Value: "japan"}}
 	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
 	require.NoError(t, err)
 	assert.Empty(t, results) // No Japanese SNES Mario games
 
 	// Test 5: Slug search with multiple tag filters (AND logic)
-	tags = []database.TagFilter{
+	tags = []zapscript.TagFilter{
 		{Type: "region", Value: "usa"},
 		{Type: "genre", Value: "platform"},
 	}
@@ -972,7 +973,7 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	assert.Empty(t, results)
 
 	// Test 12: Verify tags are populated in results
-	tags = []database.TagFilter{{Type: "genre", Value: "puzzle"}}
+	tags = []zapscript.TagFilter{{Type: "genre", Value: "puzzle"}}
 	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "Doctor Mario", tags)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)

@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/go-zapscript"
 	"pgregory.net/rapid"
 )
 
@@ -82,7 +82,7 @@ func TestPropertyParseTagFiltersDefaultOperator(t *testing.T) {
 			t.Fatalf("Expected 1 filter, got %d", len(result))
 		}
 
-		if result[0].Operator != database.TagOperatorAND {
+		if result[0].Operator != zapscript.TagOperatorAND {
 			t.Fatalf("Expected AND operator, got %v", result[0].Operator)
 		}
 	})
@@ -105,7 +105,7 @@ func TestPropertyParseTagFiltersPlusOperator(t *testing.T) {
 			t.Fatalf("Expected 1 filter, got %d", len(result))
 		}
 
-		if result[0].Operator != database.TagOperatorAND {
+		if result[0].Operator != zapscript.TagOperatorAND {
 			t.Fatalf("Expected AND operator for + prefix, got %v", result[0].Operator)
 		}
 	})
@@ -128,7 +128,7 @@ func TestPropertyParseTagFiltersMinusOperator(t *testing.T) {
 			t.Fatalf("Expected 1 filter, got %d", len(result))
 		}
 
-		if result[0].Operator != database.TagOperatorNOT {
+		if result[0].Operator != zapscript.TagOperatorNOT {
 			t.Fatalf("Expected NOT operator for - prefix, got %v", result[0].Operator)
 		}
 	})
@@ -151,7 +151,7 @@ func TestPropertyParseTagFiltersTildeOperator(t *testing.T) {
 			t.Fatalf("Expected 1 filter, got %d", len(result))
 		}
 
-		if result[0].Operator != database.TagOperatorOR {
+		if result[0].Operator != zapscript.TagOperatorOR {
 			t.Fatalf("Expected OR operator for ~ prefix, got %v", result[0].Operator)
 		}
 	})

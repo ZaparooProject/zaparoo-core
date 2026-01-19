@@ -24,7 +24,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/go-zapscript"
 	"pgregory.net/rapid"
 )
 
@@ -43,18 +43,18 @@ func slugGen() *rapid.Generator[string] {
 }
 
 // tagFilterGen generates random TagFilter values.
-func tagFilterGen() *rapid.Generator[database.TagFilter] {
-	return rapid.Custom(func(t *rapid.T) database.TagFilter {
+func tagFilterGen() *rapid.Generator[zapscript.TagFilter] {
+	return rapid.Custom(func(t *rapid.T) zapscript.TagFilter {
 		tagTypes := []string{"lang", "region", "year", "players", "edition", "demo", "proto"}
 		tagType := rapid.SampledFrom(tagTypes).Draw(t, "tagType")
 		tagValue := rapid.StringMatching(`[a-z0-9\-]{1,15}`).Draw(t, "tagValue")
-		operator := rapid.SampledFrom([]database.TagOperator{
-			database.TagOperatorAND,
-			database.TagOperatorNOT,
-			database.TagOperatorOR,
+		operator := rapid.SampledFrom([]zapscript.TagOperator{
+			zapscript.TagOperatorAND,
+			zapscript.TagOperatorNOT,
+			zapscript.TagOperatorOR,
 		}).Draw(t, "operator")
 
-		return database.TagFilter{
+		return zapscript.TagFilter{
 			Type:     tagType,
 			Value:    tagValue,
 			Operator: operator,
@@ -63,7 +63,7 @@ func tagFilterGen() *rapid.Generator[database.TagFilter] {
 }
 
 // tagFiltersGen generates a slice of tag filters.
-func tagFiltersGen() *rapid.Generator[[]database.TagFilter] {
+func tagFiltersGen() *rapid.Generator[[]zapscript.TagFilter] {
 	return rapid.SliceOfN(tagFilterGen(), 0, 10)
 }
 
@@ -150,7 +150,7 @@ func TestPropertySlugCacheKeyTagOrderIndependent(t *testing.T) {
 		tagFilters := rapid.SliceOfN(tagFilterGen(), 2, 10).Draw(t, "tagFilters")
 
 		// Create a shuffled copy
-		shuffled := make([]database.TagFilter, len(tagFilters))
+		shuffled := make([]zapscript.TagFilter, len(tagFilters))
 		copy(shuffled, tagFilters)
 		// Fisher-Yates shuffle
 		for i := len(shuffled) - 1; i > 0; i-- {
@@ -344,7 +344,7 @@ func TestPropertySlugCacheKeyEmptyTagFilters(t *testing.T) {
 
 		// nil and empty slice should produce same key
 		key1, err1 := generateSlugCacheKey(systemID, slug, nil)
-		key2, err2 := generateSlugCacheKey(systemID, slug, []database.TagFilter{})
+		key2, err2 := generateSlugCacheKey(systemID, slug, []zapscript.TagFilter{})
 
 		if err1 != nil || err2 != nil {
 			t.Fatalf("Expected no errors: err1=%v, err2=%v", err1, err2)
@@ -361,7 +361,7 @@ func TestPropertySlugCacheKeyEmptyTagFilters(t *testing.T) {
 // ============================================================================
 
 // tagsEqual checks if two tag filter slices have equivalent content.
-func tagsEqual(a, b []database.TagFilter) bool {
+func tagsEqual(a, b []zapscript.TagFilter) bool {
 	if len(a) != len(b) {
 		return false
 	}

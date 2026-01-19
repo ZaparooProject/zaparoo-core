@@ -24,12 +24,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -69,10 +69,10 @@ func TestCmdLaunch_SystemArgAppliesDefaults(t *testing.T) {
 		(*platforms.LaunchOptions)(nil)).Return(nil)
 
 	env := platforms.CmdEnv{
-		Cmd: parser.Command{
+		Cmd: zapscript.Command{
 			Name: "launch",
 			Args: []string{absPath},
-			AdvArgs: parser.NewAdvArgs(map[string]string{
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
 				"system": "genesis",
 			}),
 		},
@@ -120,10 +120,10 @@ func TestCmdLaunch_LauncherArgOverridesSystemArg(t *testing.T) {
 		(*platforms.LaunchOptions)(nil)).Return(nil)
 
 	env := platforms.CmdEnv{
-		Cmd: parser.Command{
+		Cmd: zapscript.Command{
 			Name: "launch",
 			Args: []string{absPath},
-			AdvArgs: parser.NewAdvArgs(map[string]string{
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
 				"system":   "genesis",
 				"launcher": "genesis-explicit", // Explicit launcher should win
 			}),
@@ -152,10 +152,10 @@ func TestCmdLaunch_InvalidSystemArgReturnsError(t *testing.T) {
 	absPath := filepath.Join(t.TempDir(), "game.bin")
 
 	env := platforms.CmdEnv{
-		Cmd: parser.Command{
+		Cmd: zapscript.Command{
 			Name: "launch",
 			Args: []string{absPath},
-			AdvArgs: parser.NewAdvArgs(map[string]string{
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
 				"system": "invalidname", // Invalid system should return validation error
 			}),
 		},
@@ -185,10 +185,10 @@ func TestCmdLaunch_SystemArgWithNoDefaults(t *testing.T) {
 		(*platforms.LaunchOptions)(nil)).Return(nil)
 
 	env := platforms.CmdEnv{
-		Cmd: parser.Command{
+		Cmd: zapscript.Command{
 			Name: "launch",
 			Args: []string{absPath},
-			AdvArgs: parser.NewAdvArgs(map[string]string{
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
 				"system": "genesis",
 			}),
 		},
@@ -247,7 +247,7 @@ func TestCmdLaunch_DelegationToTitlePreservesLauncher(t *testing.T) {
 		Return(nil).Maybe()
 
 	env := platforms.CmdEnv{
-		Cmd: parser.Command{
+		Cmd: zapscript.Command{
 			Name: "launch",
 			Args: []string{"snes/Super Mario World"},
 		},
@@ -298,7 +298,7 @@ func TestCmdLaunch_SystemPathFormatUsesDefaultLauncher(t *testing.T) {
 		(*platforms.LaunchOptions)(nil)).Return(nil)
 
 	env := platforms.CmdEnv{
-		Cmd: parser.Command{
+		Cmd: zapscript.Command{
 			Name: "launch",
 			Args: []string{"snes/game.sfc"},
 		},
@@ -335,7 +335,7 @@ func TestCmdLaunch_FileNotFound(t *testing.T) {
 		Return([]database.SearchResult{}, nil)
 
 	env := platforms.CmdEnv{
-		Cmd: parser.Command{
+		Cmd: zapscript.Command{
 			Name: "launch",
 			// Use system/path.ext format with file extension to skip title search
 			Args: []string{"snes/nonexistent_game.sfc"},

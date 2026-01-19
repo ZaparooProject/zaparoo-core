@@ -23,6 +23,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
@@ -31,7 +32,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	titleshelper "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -113,10 +113,10 @@ func TestCmdTitle(t *testing.T) {
 				MediaDB: mockMediaDB,
 			}
 
-			cmd := parser.Command{
+			cmd := zapscript.Command{
 				Name:    "launch.title",
 				Args:    []string{tt.input},
-				AdvArgs: parser.NewAdvArgs(map[string]string{}),
+				AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 			}
 
 			env := platforms.CmdEnv{
@@ -129,7 +129,7 @@ func TestCmdTitle(t *testing.T) {
 			if !tt.shouldError {
 				// Mock cache miss
 				mockMediaDB.On("GetCachedSlugResolution",
-					mock.Anything, tt.expectedSystem, tt.expectedSlug, []database.TagFilter(nil)).
+					mock.Anything, tt.expectedSystem, tt.expectedSlug, []zapscript.TagFilter(nil)).
 					Return(int64(0), "", false)
 
 				expectedResults := []database.SearchResultWithCursor{
@@ -140,10 +140,10 @@ func TestCmdTitle(t *testing.T) {
 					},
 				}
 				mockMediaDB.On("SearchMediaBySlug",
-					context.Background(), tt.expectedSystem, tt.expectedSlug, []database.TagFilter(nil)).
+					context.Background(), tt.expectedSystem, tt.expectedSlug, []zapscript.TagFilter(nil)).
 					Return(expectedResults, nil)
 				mockMediaDB.On("SetCachedSlugResolution",
-					mock.Anything, tt.expectedSystem, tt.expectedSlug, []database.TagFilter(nil),
+					mock.Anything, tt.expectedSystem, tt.expectedSlug, []zapscript.TagFilter(nil),
 					mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 					Return(nil).Maybe()
 				mockPlatform.On(
@@ -152,7 +152,7 @@ func TestCmdTitle(t *testing.T) {
 			} else if tt.expectedSystem != "" && tt.expectedSlug != "" {
 				// shouldError but validation passes - set up mocks to return no results
 				mockMediaDB.On("GetCachedSlugResolution",
-					mock.Anything, tt.expectedSystem, tt.expectedSlug, []database.TagFilter(nil)).
+					mock.Anything, tt.expectedSystem, tt.expectedSlug, []zapscript.TagFilter(nil)).
 					Return(int64(0), "", false)
 				mockMediaDB.On("SearchMediaBySlug",
 					mock.Anything, tt.expectedSystem, mock.AnythingOfType("string"), mock.Anything).
@@ -195,7 +195,7 @@ func TestExtractCanonicalTagsFromParens(t *testing.T) {
 		name              string
 		input             string
 		expectedRemaining string
-		expectedTags      []database.TagFilter
+		expectedTags      []zapscript.TagFilter
 	}{
 		{
 			name:              "no canonical tags",
@@ -206,51 +206,51 @@ func TestExtractCanonicalTagsFromParens(t *testing.T) {
 		{
 			name:  "single canonical tag with AND operator",
 			input: "Game (region:us)",
-			expectedTags: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+			expectedTags: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
 			},
 			expectedRemaining: "Game",
 		},
 		{
 			name:  "single canonical tag with NOT operator",
 			input: "Game (-unfinished:beta)",
-			expectedTags: []database.TagFilter{
-				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
+			expectedTags: []zapscript.TagFilter{
+				{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
 			},
 			expectedRemaining: "Game",
 		},
 		{
 			name:  "single canonical tag with OR operator",
 			input: "Game (~lang:en)",
-			expectedTags: []database.TagFilter{
-				{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
+			expectedTags: []zapscript.TagFilter{
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
 			},
 			expectedRemaining: "Game",
 		},
 		{
 			name:  "multiple canonical tags with operators",
 			input: "Game (-unfinished:beta) (+region:us) (~lang:en)",
-			expectedTags: []database.TagFilter{
-				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
-				{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
+			expectedTags: []zapscript.TagFilter{
+				{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
 			},
 			expectedRemaining: "Game",
 		},
 		{
 			name:  "canonical tags mixed with filename metadata",
 			input: "Game (-unfinished:beta) (USA) (year:1996)",
-			expectedTags: []database.TagFilter{
-				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
-				{Type: "year", Value: "1996", Operator: database.TagOperatorAND},
+			expectedTags: []zapscript.TagFilter{
+				{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
+				{Type: "year", Value: "1996", Operator: zapscript.TagOperatorAND},
 			},
 			expectedRemaining: "Game (USA)",
 		},
 		{
 			name:  "canonical tag without operator defaults to AND",
 			input: "Game (year:1996)",
-			expectedTags: []database.TagFilter{
-				{Type: "year", Value: "1996", Operator: database.TagOperatorAND},
+			expectedTags: []zapscript.TagFilter{
+				{Type: "year", Value: "1996", Operator: zapscript.TagOperatorAND},
 			},
 			expectedRemaining: "Game",
 		},
@@ -290,15 +290,15 @@ func TestCmdTitleWithTags(t *testing.T) {
 	input := "snes/Super Mario World"
 	expectedSystem := "SNES"
 	expectedSlug := "supermarioworld"
-	expectedTags := []database.TagFilter{
-		{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-		{Type: "type", Value: "game", Operator: database.TagOperatorAND},
+	expectedTags := []zapscript.TagFilter{
+		{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+		{Type: "type", Value: "game", Operator: zapscript.TagOperatorAND},
 	}
 
-	cmd := parser.Command{
+	cmd := zapscript.Command{
 		Name:    "launch.title",
 		Args:    []string{input},
-		AdvArgs: parser.NewAdvArgs(map[string]string{"tags": "region:usa,type:game"}),
+		AdvArgs: zapscript.NewAdvArgs(map[string]string{"tags": "region:usa,type:game"}),
 	}
 
 	env := platforms.CmdEnv{
@@ -431,10 +431,10 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 				MediaDB: mockMediaDB,
 			}
 
-			cmd := parser.Command{
+			cmd := zapscript.Command{
 				Name:    "launch.title",
 				Args:    []string{tt.input},
-				AdvArgs: parser.NewAdvArgs(map[string]string{}),
+				AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 			}
 
 			env := platforms.CmdEnv{
@@ -446,24 +446,24 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 
 			// Mock cache miss
 			mockMediaDB.On("GetCachedSlugResolution",
-				mock.Anything, tt.systemID, tt.initialSearchSlug, []database.TagFilter(nil)).
+				mock.Anything, tt.systemID, tt.initialSearchSlug, []zapscript.TagFilter(nil)).
 				Return(int64(0), "", false)
 
 			mockMediaDB.On("SearchMediaBySlug",
-				context.Background(), tt.systemID, tt.initialSearchSlug, []database.TagFilter(nil)).
+				context.Background(), tt.systemID, tt.initialSearchSlug, []zapscript.TagFilter(nil)).
 				Return(tt.initialResults, nil).Once()
 
 			if len(tt.initialResults) == 0 && tt.expectFallback {
 				// Strategy 2: Exact match without tags (same slug, different tag filter)
 				// This is the new strategy that tries without tag filters
 				mockMediaDB.On("SearchMediaBySlug",
-					context.Background(), tt.systemID, tt.initialSearchSlug, []database.TagFilter(nil)).
+					context.Background(), tt.systemID, tt.initialSearchSlug, []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil).Once()
 
 				// Strategy 3: Secondary title-only search (for titles with subtitles)
 				// Exact match: Search DB's Slug column with secondary title slug
 				mockMediaDB.On("SearchMediaBySlug",
-					context.Background(), tt.systemID, tt.fallbackSearchSlug, []database.TagFilter(nil)).
+					context.Background(), tt.systemID, tt.fallbackSearchSlug, []zapscript.TagFilter(nil)).
 					Return(tt.fallbackResults, nil).Maybe()
 
 				// Partial match: Search DB's SecondarySlug column with secondary title slug
@@ -489,7 +489,7 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 
 			if !tt.shouldError {
 				mockMediaDB.On("SetCachedSlugResolution",
-					mock.Anything, tt.systemID, mock.AnythingOfType("string"), []database.TagFilter(nil),
+					mock.Anything, tt.systemID, mock.AnythingOfType("string"), []zapscript.TagFilter(nil),
 					mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 					Return(nil).Maybe()
 				mockPlatform.On(
@@ -572,10 +572,10 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 				MediaDB: mockMediaDB,
 			}
 
-			cmd := parser.Command{
+			cmd := zapscript.Command{
 				Name:    "launch.title",
 				Args:    []string{tt.input},
-				AdvArgs: parser.NewAdvArgs(map[string]string{}),
+				AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 			}
 
 			env := platforms.CmdEnv{
@@ -587,12 +587,12 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 
 			// Mock cache miss
 			mockMediaDB.On("GetCachedSlugResolution",
-				mock.Anything, tt.systemID, tt.slug, []database.TagFilter(nil)).
+				mock.Anything, tt.systemID, tt.slug, []zapscript.TagFilter(nil)).
 				Return(int64(0), "", false)
 
 			// Strategy 1 (exact match) fails
 			mockMediaDB.On("SearchMediaBySlug",
-				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
+				context.Background(), tt.systemID, tt.slug, []zapscript.TagFilter(nil)).
 				Return([]database.SearchResultWithCursor{}, nil).Once()
 
 			// Strategies 2-4 don't apply (no secondary title in these test queries)
@@ -617,7 +617,7 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 				},
 			}
 			mockMediaDB.On("SearchMediaBySlug",
-				context.Background(), tt.systemID, tt.expectedMatch, []database.TagFilter(nil)).
+				context.Background(), tt.systemID, tt.expectedMatch, []zapscript.TagFilter(nil)).
 				Return(expectedResults, nil).Once()
 
 			// Secondary title searches also fail (no ':' or '-' in query)
@@ -639,7 +639,7 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 				Return([]database.MediaTitle{}, nil).Maybe()
 
 			mockMediaDB.On("SetCachedSlugResolution",
-				mock.Anything, tt.systemID, mock.AnythingOfType("string"), []database.TagFilter(nil),
+				mock.Anything, tt.systemID, mock.AnythingOfType("string"), []zapscript.TagFilter(nil),
 				mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 				Return(nil).Maybe()
 			mockPlatform.On(
@@ -708,10 +708,10 @@ func TestCmdTitleEdgeCases(t *testing.T) {
 				MediaDB: mockMediaDB,
 			}
 
-			cmd := parser.Command{
+			cmd := zapscript.Command{
 				Name:    "launch.title",
 				Args:    tt.args,
-				AdvArgs: parser.NewAdvArgs(map[string]string{}),
+				AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 			}
 
 			env := platforms.CmdEnv{
@@ -1162,7 +1162,7 @@ func TestSelectBestResult(t *testing.T) {
 		expectedName string
 		description  string
 		results      []database.SearchResultWithCursor
-		tagFilters   []database.TagFilter
+		tagFilters   []zapscript.TagFilter
 	}{
 		{
 			name: "single result returns that result",
@@ -1178,7 +1178,7 @@ func TestSelectBestResult(t *testing.T) {
 				{Name: "Game (USA)", Tags: []database.TagInfo{{Type: "region", Tag: "us"}}},
 				{Name: "Game (Japan)", Tags: []database.TagInfo{{Type: "region", Tag: "jp"}}},
 			},
-			tagFilters:   []database.TagFilter{{Type: "region", Value: "jp"}},
+			tagFilters:   []zapscript.TagFilter{{Type: "region", Value: "jp"}},
 			expectedName: "Game (Japan)",
 			description:  "should prefer Japan region when specified",
 		},
@@ -1217,9 +1217,9 @@ func TestSelectBestResult(t *testing.T) {
 					{Type: "year", Tag: "1992"},
 				}},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
-				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "year", Value: "1991", Operator: zapscript.TagOperatorAND},
 			},
 			expectedName: "Game (USA, 1992)",
 			description:  "year mismatch with matching region should have acceptable confidence (>0.40)",
@@ -1230,7 +1230,7 @@ func TestSelectBestResult(t *testing.T) {
 				{Name: "Game (1992)", Tags: []database.TagInfo{{Type: "year", Tag: "1992"}}},
 				{Name: "Game (1991)", Tags: []database.TagInfo{{Type: "year", Tag: "1991"}}},
 			},
-			tagFilters:   []database.TagFilter{{Type: "year", Value: "1991", Operator: database.TagOperatorAND}},
+			tagFilters:   []zapscript.TagFilter{{Type: "year", Value: "1991", Operator: zapscript.TagOperatorAND}},
 			expectedName: "Game (1991)",
 			description:  "exact year match should be preferred",
 		},
@@ -1242,9 +1242,9 @@ func TestSelectBestResult(t *testing.T) {
 					{Type: "year", Tag: "1991"},
 				}},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
-				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "year", Value: "1991", Operator: zapscript.TagOperatorAND},
 			},
 			expectedName: "Game (Japan, 1991)",
 			description:  "region mismatch with year match gets lower confidence than year mismatch with region match",
@@ -1268,7 +1268,7 @@ func TestSelectBestResult(t *testing.T) {
 func TestHasAllTags(t *testing.T) {
 	tests := []struct {
 		name       string
-		tagFilters []database.TagFilter
+		tagFilters []zapscript.TagFilter
 		result     database.SearchResultWithCursor
 		expected   bool
 	}{
@@ -1280,7 +1280,7 @@ func TestHasAllTags(t *testing.T) {
 					{Type: "lang", Tag: "en"},
 				},
 			},
-			tagFilters: []database.TagFilter{
+			tagFilters: []zapscript.TagFilter{
 				{Type: "region", Value: "us"},
 				{Type: "lang", Value: "en"},
 			},
@@ -1293,7 +1293,7 @@ func TestHasAllTags(t *testing.T) {
 					{Type: "region", Tag: "us"},
 				},
 			},
-			tagFilters: []database.TagFilter{
+			tagFilters: []zapscript.TagFilter{
 				{Type: "region", Value: "us"},
 				{Type: "lang", Value: "en"},
 			},
@@ -1306,7 +1306,7 @@ func TestHasAllTags(t *testing.T) {
 					{Type: "region", Tag: "jp"},
 				},
 			},
-			tagFilters: []database.TagFilter{
+			tagFilters: []zapscript.TagFilter{
 				{Type: "region", Value: "us"},
 			},
 			expected: false,
@@ -1316,7 +1316,7 @@ func TestHasAllTags(t *testing.T) {
 			result: database.SearchResultWithCursor{
 				Tags: []database.TagInfo{},
 			},
-			tagFilters: []database.TagFilter{},
+			tagFilters: []zapscript.TagFilter{},
 			expected:   true,
 		},
 	}
@@ -1442,10 +1442,10 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		systemID := "SNES"
 		slug := "supermarioworld"
 
-		cmd := parser.Command{
+		cmd := zapscript.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1457,7 +1457,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 
 		// Mock cache hit - should return cached values
 		mockMediaDB.On("GetCachedSlugResolution",
-			mock.Anything, systemID, slug, []database.TagFilter(nil)).
+			mock.Anything, systemID, slug, []zapscript.TagFilter(nil)).
 			Return(int64(123), "strategy_exact_match", true)
 
 		// When cache hits, GetMediaByDBID is called to fetch full media details
@@ -1496,10 +1496,10 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		systemID := "SNES"
 		slug := "supermarioworld"
 
-		cmd := parser.Command{
+		cmd := zapscript.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1511,7 +1511,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 
 		// Mock cache miss
 		mockMediaDB.On("GetCachedSlugResolution",
-			mock.Anything, systemID, slug, []database.TagFilter(nil)).
+			mock.Anything, systemID, slug, []zapscript.TagFilter(nil)).
 			Return(int64(0), "", false)
 
 		expectedResults := []database.SearchResultWithCursor{
@@ -1523,12 +1523,12 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			},
 		}
 		mockMediaDB.On("SearchMediaBySlug",
-			context.Background(), systemID, slug, []database.TagFilter(nil)).
+			context.Background(), systemID, slug, []zapscript.TagFilter(nil)).
 			Return(expectedResults, nil)
 
 		// Should update cache after successful search
 		mockMediaDB.On("SetCachedSlugResolution",
-			mock.Anything, systemID, slug, []database.TagFilter(nil),
+			mock.Anything, systemID, slug, []zapscript.TagFilter(nil),
 			int64(123), mock.AnythingOfType("string")). // strategy string
 			Return(nil).Once()
 
@@ -1558,14 +1558,14 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 
 		systemID := "SNES"
 		slug := "supermarioworld"
-		tags1 := []database.TagFilter{{Type: "region", Value: "usa", Operator: database.TagOperatorAND}}
-		tags2 := []database.TagFilter{{Type: "region", Value: "jp", Operator: database.TagOperatorAND}}
+		tags1 := []zapscript.TagFilter{{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND}}
+		tags2 := []zapscript.TagFilter{{Type: "region", Value: "jp", Operator: zapscript.TagOperatorAND}}
 
 		// First call with USA tag
-		cmd1 := parser.Command{
+		cmd1 := zapscript.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{"tags": "region:usa"}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{"tags": "region:usa"}),
 		}
 
 		env1 := platforms.CmdEnv{
@@ -1598,10 +1598,10 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		require.NoError(t, err)
 
 		// Second call with different tags should not use same cache
-		cmd2 := parser.Command{
+		cmd2 := zapscript.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{"tags": "region:jp"}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{"tags": "region:jp"}),
 		}
 
 		env2 := platforms.CmdEnv{
@@ -1649,10 +1649,10 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 			MediaDB: mockMediaDB,
 		}
 
-		cmd := parser.Command{
+		cmd := zapscript.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1663,11 +1663,11 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		}
 
 		mockMediaDB.On("GetCachedSlugResolution",
-			mock.Anything, "SNES", "supermarioworld", []database.TagFilter(nil)).
+			mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
 			Return(int64(0), "", false)
 
 		mockMediaDB.On("SearchMediaBySlug",
-			context.Background(), "SNES", "supermarioworld", []database.TagFilter(nil)).
+			context.Background(), "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
 			Return([]database.SearchResultWithCursor{}, assert.AnError)
 
 		_, err := cmdTitle(mockPlatform, env)
@@ -1686,10 +1686,10 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 			MediaDB: mockMediaDB,
 		}
 
-		cmd := parser.Command{
+		cmd := zapscript.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1700,19 +1700,19 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		}
 
 		mockMediaDB.On("GetCachedSlugResolution",
-			mock.Anything, "SNES", "supermarioworld", []database.TagFilter(nil)).
+			mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
 			Return(int64(0), "", false)
 
 		expectedResults := []database.SearchResultWithCursor{
 			{MediaID: 123, SystemID: "SNES", Name: "Super Mario World", Path: "/test/smw.smc"},
 		}
 		mockMediaDB.On("SearchMediaBySlug",
-			context.Background(), "SNES", "supermarioworld", []database.TagFilter(nil)).
+			context.Background(), "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
 			Return(expectedResults, nil)
 
 		// Cache will be set before platform launch attempt
 		mockMediaDB.On("SetCachedSlugResolution",
-			mock.Anything, "SNES", "supermarioworld", []database.TagFilter(nil),
+			mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil),
 			int64(123), mock.AnythingOfType("string")).
 			Return(nil).Maybe()
 
@@ -1732,10 +1732,10 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		mockPlaylistController := playlists.PlaylistController{}
 		mockConfig := &config.Instance{}
 
-		cmd := parser.Command{
+		cmd := zapscript.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{"tags": "invalid_format"}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{"tags": "invalid_format"}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1762,10 +1762,10 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 			MediaDB: mockMediaDB,
 		}
 
-		cmd := parser.Command{
+		cmd := zapscript.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/NonexistentGame12345"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1776,7 +1776,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		}
 
 		mockMediaDB.On("GetCachedSlugResolution",
-			mock.Anything, "SNES", "nonexistentgame12345", []database.TagFilter(nil)).
+			mock.Anything, "SNES", "nonexistentgame12345", []zapscript.TagFilter(nil)).
 			Return(int64(0), "", false)
 
 		// All search strategies return empty
@@ -1821,10 +1821,10 @@ func TestCmdTitlePerformance(t *testing.T) {
 			MediaDB: mockMediaDB,
 		}
 
-		cmd := parser.Command{
+		cmd := zapscript.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/mario"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{}),
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1849,15 +1849,15 @@ func TestCmdTitlePerformance(t *testing.T) {
 		}
 
 		mockMediaDB.On("GetCachedSlugResolution",
-			mock.Anything, "SNES", "mario", []database.TagFilter(nil)).
+			mock.Anything, "SNES", "mario", []zapscript.TagFilter(nil)).
 			Return(int64(0), "", false)
 
 		mockMediaDB.On("SearchMediaBySlug",
-			context.Background(), "SNES", "mario", []database.TagFilter(nil)).
+			context.Background(), "SNES", "mario", []zapscript.TagFilter(nil)).
 			Return(results, nil)
 
 		mockMediaDB.On("SetCachedSlugResolution",
-			mock.Anything, "SNES", "mario", []database.TagFilter(nil),
+			mock.Anything, "SNES", "mario", []zapscript.TagFilter(nil),
 			mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 			Return(nil).Maybe()
 

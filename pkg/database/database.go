@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
@@ -158,32 +159,15 @@ type TagInfo struct {
 	Type string `json:"type"`
 }
 
-// TagOperator represents the logical operator for tag filtering
-type TagOperator string
-
-// Tag filter operator constants
-const (
-	TagOperatorAND TagOperator = "AND" // Default: must have tag
-	TagOperatorNOT TagOperator = "NOT" // Must not have tag (-)
-	TagOperatorOR  TagOperator = "OR"  // At least one OR tag must match (~)
-)
-
-// TagFilter represents a tag type/value filter for queries
-type TagFilter struct {
-	Type     string      // Tag type (e.g., "lang", "year", "players")
-	Value    string      // Tag value (e.g., "en", "1991", "2")
-	Operator TagOperator // Operator: AND (default), NOT (-), OR (~)
-}
-
 // GroupTagFiltersByOperator groups tag filters by operator type for consistent processing.
 // Returns (andFilters, notFilters, orFilters) to enable both SQL generation and in-memory filtering
 // to use the same grouping logic.
-func GroupTagFiltersByOperator(filters []TagFilter) (and, not, or []TagFilter) {
+func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []zapscript.TagFilter) {
 	for _, f := range filters {
 		switch f.Operator {
-		case TagOperatorNOT:
+		case zapscript.TagOperatorNOT:
 			not = append(not, f)
-		case TagOperatorOR:
+		case zapscript.TagOperatorOR:
 			or = append(or, f)
 		default: // AND is the default
 			and = append(and, f)
@@ -227,20 +211,20 @@ type FileInfo struct {
 
 // MediaQuery represents parameters for querying media counts used in random selection
 type MediaQuery struct {
-	PathGlob   string      `json:"pathGlob,omitempty"`
-	PathPrefix string      `json:"pathPrefix,omitempty"`
-	Systems    []string    `json:"systems,omitempty"`
-	Tags       []TagFilter `json:"tags,omitempty"`
+	PathGlob   string                `json:"pathGlob,omitempty"`
+	PathPrefix string                `json:"pathPrefix,omitempty"`
+	Systems    []string              `json:"systems,omitempty"`
+	Tags       []zapscript.TagFilter `json:"tags,omitempty"`
 }
 
 // SearchFilters represents parameters for filtered media search
 type SearchFilters struct {
-	Cursor  *int64              `json:"cursor,omitempty"`
-	Letter  *string             `json:"letter,omitempty"`
-	Query   string              `json:"query"`
-	Systems []systemdefs.System `json:"systems,omitempty"`
-	Tags    []TagFilter         `json:"tags,omitempty"`
-	Limit   int                 `json:"limit"`
+	Cursor  *int64                `json:"cursor,omitempty"`
+	Letter  *string               `json:"letter,omitempty"`
+	Query   string                `json:"query"`
+	Systems []systemdefs.System   `json:"systems,omitempty"`
+	Tags    []zapscript.TagFilter `json:"tags,omitempty"`
+	Limit   int                   `json:"limit"`
 }
 
 type ScanState struct {
@@ -332,10 +316,10 @@ type MediaDBI interface {
 
 	// Slug resolution cache methods
 	GetCachedSlugResolution(
-		ctx context.Context, systemID, slug string, tagFilters []TagFilter,
+		ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
 	) (int64, string, bool)
 	SetCachedSlugResolution(
-		ctx context.Context, systemID, slug string, tagFilters []TagFilter, mediaDBID int64, strategy string,
+		ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter, mediaDBID int64, strategy string,
 	) error
 	InvalidateSlugCache(ctx context.Context) error
 	InvalidateSlugCacheForSystems(ctx context.Context, systemIDs []string) error
@@ -353,16 +337,16 @@ type MediaDBI interface {
 	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
 	SearchMediaBySlug(
-		ctx context.Context, systemID string, slug string, tags []TagFilter,
+		ctx context.Context, systemID string, slug string, tags []zapscript.TagFilter,
 	) ([]SearchResultWithCursor, error)
 	SearchMediaBySecondarySlug(
-		ctx context.Context, systemID string, secondarySlug string, tags []TagFilter,
+		ctx context.Context, systemID string, secondarySlug string, tags []zapscript.TagFilter,
 	) ([]SearchResultWithCursor, error)
 	SearchMediaBySlugPrefix(
-		ctx context.Context, systemID string, slugPrefix string, tags []TagFilter,
+		ctx context.Context, systemID string, slugPrefix string, tags []zapscript.TagFilter,
 	) ([]SearchResultWithCursor, error)
 	SearchMediaBySlugIn(
-		ctx context.Context, systemID string, slugs []string, tags []TagFilter,
+		ctx context.Context, systemID string, slugs []string, tags []zapscript.TagFilter,
 	) ([]SearchResultWithCursor, error)
 	GetTitlesWithPreFilter(
 		ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
