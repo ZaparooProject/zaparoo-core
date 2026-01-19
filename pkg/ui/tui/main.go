@@ -58,6 +58,11 @@ const (
 	PageGenerateDB            = "generate_db"
 )
 
+// mainMenuFocus tracks the last focused button position on the main menu.
+var mainMenuFocus = struct {
+	row, col int
+}{0, 0}
+
 // ButtonGridItem represents a button in the grid with its help text.
 type ButtonGridItem struct {
 	Button   *tview.Button
@@ -127,6 +132,22 @@ func (bg *ButtonGrid) FocusFirst() {
 		bg.findNextEnabled(1, 0)
 	}
 	bg.triggerHelp()
+}
+
+// SetFocus sets focus to a specific button position.
+func (bg *ButtonGrid) SetFocus(row, col int) {
+	bg.focusedRow = row
+	bg.focusedCol = col
+	if !bg.isCurrentEnabled() {
+		bg.FocusFirst()
+		return
+	}
+	bg.triggerHelp()
+}
+
+// GetFocus returns the current focused button position.
+func (bg *ButtonGrid) GetFocus() (row, col int) {
+	return bg.focusedRow, bg.focusedCol
 }
 
 // findNextEnabled moves to next enabled button in given direction.
@@ -632,16 +653,26 @@ func BuildMainPage(
 		BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName)
 	}
 
+	buttonGrid := NewButtonGrid(app, 3)
+
+	saveFocus := func() {
+		mainMenuFocus.row, mainMenuFocus.col = buttonGrid.GetFocus()
+	}
+
 	searchButton := tview.NewButton("Search media").SetSelectedFunc(func() {
+		saveFocus()
 		BuildSearchMedia(svc, pages, app)
 	})
 	writeButton := tview.NewButton("Custom write").SetSelectedFunc(func() {
+		saveFocus()
 		BuildTagsWriteMenu(svc, pages, app)
 	})
 	updateDBButton := tview.NewButton("Update media").SetSelectedFunc(func() {
+		saveFocus()
 		BuildGenerateDBPage(cfg, pages, app)
 	})
 	settingsButton := tview.NewButton("Settings").SetSelectedFunc(func() {
+		saveFocus()
 		BuildSettingsMainMenu(cfg, pages, app, pl, rebuildMainPage, logDestPath, logDestName)
 	})
 	exitButton := tview.NewButton("Exit").SetSelectedFunc(func() {
@@ -662,7 +693,6 @@ func BuildMainPage(
 		exitHelpText = "Exit TUI app (service will continue running)"
 	}
 
-	buttonGrid := NewButtonGrid(app, 3)
 	buttonGrid.AddRow(
 		&ButtonGridItem{searchButton, "Search for media and write to a token", disableRow1},
 		&ButtonGridItem{writeButton, "Write custom ZapScript to a token", disableRow1},
@@ -680,7 +710,7 @@ func BuildMainPage(
 		notifyCancel()
 		app.Stop()
 	})
-	buttonGrid.FocusFirst()
+	buttonGrid.SetFocus(mainMenuFocus.row, mainMenuFocus.col)
 
 	main.AddItem(contentFlex, 0, 1, false)
 	main.AddItem(helpText, 1, 0, false)

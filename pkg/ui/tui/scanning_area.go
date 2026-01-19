@@ -272,13 +272,13 @@ func drawWaitingIndicator(screen tcell.Screen, x, y, width int, t *Theme) {
 	}
 
 	wave := []waveChar{
-		{')', outerStyle},
-		{')', outerStyle},
-		{')', innerStyle},
-		{tcell.RuneDiamond, centerStyle},
-		{'(', innerStyle},
-		{'(', outerStyle},
-		{'(', outerStyle},
+		{outerStyle, ')'},
+		{outerStyle, ')'},
+		{innerStyle, ')'},
+		{centerStyle, tcell.RuneDiamond},
+		{innerStyle, '('},
+		{outerStyle, '('},
+		{outerStyle, '('},
 	}
 
 	startX := x + (width-len(wave))/2
