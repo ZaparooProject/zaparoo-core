@@ -420,6 +420,17 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                     SendPlatformsList();
                     break;
 
+                case "GetGames":
+                    SendGamesList();
+                    break;
+
+                case "GetGamesForPlatform":
+                    if (!string.IsNullOrEmpty(command.Platform))
+                    {
+                        SendGamesForPlatform(command.Platform);
+                    }
+                    break;
+
                 case "Ping":
                     // Heartbeat to keep connection alive - no action needed
                     break;
@@ -438,21 +449,37 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     {
         try
         {
+            // First try to find as a regular game
             var game = PluginHelper.DataManager.GetGameById(gameId);
-            if (game == null)
+            if (game != null)
             {
-                System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Game not found: {gameId}");
+                if (_isBigBoxRunning)
+                {
+                    PluginHelper.BigBoxMainViewModel.PlayGame(game, null, null, null);
+                }
+                else
+                {
+                    PluginHelper.LaunchBoxMainViewModel.PlayGame(game, null, null, null);
+                }
                 return;
             }
 
-            if (_isBigBoxRunning)
+            // Try to find as an additional application (merged games, secondary discs)
+            var additionalApp = PluginHelper.DataManager.GetAdditionalApplicationById(gameId);
+            if (additionalApp != null)
             {
-                PluginHelper.BigBoxMainViewModel.PlayGame(game, null, null, null);
+                if (_isBigBoxRunning)
+                {
+                    PluginHelper.BigBoxMainViewModel.PlayGame(additionalApp.Game, additionalApp, null, null);
+                }
+                else
+                {
+                    PluginHelper.LaunchBoxMainViewModel.PlayGame(additionalApp.Game, additionalApp, null, null);
+                }
+                return;
             }
-            else
-            {
-                PluginHelper.LaunchBoxMainViewModel.PlayGame(game, null, null, null);
-            }
+
+            System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Game or additional app not found: {gameId}");
         }
         catch (Exception ex)
         {
@@ -482,6 +509,91 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
         catch (Exception)
         {
             // Ignore errors - platforms won't be sent
+        }
+    }
+
+    private void SendGamesList()
+    {
+        try
+        {
+            var allGames = PluginHelper.DataManager.GetAllGames();
+            var response = new GamesResponseEvent();
+
+            foreach (var game in allGames)
+            {
+                var gameInfo = new GameInfo
+                {
+                    Id = game.Id,
+                    Title = game.Title,
+                    Platform = game.Platform
+                };
+
+                // Include additional applications (secondary discs, merged games, etc.)
+                var additionalApps = game.GetAllAdditionalApplications();
+                if (additionalApps != null)
+                {
+                    foreach (var app in additionalApps)
+                    {
+                        gameInfo.AdditionalApps.Add(new AdditionalAppInfo
+                        {
+                            Id = app.Id,
+                            Name = app.Name
+                        });
+                    }
+                }
+
+                response.Games.Add(gameInfo);
+            }
+
+            SendEvent(response);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Failed to get games list: {ex.Message}");
+        }
+    }
+
+    private void SendGamesForPlatform(string platform)
+    {
+        try
+        {
+            var allGames = PluginHelper.DataManager.GetAllGames()
+                .Where(g => g.Platform == platform);
+
+            var response = new GamesResponseEvent { Platform = platform };
+
+            foreach (var game in allGames)
+            {
+                var gameInfo = new GameInfo
+                {
+                    Id = game.Id,
+                    Title = game.Title,
+                    Platform = game.Platform
+                };
+
+                // Include additional applications (secondary discs, merged games, etc.)
+                var additionalApps = game.GetAllAdditionalApplications();
+                if (additionalApps != null)
+                {
+                    foreach (var app in additionalApps)
+                    {
+                        gameInfo.AdditionalApps.Add(new AdditionalAppInfo
+                        {
+                            Id = app.Id,
+                            Name = app.Name
+                        });
+                    }
+                }
+
+                response.Games.Add(gameInfo);
+            }
+
+            SendEvent(response);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Failed to get games for {platform}: {ex.Message}");
+            SendEvent(new GamesResponseEvent { Platform = platform, Error = ex.Message });
         }
     }
 
@@ -517,6 +629,7 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     {
         public string? Command { get; set; }
         public string? Id { get; set; }
+        public string? Platform { get; set; }
     }
 
     private class PlatformInfo
@@ -529,6 +642,28 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     {
         public string Event { get; set; } = "Platforms";
         public List<PlatformInfo> Platforms { get; set; } = new();
+    }
+
+    private class AdditionalAppInfo
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+    }
+
+    private class GameInfo
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Platform { get; set; } = string.Empty;
+        public List<AdditionalAppInfo> AdditionalApps { get; set; } = new();
+    }
+
+    private class GamesResponseEvent
+    {
+        public string Event { get; set; } = "Games";
+        public string Platform { get; set; } = string.Empty;
+        public string? Error { get; set; }
+        public List<GameInfo> Games { get; set; } = new();
     }
 
     #endregion
