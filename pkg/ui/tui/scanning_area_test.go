@@ -1,5 +1,5 @@
 // Zaparoo Core
-// Copyright (c) 2025 The Zaparoo Project Contributors.
+// Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // This file is part of Zaparoo Core.
@@ -137,9 +137,6 @@ func TestScanningArea_SetReaderInfo(t *testing.T) {
 	// Set zero readers - should transition to no reader
 	sa.SetReaderInfo(0, "")
 	assert.Equal(t, ScanStateNoReader, sa.state)
-
-	// Clean up animation if any
-	sa.Stop()
 }
 
 func TestScanningArea_SetTokenInfo(t *testing.T) {
@@ -159,9 +156,6 @@ func TestScanningArea_SetTokenInfo(t *testing.T) {
 	assert.Equal(t, "2025-01-01 12:00:00", sa.tokenInfo.Time)
 	assert.Equal(t, "ABCD1234", sa.tokenInfo.UID)
 	assert.Equal(t, "Super Mario Bros", sa.tokenInfo.Value)
-
-	// Clean up animation if any
-	sa.Stop()
 }
 
 func TestScanningArea_ClearToken(t *testing.T) {
@@ -189,9 +183,6 @@ func TestScanningArea_ClearToken(t *testing.T) {
 	sa.SetReaderInfo(0, "")
 	sa.ClearToken()
 	assert.Equal(t, ScanStateNoReader, sa.state)
-
-	// Clean up
-	sa.Stop()
 }
 
 func TestScanningArea_StateTransitions(t *testing.T) {
@@ -218,7 +209,4 @@ func TestScanningArea_StateTransitions(t *testing.T) {
 	// Waiting -> NoReader
 	sa.SetState(ScanStateNoReader)
 	assert.Equal(t, ScanStateNoReader, sa.state)
-
-	// Clean up
-	sa.Stop()
 }

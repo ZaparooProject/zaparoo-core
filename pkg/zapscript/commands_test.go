@@ -481,17 +481,17 @@ func TestIsValidCommand(t *testing.T) {
 		want    bool
 	}{
 		// Valid commands
-		{name: "launch", cmdName: models.ZapScriptCmdLaunch, want: true},
-		{name: "launch.system", cmdName: models.ZapScriptCmdLaunchSystem, want: true},
-		{name: "launch.random", cmdName: models.ZapScriptCmdLaunchRandom, want: true},
-		{name: "launch.search", cmdName: models.ZapScriptCmdLaunchSearch, want: true},
-		{name: "launch.title", cmdName: models.ZapScriptCmdLaunchTitle, want: true},
-		{name: "playlist.play", cmdName: models.ZapScriptCmdPlaylistPlay, want: true},
-		{name: "execute", cmdName: models.ZapScriptCmdExecute, want: true},
-		{name: "delay", cmdName: models.ZapScriptCmdDelay, want: true},
-		{name: "stop", cmdName: models.ZapScriptCmdStop, want: true},
-		{name: "http.get", cmdName: models.ZapScriptCmdHTTPGet, want: true},
-		{name: "input.keyboard", cmdName: models.ZapScriptCmdInputKeyboard, want: true},
+		{name: "launch", cmdName: zapscript.ZapScriptCmdLaunch, want: true},
+		{name: "launch.system", cmdName: zapscript.ZapScriptCmdLaunchSystem, want: true},
+		{name: "launch.random", cmdName: zapscript.ZapScriptCmdLaunchRandom, want: true},
+		{name: "launch.search", cmdName: zapscript.ZapScriptCmdLaunchSearch, want: true},
+		{name: "launch.title", cmdName: zapscript.ZapScriptCmdLaunchTitle, want: true},
+		{name: "playlist.play", cmdName: zapscript.ZapScriptCmdPlaylistPlay, want: true},
+		{name: "execute", cmdName: zapscript.ZapScriptCmdExecute, want: true},
+		{name: "delay", cmdName: zapscript.ZapScriptCmdDelay, want: true},
+		{name: "stop", cmdName: zapscript.ZapScriptCmdStop, want: true},
+		{name: "http.get", cmdName: zapscript.ZapScriptCmdHTTPGet, want: true},
+		{name: "input.keyboard", cmdName: zapscript.ZapScriptCmdInputKeyboard, want: true},
 		// Invalid commands
 		{name: "unknown command", cmdName: "unknown.cmd", want: false},
 		{name: "empty string", cmdName: "", want: false},

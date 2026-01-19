@@ -541,7 +541,6 @@ func BuildMainPage(
 				select {
 				case <-notifyCtx.Done():
 					log.Debug().Msg("notification listener cancelled")
-					scanningArea.Stop()
 					return
 				default:
 				}

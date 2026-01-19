@@ -1,5 +1,5 @@
 // Zaparoo Core
-// Copyright (c) 2025 The Zaparoo Project Contributors.
+// Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // This file is part of Zaparoo Core.
@@ -21,7 +21,6 @@ package tui
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/gdamore/tcell/v2"
@@ -50,16 +49,13 @@ type ReaderInfo struct {
 	Count  int
 }
 
-// ScanningArea is a custom widget that displays NFC scanning status with animation.
+// ScanningArea is a custom widget that displays NFC scanning status.
 type ScanningArea struct {
 	*tview.Box
 	app        *tview.Application
-	animTicker *time.Ticker
-	animStop   chan struct{}
 	tokenInfo  *TokenInfo
 	readerInfo ReaderInfo
 	state      ScanState
-	animFrame  int
 	mu         syncutil.Mutex
 }
 
@@ -72,24 +68,11 @@ func NewScanningArea(app *tview.Application) *ScanningArea {
 	}
 }
 
-// SetState changes the current state and manages animation.
+// SetState changes the current state.
 func (sa *ScanningArea) SetState(state ScanState) *ScanningArea {
 	sa.mu.Lock()
 	defer sa.mu.Unlock()
-
-	oldState := sa.state
 	sa.state = state
-
-	// Start animation when entering waiting state
-	if state == ScanStateWaiting && oldState != ScanStateWaiting {
-		sa.startAnimation()
-	}
-
-	// Stop animation when leaving waiting state
-	if state != ScanStateWaiting && oldState == ScanStateWaiting {
-		sa.stopAnimation()
-	}
-
 	return sa
 }
 
@@ -138,53 +121,6 @@ func (sa *ScanningArea) ClearToken() *ScanningArea {
 	return sa
 }
 
-// Stop stops the animation ticker (call when leaving the page).
-func (sa *ScanningArea) Stop() {
-	sa.mu.Lock()
-	defer sa.mu.Unlock()
-	sa.stopAnimation()
-}
-
-// startAnimation starts the animation ticker goroutine.
-// Must be called with mutex held.
-func (sa *ScanningArea) startAnimation() {
-	if sa.animTicker != nil {
-		return // Already running
-	}
-
-	sa.animTicker = time.NewTicker(200 * time.Millisecond)
-	sa.animStop = make(chan struct{})
-
-	// Capture local references to avoid race with stopAnimation setting these to nil
-	ticker := sa.animTicker
-	stop := sa.animStop
-
-	go func() {
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				sa.mu.Lock()
-				sa.animFrame = (sa.animFrame + 1) % 6
-				sa.mu.Unlock()
-				sa.app.QueueUpdateDraw(func() {})
-			}
-		}
-	}()
-}
-
-// stopAnimation stops the animation ticker.
-// Must be called with mutex held.
-func (sa *ScanningArea) stopAnimation() {
-	if sa.animTicker != nil {
-		sa.animTicker.Stop()
-		close(sa.animStop)
-		sa.animTicker = nil
-		sa.animStop = nil
-	}
-}
-
 // Draw renders the scanning area based on current state.
 func (sa *ScanningArea) Draw(screen tcell.Screen) {
 	sa.DrawForSubclass(screen, sa)
@@ -196,7 +132,6 @@ func (sa *ScanningArea) Draw(screen tcell.Screen) {
 
 	sa.mu.Lock()
 	state := sa.state
-	frame := sa.animFrame
 	tokenInfo := sa.tokenInfo
 	readerInfo := sa.readerInfo
 	sa.mu.Unlock()
@@ -225,7 +160,7 @@ func (sa *ScanningArea) Draw(screen tcell.Screen) {
 	case ScanStateNoReader:
 		drawNoReader(screen, x, contentY, width, contentHeight, t)
 	case ScanStateWaiting:
-		drawWaiting(screen, x, contentY, width, contentHeight, frame, t)
+		drawWaiting(screen, x, contentY, width, contentHeight, t)
 	case ScanStateScanned:
 		drawScanned(screen, x, contentY, width, contentHeight, tokenInfo, t)
 	}
@@ -295,41 +230,31 @@ func drawNoReader(
 	drawCenteredText(screen, x, centerY, width, msg, style)
 }
 
-// drawWaiting renders the waiting state with animation.
+// drawWaiting renders the waiting state with a static indicator.
 func drawWaiting(
 	screen tcell.Screen,
 	x, y, width, height int,
-	frame int,
 	t *Theme,
 ) {
 	if height < 2 {
 		return
 	}
 
-	// Calculate vertical center for wave + text
+	// Calculate vertical center for indicator + text
 	centerY := y + height/2 - 1
 
-	// Draw animated wave with color gradient (inner bright, outer dim)
-	drawWaveFrame(screen, x, centerY, width, frame, t)
+	// Draw static indicator
+	drawWaitingIndicator(screen, x, centerY, width, t)
 
-	// Draw instruction text below (white/primary color)
+	// Draw instruction text below
 	textStyle := tcell.StyleDefault.
 		Foreground(t.PrimaryTextColor).
 		Background(t.PrimitiveBackgroundColor)
 	drawCenteredText(screen, x, centerY+2, width, "Place token on reader", textStyle)
 }
 
-// drawWaveFrame draws a single frame of the wave animation with gradient colors.
-func drawWaveFrame(screen tcell.Screen, x, y, width, frame int, t *Theme) {
-	// Wave patterns for each frame
-	// Frame 0: •
-	// Frame 1: )•(
-	// Frame 2: ))•((
-	// Frame 3: )))•(((
-	// Frame 4: ))•((
-	// Frame 5: )•(
-
-	// Color styles: center brightest (border/accent), outer dimmer (secondary)
+// drawWaitingIndicator draws a static wave pattern with diamond center.
+func drawWaitingIndicator(screen tcell.Screen, x, y, width int, t *Theme) {
 	centerStyle := tcell.StyleDefault.
 		Foreground(t.BorderColor).
 		Background(t.PrimitiveBackgroundColor).
@@ -346,39 +271,16 @@ func drawWaveFrame(screen tcell.Screen, x, y, width, frame int, t *Theme) {
 		char  rune
 	}
 
-	// Build wave pattern based on frame
-	dot := tcell.RuneDiamond
-	var wave []waveChar
-	switch frame {
-	case 0:
-		wave = []waveChar{{char: dot, style: centerStyle}}
-	case 1, 5:
-		wave = []waveChar{
-			{char: ')', style: innerStyle},
-			{char: dot, style: centerStyle},
-			{char: '(', style: innerStyle},
-		}
-	case 2, 4:
-		wave = []waveChar{
-			{char: ')', style: outerStyle},
-			{char: ')', style: innerStyle},
-			{char: dot, style: centerStyle},
-			{char: '(', style: innerStyle},
-			{char: '(', style: outerStyle},
-		}
-	case 3:
-		wave = []waveChar{
-			{char: ')', style: outerStyle},
-			{char: ')', style: outerStyle},
-			{char: ')', style: innerStyle},
-			{char: dot, style: centerStyle},
-			{char: '(', style: innerStyle},
-			{char: '(', style: outerStyle},
-			{char: '(', style: outerStyle},
-		}
+	wave := []waveChar{
+		{')', outerStyle},
+		{')', outerStyle},
+		{')', innerStyle},
+		{tcell.RuneDiamond, centerStyle},
+		{'(', innerStyle},
+		{'(', outerStyle},
+		{'(', outerStyle},
 	}
 
-	// Center the wave
 	startX := x + (width-len(wave))/2
 	if startX < x {
 		startX = x

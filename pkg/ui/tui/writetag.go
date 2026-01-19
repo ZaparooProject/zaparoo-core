@@ -23,8 +23,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
+	"github.com/ZaparooProject/go-zapscript"
+	libzapscript "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -36,7 +36,7 @@ func validateZapScript(text string) (valid bool, message string) {
 	}
 
 	t := CurrentTheme()
-	reader := parser.NewParser(text)
+	reader := zapscript.NewParser(text)
 	script, err := reader.ParseScript()
 	if err != nil {
 		return false, fmt.Sprintf("[%s]Error: %s[-]", t.ErrorColorName, err.Error())
@@ -48,7 +48,7 @@ func validateZapScript(text string) (valid bool, message string) {
 
 	// Validate all command names are known
 	for _, cmd := range script.Cmds {
-		if !zapscript.IsValidCommand(cmd.Name) {
+		if !libzapscript.IsValidCommand(cmd.Name) {
 			return false, fmt.Sprintf("[%s]Unknown command: %s[-]", t.ErrorColorName, cmd.Name)
 		}
 	}
