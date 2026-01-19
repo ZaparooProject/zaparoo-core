@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/linux/installer"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
+	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )
 
@@ -281,18 +282,15 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 			return fmt.Errorf("error getting user home directory: %w", err)
 		}
 
-		app, err := tui.BuildMain(
-			cfg, pl,
-			func() bool { return helpers.IsServiceRunning(cfg) },
-			filepath.Join(home, "Desktop", "core.log"),
-			"desktop",
-		)
+		err = tui.BuildAndRetry(cfg, func() (*tview.Application, error) {
+			return tui.BuildMain(
+				cfg, pl,
+				func() bool { return helpers.IsServiceRunning(cfg) },
+				filepath.Join(home, "Desktop", "core.log"),
+				"desktop",
+			)
+		})
 		if err != nil {
-			log.Error().Err(err).Msgf("error building UI")
-			return fmt.Errorf("error building UI: %w", err)
-		}
-
-		if err = app.Run(); err != nil {
 			log.Error().Err(err).Msg("error running UI")
 			return fmt.Errorf("error running UI: %w", err)
 		}

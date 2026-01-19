@@ -23,6 +23,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -378,9 +380,16 @@ type PrimitiveWithSetBorder interface {
 // alternate settings on error.
 // It's used to work around issues on MiSTer, which has an unusual setup for
 // showing TUI applications.
+// When cfg is non-nil, ZapScript execution is disabled while the TUI is open.
 func BuildAndRetry(
+	cfg *config.Instance,
 	builder func() (*tview.Application, error),
 ) error {
+	if cfg != nil {
+		enableZapScript := client.DisableZapScript(cfg)
+		defer enableZapScript()
+	}
+
 	app, err := builder()
 	if err != nil {
 		return err

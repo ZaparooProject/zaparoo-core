@@ -31,7 +31,6 @@ import (
 	"runtime/debug"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -95,8 +94,7 @@ func run() error {
 	}
 
 	// display main info gui
-	enableZapScript := client.DisableZapScript(cfg)
-	err = tui.BuildAndRetry(func() (*tview.Application, error) {
+	err = tui.BuildAndRetry(cfg, func() (*tview.Application, error) {
 		logDestinationPath := path.Join("/storage", config.LogFile)
 		return tui.BuildMain(
 			cfg, pl, svc.Running,
@@ -104,10 +102,8 @@ func run() error {
 		)
 	})
 	if err != nil {
-		enableZapScript()
 		return fmt.Errorf("error displaying TUI: %w", err)
 	}
-	enableZapScript()
 
 	return nil
 }

@@ -34,7 +34,6 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config/migrate"
@@ -219,13 +218,10 @@ func run() error {
 	}
 
 	// display main info gui
-	enableZapScript := client.DisableZapScript(cfg)
 	err = displayServiceInfo(pl, cfg, svc)
 	if err != nil {
-		enableZapScript()
 		return fmt.Errorf("error displaying TUI: %w", err)
 	}
-	enableZapScript()
 
 	return nil
 }

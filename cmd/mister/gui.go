@@ -100,7 +100,7 @@ func tryAddStartup() error {
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
-		err := tui.BuildAndRetry(buildTheInstallRequestApp)
+		err := tui.BuildAndRetry(nil, buildTheInstallRequestApp)
 		if err != nil {
 			return fmt.Errorf("failed to show startup prompt: %w", err)
 		}
@@ -111,7 +111,7 @@ func tryAddStartup() error {
 
 func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *helpers.Service) error {
 	// Asturur > Wizzo
-	err := tui.BuildAndRetry(func() (*tview.Application, error) {
+	err := tui.BuildAndRetry(cfg, func() (*tview.Application, error) {
 		logDestinationPath := path.Join(misterconfig.DataDir, config.LogFile)
 		return tui.BuildMain(cfg, pl, service.Running, logDestinationPath, "SD card")
 	})
