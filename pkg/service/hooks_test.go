@@ -22,6 +22,7 @@ package service
 import (
 	"testing"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -30,7 +31,6 @@ import (
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -97,7 +97,7 @@ func TestRunHook_WithScannedContext(t *testing.T) {
 	env := setupHookTest(t)
 
 	scannedOpts := &zapscript.ExprEnvOptions{
-		Scanned: &parser.ExprEnvScanned{
+		Scanned: &gozapscript.ExprEnvScanned{
 			ID:    "test-token-id",
 			Value: "**launch:/games/sonic.bin",
 			Data:  "raw-ndef-data",
@@ -114,7 +114,7 @@ func TestRunHook_WithLaunchingContext(t *testing.T) {
 	env := setupHookTest(t)
 
 	launchingOpts := &zapscript.ExprEnvOptions{
-		Launching: &parser.ExprEnvLaunching{
+		Launching: &gozapscript.ExprEnvLaunching{
 			Path:       "/games/genesis/sonic.bin",
 			SystemID:   "genesis",
 			LauncherID: "retroarch",
@@ -132,7 +132,7 @@ func TestRunHook_SetsInHookContext(t *testing.T) {
 
 	// Pass opts without InHookContext set - runHook should set it internally
 	opts := &zapscript.ExprEnvOptions{
-		Scanned: &parser.ExprEnvScanned{
+		Scanned: &gozapscript.ExprEnvScanned{
 			ID: "test-id",
 		},
 		InHookContext: false, // Should be overridden to true by runHook
@@ -150,12 +150,12 @@ func TestRunHook_PreservesScannedAndLaunching(t *testing.T) {
 
 	// Provide both Scanned and Launching contexts
 	opts := &zapscript.ExprEnvOptions{
-		Scanned: &parser.ExprEnvScanned{
+		Scanned: &gozapscript.ExprEnvScanned{
 			ID:    "scanned-id",
 			Value: "scanned-value",
 			Data:  "scanned-data",
 		},
-		Launching: &parser.ExprEnvLaunching{
+		Launching: &gozapscript.ExprEnvLaunching{
 			Path:       "/path/to/game",
 			SystemID:   "snes",
 			LauncherID: "mister",

@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
@@ -38,18 +39,18 @@ import (
 // generateSlugCacheKey creates a consistent hash for a slug resolution query.
 // The cache key is based on systemID, slug, and sorted tag filters to ensure
 // deterministic caching regardless of input order.
-func generateSlugCacheKey(systemID, slug string, tagFilters []database.TagFilter) (string, error) {
+func generateSlugCacheKey(systemID, slug string, tagFilters []zapscript.TagFilter) (string, error) {
 	// Normalize inputs to ensure consistent hashing
 	type cacheKeyInput struct {
-		SystemID string               `json:"systemId"`
-		Slug     string               `json:"slug"`
-		Tags     []database.TagFilter `json:"tags"`
+		SystemID string                `json:"systemId"`
+		Slug     string                `json:"slug"`
+		Tags     []zapscript.TagFilter `json:"tags"`
 	}
 
 	normalized := cacheKeyInput{
 		SystemID: strings.ToLower(strings.TrimSpace(systemID)),
 		Slug:     strings.ToLower(strings.TrimSpace(slug)),
-		Tags:     make([]database.TagFilter, len(tagFilters)),
+		Tags:     make([]zapscript.TagFilter, len(tagFilters)),
 	}
 
 	// Copy and sort tags for consistent ordering (by Type, then Value, then Operator)
@@ -78,7 +79,7 @@ func generateSlugCacheKey(systemID, slug string, tagFilters []database.TagFilter
 // GetCachedSlugResolution retrieves a cached slug resolution result.
 // Returns the MediaDBID, strategy name, and true if found; otherwise returns 0, "", false.
 func (db *MediaDB) GetCachedSlugResolution(
-	ctx context.Context, systemID, slug string, tagFilters []database.TagFilter,
+	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
 ) (mediaDBID int64, strategy string, found bool) {
 	if db.sql == nil {
 		return 0, "", false
@@ -113,7 +114,7 @@ func (db *MediaDB) GetCachedSlugResolution(
 
 // SetCachedSlugResolution stores a successful slug resolution in the cache.
 func (db *MediaDB) SetCachedSlugResolution(
-	ctx context.Context, systemID, slug string, tagFilters []database.TagFilter, mediaDBID int64, strategy string,
+	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter, mediaDBID int64, strategy string,
 ) error {
 	if db.sql == nil {
 		return ErrNullSQL

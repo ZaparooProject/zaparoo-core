@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
@@ -472,7 +473,7 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 	}
 	variantGroups := [][]string{{"mario"}} // Single word with single variant
 	rawWords := []string{"mario"}
-	tags := []database.TagFilter{{Type: "genre", Value: "Action"}}
+	tags := []zapscript.TagFilter{{Type: "genre", Value: "Action"}}
 	includeName := false
 
 	// Mock first query: get media items (with EXISTS clause - no HAVING COUNT arg needed)
@@ -841,7 +842,7 @@ func TestSqlSearchMediaBySlug_Success(t *testing.T) {
 
 	systemID := "snes"
 	slug := "supermarioworld"
-	tags := []database.TagFilter{}
+	tags := []zapscript.TagFilter{}
 
 	// Mock main query
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
@@ -875,7 +876,7 @@ func TestSqlSearchMediaBySlug_WithTags(t *testing.T) {
 
 	systemID := "snes"
 	slug := "supermarioworld"
-	tags := []database.TagFilter{{Type: "region", Value: "usa"}, {Type: "genre", Value: "platform"}}
+	tags := []zapscript.TagFilter{{Type: "region", Value: "usa"}, {Type: "genre", Value: "platform"}}
 
 	// Mock main query with tag filtering (with EXISTS clauses - no HAVING COUNT arg)
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
@@ -917,7 +918,7 @@ func TestSqlSearchMediaBySlug_MultipleResults(t *testing.T) {
 
 	systemID := "genesis"
 	slug := "sonic"
-	tags := []database.TagFilter{}
+	tags := []zapscript.TagFilter{}
 
 	// Mock main query returning multiple results
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
@@ -961,7 +962,7 @@ func TestSqlSearchMediaBySlug_LoadsTagsWithoutFilters(t *testing.T) {
 
 	systemID := "snes"
 	slug := "supermarioworld"
-	tags := []database.TagFilter{}
+	tags := []zapscript.TagFilter{}
 
 	// Mock main query
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
@@ -1007,7 +1008,7 @@ func TestSqlSearchMediaBySlug_NoResults(t *testing.T) {
 
 	systemID := "nes"
 	slug := "nonexistent"
-	tags := []database.TagFilter{}
+	tags := []zapscript.TagFilter{}
 
 	// Mock main query returning no results
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
@@ -1030,7 +1031,7 @@ func TestSqlSearchMediaBySlug_WithTagsNoResults(t *testing.T) {
 
 	systemID := "snes"
 	slug := "supermarioworld"
-	tags := []database.TagFilter{{Type: "region", Value: "japan"}}
+	tags := []zapscript.TagFilter{{Type: "region", Value: "japan"}}
 
 	// Mock main query returning no results (tag filter too restrictive, with EXISTS - no HAVING COUNT arg)
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
@@ -1053,7 +1054,7 @@ func TestSqlSearchMediaBySlug_QueryError(t *testing.T) {
 
 	systemID := "snes"
 	slug := "supermarioworld"
-	tags := []database.TagFilter{}
+	tags := []zapscript.TagFilter{}
 
 	// Mock main query error
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
@@ -1077,7 +1078,7 @@ func TestSqlSearchMediaBySlug_TagsQueryError(t *testing.T) {
 
 	systemID := "snes"
 	slug := "supermarioworld"
-	tags := []database.TagFilter{{Type: "region", Value: "usa"}}
+	tags := []zapscript.TagFilter{{Type: "region", Value: "usa"}}
 
 	// Mock main query success (with EXISTS clause - no HAVING COUNT arg)
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
@@ -1115,7 +1116,7 @@ func TestSqlSearchMediaBySlug_ScanError(t *testing.T) {
 
 	systemID := "snes"
 	slug := "supermarioworld"
-	tags := []database.TagFilter{}
+	tags := []zapscript.TagFilter{}
 
 	// Mock main query with wrong column count (scan error)
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
@@ -1140,7 +1141,7 @@ func TestSqlSearchMediaBySlug_TagsScanError(t *testing.T) {
 
 	systemID := "snes"
 	slug := "supermarioworld"
-	tags := []database.TagFilter{{Type: "region", Value: "usa"}}
+	tags := []zapscript.TagFilter{{Type: "region", Value: "usa"}}
 
 	// Mock main query success (with EXISTS - no HAVING COUNT arg)
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").

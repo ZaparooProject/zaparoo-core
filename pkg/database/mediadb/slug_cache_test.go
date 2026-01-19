@@ -23,6 +23,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -78,7 +79,7 @@ func TestGenerateSlugCacheKey_ConsistentHashing(t *testing.T) {
 		name       string
 		systemID   string
 		slug       string
-		tagFilters []database.TagFilter
+		tagFilters []zapscript.TagFilter
 	}{
 		{
 			name:       "simple case",
@@ -90,7 +91,7 @@ func TestGenerateSlugCacheKey_ConsistentHashing(t *testing.T) {
 			name:     "with single tag",
 			systemID: "SNES",
 			slug:     "zelda",
-			tagFilters: []database.TagFilter{
+			tagFilters: []zapscript.TagFilter{
 				{Type: "region", Value: "usa"},
 			},
 		},
@@ -98,7 +99,7 @@ func TestGenerateSlugCacheKey_ConsistentHashing(t *testing.T) {
 			name:     "with multiple tags",
 			systemID: "Genesis",
 			slug:     "sonic",
-			tagFilters: []database.TagFilter{
+			tagFilters: []zapscript.TagFilter{
 				{Type: "region", Value: "usa"},
 				{Type: "genre", Value: "platform"},
 			},
@@ -124,13 +125,13 @@ func TestGenerateSlugCacheKey_ConsistentHashing(t *testing.T) {
 func TestGenerateSlugCacheKey_TagOrderIndependence(t *testing.T) {
 	t.Parallel()
 
-	tags1 := []database.TagFilter{
+	tags1 := []zapscript.TagFilter{
 		{Type: "region", Value: "usa"},
 		{Type: "genre", Value: "platform"},
 		{Type: "lang", Value: "en"},
 	}
 
-	tags2 := []database.TagFilter{
+	tags2 := []zapscript.TagFilter{
 		{Type: "lang", Value: "en"},
 		{Type: "region", Value: "usa"},
 		{Type: "genre", Value: "platform"},
@@ -178,7 +179,7 @@ func TestGenerateSlugCacheKey_EmptyTags(t *testing.T) {
 	keyNil, errNil := generateSlugCacheKey("NES", "mario", nil)
 	require.NoError(t, errNil)
 
-	keyEmpty, errEmpty := generateSlugCacheKey("NES", "mario", []database.TagFilter{})
+	keyEmpty, errEmpty := generateSlugCacheKey("NES", "mario", []zapscript.TagFilter{})
 	require.NoError(t, errEmpty)
 
 	assert.Equal(t, keyNil, keyEmpty, "nil and empty tag slices should produce same hash")
@@ -320,12 +321,12 @@ func TestSlugCache_WithTagFilters_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set entry with USA region tag
-	usaTags := []database.TagFilter{{Type: "region", Value: "usa"}}
+	usaTags := []zapscript.TagFilter{{Type: "region", Value: "usa"}}
 	err = mediaDB.SetCachedSlugResolution(ctx, systemID, slug, usaTags, media2DBID, "usa_region")
 	require.NoError(t, err)
 
 	// Set entry with multiple tags
-	multiTags := []database.TagFilter{
+	multiTags := []zapscript.TagFilter{
 		{Type: "region", Value: "usa"},
 		{Type: "genre", Value: "platform"},
 	}

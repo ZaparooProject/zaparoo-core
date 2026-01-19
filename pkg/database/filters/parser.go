@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 )
 
@@ -41,7 +41,7 @@ const (
 // Format: "type:value" or "+type:value" (AND), "-type:value" (NOT), "~type:value" (OR)
 // Example: []string{"region:usa", "-unfinished:demo", "~lang:en", "~lang:es"}
 // Returns normalized, deduplicated filters.
-func ParseTagFilters(tagSlice []string) ([]database.TagFilter, error) {
+func ParseTagFilters(tagSlice []string) ([]zapscript.TagFilter, error) {
 	if len(tagSlice) > maxTagsCount {
 		return nil, fmt.Errorf("exceeded maximum number of tags: %d (max: %d)", len(tagSlice), maxTagsCount)
 	}
@@ -50,10 +50,10 @@ func ParseTagFilters(tagSlice []string) ([]database.TagFilter, error) {
 	type filterKey struct {
 		typ      string
 		value    string
-		operator database.TagOperator
+		operator zapscript.TagOperator
 	}
 	seenFilters := make(map[filterKey]bool)
-	result := make([]database.TagFilter, 0, len(tagSlice))
+	result := make([]zapscript.TagFilter, 0, len(tagSlice))
 
 	for _, tagStr := range tagSlice {
 		trimmedTag := strings.TrimSpace(tagStr)
@@ -66,17 +66,17 @@ func ParseTagFilters(tagSlice []string) ([]database.TagFilter, error) {
 		}
 
 		// Parse operator prefix
-		operator := database.TagOperatorAND // default
+		operator := zapscript.TagOperatorAND // default
 		if trimmedTag != "" {
 			switch trimmedTag[0] {
 			case '+':
-				operator = database.TagOperatorAND
+				operator = zapscript.TagOperatorAND
 				trimmedTag = trimmedTag[1:] // Remove operator prefix
 			case '-':
-				operator = database.TagOperatorNOT
+				operator = zapscript.TagOperatorNOT
 				trimmedTag = trimmedTag[1:] // Remove operator prefix
 			case '~':
-				operator = database.TagOperatorOR
+				operator = zapscript.TagOperatorOR
 				trimmedTag = trimmedTag[1:] // Remove operator prefix
 			}
 		}
@@ -99,7 +99,7 @@ func ParseTagFilters(tagSlice []string) ([]database.TagFilter, error) {
 			return nil, fmt.Errorf("invalid tag %q: type and value cannot be empty after normalization", tagStr)
 		}
 
-		filter := database.TagFilter{
+		filter := zapscript.TagFilter{
 			Type:     normalizedType,
 			Value:    normalizedValue,
 			Operator: operator,

@@ -22,8 +22,7 @@ package advargs
 import (
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -61,7 +60,7 @@ func TestParse_GlobalArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var args advargtypes.GlobalArgs
+			var args zapscript.GlobalArgs
 			err := Parse(tt.raw, &args, nil)
 
 			if tt.wantErr {
@@ -97,7 +96,7 @@ func TestGlobalArgs_ShouldRun(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			args := advargtypes.GlobalArgs{When: tt.when}
+			args := zapscript.GlobalArgs{When: tt.when}
 			assert.Equal(t, tt.want, ShouldRun(args))
 		})
 	}
@@ -110,7 +109,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 
 	tests := []struct {
 		raw        map[string]string
-		check      func(t *testing.T, args *advargtypes.LaunchRandomArgs)
+		check      func(t *testing.T, args *zapscript.LaunchRandomArgs)
 		name       string
 		errContain string
 		wantErr    bool
@@ -119,7 +118,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 			name:    "empty args",
 			raw:     map[string]string{},
 			wantErr: false,
-			check: func(t *testing.T, args *advargtypes.LaunchRandomArgs) {
+			check: func(t *testing.T, args *zapscript.LaunchRandomArgs) {
 				assert.Empty(t, args.Launcher)
 				assert.Empty(t, args.Action)
 				assert.Nil(t, args.Tags)
@@ -129,7 +128,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 			name:    "valid launcher",
 			raw:     map[string]string{"launcher": "steam"},
 			wantErr: false,
-			check: func(t *testing.T, args *advargtypes.LaunchRandomArgs) {
+			check: func(t *testing.T, args *zapscript.LaunchRandomArgs) {
 				assert.Equal(t, "steam", args.Launcher)
 			},
 		},
@@ -143,7 +142,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 			name:    "valid action run",
 			raw:     map[string]string{"action": "run"},
 			wantErr: false,
-			check: func(t *testing.T, args *advargtypes.LaunchRandomArgs) {
+			check: func(t *testing.T, args *zapscript.LaunchRandomArgs) {
 				assert.Equal(t, "run", args.Action)
 			},
 		},
@@ -151,7 +150,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 			name:    "valid action details",
 			raw:     map[string]string{"action": "details"},
 			wantErr: false,
-			check: func(t *testing.T, args *advargtypes.LaunchRandomArgs) {
+			check: func(t *testing.T, args *zapscript.LaunchRandomArgs) {
 				assert.Equal(t, "details", args.Action)
 			},
 		},
@@ -165,7 +164,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 			name:    "valid tags",
 			raw:     map[string]string{"tags": "region:usa,type:game"},
 			wantErr: false,
-			check: func(t *testing.T, args *advargtypes.LaunchRandomArgs) {
+			check: func(t *testing.T, args *zapscript.LaunchRandomArgs) {
 				require.Len(t, args.Tags, 2)
 				assert.Equal(t, "region", args.Tags[0].Type)
 				assert.Equal(t, "usa", args.Tags[0].Value)
@@ -183,7 +182,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var args advargtypes.LaunchRandomArgs
+			var args zapscript.LaunchRandomArgs
 			err := Parse(tt.raw, &args, ctx)
 
 			if tt.wantErr {
@@ -209,7 +208,7 @@ func TestParse_LaunchArgs(t *testing.T) {
 
 	tests := []struct {
 		raw        map[string]string
-		check      func(t *testing.T, args *advargtypes.LaunchArgs)
+		check      func(t *testing.T, args *zapscript.LaunchArgs)
 		name       string
 		errContain string
 		wantErr    bool
@@ -221,7 +220,7 @@ func TestParse_LaunchArgs(t *testing.T) {
 				"name": "test", "pre_notice": "notice",
 			},
 			wantErr: false,
-			check: func(t *testing.T, args *advargtypes.LaunchArgs) {
+			check: func(t *testing.T, args *zapscript.LaunchArgs) {
 				assert.Equal(t, "steam", args.Launcher)
 				assert.Equal(t, "snes", args.System)
 				assert.Equal(t, "run", args.Action)
@@ -241,7 +240,7 @@ func TestParse_LaunchArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var args advargtypes.LaunchArgs
+			var args zapscript.LaunchArgs
 			err := Parse(tt.raw, &args, ctx)
 
 			if tt.wantErr {
@@ -294,7 +293,7 @@ func TestParse_PlaylistArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var args advargtypes.PlaylistArgs
+			var args zapscript.PlaylistArgs
 			err := Parse(tt.raw, &args, nil)
 
 			if tt.wantErr {
@@ -317,7 +316,7 @@ func TestParse_TagFiltersDecoding(t *testing.T) {
 	tests := []struct {
 		name     string
 		tagsStr  string
-		wantTags []database.TagFilter
+		wantTags []zapscript.TagFilter
 		wantErr  bool
 		wantNil  bool
 	}{
@@ -331,17 +330,17 @@ func TestParse_TagFiltersDecoding(t *testing.T) {
 			name:    "single tag",
 			tagsStr: "region:usa",
 			wantErr: false,
-			wantTags: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+			wantTags: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:    "multiple tags",
 			tagsStr: "region:usa,type:game",
 			wantErr: false,
-			wantTags: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
-				{Type: "type", Value: "game", Operator: database.TagOperatorAND},
+			wantTags: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
+				{Type: "type", Value: "game", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
@@ -349,24 +348,24 @@ func TestParse_TagFiltersDecoding(t *testing.T) {
 			name:    "tag with explicit AND prefix",
 			tagsStr: "+region:usa",
 			wantErr: false,
-			wantTags: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+			wantTags: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
 			name:    "tag with OR operator (tilde prefix)",
 			tagsStr: "~region:usa",
 			wantErr: false,
-			wantTags: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorOR},
+			wantTags: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorOR},
 			},
 		},
 		{
 			name:    "tag with NOT operator",
 			tagsStr: "-region:usa",
 			wantErr: false,
-			wantTags: []database.TagFilter{
-				{Type: "region", Value: "usa", Operator: database.TagOperatorNOT},
+			wantTags: []zapscript.TagFilter{
+				{Type: "region", Value: "usa", Operator: zapscript.TagOperatorNOT},
 			},
 		},
 	}
@@ -380,7 +379,7 @@ func TestParse_TagFiltersDecoding(t *testing.T) {
 				raw["tags"] = tt.tagsStr
 			}
 
-			var args advargtypes.LaunchRandomArgs
+			var args zapscript.LaunchRandomArgs
 			err := Parse(raw, &args, nil)
 
 			if tt.wantErr {
@@ -406,7 +405,7 @@ func TestParser_NewParser(t *testing.T) {
 	require.NotNil(t, p.validate)
 
 	// Verify can parse successfully
-	var args advargtypes.GlobalArgs
+	var args zapscript.GlobalArgs
 	err := p.Parse(map[string]string{"when": "true"}, &args, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "true", args.When)
@@ -442,7 +441,7 @@ func TestParse_LauncherValidation_CaseInsensitive(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var args advargtypes.LaunchRandomArgs
+			var args zapscript.LaunchRandomArgs
 			err := Parse(map[string]string{"launcher": tt.launcher}, &args, ctx)
 
 			if tt.wantErr {
@@ -460,7 +459,7 @@ func TestParse_LauncherValidation_NilContext(t *testing.T) {
 
 	// When no context is provided, launcher validation passes through
 	// (will fail at runtime if invalid, but allows parsing to succeed)
-	var args advargtypes.LaunchRandomArgs
+	var args zapscript.LaunchRandomArgs
 	err := Parse(map[string]string{"launcher": "any_launcher"}, &args, nil)
 
 	require.NoError(t, err)
@@ -471,7 +470,7 @@ func TestParse_UnknownArgument(t *testing.T) {
 	t.Parallel()
 
 	// Unknown arguments should fail with ErrorUnused
-	var args advargtypes.GlobalArgs
+	var args zapscript.GlobalArgs
 	err := Parse(map[string]string{"unknown_key": "value"}, &args, nil)
 
 	require.Error(t, err)
@@ -511,7 +510,7 @@ func TestParse_MisterScriptArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var args advargtypes.MisterScriptArgs
+			var args zapscript.MisterScriptArgs
 			err := Parse(tt.raw, &args, nil)
 
 			if tt.wantErr {
@@ -536,7 +535,7 @@ func TestParse_LaunchTitleArgs_Action(t *testing.T) {
 
 	tests := []struct {
 		raw        map[string]string
-		check      func(t *testing.T, args *advargtypes.LaunchTitleArgs)
+		check      func(t *testing.T, args *zapscript.LaunchTitleArgs)
 		name       string
 		errContain string
 		wantErr    bool
@@ -545,7 +544,7 @@ func TestParse_LaunchTitleArgs_Action(t *testing.T) {
 			name:    "empty args",
 			raw:     map[string]string{},
 			wantErr: false,
-			check: func(t *testing.T, args *advargtypes.LaunchTitleArgs) {
+			check: func(t *testing.T, args *zapscript.LaunchTitleArgs) {
 				assert.Empty(t, args.Launcher)
 				assert.Empty(t, args.Action)
 				assert.Nil(t, args.Tags)
@@ -556,7 +555,7 @@ func TestParse_LaunchTitleArgs_Action(t *testing.T) {
 			name:    "action=details (regression test for GH-462)",
 			raw:     map[string]string{"action": "details"},
 			wantErr: false,
-			check: func(t *testing.T, args *advargtypes.LaunchTitleArgs) {
+			check: func(t *testing.T, args *zapscript.LaunchTitleArgs) {
 				assert.Equal(t, "details", args.Action)
 			},
 		},
@@ -564,7 +563,7 @@ func TestParse_LaunchTitleArgs_Action(t *testing.T) {
 			name:    "action=run",
 			raw:     map[string]string{"action": "run"},
 			wantErr: false,
-			check: func(t *testing.T, args *advargtypes.LaunchTitleArgs) {
+			check: func(t *testing.T, args *zapscript.LaunchTitleArgs) {
 				assert.Equal(t, "run", args.Action)
 			},
 		},
@@ -578,7 +577,7 @@ func TestParse_LaunchTitleArgs_Action(t *testing.T) {
 			name:    "launcher with action",
 			raw:     map[string]string{"launcher": "Steam", "action": "details"},
 			wantErr: false,
-			check: func(t *testing.T, args *advargtypes.LaunchTitleArgs) {
+			check: func(t *testing.T, args *zapscript.LaunchTitleArgs) {
 				assert.Equal(t, "Steam", args.Launcher)
 				assert.Equal(t, "details", args.Action)
 			},
@@ -587,7 +586,7 @@ func TestParse_LaunchTitleArgs_Action(t *testing.T) {
 			name:    "all fields combined",
 			raw:     map[string]string{"launcher": "Steam", "action": "details", "tags": "region:usa"},
 			wantErr: false,
-			check: func(t *testing.T, args *advargtypes.LaunchTitleArgs) {
+			check: func(t *testing.T, args *zapscript.LaunchTitleArgs) {
 				assert.Equal(t, "Steam", args.Launcher)
 				assert.Equal(t, "details", args.Action)
 				require.Len(t, args.Tags, 1)
@@ -601,7 +600,7 @@ func TestParse_LaunchTitleArgs_Action(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var args advargtypes.LaunchTitleArgs
+			var args zapscript.LaunchTitleArgs
 			err := Parse(tt.raw, &args, ctx)
 
 			if tt.wantErr {

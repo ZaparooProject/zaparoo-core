@@ -22,6 +22,7 @@ package titles
 import (
 	"testing"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -167,7 +168,7 @@ func TestHasAllTagsOperators(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		tagFilters []database.TagFilter
+		tagFilters []zapscript.TagFilter
 		result     database.SearchResultWithCursor
 		expected   bool
 	}{
@@ -179,9 +180,9 @@ func TestHasAllTagsOperators(t *testing.T) {
 					{Type: "lang", Tag: "en"},
 				},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
-				{Type: "lang", Value: "en", Operator: database.TagOperatorAND},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorAND},
 			},
 			expected: true,
 		},
@@ -192,9 +193,9 @@ func TestHasAllTagsOperators(t *testing.T) {
 					{Type: "region", Tag: "us"},
 				},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
-				{Type: "lang", Value: "en", Operator: database.TagOperatorAND},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorAND},
 			},
 			expected: false,
 		},
@@ -205,8 +206,8 @@ func TestHasAllTagsOperators(t *testing.T) {
 					{Type: "unfinished", Tag: "beta"},
 				},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
 			},
 			expected: false,
 		},
@@ -217,8 +218,8 @@ func TestHasAllTagsOperators(t *testing.T) {
 					{Type: "region", Tag: "us"},
 				},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
 			},
 			expected: true,
 		},
@@ -229,9 +230,9 @@ func TestHasAllTagsOperators(t *testing.T) {
 					{Type: "region", Tag: "us"},
 				},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorOR},
-				{Type: "region", Value: "eu", Operator: database.TagOperatorOR},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorOR},
+				{Type: "region", Value: "eu", Operator: zapscript.TagOperatorOR},
 			},
 			expected: true,
 		},
@@ -242,9 +243,9 @@ func TestHasAllTagsOperators(t *testing.T) {
 					{Type: "region", Tag: "jp"},
 				},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorOR},
-				{Type: "region", Value: "eu", Operator: database.TagOperatorOR},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorOR},
+				{Type: "region", Value: "eu", Operator: zapscript.TagOperatorOR},
 			},
 			expected: false,
 		},
@@ -256,9 +257,9 @@ func TestHasAllTagsOperators(t *testing.T) {
 					{Type: "lang", Tag: "en"},
 				},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
-				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
 			},
 			expected: true,
 		},
@@ -270,9 +271,9 @@ func TestHasAllTagsOperators(t *testing.T) {
 					{Type: "unfinished", Tag: "beta"},
 				},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
-				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "unfinished", Value: "beta", Operator: zapscript.TagOperatorNOT},
 			},
 			expected: false,
 		},
@@ -284,10 +285,10 @@ func TestHasAllTagsOperators(t *testing.T) {
 					{Type: "lang", Tag: "en"},
 				},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
-				{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
-				{Type: "lang", Value: "es", Operator: database.TagOperatorOR},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
+				{Type: "lang", Value: "es", Operator: zapscript.TagOperatorOR},
 			},
 			expected: true,
 		},
@@ -296,7 +297,7 @@ func TestHasAllTagsOperators(t *testing.T) {
 			result: database.SearchResultWithCursor{
 				Tags: []database.TagInfo{{Type: "region", Tag: "us"}},
 			},
-			tagFilters: []database.TagFilter{},
+			tagFilters: []zapscript.TagFilter{},
 			expected:   true,
 		},
 	}
@@ -435,47 +436,47 @@ func TestFilterByTagsMultipleResults(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		tagFilters    []database.TagFilter
+		tagFilters    []zapscript.TagFilter
 		expectedNames []string
 		expectedCount int
 	}{
 		{
 			name: "filter by single tag",
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
 			},
 			expectedCount: 1,
 			expectedNames: []string{"Game (USA)"},
 		},
 		{
 			name: "filter by multiple AND tags",
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "eu", Operator: database.TagOperatorAND},
-				{Type: "lang", Value: "en", Operator: database.TagOperatorAND},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "eu", Operator: zapscript.TagOperatorAND},
+				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorAND},
 			},
 			expectedCount: 1,
 			expectedNames: []string{"Game (Europe)"},
 		},
 		{
 			name: "filter with OR - matches multiple",
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorOR},
-				{Type: "region", Value: "eu", Operator: database.TagOperatorOR},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorOR},
+				{Type: "region", Value: "eu", Operator: zapscript.TagOperatorOR},
 			},
 			expectedCount: 2,
 			expectedNames: []string{"Game (USA)", "Game (Europe)"},
 		},
 		{
 			name: "filter with NOT - excludes",
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "jp", Operator: database.TagOperatorNOT},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "jp", Operator: zapscript.TagOperatorNOT},
 			},
 			expectedCount: 2,
 			expectedNames: []string{"Game (USA)", "Game (Europe)"},
 		},
 		{
 			name:          "no filters - returns all",
-			tagFilters:    []database.TagFilter{},
+			tagFilters:    []zapscript.TagFilter{},
 			expectedCount: 3,
 			expectedNames: []string{"Game (USA)", "Game (Japan)", "Game (Europe)"},
 		},
@@ -996,7 +997,7 @@ func TestSelectBest_SingleResultVariant(t *testing.T) {
 
 			result, confidence := SelectBestResult(
 				tt.results,
-				[]database.TagFilter{},
+				[]zapscript.TagFilter{},
 				nil, // cfg
 				tt.matchQuality,
 				[]platforms.Launcher{},
@@ -1018,7 +1019,7 @@ func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 	tests := []struct {
 		name        string
 		description string
-		tagFilters  []database.TagFilter
+		tagFilters  []zapscript.TagFilter
 		result      database.SearchResultWithCursor
 		minExpected float64
 		maxExpected float64
@@ -1028,8 +1029,8 @@ func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 			result: database.SearchResultWithCursor{
 				Tags: []database.TagInfo{{Type: "year", Tag: "1991"}},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "year", Value: "1991", Operator: zapscript.TagOperatorAND},
 			},
 			minExpected: 0.99,
 			maxExpected: 1.0,
@@ -1040,8 +1041,8 @@ func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 			result: database.SearchResultWithCursor{
 				Tags: []database.TagInfo{{Type: "year", Tag: "1992"}},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "year", Value: "1991", Operator: zapscript.TagOperatorAND},
 			},
 			// Year penalty is 0.05 vs normal 0.2 penalty
 			// With 1 filter and 0 matches: matchRatio = 0, penalty = 0.05
@@ -1057,8 +1058,8 @@ func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 			result: database.SearchResultWithCursor{
 				Tags: []database.TagInfo{{Type: "region", Tag: "us"}},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "year", Value: "1991", Operator: zapscript.TagOperatorAND},
 			},
 			// Year not present = no conflict counted
 			// matchRatio = 0/1 = 0, penalty = 0
@@ -1071,8 +1072,8 @@ func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 			result: database.SearchResultWithCursor{
 				Tags: []database.TagInfo{{Type: "region", Tag: "jp"}},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
 			},
 			// Normal penalty: matchRatio = 0, penalty = 0.2
 			// confidence = 0 - 0.2 = -0.2 (clamped to 0)
@@ -1088,9 +1089,9 @@ func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 					{Type: "region", Tag: "us"},
 				},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "year", Value: "1991", Operator: zapscript.TagOperatorAND},
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
 			},
 			// 2 filters total
 			// region matches (matched = 1)
@@ -1110,9 +1111,9 @@ func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 					{Type: "region", Tag: "wrong"},
 				},
 			},
-			tagFilters: []database.TagFilter{
-				{Type: "year", Value: "1991", Operator: database.TagOperatorAND},
-				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+			tagFilters: []zapscript.TagFilter{
+				{Type: "year", Value: "1991", Operator: zapscript.TagOperatorAND},
+				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
 			},
 			// 2 filters, 0 matches
 			// 1 year conflict (0.05 penalty) + 1 region conflict (0.2 penalty)

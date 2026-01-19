@@ -23,12 +23,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
-	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/rs/zerolog/log"
 )
 
@@ -79,7 +79,7 @@ func ResolveAction(opts *LaunchOptions, cfg *config.Instance, launcher *Launcher
 
 // IsActionDetails returns true if action is "details" (case-insensitive).
 func IsActionDetails(action string) bool {
-	return strings.EqualFold(action, advargtypes.ActionDetails)
+	return strings.EqualFold(action, zapscript.ActionDetails)
 }
 
 // DoLaunch launches the given path and updates the active media with it if

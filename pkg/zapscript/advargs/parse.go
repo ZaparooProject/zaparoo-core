@@ -26,11 +26,10 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
-	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/go-playground/validator/v10"
 	"github.com/go-viper/mapstructure/v2"
 )
@@ -131,19 +130,19 @@ func formatValidationError(fe validator.FieldError) string {
 	}
 }
 
-// stringToTagFiltersHook converts a string to []database.TagFilter.
+// stringToTagFiltersHook converts a string to []zapscript.TagFilter.
 func stringToTagFiltersHook() mapstructure.DecodeHookFunc {
 	return func(from reflect.Type, to reflect.Type, data any) (any, error) {
 		if from.Kind() != reflect.String {
 			return data, nil
 		}
-		if to != reflect.TypeOf([]database.TagFilter{}) {
+		if to != reflect.TypeOf([]zapscript.TagFilter{}) {
 			return data, nil
 		}
 
 		str, ok := data.(string)
 		if !ok || str == "" {
-			return []database.TagFilter{}, nil
+			return []zapscript.TagFilter{}, nil
 		}
 
 		parts := strings.Split(str, ",")
@@ -157,7 +156,7 @@ func stringToTagFiltersHook() mapstructure.DecodeHookFunc {
 }
 
 // ShouldRun returns true if the command should execute based on the When condition.
-func ShouldRun(g advargtypes.GlobalArgs) bool {
+func ShouldRun(g zapscript.GlobalArgs) bool {
 	if g.When == "" {
 		return true
 	}

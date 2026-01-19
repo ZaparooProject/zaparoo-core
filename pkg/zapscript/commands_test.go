@@ -22,12 +22,11 @@ package zapscript
 import (
 	"testing"
 
+	"github.com/ZaparooProject/go-zapscript"
 	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -42,201 +41,201 @@ func TestIsMediaLaunchingCommand(t *testing.T) {
 		// Launch commands - should be blocked
 		{
 			name:    "launch command",
-			cmdName: models.ZapScriptCmdLaunch,
+			cmdName: zapscript.ZapScriptCmdLaunch,
 			want:    true,
 		},
 		{
 			name:    "launch.system command",
-			cmdName: models.ZapScriptCmdLaunchSystem,
+			cmdName: zapscript.ZapScriptCmdLaunchSystem,
 			want:    true,
 		},
 		{
 			name:    "launch.random command",
-			cmdName: models.ZapScriptCmdLaunchRandom,
+			cmdName: zapscript.ZapScriptCmdLaunchRandom,
 			want:    true,
 		},
 		{
 			name:    "launch.search command",
-			cmdName: models.ZapScriptCmdLaunchSearch,
+			cmdName: zapscript.ZapScriptCmdLaunchSearch,
 			want:    true,
 		},
 		{
 			name:    "launch.title command",
-			cmdName: models.ZapScriptCmdLaunchTitle,
+			cmdName: zapscript.ZapScriptCmdLaunchTitle,
 			want:    true,
 		},
 
 		// Playlist commands that launch media - should be blocked
 		{
 			name:    "playlist.play command",
-			cmdName: models.ZapScriptCmdPlaylistPlay,
+			cmdName: zapscript.ZapScriptCmdPlaylistPlay,
 			want:    true,
 		},
 		{
 			name:    "playlist.next command",
-			cmdName: models.ZapScriptCmdPlaylistNext,
+			cmdName: zapscript.ZapScriptCmdPlaylistNext,
 			want:    true,
 		},
 		{
 			name:    "playlist.previous command",
-			cmdName: models.ZapScriptCmdPlaylistPrevious,
+			cmdName: zapscript.ZapScriptCmdPlaylistPrevious,
 			want:    true,
 		},
 		{
 			name:    "playlist.goto command",
-			cmdName: models.ZapScriptCmdPlaylistGoto,
+			cmdName: zapscript.ZapScriptCmdPlaylistGoto,
 			want:    true,
 		},
 		{
 			name:    "playlist.load command",
-			cmdName: models.ZapScriptCmdPlaylistLoad,
+			cmdName: zapscript.ZapScriptCmdPlaylistLoad,
 			want:    true,
 		},
 		{
 			name:    "playlist.open command",
-			cmdName: models.ZapScriptCmdPlaylistOpen,
+			cmdName: zapscript.ZapScriptCmdPlaylistOpen,
 			want:    true,
 		},
 
 		// Playlist commands that don't launch media - should NOT be blocked
 		{
 			name:    "playlist.stop command",
-			cmdName: models.ZapScriptCmdPlaylistStop,
+			cmdName: zapscript.ZapScriptCmdPlaylistStop,
 			want:    false,
 		},
 		{
 			name:    "playlist.pause command",
-			cmdName: models.ZapScriptCmdPlaylistPause,
+			cmdName: zapscript.ZapScriptCmdPlaylistPause,
 			want:    false,
 		},
 
 		// MiSTer commands
 		{
 			name:    "mister.mgl command - should be blocked",
-			cmdName: models.ZapScriptCmdMisterMGL,
+			cmdName: zapscript.ZapScriptCmdMisterMGL,
 			want:    true,
 		},
 		{
 			name:    "mister.core command - should NOT be blocked",
-			cmdName: models.ZapScriptCmdMisterCore,
+			cmdName: zapscript.ZapScriptCmdMisterCore,
 			want:    false,
 		},
 		{
 			name:    "mister.ini command - should NOT be blocked",
-			cmdName: models.ZapScriptCmdMisterINI,
+			cmdName: zapscript.ZapScriptCmdMisterINI,
 			want:    false,
 		},
 		{
 			name:    "mister.script command - should NOT be blocked",
-			cmdName: models.ZapScriptCmdMisterScript,
+			cmdName: zapscript.ZapScriptCmdMisterScript,
 			want:    false,
 		},
 
 		// Utility commands - should NOT be blocked
 		{
 			name:    "execute command",
-			cmdName: models.ZapScriptCmdExecute,
+			cmdName: zapscript.ZapScriptCmdExecute,
 			want:    false,
 		},
 		{
 			name:    "delay command",
-			cmdName: models.ZapScriptCmdDelay,
+			cmdName: zapscript.ZapScriptCmdDelay,
 			want:    false,
 		},
 		{
 			name:    "stop command",
-			cmdName: models.ZapScriptCmdStop,
+			cmdName: zapscript.ZapScriptCmdStop,
 			want:    false,
 		},
 		{
 			name:    "echo command",
-			cmdName: models.ZapScriptCmdEcho,
+			cmdName: zapscript.ZapScriptCmdEcho,
 			want:    false,
 		},
 
 		// HTTP commands - should NOT be blocked
 		{
 			name:    "http.get command",
-			cmdName: models.ZapScriptCmdHTTPGet,
+			cmdName: zapscript.ZapScriptCmdHTTPGet,
 			want:    false,
 		},
 		{
 			name:    "http.post command",
-			cmdName: models.ZapScriptCmdHTTPPost,
+			cmdName: zapscript.ZapScriptCmdHTTPPost,
 			want:    false,
 		},
 
 		// Input commands - should NOT be blocked
 		{
 			name:    "input.keyboard command",
-			cmdName: models.ZapScriptCmdInputKeyboard,
+			cmdName: zapscript.ZapScriptCmdInputKeyboard,
 			want:    false,
 		},
 		{
 			name:    "input.gamepad command",
-			cmdName: models.ZapScriptCmdInputGamepad,
+			cmdName: zapscript.ZapScriptCmdInputGamepad,
 			want:    false,
 		},
 		{
 			name:    "input.coinp1 command",
-			cmdName: models.ZapScriptCmdInputCoinP1,
+			cmdName: zapscript.ZapScriptCmdInputCoinP1,
 			want:    false,
 		},
 		{
 			name:    "input.coinp2 command",
-			cmdName: models.ZapScriptCmdInputCoinP2,
+			cmdName: zapscript.ZapScriptCmdInputCoinP2,
 			want:    false,
 		},
 
 		// Deprecated aliases
 		{
 			name:    "random (deprecated) - should be blocked",
-			cmdName: models.ZapScriptCmdRandom,
+			cmdName: zapscript.ZapScriptCmdRandom,
 			want:    true,
 		},
 		{
 			name:    "system (deprecated) - should be blocked",
-			cmdName: models.ZapScriptCmdSystem,
+			cmdName: zapscript.ZapScriptCmdSystem,
 			want:    true,
 		},
 		{
 			name:    "shell (deprecated) - should NOT be blocked",
-			cmdName: models.ZapScriptCmdShell,
+			cmdName: zapscript.ZapScriptCmdShell,
 			want:    false,
 		},
 		{
 			name:    "command (deprecated) - should NOT be blocked",
-			cmdName: models.ZapScriptCmdCommand,
+			cmdName: zapscript.ZapScriptCmdCommand,
 			want:    false,
 		},
 		{
 			name:    "ini (deprecated) - should NOT be blocked",
-			cmdName: models.ZapScriptCmdINI,
+			cmdName: zapscript.ZapScriptCmdINI,
 			want:    false,
 		},
 		{
 			name:    "get (deprecated) - should NOT be blocked",
-			cmdName: models.ZapScriptCmdGet,
+			cmdName: zapscript.ZapScriptCmdGet,
 			want:    false,
 		},
 		{
 			name:    "input.key (deprecated) - should NOT be blocked",
-			cmdName: models.ZapScriptCmdInputKey,
+			cmdName: zapscript.ZapScriptCmdInputKey,
 			want:    false,
 		},
 		{
 			name:    "key (deprecated) - should NOT be blocked",
-			cmdName: models.ZapScriptCmdKey,
+			cmdName: zapscript.ZapScriptCmdKey,
 			want:    false,
 		},
 		{
 			name:    "coinp1 (deprecated) - should NOT be blocked",
-			cmdName: models.ZapScriptCmdCoinP1,
+			cmdName: zapscript.ZapScriptCmdCoinP1,
 			want:    false,
 		},
 		{
 			name:    "coinp2 (deprecated) - should NOT be blocked",
-			cmdName: models.ZapScriptCmdCoinP2,
+			cmdName: zapscript.ZapScriptCmdCoinP2,
 			want:    false,
 		},
 
@@ -264,47 +263,47 @@ func TestIsMediaLaunchingCommand_ComprehensiveCoverage(t *testing.T) {
 
 	// Commands that SHOULD be blocked
 	blockedCommands := []string{
-		models.ZapScriptCmdLaunch,
-		models.ZapScriptCmdLaunchSystem,
-		models.ZapScriptCmdLaunchRandom,
-		models.ZapScriptCmdLaunchSearch,
-		models.ZapScriptCmdLaunchTitle,
-		models.ZapScriptCmdPlaylistPlay,
-		models.ZapScriptCmdPlaylistNext,
-		models.ZapScriptCmdPlaylistPrevious,
-		models.ZapScriptCmdPlaylistGoto,
-		models.ZapScriptCmdPlaylistLoad,
-		models.ZapScriptCmdPlaylistOpen,
-		models.ZapScriptCmdMisterMGL,
-		models.ZapScriptCmdRandom, // deprecated
-		models.ZapScriptCmdSystem, // deprecated
+		zapscript.ZapScriptCmdLaunch,
+		zapscript.ZapScriptCmdLaunchSystem,
+		zapscript.ZapScriptCmdLaunchRandom,
+		zapscript.ZapScriptCmdLaunchSearch,
+		zapscript.ZapScriptCmdLaunchTitle,
+		zapscript.ZapScriptCmdPlaylistPlay,
+		zapscript.ZapScriptCmdPlaylistNext,
+		zapscript.ZapScriptCmdPlaylistPrevious,
+		zapscript.ZapScriptCmdPlaylistGoto,
+		zapscript.ZapScriptCmdPlaylistLoad,
+		zapscript.ZapScriptCmdPlaylistOpen,
+		zapscript.ZapScriptCmdMisterMGL,
+		zapscript.ZapScriptCmdRandom, // deprecated
+		zapscript.ZapScriptCmdSystem, // deprecated
 	}
 
 	// Commands that should NOT be blocked
 	allowedCommands := []string{
-		models.ZapScriptCmdExecute,
-		models.ZapScriptCmdDelay,
-		models.ZapScriptCmdStop,
-		models.ZapScriptCmdEcho,
-		models.ZapScriptCmdPlaylistStop,
-		models.ZapScriptCmdPlaylistPause,
-		models.ZapScriptCmdMisterINI,
-		models.ZapScriptCmdMisterCore,
-		models.ZapScriptCmdMisterScript,
-		models.ZapScriptCmdHTTPGet,
-		models.ZapScriptCmdHTTPPost,
-		models.ZapScriptCmdInputKeyboard,
-		models.ZapScriptCmdInputGamepad,
-		models.ZapScriptCmdInputCoinP1,
-		models.ZapScriptCmdInputCoinP2,
-		models.ZapScriptCmdShell,    // deprecated
-		models.ZapScriptCmdCommand,  // deprecated
-		models.ZapScriptCmdINI,      // deprecated
-		models.ZapScriptCmdGet,      // deprecated
-		models.ZapScriptCmdInputKey, // deprecated
-		models.ZapScriptCmdKey,      // deprecated
-		models.ZapScriptCmdCoinP1,   // deprecated
-		models.ZapScriptCmdCoinP2,   // deprecated
+		zapscript.ZapScriptCmdExecute,
+		zapscript.ZapScriptCmdDelay,
+		zapscript.ZapScriptCmdStop,
+		zapscript.ZapScriptCmdEcho,
+		zapscript.ZapScriptCmdPlaylistStop,
+		zapscript.ZapScriptCmdPlaylistPause,
+		zapscript.ZapScriptCmdMisterINI,
+		zapscript.ZapScriptCmdMisterCore,
+		zapscript.ZapScriptCmdMisterScript,
+		zapscript.ZapScriptCmdHTTPGet,
+		zapscript.ZapScriptCmdHTTPPost,
+		zapscript.ZapScriptCmdInputKeyboard,
+		zapscript.ZapScriptCmdInputGamepad,
+		zapscript.ZapScriptCmdInputCoinP1,
+		zapscript.ZapScriptCmdInputCoinP2,
+		zapscript.ZapScriptCmdShell,    // deprecated
+		zapscript.ZapScriptCmdCommand,  // deprecated
+		zapscript.ZapScriptCmdINI,      // deprecated
+		zapscript.ZapScriptCmdGet,      // deprecated
+		zapscript.ZapScriptCmdInputKey, // deprecated
+		zapscript.ZapScriptCmdKey,      // deprecated
+		zapscript.ZapScriptCmdCoinP1,   // deprecated
+		zapscript.ZapScriptCmdCoinP2,   // deprecated
 	}
 
 	// Verify all blocked commands return true
@@ -331,7 +330,7 @@ func TestGetExprEnv_ScannedContext(t *testing.T) {
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	opts := &ExprEnvOptions{
-		Scanned: &parser.ExprEnvScanned{
+		Scanned: &zapscript.ExprEnvScanned{
 			ID:    "scanned-token-id",
 			Value: "**launch:/games/sonic.bin",
 			Data:  "NDEF-record-data",
@@ -356,7 +355,7 @@ func TestGetExprEnv_LaunchingContext(t *testing.T) {
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	opts := &ExprEnvOptions{
-		Launching: &parser.ExprEnvLaunching{
+		Launching: &zapscript.ExprEnvLaunching{
 			Path:       "/games/genesis/sonic.bin",
 			SystemID:   "genesis",
 			LauncherID: "retroarch",
@@ -401,12 +400,12 @@ func TestGetExprEnv_BothContexts(t *testing.T) {
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	opts := &ExprEnvOptions{
-		Scanned: &parser.ExprEnvScanned{
+		Scanned: &zapscript.ExprEnvScanned{
 			ID:    "token-123",
 			Value: "test-value",
 			Data:  "test-data",
 		},
-		Launching: &parser.ExprEnvLaunching{
+		Launching: &zapscript.ExprEnvLaunching{
 			Path:       "/path/to/game",
 			SystemID:   "snes",
 			LauncherID: "mister",

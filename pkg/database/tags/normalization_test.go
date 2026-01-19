@@ -22,7 +22,7 @@ package tags
 import (
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/go-zapscript"
 )
 
 func TestNormalizeTag(t *testing.T) {
@@ -91,38 +91,38 @@ func TestNormalizeTag(t *testing.T) {
 func TestNormalizeTagFilter(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    database.TagFilter
-		expected database.TagFilter
+		input    zapscript.TagFilter
+		expected zapscript.TagFilter
 	}{
 		{
 			name: "basic normalization",
-			input: database.TagFilter{
+			input: zapscript.TagFilter{
 				Type:  "Genre",
 				Value: "RPG",
 			},
-			expected: database.TagFilter{
+			expected: zapscript.TagFilter{
 				Type:  "genre",
 				Value: "rpg",
 			},
 		},
 		{
 			name: "complex normalization",
-			input: database.TagFilter{
+			input: zapscript.TagFilter{
 				Type:  "  Year  ",
 				Value: " 1.991 ",
 			},
-			expected: database.TagFilter{
+			expected: zapscript.TagFilter{
 				Type:  "year",
 				Value: "1-991",
 			},
 		},
 		{
 			name: "keep colon and dash in value",
-			input: database.TagFilter{
+			input: zapscript.TagFilter{
 				Type:  "Disc",
 				Value: "1-2",
 			},
-			expected: database.TagFilter{
+			expected: zapscript.TagFilter{
 				Type:  "disc",
 				Value: "1-2",
 			},

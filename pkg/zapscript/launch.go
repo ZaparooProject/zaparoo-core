@@ -27,23 +27,23 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
-	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/rs/zerolog/log"
 )
 
 func applySystemDefaultLauncher(env *platforms.CmdEnv, systemID string) string {
-	current := env.Cmd.AdvArgs.Get(advargtypes.KeyLauncher)
+	current := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
 	if current != "" {
 		return current
 	}
 	if defaults, ok := env.Cfg.LookupSystemDefaults(systemID); ok && defaults.Launcher != "" {
 		log.Info().Msgf("using system default launcher for %s: %s", systemID, defaults.Launcher)
-		env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(advargtypes.KeyLauncher, defaults.Launcher)
+		env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(zapscript.KeyLauncher, defaults.Launcher)
 		return defaults.Launcher
 	}
 	return ""
@@ -93,7 +93,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
-	var args advargtypes.LaunchRandomArgs
+	var args zapscript.LaunchRandomArgs
 	if err := ParseAdvArgs(pl, &env, &args); err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
 	}
@@ -274,8 +274,8 @@ func getLaunchClosure(
 	env *platforms.CmdEnv,
 ) func(path string) error {
 	return func(path string) error {
-		launcherID := env.Cmd.AdvArgs.Get(advargtypes.KeyLauncher)
-		action := env.Cmd.AdvArgs.Get(advargtypes.KeyAction)
+		launcherID := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
+		action := env.Cmd.AdvArgs.Get(zapscript.KeyAction)
 
 		var opts *platforms.LaunchOptions
 		if action != "" {
@@ -325,7 +325,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
-	var args advargtypes.LaunchArgs
+	var args zapscript.LaunchArgs
 	if err := ParseAdvArgs(pl, &env, &args); err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -492,7 +492,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
-	var args advargtypes.LaunchSearchArgs
+	var args zapscript.LaunchSearchArgs
 	if err := ParseAdvArgs(pl, &env, &args); err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
 	}

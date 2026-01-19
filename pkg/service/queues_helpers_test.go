@@ -22,10 +22,9 @@ package service
 import (
 	"testing"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -43,84 +42,84 @@ func TestShouldRunBeforeMediaStartHook(t *testing.T) {
 			name:       "runs when all conditions met",
 			exprOpts:   nil,
 			hookScript: "**echo:before launch",
-			cmdName:    models.ZapScriptCmdLaunch,
+			cmdName:    gozapscript.ZapScriptCmdLaunch,
 			expected:   true,
 		},
 		{
 			name:       "runs with non-hook exprOpts",
 			exprOpts:   &zapscript.ExprEnvOptions{InHookContext: false},
 			hookScript: "**echo:test",
-			cmdName:    models.ZapScriptCmdLaunch,
+			cmdName:    gozapscript.ZapScriptCmdLaunch,
 			expected:   true,
 		},
 		{
 			name:       "blocked when in hook context",
 			exprOpts:   &zapscript.ExprEnvOptions{InHookContext: true},
 			hookScript: "**echo:test",
-			cmdName:    models.ZapScriptCmdLaunch,
+			cmdName:    gozapscript.ZapScriptCmdLaunch,
 			expected:   false,
 		},
 		{
 			name:       "blocked when hook script empty",
 			exprOpts:   nil,
 			hookScript: "",
-			cmdName:    models.ZapScriptCmdLaunch,
+			cmdName:    gozapscript.ZapScriptCmdLaunch,
 			expected:   false,
 		},
 		{
 			name:       "blocked when command is not media-launching",
 			exprOpts:   nil,
 			hookScript: "**echo:test",
-			cmdName:    models.ZapScriptCmdExecute,
+			cmdName:    gozapscript.ZapScriptCmdExecute,
 			expected:   false,
 		},
 		{
 			name:       "blocked when command is echo",
 			exprOpts:   nil,
 			hookScript: "**echo:test",
-			cmdName:    models.ZapScriptCmdEcho,
+			cmdName:    gozapscript.ZapScriptCmdEcho,
 			expected:   false,
 		},
 		{
 			name:       "blocked when command is delay",
 			exprOpts:   nil,
 			hookScript: "**echo:test",
-			cmdName:    models.ZapScriptCmdDelay,
+			cmdName:    gozapscript.ZapScriptCmdDelay,
 			expected:   false,
 		},
 		{
 			name:       "runs for launch.system command",
 			exprOpts:   nil,
 			hookScript: "**echo:test",
-			cmdName:    models.ZapScriptCmdLaunchSystem,
+			cmdName:    gozapscript.ZapScriptCmdLaunchSystem,
 			expected:   true,
 		},
 		{
 			name:       "runs for launch.random command",
 			exprOpts:   nil,
 			hookScript: "**echo:test",
-			cmdName:    models.ZapScriptCmdLaunchRandom,
+			cmdName:    gozapscript.ZapScriptCmdLaunchRandom,
 			expected:   true,
 		},
 		{
 			name:       "runs for launch.search command",
 			exprOpts:   nil,
 			hookScript: "**echo:test",
-			cmdName:    models.ZapScriptCmdLaunchSearch,
+			cmdName:    gozapscript.ZapScriptCmdLaunchSearch,
 			expected:   true,
 		},
 		{
 			name:       "runs for playlist.play command",
 			exprOpts:   nil,
 			hookScript: "**echo:test",
-			cmdName:    models.ZapScriptCmdPlaylistPlay,
+			cmdName:    gozapscript.ZapScriptCmdPlaylistPlay,
 			expected:   true,
 		},
 		{
 			name:       "blocked for playlist.stop command",
 			exprOpts:   nil,
 			hookScript: "**echo:test",
-			cmdName:    models.ZapScriptCmdPlaylistStop,
+			cmdName:    gozapscript.ZapScriptCmdPlaylistStop,
 			expected:   false,
 		},
 	}
@@ -140,7 +139,7 @@ func TestBuildLaunchingExprOpts(t *testing.T) {
 	t.Run("empty command", func(t *testing.T) {
 		t.Parallel()
 
-		cmd := parser.Command{
+		cmd := gozapscript.Command{
 			Name: "launch",
 			Args: []string{},
 		}
@@ -158,7 +157,7 @@ func TestBuildLaunchingExprOpts(t *testing.T) {
 	t.Run("with path only", func(t *testing.T) {
 		t.Parallel()
 
-		cmd := parser.Command{
+		cmd := gozapscript.Command{
 			Name: "launch",
 			Args: []string{"/games/snes/mario.sfc"},
 		}
@@ -174,10 +173,10 @@ func TestBuildLaunchingExprOpts(t *testing.T) {
 	t.Run("with system ID", func(t *testing.T) {
 		t.Parallel()
 
-		cmd := parser.Command{
+		cmd := gozapscript.Command{
 			Name:    "launch",
 			Args:    []string{"/games/sonic.bin"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{"system": "genesis"}),
+			AdvArgs: gozapscript.NewAdvArgs(map[string]string{"system": "genesis"}),
 		}
 
 		opts := buildLaunchingExprOpts(cmd)
@@ -190,10 +189,10 @@ func TestBuildLaunchingExprOpts(t *testing.T) {
 	t.Run("with launcher ID", func(t *testing.T) {
 		t.Parallel()
 
-		cmd := parser.Command{
+		cmd := gozapscript.Command{
 			Name:    "launch",
 			Args:    []string{"/games/game.rom"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{"launcher": "retroarch"}),
+			AdvArgs: gozapscript.NewAdvArgs(map[string]string{"launcher": "retroarch"}),
 		}
 
 		opts := buildLaunchingExprOpts(cmd)
@@ -206,10 +205,10 @@ func TestBuildLaunchingExprOpts(t *testing.T) {
 	t.Run("with all fields", func(t *testing.T) {
 		t.Parallel()
 
-		cmd := parser.Command{
+		cmd := gozapscript.Command{
 			Name:    "launch",
 			Args:    []string{"/roms/snes/zelda.sfc"},
-			AdvArgs: parser.NewAdvArgs(map[string]string{"system": "snes", "launcher": "mister"}),
+			AdvArgs: gozapscript.NewAdvArgs(map[string]string{"system": "snes", "launcher": "mister"}),
 		}
 
 		opts := buildLaunchingExprOpts(cmd)
@@ -224,7 +223,7 @@ func TestBuildLaunchingExprOpts(t *testing.T) {
 	t.Run("multiple args uses first as path", func(t *testing.T) {
 		t.Parallel()
 
-		cmd := parser.Command{
+		cmd := gozapscript.Command{
 			Name: "launch",
 			Args: []string{"/path/to/game.rom", "extra", "args"},
 		}
@@ -239,7 +238,7 @@ func TestScriptHasMediaLaunchingCommand(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		script   *parser.Script
+		script   *gozapscript.Script
 		name     string
 		expected bool
 	}{
@@ -250,54 +249,54 @@ func TestScriptHasMediaLaunchingCommand(t *testing.T) {
 		},
 		{
 			name:     "empty script",
-			script:   &parser.Script{Cmds: []parser.Command{}},
+			script:   &gozapscript.Script{Cmds: []gozapscript.Command{}},
 			expected: false,
 		},
 		{
 			name: "only non-launching commands",
-			script: &parser.Script{
-				Cmds: []parser.Command{
-					{Name: models.ZapScriptCmdEcho},
-					{Name: models.ZapScriptCmdDelay},
-					{Name: models.ZapScriptCmdExecute},
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{
+					{Name: gozapscript.ZapScriptCmdEcho},
+					{Name: gozapscript.ZapScriptCmdDelay},
+					{Name: gozapscript.ZapScriptCmdExecute},
 				},
 			},
 			expected: false,
 		},
 		{
 			name: "has launch command",
-			script: &parser.Script{
-				Cmds: []parser.Command{
-					{Name: models.ZapScriptCmdLaunch},
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{
+					{Name: gozapscript.ZapScriptCmdLaunch},
 				},
 			},
 			expected: true,
 		},
 		{
 			name: "launch command after other commands",
-			script: &parser.Script{
-				Cmds: []parser.Command{
-					{Name: models.ZapScriptCmdEcho},
-					{Name: models.ZapScriptCmdDelay},
-					{Name: models.ZapScriptCmdLaunchSystem},
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{
+					{Name: gozapscript.ZapScriptCmdEcho},
+					{Name: gozapscript.ZapScriptCmdDelay},
+					{Name: gozapscript.ZapScriptCmdLaunchSystem},
 				},
 			},
 			expected: true,
 		},
 		{
 			name: "playlist.play is media launching",
-			script: &parser.Script{
-				Cmds: []parser.Command{
-					{Name: models.ZapScriptCmdPlaylistPlay},
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{
+					{Name: gozapscript.ZapScriptCmdPlaylistPlay},
 				},
 			},
 			expected: true,
 		},
 		{
 			name: "playlist.stop is not media launching",
-			script: &parser.Script{
-				Cmds: []parser.Command{
-					{Name: models.ZapScriptCmdPlaylistStop},
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{
+					{Name: gozapscript.ZapScriptCmdPlaylistStop},
 				},
 			},
 			expected: false,
@@ -319,12 +318,12 @@ func TestInjectCommands(t *testing.T) {
 	t.Run("empty new commands returns original", func(t *testing.T) {
 		t.Parallel()
 
-		cmds := []parser.Command{
+		cmds := []gozapscript.Command{
 			{Name: "cmd1"},
 			{Name: "cmd2"},
 		}
 
-		result := injectCommands(cmds, 0, []parser.Command{})
+		result := injectCommands(cmds, 0, []gozapscript.Command{})
 
 		assert.Equal(t, cmds, result)
 	})
@@ -332,11 +331,11 @@ func TestInjectCommands(t *testing.T) {
 	t.Run("inject at beginning", func(t *testing.T) {
 		t.Parallel()
 
-		cmds := []parser.Command{
+		cmds := []gozapscript.Command{
 			{Name: "cmd1"},
 			{Name: "cmd2"},
 		}
-		newCmds := []parser.Command{
+		newCmds := []gozapscript.Command{
 			{Name: "new1"},
 			{Name: "new2"},
 		}
@@ -353,12 +352,12 @@ func TestInjectCommands(t *testing.T) {
 	t.Run("inject in middle", func(t *testing.T) {
 		t.Parallel()
 
-		cmds := []parser.Command{
+		cmds := []gozapscript.Command{
 			{Name: "cmd1"},
 			{Name: "cmd2"},
 			{Name: "cmd3"},
 		}
-		newCmds := []parser.Command{
+		newCmds := []gozapscript.Command{
 			{Name: "injected"},
 		}
 
@@ -374,11 +373,11 @@ func TestInjectCommands(t *testing.T) {
 	t.Run("inject at end", func(t *testing.T) {
 		t.Parallel()
 
-		cmds := []parser.Command{
+		cmds := []gozapscript.Command{
 			{Name: "cmd1"},
 			{Name: "cmd2"},
 		}
-		newCmds := []parser.Command{
+		newCmds := []gozapscript.Command{
 			{Name: "appended"},
 		}
 

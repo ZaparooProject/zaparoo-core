@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -333,7 +334,7 @@ func sqlSearchMediaWithFilters(
 	systems []systemdefs.System,
 	variantGroups [][]string,
 	rawWords []string,
-	tags []database.TagFilter,
+	tags []zapscript.TagFilter,
 	letter *string,
 	cursor *int64,
 	limit int,
@@ -491,7 +492,7 @@ func sqlSearchMediaBySlug(
 	db *sql.DB,
 	systemID string,
 	slug string,
-	tags []database.TagFilter,
+	tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, 10)
 	args := make([]any, 0, 2+len(tags)*2)
@@ -576,7 +577,7 @@ func sqlSearchMediaBySecondarySlug(
 	db *sql.DB,
 	systemID string,
 	secondarySlug string,
-	tags []database.TagFilter,
+	tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, 10)
 	args := make([]any, 0, 2+len(tags)*2)
@@ -661,7 +662,7 @@ func sqlSearchMediaBySlugPrefix(
 	db *sql.DB,
 	systemID string,
 	slugPrefix string,
-	tags []database.TagFilter,
+	tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, 10)
 	args := make([]any, 0, 2+len(tags)*2)
@@ -746,7 +747,7 @@ func sqlSearchMediaBySlugIn(
 	db *sql.DB,
 	systemID string,
 	slugList []string,
-	tags []database.TagFilter,
+	tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, 10)
 

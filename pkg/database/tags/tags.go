@@ -23,7 +23,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/go-zapscript"
 )
 
 // This tag system is inspired by the GameDataBase project's hierarchical
@@ -162,10 +162,11 @@ func NormalizeTag(s string) string {
 
 // NormalizeTagFilter normalizes a TagFilter for consistent querying.
 // Applies normalization to both Type and Value fields.
-func NormalizeTagFilter(filter database.TagFilter) database.TagFilter {
-	return database.TagFilter{
-		Type:  NormalizeTag(filter.Type),
-		Value: NormalizeTag(filter.Value),
+func NormalizeTagFilter(filter zapscript.TagFilter) zapscript.TagFilter {
+	return zapscript.TagFilter{
+		Type:     NormalizeTag(filter.Type),
+		Value:    NormalizeTag(filter.Value),
+		Operator: filter.Operator,
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
@@ -34,7 +35,7 @@ import (
 //
 // Returns a slice of WHERE clause strings and corresponding arguments.
 // Clauses should be joined with " AND " and appended to the main query's WHERE conditions.
-func BuildTagFilterSQL(filters []database.TagFilter) (clauses []string, args []any) {
+func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []any) {
 	if len(filters) == 0 {
 		return nil, nil
 	}

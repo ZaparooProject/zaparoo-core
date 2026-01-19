@@ -35,6 +35,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
@@ -874,7 +875,7 @@ func (db *MediaDB) SearchMediaWithFilters(
 }
 
 func (db *MediaDB) SearchMediaBySlug(
-	ctx context.Context, systemID string, slug string, tags []database.TagFilter,
+	ctx context.Context, systemID string, slug string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
@@ -883,7 +884,7 @@ func (db *MediaDB) SearchMediaBySlug(
 }
 
 func (db *MediaDB) SearchMediaBySecondarySlug(
-	ctx context.Context, systemID string, secondarySlug string, tags []database.TagFilter,
+	ctx context.Context, systemID string, secondarySlug string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
@@ -892,7 +893,7 @@ func (db *MediaDB) SearchMediaBySecondarySlug(
 }
 
 func (db *MediaDB) SearchMediaBySlugPrefix(
-	ctx context.Context, systemID string, slugPrefix string, tags []database.TagFilter,
+	ctx context.Context, systemID string, slugPrefix string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
@@ -903,7 +904,7 @@ func (db *MediaDB) SearchMediaBySlugPrefix(
 // SearchMediaBySlugIn searches for media items matching any of the provided slugs using an IN clause.
 // This is optimized for searching multiple slug candidates in a single query.
 func (db *MediaDB) SearchMediaBySlugIn(
-	ctx context.Context, systemID string, slugList []string, tags []database.TagFilter,
+	ctx context.Context, systemID string, slugList []string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
@@ -1282,7 +1283,7 @@ func (*MediaDB) generateQueryHash(query *database.MediaQuery) (string, error) {
 		Systems:    make([]string, len(query.Systems)),
 		PathGlob:   strings.ToLower(strings.TrimSpace(query.PathGlob)),
 		PathPrefix: strings.ToLower(strings.TrimSpace(query.PathPrefix)),
-		Tags:       make([]database.TagFilter, len(query.Tags)),
+		Tags:       make([]zapscript.TagFilter, len(query.Tags)),
 	}
 
 	// Sort systems for consistent ordering

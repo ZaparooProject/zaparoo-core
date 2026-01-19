@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"time"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
@@ -37,7 +38,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/google/uuid"
 	"github.com/mackerelio/go-osstat/uptime"
 	"github.com/rs/zerolog/log"
@@ -64,7 +64,7 @@ func runTokenZapScript(
 		token.Text = mappedValue
 	}
 
-	reader := parser.NewParser(token.Text)
+	reader := gozapscript.NewParser(token.Text)
 	script, err := reader.ParseScript()
 	if err != nil {
 		return fmt.Errorf("failed to parse script: %w", err)
@@ -303,7 +303,7 @@ func processTokenQueue(
 				scriptText = mappedValue
 			}
 
-			reader := parser.NewParser(scriptText)
+			reader := gozapscript.NewParser(scriptText)
 			script, parseErr := reader.ParseScript()
 			if parseErr != nil {
 				log.Debug().Err(parseErr).Msg("failed to parse script for playtime check")

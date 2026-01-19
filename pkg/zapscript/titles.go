@@ -25,13 +25,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
 )
@@ -65,7 +65,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
 	}
 
-	var args advargtypes.LaunchTitleArgs
+	var args zapscript.LaunchTitleArgs
 	if parseErr := ParseAdvArgs(pl, &env, &args); parseErr != nil {
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", parseErr)
 	}
@@ -112,15 +112,15 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 
 	// Convert filename tags to tag filters (always AND operator)
 	// Skip inferred tags (e.g., "Edition" from plain text) - only use tags from brackets
-	filenameTagFilters := make([]database.TagFilter, 0, len(filenameTags))
+	filenameTagFilters := make([]zapscript.TagFilter, 0, len(filenameTags))
 	for _, tag := range filenameTags {
 		if tag.Source == tags.TagSourceInferred {
 			continue // Skip inferred tags - don't use as search filters
 		}
-		filenameTagFilters = append(filenameTagFilters, database.TagFilter{
+		filenameTagFilters = append(filenameTagFilters, zapscript.TagFilter{
 			Type:     string(tag.Type),
 			Value:    string(tag.Value),
-			Operator: database.TagOperatorAND,
+			Operator: zapscript.TagOperatorAND,
 		})
 	}
 

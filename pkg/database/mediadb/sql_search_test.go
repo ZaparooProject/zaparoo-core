@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
@@ -457,7 +458,7 @@ func TestSqlSearchMediaWithFilters_IntegrationWithTags(t *testing.T) {
 	systems := []systemdefs.System{{ID: "nes"}}
 	variantGroups := [][]string{{"mario"}} // Single word with single variant
 	rawWords := []string{"mario"}
-	tags := []database.TagFilter{}
+	tags := []zapscript.TagFilter{}
 	limit := 10
 	includeName := false
 

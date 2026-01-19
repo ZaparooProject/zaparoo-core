@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"time"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -35,7 +36,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
 )
 
@@ -414,7 +414,7 @@ preprocessing:
 			// Run on_scan hook before SetActiveCard so last_scanned refers to previous token
 			if onScanScript := cfg.ReadersScan().OnScan; onScanScript != "" {
 				scannedOpts := &zapscript.ExprEnvOptions{
-					Scanned: &parser.ExprEnvScanned{
+					Scanned: &gozapscript.ExprEnvScanned{
 						ID:    scan.UID,
 						Value: scan.Text,
 						Data:  scan.Data,

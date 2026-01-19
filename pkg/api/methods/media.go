@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
@@ -447,7 +448,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	// Validate and parse tags parameter - requires type:value format
 	// Supports operator prefixes: "+" (AND), "-" (NOT), "~" (OR)
-	var tagFilters []database.TagFilter
+	var tagFilters []zapscript.TagFilter
 	if tagParams != nil && len(*tagParams) > 0 {
 		var parseErr error
 		tagFilters, parseErr = filters.ParseTagFilters(*tagParams)

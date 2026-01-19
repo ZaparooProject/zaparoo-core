@@ -24,12 +24,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -182,7 +182,7 @@ func TestCmdPlaylistOpen_NoArgs(t *testing.T) {
 			playlistQueue := make(chan *playlists.Playlist, 1)
 
 			env := platforms.CmdEnv{
-				Cmd: parser.Command{
+				Cmd: zapscript.Command{
 					Name: "playlist.open",
 					Args: []string{}, // No arguments!
 				},
@@ -259,7 +259,7 @@ Title3=Item 3`
 	playlistQueue := make(chan *playlists.Playlist, 1)
 
 	env := platforms.CmdEnv{
-		Cmd: parser.Command{
+		Cmd: zapscript.Command{
 			Name: "playlist.open",
 			Args: []string{plsFile}, // Argument matches active playlist
 		},

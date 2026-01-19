@@ -27,10 +27,10 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
 )
 
@@ -109,10 +109,10 @@ func ParseCustomLaunchers(
 					action = defaults.Action
 				}
 
-				exprEnv := parser.CustomLauncherExprEnv{
+				exprEnv := zapscript.CustomLauncherExprEnv{
 					Platform: pl.ID(),
 					Version:  config.AppVersion,
-					Device: parser.ExprEnvDevice{
+					Device: zapscript.ExprEnvDevice{
 						Hostname: hostname,
 						OS:       runtime.GOOS,
 						Arch:     runtime.GOARCH,
@@ -125,13 +125,13 @@ func ParseCustomLaunchers(
 					LauncherID: launcherID,
 				}
 
-				parseReader := parser.NewParser(executeCmd)
+				parseReader := zapscript.NewParser(executeCmd)
 				parsed, err := parseReader.ParseExpressions()
 				if err != nil {
 					return nil, fmt.Errorf("error parsing expressions: %w", err)
 				}
 
-				evalReader := parser.NewParser(parsed)
+				evalReader := zapscript.NewParser(parsed)
 				output, err := evalReader.EvalExpressions(exprEnv)
 				if err != nil {
 					return nil, fmt.Errorf("error evaluating execute expression: %w", err)
