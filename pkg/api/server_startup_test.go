@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -303,7 +304,7 @@ func TestIsPrivateIP(t *testing.T) {
 func TestCheckWebSocketOrigin(t *testing.T) {
 	t.Parallel()
 
-	allowedOrigins := []string{
+	staticOrigins := []string{
 		"capacitor://localhost",
 		"ionic://localhost",
 		"http://localhost",
@@ -312,6 +313,7 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 		"http://192.168.1.100:7497",
 		"http://MiSTer.local:7497", // Mixed case hostname
 	}
+	customOriginsProvider := func() []string { return nil }
 	apiPort := 7497
 
 	tests := []struct {
@@ -374,7 +376,7 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := checkWebSocketOrigin(tt.origin, allowedOrigins, apiPort)
+			result := checkWebSocketOrigin(tt.origin, staticOrigins, customOriginsProvider, apiPort)
 			require.Equal(t, tt.expected, result, "checkWebSocketOrigin result mismatch for %s", tt.origin)
 		})
 	}
@@ -619,4 +621,73 @@ func TestBuildDynamicAllowedOrigins_HTTPURLWithoutPortAddsPortVariant(t *testing
 		"Bug fix: should not have double http:// prefix")
 	require.NotContains(t, result, "https://http://batocera.local",
 		"Bug fix: should not have https:// prepended to http:// URL")
+}
+
+func TestCheckWebSocketOrigin_HotReload(t *testing.T) {
+	t.Parallel()
+
+	staticOrigins := []string{
+		"http://localhost:7497",
+	}
+	apiPort := 7497
+
+	// Mutable custom origins to simulate config reload
+	customOrigins := []string{"http://myapp.example.com"}
+	provider := func() []string { return customOrigins }
+
+	// Initial state: custom origin allowed
+	assert.True(t, checkWebSocketOrigin("http://myapp.example.com", staticOrigins, provider, apiPort))
+	assert.True(t, checkWebSocketOrigin("http://myapp.example.com:7497", staticOrigins, provider, apiPort))
+	assert.False(t, checkWebSocketOrigin("http://other.example.com:7497", staticOrigins, provider, apiPort))
+
+	// Simulate config reload: change custom origins
+	customOrigins = []string{"http://other.example.com"}
+
+	// Old custom origin should now be rejected (not private IP, not localhost)
+	assert.False(t, checkWebSocketOrigin("http://myapp.example.com:7497", staticOrigins, provider, apiPort))
+	// New custom origin should be allowed
+	assert.True(t, checkWebSocketOrigin("http://other.example.com", staticOrigins, provider, apiPort))
+	assert.True(t, checkWebSocketOrigin("http://other.example.com:7497", staticOrigins, provider, apiPort))
+
+	// Static origins should always work regardless of custom origins
+	assert.True(t, checkWebSocketOrigin("http://localhost:7497", staticOrigins, provider, apiPort))
+}
+
+func TestMakeOriginValidator_HotReload(t *testing.T) {
+	t.Parallel()
+
+	staticOrigins := []string{
+		"http://localhost:7497",
+		"http://192.168.1.100:7497",
+	}
+	port := 7497
+
+	// Mutable custom origins to simulate config reload
+	customOrigins := []string{"myapp.local"}
+	provider := func() []string { return customOrigins }
+
+	validator := makeOriginValidator(staticOrigins, provider, port)
+
+	// Static origins always work
+	assert.True(t, validator(nil, "http://localhost:7497"))
+	assert.True(t, validator(nil, "http://192.168.1.100:7497"))
+
+	// Custom origin (expanded) works
+	assert.True(t, validator(nil, "http://myapp.local:7497"))
+	assert.True(t, validator(nil, "https://myapp.local:7497"))
+
+	// Unknown origin rejected
+	assert.False(t, validator(nil, "http://unknown.com:7497"))
+
+	// Simulate config reload: change custom origins
+	customOrigins = []string{"newapp.local"}
+
+	// Old custom origin should now be rejected
+	assert.False(t, validator(nil, "http://myapp.local:7497"))
+
+	// New custom origin should work
+	assert.True(t, validator(nil, "http://newapp.local:7497"))
+
+	// Static origins still work
+	assert.True(t, validator(nil, "http://localhost:7497"))
 }

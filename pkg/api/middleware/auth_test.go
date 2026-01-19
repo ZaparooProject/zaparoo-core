@@ -27,6 +27,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// keysProvider wraps a slice as an APIKeyProvider for testing.
+func keysProvider(keys []string) APIKeyProvider {
+	return func() []string { return keys }
+}
+
 func TestNewAuthConfig(t *testing.T) {
 	t.Parallel()
 
@@ -66,7 +71,7 @@ func TestNewAuthConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := NewAuthConfig(tt.keys)
+			cfg := NewAuthConfig(keysProvider(tt.keys))
 
 			assert.NotNil(t, cfg)
 			assert.Equal(t, tt.wantEnabled, cfg.Enabled())
@@ -143,7 +148,7 @@ func TestAuthConfig_IsValidKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := NewAuthConfig(tt.keys)
+			cfg := NewAuthConfig(keysProvider(tt.keys))
 			result := cfg.IsValidKey(tt.checkKey)
 
 			assert.Equal(t, tt.expected, result,
@@ -242,7 +247,7 @@ func TestHTTPAuthMiddleware(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := NewAuthConfig(tt.keys)
+			cfg := NewAuthConfig(keysProvider(tt.keys))
 			middleware := HTTPAuthMiddleware(cfg)
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -324,7 +329,7 @@ func TestWebSocketAuthHandler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := NewAuthConfig(tt.keys)
+			cfg := NewAuthConfig(keysProvider(tt.keys))
 
 			url := "/ws"
 			if tt.queryParam != "" {
@@ -347,7 +352,7 @@ func TestWebSocketAuthHandler(t *testing.T) {
 func TestHTTPAuthMiddleware_Integration(t *testing.T) {
 	t.Parallel()
 
-	cfg := NewAuthConfig([]string{"valid-key"})
+	cfg := NewAuthConfig(keysProvider([]string{"valid-key"}))
 	authMiddleware := HTTPAuthMiddleware(cfg)
 
 	callCount := 0
@@ -430,7 +435,7 @@ func TestHTTPAuthMiddleware_LocalhostExempt(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := NewAuthConfig([]string{"secret-key"})
+			cfg := NewAuthConfig(keysProvider([]string{"secret-key"}))
 			middleware := HTTPAuthMiddleware(cfg)
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -480,7 +485,7 @@ func TestWebSocketAuthHandler_LocalhostExempt(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := NewAuthConfig([]string{"secret-key"})
+			cfg := NewAuthConfig(keysProvider([]string{"secret-key"}))
 
 			req := httptest.NewRequest(http.MethodGet, "/ws", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
@@ -490,4 +495,80 @@ func TestWebSocketAuthHandler_LocalhostExempt(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestAuthConfig_HotReload(t *testing.T) {
+	t.Parallel()
+
+	// Mutable key store to simulate config reload
+	keys := []string{"initial-key"}
+	provider := func() []string { return keys }
+
+	cfg := NewAuthConfig(provider)
+
+	// Initial state: "initial-key" is valid
+	assert.True(t, cfg.Enabled())
+	assert.True(t, cfg.IsValidKey("initial-key"))
+	assert.False(t, cfg.IsValidKey("new-key"))
+
+	// Simulate config reload: add new key
+	keys = []string{"initial-key", "new-key"}
+
+	// Both keys should now be valid without recreating AuthConfig
+	assert.True(t, cfg.IsValidKey("initial-key"))
+	assert.True(t, cfg.IsValidKey("new-key"))
+
+	// Simulate config reload: remove initial key
+	keys = []string{"new-key"}
+
+	// Only new-key should be valid now
+	assert.False(t, cfg.IsValidKey("initial-key"))
+	assert.True(t, cfg.IsValidKey("new-key"))
+
+	// Simulate config reload: remove all keys (disable auth)
+	keys = []string{}
+
+	assert.False(t, cfg.Enabled())
+}
+
+func TestHTTPAuthMiddleware_HotReload(t *testing.T) {
+	t.Parallel()
+
+	keys := []string{"secret"}
+	provider := func() []string { return keys }
+
+	cfg := NewAuthConfig(provider)
+	middleware := HTTPAuthMiddleware(cfg)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := middleware(handler)
+
+	// Request with valid key should succeed
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.100:12345" // Non-localhost to require auth
+	req.Header.Set("Authorization", "Bearer secret")
+	recorder := httptest.NewRecorder()
+	wrapped.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+
+	// Simulate config reload: change the key
+	keys = []string{"new-secret"}
+
+	// Old key should now fail
+	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.100:12345"
+	req.Header.Set("Authorization", "Bearer secret")
+	recorder = httptest.NewRecorder()
+	wrapped.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+
+	// New key should succeed
+	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.100:12345"
+	req.Header.Set("Authorization", "Bearer new-secret")
+	recorder = httptest.NewRecorder()
+	wrapped.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
 }

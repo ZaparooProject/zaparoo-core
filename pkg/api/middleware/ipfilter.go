@@ -44,52 +44,53 @@ func IsLoopbackAddr(remoteAddr string) bool {
 	return ip.IsLoopback()
 }
 
-// IPFilter manages IP allowlist filtering for both HTTP and WebSocket connections
+// IPsProvider is a function that returns the current list of allowed IPs/CIDRs.
+// This allows the IP filter to dynamically fetch the allowlist on each request,
+// supporting hot-reload of configuration.
+type IPsProvider func() []string
+
+// IPFilter manages IP allowlist filtering for both HTTP and WebSocket connections.
+// It uses a provider function to fetch the allowlist dynamically.
 type IPFilter struct {
-	allowedIPs   []string
-	allowedNets  []*net.IPNet
-	allowedAddrs []net.IP
+	getAllowedIPs IPsProvider
 }
 
-// NewIPFilter creates a new IP filter from a list of allowed IPs/CIDRs.
-// Empty list means all IPs are allowed (no filtering).
-func NewIPFilter(allowedIPs []string) *IPFilter {
-	filter := &IPFilter{
-		allowedIPs:   allowedIPs,
-		allowedNets:  make([]*net.IPNet, 0),
-		allowedAddrs: make([]net.IP, 0),
+// NewIPFilter creates a new IP filter with an IPs provider function.
+// The provider is called on each request to get the current allowlist,
+// allowing configuration changes to take effect without server restart.
+func NewIPFilter(ipsProvider IPsProvider) *IPFilter {
+	return &IPFilter{
+		getAllowedIPs: ipsProvider,
 	}
+}
 
-	// Parse and categorize allowed IPs
+// parseAllowedIPs parses a list of IP strings into nets and individual IPs.
+func parseAllowedIPs(allowedIPs []string) (nets []*net.IPNet, addrs []net.IP) {
 	for _, ipStr := range allowedIPs {
-		// Clean input if user pasted an address with port (e.g., "192.168.1.1:7497")
 		if host, _, err := net.SplitHostPort(ipStr); err == nil {
 			ipStr = host
 		}
 
-		// Try parsing as CIDR first
 		if _, network, err := net.ParseCIDR(ipStr); err == nil {
-			filter.allowedNets = append(filter.allowedNets, network)
+			nets = append(nets, network)
 			continue
 		}
 
-		// Try parsing as individual IP
 		if ip := net.ParseIP(ipStr); ip != nil {
-			filter.allowedAddrs = append(filter.allowedAddrs, ip)
+			addrs = append(addrs, ip)
 			continue
 		}
 
-		// Invalid IP/CIDR - log and skip
 		log.Warn().Str("ip", ipStr).Msg("invalid IP or CIDR in allowed_ips, skipping")
 	}
-
-	return filter
+	return nets, addrs
 }
 
 // IsAllowed checks if an IP address is allowed.
 // Returns true if the allowlist is empty (no filtering) or if the IP matches an allowed entry.
 func (f *IPFilter) IsAllowed(remoteAddr string) bool {
-	if len(f.allowedIPs) == 0 {
+	allowedIPs := f.getAllowedIPs()
+	if len(allowedIPs) == 0 {
 		return true
 	}
 
@@ -99,15 +100,15 @@ func (f *IPFilter) IsAllowed(remoteAddr string) bool {
 		return false
 	}
 
-	// Check against individual IPs
-	for _, allowedIP := range f.allowedAddrs {
+	nets, addrs := parseAllowedIPs(allowedIPs)
+
+	for _, allowedIP := range addrs {
 		if ip.Equal(allowedIP) {
 			return true
 		}
 	}
 
-	// Check against CIDR networks
-	for _, network := range f.allowedNets {
+	for _, network := range nets {
 		if network.Contains(ip) {
 			return true
 		}

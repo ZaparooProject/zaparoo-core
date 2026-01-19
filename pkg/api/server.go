@@ -450,18 +450,32 @@ func isPrivateIP(ipStr string) bool {
 	return false
 }
 
-// checkWebSocketOrigin validates WebSocket origin requests based on security policy
-func checkWebSocketOrigin(origin string, allowedOrigins []string, apiPort int) bool {
-	// Allow empty origin (same-origin requests)
+// checkWebSocketOrigin validates WebSocket origin requests based on security policy.
+// It checks static origins and dynamically fetches custom origins from the provider.
+func checkWebSocketOrigin(
+	origin string,
+	staticOrigins []string,
+	customOriginsProvider OriginsProvider,
+	apiPort int,
+) bool {
 	if origin == "" {
 		log.Debug().Msg("websocket origin: empty origin allowed (same-origin)")
 		return true
 	}
 
-	// Check explicit allowed origins first (case-insensitive for hostnames)
-	for _, allowed := range allowedOrigins {
+	// Check static origins (case-insensitive)
+	for _, allowed := range staticOrigins {
 		if strings.EqualFold(origin, allowed) {
-			log.Debug().Msgf("websocket origin: %s allowed (explicit match)", origin)
+			log.Debug().Msgf("websocket origin: %s allowed (static match)", origin)
+			return true
+		}
+	}
+
+	// Check custom origins (fetched dynamically)
+	customOrigins := expandCustomOrigins(customOriginsProvider(), apiPort)
+	for _, allowed := range customOrigins {
+		if strings.EqualFold(origin, allowed) {
+			log.Debug().Msgf("websocket origin: %s allowed (custom match)", origin)
 			return true
 		}
 	}
@@ -473,7 +487,7 @@ func checkWebSocketOrigin(origin string, allowedOrigins []string, apiPort int) b
 		return false
 	}
 
-	// Allow localhost and 127.0.0.1 on any port (http or https)
+	// Allow localhost and 127.0.0.1 on any port
 	hostname := u.Hostname()
 	if hostname == "localhost" || hostname == "127.0.0.1" {
 		log.Debug().Msgf("websocket origin: %s allowed (localhost any port)", origin)
@@ -485,7 +499,7 @@ func checkWebSocketOrigin(origin string, allowedOrigins []string, apiPort int) b
 		port := u.Port()
 		if port == "" && (u.Scheme == "http" || u.Scheme == "https") {
 			log.Debug().Msgf("websocket origin: %s rejected (private IP needs explicit port)", origin)
-			return false // explicit port required for private IPs
+			return false
 		}
 		if port == strconv.Itoa(apiPort) {
 			log.Debug().Msgf("websocket origin: %s allowed (private IP correct port)", origin)
@@ -500,42 +514,28 @@ func checkWebSocketOrigin(origin string, allowedOrigins []string, apiPort int) b
 	return false
 }
 
-// buildDynamicAllowedOrigins creates the allowed origins list for CORS/WebSocket
-func buildDynamicAllowedOrigins(baseOrigins, localIPs []string, port int, customOrigins []string) []string {
-	result := make([]string, 0, len(baseOrigins)+len(localIPs)*2)
-	result = append(result, baseOrigins...)
-
-	// Add all provided local IPs
-	for _, localIP := range localIPs {
-		result = append(result,
-			fmt.Sprintf("http://%s:%d", localIP, port),
-			fmt.Sprintf("https://%s:%d", localIP, port),
-		)
-	}
-
-	// Add custom origins. Custom origins can be:
-	// - Full URLs with port: http://example.com:7497 (used as-is)
-	// - Full URLs without port: http://example.com (adds version with API port too)
-	// - Other schemes: capacitor://localhost, ionic://localhost (used as-is)
-	// - Hostnames only: example.com (adds http/https with and without port)
+// expandCustomOrigins expands custom origin entries into full origin URLs.
+// Custom origins can be:
+// - Full URLs with port: http://example.com:7497 (used as-is)
+// - Full URLs without port: http://example.com (adds version with API port too)
+// - Other schemes: capacitor://localhost, ionic://localhost (used as-is)
+// - Hostnames only: example.com (adds http/https with and without port)
+func expandCustomOrigins(customOrigins []string, port int) []string {
+	var result []string
 	for _, origin := range customOrigins {
 		origin = strings.TrimSpace(origin)
 		origin = strings.TrimSuffix(origin, "/")
 
 		if strings.Contains(origin, "://") {
-			// URL with scheme provided - always include as-is
 			result = append(result, origin)
 
-			// For http/https URLs without explicit port, also add version with API port
 			if strings.HasPrefix(origin, "http://") || strings.HasPrefix(origin, "https://") {
-				// Check if origin already has a port by looking for :port after the host
 				u, err := url.Parse(origin)
 				if err == nil && u.Port() == "" {
 					result = append(result, fmt.Sprintf("%s:%d", origin, port))
 				}
 			}
 		} else {
-			// Hostname only - add both protocols, with and without port
 			result = append(result,
 				"http://"+origin,
 				"https://"+origin,
@@ -544,8 +544,64 @@ func buildDynamicAllowedOrigins(baseOrigins, localIPs []string, port int, custom
 			)
 		}
 	}
+	return result
+}
+
+// buildStaticAllowedOrigins creates the static part of allowed origins (base + local IPs).
+func buildStaticAllowedOrigins(baseOrigins, localIPs []string, port int) []string {
+	result := make([]string, 0, len(baseOrigins)+len(localIPs)*2)
+	result = append(result, baseOrigins...)
+
+	for _, localIP := range localIPs {
+		result = append(result,
+			fmt.Sprintf("http://%s:%d", localIP, port),
+			fmt.Sprintf("https://%s:%d", localIP, port),
+		)
+	}
 
 	return result
+}
+
+// buildDynamicAllowedOrigins creates the allowed origins list for CORS/WebSocket
+func buildDynamicAllowedOrigins(baseOrigins, localIPs []string, port int, customOrigins []string) []string {
+	result := buildStaticAllowedOrigins(baseOrigins, localIPs, port)
+	result = append(result, expandCustomOrigins(customOrigins, port)...)
+	return result
+}
+
+// OriginsProvider is a function that returns custom origins from config.
+type OriginsProvider func() []string
+
+// makeOriginValidator creates an origin validation function for CORS middleware.
+// It checks against static origins and dynamically fetches custom origins on each request.
+func makeOriginValidator(
+	staticOrigins []string,
+	customOriginsProvider OriginsProvider,
+	port int,
+) func(*http.Request, string) bool {
+	staticSet := make(map[string]struct{}, len(staticOrigins))
+	for _, o := range staticOrigins {
+		staticSet[strings.ToLower(o)] = struct{}{}
+	}
+
+	return func(_ *http.Request, origin string) bool {
+		lowerOrigin := strings.ToLower(origin)
+
+		// Check static origins first
+		if _, ok := staticSet[lowerOrigin]; ok {
+			return true
+		}
+
+		// Check custom origins (fetched dynamically)
+		customOrigins := expandCustomOrigins(customOriginsProvider(), port)
+		for _, allowed := range customOrigins {
+			if strings.EqualFold(origin, allowed) {
+				return true
+			}
+		}
+
+		return false
+	}
 }
 
 // privateNetworkAccessMiddleware adds the Access-Control-Allow-Private-Network
@@ -850,13 +906,12 @@ func Start(
 		log.Debug().Msgf("adding local IP to allowed origins: %s", localIP)
 	}
 
-	customOrigins := cfg.AllowedOrigins()
-	dynamicAllowedOrigins := buildDynamicAllowedOrigins(baseOrigins, localIPs, port, customOrigins)
+	// Build static origins (base + local IPs + mDNS + OS hostname)
+	staticOrigins := buildStaticAllowedOrigins(baseOrigins, localIPs, port)
 
-	// Add mDNS hostname.local if discovery resolved an instance name
 	if mdnsHostname != "" {
 		mdnsLocal := mdnsHostname + ".local"
-		dynamicAllowedOrigins = append(dynamicAllowedOrigins,
+		staticOrigins = append(staticOrigins,
 			"http://"+mdnsLocal,
 			"https://"+mdnsLocal,
 			fmt.Sprintf("http://%s:%d", mdnsLocal, port),
@@ -865,9 +920,8 @@ func Start(
 		log.Debug().Str("hostname", mdnsLocal).Msg("added mDNS hostname to allowed origins")
 	}
 
-	// Add raw hostname for users with hostname resolution on their network
 	if hostname, err := os.Hostname(); err == nil && hostname != "" {
-		dynamicAllowedOrigins = append(dynamicAllowedOrigins,
+		staticOrigins = append(staticOrigins,
 			"http://"+hostname,
 			"https://"+hostname,
 			fmt.Sprintf("http://%s:%d", hostname, port),
@@ -876,25 +930,28 @@ func Start(
 		log.Debug().Str("hostname", hostname).Msg("added OS hostname to allowed origins")
 	}
 
-	log.Debug().Msgf("dynamicAllowedOrigins: %v", dynamicAllowedOrigins)
+	log.Debug().Msgf("staticOrigins: %v", staticOrigins)
+
+	// Create origin validator that checks static origins + dynamic custom origins
+	originValidator := makeOriginValidator(staticOrigins, cfg.AllowedOrigins, port)
 
 	r := chi.NewRouter()
 
 	rateLimiter := apimiddleware.NewIPRateLimiter()
 	rateLimiter.StartCleanup(st.GetContext())
 
-	ipFilter := apimiddleware.NewIPFilter(cfg.AllowedIPs())
-	authConfig := apimiddleware.NewAuthConfig(config.GetAPIKeys())
+	ipFilter := apimiddleware.NewIPFilter(cfg.AllowedIPs)
+	authConfig := apimiddleware.NewAuthConfig(config.GetAPIKeys)
 
 	// Global middleware for all routes
 	r.Use(apimiddleware.HTTPIPFilterMiddleware(ipFilter))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(config.APIRequestTimeout))
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: dynamicAllowedOrigins,
-		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization"},
-		ExposedHeaders: []string{},
+		AllowOriginFunc: originValidator,
+		AllowedMethods:  []string{"GET", "POST", "OPTIONS"},
+		AllowedHeaders:  []string{"Accept", "Content-Type", "Authorization"},
+		ExposedHeaders:  []string{},
 	}))
 	r.Use(privateNetworkAccessMiddleware)
 
@@ -917,7 +974,7 @@ func Start(
 	session.Upgrader.CheckOrigin = func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		log.Debug().Msgf("websocket origin: %s", origin)
-		return checkWebSocketOrigin(origin, dynamicAllowedOrigins, port)
+		return checkWebSocketOrigin(origin, staticOrigins, cfg.AllowedOrigins, port)
 	}
 	go broadcastNotifications(st, session, notifications)
 

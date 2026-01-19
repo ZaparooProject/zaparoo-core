@@ -27,29 +27,35 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// APIKeyProvider is a function that returns the current list of API keys.
+// This allows the auth middleware to dynamically fetch keys on each request,
+// supporting hot-reload of configuration.
+type APIKeyProvider func() []string
+
 // AuthConfig holds authentication configuration for the API.
-// Authentication is enabled when at least one API key is configured.
+// It uses a provider function to fetch keys dynamically, supporting hot-reload.
 type AuthConfig struct {
-	keys map[string]struct{}
+	getKeys APIKeyProvider
 }
 
-// NewAuthConfig creates a new AuthConfig from a list of API keys.
-// If no keys are provided, authentication is disabled.
-func NewAuthConfig(keys []string) *AuthConfig {
-	keySet := make(map[string]struct{}, len(keys))
-	for _, k := range keys {
-		if k != "" {
-			keySet[k] = struct{}{}
-		}
-	}
+// NewAuthConfig creates a new AuthConfig with a key provider function.
+// The provider is called on each request to get the current list of valid keys,
+// allowing configuration changes to take effect without server restart.
+func NewAuthConfig(keyProvider APIKeyProvider) *AuthConfig {
 	return &AuthConfig{
-		keys: keySet,
+		getKeys: keyProvider,
 	}
 }
 
 // Enabled returns true if authentication is enabled (at least one key configured).
 func (a *AuthConfig) Enabled() bool {
-	return len(a.keys) > 0
+	keys := a.getKeys()
+	for _, k := range keys {
+		if k != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // IsValidKey checks if the provided key is valid using constant-time comparison
@@ -59,11 +65,10 @@ func (a *AuthConfig) IsValidKey(key string) bool {
 		return false
 	}
 
-	// Iterate through all keys and use constant-time comparison for each.
-	// We check all keys to maintain constant time regardless of which key matches.
+	keys := a.getKeys()
 	var found bool
-	for k := range a.keys {
-		if subtle.ConstantTimeCompare([]byte(k), []byte(key)) == 1 {
+	for _, k := range keys {
+		if k != "" && subtle.ConstantTimeCompare([]byte(k), []byte(key)) == 1 {
 			found = true
 		}
 	}
