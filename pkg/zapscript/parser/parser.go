@@ -1055,11 +1055,17 @@ type ArgExprEnv struct {
 	MediaPlaying bool               `expr:"media_playing" json:"media_playing"`
 }
 
+//nolint:tagliatelle // JSON uses snake_case to match expression env naming
 type CustomLauncherExprEnv struct {
-	Platform  string        `expr:"platform"`
-	Version   string        `expr:"version"`
-	Device    ExprEnvDevice `expr:"device"`
-	MediaPath string        `expr:"media_path"`
+	Platform   string        `expr:"platform" json:"platform"`
+	Version    string        `expr:"version" json:"version"`
+	Device     ExprEnvDevice `expr:"device" json:"device"`
+	MediaPath  string        `expr:"media_path" json:"media_path"`
+	Action     string        `expr:"action" json:"action"`
+	InstallDir string        `expr:"install_dir" json:"install_dir"`
+	ServerURL  string        `expr:"server_url" json:"server_url"`
+	SystemID   string        `expr:"system_id" json:"system_id"`
+	LauncherID string        `expr:"launcher_id" json:"launcher_id"`
 }
 
 // ParseExpressions parses and converts expressions in the input string from

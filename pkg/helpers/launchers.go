@@ -20,6 +20,7 @@
 package helpers
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -49,12 +50,21 @@ func formatExtensions(exts []string) []string {
 	return newExts
 }
 
+func parseLifecycle(lifecycle string) platforms.LauncherLifecycle {
+	if strings.EqualFold(lifecycle, "background") {
+		return platforms.LifecycleFireAndForget
+	}
+	return platforms.LifecycleBlocking
+}
+
 func ParseCustomLaunchers(
 	pl platforms.Platform,
 	customLaunchers []config.LaunchersCustom,
 ) []platforms.Launcher {
 	launchers := make([]platforms.Launcher, 0)
-	for _, v := range customLaunchers {
+	for i := range customLaunchers {
+		v := &customLaunchers[i]
+
 		systemID := ""
 		if v.System != "" {
 			system, err := systemdefs.LookupSystem(v.System)
@@ -65,16 +75,38 @@ func ParseCustomLaunchers(
 			systemID = system.ID
 		}
 
+		lifecycle := parseLifecycle(v.Lifecycle)
+
+		// Capture values for the closure
+		launcherID := v.ID
+		launcherSystemID := systemID
+		launcherGroups := v.Groups
+		executeCmd := v.Execute
+
 		launchers = append(launchers, platforms.Launcher{
-			ID:         v.ID,
-			SystemID:   systemID,
-			Folders:    v.MediaDirs,
-			Extensions: formatExtensions(v.FileExts),
-			Lifecycle:  platforms.LifecycleBlocking,
-			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			ID:            launcherID,
+			SystemID:      launcherSystemID,
+			Folders:       v.MediaDirs,
+			Extensions:    formatExtensions(v.FileExts),
+			Groups:        launcherGroups,
+			Schemes:       v.Schemes,
+			AllowListOnly: v.Restricted,
+			Lifecycle:     lifecycle,
+			Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 				hostname, err := os.Hostname()
 				if err != nil {
 					log.Debug().Err(err).Msgf("error getting hostname, continuing")
+				}
+
+				// Get config defaults for this launcher
+				defaults := cfg.LookupLauncherDefaults(launcherID, launcherGroups)
+
+				// Resolve action from opts or defaults
+				action := ""
+				if opts != nil && opts.Action != "" {
+					action = opts.Action
+				} else {
+					action = defaults.Action
 				}
 
 				exprEnv := parser.CustomLauncherExprEnv{
@@ -85,10 +117,15 @@ func ParseCustomLaunchers(
 						OS:       runtime.GOOS,
 						Arch:     runtime.GOARCH,
 					},
-					MediaPath: path,
+					MediaPath:  path,
+					Action:     action,
+					InstallDir: defaults.InstallDir,
+					ServerURL:  defaults.ServerURL,
+					SystemID:   launcherSystemID,
+					LauncherID: launcherID,
 				}
 
-				parseReader := parser.NewParser(v.Execute)
+				parseReader := parser.NewParser(executeCmd)
 				parsed, err := parseReader.ParseExpressions()
 				if err != nil {
 					return nil, fmt.Errorf("error parsing expressions: %w", err)
@@ -108,6 +145,14 @@ func ParseCustomLaunchers(
 				} else {
 					//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
 					cmd = exec.Command("sh", "-c", output)
+				}
+
+				// Pass ZAPAROO_ENVIRONMENT JSON env var
+				envJSON, jsonErr := json.Marshal(exprEnv)
+				if jsonErr != nil {
+					log.Debug().Err(jsonErr).Msg("failed to marshal ZAPAROO_ENVIRONMENT")
+				} else {
+					cmd.Env = append(os.Environ(), "ZAPAROO_ENVIRONMENT="+string(envJSON))
 				}
 
 				if err = cmd.Start(); err != nil {
