@@ -69,6 +69,11 @@ type Platform struct {
 	steamTracker      *steamtracker.WindowsPlatformIntegration
 	processMu         syncutil.RWMutex
 	launchBoxPipeLock syncutil.Mutex
+
+	// Platform mappings from LaunchBox plugin (custom platform names -> system IDs)
+	customPlatformToSystem map[string]string // e.g., "Mame Arcade" -> "arcade"
+	systemToCustomPlatform map[string]string // e.g., "arcade" -> "Mame Arcade"
+	platformMappingsMu     syncutil.RWMutex
 }
 
 func (*Platform) ID() string {

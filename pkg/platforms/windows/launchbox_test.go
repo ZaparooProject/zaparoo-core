@@ -23,6 +23,7 @@ package windows
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -201,4 +202,218 @@ func TestLaunchBoxPipeServerLaunchGameNotConnected(t *testing.T) {
 	err := server.LaunchGame("test-id")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
+}
+
+func TestLaunchBoxPlatformsEventJSONDeserialization(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		jsonStr  string
+		expected launchBoxPlatformsEvent
+	}{
+		{
+			name: "single platform with ScrapeAs",
+			jsonStr: `{"Event":"Platforms","Platforms":[` +
+				`{"Name":"Mame Arcade","ScrapeAs":"Arcade"}]}`,
+			expected: launchBoxPlatformsEvent{
+				Event: "Platforms",
+				Platforms: []launchBoxPlatformInfo{
+					{Name: "Mame Arcade", ScrapeAs: "Arcade"},
+				},
+			},
+		},
+		{
+			name: "multiple platforms",
+			jsonStr: `{"Event":"Platforms","Platforms":[` +
+				`{"Name":"Nintendo Entertainment System","ScrapeAs":"Nintendo Entertainment System"},` +
+				`{"Name":"My SNES Games","ScrapeAs":"Super Nintendo Entertainment System"},` +
+				`{"Name":"Arcade","ScrapeAs":"Arcade"}]}`,
+			expected: launchBoxPlatformsEvent{
+				Event: "Platforms",
+				Platforms: []launchBoxPlatformInfo{
+					{Name: "Nintendo Entertainment System", ScrapeAs: "Nintendo Entertainment System"},
+					{Name: "My SNES Games", ScrapeAs: "Super Nintendo Entertainment System"},
+					{Name: "Arcade", ScrapeAs: "Arcade"},
+				},
+			},
+		},
+		{
+			name:    "empty platforms list",
+			jsonStr: `{"Event":"Platforms","Platforms":[]}`,
+			expected: launchBoxPlatformsEvent{
+				Event:     "Platforms",
+				Platforms: []launchBoxPlatformInfo{},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var event launchBoxPlatformsEvent
+			err := json.Unmarshal([]byte(tt.jsonStr), &event)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, event)
+		})
+	}
+}
+
+func TestGetPlatformsCommandJSONSerialization(t *testing.T) {
+	t.Parallel()
+
+	cmd := pluginCommand{
+		Command: "GetPlatforms",
+	}
+
+	data, err := json.Marshal(cmd)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"Command":"GetPlatforms"}`, string(data))
+}
+
+func TestLaunchBoxPipeServerRequestPlatformsNotConnected(t *testing.T) {
+	t.Parallel()
+
+	server := NewLaunchBoxPipeServer()
+	err := server.RequestPlatforms()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not connected")
+}
+
+func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                       string
+		platforms                  []launchBoxPlatformInfo
+		expectedCustomToSystem     map[string]string
+		expectedSystemToCustom     map[string]string
+		expectedCustomToSystemLen  int
+		expectedSystemToCustomLen  int
+	}{
+		{
+			name: "custom platform name with ScrapeAs",
+			platforms: []launchBoxPlatformInfo{
+				{Name: "Mame Arcade", ScrapeAs: "Arcade"},
+			},
+			expectedCustomToSystem: map[string]string{
+				"Mame Arcade": systemdefs.SystemArcade,
+			},
+			expectedSystemToCustom: map[string]string{
+				systemdefs.SystemArcade: "Mame Arcade",
+			},
+			expectedCustomToSystemLen: 1,
+			expectedSystemToCustomLen: 1,
+		},
+		{
+			name: "standard platform name matches canonical",
+			platforms: []launchBoxPlatformInfo{
+				{Name: "Arcade", ScrapeAs: "Arcade"},
+			},
+			expectedCustomToSystem: map[string]string{
+				"Arcade": systemdefs.SystemArcade,
+			},
+			// No reverse mapping when name matches canonical
+			expectedSystemToCustom:    map[string]string{},
+			expectedCustomToSystemLen: 1,
+			expectedSystemToCustomLen: 0,
+		},
+		{
+			name: "multiple custom platforms",
+			platforms: []launchBoxPlatformInfo{
+				{Name: "Mame Arcade", ScrapeAs: "Arcade"},
+				{Name: "My NES Collection", ScrapeAs: "Nintendo Entertainment System"},
+				{Name: "Super Nintendo Entertainment System", ScrapeAs: "Super Nintendo Entertainment System"},
+			},
+			expectedCustomToSystem: map[string]string{
+				"Mame Arcade":                          systemdefs.SystemArcade,
+				"My NES Collection":                    systemdefs.SystemNES,
+				"Super Nintendo Entertainment System":  systemdefs.SystemSNES,
+			},
+			expectedSystemToCustom: map[string]string{
+				systemdefs.SystemArcade: "Mame Arcade",
+				systemdefs.SystemNES:    "My NES Collection",
+				// SNES not in reverse map because name matches canonical
+			},
+			expectedCustomToSystemLen: 3,
+			expectedSystemToCustomLen: 2,
+		},
+		{
+			name: "unknown ScrapeAs value",
+			platforms: []launchBoxPlatformInfo{
+				{Name: "My Custom Platform", ScrapeAs: "Unknown Platform That Does Not Exist"},
+			},
+			expectedCustomToSystem:    map[string]string{},
+			expectedSystemToCustom:    map[string]string{},
+			expectedCustomToSystemLen: 0,
+			expectedSystemToCustomLen: 0,
+		},
+		{
+			name: "empty ScrapeAs falls back to Name",
+			platforms: []launchBoxPlatformInfo{
+				{Name: "Arcade", ScrapeAs: ""},
+			},
+			expectedCustomToSystem: map[string]string{
+				"Arcade": systemdefs.SystemArcade,
+			},
+			expectedSystemToCustom:    map[string]string{},
+			expectedCustomToSystemLen: 1,
+			expectedSystemToCustomLen: 0,
+		},
+		{
+			name: "case insensitive matching",
+			platforms: []launchBoxPlatformInfo{
+				{Name: "My Arcade Games", ScrapeAs: "arcade"}, // lowercase
+			},
+			expectedCustomToSystem: map[string]string{
+				"My Arcade Games": systemdefs.SystemArcade,
+			},
+			expectedSystemToCustom: map[string]string{
+				systemdefs.SystemArcade: "My Arcade Games",
+			},
+			expectedCustomToSystemLen: 1,
+			expectedSystemToCustomLen: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Simulate the mapping building logic from initLaunchBoxPipe
+			customPlatformToSystem := make(map[string]string)
+			systemToCustomPlatform := make(map[string]string)
+
+			for _, plat := range tt.platforms {
+				canonicalName := plat.ScrapeAs
+				if canonicalName == "" {
+					canonicalName = plat.Name
+				}
+
+				for sysID, lbName := range lbSysMap {
+					if strings.EqualFold(lbName, canonicalName) {
+						customPlatformToSystem[plat.Name] = sysID
+						if !strings.EqualFold(plat.Name, lbName) {
+							systemToCustomPlatform[sysID] = plat.Name
+						}
+						break
+					}
+				}
+			}
+
+			assert.Len(t, customPlatformToSystem, tt.expectedCustomToSystemLen)
+			assert.Len(t, systemToCustomPlatform, tt.expectedSystemToCustomLen)
+
+			for name, expectedSysID := range tt.expectedCustomToSystem {
+				assert.Equal(t, expectedSysID, customPlatformToSystem[name],
+					"customPlatformToSystem[%q] mismatch", name)
+			}
+
+			for sysID, expectedName := range tt.expectedSystemToCustom {
+				assert.Equal(t, expectedName, systemToCustomPlatform[sysID],
+					"systemToCustomPlatform[%q] mismatch", sysID)
+			}
+		})
+	}
 }

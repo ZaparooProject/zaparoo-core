@@ -32,6 +32,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Microsoft/go-winio"
@@ -66,6 +67,18 @@ type pluginEvent struct {
 type pluginCommand struct {
 	Command string `json:"Command"`
 	ID      string `json:"Id,omitempty"`
+}
+
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
+type launchBoxPlatformInfo struct {
+	Name     string `json:"Name"`
+	ScrapeAs string `json:"ScrapeAs"`
+}
+
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
+type launchBoxPlatformsEvent struct {
+	Event     string                  `json:"Event"`
+	Platforms []launchBoxPlatformInfo `json:"Platforms"`
 }
 
 // LaunchBox XML types
@@ -303,15 +316,16 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 
 // LaunchBoxPipeServer manages named pipe communication with the LaunchBox plugin
 type LaunchBoxPipeServer struct {
-	onGameStarted  func(id, title, platform, path string)
-	onGameExited   func(id, title string)
-	onWriteRequest func(id, title, platform string)
-	listener       net.Listener
-	conn           net.Conn
-	ctx            context.Context
-	cancel         context.CancelFunc
-	writer         *bufio.Writer
-	connMu         syncutil.Mutex
+	onGameStarted       func(id, title, platform, path string)
+	onGameExited        func(id, title string)
+	onWriteRequest      func(id, title, platform string)
+	onPlatformsReceived func(platforms []launchBoxPlatformInfo)
+	listener            net.Listener
+	conn                net.Conn
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	writer              *bufio.Writer
+	connMu              syncutil.Mutex
 }
 
 // NewLaunchBoxPipeServer creates a new named pipe server
@@ -375,6 +389,41 @@ func (s *LaunchBoxPipeServer) SetGameExitedHandler(handler func(id, title string
 // SetWriteRequestHandler sets the callback for write request events
 func (s *LaunchBoxPipeServer) SetWriteRequestHandler(handler func(id, title, platform string)) {
 	s.onWriteRequest = handler
+}
+
+// SetPlatformsReceivedHandler sets the callback for platforms received events
+func (s *LaunchBoxPipeServer) SetPlatformsReceivedHandler(handler func(platforms []launchBoxPlatformInfo)) {
+	s.onPlatformsReceived = handler
+}
+
+// RequestPlatforms sends a GetPlatforms command to the LaunchBox plugin
+func (s *LaunchBoxPipeServer) RequestPlatforms() error {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+
+	if s.writer == nil {
+		return errors.New("LaunchBox plugin not connected")
+	}
+
+	cmd := pluginCommand{
+		Command: "GetPlatforms",
+	}
+
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to marshal GetPlatforms command: %w", err)
+	}
+
+	if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
+		return fmt.Errorf("failed to write GetPlatforms command: %w", err)
+	}
+
+	if err := s.writer.Flush(); err != nil {
+		return fmt.Errorf("failed to flush GetPlatforms command: %w", err)
+	}
+
+	log.Debug().Msg("sent GetPlatforms command to LaunchBox plugin")
+	return nil
 }
 
 // LaunchGame sends a launch command to the LaunchBox plugin
@@ -476,6 +525,11 @@ func (s *LaunchBoxPipeServer) acceptConnections() {
 		s.writer = bufio.NewWriter(conn)
 		s.connMu.Unlock()
 
+		// Request platform mappings from the plugin
+		if err := s.RequestPlatforms(); err != nil {
+			log.Warn().Err(err).Msg("failed to request platforms from LaunchBox plugin")
+		}
+
 		// Handle this connection
 		go s.handleConnection(conn)
 	}
@@ -576,6 +630,19 @@ func (s *LaunchBoxPipeServer) handleEvent(data string) {
 			s.onWriteRequest(event.ID, event.Title, event.Platform)
 		}
 
+	case "Platforms":
+		var platformsEvent launchBoxPlatformsEvent
+		if err := json.Unmarshal([]byte(data), &platformsEvent); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal LaunchBox Platforms event")
+			return
+		}
+
+		log.Info().Msgf("received %d platforms from LaunchBox", len(platformsEvent.Platforms))
+
+		if s.onPlatformsReceived != nil {
+			s.onPlatformsReceived(platformsEvent.Platforms)
+		}
+
 	default:
 		log.Debug().Msgf("unknown LaunchBox event type: %s", event.Event)
 	}
@@ -602,11 +669,18 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 
 	// Set event handlers
 	pipe.SetGameStartedHandler(func(id, title, platform, _ string) {
-		// Convert LaunchBox platform name to Zaparoo system ID
-		systemID, ok := lbSysMapReverse[platform]
+		// Try custom platform mapping first (from plugin's ScrapeAs data)
+		p.platformMappingsMu.RLock()
+		systemID, ok := p.customPlatformToSystem[platform]
+		p.platformMappingsMu.RUnlock()
+
 		if !ok {
-			log.Debug().Msgf("unknown LaunchBox platform: %s, skipping ActiveMedia", platform)
-			return
+			// Fall back to hardcoded reverse map
+			systemID, ok = lbSysMapReverse[platform]
+			if !ok {
+				log.Debug().Msgf("unknown LaunchBox platform: %s, skipping ActiveMedia", platform)
+				return
+			}
 		}
 
 		// Get system name from metadata
@@ -663,6 +737,38 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 		log.Info().Msgf("write request sent to API: %s", text)
 	})
 
+	pipe.SetPlatformsReceivedHandler(func(platforms []launchBoxPlatformInfo) {
+		p.platformMappingsMu.Lock()
+		defer p.platformMappingsMu.Unlock()
+
+		p.customPlatformToSystem = make(map[string]string)
+		p.systemToCustomPlatform = make(map[string]string)
+
+		for _, plat := range platforms {
+			// Use ScrapeAs to find the Zaparoo system ID via lbSysMap
+			canonicalName := plat.ScrapeAs
+			if canonicalName == "" {
+				canonicalName = plat.Name
+			}
+
+			// Look up in lbSysMap (which maps Zaparoo system ID -> LaunchBox canonical name)
+			for sysID, lbName := range lbSysMap {
+				if strings.EqualFold(lbName, canonicalName) {
+					p.customPlatformToSystem[plat.Name] = sysID
+					// Only set reverse mapping if it's a custom name
+					if !strings.EqualFold(plat.Name, lbName) {
+						p.systemToCustomPlatform[sysID] = plat.Name
+					}
+					log.Debug().Msgf("mapped LaunchBox platform %q (ScrapeAs: %q) -> %s",
+						plat.Name, plat.ScrapeAs, sysID)
+					break
+				}
+			}
+		}
+
+		log.Info().Msgf("built %d custom platform mappings from LaunchBox", len(p.customPlatformToSystem))
+	})
+
 	if err := pipe.Start(); err != nil {
 		log.Warn().Err(err).Msg("failed to start LaunchBox named pipe server")
 		// Don't fail platform initialization if pipe server fails
@@ -687,9 +793,17 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 			systemId string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
-			lbSys, ok := lbSysMap[systemId]
+			// Try custom platform name first (from plugin's platform data)
+			p.platformMappingsMu.RLock()
+			lbSys, ok := p.systemToCustomPlatform[systemId]
+			p.platformMappingsMu.RUnlock()
+
 			if !ok {
-				return results, nil
+				// Fall back to hardcoded map
+				lbSys, ok = lbSysMap[systemId]
+				if !ok {
+					return results, nil
+				}
 			}
 
 			lbDir, err := findLaunchBoxDir(cfg)

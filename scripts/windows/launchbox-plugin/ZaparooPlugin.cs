@@ -409,6 +409,10 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                     }
                     break;
 
+                case "GetPlatforms":
+                    SendPlatformsList();
+                    break;
+
                 case "Ping":
                     // Heartbeat to keep connection alive - no action needed
                     break;
@@ -438,6 +442,31 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
         catch (Exception)
         {
             // Ignore launch errors
+        }
+    }
+
+    private void SendPlatformsList()
+    {
+        try
+        {
+            var platforms = PluginHelper.DataManager.GetAllPlatforms();
+            var response = new PlatformsResponseEvent();
+
+            foreach (var platform in platforms)
+            {
+                response.Platforms.Add(new PlatformInfo
+                {
+                    Name = platform.Name,
+                    // Fall back to Name if ScrapeAs is not set
+                    ScrapeAs = string.IsNullOrEmpty(platform.ScrapeAs) ? platform.Name : platform.ScrapeAs
+                });
+            }
+
+            SendEvent(response);
+        }
+        catch (Exception)
+        {
+            // Ignore errors - platforms won't be sent
         }
     }
 
@@ -473,6 +502,18 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     {
         public string? Command { get; set; }
         public string? Id { get; set; }
+    }
+
+    private class PlatformInfo
+    {
+        public string Name { get; set; } = string.Empty;
+        public string ScrapeAs { get; set; } = string.Empty;
+    }
+
+    private class PlatformsResponseEvent
+    {
+        public string Event { get; set; } = "Platforms";
+        public List<PlatformInfo> Platforms { get; set; } = new();
     }
 
     #endregion
