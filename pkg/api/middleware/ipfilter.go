@@ -26,77 +26,89 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// IPFilter manages IP allowlist filtering for both HTTP and WebSocket connections
-type IPFilter struct {
-	allowedIPs   []string
-	allowedNets  []*net.IPNet
-	allowedAddrs []net.IP
+// ParseRemoteIP extracts and parses the IP address from a RemoteAddr string (IP:port format).
+func ParseRemoteIP(remoteAddr string) net.IP {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	return net.ParseIP(host)
 }
 
-// NewIPFilter creates a new IP filter from a list of allowed IPs/CIDRs.
-// Empty list means all IPs are allowed (no filtering).
-func NewIPFilter(allowedIPs []string) *IPFilter {
-	filter := &IPFilter{
-		allowedIPs:   allowedIPs,
-		allowedNets:  make([]*net.IPNet, 0),
-		allowedAddrs: make([]net.IP, 0),
+// IsLoopbackAddr checks if a RemoteAddr string represents a loopback address.
+func IsLoopbackAddr(remoteAddr string) bool {
+	ip := ParseRemoteIP(remoteAddr)
+	if ip == nil {
+		return false
 	}
+	return ip.IsLoopback()
+}
 
-	// Parse and categorize allowed IPs
+// IPsProvider is a function that returns the current list of allowed IPs/CIDRs.
+// This allows the IP filter to dynamically fetch the allowlist on each request,
+// supporting hot-reload of configuration.
+type IPsProvider func() []string
+
+// IPFilter manages IP allowlist filtering for both HTTP and WebSocket connections.
+// It uses a provider function to fetch the allowlist dynamically.
+type IPFilter struct {
+	getAllowedIPs IPsProvider
+}
+
+// NewIPFilter creates a new IP filter with an IPs provider function.
+// The provider is called on each request to get the current allowlist,
+// allowing configuration changes to take effect without server restart.
+func NewIPFilter(ipsProvider IPsProvider) *IPFilter {
+	return &IPFilter{
+		getAllowedIPs: ipsProvider,
+	}
+}
+
+// parseAllowedIPs parses a list of IP strings into nets and individual IPs.
+func parseAllowedIPs(allowedIPs []string) (nets []*net.IPNet, addrs []net.IP) {
 	for _, ipStr := range allowedIPs {
-		// Clean input if user pasted an address with port (e.g., "192.168.1.1:7497")
 		if host, _, err := net.SplitHostPort(ipStr); err == nil {
 			ipStr = host
 		}
 
-		// Try parsing as CIDR first
 		if _, network, err := net.ParseCIDR(ipStr); err == nil {
-			filter.allowedNets = append(filter.allowedNets, network)
+			nets = append(nets, network)
 			continue
 		}
 
-		// Try parsing as individual IP
 		if ip := net.ParseIP(ipStr); ip != nil {
-			filter.allowedAddrs = append(filter.allowedAddrs, ip)
+			addrs = append(addrs, ip)
 			continue
 		}
 
-		// Invalid IP/CIDR - log and skip
 		log.Warn().Str("ip", ipStr).Msg("invalid IP or CIDR in allowed_ips, skipping")
 	}
-
-	return filter
+	return nets, addrs
 }
 
 // IsAllowed checks if an IP address is allowed.
 // Returns true if the allowlist is empty (no filtering) or if the IP matches an allowed entry.
 func (f *IPFilter) IsAllowed(remoteAddr string) bool {
-	// Empty allowlist means allow all
-	if len(f.allowedIPs) == 0 {
+	allowedIPs := f.getAllowedIPs()
+	if len(allowedIPs) == 0 {
 		return true
 	}
 
-	// Extract IP from "IP:port" format
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
-	}
-
-	ip := net.ParseIP(host)
+	ip := ParseRemoteIP(remoteAddr)
 	if ip == nil {
 		log.Warn().Str("addr", remoteAddr).Msg("failed to parse IP address")
 		return false
 	}
 
-	// Check against individual IPs
-	for _, allowedIP := range f.allowedAddrs {
+	nets, addrs := parseAllowedIPs(allowedIPs)
+
+	for _, allowedIP := range addrs {
 		if ip.Equal(allowedIP) {
 			return true
 		}
 	}
 
-	// Check against CIDR networks
-	for _, network := range f.allowedNets {
+	for _, network := range nets {
 		if network.Contains(ip) {
 			return true
 		}
@@ -111,14 +123,9 @@ func HTTPIPFilterMiddleware(filter *IPFilter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !filter.IsAllowed(r.RemoteAddr) {
-				host, _, err := net.SplitHostPort(r.RemoteAddr)
-				if err != nil {
-					host = r.RemoteAddr
-				}
-
-				// Use Debug level to prevent log flooding from blocked IPs
+				ip := ParseRemoteIP(r.RemoteAddr)
 				log.Debug().
-					Str("ip", host).
+					Str("ip", ip.String()).
 					Str("path", r.URL.Path).
 					Str("method", r.Method).
 					Msg("request from blocked IP")

@@ -99,7 +99,10 @@ type Instance struct {
 	mu       syncutil.RWMutex
 }
 
-var authCfg atomic.Value
+var (
+	authCfg atomic.Value
+	apiKeys atomic.Value
+)
 
 func GetAuthCfg() map[string]CredentialEntry {
 	val := authCfg.Load()
@@ -111,6 +114,18 @@ func GetAuthCfg() map[string]CredentialEntry {
 		return nil
 	}
 	return creds
+}
+
+func GetAPIKeys() []string {
+	val := apiKeys.Load()
+	if val == nil {
+		return nil
+	}
+	keys, ok := val.([]string)
+	if !ok {
+		return nil
+	}
+	return keys
 }
 
 //nolint:gocritic // config struct copied for immutability
@@ -200,8 +215,11 @@ func (c *Instance) Load() error {
 
 		authEntries := LoadAuthFromData(authData)
 		log.Info().Msgf("loaded %d auth entries", len(authEntries))
-
 		authCfg.Store(authEntries)
+
+		keys := LoadAPIKeysFromData(authData)
+		log.Info().Msgf("loaded %d API keys", len(keys))
+		apiKeys.Store(keys)
 	}
 
 	// prepare allow files regexes

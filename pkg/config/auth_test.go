@@ -524,3 +524,84 @@ func TestLookupAuth_RealWorldMQTTScenarios(t *testing.T) {
 		assert.Equal(t, "mqtt-user", result.Username)
 	})
 }
+
+func TestLoadAPIKeysFromData(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		data     string
+		expected []string
+	}{
+		{
+			name:     "empty data",
+			data:     "",
+			expected: nil,
+		},
+		{
+			name:     "no api_keys field",
+			data:     `["https://example.com"]\nusername = "user"`,
+			expected: nil,
+		},
+		{
+			name:     "single key",
+			data:     `api_keys = ["secret-key-123"]`,
+			expected: []string{"secret-key-123"},
+		},
+		{
+			name:     "multiple keys",
+			data:     `api_keys = ["key1", "key2", "key3"]`,
+			expected: []string{"key1", "key2", "key3"},
+		},
+		{
+			name:     "empty strings filtered out",
+			data:     `api_keys = ["", "valid-key", ""]`,
+			expected: []string{"valid-key"},
+		},
+		{
+			name:     "all empty strings",
+			data:     `api_keys = ["", "", ""]`,
+			expected: nil,
+		},
+		{
+			name:     "empty keys array",
+			data:     `api_keys = []`,
+			expected: nil,
+		},
+		{
+			name: "mixed with auth entries",
+			data: `api_keys = ["api-key-1", "api-key-2"]
+
+["https://api.example.com"]
+username = "user1"
+password = "pass1"`,
+			expected: []string{"api-key-1", "api-key-2"},
+		},
+		{
+			name:     "keys with special characters",
+			data:     `api_keys = ["key-with-dashes", "key_with_underscores", "key.with.dots"]`,
+			expected: []string{"key-with-dashes", "key_with_underscores", "key.with.dots"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := LoadAPIKeysFromData([]byte(tt.data))
+
+			if tt.expected == nil {
+				assert.Nil(t, result)
+			} else {
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestLoadAPIKeysFromData_InvalidTOML(t *testing.T) {
+	t.Parallel()
+
+	result := LoadAPIKeysFromData([]byte("this is not valid toml [[["))
+	assert.Nil(t, result)
+}

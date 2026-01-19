@@ -27,15 +27,19 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestNewIPFilter(t *testing.T) {
+// ipsProvider wraps a slice as an IPsProvider for testing.
+func ipsProvider(ips []string) IPsProvider {
+	return func() []string { return ips }
+}
+
+func TestParseAllowedIPs(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name              string
-		allowedIPs        []string
-		expectedNets      int
-		expectedAddrs     int
-		expectWarningLogs bool
+		name          string
+		allowedIPs    []string
+		expectedNets  int
+		expectedAddrs int
 	}{
 		{
 			name:          "empty list",
@@ -62,11 +66,10 @@ func TestNewIPFilter(t *testing.T) {
 			expectedAddrs: 2,
 		},
 		{
-			name:              "invalid IP",
-			allowedIPs:        []string{"invalid"},
-			expectedNets:      0,
-			expectedAddrs:     0,
-			expectWarningLogs: true,
+			name:          "invalid IP filtered out",
+			allowedIPs:    []string{"invalid"},
+			expectedNets:  0,
+			expectedAddrs: 0,
 		},
 		{
 			name:          "IPv6 address",
@@ -104,14 +107,12 @@ func TestNewIPFilter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			filter := NewIPFilter(tt.allowedIPs)
+			nets, addrs := parseAllowedIPs(tt.allowedIPs)
 
-			assert.NotNil(t, filter)
-			assert.Len(t, filter.allowedIPs, len(tt.allowedIPs))
-			assert.Len(t, filter.allowedNets, tt.expectedNets,
-				"expected %d networks, got %d", tt.expectedNets, len(filter.allowedNets))
-			assert.Len(t, filter.allowedAddrs, tt.expectedAddrs,
-				"expected %d addresses, got %d", tt.expectedAddrs, len(filter.allowedAddrs))
+			assert.Len(t, nets, tt.expectedNets,
+				"expected %d networks, got %d", tt.expectedNets, len(nets))
+			assert.Len(t, addrs, tt.expectedAddrs,
+				"expected %d addresses, got %d", tt.expectedAddrs, len(addrs))
 		})
 	}
 }
@@ -233,7 +234,7 @@ func TestIPFilter_IsAllowed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			filter := NewIPFilter(tt.allowedIPs)
+			filter := NewIPFilter(ipsProvider(tt.allowedIPs))
 			result := filter.IsAllowed(tt.remoteAddr)
 
 			assert.Equal(t, tt.expected, result,
@@ -301,7 +302,7 @@ func TestHTTPIPFilterMiddleware(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			filter := NewIPFilter(tt.allowedIPs)
+			filter := NewIPFilter(ipsProvider(tt.allowedIPs))
 			middleware := HTTPIPFilterMiddleware(filter)
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -329,7 +330,7 @@ func TestHTTPIPFilterMiddleware_Integration(t *testing.T) {
 	t.Parallel()
 
 	// Test that middleware works correctly in a chain with multiple middlewares
-	filter := NewIPFilter([]string{"192.168.1.0/24"})
+	filter := NewIPFilter(ipsProvider([]string{"192.168.1.0/24"}))
 	ipFilterMiddleware := HTTPIPFilterMiddleware(filter)
 
 	callCount := 0
@@ -367,4 +368,180 @@ func TestHTTPIPFilterMiddleware_Integration(t *testing.T) {
 
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
 	assert.Equal(t, 0, callCount, "testMiddleware should not be called for blocked IP")
+}
+
+func TestParseRemoteIP(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		expected   string
+		expectNil  bool
+	}{
+		{
+			name:       "IPv4 with port",
+			remoteAddr: "192.168.1.1:12345",
+			expected:   "192.168.1.1",
+		},
+		{
+			name:       "IPv6 with port",
+			remoteAddr: "[::1]:12345",
+			expected:   "::1",
+		},
+		{
+			name:       "IPv4 without port",
+			remoteAddr: "10.0.0.1",
+			expected:   "10.0.0.1",
+		},
+		{
+			name:       "invalid address",
+			remoteAddr: "not-an-ip",
+			expectNil:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ip := ParseRemoteIP(tt.remoteAddr)
+			if tt.expectNil {
+				assert.Nil(t, ip)
+			} else {
+				assert.NotNil(t, ip)
+				assert.Equal(t, tt.expected, ip.String())
+			}
+		})
+	}
+}
+
+func TestIsLoopbackAddr(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		expected   bool
+	}{
+		{
+			name:       "IPv4 loopback with port",
+			remoteAddr: "127.0.0.1:12345",
+			expected:   true,
+		},
+		{
+			name:       "IPv4 loopback range",
+			remoteAddr: "127.0.0.100:8080",
+			expected:   true,
+		},
+		{
+			name:       "IPv6 loopback with port",
+			remoteAddr: "[::1]:12345",
+			expected:   true,
+		},
+		{
+			name:       "private IPv4",
+			remoteAddr: "192.168.1.1:12345",
+			expected:   false,
+		},
+		{
+			name:       "public IPv4",
+			remoteAddr: "8.8.8.8:53",
+			expected:   false,
+		},
+		{
+			name:       "invalid address",
+			remoteAddr: "not-an-ip",
+			expected:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := IsLoopbackAddr(tt.remoteAddr)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestIPFilter_HotReload(t *testing.T) {
+	t.Parallel()
+
+	// Mutable IP store to simulate config reload
+	allowedIPs := []string{"192.168.1.0/24"}
+	provider := func() []string { return allowedIPs }
+
+	filter := NewIPFilter(provider)
+
+	// Initial state: 192.168.1.x allowed, 10.0.0.x blocked
+	assert.True(t, filter.IsAllowed("192.168.1.100:12345"))
+	assert.False(t, filter.IsAllowed("10.0.0.1:12345"))
+
+	// Simulate config reload: change to allow 10.0.0.0/8 instead
+	allowedIPs = []string{"10.0.0.0/8"}
+
+	// Now 10.0.0.x allowed, 192.168.1.x blocked
+	assert.False(t, filter.IsAllowed("192.168.1.100:12345"))
+	assert.True(t, filter.IsAllowed("10.0.0.1:12345"))
+
+	// Simulate config reload: allow both
+	allowedIPs = []string{"192.168.1.0/24", "10.0.0.0/8"}
+
+	assert.True(t, filter.IsAllowed("192.168.1.100:12345"))
+	assert.True(t, filter.IsAllowed("10.0.0.1:12345"))
+
+	// Simulate config reload: empty list (allow all)
+	allowedIPs = []string{}
+
+	assert.True(t, filter.IsAllowed("192.168.1.100:12345"))
+	assert.True(t, filter.IsAllowed("10.0.0.1:12345"))
+	assert.True(t, filter.IsAllowed("8.8.8.8:12345")) // Even public IPs
+}
+
+func TestHTTPIPFilterMiddleware_HotReload(t *testing.T) {
+	t.Parallel()
+
+	allowedIPs := []string{"192.168.1.100"}
+	provider := func() []string { return allowedIPs }
+
+	filter := NewIPFilter(provider)
+	middleware := HTTPIPFilterMiddleware(filter)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := middleware(handler)
+
+	// Request from allowed IP should succeed
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.100:12345"
+	recorder := httptest.NewRecorder()
+	wrapped.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+
+	// Request from blocked IP should fail
+	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.200:12345"
+	recorder = httptest.NewRecorder()
+	wrapped.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+
+	// Simulate config reload: allow 192.168.1.200 instead
+	allowedIPs = []string{"192.168.1.200"}
+
+	// Old IP should now be blocked
+	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.100:12345"
+	recorder = httptest.NewRecorder()
+	wrapped.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+
+	// New IP should now be allowed
+	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.200:12345"
+	recorder = httptest.NewRecorder()
+	wrapped.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
 }
