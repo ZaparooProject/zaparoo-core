@@ -884,6 +884,7 @@ func Start(
 	rateLimiter.StartCleanup(st.GetContext())
 
 	ipFilter := apimiddleware.NewIPFilter(cfg.AllowedIPs())
+	authConfig := apimiddleware.NewAuthConfig(config.GetAPIKeys())
 
 	// Global middleware for all routes
 	r.Use(apimiddleware.HTTPIPFilterMiddleware(ipFilter))
@@ -892,7 +893,7 @@ func Start(
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: dynamicAllowedOrigins,
 		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type"},
+		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization"},
 		ExposedHeaders: []string{},
 	}))
 	r.Use(privateNetworkAccessMiddleware)
@@ -922,30 +923,34 @@ func Start(
 
 	// API routes
 	r.Group(func(r chi.Router) {
+		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
 
-		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
+		// WebSocket handler that checks auth before upgrade
+		wsHandler := func(w http.ResponseWriter, r *http.Request, version string) {
+			if !apimiddleware.WebSocketAuthHandler(authConfig, r) {
+				http.Error(w, "Unauthorized: API key required", http.StatusUnauthorized)
+				return
+			}
 			err := session.HandleRequest(w, r)
 			if err != nil {
-				log.Error().Err(err).Msg("handling websocket request: latest")
+				log.Error().Err(err).Msgf("handling websocket request: %s", version)
 			}
+		}
+
+		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
+			wsHandler(w, r, "latest")
 		})
 		r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
 
 		r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
-			err := session.HandleRequest(w, r)
-			if err != nil {
-				log.Error().Err(err).Msg("handling websocket request: v0")
-			}
+			wsHandler(w, r, "v0")
 		})
 		r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
 
 		r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
-			err := session.HandleRequest(w, r)
-			if err != nil {
-				log.Error().Err(err).Msg("handling websocket request: v0.1")
-			}
+			wsHandler(w, r, "v0.1")
 		})
 		r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
 

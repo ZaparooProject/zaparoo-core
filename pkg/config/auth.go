@@ -62,10 +62,15 @@ type authAuthCredsFormat struct {
 	Auth authCredsWrapper `toml:"auth"`
 }
 
+// authAPIKeysFormat represents root-level api_keys in auth.toml
+type authAPIKeysFormat struct {
+	APIKeys []string `toml:"api_keys"`
+}
+
 // isValidAuthKey filters out TOML structural keys that get captured when
 // parsing the root format in mixed-format files.
 func isValidAuthKey(key string) bool {
-	return key != "creds" && key != "auth"
+	return key != "creds" && key != "auth" && key != "api_keys"
 }
 
 // LoadAuthFromData parses auth.toml data supporting all three formats.
@@ -103,6 +108,24 @@ func LoadAuthFromData(data []byte) map[string]CredentialEntry {
 	}
 
 	return result
+}
+
+// LoadAPIKeysFromData parses root-level api_keys from auth.toml and returns
+// valid API keys. Empty strings are filtered out.
+func LoadAPIKeysFromData(data []byte) []string {
+	var apiCfg authAPIKeysFormat
+	if err := toml.Unmarshal(data, &apiCfg); err != nil {
+		return nil
+	}
+
+	// Filter out empty keys
+	var keys []string
+	for _, k := range apiCfg.APIKeys {
+		if k != "" {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 // normalizeScheme converts scheme aliases to their canonical form.

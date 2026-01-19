@@ -26,6 +26,24 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// ParseRemoteIP extracts and parses the IP address from a RemoteAddr string (IP:port format).
+func ParseRemoteIP(remoteAddr string) net.IP {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	return net.ParseIP(host)
+}
+
+// IsLoopbackAddr checks if a RemoteAddr string represents a loopback address.
+func IsLoopbackAddr(remoteAddr string) bool {
+	ip := ParseRemoteIP(remoteAddr)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
+}
+
 // IPFilter manages IP allowlist filtering for both HTTP and WebSocket connections
 type IPFilter struct {
 	allowedIPs   []string
@@ -71,18 +89,11 @@ func NewIPFilter(allowedIPs []string) *IPFilter {
 // IsAllowed checks if an IP address is allowed.
 // Returns true if the allowlist is empty (no filtering) or if the IP matches an allowed entry.
 func (f *IPFilter) IsAllowed(remoteAddr string) bool {
-	// Empty allowlist means allow all
 	if len(f.allowedIPs) == 0 {
 		return true
 	}
 
-	// Extract IP from "IP:port" format
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
-	}
-
-	ip := net.ParseIP(host)
+	ip := ParseRemoteIP(remoteAddr)
 	if ip == nil {
 		log.Warn().Str("addr", remoteAddr).Msg("failed to parse IP address")
 		return false
@@ -111,14 +122,9 @@ func HTTPIPFilterMiddleware(filter *IPFilter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !filter.IsAllowed(r.RemoteAddr) {
-				host, _, err := net.SplitHostPort(r.RemoteAddr)
-				if err != nil {
-					host = r.RemoteAddr
-				}
-
-				// Use Debug level to prevent log flooding from blocked IPs
+				ip := ParseRemoteIP(r.RemoteAddr)
 				log.Debug().
-					Str("ip", host).
+					Str("ip", ip.String()).
 					Str("path", r.URL.Path).
 					Str("method", r.Method).
 					Msg("request from blocked IP")

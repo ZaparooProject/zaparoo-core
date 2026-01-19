@@ -22,7 +22,6 @@ package middleware
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"net/http"
 	"time"
 
@@ -113,10 +112,8 @@ func (rl *IPRateLimiter) StartCleanup(ctx context.Context) {
 func HTTPRateLimitMiddleware(limiter *IPRateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			host, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				host = r.RemoteAddr
-			}
+			ip := ParseRemoteIP(r.RemoteAddr)
+			host := ip.String()
 			rl := limiter.GetLimiter(host)
 
 			if !rl.Allow() {
@@ -141,10 +138,8 @@ func WebSocketRateLimitHandler(
 	handler func(*melody.Session, []byte),
 ) func(*melody.Session, []byte) {
 	return func(session *melody.Session, msg []byte) {
-		host, _, err := net.SplitHostPort(session.Request.RemoteAddr)
-		if err != nil {
-			host = session.Request.RemoteAddr
-		}
+		ip := ParseRemoteIP(session.Request.RemoteAddr)
+		host := ip.String()
 		rl := limiter.GetLimiter(host)
 
 		if !rl.Allow() {

@@ -368,3 +368,99 @@ func TestHTTPIPFilterMiddleware_Integration(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
 	assert.Equal(t, 0, callCount, "testMiddleware should not be called for blocked IP")
 }
+
+func TestParseRemoteIP(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		expected   string
+		expectNil  bool
+	}{
+		{
+			name:       "IPv4 with port",
+			remoteAddr: "192.168.1.1:12345",
+			expected:   "192.168.1.1",
+		},
+		{
+			name:       "IPv6 with port",
+			remoteAddr: "[::1]:12345",
+			expected:   "::1",
+		},
+		{
+			name:       "IPv4 without port",
+			remoteAddr: "10.0.0.1",
+			expected:   "10.0.0.1",
+		},
+		{
+			name:       "invalid address",
+			remoteAddr: "not-an-ip",
+			expectNil:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ip := ParseRemoteIP(tt.remoteAddr)
+			if tt.expectNil {
+				assert.Nil(t, ip)
+			} else {
+				assert.NotNil(t, ip)
+				assert.Equal(t, tt.expected, ip.String())
+			}
+		})
+	}
+}
+
+func TestIsLoopbackAddr(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		expected   bool
+	}{
+		{
+			name:       "IPv4 loopback with port",
+			remoteAddr: "127.0.0.1:12345",
+			expected:   true,
+		},
+		{
+			name:       "IPv4 loopback range",
+			remoteAddr: "127.0.0.100:8080",
+			expected:   true,
+		},
+		{
+			name:       "IPv6 loopback with port",
+			remoteAddr: "[::1]:12345",
+			expected:   true,
+		},
+		{
+			name:       "private IPv4",
+			remoteAddr: "192.168.1.1:12345",
+			expected:   false,
+		},
+		{
+			name:       "public IPv4",
+			remoteAddr: "8.8.8.8:53",
+			expected:   false,
+		},
+		{
+			name:       "invalid address",
+			remoteAddr: "not-an-ip",
+			expected:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := IsLoopbackAddr(tt.remoteAddr)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
