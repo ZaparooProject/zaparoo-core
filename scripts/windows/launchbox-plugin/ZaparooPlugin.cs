@@ -44,6 +44,7 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     private static Task? _connectionTask;
     private static readonly object _pipeLock = new();
     private static bool _isShuttingDown;
+    private static bool _isBigBoxRunning;
 
     // Instance-specific state
     private IGame? _currentGame;
@@ -68,9 +69,15 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
 
     public void OnEventRaised(string eventType)
     {
-        if (eventType == SystemEventTypes.LaunchBoxStartupCompleted ||
-            eventType == SystemEventTypes.BigBoxStartupCompleted)
+        if (eventType == SystemEventTypes.LaunchBoxStartupCompleted)
         {
+            _isBigBoxRunning = false;
+            _isShuttingDown = false;
+            StartConnectionTask();
+        }
+        else if (eventType == SystemEventTypes.BigBoxStartupCompleted)
+        {
+            _isBigBoxRunning = true;
             _isShuttingDown = false;
             StartConnectionTask();
         }
@@ -432,16 +439,24 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
         try
         {
             var game = PluginHelper.DataManager.GetGameById(gameId);
-            if (game != null)
+            if (game == null)
             {
-                // Use the full launch process, not the bare Play() method
-                // Pass null for app, emulator, and commandLine to use defaults
+                System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Game not found: {gameId}");
+                return;
+            }
+
+            if (_isBigBoxRunning)
+            {
+                PluginHelper.BigBoxMainViewModel.PlayGame(game, null, null, null);
+            }
+            else
+            {
                 PluginHelper.LaunchBoxMainViewModel.PlayGame(game, null, null, null);
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Ignore launch errors
+            System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Failed to launch game {gameId}: {ex.Message}");
         }
     }
 
