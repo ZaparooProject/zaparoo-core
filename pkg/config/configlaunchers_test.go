@@ -453,3 +453,70 @@ func TestLauncherDefaults_SaveLoadRoundTrip(t *testing.T) {
 	assert.Equal(t, "run", gogDefault.Action)
 	assert.Equal(t, "/games/gog", gogDefault.InstallDir)
 }
+
+func TestCustomLaunchers_NewFieldsParsing(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfgPath := filepath.Join(tempDir, CfgFile)
+
+	// Config file with custom launcher including new fields
+	configContent := fmt.Sprintf(`config_schema = %d
+
+[[launchers.custom]]
+id = "VLC"
+system = "Linux"
+execute = "vlc \"[[media_path]]\""
+media_dirs = ["/media/videos"]
+file_exts = [".mp4", ".mkv", ".avi"]
+groups = ["Video", "MediaPlayers"]
+schemes = ["vlc", "video"]
+restricted = true
+lifecycle = "blocking"
+
+[[launchers.custom]]
+id = "SteamLink"
+execute = "steam [[media_path]]"
+schemes = ["steam"]
+lifecycle = "background"
+`, SchemaVersion)
+
+	err := os.WriteFile(cfgPath, []byte(configContent), 0o600)
+	require.NoError(t, err)
+
+	cfg := &Instance{
+		cfgPath:  cfgPath,
+		vals:     Values{ConfigSchema: SchemaVersion},
+		defaults: Values{ConfigSchema: SchemaVersion},
+	}
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	customLaunchers := cfg.CustomLaunchers()
+	require.Len(t, customLaunchers, 2)
+
+	// Verify VLC launcher with all fields
+	vlc := customLaunchers[0]
+	assert.Equal(t, "VLC", vlc.ID)
+	assert.Equal(t, "Linux", vlc.System)
+	assert.Equal(t, `vlc "[[media_path]]"`, vlc.Execute)
+	assert.Equal(t, []string{"/media/videos"}, vlc.MediaDirs)
+	assert.Equal(t, []string{".mp4", ".mkv", ".avi"}, vlc.FileExts)
+	assert.Equal(t, []string{"Video", "MediaPlayers"}, vlc.Groups)
+	assert.Equal(t, []string{"vlc", "video"}, vlc.Schemes)
+	assert.True(t, vlc.Restricted)
+	assert.Equal(t, "blocking", vlc.Lifecycle)
+
+	// Verify SteamLink launcher with minimal fields
+	steamLink := customLaunchers[1]
+	assert.Equal(t, "SteamLink", steamLink.ID)
+	assert.Empty(t, steamLink.System)
+	assert.Equal(t, "steam [[media_path]]", steamLink.Execute)
+	assert.Empty(t, steamLink.MediaDirs)
+	assert.Empty(t, steamLink.FileExts)
+	assert.Empty(t, steamLink.Groups)
+	assert.Equal(t, []string{"steam"}, steamLink.Schemes)
+	assert.False(t, steamLink.Restricted)
+	assert.Equal(t, "background", steamLink.Lifecycle)
+}
