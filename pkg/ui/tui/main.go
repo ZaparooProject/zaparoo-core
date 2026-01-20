@@ -520,9 +520,9 @@ func BuildMainPage(
 	statusText := tview.NewTextView().SetDynamicColors(true)
 	var svcStatus string
 	if svcRunning {
-		svcStatus = fmt.Sprintf("[%s]✓ RUNNING[-]", t.SuccessColorName)
+		svcStatus = fmt.Sprintf("[%s]* RUNNING[-]", t.SuccessColorName)
 	} else {
-		svcStatus = fmt.Sprintf("[%s]✗ NOT RUNNING[-]", t.ErrorColorName) +
+		svcStatus = fmt.Sprintf("[%s]x NOT RUNNING[-]", t.ErrorColorName) +
 			"\nService may not have started.\nCheck Logs for details."
 	}
 

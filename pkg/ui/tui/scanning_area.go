@@ -201,7 +201,7 @@ func drawReaderStatus(
 		Foreground(t.PrimaryTextColor).
 		Background(t.PrimitiveBackgroundColor)
 
-	screen.SetContent(x, y, tcell.RuneDiamond, nil, dotStyle)
+	screen.SetContent(x, y, '*', nil, dotStyle)
 	screen.SetContent(x+1, y, ' ', nil, textStyle)
 
 	// Draw status text
@@ -275,7 +275,7 @@ func drawWaitingIndicator(screen tcell.Screen, x, y, width int, t *Theme) {
 		{outerStyle, ')'},
 		{outerStyle, ')'},
 		{innerStyle, ')'},
-		{centerStyle, tcell.RuneDiamond},
+		{centerStyle, '*'},
 		{innerStyle, '('},
 		{outerStyle, '('},
 		{outerStyle, '('},
