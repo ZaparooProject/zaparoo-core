@@ -162,13 +162,17 @@ func ShowInfoModal(pages *tview.Pages, app *tview.Application, title, message st
 }
 
 // ShowErrorModal displays an error message modal to the user.
-func ShowErrorModal(pages *tview.Pages, app *tview.Application, message string) {
+// onDismiss is called when the modal is closed and should restore focus.
+func ShowErrorModal(pages *tview.Pages, app *tview.Application, message string, onDismiss func()) {
 	modal := tview.NewModal().
 		SetText(message).
 		AddButtons([]string{"OK"}).
 		SetDoneFunc(func(_ int, _ string) {
 			pages.HidePage(errorModalPage)
 			pages.RemovePage(errorModalPage)
+			if onDismiss != nil {
+				onDismiss()
+			}
 		})
 	pages.AddPage(errorModalPage, modal, false, true)
 	app.SetFocus(modal)
@@ -346,10 +350,11 @@ func WriteTagWithModal(
 			log.Error().Err(err).Msg("error writing tag")
 			app.QueueUpdateDraw(func() {
 				pages.RemovePage(writeModalPage)
-				ShowErrorModal(pages, app, "Write failed: "+err.Error())
-				if onComplete != nil {
-					onComplete(false)
-				}
+				ShowErrorModal(pages, app, "Write failed: "+err.Error(), func() {
+					if onComplete != nil {
+						onComplete(false)
+					}
+				})
 			})
 			return
 		}

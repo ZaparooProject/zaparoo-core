@@ -22,6 +22,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -127,8 +128,9 @@ func buildAudioSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.
 	settings, err := svc.GetSettings(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
-		ShowErrorModal(pages, app, "Failed to load audio settings")
-		pages.SwitchToPage(PageSettingsMain)
+		ShowErrorModal(pages, app, "Failed to load audio settings", func() {
+			pages.SwitchToPage(PageSettingsMain)
+		})
 		return
 	}
 
@@ -165,7 +167,9 @@ func buildAudioSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.
 		})
 		if err != nil {
 			log.Error().Err(err).Msg("error updating audio feedback")
-			ShowErrorModal(pages, app, "Failed to save audio settings")
+			ShowErrorModal(pages, app, "Failed to save audio settings", func() {
+				app.SetFocus(menu.List)
+			})
 		}
 	})
 
@@ -209,8 +213,9 @@ func buildReadersSettingsMenu(
 	settings, err := svc.GetSettings(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
-		ShowErrorModal(pages, app, "Failed to load reader settings")
-		pages.SwitchToPage(PageSettingsMain)
+		ShowErrorModal(pages, app, "Failed to load reader settings", func() {
+			pages.SwitchToPage(PageSettingsMain)
+		})
 		return
 	}
 
@@ -255,7 +260,9 @@ func buildReadersSettingsMenu(
 		})
 		if err != nil {
 			log.Error().Err(err).Msg("error updating auto-detect")
-			ShowErrorModal(pages, app, "Failed to save auto-detect setting")
+			ShowErrorModal(pages, app, "Failed to save auto-detect setting", func() {
+				app.SetFocus(menu.List)
+			})
 		}
 	})
 
@@ -270,7 +277,9 @@ func buildReadersSettingsMenu(
 		})
 		if err != nil {
 			log.Error().Err(err).Msg("error updating scan mode")
-			ShowErrorModal(pages, app, "Failed to save scan mode")
+			ShowErrorModal(pages, app, "Failed to save scan mode", func() {
+				app.SetFocus(menu.List)
+			})
 		}
 	})
 
@@ -286,7 +295,9 @@ func buildReadersSettingsMenu(
 		})
 		if err != nil {
 			log.Error().Err(err).Msg("error updating exit delay")
-			ShowErrorModal(pages, app, "Failed to save exit delay")
+			ShowErrorModal(pages, app, "Failed to save exit delay", func() {
+				app.SetFocus(menu.List)
+			})
 		}
 	})
 
@@ -305,7 +316,9 @@ func buildReadersSettingsMenu(
 			})
 			if err != nil {
 				log.Error().Err(err).Msg("error updating scan mode")
-				ShowErrorModal(pages, app, "Failed to save scan mode")
+				ShowErrorModal(pages, app, "Failed to save scan mode", func() {
+					app.SetFocus(menu.List)
+				})
 			}
 			menu.refreshAllItems(menu.GetCurrentItem())
 		},
@@ -319,7 +332,9 @@ func buildReadersSettingsMenu(
 			})
 			if err != nil {
 				log.Error().Err(err).Msg("error updating exit delay")
-				ShowErrorModal(pages, app, "Failed to save exit delay")
+				ShowErrorModal(pages, app, "Failed to save exit delay", func() {
+					app.SetFocus(menu.List)
+				})
 			}
 			menu.refreshAllItems(menu.GetCurrentItem())
 		},
@@ -342,8 +357,9 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 	settings, err := svc.GetSettings(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
-		ShowErrorModal(pages, app, "Failed to load advanced settings")
-		pages.SwitchToPage(PageSettingsMain)
+		ShowErrorModal(pages, app, "Failed to load advanced settings", func() {
+			pages.SwitchToPage(PageSettingsMain)
+		})
 		return
 	}
 
@@ -391,7 +407,9 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 		})
 		if err != nil {
 			log.Error().Err(err).Msg("error updating debug logging")
-			ShowErrorModal(pages, app, "Failed to save debug logging setting")
+			ShowErrorModal(pages, app, "Failed to save debug logging setting", func() {
+				app.SetFocus(menu.List)
+			})
 		}
 	})
 
@@ -416,8 +434,9 @@ func buildReaderListPage(
 	settings, err := svc.GetSettings(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
-		ShowErrorModal(pages, app, "Failed to load reader list")
-		pages.SwitchToPage(PageSettingsReadersMenu)
+		ShowErrorModal(pages, app, "Failed to load reader list", func() {
+			pages.SwitchToPage(PageSettingsReadersMenu)
+		})
 		return
 	}
 
@@ -492,7 +511,9 @@ func buildReaderListPage(
 				})
 				if err != nil {
 					log.Error().Err(err).Msg("error deleting reader")
-					ShowErrorModal(pages, app, "Failed to delete reader")
+					ShowErrorModal(pages, app, "Failed to delete reader", func() {
+						app.SetFocus(readerList)
+					})
 				}
 				refreshList()
 			}, nil)
@@ -538,8 +559,9 @@ func buildReaderEditPage(
 	}
 
 	if len(availableDrivers) == 0 {
-		ShowErrorModal(pages, app, "No reader drivers available for this platform")
-		buildReaderListPage(cfg, svc, pages, app, pl)
+		ShowErrorModal(pages, app, "No reader drivers available for this platform", func() {
+			buildReaderListPage(cfg, svc, pages, app, pl)
+		})
 		return
 	}
 
@@ -610,7 +632,9 @@ func buildReaderEditPage(
 		})
 		if err != nil {
 			log.Error().Err(err).Msg("error saving reader")
-			ShowErrorModal(pages, app, "Failed to save reader")
+			ShowErrorModal(pages, app, "Failed to save reader", func() {
+				app.SetFocus(driverDisplay)
+			})
 			return
 		}
 		goBack()
@@ -751,16 +775,18 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 	settings, err := svc.GetSettings(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching settings")
-		ShowErrorModal(pages, app, "Failed to load settings")
-		pages.SwitchToPage(PageSettingsAdvanced)
+		ShowErrorModal(pages, app, "Failed to load settings", func() {
+			pages.SwitchToPage(PageSettingsAdvanced)
+		})
 		return
 	}
 
 	systems, err := svc.GetSystems(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching systems")
-		ShowErrorModal(pages, app, "Failed to load systems list")
-		pages.SwitchToPage(PageSettingsAdvanced)
+		ShowErrorModal(pages, app, "Failed to load systems list", func() {
+			pages.SwitchToPage(PageSettingsAdvanced)
+		})
 		return
 	}
 
@@ -811,7 +837,9 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 		})
 		if err != nil {
 			log.Error().Err(err).Msg("error updating ignored systems")
-			ShowErrorModal(pages, app, "Failed to save ignored systems")
+			ShowErrorModal(pages, app, "Failed to save ignored systems", func() {
+				app.SetFocus(systemSelector)
+			})
 			return
 		}
 		buildAdvancedSettingsMenu(svc, pages, app)
@@ -893,7 +921,7 @@ func buildAboutPage(pages *tview.Pages, app *tview.Application) {
 Version %s
 
 [%s::b]Copyright[-::-]
-© 2025 The Zaparoo Project Contributors
+© %d The Zaparoo Project Contributors
 
 [%s::b]License[-::-]
 GNU General Public License v3.0 or later (GPL-3.0-or-later)
@@ -903,6 +931,7 @@ There is NO WARRANTY, to the extent permitted by law.`,
 		t.AccentColorName,
 		config.AppVersion,
 		t.AccentColorName,
+		time.Now().Year(),
 		t.AccentColorName,
 	)
 

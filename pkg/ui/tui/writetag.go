@@ -89,12 +89,16 @@ func BuildTagsWriteMenu(svc SettingsService, pages *tview.Pages, app *tview.Appl
 	doWrite := func() {
 		text := strings.TrimSpace(zapScriptInput.GetText())
 		if text == "" {
-			ShowErrorModal(pages, app, "Please enter ZapScript before writing")
+			ShowErrorModal(pages, app, "Please enter ZapScript before writing", func() {
+				app.SetFocus(zapScriptInput)
+			})
 			return
 		}
 		valid, _ := validateZapScript(text)
 		if !valid {
-			ShowErrorModal(pages, app, "Please fix ZapScript errors before writing")
+			ShowErrorModal(pages, app, "Please fix ZapScript errors before writing", func() {
+				app.SetFocus(zapScriptInput)
+			})
 			return
 		}
 		WriteTagWithModal(pages, app, svc, text, func(_ bool) {
