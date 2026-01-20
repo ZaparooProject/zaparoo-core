@@ -514,6 +514,7 @@ func buildReaderListPage(
 					ShowErrorModal(pages, app, "Failed to delete reader", func() {
 						app.SetFocus(readerList)
 					})
+					return
 				}
 				refreshList()
 			}, nil)
