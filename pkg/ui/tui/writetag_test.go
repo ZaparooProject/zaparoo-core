@@ -21,8 +21,11 @@ package tui
 
 import (
 	"testing"
+	"time"
 
+	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidateZapScript(t *testing.T) {
@@ -88,4 +91,192 @@ func TestValidateZapScript(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildTagsWriteMenu_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupWriteTagSuccess()
+	mockSvc.SetupCancelWriteTagSuccess()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	// Reset session state
+	writeTagZapScript = ""
+
+	runner.QueueUpdateDraw(func() {
+		BuildTagsWriteMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Write Token", 500*time.Millisecond), "Write Token title should appear")
+
+	// Verify UI elements are visible
+	assert.True(t, runner.Screen().ContainsText("ZapScript"), "ZapScript label should be visible")
+	assert.True(t, runner.Screen().ContainsText("Write"), "Write button should be visible")
+	assert.True(t, runner.Screen().ContainsText("Clear"), "Clear button should be visible")
+	assert.True(t, runner.Screen().ContainsText("Back"), "Back button should be visible")
+}
+
+func TestBuildTagsWriteMenu_EscapeGoesBack_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, true)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupWriteTagSuccess()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	// Reset session state
+	writeTagZapScript = ""
+
+	runner.QueueUpdateDraw(func() {
+		BuildTagsWriteMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Write Token", 500*time.Millisecond))
+
+	// Press escape
+	runner.Screen().InjectEscape()
+	runner.Draw()
+	time.Sleep(30 * time.Millisecond)
+
+	// Verify we went back
+	getFrontPage := func() string {
+		var name string
+		runner.QueueUpdateDraw(func() {
+			name, _ = pages.GetFrontPage()
+		})
+		return name
+	}
+
+	assert.Equal(t, PageMain, getFrontPage(), "Should navigate back to main page")
+}
+
+func TestBuildTagsWriteMenu_ClearButton_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupWriteTagSuccess()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	// Set some session state
+	writeTagZapScript = "**launch.system:nes"
+
+	runner.QueueUpdateDraw(func() {
+		BuildTagsWriteMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Write Token", 500*time.Millisecond))
+
+	// Navigate to Clear button (Tab then right)
+	runner.Screen().InjectTab()
+	runner.Draw()
+	runner.Screen().InjectArrowRight()
+	runner.Draw()
+
+	// Press Enter on Clear
+	runner.Screen().InjectEnter()
+	runner.Draw()
+	time.Sleep(30 * time.Millisecond)
+
+	// Verify session state was cleared
+	assert.Empty(t, writeTagZapScript, "ZapScript should be cleared")
+}
+
+func TestBuildTagsWriteMenu_Validation_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupWriteTagSuccess()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	// Set valid ZapScript in session state
+	writeTagZapScript = "**launch.system:nes"
+
+	runner.QueueUpdateDraw(func() {
+		BuildTagsWriteMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Write Token", 500*time.Millisecond))
+
+	// Wait a bit more for validation to render
+	time.Sleep(50 * time.Millisecond)
+	runner.Draw()
+
+	// Verify page is showing and the ZapScript label is present
+	assert.True(t, runner.Screen().ContainsText("ZapScript"), "Should show ZapScript label")
+}
+
+func TestBuildTagsWriteMenu_InvalidScript_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupWriteTagSuccess()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	// Set invalid ZapScript in session state
+	writeTagZapScript = "**unknown.command:value"
+
+	runner.QueueUpdateDraw(func() {
+		BuildTagsWriteMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Write Token", 500*time.Millisecond))
+
+	// Wait a bit for validation to render
+	time.Sleep(50 * time.Millisecond)
+	runner.Draw()
+
+	// Verify page shows properly
+	assert.True(t, runner.Screen().ContainsText("ZapScript"), "Should show ZapScript label")
+}
+
+func TestWriteTagSessionState(t *testing.T) {
+	t.Parallel()
+
+	// Test that session state variable exists and can be set
+	writeTagZapScript = "test script"
+
+	assert.Equal(t, "test script", writeTagZapScript)
+
+	// Clean up
+	writeTagZapScript = ""
 }

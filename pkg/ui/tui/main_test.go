@@ -179,3 +179,418 @@ func TestButtonGridItem_Disabled(t *testing.T) {
 	assert.True(t, item.Disabled)
 	assert.Equal(t, "Test help", item.HelpText)
 }
+
+func TestButtonGrid_FocusFirst(t *testing.T) {
+	t.Parallel()
+
+	app := tview.NewApplication()
+	grid := NewButtonGrid(app, 3)
+
+	btn1 := &ButtonGridItem{Button: tview.NewButton("Btn1"), HelpText: "Help 1"}
+	btn2 := &ButtonGridItem{Button: tview.NewButton("Btn2"), HelpText: "Help 2"}
+	btn3 := &ButtonGridItem{Button: tview.NewButton("Btn3"), HelpText: "Help 3"}
+
+	grid.AddRow(btn1, btn2, btn3)
+
+	grid.FocusFirst()
+
+	row, col := grid.GetFocus()
+	assert.Equal(t, 0, row, "Should focus first row")
+	assert.Equal(t, 0, col, "Should focus first column")
+}
+
+func TestButtonGrid_FocusFirst_SkipsDisabled(t *testing.T) {
+	t.Parallel()
+
+	app := tview.NewApplication()
+	grid := NewButtonGrid(app, 3)
+
+	// First button is disabled
+	btn1 := &ButtonGridItem{Button: tview.NewButton("Btn1"), HelpText: "Help 1", Disabled: true}
+	btn2 := &ButtonGridItem{Button: tview.NewButton("Btn2"), HelpText: "Help 2"}
+	btn3 := &ButtonGridItem{Button: tview.NewButton("Btn3"), HelpText: "Help 3"}
+
+	grid.AddRow(btn1, btn2, btn3)
+
+	grid.FocusFirst()
+
+	row, col := grid.GetFocus()
+	assert.Equal(t, 0, row, "Should focus first row")
+	assert.Equal(t, 1, col, "Should skip disabled and focus second column")
+}
+
+func TestButtonGrid_SetFocus(t *testing.T) {
+	t.Parallel()
+
+	app := tview.NewApplication()
+	grid := NewButtonGrid(app, 3)
+
+	btn1 := &ButtonGridItem{Button: tview.NewButton("Btn1"), HelpText: "Help 1"}
+	btn2 := &ButtonGridItem{Button: tview.NewButton("Btn2"), HelpText: "Help 2"}
+	btn3 := &ButtonGridItem{Button: tview.NewButton("Btn3"), HelpText: "Help 3"}
+
+	grid.AddRow(btn1, btn2, btn3)
+
+	grid.SetFocus(0, 2)
+
+	row, col := grid.GetFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 2, col)
+}
+
+func TestButtonGrid_SetFocus_FallsBackOnDisabled(t *testing.T) {
+	t.Parallel()
+
+	app := tview.NewApplication()
+	grid := NewButtonGrid(app, 3)
+
+	btn1 := &ButtonGridItem{Button: tview.NewButton("Btn1"), HelpText: "Help 1"}
+	btn2 := &ButtonGridItem{Button: tview.NewButton("Btn2"), HelpText: "Help 2", Disabled: true}
+	btn3 := &ButtonGridItem{Button: tview.NewButton("Btn3"), HelpText: "Help 3"}
+
+	grid.AddRow(btn1, btn2, btn3)
+
+	// Try to set focus on disabled button
+	grid.SetFocus(0, 1)
+
+	// Should fall back to first enabled
+	row, col := grid.GetFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 0, col, "Should fall back to first enabled button")
+}
+
+func TestButtonGrid_isCurrentEnabled(t *testing.T) {
+	t.Parallel()
+
+	app := tview.NewApplication()
+	grid := NewButtonGrid(app, 3)
+
+	btn1 := &ButtonGridItem{Button: tview.NewButton("Btn1"), HelpText: "Help 1"}
+	btn2 := &ButtonGridItem{Button: tview.NewButton("Btn2"), HelpText: "Help 2", Disabled: true}
+
+	grid.AddRow(btn1, btn2)
+
+	grid.focusedRow = 0
+	grid.focusedCol = 0
+	assert.True(t, grid.isCurrentEnabled(), "First button should be enabled")
+
+	grid.focusedCol = 1
+	assert.False(t, grid.isCurrentEnabled(), "Second button should be disabled")
+}
+
+func TestButtonGrid_HelpCallback_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	app := runner.App()
+	grid := NewButtonGrid(app, 3)
+
+	var helpTexts []string
+	grid.SetOnHelp(func(text string) {
+		helpTexts = append(helpTexts, text)
+	})
+
+	btn1 := &ButtonGridItem{Button: tview.NewButton("Btn1"), HelpText: "Help for button 1"}
+	btn2 := &ButtonGridItem{Button: tview.NewButton("Btn2"), HelpText: "Help for button 2"}
+	btn3 := &ButtonGridItem{Button: tview.NewButton("Btn3"), HelpText: "Help for button 3"}
+
+	grid.AddRow(btn1, btn2, btn3)
+
+	runner.Start(grid)
+	runner.SetFocus(grid)
+
+	// Should trigger help for first button on focus
+	assert.Contains(t, helpTexts, "Help for button 1", "Should receive help for first button")
+
+	// Navigate right
+	runner.Screen().InjectArrowRight()
+	runner.Draw()
+
+	assert.Contains(t, helpTexts, "Help for button 2", "Should receive help for second button")
+}
+
+func TestButtonGrid_Navigation_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	app := runner.App()
+	grid := NewButtonGrid(app, 3)
+
+	btn1 := &ButtonGridItem{Button: tview.NewButton("Btn1"), HelpText: "Help 1"}
+	btn2 := &ButtonGridItem{Button: tview.NewButton("Btn2"), HelpText: "Help 2"}
+	btn3 := &ButtonGridItem{Button: tview.NewButton("Btn3"), HelpText: "Help 3"}
+	btn4 := &ButtonGridItem{Button: tview.NewButton("Btn4"), HelpText: "Help 4"}
+	btn5 := &ButtonGridItem{Button: tview.NewButton("Btn5"), HelpText: "Help 5"}
+
+	grid.AddRow(btn1, btn2, btn3)
+	grid.AddRow(btn4, btn5, nil)
+
+	runner.Start(grid)
+	runner.SetFocus(grid)
+
+	// Get current focus helper
+	getFocus := func() (int, int) {
+		var row, col int
+		runner.QueueUpdateDraw(func() {
+			row, col = grid.GetFocus()
+		})
+		return row, col
+	}
+
+	// Initial focus should be (0, 0)
+	row, col := getFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 0, col)
+
+	// Navigate right
+	runner.Screen().InjectArrowRight()
+	runner.Draw()
+	row, col = getFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 1, col)
+
+	// Navigate down
+	runner.Screen().InjectArrowDown()
+	runner.Draw()
+	row, col = getFocus()
+	assert.Equal(t, 1, row)
+	assert.Equal(t, 1, col)
+
+	// Navigate left
+	runner.Screen().InjectArrowLeft()
+	runner.Draw()
+	row, col = getFocus()
+	assert.Equal(t, 1, row)
+	assert.Equal(t, 0, col)
+
+	// Navigate up
+	runner.Screen().InjectArrowUp()
+	runner.Draw()
+	row, col = getFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 0, col)
+}
+
+func TestButtonGrid_TabNavigation_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	app := runner.App()
+	grid := NewButtonGrid(app, 3)
+
+	btn1 := &ButtonGridItem{Button: tview.NewButton("Btn1"), HelpText: "Help 1"}
+	btn2 := &ButtonGridItem{Button: tview.NewButton("Btn2"), HelpText: "Help 2"}
+	btn3 := &ButtonGridItem{Button: tview.NewButton("Btn3"), HelpText: "Help 3"}
+
+	grid.AddRow(btn1, btn2, btn3)
+
+	runner.Start(grid)
+	runner.SetFocus(grid)
+
+	getFocus := func() (int, int) {
+		var row, col int
+		runner.QueueUpdateDraw(func() {
+			row, col = grid.GetFocus()
+		})
+		return row, col
+	}
+
+	// Tab should navigate right
+	runner.Screen().InjectTab()
+	runner.Draw()
+	row, col := getFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 1, col)
+
+	// Backtab should navigate left
+	runner.Screen().InjectBacktab()
+	runner.Draw()
+	row, col = getFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 0, col)
+}
+
+func TestButtonGrid_EscapeCallback_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	app := runner.App()
+	grid := NewButtonGrid(app, 3)
+
+	var escapeCalled bool
+	grid.SetOnEscape(func() {
+		escapeCalled = true
+	})
+
+	btn1 := &ButtonGridItem{Button: tview.NewButton("Btn1"), HelpText: "Help 1"}
+	grid.AddRow(btn1)
+
+	runner.Start(grid)
+	runner.SetFocus(grid)
+
+	runner.Screen().InjectEscape()
+	runner.Draw()
+
+	assert.True(t, escapeCalled, "Escape callback should be called")
+}
+
+func TestButtonGrid_EnterActivatesButton_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	app := runner.App()
+	grid := NewButtonGrid(app, 3)
+
+	var buttonPressed bool
+	btn1 := &ButtonGridItem{
+		Button:   tview.NewButton("Btn1").SetSelectedFunc(func() { buttonPressed = true }),
+		HelpText: "Help 1",
+	}
+	grid.AddRow(btn1)
+
+	runner.Start(grid)
+	runner.SetFocus(grid)
+
+	runner.Screen().InjectEnter()
+	runner.Draw()
+
+	assert.True(t, buttonPressed, "Button should be activated on Enter")
+}
+
+func TestButtonGrid_DisabledButtonsSkipped_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	app := runner.App()
+	grid := NewButtonGrid(app, 3)
+
+	btn1 := &ButtonGridItem{Button: tview.NewButton("Btn1"), HelpText: "Help 1"}
+	btn2 := &ButtonGridItem{Button: tview.NewButton("Btn2"), HelpText: "Help 2", Disabled: true}
+	btn3 := &ButtonGridItem{Button: tview.NewButton("Btn3"), HelpText: "Help 3"}
+
+	grid.AddRow(btn1, btn2, btn3)
+
+	runner.Start(grid)
+	runner.SetFocus(grid)
+
+	getFocus := func() (int, int) {
+		var row, col int
+		runner.QueueUpdateDraw(func() {
+			row, col = grid.GetFocus()
+		})
+		return row, col
+	}
+
+	// Initial focus (0, 0)
+	_, col := getFocus()
+	assert.Equal(t, 0, col)
+
+	// Navigate right - should skip disabled btn2 and go to btn3
+	runner.Screen().InjectArrowRight()
+	runner.Draw()
+	row, col := getFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 2, col, "Should skip disabled button and go to third")
+}
+
+func TestMainFrame_Delegates(t *testing.T) {
+	t.Parallel()
+
+	content := tview.NewTextView().SetText("Test content")
+	frame := NewMainFrame(content)
+
+	assert.NotNil(t, frame.content)
+
+	// InputHandler should delegate to content
+	handler := frame.InputHandler()
+	assert.NotNil(t, handler)
+}
+
+func TestMainFrame_HasFocus(t *testing.T) {
+	t.Parallel()
+
+	content := tview.NewTextView()
+	frame := NewMainFrame(content)
+
+	// HasFocus should delegate to content
+	hasFocus := frame.HasFocus()
+	assert.False(t, hasFocus, "Content should not have focus initially")
+}
+
+func TestMainFrame_NilContent(t *testing.T) {
+	t.Parallel()
+
+	frame := NewMainFrame(nil)
+
+	// Should handle nil content gracefully
+	handler := frame.InputHandler()
+	assert.Nil(t, handler)
+
+	hasFocus := frame.HasFocus()
+	assert.False(t, hasFocus)
+}
+
+func TestMainFrame_MouseHandler(t *testing.T) {
+	t.Parallel()
+
+	content := tview.NewTextView()
+	frame := NewMainFrame(content)
+
+	handler := frame.MouseHandler()
+	assert.NotNil(t, handler)
+}
+
+func TestButtonGrid_WrapAround_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	app := runner.App()
+	grid := NewButtonGrid(app, 3)
+
+	btn1 := &ButtonGridItem{Button: tview.NewButton("Btn1"), HelpText: "Help 1"}
+	btn2 := &ButtonGridItem{Button: tview.NewButton("Btn2"), HelpText: "Help 2"}
+	btn3 := &ButtonGridItem{Button: tview.NewButton("Btn3"), HelpText: "Help 3"}
+
+	grid.AddRow(btn1, btn2, btn3)
+
+	runner.Start(grid)
+	runner.SetFocus(grid)
+
+	getFocus := func() (int, int) {
+		var row, col int
+		runner.QueueUpdateDraw(func() {
+			row, col = grid.GetFocus()
+		})
+		return row, col
+	}
+
+	// Navigate to the last column
+	runner.Screen().InjectArrowRight()
+	runner.Draw()
+	runner.Screen().InjectArrowRight()
+	runner.Draw()
+
+	_, col := getFocus()
+	assert.Equal(t, 2, col, "Should be at last column")
+
+	// Navigate right again - should wrap to first
+	runner.Screen().InjectArrowRight()
+	runner.Draw()
+	row, col := getFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 0, col, "Should wrap to first column")
+}

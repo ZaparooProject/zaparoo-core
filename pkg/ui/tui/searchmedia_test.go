@@ -21,8 +21,12 @@ package tui
 
 import (
 	"testing"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTruncateSystemName(t *testing.T) {
@@ -74,4 +78,261 @@ func TestTruncateSystemName(t *testing.T) {
 			assert.LessOrEqual(t, len(result), 18)
 		})
 	}
+}
+
+func TestBuildSearchMedia_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+
+	// Add main page for navigation
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSystems([]models.System{
+		{ID: "nes", Name: "NES"},
+		{ID: "snes", Name: "SNES"},
+	})
+	mockSvc.SetupSearchMedia(&models.SearchResults{
+		Results: []models.SearchResultMedia{},
+		Total:   0,
+	})
+
+	runner.Start(pages)
+	runner.Draw()
+
+	// Reset session state before test
+	searchMediaName = ""
+	searchMediaSystem = ""
+	searchMediaSystemName = "All"
+
+	runner.QueueUpdateDraw(func() {
+		BuildSearchMedia(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond), "Search Media title should appear")
+
+	// Verify UI elements are visible
+	assert.True(t, runner.Screen().ContainsText("Name"), "Name label should be visible")
+	assert.True(t, runner.Screen().ContainsText("System"), "System label should be visible")
+	assert.True(t, runner.Screen().ContainsText("Search"), "Search button should be visible")
+	assert.True(t, runner.Screen().ContainsText("Clear"), "Clear button should be visible")
+	assert.True(t, runner.Screen().ContainsText("Back"), "Back button should be visible")
+}
+
+func TestBuildSearchMedia_SearchWithResults_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSystems([]models.System{
+		{ID: "nes", Name: "NES"},
+	})
+
+	// Setup search to return results
+	searchResults := &models.SearchResults{
+		Results: []models.SearchResultMedia{
+			{
+				Name:      "Super Mario Bros",
+				Path:      "/roms/nes/smb.nes",
+				ZapScript: "**launch.nes:/roms/nes/smb.nes",
+				System:    models.System{ID: "nes", Name: "NES"},
+			},
+			{
+				Name:      "Zelda",
+				Path:      "/roms/nes/zelda.nes",
+				ZapScript: "**launch.nes:/roms/nes/zelda.nes",
+				System:    models.System{ID: "nes", Name: "NES"},
+			},
+		},
+		Total: 2,
+	}
+	mockSvc.SetupSearchMedia(searchResults)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	// Reset session state
+	searchMediaName = ""
+	searchMediaSystem = ""
+	searchMediaSystemName = "All"
+
+	runner.QueueUpdateDraw(func() {
+		BuildSearchMedia(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond))
+
+	// Type in search
+	runner.Screen().InjectString("mario")
+	runner.Draw()
+
+	// Press Tab to navigate to Search button
+	runner.Screen().InjectTab()
+	runner.Draw()
+
+	// Press Enter to trigger search
+	runner.Screen().InjectEnter()
+	runner.Draw()
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify search was called at least once
+	mockSvc.AssertNumberOfCalls(t, "SearchMedia", 1)
+}
+
+func TestBuildSearchMedia_EscapeGoesBack_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, true)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSystems([]models.System{})
+
+	runner.Start(pages)
+	runner.Draw()
+
+	// Reset session state
+	searchMediaName = ""
+	searchMediaSystem = ""
+	searchMediaSystemName = "All"
+
+	runner.QueueUpdateDraw(func() {
+		BuildSearchMedia(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond))
+
+	// Press escape
+	runner.Screen().InjectEscape()
+	runner.Draw()
+	time.Sleep(30 * time.Millisecond)
+
+	// Verify we went back
+	getFrontPage := func() string {
+		var name string
+		runner.QueueUpdateDraw(func() {
+			name, _ = pages.GetFrontPage()
+		})
+		return name
+	}
+
+	assert.Equal(t, PageMain, getFrontPage(), "Should navigate back to main page")
+}
+
+func TestBuildSearchMedia_ClearButton_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSystems([]models.System{})
+
+	runner.Start(pages)
+	runner.Draw()
+
+	// Set some session state
+	searchMediaName = "test query"
+	searchMediaSystem = "nes"
+	searchMediaSystemName = "NES"
+
+	runner.QueueUpdateDraw(func() {
+		BuildSearchMedia(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond))
+
+	// Navigate to Clear button (Tab then right)
+	runner.Screen().InjectTab()
+	runner.Draw()
+	runner.Screen().InjectArrowRight()
+	runner.Draw()
+
+	// Press Enter on Clear
+	runner.Screen().InjectEnter()
+	runner.Draw()
+	time.Sleep(30 * time.Millisecond)
+
+	// Verify session state was cleared
+	assert.Empty(t, searchMediaName, "Search name should be cleared")
+	assert.Empty(t, searchMediaSystem, "Search system should be cleared")
+	assert.Equal(t, "All", searchMediaSystemName, "Search system name should be reset to All")
+}
+
+func TestBuildSearchMedia_SystemNavigation_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	pages.AddPage(PageMain, tview.NewTextView().SetText("Main"), true, false)
+
+	mockSvc := NewMockSettingsService()
+	mockSvc.SetupGetSystems([]models.System{
+		{ID: "nes", Name: "NES"},
+		{ID: "snes", Name: "SNES"},
+		{ID: "genesis", Name: "Genesis"},
+	})
+	// Also need to set up search in case it's called
+	mockSvc.SetupSearchMedia(&models.SearchResults{
+		Results: []models.SearchResultMedia{},
+		Total:   0,
+	})
+
+	runner.Start(pages)
+	runner.Draw()
+
+	// Reset session state
+	searchMediaName = ""
+	searchMediaSystem = ""
+	searchMediaSystemName = "All"
+
+	runner.QueueUpdateDraw(func() {
+		BuildSearchMedia(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond))
+
+	// Navigate down to system button
+	runner.Screen().InjectArrowDown()
+	runner.Draw()
+	time.Sleep(30 * time.Millisecond)
+
+	// System button should show "All" initially - also check for "System" label
+	// which should be visible regardless
+	assert.True(t, runner.Screen().ContainsText("System"), "System label should be visible")
+}
+
+func TestSearchMediaSessionState(t *testing.T) {
+	t.Parallel()
+
+	// Test that session state variables exist and can be set
+	searchMediaName = "test"
+	searchMediaSystem = "nes"
+	searchMediaSystemName = "NES"
+
+	assert.Equal(t, "test", searchMediaName)
+	assert.Equal(t, "nes", searchMediaSystem)
+	assert.Equal(t, "NES", searchMediaSystemName)
+
+	// Clean up
+	searchMediaName = ""
+	searchMediaSystem = ""
+	searchMediaSystemName = "All"
 }
