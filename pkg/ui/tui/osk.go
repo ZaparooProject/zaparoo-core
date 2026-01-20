@@ -188,17 +188,14 @@ func (o *OnScreenKeyboard) drawKeyRow(
 }
 
 // drawBottomRow renders the bottom action row with custom spacing.
-// Layout: [SHFT SYM] ... [SPC] ... [DEL OK CANC]
+// Layout: [SHFT SYM] [    SPC    ] [DEL OK CANC]
 func (o *OnScreenKeyboard) drawBottomRow(
 	screen tcell.Screen,
 	x, y int,
 	row []string,
 	theme *Theme,
 ) {
-	const (
-		btnWidth   = 5 // Width for regular buttons
-		spaceWidth = 7 // Wider space bar
-	)
+	const btnWidth = 5 // Width for regular buttons
 
 	// Find indices based on row length
 	// Lower/Upper: SHFT(0) SYM(1) SPC(2) DEL(3) OK(4) CANC(5)
@@ -214,9 +211,10 @@ func (o *OnScreenKeyboard) drawBottomRow(
 		rightStart = 2 // DEL, OK, CANC
 	}
 
-	// Calculate positions
-	spaceX := x + (oskKeyboardWidth-spaceWidth)/2
-	rightX := x + oskKeyboardWidth - (len(row)-rightStart)*btnWidth
+	// Calculate positions - space fills gap between left and right groups
+	leftGroupEnd := leftEnd * btnWidth
+	rightGroupStart := oskKeyboardWidth - (len(row)-rightStart)*btnWidth
+	spaceWidth := rightGroupStart - leftGroupEnd
 
 	for colIdx, key := range row {
 		isSelected := o.cursorRow == len(o.currentLayout())-1 && colIdx == o.cursorCol
@@ -229,12 +227,12 @@ func (o *OnScreenKeyboard) drawBottomRow(
 			keyX = x + colIdx*btnWidth
 			width = btnWidth - 1
 		case colIdx == spaceIdx:
-			// Center space bar
-			keyX = spaceX
+			// Space bar fills gap between left and right groups
+			keyX = x + leftGroupEnd
 			width = spaceWidth - 1
 		default:
 			// Right group
-			keyX = rightX + (colIdx-rightStart)*btnWidth
+			keyX = x + rightGroupStart + (colIdx-rightStart)*btnWidth
 			width = btnWidth - 1
 		}
 
