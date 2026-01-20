@@ -20,6 +20,7 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -29,12 +30,14 @@ import (
 // PageFrame provides a consistent page structure with:
 // - Breadcrumb title in top border
 // - Main content area
+// - Optional info text line (above help text)
 // - Dynamic help text line
 // - ButtonBar footer
 // - Keyboard hints in bottom border
 type PageFrame struct {
 	content tview.Primitive
 	*tview.Box
+	infoText  *tview.TextView
 	helpText  *tview.TextView
 	buttonBar *ButtonBar
 	app       *tview.Application
@@ -90,6 +93,61 @@ func (pf *PageFrame) SetHelpText(text string) *PageFrame {
 	return pf
 }
 
+// SetInfoText sets the optional info text displayed above the help text.
+// If text is empty, the info line is hidden.
+// If the text is longer than the available width, it is truncated from the left with "...".
+func (pf *PageFrame) SetInfoText(text string) *PageFrame {
+	if pf.infoText == nil {
+		pf.infoText = tview.NewTextView().
+			SetDynamicColors(true).
+			SetTextAlign(tview.AlignCenter)
+	}
+	pf.infoText.SetText(text)
+	return pf
+}
+
+// colorTagPattern matches tview color tags like [#ffffff], [red], [-], etc.
+var colorTagPattern = regexp.MustCompile(`^\[([^\]]*)\]`)
+
+// truncateFromLeft truncates a string from the left side if it exceeds maxLen.
+// It preserves tview color tags at the start and end of the string.
+func truncateFromLeft(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+
+	// Extract leading color tag if present
+	var prefix, suffix, content string
+	remaining := s
+
+	if match := colorTagPattern.FindString(remaining); match != "" {
+		prefix = match
+		remaining = remaining[len(match):]
+	}
+
+	// Check for trailing reset tag [-]
+	if strings.HasSuffix(remaining, "[-]") {
+		suffix = "[-]"
+		content = remaining[:len(remaining)-3]
+	} else {
+		content = remaining
+	}
+
+	// Check if content fits
+	if len(content) <= maxLen {
+		return s
+	}
+
+	// Truncate content from left
+	if maxLen <= 3 {
+		content = content[len(content)-maxLen:]
+	} else {
+		content = "..." + content[len(content)-(maxLen-3):]
+	}
+
+	return prefix + content + suffix
+}
+
 // SetButtonBar sets the button bar at the bottom of the frame.
 // Call SetupContentToButtonNavigation after this for list content navigation.
 func (pf *PageFrame) SetButtonBar(bar *ButtonBar) *PageFrame {
@@ -113,13 +171,23 @@ func (pf *PageFrame) Draw(screen tcell.Screen) {
 	}
 
 	// Calculate layout heights
+	infoHeight := 0
+	if pf.infoText != nil && pf.infoText.GetText(true) != "" {
+		infoHeight = 1
+		// Truncate info text from left if needed (preserve color tags)
+		text := pf.infoText.GetText(false) // Get text with tags
+		truncated := truncateFromLeft(text, width)
+		if truncated != text {
+			pf.infoText.SetText(truncated)
+		}
+	}
 	helpHeight := 1
 	buttonHeight := 0
 	if pf.buttonBar != nil {
 		buttonHeight = 1
 	}
 
-	contentHeight := height - helpHeight - buttonHeight
+	contentHeight := height - infoHeight - helpHeight - buttonHeight
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
@@ -130,13 +198,19 @@ func (pf *PageFrame) Draw(screen tcell.Screen) {
 		pf.content.Draw(screen)
 	}
 
+	// Draw info text (above help text)
+	if infoHeight > 0 {
+		pf.infoText.SetRect(x, y+contentHeight, width, infoHeight)
+		pf.infoText.Draw(screen)
+	}
+
 	// Draw help text
-	pf.helpText.SetRect(x, y+contentHeight, width, helpHeight)
+	pf.helpText.SetRect(x, y+contentHeight+infoHeight, width, helpHeight)
 	pf.helpText.Draw(screen)
 
 	// Draw button bar
 	if pf.buttonBar != nil {
-		pf.buttonBar.SetRect(x, y+contentHeight+helpHeight, width, buttonHeight)
+		pf.buttonBar.SetRect(x, y+contentHeight+infoHeight+helpHeight, width, buttonHeight)
 		pf.buttonBar.Draw(screen)
 	}
 

@@ -58,7 +58,7 @@ func truncateSystemName(name string) string {
 func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Application) {
 	frame := NewPageFrame(app).
 		SetTitle("Search Media").
-		SetHelpText("Type query and press Enter to search")
+		SetHelpText("Type query in Name and press Search")
 
 	goBack := func() {
 		pages.SwitchToPage(PageMain)
@@ -69,10 +69,18 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 	filterSystem := ""
 	filterSystemName := "All"
 	searching := false
+	var resultPaths []string
 
 	scrollList := NewScrollIndicatorList()
 	mediaList := scrollList.GetList()
 	mediaList.SetMainTextColor(CurrentTheme().PrimaryTextColor)
+	mediaList.SetChangedFunc(func(index int, _, _ string, _ rune) {
+		if index >= 0 && index < len(resultPaths) {
+			frame.SetInfoText(fmt.Sprintf("[%s]%s[-]", CurrentTheme().SecondaryColor, resultPaths[index]))
+		} else {
+			frame.SetInfoText("")
+		}
+	})
 
 	nameLabel := NewLabel("Name")
 
@@ -179,9 +187,11 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 
 		mediaList.Clear()
 		mediaList.SetCurrentItem(0)
+		resultPaths = make([]string, len(results.Results))
 		tuiCfg := config.GetTUIConfig()
 		for i := range results.Results {
 			result := &results.Results[i]
+			resultPaths[i] = result.Path
 			var displayName, writeValue string
 			if tuiCfg.WriteFormat == "path" {
 				// Check if path is a virtual path (contains ://)
@@ -204,8 +214,18 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 				writeTagForMedia(pages, app, svc, value, mediaList)
 			})
 		}
+		// Update info text for first result
+		if len(resultPaths) > 0 {
+			frame.SetInfoText(fmt.Sprintf("[%s]%s[-]", CurrentTheme().SecondaryColor, resultPaths[0]))
+		} else {
+			frame.SetInfoText("")
+		}
 
-		frame.SetHelpText(fmt.Sprintf("Found %d results. Select to write token", len(results.Results)))
+		resultWord := "results"
+		if len(results.Results) == 1 {
+			resultWord = "result"
+		}
+		frame.SetHelpText(fmt.Sprintf("Found %d %s. Select to write token", len(results.Results), resultWord))
 		if results.Total > 0 {
 			app.SetFocus(mediaList)
 		}
