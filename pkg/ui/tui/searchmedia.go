@@ -20,6 +20,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -54,6 +55,13 @@ func truncateSystemName(name string) string {
 	return name[:maxLen-3] + "..."
 }
 
+// Session state for media search - persists across page navigation.
+var (
+	searchMediaName       string
+	searchMediaSystem     string
+	searchMediaSystemName = "All"
+)
+
 // BuildSearchMedia creates the search media page.
 func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Application) {
 	frame := NewPageFrame(app).
@@ -65,9 +73,6 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 	}
 	frame.SetOnEscape(goBack)
 
-	name := ""
-	filterSystem := ""
-	filterSystemName := "All"
 	searching := false
 	var resultPaths []string
 
@@ -85,14 +90,15 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 	nameLabel := NewLabel("Name")
 
 	searchInput := tview.NewInputField()
+	searchInput.SetText(searchMediaName)
 	searchInput.SetChangedFunc(func(value string) {
-		name = value
+		searchMediaName = value
 	})
 	setupInputFieldFocus(searchInput)
 
 	systemLabel := NewLabel("System")
 
-	systemButton := tview.NewButton(truncateSystemName(filterSystemName))
+	systemButton := tview.NewButton(truncateSystemName(searchMediaSystemName))
 
 	var systemItems []SystemItem
 	ctx, cancel := tuiContext()
@@ -122,20 +128,20 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 			IncludeAll:  true,
 			AutoConfirm: true,
 			Systems:     systemItems,
-			Selected:    []string{filterSystem},
+			Selected:    []string{searchMediaSystem},
 			OnSingle: func(systemID string) {
-				filterSystem = systemID
-				if filterSystem == "" {
-					filterSystemName = "All"
+				searchMediaSystem = systemID
+				if searchMediaSystem == "" {
+					searchMediaSystemName = "All"
 				} else {
 					for _, item := range systemItems {
-						if item.ID == filterSystem {
-							filterSystemName = item.Name
+						if item.ID == searchMediaSystem {
+							searchMediaSystemName = item.Name
 							break
 						}
 					}
 				}
-				systemButton.SetLabel(truncateSystemName(filterSystemName))
+				systemButton.SetLabel(truncateSystemName(searchMediaSystemName))
 				pages.RemovePage(selectorPage)
 				app.SetFocus(systemButton)
 			},
@@ -161,11 +167,11 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 		}
 
 		params := models.SearchParams{
-			Query: &name,
+			Query: &searchMediaName,
 		}
 
-		if filterSystem != "" {
-			systemsFilter := []string{filterSystem}
+		if searchMediaSystem != "" {
+			systemsFilter := []string{searchMediaSystem}
 			params.Systems = &systemsFilter
 		}
 
@@ -176,7 +182,7 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 			searching = false
 		}()
 
-		searchCtx, searchCancel := tuiContext()
+		searchCtx, searchCancel := context.WithTimeout(context.Background(), config.APIRequestTimeout)
 		results, err := svc.SearchMedia(searchCtx, params)
 		searchCancel()
 		if err != nil {
@@ -255,7 +261,7 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 					searchInput.GetText(),
 					func(text string) {
 						searchInput.SetText(text)
-						name = text
+						searchMediaName = text
 						app.SetFocus(searchInput)
 					},
 					func() {
@@ -324,8 +330,22 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 		}
 	})
 
+	clearSearch := func() {
+		searchMediaName = ""
+		searchMediaSystem = ""
+		searchMediaSystemName = "All"
+		searchInput.SetText("")
+		systemButton.SetLabel(truncateSystemName("All"))
+		mediaList.Clear()
+		resultPaths = nil
+		frame.SetInfoText("")
+		frame.SetHelpText("Type query in Name and press Search")
+		app.SetFocus(searchInput)
+	}
+
 	buttonBar := NewButtonBar(app)
 	buttonBar.AddButton("Search", search).
+		AddButton("Clear", clearSearch).
 		AddButton("Back", goBack).
 		SetupNavigation(goBack)
 	frame.SetButtonBar(buttonBar)

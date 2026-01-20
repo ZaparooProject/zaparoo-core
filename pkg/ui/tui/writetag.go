@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	libzapscript "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -60,6 +61,9 @@ func validateZapScript(text string) (valid bool, message string) {
 	return true, fmt.Sprintf("[%s]Valid: %d commands[-]", t.SuccessColorName, len(script.Cmds))
 }
 
+// Session state for custom write - persists across page navigation.
+var writeTagZapScript string
+
 // BuildTagsWriteMenu creates the tag write menu.
 func BuildTagsWriteMenu(svc SettingsService, pages *tview.Pages, app *tview.Application) {
 	frame := NewPageFrame(app).
@@ -75,13 +79,21 @@ func BuildTagsWriteMenu(svc SettingsService, pages *tview.Pages, app *tview.Appl
 	zapScriptInput := tview.NewTextArea()
 	zapScriptInput.SetBorder(true)
 	zapScriptInput.SetBorderPadding(0, 0, 1, 1)
+	zapScriptInput.SetText(writeTagZapScript, true)
 
 	validationStatus := tview.NewTextView().
 		SetDynamicColors(true).
 		SetText("")
 
+	// Initialize validation status if there's persisted text
+	if writeTagZapScript != "" {
+		_, message := validateZapScript(writeTagZapScript)
+		validationStatus.SetText(message)
+	}
+
 	zapScriptInput.SetChangedFunc(func() {
 		text := zapScriptInput.GetText()
+		writeTagZapScript = text
 		_, message := validateZapScript(text)
 		validationStatus.SetText(message)
 	})
@@ -107,6 +119,7 @@ func BuildTagsWriteMenu(svc SettingsService, pages *tview.Pages, app *tview.Appl
 	}
 
 	doClear := func() {
+		writeTagZapScript = ""
 		zapScriptInput.SetText("", true)
 		validationStatus.SetText("")
 		app.SetFocus(zapScriptInput)
@@ -134,6 +147,23 @@ func BuildTagsWriteMenu(svc SettingsService, pages *tview.Pages, app *tview.Appl
 
 	zapScriptInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
+		case tcell.KeyEnter:
+			if config.GetTUIConfig().OnScreenKeyboard {
+				ShowOSKModal(
+					pages,
+					app,
+					zapScriptInput.GetText(),
+					func(text string) {
+						zapScriptInput.SetText(text, true)
+						app.SetFocus(zapScriptInput)
+					},
+					func() {
+						app.SetFocus(zapScriptInput)
+					},
+				)
+				return nil
+			}
+			return event
 		case tcell.KeyUp:
 			_, _, cursorRow, _ := zapScriptInput.GetCursor()
 			if cursorRow == 0 {

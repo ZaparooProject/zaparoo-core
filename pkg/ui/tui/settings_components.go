@@ -656,20 +656,34 @@ func (bb *ButtonBar) MouseHandler() func(
 		event *tcell.EventMouse,
 		setFocus func(p tview.Primitive),
 	) (consumed bool, capture tview.Primitive) {
-		if action != tview.MouseLeftClick {
+		// Handle mouse down to show highlight immediately during press
+		if action == tview.MouseLeftDown {
+			for i, btn := range bb.buttons {
+				if !btn.InRect(event.Position()) {
+					continue
+				}
+				bb.focusedIndex = i
+				bb.triggerHelp()
+				setFocus(bb)
+				return true, nil
+			}
 			return false, nil
 		}
-		for i, btn := range bb.buttons {
-			if !btn.InRect(event.Position()) {
-				continue
+
+		// Handle click to trigger action
+		if action == tview.MouseLeftClick {
+			for i, btn := range bb.buttons {
+				if !btn.InRect(event.Position()) {
+					continue
+				}
+				bb.focusedIndex = i
+				bb.triggerHelp()
+				setFocus(bb)
+				if handler := btn.MouseHandler(); handler != nil {
+					return handler(action, event, setFocus)
+				}
+				return true, nil
 			}
-			bb.focusedIndex = i
-			bb.triggerHelp()
-			setFocus(bb)
-			if handler := btn.MouseHandler(); handler != nil {
-				return handler(action, event, setFocus)
-			}
-			return true, nil
 		}
 		return false, nil
 	})

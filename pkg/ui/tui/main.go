@@ -324,6 +324,28 @@ func (bg *ButtonGrid) MouseHandler() func(
 		event *tcell.EventMouse,
 		setFocus func(p tview.Primitive),
 	) (bool, tview.Primitive) {
+		// Handle mouse down to show highlight immediately during press
+		if action == tview.MouseLeftDown {
+			mouseX, mouseY := event.Position()
+			for rowIdx, row := range bg.buttons {
+				for colIdx, item := range row {
+					if item == nil || item.Button == nil || item.Disabled {
+						continue
+					}
+					bx, by, bw, bh := item.Button.GetRect()
+					if mouseX >= bx && mouseX < bx+bw && mouseY >= by && mouseY < by+bh {
+						bg.focusedRow = rowIdx
+						bg.focusedCol = colIdx
+						setFocus(bg)
+						bg.triggerHelp()
+						return true, nil
+					}
+				}
+			}
+			return false, nil
+		}
+
+		// Handle click to trigger action
 		if action == tview.MouseLeftClick {
 			mouseX, mouseY := event.Position()
 			for rowIdx, row := range bg.buttons {
