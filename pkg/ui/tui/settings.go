@@ -380,6 +380,7 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 	frame.SetButtonBar(buttonBar)
 
 	debugLogging := settings.DebugLogging
+	errorReporting := settings.ErrorReporting
 
 	// Build ignore systems label with count indicator
 	ignoreLabel := "Ignore systems"
@@ -411,6 +412,64 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 			ShowErrorModal(pages, app, "Failed to save debug logging setting", func() {
 				app.SetFocus(menu.List)
 			})
+		}
+	})
+
+	errorReportingDesc := "Send anonymous crash reports to help improve Zaparoo"
+	menu.AddToggle("Error reporting", errorReportingDesc, &errorReporting, func(value bool) {
+		// Capture current item index before modal steals focus
+		currentIdx := menu.GetCurrentItem()
+
+		if value {
+			// Immediately revert the toggle - AddToggle already flipped it
+			errorReporting = false
+			menu.refreshAllItems(currentIdx)
+
+			// Show confirmation before enabling
+			ShowConfirmModal(pages, app,
+				"Enable anonymous error reporting?\n\n"+
+					"Crash reports help us fix bugs faster.\n"+
+					"Reports are anonymized and sent via Sentry. "+
+					"No personal data is collected.",
+				func() {
+					// User confirmed - now enable it
+					enabled := true
+					ctx, cancel := tuiContext()
+					defer cancel()
+					err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+						ErrorReporting: &enabled,
+					})
+					if err != nil {
+						log.Error().Err(err).Msg("error enabling error reporting")
+						ShowErrorModal(pages, app, "Failed to save error reporting setting", func() {
+							app.SetFocus(menu.List)
+						})
+						return
+					}
+					errorReporting = true
+					menu.refreshAllItems(currentIdx)
+					app.SetFocus(menu.List)
+				},
+				func() {
+					// User cancelled - already reverted, just restore focus
+					app.SetFocus(menu.List)
+				},
+			)
+		} else {
+			// Disable without confirmation
+			ctx, cancel := tuiContext()
+			defer cancel()
+			err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+				ErrorReporting: &value,
+			})
+			if err != nil {
+				log.Error().Err(err).Msg("error disabling error reporting")
+				errorReporting = true
+				menu.refreshAllItems(currentIdx)
+				ShowErrorModal(pages, app, "Failed to save error reporting setting", func() {
+					app.SetFocus(menu.List)
+				})
+			}
 		}
 	})
 
