@@ -55,6 +55,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		ReadersScanExitDelay:    env.Config.ReadersScan().ExitDelay,
 		ReadersScanIgnoreSystem: make([]string, 0),
 		ReadersConnect:          readersConnect,
+		ErrorReporting:          env.Config.ErrorReporting(),
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
@@ -117,6 +118,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.ReadersAutoDetect != nil {
 		log.Info().Bool("readersAutoDetect", *params.ReadersAutoDetect).Msg("update")
 		env.Config.SetAutoDetect(*params.ReadersAutoDetect)
+	}
+
+	if params.ErrorReporting != nil {
+		log.Info().Bool("errorReporting", *params.ErrorReporting).Msg("update")
+		env.Config.SetErrorReporting(*params.ErrorReporting)
 	}
 
 	if params.ReadersScanMode != nil {

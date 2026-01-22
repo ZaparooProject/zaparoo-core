@@ -61,6 +61,7 @@ type SettingsResponse struct {
 	DebugLogging            bool               `json:"debugLogging"`
 	AudioScanFeedback       bool               `json:"audioScanFeedback"`
 	ReadersAutoDetect       bool               `json:"readersAutoDetect"`
+	ErrorReporting          bool               `json:"errorReporting"`
 }
 
 type PlaytimeLimitsResponse struct {
