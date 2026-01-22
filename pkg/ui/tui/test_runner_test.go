@@ -116,69 +116,73 @@ func (r *TestAppRunner) SetFocus(p tview.Primitive) {
 	r.Draw()
 }
 
-// Sync ensures all pending events have been processed by the event loop.
-// This queues a no-op update and waits for it to complete, guaranteeing
-// that the event loop has cycled and processed any injected events.
-func (r *TestAppRunner) Sync() {
-	r.QueueUpdateDraw(func() {})
+// SimulateKey simulates a key press by calling the focused primitive's
+// InputHandler directly. This is synchronous and race-free.
+func (r *TestAppRunner) SimulateKey(key tcell.Key, ch rune, mod tcell.ModMask) {
+	r.QueueUpdateDraw(func() {
+		focused := r.app.GetFocus()
+		if focused == nil {
+			return
+		}
+		handler := focused.InputHandler()
+		if handler == nil {
+			return
+		}
+		event := tcell.NewEventKey(key, ch, mod)
+		handler(event, func(p tview.Primitive) { r.app.SetFocus(p) })
+	})
 }
 
-// SendKey injects a key event and waits for it to be processed.
-func (r *TestAppRunner) SendKey(key tcell.Key, ch rune, mod tcell.ModMask) {
-	r.screen.InjectKey(key, ch, mod)
-	r.Sync()
+// SimulateRune simulates typing a character.
+func (r *TestAppRunner) SimulateRune(ch rune) {
+	r.SimulateKey(tcell.KeyRune, ch, tcell.ModNone)
 }
 
-// SendRune injects a rune and waits for it to be processed.
-func (r *TestAppRunner) SendRune(ch rune) {
-	r.SendKey(tcell.KeyRune, ch, tcell.ModNone)
-}
-
-// SendString injects a string of characters and waits for them to be processed.
-func (r *TestAppRunner) SendString(str string) {
+// SimulateString simulates typing a string of characters.
+func (r *TestAppRunner) SimulateString(str string) {
 	for _, ch := range str {
-		r.SendRune(ch)
+		r.SimulateRune(ch)
 	}
 }
 
-// SendEnter injects Enter key and waits for it to be processed.
-func (r *TestAppRunner) SendEnter() {
-	r.SendKey(tcell.KeyEnter, 0, tcell.ModNone)
+// SimulateEnter simulates pressing Enter.
+func (r *TestAppRunner) SimulateEnter() {
+	r.SimulateKey(tcell.KeyEnter, 0, tcell.ModNone)
 }
 
-// SendEscape injects Escape key and waits for it to be processed.
-func (r *TestAppRunner) SendEscape() {
-	r.SendKey(tcell.KeyEscape, 0, tcell.ModNone)
+// SimulateEscape simulates pressing Escape.
+func (r *TestAppRunner) SimulateEscape() {
+	r.SimulateKey(tcell.KeyEscape, 0, tcell.ModNone)
 }
 
-// SendTab injects Tab key and waits for it to be processed.
-func (r *TestAppRunner) SendTab() {
-	r.SendKey(tcell.KeyTab, 0, tcell.ModNone)
+// SimulateTab simulates pressing Tab.
+func (r *TestAppRunner) SimulateTab() {
+	r.SimulateKey(tcell.KeyTab, 0, tcell.ModNone)
 }
 
-// SendBacktab injects Shift+Tab and waits for it to be processed.
-func (r *TestAppRunner) SendBacktab() {
-	r.SendKey(tcell.KeyBacktab, 0, tcell.ModNone)
+// SimulateBacktab simulates pressing Shift+Tab.
+func (r *TestAppRunner) SimulateBacktab() {
+	r.SimulateKey(tcell.KeyBacktab, 0, tcell.ModNone)
 }
 
-// SendArrowUp injects Up arrow and waits for it to be processed.
-func (r *TestAppRunner) SendArrowUp() {
-	r.SendKey(tcell.KeyUp, 0, tcell.ModNone)
+// SimulateArrowUp simulates pressing the Up arrow.
+func (r *TestAppRunner) SimulateArrowUp() {
+	r.SimulateKey(tcell.KeyUp, 0, tcell.ModNone)
 }
 
-// SendArrowDown injects Down arrow and waits for it to be processed.
-func (r *TestAppRunner) SendArrowDown() {
-	r.SendKey(tcell.KeyDown, 0, tcell.ModNone)
+// SimulateArrowDown simulates pressing the Down arrow.
+func (r *TestAppRunner) SimulateArrowDown() {
+	r.SimulateKey(tcell.KeyDown, 0, tcell.ModNone)
 }
 
-// SendArrowLeft injects Left arrow and waits for it to be processed.
-func (r *TestAppRunner) SendArrowLeft() {
-	r.SendKey(tcell.KeyLeft, 0, tcell.ModNone)
+// SimulateArrowLeft simulates pressing the Left arrow.
+func (r *TestAppRunner) SimulateArrowLeft() {
+	r.SimulateKey(tcell.KeyLeft, 0, tcell.ModNone)
 }
 
-// SendArrowRight injects Right arrow and waits for it to be processed.
-func (r *TestAppRunner) SendArrowRight() {
-	r.SendKey(tcell.KeyRight, 0, tcell.ModNone)
+// SimulateArrowRight simulates pressing the Right arrow.
+func (r *TestAppRunner) SimulateArrowRight() {
+	r.SimulateKey(tcell.KeyRight, 0, tcell.ModNone)
 }
 
 // IsStopped returns whether the application has stopped.

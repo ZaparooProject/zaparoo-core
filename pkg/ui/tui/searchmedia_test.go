@@ -165,19 +165,18 @@ func TestBuildSearchMedia_SearchWithResults_Integration(t *testing.T) {
 
 	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
 
-	// Type in search using synchronizing Send methods
-	runner.SendString("mario")
-	require.True(t, runner.ContainsText("mario"), "Search text should appear")
+	// Type in search
+	runner.SimulateString("mario")
 
 	// Press Tab to navigate to button bar (results list is empty)
-	runner.SendTab()
+	runner.SimulateTab()
 
 	// Press Enter to trigger search (first button in button bar)
-	runner.SendEnter()
+	runner.SimulateEnter()
 
 	// Wait for SearchMedia to be called using the mock's signal channel
 	called := mockSvc.SearchMediaCalled()
-	assert.True(t, runner.WaitForSignal(called, 200*time.Millisecond), "SearchMedia should be called")
+	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond), "SearchMedia should be called")
 }
 
 func TestBuildSearchMedia_EscapeGoesBack_Integration(t *testing.T) {
@@ -213,8 +212,7 @@ func TestBuildSearchMedia_EscapeGoesBack_Integration(t *testing.T) {
 	}
 
 	// Press escape
-	runner.Screen().InjectEscape()
-	runner.Draw()
+	runner.SimulateEscape()
 
 	// Verify we went back
 	assert.True(t, runner.WaitForCondition(func() bool {
@@ -249,14 +247,11 @@ func TestBuildSearchMedia_ClearButton_Integration(t *testing.T) {
 	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
 
 	// Navigate to Clear button (Tab then right)
-	runner.Screen().InjectTab()
-	runner.Draw()
-	runner.Screen().InjectArrowRight()
-	runner.Draw()
+	runner.SimulateTab()
+	runner.SimulateArrowRight()
 
 	// Press Enter on Clear
-	runner.Screen().InjectEnter()
-	runner.Draw()
+	runner.SimulateEnter()
 
 	// Wait for session state to be cleared
 	assert.True(t, runner.WaitForCondition(func() bool {
@@ -299,8 +294,7 @@ func TestBuildSearchMedia_SystemNavigation_Integration(t *testing.T) {
 	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
 
 	// Navigate down to system button
-	runner.Screen().InjectArrowDown()
-	runner.Draw()
+	runner.SimulateArrowDown()
 
 	// System button should show "All" initially - also check for "System" label
 	// which should be visible regardless

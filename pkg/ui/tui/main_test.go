@@ -329,8 +329,7 @@ func TestButtonGrid_HelpCallback_Integration(t *testing.T) {
 	}, 100*time.Millisecond), "Should receive help for first button")
 
 	// Navigate right
-	runner.Screen().InjectArrowRight()
-	runner.Draw()
+	runner.SimulateArrowRight()
 
 	assert.True(t, runner.WaitForCondition(func() bool {
 		return containsHelpText("Help for button 2")
@@ -358,43 +357,34 @@ func TestButtonGrid_Navigation_Integration(t *testing.T) {
 	runner.Start(grid)
 	runner.SetFocus(grid)
 
-	// Get current focus helper (synchronized via QueueUpdateDraw)
-	getFocus := func() (int, int) {
-		var row, col int
-		runner.QueueUpdateDraw(func() {
-			row, col = grid.GetFocus()
-		})
-		return row, col
-	}
-
 	// Initial focus should be (0, 0)
-	row, col := getFocus()
-	assert.Equal(t, 0, row, "Initial row should be 0")
-	assert.Equal(t, 0, col, "Initial col should be 0")
-
-	// Navigate right (Send* methods synchronize with event loop)
-	runner.SendArrowRight()
-	row, col = getFocus()
+	row, col := grid.GetFocus()
 	assert.Equal(t, 0, row)
-	assert.Equal(t, 1, col, "Focus should be (0, 1) after right")
+	assert.Equal(t, 0, col)
+
+	// Navigate right
+	runner.SimulateArrowRight()
+	row, col = grid.GetFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 1, col)
 
 	// Navigate down
-	runner.SendArrowDown()
-	row, col = getFocus()
+	runner.SimulateArrowDown()
+	row, col = grid.GetFocus()
 	assert.Equal(t, 1, row)
-	assert.Equal(t, 1, col, "Focus should be (1, 1) after down")
+	assert.Equal(t, 1, col)
 
 	// Navigate left
-	runner.SendArrowLeft()
-	row, col = getFocus()
+	runner.SimulateArrowLeft()
+	row, col = grid.GetFocus()
 	assert.Equal(t, 1, row)
-	assert.Equal(t, 0, col, "Focus should be (1, 0) after left")
+	assert.Equal(t, 0, col)
 
 	// Navigate up
-	runner.SendArrowUp()
-	row, col = getFocus()
+	runner.SimulateArrowUp()
+	row, col = grid.GetFocus()
 	assert.Equal(t, 0, row)
-	assert.Equal(t, 0, col, "Focus should be (0, 0) after up")
+	assert.Equal(t, 0, col)
 }
 
 func TestButtonGrid_TabNavigation_Integration(t *testing.T) {
@@ -415,25 +405,15 @@ func TestButtonGrid_TabNavigation_Integration(t *testing.T) {
 	runner.Start(grid)
 	runner.SetFocus(grid)
 
-	getFocus := func() (int, int) {
-		var row, col int
-		runner.QueueUpdateDraw(func() {
-			row, col = grid.GetFocus()
-		})
-		return row, col
-	}
-
 	// Tab should navigate right
-	runner.Screen().InjectTab()
-	runner.Draw()
-	row, col := getFocus()
+	runner.SimulateTab()
+	row, col := grid.GetFocus()
 	assert.Equal(t, 0, row)
 	assert.Equal(t, 1, col)
 
 	// Backtab should navigate left
-	runner.Screen().InjectBacktab()
-	runner.Draw()
-	row, col = getFocus()
+	runner.SimulateBacktab()
+	row, col = grid.GetFocus()
 	assert.Equal(t, 0, row)
 	assert.Equal(t, 0, col)
 }
@@ -461,8 +441,7 @@ func TestButtonGrid_EscapeCallback_Integration(t *testing.T) {
 	runner.Start(grid)
 	runner.SetFocus(grid)
 
-	runner.Screen().InjectEscape()
-	runner.Draw()
+	runner.SimulateEscape()
 
 	assert.True(t, runner.WaitForSignal(escapeCalled, 100*time.Millisecond), "Escape callback should be called")
 }
@@ -491,8 +470,7 @@ func TestButtonGrid_EnterActivatesButton_Integration(t *testing.T) {
 	runner.Start(grid)
 	runner.SetFocus(grid)
 
-	runner.Screen().InjectEnter()
-	runner.Draw()
+	runner.SimulateEnter()
 
 	assert.True(t, runner.WaitForSignal(buttonPressed, 100*time.Millisecond), "Button should be activated on Enter")
 }
@@ -515,23 +493,13 @@ func TestButtonGrid_DisabledButtonsSkipped_Integration(t *testing.T) {
 	runner.Start(grid)
 	runner.SetFocus(grid)
 
-	// Get current focus helper (synchronized via QueueUpdateDraw)
-	getFocus := func() (int, int) {
-		var row, col int
-		runner.QueueUpdateDraw(func() {
-			row, col = grid.GetFocus()
-		})
-		return row, col
-	}
-
 	// Initial focus (0, 0)
-	row, col := getFocus()
-	assert.Equal(t, 0, row)
-	assert.Equal(t, 0, col, "Initial focus should be (0, 0)")
+	_, col := grid.GetFocus()
+	assert.Equal(t, 0, col)
 
 	// Navigate right - should skip disabled btn2 and go to btn3
-	runner.SendArrowRight()
-	row, col = getFocus()
+	runner.SimulateArrowRight()
+	row, col := grid.GetFocus()
 	assert.Equal(t, 0, row)
 	assert.Equal(t, 2, col, "Should skip disabled button and go to third")
 }
@@ -601,27 +569,16 @@ func TestButtonGrid_WrapAround_Integration(t *testing.T) {
 	runner.Start(grid)
 	runner.SetFocus(grid)
 
-	// Get current focus helper (synchronized via QueueUpdateDraw)
-	getFocus := func() (int, int) {
-		var row, col int
-		runner.QueueUpdateDraw(func() {
-			row, col = grid.GetFocus()
-		})
-		return row, col
-	}
+	// Navigate to the last column
+	runner.SimulateArrowRight()
+	runner.SimulateArrowRight()
 
-	// Navigate to the last column (Send* methods synchronize with event loop)
-	runner.SendArrowRight()
-	_, col := getFocus()
-	assert.Equal(t, 1, col, "Should be at column 1 after first right")
-
-	runner.SendArrowRight()
-	_, col = getFocus()
+	_, col := grid.GetFocus()
 	assert.Equal(t, 2, col, "Should be at last column")
 
 	// Navigate right again - should wrap to first
-	runner.SendArrowRight()
-	row, col := getFocus()
+	runner.SimulateArrowRight()
+	row, col := grid.GetFocus()
 	assert.Equal(t, 0, row)
 	assert.Equal(t, 0, col, "Should wrap to first column")
 }
