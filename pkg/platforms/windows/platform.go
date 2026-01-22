@@ -63,13 +63,16 @@ import (
 )
 
 type Platform struct {
-	activeMedia       func() *models.ActiveMedia
-	setActiveMedia    func(*models.ActiveMedia)
-	trackedProcess    *os.Process
-	launchBoxPipe     *LaunchBoxPipeServer
-	steamTracker      *steamtracker.WindowsPlatformIntegration
-	processMu         syncutil.RWMutex
-	launchBoxPipeLock syncutil.Mutex
+	activeMedia             func() *models.ActiveMedia
+	setActiveMedia          func(*models.ActiveMedia)
+	customPlatformToSystem  map[string]string   // e.g., "Mame Arcade" -> "arcade"
+	systemToCustomPlatforms map[string][]string // e.g., "arcade" -> ["Mame Arcade", "Mame Classics"]
+	trackedProcess          *os.Process
+	launchBoxPipe           *LaunchBoxPipeServer
+	steamTracker            *steamtracker.WindowsPlatformIntegration
+	processMu               syncutil.RWMutex
+	launchBoxPipeLock       syncutil.Mutex
+	platformMappingsMu      syncutil.RWMutex
 }
 
 func (*Platform) ID() string {

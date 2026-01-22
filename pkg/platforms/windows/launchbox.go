@@ -32,6 +32,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Microsoft/go-winio"
@@ -49,6 +50,11 @@ import (
 
 const (
 	launchBoxPipeName = `\\.\pipe\zaparoo-launchbox-ipc`
+
+	// launchBoxScannerMaxBuffer is the maximum buffer size for reading from the LaunchBox pipe.
+	// Must be large enough to handle JSON responses for platforms with thousands of games
+	// (e.g., NES with 8888 games can produce ~3MB responses).
+	launchBoxScannerMaxBuffer = 16 * 1024 * 1024 // 16MB
 )
 
 // Plugin message types (matches C# plugin JSON structure)
@@ -64,8 +70,53 @@ type pluginEvent struct {
 
 //nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
 type pluginCommand struct {
-	Command string `json:"Command"`
-	ID      string `json:"Id,omitempty"`
+	Command  string `json:"Command"`
+	ID       string `json:"Id,omitempty"`
+	Platform string `json:"Platform,omitempty"`
+}
+
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
+type launchBoxPlatformInfo struct {
+	Name     string `json:"Name"`
+	ScrapeAs string `json:"ScrapeAs"`
+}
+
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
+type launchBoxPlatformsEvent struct {
+	Event     string                  `json:"Event"`
+	Platforms []launchBoxPlatformInfo `json:"Platforms"`
+}
+
+// LaunchBoxAdditionalApp represents an additional application for a LaunchBox game
+//
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
+type LaunchBoxAdditionalApp struct {
+	ID   string `json:"Id"`
+	Name string `json:"Name"`
+}
+
+// LaunchBoxGameInfo represents a game from the LaunchBox plugin
+//
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
+type LaunchBoxGameInfo struct {
+	ID             string                   `json:"Id"`
+	Title          string                   `json:"Title"`
+	Platform       string                   `json:"Platform"`
+	AdditionalApps []LaunchBoxAdditionalApp `json:"AdditionalApps"`
+}
+
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
+type launchBoxGamesEvent struct {
+	Event    string              `json:"Event"`
+	Platform string              `json:"Platform"`
+	Error    string              `json:"Error,omitempty"`
+	Games    []LaunchBoxGameInfo `json:"Games"`
+}
+
+// launchBoxGamesResponse is used internally for the synchronous request channel
+type launchBoxGamesResponse struct {
+	Error string
+	Games []LaunchBoxGameInfo
 }
 
 // LaunchBox XML types
@@ -301,17 +352,27 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 	return "", errors.New("launchbox directory not found")
 }
 
+// pendingGamesRequest tracks a pending synchronous game request during scanning
+type pendingGamesRequest struct {
+	response chan launchBoxGamesResponse
+	platform string
+}
+
 // LaunchBoxPipeServer manages named pipe communication with the LaunchBox plugin
 type LaunchBoxPipeServer struct {
-	onGameStarted  func(id, title, platform, path string)
-	onGameExited   func(id, title string)
-	onWriteRequest func(id, title, platform string)
-	listener       net.Listener
-	conn           net.Conn
-	ctx            context.Context
-	cancel         context.CancelFunc
-	writer         *bufio.Writer
-	connMu         syncutil.Mutex
+	ctx                 context.Context
+	listener            net.Listener
+	conn                net.Conn
+	onGameStarted       func(id, title, platform, path string)
+	onGameExited        func(id, title string)
+	onWriteRequest      func(id, title, platform string)
+	onPlatformsReceived func(platforms []launchBoxPlatformInfo)
+	cancel              context.CancelFunc
+	writer              *bufio.Writer
+	// For synchronous game requests during scanning
+	pendingGamesReq   pendingGamesRequest
+	connMu            syncutil.Mutex
+	pendingGamesReqMu syncutil.Mutex
 }
 
 // NewLaunchBoxPipeServer creates a new named pipe server
@@ -375,6 +436,106 @@ func (s *LaunchBoxPipeServer) SetGameExitedHandler(handler func(id, title string
 // SetWriteRequestHandler sets the callback for write request events
 func (s *LaunchBoxPipeServer) SetWriteRequestHandler(handler func(id, title, platform string)) {
 	s.onWriteRequest = handler
+}
+
+// SetPlatformsReceivedHandler sets the callback for platforms received events
+func (s *LaunchBoxPipeServer) SetPlatformsReceivedHandler(handler func(plats []launchBoxPlatformInfo)) {
+	s.onPlatformsReceived = handler
+}
+
+// RequestPlatforms sends a GetPlatforms command to the LaunchBox plugin
+func (s *LaunchBoxPipeServer) RequestPlatforms() error {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+
+	if s.writer == nil {
+		return errors.New("LaunchBox plugin not connected")
+	}
+
+	cmd := pluginCommand{
+		Command: "GetPlatforms",
+	}
+
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to marshal GetPlatforms command: %w", err)
+	}
+
+	if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
+		return fmt.Errorf("failed to write GetPlatforms command: %w", err)
+	}
+
+	if err := s.writer.Flush(); err != nil {
+		return fmt.Errorf("failed to flush GetPlatforms command: %w", err)
+	}
+
+	log.Debug().Msg("sent GetPlatforms command to LaunchBox plugin")
+	return nil
+}
+
+// RequestGamesForPlatformSync sends a GetGamesForPlatform command and waits for the response.
+// This is used by the scanner to query games on-demand per-platform instead of caching all games.
+func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(
+	ctx context.Context,
+	platform string,
+) ([]LaunchBoxGameInfo, error) {
+	s.connMu.Lock()
+	if s.writer == nil {
+		s.connMu.Unlock()
+		return nil, errors.New("LaunchBox plugin not connected")
+	}
+	s.connMu.Unlock()
+
+	respChan := make(chan launchBoxGamesResponse, 1)
+
+	s.pendingGamesReqMu.Lock()
+	if s.pendingGamesReq.response != nil {
+		s.pendingGamesReqMu.Unlock()
+		return nil, errors.New("games request already in flight")
+	}
+	s.pendingGamesReq.platform = platform
+	s.pendingGamesReq.response = respChan
+	s.pendingGamesReqMu.Unlock()
+
+	defer func() {
+		s.pendingGamesReqMu.Lock()
+		s.pendingGamesReq.platform = ""
+		s.pendingGamesReq.response = nil
+		s.pendingGamesReqMu.Unlock()
+	}()
+
+	// Send request
+	cmd := pluginCommand{Command: "GetGamesForPlatform", Platform: platform}
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal GetGamesForPlatform command: %w", err)
+	}
+
+	s.connMu.Lock()
+	if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
+		s.connMu.Unlock()
+		return nil, fmt.Errorf("failed to write GetGamesForPlatform command: %w", err)
+	}
+	if err := s.writer.Flush(); err != nil {
+		s.connMu.Unlock()
+		return nil, fmt.Errorf("failed to flush GetGamesForPlatform command: %w", err)
+	}
+	s.connMu.Unlock()
+
+	log.Debug().Msgf("sent GetGamesForPlatform command for: %s", platform)
+
+	// Wait for response with timeout
+	select {
+	case resp := <-respChan:
+		if resp.Error != "" {
+			return nil, fmt.Errorf("LaunchBox plugin error: %s", resp.Error)
+		}
+		return resp.Games, nil
+	case <-time.After(30 * time.Second):
+		return nil, errors.New("timeout waiting for games from LaunchBox")
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // LaunchGame sends a launch command to the LaunchBox plugin
@@ -476,6 +637,11 @@ func (s *LaunchBoxPipeServer) acceptConnections() {
 		s.writer = bufio.NewWriter(conn)
 		s.connMu.Unlock()
 
+		// Request platform mappings from the plugin
+		if err := s.RequestPlatforms(); err != nil {
+			log.Warn().Err(err).Msg("failed to request platforms from LaunchBox plugin")
+		}
+
 		// Handle this connection
 		go s.handleConnection(conn)
 	}
@@ -506,7 +672,7 @@ func (s *LaunchBoxPipeServer) handleConnection(conn net.Conn) {
 	go func() {
 		defer close(scanDone)
 		scanner := bufio.NewScanner(conn)
-		scanner.Buffer(make([]byte, 4096), 1024*1024) // 1MB buffer
+		scanner.Buffer(make([]byte, 4096), launchBoxScannerMaxBuffer)
 
 		for scanner.Scan() {
 			select {
@@ -576,6 +742,44 @@ func (s *LaunchBoxPipeServer) handleEvent(data string) {
 			s.onWriteRequest(event.ID, event.Title, event.Platform)
 		}
 
+	case "Platforms":
+		var platformsEvent launchBoxPlatformsEvent
+		if err := json.Unmarshal([]byte(data), &platformsEvent); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal LaunchBox Platforms event")
+			return
+		}
+
+		log.Info().Msgf("received %d platforms from LaunchBox", len(platformsEvent.Platforms))
+
+		if s.onPlatformsReceived != nil {
+			s.onPlatformsReceived(platformsEvent.Platforms)
+		}
+
+	case "Games":
+		var gamesEvent launchBoxGamesEvent
+		if err := json.Unmarshal([]byte(data), &gamesEvent); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal LaunchBox Games event")
+			return
+		}
+
+		if gamesEvent.Error != "" {
+			log.Warn().Msgf("LaunchBox plugin error for platform %s: %s",
+				gamesEvent.Platform, gamesEvent.Error)
+		} else {
+			log.Debug().Msgf("received %d games from LaunchBox for platform %s",
+				len(gamesEvent.Games), gamesEvent.Platform)
+		}
+
+		// Send to pending request if one exists for this platform
+		s.pendingGamesReqMu.Lock()
+		if s.pendingGamesReq.response != nil && s.pendingGamesReq.platform == gamesEvent.Platform {
+			s.pendingGamesReq.response <- launchBoxGamesResponse{
+				Games: gamesEvent.Games,
+				Error: gamesEvent.Error,
+			}
+		}
+		s.pendingGamesReqMu.Unlock()
+
 	default:
 		log.Debug().Msgf("unknown LaunchBox event type: %s", event.Event)
 	}
@@ -602,11 +806,18 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 
 	// Set event handlers
 	pipe.SetGameStartedHandler(func(id, title, platform, _ string) {
-		// Convert LaunchBox platform name to Zaparoo system ID
-		systemID, ok := lbSysMapReverse[platform]
+		// Try custom platform mapping first (from plugin's ScrapeAs data)
+		p.platformMappingsMu.RLock()
+		systemID, ok := p.customPlatformToSystem[platform]
+		p.platformMappingsMu.RUnlock()
+
 		if !ok {
-			log.Debug().Msgf("unknown LaunchBox platform: %s, skipping ActiveMedia", platform)
-			return
+			// Fall back to hardcoded reverse map
+			systemID, ok = lbSysMapReverse[platform]
+			if !ok {
+				log.Debug().Msgf("unknown LaunchBox platform: %s, skipping ActiveMedia", platform)
+				return
+			}
 		}
 
 		// Get system name from metadata
@@ -663,6 +874,38 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 		log.Info().Msgf("write request sent to API: %s", text)
 	})
 
+	pipe.SetPlatformsReceivedHandler(func(platforms []launchBoxPlatformInfo) {
+		p.platformMappingsMu.Lock()
+		defer p.platformMappingsMu.Unlock()
+
+		p.customPlatformToSystem = make(map[string]string)
+		p.systemToCustomPlatforms = make(map[string][]string)
+
+		for _, plat := range platforms {
+			// Use ScrapeAs to find the Zaparoo system ID via lbSysMap
+			canonicalName := plat.ScrapeAs
+			if canonicalName == "" {
+				canonicalName = plat.Name
+			}
+
+			// Look up in lbSysMap (which maps Zaparoo system ID -> LaunchBox canonical name)
+			for sysID, lbName := range lbSysMap {
+				if strings.EqualFold(lbName, canonicalName) {
+					p.customPlatformToSystem[plat.Name] = sysID
+					// Only set reverse mapping if it's a custom name
+					if !strings.EqualFold(plat.Name, lbName) {
+						p.systemToCustomPlatforms[sysID] = append(p.systemToCustomPlatforms[sysID], plat.Name)
+					}
+					log.Debug().Msgf("mapped LaunchBox platform %q (ScrapeAs: %q) -> %s",
+						plat.Name, plat.ScrapeAs, sysID)
+					break
+				}
+			}
+		}
+
+		log.Info().Msgf("built %d custom platform mappings from LaunchBox", len(p.customPlatformToSystem))
+	})
+
 	if err := pipe.Start(); err != nil {
 		log.Warn().Err(err).Msg("failed to start LaunchBox named pipe server")
 		// Don't fail platform initialization if pipe server fails
@@ -682,16 +925,69 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 		ID:      "LaunchBox",
 		Schemes: []string{shared.SchemeLaunchBox},
 		Scanner: func(
-			_ context.Context,
+			ctx context.Context,
 			cfg *config.Instance,
 			systemId string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
-			lbSys, ok := lbSysMap[systemId]
-			if !ok {
+			// Build list of LaunchBox platforms to query
+			p.platformMappingsMu.RLock()
+			customPlatforms := p.systemToCustomPlatforms[systemId]
+			p.platformMappingsMu.RUnlock()
+
+			// Start with custom platforms, then add canonical name from hardcoded map
+			var platformsToQuery []string
+			platformsToQuery = append(platformsToQuery, customPlatforms...)
+
+			// Add canonical platform from hardcoded map if it exists
+			if canonicalPlatform, ok := lbSysMap[systemId]; ok {
+				platformsToQuery = append(platformsToQuery, canonicalPlatform)
+			}
+
+			if len(platformsToQuery) == 0 {
 				return results, nil
 			}
 
+			// Try plugin first (includes additional apps for merged games)
+			p.launchBoxPipeLock.Lock()
+			pipe := p.launchBoxPipe
+			p.launchBoxPipeLock.Unlock()
+
+			if pipe != nil && pipe.IsConnected() {
+				pluginSucceeded := false
+				for _, lbSys := range platformsToQuery {
+					games, err := pipe.RequestGamesForPlatformSync(ctx, lbSys)
+					if err != nil {
+						log.Debug().Err(err).Msgf("plugin query failed for platform %s", lbSys)
+						continue
+					}
+					pluginSucceeded = true
+					for _, game := range games {
+						// Add the primary game
+						results = append(results, platforms.ScanResult{
+							Path:  virtualpath.CreateVirtualPath(shared.SchemeLaunchBox, game.ID, game.Title),
+							Name:  game.Title,
+							NoExt: true,
+						})
+
+						// Add additional applications (merged games, secondary discs, etc.)
+						for _, app := range game.AdditionalApps {
+							results = append(results, platforms.ScanResult{
+								Path:  virtualpath.CreateVirtualPath(shared.SchemeLaunchBox, app.ID, app.Name),
+								Name:  app.Name,
+								NoExt: true,
+							})
+						}
+					}
+					log.Debug().Msgf("scanned %d items from LaunchBox plugin for %s", len(games), lbSys)
+				}
+				if pluginSucceeded {
+					return results, nil
+				}
+				log.Debug().Msg("all plugin queries failed, falling back to XML")
+			}
+
+			// Fall back to XML parsing (no additional apps available)
 			lbDir, err := findLaunchBoxDir(cfg)
 			if err != nil {
 				return results, err
@@ -702,34 +998,41 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 				return results, errors.New("LaunchBox platforms dir not found")
 			}
 
-			xmlPath := filepath.Join(platformsDir, lbSys+".xml")
-			if _, statErr := os.Stat(xmlPath); os.IsNotExist(statErr) {
-				log.Debug().Msgf("LaunchBox platform xml not found: %s", xmlPath)
-				return results, nil
-			}
+			for _, lbSys := range platformsToQuery {
+				xmlPath := filepath.Join(platformsDir, lbSys+".xml")
+				if _, statErr := os.Stat(xmlPath); os.IsNotExist(statErr) {
+					log.Debug().Msgf("LaunchBox platform xml not found: %s", xmlPath)
+					continue
+				}
 
-			//nolint:gosec // Safe: reads game database XML files from controlled directories
-			xmlFile, err := os.Open(xmlPath)
-			if err != nil {
-				return results, fmt.Errorf("failed to open XML file %s: %w", xmlPath, err)
-			}
-			defer func(xmlFile *os.File) {
+				//nolint:gosec // Safe: reads game database XML files from controlled directories
+				xmlFile, err := os.Open(xmlPath)
+				if err != nil {
+					log.Warn().Err(err).Msgf("failed to open XML file %s", xmlPath)
+					continue
+				}
+
+				var lbXML launchBoxXML
+				if err := xml.NewDecoder(xmlFile).Decode(&lbXML); err != nil {
+					if closeErr := xmlFile.Close(); closeErr != nil {
+						log.Warn().Err(closeErr).Msg("error closing xml file")
+					}
+					log.Warn().Err(err).Msgf("failed to decode XML for %s", lbSys)
+					continue
+				}
+
 				if closeErr := xmlFile.Close(); closeErr != nil {
 					log.Warn().Err(closeErr).Msg("error closing xml file")
 				}
-			}(xmlFile)
 
-			var lbXML launchBoxXML
-			if err := xml.NewDecoder(xmlFile).Decode(&lbXML); err != nil {
-				return results, fmt.Errorf("failed to decode XML: %w", err)
-			}
-
-			for _, game := range lbXML.Games {
-				results = append(results, platforms.ScanResult{
-					Path:  virtualpath.CreateVirtualPath(shared.SchemeLaunchBox, game.ID, game.Title),
-					Name:  game.Title,
-					NoExt: true,
-				})
+				for _, game := range lbXML.Games {
+					results = append(results, platforms.ScanResult{
+						Path:  virtualpath.CreateVirtualPath(shared.SchemeLaunchBox, game.ID, game.Title),
+						Name:  game.Title,
+						NoExt: true,
+					})
+				}
+				log.Debug().Msgf("scanned %d games from LaunchBox XML for %s", len(lbXML.Games), lbSys)
 			}
 
 			return results, nil

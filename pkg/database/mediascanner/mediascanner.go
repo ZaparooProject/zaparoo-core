@@ -1208,6 +1208,12 @@ func NewNamesIndex(
 			log.Debug().Msgf("scanned %d files for system: %s", len(results), s.ID)
 
 			if len(results) > 0 {
+				// Dynamically expand total and report progress for systems with results
+				status.Total++
+				status.Step++
+				status.SystemID = systemID
+				update(status)
+
 				status.Files += len(results)
 
 				for _, scanResult := range results {
