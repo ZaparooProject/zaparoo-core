@@ -42,6 +42,7 @@ func defaultTestSettings() *models.SettingsResponse {
 		ReadersScanIgnoreSystem: []string{},
 		ReadersConnect:          nil,
 		DebugLogging:            false,
+		ErrorReporting:          false,
 	}
 }
 
@@ -504,4 +505,193 @@ func TestFindExitDelayIndex(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestBuildAdvancedSettingsMenu_ErrorReportingVisible_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+
+	mockSvc := NewMockSettingsService()
+	settings := defaultTestSettings()
+	settings.ErrorReporting = false
+	mockSvc.SetupGetSettings(settings)
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	runner.QueueUpdateDraw(func() {
+		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond), "Advanced title should appear")
+
+	// Verify error reporting toggle is visible
+	assert.True(t, runner.ContainsText("Error reporting"), "Error reporting toggle should be visible")
+}
+
+func TestBuildAdvancedSettingsMenu_ErrorReportingShowsConfirmModal_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+
+	mockSvc := NewMockSettingsService()
+	settings := defaultTestSettings()
+	settings.ErrorReporting = false
+	mockSvc.SetupGetSettings(settings)
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	runner.QueueUpdateDraw(func() {
+		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
+
+	// Navigate to error reporting (third item: ignore systems, debug logging, error reporting)
+	runner.SimulateArrowDown() // to debug logging
+	runner.SimulateArrowDown() // to error reporting
+
+	// Toggle error reporting
+	runner.SimulateEnter()
+
+	// Should show confirmation modal with Sentry mention
+	assert.True(t, runner.WaitForText("Sentry", 100*time.Millisecond),
+		"Confirmation modal should mention Sentry")
+}
+
+func TestBuildAdvancedSettingsMenu_ErrorReportingCancelDoesNotEnable_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+
+	mockSvc := NewMockSettingsService()
+	settings := defaultTestSettings()
+	settings.ErrorReporting = false
+	mockSvc.SetupGetSettings(settings)
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	runner.QueueUpdateDraw(func() {
+		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
+
+	// Navigate to error reporting
+	runner.SimulateArrowDown() // to debug logging
+	runner.SimulateArrowDown() // to error reporting
+
+	// Toggle error reporting - shows modal
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Sentry", 100*time.Millisecond), "Modal should appear")
+
+	// Press Escape to cancel
+	runner.SimulateEscape()
+
+	// Wait for modal to close
+	time.Sleep(50 * time.Millisecond)
+	runner.Draw()
+
+	// UpdateSettings should NOT have been called (only cancel happened)
+	assert.Equal(t, 0, mockSvc.UpdateSettingsCallCount(),
+		"UpdateSettings should not be called when user cancels")
+}
+
+func TestBuildAdvancedSettingsMenu_ErrorReportingConfirmEnables_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+
+	mockSvc := NewMockSettingsService()
+	settings := defaultTestSettings()
+	settings.ErrorReporting = false
+	mockSvc.SetupGetSettings(settings)
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	runner.QueueUpdateDraw(func() {
+		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
+
+	// Navigate to error reporting
+	runner.SimulateArrowDown() // to debug logging
+	runner.SimulateArrowDown() // to error reporting
+
+	// Toggle error reporting - shows modal
+	runner.SimulateEnter()
+	require.True(t, runner.WaitForText("Sentry", 100*time.Millisecond), "Modal should appear")
+
+	// Press Enter to confirm (Yes is the default focused button)
+	runner.SimulateEnter()
+
+	// Wait for UpdateSettings to be called
+	called := mockSvc.UpdateSettingsCalled()
+	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond),
+		"UpdateSettings should be called when user confirms")
+
+	// Verify the toggle is now visually checked
+	assert.True(t, runner.WaitForText("[*]", 100*time.Millisecond),
+		"Toggle should show as checked after confirming")
+}
+
+func TestBuildAdvancedSettingsMenu_ErrorReportingDisableNoConfirm_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+
+	mockSvc := NewMockSettingsService()
+	settings := defaultTestSettings()
+	settings.ErrorReporting = true // Start with enabled
+	mockSvc.SetupGetSettings(settings)
+	mockSvc.SetupUpdateSettingsSuccess()
+
+	runner.Start(pages)
+	runner.Draw()
+
+	runner.QueueUpdateDraw(func() {
+		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
+	})
+
+	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
+
+	// Navigate to error reporting
+	runner.SimulateArrowDown() // to debug logging
+	runner.SimulateArrowDown() // to error reporting
+
+	// Toggle error reporting to disable - should NOT show modal
+	runner.SimulateEnter()
+
+	// UpdateSettings should be called immediately (no confirm modal for disable)
+	called := mockSvc.UpdateSettingsCalled()
+	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond),
+		"UpdateSettings should be called immediately when disabling")
+
+	// Verify no modal appeared (no "Sentry" text visible)
+	assert.False(t, runner.ContainsText("Sentry"),
+		"No confirmation modal should appear when disabling")
 }
