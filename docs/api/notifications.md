@@ -2,12 +2,6 @@
 
 Notifications are sent from the server to connected clients to inform them of events.
 
-## Launching
-
-### running
-
-Media started running on the server.
-
 ## Readers
 
 ### readers.added
@@ -228,6 +222,41 @@ The warning applies to whichever limit will be reached first (session or daily).
   "params": {
     "interval": "5m",
     "remaining": "4m58s"
+  }
+}
+```
+
+## Inbox
+
+### inbox.added
+
+Sent when a new inbox message is added to the server.
+
+#### Parameters
+
+| Key       | Type   | Required | Description                                      |
+| :-------- | :----- | :------- | :----------------------------------------------- |
+| id        | number | Yes      | Unique identifier of the message.                |
+| title     | string | Yes      | Title of the message.                            |
+| body      | string | No       | Body text of the message.                        |
+| severity  | number | Yes      | Severity level (0=info, 1=warning, 2=error).     |
+| category  | string | No       | Category of the message.                         |
+| profileId | number | No       | Associated profile ID, if applicable.            |
+| createdAt | string | Yes      | Timestamp when message was created in RFC3339 format. |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "inbox.added",
+  "params": {
+    "id": 1,
+    "title": "Update Available",
+    "body": "A new version of Zaparoo is available.",
+    "severity": 0,
+    "category": "update",
+    "createdAt": "2024-09-24T17:49:42.938167429+08:00"
   }
 }
 ```
