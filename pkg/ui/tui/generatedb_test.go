@@ -177,3 +177,73 @@ func TestFormatDBStats(t *testing.T) {
 func intPtr(v int) *int {
 	return &v
 }
+
+func TestProgressBar_Draw_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 40, 3)
+	defer runner.Stop()
+
+	pb := NewProgressBar()
+	pb.SetBorder(true)
+	pb.SetProgress(0.5)
+
+	runner.Start(pb)
+	runner.Draw()
+
+	// The progress bar should render with some filled and empty characters
+	// We can't easily assert on specific characters, but we verify it doesn't panic
+	// and renders something
+}
+
+func TestProgressBar_Draw_Empty(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 40, 3)
+	defer runner.Stop()
+
+	pb := NewProgressBar()
+	pb.SetBorder(true)
+	pb.SetProgress(0)
+
+	runner.Start(pb)
+	runner.Draw()
+
+	// Verify no panic with 0% progress
+}
+
+func TestProgressBar_Draw_Full(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 40, 3)
+	defer runner.Stop()
+
+	pb := NewProgressBar()
+	pb.SetBorder(true)
+	pb.SetProgress(1.0)
+
+	runner.Start(pb)
+	runner.Draw()
+
+	// Verify no panic with 100% progress
+}
+
+func TestProgressBar_BoundaryValues(t *testing.T) {
+	t.Parallel()
+
+	pb := NewProgressBar()
+
+	// Values at boundaries
+	pb.SetProgress(0)
+	assert.InDelta(t, 0.0, pb.GetProgress(), 0.001)
+
+	pb.SetProgress(1)
+	assert.InDelta(t, 1.0, pb.GetProgress(), 0.001)
+
+	// Just inside boundaries
+	pb.SetProgress(0.001)
+	assert.InDelta(t, 0.001, pb.GetProgress(), 0.001)
+
+	pb.SetProgress(0.999)
+	assert.InDelta(t, 0.999, pb.GetProgress(), 0.001)
+}

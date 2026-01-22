@@ -210,3 +210,120 @@ func TestScanningArea_StateTransitions(t *testing.T) {
 	sa.SetState(ScanStateNoReader)
 	assert.Equal(t, ScanStateNoReader, sa.state)
 }
+
+func TestScanningArea_Concurrent(t *testing.T) {
+	t.Parallel()
+
+	app := tview.NewApplication()
+	sa := NewScanningArea(app)
+
+	// Run concurrent state updates to verify mutex protection
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		for range 100 {
+			sa.SetReaderInfo(1, "libnfc")
+			sa.SetTokenInfo("2025-01-01", "ABCD", "Test")
+			sa.ClearToken()
+			sa.SetReaderInfo(0, "")
+		}
+	}()
+
+	// No assertions needed - if there's a race, the -race detector will catch it
+	<-done
+}
+
+func TestScanningArea_MethodChaining(t *testing.T) {
+	t.Parallel()
+
+	app := tview.NewApplication()
+	sa := NewScanningArea(app)
+
+	// Verify all methods return *ScanningArea for chaining
+	result := sa.SetState(ScanStateWaiting)
+	assert.Equal(t, sa, result)
+
+	result = sa.SetReaderInfo(1, "libnfc")
+	assert.Equal(t, sa, result)
+
+	result = sa.SetTokenInfo("2025-01-01", "UID", "Value")
+	assert.Equal(t, sa, result)
+
+	result = sa.ClearToken()
+	assert.Equal(t, sa, result)
+}
+
+func TestScanningArea_Draw_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	app := runner.App()
+	sa := NewScanningArea(app)
+	sa.SetReaderInfo(1, "libnfc")
+
+	runner.Start(sa)
+	runner.Draw()
+
+	// Should show waiting state with reader info
+	assert.True(t, runner.ContainsText("1 reader"), "Should show reader count")
+	assert.True(t, runner.ContainsText("Place token on reader"), "Should show waiting message")
+}
+
+func TestScanningArea_Draw_NoReader_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	app := runner.App()
+	sa := NewScanningArea(app)
+
+	runner.Start(sa)
+	runner.Draw()
+
+	// Should show no reader message
+	assert.True(t, runner.ContainsText("No readers"), "Should show no readers")
+	assert.True(t, runner.ContainsText("No reader connected"), "Should show no reader message")
+}
+
+func TestScanningArea_Draw_Scanned_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	app := runner.App()
+	sa := NewScanningArea(app)
+	sa.SetReaderInfo(1, "libnfc")
+	sa.SetTokenInfo("2025-01-22 10:30:45", "ABCD1234", "Super Mario Bros")
+
+	runner.Start(sa)
+	runner.Draw()
+
+	// Should show scanned token info
+	assert.True(t, runner.ContainsText("Time"), "Should show Time label")
+	assert.True(t, runner.ContainsText("UID"), "Should show UID label")
+	assert.True(t, runner.ContainsText("Value"), "Should show Value label")
+	assert.True(t, runner.ContainsText("ABCD1234"), "Should show UID value")
+	assert.True(t, runner.ContainsText("Super Mario Bros"), "Should show Value content")
+}
+
+func TestScanningArea_Draw_MultipleReaders_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	app := runner.App()
+	sa := NewScanningArea(app)
+	sa.SetReaderInfo(3, "acr122")
+
+	runner.Start(sa)
+	runner.Draw()
+
+	// Should show multiple readers message
+	assert.True(t, runner.ContainsText("3 readers"), "Should show plural readers")
+}

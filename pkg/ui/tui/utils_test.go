@@ -20,7 +20,9 @@
 package tui
 
 import (
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -193,4 +195,446 @@ func TestExitDelayOptions(t *testing.T) {
 		}
 		assert.True(t, found, "ExitDelayOptions should contain {%s, %f}", expected.label, expected.value)
 	}
+}
+
+func TestResponsiveMaxWidget(t *testing.T) {
+	t.Parallel()
+
+	content := tview.NewTextView().SetText("Test content")
+	wrapper := ResponsiveMaxWidget(100, 30, content)
+
+	require.NotNil(t, wrapper)
+
+	// Cast to responsiveWrapper to access internal state
+	rw, ok := wrapper.(*responsiveWrapper)
+	require.True(t, ok, "Should return a responsiveWrapper")
+	assert.Equal(t, 100, rw.maxWidth)
+	assert.Equal(t, 30, rw.maxHeight)
+	assert.Equal(t, content, rw.child)
+}
+
+func TestResponsiveWrapper_Focus(t *testing.T) {
+	t.Parallel()
+
+	content := tview.NewTextView()
+	w := ResponsiveMaxWidget(100, 30, content)
+	wrapper, ok := w.(*responsiveWrapper)
+	require.True(t, ok, "Should return a responsiveWrapper")
+
+	// Focus should delegate to child
+	var focusedPrimitive tview.Primitive
+	wrapper.Focus(func(p tview.Primitive) {
+		focusedPrimitive = p
+	})
+
+	assert.Equal(t, content, focusedPrimitive, "Focus should delegate to child")
+}
+
+func TestResponsiveWrapper_HasFocus(t *testing.T) {
+	t.Parallel()
+
+	content := tview.NewTextView()
+	w := ResponsiveMaxWidget(100, 30, content)
+	wrapper, ok := w.(*responsiveWrapper)
+	require.True(t, ok, "Should return a responsiveWrapper")
+
+	// HasFocus should delegate to child
+	assert.False(t, wrapper.HasFocus(), "Content should not have focus initially")
+}
+
+func TestResponsiveWrapper_InputHandler(t *testing.T) {
+	t.Parallel()
+
+	content := tview.NewTextView()
+	w := ResponsiveMaxWidget(100, 30, content)
+	wrapper, ok := w.(*responsiveWrapper)
+	require.True(t, ok, "Should return a responsiveWrapper")
+
+	handler := wrapper.InputHandler()
+	assert.NotNil(t, handler, "InputHandler should delegate to child")
+}
+
+func TestResponsiveWrapper_MouseHandler(t *testing.T) {
+	t.Parallel()
+
+	content := tview.NewTextView()
+	w := ResponsiveMaxWidget(100, 30, content)
+	wrapper, ok := w.(*responsiveWrapper)
+	require.True(t, ok, "Should return a responsiveWrapper")
+
+	handler := wrapper.MouseHandler()
+	assert.NotNil(t, handler, "MouseHandler should delegate to child")
+}
+
+func TestColorToHex(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		expected string
+		color    tcell.Color
+	}{
+		{
+			name:     "black",
+			color:    tcell.ColorBlack,
+			expected: "#000000",
+		},
+		{
+			name:     "white",
+			color:    tcell.ColorWhite,
+			expected: "#ffffff",
+		},
+		{
+			name:     "red",
+			color:    tcell.ColorRed,
+			expected: "#ff0000",
+		},
+		{
+			name:     "green",
+			color:    tcell.ColorGreen,
+			expected: "#008000",
+		},
+		{
+			name:     "blue",
+			color:    tcell.ColorBlue,
+			expected: "#0000ff",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := colorToHex(tt.color)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestRgbToHex(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		expected string
+		value    int32
+	}{
+		{name: "zero", value: 0, expected: "00"},
+		{name: "max", value: 255, expected: "ff"},
+		{name: "mid", value: 128, expected: "80"},
+		{name: "low", value: 16, expected: "10"},
+		{name: "single digit", value: 10, expected: "0a"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := rgbToHex(tt.value)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestNewLabel(t *testing.T) {
+	t.Parallel()
+
+	label := NewLabel("Test")
+
+	require.NotNil(t, label)
+	// The text should have a colon suffix
+	assert.Equal(t, "Test:", label.GetText(true))
+}
+
+func TestSetInputLabel(t *testing.T) {
+	t.Parallel()
+
+	input := tview.NewInputField()
+	result := SetInputLabel(input, "Name")
+
+	require.NotNil(t, result)
+	assert.Equal(t, input, result, "Should return same input for chaining")
+	assert.Equal(t, "Name: ", input.GetLabel())
+}
+
+func TestFormatLabel(t *testing.T) {
+	t.Parallel()
+
+	result := FormatLabel("Status")
+
+	// Should contain the label text with color markup
+	assert.Contains(t, result, "Status:")
+	assert.Contains(t, result, "[#")
+	assert.Contains(t, result, "::b]") // bold markup
+}
+
+func TestSetBoxTitle(t *testing.T) {
+	t.Parallel()
+
+	box := tview.NewBox()
+	SetBoxTitle(box, "Title")
+
+	// The title should have padding
+	assert.Equal(t, " Title ", box.GetTitle())
+}
+
+func TestTuiContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := tuiContext()
+	defer cancel()
+
+	require.NotNil(t, ctx)
+	require.NotNil(t, cancel)
+
+	// Context should have a deadline
+	deadline, ok := ctx.Deadline()
+	assert.True(t, ok, "tuiContext should have a deadline")
+	assert.True(t, deadline.After(time.Now()), "Deadline should be in the future")
+}
+
+func TestTagReadContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := tagReadContext()
+	defer cancel()
+
+	require.NotNil(t, ctx)
+	require.NotNil(t, cancel)
+
+	// Context should have a deadline
+	deadline, ok := ctx.Deadline()
+	assert.True(t, ok, "tagReadContext should have a deadline")
+	assert.True(t, deadline.After(time.Now()), "Deadline should be in the future")
+
+	// Tag read context should have a longer timeout than TUI context
+	tuiCtx, tuiCancel := tuiContext()
+	defer tuiCancel()
+	tuiDeadline, _ := tuiCtx.Deadline()
+
+	assert.True(t, deadline.After(tuiDeadline), "Tag read timeout should be longer than TUI timeout")
+}
+
+func TestShowInfoModal_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	mainPage := tview.NewTextView().SetText("Main Page")
+	pages.AddPage("main", mainPage, true, true)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	// Show info modal
+	runner.QueueUpdateDraw(func() {
+		ShowInfoModal(pages, runner.App(), "Info", "This is information")
+	})
+
+	// Verify modal is shown
+	require.True(t, runner.WaitForText("This is information", 500*time.Millisecond), "Modal message should appear")
+	assert.True(t, runner.ContainsText("OK"), "OK button should be visible")
+}
+
+func TestShowErrorModal_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	mainPage := tview.NewTextView().SetText("Main Page")
+	pages.AddPage("main", mainPage, true, true)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	var dismissCalled atomic.Bool
+
+	// Show error modal
+	runner.QueueUpdateDraw(func() {
+		ShowErrorModal(pages, runner.App(), "Something went wrong", func() {
+			dismissCalled.Store(true)
+		})
+	})
+
+	// Verify modal is shown
+	require.True(t, runner.WaitForText("Something went wrong", 500*time.Millisecond), "Error message should appear")
+	assert.True(t, runner.ContainsText("OK"), "OK button should be visible")
+
+	// Dismiss the modal
+	runner.Screen().InjectEnter()
+	runner.Draw()
+	time.Sleep(50 * time.Millisecond)
+
+	assert.True(t, dismissCalled.Load(), "Dismiss callback should be called")
+}
+
+func TestShowConfirmModal_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	mainPage := tview.NewTextView().SetText("Main Page")
+	pages.AddPage("main", mainPage, true, true)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	var yesCalled, noCalled atomic.Bool
+
+	// Show confirm modal
+	runner.QueueUpdateDraw(func() {
+		ShowConfirmModal(pages, runner.App(), "Are you sure?",
+			func() { yesCalled.Store(true) },
+			func() { noCalled.Store(true) },
+		)
+	})
+
+	// Verify modal is shown
+	require.True(t, runner.WaitForText("Are you sure?", 500*time.Millisecond), "Confirm message should appear")
+	assert.True(t, runner.ContainsText("Yes"), "Yes button should be visible")
+	assert.True(t, runner.ContainsText("No"), "No button should be visible")
+
+	// Click Yes (first button, so just Enter)
+	runner.Screen().InjectEnter()
+	runner.Draw()
+	time.Sleep(50 * time.Millisecond)
+
+	assert.True(t, yesCalled.Load(), "Yes callback should be called")
+	assert.False(t, noCalled.Load(), "No callback should not be called")
+}
+
+func TestShowConfirmModal_No_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	mainPage := tview.NewTextView().SetText("Main Page")
+	pages.AddPage("main", mainPage, true, true)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	var yesCalled, noCalled atomic.Bool
+
+	// Show confirm modal
+	runner.QueueUpdateDraw(func() {
+		ShowConfirmModal(pages, runner.App(), "Are you sure?",
+			func() { yesCalled.Store(true) },
+			func() { noCalled.Store(true) },
+		)
+	})
+
+	require.True(t, runner.WaitForText("Are you sure?", 500*time.Millisecond))
+
+	// Navigate to No button and click
+	runner.Screen().InjectTab()
+	runner.Draw()
+	runner.Screen().InjectEnter()
+	runner.Draw()
+	time.Sleep(50 * time.Millisecond)
+
+	assert.False(t, yesCalled.Load(), "Yes callback should not be called")
+	assert.True(t, noCalled.Load(), "No callback should be called")
+}
+
+func TestShowWaitingModal_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	mainPage := tview.NewTextView().SetText("Main Page")
+	pages.AddPage("main", mainPage, true, true)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	var cancelCalled atomic.Bool
+
+	// Show waiting modal
+	var cleanup func()
+	runner.QueueUpdateDraw(func() {
+		cleanup = ShowWaitingModal(pages, runner.App(), "Please wait...", func() {
+			cancelCalled.Store(true)
+		})
+	})
+
+	// Verify modal is shown
+	require.True(t, runner.WaitForText("Please wait...", 500*time.Millisecond), "Waiting message should appear")
+	assert.True(t, runner.ContainsText("Cancel"), "Cancel button should be visible")
+	require.NotNil(t, cleanup)
+
+	// Call cleanup to remove modal
+	runner.QueueUpdateDraw(func() {
+		cleanup()
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	// Cleanup should remove the modal without calling cancel
+	assert.False(t, cancelCalled.Load(), "Cancel should not be called when cleanup is used")
+}
+
+func TestShowOSKModal_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	mainPage := tview.NewTextView().SetText("Main Page")
+	pages.AddPage("main", mainPage, true, true)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	var cancelCalled atomic.Bool
+
+	// Show OSK modal
+	runner.QueueUpdateDraw(func() {
+		ShowOSKModal(pages, runner.App(), "initial",
+			nil,
+			func() { cancelCalled.Store(true) },
+		)
+	})
+
+	// Verify OSK is shown - look for keyboard keys
+	time.Sleep(100 * time.Millisecond)
+	runner.Draw()
+
+	// The OSK should be displayed (it has keys like "q", "w", etc.)
+	// Press Escape to cancel
+	runner.Screen().InjectEscape()
+	runner.Draw()
+	time.Sleep(50 * time.Millisecond)
+
+	assert.True(t, cancelCalled.Load(), "Cancel callback should be called")
+}
+
+func TestTimeoutConstants(t *testing.T) {
+	t.Parallel()
+
+	// Verify timeout constants have sensible values
+	assert.Equal(t, 5*time.Second, TUIRequestTimeout)
+	assert.Equal(t, 30*time.Second, TagReadTimeout)
+
+	// Tag read should be longer than TUI request (for user interaction)
+	assert.Greater(t, TagReadTimeout, TUIRequestTimeout)
+}
+
+func TestDefaultDimensions(t *testing.T) {
+	t.Parallel()
+
+	// Verify default dimensions are reasonable
+	assert.Equal(t, 100, DefaultMaxWidth)
+	assert.Equal(t, 30, DefaultMaxHeight)
+
+	// Width should be greater than height for typical terminal layouts
+	assert.Greater(t, DefaultMaxWidth, DefaultMaxHeight)
 }
