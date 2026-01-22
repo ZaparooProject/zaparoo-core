@@ -350,26 +350,25 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 
 // pendingGamesRequest tracks a pending synchronous game request during scanning
 type pendingGamesRequest struct {
-	platform string
 	response chan launchBoxGamesResponse
+	platform string
 }
 
 // LaunchBoxPipeServer manages named pipe communication with the LaunchBox plugin
 type LaunchBoxPipeServer struct {
-	onGameStarted       func(id, title, platform, path string)
-	onGameExited        func(id, title string)
-	onWriteRequest      func(id, title, platform string)
-	onPlatformsReceived func(platforms []launchBoxPlatformInfo)
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	listener            net.Listener
 	conn                net.Conn
 	writer              *bufio.Writer
+	onGameStarted       func(id, title, platform, path string)
+	onGameExited        func(id, title string)
+	onWriteRequest      func(id, title, platform string)
+	onPlatformsReceived func(platforms []launchBoxPlatformInfo)
 	connMu              syncutil.Mutex
-
+	pendingGamesReqMu   syncutil.Mutex
 	// For synchronous game requests during scanning
-	pendingGamesReq   pendingGamesRequest
-	pendingGamesReqMu syncutil.Mutex
+	pendingGamesReq pendingGamesRequest
 }
 
 // NewLaunchBoxPipeServer creates a new named pipe server
@@ -472,7 +471,10 @@ func (s *LaunchBoxPipeServer) RequestPlatforms() error {
 
 // RequestGamesForPlatformSync sends a GetGamesForPlatform command and waits for the response.
 // This is used by the scanner to query games on-demand per-platform instead of caching all games.
-func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(ctx context.Context, platform string) ([]LaunchBoxGameInfo, error) {
+func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(
+	ctx context.Context,
+	platform string,
+) ([]LaunchBoxGameInfo, error) {
 	s.connMu.Lock()
 	if s.writer == nil {
 		s.connMu.Unlock()
