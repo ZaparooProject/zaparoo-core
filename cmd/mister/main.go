@@ -41,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister"
 	misterstartup "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/startup"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/daemon"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets"
 	"github.com/rs/zerolog/log"
 )
@@ -182,7 +183,7 @@ func run() error {
 		return nil
 	}
 
-	svc, err := helpers.NewService(helpers.ServiceArgs{
+	svc, err := daemon.NewService(daemon.ServiceArgs{
 		Entry: func() (func() error, <-chan struct{}, error) {
 			return service.Start(pl, cfg)
 		},

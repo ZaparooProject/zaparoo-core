@@ -114,6 +114,7 @@ func LocalClient(
 			return d.DialContext(dialCtx, network, addr)
 		},
 	}
+	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
 	c, _, err := dialer.DialContext(ctx, localWebsocketURL.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to dial websocket: %w", err)
@@ -227,6 +228,7 @@ func WaitNotification(
 			return d.DialContext(dialCtx, network, addr)
 		},
 	}
+	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
 	c, _, err := dialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to dial websocket: %w", err)
@@ -318,6 +320,37 @@ func WaitNotification(
 	return string(b), nil
 }
 
+// IsServiceRunning checks if a Zaparoo service is running on the configured port.
+func IsServiceRunning(cfg *config.Instance) bool {
+	_, err := LocalClient(context.Background(), cfg, models.MethodVersion, "")
+	if err != nil {
+		log.Debug().
+			Err(err).
+			Int("port", cfg.APIPort()).
+			Msg("service not detected on API port")
+		return false
+	}
+	log.Debug().
+		Int("port", cfg.APIPort()).
+		Msg("detected running service instance")
+	return true
+}
+
+// WaitForAPI waits for the service API to become available.
+// Returns true if API became available, false if timeout reached.
+func WaitForAPI(cfg *config.Instance, maxWaitTime, checkInterval time.Duration) bool {
+	deadline := time.Now().Add(maxWaitTime)
+
+	for time.Now().Before(deadline) {
+		if IsServiceRunning(cfg) {
+			return true
+		}
+		time.Sleep(checkInterval)
+	}
+
+	return false
+}
+
 // WaitNotifications waits for any of the specified notification types on a single
 // WebSocket connection. Returns the notification method that matched and its params.
 func WaitNotifications(
@@ -347,6 +380,7 @@ func WaitNotifications(
 			return d.DialContext(dialCtx, network, addr)
 		},
 	}
+	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
 	c, _, err := dialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to dial websocket: %w", err)

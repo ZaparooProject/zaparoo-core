@@ -33,9 +33,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/libreelec"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/daemon"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -68,7 +68,7 @@ func run() error {
 
 	cfg := cli.Setup(pl, config.BaseDefaults, nil)
 
-	svc, err := helpers.NewService(helpers.ServiceArgs{
+	svc, err := daemon.NewService(daemon.ServiceArgs{
 		Entry: func() (func() error, <-chan struct{}, error) {
 			return service.Start(pl, cfg)
 		},

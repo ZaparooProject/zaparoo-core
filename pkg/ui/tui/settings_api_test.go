@@ -408,3 +408,128 @@ func TestDefaultSettingsService_GetReaders_Empty(t *testing.T) {
 
 	mockClient.AssertExpectations(t)
 }
+
+func TestDefaultSettingsService_WriteTag(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupWriteTagSuccess()
+
+	svc := NewSettingsService(mockClient)
+	err := svc.WriteTag(context.Background(), "**launch.system:nes")
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_WriteTag_Error(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupWriteTagError(errors.New("no reader connected"))
+
+	svc := NewSettingsService(mockClient)
+	err := svc.WriteTag(context.Background(), "test")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to write tag")
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_CancelWriteTag(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupCancelWriteTagSuccess()
+
+	svc := NewSettingsService(mockClient)
+	err := svc.CancelWriteTag(context.Background())
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_CancelWriteTag_Error(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupCancelWriteTagError(errors.New("no pending write"))
+
+	svc := NewSettingsService(mockClient)
+	err := svc.CancelWriteTag(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to cancel write")
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_SearchMedia(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupSearchMediaResponse(&models.SearchResults{
+		Results: []models.SearchResultMedia{
+			{Name: "Super Mario Bros", Path: "/games/nes/smb.nes"},
+			{Name: "Super Mario Bros 3", Path: "/games/nes/smb3.nes"},
+		},
+		Total: 2,
+	})
+
+	svc := NewSettingsService(mockClient)
+	query := "mario"
+	results, err := svc.SearchMedia(context.Background(), models.SearchParams{
+		Query: &query,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, results)
+	assert.Len(t, results.Results, 2)
+	assert.Equal(t, "Super Mario Bros", results.Results[0].Name)
+	assert.Equal(t, 2, results.Total)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_SearchMedia_Error(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupSearchMediaError(errors.New("database unavailable"))
+
+	svc := NewSettingsService(mockClient)
+	query := "test"
+	results, err := svc.SearchMedia(context.Background(), models.SearchParams{
+		Query: &query,
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, results)
+	assert.Contains(t, err.Error(), "failed to search media")
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestDefaultSettingsService_SearchMedia_Empty(t *testing.T) {
+	t.Parallel()
+
+	mockClient := mocks.NewMockAPIClient()
+	mockClient.SetupSearchMediaResponse(&models.SearchResults{
+		Results: []models.SearchResultMedia{},
+		Total:   0,
+	})
+
+	svc := NewSettingsService(mockClient)
+	query := "nonexistent"
+	results, err := svc.SearchMedia(context.Background(), models.SearchParams{
+		Query: &query,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, results)
+	assert.Empty(t, results.Results)
+	assert.Equal(t, 0, results.Total)
+
+	mockClient.AssertExpectations(t)
+}

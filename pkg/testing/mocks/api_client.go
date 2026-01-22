@@ -114,3 +114,34 @@ func (m *MockAPIClient) SetupReadersResponse(readers *models.ReadersResponse) {
 func (m *MockAPIClient) SetupReadersError(err error) {
 	m.On("Call", mock.Anything, models.MethodReaders, "").Return("", err)
 }
+
+// SetupWriteTagSuccess configures the mock to accept write tag operations.
+func (m *MockAPIClient) SetupWriteTagSuccess() {
+	m.On("Call", mock.Anything, models.MethodReadersWrite, mock.Anything).Return("{}", nil)
+}
+
+// SetupWriteTagError configures the mock to return an error for write tag.
+func (m *MockAPIClient) SetupWriteTagError(err error) {
+	m.On("Call", mock.Anything, models.MethodReadersWrite, mock.Anything).Return("", err)
+}
+
+// SetupCancelWriteTagSuccess configures the mock to accept cancel write operations.
+func (m *MockAPIClient) SetupCancelWriteTagSuccess() {
+	m.On("Call", mock.Anything, models.MethodReadersWriteCancel, "").Return("{}", nil)
+}
+
+// SetupCancelWriteTagError configures the mock to return an error for cancel write.
+func (m *MockAPIClient) SetupCancelWriteTagError(err error) {
+	m.On("Call", mock.Anything, models.MethodReadersWriteCancel, "").Return("", err)
+}
+
+// SetupSearchMediaResponse configures the mock to return search results.
+func (m *MockAPIClient) SetupSearchMediaResponse(results *models.SearchResults) {
+	data, _ := json.Marshal(results)
+	m.On("Call", mock.Anything, models.MethodMediaSearch, mock.Anything).Return(string(data), nil)
+}
+
+// SetupSearchMediaError configures the mock to return an error for media search.
+func (m *MockAPIClient) SetupSearchMediaError(err error) {
+	m.On("Call", mock.Anything, models.MethodMediaSearch, mock.Anything).Return("", err)
+}
