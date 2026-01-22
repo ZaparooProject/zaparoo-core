@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -113,6 +114,71 @@ func (r *TestAppRunner) QueueUpdateDraw(f func()) {
 func (r *TestAppRunner) SetFocus(p tview.Primitive) {
 	r.app.SetFocus(p)
 	r.Draw()
+}
+
+// Sync ensures all pending events have been processed by the event loop.
+// This queues a no-op update and waits for it to complete, guaranteeing
+// that the event loop has cycled and processed any injected events.
+func (r *TestAppRunner) Sync() {
+	r.QueueUpdateDraw(func() {})
+}
+
+// SendKey injects a key event and waits for it to be processed.
+func (r *TestAppRunner) SendKey(key tcell.Key, ch rune, mod tcell.ModMask) {
+	r.screen.InjectKey(key, ch, mod)
+	r.Sync()
+}
+
+// SendRune injects a rune and waits for it to be processed.
+func (r *TestAppRunner) SendRune(ch rune) {
+	r.SendKey(tcell.KeyRune, ch, tcell.ModNone)
+}
+
+// SendString injects a string of characters and waits for them to be processed.
+func (r *TestAppRunner) SendString(str string) {
+	for _, ch := range str {
+		r.SendRune(ch)
+	}
+}
+
+// SendEnter injects Enter key and waits for it to be processed.
+func (r *TestAppRunner) SendEnter() {
+	r.SendKey(tcell.KeyEnter, 0, tcell.ModNone)
+}
+
+// SendEscape injects Escape key and waits for it to be processed.
+func (r *TestAppRunner) SendEscape() {
+	r.SendKey(tcell.KeyEscape, 0, tcell.ModNone)
+}
+
+// SendTab injects Tab key and waits for it to be processed.
+func (r *TestAppRunner) SendTab() {
+	r.SendKey(tcell.KeyTab, 0, tcell.ModNone)
+}
+
+// SendBacktab injects Shift+Tab and waits for it to be processed.
+func (r *TestAppRunner) SendBacktab() {
+	r.SendKey(tcell.KeyBacktab, 0, tcell.ModNone)
+}
+
+// SendArrowUp injects Up arrow and waits for it to be processed.
+func (r *TestAppRunner) SendArrowUp() {
+	r.SendKey(tcell.KeyUp, 0, tcell.ModNone)
+}
+
+// SendArrowDown injects Down arrow and waits for it to be processed.
+func (r *TestAppRunner) SendArrowDown() {
+	r.SendKey(tcell.KeyDown, 0, tcell.ModNone)
+}
+
+// SendArrowLeft injects Left arrow and waits for it to be processed.
+func (r *TestAppRunner) SendArrowLeft() {
+	r.SendKey(tcell.KeyLeft, 0, tcell.ModNone)
+}
+
+// SendArrowRight injects Right arrow and waits for it to be processed.
+func (r *TestAppRunner) SendArrowRight() {
+	r.SendKey(tcell.KeyRight, 0, tcell.ModNone)
 }
 
 // IsStopped returns whether the application has stopped.

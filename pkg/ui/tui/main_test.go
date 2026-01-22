@@ -358,7 +358,7 @@ func TestButtonGrid_Navigation_Integration(t *testing.T) {
 	runner.Start(grid)
 	runner.SetFocus(grid)
 
-	// Get current focus helper
+	// Get current focus helper (synchronized via QueueUpdateDraw)
 	getFocus := func() (int, int) {
 		var row, col int
 		runner.QueueUpdateDraw(func() {
@@ -367,36 +367,34 @@ func TestButtonGrid_Navigation_Integration(t *testing.T) {
 		return row, col
 	}
 
-	// Wait for focus to match expected position
-	waitForFocus := func(expectedRow, expectedCol int) bool {
-		return runner.WaitForCondition(func() bool {
-			row, col := getFocus()
-			return row == expectedRow && col == expectedCol
-		}, 100*time.Millisecond)
-	}
-
 	// Initial focus should be (0, 0)
-	assert.True(t, waitForFocus(0, 0), "Initial focus should be (0, 0)")
+	row, col := getFocus()
+	assert.Equal(t, 0, row, "Initial row should be 0")
+	assert.Equal(t, 0, col, "Initial col should be 0")
 
-	// Navigate right
-	runner.Screen().InjectArrowRight()
-	runner.Draw()
-	assert.True(t, waitForFocus(0, 1), "Focus should be (0, 1) after right")
+	// Navigate right (Send* methods synchronize with event loop)
+	runner.SendArrowRight()
+	row, col = getFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 1, col, "Focus should be (0, 1) after right")
 
 	// Navigate down
-	runner.Screen().InjectArrowDown()
-	runner.Draw()
-	assert.True(t, waitForFocus(1, 1), "Focus should be (1, 1) after down")
+	runner.SendArrowDown()
+	row, col = getFocus()
+	assert.Equal(t, 1, row)
+	assert.Equal(t, 1, col, "Focus should be (1, 1) after down")
 
 	// Navigate left
-	runner.Screen().InjectArrowLeft()
-	runner.Draw()
-	assert.True(t, waitForFocus(1, 0), "Focus should be (1, 0) after left")
+	runner.SendArrowLeft()
+	row, col = getFocus()
+	assert.Equal(t, 1, row)
+	assert.Equal(t, 0, col, "Focus should be (1, 0) after left")
 
 	// Navigate up
-	runner.Screen().InjectArrowUp()
-	runner.Draw()
-	assert.True(t, waitForFocus(0, 0), "Focus should be (0, 0) after up")
+	runner.SendArrowUp()
+	row, col = getFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 0, col, "Focus should be (0, 0) after up")
 }
 
 func TestButtonGrid_TabNavigation_Integration(t *testing.T) {
@@ -517,6 +515,7 @@ func TestButtonGrid_DisabledButtonsSkipped_Integration(t *testing.T) {
 	runner.Start(grid)
 	runner.SetFocus(grid)
 
+	// Get current focus helper (synchronized via QueueUpdateDraw)
 	getFocus := func() (int, int) {
 		var row, col int
 		runner.QueueUpdateDraw(func() {
@@ -526,13 +525,13 @@ func TestButtonGrid_DisabledButtonsSkipped_Integration(t *testing.T) {
 	}
 
 	// Initial focus (0, 0)
-	_, col := getFocus()
-	assert.Equal(t, 0, col)
+	row, col := getFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 0, col, "Initial focus should be (0, 0)")
 
 	// Navigate right - should skip disabled btn2 and go to btn3
-	runner.Screen().InjectArrowRight()
-	runner.Draw()
-	row, col := getFocus()
+	runner.SendArrowRight()
+	row, col = getFocus()
 	assert.Equal(t, 0, row)
 	assert.Equal(t, 2, col, "Should skip disabled button and go to third")
 }
@@ -602,6 +601,7 @@ func TestButtonGrid_WrapAround_Integration(t *testing.T) {
 	runner.Start(grid)
 	runner.SetFocus(grid)
 
+	// Get current focus helper (synchronized via QueueUpdateDraw)
 	getFocus := func() (int, int) {
 		var row, col int
 		runner.QueueUpdateDraw(func() {
@@ -610,26 +610,18 @@ func TestButtonGrid_WrapAround_Integration(t *testing.T) {
 		return row, col
 	}
 
-	// Wait for focus to match expected position
-	waitForFocus := func(expectedRow, expectedCol int, msg string) {
-		ok := runner.WaitForCondition(func() bool {
-			row, col := getFocus()
-			return row == expectedRow && col == expectedCol
-		}, 100*time.Millisecond)
-		assert.True(t, ok, msg)
-	}
+	// Navigate to the last column (Send* methods synchronize with event loop)
+	runner.SendArrowRight()
+	_, col := getFocus()
+	assert.Equal(t, 1, col, "Should be at column 1 after first right")
 
-	// Navigate to the last column
-	runner.Screen().InjectArrowRight()
-	runner.Draw()
-	waitForFocus(0, 1, "Should be at column 1 after first right")
-
-	runner.Screen().InjectArrowRight()
-	runner.Draw()
-	waitForFocus(0, 2, "Should be at last column")
+	runner.SendArrowRight()
+	_, col = getFocus()
+	assert.Equal(t, 2, col, "Should be at last column")
 
 	// Navigate right again - should wrap to first
-	runner.Screen().InjectArrowRight()
-	runner.Draw()
-	waitForFocus(0, 0, "Should wrap to first column")
+	runner.SendArrowRight()
+	row, col := getFocus()
+	assert.Equal(t, 0, row)
+	assert.Equal(t, 0, col, "Should wrap to first column")
 }
