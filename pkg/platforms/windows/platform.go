@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
@@ -77,7 +78,7 @@ type Platform struct {
 }
 
 func (*Platform) ID() string {
-	return platforms.PlatformIDWindows
+	return platformids.Windows
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {

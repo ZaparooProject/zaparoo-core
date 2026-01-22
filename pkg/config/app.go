@@ -31,6 +31,7 @@ const (
 	PidFile              = "core.pid"
 	CfgFile              = "config.toml"
 	AuthFile             = "auth.toml"
+	TUIFile              = "tui.toml"
 	UserDir              = "user"
 	LogsDir              = "logs"
 	APIRequestTimeout    = 30 * time.Second

@@ -89,6 +89,12 @@ type Notification struct {
 	Params json.RawMessage `json:"params"`
 }
 
+type NotificationObject struct {
+	JSONRPC string          `json:"jsonrpc"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
 type RequestObject struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      RPCID           `json:"id,omitempty"`

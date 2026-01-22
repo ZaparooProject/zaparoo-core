@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
@@ -61,7 +62,7 @@ type Platform struct {
 }
 
 func (*Platform) ID() string {
-	return platforms.PlatformIDRecalbox
+	return platformids.Recalbox
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {

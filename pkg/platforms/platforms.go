@@ -78,21 +78,6 @@ const (
 	InstanceKodi = "kodi"
 )
 
-const (
-	PlatformIDBatocera  = "batocera"
-	PlatformIDBazzite   = "bazzite"
-	PlatformIDChimeraOS = "chimeraos"
-	PlatformIDLibreELEC = "libreelec"
-	PlatformIDLinux     = "linux"
-	PlatformIDMac       = "mac"
-	PlatformIDMister    = "mister"
-	PlatformIDMistex    = "mistex"
-	PlatformIDRecalbox  = "recalbox"
-	PlatformIDRetroPie  = "retropie"
-	PlatformIDSteamOS   = "steamos"
-	PlatformIDWindows   = "windows"
-)
-
 // CmdEnv is the local state of a scanned token, as it processes each ZapScript
 // command. Every command run has access to and can modify it.
 type CmdEnv struct {

@@ -40,9 +40,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
@@ -332,36 +329,6 @@ func YesNoPrompt(label string, def bool) bool {
 			return false
 		}
 	}
-}
-
-func IsServiceRunning(cfg *config.Instance) bool {
-	_, err := client.LocalClient(context.Background(), cfg, models.MethodVersion, "")
-	if err != nil {
-		log.Debug().
-			Err(err).
-			Int("port", cfg.APIPort()).
-			Msg("service not detected on API port")
-		return false
-	}
-	log.Debug().
-		Int("port", cfg.APIPort()).
-		Msg("detected running service instance")
-	return true
-}
-
-// WaitForAPI waits for the service API to become available.
-// Returns true if API became available, false if timeout reached.
-func WaitForAPI(cfg *config.Instance, maxWaitTime, checkInterval time.Duration) bool {
-	deadline := time.Now().Add(maxWaitTime)
-
-	for time.Now().Before(deadline) {
-		if IsServiceRunning(cfg) {
-			return true
-		}
-		time.Sleep(checkInterval)
-	}
-
-	return false
 }
 
 func IsTruthy(s string) bool {

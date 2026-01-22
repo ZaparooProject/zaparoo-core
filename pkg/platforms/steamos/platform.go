@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
@@ -50,7 +51,7 @@ type Platform struct {
 // NewPlatform creates a new SteamOS platform instance.
 func NewPlatform() *Platform {
 	return &Platform{
-		Base: linuxbase.NewBase(platforms.PlatformIDSteamOS),
+		Base: linuxbase.NewBase(platformids.SteamOS),
 	}
 }
 

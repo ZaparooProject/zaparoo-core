@@ -33,12 +33,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/linux/installer"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/daemon"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
+	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )
 
@@ -174,7 +177,7 @@ func StartAndOpenBrowser(cfg *config.Instance) error {
 	webURL := fmt.Sprintf("http://localhost:%d/app/", port)
 
 	// Check if API is already responding
-	if helpers.IsServiceRunning(cfg) {
+	if client.IsServiceRunning(cfg) {
 		_, _ = fmt.Fprintln(os.Stderr, "Service is already running")
 		_, _ = fmt.Fprintf(os.Stderr, "Opening %s in browser...\n", webURL)
 		if err := helpers.OpenBrowser(webURL); err != nil {
@@ -216,7 +219,7 @@ func StartAndOpenBrowser(cfg *config.Instance) error {
 		case <-waitCtx.Done():
 			return errors.New("service failed to start within 30 seconds")
 		case <-ticker.C:
-			if helpers.IsServiceRunning(cfg) {
+			if client.IsServiceRunning(cfg) {
 				_, _ = fmt.Fprintln(os.Stderr, "Service is ready")
 				_, _ = fmt.Fprintf(os.Stderr, "Opening %s in browser...\n", webURL)
 				if err := helpers.OpenBrowser(webURL); err != nil {
@@ -248,7 +251,7 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 
 	switch {
 	case daemonMode:
-		if helpers.IsServiceRunning(cfg) {
+		if client.IsServiceRunning(cfg) {
 			log.Info().
 				Int("port", cfg.APIPort()).
 				Msg("service already running, exiting")
@@ -270,7 +273,7 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 		log.Info().Msg("started in daemon mode")
 
 	default:
-		stopDaemon, err := helpers.SpawnDaemon(cfg)
+		stopDaemon, err := daemon.SpawnDaemon(cfg)
 		if err != nil {
 			return fmt.Errorf("error spawning daemon: %w", err)
 		}
@@ -281,18 +284,15 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 			return fmt.Errorf("error getting user home directory: %w", err)
 		}
 
-		app, err := tui.BuildMain(
-			cfg, pl,
-			func() bool { return helpers.IsServiceRunning(cfg) },
-			filepath.Join(home, "Desktop", "core.log"),
-			"desktop",
-		)
+		err = tui.BuildAndRetry(cfg, func() (*tview.Application, error) {
+			return tui.BuildMain(
+				cfg, pl,
+				func() bool { return client.IsServiceRunning(cfg) },
+				filepath.Join(home, "Desktop", "core.log"),
+				"desktop",
+			)
+		})
 		if err != nil {
-			log.Error().Err(err).Msgf("error building UI")
-			return fmt.Errorf("error building UI: %w", err)
-		}
-
-		if err = app.Run(); err != nil {
 			log.Error().Err(err).Msg("error running UI")
 			return fmt.Errorf("error running UI: %w", err)
 		}

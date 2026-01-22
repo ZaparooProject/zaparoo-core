@@ -101,309 +101,202 @@ func (p *ProgressBar) Draw(screen tcell.Screen) {
 	if height > 0 {
 		barWidth := width
 		filled := int(float64(barWidth) * p.progress)
+		t := CurrentTheme()
 
 		for i := range filled {
-			screen.SetContent(x+i, y, p.filledRune, nil, tcell.StyleDefault.Foreground(tcell.ColorGreen))
+			screen.SetContent(x+i, y, p.filledRune, nil, tcell.StyleDefault.Foreground(t.ProgressFillColor))
 		}
 
 		for i := filled; i < barWidth; i++ {
-			screen.SetContent(x+i, y, p.emptyRune, nil, tcell.StyleDefault.Foreground(tcell.ColorGray))
+			screen.SetContent(x+i, y, p.emptyRune, nil, tcell.StyleDefault.Foreground(t.ProgressEmptyColor))
 		}
 	}
 }
 
-func initStatePage(
-	cfg *config.Instance,
-	app *tview.Application,
-	appPages *tview.Pages,
-	parentPages *tview.Pages,
-	cancel context.CancelFunc,
-) tview.Primitive {
-	initialState := tview.NewFlex().SetDirection(tview.FlexRow)
-	explanationText := tview.NewTextView().
-		SetText("Update Core's internal database of media files.").
-		SetTextAlign(tview.AlignCenter).
-		SetWordWrap(true)
+// formatDBStats returns a formatted string showing database statistics.
+func formatDBStats(db models.IndexingStatusResponse) string {
+	if !db.Exists {
+		return "No database found. Run update to scan your media folders."
+	}
 
-	buttonFlex := tview.NewFlex().
-		SetDirection(tview.FlexColumn)
+	mediaCount := 0
+	if db.TotalMedia != nil {
+		mediaCount = *db.TotalMedia
+	}
 
-	startButton := tview.NewButton("Update")
-
-	backButton := tview.NewButton("Go back").
-		SetSelectedFunc(func() {
-			cancel() // Cancel the goroutine
-			appPages.SwitchToPage(PageMain)
-		})
-
-	backButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyRight || k == tcell.KeyLeft || k == tcell.KeyTab || k == tcell.KeyBacktab {
-			app.SetFocus(startButton)
-			return nil
-		}
-		return event
-	})
-	startButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyRight || k == tcell.KeyLeft || k == tcell.KeyTab || k == tcell.KeyBacktab {
-			app.SetFocus(backButton)
-			return nil
-		}
-		return event
-	})
-
-	startButton.SetSelectedFunc(func() {
-		_, err := client.LocalClient(context.Background(), cfg, models.MethodMediaGenerate, "")
-		if err != nil {
-			log.Error().Err(err).Msg("error generating media db")
-			return
-		}
-		parentPages.SwitchToPage("progress")
-	})
-
-	buttonFlex.AddItem(nil, 0, 1, false)
-	buttonFlex.AddItem(startButton, 0, 1, true)
-	buttonFlex.AddItem(nil, 1, 0, false)
-	buttonFlex.AddItem(backButton, 0, 1, false)
-	buttonFlex.AddItem(nil, 0, 1, false)
-
-	initialState.AddItem(nil, 0, 1, false)
-	initialState.AddItem(explanationText, 0, 2, false)
-	initialState.AddItem(buttonFlex, 1, 1, true)
-	initialState.AddItem(nil, 0, 1, false)
-
-	initialState.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEscape {
-			cancel() // Cancel the goroutine
-			appPages.SwitchToPage(PageMain)
-			return nil
-		}
-		return event
-	})
-
-	return initialState
+	return fmt.Sprintf("Database contains %d indexed media files.", mediaCount)
 }
 
-func progressStatePage(
-	_ *tview.Application,
-	appPages *tview.Pages,
-	_ *tview.Pages,
-	cancel context.CancelFunc,
-) (tview.Primitive, *ProgressBar, *tview.TextView) {
-	progressState := tview.NewFlex().SetDirection(tview.FlexRow)
-	progressText := tview.NewTextView().
-		SetText("Scanning media files...").
-		SetTextAlign(tview.AlignCenter)
-
-	progress := NewProgressBar()
-	progress.SetBorder(true)
-
-	statusText := tview.NewTextView().
-		SetTextAlign(tview.AlignCenter).
-		SetText("Starting scan...")
-
-	hideButton := tview.NewButton("Hide").
-		SetSelectedFunc(func() {
-			cancel() // Cancel the goroutine
-			appPages.SwitchToPage(PageMain)
-		})
-
-	progressState.AddItem(nil, 0, 1, false)
-	progressState.AddItem(progressText, 2, 0, false)
-	progressState.AddItem(nil, 1, 0, false)
-	progressState.AddItem(progress, 3, 0, false)
-	progressState.AddItem(nil, 1, 0, false)
-	progressState.AddItem(statusText, 2, 0, false)
-	progressState.AddItem(nil, 1, 0, false)
-
-	buttonFlex := tview.NewFlex().
-		SetDirection(tview.FlexColumn).
-		AddItem(nil, 0, 1, false).
-		AddItem(hideButton, 0, 1, true).
-		AddItem(nil, 0, 1, false)
-	progressState.AddItem(buttonFlex, 1, 0, true)
-
-	progressState.AddItem(nil, 0, 1, false)
-
-	layout := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(nil, 5, 0, false).
-		AddItem(progressState, 0, 1, true).
-		AddItem(nil, 5, 0, false)
-
-	layout.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEscape {
-			cancel() // Cancel the goroutine
-			appPages.SwitchToPage(PageMain)
-			return nil
-		}
-		return event
-	})
-
-	return layout, progress, statusText
-}
-
-func completeStatePage(
-	_ *tview.Application,
-	appPages *tview.Pages,
-	parentPages *tview.Pages,
-	cancel context.CancelFunc,
-) (tview.Primitive, *tview.TextView) {
-	completeState := tview.NewFlex().SetDirection(tview.FlexRow)
-	completeText := tview.NewTextView().
-		SetTextAlign(tview.AlignCenter)
-
-	doneButton := tview.NewButton("Done").
-		SetSelectedFunc(func() {
-			cancel() // Cancel the goroutine
-			appPages.SwitchToPage(PageMain)
-			parentPages.SwitchToPage("initial")
-		})
-
-	completeState.AddItem(nil, 0, 1, false)
-	completeState.AddItem(completeText, 0, 2, false)
-	completeState.AddItem(nil, 1, 0, false)
-
-	buttonFlex := tview.NewFlex().
-		SetDirection(tview.FlexColumn).
-		AddItem(nil, 0, 1, false).
-		AddItem(doneButton, 0, 1, true).
-		AddItem(nil, 0, 1, false)
-	completeState.AddItem(buttonFlex, 1, 0, true)
-
-	completeState.AddItem(nil, 0, 1, false)
-
-	layout := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(nil, 5, 0, false).
-		AddItem(completeState, 0, 1, true).
-		AddItem(nil, 5, 0, false)
-
-	layout.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEscape {
-			cancel() // Cancel the goroutine
-			appPages.SwitchToPage(PageMain)
-			return nil
-		}
-		return event
-	})
-
-	return layout, completeText
-}
-
-func errorStatePage(
-	_ *tview.Application,
-	appPages *tview.Pages,
-	_ *tview.Pages,
-	cancel context.CancelFunc,
-	message string,
-) tview.Primitive {
-	errorState := tview.NewFlex().SetDirection(tview.FlexRow)
-	errorText := tview.NewTextView().
-		SetText(message).
-		SetTextAlign(tview.AlignCenter).
-		SetWordWrap(true)
-
-	backButton := tview.NewButton("Go back").
-		SetSelectedFunc(func() {
-			cancel()
-			appPages.SwitchToPage(PageMain)
-		})
-
-	buttonFlex := tview.NewFlex().SetDirection(tview.FlexColumn)
-	buttonFlex.AddItem(nil, 0, 1, false)
-	buttonFlex.AddItem(backButton, 0, 1, true)
-	buttonFlex.AddItem(nil, 0, 1, false)
-
-	errorState.AddItem(nil, 0, 1, false)
-	errorState.AddItem(errorText, 0, 2, false)
-	errorState.AddItem(buttonFlex, 1, 1, true)
-	errorState.AddItem(nil, 0, 1, false)
-
-	errorState.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEscape {
-			cancel()
-			appPages.SwitchToPage(PageMain)
-			return nil
-		}
-		return event
-	})
-
-	return errorState
-}
-
+// BuildGenerateDBPage creates the media database update page with PageFrame.
 func BuildGenerateDBPage(
 	cfg *config.Instance,
 	pages *tview.Pages,
 	app *tview.Application,
-) tview.Primitive {
-	// Create a cancellable context for the goroutine
+) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	generateDB := tview.NewPages()
-	generateDB.SetTitle("Update Media DB")
-	generateDB.SetBorder(true)
+	// Create page frame
+	frame := NewPageFrame(app).
+		SetTitle("Update Media DB")
 
-	progressState, progressBar, statusText := progressStatePage(app, pages, generateDB, cancel)
-	generateDB.AddPage("progress", progressState, true, false)
+	goBack := func() {
+		cancel()
+		pages.SwitchToPage(PageMain)
+	}
+	frame.SetOnEscape(goBack)
 
-	initialState := initStatePage(cfg, app, pages, generateDB, cancel)
-	generateDB.AddPage("initial", initialState, true, false)
+	// State components
+	progressBar := NewProgressBar()
+	progressBar.SetBorder(true)
 
-	completeState, completeText := completeStatePage(app, pages, generateDB, cancel)
-	generateDB.AddPage("complete", completeState, true, false)
+	progressStatusText := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter).
+		SetText("Starting scan...")
 
-	errorMsg := "Could not connect to Core service.\nPlease ensure it is running."
-	errorPage := errorStatePage(app, pages, generateDB, cancel, errorMsg)
-	generateDB.AddPage("error", errorPage, true, false)
+	dbStatsText := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter).
+		SetWordWrap(true)
 
+	completeText := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter)
+
+	// Internal pages for different states
+	statePages := tview.NewPages()
+
+	// === INITIAL STATE ===
+	initialContent := tview.NewFlex().SetDirection(tview.FlexRow)
+	initialContent.AddItem(nil, 0, 1, false)
+	initialContent.AddItem(dbStatsText, 2, 0, false)
+	initialContent.AddItem(nil, 0, 1, false)
+
+	// === PROGRESS STATE ===
+	progressContent := tview.NewFlex().SetDirection(tview.FlexRow)
+	progressTitle := tview.NewTextView().
+		SetText("Scanning media files...").
+		SetTextAlign(tview.AlignCenter)
+	progressContent.AddItem(nil, 0, 1, false)
+	progressContent.AddItem(progressTitle, 1, 0, false)
+	progressContent.AddItem(progressBar, 3, 0, false)
+	progressContent.AddItem(progressStatusText, 1, 0, false)
+	progressContent.AddItem(nil, 0, 1, false)
+
+	// === COMPLETE STATE ===
+	completeContent := tview.NewFlex().SetDirection(tview.FlexRow)
+	completeContent.AddItem(nil, 0, 1, false)
+	completeContent.AddItem(completeText, 3, 0, false)
+	completeContent.AddItem(nil, 0, 1, false)
+
+	// Add state pages
+	statePages.AddPage("initial", initialContent, true, true)
+	statePages.AddPage("progress", progressContent, true, false)
+	statePages.AddPage("complete", completeContent, true, false)
+
+	// Button bar creation functions (declared first to allow mutual references)
+	var createInitialButtonBar, createProgressButtonBar, createCompleteButtonBar func() *ButtonBar
+
+	createProgressButtonBar = func() *ButtonBar {
+		bar := NewButtonBar(app)
+		bar.AddButton("Hide", goBack)
+		bar.SetupNavigation(goBack)
+		return bar
+	}
+
+	createCompleteButtonBar = func() *ButtonBar {
+		bar := NewButtonBar(app)
+		bar.AddButton("Done", func() {
+			// Refresh stats before going back
+			mediaCtx, mediaCancel := tuiContext()
+			media, err := getMediaState(mediaCtx, cfg)
+			mediaCancel()
+			if err == nil {
+				dbStatsText.SetText(formatDBStats(media.Database))
+			}
+			statePages.SwitchToPage("initial")
+			frame.SetHelpText("Rescan your media folders to update the index")
+			frame.SetButtonBar(createInitialButtonBar())
+			frame.FocusButtonBar()
+		})
+		bar.SetupNavigation(goBack)
+		return bar
+	}
+
+	createInitialButtonBar = func() *ButtonBar {
+		bar := NewButtonBar(app)
+		bar.AddButton("Update", func() {
+			_, err := client.LocalClient(context.Background(), cfg, models.MethodMediaGenerate, "")
+			if err != nil {
+				log.Error().Err(err).Msg("error generating media db")
+				return
+			}
+			statePages.SwitchToPage("progress")
+			frame.SetHelpText("Scanning media files...")
+			frame.SetButtonBar(createProgressButtonBar())
+			frame.FocusButtonBar()
+		})
+		bar.AddButton("Back", goBack)
+		bar.SetupNavigation(goBack)
+		return bar
+	}
+
+	// Update functions
 	updateProgress := func(current, total int, status string) {
 		app.QueueUpdateDraw(func() {
 			progressBar.SetProgress(float64(current) / float64(total))
-			statusText.SetText(status)
+			progressStatusText.SetText(status)
 		})
 	}
 
 	showComplete := func(filesFound int) {
 		app.QueueUpdateDraw(func() {
-			completeText.SetText(fmt.Sprintf("Database update complete!\n%d files processed.", filesFound))
-			generateDB.SwitchToPage("complete")
+			completeText.SetText(fmt.Sprintf("Database update complete!\n\n%d files processed.", filesFound))
+			statePages.SwitchToPage("complete")
+			frame.SetHelpText("Update finished successfully")
+			frame.SetButtonBar(createCompleteButtonBar())
+			frame.FocusButtonBar()
 		})
 	}
 
-	media, err := getMediaState(context.Background(), cfg)
+	// Check initial state and set stats
+	mediaCtx, mediaCancel := tuiContext()
+	defer mediaCancel()
+	media, err := getMediaState(mediaCtx, cfg)
+
 	switch {
 	case err != nil:
-		log.Debug().Err(err).Msg("failed to get media state")
-		generateDB.SwitchToPage("error")
+		dbStatsText.SetText("Unable to retrieve database status.")
+		frame.SetHelpText("Rescan your media folders to update the index")
+		statePages.SwitchToPage("initial")
+		frame.SetButtonBar(createInitialButtonBar())
 	case media.Database.Indexing:
-		// Check for nil pointers before dereferencing
 		if media.Database.CurrentStep == nil ||
 			media.Database.TotalSteps == nil ||
 			media.Database.CurrentStepDisplay == nil {
-			generateDB.SwitchToPage("initial")
+			dbStatsText.SetText(formatDBStats(media.Database))
+			frame.SetHelpText("Rescan your media folders to update the index")
+			statePages.SwitchToPage("initial")
+			frame.SetButtonBar(createInitialButtonBar())
 		} else {
-			// Set progress directly to avoid nested QueueUpdateDraw calls
 			progressBar.SetProgress(float64(*media.Database.CurrentStep) / float64(*media.Database.TotalSteps))
-			statusText.SetText(*media.Database.CurrentStepDisplay)
-			generateDB.SwitchToPage("progress")
+			progressStatusText.SetText(*media.Database.CurrentStepDisplay)
+			statePages.SwitchToPage("progress")
+			frame.SetHelpText("Scanning media files...")
+			frame.SetButtonBar(createProgressButtonBar())
 		}
 	default:
-		generateDB.SwitchToPage("initial")
+		dbStatsText.SetText(formatDBStats(media.Database))
+		frame.SetHelpText("Rescan your media folders to update the index")
+		statePages.SwitchToPage("initial")
+		frame.SetButtonBar(createInitialButtonBar())
 	}
 
+	// Background worker for progress updates
 	go func() {
-		defer cancel() // Ensure cleanup on goroutine exit
+		defer cancel()
 
-		// Continue with normal notification loop
 		var lastUpdate *models.IndexingStatusResponse
 		for {
 			select {
 			case <-ctx.Done():
-				// Context cancelled, clean exit
 				return
 			default:
 				indexing, err := waitGenerateUpdate(ctx, cfg)
@@ -411,7 +304,6 @@ func BuildGenerateDBPage(
 					continue
 				} else if err != nil {
 					if errors.Is(err, client.ErrRequestCancelled) {
-						// Context cancelled during request, clean exit
 						return
 					}
 					log.Error().Err(err).Msg("error waiting for indexing update")
@@ -433,9 +325,11 @@ func BuildGenerateDBPage(
 						*indexing.TotalSteps,
 						*indexing.CurrentStepDisplay,
 					)
-					// Switch to progress page if we're not already there
 					app.QueueUpdateDraw(func() {
-						generateDB.SwitchToPage("progress")
+						statePages.SwitchToPage("progress")
+						frame.SetHelpText("Scanning media files...")
+						frame.SetButtonBar(createProgressButtonBar())
+						frame.FocusButtonBar()
 					})
 				}
 				lastUpdate = &indexing
@@ -443,6 +337,7 @@ func BuildGenerateDBPage(
 		}
 	}()
 
-	pageDefaults(PageGenerateDB, pages, generateDB)
-	return generateDB
+	frame.SetContent(statePages)
+	pages.AddAndSwitchToPage(PageGenerateDB, frame, true)
+	frame.FocusButtonBar()
 }

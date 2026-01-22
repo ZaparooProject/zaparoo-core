@@ -36,9 +36,9 @@ import (
 	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mac"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/systray"
@@ -106,7 +106,7 @@ func run() error {
 
 	var stopSvc func() error
 	var svcDone <-chan struct{}
-	if !helpers.IsServiceRunning(cfg) {
+	if !client.IsServiceRunning(cfg) {
 		log.Info().Msg("starting new service instance")
 		var err error
 		stopSvc, svcDone, err = service.Start(pl, cfg)
@@ -146,7 +146,7 @@ func run() error {
 		// default to showing the TUI
 		app, err := tui.BuildMain(
 			cfg, pl,
-			func() bool { return helpers.IsServiceRunning(cfg) },
+			func() bool { return client.IsServiceRunning(cfg) },
 			filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
 			"desktop",
 		)

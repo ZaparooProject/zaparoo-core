@@ -1,6 +1,26 @@
 //go:build linux || darwin
 
-package helpers
+/*
+Zaparoo Core
+Copyright (C) 2023, 2024 Callan Barrett
+
+This file is part of Zaparoo Core.
+
+Zaparoo Core is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+Zaparoo Core is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+package daemon
 
 import (
 	"context"
@@ -16,7 +36,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -272,7 +294,7 @@ func (s *Service) Start() error {
 	}
 
 	// point new binary to existing config file
-	configPath := filepath.Join(ConfigDir(s.pl), config.CfgFile)
+	configPath := filepath.Join(helpers.ConfigDir(s.pl), config.CfgFile)
 
 	if _, statErr := os.Stat(configPath); statErr == nil {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", config.CfgEnv, configPath))
@@ -359,7 +381,7 @@ func (s *Service) Restart() error {
 // WaitForAPI waits for the service API to become available with health monitoring.
 // Returns nil if API became available, error if timeout or process crashed.
 func (s *Service) WaitForAPI(cfg *config.Instance, maxWait, checkInterval time.Duration) error {
-	if WaitForAPI(cfg, maxWait, checkInterval) {
+	if client.WaitForAPI(cfg, maxWait, checkInterval) {
 		log.Info().Msg("API is now available")
 		return nil
 	}
@@ -378,7 +400,7 @@ func (s *Service) WaitForAPI(cfg *config.Instance, maxWait, checkInterval time.D
 // The cleanup function sends SIGTERM and waits for graceful shutdown with timeout.
 // Returns a no-op cleanup function if service was already running.
 func SpawnDaemon(cfg *config.Instance) (cleanup func(), err error) {
-	if IsServiceRunning(cfg) {
+	if client.IsServiceRunning(cfg) {
 		log.Info().
 			Int("port", cfg.APIPort()).
 			Msg("connecting to existing service instance")
@@ -407,7 +429,7 @@ func SpawnDaemon(cfg *config.Instance) (cleanup func(), err error) {
 	// Wait for service to be ready
 	ready := false
 	for range 30 {
-		if IsServiceRunning(cfg) {
+		if client.IsServiceRunning(cfg) {
 			ready = true
 			break
 		}
