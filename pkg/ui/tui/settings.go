@@ -21,6 +21,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -503,11 +504,12 @@ func buildReaderListPage(
 				readerName += ":" + readers[idx].Path
 			}
 			ShowConfirmModal(pages, app, "Delete reader "+readerName+"?", func() {
-				readers = append(readers[:idx], readers[idx+1:]...)
+				// Create updated slice for API call without modifying original yet
+				updatedReaders := slices.Delete(slices.Clone(readers), idx, idx+1)
 				ctx, cancel := tuiContext()
 				defer cancel()
 				err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
-					ReadersConnect: &readers,
+					ReadersConnect: &updatedReaders,
 				})
 				if err != nil {
 					log.Error().Err(err).Msg("error deleting reader")
@@ -516,6 +518,8 @@ func buildReaderListPage(
 					})
 					return
 				}
+				// Only update local slice after successful API call
+				readers = updatedReaders
 				refreshList()
 			}, nil)
 		}
