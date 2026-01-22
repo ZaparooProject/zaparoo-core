@@ -26,9 +26,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
 func TestPluginEventJSONSerialization(t *testing.T) {
@@ -285,10 +286,10 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name                       string
 		platforms                  []launchBoxPlatformInfo
 		expectedCustomToSystem     map[string]string
 		expectedSystemToCustoms    map[string][]string
+		name                       string
 		expectedCustomToSystemLen  int
 		expectedSystemToCustomsLen int
 	}{
@@ -327,9 +328,9 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 				{Name: "Super Nintendo Entertainment System", ScrapeAs: "Super Nintendo Entertainment System"},
 			},
 			expectedCustomToSystem: map[string]string{
-				"Mame Arcade":                          systemdefs.SystemArcade,
-				"My NES Collection":                    systemdefs.SystemNES,
-				"Super Nintendo Entertainment System":  systemdefs.SystemSNES,
+				"Mame Arcade":                         systemdefs.SystemArcade,
+				"My NES Collection":                   systemdefs.SystemNES,
+				"Super Nintendo Entertainment System": systemdefs.SystemSNES,
 			},
 			expectedSystemToCustoms: map[string][]string{
 				systemdefs.SystemArcade: {"Mame Arcade"},

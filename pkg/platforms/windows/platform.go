@@ -32,6 +32,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/adrg/xdg"
+	"github.com/rs/zerolog/log"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -58,23 +61,19 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
-	"github.com/adrg/xdg"
-	"github.com/rs/zerolog/log"
 )
 
 type Platform struct {
-	activeMedia       func() *models.ActiveMedia
-	setActiveMedia    func(*models.ActiveMedia)
-	trackedProcess    *os.Process
-	launchBoxPipe     *LaunchBoxPipeServer
-	steamTracker      *steamtracker.WindowsPlatformIntegration
-	processMu         syncutil.RWMutex
-	launchBoxPipeLock syncutil.Mutex
-
-	// Platform mappings from LaunchBox plugin (custom platform names -> system IDs)
-	customPlatformToSystem   map[string]string   // e.g., "Mame Arcade" -> "arcade"
-	systemToCustomPlatforms  map[string][]string // e.g., "arcade" -> ["Mame Arcade", "Mame Classics"]
-	platformMappingsMu     syncutil.RWMutex
+	activeMedia             func() *models.ActiveMedia
+	setActiveMedia          func(*models.ActiveMedia)
+	customPlatformToSystem  map[string]string   // e.g., "Mame Arcade" -> "arcade"
+	systemToCustomPlatforms map[string][]string // e.g., "arcade" -> ["Mame Arcade", "Mame Classics"]
+	trackedProcess          *os.Process
+	launchBoxPipe           *LaunchBoxPipeServer
+	steamTracker            *steamtracker.WindowsPlatformIntegration
+	processMu               syncutil.RWMutex
+	launchBoxPipeLock       syncutil.Mutex
+	platformMappingsMu      syncutil.RWMutex
 }
 
 func (*Platform) ID() string {

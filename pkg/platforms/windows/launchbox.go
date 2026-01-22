@@ -36,6 +36,8 @@ import (
 	"time"
 
 	"github.com/Microsoft/go-winio"
+	"github.com/rs/zerolog/log"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
@@ -45,7 +47,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -82,18 +83,22 @@ type launchBoxPlatformsEvent struct {
 	Platforms []launchBoxPlatformInfo `json:"Platforms"`
 }
 
+// LaunchBoxAdditionalApp represents an additional application for a LaunchBox game
+//
 //nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
-type launchBoxAdditionalApp struct {
+type LaunchBoxAdditionalApp struct {
 	ID   string `json:"Id"`
 	Name string `json:"Name"`
 }
 
+// LaunchBoxGameInfo represents a game from the LaunchBox plugin
+//
 //nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
-type launchBoxGameInfo struct {
+type LaunchBoxGameInfo struct {
 	ID             string                   `json:"Id"`
 	Title          string                   `json:"Title"`
 	Platform       string                   `json:"Platform"`
-	AdditionalApps []launchBoxAdditionalApp `json:"AdditionalApps"`
+	AdditionalApps []LaunchBoxAdditionalApp `json:"AdditionalApps"`
 }
 
 //nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
@@ -101,13 +106,13 @@ type launchBoxGamesEvent struct {
 	Event    string              `json:"Event"`
 	Platform string              `json:"Platform"`
 	Error    string              `json:"Error,omitempty"`
-	Games    []launchBoxGameInfo `json:"Games"`
+	Games    []LaunchBoxGameInfo `json:"Games"`
 }
 
 // launchBoxGamesResponse is used internally for the synchronous request channel
 type launchBoxGamesResponse struct {
-	Games []launchBoxGameInfo
 	Error string
+	Games []LaunchBoxGameInfo
 }
 
 // LaunchBox XML types
@@ -343,25 +348,28 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 	return "", errors.New("launchbox directory not found")
 }
 
+// pendingGamesRequest tracks a pending synchronous game request during scanning
+type pendingGamesRequest struct {
+	platform string
+	response chan launchBoxGamesResponse
+}
+
 // LaunchBoxPipeServer manages named pipe communication with the LaunchBox plugin
 type LaunchBoxPipeServer struct {
 	onGameStarted       func(id, title, platform, path string)
 	onGameExited        func(id, title string)
 	onWriteRequest      func(id, title, platform string)
 	onPlatformsReceived func(platforms []launchBoxPlatformInfo)
-	listener            net.Listener
-	conn                net.Conn
 	ctx                 context.Context
 	cancel              context.CancelFunc
+	listener            net.Listener
+	conn                net.Conn
 	writer              *bufio.Writer
 	connMu              syncutil.Mutex
 
 	// For synchronous game requests during scanning
-	pendingGamesRequest struct {
-		platform string
-		response chan launchBoxGamesResponse
-	}
-	pendingGamesRequestMu syncutil.Mutex
+	pendingGamesReq   pendingGamesRequest
+	pendingGamesReqMu syncutil.Mutex
 }
 
 // NewLaunchBoxPipeServer creates a new named pipe server
@@ -428,7 +436,7 @@ func (s *LaunchBoxPipeServer) SetWriteRequestHandler(handler func(id, title, pla
 }
 
 // SetPlatformsReceivedHandler sets the callback for platforms received events
-func (s *LaunchBoxPipeServer) SetPlatformsReceivedHandler(handler func(platforms []launchBoxPlatformInfo)) {
+func (s *LaunchBoxPipeServer) SetPlatformsReceivedHandler(handler func(plats []launchBoxPlatformInfo)) {
 	s.onPlatformsReceived = handler
 }
 
@@ -464,7 +472,7 @@ func (s *LaunchBoxPipeServer) RequestPlatforms() error {
 
 // RequestGamesForPlatformSync sends a GetGamesForPlatform command and waits for the response.
 // This is used by the scanner to query games on-demand per-platform instead of caching all games.
-func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(ctx context.Context, platform string) ([]launchBoxGameInfo, error) {
+func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(ctx context.Context, platform string) ([]LaunchBoxGameInfo, error) {
 	s.connMu.Lock()
 	if s.writer == nil {
 		s.connMu.Unlock()
@@ -474,20 +482,20 @@ func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(ctx context.Context, p
 
 	respChan := make(chan launchBoxGamesResponse, 1)
 
-	s.pendingGamesRequestMu.Lock()
-	if s.pendingGamesRequest.response != nil {
-		s.pendingGamesRequestMu.Unlock()
+	s.pendingGamesReqMu.Lock()
+	if s.pendingGamesReq.response != nil {
+		s.pendingGamesReqMu.Unlock()
 		return nil, errors.New("games request already in flight")
 	}
-	s.pendingGamesRequest.platform = platform
-	s.pendingGamesRequest.response = respChan
-	s.pendingGamesRequestMu.Unlock()
+	s.pendingGamesReq.platform = platform
+	s.pendingGamesReq.response = respChan
+	s.pendingGamesReqMu.Unlock()
 
 	defer func() {
-		s.pendingGamesRequestMu.Lock()
-		s.pendingGamesRequest.platform = ""
-		s.pendingGamesRequest.response = nil
-		s.pendingGamesRequestMu.Unlock()
+		s.pendingGamesReqMu.Lock()
+		s.pendingGamesReq.platform = ""
+		s.pendingGamesReq.response = nil
+		s.pendingGamesReqMu.Unlock()
 	}()
 
 	// Send request
@@ -749,20 +757,22 @@ func (s *LaunchBoxPipeServer) handleEvent(data string) {
 		}
 
 		if gamesEvent.Error != "" {
-			log.Warn().Msgf("LaunchBox plugin error for platform %s: %s", gamesEvent.Platform, gamesEvent.Error)
+			log.Warn().Msgf("LaunchBox plugin error for platform %s: %s",
+				gamesEvent.Platform, gamesEvent.Error)
 		} else {
-			log.Debug().Msgf("received %d games from LaunchBox for platform %s", len(gamesEvent.Games), gamesEvent.Platform)
+			log.Debug().Msgf("received %d games from LaunchBox for platform %s",
+				len(gamesEvent.Games), gamesEvent.Platform)
 		}
 
 		// Send to pending request if one exists for this platform
-		s.pendingGamesRequestMu.Lock()
-		if s.pendingGamesRequest.response != nil && s.pendingGamesRequest.platform == gamesEvent.Platform {
-			s.pendingGamesRequest.response <- launchBoxGamesResponse{
+		s.pendingGamesReqMu.Lock()
+		if s.pendingGamesReq.response != nil && s.pendingGamesReq.platform == gamesEvent.Platform {
+			s.pendingGamesReq.response <- launchBoxGamesResponse{
 				Games: gamesEvent.Games,
 				Error: gamesEvent.Error,
 			}
 		}
-		s.pendingGamesRequestMu.Unlock()
+		s.pendingGamesReqMu.Unlock()
 
 	default:
 		log.Debug().Msgf("unknown LaunchBox event type: %s", event.Event)
