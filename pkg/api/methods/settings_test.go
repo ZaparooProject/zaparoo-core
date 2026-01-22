@@ -287,6 +287,140 @@ func TestHandleSettingsUpdate_ReaderConnections(t *testing.T) {
 	assert.Empty(t, readers[1].Path)
 }
 
+// TestHandleSettings_ErrorReportingDefault tests that HandleSettings returns
+// errorReporting as false by default.
+func TestHandleSettings_ErrorReportingDefault(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	}
+
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok, "result should be SettingsResponse")
+
+	assert.False(t, resp.ErrorReporting, "errorReporting should be false by default")
+}
+
+// TestHandleSettings_ErrorReportingEnabled tests that HandleSettings returns
+// errorReporting as true when it's enabled in config.
+func TestHandleSettings_ErrorReportingEnabled(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{
+		ErrorReporting: true,
+	})
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	}
+
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok, "result should be SettingsResponse")
+
+	assert.True(t, resp.ErrorReporting, "errorReporting should be true when enabled")
+}
+
+// TestHandleSettingsUpdate_ErrorReportingEnable tests that HandleSettingsUpdate
+// properly enables error reporting.
+func TestHandleSettingsUpdate_ErrorReportingEnable(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+	assert.False(t, cfg.ErrorReporting(), "errorReporting should start as false")
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	enabled := true
+	params := models.UpdateSettingsParams{
+		ErrorReporting: &enabled,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.ErrorReporting(), "errorReporting should be enabled after update")
+}
+
+// TestHandleSettingsUpdate_ErrorReportingDisable tests that HandleSettingsUpdate
+// properly disables error reporting.
+func TestHandleSettingsUpdate_ErrorReportingDisable(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{
+		ErrorReporting: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, cfg.ErrorReporting(), "errorReporting should start as true")
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	disabled := false
+	params := models.UpdateSettingsParams{
+		ErrorReporting: &disabled,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	assert.False(t, cfg.ErrorReporting(), "errorReporting should be disabled after update")
+}
+
 // TestHandleSettingsUpdate_ReaderConnectionsWithIDSource tests that IDSource
 // field is preserved when updating reader connections.
 func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {
