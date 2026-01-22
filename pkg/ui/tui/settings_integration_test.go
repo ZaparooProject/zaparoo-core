@@ -50,32 +50,20 @@ func TestSettingsList_Navigation_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
-	// Helper to read current item safely from tview's goroutine
-	getCurrentItem := func() int {
-		var result int
-		runner.QueueUpdateDraw(func() {
-			result = sl.GetCurrentItem()
-		})
-		return result
-	}
-
 	// Verify initial selection is first item (index 0)
-	assert.Equal(t, 0, getCurrentItem())
+	assert.Equal(t, 0, sl.GetCurrentItem())
 
 	// Navigate down
-	runner.Screen().InjectArrowDown()
-	runner.Draw()
-	assert.Equal(t, 1, getCurrentItem())
+	runner.SimulateArrowDown()
+	assert.Equal(t, 1, sl.GetCurrentItem())
 
 	// Navigate down again
-	runner.Screen().InjectArrowDown()
-	runner.Draw()
-	assert.Equal(t, 2, getCurrentItem())
+	runner.SimulateArrowDown()
+	assert.Equal(t, 2, sl.GetCurrentItem())
 
 	// Navigate up
-	runner.Screen().InjectArrowUp()
-	runner.Draw()
-	assert.Equal(t, 1, getCurrentItem())
+	runner.SimulateArrowUp()
+	assert.Equal(t, 1, sl.GetCurrentItem())
 }
 
 func TestSettingsList_ToggleActivation_Integration(t *testing.T) {
@@ -102,8 +90,7 @@ func TestSettingsList_ToggleActivation_Integration(t *testing.T) {
 	runner.Draw()
 
 	// Press Enter to toggle
-	runner.Screen().InjectEnter()
-	runner.Draw()
+	runner.SimulateEnter()
 
 	// Wait for the callback
 	assert.True(t, runner.WaitForSignal(toggleCalled, 100*time.Millisecond), "toggle callback should be called")
@@ -143,8 +130,7 @@ func TestSettingsList_EscapeGoesBack_Integration(t *testing.T) {
 	assert.Equal(t, "settings", getFrontPage())
 
 	// Press Escape
-	runner.Screen().InjectEscape()
-	runner.Draw()
+	runner.SimulateEscape()
 
 	// Verify we switched to main page
 	assert.True(t, runner.WaitForCondition(func() bool {
@@ -181,18 +167,15 @@ func TestButtonBar_Navigation_Integration(t *testing.T) {
 	runner.SetFocus(bb)
 
 	// Press Enter on first button
-	runner.Screen().InjectEnter()
-	runner.Draw()
+	runner.SimulateEnter()
 
 	assert.True(t, runner.WaitForSignal(button1Pressed, 100*time.Millisecond), "first button should be pressed")
 
 	// Navigate right to second button
-	runner.Screen().InjectArrowRight()
-	runner.Draw()
+	runner.SimulateArrowRight()
 
 	// Press Enter on second button
-	runner.Screen().InjectEnter()
-	runner.Draw()
+	runner.SimulateEnter()
 
 	assert.True(t, runner.WaitForSignal(button2Pressed, 100*time.Millisecond), "second button should be pressed")
 }
@@ -218,8 +201,7 @@ func TestButtonBar_EscapeCallback_Integration(t *testing.T) {
 	runner.SetFocus(bb)
 
 	// Press Escape
-	runner.Screen().InjectEscape()
-	runner.Draw()
+	runner.SimulateEscape()
 
 	assert.True(t, runner.WaitForSignal(escapeCalled, 100*time.Millisecond), "escape callback should be called")
 }
@@ -250,8 +232,7 @@ func TestCheckList_Integration(t *testing.T) {
 	runner.Draw()
 
 	// Toggle first item
-	runner.Screen().InjectEnter()
-	runner.Draw()
+	runner.SimulateEnter()
 
 	assert.True(t, runner.WaitForSignal(selectionChanged, 100*time.Millisecond), "selection callback should be called")
 
@@ -261,10 +242,8 @@ func TestCheckList_Integration(t *testing.T) {
 	selMu.Unlock()
 
 	// Navigate down and toggle second
-	runner.Screen().InjectArrowDown()
-	runner.Draw()
-	runner.Screen().InjectEnter()
-	runner.Draw()
+	runner.SimulateArrowDown()
+	runner.SimulateEnter()
 
 	assert.True(t, runner.WaitForSignal(selectionChanged, 100*time.Millisecond), "selection callback should be called")
 
@@ -308,8 +287,7 @@ func TestCheckList_EscapeNavigation_Integration(t *testing.T) {
 	assert.Equal(t, "checklist", getFrontPage())
 
 	// Press Escape
-	runner.Screen().InjectEscape()
-	runner.Draw()
+	runner.SimulateEscape()
 
 	// Verify we went back to main
 	assert.True(t, runner.WaitForCondition(func() bool {
@@ -334,29 +312,18 @@ func TestSettingsList_RefreshItems_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
-	// Helper to read current item safely
-	getCurrentItem := func() int {
-		var result int
-		runner.QueueUpdateDraw(func() {
-			result = sl.GetCurrentItem()
-		})
-		return result
-	}
-
 	// First item should be selected
-	assert.Equal(t, 0, getCurrentItem())
+	assert.Equal(t, 0, sl.GetCurrentItem())
 
 	// Navigate and verify refresh happens
-	runner.Screen().InjectArrowDown()
-	runner.Draw()
+	runner.SimulateArrowDown()
 
-	assert.Equal(t, 1, getCurrentItem())
+	assert.Equal(t, 1, sl.GetCurrentItem())
 
 	// Navigate back up
-	runner.Screen().InjectArrowUp()
-	runner.Draw()
+	runner.SimulateArrowUp()
 
-	assert.Equal(t, 0, getCurrentItem())
+	assert.Equal(t, 0, sl.GetCurrentItem())
 }
 
 func TestScreenContainsText_Integration(t *testing.T) {
