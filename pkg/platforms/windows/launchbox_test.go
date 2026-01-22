@@ -288,9 +288,9 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 		name                       string
 		platforms                  []launchBoxPlatformInfo
 		expectedCustomToSystem     map[string]string
-		expectedSystemToCustom     map[string]string
+		expectedSystemToCustoms    map[string][]string
 		expectedCustomToSystemLen  int
-		expectedSystemToCustomLen  int
+		expectedSystemToCustomsLen int
 	}{
 		{
 			name: "custom platform name with ScrapeAs",
@@ -300,11 +300,11 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 			expectedCustomToSystem: map[string]string{
 				"Mame Arcade": systemdefs.SystemArcade,
 			},
-			expectedSystemToCustom: map[string]string{
-				systemdefs.SystemArcade: "Mame Arcade",
+			expectedSystemToCustoms: map[string][]string{
+				systemdefs.SystemArcade: {"Mame Arcade"},
 			},
-			expectedCustomToSystemLen: 1,
-			expectedSystemToCustomLen: 1,
+			expectedCustomToSystemLen:  1,
+			expectedSystemToCustomsLen: 1,
 		},
 		{
 			name: "standard platform name matches canonical",
@@ -315,12 +315,12 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 				"Arcade": systemdefs.SystemArcade,
 			},
 			// No reverse mapping when name matches canonical
-			expectedSystemToCustom:    map[string]string{},
-			expectedCustomToSystemLen: 1,
-			expectedSystemToCustomLen: 0,
+			expectedSystemToCustoms:    map[string][]string{},
+			expectedCustomToSystemLen:  1,
+			expectedSystemToCustomsLen: 0,
 		},
 		{
-			name: "multiple custom platforms",
+			name: "multiple custom platforms for different systems",
 			platforms: []launchBoxPlatformInfo{
 				{Name: "Mame Arcade", ScrapeAs: "Arcade"},
 				{Name: "My NES Collection", ScrapeAs: "Nintendo Entertainment System"},
@@ -331,23 +331,41 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 				"My NES Collection":                    systemdefs.SystemNES,
 				"Super Nintendo Entertainment System":  systemdefs.SystemSNES,
 			},
-			expectedSystemToCustom: map[string]string{
-				systemdefs.SystemArcade: "Mame Arcade",
-				systemdefs.SystemNES:    "My NES Collection",
+			expectedSystemToCustoms: map[string][]string{
+				systemdefs.SystemArcade: {"Mame Arcade"},
+				systemdefs.SystemNES:    {"My NES Collection"},
 				// SNES not in reverse map because name matches canonical
 			},
-			expectedCustomToSystemLen: 3,
-			expectedSystemToCustomLen: 2,
+			expectedCustomToSystemLen:  3,
+			expectedSystemToCustomsLen: 2,
+		},
+		{
+			name: "multiple custom platforms mapping to same system",
+			platforms: []launchBoxPlatformInfo{
+				{Name: "SNES Hacks", ScrapeAs: "Super Nintendo Entertainment System"},
+				{Name: "SNES Romhacks", ScrapeAs: "Super Nintendo Entertainment System"},
+				{Name: "SNES Translations", ScrapeAs: "Super Nintendo Entertainment System"},
+			},
+			expectedCustomToSystem: map[string]string{
+				"SNES Hacks":        systemdefs.SystemSNES,
+				"SNES Romhacks":     systemdefs.SystemSNES,
+				"SNES Translations": systemdefs.SystemSNES,
+			},
+			expectedSystemToCustoms: map[string][]string{
+				systemdefs.SystemSNES: {"SNES Hacks", "SNES Romhacks", "SNES Translations"},
+			},
+			expectedCustomToSystemLen:  3,
+			expectedSystemToCustomsLen: 1,
 		},
 		{
 			name: "unknown ScrapeAs value",
 			platforms: []launchBoxPlatformInfo{
 				{Name: "My Custom Platform", ScrapeAs: "Unknown Platform That Does Not Exist"},
 			},
-			expectedCustomToSystem:    map[string]string{},
-			expectedSystemToCustom:    map[string]string{},
-			expectedCustomToSystemLen: 0,
-			expectedSystemToCustomLen: 0,
+			expectedCustomToSystem:     map[string]string{},
+			expectedSystemToCustoms:    map[string][]string{},
+			expectedCustomToSystemLen:  0,
+			expectedSystemToCustomsLen: 0,
 		},
 		{
 			name: "empty ScrapeAs falls back to Name",
@@ -357,9 +375,9 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 			expectedCustomToSystem: map[string]string{
 				"Arcade": systemdefs.SystemArcade,
 			},
-			expectedSystemToCustom:    map[string]string{},
-			expectedCustomToSystemLen: 1,
-			expectedSystemToCustomLen: 0,
+			expectedSystemToCustoms:    map[string][]string{},
+			expectedCustomToSystemLen:  1,
+			expectedSystemToCustomsLen: 0,
 		},
 		{
 			name: "case insensitive matching",
@@ -369,11 +387,11 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 			expectedCustomToSystem: map[string]string{
 				"My Arcade Games": systemdefs.SystemArcade,
 			},
-			expectedSystemToCustom: map[string]string{
-				systemdefs.SystemArcade: "My Arcade Games",
+			expectedSystemToCustoms: map[string][]string{
+				systemdefs.SystemArcade: {"My Arcade Games"},
 			},
-			expectedCustomToSystemLen: 1,
-			expectedSystemToCustomLen: 1,
+			expectedCustomToSystemLen:  1,
+			expectedSystemToCustomsLen: 1,
 		},
 	}
 
@@ -383,7 +401,7 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 
 			// Simulate the mapping building logic from initLaunchBoxPipe
 			customPlatformToSystem := make(map[string]string)
-			systemToCustomPlatform := make(map[string]string)
+			systemToCustomPlatforms := make(map[string][]string)
 
 			for _, plat := range tt.platforms {
 				canonicalName := plat.ScrapeAs
@@ -395,7 +413,7 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 					if strings.EqualFold(lbName, canonicalName) {
 						customPlatformToSystem[plat.Name] = sysID
 						if !strings.EqualFold(plat.Name, lbName) {
-							systemToCustomPlatform[sysID] = plat.Name
+							systemToCustomPlatforms[sysID] = append(systemToCustomPlatforms[sysID], plat.Name)
 						}
 						break
 					}
@@ -403,16 +421,16 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 			}
 
 			assert.Len(t, customPlatformToSystem, tt.expectedCustomToSystemLen)
-			assert.Len(t, systemToCustomPlatform, tt.expectedSystemToCustomLen)
+			assert.Len(t, systemToCustomPlatforms, tt.expectedSystemToCustomsLen)
 
 			for name, expectedSysID := range tt.expectedCustomToSystem {
 				assert.Equal(t, expectedSysID, customPlatformToSystem[name],
 					"customPlatformToSystem[%q] mismatch", name)
 			}
 
-			for sysID, expectedName := range tt.expectedSystemToCustom {
-				assert.Equal(t, expectedName, systemToCustomPlatform[sysID],
-					"systemToCustomPlatform[%q] mismatch", sysID)
+			for sysID, expectedNames := range tt.expectedSystemToCustoms {
+				assert.ElementsMatch(t, expectedNames, systemToCustomPlatforms[sysID],
+					"systemToCustomPlatforms[%q] mismatch", sysID)
 			}
 		})
 	}

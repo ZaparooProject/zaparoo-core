@@ -72,8 +72,8 @@ type Platform struct {
 	launchBoxPipeLock syncutil.Mutex
 
 	// Platform mappings from LaunchBox plugin (custom platform names -> system IDs)
-	customPlatformToSystem map[string]string // e.g., "Mame Arcade" -> "arcade"
-	systemToCustomPlatform map[string]string // e.g., "arcade" -> "Mame Arcade"
+	customPlatformToSystem   map[string]string   // e.g., "Mame Arcade" -> "arcade"
+	systemToCustomPlatforms  map[string][]string // e.g., "arcade" -> ["Mame Arcade", "Mame Classics"]
 	platformMappingsMu     syncutil.RWMutex
 }
 

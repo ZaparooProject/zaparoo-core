@@ -485,6 +485,7 @@ func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(ctx context.Context, p
 
 	defer func() {
 		s.pendingGamesRequestMu.Lock()
+		s.pendingGamesRequest.platform = ""
 		s.pendingGamesRequest.response = nil
 		s.pendingGamesRequestMu.Unlock()
 	}()
@@ -862,7 +863,7 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 		defer p.platformMappingsMu.Unlock()
 
 		p.customPlatformToSystem = make(map[string]string)
-		p.systemToCustomPlatform = make(map[string]string)
+		p.systemToCustomPlatforms = make(map[string][]string)
 
 		for _, plat := range platforms {
 			// Use ScrapeAs to find the Zaparoo system ID via lbSysMap
@@ -877,7 +878,7 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 					p.customPlatformToSystem[plat.Name] = sysID
 					// Only set reverse mapping if it's a custom name
 					if !strings.EqualFold(plat.Name, lbName) {
-						p.systemToCustomPlatform[sysID] = plat.Name
+						p.systemToCustomPlatforms[sysID] = append(p.systemToCustomPlatforms[sysID], plat.Name)
 					}
 					log.Debug().Msgf("mapped LaunchBox platform %q (ScrapeAs: %q) -> %s",
 						plat.Name, plat.ScrapeAs, sysID)
@@ -913,17 +914,22 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 			systemId string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
-			// Try custom platform name first (from plugin's platform data)
+			// Build list of LaunchBox platforms to query
 			p.platformMappingsMu.RLock()
-			lbSys, ok := p.systemToCustomPlatform[systemId]
+			customPlatforms := p.systemToCustomPlatforms[systemId]
 			p.platformMappingsMu.RUnlock()
 
-			if !ok {
-				// Fall back to hardcoded map
-				lbSys, ok = lbSysMap[systemId]
-				if !ok {
-					return results, nil
-				}
+			// Start with custom platforms, then add canonical name from hardcoded map
+			var platformsToQuery []string
+			platformsToQuery = append(platformsToQuery, customPlatforms...)
+
+			// Add canonical platform from hardcoded map if it exists
+			if canonicalPlatform, ok := lbSysMap[systemId]; ok {
+				platformsToQuery = append(platformsToQuery, canonicalPlatform)
+			}
+
+			if len(platformsToQuery) == 0 {
+				return results, nil
 			}
 
 			// Try plugin first (includes additional apps for merged games)
@@ -932,8 +938,14 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 			p.launchBoxPipeLock.Unlock()
 
 			if pipe != nil && pipe.IsConnected() {
-				games, err := pipe.RequestGamesForPlatformSync(ctx, lbSys)
-				if err == nil && len(games) > 0 {
+				pluginSucceeded := false
+				for _, lbSys := range platformsToQuery {
+					games, err := pipe.RequestGamesForPlatformSync(ctx, lbSys)
+					if err != nil {
+						log.Debug().Err(err).Msgf("plugin query failed for platform %s", lbSys)
+						continue
+					}
+					pluginSucceeded = true
 					for _, game := range games {
 						// Add the primary game
 						results = append(results, platforms.ScanResult{
@@ -951,10 +963,12 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 							})
 						}
 					}
-					log.Debug().Msgf("scanned %d items from LaunchBox plugin for %s", len(results), lbSys)
+					log.Debug().Msgf("scanned %d items from LaunchBox plugin for %s", len(games), lbSys)
+				}
+				if pluginSucceeded {
 					return results, nil
 				}
-				log.Debug().Err(err).Msg("plugin query failed, falling back to XML")
+				log.Debug().Msg("all plugin queries failed, falling back to XML")
 			}
 
 			// Fall back to XML parsing (no additional apps available)
@@ -968,34 +982,41 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 				return results, errors.New("LaunchBox platforms dir not found")
 			}
 
-			xmlPath := filepath.Join(platformsDir, lbSys+".xml")
-			if _, statErr := os.Stat(xmlPath); os.IsNotExist(statErr) {
-				log.Debug().Msgf("LaunchBox platform xml not found: %s", xmlPath)
-				return results, nil
-			}
+			for _, lbSys := range platformsToQuery {
+				xmlPath := filepath.Join(platformsDir, lbSys+".xml")
+				if _, statErr := os.Stat(xmlPath); os.IsNotExist(statErr) {
+					log.Debug().Msgf("LaunchBox platform xml not found: %s", xmlPath)
+					continue
+				}
 
-			//nolint:gosec // Safe: reads game database XML files from controlled directories
-			xmlFile, err := os.Open(xmlPath)
-			if err != nil {
-				return results, fmt.Errorf("failed to open XML file %s: %w", xmlPath, err)
-			}
-			defer func(xmlFile *os.File) {
+				//nolint:gosec // Safe: reads game database XML files from controlled directories
+				xmlFile, err := os.Open(xmlPath)
+				if err != nil {
+					log.Warn().Err(err).Msgf("failed to open XML file %s", xmlPath)
+					continue
+				}
+
+				var lbXML launchBoxXML
+				if err := xml.NewDecoder(xmlFile).Decode(&lbXML); err != nil {
+					if closeErr := xmlFile.Close(); closeErr != nil {
+						log.Warn().Err(closeErr).Msg("error closing xml file")
+					}
+					log.Warn().Err(err).Msgf("failed to decode XML for %s", lbSys)
+					continue
+				}
+
 				if closeErr := xmlFile.Close(); closeErr != nil {
 					log.Warn().Err(closeErr).Msg("error closing xml file")
 				}
-			}(xmlFile)
 
-			var lbXML launchBoxXML
-			if err := xml.NewDecoder(xmlFile).Decode(&lbXML); err != nil {
-				return results, fmt.Errorf("failed to decode XML: %w", err)
-			}
-
-			for _, game := range lbXML.Games {
-				results = append(results, platforms.ScanResult{
-					Path:  virtualpath.CreateVirtualPath(shared.SchemeLaunchBox, game.ID, game.Title),
-					Name:  game.Title,
-					NoExt: true,
-				})
+				for _, game := range lbXML.Games {
+					results = append(results, platforms.ScanResult{
+						Path:  virtualpath.CreateVirtualPath(shared.SchemeLaunchBox, game.ID, game.Title),
+						Name:  game.Title,
+						NoExt: true,
+					})
+				}
+				log.Debug().Msgf("scanned %d games from LaunchBox XML for %s", len(lbXML.Games), lbSys)
 			}
 
 			return results, nil
