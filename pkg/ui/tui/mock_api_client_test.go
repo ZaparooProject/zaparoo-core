@@ -29,6 +29,8 @@ import (
 
 // MockSettingsService is a mock implementation of SettingsService for testing.
 type MockSettingsService struct {
+	updateSettingsCalled chan struct{}
+	searchMediaCalled    chan struct{}
 	mock.Mock
 	updateSettingsCallCount atomic.Int32
 	searchMediaCallCount    atomic.Int32
@@ -36,7 +38,10 @@ type MockSettingsService struct {
 
 // NewMockSettingsService creates a new mock settings service.
 func NewMockSettingsService() *MockSettingsService {
-	return &MockSettingsService{}
+	return &MockSettingsService{
+		updateSettingsCalled: make(chan struct{}, 10),
+		searchMediaCalled:    make(chan struct{}, 10),
+	}
 }
 
 // UpdateSettingsCallCount returns the number of times UpdateSettings was called.
@@ -44,9 +49,19 @@ func (m *MockSettingsService) UpdateSettingsCallCount() int {
 	return int(m.updateSettingsCallCount.Load())
 }
 
+// UpdateSettingsCalled returns a channel that receives when UpdateSettings is called.
+func (m *MockSettingsService) UpdateSettingsCalled() <-chan struct{} {
+	return m.updateSettingsCalled
+}
+
 // SearchMediaCallCount returns the number of times SearchMedia was called.
 func (m *MockSettingsService) SearchMediaCallCount() int {
 	return int(m.searchMediaCallCount.Load())
+}
+
+// SearchMediaCalled returns a channel that receives when SearchMedia is called.
+func (m *MockSettingsService) SearchMediaCalled() <-chan struct{} {
+	return m.searchMediaCalled
 }
 
 // GetSettings mocks fetching settings.
@@ -65,6 +80,10 @@ func (m *MockSettingsService) GetSettings(ctx context.Context) (*models.Settings
 // UpdateSettings mocks updating settings.
 func (m *MockSettingsService) UpdateSettings(ctx context.Context, params models.UpdateSettingsParams) error {
 	m.updateSettingsCallCount.Add(1)
+	select {
+	case m.updateSettingsCalled <- struct{}{}:
+	default:
+	}
 	args := m.Called(ctx, params)
 	return args.Error(0) //nolint:wrapcheck // mock returns test-provided errors
 }
@@ -176,6 +195,10 @@ func (m *MockSettingsService) SearchMedia(
 	params models.SearchParams,
 ) (*models.SearchResults, error) {
 	m.searchMediaCallCount.Add(1)
+	select {
+	case m.searchMediaCalled <- struct{}{}:
+	default:
+	}
 	args := m.Called(ctx, params)
 	if args.Get(0) == nil {
 		return nil, args.Error(1) //nolint:wrapcheck // mock returns test-provided errors

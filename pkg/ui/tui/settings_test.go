@@ -236,10 +236,9 @@ func TestBuildAudioSettingsMenu_Toggle_Integration(t *testing.T) {
 	runner.Screen().InjectEnter()
 	runner.Draw()
 
-	// Wait for UpdateSettings to be called
-	assert.True(t, runner.WaitForCondition(func() bool {
-		return mockSvc.UpdateSettingsCallCount() > 0
-	}, 100*time.Millisecond), "UpdateSettings should be called")
+	// Wait for UpdateSettings to be called using the mock's signal channel
+	called := mockSvc.UpdateSettingsCalled()
+	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond), "UpdateSettings should be called")
 }
 
 func TestBuildAudioSettingsMenu_Error_Integration(t *testing.T) {
@@ -392,10 +391,9 @@ func TestBuildAdvancedSettingsMenu_ToggleDebugLogging_Integration(t *testing.T) 
 	runner.Screen().InjectEnter()
 	runner.Draw()
 
-	// Wait for UpdateSettings to be called
-	assert.True(t, runner.WaitForCondition(func() bool {
-		return mockSvc.UpdateSettingsCallCount() > 0
-	}, 100*time.Millisecond), "UpdateSettings should be called")
+	// Wait for UpdateSettings to be called using the mock's signal channel
+	called := mockSvc.UpdateSettingsCalled()
+	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond), "UpdateSettings should be called")
 }
 
 func TestBuildAboutPage_Integration(t *testing.T) {
