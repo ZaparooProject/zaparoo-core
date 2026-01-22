@@ -22,7 +22,9 @@
 package windows
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -434,4 +436,46 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLaunchBoxScannerBufferHandlesLargeResponses(t *testing.T) {
+	t.Parallel()
+
+	// Generate a large JSON response simulating NES platform with 8888 games
+	const numGames = 8888
+	games := make([]LaunchBoxGameInfo, numGames)
+	for i := range games {
+		games[i] = LaunchBoxGameInfo{
+			ID:    fmt.Sprintf("game-%d-with-long-uuid-style-id-12345", i),
+			Title: fmt.Sprintf("Test Game %d with a reasonably long title for testing", i),
+		}
+	}
+
+	event := launchBoxGamesEvent{
+		Event:    "Games",
+		Platform: "Nintendo Entertainment System",
+		Games:    games,
+	}
+
+	jsonData, err := json.Marshal(event)
+	require.NoError(t, err)
+
+	// Verify the test data is large enough to trigger the original bug (>1MB)
+	require.Greater(t, len(jsonData), 1024*1024,
+		"test JSON should exceed 1MB to be a valid regression test")
+
+	// Create a scanner with the same buffer configuration as production
+	reader := strings.NewReader(string(jsonData) + "\n")
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 4096), launchBoxScannerMaxBuffer)
+
+	// The scanner should be able to read the entire response without error
+	require.True(t, scanner.Scan(), "scanner should read large JSON response")
+	require.NoError(t, scanner.Err(), "scanner should not return 'token too long' error")
+
+	// Verify we can parse the response
+	var parsed launchBoxGamesEvent
+	err = json.Unmarshal(scanner.Bytes(), &parsed)
+	require.NoError(t, err)
+	assert.Len(t, parsed.Games, numGames)
 }

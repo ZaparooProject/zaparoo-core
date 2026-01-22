@@ -7,9 +7,19 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <OutputPath>bin\$(Configuration)\</OutputPath>
+
+    <!-- Version info visible in Windows File Properties -->
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0</AssemblyVersion>
+    <FileVersion>1.0.0</FileVersion>
+
+    <!-- File properties metadata -->
+    <Product>Zaparoo LaunchBox Plugin</Product>
+    <Company>The Zaparoo Project</Company>
+    <Copyright>Copyright © 2025-2026 The Zaparoo Project Contributors</Copyright>
+    <Description>LaunchBox integration plugin for Zaparoo</Description>
   </PropertyGroup>
 
   <ItemGroup>

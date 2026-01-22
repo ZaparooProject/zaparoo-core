@@ -50,6 +50,11 @@ import (
 
 const (
 	launchBoxPipeName = `\\.\pipe\zaparoo-launchbox-ipc`
+
+	// launchBoxScannerMaxBuffer is the maximum buffer size for reading from the LaunchBox pipe.
+	// Must be large enough to handle JSON responses for platforms with thousands of games
+	// (e.g., NES with 8888 games can produce ~3MB responses).
+	launchBoxScannerMaxBuffer = 16 * 1024 * 1024 // 16MB
 )
 
 // Plugin message types (matches C# plugin JSON structure)
@@ -667,7 +672,7 @@ func (s *LaunchBoxPipeServer) handleConnection(conn net.Conn) {
 	go func() {
 		defer close(scanDone)
 		scanner := bufio.NewScanner(conn)
-		scanner.Buffer(make([]byte, 4096), 1024*1024) // 1MB buffer
+		scanner.Buffer(make([]byte, 4096), launchBoxScannerMaxBuffer)
 
 		for scanner.Scan() {
 			select {
