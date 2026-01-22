@@ -465,16 +465,16 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             }
 
             // Try to find as an additional application (merged games, secondary discs)
-            var additionalApp = PluginHelper.DataManager.GetAdditionalApplicationById(gameId);
-            if (additionalApp != null)
+            var (parentGame, additionalApp) = FindAdditionalApplicationById(gameId);
+            if (additionalApp != null && parentGame != null)
             {
                 if (_isBigBoxRunning)
                 {
-                    PluginHelper.BigBoxMainViewModel.PlayGame(additionalApp.Game, additionalApp, null, null);
+                    PluginHelper.BigBoxMainViewModel.PlayGame(parentGame, additionalApp, null, null);
                 }
                 else
                 {
-                    PluginHelper.LaunchBoxMainViewModel.PlayGame(additionalApp.Game, additionalApp, null, null);
+                    PluginHelper.LaunchBoxMainViewModel.PlayGame(parentGame, additionalApp, null, null);
                 }
                 return;
             }
@@ -485,6 +485,21 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
         {
             System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Failed to launch game {gameId}: {ex.Message}");
         }
+    }
+
+    private (IGame?, IAdditionalApplication?) FindAdditionalApplicationById(string id)
+    {
+        foreach (var game in PluginHelper.DataManager.GetAllGames())
+        {
+            foreach (var app in game.GetAllAdditionalApplications())
+            {
+                if (app.Id == id)
+                {
+                    return (game, app);
+                }
+            }
+        }
+        return (null, null);
     }
 
     private void SendPlatformsList()
