@@ -1132,6 +1132,114 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+// TestAnyScannerProgressUpdates tests that "any" scanners (launchers with no SystemID)
+// trigger progress updates when they find results. This tests lines 1212-1215 in mediascanner.go.
+//
+// "Any" scanners are launchers with SystemID="" that run against every system.
+// When they find results for a system, the code should:
+// - Dynamically expand status.Total
+// - Increment status.Step
+// - Set status.SystemID
+// - Call update(status)
+func TestAnyScannerProgressUpdates(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create test config
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	// Use real database
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	// Track scanner calls and verify it's called with expected systems
+	scannerCalls := make(map[string]int)
+
+	// Create an "any" launcher (SystemID="") with a scanner that returns results
+	// This should trigger the code path at lines 1212-1215
+	anyLauncher := platforms.Launcher{
+		ID:       "TestAnyScannerLauncher",
+		SystemID: "", // Empty = "any" scanner that runs against all systems
+		Scanner: func(_ context.Context, _ *config.Instance, systemID string,
+			_ []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			scannerCalls[systemID]++
+			// Return a result for this system
+			return []platforms.ScanResult{
+				{Name: "Test Item from any scanner", Path: "test://any/" + systemID + "/item"},
+			}, nil
+		},
+	}
+
+	// Create mock platform with our "any" launcher
+	// Important: Return empty root dirs so no systems are processed in the main loop
+	// This ensures systems reach the "any" scanner code path without being marked as completed
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{}) // No root dirs
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{anyLauncher})
+
+	// Initialize cache with our test launcher
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Track status updates to verify the progress update code path is hit
+	var statusUpdates []IndexStatus
+	updateFunc := func(status IndexStatus) {
+		// Copy the status to avoid mutation
+		statusUpdates = append(statusUpdates, IndexStatus{
+			SystemID: status.SystemID,
+			Total:    status.Total,
+			Step:     status.Step,
+			Files:    status.Files,
+		})
+	}
+
+	// Run the media indexer with a test system
+	// Since there are no root dirs, the system won't be processed in the main loop
+	// and will only be picked up by the "any" scanner
+	systems := []systemdefs.System{{ID: "test-system-for-any-scanner"}}
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, updateFunc)
+	require.NoError(t, err)
+
+	// Verify the "any" scanner was called for our system
+	assert.Equal(t, 1, scannerCalls["test-system-for-any-scanner"],
+		"'any' scanner should have been called once for the test system")
+
+	// Verify files were indexed
+	assert.Equal(t, 1, filesIndexed, "Should have indexed 1 file from the 'any' scanner")
+
+	// Verify that the status update function was called with the correct system ID
+	// The "any" scanner progress update code (lines 1212-1215) should have been triggered
+	foundSystemUpdate := false
+	for _, status := range statusUpdates {
+		if status.SystemID == "test-system-for-any-scanner" {
+			foundSystemUpdate = true
+			break
+		}
+	}
+	assert.True(t, foundSystemUpdate,
+		"Status update should have been called with the test system ID from 'any' scanner")
+
+	// Verify that status.Total was dynamically expanded (should be > initial value)
+	// Initial total is len(sysPathIDs) + 2, but since there are no paths, it starts at 2
+	// After "any" scanner finds results, Total should be incremented
+	if len(statusUpdates) > 0 {
+		lastStatus := statusUpdates[len(statusUpdates)-1]
+		assert.GreaterOrEqual(t, lastStatus.Total, 3,
+			"Total should be dynamically expanded when 'any' scanner finds results")
+	}
+}
+
 // TestZaparooignoreMarker tests that directories containing a .zaparooignore file
 // are skipped during media scanning along with all their subdirectories.
 func TestZaparooignoreMarker(t *testing.T) {
