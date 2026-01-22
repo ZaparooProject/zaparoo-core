@@ -285,10 +285,10 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		platforms                  []launchBoxPlatformInfo
-		name                       string
 		expectedCustomToSystem     map[string]string
 		expectedSystemToCustoms    map[string][]string
+		name                       string
+		platforms                  []launchBoxPlatformInfo
 		expectedCustomToSystemLen  int
 		expectedSystemToCustomsLen int
 	}{
