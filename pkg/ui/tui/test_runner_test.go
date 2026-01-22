@@ -139,7 +139,32 @@ func (*TestAppRunner) WaitForCondition(condition func() bool, timeout time.Durat
 // WaitForText waits for specific text to appear on screen.
 func (r *TestAppRunner) WaitForText(text string, timeout time.Duration) bool {
 	return r.WaitForCondition(func() bool {
-		r.Draw()
-		return r.screen.ContainsText(text)
+		return r.ContainsText(text)
 	}, timeout)
+}
+
+// ContainsText checks if the screen contains the specified text.
+// This method is synchronized with the app's draw cycle to avoid races.
+func (r *TestAppRunner) ContainsText(text string) bool {
+	var result bool
+	done := make(chan struct{})
+	r.app.QueueUpdate(func() {
+		result = r.screen.ContainsText(text)
+		close(done)
+	})
+	<-done
+	return result
+}
+
+// GetScreenText returns all screen content as a single string.
+// This method is synchronized with the app's draw cycle to avoid races.
+func (r *TestAppRunner) GetScreenText() string {
+	var result string
+	done := make(chan struct{})
+	r.app.QueueUpdate(func() {
+		result = r.screen.GetScreenText()
+		close(done)
+	})
+	<-done
+	return result
 }

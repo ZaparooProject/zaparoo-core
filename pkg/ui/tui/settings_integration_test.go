@@ -352,10 +352,10 @@ func TestScreenContainsText_Integration(t *testing.T) {
 	runner.Draw()
 
 	// Verify text is on screen
-	assert.True(t, runner.Screen().ContainsText("Hello"))
-	assert.True(t, runner.Screen().ContainsText("World"))
-	assert.True(t, runner.Screen().ContainsText("Hello World"))
-	assert.False(t, runner.Screen().ContainsText("Goodbye"))
+	assert.True(t, runner.ContainsText("Hello"))
+	assert.True(t, runner.ContainsText("World"))
+	assert.True(t, runner.ContainsText("Hello World"))
+	assert.False(t, runner.ContainsText("Goodbye"))
 }
 
 func TestMultiplePages_Navigation_Integration(t *testing.T) {

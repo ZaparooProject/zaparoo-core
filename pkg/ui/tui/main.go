@@ -58,11 +58,6 @@ const (
 	PageGenerateDB            = "generate_db"
 )
 
-// mainMenuFocus tracks the last focused button position on the main menu.
-var mainMenuFocus = struct {
-	row, col int
-}{0, 0}
-
 // ButtonGridItem represents a button in the grid with its help text.
 type ButtonGridItem struct {
 	Button   *tview.Button
@@ -493,7 +488,11 @@ func BuildMainPage(
 	isRunning func() bool,
 	logDestPath string,
 	logDestName string,
+	session *Session,
 ) tview.Primitive {
+	if session == nil {
+		session = defaultSession
+	}
 	mainPageNotifyState.Cancel()
 
 	notifyCtx, notifyCancel := context.WithCancel(context.Background())
@@ -672,22 +671,23 @@ func BuildMainPage(
 	helpText := tview.NewTextView().SetTextAlign(tview.AlignCenter)
 
 	rebuildMainPage := func() {
-		BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName)
+		BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName, session)
 	}
 
 	buttonGrid := NewButtonGrid(app, 3)
 
 	saveFocus := func() {
-		mainMenuFocus.row, mainMenuFocus.col = buttonGrid.GetFocus()
+		row, col := buttonGrid.GetFocus()
+		session.SetMainMenuFocus(row, col)
 	}
 
 	searchButton := tview.NewButton("Search media").SetSelectedFunc(func() {
 		saveFocus()
-		BuildSearchMedia(svc, pages, app)
+		BuildSearchMedia(svc, pages, app, session)
 	})
 	writeButton := tview.NewButton("Custom write").SetSelectedFunc(func() {
 		saveFocus()
-		BuildTagsWriteMenu(svc, pages, app)
+		BuildTagsWriteMenu(svc, pages, app, session)
 	})
 	updateDBButton := tview.NewButton("Update media").SetSelectedFunc(func() {
 		saveFocus()
@@ -732,7 +732,8 @@ func BuildMainPage(
 		notifyCancel()
 		app.Stop()
 	})
-	buttonGrid.SetFocus(mainMenuFocus.row, mainMenuFocus.col)
+	focusRow, focusCol := session.GetMainMenuFocus()
+	buttonGrid.SetFocus(focusRow, focusCol)
 
 	main.AddItem(contentFlex, 0, 1, false)
 	main.AddItem(helpText, 1, 0, false)
@@ -764,7 +765,7 @@ func BuildMain(
 	app.EnableMouse(tuiCfg.Mouse)
 
 	pages := tview.NewPages()
-	BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName)
+	BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName, nil)
 
 	var rootWidget tview.Primitive
 	if tuiCfg.CRTMode {

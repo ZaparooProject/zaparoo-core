@@ -104,23 +104,20 @@ func TestBuildSearchMedia_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
-	// Reset session state before test
-	searchMediaName = ""
-	searchMediaSystem = ""
-	searchMediaSystemName = "All"
+	session := NewSession()
 
 	runner.QueueUpdateDraw(func() {
-		BuildSearchMedia(mockSvc, pages, runner.App())
+		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
 	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond), "Search Media title should appear")
 
 	// Verify UI elements are visible
-	assert.True(t, runner.Screen().ContainsText("Name"), "Name label should be visible")
-	assert.True(t, runner.Screen().ContainsText("System"), "System label should be visible")
-	assert.True(t, runner.Screen().ContainsText("Search"), "Search button should be visible")
-	assert.True(t, runner.Screen().ContainsText("Clear"), "Clear button should be visible")
-	assert.True(t, runner.Screen().ContainsText("Back"), "Back button should be visible")
+	assert.True(t, runner.ContainsText("Name"), "Name label should be visible")
+	assert.True(t, runner.ContainsText("System"), "System label should be visible")
+	assert.True(t, runner.ContainsText("Search"), "Search button should be visible")
+	assert.True(t, runner.ContainsText("Clear"), "Clear button should be visible")
+	assert.True(t, runner.ContainsText("Back"), "Back button should be visible")
 }
 
 func TestBuildSearchMedia_SearchWithResults_Integration(t *testing.T) {
@@ -160,13 +157,10 @@ func TestBuildSearchMedia_SearchWithResults_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
-	// Reset session state
-	searchMediaName = ""
-	searchMediaSystem = ""
-	searchMediaSystemName = "All"
+	session := NewSession()
 
 	runner.QueueUpdateDraw(func() {
-		BuildSearchMedia(mockSvc, pages, runner.App())
+		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
 	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond))
@@ -203,13 +197,10 @@ func TestBuildSearchMedia_EscapeGoesBack_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
-	// Reset session state
-	searchMediaName = ""
-	searchMediaSystem = ""
-	searchMediaSystemName = "All"
+	session := NewSession()
 
 	runner.QueueUpdateDraw(func() {
-		BuildSearchMedia(mockSvc, pages, runner.App())
+		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
 	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond))
@@ -246,13 +237,13 @@ func TestBuildSearchMedia_ClearButton_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
-	// Set some session state
-	searchMediaName = "test query"
-	searchMediaSystem = "nes"
-	searchMediaSystemName = "NES"
+	session := NewSession()
+	session.SetSearchMediaName("test query")
+	session.SetSearchMediaSystem("nes")
+	session.SetSearchMediaSystemName("NES")
 
 	runner.QueueUpdateDraw(func() {
-		BuildSearchMedia(mockSvc, pages, runner.App())
+		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
 	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond))
@@ -269,9 +260,9 @@ func TestBuildSearchMedia_ClearButton_Integration(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 
 	// Verify session state was cleared
-	assert.Empty(t, searchMediaName, "Search name should be cleared")
-	assert.Empty(t, searchMediaSystem, "Search system should be cleared")
-	assert.Equal(t, "All", searchMediaSystemName, "Search system name should be reset to All")
+	assert.Empty(t, session.GetSearchMediaName(), "Search name should be cleared")
+	assert.Empty(t, session.GetSearchMediaSystem(), "Search system should be cleared")
+	assert.Equal(t, "All", session.GetSearchMediaSystemName(), "Search system name should be reset to All")
 }
 
 func TestBuildSearchMedia_SystemNavigation_Integration(t *testing.T) {
@@ -298,13 +289,10 @@ func TestBuildSearchMedia_SystemNavigation_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
-	// Reset session state
-	searchMediaName = ""
-	searchMediaSystem = ""
-	searchMediaSystemName = "All"
+	session := NewSession()
 
 	runner.QueueUpdateDraw(func() {
-		BuildSearchMedia(mockSvc, pages, runner.App())
+		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
 	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond))
@@ -316,23 +304,31 @@ func TestBuildSearchMedia_SystemNavigation_Integration(t *testing.T) {
 
 	// System button should show "All" initially - also check for "System" label
 	// which should be visible regardless
-	assert.True(t, runner.Screen().ContainsText("System"), "System label should be visible")
+	assert.True(t, runner.ContainsText("System"), "System label should be visible")
 }
 
-func TestSearchMediaSessionState(t *testing.T) {
+func TestSession_SearchMedia(t *testing.T) {
 	t.Parallel()
 
-	// Test that session state variables exist and can be set
-	searchMediaName = "test"
-	searchMediaSystem = "nes"
-	searchMediaSystemName = "NES"
+	session := NewSession()
 
-	assert.Equal(t, "test", searchMediaName)
-	assert.Equal(t, "nes", searchMediaSystem)
-	assert.Equal(t, "NES", searchMediaSystemName)
+	// Test default values
+	assert.Empty(t, session.GetSearchMediaName())
+	assert.Empty(t, session.GetSearchMediaSystem())
+	assert.Equal(t, "All", session.GetSearchMediaSystemName())
 
-	// Clean up
-	searchMediaName = ""
-	searchMediaSystem = ""
-	searchMediaSystemName = "All"
+	// Test setters and getters
+	session.SetSearchMediaName("test")
+	session.SetSearchMediaSystem("nes")
+	session.SetSearchMediaSystemName("NES")
+
+	assert.Equal(t, "test", session.GetSearchMediaName())
+	assert.Equal(t, "nes", session.GetSearchMediaSystem())
+	assert.Equal(t, "NES", session.GetSearchMediaSystemName())
+
+	// Test ClearSearchMedia
+	session.ClearSearchMedia()
+	assert.Empty(t, session.GetSearchMediaName())
+	assert.Empty(t, session.GetSearchMediaSystem())
+	assert.Equal(t, "All", session.GetSearchMediaSystemName())
 }

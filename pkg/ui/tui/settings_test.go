@@ -87,12 +87,12 @@ func TestBuildSettingsMainMenu_Integration(t *testing.T) {
 	require.True(t, runner.WaitForText("Settings", 500*time.Millisecond), "Settings title should appear")
 
 	// Verify menu items are visible
-	assert.True(t, runner.Screen().ContainsText("Readers"), "Readers menu item should be visible")
-	assert.True(t, runner.Screen().ContainsText("Audio"), "Audio menu item should be visible")
-	assert.True(t, runner.Screen().ContainsText("TUI"), "TUI menu item should be visible")
-	assert.True(t, runner.Screen().ContainsText("Advanced"), "Advanced menu item should be visible")
-	assert.True(t, runner.Screen().ContainsText("Logs"), "Logs menu item should be visible")
-	assert.True(t, runner.Screen().ContainsText("About"), "About menu item should be visible")
+	assert.True(t, runner.ContainsText("Readers"), "Readers menu item should be visible")
+	assert.True(t, runner.ContainsText("Audio"), "Audio menu item should be visible")
+	assert.True(t, runner.ContainsText("TUI"), "TUI menu item should be visible")
+	assert.True(t, runner.ContainsText("Advanced"), "Advanced menu item should be visible")
+	assert.True(t, runner.ContainsText("Logs"), "Logs menu item should be visible")
+	assert.True(t, runner.ContainsText("About"), "About menu item should be visible")
 }
 
 func TestBuildSettingsMainMenu_Navigation_Integration(t *testing.T) {
@@ -127,7 +127,7 @@ func TestBuildSettingsMainMenu_Navigation_Integration(t *testing.T) {
 	runner.Draw()
 
 	// Should still be on the settings page
-	assert.True(t, runner.Screen().ContainsText("Settings"), "Should still be on settings page")
+	assert.True(t, runner.ContainsText("Settings"), "Should still be on settings page")
 }
 
 func TestBuildSettingsMainMenu_EscapeGoesBack_Integration(t *testing.T) {
@@ -199,7 +199,7 @@ func TestBuildAudioSettingsMenu_Integration(t *testing.T) {
 	require.True(t, runner.WaitForText("Audio", 500*time.Millisecond), "Audio title should appear")
 
 	// Verify toggle is visible
-	assert.True(t, runner.Screen().ContainsText("Audio feedback"), "Audio feedback toggle should be visible")
+	assert.True(t, runner.ContainsText("Audio feedback"), "Audio feedback toggle should be visible")
 }
 
 func TestBuildAudioSettingsMenu_Toggle_Integration(t *testing.T) {
@@ -286,9 +286,9 @@ func TestBuildReadersSettingsMenu_Integration(t *testing.T) {
 	require.True(t, runner.WaitForText("Readers", 500*time.Millisecond), "Readers title should appear")
 
 	// Verify menu items
-	assert.True(t, runner.Screen().ContainsText("Auto-detect"), "Auto-detect toggle should be visible")
-	assert.True(t, runner.Screen().ContainsText("Scan mode"), "Scan mode should be visible")
-	assert.True(t, runner.Screen().ContainsText("Exit delay"), "Exit delay should be visible")
+	assert.True(t, runner.ContainsText("Auto-detect"), "Auto-detect toggle should be visible")
+	assert.True(t, runner.ContainsText("Scan mode"), "Scan mode should be visible")
+	assert.True(t, runner.ContainsText("Exit delay"), "Exit delay should be visible")
 }
 
 func TestBuildReadersSettingsMenu_ScanModeOptions(t *testing.T) {
@@ -317,7 +317,7 @@ func TestBuildReadersSettingsMenu_ScanModeOptions(t *testing.T) {
 	require.True(t, runner.WaitForText("Readers", 500*time.Millisecond))
 
 	// Verify scan mode displays Tap
-	assert.True(t, runner.Screen().ContainsText("Tap"), "Tap mode should be visible")
+	assert.True(t, runner.ContainsText("Tap"), "Tap mode should be visible")
 }
 
 func TestBuildAdvancedSettingsMenu_Integration(t *testing.T) {
@@ -346,11 +346,11 @@ func TestBuildAdvancedSettingsMenu_Integration(t *testing.T) {
 	require.True(t, runner.WaitForText("Advanced", 500*time.Millisecond), "Advanced title should appear")
 
 	// Verify menu items
-	assert.True(t, runner.Screen().ContainsText("Ignore systems"), "Ignore systems should be visible")
-	assert.True(t, runner.Screen().ContainsText("Debug logging"), "Debug logging should be visible")
+	assert.True(t, runner.ContainsText("Ignore systems"), "Ignore systems should be visible")
+	assert.True(t, runner.ContainsText("Debug logging"), "Debug logging should be visible")
 
 	// Verify count indicator (2 systems selected)
-	assert.True(t, runner.Screen().ContainsText("2 selected"), "Should show 2 systems selected")
+	assert.True(t, runner.ContainsText("2 selected"), "Should show 2 systems selected")
 }
 
 func TestBuildAdvancedSettingsMenu_ToggleDebugLogging_Integration(t *testing.T) {
@@ -410,9 +410,9 @@ func TestBuildAboutPage_Integration(t *testing.T) {
 	require.True(t, runner.WaitForText("About", 500*time.Millisecond), "About title should appear")
 
 	// Verify content
-	assert.True(t, runner.Screen().ContainsText("Zaparoo Core"), "Should show Zaparoo Core")
-	assert.True(t, runner.Screen().ContainsText("Version"), "Should show Version")
-	assert.True(t, runner.Screen().ContainsText("GPL"), "Should show GPL license")
+	assert.True(t, runner.ContainsText("Zaparoo Core"), "Should show Zaparoo Core")
+	assert.True(t, runner.ContainsText("Version"), "Should show Version")
+	assert.True(t, runner.ContainsText("GPL"), "Should show GPL license")
 }
 
 func TestBuildAboutPage_BackNavigation_Integration(t *testing.T) {

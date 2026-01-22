@@ -61,11 +61,12 @@ func validateZapScript(text string) (valid bool, message string) {
 	return true, fmt.Sprintf("[%s]Valid: %d commands[-]", t.SuccessColorName, len(script.Cmds))
 }
 
-// Session state for custom write - persists across page navigation.
-var writeTagZapScript string
-
 // BuildTagsWriteMenu creates the tag write menu.
-func BuildTagsWriteMenu(svc SettingsService, pages *tview.Pages, app *tview.Application) {
+// If session is nil, the default session is used.
+func BuildTagsWriteMenu(svc SettingsService, pages *tview.Pages, app *tview.Application, session *Session) {
+	if session == nil {
+		session = defaultSession
+	}
 	frame := NewPageFrame(app).
 		SetTitle("Write Token").
 		SetHelpText("Enter ZapScript and press Write button")
@@ -79,21 +80,21 @@ func BuildTagsWriteMenu(svc SettingsService, pages *tview.Pages, app *tview.Appl
 	zapScriptInput := tview.NewTextArea()
 	zapScriptInput.SetBorder(true)
 	zapScriptInput.SetBorderPadding(0, 0, 1, 1)
-	zapScriptInput.SetText(writeTagZapScript, true)
+	zapScriptInput.SetText(session.GetWriteTagZapScript(), true)
 
 	validationStatus := tview.NewTextView().
 		SetDynamicColors(true).
 		SetText("")
 
 	// Initialize validation status if there's persisted text
-	if writeTagZapScript != "" {
-		_, message := validateZapScript(writeTagZapScript)
+	if session.GetWriteTagZapScript() != "" {
+		_, message := validateZapScript(session.GetWriteTagZapScript())
 		validationStatus.SetText(message)
 	}
 
 	zapScriptInput.SetChangedFunc(func() {
 		text := zapScriptInput.GetText()
-		writeTagZapScript = text
+		session.SetWriteTagZapScript(text)
 		_, message := validateZapScript(text)
 		validationStatus.SetText(message)
 	})
@@ -119,7 +120,7 @@ func BuildTagsWriteMenu(svc SettingsService, pages *tview.Pages, app *tview.Appl
 	}
 
 	doClear := func() {
-		writeTagZapScript = ""
+		session.SetWriteTagZapScript("")
 		zapScriptInput.SetText("", true)
 		validationStatus.SetText("")
 		app.SetFocus(zapScriptInput)
