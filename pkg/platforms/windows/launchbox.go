@@ -36,8 +36,6 @@ import (
 	"time"
 
 	"github.com/Microsoft/go-winio"
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
@@ -47,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -357,18 +356,18 @@ type pendingGamesRequest struct {
 // LaunchBoxPipeServer manages named pipe communication with the LaunchBox plugin
 type LaunchBoxPipeServer struct {
 	ctx                 context.Context
-	cancel              context.CancelFunc
 	listener            net.Listener
 	conn                net.Conn
-	writer              *bufio.Writer
 	onGameStarted       func(id, title, platform, path string)
 	onGameExited        func(id, title string)
 	onWriteRequest      func(id, title, platform string)
 	onPlatformsReceived func(platforms []launchBoxPlatformInfo)
-	connMu              syncutil.Mutex
-	pendingGamesReqMu   syncutil.Mutex
+	cancel              context.CancelFunc
+	writer              *bufio.Writer
 	// For synchronous game requests during scanning
-	pendingGamesReq pendingGamesRequest
+	pendingGamesReq   pendingGamesRequest
+	connMu            syncutil.Mutex
+	pendingGamesReqMu syncutil.Mutex
 }
 
 // NewLaunchBoxPipeServer creates a new named pipe server

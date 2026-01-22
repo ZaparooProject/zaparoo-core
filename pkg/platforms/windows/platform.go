@@ -32,9 +32,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/adrg/xdg"
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -61,6 +58,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	"github.com/adrg/xdg"
+	"github.com/rs/zerolog/log"
 )
 
 type Platform struct {

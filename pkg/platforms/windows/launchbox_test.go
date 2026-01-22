@@ -26,10 +26,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
 func TestPluginEventJSONSerialization(t *testing.T) {
@@ -286,8 +285,8 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name                       string
 		platforms                  []launchBoxPlatformInfo
+		name                       string
 		expectedCustomToSystem     map[string]string
 		expectedSystemToCustoms    map[string][]string
 		expectedCustomToSystemLen  int
