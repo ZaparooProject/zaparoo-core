@@ -152,6 +152,12 @@ func IsMediaLaunchingCommand(cmdName string) bool {
 	}
 }
 
+// IsValidCommand returns true if the command name is a valid ZapScript command.
+func IsValidCommand(cmdName string) bool {
+	_, ok := cmdMap[cmdName]
+	return ok
+}
+
 //nolint:gocritic // single-use parameter in command handler
 func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	result, err := pl.ForwardCmd(&env)

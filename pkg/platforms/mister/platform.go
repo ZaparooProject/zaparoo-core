@@ -21,6 +21,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/arcadedb"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
@@ -111,7 +112,7 @@ func (p *Platform) SetDB(uidMap, textMap map[string]string) {
 }
 
 func (*Platform) ID() string {
-	return platforms.PlatformIDMister
+	return platformids.Mister
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {

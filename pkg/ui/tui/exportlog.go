@@ -20,12 +20,12 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"os"
-	"os/exec"
 	"path"
 	"strings"
 	"time"
@@ -33,28 +33,35 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )
 
+// BuildExportLogModal creates the log export page with PageFrame.
 func BuildExportLogModal(
-	pl platforms.Platform,
-	app *tview.Application,
 	pages *tview.Pages,
+	app *tview.Application,
+	pl platforms.Platform,
 	logDestPath string,
 	logDestName string,
-) tview.Primitive {
+) {
+	frame := NewPageFrame(app).
+		SetTitle("Export Logs").
+		SetHelpText("View, upload, or copy log files")
+
+	goBack := func() {
+		pages.SwitchToPage(PageSettingsMain)
+	}
+	frame.SetOnEscape(goBack)
+
 	exportPages := tview.NewPages()
 
-	// Create log viewer (top section)
 	logViewer := tview.NewTextView().
 		SetDynamicColors(true).
 		SetScrollable(true).
 		SetWrap(true).
 		SetWordWrap(true)
 
-	// Load log content
 	loadLogContent := func() {
 		logPath := path.Join(pl.Settings().LogDir, config.LogFile)
 		content, err := readLastLines(logPath, 50)
@@ -68,108 +75,56 @@ func BuildExportLogModal(
 	}
 	loadLogContent()
 
-	// Create horizontal button bar (bottom section)
-	refreshBtn := tview.NewButton("Refresh").SetSelectedFunc(func() {
-		loadLogContent()
-	})
-	uploadBtn := tview.NewButton("Upload").SetSelectedFunc(func() {
-		outcome := uploadLog(pl, exportPages, app)
-		resultModal := genericModal(outcome, "Upload Log File",
-			func(_ int, _ string) {
-				exportPages.RemovePage("upload")
-			}, true)
-		exportPages.AddPage("upload", resultModal, true, true)
-		app.SetFocus(resultModal)
-	})
-	copyBtn := tview.NewButton("Copy").SetSelectedFunc(func() {
-		outcome := copyLogToSd(pl, logDestPath, logDestName)
-		resultModal := genericModal(outcome, "Copy Log File",
-			func(_ int, _ string) {
-				exportPages.RemovePage("copy")
-			}, true)
-		exportPages.AddPage("copy", resultModal, true, true)
-		app.SetFocus(resultModal)
-	})
-	backBtn := tview.NewButton("Go back").SetSelectedFunc(func() {
-		pages.SwitchToPage(PageMain)
-	})
-
-	// Create help text view
-	helpText := tview.NewTextView().
-		SetTextAlign(tview.AlignCenter)
-
-	// Set up help text updates when buttons receive focus
-	refreshBtn.SetFocusFunc(func() {
-		helpText.SetText("Reload log contents from disk.")
-	})
-	uploadBtn.SetFocusFunc(func() {
-		helpText.SetText("Upload log file to termbin.com and display URL.")
-	})
-	copyBtn.SetFocusFunc(func() {
-		helpText.SetText("Copy log file to " + logDestName + ".")
-	})
-	backBtn.SetFocusFunc(func() {
-		helpText.SetText("Return to main screen.")
-	})
-
-	// Build button list based on whether copy destination exists
-	buttons := []*tview.Button{refreshBtn, uploadBtn}
+	helpTexts := []string{
+		"Reload log contents from disk",
+		"Upload log file to termbin.com and display URL",
+	}
 	if logDestPath != "" {
-		buttons = append(buttons, copyBtn)
+		helpTexts = append(helpTexts, "Copy log file to "+logDestName)
 	}
-	buttons = append(buttons, backBtn)
+	helpTexts = append(helpTexts, "Return to main screen")
 
-	// Create horizontal button bar with spacers
-	buttonBar := tview.NewFlex().
-		AddItem(tview.NewTextView(), 0, 1, false) // Left spacer
-	for i, btn := range buttons {
-		buttonBar.AddItem(btn, 15, 1, i == len(buttons)-1) // Last button (Back) gets focus
-		if i < len(buttons)-1 {
-			buttonBar.AddItem(tview.NewTextView(), 1, 0, false) // Small gap between buttons
-		}
-	}
-	buttonBar.AddItem(tview.NewTextView(), 0, 1, false) // Right spacer
+	buttonBar := NewButtonBar(app)
 
-	// Set up left/right navigation between buttons with wrap-around
-	for i, btn := range buttons {
-		idx := i // Capture for closure
-		btn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			switch event.Key() {
-			case tcell.KeyLeft:
-				prevIdx := (idx - 1 + len(buttons)) % len(buttons)
-				app.SetFocus(buttons[prevIdx])
-				return nil
-			case tcell.KeyRight:
-				nextIdx := (idx + 1) % len(buttons)
-				app.SetFocus(buttons[nextIdx])
-				return nil
-			case tcell.KeyEscape:
-				pages.SwitchToPage(PageMain)
-				return nil
-			default:
-				return event
-			}
-		})
-	}
-
-	// Create layout with log viewer on top, buttons, then help text on bottom
-	layout := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(logViewer, 0, 1, false).
-		AddItem(buttonBar, 1, 1, true).
-		AddItem(helpText, 1, 1, false)
-
-	exportPages.AddAndSwitchToPage("export", layout, true)
-
-	exportPages.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			pages.SwitchToPage(PageMain)
-			return nil
-		}
-		return event
+	buttonBar.AddButtonWithHelp("Refresh", helpTexts[0], func() {
+		loadLogContent()
+		frame.SetHelpText("Log refreshed")
 	})
 
-	pageDefaults(PageExportLog, pages, exportPages)
-	return exportPages
+	buttonBar.AddButtonWithHelp("Upload", helpTexts[1], func() {
+		outcome := uploadLog(pl, exportPages, app)
+		ShowInfoModal(exportPages, app, "Upload Log File", outcome)
+	})
+
+	helpIdx := 2
+	if logDestPath != "" {
+		buttonBar.AddButtonWithHelp("Copy", helpTexts[helpIdx], func() {
+			outcome := copyLogToSd(pl, logDestPath, logDestName)
+			ShowInfoModal(exportPages, app, "Copy Log File", outcome)
+		})
+		helpIdx++
+	}
+
+	buttonBar.AddButtonWithHelp("Back", helpTexts[helpIdx], goBack)
+	buttonBar.SetupNavigation(goBack)
+	buttonBar.SetHelpCallback(func(help string) {
+		frame.SetHelpText(help)
+	})
+
+	frame.SetButtonBar(buttonBar)
+
+	// Log viewer is scroll-only, not focusable
+	buttonBar.SetOnUp(nil)
+	buttonBar.SetOnDown(nil)
+
+	contentFlex := tview.NewFlex().SetDirection(tview.FlexRow)
+	contentFlex.AddItem(logViewer, 0, 1, false)
+
+	exportPages.AddPage("main", contentFlex, true, true)
+	frame.SetContent(exportPages)
+
+	pages.AddAndSwitchToPage(PageExportLog, frame, true)
+	frame.FocusButtonBar()
 }
 
 func copyLogToSd(pl platforms.Platform, logDestPath, logDestName string) string {
@@ -188,33 +143,60 @@ func copyLogToSd(pl platforms.Platform, logDestPath, logDestName string) string 
 
 func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
 	logPath := path.Join(pl.Settings().LogDir, config.LogFile)
-	modal := genericModal("Uploading log file...", "Log upload", func(_ int, _ string) {}, false)
-	pages.AddPage("temp_upload", modal, true, true)
-	app.SetFocus(modal)
+
+	loadingModal := tview.NewModal().SetText("Uploading log file...")
+	SetBoxTitle(loadingModal, "Log upload")
+	loadingModal.SetBorder(true)
+	pages.AddPage("temp_upload", loadingModal, true, true)
+	app.SetFocus(loadingModal)
 	app.ForceDraw()
 
-	// Create a pipe to safely pass file content to nc without shell injection
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Read the log file
-	//nolint:gosec // Safe: logPath is from internal platform settings, not user input
+	//nolint:gosec // logPath is from internal platform settings, not user input
 	logContent, err := os.ReadFile(logPath)
 	if err != nil {
+		pages.RemovePage("temp_upload")
 		log.Error().Err(err).Msg("failed to read log file")
 		return "Error reading log file."
 	}
 
-	// Execute nc command with stdin pipe
-	cmd := exec.CommandContext(ctx, "nc", "termbin.com", "9999")
-	cmd.Stdin = bytes.NewReader(logContent)
-	out, err := cmd.Output()
-	pages.RemovePage("temp_upload")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", "termbin.com:9999")
 	if err != nil {
-		log.Error().Err(err).Msgf("error uploading log file to termbin")
+		pages.RemovePage("temp_upload")
+		log.Error().Err(err).Msg("failed to connect to termbin.com")
+		return "Error connecting to upload service."
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Debug().Err(closeErr).Msg("failed to close connection")
+		}
+	}()
+
+	deadlineErr := conn.SetDeadline(time.Now().Add(30 * time.Second))
+	if deadlineErr != nil {
+		pages.RemovePage("temp_upload")
+		log.Error().Err(deadlineErr).Msg("failed to set connection deadline")
 		return "Error uploading log file."
 	}
-	return "Log file URL:\n\n" + strings.TrimSpace(string(out))
+
+	_, err = conn.Write(logContent)
+	if err != nil {
+		pages.RemovePage("temp_upload")
+		log.Error().Err(err).Msg("failed to send log content")
+		return "Error uploading log file."
+	}
+
+	response, err := io.ReadAll(conn)
+	pages.RemovePage("temp_upload")
+	if err != nil {
+		log.Error().Err(err).Msg("failed to read upload response")
+		return "Error reading upload response."
+	}
+
+	return "Log file URL:\n\n" + strings.TrimSpace(string(response))
 }
 
 // readLastLines reads the last n lines from a file
@@ -227,12 +209,10 @@ func readLastLines(filePath string, n int) (string, error) {
 
 	lines := strings.Split(string(content), "\n")
 
-	// Remove empty last line if present
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 
-	// Get last n lines
 	start := 0
 	if len(lines) > n {
 		start = len(lines) - n
@@ -256,26 +236,24 @@ func formatLogEntry(line string) string {
 		return line
 	}
 
-	// Map log levels to colors
+	t := CurrentTheme()
 	levelColors := map[string]string{
-		"error": "red",
-		"warn":  "yellow",
-		"info":  "green",
-		"debug": "gray",
+		"error": t.ErrorColorName,
+		"warn":  t.WarningColorName,
+		"info":  t.SuccessColorName,
+		"debug": t.SecondaryColor,
 	}
 
 	color, exists := levelColors[entry.Level]
 	if !exists {
-		color = "white"
+		color = t.TextColorName
 	}
 
-	// Shorten timestamp (from "2025-11-20T13:04:23Z" to "13:04:23")
 	timestamp := entry.Time
 	if t, err := time.Parse(time.RFC3339, entry.Time); err == nil {
 		timestamp = t.Format("15:04:05")
 	}
 
-	// Format: [color]LEVEL[-] timestamp message
 	levelUpper := strings.ToUpper(entry.Level)
 	return fmt.Sprintf("[%s::b]%5s[-:-:-] %s %s",
 		color, levelUpper, timestamp, entry.Message)
@@ -285,7 +263,6 @@ func formatLogEntry(line string) string {
 func formatLogContent(content string) string {
 	lines := strings.Split(content, "\n")
 
-	// Remove empty lines
 	var nonEmpty []string
 	for _, line := range lines {
 		if strings.TrimSpace(line) != "" {
@@ -293,12 +270,10 @@ func formatLogContent(content string) string {
 		}
 	}
 
-	// Reverse to show newest first
 	for i, j := 0, len(nonEmpty)-1; i < j; i, j = i+1, j-1 {
 		nonEmpty[i], nonEmpty[j] = nonEmpty[j], nonEmpty[i]
 	}
 
-	// Format each line
 	formatted := make([]string, 0, len(nonEmpty))
 	for _, line := range nonEmpty {
 		formatted = append(formatted, formatLogEntry(line))

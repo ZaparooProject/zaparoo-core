@@ -114,6 +114,7 @@ func LocalClient(
 			return d.DialContext(dialCtx, network, addr)
 		},
 	}
+	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
 	c, _, err := dialer.DialContext(ctx, localWebsocketURL.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to dial websocket: %w", err)
@@ -178,16 +179,8 @@ func LocalClient(
 	case <-done:
 
 	case <-timer.C:
-		closeErr := c.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing websocket")
-		}
 		return "", ErrRequestTimeout
 	case <-ctx.Done():
-		closeErr := c.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing websocket")
-		}
 		return "", ErrRequestCancelled
 	}
 
@@ -235,6 +228,7 @@ func WaitNotification(
 			return d.DialContext(dialCtx, network, addr)
 		},
 	}
+	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
 	c, _, err := dialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to dial websocket: %w", err)
@@ -308,16 +302,8 @@ func WaitNotification(
 	case <-done:
 
 	case <-timerChan:
-		closeErr := c.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing websocket")
-		}
 		return "", ErrRequestTimeout
 	case <-ctx.Done():
-		closeErr := c.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing websocket")
-		}
 		return "", ErrRequestCancelled
 	}
 
@@ -332,4 +318,155 @@ func WaitNotification(
 	}
 
 	return string(b), nil
+}
+
+// IsServiceRunning checks if a Zaparoo service is running on the configured port.
+func IsServiceRunning(cfg *config.Instance) bool {
+	_, err := LocalClient(context.Background(), cfg, models.MethodVersion, "")
+	if err != nil {
+		log.Debug().
+			Err(err).
+			Int("port", cfg.APIPort()).
+			Msg("service not detected on API port")
+		return false
+	}
+	log.Debug().
+		Int("port", cfg.APIPort()).
+		Msg("detected running service instance")
+	return true
+}
+
+// WaitForAPI waits for the service API to become available.
+// Returns true if API became available, false if timeout reached.
+func WaitForAPI(cfg *config.Instance, maxWaitTime, checkInterval time.Duration) bool {
+	deadline := time.Now().Add(maxWaitTime)
+
+	for time.Now().Before(deadline) {
+		if IsServiceRunning(cfg) {
+			return true
+		}
+		time.Sleep(checkInterval)
+	}
+
+	return false
+}
+
+// WaitNotifications waits for any of the specified notification types on a single
+// WebSocket connection. Returns the notification method that matched and its params.
+func WaitNotifications(
+	ctx context.Context,
+	timeout time.Duration,
+	cfg *config.Instance,
+	ids ...string,
+) (method, params string, err error) {
+	u := url.URL{
+		Scheme: "ws",
+		Host:   "localhost:" + strconv.Itoa(cfg.APIPort()),
+		Path:   APIPath,
+	}
+
+	dialTimeout := timeout
+	if dialTimeout <= 0 {
+		dialTimeout = config.APIRequestTimeout
+	}
+
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: dialTimeout,
+		NetDialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+			d := &net.Dialer{
+				Timeout:   dialTimeout,
+				KeepAlive: 30 * time.Second,
+			}
+			return d.DialContext(dialCtx, network, addr)
+		},
+	}
+	//nolint:bodyclose // gorilla/websocket replaces resp.Body with NopCloser before returning
+	c, _, err := dialer.DialContext(ctx, u.String(), nil)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to dial websocket: %w", err)
+	}
+	defer func(c *websocket.Conn) {
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
+		}
+	}(c)
+
+	idSet := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		idSet[id] = struct{}{}
+	}
+
+	done := make(chan struct{})
+	var resp *models.RequestObject
+
+	go func() {
+		defer close(done)
+		for {
+			_, message, readErr := c.ReadMessage()
+			if readErr != nil {
+				log.Error().Err(readErr).Msg("error reading message")
+				return
+			}
+
+			var m models.RequestObject
+			unmarshalErr := json.Unmarshal(message, &m)
+			if unmarshalErr != nil {
+				continue
+			}
+
+			if m.JSONRPC != "2.0" {
+				log.Error().Msg("invalid jsonrpc version")
+				continue
+			}
+
+			if !m.ID.IsAbsent() {
+				continue
+			}
+
+			if _, ok := idSet[m.Method]; !ok {
+				continue
+			}
+
+			resp = &m
+			return
+		}
+	}()
+
+	var timerChan <-chan time.Time
+	if timeout == 0 {
+		effectiveTimeout := config.APIRequestTimeout
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining < effectiveTimeout {
+				effectiveTimeout = remaining
+			}
+		}
+		timer := time.NewTimer(effectiveTimeout)
+		timerChan = timer.C
+	} else if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		timerChan = timer.C
+	}
+
+	select {
+	case <-done:
+
+	case <-timerChan:
+		return "", "", ErrRequestTimeout
+	case <-ctx.Done():
+		return "", "", ErrRequestCancelled
+	}
+
+	if resp == nil {
+		return "", "", ErrRequestTimeout
+	}
+
+	var b []byte
+	b, err = json.Marshal(resp.Params)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to marshal response params: %w", err)
+	}
+
+	return resp.Method, string(b), nil
 }

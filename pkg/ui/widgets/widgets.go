@@ -97,8 +97,6 @@ func removePIDFile(pl platforms.Platform) error {
 	return fmt.Errorf("failed to stat PID file: %w", err)
 }
 
-// killWidgetIfRunning checks if a widget is running via the PID file and
-// tries to kill it with an interrupt. Returns true if it was killed.
 func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 	path := pidPath(pl)
 	if _, err := os.Stat(path); err != nil {
@@ -108,19 +106,17 @@ func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 		return false, fmt.Errorf("failed to stat PID file: %w", err)
 	}
 
-	pid := 0
 	//nolint:gosec // Safe: reads PID files for process management
 	pidBytes, err := os.ReadFile(path)
 	if err != nil {
 		return false, fmt.Errorf("failed to read PID file: %w", err)
 	}
-	pid, err = strconv.Atoi(string(pidBytes))
+	pid, err := strconv.Atoi(string(pidBytes))
 	if err != nil {
 		return false, fmt.Errorf("failed to parse PID: %w", err)
 	}
 
 	if !isProcessRunning(pid) {
-		// clean up stale file
 		if removeErr := os.Remove(path); removeErr != nil {
 			return false, fmt.Errorf("failed to remove stale PID file: %w", removeErr)
 		}
@@ -148,15 +144,13 @@ func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 	return true, nil
 }
 
-// handleTimeout adds a background timer which quits the app once ended. It's
-// used to make sure there aren't hanging processes running in the background
-// if a core gets loaded while it's open.
+// handleTimeout creates a timer that exits the app after the specified timeout.
+// Prevents hanging widget processes if the parent application closes unexpectedly.
 func handleTimeout(_ *tview.Application, timeout int) (timer *time.Timer, actualTimeout int) {
 	switch {
 	case timeout == 0:
 		actualTimeout = DefaultTimeout
 	case timeout < 0:
-		// no timeout
 		return nil, -1
 	default:
 		actualTimeout = timeout
@@ -188,7 +182,7 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 	}
 
 	app := tview.NewApplication()
-	tui.SetTheme(&tview.Styles)
+	tui.ApplyTheme(tui.CurrentTheme())
 
 	view := tview.NewTextView().
 		SetText(noticeArgs.Text).
@@ -251,8 +245,7 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 	return app.SetRoot(centeredPages, true), nil
 }
 
-// NoticeUI is a simple TUI screen that displays a message on screen. It can
-// also optionally include a loading indicator spinner next to the message.
+// NoticeUI displays a message with an optional loading spinner.
 func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
 	log.Info().Str("args", argsPath).Msg("showing notice")
 
@@ -294,7 +287,7 @@ func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
 		}()
 	}
 
-	err := tui.BuildAndRetry(func() (*tview.Application, error) {
+	err := tui.BuildAndRetry(nil, func() (*tview.Application, error) {
 		return NoticeUIBuilder(pl, argsPath, loader)
 	})
 	log.Debug().Msg("exiting notice widget")
@@ -322,7 +315,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	}
 
 	app := tview.NewApplication()
-	tui.SetTheme(&tview.Styles)
+	tui.ApplyTheme(tui.CurrentTheme())
 
 	run := func(item widgetmodels.PickerItem) {
 		log.Info().Msgf("running picker selection: %v", item)
@@ -395,7 +388,6 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	})
 
 	for i, item := range pickerArgs.Items {
-		// Create local copy to avoid closure bug
 		currentItem := pickerArgs.Items[i]
 		list.AddItem(item.Name, "", 0, func() {
 			run(currentItem)
@@ -418,7 +410,6 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		if event.Key() == tcell.KeyEsc || event.Rune() == 'q' {
 			app.Stop()
 		}
-		// reset the timeout timer if a key was pressed
 		if timer != nil {
 			timer.Stop()
 		}
@@ -430,7 +421,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	return app.SetRoot(centeredPages, true), nil
 }
 
-// PickerUI displays a list picker of Zap Link Cmds to run via the API.
+// PickerUI displays a list picker of ZapScript commands to run.
 func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) error {
 	log.Info().Str("args", argsPath).Msg("showing picker")
 
@@ -472,7 +463,7 @@ func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) erro
 		}()
 	}
 
-	err := tui.BuildAndRetry(func() (*tview.Application, error) {
+	err := tui.BuildAndRetry(nil, func() (*tview.Application, error) {
 		return PickerUIBuilder(cfg, pl, argsPath)
 	})
 	log.Debug().Msg("exiting picker widget")

@@ -632,7 +632,7 @@ func broadcastNotifications(
 			log.Debug().Msg("closing HTTP server via context cancellation")
 			return
 		case notif := <-notifications:
-			req := models.RequestObject{
+			req := models.NotificationObject{
 				JSONRPC: "2.0",
 				Method:  notif.Method,
 				Params:  notif.Params,
