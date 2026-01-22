@@ -84,7 +84,7 @@ func TestBuildSettingsMainMenu_Integration(t *testing.T) {
 	})
 
 	// Verify settings page is shown
-	require.True(t, runner.WaitForText("Settings", 500*time.Millisecond), "Settings title should appear")
+	require.True(t, runner.WaitForText("Settings", 100*time.Millisecond), "Settings title should appear")
 
 	// Verify menu items are visible
 	assert.True(t, runner.ContainsText("Readers"), "Readers menu item should be visible")
@@ -117,7 +117,7 @@ func TestBuildSettingsMainMenu_Navigation_Integration(t *testing.T) {
 		BuildSettingsMainMenuWithService(cfg, mockSvc, pages, runner.App(), nil, nil, "", "")
 	})
 
-	require.True(t, runner.WaitForText("Settings", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Settings", 100*time.Millisecond))
 
 	// Navigate down through menu items
 	runner.Screen().InjectArrowDown()
@@ -162,15 +162,22 @@ func TestBuildSettingsMainMenu_EscapeGoesBack_Integration(t *testing.T) {
 		BuildSettingsMainMenuWithService(cfg, mockSvc, pages, runner.App(), nil, rebuildMainPage, "", "")
 	})
 
-	require.True(t, runner.WaitForText("Settings", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Settings", 100*time.Millisecond))
+
+	rebuildDone := make(chan struct{}, 1)
+	go func() {
+		for !rebuildCalled.Load() {
+			time.Sleep(5 * time.Millisecond)
+		}
+		close(rebuildDone)
+	}()
 
 	// Press escape
 	runner.Screen().InjectEscape()
 	runner.Draw()
-	time.Sleep(30 * time.Millisecond)
 
 	// Should have called rebuild
-	assert.True(t, rebuildCalled.Load(), "Should have called rebuildMainPage")
+	assert.True(t, runner.WaitForSignal(rebuildDone, 100*time.Millisecond), "Should have called rebuildMainPage")
 }
 
 func TestBuildAudioSettingsMenu_Integration(t *testing.T) {
@@ -196,7 +203,7 @@ func TestBuildAudioSettingsMenu_Integration(t *testing.T) {
 	})
 
 	// Verify audio page is shown
-	require.True(t, runner.WaitForText("Audio", 500*time.Millisecond), "Audio title should appear")
+	require.True(t, runner.WaitForText("Audio", 100*time.Millisecond), "Audio title should appear")
 
 	// Verify toggle is visible
 	assert.True(t, runner.ContainsText("Audio feedback"), "Audio feedback toggle should be visible")
@@ -223,15 +230,16 @@ func TestBuildAudioSettingsMenu_Toggle_Integration(t *testing.T) {
 		buildAudioSettingsMenu(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Audio", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Audio", 100*time.Millisecond))
 
 	// Toggle by pressing Enter
 	runner.Screen().InjectEnter()
 	runner.Draw()
-	time.Sleep(50 * time.Millisecond)
 
-	// Verify UpdateSettings was called at least once
-	mockSvc.AssertNumberOfCalls(t, "UpdateSettings", 1)
+	// Wait for UpdateSettings to be called
+	assert.True(t, runner.WaitForCondition(func() bool {
+		return mockSvc.UpdateSettingsCallCount() > 0
+	}, 100*time.Millisecond), "UpdateSettings should be called")
 }
 
 func TestBuildAudioSettingsMenu_Error_Integration(t *testing.T) {
@@ -256,7 +264,7 @@ func TestBuildAudioSettingsMenu_Error_Integration(t *testing.T) {
 	})
 
 	// Should show error modal
-	require.True(t, runner.WaitForText("Failed", 500*time.Millisecond), "Error modal should appear")
+	require.True(t, runner.WaitForText("Failed", 100*time.Millisecond), "Error modal should appear")
 }
 
 func TestBuildReadersSettingsMenu_Integration(t *testing.T) {
@@ -283,7 +291,7 @@ func TestBuildReadersSettingsMenu_Integration(t *testing.T) {
 		buildReadersSettingsMenu(cfg, mockSvc, pages, runner.App(), nil)
 	})
 
-	require.True(t, runner.WaitForText("Readers", 500*time.Millisecond), "Readers title should appear")
+	require.True(t, runner.WaitForText("Readers", 100*time.Millisecond), "Readers title should appear")
 
 	// Verify menu items
 	assert.True(t, runner.ContainsText("Auto-detect"), "Auto-detect toggle should be visible")
@@ -314,7 +322,7 @@ func TestBuildReadersSettingsMenu_ScanModeOptions(t *testing.T) {
 		buildReadersSettingsMenu(cfg, mockSvc, pages, runner.App(), nil)
 	})
 
-	require.True(t, runner.WaitForText("Readers", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Readers", 100*time.Millisecond))
 
 	// Verify scan mode displays Tap
 	assert.True(t, runner.ContainsText("Tap"), "Tap mode should be visible")
@@ -343,7 +351,7 @@ func TestBuildAdvancedSettingsMenu_Integration(t *testing.T) {
 		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Advanced", 500*time.Millisecond), "Advanced title should appear")
+	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond), "Advanced title should appear")
 
 	// Verify menu items
 	assert.True(t, runner.ContainsText("Ignore systems"), "Ignore systems should be visible")
@@ -374,7 +382,7 @@ func TestBuildAdvancedSettingsMenu_ToggleDebugLogging_Integration(t *testing.T) 
 		buildAdvancedSettingsMenu(mockSvc, pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("Advanced", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Advanced", 100*time.Millisecond))
 
 	// Navigate to debug logging (second item)
 	runner.Screen().InjectArrowDown()
@@ -383,10 +391,11 @@ func TestBuildAdvancedSettingsMenu_ToggleDebugLogging_Integration(t *testing.T) 
 	// Toggle
 	runner.Screen().InjectEnter()
 	runner.Draw()
-	time.Sleep(50 * time.Millisecond)
 
-	// Verify UpdateSettings was called at least once
-	mockSvc.AssertNumberOfCalls(t, "UpdateSettings", 1)
+	// Wait for UpdateSettings to be called
+	assert.True(t, runner.WaitForCondition(func() bool {
+		return mockSvc.UpdateSettingsCallCount() > 0
+	}, 100*time.Millisecond), "UpdateSettings should be called")
 }
 
 func TestBuildAboutPage_Integration(t *testing.T) {
@@ -407,7 +416,7 @@ func TestBuildAboutPage_Integration(t *testing.T) {
 		buildAboutPage(pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("About", 500*time.Millisecond), "About title should appear")
+	require.True(t, runner.WaitForText("About", 100*time.Millisecond), "About title should appear")
 
 	// Verify content
 	assert.True(t, runner.ContainsText("Zaparoo Core"), "Should show Zaparoo Core")
@@ -433,12 +442,7 @@ func TestBuildAboutPage_BackNavigation_Integration(t *testing.T) {
 		buildAboutPage(pages, runner.App())
 	})
 
-	require.True(t, runner.WaitForText("About", 500*time.Millisecond))
-
-	// Press escape
-	runner.Screen().InjectEscape()
-	runner.Draw()
-	time.Sleep(30 * time.Millisecond)
+	require.True(t, runner.WaitForText("About", 100*time.Millisecond))
 
 	// Helper to check current page
 	getFrontPage := func() string {
@@ -449,7 +453,13 @@ func TestBuildAboutPage_BackNavigation_Integration(t *testing.T) {
 		return name
 	}
 
-	assert.Equal(t, PageSettingsMain, getFrontPage(), "Should navigate back to settings main")
+	// Press escape
+	runner.Screen().InjectEscape()
+	runner.Draw()
+
+	assert.True(t, runner.WaitForCondition(func() bool {
+		return getFrontPage() == PageSettingsMain
+	}, 100*time.Millisecond), "Should navigate back to settings main")
 }
 
 func TestExitDelayLabels(t *testing.T) {

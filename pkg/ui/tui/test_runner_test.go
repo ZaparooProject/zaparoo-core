@@ -94,16 +94,19 @@ func (r *TestAppRunner) App() *tview.Application {
 	return r.app
 }
 
-// Draw forces a synchronous draw and waits for it to complete.
+// Draw forces a synchronous draw.
 func (r *TestAppRunner) Draw() {
 	r.app.Draw()
-	time.Sleep(10 * time.Millisecond)
 }
 
-// QueueUpdateDraw queues a UI update and waits for the draw to complete.
+// QueueUpdateDraw queues a UI update and waits for it to complete.
 func (r *TestAppRunner) QueueUpdateDraw(f func()) {
-	r.app.QueueUpdateDraw(f)
-	time.Sleep(10 * time.Millisecond)
+	done := make(chan struct{})
+	r.app.QueueUpdateDraw(func() {
+		f()
+		close(done)
+	})
+	<-done
 }
 
 // SetFocus sets focus on a primitive and waits for the draw.
@@ -131,9 +134,19 @@ func (*TestAppRunner) WaitForCondition(condition func() bool, timeout time.Durat
 		if condition() {
 			return true
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 	return false
+}
+
+// WaitForSignal waits for a channel to be closed or receive a value.
+func (*TestAppRunner) WaitForSignal(ch <-chan struct{}, timeout time.Duration) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // WaitForText waits for specific text to appear on screen.

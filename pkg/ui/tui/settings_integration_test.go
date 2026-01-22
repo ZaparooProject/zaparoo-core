@@ -20,7 +20,6 @@
 package tui
 
 import (
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,10 +88,13 @@ func TestSettingsList_ToggleActivation_Integration(t *testing.T) {
 	sl := NewSettingsList(pages, "main")
 
 	toggleValue := false
-	var toggleCalled atomic.Bool
+	toggleCalled := make(chan struct{}, 1)
 
 	sl.AddToggle("Audio Feedback", "Play sound on scan", &toggleValue, func(_ bool) {
-		toggleCalled.Store(true)
+		select {
+		case toggleCalled <- struct{}{}:
+		default:
+		}
 	})
 
 	pages.AddPage("settings", sl.List, true, true)
@@ -103,10 +105,8 @@ func TestSettingsList_ToggleActivation_Integration(t *testing.T) {
 	runner.Screen().InjectEnter()
 	runner.Draw()
 
-	// Give time for the callback
-	time.Sleep(20 * time.Millisecond)
-
-	assert.True(t, toggleCalled.Load(), "toggle callback should be called")
+	// Wait for the callback
+	assert.True(t, runner.WaitForSignal(toggleCalled, 100*time.Millisecond), "toggle callback should be called")
 	assert.True(t, toggleValue, "toggle value should be true after activation")
 }
 
@@ -145,10 +145,11 @@ func TestSettingsList_EscapeGoesBack_Integration(t *testing.T) {
 	// Press Escape
 	runner.Screen().InjectEscape()
 	runner.Draw()
-	time.Sleep(20 * time.Millisecond)
 
 	// Verify we switched to main page
-	assert.Equal(t, "main", getFrontPage())
+	assert.True(t, runner.WaitForCondition(func() bool {
+		return getFrontPage() == "main"
+	}, 100*time.Millisecond), "Should switch to main page")
 }
 
 func TestButtonBar_Navigation_Integration(t *testing.T) {
@@ -159,11 +160,21 @@ func TestButtonBar_Navigation_Integration(t *testing.T) {
 
 	bb := NewButtonBar(runner.App())
 
-	var button1Pressed atomic.Bool
-	var button2Pressed atomic.Bool
+	button1Pressed := make(chan struct{}, 1)
+	button2Pressed := make(chan struct{}, 1)
 
-	bb.AddButton("Button 1", func() { button1Pressed.Store(true) })
-	bb.AddButton("Button 2", func() { button2Pressed.Store(true) })
+	bb.AddButton("Button 1", func() {
+		select {
+		case button1Pressed <- struct{}{}:
+		default:
+		}
+	})
+	bb.AddButton("Button 2", func() {
+		select {
+		case button2Pressed <- struct{}{}:
+		default:
+		}
+	})
 	bb.SetupNavigation(nil)
 
 	runner.Start(bb)
@@ -172,10 +183,8 @@ func TestButtonBar_Navigation_Integration(t *testing.T) {
 	// Press Enter on first button
 	runner.Screen().InjectEnter()
 	runner.Draw()
-	time.Sleep(20 * time.Millisecond)
 
-	assert.True(t, button1Pressed.Load(), "first button should be pressed")
-	assert.False(t, button2Pressed.Load(), "second button should not be pressed yet")
+	assert.True(t, runner.WaitForSignal(button1Pressed, 100*time.Millisecond), "first button should be pressed")
 
 	// Navigate right to second button
 	runner.Screen().InjectArrowRight()
@@ -184,9 +193,8 @@ func TestButtonBar_Navigation_Integration(t *testing.T) {
 	// Press Enter on second button
 	runner.Screen().InjectEnter()
 	runner.Draw()
-	time.Sleep(20 * time.Millisecond)
 
-	assert.True(t, button2Pressed.Load(), "second button should be pressed")
+	assert.True(t, runner.WaitForSignal(button2Pressed, 100*time.Millisecond), "second button should be pressed")
 }
 
 func TestButtonBar_EscapeCallback_Integration(t *testing.T) {
@@ -197,10 +205,13 @@ func TestButtonBar_EscapeCallback_Integration(t *testing.T) {
 
 	bb := NewButtonBar(runner.App())
 
-	var escapeCalled atomic.Bool
+	escapeCalled := make(chan struct{}, 1)
 	bb.AddButton("Test", func() {})
 	bb.SetupNavigation(func() {
-		escapeCalled.Store(true)
+		select {
+		case escapeCalled <- struct{}{}:
+		default:
+		}
 	})
 
 	runner.Start(bb)
@@ -209,9 +220,8 @@ func TestButtonBar_EscapeCallback_Integration(t *testing.T) {
 	// Press Escape
 	runner.Screen().InjectEscape()
 	runner.Draw()
-	time.Sleep(20 * time.Millisecond)
 
-	assert.True(t, escapeCalled.Load(), "escape callback should be called")
+	assert.True(t, runner.WaitForSignal(escapeCalled, 100*time.Millisecond), "escape callback should be called")
 }
 
 func TestCheckList_Integration(t *testing.T) {
@@ -223,12 +233,17 @@ func TestCheckList_Integration(t *testing.T) {
 	items := []string{"Item A", "Item B", "Item C"}
 	var selections []string
 	var selMu syncutil.Mutex
+	selectionChanged := make(chan struct{}, 10)
 
 	cl := NewCheckList(items, nil, func(sel []string) {
 		selMu.Lock()
 		selections = make([]string, len(sel))
 		copy(selections, sel)
 		selMu.Unlock()
+		select {
+		case selectionChanged <- struct{}{}:
+		default:
+		}
 	})
 
 	runner.Start(cl.List)
@@ -237,7 +252,8 @@ func TestCheckList_Integration(t *testing.T) {
 	// Toggle first item
 	runner.Screen().InjectEnter()
 	runner.Draw()
-	time.Sleep(20 * time.Millisecond)
+
+	assert.True(t, runner.WaitForSignal(selectionChanged, 100*time.Millisecond), "selection callback should be called")
 
 	selMu.Lock()
 	require.Len(t, selections, 1)
@@ -249,7 +265,8 @@ func TestCheckList_Integration(t *testing.T) {
 	runner.Draw()
 	runner.Screen().InjectEnter()
 	runner.Draw()
-	time.Sleep(20 * time.Millisecond)
+
+	assert.True(t, runner.WaitForSignal(selectionChanged, 100*time.Millisecond), "selection callback should be called")
 
 	selMu.Lock()
 	require.Len(t, selections, 2)
@@ -293,10 +310,11 @@ func TestCheckList_EscapeNavigation_Integration(t *testing.T) {
 	// Press Escape
 	runner.Screen().InjectEscape()
 	runner.Draw()
-	time.Sleep(20 * time.Millisecond)
 
 	// Verify we went back to main
-	assert.Equal(t, "main", getFrontPage())
+	assert.True(t, runner.WaitForCondition(func() bool {
+		return getFrontPage() == "main"
+	}, 100*time.Millisecond), "Should go back to main")
 }
 
 func TestSettingsList_RefreshItems_Integration(t *testing.T) {

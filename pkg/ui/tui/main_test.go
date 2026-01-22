@@ -21,8 +21,8 @@ package tui
 
 import (
 	"sync"
-	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rivo/tview"
@@ -313,14 +313,28 @@ func TestButtonGrid_HelpCallback_Integration(t *testing.T) {
 		return append([]string(nil), helpTexts...)
 	}
 
+	// Helper to check if text is in help texts
+	containsHelpText := func(text string) bool {
+		for _, h := range getHelpTexts() {
+			if h == text {
+				return true
+			}
+		}
+		return false
+	}
+
 	// Should trigger help for first button on focus
-	assert.Contains(t, getHelpTexts(), "Help for button 1", "Should receive help for first button")
+	assert.True(t, runner.WaitForCondition(func() bool {
+		return containsHelpText("Help for button 1")
+	}, 100*time.Millisecond), "Should receive help for first button")
 
 	// Navigate right
 	runner.Screen().InjectArrowRight()
 	runner.Draw()
 
-	assert.Contains(t, getHelpTexts(), "Help for button 2", "Should receive help for second button")
+	assert.True(t, runner.WaitForCondition(func() bool {
+		return containsHelpText("Help for button 2")
+	}, 100*time.Millisecond), "Should receive help for second button")
 }
 
 func TestButtonGrid_Navigation_Integration(t *testing.T) {
@@ -437,9 +451,12 @@ func TestButtonGrid_EscapeCallback_Integration(t *testing.T) {
 	app := runner.App()
 	grid := NewButtonGrid(app, 3)
 
-	var escapeCalled atomic.Bool
+	escapeCalled := make(chan struct{}, 1)
 	grid.SetOnEscape(func() {
-		escapeCalled.Store(true)
+		select {
+		case escapeCalled <- struct{}{}:
+		default:
+		}
 	})
 
 	btn1 := &ButtonGridItem{Button: tview.NewButton("Btn1"), HelpText: "Help 1"}
@@ -451,7 +468,7 @@ func TestButtonGrid_EscapeCallback_Integration(t *testing.T) {
 	runner.Screen().InjectEscape()
 	runner.Draw()
 
-	assert.True(t, escapeCalled.Load(), "Escape callback should be called")
+	assert.True(t, runner.WaitForSignal(escapeCalled, 100*time.Millisecond), "Escape callback should be called")
 }
 
 func TestButtonGrid_EnterActivatesButton_Integration(t *testing.T) {
@@ -463,9 +480,14 @@ func TestButtonGrid_EnterActivatesButton_Integration(t *testing.T) {
 	app := runner.App()
 	grid := NewButtonGrid(app, 3)
 
-	var buttonPressed atomic.Bool
+	buttonPressed := make(chan struct{}, 1)
 	btn1 := &ButtonGridItem{
-		Button:   tview.NewButton("Btn1").SetSelectedFunc(func() { buttonPressed.Store(true) }),
+		Button: tview.NewButton("Btn1").SetSelectedFunc(func() {
+			select {
+			case buttonPressed <- struct{}{}:
+			default:
+			}
+		}),
 		HelpText: "Help 1",
 	}
 	grid.AddRow(btn1)
@@ -476,7 +498,7 @@ func TestButtonGrid_EnterActivatesButton_Integration(t *testing.T) {
 	runner.Screen().InjectEnter()
 	runner.Draw()
 
-	assert.True(t, buttonPressed.Load(), "Button should be activated on Enter")
+	assert.True(t, runner.WaitForSignal(buttonPressed, 100*time.Millisecond), "Button should be activated on Enter")
 }
 
 func TestButtonGrid_DisabledButtonsSkipped_Integration(t *testing.T) {

@@ -110,7 +110,7 @@ func TestBuildSearchMedia_Integration(t *testing.T) {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond), "Search Media title should appear")
+	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond), "Search Media title should appear")
 
 	// Verify UI elements are visible
 	assert.True(t, runner.ContainsText("Name"), "Name label should be visible")
@@ -163,7 +163,7 @@ func TestBuildSearchMedia_SearchWithResults_Integration(t *testing.T) {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
 
 	// Type in search
 	runner.Screen().InjectString("mario")
@@ -176,10 +176,11 @@ func TestBuildSearchMedia_SearchWithResults_Integration(t *testing.T) {
 	// Press Enter to trigger search
 	runner.Screen().InjectEnter()
 	runner.Draw()
-	time.Sleep(100 * time.Millisecond)
 
-	// Verify search was called at least once
-	mockSvc.AssertNumberOfCalls(t, "SearchMedia", 1)
+	// Wait for SearchMedia to be called
+	assert.True(t, runner.WaitForCondition(func() bool {
+		return mockSvc.SearchMediaCallCount() > 0
+	}, 100*time.Millisecond), "SearchMedia should be called")
 }
 
 func TestBuildSearchMedia_EscapeGoesBack_Integration(t *testing.T) {
@@ -203,14 +204,9 @@ func TestBuildSearchMedia_EscapeGoesBack_Integration(t *testing.T) {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
 
-	// Press escape
-	runner.Screen().InjectEscape()
-	runner.Draw()
-	time.Sleep(30 * time.Millisecond)
-
-	// Verify we went back
+	// Helper to get front page
 	getFrontPage := func() string {
 		var name string
 		runner.QueueUpdateDraw(func() {
@@ -219,7 +215,14 @@ func TestBuildSearchMedia_EscapeGoesBack_Integration(t *testing.T) {
 		return name
 	}
 
-	assert.Equal(t, PageMain, getFrontPage(), "Should navigate back to main page")
+	// Press escape
+	runner.Screen().InjectEscape()
+	runner.Draw()
+
+	// Verify we went back
+	assert.True(t, runner.WaitForCondition(func() bool {
+		return getFrontPage() == PageMain
+	}, 100*time.Millisecond), "Should navigate back to main page")
 }
 
 func TestBuildSearchMedia_ClearButton_Integration(t *testing.T) {
@@ -246,7 +249,7 @@ func TestBuildSearchMedia_ClearButton_Integration(t *testing.T) {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
 
 	// Navigate to Clear button (Tab then right)
 	runner.Screen().InjectTab()
@@ -257,12 +260,13 @@ func TestBuildSearchMedia_ClearButton_Integration(t *testing.T) {
 	// Press Enter on Clear
 	runner.Screen().InjectEnter()
 	runner.Draw()
-	time.Sleep(30 * time.Millisecond)
 
-	// Verify session state was cleared
-	assert.Empty(t, session.GetSearchMediaName(), "Search name should be cleared")
-	assert.Empty(t, session.GetSearchMediaSystem(), "Search system should be cleared")
-	assert.Equal(t, "All", session.GetSearchMediaSystemName(), "Search system name should be reset to All")
+	// Wait for session state to be cleared
+	assert.True(t, runner.WaitForCondition(func() bool {
+		return session.GetSearchMediaName() == "" &&
+			session.GetSearchMediaSystem() == "" &&
+			session.GetSearchMediaSystemName() == "All"
+	}, 100*time.Millisecond), "Session state should be cleared")
 }
 
 func TestBuildSearchMedia_SystemNavigation_Integration(t *testing.T) {
@@ -295,12 +299,11 @@ func TestBuildSearchMedia_SystemNavigation_Integration(t *testing.T) {
 		BuildSearchMedia(mockSvc, pages, runner.App(), session)
 	})
 
-	require.True(t, runner.WaitForText("Search Media", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
 
 	// Navigate down to system button
 	runner.Screen().InjectArrowDown()
 	runner.Draw()
-	time.Sleep(30 * time.Millisecond)
 
 	// System button should show "All" initially - also check for "System" label
 	// which should be visible regardless

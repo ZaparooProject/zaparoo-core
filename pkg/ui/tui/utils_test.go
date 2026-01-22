@@ -20,7 +20,6 @@
 package tui
 
 import (
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -449,25 +448,24 @@ func TestShowErrorModal_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
-	var dismissCalled atomic.Bool
+	dismissCalled := make(chan struct{}, 1)
 
 	// Show error modal
 	runner.QueueUpdateDraw(func() {
 		ShowErrorModal(pages, runner.App(), "Something went wrong", func() {
-			dismissCalled.Store(true)
+			close(dismissCalled)
 		})
 	})
 
 	// Verify modal is shown
-	require.True(t, runner.WaitForText("Something went wrong", 500*time.Millisecond), "Error message should appear")
+	require.True(t, runner.WaitForText("Something went wrong", 100*time.Millisecond), "Error message should appear")
 	assert.True(t, runner.ContainsText("OK"), "OK button should be visible")
 
 	// Dismiss the modal
 	runner.Screen().InjectEnter()
 	runner.Draw()
-	time.Sleep(50 * time.Millisecond)
 
-	assert.True(t, dismissCalled.Load(), "Dismiss callback should be called")
+	assert.True(t, runner.WaitForSignal(dismissCalled, 100*time.Millisecond), "Dismiss callback should be called")
 }
 
 func TestShowConfirmModal_Integration(t *testing.T) {
@@ -483,28 +481,35 @@ func TestShowConfirmModal_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
-	var yesCalled, noCalled atomic.Bool
+	yesCalled := make(chan struct{}, 1)
+	noCalled := make(chan struct{}, 1)
 
 	// Show confirm modal
 	runner.QueueUpdateDraw(func() {
 		ShowConfirmModal(pages, runner.App(), "Are you sure?",
-			func() { yesCalled.Store(true) },
-			func() { noCalled.Store(true) },
+			func() { close(yesCalled) },
+			func() { close(noCalled) },
 		)
 	})
 
 	// Verify modal is shown
-	require.True(t, runner.WaitForText("Are you sure?", 500*time.Millisecond), "Confirm message should appear")
+	require.True(t, runner.WaitForText("Are you sure?", 100*time.Millisecond), "Confirm message should appear")
 	assert.True(t, runner.ContainsText("Yes"), "Yes button should be visible")
 	assert.True(t, runner.ContainsText("No"), "No button should be visible")
 
 	// Click Yes (first button, so just Enter)
 	runner.Screen().InjectEnter()
 	runner.Draw()
-	time.Sleep(50 * time.Millisecond)
 
-	assert.True(t, yesCalled.Load(), "Yes callback should be called")
-	assert.False(t, noCalled.Load(), "No callback should not be called")
+	assert.True(t, runner.WaitForSignal(yesCalled, 100*time.Millisecond), "Yes callback should be called")
+
+	// Check that No was not called (use very short timeout since we just want to verify it wasn't triggered)
+	select {
+	case <-noCalled:
+		t.Fatal("No callback should not be called")
+	default:
+		// Good - channel is still open
+	}
 }
 
 func TestShowConfirmModal_No_Integration(t *testing.T) {
@@ -520,27 +525,34 @@ func TestShowConfirmModal_No_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
-	var yesCalled, noCalled atomic.Bool
+	yesCalled := make(chan struct{}, 1)
+	noCalled := make(chan struct{}, 1)
 
 	// Show confirm modal
 	runner.QueueUpdateDraw(func() {
 		ShowConfirmModal(pages, runner.App(), "Are you sure?",
-			func() { yesCalled.Store(true) },
-			func() { noCalled.Store(true) },
+			func() { close(yesCalled) },
+			func() { close(noCalled) },
 		)
 	})
 
-	require.True(t, runner.WaitForText("Are you sure?", 500*time.Millisecond))
+	require.True(t, runner.WaitForText("Are you sure?", 100*time.Millisecond))
 
 	// Navigate to No button and click
 	runner.Screen().InjectTab()
 	runner.Draw()
 	runner.Screen().InjectEnter()
 	runner.Draw()
-	time.Sleep(50 * time.Millisecond)
 
-	assert.False(t, yesCalled.Load(), "Yes callback should not be called")
-	assert.True(t, noCalled.Load(), "No callback should be called")
+	assert.True(t, runner.WaitForSignal(noCalled, 100*time.Millisecond), "No callback should be called")
+
+	// Check that Yes was not called
+	select {
+	case <-yesCalled:
+		t.Fatal("Yes callback should not be called")
+	default:
+		// Good - channel is still open
+	}
 }
 
 func TestShowWaitingModal_Integration(t *testing.T) {
@@ -556,18 +568,18 @@ func TestShowWaitingModal_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
-	var cancelCalled atomic.Bool
+	cancelCalled := make(chan struct{}, 1)
 
 	// Show waiting modal
 	var cleanup func()
 	runner.QueueUpdateDraw(func() {
 		cleanup = ShowWaitingModal(pages, runner.App(), "Please wait...", func() {
-			cancelCalled.Store(true)
+			close(cancelCalled)
 		})
 	})
 
 	// Verify modal is shown
-	require.True(t, runner.WaitForText("Please wait...", 500*time.Millisecond), "Waiting message should appear")
+	require.True(t, runner.WaitForText("Please wait...", 100*time.Millisecond), "Waiting message should appear")
 	assert.True(t, runner.ContainsText("Cancel"), "Cancel button should be visible")
 	require.NotNil(t, cleanup)
 
@@ -575,10 +587,15 @@ func TestShowWaitingModal_Integration(t *testing.T) {
 	runner.QueueUpdateDraw(func() {
 		cleanup()
 	})
-	time.Sleep(50 * time.Millisecond)
 
 	// Cleanup should remove the modal without calling cancel
-	assert.False(t, cancelCalled.Load(), "Cancel should not be called when cleanup is used")
+	// Check that cancel was not called
+	select {
+	case <-cancelCalled:
+		t.Fatal("Cancel should not be called when cleanup is used")
+	default:
+		// Good - channel is still open
+	}
 }
 
 func TestShowOSKModal_Integration(t *testing.T) {
@@ -594,27 +611,28 @@ func TestShowOSKModal_Integration(t *testing.T) {
 	runner.Start(pages)
 	runner.Draw()
 
-	var cancelCalled atomic.Bool
+	cancelCalled := make(chan struct{}, 1)
 
 	// Show OSK modal
 	runner.QueueUpdateDraw(func() {
 		ShowOSKModal(pages, runner.App(), "initial",
 			nil,
-			func() { cancelCalled.Store(true) },
+			func() { close(cancelCalled) },
 		)
 	})
 
-	// Verify OSK is shown - look for keyboard keys
-	time.Sleep(100 * time.Millisecond)
-	runner.Draw()
+	// Wait for OSK to render
+	runner.WaitForCondition(func() bool {
+		runner.Draw()
+		return true
+	}, 50*time.Millisecond)
 
 	// The OSK should be displayed (it has keys like "q", "w", etc.)
 	// Press Escape to cancel
 	runner.Screen().InjectEscape()
 	runner.Draw()
-	time.Sleep(50 * time.Millisecond)
 
-	assert.True(t, cancelCalled.Load(), "Cancel callback should be called")
+	assert.True(t, runner.WaitForSignal(cancelCalled, 100*time.Millisecond), "Cancel callback should be called")
 }
 
 func TestTimeoutConstants(t *testing.T) {
