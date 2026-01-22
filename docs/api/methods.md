@@ -816,15 +816,25 @@ None.
 
 #### Result
 
-| Key                       | Type     | Required | Description                                                     |
-| :------------------------ | :------- | :------- | :-------------------------------------------------------------- |
-| runZapScript              | boolean  | Yes      | Whether ZapScript execution is enabled.                         |
-| debugLogging              | boolean  | Yes      | Whether debug logging is enabled.                               |
-| audioScanFeedback         | boolean  | Yes      | Whether audio feedback on scan is enabled.                      |
-| readersAutoDetect         | boolean  | Yes      | Whether automatic reader detection is enabled.                  |
-| readersScanMode           | string   | Yes      | Current scan mode setting.                                      |
-| readersScanExitDelay      | number   | Yes      | Delay before exiting scan mode in seconds.                      |
-| readersScanIgnoreSystems  | string[] | Yes      | List of system IDs to ignore during scanning.                   |
+| Key                       | Type                                      | Required | Description                                                     |
+| :------------------------ | :---------------------------------------- | :------- | :-------------------------------------------------------------- |
+| runZapScript              | boolean                                   | Yes      | Whether ZapScript execution is enabled.                         |
+| debugLogging              | boolean                                   | Yes      | Whether debug logging is enabled.                               |
+| audioScanFeedback         | boolean                                   | Yes      | Whether audio feedback on scan is enabled.                      |
+| readersAutoDetect         | boolean                                   | Yes      | Whether automatic reader detection is enabled.                  |
+| readersScanMode           | string                                    | Yes      | Current scan mode setting.                                      |
+| readersScanExitDelay      | number                                    | Yes      | Delay before exiting scan mode in seconds.                      |
+| readersScanIgnoreSystems  | string[]                                  | Yes      | List of system IDs to ignore during scanning.                   |
+| errorReporting            | boolean                                   | Yes      | Whether error reporting is enabled.                             |
+| readersConnect            | [ReaderConnection](#reader-connection-object)[] | Yes      | List of manually configured reader connections.                 |
+
+##### Reader connection object
+
+| Key      | Type   | Required | Description                                      |
+| :------- | :----- | :------- | :----------------------------------------------- |
+| driver   | string | Yes      | Reader driver type (e.g., "pn532uart", "acr122pcsc"). |
+| path     | string | Yes      | Path or address for the reader connection.       |
+| idSource | string | No       | Source for the reader ID.                        |
 
 #### Example
 
@@ -851,7 +861,9 @@ None.
     "readersAutoDetect": true,
     "readersScanMode": "insert",
     "readersScanExitDelay": 0.0,
-    "readersScanIgnoreSystems": ["DOS"]
+    "readersScanIgnoreSystems": ["DOS"],
+    "errorReporting": true,
+    "readersConnect": []
   }
 }
 ```
@@ -866,15 +878,17 @@ This method will only write values which are supplied. Existing values will not 
 
 An object containing any of the following optional keys:
 
-| Key                       | Type     | Required | Description                                                     |
-| :------------------------ | :------- | :------- | :-------------------------------------------------------------- |
-| runZapScript              | boolean  | No       | Whether ZapScript execution is enabled.                         |
-| debugLogging              | boolean  | No       | Whether debug logging is enabled.                               |
-| audioScanFeedback         | boolean  | No       | Whether audio feedback on scan is enabled.                      |
-| readersAutoDetect         | boolean  | No       | Whether automatic reader detection is enabled.                  |
-| readersScanMode           | string   | No       | Current scan mode setting.                                      |
-| readersScanExitDelay      | number   | No       | Delay before exiting scan mode in seconds.                      |
-| readersScanIgnoreSystems  | string[] | No       | List of system IDs to ignore during scanning.                   |
+| Key                       | Type                                      | Required | Description                                                     |
+| :------------------------ | :---------------------------------------- | :------- | :-------------------------------------------------------------- |
+| runZapScript              | boolean                                   | No       | Whether ZapScript execution is enabled.                         |
+| debugLogging              | boolean                                   | No       | Whether debug logging is enabled.                               |
+| audioScanFeedback         | boolean                                   | No       | Whether audio feedback on scan is enabled.                      |
+| readersAutoDetect         | boolean                                   | No       | Whether automatic reader detection is enabled.                  |
+| readersScanMode           | string                                    | No       | Current scan mode setting.                                      |
+| readersScanExitDelay      | number                                    | No       | Delay before exiting scan mode in seconds.                      |
+| readersScanIgnoreSystems  | string[]                                  | No       | List of system IDs to ignore during scanning.                   |
+| errorReporting            | boolean                                   | No       | Whether error reporting is enabled.                             |
+| readersConnect            | [ReaderConnection](#reader-connection-object)[] | No       | List of manually configured reader connections.                 |
 
 #### Result
 
@@ -1641,3 +1655,178 @@ None.
   }
 }
 ```
+
+### health
+
+Simple health check to verify the server is running and responding.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key    | Type   | Required | Description                                      |
+| :----- | :----- | :------- | :----------------------------------------------- |
+| status | string | Yes      | Health status. Returns `"ok"` when server is healthy. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "db58f757-7e47-11ef-982b-020304050607",
+  "method": "health"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "db58f757-7e47-11ef-982b-020304050607",
+  "result": {
+    "status": "ok"
+  }
+}
+```
+
+## Inbox
+
+Inbox messages are system notifications stored on the server, typically used to inform the user of events like update availability, errors, or other important information.
+
+### inbox
+
+List all inbox messages.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key      | Type                               | Required | Description               |
+| :------- | :--------------------------------- | :------- | :------------------------ |
+| messages | [InboxMessage](#inbox-message-object)[] | Yes      | List of inbox messages.   |
+
+##### Inbox message object
+
+| Key       | Type   | Required | Description                                      |
+| :-------- | :----- | :------- | :----------------------------------------------- |
+| id        | number | Yes      | Unique identifier of the message.                |
+| title     | string | Yes      | Title of the message.                            |
+| body      | string | No       | Body text of the message.                        |
+| severity  | number | Yes      | Severity level (0=info, 1=warning, 2=error).     |
+| category  | string | No       | Category of the message.                         |
+| profileId | number | No       | Associated profile ID, if applicable.            |
+| createdAt | string | Yes      | Timestamp when message was created in RFC3339 format. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "ec69f868-7e47-11ef-993c-020304050607",
+  "method": "inbox"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "ec69f868-7e47-11ef-993c-020304050607",
+  "result": {
+    "messages": [
+      {
+        "id": 1,
+        "title": "Update Available",
+        "body": "A new version of Zaparoo is available.",
+        "severity": 0,
+        "category": "update",
+        "createdAt": "2024-09-24T17:49:42.938167429+08:00"
+      }
+    ]
+  }
+}
+```
+
+### inbox.delete
+
+Delete a specific inbox message by ID.
+
+#### Parameters
+
+An object:
+
+| Key | Type   | Required | Description                   |
+| :-- | :----- | :------- | :---------------------------- |
+| id  | number | Yes      | ID of the message to delete.  |
+
+#### Result
+
+Returns `null` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "fd7a0979-7e47-11ef-9a4d-020304050607",
+  "method": "inbox.delete",
+  "params": {
+    "id": 1
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "fd7a0979-7e47-11ef-9a4d-020304050607",
+  "result": null
+}
+```
+
+### inbox.clear
+
+Delete all inbox messages.
+
+#### Parameters
+
+None.
+
+#### Result
+
+Returns `null` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "0e8b1a8a-7e48-11ef-9b5e-020304050607",
+  "method": "inbox.clear"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "0e8b1a8a-7e48-11ef-9b5e-020304050607",
+  "result": null
+}
