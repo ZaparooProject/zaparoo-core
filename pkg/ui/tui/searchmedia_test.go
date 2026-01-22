@@ -165,13 +165,16 @@ func TestBuildSearchMedia_SearchWithResults_Integration(t *testing.T) {
 
 	require.True(t, runner.WaitForText("Search Media", 100*time.Millisecond))
 
-	// Type in search
+	// Type in search and wait for it to appear
 	runner.Screen().InjectString("mario")
 	runner.Draw()
+	require.True(t, runner.WaitForText("mario", 100*time.Millisecond), "Search text should appear")
 
 	// Press Tab to navigate to button bar (results list is empty)
 	runner.Screen().InjectTab()
 	runner.Draw()
+	// Give time for Tab event to be processed
+	time.Sleep(20 * time.Millisecond)
 
 	// Press Enter to trigger search (first button in button bar)
 	runner.Screen().InjectEnter()
@@ -179,7 +182,7 @@ func TestBuildSearchMedia_SearchWithResults_Integration(t *testing.T) {
 
 	// Wait for SearchMedia to be called using the mock's signal channel
 	called := mockSvc.SearchMediaCalled()
-	assert.True(t, runner.WaitForSignal(called, 100*time.Millisecond), "SearchMedia should be called")
+	assert.True(t, runner.WaitForSignal(called, 200*time.Millisecond), "SearchMedia should be called")
 }
 
 func TestBuildSearchMedia_EscapeGoesBack_Integration(t *testing.T) {
