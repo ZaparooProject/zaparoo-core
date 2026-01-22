@@ -57,7 +57,7 @@ var (
 		{"-", "_", "=", "+", "[", "]", "{", "}", "\\", "|"},
 		{";", ":", "'", "\"", "`", "~", "/", "?", "<", ">"},
 		{}, // Empty row to align bottom row with other modes
-		{"ABC", keyActionSpace, keyActionBackspace, keyActionEnter, keyActionCancel},
+		{"", "ABC", keyActionSpace, keyActionBackspace, keyActionEnter, keyActionCancel},
 	}
 )
 
@@ -467,11 +467,11 @@ func (o *OnScreenKeyboard) activateKey() {
 	case keyActionSymbols:
 		o.symbolsOn = true
 		o.shiftOn = false
-		o.cursorCol = 0 // Focus ABC in symbols mode
+		o.cursorCol = 1 // Focus ABC in symbols mode (position 1, after empty spacer)
 
 	case "ABC":
 		o.symbolsOn = false
-		o.cursorCol = 0 // Focus SHFT in normal mode
+		o.cursorCol = 1 // Focus SYM in normal mode (matches ABC position in symbols mode)
 
 	case keyActionSpace:
 		o.text += " "
