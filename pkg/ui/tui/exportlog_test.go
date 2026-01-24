@@ -20,6 +20,11 @@
 package tui
 
 import (
+	"io"
+	"mime"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -218,4 +223,87 @@ func TestReadLastLinesNonexistentFile(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, result)
 	assert.Contains(t, err.Error(), "failed to read log file")
+}
+
+func TestUploadLogContent_RequestFormat(t *testing.T) {
+	t.Parallel()
+
+	logContent := []byte("test log content\nline 2\nline 3")
+	expectedURL := "https://logs.zaparoo.org/abc123.log"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request is constructed correctly
+		assert.Equal(t, http.MethodPost, r.Method)
+
+		mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if !assert.NoError(t, err) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		assert.Equal(t, "multipart/form-data", mediaType)
+
+		reader := multipart.NewReader(r.Body, params["boundary"])
+		part, err := reader.NextPart()
+		if !assert.NoError(t, err) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		// Verify form field name and filename match rustypaste expectations
+		assert.Equal(t, "file", part.FormName())
+		assert.Equal(t, "core.log", part.FileName())
+
+		body, err := io.ReadAll(part)
+		if !assert.NoError(t, err) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		assert.Equal(t, logContent, body)
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(expectedURL))
+	}))
+	defer server.Close()
+
+	url, err := uploadLogContent(logContent, server.URL, server.Client())
+
+	require.NoError(t, err)
+	assert.Equal(t, expectedURL, url)
+}
+
+func TestUploadLogContent_TrimsResponseWhitespace(t *testing.T) {
+	t.Parallel()
+
+	// rustypaste may return URLs with trailing newlines
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("  https://logs.zaparoo.org/xyz.log  \n"))
+	}))
+	defer server.Close()
+
+	url, err := uploadLogContent([]byte("test"), server.URL, server.Client())
+
+	require.NoError(t, err)
+	assert.Equal(t, "https://logs.zaparoo.org/xyz.log", url)
+}
+
+func TestUploadLogContent_NonOKStatus(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	_, err := uploadLogContent([]byte("test"), server.URL, server.Client())
+
+	require.ErrorIs(t, err, errUploadStatus)
+}
+
+func TestUploadLogContent_ConnectionError(t *testing.T) {
+	t.Parallel()
+
+	_, err := uploadLogContent([]byte("test"), "http://localhost:1", &http.Client{})
+
+	require.ErrorIs(t, err, errUploadConnect)
 }

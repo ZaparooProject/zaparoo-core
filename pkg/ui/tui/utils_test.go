@@ -427,7 +427,7 @@ func TestShowInfoModal_Integration(t *testing.T) {
 
 	// Show info modal
 	runner.QueueUpdateDraw(func() {
-		ShowInfoModal(pages, runner.App(), "Info", "This is information")
+		ShowInfoModal(pages, runner.App(), "Info", "This is information", nil)
 	})
 
 	// Verify modal is shown
