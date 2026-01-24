@@ -279,7 +279,7 @@ func Start(
 	log.Info().Msg("starting mDNS discovery service")
 	discoveryService := discovery.New(cfg, pl.ID())
 	if discoveryErr := discoveryService.Start(); discoveryErr != nil {
-		log.Error().Err(discoveryErr).Msg("mDNS discovery failed to start (continuing without discovery)")
+		log.Warn().Err(discoveryErr).Msg("mDNS discovery failed to start (continuing without discovery)")
 	}
 
 	log.Info().Msg("starting API service")
