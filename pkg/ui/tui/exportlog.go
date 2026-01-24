@@ -20,11 +20,14 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net"
+	"mime/multipart"
+	"net/http"
 	"os"
 	"path"
 	"strings"
@@ -77,7 +80,7 @@ func BuildExportLogModal(
 
 	helpTexts := []string{
 		"Reload log contents from disk",
-		"Upload log file to termbin.com and display URL",
+		"Upload log file and display URL",
 	}
 	if logDestPath != "" {
 		helpTexts = append(helpTexts, "Copy log file to "+logDestName)
@@ -93,14 +96,14 @@ func BuildExportLogModal(
 
 	buttonBar.AddButtonWithHelp("Upload", helpTexts[1], func() {
 		outcome := uploadLog(pl, exportPages, app)
-		ShowInfoModal(exportPages, app, "Upload Log File", outcome)
+		ShowInfoModal(exportPages, app, "Upload Log File", outcome, frame.FocusButtonBar)
 	})
 
 	helpIdx := 2
 	if logDestPath != "" {
 		buttonBar.AddButtonWithHelp("Copy", helpTexts[helpIdx], func() {
 			outcome := copyLogToSd(pl, logDestPath, logDestName)
-			ShowInfoModal(exportPages, app, "Copy Log File", outcome)
+			ShowInfoModal(exportPages, app, "Copy Log File", outcome, frame.FocusButtonBar)
 		})
 		helpIdx++
 	}
@@ -141,6 +144,13 @@ func copyLogToSd(pl platforms.Platform, logDestPath, logDestName string) string 
 	return outcome
 }
 
+var (
+	errUploadPrepare  = errors.New("failed to prepare upload")
+	errUploadConnect  = errors.New("failed to connect to upload service")
+	errUploadResponse = errors.New("failed to read upload response")
+	errUploadStatus   = errors.New("upload service returned error status")
+)
+
 func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
 	logPath := path.Join(pl.Settings().LogDir, config.LogFile)
 
@@ -156,47 +166,69 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 	if err != nil {
 		pages.RemovePage("temp_upload")
 		log.Error().Err(err).Msg("failed to read log file")
-		return "Error reading log file."
+		return "Unable to read log file."
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	url, err := uploadLogContent(logContent, config.LogUploadURL, client)
+	pages.RemovePage("temp_upload")
+	if err != nil {
+		log.Error().Err(err).Msg("log upload failed")
+		switch {
+		case errors.Is(err, errUploadConnect):
+			return "Unable to connect to upload service."
+		default:
+			return "Unable to upload log file."
+		}
+	}
+
+	return "Log file URL:\n\n" + url
+}
+
+// uploadLogContent uploads log content to the specified URL and returns the resulting URL.
+func uploadLogContent(content []byte, uploadURL string, client *http.Client) (string, error) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", "core.log")
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errUploadPrepare, err)
+	}
+	if _, err = part.Write(content); err != nil {
+		return "", fmt.Errorf("%w: %w", errUploadPrepare, err)
+	}
+	if err = writer.Close(); err != nil {
+		return "", fmt.Errorf("%w: %w", errUploadPrepare, err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	dialer := &net.Dialer{Timeout: 30 * time.Second}
-	conn, err := dialer.DialContext(ctx, "tcp", "termbin.com:9999")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, body)
 	if err != nil {
-		pages.RemovePage("temp_upload")
-		log.Error().Err(err).Msg("failed to connect to termbin.com")
-		return "Error connecting to upload service."
+		return "", fmt.Errorf("%w: %w", errUploadPrepare, err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errUploadConnect, err)
 	}
 	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Msg("failed to close connection")
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Debug().Err(closeErr).Msg("failed to close response body")
 		}
 	}()
 
-	deadlineErr := conn.SetDeadline(time.Now().Add(30 * time.Second))
-	if deadlineErr != nil {
-		pages.RemovePage("temp_upload")
-		log.Error().Err(deadlineErr).Msg("failed to set connection deadline")
-		return "Error uploading log file."
-	}
-
-	_, err = conn.Write(logContent)
+	response, err := io.ReadAll(resp.Body)
 	if err != nil {
-		pages.RemovePage("temp_upload")
-		log.Error().Err(err).Msg("failed to send log content")
-		return "Error uploading log file."
+		return "", fmt.Errorf("%w: %w", errUploadResponse, err)
 	}
 
-	response, err := io.ReadAll(conn)
-	pages.RemovePage("temp_upload")
-	if err != nil {
-		log.Error().Err(err).Msg("failed to read upload response")
-		return "Error reading upload response."
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("%w: %d %s", errUploadStatus, resp.StatusCode, string(response))
 	}
 
-	return "Log file URL:\n\n" + strings.TrimSpace(string(response))
+	return strings.TrimSpace(string(response)), nil
 }
 
 // readLastLines reads the last n lines from a file

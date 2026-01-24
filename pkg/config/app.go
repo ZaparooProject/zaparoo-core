@@ -42,4 +42,5 @@ const (
 	MappingsDir          = "mappings"
 	LaunchersDir         = "launchers"
 	MediaDir             = "media"
+	LogUploadURL         = "https://logs.zaparoo.org/"
 )
