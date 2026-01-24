@@ -1051,7 +1051,7 @@ func Start(
 	serverReady := make(chan struct{})
 
 	go func() {
-		log.Info().Msgf("starting HTTP server on %s", cfg.APIListen())
+		log.Info().Str("listen", cfg.APIListen()).Msg("starting HTTP server")
 		log.Debug().Msg("HTTP server goroutine started, attempting to bind")
 
 		// Create a listener to ensure we can bind to the port before continuing

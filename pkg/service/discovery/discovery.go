@@ -20,10 +20,13 @@
 package discovery
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/grandcat/zeroconf"
 	"github.com/rs/zerolog/log"
 )
@@ -31,14 +34,22 @@ import (
 // ServiceType is the DNS-SD service type for Zaparoo Core.
 const ServiceType = "_zaparoo._tcp"
 
+// retryInterval is how often to retry mDNS registration when network is unavailable.
+const retryInterval = 30 * time.Second
+
+// maxRetryDuration is the maximum time to keep retrying mDNS registration.
+const maxRetryDuration = 5 * time.Minute
+
 // Service manages mDNS service advertising for network discovery.
 // It allows mobile apps to discover Zaparoo Core instances without
 // manual IP configuration.
 type Service struct {
 	server       *zeroconf.Server
 	cfg          *config.Instance
+	cancelFunc   context.CancelFunc
 	platformID   string
-	instanceName string // resolved instance name after Start()
+	instanceName string
+	mu           syncutil.Mutex
 }
 
 // New creates a new discovery service.
@@ -49,8 +60,9 @@ func New(cfg *config.Instance, platformID string) *Service {
 	}
 }
 
-// Start begins mDNS service advertising. Returns an error if advertising
-// fails to start, but callers should treat this as non-fatal.
+// Start begins mDNS service advertising. If initial registration fails due to
+// network unavailability, it starts a background retry loop. Returns an error
+// only for permanent failures (e.g., disabled by config).
 func (s *Service) Start() error {
 	if !s.cfg.DiscoveryEnabled() {
 		log.Info().Msg("mDNS discovery disabled by configuration")
@@ -63,6 +75,29 @@ func (s *Service) Start() error {
 	}
 	s.instanceName = instanceName
 
+	// Try initial registration
+	if s.tryRegister() {
+		return nil
+	}
+
+	// Initial registration failed - start background retry
+	log.Info().
+		Dur("retryInterval", retryInterval).
+		Dur("maxDuration", maxRetryDuration).
+		Msg("mDNS registration failed, starting background retry (network may not be ready)")
+
+	ctx, cancel := context.WithTimeout(context.Background(), maxRetryDuration)
+	s.mu.Lock()
+	s.cancelFunc = cancel
+	s.mu.Unlock()
+
+	go s.retryLoop(ctx)
+
+	return nil
+}
+
+// tryRegister attempts to register the mDNS service. Returns true on success.
+func (s *Service) tryRegister() bool {
 	port := s.cfg.APIPort()
 
 	txtRecords := []string{
@@ -72,7 +107,7 @@ func (s *Service) Start() error {
 	}
 
 	server, err := zeroconf.Register(
-		instanceName,
+		s.instanceName,
 		ServiceType,
 		"local.",
 		port,
@@ -80,21 +115,53 @@ func (s *Service) Start() error {
 		nil, // all network interfaces
 	)
 	if err != nil {
-		return fmt.Errorf("start mDNS advertising: %w", err)
+		log.Debug().Err(err).Msg("mDNS registration attempt failed")
+		return false
 	}
 
+	s.mu.Lock()
 	s.server = server
+	s.mu.Unlock()
+
 	log.Info().
-		Str("instance", instanceName).
+		Str("instance", s.instanceName).
 		Int("port", port).
 		Str("type", ServiceType).
 		Msg("mDNS service advertising started")
 
-	return nil
+	return true
+}
+
+// retryLoop periodically retries mDNS registration until successful or context expires.
+func (s *Service) retryLoop(ctx context.Context) {
+	ticker := time.NewTicker(retryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if s.tryRegister() {
+				log.Info().Msg("mDNS registration succeeded after retry")
+				return
+			}
+		case <-ctx.Done():
+			log.Warn().Msg("mDNS registration retry timed out, discovery will not be available")
+			return
+		}
+	}
 }
 
 // Stop gracefully shuts down mDNS advertising, sending goodbye packets.
 func (s *Service) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Cancel any running retry loop
+	if s.cancelFunc != nil {
+		s.cancelFunc()
+		s.cancelFunc = nil
+	}
+
 	if s.server != nil {
 		log.Debug().Msg("stopping mDNS service advertising")
 		s.server.Shutdown()

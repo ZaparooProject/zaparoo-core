@@ -111,7 +111,7 @@ func NewTracker(
 
 	nameMap := generateNameMap(pl)
 
-	log.Info().Msgf("loaded %d name mappings", len(nameMap))
+	log.Info().Int("count", len(nameMap)).Msg("loaded name mappings")
 
 	return &Tracker{
 		pl:               pl,
@@ -134,7 +134,7 @@ func (tr *Tracker) ReloadNameMap() {
 	defer tr.mu.Unlock()
 
 	nameMap := generateNameMap(tr.pl)
-	log.Info().Msgf("reloaded %d name mappings", len(nameMap))
+	log.Info().Int("count", len(nameMap)).Msg("reloaded name mappings")
 	tr.NameMap = nameMap
 }
 

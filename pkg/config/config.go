@@ -131,9 +131,9 @@ func GetAPIKeys() []string {
 //nolint:gocritic // config struct copied for immutability
 func NewConfig(configDir string, defaults Values) (*Instance, error) {
 	cfgPath := os.Getenv(CfgEnv)
-	log.Debug().Msgf("env config path: %s", cfgPath)
-
-	if cfgPath == "" {
+	if cfgPath != "" {
+		log.Debug().Str("path", cfgPath).Msg("using config path from environment")
+	} else {
 		cfgPath = filepath.Join(configDir, CfgFile)
 	}
 
