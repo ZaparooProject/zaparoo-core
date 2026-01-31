@@ -39,6 +39,7 @@ const (
 	CoreConfigFolder   = SDRootDir + "/config"
 	MenuConfigFile     = CoreConfigFolder + "/MENU.CFG"
 	DefaultIniFilename = "MiSTer.ini"
+	StartPathFile      = "/tmp/STARTPATH"
 )
 
 func MainHasFeature(feature string) bool {
