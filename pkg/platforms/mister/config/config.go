@@ -34,6 +34,7 @@ const (
 	CurrentPathFile    = "/tmp/CURRENTPATH"
 	CoreConfigFolder   = SDRootDir + "/config"
 	DefaultIniFilename = "MiSTer.ini"
+	StartPathFile      = "/tmp/STARTPATH"
 )
 
 func MainHasFeature(feature string) bool {
