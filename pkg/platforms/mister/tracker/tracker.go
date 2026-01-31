@@ -360,6 +360,25 @@ func (tr *Tracker) loadGame() {
 	}
 }
 
+// loadStartPath reads the STARTPATH file (written by MiSTer when log_file_entry=1)
+// and sets it as the active game. This triggers loadGame() via the ACTIVEGAME watcher.
+func (*Tracker) loadStartPath() {
+	data, err := os.ReadFile(misterconfig.StartPathFile)
+	if err != nil {
+		log.Error().Err(err).Msg("error reading STARTPATH")
+		return
+	}
+	path := strings.TrimSpace(string(data))
+	if path == "" {
+		return
+	}
+	log.Info().Str("path", path).Msg("STARTPATH launch detected")
+
+	if err := activegame.SetActiveGame(path); err != nil {
+		log.Error().Err(err).Msg("error setting active game from STARTPATH")
+	}
+}
+
 func (tr *Tracker) StopAll() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
@@ -478,6 +497,8 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 						tr.LoadCore()
 					case event.Name == misterconfig.ActiveGameFile:
 						tr.loadGame()
+					case event.Name == misterconfig.StartPathFile:
+						tr.loadStartPath()
 					case strings.HasPrefix(event.Name, misterconfig.CoreConfigFolder):
 						err = loadRecent(event.Name)
 						if err != nil {
@@ -512,19 +533,35 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		return nil, fmt.Errorf("failed to watch core name file (%s): %w", misterconfig.CoreNameFile, err)
 	}
 
-	if _, statErr := os.Stat(misterconfig.CoreConfigFolder); os.IsNotExist(statErr) {
-		//nolint:gosec // MiSTer system directory, needs to be accessible by other apps
-		mkdirErr := os.MkdirAll(misterconfig.CoreConfigFolder, 0o755)
-		if mkdirErr != nil {
-			return nil, fmt.Errorf("failed to create core config folder: %w", mkdirErr)
-		}
-		log.Info().Msgf("created core config folder: %s", misterconfig.CoreConfigFolder)
+	// Check if STARTPATH exists (indicates MiSTer's log_file_entry=1 is enabled).
+	// If so, use STARTPATH for tracking instead of recents files.
+	useStartPath := false
+	if _, statErr := os.Stat(misterconfig.StartPathFile); statErr == nil {
+		useStartPath = true
+		log.Info().Msg("STARTPATH exists, using log_file_entry for tracking")
 	}
 
-	log.Debug().Msgf("adding watcher for core config folder: %s", misterconfig.CoreConfigFolder)
-	err = watcher.Add(misterconfig.CoreConfigFolder)
-	if err != nil {
-		return nil, fmt.Errorf("failed to watch core config folder (%s): %w", misterconfig.CoreConfigFolder, err)
+	if useStartPath {
+		log.Debug().Msgf("adding watcher for STARTPATH file: %s", misterconfig.StartPathFile)
+		err = watcher.Add(misterconfig.StartPathFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to watch STARTPATH file (%s): %w", misterconfig.StartPathFile, err)
+		}
+	} else {
+		if _, statErr := os.Stat(misterconfig.CoreConfigFolder); os.IsNotExist(statErr) {
+			//nolint:gosec // MiSTer system directory, needs to be accessible by other apps
+			mkdirErr := os.MkdirAll(misterconfig.CoreConfigFolder, 0o755)
+			if mkdirErr != nil {
+				return nil, fmt.Errorf("failed to create core config folder: %w", mkdirErr)
+			}
+			log.Info().Msgf("created core config folder: %s", misterconfig.CoreConfigFolder)
+		}
+
+		log.Debug().Msgf("adding watcher for core config folder: %s", misterconfig.CoreConfigFolder)
+		err = watcher.Add(misterconfig.CoreConfigFolder)
+		if err != nil {
+			return nil, fmt.Errorf("failed to watch core config folder (%s): %w", misterconfig.CoreConfigFolder, err)
+		}
 	}
 
 	if _, statActiveErr := os.Stat(misterconfig.ActiveGameFile); os.IsNotExist(statActiveErr) {
