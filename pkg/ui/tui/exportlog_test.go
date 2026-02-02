@@ -20,6 +20,7 @@
 package tui
 
 import (
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -293,14 +294,182 @@ func TestUploadLogContent_TrimsResponseWhitespace(t *testing.T) {
 func TestUploadLogContent_NonOKStatus(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
+	tests := []struct {
+		name         string
+		responseBody string
+		wantInError  []string
+		statusCode   int
+	}{
+		{
+			name:         "500 internal server error",
+			statusCode:   http.StatusInternalServerError,
+			responseBody: "internal error occurred",
+			wantInError:  []string{"500", "internal error occurred"},
+		},
+		{
+			name:         "403 forbidden",
+			statusCode:   http.StatusForbidden,
+			responseBody: "access denied",
+			wantInError:  []string{"403", "access denied"},
+		},
+		{
+			name:         "413 payload too large",
+			statusCode:   http.StatusRequestEntityTooLarge,
+			responseBody: "file exceeds maximum size",
+			wantInError:  []string{"413", "file exceeds maximum size"},
+		},
+		{
+			name:         "429 rate limited",
+			statusCode:   http.StatusTooManyRequests,
+			responseBody: "rate limit exceeded",
+			wantInError:  []string{"429", "rate limit exceeded"},
+		},
+		{
+			name:         "empty response body",
+			statusCode:   http.StatusBadGateway,
+			responseBody: "",
+			wantInError:  []string{"502"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte(tt.responseBody))
+			}))
+			defer server.Close()
+
+			_, err := uploadLogContent([]byte("test"), server.URL, server.Client())
+
+			require.ErrorIs(t, err, errUploadStatus)
+			for _, want := range tt.wantInError {
+				assert.ErrorContains(t, err, want)
+			}
+		})
+	}
+}
+
+func TestUploadLogContent_EmptyContent(t *testing.T) {
+	t.Parallel()
+
+	expectedURL := "https://logs.zaparoo.org/empty.log"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify empty content is still sent correctly
+		mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if !assert.NoError(t, err) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		assert.Equal(t, "multipart/form-data", mediaType)
+
+		reader := multipart.NewReader(r.Body, params["boundary"])
+		part, err := reader.NextPart()
+		if !assert.NoError(t, err) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		body, err := io.ReadAll(part)
+		if !assert.NoError(t, err) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		assert.Empty(t, body, "empty content should result in empty body")
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(expectedURL))
 	}))
 	defer server.Close()
 
-	_, err := uploadLogContent([]byte("test"), server.URL, server.Client())
+	url, err := uploadLogContent([]byte{}, server.URL, server.Client())
 
-	require.ErrorIs(t, err, errUploadStatus)
+	require.NoError(t, err)
+	assert.Equal(t, expectedURL, url)
+}
+
+func TestUploadLogContent_LargeContent(t *testing.T) {
+	t.Parallel()
+
+	// Create 1MB of log content
+	largeContent := make([]byte, 1024*1024)
+	for i := range largeContent {
+		largeContent[i] = byte('A' + (i % 26))
+	}
+
+	expectedURL := "https://logs.zaparoo.org/large.log"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify large content is received correctly
+		mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if !assert.NoError(t, err) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		assert.Equal(t, "multipart/form-data", mediaType)
+
+		reader := multipart.NewReader(r.Body, params["boundary"])
+		part, err := reader.NextPart()
+		if !assert.NoError(t, err) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		body, err := io.ReadAll(part)
+		if !assert.NoError(t, err) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		assert.Len(t, body, len(largeContent), "large content should be fully transmitted")
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(expectedURL))
+	}))
+	defer server.Close()
+
+	url, err := uploadLogContent(largeContent, server.URL, server.Client())
+
+	require.NoError(t, err)
+	assert.Equal(t, expectedURL, url)
+}
+
+func TestUploadLogContent_InvalidURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		expectedErr error
+		name        string
+		url         string
+	}{
+		{
+			name:        "missing scheme",
+			url:         "://missing-scheme",
+			expectedErr: errUploadPrepare,
+		},
+		{
+			name:        "empty URL",
+			url:         "",
+			expectedErr: errUploadConnect, // Empty URL passes request creation but fails at Do()
+		},
+		{
+			name:        "invalid scheme",
+			url:         "notascheme://example.com",
+			expectedErr: errUploadConnect,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := uploadLogContent([]byte("test"), tt.url, &http.Client{})
+
+			require.ErrorIs(t, err, tt.expectedErr)
+		})
+	}
 }
 
 func TestUploadLogContent_ConnectionError(t *testing.T) {
@@ -309,6 +478,47 @@ func TestUploadLogContent_ConnectionError(t *testing.T) {
 	_, err := uploadLogContent([]byte("test"), "http://localhost:1", &http.Client{})
 
 	require.ErrorIs(t, err, errUploadConnect)
+}
+
+// errorReader is a reader that always returns an error.
+type errorReader struct {
+	err error
+}
+
+func (e errorReader) Read(_ []byte) (int, error) {
+	return 0, e.err
+}
+
+func (errorReader) Close() error {
+	return nil
+}
+
+func TestUploadLogContent_ReadResponseError(t *testing.T) {
+	t.Parallel()
+
+	readErr := errors.New("simulated read failure")
+
+	// Custom transport that returns a response with a failing body
+	client := &http.Client{
+		Transport: roundTripperFunc(func(_ *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       errorReader{err: readErr},
+			}, nil
+		}),
+	}
+
+	_, err := uploadLogContent([]byte("test"), "http://example.com", client)
+
+	require.ErrorIs(t, err, errUploadResponse)
+	assert.ErrorContains(t, err, "simulated read failure")
+}
+
+// roundTripperFunc allows using a function as an http.RoundTripper.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func TestCopyLogToSd_Success(t *testing.T) {
