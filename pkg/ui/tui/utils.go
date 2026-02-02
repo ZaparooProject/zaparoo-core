@@ -146,13 +146,17 @@ const (
 )
 
 // ShowInfoModal displays an informational modal with a title and OK button.
-func ShowInfoModal(pages *tview.Pages, app *tview.Application, title, message string) {
+// onDismiss is called when the modal is closed and should restore focus.
+func ShowInfoModal(pages *tview.Pages, app *tview.Application, title, message string, onDismiss func()) {
 	modal := tview.NewModal().
 		SetText(message).
 		AddButtons([]string{"OK"}).
 		SetDoneFunc(func(_ int, _ string) {
 			pages.HidePage(infoModalPage)
 			pages.RemovePage(infoModalPage)
+			if onDismiss != nil {
+				onDismiss()
+			}
 		})
 	modal.SetTitle(" " + title + " ").
 		SetBorder(true).
