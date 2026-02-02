@@ -49,6 +49,7 @@ type Service struct {
 	cancelFunc   context.CancelFunc
 	platformID   string
 	instanceName string
+	stopped      bool
 	mu           syncutil.Mutex
 }
 
@@ -120,6 +121,13 @@ func (s *Service) tryRegister() bool {
 	}
 
 	s.mu.Lock()
+	// Check if Stop() was called while we were registering. If so, shut down
+	// the newly created server immediately to avoid a resource leak.
+	if s.stopped {
+		s.mu.Unlock()
+		server.Shutdown()
+		return false
+	}
 	s.server = server
 	s.mu.Unlock()
 
@@ -155,6 +163,8 @@ func (s *Service) retryLoop(ctx context.Context) {
 func (s *Service) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	s.stopped = true
 
 	// Cancel any running retry loop
 	if s.cancelFunc != nil {
