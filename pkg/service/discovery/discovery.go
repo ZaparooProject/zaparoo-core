@@ -22,7 +22,9 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -39,6 +41,60 @@ const retryInterval = 30 * time.Second
 
 // maxRetryDuration is the maximum time to keep retrying mDNS registration.
 const maxRetryDuration = 5 * time.Minute
+
+// virtualInterfacePrefixes lists common prefixes for virtual/container network interfaces
+// that should be excluded from mDNS registration.
+var virtualInterfacePrefixes = []string{
+	"docker", "br-", "veth", "virbr", "lxc", "lxd",
+	"cni", "flannel", "cali", "tunl", "wg",
+}
+
+// getPreferredInterfaces returns network interfaces suitable for mDNS registration.
+// It filters out loopback, down, non-multicast, and virtual interfaces.
+func getPreferredInterfaces() ([]net.Interface, error) {
+	allIfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("list network interfaces: %w", err)
+	}
+
+	var preferred []net.Interface
+	for _, iface := range allIfaces {
+		// Skip down interfaces
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+
+		// Skip loopback
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		// Skip non-multicast interfaces (mDNS requires multicast)
+		if iface.Flags&net.FlagMulticast == 0 {
+			continue
+		}
+
+		// Skip virtual/container interfaces
+		if isVirtualInterface(iface.Name) {
+			continue
+		}
+
+		preferred = append(preferred, iface)
+	}
+
+	return preferred, nil
+}
+
+// isVirtualInterface checks if an interface name matches known virtual interface prefixes.
+func isVirtualInterface(name string) bool {
+	lowerName := strings.ToLower(name)
+	for _, prefix := range virtualInterfacePrefixes {
+		if strings.HasPrefix(lowerName, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 // Service manages mDNS service advertising for network discovery.
 // It allows mobile apps to discover Zaparoo Core instances without
@@ -107,13 +163,32 @@ func (s *Service) tryRegister() bool {
 		"platform=" + s.platformID,
 	}
 
+	// Get filtered interfaces (excluding virtual/container interfaces)
+	ifaces, err := getPreferredInterfaces()
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to get network interfaces")
+		return false
+	}
+
+	if len(ifaces) == 0 {
+		log.Debug().Msg("no suitable network interfaces found for mDNS")
+		return false
+	}
+
+	// Log selected interfaces for debugging
+	ifaceNames := make([]string, len(ifaces))
+	for i, iface := range ifaces {
+		ifaceNames[i] = iface.Name
+	}
+	log.Debug().Strs("interfaces", ifaceNames).Msg("selected interfaces for mDNS")
+
 	server, err := zeroconf.Register(
 		s.instanceName,
 		ServiceType,
 		"local.",
 		port,
 		txtRecords,
-		nil, // all network interfaces
+		ifaces,
 	)
 	if err != nil {
 		log.Debug().Err(err).Msg("mDNS registration attempt failed")
@@ -135,6 +210,7 @@ func (s *Service) tryRegister() bool {
 		Str("instance", s.instanceName).
 		Int("port", port).
 		Str("type", ServiceType).
+		Strs("interfaces", ifaceNames).
 		Msg("mDNS service advertising started")
 
 	return true
