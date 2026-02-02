@@ -29,6 +29,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -306,4 +309,69 @@ func TestUploadLogContent_ConnectionError(t *testing.T) {
 	_, err := uploadLogContent([]byte("test"), "http://localhost:1", &http.Client{})
 
 	require.ErrorIs(t, err, errUploadConnect)
+}
+
+func TestCopyLogToSd_Success(t *testing.T) {
+	t.Parallel()
+
+	// Setup: create temp directories and log file
+	logDir := t.TempDir()
+	destDir := t.TempDir()
+
+	logContent := []byte("test log content\nline 2\nline 3")
+	logPath := filepath.Join(logDir, config.LogFile)
+	err := os.WriteFile(logPath, logContent, 0o600)
+	require.NoError(t, err)
+
+	destPath := filepath.Join(destDir, "exported.log")
+
+	// Create mock platform with custom LogDir
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		LogDir: logDir,
+	})
+
+	// Execute
+	result := copyLogToSd(mockPlatform, destPath, "SD Card")
+
+	// Verify the result message
+	assert.Contains(t, result, "Copied")
+	assert.Contains(t, result, config.LogFile)
+	assert.Contains(t, result, "SD Card")
+
+	// Verify file was actually copied with correct content
+	//nolint:gosec // destPath is from t.TempDir(), safe in tests
+	copiedContent, err := os.ReadFile(destPath)
+	require.NoError(t, err)
+	assert.Equal(t, logContent, copiedContent)
+
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCopyLogToSd_Error(t *testing.T) {
+	t.Parallel()
+
+	// Setup: create temp directory but no log file (simulates missing log)
+	logDir := t.TempDir()
+	destDir := t.TempDir()
+	destPath := filepath.Join(destDir, "exported.log")
+
+	// Create mock platform with LogDir pointing to empty directory
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		LogDir: logDir,
+	})
+
+	// Execute - should fail because source log file doesn't exist
+	result := copyLogToSd(mockPlatform, destPath, "SD Card")
+
+	// Verify the error message
+	assert.Contains(t, result, "Unable to copy")
+	assert.Contains(t, result, "SD Card")
+
+	// Verify destination file was not created
+	_, err := os.Stat(destPath)
+	assert.True(t, os.IsNotExist(err), "Destination file should not exist after failed copy")
+
+	mockPlatform.AssertExpectations(t)
 }

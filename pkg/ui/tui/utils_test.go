@@ -435,6 +435,39 @@ func TestShowInfoModal_Integration(t *testing.T) {
 	assert.True(t, runner.ContainsText("OK"), "OK button should be visible")
 }
 
+func TestShowInfoModal_OnDismissCallback(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	mainPage := tview.NewTextView().SetText("Main Page")
+	pages.AddPage("main", mainPage, true, true)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	dismissCalled := make(chan struct{}, 1)
+
+	// Show info modal with dismiss callback
+	runner.QueueUpdateDraw(func() {
+		ShowInfoModal(pages, runner.App(), "Info", "Test message", func() {
+			close(dismissCalled)
+		})
+	})
+
+	// Verify modal is shown
+	require.True(t, runner.WaitForText("Test message", 500*time.Millisecond), "Modal message should appear")
+
+	// Press Enter to dismiss
+	runner.Screen().InjectEnter()
+	runner.Draw()
+
+	// Verify callback was invoked
+	assert.True(t, runner.WaitForSignal(dismissCalled, 500*time.Millisecond), "onDismiss callback should be invoked")
+}
+
 func TestShowErrorModal_Integration(t *testing.T) {
 	t.Parallel()
 
