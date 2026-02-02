@@ -521,6 +521,44 @@ func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
+func TestDoUploadLog_Success(t *testing.T) {
+	t.Parallel()
+
+	expectedURL := "https://logs.zaparoo.org/abc123.log"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(expectedURL))
+	}))
+	defer server.Close()
+
+	result := doUploadLog([]byte("test log content"), server.URL, server.Client())
+
+	assert.Equal(t, "Log file URL:\n\n"+expectedURL, result)
+}
+
+func TestDoUploadLog_ConnectionError(t *testing.T) {
+	t.Parallel()
+
+	result := doUploadLog([]byte("test"), "http://localhost:1", &http.Client{})
+
+	assert.Equal(t, "Unable to connect to upload service.", result)
+}
+
+func TestDoUploadLog_UploadError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("server error"))
+	}))
+	defer server.Close()
+
+	result := doUploadLog([]byte("test"), server.URL, server.Client())
+
+	assert.Equal(t, "Unable to upload log file.", result)
+}
+
 func TestCopyLogToSd_Success(t *testing.T) {
 	t.Parallel()
 

@@ -170,8 +170,14 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	url, err := uploadLogContent(logContent, config.LogUploadURL, client)
+	result := doUploadLog(logContent, config.LogUploadURL, client)
 	pages.RemovePage("temp_upload")
+	return result
+}
+
+// doUploadLog performs the upload and returns a user-friendly message.
+func doUploadLog(logContent []byte, uploadURL string, client *http.Client) string {
+	url, err := uploadLogContent(logContent, uploadURL, client)
 	if err != nil {
 		log.Error().Err(err).Msg("log upload failed")
 		switch {
@@ -181,7 +187,6 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 			return "Unable to upload log file."
 		}
 	}
-
 	return "Log file URL:\n\n" + url
 }
 
