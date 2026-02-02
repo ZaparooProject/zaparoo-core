@@ -57,8 +57,14 @@ func getPreferredInterfaces() ([]net.Interface, error) {
 		return nil, fmt.Errorf("list network interfaces: %w", err)
 	}
 
+	return filterInterfaces(allIfaces), nil
+}
+
+// filterInterfaces filters a list of network interfaces to only include those
+// suitable for mDNS: up, non-loopback, multicast-capable, and non-virtual.
+func filterInterfaces(ifaces []net.Interface) []net.Interface {
 	var preferred []net.Interface
-	for _, iface := range allIfaces {
+	for _, iface := range ifaces {
 		// Skip down interfaces
 		if iface.Flags&net.FlagUp == 0 {
 			continue
@@ -82,7 +88,7 @@ func getPreferredInterfaces() ([]net.Interface, error) {
 		preferred = append(preferred, iface)
 	}
 
-	return preferred, nil
+	return preferred
 }
 
 // isVirtualInterface checks if an interface name matches known virtual interface prefixes.
