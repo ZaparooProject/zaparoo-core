@@ -997,7 +997,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 }
 
 func (p *Platform) ShowNotice(
-	cfg *config.Instance,
+	_ *config.Instance,
 	args widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
 	p.platformMu.Lock()
@@ -1007,7 +1007,7 @@ func (p *Platform) ShowNotice(
 		time.Sleep(3 * time.Second)
 	}
 
-	completePath, err := showNotice(cfg, p, args.Text, false)
+	completePath, err := showNotice(p, args.Text, false)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1020,7 +1020,7 @@ func (p *Platform) ShowNotice(
 }
 
 func (p *Platform) ShowLoader(
-	cfg *config.Instance,
+	_ *config.Instance,
 	args widgetmodels.NoticeArgs,
 ) (func() error, error) {
 	p.platformMu.Lock()
@@ -1030,7 +1030,7 @@ func (p *Platform) ShowLoader(
 		time.Sleep(3 * time.Second)
 	}
 
-	completePath, err := showNotice(cfg, p, args.Text, true)
+	completePath, err := showNotice(p, args.Text, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1043,10 +1043,10 @@ func (p *Platform) ShowLoader(
 }
 
 func (p *Platform) ShowPicker(
-	cfg *config.Instance,
+	_ *config.Instance,
 	args widgetmodels.PickerArgs,
 ) error {
-	return showPicker(cfg, p, args)
+	return showPicker(p, args)
 }
 
 func (p *Platform) ConsoleManager() platforms.ConsoleManager {

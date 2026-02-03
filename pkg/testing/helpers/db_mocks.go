@@ -1427,6 +1427,54 @@ func (m *MockMediaDBI) GetMediaWithFullPathExcluding(excludeSystemIDs []string) 
 	return []database.MediaWithFullPath{}, nil
 }
 
+// GetTitlesBySystemID mock method for per-system lazy loading during resume
+func (m *MockMediaDBI) GetTitlesBySystemID(systemID string) ([]database.TitleWithSystem, error) {
+	// Try to get mock expectations, but don't fail if none are set
+	if len(m.ExpectedCalls) > 0 {
+		for _, call := range m.ExpectedCalls {
+			if call.Method == "GetTitlesBySystemID" {
+				args := m.Called(systemID)
+				if titles, ok := args.Get(0).([]database.TitleWithSystem); ok {
+					if err := args.Error(1); err != nil {
+						return titles, fmt.Errorf("mock operation failed: %w", err)
+					}
+					return titles, nil
+				}
+				if err := args.Error(1); err != nil {
+					return nil, fmt.Errorf("mock operation failed: %w", err)
+				}
+				return []database.TitleWithSystem{}, nil
+			}
+		}
+	}
+	// Default behavior when no expectations are set - return empty slice
+	return []database.TitleWithSystem{}, nil
+}
+
+// GetMediaBySystemID mock method for per-system lazy loading during resume
+func (m *MockMediaDBI) GetMediaBySystemID(systemID string) ([]database.MediaWithFullPath, error) {
+	// Try to get mock expectations, but don't fail if none are set
+	if len(m.ExpectedCalls) > 0 {
+		for _, call := range m.ExpectedCalls {
+			if call.Method == "GetMediaBySystemID" {
+				args := m.Called(systemID)
+				if media, ok := args.Get(0).([]database.MediaWithFullPath); ok {
+					if err := args.Error(1); err != nil {
+						return media, fmt.Errorf("mock operation failed: %w", err)
+					}
+					return media, nil
+				}
+				if err := args.Error(1); err != nil {
+					return nil, fmt.Errorf("mock operation failed: %w", err)
+				}
+				return []database.MediaWithFullPath{}, nil
+			}
+		}
+	}
+	// Default behavior when no expectations are set - return empty slice
+	return []database.MediaWithFullPath{}, nil
+}
+
 func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
 	args := m.Called()
 	if count, ok := args.Get(0).(int); ok {
@@ -1525,15 +1573,6 @@ func (m *MockMediaDBI) RandomGameWithQuery(query *database.MediaQuery) (database
 	}
 	return database.SearchResult{}, nil
 }
-
-// Helper functions for sqlmock setup - MOVED TO pkg/testing/sqlmock
-// These functions have been moved to avoid import cycles.
-// Use github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock instead.
-//
-// SQL Mock functions moved:
-// - SetupSQLMock() -> moved to pkg/testing/sqlmock
-// - SetupSQLMockWithExpectations() -> moved to pkg/testing/sqlmock
-// - NewSQLMock() -> moved to pkg/testing/sqlmock
 
 // ExpectHistoryInsert sets up expectations for history insertion
 func ExpectHistoryInsert(mockDB sqlmock.Sqlmock, entry *database.HistoryEntry) {

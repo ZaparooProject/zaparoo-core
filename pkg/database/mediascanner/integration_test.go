@@ -838,18 +838,17 @@ func TestSlugGenerationPipeline(t *testing.T) {
 			expectedSlug:        "finalfantasy7",
 		},
 
-		// Trailing article format - The filename tag parser normalizes "Title, The" to "The Title"
-		// This happens during tag extraction, before slug generation
+		// Trailing article format - title preserved as-is, slug removes trailing ", The"
 		{
-			name:                "trailing article format - normalized by tag parser",
+			name:                "trailing article format - preserved in title, stripped from slug",
 			systemID:            "NES",
 			path:                "/roms/nes/Legend of Zelda, The (USA).nes",
 			stripLeadingNumbers: false,
-			expectedTitle:       "The Legend of Zelda", // Normalized by filename tag parser
-			expectedSlug:        "legendofzelda",       // Slug removes "The"
+			expectedTitle:       "Legend of Zelda, The", // Title preserves trailing article format
+			expectedSlug:        "legendofzelda",        // Slug strips trailing ", The"
 		},
 
-		// Subtitle handling - filename tag parser normalizes subtitle delimiters
+		// Subtitle handling - title preserves original delimiter, slug removes separators
 		{
 			name:                "subtitle with colon",
 			systemID:            "NES",
@@ -859,12 +858,12 @@ func TestSlugGenerationPipeline(t *testing.T) {
 			expectedSlug:        "zeldalinksawakening",     // Slug removes separator
 		},
 		{
-			name:                "subtitle with dash - normalized to colon by tag parser",
+			name:                "subtitle with dash - preserved as-is",
 			systemID:            "NES",
 			path:                "/roms/nes/Zelda - Link's Awakening (USA).nes",
 			stripLeadingNumbers: false,
-			expectedTitle:       "Zelda: Link's Awakening", // Dash normalized to colon by tag parser
-			expectedSlug:        "zeldalinksawakening",     // Slug removes separator
+			expectedTitle:       "Zelda - Link's Awakening", // Title preserves dash separator
+			expectedSlug:        "zeldalinksawakening",      // Slug removes separator
 		},
 
 		// Edge cases

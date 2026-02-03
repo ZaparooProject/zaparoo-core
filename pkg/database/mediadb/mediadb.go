@@ -1619,6 +1619,18 @@ func (db *MediaDB) GetMediaWithFullPath() ([]database.MediaWithFullPath, error) 
 	return sqlGetMediaWithFullPath(db.ctx, db.sql)
 }
 
+// GetTitlesBySystemID retrieves all media titles for a specific system with their associated system information.
+// This is used for lazy loading during resume to avoid loading ALL titles upfront.
+func (db *MediaDB) GetTitlesBySystemID(systemID string) ([]database.TitleWithSystem, error) {
+	return sqlGetTitlesBySystemID(db.ctx, db.sql, systemID)
+}
+
+// GetMediaBySystemID retrieves all media for a specific system with their associated title and system information.
+// This is used for lazy loading during resume to avoid loading ALL media upfront.
+func (db *MediaDB) GetMediaBySystemID(systemID string) ([]database.MediaWithFullPath, error) {
+	return sqlGetMediaBySystemID(db.ctx, db.sql, systemID)
+}
+
 // GetSystemsExcluding retrieves all systems except those in the excludeSystemIDs list.
 // This is optimized for selective indexing to avoid loading data for systems being reindexed.
 func (db *MediaDB) GetSystemsExcluding(excludeSystemIDs []string) ([]database.System, error) {

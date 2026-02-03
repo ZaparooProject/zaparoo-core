@@ -86,18 +86,18 @@ func TestIsMediaLaunchingCommand(t *testing.T) {
 			cmdName: zapscript.ZapScriptCmdPlaylistGoto,
 			want:    true,
 		},
-		{
-			name:    "playlist.load command",
-			cmdName: zapscript.ZapScriptCmdPlaylistLoad,
-			want:    true,
-		},
-		{
-			name:    "playlist.open command",
-			cmdName: zapscript.ZapScriptCmdPlaylistOpen,
-			want:    true,
-		},
-
 		// Playlist commands that don't launch media - should NOT be blocked
+		// playlist.load just loads without playing, playlist.open shows picker UI
+		{
+			name:    "playlist.load command - loads without playing",
+			cmdName: zapscript.ZapScriptCmdPlaylistLoad,
+			want:    false,
+		},
+		{
+			name:    "playlist.open command - shows picker UI",
+			cmdName: zapscript.ZapScriptCmdPlaylistOpen,
+			want:    false,
+		},
 		{
 			name:    "playlist.stop command",
 			cmdName: zapscript.ZapScriptCmdPlaylistStop,
@@ -272,8 +272,7 @@ func TestIsMediaLaunchingCommand_ComprehensiveCoverage(t *testing.T) {
 		zapscript.ZapScriptCmdPlaylistNext,
 		zapscript.ZapScriptCmdPlaylistPrevious,
 		zapscript.ZapScriptCmdPlaylistGoto,
-		zapscript.ZapScriptCmdPlaylistLoad,
-		zapscript.ZapScriptCmdPlaylistOpen,
+		// Note: playlist.load and playlist.open are NOT blocked - they don't launch media
 		zapscript.ZapScriptCmdMisterMGL,
 		zapscript.ZapScriptCmdRandom, // deprecated
 		zapscript.ZapScriptCmdSystem, // deprecated
@@ -287,6 +286,8 @@ func TestIsMediaLaunchingCommand_ComprehensiveCoverage(t *testing.T) {
 		zapscript.ZapScriptCmdEcho,
 		zapscript.ZapScriptCmdPlaylistStop,
 		zapscript.ZapScriptCmdPlaylistPause,
+		zapscript.ZapScriptCmdPlaylistLoad, // loads without playing
+		zapscript.ZapScriptCmdPlaylistOpen, // shows picker UI
 		zapscript.ZapScriptCmdMisterINI,
 		zapscript.ZapScriptCmdMisterCore,
 		zapscript.ZapScriptCmdMisterScript,

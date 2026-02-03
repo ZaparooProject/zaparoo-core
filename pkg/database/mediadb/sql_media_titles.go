@@ -299,6 +299,37 @@ func sqlGetTitlesWithSystemsExcluding(
 	return titles, rows.Err()
 }
 
+// sqlGetTitlesBySystemID retrieves all media titles for a specific system with their associated system information.
+// This is used for lazy loading during resume to avoid loading ALL titles upfront.
+func sqlGetTitlesBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.TitleWithSystem, error) {
+	query := `
+		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID, s.SystemID
+		FROM MediaTitles t
+		JOIN Systems s ON t.SystemDBID = s.DBID
+		WHERE s.SystemID = ?
+		ORDER BY t.DBID
+	`
+	rows, err := db.QueryContext(ctx, query, systemID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query titles for system %s: %w", systemID, err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	titles := make([]database.TitleWithSystem, 0)
+	for rows.Next() {
+		var title database.TitleWithSystem
+		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID, &title.SystemID); err != nil {
+			return nil, fmt.Errorf("failed to scan title for system %s: %w", systemID, err)
+		}
+		titles = append(titles, title)
+	}
+	return titles, rows.Err()
+}
+
 // PreFilterQuery represents pre-filter parameters for efficient fuzzy matching candidate reduction.
 type PreFilterQuery struct {
 	MinLength    int
