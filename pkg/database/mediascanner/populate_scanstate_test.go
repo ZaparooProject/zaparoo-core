@@ -34,7 +34,6 @@ import (
 )
 
 // TestPopulateScanStateFromDB_EdgeCases tests edge cases for PopulateScanStateFromDB
-// This function was previously a stub and completely non-functional
 func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 	t.Parallel()
 
@@ -356,5 +355,330 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, int(largeID), scanState.SystemsIndex, "Should handle large ID values")
+	})
+
+	t.Run("DoesNotLoadTitlesOrMedia", func(t *testing.T) {
+		t.Parallel()
+
+		// This test verifies that PopulateScanStateFromDB no longer loads TitleIDs and MediaIDs
+		// (they are now lazy-loaded per-system via PopulateScanStateForSystem)
+		sqlDB, err := sql.Open("sqlite3", ":memory:")
+		require.NoError(t, err)
+		defer func() { _ = sqlDB.Close() }()
+
+		ctx := context.Background()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform.On("ID").Return("test-platform")
+
+		mediaDB := &mediadb.MediaDB{}
+		err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
+		require.NoError(t, err)
+
+		// Insert systems, titles, and media
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'NES', 'Nintendo Entertainment System')")
+		require.NoError(t, err)
+
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 1, 'test_game', 'Test Game')")
+		require.NoError(t, err)
+
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (1, 1, 1, 'path/to/game.nes')")
+		require.NoError(t, err)
+
+		scanState := &database.ScanState{
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
+		}
+
+		err = PopulateScanStateFromDB(ctx, mediaDB, scanState)
+		require.NoError(t, err)
+
+		// Max indexes should be set correctly
+		assert.Equal(t, 1, scanState.SystemsIndex, "Should have SystemsIndex = 1")
+		assert.Equal(t, 1, scanState.TitlesIndex, "Should have TitlesIndex = 1")
+		assert.Equal(t, 1, scanState.MediaIndex, "Should have MediaIndex = 1")
+
+		// SystemIDs map should be populated
+		assert.Len(t, scanState.SystemIDs, 1, "SystemIDs map should have 1 entry")
+		assert.Equal(t, 1, scanState.SystemIDs["NES"], "SystemIDs should have NES")
+
+		// TitleIDs and MediaIDs maps should NOT be populated (lazy loading)
+		assert.Empty(t, scanState.TitleIDs, "TitleIDs should be empty (lazy loaded per-system)")
+		assert.Empty(t, scanState.MediaIDs, "MediaIDs should be empty (lazy loaded per-system)")
+	})
+}
+
+// TestPopulateScanStateForSystem tests the per-system lazy loading function
+func TestPopulateScanStateForSystem(t *testing.T) {
+	t.Parallel()
+
+	t.Run("LoadsOnlyRequestedSystem", func(t *testing.T) {
+		t.Parallel()
+
+		sqlDB, err := sql.Open("sqlite3", ":memory:")
+		require.NoError(t, err)
+		defer func() { _ = sqlDB.Close() }()
+
+		ctx := context.Background()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform.On("ID").Return("test-platform")
+
+		mediaDB := &mediadb.MediaDB{}
+		err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
+		require.NoError(t, err)
+
+		// Insert multiple systems with data
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'NES', 'Nintendo Entertainment System')")
+		require.NoError(t, err)
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'SNES', 'Super Nintendo')")
+		require.NoError(t, err)
+
+		// Insert titles for both systems
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 1, 'nes_game_1', 'NES Game 1')")
+		require.NoError(t, err)
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'nes_game_2', 'NES Game 2')")
+		require.NoError(t, err)
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (3, 2, 'snes_game_1', 'SNES Game 1')")
+		require.NoError(t, err)
+
+		// Insert media for both systems
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (1, 1, 1, 'path/to/nes1.nes')")
+		require.NoError(t, err)
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, 'path/to/nes2.nes')")
+		require.NoError(t, err)
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (3, 3, 2, 'path/to/snes1.sfc')")
+		require.NoError(t, err)
+
+		scanState := &database.ScanState{
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  2,
+			TitlesIndex:   3,
+			MediaIndex:    3,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
+		}
+
+		// Load only NES data
+		err = PopulateScanStateForSystem(ctx, mediaDB, scanState, "NES")
+		require.NoError(t, err)
+
+		// Should have only NES titles and media loaded
+		assert.Len(t, scanState.TitleIDs, 2, "Should have 2 NES titles")
+		assert.Len(t, scanState.MediaIDs, 2, "Should have 2 NES media")
+
+		// Verify the correct keys are present
+		assert.Equal(t, 1, scanState.TitleIDs["NES:nes_game_1"], "Should have NES:nes_game_1")
+		assert.Equal(t, 2, scanState.TitleIDs["NES:nes_game_2"], "Should have NES:nes_game_2")
+		assert.Equal(t, 1, scanState.MediaIDs["NES:path/to/nes1.nes"], "Should have NES:path/to/nes1.nes")
+		assert.Equal(t, 2, scanState.MediaIDs["NES:path/to/nes2.nes"], "Should have NES:path/to/nes2.nes")
+
+		// SNES data should NOT be loaded
+		_, hasTitle := scanState.TitleIDs["SNES:snes_game_1"]
+		assert.False(t, hasTitle, "Should NOT have SNES titles")
+		_, hasMedia := scanState.MediaIDs["SNES:path/to/snes1.sfc"]
+		assert.False(t, hasMedia, "Should NOT have SNES media")
+	})
+
+	t.Run("EmptySystemReturnsNoError", func(t *testing.T) {
+		t.Parallel()
+
+		sqlDB, err := sql.Open("sqlite3", ":memory:")
+		require.NoError(t, err)
+		defer func() { _ = sqlDB.Close() }()
+
+		ctx := context.Background()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform.On("ID").Return("test-platform")
+
+		mediaDB := &mediadb.MediaDB{}
+		err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
+		require.NoError(t, err)
+
+		// Insert a system but no data for it
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'NES', 'Nintendo Entertainment System')")
+		require.NoError(t, err)
+
+		scanState := &database.ScanState{
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  1,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
+		}
+
+		// Loading a system with no data should succeed (empty result)
+		err = PopulateScanStateForSystem(ctx, mediaDB, scanState, "NES")
+		require.NoError(t, err)
+
+		assert.Empty(t, scanState.TitleIDs, "Should have no titles")
+		assert.Empty(t, scanState.MediaIDs, "Should have no media")
+	})
+
+	t.Run("NonExistentSystemReturnsNoError", func(t *testing.T) {
+		t.Parallel()
+
+		sqlDB, err := sql.Open("sqlite3", ":memory:")
+		require.NoError(t, err)
+		defer func() { _ = sqlDB.Close() }()
+
+		ctx := context.Background()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform.On("ID").Return("test-platform")
+
+		mediaDB := &mediadb.MediaDB{}
+		err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
+		require.NoError(t, err)
+
+		scanState := &database.ScanState{
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
+		}
+
+		// Loading a non-existent system should succeed (empty result)
+		err = PopulateScanStateForSystem(ctx, mediaDB, scanState, "NONEXISTENT")
+		require.NoError(t, err)
+
+		assert.Empty(t, scanState.TitleIDs, "Should have no titles")
+		assert.Empty(t, scanState.MediaIDs, "Should have no media")
+	})
+
+	t.Run("MultipleCallsAppendData", func(t *testing.T) {
+		t.Parallel()
+
+		sqlDB, err := sql.Open("sqlite3", ":memory:")
+		require.NoError(t, err)
+		defer func() { _ = sqlDB.Close() }()
+
+		ctx := context.Background()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform.On("ID").Return("test-platform")
+
+		mediaDB := &mediadb.MediaDB{}
+		err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
+		require.NoError(t, err)
+
+		// Insert multiple systems with data
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'NES', 'Nintendo Entertainment System')")
+		require.NoError(t, err)
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'SNES', 'Super Nintendo')")
+		require.NoError(t, err)
+
+		// Insert titles and media for both systems
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 1, 'nes_game', 'NES Game')")
+		require.NoError(t, err)
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 2, 'snes_game', 'SNES Game')")
+		require.NoError(t, err)
+
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (1, 1, 1, 'path/to/nes.nes')")
+		require.NoError(t, err)
+		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+			"INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 2, 'path/to/snes.sfc')")
+		require.NoError(t, err)
+
+		scanState := &database.ScanState{
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  2,
+			TitlesIndex:   2,
+			MediaIndex:    2,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
+		}
+
+		// Load NES first
+		err = PopulateScanStateForSystem(ctx, mediaDB, scanState, "NES")
+		require.NoError(t, err)
+		assert.Len(t, scanState.TitleIDs, 1, "Should have 1 title after NES load")
+		assert.Len(t, scanState.MediaIDs, 1, "Should have 1 media after NES load")
+
+		// Load SNES - should append, not replace
+		err = PopulateScanStateForSystem(ctx, mediaDB, scanState, "SNES")
+		require.NoError(t, err)
+		assert.Len(t, scanState.TitleIDs, 2, "Should have 2 titles after SNES load")
+		assert.Len(t, scanState.MediaIDs, 2, "Should have 2 media after SNES load")
+
+		// Verify both systems' data is present
+		assert.Equal(t, 1, scanState.TitleIDs["NES:nes_game"], "NES title should still be present")
+		assert.Equal(t, 2, scanState.TitleIDs["SNES:snes_game"], "SNES title should be added")
+	})
+
+	t.Run("CancellationHandled", func(t *testing.T) {
+		t.Parallel()
+
+		sqlDB, err := sql.Open("sqlite3", ":memory:")
+		require.NoError(t, err)
+		defer func() { _ = sqlDB.Close() }()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform.On("ID").Return("test-platform")
+
+		mediaDB := &mediadb.MediaDB{}
+		err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
+		require.NoError(t, err)
+
+		scanState := &database.ScanState{
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
+		}
+
+		// Cancel before calling
+		cancel()
+
+		err = PopulateScanStateForSystem(ctx, mediaDB, scanState, "NES")
+		require.Error(t, err, "Should return error when context is cancelled")
+		assert.ErrorIs(t, err, context.Canceled, "Error should be context.Canceled")
 	})
 }

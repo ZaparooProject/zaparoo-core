@@ -405,10 +405,14 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("GetMaxTagID").Return(int64(20), nil).Once()
 	// Mock GetAll* methods for PopulateScanStateFromDB to populate maps
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Once()
-	mockMediaDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, nil).Once()
-	mockMediaDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, nil).Once()
 	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Once()
 	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Once()
+	// Mock per-system lazy loading for resume (PopulateScanStateForSystem)
+	// This is called for each system being processed during resume
+	mockMediaDB.On("GetTitlesBySystemID", mock.AnythingOfType("string")).
+		Return([]database.TitleWithSystem{}, nil).Maybe()
+	mockMediaDB.On("GetMediaBySystemID", mock.AnythingOfType("string")).
+		Return([]database.MediaWithFullPath{}, nil).Maybe()
 	// Subsequent calls: normal operation (no truncate because resuming successfully)
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
 	mockMediaDB.On("SetLastIndexedSystem", "genesis").Return(nil).Maybe() // Update progress during processing

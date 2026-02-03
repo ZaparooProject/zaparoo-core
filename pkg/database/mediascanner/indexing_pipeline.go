@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -119,7 +120,7 @@ func AddMediaPath(
 		systemIndex = foundSystemIndex
 	}
 
-	titleKey := systemID + ":" + pf.Slug
+	titleKey := database.TitleKey(systemID, pf.Slug)
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
@@ -151,7 +152,7 @@ func AddMediaPath(
 		titleIndex = foundTitleIndex
 	}
 
-	mediaKey := systemID + ":" + pf.Path
+	mediaKey := database.MediaKey(systemID, pf.Path)
 	if foundMediaIndex, ok := ss.MediaIDs[mediaKey]; !ok {
 		ss.MediaIndex++
 		mediaIndex = ss.MediaIndex
@@ -175,7 +176,7 @@ func AddMediaPath(
 		// Remove leading dot from extension for tag storage
 		extWithoutDot := strings.TrimPrefix(pf.Ext, ".")
 		// Use composite key for extension tags to avoid collisions
-		extensionKey := string(tags.TagTypeExtension) + ":" + extWithoutDot
+		extensionKey := database.TagKey(string(tags.TagTypeExtension), extWithoutDot)
 		if _, ok := ss.TagIDs[extensionKey]; !ok {
 			// Get or create the Extension tag type ID dynamically
 			extensionTypeID, found := ss.TagTypeIDs[string(tags.TagTypeExtension)]
@@ -357,7 +358,7 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 		return fmt.Errorf("error inserting tag unknown: %w", err)
 	}
 	// Use composite key for consistency
-	ss.TagIDs["unknown:unknown"] = ss.TagsIndex
+	ss.TagIDs[database.TagKey("unknown", "unknown")] = ss.TagsIndex
 
 	ss.TagTypesIndex++
 	_, err = db.InsertTagType(database.TagType{
@@ -391,7 +392,7 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 
 		for _, tag := range tagValues {
 			tagValue := strings.ToLower(tag)
-			compositeKey := typeStr + ":" + tagValue
+			compositeKey := database.TagKey(typeStr, tagValue)
 
 			// Skip if we've already inserted this tag
 			if _, exists := ss.TagIDs[compositeKey]; exists {
@@ -511,39 +512,9 @@ func PopulateScanStateFromDB(ctx context.Context, db database.MediaDBI, ss *data
 		ss.SystemIDs[system.SystemID] = int(system.DBID)
 	}
 
-	// Check for cancellation before loading titles
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	titlesWithSystems, err := db.GetTitlesWithSystems()
-	if err != nil {
-		return fmt.Errorf("failed to get existing titles with systems: %w", err)
-	}
-	for _, title := range titlesWithSystems {
-		// Direct construction - SystemID is already available from the JOIN
-		titleKey := title.SystemID + ":" + title.Slug
-		ss.TitleIDs[titleKey] = int(title.DBID)
-	}
-
-	// Check for cancellation before loading media
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	mediaWithFullPath, err := db.GetMediaWithFullPath()
-	if err != nil {
-		return fmt.Errorf("failed to get existing media with full path: %w", err)
-	}
-	for _, m := range mediaWithFullPath {
-		// Direct construction - SystemID is already available from the JOIN
-		mediaKey := m.SystemID + ":" + m.Path
-		ss.MediaIDs[mediaKey] = int(m.DBID)
-	}
+	// NOTE: TitleIDs and MediaIDs are NOT loaded here for resume optimization.
+	// Instead, they are lazy-loaded per-system using PopulateScanStateForSystem()
+	// before processing each system.
 
 	// Check for cancellation before loading tag types
 	select {
@@ -577,10 +548,70 @@ func PopulateScanStateFromDB(ctx context.Context, db database.MediaDBI, ss *data
 		ss.TagIDs[tag.Tag] = int(tag.DBID)
 	}
 
-	log.Debug().Msgf("populated scan state from DB: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d "+
-		"(maps: TagTypes=%d, Tags=%d)",
-		ss.SystemsIndex, ss.TitlesIndex, ss.MediaIndex,
-		ss.TagTypesIndex, ss.TagsIndex, len(ss.TagTypeIDs), len(ss.TagIDs))
+	log.Debug().
+		Int("maxSystemID", ss.SystemsIndex).
+		Int("maxTitleID", ss.TitlesIndex).
+		Int("maxMediaID", ss.MediaIndex).
+		Int("maxTagTypeID", ss.TagTypesIndex).
+		Int("maxTagID", ss.TagsIndex).
+		Int("systemsMapSize", len(ss.SystemIDs)).
+		Int("tagTypesMapSize", len(ss.TagTypeIDs)).
+		Int("tagsMapSize", len(ss.TagIDs)).
+		Msg("populated scan state")
+
+	return nil
+}
+
+// PopulateScanStateForSystem loads the existing titles and media for a single system into the scan state.
+// This is called lazily during resume, just before processing each system.
+//
+// This function is safe to call multiple times for different systems - it appends to the
+// existing TitleIDs and MediaIDs maps.
+func PopulateScanStateForSystem(
+	ctx context.Context, db database.MediaDBI, ss *database.ScanState, systemID string,
+) error {
+	startTime := time.Now()
+
+	// Check for cancellation before starting
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// Load titles for this system
+	titles, err := db.GetTitlesBySystemID(systemID)
+	if err != nil {
+		return fmt.Errorf("failed to get titles for system %s: %w", systemID, err)
+	}
+	for _, title := range titles {
+		titleKey := database.TitleKey(title.SystemID, title.Slug)
+		ss.TitleIDs[titleKey] = int(title.DBID)
+	}
+
+	// Check for cancellation between operations
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// Load media for this system
+	media, err := db.GetMediaBySystemID(systemID)
+	if err != nil {
+		return fmt.Errorf("failed to get media for system %s: %w", systemID, err)
+	}
+	for _, m := range media {
+		mediaKey := database.MediaKey(m.SystemID, m.Path)
+		ss.MediaIDs[mediaKey] = int(m.DBID)
+	}
+
+	log.Debug().
+		Str("system", systemID).
+		Int("titles", len(titles)).
+		Int("media", len(media)).
+		Dur("elapsed", time.Since(startTime)).
+		Msg("loaded existing data for system resume")
 
 	return nil
 }
