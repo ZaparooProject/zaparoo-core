@@ -165,6 +165,8 @@ func launchPlaylistMedia(
 	err := runTokenZapScript(platform, cfg, st, t, db, lsq, plsc, nil)
 	if err != nil {
 		log.Error().Err(err).Msgf("error launching token")
+		path, enabled := cfg.FailSoundPath(helpers.DataDir(platform))
+		helpers.PlayConfiguredSound(path, enabled, assets.FailSound, "fail")
 	}
 
 	now := time.Now()
