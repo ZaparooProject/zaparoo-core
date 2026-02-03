@@ -528,8 +528,11 @@ func PopulateScanStateFromDB(ctx context.Context, db database.MediaDBI, ss *data
 	if err != nil {
 		return fmt.Errorf("failed to get existing tag types: %w", err)
 	}
+	// Build reverse lookup from TypeDBID -> type string for composite key construction
+	tagTypeByDBID := make(map[int64]string, len(tagTypes))
 	for _, tagType := range tagTypes {
 		ss.TagTypeIDs[tagType.Type] = int(tagType.DBID)
+		tagTypeByDBID[tagType.DBID] = tagType.Type
 	}
 
 	// Check for cancellation before loading tags
@@ -539,13 +542,16 @@ func PopulateScanStateFromDB(ctx context.Context, db database.MediaDBI, ss *data
 	default:
 	}
 
-	// Populate tags map
+	// Populate tags map with composite keys (type:value format)
+	// This must match the key format used in AddMediaPath and SeedCanonicalTags
 	allTags, err := db.GetAllTags()
 	if err != nil {
 		return fmt.Errorf("failed to get existing tags: %w", err)
 	}
 	for _, tag := range allTags {
-		ss.TagIDs[tag.Tag] = int(tag.DBID)
+		tagType := tagTypeByDBID[tag.TypeDBID]
+		compositeKey := database.TagKey(tagType, tag.Tag)
+		ss.TagIDs[compositeKey] = int(tag.DBID)
 	}
 
 	log.Debug().

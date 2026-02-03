@@ -682,3 +682,77 @@ func TestPopulateScanStateForSystem(t *testing.T) {
 		assert.ErrorIs(t, err, context.Canceled, "Error should be context.Canceled")
 	})
 }
+
+// TestPopulateScanStateFromDB_TagIDsUseCompositeKeys is a regression test ensuring that
+// TagIDs are populated with composite keys (type:value format) not just the tag value.
+// Bug: Previously, tags were loaded with just tag.Tag as the key (e.g., "usa"), but lookups
+// in AddMediaPath use composite keys (e.g., "region:usa"). This caused cache misses during
+// resume, leading to duplicate insert attempts and UNIQUE constraint violations.
+func TestPopulateScanStateFromDB_TagIDsUseCompositeKeys(t *testing.T) {
+	t.Parallel()
+
+	sqlDB, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = sqlDB.Close() }()
+
+	ctx := context.Background()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+
+	mediaDB := &mediadb.MediaDB{}
+	err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
+	require.NoError(t, err)
+
+	// Insert tag types
+	_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+		"INSERT INTO TagTypes (DBID, Type) VALUES (1, 'region'), (2, 'extension'), (3, 'lang')")
+	require.NoError(t, err)
+
+	// Insert tags with their type references
+	_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+		"INSERT INTO Tags (DBID, Tag, TypeDBID) VALUES (1, 'usa', 1), (2, 'nes', 2), (3, 'en', 3)")
+	require.NoError(t, err)
+
+	scanState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		SystemsIndex:  0,
+		TitlesIndex:   0,
+		MediaIndex:    0,
+		TagTypesIndex: 0,
+		TagsIndex:     0,
+	}
+
+	err = PopulateScanStateFromDB(ctx, mediaDB, scanState)
+	require.NoError(t, err)
+
+	// Verify TagIDs uses composite keys (type:value), not just the tag value
+	// This is the key assertion - if the bug regresses, these will fail
+	assert.Contains(t, scanState.TagIDs, "region:usa",
+		"TagIDs should use composite key 'region:usa', not just 'usa'")
+	assert.Contains(t, scanState.TagIDs, "extension:nes",
+		"TagIDs should use composite key 'extension:nes', not just 'nes'")
+	assert.Contains(t, scanState.TagIDs, "lang:en",
+		"TagIDs should use composite key 'lang:en', not just 'en'")
+
+	// Verify the old (buggy) format is NOT present
+	_, hasOldKey := scanState.TagIDs["usa"]
+	assert.False(t, hasOldKey, "TagIDs should NOT contain plain 'usa' key (old buggy format)")
+	_, hasOldKey = scanState.TagIDs["nes"]
+	assert.False(t, hasOldKey, "TagIDs should NOT contain plain 'nes' key (old buggy format)")
+	_, hasOldKey = scanState.TagIDs["en"]
+	assert.False(t, hasOldKey, "TagIDs should NOT contain plain 'en' key (old buggy format)")
+
+	// Verify the correct DBIDs are stored
+	assert.Equal(t, 1, scanState.TagIDs["region:usa"])
+	assert.Equal(t, 2, scanState.TagIDs["extension:nes"])
+	assert.Equal(t, 3, scanState.TagIDs["lang:en"])
+
+	// Verify TagTypeIDs are also correctly populated
+	assert.Equal(t, 1, scanState.TagTypeIDs["region"])
+	assert.Equal(t, 2, scanState.TagTypeIDs["extension"])
+	assert.Equal(t, 3, scanState.TagTypeIDs["lang"])
+}
