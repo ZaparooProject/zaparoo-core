@@ -241,6 +241,39 @@ func sqlGetMediaWithFullPathExcluding(
 	return media, rows.Err()
 }
 
+// sqlGetMediaBySystemID retrieves all media for a specific system with their associated title and system information.
+// This is used for lazy loading during resume to avoid loading ALL media upfront.
+func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.MediaWithFullPath, error) {
+	query := `
+		SELECT m.DBID, m.Path, m.MediaTitleDBID, m.SystemDBID, t.Slug, s.SystemID
+		FROM Media m
+		JOIN MediaTitles t ON m.MediaTitleDBID = t.DBID
+		JOIN Systems s ON t.SystemDBID = s.DBID
+		WHERE s.SystemID = ?
+		ORDER BY m.DBID
+	`
+	rows, err := db.QueryContext(ctx, query, systemID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media for system %s: %w", systemID, err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	media := make([]database.MediaWithFullPath, 0)
+	for rows.Next() {
+		var m database.MediaWithFullPath
+		var systemDBID int64 // Temporary variable for the extra field
+		if err := rows.Scan(&m.DBID, &m.Path, &m.MediaTitleDBID, &systemDBID, &m.TitleSlug, &m.SystemID); err != nil {
+			return nil, fmt.Errorf("failed to scan media for system %s: %w", systemID, err)
+		}
+		media = append(media, m)
+	}
+	return media, rows.Err()
+}
+
 // sqlGetLaunchCommandForMedia generates a title-based launch command for media at the given path.
 // Returns a command in the format: @systemID/titleName or @systemID/titleName (year:XXXX)
 func sqlGetLaunchCommandForMedia(

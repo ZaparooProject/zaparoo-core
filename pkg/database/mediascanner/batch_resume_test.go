@@ -211,8 +211,13 @@ func TestBatchModeResumeIndexing(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		// Populate from database
+		// Populate global state from database (systems, tags, max IDs)
 		err := PopulateScanStateFromDB(ctx, mediaDB, reindexState)
+		require.NoError(t, err)
+
+		// Lazy load NES system data (titles and media) since PopulateScanStateFromDB
+		// no longer loads these upfront for performance reasons
+		err = PopulateScanStateForSystem(ctx, mediaDB, reindexState, "NES")
 		require.NoError(t, err)
 
 		// Get current counts
@@ -549,8 +554,12 @@ func TestBatchMode_DuplicateDetection(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		// Populate from previous test's data
+		// Populate global state from database
 		err = PopulateScanStateFromDB(ctx, mediaDB, scanState)
+		require.NoError(t, err)
+
+		// Lazy load NES system data since PopulateScanStateFromDB no longer loads per-system data
+		err = PopulateScanStateForSystem(ctx, mediaDB, scanState, "NES")
 		require.NoError(t, err)
 
 		beforeMedia := scanState.MediaIndex

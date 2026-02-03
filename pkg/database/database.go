@@ -28,11 +28,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
-/*
- * In attempting to correct circular import deps, these non-concrete
- * interfaces were moves to this generic package level.
- * Actual implementations found in userdb/mediadb
- */
+// This file contains shared database types and interfaces.
+// Types are defined here to avoid circular imports between userdb and mediadb packages.
 
 // Database is a portable interface for ENV bindings
 type Database struct {
@@ -40,9 +37,7 @@ type Database struct {
 	MediaDB MediaDBI
 }
 
-/*
- * Structs for SQL records
- */
+// Structs for SQL records
 
 type HistoryEntry struct {
 	Time           time.Time  `json:"time"`
@@ -249,9 +244,7 @@ const (
 	JournalModeDELETE JournalMode = "DELETE"
 )
 
-/*
- * Interfaces for external deps
- */
+// Interfaces for external deps
 
 type GenericDBI interface {
 	Open() error
@@ -412,4 +405,8 @@ type MediaDBI interface {
 	GetSystemsExcluding(excludeSystemIDs []string) ([]System, error)
 	GetTitlesWithSystemsExcluding(excludeSystemIDs []string) ([]TitleWithSystem, error)
 	GetMediaWithFullPathExcluding(excludeSystemIDs []string) ([]MediaWithFullPath, error)
+
+	// Per-system query methods for lazy loading during resume
+	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
+	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
 }

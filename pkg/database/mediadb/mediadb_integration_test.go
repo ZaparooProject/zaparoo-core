@@ -1379,3 +1379,255 @@ func TestCheckForDuplicateMediaTitles_Integration(t *testing.T) {
 	assert.Contains(t, duplicates[0], "mario")
 	assert.Contains(t, duplicates[0], "count=2")
 }
+
+// TestMediaDB_GetMediaBySystemID_Integration tests retrieving media for a specific system.
+func TestMediaDB_GetMediaBySystemID_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	// Insert test data for multiple systems
+	err := mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	snesSystem, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	// Insert NES system
+	nesSystemDB := database.System{
+		SystemID: nesSystem.ID,
+		Name:     "NES",
+	}
+	insertedNES, err := mediaDB.InsertSystem(nesSystemDB)
+	require.NoError(t, err)
+
+	// Insert SNES system
+	snesSystemDB := database.System{
+		SystemID: snesSystem.ID,
+		Name:     "SNES",
+	}
+	insertedSNES, err := mediaDB.InsertSystem(snesSystemDB)
+	require.NoError(t, err)
+
+	// Add NES games
+	nesGames := []struct {
+		name string
+		path string
+	}{
+		{"Super Mario Bros", "/roms/nes/mario.nes"},
+		{"The Legend of Zelda", "/roms/nes/zelda.nes"},
+		{"Metroid", "/roms/nes/metroid.nes"},
+	}
+
+	for _, game := range nesGames {
+		title := database.MediaTitle{
+			SystemDBID: insertedNES.DBID,
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, game.name),
+			Name:       game.name,
+		}
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
+		require.NoError(t, titleErr)
+
+		media := database.Media{
+			SystemDBID:     insertedNES.DBID,
+			MediaTitleDBID: insertedTitle.DBID,
+			Path:           game.path,
+		}
+		_, mediaErr := mediaDB.InsertMedia(media)
+		require.NoError(t, mediaErr)
+	}
+
+	// Add SNES games
+	snesGames := []struct {
+		name string
+		path string
+	}{
+		{"Super Mario World", "/roms/snes/mario_world.smc"},
+		{"A Link to the Past", "/roms/snes/zelda_lttp.smc"},
+	}
+
+	for _, game := range snesGames {
+		title := database.MediaTitle{
+			SystemDBID: insertedSNES.DBID,
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, game.name),
+			Name:       game.name,
+		}
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
+		require.NoError(t, titleErr)
+
+		media := database.Media{
+			SystemDBID:     insertedSNES.DBID,
+			MediaTitleDBID: insertedTitle.DBID,
+			Path:           game.path,
+		}
+		_, mediaErr := mediaDB.InsertMedia(media)
+		require.NoError(t, mediaErr)
+	}
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Test: Get NES media only
+	nesMedia, err := mediaDB.GetMediaBySystemID(nesSystem.ID)
+	require.NoError(t, err)
+	assert.Len(t, nesMedia, 3, "should return exactly 3 NES games")
+
+	// Verify all returned media are NES
+	for _, m := range nesMedia {
+		assert.Equal(t, nesSystem.ID, m.SystemID, "all media should be NES")
+		assert.NotEmpty(t, m.Path, "path should not be empty")
+		assert.NotEmpty(t, m.TitleSlug, "slug should not be empty")
+		assert.Positive(t, m.DBID, "DBID should be positive")
+		assert.Positive(t, m.MediaTitleDBID, "MediaTitleDBID should be positive")
+	}
+
+	// Verify specific paths are present
+	nesPaths := make([]string, 0, len(nesMedia))
+	for _, m := range nesMedia {
+		nesPaths = append(nesPaths, m.Path)
+	}
+	assert.Contains(t, nesPaths, "/roms/nes/mario.nes")
+	assert.Contains(t, nesPaths, "/roms/nes/zelda.nes")
+	assert.Contains(t, nesPaths, "/roms/nes/metroid.nes")
+
+	// Test: Get SNES media only
+	snesMedia, err := mediaDB.GetMediaBySystemID(snesSystem.ID)
+	require.NoError(t, err)
+	assert.Len(t, snesMedia, 2, "should return exactly 2 SNES games")
+
+	for _, m := range snesMedia {
+		assert.Equal(t, snesSystem.ID, m.SystemID, "all media should be SNES")
+	}
+
+	// Test: Non-existent system returns empty slice
+	emptyMedia, err := mediaDB.GetMediaBySystemID("nonexistent")
+	require.NoError(t, err)
+	assert.Empty(t, emptyMedia, "non-existent system should return empty slice")
+
+	// Test: Results are ordered by DBID
+	for i := 1; i < len(nesMedia); i++ {
+		assert.Greater(t, nesMedia[i].DBID, nesMedia[i-1].DBID, "results should be ordered by DBID")
+	}
+}
+
+// TestMediaDB_GetTitlesBySystemID_Integration tests retrieving titles for a specific system.
+func TestMediaDB_GetTitlesBySystemID_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	// Insert test data for multiple systems
+	err := mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	snesSystem, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	// Insert NES system
+	nesSystemDB := database.System{
+		SystemID: nesSystem.ID,
+		Name:     "NES",
+	}
+	insertedNES, err := mediaDB.InsertSystem(nesSystemDB)
+	require.NoError(t, err)
+
+	// Insert SNES system
+	snesSystemDB := database.System{
+		SystemID: snesSystem.ID,
+		Name:     "SNES",
+	}
+	insertedSNES, err := mediaDB.InsertSystem(snesSystemDB)
+	require.NoError(t, err)
+
+	// Add NES titles
+	nesTitles := []struct {
+		name string
+	}{
+		{"Super Mario Bros"},
+		{"The Legend of Zelda"},
+		{"Metroid"},
+	}
+
+	for _, title := range nesTitles {
+		mediaTitle := database.MediaTitle{
+			SystemDBID: insertedNES.DBID,
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, title.name),
+			Name:       title.name,
+		}
+		_, titleErr := mediaDB.InsertMediaTitle(&mediaTitle)
+		require.NoError(t, titleErr)
+	}
+
+	// Add SNES titles
+	snesTitles := []struct {
+		name string
+	}{
+		{"Super Mario World"},
+		{"A Link to the Past"},
+	}
+
+	for _, title := range snesTitles {
+		mediaTitle := database.MediaTitle{
+			SystemDBID: insertedSNES.DBID,
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, title.name),
+			Name:       title.name,
+		}
+		_, titleErr := mediaDB.InsertMediaTitle(&mediaTitle)
+		require.NoError(t, titleErr)
+	}
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Test: Get NES titles only
+	nesTitleResults, err := mediaDB.GetTitlesBySystemID(nesSystem.ID)
+	require.NoError(t, err)
+	assert.Len(t, nesTitleResults, 3, "should return exactly 3 NES titles")
+
+	// Verify all returned titles are NES
+	for _, title := range nesTitleResults {
+		assert.Equal(t, nesSystem.ID, title.SystemID, "all titles should be NES")
+		assert.NotEmpty(t, title.Slug, "slug should not be empty")
+		assert.NotEmpty(t, title.Name, "name should not be empty")
+		assert.Positive(t, title.DBID, "DBID should be positive")
+		assert.Positive(t, title.SystemDBID, "SystemDBID should be positive")
+	}
+
+	// Verify specific names are present
+	nesNames := make([]string, 0, len(nesTitleResults))
+	for _, title := range nesTitleResults {
+		nesNames = append(nesNames, title.Name)
+	}
+	assert.Contains(t, nesNames, "Super Mario Bros")
+	assert.Contains(t, nesNames, "The Legend of Zelda")
+	assert.Contains(t, nesNames, "Metroid")
+
+	// Test: Get SNES titles only
+	snesTitleResults, err := mediaDB.GetTitlesBySystemID(snesSystem.ID)
+	require.NoError(t, err)
+	assert.Len(t, snesTitleResults, 2, "should return exactly 2 SNES titles")
+
+	for _, title := range snesTitleResults {
+		assert.Equal(t, snesSystem.ID, title.SystemID, "all titles should be SNES")
+	}
+
+	// Test: Non-existent system returns empty slice
+	emptyTitles, err := mediaDB.GetTitlesBySystemID("nonexistent")
+	require.NoError(t, err)
+	assert.Empty(t, emptyTitles, "non-existent system should return empty slice")
+
+	// Test: Results are ordered by DBID
+	for i := 1; i < len(nesTitleResults); i++ {
+		assert.Greater(t, nesTitleResults[i].DBID, nesTitleResults[i-1].DBID, "results should be ordered by DBID")
+	}
+}
