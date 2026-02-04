@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -147,4 +148,166 @@ func TestReadMRA_EmptyFile(t *testing.T) {
 
 	_, err = ReadMRA(mraPath)
 	require.Error(t, err)
+}
+
+func TestGenerateMgl(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		core     *cores.Core
+		path     string
+		override string
+		want     string
+		wantErr  bool
+	}{
+		{
+			name:    "nil core returns error",
+			core:    nil,
+			path:    "/path/to/game.nes",
+			wantErr: true,
+		},
+		{
+			name: "core only (no path)",
+			core: &cores.Core{
+				ID:  "NES",
+				RBF: "_Console/NES",
+			},
+			path: "",
+			want: "<mistergamedescription>\n\t<rbf>_Console/NES</rbf>\n</mistergamedescription>",
+		},
+		{
+			name: "core with setname",
+			core: &cores.Core{
+				ID:      "FDS",
+				SetName: "FDS",
+				RBF:     "_Console/NES",
+			},
+			path: "",
+			want: "<mistergamedescription>\n\t<rbf>_Console/NES</rbf>\n" +
+				"\t<setname>FDS</setname>\n</mistergamedescription>",
+		},
+		{
+			name: "core with setname and same_dir",
+			core: &cores.Core{
+				ID:             "Atari2600",
+				SetName:        "Atari2600",
+				RBF:            "_Console/Atari7800",
+				SetNameSameDir: true,
+			},
+			path: "",
+			want: "<mistergamedescription>\n\t<rbf>_Console/Atari7800</rbf>\n" +
+				"\t<setname same_dir=\"1\">Atari2600</setname>\n</mistergamedescription>",
+		},
+		{
+			name: "standard game launch",
+			core: &cores.Core{
+				ID:  "NES",
+				RBF: "_Console/NES",
+				Slots: []cores.Slot{
+					{
+						Exts: []string{".nes"},
+						Mgl: &cores.MGLParams{
+							Delay:  2,
+							Method: "f",
+							Index:  1,
+						},
+					},
+				},
+			},
+			path: "/media/fat/games/NES/Mario.nes",
+			want: `<mistergamedescription>
+	<rbf>_Console/NES</rbf>
+	<file delay="2" type="f" index="1" path="../../../../../media/fat/games/NES/Mario.nes"/>
+</mistergamedescription>`,
+		},
+		{
+			name: "game launch with reset tag (Jaguar)",
+			core: &cores.Core{
+				ID:  "Jaguar",
+				RBF: "_Console/Jaguar",
+				Slots: []cores.Slot{
+					{
+						Exts: []string{".jag", ".j64", ".rom", ".bin"},
+						Mgl: &cores.MGLParams{
+							Delay:      1,
+							Method:     "f",
+							Index:      0,
+							ResetDelay: 1,
+							ResetHold:  1,
+						},
+					},
+				},
+			},
+			path: "/media/fat/games/Jaguar/Tempest2000.jag",
+			want: `<mistergamedescription>
+	<rbf>_Console/Jaguar</rbf>
+	<file delay="1" type="f" index="0" path="../../../../../media/fat/games/Jaguar/Tempest2000.jag"/>
+	<reset delay="1" hold="1"/>
+</mistergamedescription>`,
+		},
+		{
+			name: "override takes precedence over path",
+			core: &cores.Core{
+				ID:  "NES",
+				RBF: "_Console/NES",
+				Slots: []cores.Slot{
+					{
+						Exts: []string{".nes"},
+						Mgl: &cores.MGLParams{
+							Delay:  2,
+							Method: "f",
+							Index:  1,
+						},
+					},
+				},
+			},
+			path:     "/media/fat/games/NES/Mario.nes",
+			override: "\t<custom>override</custom>\n",
+			want: `<mistergamedescription>
+	<rbf>_Console/NES</rbf>
+	<custom>override</custom>
+</mistergamedescription>`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := GenerateMgl(tt.core, tt.path, tt.override)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestGenerateMgl_NoMatchingSlot(t *testing.T) {
+	t.Parallel()
+
+	core := &cores.Core{
+		ID:  "NES",
+		RBF: "_Console/NES",
+		Slots: []cores.Slot{
+			{
+				Exts: []string{".nes"},
+				Mgl: &cores.MGLParams{
+					Delay:  2,
+					Method: "f",
+					Index:  1,
+				},
+			},
+		},
+	}
+
+	// Try to launch a .sfc file with NES core - no matching slot
+	_, err := GenerateMgl(core, "/media/fat/games/NES/game.sfc", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no matching mgl args")
 }
