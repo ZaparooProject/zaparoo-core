@@ -351,6 +351,7 @@ func RunCommand(
 			return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
 		}
 		defer st.LauncherManager().EndLaunch()
+		env.LauncherCtx = st.LauncherManager().GetContext()
 	}
 
 	log.Info().Msgf("running command: %s", cmd)

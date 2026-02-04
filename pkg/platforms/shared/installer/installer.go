@@ -86,6 +86,9 @@ func showPreNotice(cfg *config.Instance, pl platforms.Platform, text string) err
 		if err != nil {
 			return fmt.Errorf("error showing pre-notice: %w", err)
 		}
+		if hide == nil {
+			hide = func() error { return nil }
+		}
 
 		if delay > 0 {
 			log.Debug().Msgf("delaying pre-notice: %d", delay)
@@ -135,7 +138,12 @@ type DownloaderArgs struct {
 	tempPath  string
 }
 
+// maxDownloadTimeout is the emergency timeout for downloads. This is a safety
+// backstop for stalled connections, not the primary cancellation mechanism.
+const maxDownloadTimeout = 1 * time.Hour
+
 func InstallRemoteFile(
+	ctx context.Context,
 	cfg *config.Instance,
 	pl platforms.Platform,
 	fileURL string,
@@ -150,6 +158,15 @@ func InstallRemoteFile(
 	if systemID == "" {
 		return "", errors.New("media system id is empty")
 	}
+	if downloader == nil {
+		return "", errors.New("downloader function is nil")
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, maxDownloadTimeout)
+	defer cancel()
 
 	names := namesFromURL(fileURL, displayName)
 
@@ -189,6 +206,9 @@ func InstallRemoteFile(
 	if err != nil {
 		log.Warn().Err(err).Msgf("error showing loading dialog")
 	}
+	if hideLoader == nil {
+		hideLoader = func() error { return nil }
+	}
 
 	if _, statErr := os.Stat(tempPath); statErr == nil {
 		log.Warn().Msgf("removing leftover temp file: %s", tempPath)
@@ -202,7 +222,7 @@ func InstallRemoteFile(
 
 	err = downloader(DownloaderArgs{
 		cfg:       cfg,
-		ctx:       context.Background(),
+		ctx:       ctx,
 		url:       fileURL,
 		finalPath: localPath,
 		tempPath:  tempPath,
