@@ -27,9 +27,11 @@ import (
 )
 
 type MGLParams struct {
-	Method string
-	Delay  int
-	Index  int
+	Method     string
+	Delay      int
+	Index      int
+	ResetDelay int // Delay in seconds before reset (0 = no reset)
+	ResetHold  int // Duration to hold reset signal
 }
 
 type Slot struct {
@@ -478,14 +480,15 @@ var Systems = map[string]Core{
 			{
 				Exts: []string{".jag", ".j64", ".rom", ".bin"},
 				Mgl: &MGLParams{
-					Delay:  1,
-					Method: "s",
-					Index:  1,
+					Delay:      1,
+					Method:     "f",
+					Index:      0,
+					ResetDelay: 1,
+					ResetHold:  1,
 				},
 			},
 		},
 	},
-	// TODO: Jaguar
 	"MasterSystem": {
 		ID:  "MasterSystem",
 		RBF: "_Console/SMS",
