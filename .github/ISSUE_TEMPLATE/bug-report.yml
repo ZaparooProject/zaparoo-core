@@ -8,7 +8,7 @@ body:
       value: |
         Thank you for taking the time to fill out this bug form!
   - type: dropdown
-    id: Platform
+    id: platform
     attributes:
       label: Select the Platform
       description: What platform are you experiencing the issue with?
@@ -22,6 +22,7 @@ body:
         - Bazzite
         - ChimeraOS
         - LibreELEC/CoreELEC
+        - All
       default: 0
     validations:
       required: true

@@ -8,13 +8,25 @@ body:
       value: |
         Thank you for taking the time to fill out this feature form!
   - type: dropdown
-    id: functionality
+    id: platform
     attributes:
-      label: Select the functionality
-      description: In which functionality would you like to add a new feature?
+      label: Select the Platform
+      description: On which platform would you like to add a new feature?
+      id: platform
+    attributes:
+      label: Select the Platform
+      description: What platform are you experiencing the issue with?
       options:
-        - GUI
-        - Templates
+        - MiSTer FPGA
+        - Batocera
+        - MiSTeX
+        - Windows
+        - Linux
+        - SteamOS
+        - Bazzite
+        - ChimeraOS
+        - LibreELEC/CoreELEC
+        - All
       default: 0
     validations:
       required: true

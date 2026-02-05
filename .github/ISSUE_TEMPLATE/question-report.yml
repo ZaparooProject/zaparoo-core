@@ -8,13 +8,21 @@ body:
       value: |
         Thank you for taking the time to fill out the question form!
   - type: dropdown
-    id: functionality
+    id: platform
     attributes:
-      label: Select the functionality
-      description: What functionality do you have a question about?
+      label: Select the Platform
+      description: Which Platform do you have a question about?
       options:
-        - GUI
-        - Templates
+        - MiSTer FPGA
+        - Batocera
+        - MiSTeX
+        - Windows
+        - Linux
+        - SteamOS
+        - Bazzite
+        - ChimeraOS
+        - LibreELEC/CoreELEC
+        - All
       default: 0
     validations:
       required: true
