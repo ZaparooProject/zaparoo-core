@@ -22,7 +22,7 @@ body:
         - Bazzite
         - ChimeraOS
         - LibreELEC/CoreELEC
-        - All
+        - All Platforms
       default: 0
     validations:
       required: true
