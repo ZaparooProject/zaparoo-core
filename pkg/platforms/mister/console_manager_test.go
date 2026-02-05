@@ -336,3 +336,21 @@ func TestMockCoreNameGetter(t *testing.T) {
 	mockCN.coreName = "NES"
 	assert.Equal(t, "NES", cm.coreNameGetter.GetCoreName())
 }
+
+func TestRealCoreNameGetter(t *testing.T) {
+	t.Parallel()
+
+	// realCoreNameGetter wraps mistermain.GetActiveCoreName()
+	// In test environment, CORENAME file won't exist, so it returns empty string
+	getter := realCoreNameGetter{}
+	coreName := getter.GetCoreName()
+
+	// Should return empty string in test env (no MiSTer hardware)
+	// This validates the real implementation doesn't panic and handles missing files
+	assert.NotPanics(t, func() {
+		_ = getter.GetCoreName()
+	})
+	// In test environment, coreName will be empty (no /tmp/CORENAME file)
+	// We can't assert the exact value since it depends on environment
+	_ = coreName
+}
