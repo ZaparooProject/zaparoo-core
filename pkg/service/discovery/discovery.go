@@ -65,22 +65,19 @@ func getPreferredInterfaces() ([]net.Interface, error) {
 func filterInterfaces(ifaces []net.Interface) []net.Interface {
 	var preferred []net.Interface
 	for _, iface := range ifaces {
-		// Skip down interfaces
 		if iface.Flags&net.FlagUp == 0 {
 			continue
 		}
 
-		// Skip loopback
 		if iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
 
-		// Skip non-multicast interfaces (mDNS requires multicast)
+		// mDNS requires multicast
 		if iface.Flags&net.FlagMulticast == 0 {
 			continue
 		}
 
-		// Skip virtual/container interfaces
 		if isVirtualInterface(iface.Name) {
 			continue
 		}
@@ -138,12 +135,10 @@ func (s *Service) Start() error {
 	}
 	s.instanceName = instanceName
 
-	// Try initial registration
 	if s.tryRegister() {
 		return nil
 	}
 
-	// Initial registration failed - start background retry
 	log.Info().
 		Dur("retryInterval", retryInterval).
 		Dur("maxDuration", maxRetryDuration).
@@ -169,7 +164,6 @@ func (s *Service) tryRegister() bool {
 		"platform=" + s.platformID,
 	}
 
-	// Get filtered interfaces (excluding virtual/container interfaces)
 	ifaces, err := getPreferredInterfaces()
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to get network interfaces")
@@ -181,7 +175,6 @@ func (s *Service) tryRegister() bool {
 		return false
 	}
 
-	// Log selected interfaces for debugging
 	ifaceNames := make([]string, len(ifaces))
 	for i, iface := range ifaces {
 		ifaceNames[i] = iface.Name
@@ -248,7 +241,6 @@ func (s *Service) Stop() {
 
 	s.stopped = true
 
-	// Cancel any running retry loop
 	if s.cancelFunc != nil {
 		s.cancelFunc()
 		s.cancelFunc = nil

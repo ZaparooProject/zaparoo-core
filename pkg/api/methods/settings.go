@@ -35,7 +35,6 @@ import (
 func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received settings request")
 
-	// Build reader connections from config
 	connectCfg := env.Config.Readers().Connect
 	readersConnect := make([]models.ReaderConnection, 0, len(connectCfg))
 	for _, rc := range connectCfg {
@@ -169,7 +168,6 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
 	log.Debug().Msg("received playtime limits request")
 
-	// Get current config values
 	enabled := env.Config.PlaytimeLimitsEnabled()
 	daily := env.Config.DailyLimit()
 	session := env.Config.SessionLimit()
@@ -177,13 +175,11 @@ func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
 	warnings := env.Config.WarningIntervals()
 	retention := env.Config.PlaytimeRetention()
 
-	// Build response with optional fields
 	resp := models.PlaytimeLimitsResponse{
 		Enabled:  enabled,
 		Warnings: make([]string, 0, len(warnings)),
 	}
 
-	// Convert durations to strings for response
 	if daily > 0 {
 		dailyStr := daily.String()
 		resp.Daily = &dailyStr
@@ -194,11 +190,9 @@ func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
 		resp.Session = &sessionStr
 	}
 
-	// Always include session reset (even if 0 or default)
 	resetStr := sessionReset.String()
 	resp.SessionReset = &resetStr
 
-	// Convert warning durations to strings
 	for _, w := range warnings {
 		resp.Warnings = append(resp.Warnings, w.String())
 	}
@@ -220,7 +214,6 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
-	// Update each parameter if provided
 	if params.Enabled != nil {
 		log.Info().Bool("enabled", *params.Enabled).Msg("playtime limits update")
 		env.Config.SetPlaytimeLimitsEnabled(*params.Enabled)
@@ -276,7 +269,6 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		env.Config.SetPlaytimeRetention(*params.Retention)
 	}
 
-	// Save configuration to disk
 	err := env.Config.Save()
 	if err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
