@@ -34,6 +34,7 @@ import (
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -91,12 +92,23 @@ var BaseDefaults = Values{
 }
 
 type Instance struct {
+	fs       afero.Fs
 	appPath  string
 	cfgPath  string
 	authPath string
 	vals     Values
 	defaults Values
 	mu       syncutil.RWMutex
+}
+
+// getFs returns the instance's filesystem, defaulting to the OS filesystem
+// if none was set. This allows Instance structs created without NewConfigWithFs
+// to still function correctly.
+func (c *Instance) getFs() afero.Fs {
+	if c.fs != nil {
+		return c.fs
+	}
+	return afero.NewOsFs()
 }
 
 var (
@@ -130,6 +142,14 @@ func GetAPIKeys() []string {
 
 //nolint:gocritic // config struct copied for immutability
 func NewConfig(configDir string, defaults Values) (*Instance, error) {
+	return NewConfigWithFs(configDir, defaults, afero.NewOsFs())
+}
+
+// NewConfigWithFs creates a new config instance using the provided filesystem.
+// This allows tests to use an in-memory filesystem instead of the real OS filesystem.
+//
+//nolint:gocritic // config struct copied for immutability
+func NewConfigWithFs(configDir string, defaults Values, fs afero.Fs) (*Instance, error) {
 	cfgPath := os.Getenv(CfgEnv)
 	if cfgPath != "" {
 		log.Debug().Str("path", cfgPath).Msg("using config path from environment")
@@ -138,6 +158,7 @@ func NewConfig(configDir string, defaults Values) (*Instance, error) {
 	}
 
 	cfg := Instance{
+		fs:       fs,
 		mu:       syncutil.RWMutex{},
 		appPath:  os.Getenv(AppEnv),
 		cfgPath:  cfgPath,
@@ -145,10 +166,10 @@ func NewConfig(configDir string, defaults Values) (*Instance, error) {
 		defaults: defaults,
 	}
 
-	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+	if _, err := fs.Stat(cfgPath); os.IsNotExist(err) {
 		log.Info().Msg("saving new default config to disk")
 
-		err := os.MkdirAll(filepath.Dir(cfgPath), 0o750)
+		err := fs.MkdirAll(filepath.Dir(cfgPath), 0o750)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create config directory: %w", err)
 		}
@@ -177,11 +198,13 @@ func (c *Instance) Load() error {
 		return errors.New("config path not set")
 	}
 
-	if _, err := os.Stat(c.cfgPath); err != nil {
+	fs := c.getFs()
+
+	if _, err := fs.Stat(c.cfgPath); err != nil {
 		return fmt.Errorf("failed to stat config file: %w", err)
 	}
 
-	data, err := os.ReadFile(c.cfgPath)
+	data, err := afero.ReadFile(fs, c.cfgPath)
 	if err != nil {
 		return fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -206,9 +229,9 @@ func (c *Instance) Load() error {
 	c.vals = newVals
 
 	// load auth file
-	if _, err := os.Stat(c.authPath); err == nil {
+	if _, err := fs.Stat(c.authPath); err == nil {
 		log.Info().Msg("loading auth file")
-		authData, err := os.ReadFile(c.authPath)
+		authData, err := afero.ReadFile(fs, c.authPath)
 		if err != nil {
 			return fmt.Errorf("failed to read auth file: %w", err)
 		}
@@ -298,7 +321,7 @@ func (c *Instance) Save() error {
 	c.vals.Mappings = tmpMappings
 	c.vals.Launchers.Custom = tmpCustomLauncher
 
-	if err := os.WriteFile(c.cfgPath, data, 0o600); err != nil {
+	if err := afero.WriteFile(c.getFs(), c.cfgPath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 	return nil

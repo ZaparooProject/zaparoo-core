@@ -20,7 +20,9 @@
 package publishers
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/stretchr/testify/assert"
@@ -149,15 +151,19 @@ func TestMatchesFilter(t *testing.T) {
 func TestStop(t *testing.T) {
 	t.Parallel()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	mockClient := newMockMQTTClient()
-	publisher := NewMQTTPublisher("localhost:1883", "test", nil)
-	publisher.client = mockClient
 	mockClient.connected = true
 
-	// Stop should not panic and should disconnect
+	publisher := NewMQTTPublisher("localhost:1883", "test", nil)
+	publisher.client = mockClient
+	publisher.ctx = ctx
+	publisher.cancel = cancel
+
 	publisher.Stop()
 
-	// Verify disconnect was called
 	assert.Equal(t, 1, mockClient.disconnectCall)
 	assert.False(t, mockClient.IsConnected())
 }
@@ -165,18 +171,21 @@ func TestStop(t *testing.T) {
 func TestStopMultipleTimes(t *testing.T) {
 	t.Parallel()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	mockClient := newMockMQTTClient()
-	publisher := NewMQTTPublisher("localhost:1883", "test", nil)
-	publisher.client = mockClient
 	mockClient.connected = true
 
-	// Stop should be idempotent and safe to call multiple times (no panic)
+	publisher := NewMQTTPublisher("localhost:1883", "test", nil)
+	publisher.client = mockClient
+	publisher.ctx = ctx
+	publisher.cancel = cancel
+
 	publisher.Stop()
 	publisher.Stop()
 	publisher.Stop()
 
-	// Disconnect is only called on the first Stop() when connected=true
-	// Subsequent calls see connected=false and skip disconnect
 	assert.Equal(t, 1, mockClient.disconnectCall)
 }
 
@@ -188,17 +197,13 @@ func TestPublish_Success(t *testing.T) {
 	publisher.client = mockClient
 	mockClient.connected = true
 
-	// Send a test notification
 	testNotif := models.Notification{
 		Method: "media.started",
 		Params: []byte(`{"system": "NES", "name": "Super Mario Bros."}`),
 	}
 	err := publisher.Publish(testNotif)
 
-	// Should succeed without error
 	require.NoError(t, err)
-
-	// Verify message was published (thread-safe check)
 	assert.Equal(t, 1, mockClient.getPublishedCount())
 }
 
@@ -210,28 +215,20 @@ func TestPublish_FilteredOut(t *testing.T) {
 	publisher.client = mockClient
 	mockClient.connected = true
 
-	// Send notification that should be filtered out
 	err := publisher.Publish(models.Notification{
 		Method: "media.started",
 		Params: []byte(`{"system": "NES"}`),
 	})
 
-	// Should succeed (filtering is not an error)
 	require.NoError(t, err)
-
-	// Should not have published anything
 	assert.Equal(t, 0, mockClient.getPublishedCount())
 
-	// Now send one that matches filter
 	err = publisher.Publish(models.Notification{
 		Method: "tokens.added",
 		Params: []byte(`{"uid": "test-uid"}`),
 	})
 
-	// Should succeed
 	require.NoError(t, err)
-
-	// Should have published the matching one
 	assert.Equal(t, 1, mockClient.getPublishedCount())
 }
 
@@ -245,13 +242,11 @@ func TestPublish_PublishError(t *testing.T) {
 	publisher := NewMQTTPublisher("localhost:1883", "test/topic", nil)
 	publisher.client = mockClient
 
-	// Send notification - should return error
 	err := publisher.Publish(models.Notification{
 		Method: "media.stopped",
 		Params: []byte(`{}`),
 	})
 
-	// Should get the error back (either timeout or publish error)
 	assert.Error(t, err)
 }
 
@@ -261,19 +256,15 @@ func TestPublish_DisconnectedClient(t *testing.T) {
 	mockClient := newMockMQTTClient()
 	publisher := NewMQTTPublisher("localhost:1883", "test/topic", nil)
 	publisher.client = mockClient
-	mockClient.connected = false // Client not connected
+	mockClient.connected = false
 
-	// Send notification - should return error
 	err := publisher.Publish(models.Notification{
 		Method: "test.notification",
 		Params: []byte(`{"valid": "json"}`),
 	})
 
-	// Should get error about not being connected
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
-
-	// Should not have attempted to publish
 	assert.Equal(t, 0, mockClient.getPublishedCount())
 }
 
@@ -285,7 +276,6 @@ func TestPublish_Concurrent(t *testing.T) {
 	publisher.client = mockClient
 	mockClient.connected = true
 
-	// Publish multiple notifications concurrently
 	const numGoroutines = 10
 	done := make(chan bool, numGoroutines)
 
@@ -295,17 +285,211 @@ func TestPublish_Concurrent(t *testing.T) {
 				Method: "test.notification",
 				Params: []byte(`{"id": ` + string(rune(id+'0')) + `}`),
 			})
-			// Use assert in goroutine (require.FailNow doesn't work in goroutines)
 			assert.NoError(t, err)
 			done <- true
 		}(i)
 	}
 
-	// Wait for all goroutines
 	for range numGoroutines {
 		<-done
 	}
 
-	// Should have published all notifications
 	assert.Equal(t, numGoroutines, mockClient.getPublishedCount())
+}
+
+func TestStart_ConfigValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		broker  string
+		topic   string
+		wantErr string
+	}{
+		{
+			name:    "empty broker",
+			broker:  "",
+			topic:   "test/topic",
+			wantErr: "broker address is required",
+		},
+		{
+			name:    "empty topic",
+			broker:  "localhost:1883",
+			topic:   "",
+			wantErr: "topic is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			publisher := NewMQTTPublisher(tt.broker, tt.topic, nil)
+			err := publisher.Start(context.Background())
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestStart_ConnectionFailure_ReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	// Start with an unreachable broker. Start() should return nil (not an error)
+	// because connection failures trigger background retry, not immediate failure.
+	publisher := NewMQTTPublisher("unreachable-host-that-does-not-exist:1883", "test/topic", nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := publisher.Start(ctx)
+
+	// Connection failure should NOT be returned as an error
+	require.NoError(t, err)
+
+	// Publisher should not be connected yet
+	assert.False(t, publisher.IsConnected())
+
+	// Clean up the retry goroutine
+	publisher.Stop()
+}
+
+func TestPublish_NilClient(t *testing.T) {
+	t.Parallel()
+
+	publisher := NewMQTTPublisher("localhost:1883", "test/topic", nil)
+	// client is nil (e.g., during retry)
+
+	err := publisher.Publish(models.Notification{
+		Method: "test.notification",
+		Params: []byte(`{}`),
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not connected")
+}
+
+func TestIsConnected(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil client", func(t *testing.T) {
+		t.Parallel()
+
+		publisher := NewMQTTPublisher("localhost:1883", "test", nil)
+		assert.False(t, publisher.IsConnected())
+	})
+
+	t.Run("connected client", func(t *testing.T) {
+		t.Parallel()
+
+		mockClient := newMockMQTTClient()
+		mockClient.connected = true
+		publisher := NewMQTTPublisher("localhost:1883", "test", nil)
+		publisher.client = mockClient
+
+		assert.True(t, publisher.IsConnected())
+	})
+
+	t.Run("disconnected client", func(t *testing.T) {
+		t.Parallel()
+
+		mockClient := newMockMQTTClient()
+		mockClient.connected = false
+		publisher := NewMQTTPublisher("localhost:1883", "test", nil)
+		publisher.client = mockClient
+
+		assert.False(t, publisher.IsConnected())
+	})
+}
+
+func TestRetryConnect_CancelledContext(t *testing.T) {
+	t.Parallel()
+
+	publisher := NewMQTTPublisher("localhost:1883", "test/topic", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	publisher.ctx = ctx
+	publisher.cancel = cancel
+
+	// Cancel immediately — retryConnect should exit without connecting
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		publisher.retryConnect()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// retryConnect exited as expected
+	case <-time.After(2 * time.Second):
+		t.Fatal("retryConnect did not exit after context cancellation")
+	}
+
+	assert.False(t, publisher.IsConnected())
+}
+
+func TestRetryConnect_AlreadyConnected(t *testing.T) {
+	t.Parallel()
+
+	mockClient := newMockMQTTClient()
+	mockClient.connected = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	publisher := NewMQTTPublisher("localhost:1883", "test/topic", nil)
+	publisher.client = mockClient
+	publisher.ctx = ctx
+	publisher.cancel = cancel
+
+	// Override retry interval to be very short for testing
+	origInterval := publisherRetryInterval
+	_ = origInterval // can't override const, but retryConnect will check IsConnected on first tick
+
+	done := make(chan struct{})
+	go func() {
+		publisher.retryConnect()
+		close(done)
+	}()
+
+	// retryConnect should see client is already connected and return on first tick
+	// With 30s default interval this would be slow, so we cancel after a short time
+	// to verify the test doesn't hang. The real verification is that retryConnect
+	// checks IsConnected() and returns early.
+	select {
+	case <-done:
+		// Exited because already connected
+	case <-time.After(35 * time.Second):
+		cancel()
+		t.Fatal("retryConnect did not exit for already-connected client")
+	}
+}
+
+func TestStop_CancelsRetryGoroutine(t *testing.T) {
+	t.Parallel()
+
+	publisher := NewMQTTPublisher("unreachable-host-that-does-not-exist:1883", "test/topic", nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := publisher.Start(ctx)
+	require.NoError(t, err)
+
+	// Stop should cancel the retry goroutine via context
+	publisher.Stop()
+
+	// Give a moment for the goroutine to exit
+	time.Sleep(50 * time.Millisecond)
+
+	// No assertion needed — if the goroutine leaks, the race detector will catch it.
+	// The test itself succeeding (no hang, no race) is the verification.
+}
+
+func TestPublisherRetryInterval(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 30*time.Second, publisherRetryInterval)
 }

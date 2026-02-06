@@ -58,6 +58,8 @@ func (m *mockMQTTClient) getPublishedCount() int {
 }
 
 func (m *mockMQTTClient) IsConnected() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.connected
 }
 
@@ -66,6 +68,9 @@ func (m *mockMQTTClient) IsConnectionOpen() bool {
 }
 
 func (m *mockMQTTClient) Connect() mqtt.Token {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.connectError != nil {
 		return &mockToken{err: m.connectError}
 	}
@@ -74,6 +79,8 @@ func (m *mockMQTTClient) Connect() mqtt.Token {
 }
 
 func (m *mockMQTTClient) Disconnect(_ uint) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.connected = false
 	m.disconnectCall++
 }
