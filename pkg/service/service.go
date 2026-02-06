@@ -582,7 +582,7 @@ func startPublishers(
 			log.Info().Msgf("starting MQTT publisher: %s (topic: %s)", mqttCfg.Broker, mqttCfg.Topic)
 
 			publisher := publishers.NewMQTTPublisher(mqttCfg.Broker, mqttCfg.Topic, mqttCfg.Filter)
-			if err := publisher.Start(); err != nil {
+			if err := publisher.Start(st.GetContext()); err != nil {
 				log.Error().Err(err).Msgf("failed to start MQTT publisher for %s", mqttCfg.Broker)
 				continue
 			}

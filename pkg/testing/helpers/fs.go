@@ -398,22 +398,28 @@ func NewTestConfig(fs *FSHelper, configDir string) (*config.Instance, error) {
 	return NewTestConfigWithPort(fs, configDir, 0) // Use random port by default
 }
 
-// NewTestConfigWithPort creates a config instance for testing with a specific API port
-func NewTestConfigWithPort(_ *FSHelper, configDir string, port int) (*config.Instance, error) {
-	// For now, create a real temporary directory since config.Instance
-	// is tightly coupled with the OS filesystem
-	err := os.MkdirAll(configDir, 0o750)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp config dir: %w", err)
-	}
-
-	// Create defaults with custom port
+// NewTestConfigWithPort creates a config instance for testing with a specific API port.
+// If fs is provided, its in-memory filesystem is used for config file operations.
+// If fs is nil, the real OS filesystem is used.
+func NewTestConfigWithPort(fs *FSHelper, configDir string, port int) (*config.Instance, error) {
 	defaults := config.BaseDefaults
 	if port != 0 {
 		defaults.Service.APIPort = &port
 	}
 
-	// Create config instance using the real filesystem
+	if fs != nil {
+		cfg, err := config.NewConfigWithFs(configDir, defaults, fs.Fs)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create test config: %w", err)
+		}
+		return cfg, nil
+	}
+
+	err := os.MkdirAll(configDir, 0o750)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp config dir: %w", err)
+	}
+
 	cfg, err := config.NewConfig(configDir, defaults)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create test config: %w", err)

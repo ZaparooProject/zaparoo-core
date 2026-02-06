@@ -20,23 +20,30 @@
 package publishers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	mqttreader "github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog/log"
 )
 
+const publisherRetryInterval = 30 * time.Second
+
 // MQTTPublisher publishes system notifications to an MQTT broker.
 type MQTTPublisher struct {
 	client mqtt.Client
+	ctx    context.Context
+	cancel context.CancelFunc
 	broker string
 	topic  string
 	filter []string
+	mu     syncutil.RWMutex
 }
 
 // NewMQTTPublisher creates a new MQTT publisher for the given broker, topic, and optional filter.
@@ -50,44 +57,101 @@ func NewMQTTPublisher(broker, topic string, filter []string) *MQTTPublisher {
 	}
 }
 
-// Start connects to the MQTT broker.
-func (p *MQTTPublisher) Start() error {
-	// Configure MQTT client options using shared helper
+// Start connects to the MQTT broker. If the initial connection fails, a background
+// retry loop is started and nil is returned. Only config validation errors (empty
+// broker or topic) cause Start to return an error.
+func (p *MQTTPublisher) Start(ctx context.Context) error {
+	if p.broker == "" {
+		return errors.New("mqtt publisher: broker address is required")
+	}
+	if p.topic == "" {
+		return errors.New("mqtt publisher: topic is required")
+	}
+
+	p.ctx, p.cancel = context.WithCancel(ctx)
+
+	if err := p.connect(); err != nil {
+		log.Warn().Err(err).Msgf("mqtt publisher: initial connection to %s failed, retrying in background", p.broker)
+		go p.retryConnect()
+		return nil
+	}
+
+	return nil
+}
+
+// connect attempts a single connection to the MQTT broker. On success it sets
+// p.client under write lock. On failure it cleans up and returns an error.
+func (p *MQTTPublisher) connect() error {
 	opts := mqttreader.NewClientOptions(p.broker, "zaparoo-publisher-")
 
-	// Set up connection handlers
 	opts.OnConnect = func(_ mqtt.Client) {
 		log.Info().Msgf("mqtt publisher: connected to %s", p.broker)
 	}
-
 	opts.OnConnectionLost = func(_ mqtt.Client, err error) {
 		log.Warn().Err(err).Msg("mqtt publisher: connection lost")
 	}
 
-	// Create and connect client
-	p.client = mqtt.NewClient(opts)
+	client := mqtt.NewClient(opts)
 
-	token := p.client.Connect()
-	// Use WaitTimeout to prevent indefinite blocking (5 second timeout)
+	token := client.Connect()
 	if !token.WaitTimeout(5 * time.Second) {
-		// Clean up client on timeout to prevent resource leak
-		p.client.Disconnect(0)
-		p.client = nil
-		return errors.New("failed to connect to MQTT broker: connection timeout")
+		client.Disconnect(0)
+		return errors.New("connection timeout")
 	}
 	if err := token.Error(); err != nil {
-		// Clean up client on error to prevent resource leak
-		p.client.Disconnect(0)
-		p.client = nil
-		return fmt.Errorf("failed to connect to MQTT broker: %w", err)
+		client.Disconnect(0)
+		return fmt.Errorf("connection error: %w", err)
 	}
+
+	p.mu.Lock()
+	p.client = client
+	p.mu.Unlock()
 
 	log.Info().Msgf("mqtt publisher: connected to %s (topic: %s)", p.broker, p.topic)
 	return nil
 }
 
-// Stop disconnects from the MQTT broker.
+// retryConnect periodically attempts to connect until success or context cancellation.
+func (p *MQTTPublisher) retryConnect() {
+	ticker := time.NewTicker(publisherRetryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-p.ctx.Done():
+			log.Debug().Msgf("mqtt publisher: retry cancelled for %s", p.broker)
+			return
+		case <-ticker.C:
+			if p.IsConnected() {
+				return
+			}
+
+			if err := p.connect(); err != nil {
+				log.Warn().Err(err).Msgf("mqtt publisher: retry connection to %s failed", p.broker)
+				continue
+			}
+
+			return
+		}
+	}
+}
+
+// IsConnected returns true if the publisher has an active MQTT connection.
+func (p *MQTTPublisher) IsConnected() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.client != nil && p.client.IsConnected()
+}
+
+// Stop disconnects from the MQTT broker and cancels any retry loop.
 func (p *MQTTPublisher) Stop() {
+	if p.cancel != nil {
+		p.cancel()
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if p.client != nil && p.client.IsConnected() {
 		log.Debug().Msg("mqtt publisher: disconnecting")
 		p.client.Disconnect(250)
@@ -99,33 +163,30 @@ func (p *MQTTPublisher) Stop() {
 // It returns an error if publishing fails or times out.
 // This method is safe to call concurrently.
 func (p *MQTTPublisher) Publish(notif models.Notification) error {
-	// Guard against calls on an uninitialized or disconnected client
-	if p.client == nil || !p.client.IsConnected() {
+	p.mu.RLock()
+	client := p.client
+	p.mu.RUnlock()
+
+	if client == nil || !client.IsConnected() {
 		return fmt.Errorf("mqtt publisher for %s is not connected", p.broker)
 	}
 
-	// Apply filter if configured
 	if !p.matchesFilter(notif.Method) {
-		return nil // Not an error, just filtered out
+		return nil
 	}
 
-	// Marshal notification to JSON (includes method and params)
 	payload, err := json.Marshal(notif)
 	if err != nil {
 		log.Error().Err(err).Msg("mqtt publisher: failed to marshal notification")
 		return fmt.Errorf("failed to marshal notification: %w", err)
 	}
 
-	// Publish to MQTT broker (QoS 1 = at-least-once delivery)
-	token := p.client.Publish(p.topic, 1, false, payload)
+	token := client.Publish(p.topic, 1, false, payload)
 
-	// Block until publish is complete or times out
-	// 2 second timeout is reasonable for local/cloud MQTT brokers
 	if !token.WaitTimeout(2 * time.Second) {
 		return fmt.Errorf("publish to %s timed out", p.broker)
 	}
 
-	// Check for error from the broker after waiting
 	if err := token.Error(); err != nil {
 		return fmt.Errorf("failed to publish to %s: %w", p.broker, err)
 	}
@@ -138,12 +199,10 @@ func (p *MQTTPublisher) Publish(notif models.Notification) error {
 // If filter is empty, all notifications pass. Otherwise, only notifications
 // in the filter list are published.
 func (p *MQTTPublisher) matchesFilter(method string) bool {
-	// If no filter configured, publish everything
 	if len(p.filter) == 0 {
 		return true
 	}
 
-	// Check if method is in the filter list
 	for _, f := range p.filter {
 		if f == method {
 			return true

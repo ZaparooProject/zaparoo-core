@@ -20,7 +20,6 @@
 package helpers
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -47,8 +46,8 @@ func TestNewTestConfig(t *testing.T) {
 	assert.NotNil(t, cfg)
 	assert.Equal(t, config.DefaultAPIPort, cfg.APIPort())
 
-	// Verify the config file exists on the real filesystem
+	// Verify the config file exists on the in-memory filesystem
 	configPath := filepath.Join(configDir, config.CfgFile)
-	_, err = os.Stat(configPath)
+	_, err = fs.Fs.Stat(configPath)
 	assert.NoError(t, err, "config file should exist")
 }

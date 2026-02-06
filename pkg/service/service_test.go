@@ -307,7 +307,7 @@ func TestStartPublishers_DisabledPublisher(t *testing.T) {
 
 	// Create config with explicitly disabled publisher
 	configContent := `
-schema_version = 1
+config_schema = 1
 
 [service]
 api_port = 7497
@@ -339,9 +339,9 @@ func TestStartPublishers_InvalidBroker(t *testing.T) {
 	fs := testhelpers.NewMemoryFS()
 	configDir := t.TempDir()
 
-	// Create config with invalid broker that will fail to connect
+	// Create config with unreachable broker
 	configContent := `
-schema_version = 1
+config_schema = 1
 
 [service]
 api_port = 7497
@@ -362,9 +362,46 @@ topic = "zaparoo/events"
 
 	publishers, cancel := startPublishers(st, cfg, notifChan)
 	defer cancel()
+	defer st.StopService() // cancel state context to stop publisher retry goroutines
 
-	// Should return empty slice when publisher fails to start
-	assert.Empty(t, publishers, "should not include publishers that fail to start")
+	// Connection failures now retry in background instead of being skipped,
+	// so the publisher is added to the active list
+	assert.Len(t, publishers, 1, "unreachable broker should still be added (retries in background)")
+}
+
+func TestStartPublishers_EmptyBroker(t *testing.T) {
+	t.Parallel()
+
+	fs := testhelpers.NewMemoryFS()
+	configDir := t.TempDir()
+
+	// Create config with empty broker (config validation error)
+	configContent := `
+config_schema = 1
+
+[service]
+api_port = 7497
+
+[[service.publishers.mqtt]]
+broker = ""
+topic = "zaparoo/events"
+`
+	err := fs.WriteFile(configDir+"/config.toml", []byte(configContent), 0o644)
+	require.NoError(t, err)
+
+	cfg, err := testhelpers.NewTestConfigWithPort(fs, configDir, 7497)
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	notifChan := make(chan models.Notification)
+
+	publishers, cancel := startPublishers(st, cfg, notifChan)
+	defer cancel()
+	defer st.StopService()
+
+	// Config validation errors (empty broker) should still cause the publisher to be skipped
+	assert.Empty(t, publishers, "empty broker should be skipped (config validation error)")
 }
 
 func TestPruneExpiredZapLinkHosts_Success(t *testing.T) {
