@@ -336,65 +336,67 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 		typeMatches[string(tagType)] = strTags
 	}
 
-	ss.TagTypesIndex++
-	_, err := db.InsertTagType(database.TagType{
-		DBID: int64(ss.TagTypesIndex),
-		Type: "unknown",
-	})
-	if err != nil {
-		ss.TagTypesIndex-- // Rollback index increment on failure
-		return fmt.Errorf("error inserting tag type unknown: %w", err)
-	}
-	ss.TagTypeIDs["unknown"] = ss.TagTypesIndex
-
-	ss.TagsIndex++
-	_, err = db.InsertTag(database.Tag{
-		DBID:     int64(ss.TagsIndex),
-		Tag:      "unknown",
-		TypeDBID: int64(ss.TagTypesIndex),
-	})
-	if err != nil {
-		ss.TagsIndex-- // Rollback index increment on failure
-		return fmt.Errorf("error inserting tag unknown: %w", err)
-	}
-	// Use composite key for consistency
-	ss.TagIDs[database.TagKey("unknown", "unknown")] = ss.TagsIndex
-
-	ss.TagTypesIndex++
-	_, err = db.InsertTagType(database.TagType{
-		DBID: int64(ss.TagTypesIndex),
-		Type: "extension",
-	})
-	if err != nil {
-		ss.TagTypesIndex-- // Rollback index increment on failure
-		return fmt.Errorf("error inserting tag type extension: %w", err)
-	}
-	ss.TagTypeIDs["extension"] = ss.TagTypesIndex
-
-	// Seed canonical tag types and values
-	for typeStr, tagValues := range typeMatches {
-		// Skip if we've already inserted this tag type (e.g., "extension" or "unknown")
-		if _, exists := ss.TagTypeIDs[typeStr]; exists {
-			// Tag type already inserted, skip it
-			continue
-		}
-
+	if _, exists := ss.TagTypeIDs["unknown"]; !exists {
 		ss.TagTypesIndex++
 		_, err := db.InsertTagType(database.TagType{
 			DBID: int64(ss.TagTypesIndex),
-			Type: typeStr,
+			Type: "unknown",
 		})
 		if err != nil {
 			ss.TagTypesIndex-- // Rollback index increment on failure
-			return fmt.Errorf("error inserting tag type %s: %w", typeStr, err)
+			return fmt.Errorf("error inserting tag type unknown: %w", err)
 		}
-		ss.TagTypeIDs[typeStr] = ss.TagTypesIndex
+		ss.TagTypeIDs["unknown"] = ss.TagTypesIndex
+	}
+
+	unknownKey := database.TagKey("unknown", "unknown")
+	if _, exists := ss.TagIDs[unknownKey]; !exists {
+		ss.TagsIndex++
+		_, err := db.InsertTag(database.Tag{
+			DBID:     int64(ss.TagsIndex),
+			Tag:      "unknown",
+			TypeDBID: int64(ss.TagTypeIDs["unknown"]),
+		})
+		if err != nil {
+			ss.TagsIndex-- // Rollback index increment on failure
+			return fmt.Errorf("error inserting tag unknown: %w", err)
+		}
+		ss.TagIDs[unknownKey] = ss.TagsIndex
+	}
+
+	if _, exists := ss.TagTypeIDs["extension"]; !exists {
+		ss.TagTypesIndex++
+		_, err := db.InsertTagType(database.TagType{
+			DBID: int64(ss.TagTypesIndex),
+			Type: "extension",
+		})
+		if err != nil {
+			ss.TagTypesIndex-- // Rollback index increment on failure
+			return fmt.Errorf("error inserting tag type extension: %w", err)
+		}
+		ss.TagTypeIDs["extension"] = ss.TagTypesIndex
+	}
+
+	for typeStr, tagValues := range typeMatches {
+		typeID, exists := ss.TagTypeIDs[typeStr]
+		if !exists {
+			ss.TagTypesIndex++
+			_, err := db.InsertTagType(database.TagType{
+				DBID: int64(ss.TagTypesIndex),
+				Type: typeStr,
+			})
+			if err != nil {
+				ss.TagTypesIndex-- // Rollback index increment on failure
+				return fmt.Errorf("error inserting tag type %s: %w", typeStr, err)
+			}
+			typeID = ss.TagTypesIndex
+			ss.TagTypeIDs[typeStr] = typeID
+		}
 
 		for _, tag := range tagValues {
 			tagValue := strings.ToLower(tag)
 			compositeKey := database.TagKey(typeStr, tagValue)
 
-			// Skip if we've already inserted this tag
 			if _, exists := ss.TagIDs[compositeKey]; exists {
 				continue
 			}
@@ -403,7 +405,7 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 			_, err := db.InsertTag(database.Tag{
 				DBID:     int64(ss.TagsIndex),
 				Tag:      tagValue,
-				TypeDBID: int64(ss.TagTypesIndex),
+				TypeDBID: int64(typeID),
 			})
 			if err != nil {
 				ss.TagsIndex-- // Rollback index increment on failure
@@ -694,19 +696,14 @@ func PopulateScanStateForSelectiveIndexing(
 	}
 	ss.TagsIndex = int(maxTagID)
 
-	// For selective indexing, pre-populate SystemIDs to avoid cache key collisions.
-	// IMPORTANT: SystemIDs cache keys are NOT system-scoped (just "pc", "nes", etc).
-	// On platforms like Batocera, multiple folders map to the same SystemID (e.g., 50+ folders → "pc").
-	// Empty SystemIDs map causes cache collisions when processing these folders.
+	// SystemIDs must be pre-populated because keys are NOT system-scoped ("pc", "nes"),
+	// so multiple folders can map to the same SystemID (e.g., Batocera: 50+ folders → "pc").
 	//
-	// TitleIDs and MediaIDs can remain empty because:
-	// - Their cache keys ARE system-scoped (e.g., "nes:mario" vs "snes:mario")
-	// - TruncateSystems() CASCADE deleted all data for reindexed systems
-	// - Only prevents duplicates within the current indexing session
+	// TagTypeIDs and TagIDs must be pre-populated because AddMediaPath uses them to
+	// create MediaTag associations — empty maps cause tags to be silently dropped.
 	//
-	// TagTypeIDs and TagIDs can remain empty because:
-	// - They are global entities reused across all systems
-	// - Database UNIQUE constraints handle duplicates (SeedCanonicalTags uses non-batch mode)
+	// TitleIDs and MediaIDs can remain empty because their keys ARE system-scoped
+	// and TruncateSystems CASCADE deleted all data for reindexed systems.
 
 	// Check for cancellation before loading systems
 	select {
@@ -715,7 +712,6 @@ func PopulateScanStateForSelectiveIndexing(
 	default:
 	}
 
-	// Pre-populate SystemIDs with existing systems (including those not being reindexed)
 	systems, err := db.GetAllSystems()
 	if err != nil {
 		return fmt.Errorf("failed to get existing systems for selective indexing: %w", err)
@@ -725,11 +721,58 @@ func PopulateScanStateForSelectiveIndexing(
 		ss.SystemIDs[system.SystemID] = int(system.DBID)
 	}
 
-	// Keep other maps empty for performance (system-scoped keys or global with UNIQUE constraints)
-	ss.TagTypeIDs = make(map[string]int)
-	ss.TagIDs = make(map[string]int)
+	// Check for cancellation before loading tag types
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	tagTypes, err := db.GetAllTagTypes()
+	if err != nil {
+		return fmt.Errorf("failed to get existing tag types for selective indexing: %w", err)
+	}
+	ss.TagTypeIDs = make(map[string]int, len(tagTypes))
+	tagTypeByDBID := make(map[int64]string, len(tagTypes))
+	for _, tagType := range tagTypes {
+		ss.TagTypeIDs[tagType.Type] = int(tagType.DBID)
+		tagTypeByDBID[tagType.DBID] = tagType.Type
+	}
+
+	// Check for cancellation before loading tags
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	allTags, err := db.GetAllTags()
+	if err != nil {
+		return fmt.Errorf("failed to get existing tags for selective indexing: %w", err)
+	}
+	ss.TagIDs = make(map[string]int, len(allTags))
+	for _, tag := range allTags {
+		tagType := tagTypeByDBID[tag.TypeDBID]
+		compositeKey := database.TagKey(tagType, tag.Tag)
+		ss.TagIDs[compositeKey] = int(tag.DBID)
+	}
+
+	// TitleIDs and MediaIDs remain empty (system-scoped keys, safe for selective indexing)
 	ss.TitleIDs = make(map[string]int)
 	ss.MediaIDs = make(map[string]int)
+
+	// Check for cancellation before re-seeding
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// TruncateSystems orphan-cleans tags only used by truncated systems,
+	// so re-seed any missing canonical tags before indexing.
+	if err := SeedCanonicalTags(db, ss); err != nil {
+		return fmt.Errorf("failed to re-seed canonical tags for selective indexing: %w", err)
+	}
 
 	log.Debug().Msgf("populated scan state for selective indexing: "+
 		"maxIDs: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d; "+

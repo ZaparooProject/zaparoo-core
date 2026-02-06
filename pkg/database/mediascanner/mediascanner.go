@@ -744,10 +744,9 @@ func NewNamesIndex(
 			log.Error().Err(setErr).Msg("failed to clear last indexed system on fresh start")
 		}
 
-		// Seed known tags only on fresh start (after truncate)
-		// Check if we need to seed tags (they might exist from other systems)
-		maxTagTypeID, getMaxErr := db.GetMaxTagTypeID()
-		if getMaxErr != nil || maxTagTypeID == 0 {
+		// Selective indexing already seeds tags via PopulateScanStateForSelectiveIndexing;
+		// only seed here for full truncate where TagTypesIndex is still 0.
+		if scanState.TagTypesIndex == 0 {
 			log.Info().Msg("seeding known tags for fresh indexing")
 			// SeedCanonicalTags runs in its own non-batch transaction for safety.
 			err = SeedCanonicalTags(db, &scanState)
