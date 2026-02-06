@@ -109,9 +109,9 @@ func TestSelectiveUpdate_EmptyCache(t *testing.T) {
 	assert.Contains(t, selectiveState.SystemIDs, "genesis", "SystemIDs should contain existing genesis system")
 	assert.NotContains(t, selectiveState.SystemIDs, "nes", "SystemIDs should not contain truncated nes system")
 
-	// TagTypeIDs and TagIDs can be empty (global entities with UNIQUE constraints)
-	assert.Empty(t, selectiveState.TagTypeIDs, "TagTypeIDs cache should be empty for selective indexing")
-	assert.Empty(t, selectiveState.TagIDs, "TagIDs cache should be empty for selective indexing")
+	// TagTypeIDs and TagIDs must be pre-populated (AddMediaPath needs them for tag associations)
+	assert.NotEmpty(t, selectiveState.TagTypeIDs, "TagTypeIDs cache should be pre-populated from DB")
+	assert.NotEmpty(t, selectiveState.TagIDs, "TagIDs cache should be pre-populated from DB")
 
 	// Verify max IDs were set correctly (DBID continuity)
 	assert.Positive(t, selectiveState.TitlesIndex, "TitlesIndex should be set from max ID")
@@ -382,8 +382,8 @@ func TestSelectiveUpdate_GlobalEntitiesLazyLoad(t *testing.T) {
 		SystemIDs:     make(map[string]int),
 		TitleIDs:      make(map[string]int),
 		MediaIDs:      make(map[string]int),
-		TagTypeIDs:    make(map[string]int), // EMPTY - will lazy load
-		TagIDs:        make(map[string]int), // EMPTY - will lazy load
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
 		SystemsIndex:  0,
 		TitlesIndex:   0,
 		MediaIndex:    0,
@@ -394,9 +394,8 @@ func TestSelectiveUpdate_GlobalEntitiesLazyLoad(t *testing.T) {
 	err = PopulateScanStateForSelectiveIndexing(ctx, db, selectiveState, []string{"nes"})
 	require.NoError(t, err)
 
-	// Verify caches are empty
-	assert.Empty(t, selectiveState.TagTypeIDs, "TagTypeIDs cache should be empty")
-	assert.Empty(t, selectiveState.TagIDs, "TagIDs cache should be empty")
+	assert.NotEmpty(t, selectiveState.TagTypeIDs, "TagTypeIDs cache should be pre-populated from DB")
+	assert.NotEmpty(t, selectiveState.TagIDs, "TagIDs cache should be pre-populated from DB")
 
 	// Re-index NES - this should lazy-load existing Tags/TagTypes, not create duplicates
 	err = db.BeginTransaction(false)
@@ -592,4 +591,103 @@ func TestSelectiveUpdate_DuplicateTagPrevention(t *testing.T) {
 
 	t.Logf("✓ Verified no duplicates: TagTypes=%d (unchanged), Tags %d→%d (orphans cleaned)",
 		len(tagTypesAfterReindex), len(tagsBeforeUpdate), len(tagsAfterReindex))
+}
+
+// TestSelectiveUpdate_MediaTagAssociationsPreserved verifies that media entries
+// actually have tag associations after selective reindexing (regression test for #504).
+func TestSelectiveUpdate_MediaTagAssociationsPreserved(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	defer cleanup()
+
+	testSystems := []string{"nes", "snes", "genesis"}
+	batch := testdata.CreateReproducibleBatch(testSystems, 10)
+
+	// Phase 1: Full index
+	initialState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		SystemsIndex:  0,
+		TitlesIndex:   0,
+		MediaIndex:    0,
+		TagTypesIndex: 0,
+		TagsIndex:     0,
+	}
+
+	err := SeedCanonicalTags(db, initialState)
+	require.NoError(t, err)
+
+	err = db.BeginTransaction(false)
+	require.NoError(t, err)
+
+	for _, systemID := range testSystems {
+		entries := batch.Entries[systemID]
+		for _, entry := range entries {
+			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil)
+			require.NoError(t, addErr)
+		}
+	}
+
+	err = db.CommitTransaction()
+	require.NoError(t, err)
+
+	var mediaTagCountBefore int
+	err = db.UnsafeGetSQLDb().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM MediaTags mt
+		 JOIN Media m ON mt.MediaDBID = m.DBID
+		 JOIN Systems s ON m.SystemDBID = s.DBID
+		 WHERE s.SystemID = ?`, "nes").Scan(&mediaTagCountBefore)
+	require.NoError(t, err)
+	require.Positive(t, mediaTagCountBefore, "NES media should have tag associations from full index")
+	t.Logf("NES MediaTag count before selective reindex: %d", mediaTagCountBefore)
+
+	// Phase 2: Selective reindex of NES
+	err = db.TruncateSystems([]string{"nes"})
+	require.NoError(t, err)
+
+	selectiveState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		SystemsIndex:  0,
+		TitlesIndex:   0,
+		MediaIndex:    0,
+		TagTypesIndex: 0,
+		TagsIndex:     0,
+	}
+
+	err = PopulateScanStateForSelectiveIndexing(ctx, db, selectiveState, []string{"nes"})
+	require.NoError(t, err)
+
+	err = db.BeginTransaction(false)
+	require.NoError(t, err)
+
+	nesEntries := batch.Entries["nes"]
+	for _, entry := range nesEntries {
+		_, _, addErr := AddMediaPath(db, selectiveState, "nes", entry.Path, false, false, nil)
+		require.NoError(t, addErr)
+	}
+
+	err = db.CommitTransaction()
+	require.NoError(t, err)
+
+	// Phase 3: Verify MediaTag associations were recreated
+	var mediaTagCountAfter int
+	err = db.UnsafeGetSQLDb().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM MediaTags mt
+		 JOIN Media m ON mt.MediaDBID = m.DBID
+		 JOIN Systems s ON m.SystemDBID = s.DBID
+		 WHERE s.SystemID = ?`, "nes").Scan(&mediaTagCountAfter)
+	require.NoError(t, err)
+
+	assert.Equal(t, mediaTagCountBefore, mediaTagCountAfter,
+		"MediaTag count should match after selective reindex (tags must not be silently dropped)")
+	t.Logf("NES MediaTag count after selective reindex: %d (expected %d)", mediaTagCountAfter, mediaTagCountBefore)
 }
