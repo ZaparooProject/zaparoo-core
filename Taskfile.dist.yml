@@ -1,6 +1,7 @@
 version: "3"
 
 env:
+  GOTOOLCHAIN: auto
   GOPROXY: https://goproxy.io,direct
   APP_VERSION:
     sh: echo -n "${APP_VERSION:-$(git rev-parse --short HEAD)-dev}"

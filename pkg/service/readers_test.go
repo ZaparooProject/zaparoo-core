@@ -591,3 +591,116 @@ func TestTimedExitConditions_ReaderIDRequired(t *testing.T) {
 		})
 	}
 }
+
+// TestReaderErrorRecovery_PrevTokenPreservation tests that prevToken is
+// preserved through reader errors so that duplicate detection still works
+// when a reader reconnects and re-detects the same card. This is the core
+// fix for #497: USB controller hotplug causing false NFC re-scans.
+//
+// This test exercises the scanPreprocessor directly rather than simulating
+// the logic inline.
+func TestReaderErrorRecovery_PrevTokenPreservation(t *testing.T) {
+	t.Parallel()
+
+	cardToken := &tokens.Token{
+		UID:      "abc123",
+		Text:     "**launch.system:nes",
+		ScanTime: time.Now(),
+	}
+
+	tests := []struct {
+		initialPrev  *tokens.Token
+		scan         *tokens.Token
+		expectedPrev *tokens.Token
+		name         string
+		wantAction   scanAction
+		readerError  bool
+	}{
+		{
+			name:         "normal scan updates prevToken",
+			initialPrev:  nil,
+			scan:         cardToken,
+			readerError:  false,
+			wantAction:   scanNewToken,
+			expectedPrev: cardToken,
+		},
+		{
+			name:         "normal removal clears prevToken",
+			initialPrev:  cardToken,
+			scan:         nil,
+			readerError:  false,
+			wantAction:   scanNormalRemoval,
+			expectedPrev: nil,
+		},
+		{
+			name:         "reader error preserves prevToken",
+			initialPrev:  cardToken,
+			scan:         nil,
+			readerError:  true,
+			wantAction:   scanReaderErrorRemoval,
+			expectedPrev: cardToken,
+		},
+		{
+			name:         "reader error with nil prevToken is duplicate (nil==nil)",
+			initialPrev:  nil,
+			scan:         nil,
+			readerError:  true,
+			wantAction:   scanSkipDuplicate,
+			expectedPrev: nil,
+		},
+		{
+			name:         "re-scan after reader error is duplicate",
+			initialPrev:  cardToken,
+			scan:         cardToken,
+			readerError:  false,
+			wantAction:   scanSkipDuplicate,
+			expectedPrev: cardToken,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			proc := &scanPreprocessor{prevToken: tt.initialPrev}
+			action := proc.Process(tt.scan, tt.readerError)
+
+			assert.Equal(t, tt.wantAction, action, "unexpected action")
+			assert.Equal(t, tt.expectedPrev, proc.PrevToken(),
+				"prevToken should match expected value after Process")
+		})
+	}
+}
+
+// TestReaderErrorRecovery_FullSequence simulates the complete sequence from
+// #497: card scanned → reader error (USB hotplug) → reader reconnects →
+// same card detected. The fix ensures the re-detection is caught as a
+// duplicate and suppressed.
+//
+// This test exercises the scanPreprocessor directly.
+func TestReaderErrorRecovery_FullSequence(t *testing.T) {
+	t.Parallel()
+
+	card := &tokens.Token{
+		UID:  "nfc-tag-001",
+		Text: "**launch.system:snes",
+	}
+
+	proc := &scanPreprocessor{}
+
+	// 1. Initial card scan — should pass through
+	action := proc.Process(card, false)
+	assert.Equal(t, scanNewToken, action, "first scan should not be duplicate")
+	assert.Equal(t, card, proc.PrevToken())
+
+	// 2. Reader error (USB controller hotplug) — prevToken preserved
+	action = proc.Process(nil, true)
+	assert.Equal(t, scanReaderErrorRemoval, action)
+	assert.Equal(t, card, proc.PrevToken(),
+		"prevToken must be preserved through reader error")
+
+	// 3. Reader reconnects, same card detected — should be caught as duplicate
+	action = proc.Process(card, false)
+	assert.Equal(t, scanSkipDuplicate, action,
+		"re-scan of same card after reader error recovery must be detected as duplicate")
+}

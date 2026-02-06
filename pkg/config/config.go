@@ -479,6 +479,18 @@ func ClearAuthCfgForTesting() {
 	authCfg.Store(map[string]CredentialEntry{})
 }
 
+// DisableAllSoundsForTesting disables all audio feedback to prevent
+// goroutine leaks from audio drivers (e.g. malgo on macOS) during tests.
+func (c *Instance) DisableAllSoundsForTesting() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	disabled := ""
+	c.vals.Audio.SuccessSound = &disabled
+	c.vals.Audio.FailSound = &disabled
+	c.vals.Audio.LimitSound = &disabled
+	c.vals.Audio.ScanFeedback = false
+}
+
 // SetExecuteAllowListForTesting configures the execute allow list for tests.
 func (c *Instance) SetExecuteAllowListForTesting(allowList []string) {
 	c.mu.Lock()
