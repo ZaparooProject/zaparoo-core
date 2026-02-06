@@ -1,19 +1,17 @@
-name: Feature request
-description: If you want to have a feature to be added, please fill out this form.
-title: "[Feature request]: "
-labels: ["enhancement"]
-
+name: Question
+description: If you have a question, please fill out this form.
+title: "[Question]: "
+labels: ["question"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you for taking the time to fill out this feature form!
-
+        Thank you for taking the time to fill out the question form!
   - type: dropdown
     id: platform
     attributes:
       label: Select the platform
-      description: On which platform would you like this feature to be added?
+      description: Which platform do you have a question about?
       options:
         - MiSTer FPGA
         - Batocera
@@ -25,19 +23,20 @@ body:
         - ChimeraOS
         - LibreELEC/CoreELEC
         - All platforms
+      default: 0
     validations:
       required: true
-
   - type: textarea
-    id: feature
+    id: question
     attributes:
-      label: Describe the feature
-      description: Describe the feature as accurately as possible.
+      label: Describe your question
+      description: Describe your question as accurately as possible.
     validations:
       required: true
-
   - type: textarea
     id: screenshots
     attributes:
       label: Add screenshots
       description: Please add screenshots if available.
+    validations:
+      required: false
