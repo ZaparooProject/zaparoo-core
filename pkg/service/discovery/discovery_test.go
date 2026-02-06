@@ -317,19 +317,15 @@ func TestGetPreferredInterfaces(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, iface := range ifaces {
-		// All returned interfaces must be up
-		assert.NotEqual(t, iface.Flags&net.FlagUp, 0,
+		assert.NotZero(t, iface.Flags&net.FlagUp,
 			"interface %s should be up", iface.Name)
 
-		// None should be loopback
-		assert.Equal(t, iface.Flags&net.FlagLoopback, 0,
+		assert.Zero(t, iface.Flags&net.FlagLoopback,
 			"interface %s should not be loopback", iface.Name)
 
-		// All should support multicast
-		assert.NotEqual(t, iface.Flags&net.FlagMulticast, 0,
+		assert.NotZero(t, iface.Flags&net.FlagMulticast,
 			"interface %s should support multicast", iface.Name)
 
-		// None should be virtual interfaces
 		assert.False(t, isVirtualInterface(iface.Name),
 			"interface %s should not be a virtual interface", iface.Name)
 	}
