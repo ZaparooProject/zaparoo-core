@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
@@ -312,7 +313,7 @@ func Start(
 	}
 
 	log.Info().Msg("starting reader manager")
-	go readerManager(pl, cfg, st, db, itq, lsq, plq)
+	go readerManager(pl, cfg, st, db, itq, lsq, plq, make(chan readers.Scan))
 
 	log.Info().Msg("starting input token queue manager")
 	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq, limitsManager)

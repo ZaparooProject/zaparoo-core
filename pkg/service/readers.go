@@ -285,12 +285,11 @@ func readerManager(
 	itq chan<- tokens.Token,
 	lsq chan *tokens.Token,
 	plq chan *playlists.Playlist,
+	scanQueue chan readers.Scan,
 ) {
-	scanQueue := make(chan readers.Scan)
-
 	var lastError time.Time
 
-	var prevToken *tokens.Token
+	proc := &scanPreprocessor{}
 	var exitTimer *time.Timer
 
 	var autoDetector *AutoDetector
@@ -409,23 +408,15 @@ preprocessing:
 			continue preprocessing
 		}
 
-		if helpers.TokensEqual(scan, prevToken) {
+		switch proc.Process(scan, readerError) {
+		case scanSkipDuplicate:
 			log.Debug().
 				Str("source", scanSource).
 				Bool("readerError", readerError).
 				Msg("ignoring duplicate scan")
 			continue preprocessing
-		}
 
-		if !readerError {
-			prevToken = scan
-		} else {
-			log.Debug().
-				Bool("prevTokenSet", prevToken != nil).
-				Msg("preserving prevToken through reader error")
-		}
-
-		if scan != nil {
+		case scanNewToken:
 			log.Info().Msgf("new token scanned: %v", scan)
 
 			// Run on_scan hook before SetActiveCard so last_scanned refers to previous token
@@ -470,22 +461,21 @@ preprocessing:
 			log.Info().Msgf("sending token to queue: %v", scan)
 
 			itq <- *scan
-		} else {
-			log.Info().Msg("token was removed")
 
-			if readerError {
-				log.Warn().
-					Str("source", scanSource).
-					Bool("prevTokenSet", prevToken != nil).
-					Msg("token removal due to reader error, keeping media running")
-				if exitTimer != nil {
-					if stopped := exitTimer.Stop(); stopped {
-						log.Debug().Msg("cancelled exit timer due to reader error")
-					}
+		case scanReaderErrorRemoval:
+			log.Warn().
+				Str("source", scanSource).
+				Bool("prevTokenSet", proc.PrevToken() != nil).
+				Msg("token removal due to reader error, keeping media running")
+			if exitTimer != nil {
+				if stopped := exitTimer.Stop(); stopped {
+					log.Debug().Msg("cancelled exit timer due to reader error")
 				}
-				st.SetActiveCard(tokens.Token{})
-				continue preprocessing
 			}
+			st.SetActiveCard(tokens.Token{})
+
+		case scanNormalRemoval:
+			log.Info().Msg("token was removed")
 
 			// Clear ActiveCard before hook to prevent blocked removals from affecting new scans
 			st.SetActiveCard(tokens.Token{})

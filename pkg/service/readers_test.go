@@ -596,6 +596,9 @@ func TestTimedExitConditions_ReaderIDRequired(t *testing.T) {
 // preserved through reader errors so that duplicate detection still works
 // when a reader reconnects and re-detects the same card. This is the core
 // fix for #497: USB controller hotplug causing false NFC re-scans.
+//
+// This test exercises the scanPreprocessor directly rather than simulating
+// the logic inline.
 func TestReaderErrorRecovery_PrevTokenPreservation(t *testing.T) {
 	t.Parallel()
 
@@ -606,52 +609,52 @@ func TestReaderErrorRecovery_PrevTokenPreservation(t *testing.T) {
 	}
 
 	tests := []struct {
-		initialPrev       *tokens.Token
-		scan              *tokens.Token
-		expectedPrev      *tokens.Token
-		name              string
-		readerError       bool
-		shouldBeDuplicate bool
+		initialPrev  *tokens.Token
+		scan         *tokens.Token
+		expectedPrev *tokens.Token
+		name         string
+		wantAction   scanAction
+		readerError  bool
 	}{
 		{
-			name:              "normal scan updates prevToken",
-			initialPrev:       nil,
-			scan:              cardToken,
-			readerError:       false,
-			expectedPrev:      cardToken,
-			shouldBeDuplicate: false,
+			name:         "normal scan updates prevToken",
+			initialPrev:  nil,
+			scan:         cardToken,
+			readerError:  false,
+			wantAction:   scanNewToken,
+			expectedPrev: cardToken,
 		},
 		{
-			name:              "normal removal clears prevToken",
-			initialPrev:       cardToken,
-			scan:              nil,
-			readerError:       false,
-			expectedPrev:      nil,
-			shouldBeDuplicate: false,
+			name:         "normal removal clears prevToken",
+			initialPrev:  cardToken,
+			scan:         nil,
+			readerError:  false,
+			wantAction:   scanNormalRemoval,
+			expectedPrev: nil,
 		},
 		{
-			name:              "reader error preserves prevToken",
-			initialPrev:       cardToken,
-			scan:              nil,
-			readerError:       true,
-			expectedPrev:      cardToken,
-			shouldBeDuplicate: false,
+			name:         "reader error preserves prevToken",
+			initialPrev:  cardToken,
+			scan:         nil,
+			readerError:  true,
+			wantAction:   scanReaderErrorRemoval,
+			expectedPrev: cardToken,
 		},
 		{
-			name:              "reader error with nil prevToken is duplicate (nil==nil)",
-			initialPrev:       nil,
-			scan:              nil,
-			readerError:       true,
-			expectedPrev:      nil,
-			shouldBeDuplicate: true,
+			name:         "reader error with nil prevToken is duplicate (nil==nil)",
+			initialPrev:  nil,
+			scan:         nil,
+			readerError:  true,
+			wantAction:   scanSkipDuplicate,
+			expectedPrev: nil,
 		},
 		{
-			name:              "re-scan after reader error is duplicate",
-			initialPrev:       cardToken,
-			scan:              cardToken,
-			readerError:       false,
-			expectedPrev:      cardToken,
-			shouldBeDuplicate: true,
+			name:         "re-scan after reader error is duplicate",
+			initialPrev:  cardToken,
+			scan:         cardToken,
+			readerError:  false,
+			wantAction:   scanSkipDuplicate,
+			expectedPrev: cardToken,
 		},
 	}
 
@@ -659,24 +662,12 @@ func TestReaderErrorRecovery_PrevTokenPreservation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			prevToken := tt.initialPrev
+			proc := &scanPreprocessor{prevToken: tt.initialPrev}
+			action := proc.Process(tt.scan, tt.readerError)
 
-			// Step 1: duplicate check (mirrors readers.go line 410)
-			isDuplicate := helpers.TokensEqual(tt.scan, prevToken)
-			assert.Equal(t, tt.shouldBeDuplicate, isDuplicate,
-				"duplicate detection mismatch")
-
-			if isDuplicate {
-				return
-			}
-
-			// Step 2: prevToken update (mirrors readers.go line 418-424)
-			if !tt.readerError {
-				prevToken = tt.scan
-			}
-
-			assert.Equal(t, tt.expectedPrev, prevToken,
-				"prevToken should match expected value after update")
+			assert.Equal(t, tt.wantAction, action, "unexpected action")
+			assert.Equal(t, tt.expectedPrev, proc.PrevToken(),
+				"prevToken should match expected value after Process")
 		})
 	}
 }
@@ -685,6 +676,8 @@ func TestReaderErrorRecovery_PrevTokenPreservation(t *testing.T) {
 // #497: card scanned → reader error (USB hotplug) → reader reconnects →
 // same card detected. The fix ensures the re-detection is caught as a
 // duplicate and suppressed.
+//
+// This test exercises the scanPreprocessor directly.
 func TestReaderErrorRecovery_FullSequence(t *testing.T) {
 	t.Parallel()
 
@@ -693,25 +686,21 @@ func TestReaderErrorRecovery_FullSequence(t *testing.T) {
 		Text: "**launch.system:snes",
 	}
 
-	var prevToken *tokens.Token
+	proc := &scanPreprocessor{}
 
 	// 1. Initial card scan — should pass through
-	isDup := helpers.TokensEqual(card, prevToken)
-	assert.False(t, isDup, "first scan should not be duplicate")
-	prevToken = card
+	action := proc.Process(card, false)
+	assert.Equal(t, scanNewToken, action, "first scan should not be duplicate")
+	assert.Equal(t, card, proc.PrevToken())
 
 	// 2. Reader error (USB controller hotplug) — prevToken preserved
-	readerErrorScan := (*tokens.Token)(nil)
-	isDup = helpers.TokensEqual(readerErrorScan, prevToken)
-	assert.False(t, isDup, "reader error scan is not a duplicate of card")
-	// readerError=true, so we do NOT update prevToken
-	// prevToken stays as card
-
-	assert.Equal(t, card, prevToken,
+	action = proc.Process(nil, true)
+	assert.Equal(t, scanReaderErrorRemoval, action)
+	assert.Equal(t, card, proc.PrevToken(),
 		"prevToken must be preserved through reader error")
 
 	// 3. Reader reconnects, same card detected — should be caught as duplicate
-	isDup = helpers.TokensEqual(card, prevToken)
-	assert.True(t, isDup,
+	action = proc.Process(card, false)
+	assert.Equal(t, scanSkipDuplicate, action,
 		"re-scan of same card after reader error recovery must be detected as duplicate")
 }
