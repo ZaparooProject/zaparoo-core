@@ -135,3 +135,74 @@ func TestHandleLaunchersRefresh_CacheUpdatesOnSecondCall(t *testing.T) {
 	assert.Equal(t, "launcher-v2", cached[0].ID)
 	assert.Equal(t, "launcher-v3", cached[1].ID)
 }
+
+// TestHandleLaunchersRefresh_ConfigLoadError tests that HandleLaunchersRefresh
+// returns an error when the config file cannot be loaded from disk.
+func TestHandleLaunchersRefresh_ConfigLoadError(t *testing.T) {
+	t.Parallel()
+
+	memFS := helpers.NewMemoryFS()
+
+	// Create config with a path that won't exist on the in-memory FS,
+	// so that Load() fails when trying to stat the config file.
+	cfg, err := config.NewConfigWithFs("/config", config.BaseDefaults, memFS.Fs)
+	require.NoError(t, err)
+
+	// Delete the config file so Load() fails
+	require.NoError(t, memFS.Fs.Remove("/config/config.toml"))
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: "/data"}).Maybe()
+
+	testCache := &corehelpers.LauncherCache{}
+
+	env := requests.RequestEnv{
+		Platform:      mockPlatform,
+		Config:        cfg,
+		LauncherCache: testCache,
+	}
+
+	result, err := HandleLaunchersRefresh(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error reloading config")
+	assert.Nil(t, result)
+
+	// Cache should not have been refreshed
+	assert.Empty(t, testCache.GetAllLaunchers())
+}
+
+// TestHandleLaunchersRefresh_CustomLaunchersLoadError tests that HandleLaunchersRefresh
+// returns an error when the custom launchers directory doesn't exist.
+func TestHandleLaunchersRefresh_CustomLaunchersLoadError(t *testing.T) {
+	t.Parallel()
+
+	memFS := helpers.NewMemoryFS()
+	configDir := "/config"
+	dataDir := "/data"
+	require.NoError(t, memFS.Fs.MkdirAll(configDir, 0o750))
+	// Deliberately NOT creating the launchers dir so LoadCustomLaunchers fails
+
+	cfg, err := helpers.NewTestConfig(memFS, configDir)
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: dataDir}).Maybe()
+
+	testCache := &corehelpers.LauncherCache{}
+
+	env := requests.RequestEnv{
+		Platform:      mockPlatform,
+		Config:        cfg,
+		LauncherCache: testCache,
+	}
+
+	result, err := HandleLaunchersRefresh(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error loading custom launchers")
+	assert.Nil(t, result)
+
+	// Cache should not have been refreshed
+	assert.Empty(t, testCache.GetAllLaunchers())
+}

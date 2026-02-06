@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -519,4 +520,177 @@ lifecycle = "background"
 	assert.Equal(t, []string{"steam"}, steamLink.Schemes)
 	assert.False(t, steamLink.Restricted)
 	assert.Equal(t, "background", steamLink.Lifecycle)
+}
+
+func TestLoadCustomLaunchers_LoadsFromAferoFS(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	launchersDir := "/data/launchers"
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+
+	launcherTOML := `
+[[launchers.custom]]
+id = "MyLauncher"
+system = ""
+execute = "echo test"
+media_dirs = ["/games"]
+file_exts = [".rom"]
+`
+	require.NoError(t, afero.WriteFile(fs, launchersDir+"/my_launcher.toml", []byte(launcherTOML), 0o600))
+
+	cfg := &Instance{fs: fs}
+
+	err := cfg.LoadCustomLaunchers(launchersDir)
+	require.NoError(t, err)
+
+	customs := cfg.CustomLaunchers()
+	require.Len(t, customs, 1)
+	assert.Equal(t, "MyLauncher", customs[0].ID)
+	assert.Equal(t, "echo test", customs[0].Execute)
+	assert.Equal(t, []string{"/games"}, customs[0].MediaDirs)
+	assert.Equal(t, []string{".rom"}, customs[0].FileExts)
+}
+
+func TestLoadCustomLaunchers_MultipleFiles(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	launchersDir := "/data/launchers"
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+
+	file1 := `
+[[launchers.custom]]
+id = "Launcher1"
+execute = "echo one"
+`
+	file2 := `
+[[launchers.custom]]
+id = "Launcher2"
+execute = "echo two"
+
+[[launchers.custom]]
+id = "Launcher3"
+execute = "echo three"
+`
+	require.NoError(t, afero.WriteFile(fs, launchersDir+"/a.toml", []byte(file1), 0o600))
+	require.NoError(t, afero.WriteFile(fs, launchersDir+"/b.toml", []byte(file2), 0o600))
+
+	cfg := &Instance{fs: fs}
+
+	err := cfg.LoadCustomLaunchers(launchersDir)
+	require.NoError(t, err)
+
+	customs := cfg.CustomLaunchers()
+	require.Len(t, customs, 3)
+}
+
+func TestLoadCustomLaunchers_IgnoresNonTOMLFiles(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	launchersDir := "/data/launchers"
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+
+	validTOML := `
+[[launchers.custom]]
+id = "ValidLauncher"
+execute = "echo valid"
+`
+	require.NoError(t, afero.WriteFile(fs, launchersDir+"/valid.toml", []byte(validTOML), 0o600))
+	require.NoError(t, afero.WriteFile(fs, launchersDir+"/readme.txt", []byte("not a launcher"), 0o600))
+	require.NoError(t, afero.WriteFile(fs, launchersDir+"/config.json", []byte("{}"), 0o600))
+
+	cfg := &Instance{fs: fs}
+
+	err := cfg.LoadCustomLaunchers(launchersDir)
+	require.NoError(t, err)
+
+	customs := cfg.CustomLaunchers()
+	require.Len(t, customs, 1)
+	assert.Equal(t, "ValidLauncher", customs[0].ID)
+}
+
+func TestLoadCustomLaunchers_EmptyDirectory(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	launchersDir := "/data/launchers"
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+
+	cfg := &Instance{fs: fs}
+
+	err := cfg.LoadCustomLaunchers(launchersDir)
+	require.NoError(t, err)
+
+	customs := cfg.CustomLaunchers()
+	assert.Empty(t, customs)
+}
+
+func TestLoadCustomLaunchers_MissingDirectory(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+
+	cfg := &Instance{fs: fs}
+
+	err := cfg.LoadCustomLaunchers("/nonexistent/launchers")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to stat launchers directory")
+}
+
+func TestLoadCustomLaunchers_SkipsInvalidTOML(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	launchersDir := "/data/launchers"
+	require.NoError(t, fs.MkdirAll(launchersDir, 0o750))
+
+	validTOML := `
+[[launchers.custom]]
+id = "GoodLauncher"
+execute = "echo good"
+`
+	invalidTOML := `this is not valid toml {{{{`
+
+	require.NoError(t, afero.WriteFile(fs, launchersDir+"/good.toml", []byte(validTOML), 0o600))
+	require.NoError(t, afero.WriteFile(fs, launchersDir+"/bad.toml", []byte(invalidTOML), 0o600))
+
+	cfg := &Instance{fs: fs}
+
+	err := cfg.LoadCustomLaunchers(launchersDir)
+	require.NoError(t, err)
+
+	customs := cfg.CustomLaunchers()
+	require.Len(t, customs, 1)
+	assert.Equal(t, "GoodLauncher", customs[0].ID)
+}
+
+func TestLoadCustomLaunchers_NestedDirectories(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	launchersDir := "/data/launchers"
+	require.NoError(t, fs.MkdirAll(launchersDir+"/subdir", 0o750))
+
+	rootTOML := `
+[[launchers.custom]]
+id = "RootLauncher"
+execute = "echo root"
+`
+	nestedTOML := `
+[[launchers.custom]]
+id = "NestedLauncher"
+execute = "echo nested"
+`
+	require.NoError(t, afero.WriteFile(fs, launchersDir+"/root.toml", []byte(rootTOML), 0o600))
+	require.NoError(t, afero.WriteFile(fs, launchersDir+"/subdir/nested.toml", []byte(nestedTOML), 0o600))
+
+	cfg := &Instance{fs: fs}
+
+	err := cfg.LoadCustomLaunchers(launchersDir)
+	require.NoError(t, err)
+
+	customs := cfg.CustomLaunchers()
+	require.Len(t, customs, 2)
 }
