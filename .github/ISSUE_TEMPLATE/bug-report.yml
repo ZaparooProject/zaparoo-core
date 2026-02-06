@@ -1,0 +1,65 @@
+name: Bug report
+description: If you are experiencing an issue, please fill out this form.
+title: "[Issue]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to fill out this bug form!
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Select the platform
+      description: What platform are you experiencing the issue with?
+      options:
+        - MiSTer FPGA
+        - Batocera
+        - MiSTeX
+        - Windows
+        - Linux
+        - SteamOS
+        - Bazzite
+        - ChimeraOS
+        - LibreELEC/CoreELEC
+        - All platforms
+      default: 0
+    validations:
+      required: true
+  - type: textarea
+    id: describe-bug
+    attributes:
+      label: Describe the bug
+      description: Describe the bug as accurately as possible.
+    validations:
+      required: true
+  - type: textarea
+    id: steps-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Describe the steps to reproduce the bug as accurately as possible.
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: Describe what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log file
+      description: |
+        Please attach your log file or paste a logs.zaparoo.org link.
+        See [Collecting Logs](https://zaparoo.org/support#collecting-logs) for instructions.
+    validations:
+      required: false
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Add screenshots
+      description: Please add screenshots if available.
+    validations:
+      required: false
