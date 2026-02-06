@@ -17,30 +17,23 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package config
+package database
 
-import "time"
+// Composite key builder functions for consistent key generation across the codebase.
+// These functions centralize key format to prevent inconsistencies and make format
+// changes easier in the future.
 
-var AppVersion = "DEVELOPMENT"
+// TitleKey builds a composite key for title deduplication: "systemID:slug"
+func TitleKey(systemID, slug string) string {
+	return systemID + ":" + slug
+}
 
-const (
-	AppName              = "zaparoo"
-	MediaDbFile          = "media.db"
-	UserDbFile           = "user.db"
-	LogFile              = "core.log"
-	PidFile              = "core.pid"
-	CfgFile              = "config.toml"
-	AuthFile             = "auth.toml"
-	TUIFile              = "tui.toml"
-	UserDir              = "user"
-	LogsDir              = "logs"
-	APIRequestTimeout    = 30 * time.Second
-	SuccessSoundFilename = "success.wav"
-	FailSoundFilename    = "fail.wav"
-	LimitSoundFilename   = "limit.wav"
-	AssetsDir            = "assets"
-	MappingsDir          = "mappings"
-	LaunchersDir         = "launchers"
-	MediaDir             = "media"
-	LogUploadURL         = "https://logs.zaparoo.org/"
-)
+// MediaKey builds a composite key for media deduplication: "systemID:path"
+func MediaKey(systemID, path string) string {
+	return systemID + ":" + path
+}
+
+// TagKey builds a composite key for tag deduplication: "type:value"
+func TagKey(tagType, tagValue string) string {
+	return tagType + ":" + tagValue
+}

@@ -868,6 +868,18 @@ func NewNamesIndex(
 			continue // Skip this system if it was already completed in a previous run
 		}
 
+		// Lazy load this system's existing data for resume
+		if shouldResume {
+			log.Debug().Str("system", systemID).Msg("loading existing data for system resume")
+			if loadErr := PopulateScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
+				// Check if this is a cancellation error
+				if errors.Is(loadErr, context.Canceled) {
+					return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
+				}
+				return 0, fmt.Errorf("failed to load system data for resume: %w", loadErr)
+			}
+		}
+
 		files := make([]platforms.ScanResult, 0)
 		systemStartTime := time.Now()
 

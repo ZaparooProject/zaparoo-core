@@ -1201,6 +1201,220 @@ func TestCheckForDuplicateMediaTitles_WithDuplicates(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlGetMediaBySystemID_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "nes"
+
+	rows := sqlmock.NewRows([]string{"DBID", "Path", "MediaTitleDBID", "SystemDBID", "Slug", "SystemID"}).
+		AddRow(int64(1), "/games/mario.nes", int64(10), int64(100), "supermariobros", "nes").
+		AddRow(int64(2), "/games/zelda.nes", int64(11), int64(100), "legendofzelda", "nes").
+		AddRow(int64(3), "/games/metroid.nes", int64(12), int64(100), "metroid", "nes")
+
+	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.MediaTitleDBID, m\.SystemDBID, ` +
+		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
+	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
+
+	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 3)
+
+	// Check first result
+	assert.Equal(t, int64(1), results[0].DBID)
+	assert.Equal(t, "/games/mario.nes", results[0].Path)
+	assert.Equal(t, int64(10), results[0].MediaTitleDBID)
+	assert.Equal(t, "supermariobros", results[0].TitleSlug)
+	assert.Equal(t, "nes", results[0].SystemID)
+
+	// Check second result
+	assert.Equal(t, int64(2), results[1].DBID)
+	assert.Equal(t, "/games/zelda.nes", results[1].Path)
+	assert.Equal(t, "legendofzelda", results[1].TitleSlug)
+
+	// Check third result
+	assert.Equal(t, int64(3), results[2].DBID)
+	assert.Equal(t, "/games/metroid.nes", results[2].Path)
+	assert.Equal(t, "metroid", results[2].TitleSlug)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetMediaBySystemID_EmptyResult(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "nonexistent"
+
+	rows := sqlmock.NewRows([]string{"DBID", "Path", "MediaTitleDBID", "SystemDBID", "Slug", "SystemID"})
+
+	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.MediaTitleDBID, m\.SystemDBID, ` +
+		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
+	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
+
+	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
+
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetMediaBySystemID_QueryError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "nes"
+
+	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.MediaTitleDBID, m\.SystemDBID, ` +
+		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
+	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnError(sql.ErrConnDone)
+
+	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to query media for system nes")
+	assert.Nil(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetMediaBySystemID_ScanError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "nes"
+
+	// Return rows with wrong column count to cause scan error
+	rows := sqlmock.NewRows([]string{"DBID", "Path"}).
+		AddRow(int64(1), "/games/mario.nes")
+
+	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.MediaTitleDBID, m\.SystemDBID, ` +
+		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
+	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
+
+	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to scan media for system nes")
+	assert.Nil(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetTitlesBySystemID_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "nes"
+
+	rows := sqlmock.NewRows([]string{"DBID", "Slug", "Name", "SystemDBID", "SystemID"}).
+		AddRow(int64(1), "supermariobros", "Super Mario Bros", int64(100), "nes").
+		AddRow(int64(2), "legendofzelda", "The Legend of Zelda", int64(100), "nes").
+		AddRow(int64(3), "metroid", "Metroid", int64(100), "nes")
+
+	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID, s\.SystemID.*` +
+		`FROM MediaTitles t.*WHERE s\.SystemID = \?`
+	mock.ExpectQuery(titlesBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
+
+	results, err := sqlGetTitlesBySystemID(context.Background(), db, systemID)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 3)
+
+	// Check first result
+	assert.Equal(t, int64(1), results[0].DBID)
+	assert.Equal(t, "supermariobros", results[0].Slug)
+	assert.Equal(t, "Super Mario Bros", results[0].Name)
+	assert.Equal(t, int64(100), results[0].SystemDBID)
+	assert.Equal(t, "nes", results[0].SystemID)
+
+	// Check second result
+	assert.Equal(t, int64(2), results[1].DBID)
+	assert.Equal(t, "legendofzelda", results[1].Slug)
+	assert.Equal(t, "The Legend of Zelda", results[1].Name)
+
+	// Check third result
+	assert.Equal(t, int64(3), results[2].DBID)
+	assert.Equal(t, "metroid", results[2].Slug)
+	assert.Equal(t, "Metroid", results[2].Name)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetTitlesBySystemID_EmptyResult(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "nonexistent"
+
+	rows := sqlmock.NewRows([]string{"DBID", "Slug", "Name", "SystemDBID", "SystemID"})
+
+	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID, s\.SystemID.*` +
+		`FROM MediaTitles t.*WHERE s\.SystemID = \?`
+	mock.ExpectQuery(titlesBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
+
+	results, err := sqlGetTitlesBySystemID(context.Background(), db, systemID)
+
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetTitlesBySystemID_QueryError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "nes"
+
+	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID, s\.SystemID.*` +
+		`FROM MediaTitles t.*WHERE s\.SystemID = \?`
+	mock.ExpectQuery(titlesBySystemQuery).WithArgs(systemID).WillReturnError(sql.ErrConnDone)
+
+	results, err := sqlGetTitlesBySystemID(context.Background(), db, systemID)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to query titles for system nes")
+	assert.Nil(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetTitlesBySystemID_ScanError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "nes"
+
+	// Return rows with wrong column count to cause scan error
+	rows := sqlmock.NewRows([]string{"DBID", "Slug"}).
+		AddRow(int64(1), "supermariobros")
+
+	titlesBySystemQuery := `SELECT t\.DBID, t\.Slug, t\.Name, t\.SystemDBID, s\.SystemID.*` +
+		`FROM MediaTitles t.*WHERE s\.SystemID = \?`
+	mock.ExpectQuery(titlesBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
+
+	results, err := sqlGetTitlesBySystemID(context.Background(), db, systemID)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to scan title for system nes")
+	assert.Nil(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestCheckForDuplicateMediaTitles_NoDuplicates tests when no duplicates exist.
 func TestCheckForDuplicateMediaTitles_NoDuplicates(t *testing.T) {
 	t.Parallel()

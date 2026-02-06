@@ -65,39 +65,37 @@ func TestIsMediaLaunchingCommand(t *testing.T) {
 			want:    true,
 		},
 
-		// Playlist commands that launch media - should be blocked
+		// Playlist commands - should NOT be blocked (they queue state changes, actual launch happens asynchronously)
 		{
-			name:    "playlist.play command",
+			name:    "playlist.play command - queues state change",
 			cmdName: zapscript.ZapScriptCmdPlaylistPlay,
-			want:    true,
+			want:    false,
 		},
 		{
-			name:    "playlist.next command",
+			name:    "playlist.next command - queues state change",
 			cmdName: zapscript.ZapScriptCmdPlaylistNext,
-			want:    true,
+			want:    false,
 		},
 		{
-			name:    "playlist.previous command",
+			name:    "playlist.previous command - queues state change",
 			cmdName: zapscript.ZapScriptCmdPlaylistPrevious,
-			want:    true,
+			want:    false,
 		},
 		{
-			name:    "playlist.goto command",
+			name:    "playlist.goto command - queues state change",
 			cmdName: zapscript.ZapScriptCmdPlaylistGoto,
-			want:    true,
+			want:    false,
 		},
 		{
-			name:    "playlist.load command",
+			name:    "playlist.load command - loads without playing",
 			cmdName: zapscript.ZapScriptCmdPlaylistLoad,
-			want:    true,
+			want:    false,
 		},
 		{
-			name:    "playlist.open command",
+			name:    "playlist.open command - shows picker UI",
 			cmdName: zapscript.ZapScriptCmdPlaylistOpen,
-			want:    true,
+			want:    false,
 		},
-
-		// Playlist commands that don't launch media - should NOT be blocked
 		{
 			name:    "playlist.stop command",
 			cmdName: zapscript.ZapScriptCmdPlaylistStop,
@@ -268,25 +266,26 @@ func TestIsMediaLaunchingCommand_ComprehensiveCoverage(t *testing.T) {
 		zapscript.ZapScriptCmdLaunchRandom,
 		zapscript.ZapScriptCmdLaunchSearch,
 		zapscript.ZapScriptCmdLaunchTitle,
-		zapscript.ZapScriptCmdPlaylistPlay,
-		zapscript.ZapScriptCmdPlaylistNext,
-		zapscript.ZapScriptCmdPlaylistPrevious,
-		zapscript.ZapScriptCmdPlaylistGoto,
-		zapscript.ZapScriptCmdPlaylistLoad,
-		zapscript.ZapScriptCmdPlaylistOpen,
 		zapscript.ZapScriptCmdMisterMGL,
 		zapscript.ZapScriptCmdRandom, // deprecated
 		zapscript.ZapScriptCmdSystem, // deprecated
 	}
 
 	// Commands that should NOT be blocked
+	// Note: All playlist commands queue state changes - actual launch happens asynchronously
 	allowedCommands := []string{
 		zapscript.ZapScriptCmdExecute,
 		zapscript.ZapScriptCmdDelay,
 		zapscript.ZapScriptCmdStop,
 		zapscript.ZapScriptCmdEcho,
+		zapscript.ZapScriptCmdPlaylistPlay,     // queues state change
+		zapscript.ZapScriptCmdPlaylistNext,     // queues state change
+		zapscript.ZapScriptCmdPlaylistPrevious, // queues state change
+		zapscript.ZapScriptCmdPlaylistGoto,     // queues state change
 		zapscript.ZapScriptCmdPlaylistStop,
 		zapscript.ZapScriptCmdPlaylistPause,
+		zapscript.ZapScriptCmdPlaylistLoad, // loads without playing
+		zapscript.ZapScriptCmdPlaylistOpen, // shows picker UI
 		zapscript.ZapScriptCmdMisterINI,
 		zapscript.ZapScriptCmdMisterCore,
 		zapscript.ZapScriptCmdMisterScript,

@@ -118,7 +118,6 @@ var cmdMap = map[string]func(
 }
 
 // IsMediaLaunchingCommand returns true if the command launches media and should be subject to playtime limits.
-// This includes all launch.* commands, most playlist commands (play/next/prev/goto/load/open), and mister.mgl.
 func IsMediaLaunchingCommand(cmdName string) bool {
 	switch cmdName {
 	// Launch commands
@@ -127,15 +126,6 @@ func IsMediaLaunchingCommand(cmdName string) bool {
 		zapscript.ZapScriptCmdLaunchRandom,
 		zapscript.ZapScriptCmdLaunchSearch,
 		zapscript.ZapScriptCmdLaunchTitle:
-		return true
-
-	// Playlist commands that launch or load media
-	case zapscript.ZapScriptCmdPlaylistPlay,
-		zapscript.ZapScriptCmdPlaylistNext,
-		zapscript.ZapScriptCmdPlaylistPrevious,
-		zapscript.ZapScriptCmdPlaylistGoto,
-		zapscript.ZapScriptCmdPlaylistLoad,
-		zapscript.ZapScriptCmdPlaylistOpen:
 		return true
 
 	// MiSTer MGL launches games
@@ -354,6 +344,7 @@ func RunCommand(
 			return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
 		}
 		defer st.LauncherManager().EndLaunch()
+		env.LauncherCtx = st.LauncherManager().GetContext()
 	}
 
 	log.Info().Msgf("running command: %s", cmd)

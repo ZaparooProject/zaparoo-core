@@ -3,7 +3,6 @@
 package mister
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,11 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
@@ -31,8 +26,7 @@ func preNoticeTime() time.Duration {
 }
 
 func showNotice(
-	cfg *config.Instance,
-	pl platforms.Platform,
+	pl *Platform,
 	text string,
 	loader bool,
 ) (string, error) {
@@ -68,21 +62,16 @@ func showNotice(
 		if err != nil {
 			return "", fmt.Errorf("error writing notice args: %w", err)
 		}
-		text := "**mister.script:zaparoo.sh -show-notice " + argsPath
+
+		scriptPath := filepath.Join(misterconfig.ScriptsDir, "zaparoo.sh")
+		scriptArg := "'-show-notice' '" + argsPath + "'"
 		if loader {
-			text = "**mister.script:zaparoo.sh -show-loader " + argsPath
+			scriptArg = "'-show-loader' '" + argsPath + "'"
 		}
-		log.Debug().Msgf("running script notice: %s", text)
-		apiArgs := models.RunParams{
-			Text: &text,
-		}
-		ps, err := json.Marshal(apiArgs)
+		log.Debug().Msgf("running script notice: %s %s", scriptPath, scriptArg)
+		err = runScript(pl, scriptPath, scriptArg, false)
 		if err != nil {
-			log.Error().Err(err).Msg("error creating run params")
-		}
-		_, err = client.LocalClient(context.Background(), cfg, models.MethodRun, string(ps))
-		if err != nil {
-			log.Error().Err(err).Msg("error running local client")
+			return "", fmt.Errorf("error running notice script: %w", err)
 		}
 	}
 
@@ -150,8 +139,7 @@ func misterSetupMainPicker(args widgetmodels.PickerArgs) error {
 }
 
 func showPicker(
-	cfg *config.Instance,
-	pl platforms.Platform,
+	pl *Platform,
 	args widgetmodels.PickerArgs,
 ) error {
 	// use custom main ui if available
@@ -174,19 +162,6 @@ func showPicker(
 		return fmt.Errorf("failed to write picker args file: %w", err)
 	}
 
-	text := "**mister.script:zaparoo.sh -show-picker " + argsPath
-	apiArgs := models.RunParams{
-		Text: &text,
-	}
-	ps, err := json.Marshal(apiArgs)
-	if err != nil {
-		log.Error().Err(err).Msg("error creating run params")
-	}
-
-	_, err = client.LocalClient(context.Background(), cfg, models.MethodRun, string(ps))
-	if err != nil {
-		log.Error().Err(err).Msg("error running local client")
-	}
-
-	return nil
+	scriptPath := filepath.Join(misterconfig.ScriptsDir, "zaparoo.sh")
+	return runScript(pl, scriptPath, "'-show-picker' '"+argsPath+"'", false)
 }
