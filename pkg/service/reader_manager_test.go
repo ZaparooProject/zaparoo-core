@@ -53,6 +53,9 @@ func setupReaderManager(t *testing.T) *readerManagerEnv {
 	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
 	require.NoError(t, err)
 
+	// Disable all audio to prevent malgo goroutine leaks on macOS CI
+	cfg.DisableAllSoundsForTesting()
+
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.SetupBasicMock()
 
