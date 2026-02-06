@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -345,5 +346,46 @@ func TestGamepadPress_ValidButtonsWhenDisabled(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "virtual gamepad is disabled")
 		})
+	}
+}
+
+// TestShowLoader_NoDeadlockWithActiveMedia is a regression test for the deadlock
+// that occurred when ShowLoader was called while a game was running.
+// The deadlock happened because ShowLoader held platformMu while calling showNotice,
+// which called runScript, which called StopActiveLauncher - which also needs platformMu.
+func TestShowLoader_NoDeadlockWithActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	p.launcherManager = &mockLauncherManager{}
+	p.setActiveMedia = func(_ *models.ActiveMedia) {}
+
+	// Set activeMedia function to return active media state
+	// This triggers the StopActiveLauncher path in runScript
+	p.activeMedia = func() *models.ActiveMedia {
+		return &models.ActiveMedia{
+			SystemID: "TestSystem",
+			Path:     "/test/game.rom",
+		}
+	}
+
+	cfg := &config.Instance{}
+
+	// Run ShowLoader in a goroutine with timeout detection
+	done := make(chan struct{})
+	go func() {
+		// This will fail (no actual script/console), but should NOT deadlock
+		_, _ = p.ShowLoader(cfg, widgetmodels.NoticeArgs{
+			Text: "Test loader",
+		})
+		close(done)
+	}()
+
+	// If deadlock occurs, this will timeout
+	select {
+	case <-done:
+		// Success - no deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("ShowLoader deadlocked - platformMu held during showNotice/StopActiveLauncher")
 	}
 }

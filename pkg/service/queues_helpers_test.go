@@ -109,11 +109,11 @@ func TestShouldRunBeforeMediaStartHook(t *testing.T) {
 			expected:   true,
 		},
 		{
-			name:       "runs for playlist.play command",
+			name:       "blocked for playlist.play command (queues state change)",
 			exprOpts:   nil,
 			hookScript: "**echo:test",
 			cmdName:    gozapscript.ZapScriptCmdPlaylistPlay,
-			expected:   true,
+			expected:   false,
 		},
 		{
 			name:       "blocked for playlist.stop command",
@@ -284,13 +284,13 @@ func TestScriptHasMediaLaunchingCommand(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "playlist.play is media launching",
+			name: "playlist.play is not media launching (queues state change)",
 			script: &gozapscript.Script{
 				Cmds: []gozapscript.Command{
 					{Name: gozapscript.ZapScriptCmdPlaylistPlay},
 				},
 			},
-			expected: true,
+			expected: false,
 		},
 		{
 			name: "playlist.stop is not media launching",

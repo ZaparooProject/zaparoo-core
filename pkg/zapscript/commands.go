@@ -128,13 +128,6 @@ func IsMediaLaunchingCommand(cmdName string) bool {
 		zapscript.ZapScriptCmdLaunchTitle:
 		return true
 
-	// Playlist commands that actually play media
-	case zapscript.ZapScriptCmdPlaylistPlay,
-		zapscript.ZapScriptCmdPlaylistNext,
-		zapscript.ZapScriptCmdPlaylistPrevious,
-		zapscript.ZapScriptCmdPlaylistGoto:
-		return true
-
 	// MiSTer MGL launches games
 	case zapscript.ZapScriptCmdMisterMGL:
 		return true
@@ -351,6 +344,7 @@ func RunCommand(
 			return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
 		}
 		defer st.LauncherManager().EndLaunch()
+		env.LauncherCtx = st.LauncherManager().GetContext()
 	}
 
 	log.Info().Msgf("running command: %s", cmd)

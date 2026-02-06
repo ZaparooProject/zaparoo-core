@@ -196,20 +196,6 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 		return x, y, w, h
 	})
 
-	if loader {
-		go func() {
-			frames := []string{"|", "/", "-", "\\"}
-			frameIndex := 0
-			for app != nil {
-				app.QueueUpdateDraw(func() {
-					view.SetText(frames[frameIndex] + " " + noticeArgs.Text)
-				})
-				frameIndex = (frameIndex + 1) % len(frames)
-				time.Sleep(100 * time.Millisecond)
-			}
-		}()
-	}
-
 	handleTimeout(app, noticeArgs.Timeout)
 
 	ticker := time.NewTicker(1 * time.Second)

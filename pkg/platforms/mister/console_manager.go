@@ -7,22 +7,86 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/rs/zerolog/log"
 )
 
+// TTYReader provides an interface for reading the active TTY.
+type TTYReader interface {
+	GetActiveTTY() (string, error)
+}
+
+// FramebufferChecker provides an interface for checking framebuffer readiness.
+type FramebufferChecker interface {
+	IsReady() bool
+}
+
+// CoreNameGetter provides an interface for getting the active core name.
+type CoreNameGetter interface {
+	GetCoreName() string
+}
+
+// realCoreNameGetter gets the core name from MiSTer_Main's temp file.
+type realCoreNameGetter struct{}
+
+func (realCoreNameGetter) GetCoreName() string {
+	return mistermain.GetActiveCoreName()
+}
+
+// realTTYReader reads the active TTY from the sysfs.
+type realTTYReader struct{}
+
+func (realTTYReader) GetActiveTTY() (string, error) {
+	sys := "/sys/devices/virtual/tty/tty0/active"
+	if _, err := os.Stat(sys); err != nil {
+		return "", fmt.Errorf("failed to stat tty active file: %w", err)
+	}
+
+	tty, err := os.ReadFile(sys)
+	if err != nil {
+		return "", fmt.Errorf("failed to read tty active file: %w", err)
+	}
+
+	return string(tty[:len(tty)-1]), nil
+}
+
+// realFramebufferChecker checks if the framebuffer is accessible.
+type realFramebufferChecker struct{}
+
+func (realFramebufferChecker) IsReady() bool {
+	if _, err := os.Stat("/dev/fb0"); err != nil {
+		return false
+	}
+	if _, err := os.Stat("/sys/class/graphics/fbcon/cursor_blink"); err != nil {
+		return false
+	}
+	return true
+}
+
 // MiSTerConsoleManager manages console/TTY switching for MiSTer platform.
 type MiSTerConsoleManager struct {
-	platform *Platform
-	active   bool
-	mu       syncutil.RWMutex
+	ttyReader      TTYReader
+	fbChecker      FramebufferChecker
+	coreNameGetter CoreNameGetter
+	executor       command.Executor
+	platform       *Platform
+	mu             syncutil.RWMutex
+	active         bool
 }
 
 func newConsoleManager(p *Platform) *MiSTerConsoleManager {
-	return &MiSTerConsoleManager{platform: p}
+	return &MiSTerConsoleManager{
+		platform:       p,
+		ttyReader:      realTTYReader{},
+		fbChecker:      realFramebufferChecker{},
+		coreNameGetter: realCoreNameGetter{},
+		executor:       &command.RealExecutor{},
+	}
 }
 
 // Open switches to console mode on the specified VT.
@@ -53,14 +117,19 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 	// Problem: When the menu "sleeps", keypresses can be eaten by Main and not
 	// trigger the console switch. We use retry logic with exponential
 	// backoff and verification to handle this reliably.
-
-	// Switch to target VT using chvt command
-	chvtCtx, chvtCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	err := exec.CommandContext(chvtCtx, "chvt", vt).Run()
-	chvtCancel()
-	if err != nil {
-		log.Debug().Err(err).Msg("error switching VT")
-		return fmt.Errorf("failed to switch VT: %w", err)
+	//
+	// When in menu: do chvt first to prime/wake the VT subsystem before F9.
+	// When a game is running: skip initial chvt as it interferes with
+	// MiSTer_Main's VT switching and causes timeouts.
+	coreName := m.coreNameGetter.GetCoreName()
+	if coreName == misterconfig.MenuCore {
+		chvtCtx, chvtCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := m.executor.Run(chvtCtx, "chvt", vt)
+		chvtCancel()
+		if err != nil {
+			log.Debug().Err(err).Msg("error switching VT from menu")
+			// Don't return error - continue with F9 loop
+		}
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -102,7 +171,7 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 			// Switch to target VT
 			if vt != f9ConsoleVT {
 				chvtCtx, chvtCancel := context.WithTimeout(context.Background(), 2*time.Second)
-				err := exec.CommandContext(chvtCtx, "chvt", vt).Run()
+				err := m.executor.Run(chvtCtx, "chvt", vt)
 				chvtCancel()
 				if err != nil {
 					log.Debug().Err(err).Msgf("failed to switch to tty%s", vt)
@@ -189,28 +258,20 @@ func (*MiSTerConsoleManager) Restore(vt string) error {
 }
 
 // getTTY returns the currently active TTY.
-func (*MiSTerConsoleManager) getTTY() (string, error) {
-	sys := "/sys/devices/virtual/tty/tty0/active"
-	if _, err := os.Stat(sys); err != nil {
-		return "", fmt.Errorf("failed to stat tty active file: %w", err)
-	}
-
-	tty, err := os.ReadFile(sys)
+func (m *MiSTerConsoleManager) getTTY() (string, error) {
+	tty, err := m.ttyReader.GetActiveTTY()
 	if err != nil {
-		return "", fmt.Errorf("failed to read tty active file: %w", err)
+		return "", fmt.Errorf("failed to get active TTY: %w", err)
 	}
-
-	return string(tty[:len(tty)-1]), nil
+	return tty, nil
 }
 
 // waitForFramebuffer waits for the framebuffer device to become accessible.
-func (*MiSTerConsoleManager) waitForFramebuffer(timeout time.Duration) error {
+func (m *MiSTerConsoleManager) waitForFramebuffer(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat("/dev/fb0"); err == nil {
-			if _, err := os.Stat("/sys/class/graphics/fbcon/cursor_blink"); err == nil {
-				return nil
-			}
+		if m.fbChecker.IsReady() {
+			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
