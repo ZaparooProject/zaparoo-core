@@ -1001,8 +1001,11 @@ func (p *Platform) ShowNotice(
 	args widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
 	p.platformMu.Lock()
-	defer p.platformMu.Unlock()
-	if time.Since(p.lastUIHidden) < 2*time.Second && !misterconfig.MainHasFeature(misterconfig.MainFeatureNotice) {
+	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second &&
+		!misterconfig.MainHasFeature(misterconfig.MainFeatureNotice)
+	p.platformMu.Unlock()
+
+	if needsDelay {
 		log.Debug().Msg("waiting for previous notice to finish")
 		time.Sleep(3 * time.Second)
 	}
@@ -1011,6 +1014,7 @@ func (p *Platform) ShowNotice(
 	if err != nil {
 		return nil, 0, err
 	}
+
 	return func() error {
 		p.platformMu.Lock()
 		defer p.platformMu.Unlock()
@@ -1024,8 +1028,11 @@ func (p *Platform) ShowLoader(
 	args widgetmodels.NoticeArgs,
 ) (func() error, error) {
 	p.platformMu.Lock()
-	defer p.platformMu.Unlock()
-	if time.Since(p.lastUIHidden) < 2*time.Second && !misterconfig.MainHasFeature(misterconfig.MainFeatureNotice) {
+	needsDelay := time.Since(p.lastUIHidden) < 2*time.Second &&
+		!misterconfig.MainHasFeature(misterconfig.MainFeatureNotice)
+	p.platformMu.Unlock()
+
+	if needsDelay {
 		log.Debug().Msg("waiting for previous notice to finish")
 		time.Sleep(3 * time.Second)
 	}
@@ -1034,6 +1041,7 @@ func (p *Platform) ShowLoader(
 	if err != nil {
 		return nil, err
 	}
+
 	return func() error {
 		p.platformMu.Lock()
 		defer p.platformMu.Unlock()

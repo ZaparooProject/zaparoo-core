@@ -20,7 +20,6 @@
 package installer
 
 import (
-	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -79,11 +78,7 @@ var httpClient = &http.Client{
 
 func DownloadHTTPFile(opts DownloaderArgs) error {
 	// TODO: Add progress feedback for large file downloads
-	// Extended timeout for potentially large game files (700MB+)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, opts.url, http.NoBody)
+	req, err := http.NewRequestWithContext(opts.ctx, http.MethodGet, opts.url, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("error creating request: %w", err)
 	}
