@@ -27,6 +27,7 @@ import (
 
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 type MappingsEntry struct {
@@ -43,25 +44,28 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	_, err := os.Stat(mappingsDir)
+	fs := c.getFs()
+
+	_, err := fs.Stat(mappingsDir)
 	if err != nil {
 		return fmt.Errorf("failed to stat mappings directory: %w", err)
 	}
 
 	var mapFiles []string
 
-	err = filepath.WalkDir(
+	err = afero.Walk(
+		fs,
 		mappingsDir,
-		func(path string, d os.DirEntry, err error) error {
+		func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
 
-			if d.IsDir() {
+			if info.IsDir() {
 				return nil
 			}
 
-			if strings.ToLower(filepath.Ext(d.Name())) != ".toml" {
+			if strings.ToLower(filepath.Ext(info.Name())) != ".toml" {
 				return nil
 			}
 
@@ -80,8 +84,7 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 	for _, mapPath := range mapFiles {
 		log.Debug().Msgf("loading mapping file: %s", mapPath)
 
-		//nolint:gosec // Safe: reads mapping config files from controlled application directories
-		data, err := os.ReadFile(mapPath)
+		data, err := afero.ReadFile(fs, mapPath)
 		if err != nil {
 			log.Error().Msgf("error reading mapping file: %s", mapPath)
 			continue

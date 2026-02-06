@@ -28,6 +28,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	corehelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -459,4 +461,49 @@ func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {
 	assert.Equal(t, "pn532", readers[0].Driver)
 	assert.Equal(t, "/dev/ttyUSB0", readers[0].Path)
 	assert.Equal(t, "uid", readers[0].IDSource)
+}
+
+// TestHandleSettingsReload_RefreshesLauncherCache tests that HandleSettingsReload
+// refreshes the launcher cache after reloading config and custom launcher files.
+func TestHandleSettingsReload_RefreshesLauncherCache(t *testing.T) {
+	t.Parallel()
+
+	// Set up in-memory filesystem with required directories
+	memFS := helpers.NewMemoryFS()
+	dataDir := "/data"
+	configDir := "/config"
+	require.NoError(t, memFS.Fs.MkdirAll(configDir, 0o750))
+	require.NoError(t, memFS.Fs.MkdirAll(dataDir+"/"+config.MappingsDir, 0o750))
+	require.NoError(t, memFS.Fs.MkdirAll(dataDir+"/"+config.LaunchersDir, 0o750))
+
+	cfg, err := helpers.NewTestConfig(memFS, configDir)
+	require.NoError(t, err)
+
+	expectedLaunchers := []platforms.Launcher{
+		{ID: "test-launcher", SystemID: "NES"},
+	}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: dataDir}).Maybe()
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(expectedLaunchers).Maybe()
+
+	testCache := &corehelpers.LauncherCache{}
+	assert.Empty(t, testCache.GetAllLaunchers())
+
+	env := requests.RequestEnv{
+		Platform:      mockPlatform,
+		Config:        cfg,
+		LauncherCache: testCache,
+	}
+
+	result, err := HandleSettingsReload(env)
+	require.NoError(t, err)
+	assert.Equal(t, NoContent{}, result)
+
+	cached := testCache.GetAllLaunchers()
+	require.Len(t, cached, 1)
+	assert.Equal(t, "test-launcher", cached[0].ID)
+	assert.Equal(t, "NES", cached[0].SystemID)
+
+	mockPlatform.AssertExpectations(t)
 }

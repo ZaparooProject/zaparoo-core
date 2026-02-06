@@ -20,7 +20,11 @@
 package methods
 
 import (
+	"errors"
+	"path/filepath"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
@@ -28,7 +32,20 @@ import (
 func HandleLaunchersRefresh(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use
 	log.Info().Msg("received launchers refresh request")
 
-	helpers.GlobalLauncherCache.Refresh(env.Platform, env.Config)
+	err := env.Config.Load()
+	if err != nil {
+		log.Error().Err(err).Msg("error reloading config")
+		return nil, errors.New("error reloading config")
+	}
+
+	launchersDir := filepath.Join(helpers.DataDir(env.Platform), config.LaunchersDir)
+	err = env.Config.LoadCustomLaunchers(launchersDir)
+	if err != nil {
+		log.Error().Err(err).Msg("error loading custom launchers")
+		return nil, errors.New("error loading custom launchers")
+	}
+
+	env.LauncherCache.Refresh(env.Platform, env.Config)
 
 	log.Info().Msg("launcher cache refreshed")
 	return NoContent{}, nil

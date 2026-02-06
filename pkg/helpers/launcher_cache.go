@@ -23,6 +23,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/rs/zerolog/log"
 )
 
 // LauncherCache provides fast O(1) launcher lookups by system ID.
@@ -55,6 +56,9 @@ func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance)
 			lc.bySystemID[launcher.SystemID] = append(lc.bySystemID[launcher.SystemID], launcher)
 		}
 	}
+
+	log.Info().Int("totalLaunchers", len(allLaunchers)).Int("systemIDs", len(lc.bySystemID)).
+		Msg("launcher cache initialized")
 }
 
 // GetLaunchersBySystem returns all launchers for a specific system ID.
