@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -55,6 +56,19 @@ func parseServerPort(t *testing.T, server *httptest.Server) int {
 	require.NoError(t, err)
 	port, err := strconv.Atoi(u.Port())
 	require.NoError(t, err)
+	return port
+}
+
+// unusedPort returns a port that is guaranteed to not have anything listening.
+// It binds to port 0 (OS assigns a free port), gets the assigned port, then
+// closes the listener. There's a small race window but it's reliable for tests.
+func unusedPort(t *testing.T) int {
+	t.Helper()
+	var lc net.ListenConfig
+	listener, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := listener.Addr().(*net.TCPAddr).Port
+	require.NoError(t, listener.Close())
 	return port
 }
 
@@ -296,8 +310,8 @@ func TestLocalClient_IgnoresInvalidJSONRPCVersion(t *testing.T) {
 func TestLocalClient_ConnectionFailure(t *testing.T) {
 	t.Parallel()
 
-	// Use a port that's not listening
-	cfg := testConfigWithPort(t, 0) // Random unused port
+	// Use a port that's guaranteed to not have anything listening
+	cfg := testConfigWithPort(t, unusedPort(t))
 
 	_, err := LocalClient(context.Background(), cfg, "test.method", "")
 	require.Error(t, err)
@@ -754,8 +768,8 @@ func TestIsServiceRunning_ServiceUp(t *testing.T) {
 func TestIsServiceRunning_ServiceDown(t *testing.T) {
 	t.Parallel()
 
-	// Use a port that's not listening
-	cfg := testConfigWithPort(t, 0)
+	// Use a port that's guaranteed to not have anything listening
+	cfg := testConfigWithPort(t, unusedPort(t))
 
 	assert.False(t, IsServiceRunning(cfg))
 }
@@ -794,8 +808,8 @@ func TestWaitForAPI_ServiceAlreadyUp(t *testing.T) {
 func TestWaitForAPI_Timeout(t *testing.T) {
 	t.Parallel()
 
-	// Use a port that's not listening
-	cfg := testConfigWithPort(t, 0)
+	// Use a port that's guaranteed to not have anything listening
+	cfg := testConfigWithPort(t, unusedPort(t))
 
 	start := time.Now()
 	result := WaitForAPI(cfg, 200*time.Millisecond, 50*time.Millisecond)

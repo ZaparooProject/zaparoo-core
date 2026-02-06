@@ -102,9 +102,15 @@ func GenerateMgl(core *cores.Core, path, override string) (string, error) {
 	}
 
 	mgl += fmt.Sprintf(
-		"<file delay=\"%d\" type=%q index=\"%d\" path=\"../../../../..%s\"/>\n",
+		"\t<file delay=\"%d\" type=%q index=\"%d\" path=\"../../../../..%s\"/>\n",
 		mglDef.Delay, mglDef.Method, mglDef.Index, path,
 	)
+
+	if mglDef.ResetDelay > 0 {
+		mgl += fmt.Sprintf("\t<reset delay=\"%d\" hold=\"%d\"/>\n",
+			mglDef.ResetDelay, mglDef.ResetHold)
+	}
+
 	mgl += "</mistergamedescription>"
 	return mgl, nil
 }
