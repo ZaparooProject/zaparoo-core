@@ -28,7 +28,7 @@ import (
 )
 
 func HandleTokens(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
-	log.Info().Msg("received tokens request")
+	log.Debug().Msg("received tokens request")
 
 	resp := models.TokensResponse{
 		Active: make([]models.TokenResponse, 0),

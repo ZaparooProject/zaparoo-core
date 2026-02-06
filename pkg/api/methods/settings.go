@@ -35,7 +35,6 @@ import (
 func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received settings request")
 
-	// Build reader connections from config
 	connectCfg := env.Config.Readers().Connect
 	readersConnect := make([]models.ReaderConnection, 0, len(connectCfg))
 	for _, rc := range connectCfg {
@@ -92,7 +91,7 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 
 //nolint:gocritic // single-use parameter in API handler
 func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
-	log.Info().Msg("received settings update request")
+	log.Debug().Msg("received settings update request")
 
 	var params models.UpdateSettingsParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
@@ -101,32 +100,32 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	}
 
 	if params.RunZapScript != nil {
-		log.Info().Bool("runZapScript", *params.RunZapScript).Msg("update")
+		log.Debug().Bool("runZapScript", *params.RunZapScript).Msg("updating setting")
 		env.State.SetRunZapScript(*params.RunZapScript)
 	}
 
 	if params.DebugLogging != nil {
-		log.Info().Bool("debugLogging", *params.DebugLogging).Msg("update")
+		log.Debug().Bool("debugLogging", *params.DebugLogging).Msg("updating setting")
 		env.Config.SetDebugLogging(*params.DebugLogging)
 	}
 
 	if params.AudioScanFeedback != nil {
-		log.Info().Bool("audioScanFeedback", *params.AudioScanFeedback).Msg("update")
+		log.Debug().Bool("audioScanFeedback", *params.AudioScanFeedback).Msg("updating setting")
 		env.Config.SetAudioFeedback(*params.AudioScanFeedback)
 	}
 
 	if params.ReadersAutoDetect != nil {
-		log.Info().Bool("readersAutoDetect", *params.ReadersAutoDetect).Msg("update")
+		log.Debug().Bool("readersAutoDetect", *params.ReadersAutoDetect).Msg("updating setting")
 		env.Config.SetAutoDetect(*params.ReadersAutoDetect)
 	}
 
 	if params.ErrorReporting != nil {
-		log.Info().Bool("errorReporting", *params.ErrorReporting).Msg("update")
+		log.Debug().Bool("errorReporting", *params.ErrorReporting).Msg("updating setting")
 		env.Config.SetErrorReporting(*params.ErrorReporting)
 	}
 
 	if params.ReadersScanMode != nil {
-		log.Info().Str("readersScanMode", *params.ReadersScanMode).Msg("update")
+		log.Debug().Str("readersScanMode", *params.ReadersScanMode).Msg("updating setting")
 		// empty string defaults to tap mode
 		if *params.ReadersScanMode == "" {
 			env.Config.SetScanMode(config.ScanModeTap)
@@ -136,17 +135,17 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	}
 
 	if params.ReadersScanExitDelay != nil {
-		log.Info().Float32("readersScanExitDelay", *params.ReadersScanExitDelay).Msg("update")
+		log.Debug().Float32("readersScanExitDelay", *params.ReadersScanExitDelay).Msg("updating setting")
 		env.Config.SetScanExitDelay(*params.ReadersScanExitDelay)
 	}
 
 	if params.ReadersScanIgnoreSystem != nil {
-		log.Info().Strs("readsScanIgnoreSystem", *params.ReadersScanIgnoreSystem).Msg("update")
+		log.Debug().Strs("readersScanIgnoreSystem", *params.ReadersScanIgnoreSystem).Msg("updating setting")
 		env.Config.SetScanIgnoreSystem(*params.ReadersScanIgnoreSystem)
 	}
 
 	if params.ReadersConnect != nil {
-		log.Info().Int("count", len(*params.ReadersConnect)).Msg("updating readers.connect")
+		log.Debug().Int("count", len(*params.ReadersConnect)).Msg("updating readers.connect")
 		connections := make([]config.ReadersConnect, 0, len(*params.ReadersConnect))
 		for _, rc := range *params.ReadersConnect {
 			connections = append(connections, config.ReadersConnect{
@@ -167,9 +166,8 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 
 //nolint:gocritic // single-use parameter in API handler
 func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
-	log.Info().Msg("received playtime limits request")
+	log.Debug().Msg("received playtime limits request")
 
-	// Get current config values
 	enabled := env.Config.PlaytimeLimitsEnabled()
 	daily := env.Config.DailyLimit()
 	session := env.Config.SessionLimit()
@@ -177,13 +175,11 @@ func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
 	warnings := env.Config.WarningIntervals()
 	retention := env.Config.PlaytimeRetention()
 
-	// Build response with optional fields
 	resp := models.PlaytimeLimitsResponse{
 		Enabled:  enabled,
 		Warnings: make([]string, 0, len(warnings)),
 	}
 
-	// Convert durations to strings for response
 	if daily > 0 {
 		dailyStr := daily.String()
 		resp.Daily = &dailyStr
@@ -194,11 +190,9 @@ func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
 		resp.Session = &sessionStr
 	}
 
-	// Always include session reset (even if 0 or default)
 	resetStr := sessionReset.String()
 	resp.SessionReset = &resetStr
 
-	// Convert warning durations to strings
 	for _, w := range warnings {
 		resp.Warnings = append(resp.Warnings, w.String())
 	}
@@ -220,7 +214,6 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
-	// Update each parameter if provided
 	if params.Enabled != nil {
 		log.Info().Bool("enabled", *params.Enabled).Msg("playtime limits update")
 		env.Config.SetPlaytimeLimitsEnabled(*params.Enabled)
@@ -276,7 +269,6 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		env.Config.SetPlaytimeRetention(*params.Retention)
 	}
 
-	// Save configuration to disk
 	err := env.Config.Save()
 	if err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)

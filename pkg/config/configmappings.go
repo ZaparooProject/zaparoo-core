@@ -73,7 +73,6 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to walk mappings directory: %w", err)
 	}
-	log.Info().Msgf("found %d mapping files", len(mapFiles))
 
 	filesCounts := 0
 	mappingsCount := 0
@@ -101,7 +100,7 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 		mappingsCount += len(newVals.Mappings.Entry)
 	}
 
-	log.Info().Msgf("loaded %d mapping files, %d mappings", filesCounts, mappingsCount)
+	log.Info().Int("files", filesCounts).Int("mappings", mappingsCount).Msg("loaded mapping files")
 
 	return nil
 }

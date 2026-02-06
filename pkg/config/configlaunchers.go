@@ -193,7 +193,6 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to walk launchers directory: %w", err)
 	}
-	log.Info().Msgf("found %d custom launcher files", len(launcherFiles))
 
 	filesCounts := 0
 	launchersCount := 0
@@ -221,7 +220,7 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 		launchersCount += len(newVals.Launchers.Custom)
 	}
 
-	log.Info().Msgf("loaded %d files, %d custom launchers", filesCounts, launchersCount)
+	log.Info().Int("files", filesCounts).Int("launchers", launchersCount).Msg("loaded custom launchers")
 
 	return nil
 }

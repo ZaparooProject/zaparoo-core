@@ -342,8 +342,10 @@ func readerManager(
 					lastReaderCount = len(rs)
 				} else if readerConnectAttempts%120 == 1 && len(rs) == 0 {
 					// Only log if no readers for 2 minutes
-					log.Info().Msgf("no readers connected after %d attempts, auto-detect=%v",
-						readerConnectAttempts, cfg.AutoDetect())
+					log.Debug().
+						Int("attempts", readerConnectAttempts).
+						Bool("autoDetect", cfg.AutoDetect()).
+						Msg("no readers connected")
 				}
 
 				for _, r := range rs {
