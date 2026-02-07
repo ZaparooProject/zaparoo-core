@@ -45,6 +45,7 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     private static readonly object _pipeLock = new();
     private static bool _isShuttingDown;
     private static bool _isBigBoxRunning;
+    private static System.Windows.Threading.Dispatcher? _uiDispatcher;
 
     // Instance-specific state
     private IGame? _currentGame;
@@ -69,14 +70,20 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
 
     public void OnEventRaised(string eventType)
     {
-        if (eventType == SystemEventTypes.LaunchBoxStartupCompleted)
+        if (eventType == SystemEventTypes.PluginInitialized)
         {
+            _uiDispatcher ??= System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        }
+        else if (eventType == SystemEventTypes.LaunchBoxStartupCompleted)
+        {
+            _uiDispatcher ??= System.Windows.Threading.Dispatcher.CurrentDispatcher;
             _isBigBoxRunning = false;
             _isShuttingDown = false;
             StartConnectionTask();
         }
         else if (eventType == SystemEventTypes.BigBoxStartupCompleted)
         {
+            _uiDispatcher ??= System.Windows.Threading.Dispatcher.CurrentDispatcher;
             _isBigBoxRunning = true;
             _isShuttingDown = false;
             StartConnectionTask();
@@ -453,14 +460,13 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             var game = PluginHelper.DataManager.GetGameById(gameId);
             if (game != null)
             {
-                if (_isBigBoxRunning)
+                InvokeOnUiThread(() =>
                 {
-                    PluginHelper.BigBoxMainViewModel.PlayGame(game, null, null, null);
-                }
-                else
-                {
-                    PluginHelper.LaunchBoxMainViewModel.PlayGame(game, null, null, null);
-                }
+                    if (_isBigBoxRunning)
+                        PluginHelper.BigBoxMainViewModel?.PlayGame(game, null, null, null);
+                    else
+                        PluginHelper.LaunchBoxMainViewModel?.PlayGame(game, null, null, null);
+                });
                 return;
             }
 
@@ -468,14 +474,13 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             var (parentGame, additionalApp) = FindAdditionalApplicationById(gameId);
             if (additionalApp != null && parentGame != null)
             {
-                if (_isBigBoxRunning)
+                InvokeOnUiThread(() =>
                 {
-                    PluginHelper.BigBoxMainViewModel.PlayGame(parentGame, additionalApp, null, null);
-                }
-                else
-                {
-                    PluginHelper.LaunchBoxMainViewModel.PlayGame(parentGame, additionalApp, null, null);
-                }
+                    if (_isBigBoxRunning)
+                        PluginHelper.BigBoxMainViewModel?.PlayGame(parentGame, additionalApp, null, null);
+                    else
+                        PluginHelper.LaunchBoxMainViewModel?.PlayGame(parentGame, additionalApp, null, null);
+                });
                 return;
             }
 
@@ -484,6 +489,19 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Failed to launch game {gameId}: {ex.Message}");
+        }
+    }
+
+    private static void InvokeOnUiThread(Action action)
+    {
+        var dispatcher = _uiDispatcher ?? System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher != null && !dispatcher.CheckAccess())
+        {
+            dispatcher.Invoke(action);
+        }
+        else
+        {
+            action();
         }
     }
 
