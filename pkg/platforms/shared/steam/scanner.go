@@ -68,6 +68,7 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 		log.Error().Err(err).Msg("error parsing libraryfolders.vdf")
 		return results, nil
 	}
+	m = normalizeVDFKeys(m)
 
 	lfs, ok := m["libraryfolders"].(map[string]any)
 	if !ok {
@@ -122,10 +123,11 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 			if closeErr := af.Close(); closeErr != nil {
 				log.Warn().Err(closeErr).Msg("error closing manifest file")
 			}
+			am = normalizeVDFKeys(am)
 
-			appState, ok := am["AppState"].(map[string]any)
+			appState, ok := am["appstate"].(map[string]any)
 			if !ok {
-				log.Error().Msgf("AppState is not a map in manifest: %s", mf)
+				log.Error().Msgf("appstate is not a map in manifest: %s", mf)
 				continue
 			}
 

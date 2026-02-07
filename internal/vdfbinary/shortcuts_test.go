@@ -199,7 +199,7 @@ func TestParseShortcuts_MissingRequiredField_AppName(t *testing.T) {
 
 	_, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "AppName")
+	assert.Contains(t, err.Error(), "appname")
 }
 
 func TestParseShortcuts_MissingRequiredField_Exe(t *testing.T) {
@@ -238,7 +238,7 @@ func TestParseShortcuts_MissingRequiredField_Exe(t *testing.T) {
 
 	_, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Exe")
+	assert.Contains(t, err.Error(), "exe")
 }
 
 func TestParseShortcuts_MissingRequiredField_StartDir(t *testing.T) {
@@ -277,7 +277,7 @@ func TestParseShortcuts_MissingRequiredField_StartDir(t *testing.T) {
 
 	_, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "StartDir")
+	assert.Contains(t, err.Error(), "startdir")
 }
 
 func TestParseShortcuts_TruncatedNumber(t *testing.T) {
@@ -352,4 +352,81 @@ func TestParseShortcuts_EmptyShortcutsMap(t *testing.T) {
 	shortcuts, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.NoError(t, err)
 	assert.Empty(t, shortcuts)
+}
+
+// buildShortcutVDF builds a binary VDF with a single shortcut using the given key names.
+// Keys map: "appname" key, "exe" key, "startdir" key (actual string to write in the binary).
+func buildShortcutVDF(appNameKey, exeKey, startDirKey string) []byte {
+	var buf bytes.Buffer
+
+	// shortcuts map start
+	buf.WriteByte(0x00)
+	buf.WriteString("shortcuts")
+	buf.WriteByte(0x00)
+
+	// shortcut "0" map start
+	buf.WriteByte(0x00)
+	buf.WriteString("0")
+	buf.WriteByte(0x00)
+
+	// appid (number)
+	buf.WriteByte(0x02)
+	buf.WriteString("appid")
+	buf.WriteByte(0x00)
+	buf.Write([]byte{0x01, 0x02, 0x03, 0x04})
+
+	// AppName (string) - key name varies
+	buf.WriteByte(0x01)
+	buf.WriteString(appNameKey)
+	buf.WriteByte(0x00)
+	buf.WriteString("Case Test Game")
+	buf.WriteByte(0x00)
+
+	// Exe (string) - key name varies
+	buf.WriteByte(0x01)
+	buf.WriteString(exeKey)
+	buf.WriteByte(0x00)
+	buf.WriteString("/path/to/game")
+	buf.WriteByte(0x00)
+
+	// StartDir (string) - key name varies
+	buf.WriteByte(0x01)
+	buf.WriteString(startDirKey)
+	buf.WriteByte(0x00)
+	buf.WriteString("/path/to")
+	buf.WriteByte(0x00)
+
+	buf.WriteByte(0x08) // end shortcut "0"
+	buf.WriteByte(0x08) // end shortcuts
+	buf.WriteByte(0x08) // end root
+
+	return buf.Bytes()
+}
+
+func TestParseShortcuts_CaseInsensitiveKeys(t *testing.T) {
+	t.Parallel()
+
+	// All-lowercase keys as seen in some shortcuts.vdf files (issue #514)
+	data := buildShortcutVDF("appname", "exe", "startdir")
+	shortcuts, err := vdfbinary.ParseShortcuts(bytes.NewReader(data))
+
+	require.NoError(t, err, "should parse shortcuts with all-lowercase keys")
+	require.Len(t, shortcuts, 1)
+	assert.Equal(t, "Case Test Game", shortcuts[0].AppName)
+	assert.Equal(t, "/path/to/game", shortcuts[0].Exe)
+	assert.Equal(t, "/path/to", shortcuts[0].StartDir)
+}
+
+func TestParseShortcuts_MixedCaseKeys(t *testing.T) {
+	t.Parallel()
+
+	// Unusual mixed case as a stress test
+	data := buildShortcutVDF("APPNAME", "eXe", "sTaRtDiR")
+	shortcuts, err := vdfbinary.ParseShortcuts(bytes.NewReader(data))
+
+	require.NoError(t, err, "should parse shortcuts with unusual mixed-case keys")
+	require.Len(t, shortcuts, 1)
+	assert.Equal(t, "Case Test Game", shortcuts[0].AppName)
+	assert.Equal(t, "/path/to/game", shortcuts[0].Exe)
+	assert.Equal(t, "/path/to", shortcuts[0].StartDir)
 }

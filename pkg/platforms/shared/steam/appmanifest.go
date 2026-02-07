@@ -71,10 +71,11 @@ func ReadAppManifest(steamAppsDir string, appID int) (AppInfo, bool) {
 		log.Warn().Err(err).Int("appID", appID).Msg("failed to parse app manifest")
 		return AppInfo{}, false
 	}
+	m = normalizeVDFKeys(m)
 
-	appState, ok := m["AppState"].(map[string]any)
+	appState, ok := m["appstate"].(map[string]any)
 	if !ok {
-		log.Warn().Int("appID", appID).Msg("AppState not found in manifest")
+		log.Warn().Int("appID", appID).Msg("appstate not found in manifest")
 		return AppInfo{}, false
 	}
 
@@ -144,6 +145,7 @@ func forEachSteamLibrary(mainSteamAppsDir string, appID int, callback func(steam
 		log.Warn().Err(err).Msg("failed to parse libraryfolders.vdf")
 		return
 	}
+	m = normalizeVDFKeys(m)
 
 	lfs, ok := m["libraryfolders"].(map[string]any)
 	if !ok {

@@ -362,6 +362,36 @@ func TestBinaryVDFReader_ReadObject(t *testing.T) {
 
 		assert.ErrorIs(t, err, ErrInvalidFormat)
 	})
+
+	t.Run("normalizes_keys_to_lowercase", func(t *testing.T) {
+		t.Parallel()
+
+		// PascalCase key "Name" should become "name"
+		data := []byte{
+			vdfTypeString,
+			'N', 'a', 'm', 'e', 0x00, // PascalCase key
+			't', 'e', 's', 't', 0x00, // value
+			vdfTypeNested,
+			'C', 'o', 'n', 'f', 'i', 'g', 0x00, // PascalCase nested key
+			vdfTypeString,
+			'E', 'x', 'e', 0x00, // PascalCase key inside nested
+			'g', 'a', 'm', 'e', 0x00, // value
+			vdfTypeEnd, // end nested
+			vdfTypeEnd, // end outer
+		}
+		r := newBinaryVDFReader(data)
+		r.magic = magic27
+		obj, err := r.readObject()
+
+		require.NoError(t, err)
+		assert.Equal(t, "test", obj["name"])
+		_, hasOriginal := obj["Name"]
+		assert.False(t, hasOriginal, "PascalCase key should not exist")
+
+		config, ok := obj["config"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "game", config["exe"])
+	})
 }
 
 func TestExtractLaunchConfigs(t *testing.T) {

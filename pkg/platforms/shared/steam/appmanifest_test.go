@@ -130,6 +130,28 @@ func TestReadAppManifest(t *testing.T) {
 
 		assert.False(t, ok)
 	})
+
+	t.Run("reads_manifest_with_lowercase_appstate", func(t *testing.T) {
+		t.Parallel()
+
+		steamAppsDir := t.TempDir()
+		manifestPath := filepath.Join(steamAppsDir, "appmanifest_54321.acf")
+		content := `"appstate"
+{
+	"appid"		"54321"
+	"name"		"Lowercase Key Game"
+	"installdir"		"LowercaseGame"
+}`
+		//nolint:gosec // G306: test file permissions are fine
+		require.NoError(t, os.WriteFile(manifestPath, []byte(content), 0o644))
+
+		info, ok := ReadAppManifest(steamAppsDir, 54321)
+
+		assert.True(t, ok)
+		assert.Equal(t, 54321, info.AppID)
+		assert.Equal(t, "Lowercase Key Game", info.Name)
+		assert.Equal(t, "LowercaseGame", info.InstallDir)
+	})
 }
 
 func TestFindSteamAppsDir(t *testing.T) {
