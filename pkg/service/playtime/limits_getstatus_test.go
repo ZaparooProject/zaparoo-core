@@ -57,7 +57,7 @@ func TestGetStatus_StateReset(t *testing.T) {
 		currentTime := time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC)
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 		// State is already StateReset by default
 
 		status := tm.GetStatus()
@@ -102,7 +102,7 @@ func TestGetStatus_StateReset(t *testing.T) {
 		currentTime := time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC)
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 		// State is already StateReset by default
 
 		status := tm.GetStatus()
@@ -145,7 +145,7 @@ func TestGetStatus_StateReset(t *testing.T) {
 		currentTime := time.Date(1970, 1, 1, 14, 0, 0, 0, time.UTC)
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 		status := tm.GetStatus()
 
@@ -187,7 +187,7 @@ func TestGetStatus_StateReset(t *testing.T) {
 		currentTime := time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC)
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 		status := tm.GetStatus()
 
@@ -234,7 +234,7 @@ func TestGetStatus_StateCooldown(t *testing.T) {
 		currentTime := time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 		// Set up cooldown state
 		tm.mu.Lock()
@@ -288,7 +288,7 @@ func TestGetStatus_StateCooldown(t *testing.T) {
 		currentTime := time.Date(1970, 1, 1, 11, 0, 0, 0, time.UTC)
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 		// Set up cooldown state
 		tm.mu.Lock()
@@ -337,7 +337,7 @@ func TestGetStatus_StateCooldown(t *testing.T) {
 		currentTime := time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 		// Set up cooldown state
 		tm.mu.Lock()
@@ -392,7 +392,7 @@ func TestGetStatus_StateActive(t *testing.T) {
 		currentTime := time.Date(2025, 1, 15, 10, 15, 0, 0, time.UTC) // 15 min into session
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 		// Set up active state
 		tm.mu.Lock()
@@ -450,7 +450,7 @@ func TestGetStatus_StateActive(t *testing.T) {
 		currentTime := time.Date(2025, 1, 15, 10, 15, 0, 0, time.UTC)
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 		// Set up active state with unreliable session start
 		tm.mu.Lock()
@@ -503,7 +503,7 @@ func TestGetStatus_StateActive(t *testing.T) {
 		currentTime := time.Date(2025, 1, 15, 10, 15, 0, 0, time.UTC)
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 		// Set up active state
 		tm.mu.Lock()

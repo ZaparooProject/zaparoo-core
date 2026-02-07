@@ -27,6 +27,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -947,6 +948,150 @@ func TestVirtualGamepadEnabled_SaveLoadRoundTrip(t *testing.T) {
 
 	// Verify explicit value persists
 	assert.True(t, cfg.VirtualGamepadEnabled(false), "Explicit true should persist after save/load")
+}
+
+func TestSuccessSoundPath(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+
+	t.Run("scan_feedback disabled returns empty false", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		cfg := &Instance{fs: fs, vals: Values{Audio: Audio{ScanFeedback: false}}}
+		path, enabled := cfg.SuccessSoundPath(dataDir)
+		assert.Empty(t, path)
+		assert.False(t, enabled)
+	})
+
+	t.Run("nil pointer no file override returns embedded default", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		cfg := &Instance{fs: fs, vals: Values{Audio: Audio{ScanFeedback: true, SuccessSound: nil}}}
+		path, enabled := cfg.SuccessSoundPath(dataDir)
+		assert.Empty(t, path)
+		assert.True(t, enabled)
+	})
+
+	t.Run("nil pointer with file override returns file path", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		assetsDir := filepath.Join(dataDir, AssetsDir)
+		overridePath := filepath.Join(assetsDir, SuccessSoundFilename)
+		require.NoError(t, fs.MkdirAll(assetsDir, 0o750))
+		require.NoError(t, afero.WriteFile(fs, overridePath, []byte("wav"), 0o600))
+
+		cfg := &Instance{fs: fs, vals: Values{Audio: Audio{ScanFeedback: true, SuccessSound: nil}}}
+		path, enabled := cfg.SuccessSoundPath(dataDir)
+		assert.Equal(t, overridePath, path)
+		assert.True(t, enabled)
+	})
+
+	t.Run("empty string pointer returns disabled", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		empty := ""
+		cfg := &Instance{fs: fs, vals: Values{Audio: Audio{ScanFeedback: true, SuccessSound: &empty}}}
+		path, enabled := cfg.SuccessSoundPath(dataDir)
+		assert.Empty(t, path)
+		assert.False(t, enabled)
+	})
+
+	t.Run("relative path resolves to dataDir/assets", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		custom := "mysound.wav"
+		cfg := &Instance{fs: fs, vals: Values{Audio: Audio{ScanFeedback: true, SuccessSound: &custom}}}
+		path, enabled := cfg.SuccessSoundPath(dataDir)
+		assert.Equal(t, filepath.Join(dataDir, AssetsDir, "mysound.wav"), path)
+		assert.True(t, enabled)
+	})
+
+	t.Run("absolute path returned as-is", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		abs := filepath.Join(t.TempDir(), "beep.wav")
+		cfg := &Instance{fs: fs, vals: Values{Audio: Audio{ScanFeedback: true, SuccessSound: &abs}}}
+		path, enabled := cfg.SuccessSoundPath(dataDir)
+		assert.Equal(t, abs, path)
+		assert.True(t, enabled)
+	})
+}
+
+func TestFailSoundPath(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+
+	t.Run("scan_feedback disabled returns empty false", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		cfg := &Instance{fs: fs, vals: Values{Audio: Audio{ScanFeedback: false}}}
+		path, enabled := cfg.FailSoundPath(dataDir)
+		assert.Empty(t, path)
+		assert.False(t, enabled)
+	})
+
+	t.Run("nil pointer with file override returns file path", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		assetsDir := filepath.Join(dataDir, AssetsDir)
+		overridePath := filepath.Join(assetsDir, FailSoundFilename)
+		require.NoError(t, fs.MkdirAll(assetsDir, 0o750))
+		require.NoError(t, afero.WriteFile(fs, overridePath, []byte("wav"), 0o600))
+
+		cfg := &Instance{fs: fs, vals: Values{Audio: Audio{ScanFeedback: true, FailSound: nil}}}
+		path, enabled := cfg.FailSoundPath(dataDir)
+		assert.Equal(t, overridePath, path)
+		assert.True(t, enabled)
+	})
+
+	t.Run("nil pointer no file returns embedded default", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		cfg := &Instance{fs: fs, vals: Values{Audio: Audio{ScanFeedback: true, FailSound: nil}}}
+		path, enabled := cfg.FailSoundPath(dataDir)
+		assert.Empty(t, path)
+		assert.True(t, enabled)
+	})
+}
+
+func TestLimitSoundPath(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+
+	t.Run("scan_feedback disabled returns empty false", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		cfg := &Instance{fs: fs, vals: Values{Audio: Audio{ScanFeedback: false}}}
+		path, enabled := cfg.LimitSoundPath(dataDir)
+		assert.Empty(t, path)
+		assert.False(t, enabled)
+	})
+
+	t.Run("nil pointer with file override returns file path", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		assetsDir := filepath.Join(dataDir, AssetsDir)
+		overridePath := filepath.Join(assetsDir, LimitSoundFilename)
+		require.NoError(t, fs.MkdirAll(assetsDir, 0o750))
+		require.NoError(t, afero.WriteFile(fs, overridePath, []byte("wav"), 0o600))
+
+		cfg := &Instance{fs: fs, vals: Values{Audio: Audio{ScanFeedback: true, LimitSound: nil}}}
+		path, enabled := cfg.LimitSoundPath(dataDir)
+		assert.Equal(t, overridePath, path)
+		assert.True(t, enabled)
+	})
+
+	t.Run("nil pointer no file returns embedded default", func(t *testing.T) {
+		t.Parallel()
+		fs := afero.NewMemMapFs()
+		cfg := &Instance{fs: fs, vals: Values{Audio: Audio{ScanFeedback: true, LimitSound: nil}}}
+		path, enabled := cfg.LimitSoundPath(dataDir)
+		assert.Empty(t, path)
+		assert.True(t, enabled)
+	})
 }
 
 func TestSave_OmitsGamepadEnabledWhenNil(t *testing.T) {

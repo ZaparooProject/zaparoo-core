@@ -31,7 +31,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockReadCloser is a mock implementation of io.ReadCloser for testing
 type mockReadCloser struct {
 	reader    io.Reader
 	closeErr  error
@@ -55,9 +54,8 @@ func (m *mockReadCloser) Close() error {
 	return m.closeErr
 }
 
-// validWAVHeader returns a minimal valid WAV file header
 func validWAVHeader() []byte {
-	// Minimal WAV file: RIFF header + fmt chunk + data chunk (44 bytes header + some silence)
+	// Minimal valid 44-byte WAV: RIFF header + fmt chunk + empty data chunk
 	wav := []byte{
 		// RIFF header
 		'R', 'I', 'F', 'F',
@@ -95,11 +93,7 @@ func TestPlayWAV(t *testing.T) {
 					reader: bytes.NewReader(validWAVHeader()),
 				}
 			},
-			wantErr: false,
-			// Note: We don't verify async callback cleanup here because:
-			// 1. It would require sleep-based timing (flaky, slow)
-			// 2. Callback execution is handled by beep library
-			// 3. We trust beep's Seq() to call our cleanup callback
+			wantErr:   false,
 			checkMock: nil,
 		},
 		{
@@ -111,7 +105,6 @@ func TestPlayWAV(t *testing.T) {
 			},
 			wantErr: true,
 			checkMock: func(t *testing.T, mock *mockReadCloser) {
-				// Reader should be closed on error
 				assert.True(t, mock.closed, "reader should be closed on error")
 			},
 		},
@@ -144,9 +137,10 @@ func TestPlayWAV(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			p := NewMalgoPlayer()
 			//nolint:forcetypeassert,revive // Test code with known mock type
 			mock := tt.setupMock().(*mockReadCloser)
-			err := PlayWAV(mock)
+			err := p.playWAV(mock)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -193,7 +187,8 @@ func TestPlayWAVBytes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := PlayWAVBytes(tt.data)
+			p := NewMalgoPlayer()
+			err := p.PlayWAVBytes(tt.data)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -204,18 +199,15 @@ func TestPlayWAVBytes(t *testing.T) {
 	}
 }
 
-func TestPlayWAVFile(t *testing.T) {
+func TestPlayFile_WAV(t *testing.T) {
 	t.Parallel()
 
-	// Create a temporary directory for test files
 	tmpDir := t.TempDir()
 
-	// Create a valid WAV file
 	validWAVPath := filepath.Join(tmpDir, "valid.wav")
 	err := os.WriteFile(validWAVPath, validWAVHeader(), 0o600)
 	require.NoError(t, err)
 
-	// Create an invalid WAV file
 	invalidWAVPath := filepath.Join(tmpDir, "invalid.wav")
 	err = os.WriteFile(invalidWAVPath, []byte("not a wav file"), 0o600)
 	require.NoError(t, err)
@@ -249,7 +241,8 @@ func TestPlayWAVFile(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := PlayWAVFile(tt.path)
+			p := NewMalgoPlayer()
+			err := p.PlayFile(tt.path)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -260,76 +253,76 @@ func TestPlayWAVFile(t *testing.T) {
 	}
 }
 
-// Note: We don't have a TestPlayWAVFile_ResourceCleanup test because:
-// 1. The cleanup callback runs asynchronously after audio finishes
-// 2. Testing it would require sleep-based timing which is flaky and slow
-// 3. The callback mechanism is provided by beep.Seq() which we trust
-// 4. We test the error path cleanup in TestPlayWAV (immediate Close on error)
-
 func TestPlayWAV_CancellationBehavior(t *testing.T) {
 	t.Parallel()
 
-	// This test verifies that playing a new sound cancels the previous sound
-	// by checking that the generation counter increments
+	p := NewMalgoPlayer()
 
-	// Reset global state for this test
-	playbackMu.Lock()
-	initialGen := playbackGen
-	playbackMu.Unlock()
+	p.playbackMu.Lock()
+	initialGen := p.playbackGen
+	p.playbackMu.Unlock()
 
 	// Play first sound
 	mock1 := &mockReadCloser{
 		reader: bytes.NewReader(validWAVHeader()),
 	}
-	err := PlayWAV(mock1)
+	err := p.playWAV(mock1)
 	require.NoError(t, err)
 
-	// Verify generation incremented
-	playbackMu.Lock()
-	gen1 := playbackGen
-	playbackMu.Unlock()
+	p.playbackMu.Lock()
+	gen1 := p.playbackGen
+	p.playbackMu.Unlock()
 	assert.Greater(t, gen1, initialGen, "first playback should increment generation")
 
 	// Play second sound (should cancel first)
 	mock2 := &mockReadCloser{
 		reader: bytes.NewReader(validWAVHeader()),
 	}
-	err = PlayWAV(mock2)
+	err = p.playWAV(mock2)
 	require.NoError(t, err)
 
-	// Verify generation incremented again
-	playbackMu.Lock()
-	gen2 := playbackGen
-	playbackMu.Unlock()
+	p.playbackMu.Lock()
+	gen2 := p.playbackGen
+	p.playbackMu.Unlock()
 	assert.Greater(t, gen2, gen1, "second playback should increment generation")
 }
 
 func TestPlayWAVBytes_CancellationBehavior(t *testing.T) {
 	t.Parallel()
 
-	// Similar test for PlayWAVBytes to ensure it also supports cancellation
+	p := NewMalgoPlayer()
 
-	playbackMu.Lock()
-	initialGen := playbackGen
-	playbackMu.Unlock()
+	p.playbackMu.Lock()
+	initialGen := p.playbackGen
+	p.playbackMu.Unlock()
 
-	// Play first sound
-	err := PlayWAVBytes(validWAVHeader())
+	err := p.PlayWAVBytes(validWAVHeader())
 	require.NoError(t, err)
 
-	// Verify generation incremented
-	playbackMu.Lock()
-	gen1 := playbackGen
-	playbackMu.Unlock()
+	p.playbackMu.Lock()
+	gen1 := p.playbackGen
+	p.playbackMu.Unlock()
 	assert.Greater(t, gen1, initialGen, "first playback should increment generation")
 
-	// Play second sound (should cancel first)
-	err = PlayWAVBytes(validWAVHeader())
+	err = p.PlayWAVBytes(validWAVHeader())
 	require.NoError(t, err)
 
-	// Verify generation incremented again
-	playbackMu.Lock()
-	gen2 := playbackGen
-	playbackMu.Unlock()
+	p.playbackMu.Lock()
+	gen2 := p.playbackGen
+	p.playbackMu.Unlock()
 	assert.Greater(t, gen2, gen1, "second playback should increment generation")
+}
+
+func TestPlayFile_UnsupportedFormat(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	unsupportedPath := filepath.Join(tmpDir, "audio.aac")
+	err := os.WriteFile(unsupportedPath, []byte("fake audio"), 0o600)
+	require.NoError(t, err)
+
+	p := NewMalgoPlayer()
+	err = p.PlayFile(unsupportedPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported audio format")
 }

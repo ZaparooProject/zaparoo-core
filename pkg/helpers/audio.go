@@ -24,25 +24,24 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// PlayConfiguredSound plays a sound based on configuration settings.
-// If enabled is false, no sound is played.
-// If path is empty, plays the default embedded sound.
-// If path is set, plays the custom sound file from that path.
-// Errors are logged but not returned.
-func PlayConfiguredSound(path string, enabled bool, defaultSound []byte, soundName string) {
+// PlayConfiguredSound plays a sound based on configuration. Custom sound files
+// fall back to the embedded default on error.
+func PlayConfiguredSound(player audio.Player, path string, enabled bool, defaultSound []byte, soundName string) {
 	if !enabled {
 		return
 	}
 
 	if path == "" {
-		// Use embedded default sound
-		if err := audio.PlayWAVBytes(defaultSound); err != nil {
+		if err := player.PlayWAVBytes(defaultSound); err != nil {
 			log.Warn().Err(err).Msgf("error playing %s sound", soundName)
 		}
-	} else {
-		// Use custom sound file
-		if err := audio.PlayFile(path); err != nil {
-			log.Warn().Str("path", path).Err(err).Msgf("error playing custom %s sound", soundName)
+		return
+	}
+
+	if err := player.PlayFile(path); err != nil {
+		log.Warn().Str("path", path).Err(err).Msgf("error playing custom %s sound, falling back to default", soundName)
+		if fbErr := player.PlayWAVBytes(defaultSound); fbErr != nil {
+			log.Warn().Err(fbErr).Msgf("error playing fallback %s sound", soundName)
 		}
 	}
 }

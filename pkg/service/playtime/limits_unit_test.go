@@ -119,7 +119,7 @@ func TestCreateRules(t *testing.T) {
 				Playtime: tt.playtime,
 			})
 
-			tm := NewLimitsManager(nil, nil, cfg, nil)
+			tm := NewLimitsManager(nil, nil, cfg, nil, nil)
 
 			rules := tm.createRules()
 
@@ -184,7 +184,7 @@ func TestSetEnabled(t *testing.T) {
 
 			cfg := newTestConfig(t, &config.Values{}) //nolint:exhaustruct // Default config is fine
 
-			tm := NewLimitsManager(nil, nil, cfg, nil)
+			tm := NewLimitsManager(nil, nil, cfg, nil, nil)
 			tm.enabled = tt.initial
 
 			tm.SetEnabled(tt.set)
@@ -201,7 +201,7 @@ func TestSetEnabled_SessionReset(t *testing.T) {
 	cfg := newTestConfig(t, &config.Values{}) //nolint:exhaustruct // Default config is fine
 	clock := clockwork.NewFakeClock()
 
-	tm := NewLimitsManager(nil, nil, cfg, clock)
+	tm := NewLimitsManager(nil, nil, cfg, clock, nil)
 	tm.enabled = true
 
 	// Simulate active session with cumulative time
@@ -248,7 +248,7 @@ func TestSetEnabled_CooldownReset(t *testing.T) {
 	cfg := newTestConfig(t, &config.Values{}) //nolint:exhaustruct // Default config is fine
 	clock := clockwork.NewFakeClock()
 
-	tm := NewLimitsManager(nil, nil, cfg, clock)
+	tm := NewLimitsManager(nil, nil, cfg, clock, nil)
 	tm.enabled = true
 
 	// Simulate cooldown state with cumulative time
@@ -280,7 +280,7 @@ func TestCooldownTimer_AutomaticReset(t *testing.T) {
 	cfg := newTestConfig(t, &config.Values{}) //nolint:exhaustruct // Default config is fine
 	clock := clockwork.NewFakeClock()
 
-	tm := NewLimitsManager(nil, nil, cfg, clock)
+	tm := NewLimitsManager(nil, nil, cfg, clock, nil)
 	defer tm.Stop() // Stop manager to clean up goroutines
 
 	tm.enabled = true
@@ -331,7 +331,7 @@ func TestCooldownTimer_CancelledByNewGame(t *testing.T) {
 	})
 	clock := clockwork.NewFakeClock()
 
-	tm := NewLimitsManager(nil, nil, cfg, clock)
+	tm := NewLimitsManager(nil, nil, cfg, clock, nil)
 	defer tm.Stop() // Stop manager to clean up goroutines
 
 	tm.enabled = true
@@ -411,7 +411,7 @@ func TestIsSessionActive(t *testing.T) {
 
 			cfg := newTestConfig(t, &config.Values{}) //nolint:exhaustruct // Default config is fine
 
-			tm := NewLimitsManager(nil, nil, cfg, nil)
+			tm := NewLimitsManager(nil, nil, cfg, nil, nil)
 
 			if !tt.sessionStartZero {
 				tm.sessionStart = tm.clock.Now()

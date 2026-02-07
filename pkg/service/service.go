@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -197,6 +198,8 @@ func Start(
 	bootUUID := uuid.New().String()
 	log.Info().Msgf("boot session UUID: %s", bootUUID)
 
+	player := audio.NewMalgoPlayer()
+
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
 
@@ -241,7 +244,7 @@ func Start(
 
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")
-	limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock())
+	limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock(), player)
 	limitsManager.Start(notifBroker, st.Notifications)
 	if cfg.PlaytimeLimitsEnabled() {
 		limitsManager.SetEnabled(true)
@@ -313,10 +316,10 @@ func Start(
 	}
 
 	log.Info().Msg("starting reader manager")
-	go readerManager(pl, cfg, st, db, itq, lsq, plq, make(chan readers.Scan))
+	go readerManager(pl, cfg, st, db, itq, lsq, plq, make(chan readers.Scan), player)
 
 	log.Info().Msg("starting input token queue manager")
-	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq, limitsManager)
+	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq, limitsManager, player)
 
 	log.Info().Msg("running platform post start")
 	err = pl.StartPost(cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia, db)

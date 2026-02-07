@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -151,6 +152,7 @@ func launchPlaylistMedia(
 	pls *playlists.Playlist,
 	plq chan<- *playlists.Playlist,
 	activePlaylist *playlists.Playlist,
+	player audio.Player,
 ) {
 	t := tokens.Token{
 		Text:     pls.Current().ZapScript,
@@ -166,7 +168,7 @@ func launchPlaylistMedia(
 	if err != nil {
 		log.Error().Err(err).Msgf("error launching token")
 		path, enabled := cfg.FailSoundPath(helpers.DataDir(platform))
-		helpers.PlayConfiguredSound(path, enabled, assets.FailSound, "fail")
+		helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 	}
 
 	now := time.Now()
@@ -204,6 +206,7 @@ func handlePlaylist(
 	pls *playlists.Playlist,
 	lsq chan<- *tokens.Token,
 	plq chan<- *playlists.Playlist,
+	player audio.Player,
 ) {
 	activePlaylist := st.GetActivePlaylist()
 
@@ -220,7 +223,7 @@ func handlePlaylist(
 		st.SetActivePlaylist(pls)
 		if pls.Playing {
 			log.Info().Any("pls", pls).Msg("setting new playlist, launching token")
-			go launchPlaylistMedia(pl, cfg, st, db, lsq, pls, plq, activePlaylist)
+			go launchPlaylistMedia(pl, cfg, st, db, lsq, pls, plq, activePlaylist, player)
 		} else {
 			log.Info().Any("pls", pls).Msg("setting new playlist")
 		}
@@ -235,7 +238,7 @@ func handlePlaylist(
 		st.SetActivePlaylist(pls)
 		if pls.Playing {
 			log.Info().Any("pls", pls).Msg("updating playlist, launching token")
-			go launchPlaylistMedia(pl, cfg, st, db, lsq, pls, plq, activePlaylist)
+			go launchPlaylistMedia(pl, cfg, st, db, lsq, pls, plq, activePlaylist, player)
 		} else {
 			log.Info().Any("pls", pls).Msg("updating playlist")
 		}
@@ -252,11 +255,12 @@ func processTokenQueue(
 	lsq chan<- *tokens.Token,
 	plq chan *playlists.Playlist,
 	limitsManager *playtime.LimitsManager,
+	player audio.Player,
 ) {
 	for {
 		select {
 		case pls := <-plq:
-			handlePlaylist(cfg, platform, db, st, pls, lsq, plq)
+			handlePlaylist(cfg, platform, db, st, pls, lsq, plq, player)
 			continue
 		case t := <-itq:
 			// TODO: change this channel to send a token pointer or something
@@ -267,9 +271,8 @@ func processTokenQueue(
 
 			log.Info().Msgf("processing token: %v", t)
 
-			// Play success sound immediately on scan success
 			path, enabled := cfg.SuccessSoundPath(helpers.DataDir(platform))
-			helpers.PlayConfiguredSound(path, enabled, assets.SuccessSound, "success")
+			helpers.PlayConfiguredSound(player, path, enabled, assets.SuccessSound, "success")
 
 			err := platform.ScanHook(&t)
 			if err != nil {
@@ -325,11 +328,9 @@ func processTokenQueue(
 						Reason: models.PlaytimeLimitReasonDaily,
 					})
 
-					// Play limit sound
 					path, enabled := cfg.LimitSoundPath(helpers.DataDir(platform))
-					helpers.PlayConfiguredSound(path, enabled, assets.LimitSound, "limit")
+					helpers.PlayConfiguredSound(player, path, enabled, assets.LimitSound, "limit")
 
-					// Add to history as failed
 					he.Success = false
 					if histErr := db.UserDB.AddHistory(&he); histErr != nil {
 						log.Error().Err(histErr).Msgf("error adding history")
@@ -358,10 +359,9 @@ func processTokenQueue(
 					}
 				}
 
-				// Play fail sound only if ZapScript fails
 				if err != nil {
 					path, enabled := cfg.FailSoundPath(helpers.DataDir(platform))
-					helpers.PlayConfiguredSound(path, enabled, assets.FailSound, "fail")
+					helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 				}
 
 				he.Success = err == nil

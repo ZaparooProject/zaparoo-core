@@ -97,7 +97,7 @@ func TestBuildRuleContext_UnreliableClock(t *testing.T) {
 		currentTime := time.Date(1970, 1, 1, 11, 0, 0, 0, time.UTC)
 
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 		ctx, err := tm.buildRuleContext(sessionStart)
 
@@ -126,7 +126,7 @@ func TestBuildRuleContext_UnreliableClock(t *testing.T) {
 		currentTime := time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)
 
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 		// Session started with reliable clock
 		tm.mu.Lock()
@@ -163,7 +163,7 @@ func TestBuildRuleContext_ClockHealing(t *testing.T) {
 		sessionStart := time.Date(1970, 1, 1, 10, 0, 0, 0, time.UTC)
 		fakeClock := clockwork.NewFakeClockAt(sessionStart)
 
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 		// Simulate OnMediaStarted at 1970
 		tm.mu.Lock()
@@ -205,7 +205,7 @@ func TestBuildRuleContext_ClockHealing(t *testing.T) {
 		currentTime := time.Date(2025, 1, 15, 0, 30, 0, 0, time.UTC) // 12:30 AM today
 
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
-		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 		// Mark session start as reliable
 		tm.mu.Lock()
@@ -360,7 +360,7 @@ func TestBuildRuleContext_MidnightRollover_CurrentSession(t *testing.T) {
 
 			// Create LimitsManager with fake clock
 			fakeClock := clockwork.NewFakeClockAt(tt.currentTime)
-			tm := NewLimitsManager(db, nil, cfg, fakeClock)
+			tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 			// Mark session start as reliable for these tests
 			tm.mu.Lock()
@@ -469,7 +469,7 @@ func TestCalculateDailyUsage_EdgeCases(t *testing.T) {
 
 			// Create LimitsManager
 			cfg := &config.Instance{}
-			tm := NewLimitsManager(db, nil, cfg, clockwork.NewRealClock())
+			tm := NewLimitsManager(db, nil, cfg, clockwork.NewRealClock(), nil)
 
 			// Mark session start as reliable
 			tm.mu.Lock()

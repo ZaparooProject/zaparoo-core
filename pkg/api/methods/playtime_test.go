@@ -96,7 +96,7 @@ func TestHandlePlaytime_ResetStateWithDailyFields(t *testing.T) {
 	currentTime := time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC)
 	fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock)
+	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, nil)
 	// State is already StateReset by default
 
 	env := requests.RequestEnv{
@@ -145,7 +145,7 @@ func TestHandlePlaytime_ResetStateNilDailyFields(t *testing.T) {
 	currentTime := time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC)
 	fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock)
+	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 	env := requests.RequestEnv{
 		Config:        cfg,
@@ -196,7 +196,7 @@ func TestHandlePlaytime_CooldownStateWithDailyFields(t *testing.T) {
 	currentTime := time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)
 	fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock)
+	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 	// Put manager in cooldown state (need to access internals)
 	// We'll use reflection or simply test the handler with a real state transition
@@ -245,7 +245,7 @@ func TestHandlePlaytime_SessionFields(t *testing.T) {
 	currentTime := time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC)
 	fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock)
+	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 	env := requests.RequestEnv{
 		Config:        cfg,
@@ -291,7 +291,7 @@ func TestHandlePlaytime_UnreliableClockNilDailyFields(t *testing.T) {
 	currentTime := time.Date(1970, 1, 1, 14, 0, 0, 0, time.UTC)
 	fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock)
+	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, nil)
 
 	env := requests.RequestEnv{
 		Config:        cfg,
