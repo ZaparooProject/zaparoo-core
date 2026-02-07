@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -325,4 +326,97 @@ func TestPlayFile_UnsupportedFormat(t *testing.T) {
 	err = p.PlayFile(unsupportedPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported audio format")
+}
+
+func TestFileCache_HitAndMiss(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	wavPath := filepath.Join(tmpDir, "test.wav")
+	err := os.WriteFile(wavPath, validWAVHeader(), 0o600)
+	require.NoError(t, err)
+
+	p := NewMalgoPlayer()
+
+	// First call: cache miss, reads from disk
+	data1, err := p.readFileWithCache(wavPath)
+	require.NoError(t, err)
+	assert.Equal(t, validWAVHeader(), data1)
+
+	// Verify it's cached
+	p.fileCacheMu.RLock()
+	_, cached := p.fileCache[wavPath]
+	p.fileCacheMu.RUnlock()
+	assert.True(t, cached, "file should be in cache after first read")
+
+	// Delete the file — second call should still succeed from cache
+	require.NoError(t, os.Remove(wavPath))
+
+	data2, err := p.readFileWithCache(wavPath)
+	require.NoError(t, err)
+	assert.Equal(t, data1, data2, "cached data should match original")
+}
+
+func TestFileCache_Clear(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	wavPath := filepath.Join(tmpDir, "test.wav")
+	err := os.WriteFile(wavPath, validWAVHeader(), 0o600)
+	require.NoError(t, err)
+
+	p := NewMalgoPlayer()
+
+	// Populate cache
+	_, err = p.readFileWithCache(wavPath)
+	require.NoError(t, err)
+
+	// Clear cache
+	p.ClearFileCache()
+
+	p.fileCacheMu.RLock()
+	assert.Empty(t, p.fileCache, "cache should be empty after clear")
+	p.fileCacheMu.RUnlock()
+
+	// Next read should hit disk again (file still exists)
+	data, err := p.readFileWithCache(wavPath)
+	require.NoError(t, err)
+	assert.Equal(t, validWAVHeader(), data)
+}
+
+func TestFileCache_NonExistentFile(t *testing.T) {
+	t.Parallel()
+
+	p := NewMalgoPlayer()
+
+	_, err := p.readFileWithCache("/nonexistent/path.wav")
+	require.Error(t, err)
+
+	// Should not cache failed reads
+	p.fileCacheMu.RLock()
+	assert.Empty(t, p.fileCache)
+	p.fileCacheMu.RUnlock()
+}
+
+func TestFileCache_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	wavPath := filepath.Join(tmpDir, "test.wav")
+	err := os.WriteFile(wavPath, validWAVHeader(), 0o600)
+	require.NoError(t, err)
+
+	p := NewMalgoPlayer()
+
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data, readErr := p.readFileWithCache(wavPath)
+			assert.NoError(t, readErr)
+			assert.Equal(t, validWAVHeader(), data)
+		}()
+	}
+	wg.Wait()
 }

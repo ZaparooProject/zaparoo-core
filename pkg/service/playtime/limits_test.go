@@ -27,10 +27,17 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newNoOpMockPlayer() *mocks.MockPlayer {
+	p := mocks.NewMockPlayer()
+	p.SetupNoOpMock()
+	return p
+}
 
 func TestIsClockReliable(t *testing.T) {
 	t.Parallel()
@@ -97,7 +104,7 @@ func TestBuildRuleContext_UnreliableClock(t *testing.T) {
 		currentTime := time.Date(1970, 1, 1, 11, 0, 0, 0, time.UTC)
 
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
-		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 
 		ctx, err := tm.buildRuleContext(sessionStart)
 
@@ -126,7 +133,7 @@ func TestBuildRuleContext_UnreliableClock(t *testing.T) {
 		currentTime := time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)
 
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
-		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 
 		// Session started with reliable clock
 		tm.mu.Lock()
@@ -163,7 +170,7 @@ func TestBuildRuleContext_ClockHealing(t *testing.T) {
 		sessionStart := time.Date(1970, 1, 1, 10, 0, 0, 0, time.UTC)
 		fakeClock := clockwork.NewFakeClockAt(sessionStart)
 
-		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 
 		// Simulate OnMediaStarted at 1970
 		tm.mu.Lock()
@@ -205,7 +212,7 @@ func TestBuildRuleContext_ClockHealing(t *testing.T) {
 		currentTime := time.Date(2025, 1, 15, 0, 30, 0, 0, time.UTC) // 12:30 AM today
 
 		fakeClock := clockwork.NewFakeClockAt(currentTime)
-		tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 
 		// Mark session start as reliable
 		tm.mu.Lock()
@@ -360,7 +367,7 @@ func TestBuildRuleContext_MidnightRollover_CurrentSession(t *testing.T) {
 
 			// Create LimitsManager with fake clock
 			fakeClock := clockwork.NewFakeClockAt(tt.currentTime)
-			tm := NewLimitsManager(db, nil, cfg, fakeClock, nil)
+			tm := NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 
 			// Mark session start as reliable for these tests
 			tm.mu.Lock()
@@ -469,7 +476,7 @@ func TestCalculateDailyUsage_EdgeCases(t *testing.T) {
 
 			// Create LimitsManager
 			cfg := &config.Instance{}
-			tm := NewLimitsManager(db, nil, cfg, clockwork.NewRealClock(), nil)
+			tm := NewLimitsManager(db, nil, cfg, clockwork.NewRealClock(), newNoOpMockPlayer())
 
 			// Mark session start as reliable
 			tm.mu.Lock()

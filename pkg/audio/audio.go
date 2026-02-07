@@ -48,18 +48,23 @@ import (
 type Player interface {
 	PlayWAVBytes(data []byte) error
 	PlayFile(path string) error
+	ClearFileCache()
 }
 
 // MalgoPlayer implements Player using malgo for real audio hardware output.
 type MalgoPlayer struct {
 	currentCancel context.CancelFunc
+	fileCache     map[string][]byte
 	playbackGen   uint64
+	fileCacheMu   syncutil.RWMutex
 	playbackMu    syncutil.Mutex
 }
 
 // NewMalgoPlayer creates a new MalgoPlayer instance.
 func NewMalgoPlayer() *MalgoPlayer {
-	return &MalgoPlayer{}
+	return &MalgoPlayer{
+		fileCache: make(map[string][]byte),
+	}
 }
 
 func (p *MalgoPlayer) playWAV(r io.ReadCloser) error {
@@ -120,11 +125,11 @@ func (p *MalgoPlayer) PlayWAVBytes(data []byte) error {
 
 // PlayFile plays an audio file asynchronously, detecting format by extension.
 // Supports WAV, MP3, OGG (Vorbis), and FLAC. Cancels any currently playing sound.
+// File bytes are cached per-instance to avoid repeated disk reads for the same path.
 func (p *MalgoPlayer) PlayFile(path string) error {
-	//nolint:gosec // G304: callers are responsible for path sanitization
-	f, err := os.Open(path)
+	data, err := p.readFileWithCache(path)
 	if err != nil {
-		return fmt.Errorf("failed to open audio file: %w", err)
+		return fmt.Errorf("failed to read audio file: %w", err)
 	}
 
 	ext := strings.ToLower(filepath.Ext(path))
@@ -134,24 +139,18 @@ func (p *MalgoPlayer) PlayFile(path string) error {
 
 	switch ext {
 	case ".wav":
-		streamer, format, err = wav.Decode(f)
+		streamer, format, err = wav.Decode(bytes.NewReader(data))
 	case ".mp3":
-		streamer, format, err = mp3.Decode(f)
+		streamer, format, err = mp3.Decode(io.NopCloser(bytes.NewReader(data)))
 	case ".ogg":
-		streamer, format, err = vorbis.Decode(f)
+		streamer, format, err = vorbis.Decode(io.NopCloser(bytes.NewReader(data)))
 	case ".flac":
-		streamer, format, err = flac.Decode(f)
+		streamer, format, err = flac.Decode(bytes.NewReader(data))
 	default:
-		if closeErr := f.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close file after unsupported format detection")
-		}
 		return fmt.Errorf("unsupported audio format: %s (supported: .wav, .mp3, .ogg, .flac)", ext)
 	}
 
 	if err != nil {
-		if closeErr := f.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close audio file on decode error")
-		}
 		return fmt.Errorf("failed to decode audio file: %w", err)
 	}
 
@@ -173,9 +172,6 @@ func (p *MalgoPlayer) PlayFile(path string) error {
 			if err := streamer.Close(); err != nil {
 				log.Warn().Err(err).Msg("failed to close audio streamer")
 			}
-			if err := f.Close(); err != nil {
-				log.Warn().Err(err).Msg("failed to close audio file")
-			}
 			p.playbackMu.Lock()
 			if p.playbackGen == thisGen {
 				p.currentCancel = nil
@@ -194,6 +190,37 @@ func (p *MalgoPlayer) PlayFile(path string) error {
 	}()
 
 	return nil
+}
+
+// readFileWithCache returns file bytes, using an in-memory cache to avoid
+// repeated disk reads for files that are played frequently (e.g. scan feedback).
+func (p *MalgoPlayer) readFileWithCache(path string) ([]byte, error) {
+	p.fileCacheMu.RLock()
+	if cached, ok := p.fileCache[path]; ok {
+		p.fileCacheMu.RUnlock()
+		return cached, nil
+	}
+	p.fileCacheMu.RUnlock()
+
+	//nolint:gosec // G304: callers are responsible for path sanitization
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	p.fileCacheMu.Lock()
+	p.fileCache[path] = data
+	p.fileCacheMu.Unlock()
+
+	return data, nil
+}
+
+// ClearFileCache clears the in-memory file cache, forcing subsequent PlayFile
+// calls to re-read from disk. Called after settings reload to pick up new files.
+func (p *MalgoPlayer) ClearFileCache() {
+	p.fileCacheMu.Lock()
+	defer p.fileCacheMu.Unlock()
+	p.fileCache = make(map[string][]byte)
 }
 
 // playWAVWithMalgo plays audio samples through malgo, blocking until complete or ctx is cancelled.

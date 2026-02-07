@@ -80,7 +80,7 @@ func TestHandlePlaytimeLimitsUpdate_ReEnableWithActiveMedia(t *testing.T) {
 	}
 
 	// Create a LimitsManager with the mock database
-	limitsManager := playtime.NewLimitsManager(db, mockPlatform, cfg, fakeClock, nil)
+	limitsManager := playtime.NewLimitsManager(db, mockPlatform, cfg, fakeClock, newNoOpMockPlayer())
 	defer limitsManager.Stop() // Clean up goroutines
 
 	// Prepare the request to enable limits
@@ -142,7 +142,7 @@ func TestHandlePlaytimeLimitsUpdate_ReEnableWithNoActiveMedia(t *testing.T) {
 	// Create a LimitsManager
 	baseTime := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
 	fakeClock := clockwork.NewFakeClockAt(baseTime)
-	limitsManager := playtime.NewLimitsManager(db, mockPlatform, cfg, fakeClock, nil)
+	limitsManager := playtime.NewLimitsManager(db, mockPlatform, cfg, fakeClock, newNoOpMockPlayer())
 	defer limitsManager.Stop() // Clean up goroutines
 
 	// Prepare the request to enable limits

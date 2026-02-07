@@ -288,7 +288,7 @@ func Start(
 
 	log.Info().Msg("starting API service")
 	apiNotifications, _ := notifBroker.Subscribe(100)
-	go api.Start(pl, cfg, st, itq, db, limitsManager, apiNotifications, discoveryService.InstanceName())
+	go api.Start(pl, cfg, st, itq, db, limitsManager, apiNotifications, discoveryService.InstanceName(), player)
 
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)

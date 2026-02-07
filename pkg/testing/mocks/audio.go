@@ -36,6 +36,10 @@ func (m *MockPlayer) PlayFile(path string) error {
 	return args.Error(0) //nolint:wrapcheck // mock
 }
 
+func (m *MockPlayer) ClearFileCache() {
+	m.Called()
+}
+
 // NewMockPlayer creates a new MockPlayer instance.
 func NewMockPlayer() *MockPlayer {
 	return &MockPlayer{}
@@ -45,4 +49,5 @@ func NewMockPlayer() *MockPlayer {
 func (m *MockPlayer) SetupNoOpMock() {
 	m.On("PlayWAVBytes", mock.Anything).Return(nil).Maybe()
 	m.On("PlayFile", mock.Anything).Return(nil).Maybe()
+	m.On("ClearFileCache").Return().Maybe()
 }
