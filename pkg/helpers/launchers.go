@@ -62,6 +62,7 @@ func ParseCustomLaunchers(
 	customLaunchers []config.LaunchersCustom,
 ) []platforms.Launcher {
 	launchers := make([]platforms.Launcher, 0)
+	skipped := 0
 	for i := range customLaunchers {
 		v := &customLaunchers[i]
 
@@ -69,7 +70,9 @@ func ParseCustomLaunchers(
 		if v.System != "" {
 			system, err := systemdefs.LookupSystem(v.System)
 			if err != nil {
-				log.Err(err).Msgf("custom launcher %s: system not found: %s", v.ID, v.System)
+				log.Warn().Err(err).Str("launcherID", v.ID).Str("system", v.System).
+					Msg("skipping custom launcher: system not found")
+				skipped++
 				continue
 			}
 			systemID = system.ID
@@ -83,11 +86,17 @@ func ParseCustomLaunchers(
 		launcherGroups := v.Groups
 		executeCmd := v.Execute
 
+		exts := formatExtensions(v.FileExts)
+
+		log.Debug().Str("launcherID", launcherID).Str("systemID", launcherSystemID).
+			Int("folders", len(v.MediaDirs)).Int("extensions", len(exts)).
+			Msg("parsed custom launcher")
+
 		launchers = append(launchers, platforms.Launcher{
 			ID:            launcherID,
 			SystemID:      launcherSystemID,
 			Folders:       v.MediaDirs,
-			Extensions:    formatExtensions(v.FileExts),
+			Extensions:    exts,
 			Groups:        launcherGroups,
 			Schemes:       v.Schemes,
 			AllowListOnly: v.Restricted,
@@ -155,6 +164,9 @@ func ParseCustomLaunchers(
 					cmd.Env = append(os.Environ(), "ZAPAROO_ENVIRONMENT="+string(envJSON))
 				}
 
+				log.Debug().Str("launcherID", launcherID).Str("command", output).
+					Msg("executing custom launcher")
+
 				if err = cmd.Start(); err != nil {
 					log.Error().Err(err).Msgf("error running custom launcher: %s", output)
 					return nil, fmt.Errorf("failed to start custom launcher command: %w", err)
@@ -165,5 +177,11 @@ func ParseCustomLaunchers(
 			},
 		})
 	}
+
+	if skipped > 0 {
+		log.Warn().Int("skipped", skipped).Int("parsed", len(launchers)).
+			Msg("some custom launchers were skipped due to errors")
+	}
+
 	return launchers
 }

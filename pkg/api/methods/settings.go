@@ -86,6 +86,8 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 		return nil, errors.New("error loading custom launchers")
 	}
 
+	env.LauncherCache.Refresh(env.Platform, env.Config)
+
 	return NoContent{}, nil
 }
 

@@ -158,6 +158,62 @@ func TestParseCustomLaunchers_EmptyGroups(t *testing.T) {
 	assert.False(t, launchers[0].AllowListOnly) // maps from Restricted field
 }
 
+func TestParseCustomLaunchers_SkipsUnknownSystem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	customLaunchers := []config.LaunchersCustom{
+		{
+			ID:      "GoodLauncher",
+			System:  "SNES",
+			Execute: "echo good",
+		},
+		{
+			ID:      "BadSystemLauncher",
+			System:  "NonExistentSystem12345",
+			Execute: "echo bad",
+		},
+		{
+			ID:      "NoSystemLauncher",
+			Execute: "echo nosystem",
+		},
+	}
+
+	launchers := ParseCustomLaunchers(mockPlatform, customLaunchers)
+
+	// The launcher with the unknown system should be skipped
+	assert.Len(t, launchers, 2)
+	assert.Equal(t, "GoodLauncher", launchers[0].ID)
+	assert.Equal(t, "SNES", launchers[0].SystemID)
+	assert.Equal(t, "NoSystemLauncher", launchers[1].ID)
+	assert.Empty(t, launchers[1].SystemID)
+}
+
+func TestParseCustomLaunchers_AllUnknownSystems(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	customLaunchers := []config.LaunchersCustom{
+		{
+			ID:      "BadLauncher1",
+			System:  "FakeSystem1",
+			Execute: "echo bad1",
+		},
+		{
+			ID:      "BadLauncher2",
+			System:  "FakeSystem2",
+			Execute: "echo bad2",
+		},
+	}
+
+	launchers := ParseCustomLaunchers(mockPlatform, customLaunchers)
+	assert.Empty(t, launchers)
+}
+
 func TestFormatExtensions(t *testing.T) {
 	t.Parallel()
 

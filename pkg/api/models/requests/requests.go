@@ -24,6 +24,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -36,6 +37,7 @@ type RequestEnv struct {
 	State         *state.State
 	Database      *database.Database
 	LimitsManager *playtime.LimitsManager
+	LauncherCache *helpers.LauncherCache
 	TokenQueue    chan<- tokens.Token
 	ClientID      string
 	Params        json.RawMessage

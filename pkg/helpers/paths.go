@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/rs/zerolog/log"
 )
 
 // NormalizePathForComparison normalizes a path for cross-platform case-insensitive comparison.
@@ -356,6 +357,8 @@ func FindLauncher(
 ) (platforms.Launcher, error) {
 	launchers := PathToLaunchers(cfg, pl, path)
 	if len(launchers) == 0 {
+		log.Debug().Str("path", path).Int("launchersChecked", len(GlobalLauncherCache.GetAllLaunchers())).
+			Msg("no launcher matched path")
 		return platforms.Launcher{}, errors.New("no launcher found for: " + path)
 	}
 
