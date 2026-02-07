@@ -1188,3 +1188,24 @@ func TestRootDirs_DeduplicatesPaths(t *testing.T) {
 
 	assert.Equal(t, 1, count, "/userdata/roms should appear exactly once (deduplicated)")
 }
+
+// TestStopActiveLauncher_NoActiveState_ReturnsEarly tests that StopActiveLauncher
+// returns early without sending hotkeygen exit when nothing is active.
+// No MockESAPIServer is started — any ES API call would fail, proving the early return works.
+func TestStopActiveLauncher_NoActiveState_ReturnsEarly(t *testing.T) {
+	t.Parallel()
+
+	platform := &Platform{}
+
+	// No active media, no Kodi, no tracked process
+	platform.activeMedia = func() *models.ActiveMedia {
+		return nil
+	}
+	platform.setActiveMedia = func(_ *models.ActiveMedia) {}
+
+	err := platform.StopActiveLauncher(platforms.StopForMenu)
+	require.NoError(t, err, "should return nil when nothing is active")
+
+	err = platform.StopActiveLauncher(platforms.StopForPreemption)
+	require.NoError(t, err, "should return nil for any stop intent when nothing is active")
+}

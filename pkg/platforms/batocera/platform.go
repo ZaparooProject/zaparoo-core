@@ -301,6 +301,17 @@ func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 		return p.stopKodi(p.cfg, reason)
 	}
 
+	// Nothing active to stop — avoid sending hotkeygen exit to ES
+	// which interferes with its UI state when nothing is running.
+	p.processMu.RLock()
+	hasTrackedProcess := p.trackedProcess != nil
+	p.processMu.RUnlock()
+
+	if activeMedia == nil && !kodiActive && !hasTrackedProcess {
+		log.Debug().Msg("no active launcher to stop, skipping hotkeygen")
+		return nil
+	}
+
 	// Try hotkeygen first - this is the universal/recommended way to exit on Batocera
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := hotkeygenExit(ctx); err != nil {
