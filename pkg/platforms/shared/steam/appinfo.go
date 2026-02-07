@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 )
@@ -171,6 +172,7 @@ func (r *binaryVDFReader) readObject() (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
+		key = strings.ToLower(key)
 
 		switch typeMarker {
 		case vdfTypeNested:

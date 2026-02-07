@@ -51,26 +51,26 @@ func ParseShortcuts(buf io.Reader) ([]Shortcut, error) {
 			return []Shortcut{}, errors.New("could not get key 'appid' for one of the shortcuts")
 		}
 
-		appName, ok := s.GetString("AppName")
+		appName, ok := s.GetString("appname")
 		if !ok {
-			return []Shortcut{}, errors.New("could not get key 'AppName' for one of the shortcuts")
+			return []Shortcut{}, errors.New("could not get key 'appname' for one of the shortcuts")
 		}
 
-		exe, ok := s.GetString("Exe")
+		exe, ok := s.GetString("exe")
 		if !ok {
-			return []Shortcut{}, errors.New("could not get key 'Exe' for one of the shortcuts")
+			return []Shortcut{}, errors.New("could not get key 'exe' for one of the shortcuts")
 		}
 
-		startDir, ok := s.GetString("StartDir")
+		startDir, ok := s.GetString("startdir")
 		if !ok {
-			return []Shortcut{}, errors.New("could not get key 'StartDir' for one of the shortcuts")
+			return []Shortcut{}, errors.New("could not get key 'startdir' for one of the shortcuts")
 		}
 
 		// icon is optional - some shortcuts don't have an icon set
 		icon, _ := s.GetString("icon")
 
-		// IsHidden is optional - defaults to false if not present
-		isHidden, _ := s.GetBool("IsHidden")
+		// ishidden is optional - defaults to false if not present
+		isHidden, _ := s.GetBool("ishidden")
 
 		// tags is optional - shortcuts from EmuDeck/Lutris may not have tags
 		var tags []string

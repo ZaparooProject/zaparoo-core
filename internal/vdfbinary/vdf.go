@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 var (
@@ -75,7 +76,7 @@ func parseMap(buf *bufio.Reader) (vdfValue, error) {
 			return vdfValue{}, err
 		}
 
-		m[key] = value
+		m[strings.ToLower(key)] = value
 	}
 
 	return vdfValue{m}, nil
