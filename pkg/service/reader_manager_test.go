@@ -53,8 +53,8 @@ func setupReaderManager(t *testing.T) *readerManagerEnv {
 	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
 	require.NoError(t, err)
 
-	// Disable all audio to prevent malgo goroutine leaks on macOS CI
-	cfg.DisableAllSoundsForTesting()
+	mockPlayer := mocks.NewMockPlayer()
+	mockPlayer.SetupNoOpMock()
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.SetupBasicMock()
@@ -71,7 +71,7 @@ func setupReaderManager(t *testing.T) *readerManagerEnv {
 	lsq := make(chan *tokens.Token, 10)
 	plq := make(chan *playlists.Playlist, 10)
 
-	go readerManager(mockPlatform, cfg, st, db, itq, lsq, plq, scanQueue)
+	go readerManager(mockPlatform, cfg, st, db, itq, lsq, plq, scanQueue, mockPlayer)
 
 	t.Cleanup(func() {
 		st.StopService()

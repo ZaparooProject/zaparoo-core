@@ -88,6 +88,10 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 
 	env.LauncherCache.Refresh(env.Platform, env.Config)
 
+	if env.Player != nil {
+		env.Player.ClearFileCache()
+	}
+
 	return NoContent{}, nil
 }
 

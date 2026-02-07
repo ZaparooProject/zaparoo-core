@@ -22,6 +22,7 @@ package requests
 import (
 	"encoding/json"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -38,6 +39,7 @@ type RequestEnv struct {
 	Database      *database.Database
 	LimitsManager *playtime.LimitsManager
 	LauncherCache *helpers.LauncherCache
+	Player        audio.Player
 	TokenQueue    chan<- tokens.Token
 	ClientID      string
 	Params        json.RawMessage

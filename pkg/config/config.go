@@ -339,16 +339,25 @@ func (c *Instance) SetAudioFeedback(enabled bool) {
 	c.vals.Audio.ScanFeedback = enabled
 }
 
-// SuccessSoundPath returns the resolved path to the success sound file and whether it's enabled.
-// Returns ("", true) if nil (use embedded default), ("", false) if disabled (empty string),
-// or (resolved_path, true) if a custom path is configured.
-// For relative paths, dataDir is used as the base (typically helpers.DataDir(pl)).
+// SuccessSoundPath resolves the success sound file path based on config and disk overrides.
+// Returns (path, enabled) where:
+//   - ("", false) = ScanFeedback disabled or sound explicitly disabled (empty string config)
+//   - ("", true) = use embedded default (nil config, no file override on disk)
+//   - (path, true) = use file at path (explicit config or auto-detected in dataDir/assets/)
 func (c *Instance) SuccessSoundPath(dataDir string) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// nil = use embedded default
+	if !c.vals.Audio.ScanFeedback {
+		return "", false
+	}
+
+	// nil = check for file override on disk, then use embedded default
 	if c.vals.Audio.SuccessSound == nil {
+		overridePath := filepath.Join(dataDir, AssetsDir, SuccessSoundFilename)
+		if _, err := c.getFs().Stat(overridePath); err == nil {
+			return overridePath, true
+		}
 		return "", true
 	}
 
@@ -368,16 +377,21 @@ func (c *Instance) SuccessSoundPath(dataDir string) (string, bool) {
 	return filepath.Join(dataDir, AssetsDir, path), true
 }
 
-// FailSoundPath returns the resolved path to the fail sound file and whether it's enabled.
-// Returns ("", true) if nil (use embedded default), ("", false) if disabled (empty string),
-// or (resolved_path, true) if a custom path is configured.
-// For relative paths, dataDir is used as the base (typically helpers.DataDir(pl)).
+// FailSoundPath resolves the fail sound file path. See SuccessSoundPath for return semantics.
 func (c *Instance) FailSoundPath(dataDir string) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// nil = use embedded default
+	if !c.vals.Audio.ScanFeedback {
+		return "", false
+	}
+
+	// nil = check for file override on disk, then use embedded default
 	if c.vals.Audio.FailSound == nil {
+		overridePath := filepath.Join(dataDir, AssetsDir, FailSoundFilename)
+		if _, err := c.getFs().Stat(overridePath); err == nil {
+			return overridePath, true
+		}
 		return "", true
 	}
 
@@ -397,16 +411,21 @@ func (c *Instance) FailSoundPath(dataDir string) (string, bool) {
 	return filepath.Join(dataDir, AssetsDir, path), true
 }
 
-// LimitSoundPath returns the resolved path to the limit sound file and whether it's enabled.
-// Returns ("", true) if nil (use embedded default), ("", false) if disabled (empty string),
-// or (resolved_path, true) if a custom path is configured.
-// For relative paths, dataDir is used as the base (typically helpers.DataDir(pl)).
+// LimitSoundPath resolves the limit sound file path. See SuccessSoundPath for return semantics.
 func (c *Instance) LimitSoundPath(dataDir string) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// nil = use embedded default
+	if !c.vals.Audio.ScanFeedback {
+		return "", false
+	}
+
+	// nil = check for file override on disk, then use embedded default
 	if c.vals.Audio.LimitSound == nil {
+		overridePath := filepath.Join(dataDir, AssetsDir, LimitSoundFilename)
+		if _, err := c.getFs().Stat(overridePath); err == nil {
+			return overridePath, true
+		}
 		return "", true
 	}
 
@@ -500,18 +519,6 @@ func SetAuthCfgForTesting(creds map[string]CredentialEntry) {
 // ClearAuthCfgForTesting clears the global auth config for testing purposes
 func ClearAuthCfgForTesting() {
 	authCfg.Store(map[string]CredentialEntry{})
-}
-
-// DisableAllSoundsForTesting disables all audio feedback to prevent
-// goroutine leaks from audio drivers (e.g. malgo on macOS) during tests.
-func (c *Instance) DisableAllSoundsForTesting() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	disabled := ""
-	c.vals.Audio.SuccessSound = &disabled
-	c.vals.Audio.FailSound = &disabled
-	c.vals.Audio.LimitSound = &disabled
-	c.vals.Audio.ScanFeedback = false
 }
 
 // SetExecuteAllowListForTesting configures the execute allow list for tests.

@@ -29,10 +29,17 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newNoOpMockPlayer() *mocks.MockPlayer {
+	p := mocks.NewMockPlayer()
+	p.SetupNoOpMock()
+	return p
+}
 
 // newTestConfig creates a config instance with the given values for testing
 func newTestConfig(t *testing.T, vals *config.Values) *config.Instance {
@@ -96,7 +103,7 @@ func TestHandlePlaytime_ResetStateWithDailyFields(t *testing.T) {
 	currentTime := time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC)
 	fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock)
+	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 	// State is already StateReset by default
 
 	env := requests.RequestEnv{
@@ -145,7 +152,7 @@ func TestHandlePlaytime_ResetStateNilDailyFields(t *testing.T) {
 	currentTime := time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC)
 	fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock)
+	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 
 	env := requests.RequestEnv{
 		Config:        cfg,
@@ -196,7 +203,7 @@ func TestHandlePlaytime_CooldownStateWithDailyFields(t *testing.T) {
 	currentTime := time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)
 	fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock)
+	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 
 	// Put manager in cooldown state (need to access internals)
 	// We'll use reflection or simply test the handler with a real state transition
@@ -245,7 +252,7 @@ func TestHandlePlaytime_SessionFields(t *testing.T) {
 	currentTime := time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC)
 	fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock)
+	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 
 	env := requests.RequestEnv{
 		Config:        cfg,
@@ -291,7 +298,7 @@ func TestHandlePlaytime_UnreliableClockNilDailyFields(t *testing.T) {
 	currentTime := time.Date(1970, 1, 1, 14, 0, 0, 0, time.UTC)
 	fakeClock := clockwork.NewFakeClockAt(currentTime)
 
-	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock)
+	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 
 	env := requests.RequestEnv{
 		Config:        cfg,

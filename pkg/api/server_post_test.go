@@ -78,7 +78,7 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap) {
 		close(tokenQueue)
 	})
 
-	handler := handlePostRequest(methodMap, platform, cfg, st, tokenQueue, db, nil)
+	handler := handlePostRequest(methodMap, platform, cfg, st, tokenQueue, db, nil, nil)
 	return handler, methodMap
 }
 

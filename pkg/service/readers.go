@@ -26,6 +26,7 @@ import (
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -286,6 +287,7 @@ func readerManager(
 	lsq chan *tokens.Token,
 	plq chan *playlists.Playlist,
 	scanQueue chan readers.Scan,
+	player audio.Player,
 ) {
 	var lastError time.Time
 
@@ -302,7 +304,7 @@ func readerManager(
 	playFail := func() {
 		if time.Since(lastError) > 1*time.Second {
 			path, enabled := cfg.FailSoundPath(helpers.DataDir(pl))
-			helpers.PlayConfiguredSound(path, enabled, assets.FailSound, "fail")
+			helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 		}
 	}
 

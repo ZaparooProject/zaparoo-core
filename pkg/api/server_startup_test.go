@@ -74,7 +74,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 			serverDone := make(chan struct{})
 			go func() {
 				defer close(serverDone)
-				Start(platform, cfg, st, tokenQueue, db, nil, notifications, "")
+				Start(platform, cfg, st, tokenQueue, db, nil, notifications, "", nil)
 			}()
 			// Cleanup: stop service first, then wait for server goroutine to fully exit
 			defer func() {
@@ -142,7 +142,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
-		Start(platform, cfg, st, tokenQueue, db, nil, notifications, "")
+		Start(platform, cfg, st, tokenQueue, db, nil, notifications, "", nil)
 	}()
 	// Cleanup: stop service first, then wait for server goroutine to fully exit
 	defer func() {
@@ -225,7 +225,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		Start(platform, cfg, st, tokenQueue, db, nil, notifications, "")
+		Start(platform, cfg, st, tokenQueue, db, nil, notifications, "", nil)
 	}()
 
 	// Wait for completion or timeout
@@ -515,7 +515,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	server1Done := make(chan struct{})
 	go func() {
 		defer close(server1Done)
-		Start(platform1, cfg1, st1, tokenQueue1, db1, nil, notifications1, "")
+		Start(platform1, cfg1, st1, tokenQueue1, db1, nil, notifications1, "", nil)
 	}()
 
 	// Wait for first server to be ready
@@ -557,7 +557,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	server2Done := make(chan struct{})
 	go func() {
 		defer close(server2Done)
-		Start(platform2, cfg2, st2, tokenQueue2, db2, nil, notifications2, "")
+		Start(platform2, cfg2, st2, tokenQueue2, db2, nil, notifications2, "", nil)
 	}()
 
 	// Wait for the second server's context to be cancelled (StopService called)

@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -85,6 +86,7 @@ type LimitsManager struct {
 	db                    *database.Database
 	notificationsSend     chan<- models.Notification
 	cfg                   *config.Instance
+	player                audio.Player
 	cancel                context.CancelFunc
 	state                 SessionState
 	sessionResetTimeout   time.Duration
@@ -102,6 +104,7 @@ func NewLimitsManager(
 	platform platforms.Platform,
 	cfg *config.Instance,
 	clock clockwork.Clock,
+	player audio.Player,
 ) *LimitsManager {
 	if clock == nil {
 		clock = clockwork.NewRealClock()
@@ -120,6 +123,7 @@ func NewLimitsManager(
 		platform:            platform,
 		cfg:                 cfg,
 		clock:               clock,
+		player:              player,
 		ctx:                 ctx,
 		cancel:              cancel,
 		warningsGiven:       make(map[time.Duration]bool),
@@ -652,10 +656,9 @@ func (tm *LimitsManager) handleWarnings(remaining time.Duration) {
 	}
 }
 
-// playWarningSound plays an audio warning.
 func (tm *LimitsManager) playWarningSound() {
 	path, enabled := tm.cfg.LimitSoundPath(helpers.DataDir(tm.platform))
-	helpers.PlayConfiguredSound(path, enabled, assets.LimitSound, "limit")
+	helpers.PlayConfiguredSound(tm.player, path, enabled, assets.LimitSound, "limit")
 }
 
 // StatusInfo contains current playtime session and limit status.

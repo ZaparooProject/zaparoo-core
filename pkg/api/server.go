@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -732,6 +733,7 @@ func handleWSMessage(
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
+	player audio.Player,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
 		defer func() {
@@ -762,6 +764,7 @@ func handleWSMessage(
 			Database:      db,
 			LimitsManager: limitsManager,
 			LauncherCache: helpers.GlobalLauncherCache,
+			Player:        player,
 			TokenQueue:    inTokenQueue,
 			IsLocal:       clientIP.IsLoopback(),
 			ClientID:      session.Request.RemoteAddr,
@@ -794,6 +797,7 @@ func handlePostRequest(
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
+	player audio.Player,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -826,6 +830,7 @@ func handlePostRequest(
 			Database:      db,
 			LimitsManager: limitsManager,
 			LauncherCache: helpers.GlobalLauncherCache,
+			Player:        player,
 			TokenQueue:    inTokenQueue,
 			IsLocal:       clientIP.IsLoopback(),
 			ClientID:      r.RemoteAddr,
@@ -884,6 +889,7 @@ func Start(
 	limitsManager *playtime.LimitsManager,
 	notifications <-chan models.Notification,
 	mdnsHostname string,
+	player audio.Player,
 ) {
 	// Extract port from listen address or use default
 	port := cfg.APIPort()
@@ -1001,17 +1007,17 @@ func Start(
 		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
 			wsHandler(w, r, "latest")
 		})
-		r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
+		r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player))
 
 		r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
 			wsHandler(w, r, "v0")
 		})
-		r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
+		r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player))
 
 		r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
 			wsHandler(w, r, "v0.1")
 		})
-		r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
+		r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player))
 
 		// REST action endpoints
 		r.Get("/l/*", methods.HandleRunRest(cfg, st, inTokenQueue)) // DEPRECATED
@@ -1021,7 +1027,7 @@ func Start(
 
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,
-		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager),
+		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player),
 	))
 
 	// Static app assets
