@@ -3,6 +3,7 @@
 package arcadedb
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1" //nolint:gosec // Required for git blob SHA1 verification against GitHub API
 	"encoding/hex"
@@ -220,13 +221,27 @@ func (c *Client) Update(arcadeDBPath string) (bool, error) {
 	return true, nil
 }
 
+// filterValidEntries drops entries missing required fields. gocsv silently
+// accepts malformed rows, so this prevents empty mappings from reaching
+// the tracker's name map.
+func filterValidEntries(entries []ArcadeDbEntry) []ArcadeDbEntry {
+	valid := make([]ArcadeDbEntry, 0, len(entries))
+	for i := range entries {
+		if entries[i].Setname != "" && entries[i].Name != "" {
+			valid = append(valid, entries[i])
+		}
+	}
+	return valid
+}
+
 func (c *Client) Read(arcadeDBPath string) ([]ArcadeDbEntry, error) {
 	exists, err := afero.Exists(c.fs, arcadeDBPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check arcadedb file: %w", err)
 	}
+
 	if !exists {
-		return nil, fmt.Errorf("arcadedb file does not exist: %s", arcadeDBPath)
+		return c.readEmbedded()
 	}
 
 	file, err := c.fs.Open(arcadeDBPath)
@@ -243,7 +258,27 @@ func (c *Client) Read(arcadeDBPath string) ([]ArcadeDbEntry, error) {
 		return nil, fmt.Errorf("failed to unmarshal arcadedb CSV: %w", err)
 	}
 
-	return entries, nil
+	return filterValidEntries(entries), nil
+}
+
+func (*Client) readEmbedded() ([]ArcadeDbEntry, error) {
+	if len(EmbeddedArcadeDB) == 0 {
+		return nil, errors.New("arcadedb file not found and no embedded database available")
+	}
+
+	log.Info().Msg("using embedded arcade database as fallback")
+
+	entries := make([]ArcadeDbEntry, 0)
+	if err := gocsv.Unmarshal(bytes.NewReader(EmbeddedArcadeDB), &entries); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal embedded arcadedb CSV: %w", err)
+	}
+
+	valid := filterValidEntries(entries)
+	if len(valid) == 0 {
+		return nil, errors.New("embedded arcade database contains no usable entries")
+	}
+
+	return valid, nil
 }
 
 // UpdateArcadeDb checks for and downloads arcade database updates.
