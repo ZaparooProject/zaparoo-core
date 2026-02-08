@@ -489,6 +489,8 @@ func (r *Reader) Close() error {
 		}
 	}
 
+	detection.ClearDetectionCache()
+
 	return nil
 }
 

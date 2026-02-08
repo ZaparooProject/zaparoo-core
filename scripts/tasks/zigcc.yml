@@ -24,6 +24,7 @@ tasks:
           CXX: "zig c++ -target x86_64-linux-gnu"
           NO_STATIC: true
           EXTRA_LDFLAGS: "-linkmode external"
+          EXTRA_TAGS: "{{.EXTRA_TAGS}}"
           EXTRA_DOCKER_ARGS: >-
             -e CGO_CFLAGS="-I/opt/libnfc/x86_64-linux-gnu/include"
             -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-gnu/lib -L/opt/deps/x86_64-linux-gnu/lib /opt/libnfc/x86_64-linux-gnu/lib/libnfc.a /opt/deps/x86_64-linux-gnu/lib/libusb.a /opt/deps/x86_64-linux-gnu/lib/libusb-1.0.a -ldl"
@@ -43,6 +44,7 @@ tasks:
           CXX: "zig c++ -target aarch64-linux-gnu"
           NO_STATIC: true
           EXTRA_LDFLAGS: "-linkmode external"
+          EXTRA_TAGS: "{{.EXTRA_TAGS}}"
           EXTRA_DOCKER_ARGS: >-
             -e CGO_CFLAGS="-I/opt/libnfc/aarch64-linux-gnu/include"
             -e CGO_LDFLAGS="-L/opt/libnfc/aarch64-linux-gnu/lib -L/opt/deps/aarch64-linux-gnu/lib /opt/libnfc/aarch64-linux-gnu/lib/libnfc.a /opt/deps/aarch64-linux-gnu/lib/libusb.a /opt/deps/aarch64-linux-gnu/lib/libusb-1.0.a -ldl"
@@ -62,6 +64,7 @@ tasks:
           CXX: "zig c++ -target arm-linux-gnueabihf"
           NO_STATIC: true
           EXTRA_LDFLAGS: "-linkmode external"
+          EXTRA_TAGS: "{{.EXTRA_TAGS}}"
           EXTRA_DOCKER_ARGS: >-
             -e CGO_CFLAGS="-I/opt/libnfc/arm-linux-gnueabihf/include"
             -e CGO_LDFLAGS="-L/opt/libnfc/arm-linux-gnueabihf/lib -L/opt/deps/arm-linux-gnueabihf/lib /opt/libnfc/arm-linux-gnueabihf/lib/libnfc.a /opt/deps/arm-linux-gnueabihf/lib/libusb.a /opt/deps/arm-linux-gnueabihf/lib/libusb-1.0.a -ldl"
@@ -79,6 +82,7 @@ tasks:
           APP_BIN: Zaparoo.exe
           NO_LIBNFC: true
           EXTRA_LDFLAGS: -H=windowsgui
+          EXTRA_TAGS: "{{.EXTRA_TAGS}}"
           CC: "zig cc -w --target=x86_64-windows-gnu"
           CXX: "zig c++ -w --target=x86_64-windows-gnu"
           EXTRA_DOCKER_ARGS: >-
@@ -97,6 +101,7 @@ tasks:
           APP_BIN: Zaparoo.exe
           NO_LIBNFC: true
           EXTRA_LDFLAGS: -H=windowsgui
+          EXTRA_TAGS: "{{.EXTRA_TAGS}}"
           CC: "zig cc -w --target=aarch64-windows-gnu"
           CXX: "zig c++ -w --target=aarch64-windows-gnu"
           EXTRA_DOCKER_ARGS: >-
@@ -115,6 +120,7 @@ tasks:
           APP_BIN: Zaparoo.exe
           NO_LIBNFC: true
           EXTRA_LDFLAGS: -H=windowsgui
+          EXTRA_TAGS: "{{.EXTRA_TAGS}}"
           CC: "zig cc -w --target=x86-windows-gnu"
           CXX: "zig c++ -w --target=x86-windows-gnu"
           EXTRA_DOCKER_ARGS: >-
@@ -133,6 +139,7 @@ tasks:
           APP_BIN: zaparoo
           NO_LIBNFC: true
           NO_STATIC: true
+          EXTRA_TAGS: "{{.EXTRA_TAGS}}"
           CC: >-
             zig cc -w --target=x86_64-macos
             -I/opt/macosx-sdk/usr/include
@@ -157,6 +164,7 @@ tasks:
           APP_BIN: zaparoo
           NO_LIBNFC: true
           NO_STATIC: true
+          EXTRA_TAGS: "{{.EXTRA_TAGS}}"
           CC: >-
             zig cc -w --target=aarch64-macos
             -I/opt/macosx-sdk/usr/include

@@ -46,6 +46,7 @@ tasks:
           CC: "{{.CC}}"
           CXX: "{{.CXX}}"
           EXTRA_LDFLAGS: "{{.EXTRA_LDFLAGS}}"
+          EXTRA_TAGS: "{{.EXTRA_TAGS}}"
           APP_BIN: "{{.APP_BIN}}"
           APP_VERSION:
             sh: echo -n "${APP_VERSION:-$(git rev-parse --short HEAD)-dev}"
@@ -82,6 +83,7 @@ tasks:
         {{if .CC}}-e CC="{{.CC}}"{{end}}
         {{if .CXX}}-e CXX="{{.CXX}}"{{end}}
         {{if .EXTRA_LDFLAGS}}-e EXTRA_LDFLAGS="{{.EXTRA_LDFLAGS}}"{{end}}
+        {{if .EXTRA_TAGS}}-e EXTRA_TAGS="{{.EXTRA_TAGS}}"{{end}}
         {{if env "GOFLAGS"}}-e GOFLAGS="{{env "GOFLAGS"}}"{{end}}
         {{.EXTRA_DOCKER_ARGS}}
         {{.IMAGE_NAME}} {{.EXEC}}

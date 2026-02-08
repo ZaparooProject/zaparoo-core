@@ -54,4 +54,6 @@ worktrees/
 /scripts/mister/utils/src/
 /scripts/mister/utils/build/
 
+/pkg/platforms/mister/arcadedb/ArcadeDatabase.csv
+
 /scripts/batocera/template/userdata/roms/ports/Zaparoo.sh

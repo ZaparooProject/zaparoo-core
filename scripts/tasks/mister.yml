@@ -11,13 +11,25 @@ vars:
   ARM_CFLAGS: "-mcpu=cortex-a9 -mfloat-abi=hard -mtune=cortex-a9 -mfpu=neon"
 
 tasks:
+  download-arcadedb:
+    desc: Download ArcadeDatabase.csv for embedding
+    cmds:
+      - mkdir -p pkg/platforms/mister/arcadedb
+      - >-
+        curl -fsSL -o pkg/platforms/mister/arcadedb/ArcadeDatabase.csv
+        "https://raw.githubusercontent.com/MiSTer-devel/ArcadeDatabase_MiSTer/main/ArcadeDatabase.csv"
+    status:
+      - test -f pkg/platforms/mister/arcadedb/ArcadeDatabase.csv
+
   build-arm:
     desc: Build MiSTer ARM binary
+    deps: [download-arcadedb]
     cmds:
       - task: :zigcc:build-linux-arm
         vars:
           PLATFORM: mister
           APP_BIN: zaparoo.sh
+          EXTRA_TAGS: embed_arcadedb
 
   deploy:
     cmds:

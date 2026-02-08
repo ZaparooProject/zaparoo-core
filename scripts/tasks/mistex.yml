@@ -3,11 +3,13 @@ version: "3"
 tasks:
   build-arm64:
     desc: Build MiSTeX ARM64 binary
+    deps: [":mister:download-arcadedb"]
     cmds:
       - task: :zigcc:build-linux-arm64
         vars:
           PLATFORM: mistex
           APP_BIN: zaparoo.sh
+          EXTRA_TAGS: embed_arcadedb
 
   deploy:
     cmds:
