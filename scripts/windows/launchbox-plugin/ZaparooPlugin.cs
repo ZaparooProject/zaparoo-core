@@ -463,9 +463,17 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                 InvokeOnUiThread(() =>
                 {
                     if (_isBigBoxRunning)
+                    {
+                        // ShowGame navigates BigBox UI to the game, which fires
+                        // LEDBlinky Event 9 (game selection). Without this, LEDBlinky
+                        // shows controls for whichever game was highlighted in the menu.
+                        PluginHelper.BigBoxMainViewModel?.ShowGame(game, FilterType.None);
                         PluginHelper.BigBoxMainViewModel?.PlayGame(game, null, null, null);
+                    }
                     else
+                    {
                         PluginHelper.LaunchBoxMainViewModel?.PlayGame(game, null, null, null);
+                    }
                 });
                 return;
             }
@@ -477,9 +485,14 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                 InvokeOnUiThread(() =>
                 {
                     if (_isBigBoxRunning)
+                    {
+                        PluginHelper.BigBoxMainViewModel?.ShowGame(parentGame, FilterType.None);
                         PluginHelper.BigBoxMainViewModel?.PlayGame(parentGame, additionalApp, null, null);
+                    }
                     else
+                    {
                         PluginHelper.LaunchBoxMainViewModel?.PlayGame(parentGame, additionalApp, null, null);
+                    }
                 });
                 return;
             }
