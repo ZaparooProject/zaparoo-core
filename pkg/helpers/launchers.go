@@ -88,9 +88,10 @@ func ParseCustomLaunchers(
 
 		exts := formatExtensions(v.FileExts)
 
-		log.Debug().Str("launcherID", launcherID).Str("systemID", launcherSystemID).
-			Int("folders", len(v.MediaDirs)).Int("extensions", len(exts)).
-			Msg("parsed custom launcher")
+		log.Info().Str("launcherID", launcherID).Str("systemID", launcherSystemID).
+			Strs("folders", v.MediaDirs).Strs("extensions", exts).
+			Int("lifecycle", int(lifecycle)).
+			Msg("registered custom launcher")
 
 		launchers = append(launchers, platforms.Launcher{
 			ID:            launcherID,

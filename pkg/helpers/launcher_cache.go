@@ -57,6 +57,11 @@ func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance)
 		}
 	}
 
+	for sysID, sysLaunchers := range lc.bySystemID {
+		log.Debug().Str("systemID", sysID).Int("launchers", len(sysLaunchers)).
+			Msg("launcher cache system entry")
+	}
+
 	log.Info().Int("totalLaunchers", len(allLaunchers)).Int("systemIDs", len(lc.bySystemID)).
 		Msg("launcher cache initialized")
 }
