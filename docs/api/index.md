@@ -184,11 +184,15 @@ If sent the bytes `ping`, the API will immediately respond with the bytes `pong`
 
 ## Launch Endpoint
 
-The HTTP server has an additional endpoint which allows restricted access to launch ZapScript using a GET request. This endpoint is specifically meant to support uses such as QR codes scanned by a phone's camera app or simple launch testing.
+The HTTP server has additional endpoints which allow restricted access to launch ZapScript using a GET request. These endpoints are specifically meant to support uses such as QR codes scanned by a phone's camera app or simple launch testing.
 
-The endpoint is: `/l/`
+The following endpoints are available:
 
-An example request: `GET http://10.0.0.123:7497/l/**launch.system:snes`
+- `/run/` - Preferred endpoint for launching ZapScript.
+- `/r/` - Alias for `/run/`.
+- `/l/` - **Deprecated.** Use `/run/` instead.
+
+An example request: `GET http://10.0.0.123:7497/run/**launch.system:snes`
 
 This would act as though a token with the text `**launch.system:snes` had been scanned.
 
@@ -196,7 +200,7 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods are used to execute actions and request data back from the API. The current API provides **26 methods** across core functionality areas. See the [API Methods](./methods) page for detailed definitions and examples of each method.
+Methods are used to execute actions and request data back from the API. The current API provides **33 methods** across core functionality areas. See the [API Methods](./methods) page for detailed definitions and examples of each method.
 
 | ID                              | Description                                                                           |
 | :------------------------------ | :------------------------------------------------------------------------------------ |
@@ -229,6 +233,10 @@ Methods are used to execute actions and request data back from the API. The curr
 | readers.write.cancel            | Cancel any active write operation.                                                    |
 | launchers.refresh               | Refresh the internal launcher cache, forcing a reload of launcher configurations.     |
 | version                         | Return server's current version and platform.                                         |
+| health                          | Simple health check to verify the server is running and responding.                   |
+| inbox                           | List all inbox messages.                                                              |
+| inbox.delete                    | Delete a specific inbox message by ID.                                                |
+| inbox.clear                     | Delete all inbox messages.                                                            |
 
 ## Notifications
 
@@ -236,7 +244,6 @@ Notifications let a server or client know an event has occurred. See the [API No
 
 | ID                     | Description                                                                       |
 | :--------------------- | :-------------------------------------------------------------------------------- |
-| running                | New ZapScript has been added to the launch queue.                                 |
 | readers.added          | A new reader was connected to the server.                                         |
 | readers.removed        | A connected reader was disconnected from the server.                              |
 | tokens.added           | A new token detected by a reader.                                                 |
@@ -246,3 +253,4 @@ Notifications let a server or client know an event has occurred. See the [API No
 | media.indexing         | The state of the indexing or optimization process has changed.                    |
 | playtime.limit.reached | A playtime limit (session or daily) has been reached and enforced.                |
 | playtime.limit.warning | A playtime warning notification sent at configured intervals before limit reached. |
+| inbox.added            | A new inbox message was added to the server.                                      |
