@@ -152,16 +152,73 @@ func TestClient_Read_Success(t *testing.T) {
 	assert.Equal(t, "Namco", entries[0].Manufacturer)
 }
 
-func TestClient_Read_FileNotFound(t *testing.T) {
-	t.Parallel()
+func TestClient_Read_EmbeddedFallback(t *testing.T) {
+	// These subtests modify the package-level EmbeddedArcadeDB variable,
+	// so they must not run in parallel with each other or other tests.
+	csvHeader := "setname,name,region,version,alternative,parent_title,platform,series," +
+		"homebrew,bootleg,year,manufacturer,category,linebreak1,resolution,flip," +
+		"linebreak2,players,move_inputs,special_controls,num_buttons"
 
-	fs := afero.NewMemMapFs()
-	client := NewClient(nil, fs, "", "")
+	t.Run("no embed returns error", func(t *testing.T) {
+		original := EmbeddedArcadeDB
+		EmbeddedArcadeDB = nil
+		t.Cleanup(func() { EmbeddedArcadeDB = original })
 
-	_, err := client.Read("/nonexistent/arcade.csv")
+		fs := afero.NewMemMapFs()
+		client := NewClient(nil, fs, "", "")
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "does not exist")
+		_, err := client.Read("/nonexistent/arcade.csv")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no embedded database available")
+	})
+
+	t.Run("falls back to embedded", func(t *testing.T) {
+		csvContent := csvHeader +
+			"\nbublbobl,Bubble Bobble,World,,,,Arcade,,,," +
+			"1986,Taito,Platform,,256x224,,,1-2,4-way,,2\n"
+
+		original := EmbeddedArcadeDB
+		EmbeddedArcadeDB = []byte(csvContent)
+		t.Cleanup(func() { EmbeddedArcadeDB = original })
+
+		fs := afero.NewMemMapFs()
+		client := NewClient(nil, fs, "", "")
+
+		entries, err := client.Read("/nonexistent/arcade.csv")
+
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		assert.Equal(t, "bublbobl", entries[0].Setname)
+		assert.Equal(t, "Bubble Bobble", entries[0].Name)
+		assert.Equal(t, "1986", entries[0].Year)
+	})
+
+	t.Run("disk takes priority over embedded", func(t *testing.T) {
+		embeddedContent := csvHeader +
+			"\nbublbobl,Bubble Bobble,World,,,,Arcade,,,," +
+			"1986,Taito,Platform,,256x224,,,1-2,4-way,,2\n"
+		diskContent := csvHeader +
+			"\npacman,Pac-Man,World,,,,Arcade,Pac-Man,,," +
+			"1980,Namco,Maze,,224x288,,,1-2,4-way,,1\n"
+
+		original := EmbeddedArcadeDB
+		EmbeddedArcadeDB = []byte(embeddedContent)
+		t.Cleanup(func() { EmbeddedArcadeDB = original })
+
+		fs := afero.NewMemMapFs()
+		err := afero.WriteFile(fs, "/data/arcade.csv", []byte(diskContent), 0o644)
+		require.NoError(t, err)
+
+		client := NewClient(nil, fs, "", "")
+
+		entries, err := client.Read("/data/arcade.csv")
+
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		assert.Equal(t, "pacman", entries[0].Setname,
+			"disk file should take priority over embedded")
+	})
 }
 
 func TestClient_Read_InvalidCSV(t *testing.T) {

@@ -37,6 +37,7 @@ tasks:
       PLATFORM: '{{default (OS | replace "darwin" "mac") .PLATFORM}}'
       BUILD_DIR: "_build/{{.PLATFORM}}_{{.BUILD_ARCH}}"
       EXTRA_LDFLAGS: "{{.EXTRA_LDFLAGS}}"
+      EXTRA_TAGS: "{{.EXTRA_TAGS}}"
     env:
       GO111MODULE: on
       CGO_ENABLED: 1
@@ -54,7 +55,7 @@ tasks:
         '{{if not .NO_LIBNFC}}${CGO_LDFLAGS}{{end}}
         {{if not .NO_STATIC}}-static{{end}}'
         -s -w {{.EXTRA_LDFLAGS}}"
-        -tags "netgo,osusergo,sqlite_omit_load_extension"
+        -tags "netgo,osusergo,sqlite_omit_load_extension{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}}"
         -o "{{.BUILD_DIR}}/{{.APP_BIN}}"
         "./cmd/${PLATFORM}"
 

@@ -3,6 +3,7 @@
 package arcadedb
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1" //nolint:gosec // Required for git blob SHA1 verification against GitHub API
 	"encoding/hex"
@@ -225,8 +226,9 @@ func (c *Client) Read(arcadeDBPath string) ([]ArcadeDbEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to check arcadedb file: %w", err)
 	}
+
 	if !exists {
-		return nil, fmt.Errorf("arcadedb file does not exist: %s", arcadeDBPath)
+		return c.readEmbedded()
 	}
 
 	file, err := c.fs.Open(arcadeDBPath)
@@ -241,6 +243,21 @@ func (c *Client) Read(arcadeDBPath string) ([]ArcadeDbEntry, error) {
 	err = gocsv.Unmarshal(file, &entries)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal arcadedb CSV: %w", err)
+	}
+
+	return entries, nil
+}
+
+func (*Client) readEmbedded() ([]ArcadeDbEntry, error) {
+	if len(EmbeddedArcadeDB) == 0 {
+		return nil, errors.New("arcadedb file not found and no embedded database available")
+	}
+
+	log.Info().Msg("using embedded arcade database as fallback")
+
+	entries := make([]ArcadeDbEntry, 0)
+	if err := gocsv.Unmarshal(bytes.NewReader(EmbeddedArcadeDB), &entries); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal embedded arcadedb CSV: %w", err)
 	}
 
 	return entries, nil
