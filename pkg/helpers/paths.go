@@ -177,6 +177,13 @@ func MatchSystemFile(
 			return true
 		}
 	}
+
+	log.Debug().
+		Str("system", systemID).
+		Str("path", path).
+		Int("launchersChecked", len(launchers)).
+		Msg("no launcher matched file")
+
 	return false
 }
 

@@ -217,6 +217,17 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 			continue
 		}
 
+		for i := range newVals.Launchers.Custom {
+			cl := &newVals.Launchers.Custom[i]
+			log.Info().
+				Str("file", launcherPath).
+				Str("id", cl.ID).
+				Str("system", cl.System).
+				Strs("mediaDirs", cl.MediaDirs).
+				Strs("fileExts", cl.FileExts).
+				Msg("parsed custom launcher from TOML")
+		}
+
 		c.vals.Launchers.Custom = append(c.vals.Launchers.Custom, newVals.Launchers.Custom...)
 
 		filesCounts++

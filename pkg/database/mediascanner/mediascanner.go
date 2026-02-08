@@ -471,6 +471,14 @@ func GetFiles(
 		Dur("elapsed", walkElapsed).
 		Msg("completed directory walk")
 
+	if entriesScanned > 0 && len(allResults) == 0 {
+		log.Info().
+			Str("system", systemID).
+			Str("path", realPath).
+			Int("entriesScanned", entriesScanned).
+			Msg("directory walk found entries but no files matched any launcher")
+	}
+
 	if walkElapsed > 15*time.Second {
 		log.Warn().
 			Str("system", systemID).
