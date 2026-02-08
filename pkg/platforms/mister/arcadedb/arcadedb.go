@@ -221,6 +221,19 @@ func (c *Client) Update(arcadeDBPath string) (bool, error) {
 	return true, nil
 }
 
+// filterValidEntries drops entries missing required fields. gocsv silently
+// accepts malformed rows, so this prevents empty mappings from reaching
+// the tracker's name map.
+func filterValidEntries(entries []ArcadeDbEntry) []ArcadeDbEntry {
+	valid := make([]ArcadeDbEntry, 0, len(entries))
+	for i := range entries {
+		if entries[i].Setname != "" && entries[i].Name != "" {
+			valid = append(valid, entries[i])
+		}
+	}
+	return valid
+}
+
 func (c *Client) Read(arcadeDBPath string) ([]ArcadeDbEntry, error) {
 	exists, err := afero.Exists(c.fs, arcadeDBPath)
 	if err != nil {
@@ -245,7 +258,7 @@ func (c *Client) Read(arcadeDBPath string) ([]ArcadeDbEntry, error) {
 		return nil, fmt.Errorf("failed to unmarshal arcadedb CSV: %w", err)
 	}
 
-	return entries, nil
+	return filterValidEntries(entries), nil
 }
 
 func (*Client) readEmbedded() ([]ArcadeDbEntry, error) {
@@ -260,7 +273,12 @@ func (*Client) readEmbedded() ([]ArcadeDbEntry, error) {
 		return nil, fmt.Errorf("failed to unmarshal embedded arcadedb CSV: %w", err)
 	}
 
-	return entries, nil
+	valid := filterValidEntries(entries)
+	if len(valid) == 0 {
+		return nil, errors.New("embedded arcade database contains no usable entries")
+	}
+
+	return valid, nil
 }
 
 // UpdateArcadeDb checks for and downloads arcade database updates.

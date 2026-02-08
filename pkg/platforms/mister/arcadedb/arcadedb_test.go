@@ -152,6 +152,36 @@ func TestClient_Read_Success(t *testing.T) {
 	assert.Equal(t, "Namco", entries[0].Manufacturer)
 }
 
+func TestClient_Read_FiltersInvalidDiskEntries(t *testing.T) {
+	t.Parallel()
+
+	csvHeader := "setname,name,region,version,alternative,parent_title,platform,series," +
+		"homebrew,bootleg,year,manufacturer,category,linebreak1,resolution,flip," +
+		"linebreak2,players,move_inputs,special_controls,num_buttons"
+	csvContent := csvHeader +
+		"\npacman,Pac-Man,World,,,,Arcade,Pac-Man,,," +
+		"1980,Namco,Maze,,224x288,,,1-2,4-way,,1" +
+		"\n,Missing Setname,World,,,,Arcade,,,," +
+		"1990,,Platform,,256x224,,,1-2,4-way,,2" +
+		"\nmissingname,,World,,,,Arcade,,,," +
+		"1990,,Platform,,256x224,,,1-2,4-way,,2" +
+		"\ngalaga,Galaga,World,,,,Arcade,Galaxian,,," +
+		"1981,Namco,Shooter,,224x288,,,1-2,4-way,,1\n"
+
+	fs := afero.NewMemMapFs()
+	err := afero.WriteFile(fs, "/data/arcade.csv", []byte(csvContent), 0o644)
+	require.NoError(t, err)
+
+	client := NewClient(nil, fs, "", "")
+
+	entries, err := client.Read("/data/arcade.csv")
+
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.Equal(t, "pacman", entries[0].Setname)
+	assert.Equal(t, "galaga", entries[1].Setname)
+}
+
 func TestClient_Read_EmbeddedFallback(t *testing.T) {
 	// These subtests modify the package-level EmbeddedArcadeDB variable,
 	// so they must not run in parallel with each other or other tests.
@@ -159,9 +189,23 @@ func TestClient_Read_EmbeddedFallback(t *testing.T) {
 		"homebrew,bootleg,year,manufacturer,category,linebreak1,resolution,flip," +
 		"linebreak2,players,move_inputs,special_controls,num_buttons"
 
-	t.Run("no embed returns error", func(t *testing.T) {
+	t.Run("nil embed returns error", func(t *testing.T) {
 		original := EmbeddedArcadeDB
 		EmbeddedArcadeDB = nil
+		t.Cleanup(func() { EmbeddedArcadeDB = original })
+
+		fs := afero.NewMemMapFs()
+		client := NewClient(nil, fs, "", "")
+
+		_, err := client.Read("/nonexistent/arcade.csv")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no embedded database available")
+	})
+
+	t.Run("empty embed returns error", func(t *testing.T) {
+		original := EmbeddedArcadeDB
+		EmbeddedArcadeDB = []byte{}
 		t.Cleanup(func() { EmbeddedArcadeDB = original })
 
 		fs := afero.NewMemMapFs()
@@ -219,6 +263,101 @@ func TestClient_Read_EmbeddedFallback(t *testing.T) {
 		assert.Equal(t, "pacman", entries[0].Setname,
 			"disk file should take priority over embedded")
 	})
+
+	t.Run("headers only returns error", func(t *testing.T) {
+		original := EmbeddedArcadeDB
+		EmbeddedArcadeDB = []byte(csvHeader + "\n")
+		t.Cleanup(func() { EmbeddedArcadeDB = original })
+
+		fs := afero.NewMemMapFs()
+		client := NewClient(nil, fs, "", "")
+
+		_, err := client.Read("/nonexistent/arcade.csv")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no usable entries")
+	})
+
+	t.Run("garbage data returns error", func(t *testing.T) {
+		original := EmbeddedArcadeDB
+		EmbeddedArcadeDB = []byte("not,a,valid,csv\x00\x01\x02")
+		t.Cleanup(func() { EmbeddedArcadeDB = original })
+
+		fs := afero.NewMemMapFs()
+		client := NewClient(nil, fs, "", "")
+
+		_, err := client.Read("/nonexistent/arcade.csv")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no usable entries")
+	})
+
+	t.Run("entries missing required fields returns error", func(t *testing.T) {
+		csvContent := csvHeader +
+			"\n,,World,,,,Arcade,,,," +
+			"1986,Taito,Platform,,256x224,,,1-2,4-way,,2\n"
+
+		original := EmbeddedArcadeDB
+		EmbeddedArcadeDB = []byte(csvContent)
+		t.Cleanup(func() { EmbeddedArcadeDB = original })
+
+		fs := afero.NewMemMapFs()
+		client := NewClient(nil, fs, "", "")
+
+		_, err := client.Read("/nonexistent/arcade.csv")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no usable entries")
+	})
+
+	t.Run("filters invalid entries from valid ones", func(t *testing.T) {
+		csvContent := csvHeader +
+			"\nbublbobl,Bubble Bobble,World,,,,Arcade,,,," +
+			"1986,Taito,Platform,,256x224,,,1-2,4-way,,2" +
+			"\n,,World,,,,Arcade,,,," +
+			"1990,,Platform,,256x224,,,1-2,4-way,,2" +
+			"\npacman,Pac-Man,World,,,,Arcade,Pac-Man,,," +
+			"1980,Namco,Maze,,224x288,,,1-2,4-way,,1\n"
+
+		original := EmbeddedArcadeDB
+		EmbeddedArcadeDB = []byte(csvContent)
+		t.Cleanup(func() { EmbeddedArcadeDB = original })
+
+		fs := afero.NewMemMapFs()
+		client := NewClient(nil, fs, "", "")
+
+		entries, err := client.Read("/nonexistent/arcade.csv")
+
+		require.NoError(t, err)
+		require.Len(t, entries, 2)
+		assert.Equal(t, "bublbobl", entries[0].Setname)
+		assert.Equal(t, "pacman", entries[1].Setname)
+	})
+
+	t.Run("embedded multiple entries", func(t *testing.T) {
+		csvContent := csvHeader +
+			"\nbublbobl,Bubble Bobble,World,,,,Arcade,,,," +
+			"1986,Taito,Platform,,256x224,,,1-2,4-way,,2" +
+			"\npacman,Pac-Man,World,,,,Arcade,Pac-Man,,," +
+			"1980,Namco,Maze,,224x288,,,1-2,4-way,,1" +
+			"\ngalaga,Galaga,World,,,,Arcade,Galaxian,,," +
+			"1981,Namco,Shooter,,224x288,,,1-2,4-way,,1\n"
+
+		original := EmbeddedArcadeDB
+		EmbeddedArcadeDB = []byte(csvContent)
+		t.Cleanup(func() { EmbeddedArcadeDB = original })
+
+		fs := afero.NewMemMapFs()
+		client := NewClient(nil, fs, "", "")
+
+		entries, err := client.Read("/nonexistent/arcade.csv")
+
+		require.NoError(t, err)
+		require.Len(t, entries, 3)
+		assert.Equal(t, "bublbobl", entries[0].Setname)
+		assert.Equal(t, "pacman", entries[1].Setname)
+		assert.Equal(t, "galaga", entries[2].Setname)
+	})
 }
 
 func TestClient_Read_InvalidCSV(t *testing.T) {
@@ -227,15 +366,15 @@ func TestClient_Read_InvalidCSV(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	client := NewClient(nil, fs, "", "")
 
-	// Missing required headers
 	err := afero.WriteFile(fs, "/data/arcade.csv", []byte("invalid,csv\n1,2\n"), 0o644)
 	require.NoError(t, err)
 
 	entries, err := client.Read("/data/arcade.csv")
 
-	// gocsv is lenient - it will just have empty fields for missing columns
+	// gocsv parses it but all required fields are empty, so filtering
+	// drops every entry
 	require.NoError(t, err)
-	assert.Len(t, entries, 1)
+	assert.Empty(t, entries)
 }
 
 func TestClient_Update_Success(t *testing.T) {
