@@ -8,8 +8,8 @@ github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERo
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d h1:2xp1BQbqcDDaikHnASWpVZRjibOxu7y9LhAv04whugI=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d/go.mod h1:peYoMncQljjNS6tZwI9WVyQB3qZS6u79/N3mBOcnd3I=
-github.com/ZaparooProject/go-pn532 v0.20.2 h1:Wz7IgaRPIpsxGsVfIlmtch77BzfWahdk6W8NYkgCy7U=
-github.com/ZaparooProject/go-pn532 v0.20.2/go.mod h1:38r+NvAyNsUa/McJC4FEk2+uxOzrN1AUgrh/fpc0oLk=
+github.com/ZaparooProject/go-pn532 v0.20.3 h1:okjV/BVttJZvjXDZ0wuNlI165iT3N9g1B+zR9D+bU4M=
+github.com/ZaparooProject/go-pn532 v0.20.3/go.mod h1:38r+NvAyNsUa/McJC4FEk2+uxOzrN1AUgrh/fpc0oLk=
 github.com/ZaparooProject/go-zapscript v0.1.0 h1:IlDzx4WsYOy17cADbWyegIjB7wprAy6dNr6WsXyx/Ts=
 github.com/ZaparooProject/go-zapscript v0.1.0/go.mod h1:mXkIhNUoWCdsoUkjFPmbVba9PTkzD5H4ntmIxnNNSD0=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
