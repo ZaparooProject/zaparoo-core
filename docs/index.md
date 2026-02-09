@@ -10,7 +10,7 @@ Build scripts work on Linux, Mac and Windows (natively or WSL). Just make sure a
 
 - [Go](https://go.dev/)
 
-  Version 1.23 or newer. The build script assumes your Go path is in the default location, for caching between Docker build environments: `$HOME/go` 
+  Version 1.25 or newer. The build script assumes your Go path is in the default location, for caching between Docker build environments: `$HOME/go`
 
 - [Task](https://taskfile.dev/)
 - [Docker](https://www.docker.com/)
@@ -35,7 +35,7 @@ These are the important commands:
 
 - `task <platform>:deploy-<architecture>`
 
-  Some builds also have a helper command to automatically make a new build, transfer it to a remote device and remotely restart the service running. For example, to enable this for the MiSTer ARM build, add `MISTER_IP=1.2.3.4` to a `.env` file in the root of the project and then run `task mister:deploy-arm`.
+  Some platforms also have a helper command to automatically make a new build, transfer it to a remote device and remotely restart the service running. For example, to enable this for MiSTer, add `MISTER_IP=1.2.3.4` to a `.env` file in the root of the project and then run `task mister:deploy-arm`.
 
 ### Direct Builds
 
@@ -43,7 +43,7 @@ Core can be built directly on the host using the `task build` command, but will 
 
 #### Linux
 
-Linux is the most complex because it uses a custom build of libnfc. Check a Dockerfile like `scripts/linux_amd64/Dockerfile` for full details of setting up the environment.
+Linux is the most complex because it uses a custom build of libnfc. Check the Dockerfile at `scripts/zigcc/Dockerfile` for full details of setting up the environment.
 
 You will need:
 

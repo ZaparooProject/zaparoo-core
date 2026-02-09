@@ -24,7 +24,7 @@ When working on the API, notifications, or media features, remember the App is t
 - **ZapScript**: Command language stored on tokens. Format: `**command:arg1,arg2?key=value`, chained with `||`. Supports expressions (`[[variable]]`) and conditions (`?when=`). A bare path (no `**` prefix) auto-launches as media. See `pkg/zapscript/` and official docs.
 - **Mappings**: Rules that override what a token does based on pattern matching (exact, partial/wildcard, regex) against UID, text, or data. Essential for read-only tokens like Amiibo. Stored in UserDB or as TOML files in `mappings/`.
 - **Launchers**: Per-system programs that launch games/media. Each platform provides built-in launchers. Users can add custom launchers via TOML files in `launchers/`. See `pkg/platforms/`.
-- **Systems**: 200+ supported game/computer/media systems (e.g., `snes`, `genesis`, `psx`). IDs are case-insensitive with aliases and fallbacks. See official docs for the full list.
+- **Systems**: 200+ supported game/computer/media systems (e.g., `SNES`, `Genesis`, `PSX`). IDs are case-insensitive with aliases and fallbacks. See official docs for the full list.
 - **Readers**: Hardware or virtual devices that detect tokens. Support two scan modes: **tap** (default, token can be removed freely) and **hold** (token must stay on reader, removal stops media).
 
 ## Safety & Permissions
@@ -37,15 +37,12 @@ When working on the API, notifications, or media features, remember the App is t
 - Run package-level linting: `golangci-lint run pkg/specific/`
 - Format files: `gofumpt -w file.go`
 - View git history: `git log`, `git diff`
-- Run vulnerability checks: `govulncheck ./...`
 
 ### Ask before
 
 - Installing new Go dependencies
 - Running `git push` or `git commit`
 - Deleting files or directories
-- Running full `task test` (it's slow - prefer file-scoped)
-- Running `task build` (slow - only when needed)
 - Changing the database schema or migrations
 - Modifying configuration schema (SchemaVersion)
 - Adding new platform support
