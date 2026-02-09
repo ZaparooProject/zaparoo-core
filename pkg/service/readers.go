@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
@@ -194,8 +195,9 @@ func timedExit(
 	db *database.Database,
 	lsq chan *tokens.Token,
 	plq chan *playlists.Playlist,
-	exitTimer *time.Timer,
-) *time.Timer {
+	clock clockwork.Clock,
+	exitTimer clockwork.Timer,
+) clockwork.Timer {
 	if exitTimer != nil {
 		stopped := exitTimer.Stop()
 		if stopped {
@@ -226,12 +228,16 @@ func timedExit(
 		return exitTimer
 	}
 
-	timerLen := time.Second * time.Duration(cfg.ReadersScan().ExitDelay)
+	timerLen := time.Duration(float64(cfg.ReadersScan().ExitDelay) * float64(time.Second))
 	log.Debug().Msgf("exit timer set to: %s seconds", timerLen)
-	exitTimer = time.NewTimer(timerLen)
+	exitTimer = clock.NewTimer(timerLen)
 
 	go func() {
-		<-exitTimer.C
+		select {
+		case <-exitTimer.Chan():
+		case <-st.GetContext().Done():
+			return
+		}
 
 		if !cfg.HoldModeEnabled() {
 			log.Debug().Msg("exit timer expired, but hold mode disabled")
@@ -288,11 +294,16 @@ func readerManager(
 	plq chan *playlists.Playlist,
 	scanQueue chan readers.Scan,
 	player audio.Player,
+	clock clockwork.Clock,
 ) {
+	if clock == nil {
+		clock = clockwork.NewRealClock()
+	}
+
 	var lastError time.Time
 
 	proc := &scanPreprocessor{}
-	var exitTimer *time.Timer
+	var exitTimer clockwork.Timer
 
 	var autoDetector *AutoDetector
 	if cfg.AutoDetect() {
@@ -400,7 +411,7 @@ preprocessing:
 			scanSource = t.Source
 		case stoken := <-lsq:
 			// a token has been launched that starts software, used for managing exits
-			log.Debug().Msgf("new software token: %v", st)
+			log.Debug().Msgf("new software token: %v", stoken)
 			if exitTimer != nil && !helpers.TokensEqual(stoken, st.GetSoftwareToken()) {
 				if stopped := exitTimer.Stop(); stopped {
 					log.Info().Msg("different software token inserted, cancelling exit")
@@ -440,13 +451,13 @@ preprocessing:
 
 			if exitTimer != nil {
 				stopped := exitTimer.Stop()
-				activeToken := st.GetActiveCard()
-				if stopped && helpers.TokensEqual(scan, &activeToken) {
+				stoken := st.GetSoftwareToken()
+				if stopped && helpers.TokensEqual(scan, stoken) {
 					log.Info().Msg("same token reinserted, cancelling exit")
 					continue preprocessing
 				} else if stopped {
 					log.Info().Msg("new token inserted, restarting exit timer")
-					exitTimer = timedExit(pl, cfg, st, db, lsq, plq, exitTimer)
+					exitTimer = timedExit(pl, cfg, st, db, lsq, plq, clock, exitTimer)
 				}
 			}
 
@@ -490,7 +501,7 @@ preprocessing:
 				}
 			}
 
-			exitTimer = timedExit(pl, cfg, st, db, lsq, plq, exitTimer)
+			exitTimer = timedExit(pl, cfg, st, db, lsq, plq, clock, exitTimer)
 		}
 	}
 

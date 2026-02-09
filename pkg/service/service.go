@@ -316,7 +316,7 @@ func Start(
 	}
 
 	log.Info().Msg("starting reader manager")
-	go readerManager(pl, cfg, st, db, itq, lsq, plq, make(chan readers.Scan), player)
+	go readerManager(pl, cfg, st, db, itq, lsq, plq, make(chan readers.Scan), player, nil)
 
 	log.Info().Msg("starting input token queue manager")
 	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq, limitsManager, player)
