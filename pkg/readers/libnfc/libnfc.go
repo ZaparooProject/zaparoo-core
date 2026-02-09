@@ -142,6 +142,7 @@ type Reader struct {
 	activeWrite   *WriteRequest
 	conn          config.ReadersConnect
 	activeWriteMu syncutil.RWMutex
+	mu            syncutil.RWMutex // protects polling, pnd
 	polling       bool
 	mode          readerMode // Reader mode for different device types
 }
@@ -206,13 +207,22 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		return err
 	}
 
+	r.mu.Lock()
 	r.conn = device
 	r.pnd = &pnd
 	r.polling = true
 	r.prevToken = nil
+	r.mu.Unlock()
 
 	go func() {
-		for r.polling {
+		for {
+			r.mu.RLock()
+			polling := r.polling
+			pnd := r.pnd
+			r.mu.RUnlock()
+			if !polling || pnd == nil {
+				break
+			}
 			select {
 			case req := <-r.write:
 				r.writeTag(req)
@@ -220,7 +230,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 				// continue with reading
 			}
 
-			token, removed, err := r.pollDevice(r.pnd, r.prevToken, timesToPoll, periodBetweenPolls)
+			token, removed, err := r.pollDevice(pnd, r.prevToken, timesToPoll, periodBetweenPolls)
 			if errors.Is(err, nfc.Error(nfc.EIO)) {
 				log.Warn().Msgf("error during poll: %s", err)
 				log.Warn().Msg("fatal IO error, device was possibly unplugged")
@@ -238,7 +248,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 					log.Warn().Msgf("error closing device: %s", err)
 				}
 
-				continue
+				break
 			} else if err != nil {
 				log.Warn().Msgf("error polling device: %s", err)
 				continue
@@ -270,13 +280,18 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 }
 
 func (r *Reader) Close() error {
+	r.mu.Lock()
 	r.polling = false
-
 	if r.pnd == nil {
+		r.mu.Unlock()
 		return nil
 	}
+	pnd := r.pnd
+	r.pnd = nil
+	r.mu.Unlock()
+
 	log.Debug().Msgf("closing device: %s", r.conn)
-	err := r.pnd.Close()
+	err := pnd.Close()
 	if err != nil {
 		return fmt.Errorf("failed to close NFC device: %w", err)
 	}
@@ -391,14 +406,17 @@ func (r *Reader) Path() string {
 }
 
 func (r *Reader) Connected() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.polling && r.pnd != nil
 }
 
 func (r *Reader) Info() string {
-	if !r.Connected() {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.polling || r.pnd == nil {
 		return ""
 	}
-
 	return r.pnd.String()
 }
 
@@ -455,12 +473,14 @@ func (*Reader) OnMediaChange(*models.ActiveMedia) error {
 }
 
 func (r *Reader) ReaderID() string {
+	r.mu.RLock()
 	connStr := r.conn.ConnectionString()
 	if connStr == "" || connStr == autoConnStr {
 		if r.pnd != nil && r.pnd.Connection() != "" {
 			connStr = r.pnd.Connection()
 		}
 	}
+	r.mu.RUnlock()
 	return readers.GenerateReaderID(r.Metadata().ID, connStr)
 }
 
