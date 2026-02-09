@@ -142,6 +142,7 @@ type Reader struct {
 	activeWrite   *WriteRequest
 	conn          config.ReadersConnect
 	activeWriteMu syncutil.RWMutex
+	mu            syncutil.RWMutex // protects polling, pnd
 	polling       bool
 	mode          readerMode // Reader mode for different device types
 }
@@ -195,19 +196,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		log.Debug().Msgf("opening device: %s", connStr)
 	}
 
-	// Translate legacy connection strings to libnfc format
-	switch r.mode {
-	case modeLegacyUART:
-		connStr = strings.Replace(connStr, "legacypn532uart:", "pn532uart:", 1)
-		connStr = strings.Replace(connStr, "legacy_pn532_uart:", "pn532uart:", 1)
-		connStr = strings.Replace(connStr, "pn532_uart:", "pn532uart:", 1)
-	case modeLegacyI2C:
-		connStr = strings.Replace(connStr, "legacypn532i2c:", "pn532i2c:", 1)
-		connStr = strings.Replace(connStr, "legacy_pn532_i2c:", "pn532i2c:", 1)
-		connStr = strings.Replace(connStr, "pn532_i2c:", "pn532i2c:", 1)
-	default:
-		// No translation needed for other modes
-	}
+	connStr = toLibnfcConnStr(r.mode, connStr)
 
 	pnd, err := openDeviceWithRetries(connStr)
 	if err != nil {
@@ -218,13 +207,22 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		return err
 	}
 
+	r.mu.Lock()
 	r.conn = device
 	r.pnd = &pnd
 	r.polling = true
 	r.prevToken = nil
+	r.mu.Unlock()
 
 	go func() {
-		for r.polling {
+		for {
+			r.mu.RLock()
+			polling := r.polling
+			pnd := r.pnd
+			r.mu.RUnlock()
+			if !polling || pnd == nil {
+				break
+			}
 			select {
 			case req := <-r.write:
 				r.writeTag(req)
@@ -232,7 +230,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 				// continue with reading
 			}
 
-			token, removed, err := r.pollDevice(r.pnd, r.prevToken, timesToPoll, periodBetweenPolls)
+			token, removed, err := r.pollDevice(pnd, r.prevToken, timesToPoll, periodBetweenPolls)
 			if errors.Is(err, nfc.Error(nfc.EIO)) {
 				log.Warn().Msgf("error during poll: %s", err)
 				log.Warn().Msg("fatal IO error, device was possibly unplugged")
@@ -250,7 +248,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 					log.Warn().Msgf("error closing device: %s", err)
 				}
 
-				continue
+				break
 			} else if err != nil {
 				log.Warn().Msgf("error polling device: %s", err)
 				continue
@@ -282,13 +280,18 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 }
 
 func (r *Reader) Close() error {
+	r.mu.Lock()
 	r.polling = false
-
 	if r.pnd == nil {
+		r.mu.Unlock()
 		return nil
 	}
+	pnd := r.pnd
+	r.pnd = nil
+	r.mu.Unlock()
+
 	log.Debug().Msgf("closing device: %s", r.conn)
-	err := r.pnd.Close()
+	err := pnd.Close()
 	if err != nil {
 		return fmt.Errorf("failed to close NFC device: %w", err)
 	}
@@ -374,15 +377,13 @@ func (r *Reader) Detect(connected []string) string {
 		// Only detect UART devices, return with legacy prefix
 		device := detectSerialReaders(connected)
 		if device != "" && !helpers.Contains(connected, device) {
-			// Replace pn532uart: with legacypn532uart:
-			return strings.Replace(device, "pn532uart:", "legacypn532uart:", 1)
+			return strings.Replace(device, "pn532_uart:", "legacypn532uart:", 1)
 		}
 	case modeLegacyI2C:
 		// Only detect I2C devices, return with legacy prefix
 		device := detectI2CReaders(connected)
 		if device != "" && !helpers.Contains(connected, device) {
-			// Replace pn532i2c: with legacypn532i2c:
-			return strings.Replace(device, "pn532i2c:", "legacypn532i2c:", 1)
+			return strings.Replace(device, "pn532_i2c:", "legacypn532i2c:", 1)
 		}
 	default:
 		// Default mode - detect UART/I2C serial devices
@@ -405,14 +406,17 @@ func (r *Reader) Path() string {
 }
 
 func (r *Reader) Connected() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.polling && r.pnd != nil
 }
 
 func (r *Reader) Info() string {
-	if !r.Connected() {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.polling || r.pnd == nil {
 		return ""
 	}
-
 	return r.pnd.String()
 }
 
@@ -469,12 +473,14 @@ func (*Reader) OnMediaChange(*models.ActiveMedia) error {
 }
 
 func (r *Reader) ReaderID() string {
+	r.mu.RLock()
 	connStr := r.conn.ConnectionString()
 	if connStr == "" || connStr == autoConnStr {
 		if r.pnd != nil && r.pnd.Connection() != "" {
 			connStr = r.pnd.Connection()
 		}
 	}
+	r.mu.RUnlock()
 	return readers.GenerateReaderID(r.Metadata().ID, connStr)
 }
 
@@ -500,7 +506,7 @@ func detectSerialReaders(connected []string) string {
 	for _, device := range devices {
 		// the libnfc open is extremely disruptive to other devices, we want
 		// to minimise the number of times we try to open a device
-		connStr := "pn532uart:" + device
+		connStr := "pn532_uart:" + device
 
 		// ignore if device is in block list
 		serialCacheMu.RLock()
@@ -586,7 +592,7 @@ func detectI2CReaders(connected []string) string {
 			continue
 		}
 
-		connStr := "pn532i2c:" + device
+		connStr := "pn532_i2c:" + device
 
 		// ignore if device is in block list
 		i2cCacheMu.RLock()
@@ -629,6 +635,23 @@ func detectI2CReaders(connected []string) string {
 	}
 
 	return ""
+}
+
+// toLibnfcConnStr translates internal normalized connection strings to the
+// format expected by libnfc. libnfc driver names use underscores
+// (e.g. "pn532_i2c", "pn532_uart") but ConnectionString() strips them for
+// internal driver matching.
+func toLibnfcConnStr(mode readerMode, connStr string) string {
+	switch mode {
+	case modeLegacyUART:
+		return strings.Replace(connStr, "legacypn532uart:", "pn532_uart:", 1)
+	case modeLegacyI2C:
+		return strings.Replace(connStr, "legacypn532i2c:", "pn532_i2c:", 1)
+	default:
+		connStr = strings.Replace(connStr, "pn532uart:", "pn532_uart:", 1)
+		connStr = strings.Replace(connStr, "pn532i2c:", "pn532_i2c:", 1)
+		return connStr
+	}
 }
 
 func openDeviceWithRetries(device string) (nfc.Device, error) {
@@ -764,6 +787,16 @@ func (r *Reader) pollDevice(
 func (r *Reader) writeTag(req WriteRequest) {
 	log.Info().Msgf("libnfc write request: %s", req.Text)
 
+	r.mu.RLock()
+	pnd := r.pnd
+	r.mu.RUnlock()
+	if pnd == nil {
+		req.Result <- WriteRequestResult{
+			Err: errors.New("device closed"),
+		}
+		return
+	}
+
 	r.activeWriteMu.Lock()
 	if r.activeWrite != nil {
 		log.Warn().Msgf("write already in progress")
@@ -804,7 +837,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 			// continue with reading
 		}
 
-		count, target, err = r.pnd.InitiatorPollTarget(
+		count, target, err = pnd.InitiatorPollTarget(
 			tags.SupportedCardTypes,
 			timesToPoll,
 			periodBetweenPolls,
@@ -837,7 +870,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 
 	switch cardType {
 	case tokens.TypeMifare:
-		bytesWritten, err = tags.WriteMifare(*r.pnd, req.Text, cardUID)
+		bytesWritten, err = tags.WriteMifare(*pnd, req.Text, cardUID)
 		if err != nil {
 			log.Error().Msgf("error writing to mifare: %s", err)
 			req.Result <- WriteRequestResult{
@@ -846,7 +879,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 			return
 		}
 	case tokens.TypeNTAG:
-		bytesWritten, err = tags.WriteNtag(*r.pnd, req.Text)
+		bytesWritten, err = tags.WriteNtag(*pnd, req.Text)
 		if err != nil {
 			log.Error().Msgf("error writing to ntag: %s", err)
 			req.Result <- WriteRequestResult{
@@ -866,7 +899,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 	var t *tokens.Token
 	for i := range verificationTries {
 		var verifyErr error
-		t, _, verifyErr = r.pollDevice(r.pnd, nil, timesToPoll, periodBetweenPolls)
+		t, _, verifyErr = r.pollDevice(pnd, nil, timesToPoll, periodBetweenPolls)
 		if verifyErr == nil && t != nil {
 			break
 		}
