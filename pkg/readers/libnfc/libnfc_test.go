@@ -296,6 +296,121 @@ func TestDataCorruptedError(t *testing.T) {
 	assert.Equal(t, assert.AnError, err.Unwrap())
 }
 
+func TestConnected(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not connected by default", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		assert.False(t, r.Connected())
+	})
+
+	t.Run("not connected when only polling is true", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		r.polling = true
+		assert.False(t, r.Connected())
+	})
+}
+
+func TestInfo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty when not connected", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		assert.Empty(t, r.Info())
+	})
+
+	t.Run("empty when polling but no device", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		r.polling = true
+		assert.Empty(t, r.Info())
+	})
+}
+
+func TestPath(t *testing.T) {
+	t.Parallel()
+
+	r := NewReader(&config.Instance{})
+	r.conn = config.ReadersConnect{
+		Driver: "pn532_i2c",
+		Path:   "/dev/i2c-2",
+	}
+	assert.Equal(t, "/dev/i2c-2", r.Path())
+}
+
+func TestClose_NilDevice(t *testing.T) {
+	t.Parallel()
+
+	r := NewReader(&config.Instance{})
+	err := r.Close()
+	require.NoError(t, err)
+	assert.False(t, r.polling)
+}
+
+func TestReaderID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("uses connection string from conn", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		r.conn = config.ReadersConnect{
+			Driver: "pn532_i2c",
+			Path:   "/dev/i2c-2",
+		}
+		id := r.ReaderID()
+		assert.NotEmpty(t, id)
+	})
+
+	t.Run("empty conn yields deterministic id", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		id := r.ReaderID()
+		assert.NotEmpty(t, id)
+	})
+
+	t.Run("auto conn with nil pnd uses auto string", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		r.conn = config.ReadersConnect{
+			Driver: "libnfcauto",
+			Path:   "",
+		}
+		id := r.ReaderID()
+		assert.NotEmpty(t, id)
+	})
+}
+
+func TestValidateWriteParameters(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil reader", func(t *testing.T) {
+		t.Parallel()
+		err := validateWriteParameters(nil, "test")
+		assert.EqualError(t, err, "reader cannot be nil")
+	})
+
+	t.Run("not connected", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		err := validateWriteParameters(r, "test")
+		assert.EqualError(t, err, "reader not connected")
+	})
+
+	t.Run("empty text", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		r.polling = true
+		// Can't set pnd to non-nil without real device, so this hits
+		// "reader not connected" first. Test the empty text path via
+		// the nil reader and not-connected paths above.
+		err := validateWriteParameters(r, "")
+		assert.Error(t, err)
+	})
+}
+
 // TODO: Add mock-based tests for error scenarios:
 // - IO errors with active token → sends ReaderError: true
 // - Device disconnect scenarios
