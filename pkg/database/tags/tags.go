@@ -20,21 +20,11 @@
 package tags
 
 import (
-	"regexp"
-	"strings"
-
 	"github.com/ZaparooProject/go-zapscript"
 )
 
 // This tag system is inspired by the GameDataBase project's hierarchical
 // tag taxonomy. Reference: https://github.com/PigSaint/GameDataBase/blob/main/tags.yml
-
-// Package-level compiled regexes for tag normalization.
-// These are compiled once at initialization for optimal performance.
-var (
-	reColonSpacing = regexp.MustCompile(`\s*:\s*`)
-	reSpecialChars = regexp.MustCompile(`[^a-z0-9:,+\-]`)
-)
 
 // TagType represents a top-level tag category
 type TagType string
@@ -134,41 +124,8 @@ const (
 // for simplicity, but the taxonomy and tag values are directly inspired by their work.
 
 // NormalizeTag normalizes a tag string for consistent querying and storage.
-// Applied to BOTH type and value parts separately.
-// Rules: trim whitespace, normalize colon spacing, lowercase, spaces→dashes,
-// periods→dashes, and remove special chars (except colon, dash, and comma)
-func NormalizeTag(s string) string {
-	// 1. Trim whitespace
-	s = strings.TrimSpace(s)
-
-	// 2. Normalize colon spacing - remove spaces around colons first
-	s = reColonSpacing.ReplaceAllString(s, ":")
-
-	// 3. Convert to lowercase
-	s = strings.ToLower(s)
-
-	// 4. Replace remaining spaces with dashes
-	s = strings.ReplaceAll(s, " ", "-")
-
-	// 5. Convert periods to dashes (for version numbers like "1.2.3" → "1-2-3")
-	s = strings.ReplaceAll(s, ".", "-")
-
-	// 6. Remove other special chars (except colon, dash, and comma)
-	// Keep: a-z, 0-9, dash, colon, comma
-	s = reSpecialChars.ReplaceAllString(s, "")
-
-	return s
-}
-
-// NormalizeTagFilter normalizes a TagFilter for consistent querying.
-// Applies normalization to both Type and Value fields.
-func NormalizeTagFilter(filter zapscript.TagFilter) zapscript.TagFilter {
-	return zapscript.TagFilter{
-		Type:     NormalizeTag(filter.Type),
-		Value:    NormalizeTag(filter.Value),
-		Operator: filter.Operator,
-	}
-}
+// Delegates to go-zapscript's implementation.
+var NormalizeTag = zapscript.NormalizeTag
 
 var CanonicalTagDefinitions = map[TagType][]TagValue{
 	TagTypeInput: {

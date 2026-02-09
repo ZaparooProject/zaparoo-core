@@ -74,34 +74,6 @@ func TestParse_GlobalArgs(t *testing.T) {
 	}
 }
 
-func TestGlobalArgs_ShouldRun(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		when string
-		want bool
-	}{
-		{name: "empty when", when: "", want: true},
-		{name: "true", when: "true", want: true},
-		{name: "yes", when: "yes", want: true},
-		{name: "false", when: "false", want: false},
-		{name: "no", when: "no", want: false},
-		// IsTruthy only accepts "true" and "yes", all other values are falsey
-		{name: "1 is falsey", when: "1", want: false},
-		{name: "0 is falsey", when: "0", want: false},
-		{name: "random string is falsey", when: "random", want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			args := zapscript.GlobalArgs{When: tt.when}
-			assert.Equal(t, tt.want, ShouldRun(args))
-		})
-	}
-}
-
 func TestParse_LaunchRandomArgs(t *testing.T) {
 	t.Parallel()
 

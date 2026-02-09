@@ -29,7 +29,6 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/go-playground/validator/v10"
 	"github.com/go-viper/mapstructure/v2"
 )
@@ -153,14 +152,6 @@ func stringToTagFiltersHook() mapstructure.DecodeHookFunc {
 
 		return tagFilters, nil
 	}
-}
-
-// ShouldRun returns true if the command should execute based on the When condition.
-func ShouldRun(g zapscript.GlobalArgs) bool {
-	if g.When == "" {
-		return true
-	}
-	return helpers.IsTruthy(g.When)
 }
 
 // validateLauncher checks if a launcher ID exists in the available launchers.

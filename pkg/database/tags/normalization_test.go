@@ -21,8 +21,6 @@ package tags
 
 import (
 	"testing"
-
-	"github.com/ZaparooProject/go-zapscript"
 )
 
 func TestNormalizeTag(t *testing.T) {
@@ -83,57 +81,6 @@ func TestNormalizeTag(t *testing.T) {
 			result := NormalizeTag(tt.input)
 			if result != tt.expected {
 				t.Errorf("NormalizeTag(%q) = %q, want %q", tt.input, result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestNormalizeTagFilter(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    zapscript.TagFilter
-		expected zapscript.TagFilter
-	}{
-		{
-			name: "basic normalization",
-			input: zapscript.TagFilter{
-				Type:  "Genre",
-				Value: "RPG",
-			},
-			expected: zapscript.TagFilter{
-				Type:  "genre",
-				Value: "rpg",
-			},
-		},
-		{
-			name: "complex normalization",
-			input: zapscript.TagFilter{
-				Type:  "  Year  ",
-				Value: " 1.991 ",
-			},
-			expected: zapscript.TagFilter{
-				Type:  "year",
-				Value: "1-991",
-			},
-		},
-		{
-			name: "keep colon and dash in value",
-			input: zapscript.TagFilter{
-				Type:  "Disc",
-				Value: "1-2",
-			},
-			expected: zapscript.TagFilter{
-				Type:  "disc",
-				Value: "1-2",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := NormalizeTagFilter(tt.input)
-			if result.Type != tt.expected.Type || result.Value != tt.expected.Value {
-				t.Errorf("NormalizeTagFilter(%+v) = %+v, want %+v", tt.input, result, tt.expected)
 			}
 		})
 	}
