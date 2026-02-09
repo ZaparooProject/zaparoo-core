@@ -120,6 +120,7 @@ None.
 | text     | string  | Yes      | Text content of the token.                       |
 | data     | string  | Yes      | Raw data of the token as hexadecimal string.     |
 | scanTime | string  | Yes      | Timestamp of when the token was scanned in RFC3339 format. |
+| readerId | string  | No       | ID of the reader that scanned the token.         |
 
 #### Example
 
@@ -254,6 +255,7 @@ None.
 | mediaPath  | string | Yes      | Path to the media file.                    |
 | mediaName  | string | Yes      | Display name of the media.                 |
 | started    | string | Yes      | Timestamp when media started in RFC3339 format. |
+| zapScript  | string | Yes      | ZapScript command to launch this media item. |
 
 #### Example
 
@@ -333,12 +335,13 @@ An object:
 
 ##### Media object
 
-| Key    | Type                     | Required | Description                                                                                                 |
-| :----- | :----------------------- | :------- | :---------------------------------------------------------------------------------------------------------- |
-| system | [System](#system-object) | Yes      | System which the media has been indexed under.                                                              |
-| name   | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
-| path   | string                   | Yes      | Path to the media file. If possible, this path will be compressed into the `<system>/<path>` launch format. |
-| tags   | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
+| Key       | Type                     | Required | Description                                                                                                 |
+| :-------- | :----------------------- | :------- | :---------------------------------------------------------------------------------------------------------- |
+| system    | [System](#system-object) | Yes      | System which the media has been indexed under.                                                              |
+| name      | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
+| path      | string                   | Yes      | Path to the media file. If possible, this path will be compressed into the `<system>/<path>` launch format. |
+| zapScript | string                   | Yes      | ZapScript command to launch this media item.                                                                |
+| tags      | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
 
 ##### System object
 
@@ -391,6 +394,7 @@ An object:
       {
         "name": "240p Test Suite (PD) v0.03 tepples",
         "path": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
+        "zapScript": "@Gameboy/240p Test Suite (PD) v0.03 tepples",
         "system": {
           "category": "Handheld",
           "id": "Gameboy",
@@ -446,6 +450,7 @@ An object:
       {
         "name": "Super Mario Bros.",
         "path": "NES/Super Mario Bros.nes",
+        "zapScript": "@NES/Super Mario Bros. (year:1985)",
         "system": {
           "category": "Console",
           "id": "NES",
@@ -571,7 +576,7 @@ An omitted or `null` value parameters key is also valid and will index every sys
 
 #### Result
 
-Returns `null` on success once indexing is complete.
+Returns `null` on success. Indexing runs in the background after the response is sent. Track progress using [media.indexing](./notifications.md) notifications.
 
 #### Examples
 
@@ -678,7 +683,7 @@ None.
 
 #### Result
 
-Returns a list of [ActiveMedia](#active-media-object) objects or an empty array if no media is active.
+Returns an [ActiveMedia](#active-media-object) object if media is currently active, or `null` if no media is active.
 
 #### Example
 
@@ -692,13 +697,31 @@ Returns a list of [ActiveMedia](#active-media-object) objects or an empty array 
 }
 ```
 
-##### Response
+##### Response (No Active Media)
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": "47f80537-7a5d-11ef-9c7b-020304050607",
-  "result": []
+  "result": null
+}
+```
+
+##### Response (Media Active)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "47f80537-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "started": "2024-09-24T17:49:42.938167429+08:00",
+    "launcherId": "SNES",
+    "systemId": "SNES",
+    "systemName": "Super Nintendo Entertainment System",
+    "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+    "mediaName": "Super Mario World",
+    "zapScript": "@SNES/Super Mario World"
+  }
 }
 ```
 
@@ -859,7 +882,7 @@ None.
     "debugLogging": false,
     "audioScanFeedback": true,
     "readersAutoDetect": true,
-    "readersScanMode": "insert",
+    "readersScanMode": "tap",
     "readersScanExitDelay": 0.0,
     "readersScanIgnoreSystems": ["DOS"],
     "errorReporting": true,
@@ -1286,9 +1309,7 @@ An object:
 
 #### Result
 
-| Key | Type   | Required | Description                       |
-| :-- | :----- | :------- | :-------------------------------- |
-| id  | string | Yes      | Database ID of new mapping entry. |
+Returns an empty object `{}` on success.
 
 #### Example
 
@@ -1316,9 +1337,7 @@ An object:
 {
   "jsonrpc": "2.0",
   "id": "562c0b60-7ae8-11ef-87d7-020304050607",
-  "result": {
-    "id": "2"
-  }
+  "result": {}
 }
 ```
 
@@ -1467,7 +1486,9 @@ None.
 
 | Key          | Type     | Required | Description                                   |
 | :----------- | :------- | :------- | :-------------------------------------------- |
-| id           | string   | Yes      | Unique identifier for the reader.             |
+| id           | string   | Yes      | Device path or system identifier of the reader. Legacy field, prefer `readerId` for stable identification. |
+| readerId     | string   | Yes      | Stable reader ID, deterministic across restarts. Format: `{driver}-{hash}`. |
+| driver       | string   | Yes      | Driver type for the reader (e.g., `"pn532"`, `"acr122pcsc"`, `"file"`). |
 | info         | string   | Yes      | Human-readable information about the reader.  |
 | connected    | boolean  | Yes      | Whether the reader is currently connected.    |
 | capabilities | string[] | Yes      | List of capabilities supported by the reader. |
@@ -1493,10 +1514,12 @@ None.
   "result": {
     "readers": [
       {
-        "id": "pn532_1",
-        "info": "PN532 NFC Reader",
-        "connected": true,
-        "capabilities": ["read", "write"]
+        "id": "/dev/ttyUSB0",
+        "readerId": "pn532-ujqixjv6",
+        "driver": "pn532",
+        "info": "PN532 (1-2.3.1)",
+        "capabilities": ["read", "write"],
+        "connected": true
       }
     ]
   }
@@ -1511,9 +1534,10 @@ Attempt to write given text to the first available write-capable reader, if poss
 
 An object:
 
-| Key  | Type   | Required | Description                           |
-| :--- | :----- | :------- | :------------------------------------ |
-| text | string | Yes      | ZapScript to be written to the token. |
+| Key      | Type   | Required | Description                                                                  |
+| :------- | :----- | :------- | :--------------------------------------------------------------------------- |
+| text     | string | Yes      | ZapScript to be written to the token.                                        |
+| readerId | string | No       | ID of a specific reader to write to. If omitted, uses the first available write-capable reader. |
 
 #### Result
 
@@ -1550,7 +1574,11 @@ Cancel any ongoing write operation.
 
 #### Parameters
 
-None.
+Optionally, an object:
+
+| Key      | Type   | Required | Description                                                                    |
+| :------- | :----- | :------- | :----------------------------------------------------------------------------- |
+| readerId | string | No       | ID of a specific reader to cancel write on. If omitted, cancels on all readers. |
 
 #### Result
 

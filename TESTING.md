@@ -42,30 +42,40 @@ The testing infrastructure is organized under `pkg/testing/`:
 
 ```
 pkg/testing/
-├── README.md           # Quick reference guide to all testing utilities ⭐
-├── mocks/              # Interface mocks
-│   ├── reader.go       # Reader interface mock
-│   ├── platform.go     # Platform interface mock
-│   └── websocket.go    # WebSocket mocks
-├── helpers/            # Testing utilities
-│   ├── db.go          # Database testing helpers
-│   ├── fs.go          # Filesystem testing helpers
-│   └── api.go         # API testing helpers
-├── fixtures/           # Test data
-│   ├── tokens.go      # Sample tokens: SampleTokens(), NewNFCToken(), NewTokenCollection()
-│   ├── media.go       # Sample media: SampleMedia(), NewRetroGame(), NewMediaCollection()
-│   ├── playlists.go   # Sample playlists: SamplePlaylists()
-│   ├── kodi.go        # Kodi test fixtures
-│   └── database.go    # Database fixtures and history entries
-├── sqlmock/            # SQL mock utilities (testsqlmock.NewSQLMock())
-└── examples/           # Example tests and patterns
-    ├── mock_usage_example_test.go
+├── README.md              # Quick reference guide to all testing utilities ⭐
+├── mocks/                 # Interface mocks
+│   ├── api_client.go      # API client mock
+│   ├── audio.go           # Audio interface mock
+│   ├── command_executor.go # Command executor mock
+│   ├── kodi_client.go     # Kodi client mock
+│   ├── platform.go        # Platform interface mock
+│   ├── reader.go          # Reader interface mock
+│   └── websocket.go       # WebSocket mocks
+├── helpers/               # Testing utilities
+│   ├── api.go             # API testing helpers
+│   ├── command.go         # Command testing helpers
+│   ├── db_mocks.go        # Database mock interfaces and matchers
+│   ├── esapi_server.go    # ES API test server
+│   ├── fs.go              # Filesystem testing helpers
+│   ├── inmemory_db.go     # In-memory database for testing
+│   ├── kodi_server.go     # Kodi test server
+│   └── validation.go      # Validation helpers
+├── fixtures/              # Test data
+│   ├── database.go        # Database fixtures and history entries
+│   ├── kodi.go            # Kodi test fixtures
+│   ├── media.go           # Sample media: SampleMedia(), NewRetroGame(), NewMediaCollection()
+│   ├── playlists.go       # Sample playlists: SamplePlaylists()
+│   └── tokens.go          # Sample tokens: SampleTokens(), NewNFCToken(), NewTokenCollection()
+├── sqlmock/               # SQL mock utilities (testsqlmock.NewSQLMock())
+│   └── sqlmock.go
+└── examples/              # Example tests and patterns
+    ├── api_example_test.go
     ├── database_example_test.go
     ├── filesystem_example_test.go
-    ├── api_example_test.go
+    ├── mock_usage_example_test.go
+    ├── service_state_management_test.go
     ├── service_token_processing_test.go
-    ├── service_zapscript_test.go
-    └── service_state_management_test.go
+    └── service_zapscript_test.go
 ```
 
 **New to testing in Zaparoo?** Start with `pkg/testing/README.md` for a quick reference guide to all available helpers and examples.
@@ -80,9 +90,9 @@ package mypackage
 import (
     "testing"
     
-    "github.com/ZaparooProject/zaparoo-core/pkg/testing/fixtures"
-    "github.com/ZaparooProject/zaparoo-core/pkg/testing/helpers"
-    "github.com/ZaparooProject/zaparoo-core/pkg/testing/mocks"
+    "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
+    "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+    "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
     "github.com/stretchr/testify/assert"
     "github.com/stretchr/testify/require"
 )
@@ -108,8 +118,7 @@ func TestWithFixtures(t *testing.T) {
     // Get sample data
     tokens := fixtures.SampleTokens()
     media := fixtures.SampleMedia()
-    systems := fixtures.SampleSystems()
-    
+
     // Use in tests
     assert.Len(t, tokens, 3)
     assert.Equal(t, "Super Mario Bros", media[0].Name)
@@ -122,7 +131,7 @@ func TestWithFixtures(t *testing.T) {
 func TestDatabaseOperations(t *testing.T) {
     // Setup mock database
     mockUserDB := helpers.NewMockUserDBI()
-    mockUserDB.On("AddHistory", fixtures.HistoryEntryMatcher()).Return(nil)
+    mockUserDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
     
     // Test your function
     err := MyDatabaseFunction(mockUserDB)
@@ -228,7 +237,7 @@ func TestPlatformIntegration(t *testing.T) {
     platform.SetupBasicMock()
     
     // Set specific expectations
-    platform.On("LaunchMedia", fixtures.MediaMatcher(), fixtures.SystemMatcher()).Return(nil)
+    platform.On("LaunchMedia", helpers.MediaMatcher(), helpers.SystemMatcher()).Return(nil)
     platform.On("SendKeyboard", "RETURN").Return(nil)
     
     // Use in your code
@@ -309,7 +318,7 @@ func TestUserOperations(t *testing.T) {
     }
     
     // Set expectations
-    userDB.On("AddHistory", fixtures.HistoryEntryMatcher()).Return(nil)
+    userDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
     mediaDB.On("GetMediaByText", "Game Name").Return(fixtures.SampleMedia()[0], nil)
     
     // Test your function
@@ -464,13 +473,13 @@ func TestTokenProcessing(t *testing.T) {
     }
 
     // Set expectations for complete workflow
-    db.UserDB.(*helpers.MockUserDBI).On("AddHistory", fixtures.HistoryEntryMatcher()).Return(nil)
+    db.UserDB.(*helpers.MockUserDBI).On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
     db.MediaDB.(*helpers.MockMediaDBI).On("GetMediaByText", "Game").Return(fixtures.SampleMedia()[0], nil)
-    platform.On("LaunchMedia", fixtures.MediaMatcher(), fixtures.SystemMatcher()).Return(nil)
+    platform.On("LaunchMedia", helpers.MediaMatcher(), helpers.SystemMatcher()).Return(nil)
 
     // Test complete workflow
     token := fixtures.SampleTokens()[0]
-    err := ProcessTokenWorkflow(token, platform, db)
+    err := MyTokenHandler(token, platform, db)
 
     // Verify
     require.NoError(t, err)
@@ -791,7 +800,7 @@ func TestMediaHistoryTracker_UpdatePlayTime(t *testing.T) {
 ### Additional Resources
 
 - **Clockwork documentation**: https://github.com/jonboulle/clockwork
-- **Example tests**: `pkg/database/mediadb/*_test.go` (extensive clockwork usage)
+- **Example tests**: `pkg/database/mediadb/wal_checkpoint_test.go`, `concurrent_operations_test.go`, `optimization_test.go`
 - **Service layer example**: `pkg/service/media_history_tracker_test.go`
 
 ## Fuzz Testing
@@ -954,19 +963,20 @@ When fuzzing finds a bug:
 
 ### Example Fuzz Tests
 
-See `pkg/helpers/uris_fuzz_test.go` and `pkg/helpers/paths_fuzz_test.go` for complete examples:
+Fuzz test files across the project:
 
-- `FuzzParseVirtualPathStr` - Virtual path parsing
-- `FuzzDecodeURIIfNeeded` - URI decoding
-- `FuzzIsValidExtension` - Extension validation
-- `FuzzFilenameFromPath` - Filename extraction
-- `FuzzGetPathExt` - Path extension extraction
+- `pkg/helpers/uris_fuzz_test.go` - URI parsing and decoding
+- `pkg/helpers/paths_fuzz_test.go` - Path operations
+- `pkg/helpers/virtualpath/virtualpath_fuzz_test.go` - Virtual path parsing
+- `pkg/database/mediascanner/findpath_fuzz_test.go` - Media path matching
+- `pkg/database/tags/filename_parser_fuzz_test.go` - Filename tag parsing
+- `pkg/readers/shared/ndef/parser_fuzz_test.go` - NDEF record parsing
+- `pkg/readers/rs232barcode/rs232barcode_fuzz_test.go` - Barcode input parsing
 
 ### Additional Resources
 
 - **Go fuzzing tutorial**: https://go.dev/doc/tutorial/fuzz
 - **Go fuzzing docs**: https://go.dev/doc/security/fuzz
-- **Example fuzz tests**: `pkg/helpers/*_fuzz_test.go`
 
 ## Property-Based Testing with Rapid
 
@@ -1119,13 +1129,19 @@ go test -run TestPropertyCacheKeyOrderIndependent -rapid.failfile=path/to/downlo
 
 ### Example Property Tests
 
-See these files for complete examples:
+Property test files across the project:
 
-- `pkg/database/slugs/slugify_property_test.go` - Slug normalization properties
-- `pkg/database/mediadb/slug_cache_property_test.go` - Cache key determinism
-- `pkg/database/matcher/fuzzy_property_test.go` - Fuzzy matching properties
+- `pkg/config/config_property_test.go` - Configuration properties
 - `pkg/database/filters/parser_property_test.go` - Tag filter parsing
+- `pkg/database/matcher/fuzzy_property_test.go` - Fuzzy matching properties
+- `pkg/database/mediadb/batch_inserter_property_test.go` - Batch insert properties
+- `pkg/database/mediadb/slug_cache_property_test.go` - Cache key determinism
+- `pkg/database/slugs/slugify_property_test.go` - Slug normalization properties
+- `pkg/database/tags/tags_property_test.go` - Tag parsing properties
+- `pkg/database/userdb/media_history_property_test.go` - Media history properties
 - `pkg/helpers/paths_property_test.go` - Path normalization and comparison
+- `pkg/service/playlists/playlists_property_test.go` - Playlist properties
+- `pkg/service/playtime/playtime_property_test.go` - Playtime tracking properties
 
 ## Best Practices
 

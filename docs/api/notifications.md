@@ -43,6 +43,7 @@ A token was detected by a connected reader.
 | text     | string | No       | Text data associated with the token.           |
 | data     | string | No       | Raw binary data of the token (base64 encoded). |
 | scanTime | string | Yes      | ISO 8601 timestamp when token was scanned.     |
+| readerId | string | No       | ID of the reader that scanned the token.       |
 
 ### tokens.removed
 

@@ -6,102 +6,122 @@ A README for AI coding agents working on Zaparoo Core.
 
 Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (NFC tags, barcodes, RFID) with digital media across 12 gaming platforms. Built in Go, it provides a unified API for launching games on MiSTer, Batocera, Bazzite, ChimeraOS, LibreELEC, Linux, macOS, RetroPie, Recalbox, SteamOS, Windows, and MiSTeX through token scanning. The system uses WebSocket/JSON-RPC for real-time communication, SQLite for dual-database storage, supports 11 reader types, includes cross-platform audio feedback, and features a custom ZapScript language for automation.
 
-**Tech Stack**: Go 1.24.11+, SQLite (dual-DB: UserDB + MediaDB), WebSocket/HTTP with JSON-RPC 2.0, malgo+beep/v2 (audio), testify/mock, sqlmock, afero
+**Tech Stack**: Go 1.25.7+, SQLite (dual-DB: UserDB + MediaDB), WebSocket/HTTP with JSON-RPC 2.0, malgo+beep/v2 (audio), testify/mock, sqlmock, afero
 
-**Testing Standards**: Comprehensive test coverage required for all new code - we have extensive testing infrastructure with mocks, fixtures, and examples in `pkg/testing/`
+### Zaparoo Ecosystem
+
+Zaparoo Core is the backend service in a larger ecosystem:
+
+- **Zaparoo App** ([github.com/ZaparooProject/zaparoo-app](https://github.com/ZaparooProject/zaparoo-app)) - The primary user interface (iOS, Android, Web). Its web build is embedded into the Core binary at `pkg/assets/_app/dist/` and served at `/app/`. The App uses Core's JSON-RPC API for all communication. CI automatically downloads the latest App build during Core builds.
+- **go-pn532** - NFC reader driver library used by Core's PN532 reader implementations
+- **go-zapscript** - ZapScript language parser library used by Core's token processing
+
+When working on the API, notifications, or media features, remember the App is the primary consumer of these interfaces.
+
+### Key Concepts
+
+- **Tokens**: Physical objects (NFC tags, barcodes, QR codes, optical discs) that carry or are mapped to ZapScript commands. Identified by UID, text content, or raw data.
+- **ZapScript**: Command language stored on tokens. Format: `**command:arg1,arg2?key=value`, chained with `||`. Supports expressions (`[[variable]]`) and conditions (`?when=`). A bare path (no `**` prefix) auto-launches as media. See `pkg/zapscript/` and official docs.
+- **Mappings**: Rules that override what a token does based on pattern matching (exact, partial/wildcard, regex) against UID, text, or data. Essential for read-only tokens like Amiibo. Stored in UserDB or as TOML files in `mappings/`.
+- **Launchers**: Per-system programs that launch games/media. Each platform provides built-in launchers. Users can add custom launchers via TOML files in `launchers/`. See `pkg/platforms/`.
+- **Systems**: 200+ supported game/computer/media systems (e.g., `SNES`, `Genesis`, `PSX`). IDs are case-insensitive with aliases and fallbacks. See official docs for the full list.
+- **Readers**: Hardware or virtual devices that detect tokens. Support two scan modes: **tap** (default, token can be removed freely) and **hold** (token must stay on reader, removal stops media).
+
+## Safety & Permissions
+
+### Allowed without asking
+
+- Read any files in the repository
+- Run file-scoped tests: `go test ./pkg/specific/`
+- Run `task lint-fix` to fix linting and formatting issues
+- Run package-level linting: `golangci-lint run pkg/specific/`
+- Format files: `gofumpt -w file.go`
+- View git history: `git log`, `git diff`
+
+### Ask before
+
+- Installing new Go dependencies
+- Running `git push` or `git commit`
+- Deleting files or directories
+- Changing the database schema or migrations
+- Modifying configuration schema (SchemaVersion)
+- Adding new platform support
+- Changing API contract (breaking changes)
 
 ## Development Guidelines
 
 ### Do
 
-- **Write tests for all new code** - comprehensive coverage required
-- **Use `task lint-fix`** to resolve all linting and formatting issues
-- **Keep diffs small and focused** - one concern per change
-- **Use file-scoped commands** (tests, formatting) for faster feedback
-- **Reference existing patterns** before writing new code - consistency matters
-- **Use zerolog for all logging** - standard `log` and `fmt.Println` are not allowed
-- **Use filepath.Join** for all path construction - ensures cross-platform compatibility
-- **Handle all errors explicitly** - use golangci-lint's error handling checks
-- **Default to small components** - prefer focused modules over monolithic files
+- Write tests for all new code - comprehensive coverage required
+- Use `task lint-fix` to resolve all linting and formatting issues (enforced by depguard, goheader, etc.)
+- Keep diffs small and focused - one concern per change
+- Use file-scoped commands (tests, formatting) for faster feedback
+- Reference existing patterns before writing new code - consistency matters
+- Use zerolog for all logging - `log` and `fmt.Println` are forbidden (depguard)
+- Use `filepath.Join` for all path construction - cross-platform compatibility
+- Handle all errors explicitly - use golangci-lint's error handling checks
+- Use afero for filesystem operations in testable code
+- Use absolute imports with full module path `github.com/ZaparooProject/zaparoo-core/v2`
+- Add GPL-3.0-or-later license headers on all new files (goheader linter)
 
 ### Don't
 
-- ❌ Use standard `log` or `fmt.Println` (use zerolog instead)
-- ❌ Run file-level golangci-lint (use `task lint-fix` or package-level commands)
-- ❌ Add new dependencies without discussion
-- ❌ Run full test suite unless needed (prefer file-scoped: `go test ./pkg/specific/`)
-- ❌ Skip writing tests for new features or bug fixes
-- ❌ Make large, unfocused diffs - keep changes small and targeted
-- ❌ Write comments that restate what the code does - comments should explain *why*, not *what*
-- ❌ Attempt to run builds, lints, or tests for another OS (e.g., `GOOS=windows`) - CGO dependencies mean these only work on the current OS. Files for other platforms will be silently skipped. **Rely on CI to report issues for other platforms.**
-
-### Code Quality
-
-- **Use Go 1.24.11+** with Go modules enabled
-- **Handle all errors explicitly** - use golangci-lint's error handling checks
-- **Use explicit returns** in functions longer than 5 lines (avoid naked returns)
-- **Keep functions small** and focused on single responsibility
-- **Keep diffs small and focused** - one concern per change
-- **Reference existing code patterns** before writing new code - consistency matters
-
-### Logging & Output
-
-- **Use zerolog for all logging** - standard `log` and `fmt.Println` are not allowed (enforced by depguard)
-- **Log at appropriate levels** - debug, info, warn, error
+- Use standard `log` or `fmt.Println` (use zerolog instead)
+- Run file-level golangci-lint (use `task lint-fix` or package-level commands)
+- Add new dependencies without discussion
+- Run full test suite unless needed (prefer file-scoped: `go test ./pkg/specific/`)
+- Skip writing tests for new features or bug fixes
+- Write comments that restate what the code does - comments should explain *why*, not *what*
+- Amend commits - always prefer to create new commits
+- **Attempt to run builds, lints, or tests for another OS** (e.g., `GOOS=windows`) - CGO dependencies mean these only work on the current OS. Rely on CI for other platforms.
 
 ### Testing
 
-**The goal is useful tests, not coverage metrics.** High coverage means nothing if tests don't catch bugs.
+Full guide: [TESTING.md](TESTING.md) | Quick reference: `pkg/testing/README.md`
 
-#### What to Test
-- **Business logic and algorithms** - the core value of your code
-- **Edge cases and error paths** - where bugs hide
-- **Integration points** - database queries, API responses
-- **State transitions** - multi-step workflows
-- **Regression scenarios** - any bug that was fixed
+The goal is useful tests, not coverage metrics. High coverage means nothing if tests don't catch bugs.
 
-#### What NOT to Test
-- ❌ **Library functions** - don't test that `strings.Split` works
-- ❌ **Simple getters/setters** - trivial code with no logic
-- ❌ **Third-party code** - don't verify its internals
-- ❌ **Implementation details** - test behavior, not how it's done
-- ❌ **Obvious code** - `if err != nil { return err }` doesn't need a test
+**What to test**: Business logic and algorithms, edge cases and error paths, integration points (DB queries, API responses), state transitions, regression scenarios.
 
-#### How to Test
-- **Mock at interface boundaries** - all hardware interactions must be mocked
-- **Use existing mocks/fixtures** from `pkg/testing/` instead of creating new ones
-- **Write sqlmock tests** for all direct SQL operations
-- **Use `t.Parallel()`** in tests when safe to run concurrently
-- **Run file-scoped tests** for faster feedback (see Commands section below)
-- **Commit regression files** - both rapid `.fail` files and fuzz corpus entries are valuable regression tests
+**What NOT to test**: Library functions, simple getters/setters, third-party internals, implementation details, obvious code like `if err != nil { return err }`.
 
-#### Test Quality Checklist
-- Would this test catch a real bug?
-- Does it test behavior the user/caller cares about?
-- Is this testing MY code or a library's code?
+**How to test**:
+- Mock at interface boundaries - all hardware interactions must be mocked
+- Use existing mocks/fixtures from `pkg/testing/` instead of creating new ones
+- Write sqlmock tests for all direct SQL operations
+- Use `t.Parallel()` unless tests share state
+- Use table-driven tests for multiple scenarios
+- Verify mock expectations with `AssertExpectations(t)`
+- Commit regression files - both rapid `.fail` files and fuzz corpus entries
 
-### File Paths & Filesystem
+**Mock setup pattern**:
 
-- **Use filepath.Join** for all file path construction - ensures cross-platform compatibility
-- **Use afero** for filesystem operations in testable code
-- **Use absolute imports** with full module path `github.com/ZaparooProject/zaparoo-core/v2`
+```go
+import (
+    "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+    "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+    "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
+)
+
+mockPlatform := mocks.NewMockPlatform()
+mockReader := mocks.NewMockReader()
+mockUserDB := helpers.NewMockUserDBI()
+mockMediaDB := helpers.NewMockMediaDBI()
+```
+
+See Commands section for test invocations.
 
 ### Dependencies & State
 
-- **Discuss new dependencies** before adding them - keep the dependency tree lean
-- **Protect global state** with sync.RWMutex or atomic operations
-- **Use context** for cancellation and timeouts in long-running operations
+- Discuss new dependencies before adding them - keep the dependency tree lean
+- Protect global state with syncutil.RWMutex or atomic operations
+- **Use `syncutil.Mutex`/`syncutil.RWMutex`** instead of `sync.Mutex`/`sync.RWMutex` (forbidigo linter, deadlock detection)
+- Use context for cancellation and timeouts in long-running operations
 
 ### Compatibility & Migration
 
-- **Maintain backward compatibility** in config schema - use migrations for breaking changes
-- **Plan migrations** before modifying database schemas (SchemaVersion)
-
-### Code Hygiene
-
-- **Follow GPL-3.0-or-later license** header format on all new files
-- **Run `task lint-fix`** before committing to auto-fix linting issues
-- **Default to small components** - prefer focused modules over monolithic files
+- Maintain backward compatibility in config schema - use migrations for breaking changes
+- Plan migrations before modifying database schemas (SchemaVersion)
 
 ## Commands
 
@@ -115,15 +135,15 @@ go test -run TestSpecificFunction ./pkg/api/
 # Test with race detection
 go test -race ./pkg/service/tokens/
 
-# Lint and format - ALWAYS prefer task commands
-task lint-fix                          # PREFERRED: Full project lint with auto-fixes
+# Lint and format - prefer task commands
+task lint-fix                          # Full project lint with auto-fixes
 
 # Package-level linting (only when file-scoped is needed)
 golangci-lint run --fix pkg/service/   # Package level OK
 golangci-lint run pkg/database/        # Package level OK
 
-# ❌ NEVER use file-level golangci-lint - not well supported
-# golangci-lint run pkg/config/config.go  # DON'T DO THIS
+# DON'T use file-level golangci-lint - not well supported
+# golangci-lint run pkg/config/config.go
 
 # Run single test by name
 go test -run TestTokenProcessing ./pkg/service/
@@ -142,40 +162,11 @@ govulncheck ./pkg/api/...
 ### Project-wide commands
 
 ```bash
-# Full test suite with race detection
-task test
-
-# Full lint with auto-fixes
-task lint-fix
-
-# Security vulnerability scan
-task vulncheck
-
-# Nil-pointer analysis
-task nilcheck
-
-# Platform-specific build examples
-task linux:build-amd64
-task windows:build-amd64
-task mister:build-arm
-task batocera:build-arm64
+task test           # Full test suite with race detection
+task lint-fix       # Full lint with auto-fixes
+task vulncheck      # Security vulnerability scan
+task nilcheck       # Nil-pointer analysis
 ```
-
-## When Stuck
-
-**Don't guess - ask for help or gather more information first.**
-
-- **Ask clarifying questions** - Get requirements clear before coding
-- **Propose a plan first** - Outline approach, then implement
-- **Use extended thinking** - For complex problems, think through the solution systematically
-- **Reference existing patterns** - Check similar code in the codebase for consistency
-- **Consult TESTING.md** - For comprehensive testing guidance
-- **Check pkg/testing/examples/** - For real-world test patterns
-- **Look at git history** - `git log -p filename` shows how code evolved
-- **Use subagents** - Delegate exploration and verification tasks when appropriate
-- **Keep scope focused** - Small, well-defined changes are easier to review and debug
-
-**Remember**: It's better to ask than to make incorrect assumptions. The project values correctness over speed.
 
 ## Project Structure
 
@@ -188,17 +179,19 @@ zaparoo-core/
 │   ├── api/             # WebSocket/HTTP JSON-RPC server
 │   │   ├── methods/     # RPC method handlers
 │   │   └── models/      # API data models
+│   ├── assets/          # Embedded static files (Zaparoo App web build)
 │   ├── audio/           # Cross-platform audio playback (beep-based)
 │   ├── config/          # Configuration management (TOML-based)
 │   ├── database/        # Dual database system
 │   │   ├── userdb/      # User mappings, history, playlists
-│   │   └── mediadb/     # Indexed media content
+│   │   ├── mediadb/     # Indexed media content
+│   │   └── mediascanner/ # Media indexing engine
 │   ├── platforms/       # 12 platform implementations
 │   ├── readers/         # 11 reader type drivers
 │   ├── service/         # Core business logic
 │   │   ├── tokens/      # Token processing
 │   │   └── playlists/   # Playlist management
-│   ├── testing/         # Testing infrastructure ⭐
+│   ├── testing/         # Testing infrastructure
 │   │   ├── README.md    # Quick reference for all testing utilities
 │   │   ├── mocks/       # Pre-built mocks for all major interfaces
 │   │   ├── helpers/     # Testing utilities (DB, FS, API)
@@ -208,22 +201,9 @@ zaparoo-core/
 └── Taskfile.dist.yml    # Build and development tasks
 ```
 
-## Audio System
+### Reference Files
 
-Zaparoo uses **malgo** (gen2brain/malgo) for cross-platform hardware audio output and **beep** (gopxl/beep/v2) for audio decoding.
-
-### Overview
-
-- **Location**: `pkg/audio/audio.go`
-- **Supported platforms**: All 12 platforms (Linux, Windows, macOS, MiSTer, MiSTeX, Batocera, etc.)
-- **Audio formats**: WAV, MP3, FLAC, Vorbis (beep handles decoding)
-- **Sample rate**: Resampled to 48000 Hz for HDMI audio compatibility (MiSTer, etc.)
-- **Playback**: Fire-and-forget asynchronous - audio devices are created and released per-playback
-- **Cancellation**: New sounds automatically cancel any currently playing sound
-
-## Good Examples to Follow
-
-**Copy these patterns for new code:**
+Copy these patterns for new code:
 
 - **Tests**: `pkg/testing/examples/service_token_processing_test.go` - Complete test pattern with mocks
 - **Tests**: `pkg/testing/examples/mock_usage_example_test.go` - How to use mocks and fixtures
@@ -234,62 +214,11 @@ Zaparoo uses **malgo** (gen2brain/malgo) for cross-platform hardware audio outpu
 - **Platform**: `pkg/platforms/linux/platform.go` - Platform implementation pattern
 - **Service**: `pkg/service/tokens/tokens.go` - Service layer pattern
 
-## Testing Quick Reference
-
-**Full guide**: [TESTING.md](TESTING.md) | **Quick reference**: `pkg/testing/README.md`
-
-### Mock Setup Pattern
-
-```go
-import (
-    "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
-    "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
-    "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
-)
-
-mockPlatform := mocks.NewMockPlatform()
-mockReader := mocks.NewMockReader()
-mockUserDB := helpers.NewMockUserDBI()
-mockMediaDB := helpers.NewMockMediaDBI()
-```
-
-### Running Tests
-
-```bash
-task test                           # All tests with race detection
-task test -- -run TestName          # Specific test
-task test -- ./pkg/service/...      # Specific package
-go test -race ./pkg/service/tokens/ # Package with race detection
-```
-
-### Test Organization
-
-- **Use table-driven tests** for multiple scenarios
-- **Use `t.Parallel()`** unless tests share state
-- **Verify mock expectations** with `AssertExpectations(t)`
-- **Focus on cohesion over file size** - big test files are fine if cohesive
-
-## Code Style & Standards
-
-Following golangci-lint configuration in `.golangci.yml`:
-
-- **Line length**: 120 characters max (revive rule)
-- **Function results**: Max 3 return values (revive rule)
-- **Error handling**: All errors must be checked (errcheck, wrapcheck)
-- **Imports**: Grouped and sorted with gci formatter
-- **Formatting**: Use gofumpt (stricter than gofmt)
-- **JSON tags**: camelCase (enforced by tagliatelle)
-- **TOML tags**: snake_case (enforced by tagliatelle)
-- **Nil checks**: Comprehensive (nilnil, nilerr rules)
-- **SQL**: Close all rows/statements (sqlclosecheck, rowserrcheck)
-- **Concurrency**: Proper context usage (noctx rule)
-- **No naked returns** in long functions (nakedret rule)
-
 ## Git & Commit Guidelines
 
 ### Commit message format
 
-Zaparoo uses **Conventional Commits** format for automated semantic versioning:
+Zaparoo uses **Conventional Commits** for automated semantic versioning:
 
 ```
 <type>[optional scope]: <description>
@@ -299,112 +228,47 @@ Zaparoo uses **Conventional Commits** format for automated semantic versioning:
 [optional footer(s)]
 ```
 
-**Types** (determines version bump):
-- `feat:` - New feature (triggers **minor** version bump, e.g., 1.0.0 → 1.1.0)
-- `fix:` - Bug fix (triggers **patch** version bump, e.g., 1.0.0 → 1.0.1)
-- `docs:` - Documentation only changes (no version bump)
-- `style:` - Code style/formatting changes (no version bump)
-- `refactor:` - Code refactoring without behavior change (no version bump)
-- `perf:` - Performance improvement (triggers **patch** bump)
-- `test:` - Adding or updating tests (no version bump)
-- `build:` - Build system or dependency changes (no version bump)
-- `ci:` - CI/CD configuration changes (no version bump)
-- `chore:` - Other changes that don't modify src or test files (no version bump)
+**Primary types**:
+- `feat:` - New feature (minor bump, e.g., 1.0.0 → 1.1.0)
+- `fix:` - Bug fix (patch bump, e.g., 1.0.0 → 1.0.1)
+- `docs:` - Documentation only (no bump)
+- `refactor:` - Code change without behavior change (no bump)
 
-**Breaking changes** (triggers **major** version bump, e.g., 1.0.0 → 2.0.0):
-- Add `!` after type/scope: `feat!:` or `fix(api)!:`
-- Or add `BREAKING CHANGE:` in footer
+Also: `style`, `perf`, `test`, `build`, `ci`, `chore` (no bump except `perf` → patch)
+
+**Breaking changes** (major bump): Add `!` after type/scope (`feat!:`) or `BREAKING CHANGE:` in footer.
 
 **Examples**:
 
 ```bash
-# Good examples:
+# Good:
 git commit -m "feat: add support for new NFC reader type"
 git commit -m "fix: resolve token processing race condition"
-git commit -m "docs: update API endpoint documentation"
-git commit -m "refactor(database): improve batch inserter performance"
-git commit -m "feat(api)!: change websocket message format" # Breaking change
-git commit -m "fix: correct slug cache invalidation
+git commit -m "feat(api)!: change websocket message format"
 
-BREAKING CHANGE: slug cache now clears on all media updates"
-
-# Avoid:
-git commit -m "Fixed bug"              # Missing type, too vague
-git commit -m "feat: Add feature"       # Not descriptive enough
-git commit -m "add reader support"      # Missing type prefix
-git commit -m "feat:add reader"         # Missing space after colon
+# Bad:
+git commit -m "Fixed bug"           # Missing type, too vague
+git commit -m "add reader support"  # Missing type prefix
 ```
 
-**Scopes** (optional but recommended):
-- `api`, `database`, `config`, `reader`, `platform`, `zapscript`, etc.
-- Use package name or feature area
+**Scopes** (optional): `api`, `database`, `config`, `reader`, `platform`, `zapscript`, etc.
 
-**Tips**:
-- Use lowercase for description (after colon)
-- Use imperative mood ("add" not "added", "fix" not "fixed")
-- Keep description under 72 characters
-- Reference issues in footer: `Fixes #123` or `Closes #456`
-
-Look at recent commits with `git log --oneline -20` to match the style.
-
-### Before committing
-
-**ALWAYS run these commands in order:**
-
-```bash
-# 1. Fix all linting and formatting issues (REQUIRED)
-task lint-fix
-
-# 2. Run all tests with race detection (REQUIRED)
-task test
-
-# 3. Check for vulnerabilities (for security-sensitive changes)
-task vulncheck
-```
-
-**Note**: `task lint-fix` handles all linting, formatting, and license header checks automatically. You should not need to run golangci-lint manually.
+**Tips**: lowercase description, imperative mood ("add" not "added"), under 72 characters. Reference issues in footer: `Fixes #123`. Match style with `git log --oneline -20`.
 
 ### Commit checklist
 
-- [ ] Tests pass (`task test`)
-- [ ] Linting passes (`task lint-fix`)
-- [ ] License headers on new files
+Before committing: run **`task lint-fix`** then **`task test`** (required).
+
+- [ ] Tests pass and linting passes
 - [ ] Commit message follows Conventional Commits format
-- [ ] Commit type correctly indicates change (feat/fix/docs/etc)
 - [ ] Breaking changes marked with `!` or `BREAKING CHANGE:` footer
-- [ ] Diff is small and focused on one concern
 - [ ] No commented-out code or debug prints
-- [ ] Documentation updated if needed
 
 ### Pull request descriptions
 
-- **Do NOT include test plans** in PR descriptions - just summarize what the PR does
+- Do NOT include test plans in PR descriptions - just summarize what the PR does
 - Keep descriptions concise with bullet points
 - Reference related issues if applicable
-
-## Safety & Permissions
-
-### Allowed without asking:
-
-- Read any files in the repository
-- Run file-scoped tests: `go test ./pkg/specific/`
-- Run `task lint-fix` to fix linting and formatting issues
-- Run package-level linting: `golangci-lint run pkg/specific/`
-- Format files: `gofumpt -w file.go`
-- View git history: `git log`, `git diff`
-- Run vulnerability checks: `govulncheck ./...`
-
-### Ask before:
-
-- Installing new Go dependencies
-- Running `git push` or `git commit`
-- Deleting files or directories
-- Running full `task test` (it's slow - prefer file-scoped)
-- Running `task build` (slow - only when needed)
-- Changing the database schema or migrations
-- Modifying configuration schema (SchemaVersion)
-- Adding new platform support
-- Changing API contract (breaking changes)
 
 ## API & Architecture Notes
 
@@ -414,6 +278,12 @@ task vulncheck
 - HTTP: `http://localhost:7497/api/v0.1`
 - Default port: 7497 (configurable via config.toml)
 - Protocol: JSON-RPC 2.0
+- App UI: served at `/app/` (root `/` redirects here)
+- Launch endpoint: `/l/{zapscript}` - simplified GET-based execution for QR codes
+- Auth: API keys via `auth.toml`, anonymous access from localhost
+- Discovery: mDNS (`_zaparoo._tcp`) for automatic network detection
+- Notifications: Real-time events broadcast over WebSocket - readers connected/disconnected, tokens scanned/removed, media started/stopped, indexing progress, playtime warnings. See `docs/api/notifications.md`.
+- API docs: See `docs/api/`
 
 ### Database Architecture
 
@@ -426,8 +296,8 @@ task vulncheck
 
 - Location: `~/.config/zaparoo/config.toml`
 - Format: TOML with schema versioning
-- Thread-safe: config.Instance uses sync.RWMutex
-- **Plan migrations before schema changes** - maintain backward compatibility
+- Thread-safe: config.Instance uses syncutil.RWMutex
+- Plan migrations before schema changes - maintain backward compatibility
 
 ### Platform Detection
 
@@ -439,33 +309,13 @@ Each platform has its own entry point in `cmd/{platform}/` with platform-specifi
 
 - acr122pcsc, externaldrive, file, libnfc, mqtt, opticaldrive, pn532, pn532uart, rs232barcode, simpleserial, tty2oled
 
-## Additional Resources
+## When Stuck
 
-- **Testing**: See [TESTING.md](TESTING.md) and `pkg/testing/examples/`
-- **Testing Quick Reference**: See `pkg/testing/README.md`
-- **API Documentation**: See `docs/api/`
-- **ZapScript**: See `pkg/zapscript/`
-- **License**: GPL-3.0-or-later (see LICENSE file)
+Don't guess - ask for help or gather more information first.
 
-## Platform-Specific Build Notes
+- **Ask clarifying questions** - get requirements clear before coding
+- **Propose a plan first** - outline approach, then implement
+- **Reference existing patterns** - check similar code in the codebase for consistency
+- **Look at git history** - `git log -p filename` shows how code evolved
 
-```bash
-# Linux
-task linux:build-amd64
-
-# Windows
-task windows:build-amd64
-
-# MiSTer (ARM)
-task mister:arm
-
-# See Taskfile.dist.yml for all platform builds
-```
-
-## Remember
-
-1. **Write tests** - comprehensive test coverage is required for all new code
-2. **Small diffs** - focused changes are easier to review
-3. **File-scoped commands** - faster feedback loop
-4. **Use existing patterns** - consistency matters
-5. **Ask when uncertain** - better than wrong assumptions
+It's better to ask than to make incorrect assumptions. The project values correctness over speed.

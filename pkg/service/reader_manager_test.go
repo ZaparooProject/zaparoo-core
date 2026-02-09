@@ -71,7 +71,7 @@ func setupReaderManager(t *testing.T) *readerManagerEnv {
 	lsq := make(chan *tokens.Token, 10)
 	plq := make(chan *playlists.Playlist, 10)
 
-	go readerManager(mockPlatform, cfg, st, db, itq, lsq, plq, scanQueue, mockPlayer)
+	go readerManager(mockPlatform, cfg, st, db, itq, lsq, plq, scanQueue, mockPlayer, nil)
 
 	t.Cleanup(func() {
 		st.StopService()

@@ -4,7 +4,7 @@ Zaparoo Core's title normalization and matching system enables users to launch g
 
 ## Overview
 
-The system enables game lookups using **natural language titles** rather than exact filenames or unique identifiers. Users can write titles in various forms (with or without articles, with Roman numerals or digits, with typos, etc.) and the system will find matching games through progressive normalization and intelligent fallback strategies.
+The system lets users look up games by **natural language titles** rather than exact filenames or unique identifiers. Titles can be written in various forms (with or without articles, with Roman numerals or digits, with typos, etc.) and the system will find matching games through progressive normalization and fallback strategies.
 
 **Key Concept:** Slugs are **not IDs**. They are an intermediary normalization step that enables fuzzy matching between user queries and indexed filenames. The system normalizes both sides:
 
@@ -41,9 +41,9 @@ The system works around several constraints:
 When scanning media, Zaparoo:
 
 1. Cleans path and extracts filename (strips file extension and path)
-2. Parses filename to extract clean display title (10-step pipeline - see Filename Parser section)
+2. Parses filename to extract clean display title (8-step pipeline - see Filename Parser section)
 3. Extracts tags from filename using bracket disambiguation (4-step pipeline - see Filename Parser section)
-4. Determines media type from system (Game, TVShow, Movie, Music, etc.)
+4. Determines media type from system (Game, TVShow, Movie, Music, Image, Audio, Video, Application)
 5. Runs media-type-aware slugification on title (two-phase normalization - see Slug Normalization section)
 6. Stores path, title, slug, tags, and metadata in database for fast searching
 
@@ -78,23 +78,54 @@ Slug normalization uses a **two-phase architecture** that converts titles into a
 Applies format-specific normalization based on media type **before** universal normalization.
 
 **For Games** (`ParseGame`):
-1. Width normalization (fullwidth separators → ASCII for detection)
-2. Split titles and strip articles: "The Zelda: Link's Awakening" → "Zelda Link's Awakening"
-3. Strip trailing articles: "Legend, The" → "Legend"
-4. Strip metadata brackets: `(USA)`, `[!]`, `{Europe}` → removed
-5. Strip edition/version suffixes: "Edition", "Version", "v1.0" → removed
-6. Normalize symbols/separators (preserve commas for trailing articles)
-7. Expand abbreviations: "Bros" → "brothers", "vs" → "versus", "Dr" → "doctor"
-8. Expand number words: "one" → "1", "two" → "2" (1-20)
-9. Normalize ordinals: "2nd" → "2", "3rd" → "3"
-10. Convert roman numerals: "VII" → "7", "II" → "2" (preserves "X" in "Mega Man X")
+
+Width normalization is applied first (fullwidth separators → ASCII for detection), then 9 steps:
+
+1. Split titles and strip articles: "The Zelda: Link's Awakening" → "Zelda Link's Awakening"
+2. Strip trailing articles: "Legend, The" → "Legend"
+3. Strip metadata brackets: `(USA)`, `[!]`, `{Europe}` → removed
+4. Strip edition/version suffixes: "Edition", "Version", "v1.0" → removed
+5. Normalize symbols/separators (preserve commas for trailing articles)
+6. Expand abbreviations: "Bros" → "brothers", "vs" → "versus", "Dr" → "doctor"
+7. Expand number words: "one" → "1", "two" → "2" (1-20)
+8. Normalize ordinals: "2nd" → "2", "3rd" → "3"
+9. Convert roman numerals: "VII" → "7", "II" → "2" (preserves "X" in "Mega Man X")
 
 **For TV Shows** (`ParseTVShow`):
-- Normalizes episode formats: `S01E02` / `1x02` / `1-02` → `s01e02`
-- Preserves episode information for matching
 
-**For Movies/Music** (`ParseMovie`, `ParseMusic`):
-- Currently pass-through (future enhancement)
+Width normalization is applied first, then 9 steps:
+
+1. Scene tag stripping: quality, codec, source tags (1080p, x264, BluRay, etc.)
+2. Dot normalization: scene release dots → spaces
+3. Strip metadata brackets: `[720p]`, `(extended)` → removed
+4. Normalize date episodes: YYYY-MM-DD, DD-MM-YYYY (with `.`, `/`, `-` separators) → canonical `YYYY-MM-DD`
+5. Normalize season-based formats: `S01E02`, `s01e02`, `1x02`, `S01.E02`, `S01_E02`, multi-episode (`S01E01-E02`) → `s01e02`
+6. Normalize absolute numbering: `Episode 001`, `Ep 42`, `E001`, `#001` (anime), leading numbers → `e001`
+7. Component reordering: episode marker placed after show name ("S01E02 - Show - Title" → "Show s01e02 Title")
+8. Split titles and strip articles: "The Show: Episode Title" → "Show Episode Title"
+9. Strip trailing articles: "Show, The" → "Show"
+
+**For Movies** (`ParseMovie`):
+1. Width normalization (fullwidth separators → ASCII for detection)
+2. Scene tag stripping: quality, codec, source, HDR, 3D tags (preserves edition qualifiers like "Extended", "Unrated", "Director's Cut")
+3. Dot normalization: scene release dots → spaces
+4. Edition suffix stripping: trailing "Edition", "Version", "Cut", "Release" removed (preserves qualifiers: "Director's Cut Edition" → "Director's")
+5. Bracket stripping: `(2024)`, `{imdb-tt1234567}` → removed (years extracted as tags)
+6. Split titles and strip articles: "The Movie: Subtitle" → "Movie Subtitle"
+7. Strip trailing articles: "Movie, The" → "Movie"
+
+**For Music** (`ParseMusic`):
+1. Width normalization (fullwidth separators → ASCII for detection)
+2. Scene tag stripping: format (FLAC, MP3), quality (V0, 320, 24bit), source (CD, Vinyl, WEB), release group (preserves edition qualifiers like "Remastered", "Deluxe")
+3. Separator normalization: dots, underscores, dashes → spaces
+4. Bracket stripping: `(1979)`, `[FLAC]` → removed (years extracted as tags)
+5. Disc number stripping: CD1, CD2, Disc 1 → removed
+6. Strip leading article: "The Beatles Abbey Road" → "Beatles Abbey Road"
+7. Strip trailing articles: "Album, The" → "Album"
+8. Whitespace collapse: multiple spaces → single space
+
+**For Image/Audio/Video/Application**:
+- Pass through to Phase 2 universal normalization only (no media-specific parsing yet)
 
 #### Phase 2: Universal Normalization (`normalizeInternal`)
 
@@ -117,15 +148,15 @@ Applied after media-specific parsing:
 Input:  "The Legend of Zelda: Ocarina of Time (USA) [!]"
 
 Phase 1 (ParseGame):
-  Step 1-2: Split & strip articles → "Zelda Ocarina of Time (USA) [!]"
-  Step 4:   Strip brackets → "Zelda Ocarina of Time"
-  Step 10:  Roman numerals (none) → "Zelda Ocarina of Time"
+  Step 1: Split & strip articles → "Legend of Zelda Ocarina of Time (USA) [!]"
+  Step 3:   Strip brackets → "Legend of Zelda Ocarina of Time"
+  Step 9:   Roman numerals (none) → "Legend of Zelda Ocarina of Time"
 
 Phase 2 (normalizeInternal):
-  Step 6:   Lowercase → "zelda ocarina of time"
+  Step 6:   Lowercase → "legend of zelda ocarina of time"
 
 Final:
-  Step 7:   Filter → "legendofzeldaocarinaoftime"
+  Character filtering → "legendofzeldaocarinaoftime"
 
 Output: "legendofzeldaocarinaoftime"
 ```
@@ -170,9 +201,9 @@ When a file is indexed, the system:
 
 **Function:** `tags.ParseTitleFromFilename(filename, stripLeadingNumbers)`
 
-Extracts a clean, human-readable display title from a filename by removing metadata and normalizing artifacts.
+Extracts a clean display title from a filename by removing metadata and normalizing artifacts.
 
-#### The 10-Step Pipeline
+#### The 8-Step Pipeline
 
 1. **Remove File Extension**
    - Strips `.zip`, `.nes`, `.mkv`, etc.
@@ -217,26 +248,17 @@ Extracts a clean, human-readable display title from a filename by removing metad
    - Example: `"01 - Game Name"` → `"Game Name"`
    - **Contextual:** Only enabled when directory shows list-style numbering
 
-7. **Extract Year from Brackets**
-   - Finds year in format: `(1997)`, `(2008)`
-   - Preserves for re-appending after bracket removal
-   - Range: 1970-2099
-
-8. **Remove All Bracket Content**
+7. **Remove All Bracket Content**
    - **Function:** `slugs.StripMetadataBrackets()`
    - Removes: `()`, `[]`, `{}`, `<>`
    - Handles nested brackets
    - Example: `"Game (USA) [!] {Europe}"` → `"Game"`
+   - Example: `"Movie (2008) (Blu-ray)"` → `"Movie"`
 
-9. **Re-append Year**
-   - If year was extracted and not still present, append it
-   - Example: `"Movie (2008) (Blu-ray)"` → `"Movie 2008"`
-   - Preserves useful year information in display title
-
-10. **Normalize Whitespace**
-    - Collapses multiple spaces to single space
-    - Trims leading/trailing spaces
-    - Final cleanup after all transformations
+8. **Normalize Whitespace**
+   - Collapses multiple spaces to single space
+   - Trims leading/trailing spaces
+   - Final cleanup after all transformations
 
 ### Title Extraction Examples
 
@@ -244,9 +266,8 @@ Extracts a clean, human-readable display title from a filename by removing metad
 ```
 Input:  "Super Mario Bros. III (USA) (Rev A) [!].nes"
 Step 1: Remove extension → "Super Mario Bros. III (USA) (Rev A) [!]"
-Step 7: Extract year → (none)
-Step 8: Remove brackets → "Super Mario Bros. III"
-Step 10: Normalize → "Super Mario Bros. III"
+Step 7: Remove brackets → "Super Mario Bros. III"
+Step 8: Normalize whitespace → "Super Mario Bros. III"
 Output: "Super Mario Bros. III"
 ```
 
@@ -280,15 +301,17 @@ Extracts metadata tags from filenames following No-Intro and TOSEC conventions.
 **Step 1: Extract Special Patterns**
 - **Function:** `extractSpecialPatterns()`
 - Finds patterns that appear outside brackets:
-  - **Translations**: `T+En`, `T-Fr v1.0` → `translation:en`, `translation-:fr`
   - **Disc numbers**: `(Disc 1 of 2)` → `disc:1`, `discof:2`
   - **Revisions**: `(Rev A)`, `(Rev 1)` → `rev:a`, `rev:1`
-  - **Versions**: `(v1.2)`, `v3.0` → `version:1.2`, `version:3.0`
+  - **Volumes**: `(Vol. 2)`, `(Volume 3)` → `volume:2`
+  - **Versions**: `(v1.2)`, `v3.0` → `rev:1-2`, `rev:3-0`
   - **Years**: `(1997)` → `year:1997`
-  - **Episodes**: `S01E02`, `1x05` → `season:01`, `episode:02`
+  - **Episodes**: `S01E02`, `1x05` → `season:1`, `episode:2`
   - **Issues**: `#12`, `Issue 5` → `issue:12`
-  - **Tracks**: `01 -`, `Track 03` → `track:01`
-  - **Volumes**: `(Vol. 2)` → `volume:2`
+  - **Tracks**: `01 -`, `Track 03` → `track:1`
+  - **Translations**: `T+En`, `T-Fr v1.0` → `translation:en`, `translation-:fr`
+  - **Bracketless versions**: `v1.0`, `v1.2.3` outside brackets → `rev:1-0` (only if no version already extracted)
+  - **Edition/version words**: "Edition", "Version" (+ multi-language equivalents) → `edition:edition` or `edition:version` (inferred, not removed from title)
 - Removes matched patterns from string for cleaner bracket extraction
 
 **Step 2: Extract Bracket Content**
@@ -407,7 +430,7 @@ The system uses **positional** and **bracket-type** rules for disambiguation:
 
 ## Matching Strategies
 
-Resolution tries strategies **in order** until finding results. Each strategy becomes progressively more lenient.
+Resolution tries strategies **in order** until finding results. Each strategy is more lenient than the last.
 
 **Implementation:** `pkg/zapscript/titles.go` → `cmdTitle()`
 
@@ -496,7 +519,7 @@ Base confidence from strategy (0.85-1.0) is adjusted by tag matching:
 ### Filtering Priority
 
 1. **User-specified tags** - Filter to exact matches (if provided)
-2. **Exclude variants** - Remove demos, betas, hacks, translations, bad dumps
+2. **Exclude variants** - Remove unfinished (demo, beta, proto, alpha, sample, preview, prerelease), unlicensed (hack, translation, bootleg, clone), and bad dumps
 3. **Exclude re-releases** - Remove reboxed editions, re-releases
 4. **Preferred regions** - Match user's region config
 5. **Preferred languages** - Match user's language config
@@ -511,7 +534,7 @@ Base confidence from strategy (0.85-1.0) is adjusted by tag matching:
 
 ## Tag System
 
-Tags provide additional filtering and disambiguation during both indexing and resolution.
+Tags are used for filtering and disambiguation during indexing and resolution.
 
 ### Tag Extraction (During Indexing)
 

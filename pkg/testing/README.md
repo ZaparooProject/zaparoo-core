@@ -239,13 +239,6 @@ The `fixtures/` directory provides pre-built test data:
 - `fixtures.SamplePlaylists()` - Pre-defined playlist data
 - `fixtures.HistoryEntries` - Pre-populated history entries
 
-## Integration with TDD Guard
-
-All tests are monitored by TDD Guard for strict test-driven development:
-- Use `task test` instead of `go test` for TDD integration
-- Write failing tests first, then implement features
-- TDD Guard ensures code changes are driven by test failures
-
 ## Best Practices
 
 1. **Always use `t.Parallel()`** for independent tests
