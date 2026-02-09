@@ -787,6 +787,16 @@ func (r *Reader) pollDevice(
 func (r *Reader) writeTag(req WriteRequest) {
 	log.Info().Msgf("libnfc write request: %s", req.Text)
 
+	r.mu.RLock()
+	pnd := r.pnd
+	r.mu.RUnlock()
+	if pnd == nil {
+		req.Result <- WriteRequestResult{
+			Err: errors.New("device closed"),
+		}
+		return
+	}
+
 	r.activeWriteMu.Lock()
 	if r.activeWrite != nil {
 		log.Warn().Msgf("write already in progress")
@@ -827,7 +837,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 			// continue with reading
 		}
 
-		count, target, err = r.pnd.InitiatorPollTarget(
+		count, target, err = pnd.InitiatorPollTarget(
 			tags.SupportedCardTypes,
 			timesToPoll,
 			periodBetweenPolls,
@@ -860,7 +870,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 
 	switch cardType {
 	case tokens.TypeMifare:
-		bytesWritten, err = tags.WriteMifare(*r.pnd, req.Text, cardUID)
+		bytesWritten, err = tags.WriteMifare(*pnd, req.Text, cardUID)
 		if err != nil {
 			log.Error().Msgf("error writing to mifare: %s", err)
 			req.Result <- WriteRequestResult{
@@ -869,7 +879,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 			return
 		}
 	case tokens.TypeNTAG:
-		bytesWritten, err = tags.WriteNtag(*r.pnd, req.Text)
+		bytesWritten, err = tags.WriteNtag(*pnd, req.Text)
 		if err != nil {
 			log.Error().Msgf("error writing to ntag: %s", err)
 			req.Result <- WriteRequestResult{
@@ -889,7 +899,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 	var t *tokens.Token
 	for i := range verificationTries {
 		var verifyErr error
-		t, _, verifyErr = r.pollDevice(r.pnd, nil, timesToPoll, periodBetweenPolls)
+		t, _, verifyErr = r.pollDevice(pnd, nil, timesToPoll, periodBetweenPolls)
 		if verifyErr == nil && t != nil {
 			break
 		}
