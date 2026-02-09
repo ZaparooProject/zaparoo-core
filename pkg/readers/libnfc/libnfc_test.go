@@ -345,3 +345,162 @@ func TestOpenConnectionStringTranslation(t *testing.T) {
 		})
 	}
 }
+
+// TestToLibnfcConnStr verifies that internal connection strings are translated
+// to the libnfc format with underscored driver names (e.g. "pn532_i2c").
+// Regression test: libnfc requires underscores in driver names but the internal
+// ConnectionString() normalization strips them, causing nfc.Open() to fail with
+// "cannot open NFC device".
+func TestToLibnfcConnStr(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+		mode     readerMode
+	}{
+		// Legacy I2C mode — the primary bug that was reported
+		{
+			name:     "legacy i2c from config",
+			mode:     modeLegacyI2C,
+			input:    "legacypn532i2c:/dev/i2c-2",
+			expected: "pn532_i2c:/dev/i2c-2",
+		},
+		{
+			name:     "legacy i2c bus 1",
+			mode:     modeLegacyI2C,
+			input:    "legacypn532i2c:/dev/i2c-1",
+			expected: "pn532_i2c:/dev/i2c-1",
+		},
+
+		// Legacy UART mode
+		{
+			name:     "legacy uart from config",
+			mode:     modeLegacyUART,
+			input:    "legacypn532uart:/dev/ttyUSB0",
+			expected: "pn532_uart:/dev/ttyUSB0",
+		},
+		{
+			name:     "legacy uart ttyACM device",
+			mode:     modeLegacyUART,
+			input:    "legacypn532uart:/dev/ttyACM0",
+			expected: "pn532_uart:/dev/ttyACM0",
+		},
+
+		// Default mode (non-legacy libnfc reader)
+		{
+			name:     "default mode i2c",
+			mode:     modeAll,
+			input:    "pn532i2c:/dev/i2c-2",
+			expected: "pn532_i2c:/dev/i2c-2",
+		},
+		{
+			name:     "default mode uart",
+			mode:     modeAll,
+			input:    "pn532uart:/dev/ttyUSB0",
+			expected: "pn532_uart:/dev/ttyUSB0",
+		},
+
+		// Passthrough cases — strings that shouldn't be changed
+		{
+			name:     "acr122 mode passthrough",
+			mode:     modeACR122Only,
+			input:    "libnfcauto:",
+			expected: "libnfcauto:",
+		},
+		{
+			name:     "empty string passthrough",
+			mode:     modeAll,
+			input:    "",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := toLibnfcConnStr(tt.mode, tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestToLibnfcConnStrEndToEnd verifies the full pipeline from user config
+// (ReadersConnect) through ConnectionString() normalization to libnfc format.
+func TestToLibnfcConnStrEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		device   config.ReadersConnect
+		name     string
+		expected string
+		mode     readerMode
+	}{
+		{
+			name: "legacy_pn532_i2c config to libnfc",
+			mode: modeLegacyI2C,
+			device: config.ReadersConnect{
+				Driver: "legacy_pn532_i2c",
+				Path:   "/dev/i2c-2",
+			},
+			expected: "pn532_i2c:/dev/i2c-2",
+		},
+		{
+			name: "legacypn532i2c config to libnfc",
+			mode: modeLegacyI2C,
+			device: config.ReadersConnect{
+				Driver: "legacypn532i2c",
+				Path:   "/dev/i2c-2",
+			},
+			expected: "pn532_i2c:/dev/i2c-2",
+		},
+		{
+			name: "legacy_pn532_uart config to libnfc",
+			mode: modeLegacyUART,
+			device: config.ReadersConnect{
+				Driver: "legacy_pn532_uart",
+				Path:   "/dev/ttyUSB0",
+			},
+			expected: "pn532_uart:/dev/ttyUSB0",
+		},
+		{
+			name: "legacypn532uart config to libnfc",
+			mode: modeLegacyUART,
+			device: config.ReadersConnect{
+				Driver: "legacypn532uart",
+				Path:   "/dev/ttyUSB0",
+			},
+			expected: "pn532_uart:/dev/ttyUSB0",
+		},
+		{
+			name: "pn532_i2c config to libnfc (default mode)",
+			mode: modeAll,
+			device: config.ReadersConnect{
+				Driver: "pn532_i2c",
+				Path:   "/dev/i2c-1",
+			},
+			expected: "pn532_i2c:/dev/i2c-1",
+		},
+		{
+			name: "pn532_uart config to libnfc (default mode)",
+			mode: modeAll,
+			device: config.ReadersConnect{
+				Driver: "pn532_uart",
+				Path:   "/dev/ttyUSB0",
+			},
+			expected: "pn532_uart:/dev/ttyUSB0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			connStr := tt.device.ConnectionString()
+			result := toLibnfcConnStr(tt.mode, connStr)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

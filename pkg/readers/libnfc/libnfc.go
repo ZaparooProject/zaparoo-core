@@ -195,19 +195,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		log.Debug().Msgf("opening device: %s", connStr)
 	}
 
-	// Translate legacy connection strings to libnfc format
-	switch r.mode {
-	case modeLegacyUART:
-		connStr = strings.Replace(connStr, "legacypn532uart:", "pn532uart:", 1)
-		connStr = strings.Replace(connStr, "legacy_pn532_uart:", "pn532uart:", 1)
-		connStr = strings.Replace(connStr, "pn532_uart:", "pn532uart:", 1)
-	case modeLegacyI2C:
-		connStr = strings.Replace(connStr, "legacypn532i2c:", "pn532i2c:", 1)
-		connStr = strings.Replace(connStr, "legacy_pn532_i2c:", "pn532i2c:", 1)
-		connStr = strings.Replace(connStr, "pn532_i2c:", "pn532i2c:", 1)
-	default:
-		// No translation needed for other modes
-	}
+	connStr = toLibnfcConnStr(r.mode, connStr)
 
 	pnd, err := openDeviceWithRetries(connStr)
 	if err != nil {
@@ -374,15 +362,13 @@ func (r *Reader) Detect(connected []string) string {
 		// Only detect UART devices, return with legacy prefix
 		device := detectSerialReaders(connected)
 		if device != "" && !helpers.Contains(connected, device) {
-			// Replace pn532uart: with legacypn532uart:
-			return strings.Replace(device, "pn532uart:", "legacypn532uart:", 1)
+			return strings.Replace(device, "pn532_uart:", "legacypn532uart:", 1)
 		}
 	case modeLegacyI2C:
 		// Only detect I2C devices, return with legacy prefix
 		device := detectI2CReaders(connected)
 		if device != "" && !helpers.Contains(connected, device) {
-			// Replace pn532i2c: with legacypn532i2c:
-			return strings.Replace(device, "pn532i2c:", "legacypn532i2c:", 1)
+			return strings.Replace(device, "pn532_i2c:", "legacypn532i2c:", 1)
 		}
 	default:
 		// Default mode - detect UART/I2C serial devices
@@ -500,7 +486,7 @@ func detectSerialReaders(connected []string) string {
 	for _, device := range devices {
 		// the libnfc open is extremely disruptive to other devices, we want
 		// to minimise the number of times we try to open a device
-		connStr := "pn532uart:" + device
+		connStr := "pn532_uart:" + device
 
 		// ignore if device is in block list
 		serialCacheMu.RLock()
@@ -586,7 +572,7 @@ func detectI2CReaders(connected []string) string {
 			continue
 		}
 
-		connStr := "pn532i2c:" + device
+		connStr := "pn532_i2c:" + device
 
 		// ignore if device is in block list
 		i2cCacheMu.RLock()
@@ -629,6 +615,23 @@ func detectI2CReaders(connected []string) string {
 	}
 
 	return ""
+}
+
+// toLibnfcConnStr translates internal normalized connection strings to the
+// format expected by libnfc. libnfc driver names use underscores
+// (e.g. "pn532_i2c", "pn532_uart") but ConnectionString() strips them for
+// internal driver matching.
+func toLibnfcConnStr(mode readerMode, connStr string) string {
+	switch mode {
+	case modeLegacyUART:
+		return strings.Replace(connStr, "legacypn532uart:", "pn532_uart:", 1)
+	case modeLegacyI2C:
+		return strings.Replace(connStr, "legacypn532i2c:", "pn532_i2c:", 1)
+	default:
+		connStr = strings.Replace(connStr, "pn532uart:", "pn532_uart:", 1)
+		connStr = strings.Replace(connStr, "pn532i2c:", "pn532_i2c:", 1)
+		return connStr
+	}
 }
 
 func openDeviceWithRetries(device string) (nfc.Device, error) {
