@@ -21,6 +21,7 @@ package service
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -49,14 +50,14 @@ const (
 )
 
 type scanBehaviorEnv struct {
-	st        *state.State
-	cfg       *config.Instance
-	scanQueue chan readers.Scan
-	clock     *clockwork.FakeClock
-
+	st         *state.State
+	cfg        *config.Instance
+	scanQueue  chan readers.Scan
+	clock      *clockwork.FakeClock
 	launchCh   chan string
 	stopCh     chan struct{}
 	keyboardCh chan string
+	romsDir    string
 }
 
 func setupScanBehavior(
@@ -66,8 +67,11 @@ func setupScanBehavior(
 ) *scanBehaviorEnv {
 	t.Helper()
 
+	tmpDir := t.TempDir()
+	romsDir := filepath.Join(tmpDir, "roms")
+
 	fs := testhelpers.NewMemoryFS()
-	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	cfg, err := testhelpers.NewTestConfig(fs, tmpDir)
 	require.NoError(t, err)
 
 	cfg.SetScanMode(scanMode)
@@ -186,6 +190,7 @@ func setupScanBehavior(
 		cfg:        cfg,
 		scanQueue:  scanQueue,
 		clock:      fakeClock,
+		romsDir:    romsDir,
 		launchCh:   launchCh,
 		stopCh:     stopCh,
 		keyboardCh: keyboardCh,
@@ -193,6 +198,11 @@ func setupScanBehavior(
 }
 
 // --- Scan helpers ---
+
+// gamePath returns a platform-appropriate absolute path for a game file.
+func (env *scanBehaviorEnv) gamePath(name string) string {
+	return filepath.Join(env.romsDir, name)
+}
 
 func (env *scanBehaviorEnv) sendGameScan(uid, path string) {
 	env.scanQueue <- readers.Scan{
@@ -349,7 +359,7 @@ func TestScanBehavior_Tap_RemovalDoesNotCloseGame(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 
 	env.sendRemoval()
@@ -360,11 +370,11 @@ func TestScanBehavior_Tap_DuplicateSuppression(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 
 	// Same card again — should be suppressed.
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.expectNoLaunch(t)
 }
 
@@ -372,11 +382,11 @@ func TestScanBehavior_Tap_DifferentCardLaunchesDirectly(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
 
-	env.sendGameScan("gameA", "/mock/roms/gameA.rom")
-	require.Equal(t, "/mock/roms/gameA.rom", env.waitForLaunch(t))
+	env.sendGameScan("gameA", env.gamePath("gameA.rom"))
+	require.Equal(t, env.gamePath("gameA.rom"), env.waitForLaunch(t))
 
-	env.sendGameScan("gameB", "/mock/roms/gameB.rom")
-	require.Equal(t, "/mock/roms/gameB.rom", env.waitForLaunch(t))
+	env.sendGameScan("gameB", env.gamePath("gameB.rom"))
+	require.Equal(t, env.gamePath("gameB.rom"), env.waitForLaunch(t))
 
 	select {
 	case <-env.stopCh:
@@ -389,13 +399,13 @@ func TestScanBehavior_Tap_SameCardAfterRemoveReloads(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 
 	env.sendRemoval()
 
 	// Re-tap same card — should launch again (prevToken cleared by removal).
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 }
 
@@ -403,7 +413,7 @@ func TestScanBehavior_Tap_CommandDoesNotInterruptGame(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 
 	env.sendCommandScan("cmd1", "**input.keyboard:coin")
@@ -416,20 +426,20 @@ func TestScanBehavior_Tap_ManualExitResetsState(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
 
-	env.sendGameScan("gameA", "/mock/roms/gameA.rom")
+	env.sendGameScan("gameA", env.gamePath("gameA.rom"))
 	env.waitForLaunch(t)
 
 	env.simulateManualExit()
 
-	env.sendGameScan("gameB", "/mock/roms/gameB.rom")
-	require.Equal(t, "/mock/roms/gameB.rom", env.waitForLaunch(t))
+	env.sendGameScan("gameB", env.gamePath("gameB.rom"))
+	require.Equal(t, env.gamePath("gameB.rom"), env.waitForLaunch(t))
 }
 
 func TestScanBehavior_Tap_ManualExitWithCardNoRelaunch(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeTap, 0)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 
 	// User manually exits — card still on reader (no removal sent).
@@ -445,7 +455,7 @@ func TestScanBehavior_HoldImmediate_RemovalClosesGame(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 0)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 	// Wait for the software token roundtrip through lsq before removal,
 	// otherwise the 0s timer fires before software token is set.
@@ -459,7 +469,7 @@ func TestScanBehavior_HoldImmediate_ManualExitNoRelaunch(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 0)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 
 	// User manually exits while card is still on reader.
@@ -471,7 +481,7 @@ func TestScanBehavior_HoldImmediate_ManualExitThenRemoveNoReload(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 0)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 
 	env.simulateManualExit()
@@ -489,7 +499,7 @@ func TestScanBehavior_HoldDelayed_RemovalClosesAfterDelay(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 5)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 	env.waitForSoftwareToken(t)
 
@@ -504,12 +514,12 @@ func TestScanBehavior_HoldDelayed_ReinsertCancelsExit(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 5)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 	env.waitForSoftwareToken(t)
 
 	env.sendRemoval()
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForActiveCard(t, "game1")
 	env.waitForTimerStopped(t)
 
@@ -522,20 +532,20 @@ func TestScanBehavior_HoldDelayed_DifferentCardLaunchesImmediately(t *testing.T)
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 5)
 
-	env.sendGameScan("gameA", "/mock/roms/gameA.rom")
-	require.Equal(t, "/mock/roms/gameA.rom", env.waitForLaunch(t))
+	env.sendGameScan("gameA", env.gamePath("gameA.rom"))
+	require.Equal(t, env.gamePath("gameA.rom"), env.waitForLaunch(t))
 	env.waitForSoftwareToken(t)
 
 	env.sendRemoval()
-	env.sendGameScan("gameB", "/mock/roms/gameB.rom")
-	require.Equal(t, "/mock/roms/gameB.rom", env.waitForLaunch(t))
+	env.sendGameScan("gameB", env.gamePath("gameB.rom"))
+	require.Equal(t, env.gamePath("gameB.rom"), env.waitForLaunch(t))
 }
 
 func TestScanBehavior_HoldDelayed_CommandResetsCountdown(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 5)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 	env.waitForSoftwareToken(t)
 
@@ -560,7 +570,7 @@ func TestScanBehavior_HoldDelayed_CommandResetsCountdown(t *testing.T) {
 	env.expectNoStop(t)
 
 	// Reinsert original game card — cancels timer, session continues.
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForActiveCard(t, "game1")
 	env.waitForTimerStopped(t)
 
@@ -572,7 +582,7 @@ func TestScanBehavior_HoldDelayed_ManualExitNoRelaunch(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 5)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 
 	env.simulateManualExit()
@@ -583,7 +593,7 @@ func TestScanBehavior_HoldDelayed_ManualExitThenRemoveNoReload(t *testing.T) {
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 5)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 
 	env.simulateManualExit()
@@ -596,7 +606,7 @@ func TestScanBehavior_HoldDelayed_ManualExitDuringCountdownCancels(t *testing.T)
 	t.Parallel()
 	env := setupScanBehavior(t, config.ScanModeHold, 5)
 
-	env.sendGameScan("game1", "/mock/roms/game.rom")
+	env.sendGameScan("game1", env.gamePath("game.rom"))
 	env.waitForLaunch(t)
 	env.waitForSoftwareToken(t)
 

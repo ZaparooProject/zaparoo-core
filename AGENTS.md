@@ -72,6 +72,7 @@ When working on the API, notifications, or media features, remember the App is t
 - Run full test suite unless needed (prefer file-scoped: `go test ./pkg/specific/`)
 - Skip writing tests for new features or bug fixes
 - Write comments that restate what the code does - comments should explain *why*, not *what*
+- Amend commits - always prefer to create new commits
 - **Attempt to run builds, lints, or tests for another OS** (e.g., `GOOS=windows`) - CGO dependencies mean these only work on the current OS. Rely on CI for other platforms.
 
 ### Testing
