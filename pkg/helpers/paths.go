@@ -139,6 +139,12 @@ func PathIsLauncher(
 		}
 
 		if !inRoot && !isAbs {
+			log.Trace().
+				Str("launcher", l.ID).
+				Str("path", path).
+				Strs("folders", l.Folders).
+				Strs("rootDirs", rootDirs).
+				Msg("path not in any launcher folder (root or absolute)")
 			return false
 		}
 	}
@@ -154,6 +160,11 @@ func PathIsLauncher(
 		if l.Test != nil {
 			return l.Test(cfg, lp)
 		}
+		log.Trace().
+			Str("launcher", l.ID).
+			Str("path", path).
+			Strs("extensions", l.Extensions).
+			Msg("path extension did not match any launcher extension")
 		return false
 	}
 

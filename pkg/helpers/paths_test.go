@@ -527,10 +527,6 @@ func TestGetPathExt(t *testing.T) {
 	}
 }
 
-// Note: PathIsLauncher tests are in the integration tests (pkg/database/mediascanner)
-// to avoid import cycles with the platforms package. The function is thoroughly tested
-// through those integration tests which exercise all code paths.
-
 // TestGetPathInfo_VirtualPathEdgeCases tests edge cases in GetPathInfo with virtual paths
 // that could cause issues with encoding/decoding, parsing, or display
 func TestGetPathInfo_VirtualPathEdgeCases(t *testing.T) {
