@@ -1244,6 +1244,418 @@ func TestAnyScannerProgressUpdates(t *testing.T) {
 	}
 }
 
+// TestGetSystemPaths_CustomLauncherAbsolutePaths tests that GetSystemPaths returns
+// valid paths for a custom launcher with absolute Folders pointing to real temp directories.
+func TestGetSystemPaths_CustomLauncherAbsolutePaths(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create temp directories to simulate custom launcher media dirs
+	ps2Dir := t.TempDir()
+
+	// Create test files in the directory
+	require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, "game1.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, "game2.iso"), []byte("test"), 0o600))
+
+	// Create a custom launcher with absolute path Folders
+	launcher := platforms.Launcher{
+		ID:         "custom-ps2",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{ps2Dir},
+		Extensions: []string{".iso", ".bin"},
+	}
+
+	// Create config
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock platform
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	// Initialize launcher cache
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Call GetSystemPaths with no root folders (custom launchers use absolute paths)
+	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
+	results := GetSystemPaths(cfg, platform, []string{}, systems)
+
+	// The custom launcher's absolute folder should be resolved
+	require.Len(t, results, 1, "Should find exactly one path for PS2 custom launcher")
+	assert.Equal(t, systemdefs.SystemPS2, results[0].System.ID)
+	assert.Equal(t, ps2Dir, results[0].Path)
+}
+
+// TestGetFiles_CustomLauncherMatchesFiles is the critical reproduction test:
+// it verifies that GetFiles() actually finds and matches files when walking
+// a directory from a custom launcher with absolute paths.
+func TestGetFiles_CustomLauncherMatchesFiles(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create temp directory with test files
+	ps2Dir := t.TempDir()
+	testFiles := []string{"Final Fantasy X.iso", "Metal Gear Solid 3.iso", "Shadow of the Colossus.bin"}
+	for _, f := range testFiles {
+		require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, f), []byte("test"), 0o600))
+	}
+	// Also create a file that should NOT match
+	require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, "readme.txt"), []byte("test"), 0o600))
+
+	// Create a custom launcher with absolute path
+	launcher := platforms.Launcher{
+		ID:         "custom-ps2",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{ps2Dir},
+		Extensions: []string{".iso", ".bin"},
+	}
+
+	// Create config
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock platform - RootDirs is needed by PathIsLauncher for root-relative folder matching
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	// Initialize launcher cache
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Call GetFiles with the custom launcher's directory
+	ctx := context.Background()
+	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemPS2, ps2Dir)
+	require.NoError(t, err)
+
+	// Should find all matching files (.iso and .bin) but not .txt
+	assert.Len(t, files, 3, "Should find 3 matching files (.iso and .bin)")
+
+	// Verify the right files were found
+	foundFiles := make(map[string]bool)
+	for _, f := range files {
+		foundFiles[filepath.Base(f)] = true
+	}
+	assert.True(t, foundFiles["Final Fantasy X.iso"])
+	assert.True(t, foundFiles["Metal Gear Solid 3.iso"])
+	assert.True(t, foundFiles["Shadow of the Colossus.bin"])
+	assert.False(t, foundFiles["readme.txt"], "Non-matching extension should be excluded")
+}
+
+// TestGetFiles_CustomLauncherNestedDirectories verifies that GetFiles walks
+// subdirectories within a custom launcher's absolute path.
+func TestGetFiles_CustomLauncherNestedDirectories(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create temp directory with nested structure
+	ps2Dir := t.TempDir()
+	rpgDir := filepath.Join(ps2Dir, "RPG")
+	actionDir := filepath.Join(ps2Dir, "Action")
+	require.NoError(t, os.MkdirAll(rpgDir, 0o750))
+	require.NoError(t, os.MkdirAll(actionDir, 0o750))
+
+	require.NoError(t, os.WriteFile(filepath.Join(rpgDir, "FFX.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(actionDir, "DMC3.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, "root_game.iso"), []byte("test"), 0o600))
+
+	// Create a custom launcher with absolute path
+	launcher := platforms.Launcher{
+		ID:         "custom-ps2",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{ps2Dir},
+		Extensions: []string{".iso"},
+	}
+
+	// Create config
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock platform
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	// Initialize launcher cache
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Call GetFiles
+	ctx := context.Background()
+	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemPS2, ps2Dir)
+	require.NoError(t, err)
+
+	assert.Len(t, files, 3, "Should find files in root and nested directories")
+}
+
+// TestNewNamesIndex_CustomLauncherE2E is a full end-to-end test:
+// custom launcher → GetSystemPaths → GetFiles → AddMediaPath → verify DB has entries.
+func TestNewNamesIndex_CustomLauncherE2E(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create temp directory with test files
+	ps2Dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, "Final Fantasy X.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, "Metal Gear Solid 3.bin"), []byte("test"), 0o600))
+
+	// Create a custom launcher with absolute path
+	launcher := platforms.Launcher{
+		ID:         "custom-ps2-e2e",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{ps2Dir},
+		Extensions: []string{".iso", ".bin"},
+	}
+
+	// Create config
+	fsHelper := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock platform
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	// Use real database
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	// Initialize launcher cache
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Run the full indexer
+	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {})
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, filesIndexed, "Should have indexed 2 files from custom launcher")
+
+	// Verify files are actually in the database
+	mediaEntries, err := db.MediaDB.GetMediaBySystemID(systemdefs.SystemPS2)
+	require.NoError(t, err)
+	assert.Len(t, mediaEntries, 2, "Database should contain 2 media entries for PS2")
+
+	// Verify the paths are correct
+	foundPaths := make(map[string]bool)
+	for _, entry := range mediaEntries {
+		foundPaths[filepath.Base(entry.Path)] = true
+	}
+	assert.True(t, foundPaths["Final Fantasy X.iso"], "Should find Final Fantasy X.iso in DB")
+	assert.True(t, foundPaths["Metal Gear Solid 3.bin"], "Should find Metal Gear Solid 3.bin in DB")
+}
+
+// TestNewNamesIndex_MixedSkipFilesystemScanAndCustomLauncher tests the scenario where
+// a SkipFilesystemScan launcher (e.g., RetroBat) AND a custom launcher both target
+// the same system (e.g., PS2). Verifies the custom launcher's files still get indexed.
+func TestNewNamesIndex_MixedSkipFilesystemScanAndCustomLauncher(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create temp directory with test files for the custom launcher
+	customDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(customDir, "game1.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(customDir, "game2.mdf"), []byte("test"), 0o600))
+
+	// SkipFilesystemScan launcher with a Scanner that ignores its input and
+	// returns empty — simulates RetroBat when gamelist.xml is missing.
+	skipLauncher := platforms.Launcher{
+		ID:                 "retrobat-ps2",
+		SystemID:           systemdefs.SystemPS2,
+		Folders:            []string{"ps2"},
+		Extensions:         []string{".iso", ".bin", ".chd"},
+		SkipFilesystemScan: true,
+		Scanner: func(_ context.Context, _ *config.Instance, _ string,
+			_ []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			return nil, nil
+		},
+	}
+
+	// Custom launcher with absolute path and additional extensions
+	customLauncher := platforms.Launcher{
+		ID:         "custom-ps2-emulator",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{customDir},
+		Extensions: []string{".iso", ".mdf"},
+	}
+
+	// Create config
+	fsHelper := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock platform
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{skipLauncher, customLauncher})
+
+	// Use real database
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	// Initialize launcher cache
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Run the full indexer
+	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {})
+	require.NoError(t, err)
+
+	// The custom launcher's files should be indexed even though
+	// the SkipFilesystemScan launcher also targets PS2
+	assert.Equal(t, 2, filesIndexed, "Should have indexed 2 files from custom launcher")
+
+	// Verify files are actually in the database
+	mediaEntries, err := db.MediaDB.GetMediaBySystemID(systemdefs.SystemPS2)
+	require.NoError(t, err)
+	assert.Len(t, mediaEntries, 2, "Database should contain 2 media entries for PS2")
+
+	// Verify both file types were indexed
+	foundPaths := make(map[string]bool)
+	for _, entry := range mediaEntries {
+		foundPaths[filepath.Base(entry.Path)] = true
+	}
+	assert.True(t, foundPaths["game1.iso"], "Should find .iso file in DB")
+	assert.True(t, foundPaths["game2.mdf"], "Should find .mdf file in DB")
+}
+
+// TestNewNamesIndex_IndependentScannerDoesNotWipeFiles is the critical regression
+// test for the scanner isolation fix. A custom launcher provides filesystem files,
+// and a SkipFilesystemScan launcher has a Scanner that ignores its input and returns
+// its own results. Both launchers' files must end up in the DB.
+func TestNewNamesIndex_IndependentScannerDoesNotWipeFiles(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create temp directory with test files for the custom (filesystem) launcher
+	customDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(customDir, "game1.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(customDir, "game2.bin"), []byte("test"), 0o600))
+
+	// SkipFilesystemScan launcher whose Scanner ignores input and generates its own
+	// results (e.g. Kodi API, gamelist.xml with independent paths).
+	skipLauncher := platforms.Launcher{
+		ID:                 "independent-scanner",
+		SystemID:           systemdefs.SystemPS2,
+		SkipFilesystemScan: true,
+		Scanner: func(_ context.Context, _ *config.Instance, _ string,
+			_ []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			return []platforms.ScanResult{
+				{Name: "Scanner Game A", Path: "/virtual/scanner-game-a.iso"},
+				{Name: "Scanner Game B", Path: "/virtual/scanner-game-b.iso"},
+			}, nil
+		},
+	}
+
+	// Custom launcher with real filesystem files
+	customLauncher := platforms.Launcher{
+		ID:         "custom-ps2",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{customDir},
+		Extensions: []string{".iso", ".bin"},
+	}
+
+	// Create config
+	fsHelper := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock platform
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{skipLauncher, customLauncher})
+
+	// Use real database
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	// Initialize launcher cache
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Run the full indexer
+	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {})
+	require.NoError(t, err)
+
+	// Both launchers' files should be indexed: 2 from filesystem + 2 from scanner
+	assert.Equal(t, 4, filesIndexed,
+		"Should have indexed 4 files total (2 filesystem + 2 from independent scanner)")
+
+	// Verify files are actually in the database
+	mediaEntries, err := db.MediaDB.GetMediaBySystemID(systemdefs.SystemPS2)
+	require.NoError(t, err)
+	assert.Len(t, mediaEntries, 4, "Database should contain 4 media entries for PS2")
+
+	// Verify all files are present
+	foundPaths := make(map[string]bool)
+	for _, entry := range mediaEntries {
+		foundPaths[filepath.Base(entry.Path)] = true
+	}
+	assert.True(t, foundPaths["game1.iso"], "Should find filesystem game1.iso in DB")
+	assert.True(t, foundPaths["game2.bin"], "Should find filesystem game2.bin in DB")
+	assert.True(t, foundPaths["scanner-game-a.iso"], "Should find scanner game A in DB")
+	assert.True(t, foundPaths["scanner-game-b.iso"], "Should find scanner game B in DB")
+}
+
 // TestZaparooignoreMarker tests that directories containing a .zaparooignore file
 // are skipped during media scanning along with all their subdirectories.
 func TestZaparooignoreMarker(t *testing.T) {

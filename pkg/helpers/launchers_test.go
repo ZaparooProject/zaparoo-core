@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseLifecycle(t *testing.T) {
@@ -212,6 +213,36 @@ func TestParseCustomLaunchers_AllUnknownSystems(t *testing.T) {
 
 	launchers := ParseCustomLaunchers(mockPlatform, customLaunchers)
 	assert.Empty(t, launchers)
+}
+
+func TestParseCustomLaunchers_AbsolutePathWithSystemID(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	customLaunchers := []config.LaunchersCustom{
+		{
+			ID:        "ps2-custom",
+			System:    "PS2",
+			Execute:   "pcsx2 [[media_path]]",
+			MediaDirs: []string{"/emulation/roms/ps2", "/mnt/games/ps2"},
+			FileExts:  []string{"iso", ".bin", "MDF", " .chd "},
+		},
+	}
+
+	launchers := ParseCustomLaunchers(mockPlatform, customLaunchers)
+
+	require.Len(t, launchers, 1)
+	l := launchers[0]
+
+	assert.Equal(t, "ps2-custom", l.ID)
+	assert.Equal(t, "PS2", l.SystemID, "SystemID should be the canonical ID from LookupSystem")
+	assert.Equal(t, []string{"/emulation/roms/ps2", "/mnt/games/ps2"}, l.Folders,
+		"MediaDirs should map directly to Folders")
+	assert.Equal(t, []string{".iso", ".bin", ".mdf", ".chd"}, l.Extensions,
+		"FileExts should be dot-prefixed and lowercased")
+	assert.NotNil(t, l.Launch, "Launch function should be set")
 }
 
 func TestFormatExtensions(t *testing.T) {

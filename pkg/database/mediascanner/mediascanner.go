@@ -217,6 +217,10 @@ func GetSystemPaths(
 		for i := range launchers {
 			// Skip filesystem scanning for launchers that don't need it
 			if launchers[i].SkipFilesystemScan {
+				log.Trace().
+					Str("launcher", launchers[i].ID).
+					Str("system", system.ID).
+					Msg("skipping filesystem scan for launcher")
 				continue
 			}
 			for _, folder := range launchers[i].Folders {
@@ -225,6 +229,13 @@ func GetSystemPaths(
 				}
 			}
 		}
+
+		log.Trace().
+			Str("system", system.ID).
+			Int("launchers", len(launchers)).
+			Strs("folders", folders).
+			Strs("rootFolders", validRootFolders).
+			Msg("resolving system paths")
 
 		// check for <root>/<folder>
 		for _, gf := range validRootFolders {
@@ -463,6 +474,14 @@ func GetFiles(
 		return nil, fmt.Errorf("failed to walk directory %s: %w", realPath, err)
 	}
 	walkElapsed := time.Since(walkStartTime)
+
+	results, err := stack.get()
+	if err != nil {
+		return nil, err
+	}
+
+	allResults = append(allResults, *results...)
+
 	log.Debug().
 		Str("system", systemID).
 		Str("path", realPath).
@@ -487,13 +506,6 @@ func GetFiles(
 			Dur("elapsed", walkElapsed).
 			Msg("directory walk took longer than expected - large directory or slow storage")
 	}
-
-	results, err := stack.get()
-	if err != nil {
-		return nil, err
-	}
-
-	allResults = append(allResults, *results...)
 
 	// change root back to symlink
 	if realPath != path {
@@ -918,17 +930,35 @@ func NewNamesIndex(
 			}
 		}
 
-		// for each system launcher in a platform, run the results through its
-		// custom scan function if one exists
+		// Run each system launcher's custom scanner if one exists.
+		//
+		// SkipFilesystemScan launchers (e.g. RetroBat, Kodi) generate results
+		// independently — they don't filter/enrich the shared file list, so they
+		// receive empty input and their results are *appended* to files. This
+		// prevents an independent scanner that ignores its input from wiping out
+		// files discovered by other launchers or the filesystem walk.
+		//
+		// Non-skip launchers (e.g. Batocera gamelist.xml enrichment) act as a
+		// pipeline: they receive the current files and their output *replaces*
+		// files, allowing them to filter, reorder, or add metadata.
 		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(k)
 		for i := range launchers {
 			l := &launchers[i]
 			if l.Scanner != nil {
 				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 				var scanErr error
-				files, scanErr = l.Scanner(ctx, cfg, systemID, files)
+				if l.SkipFilesystemScan {
+					// Isolated: scanner gets empty input, results accumulated
+					var independent []platforms.ScanResult
+					independent, scanErr = l.Scanner(ctx, cfg, systemID, nil)
+					if scanErr == nil {
+						files = append(files, independent...)
+					}
+				} else {
+					// Pipeline: scanner filters/enriches existing files
+					files, scanErr = l.Scanner(ctx, cfg, systemID, files)
+				}
 				if scanErr != nil {
-					// Check if this is a cancellation error
 					if errors.Is(scanErr, context.Canceled) {
 						return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
 					}
