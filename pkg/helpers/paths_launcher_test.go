@@ -301,3 +301,267 @@ func TestGetSystemPaths_CustomLauncherAbsolutePath(t *testing.T) {
 	// Verify PathIsLauncher works for a file in this directory
 	assert.True(t, PathIsLauncher(cfg, mockPlatform, &launchers[0], filepath.Join(tmpDir, "game.iso")))
 }
+
+func TestLauncherSpecificity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		launcher platforms.Launcher
+		want     int
+	}{
+		{
+			name:     "generic: no schemes, folders, or system",
+			launcher: platforms.Launcher{ID: "Generic", Extensions: []string{".sh"}},
+			want:     0,
+		},
+		{
+			name:     "system only",
+			launcher: platforms.Launcher{ID: "SNES", SystemID: "SNES", Extensions: []string{".sfc"}},
+			want:     10,
+		},
+		{
+			name:     "folders only",
+			launcher: platforms.Launcher{ID: "FolderOnly", Folders: []string{"roms"}},
+			want:     100,
+		},
+		{
+			name: "folders and system",
+			launcher: platforms.Launcher{
+				ID: "Ports", SystemID: "Ports",
+				Folders: []string{"ports"}, Extensions: []string{".sh"},
+			},
+			want: 110,
+		},
+		{
+			name:     "scheme only",
+			launcher: platforms.Launcher{ID: "SchemeOnly", Schemes: []string{"custom"}},
+			want:     1000,
+		},
+		{
+			name:     "scheme and system",
+			launcher: platforms.Launcher{ID: "Steam", SystemID: "Steam", Schemes: []string{"steam"}},
+			want:     1010,
+		},
+		{
+			name:     "all criteria",
+			launcher: platforms.Launcher{ID: "Full", SystemID: "X", Folders: []string{"x"}, Schemes: []string{"x"}},
+			want:     1110,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := launcherSpecificity(&tt.launcher)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestFindLauncher_SpecificOverGeneric(t *testing.T) {
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/userdata/roms"})
+
+	genericLauncher := platforms.Launcher{
+		ID:         "Generic",
+		Extensions: []string{".sh"},
+	}
+	portsLauncher := platforms.Launcher{
+		ID:         "Ports",
+		SystemID:   "Ports",
+		Folders:    []string{"ports"},
+		Extensions: []string{".sh"},
+	}
+
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{genericLauncher, portsLauncher})
+
+	cfg := &config.Instance{}
+
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() { GlobalLauncherCache = originalCache }()
+
+	launcher, err := FindLauncher(cfg, mockPlatform, "/userdata/roms/ports/Stardew Valley.sh")
+	require.NoError(t, err)
+	assert.Equal(t, "Ports", launcher.ID, "specific Ports launcher should win over Generic")
+}
+
+func TestFindLauncher_SchemeHighestPriority(t *testing.T) {
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+
+	genericLauncher := platforms.Launcher{
+		ID:         "Generic",
+		Extensions: []string{".sh"},
+	}
+	steamLauncher := platforms.Launcher{
+		ID:       "Steam",
+		SystemID: "Steam",
+		Schemes:  []string{"steam"},
+	}
+
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{genericLauncher, steamLauncher})
+
+	cfg := &config.Instance{}
+
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() { GlobalLauncherCache = originalCache }()
+
+	launcher, err := FindLauncher(cfg, mockPlatform, "steam://rungameid/413150")
+	require.NoError(t, err)
+	assert.Equal(t, "Steam", launcher.ID, "scheme-based launcher should have highest priority")
+}
+
+func TestFindLauncher_FolderSystemOverSystemOnly(t *testing.T) {
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
+
+	systemOnly := platforms.Launcher{
+		ID:         "SystemOnly",
+		SystemID:   "NES",
+		Extensions: []string{".nes"},
+	}
+	folderAndSystem := platforms.Launcher{
+		ID:         "FolderAndSystem",
+		SystemID:   "NES",
+		Folders:    []string{"nes"},
+		Extensions: []string{".nes"},
+	}
+
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{systemOnly, folderAndSystem})
+
+	cfg := &config.Instance{}
+
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() { GlobalLauncherCache = originalCache }()
+
+	launcher, err := FindLauncher(cfg, mockPlatform, "/roms/nes/mario.nes")
+	require.NoError(t, err)
+	assert.Equal(t, "FolderAndSystem", launcher.ID, "folder+system launcher should beat system-only")
+}
+
+func TestFindLauncher_GenericAloneStillWorks(t *testing.T) {
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+
+	genericLauncher := platforms.Launcher{
+		ID:         "Generic",
+		Extensions: []string{".sh"},
+	}
+
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{genericLauncher})
+
+	cfg := &config.Instance{}
+
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() { GlobalLauncherCache = originalCache }()
+
+	launcher, err := FindLauncher(cfg, mockPlatform, "/some/path/script.sh")
+	require.NoError(t, err)
+	assert.Equal(t, "Generic", launcher.ID, "generic launcher should work when it's the only match")
+}
+
+func TestFindLauncher_NoMatch(t *testing.T) {
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{
+			{ID: "NES", SystemID: "NES", Folders: []string{"nes"}, Extensions: []string{".nes"}},
+		})
+
+	cfg := &config.Instance{}
+
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() { GlobalLauncherCache = originalCache }()
+
+	_, err := FindLauncher(cfg, mockPlatform, "/some/random/file.xyz")
+	assert.Error(t, err, "should return error when no launcher matches")
+}
+
+func TestFindLauncher_AllowListBlocksAfterSpecificity(t *testing.T) {
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+
+	// AllowListOnly launcher wins by specificity but blocks due to allowlist
+	launcher := platforms.Launcher{
+		ID:            "Generic",
+		Extensions:    []string{".sh"},
+		AllowListOnly: true,
+	}
+
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{launcher})
+
+	cfg := &config.Instance{}
+
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() { GlobalLauncherCache = originalCache }()
+
+	_, err := FindLauncher(cfg, mockPlatform, "/path/script.sh")
+	require.Error(t, err, "allowlist should block even after specificity selection")
+	assert.Contains(t, err.Error(), "file not allowed")
+}
+
+func TestFindLauncher_TieBreaksToFirstMatch(t *testing.T) {
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
+
+	// Two launchers with identical specificity (both have Folders+SystemID = 110)
+	first := platforms.Launcher{
+		ID:         "First",
+		SystemID:   "NES",
+		Folders:    []string{"nes"},
+		Extensions: []string{".nes"},
+	}
+	second := platforms.Launcher{
+		ID:         "Second",
+		SystemID:   "NES",
+		Folders:    []string{"nes"},
+		Extensions: []string{".nes"},
+	}
+
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{first, second})
+
+	cfg := &config.Instance{}
+
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() { GlobalLauncherCache = originalCache }()
+
+	launcher, err := FindLauncher(cfg, mockPlatform, "/roms/nes/mario.nes")
+	require.NoError(t, err)
+	assert.Equal(t, "First", launcher.ID, "on tie, first match should win")
+}

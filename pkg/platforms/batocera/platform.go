@@ -633,18 +633,6 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
-		platforms.Launcher{
-			ID:            "Generic",
-			Extensions:    []string{".sh"},
-			AllowListOnly: true,
-			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-				err := exec.CommandContext(context.Background(), path).Start()
-				if err != nil {
-					return nil, fmt.Errorf("failed to start command: %w", err)
-				}
-				return nil, nil //nolint:nilnil // Command launches don't return a process handle
-			},
-		},
 	)
 
 	for folder, info := range esde.SystemMap {
@@ -745,6 +733,19 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			},
 		})
 	}
+
+	launchers = append(launchers, platforms.Launcher{
+		ID:            "Generic",
+		Extensions:    []string{".sh"},
+		AllowListOnly: true,
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			err := exec.CommandContext(context.Background(), path).Start()
+			if err != nil {
+				return nil, fmt.Errorf("failed to start command: %w", err)
+			}
+			return nil, nil //nolint:nilnil // Command launches don't return a process handle
+		},
+	})
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }

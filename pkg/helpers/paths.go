@@ -365,9 +365,24 @@ func getPathExt(path string) string {
 	return base[lastDot:]
 }
 
+// launcherSpecificity scores how specific a launcher's matching criteria are.
+// Higher scores indicate more specific matches which should take priority.
+func launcherSpecificity(l *platforms.Launcher) int {
+	score := 0
+	if len(l.Schemes) > 0 {
+		score += 1000
+	}
+	if len(l.Folders) > 0 {
+		score += 100
+	}
+	if l.SystemID != "" {
+		score += 10
+	}
+	return score
+}
+
 // FindLauncher takes a path and tries to find the best possible match for a
-// launcher, taking into account any allowlist restrictions. Returns the
-// launcher to be used.
+// launcher, taking into account specificity and allowlist restrictions.
 func FindLauncher(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -380,8 +395,24 @@ func FindLauncher(
 		return platforms.Launcher{}, errors.New("no launcher found for: " + path)
 	}
 
-	// TODO: must be some better logic to picking this!
-	launcher := launchers[0]
+	best := 0
+	bestScore := launcherSpecificity(&launchers[0])
+	for i := 1; i < len(launchers); i++ {
+		score := launcherSpecificity(&launchers[i])
+		if score > bestScore {
+			best = i
+			bestScore = score
+		}
+	}
+
+	launcher := launchers[best]
+
+	log.Debug().
+		Str("path", path).
+		Str("launcher", launcher.ID).
+		Int("specificity", bestScore).
+		Int("candidates", len(launchers)).
+		Msg("selected launcher by specificity")
 
 	if launcher.AllowListOnly && !cfg.IsLauncherFileAllowed(path) {
 		return platforms.Launcher{}, errors.New("file not allowed: " + path)
