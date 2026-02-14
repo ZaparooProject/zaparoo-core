@@ -116,6 +116,11 @@ func runTokenZapScript(
 			return fmt.Errorf("failed to run zapscript command: %w", err)
 		}
 
+		if result.MediaChanged && token.Source != tokens.SourcePlaylist {
+			log.Debug().Any("token", token).Msg("cmd launch: clearing current playlist")
+			plsc.Queue <- nil
+		}
+
 		if result.MediaChanged && token.ReaderID != "" {
 			if r, ok := st.GetReader(token.ReaderID); ok && readers.HasCapability(r, readers.CapabilityRemovable) {
 				log.Debug().Any("token", token).Msg("media changed, updating software token")

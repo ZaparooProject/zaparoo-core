@@ -21,6 +21,7 @@ package state
 
 import (
 	"context"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
@@ -294,7 +295,8 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		s.mu.Unlock()
 
 		// Send notifications outside lock to prevent deadlock
-		notifications.MediaStopped(s.Notifications)
+		stoppedParams := buildMediaStoppedParams(oldMedia)
+		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		s.notifyDisplayReaders(media)
 		return
 	}
@@ -326,7 +328,8 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		s.mu.Unlock()
 
 		// Send notifications outside lock to prevent deadlock
-		notifications.MediaStopped(s.Notifications)
+		changedStoppedParams := buildMediaStoppedParams(oldMedia)
+		notifications.MediaStopped(s.Notifications, &changedStoppedParams)
 		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
 			SystemID:   media.SystemID,
 			SystemName: media.SystemName,
@@ -344,6 +347,18 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 
 	// No changes
 	s.mu.Unlock()
+}
+
+func buildMediaStoppedParams(media *models.ActiveMedia) models.MediaStoppedParams {
+	elapsed := max(0, int(time.Since(media.Started).Seconds()))
+	return models.MediaStoppedParams{
+		SystemID:   media.SystemID,
+		SystemName: media.SystemName,
+		MediaName:  media.Name,
+		MediaPath:  media.Path,
+		LauncherID: media.LauncherID,
+		Elapsed:    elapsed,
+	}
 }
 
 // notifyDisplayReaders calls OnMediaChange for all readers with display capability.

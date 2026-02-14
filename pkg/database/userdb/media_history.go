@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -54,7 +55,7 @@ func (db *UserDB) CloseMediaHistory(dbid int64, endTime time.Time, playTime int)
 }
 
 // GetMediaHistory retrieves media history entries with pagination.
-func (db *UserDB) GetMediaHistory(lastID, limit int) ([]database.MediaHistoryEntry, error) {
+func (db *UserDB) GetMediaHistory(lastID int64, limit int) ([]database.MediaHistoryEntry, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
@@ -192,7 +193,9 @@ func sqlCloseMediaHistory(ctx context.Context, db *sql.DB, dbid int64, endTime t
 	return nil
 }
 
-func sqlGetMediaHistory(ctx context.Context, db *sql.DB, lastID, limit int) ([]database.MediaHistoryEntry, error) {
+func sqlGetMediaHistory(
+	ctx context.Context, db *sql.DB, lastID int64, limit int,
+) ([]database.MediaHistoryEntry, error) {
 	if limit <= 0 {
 		limit = 25
 	}
@@ -204,7 +207,7 @@ func sqlGetMediaHistory(ctx context.Context, db *sql.DB, lastID, limit int) ([]d
 
 	// Use token-based pagination (similar to history)
 	if lastID == 0 {
-		lastID = 2147483646 // Max int32 value for "get latest"
+		lastID = math.MaxInt64
 	}
 
 	q, err := db.PrepareContext(ctx, `

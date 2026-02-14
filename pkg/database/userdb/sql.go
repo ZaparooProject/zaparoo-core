@@ -25,6 +25,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -147,11 +148,11 @@ func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry)
 	return nil
 }
 
-func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]database.HistoryEntry, error) {
+func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int64) ([]database.HistoryEntry, error) {
 	list := make([]database.HistoryEntry, 0, 25)
 	// Instead of offset, use token-based
 	if lastID == 0 {
-		lastID = 2147483646
+		lastID = math.MaxInt64
 	}
 
 	q, err := db.PrepareContext(ctx, `

@@ -358,11 +358,6 @@ func RunCommand(
 		return platforms.CmdResult{}, err
 	}
 
-	if res.MediaChanged && token.Source != tokens.SourcePlaylist {
-		log.Debug().Any("token", token).Msg("cmd launch: clearing current playlist")
-		plsc.Queue <- nil
-	}
-
 	res.Unsafe = unsafe
 	res.NewCommands = newCmds
 	return res, nil

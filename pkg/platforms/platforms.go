@@ -78,6 +78,34 @@ const (
 	InstanceKodi = "kodi"
 )
 
+// Control action identifiers for active media control.
+const (
+	ControlSaveState   = "save_state"
+	ControlLoadState   = "load_state"
+	ControlSaveRAM     = "save_ram"
+	ControlToggleMenu  = "toggle_menu"
+	ControlSave        = "save"
+	ControlLoad        = "load"
+	ControlReset       = "reset"
+	ControlTogglePause = "toggle_pause"
+)
+
+// ControlParams contains parameters for a control action.
+type ControlParams struct {
+	Args map[string]string
+}
+
+// ControlFunc is a function that executes a control action on active media.
+type ControlFunc func(*config.Instance, ControlParams) error
+
+// Control represents a single control action. Either Func (native Go for
+// built-in launchers) or Script (zapscript string for custom launchers)
+// should be set, not both.
+type Control struct {
+	Func   ControlFunc // Native Go implementation
+	Script string      // ZapScript string executed via RunControlScript
+}
+
 // CmdEnv is the local state of a scanned token, as it processes each ZapScript
 // command. Every command run has access to and can modify it.
 type CmdEnv struct {
@@ -143,10 +171,9 @@ type LaunchOptions struct {
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
-	// Launch function, takes a direct as possible path/ID media file.
-	// Returns process handle for tracked processes, nil for fire-and-forget.
-	// The opts parameter is optional and may be nil.
-	Launch func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
+	// Controls maps control action identifiers to control actions that execute
+	// on active media (e.g., save state, load state, open menu).
+	Controls map[string]Control
 	// Kill function provides custom termination logic for the launcher.
 	// If defined, this function is called instead of signal-based termination
 	// (SIGTERM/SIGKILL). Use this for launchers that require special exit methods
@@ -159,6 +186,10 @@ type Launcher struct {
 	// Test function returns true if file looks supported by this launcher.
 	// It's checked after all standard extension and folder checks.
 	Test func(*config.Instance, string) bool
+	// Launch function, takes a direct as possible path/ID media file.
+	// Returns process handle for tracked processes, nil for fire-and-forget.
+	// The opts parameter is optional and may be nil.
+	Launch func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
 	// UsesRunningInstance identifies which running application instance this launcher
 	// communicates with (e.g., "kodi", "plex"). Empty string means the launcher starts
 	// its own process. When non-empty, platforms should not kill the running app if both
@@ -168,21 +199,19 @@ type Launcher struct {
 	UsesRunningInstance string
 	// Unique ID of the launcher, visible to user.
 	ID string
+	// System associated with this launcher.
+	SystemID string
 	// Groups this launcher belongs to. Used for configuration lookup - when a config
 	// entry's launcher field matches a group name, it applies to all launchers in that
 	// group. Example: ["Kodi", "KodiTV"] means this launcher matches config entries for
 	// both "Kodi" and "KodiTV".
 	Groups []string
-	// System associated with this launcher.
-	SystemID string
-	// Folders to scan for files, relative to the root folders of the platform.
-	// TODO: Support absolute paths?
-	// TODO: rename RootDirs
-	Folders []string
 	// Accepted schemes for URI-style launches.
 	Schemes []string
 	// Extensions to match for files during a standard scan.
 	Extensions []string
+	// Folders to scan for files, relative to the root folders of the platform.
+	Folders []string
 	// Lifecycle determines how the launcher process is managed.
 	Lifecycle LauncherLifecycle
 	// If true, all resolved paths must be in the allow list before they
@@ -308,4 +337,19 @@ type Platform interface {
 	// ConsoleManager returns the platform's console manager for TTY/console switching.
 	// Platforms without console switching return NoOpConsoleManager.
 	ConsoleManager() ConsoleManager
+}
+
+// KeyboardControls builds a Controls map from action→key mappings using the
+// platform's KeyboardPress method. Key strings use the standard zapscript
+// input format (e.g., "a", "{f9}", "{ctrl+q}").
+func KeyboardControls(pl Platform, actions map[string]string) map[string]Control {
+	controls := make(map[string]Control, len(actions))
+	for action, key := range actions {
+		controls[action] = Control{
+			Func: func(_ *config.Instance, _ ControlParams) error {
+				return pl.KeyboardPress(key)
+			},
+		}
+	}
+	return controls
 }

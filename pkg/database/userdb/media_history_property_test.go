@@ -293,7 +293,7 @@ func TestPropertyGetMediaHistoryLastIDPagination(t *testing.T) {
 	}
 
 	rapid.Check(t, func(t *rapid.T) {
-		lastID := rapid.IntRange(-10, 30).Draw(t, "lastID")
+		lastID := int64(rapid.IntRange(-10, 30).Draw(t, "lastID"))
 		limit := rapid.IntRange(1, 100).Draw(t, "limit")
 
 		entries, err := sqlGetMediaHistory(ctx, db, lastID, limit)
@@ -302,7 +302,7 @@ func TestPropertyGetMediaHistoryLastIDPagination(t *testing.T) {
 		// Verify all returned entries have DBID < lastID (or lastID=0 means all)
 		if lastID > 0 {
 			for _, entry := range entries {
-				if entry.DBID >= int64(lastID) {
+				if entry.DBID >= lastID {
 					t.Fatalf("Entry DBID (%d) should be < lastID (%d)",
 						entry.DBID, lastID)
 				}

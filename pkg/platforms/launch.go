@@ -21,6 +21,7 @@ package platforms
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -188,6 +189,15 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		displayName,
 		params.Launcher.ID,
 	)
+
+	if len(params.Launcher.Controls) > 0 {
+		caps := make([]string, 0, len(params.Launcher.Controls))
+		for action := range params.Launcher.Controls {
+			caps = append(caps, action)
+		}
+		sort.Strings(caps)
+		activeMedia.LauncherControls = caps
+	}
 
 	log.Info().Msgf(
 		"DoLaunch setting ActiveMedia: SystemID='%s', SystemName='%s', Path='%s', Name='%s', LauncherID='%s'",

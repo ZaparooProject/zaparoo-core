@@ -57,6 +57,30 @@ func parseLifecycle(lifecycle string) platforms.LauncherLifecycle {
 	return platforms.LifecycleBlocking
 }
 
+// parseCustomControls builds a Controls map from TOML command definitions.
+// Values are zapscript strings (e.g., "**input.keyboard:{f2}").
+// Scripts are validated at load time; entries with invalid syntax are skipped.
+func parseCustomControls(commands map[string]string) map[string]platforms.Control {
+	if len(commands) == 0 {
+		return nil
+	}
+	controls := make(map[string]platforms.Control, len(commands))
+	for action, script := range commands {
+		parser := zapscript.NewParser(script)
+		_, err := parser.ParseScript()
+		if err != nil {
+			log.Warn().Err(err).Str("action", action).Str("script", script).
+				Msg("skipping custom control: invalid zapscript syntax")
+			continue
+		}
+		controls[action] = platforms.Control{Script: script}
+	}
+	if len(controls) == 0 {
+		return nil
+	}
+	return controls
+}
+
 func ParseCustomLaunchers(
 	pl platforms.Platform,
 	customLaunchers []config.LaunchersCustom,
@@ -102,6 +126,7 @@ func ParseCustomLaunchers(
 			Schemes:       v.Schemes,
 			AllowListOnly: v.Restricted,
 			Lifecycle:     lifecycle,
+			Controls:      parseCustomControls(v.Commands),
 			Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 				hostname, err := os.Hostname()
 				if err != nil {

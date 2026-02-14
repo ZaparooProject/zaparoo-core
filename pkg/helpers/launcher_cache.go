@@ -40,29 +40,17 @@ var GlobalLauncherCache = &LauncherCache{}
 // Initialize builds the launcher cache from platform launchers.
 // This should be called once at startup after custom launchers are loaded.
 func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
+	lc.InitializeFromSlice(pl.Launchers(cfg))
 
-	// Get all launchers from platform
-	allLaunchers := pl.Launchers(cfg)
-	lc.allLaunchers = make([]platforms.Launcher, len(allLaunchers))
-	copy(lc.allLaunchers, allLaunchers)
-
-	// Build system ID index
-	lc.bySystemID = make(map[string][]platforms.Launcher)
-	for i := range allLaunchers {
-		launcher := allLaunchers[i]
-		if launcher.SystemID != "" {
-			lc.bySystemID[launcher.SystemID] = append(lc.bySystemID[launcher.SystemID], launcher)
-		}
-	}
+	lc.mu.RLock()
+	defer lc.mu.RUnlock()
 
 	for sysID, sysLaunchers := range lc.bySystemID {
 		log.Debug().Str("systemID", sysID).Int("launchers", len(sysLaunchers)).
 			Msg("launcher cache system entry")
 	}
 
-	log.Info().Int("totalLaunchers", len(allLaunchers)).Int("systemIDs", len(lc.bySystemID)).
+	log.Info().Int("totalLaunchers", len(lc.allLaunchers)).Int("systemIDs", len(lc.bySystemID)).
 		Msg("launcher cache initialized")
 }
 
@@ -83,6 +71,38 @@ func (lc *LauncherCache) GetAllLaunchers() []platforms.Launcher {
 	result := make([]platforms.Launcher, len(lc.allLaunchers))
 	copy(result, lc.allLaunchers)
 	return result
+}
+
+// InitializeFromSlice builds the launcher cache from a pre-built slice of launchers.
+// This is useful for testing or when launchers are already available.
+func (lc *LauncherCache) InitializeFromSlice(launchers []platforms.Launcher) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+
+	lc.allLaunchers = make([]platforms.Launcher, len(launchers))
+	copy(lc.allLaunchers, launchers)
+
+	lc.bySystemID = make(map[string][]platforms.Launcher)
+	for i := range launchers {
+		launcher := launchers[i]
+		if launcher.SystemID != "" {
+			lc.bySystemID[launcher.SystemID] = append(lc.bySystemID[launcher.SystemID], launcher)
+		}
+	}
+}
+
+// GetLauncherByID finds a launcher by its unique ID.
+// Returns nil if no launcher with the given ID is found.
+func (lc *LauncherCache) GetLauncherByID(id string) *platforms.Launcher {
+	lc.mu.RLock()
+	defer lc.mu.RUnlock()
+
+	for i := range lc.allLaunchers {
+		if lc.allLaunchers[i].ID == id {
+			return &lc.allLaunchers[i]
+		}
+	}
+	return nil
 }
 
 // Refresh rebuilds the cache with updated launcher data.

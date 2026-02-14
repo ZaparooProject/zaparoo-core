@@ -324,11 +324,10 @@ func sqlGetLaunchCommandForMedia(
 		return "", fmt.Errorf("failed to query launch command: %w", err)
 	}
 
-	// Build the launch command
-	launchCmd := fmt.Sprintf("@%s/%s", systemID, titleName)
+	var yearPtr *string
 	if year.Valid && year.String != "" {
-		launchCmd = fmt.Sprintf("%s (year:%s)", launchCmd, year.String)
+		yearPtr = &year.String
 	}
 
-	return launchCmd, nil
+	return database.BuildTitleZapScript(systemID, titleName, yearPtr), nil
 }

@@ -23,16 +23,18 @@ package models
 import "github.com/ZaparooProject/go-zapscript"
 
 type SearchParams struct {
-	Systems    *[]string `json:"systems" validate:"omitempty,dive,system"`
-	MaxResults *int      `json:"maxResults" validate:"omitempty,gt=0,max=1000"`
-	Cursor     *string   `json:"cursor,omitempty"`
-	Tags       *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
-	Letter     *string   `json:"letter,omitempty" validate:"omitempty,letter"`
-	Query      *string   `json:"query"`
+	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	MaxResults  *int      `json:"maxResults" validate:"omitempty,gt=0,max=1000"`
+	Cursor      *string   `json:"cursor,omitempty"`
+	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
+	Query       *string   `json:"query"`
 }
 
 type MediaIndexParams struct {
-	Systems *[]string `json:"systems" validate:"omitempty,dive,system"`
+	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
 }
 
 type RunParams struct {
@@ -128,6 +130,31 @@ type UpdateActiveMediaParams struct {
 	SystemID  string `json:"systemId" validate:"required"`
 	MediaPath string `json:"mediaPath" validate:"required"`
 	MediaName string `json:"mediaName" validate:"required"`
+}
+
+type MediaStoppedParams struct {
+	SystemID   string `json:"systemId"`
+	SystemName string `json:"systemName"`
+	MediaName  string `json:"mediaName"`
+	MediaPath  string `json:"mediaPath"`
+	LauncherID string `json:"launcherId"`
+	Elapsed    int    `json:"elapsed"`
+}
+
+type MediaHistoryParams struct {
+	Limit  *int    `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
+	Cursor *string `json:"cursor,omitempty"`
+}
+
+type MediaLookupParams struct {
+	FuzzySystem *bool  `json:"fuzzySystem,omitempty"`
+	Name        string `json:"name" validate:"required,min=1"`
+	System      string `json:"system" validate:"required,min=1"`
+}
+
+type MediaControlParams struct {
+	Args   map[string]string `json:"args,omitempty"`
+	Action string            `json:"action" validate:"required,min=1"`
 }
 
 type DeleteInboxParams struct {

@@ -135,7 +135,7 @@ func (m *MockUserDBI) AddHistory(entry *database.HistoryEntry) error {
 	return nil
 }
 
-func (m *MockUserDBI) GetHistory(lastID int) ([]database.HistoryEntry, error) {
+func (m *MockUserDBI) GetHistory(lastID int64) ([]database.HistoryEntry, error) {
 	args := m.Called(lastID)
 	if history, ok := args.Get(0).([]database.HistoryEntry); ok {
 		if err := args.Error(1); err != nil {
@@ -307,7 +307,7 @@ func (m *MockUserDBI) CloseMediaHistory(dbid int64, endTime time.Time, playTime 
 	return nil
 }
 
-func (m *MockUserDBI) GetMediaHistory(lastID, limit int) ([]database.MediaHistoryEntry, error) {
+func (m *MockUserDBI) GetMediaHistory(lastID int64, limit int) ([]database.MediaHistoryEntry, error) {
 	args := m.Called(lastID, limit)
 	history, ok := args.Get(0).([]database.MediaHistoryEntry)
 	if !ok {

@@ -571,7 +571,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			name:          "invalid system ID",
 			params:        `{"systems": ["invalid_system"]}`,
 			wantError:     true,
-			errorContains: "system \"invalid_system\" not found",
+			errorContains: "unknown system: invalid_system",
 		},
 	}
 

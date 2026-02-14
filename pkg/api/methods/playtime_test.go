@@ -77,7 +77,7 @@ func TestHandlePlaytime_ResetStateWithDailyFields(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockUserDBI()
-	mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{
+	mockDB.On("GetMediaHistory", int64(0), 100).Return([]database.MediaHistoryEntry{
 		{
 			DBID:      1,
 			StartTime: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
@@ -176,7 +176,7 @@ func TestHandlePlaytime_CooldownStateWithDailyFields(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockUserDBI()
-	mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{
+	mockDB.On("GetMediaHistory", int64(0), 100).Return([]database.MediaHistoryEntry{
 		{
 			DBID:      1,
 			StartTime: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),

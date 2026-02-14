@@ -1,0 +1,108 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package zapscript
+
+import (
+	"errors"
+	"fmt"
+
+	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+)
+
+var ErrControlCommandNotAllowed = errors.New("command not allowed in control context")
+
+// IsPlaylistCommand returns true if the command is a playlist command.
+// Playlist commands require a PlaylistController and are not safe in control context.
+func IsPlaylistCommand(cmdName string) bool {
+	switch cmdName {
+	case gozapscript.ZapScriptCmdPlaylistPlay,
+		gozapscript.ZapScriptCmdPlaylistStop,
+		gozapscript.ZapScriptCmdPlaylistNext,
+		gozapscript.ZapScriptCmdPlaylistPrevious,
+		gozapscript.ZapScriptCmdPlaylistGoto,
+		gozapscript.ZapScriptCmdPlaylistPause,
+		gozapscript.ZapScriptCmdPlaylistLoad,
+		gozapscript.ZapScriptCmdPlaylistOpen:
+		return true
+	default:
+		return false
+	}
+}
+
+// isControlAllowed returns true if the command is safe to run in control context.
+func isControlAllowed(cmdName string) bool {
+	return !IsMediaLaunchingCommand(cmdName) && !IsPlaylistCommand(cmdName)
+}
+
+// RunControlScript parses and executes a zapscript string in control context.
+// All commands are validated before any are executed to prevent partial execution.
+func RunControlScript(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	db *database.Database,
+	st *state.State,
+	script string,
+) error {
+	parser := gozapscript.NewParser(script)
+	parsed, err := parser.ParseScript()
+	if err != nil {
+		return fmt.Errorf("failed to parse control script: %w", err)
+	}
+
+	if len(parsed.Cmds) == 0 {
+		return errors.New("control script is empty")
+	}
+
+	// Validate all commands before executing any
+	for _, cmd := range parsed.Cmds {
+		if !isControlAllowed(cmd.Name) {
+			return fmt.Errorf("%w: %s", ErrControlCommandNotAllowed, cmd.Name)
+		}
+	}
+
+	token := tokens.Token{
+		Text: script,
+	}
+
+	for i, cmd := range parsed.Cmds {
+		_, err := RunCommand(
+			pl, cfg,
+			playlists.PlaylistController{},
+			token,
+			cmd,
+			len(parsed.Cmds),
+			i,
+			db,
+			st,
+			nil,
+		)
+		if err != nil {
+			return fmt.Errorf("control command %q failed: %w", cmd.Name, err)
+		}
+	}
+
+	return nil
+}

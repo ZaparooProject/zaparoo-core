@@ -201,6 +201,9 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaTags:           methods.HandleMediaTags,
 		models.MethodMediaActive:         methods.HandleActiveMedia,
 		models.MethodMediaActiveUpdate:   methods.HandleUpdateActiveMedia,
+		models.MethodMediaHistory:        methods.HandleMediaHistory,
+		models.MethodMediaLookup:         methods.HandleMediaLookup,
+		models.MethodMediaControl:        methods.HandleMediaControl,
 		// settings
 		models.MethodSettings:             methods.HandleSettings,
 		models.MethodSettingsUpdate:       methods.HandleSettingsUpdate,
@@ -259,6 +262,12 @@ func NewMethodMap() *MethodMap {
 
 // handleRequest validates a client request and forwards it to the
 // appropriate method handler. Returns the method's result object.
+//
+// TODO: create a per-request timeout context (child of state context) and
+// pass it via RequestEnv so all method handlers can use it for cancellation.
+// Currently handlers either use context.Background() or state context directly.
+// For HTTP transport, the request context (r.Context()) should also be merged
+// so that client disconnects and middleware timeouts are respected.
 //
 //nolint:gocritic // single-use parameter in API handler
 func handleRequest(

@@ -278,3 +278,63 @@ func TestHandleMedia_WithActiveMediaZapScript(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleActiveMedia_WithLauncherControls(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	activeMedia := models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher")
+	activeMedia.LauncherControls = []string{"save_state"}
+	st.SetActiveMedia(activeMedia)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("GetYearBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
+		Return("", nil)
+
+	env := requests.RequestEnv{
+		State:    st,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := HandleActiveMedia(env)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	resp, ok := result.(models.ActiveMediaResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"save_state"}, resp.LauncherControls)
+}
+
+func TestHandleActiveMedia_WithoutLauncherControls(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher"))
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("GetYearBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
+		Return("", nil)
+
+	env := requests.RequestEnv{
+		State:    st,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := HandleActiveMedia(env)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	resp, ok := result.(models.ActiveMediaResponse)
+	require.True(t, ok)
+	assert.Nil(t, resp.LauncherControls)
+}

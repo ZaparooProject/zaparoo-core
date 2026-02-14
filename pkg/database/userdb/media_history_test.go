@@ -21,6 +21,7 @@ package userdb
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -234,7 +235,7 @@ func TestSqlGetMediaHistory_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	lastID := 0
+	var lastID int64
 	limit := 10
 	now := time.Now()
 	startTime := now.Add(-1 * time.Hour).Unix()
@@ -261,7 +262,7 @@ func TestSqlGetMediaHistory_Success(t *testing.T) {
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
 		ExpectQuery().
-		WithArgs(2147483646, limit). // lastID=0 becomes 2147483646 in implementation
+		WithArgs(int64(math.MaxInt64), limit). // lastID=0 becomes math.MaxInt64 in implementation
 		WillReturnRows(rows)
 
 	entries, err := sqlGetMediaHistory(context.Background(), db, lastID, limit)
@@ -279,7 +280,7 @@ func TestSqlGetMediaHistory_EmptyResult(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	lastID := 0
+	var lastID int64
 	limit := 10
 
 	rows := sqlmock.NewRows([]string{
@@ -291,7 +292,7 @@ func TestSqlGetMediaHistory_EmptyResult(t *testing.T) {
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
 		ExpectQuery().
-		WithArgs(2147483646, limit). // lastID=0 becomes 2147483646 in implementation
+		WithArgs(int64(math.MaxInt64), limit). // lastID=0 becomes math.MaxInt64 in implementation
 		WillReturnRows(rows)
 
 	entries, err := sqlGetMediaHistory(context.Background(), db, lastID, limit)
@@ -306,7 +307,7 @@ func TestSqlGetMediaHistory_DatabaseError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	lastID := 0
+	var lastID int64
 	limit := 10
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
@@ -317,6 +318,65 @@ func TestSqlGetMediaHistory_DatabaseError(t *testing.T) {
 	assert.NotNil(t, entries) // Returns empty slice, not nil
 	assert.Empty(t, entries)
 	assert.Contains(t, err.Error(), "failed to prepare media history query statement")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetMediaHistory_SentinelUsesMaxInt64(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	rows := sqlmock.NewRows([]string{
+		"DBID", "ID", "StartTime", "EndTime", "SystemID", "SystemName",
+		"MediaPath", "MediaName", "LauncherID", "PlayTime",
+		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
+		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID",
+	})
+
+	// Verify that lastID=0 uses math.MaxInt64 as sentinel, not the old MaxInt32
+	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
+		ExpectQuery().
+		WithArgs(int64(math.MaxInt64), 10).
+		WillReturnRows(rows)
+
+	entries, err := sqlGetMediaHistory(context.Background(), db, 0, 10)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetMediaHistory_LargeLastID(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Use a lastID larger than math.MaxInt32 to verify int64 handling
+	lastID := int64(math.MaxInt32) + 100
+	limit := 10
+
+	rows := sqlmock.NewRows([]string{
+		"DBID", "ID", "StartTime", "EndTime", "SystemID", "SystemName",
+		"MediaPath", "MediaName", "LauncherID", "PlayTime",
+		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
+		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID",
+	}).AddRow(
+		int64(math.MaxInt32)+50, "uuid-1", time.Now().Unix(), nil, "nes", "NES",
+		"/games/mario.nes", "Mario", "retroarch", 100,
+		"boot-1", int64(1000), 100, 100, false,
+		true, "system", time.Now().Unix(), time.Now().Unix(), nil,
+	)
+
+	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
+		ExpectQuery().
+		WithArgs(lastID, limit).
+		WillReturnRows(rows)
+
+	entries, err := sqlGetMediaHistory(context.Background(), db, lastID, limit)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+	assert.Equal(t, int64(math.MaxInt32)+50, entries[0].DBID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
