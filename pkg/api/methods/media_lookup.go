@@ -91,6 +91,7 @@ func HandleMediaLookup(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			Name:       result.Result.Name,
 			Path:       result.Result.Path,
 			ZapScript:  zapScript,
+			Tags:       result.Result.Tags,
 			Confidence: result.Confidence,
 		},
 	}, nil

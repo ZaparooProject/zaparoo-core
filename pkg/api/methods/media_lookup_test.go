@@ -233,3 +233,62 @@ func TestHandleMediaLookup_EmptyName(t *testing.T) {
 	_, err := HandleMediaLookup(env)
 	require.Error(t, err)
 }
+
+func TestHandleMediaLookup_TagsReturned(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+
+	mockMediaDB.On("GetCachedSlugResolution",
+		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
+	).Return(int64(0), "", false)
+
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
+	).Return([]database.SearchResultWithCursor{
+		{
+			MediaID:  1,
+			SystemID: "NES",
+			Name:     "Super Mario Bros",
+			Path:     "/games/nes/smb.nes",
+			Tags: []database.TagInfo{
+				{Tag: "platformer", Type: "genre"},
+				{Tag: "1985", Type: "year"},
+			},
+		},
+	}, nil)
+
+	mockMediaDB.On("SetCachedSlugResolution",
+		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything, int64(1), mock.AnythingOfType("string"),
+	).Return(nil)
+
+	launcherCache := &helpers.LauncherCache{}
+
+	env := requests.RequestEnv{
+		State:         st,
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		Config:        cfg,
+		LauncherCache: launcherCache,
+		Params:        json.RawMessage(`{"name": "Super Mario Bros", "system": "NES"}`),
+	}
+
+	result, err := HandleMediaLookup(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaLookupResponse)
+	require.True(t, ok)
+	require.NotNil(t, resp.Match)
+	require.Len(t, resp.Match.Tags, 2)
+	assert.Equal(t, "platformer", resp.Match.Tags[0].Tag)
+	assert.Equal(t, "genre", resp.Match.Tags[0].Type)
+	assert.Equal(t, "1985", resp.Match.Tags[1].Tag)
+	assert.Equal(t, "year", resp.Match.Tags[1].Type)
+}

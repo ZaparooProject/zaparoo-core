@@ -85,7 +85,31 @@ Media has stopped on server.
 
 #### Response
 
-Returns `null`.
+| Key        | Type   | Required | Description                                    |
+| :--------- | :----- | :------- | :--------------------------------------------- |
+| systemId   | string | Yes      | ID of the system.                              |
+| systemName | string | Yes      | Display name of the system.                    |
+| mediaName  | string | Yes      | Display name of the media.                     |
+| mediaPath  | string | Yes      | Path to media file on server.                  |
+| launcherId | string | Yes      | ID of the launcher.                            |
+| elapsed    | number | Yes      | Duration of the media session in seconds.      |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "media.stopped",
+  "params": {
+    "systemId": "SNES",
+    "systemName": "Super Nintendo Entertainment System",
+    "mediaName": "Super Mario World",
+    "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+    "launcherId": "SNES",
+    "elapsed": 2730
+  }
+}
+```
 
 ### media.indexing
 

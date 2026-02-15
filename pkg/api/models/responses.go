@@ -178,11 +178,12 @@ type MediaHistoryResponse struct {
 }
 
 type MediaLookupMatch struct {
-	System     System  `json:"system"`
-	Name       string  `json:"name"`
-	Path       string  `json:"path"`
-	ZapScript  string  `json:"zapScript"`
-	Confidence float64 `json:"confidence"`
+	System     System             `json:"system"`
+	Name       string             `json:"name"`
+	Path       string             `json:"path"`
+	ZapScript  string             `json:"zapScript"`
+	Tags       []database.TagInfo `json:"tags"`
+	Confidence float64            `json:"confidence"`
 }
 
 type MediaLookupResponse struct {
