@@ -124,7 +124,7 @@ func TestResolveTitle_CacheHit(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, 1.0, result.Confidence)
+	assert.InDelta(t, 1.0, result.Confidence, 0.001)
 	assert.Equal(t, "exact_match", result.Strategy)
 	assert.Equal(t, "Super Mario Bros", result.Result.Name)
 }

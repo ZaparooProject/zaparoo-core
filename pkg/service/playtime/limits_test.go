@@ -121,7 +121,7 @@ func TestBuildRuleContext_UnreliableClock(t *testing.T) {
 		t.Parallel()
 
 		mockDB := testhelpers.NewMockUserDBI()
-		mockDB.On("GetMediaHistory", int64(0), 100).Return([]database.MediaHistoryEntry{}, nil)
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{}, nil)
 
 		db := &database.Database{
 			UserDB: mockDB,
@@ -199,7 +199,7 @@ func TestBuildRuleContext_ClockHealing(t *testing.T) {
 		t.Parallel()
 
 		mockDB := testhelpers.NewMockUserDBI()
-		mockDB.On("GetMediaHistory", int64(0), 100).Return([]database.MediaHistoryEntry{}, nil)
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{}, nil)
 
 		db := &database.Database{
 			UserDB: mockDB,
@@ -353,7 +353,7 @@ func TestBuildRuleContext_MidnightRollover_CurrentSession(t *testing.T) {
 
 			// Setup mock database
 			mockDB := testhelpers.NewMockUserDBI()
-			mockDB.On("GetMediaHistory", int64(0), 100).Return(tt.historicalEntries, nil)
+			mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return(tt.historicalEntries, nil)
 
 			db := &database.Database{
 				UserDB: mockDB,
@@ -468,7 +468,7 @@ func TestCalculateDailyUsage_EdgeCases(t *testing.T) {
 
 			// Setup mock database
 			mockDB := testhelpers.NewMockUserDBI()
-			mockDB.On("GetMediaHistory", int64(0), 100).Return(tt.historicalEntries, nil)
+			mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return(tt.historicalEntries, nil)
 
 			db := &database.Database{
 				UserDB: mockDB,

@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -54,12 +55,23 @@ func (db *UserDB) CloseMediaHistory(dbid int64, endTime time.Time, playTime int)
 	return sqlCloseMediaHistory(db.ctx, db.sql, dbid, endTime, playTime)
 }
 
-// GetMediaHistory retrieves media history entries with pagination.
-func (db *UserDB) GetMediaHistory(lastID int64, limit int) ([]database.MediaHistoryEntry, error) {
+// GetMediaHistory retrieves media history entries with pagination and optional system filtering.
+func (db *UserDB) GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]database.MediaHistoryEntry, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlGetMediaHistory(db.ctx, db.sql, lastID, limit)
+	return sqlGetMediaHistory(db.ctx, db.sql, systemIDs, lastID, limit)
+}
+
+// GetMediaHistoryTop returns aggregated media history grouped by SystemID+MediaName,
+// sorted by total play time descending.
+func (db *UserDB) GetMediaHistoryTop(
+	systemIDs []string, since *time.Time, limit int,
+) ([]database.MediaHistoryTopEntry, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	return sqlGetMediaHistoryTop(db.ctx, db.sql, systemIDs, since, limit)
 }
 
 // CloseHangingMediaHistory closes any media history entries left open from unclean shutdowns.
@@ -194,7 +206,7 @@ func sqlCloseMediaHistory(ctx context.Context, db *sql.DB, dbid int64, endTime t
 }
 
 func sqlGetMediaHistory(
-	ctx context.Context, db *sql.DB, lastID int64, limit int,
+	ctx context.Context, db *sql.DB, systemIDs []string, lastID int64, limit int,
 ) ([]database.MediaHistoryEntry, error) {
 	if limit <= 0 {
 		limit = 25
@@ -210,17 +222,39 @@ func sqlGetMediaHistory(
 		lastID = math.MaxInt64
 	}
 
-	q, err := db.PrepareContext(ctx, `
+	conditions := []string{"DBID < ?"}
+	args := make([]any, 0, len(systemIDs)+2)
+	args = append(args, lastID)
+
+	if len(systemIDs) == 1 {
+		conditions = append(conditions, "SystemID = ?")
+		args = append(args, systemIDs[0])
+	} else if len(systemIDs) > 1 {
+		placeholders := make([]string, len(systemIDs))
+		for i, id := range systemIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		conditions = append(conditions, "SystemID IN ("+strings.Join(placeholders, ", ")+")")
+	}
+
+	where := strings.Join(conditions, " AND ")
+	args = append(args, limit)
+
+	//nolint:gosec // where clause uses only hardcoded column names, not user input
+	query := fmt.Sprintf(`
 		SELECT
 			DBID, ID, StartTime, EndTime, SystemID, SystemName,
 			MediaPath, MediaName, LauncherID, PlayTime,
 			BootUUID, MonotonicStart, DurationSec, WallDuration, TimeSkewFlag,
 			ClockReliable, ClockSource, CreatedAt, UpdatedAt, DeviceID
 		FROM MediaHistory
-		WHERE DBID < ?
+		WHERE %s
 		ORDER BY DBID DESC
 		LIMIT ?;
-	`)
+	`, where)
+
+	q, err := db.PrepareContext(ctx, query)
 	if err != nil {
 		return list, fmt.Errorf("failed to prepare media history query statement: %w", err)
 	}
@@ -230,7 +264,7 @@ func sqlGetMediaHistory(
 		}
 	}()
 
-	rows, err := q.QueryContext(ctx, lastID, limit)
+	rows, err := q.QueryContext(ctx, args...)
 	if err != nil {
 		return list, fmt.Errorf("failed to query media history: %w", err)
 	}
@@ -434,4 +468,112 @@ func sqlHealTimestamps(ctx context.Context, db *sql.DB, bootUUID string, trueBoo
 	}
 
 	return totalRows, nil
+}
+
+func sqlGetMediaHistoryTop(
+	ctx context.Context, db *sql.DB, systemIDs []string, since *time.Time, limit int,
+) ([]database.MediaHistoryTopEntry, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	where := ""
+	args := make([]any, 0, len(systemIDs)+2)
+
+	conditions := make([]string, 0, 2)
+	if len(systemIDs) == 1 {
+		conditions = append(conditions, "SystemID = ?")
+		args = append(args, systemIDs[0])
+	} else if len(systemIDs) > 1 {
+		placeholders := make([]string, len(systemIDs))
+		for i, id := range systemIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		conditions = append(conditions, "SystemID IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if since != nil {
+		conditions = append(conditions, "StartTime >= ?")
+		args = append(args, since.Unix())
+	}
+
+	if len(conditions) > 0 {
+		where = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	//nolint:gosec // where clause uses only hardcoded column names, not user input
+	query := fmt.Sprintf(`
+		SELECT
+			sub.SystemID, sub.MediaName, sub.TotalPlayTime,
+			sub.SessionCount, sub.LastPlayedAt,
+			mh2.SystemName, mh2.MediaPath
+		FROM (
+			SELECT SystemID, MediaName,
+				SUM(PlayTime) as TotalPlayTime,
+				COUNT(*) as SessionCount,
+				MAX(StartTime) as LastPlayedAt,
+				MAX(DBID) as LatestDBID
+			FROM MediaHistory
+			%s
+			GROUP BY SystemID, MediaName
+			HAVING SUM(PlayTime) > 0
+		) sub
+		INNER JOIN MediaHistory mh2 ON mh2.DBID = sub.LatestDBID
+		ORDER BY sub.TotalPlayTime DESC
+		LIMIT ?;
+	`, where)
+
+	args = append(args, limit)
+
+	list := make([]database.MediaHistoryTopEntry, 0, limit)
+
+	q, err := db.PrepareContext(ctx, query)
+	if err != nil {
+		return list, fmt.Errorf("failed to prepare media history top query: %w", err)
+	}
+	defer func() {
+		if closeErr := q.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	rows, err := q.QueryContext(ctx, args...)
+	if err != nil {
+		return list, fmt.Errorf("failed to query media history top: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	for rows.Next() {
+		var entry database.MediaHistoryTopEntry
+		var lastPlayedUnix int64
+
+		err = rows.Scan(
+			&entry.SystemID,
+			&entry.MediaName,
+			&entry.TotalPlayTime,
+			&entry.SessionCount,
+			&lastPlayedUnix,
+			&entry.SystemName,
+			&entry.MediaPath,
+		)
+		if err != nil {
+			return list, fmt.Errorf("failed to scan media history top row: %w", err)
+		}
+
+		entry.LastPlayedAt = time.Unix(lastPlayedUnix, 0)
+		list = append(list, entry)
+	}
+
+	if err = rows.Err(); err != nil {
+		return list, fmt.Errorf("error iterating media history top rows: %w", err)
+	}
+
+	return list, nil
 }

@@ -40,7 +40,7 @@ func TestHandleMediaHistory_NoParams(t *testing.T) {
 	now := time.Now()
 	endTime := now.Add(30 * time.Minute)
 
-	mockUserDB.On("GetMediaHistory", int64(0), 26).Return([]database.MediaHistoryEntry{
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).Return([]database.MediaHistoryEntry{
 		{
 			DBID:       1,
 			SystemID:   "NES",
@@ -93,7 +93,7 @@ func TestHandleMediaHistory_WithLimit(t *testing.T) {
 			PlayTime: (i + 1) * 100,
 		}
 	}
-	mockUserDB.On("GetMediaHistory", int64(0), 6).Return(entries, nil)
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 6).Return(entries, nil)
 
 	env := requests.RequestEnv{
 		Database: &database.Database{UserDB: mockUserDB},
@@ -123,7 +123,7 @@ func TestHandleMediaHistory_WithCursor(t *testing.T) {
 	cursorStr, err := encodeCursor(5)
 	require.NoError(t, err)
 
-	mockUserDB.On("GetMediaHistory", int64(5), 26).Return([]database.MediaHistoryEntry{
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(5), 26).Return([]database.MediaHistoryEntry{
 		{
 			DBID: 6, SystemID: "SNES", SystemName: "SNES",
 			MediaName: "Game 6", MediaPath: "/g6",
@@ -151,7 +151,7 @@ func TestHandleMediaHistory_EmptyHistory(t *testing.T) {
 	t.Parallel()
 
 	mockUserDB := helpers.NewMockUserDBI()
-	mockUserDB.On("GetMediaHistory", int64(0), 26).Return([]database.MediaHistoryEntry{}, nil)
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).Return([]database.MediaHistoryEntry{}, nil)
 
 	env := requests.RequestEnv{
 		Database: &database.Database{UserDB: mockUserDB},
@@ -187,7 +187,7 @@ func TestHandleMediaHistory_NullEndTime(t *testing.T) {
 	mockUserDB := helpers.NewMockUserDBI()
 	now := time.Now()
 
-	mockUserDB.On("GetMediaHistory", int64(0), 26).Return([]database.MediaHistoryEntry{
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).Return([]database.MediaHistoryEntry{
 		{
 			DBID:       1,
 			SystemID:   "Genesis",
@@ -215,6 +215,98 @@ func TestHandleMediaHistory_NullEndTime(t *testing.T) {
 	assert.Equal(t, 60, resp.Entries[0].PlayTime)
 
 	mockUserDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistory_SystemFilter(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	now := time.Now()
+
+	mockUserDB.On("GetMediaHistory", []string{"SNES"}, int64(0), 26).Return([]database.MediaHistoryEntry{
+		{
+			DBID:       1,
+			SystemID:   "SNES",
+			SystemName: "Super Nintendo Entertainment System",
+			MediaName:  "Super Mario World",
+			MediaPath:  "/games/snes/smw.sfc",
+			LauncherID: "retroarch-snes",
+			StartTime:  now,
+			PlayTime:   3600,
+		},
+	}, nil)
+
+	env := requests.RequestEnv{
+		Database: &database.Database{UserDB: mockUserDB},
+		Params:   json.RawMessage(`{"systems": ["SNES"]}`),
+	}
+
+	result, err := HandleMediaHistory(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	assert.Len(t, resp.Entries, 1)
+	assert.Equal(t, "SNES", resp.Entries[0].SystemID)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistory_FuzzySystemResolution(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockUserDB.On("GetMediaHistory", []string{"Genesis"}, int64(0), 26).
+		Return([]database.MediaHistoryEntry{}, nil)
+
+	env := requests.RequestEnv{
+		Database: &database.Database{UserDB: mockUserDB},
+		Params:   json.RawMessage(`{"systems": ["sega genesis"], "fuzzySystem": true}`),
+	}
+
+	result, err := HandleMediaHistory(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	assert.Empty(t, resp.Entries)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistory_EmptySystemsArray(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).
+		Return([]database.MediaHistoryEntry{}, nil)
+
+	env := requests.RequestEnv{
+		Database: &database.Database{UserDB: mockUserDB},
+		Params:   json.RawMessage(`{"systems": []}`),
+	}
+
+	result, err := HandleMediaHistory(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	assert.Empty(t, resp.Entries)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistory_InvalidSystemID(t *testing.T) {
+	t.Parallel()
+
+	env := requests.RequestEnv{
+		Database: &database.Database{UserDB: helpers.NewMockUserDBI()},
+		Params:   json.RawMessage(`{"systems": ["NOT_A_REAL_SYSTEM"]}`),
+	}
+
+	_, err := HandleMediaHistory(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NOT_A_REAL_SYSTEM")
 }
 
 func TestHandleMediaHistory_InvalidParams(t *testing.T) {

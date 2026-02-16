@@ -35,6 +35,7 @@ const defaultMediaHistoryLimit = 25
 func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	limit := defaultMediaHistoryLimit
 	var lastID int64
+	var systemIDs []string
 
 	if len(env.Params) > 0 {
 		var params models.MediaHistoryParams
@@ -58,10 +59,22 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 				lastID = *cursor
 			}
 		}
+
+		if params.Systems != nil && len(*params.Systems) > 0 {
+			fuzzy := params.FuzzySystem != nil && *params.FuzzySystem
+			systems, err := resolveSystems(*params.Systems, fuzzy)
+			if err != nil {
+				return nil, err
+			}
+			systemIDs = make([]string, len(systems))
+			for i, sys := range systems {
+				systemIDs[i] = sys.ID
+			}
+		}
 	}
 
 	// Fetch one extra to detect next page
-	entries, err := env.Database.UserDB.GetMediaHistory(lastID, limit+1)
+	entries, err := env.Database.UserDB.GetMediaHistory(systemIDs, lastID, limit+1)
 	if err != nil {
 		log.Error().Err(err).Msg("error getting media history")
 		return nil, fmt.Errorf("error getting media history: %w", err)

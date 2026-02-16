@@ -142,8 +142,17 @@ type MediaStoppedParams struct {
 }
 
 type MediaHistoryParams struct {
-	Limit  *int    `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
-	Cursor *string `json:"cursor,omitempty"`
+	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
+	Cursor      *string   `json:"cursor,omitempty"`
+}
+
+type MediaHistoryTopParams struct {
+	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	Since       *string   `json:"since,omitempty"`
+	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
 }
 
 type MediaLookupParams struct {

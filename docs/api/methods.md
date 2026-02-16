@@ -783,10 +783,12 @@ Return paginated media play history.
 
 Optionally, an object:
 
-| Key    | Type   | Required | Description                                                                                     |
-| :----- | :----- | :------- | :---------------------------------------------------------------------------------------------- |
-| limit  | number | No       | Maximum number of entries to return. Default is 25, maximum is 100.                              |
-| cursor | string | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages. |
+| Key         | Type     | Required | Description                                                                                     |
+| :---------- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
+| limit       | number   | No       | Maximum number of entries to return. Default is 25, maximum is 100.                              |
+| cursor      | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages. |
+| systems     | string[] | No       | Filter to one or more system IDs (e.g., `["SNES", "NES"]`).                                     |
+| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs.                                                            |
 
 #### Result
 
@@ -847,6 +849,77 @@ Optionally, an object:
       "hasNextPage": false,
       "pageSize": 10
     }
+  }
+}
+```
+
+### media.history.top
+
+Return aggregated media play history grouped by game, sorted by total play time descending. Useful for "most played" displays.
+
+#### Parameters
+
+Optionally, an object:
+
+| Key         | Type     | Required | Description                                                                                     |
+| :---------- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
+| limit       | number   | No       | Maximum number of entries to return. Default is 25, maximum is 100.                              |
+| systems     | string[] | No       | Filter to one or more system IDs (e.g., `["SNES", "NES"]`).                                     |
+| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs.                                                            |
+| since       | string   | No       | Only count sessions starting after this RFC3339 timestamp.                                       |
+
+#### Result
+
+| Key     | Type                                                         | Required | Description                              |
+| :------ | :----------------------------------------------------------- | :------- | :--------------------------------------- |
+| entries | [MediaHistoryTopEntry](#media-history-top-entry-object)[]    | Yes      | A ranked list of games by total play time. |
+
+##### Media history top entry object
+
+| Key           | Type   | Required | Description                                            |
+| :------------ | :----- | :------- | :----------------------------------------------------- |
+| systemId      | string | Yes      | ID of the system.                                      |
+| systemName    | string | Yes      | Display name of the system.                            |
+| mediaName     | string | Yes      | Display name of the media.                             |
+| mediaPath     | string | Yes      | Path to the media file (from most recent session).     |
+| totalPlayTime | number | Yes      | Total play time across all sessions in seconds.        |
+| sessionCount  | number | Yes      | Number of play sessions.                               |
+| lastPlayedAt  | string | Yes      | Timestamp of the most recent session in RFC3339 format. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-8b6e-12f0-ad8c-030405060708",
+  "method": "media.history.top",
+  "params": {
+    "limit": 5,
+    "systems": ["SNES"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-8b6e-12f0-ad8c-030405060708",
+  "result": {
+    "entries": [
+      {
+        "systemId": "SNES",
+        "systemName": "Super Nintendo Entertainment System",
+        "mediaName": "Super Mario World",
+        "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+        "totalPlayTime": 7200,
+        "sessionCount": 12,
+        "lastPlayedAt": "2026-02-14T20:30:00Z"
+      }
+    ]
   }
 }
 ```

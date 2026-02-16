@@ -177,6 +177,20 @@ type MediaHistoryResponse struct {
 	Entries    []MediaHistoryResponseEntry `json:"entries"`
 }
 
+type MediaHistoryTopEntry struct {
+	SystemID      string `json:"systemId"`
+	SystemName    string `json:"systemName"`
+	MediaName     string `json:"mediaName"`
+	MediaPath     string `json:"mediaPath"`
+	LastPlayedAt  string `json:"lastPlayedAt"`
+	TotalPlayTime int    `json:"totalPlayTime"`
+	SessionCount  int    `json:"sessionCount"`
+}
+
+type MediaHistoryTopResponse struct {
+	Entries []MediaHistoryTopEntry `json:"entries"`
+}
+
 type MediaLookupMatch struct {
 	System     System             `json:"system"`
 	Name       string             `json:"name"`

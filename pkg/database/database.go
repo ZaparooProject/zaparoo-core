@@ -82,6 +82,16 @@ type MediaHistoryEntry struct {
 	IsDeleted      bool       `json:"isDeleted,omitempty"`
 }
 
+type MediaHistoryTopEntry struct {
+	LastPlayedAt  time.Time
+	SystemID      string
+	SystemName    string
+	MediaName     string
+	MediaPath     string
+	TotalPlayTime int
+	SessionCount  int
+}
+
 type Mapping struct {
 	Label    string `json:"label"`
 	Type     string `json:"type"`
@@ -281,7 +291,8 @@ type UserDBI interface {
 	AddMediaHistory(entry *MediaHistoryEntry) (int64, error)
 	UpdateMediaHistoryTime(dbid int64, playTime int) error
 	CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error
-	GetMediaHistory(lastID int64, limit int) ([]MediaHistoryEntry, error)
+	GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]MediaHistoryEntry, error)
+	GetMediaHistoryTop(systemIDs []string, since *time.Time, limit int) ([]MediaHistoryTopEntry, error)
 	CloseHangingMediaHistory() error
 	CleanupMediaHistory(retentionDays int) (int64, error)
 	HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error)

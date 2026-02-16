@@ -56,6 +56,7 @@ const (
 	MethodMediaTags            = "media.tags"
 	MethodMediaActive          = "media.active"
 	MethodMediaHistory         = "media.history"
+	MethodMediaHistoryTop      = "media.history.top"
 	MethodMediaLookup          = "media.lookup"
 	MethodMediaControl         = "media.control"
 	MethodMediaActiveUpdate    = "media.active.update"

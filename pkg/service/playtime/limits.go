@@ -547,7 +547,7 @@ func (tm *LimitsManager) calculateDailyUsage(
 	limit := 100
 
 	for {
-		entries, err := tm.db.UserDB.GetMediaHistory(lastID, limit)
+		entries, err := tm.db.UserDB.GetMediaHistory(nil, lastID, limit)
 		if err != nil {
 			return 0, fmt.Errorf("failed to query media history: %w", err)
 		}

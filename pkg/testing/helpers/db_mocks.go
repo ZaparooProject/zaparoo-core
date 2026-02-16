@@ -307,8 +307,10 @@ func (m *MockUserDBI) CloseMediaHistory(dbid int64, endTime time.Time, playTime 
 	return nil
 }
 
-func (m *MockUserDBI) GetMediaHistory(lastID int64, limit int) ([]database.MediaHistoryEntry, error) {
-	args := m.Called(lastID, limit)
+func (m *MockUserDBI) GetMediaHistory(
+	systemIDs []string, lastID int64, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	args := m.Called(systemIDs, lastID, limit)
 	history, ok := args.Get(0).([]database.MediaHistoryEntry)
 	if !ok {
 		history = []database.MediaHistoryEntry{}
@@ -317,6 +319,20 @@ func (m *MockUserDBI) GetMediaHistory(lastID int64, limit int) ([]database.Media
 		return history, fmt.Errorf("mock UserDBI get media history failed: %w", err)
 	}
 	return history, nil
+}
+
+func (m *MockUserDBI) GetMediaHistoryTop(
+	systemIDs []string, since *time.Time, limit int,
+) ([]database.MediaHistoryTopEntry, error) {
+	args := m.Called(systemIDs, since, limit)
+	entries, ok := args.Get(0).([]database.MediaHistoryTopEntry)
+	if !ok {
+		entries = []database.MediaHistoryTopEntry{}
+	}
+	if err := args.Error(1); err != nil {
+		return entries, fmt.Errorf("mock UserDBI get media history top failed: %w", err)
+	}
+	return entries, nil
 }
 
 func (m *MockUserDBI) CloseHangingMediaHistory() error {
