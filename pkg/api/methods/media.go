@@ -46,6 +46,10 @@ import (
 
 const defaultMaxResults = 100
 
+// searchSem limits concurrent media.search requests to avoid saturating
+// the single SQLite connection with long-running LIKE queries.
+var searchSem = make(chan struct{}, 3)
+
 func resolveSystem(id string, fuzzyMatch bool) (*systemdefs.System, error) {
 	if fuzzyMatch {
 		sys, err := systemdefs.LookupSystem(id)
@@ -340,6 +344,10 @@ func GenerateMediaDB(
 			TotalFiles: &total,
 		})
 
+		if cacheErr := db.MediaDB.RebuildSlugSearchCache(); cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to rebuild slug search cache after indexing")
+		}
+
 		// Start background optimization with notification callback
 		// Track the optimization operation BEFORE starting the goroutine to prevent a race
 		// where Close() → Wait() could return between this goroutine's Done() and
@@ -421,6 +429,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		}
 	}
 
+	// Use app-scoped context — indexing outlives the API request
 	err := GenerateMediaDB(
 		env.State.GetContext(),
 		env.Platform,
@@ -436,6 +445,13 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received media search request")
 
+	select {
+	case searchSem <- struct{}{}:
+		defer func() { <-searchSem }()
+	case <-env.Context.Done():
+		return nil, env.Context.Err()
+	}
+
 	var params models.SearchParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
@@ -447,7 +463,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		maxResults = *params.MaxResults
 	}
 
-	ctx := env.State.GetContext()
+	ctx := env.Context
 
 	// Handle cursor-based pagination
 	var cursorStr string
@@ -602,7 +618,7 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 		}
 	}
 
-	ctx := env.State.GetContext()
+	ctx := env.Context
 
 	system := params.Systems
 
@@ -648,7 +664,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		var year *string
 		if env.Database.MediaDB != nil {
 			y, yearErr := env.Database.MediaDB.GetYearBySystemAndPath(
-				env.State.GetContext(), system.ID, activeMedia.Path,
+				env.Context, system.ID, activeMedia.Path,
 			)
 			if yearErr != nil {
 				log.Debug().Err(yearErr).Msgf("could not get year for %s:%s", system.ID, activeMedia.Path)
@@ -782,7 +798,7 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	var year *string
 	if env.Database.MediaDB != nil {
 		y, yearErr := env.Database.MediaDB.GetYearBySystemAndPath(
-			env.State.GetContext(), media.SystemID, media.Path,
+			env.Context, media.SystemID, media.Path,
 		)
 		if yearErr != nil {
 			log.Debug().Err(yearErr).Msgf("could not get year for %s:%s", media.SystemID, media.Path)

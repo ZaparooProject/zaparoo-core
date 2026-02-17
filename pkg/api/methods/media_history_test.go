@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -55,6 +56,7 @@ func TestHandleMediaHistory_NoParams(t *testing.T) {
 	}, nil)
 
 	env := requests.RequestEnv{
+		Context: context.Background(),
 		Database: &database.Database{
 			UserDB: mockUserDB,
 		},
@@ -96,6 +98,7 @@ func TestHandleMediaHistory_WithLimit(t *testing.T) {
 	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 6).Return(entries, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   json.RawMessage(`{"limit": 5}`),
 	}
@@ -132,6 +135,7 @@ func TestHandleMediaHistory_WithCursor(t *testing.T) {
 	}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   json.RawMessage(`{"cursor": "` + cursorStr + `"}`),
 	}
@@ -154,6 +158,7 @@ func TestHandleMediaHistory_EmptyHistory(t *testing.T) {
 	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).Return([]database.MediaHistoryEntry{}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 	}
 
@@ -172,6 +177,7 @@ func TestHandleMediaHistory_InvalidCursor(t *testing.T) {
 	t.Parallel()
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: helpers.NewMockUserDBI()},
 		Params:   json.RawMessage(`{"cursor": "not-valid-base64!!!"}`),
 	}
@@ -202,6 +208,7 @@ func TestHandleMediaHistory_NullEndTime(t *testing.T) {
 	}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 	}
 
@@ -237,6 +244,7 @@ func TestHandleMediaHistory_SystemFilter(t *testing.T) {
 	}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   json.RawMessage(`{"systems": ["SNES"]}`),
 	}
@@ -260,6 +268,7 @@ func TestHandleMediaHistory_FuzzySystemResolution(t *testing.T) {
 		Return([]database.MediaHistoryEntry{}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   json.RawMessage(`{"systems": ["sega genesis"], "fuzzySystem": true}`),
 	}
@@ -282,6 +291,7 @@ func TestHandleMediaHistory_EmptySystemsArray(t *testing.T) {
 		Return([]database.MediaHistoryEntry{}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   json.RawMessage(`{"systems": []}`),
 	}
@@ -300,6 +310,7 @@ func TestHandleMediaHistory_InvalidSystemID(t *testing.T) {
 	t.Parallel()
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: helpers.NewMockUserDBI()},
 		Params:   json.RawMessage(`{"systems": ["NOT_A_REAL_SYSTEM"]}`),
 	}
@@ -313,6 +324,7 @@ func TestHandleMediaHistory_InvalidParams(t *testing.T) {
 	t.Parallel()
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: helpers.NewMockUserDBI()},
 		Params:   json.RawMessage(`{invalid json`),
 	}

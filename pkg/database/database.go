@@ -333,6 +333,7 @@ type MediaDBI interface {
 	BackgroundOperationDone()
 
 	InvalidateCountCache() error
+	RebuildSlugSearchCache() error
 
 	// Slug resolution cache methods
 	GetCachedSlugResolution(

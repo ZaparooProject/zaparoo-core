@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -52,6 +53,7 @@ func TestHandleMediaHistoryTop_NoParams(t *testing.T) {
 	}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 	}
 
@@ -78,6 +80,7 @@ func TestHandleMediaHistoryTop_CustomLimit(t *testing.T) {
 		Return([]database.MediaHistoryTopEntry{}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   json.RawMessage(`{"limit": 10}`),
 	}
@@ -100,6 +103,7 @@ func TestHandleMediaHistoryTop_EmptySystemsArray(t *testing.T) {
 		Return([]database.MediaHistoryTopEntry{}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   json.RawMessage(`{"systems": []}`),
 	}
@@ -131,6 +135,7 @@ func TestHandleMediaHistoryTop_SystemFilter(t *testing.T) {
 	}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   json.RawMessage(`{"systems": ["SNES"]}`),
 	}
@@ -176,6 +181,7 @@ func TestHandleMediaHistoryTop_MultipleSystems(t *testing.T) {
 	}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   json.RawMessage(`{"systems": ["SNES", "NES"]}`),
 	}
@@ -200,6 +206,7 @@ func TestHandleMediaHistoryTop_FuzzySystemResolution(t *testing.T) {
 		Return([]database.MediaHistoryTopEntry{}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   json.RawMessage(`{"systems": ["sega genesis"], "fuzzySystem": true}`),
 	}
@@ -224,6 +231,7 @@ func TestHandleMediaHistoryTop_SinceFilter(t *testing.T) {
 	mockUserDB.On("GetMediaHistoryTop", []string(nil), &sinceTime, 25).Return([]database.MediaHistoryTopEntry{}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   json.RawMessage(`{"since": "` + sinceStr + `"}`),
 	}
@@ -258,6 +266,7 @@ func TestHandleMediaHistoryTop_AllFilters(t *testing.T) {
 	}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   json.RawMessage(`{"systems": ["Genesis"], "since": "` + sinceStr + `", "limit": 5}`),
 	}
@@ -283,6 +292,7 @@ func TestHandleMediaHistoryTop_EmptyResults(t *testing.T) {
 		Return([]database.MediaHistoryTopEntry{}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 	}
 
@@ -300,6 +310,7 @@ func TestHandleMediaHistoryTop_InvalidSystemID(t *testing.T) {
 	t.Parallel()
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: helpers.NewMockUserDBI()},
 		Params:   json.RawMessage(`{"systems": ["NOT_A_REAL_SYSTEM"]}`),
 	}
@@ -313,6 +324,7 @@ func TestHandleMediaHistoryTop_InvalidParams(t *testing.T) {
 	t.Parallel()
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: helpers.NewMockUserDBI()},
 		Params:   json.RawMessage(`{invalid json`),
 	}
@@ -325,6 +337,7 @@ func TestHandleMediaHistoryTop_LimitZero(t *testing.T) {
 	t.Parallel()
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: helpers.NewMockUserDBI()},
 		Params:   json.RawMessage(`{"limit": 0}`),
 	}
@@ -338,6 +351,7 @@ func TestHandleMediaHistoryTop_LimitExceedsMax(t *testing.T) {
 	t.Parallel()
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: helpers.NewMockUserDBI()},
 		Params:   json.RawMessage(`{"limit": 200}`),
 	}
@@ -351,6 +365,7 @@ func TestHandleMediaHistoryTop_InvalidSince(t *testing.T) {
 	t.Parallel()
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: helpers.NewMockUserDBI()},
 		Params:   json.RawMessage(`{"since": "not-a-timestamp"}`),
 	}
@@ -369,6 +384,7 @@ func TestHandleMediaHistoryTop_DatabaseError(t *testing.T) {
 	)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 	}
 

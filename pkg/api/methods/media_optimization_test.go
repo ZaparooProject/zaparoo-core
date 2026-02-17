@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -137,6 +138,7 @@ func TestHandleMedia_OptimizationStatus(t *testing.T) {
 				UserDB:  mockUserDB,
 			}
 			env := requests.RequestEnv{
+				Context:  context.Background(),
 				Database: db,
 				State:    testState,
 			}
@@ -187,6 +189,7 @@ func TestHandleMedia_IndexingAndOptimizationPriority(t *testing.T) {
 		UserDB:  mockUserDB,
 	}
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: db,
 		State:    testState,
 	}
@@ -262,6 +265,7 @@ func TestHandleMedia_OptimizationStatusIntegration(t *testing.T) {
 				UserDB:  mockUserDB,
 			}
 			env := requests.RequestEnv{
+				Context:  context.Background(),
 				Database: db,
 				State:    testState,
 			}

@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -93,6 +94,7 @@ func TestHandlePlaytimeLimitsUpdate_ReEnableWithActiveMedia(t *testing.T) {
 	require.NoError(t, err)
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Platform:      mockPlatform,
 		Config:        cfg,
 		State:         appState,
@@ -155,6 +157,7 @@ func TestHandlePlaytimeLimitsUpdate_ReEnableWithNoActiveMedia(t *testing.T) {
 	require.NoError(t, err)
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Platform:      mockPlatform,
 		Config:        cfg,
 		State:         appState,
@@ -199,6 +202,7 @@ func TestHandleSettings_ReaderConnections(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Platform: mockPlatform,
 		Config:   cfg,
 		State:    appState,
@@ -233,6 +237,7 @@ func TestHandleSettings_EmptyReaderConnections(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Platform: mockPlatform,
 		Config:   cfg,
 		State:    appState,
@@ -272,6 +277,7 @@ func TestHandleSettingsUpdate_ReaderConnections(t *testing.T) {
 	require.NoError(t, err)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Platform: mockPlatform,
 		Config:   cfg,
 		State:    appState,
@@ -305,6 +311,7 @@ func TestHandleSettings_ErrorReportingDefault(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Platform: mockPlatform,
 		Config:   cfg,
 		State:    appState,
@@ -337,6 +344,7 @@ func TestHandleSettings_ErrorReportingEnabled(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Platform: mockPlatform,
 		Config:   cfg,
 		State:    appState,
@@ -375,6 +383,7 @@ func TestHandleSettingsUpdate_ErrorReportingEnable(t *testing.T) {
 	require.NoError(t, err)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Platform: mockPlatform,
 		Config:   cfg,
 		State:    appState,
@@ -412,6 +421,7 @@ func TestHandleSettingsUpdate_ErrorReportingDisable(t *testing.T) {
 	require.NoError(t, err)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Platform: mockPlatform,
 		Config:   cfg,
 		State:    appState,
@@ -447,6 +457,7 @@ func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {
 	require.NoError(t, err)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Platform: mockPlatform,
 		Config:   cfg,
 		State:    appState,
@@ -492,6 +503,7 @@ func TestHandleSettingsReload_RefreshesLauncherCache(t *testing.T) {
 	assert.Empty(t, testCache.GetAllLaunchers())
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Platform:      mockPlatform,
 		Config:        cfg,
 		LauncherCache: testCache,

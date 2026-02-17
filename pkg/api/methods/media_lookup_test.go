@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -75,6 +76,7 @@ func TestHandleMediaLookup_MatchFound(t *testing.T) {
 	launcherCache := &helpers.LauncherCache{}
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		State:         st,
 		Database:      &database.Database{MediaDB: mockMediaDB},
 		Config:        cfg,
@@ -130,6 +132,7 @@ func TestHandleMediaLookup_NilLauncherCache(t *testing.T) {
 	).Return(nil)
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		State:         st,
 		Database:      &database.Database{MediaDB: mockMediaDB},
 		Config:        cfg,
@@ -186,6 +189,7 @@ func TestHandleMediaLookup_NoMatch(t *testing.T) {
 	launcherCache := &helpers.LauncherCache{}
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		State:         st,
 		Database:      &database.Database{MediaDB: mockMediaDB},
 		Config:        cfg,
@@ -205,7 +209,8 @@ func TestHandleMediaLookup_MissingParams(t *testing.T) {
 	t.Parallel()
 
 	env := requests.RequestEnv{
-		Params: json.RawMessage(`{}`),
+		Context: context.Background(),
+		Params:  json.RawMessage(`{}`),
 	}
 
 	_, err := HandleMediaLookup(env)
@@ -216,7 +221,8 @@ func TestHandleMediaLookup_InvalidSystem(t *testing.T) {
 	t.Parallel()
 
 	env := requests.RequestEnv{
-		Params: json.RawMessage(`{"name": "Test", "system": "INVALID_SYSTEM_XYZ"}`),
+		Context: context.Background(),
+		Params:  json.RawMessage(`{"name": "Test", "system": "INVALID_SYSTEM_XYZ"}`),
 	}
 
 	_, err := HandleMediaLookup(env)
@@ -227,7 +233,8 @@ func TestHandleMediaLookup_EmptyName(t *testing.T) {
 	t.Parallel()
 
 	env := requests.RequestEnv{
-		Params: json.RawMessage(`{"name": "", "system": "NES"}`),
+		Context: context.Background(),
+		Params:  json.RawMessage(`{"name": "", "system": "NES"}`),
 	}
 
 	_, err := HandleMediaLookup(env)
@@ -273,6 +280,7 @@ func TestHandleMediaLookup_TagsReturned(t *testing.T) {
 	launcherCache := &helpers.LauncherCache{}
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		State:         st,
 		Database:      &database.Database{MediaDB: mockMediaDB},
 		Config:        cfg,

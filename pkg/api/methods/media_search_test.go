@@ -20,8 +20,10 @@
 package methods
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -149,7 +151,8 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -239,7 +242,8 @@ func TestHandleMediaSearch_WithCursor(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -290,6 +294,7 @@ func TestHandleMediaSearch_InvalidCursor(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Params:   paramsJSON,
 		ClientID: "127.0.0.1:12345",
 		State:    appState,
@@ -336,7 +341,8 @@ func TestHandleMediaTags_Success(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -383,7 +389,8 @@ func TestHandleMediaTags_NoParams(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: []byte("{}"), // Empty params should still work
+		Context: context.Background(),
+		Params:  []byte("{}"), // Empty params should still work
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -430,7 +437,8 @@ func TestHandleMediaSearch_WithLetterFiltering(t *testing.T) {
 
 	// Create request environment
 	env := requests.RequestEnv{
-		Params: paramBytes,
+		Context: context.Background(),
+		Params:  paramBytes,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -484,7 +492,8 @@ func TestHandleMediaSearch_FullyBlankQuery(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -552,7 +561,8 @@ func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -609,7 +619,8 @@ func TestHandleMediaSearch_SystemMetadata(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -684,6 +695,7 @@ func TestHandleMediaSearch_RejectsNonCanonicalSystemByDefault(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Params:   paramsJSON,
 		State:    appState,
 		ClientID: "127.0.0.1:12345",
@@ -718,7 +730,8 @@ func TestHandleMediaSearch_AcceptsFuzzySystem(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			MediaDB: mockMediaDB,
 		},
@@ -744,6 +757,7 @@ func TestHandleMediaTags_RejectsNonCanonicalSystemByDefault(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Params:   paramsJSON,
 		State:    appState,
 		ClientID: "127.0.0.1:12345",
@@ -766,7 +780,8 @@ func TestHandleGenerateMedia_RejectsNonCanonicalSystemByDefault(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			MediaDB: mockMediaDB,
 		},
@@ -854,7 +869,8 @@ func TestHandleMediaSearch_DeduplicatesSystems(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			MediaDB: mockMediaDB,
 		},
@@ -891,7 +907,8 @@ func TestHandleMediaTags_DeduplicatesSystems(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			MediaDB: mockMediaDB,
 		},
@@ -904,6 +921,32 @@ func TestHandleMediaTags_DeduplicatesSystems(t *testing.T) {
 	_, err = HandleMediaTags(env)
 	require.NoError(t, err)
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestSearchSemaphore_BlocksWhenFull(t *testing.T) {
+	t.Parallel()
+
+	// Fill the semaphore to capacity
+	for range cap(searchSem) {
+		searchSem <- struct{}{}
+	}
+	defer func() {
+		for range cap(searchSem) {
+			<-searchSem
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	env := requests.RequestEnv{
+		Context: ctx,
+		Params:  json.RawMessage(`{"query": "test"}`),
+	}
+
+	_, err := HandleMediaSearch(env)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestResolveSystems_DeduplicatesForGenerateMedia(t *testing.T) {

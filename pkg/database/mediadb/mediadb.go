@@ -70,8 +70,8 @@ type MediaDB struct {
 	clock                 clockwork.Clock
 	ctx                   context.Context
 	pl                    platforms.Platform
-	batchInsertSystem     *BatchInserter
-	batchInsertMediaTitle *BatchInserter
+	batchInsertTagType    *BatchInserter
+	batchInsertMedia      *BatchInserter
 	stmtInsertMedia       *sql.Stmt
 	tx                    *sql.Tx
 	stmtInsertSystem      *sql.Stmt
@@ -79,11 +79,12 @@ type MediaDB struct {
 	stmtInsertTag         *sql.Stmt
 	stmtInsertTagType     *sql.Stmt
 	batchInsertMediaTag   *BatchInserter
-	batchInsertTagType    *BatchInserter
+	batchInsertSystem     *BatchInserter
 	batchInsertTag        *BatchInserter
-	batchInsertMedia      *BatchInserter
+	batchInsertMediaTitle *BatchInserter
 	stmtInsertMediaTag    *sql.Stmt
 	stmtInsertMediaTitle  *sql.Stmt
+	slugSearchCache       atomic.Pointer[SlugSearchCache]
 	dbPath                string
 	backgroundOps         sync.WaitGroup
 	vacuumRetryDelay      time.Duration
@@ -92,6 +93,24 @@ type MediaDB struct {
 	sqlMu                 syncutil.RWMutex
 	isOptimizing          atomic.Bool
 	inTransaction         bool
+}
+
+// sqlQueryable is the subset of *sql.DB and *sql.Tx needed by SQL helpers.
+// Passing db.tx when a transaction is active avoids acquiring a second
+// connection from the pool (which would deadlock with SetMaxOpenConns(1)).
+type sqlQueryable interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	PrepareContext(ctx context.Context, query string) (*sql.Stmt, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// conn returns the active transaction if one exists, otherwise the raw pool.
+func (db *MediaDB) conn() sqlQueryable {
+	if db.tx != nil {
+		return db.tx
+	}
+	return db.sql
 }
 
 // invalidationScope describes what data was changed to determine cache invalidation scope
@@ -110,10 +129,10 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	// System-specific caches: invalidate all or by system
 	if scope.AllSystems {
 		// Full invalidation
-		if _, err := db.sql.ExecContext(db.ctx, "DELETE FROM SystemTagsCache"); err != nil {
+		if _, err := db.conn().ExecContext(db.ctx, "DELETE FROM SystemTagsCache"); err != nil {
 			log.Warn().Err(err).Msg("failed to invalidate all system tags cache")
 		}
-		if _, err := db.sql.ExecContext(db.ctx, "DELETE FROM SlugResolutionCache"); err != nil {
+		if _, err := db.conn().ExecContext(db.ctx, "DELETE FROM SlugResolutionCache"); err != nil {
 			log.Warn().Err(err).Msg("failed to invalidate all slug resolution cache")
 		}
 	} else if len(scope.SystemIDs) > 0 {
@@ -174,6 +193,7 @@ func (db *MediaDB) Open() error {
 	if err != nil {
 		return fmt.Errorf("failed to open media database: %w", err)
 	}
+	sqlInstance.SetMaxOpenConns(1)
 	db.sql = sqlInstance
 
 	if !exists {
@@ -196,6 +216,12 @@ func (db *MediaDB) Open() error {
 	_, err = db.sql.ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to run WAL checkpoint on startup")
+	}
+
+	if exists {
+		if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to build slug search cache on startup")
+		}
 	}
 
 	return nil
@@ -812,7 +838,7 @@ func (db *MediaDB) SearchMediaPathExact(systems []systemdefs.System, query strin
 	if db.sql == nil {
 		return make([]database.SearchResult, 0), ErrNullSQL
 	}
-	return sqlSearchMediaPathExact(db.ctx, db.sql, systems, query)
+	return sqlSearchMediaPathExact(db.ctx, db.conn(), systems, query)
 }
 
 func (db *MediaDB) SearchMediaWithFilters(
@@ -849,7 +875,7 @@ func (db *MediaDB) SearchMediaWithFilters(
 			}
 		}
 
-		// If no variants were generated (non-Latin word), we'll need Name fallback
+		// If no variants were generated (e.g. pure punctuation), fall back to Name search
 		if len(variants) == 0 && word != "" {
 			includeName = true
 		}
@@ -866,9 +892,37 @@ func (db *MediaDB) SearchMediaWithFilters(
 		}
 	}
 
-	// Search with variant groups
+	// Try in-memory cache path when we have slug variants and no Name fallback
+	cache := db.slugSearchCache.Load()
+	if cache != nil && len(variantGroups) > 0 && !includeName {
+		systemIDs := make([]string, len(filters.Systems))
+		for i, sys := range filters.Systems {
+			systemIDs[i] = sys.ID
+		}
+		systemDBIDs := cache.ResolveSystemDBIDs(systemIDs)
+
+		// Convert string variant groups to byte variant groups
+		byteGroups := make([][][]byte, len(variantGroups))
+		for i, group := range variantGroups {
+			byteGroups[i] = make([][]byte, len(group))
+			for j, v := range group {
+				byteGroups[i][j] = []byte(v)
+			}
+		}
+
+		candidateIDs := cache.Search(systemDBIDs, byteGroups)
+		if len(candidateIDs) == 0 {
+			return []database.SearchResultWithCursor{}, nil
+		}
+
+		return sqlSearchMediaByTitleDBIDs(
+			ctx, db.conn(), candidateIDs, filters.Tags,
+			filters.Letter, filters.Cursor, filters.Limit)
+	}
+
+	// Fallback: SQL LIKE path (no cache, non-Latin query, or browse-only)
 	results, err := sqlSearchMediaWithFilters(
-		ctx, db.sql, filters.Systems, variantGroups, qWords, filters.Tags,
+		ctx, db.conn(), filters.Systems, variantGroups, qWords, filters.Tags,
 		filters.Letter, filters.Cursor, filters.Limit, includeName)
 
 	return results, err
@@ -880,7 +934,7 @@ func (db *MediaDB) SearchMediaBySlug(
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
-	return sqlSearchMediaBySlug(ctx, db.sql, systemID, slug, tags)
+	return sqlSearchMediaBySlug(ctx, db.conn(), systemID, slug, tags)
 }
 
 func (db *MediaDB) SearchMediaBySecondarySlug(
@@ -889,7 +943,7 @@ func (db *MediaDB) SearchMediaBySecondarySlug(
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
-	return sqlSearchMediaBySecondarySlug(ctx, db.sql, systemID, secondarySlug, tags)
+	return sqlSearchMediaBySecondarySlug(ctx, db.conn(), systemID, secondarySlug, tags)
 }
 
 func (db *MediaDB) SearchMediaBySlugPrefix(
@@ -898,7 +952,7 @@ func (db *MediaDB) SearchMediaBySlugPrefix(
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
-	return sqlSearchMediaBySlugPrefix(ctx, db.sql, systemID, slugPrefix, tags)
+	return sqlSearchMediaBySlugPrefix(ctx, db.conn(), systemID, slugPrefix, tags)
 }
 
 // SearchMediaBySlugIn searches for media items matching any of the provided slugs using an IN clause.
@@ -909,7 +963,7 @@ func (db *MediaDB) SearchMediaBySlugIn(
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
-	return sqlSearchMediaBySlugIn(ctx, db.sql, systemID, slugList, tags)
+	return sqlSearchMediaBySlugIn(ctx, db.conn(), systemID, slugList, tags)
 }
 
 // GetTitlesWithPreFilter retrieves media titles filtered by slug length and word count ranges.
@@ -1070,7 +1124,7 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 
 	// TODO: since we approximated a glob, we should actually check
 	//       result paths against base glob to confirm
-	return sqlSearchMediaPathParts(db.ctx, db.sql, systems, variantGroups)
+	return sqlSearchMediaPathParts(db.ctx, db.conn(), systems, variantGroups)
 }
 
 // SystemIndexed returns true if a specific system is indexed in the media database.
@@ -1104,7 +1158,7 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 		return result, fmt.Errorf("failed to select random system: %w", err)
 	}
 
-	return sqlRandomGame(db.ctx, db.sql, &system)
+	return sqlRandomGame(db.ctx, db.conn(), &system)
 }
 
 // RandomGameWithQuery returns a random game matching the specified MediaQuery.
@@ -1124,7 +1178,7 @@ func (db *MediaDB) RandomGameWithQuery(query *database.MediaQuery) (database.Sea
 	}
 
 	// Cache miss - use the full SQL implementation and cache the stats
-	result, stats, err := sqlRandomGameWithQueryAndStats(db.ctx, db.sql, query)
+	result, stats, err := sqlRandomGameWithQueryAndStats(db.ctx, db.conn(), query)
 	if err != nil {
 		return result, err
 	}
@@ -1166,7 +1220,7 @@ func (db *MediaDB) GetCachedStats(ctx context.Context, query *database.MediaQuer
 	}
 
 	var stats MediaStats
-	err = db.sql.QueryRowContext(ctx,
+	err = db.conn().QueryRowContext(ctx,
 		"SELECT Count, MinDBID, MaxDBID FROM MediaCountCache WHERE QueryHash = ?",
 		queryHash).Scan(&stats.Count, &stats.MinDBID, &stats.MaxDBID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1207,7 +1261,7 @@ func (db *MediaDB) randomGameWithStats(query *database.MediaQuery, stats MediaSt
 	`, whereClause)
 
 	args = append(args, targetDBID)
-	err = db.sql.QueryRowContext(db.ctx, selectQuery, args...).Scan(
+	err = db.conn().QueryRowContext(db.ctx, selectQuery, args...).Scan(
 		&row.SystemID,
 		&row.Path,
 	)
@@ -1223,7 +1277,7 @@ func (db *MediaDB) randomGameWithStats(query *database.MediaQuery, stats MediaSt
 			LIMIT 1
 		`, whereClause)
 		args[len(args)-1] = targetDBID // Replace the last argument
-		err = db.sql.QueryRowContext(db.ctx, selectQuery, args...).Scan(
+		err = db.conn().QueryRowContext(db.ctx, selectQuery, args...).Scan(
 			&row.SystemID,
 			&row.Path,
 		)
@@ -1251,7 +1305,7 @@ func (db *MediaDB) SetCachedStats(ctx context.Context, query *database.MediaQuer
 		return fmt.Errorf("failed to marshal query params: %w", err)
 	}
 
-	_, err = db.sql.ExecContext(ctx, `
+	_, err = db.conn().ExecContext(ctx, `
 		INSERT OR REPLACE INTO MediaCountCache (QueryHash, QueryParams, Count, MinDBID, MaxDBID, LastUpdated)
 		VALUES (?, ?, ?, ?, ?, ?)
 	`, queryHash, string(queryParams), stats.Count, stats.MinDBID, stats.MaxDBID, time.Now().Unix())
@@ -1269,7 +1323,7 @@ func (db *MediaDB) InvalidateCountCache() error {
 		return ErrNullSQL
 	}
 
-	_, err := db.sql.ExecContext(db.ctx, "DELETE FROM MediaCountCache")
+	_, err := db.conn().ExecContext(db.ctx, "DELETE FROM MediaCountCache")
 	if err != nil {
 		return fmt.Errorf("failed to invalidate count cache: %w", err)
 	}
@@ -1311,11 +1365,11 @@ func (*MediaDB) generateQueryHash(query *database.MediaQuery) (string, error) {
 }
 
 func (db *MediaDB) FindSystem(row database.System) (database.System, error) {
-	return sqlFindSystem(db.ctx, db.sql, row)
+	return sqlFindSystem(db.ctx, db.conn(), row)
 }
 
 func (db *MediaDB) FindSystemBySystemID(systemID string) (database.System, error) {
-	return sqlFindSystemBySystemID(db.ctx, db.sql, systemID)
+	return sqlFindSystemBySystemID(db.ctx, db.conn(), systemID)
 }
 
 func (db *MediaDB) InsertSystem(row database.System) (database.System, error) {
@@ -1356,7 +1410,7 @@ func (db *MediaDB) FindOrInsertSystem(row database.System) (database.System, err
 }
 
 func (db *MediaDB) FindMediaTitle(row *database.MediaTitle) (database.MediaTitle, error) {
-	return sqlFindMediaTitle(db.ctx, db.sql, row)
+	return sqlFindMediaTitle(db.ctx, db.conn(), row)
 }
 
 func (db *MediaDB) InsertMediaTitle(row *database.MediaTitle) (database.MediaTitle, error) {
@@ -1398,7 +1452,7 @@ func (db *MediaDB) FindOrInsertMediaTitle(row *database.MediaTitle) (database.Me
 }
 
 func (db *MediaDB) FindMedia(row database.Media) (database.Media, error) {
-	return sqlFindMedia(db.ctx, db.sql, row)
+	return sqlFindMedia(db.ctx, db.conn(), row)
 }
 
 func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
@@ -1439,7 +1493,7 @@ func (db *MediaDB) FindOrInsertMedia(row database.Media) (database.Media, error)
 }
 
 func (db *MediaDB) FindTagType(row database.TagType) (database.TagType, error) {
-	return sqlFindTagType(db.ctx, db.sql, row)
+	return sqlFindTagType(db.ctx, db.conn(), row)
 }
 
 // InsertTagType inserts a new TagType into the database.
@@ -1481,7 +1535,7 @@ func (db *MediaDB) FindOrInsertTagType(row database.TagType) (database.TagType, 
 }
 
 func (db *MediaDB) FindTag(row database.Tag) (database.Tag, error) {
-	return sqlFindTag(db.ctx, db.sql, row)
+	return sqlFindTag(db.ctx, db.conn(), row)
 }
 
 func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
@@ -1522,7 +1576,7 @@ func (db *MediaDB) FindOrInsertTag(row database.Tag) (database.Tag, error) {
 }
 
 func (db *MediaDB) FindMediaTag(row database.MediaTag) (database.MediaTag, error) {
-	return sqlFindMediaTag(db.ctx, db.sql, row)
+	return sqlFindMediaTag(db.ctx, db.conn(), row)
 }
 
 func (db *MediaDB) InsertMediaTag(row database.MediaTag) (database.MediaTag, error) {

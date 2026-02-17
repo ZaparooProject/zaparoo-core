@@ -32,7 +32,7 @@ import (
 
 const insertSystemSQL = `INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)`
 
-func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (database.System, error) {
+func sqlFindSystem(ctx context.Context, db sqlQueryable, system database.System) (database.System, error) {
 	var row database.System
 	stmt, err := db.PrepareContext(ctx, `
 		select
@@ -64,7 +64,7 @@ func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (dat
 	return row, nil
 }
 
-func sqlFindSystemBySystemID(ctx context.Context, db *sql.DB, systemID string) (database.System, error) {
+func sqlFindSystemBySystemID(ctx context.Context, db sqlQueryable, systemID string) (database.System, error) {
 	var row database.System
 	stmt, err := db.PrepareContext(ctx, `
 		select

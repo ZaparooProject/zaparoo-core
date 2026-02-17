@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -120,6 +121,7 @@ func TestHandleActiveMedia_WithZapScript(t *testing.T) {
 			}
 
 			env := requests.RequestEnv{
+				Context: context.Background(),
 				Database: &database.Database{
 					MediaDB: mockMediaDB,
 				},
@@ -251,6 +253,7 @@ func TestHandleMedia_WithActiveMediaZapScript(t *testing.T) {
 			}
 
 			env := requests.RequestEnv{
+				Context: context.Background(),
 				Database: &database.Database{
 					MediaDB: mockMediaDB,
 				},
@@ -297,6 +300,7 @@ func TestHandleActiveMedia_WithLauncherControls(t *testing.T) {
 		Return("", nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		State:    st,
 		Database: &database.Database{MediaDB: mockMediaDB},
 	}
@@ -326,6 +330,7 @@ func TestHandleActiveMedia_WithoutLauncherControls(t *testing.T) {
 		Return("", nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		State:    st,
 		Database: &database.Database{MediaDB: mockMediaDB},
 	}

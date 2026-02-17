@@ -1513,6 +1513,14 @@ func (m *MockMediaDBI) InvalidateCountCache() error {
 	return nil
 }
 
+func (m *MockMediaDBI) RebuildSlugSearchCache() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock RebuildSlugSearchCache: %w", err)
+	}
+	return nil
+}
+
 // Slug resolution cache methods
 func (m *MockMediaDBI) GetCachedSlugResolution(
 	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
@@ -1688,6 +1696,7 @@ func NewMockMediaDBI() *MockMediaDBI {
 	// Set default expectation for GetLaunchCommandForMedia to return empty string
 	// This is called during media search and should succeed by default
 	mockMediaDB.On("GetLaunchCommandForMedia", mock.Anything, mock.Anything, mock.Anything).Return("", nil).Maybe()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	return mockMediaDB
 }
 

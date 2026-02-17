@@ -91,7 +91,7 @@ func (db *MediaDB) GetCachedSlugResolution(
 		return 0, "", false
 	}
 
-	err = db.sql.QueryRowContext(ctx,
+	err = db.conn().QueryRowContext(ctx,
 		"SELECT MediaDBID, Strategy FROM SlugResolutionCache WHERE CacheKey = ?",
 		cacheKey).Scan(&mediaDBID, &strategy)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -130,7 +130,7 @@ func (db *MediaDB) SetCachedSlugResolution(
 		return fmt.Errorf("failed to marshal tag filters: %w", err)
 	}
 
-	_, err = db.sql.ExecContext(ctx, `
+	_, err = db.conn().ExecContext(ctx, `
 		INSERT OR REPLACE INTO SlugResolutionCache
 		(CacheKey, SystemID, Slug, TagFilters, MediaDBID, Strategy, LastUpdated)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -156,7 +156,7 @@ func (db *MediaDB) InvalidateSlugCache(ctx context.Context) error {
 		return ErrNullSQL
 	}
 
-	_, err := db.sql.ExecContext(ctx, "DELETE FROM SlugResolutionCache")
+	_, err := db.conn().ExecContext(ctx, "DELETE FROM SlugResolutionCache")
 	if err != nil {
 		return fmt.Errorf("failed to invalidate slug resolution cache: %w", err)
 	}
@@ -187,7 +187,7 @@ func (db *MediaDB) InvalidateSlugCacheForSystems(ctx context.Context, systemIDs 
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	deleteStmt := fmt.Sprintf("DELETE FROM SlugResolutionCache WHERE SystemID IN (%s)", placeholders)
-	_, err := db.sql.ExecContext(ctx, deleteStmt, args...)
+	_, err := db.conn().ExecContext(ctx, deleteStmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to invalidate slug cache for systems: %w", err)
 	}
@@ -206,7 +206,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 	result := database.SearchResultWithCursor{}
 
 	// Query for media information
-	err := db.sql.QueryRowContext(ctx, `
+	err := db.conn().QueryRowContext(ctx, `
 		SELECT
 			Systems.SystemID,
 			MediaTitles.Name,
@@ -227,7 +227,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 	}
 
 	// Fetch tags for this media
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.conn().QueryContext(ctx, `
 		SELECT
 			Tags.Tag,
 			TagTypes.Type
@@ -270,7 +270,7 @@ func (db *MediaDB) GetYearBySystemAndPath(ctx context.Context, systemID, path st
 	}
 
 	var year string
-	err := db.sql.QueryRowContext(ctx, `
+	err := db.conn().QueryRowContext(ctx, `
 		SELECT Tags.Tag
 		FROM Media
 		INNER JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID

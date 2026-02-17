@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -44,8 +45,9 @@ func TestHandleMediaControl_NoActiveMedia(t *testing.T) {
 	drainNotifications(t, ns)
 
 	env := requests.RequestEnv{
-		State:  st,
-		Params: json.RawMessage(`{"action": "save_state"}`),
+		Context: context.Background(),
+		State:   st,
+		Params:  json.RawMessage(`{"action": "save_state"}`),
 	}
 
 	_, err := HandleMediaControl(env)
@@ -78,6 +80,7 @@ func TestHandleMediaControl_UnknownAction(t *testing.T) {
 	})
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		State:         st,
 		LauncherCache: cache,
 		Params:        json.RawMessage(`{"action": "unknown_action"}`),
@@ -108,6 +111,7 @@ func TestHandleMediaControl_NoControls(t *testing.T) {
 	})
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		State:         st,
 		LauncherCache: cache,
 		Params:        json.RawMessage(`{"action": "save_state"}`),
@@ -145,6 +149,7 @@ func TestHandleMediaControl_Success(t *testing.T) {
 	})
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		State:         st,
 		LauncherCache: cache,
 		Params:        json.RawMessage(`{"action": "save_state"}`),
@@ -160,7 +165,8 @@ func TestHandleMediaControl_MissingParams(t *testing.T) {
 	t.Parallel()
 
 	env := requests.RequestEnv{
-		Params: json.RawMessage(`{}`),
+		Context: context.Background(),
+		Params:  json.RawMessage(`{}`),
 	}
 
 	_, err := HandleMediaControl(env)
@@ -194,6 +200,7 @@ func TestHandleMediaControl_ArgsPassThrough(t *testing.T) {
 	})
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		State:         st,
 		LauncherCache: cache,
 		Params:        json.RawMessage(`{"action": "save_state", "args": {"slot": "3"}}`),
@@ -232,6 +239,7 @@ func TestHandleMediaControl_ArgsNilWhenOmitted(t *testing.T) {
 	})
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		State:         st,
 		LauncherCache: cache,
 		Params:        json.RawMessage(`{"action": "save_state"}`),
@@ -268,6 +276,7 @@ func TestHandleMediaControl_ScriptExecution(t *testing.T) {
 	})
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		State:         st,
 		Platform:      pl,
 		Config:        &config.Instance{},

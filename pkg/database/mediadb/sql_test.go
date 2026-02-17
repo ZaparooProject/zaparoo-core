@@ -1435,3 +1435,139 @@ func TestCheckForDuplicateMediaTitles_NoDuplicates(t *testing.T) {
 	assert.Empty(t, duplicates, "Should have no duplicates")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestSqlSearchMediaByTitleDBIDs_TempTablePath(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Generate 20001 IDs to exceed the 20000 threshold and trigger the temp table path
+	ids := make([]int64, 20001)
+	for i := range ids {
+		ids[i] = int64(i + 1)
+	}
+
+	// 1. CREATE TEMP TABLE
+	mock.ExpectExec("CREATE TEMP TABLE IF NOT EXISTS _search_candidates").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// 2. DELETE stale data
+	mock.ExpectExec("DELETE FROM _search_candidates").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// 3. INSERT batches (40 full batches of 500 + 1 partial batch of 1)
+	for range 40 {
+		mock.ExpectExec("INSERT OR IGNORE INTO _search_candidates").
+			WillReturnResult(sqlmock.NewResult(0, 500))
+	}
+	mock.ExpectExec("INSERT OR IGNORE INTO _search_candidates").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// 5. Main SELECT query uses subquery against temp table
+	mock.ExpectQuery("SELECT .+ FROM MediaTitles").
+		WithArgs(100).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
+			AddRow("NES", "Game One", "/games/nes/one.nes", 42).
+			AddRow("NES", "Game Two", "/games/nes/two.nes", 99))
+
+	// 6. Tags query
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tags\\.Tag.*TagTypes\\.Type.*").
+		ExpectQuery().
+		WithArgs(42, 99).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+
+	// 7. Deferred DROP TABLE
+	mock.ExpectExec("DROP TABLE IF EXISTS _search_candidates").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	results, err := sqlSearchMediaByTitleDBIDs(
+		context.Background(), db, ids, nil, nil, nil, 100)
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+	assert.Equal(t, "Game One", results[0].Name)
+	assert.Equal(t, "Game Two", results[1].Name)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaByTitleDBIDs_BasicLookup(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("SELECT .+ FROM MediaTitles").
+		WithArgs(int64(10), int64(20), 100).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
+			AddRow("NES", "Super Mario Bros", "/games/nes/smb.nes", 100).
+			AddRow("NES", "Zelda", "/games/nes/zelda.nes", 200))
+
+	// Tag query (fetchAndAttachTags uses PrepareContext)
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tags\\.Tag.*TagTypes\\.Type.*").
+		ExpectQuery().
+		WithArgs(100, 200).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+
+	results, err := sqlSearchMediaByTitleDBIDs(
+		context.Background(), db, []int64{10, 20}, nil, nil, nil, 100)
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+	assert.Equal(t, "Super Mario Bros", results[0].Name)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaByTitleDBIDs_EmptyCandidates(t *testing.T) {
+	t.Parallel()
+	results, err := sqlSearchMediaByTitleDBIDs(
+		context.Background(), nil, []int64{}, nil, nil, nil, 100)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
+
+func TestSqlSearchMediaByTitleDBIDs_WithCursor(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	cursor := int64(150)
+	mock.ExpectQuery("SELECT .+ FROM MediaTitles").
+		WithArgs(int64(10), cursor, 100).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
+			AddRow("NES", "Zelda", "/games/nes/zelda.nes", 200))
+
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tags\\.Tag.*TagTypes\\.Type.*").
+		ExpectQuery().
+		WithArgs(200).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+
+	results, err := sqlSearchMediaByTitleDBIDs(
+		context.Background(), db, []int64{10}, nil, nil, &cursor, 100)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaByTitleDBIDs_WithLetter(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	letter := "S"
+	mock.ExpectQuery("SELECT .+ FROM MediaTitles").
+		WithArgs(int64(10), letter, 100).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
+			AddRow("NES", "Super Mario Bros", "/games/nes/smb.nes", 100))
+
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tags\\.Tag.*TagTypes\\.Type.*").
+		ExpectQuery().
+		WithArgs(100).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+
+	results, err := sqlSearchMediaByTitleDBIDs(
+		context.Background(), db, []int64{10}, nil, &letter, nil, 100)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

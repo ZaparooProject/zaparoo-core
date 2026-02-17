@@ -35,7 +35,7 @@ const (
 	insertTagTypeSQL = `INSERT INTO TagTypes (DBID, Type) VALUES (?, ?)`
 )
 
-func sqlFindTagType(ctx context.Context, db *sql.DB, tagType database.TagType) (database.TagType, error) {
+func sqlFindTagType(ctx context.Context, db sqlQueryable, tagType database.TagType) (database.TagType, error) {
 	var row database.TagType
 	stmt, err := db.PrepareContext(ctx, `
 		select
@@ -122,7 +122,7 @@ func sqlInsertTagType(ctx context.Context, db *sql.DB, row database.TagType) (da
 	return row, nil
 }
 
-func sqlFindTag(ctx context.Context, db *sql.DB, tagType database.Tag) (database.Tag, error) {
+func sqlFindTag(ctx context.Context, db sqlQueryable, tagType database.Tag) (database.Tag, error) {
 	var row database.Tag
 	stmt, err := db.PrepareContext(ctx, `
 		select

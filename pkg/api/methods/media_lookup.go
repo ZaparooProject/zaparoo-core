@@ -49,7 +49,7 @@ func HandleMediaLookup(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		launchers = env.LauncherCache.GetLaunchersBySystem(system.ID)
 	}
 
-	ctx := env.State.GetContext()
+	ctx := env.Context
 	result, err := titles.ResolveTitle(ctx, &titles.ResolveParams{
 		SystemID:  system.ID,
 		GameName:  params.Name,

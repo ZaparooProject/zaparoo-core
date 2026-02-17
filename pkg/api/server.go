@@ -264,12 +264,6 @@ func NewMethodMap() *MethodMap {
 // handleRequest validates a client request and forwards it to the
 // appropriate method handler. Returns the method's result object.
 //
-// TODO: create a per-request timeout context (child of state context) and
-// pass it via RequestEnv so all method handlers can use it for cancellation.
-// Currently handlers either use context.Background() or state context directly.
-// For HTTP transport, the request context (r.Context()) should also be merged
-// so that client disconnects and middleware timeouts are respected.
-//
 //nolint:gocritic // single-use parameter in API handler
 func handleRequest(
 	methodMap *MethodMap,
@@ -765,9 +759,13 @@ func handleWSMessage(
 			return
 		}
 
+		reqCtx, reqCancel := context.WithTimeout(st.GetContext(), config.APIRequestTimeout)
+		defer reqCancel()
+
 		rawIP := strings.SplitN(session.Request.RemoteAddr, ":", 2)
 		clientIP := net.ParseIP(rawIP[0])
 		env := requests.RequestEnv{
+			Context:       reqCtx,
 			Platform:      platform,
 			Config:        cfg,
 			State:         st,
@@ -831,9 +829,16 @@ func handlePostRequest(
 			return
 		}
 
+		// Derive from r.Context() (already has APIRequestTimeout from middleware)
+		// but also cancel on app shutdown via st.GetContext().
+		reqCtx, reqCancel := context.WithCancel(r.Context())
+		context.AfterFunc(st.GetContext(), reqCancel)
+		defer reqCancel()
+
 		rawIP := strings.SplitN(r.RemoteAddr, ":", 2)
 		clientIP := net.ParseIP(rawIP[0])
 		env := requests.RequestEnv{
+			Context:       reqCtx,
 			Platform:      platform,
 			Config:        cfg,
 			State:         st,
