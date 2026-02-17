@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"testing"
 
@@ -1630,4 +1631,217 @@ func TestMediaDB_GetTitlesBySystemID_Integration(t *testing.T) {
 	for i := 1; i < len(nesTitleResults); i++ {
 		assert.Greater(t, nesTitleResults[i].DBID, nesTitleResults[i-1].DBID, "results should be ordered by DBID")
 	}
+}
+
+// TestMediaDB_CacheFastPath_MatchesSQL_Integration verifies that cache fast-paths
+// produce the same results as the SQL-only fallback paths. Runs each query twice:
+// once without the slug search cache (SQL path) and once with it (cache path).
+func TestMediaDB_CacheFastPath_MatchesSQL_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create tag types before transaction
+	regionTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "region"})
+	require.NoError(t, err)
+	genreTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "genre"})
+	require.NoError(t, err)
+
+	err = mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	snesSystem, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	insertedNES, err := mediaDB.InsertSystem(database.System{SystemID: nesSystem.ID, Name: "NES"})
+	require.NoError(t, err)
+	insertedSNES, err := mediaDB.InsertSystem(database.System{SystemID: snesSystem.ID, Name: "SNES"})
+	require.NoError(t, err)
+
+	type testGame struct {
+		name       string
+		secSlug    string
+		path       string
+		tags       []database.TagInfo
+		systemDBID int64
+	}
+
+	games := []testGame{
+		{
+			systemDBID: insertedNES.DBID, name: "Super Mario Bros", path: "/roms/nes/smb.nes",
+			tags: []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "platform"}},
+		},
+		{
+			systemDBID: insertedNES.DBID, name: "Super Mario Bros 2", path: "/roms/nes/smb2.nes",
+			tags: []database.TagInfo{{Type: "region", Tag: "japan"}, {Type: "genre", Tag: "platform"}},
+		},
+		{
+			systemDBID: insertedNES.DBID, name: "Dr. Mario", path: "/roms/nes/dr_mario.nes",
+			tags: []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "puzzle"}},
+		},
+		{
+			systemDBID: insertedSNES.DBID, name: "Super Mario World", path: "/roms/snes/smw.smc",
+			tags: []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "platform"}},
+		},
+		{
+			systemDBID: insertedSNES.DBID, name: "The Legend of Zelda: A Link to the Past", secSlug: "zelda3",
+			path: "/roms/snes/zelda_lttp.smc",
+			tags: []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "adventure"}},
+		},
+	}
+
+	for _, game := range games {
+		var secSlug sql.NullString
+		if game.secSlug != "" {
+			secSlug = sql.NullString{String: game.secSlug, Valid: true}
+		}
+		title := database.MediaTitle{
+			SystemDBID:    game.systemDBID,
+			Slug:          slugs.Slugify(slugs.MediaTypeGame, game.name),
+			Name:          game.name,
+			SecondarySlug: secSlug,
+		}
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
+		require.NoError(t, titleErr)
+
+		media := database.Media{
+			SystemDBID:     game.systemDBID,
+			MediaTitleDBID: insertedTitle.DBID,
+			Path:           game.path,
+		}
+		insertedMedia, mediaErr := mediaDB.InsertMedia(media)
+		require.NoError(t, mediaErr)
+
+		for _, tag := range game.tags {
+			var tagTypeDBID int64
+			switch tag.Type {
+			case "region":
+				tagTypeDBID = regionTagType.DBID
+			case "genre":
+				tagTypeDBID = genreTagType.DBID
+			}
+			dbTag, tagErr := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: tagTypeDBID, Tag: tag.Tag})
+			require.NoError(t, tagErr)
+			_, tagErr = mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: insertedMedia.DBID, TagDBID: dbTag.DBID})
+			require.NoError(t, tagErr)
+		}
+	}
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// --- Phase 1: Run queries WITHOUT cache (SQL path) ---
+	// Cache should be nil since setupTempMediaDB creates a new DB
+	assert.Nil(t, mediaDB.slugSearchCache.Load(), "cache should be nil before build")
+
+	type searchQuery struct {
+		fn   func() ([]database.SearchResultWithCursor, error)
+		name string
+	}
+
+	queries := []searchQuery{
+		{name: "SearchMediaBySlug NES supermariobrothers", fn: func() ([]database.SearchResultWithCursor, error) {
+			return mediaDB.SearchMediaBySlug(ctx, "NES", "Super Mario Bros", nil)
+		}},
+		{name: "SearchMediaBySlug SNES supermarioworld", fn: func() ([]database.SearchResultWithCursor, error) {
+			return mediaDB.SearchMediaBySlug(ctx, "SNES", "Super Mario World", nil)
+		}},
+		{name: "SearchMediaBySlug NES drmario with tag", fn: func() ([]database.SearchResultWithCursor, error) {
+			return mediaDB.SearchMediaBySlug(ctx, "NES", "Dr. Mario",
+				[]zapscript.TagFilter{{Type: "genre", Value: "puzzle"}})
+		}},
+		{name: "SearchMediaBySlug no match", fn: func() ([]database.SearchResultWithCursor, error) {
+			return mediaDB.SearchMediaBySlug(ctx, "NES", "nonexistent", nil)
+		}},
+		{name: "SearchMediaBySlug wrong system", fn: func() ([]database.SearchResultWithCursor, error) {
+			return mediaDB.SearchMediaBySlug(ctx, "Genesis", "Super Mario Bros", nil)
+		}},
+		{name: "SearchMediaBySecondarySlug zelda3", fn: func() ([]database.SearchResultWithCursor, error) {
+			return mediaDB.SearchMediaBySecondarySlug(ctx, "SNES", "zelda3", nil)
+		}},
+		{name: "SearchMediaBySecondarySlug no match", fn: func() ([]database.SearchResultWithCursor, error) {
+			return mediaDB.SearchMediaBySecondarySlug(ctx, "SNES", "nonexistent", nil)
+		}},
+		{name: "SearchMediaBySlugPrefix supermario NES", fn: func() ([]database.SearchResultWithCursor, error) {
+			return mediaDB.SearchMediaBySlugPrefix(ctx, "NES", "Super Mario", nil)
+		}},
+		{name: "SearchMediaBySlugPrefix no match", fn: func() ([]database.SearchResultWithCursor, error) {
+			return mediaDB.SearchMediaBySlugPrefix(ctx, "NES", "zzz", nil)
+		}},
+		{name: "SearchMediaBySlugIn NES multi", fn: func() ([]database.SearchResultWithCursor, error) {
+			return mediaDB.SearchMediaBySlugIn(ctx, "NES",
+				[]string{"Super Mario Bros", "Dr. Mario"}, nil)
+		}},
+		{name: "SearchMediaBySlugIn no match", fn: func() ([]database.SearchResultWithCursor, error) {
+			return mediaDB.SearchMediaBySlugIn(ctx, "NES", []string{"nonexistent"}, nil)
+		}},
+	}
+
+	sqlResults := make([][]database.SearchResultWithCursor, len(queries))
+	for i, q := range queries {
+		result, queryErr := q.fn()
+		require.NoError(t, queryErr, "SQL path failed for %s", q.name)
+		sqlResults[i] = result
+	}
+
+	// --- Phase 2: Build cache and run the same queries (cache path) ---
+	err = mediaDB.RebuildSlugSearchCache()
+	require.NoError(t, err)
+	require.NotNil(t, mediaDB.slugSearchCache.Load(), "cache should be built")
+
+	for i, q := range queries {
+		cacheResult, queryErr := q.fn()
+		require.NoError(t, queryErr, "cache path failed for %s", q.name)
+
+		// Compare result counts
+		assert.Len(t, cacheResult, len(sqlResults[i]),
+			"result count mismatch for %s: SQL=%d cache=%d",
+			q.name, len(sqlResults[i]), len(cacheResult))
+
+		// Compare result sets (order may differ between SQL and cache paths)
+		if len(cacheResult) == len(sqlResults[i]) {
+			sqlPaths := make([]string, len(sqlResults[i]))
+			cachePaths := make([]string, len(cacheResult))
+			for j := range sqlResults[i] {
+				sqlPaths[j] = sqlResults[i][j].Path
+			}
+			for j := range cacheResult {
+				cachePaths[j] = cacheResult[j].Path
+			}
+			assert.ElementsMatch(t, sqlPaths, cachePaths,
+				"path set mismatch for %s", q.name)
+		}
+	}
+
+	// --- Phase 3: Verify RandomGame and RandomGameWithQuery via cache ---
+	result, err := mediaDB.RandomGame([]systemdefs.System{*nesSystem})
+	require.NoError(t, err)
+	assert.Equal(t, nesSystem.ID, result.SystemID)
+	assert.NotEmpty(t, result.Path)
+
+	result, err = mediaDB.RandomGameWithQuery(&database.MediaQuery{
+		Systems: []string{nesSystem.ID},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, nesSystem.ID, result.SystemID)
+	assert.NotEmpty(t, result.Path)
+
+	// RandomGameWithQuery with multiple systems
+	result, err = mediaDB.RandomGameWithQuery(&database.MediaQuery{
+		Systems: []string{nesSystem.ID, snesSystem.ID},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, []string{nesSystem.ID, snesSystem.ID}, result.SystemID)
+	assert.NotEmpty(t, result.Path)
+
+	// RandomGame with empty system filter should fail
+	_, err = mediaDB.RandomGame(nil)
+	require.Error(t, err)
 }

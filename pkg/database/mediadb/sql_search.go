@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -666,7 +667,7 @@ func sqlSearchMediaBySlug(
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE `+strings.Join(whereConditions, " AND ")+`
 		ORDER BY MediaTitles.Name
-		LIMIT 50
+		LIMIT `+strconv.Itoa(defaultSlugSearchLimit)+`
 	`)
 	if err != nil {
 		return results, fmt.Errorf("failed to prepare media by slug search statement: %w", err)
@@ -751,7 +752,7 @@ func sqlSearchMediaBySecondarySlug(
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE `+strings.Join(whereConditions, " AND ")+`
 		ORDER BY MediaTitles.Name
-		LIMIT 50
+		LIMIT `+strconv.Itoa(defaultSlugSearchLimit)+`
 	`)
 	if err != nil {
 		return results, fmt.Errorf("failed to prepare media by secondary slug search statement: %w", err)
@@ -836,7 +837,7 @@ func sqlSearchMediaBySlugPrefix(
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE `+strings.Join(whereConditions, " AND ")+`
 		ORDER BY MediaTitles.Name
-		LIMIT 50
+		LIMIT `+strconv.Itoa(defaultSlugSearchLimit)+`
 	`)
 	if err != nil {
 		return results, fmt.Errorf("failed to prepare media by slug prefix search statement: %w", err)
@@ -943,7 +944,7 @@ func sqlSearchMediaBySlugIn(
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE `+strings.Join(whereConditions, " AND ")+`
 		ORDER BY MediaTitles.Name
-		LIMIT 50
+		LIMIT `+strconv.Itoa(defaultSlugSearchLimit)+`
 	`)
 	if err != nil {
 		return results, fmt.Errorf("failed to prepare media by slug IN search statement: %w", err)
@@ -987,6 +988,24 @@ func sqlSearchMediaBySlugIn(
 	}
 
 	return results, nil
+}
+
+// sqlGetRandomMediaForTitle returns a random media entry for the given title DBID.
+func sqlGetRandomMediaForTitle(ctx context.Context, db sqlQueryable, titleDBID int64) (database.SearchResult, error) {
+	var row database.SearchResult
+	err := db.QueryRowContext(ctx, `
+		SELECT Systems.SystemID, Media.Path
+		FROM Media
+		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+		WHERE Media.MediaTitleDBID = ?
+		ORDER BY RANDOM() LIMIT 1
+	`, titleDBID).Scan(&row.SystemID, &row.Path)
+	if err != nil {
+		return row, fmt.Errorf("failed to get random media for title %d: %w", titleDBID, err)
+	}
+	row.Name = helpers.FilenameFromPath(row.Path)
+	return row, nil
 }
 
 func sqlRandomGame(ctx context.Context, db sqlQueryable, system *systemdefs.System) (database.SearchResult, error) {

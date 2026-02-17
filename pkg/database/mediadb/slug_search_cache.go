@@ -25,6 +25,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
 
@@ -152,45 +153,18 @@ func (c *SlugSearchCache) Search(systemDBIDs []int64, variantGroups [][][]byte) 
 		return nil
 	}
 
-	// Build a fast system lookup set
-	var systemSet map[int64]struct{}
-	if len(systemDBIDs) > 0 {
-		systemSet = make(map[int64]struct{}, len(systemDBIDs))
-		for _, id := range systemDBIDs {
-			systemSet[id] = struct{}{}
-		}
-	}
-
+	systemSet := buildSystemSet(systemDBIDs)
 	candidates := make([]int64, 0, min(c.entryCount, 1024))
 
 	for i := range c.entryCount {
-		// System filter (cheapest check)
 		if systemSet != nil {
 			if _, ok := systemSet[c.systemDBIDs[i]]; !ok {
 				continue
 			}
 		}
 
-		// Slug for this entry
-		slugStart := c.slugOffsets[i]
-		slugEnd := c.slugOffsets[i+1]
-		// Exclude the null separator from the slug bytes
-		if slugEnd > slugStart && c.slugData[slugEnd-1] == 0 {
-			slugEnd--
-		}
-		slug := c.slugData[slugStart:slugEnd]
-
-		// Secondary slug for this entry (consecutive equal offsets = no data)
-		var secSlug []byte
-		secStart := c.secSlugOffsets[i]
-		secEnd := c.secSlugOffsets[i+1]
-		if secEnd > secStart {
-			end := secEnd
-			if end > secStart && c.secSlugData[end-1] == 0 {
-				end--
-			}
-			secSlug = c.secSlugData[secStart:end]
-		}
+		slug := c.slugForEntry(i)
+		secSlug := c.secSlugForEntry(i)
 
 		// AND-of-ORs: every group must have at least one variant match
 		allGroupsMatch := true
@@ -218,6 +192,174 @@ func (c *SlugSearchCache) Search(systemDBIDs []int64, variantGroups [][][]byte) 
 	}
 
 	return candidates
+}
+
+// slugForEntry returns the slug bytes for entry i (excluding null separator).
+func (c *SlugSearchCache) slugForEntry(i int) []byte {
+	start := c.slugOffsets[i]
+	end := c.slugOffsets[i+1]
+	if end > start && c.slugData[end-1] == 0 {
+		end--
+	}
+	return c.slugData[start:end]
+}
+
+// secSlugForEntry returns the secondary slug bytes for entry i (excluding null separator).
+// Returns nil if the entry has no secondary slug.
+func (c *SlugSearchCache) secSlugForEntry(i int) []byte {
+	start := c.secSlugOffsets[i]
+	end := c.secSlugOffsets[i+1]
+	if end <= start {
+		return nil
+	}
+	if c.secSlugData[end-1] == 0 {
+		end--
+	}
+	return c.secSlugData[start:end]
+}
+
+// buildSystemSet converts a slice of system DBIDs into a fast lookup set.
+// Returns nil when systemDBIDs is empty (meaning no filter).
+func buildSystemSet(systemDBIDs []int64) map[int64]struct{} {
+	if len(systemDBIDs) == 0 {
+		return nil
+	}
+	set := make(map[int64]struct{}, len(systemDBIDs))
+	for _, id := range systemDBIDs {
+		set[id] = struct{}{}
+	}
+	return set
+}
+
+// ExactSlugMatch returns title DBIDs where the slug exactly matches the given bytes.
+func (c *SlugSearchCache) ExactSlugMatch(systemDBIDs []int64, slug []byte) []int64 {
+	if c == nil || c.entryCount == 0 {
+		return nil
+	}
+	systemSet := buildSystemSet(systemDBIDs)
+	var candidates []int64
+	for i := range c.entryCount {
+		if systemSet != nil {
+			if _, ok := systemSet[c.systemDBIDs[i]]; !ok {
+				continue
+			}
+		}
+		if bytes.Equal(c.slugForEntry(i), slug) {
+			candidates = append(candidates, c.titleDBIDs[i])
+		}
+	}
+	return candidates
+}
+
+// ExactSecondarySlugMatch returns title DBIDs where the secondary slug exactly matches the given bytes.
+func (c *SlugSearchCache) ExactSecondarySlugMatch(systemDBIDs []int64, secSlug []byte) []int64 {
+	if c == nil || c.entryCount == 0 {
+		return nil
+	}
+	systemSet := buildSystemSet(systemDBIDs)
+	var candidates []int64
+	for i := range c.entryCount {
+		if systemSet != nil {
+			if _, ok := systemSet[c.systemDBIDs[i]]; !ok {
+				continue
+			}
+		}
+		entrySecSlug := c.secSlugForEntry(i)
+		if len(entrySecSlug) > 0 && bytes.Equal(entrySecSlug, secSlug) {
+			candidates = append(candidates, c.titleDBIDs[i])
+		}
+	}
+	return candidates
+}
+
+// PrefixSlugMatch returns title DBIDs where the slug starts with the given prefix.
+func (c *SlugSearchCache) PrefixSlugMatch(systemDBIDs []int64, prefix []byte) []int64 {
+	if c == nil || c.entryCount == 0 {
+		return nil
+	}
+	systemSet := buildSystemSet(systemDBIDs)
+	var candidates []int64
+	for i := range c.entryCount {
+		if systemSet != nil {
+			if _, ok := systemSet[c.systemDBIDs[i]]; !ok {
+				continue
+			}
+		}
+		if bytes.HasPrefix(c.slugForEntry(i), prefix) {
+			candidates = append(candidates, c.titleDBIDs[i])
+		}
+	}
+	return candidates
+}
+
+// ExactSlugMatchAny returns title DBIDs where the slug exactly matches any of the given slugs.
+func (c *SlugSearchCache) ExactSlugMatchAny(systemDBIDs []int64, slugList [][]byte) []int64 {
+	if c == nil || c.entryCount == 0 || len(slugList) == 0 {
+		return nil
+	}
+	systemSet := buildSystemSet(systemDBIDs)
+	// Build a set for O(1) lookups when the list is large enough
+	slugSet := make(map[string]struct{}, len(slugList))
+	for _, s := range slugList {
+		slugSet[string(s)] = struct{}{}
+	}
+	var candidates []int64
+	for i := range c.entryCount {
+		if systemSet != nil {
+			if _, ok := systemSet[c.systemDBIDs[i]]; !ok {
+				continue
+			}
+		}
+		if _, ok := slugSet[string(c.slugForEntry(i))]; ok {
+			candidates = append(candidates, c.titleDBIDs[i])
+		}
+	}
+	return candidates
+}
+
+// RandomEntry picks a random title DBID from entries matching the system filter.
+// Uses two passes to avoid allocating a candidates slice.
+func (c *SlugSearchCache) RandomEntry(systemDBIDs []int64) (int64, bool) {
+	if c == nil || c.entryCount == 0 {
+		return 0, false
+	}
+	systemSet := buildSystemSet(systemDBIDs)
+
+	// Pass 1: count matching entries
+	var count int
+	if systemSet == nil {
+		count = c.entryCount
+	} else {
+		for i := range c.entryCount {
+			if _, ok := systemSet[c.systemDBIDs[i]]; ok {
+				count++
+			}
+		}
+	}
+	if count == 0 {
+		return 0, false
+	}
+
+	// Pick a random index in [0, count)
+	target, err := helpers.RandomInt(count)
+	if err != nil {
+		return 0, false
+	}
+
+	// Pass 2: walk to the target-th match
+	seen := 0
+	for i := range c.entryCount {
+		if systemSet != nil {
+			if _, ok := systemSet[c.systemDBIDs[i]]; !ok {
+				continue
+			}
+		}
+		if seen == target {
+			return c.titleDBIDs[i], true
+		}
+		seen++
+	}
+	return 0, false
 }
 
 // ResolveSystemDBIDs converts system ID strings to database IDs using the cache's lookup map.

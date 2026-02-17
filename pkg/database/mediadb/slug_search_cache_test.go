@@ -404,6 +404,216 @@ func BenchmarkSlugSearchCacheSearch_1M(b *testing.B) {
 	}
 }
 
+// --- ExactSlugMatch tests ---
+
+func TestSlugSearchCache_ExactSlugMatch(t *testing.T) {
+	t.Parallel()
+	cache := buildTestCache([]struct {
+		slug       string
+		secSlug    string
+		titleDBID  int64
+		systemDBID int64
+	}{
+		{"super-mario-bros", "", 1, 1},
+		{"super-mario-bros-3", "", 2, 1},
+		{"metroid", "", 3, 2},
+	}, map[int64]string{1: "NES", 2: "SNES"})
+
+	// Exact match
+	results := cache.ExactSlugMatch(nil, []byte("super-mario-bros"))
+	assert.Equal(t, []int64{1}, results)
+
+	// No match
+	results = cache.ExactSlugMatch(nil, []byte("super-mario"))
+	assert.Nil(t, results)
+
+	// System filter
+	results = cache.ExactSlugMatch([]int64{2}, []byte("metroid"))
+	assert.Equal(t, []int64{3}, results)
+
+	// System filter excludes match
+	results = cache.ExactSlugMatch([]int64{2}, []byte("super-mario-bros"))
+	assert.Nil(t, results)
+}
+
+func TestSlugSearchCache_ExactSlugMatch_NilCache(t *testing.T) {
+	t.Parallel()
+	var cache *SlugSearchCache
+	results := cache.ExactSlugMatch(nil, []byte("test"))
+	assert.Nil(t, results)
+}
+
+// --- ExactSecondarySlugMatch tests ---
+
+func TestSlugSearchCache_ExactSecondarySlugMatch(t *testing.T) {
+	t.Parallel()
+	cache := buildTestCache([]struct {
+		slug       string
+		secSlug    string
+		titleDBID  int64
+		systemDBID int64
+	}{
+		{"zelda-link-to-the-past", "zelda-3", 1, 1},
+		{"zelda-ocarina-of-time", "zelda-5", 2, 1},
+		{"metroid", "", 3, 1},
+	}, map[int64]string{1: "NES"})
+
+	// Exact secondary slug match
+	results := cache.ExactSecondarySlugMatch(nil, []byte("zelda-3"))
+	assert.Equal(t, []int64{1}, results)
+
+	// No match (entry has no secondary slug)
+	results = cache.ExactSecondarySlugMatch(nil, []byte("metroid"))
+	assert.Nil(t, results)
+
+	// Partial match should not work
+	results = cache.ExactSecondarySlugMatch(nil, []byte("zelda"))
+	assert.Nil(t, results)
+
+	// System filter
+	results = cache.ExactSecondarySlugMatch([]int64{1}, []byte("zelda-5"))
+	assert.Equal(t, []int64{2}, results)
+}
+
+func TestSlugSearchCache_ExactSecondarySlugMatch_NilCache(t *testing.T) {
+	t.Parallel()
+	var cache *SlugSearchCache
+	results := cache.ExactSecondarySlugMatch(nil, []byte("test"))
+	assert.Nil(t, results)
+}
+
+// --- PrefixSlugMatch tests ---
+
+func TestSlugSearchCache_PrefixSlugMatch(t *testing.T) {
+	t.Parallel()
+	cache := buildTestCache([]struct {
+		slug       string
+		secSlug    string
+		titleDBID  int64
+		systemDBID int64
+	}{
+		{"super-mario-bros", "", 1, 1},
+		{"super-mario-bros-3", "", 2, 1},
+		{"metroid", "", 3, 2},
+	}, map[int64]string{1: "NES", 2: "SNES"})
+
+	// Prefix match
+	results := cache.PrefixSlugMatch(nil, []byte("super-mario-bros"))
+	assert.Equal(t, []int64{1, 2}, results)
+
+	// Shorter prefix
+	results = cache.PrefixSlugMatch(nil, []byte("super"))
+	assert.Equal(t, []int64{1, 2}, results)
+
+	// No match
+	results = cache.PrefixSlugMatch(nil, []byte("zelda"))
+	assert.Nil(t, results)
+
+	// System filter
+	results = cache.PrefixSlugMatch([]int64{2}, []byte("met"))
+	assert.Equal(t, []int64{3}, results)
+}
+
+func TestSlugSearchCache_PrefixSlugMatch_NilCache(t *testing.T) {
+	t.Parallel()
+	var cache *SlugSearchCache
+	results := cache.PrefixSlugMatch(nil, []byte("test"))
+	assert.Nil(t, results)
+}
+
+// --- ExactSlugMatchAny tests ---
+
+func TestSlugSearchCache_ExactSlugMatchAny(t *testing.T) {
+	t.Parallel()
+	cache := buildTestCache([]struct {
+		slug       string
+		secSlug    string
+		titleDBID  int64
+		systemDBID int64
+	}{
+		{"super-mario-bros", "", 1, 1},
+		{"metroid", "", 2, 1},
+		{"zelda", "", 3, 2},
+	}, map[int64]string{1: "NES", 2: "SNES"})
+
+	// Multi-slug match
+	results := cache.ExactSlugMatchAny(nil, [][]byte{
+		[]byte("super-mario-bros"),
+		[]byte("zelda"),
+	})
+	assert.Equal(t, []int64{1, 3}, results)
+
+	// Single match
+	results = cache.ExactSlugMatchAny(nil, [][]byte{[]byte("metroid")})
+	assert.Equal(t, []int64{2}, results)
+
+	// No match
+	results = cache.ExactSlugMatchAny(nil, [][]byte{[]byte("nonexistent")})
+	assert.Nil(t, results)
+
+	// Empty slug list
+	results = cache.ExactSlugMatchAny(nil, nil)
+	assert.Nil(t, results)
+
+	// System filter
+	results = cache.ExactSlugMatchAny([]int64{1}, [][]byte{
+		[]byte("super-mario-bros"),
+		[]byte("zelda"),
+	})
+	assert.Equal(t, []int64{1}, results)
+}
+
+func TestSlugSearchCache_ExactSlugMatchAny_NilCache(t *testing.T) {
+	t.Parallel()
+	var cache *SlugSearchCache
+	results := cache.ExactSlugMatchAny(nil, [][]byte{[]byte("test")})
+	assert.Nil(t, results)
+}
+
+// --- RandomEntry tests ---
+
+func TestSlugSearchCache_RandomEntry(t *testing.T) {
+	t.Parallel()
+	cache := buildTestCache([]struct {
+		slug       string
+		secSlug    string
+		titleDBID  int64
+		systemDBID int64
+	}{
+		{"super-mario-bros", "", 1, 1},
+		{"metroid", "", 2, 1},
+		{"zelda", "", 3, 2},
+	}, map[int64]string{1: "NES", 2: "SNES"})
+
+	// Random from all entries
+	titleDBID, ok := cache.RandomEntry(nil)
+	assert.True(t, ok)
+	assert.Contains(t, []int64{1, 2, 3}, titleDBID)
+
+	// Random with system filter
+	titleDBID, ok = cache.RandomEntry([]int64{2})
+	assert.True(t, ok)
+	assert.Equal(t, int64(3), titleDBID)
+
+	// Empty result
+	_, ok = cache.RandomEntry([]int64{99})
+	assert.False(t, ok)
+}
+
+func TestSlugSearchCache_RandomEntry_EmptyCache(t *testing.T) {
+	t.Parallel()
+	cache := buildTestCache(nil, map[int64]string{1: "NES"})
+	_, ok := cache.RandomEntry(nil)
+	assert.False(t, ok)
+}
+
+func TestSlugSearchCache_RandomEntry_NilCache(t *testing.T) {
+	t.Parallel()
+	var cache *SlugSearchCache
+	_, ok := cache.RandomEntry(nil)
+	assert.False(t, ok)
+}
+
 func BenchmarkSlugSearchCacheBuild(b *testing.B) {
 	// Benchmark cache struct population speed (excludes SQL)
 	for b.Loop() {

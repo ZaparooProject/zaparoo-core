@@ -59,6 +59,9 @@ const (
 	IndexingStatusCancelled = "cancelled"
 )
 
+// defaultSlugSearchLimit is the max results returned by slug-based search methods.
+const defaultSlugSearchLimit = 50
+
 // getSqliteConnParams constructs the SQLite connection string
 func getSqliteConnParams() string {
 	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
@@ -928,11 +931,50 @@ func (db *MediaDB) SearchMediaWithFilters(
 	return results, err
 }
 
+// slugCacheSearch is a shared helper for slug-based search methods that use the
+// in-memory cache. It handles slugification, system resolution, and SQL fallback.
+// Returns (results, true, nil) on cache hit, or (nil, false, nil) when the caller
+// should fall back to the SQL-only path.
+func (db *MediaDB) slugCacheSearch(
+	ctx context.Context,
+	systemID string,
+	input string,
+	tags []zapscript.TagFilter,
+	matchFn func(*SlugSearchCache, []int64, []byte) []int64,
+) ([]database.SearchResultWithCursor, bool, error) {
+	cache := db.slugSearchCache.Load()
+	if cache == nil {
+		return nil, false, nil
+	}
+	mediaType := slugs.MediaTypeGame
+	if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
+		mediaType = system.GetMediaType()
+	}
+	slugified := []byte(slugs.Slugify(mediaType, input))
+	if len(slugified) == 0 {
+		return []database.SearchResultWithCursor{}, true, nil
+	}
+	systemDBIDs := cache.ResolveSystemDBIDs([]string{systemID})
+	if len(systemDBIDs) == 0 {
+		return []database.SearchResultWithCursor{}, true, nil
+	}
+	candidates := matchFn(cache, systemDBIDs, slugified)
+	if len(candidates) == 0 {
+		return []database.SearchResultWithCursor{}, true, nil
+	}
+	results, err := sqlSearchMediaByTitleDBIDs(ctx, db.conn(), candidates, tags, nil, nil, defaultSlugSearchLimit)
+	return results, true, err
+}
+
 func (db *MediaDB) SearchMediaBySlug(
 	ctx context.Context, systemID string, slug string, tags []zapscript.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
+	}
+	if results, ok, err := db.slugCacheSearch(ctx, systemID, slug, tags,
+		(*SlugSearchCache).ExactSlugMatch); ok || err != nil {
+		return results, err
 	}
 	return sqlSearchMediaBySlug(ctx, db.conn(), systemID, slug, tags)
 }
@@ -943,6 +985,10 @@ func (db *MediaDB) SearchMediaBySecondarySlug(
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
+	if results, ok, err := db.slugCacheSearch(ctx, systemID, secondarySlug, tags,
+		(*SlugSearchCache).ExactSecondarySlugMatch); ok || err != nil {
+		return results, err
+	}
 	return sqlSearchMediaBySecondarySlug(ctx, db.conn(), systemID, secondarySlug, tags)
 }
 
@@ -951,6 +997,10 @@ func (db *MediaDB) SearchMediaBySlugPrefix(
 ) ([]database.SearchResultWithCursor, error) {
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
+	}
+	if results, ok, err := db.slugCacheSearch(ctx, systemID, slugPrefix, tags,
+		(*SlugSearchCache).PrefixSlugMatch); ok || err != nil {
+		return results, err
 	}
 	return sqlSearchMediaBySlugPrefix(ctx, db.conn(), systemID, slugPrefix, tags)
 }
@@ -963,6 +1013,34 @@ func (db *MediaDB) SearchMediaBySlugIn(
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
+
+	cache := db.slugSearchCache.Load()
+	if cache != nil {
+		mediaType := slugs.MediaTypeGame
+		if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
+			mediaType = system.GetMediaType()
+		}
+		slugBytes := make([][]byte, 0, len(slugList))
+		for _, s := range slugList {
+			slugified := slugs.Slugify(mediaType, s)
+			if slugified != "" {
+				slugBytes = append(slugBytes, []byte(slugified))
+			}
+		}
+		if len(slugBytes) == 0 {
+			return []database.SearchResultWithCursor{}, nil
+		}
+		systemDBIDs := cache.ResolveSystemDBIDs([]string{systemID})
+		if len(systemDBIDs) == 0 {
+			return []database.SearchResultWithCursor{}, nil
+		}
+		candidates := cache.ExactSlugMatchAny(systemDBIDs, slugBytes)
+		if len(candidates) == 0 {
+			return []database.SearchResultWithCursor{}, nil
+		}
+		return sqlSearchMediaByTitleDBIDs(ctx, db.conn(), candidates, tags, nil, nil, defaultSlugSearchLimit)
+	}
+
 	return sqlSearchMediaBySlugIn(ctx, db.conn(), systemID, slugList, tags)
 }
 
@@ -1153,6 +1231,27 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 		return result, ErrNullSQL
 	}
 
+	if len(systems) > 0 {
+		cache := db.slugSearchCache.Load()
+		if cache != nil {
+			// Pick a random system first, then a random title within it
+			// to give equal weight to each system regardless of game count
+			system, err := helpers.RandomElem(systems)
+			if err != nil {
+				return result, fmt.Errorf("failed to select random system: %w", err)
+			}
+			systemDBIDs := cache.ResolveSystemDBIDs([]string{system.ID})
+			if len(systemDBIDs) == 0 {
+				return result, sql.ErrNoRows
+			}
+			titleDBID, ok := cache.RandomEntry(systemDBIDs)
+			if !ok {
+				return result, sql.ErrNoRows
+			}
+			return sqlGetRandomMediaForTitle(db.ctx, db.conn(), titleDBID)
+		}
+	}
+
 	system, err := helpers.RandomElem(systems)
 	if err != nil {
 		return result, fmt.Errorf("failed to select random system: %w", err)
@@ -1168,12 +1267,40 @@ func (db *MediaDB) RandomGameWithQuery(query *database.MediaQuery) (database.Sea
 		return result, ErrNullSQL
 	}
 
-	// Check cache first
+	// Pick a random system first to give equal weight per system,
+	// then narrow the query to just that system
+	if len(query.Systems) > 1 {
+		system, err := helpers.RandomElem(query.Systems)
+		if err != nil {
+			return result, fmt.Errorf("failed to select random system: %w", err)
+		}
+		narrowed := *query
+		narrowed.Systems = []string{system}
+		query = &narrowed
+	}
+
+	// Systems-only queries can use the in-memory slug search cache
+	isSystemsOnly := query.PathPrefix == "" && query.PathGlob == "" && len(query.Tags) == 0 && len(query.Systems) > 0
+	if isSystemsOnly {
+		cache := db.slugSearchCache.Load()
+		if cache != nil {
+			systemDBIDs := cache.ResolveSystemDBIDs(query.Systems)
+			if len(systemDBIDs) == 0 {
+				return result, sql.ErrNoRows
+			}
+			titleDBID, ok := cache.RandomEntry(systemDBIDs)
+			if !ok {
+				return result, sql.ErrNoRows
+			}
+			return sqlGetRandomMediaForTitle(db.ctx, db.conn(), titleDBID)
+		}
+	}
+
+	// Check MediaCountCache for complex queries or when slug cache unavailable
 	if stats, found := db.GetCachedStats(db.ctx, query); found {
 		if stats.Count == 0 {
 			return result, sql.ErrNoRows
 		}
-		// Use cached stats to generate random selection
 		return db.randomGameWithStats(query, stats)
 	}
 
