@@ -226,17 +226,22 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 		return result, fmt.Errorf("failed to get media by DBID: %w", err)
 	}
 
-	// Fetch tags for this media
+	// Fetch tags from both MediaTags (file-level) and MediaTitleTags (title-level)
 	rows, err := db.conn().QueryContext(ctx, `
-		SELECT
-			Tags.Tag,
-			TagTypes.Type
+		SELECT Tags.Tag, TagTypes.Type
 		FROM MediaTags
-		INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-		INNER JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
 		WHERE MediaTags.MediaDBID = ?
-		ORDER BY TagTypes.Type, Tags.Tag
-	`, mediaDBID)
+		UNION
+		SELECT Tags.Tag, TagTypes.Type
+		FROM Media
+		JOIN MediaTitleTags ON MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
+		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE Media.DBID = ?
+		ORDER BY Type, Tag
+	`, mediaDBID, mediaDBID)
 	if err != nil {
 		return result, fmt.Errorf("failed to query tags: %w", err)
 	}
@@ -271,19 +276,32 @@ func (db *MediaDB) GetYearBySystemAndPath(ctx context.Context, systemID, path st
 
 	var year string
 	err := db.conn().QueryRowContext(ctx, `
-		SELECT Tags.Tag
-		FROM Media
-		INNER JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
-		INNER JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
-		INNER JOIN MediaTags ON Media.DBID = MediaTags.MediaDBID
-		INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-		INNER JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-		WHERE Systems.SystemID = ?
-		  AND Media.Path = ?
-		  AND TagTypes.Type = 'year'
-		  AND length(Tags.Tag) = 4
-		LIMIT 1
-	`, systemID, path).Scan(&year)
+		SELECT YearTags.Tag FROM (
+			SELECT Tags.Tag
+			FROM Media
+			JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
+			JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
+			JOIN MediaTags ON Media.DBID = MediaTags.MediaDBID
+			JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+			WHERE Systems.SystemID = ?
+			  AND Media.Path = ?
+			  AND TagTypes.Type = 'year'
+			  AND length(Tags.Tag) = 4
+			UNION
+			SELECT Tags.Tag
+			FROM Media
+			JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
+			JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
+			JOIN MediaTitleTags ON MediaTitles.DBID = MediaTitleTags.MediaTitleDBID
+			JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+			WHERE Systems.SystemID = ?
+			  AND Media.Path = ?
+			  AND TagTypes.Type = 'year'
+			  AND length(Tags.Tag) = 4
+		) YearTags LIMIT 1
+	`, systemID, path, systemID, path).Scan(&year)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil

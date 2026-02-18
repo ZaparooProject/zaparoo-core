@@ -1234,17 +1234,21 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 	if len(systems) > 0 {
 		cache := db.slugSearchCache.Load()
 		if cache != nil {
-			// Pick a random system first, then a random title within it
-			// to give equal weight to each system regardless of game count
-			system, err := helpers.RandomElem(systems)
-			if err != nil {
-				return result, fmt.Errorf("failed to select random system: %w", err)
+			// Resolve to only systems that have indexed content
+			systemIDs := make([]string, len(systems))
+			for i, sys := range systems {
+				systemIDs[i] = sys.ID
 			}
-			systemDBIDs := cache.ResolveSystemDBIDs([]string{system.ID})
+			systemDBIDs := cache.ResolveSystemDBIDs(systemIDs)
 			if len(systemDBIDs) == 0 {
 				return result, sql.ErrNoRows
 			}
-			titleDBID, ok := cache.RandomEntry(systemDBIDs)
+			// Pick a random system first to give equal weight per system
+			systemDBID, err := helpers.RandomElem(systemDBIDs)
+			if err != nil {
+				return result, fmt.Errorf("failed to select random system: %w", err)
+			}
+			titleDBID, ok := cache.RandomEntry([]int64{systemDBID})
 			if !ok {
 				return result, sql.ErrNoRows
 			}
@@ -1252,12 +1256,29 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 		}
 	}
 
-	system, err := helpers.RandomElem(systems)
+	// Filter to only systems that have indexed content
+	systemIDs := make([]string, len(systems))
+	for i, sys := range systems {
+		systemIDs[i] = sys.ID
+	}
+	indexedIDs, err := sqlFilterIndexedSystems(db.ctx, db.conn(), systemIDs)
+	if err != nil {
+		return result, fmt.Errorf("failed to filter indexed systems: %w", err)
+	}
+	if len(indexedIDs) == 0 {
+		return result, sql.ErrNoRows
+	}
+
+	systemID, err := helpers.RandomElem(indexedIDs)
 	if err != nil {
 		return result, fmt.Errorf("failed to select random system: %w", err)
 	}
+	sys, sysErr := systemdefs.GetSystem(systemID)
+	if sysErr != nil {
+		return result, fmt.Errorf("failed to get system definition: %w", sysErr)
+	}
 
-	return sqlRandomGame(db.ctx, db.conn(), &system)
+	return sqlRandomGame(db.ctx, db.conn(), sys)
 }
 
 // RandomGameWithQuery returns a random game matching the specified MediaQuery.
@@ -1267,33 +1288,45 @@ func (db *MediaDB) RandomGameWithQuery(query *database.MediaQuery) (database.Sea
 		return result, ErrNullSQL
 	}
 
-	// Pick a random system first to give equal weight per system,
-	// then narrow the query to just that system
-	if len(query.Systems) > 1 {
-		system, err := helpers.RandomElem(query.Systems)
-		if err != nil {
-			return result, fmt.Errorf("failed to select random system: %w", err)
-		}
-		narrowed := *query
-		narrowed.Systems = []string{system}
-		query = &narrowed
-	}
-
 	// Systems-only queries can use the in-memory slug search cache
 	isSystemsOnly := query.PathPrefix == "" && query.PathGlob == "" && len(query.Tags) == 0 && len(query.Systems) > 0
 	if isSystemsOnly {
 		cache := db.slugSearchCache.Load()
 		if cache != nil {
+			// Resolve to only systems that have indexed content
 			systemDBIDs := cache.ResolveSystemDBIDs(query.Systems)
 			if len(systemDBIDs) == 0 {
 				return result, sql.ErrNoRows
 			}
-			titleDBID, ok := cache.RandomEntry(systemDBIDs)
+			// Pick a random system first to give equal weight per system
+			systemDBID, err := helpers.RandomElem(systemDBIDs)
+			if err != nil {
+				return result, fmt.Errorf("failed to select random system: %w", err)
+			}
+			titleDBID, ok := cache.RandomEntry([]int64{systemDBID})
 			if !ok {
 				return result, sql.ErrNoRows
 			}
 			return sqlGetRandomMediaForTitle(db.ctx, db.conn(), titleDBID)
 		}
+	}
+
+	// For SQL fallback, filter to indexed systems and pick one for equal weight
+	if len(query.Systems) > 1 {
+		indexedSystems, filterErr := sqlFilterIndexedSystems(db.ctx, db.conn(), query.Systems)
+		if filterErr != nil {
+			return result, fmt.Errorf("failed to filter indexed systems: %w", filterErr)
+		}
+		if len(indexedSystems) == 0 {
+			return result, sql.ErrNoRows
+		}
+		system, randErr := helpers.RandomElem(indexedSystems)
+		if randErr != nil {
+			return result, fmt.Errorf("failed to select random system: %w", randErr)
+		}
+		narrowed := *query
+		narrowed.Systems = []string{system}
+		query = &narrowed
 	}
 
 	// Check MediaCountCache for complex queries or when slug cache unavailable

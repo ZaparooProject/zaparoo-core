@@ -48,7 +48,8 @@ func sqlPopulateSystemTagsCache(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("failed to clear system tags cache: %w", execErr)
 	}
 
-	// Populate cache with all system-tag combinations
+	// Populate cache with all system-tag combinations from both
+	// MediaTags (file-level) and MediaTitleTags (title-level)
 	populateSQL := `
 		INSERT INTO SystemTagsCache (SystemDBID, TagDBID, TagType, Tag)
 		SELECT DISTINCT
@@ -62,7 +63,18 @@ func sqlPopulateSystemTagsCache(ctx context.Context, db *sql.DB) error {
 		JOIN MediaTags mt ON m.DBID = mt.MediaDBID
 		JOIN Tags t ON mt.TagDBID = t.DBID
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		ORDER BY s.DBID, tt.Type, t.Tag`
+		UNION
+		SELECT DISTINCT
+			s.DBID as SystemDBID,
+			t.DBID as TagDBID,
+			tt.Type as TagType,
+			t.Tag as Tag
+		FROM Systems s
+		JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
+		JOIN MediaTitleTags mtt ON mtl.DBID = mtt.MediaTitleDBID
+		JOIN Tags t ON mtt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		ORDER BY SystemDBID, TagType, Tag`
 
 	populateStmt, err := db.PrepareContext(ctx, populateSQL)
 	if err != nil {
@@ -141,7 +153,8 @@ func sqlPopulateSystemTagsCacheForSystems(
 		return fmt.Errorf("failed to clear cache for specific systems: %w", execErr)
 	}
 
-	// Step 3: Populate cache for these systems only
+	// Step 3: Populate cache for these systems only, from both
+	// MediaTags (file-level) and MediaTitleTags (title-level)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	populateSQL := fmt.Sprintf(`
 		INSERT INTO SystemTagsCache (SystemDBID, TagDBID, TagType, Tag)
@@ -157,7 +170,19 @@ func sqlPopulateSystemTagsCacheForSystems(
 		JOIN Tags t ON mt.TagDBID = t.DBID
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
 		WHERE s.DBID IN (%s)
-		ORDER BY s.DBID, tt.Type, t.Tag`, placeholders)
+		UNION
+		SELECT DISTINCT
+			s.DBID as SystemDBID,
+			t.DBID as TagDBID,
+			tt.Type as TagType,
+			t.Tag as Tag
+		FROM Systems s
+		JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
+		JOIN MediaTitleTags mtt ON mtl.DBID = mtt.MediaTitleDBID
+		JOIN Tags t ON mtt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE s.DBID IN (%s)
+		ORDER BY SystemDBID, TagType, Tag`, placeholders, placeholders)
 
 	populateStmt, err := db.PrepareContext(ctx, populateSQL)
 	if err != nil {
@@ -169,7 +194,12 @@ func sqlPopulateSystemTagsCacheForSystems(
 		}
 	}()
 
-	if _, execErr := populateStmt.ExecContext(ctx, args...); execErr != nil {
+	// Double args for the UNION's second WHERE clause
+	populateArgs := make([]any, 0, len(args)*2)
+	populateArgs = append(populateArgs, args...)
+	populateArgs = append(populateArgs, args...)
+
+	if _, execErr := populateStmt.ExecContext(ctx, populateArgs...); execErr != nil {
 		return fmt.Errorf("failed to populate cache for specific systems: %w", execErr)
 	}
 

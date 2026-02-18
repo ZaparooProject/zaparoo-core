@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"testing"
 
@@ -1844,4 +1845,248 @@ func TestMediaDB_CacheFastPath_MatchesSQL_Integration(t *testing.T) {
 	// RandomGame with empty system filter should fail
 	_, err = mediaDB.RandomGame(nil)
 	require.Error(t, err)
+}
+
+// TestMediaDB_RandomGame_MixedSystems_Integration verifies that RandomGame and
+// RandomGameWithQuery correctly handle a system list that includes systems with
+// no indexed content. Both cache and SQL fallback paths are tested.
+func TestMediaDB_RandomGame_MixedSystems_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	// Only NES and SNES get indexed content; Genesis and GameBoy do not.
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	snesSystem, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+	genesisSystem, err := systemdefs.GetSystem("Genesis")
+	require.NoError(t, err)
+	gbSystem, err := systemdefs.GetSystem("Gameboy")
+	require.NoError(t, err)
+
+	err = mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	insertedNES, err := mediaDB.InsertSystem(database.System{SystemID: nesSystem.ID, Name: "NES"})
+	require.NoError(t, err)
+	insertedSNES, err := mediaDB.InsertSystem(database.System{SystemID: snesSystem.ID, Name: "SNES"})
+	require.NoError(t, err)
+
+	for i := 1; i <= 5; i++ {
+		name := fmt.Sprintf("NES Game %d", i)
+		title := database.MediaTitle{
+			SystemDBID: insertedNES.DBID,
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, name),
+			Name:       name,
+		}
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
+		require.NoError(t, titleErr)
+		_, mediaErr := mediaDB.InsertMedia(database.Media{
+			SystemDBID:     insertedNES.DBID,
+			MediaTitleDBID: insertedTitle.DBID,
+			Path:           fmt.Sprintf("/roms/nes/game%d.nes", i),
+		})
+		require.NoError(t, mediaErr)
+	}
+	for i := 1; i <= 5; i++ {
+		name := fmt.Sprintf("SNES Game %d", i)
+		title := database.MediaTitle{
+			SystemDBID: insertedSNES.DBID,
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, name),
+			Name:       name,
+		}
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
+		require.NoError(t, titleErr)
+		_, mediaErr := mediaDB.InsertMedia(database.Media{
+			SystemDBID:     insertedSNES.DBID,
+			MediaTitleDBID: insertedTitle.DBID,
+			Path:           fmt.Sprintf("/roms/snes/game%d.sfc", i),
+		})
+		require.NoError(t, mediaErr)
+	}
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	mixedSystems := []systemdefs.System{*nesSystem, *snesSystem, *genesisSystem, *gbSystem}
+	indexedIDs := map[string]bool{nesSystem.ID: true, snesSystem.ID: true}
+
+	// --- SQL fallback path (no cache) ---
+	assert.Nil(t, mediaDB.slugSearchCache.Load(), "cache should be nil before build")
+
+	for i := range 20 {
+		result, randErr := mediaDB.RandomGame(mixedSystems)
+		require.NoError(t, randErr, "RandomGame SQL path iteration %d", i)
+		assert.True(t, indexedIDs[result.SystemID],
+			"RandomGame SQL path returned non-indexed system %s", result.SystemID)
+	}
+
+	mixedSystemIDs := []string{nesSystem.ID, snesSystem.ID, genesisSystem.ID, gbSystem.ID}
+	for i := range 20 {
+		result, randErr := mediaDB.RandomGameWithQuery(&database.MediaQuery{Systems: mixedSystemIDs})
+		require.NoError(t, randErr, "RandomGameWithQuery SQL path iteration %d", i)
+		assert.True(t, indexedIDs[result.SystemID],
+			"RandomGameWithQuery SQL path returned non-indexed system %s", result.SystemID)
+	}
+
+	// --- Cache path ---
+	err = mediaDB.RebuildSlugSearchCache()
+	require.NoError(t, err)
+	require.NotNil(t, mediaDB.slugSearchCache.Load())
+
+	for i := range 20 {
+		result, randErr := mediaDB.RandomGame(mixedSystems)
+		require.NoError(t, randErr, "RandomGame cache path iteration %d", i)
+		assert.True(t, indexedIDs[result.SystemID],
+			"RandomGame cache path returned non-indexed system %s", result.SystemID)
+	}
+
+	for i := range 20 {
+		result, randErr := mediaDB.RandomGameWithQuery(&database.MediaQuery{Systems: mixedSystemIDs})
+		require.NoError(t, randErr, "RandomGameWithQuery cache path iteration %d", i)
+		assert.True(t, indexedIDs[result.SystemID],
+			"RandomGameWithQuery cache path returned non-indexed system %s", result.SystemID)
+	}
+
+	// --- Edge case: ALL systems non-indexed ---
+	nonIndexedSystems := []systemdefs.System{*genesisSystem, *gbSystem}
+	_, err = mediaDB.RandomGame(nonIndexedSystems)
+	require.ErrorIs(t, err, sql.ErrNoRows, "RandomGame with all non-indexed systems should return ErrNoRows")
+
+	_, err = mediaDB.RandomGameWithQuery(&database.MediaQuery{
+		Systems: []string{genesisSystem.ID, gbSystem.ID},
+	})
+	require.ErrorIs(t, err, sql.ErrNoRows, "RandomGameWithQuery with all non-indexed systems should return ErrNoRows")
+
+	// --- Edge case: single non-indexed system ---
+	_, err = mediaDB.RandomGame([]systemdefs.System{*genesisSystem})
+	require.ErrorIs(t, err, sql.ErrNoRows, "RandomGame with single non-indexed system should return ErrNoRows")
+
+	_, err = mediaDB.RandomGameWithQuery(&database.MediaQuery{
+		Systems: []string{genesisSystem.ID},
+	})
+	require.ErrorIs(t, err, sql.ErrNoRows, "RandomGameWithQuery with single non-indexed system should return ErrNoRows")
+}
+
+// TestMediaDB_GetMediaByDBID_TitleTags_Integration verifies that GetMediaByDBID
+// returns tags from both MediaTags (file-level) and MediaTitleTags (title-level).
+func TestMediaDB_GetMediaByDBID_TitleTags_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create tag types before transaction
+	regionTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "region"})
+	require.NoError(t, err)
+	genreTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "genre"})
+	require.NoError(t, err)
+
+	err = mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: nesSystem.ID, Name: "NES"})
+	require.NoError(t, err)
+
+	title := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Super Mario Bros"),
+		Name:       "Super Mario Bros",
+	}
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
+	require.NoError(t, err)
+
+	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/nes/smb.nes",
+	}
+	insertedMedia, err := mediaDB.InsertMedia(media)
+	require.NoError(t, err)
+
+	// File-level tag (MediaTags): region:usa
+	usaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionTagType.DBID, Tag: "usa"})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: insertedMedia.DBID, TagDBID: usaTag.DBID})
+	require.NoError(t, err)
+
+	// Title-level tag (MediaTitleTags): genre:platform
+	platformTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreTagType.DBID, Tag: "platform"})
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Insert title-level tag directly — no production write path for
+	// MediaTitleTags yet (read queries prepared ahead of indexer support)
+	_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+		"INSERT INTO MediaTitleTags (MediaTitleDBID, TagDBID) VALUES (?, ?)",
+		insertedTitle.DBID, platformTag.DBID)
+	require.NoError(t, err)
+
+	// Retrieve via GetMediaByDBID
+	result, err := mediaDB.GetMediaByDBID(ctx, insertedMedia.DBID)
+	require.NoError(t, err)
+
+	assert.Equal(t, nesSystem.ID, result.SystemID)
+	assert.Equal(t, "Super Mario Bros", result.Name)
+	assert.Len(t, result.Tags, 2, "should have both file-level and title-level tags")
+	assert.Contains(t, result.Tags, database.TagInfo{Type: "region", Tag: "usa"})
+	assert.Contains(t, result.Tags, database.TagInfo{Type: "genre", Tag: "platform"})
+
+	// --- Title-level only: media with no file-level tags ---
+	err = mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	title2 := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Zelda"),
+		Name:       "Zelda",
+	}
+	insertedTitle2, err := mediaDB.InsertMediaTitle(&title2)
+	require.NoError(t, err)
+
+	media2 := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle2.DBID,
+		Path:           "/roms/nes/zelda.nes",
+	}
+	insertedMedia2, err := mediaDB.InsertMedia(media2)
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+		"INSERT INTO MediaTitleTags (MediaTitleDBID, TagDBID) VALUES (?, ?)",
+		insertedTitle2.DBID, platformTag.DBID)
+	require.NoError(t, err)
+
+	result2, err := mediaDB.GetMediaByDBID(ctx, insertedMedia2.DBID)
+	require.NoError(t, err)
+	assert.Len(t, result2.Tags, 1, "should have only the title-level tag")
+	assert.Contains(t, result2.Tags, database.TagInfo{Type: "genre", Tag: "platform"})
+
+	// --- Dedup: same tag at both file and title level ---
+	_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+		"INSERT INTO MediaTitleTags (MediaTitleDBID, TagDBID) VALUES (?, ?)",
+		insertedTitle.DBID, usaTag.DBID)
+	require.NoError(t, err)
+
+	result3, err := mediaDB.GetMediaByDBID(ctx, insertedMedia.DBID)
+	require.NoError(t, err)
+	assert.Len(t, result3.Tags, 2, "DISTINCT should deduplicate tag present at both levels")
+	assert.Contains(t, result3.Tags, database.TagInfo{Type: "region", Tag: "usa"})
+	assert.Contains(t, result3.Tags, database.TagInfo{Type: "genre", Tag: "platform"})
 }

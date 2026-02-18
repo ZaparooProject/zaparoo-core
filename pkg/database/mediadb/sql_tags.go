@@ -250,13 +250,17 @@ func sqlGetAllTagTypes(ctx context.Context, db *sql.DB) ([]database.TagType, err
 }
 
 // sqlGetAllUsedTags - Ultra-fast query for all tags that are actually in use
-// This avoids the expensive system filtering by directly querying MediaTags
+// This queries both MediaTags (file-level) and MediaTitleTags (title-level)
 func sqlGetAllUsedTags(ctx context.Context, db *sql.DB) ([]database.TagInfo, error) {
 	sqlQuery := `
 		SELECT DISTINCT TagTypes.Type, Tags.Tag
 		FROM TagTypes
 		JOIN Tags ON TagTypes.DBID = Tags.TypeDBID
-		WHERE Tags.DBID IN (SELECT DISTINCT TagDBID FROM MediaTags)
+		WHERE Tags.DBID IN (
+			SELECT DISTINCT TagDBID FROM MediaTags
+			UNION
+			SELECT DISTINCT TagDBID FROM MediaTitleTags
+		)
 		ORDER BY TagTypes.Type, Tags.Tag`
 
 	stmt, err := db.PrepareContext(ctx, sqlQuery)
@@ -309,10 +313,14 @@ func sqlGetTags(
 		return nil, errors.New("no systems provided for tag search")
 	}
 
-	args := make([]any, 0, len(systems))
+	placeholders := prepareVariadic("?", ",", len(systems))
+
+	args := make([]any, 0, len(systems)*2)
 	for _, sys := range systems {
 		args = append(args, sys.ID)
 	}
+	// Double args for the UNION's second WHERE clause
+	args = append(args, args...)
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	sqlQuery := `
@@ -325,9 +333,13 @@ func sqlGetTags(
 			JOIN Media m ON mt.MediaDBID = m.DBID
 			JOIN MediaTitles mtl ON m.MediaTitleDBID = mtl.DBID
 			JOIN Systems s ON mtl.SystemDBID = s.DBID
-			WHERE s.SystemID IN (` +
-		prepareVariadic("?", ",", len(systems)) +
-		`)
+			WHERE s.SystemID IN (` + placeholders + `)
+			UNION
+			SELECT DISTINCT mtt.TagDBID
+			FROM MediaTitleTags mtt
+			JOIN MediaTitles mtl ON mtt.MediaTitleDBID = mtl.DBID
+			JOIN Systems s ON mtl.SystemDBID = s.DBID
+			WHERE s.SystemID IN (` + placeholders + `)
 		)
 		ORDER BY TagTypes.Type, Tags.Tag`
 

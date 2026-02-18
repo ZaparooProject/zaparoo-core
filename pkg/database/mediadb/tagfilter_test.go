@@ -46,14 +46,17 @@ func TestBuildTagFilterSQL_ANDOnly(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 1)
-		require.Len(t, args, 2)
+		require.Len(t, args, 4) // 1 filter * 4 args (MediaTags + MediaTitleTags)
 
-		// Should use INTERSECT pattern (even for single tag)
+		// Should use INTERSECT pattern with both tag sources
 		assert.Contains(t, clauses[0], "Media.DBID IN (")
 		assert.Contains(t, clauses[0], "SELECT MediaDBID FROM MediaTags")
+		assert.Contains(t, clauses[0], "MediaTitleTags")
 		assert.NotContains(t, clauses[0], "INTERSECT") // Single tag doesn't need INTERSECT
 		assert.Equal(t, "region", args[0])
 		assert.Equal(t, "usa", args[1])
+		assert.Equal(t, "region", args[2])
+		assert.Equal(t, "usa", args[3])
 	})
 
 	t.Run("Multiple AND filters", func(t *testing.T) {
@@ -64,17 +67,13 @@ func TestBuildTagFilterSQL_ANDOnly(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 1)
-		require.Len(t, args, 4) // 2 filters * 2 args each
+		require.Len(t, args, 8) // 2 filters * 4 args each
 
 		// Should use INTERSECT pattern for optimal performance
 		assert.Contains(t, clauses[0], "Media.DBID IN (")
 		assert.Contains(t, clauses[0], "INTERSECT")
 		assert.Equal(t, 2, strings.Count(clauses[0], "SELECT MediaDBID FROM MediaTags"))
-
-		assert.Equal(t, "region", args[0])
-		assert.Equal(t, "usa", args[1])
-		assert.Equal(t, "lang", args[2])
-		assert.Equal(t, "en", args[3])
+		assert.Equal(t, 2, strings.Count(clauses[0], "MediaTitleTags"))
 	})
 
 	t.Run("Three AND filters", func(t *testing.T) {
@@ -86,7 +85,7 @@ func TestBuildTagFilterSQL_ANDOnly(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 1)
-		require.Len(t, args, 6)
+		require.Len(t, args, 12) // 3 filters * 4 args each
 
 		// Should have 2 INTERSECT operators for 3 filters
 		assert.Equal(t, 2, strings.Count(clauses[0], "INTERSECT"))
@@ -102,13 +101,16 @@ func TestBuildTagFilterSQL_NOTOnly(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 1)
-		require.Len(t, args, 2)
+		require.Len(t, args, 4) // 1 filter * 4 args (MediaTags + MediaTitleTags)
 
-		// Should use NOT EXISTS pattern
+		// Should use NOT EXISTS pattern for both tag sources
 		assert.Contains(t, clauses[0], "NOT EXISTS (")
 		assert.Contains(t, clauses[0], "MediaTags.MediaDBID = Media.DBID")
+		assert.Contains(t, clauses[0], "MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID")
 		assert.Equal(t, "unfinished", args[0])
 		assert.Equal(t, "demo", args[1])
+		assert.Equal(t, "unfinished", args[2])
+		assert.Equal(t, "demo", args[3])
 	})
 
 	t.Run("Multiple NOT filters", func(t *testing.T) {
@@ -119,9 +121,9 @@ func TestBuildTagFilterSQL_NOTOnly(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 2) // Each NOT filter gets its own clause
-		require.Len(t, args, 4)
+		require.Len(t, args, 8)    // 2 filters * 4 args each
 
-		// Both should use NOT EXISTS
+		// Both should use NOT EXISTS for both tag sources
 		assert.Contains(t, clauses[0], "NOT EXISTS")
 		assert.Contains(t, clauses[1], "NOT EXISTS")
 	})
@@ -135,12 +137,12 @@ func TestBuildTagFilterSQL_OROnly(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 1)
-		require.Len(t, args, 2)
+		require.Len(t, args, 4) // 1 filter * 4 args (MediaTags + MediaTitleTags)
 
-		// Should use EXISTS with single condition
+		// Should use EXISTS with single condition for both tag sources
 		assert.Contains(t, clauses[0], "EXISTS (")
 		assert.Contains(t, clauses[0], "MediaTags.MediaDBID = Media.DBID")
-		assert.NotContains(t, clauses[0], " OR ") // Single filter doesn't need OR
+		assert.Contains(t, clauses[0], "MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID")
 	})
 
 	t.Run("Multiple OR filters", func(t *testing.T) {
@@ -151,13 +153,12 @@ func TestBuildTagFilterSQL_OROnly(t *testing.T) {
 		}
 
 		clauses, args := BuildTagFilterSQL(filters)
-		require.Len(t, clauses, 1) // All OR filters grouped into one EXISTS
-		require.Len(t, args, 6)
+		require.Len(t, clauses, 1) // All OR filters grouped into one clause
+		require.Len(t, args, 12)   // 3 filters * 2 args * 2 sources
 
-		// Should use EXISTS with OR conditions
+		// Should use EXISTS with OR conditions for both tag sources
 		assert.Contains(t, clauses[0], "EXISTS (")
-		assert.Equal(t, 2, strings.Count(clauses[0], " OR ")) // 3 conditions = 2 OR operators
-		assert.Equal(t, 3, strings.Count(clauses[0], "TagTypes.Type = ?"))
+		assert.Equal(t, 6, strings.Count(clauses[0], "TagTypes.Type = ?")) // 3 per source
 	})
 }
 
@@ -170,7 +171,7 @@ func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 2) // One for AND, one for NOT
-		require.Len(t, args, 4)
+		require.Len(t, args, 8)    // 2 filters * 4 args each
 
 		// First clause should be INTERSECT (or IN for single)
 		assert.Contains(t, clauses[0], "Media.DBID IN (")
@@ -188,14 +189,13 @@ func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 2) // One for AND, one for OR group
-		require.Len(t, args, 6)
+		require.Len(t, args, 12)   // 1 AND*4 + 2 OR*4
 
 		// First clause should be INTERSECT
 		assert.Contains(t, clauses[0], "Media.DBID IN (")
 
 		// Second clause should be EXISTS with OR
 		assert.Contains(t, clauses[1], "EXISTS (")
-		assert.Contains(t, clauses[1], " OR ")
 	})
 
 	t.Run("NOT + OR", func(t *testing.T) {
@@ -207,14 +207,13 @@ func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 2) // One for NOT, one for OR group
-		require.Len(t, args, 6)
+		require.Len(t, args, 12)   // 1 NOT*4 + 2 OR*4
 
 		// First clause should be NOT EXISTS
 		assert.Contains(t, clauses[0], "NOT EXISTS")
 
 		// Second clause should be EXISTS with OR
 		assert.Contains(t, clauses[1], "EXISTS (")
-		assert.Contains(t, clauses[1], " OR ")
 	})
 
 	t.Run("AND + NOT + OR", func(t *testing.T) {
@@ -229,7 +228,7 @@ func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 4) // 1 AND group, 2 NOT, 1 OR group
-		require.Len(t, args, 12)
+		require.Len(t, args, 24)   // 2 AND*4 + 2 NOT*4 + 2 OR*4
 
 		// First clause: INTERSECT for AND
 		assert.Contains(t, clauses[0], "Media.DBID IN (")
@@ -241,7 +240,6 @@ func TestBuildTagFilterSQL_MixedOperators(t *testing.T) {
 
 		// Last clause: EXISTS with OR
 		assert.Contains(t, clauses[3], "EXISTS (")
-		assert.Contains(t, clauses[3], " OR ")
 	})
 }
 
@@ -256,17 +254,29 @@ func TestBuildTagFilterSQL_ArgumentOrder(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 3) // AND group, NOT, OR
-		require.Len(t, args, 8)
+		require.Len(t, args, 16)   // 4 filters * 4 args each
 
-		// Verify argument order: AND filters first, then NOT, then OR
+		// Verify argument order: AND filters (doubled for UNION), then NOT (doubled), then OR (doubled)
+		// AND: region/usa for MediaTags, region/usa for MediaTitleTags
 		assert.Equal(t, "region", args[0])
 		assert.Equal(t, "usa", args[1])
-		assert.Equal(t, "lang", args[2])
-		assert.Equal(t, "en", args[3])
-		assert.Equal(t, "unfinished", args[4])
-		assert.Equal(t, "demo", args[5])
-		assert.Equal(t, "players", args[6])
-		assert.Equal(t, "2", args[7])
+		assert.Equal(t, "region", args[2])
+		assert.Equal(t, "usa", args[3])
+		// AND: lang/en for MediaTags, lang/en for MediaTitleTags
+		assert.Equal(t, "lang", args[4])
+		assert.Equal(t, "en", args[5])
+		assert.Equal(t, "lang", args[6])
+		assert.Equal(t, "en", args[7])
+		// NOT: unfinished/demo for MediaTags, unfinished/demo for MediaTitleTags
+		assert.Equal(t, "unfinished", args[8])
+		assert.Equal(t, "demo", args[9])
+		assert.Equal(t, "unfinished", args[10])
+		assert.Equal(t, "demo", args[11])
+		// OR: players/2 for MediaTags, players/2 for MediaTitleTags
+		assert.Equal(t, "players", args[12])
+		assert.Equal(t, "2", args[13])
+		assert.Equal(t, "players", args[14])
+		assert.Equal(t, "2", args[15])
 	})
 }
 
@@ -395,7 +405,7 @@ func TestBuildTagFilterSQL_LargeScale(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		assert.NotEmpty(t, clauses)
-		assert.Len(t, args, 40) // 20 filters * 2 args each
+		assert.Len(t, args, 80) // 20 filters * 4 args each (MediaTags + MediaTitleTags)
 	})
 
 	t.Run("Many OR filters", func(t *testing.T) {
@@ -410,7 +420,7 @@ func TestBuildTagFilterSQL_LargeScale(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		assert.Len(t, clauses, 1) // All ORs grouped together
-		assert.Len(t, args, 30)
+		assert.Len(t, args, 60)   // 15 filters * 2 args * 2 sources
 	})
 
 	t.Run("Many NOT filters", func(t *testing.T) {
@@ -425,7 +435,7 @@ func TestBuildTagFilterSQL_LargeScale(t *testing.T) {
 
 		clauses, args := BuildTagFilterSQL(filters)
 		assert.Len(t, clauses, 10) // Each NOT gets its own clause
-		assert.Len(t, args, 20)
+		assert.Len(t, args, 40)    // 10 filters * 4 args each (MediaTags + MediaTitleTags)
 	})
 }
 
@@ -446,7 +456,7 @@ func TestBuildTagFilterSQL_EdgeCases(t *testing.T) {
 				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
 			},
 			expectedClauses: 3,
-			expectedArgsMin: 6,
+			expectedArgsMin: 12, // 3 filters * 4 args each (MediaTags + MediaTitleTags)
 			description:     "Should generate 3 separate clauses",
 		},
 		{
@@ -455,7 +465,7 @@ func TestBuildTagFilterSQL_EdgeCases(t *testing.T) {
 				{Type: "description", Value: string(make([]byte, 500)), Operator: zapscript.TagOperatorAND},
 			},
 			expectedClauses: 1,
-			expectedArgsMin: 2,
+			expectedArgsMin: 4, // 1 filter * 4 args (MediaTags + MediaTitleTags)
 			description:     "Should handle very long values",
 		},
 		{
@@ -464,7 +474,7 @@ func TestBuildTagFilterSQL_EdgeCases(t *testing.T) {
 				{Type: "tag", Value: "", Operator: zapscript.TagOperatorAND},
 			},
 			expectedClauses: 1,
-			expectedArgsMin: 2,
+			expectedArgsMin: 4, // 1 filter * 4 args (MediaTags + MediaTitleTags)
 			description:     "Should handle empty values",
 		},
 	}
@@ -480,7 +490,7 @@ func TestBuildTagFilterSQL_EdgeCases(t *testing.T) {
 
 // TestBuildTagFilterSQL_SQLStructure tests the structure of generated SQL
 func TestBuildTagFilterSQL_SQLStructure(t *testing.T) {
-	t.Run("AND filters use INTERSECT pattern", func(t *testing.T) {
+	t.Run("AND filters use INTERSECT pattern with both tag sources", func(t *testing.T) {
 		filters := []zapscript.TagFilter{
 			{Type: "region", Value: "usa", Operator: zapscript.TagOperatorAND},
 			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorAND},
@@ -489,13 +499,14 @@ func TestBuildTagFilterSQL_SQLStructure(t *testing.T) {
 		clauses, _ := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 1)
 
-		// Should contain INTERSECT
+		// Should contain INTERSECT with both MediaTags and MediaTitleTags
 		assert.Contains(t, clauses[0], "INTERSECT")
 		assert.Contains(t, clauses[0], "Media.DBID IN (")
 		assert.Contains(t, clauses[0], "SELECT MediaDBID FROM MediaTags")
+		assert.Contains(t, clauses[0], "MediaTitleTags")
 	})
 
-	t.Run("NOT filters use NOT EXISTS pattern", func(t *testing.T) {
+	t.Run("NOT filters use NOT EXISTS pattern with both tag sources", func(t *testing.T) {
 		filters := []zapscript.TagFilter{
 			{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
 		}
@@ -503,12 +514,13 @@ func TestBuildTagFilterSQL_SQLStructure(t *testing.T) {
 		clauses, _ := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 1)
 
-		// Should contain NOT EXISTS
+		// Should contain NOT EXISTS for both MediaTags and MediaTitleTags
 		assert.Contains(t, clauses[0], "NOT EXISTS")
 		assert.Contains(t, clauses[0], "MediaTags.MediaDBID = Media.DBID")
+		assert.Contains(t, clauses[0], "MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID")
 	})
 
-	t.Run("OR filters use EXISTS with OR pattern", func(t *testing.T) {
+	t.Run("OR filters use EXISTS with OR pattern for both tag sources", func(t *testing.T) {
 		filters := []zapscript.TagFilter{
 			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
 			{Type: "lang", Value: "es", Operator: zapscript.TagOperatorOR},
@@ -517,9 +529,11 @@ func TestBuildTagFilterSQL_SQLStructure(t *testing.T) {
 		clauses, _ := BuildTagFilterSQL(filters)
 		require.Len(t, clauses, 1)
 
-		// Should contain EXISTS with OR
+		// Should contain EXISTS with OR for both MediaTags and MediaTitleTags
 		assert.Contains(t, clauses[0], "EXISTS (")
 		assert.Contains(t, clauses[0], " OR ")
+		assert.Contains(t, clauses[0], "MediaTags.MediaDBID = Media.DBID")
+		assert.Contains(t, clauses[0], "MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID")
 	})
 }
 
@@ -544,33 +558,45 @@ func TestBuildTagFilterSQL_Regression(t *testing.T) {
 			},
 		},
 		{
-			name: "Single OR filter should not have OR operator",
+			name: "Single OR filter uses EXISTS for both tag sources",
 			filters: []zapscript.TagFilter{
 				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorOR},
 			},
-			description: "Single OR filter doesn't need OR operator",
+			description: "Single OR filter uses EXISTS with both MediaTags and MediaTitleTags",
 			validate: func(t *testing.T, clauses []string, _ []any) {
 				assert.Len(t, clauses, 1)
-				assert.NotContains(t, clauses[0], " OR ")
 				assert.Contains(t, clauses[0], "EXISTS (")
+				assert.Contains(t, clauses[0], "MediaTags")
+				assert.Contains(t, clauses[0], "MediaTitleTags")
+				// Single OR condition appears in both EXISTS clauses (one per tag source)
+				assert.Equal(t, 2, strings.Count(clauses[0], "TagTypes.Type = ?"))
 			},
 		},
 		{
-			name: "All args must be used in order",
+			name: "All args must be used in order with doubled args for both tag sources",
 			filters: []zapscript.TagFilter{
 				{Type: "a", Value: "1", Operator: zapscript.TagOperatorAND},
 				{Type: "b", Value: "2", Operator: zapscript.TagOperatorNOT},
 				{Type: "c", Value: "3", Operator: zapscript.TagOperatorOR},
 			},
-			description: "Arguments must match SQL clause order",
+			description: "Arguments must match SQL clause order with MediaTags + MediaTitleTags",
 			validate: func(t *testing.T, _ []string, args []any) {
-				// Verify all args are present and in correct order
+				require.Len(t, args, 12) // 3 filters * 4 args each
+				// AND: a/1 for MediaTags, a/1 for MediaTitleTags
 				assert.Equal(t, "a", args[0])
 				assert.Equal(t, "1", args[1])
-				assert.Equal(t, "b", args[2])
-				assert.Equal(t, "2", args[3])
-				assert.Equal(t, "c", args[4])
-				assert.Equal(t, "3", args[5])
+				assert.Equal(t, "a", args[2])
+				assert.Equal(t, "1", args[3])
+				// NOT: b/2 for MediaTags, b/2 for MediaTitleTags
+				assert.Equal(t, "b", args[4])
+				assert.Equal(t, "2", args[5])
+				assert.Equal(t, "b", args[6])
+				assert.Equal(t, "2", args[7])
+				// OR: c/3 for MediaTags, c/3 for MediaTitleTags
+				assert.Equal(t, "c", args[8])
+				assert.Equal(t, "3", args[9])
+				assert.Equal(t, "c", args[10])
+				assert.Equal(t, "3", args[11])
 			},
 		},
 	}
