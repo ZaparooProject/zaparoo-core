@@ -121,7 +121,7 @@ func runTokenZapScript(
 			select {
 			case plsc.Queue <- nil:
 			case <-st.GetContext().Done():
-				return fmt.Errorf("service shutting down")
+				return errors.New("service shutting down")
 			}
 		}
 
@@ -131,7 +131,7 @@ func runTokenZapScript(
 				select {
 				case lsq <- &token:
 				case <-st.GetContext().Done():
-					return fmt.Errorf("service shutting down")
+					return errors.New("service shutting down")
 				}
 			}
 		}
