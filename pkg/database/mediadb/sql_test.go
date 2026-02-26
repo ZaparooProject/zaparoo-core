@@ -1437,60 +1437,6 @@ func TestCheckForDuplicateMediaTitles_NoDuplicates(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSqlSearchMediaByTitleDBIDs_TempTablePath(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	// Generate 20001 IDs to exceed the 20000 threshold and trigger the temp table path
-	ids := make([]int64, 20001)
-	for i := range ids {
-		ids[i] = int64(i + 1)
-	}
-
-	// 1. CREATE TEMP TABLE
-	mock.ExpectExec("CREATE TEMP TABLE IF NOT EXISTS _search_candidates").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	// 2. DELETE stale data
-	mock.ExpectExec("DELETE FROM _search_candidates").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	// 3. INSERT batches (40 full batches of 500 + 1 partial batch of 1)
-	for range 40 {
-		mock.ExpectExec("INSERT OR IGNORE INTO _search_candidates").
-			WillReturnResult(sqlmock.NewResult(0, 500))
-	}
-	mock.ExpectExec("INSERT OR IGNORE INTO _search_candidates").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// 5. Main SELECT query uses subquery against temp table
-	mock.ExpectQuery("SELECT .+ FROM MediaTitles").
-		WithArgs(100).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-			AddRow("NES", "Game One", "/games/nes/one.nes", 42).
-			AddRow("NES", "Game Two", "/games/nes/two.nes", 99))
-
-	// 6. Tags query
-	mock.ExpectPrepare("SELECT.*MediaDBID.*Tags\\.Tag.*TagTypes\\.Type.*").
-		ExpectQuery().
-		WithArgs(42, 99).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
-
-	// 7. Deferred DROP TABLE
-	mock.ExpectExec("DROP TABLE IF EXISTS _search_candidates").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	results, err := sqlSearchMediaByTitleDBIDs(
-		context.Background(), db, ids, nil, nil, nil, 100)
-	require.NoError(t, err)
-	assert.Len(t, results, 2)
-	assert.Equal(t, "Game One", results[0].Name)
-	assert.Equal(t, "Game Two", results[1].Name)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestSqlSearchMediaByTitleDBIDs_BasicLookup(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()

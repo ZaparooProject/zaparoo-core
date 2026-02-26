@@ -637,10 +637,10 @@ func TestGetPathInfo_VirtualPathEdgeCases(t *testing.T) {
 			},
 			notes: "HTTP URLs with ports should decode path component",
 		},
-		{
+		{ //nolint:gosec // G101: test data with credentials in URL
 			name: "http_with_userinfo",
 			path: "http://user:pass@server.com/File%20Name.iso",
-			expected: PathInfo{
+			expected: PathInfo{ //nolint:gosec // G101: test data with credentials in URL
 				Path:      "http://user:pass@server.com/File%20Name.iso",
 				Filename:  "File Name.iso",
 				Extension: ".iso",

@@ -49,7 +49,7 @@ func cmdHTTPGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: URL from user's ZapScript command
 		if err != nil {
 			log.Error().Err(err).Msgf("getting url: %s", url)
 			return
@@ -85,7 +85,7 @@ func cmdHTTPPost(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		}
 		req.Header.Set("Content-Type", mime)
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: URL from user's ZapScript command
 		if err != nil {
 			log.Error().Err(err).Msgf("error posting to url: %s", url)
 			return

@@ -146,7 +146,7 @@ func WaitForInternet(maxTries int) bool {
 			continue
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: hardcoded URL https://api.github.com
 		cancel()
 		if err == nil && resp != nil {
 			if err := resp.Body.Close(); err != nil {

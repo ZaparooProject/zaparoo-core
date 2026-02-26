@@ -40,6 +40,7 @@ const (
 
 // IsFlatpakInstalled checks if a Flatpak application is installed by querying flatpak info.
 func IsFlatpakInstalled(appID string) bool {
+	//nolint:gosec // G204: appID from hardcoded constants
 	cmd := exec.CommandContext(context.Background(), "flatpak", "info", appID)
 	return cmd.Run() == nil
 }

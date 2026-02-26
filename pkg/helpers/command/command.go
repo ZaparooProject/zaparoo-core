@@ -58,21 +58,21 @@ type RealExecutor struct{}
 
 // Run executes a system command using exec.CommandContext.
 //
-//nolint:wrapcheck // Wrapping exec errors loses important context
+//nolint:wrapcheck,gosec // Wrapping exec errors loses important context; G204: command executor's purpose
 func (*RealExecutor) Run(ctx context.Context, name string, args ...string) error {
 	return exec.CommandContext(ctx, name, args...).Run()
 }
 
 // Output runs a command and returns its standard output.
 //
-//nolint:wrapcheck // Wrapping exec errors loses important context
+//nolint:wrapcheck,gosec // Wrapping exec errors loses important context; G204: command executor's purpose
 func (*RealExecutor) Output(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).Output()
 }
 
 // Start starts a command without waiting for it to complete.
 //
-//nolint:wrapcheck // Wrapping exec errors loses important context
+//nolint:wrapcheck,gosec // Wrapping exec errors loses important context; G204: command executor's purpose
 func (*RealExecutor) Start(ctx context.Context, name string, args ...string) error {
 	return exec.CommandContext(ctx, name, args...).Start()
 }

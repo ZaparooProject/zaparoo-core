@@ -106,7 +106,7 @@ func queryZapLinkSupport(u *url.URL, platform string) (int, error) {
 	}
 	setZapLinkHeaders(req, platform)
 
-	resp, err := zapFetchClient.Do(req)
+	resp, err := zapFetchClient.Do(req) //nolint:gosec // G704: URL from ZapLink resolution
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch '%s': %w", wellKnownURL, err)
 	}
@@ -191,7 +191,7 @@ func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
 	setZapLinkHeaders(req, platform)
 	req.Header.Set("Accept", strings.Join(AcceptedMimeTypes, ", "))
 
-	resp, err := zapFetchClient.Do(req)
+	resp, err := zapFetchClient.Do(req) //nolint:gosec // G704: URL from ZapLink resolution
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch zapscript from '%s': %w", urlStr, err)
 	}

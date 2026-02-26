@@ -452,7 +452,7 @@ func HasUserDir() (string, bool) {
 		parent := filepath.Dir(exeDir)
 		userDir := filepath.Join(parent, config.UserDir)
 
-		info, err := os.Stat(userDir)
+		info, err := os.Stat(userDir) //nolint:gosec // G703: userDir built from filepath.Join with constant
 		if err != nil {
 			userDirCacheExists = false
 			return

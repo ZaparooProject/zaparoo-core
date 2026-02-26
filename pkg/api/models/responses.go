@@ -301,7 +301,7 @@ type TokensResponse struct {
 type ClientResponse struct {
 	Name    string    `json:"name"`
 	Address string    `json:"address"`
-	Secret  string    `json:"secret"`
+	Secret  string    `json:"secret"` //nolint:gosec // G117: pairing secret, not a credential
 	ID      uuid.UUID `json:"id"`
 }
 

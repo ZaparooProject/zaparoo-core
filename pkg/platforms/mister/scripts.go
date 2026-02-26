@@ -41,7 +41,7 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 
 	if hidden {
 		// run the script directly
-		cmd := exec.CommandContext(context.Background(), bin, args)
+		cmd := exec.CommandContext(context.Background(), bin, args) //nolint:gosec // G204: script runner's purpose
 		cmd.Env = os.Environ()
 		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8", "HOME=/root",
 			"LESSKEY=/media/fat/linux/lesskey", "ZAPAROO_RUN_SCRIPT=1")

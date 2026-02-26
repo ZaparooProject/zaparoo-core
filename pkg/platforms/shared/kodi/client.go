@@ -499,7 +499,7 @@ func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (
 	}
 
 	client := &http.Client{}
-	resp, err := client.Do(kodiReq)
+	resp, err := client.Do(kodiReq) //nolint:gosec // G704: URL from user config, Kodi client's purpose
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}

@@ -136,7 +136,7 @@ func fetchAndAttachTags(
 							}
 						}
 						if isYear {
-							results[i].Year = &tag.Tag
+							results[i].Year = &tag.Tag //nolint:gosec // G602: indexing within loop bounds
 							break
 						}
 					}
@@ -501,53 +501,12 @@ func sqlSearchMediaByTitleDBIDs(
 		return []database.SearchResultWithCursor{}, nil
 	}
 
-	const tempTableThreshold = 20000 // SQLite 3.32+ allows 32766 bound params
-
 	args := make([]any, 0, len(titleDBIDs)+10)
-	var titleCondition string
-
-	if len(titleDBIDs) <= tempTableThreshold {
-		// Small set: use IN clause with placeholders
-		for _, id := range titleDBIDs {
-			args = append(args, id)
-		}
-		titleCondition = "MediaTitles.DBID IN (" +
-			prepareVariadic("?", ",", len(titleDBIDs)) + ")"
-	} else {
-		// Large set: create temp table and batch-insert
-		if _, err := db.ExecContext(ctx,
-			"CREATE TEMP TABLE IF NOT EXISTS _search_candidates (id INTEGER PRIMARY KEY)"); err != nil {
-			return nil, fmt.Errorf("failed to create temp table: %w", err)
-		}
-		defer func() {
-			_, _ = db.ExecContext(context.WithoutCancel(ctx), "DROP TABLE IF EXISTS _search_candidates")
-		}()
-
-		// Clear any stale data from a previous interrupted request
-		if _, err := db.ExecContext(ctx, "DELETE FROM _search_candidates"); err != nil {
-			return nil, fmt.Errorf("failed to clear temp table: %w", err)
-		}
-
-		// Batch insert IDs
-		const batchSize = 500
-		for i := 0; i < len(titleDBIDs); i += batchSize {
-			end := min(i+batchSize, len(titleDBIDs))
-			batch := titleDBIDs[i:end]
-			placeholders := prepareVariadic("(?)", ",", len(batch))
-			batchArgs := make([]any, len(batch))
-			for j, id := range batch {
-				batchArgs[j] = id
-			}
-			//nolint:gosec // Safe: placeholders are generated "(?)" markers from prepareVariadic
-			if _, err := db.ExecContext(ctx,
-				"INSERT OR IGNORE INTO _search_candidates (id) VALUES "+placeholders,
-				batchArgs...); err != nil {
-				return nil, fmt.Errorf("failed to insert candidates batch: %w", err)
-			}
-		}
-
-		titleCondition = "MediaTitles.DBID IN (SELECT id FROM _search_candidates)"
+	for _, id := range titleDBIDs {
+		args = append(args, id)
 	}
+	titleCondition := "MediaTitles.DBID IN (" +
+		prepareVariadic("?", ",", len(titleDBIDs)) + ")"
 
 	// Build additional filter conditions
 	var extraConditions []string

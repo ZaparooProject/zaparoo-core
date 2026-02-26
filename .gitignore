@@ -15,6 +15,7 @@ go.work
 .claude/
 .claudeignore
 .opencode/
+.agent-shell/
 
 *.db
 *.tar

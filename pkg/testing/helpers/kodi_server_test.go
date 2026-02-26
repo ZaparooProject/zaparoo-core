@@ -76,7 +76,7 @@ func TestMockKodiServer_HandlesPlayerGetActivePlayersRequest(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // G704: test hitting local test server
 	require.NoError(t, err)
 	defer func() {
 		closeErr := resp.Body.Close()
@@ -122,7 +122,7 @@ func TestMockKodiServer_WithActivePlayers(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // G704: test hitting local test server
 	require.NoError(t, err)
 	defer func() {
 		closeErr := resp.Body.Close()

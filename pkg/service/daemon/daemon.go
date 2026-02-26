@@ -255,7 +255,7 @@ func (s *Service) Start() error {
 		binPath = exePath
 	}
 
-	binFile, err := os.Open(binPath)
+	binFile, err := os.Open(binPath) //nolint:gosec // G703: binPath from os.Executable()
 	if err != nil {
 		return fmt.Errorf("error opening binary: %w", err)
 	}

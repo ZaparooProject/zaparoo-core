@@ -31,7 +31,7 @@ import (
 // CredentialEntry holds authentication credentials for a URL.
 type CredentialEntry struct {
 	Username string `toml:"username"`
-	Password string `toml:"password"`
+	Password string `toml:"password"` //nolint:gosec // G117: auth config struct field
 	Bearer   string `toml:"bearer"`
 }
 
@@ -64,7 +64,7 @@ type authAuthCredsFormat struct {
 
 // authAPIKeysFormat represents root-level api_keys in auth.toml
 type authAPIKeysFormat struct {
-	APIKeys []string `toml:"api_keys"`
+	APIKeys []string `toml:"api_keys"` //nolint:gosec // G101: auth config struct field
 }
 
 // isValidAuthKey filters out TOML structural keys that get captured when

@@ -446,7 +446,7 @@ func launchVideo(pl *Platform) func(*config.Instance, string, *platforms.LaunchO
 
 // buildScummVMCommand constructs the command for launching ScummVM.
 func buildScummVMCommand(ctx context.Context, scummvmBinary, targetID string) *exec.Cmd {
-	cmd := exec.CommandContext(
+	cmd := exec.CommandContext( //nolint:gosec // G204: launcher's purpose is to execute content
 		ctx,
 		"taskset", "03", // CPU affinity: cores 0-1
 		scummvmBinary,

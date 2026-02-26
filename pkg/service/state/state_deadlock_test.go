@@ -74,7 +74,8 @@ func TestSetActiveCard_NoDeadlockWithSlowConsumer(t *testing.T) {
 			defer wg.Done()
 			for j := range 20 {
 				token := tokens.Token{
-					UID:      "uid-" + string(rune('A'+id)) + "-" + string(rune('0'+j%10)),
+					//nolint:gosec // G115: int->rune for small test ints
+					UID:      "uid-" + string(rune('A'+id)) + "-" + string(rune('0'+j%10)), //nolint:gosec // G115
 					Text:     "test",
 					ScanTime: time.Now(),
 				}
@@ -143,8 +144,8 @@ func TestSetActiveMedia_NoDeadlockWithHook(t *testing.T) {
 			defer wg.Done()
 			for j := range 10 {
 				state.SetActiveMedia(&models.ActiveMedia{
-					SystemID: "system-" + string(rune('0'+id)),
-					Path:     "/path/" + string(rune('0'+j%10)),
+					SystemID: "system-" + string(rune('0'+id)),  //nolint:gosec // G115: small test ints
+					Path:     "/path/" + string(rune('0'+j%10)), //nolint:gosec // G115: small test ints
 				})
 			}
 		}(i)
@@ -261,7 +262,8 @@ func TestSetActiveMedia_RaceCondition(t *testing.T) {
 			for j := range 20 {
 				state.SetActiveMedia(&models.ActiveMedia{
 					SystemID: "system",
-					Path:     "/path/" + string(rune('A'+id)) + "/" + string(rune('0'+j%10)),
+					//nolint:gosec // G115: int->rune for small test ints
+					Path: "/path/" + string(rune('A'+id)) + "/" + string(rune('0'+j%10)), //nolint:gosec // G115
 				})
 			}
 		}(i)
