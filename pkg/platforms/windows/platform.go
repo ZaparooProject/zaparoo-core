@@ -324,7 +324,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			AllowListOnly: true,
 			Lifecycle:     platforms.LifecycleBlocking,
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-				cmd := exec.CommandContext(context.Background(), path) //nolint:gosec // Safe: executes user-configured allow-listed executable
+				//nolint:gosec // Safe: executes user-configured allow-listed executable
+			cmd := exec.CommandContext(context.Background(), path)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				if err := cmd.Start(); err != nil {
 					return nil, fmt.Errorf("failed to start executable: %w", err)
@@ -342,10 +343,12 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				var cmd *exec.Cmd
 				// Extensions not in default PATHEXT need START command for proper execution
 				if ext == ".lnk" || ext == ".a3x" || ext == ".ahk" {
-					cmd = exec.CommandContext(context.Background(), "cmd", "/c", "start", "", path) //nolint:gosec // Safe: executes user-configured allow-listed script
+					//nolint:gosec // Safe: executes user-configured allow-listed script
+					cmd = exec.CommandContext(context.Background(), "cmd", "/c", "start", "", path)
 				} else {
 					// .bat, .cmd work fine with direct execution
-					cmd = exec.CommandContext(context.Background(), "cmd", "/c", path) //nolint:gosec // Safe: executes user-configured allow-listed script
+					//nolint:gosec // Safe: executes user-configured allow-listed script
+					cmd = exec.CommandContext(context.Background(), "cmd", "/c", path)
 				}
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				err := cmd.Start()
