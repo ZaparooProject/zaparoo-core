@@ -325,7 +325,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Lifecycle:     platforms.LifecycleBlocking,
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				//nolint:gosec // Safe: executes user-configured allow-listed executable
-			cmd := exec.CommandContext(context.Background(), path)
+				cmd := exec.CommandContext(context.Background(), path)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				if err := cmd.Start(); err != nil {
 					return nil, fmt.Errorf("failed to start executable: %w", err)
