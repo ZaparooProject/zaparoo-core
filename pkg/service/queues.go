@@ -118,13 +118,21 @@ func runTokenZapScript(
 
 		if result.MediaChanged && token.Source != tokens.SourcePlaylist {
 			log.Debug().Any("token", token).Msg("cmd launch: clearing current playlist")
-			plsc.Queue <- nil
+			select {
+			case plsc.Queue <- nil:
+			case <-st.GetContext().Done():
+				return fmt.Errorf("service shutting down")
+			}
 		}
 
 		if result.MediaChanged && token.ReaderID != "" {
 			if r, ok := st.GetReader(token.ReaderID); ok && readers.HasCapability(r, readers.CapabilityRemovable) {
 				log.Debug().Any("token", token).Msg("media changed, updating software token")
-				lsq <- &token
+				select {
+				case lsq <- &token:
+				case <-st.GetContext().Done():
+					return fmt.Errorf("service shutting down")
+				}
 			}
 		}
 
