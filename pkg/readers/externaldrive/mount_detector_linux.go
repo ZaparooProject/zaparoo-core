@@ -548,7 +548,7 @@ func (d *linuxMountDetectorFallback) pollMountChanges() {
 	// Set up poll for /proc/mounts with POLLPRI (priority event) and POLLERR
 	pollFds := []unix.PollFd{
 		{
-			Fd:     int32(d.mountsFile.Fd()),
+			Fd:     int32(d.mountsFile.Fd()), //nolint:gosec // G115: uintptr->int32 for Fd(), safe on Linux
 			Events: unix.POLLPRI | unix.POLLERR,
 		},
 	}

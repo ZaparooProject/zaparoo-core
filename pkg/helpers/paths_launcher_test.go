@@ -25,12 +25,16 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// testLauncherCacheMutex protects GlobalLauncherCache modifications in tests
+var testLauncherCacheMutex syncutil.Mutex
 
 func TestPathIsLauncher_AbsoluteFolderNoRootDirs(t *testing.T) {
 	t.Parallel()
@@ -153,6 +157,7 @@ func TestPathIsLauncher_RelativeFolderWithRootDirs(t *testing.T) {
 }
 
 func TestMatchSystemFile_CustomLauncherAbsolutePath(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	tmpDir := t.TempDir()
 
 	mockPlatform := mocks.NewMockPlatform()
@@ -169,12 +174,15 @@ func TestMatchSystemFile_CustomLauncherAbsolutePath(t *testing.T) {
 
 	cfg := &config.Instance{}
 
-	// Swap GlobalLauncherCache for this test
+	testLauncherCacheMutex.Lock()
 	originalCache := GlobalLauncherCache
 	testCache := &LauncherCache{}
 	testCache.Initialize(mockPlatform, cfg)
 	GlobalLauncherCache = testCache
-	defer func() { GlobalLauncherCache = originalCache }()
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	assert.True(t, MatchSystemFile(cfg, mockPlatform, "PS2", filepath.Join(tmpDir, "game.iso")),
 		"MatchSystemFile should find file via custom launcher with absolute path")
@@ -187,6 +195,7 @@ func TestMatchSystemFile_CustomLauncherAbsolutePath(t *testing.T) {
 }
 
 func TestMatchSystemFile_CustomLauncherWithBuiltinLaunchers(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	tmpDir := t.TempDir()
 
 	// Simulate a platform that has both built-in launchers (with Test functions,
@@ -216,11 +225,15 @@ func TestMatchSystemFile_CustomLauncherWithBuiltinLaunchers(t *testing.T) {
 
 	cfg := &config.Instance{}
 
+	testLauncherCacheMutex.Lock()
 	originalCache := GlobalLauncherCache
 	testCache := &LauncherCache{}
 	testCache.Initialize(mockPlatform, cfg)
 	GlobalLauncherCache = testCache
-	defer func() { GlobalLauncherCache = originalCache }()
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	// File in the custom launcher's absolute path should match PS2
 	assert.True(t, MatchSystemFile(cfg, mockPlatform, "PS2", filepath.Join(tmpDir, "game.chd")),
@@ -232,7 +245,7 @@ func TestMatchSystemFile_CustomLauncherWithBuiltinLaunchers(t *testing.T) {
 }
 
 func TestMatchSystemFile_EmptyFoldersLauncherWithTestFunc(t *testing.T) {
-	t.Parallel()
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 
 	// Launcher with no Folders but a Test function — acts as a generic matcher
 	genericLauncher := platforms.Launcher{
@@ -251,17 +264,22 @@ func TestMatchSystemFile_EmptyFoldersLauncherWithTestFunc(t *testing.T) {
 
 	cfg := &config.Instance{}
 
+	testLauncherCacheMutex.Lock()
 	originalCache := GlobalLauncherCache
 	testCache := &LauncherCache{}
 	testCache.Initialize(mockPlatform, cfg)
 	GlobalLauncherCache = testCache
-	defer func() { GlobalLauncherCache = originalCache }()
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	assert.True(t, MatchSystemFile(cfg, mockPlatform, "Custom", "/some/specific/file.rom"))
 	assert.False(t, MatchSystemFile(cfg, mockPlatform, "Custom", "/some/other/file.rom"))
 }
 
 func TestGetSystemPaths_CustomLauncherAbsolutePath(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	// Create a real temp directory with a file so FindPath can resolve it
 	tmpDir := t.TempDir()
 	err := os.WriteFile(filepath.Join(tmpDir, "game.iso"), []byte("test"), 0o600)
@@ -285,11 +303,15 @@ func TestGetSystemPaths_CustomLauncherAbsolutePath(t *testing.T) {
 	// Instead, test the underlying logic: LauncherCache returns the launcher with
 	// absolute Folders, and the folder is valid on disk.
 
+	testLauncherCacheMutex.Lock()
 	originalCache := GlobalLauncherCache
 	testCache := &LauncherCache{}
 	testCache.Initialize(mockPlatform, cfg)
 	GlobalLauncherCache = testCache
-	defer func() { GlobalLauncherCache = originalCache }()
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	// Verify the cache correctly stores the launcher with its absolute folder
 	launchers := GlobalLauncherCache.GetLaunchersBySystem("PS2")
@@ -360,6 +382,7 @@ func TestLauncherSpecificity(t *testing.T) {
 }
 
 func TestFindLauncher_SpecificOverGeneric(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{})
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/userdata/roms"})
@@ -380,11 +403,15 @@ func TestFindLauncher_SpecificOverGeneric(t *testing.T) {
 
 	cfg := &config.Instance{}
 
+	testLauncherCacheMutex.Lock()
 	originalCache := GlobalLauncherCache
 	testCache := &LauncherCache{}
 	testCache.Initialize(mockPlatform, cfg)
 	GlobalLauncherCache = testCache
-	defer func() { GlobalLauncherCache = originalCache }()
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	launcher, err := FindLauncher(cfg, mockPlatform, "/userdata/roms/ports/Stardew Valley.sh")
 	require.NoError(t, err)
@@ -392,6 +419,7 @@ func TestFindLauncher_SpecificOverGeneric(t *testing.T) {
 }
 
 func TestFindLauncher_SchemeHighestPriority(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{})
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
@@ -411,11 +439,15 @@ func TestFindLauncher_SchemeHighestPriority(t *testing.T) {
 
 	cfg := &config.Instance{}
 
+	testLauncherCacheMutex.Lock()
 	originalCache := GlobalLauncherCache
 	testCache := &LauncherCache{}
 	testCache.Initialize(mockPlatform, cfg)
 	GlobalLauncherCache = testCache
-	defer func() { GlobalLauncherCache = originalCache }()
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	launcher, err := FindLauncher(cfg, mockPlatform, "steam://rungameid/413150")
 	require.NoError(t, err)
@@ -423,6 +455,7 @@ func TestFindLauncher_SchemeHighestPriority(t *testing.T) {
 }
 
 func TestFindLauncher_FolderSystemOverSystemOnly(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{})
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
@@ -444,11 +477,15 @@ func TestFindLauncher_FolderSystemOverSystemOnly(t *testing.T) {
 
 	cfg := &config.Instance{}
 
+	testLauncherCacheMutex.Lock()
 	originalCache := GlobalLauncherCache
 	testCache := &LauncherCache{}
 	testCache.Initialize(mockPlatform, cfg)
 	GlobalLauncherCache = testCache
-	defer func() { GlobalLauncherCache = originalCache }()
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	launcher, err := FindLauncher(cfg, mockPlatform, "/roms/nes/mario.nes")
 	require.NoError(t, err)
@@ -456,6 +493,7 @@ func TestFindLauncher_FolderSystemOverSystemOnly(t *testing.T) {
 }
 
 func TestFindLauncher_GenericAloneStillWorks(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{})
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
@@ -470,11 +508,15 @@ func TestFindLauncher_GenericAloneStillWorks(t *testing.T) {
 
 	cfg := &config.Instance{}
 
+	testLauncherCacheMutex.Lock()
 	originalCache := GlobalLauncherCache
 	testCache := &LauncherCache{}
 	testCache.Initialize(mockPlatform, cfg)
 	GlobalLauncherCache = testCache
-	defer func() { GlobalLauncherCache = originalCache }()
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	launcher, err := FindLauncher(cfg, mockPlatform, "/some/path/script.sh")
 	require.NoError(t, err)
@@ -482,6 +524,7 @@ func TestFindLauncher_GenericAloneStillWorks(t *testing.T) {
 }
 
 func TestFindLauncher_NoMatch(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{})
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
@@ -493,17 +536,22 @@ func TestFindLauncher_NoMatch(t *testing.T) {
 
 	cfg := &config.Instance{}
 
+	testLauncherCacheMutex.Lock()
 	originalCache := GlobalLauncherCache
 	testCache := &LauncherCache{}
 	testCache.Initialize(mockPlatform, cfg)
 	GlobalLauncherCache = testCache
-	defer func() { GlobalLauncherCache = originalCache }()
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	_, err := FindLauncher(cfg, mockPlatform, "/some/random/file.xyz")
 	assert.Error(t, err, "should return error when no launcher matches")
 }
 
 func TestFindLauncher_AllowListBlocksAfterSpecificity(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{})
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
@@ -520,11 +568,15 @@ func TestFindLauncher_AllowListBlocksAfterSpecificity(t *testing.T) {
 
 	cfg := &config.Instance{}
 
+	testLauncherCacheMutex.Lock()
 	originalCache := GlobalLauncherCache
 	testCache := &LauncherCache{}
 	testCache.Initialize(mockPlatform, cfg)
 	GlobalLauncherCache = testCache
-	defer func() { GlobalLauncherCache = originalCache }()
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	_, err := FindLauncher(cfg, mockPlatform, "/path/script.sh")
 	require.Error(t, err, "allowlist should block even after specificity selection")
@@ -532,6 +584,7 @@ func TestFindLauncher_AllowListBlocksAfterSpecificity(t *testing.T) {
 }
 
 func TestFindLauncher_TieBreaksToFirstMatch(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{})
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
@@ -555,11 +608,15 @@ func TestFindLauncher_TieBreaksToFirstMatch(t *testing.T) {
 
 	cfg := &config.Instance{}
 
+	testLauncherCacheMutex.Lock()
 	originalCache := GlobalLauncherCache
 	testCache := &LauncherCache{}
 	testCache.Initialize(mockPlatform, cfg)
 	GlobalLauncherCache = testCache
-	defer func() { GlobalLauncherCache = originalCache }()
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	launcher, err := FindLauncher(cfg, mockPlatform, "/roms/nes/mario.nes")
 	require.NoError(t, err)

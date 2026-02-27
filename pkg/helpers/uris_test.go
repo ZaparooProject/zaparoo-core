@@ -398,7 +398,7 @@ func TestDecodeURIIfNeeded_EdgeCases(t *testing.T) {
 			input:    "http://example.com:8080/my%20game.zip",
 			expected: "http://example.com:8080/my game.zip",
 		},
-		{
+		{ //nolint:gosec // G101: test data with credentials in URL
 			name:     "http_with_userinfo",
 			input:    "http://user:pass@example.com/my%20file.iso",
 			expected: "http://user:pass@example.com/my file.iso",

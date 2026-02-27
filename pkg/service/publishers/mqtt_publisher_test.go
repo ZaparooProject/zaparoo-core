@@ -283,7 +283,7 @@ func TestPublish_Concurrent(t *testing.T) {
 		go func(id int) {
 			err := publisher.Publish(models.Notification{
 				Method: "test.notification",
-				Params: []byte(`{"id": ` + string(rune(id+'0')) + `}`),
+				Params: []byte(`{"id": ` + string(rune(id+'0')) + `}`), //nolint:gosec // G115: int->rune
 			})
 			assert.NoError(t, err)
 			done <- true

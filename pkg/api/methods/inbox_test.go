@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -47,6 +48,7 @@ func TestHandleInbox_Success(t *testing.T) {
 	mockUserDB.On("GetInboxMessages").Return(messages, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 	}
 
@@ -75,6 +77,7 @@ func TestHandleInbox_Empty(t *testing.T) {
 	mockUserDB.On("GetInboxMessages").Return([]database.InboxMessage{}, nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 	}
 
@@ -95,6 +98,7 @@ func TestHandleInbox_DatabaseError(t *testing.T) {
 	mockUserDB.On("GetInboxMessages").Return([]database.InboxMessage{}, errors.New("db error"))
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 	}
 
@@ -118,6 +122,7 @@ func TestHandleInboxDelete_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   paramsJSON,
 	}
@@ -142,6 +147,7 @@ func TestHandleInboxDelete_InvalidParams(t *testing.T) {
 	require.NoError(t, err)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   paramsJSON,
 	}
@@ -166,6 +172,7 @@ func TestHandleInboxDelete_DatabaseError(t *testing.T) {
 	require.NoError(t, err)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 		Params:   paramsJSON,
 	}
@@ -186,6 +193,7 @@ func TestHandleInboxClear_Success(t *testing.T) {
 	mockUserDB.On("DeleteAllInboxMessages").Return(int64(5), nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 	}
 
@@ -205,6 +213,7 @@ func TestHandleInboxClear_EmptyInbox(t *testing.T) {
 	mockUserDB.On("DeleteAllInboxMessages").Return(int64(0), nil)
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 	}
 
@@ -224,6 +233,7 @@ func TestHandleInboxClear_DatabaseError(t *testing.T) {
 	mockUserDB.On("DeleteAllInboxMessages").Return(int64(0), errors.New("db error"))
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Database: &database.Database{UserDB: mockUserDB},
 	}
 

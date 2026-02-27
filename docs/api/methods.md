@@ -247,15 +247,16 @@ None.
 
 ##### Active media object
 
-| Key        | Type   | Required | Description                                |
-| :--------- | :----- | :------- | :----------------------------------------- |
-| launcherId | string | Yes      | ID of the launcher.                        |
-| systemId   | string | Yes      | ID of the system.                          |
-| systemName | string | Yes      | Display name of the system.                |
-| mediaPath  | string | Yes      | Path to the media file.                    |
-| mediaName  | string | Yes      | Display name of the media.                 |
-| started    | string | Yes      | Timestamp when media started in RFC3339 format. |
-| zapScript  | string | Yes      | ZapScript command to launch this media item. |
+| Key              | Type     | Required | Description                                |
+| :--------------- | :------- | :------- | :----------------------------------------- |
+| launcherId       | string   | Yes      | ID of the launcher.                        |
+| systemId         | string   | Yes      | ID of the system.                          |
+| systemName       | string   | Yes      | Display name of the system.                |
+| mediaPath        | string   | Yes      | Path to the media file.                    |
+| mediaName        | string   | Yes      | Display name of the media.                 |
+| started          | string   | Yes      | Timestamp when media started in RFC3339 format. |
+| zapScript        | string   | Yes      | ZapScript command to launch this media item. |
+| launcherControls | string[] | No       | List of control action names supported by the active launcher. Only present if the launcher supports controls. See [media.control](#mediacontrol). |
 
 #### Example
 
@@ -324,6 +325,7 @@ An object:
 | cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages.                     |
 | tags       | string[] | No       | Filter results by tags. Maximum 50 tags, each up to 128 characters. Tags are case-sensitive and results must match all provided tags. Can be used without query or systems for tag-only searches. |
 | letter     | string   | No       | Filter results by first character of game name. Supports: A-Z (single letters), "0-9" (numbers), "#" (symbols). Case-insensitive. |
+| fuzzySystem | boolean | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 
 #### Result
 
@@ -357,7 +359,7 @@ An object:
 
 | Key         | Type    | Required | Description                                                                 |
 | :---------- | :------ | :------- | :-------------------------------------------------------------------------- |
-| nextCursor  | string  | No       | Cursor for the next page of results. `null` if no more pages available.    |
+| nextCursor  | string  | No       | Cursor for the next page of results. Omitted if no more pages available.   |
 | hasNextPage | boolean | Yes      | Whether there are more results available after the current page.           |
 | pageSize    | number  | Yes      | Number of results requested for this page (matches `maxResults` parameter). |
 
@@ -414,7 +416,6 @@ An object:
     ],
     "total": 1,
     "pagination": {
-      "nextCursor": null,
       "hasNextPage": false,
       "pageSize": 100
     }
@@ -474,7 +475,6 @@ An object:
     ],
     "total": 1,
     "pagination": {
-      "nextCursor": null,
       "hasNextPage": false,
       "pageSize": 10
     }
@@ -492,7 +492,8 @@ This method returns all available tags (with their types) for the specified syst
 
 | Key     | Type     | Required | Description                                                                                         |
 | :------ | :------- | :------- | :-------------------------------------------------------------------------------------------------- |
-| systems | string[] | No       | Case-sensitive list of system IDs to restrict tags to. A missing key or empty list will get all systems. |
+| systems     | string[] | No       | Case-sensitive list of system IDs to restrict tags to. A missing key or empty list will get all systems. |
+| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 
 #### Result
 
@@ -563,7 +564,8 @@ Optionally, an object:
 
 | Key     | Type     | Required | Description                                                                         |
 | :------ | :------- | :------- | :---------------------------------------------------------------------------------- |
-| systems | string[] | No       | List of system IDs to restrict indexing to. Other system indexes will remain as is. |
+| systems     | string[] | No       | List of system IDs to restrict indexing to. Other system indexes will remain as is. |
+| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 
 An omitted or `null` value parameters key is also valid and will index every system.
 
@@ -720,7 +722,8 @@ Returns an [ActiveMedia](#active-media-object) object if media is currently acti
     "systemName": "Super Nintendo Entertainment System",
     "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
     "mediaName": "Super Mario World",
-    "zapScript": "@SNES/Super Mario World"
+    "zapScript": "@SNES/Super Mario World",
+    "launcherControls": ["load_state", "save_state", "toggle_menu"]
   }
 }
 ```
@@ -767,6 +770,295 @@ Returns `null` on success.
   "jsonrpc": "2.0",
   "id": "47f80537-7a5d-11ef-9c7b-020304050607",
   "result": null
+}
+```
+
+### media.history
+
+Return paginated media play history.
+
+#### Parameters
+
+Optionally, an object:
+
+| Key         | Type     | Required | Description                                                                                     |
+| :---------- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
+| limit       | number   | No       | Maximum number of entries to return. Default is 25, maximum is 100.                              |
+| cursor      | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages. |
+| systems     | string[] | No       | Filter to one or more system IDs (e.g., `["SNES", "NES"]`).                                     |
+| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs.                                                            |
+
+#### Result
+
+| Key        | Type                                                 | Required | Description                              |
+| :--------- | :--------------------------------------------------- | :------- | :--------------------------------------- |
+| entries    | [MediaHistoryEntry](#media-history-entry-object)[]   | Yes      | A list of media play history entries.    |
+| pagination | [Pagination](#pagination-object)                     | No       | Pagination information for cursor-based navigation. Only present when entries are returned. |
+
+##### Media history entry object
+
+| Key        | Type   | Required | Description                                            |
+| :--------- | :----- | :------- | :----------------------------------------------------- |
+| systemId   | string | Yes      | ID of the system.                                      |
+| systemName | string | Yes      | Display name of the system.                            |
+| mediaName  | string | Yes      | Display name of the media.                             |
+| mediaPath  | string | Yes      | Path to the media file.                                |
+| launcherId | string | Yes      | ID of the launcher used.                               |
+| startedAt  | string | Yes      | Timestamp when media started in RFC3339 format.        |
+| endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Omitted if media is still active. |
+| playTime   | number | Yes      | Duration of the play session in seconds.               |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "method": "media.history",
+  "params": {
+    "limit": 10
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "entries": [
+      {
+        "systemId": "SNES",
+        "systemName": "Super Nintendo Entertainment System",
+        "mediaName": "Super Mario World",
+        "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+        "launcherId": "SNES",
+        "startedAt": "2025-01-22T14:30:00Z",
+        "endedAt": "2025-01-22T15:15:30Z",
+        "playTime": 2730
+      }
+    ],
+    "pagination": {
+      "hasNextPage": false,
+      "pageSize": 10
+    }
+  }
+}
+```
+
+### media.history.top
+
+Return aggregated media play history grouped by game, sorted by total play time descending. Useful for "most played" displays.
+
+#### Parameters
+
+Optionally, an object:
+
+| Key         | Type     | Required | Description                                                                                     |
+| :---------- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
+| limit       | number   | No       | Maximum number of entries to return. Default is 25, maximum is 100.                              |
+| systems     | string[] | No       | Filter to one or more system IDs (e.g., `["SNES", "NES"]`).                                     |
+| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs.                                                            |
+| since       | string   | No       | Only count sessions starting after this RFC3339 timestamp.                                       |
+
+#### Result
+
+| Key     | Type                                                         | Required | Description                              |
+| :------ | :----------------------------------------------------------- | :------- | :--------------------------------------- |
+| entries | [MediaHistoryTopEntry](#media-history-top-entry-object)[]    | Yes      | A ranked list of games by total play time. |
+
+##### Media history top entry object
+
+| Key           | Type   | Required | Description                                            |
+| :------------ | :----- | :------- | :----------------------------------------------------- |
+| systemId      | string | Yes      | ID of the system.                                      |
+| systemName    | string | Yes      | Display name of the system.                            |
+| mediaName     | string | Yes      | Display name of the media.                             |
+| mediaPath     | string | Yes      | Path to the media file (from most recent session).     |
+| totalPlayTime | number | Yes      | Total play time across all sessions in seconds.        |
+| sessionCount  | number | Yes      | Number of play sessions.                               |
+| lastPlayedAt  | string | Yes      | Timestamp of the most recent session in RFC3339 format. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-8b6e-12f0-ad8c-030405060708",
+  "method": "media.history.top",
+  "params": {
+    "limit": 5,
+    "systems": ["SNES"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-8b6e-12f0-ad8c-030405060708",
+  "result": {
+    "entries": [
+      {
+        "systemId": "SNES",
+        "systemName": "Super Nintendo Entertainment System",
+        "mediaName": "Super Mario World",
+        "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+        "totalPlayTime": 7200,
+        "sessionCount": 12,
+        "lastPlayedAt": "2026-02-14T20:30:00Z"
+      }
+    ]
+  }
+}
+```
+
+### media.lookup
+
+Resolve a game name and system to a media database match.
+
+Given a system ID and game name, searches the media database for the best matching title. Uses fuzzy matching to handle minor differences in naming. Returns `null` for the match when no title is found or confidence is too low.
+
+#### Parameters
+
+An object:
+
+| Key         | Type    | Required | Description                                                                            |
+| :---------- | :------ | :------- | :------------------------------------------------------------------------------------- |
+| system      | string  | Yes      | System ID to search within (e.g., `"SNES"`, `"Genesis"`).                             |
+| name        | string  | Yes      | Game name to look up.                                                                   |
+| fuzzySystem | boolean | No       | Enable fuzzy matching for the system ID (e.g., `"snes"` matches `"SNES"`).             |
+
+#### Result
+
+| Key   | Type                                         | Required | Description                                            |
+| :---- | :------------------------------------------- | :------- | :----------------------------------------------------- |
+| match | [MediaLookupMatch](#media-lookup-match-object) | No       | The best matching media entry, or `null` if no match found. |
+
+##### Media lookup match object
+
+| Key        | Type                         | Required | Description                                                                                 |
+| :--------- | :--------------------------- | :------- | :------------------------------------------------------------------------------------------ |
+| system     | [System](#system-object)     | Yes      | System the media was found in.                                                              |
+| name       | string                       | Yes      | Display name of the matched media.                                                          |
+| path       | string                       | Yes      | Path to the media file.                                                                     |
+| zapScript  | string                       | Yes      | ZapScript command to launch this media item.                                                |
+| tags       | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                              |
+| confidence | number                       | Yes      | Match confidence score from 0.0 to 1.0.                                                    |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
+  "method": "media.lookup",
+  "params": {
+    "system": "SNES",
+    "name": "Super Mario World"
+  }
+}
+```
+
+##### Response (Match Found)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "match": {
+      "system": {
+        "id": "SNES",
+        "name": "Super Nintendo Entertainment System",
+        "category": "Console",
+        "releaseDate": "1990-11-21",
+        "manufacturer": "Nintendo"
+      },
+      "name": "Super Mario World",
+      "path": "SNES/Super Mario World (USA).sfc",
+      "zapScript": "@SNES/Super Mario World",
+      "tags": [
+        {
+          "tag": "platformer",
+          "type": "genre"
+        },
+        {
+          "tag": "1990",
+          "type": "year"
+        }
+      ],
+      "confidence": 0.95
+    }
+  }
+}
+```
+
+##### Response (No Match)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "match": null
+  }
+}
+```
+
+### media.control
+
+Send a control action to the active media's launcher.
+
+Requires active media with a launcher that supports control capabilities. The available control actions depend on the launcher. Use the `launcherControls` field from `media.active` or `media` to discover supported actions.
+
+Control actions run in a restricted runtime that blocks media-launching and playlist commands. Utility commands like `input.keyboard`, `execute`, `delay` and `echo` are allowed. The `execute` command bypasses the `allow_execute` allowlist for control scripts defined in launcher configuration.
+
+#### Parameters
+
+An object:
+
+| Key    | Type   | Required | Description                                                       |
+| :----- | :----- | :------- | :---------------------------------------------------------------- |
+| action | string | Yes      | The control action to execute (e.g., `"save_state"`, `"toggle_pause"`). |
+| args   | object | No       | Optional key-value arguments for the control action. Values are strings. |
+
+#### Result
+
+Returns an empty object `{}` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-7a5d-11ef-9c7b-020304050607",
+  "method": "media.control",
+  "params": {
+    "action": "save_state"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-7a5d-11ef-9c7b-020304050607",
+  "result": {}
 }
 ```
 

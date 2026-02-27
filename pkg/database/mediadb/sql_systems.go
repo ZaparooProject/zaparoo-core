@@ -32,7 +32,7 @@ import (
 
 const insertSystemSQL = `INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)`
 
-func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (database.System, error) {
+func sqlFindSystem(ctx context.Context, db sqlQueryable, system database.System) (database.System, error) {
 	var row database.System
 	stmt, err := db.PrepareContext(ctx, `
 		select
@@ -64,7 +64,7 @@ func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (dat
 	return row, nil
 }
 
-func sqlFindSystemBySystemID(ctx context.Context, db *sql.DB, systemID string) (database.System, error) {
+func sqlFindSystemBySystemID(ctx context.Context, db sqlQueryable, systemID string) (database.System, error) {
 	var row database.System
 	stmt, err := db.PrepareContext(ctx, `
 		select
@@ -200,6 +200,55 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	}
 	err = rows.Err()
 	return list, err
+}
+
+// sqlFilterIndexedSystems returns only those systemIDs that exist in the Systems
+// table (i.e., have indexed content). Preserves input order.
+func sqlFilterIndexedSystems(ctx context.Context, db sqlQueryable, systemIDs []string) ([]string, error) {
+	if len(systemIDs) == 0 {
+		return nil, nil
+	}
+
+	args := make([]any, len(systemIDs))
+	for i, id := range systemIDs {
+		args[i] = id
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	rows, err := db.QueryContext(ctx,
+		"SELECT SystemID FROM Systems WHERE SystemID IN ("+
+			prepareVariadic("?", ",", len(systemIDs))+")",
+		args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to filter indexed systems: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows in sqlFilterIndexedSystems")
+		}
+	}()
+
+	indexed := make(map[string]struct{})
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan indexed system: %w", scanErr)
+		}
+		indexed[id] = struct{}{}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating indexed systems: %w", err)
+	}
+
+	// Preserve input order, dedup by removing from map after first match
+	result := make([]string, 0, len(indexed))
+	for _, id := range systemIDs {
+		if _, ok := indexed[id]; ok {
+			result = append(result, id)
+			delete(indexed, id)
+		}
+	}
+	return result, nil
 }
 
 func sqlGetAllSystems(ctx context.Context, db *sql.DB) ([]database.System, error) {

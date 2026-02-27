@@ -157,7 +157,7 @@ func (db *UserDB) AddHistory(entry *database.HistoryEntry) error {
 	return sqlAddHistory(db.ctx, db.sql, *entry)
 }
 
-func (db *UserDB) GetHistory(lastID int) ([]database.HistoryEntry, error) {
+func (db *UserDB) GetHistory(lastID int64) ([]database.HistoryEntry, error) {
 	return sqlGetHistoryWithOffset(db.ctx, db.sql, lastID)
 }
 

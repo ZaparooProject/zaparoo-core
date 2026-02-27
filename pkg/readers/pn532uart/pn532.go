@@ -160,7 +160,7 @@ func sendFrame(port serial.Port, cmd byte, args []byte) ([]byte, error) {
 		return []byte{}, errors.New("data too big for frame")
 	}
 
-	dlen := byte(len(data))
+	dlen := byte(len(data))          //nolint:gosec // G115: int->byte after len(data) > 255 guard above
 	frm = append(frm, dlen, ^dlen+1) // length and length checksum
 
 	checksum := byte(0)

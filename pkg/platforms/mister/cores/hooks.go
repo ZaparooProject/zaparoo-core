@@ -144,13 +144,11 @@ func hookAo486(_ *config.Instance, system *Core, path string) (string, error) {
 	for _, file := range files {
 		fileName := strings.ToLower(file.Name())
 		if (strings.HasSuffix(fileName, ".iso") || strings.HasSuffix(fileName, ".chd")) && file.Name() != filename {
-			_, _ = isoMgl.WriteString(fmt.Sprintf(
-				"\t<file delay=\"%d\" type=%q index=\"%d\" path=%q/>\n",
+			_, _ = fmt.Fprintf(&isoMgl, "\t<file delay=\"%d\" type=%q index=\"%d\" path=%q/>\n",
 				mglDef.Delay,
 				mglDef.Method,
 				4,
-				"../../../../.."+filepath.Join(dir, file.Name()),
-			))
+				"../../../../.."+filepath.Join(dir, file.Name()))
 			break
 		}
 	}

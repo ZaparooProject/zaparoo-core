@@ -543,11 +543,11 @@ func (tm *LimitsManager) calculateDailyUsage(
 	// Query media history for today
 	// Note: GetMediaHistory uses pagination, so we need to fetch all entries
 	var totalUsage time.Duration
-	lastID := 0
+	var lastID int64
 	limit := 100
 
 	for {
-		entries, err := tm.db.UserDB.GetMediaHistory(lastID, limit)
+		entries, err := tm.db.UserDB.GetMediaHistory(nil, lastID, limit)
 		if err != nil {
 			return 0, fmt.Errorf("failed to query media history: %w", err)
 		}
@@ -588,7 +588,7 @@ func (tm *LimitsManager) calculateDailyUsage(
 				totalUsage += time.Duration(entry.PlayTime) * time.Second
 			}
 
-			lastID = int(entry.DBID)
+			lastID = entry.DBID
 		}
 
 		if len(entries) < limit {

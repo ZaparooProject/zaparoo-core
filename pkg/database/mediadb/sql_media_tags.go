@@ -30,7 +30,7 @@ import (
 
 const insertMediaTagSQL = `INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`
 
-func sqlFindMediaTag(ctx context.Context, db *sql.DB, mediaTag database.MediaTag) (database.MediaTag, error) {
+func sqlFindMediaTag(ctx context.Context, db sqlQueryable, mediaTag database.MediaTag) (database.MediaTag, error) {
 	var row database.MediaTag
 	stmt, err := db.PrepareContext(ctx, `
 		select

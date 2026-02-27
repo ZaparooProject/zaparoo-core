@@ -32,7 +32,7 @@ import (
 
 const insertMediaSQL = `INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (?, ?, ?, ?)`
 
-func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (database.Media, error) {
+func sqlFindMedia(ctx context.Context, db sqlQueryable, media database.Media) (database.Media, error) {
 	var row database.Media
 	stmt, err := db.PrepareContext(ctx, `
 		select
@@ -324,11 +324,10 @@ func sqlGetLaunchCommandForMedia(
 		return "", fmt.Errorf("failed to query launch command: %w", err)
 	}
 
-	// Build the launch command
-	launchCmd := fmt.Sprintf("@%s/%s", systemID, titleName)
+	var yearPtr *string
 	if year.Valid && year.String != "" {
-		launchCmd = fmt.Sprintf("%s (year:%s)", launchCmd, year.String)
+		yearPtr = &year.String
 	}
 
-	return launchCmd, nil
+	return database.BuildTitleZapScript(systemID, titleName, yearPtr), nil
 }

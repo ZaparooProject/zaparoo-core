@@ -46,6 +46,49 @@ import (
 
 const defaultMaxResults = 100
 
+// searchSem limits concurrent media.search requests to 3 to avoid saturating
+// SQLite with long-running LIKE queries. Additional callers block until a slot
+// opens or their request context is cancelled.
+var searchSem = make(chan struct{}, 3)
+
+func resolveSystem(id string, fuzzyMatch bool) (*systemdefs.System, error) {
+	if fuzzyMatch {
+		sys, err := systemdefs.LookupSystem(id)
+		if err != nil {
+			return nil, fmt.Errorf("error looking up system %q: %w", id, err)
+		}
+		return sys, nil
+	}
+	sys, err := systemdefs.GetSystem(id)
+	if err != nil {
+		return nil, fmt.Errorf("error getting system %q: %w", id, err)
+	}
+	return sys, nil
+}
+
+// resolveSystems resolves a list of system ID strings to canonical System
+// values. Handles fuzzy matching, deduplication, and falls back to AllSystems
+// when the input list is nil or empty.
+func resolveSystems(ids []string, fuzzy bool) ([]systemdefs.System, error) {
+	if len(ids) == 0 {
+		return systemdefs.AllSystems(), nil
+	}
+	seen := make(map[string]bool, len(ids))
+	systems := make([]systemdefs.System, 0, len(ids))
+	for _, id := range ids {
+		sys, err := resolveSystem(id, fuzzy)
+		if err != nil {
+			return nil, fmt.Errorf("invalid system ID %s: %w", id, err)
+		}
+		if seen[sys.ID] {
+			continue
+		}
+		seen[sys.ID] = true
+		systems = append(systems, *sys)
+	}
+	return systems, nil
+}
+
 type cursorData struct {
 	LastID int64 `json:"lastId"`
 }
@@ -108,14 +151,18 @@ func (s *indexingStatus) get() indexingStatusVals {
 	}
 }
 
-func (s *indexingStatus) start() {
+func (s *indexingStatus) startIfNotRunning() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.indexing {
+		return false
+	}
 	s.indexing = true
 	s.totalSteps = 0
 	s.currentStep = 0
 	s.currentDesc = ""
 	s.totalFiles = 0
+	return true
 }
 
 func (s *indexingStatus) clear() {
@@ -198,21 +245,19 @@ func GenerateMediaDB(
 	systems []systemdefs.System,
 	db *database.Database,
 ) error {
-	if statusInstance.get().indexing {
+	if !statusInstance.startIfNotRunning() {
 		return errors.New("indexing already in progress")
 	}
 
 	// Also prevent indexing if optimization is running
 	optimizationStatus, err := db.MediaDB.GetOptimizationStatus()
 	if err != nil {
-		// If we can't read the status, assume it might be in an unknown state
-		// and prevent indexing to avoid potential conflicts
+		statusInstance.clear()
 		return fmt.Errorf("failed to get optimization status during indexing check: %w", err)
 	} else if optimizationStatus == "running" {
+		statusInstance.clear()
 		return errors.New("database optimization in progress")
 	}
-
-	statusInstance.start()
 	startTime := time.Now()
 
 	// Create cancellable context for indexing
@@ -300,6 +345,10 @@ func GenerateMediaDB(
 			TotalFiles: &total,
 		})
 
+		if cacheErr := db.MediaDB.RebuildSlugSearchCache(); cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to rebuild slug search cache after indexing")
+		}
+
 		// Start background optimization with notification callback
 		// Track the optimization operation BEFORE starting the goroutine to prevent a race
 		// where Close() → Wait() could return between this goroutine's Done() and
@@ -334,51 +383,31 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 
 	if len(env.Params) > 0 {
 		var params models.MediaIndexParams
-		err := json.Unmarshal(env.Params, &params)
-		if err != nil {
+		if unmarshalErr := json.Unmarshal(env.Params, &params); unmarshalErr != nil {
 			return nil, validation.ErrInvalidParams
 		}
 
 		// Validate params (systems are validated by struct tags)
-		if err := validation.DefaultValidator.Validate(&params); err != nil {
-			log.Warn().Err(err).Msg("invalid params")
-			return nil, fmt.Errorf("invalid params: %w", err)
+		if validateErr := validation.DefaultValidator.Validate(&params); validateErr != nil {
+			log.Warn().Err(validateErr).Msg("invalid params")
+			return nil, fmt.Errorf("invalid params: %w", validateErr)
 		}
 
-		if params.Systems == nil || len(*params.Systems) == 0 {
-			systems = systemdefs.AllSystems()
-		} else {
+		fuzzy := params.FuzzySystem != nil && *params.FuzzySystem
+		var ids []string
+		if params.Systems != nil {
+			ids = *params.Systems
+		}
+
+		var resolveErr error
+		systems, resolveErr = resolveSystems(ids, fuzzy)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+
+		if len(ids) > 0 && len(systems) < len(systemdefs.AllSystems()) {
 			isSelectiveIndexing = true
-			// Validate all provided system IDs
-			for _, s := range *params.Systems {
-				system, err := systemdefs.GetSystem(s)
-				if err != nil {
-					return nil, fmt.Errorf("invalid system ID %s: %w", s, err)
-				}
-				systems = append(systems, *system)
-			}
-
-			// Check if we're actually doing selective indexing (not all systems)
-			allSystems := systemdefs.AllSystems()
-			if len(systems) == len(allSystems) {
-				// Double-check by comparing system IDs
-				systemIDsMap := make(map[string]bool)
-				for _, sys := range systems {
-					systemIDsMap[sys.ID] = true
-				}
-				for _, sys := range allSystems {
-					if !systemIDsMap[sys.ID] {
-						break
-					}
-				}
-				if len(systemIDsMap) == len(allSystems) {
-					isSelectiveIndexing = false
-				}
-			}
-
-			if isSelectiveIndexing {
-				log.Info().Msgf("Starting selective media indexing for systems: %v", *params.Systems)
-			}
+			log.Info().Msgf("Starting selective media indexing for systems: %v", ids)
 		}
 	} else {
 		systems = systemdefs.AllSystems()
@@ -401,6 +430,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		}
 	}
 
+	// Use app-scoped context — indexing outlives the API request
 	err := GenerateMediaDB(
 		env.State.GetContext(),
 		env.Platform,
@@ -416,6 +446,13 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received media search request")
 
+	select {
+	case searchSem <- struct{}{}:
+		defer func() { <-searchSem }()
+	case <-env.Context.Done():
+		return nil, env.Context.Err()
+	}
+
 	var params models.SearchParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
@@ -427,7 +464,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		maxResults = *params.MaxResults
 	}
 
-	ctx := env.State.GetContext()
+	ctx := env.Context
 
 	// Handle cursor-based pagination
 	var cursorStr string
@@ -469,18 +506,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	var searchResults []database.SearchResultWithCursor
 
 	// Prepare systems for search
-	var systems []systemdefs.System
-	if system == nil || len(*system) == 0 {
-		systems = systemdefs.AllSystems()
-	} else {
-		systems = make([]systemdefs.System, 0, len(*system))
-		for _, s := range *system {
-			sys, systemErr := systemdefs.GetSystem(s)
-			if systemErr != nil {
-				return nil, fmt.Errorf("error getting system %s: %w", s, systemErr)
-			}
-			systems = append(systems, *sys)
-		}
+	fuzzy := params.FuzzySystem != nil && *params.FuzzySystem
+	var systemIDs []string
+	if system != nil {
+		systemIDs = *system
+	}
+	systems, resolveErr := resolveSystems(systemIDs, fuzzy)
+	if resolveErr != nil {
+		return nil, resolveErr
 	}
 
 	searchFilters := database.SearchFilters{
@@ -530,11 +563,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			}
 		}
 
-		// Build zapscript command in memory using data from query
-		zapScript := fmt.Sprintf("@%s/%s", result.SystemID, result.Name)
-		if result.Year != nil && *result.Year != "" {
-			zapScript = fmt.Sprintf("%s (year:%s)", zapScript, *result.Year)
-		}
+		zapScript := result.ZapScript()
 
 		results = append(results, models.SearchResultMedia{
 			System:    resultSystem,
@@ -590,7 +619,7 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 		}
 	}
 
-	ctx := env.State.GetContext()
+	ctx := env.Context
 
 	system := params.Systems
 
@@ -598,18 +627,14 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	var err error
 
 	// Optimize for "all systems" case
+	fuzzy := params.FuzzySystem != nil && *params.FuzzySystem
 	switch {
 	case system == nil || len(*system) == 0:
 		tagList, err = env.Database.MediaDB.GetAllUsedTags(ctx)
 	default:
-		// Specific systems - use cached approach with fallback
-		systems := make([]systemdefs.System, 0, len(*system))
-		for _, s := range *system {
-			sys, systemErr := systemdefs.GetSystem(s)
-			if systemErr != nil {
-				return nil, fmt.Errorf("error getting system %s: %w", s, systemErr)
-			}
-			systems = append(systems, *sys)
+		systems, resolveErr := resolveSystems(*system, fuzzy)
+		if resolveErr != nil {
+			return nil, resolveErr
 		}
 		tagList, err = env.Database.MediaDB.GetSystemTagsCached(ctx, systems)
 	}
@@ -636,32 +661,34 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			return nil, fmt.Errorf("error getting system metadata: %w", err)
 		}
 
-		// Build zapScript: @{systemId}/{mediaName}
-		zapScript := fmt.Sprintf("@%s/%s", system.ID, activeMedia.Name)
-
-		// Try to look up year from MediaDB
+		// Build zapScript with optional year from MediaDB
+		var year *string
 		if env.Database.MediaDB != nil {
-			year, yearErr := env.Database.MediaDB.GetYearBySystemAndPath(
-				env.State.GetContext(), system.ID, activeMedia.Path,
+			y, yearErr := env.Database.MediaDB.GetYearBySystemAndPath(
+				env.Context, system.ID, activeMedia.Path,
 			)
 			if yearErr != nil {
 				log.Debug().Err(yearErr).Msgf("could not get year for %s:%s", system.ID, activeMedia.Path)
-			} else if year != "" {
-				zapScript = fmt.Sprintf("%s (year:%s)", zapScript, year)
+			} else if y != "" {
+				year = &y
 			}
 		}
+		zapScript := database.BuildTitleZapScript(system.ID, activeMedia.Name, year)
 
-		resp.Active = append(resp.Active, models.ActiveMediaResponse{
+		activeResp := models.ActiveMediaResponse{
 			ActiveMedia: models.ActiveMedia{
-				Started:    activeMedia.Started,
-				LauncherID: activeMedia.LauncherID,
-				SystemID:   system.ID,
-				SystemName: system.Name,
-				Name:       activeMedia.Name,
-				Path:       activeMedia.Path,
+				Started:          activeMedia.Started,
+				LauncherID:       activeMedia.LauncherID,
+				SystemID:         system.ID,
+				SystemName:       system.Name,
+				Name:             activeMedia.Name,
+				Path:             activeMedia.Path,
+				LauncherControls: activeMedia.LauncherControls,
 			},
 			ZapScript: zapScript,
-		})
+		}
+
+		resp.Active = append(resp.Active, activeResp)
 	}
 
 	status := statusInstance.get()
@@ -768,32 +795,34 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, nil //nolint:nilnil // nil response means no active media
 	}
 
-	// Build zapScript: @{systemId}/{mediaName}
-	zapScript := fmt.Sprintf("@%s/%s", media.SystemID, media.Name)
-
-	// Try to look up year from MediaDB
+	// Build zapScript with optional year from MediaDB
+	var year *string
 	if env.Database.MediaDB != nil {
-		year, err := env.Database.MediaDB.GetYearBySystemAndPath(
-			env.State.GetContext(), media.SystemID, media.Path,
+		y, yearErr := env.Database.MediaDB.GetYearBySystemAndPath(
+			env.Context, media.SystemID, media.Path,
 		)
-		if err != nil {
-			log.Debug().Err(err).Msgf("could not get year for %s:%s", media.SystemID, media.Path)
-		} else if year != "" {
-			zapScript = fmt.Sprintf("%s (year:%s)", zapScript, year)
+		if yearErr != nil {
+			log.Debug().Err(yearErr).Msgf("could not get year for %s:%s", media.SystemID, media.Path)
+		} else if y != "" {
+			year = &y
 		}
 	}
+	zapScript := database.BuildTitleZapScript(media.SystemID, media.Name, year)
 
-	return models.ActiveMediaResponse{
+	resp := models.ActiveMediaResponse{
 		ActiveMedia: models.ActiveMedia{
-			Started:    media.Started,
-			LauncherID: media.LauncherID,
-			SystemID:   media.SystemID,
-			SystemName: media.SystemName,
-			Name:       media.Name,
-			Path:       media.Path,
+			Started:          media.Started,
+			LauncherID:       media.LauncherID,
+			SystemID:         media.SystemID,
+			SystemName:       media.SystemName,
+			Name:             media.Name,
+			Path:             media.Path,
+			LauncherControls: media.LauncherControls,
 		},
 		ZapScript: zapScript,
-	}, nil
+	}
+
+	return resp, nil
 }
 
 //nolint:gocritic,revive // single-use parameter in API handler
@@ -802,12 +831,12 @@ func HandleMediaGenerateCancel(env requests.RequestEnv) (any, error) {
 
 	if statusInstance.cancel() {
 		log.Info().Msg("media indexing cancellation requested")
-		return map[string]interface{}{
+		return map[string]any{
 			"message": "Media indexing cancelled successfully",
 		}, nil
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"message": "No media indexing operation is currently running or it has already been cancelled",
 	}, nil
 }

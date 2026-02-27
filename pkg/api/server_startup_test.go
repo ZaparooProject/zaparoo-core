@@ -98,7 +98,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 				req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
 				require.NoError(t, reqErr)
 
-				resp, connectErr = client.Do(req)
+				resp, connectErr = client.Do(req) //nolint:gosec // G704: test hitting local test server
 				if connectErr == nil {
 					break // Server responded successfully
 				}
@@ -168,7 +168,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 			connectionResult <- err
 			return
 		}
-		resp, err := client.Do(req)
+		resp, err := client.Do(req) //nolint:gosec // G704: test hitting local test server
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
@@ -527,7 +527,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 		if reqErr != nil {
 			continue
 		}
-		resp, connErr := client.Do(req)
+		resp, connErr := client.Do(req) //nolint:gosec // G704: test hitting local test server
 		if connErr == nil {
 			_ = resp.Body.Close()
 			server1Ready = true

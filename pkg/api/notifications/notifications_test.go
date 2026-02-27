@@ -20,6 +20,7 @@
 package notifications
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -138,16 +139,32 @@ func TestMediaStarted_Payload(t *testing.T) {
 	assert.Contains(t, string(notification.Params), "Super Mario Bros")
 }
 
-// TestMediaStopped verifies MediaStopped sends correctly.
+// TestMediaStopped verifies MediaStopped sends correctly with payload.
 func TestMediaStopped(t *testing.T) {
 	t.Parallel()
 
 	ns := make(chan models.Notification, 1)
 
-	MediaStopped(ns)
+	payload := models.MediaStoppedParams{
+		SystemID:   "NES",
+		SystemName: "Nintendo Entertainment System",
+		MediaName:  "Super Mario Bros",
+		MediaPath:  "/games/nes/smb.nes",
+		LauncherID: "retroarch-nes",
+		Elapsed:    120,
+	}
+	MediaStopped(ns, &payload)
 
 	notification := <-ns
 	assert.Equal(t, models.NotificationStopped, notification.Method)
+	require.NotNil(t, notification.Params)
+
+	var received models.MediaStoppedParams
+	err := json.Unmarshal(notification.Params, &received)
+	require.NoError(t, err)
+	assert.Equal(t, "NES", received.SystemID)
+	assert.Equal(t, "Super Mario Bros", received.MediaName)
+	assert.Equal(t, 120, received.Elapsed)
 }
 
 // TestReadersAdded_Payload verifies ReadersAdded marshals payload correctly.

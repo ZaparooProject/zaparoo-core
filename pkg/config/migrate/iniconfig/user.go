@@ -269,6 +269,7 @@ func NewUserConfig(defaultConfig *UserConfig) (*UserConfig, error) {
 	defaultConfig.AppPath = exePath
 	defaultConfig.IniPath = iniPath
 
+	//nolint:gosec // G703: iniPath from known config location
 	if _, statErr := os.Stat(iniPath); os.IsNotExist(statErr) {
 		// create a blank one on disk
 		saveErr := defaultConfig.SaveConfig()

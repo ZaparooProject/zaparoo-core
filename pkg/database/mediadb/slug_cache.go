@@ -91,7 +91,7 @@ func (db *MediaDB) GetCachedSlugResolution(
 		return 0, "", false
 	}
 
-	err = db.sql.QueryRowContext(ctx,
+	err = db.conn().QueryRowContext(ctx,
 		"SELECT MediaDBID, Strategy FROM SlugResolutionCache WHERE CacheKey = ?",
 		cacheKey).Scan(&mediaDBID, &strategy)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -130,7 +130,7 @@ func (db *MediaDB) SetCachedSlugResolution(
 		return fmt.Errorf("failed to marshal tag filters: %w", err)
 	}
 
-	_, err = db.sql.ExecContext(ctx, `
+	_, err = db.conn().ExecContext(ctx, `
 		INSERT OR REPLACE INTO SlugResolutionCache
 		(CacheKey, SystemID, Slug, TagFilters, MediaDBID, Strategy, LastUpdated)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -156,7 +156,7 @@ func (db *MediaDB) InvalidateSlugCache(ctx context.Context) error {
 		return ErrNullSQL
 	}
 
-	_, err := db.sql.ExecContext(ctx, "DELETE FROM SlugResolutionCache")
+	_, err := db.conn().ExecContext(ctx, "DELETE FROM SlugResolutionCache")
 	if err != nil {
 		return fmt.Errorf("failed to invalidate slug resolution cache: %w", err)
 	}
@@ -187,7 +187,7 @@ func (db *MediaDB) InvalidateSlugCacheForSystems(ctx context.Context, systemIDs 
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	deleteStmt := fmt.Sprintf("DELETE FROM SlugResolutionCache WHERE SystemID IN (%s)", placeholders)
-	_, err := db.sql.ExecContext(ctx, deleteStmt, args...)
+	_, err := db.conn().ExecContext(ctx, deleteStmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to invalidate slug cache for systems: %w", err)
 	}
@@ -206,7 +206,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 	result := database.SearchResultWithCursor{}
 
 	// Query for media information
-	err := db.sql.QueryRowContext(ctx, `
+	err := db.conn().QueryRowContext(ctx, `
 		SELECT
 			Systems.SystemID,
 			MediaTitles.Name,
@@ -226,17 +226,22 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 		return result, fmt.Errorf("failed to get media by DBID: %w", err)
 	}
 
-	// Fetch tags for this media
-	rows, err := db.sql.QueryContext(ctx, `
-		SELECT
-			Tags.Tag,
-			TagTypes.Type
+	// Fetch tags from both MediaTags (file-level) and MediaTitleTags (title-level)
+	rows, err := db.conn().QueryContext(ctx, `
+		SELECT Tags.Tag, TagTypes.Type
 		FROM MediaTags
-		INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-		INNER JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
 		WHERE MediaTags.MediaDBID = ?
-		ORDER BY TagTypes.Type, Tags.Tag
-	`, mediaDBID)
+		UNION
+		SELECT Tags.Tag, TagTypes.Type
+		FROM Media
+		JOIN MediaTitleTags ON MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
+		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE Media.DBID = ?
+		ORDER BY Type, Tag
+	`, mediaDBID, mediaDBID)
 	if err != nil {
 		return result, fmt.Errorf("failed to query tags: %w", err)
 	}
@@ -270,20 +275,33 @@ func (db *MediaDB) GetYearBySystemAndPath(ctx context.Context, systemID, path st
 	}
 
 	var year string
-	err := db.sql.QueryRowContext(ctx, `
-		SELECT Tags.Tag
-		FROM Media
-		INNER JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
-		INNER JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
-		INNER JOIN MediaTags ON Media.DBID = MediaTags.MediaDBID
-		INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-		INNER JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-		WHERE Systems.SystemID = ?
-		  AND Media.Path = ?
-		  AND TagTypes.Type = 'year'
-		  AND length(Tags.Tag) = 4
-		LIMIT 1
-	`, systemID, path).Scan(&year)
+	err := db.conn().QueryRowContext(ctx, `
+		SELECT YearTags.Tag FROM (
+			SELECT Tags.Tag
+			FROM Media
+			JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
+			JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
+			JOIN MediaTags ON Media.DBID = MediaTags.MediaDBID
+			JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+			WHERE Systems.SystemID = ?
+			  AND Media.Path = ?
+			  AND TagTypes.Type = 'year'
+			  AND length(Tags.Tag) = 4
+			UNION
+			SELECT Tags.Tag
+			FROM Media
+			JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
+			JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
+			JOIN MediaTitleTags ON MediaTitles.DBID = MediaTitleTags.MediaTitleDBID
+			JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+			WHERE Systems.SystemID = ?
+			  AND Media.Path = ?
+			  AND TagTypes.Type = 'year'
+			  AND length(Tags.Tag) = 4
+		) YearTags LIMIT 1
+	`, systemID, path, systemID, path).Scan(&year)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil

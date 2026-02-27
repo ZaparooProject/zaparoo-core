@@ -40,6 +40,7 @@ const (
 	SourcePlaylist = "Playlist" // Playlist-triggered launch
 	SourceHook     = "Hook"     // Hook-generated token
 	SourceGMC      = "GMC"      // Groovy Media Center proxy
+	SourceControl  = "Control"  // Config-defined control script
 )
 
 type Token struct {

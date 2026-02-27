@@ -135,7 +135,7 @@ func (m *MockUserDBI) AddHistory(entry *database.HistoryEntry) error {
 	return nil
 }
 
-func (m *MockUserDBI) GetHistory(lastID int) ([]database.HistoryEntry, error) {
+func (m *MockUserDBI) GetHistory(lastID int64) ([]database.HistoryEntry, error) {
 	args := m.Called(lastID)
 	if history, ok := args.Get(0).([]database.HistoryEntry); ok {
 		if err := args.Error(1); err != nil {
@@ -307,8 +307,10 @@ func (m *MockUserDBI) CloseMediaHistory(dbid int64, endTime time.Time, playTime 
 	return nil
 }
 
-func (m *MockUserDBI) GetMediaHistory(lastID, limit int) ([]database.MediaHistoryEntry, error) {
-	args := m.Called(lastID, limit)
+func (m *MockUserDBI) GetMediaHistory(
+	systemIDs []string, lastID int64, limit int,
+) ([]database.MediaHistoryEntry, error) {
+	args := m.Called(systemIDs, lastID, limit)
 	history, ok := args.Get(0).([]database.MediaHistoryEntry)
 	if !ok {
 		history = []database.MediaHistoryEntry{}
@@ -317,6 +319,20 @@ func (m *MockUserDBI) GetMediaHistory(lastID, limit int) ([]database.MediaHistor
 		return history, fmt.Errorf("mock UserDBI get media history failed: %w", err)
 	}
 	return history, nil
+}
+
+func (m *MockUserDBI) GetMediaHistoryTop(
+	systemIDs []string, since *time.Time, limit int,
+) ([]database.MediaHistoryTopEntry, error) {
+	args := m.Called(systemIDs, since, limit)
+	entries, ok := args.Get(0).([]database.MediaHistoryTopEntry)
+	if !ok {
+		entries = []database.MediaHistoryTopEntry{}
+	}
+	if err := args.Error(1); err != nil {
+		return entries, fmt.Errorf("mock UserDBI get media history top failed: %w", err)
+	}
+	return entries, nil
 }
 
 func (m *MockUserDBI) CloseHangingMediaHistory() error {
@@ -1497,6 +1513,14 @@ func (m *MockMediaDBI) InvalidateCountCache() error {
 	return nil
 }
 
+func (m *MockMediaDBI) RebuildSlugSearchCache() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock RebuildSlugSearchCache: %w", err)
+	}
+	return nil
+}
+
 // Slug resolution cache methods
 func (m *MockMediaDBI) GetCachedSlugResolution(
 	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
@@ -1672,6 +1696,7 @@ func NewMockMediaDBI() *MockMediaDBI {
 	// Set default expectation for GetLaunchCommandForMedia to return empty string
 	// This is called during media search and should succeed by default
 	mockMediaDB.On("GetLaunchCommandForMedia", mock.Anything, mock.Anything, mock.Anything).Return("", nil).Maybe()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	return mockMediaDB
 }
 

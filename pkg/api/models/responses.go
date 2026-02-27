@@ -161,13 +161,57 @@ type ReaderResponse struct {
 	Connected bool   `json:"connected"`
 }
 
+type MediaHistoryResponseEntry struct {
+	EndedAt    *string `json:"endedAt,omitempty"`
+	SystemID   string  `json:"systemId"`
+	SystemName string  `json:"systemName"`
+	MediaName  string  `json:"mediaName"`
+	MediaPath  string  `json:"mediaPath"`
+	LauncherID string  `json:"launcherId"`
+	StartedAt  string  `json:"startedAt"`
+	PlayTime   int     `json:"playTime"`
+}
+
+type MediaHistoryResponse struct {
+	Pagination *PaginationInfo             `json:"pagination,omitempty"`
+	Entries    []MediaHistoryResponseEntry `json:"entries"`
+}
+
+type MediaHistoryTopEntry struct {
+	SystemID      string `json:"systemId"`
+	SystemName    string `json:"systemName"`
+	MediaName     string `json:"mediaName"`
+	MediaPath     string `json:"mediaPath"`
+	LastPlayedAt  string `json:"lastPlayedAt"`
+	TotalPlayTime int    `json:"totalPlayTime"`
+	SessionCount  int    `json:"sessionCount"`
+}
+
+type MediaHistoryTopResponse struct {
+	Entries []MediaHistoryTopEntry `json:"entries"`
+}
+
+type MediaLookupMatch struct {
+	System     System             `json:"system"`
+	Name       string             `json:"name"`
+	Path       string             `json:"path"`
+	ZapScript  string             `json:"zapScript"`
+	Tags       []database.TagInfo `json:"tags"`
+	Confidence float64            `json:"confidence"`
+}
+
+type MediaLookupResponse struct {
+	Match *MediaLookupMatch `json:"match"`
+}
+
 type ActiveMedia struct {
-	Started    time.Time `json:"started"`
-	LauncherID string    `json:"launcherId"`
-	SystemID   string    `json:"systemId"`
-	SystemName string    `json:"systemName"`
-	Path       string    `json:"mediaPath"`
-	Name       string    `json:"mediaName"`
+	Started          time.Time `json:"started"`
+	LauncherID       string    `json:"launcherId"`
+	SystemID         string    `json:"systemId"`
+	SystemName       string    `json:"systemName"`
+	Path             string    `json:"mediaPath"`
+	Name             string    `json:"mediaName"`
+	LauncherControls []string  `json:"launcherControls,omitempty"`
 }
 
 // NewActiveMedia creates a new ActiveMedia with the current timestamp.
@@ -184,8 +228,8 @@ func NewActiveMedia(systemID, systemName, path, name, launcherID string) *Active
 
 // ActiveMediaResponse is the API response type for active media, including ZapScript.
 type ActiveMediaResponse struct {
-	ActiveMedia
 	ZapScript string `json:"zapScript"`
+	ActiveMedia
 }
 
 func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
@@ -257,7 +301,7 @@ type TokensResponse struct {
 type ClientResponse struct {
 	Name    string    `json:"name"`
 	Address string    `json:"address"`
-	Secret  string    `json:"secret"`
+	Secret  string    `json:"secret"` //nolint:gosec // G117: pairing secret, not a credential
 	ID      uuid.UUID `json:"id"`
 }
 

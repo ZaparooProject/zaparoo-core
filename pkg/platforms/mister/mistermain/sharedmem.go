@@ -41,7 +41,7 @@ func mapSharedMem(address int64) (*[]byte, *os.File, error) {
 	}
 
 	mem, err := syscall.Mmap(
-		int(file.Fd()),
+		int(file.Fd()), //nolint:gosec // G115: uintptr->int for file.Fd(), always valid
 		address,
 		0x1000,
 		syscall.PROT_READ|syscall.PROT_WRITE,

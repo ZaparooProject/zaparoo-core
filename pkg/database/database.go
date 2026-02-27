@@ -82,6 +82,16 @@ type MediaHistoryEntry struct {
 	IsDeleted      bool       `json:"isDeleted,omitempty"`
 }
 
+type MediaHistoryTopEntry struct {
+	LastPlayedAt  time.Time
+	SystemID      string
+	SystemName    string
+	MediaName     string
+	MediaPath     string
+	TotalPlayTime int
+	SessionCount  int
+}
+
 type Mapping struct {
 	Label    string `json:"label"`
 	Type     string `json:"type"`
@@ -180,6 +190,22 @@ type SearchResultWithCursor struct {
 	MediaID  int64
 }
 
+// BuildTitleZapScript builds a ZapScript title command string from a system ID,
+// media name, and optional year. Format: @SystemID/Name (year:YYYY)
+// This will be expanded to include additional tags as appropriate.
+func BuildTitleZapScript(systemID, name string, year *string) string {
+	s := "@" + systemID + "/" + name
+	if year != nil && *year != "" {
+		s += " (year:" + *year + ")"
+	}
+	return s
+}
+
+// ZapScript returns the ZapScript title command string for this search result.
+func (r *SearchResultWithCursor) ZapScript() string {
+	return BuildTitleZapScript(r.SystemID, r.Name, r.Year)
+}
+
 // TitleWithSystem represents a MediaTitle with its associated System information
 type TitleWithSystem struct {
 	Slug       string
@@ -260,12 +286,13 @@ type GenericDBI interface {
 type UserDBI interface {
 	GenericDBI
 	AddHistory(entry *HistoryEntry) error
-	GetHistory(lastID int) ([]HistoryEntry, error)
+	GetHistory(lastID int64) ([]HistoryEntry, error)
 	CleanupHistory(retentionDays int) (int64, error)
 	AddMediaHistory(entry *MediaHistoryEntry) (int64, error)
 	UpdateMediaHistoryTime(dbid int64, playTime int) error
 	CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error
-	GetMediaHistory(lastID, limit int) ([]MediaHistoryEntry, error)
+	GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]MediaHistoryEntry, error)
+	GetMediaHistoryTop(systemIDs []string, since *time.Time, limit int) ([]MediaHistoryTopEntry, error)
 	CloseHangingMediaHistory() error
 	CleanupMediaHistory(retentionDays int) (int64, error)
 	HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error)
@@ -306,6 +333,7 @@ type MediaDBI interface {
 	BackgroundOperationDone()
 
 	InvalidateCountCache() error
+	RebuildSlugSearchCache() error
 
 	// Slug resolution cache methods
 	GetCachedSlugResolution(

@@ -22,6 +22,7 @@ package userdb
 import (
 	"context"
 	"database/sql"
+	"math"
 	"testing"
 	"time"
 
@@ -178,7 +179,7 @@ func TestSqlGetHistoryWithOffset_NoRows(t *testing.T) {
 
 	mock.ExpectPrepare(`select.*from History.*where DBID.*order by.*limit`).
 		ExpectQuery().
-		WithArgs(2147483646). // MaxInt32-1: sentinel value when lastID=0 to get latest records
+		WithArgs(int64(math.MaxInt64)). // sentinel value when lastID=0 to get latest records
 		WillReturnRows(rows)
 
 	result, err := sqlGetHistoryWithOffset(context.Background(), db, 0)

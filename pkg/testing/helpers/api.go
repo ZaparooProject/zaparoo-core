@@ -306,7 +306,7 @@ func (h *HTTPTestHelper) PostJSONRPC(method string, params any) (*http.Response,
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := h.Client.Do(req)
+	resp, err := h.Client.Do(req) //nolint:gosec // G704: test helper hitting local test server
 	if err != nil {
 		return nil, fmt.Errorf("failed to send POST request: %w", err)
 	}

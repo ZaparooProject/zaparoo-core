@@ -176,7 +176,7 @@ func downloadDoc(platformID, toDir string) error {
 		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: hardcoded doc download URL
 	if err != nil {
 		return fmt.Errorf("failed to execute HTTP request: %w", err)
 	}
@@ -213,6 +213,7 @@ func downloadDoc(platformID, toDir string) error {
 
 	readmePath := filepath.Join(toDir, "README.txt")
 	readmeContent := []byte(processedContent + "\n")
+	//nolint:gosec // G703: build script, not user-facing
 	if err := os.WriteFile(readmePath, readmeContent, 0o600); err != nil {
 		return fmt.Errorf("failed to write README.txt: %w", err)
 	}
@@ -234,19 +235,19 @@ func main() {
 		os.Exit(0)
 	}
 
-	if _, err := os.Stat(buildDir); os.IsNotExist(err) {
+	if _, err := os.Stat(buildDir); os.IsNotExist(err) { //nolint:gosec // G703: build script
 		_, _ = fmt.Printf("The specified directory '%s' does not exist\n", buildDir)
 		os.Exit(1)
 	}
 
 	licensePath := filepath.Join(buildDir, "LICENSE.txt")
-	if _, err := os.Stat(licensePath); os.IsNotExist(err) {
+	if _, err := os.Stat(licensePath); os.IsNotExist(err) { //nolint:gosec // G703: build script
 		input, err := os.ReadFile("LICENSE")
 		if err != nil {
 			_, _ = fmt.Printf("Error reading LICENSE file: %v\n", err)
 			os.Exit(1)
 		}
-		err = os.WriteFile(licensePath, input, 0o600)
+		err = os.WriteFile(licensePath, input, 0o600) //nolint:gosec // G703: build script
 		if err != nil {
 			_, _ = fmt.Printf("Error copying LICENSE file: %v\n", err)
 			os.Exit(1)
@@ -254,16 +255,16 @@ func main() {
 	}
 
 	appPath := filepath.Join(buildDir, appBin)
-	if _, err := os.Stat(appPath); os.IsNotExist(err) {
+	if _, err := os.Stat(appPath); os.IsNotExist(err) { //nolint:gosec // G703: build script
 		_, _ = fmt.Printf("The specified binary file '%s' does not exist\n", appPath)
 		os.Exit(1)
 	}
 
 	archivePath := filepath.Join(buildDir, archiveName)
-	_ = os.Remove(archivePath)
+	_ = os.Remove(archivePath) //nolint:gosec // G703: build script
 
 	readmePath := filepath.Join(buildDir, "README.txt")
-	if _, err := os.Stat(readmePath); os.IsNotExist(err) {
+	if _, err := os.Stat(readmePath); os.IsNotExist(err) { //nolint:gosec // G703: build script
 		if err := downloadDoc(platform, buildDir); err != nil {
 			_, _ = fmt.Printf("Error downloading documentation: %v\n", err)
 			os.Exit(1)
@@ -409,7 +410,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("operation failed: %w", err)
 	}
-	if err := os.WriteFile(dst, input, 0o600); err != nil {
+	if err := os.WriteFile(dst, input, 0o600); err != nil { //nolint:gosec // G703: build script
 		return fmt.Errorf("failed to write file %s: %w", dst, err)
 	}
 	return nil

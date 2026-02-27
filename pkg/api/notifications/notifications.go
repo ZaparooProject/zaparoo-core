@@ -75,8 +75,8 @@ func MediaIndexing(ns chan<- models.Notification, payload models.IndexingStatusR
 	sendNotification(ns, models.NotificationMediaIndexing, payload)
 }
 
-func MediaStopped(ns chan<- models.Notification) {
-	sendNotification(ns, models.NotificationStopped, nil)
+func MediaStopped(ns chan<- models.Notification, payload *models.MediaStoppedParams) {
+	sendNotification(ns, models.NotificationStopped, payload)
 }
 
 func MediaStarted(ns chan<- models.Notification, payload models.MediaStartedParams) {

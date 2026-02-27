@@ -33,10 +33,10 @@ var HistoryEntries = struct {
 	Collection    []database.HistoryEntry
 	Successful    database.HistoryEntry
 	Failed        database.HistoryEntry
-	APIToken      database.HistoryEntry
-	HardwareToken database.HistoryEntry
+	APIToken      database.HistoryEntry //nolint:gosec // G101: NFC token, not auth token
+	HardwareToken database.HistoryEntry //nolint:gosec // G101: NFC token, not auth token
 }{
-	Successful: database.HistoryEntry{
+	Successful: database.HistoryEntry{ //nolint:gosec // G101: NFC tokens, not auth tokens
 		Time:       time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC),
 		Type:       "ntag213",
 		TokenID:    "04:12:34:AB:CD:EF:80",
@@ -45,7 +45,7 @@ var HistoryEntries = struct {
 		DBID:       1,
 		Success:    true,
 	},
-	Failed: database.HistoryEntry{
+	Failed: database.HistoryEntry{ //nolint:gosec // G101: NFC tokens, not auth tokens
 		Time:       time.Date(2025, 1, 15, 12, 5, 0, 0, time.UTC),
 		Type:       "ntag213",
 		TokenID:    "04:56:78:AB:CD:EF:80",
@@ -54,7 +54,7 @@ var HistoryEntries = struct {
 		DBID:       2,
 		Success:    false,
 	},
-	APIToken: database.HistoryEntry{
+	APIToken: database.HistoryEntry{ //nolint:gosec // G101: NFC tokens, not auth tokens
 		Time:       time.Date(2025, 1, 15, 12, 10, 0, 0, time.UTC),
 		Type:       "api",
 		TokenID:    "api-request-123",
@@ -63,7 +63,7 @@ var HistoryEntries = struct {
 		DBID:       3,
 		Success:    true,
 	},
-	HardwareToken: database.HistoryEntry{
+	HardwareToken: database.HistoryEntry{ //nolint:gosec // G101: NFC tokens, not auth tokens
 		Time:       time.Date(2025, 1, 15, 12, 15, 0, 0, time.UTC),
 		Type:       "mifare_classic",
 		TokenID:    "AB:CD:EF:12:34:56:78",
@@ -73,7 +73,7 @@ var HistoryEntries = struct {
 		Success:    true,
 	},
 	Collection: []database.HistoryEntry{
-		{
+		{ //nolint:gosec // G101: NFC tokens, not auth tokens
 			Time:       time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC),
 			Type:       "ntag213",
 			TokenID:    "04:12:34:AB:CD:EF:80",
@@ -82,7 +82,7 @@ var HistoryEntries = struct {
 			DBID:       1,
 			Success:    true,
 		},
-		{
+		{ //nolint:gosec // G101: NFC tokens, not auth tokens
 			Time:       time.Date(2025, 1, 15, 12, 5, 0, 0, time.UTC),
 			Type:       "ntag213",
 			TokenID:    "04:56:78:AB:CD:EF:80",
@@ -91,7 +91,7 @@ var HistoryEntries = struct {
 			DBID:       2,
 			Success:    false,
 		},
-		{
+		{ //nolint:gosec // G101: NFC tokens, not auth tokens
 			Time:       time.Date(2025, 1, 15, 12, 10, 0, 0, time.UTC),
 			Type:       "api",
 			TokenID:    "api-request-123",

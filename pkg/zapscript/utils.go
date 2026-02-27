@@ -31,7 +31,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
@@ -84,49 +86,23 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	if env.Unsafe {
 		return platforms.CmdResult{}, errors.New("command cannot be run from a remote source")
-	} else if !env.Cfg.IsExecuteAllowed(execStr) {
+	} else if env.Source != tokens.SourceControl && !env.Cfg.IsExecuteAllowed(execStr) {
 		return platforms.CmdResult{}, fmt.Errorf("execute not allowed: %s", execStr)
 	}
 
-	// very basic support for treating quoted strings as a single field
-	// probably needs to be expanded to include single quotes and
-	// escaped characters
-	// TODO: this probably doesn't work on windows?
-	sb := &strings.Builder{}
-	quoted := false
-	var tokenArgs []string
-	for _, r := range execStr {
-		switch {
-		case r == '"':
-			quoted = !quoted
-			_, _ = sb.WriteRune(r)
-		case !quoted && r == ' ':
-			tokenArgs = append(tokenArgs, sb.String())
-			sb.Reset()
-		default:
-			_, _ = sb.WriteRune(r)
-		}
+	tokenArgs, splitErr := helpers.SplitCommand(execStr)
+	if splitErr != nil {
+		return platforms.CmdResult{}, fmt.Errorf("failed to parse execute command: %w", splitErr)
 	}
-	if sb.Len() > 0 {
-		tokenArgs = append(tokenArgs, sb.String())
-	}
-
 	if len(tokenArgs) == 0 {
 		return platforms.CmdResult{}, errors.New("execute command is empty")
-	}
-
-	cmdPath := tokenArgs[0]
-	var cmdArgs []string
-
-	if len(tokenArgs) > 1 {
-		cmdArgs = tokenArgs[1:]
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), ExecuteTimeout)
 	defer cancel()
 
 	//nolint:gosec // Safe: cmd validated through IsExecuteAllowed allowlist, args properly separated
-	execCmd := exec.CommandContext(ctx, cmdPath, cmdArgs...)
+	execCmd := exec.CommandContext(ctx, tokenArgs[0], tokenArgs[1:]...)
 
 	var stderr bytes.Buffer
 	execCmd.Stderr = &stderr
@@ -145,13 +121,13 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		if stderrStr != "" {
 			log.Debug().Str("stderr", stderrStr).Msg("execute command stderr")
 			return platforms.CmdResult{},
-				fmt.Errorf("failed to execute command '%s': %w (stderr: %s)", cmdPath, err, stderrStr)
+				fmt.Errorf("failed to execute command '%s': %w (stderr: %s)", tokenArgs[0], err, stderrStr)
 		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return platforms.CmdResult{},
-				fmt.Errorf("execute command '%s' timed out after %v", cmdPath, ExecuteTimeout)
+				fmt.Errorf("execute command '%s' timed out after %v", tokenArgs[0], ExecuteTimeout)
 		}
-		return platforms.CmdResult{}, fmt.Errorf("failed to execute command '%s': %w", cmdPath, err)
+		return platforms.CmdResult{}, fmt.Errorf("failed to execute command '%s': %w", tokenArgs[0], err)
 	}
 	return platforms.CmdResult{}, nil
 }

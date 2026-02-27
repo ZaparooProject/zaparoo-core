@@ -81,12 +81,33 @@ func setupTestMediaDBWithAllGames(t *testing.T) (db *mediadb.MediaDB, cleanup fu
 	mediaDB, err := mediadb.OpenMediaDB(ctx, mockPlatform)
 	require.NoError(t, err)
 
-	// Create tag types
+	// Create tag types and tags before the transaction — these use the raw
+	// connection pool and would deadlock if called while a transaction holds
+	// the single connection (SetMaxOpenConns(1)).
 	regionTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "region"})
 	require.NoError(t, err)
 	unfinishedTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "unfinished"})
 	require.NoError(t, err)
 	langTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "lang"})
+	require.NoError(t, err)
+
+	usaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionTagType.DBID, Tag: string(tags.TagRegionUS)})
+	require.NoError(t, err)
+	europeTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionTagType.DBID, Tag: string(tags.TagRegionEU)})
+	require.NoError(t, err)
+	japanTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionTagType.DBID, Tag: string(tags.TagRegionJP)})
+	require.NoError(t, err)
+	demoTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: unfinishedTagType.DBID, Tag: "demo"})
+	require.NoError(t, err)
+	betaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: unfinishedTagType.DBID, Tag: "beta"})
+	require.NoError(t, err)
+	protoTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: unfinishedTagType.DBID, Tag: "proto"})
+	require.NoError(t, err)
+	enTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: langTagType.DBID, Tag: "en"})
+	require.NoError(t, err)
+	jaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: langTagType.DBID, Tag: "ja"})
+	require.NoError(t, err)
+	frTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: langTagType.DBID, Tag: "fr"})
 	require.NoError(t, err)
 
 	// Begin transaction for bulk insert
@@ -115,26 +136,6 @@ func setupTestMediaDBWithAllGames(t *testing.T) (db *mediadb.MediaDB, cleanup fu
 	insertedN64, err := mediaDB.InsertSystem(database.System{SystemID: n64System.ID, Name: "Nintendo64"})
 	require.NoError(t, err)
 	insertedPC, err := mediaDB.InsertSystem(database.System{SystemID: pcSystem.ID, Name: "PC"})
-	require.NoError(t, err)
-
-	// Create tags
-	usaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionTagType.DBID, Tag: string(tags.TagRegionUS)})
-	require.NoError(t, err)
-	europeTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionTagType.DBID, Tag: string(tags.TagRegionEU)})
-	require.NoError(t, err)
-	japanTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionTagType.DBID, Tag: string(tags.TagRegionJP)})
-	require.NoError(t, err)
-	demoTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: unfinishedTagType.DBID, Tag: "demo"})
-	require.NoError(t, err)
-	betaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: unfinishedTagType.DBID, Tag: "beta"})
-	require.NoError(t, err)
-	protoTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: unfinishedTagType.DBID, Tag: "proto"})
-	require.NoError(t, err)
-	enTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: langTagType.DBID, Tag: "en"})
-	require.NoError(t, err)
-	jaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: langTagType.DBID, Tag: "ja"})
-	require.NoError(t, err)
-	frTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: langTagType.DBID, Tag: "fr"})
 	require.NoError(t, err)
 
 	// ============================================================

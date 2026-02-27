@@ -304,6 +304,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Schemes:   []string{"http", "https"},
 			Lifecycle: platforms.LifecycleFireAndForget,
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+				//nolint:gosec // Safe: opens URL in default browser via cmd start
 				cmd := exec.CommandContext(context.Background(),
 					"cmd", "/c",
 					"start",
@@ -323,6 +324,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			AllowListOnly: true,
 			Lifecycle:     platforms.LifecycleBlocking,
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+				//nolint:gosec // Safe: executes user-configured allow-listed executable
 				cmd := exec.CommandContext(context.Background(), path)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				if err := cmd.Start(); err != nil {
@@ -341,9 +343,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				var cmd *exec.Cmd
 				// Extensions not in default PATHEXT need START command for proper execution
 				if ext == ".lnk" || ext == ".a3x" || ext == ".ahk" {
+					//nolint:gosec // Safe: executes user-configured allow-listed script
 					cmd = exec.CommandContext(context.Background(), "cmd", "/c", "start", "", path)
 				} else {
 					// .bat, .cmd work fine with direct execution
+					//nolint:gosec // Safe: executes user-configured allow-listed script
 					cmd = exec.CommandContext(context.Background(), "cmd", "/c", path)
 				}
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}

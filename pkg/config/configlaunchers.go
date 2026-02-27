@@ -53,15 +53,16 @@ type LaunchersDefault struct {
 }
 
 type LaunchersCustom struct {
-	ID         string   `toml:"id"`
-	System     string   `toml:"system"`
-	Execute    string   `toml:"execute"`
-	Lifecycle  string   `toml:"lifecycle"`
-	MediaDirs  []string `toml:"media_dirs"`
-	FileExts   []string `toml:"file_exts"`
-	Groups     []string `toml:"groups"`
-	Schemes    []string `toml:"schemes"`
-	Restricted bool     `toml:"restricted"`
+	Controls   map[string]string `toml:"controls"`
+	ID         string            `toml:"id"`
+	System     string            `toml:"system"`
+	Execute    string            `toml:"execute"`
+	Lifecycle  string            `toml:"lifecycle"`
+	MediaDirs  []string          `toml:"media_dirs"`
+	FileExts   []string          `toml:"file_exts"`
+	Groups     []string          `toml:"groups"`
+	Schemes    []string          `toml:"schemes"`
+	Restricted bool              `toml:"restricted"`
 }
 
 func (c *Instance) DefaultMediaDir() string {

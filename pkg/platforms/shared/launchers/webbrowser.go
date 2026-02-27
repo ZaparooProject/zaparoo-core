@@ -39,6 +39,7 @@ func NewWebBrowserLauncher() platforms.Launcher {
 		Schemes:   []string{"http", "https"},
 		Lifecycle: platforms.LifecycleFireAndForget,
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			//nolint:gosec // G204: launcher's purpose is to execute content
 			cmd := exec.CommandContext(context.Background(), "xdg-open", path)
 			err := cmd.Start()
 			if err != nil {

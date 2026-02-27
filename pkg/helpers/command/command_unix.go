@@ -36,5 +36,5 @@ func (*RealExecutor) StartWithOptions(
 	name string,
 	args ...string,
 ) error {
-	return exec.CommandContext(ctx, name, args...).Start()
+	return exec.CommandContext(ctx, name, args...).Start() //nolint:gosec // G204: command executor's purpose
 }

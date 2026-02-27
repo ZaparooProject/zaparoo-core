@@ -201,6 +201,10 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaTags:           methods.HandleMediaTags,
 		models.MethodMediaActive:         methods.HandleActiveMedia,
 		models.MethodMediaActiveUpdate:   methods.HandleUpdateActiveMedia,
+		models.MethodMediaHistory:        methods.HandleMediaHistory,
+		models.MethodMediaHistoryTop:     methods.HandleMediaHistoryTop,
+		models.MethodMediaLookup:         methods.HandleMediaLookup,
+		models.MethodMediaControl:        methods.HandleMediaControl,
 		// settings
 		models.MethodSettings:             methods.HandleSettings,
 		models.MethodSettingsUpdate:       methods.HandleSettingsUpdate,
@@ -755,9 +759,13 @@ func handleWSMessage(
 			return
 		}
 
+		reqCtx, reqCancel := context.WithTimeout(st.GetContext(), config.APIRequestTimeout)
+		defer reqCancel()
+
 		rawIP := strings.SplitN(session.Request.RemoteAddr, ":", 2)
 		clientIP := net.ParseIP(rawIP[0])
 		env := requests.RequestEnv{
+			Context:       reqCtx,
 			Platform:      platform,
 			Config:        cfg,
 			State:         st,
@@ -821,9 +829,16 @@ func handlePostRequest(
 			return
 		}
 
+		// Derive from r.Context() (already has APIRequestTimeout from middleware)
+		// but also cancel on app shutdown via st.GetContext().
+		reqCtx, reqCancel := context.WithCancel(r.Context())
+		context.AfterFunc(st.GetContext(), reqCancel)
+		defer reqCancel()
+
 		rawIP := strings.SplitN(r.RemoteAddr, ":", 2)
 		clientIP := net.ParseIP(rawIP[0])
 		env := requests.RequestEnv{
+			Context:       reqCtx,
 			Platform:      platform,
 			Config:        cfg,
 			State:         st,

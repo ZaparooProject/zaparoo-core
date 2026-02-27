@@ -37,7 +37,7 @@ func (*RealExecutor) StartWithOptions(
 	name string,
 	args ...string,
 ) error {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // Variable command execution is core functionality
 	if opts.HideWindow {
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	}

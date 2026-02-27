@@ -16,7 +16,7 @@ This directory provides comprehensive testing utilities for Zaparoo Core, enabli
 
 #### WebSocket Testing
 - `helpers.NewWebSocketTestServer(t, handler)` - Test WebSocket server
-- `server.NewClient(t)` - WebSocket test client
+- `server.CreateWebSocketClient()` - WebSocket test client
 
 ### Database Testing
 

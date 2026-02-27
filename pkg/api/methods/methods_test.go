@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -571,7 +572,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			name:          "invalid system ID",
 			params:        `{"systems": ["invalid_system"]}`,
 			wantError:     true,
-			errorContains: "system \"invalid_system\" not found",
+			errorContains: "unknown system: invalid_system",
 		},
 	}
 
@@ -650,6 +651,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 			env := requests.RequestEnv{
+				Context:  context.Background(),
 				Platform: mockPlatform,
 				Config:   cfg,
 				State:    appState,
@@ -710,6 +712,7 @@ func TestHandleHealthCheck(t *testing.T) {
 			appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 			env := requests.RequestEnv{
+				Context:  context.Background(),
 				Platform: mockPlatform,
 				Config:   cfg,
 				State:    appState,

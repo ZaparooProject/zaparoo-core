@@ -172,7 +172,7 @@ func TestCmdTitle(t *testing.T) {
 				if tt.expectedSystem == "" || tt.expectedSlug == "" {
 					assert.Contains(t, err.Error(), "invalid title format")
 				} else {
-					assert.Contains(t, err.Error(), "no results found")
+					require.ErrorIs(t, err, titleshelper.ErrNoMatch)
 				}
 			} else {
 				require.NoError(t, err)
@@ -1804,7 +1804,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		_, err := cmdTitle(mockPlatform, env)
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no results found")
+		require.ErrorIs(t, err, titleshelper.ErrNoMatch)
 		mockMediaDB.AssertExpectations(t)
 	})
 }

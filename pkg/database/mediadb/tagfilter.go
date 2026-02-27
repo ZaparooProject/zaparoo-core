@@ -44,20 +44,29 @@ func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []
 	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(filters)
 
 	clauses = make([]string, 0, len(filters))
-	args = make([]any, 0, len(filters)*2)
+	args = make([]any, 0, len(filters)*4)
 
 	// Build INTERSECT clause for AND filters (optimal performance on SQLite)
 	// Each INTERSECT reduces the result set, making this extremely fast
+	// Each select unions MediaTags (file-level) and MediaTitleTags (title-level)
 	if len(andFilters) > 0 {
-		selectTpl := `SELECT MediaDBID FROM MediaTags
+		selectTpl := `SELECT MediaDBID FROM (
+			SELECT MediaDBID FROM MediaTags
 			JOIN Tags ON MediaTags.TagDBID = Tags.DBID
 			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE TagTypes.Type = ? AND Tags.Tag = ?`
+			WHERE TagTypes.Type = ? AND Tags.Tag = ?
+			UNION
+			SELECT m.DBID AS MediaDBID FROM Media m
+			JOIN MediaTitleTags mtt ON m.MediaTitleDBID = mtt.MediaTitleDBID
+			JOIN Tags ON mtt.TagDBID = Tags.DBID
+			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+			WHERE TagTypes.Type = ? AND Tags.Tag = ?
+		)`
 
 		var intersectSelects []string
 		for _, f := range andFilters {
 			intersectSelects = append(intersectSelects, selectTpl)
-			args = append(args, f.Type, f.Value)
+			args = append(args, f.Type, f.Value, f.Type, f.Value)
 		}
 
 		intersectClause := fmt.Sprintf("Media.DBID IN (%s)", strings.Join(intersectSelects, " INTERSECT "))
@@ -65,7 +74,7 @@ func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []
 	}
 
 	// Build NOT EXISTS clauses for NOT filters
-	// Each NOT filter excludes media that has the specified tag
+	// Each NOT filter excludes media that has the specified tag at either level
 	for _, f := range notFilters {
 		clause := `NOT EXISTS (
 			SELECT 1 FROM MediaTags
@@ -73,27 +82,45 @@ func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []
 			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
 			WHERE MediaTags.MediaDBID = Media.DBID
 			AND TagTypes.Type = ? AND Tags.Tag = ?
+		) AND NOT EXISTS (
+			SELECT 1 FROM MediaTitleTags
+			JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+			WHERE MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
+			AND TagTypes.Type = ? AND Tags.Tag = ?
 		)`
 		clauses = append(clauses, clause)
-		args = append(args, f.Type, f.Value)
+		args = append(args, f.Type, f.Value, f.Type, f.Value)
 	}
 
 	// Build a single EXISTS clause with OR for all OR filters
-	// Media must have at least ONE of the OR tags
+	// Media must have at least ONE of the OR tags from either level
 	if len(orFilters) > 0 {
 		var orConditions []string
 		for _, f := range orFilters {
 			orConditions = append(orConditions, "(TagTypes.Type = ? AND Tags.Tag = ?)")
 			args = append(args, f.Type, f.Value)
 		}
+		orJoined := strings.Join(orConditions, " OR ")
 
-		orClause := fmt.Sprintf(`EXISTS (
+		// Duplicate args for the second EXISTS (MediaTitleTags)
+		for _, f := range orFilters {
+			args = append(args, f.Type, f.Value)
+		}
+
+		orClause := fmt.Sprintf(`(EXISTS (
 			SELECT 1 FROM MediaTags
 			JOIN Tags ON MediaTags.TagDBID = Tags.DBID
 			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
 			WHERE MediaTags.MediaDBID = Media.DBID
 			AND (%s)
-		)`, strings.Join(orConditions, " OR "))
+		) OR EXISTS (
+			SELECT 1 FROM MediaTitleTags
+			JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+			WHERE MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
+			AND (%s)
+		))`, orJoined, orJoined)
 		clauses = append(clauses, orClause)
 	}
 

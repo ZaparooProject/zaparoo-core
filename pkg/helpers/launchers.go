@@ -21,6 +21,7 @@ package helpers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -55,6 +56,30 @@ func parseLifecycle(lifecycle string) platforms.LauncherLifecycle {
 		return platforms.LifecycleFireAndForget
 	}
 	return platforms.LifecycleBlocking
+}
+
+// parseCustomControls builds a Controls map from TOML control definitions.
+// Values are zapscript strings (e.g., "**input.keyboard:{f2}").
+// Scripts are validated at load time; entries with invalid syntax are skipped.
+func parseCustomControls(commands map[string]string) map[string]platforms.Control {
+	if len(commands) == 0 {
+		return nil
+	}
+	controls := make(map[string]platforms.Control, len(commands))
+	for action, script := range commands {
+		parser := zapscript.NewParser(script)
+		_, err := parser.ParseScript()
+		if err != nil {
+			log.Warn().Err(err).Str("action", action).Str("script", script).
+				Msg("skipping custom control: invalid zapscript syntax")
+			continue
+		}
+		controls[action] = platforms.Control{Script: script}
+	}
+	if len(controls) == 0 {
+		return nil
+	}
+	return controls
 }
 
 func ParseCustomLaunchers(
@@ -102,6 +127,7 @@ func ParseCustomLaunchers(
 			Schemes:       v.Schemes,
 			AllowListOnly: v.Restricted,
 			Lifecycle:     lifecycle,
+			Controls:      parseCustomControls(v.Controls),
 			Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 				hostname, err := os.Hostname()
 				if err != nil {
@@ -147,15 +173,16 @@ func ParseCustomLaunchers(
 					return nil, fmt.Errorf("error evaluating execute expression: %w", err)
 				}
 
-				var cmd *exec.Cmd
-
-				if runtime.GOOS == "windows" {
-					//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
-					cmd = exec.Command("cmd", "/c", output)
-				} else {
-					//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
-					cmd = exec.Command("sh", "-c", output)
+				parts, splitErr := SplitCommand(output)
+				if splitErr != nil {
+					return nil, fmt.Errorf("failed to parse execute command: %w", splitErr)
 				}
+				if len(parts) == 0 {
+					return nil, errors.New("execute command is empty after parsing")
+				}
+
+				//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
+				cmd := exec.Command(parts[0], parts[1:]...)
 
 				// Pass ZAPAROO_ENVIRONMENT JSON env var
 				envJSON, jsonErr := json.Marshal(exprEnv)

@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -41,7 +42,7 @@ import (
 // Modifies results in-place.
 func fetchAndAttachTags(
 	ctx context.Context,
-	db *sql.DB,
+	db sqlQueryable,
 	results []database.SearchResultWithCursor,
 	extractYear bool,
 ) error {
@@ -135,7 +136,7 @@ func fetchAndAttachTags(
 							}
 						}
 						if isYear {
-							results[i].Year = &tag.Tag
+							results[i].Year = &tag.Tag //nolint:gosec // G602: indexing within loop bounds
 							break
 						}
 					}
@@ -152,7 +153,7 @@ func fetchAndAttachTags(
 
 func sqlSearchMediaPathExact(
 	ctx context.Context,
-	db *sql.DB,
+	db sqlQueryable,
 	systems []systemdefs.System,
 	path string,
 ) ([]database.SearchResult, error) {
@@ -225,7 +226,7 @@ func sqlSearchMediaPathExact(
 
 func sqlSearchMediaPathParts(
 	ctx context.Context,
-	db *sql.DB,
+	db sqlQueryable,
 	systems []systemdefs.System,
 	variantGroups [][]string,
 ) ([]database.SearchResult, error) {
@@ -330,7 +331,7 @@ func sqlSearchMediaPathParts(
 
 func sqlSearchMediaWithFilters(
 	ctx context.Context,
-	db *sql.DB,
+	db sqlQueryable,
 	systems []systemdefs.System,
 	variantGroups [][]string,
 	rawWords []string,
@@ -487,9 +488,108 @@ func sqlSearchMediaWithFilters(
 	return results, nil
 }
 
+func sqlSearchMediaByTitleDBIDs(
+	ctx context.Context,
+	db sqlQueryable,
+	titleDBIDs []int64,
+	tags []zapscript.TagFilter,
+	letter *string,
+	cursor *int64,
+	limit int,
+) ([]database.SearchResultWithCursor, error) {
+	if len(titleDBIDs) == 0 {
+		return []database.SearchResultWithCursor{}, nil
+	}
+
+	args := make([]any, 0, len(titleDBIDs)+10)
+	for _, id := range titleDBIDs {
+		args = append(args, id)
+	}
+	titleCondition := "MediaTitles.DBID IN (" +
+		prepareVariadic("?", ",", len(titleDBIDs)) + ")"
+
+	// Build additional filter conditions
+	var extraConditions []string
+	var extraArgs []any
+
+	if cursor != nil {
+		extraConditions = append(extraConditions, "Media.DBID > ?")
+		extraArgs = append(extraArgs, *cursor)
+	}
+
+	tagFilterClauses, tagFilterArgs := BuildTagFilterSQL(tags)
+	extraConditions = append(extraConditions, tagFilterClauses...)
+	extraArgs = append(extraArgs, tagFilterArgs...)
+
+	if letter != nil && *letter != "" {
+		letterValue := strings.ToUpper(*letter)
+		switch {
+		case letterValue == "0-9":
+			extraConditions = append(extraConditions,
+				"UPPER(SUBSTR(MediaTitles.Name, 1, 1)) BETWEEN '0' AND '9'")
+		case letterValue == "#":
+			extraConditions = append(extraConditions,
+				"UPPER(SUBSTR(MediaTitles.Name, 1, 1)) NOT BETWEEN 'A' AND 'Z'",
+				"UPPER(SUBSTR(MediaTitles.Name, 1, 1)) NOT BETWEEN '0' AND '9'")
+		case len(letterValue) == 1 && letterValue >= "A" && letterValue <= "Z":
+			extraConditions = append(extraConditions,
+				"UPPER(SUBSTR(MediaTitles.Name, 1, 1)) = ?")
+			extraArgs = append(extraArgs, letterValue)
+		}
+	}
+
+	whereExtra := ""
+	if len(extraConditions) > 0 {
+		whereExtra = " AND " + strings.Join(extraConditions, " AND ")
+	}
+
+	//nolint:gosec // Safe: WHERE clause built from sanitized components
+	query := `
+		SELECT
+			Systems.SystemID,
+			MediaTitles.Name,
+			Media.Path,
+			Media.DBID
+		FROM MediaTitles
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
+		WHERE ` + titleCondition + whereExtra + `
+		ORDER BY Media.DBID ASC
+		LIMIT ?`
+
+	finalArgs := make([]any, 0, len(args)+len(extraArgs)+1)
+	finalArgs = append(finalArgs, args...)
+	finalArgs = append(finalArgs, extraArgs...)
+	finalArgs = append(finalArgs, limit)
+
+	rows, err := db.QueryContext(ctx, query, finalArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query by title DBIDs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	results := make([]database.SearchResultWithCursor, 0, min(limit, 100))
+	for rows.Next() {
+		var r database.SearchResultWithCursor
+		if scanErr := rows.Scan(&r.SystemID, &r.Name, &r.Path, &r.MediaID); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan result: %w", scanErr)
+		}
+		results = append(results, r)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+
+	if err := fetchAndAttachTags(ctx, db, results, true); err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
 func sqlSearchMediaBySlug(
 	ctx context.Context,
-	db *sql.DB,
+	db sqlQueryable,
 	systemID string,
 	slug string,
 	tags []zapscript.TagFilter,
@@ -526,7 +626,7 @@ func sqlSearchMediaBySlug(
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE `+strings.Join(whereConditions, " AND ")+`
 		ORDER BY MediaTitles.Name
-		LIMIT 50
+		LIMIT `+strconv.Itoa(defaultSlugSearchLimit)+`
 	`)
 	if err != nil {
 		return results, fmt.Errorf("failed to prepare media by slug search statement: %w", err)
@@ -574,7 +674,7 @@ func sqlSearchMediaBySlug(
 
 func sqlSearchMediaBySecondarySlug(
 	ctx context.Context,
-	db *sql.DB,
+	db sqlQueryable,
 	systemID string,
 	secondarySlug string,
 	tags []zapscript.TagFilter,
@@ -611,7 +711,7 @@ func sqlSearchMediaBySecondarySlug(
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE `+strings.Join(whereConditions, " AND ")+`
 		ORDER BY MediaTitles.Name
-		LIMIT 50
+		LIMIT `+strconv.Itoa(defaultSlugSearchLimit)+`
 	`)
 	if err != nil {
 		return results, fmt.Errorf("failed to prepare media by secondary slug search statement: %w", err)
@@ -659,7 +759,7 @@ func sqlSearchMediaBySecondarySlug(
 
 func sqlSearchMediaBySlugPrefix(
 	ctx context.Context,
-	db *sql.DB,
+	db sqlQueryable,
 	systemID string,
 	slugPrefix string,
 	tags []zapscript.TagFilter,
@@ -696,7 +796,7 @@ func sqlSearchMediaBySlugPrefix(
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE `+strings.Join(whereConditions, " AND ")+`
 		ORDER BY MediaTitles.Name
-		LIMIT 50
+		LIMIT `+strconv.Itoa(defaultSlugSearchLimit)+`
 	`)
 	if err != nil {
 		return results, fmt.Errorf("failed to prepare media by slug prefix search statement: %w", err)
@@ -744,7 +844,7 @@ func sqlSearchMediaBySlugPrefix(
 
 func sqlSearchMediaBySlugIn(
 	ctx context.Context,
-	db *sql.DB,
+	db sqlQueryable,
 	systemID string,
 	slugList []string,
 	tags []zapscript.TagFilter,
@@ -803,7 +903,7 @@ func sqlSearchMediaBySlugIn(
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE `+strings.Join(whereConditions, " AND ")+`
 		ORDER BY MediaTitles.Name
-		LIMIT 50
+		LIMIT `+strconv.Itoa(defaultSlugSearchLimit)+`
 	`)
 	if err != nil {
 		return results, fmt.Errorf("failed to prepare media by slug IN search statement: %w", err)
@@ -849,7 +949,25 @@ func sqlSearchMediaBySlugIn(
 	return results, nil
 }
 
-func sqlRandomGame(ctx context.Context, db *sql.DB, system *systemdefs.System) (database.SearchResult, error) {
+// sqlGetRandomMediaForTitle returns a random media entry for the given title DBID.
+func sqlGetRandomMediaForTitle(ctx context.Context, db sqlQueryable, titleDBID int64) (database.SearchResult, error) {
+	var row database.SearchResult
+	err := db.QueryRowContext(ctx, `
+		SELECT Systems.SystemID, Media.Path
+		FROM Media
+		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+		WHERE Media.MediaTitleDBID = ?
+		ORDER BY RANDOM() LIMIT 1
+	`, titleDBID).Scan(&row.SystemID, &row.Path)
+	if err != nil {
+		return row, fmt.Errorf("failed to get random media for title %d: %w", titleDBID, err)
+	}
+	row.Name = helpers.FilenameFromPath(row.Path)
+	return row, nil
+}
+
+func sqlRandomGame(ctx context.Context, db sqlQueryable, system *systemdefs.System) (database.SearchResult, error) {
 	var row database.SearchResult
 
 	// Step 1: Get count, min DBID, and max DBID for this system
@@ -918,7 +1036,7 @@ func sqlRandomGame(ctx context.Context, db *sql.DB, system *systemdefs.System) (
 
 // sqlRandomGameWithQueryAndStats returns a random game matching the query along with the computed statistics.
 func sqlRandomGameWithQueryAndStats(
-	ctx context.Context, db *sql.DB, query *database.MediaQuery,
+	ctx context.Context, db sqlQueryable, query *database.MediaQuery,
 ) (database.SearchResult, MediaStats, error) {
 	var row database.SearchResult
 	var stats MediaStats

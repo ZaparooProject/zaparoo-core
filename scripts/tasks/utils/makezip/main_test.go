@@ -307,7 +307,7 @@ func TestDownloadDoc(t *testing.T) {
 			t.Fatalf("failed to create request: %v", err)
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: test hitting local test server
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

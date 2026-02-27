@@ -179,14 +179,14 @@ func CmdMisterMgl(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRes
 		}
 	}(cmd)
 
-	_, err = fmt.Fprintf(cmd, "load_core %s\n", tmpFile.Name())
+	_, err = fmt.Fprintf(cmd, "load_core %s\n", tmpFile.Name()) //nolint:gosec // G705: writing to Unix socket
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to write command: %w", err)
 	}
 
 	go func() {
 		time.Sleep(5 * time.Second)
-		_ = os.Remove(tmpFile.Name())
+		_ = os.Remove(tmpFile.Name()) //nolint:gosec // G703: temp file from os.CreateTemp
 	}()
 
 	return platforms.CmdResult{

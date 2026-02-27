@@ -143,9 +143,9 @@ func (s *TestScreen) GetLineContent(y int) string {
 	for x := range width {
 		cell := cells[y*width+x]
 		if len(cell.Runes) > 0 {
-			sb.WriteRune(cell.Runes[0])
+			sb.WriteRune(cell.Runes[0]) //nolint:revive // never fails
 		} else {
-			sb.WriteRune(' ')
+			sb.WriteRune(' ') //nolint:revive // never fails
 		}
 	}
 	return strings.TrimRight(sb.String(), " ")
@@ -159,13 +159,13 @@ func (s *TestScreen) GetScreenText() string {
 		for x := range width {
 			cell := cells[y*width+x]
 			if len(cell.Runes) > 0 {
-				sb.WriteRune(cell.Runes[0])
+				sb.WriteRune(cell.Runes[0]) //nolint:revive // never fails
 			} else {
-				sb.WriteRune(' ')
+				sb.WriteRune(' ') //nolint:revive // never fails
 			}
 		}
 		if y < height-1 {
-			sb.WriteRune('\n')
+			sb.WriteRune('\n') //nolint:revive // never fails
 		}
 	}
 	return sb.String()
@@ -187,20 +187,20 @@ func (s *TestScreen) ContainsTextOnLine(y int, text string) bool {
 func (s *TestScreen) DumpScreen() string {
 	cells, width, height := s.GetContents()
 	var sb strings.Builder
-	sb.WriteString("Screen dump:\n")
-	sb.WriteString(strings.Repeat("-", width) + "\n")
+	sb.WriteString("Screen dump:\n")                  //nolint:revive // never fails
+	sb.WriteString(strings.Repeat("-", width) + "\n") //nolint:revive // never fails
 	for y := range height {
 		for x := range width {
 			cell := cells[y*width+x]
 			if len(cell.Runes) > 0 {
-				sb.WriteRune(cell.Runes[0])
+				sb.WriteRune(cell.Runes[0]) //nolint:revive // never fails
 			} else {
-				sb.WriteRune(' ')
+				sb.WriteRune(' ') //nolint:revive // never fails
 			}
 		}
-		sb.WriteRune('\n')
+		sb.WriteRune('\n') //nolint:revive // never fails
 	}
-	sb.WriteString(strings.Repeat("-", width) + "\n")
+	sb.WriteString(strings.Repeat("-", width) + "\n") //nolint:revive // never fails
 	return sb.String()
 }
 
