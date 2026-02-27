@@ -109,11 +109,12 @@ type Control struct {
 // CmdEnv is the local state of a scanned token, as it processes each ZapScript
 // command. Every command run has access to and can modify it.
 type CmdEnv struct {
+	LauncherCtx   context.Context
+	Playlist      playlists.PlaylistController
 	Cfg           *config.Instance
 	Database      *database.Database
 	ExprEnv       *zapscript.ArgExprEnv
-	LauncherCtx   context.Context
-	Playlist      playlists.PlaylistController
+	Source        string
 	Cmd           zapscript.Command
 	TotalCommands int
 	CurrentIndex  int

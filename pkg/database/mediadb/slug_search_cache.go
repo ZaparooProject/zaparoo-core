@@ -29,6 +29,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const ctxCheckInterval = 10000
+
 func formatBytes(b int) string {
 	switch {
 	case b >= 1<<20:
@@ -99,7 +101,7 @@ func buildSlugSearchCache(ctx context.Context, db *sql.DB) (*SlugSearchCache, er
 
 	count := 0
 	for titleRows.Next() {
-		if count%10000 == 0 {
+		if count%ctxCheckInterval == 0 {
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()

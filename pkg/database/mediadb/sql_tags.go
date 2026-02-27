@@ -249,7 +249,7 @@ func sqlGetAllTagTypes(ctx context.Context, db *sql.DB) ([]database.TagType, err
 	return tagTypes, rows.Err()
 }
 
-// sqlGetAllUsedTags - Ultra-fast query for all tags that are actually in use
+// sqlGetAllUsedTags queries for all tags that are currently in use
 // This queries both MediaTags (file-level) and MediaTitleTags (title-level)
 func sqlGetAllUsedTags(ctx context.Context, db *sql.DB) ([]database.TagInfo, error) {
 	sqlQuery := `

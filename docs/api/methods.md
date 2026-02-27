@@ -359,7 +359,7 @@ An object:
 
 | Key         | Type    | Required | Description                                                                 |
 | :---------- | :------ | :------- | :-------------------------------------------------------------------------- |
-| nextCursor  | string  | No       | Cursor for the next page of results. `null` if no more pages available.    |
+| nextCursor  | string  | No       | Cursor for the next page of results. Omitted if no more pages available.   |
 | hasNextPage | boolean | Yes      | Whether there are more results available after the current page.           |
 | pageSize    | number  | Yes      | Number of results requested for this page (matches `maxResults` parameter). |
 
@@ -416,7 +416,6 @@ An object:
     ],
     "total": 1,
     "pagination": {
-      "nextCursor": null,
       "hasNextPage": false,
       "pageSize": 100
     }
@@ -476,7 +475,6 @@ An object:
     ],
     "total": 1,
     "pagination": {
-      "nextCursor": null,
       "hasNextPage": false,
       "pageSize": 10
     }
@@ -807,7 +805,7 @@ Optionally, an object:
 | mediaPath  | string | Yes      | Path to the media file.                                |
 | launcherId | string | Yes      | ID of the launcher used.                               |
 | startedAt  | string | Yes      | Timestamp when media started in RFC3339 format.        |
-| endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Null if media is still active. |
+| endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Omitted if media is still active. |
 | playTime   | number | Yes      | Duration of the play session in seconds.               |
 
 #### Example
@@ -845,7 +843,6 @@ Optionally, an object:
       }
     ],
     "pagination": {
-      "nextCursor": null,
       "hasNextPage": false,
       "pageSize": 10
     }
@@ -1024,6 +1021,8 @@ An object:
 Send a control action to the active media's launcher.
 
 Requires active media with a launcher that supports control capabilities. The available control actions depend on the launcher. Use the `launcherControls` field from `media.active` or `media` to discover supported actions.
+
+Control actions run in a restricted runtime that blocks media-launching and playlist commands. Utility commands like `input.keyboard`, `execute`, `delay` and `echo` are allowed. The `execute` command bypasses the `allow_execute` allowlist for control scripts defined in launcher configuration.
 
 #### Parameters
 

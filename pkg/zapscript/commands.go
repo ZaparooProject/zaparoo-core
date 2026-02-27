@@ -326,6 +326,7 @@ func RunCommand(
 		Cmd:           cmd,
 		Cfg:           cfg,
 		Playlist:      plsc,
+		Source:        token.Source,
 		TotalCommands: totalCmds,
 		CurrentIndex:  currentIndex,
 		Unsafe:        unsafe,

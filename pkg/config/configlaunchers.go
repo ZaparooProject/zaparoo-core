@@ -53,7 +53,7 @@ type LaunchersDefault struct {
 }
 
 type LaunchersCustom struct {
-	Commands   map[string]string `toml:"commands"`
+	Controls   map[string]string `toml:"controls"`
 	ID         string            `toml:"id"`
 	System     string            `toml:"system"`
 	Execute    string            `toml:"execute"`

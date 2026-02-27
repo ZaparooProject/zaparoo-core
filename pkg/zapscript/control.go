@@ -84,7 +84,8 @@ func RunControlScript(
 	}
 
 	token := tokens.Token{
-		Text: script,
+		Text:   script,
+		Source: tokens.SourceControl,
 	}
 
 	for i, cmd := range parsed.Cmds {

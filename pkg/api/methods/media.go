@@ -46,8 +46,9 @@ import (
 
 const defaultMaxResults = 100
 
-// searchSem limits concurrent media.search requests to avoid saturating
-// the single SQLite connection with long-running LIKE queries.
+// searchSem limits concurrent media.search requests to 3 to avoid saturating
+// SQLite with long-running LIKE queries. Additional callers block until a slot
+// opens or their request context is cancelled.
 var searchSem = make(chan struct{}, 3)
 
 func resolveSystem(id string, fuzzyMatch bool) (*systemdefs.System, error) {
