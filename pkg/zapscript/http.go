@@ -26,8 +26,13 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/rs/zerolog/log"
 )
+
+var httpCmdClient = &http.Client{
+	Transport: &installer.AuthTransport{},
+}
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdHTTPGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -49,7 +54,7 @@ func cmdHTTPGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return
 		}
 
-		resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: URL from user's ZapScript command
+		resp, err := httpCmdClient.Do(req) //nolint:gosec // G704: URL from user's ZapScript command
 		if err != nil {
 			log.Error().Err(err).Msgf("getting url: %s", url)
 			return
@@ -85,7 +90,7 @@ func cmdHTTPPost(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		}
 		req.Header.Set("Content-Type", mime)
 
-		resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: URL from user's ZapScript command
+		resp, err := httpCmdClient.Do(req) //nolint:gosec // G704: URL from user's ZapScript command
 		if err != nil {
 			log.Error().Err(err).Msgf("error posting to url: %s", url)
 			return
