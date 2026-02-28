@@ -1268,6 +1268,58 @@ Returns `null` on success.
 }
 ```
 
+### settings.auth.claim
+
+Redeem a claim token against a remote auth server and store the resulting credentials in `auth.toml`.
+
+This method performs trust discovery using the `.well-known/zaparoo` protocol. It first verifies that the claim URL's root domain supports auth (`auth: 1` in the well-known response), then redeems the claim token to obtain a bearer credential. If the root domain's well-known response includes a `trusted` list, each related domain is checked for bidirectional trust confirmation before extending the credential.
+
+#### Parameters
+
+An object:
+
+| Key      | Type   | Required | Description                                                    |
+| :------- | :----- | :------- | :------------------------------------------------------------- |
+| claimUrl | string | Yes      | HTTPS URL of the claim endpoint to redeem the token against.   |
+| token    | string | Yes      | The one-time claim token to redeem.                            |
+
+#### Result
+
+| Key     | Type     | Required | Description                                                        |
+| :------ | :------- | :------- | :----------------------------------------------------------------- |
+| domains | string[] | Yes      | List of domains the credential was stored for (root + any trusted). |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-auth-claim-example",
+  "method": "settings.auth.claim",
+  "params": {
+    "claimUrl": "https://api.example.com/auth/claim",
+    "token": "claim-token-abc123"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-auth-claim-example",
+  "result": {
+    "domains": [
+      "https://api.example.com",
+      "https://cdn.example.com"
+    ]
+  }
+}
+```
+
 ### settings.logs.download
 
 Download the current log file as base64-encoded content.

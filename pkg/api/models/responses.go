@@ -337,3 +337,7 @@ type InboxMessage struct {
 type InboxResponse struct {
 	Messages []InboxMessage `json:"messages"`
 }
+
+type SettingsAuthClaimResponse struct {
+	Domains []string `json:"domains"`
+}

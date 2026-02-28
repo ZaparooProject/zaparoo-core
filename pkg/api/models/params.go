@@ -169,3 +169,8 @@ type MediaControlParams struct {
 type DeleteInboxParams struct {
 	ID int64 `json:"id" validate:"gt=0"`
 }
+
+type SettingsAuthClaimParams struct {
+	ClaimURL string `json:"claimUrl" validate:"required,url"`
+	Token    string `json:"token" validate:"required"`
+}

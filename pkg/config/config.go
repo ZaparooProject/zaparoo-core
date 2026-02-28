@@ -229,21 +229,7 @@ func (c *Instance) Load() error {
 	c.vals = newVals
 
 	// load auth file
-	if _, err := fs.Stat(c.authPath); err == nil {
-		log.Info().Msg("loading auth file")
-		authData, err := afero.ReadFile(fs, c.authPath)
-		if err != nil {
-			return fmt.Errorf("failed to read auth file: %w", err)
-		}
-
-		authEntries := LoadAuthFromData(authData)
-		log.Info().Msgf("loaded %d auth entries", len(authEntries))
-		authCfg.Store(authEntries)
-
-		keys := LoadAPIKeysFromData(authData)
-		log.Info().Msgf("loaded %d API keys", len(keys))
-		apiKeys.Store(keys)
-	}
+	c.reloadAuth()
 
 	// prepare allow files regexes
 	c.vals.Launchers.allowFileRe = make([]*regexp.Regexp, len(c.vals.Launchers.AllowFile))
@@ -324,6 +310,64 @@ func (c *Instance) Save() error {
 	if err := afero.WriteFile(c.getFs(), c.cfgPath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
+	return nil
+}
+
+// reloadAuth reads auth.toml from disk and updates the in-memory auth config.
+// Must be called with c.mu held (read or write lock).
+func (c *Instance) reloadAuth() {
+	fs := c.getFs()
+	if _, err := fs.Stat(c.authPath); err != nil {
+		return
+	}
+
+	log.Info().Msg("loading auth file")
+	authData, err := afero.ReadFile(fs, c.authPath)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to read auth file")
+		return
+	}
+
+	authEntries := LoadAuthFromData(authData)
+	log.Info().Msgf("loaded %d auth entries", len(authEntries))
+	authCfg.Store(authEntries)
+
+	keys := LoadAPIKeysFromData(authData)
+	log.Info().Msgf("loaded %d API keys", len(keys))
+	apiKeys.Store(keys)
+}
+
+// SaveAuthEntry writes or updates a credential entry in auth.toml for the
+// given domain. Creates the file with 0600 permissions if it doesn't exist.
+// Preserves existing entries and reloads the in-memory auth config.
+func (c *Instance) SaveAuthEntry(domain string, entry CredentialEntry) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	fs := c.getFs()
+
+	// Read existing auth file once, parse both credentials and API keys
+	existing := make(map[string]CredentialEntry)
+	var existingKeys []string
+	if data, err := afero.ReadFile(fs, c.authPath); err == nil {
+		existing = LoadAuthFromData(data)
+		existingKeys = LoadAPIKeysFromData(data)
+	}
+
+	// Upsert the entry
+	existing[domain] = entry
+
+	// Build the output: API keys first, then credential entries
+	data, err := marshalAuthFile(existing, existingKeys)
+	if err != nil {
+		return err
+	}
+
+	if err := afero.WriteFile(fs, c.authPath, data, 0o600); err != nil {
+		return fmt.Errorf("failed to write auth file: %w", err)
+	}
+
+	c.reloadAuth()
 	return nil
 }
 

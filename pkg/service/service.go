@@ -236,7 +236,7 @@ func Start(
 	cleanupHistoryOnStartup(cfg, db)
 
 	pruneExpiredZapLinkHosts(db)
-	go zapscript.PreWarmZapLinkHosts(db, pl.ID(), helpers.WaitForInternet)
+	go zapscript.PreWarmZapLinkHosts(db, helpers.WaitForInternet)
 
 	// Initialize inbox service for system notifications
 	log.Info().Msg("initializing inbox service")
