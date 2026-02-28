@@ -20,6 +20,7 @@
 package config
 
 import (
+	"fmt"
 	"maps"
 	"net/url"
 	"strings"
@@ -212,4 +213,31 @@ func LookupAuth(creds map[string]CredentialEntry, reqURL string) *CredentialEntr
 	}
 
 	return nil
+}
+
+// marshalAuthFile serializes credentials and API keys into auth.toml format.
+// Uses the [creds."url"] format for credential entries, which is compatible
+// with the root-level api_keys field (the root format fails to parse when
+// api_keys is present because go-toml can't unmarshal mixed types).
+func marshalAuthFile(
+	creds map[string]CredentialEntry,
+	keys []string,
+) ([]byte, error) {
+	//nolint:gosec // G117: field name matches existing TOML key, not a secret
+	type authFile struct {
+		Creds   map[string]CredentialEntry `toml:"creds,omitempty"`
+		APIKeys []string                   `toml:"api_keys,omitempty"`
+	}
+
+	file := authFile{
+		APIKeys: keys,
+		Creds:   creds,
+	}
+
+	data, err := toml.Marshal(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal auth file: %w", err)
+	}
+
+	return data, nil
 }

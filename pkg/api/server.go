@@ -51,6 +51,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -249,6 +250,10 @@ func NewMethodMap() *MethodMap {
 		models.MethodInbox:       methods.HandleInbox,
 		models.MethodInboxDelete: methods.HandleInboxDelete,
 		models.MethodInboxClear:  methods.HandleInboxClear,
+		// auth
+		models.MethodSettingsAuthClaim: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleSettingsAuthClaim(env, zapscript.FetchWellKnown)
+		},
 	}
 
 	for name, fn := range defaultMethods {

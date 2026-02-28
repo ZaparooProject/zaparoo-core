@@ -44,6 +44,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// MaxResponseBodySize is the default maximum number of bytes to read from an
+// HTTP response body. Use with io.LimitReader to prevent memory exhaustion
+// from malicious or misconfigured servers. 1MB covers legitimate API responses.
+const MaxResponseBodySize = 1 << 20 // 1 MiB
+
 func TokensEqual(a, b *tokens.Token) bool {
 	if a == nil && b == nil {
 		return true

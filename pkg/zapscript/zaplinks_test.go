@@ -217,7 +217,7 @@ func TestPreWarmZapLinkHosts_NoInternet(t *testing.T) {
 	checkInternet := func(int) bool { return false }
 
 	// Should return early without calling the database
-	PreWarmZapLinkHosts(db, "mister", checkInternet)
+	PreWarmZapLinkHosts(db, checkInternet)
 
 	// No expectations on mockUserDB since we return early
 	mockUserDB.AssertNotCalled(t, "GetSupportedZapLinkHosts")
@@ -236,7 +236,7 @@ func TestPreWarmZapLinkHosts_EmptyHosts(t *testing.T) {
 	checkInternet := func(int) bool { return true }
 	mockUserDB.On("GetSupportedZapLinkHosts").Return([]string{}, nil)
 
-	PreWarmZapLinkHosts(db, "mister", checkInternet)
+	PreWarmZapLinkHosts(db, checkInternet)
 
 	mockUserDB.AssertExpectations(t)
 }
@@ -254,7 +254,7 @@ func TestPreWarmZapLinkHosts_DatabaseError(t *testing.T) {
 	checkInternet := func(int) bool { return true }
 	mockUserDB.On("GetSupportedZapLinkHosts").Return([]string(nil), errors.New("db error"))
 
-	PreWarmZapLinkHosts(db, "mister", checkInternet)
+	PreWarmZapLinkHosts(db, checkInternet)
 
 	mockUserDB.AssertExpectations(t)
 }
@@ -273,7 +273,7 @@ func TestPreWarmHost_HTTPError(t *testing.T) {
 	mockClient.On("Do", mock.Anything).Return(nil, errors.New("connection refused"))
 
 	// Should handle error gracefully without panicking
-	preWarmHost("https://example.com", db, "mister", mockClient)
+	preWarmHost("https://example.com", db, mockClient)
 
 	mockClient.AssertExpectations(t)
 	mockUserDB.AssertNotCalled(t, "UpdateZapLinkHost")
@@ -296,7 +296,7 @@ func TestPreWarmHost_NonOKStatus(t *testing.T) {
 	}
 	mockClient.On("Do", mock.Anything).Return(resp, nil)
 
-	preWarmHost("https://example.com", db, "mister", mockClient)
+	preWarmHost("https://example.com", db, mockClient)
 
 	mockClient.AssertExpectations(t)
 	// UpdateZapLinkHost should not be called for non-OK status
@@ -312,10 +312,10 @@ func TestPreWarmHost_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.True(t, strings.HasSuffix(r.URL.Path, WellKnownPath))
 
-		// Verify headers are set on all requests
-		assert.NotEmpty(t, r.Header.Get(HeaderZaparooOS))
-		assert.NotEmpty(t, r.Header.Get(HeaderZaparooArch))
-		assert.Equal(t, "mister", r.Header.Get(HeaderZaparooPlatform))
+		// Well-known fetching should NOT send Zaparoo identification headers
+		assert.Empty(t, r.Header.Get(HeaderZaparooOS))
+		assert.Empty(t, r.Header.Get(HeaderZaparooArch))
+		assert.Empty(t, r.Header.Get(HeaderZaparooPlatform))
 
 		if r.Method == http.MethodHead {
 			headRequestReceived = true
@@ -343,13 +343,13 @@ func TestPreWarmHost_Success(t *testing.T) {
 	// Expect UpdateZapLinkHost to be called on success
 	mockUserDB.On("UpdateZapLinkHost", server.URL, 1).Return(nil)
 
-	preWarmHost(server.URL, db, "mister", server.Client())
+	preWarmHost(server.URL, db, server.Client())
 
 	assert.True(t, headRequestReceived, "HEAD request should have been made")
 	mockUserDB.AssertExpectations(t)
 }
 
-func TestPreWarmHost_VerifiesHeaders(t *testing.T) {
+func TestPreWarmHost_DoesNotSendHeaders(t *testing.T) {
 	t.Parallel()
 
 	var capturedReq *http.Request
@@ -368,14 +368,15 @@ func TestPreWarmHost_VerifiesHeaders(t *testing.T) {
 		MediaDB: mockMediaDB,
 	}
 
-	preWarmHost("https://example.com", db, "batocera", mockClient)
+	preWarmHost("https://example.com", db, mockClient)
 
 	require.NotNil(t, capturedReq)
 	assert.Equal(t, http.MethodHead, capturedReq.Method)
 	assert.Equal(t, "https://example.com/.well-known/zaparoo", capturedReq.URL.String())
-	assert.Equal(t, runtime.GOOS, capturedReq.Header.Get(HeaderZaparooOS))
-	assert.Equal(t, runtime.GOARCH, capturedReq.Header.Get(HeaderZaparooArch))
-	assert.Equal(t, "batocera", capturedReq.Header.Get(HeaderZaparooPlatform))
+	// Well-known fetching should NOT send Zaparoo identification headers
+	assert.Empty(t, capturedReq.Header.Get(HeaderZaparooOS))
+	assert.Empty(t, capturedReq.Header.Get(HeaderZaparooArch))
+	assert.Empty(t, capturedReq.Header.Get(HeaderZaparooPlatform))
 }
 
 // queryZapLinkSupport Tests
@@ -393,7 +394,7 @@ func TestQueryZapLinkSupport_404ReturnsZeroNoError(t *testing.T) {
 	u, err := url.Parse(server.URL)
 	require.NoError(t, err)
 
-	result, err := queryZapLinkSupport(u, "mister")
+	result, err := queryZapLinkSupport(u)
 	require.NoError(t, err, "404 should not return an error")
 	assert.Equal(t, 0, result, "404 should return 0 (not supported)")
 }
@@ -410,7 +411,7 @@ func TestQueryZapLinkSupport_500ReturnsError(t *testing.T) {
 	u, err := url.Parse(server.URL)
 	require.NoError(t, err)
 
-	result, err := queryZapLinkSupport(u, "mister")
+	result, err := queryZapLinkSupport(u)
 	require.Error(t, err, "500 should return an error")
 	assert.Contains(t, err.Error(), "500")
 	assert.Equal(t, 0, result)
@@ -428,7 +429,7 @@ func TestQueryZapLinkSupport_503ReturnsError(t *testing.T) {
 	u, err := url.Parse(server.URL)
 	require.NoError(t, err)
 
-	result, err := queryZapLinkSupport(u, "mister")
+	result, err := queryZapLinkSupport(u)
 	require.Error(t, err, "503 should return an error")
 	assert.Contains(t, err.Error(), "503")
 	assert.Equal(t, 0, result)
@@ -448,7 +449,7 @@ func TestQueryZapLinkSupport_200WithZapScript0(t *testing.T) {
 	u, err := url.Parse(server.URL)
 	require.NoError(t, err)
 
-	result, err := queryZapLinkSupport(u, "mister")
+	result, err := queryZapLinkSupport(u)
 	require.NoError(t, err)
 	assert.Equal(t, 0, result)
 }
@@ -467,7 +468,7 @@ func TestQueryZapLinkSupport_200WithZapScript1(t *testing.T) {
 	u, err := url.Parse(server.URL)
 	require.NoError(t, err)
 
-	result, err := queryZapLinkSupport(u, "mister")
+	result, err := queryZapLinkSupport(u)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result)
 }
@@ -496,7 +497,7 @@ func TestIsZapLink_TransientErrorNotCached(t *testing.T) {
 	// UpdateZapLinkHost should NOT be called for transient errors
 	// (We don't set an expectation, so if it's called, the test will fail)
 
-	result := isZapLink(server.URL+"/test", db, "mister")
+	result := isZapLink(server.URL+"/test", db)
 	assert.False(t, result)
 
 	mockUserDB.AssertExpectations(t)
@@ -525,7 +526,7 @@ func TestIsZapLink_404IsCached(t *testing.T) {
 	// 404 should be cached as ZapScript=0
 	mockUserDB.On("UpdateZapLinkHost", server.URL, 0).Return(nil)
 
-	result := isZapLink(server.URL+"/test", db, "mister")
+	result := isZapLink(server.URL+"/test", db)
 	assert.False(t, result)
 
 	mockUserDB.AssertExpectations(t)
@@ -555,8 +556,113 @@ func TestIsZapLink_SuccessIsCached(t *testing.T) {
 	// Success should be cached as ZapScript=1
 	mockUserDB.On("UpdateZapLinkHost", server.URL, 1).Return(nil)
 
-	result := isZapLink(server.URL+"/test", db, "mister")
+	result := isZapLink(server.URL+"/test", db)
 	assert.True(t, result)
 
 	mockUserDB.AssertExpectations(t)
+}
+
+// FetchWellKnown Tests
+
+func TestFetchWellKnown_BasicZapScriptOnly(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"zapscript": 1}`))
+	}))
+	defer server.Close()
+
+	wk, err := doFetchWellKnown(server.URL, zapFetchClient)
+	require.NoError(t, err)
+	require.NotNil(t, wk)
+	assert.Equal(t, 1, wk.ZapScript)
+	assert.Equal(t, 0, wk.Auth)
+	assert.Nil(t, wk.Trusted)
+}
+
+func TestFetchWellKnown_WithAuthAndTrusted(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"zapscript": 1, "auth": 1, "trusted": ["zpr.au", "other.com"]}`))
+	}))
+	defer server.Close()
+
+	wk, err := doFetchWellKnown(server.URL, zapFetchClient)
+	require.NoError(t, err)
+	require.NotNil(t, wk)
+	assert.Equal(t, 1, wk.ZapScript)
+	assert.Equal(t, 1, wk.Auth)
+	assert.Equal(t, []string{"zpr.au", "other.com"}, wk.Trusted)
+}
+
+func TestFetchWellKnown_404ReturnsNotFoundError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	wk, err := doFetchWellKnown(server.URL, zapFetchClient)
+	require.ErrorIs(t, err, ErrWellKnownNotFound)
+	assert.Nil(t, wk)
+}
+
+func TestFetchWellKnown_500ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	wk, err := doFetchWellKnown(server.URL, zapFetchClient)
+	require.Error(t, err)
+	assert.Nil(t, wk)
+}
+
+func TestFetchWellKnown_BackwardCompatibility(t *testing.T) {
+	t.Parallel()
+
+	// Old format without auth/trusted fields should parse cleanly
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"zapscript": 1}`))
+	}))
+	defer server.Close()
+
+	wk, err := doFetchWellKnown(server.URL, zapFetchClient)
+	require.NoError(t, err)
+	require.NotNil(t, wk)
+
+	// Auth should default to 0, Trusted should be nil
+	assert.Equal(t, 0, wk.Auth)
+	assert.Nil(t, wk.Trusted)
+
+	// queryZapLinkSupport should still work correctly
+	u, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	result, err := queryZapLinkSupport(u)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result)
+}
+
+func TestFetchWellKnown_AuthOnly(t *testing.T) {
+	t.Parallel()
+
+	// Auth without trusted (single-domain setup)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"zapscript": 1, "auth": 1}`))
+	}))
+	defer server.Close()
+
+	wk, err := doFetchWellKnown(server.URL, zapFetchClient)
+	require.NoError(t, err)
+	require.NotNil(t, wk)
+	assert.Equal(t, 1, wk.Auth)
+	assert.Nil(t, wk.Trusted)
 }
