@@ -341,3 +341,15 @@ type InboxResponse struct {
 type SettingsAuthClaimResponse struct {
 	Domains []string `json:"domains"`
 }
+
+type UpdateCheckResponse struct {
+	CurrentVersion  string `json:"currentVersion"`
+	LatestVersion   string `json:"latestVersion,omitempty"`
+	ReleaseNotes    string `json:"releaseNotes,omitempty"`
+	UpdateAvailable bool   `json:"updateAvailable"`
+}
+
+type UpdateApplyResponse struct {
+	PreviousVersion string `json:"previousVersion"`
+	NewVersion      string `json:"newVersion"`
+}

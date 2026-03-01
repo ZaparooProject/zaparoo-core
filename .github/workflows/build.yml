@@ -432,6 +432,53 @@ jobs:
           PKG_VERSION="${VERSION//-/_}"
           gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${PKG_VERSION}-1-any.pkg.tar.zst" --clobber
 
+  publish-update-manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Publish update manifest to CDN
+    needs: [build, sign-windows, build-batocera-any]
+    if: ${{ !cancelled() && !inputs.test_build && !inputs.is_nightly && needs.build.result == 'success' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts/generate-update-manifest/
+            go.mod
+            go.sum
+          sparse-checkout-cone-mode: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Download release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ env.BUILD_TAG }}
+        run: |
+          mkdir -p _assets
+          gh release download "$tag" --dir _assets \
+            --pattern "zaparoo-*.tar.gz" \
+            --pattern "zaparoo-*.zip"
+      - name: Generate checksums and manifest
+        run: |
+          cd _assets && sha256sum * > checksums.txt && cd ..
+          go run scripts/generate-update-manifest/main.go \
+            --version "${BUILD_TAG}" \
+            --assets-dir _assets \
+            --output _assets/manifest.yaml
+      - name: Upload to Bunny.net storage
+        uses: R-J-dev/bunny-deploy@v2.1.1
+        with:
+          storage-zone-password: ${{ secrets.BUNNY_STORAGE_ZONE_PASSWORD }}
+          storage-endpoint: "https://storage.bunnycdn.com"
+          storage-zone-name: ${{ secrets.BUNNY_STORAGE_ZONE }}
+          directory-to-upload: "_assets"
+          target-directory: "ZaparooProject/zaparoo-core"
+          concurrency: "10"
+
 #  build_mac_app:
 #    runs-on: macos-12
 #    name: Package and release Mac app

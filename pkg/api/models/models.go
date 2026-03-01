@@ -87,6 +87,8 @@ const (
 	MethodInboxDelete          = "inbox.delete"
 	MethodInboxClear           = "inbox.clear"
 	MethodSettingsAuthClaim    = "settings.auth.claim"
+	MethodUpdateCheck          = "update.check"
+	MethodUpdateApply          = "update.apply"
 )
 
 type Notification struct {

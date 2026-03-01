@@ -44,7 +44,8 @@ const (
 
 // Category constants for deduplication
 const (
-	CategoryNone = "" // No deduplication
+	CategoryNone            = "" // No deduplication
+	CategoryUpdateAvailable = "update_available"
 )
 
 // MessageOptions configures optional fields for inbox messages.

@@ -51,6 +51,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -253,6 +254,13 @@ func NewMethodMap() *MethodMap {
 		// auth
 		models.MethodSettingsAuthClaim: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleSettingsAuthClaim(env, zapscript.FetchWellKnown)
+		},
+		// update
+		models.MethodUpdateCheck: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleUpdateCheck(env, updater.Check)
+		},
+		models.MethodUpdateApply: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleUpdateApply(env, updater.Apply, os.Exit)
 		},
 	}
 
@@ -986,7 +994,7 @@ func Start(
 	// Rate limiting only for API routes, not static assets
 	apiRateLimitMiddleware := apimiddleware.HTTPRateLimitMiddleware(rateLimiter)
 
-	if strings.HasSuffix(config.AppVersion, "-dev") {
+	if config.IsDevelopmentVersion() {
 		r.Mount("/debug", middleware.Profiler())
 		log.Info().Msg("pprof endpoints enabled at /debug/pprof/")
 	}

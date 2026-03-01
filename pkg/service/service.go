@@ -52,6 +52,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/publishers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/google/uuid"
 	"github.com/jonboulle/clockwork"
@@ -241,6 +242,8 @@ func Start(
 	// Initialize inbox service for system notifications
 	log.Info().Msg("initializing inbox service")
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
+
+	go updater.CheckAndNotify(st.GetContext(), cfg, pl.ID(), st.Inbox(), helpers.WaitForInternet, updater.Check)
 
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")
