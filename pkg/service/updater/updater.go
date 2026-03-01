@@ -122,8 +122,9 @@ func CheckAndNotify(
 	inboxSvc *inbox.Service,
 	waitFn func(int) bool,
 	checkFn CheckFn,
+	managedInstall bool,
 ) {
-	if !cfg.AutoUpdate() {
+	if !cfg.AutoUpdate(!managedInstall) {
 		log.Debug().Msg("auto-update disabled, skipping update check")
 		return
 	}

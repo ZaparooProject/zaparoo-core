@@ -5,6 +5,7 @@ package mister
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"os"
@@ -1059,6 +1060,34 @@ func (p *Platform) ShowPicker(
 
 func (p *Platform) ConsoleManager() platforms.ConsoleManager {
 	return p.consoleManager
+}
+
+// ManagedByPackageManager checks if this install is managed by MiSTer
+// Downloader or update_all by looking for known database entries in
+// the downloader configuration file.
+func (*Platform) ManagedByPackageManager() bool {
+	path := filepath.Join(
+		misterconfig.ScriptsDir,
+		".config", "downloader", "downloader.json",
+	)
+
+	data, err := os.ReadFile(path) //nolint:gosec // Internal config path
+	if err != nil {
+		return false
+	}
+
+	var cfg struct {
+		Dbs map[string]json.RawMessage `json:"dbs"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return false
+	}
+
+	// MiSTer Downloader database IDs for Zaparoo (mrext/tapto) and
+	// the full mrext suite (mrext/all) which includes Zaparoo.
+	_, hasTapto := cfg.Dbs["mrext/tapto"]
+	_, hasAll := cfg.Dbs["mrext/all"]
+	return hasTapto || hasAll
 }
 
 // SetArcadeCardLaunch caches the arcade setname when launching via card.

@@ -266,6 +266,12 @@ func (m *MockPlatform) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
 }
 
+// ManagedByPackageManager returns whether this install is managed by a package manager
+func (m *MockPlatform) ManagedByPackageManager() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+
 // Helper methods for testing
 
 // GetLaunchedMedia returns a slice of all media paths that were launched
@@ -330,6 +336,7 @@ func (m *MockPlatform) SetupBasicMock() {
 	m.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/mock/roms"})
 	m.On("SupportedReaders", mock.AnythingOfType("*config.Instance")).Return([]readers.Reader{})
 	m.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
+	m.On("ManagedByPackageManager").Return(false)
 
 	// Setup common stub functions for UI methods
 	noopFunc := func() error { return nil }

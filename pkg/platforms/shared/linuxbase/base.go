@@ -341,3 +341,9 @@ func (*Base) ShowPicker(
 func (*Base) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
 }
+
+// ManagedByPackageManager returns false. Platforms that embed Base and have
+// package manager detection should override this method.
+func (*Base) ManagedByPackageManager() bool {
+	return false
+}

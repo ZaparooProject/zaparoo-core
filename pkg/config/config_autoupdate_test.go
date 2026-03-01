@@ -32,24 +32,34 @@ func TestAutoUpdate(t *testing.T) {
 	falseVal := false
 
 	tests := []struct {
-		autoUpdate *bool
-		name       string
-		expected   bool
+		autoUpdate     *bool
+		name           string
+		defaultEnabled bool
+		expected       bool
 	}{
 		{
-			name:       "nil returns default true",
-			autoUpdate: nil,
-			expected:   true,
+			name:           "nil default enabled returns true",
+			autoUpdate:     nil,
+			defaultEnabled: true,
+			expected:       true,
 		},
 		{
-			name:       "explicit true",
-			autoUpdate: &trueVal,
-			expected:   true,
+			name:           "nil default disabled returns false",
+			autoUpdate:     nil,
+			defaultEnabled: false,
+			expected:       false,
 		},
 		{
-			name:       "explicit false",
-			autoUpdate: &falseVal,
-			expected:   false,
+			name:           "explicit true overrides default disabled",
+			autoUpdate:     &trueVal,
+			defaultEnabled: false,
+			expected:       true,
+		},
+		{
+			name:           "explicit false overrides default enabled",
+			autoUpdate:     &falseVal,
+			defaultEnabled: true,
+			expected:       false,
 		},
 	}
 
@@ -63,7 +73,7 @@ func TestAutoUpdate(t *testing.T) {
 				},
 			}
 
-			result := cfg.AutoUpdate()
+			result := cfg.AutoUpdate(tt.defaultEnabled)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -80,10 +90,10 @@ func TestSetAutoUpdate(t *testing.T) {
 
 	cfg.SetAutoUpdate(false)
 	assert.NotNil(t, cfg.vals.AutoUpdate)
-	assert.False(t, cfg.AutoUpdate())
+	assert.False(t, cfg.AutoUpdate(true))
 
 	cfg.SetAutoUpdate(true)
-	assert.True(t, cfg.AutoUpdate())
+	assert.True(t, cfg.AutoUpdate(true))
 }
 
 func TestIsDevelopmentVersion(t *testing.T) {

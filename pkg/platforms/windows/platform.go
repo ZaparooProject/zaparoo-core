@@ -390,3 +390,7 @@ func (*Platform) ShowPicker(
 func (*Platform) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
 }
+
+func (*Platform) ManagedByPackageManager() bool {
+	return false
+}

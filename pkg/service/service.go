@@ -243,7 +243,11 @@ func Start(
 	log.Info().Msg("initializing inbox service")
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
 
-	go updater.CheckAndNotify(st.GetContext(), cfg, pl.ID(), st.Inbox(), helpers.WaitForInternet, updater.Check)
+	go updater.CheckAndNotify(
+		st.GetContext(), cfg, pl.ID(), st.Inbox(),
+		helpers.WaitForInternet, updater.Check,
+		pl.ManagedByPackageManager(),
+	)
 
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")

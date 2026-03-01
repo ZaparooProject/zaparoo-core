@@ -68,6 +68,20 @@ func TestApply_DevelopmentVersion(t *testing.T) {
 
 func alwaysOnline(_ int) bool { return true }
 
+func TestCheckAndNotify_ManagedInstallDefaultsOff(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{} // AutoUpdate is nil
+
+	waitCalled := false
+	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ int) bool {
+		waitCalled = true
+		return true
+	}, Check, true)
+
+	assert.False(t, waitCalled)
+}
+
 func TestCheckAndNotify_DisabledConfig(t *testing.T) {
 	t.Parallel()
 
@@ -78,7 +92,7 @@ func TestCheckAndNotify_DisabledConfig(t *testing.T) {
 	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ int) bool {
 		waitCalled = true
 		return true
-	}, Check)
+	}, Check, false)
 
 	assert.False(t, waitCalled)
 }
@@ -91,7 +105,7 @@ func TestCheckAndNotify_DevelopmentVersion(t *testing.T) {
 	cfg := &config.Instance{}
 	cfg.SetAutoUpdate(true)
 
-	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, Check)
+	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, Check, false)
 }
 
 func TestCheckAndNotify_NoInternet(t *testing.T) {
@@ -102,7 +116,7 @@ func TestCheckAndNotify_NoInternet(t *testing.T) {
 
 	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ int) bool {
 		return false
-	}, Check)
+	}, Check, false)
 }
 
 func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
@@ -129,7 +143,7 @@ func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
 		}, nil
 	}
 
-	CheckAndNotify(t.Context(), cfg, "linux", inboxSvc, alwaysOnline, checkFn)
+	CheckAndNotify(t.Context(), cfg, "linux", inboxSvc, alwaysOnline, checkFn, false)
 
 	mockUserDB.AssertExpectations(t)
 }
@@ -149,7 +163,7 @@ func TestCheckAndNotify_NoUpdateAvailable(t *testing.T) {
 	}
 
 	// inboxSvc is nil — would panic if code tried to post a message
-	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn)
+	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn, false)
 }
 
 func TestCheckAndNotify_CheckError(t *testing.T) {
@@ -163,5 +177,5 @@ func TestCheckAndNotify_CheckError(t *testing.T) {
 	}
 
 	// inboxSvc is nil — would panic if code tried to post a message
-	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn)
+	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn, false)
 }

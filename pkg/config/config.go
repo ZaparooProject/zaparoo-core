@@ -614,12 +614,14 @@ func (c *Instance) SetErrorReporting(enabled bool) {
 }
 
 // AutoUpdate returns whether automatic update checking is enabled.
-// Defaults to true (opt-out).
-func (c *Instance) AutoUpdate() bool {
+// The defaultEnabled parameter allows platforms to specify their own default
+// (e.g. package-managed installs default to false).
+// An explicit user setting always takes precedence.
+func (c *Instance) AutoUpdate(defaultEnabled bool) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.vals.AutoUpdate == nil {
-		return true
+		return defaultEnabled
 	}
 	return *c.vals.AutoUpdate
 }
