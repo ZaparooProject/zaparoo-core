@@ -146,6 +146,8 @@ git commit -m "add reader support"  # Missing type prefix
 
 Before committing: run `task lint-fix` then `task test`.
 
+Pull requests should NOT include a test plan section.
+
 ## When Stuck
 
 Don't guess — ask for help or gather more information first.
