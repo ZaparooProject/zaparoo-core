@@ -61,6 +61,7 @@ type State struct {
 	activeToken      tokens.Token
 	mu               syncutil.RWMutex
 	stopService      bool
+	restartRequested bool
 	runZapScript     bool
 }
 
@@ -132,6 +133,25 @@ func (s *State) StopService() {
 	s.stopService = true
 	s.mu.Unlock()
 	s.ctxCancelFunc()
+}
+
+// RestartService signals the service to shut down and restart with the new
+// binary. Used after applying an update for graceful restart instead of
+// os.Exit.
+func (s *State) RestartService() {
+	s.mu.Lock()
+	s.restartRequested = true
+	s.stopService = true
+	s.mu.Unlock()
+	s.ctxCancelFunc()
+}
+
+// RestartRequested returns true if the service shutdown was triggered by a
+// restart request (e.g. after applying an update).
+func (s *State) RestartRequested() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.restartRequested
 }
 
 func (s *State) SetRunZapScript(run bool) {

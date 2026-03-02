@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -97,12 +98,20 @@ func Apply(ctx context.Context, platformID string) (string, error) {
 		return "", ErrDevelopmentVersion
 	}
 
-	updater, repo, err := makeUpdater(platformID)
+	u, repo, err := makeUpdater(platformID)
 	if err != nil {
 		return "", err
 	}
 
-	release, err := updater.UpdateSelf(ctx, config.AppVersion, repo)
+	// When running as a daemon subprocess, the binary is a temp copy and
+	// os.Executable() would point to it. ZAPAROO_APP holds the path to
+	// the original binary that should be updated instead.
+	var release *selfupdate.Release
+	if appPath := os.Getenv(config.AppEnv); appPath != "" {
+		release, err = u.UpdateCommand(ctx, appPath, config.AppVersion, repo)
+	} else {
+		release, err = u.UpdateSelf(ctx, config.AppVersion, repo)
+	}
 	if err != nil {
 		return "", fmt.Errorf("applying update: %w", err)
 	}

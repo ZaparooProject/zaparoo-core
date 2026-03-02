@@ -163,7 +163,7 @@ func TestHandleUpdateApply_DevelopmentVersion(t *testing.T) {
 				Platform: mockPlatform,
 			}
 
-			result, err := HandleUpdateApply(env, updater.Apply, func(_ int) {})
+			result, err := HandleUpdateApply(env, updater.Apply, func() {})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "development builds")
 			assert.Nil(t, result)
@@ -186,7 +186,7 @@ func TestHandleUpdateApply_Error(t *testing.T) {
 		return "", errors.New("download failed")
 	}
 
-	result, err := HandleUpdateApply(env, applyFn, func(_ int) {})
+	result, err := HandleUpdateApply(env, applyFn, func() {})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "update apply failed")
 	assert.Contains(t, err.Error(), "download failed")
@@ -222,7 +222,7 @@ func TestHandleUpdateApply_IndexingInProgress(t *testing.T) {
 				return "", nil
 			}
 
-			result, err := HandleUpdateApply(env, applyFn, func(_ int) {})
+			result, err := HandleUpdateApply(env, applyFn, func() {})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "media indexing is in progress")
 			assert.Nil(t, result)
@@ -251,12 +251,22 @@ func TestHandleUpdateApply_IndexingCompleted(t *testing.T) {
 		return "2.10.0", nil
 	}
 
-	result, err := HandleUpdateApply(env, applyFn, func(_ int) {})
+	restartCalled := false
+	restartFn := func() { restartCalled = true }
+
+	result, err := HandleUpdateApply(env, applyFn, restartFn)
 	require.NoError(t, err)
 
-	resp, ok := result.(models.UpdateApplyResponse)
+	rwc, ok := result.(models.ResponseWithCallback)
+	require.True(t, ok)
+	require.NotNil(t, rwc.AfterWrite)
+
+	resp, ok := rwc.Result.(models.UpdateApplyResponse)
 	require.True(t, ok)
 	assert.Equal(t, "2.10.0", resp.NewVersion)
+
+	rwc.AfterWrite()
+	assert.True(t, restartCalled)
 
 	mockMediaDB.AssertExpectations(t)
 }

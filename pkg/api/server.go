@@ -260,7 +260,7 @@ func NewMethodMap() *MethodMap {
 			return methods.HandleUpdateCheck(env, updater.Check)
 		},
 		models.MethodUpdateApply: func(env requests.RequestEnv) (any, error) {
-			return methods.HandleUpdateApply(env, updater.Apply, os.Exit)
+			return methods.HandleUpdateApply(env, updater.Apply, env.State.RestartService)
 		},
 	}
 
@@ -679,6 +679,7 @@ func broadcastNotifications(
 type requestResult struct {
 	Result      any
 	Error       *models.ErrorObject
+	AfterWrite  func() // called after the response has been written to the client
 	ID          models.RPCID
 	ShouldReply bool
 }
@@ -720,7 +721,15 @@ func processRequestObject(
 		if rpcError != nil {
 			return requestResult{ID: req.ID, Error: rpcError, ShouldReply: true}
 		}
-		return requestResult{ID: req.ID, Result: resp, ShouldReply: true}
+
+		// Unwrap ResponseWithCallback to extract the AfterWrite hook
+		var afterWrite func()
+		if rwc, ok := resp.(models.ResponseWithCallback); ok {
+			resp = rwc.Result
+			afterWrite = rwc.AfterWrite
+		}
+
+		return requestResult{ID: req.ID, Result: resp, AfterWrite: afterWrite, ShouldReply: true}
 	}
 
 	// otherwise try parse a response, which has an id field
@@ -806,6 +815,9 @@ func handleWSMessage(
 			if err != nil {
 				log.Error().Err(err).Msg("error sending response")
 			}
+		}
+		if result.AfterWrite != nil {
+			result.AfterWrite()
 		}
 	}
 }
@@ -903,6 +915,12 @@ func handlePostRequest(
 		_, err = w.Write(respBody)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to write response")
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		if result.AfterWrite != nil {
+			result.AfterWrite()
 		}
 	}
 }

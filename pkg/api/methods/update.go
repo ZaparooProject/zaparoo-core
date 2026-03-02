@@ -23,7 +23,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -59,10 +58,10 @@ func HandleUpdateCheck(
 func HandleUpdateApply(
 	env requests.RequestEnv, //nolint:gocritic // hugeParam
 	applyFn func(ctx context.Context, platformID string) (string, error),
-	exitFn func(int),
+	restartFn func(),
 ) (any, error) {
 	// Reject updates while media indexing is in progress to avoid
-	// interrupting database writes with os.Exit.
+	// interrupting database writes mid-transaction.
 	if env.Database != nil {
 		if status, err := env.Database.MediaDB.GetIndexingStatus(); err == nil {
 			if status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending {
@@ -81,25 +80,17 @@ func HandleUpdateApply(
 		return nil, fmt.Errorf("update apply failed: %w", err)
 	}
 
-	// Trigger a deferred exit so the JSON response has time to flush.
-	// Exit with ExitCodeUpdateRestart so the process manager (systemd, etc.)
-	// treats it as a failure and restarts with the new binary.
-	//
-	// TODO: replace os.Exit with a graceful shutdown via st.StopService()
-	// and a custom exit code. os.Exit bypasses deferred cleanup (DB close,
-	// HTTP server drain, publisher/discovery stop). SQLite WAL mode
-	// prevents data corruption, but a graceful path would be cleaner.
-	go func() {
-		time.Sleep(1 * time.Second)
-		log.Info().
-			Str("previous", previousVersion).
-			Str("new", newVersion).
-			Msg("update applied, restarting service")
-		exitFn(config.ExitCodeUpdateRestart)
-	}()
-
-	return models.UpdateApplyResponse{
-		PreviousVersion: previousVersion,
-		NewVersion:      newVersion,
+	return models.ResponseWithCallback{
+		Result: models.UpdateApplyResponse{
+			PreviousVersion: previousVersion,
+			NewVersion:      newVersion,
+		},
+		AfterWrite: func() {
+			log.Info().
+				Str("previous", previousVersion).
+				Str("new", newVersion).
+				Msg("update applied, restarting service")
+			restartFn()
+		},
 	}, nil
 }

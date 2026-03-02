@@ -184,7 +184,7 @@ func run() error {
 	}
 
 	svc, err := daemon.NewService(daemon.ServiceArgs{
-		Entry: func() (func() error, <-chan struct{}, error) {
+		Entry: func() (*service.StartResult, error) {
 			return service.Start(pl, cfg)
 		},
 		Platform: pl,

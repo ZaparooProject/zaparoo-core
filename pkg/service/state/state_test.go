@@ -26,7 +26,44 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestRestartRequested_DefaultFalse(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+
+	assert.False(t, state.RestartRequested())
+}
+
+func TestRestartService_SetsRestartRequested(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+
+	state.RestartService()
+
+	assert.True(t, state.RestartRequested())
+
+	select {
+	case <-state.GetContext().Done():
+		// expected
+	default:
+		require.Fail(t, "context should be cancelled after RestartService")
+	}
+}
+
+func TestStopService_DoesNotSetRestartRequested(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+
+	state.StopService()
+
+	assert.False(t, state.RestartRequested())
+}
 
 func TestSetOnMediaStartHook(t *testing.T) {
 	t.Parallel()

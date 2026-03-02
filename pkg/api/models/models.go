@@ -91,6 +91,15 @@ const (
 	MethodUpdateApply          = "update.apply"
 )
 
+// ResponseWithCallback wraps a method result with a function that should be
+// called after the response has been written to the client. This allows
+// handlers to defer side effects (like triggering a restart) until the client
+// has received the response, without relying on arbitrary sleep timers.
+type ResponseWithCallback struct {
+	Result     any
+	AfterWrite func()
+}
+
 type Notification struct {
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`

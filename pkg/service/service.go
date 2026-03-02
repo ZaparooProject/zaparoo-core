@@ -189,10 +189,17 @@ func pruneExpiredZapLinkHosts(db *database.Database) {
 	}
 }
 
+// StartResult holds the return values from Start.
+type StartResult struct {
+	Stop             func() error
+	Done             <-chan struct{}
+	RestartRequested func() bool
+}
+
 func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
-) (stop func() error, done <-chan struct{}, err error) {
+) (*StartResult, error) {
 	log.Info().Msgf("version: %s", config.AppVersion)
 
 	// Generate boot UUID for this session (for timestamp healing on MiSTer)
@@ -213,24 +220,24 @@ func Start(
 	lsq := make(chan *tokens.Token)       // launch software queue
 	plq := make(chan *playlists.Playlist) // playlist event queue
 
-	err = setupEnvironment(pl)
+	err := setupEnvironment(pl)
 	if err != nil {
 		log.Error().Err(err).Msg("error setting up environment")
-		return nil, nil, err
+		return nil, err
 	}
 
 	log.Info().Msg("running platform pre start")
 	err = pl.StartPre(cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
-		return nil, nil, fmt.Errorf("platform start pre failed: %w", err)
+		return nil, fmt.Errorf("platform start pre failed: %w", err)
 	}
 
 	log.Info().Msg("opening databases")
 	db, err := makeDatabase(st.GetContext(), pl)
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening databases")
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Perform all history cleanup operations
@@ -332,7 +339,7 @@ func Start(
 	err = pl.StartPost(cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia, db)
 	if err != nil {
 		log.Error().Err(err).Msg("platform post start error")
-		return nil, nil, fmt.Errorf("platform start post failed: %w", err)
+		return nil, fmt.Errorf("platform start post failed: %w", err)
 	}
 	log.Info().Msg("platform post start completed, service fully initialized")
 
@@ -358,13 +365,15 @@ func Start(
 		close(doneCh)
 	}()
 
-	stop = func() error {
-		st.StopService()
-		<-doneCh
-		return nil
-	}
-	done = doneCh
-	return stop, done, nil
+	return &StartResult{
+		Stop: func() error {
+			st.StopService()
+			<-doneCh
+			return nil
+		},
+		Done:             doneCh,
+		RestartRequested: st.RestartRequested,
+	}, nil
 }
 
 // monitorClockAndHealTimestamps monitors the system clock and heals timestamps when NTP syncs.

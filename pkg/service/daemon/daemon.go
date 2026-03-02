@@ -40,10 +40,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
 	"github.com/rs/zerolog/log"
 )
 
-type ServiceEntry func() (func() error, <-chan struct{}, error)
+type ServiceEntry func() (*service.StartResult, error)
 
 type Service struct {
 	pl     platforms.Platform
@@ -202,7 +204,7 @@ func (s *Service) startService() {
 		log.Error().Err(err).Msg("error setting nice level")
 	}
 
-	stop, done, err := s.start()
+	result, err := s.start()
 	if err != nil {
 		log.Error().Err(err).Msg("error starting service")
 
@@ -215,8 +217,8 @@ func (s *Service) startService() {
 	}
 
 	s.setupStopService()
-	s.stop = stop
-	s.done = done
+	s.stop = result.Stop
+	s.done = result.Done
 
 	if !s.daemon {
 		if stopErr := s.stopService(); stopErr != nil {
@@ -225,12 +227,27 @@ func (s *Service) startService() {
 		os.Exit(0)
 	}
 
-	<-done
+	<-result.Done
 	log.Info().Msg("service shut down internally")
 
 	err = s.removePidFile()
 	if err != nil {
 		log.Error().Err(err).Msg("error removing pid file")
+	}
+
+	if result.RestartRequested != nil && result.RestartRequested() {
+		log.Info().Msg("restart requested, re-executing binary")
+
+		// Remove the temp binary copy before re-exec
+		tempPath, exeErr := os.Executable()
+		if exeErr == nil && strings.HasPrefix(tempPath, s.pl.Settings().TempDir) {
+			_ = os.Remove(tempPath)
+		}
+
+		if execErr := restart.Exec(); execErr != nil {
+			log.Error().Err(execErr).Msg("failed to re-exec for restart")
+			os.Exit(1)
+		}
 	}
 
 	os.Exit(0)

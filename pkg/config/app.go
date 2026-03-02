@@ -52,8 +52,4 @@ const (
 	LaunchersDir         = "launchers"
 	MediaDir             = "media"
 	LogUploadURL         = "https://logs.zaparoo.org/"
-
-	// ExitCodeUpdateRestart is used when the service exits after applying an
-	// update, signaling the process manager to restart with the new binary.
-	ExitCodeUpdateRestart = 75
 )
