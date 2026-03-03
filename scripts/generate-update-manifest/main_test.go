@@ -1,0 +1,217 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
+)
+
+func createAssetFile(t *testing.T, dir, name string, size int) {
+	t.Helper()
+	err := os.WriteFile(filepath.Join(dir, name), make([]byte, size), 0o600)
+	require.NoError(t, err)
+}
+
+func TestBuildManifest_ValidAssets(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	createAssetFile(t, dir, "zaparoo-linux_amd64.tar.gz", 1024)
+	createAssetFile(t, dir, "zaparoo-windows_amd64.zip", 2048)
+	createAssetFile(t, dir, "checksums.txt", 256)
+
+	m, err := buildManifest("v2.10.0", dir)
+	require.NoError(t, err)
+
+	require.Len(t, m.Releases, 1)
+	assert.Equal(t, "v2.10.0", m.Releases[0].Name)
+	assert.Equal(t, "v2.10.0", m.Releases[0].TagName)
+	assert.Equal(t, int64(1), m.Releases[0].ID)
+
+	require.Len(t, m.Releases[0].Assets, 3)
+	assert.Equal(t, int64(3), m.LastAssetID)
+	assert.Equal(t, int64(1), m.LastReleaseID)
+
+	// Verify assets have correct sizes
+	assetsByName := make(map[string]*asset)
+	for _, a := range m.Releases[0].Assets {
+		assetsByName[a.Name] = a
+	}
+	assert.Equal(t, int64(1024), assetsByName["zaparoo-linux_amd64.tar.gz"].Size)
+	assert.Equal(t, int64(2048), assetsByName["zaparoo-windows_amd64.zip"].Size)
+	assert.Equal(t, int64(256), assetsByName["checksums.txt"].Size)
+}
+
+func TestBuildManifest_SkipsNonAssetFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	createAssetFile(t, dir, "zaparoo-linux_amd64.tar.gz", 100)
+	createAssetFile(t, dir, "README.md", 50)
+	createAssetFile(t, dir, "random-file.txt", 50)
+
+	m, err := buildManifest("v1.0.0", dir)
+	require.NoError(t, err)
+
+	require.Len(t, m.Releases[0].Assets, 1)
+	assert.Equal(t, "zaparoo-linux_amd64.tar.gz", m.Releases[0].Assets[0].Name)
+}
+
+func TestBuildManifest_SkipsManifestYAML(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	createAssetFile(t, dir, "zaparoo-linux_amd64.tar.gz", 100)
+	createAssetFile(t, dir, "manifest.yaml", 500)
+
+	m, err := buildManifest("v1.0.0", dir)
+	require.NoError(t, err)
+
+	require.Len(t, m.Releases[0].Assets, 1)
+	assert.Equal(t, "zaparoo-linux_amd64.tar.gz", m.Releases[0].Assets[0].Name)
+}
+
+func TestBuildManifest_SkipsDirectories(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	createAssetFile(t, dir, "zaparoo-linux_amd64.tar.gz", 100)
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "zaparoo-subdir"), 0o750))
+
+	m, err := buildManifest("v1.0.0", dir)
+	require.NoError(t, err)
+
+	require.Len(t, m.Releases[0].Assets, 1)
+}
+
+func TestBuildManifest_EmptyDirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	m, err := buildManifest("v1.0.0", dir)
+	require.ErrorIs(t, err, errNoAssets)
+	assert.Nil(t, m)
+}
+
+func TestBuildManifest_OnlyNonAssetFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	createAssetFile(t, dir, "README.md", 50)
+	createAssetFile(t, dir, "manifest.yaml", 500)
+
+	m, err := buildManifest("v1.0.0", dir)
+	require.ErrorIs(t, err, errNoAssets)
+	assert.Nil(t, m)
+}
+
+func TestBuildManifest_NonexistentDirectory(t *testing.T) {
+	t.Parallel()
+
+	m, err := buildManifest("v1.0.0", "/nonexistent/path")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading assets directory")
+	assert.Nil(t, m)
+}
+
+func TestBuildManifest_AssetURLMatchesName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	createAssetFile(t, dir, "zaparoo-mister_arm.tar.gz", 100)
+
+	m, err := buildManifest("v1.0.0", dir)
+	require.NoError(t, err)
+
+	assert.Equal(t, "zaparoo-mister_arm.tar.gz", m.Releases[0].Assets[0].URL)
+}
+
+func TestWriteManifest(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "manifest.yaml")
+
+	m := &manifest{
+		LastReleaseID: 1,
+		LastAssetID:   1,
+		Releases: []*release{
+			{
+				ID:      1,
+				Name:    "v1.0.0",
+				TagName: "v1.0.0",
+				Assets: []*asset{
+					{ID: 1, Name: "zaparoo-test.tar.gz", Size: 100, URL: "zaparoo-test.tar.gz"},
+				},
+			},
+		},
+	}
+
+	err := writeManifest(m, outputPath)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(outputPath) //nolint:gosec // Test file with controlled path
+	require.NoError(t, err)
+
+	var parsed manifest
+	require.NoError(t, yaml.Unmarshal(data, &parsed))
+
+	assert.Equal(t, int64(1), parsed.LastReleaseID)
+	assert.Equal(t, int64(1), parsed.LastAssetID)
+	require.Len(t, parsed.Releases, 1)
+	assert.Equal(t, "v1.0.0", parsed.Releases[0].TagName)
+	require.Len(t, parsed.Releases[0].Assets, 1)
+	assert.Equal(t, "zaparoo-test.tar.gz", parsed.Releases[0].Assets[0].Name)
+}
+
+func TestWriteManifest_CreatesSubdirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "sub", "dir", "manifest.yaml")
+
+	m := &manifest{
+		LastReleaseID: 1,
+		LastAssetID:   1,
+		Releases: []*release{
+			{
+				ID:      1,
+				Name:    "v1.0.0",
+				TagName: "v1.0.0",
+				Assets: []*asset{
+					{ID: 1, Name: "test.tar.gz", Size: 100, URL: "test.tar.gz"},
+				},
+			},
+		},
+	}
+
+	err := writeManifest(m, outputPath)
+	require.NoError(t, err)
+
+	_, err = os.Stat(outputPath)
+	require.NoError(t, err)
+}

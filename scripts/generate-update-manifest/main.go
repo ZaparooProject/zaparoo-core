@@ -22,7 +22,9 @@
 package main
 
 import (
+	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,21 +62,13 @@ type asset struct {
 	Size int64  `yaml:"size"`
 }
 
-func main() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+var errNoAssets = errors.New("no release assets found in directory")
 
-	version := flag.String("version", "", "release version tag (e.g. v2.10.0)")
-	assetsDir := flag.String("assets-dir", "", "directory containing release asset files")
-	output := flag.String("output", "manifest.yaml", "output manifest file path")
-	flag.Parse()
-
-	if *version == "" || *assetsDir == "" {
-		log.Fatal().Msg("usage: generate-update-manifest --version <tag> --assets-dir <dir> [--output <path>]")
-	}
-
-	entries, err := os.ReadDir(*assetsDir)
+// buildManifest reads assetsDir for release files and returns a manifest.
+func buildManifest(version, assetsDir string) (*manifest, error) {
+	entries, err := os.ReadDir(assetsDir)
 	if err != nil {
-		log.Fatal().Err(err).Msg("error reading assets directory")
+		return nil, fmt.Errorf("reading assets directory: %w", err)
 	}
 
 	var assets []*asset
@@ -96,7 +90,7 @@ func main() {
 
 		info, infoErr := entry.Info()
 		if infoErr != nil {
-			log.Fatal().Err(infoErr).Str("file", name).Msg("error getting file info")
+			return nil, fmt.Errorf("getting file info for %s: %w", name, infoErr)
 		}
 
 		assetID++
@@ -109,39 +103,65 @@ func main() {
 	}
 
 	if len(assets) == 0 {
-		log.Fatal().Msg("no release assets found in directory")
+		return nil, errNoAssets
 	}
 
-	m := &manifest{
+	return &manifest{
 		LastReleaseID: 1,
 		LastAssetID:   assetID,
 		Releases: []*release{
 			{
 				ID:          1,
-				Name:        *version,
-				TagName:     *version,
+				Name:        version,
+				TagName:     version,
 				URL:         "",
 				PublishedAt: time.Now().UTC(),
 				Assets:      assets,
 			},
 		},
-	}
+	}, nil
+}
 
+// writeManifest marshals the manifest to YAML and writes it to outputPath.
+func writeManifest(m *manifest, outputPath string) error {
 	data, err := yaml.Marshal(m)
 	if err != nil {
-		log.Fatal().Err(err).Msg("error marshalling manifest")
+		return fmt.Errorf("marshalling manifest: %w", err)
 	}
 
-	outputPath := *output
 	if dir := filepath.Dir(outputPath); dir != "." {
 		if mkdirErr := os.MkdirAll(dir, 0o750); mkdirErr != nil {
-			log.Fatal().Err(mkdirErr).Msg("error creating output directory")
+			return fmt.Errorf("creating output directory: %w", mkdirErr)
 		}
 	}
 
 	if writeErr := os.WriteFile(outputPath, data, 0o600); writeErr != nil {
-		log.Fatal().Err(writeErr).Msg("error writing manifest")
+		return fmt.Errorf("writing manifest: %w", writeErr)
 	}
 
-	log.Info().Str("path", outputPath).Int("assets", len(assets)).Msg("manifest written")
+	return nil
+}
+
+func main() {
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+
+	version := flag.String("version", "", "release version tag (e.g. v2.10.0)")
+	assetsDir := flag.String("assets-dir", "", "directory containing release asset files")
+	output := flag.String("output", "manifest.yaml", "output manifest file path")
+	flag.Parse()
+
+	if *version == "" || *assetsDir == "" {
+		log.Fatal().Msg("usage: generate-update-manifest --version <tag> --assets-dir <dir> [--output <path>]")
+	}
+
+	m, err := buildManifest(*version, *assetsDir)
+	if err != nil {
+		log.Fatal().Err(err).Msg("error building manifest")
+	}
+
+	if err := writeManifest(m, *output); err != nil {
+		log.Fatal().Err(err).Msg("error writing manifest")
+	}
+
+	log.Info().Str("path", *output).Int("assets", len(m.Releases[0].Assets)).Msg("manifest written")
 }

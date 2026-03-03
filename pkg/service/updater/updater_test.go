@@ -179,3 +179,29 @@ func TestCheckAndNotify_CheckError(t *testing.T) {
 	// inboxSvc is nil — would panic if code tried to post a message
 	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn, false)
 }
+
+func TestCheck_CancelledContext(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "1.0.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	result, err := Check(ctx, "linux")
+	require.Error(t, err)
+	assert.Nil(t, result)
+}
+
+func TestApply_CancelledContext(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "1.0.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	version, err := Apply(ctx, "linux")
+	require.Error(t, err)
+	assert.Empty(t, version)
+}

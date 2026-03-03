@@ -41,6 +41,7 @@ func Exec() error {
 		Strs("args", os.Args).
 		Msg("spawning new process for update restart")
 
+	//nolint:gosec // Safe: binPath is from os.Executable() or ZAPAROO_APP env var
 	proc, err := os.StartProcess(binPath, os.Args, &os.ProcAttr{
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 		Env:   os.Environ(),
