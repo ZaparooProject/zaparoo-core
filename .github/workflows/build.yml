@@ -483,6 +483,10 @@ jobs:
           directory-to-upload: "_assets"
           target-directory: "ZaparooProject/zaparoo-core"
           concurrency: "10"
+          access-key: ${{ secrets.BUNNY_API_KEY }}
+          pull-zone-id: ${{ secrets.BUNNY_PULL_ZONE_ID }}
+          enable-purge-pull-zone: true
+          replication-timeout: "15000"
 
 #  build_mac_app:
 #    runs-on: macos-12
