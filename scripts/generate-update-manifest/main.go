@@ -65,7 +65,7 @@ type asset struct {
 var errNoAssets = errors.New("no release assets found in directory")
 
 // buildManifest reads assetsDir for release files and returns a manifest.
-func buildManifest(version, assetsDir string) (*manifest, error) {
+func buildManifest(version, assetsDir, releaseNotes string) (*manifest, error) {
 	entries, err := os.ReadDir(assetsDir)
 	if err != nil {
 		return nil, fmt.Errorf("reading assets directory: %w", err)
@@ -111,12 +111,13 @@ func buildManifest(version, assetsDir string) (*manifest, error) {
 		LastAssetID:   assetID,
 		Releases: []*release{
 			{
-				ID:          1,
-				Name:        version,
-				TagName:     version,
-				URL:         "",
-				PublishedAt: time.Now().UTC(),
-				Assets:      assets,
+				ID:           1,
+				Name:         version,
+				TagName:      version,
+				URL:          "",
+				ReleaseNotes: releaseNotes,
+				PublishedAt:  time.Now().UTC(),
+				Assets:       assets,
 			},
 		},
 	}, nil
@@ -147,6 +148,7 @@ func main() {
 
 	version := flag.String("version", "", "release version tag (e.g. v2.10.0)")
 	assetsDir := flag.String("assets-dir", "", "directory containing release asset files")
+	releaseNotes := flag.String("release-notes", "", "release notes text to include in manifest")
 	output := flag.String("output", "manifest.yaml", "output manifest file path")
 	flag.Parse()
 
@@ -154,7 +156,7 @@ func main() {
 		log.Fatal().Msg("usage: generate-update-manifest --version <tag> --assets-dir <dir> [--output <path>]")
 	}
 
-	m, err := buildManifest(*version, *assetsDir)
+	m, err := buildManifest(*version, *assetsDir, *releaseNotes)
 	if err != nil {
 		log.Fatal().Err(err).Msg("error building manifest")
 	}

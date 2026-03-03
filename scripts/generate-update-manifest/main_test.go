@@ -43,7 +43,7 @@ func TestBuildManifest_ValidAssets(t *testing.T) {
 	createAssetFile(t, dir, "zaparoo-windows_amd64.zip", 2048)
 	createAssetFile(t, dir, "checksums.txt", 256)
 
-	m, err := buildManifest("v2.10.0", dir)
+	m, err := buildManifest("v2.10.0", dir, "")
 	require.NoError(t, err)
 
 	require.Len(t, m.Releases, 1)
@@ -73,7 +73,7 @@ func TestBuildManifest_SkipsNonAssetFiles(t *testing.T) {
 	createAssetFile(t, dir, "README.md", 50)
 	createAssetFile(t, dir, "random-file.txt", 50)
 
-	m, err := buildManifest("v1.0.0", dir)
+	m, err := buildManifest("v1.0.0", dir, "")
 	require.NoError(t, err)
 
 	require.Len(t, m.Releases[0].Assets, 1)
@@ -87,7 +87,7 @@ func TestBuildManifest_SkipsManifestYAML(t *testing.T) {
 	createAssetFile(t, dir, "zaparoo-linux_amd64.tar.gz", 100)
 	createAssetFile(t, dir, "manifest.yaml", 500)
 
-	m, err := buildManifest("v1.0.0", dir)
+	m, err := buildManifest("v1.0.0", dir, "")
 	require.NoError(t, err)
 
 	require.Len(t, m.Releases[0].Assets, 1)
@@ -101,7 +101,7 @@ func TestBuildManifest_SkipsDirectories(t *testing.T) {
 	createAssetFile(t, dir, "zaparoo-linux_amd64.tar.gz", 100)
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "zaparoo-subdir"), 0o750))
 
-	m, err := buildManifest("v1.0.0", dir)
+	m, err := buildManifest("v1.0.0", dir, "")
 	require.NoError(t, err)
 
 	require.Len(t, m.Releases[0].Assets, 1)
@@ -112,7 +112,7 @@ func TestBuildManifest_EmptyDirectory(t *testing.T) {
 
 	dir := t.TempDir()
 
-	m, err := buildManifest("v1.0.0", dir)
+	m, err := buildManifest("v1.0.0", dir, "")
 	require.ErrorIs(t, err, errNoAssets)
 	assert.Nil(t, m)
 }
@@ -124,7 +124,7 @@ func TestBuildManifest_OnlyNonAssetFiles(t *testing.T) {
 	createAssetFile(t, dir, "README.md", 50)
 	createAssetFile(t, dir, "manifest.yaml", 500)
 
-	m, err := buildManifest("v1.0.0", dir)
+	m, err := buildManifest("v1.0.0", dir, "")
 	require.ErrorIs(t, err, errNoAssets)
 	assert.Nil(t, m)
 }
@@ -132,7 +132,7 @@ func TestBuildManifest_OnlyNonAssetFiles(t *testing.T) {
 func TestBuildManifest_NonexistentDirectory(t *testing.T) {
 	t.Parallel()
 
-	m, err := buildManifest("v1.0.0", "/nonexistent/path")
+	m, err := buildManifest("v1.0.0", "/nonexistent/path", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reading assets directory")
 	assert.Nil(t, m)
@@ -144,10 +144,35 @@ func TestBuildManifest_AssetURLMatchesName(t *testing.T) {
 	dir := t.TempDir()
 	createAssetFile(t, dir, "zaparoo-mister_arm.tar.gz", 100)
 
-	m, err := buildManifest("v1.0.0", dir)
+	m, err := buildManifest("v1.0.0", dir, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, "zaparoo-mister_arm.tar.gz", m.Releases[0].Assets[0].URL)
+}
+
+func TestBuildManifest_ReleaseNotes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	createAssetFile(t, dir, "zaparoo-linux_amd64.tar.gz", 100)
+
+	notes := "## What's New\n- Added self-update support"
+	m, err := buildManifest("v2.10.0", dir, notes)
+	require.NoError(t, err)
+
+	assert.Equal(t, notes, m.Releases[0].ReleaseNotes)
+}
+
+func TestBuildManifest_EmptyReleaseNotes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	createAssetFile(t, dir, "zaparoo-linux_amd64.tar.gz", 100)
+
+	m, err := buildManifest("v1.0.0", dir, "")
+	require.NoError(t, err)
+
+	assert.Empty(t, m.Releases[0].ReleaseNotes)
 }
 
 func TestWriteManifest(t *testing.T) {
