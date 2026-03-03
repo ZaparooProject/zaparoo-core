@@ -66,10 +66,15 @@ jobs:
           tag: ${{ env.BUILD_TAG }}
           is_nightly: ${{ inputs.is_nightly || 'false' }}
         run: |
-          # Detect nightly builds and mark as pre-release
+          # Detect pre-release builds (nightly, alpha, beta, rc, etc.)
+          # Any tag with a hyphen after the version (e.g. v2.10.0-beta2) is pre-release
+          VERSION="${tag#v}"
           if [[ "$is_nightly" == "true" ]] || [[ "$tag" == *"nightly"* ]]; then
             PRERELEASE="--prerelease"
             TITLE="Nightly Build ${tag}"
+          elif [[ "$VERSION" == *-* ]]; then
+            PRERELEASE="--prerelease"
+            TITLE="${tag}"
           else
             PRERELEASE=""
             TITLE="${tag}"
@@ -437,7 +442,7 @@ jobs:
     timeout-minutes: 10
     name: Publish update manifest to CDN
     needs: [build, sign-windows, build-batocera-any]
-    if: ${{ !cancelled() && !inputs.test_build && !inputs.is_nightly && needs.build.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.test_build && !inputs.is_nightly && needs.build.result == 'success' && !contains(inputs.tag || github.ref_name, '-') }}
     permissions:
       contents: read
     steps:
