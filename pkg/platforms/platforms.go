@@ -338,6 +338,10 @@ type Platform interface {
 	// ConsoleManager returns the platform's console manager for TTY/console switching.
 	// Platforms without console switching return NoOpConsoleManager.
 	ConsoleManager() ConsoleManager
+	// ManagedByPackageManager returns true if this install is managed by an
+	// external package manager (e.g. MiSTer Downloader, Batocera pacman).
+	// Used to default auto-update off for package-managed installs.
+	ManagedByPackageManager() bool
 }
 
 // KeyboardControls builds a Controls map from action→key mappings using the

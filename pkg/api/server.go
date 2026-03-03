@@ -51,6 +51,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -253,6 +254,13 @@ func NewMethodMap() *MethodMap {
 		// auth
 		models.MethodSettingsAuthClaim: func(env requests.RequestEnv) (any, error) {
 			return methods.HandleSettingsAuthClaim(env, zapscript.FetchWellKnown)
+		},
+		// update
+		models.MethodUpdateCheck: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleUpdateCheck(env, updater.Check)
+		},
+		models.MethodUpdateApply: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleUpdateApply(env, updater.Apply, env.State.RestartService)
 		},
 	}
 
@@ -671,6 +679,7 @@ func broadcastNotifications(
 type requestResult struct {
 	Result      any
 	Error       *models.ErrorObject
+	AfterWrite  func() // called after the response has been written to the client
 	ID          models.RPCID
 	ShouldReply bool
 }
@@ -712,7 +721,15 @@ func processRequestObject(
 		if rpcError != nil {
 			return requestResult{ID: req.ID, Error: rpcError, ShouldReply: true}
 		}
-		return requestResult{ID: req.ID, Result: resp, ShouldReply: true}
+
+		// Unwrap ResponseWithCallback to extract the AfterWrite hook
+		var afterWrite func()
+		if rwc, ok := resp.(models.ResponseWithCallback); ok {
+			resp = rwc.Result
+			afterWrite = rwc.AfterWrite
+		}
+
+		return requestResult{ID: req.ID, Result: resp, AfterWrite: afterWrite, ShouldReply: true}
 	}
 
 	// otherwise try parse a response, which has an id field
@@ -798,6 +815,9 @@ func handleWSMessage(
 			if err != nil {
 				log.Error().Err(err).Msg("error sending response")
 			}
+		}
+		if result.AfterWrite != nil {
+			result.AfterWrite()
 		}
 	}
 }
@@ -896,6 +916,12 @@ func handlePostRequest(
 		if err != nil {
 			log.Error().Err(err).Msg("failed to write response")
 		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		if result.AfterWrite != nil {
+			result.AfterWrite()
+		}
 	}
 }
 
@@ -986,7 +1012,7 @@ func Start(
 	// Rate limiting only for API routes, not static assets
 	apiRateLimitMiddleware := apimiddleware.HTTPRateLimitMiddleware(rateLimiter)
 
-	if strings.HasSuffix(config.AppVersion, "-dev") {
+	if config.IsDevelopmentVersion() {
 		r.Mount("/debug", middleware.Profiler())
 		log.Info().Msg("pprof endpoints enabled at /debug/pprof/")
 	}

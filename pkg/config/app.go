@@ -19,9 +19,18 @@
 
 package config
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 var AppVersion = "DEVELOPMENT"
+
+// IsDevelopmentVersion returns true if AppVersion indicates a non-release build.
+// This includes the literal "DEVELOPMENT" default and "<hash>-dev" builds.
+func IsDevelopmentVersion() bool {
+	return AppVersion == "DEVELOPMENT" || strings.HasSuffix(AppVersion, "-dev")
+}
 
 const (
 	AppName              = "zaparoo"

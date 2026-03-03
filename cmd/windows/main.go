@@ -41,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/windows"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/systray"
 	"github.com/rs/zerolog/log"
 	syswindows "golang.org/x/sys/windows"
@@ -154,7 +155,7 @@ func run() error {
 		return errors.New("zaparoo is already running")
 	}
 
-	stopSvc, svcDone, err := service.Start(pl, cfg)
+	svcResult, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Msgf("error starting service: %s", err)
 		return fmt.Errorf("error starting service: %w", err)
@@ -178,14 +179,20 @@ func run() error {
 
 	select {
 	case <-sigs:
+		err = svcResult.Stop()
+		if err != nil {
+			log.Error().Msgf("error stopping service: %s", err)
+		}
 	case <-exit:
-	case <-svcDone:
+		err = svcResult.Stop()
+		if err != nil {
+			log.Error().Msgf("error stopping service: %s", err)
+		}
+	case <-svcResult.Done:
 		log.Info().Msg("service shut down internally")
-	}
-
-	err = stopSvc()
-	if err != nil {
-		log.Error().Msgf("error stopping service: %s", err)
+		if err := restart.ExecIfRequested(svcResult.RestartRequested); err != nil {
+			return fmt.Errorf("failed to re-exec for restart: %w", err)
+		}
 	}
 
 	return nil

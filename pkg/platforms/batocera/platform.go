@@ -780,3 +780,10 @@ func (*Platform) ShowPicker(
 func (*Platform) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
 }
+
+// ManagedByPackageManager checks if this install was done via the Batocera
+// pacman package by looking for the batoexec hook file created during install.
+func (*Platform) ManagedByPackageManager() bool {
+	_, err := os.Stat("/userdata/system/pacman/batoexec/zaparoo-core_0")
+	return err == nil
+}

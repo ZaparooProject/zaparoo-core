@@ -1,0 +1,207 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package updater
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+)
+
+func TestCheck_DevelopmentVersion(t *testing.T) {
+	devVersions := []string{"DEVELOPMENT", "abc1234-dev"}
+
+	for _, v := range devVersions {
+		t.Run(v, func(t *testing.T) {
+			original := config.AppVersion
+			config.AppVersion = v
+			t.Cleanup(func() { config.AppVersion = original })
+
+			result, err := Check(t.Context(), "linux")
+			require.ErrorIs(t, err, ErrDevelopmentVersion)
+			assert.Nil(t, result)
+		})
+	}
+}
+
+func TestApply_DevelopmentVersion(t *testing.T) {
+	devVersions := []string{"DEVELOPMENT", "abc1234-dev"}
+
+	for _, v := range devVersions {
+		t.Run(v, func(t *testing.T) {
+			original := config.AppVersion
+			config.AppVersion = v
+			t.Cleanup(func() { config.AppVersion = original })
+
+			version, err := Apply(t.Context(), "linux")
+			require.ErrorIs(t, err, ErrDevelopmentVersion)
+			assert.Empty(t, version)
+		})
+	}
+}
+
+func alwaysOnline(_ int) bool { return true }
+
+func TestCheckAndNotify_ManagedInstallDefaultsOff(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{} // AutoUpdate is nil
+
+	waitCalled := false
+	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ int) bool {
+		waitCalled = true
+		return true
+	}, Check, true)
+
+	assert.False(t, waitCalled)
+}
+
+func TestCheckAndNotify_DisabledConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetAutoUpdate(false)
+
+	waitCalled := false
+	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ int) bool {
+		waitCalled = true
+		return true
+	}, Check, false)
+
+	assert.False(t, waitCalled)
+}
+
+func TestCheckAndNotify_DevelopmentVersion(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "abc1234-dev"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	cfg := &config.Instance{}
+	cfg.SetAutoUpdate(true)
+
+	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, Check, false)
+}
+
+func TestCheckAndNotify_NoInternet(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetAutoUpdate(true)
+
+	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ int) bool {
+		return false
+	}, Check, false)
+}
+
+func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetAutoUpdate(true)
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockUserDB.On("AddInboxMessage", mock.MatchedBy(func(msg *database.InboxMessage) bool {
+		return msg.Title == "Zaparoo 2.10.0 is available" &&
+			msg.Category == inbox.CategoryUpdateAvailable
+	})).Return(&database.InboxMessage{DBID: 1, Title: "Zaparoo 2.10.0 is available"}, nil)
+
+	ns := make(chan models.Notification, 10)
+	inboxSvc := inbox.NewService(mockUserDB, ns)
+
+	checkFn := func(_ context.Context, _ string) (*Result, error) {
+		return &Result{
+			CurrentVersion:  "2.9.0",
+			LatestVersion:   "2.10.0",
+			UpdateAvailable: true,
+			ReleaseNotes:    "New features",
+		}, nil
+	}
+
+	CheckAndNotify(t.Context(), cfg, "linux", inboxSvc, alwaysOnline, checkFn, false)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestCheckAndNotify_NoUpdateAvailable(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetAutoUpdate(true)
+
+	checkFn := func(_ context.Context, _ string) (*Result, error) {
+		return &Result{
+			CurrentVersion:  "2.10.0",
+			LatestVersion:   "2.10.0",
+			UpdateAvailable: false,
+		}, nil
+	}
+
+	// inboxSvc is nil — would panic if code tried to post a message
+	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn, false)
+}
+
+func TestCheckAndNotify_CheckError(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetAutoUpdate(true)
+
+	checkFn := func(_ context.Context, _ string) (*Result, error) {
+		return nil, errors.New("network timeout")
+	}
+
+	// inboxSvc is nil — would panic if code tried to post a message
+	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn, false)
+}
+
+func TestCheck_CancelledContext(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "1.0.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	result, err := Check(ctx, "linux")
+	require.Error(t, err)
+	assert.Nil(t, result)
+}
+
+func TestApply_CancelledContext(t *testing.T) {
+	original := config.AppVersion
+	config.AppVersion = "1.0.0"
+	t.Cleanup(func() { config.AppVersion = original })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	version, err := Apply(ctx, "linux")
+	require.Error(t, err)
+	assert.Empty(t, version)
+}

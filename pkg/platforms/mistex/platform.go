@@ -350,6 +350,10 @@ func (*Platform) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
 }
 
+func (*Platform) ManagedByPackageManager() bool {
+	return false
+}
+
 func (*Platform) ShowNotice(
 	_ *config.Instance,
 	_ widgetmodels.NoticeArgs,

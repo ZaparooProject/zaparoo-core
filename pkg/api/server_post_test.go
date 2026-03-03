@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -440,4 +441,43 @@ func TestHandlePostRequest_InvalidArrayID(t *testing.T) {
 	require.NoError(t, err)
 	// The request should fail to parse due to invalid ID
 	require.NotNil(t, resp["error"], "array ID should cause an error")
+}
+
+// TestHandlePostRequest_ResponseWithCallback tests that methods returning
+// ResponseWithCallback have their result unwrapped and AfterWrite called.
+func TestHandlePostRequest_ResponseWithCallback(t *testing.T) {
+	t.Parallel()
+
+	handler, methodMap := createTestPostHandler(t)
+
+	afterWriteCalled := false
+	err := methodMap.AddMethod("test.callback", func(_ requests.RequestEnv) (any, error) {
+		return models.ResponseWithCallback{
+			Result:     map[string]string{"status": "updated"},
+			AfterWrite: func() { afterWriteCalled = true },
+		}, nil
+	})
+	require.NoError(t, err)
+
+	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.callback"}`
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// Verify the response contains the unwrapped result, not the wrapper
+	var resp models.ResponseObject
+	err = json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	require.Equal(t, "2.0", resp.JSONRPC)
+
+	resultMap, ok := resp.Result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "updated", resultMap["status"])
+
+	// AfterWrite should have been called after the response was written
+	assert.True(t, afterWriteCalled, "AfterWrite callback should be invoked after response")
 }

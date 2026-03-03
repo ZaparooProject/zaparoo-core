@@ -46,16 +46,17 @@ const (
 )
 
 type Values struct {
-	Audio          Audio     `toml:"audio"`
-	Input          Input     `toml:"input,omitempty"`
-	Launchers      Launchers `toml:"launchers,omitempty"`
-	Media          Media     `toml:"media,omitempty"`
-	Playtime       Playtime  `toml:"playtime,omitempty"`
-	ZapScript      ZapScript `toml:"zapscript,omitempty"`
-	Systems        Systems   `toml:"systems,omitempty"`
-	Mappings       Mappings  `toml:"mappings,omitempty"`
-	Service        Service   `toml:"service,omitempty"`
 	Groovy         Groovy    `toml:"groovy,omitempty"`
+	Input          Input     `toml:"input,omitempty"`
+	AutoUpdate     *bool     `toml:"auto_update,omitempty"`
+	Audio          Audio     `toml:"audio"`
+	Service        Service   `toml:"service,omitempty"`
+	Launchers      Launchers `toml:"launchers,omitempty"`
+	Playtime       Playtime  `toml:"playtime,omitempty"`
+	Media          Media     `toml:"media,omitempty"`
+	ZapScript      ZapScript `toml:"zapscript,omitempty"`
+	Mappings       Mappings  `toml:"mappings,omitempty"`
+	Systems        Systems   `toml:"systems,omitempty"`
 	Readers        Readers   `toml:"readers,omitempty"`
 	ConfigSchema   int       `toml:"config_schema"`
 	DebugLogging   bool      `toml:"debug_logging"`
@@ -610,4 +611,24 @@ func (c *Instance) SetErrorReporting(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.ErrorReporting = enabled
+}
+
+// AutoUpdate returns whether automatic update checking is enabled.
+// The defaultEnabled parameter allows platforms to specify their own default
+// (e.g. package-managed installs default to false).
+// An explicit user setting always takes precedence.
+func (c *Instance) AutoUpdate(defaultEnabled bool) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.AutoUpdate == nil {
+		return defaultEnabled
+	}
+	return *c.vals.AutoUpdate
+}
+
+// SetAutoUpdate sets whether automatic update checking is enabled.
+func (c *Instance) SetAutoUpdate(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.AutoUpdate = &enabled
 }
