@@ -275,10 +275,12 @@ func GenerateMediaDB(
 		defer db.MediaDB.BackgroundOperationDone()
 		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			var desc string
-			switch status.Step {
-			case 1:
+			switch {
+			case status.Phase == mediascanner.PhaseDiscovering:
 				desc = "Finding media folders"
-			case status.Total:
+			case status.Phase == mediascanner.PhaseInitializing:
+				desc = "Initializing database"
+			case status.Step == status.Total:
 				desc = "Writing database"
 			default:
 				system, err := systemdefs.GetSystem(status.SystemID)

@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
 
@@ -92,9 +93,9 @@ type PathResult struct {
 //   - Linux: Prefers exact match before case-insensitive match (handles File.txt vs file.txt)
 //   - Windows: Handles 8.3 short names (PROGRA~1) via fallback to os.Stat
 //   - All platforms: Works with symlinks, UNC paths, network drives
-func FindPath(path string) (string, error) {
+func FindPath(ctx context.Context, path string) (string, error) {
 	// Check if path exists first
-	if _, err := os.Stat(path); err != nil {
+	if _, err := statWithContext(ctx, path); err != nil {
 		return "", fmt.Errorf("path does not exist: %s", path)
 	}
 
@@ -134,11 +135,17 @@ func FindPath(path string) (string, error) {
 	parts := strings.Split(relPath, string(filepath.Separator))
 
 	for _, part := range parts {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
+
 		if part == "" || part == "." {
 			continue
 		}
 
-		entries, err := os.ReadDir(currentPath)
+		entries, err := readDirWithContext(ctx, currentPath)
 		if err != nil {
 			return "", fmt.Errorf("failed to read directory %s: %w", currentPath, err)
 		}
@@ -173,7 +180,7 @@ func FindPath(path string) (string, error) {
 		// it might be a short name or special filesystem entry
 		if !found {
 			targetCheck := filepath.Join(currentPath, part)
-			if _, err := os.Stat(targetCheck); err == nil {
+			if _, err := statWithContext(ctx, targetCheck); err == nil {
 				// Path exists but wasn't found in directory listing
 				// Accept the component as-is (likely 8.3 short name)
 				currentPath = targetCheck
@@ -190,40 +197,77 @@ func FindPath(path string) (string, error) {
 }
 
 func GetSystemPaths(
+	ctx context.Context,
 	_ *config.Instance,
 	_ platforms.Platform,
 	rootFolders []string,
 	systems []systemdefs.System,
 ) []PathResult {
 	var matches []PathResult
+	cache := newDirCache()
+
+	log.Info().
+		Int("rootFolders", len(rootFolders)).
+		Int("systems", len(systems)).
+		Msg("starting path discovery")
 
 	// Validate root folders ONCE before iterating systems
 	// This prevents logging the same error 200+ times (once per system)
 	validRootFolders := make([]string, 0, len(rootFolders))
 	for _, folder := range rootFolders {
-		gf, err := FindPath(folder)
+		gf, err := FindPath(ctx, folder)
 		if err != nil {
-			log.Debug().Err(err).Str("path", folder).Msg("skipping root folder - not found or inaccessible")
+			switch {
+			case errors.Is(err, ErrFsTimeout):
+				log.Warn().Str("path", folder).Dur("timeout", defaultFsTimeout).
+					Msg("root folder timed out (possible stale mount)")
+			case ctx.Err() != nil:
+				log.Info().Msg("path discovery cancelled")
+				return matches
+			default:
+				log.Debug().Err(err).Str("path", folder).Msg("skipping root folder - not found or inaccessible")
+			}
 			continue
 		}
 		validRootFolders = append(validRootFolders, gf)
+
+		// Pre-cache the root folder listing
+		if _, cacheErr := cache.list(ctx, gf); cacheErr != nil {
+			if ctx.Err() != nil {
+				log.Info().Msg("path discovery cancelled")
+				return matches
+			}
+			log.Debug().Err(cacheErr).Str("path", gf).Msg("failed to cache root folder listing")
+		}
 	}
 
+	log.Info().
+		Int("validRoots", len(validRootFolders)).
+		Int("totalRoots", len(rootFolders)).
+		Msg("root folder validation complete")
+
 	for _, system := range systems {
+		select {
+		case <-ctx.Done():
+			log.Info().Msg("path discovery cancelled")
+			return matches
+		default:
+		}
+
 		// GlobalLauncherCache is assumed to be read-only after initialization
 		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
 
 		var folders []string
-		for i := range launchers {
+		for j := range launchers {
 			// Skip filesystem scanning for launchers that don't need it
-			if launchers[i].SkipFilesystemScan {
+			if launchers[j].SkipFilesystemScan {
 				log.Trace().
-					Str("launcher", launchers[i].ID).
+					Str("launcher", launchers[j].ID).
 					Str("system", system.ID).
 					Msg("skipping filesystem scan for launcher")
 				continue
 			}
-			for _, folder := range launchers[i].Folders {
+			for _, folder := range launchers[j].Folders {
 				if !helpers.Contains(folders, folder) {
 					folders = append(folders, folder)
 				}
@@ -240,9 +284,31 @@ func GetSystemPaths(
 		// check for <root>/<folder>
 		for _, gf := range validRootFolders {
 			for _, folder := range folders {
+				// Use cached directory listing for single-component folder names
+				if !strings.Contains(folder, string(filepath.Separator)) && !filepath.IsAbs(folder) {
+					actualName, findErr := cache.findEntry(ctx, gf, folder)
+					if findErr != nil {
+						if ctx.Err() != nil {
+							return matches
+						}
+						continue
+					}
+					if actualName != "" {
+						matches = append(matches, PathResult{
+							System: system,
+							Path:   filepath.Join(gf, actualName),
+						})
+					}
+					continue
+				}
+
+				// Multi-component paths fall through to full FindPath
 				systemFolder := filepath.Join(gf, folder)
-				path, err := FindPath(systemFolder)
+				path, err := FindPath(ctx, systemFolder)
 				if err != nil {
+					if ctx.Err() != nil {
+						return matches
+					}
 					log.Debug().Err(err).Str("path", systemFolder).Str("system", system.ID).
 						Msg("skipping system folder - not found or inaccessible")
 					continue
@@ -259,8 +325,11 @@ func GetSystemPaths(
 		for _, folder := range folders {
 			if filepath.IsAbs(folder) {
 				systemFolder := folder
-				path, err := FindPath(systemFolder)
+				path, err := FindPath(ctx, systemFolder)
 				if err != nil {
+					if ctx.Err() != nil {
+						return matches
+					}
 					log.Debug().Err(err).Str("path", systemFolder).Str("system", system.ID).
 						Msg("skipping absolute path - not found or inaccessible")
 					continue
@@ -273,7 +342,24 @@ func GetSystemPaths(
 		}
 	}
 
-	return matches
+	// Deduplicate by (SystemID, resolved Path) to prevent UNIQUE constraint
+	// failures when multiple root folders resolve to the same directory
+	seen := make(map[string]bool)
+	deduplicated := make([]PathResult, 0, len(matches))
+	for _, m := range matches {
+		key := m.System.ID + ":" + m.Path
+		if !seen[key] {
+			seen[key] = true
+			deduplicated = append(deduplicated, m)
+		}
+	}
+
+	log.Info().
+		Int("matches", len(deduplicated)).
+		Int("duplicatesRemoved", len(matches)-len(deduplicated)).
+		Msg("path discovery complete")
+
+	return deduplicated
 }
 
 type resultsStack struct {
@@ -351,7 +437,7 @@ func GetFiles(
 		if file.IsDir() {
 			key := path
 			if file.Type()&os.ModeSymlink != 0 {
-				realPath, symlinkErr := filepath.EvalSymlinks(path)
+				realPath, symlinkErr := evalSymlinksWithContext(ctx, path)
 				if symlinkErr != nil {
 					return fmt.Errorf("failed to evaluate symlink %s: %w", path, symlinkErr)
 				}
@@ -364,7 +450,7 @@ func GetFiles(
 
 			// Check for .zaparooignore marker file
 			markerPath := filepath.Join(path, ".zaparooignore")
-			if _, statErr := os.Stat(markerPath); statErr == nil {
+			if _, statErr := statWithContext(ctx, markerPath); statErr == nil {
 				log.Info().Str("path", path).Msg("skipping directory with .zaparooignore marker")
 				return filepath.SkipDir
 			}
@@ -378,13 +464,13 @@ func GetFiles(
 				return fmt.Errorf("failed to get absolute path for %s: %w", path, absErr)
 			}
 
-			realPath, realPathErr := filepath.EvalSymlinks(absSym)
+			realPath, realPathErr := evalSymlinksWithContext(ctx, absSym)
 			if realPathErr != nil {
 				return fmt.Errorf("failed to evaluate symlink %s: %w", absSym, realPathErr)
 			}
 			log.Trace().Str("symlink", path).Str("target", realPath).Msg("resolved symlink")
 
-			file, statErr := os.Stat(realPath)
+			file, statErr := statWithContext(ctx, realPath)
 			if statErr != nil {
 				return fmt.Errorf("failed to stat symlink target %s: %w", realPath, statErr)
 			}
@@ -443,7 +529,7 @@ func GetFiles(
 	stack.push()
 	defer stack.pop()
 
-	root, err := os.Lstat(path)
+	root, err := lstatWithContext(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat path %s: %w", path, err)
 	}
@@ -453,13 +539,13 @@ func GetFiles(
 	if root.Mode()&os.ModeSymlink == 0 {
 		realPath = path
 	} else {
-		realPath, err = filepath.EvalSymlinks(path)
+		realPath, err = evalSymlinksWithContext(ctx, path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to evaluate symlink %s: %w", path, err)
 		}
 	}
 
-	realRoot, err := os.Stat(realPath)
+	realRoot, err := statWithContext(ctx, realPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat real path %s: %w", realPath, err)
 	}
@@ -538,8 +624,14 @@ func handleCancellationWithRollback(ctx context.Context, db database.MediaDBI, m
 	return 0, ctx.Err()
 }
 
+const (
+	PhaseDiscovering  = "discovering"
+	PhaseInitializing = "initializing"
+)
+
 type IndexStatus struct {
 	SystemID string
+	Phase    string // PhaseDiscovering, PhaseInitializing, or empty during indexing
 	Total    int
 	Step     int
 	Files    int
@@ -602,7 +694,8 @@ func NewNamesIndex(
 	case "":
 		log.Info().Msg("starting fresh indexing (no previous indexing status)")
 	case mediadb.IndexingStatusRunning, mediadb.IndexingStatusPending:
-		log.Info().Msgf("found interrupted indexing with status: %s", indexingStatus)
+		log.Warn().Str("status", indexingStatus).
+			Msg("previous indexing was interrupted, attempting to resume")
 		var getSystemErr error
 		lastIndexedSystemID, getSystemErr = db.GetLastIndexedSystem()
 		if getSystemErr != nil {
@@ -635,11 +728,14 @@ func NewNamesIndex(
 	}
 
 	// Get the ordered list of systems for this run (deterministic by ID)
+	update(IndexStatus{Phase: PhaseDiscovering})
 	systemPaths := make(map[string][]string)
-	for _, v := range GetSystemPaths(cfg, platform, platform.RootDirs(cfg), systems) {
+	for _, v := range GetSystemPaths(ctx, cfg, platform, platform.RootDirs(cfg), systems) {
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
 	sysPathIDs := helpers.AlphaMapKeys(systemPaths)
+
+	update(IndexStatus{Phase: PhaseInitializing})
 
 	// Check for cancellation
 	select {
@@ -836,9 +932,12 @@ func NewNamesIndex(
 	}()
 
 	status := IndexStatus{
-		Total: len(sysPathIDs) + 2, // Adjusted total steps for the current list
-		Step:  1,
+		Total: len(sysPathIDs) + 1, // +1 for final "Writing database" step
+		Step:  0,
 	}
+
+	// Track UNIQUE constraint failures across all systems
+	var uniqueConstraintFailures int
 
 	// Track which launchers have already been scanned to prevent double-execution
 	scannedLaunchers := make(map[string]bool)
@@ -856,8 +955,6 @@ func NewNamesIndex(
 			completedSystems[k] = true // Mark all systems before the resume point as completed
 		}
 	}
-
-	update(status)
 
 	scannedSystems := make(map[string]bool)
 	for _, s := range systemdefs.AllSystems() {
@@ -1014,6 +1111,12 @@ func NewNamesIndex(
 
 			_, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, shouldStrip, cfg)
 			if addErr != nil {
+				var sqliteErr sqlite3.Error
+				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+					uniqueConstraintFailures++
+					log.Debug().Err(addErr).Str("path", file.Path).Msg("skipping duplicate media entry")
+					continue
+				}
 				return 0, fmt.Errorf("unrecoverable error adding media path %q: %w", file.Path, addErr)
 			}
 			filesInBatch++
@@ -1182,6 +1285,12 @@ func NewNamesIndex(
 					// Custom scanner files: don't apply number stripping heuristic (false)
 					_, _, addErr := AddMediaPath(db, &scanState, systemID, result.Path, result.NoExt, false, cfg)
 					if addErr != nil {
+						var sqliteErr sqlite3.Error
+						if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+							uniqueConstraintFailures++
+							log.Debug().Err(addErr).Str("path", result.Path).Msg("skipping duplicate media entry")
+							continue
+						}
 						return 0, fmt.Errorf(
 							"unrecoverable error adding custom scanner path %q: %w",
 							result.Path,
@@ -1287,6 +1396,12 @@ func NewNamesIndex(
 						db, &scanState, systemID, scanResult.Path, scanResult.NoExt, false, cfg,
 					)
 					if addErr != nil {
+						var sqliteErr sqlite3.Error
+						if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+							uniqueConstraintFailures++
+							log.Debug().Err(addErr).Str("path", scanResult.Path).Msg("skipping duplicate media entry")
+							continue
+						}
 						return 0, fmt.Errorf(
 							"unrecoverable error adding 'any' scanner path %q: %w",
 							scanResult.Path,
@@ -1409,6 +1524,11 @@ func NewNamesIndex(
 		}
 	}
 	log.Debug().Msgf("indexed systems: %v", indexedSystems)
+
+	if uniqueConstraintFailures > 0 {
+		log.Warn().Int("count", uniqueConstraintFailures).
+			Msg("UNIQUE constraint failures during indexing (possible duplicate paths)")
+	}
 
 	indexedFiles = status.Files
 	indexElapsed := time.Since(indexStartTime)

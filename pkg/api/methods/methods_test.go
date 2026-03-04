@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -578,8 +579,10 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Reset indexing status to prevent race conditions between parallel tests
-			statusInstance.clear()
+			// Cancel any leftover background goroutine and wait for it
+			// to release the global statusInstance before starting.
+			CancelIndexing()
+			ClearIndexingStatus()
 
 			// Create mock environment
 			mockPlatform := mocks.NewMockPlatform()
@@ -673,6 +676,14 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Nil(t, result)
+
+			// Cancel the background indexing goroutine and wait for it
+			// to finish so it doesn't leak into the next subtest.
+			appState.StopService()
+			require.Eventually(t, func() bool {
+				return !statusInstance.isRunning()
+			}, 5*time.Second, 10*time.Millisecond,
+				"background indexing goroutine did not stop")
 
 			// Verify mock expectations were met
 			mockMediaDB.AssertExpectations(t)
