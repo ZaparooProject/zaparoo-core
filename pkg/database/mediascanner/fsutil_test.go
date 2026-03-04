@@ -137,14 +137,22 @@ func TestEvalSymlinksWithContext_Success(t *testing.T) {
 
 	resolved, err := evalSymlinksWithContext(context.Background(), link)
 	require.NoError(t, err)
-	assert.Equal(t, target, resolved)
+	// EvalSymlinks resolves all symlinks in the path, including those in
+	// the temp dir itself (e.g. /var -> /private/var on macOS).
+	expected, err := filepath.EvalSymlinks(target)
+	require.NoError(t, err)
+	assert.Equal(t, expected, resolved)
 }
 
 func TestEvalSymlinksWithContext_NoSymlink(t *testing.T) {
 	dir := t.TempDir()
 	resolved, err := evalSymlinksWithContext(context.Background(), dir)
 	require.NoError(t, err)
-	assert.Equal(t, dir, resolved)
+	// EvalSymlinks resolves all symlinks in the path, including those in
+	// the temp dir itself (e.g. /var -> /private/var on macOS).
+	expected, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	assert.Equal(t, expected, resolved)
 }
 
 func TestEvalSymlinksWithContext_ContextCancelled(t *testing.T) {
