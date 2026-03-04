@@ -44,7 +44,7 @@ import (
 func findRetroBatDir(cfg *config.Instance) (string, error) {
 	// Check user-configured directory first
 	if def := cfg.LookupLauncherDefaults("RetroBat", nil); def.InstallDir != "" {
-		if normalizedPath, err := mediascanner.FindPath(def.InstallDir); err == nil {
+		if normalizedPath, err := mediascanner.FindPath(context.Background(), def.InstallDir); err == nil {
 			log.Debug().Msgf("using user-configured RetroBat directory: %s", normalizedPath)
 			return normalizedPath, nil
 		}
@@ -67,7 +67,7 @@ func findRetroBatDir(cfg *config.Instance) (string, error) {
 			retroBatExe := filepath.Join(path, "retrobat.exe")
 			if _, err := os.Stat(retroBatExe); err == nil {
 				// Use FindPath to get the actual filesystem case
-				if normalizedPath, err := mediascanner.FindPath(path); err == nil {
+				if normalizedPath, err := mediascanner.FindPath(context.Background(), path); err == nil {
 					return normalizedPath, nil
 				}
 				// Fallback to original path if FindPath fails (shouldn't happen)

@@ -20,6 +20,7 @@
 package mediascanner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -29,6 +30,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var bgCtx = context.Background()
 
 // TestFindPath_BasicFunctionality tests that FindPath works for simple cases
 func TestFindPath_BasicFunctionality(t *testing.T) {
@@ -45,18 +48,18 @@ func TestFindPath_BasicFunctionality(t *testing.T) {
 	require.NoError(t, os.WriteFile(testFile, []byte("test"), 0o600))
 
 	// Test finding existing directory
-	result, err := FindPath(testDir)
+	result, err := FindPath(bgCtx, testDir)
 	require.NoError(t, err)
 	assert.Equal(t, testDir, result)
 
 	// Test finding existing file
-	result, err = FindPath(testFile)
+	result, err = FindPath(bgCtx, testFile)
 	require.NoError(t, err)
 	assert.Equal(t, testFile, result)
 
 	// Test non-existent path
 	nonExistent := filepath.Join(tmpDir, "DoesNotExist")
-	_, err = FindPath(nonExistent)
+	_, err = FindPath(bgCtx, nonExistent)
 	assert.Error(t, err)
 }
 
@@ -131,7 +134,7 @@ func TestFindPath_CaseNormalization(t *testing.T) {
 				t.Skip("Skipping on Windows")
 			}
 
-			result, err := FindPath(tt.inputPath)
+			result, err := FindPath(bgCtx, tt.inputPath)
 			require.NoError(t, err, "FindPath should succeed for: %s", tt.description)
 
 			// The critical assertion: result should match filesystem case, not input case
@@ -171,7 +174,7 @@ func TestFindPath_RegressionWindowsCaseBug(t *testing.T) {
 	// Input path with wrong case (lowercase 'b')
 	wrongCasePath := filepath.Join(tmpDir, "Retrobat", "roms", "megadrive", "3 Ninjas Kick Back (USA).md")
 
-	result, err := FindPath(wrongCasePath)
+	result, err := FindPath(bgCtx, wrongCasePath)
 	require.NoError(t, err, "FindPath must succeed even with wrong case input")
 
 	// CRITICAL: Result must have correct case, not input case
@@ -209,7 +212,7 @@ func TestFindPath_ErrorCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := FindPath(tt.inputPath)
+			_, err := FindPath(bgCtx, tt.inputPath)
 			if tt.shouldError {
 				assert.Error(t, err, tt.description)
 			} else {
@@ -230,7 +233,7 @@ func TestFindPath_WindowsVolumes(t *testing.T) {
 	// Test that volume names are preserved
 	// We can't easily create fake volumes, so we test with C: which should exist
 	cDrive := "C:\\"
-	result, err := FindPath(cDrive)
+	result, err := FindPath(bgCtx, cDrive)
 	// This might fail if C: doesn't exist (unlikely but possible)
 	if err != nil {
 		t.Skip("C:\\ not accessible, skipping volume test")
@@ -257,7 +260,7 @@ func TestFindPath_Performance(t *testing.T) {
 	}
 
 	// FindPath should complete in reasonable time even for deep paths
-	result, err := FindPath(deepPath)
+	result, err := FindPath(bgCtx, deepPath)
 	require.NoError(t, err)
 	assert.Equal(t, deepPath, result)
 }
@@ -281,7 +284,7 @@ func TestFindPath_SymlinkHandling(t *testing.T) {
 	require.NoError(t, os.Symlink(target, link))
 
 	// FindPath should resolve the symlink
-	result, err := FindPath(link)
+	result, err := FindPath(bgCtx, link)
 	require.NoError(t, err)
 	assert.NotEmpty(t, result)
 }
@@ -305,12 +308,12 @@ func TestFindPath_LinuxCaseAmbiguity(t *testing.T) {
 	require.NoError(t, os.WriteFile(lowerFile, []byte("lower"), 0o600))
 
 	// When we ask for FILE.txt, we should get FILE.txt (exact match), not file.txt
-	result, err := FindPath(upperFile)
+	result, err := FindPath(bgCtx, upperFile)
 	require.NoError(t, err)
 	assert.Equal(t, upperFile, result, "Should prefer exact match on Linux")
 
 	// When we ask for file.txt, we should get file.txt (exact match), not FILE.txt
-	result, err = FindPath(lowerFile)
+	result, err = FindPath(bgCtx, lowerFile)
 	require.NoError(t, err)
 	assert.Equal(t, lowerFile, result, "Should prefer exact match on Linux")
 
@@ -341,7 +344,7 @@ func TestFindPath_ShortFilenames(t *testing.T) {
 	}
 
 	// FindPath should handle short names via the os.Stat fallback
-	result, err := FindPath(shortPath)
+	result, err := FindPath(bgCtx, shortPath)
 	// We accept either success with short name, or success with long name
 	if err != nil {
 		t.Logf("FindPath failed on short name: %v", err)
@@ -391,7 +394,7 @@ func TestFindPath_DirtyPaths(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dirtyPath := tt.buildPath(tmpDir)
 
-			result, err := FindPath(dirtyPath)
+			result, err := FindPath(bgCtx, dirtyPath)
 			require.NoError(t, err, tt.description)
 			assert.Equal(t, targetFile, result, tt.description)
 		})
@@ -415,7 +418,7 @@ func TestFindPath_Unicode(t *testing.T) {
 	require.NoError(t, os.WriteFile(unicodeFile, []byte("test"), 0o600))
 
 	// Test finding the file
-	result, err := FindPath(unicodeFile)
+	result, err := FindPath(bgCtx, unicodeFile)
 	require.NoError(t, err, "Should handle Unicode characters in path")
 	assert.Equal(t, unicodeFile, result)
 }
@@ -433,7 +436,7 @@ func TestFindPath_DotFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(dotFile, []byte("test"), 0o600))
 
 	// FindPath should handle dot files/directories
-	result, err := FindPath(dotFile)
+	result, err := FindPath(bgCtx, dotFile)
 	require.NoError(t, err, "Should handle dot files")
 	assert.Equal(t, dotFile, result)
 }
@@ -451,7 +454,7 @@ func TestFindPath_SpecialCharacters(t *testing.T) {
 	require.NoError(t, os.WriteFile(specialFile, []byte("test"), 0o600))
 
 	// FindPath should handle special characters
-	result, err := FindPath(specialFile)
+	result, err := FindPath(bgCtx, specialFile)
 	require.NoError(t, err, "Should handle special characters in path")
 	assert.Equal(t, specialFile, result)
 }
@@ -477,7 +480,7 @@ func TestFindPath_VeryDeepStructure(t *testing.T) {
 	file := filepath.Join(current, "test.txt")
 	require.NoError(t, os.WriteFile(file, []byte("data"), 0o600))
 
-	result, err := FindPath(file)
+	result, err := FindPath(bgCtx, file)
 	require.NoError(t, err, "Should handle very long paths")
 	assert.Equal(t, file, result)
 
@@ -495,7 +498,7 @@ func TestFindPath_RootPaths(t *testing.T) {
 			t.Skip("Skipping Unix root test on Windows")
 		}
 
-		result, err := FindPath("/")
+		result, err := FindPath(bgCtx, "/")
 		if err != nil {
 			t.Logf("Root path not accessible: %v", err)
 			return
@@ -508,7 +511,7 @@ func TestFindPath_RootPaths(t *testing.T) {
 
 	// Test current directory
 	t.Run("Current directory", func(t *testing.T) {
-		result, err := FindPath(".")
+		result, err := FindPath(bgCtx, ".")
 		if err != nil {
 			t.Logf("Current directory not accessible: %v", err)
 			return

@@ -822,7 +822,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return results, fmt.Errorf("failed to get Amiga system: %w", err)
 			}
 
-			sfs := mediascanner.GetSystemPaths(cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
+			sfs := mediascanner.GetSystemPaths(ctx, cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
 			log.Debug().Int("paths", len(sfs)).Msg("amigavision scan paths found")
 
 			for _, sf := range sfs {
@@ -833,7 +833,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				}
 
 				for _, txt := range []string{aGamesPath, aDemosPath} {
-					tp, err := mediascanner.FindPath(filepath.Join(sf.Path, txt))
+					tp, err := mediascanner.FindPath(ctx, filepath.Join(sf.Path, txt))
 					if err == nil {
 						f, err := os.Open(tp) //nolint:gosec // Internal amiga games/demos path
 						if err != nil {
@@ -905,7 +905,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return results, fmt.Errorf("failed to get NeoGeo system: %w", err)
 			}
 
-			sfs := mediascanner.GetSystemPaths(cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
+			sfs := mediascanner.GetSystemPaths(ctx, cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
 			log.Debug().Int("paths", len(sfs)).Msg("neogeo scan paths found")
 
 			// Collect NEOGEO paths for filtering
@@ -922,7 +922,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				default:
 				}
 
-				rsf, err := mediascanner.FindPath(filepath.Join(sf.Path, romsetsFilename))
+				rsf, err := mediascanner.FindPath(ctx, filepath.Join(sf.Path, romsetsFilename))
 				if err == nil {
 					romsets, readErr := readRomsets(rsf)
 					if readErr != nil {

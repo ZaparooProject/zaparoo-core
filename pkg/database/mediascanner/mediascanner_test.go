@@ -165,7 +165,7 @@ func TestGetSystemPathsRespectsSkipFilesystemScan(t *testing.T) {
 
 	// Call GetSystemPaths - this will test the folder aggregation logic
 	// Even with empty root folders, we can verify the function respects SkipFilesystemScan
-	results := GetSystemPaths(cfg, mockPlatform, []string{}, systems)
+	results := GetSystemPaths(context.Background(), cfg, mockPlatform, []string{}, systems)
 
 	// Since GetSystemPaths tries to resolve actual paths and we have no real folders,
 	// we expect empty results, but the important part is that the function
@@ -1235,11 +1235,11 @@ func TestAnyScannerProgressUpdates(t *testing.T) {
 		"Status update should have been called with the test system ID from 'any' scanner")
 
 	// Verify that status.Total was dynamically expanded (should be > initial value)
-	// Initial total is len(sysPathIDs) + 2, but since there are no paths, it starts at 2
+	// Initial total is len(sysPathIDs) + 1, but since there are no paths, it starts at 1
 	// After "any" scanner finds results, Total should be incremented
 	if len(statusUpdates) > 0 {
 		lastStatus := statusUpdates[len(statusUpdates)-1]
-		assert.GreaterOrEqual(t, lastStatus.Total, 3,
+		assert.GreaterOrEqual(t, lastStatus.Total, 2,
 			"Total should be dynamically expanded when 'any' scanner finds results")
 	}
 }
@@ -1288,7 +1288,7 @@ func TestGetSystemPaths_CustomLauncherAbsolutePaths(t *testing.T) {
 
 	// Call GetSystemPaths with no root folders (custom launchers use absolute paths)
 	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
-	results := GetSystemPaths(cfg, platform, []string{}, systems)
+	results := GetSystemPaths(context.Background(), cfg, platform, []string{}, systems)
 
 	// The custom launcher's absolute folder should be resolved
 	require.Len(t, results, 1, "Should find exactly one path for PS2 custom launcher")
