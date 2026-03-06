@@ -24,12 +24,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -37,7 +37,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/charlievieth/fastwalk"
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
@@ -204,7 +206,6 @@ func GetSystemPaths(
 	systems []systemdefs.System,
 ) []PathResult {
 	var matches []PathResult
-	cache := newDirCache()
 
 	log.Info().
 		Int("rootFolders", len(rootFolders)).
@@ -230,15 +231,6 @@ func GetSystemPaths(
 			continue
 		}
 		validRootFolders = append(validRootFolders, gf)
-
-		// Pre-cache the root folder listing
-		if _, cacheErr := cache.list(ctx, gf); cacheErr != nil {
-			if ctx.Err() != nil {
-				log.Info().Msg("path discovery cancelled")
-				return matches
-			}
-			log.Debug().Err(cacheErr).Str("path", gf).Msg("failed to cache root folder listing")
-		}
 	}
 
 	log.Info().
@@ -281,36 +273,18 @@ func GetSystemPaths(
 			Strs("rootFolders", validRootFolders).
 			Msg("resolving system paths")
 
-		// check for <root>/<folder>
 		for _, gf := range validRootFolders {
 			for _, folder := range folders {
-				// Use cached directory listing for single-component folder names
-				if !strings.Contains(folder, string(filepath.Separator)) && !filepath.IsAbs(folder) {
-					actualName, findErr := cache.findEntry(ctx, gf, folder)
-					if findErr != nil {
-						if ctx.Err() != nil {
-							return matches
-						}
-						continue
-					}
-					if actualName != "" {
-						matches = append(matches, PathResult{
-							System: system,
-							Path:   filepath.Join(gf, actualName),
-						})
-					}
-					continue
+				if filepath.IsAbs(folder) {
+					continue // handled separately below
 				}
 
-				// Multi-component paths fall through to full FindPath
 				systemFolder := filepath.Join(gf, folder)
 				path, err := FindPath(ctx, systemFolder)
 				if err != nil {
 					if ctx.Err() != nil {
 						return matches
 					}
-					log.Debug().Err(err).Str("path", systemFolder).Str("system", system.ID).
-						Msg("skipping system folder - not found or inaccessible")
 					continue
 				}
 
@@ -321,24 +295,22 @@ func GetSystemPaths(
 			}
 		}
 
-		// check for absolute paths
 		for _, folder := range folders {
-			if filepath.IsAbs(folder) {
-				systemFolder := folder
-				path, err := FindPath(ctx, systemFolder)
-				if err != nil {
-					if ctx.Err() != nil {
-						return matches
-					}
-					log.Debug().Err(err).Str("path", systemFolder).Str("system", system.ID).
-						Msg("skipping absolute path - not found or inaccessible")
-					continue
-				}
-				matches = append(matches, PathResult{
-					System: system,
-					Path:   path,
-				})
+			if !filepath.IsAbs(folder) {
+				continue
 			}
+
+			path, err := FindPath(ctx, folder)
+			if err != nil {
+				if ctx.Err() != nil {
+					return matches
+				}
+				continue
+			}
+			matches = append(matches, PathResult{
+				System: system,
+				Path:   path,
+			})
 		}
 	}
 
@@ -362,37 +334,9 @@ func GetSystemPaths(
 	return deduplicated
 }
 
-type resultsStack struct {
-	results [][]string
-}
-
-func newResultsStack() *resultsStack {
-	return &resultsStack{
-		results: make([][]string, 0),
-	}
-}
-
-func (r *resultsStack) push() {
-	r.results = append(r.results, make([]string, 0))
-}
-
-func (r *resultsStack) pop() {
-	if len(r.results) == 0 {
-		return
-	}
-	r.results = r.results[:len(r.results)-1]
-}
-
-func (r *resultsStack) get() (*[]string, error) {
-	if len(r.results) == 0 {
-		return nil, errors.New("nothing on stack")
-	}
-	return &r.results[len(r.results)-1], nil
-}
-
 // GetFiles searches for all valid games in a given path and returns a list of
-// files. This function deep searches .zip files and handles symlinks at all
-// levels.
+// files. Uses fastwalk for parallel directory traversal with built-in symlink
+// cycle detection. Deep searches .zip files when ZipsAsDirs is enabled.
 func GetFiles(
 	ctx context.Context,
 	cfg *config.Instance,
@@ -400,207 +344,110 @@ func GetFiles(
 	systemID string,
 	path string,
 ) ([]string, error) {
-	var allResults []string
-	stack := newResultsStack()
-	visited := make(map[string]struct{})
-
 	system, err := systemdefs.GetSystem(systemID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
 	}
 
-	entriesScanned := 0
+	var entriesScanned atomic.Int64
 	walkStartTime := time.Now()
-	lastProgressLog := time.Now()
 
-	var scanner func(path string, file fs.DirEntry, err error) error
-	scanner = func(path string, file fs.DirEntry, _ error) error {
-		// Check for cancellation
+	var mu syncutil.Mutex
+	var results []string
+
+	conf := &fastwalk.Config{
+		Follow: true,
+	}
+
+	log.Debug().Str("system", systemID).Str("path", path).Msg("starting directory walk")
+	err = fastwalk.Walk(conf, path, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			log.Warn().Err(err).Str("path", p).Msg("walk error")
+			return nil
+		}
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		entriesScanned++
-		if entriesScanned%5000 == 0 || time.Since(lastProgressLog) > 10*time.Second {
+		n := entriesScanned.Add(1)
+		if n%5000 == 0 {
 			log.Debug().
 				Str("system", systemID).
-				Str("path", path).
-				Int("entriesScanned", entriesScanned).
+				Str("path", p).
+				Int64("entriesScanned", n).
 				Dur("elapsed", time.Since(walkStartTime)).
 				Msg("directory walk progress")
-			lastProgressLog = time.Now()
 		}
 
-		// avoid recursive symlinks
-		if file.IsDir() {
-			key := path
-			if file.Type()&os.ModeSymlink != 0 {
-				realPath, symlinkErr := evalSymlinksWithContext(ctx, path)
-				if symlinkErr != nil {
-					return fmt.Errorf("failed to evaluate symlink %s: %w", path, symlinkErr)
-				}
-				key = realPath
-			}
-			if _, seen := visited[key]; seen {
-				return filepath.SkipDir
-			}
-			visited[key] = struct{}{}
-
-			// Check for .zaparooignore marker file
-			markerPath := filepath.Join(path, ".zaparooignore")
+		if d.IsDir() {
+			markerPath := filepath.Join(p, ".zaparooignore")
 			if _, statErr := statWithContext(ctx, markerPath); statErr == nil {
-				log.Info().Str("path", path).Msg("skipping directory with .zaparooignore marker")
+				log.Info().Str("path", p).Msg("skipping directory with .zaparooignore marker")
 				return filepath.SkipDir
 			}
+			return nil
 		}
 
-		// handle symlinked directories
-		if file.Type()&os.ModeSymlink != 0 {
-			log.Trace().Str("path", path).Msg("processing symlink")
-			absSym, absErr := filepath.Abs(path)
-			if absErr != nil {
-				return fmt.Errorf("failed to get absolute path for %s: %w", path, absErr)
-			}
-
-			realPath, realPathErr := evalSymlinksWithContext(ctx, absSym)
-			if realPathErr != nil {
-				return fmt.Errorf("failed to evaluate symlink %s: %w", absSym, realPathErr)
-			}
-			log.Trace().Str("symlink", path).Str("target", realPath).Msg("resolved symlink")
-
-			file, statErr := statWithContext(ctx, realPath)
-			if statErr != nil {
-				return fmt.Errorf("failed to stat symlink target %s: %w", realPath, statErr)
-			}
-
-			if file.IsDir() {
-				stack.push()
-				defer stack.pop()
-
-				walkErr := filepath.WalkDir(realPath, scanner)
-				if walkErr != nil {
-					return fmt.Errorf("failed to walk directory %s: %w", realPath, walkErr)
-				}
-
-				results, stackErr := stack.get()
-				if stackErr != nil {
-					return stackErr
-				}
-
-				for i := range *results {
-					allResults = append(allResults, strings.Replace((*results)[i], realPath, path, 1))
-				}
-
-				return nil
-			}
-		}
-
-		results, stackErr := stack.get()
-		if stackErr != nil {
-			return stackErr
-		}
-
-		if helpers.IsZip(path) && platform.Settings().ZipsAsDirs {
-			// zip files
-			log.Trace().Str("path", path).Msg("opening zip file for indexing")
-			zipFiles, zipErr := helpers.ListZip(path)
+		if helpers.IsZip(p) && platform.Settings().ZipsAsDirs {
+			log.Trace().Str("path", p).Msg("opening zip file for indexing")
+			zipFiles, zipErr := helpers.ListZip(p)
 			if zipErr != nil {
-				// skip invalid zip files
-				log.Warn().Err(zipErr).Msgf("error listing zip: %s", path)
+				log.Warn().Err(zipErr).Msgf("error listing zip: %s", p)
 				return nil
 			}
 
+			mu.Lock()
 			for i := range zipFiles {
-				abs := filepath.Join(path, zipFiles[i])
+				abs := filepath.Join(p, zipFiles[i])
 				if helpers.MatchSystemFile(cfg, platform, system.ID, abs) {
-					*results = append(*results, abs)
+					results = append(results, abs)
 				}
 			}
-		} else if helpers.MatchSystemFile(cfg, platform, system.ID, path) {
-			// regular files
-			*results = append(*results, path)
+			mu.Unlock()
+		} else if helpers.MatchSystemFile(cfg, platform, system.ID, p) {
+			mu.Lock()
+			results = append(results, p)
+			mu.Unlock()
 		}
 
 		return nil
-	}
-
-	stack.push()
-	defer stack.pop()
-
-	root, err := lstatWithContext(ctx, path)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to stat path %s: %w", path, err)
+		return nil, fmt.Errorf("failed to walk directory %s: %w", path, err)
 	}
 
-	// handle symlinks on the root game folder because WalkDir fails silently on them
-	var realPath string
-	if root.Mode()&os.ModeSymlink == 0 {
-		realPath = path
-	} else {
-		realPath, err = evalSymlinksWithContext(ctx, path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate symlink %s: %w", path, err)
-		}
-	}
-
-	realRoot, err := statWithContext(ctx, realPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat real path %s: %w", realPath, err)
-	}
-
-	if !realRoot.IsDir() {
-		return nil, errors.New("root is not a directory")
-	}
-
-	log.Debug().Str("system", systemID).Str("path", realPath).Msg("starting directory walk")
-	err = filepath.WalkDir(realPath, scanner)
-	if err != nil {
-		return nil, fmt.Errorf("failed to walk directory %s: %w", realPath, err)
-	}
+	scanned := entriesScanned.Load()
 	walkElapsed := time.Since(walkStartTime)
-
-	results, err := stack.get()
-	if err != nil {
-		return nil, err
-	}
-
-	allResults = append(allResults, *results...)
 
 	log.Debug().
 		Str("system", systemID).
-		Str("path", realPath).
-		Int("entriesScanned", entriesScanned).
-		Int("filesFound", len(allResults)).
+		Str("path", path).
+		Int64("entriesScanned", scanned).
+		Int("filesFound", len(results)).
 		Dur("elapsed", walkElapsed).
 		Msg("completed directory walk")
 
-	if entriesScanned > 0 && len(allResults) == 0 {
+	if scanned > 0 && len(results) == 0 {
 		log.Info().
 			Str("system", systemID).
-			Str("path", realPath).
-			Int("entriesScanned", entriesScanned).
+			Str("path", path).
+			Int64("entriesScanned", scanned).
 			Msg("directory walk found entries but no files matched any launcher")
 	}
 
 	if walkElapsed > 15*time.Second {
 		log.Warn().
 			Str("system", systemID).
-			Str("path", realPath).
-			Int("entriesScanned", entriesScanned).
+			Str("path", path).
+			Int64("entriesScanned", scanned).
 			Dur("elapsed", walkElapsed).
 			Msg("directory walk took longer than expected - large directory or slow storage")
 	}
 
-	// change root back to symlink
-	if realPath != path {
-		for i := range allResults {
-			allResults[i] = strings.Replace(allResults[i], realPath, path, 1)
-		}
-	}
-
-	return allResults, nil
+	return results, nil
 }
 
 // handleCancellation performs cleanup when media indexing is cancelled

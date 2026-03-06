@@ -79,19 +79,19 @@ type httpDoer interface {
 
 var zapFetchTransport = &http.Transport{
 	DialContext: (&net.Dialer{
-		Timeout:   1 * time.Second,
+		Timeout:   2 * time.Second,
 		KeepAlive: 10 * time.Second,
 	}).DialContext,
-	TLSHandshakeTimeout:   1 * time.Second,
-	ResponseHeaderTimeout: 1 * time.Second,
-	ExpectContinueTimeout: 500 * time.Millisecond,
+	TLSHandshakeTimeout:   2 * time.Second,
+	ResponseHeaderTimeout: 5 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
 }
 
 var zapFetchClient = &http.Client{
 	Transport: &installer.AuthTransport{
 		Base: zapFetchTransport,
 	},
-	Timeout: 2 * time.Second,
+	Timeout: 10 * time.Second,
 }
 
 // ErrWellKnownNotFound is returned when the .well-known/zaparoo endpoint

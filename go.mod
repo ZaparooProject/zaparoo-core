@@ -11,6 +11,7 @@ require (
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
+	github.com/charlievieth/fastwalk v1.0.14
 	github.com/clausecker/nfc/v2 v2.1.4
 	github.com/cloudsoda/go-smb2 v0.0.0-20250228001242-d4c70e6251cc
 	github.com/creativeprojects/go-selfupdate v1.5.2
