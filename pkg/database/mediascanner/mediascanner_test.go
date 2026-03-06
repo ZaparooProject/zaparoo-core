@@ -20,6 +20,7 @@
 package mediascanner
 
 import (
+	"archive/zip"
 	"context"
 	"database/sql"
 	"os"
@@ -1842,4 +1843,180 @@ func TestZaparooignoreMarker(t *testing.T) {
 				"total number of found files should match expected count")
 		})
 	}
+}
+
+func TestGetSystemPaths_RelativeFolderResolution(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create a root directory with system subdirectories
+	rootDir := t.TempDir()
+	nesDir := filepath.Join(rootDir, "NES")
+	snesDir := filepath.Join(rootDir, "SNES")
+	require.NoError(t, os.MkdirAll(nesDir, 0o750))
+	require.NoError(t, os.MkdirAll(snesDir, 0o750))
+
+	// Create launchers with relative folder names (the common case)
+	launchers := []platforms.Launcher{
+		{
+			ID:         "nes-launcher",
+			SystemID:   systemdefs.SystemNES,
+			Folders:    []string{"NES"},
+			Extensions: []string{".nes"},
+		},
+		{
+			ID:         "snes-launcher",
+			SystemID:   systemdefs.SystemSNES,
+			Folders:    []string{"SNES"},
+			Extensions: []string{".sfc"},
+		},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(launchers)
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	systems := []systemdefs.System{
+		{ID: systemdefs.SystemNES},
+		{ID: systemdefs.SystemSNES},
+	}
+	results := GetSystemPaths(context.Background(), cfg, platform, []string{rootDir}, systems)
+
+	require.Len(t, results, 2)
+
+	pathsBySystem := make(map[string]string)
+	for _, r := range results {
+		pathsBySystem[r.System.ID] = r.Path
+	}
+	assert.Equal(t, nesDir, pathsBySystem[systemdefs.SystemNES])
+	assert.Equal(t, snesDir, pathsBySystem[systemdefs.SystemSNES])
+}
+
+func TestGetSystemPaths_NonexistentFolderSkipped(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+	// Only create NES, not SNES
+	nesDir := filepath.Join(rootDir, "NES")
+	require.NoError(t, os.MkdirAll(nesDir, 0o750))
+
+	launchers := []platforms.Launcher{
+		{
+			ID:         "nes-launcher",
+			SystemID:   systemdefs.SystemNES,
+			Folders:    []string{"NES"},
+			Extensions: []string{".nes"},
+		},
+		{
+			ID:         "snes-launcher",
+			SystemID:   systemdefs.SystemSNES,
+			Folders:    []string{"SNES"},
+			Extensions: []string{".sfc"},
+		},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(launchers)
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	systems := []systemdefs.System{
+		{ID: systemdefs.SystemNES},
+		{ID: systemdefs.SystemSNES},
+	}
+	results := GetSystemPaths(context.Background(), cfg, platform, []string{rootDir}, systems)
+
+	// Only NES should be found, SNES folder doesn't exist
+	require.Len(t, results, 1)
+	assert.Equal(t, systemdefs.SystemNES, results[0].System.ID)
+	assert.Equal(t, nesDir, results[0].Path)
+}
+
+func TestGetFiles_ZipsAsDirs(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+
+	// Create a zip file containing game ROMs
+	zipPath := filepath.Join(rootDir, "games.zip")
+	zipFile, err := os.Create(zipPath) //nolint:gosec // test file in t.TempDir()
+	require.NoError(t, err)
+	w := zip.NewWriter(zipFile)
+	for _, name := range []string{"game1.nes", "game2.nes", "readme.txt"} {
+		fw, createErr := w.Create(name)
+		require.NoError(t, createErr)
+		_, writeErr := fw.Write([]byte("data"))
+		require.NoError(t, writeErr)
+	}
+	require.NoError(t, w.Close())
+	require.NoError(t, zipFile.Close())
+
+	launcher := platforms.Launcher{
+		ID:         "nes-launcher",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{rootDir},
+		Extensions: []string{".nes"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	ctx := context.Background()
+	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir)
+	require.NoError(t, err)
+
+	// Should find the 2 .nes files inside the zip, but not readme.txt
+	assert.Len(t, files, 2)
+	foundFiles := make(map[string]bool)
+	for _, f := range files {
+		foundFiles[filepath.Base(f)] = true
+	}
+	assert.True(t, foundFiles["game1.nes"])
+	assert.True(t, foundFiles["game2.nes"])
+	assert.False(t, foundFiles["readme.txt"])
 }
