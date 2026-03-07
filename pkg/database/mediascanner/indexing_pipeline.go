@@ -161,6 +161,7 @@ func AddMediaPath(
 			Path:           pf.Path,
 			MediaTitleDBID: int64(titleIndex),
 			SystemDBID:     int64(systemIndex),
+			IsMissing:      0,
 		})
 		if err != nil {
 			ss.MediaIndex-- // Rollback index increment on failure
@@ -169,6 +170,16 @@ func AddMediaPath(
 		ss.MediaIDs[mediaKey] = mediaIndex
 	} else {
 		mediaIndex = foundMediaIndex
+		// Update anyway to mark found
+		db.InsertMedia(database.Media{
+			DBID:           0, // Use 0 for NULL binding to force CONFLICT constraint update
+			Path:           pf.Path,
+			MediaTitleDBID: int64(titleIndex),
+			SystemDBID:     int64(systemIndex),
+			IsMissing:      0,
+		})
+		// Don't process tags if found
+		return titleIndex, mediaIndex, nil
 	}
 
 	// Extract extension tag only if filename tags are enabled

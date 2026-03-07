@@ -290,7 +290,7 @@ func TestBatchInserter_OrIgnoreDuplicates(t *testing.T) {
 
 	// Create batch inserter with OR IGNORE
 	bi, err := NewBatchInserterWithOptions(ctx, tx, "test_table",
-		[]string{"DBID", "SystemID", "Name"}, 10, true)
+		[]string{"DBID", "SystemID", "Name"}, 10, true, "")
 	require.NoError(t, err)
 
 	// Add rows including duplicates
