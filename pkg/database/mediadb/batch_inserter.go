@@ -41,6 +41,7 @@ type BatchInserter struct {
 	columnCount  int
 	currentCount int
 	orIgnore     bool
+	onConflict   string
 }
 
 // NewBatchInserter creates a batch inserter for the given table
@@ -51,7 +52,7 @@ func NewBatchInserter(
 	columns []string,
 	batchSize int,
 ) (*BatchInserter, error) {
-	return NewBatchInserterWithOptions(ctx, tx, tableName, columns, batchSize, false)
+	return NewBatchInserterWithOptions(ctx, tx, tableName, columns, batchSize, false, "")
 }
 
 // NewBatchInserterWithOptions creates a batch inserter with OR IGNORE option
@@ -62,6 +63,7 @@ func NewBatchInserterWithOptions(
 	columns []string,
 	batchSize int,
 	orIgnore bool,
+	onConflict string,
 ) (*BatchInserter, error) {
 	if tx == nil {
 		return nil, errors.New("transaction is nil")
@@ -86,6 +88,7 @@ func NewBatchInserterWithOptions(
 		buffer:       make([]any, 0, batchSize*len(columns)),
 		currentCount: 0,
 		orIgnore:     orIgnore,
+		onConflict:   onConflict,
 	}, nil
 }
 
@@ -306,7 +309,7 @@ func (b *BatchInserter) generateMultiRowInsertSQL(rowCount int) string {
 	placeholder := "(" + strings.Repeat("?, ", b.columnCount-1) + "?)"
 	placeholders := strings.Repeat(placeholder+",\n    ", rowCount-1) + placeholder
 
-	return fmt.Sprintf("%s INTO %s (%s) VALUES\n    %s", insertKeyword, b.tableName, colNames, placeholders)
+	return fmt.Sprintf("%s INTO %s (%s) VALUES\n    %s \n%s", insertKeyword, b.tableName, colNames, placeholders, b.onConflict)
 }
 
 // generateSingleRowInsertSQL creates a single-row INSERT statement
@@ -318,5 +321,5 @@ func (b *BatchInserter) generateSingleRowInsertSQL() string {
 
 	colNames := strings.Join(b.columns, ", ")
 	placeholders := strings.Repeat("?, ", b.columnCount-1) + "?"
-	return fmt.Sprintf("%s INTO %s (%s) VALUES (%s)", insertKeyword, b.tableName, colNames, placeholders)
+	return fmt.Sprintf("%s INTO %s (%s) VALUES (%s) %s", insertKeyword, b.tableName, colNames, placeholders, b.onConflict)
 }

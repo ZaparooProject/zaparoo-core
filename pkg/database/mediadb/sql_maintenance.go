@@ -137,6 +137,36 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 	return nil
 }
 
+func sqlMarkSystemsMediaMissing(ctx context.Context, db *sql.DB, systemIDs []string) error {
+	if len(systemIDs) == 0 {
+		return nil
+	}
+
+	// Create placeholders for IN clause
+	placeholders := prepareVariadic("?", ",", len(systemIDs))
+
+	// Convert systemIDs to interface slice for query parameters
+	args := make([]any, len(systemIDs))
+	for i, id := range systemIDs {
+		args[i] = id
+	}
+	deleteStmt := fmt.Sprintf("UPDATE Media SET IsMissing = 1 FROM Systems WHERE Systems.DBID = Media.SystemDBID AND SystemID IN (%s)", placeholders)
+	_, err := db.ExecContext(ctx, deleteStmt, args...)
+	if err != nil {
+		return fmt.Errorf("failed to mark systems media missing: %w", err)
+	}
+
+	return nil
+}
+
+func sqlMarkAllMediaMissing(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, "UPDATE Media SET IsMissing = 1")
+	if err != nil {
+		return fmt.Errorf("failed to mark all media missing: %w", err)
+	}
+	return nil
+}
+
 func sqlVacuum(ctx context.Context, db *sql.DB) error {
 	sqlStmt := `
 	vacuum;
