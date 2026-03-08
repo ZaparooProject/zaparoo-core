@@ -34,6 +34,7 @@ type BatchInserter struct {
 	ctx          context.Context
 	tx           *sql.Tx
 	tableName    string
+	onConflict   string
 	columns      []string
 	buffer       []any
 	dependencies []*BatchInserter
@@ -41,7 +42,6 @@ type BatchInserter struct {
 	columnCount  int
 	currentCount int
 	orIgnore     bool
-	onConflict   string
 }
 
 // NewBatchInserter creates a batch inserter for the given table
@@ -309,7 +309,14 @@ func (b *BatchInserter) generateMultiRowInsertSQL(rowCount int) string {
 	placeholder := "(" + strings.Repeat("?, ", b.columnCount-1) + "?)"
 	placeholders := strings.Repeat(placeholder+",\n    ", rowCount-1) + placeholder
 
-	return fmt.Sprintf("%s INTO %s (%s) VALUES\n    %s \n%s", insertKeyword, b.tableName, colNames, placeholders, b.onConflict)
+	query := fmt.Sprintf(
+		"%s INTO %s (%s) VALUES\n    %s",
+		insertKeyword, b.tableName, colNames, placeholders,
+	)
+	if b.onConflict != "" {
+		query += "\n" + b.onConflict
+	}
+	return query
 }
 
 // generateSingleRowInsertSQL creates a single-row INSERT statement
@@ -321,5 +328,12 @@ func (b *BatchInserter) generateSingleRowInsertSQL() string {
 
 	colNames := strings.Join(b.columns, ", ")
 	placeholders := strings.Repeat("?, ", b.columnCount-1) + "?"
-	return fmt.Sprintf("%s INTO %s (%s) VALUES (%s) %s", insertKeyword, b.tableName, colNames, placeholders, b.onConflict)
+	query := fmt.Sprintf(
+		"%s INTO %s (%s) VALUES (%s)",
+		insertKeyword, b.tableName, colNames, placeholders,
+	)
+	if b.onConflict != "" {
+		query += " " + b.onConflict
+	}
+	return query
 }

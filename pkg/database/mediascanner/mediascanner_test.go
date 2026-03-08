@@ -496,9 +496,10 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("GetLastIndexedSystem").Return("removed_system", nil).Once()
 	mockMediaDB.On("GetIndexingSystems").Return([]string{"nes"}, nil).Once() // Current systems
 	// When system not found, we clear state and then do fresh start
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()            // Clear after detecting missing system
-	mockMediaDB.On("SetIndexingStatus", "").Return(nil).Once()               // Clear status after missing system
-	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Once()    // Truncate only the current systems
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once() // Clear after detecting missing system
+	mockMediaDB.On("SetIndexingStatus", "").Return(nil).Once()    // Clear status after missing system
+	mockMediaDB.On("MarkSystemsMediaMissing", []string{"nes"}).Return(nil).Maybe()
+	mockMediaDB.On("MarkAllMediaMissing").Return(nil).Maybe()
 	mockMediaDB.On("SetIndexingSystems", []string{"nes"}).Return(nil).Once() // Set current systems for fresh start
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()        // Set running for fresh start
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()            // Clear for fresh start
@@ -559,7 +560,8 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 
 	// Mock basic database operations - fallback to fresh start
 	mockMediaDB.On("Truncate").Return(nil).Maybe()
-	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Maybe()
+	mockMediaDB.On("MarkSystemsMediaMissing", []string{"nes"}).Return(nil).Maybe()
+	mockMediaDB.On("MarkAllMediaMissing").Return(nil).Maybe()
 	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
@@ -713,9 +715,9 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
-	// Mock basic database operations - expect selective TruncateSystems()
-	// Will use TruncateSystems since not all systems
-	mockMediaDB.On("TruncateSystems", mock.AnythingOfType("[]string")).Return(nil).Once()
+	// Mock basic database operations - mark media missing for selective indexing
+	mockMediaDB.On("MarkSystemsMediaMissing", mock.AnythingOfType("[]string")).Return(nil).Maybe()
+	mockMediaDB.On("MarkAllMediaMissing").Return(nil).Maybe()
 	// Transaction calls for file processing only
 	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
@@ -769,22 +771,22 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 	}
 
 	// Test with subset of systems - 3 systems when systemdefs.AllSystems() returns 197 systems
-	// This should trigger selective indexing (TruncateSystems) since we're not indexing all systems
+	// This should trigger selective indexing (MarkSystemsMediaMissing) since we're not indexing all systems
 	systems := []systemdefs.System{
 		{ID: "nes"},
 		{ID: "snes"},
 		{ID: "genesis"},
 	}
 
-	// Run the indexer - should use TruncateSystems() since not indexing all defined systems
+	// Run the indexer - should use MarkSystemsMediaMissing() since not indexing all defined systems
 	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
 	require.NoError(t, err)
 
-	// Verify mock expectations - specifically that TruncateSystems() was called, not Truncate()
+	// Verify mock expectations
 	mockMediaDB.AssertExpectations(t)
 }
 
-// TestSmartTruncationLogic_SelectiveIndexing tests that selective system indexing uses TruncateSystems()
+// TestSmartTruncationLogic_SelectiveIndexing tests that selective system indexing uses MarkSystemsMediaMissing()
 func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 	t.Parallel()
 
@@ -800,8 +802,9 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
-	// Mock basic database operations - expect selective TruncateSystems()
-	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Once() // Should use selective truncate
+	// Mock basic database operations - mark media missing for selective indexing
+	mockMediaDB.On("MarkSystemsMediaMissing", []string{"nes"}).Return(nil).Maybe()
+	mockMediaDB.On("MarkAllMediaMissing").Return(nil).Maybe()
 	// Transaction calls for file processing only
 	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
@@ -859,11 +862,11 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 		{ID: "nes"}, // Only one system, while database has more
 	}
 
-	// Run the indexer - should use TruncateSystems() since only indexing subset
+	// Run the indexer - should use MarkSystemsMediaMissing() since only indexing subset
 	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
 	require.NoError(t, err)
 
-	// Verify mock expectations - specifically that TruncateSystems() was called, not Truncate()
+	// Verify mock expectations
 	mockMediaDB.AssertExpectations(t)
 }
 
@@ -883,9 +886,9 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
-	// Mock basic database operations - should fall back to fresh start when systems differ
-	// Uses selective truncate since not indexing all systems
-	mockMediaDB.On("TruncateSystems", []string{"nes", "snes"}).Return(nil).Once()
+	// Mock basic database operations - mark media missing for selective indexing
+	mockMediaDB.On("MarkSystemsMediaMissing", []string{"nes", "snes"}).Return(nil).Maybe()
+	mockMediaDB.On("MarkAllMediaMissing").Return(nil).Maybe()
 	// Transaction calls for file processing only
 	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
@@ -983,9 +986,9 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
-	// Mock basic database operations - should use TruncateSystems() for empty list
-	mockMediaDB.On("TruncateSystems", []string{}).Return(nil).Once()
-	mockMediaDB.On("TruncateSystems", []string(nil)).Return(nil).Maybe()
+	// Mock basic database operations - mark media missing
+	mockMediaDB.On("MarkSystemsMediaMissing", mock.AnythingOfType("[]string")).Return(nil).Maybe()
+	mockMediaDB.On("MarkAllMediaMissing").Return(nil).Maybe()
 	// Transaction calls for file processing only
 	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
@@ -1033,7 +1036,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	// Test with empty systems list
 	systems := []systemdefs.System{}
 
-	// Run the indexer - should use TruncateSystems() even for empty list since 0 != 197 systems
+	// Run the indexer - should use MarkSystemsMediaMissing() even for empty list since 0 != 197 systems
 	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
 	require.NoError(t, err)
 
@@ -1083,6 +1086,8 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	mockMediaDB.On("SetIndexingSystems", []string{"nes"}).Return(nil).Once()
 	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Maybe()
 	mockMediaDB.On("Truncate").Return(nil).Maybe()
+	mockMediaDB.On("MarkSystemsMediaMissing", []string{"nes"}).Return(nil).Maybe()
+	mockMediaDB.On("MarkAllMediaMissing").Return(nil).Maybe()
 
 	// Mock GetMax*ID methods for PopulateScanStateFromDB
 	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()

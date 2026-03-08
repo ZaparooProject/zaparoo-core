@@ -1177,7 +1177,10 @@ func (m *MockMediaDBI) MarkSystemsMediaMissing(systemIDs []string) error {
 }
 
 func (m *MockMediaDBI) MarkAllMediaMissing() error {
-	m.Called()
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
 	return nil
 }
 

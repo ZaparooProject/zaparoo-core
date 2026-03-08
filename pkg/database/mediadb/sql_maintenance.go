@@ -150,8 +150,13 @@ func sqlMarkSystemsMediaMissing(ctx context.Context, db *sql.DB, systemIDs []str
 	for i, id := range systemIDs {
 		args[i] = id
 	}
-	deleteStmt := fmt.Sprintf("UPDATE Media SET IsMissing = 1 FROM Systems WHERE Systems.DBID = Media.SystemDBID AND SystemID IN (%s)", placeholders)
-	_, err := db.ExecContext(ctx, deleteStmt, args...)
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	updateStmt := fmt.Sprintf(
+		"UPDATE Media SET IsMissing = 1 FROM Systems"+
+			" WHERE Systems.DBID = Media.SystemDBID AND SystemID IN (%s)",
+		placeholders,
+	)
+	_, err := db.ExecContext(ctx, updateStmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to mark systems media missing: %w", err)
 	}

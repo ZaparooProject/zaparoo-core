@@ -171,13 +171,15 @@ func AddMediaPath(
 	} else {
 		mediaIndex = foundMediaIndex
 		// Update anyway to mark found
-		db.InsertMedia(database.Media{
+		if _, err := db.InsertMedia(database.Media{
 			DBID:           0, // Use 0 for NULL binding to force CONFLICT constraint update
 			Path:           pf.Path,
 			MediaTitleDBID: int64(titleIndex),
 			SystemDBID:     int64(systemIndex),
 			IsMissing:      0,
-		})
+		}); err != nil {
+			return 0, 0, fmt.Errorf("error updating media missing status for %s: %w", pf.Path, err)
+		}
 		// Don't process tags if found
 		return titleIndex, mediaIndex, nil
 	}
@@ -714,7 +716,7 @@ func PopulateScanStateForSelectiveIndexing(
 	// create MediaTag associations — empty maps cause tags to be silently dropped.
 	//
 	// TitleIDs and MediaIDs can remain empty because their keys ARE system-scoped
-	// and TruncateSystems CASCADE deleted all data for reindexed systems.
+	// and all media for reindexed systems has been marked missing.
 
 	// Check for cancellation before loading systems
 	select {

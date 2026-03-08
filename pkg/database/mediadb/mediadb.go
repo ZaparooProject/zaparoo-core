@@ -631,7 +631,8 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 
 		if db.batchInsertMedia, err = NewBatchInserterWithOptions(db.ctx, tx, "Media",
 			[]string{"DBID", "MediaTitleDBID", "SystemDBID", "Path", "IsMissing"}, db.batchSize, false,
-			` ON CONFLICT (SystemDBID, Path) DO UPDATE SET IsMissing = 0 ON CONFLICT (DBID) DO UPDATE SET IsMissing = 0 `,
+			"ON CONFLICT (SystemDBID, Path) DO UPDATE SET IsMissing = 0"+
+				" ON CONFLICT (DBID) DO UPDATE SET IsMissing = 0",
 		); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for media: %w", err)

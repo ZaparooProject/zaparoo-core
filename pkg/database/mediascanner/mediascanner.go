@@ -661,39 +661,17 @@ func NewNamesIndex(
 				}
 			}
 
-			/*
-				// Full truncate - foreign keys not needed since we're deleting everything
-				log.Info().Msgf("performing full database truncation (indexing %d systems)", len(currentSystemIDs))
-				err = db.Truncate()
-				if err != nil {
-					return 0, fmt.Errorf("failed to truncate database: %w", err)
-				}
-				log.Info().Msg("database truncation completed")*/
-			err := db.MarkAllMediaMissing()
+			err = db.MarkAllMediaMissing()
 			if err != nil {
 				return 0, fmt.Errorf("failed to mark all media is missing %v: %w", currentSystemIDs, err)
 			}
 			log.Info().Msg("all media marked missing for rescan")
 		} else {
-			// Selective indexing
-			// DELETE mode disables FKs for performance, but TruncateSystems() relies on CASCADE
-			// to properly delete Media/MediaTitles/MediaTags when a System is deleted
-			/*log.Info().Msgf(
-				"performing selective truncation for systems: %v",
-				currentSystemIDs,
-			)
-			err = db.TruncateSystems(currentSystemIDs)
-			if err != nil {
-				return 0, fmt.Errorf("failed to truncate systems %v: %w", currentSystemIDs, err)
-			}
-			log.Info().Msg("selective truncation completed")*/
-
-			err := db.MarkSystemsMediaMissing(currentSystemIDs)
+			err = db.MarkSystemsMediaMissing(currentSystemIDs)
 			if err != nil {
 				return 0, fmt.Errorf("failed to mark systems media is missing %v: %w", currentSystemIDs, err)
 			}
 			log.Info().Msg("systems media marked missing for rescan")
-
 		}
 
 		// For rescan indexing, populate scan state with max IDs, global data, and
@@ -722,7 +700,6 @@ func NewNamesIndex(
 
 		// Selective indexing already seeds tags via PopulateScanStateForSelectiveIndexing;
 		// only seed here for full truncate where TagTypesIndex is still 0.
-
 		if scanState.TagTypesIndex == 0 {
 			log.Info().Msg("seeding known tags for fresh indexing")
 			// SeedCanonicalTags runs in its own non-batch transaction for safety.
