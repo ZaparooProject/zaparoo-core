@@ -222,6 +222,7 @@ func TestInstallRemoteFile_ContextCancellation(t *testing.T) {
 	setupShowLoader(mockPlatform)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	downloader := func(args DownloaderArgs) error {
 		// Simulate that the downloader checks context and returns error when cancelled

@@ -366,6 +366,28 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 	return nil
 }
 
+func (db *MediaDB) MarkSystemsMediaMissing(systemIDs []string) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	err := sqlMarkSystemsMediaMissing(db.ctx, db.sql, systemIDs)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (db *MediaDB) MarkAllMediaMissing() error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	err := sqlMarkAllMediaMissing(db.ctx, db.sql)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (db *MediaDB) Allocate() error {
 	if db.sql == nil {
 		return ErrNullSQL
@@ -595,39 +617,42 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 		// - This corrupt DBID is then used as FK in child tables → FK constraint violations
 		// - Better to fail fast with UNIQUE constraint error than continue with bad state
 		if db.batchInsertSystem, err = NewBatchInserterWithOptions(db.ctx, tx, "Systems",
-			[]string{"DBID", "SystemID", "Name"}, db.batchSize, false); err != nil {
+			[]string{"DBID", "SystemID", "Name"}, db.batchSize, false, ""); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for systems: %w", err)
 		}
 
 		if db.batchInsertMediaTitle, err = NewBatchInserterWithOptions(db.ctx, tx, "MediaTitles",
 			[]string{"DBID", "SystemDBID", "Slug", "Name", "SlugLength", "SlugWordCount", "SecondarySlug"},
-			db.batchSize, false); err != nil {
+			db.batchSize, false, ""); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for media titles: %w", err)
 		}
 
 		if db.batchInsertMedia, err = NewBatchInserterWithOptions(db.ctx, tx, "Media",
-			[]string{"DBID", "MediaTitleDBID", "SystemDBID", "Path"}, db.batchSize, false); err != nil {
+			[]string{"DBID", "MediaTitleDBID", "SystemDBID", "Path", "IsMissing"}, db.batchSize, false,
+			"ON CONFLICT (SystemDBID, Path) DO UPDATE SET IsMissing = 0"+
+				" ON CONFLICT (DBID) DO UPDATE SET IsMissing = 0",
+		); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for media: %w", err)
 		}
 
 		if db.batchInsertTag, err = NewBatchInserterWithOptions(db.ctx, tx, "Tags",
-			[]string{"DBID", "TypeDBID", "Tag"}, db.batchSize, false); err != nil {
+			[]string{"DBID", "TypeDBID", "Tag"}, db.batchSize, false, ""); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for tags: %w", err)
 		}
 
 		if db.batchInsertTagType, err = NewBatchInserterWithOptions(db.ctx, tx, "TagTypes",
-			[]string{"DBID", "Type"}, db.batchSize, false); err != nil {
+			[]string{"DBID", "Type"}, db.batchSize, false, ""); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for tag types: %w", err)
 		}
 
 		// MediaTags uses INSERT OR IGNORE - it's a link table with no dependent foreign keys
 		if db.batchInsertMediaTag, err = NewBatchInserterWithOptions(db.ctx, tx, "MediaTags",
-			[]string{"MediaDBID", "TagDBID"}, db.batchSize, true); err != nil {
+			[]string{"MediaDBID", "TagDBID"}, db.batchSize, true, ""); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for media tags: %w", err)
 		}
@@ -1621,7 +1646,7 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 
 	// Use batch inserter if available
 	if db.batchInsertMedia != nil {
-		err = db.batchInsertMedia.Add(row.DBID, row.MediaTitleDBID, row.SystemDBID, row.Path)
+		err = db.batchInsertMedia.Add(row.DBID, row.MediaTitleDBID, row.SystemDBID, row.Path, row.IsMissing)
 		if err != nil {
 			return row, fmt.Errorf("failed to add media to batch: %w", err)
 		}

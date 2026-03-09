@@ -133,6 +133,7 @@ func BuildGenerateDBPage(
 	pages *tview.Pages,
 	app *tview.Application,
 ) {
+	//nolint:gosec // G118: cancel is called in goBack callback
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Create page frame

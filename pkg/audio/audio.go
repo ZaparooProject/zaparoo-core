@@ -84,6 +84,7 @@ func (p *MalgoPlayer) playWAV(r io.ReadCloser) error {
 	if p.currentCancel != nil {
 		p.currentCancel()
 	}
+	//nolint:gosec // G118: cancel is stored in p.currentCancel for later use
 	ctx, cancel := context.WithCancel(context.Background())
 	p.currentCancel = cancel
 	p.playbackGen++
@@ -161,6 +162,7 @@ func (p *MalgoPlayer) PlayFile(path string) error {
 	if p.currentCancel != nil {
 		p.currentCancel()
 	}
+	//nolint:gosec // G118: cancel is stored in p.currentCancel for later use
 	ctx, cancel := context.WithCancel(context.Background())
 	p.currentCancel = cancel
 	p.playbackGen++

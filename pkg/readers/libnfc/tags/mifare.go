@@ -42,14 +42,15 @@ const (
 
 // buildMifareAuthCommand returns a command to authenticate against a block
 func buildMifareAuthCommand(block byte, cardUID string) []byte {
-	command := []byte{
+	uidBytes, _ := hex.DecodeString(cardUID)
+	command := make([]byte, 0, 8+len(uidBytes))
+	command = append(command,
 		// Auth using key A
 		0x60, block,
 		// Using the NDEF well known private key
 		0xd3, 0xf7, 0xd3, 0xf7, 0xd3, 0xf7,
-	}
+	)
 	// And finally append the tag UID to the end
-	uidBytes, _ := hex.DecodeString(cardUID)
 	return append(command, uidBytes...)
 }
 

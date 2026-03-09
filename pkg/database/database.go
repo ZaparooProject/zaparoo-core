@@ -134,6 +134,7 @@ type Media struct {
 	DBID           int64
 	MediaTitleDBID int64
 	SystemDBID     int64
+	IsMissing      int
 }
 
 type TagType struct {
@@ -353,6 +354,8 @@ type MediaDBI interface {
 	GetLastIndexedSystem() (string, error)
 	SetIndexingSystems(systemIDs []string) error
 	GetIndexingSystems() ([]string, error)
+	MarkSystemsMediaMissing(systemIDs []string) error
+	MarkAllMediaMissing() error
 	TruncateSystems(systemIDs []string) error
 
 	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)

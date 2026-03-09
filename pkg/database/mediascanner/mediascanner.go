@@ -661,44 +661,35 @@ func NewNamesIndex(
 				}
 			}
 
-			// Full truncate - foreign keys not needed since we're deleting everything
-			log.Info().Msgf("performing full database truncation (indexing %d systems)", len(currentSystemIDs))
-			err = db.Truncate()
+			err = db.MarkAllMediaMissing()
 			if err != nil {
-				return 0, fmt.Errorf("failed to truncate database: %w", err)
+				return 0, fmt.Errorf("failed to mark all media is missing %v: %w", currentSystemIDs, err)
 			}
-			log.Info().Msg("database truncation completed")
+			log.Info().Msg("all media marked missing for rescan")
 		} else {
-			// Selective indexing
-			// DELETE mode disables FKs for performance, but TruncateSystems() relies on CASCADE
-			// to properly delete Media/MediaTitles/MediaTags when a System is deleted
-			log.Info().Msgf(
-				"performing selective truncation for systems: %v",
-				currentSystemIDs,
-			)
-			err = db.TruncateSystems(currentSystemIDs)
+			err = db.MarkSystemsMediaMissing(currentSystemIDs)
 			if err != nil {
-				return 0, fmt.Errorf("failed to truncate systems %v: %w", currentSystemIDs, err)
+				return 0, fmt.Errorf("failed to mark systems media is missing %v: %w", currentSystemIDs, err)
 			}
-			log.Info().Msg("selective truncation completed")
-
-			// For selective indexing, populate scan state with max IDs, global data, and
-			// maps for systems NOT being reindexed to avoid conflicts with existing data
-			log.Info().Msgf(
-				"Populating scan state for selective indexing (excluding systems: %v)", currentSystemIDs,
-			)
-			if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, currentSystemIDs); err != nil {
-				// Check if this is a cancellation error
-				if errors.Is(err, context.Canceled) {
-					return handleCancellation(
-						ctx, db, "Media indexing cancelled during selective scan state population",
-					)
-				}
-				log.Error().Err(err).Msg("failed to populate scan state for selective indexing")
-				return 0, fmt.Errorf("failed to populate scan state for selective indexing: %w", err)
-			}
-			log.Info().Msg("successfully populated scan state for selective indexing")
+			log.Info().Msg("systems media marked missing for rescan")
 		}
+
+		// For rescan indexing, populate scan state with max IDs, global data, and
+		// maps for systems NOT being reindexed to avoid conflicts with existing data
+		log.Info().Msgf(
+			"Populating scan state for selective indexing (excluding systems: %v)", currentSystemIDs,
+		)
+		if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, currentSystemIDs); err != nil {
+			// Check if this is a cancellation error
+			if errors.Is(err, context.Canceled) {
+				return handleCancellation(
+					ctx, db, "Media indexing cancelled during selective scan state population",
+				)
+			}
+			log.Error().Err(err).Msg("failed to populate scan state for selective indexing")
+			return 0, fmt.Errorf("failed to populate scan state for selective indexing: %w", err)
+		}
+		log.Info().Msg("successfully populated scan state for selective indexing")
 
 		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
 			log.Error().Err(setErr).Msg("failed to set indexing status to running on fresh start")

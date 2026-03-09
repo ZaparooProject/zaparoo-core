@@ -617,7 +617,7 @@ func startPublishers(
 	// CRITICAL: Always start the drain goroutine, even if there are no active publishers.
 	// The notifChan MUST be consumed or it will fill up and block the notification system.
 	// If there are no publishers, notifications are simply discarded after being consumed.
-	ctx, cancel := context.WithCancel(st.GetContext())
+	ctx, cancel := context.WithCancel(st.GetContext()) //nolint:gosec // G118: cancel is returned to caller
 	go func() {
 		for {
 			select {

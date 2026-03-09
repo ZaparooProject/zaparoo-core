@@ -1168,6 +1168,22 @@ func (m *MockMediaDBI) GetIndexingSystems() ([]string, error) {
 	return nil, nil
 }
 
+func (m *MockMediaDBI) MarkSystemsMediaMissing(systemIDs []string) error {
+	args := m.Called(systemIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) MarkAllMediaMissing() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) TruncateSystems(systemIDs []string) error {
 	args := m.Called(systemIDs)
 	if err := args.Error(0); err != nil {

@@ -41,12 +41,14 @@ const TagReadTimeout = 30 * time.Second
 // tuiContext creates a context with the TUI request timeout.
 // Use this for API calls from the TUI to avoid long hangs.
 func tuiContext() (context.Context, context.CancelFunc) {
+	//nolint:gosec // G118: cancel is returned to caller
 	return context.WithTimeout(context.Background(), TUIRequestTimeout)
 }
 
 // tagReadContext creates a context with the tag read timeout.
 // Use this for operations where the user needs to physically interact with a tag.
 func tagReadContext() (context.Context, context.CancelFunc) {
+	//nolint:gosec // G118: cancel is returned to caller
 	return context.WithTimeout(context.Background(), TagReadTimeout)
 }
 
