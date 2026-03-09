@@ -223,7 +223,6 @@ func marshalAuthFile(
 	creds map[string]CredentialEntry,
 	keys []string,
 ) ([]byte, error) {
-	//nolint:gosec // G117: field name matches existing TOML key, not a secret
 	type authFile struct {
 		Creds   map[string]CredentialEntry `toml:"creds,omitempty"`
 		APIKeys []string                   `toml:"api_keys,omitempty"`
@@ -234,6 +233,7 @@ func marshalAuthFile(
 		Creds:   creds,
 	}
 
+	//nolint:gosec // G117: field name matches existing TOML key, not a secret
 	data, err := toml.Marshal(file)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal auth file: %w", err)

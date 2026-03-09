@@ -20,6 +20,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -79,7 +80,7 @@ func TestPrivateNetworkAccessMiddleware(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			req := httptest.NewRequest(tt.method, "/api", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), tt.method, "/api", http.NoBody)
 			if tt.requestPNAHeader != "" {
 				req.Header.Set("Access-Control-Request-Private-Network", tt.requestPNAHeader)
 			}

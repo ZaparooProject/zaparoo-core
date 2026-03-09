@@ -106,7 +106,7 @@ func AddMediaPath(
 	if foundSystemIndex, ok := ss.SystemIDs[systemID]; !ok {
 		ss.SystemsIndex++
 		systemIndex = ss.SystemsIndex
-		_, err := db.InsertSystem(database.System{
+		_, err = db.InsertSystem(database.System{
 			DBID:     int64(systemIndex),
 			SystemID: systemID,
 			Name:     systemID,
@@ -127,14 +127,16 @@ func AddMediaPath(
 
 		// Look up mediaType for consistent slugification
 		mediaType := slugs.MediaTypeGame // Default
-		if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
+		var system *systemdefs.System
+		system, err = systemdefs.GetSystem(systemID)
+		if err == nil && system != nil {
 			mediaType = system.GetMediaType()
 		}
 
 		// Generate slug metadata for fuzzy matching prefilter
 		metadata := mediadb.GenerateSlugWithMetadata(mediaType, pf.Title)
 
-		_, err := db.InsertMediaTitle(&database.MediaTitle{
+		_, err = db.InsertMediaTitle(&database.MediaTitle{
 			DBID:          int64(titleIndex),
 			Slug:          pf.Slug,
 			Name:          pf.Title,
@@ -153,36 +155,38 @@ func AddMediaPath(
 	}
 
 	mediaKey := database.MediaKey(systemID, pf.Path)
-	if foundMediaIndex, ok := ss.MediaIDs[mediaKey]; !ok {
-		ss.MediaIndex++
-		mediaIndex = ss.MediaIndex
-		_, err := db.InsertMedia(database.Media{
-			DBID:           int64(mediaIndex),
+	foundMediaIndex, ok := ss.MediaIDs[mediaKey]
+	if ok {
+		mediaIndex = foundMediaIndex
+		// Update anyway to mark found
+		_, err = db.InsertMedia(database.Media{
+			DBID:           0, // Use 0 for NULL binding to force CONFLICT constraint update
 			Path:           pf.Path,
 			MediaTitleDBID: int64(titleIndex),
 			SystemDBID:     int64(systemIndex),
 			IsMissing:      0,
 		})
 		if err != nil {
-			ss.MediaIndex-- // Rollback index increment on failure
-			return 0, 0, fmt.Errorf("error inserting media %s: %w", pf.Path, err)
-		}
-		ss.MediaIDs[mediaKey] = mediaIndex
-	} else {
-		mediaIndex = foundMediaIndex
-		// Update anyway to mark found
-		if _, err := db.InsertMedia(database.Media{
-			DBID:           0, // Use 0 for NULL binding to force CONFLICT constraint update
-			Path:           pf.Path,
-			MediaTitleDBID: int64(titleIndex),
-			SystemDBID:     int64(systemIndex),
-			IsMissing:      0,
-		}); err != nil {
 			return 0, 0, fmt.Errorf("error updating media missing status for %s: %w", pf.Path, err)
 		}
 		// Don't process tags if found
 		return titleIndex, mediaIndex, nil
 	}
+
+	ss.MediaIndex++
+	mediaIndex = ss.MediaIndex
+	_, err = db.InsertMedia(database.Media{
+		DBID:           int64(mediaIndex),
+		Path:           pf.Path,
+		MediaTitleDBID: int64(titleIndex),
+		SystemDBID:     int64(systemIndex),
+		IsMissing:      0,
+	})
+	if err != nil {
+		ss.MediaIndex-- // Rollback index increment on failure
+		return 0, 0, fmt.Errorf("error inserting media %s: %w", pf.Path, err)
+	}
+	ss.MediaIDs[mediaKey] = mediaIndex
 
 	// Extract extension tag only if filename tags are enabled
 	if pf.Ext != "" && (cfg == nil || cfg.FilenameTags()) {

@@ -47,6 +47,7 @@ func (p *Platform) startGameTracker(
 		p.clock = clockwork.NewRealClock()
 	}
 
+	//nolint:gosec // G118: cancel is returned to caller via cleanup function
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Poll every 2 seconds for responsive tracking

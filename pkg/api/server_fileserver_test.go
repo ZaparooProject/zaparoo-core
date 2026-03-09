@@ -20,6 +20,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -136,7 +137,7 @@ func TestFsCustom404(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			req := httptest.NewRequest(http.MethodGet, tt.path, http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tt.path, http.NoBody)
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, req)
@@ -176,7 +177,7 @@ func TestFsCustom404_MissingIndex(t *testing.T) {
 
 	handler := fsCustom404(http.FS(mockFS))
 
-	req := httptest.NewRequest(http.MethodGet, "/unknown", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/unknown", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
