@@ -101,9 +101,45 @@ func (m *MockKodiClient) LaunchTVShow(path string) error {
 	return nil
 }
 
+// PlayPause mocks toggling play/pause on the first active player
+func (m *MockKodiClient) PlayPause(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock PlayPause error: %w", err)
+	}
+	return nil
+}
+
+// FastForward mocks increasing playback speed of the first active player
+func (m *MockKodiClient) FastForward(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock FastForward error: %w", err)
+	}
+	return nil
+}
+
+// Rewind mocks decreasing playback speed of the first active player
+func (m *MockKodiClient) Rewind(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock Rewind error: %w", err)
+	}
+	return nil
+}
+
+// GoTo mocks navigating to next or previous item in playlist
+func (m *MockKodiClient) GoTo(ctx context.Context, direction string) error {
+	args := m.Called(ctx, direction)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock GoTo error: %w", err)
+	}
+	return nil
+}
+
 // Stop mocks stopping all active players in Kodi
-func (m *MockKodiClient) Stop() error {
-	args := m.Called()
+func (m *MockKodiClient) Stop(ctx context.Context) error {
+	args := m.Called(ctx)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock Stop error: %w", err)
 	}
@@ -273,7 +309,11 @@ func (m *MockKodiClient) SetupBasicMock() {
 	m.On("LaunchFile", mock.AnythingOfType("string")).Return(nil).Maybe()
 	m.On("LaunchMovie", mock.AnythingOfType("string")).Return(nil).Maybe()
 	m.On("LaunchTVEpisode", mock.AnythingOfType("string")).Return(nil).Maybe()
-	m.On("Stop").Return(nil).Maybe()
+	m.On("Stop", mock.Anything).Return(nil).Maybe()
+	m.On("PlayPause", mock.Anything).Return(nil).Maybe()
+	m.On("FastForward", mock.Anything).Return(nil).Maybe()
+	m.On("Rewind", mock.Anything).Return(nil).Maybe()
+	m.On("GoTo", mock.Anything, mock.AnythingOfType("string")).Return(nil).Maybe()
 	m.On("Quit", mock.Anything).Return(nil).Maybe()
 	m.On("GetActivePlayers", mock.Anything).Return([]kodi.Player{}, nil).Maybe()
 	m.On("GetPlayerItem", mock.Anything, mock.AnythingOfType("int")).Return((*kodi.PlayerItem)(nil), nil).Maybe()

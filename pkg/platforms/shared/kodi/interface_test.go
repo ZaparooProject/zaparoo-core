@@ -61,8 +61,8 @@ func (m *MockKodiClient) LaunchTVEpisode(path string) error {
 	return nil
 }
 
-func (m *MockKodiClient) Stop() error {
-	args := m.Called()
+func (m *MockKodiClient) Stop(ctx context.Context) error {
+	args := m.Called(ctx)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock Stop error: %w", err)
 	}
@@ -169,6 +169,38 @@ func (m *MockKodiClient) APIRequest(ctx context.Context, method kodi.APIMethod, 
 		return nil, fmt.Errorf("mock APIRequest error: %w", err)
 	}
 	return nil, nil
+}
+
+func (m *MockKodiClient) PlayPause(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock PlayPause error: %w", err)
+	}
+	return nil
+}
+
+func (m *MockKodiClient) FastForward(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock FastForward error: %w", err)
+	}
+	return nil
+}
+
+func (m *MockKodiClient) Rewind(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock Rewind error: %w", err)
+	}
+	return nil
+}
+
+func (m *MockKodiClient) GoTo(ctx context.Context, direction string) error {
+	args := m.Called(ctx, direction)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock GoTo error: %w", err)
+	}
+	return nil
 }
 
 func (m *MockKodiClient) LaunchSong(path string) error {
@@ -306,13 +338,13 @@ func TestKodiClient_Stop(t *testing.T) {
 
 	// This test drives the addition of Stop method - critical for fixing the broken implementation
 	mockClient := new(MockKodiClient)
-	mockClient.On("Stop").Return(nil)
+	mockClient.On("Stop", mock.Anything).Return(nil)
 
 	// Use as KodiClient interface
 	var client kodi.KodiClient = mockClient
 
 	// Test Stop method exists and can be called
-	err := client.Stop()
+	err := client.Stop(context.Background())
 	require.NoError(t, err)
 
 	mockClient.AssertExpectations(t)
@@ -474,6 +506,66 @@ func TestKodiClient_SetURL(t *testing.T) {
 
 	// Test SetURL method exists and can be called
 	client.SetURL(newURL)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestKodiClient_PlayPause(t *testing.T) {
+	t.Parallel()
+
+	mockClient := new(MockKodiClient)
+	mockClient.On("PlayPause", mock.Anything).Return(nil)
+
+	var client kodi.KodiClient = mockClient
+
+	err := client.PlayPause(context.Background())
+	require.NoError(t, err)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestKodiClient_FastForward(t *testing.T) {
+	t.Parallel()
+
+	mockClient := new(MockKodiClient)
+	mockClient.On("FastForward", mock.Anything).Return(nil)
+
+	var client kodi.KodiClient = mockClient
+
+	err := client.FastForward(context.Background())
+	require.NoError(t, err)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestKodiClient_Rewind(t *testing.T) {
+	t.Parallel()
+
+	mockClient := new(MockKodiClient)
+	mockClient.On("Rewind", mock.Anything).Return(nil)
+
+	var client kodi.KodiClient = mockClient
+
+	err := client.Rewind(context.Background())
+	require.NoError(t, err)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestKodiClient_GoTo(t *testing.T) {
+	t.Parallel()
+
+	mockClient := new(MockKodiClient)
+	mockClient.On("GoTo", mock.Anything, "next").Return(nil)
+	mockClient.On("GoTo", mock.Anything, "previous").Return(nil)
+
+	var client kodi.KodiClient = mockClient
+
+	err := client.GoTo(context.Background(), "next")
+	require.NoError(t, err)
+
+	err = client.GoTo(context.Background(), "previous")
+	require.NoError(t, err)
 
 	mockClient.AssertExpectations(t)
 }

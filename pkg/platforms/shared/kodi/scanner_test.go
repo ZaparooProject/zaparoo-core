@@ -62,8 +62,8 @@ func (m *MockKodiClient) LaunchTVEpisode(path string) error {
 	return nil
 }
 
-func (m *MockKodiClient) Stop() error {
-	args := m.Called()
+func (m *MockKodiClient) Stop(ctx context.Context) error {
+	args := m.Called(ctx)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock Stop error: %w", err)
 	}
@@ -170,6 +170,38 @@ func (m *MockKodiClient) APIRequest(ctx context.Context, method APIMethod, param
 		return nil, fmt.Errorf("mock APIRequest error: %w", err)
 	}
 	return nil, nil
+}
+
+func (m *MockKodiClient) PlayPause(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock PlayPause error: %w", err)
+	}
+	return nil
+}
+
+func (m *MockKodiClient) FastForward(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock FastForward error: %w", err)
+	}
+	return nil
+}
+
+func (m *MockKodiClient) Rewind(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock Rewind error: %w", err)
+	}
+	return nil
+}
+
+func (m *MockKodiClient) GoTo(ctx context.Context, direction string) error {
+	args := m.Called(ctx, direction)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock GoTo error: %w", err)
+	}
+	return nil
 }
 
 func (m *MockKodiClient) LaunchSong(path string) error {

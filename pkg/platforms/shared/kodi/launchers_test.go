@@ -23,9 +23,19 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/stretchr/testify/assert"
 )
+
+var expectedControls = []string{
+	platforms.ControlTogglePause,
+	platforms.ControlStop,
+	platforms.ControlFastForward,
+	platforms.ControlRewind,
+	platforms.ControlNext,
+	platforms.ControlPrevious,
+}
 
 // TestNewKodiLocalLauncher tests the creation of standard KodiLocal launcher
 func TestNewKodiLocalLauncher(t *testing.T) {
@@ -45,6 +55,10 @@ func TestNewKodiLocalLauncher(t *testing.T) {
 	}
 	assert.Equal(t, expectedExtensions, launcher.Extensions)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
+	assert.Len(t, launcher.Controls, 6)
+	for _, action := range expectedControls {
+		assert.Contains(t, launcher.Controls, action)
+	}
 }
 
 // TestNewKodiMovieLauncher tests the creation of standard KodiMovie launcher
@@ -58,6 +72,10 @@ func TestNewKodiMovieLauncher(t *testing.T) {
 	assert.Equal(t, []string{shared.SchemeKodiMovie}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
+	assert.Len(t, launcher.Controls, 6)
+	for _, action := range expectedControls {
+		assert.Contains(t, launcher.Controls, action)
+	}
 }
 
 // TestNewKodiTVLauncher tests the creation of standard KodiTV launcher
@@ -71,6 +89,10 @@ func TestNewKodiTVLauncher(t *testing.T) {
 	assert.Equal(t, []string{shared.SchemeKodiEpisode}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
+	assert.Len(t, launcher.Controls, 6)
+	for _, action := range expectedControls {
+		assert.Contains(t, launcher.Controls, action)
+	}
 }
 
 // TestNewKodiSongLauncher tests the creation of KodiSong launcher for individual songs
@@ -85,6 +107,10 @@ func TestNewKodiSongLauncher(t *testing.T) {
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	// Scanner will be tested when scanners are implemented
 	// assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
+	assert.Len(t, launcher.Controls, 6)
+	for _, action := range expectedControls {
+		assert.Contains(t, launcher.Controls, action)
+	}
 }
 
 // TestNewKodiMusicLauncher tests the creation of KodiMusic launcher for local music files
@@ -102,6 +128,10 @@ func TestNewKodiMusicLauncher(t *testing.T) {
 	assert.Contains(t, launcher.Extensions, ".m4a")
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.Nil(t, launcher.Scanner, "Scanner function should not be set for local files")
+	assert.Len(t, launcher.Controls, 6)
+	for _, action := range expectedControls {
+		assert.Contains(t, launcher.Controls, action)
+	}
 }
 
 // TestNewKodiAlbumLauncher tests the creation of KodiAlbum launcher for album collection playback
@@ -115,6 +145,10 @@ func TestNewKodiAlbumLauncher(t *testing.T) {
 	assert.Equal(t, []string{shared.SchemeKodiAlbum}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
+	assert.Len(t, launcher.Controls, 6)
+	for _, action := range expectedControls {
+		assert.Contains(t, launcher.Controls, action)
+	}
 }
 
 // TestNewKodiArtistLauncher tests the creation of KodiArtist launcher for artist collection playback
@@ -128,6 +162,10 @@ func TestNewKodiArtistLauncher(t *testing.T) {
 	assert.Equal(t, []string{shared.SchemeKodiArtist}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
+	assert.Len(t, launcher.Controls, 6)
+	for _, action := range expectedControls {
+		assert.Contains(t, launcher.Controls, action)
+	}
 }
 
 // TestNewKodiTVShowLauncher tests the creation of KodiTVShow launcher for TV show collection playback
@@ -141,4 +179,8 @@ func TestNewKodiTVShowLauncher(t *testing.T) {
 	assert.Equal(t, []string{shared.SchemeKodiShow}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
+	assert.Len(t, launcher.Controls, 6)
+	for _, action := range expectedControls {
+		assert.Contains(t, launcher.Controls, action)
+	}
 }

@@ -65,7 +65,7 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	var err error
 	switch {
 	case control.Func != nil:
-		err = control.Func(env.Config, platforms.ControlParams{Args: params.Args})
+		err = control.Func(env.Context, env.Config, platforms.ControlParams{Args: params.Args})
 	case control.Script != "":
 		err = zapscript.RunControlScript(env.Platform, env.Config, env.Database, env.State, control.Script)
 	default:

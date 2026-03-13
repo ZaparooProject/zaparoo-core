@@ -461,7 +461,7 @@ func (p *Platform) stopKodi(cfg *config.Instance, reason platforms.StopIntent) e
 	// just stop playback but keep Kodi running ("Kodi mode" stays active)
 	if reason == platforms.StopForMenu {
 		log.Info().Msg("stopping Kodi playback (Kodi mode stays active)")
-		if err := client.Stop(); err != nil {
+		if err := client.Stop(context.Background()); err != nil {
 			return fmt.Errorf("failed to stop Kodi playback: %w", err)
 		}
 		// Don't clear activeMedia - Kodi is still running and we're still in "Kodi mode"

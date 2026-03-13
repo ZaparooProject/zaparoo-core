@@ -29,11 +29,62 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 )
 
+// kodiControls builds a Controls map for Kodi launchers with standard
+// playback controls. The launcherID and groups are captured by closures
+// so each control creates the correct Kodi client at invocation time.
+func kodiControls(
+	id string, groups []string,
+) map[string]platforms.Control {
+	cf := func(
+		fn func(context.Context, KodiClient) error,
+	) platforms.ControlFunc {
+		return func(
+			ctx context.Context, cfg *config.Instance,
+			_ platforms.ControlParams,
+		) error {
+			return fn(ctx, NewClientWithLauncherID(cfg, id, groups))
+		}
+	}
+	return map[string]platforms.Control{
+		platforms.ControlTogglePause: {
+			Func: cf(func(ctx context.Context, c KodiClient) error {
+				return c.PlayPause(ctx)
+			}),
+		},
+		platforms.ControlStop: {
+			Func: cf(func(ctx context.Context, c KodiClient) error {
+				return c.Stop(ctx)
+			}),
+		},
+		platforms.ControlFastForward: {
+			Func: cf(func(ctx context.Context, c KodiClient) error {
+				return c.FastForward(ctx)
+			}),
+		},
+		platforms.ControlRewind: {
+			Func: cf(func(ctx context.Context, c KodiClient) error {
+				return c.Rewind(ctx)
+			}),
+		},
+		platforms.ControlNext: {
+			Func: cf(func(ctx context.Context, c KodiClient) error {
+				return c.GoTo(ctx, "next")
+			}),
+		},
+		platforms.ControlPrevious: {
+			Func: cf(func(ctx context.Context, c KodiClient) error {
+				return c.GoTo(ctx, "previous")
+			}),
+		},
+	}
+}
+
 // NewKodiLocalLauncher creates a standard KodiLocalVideo launcher for direct video file playback
 func NewKodiLocalLauncher() platforms.Launcher {
 	id := shared.LauncherKodiLocalVideo
 	groups := []string{shared.GroupKodi}
 	return platforms.Launcher{
+		Controls:            kodiControls(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemVideo,
@@ -56,6 +107,7 @@ func NewKodiMovieLauncher() platforms.Launcher {
 	id := shared.LauncherKodiMovie
 	groups := []string{shared.GroupKodi}
 	return platforms.Launcher{
+		Controls:            kodiControls(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMovie,
@@ -83,6 +135,7 @@ func NewKodiTVLauncher() platforms.Launcher {
 	id := shared.LauncherKodiTVEpisode
 	groups := []string{shared.GroupKodi, shared.GroupKodiTV}
 	return platforms.Launcher{
+		Controls:            kodiControls(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemTVEpisode,
@@ -110,6 +163,7 @@ func NewKodiMusicLauncher() platforms.Launcher {
 	id := shared.LauncherKodiLocalAudio
 	groups := []string{shared.GroupKodi, shared.GroupKodiMusic}
 	return platforms.Launcher{
+		Controls:            kodiControls(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMusicTrack,
@@ -130,6 +184,7 @@ func NewKodiAlbumLauncher() platforms.Launcher {
 	id := shared.LauncherKodiAlbum
 	groups := []string{shared.GroupKodi, shared.GroupKodiMusic}
 	return platforms.Launcher{
+		Controls:            kodiControls(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMusicAlbum,
@@ -157,6 +212,7 @@ func NewKodiArtistLauncher() platforms.Launcher {
 	id := shared.LauncherKodiArtist
 	groups := []string{shared.GroupKodi, shared.GroupKodiMusic}
 	return platforms.Launcher{
+		Controls:            kodiControls(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMusicArtist,
@@ -184,6 +240,7 @@ func NewKodiTVShowLauncher() platforms.Launcher {
 	id := shared.LauncherKodiTVShow
 	groups := []string{shared.GroupKodi, shared.GroupKodiTV}
 	return platforms.Launcher{
+		Controls:            kodiControls(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemTVShow,
@@ -211,6 +268,7 @@ func NewKodiSongLauncher() platforms.Launcher {
 	id := shared.LauncherKodiSong
 	groups := []string{shared.GroupKodi, shared.GroupKodiMusic}
 	return platforms.Launcher{
+		Controls:            kodiControls(id, groups),
 		ID:                  id,
 		Groups:              groups,
 		SystemID:            systemdefs.SystemMusicTrack,

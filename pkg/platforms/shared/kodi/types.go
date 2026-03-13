@@ -99,6 +99,11 @@ const (
 	APIMethodPlaylistClear APIMethod = "Playlist.Clear"
 	APIMethodPlaylistAdd   APIMethod = "Playlist.Add"
 
+	// Player Controls
+	APIMethodPlayerPlayPause APIMethod = "Player.PlayPause"
+	APIMethodPlayerSetSpeed  APIMethod = "Player.SetSpeed"
+	APIMethodPlayerGoTo      APIMethod = "Player.GoTo"
+
 	// Application Control
 	APIMethodApplicationQuit APIMethod = "Application.Quit"
 )
@@ -152,6 +157,23 @@ type PlayerOpenParams struct {
 // PlayerStopParams represents parameters for Player.Stop API method
 type PlayerStopParams struct {
 	PlayerID int `json:"playerid"`
+}
+
+// PlayerPlayPauseParams represents parameters for Player.PlayPause API method
+type PlayerPlayPauseParams struct {
+	PlayerID int `json:"playerid"`
+}
+
+// PlayerSetSpeedParams represents parameters for Player.SetSpeed API method
+type PlayerSetSpeedParams struct {
+	Speed    string `json:"speed"`
+	PlayerID int    `json:"playerid"`
+}
+
+// PlayerGoToParams represents parameters for Player.GoTo API method
+type PlayerGoToParams struct {
+	To       string `json:"to"`
+	PlayerID int    `json:"playerid"`
 }
 
 // VideoLibraryGetMoviesResponse represents the response from VideoLibrary.GetMovies

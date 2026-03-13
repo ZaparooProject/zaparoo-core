@@ -39,7 +39,20 @@ type KodiClient interface {
 	LaunchTVEpisode(path string) error
 
 	// Stop stops all active players in Kodi
-	Stop() error
+	Stop(ctx context.Context) error
+
+	// PlayPause toggles play/pause on the first active player
+	PlayPause(ctx context.Context) error
+
+	// FastForward increases playback speed of the first active player
+	FastForward(ctx context.Context) error
+
+	// Rewind decreases playback speed of the first active player
+	Rewind(ctx context.Context) error
+
+	// GoTo navigates to next or previous item in playlist.
+	// Direction should be "next" or "previous".
+	GoTo(ctx context.Context, direction string) error
 
 	// Quit gracefully exits Kodi application
 	Quit(ctx context.Context) error

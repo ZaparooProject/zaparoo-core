@@ -152,7 +152,7 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 
 	p.setActiveMedia(nil)
 	client := kodi.NewClient(p.cfg)
-	if err := client.Stop(); err != nil {
+	if err := client.Stop(context.Background()); err != nil {
 		return fmt.Errorf("failed to stop Kodi client: %w", err)
 	}
 	return nil
