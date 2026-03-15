@@ -150,6 +150,11 @@ func TestIsMediaLaunchingCommand(t *testing.T) {
 			cmdName: zapscript.ZapScriptCmdEcho,
 			want:    false,
 		},
+		{
+			name:    "control command",
+			cmdName: zapscript.ZapScriptCmdControl,
+			want:    false,
+		},
 
 		// HTTP commands - should NOT be blocked
 		{
@@ -278,6 +283,7 @@ func TestIsMediaLaunchingCommand_ComprehensiveCoverage(t *testing.T) {
 		zapscript.ZapScriptCmdDelay,
 		zapscript.ZapScriptCmdStop,
 		zapscript.ZapScriptCmdEcho,
+		zapscript.ZapScriptCmdControl,
 		zapscript.ZapScriptCmdPlaylistPlay,     // queues state change
 		zapscript.ZapScriptCmdPlaylistNext,     // queues state change
 		zapscript.ZapScriptCmdPlaylistPrevious, // queues state change
@@ -318,7 +324,7 @@ func TestIsMediaLaunchingCommand_ComprehensiveCoverage(t *testing.T) {
 	}
 }
 
-// TestGetExprEnv_ScannedContext verifies that Scanned fields are populated from ExprEnvOptions.
+// TestGetExprEnv_ScannedContext verifies that Scanned fields are populated.
 func TestGetExprEnv_ScannedContext(t *testing.T) {
 	t.Parallel()
 
@@ -328,22 +334,20 @@ func TestGetExprEnv_ScannedContext(t *testing.T) {
 	cfg := &config.Instance{}
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
-	opts := &ExprEnvOptions{
-		Scanned: &zapscript.ExprEnvScanned{
-			ID:    "scanned-token-id",
-			Value: "**launch:/games/sonic.bin",
-			Data:  "NDEF-record-data",
-		},
+	scanned := &zapscript.ExprEnvScanned{
+		ID:    "scanned-token-id",
+		Value: "**launch:/games/sonic.bin",
+		Data:  "NDEF-record-data",
 	}
 
-	env := getExprEnv(mockPlatform, cfg, st, opts)
+	env := GetExprEnv(mockPlatform, cfg, st, scanned, nil)
 
 	assert.Equal(t, "scanned-token-id", env.Scanned.ID, "Scanned.ID should be populated")
 	assert.Equal(t, "**launch:/games/sonic.bin", env.Scanned.Value, "Scanned.Value should be populated")
 	assert.Equal(t, "NDEF-record-data", env.Scanned.Data, "Scanned.Data should be populated")
 }
 
-// TestGetExprEnv_LaunchingContext verifies that Launching fields are populated from ExprEnvOptions.
+// TestGetExprEnv_LaunchingContext verifies that Launching fields are populated.
 func TestGetExprEnv_LaunchingContext(t *testing.T) {
 	t.Parallel()
 
@@ -353,23 +357,21 @@ func TestGetExprEnv_LaunchingContext(t *testing.T) {
 	cfg := &config.Instance{}
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
-	opts := &ExprEnvOptions{
-		Launching: &zapscript.ExprEnvLaunching{
-			Path:       "/games/genesis/sonic.bin",
-			SystemID:   "genesis",
-			LauncherID: "retroarch",
-		},
+	launching := &zapscript.ExprEnvLaunching{
+		Path:       "/games/genesis/sonic.bin",
+		SystemID:   "genesis",
+		LauncherID: "retroarch",
 	}
 
-	env := getExprEnv(mockPlatform, cfg, st, opts)
+	env := GetExprEnv(mockPlatform, cfg, st, nil, launching)
 
 	assert.Equal(t, "/games/genesis/sonic.bin", env.Launching.Path, "Launching.Path should be populated")
 	assert.Equal(t, "genesis", env.Launching.SystemID, "Launching.SystemID should be populated")
 	assert.Equal(t, "retroarch", env.Launching.LauncherID, "Launching.LauncherID should be populated")
 }
 
-// TestGetExprEnv_NilOpts verifies that nil ExprEnvOptions leaves Scanned/Launching empty.
-func TestGetExprEnv_NilOpts(t *testing.T) {
+// TestGetExprEnv_NilParams verifies that nil scanned/launching leaves those fields empty.
+func TestGetExprEnv_NilParams(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
@@ -378,14 +380,14 @@ func TestGetExprEnv_NilOpts(t *testing.T) {
 	cfg := &config.Instance{}
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
-	env := getExprEnv(mockPlatform, cfg, st, nil)
+	env := GetExprEnv(mockPlatform, cfg, st, nil, nil)
 
-	assert.Empty(t, env.Scanned.ID, "Scanned.ID should be empty with nil opts")
-	assert.Empty(t, env.Scanned.Value, "Scanned.Value should be empty with nil opts")
-	assert.Empty(t, env.Scanned.Data, "Scanned.Data should be empty with nil opts")
-	assert.Empty(t, env.Launching.Path, "Launching.Path should be empty with nil opts")
-	assert.Empty(t, env.Launching.SystemID, "Launching.SystemID should be empty with nil opts")
-	assert.Empty(t, env.Launching.LauncherID, "Launching.LauncherID should be empty with nil opts")
+	assert.Empty(t, env.Scanned.ID, "Scanned.ID should be empty with nil params")
+	assert.Empty(t, env.Scanned.Value, "Scanned.Value should be empty with nil params")
+	assert.Empty(t, env.Scanned.Data, "Scanned.Data should be empty with nil params")
+	assert.Empty(t, env.Launching.Path, "Launching.Path should be empty with nil params")
+	assert.Empty(t, env.Launching.SystemID, "Launching.SystemID should be empty with nil params")
+	assert.Empty(t, env.Launching.LauncherID, "Launching.LauncherID should be empty with nil params")
 }
 
 // TestGetExprEnv_BothContexts verifies both Scanned and Launching can be set simultaneously.
@@ -398,20 +400,18 @@ func TestGetExprEnv_BothContexts(t *testing.T) {
 	cfg := &config.Instance{}
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
-	opts := &ExprEnvOptions{
-		Scanned: &zapscript.ExprEnvScanned{
-			ID:    "token-123",
-			Value: "test-value",
-			Data:  "test-data",
-		},
-		Launching: &zapscript.ExprEnvLaunching{
-			Path:       "/path/to/game",
-			SystemID:   "snes",
-			LauncherID: "mister",
-		},
+	scanned := &zapscript.ExprEnvScanned{
+		ID:    "token-123",
+		Value: "test-value",
+		Data:  "test-data",
+	}
+	launching := &zapscript.ExprEnvLaunching{
+		Path:       "/path/to/game",
+		SystemID:   "snes",
+		LauncherID: "mister",
 	}
 
-	env := getExprEnv(mockPlatform, cfg, st, opts)
+	env := GetExprEnv(mockPlatform, cfg, st, scanned, launching)
 
 	// Verify Scanned
 	assert.Equal(t, "token-123", env.Scanned.ID)
@@ -443,7 +443,7 @@ func TestGetExprEnv_ActiveMedia(t *testing.T) {
 		Name:       "Super Mario World",
 	})
 
-	env := getExprEnv(mockPlatform, cfg, st, nil)
+	env := GetExprEnv(mockPlatform, cfg, st, nil, nil)
 
 	assert.True(t, env.MediaPlaying, "MediaPlaying should be true when media is active")
 	assert.Equal(t, "retroarch", env.ActiveMedia.LauncherID)
@@ -463,7 +463,7 @@ func TestGetExprEnv_NoActiveMedia(t *testing.T) {
 	cfg := &config.Instance{}
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
-	env := getExprEnv(mockPlatform, cfg, st, nil)
+	env := GetExprEnv(mockPlatform, cfg, st, nil, nil)
 
 	assert.False(t, env.MediaPlaying, "MediaPlaying should be false when no media is active")
 	assert.Empty(t, env.ActiveMedia.LauncherID)
@@ -491,6 +491,7 @@ func TestIsValidCommand(t *testing.T) {
 		{name: "stop", cmdName: zapscript.ZapScriptCmdStop, want: true},
 		{name: "http.get", cmdName: zapscript.ZapScriptCmdHTTPGet, want: true},
 		{name: "input.keyboard", cmdName: zapscript.ZapScriptCmdInputKeyboard, want: true},
+		{name: "control", cmdName: zapscript.ZapScriptCmdControl, want: true},
 		// Invalid commands
 		{name: "unknown command", cmdName: "unknown.cmd", want: false},
 		{name: "empty string", cmdName: "", want: false},

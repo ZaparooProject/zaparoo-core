@@ -23,29 +23,18 @@ import (
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-type hookTestEnv struct {
-	platform *mocks.MockPlatform
-	cfg      *config.Instance
-	st       *state.State
-	db       *database.Database
-	lsq      chan *tokens.Token
-	plq      chan *playlists.Playlist
-}
-
-func setupHookTest(t *testing.T) *hookTestEnv {
+func setupHookTest(t *testing.T) *ServiceContext {
 	t.Helper()
 
 	fs := testhelpers.NewMemoryFS()
@@ -61,135 +50,119 @@ func setupHookTest(t *testing.T) *hookTestEnv {
 
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
-	db := &database.Database{
-		UserDB:  mockUserDB,
-		MediaDB: mockMediaDB,
-	}
-
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
-	return &hookTestEnv{
-		platform: mockPlatform,
-		cfg:      cfg,
-		st:       st,
-		db:       db,
-		lsq:      make(chan *tokens.Token, 1),
-		plq:      make(chan *playlists.Playlist, 1),
+	return &ServiceContext{
+		Platform: mockPlatform,
+		Config:              cfg,
+		State:               st,
+		DB: &database.Database{
+			UserDB:  mockUserDB,
+			MediaDB: mockMediaDB,
+		},
+		LaunchSoftwareQueue: make(chan *tokens.Token, 1),
+		PlaylistQueue:       make(chan *playlists.Playlist, 1),
 	}
-}
-
-func (e *hookTestEnv) runHook(hookName, script string, opts *zapscript.ExprEnvOptions) error {
-	return runHook(e.platform, e.cfg, e.st, e.db, e.lsq, e.plq, hookName, script, opts)
 }
 
 func TestRunHook_BasicExecution(t *testing.T) {
 	t.Parallel()
 
-	env := setupHookTest(t)
+	svc := setupHookTest(t)
 
-	err := env.runHook("test_hook", "**echo:test message", nil)
+	err := runHook(svc, "test_hook", "**echo:test message", nil, nil)
 	assert.NoError(t, err, "echo hook should succeed")
 }
 
 func TestRunHook_WithScannedContext(t *testing.T) {
 	t.Parallel()
 
-	env := setupHookTest(t)
+	svc := setupHookTest(t)
 
-	scannedOpts := &zapscript.ExprEnvOptions{
-		Scanned: &gozapscript.ExprEnvScanned{
-			ID:    "test-token-id",
-			Value: "**launch:/games/sonic.bin",
-			Data:  "raw-ndef-data",
-		},
+	scanned := &gozapscript.ExprEnvScanned{
+		ID:    "test-token-id",
+		Value: "**launch:/games/sonic.bin",
+		Data:  "raw-ndef-data",
 	}
 
-	err := env.runHook("on_scan", "**echo:scanned", scannedOpts)
+	err := runHook(svc, "on_scan", "**echo:scanned", scanned, nil)
 	assert.NoError(t, err, "hook with scanned context should succeed")
 }
 
 func TestRunHook_WithLaunchingContext(t *testing.T) {
 	t.Parallel()
 
-	env := setupHookTest(t)
+	svc := setupHookTest(t)
 
-	launchingOpts := &zapscript.ExprEnvOptions{
-		Launching: &gozapscript.ExprEnvLaunching{
-			Path:       "/games/genesis/sonic.bin",
-			SystemID:   "genesis",
-			LauncherID: "retroarch",
-		},
+	launching := &gozapscript.ExprEnvLaunching{
+		Path:       "/games/genesis/sonic.bin",
+		SystemID:   "genesis",
+		LauncherID: "retroarch",
 	}
 
-	err := env.runHook("before_media_start", "**echo:launching", launchingOpts)
+	err := runHook(svc, "before_media_start", "**echo:launching", nil, launching)
 	assert.NoError(t, err, "hook with launching context should succeed")
 }
 
-func TestRunHook_SetsInHookContext(t *testing.T) {
+func TestRunHook_AlwaysInHookContext(t *testing.T) {
 	t.Parallel()
 
-	env := setupHookTest(t)
+	svc := setupHookTest(t)
 
-	// Pass opts without InHookContext set - runHook should set it internally
-	opts := &zapscript.ExprEnvOptions{
-		Scanned: &gozapscript.ExprEnvScanned{
-			ID: "test-id",
-		},
-		InHookContext: false, // Should be overridden to true by runHook
+	// Hooks always run in hook context (inHookContext=true), which means
+	// before_media_start hooks inside hooks are blocked (no recursion).
+	scanned := &gozapscript.ExprEnvScanned{
+		ID: "test-id",
 	}
 
-	err := env.runHook("test_hook", "**echo:test", opts)
+	err := runHook(svc, "test_hook", "**echo:test", scanned, nil)
 	assert.NoError(t, err)
-	// The function always creates new opts with InHookContext=true, preserving other fields
 }
 
 func TestRunHook_PreservesScannedAndLaunching(t *testing.T) {
 	t.Parallel()
 
-	env := setupHookTest(t)
+	svc := setupHookTest(t)
 
-	// Provide both Scanned and Launching contexts
-	opts := &zapscript.ExprEnvOptions{
-		Scanned: &gozapscript.ExprEnvScanned{
-			ID:    "scanned-id",
-			Value: "scanned-value",
-			Data:  "scanned-data",
-		},
-		Launching: &gozapscript.ExprEnvLaunching{
-			Path:       "/path/to/game",
-			SystemID:   "snes",
-			LauncherID: "mister",
-		},
+	scanned := &gozapscript.ExprEnvScanned{
+		ID:    "scanned-id",
+		Value: "scanned-value",
+		Data:  "scanned-data",
+	}
+	launching := &gozapscript.ExprEnvLaunching{
+		Path:       "/path/to/game",
+		SystemID:   "snes",
+		LauncherID: "mister",
 	}
 
-	err := env.runHook("combined_hook", "**echo:both contexts", opts)
+	err := runHook(svc, "combined_hook", "**echo:both contexts", scanned, launching)
 	assert.NoError(t, err, "hook with both contexts should succeed")
 }
 
 func TestRunHook_InvalidScript(t *testing.T) {
 	t.Parallel()
 
-	env := setupHookTest(t)
+	svc := setupHookTest(t)
 
-	err := env.runHook("test_hook", "**unknown_command:arg", nil)
+	err := runHook(svc, "test_hook", "**unknown_command:arg", nil, nil)
 	assert.Error(t, err, "unknown command should return error")
 }
 
 func TestRunHook_EmptyScript(t *testing.T) {
 	t.Parallel()
 
-	env := setupHookTest(t)
+	svc := setupHookTest(t)
 
-	err := env.runHook("test_hook", "", nil)
+	err := runHook(svc, "test_hook", "", nil, nil)
 	require.Error(t, err, "empty script should return error")
 	assert.Contains(t, err.Error(), "script is empty")
 }
 
-func TestRunHook_NilExprOpts(t *testing.T) {
+func TestRunHook_NilContextParams(t *testing.T) {
 	t.Parallel()
 
-	env := setupHookTest(t)
+	svc := setupHookTest(t)
 
-	err := env.runHook("test_hook", "**echo:nil opts test", nil)
-	assert.NoError(t, err, "nil exprOpts should work")
+	err := runHook(svc, "test_hook", "**echo:nil opts test", nil, nil)
+	assert.NoError(t, err, "nil scanned/launching should work")
 }

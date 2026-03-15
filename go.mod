@@ -1,13 +1,13 @@
 module github.com/ZaparooProject/zaparoo-core/v2
 
-go 1.25.7
+go 1.26.1
 
 require (
 	fyne.io/systray v1.11.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/ZaparooProject/go-pn532 v0.20.3
-	github.com/ZaparooProject/go-zapscript v0.1.0
+	github.com/ZaparooProject/go-zapscript v0.2.0
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
@@ -76,7 +76,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/ebitengine/purego v0.9.1 // indirect
-	github.com/expr-lang/expr v1.17.7 // indirect
+	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.10 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/geoffgarside/ber v1.1.0 // indirect

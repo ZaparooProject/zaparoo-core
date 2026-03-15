@@ -264,10 +264,19 @@ func Start(
 		limitsManager.SetEnabled(true)
 	}
 
+	svc := &ServiceContext{
+		Platform:            pl,
+		Config:              cfg,
+		State:               st,
+		DB:                  db,
+		LaunchSoftwareQueue: lsq,
+		PlaylistQueue:       plq,
+	}
+
 	// Set up the OnMediaStart hook
 	st.SetOnMediaStartHook(func(_ *models.ActiveMedia) {
 		if script := cfg.LaunchersOnMediaStart(); script != "" {
-			if hookErr := runHook(pl, cfg, st, db, lsq, plq, "on_media_start", script, nil); hookErr != nil {
+			if hookErr := runHook(svc, "on_media_start", script, nil, nil); hookErr != nil {
 				log.Error().Err(hookErr).Msg("error running on_media_start script")
 			}
 		}
@@ -330,10 +339,10 @@ func Start(
 	}
 
 	log.Info().Msg("starting reader manager")
-	go readerManager(pl, cfg, st, db, itq, lsq, plq, make(chan readers.Scan), player, nil)
+	go readerManager(svc, itq, make(chan readers.Scan), player, nil)
 
 	log.Info().Msg("starting input token queue manager")
-	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq, limitsManager, player)
+	go processTokenQueue(svc, itq, limitsManager, player)
 
 	log.Info().Msg("running platform post start")
 	err = pl.StartPost(cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia, db)

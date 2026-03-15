@@ -28,15 +28,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
@@ -150,16 +147,11 @@ func connectReaders(
 }
 
 func runBeforeExitHook(
-	pl platforms.Platform,
-	cfg *config.Instance,
-	st *state.State,
-	db *database.Database,
-	lsq chan *tokens.Token,
-	plq chan *playlists.Playlist,
+	svc *ServiceContext,
 	activeMedia models.ActiveMedia, //nolint:gocritic // single-use parameter in service function
 ) {
 	var systemIDs []string
-	launchers := pl.Launchers(cfg)
+	launchers := svc.Platform.Launchers(svc.Config)
 	for i := range launchers {
 		l := &launchers[i]
 		if l.ID == activeMedia.SystemID {
@@ -174,12 +166,12 @@ func runBeforeExitHook(
 
 	if len(systemIDs) > 0 {
 		for _, systemID := range systemIDs {
-			defaults, ok := cfg.LookupSystemDefaults(systemID)
+			defaults, ok := svc.Config.LookupSystemDefaults(systemID)
 			if !ok || defaults.BeforeExit == "" {
 				continue
 			}
 
-			if err := runHook(pl, cfg, st, db, lsq, plq, "before_exit", defaults.BeforeExit, nil); err != nil {
+			if err := runHook(svc, "before_exit", defaults.BeforeExit, nil, nil); err != nil {
 				log.Error().Err(err).Msg("error running before_exit script")
 			}
 
@@ -189,12 +181,7 @@ func runBeforeExitHook(
 }
 
 func timedExit(
-	pl platforms.Platform,
-	cfg *config.Instance,
-	st *state.State,
-	db *database.Database,
-	lsq chan *tokens.Token,
-	plq chan *playlists.Playlist,
+	svc *ServiceContext,
 	clock clockwork.Clock,
 	exitTimer clockwork.Timer,
 ) clockwork.Timer {
@@ -205,20 +192,20 @@ func timedExit(
 		}
 	}
 
-	if !cfg.HoldModeEnabled() {
+	if !svc.Config.HoldModeEnabled() {
 		log.Debug().Msg("hold mode not enabled, skipping exit timer")
 		return exitTimer
 	}
 
 	// Only hardware readers support hold mode exit
-	lastToken := st.GetLastScanned()
+	lastToken := svc.State.GetLastScanned()
 	if lastToken.Source != tokens.SourceReader {
 		log.Debug().Str("source", lastToken.Source).Msg("skipping exit timer for non-reader source")
 		return exitTimer
 	}
 
 	// Check if the reader supports removal detection
-	r, ok := st.GetReader(lastToken.ReaderID)
+	r, ok := svc.State.GetReader(lastToken.ReaderID)
 	if !ok {
 		log.Debug().Str("readerID", lastToken.ReaderID).Msg("reader not found in state, skipping exit timer")
 		return exitTimer
@@ -228,47 +215,47 @@ func timedExit(
 		return exitTimer
 	}
 
-	timerLen := time.Duration(float64(cfg.ReadersScan().ExitDelay) * float64(time.Second))
+	timerLen := time.Duration(float64(svc.Config.ReadersScan().ExitDelay) * float64(time.Second))
 	log.Debug().Msgf("exit timer set to: %s seconds", timerLen)
 	exitTimer = clock.NewTimer(timerLen)
 
 	go func() {
 		select {
 		case <-exitTimer.Chan():
-		case <-st.GetContext().Done():
+		case <-svc.State.GetContext().Done():
 			return
 		}
 
-		if !cfg.HoldModeEnabled() {
+		if !svc.Config.HoldModeEnabled() {
 			log.Debug().Msg("exit timer expired, but hold mode disabled")
 			return
 		}
 
-		activeMedia := st.ActiveMedia()
+		activeMedia := svc.State.ActiveMedia()
 		if activeMedia == nil {
 			log.Debug().Msg("no active media, cancelling exit")
 			return
 		}
 
-		if st.GetSoftwareToken() == nil {
+		if svc.State.GetSoftwareToken() == nil {
 			log.Debug().Msg("no active software token, cancelling exit")
 			return
 		}
 
-		if cfg.IsHoldModeIgnoredSystem(activeMedia.SystemID) {
+		if svc.Config.IsHoldModeIgnoredSystem(activeMedia.SystemID) {
 			log.Debug().Msg("active system ignored in config, cancelling exit")
 			return
 		}
 
-		runBeforeExitHook(pl, cfg, st, db, lsq, plq, *activeMedia)
+		runBeforeExitHook(svc, *activeMedia)
 
 		log.Info().Msg("exiting media")
-		err := pl.StopActiveLauncher(platforms.StopForMenu)
+		err := svc.Platform.StopActiveLauncher(platforms.StopForMenu)
 		if err != nil {
 			log.Warn().Msgf("error killing launcher: %s", err)
 		}
 
-		lsq <- nil
+		svc.LaunchSoftwareQueue <- nil
 	}()
 
 	return exitTimer
@@ -285,13 +272,8 @@ func timedExit(
 // This manager also handles the logic of what to do when a token is removed
 // from the reader.
 func readerManager(
-	pl platforms.Platform,
-	cfg *config.Instance,
-	st *state.State,
-	db *database.Database,
+	svc *ServiceContext,
 	itq chan<- tokens.Token,
-	lsq chan *tokens.Token,
-	plq chan *playlists.Playlist,
 	scanQueue chan readers.Scan,
 	player audio.Player,
 	clock clockwork.Clock,
@@ -306,44 +288,44 @@ func readerManager(
 	var exitTimer clockwork.Timer
 
 	var autoDetector *AutoDetector
-	if cfg.AutoDetect() {
-		autoDetector = NewAutoDetector(cfg)
+	if svc.Config.AutoDetect() {
+		autoDetector = NewAutoDetector(svc.Config)
 	}
 
 	readerTicker := time.NewTicker(1 * time.Second)
 
 	playFail := func() {
 		if time.Since(lastError) > 1*time.Second {
-			path, enabled := cfg.FailSoundPath(helpers.DataDir(pl))
+			path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
 			helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 		}
 	}
 
 	// manage reader connections
 	go func() {
-		log.Info().Msgf("reader manager started, auto-detect=%v", cfg.AutoDetect())
+		log.Info().Msgf("reader manager started, auto-detect=%v", svc.Config.AutoDetect())
 		sleepMonitor := helpers.NewSleepWakeMonitor(5 * time.Second)
 		readerConnectAttempts := 0
 		lastReaderCount := 0
 		for {
 			select {
-			case <-st.GetContext().Done():
+			case <-svc.State.GetContext().Done():
 				log.Info().Msg("reader manager shutting down via context cancellation")
 				return
 			case <-readerTicker.C:
 				// Check for wake from sleep and reconnect all readers if detected
 				if sleepMonitor.Check() {
 					log.Info().Msg("detected wake from sleep, reconnecting all readers")
-					for _, r := range st.ListReaders() {
+					for _, r := range svc.State.ListReaders() {
 						if r != nil {
-							st.RemoveReader(r.ReaderID())
+							svc.State.RemoveReader(r.ReaderID())
 						}
 					}
 					lastReaderCount = 0
 				}
 
 				readerConnectAttempts++
-				rs := st.ListReaders()
+				rs := svc.State.ListReaders()
 
 				if len(rs) != lastReaderCount {
 					if len(rs) == 0 {
@@ -356,7 +338,7 @@ func readerManager(
 					// Only log if no readers for 2 minutes
 					log.Debug().
 						Int("attempts", readerConnectAttempts).
-						Bool("autoDetect", cfg.AutoDetect()).
+						Bool("autoDetect", svc.Config.AutoDetect()).
 						Msg("no readers connected")
 				}
 
@@ -368,7 +350,7 @@ func readerManager(
 							Str("path", r.Path()).
 							Str("info", r.Info()).
 							Msg("pruning disconnected reader")
-						st.RemoveReader(readerID)
+						svc.State.RemoveReader(readerID)
 						if autoDetector != nil {
 							autoDetector.ClearPath(r.Path())
 							autoDetector.ClearFailedPath(r.Path())
@@ -376,7 +358,7 @@ func readerManager(
 					}
 				}
 
-				if connectErr := connectReaders(pl, cfg, st, scanQueue, autoDetector); connectErr != nil {
+				if connectErr := connectReaders(svc.Platform, svc.Config, svc.State, scanQueue, autoDetector); connectErr != nil {
 					log.Warn().Msgf("error connecting rs: %s", connectErr)
 				}
 				// Reset monitor after potentially blocking operations to avoid
@@ -394,7 +376,7 @@ preprocessing:
 		var scanSource string
 
 		select {
-		case <-st.GetContext().Done():
+		case <-svc.State.GetContext().Done():
 			log.Debug().Msg("closing reader manager via context cancellation")
 			break preprocessing
 		case t := <-scanQueue:
@@ -409,15 +391,15 @@ preprocessing:
 			scan = t.Token
 			readerError = t.ReaderError
 			scanSource = t.Source
-		case stoken := <-lsq:
+		case stoken := <-svc.LaunchSoftwareQueue:
 			// a token has been launched that starts software, used for managing exits
 			log.Debug().Msgf("new software token: %v", stoken)
-			if exitTimer != nil && !helpers.TokensEqual(stoken, st.GetSoftwareToken()) {
+			if exitTimer != nil && !helpers.TokensEqual(stoken, svc.State.GetSoftwareToken()) {
 				if stopped := exitTimer.Stop(); stopped {
 					log.Info().Msg("different software token inserted, cancelling exit")
 				}
 			}
-			st.SetSoftwareToken(stoken)
+			svc.State.SetSoftwareToken(stoken)
 			continue preprocessing
 		}
 
@@ -433,43 +415,41 @@ preprocessing:
 			log.Info().Msgf("new token scanned: %v", scan)
 
 			// Run on_scan hook before SetActiveCard so last_scanned refers to previous token
-			if onScanScript := cfg.ReadersScan().OnScan; onScanScript != "" {
-				scannedOpts := &zapscript.ExprEnvOptions{
-					Scanned: &gozapscript.ExprEnvScanned{
-						ID:    scan.UID,
-						Value: scan.Text,
-						Data:  scan.Data,
-					},
+			if onScanScript := svc.Config.ReadersScan().OnScan; onScanScript != "" {
+				scanned := &gozapscript.ExprEnvScanned{
+					ID:    scan.UID,
+					Value: scan.Text,
+					Data:  scan.Data,
 				}
-				if err := runHook(pl, cfg, st, db, lsq, plq, "on_scan", onScanScript, scannedOpts); err != nil {
+				if err := runHook(svc, "on_scan", onScanScript, scanned, nil); err != nil {
 					log.Warn().Err(err).Msg("on_scan hook blocked token processing")
 					continue preprocessing
 				}
 			}
 
-			st.SetActiveCard(*scan)
+			svc.State.SetActiveCard(*scan)
 
 			if exitTimer != nil {
 				stopped := exitTimer.Stop()
-				stoken := st.GetSoftwareToken()
+				stoken := svc.State.GetSoftwareToken()
 				if stopped && helpers.TokensEqual(scan, stoken) {
 					log.Info().Msg("same token reinserted, cancelling exit")
 					continue preprocessing
 				} else if stopped {
 					log.Info().Msg("new token inserted, restarting exit timer")
-					exitTimer = timedExit(pl, cfg, st, db, lsq, plq, clock, exitTimer)
+					exitTimer = timedExit(svc, clock, exitTimer)
 				}
 			}
 
 			// avoid launching a token that was just written by a reader
 			// NOTE: This check requires both UID and Text to match (see helpers.TokensEqual).
-			wt := st.GetWroteToken()
+			wt := svc.State.GetWroteToken()
 			if wt != nil && helpers.TokensEqual(scan, wt) {
 				log.Info().Msg("skipping launching just written token")
-				st.SetWroteToken(nil)
+				svc.State.SetWroteToken(nil)
 				continue preprocessing
 			}
-			st.SetWroteToken(nil)
+			svc.State.SetWroteToken(nil)
 
 			log.Info().Msgf("sending token to queue: %v", scan)
 
@@ -485,28 +465,28 @@ preprocessing:
 					log.Debug().Msg("cancelled exit timer due to reader error")
 				}
 			}
-			st.SetActiveCard(tokens.Token{})
+			svc.State.SetActiveCard(tokens.Token{})
 
 		case scanNormalRemoval:
 			log.Info().Msg("token was removed")
 
 			// Clear ActiveCard before hook to prevent blocked removals from affecting new scans
-			st.SetActiveCard(tokens.Token{})
+			svc.State.SetActiveCard(tokens.Token{})
 
 			// Run on_remove hook; errors skip exit timer but card state is already cleared
-			if onRemoveScript := cfg.ReadersScan().OnRemove; cfg.HoldModeEnabled() && onRemoveScript != "" {
-				if err := runHook(pl, cfg, st, db, lsq, plq, "on_remove", onRemoveScript, nil); err != nil {
+			if onRemoveScript := svc.Config.ReadersScan().OnRemove; svc.Config.HoldModeEnabled() && onRemoveScript != "" {
+				if err := runHook(svc, "on_remove", onRemoveScript, nil, nil); err != nil {
 					log.Warn().Err(err).Msg("on_remove hook blocked exit, media will keep running")
 					continue preprocessing
 				}
 			}
 
-			exitTimer = timedExit(pl, cfg, st, db, lsq, plq, clock, exitTimer)
+			exitTimer = timedExit(svc, clock, exitTimer)
 		}
 	}
 
 	// daemon shutdown
-	rs := st.ListReaders()
+	rs := svc.State.ListReaders()
 	for _, r := range rs {
 		if r != nil {
 			err := r.Close()

@@ -28,7 +28,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 )
 
@@ -52,19 +51,27 @@ func IsPlaylistCommand(cmdName string) bool {
 	}
 }
 
+// IsControlCommand returns true if the command is the control command.
+// The control command is blocked in control context to prevent recursion
+// where a control's Script invokes another control command.
+func IsControlCommand(cmdName string) bool {
+	return cmdName == gozapscript.ZapScriptCmdControl
+}
+
 // isControlAllowed returns true if the command is safe to run in control context.
 func isControlAllowed(cmdName string) bool {
-	return !IsMediaLaunchingCommand(cmdName) && !IsPlaylistCommand(cmdName)
+	return !IsMediaLaunchingCommand(cmdName) && !IsPlaylistCommand(cmdName) && !IsControlCommand(cmdName)
 }
 
 // RunControlScript parses and executes a zapscript string in control context.
 // All commands are validated before any are executed to prevent partial execution.
+// The exprEnv is passed directly to each command instead of building from state.
 func RunControlScript(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	db *database.Database,
-	st *state.State,
 	script string,
+	exprEnv *gozapscript.ArgExprEnv,
 ) error {
 	parser := gozapscript.NewParser(script)
 	parsed, err := parser.ParseScript()
@@ -88,6 +95,11 @@ func RunControlScript(
 		Source: tokens.SourceControl,
 	}
 
+	var env gozapscript.ArgExprEnv
+	if exprEnv != nil {
+		env = *exprEnv
+	}
+
 	for i, cmd := range parsed.Cmds {
 		_, err := RunCommand(
 			pl, cfg,
@@ -97,8 +109,8 @@ func RunControlScript(
 			len(parsed.Cmds),
 			i,
 			db,
-			st,
-			nil,
+			nil, // lm not needed — control commands cannot launch media
+			&env,
 		)
 		if err != nil {
 			return fmt.Errorf("control command %q failed: %w", cmd.Name, err)

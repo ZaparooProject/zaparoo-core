@@ -161,15 +161,24 @@ func setupScanBehavior(
 
 	limitsManager := playtime.NewLimitsManager(db, mockPlatform, cfg, nil, mockPlayer)
 
+	svc := &ServiceContext{
+		Platform: mockPlatform,
+		Config:              cfg,
+		State:               st,
+		DB:                  db,
+		LaunchSoftwareQueue: lsq,
+		PlaylistQueue:       plq,
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		readerManager(mockPlatform, cfg, st, db, itq, lsq, plq, scanQueue, mockPlayer, fakeClock)
+		readerManager(svc, itq, scanQueue, mockPlayer, fakeClock)
 	}()
 	go func() {
 		defer wg.Done()
-		processTokenQueue(mockPlatform, cfg, st, itq, db, lsq, plq, limitsManager, mockPlayer)
+		processTokenQueue(svc, itq, limitsManager, mockPlayer)
 	}()
 
 	t.Cleanup(func() {
