@@ -76,11 +76,12 @@ func calculateNDEFHeader(payload []byte) ([]byte, error) {
 		return nil, errors.New("NDEF payload too large")
 	}
 
-	header := []byte{0x03, 0xFF}
 	buf := new(bytes.Buffer)
 	if err := binary.Write(buf, binary.BigEndian, uint16(length)); err != nil {
 		return nil, fmt.Errorf("failed to write NDEF length header: %w", err)
 	}
 
+	header := make([]byte, 0, 2+buf.Len())
+	header = append(header, 0x03, 0xFF)
 	return append(header, buf.Bytes()...), nil
 }

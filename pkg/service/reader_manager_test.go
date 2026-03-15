@@ -72,7 +72,7 @@ func setupReaderManager(t *testing.T) *readerManagerEnv {
 	plq := make(chan *playlists.Playlist, 10)
 
 	svc := &ServiceContext{
-		Platform: mockPlatform,
+		Platform:            mockPlatform,
 		Config:              cfg,
 		State:               st,
 		DB:                  db,

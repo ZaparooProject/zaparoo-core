@@ -162,7 +162,7 @@ func setupScanBehavior(
 	limitsManager := playtime.NewLimitsManager(db, mockPlatform, cfg, nil, mockPlayer)
 
 	svc := &ServiceContext{
-		Platform: mockPlatform,
+		Platform:            mockPlatform,
 		Config:              cfg,
 		State:               st,
 		DB:                  db,

@@ -84,7 +84,7 @@ func (p *MalgoPlayer) playWAV(r io.ReadCloser) error {
 	if p.currentCancel != nil {
 		p.currentCancel()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: stored in p.currentCancel
 	p.currentCancel = cancel
 	p.playbackGen++
 	thisGen := p.playbackGen
@@ -161,7 +161,7 @@ func (p *MalgoPlayer) PlayFile(path string) error {
 	if p.currentCancel != nil {
 		p.currentCancel()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: stored in p.currentCancel
 	p.currentCancel = cancel
 	p.playbackGen++
 	thisGen := p.playbackGen

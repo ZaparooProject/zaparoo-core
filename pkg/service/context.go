@@ -31,10 +31,10 @@ import (
 // ServiceContext holds the shared dependencies threaded through all
 // service-layer functions. Created once in Start() and passed by pointer.
 type ServiceContext struct {
-	Platform             platforms.Platform
-	Config               *config.Instance
-	State                *state.State
-	DB                   *database.Database
-	LaunchSoftwareQueue  chan *tokens.Token
-	PlaylistQueue        chan *playlists.Playlist
+	Platform            platforms.Platform
+	Config              *config.Instance
+	State               *state.State
+	DB                  *database.Database
+	LaunchSoftwareQueue chan *tokens.Token
+	PlaylistQueue       chan *playlists.Playlist
 }

@@ -358,7 +358,8 @@ func readerManager(
 					}
 				}
 
-				if connectErr := connectReaders(svc.Platform, svc.Config, svc.State, scanQueue, autoDetector); connectErr != nil {
+				connectErr := connectReaders(svc.Platform, svc.Config, svc.State, scanQueue, autoDetector)
+				if connectErr != nil {
 					log.Warn().Msgf("error connecting rs: %s", connectErr)
 				}
 				// Reset monitor after potentially blocking operations to avoid
@@ -474,7 +475,8 @@ preprocessing:
 			svc.State.SetActiveCard(tokens.Token{})
 
 			// Run on_remove hook; errors skip exit timer but card state is already cleared
-			if onRemoveScript := svc.Config.ReadersScan().OnRemove; svc.Config.HoldModeEnabled() && onRemoveScript != "" {
+			onRemoveScript := svc.Config.ReadersScan().OnRemove
+			if svc.Config.HoldModeEnabled() && onRemoveScript != "" {
 				if err := runHook(svc, "on_remove", onRemoveScript, nil, nil); err != nil {
 					log.Warn().Err(err).Msg("on_remove hook blocked exit, media will keep running")
 					continue preprocessing

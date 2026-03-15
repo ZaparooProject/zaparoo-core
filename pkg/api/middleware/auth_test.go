@@ -262,6 +262,7 @@ func TestHTTPAuthMiddleware(t *testing.T) {
 				url += "?key=" + tt.queryParam
 			}
 
+			//nolint:noctx // test helper, no context needed
 			req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
@@ -336,6 +337,7 @@ func TestWebSocketAuthHandler(t *testing.T) {
 				url += "?key=" + tt.queryParam
 			}
 
+			//nolint:noctx // test helper, no context needed
 			req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
@@ -373,6 +375,7 @@ func TestHTTPAuthMiddleware_Integration(t *testing.T) {
 
 	// Test valid key - should reach all middlewares and handler
 	callCount = 0
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	req.Header.Set("Authorization", "Bearer valid-key")
 	recorder := httptest.NewRecorder()
@@ -383,6 +386,7 @@ func TestHTTPAuthMiddleware_Integration(t *testing.T) {
 
 	// Test invalid key - should not reach subsequent middlewares or handler
 	callCount = 0
+	//nolint:noctx // test helper, no context needed
 	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	req.Header.Set("Authorization", "Bearer invalid-key")
 	recorder = httptest.NewRecorder()
@@ -393,6 +397,7 @@ func TestHTTPAuthMiddleware_Integration(t *testing.T) {
 
 	// Test no key - should not reach subsequent middlewares or handler
 	callCount = 0
+	//nolint:noctx // test helper, no context needed
 	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	recorder = httptest.NewRecorder()
 	wrapped.ServeHTTP(recorder, req)
@@ -445,6 +450,7 @@ func TestHTTPAuthMiddleware_LocalhostExempt(t *testing.T) {
 
 			wrapped := middleware(handler)
 
+			//nolint:noctx // test helper, no context needed
 			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 
@@ -487,6 +493,7 @@ func TestWebSocketAuthHandler_LocalhostExempt(t *testing.T) {
 
 			cfg := NewAuthConfig(keysProvider([]string{"secret-key"}))
 
+			//nolint:noctx // test helper, no context needed
 			req := httptest.NewRequest(http.MethodGet, "/ws", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 
@@ -546,6 +553,7 @@ func TestHTTPAuthMiddleware_HotReload(t *testing.T) {
 	wrapped := middleware(handler)
 
 	// Request with valid key should succeed
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.100:12345" // Non-localhost to require auth
 	req.Header.Set("Authorization", "Bearer secret")
@@ -557,6 +565,7 @@ func TestHTTPAuthMiddleware_HotReload(t *testing.T) {
 	keys = []string{"new-secret"}
 
 	// Old key should now fail
+	//nolint:noctx // test helper, no context needed
 	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.100:12345"
 	req.Header.Set("Authorization", "Bearer secret")
@@ -565,6 +574,7 @@ func TestHTTPAuthMiddleware_HotReload(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
 
 	// New key should succeed
+	//nolint:noctx // test helper, no context needed
 	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.100:12345"
 	req.Header.Set("Authorization", "Bearer new-secret")

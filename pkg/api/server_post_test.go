@@ -90,6 +90,7 @@ func TestHandlePostRequest_ValidRequest(t *testing.T) {
 	handler, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.echo"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -112,6 +113,7 @@ func TestHandlePostRequest_InvalidJSON(t *testing.T) {
 
 	handler, _ := createTestPostHandler(t)
 
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(`{invalid json`))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -136,6 +138,7 @@ func TestHandlePostRequest_UnknownMethod(t *testing.T) {
 	handler, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"nonexistent.method"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -157,6 +160,7 @@ func TestHandlePostRequest_WrongContentType(t *testing.T) {
 
 	handler, _ := createTestPostHandler(t)
 
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(`{"test":"data"}`))
 	req.Header.Set("Content-Type", "text/plain")
 
@@ -173,6 +177,7 @@ func TestHandlePostRequest_ContentTypeWithCharset(t *testing.T) {
 	handler, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.echo"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 
@@ -191,6 +196,7 @@ func TestHandlePostRequest_Notification(t *testing.T) {
 
 	// JSON-RPC notification (no ID field)
 	reqBody := `{"jsonrpc":"2.0","method":"test.echo"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -209,6 +215,7 @@ func TestHandlePostRequest_MethodError(t *testing.T) {
 	handler, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.error"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -232,6 +239,7 @@ func TestHandlePostRequest_OversizedBody(t *testing.T) {
 
 	// Create a body larger than 1MB
 	largeBody := strings.Repeat("x", 2<<20) // 2MB
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(largeBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -249,6 +257,7 @@ func TestHandlePostRequest_EmptyBody(t *testing.T) {
 
 	handler, _ := createTestPostHandler(t)
 
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(""))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -271,6 +280,7 @@ func TestHandlePostRequest_InvalidJSONRPCVersion(t *testing.T) {
 	handler, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"1.0","id":"` + uuid.New().String() + `","method":"test.echo"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -293,6 +303,7 @@ func TestHandlePostRequest_StringID(t *testing.T) {
 	handler, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":"my-custom-string-id","method":"test.echo"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -314,6 +325,7 @@ func TestHandlePostRequest_NumberID(t *testing.T) {
 	handler, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":12345,"method":"test.echo"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -337,6 +349,7 @@ func TestHandlePostRequest_MissingID(t *testing.T) {
 
 	// Request without ID field = notification
 	reqBody := `{"jsonrpc":"2.0","method":"test.echo"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -356,6 +369,7 @@ func TestHandlePostRequest_NullID(t *testing.T) {
 
 	// Request with explicit null ID
 	reqBody := `{"jsonrpc":"2.0","id":null,"method":"test.echo"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -381,6 +395,7 @@ func TestHandlePostRequest_UUIDStringID(t *testing.T) {
 
 	testUUID := uuid.New().String()
 	reqBody := `{"jsonrpc":"2.0","id":"` + testUUID + `","method":"test.echo"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -403,6 +418,7 @@ func TestHandlePostRequest_InvalidObjectID(t *testing.T) {
 
 	// Object ID is invalid per JSON-RPC spec
 	reqBody := `{"jsonrpc":"2.0","id":{"nested":"object"},"method":"test.echo"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -427,6 +443,7 @@ func TestHandlePostRequest_InvalidArrayID(t *testing.T) {
 
 	// Array ID is invalid per JSON-RPC spec
 	reqBody := `{"jsonrpc":"2.0","id":[1,2,3],"method":"test.echo"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -460,6 +477,7 @@ func TestHandlePostRequest_ResponseWithCallback(t *testing.T) {
 	require.NoError(t, err)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.callback"}`
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 

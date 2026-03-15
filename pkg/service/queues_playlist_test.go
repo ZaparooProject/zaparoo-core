@@ -62,7 +62,7 @@ func setupPlaylistTestEnv(t *testing.T) *ServiceContext {
 	mockUserDB.On("GetSupportedZapLinkHosts").Return([]string{}, nil).Maybe()
 
 	return &ServiceContext{
-		Platform: mockPlatform,
+		Platform:            mockPlatform,
 		Config:              cfg,
 		State:               st,
 		DB:                  &database.Database{UserDB: mockUserDB},

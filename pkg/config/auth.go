@@ -234,7 +234,7 @@ func marshalAuthFile(
 		Creds:   creds,
 	}
 
-	data, err := toml.Marshal(file)
+	data, err := toml.Marshal(file) //nolint:gosec // G117: field name matches existing TOML key, not a secret
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal auth file: %w", err)
 	}

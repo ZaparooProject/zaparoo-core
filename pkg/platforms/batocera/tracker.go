@@ -47,8 +47,7 @@ func (p *Platform) startGameTracker(
 		p.clock = clockwork.NewRealClock()
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel returned in closure
 	// Poll every 2 seconds for responsive tracking
 	ticker := p.clock.NewTicker(2 * time.Second)
 

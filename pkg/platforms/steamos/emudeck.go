@@ -448,9 +448,31 @@ func LaunchViaEmuDeck(ctx context.Context, romPath, systemFolder string) (*os.Pr
 	return cmd.Process, nil
 }
 
+// retroArchControls returns the control map for RetroArch-based launchers
+// using RetroArch's default keyboard hotkeys.
+func retroArchControls() map[string]platforms.Control {
+	return map[string]platforms.Control{
+		platforms.ControlSaveState:   {Script: "**input.keyboard:{f2}"},
+		platforms.ControlLoadState:   {Script: "**input.keyboard:{f4}"},
+		platforms.ControlToggleMenu:  {Script: "**input.keyboard:{f1}"},
+		platforms.ControlTogglePause: {Script: "**input.keyboard:p"},
+		platforms.ControlReset:       {Script: "**input.keyboard:{f9}"},
+		platforms.ControlFastForward: {Script: "**input.keyboard:l"},
+		platforms.ControlStop:        {Script: "**stop"},
+	}
+}
+
 // createEmuDeckLauncher creates a launcher for a specific EmuDeck system.
 func createEmuDeckLauncher(systemFolder string, systemInfo esde.SystemInfo, paths EmuDeckPaths) platforms.Launcher {
+	emulator := emulatorMapping[systemFolder]
+
+	var controls map[string]platforms.Control
+	if emulator.Type == EmulatorRetroArch {
+		controls = retroArchControls()
+	}
+
 	return platforms.Launcher{
+		Controls:           controls,
 		ID:                 "EmuDeck" + systemInfo.GetLauncherID(),
 		SystemID:           systemInfo.SystemID,
 		Lifecycle:          platforms.LifecycleTracked,

@@ -54,8 +54,8 @@ func setupHookTest(t *testing.T) *ServiceContext {
 
 	return &ServiceContext{
 		Platform: mockPlatform,
-		Config:              cfg,
-		State:               st,
+		Config:   cfg,
+		State:    st,
 		DB: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,

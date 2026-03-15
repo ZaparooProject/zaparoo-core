@@ -387,6 +387,7 @@ func addDirToZip(zipWriter *zip.Writer, dirPath, buildDir string) error {
 			}
 
 			destPath := filepath.Join(buildDir, filepath.Base(dirPath), relPath)
+			//nolint:gosec // G703: paths from internal walk, not user input
 			if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 				return fmt.Errorf("failed to create directory: %w", err)
 			}
@@ -524,6 +525,7 @@ func addDirToTar(tarWriter *tar.Writer, dirPath, buildDir string) error {
 			}
 
 			destPath := filepath.Join(buildDir, filepath.Base(dirPath), relPath)
+			//nolint:gosec // G703: paths from internal walk, not user input
 			if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 				return fmt.Errorf("failed to create directory: %w", err)
 			}

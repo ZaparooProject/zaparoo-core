@@ -136,6 +136,7 @@ func TestFsCustom404(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			//nolint:noctx // test helper, no context needed
 			req := httptest.NewRequest(http.MethodGet, tt.path, http.NoBody)
 			rec := httptest.NewRecorder()
 
@@ -176,6 +177,7 @@ func TestFsCustom404_MissingIndex(t *testing.T) {
 
 	handler := fsCustom404(http.FS(mockFS))
 
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodGet, "/unknown", http.NoBody)
 	rec := httptest.NewRecorder()
 
