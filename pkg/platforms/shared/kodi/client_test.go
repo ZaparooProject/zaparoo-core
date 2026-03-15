@@ -267,7 +267,7 @@ func TestClient_Stop_NoActivePlayers(t *testing.T) {
 	client.SetURL(server.URL)
 
 	// Execute
-	err := client.Stop()
+	err := client.Stop(context.Background())
 
 	// Verify
 	require.NoError(t, err)
@@ -329,7 +329,7 @@ func TestClient_Stop_SingleActivePlayer(t *testing.T) {
 	client.SetURL(server.URL)
 
 	// Execute
-	err := client.Stop()
+	err := client.Stop(context.Background())
 
 	// Verify
 	require.NoError(t, err)
@@ -390,7 +390,7 @@ func TestClient_Stop_MultipleActivePlayers(t *testing.T) {
 	client.SetURL(server.URL)
 
 	// Execute
-	err := client.Stop()
+	err := client.Stop(context.Background())
 
 	// Verify
 	require.NoError(t, err)
@@ -1459,4 +1459,324 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 		authHeader := receivedHeaders.Get("Authorization")
 		assert.Equal(t, "Bearer test-bearer-token-12345", authHeader)
 	})
+}
+
+func TestClient_PlayPause_MakesCorrectAPICall(t *testing.T) {
+	t.Parallel()
+
+	var receivedPayloads []map[string]any
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		receivedPayloads = append(receivedPayloads, payload)
+		method, ok := payload["method"].(string)
+		if !ok {
+			t.Fatalf("expected method to be string, got %T", payload["method"])
+		}
+
+		switch method {
+		case "Player.GetActivePlayers":
+			return map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result": []any{
+					map[string]any{"playerid": 1, "type": "video"},
+				},
+			}
+		case "Player.PlayPause":
+			return map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  map[string]any{"speed": 0},
+			}
+		default:
+			t.Errorf("Unexpected API method called: %s", method)
+			return map[string]any{}
+		}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	err := client.PlayPause(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, receivedPayloads, 2)
+	assert.Equal(t, "Player.GetActivePlayers", receivedPayloads[0]["method"])
+	assert.Equal(t, "Player.PlayPause", receivedPayloads[1]["method"])
+
+	params, ok := receivedPayloads[1]["params"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, 1, int(params["playerid"].(float64)))
+}
+
+func TestClient_PlayPause_NoActivePlayers(t *testing.T) {
+	t.Parallel()
+
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		return map[string]any{
+			"jsonrpc": "2.0",
+			"id":      payload["id"],
+			"result":  []any{},
+		}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	err := client.PlayPause(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no active players")
+}
+
+func TestClient_FastForward_NoActivePlayers(t *testing.T) {
+	t.Parallel()
+
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		return map[string]any{
+			"jsonrpc": "2.0",
+			"id":      payload["id"],
+			"result":  []any{},
+		}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	err := client.FastForward(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no active players")
+}
+
+func TestClient_FastForward_MakesCorrectAPICall(t *testing.T) {
+	t.Parallel()
+
+	var receivedPayloads []map[string]any
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		receivedPayloads = append(receivedPayloads, payload)
+		method, ok := payload["method"].(string)
+		if !ok {
+			t.Fatalf("expected method to be string, got %T", payload["method"])
+		}
+
+		switch method {
+		case "Player.GetActivePlayers":
+			return map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result": []any{
+					map[string]any{"playerid": 1, "type": "video"},
+				},
+			}
+		case "Player.SetSpeed":
+			return map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  map[string]any{"speed": 2},
+			}
+		default:
+			t.Errorf("Unexpected API method called: %s", method)
+			return map[string]any{}
+		}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	err := client.FastForward(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, receivedPayloads, 2)
+	assert.Equal(t, "Player.SetSpeed", receivedPayloads[1]["method"])
+
+	params, ok := receivedPayloads[1]["params"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, 1, int(params["playerid"].(float64)))
+	assert.Equal(t, "increment", params["speed"])
+}
+
+func TestClient_Rewind_NoActivePlayers(t *testing.T) {
+	t.Parallel()
+
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		return map[string]any{
+			"jsonrpc": "2.0",
+			"id":      payload["id"],
+			"result":  []any{},
+		}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	err := client.Rewind(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no active players")
+}
+
+func TestClient_Rewind_MakesCorrectAPICall(t *testing.T) {
+	t.Parallel()
+
+	var receivedPayloads []map[string]any
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		receivedPayloads = append(receivedPayloads, payload)
+		method, ok := payload["method"].(string)
+		if !ok {
+			t.Fatalf("expected method to be string, got %T", payload["method"])
+		}
+
+		switch method {
+		case "Player.GetActivePlayers":
+			return map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result": []any{
+					map[string]any{"playerid": 1, "type": "video"},
+				},
+			}
+		case "Player.SetSpeed":
+			return map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  map[string]any{"speed": -2},
+			}
+		default:
+			t.Errorf("Unexpected API method called: %s", method)
+			return map[string]any{}
+		}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	err := client.Rewind(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, receivedPayloads, 2)
+	assert.Equal(t, "Player.SetSpeed", receivedPayloads[1]["method"])
+
+	params, ok := receivedPayloads[1]["params"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, 1, int(params["playerid"].(float64)))
+	assert.Equal(t, "decrement", params["speed"])
+}
+
+func TestClient_GoTo_NoActivePlayers(t *testing.T) {
+	t.Parallel()
+
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		return map[string]any{
+			"jsonrpc": "2.0",
+			"id":      payload["id"],
+			"result":  []any{},
+		}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	err := client.GoTo(context.Background(), "next")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no active players")
+}
+
+func TestClient_GoTo_Next_MakesCorrectAPICall(t *testing.T) {
+	t.Parallel()
+
+	var receivedPayloads []map[string]any
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		receivedPayloads = append(receivedPayloads, payload)
+		method, ok := payload["method"].(string)
+		if !ok {
+			t.Fatalf("expected method to be string, got %T", payload["method"])
+		}
+
+		switch method {
+		case "Player.GetActivePlayers":
+			return map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result": []any{
+					map[string]any{"playerid": 1, "type": "video"},
+				},
+			}
+		case "Player.GoTo":
+			return map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  "OK",
+			}
+		default:
+			t.Errorf("Unexpected API method called: %s", method)
+			return map[string]any{}
+		}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	err := client.GoTo(context.Background(), "next")
+	require.NoError(t, err)
+
+	require.Len(t, receivedPayloads, 2)
+	assert.Equal(t, "Player.GoTo", receivedPayloads[1]["method"])
+
+	params, ok := receivedPayloads[1]["params"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, 1, int(params["playerid"].(float64)))
+	assert.Equal(t, "next", params["to"])
+}
+
+func TestClient_GoTo_Previous_MakesCorrectAPICall(t *testing.T) {
+	t.Parallel()
+
+	var receivedPayloads []map[string]any
+	server := createMockKodiServer(t, func(payload map[string]any) map[string]any {
+		receivedPayloads = append(receivedPayloads, payload)
+		method, ok := payload["method"].(string)
+		if !ok {
+			t.Fatalf("expected method to be string, got %T", payload["method"])
+		}
+
+		switch method {
+		case "Player.GetActivePlayers":
+			return map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result": []any{
+					map[string]any{"playerid": 1, "type": "video"},
+				},
+			}
+		case "Player.GoTo":
+			return map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  "OK",
+			}
+		default:
+			t.Errorf("Unexpected API method called: %s", method)
+			return map[string]any{}
+		}
+	})
+	defer server.Close()
+
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	err := client.GoTo(context.Background(), "previous")
+	require.NoError(t, err)
+
+	require.Len(t, receivedPayloads, 2)
+	assert.Equal(t, "Player.GoTo", receivedPayloads[1]["method"])
+
+	params, ok := receivedPayloads[1]["params"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, 1, int(params["playerid"].(float64)))
+	assert.Equal(t, "previous", params["to"])
 }

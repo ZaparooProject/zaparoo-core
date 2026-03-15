@@ -35,15 +35,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type playlistTestEnv struct {
-	platform *mocks.MockPlatform
-	cfg      *config.Instance
-	st       *state.State
-	db       *database.Database
-	lsq      chan *tokens.Token
-}
-
-func setupPlaylistTestEnv(t *testing.T) *playlistTestEnv {
+func setupPlaylistTestEnv(t *testing.T) *ServiceContext {
 	t.Helper()
 
 	mockPlatform := mocks.NewMockPlatform()
@@ -69,19 +61,20 @@ func setupPlaylistTestEnv(t *testing.T) *playlistTestEnv {
 	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
 	mockUserDB.On("GetSupportedZapLinkHosts").Return([]string{}, nil).Maybe()
 
-	return &playlistTestEnv{
-		platform: mockPlatform,
-		cfg:      cfg,
-		st:       st,
-		db:       &database.Database{UserDB: mockUserDB},
-		lsq:      make(chan *tokens.Token, 10),
+	return &ServiceContext{
+		Platform:            mockPlatform,
+		Config:              cfg,
+		State:               st,
+		DB:                  &database.Database{UserDB: mockUserDB},
+		LaunchSoftwareQueue: make(chan *tokens.Token, 10),
+		PlaylistQueue:       make(chan *playlists.Playlist, 10),
 	}
 }
 
 func TestRunTokenZapScript_ClearsPlaylistOnMediaChange(t *testing.T) {
 	t.Parallel()
 
-	env := setupPlaylistTestEnv(t)
+	svc := setupPlaylistTestEnv(t)
 
 	plq := make(chan *playlists.Playlist, 10)
 	plsc := playlists.PlaylistController{Queue: plq}
@@ -91,7 +84,7 @@ func TestRunTokenZapScript_ClearsPlaylistOnMediaChange(t *testing.T) {
 		ScanTime: time.Now(),
 	}
 
-	err := runTokenZapScript(env.platform, env.cfg, env.st, token, env.db, env.lsq, plsc, nil)
+	err := runTokenZapScript(svc, token, plsc, nil, false)
 	require.NoError(t, err)
 
 	select {
@@ -105,7 +98,7 @@ func TestRunTokenZapScript_ClearsPlaylistOnMediaChange(t *testing.T) {
 func TestRunTokenZapScript_SkipsPlaylistClearForPlaylistSource(t *testing.T) {
 	t.Parallel()
 
-	env := setupPlaylistTestEnv(t)
+	svc := setupPlaylistTestEnv(t)
 
 	plq := make(chan *playlists.Playlist, 10)
 	plsc := playlists.PlaylistController{Queue: plq}
@@ -116,7 +109,7 @@ func TestRunTokenZapScript_SkipsPlaylistClearForPlaylistSource(t *testing.T) {
 		Source:   tokens.SourcePlaylist,
 	}
 
-	err := runTokenZapScript(env.platform, env.cfg, env.st, token, env.db, env.lsq, plsc, nil)
+	err := runTokenZapScript(svc, token, plsc, nil, false)
 	require.NoError(t, err)
 
 	select {
@@ -130,8 +123,8 @@ func TestRunTokenZapScript_SkipsPlaylistClearForPlaylistSource(t *testing.T) {
 func TestRunTokenZapScript_NoPlaylistClearForNonMediaCommand(t *testing.T) {
 	t.Parallel()
 
-	env := setupPlaylistTestEnv(t)
-	env.platform.On("KeyboardPress", "{f2}").Return(nil)
+	svc := setupPlaylistTestEnv(t)
+	svc.Platform.(*mocks.MockPlatform).On("KeyboardPress", "{f2}").Return(nil)
 
 	plq := make(chan *playlists.Playlist, 10)
 	plsc := playlists.PlaylistController{Queue: plq}
@@ -141,7 +134,7 @@ func TestRunTokenZapScript_NoPlaylistClearForNonMediaCommand(t *testing.T) {
 		ScanTime: time.Now(),
 	}
 
-	err := runTokenZapScript(env.platform, env.cfg, env.st, token, env.db, env.lsq, plsc, nil)
+	err := runTokenZapScript(svc, token, plsc, nil, false)
 	require.NoError(t, err)
 
 	select {

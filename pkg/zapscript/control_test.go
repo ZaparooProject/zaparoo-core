@@ -23,26 +23,11 @@ import (
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func drainNotifications(t *testing.T, ns <-chan models.Notification) {
-	t.Helper()
-	t.Cleanup(func() {
-		for {
-			select {
-			case <-ns:
-			default:
-				return
-			}
-		}
-	})
-}
 
 func TestRunControlScript_SingleCommand(t *testing.T) {
 	t.Parallel()
@@ -52,10 +37,9 @@ func TestRunControlScript_SingleCommand(t *testing.T) {
 	mockPlatform.On("KeyboardPress", "{f2}").Return(nil)
 
 	cfg := &config.Instance{}
-	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
-	drainNotifications(t, ns)
+	exprEnv := gozapscript.ArgExprEnv{Platform: "test"}
 
-	err := RunControlScript(mockPlatform, cfg, nil, st, "**input.keyboard:{f2}")
+	err := RunControlScript(mockPlatform, cfg, nil, "**input.keyboard:{f2}", &exprEnv)
 	require.NoError(t, err)
 	mockPlatform.AssertCalled(t, "KeyboardPress", "{f2}")
 }
@@ -69,10 +53,9 @@ func TestRunControlScript_MultiCommand(t *testing.T) {
 	mockPlatform.On("KeyboardPress", "{f5}").Return(nil)
 
 	cfg := &config.Instance{}
-	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
-	drainNotifications(t, ns)
+	exprEnv := gozapscript.ArgExprEnv{Platform: "test"}
 
-	err := RunControlScript(mockPlatform, cfg, nil, st, "**input.keyboard:{f2}||**input.keyboard:{f5}")
+	err := RunControlScript(mockPlatform, cfg, nil, "**input.keyboard:{f2}||**input.keyboard:{f5}", &exprEnv)
 	require.NoError(t, err)
 	mockPlatform.AssertCalled(t, "KeyboardPress", "{f2}")
 	mockPlatform.AssertCalled(t, "KeyboardPress", "{f5}")
@@ -84,11 +67,7 @@ func TestRunControlScript_RejectsLaunchCommands(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test")
 
-	cfg := &config.Instance{}
-	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
-	drainNotifications(t, ns)
-
-	err := RunControlScript(mockPlatform, cfg, nil, st, "**launch:/path/to/game")
+	err := RunControlScript(mockPlatform, &config.Instance{}, nil, "**launch:/path/to/game", nil)
 	require.ErrorIs(t, err, ErrControlCommandNotAllowed)
 	assert.Contains(t, err.Error(), "launch")
 }
@@ -99,11 +78,7 @@ func TestRunControlScript_RejectsPlaylistCommands(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test")
 
-	cfg := &config.Instance{}
-	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
-	drainNotifications(t, ns)
-
-	err := RunControlScript(mockPlatform, cfg, nil, st, "**playlist.play")
+	err := RunControlScript(mockPlatform, &config.Instance{}, nil, "**playlist.play", nil)
 	require.ErrorIs(t, err, ErrControlCommandNotAllowed)
 	assert.Contains(t, err.Error(), "playlist.play")
 }
@@ -111,25 +86,14 @@ func TestRunControlScript_RejectsPlaylistCommands(t *testing.T) {
 func TestRunControlScript_EmptyScript(t *testing.T) {
 	t.Parallel()
 
-	mockPlatform := mocks.NewMockPlatform()
-	cfg := &config.Instance{}
-	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
-	drainNotifications(t, ns)
-
-	err := RunControlScript(mockPlatform, cfg, nil, st, "")
+	err := RunControlScript(nil, &config.Instance{}, nil, "", nil)
 	require.Error(t, err)
 }
 
 func TestRunControlScript_InvalidSyntax(t *testing.T) {
 	t.Parallel()
 
-	mockPlatform := mocks.NewMockPlatform()
-	cfg := &config.Instance{}
-	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
-	drainNotifications(t, ns)
-
-	// An invalid script (just the prefix with no command)
-	err := RunControlScript(mockPlatform, cfg, nil, st, "**")
+	err := RunControlScript(nil, &config.Instance{}, nil, "**", nil)
 	require.Error(t, err)
 }
 
@@ -139,13 +103,9 @@ func TestRunControlScript_RejectsBeforeExecuting(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test")
 
-	cfg := &config.Instance{}
-	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
-	drainNotifications(t, ns)
-
 	// Valid command first, then a forbidden launch command.
 	// The valid command must NOT execute.
-	err := RunControlScript(mockPlatform, cfg, nil, st, "**input.keyboard:{f2}||**launch:/path/to/game")
+	err := RunControlScript(mockPlatform, &config.Instance{}, nil, "**input.keyboard:{f2}||**launch:/path/to/game", nil)
 	require.ErrorIs(t, err, ErrControlCommandNotAllowed)
 	mockPlatform.AssertNotCalled(t, "KeyboardPress", "{f2}")
 }
@@ -156,13 +116,42 @@ func TestRunControlScript_RejectsPlaylistInMultiCommand(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test")
 
-	cfg := &config.Instance{}
-	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
-	drainNotifications(t, ns)
-
-	err := RunControlScript(mockPlatform, cfg, nil, st, "**input.keyboard:{f2}||**playlist.play")
+	err := RunControlScript(mockPlatform, &config.Instance{}, nil, "**input.keyboard:{f2}||**playlist.play", nil)
 	require.ErrorIs(t, err, ErrControlCommandNotAllowed)
 	mockPlatform.AssertNotCalled(t, "KeyboardPress", "{f2}")
+}
+
+func TestRunControlScript_RejectsControlCommand(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	err := RunControlScript(mockPlatform, &config.Instance{}, nil, "**control:toggle_pause", nil)
+	require.ErrorIs(t, err, ErrControlCommandNotAllowed)
+	assert.Contains(t, err.Error(), "control")
+}
+
+func TestIsControlCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		cmdName string
+		want    bool
+	}{
+		{name: "control", cmdName: gozapscript.ZapScriptCmdControl, want: true},
+		{name: "launch is not control", cmdName: "launch", want: false},
+		{name: "stop is not control", cmdName: "stop", want: false},
+		{name: "empty string", cmdName: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, IsControlCommand(tt.cmdName))
+		})
+	}
 }
 
 func TestIsPlaylistCommand(t *testing.T) {
@@ -182,6 +171,7 @@ func TestIsPlaylistCommand(t *testing.T) {
 		{name: "playlist.load", cmdName: gozapscript.ZapScriptCmdPlaylistLoad, want: true},
 		{name: "playlist.open", cmdName: gozapscript.ZapScriptCmdPlaylistOpen, want: true},
 		{name: "launch is not playlist", cmdName: "launch", want: false},
+		{name: "control is not playlist", cmdName: gozapscript.ZapScriptCmdControl, want: false},
 		{name: "input.keyboard is not playlist", cmdName: "input.keyboard", want: false},
 		{name: "empty string", cmdName: "", want: false},
 	}

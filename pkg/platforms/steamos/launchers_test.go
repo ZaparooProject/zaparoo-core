@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -280,6 +281,84 @@ func TestRetroDECKLauncherID(t *testing.T) {
 
 	assert.Equal(t, "snes", launcher.SystemID)
 	assert.Contains(t, launcher.ID, "RetroDECK")
+}
+
+// TestEmuDeckRetroArchLauncherHasControls tests that RetroArch-based EmuDeck
+// launchers have playback controls set.
+func TestEmuDeckRetroArchLauncherHasControls(t *testing.T) {
+	t.Parallel()
+
+	paths := EmuDeckPaths{
+		RomsPath:     "/home/testuser/Emulation/roms",
+		GamelistPath: "/home/testuser/ES-DE/gamelists",
+	}
+
+	systemInfo := esde.SystemInfo{
+		SystemID: "nes",
+	}
+
+	launcher := createEmuDeckLauncher("nes", systemInfo, paths)
+
+	expectedControls := []string{
+		platforms.ControlSaveState,
+		platforms.ControlLoadState,
+		platforms.ControlToggleMenu,
+		platforms.ControlTogglePause,
+		platforms.ControlReset,
+		platforms.ControlFastForward,
+		platforms.ControlStop,
+	}
+
+	require.NotNil(t, launcher.Controls, "RetroArch launcher should have controls")
+	for _, name := range expectedControls {
+		ctrl, ok := launcher.Controls[name]
+		assert.True(t, ok, "should have control: %s", name)
+		assert.NotEmpty(t, ctrl.Script, "control %s should have a script", name)
+	}
+}
+
+// TestEmuDeckStandaloneLauncherHasNoControls tests that standalone emulator
+// launchers do not have controls set.
+func TestEmuDeckStandaloneLauncherHasNoControls(t *testing.T) {
+	t.Parallel()
+
+	paths := EmuDeckPaths{
+		RomsPath:     "/home/testuser/Emulation/roms",
+		GamelistPath: "/home/testuser/ES-DE/gamelists",
+	}
+
+	systemInfo := esde.SystemInfo{
+		SystemID: "psx",
+	}
+
+	launcher := createEmuDeckLauncher("psx", systemInfo, paths)
+
+	assert.Nil(t, launcher.Controls, "standalone launcher should not have controls")
+}
+
+// TestRetroArchControls tests the retroArchControls helper returns the
+// expected control scripts.
+func TestRetroArchControls(t *testing.T) {
+	t.Parallel()
+
+	controls := retroArchControls()
+
+	expected := map[string]string{
+		platforms.ControlSaveState:   "**input.keyboard:{f2}",
+		platforms.ControlLoadState:   "**input.keyboard:{f4}",
+		platforms.ControlToggleMenu:  "**input.keyboard:{f1}",
+		platforms.ControlTogglePause: "**input.keyboard:p",
+		platforms.ControlReset:       "**input.keyboard:{f9}",
+		platforms.ControlFastForward: "**input.keyboard:l",
+		platforms.ControlStop:        "**stop",
+	}
+
+	assert.Len(t, controls, len(expected))
+	for name, script := range expected {
+		ctrl, ok := controls[name]
+		assert.True(t, ok, "missing control: %s", name)
+		assert.Equal(t, script, ctrl.Script, "wrong script for control: %s", name)
+	}
 }
 
 // TestGetRetroArchCoresPath tests the RetroArch cores path function.

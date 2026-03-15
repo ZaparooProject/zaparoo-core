@@ -72,7 +72,7 @@ func TestHandleMediaControl_UnknownAction(t *testing.T) {
 			ID:       "test-launcher",
 			SystemID: "NES",
 			Controls: map[string]platforms.Control{
-				"save_state": {Func: func(_ *config.Instance, _ platforms.ControlParams) error {
+				"save_state": {Func: func(_ context.Context, _ *config.Instance, _ platforms.ControlParams) error {
 					return nil
 				}},
 			},
@@ -140,7 +140,7 @@ func TestHandleMediaControl_Success(t *testing.T) {
 			ID:       "test-launcher",
 			SystemID: "NES",
 			Controls: map[string]platforms.Control{
-				"save_state": {Func: func(_ *config.Instance, _ platforms.ControlParams) error {
+				"save_state": {Func: func(_ context.Context, _ *config.Instance, _ platforms.ControlParams) error {
 					called = true
 					return nil
 				}},
@@ -191,7 +191,7 @@ func TestHandleMediaControl_ArgsPassThrough(t *testing.T) {
 			ID:       "test-launcher",
 			SystemID: "NES",
 			Controls: map[string]platforms.Control{
-				"save_state": {Func: func(_ *config.Instance, cp platforms.ControlParams) error {
+				"save_state": {Func: func(_ context.Context, _ *config.Instance, cp platforms.ControlParams) error {
 					receivedArgs = cp.Args
 					return nil
 				}},
@@ -230,7 +230,7 @@ func TestHandleMediaControl_ArgsNilWhenOmitted(t *testing.T) {
 			ID:       "test-launcher",
 			SystemID: "NES",
 			Controls: map[string]platforms.Control{
-				"save_state": {Func: func(_ *config.Instance, cp platforms.ControlParams) error {
+				"save_state": {Func: func(_ context.Context, _ *config.Instance, cp platforms.ControlParams) error {
 					receivedArgs = cp.Args
 					return nil
 				}},

@@ -20,38 +20,21 @@
 package service
 
 import (
-	"time"
-
-	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
-	"github.com/rs/zerolog/log"
 )
 
-// runHook executes a hook script with the standard playlist from state.
-// Returns error if the script fails (for blocking hooks) or nil on success.
-// The scanned/launching params provide optional context for the expression env.
-func runHook(
-	svc *ServiceContext,
-	hookName string,
-	script string,
-	scanned *gozapscript.ExprEnvScanned,
-	launching *gozapscript.ExprEnvLaunching,
-) error {
-	log.Info().Msgf("running %s: %s", hookName, script)
-
-	plsc := playlists.PlaylistController{
-		Active: svc.State.GetActivePlaylist(),
-		Queue:  svc.PlaylistQueue,
-	}
-
-	t := tokens.Token{
-		ScanTime: time.Now(),
-		Text:     script,
-		Source:   tokens.SourceHook,
-	}
-
-	hookEnv := zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, scanned, launching)
-	return runTokenZapScript(svc, t, plsc, &hookEnv, true)
+// ServiceContext holds the shared dependencies threaded through all
+// service-layer functions. Created once in Start() and passed by pointer.
+type ServiceContext struct {
+	Platform            platforms.Platform
+	Config              *config.Instance
+	State               *state.State
+	DB                  *database.Database
+	LaunchSoftwareQueue chan *tokens.Token
+	PlaylistQueue       chan *playlists.Playlist
 }

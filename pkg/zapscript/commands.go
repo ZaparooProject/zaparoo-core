@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -68,53 +69,65 @@ func ParseAdvArgs[T any](pl platforms.Platform, env *platforms.CmdEnv, dest *T) 
 	return nil
 }
 
-var cmdMap = map[string]func(
-	platforms.Platform,
-	platforms.CmdEnv,
-) (platforms.CmdResult, error){
-	zapscript.ZapScriptCmdLaunch:       cmdLaunch,
-	zapscript.ZapScriptCmdLaunchSystem: cmdSystem,
-	zapscript.ZapScriptCmdLaunchRandom: cmdRandom,
-	zapscript.ZapScriptCmdLaunchSearch: cmdSearch,
-	zapscript.ZapScriptCmdLaunchTitle:  cmdTitle,
+type cmdFunc = func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error)
 
-	zapscript.ZapScriptCmdPlaylistPlay:     cmdPlaylistPlay,
-	zapscript.ZapScriptCmdPlaylistStop:     cmdPlaylistStop,
-	zapscript.ZapScriptCmdPlaylistNext:     cmdPlaylistNext,
-	zapscript.ZapScriptCmdPlaylistPrevious: cmdPlaylistPrevious,
-	zapscript.ZapScriptCmdPlaylistGoto:     cmdPlaylistGoto,
-	zapscript.ZapScriptCmdPlaylistPause:    cmdPlaylistPause,
-	zapscript.ZapScriptCmdPlaylistLoad:     cmdPlaylistLoad,
-	zapscript.ZapScriptCmdPlaylistOpen:     cmdPlaylistOpen,
+var (
+	cmdMapOnce sync.Once
+	cmdMapVal  map[string]cmdFunc
+)
 
-	zapscript.ZapScriptCmdExecute: cmdExecute,
-	zapscript.ZapScriptCmdDelay:   cmdDelay,
-	zapscript.ZapScriptCmdStop:    cmdStop,
-	zapscript.ZapScriptCmdEcho:    cmdEcho,
+func lookupCmd(name string) (cmdFunc, bool) {
+	cmdMapOnce.Do(func() {
+		cmdMapVal = map[string]cmdFunc{
+			zapscript.ZapScriptCmdLaunch:       cmdLaunch,
+			zapscript.ZapScriptCmdLaunchSystem: cmdSystem,
+			zapscript.ZapScriptCmdLaunchRandom: cmdRandom,
+			zapscript.ZapScriptCmdLaunchSearch: cmdSearch,
+			zapscript.ZapScriptCmdLaunchTitle:  cmdTitle,
 
-	zapscript.ZapScriptCmdMisterINI:    forwardCmd,
-	zapscript.ZapScriptCmdMisterCore:   forwardCmd,
-	zapscript.ZapScriptCmdMisterScript: forwardCmd,
-	zapscript.ZapScriptCmdMisterMGL:    forwardCmd,
+			zapscript.ZapScriptCmdPlaylistPlay:     cmdPlaylistPlay,
+			zapscript.ZapScriptCmdPlaylistStop:     cmdPlaylistStop,
+			zapscript.ZapScriptCmdPlaylistNext:     cmdPlaylistNext,
+			zapscript.ZapScriptCmdPlaylistPrevious: cmdPlaylistPrevious,
+			zapscript.ZapScriptCmdPlaylistGoto:     cmdPlaylistGoto,
+			zapscript.ZapScriptCmdPlaylistPause:    cmdPlaylistPause,
+			zapscript.ZapScriptCmdPlaylistLoad:     cmdPlaylistLoad,
+			zapscript.ZapScriptCmdPlaylistOpen:     cmdPlaylistOpen,
 
-	zapscript.ZapScriptCmdHTTPGet:  cmdHTTPGet,
-	zapscript.ZapScriptCmdHTTPPost: cmdHTTPPost,
+			zapscript.ZapScriptCmdExecute: cmdExecute,
+			zapscript.ZapScriptCmdDelay:   cmdDelay,
+			zapscript.ZapScriptCmdStop:    cmdStop,
+			zapscript.ZapScriptCmdEcho:    cmdEcho,
 
-	zapscript.ZapScriptCmdInputKeyboard: cmdKeyboard,
-	zapscript.ZapScriptCmdInputGamepad:  cmdGamepad,
-	zapscript.ZapScriptCmdInputCoinP1:   cmdCoinP1,
-	zapscript.ZapScriptCmdInputCoinP2:   cmdCoinP2,
+			zapscript.ZapScriptCmdControl: cmdControl,
 
-	zapscript.ZapScriptCmdInputKey: cmdKey,     // DEPRECATED
-	zapscript.ZapScriptCmdKey:      cmdKey,     // DEPRECATED
-	zapscript.ZapScriptCmdCoinP1:   cmdCoinP1,  // DEPRECATED
-	zapscript.ZapScriptCmdCoinP2:   cmdCoinP2,  // DEPRECATED
-	zapscript.ZapScriptCmdRandom:   cmdRandom,  // DEPRECATED
-	zapscript.ZapScriptCmdShell:    cmdExecute, // DEPRECATED
-	zapscript.ZapScriptCmdCommand:  cmdExecute, // DEPRECATED
-	zapscript.ZapScriptCmdINI:      forwardCmd, // DEPRECATED
-	zapscript.ZapScriptCmdSystem:   cmdSystem,  // DEPRECATED
-	zapscript.ZapScriptCmdGet:      cmdHTTPGet, // DEPRECATED
+			zapscript.ZapScriptCmdMisterINI:    forwardCmd,
+			zapscript.ZapScriptCmdMisterCore:   forwardCmd,
+			zapscript.ZapScriptCmdMisterScript: forwardCmd,
+			zapscript.ZapScriptCmdMisterMGL:    forwardCmd,
+
+			zapscript.ZapScriptCmdHTTPGet:  cmdHTTPGet,
+			zapscript.ZapScriptCmdHTTPPost: cmdHTTPPost,
+
+			zapscript.ZapScriptCmdInputKeyboard: cmdKeyboard,
+			zapscript.ZapScriptCmdInputGamepad:  cmdGamepad,
+			zapscript.ZapScriptCmdInputCoinP1:   cmdCoinP1,
+			zapscript.ZapScriptCmdInputCoinP2:   cmdCoinP2,
+
+			zapscript.ZapScriptCmdInputKey: cmdKey,     // DEPRECATED
+			zapscript.ZapScriptCmdKey:      cmdKey,     // DEPRECATED
+			zapscript.ZapScriptCmdCoinP1:   cmdCoinP1,  // DEPRECATED
+			zapscript.ZapScriptCmdCoinP2:   cmdCoinP2,  // DEPRECATED
+			zapscript.ZapScriptCmdRandom:   cmdRandom,  // DEPRECATED
+			zapscript.ZapScriptCmdShell:    cmdExecute, // DEPRECATED
+			zapscript.ZapScriptCmdCommand:  cmdExecute, // DEPRECATED
+			zapscript.ZapScriptCmdINI:      forwardCmd, // DEPRECATED
+			zapscript.ZapScriptCmdSystem:   cmdSystem,  // DEPRECATED
+			zapscript.ZapScriptCmdGet:      cmdHTTPGet, // DEPRECATED
+		}
+	})
+	f, ok := cmdMapVal[name]
+	return f, ok
 }
 
 // IsMediaLaunchingCommand returns true if the command launches media and should be subject to playtime limits.
@@ -144,7 +157,7 @@ func IsMediaLaunchingCommand(cmdName string) bool {
 
 // IsValidCommand returns true if the command name is a valid ZapScript command.
 func IsValidCommand(cmdName string) bool {
-	_, ok := cmdMap[cmdName]
+	_, ok := lookupCmd(cmdName)
 	return ok
 }
 
@@ -190,18 +203,12 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 	return path, fmt.Errorf("%w: %s", ErrFileNotFound, path)
 }
 
-// ExprEnvOptions provides optional context for expression environment.
-type ExprEnvOptions struct {
-	Scanned       *zapscript.ExprEnvScanned
-	Launching     *zapscript.ExprEnvLaunching
-	InHookContext bool // prevents recursive hook execution
-}
-
-func getExprEnv(
+func GetExprEnv(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	st *state.State,
-	opts *ExprEnvOptions,
+	scanned *zapscript.ExprEnvScanned,
+	launching *zapscript.ExprEnvLaunching,
 ) zapscript.ArgExprEnv {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -237,19 +244,19 @@ func getExprEnv(
 		env.ActiveMedia.Name = activeMedia.Name
 	}
 
-	if opts != nil {
-		if opts.Scanned != nil {
-			env.Scanned = *opts.Scanned
-		}
-		if opts.Launching != nil {
-			env.Launching = *opts.Launching
-		}
+	if scanned != nil {
+		env.Scanned = *scanned
+	}
+	if launching != nil {
+		env.Launching = *launching
 	}
 
 	return env
 }
 
 // RunCommand parses and runs a single ZapScript command.
+// The lm parameter is only needed for media-launching commands (launch guard);
+// pass nil for contexts where media launches are not allowed (e.g. control scripts).
 func RunCommand(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -259,8 +266,8 @@ func RunCommand(
 	totalCmds int,
 	currentIndex int,
 	db *database.Database,
-	st *state.State,
-	exprOpts *ExprEnvOptions,
+	lm *state.LauncherManager,
+	exprEnv *zapscript.ArgExprEnv,
 ) (platforms.CmdResult, error) {
 	unsafe := token.Unsafe
 	newCmds := make([]zapscript.Command, 0)
@@ -288,11 +295,9 @@ func RunCommand(
 		unsafe = true
 	}
 
-	exprEnv := getExprEnv(pl, cfg, st, exprOpts)
-
 	for i, arg := range cmd.Args {
 		reader := zapscript.NewParser(arg)
-		output, evalErr := reader.EvalExpressions(exprEnv)
+		output, evalErr := reader.EvalExpressions(*exprEnv)
 		if evalErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("error evaluating arg expression: %w", evalErr)
 		}
@@ -302,7 +307,7 @@ func RunCommand(
 	var advArgEvalErr error
 	cmd.AdvArgs.Range(func(k zapscript.Key, arg string) bool {
 		reader := zapscript.NewParser(arg)
-		output, evalErr := reader.EvalExpressions(exprEnv)
+		output, evalErr := reader.EvalExpressions(*exprEnv)
 		if evalErr != nil {
 			advArgEvalErr = fmt.Errorf("error evaluating advanced arg expression: %w", evalErr)
 			return false
@@ -331,25 +336,32 @@ func RunCommand(
 		CurrentIndex:  currentIndex,
 		Unsafe:        unsafe,
 		Database:      db,
-		ExprEnv:       &exprEnv,
+		ExprEnv:       exprEnv,
 	}
 
-	cmdFunc, ok := cmdMap[cmd.Name]
+	if lm != nil {
+		env.LauncherCtx = lm.GetContext()
+	}
+
+	cmdFn, ok := lookupCmd(cmd.Name)
 	if !ok {
 		return platforms.CmdResult{}, fmt.Errorf("unknown command: %s", cmd)
 	}
 
 	// Acquire launch guard for media-launching commands to prevent concurrent launches
 	if IsMediaLaunchingCommand(cmd.Name) {
-		if guardErr := st.LauncherManager().TryStartLaunch(); guardErr != nil {
+		if lm == nil {
+			return platforms.CmdResult{}, errors.New("launcher manager required for media-launching commands")
+		}
+		if guardErr := lm.TryStartLaunch(); guardErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("launch guard: %w", guardErr)
 		}
-		defer st.LauncherManager().EndLaunch()
-		env.LauncherCtx = st.LauncherManager().GetContext()
+		defer lm.EndLaunch()
+		env.LauncherCtx = lm.GetContext()
 	}
 
 	log.Info().Msgf("running command: %s", cmd)
-	res, err := cmdFunc(pl, env)
+	res, err := cmdFn(pl, env)
 	if err != nil {
 		if errors.Is(err, ErrFileNotFound) {
 			log.Warn().Err(err).Msgf("error running command: %s", cmd)

@@ -71,7 +71,16 @@ func setupReaderManager(t *testing.T) *readerManagerEnv {
 	lsq := make(chan *tokens.Token, 10)
 	plq := make(chan *playlists.Playlist, 10)
 
-	go readerManager(mockPlatform, cfg, st, db, itq, lsq, plq, scanQueue, mockPlayer, nil)
+	svc := &ServiceContext{
+		Platform:            mockPlatform,
+		Config:              cfg,
+		State:               st,
+		DB:                  db,
+		LaunchSoftwareQueue: lsq,
+		PlaylistQueue:       plq,
+	}
+
+	go readerManager(svc, itq, scanQueue, mockPlayer, nil)
 
 	t.Cleanup(func() {
 		st.StopService()

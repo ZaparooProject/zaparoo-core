@@ -446,7 +446,7 @@ func (m *MockWebSocketConnection) SetCloseError(err error) {
 
 // CreateTestContext creates a context with timeout for testing
 func CreateTestContext(timeout time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), timeout)
+	return context.WithTimeout(context.Background(), timeout) //nolint:gosec // G118: caller is responsible for cancel
 }
 
 // WaitForMessages waits for a specific number of messages with timeout

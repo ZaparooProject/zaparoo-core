@@ -47,6 +47,7 @@ const (
 // testContext returns a context with the specified timeout for test synchronization.
 // Using context instead of raw time.After provides better semantics and cancellation support.
 func testContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	//nolint:gosec // G118: caller is responsible for cancel
 	return context.WithTimeout(context.Background(), timeout)
 }
 

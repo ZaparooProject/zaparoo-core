@@ -88,6 +88,11 @@ const (
 	ControlLoad        = "load"
 	ControlReset       = "reset"
 	ControlTogglePause = "toggle_pause"
+	ControlStop        = "stop"
+	ControlFastForward = "fast_forward"
+	ControlRewind      = "rewind"
+	ControlNext        = "next"
+	ControlPrevious    = "previous"
 )
 
 // ControlParams contains parameters for a control action.
@@ -96,7 +101,7 @@ type ControlParams struct {
 }
 
 // ControlFunc is a function that executes a control action on active media.
-type ControlFunc func(*config.Instance, ControlParams) error
+type ControlFunc func(context.Context, *config.Instance, ControlParams) error
 
 // Control represents a single control action. Either Func (native Go for
 // built-in launchers) or Script (zapscript string for custom launchers)
@@ -351,7 +356,7 @@ func KeyboardControls(pl Platform, actions map[string]string) map[string]Control
 	controls := make(map[string]Control, len(actions))
 	for action, key := range actions {
 		controls[action] = Control{
-			Func: func(_ *config.Instance, _ ControlParams) error {
+			Func: func(_ context.Context, _ *config.Instance, _ ControlParams) error {
 				return pl.KeyboardPress(key)
 			},
 		}

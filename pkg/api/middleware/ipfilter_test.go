@@ -312,6 +312,7 @@ func TestHTTPIPFilterMiddleware(t *testing.T) {
 
 			wrapped := middleware(handler)
 
+			//nolint:noctx // test helper, no context needed
 			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 
@@ -351,6 +352,7 @@ func TestHTTPIPFilterMiddleware_Integration(t *testing.T) {
 
 	// Test allowed IP - should reach all middlewares and handler
 	callCount = 0
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.100:12345"
 	recorder := httptest.NewRecorder()
@@ -361,6 +363,7 @@ func TestHTTPIPFilterMiddleware_Integration(t *testing.T) {
 
 	// Test blocked IP - should not reach subsequent middlewares or handler
 	callCount = 0
+	//nolint:noctx // test helper, no context needed
 	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	req.RemoteAddr = "10.0.0.1:12345"
 	recorder = httptest.NewRecorder()
@@ -515,6 +518,7 @@ func TestHTTPIPFilterMiddleware_HotReload(t *testing.T) {
 	wrapped := middleware(handler)
 
 	// Request from allowed IP should succeed
+	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.100:12345"
 	recorder := httptest.NewRecorder()
@@ -522,6 +526,7 @@ func TestHTTPIPFilterMiddleware_HotReload(t *testing.T) {
 	assert.Equal(t, http.StatusOK, recorder.Code)
 
 	// Request from blocked IP should fail
+	//nolint:noctx // test helper, no context needed
 	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.200:12345"
 	recorder = httptest.NewRecorder()
@@ -532,6 +537,7 @@ func TestHTTPIPFilterMiddleware_HotReload(t *testing.T) {
 	allowedIPs = []string{"192.168.1.200"}
 
 	// Old IP should now be blocked
+	//nolint:noctx // test helper, no context needed
 	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.100:12345"
 	recorder = httptest.NewRecorder()
@@ -539,6 +545,7 @@ func TestHTTPIPFilterMiddleware_HotReload(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
 
 	// New IP should now be allowed
+	//nolint:noctx // test helper, no context needed
 	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	req.RemoteAddr = "192.168.1.200:12345"
 	recorder = httptest.NewRecorder()

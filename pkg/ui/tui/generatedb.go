@@ -133,8 +133,7 @@ func BuildGenerateDBPage(
 	pages *tview.Pages,
 	app *tview.Application,
 ) {
-	ctx, cancel := context.WithCancel(context.Background())
-
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel called in goBack
 	// Create page frame
 	frame := NewPageFrame(app).
 		SetTitle("Update Media DB")
