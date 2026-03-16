@@ -25,9 +25,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-
-	"github.com/hsanjuan/go-ndef"
 )
+
+// ndefRecord holds the parsed fields of a single NDEF record.
+type ndefRecord struct {
+	recType string
+	payload []byte
+	tnf     byte
+}
 
 // ParseToText parses raw NDEF data and returns the first text or URI record as a string
 func ParseToText(data []byte) (string, error) {
@@ -42,29 +47,27 @@ func ParseToText(data []byte) (string, error) {
 		return "", ErrNoNDEF
 	}
 
-	// Validate NDEF record header before calling go-ndef to avoid
-	// algorithmic complexity issues with malformed input
-	if err := validateNDEFRecordHeader(payload); err != nil {
+	// Parse the NDEF record header and extract type + payload directly,
+	// without relying on go-ndef (which has algorithmic complexity bugs
+	// that can cause hangs with malformed input).
+	rec, err := parseNDEFRecord(payload)
+	if err != nil {
 		return "", fmt.Errorf("invalid NDEF record: %w", err)
 	}
 
-	// Parse using go-ndef
-	msg := &ndef.Message{}
-	_, err := msg.Unmarshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse NDEF message: %w", err)
+	// TNF 0x01 = NFC Forum Well-Known Type
+	if rec.tnf != 1 {
+		return "", ErrNoNDEF
 	}
 
-	// Find first text or URI record
-	for _, rec := range msg.Records {
-		if rec.TNF() == ndef.NFCForumWellKnownType {
-			if result, err := handleWellKnownRecord(rec); err == nil {
-				return result, nil
-			}
-		}
+	switch rec.recType {
+	case "T":
+		return parseTextPayload(rec.payload)
+	case "U":
+		return parseURIPayload(rec.payload)
+	default:
+		return "", ErrNoNDEF
 	}
-
-	return "", ErrNoNDEF
 }
 
 // ValidateNDEFMessage validates basic NDEF message structure
@@ -89,13 +92,13 @@ func ValidateNDEFMessage(data []byte) error {
 	return nil
 }
 
-// validateNDEFRecordHeader performs strict validation of NDEF record structure
-// to reject malformed data before passing to go-ndef library.
-// go-ndef has algorithmic complexity bugs that can cause hangs with malformed input,
-// so we only accept the common case: short records without chunking or IDs.
-func validateNDEFRecordHeader(payload []byte) error {
+// parseNDEFRecord parses a single NDEF record from the payload, supporting
+// both short records (SR=1, 1-byte payload length) and long records (SR=0,
+// 4-byte payload length). Only single-record messages (MB+ME set) without
+// chunking or ID fields are accepted.
+func parseNDEFRecord(payload []byte) (ndefRecord, error) {
 	if len(payload) < 3 {
-		return fmt.Errorf("%w: record too short", ErrInvalidNDEF)
+		return ndefRecord{}, fmt.Errorf("%w: record too short", ErrInvalidNDEF)
 	}
 
 	// First byte is flags: MB|ME|CF|SR|IL|TNF(3 bits)
@@ -104,59 +107,93 @@ func validateNDEFRecordHeader(payload []byte) error {
 
 	// TNF must be 0-6 (0x00-0x06), value 7 is reserved
 	if tnf > 6 {
-		return fmt.Errorf("%w: invalid TNF value %d", ErrInvalidNDEF, tnf)
+		return ndefRecord{}, fmt.Errorf("%w: invalid TNF value %d", ErrInvalidNDEF, tnf)
 	}
 
 	// MB (Message Begin) must be set for first record
 	if (flags & 0x80) == 0 {
-		return fmt.Errorf("%w: MB flag not set on first record", ErrInvalidNDEF)
+		return ndefRecord{}, fmt.Errorf("%w: MB flag not set on first record", ErrInvalidNDEF)
 	}
 
-	// ME (Message End) should be set for single-record messages (common case)
-	// We require this to avoid multi-record parsing complexity in go-ndef
+	// ME (Message End) must be set — we only support single-record messages
 	if (flags & 0x40) == 0 {
-		return fmt.Errorf("%w: ME flag not set (multi-record messages not supported)", ErrInvalidNDEF)
+		return ndefRecord{}, fmt.Errorf("%w: ME flag not set (multi-record messages not supported)", ErrInvalidNDEF)
 	}
 
-	// CF (Chunk Flag) must NOT be set - chunked records trigger go-ndef bugs
+	// CF (Chunk Flag) must NOT be set — chunked records not supported
 	if (flags & 0x20) != 0 {
-		return fmt.Errorf("%w: chunked records not supported", ErrInvalidNDEF)
+		return ndefRecord{}, fmt.Errorf("%w: chunked records not supported", ErrInvalidNDEF)
 	}
 
-	// SR (Short Record) must be set - long records can trigger go-ndef bugs
-	if (flags & 0x10) == 0 {
-		return fmt.Errorf("%w: long records not supported", ErrInvalidNDEF)
-	}
-
-	// IL (ID Length) must NOT be set - records with IDs can trigger go-ndef bugs
+	// IL (ID Length) must NOT be set — records with IDs not supported
 	if (flags & 0x08) != 0 {
-		return fmt.Errorf("%w: records with ID not supported", ErrInvalidNDEF)
+		return ndefRecord{}, fmt.Errorf("%w: records with ID not supported", ErrInvalidNDEF)
 	}
 
-	// For short records without ID: header is flags(1) + typeLen(1) + payloadLen(1) + type
+	shortRecord := (flags & 0x10) != 0
 	typeLen := int(payload[1])
-	if len(payload) < 3+typeLen {
-		return fmt.Errorf("%w: truncated record header", ErrInvalidNDEF)
+
+	// Parse payload length depending on SR flag
+	var payloadLen int
+	var headerLen int
+
+	if shortRecord {
+		// Short record: flags(1) + typeLen(1) + payloadLen(1) + type
+		headerLen = 3 + typeLen
+		payloadLen = int(payload[2])
+	} else {
+		// Long record: flags(1) + typeLen(1) + payloadLen(4) + type
+		headerLen = 6 + typeLen
+		if len(payload) < 6 {
+			return ndefRecord{}, fmt.Errorf("%w: truncated record header", ErrInvalidNDEF)
+		}
+		rawLen := binary.BigEndian.Uint32(payload[2:6])
+		if rawLen > 0xFFFF {
+			return ndefRecord{}, fmt.Errorf(
+				"%w: payload length %d exceeds maximum",
+				ErrInvalidNDEF, rawLen,
+			)
+		}
+		payloadLen = int(rawLen)
 	}
 
-	// Get payload length and validate total size
-	payloadLen := int(payload[2])
-	totalLen := 3 + typeLen + payloadLen
+	if len(payload) < headerLen {
+		return ndefRecord{}, fmt.Errorf("%w: truncated record header", ErrInvalidNDEF)
+	}
+
+	totalLen := headerLen + payloadLen
 	if len(payload) < totalLen {
-		return fmt.Errorf("%w: truncated payload (need %d, have %d)", ErrInvalidNDEF, totalLen, len(payload))
+		return ndefRecord{}, fmt.Errorf(
+			"%w: truncated payload (need %d, have %d)",
+			ErrInvalidNDEF, totalLen, len(payload),
+		)
 	}
 
 	// For TNF 0x00 (Empty), type and payload length must be 0
 	if tnf == 0 && (typeLen != 0 || payloadLen != 0) {
-		return fmt.Errorf("%w: empty record must have zero lengths", ErrInvalidNDEF)
+		return ndefRecord{}, fmt.Errorf("%w: empty record must have zero lengths", ErrInvalidNDEF)
 	}
 
 	// For TNF 0x01 (Well-Known), type must be present
 	if tnf == 1 && typeLen == 0 {
-		return fmt.Errorf("%w: well-known record must have type", ErrInvalidNDEF)
+		return ndefRecord{}, fmt.Errorf("%w: well-known record must have type", ErrInvalidNDEF)
 	}
 
-	return nil
+	// Extract type and payload
+	var recType string
+	if shortRecord {
+		recType = string(payload[3 : 3+typeLen])
+	} else {
+		recType = string(payload[6 : 6+typeLen])
+	}
+
+	recPayload := payload[headerLen : headerLen+payloadLen]
+
+	return ndefRecord{
+		tnf:     tnf,
+		recType: recType,
+		payload: recPayload,
+	}, nil
 }
 
 // extractNDEFPayload extracts the NDEF message from TLV format
@@ -210,33 +247,6 @@ func extractLongFormatPayload(data []byte, offset int) []byte {
 		return data[offset+4 : offset+4+length]
 	}
 	return nil
-}
-
-// handleWellKnownRecord processes NFC Forum well-known types
-func handleWellKnownRecord(rec *ndef.Record) (string, error) {
-	typeStr := rec.Type()
-	payloadBytes, err := extractPayloadBytes(rec)
-	if err != nil {
-		return "", err
-	}
-
-	switch typeStr {
-	case "T": // Text
-		return parseTextPayload(payloadBytes)
-	case "U": // URI
-		return parseURIPayload(payloadBytes)
-	default:
-		return "", fmt.Errorf("unsupported well-known type: %s", typeStr)
-	}
-}
-
-// extractPayloadBytes extracts the payload bytes from an NDEF record
-func extractPayloadBytes(rec *ndef.Record) ([]byte, error) {
-	payload, err := rec.Payload()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get NDEF record payload: %w", err)
-	}
-	return payload.Marshal(), nil
 }
 
 // parseTextPayload parses a text record payload
