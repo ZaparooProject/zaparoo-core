@@ -82,6 +82,10 @@ func parseCustomControls(commands map[string]string) map[string]platforms.Contro
 	return controls
 }
 
+// ParseCustomLaunchers converts user-configured custom launchers into platform
+// launchers. When a custom launcher has an empty Execute field, the returned
+// launcher's Launch function will be nil — the platform is expected to fill in
+// its own default launch mechanism (e.g., ES API on Batocera).
 func ParseCustomLaunchers(
 	pl platforms.Platform,
 	customLaunchers []config.LaunchersCustom,

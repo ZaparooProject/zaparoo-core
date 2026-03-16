@@ -61,10 +61,7 @@ func (s ESSystem) ParseExtensions() []string {
 	seen := make(map[string]struct{})
 	var exts []string
 	for _, ext := range strings.Fields(s.Extension) {
-		ext = strings.ToLower(strings.TrimSpace(ext))
-		if ext == "" {
-			continue
-		}
+		ext = strings.ToLower(ext)
 		if !strings.HasPrefix(ext, ".") {
 			ext = "." + ext
 		}

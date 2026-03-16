@@ -465,6 +465,35 @@ func TestDoLaunch_NoSystemIDSkipsActiveMedia(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestDoLaunch_NilLaunchReturnsError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+
+	launcher := &platforms.Launcher{
+		ID:       "no-launch-func",
+		SystemID: "test-system",
+		Launch:   nil,
+	}
+
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) {},
+		Launcher:       launcher,
+		DB:             nil,
+		Path:           "/test/path.rom",
+	}
+
+	err := platforms.DoLaunch(params, func(_ string) string { return "path" })
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no-launch-func")
+	assert.Contains(t, err.Error(), "no launch function configured")
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestDoLaunch_TrackedLauncherError(t *testing.T) {
 	t.Parallel()
 

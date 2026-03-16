@@ -20,7 +20,6 @@
 package platforms
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -111,7 +110,7 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	}
 
 	if params.Launcher.Launch == nil {
-		return errors.New("launcher has no launch function configured")
+		return fmt.Errorf("launcher %q has no launch function configured", params.Launcher.ID)
 	}
 
 	switch params.Launcher.Lifecycle {

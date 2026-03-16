@@ -757,10 +757,16 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		// extensions so the user doesn't have to duplicate them.
 		if len(cl.Extensions) == 0 && esCfg != nil {
 			for _, folder := range cl.Folders {
-				if esSys, ok := esCfg.Systems[folder]; ok {
+				// Try exact folder name first, then fall back to basename
+				// to handle absolute paths like "/userdata/roms/movies".
+				esSys, ok := esCfg.Systems[folder]
+				if !ok {
+					esSys, ok = esCfg.Systems[filepath.Base(folder)]
+				}
+				if ok {
 					if exts := esSys.ParseExtensions(); len(exts) > 0 {
 						cl.Extensions = exts
-						log.Info().Str("launcherID", cl.ID).Str("esSystem", folder).
+						log.Debug().Str("launcherID", cl.ID).Str("esSystem", folder).
 							Strs("extensions", exts).
 							Msg("enriched custom launcher extensions from ES overlay")
 						break
@@ -771,7 +777,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 		// When no execute command was defined, use the ES API to launch.
 		// This integrates with Batocera's game tracking and exit handling.
+		// Lifecycle must be FireAndForget since ES API returns no process
+		// handle — Batocera's background tracker manages active media state.
 		if cl.Launch == nil {
+			cl.Lifecycle = platforms.LifecycleFireAndForget
 			cl.Launch = func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				err := esapi.APILaunch(path)
 				if err != nil {
@@ -779,7 +788,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				}
 				return nil, nil //nolint:nilnil // API launches don't return a process handle
 			}
-			log.Info().Str("launcherID", cl.ID).Msg("custom launcher using ES API launch")
+			log.Debug().Str("launcherID", cl.ID).Msg("custom launcher using ES API launch")
 		}
 	}
 
