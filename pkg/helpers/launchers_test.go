@@ -245,6 +245,34 @@ func TestParseCustomLaunchers_AbsolutePathWithSystemID(t *testing.T) {
 	assert.NotNil(t, l.Launch, "Launch function should be set")
 }
 
+func TestParseCustomLaunchers_EmptyExecuteLeavesLaunchNil(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	customLaunchers := []config.LaunchersCustom{
+		{
+			ID:        "movies",
+			System:    "Video",
+			MediaDirs: []string{"movies"},
+			FileExts:  []string{".mp4", ".mkv"},
+			// Execute intentionally empty — platform provides launch func
+		},
+	}
+
+	launchers := ParseCustomLaunchers(mockPlatform, customLaunchers)
+
+	require.Len(t, launchers, 1)
+	l := launchers[0]
+
+	assert.Equal(t, "movies", l.ID)
+	assert.Equal(t, "Video", l.SystemID)
+	assert.Equal(t, []string{"movies"}, l.Folders)
+	assert.Equal(t, []string{".mp4", ".mkv"}, l.Extensions)
+	assert.Nil(t, l.Launch, "Launch should be nil when Execute is empty")
+}
+
 func TestFormatExtensions(t *testing.T) {
 	t.Parallel()
 

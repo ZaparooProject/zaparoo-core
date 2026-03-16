@@ -343,3 +343,91 @@ func TestParseESSystemsConfig_MultipleOverlays(t *testing.T) {
 	assert.Contains(t, paths, "/media/USB1/roms")
 	assert.Contains(t, paths, "/media/USB2/roms")
 }
+
+func TestParseExtensions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		ext      string
+		expected []string
+	}{
+		{
+			name:     "space-separated extensions",
+			ext:      ".mp4 .mkv .avi",
+			expected: []string{".mp4", ".mkv", ".avi"},
+		},
+		{
+			name:     "extensions without dots",
+			ext:      "mp4 mkv avi",
+			expected: []string{".mp4", ".mkv", ".avi"},
+		},
+		{
+			name:     "mixed with and without dots",
+			ext:      ".mp4 mkv .avi",
+			expected: []string{".mp4", ".mkv", ".avi"},
+		},
+		{
+			name:     "uppercase normalized to lowercase",
+			ext:      ".MP4 .MKV .AVI",
+			expected: []string{".mp4", ".mkv", ".avi"},
+		},
+		{
+			name:     "duplicates removed",
+			ext:      ".mp4 .mkv .mp4 .avi .mkv",
+			expected: []string{".mp4", ".mkv", ".avi"},
+		},
+		{
+			name:     "empty string returns nil",
+			ext:      "",
+			expected: nil,
+		},
+		{
+			name:     "extra whitespace handled",
+			ext:      "  .mp4   .mkv   .avi  ",
+			expected: []string{".mp4", ".mkv", ".avi"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sys := ESSystem{Extension: tt.ext}
+			result := sys.ParseExtensions()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestParseESSystemsConfig_ExtensionsParsed(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	overlayConfig := `<?xml version="1.0" encoding="UTF-8"?>
+<systemList>
+  <system>
+    <fullname>Movies</fullname>
+    <name>movies</name>
+    <path>/userdata/roms/movies</path>
+    <extension>.mp4 .mkv .avi .mov .wmv .flv .webm</extension>
+    <command>/usr/bin/mpv %ROM%</command>
+    <platform>movies</platform>
+  </system>
+</systemList>`
+
+	err := os.WriteFile(filepath.Join(tmpDir, "es_systems_movies.cfg"), []byte(overlayConfig), 0o600)
+	require.NoError(t, err)
+
+	config, err := ParseESSystemsConfig(tmpDir)
+	require.NoError(t, err)
+	require.NotNil(t, config)
+
+	assert.Len(t, config.Systems, 1)
+	moviesSys := config.Systems["movies"]
+	assert.Equal(t, "/userdata/roms/movies", moviesSys.Path)
+	assert.Equal(t, ".mp4 .mkv .avi .mov .wmv .flv .webm", moviesSys.Extension)
+
+	exts := moviesSys.ParseExtensions()
+	assert.Equal(t, []string{".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm"}, exts)
+}

@@ -747,7 +747,52 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 	})
 
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
+	customLaunchers := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
+	esCfg := p.getESConfig()
+	for i := range customLaunchers {
+		cl := &customLaunchers[i]
+
+		// Fill in missing extensions from ES overlay config. When a custom
+		// launcher's folder matches an ES system name, use that system's
+		// extensions so the user doesn't have to duplicate them.
+		if len(cl.Extensions) == 0 && esCfg != nil {
+			for _, folder := range cl.Folders {
+				// Try exact folder name first, then fall back to basename
+				// to handle absolute paths like "/userdata/roms/movies".
+				esSys, ok := esCfg.Systems[folder]
+				if !ok {
+					esSys, ok = esCfg.Systems[filepath.Base(folder)]
+				}
+				if ok {
+					if exts := esSys.ParseExtensions(); len(exts) > 0 {
+						cl.Extensions = exts
+						log.Debug().Str("launcherID", cl.ID).Str("esSystem", folder).
+							Strs("extensions", exts).
+							Msg("enriched custom launcher extensions from ES overlay")
+						break
+					}
+				}
+			}
+		}
+
+		// When no execute command was defined, use the ES API to launch.
+		// This integrates with Batocera's game tracking and exit handling.
+		// Lifecycle must be FireAndForget since ES API returns no process
+		// handle — Batocera's background tracker manages active media state.
+		if cl.Launch == nil {
+			cl.Lifecycle = platforms.LifecycleFireAndForget
+			cl.Launch = func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+				err := esapi.APILaunch(path)
+				if err != nil {
+					return nil, fmt.Errorf("failed to launch via API: %w", err)
+				}
+				return nil, nil //nolint:nilnil // API launches don't return a process handle
+			}
+			log.Debug().Str("launcherID", cl.ID).Msg("custom launcher using ES API launch")
+		}
+	}
+
+	return append(customLaunchers, launchers...)
 }
 
 func (*Platform) ShowNotice(

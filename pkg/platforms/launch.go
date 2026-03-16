@@ -109,6 +109,10 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		}
 	}
 
+	if params.Launcher.Launch == nil {
+		return fmt.Errorf("launcher %q has no launch function configured", params.Launcher.ID)
+	}
+
 	switch params.Launcher.Lifecycle {
 	case LifecycleTracked:
 		proc, err := params.Launcher.Launch(params.Config, params.Path, params.Options)
