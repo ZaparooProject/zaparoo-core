@@ -51,6 +51,11 @@ const defaultFsTimeout = 10 * time.Second
 // comes first. The op and path parameters are used for logging and error
 // messages when the timeout fires.
 func doWithTimeout[T any](ctx context.Context, fn func() (T, error), op, path string) (T, error) {
+	if ctx.Err() != nil {
+		var zero T
+		return zero, ctx.Err()
+	}
+
 	type result struct {
 		val T
 		err error
