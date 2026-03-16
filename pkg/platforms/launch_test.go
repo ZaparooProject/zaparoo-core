@@ -21,6 +21,7 @@ package platforms_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -523,4 +524,73 @@ func TestDoLaunch_TrackedLauncherError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to launch")
 	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_NativeLaunchPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		inputPath         string
+		expectedLaunchArg string
+	}{
+		{
+			name:              "file_path_converted_to_native",
+			inputPath:         "C:/Games/SNES/mario.sfc",
+			expectedLaunchArg: filepath.FromSlash("C:/Games/SNES/mario.sfc"),
+		},
+		{
+			name:              "uri_path_unchanged",
+			inputPath:         "steam://run/12345",
+			expectedLaunchArg: "steam://run/12345",
+		},
+		{
+			name:              "kodi_uri_unchanged",
+			inputPath:         "kodi://movies/12345",
+			expectedLaunchArg: "kodi://movies/12345",
+		},
+		{
+			name:              "unix_style_path_converted_to_native",
+			inputPath:         "/home/user/roms/game.nes",
+			expectedLaunchArg: filepath.FromSlash("/home/user/roms/game.nes"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+
+			var capturedPath string
+			launcher := &platforms.Launcher{
+				ID:        "test-launcher",
+				SystemID:  "test-system",
+				Lifecycle: platforms.LifecycleFireAndForget,
+				Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+					capturedPath = path
+					var noProcess *os.Process
+					return noProcess, nil
+				},
+			}
+
+			params := &platforms.LaunchParams{
+				Platform:       mockPlatform,
+				Config:         &config.Instance{},
+				SetActiveMedia: func(*models.ActiveMedia) {},
+				Launcher:       launcher,
+				DB:             nil,
+				Path:           tt.inputPath,
+			}
+
+			err := platforms.DoLaunch(params, func(_ string) string { return "game" })
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expectedLaunchArg, capturedPath,
+				"Launch should receive OS-native path")
+
+			mockPlatform.AssertExpectations(t)
+		})
+	}
 }
