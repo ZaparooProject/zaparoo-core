@@ -21,6 +21,7 @@ package platforms
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -83,6 +84,17 @@ func IsActionDetails(action string) bool {
 	return strings.EqualFold(action, zapscript.ActionDetails)
 }
 
+// nativeLaunchPath converts a forward-slash DB path to OS-native separators
+// for passing to launcher executables. URI paths (containing "://") are
+// returned unchanged because filepath.FromSlash would corrupt their scheme.
+// On non-Windows systems filepath.FromSlash is a no-op.
+func nativeLaunchPath(path string) string {
+	if strings.Contains(path, "://") {
+		return path
+	}
+	return filepath.FromSlash(path)
+}
+
 // DoLaunch launches the given path and updates the active media with it if
 // it was successful. The getDisplayName callback extracts a display name from the path.
 func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
@@ -113,9 +125,13 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		return fmt.Errorf("launcher %q has no launch function configured", params.Launcher.ID)
 	}
 
+	// Convert DB paths (forward slashes) to OS-native format for launcher
+	// executables. URI paths are left unchanged. On Linux this is a no-op.
+	launchPath := nativeLaunchPath(params.Path)
+
 	switch params.Launcher.Lifecycle {
 	case LifecycleTracked:
-		proc, err := params.Launcher.Launch(params.Config, params.Path, params.Options)
+		proc, err := params.Launcher.Launch(params.Config, launchPath, params.Options)
 		if err != nil {
 			return fmt.Errorf("failed to launch: %w", err)
 		}
@@ -126,7 +142,7 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	case LifecycleBlocking:
 		go func() {
 			log.Debug().Msgf("launching blocking process for: %s", params.Path)
-			proc, err := params.Launcher.Launch(params.Config, params.Path, params.Options)
+			proc, err := params.Launcher.Launch(params.Config, launchPath, params.Options)
 			if err != nil {
 				log.Error().Err(err).Msgf("blocking launcher failed for: %s", params.Path)
 				params.SetActiveMedia(nil)
@@ -148,7 +164,7 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 			}
 		}()
 	case LifecycleFireAndForget:
-		_, err := params.Launcher.Launch(params.Config, params.Path, params.Options)
+		_, err := params.Launcher.Launch(params.Config, launchPath, params.Options)
 		if err != nil {
 			return fmt.Errorf("failed to launch: %w", err)
 		}
