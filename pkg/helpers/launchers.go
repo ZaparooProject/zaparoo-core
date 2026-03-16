@@ -118,7 +118,7 @@ func ParseCustomLaunchers(
 			Int("lifecycle", int(lifecycle)).
 			Msg("registered custom launcher")
 
-		launchers = append(launchers, platforms.Launcher{
+		launcher := platforms.Launcher{
 			ID:            launcherID,
 			SystemID:      launcherSystemID,
 			Folders:       v.MediaDirs,
@@ -128,7 +128,14 @@ func ParseCustomLaunchers(
 			AllowListOnly: v.Restricted,
 			Lifecycle:     lifecycle,
 			Controls:      parseCustomControls(v.Controls),
-			Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
+		}
+
+		// When execute is empty, leave Launch nil so the platform can
+		// fill in its own default launch mechanism (e.g., ES API on Batocera).
+		if executeCmd != "" {
+			launcher.Launch = func(
+				cfg *config.Instance, path string, opts *platforms.LaunchOptions,
+			) (*os.Process, error) {
 				hostname, err := os.Hostname()
 				if err != nil {
 					log.Debug().Err(err).Msgf("error getting hostname, continuing")
@@ -202,8 +209,10 @@ func ParseCustomLaunchers(
 
 				// Custom launchers can be tracked - return process for lifecycle management
 				return cmd.Process, nil
-			},
-		})
+			}
+		}
+
+		launchers = append(launchers, launcher)
 	}
 
 	if skipped > 0 {

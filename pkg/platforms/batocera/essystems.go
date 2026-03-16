@@ -45,8 +45,35 @@ const (
 
 // ESSystem represents a single system entry from es_systems.cfg.
 type ESSystem struct {
-	Name string `xml:"name"`
-	Path string `xml:"path"`
+	Name      string `xml:"name"`
+	Path      string `xml:"path"`
+	Extension string `xml:"extension"`
+}
+
+// ParseExtensions splits the space-separated extension string from ES config
+// into a deduplicated slice of extensions. Each extension is normalized to
+// lowercase with a leading dot.
+func (s ESSystem) ParseExtensions() []string {
+	if s.Extension == "" {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	var exts []string
+	for _, ext := range strings.Fields(s.Extension) {
+		ext = strings.ToLower(strings.TrimSpace(ext))
+		if ext == "" {
+			continue
+		}
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		if _, exists := seen[ext]; !exists {
+			seen[ext] = struct{}{}
+			exts = append(exts, ext)
+		}
+	}
+	return exts
 }
 
 // ESSystemList is the root element of es_systems.cfg.

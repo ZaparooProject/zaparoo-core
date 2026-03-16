@@ -20,6 +20,7 @@
 package platforms
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -107,6 +108,10 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		if stopErr := params.Platform.StopActiveLauncher(StopForPreemption); stopErr != nil {
 			log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
 		}
+	}
+
+	if params.Launcher.Launch == nil {
+		return errors.New("launcher has no launch function configured")
 	}
 
 	switch params.Launcher.Lifecycle {
