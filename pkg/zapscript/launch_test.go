@@ -350,3 +350,47 @@ func TestCmdLaunch_FileNotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrFileNotFound, "should return ErrFileNotFound for missing file")
 	mockPlatform.AssertExpectations(t)
 }
+
+// TestCmdRandom_DoubleSlashPathCleaned verifies that a double-slash prefix
+// (e.g. from **launch.random://path) is normalized before querying the DB.
+func TestCmdRandom_DoubleSlashPathCleaned(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	// Expect the cleaned path (single slash) in the PathPrefix
+	mockMediaDB.On("RandomGameWithQuery",
+		mock.MatchedBy(func(q *database.MediaQuery) bool {
+			return q.PathPrefix == "/media/fat/_#Insert-Coin/_#Essentials"
+		}),
+	).Return(database.SearchResult{
+		Path:     "/media/fat/_#Insert-Coin/_#Essentials/game.zip",
+		SystemID: "arcade",
+	}, nil)
+
+	mockPlatform.On("LaunchMedia", cfg,
+		"/media/fat/_#Insert-Coin/_#Essentials/game.zip",
+		(*platforms.Launcher)(nil),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			// Double slash — as parsed from **launch.random://media/fat/...
+			Args: []string{"//media/fat/_#Insert-Coin/_#Essentials"},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+}

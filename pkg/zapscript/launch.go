@@ -132,7 +132,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// this includes virtual paths and zips as options
 	if filepath.IsAbs(query) {
 		mediaQuery := database.MediaQuery{
-			PathPrefix: query,
+			PathPrefix: filepath.Clean(query),
 			Tags:       tagFilters,
 		}
 		searchResult, searchErr := gamesdb.RandomGameWithQuery(&mediaQuery)
