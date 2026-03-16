@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	posixpath "path"
 	"path/filepath"
 	"strings"
 
@@ -132,7 +133,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// this includes virtual paths and zips as options
 	if filepath.IsAbs(query) {
 		mediaQuery := database.MediaQuery{
-			PathPrefix: query,
+			PathPrefix: posixpath.Clean(query),
 			Tags:       tagFilters,
 		}
 		searchResult, searchErr := gamesdb.RandomGameWithQuery(&mediaQuery)
