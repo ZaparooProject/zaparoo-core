@@ -40,11 +40,12 @@ type DriverConfig struct {
 }
 
 type ReadersScan struct {
-	Mode         string   `toml:"mode"`
-	OnScan       string   `toml:"on_scan,omitempty"`
-	OnRemove     string   `toml:"on_remove,omitempty"`
-	IgnoreSystem []string `toml:"ignore_system,omitempty"`
-	ExitDelay    float32  `toml:"exit_delay,omitempty"`
+	Mode            string   `toml:"mode"`
+	OnScan          string   `toml:"on_scan,omitempty"`
+	OnRemove        string   `toml:"on_remove,omitempty"`
+	IgnoreSystem    []string `toml:"ignore_system,omitempty"`
+	ExitDelay       float32  `toml:"exit_delay,omitempty"`
+	IgnoreOnConnect bool     `toml:"ignore_on_connect,omitempty"`
 }
 
 type ReadersConnect struct {
@@ -68,6 +69,12 @@ func (c *Instance) ReadersScan() ReadersScan {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Readers.Scan
+}
+
+func (c *Instance) ScanIgnoreOnConnect() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Readers.Scan.IgnoreOnConnect
 }
 
 func (c *Instance) IsHoldModeIgnoredSystem(systemID string) bool {
@@ -118,6 +125,12 @@ func (c *Instance) SetScanIgnoreSystem(ignoreSystem []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Readers.Scan.IgnoreSystem = ignoreSystem
+}
+
+func (c *Instance) SetScanIgnoreOnConnect(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Readers.Scan.IgnoreOnConnect = enabled
 }
 
 func (c *Instance) Readers() Readers {

@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -46,12 +47,16 @@ type readerManagerEnv struct {
 	itq       chan tokens.Token
 }
 
-func setupReaderManager(t *testing.T) *readerManagerEnv {
+func setupReaderManager(t *testing.T, opts ...func(*config.Instance)) *readerManagerEnv {
 	t.Helper()
 
 	fs := testhelpers.NewMemoryFS()
 	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
 	require.NoError(t, err)
+
+	for _, opt := range opts {
+		opt(cfg)
+	}
 
 	mockPlayer := mocks.NewMockPlayer()
 	mockPlayer.SetupNoOpMock()
@@ -321,4 +326,194 @@ func TestReaderManager_WroteTokenSuppression(t *testing.T) {
 	})
 	tok := env.expectToken(t)
 	assert.Equal(t, "nfc-other-002", tok.UID)
+}
+
+func withIgnoreOnConnect(cfg *config.Instance) {
+	cfg.SetScanIgnoreOnConnect(true)
+}
+
+func TestReaderManager_IgnoreOnConnect_SuppressesFirstScan(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withIgnoreOnConnect)
+
+	// First scan from a reader should be suppressed
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "startup-card",
+			Text:     "**launch.system:nes",
+			ScanTime: time.Now(),
+			ReaderID: "reader-1",
+		},
+	})
+	env.expectNoToken(t)
+}
+
+func TestReaderManager_IgnoreOnConnect_SecondScanProceeds(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withIgnoreOnConnect)
+
+	// First scan suppressed
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "startup-card",
+			Text:     "**launch.system:nes",
+			ScanTime: time.Now(),
+			ReaderID: "reader-1",
+		},
+	})
+	env.expectNoToken(t)
+
+	// Remove the card
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.expectNoToken(t)
+
+	// Second scan from the same reader should proceed
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "real-card",
+			Text:     "**launch.system:snes",
+			ScanTime: time.Now(),
+			ReaderID: "reader-1",
+		},
+	})
+	tok := env.expectToken(t)
+	assert.Equal(t, "real-card", tok.UID)
+}
+
+func TestReaderManager_IgnoreOnConnect_Disabled(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t)
+
+	// With ignore_on_connect disabled (default), first scan should proceed
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "first-card",
+			Text:     "**launch.system:nes",
+			ScanTime: time.Now(),
+			ReaderID: "reader-1",
+		},
+	})
+	tok := env.expectToken(t)
+	assert.Equal(t, "first-card", tok.UID)
+}
+
+func TestReaderManager_IgnoreOnConnect_MultipleReaders(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withIgnoreOnConnect)
+
+	// First scan from reader-1: suppressed
+	env.sendScan(readers.Scan{
+		Source: "test-reader-1",
+		Token: &tokens.Token{
+			UID:      "card-a",
+			Text:     "**launch.system:nes",
+			ScanTime: time.Now(),
+			ReaderID: "reader-1",
+		},
+	})
+	env.expectNoToken(t)
+
+	// First scan from reader-2: also suppressed (independent tracking)
+	env.sendScan(readers.Scan{
+		Source: "test-reader-2",
+		Token: &tokens.Token{
+			UID:      "card-b",
+			Text:     "**launch.system:snes",
+			ScanTime: time.Now(),
+			ReaderID: "reader-2",
+		},
+	})
+	env.expectNoToken(t)
+
+	// Remove from reader-1
+	env.sendScan(readers.Scan{Source: "test-reader-1", Token: nil})
+	env.expectNoToken(t)
+
+	// Second scan from reader-1: proceeds
+	env.sendScan(readers.Scan{
+		Source: "test-reader-1",
+		Token: &tokens.Token{
+			UID:      "card-c",
+			Text:     "**launch.system:gb",
+			ScanTime: time.Now(),
+			ReaderID: "reader-1",
+		},
+	})
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-c", tok.UID)
+
+	// Remove from reader-2
+	env.sendScan(readers.Scan{Source: "test-reader-2", Token: nil})
+	env.expectNoToken(t)
+
+	// Second scan from reader-2: also proceeds
+	env.sendScan(readers.Scan{
+		Source: "test-reader-2",
+		Token: &tokens.Token{
+			UID:      "card-d",
+			Text:     "**launch.system:gba",
+			ScanTime: time.Now(),
+			ReaderID: "reader-2",
+		},
+	})
+	tok2 := env.expectToken(t)
+	assert.Equal(t, "card-d", tok2.UID)
+}
+
+func TestReaderManager_IgnoreOnConnect_ReaderReconnection(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withIgnoreOnConnect)
+
+	// First scan from reader: suppressed
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-a",
+			Text:     "**launch.system:nes",
+			ScanTime: time.Now(),
+			ReaderID: "reader-1",
+		},
+	})
+	env.expectNoToken(t)
+
+	// Reader error (USB disconnect) — clears acknowledged state
+	env.sendScan(readers.Scan{
+		Source:      "test-reader",
+		Token:       nil,
+		ReaderError: true,
+	})
+	env.expectNoToken(t)
+
+	// Reader reconnects with a different card — first scan suppressed again
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-b",
+			Text:     "**launch.system:snes",
+			ScanTime: time.Now(),
+			ReaderID: "reader-1",
+		},
+	})
+	env.expectNoToken(t)
+
+	// Remove card
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.expectNoToken(t)
+
+	// Second scan after reconnection: proceeds
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-c",
+			Text:     "**launch.system:gb",
+			ScanTime: time.Now(),
+			ReaderID: "reader-1",
+		},
+	})
+	tok2 := env.expectToken(t)
+	assert.Equal(t, "card-c", tok2.UID)
 }
