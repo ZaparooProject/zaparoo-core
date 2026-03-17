@@ -138,6 +138,13 @@ func fetchAndAttachTags(
 // variants (results with the same Name) and populates ZapScriptTags on each result.
 // A tag type is disambiguating when multiple results sharing the same Name have
 // different values for that tag type.
+//
+// KNOWN LIMITATION: This operates on a single page of results, so siblings split
+// across pages won't trigger disambiguation here. The app writes the ZapScript
+// string from search results directly to tags, so a bare @system/name could be
+// written when siblings exist on other pages. In practice this is rare — siblings
+// are adjacent in sort order — and the resolver handles bare commands via its
+// multi-strategy search. A proper fix would require a DB query per title group.
 func computeZapScriptTags(results []database.SearchResultWithCursor) {
 	if len(results) == 0 {
 		return
