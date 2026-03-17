@@ -267,55 +267,92 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 	return result, nil
 }
 
-// GetYearBySystemAndPath retrieves the year tag for a media item in a single query.
-// Returns empty string if no year tag exists or media not found.
-func (db *MediaDB) GetYearBySystemAndPath(ctx context.Context, systemID, path string) (string, error) {
+// GetZapScriptTagsBySystemAndPath retrieves disambiguating tags for a media item.
+// A tag is disambiguating when sibling media entries (same title) have different
+// values for that tag type (e.g., 2-player vs 4-player variants of the same game).
+// Returns only the target media's tags for tag types that differ across siblings.
+// Returns empty slice if no disambiguating tags exist or media not found.
+func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
+	ctx context.Context, systemID, path string,
+) ([]database.TagInfo, error) {
 	if db.sql == nil {
-		return "", ErrNullSQL
+		return nil, ErrNullSQL
 	}
 
-	var year string
-	err := db.conn().QueryRowContext(ctx, `
-		SELECT YearTags.Tag FROM (
-			SELECT Tags.Tag
+	// Single query: find tag types where siblings under the same title have
+	// different values, then return only the target media's tags for those types.
+	// Checks both MediaTags (file-level) and MediaTitleTags (title-level) tags.
+	//nolint:gosec // Safe: ZapScriptTagTypes is internal, not user input
+	rows, err := db.conn().QueryContext(ctx, `
+		WITH Target AS (
+			SELECT Media.DBID, Media.MediaTitleDBID
 			FROM Media
 			JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
 			JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
-			JOIN MediaTags ON Media.DBID = MediaTags.MediaDBID
-			JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE Systems.SystemID = ?
-			  AND Media.Path = ?
-			  AND TagTypes.Type = 'year'
-			  AND length(Tags.Tag) = 4
+			WHERE Systems.SystemID = ? AND Media.Path = ?
+		),
+		-- All eligible tags for the target (file-level + title-level)
+		TargetTags AS (
+			SELECT DISTINCT tt.DBID as TypeDBID, tt.Type, t.Tag
+			FROM Target
+			JOIN MediaTags mt ON Target.DBID = mt.MediaDBID
+			JOIN Tags t ON mt.TagDBID = t.DBID
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			WHERE tt.Type IN ('year', 'players')
 			UNION
-			SELECT Tags.Tag
-			FROM Media
-			JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
-			JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
-			JOIN MediaTitleTags ON MediaTitles.DBID = MediaTitleTags.MediaTitleDBID
-			JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
-			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE Systems.SystemID = ?
-			  AND Media.Path = ?
-			  AND TagTypes.Type = 'year'
-			  AND length(Tags.Tag) = 4
-		) YearTags LIMIT 1
-	`, systemID, path, systemID, path).Scan(&year)
-
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
+			SELECT DISTINCT tt.DBID as TypeDBID, tt.Type, t.Tag
+			FROM Target
+			JOIN MediaTitleTags mtt ON Target.MediaTitleDBID = mtt.MediaTitleDBID
+			JOIN Tags t ON mtt.TagDBID = t.DBID
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			WHERE tt.Type IN ('year', 'players')
+		),
+		-- All eligible tags across siblings (file-level + title-level)
+		SiblingTags AS (
+			SELECT DISTINCT t.Tag, t.TypeDBID
+			FROM Target
+			JOIN Media sibling ON sibling.MediaTitleDBID = Target.MediaTitleDBID
+			JOIN MediaTags smt ON sibling.DBID = smt.MediaDBID
+			JOIN Tags t ON smt.TagDBID = t.DBID
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			WHERE tt.Type IN ('year', 'players')
+			UNION
+			SELECT DISTINCT t.Tag, t.TypeDBID
+			FROM Target
+			JOIN MediaTitleTags mtt ON Target.MediaTitleDBID = mtt.MediaTitleDBID
+			JOIN Tags t ON mtt.TagDBID = t.DBID
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			WHERE tt.Type IN ('year', 'players')
+		)
+		SELECT tt.Type, tt.Tag
+		FROM TargetTags tt
+		WHERE (
+			SELECT COUNT(DISTINCT st.Tag)
+			FROM SiblingTags st
+			WHERE st.TypeDBID = tt.TypeDBID
+		) > 1
+		ORDER BY tt.Type, tt.Tag
+	`, systemID, path)
 	if err != nil {
-		return "", fmt.Errorf("failed to get year by system and path: %w", err)
+		return nil, fmt.Errorf("failed to get zapscript tags by system and path: %w", err)
 	}
-
-	// Validate it's actually 4 digits
-	for _, ch := range year {
-		if ch < '0' || ch > '9' {
-			return "", nil
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
 		}
+	}()
+
+	var tags []database.TagInfo
+	for rows.Next() {
+		var tag database.TagInfo
+		if scanErr := rows.Scan(&tag.Type, &tag.Tag); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan tag: %w", scanErr)
+		}
+		tags = append(tags, tag)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 
-	return year, nil
+	return tags, nil
 }

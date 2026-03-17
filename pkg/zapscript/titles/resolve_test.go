@@ -117,7 +117,6 @@ func TestResolveTitle_CacheHit(t *testing.T) {
 	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
 	require.NoError(t, err)
 
-	year := "1985"
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, "NES", mock.Anything, mock.Anything,
 	).Return(int64(42), "exact_match", true)
@@ -128,7 +127,7 @@ func TestResolveTitle_CacheHit(t *testing.T) {
 			SystemID: "NES",
 			Name:     "Super Mario Bros",
 			Path:     "/games/nes/smb.nes",
-			Year:     &year,
+			Tags:     []database.TagInfo{{Type: "year", Tag: "1985"}},
 		}, nil)
 
 	result, err := ResolveTitle(context.Background(), &ResolveParams{
@@ -162,7 +161,6 @@ func TestResolveTitle_CacheHitGetMediaByDBIDFails(t *testing.T) {
 		database.SearchResultWithCursor{}, errors.New("db error"))
 
 	// Full resolution: Strategy 1 returns a single result
-	year := "1985"
 	mockMediaDB.On("SearchMediaBySlug",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Return([]database.SearchResultWithCursor{
@@ -171,7 +169,7 @@ func TestResolveTitle_CacheHitGetMediaByDBIDFails(t *testing.T) {
 			SystemID: "NES",
 			Name:     "Super Mario Bros",
 			Path:     "/games/nes/smb.nes",
-			Year:     &year,
+			Tags:     []database.TagInfo{{Type: "year", Tag: "1985"}},
 		},
 	}, nil)
 
@@ -200,7 +198,6 @@ func TestResolveTitle_Strategy1_ExactMatchHighConfidence(t *testing.T) {
 	setupCacheMiss(mockMediaDB)
 
 	// Strategy 1: Single result, no tag filters → confidence 1.0 → early return
-	year := "1985"
 	mockMediaDB.On("SearchMediaBySlug",
 		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
 	).Return([]database.SearchResultWithCursor{
@@ -209,7 +206,7 @@ func TestResolveTitle_Strategy1_ExactMatchHighConfidence(t *testing.T) {
 			SystemID: "NES",
 			Name:     "Super Mario Bros",
 			Path:     "/games/nes/smb.nes",
-			Year:     &year,
+			Tags:     []database.TagInfo{{Type: "year", Tag: "1985"}},
 		},
 	}, nil)
 
@@ -775,7 +772,6 @@ func TestResolveTitle_SetCacheFailureDoesNotBlock(t *testing.T) {
 
 	setupCacheMiss(mockMediaDB)
 
-	year := "1985"
 	mockMediaDB.On("SearchMediaBySlug",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Return([]database.SearchResultWithCursor{
@@ -784,7 +780,7 @@ func TestResolveTitle_SetCacheFailureDoesNotBlock(t *testing.T) {
 			SystemID: "NES",
 			Name:     "Super Mario Bros",
 			Path:     "/games/nes/smb.nes",
-			Year:     &year,
+			Tags:     []database.TagInfo{{Type: "year", Tag: "1985"}},
 		},
 	}, nil)
 

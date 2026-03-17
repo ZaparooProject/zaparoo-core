@@ -752,8 +752,8 @@ func TestSlugCache_CascadeDelete_Integration(t *testing.T) {
 	assert.False(t, foundAfter, "cache entry should be deleted via CASCADE when media is deleted")
 }
 
-// TestGetYearBySystemAndPath_WithYear verifies year retrieval when media has a year tag
-func TestGetYearBySystemAndPath_WithYear_Integration(t *testing.T) {
+// TestGetZapScriptTagsBySystemAndPath_WithYear verifies tag retrieval when media has a year tag
+func TestGetZapScriptTagsBySystemAndPath_WithYear_Integration(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -794,12 +794,12 @@ func TestGetYearBySystemAndPath_WithYear_Integration(t *testing.T) {
 	insertedMedia, err := mediaDB.InsertMedia(media)
 	require.NoError(t, err)
 
-	// Add year tag "1985"
-	yearTag := database.Tag{
+	// Add year tag "1985" to first media
+	yearTag1985 := database.Tag{
 		TypeDBID: yearTagType.DBID,
 		Tag:      "1985",
 	}
-	insertedYearTag, err := mediaDB.FindOrInsertTag(yearTag)
+	insertedYearTag, err := mediaDB.FindOrInsertTag(yearTag1985)
 	require.NoError(t, err)
 
 	_, err = mediaDB.InsertMediaTag(database.MediaTag{
@@ -808,17 +808,41 @@ func TestGetYearBySystemAndPath_WithYear_Integration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// Add a sibling variant with a different year to trigger disambiguation
+	siblingMedia := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/nes/mario-alt.nes",
+	}
+	insertedSibling, err := mediaDB.InsertMedia(siblingMedia)
+	require.NoError(t, err)
+
+	yearTag1986 := database.Tag{
+		TypeDBID: yearTagType.DBID,
+		Tag:      "1986",
+	}
+	insertedYearTag2, err := mediaDB.FindOrInsertTag(yearTag1986)
+	require.NoError(t, err)
+
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{
+		MediaDBID: insertedSibling.DBID,
+		TagDBID:   insertedYearTag2.DBID,
+	})
+	require.NoError(t, err)
+
 	err = mediaDB.CommitTransaction()
 	require.NoError(t, err)
 
-	// Test GetYearBySystemAndPath
-	year, err := mediaDB.GetYearBySystemAndPath(ctx, nesSystem.ID, "/roms/nes/mario.nes")
+	// Test GetZapScriptTagsBySystemAndPath - should return year since siblings differ
+	tags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, nesSystem.ID, "/roms/nes/mario.nes")
 	require.NoError(t, err)
-	assert.Equal(t, "1985", year)
+	require.Len(t, tags, 1)
+	assert.Equal(t, "year", tags[0].Type)
+	assert.Equal(t, "1985", tags[0].Tag)
 }
 
-// TestGetYearBySystemAndPath_NoYear verifies empty string returned when media has no year tag
-func TestGetYearBySystemAndPath_NoYear_Integration(t *testing.T) {
+// TestGetZapScriptTagsBySystemAndPath_NoTags verifies empty slice returned when media has no relevant tags
+func TestGetZapScriptTagsBySystemAndPath_NoTags_Integration(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -858,14 +882,14 @@ func TestGetYearBySystemAndPath_NoYear_Integration(t *testing.T) {
 	err = mediaDB.CommitTransaction()
 	require.NoError(t, err)
 
-	// Test GetYearBySystemAndPath - should return empty string
-	year, err := mediaDB.GetYearBySystemAndPath(ctx, nesSystem.ID, "/roms/test.nes")
+	// Test GetZapScriptTagsBySystemAndPath - should return empty slice
+	tags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, nesSystem.ID, "/roms/test.nes")
 	require.NoError(t, err)
-	assert.Empty(t, year, "should return empty string when no year tag exists")
+	assert.Empty(t, tags, "should return empty slice when no relevant tags exist")
 }
 
-// TestGetYearBySystemAndPath_MediaNotFound verifies empty string returned for non-existent media
-func TestGetYearBySystemAndPath_MediaNotFound_Integration(t *testing.T) {
+// TestGetZapScriptTagsBySystemAndPath_MediaNotFound verifies empty slice returned for non-existent media
+func TestGetZapScriptTagsBySystemAndPath_MediaNotFound_Integration(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -873,13 +897,13 @@ func TestGetYearBySystemAndPath_MediaNotFound_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Test with non-existent media
-	year, err := mediaDB.GetYearBySystemAndPath(ctx, "NES", "/nonexistent/path.nes")
+	tags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "NES", "/nonexistent/path.nes")
 	require.NoError(t, err)
-	assert.Empty(t, year, "should return empty string for non-existent media")
+	assert.Empty(t, tags, "should return empty slice for non-existent media")
 }
 
-// TestGetYearBySystemAndPath_InvalidYear verifies non-digit years are rejected
-func TestGetYearBySystemAndPath_InvalidYear_Integration(t *testing.T) {
+// TestGetZapScriptTagsBySystemAndPath_SingleVariant verifies no tags returned when only one variant exists
+func TestGetZapScriptTagsBySystemAndPath_SingleVariant_Integration(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -906,8 +930,8 @@ func TestGetYearBySystemAndPath_InvalidYear_Integration(t *testing.T) {
 
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Bad Year Game"),
-		Name:       "Bad Year Game",
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Single Game"),
+		Name:       "Single Game",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
@@ -915,36 +939,36 @@ func TestGetYearBySystemAndPath_InvalidYear_Integration(t *testing.T) {
 	media := database.Media{
 		SystemDBID:     insertedSystem.DBID,
 		MediaTitleDBID: insertedTitle.DBID,
-		Path:           "/roms/badyear.nes",
+		Path:           "/roms/single.nes",
 	}
 	insertedMedia, err := mediaDB.InsertMedia(media)
 	require.NoError(t, err)
 
-	// Add invalid year tag "ABCD" (4 chars but not digits)
-	badYearTag := database.Tag{
+	// Add year tag - but since there's only one variant, it shouldn't be disambiguating
+	yearTag := database.Tag{
 		TypeDBID: yearTagType.DBID,
-		Tag:      "ABCD",
+		Tag:      "1985",
 	}
-	insertedBadTag, err := mediaDB.FindOrInsertTag(badYearTag)
+	insertedTag, err := mediaDB.FindOrInsertTag(yearTag)
 	require.NoError(t, err)
 
 	_, err = mediaDB.InsertMediaTag(database.MediaTag{
 		MediaDBID: insertedMedia.DBID,
-		TagDBID:   insertedBadTag.DBID,
+		TagDBID:   insertedTag.DBID,
 	})
 	require.NoError(t, err)
 
 	err = mediaDB.CommitTransaction()
 	require.NoError(t, err)
 
-	// Test - should return empty string because ABCD fails digit validation
-	year, err := mediaDB.GetYearBySystemAndPath(ctx, nesSystem.ID, "/roms/badyear.nes")
+	// Single variant — no disambiguation needed, should return empty
+	tags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, nesSystem.ID, "/roms/single.nes")
 	require.NoError(t, err)
-	assert.Empty(t, year, "should return empty for non-digit year tag")
+	assert.Empty(t, tags, "single variant should not produce disambiguating tags")
 }
 
-// TestGetYearBySystemAndPath_WrongSystem verifies empty string for correct path but wrong system
-func TestGetYearBySystemAndPath_WrongSystem_Integration(t *testing.T) {
+// TestGetZapScriptTagsBySystemAndPath_WrongSystem verifies empty slice for correct path but wrong system
+func TestGetZapScriptTagsBySystemAndPath_WrongSystem_Integration(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -998,11 +1022,33 @@ func TestGetYearBySystemAndPath_WrongSystem_Integration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// Add a sibling with a different year to trigger disambiguation
+	siblingMedia := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/game-alt.nes",
+	}
+	insertedSibling, err := mediaDB.InsertMedia(siblingMedia)
+	require.NoError(t, err)
+
+	altYearTag := database.Tag{
+		TypeDBID: yearTagType.DBID,
+		Tag:      "1991",
+	}
+	insertedAltYearTag, err := mediaDB.FindOrInsertTag(altYearTag)
+	require.NoError(t, err)
+
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{
+		MediaDBID: insertedSibling.DBID,
+		TagDBID:   insertedAltYearTag.DBID,
+	})
+	require.NoError(t, err)
+
 	err = mediaDB.CommitTransaction()
 	require.NoError(t, err)
 
-	// Query with SNES instead of NES - should not find media
-	year, err := mediaDB.GetYearBySystemAndPath(ctx, "SNES", "/roms/game.nes")
+	// Query with SNES instead of NES - should not find media even with disambiguating data
+	tags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, "SNES", "/roms/game.nes")
 	require.NoError(t, err)
-	assert.Empty(t, year, "should return empty for wrong system")
+	assert.Empty(t, tags, "should return empty for wrong system")
 }

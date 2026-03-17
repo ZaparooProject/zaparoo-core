@@ -147,6 +147,7 @@ var allTagMappings = map[string][]CanonicalTag{
 	"tw": {{Type: TagTypeRegion, Value: TagRegionTW}, {Type: TagTypeLang, Value: TagLangZH}}, // Taiwan
 	"us": {{Type: TagTypeRegion, Value: TagRegionUS}, {Type: TagTypeLang, Value: TagLangEN}},
 	"vn": {{Type: TagTypeRegion, Value: TagRegionVN}, {Type: TagTypeLang, Value: TagLangVI}},
+	"w":  {{Type: TagTypeRegion, Value: TagRegionWorld}}, // MiSTer Arcade shorthand for "World"
 	"yu": {{Type: TagTypeRegion, Value: TagRegionYU}},
 	"za": {{Type: TagTypeRegion, Value: TagRegionZA}},
 
@@ -416,6 +417,32 @@ var allTagMappings = map[string][]CanonicalTag{
 	"rumble-version": {{Type: TagTypeAddon, Value: TagAddonControllerRumble}},    // Rumble Pak version
 	"mt-32":          {{Type: TagTypeAddon, Value: TagAddonMidiMT32}},            // Roland MT-32 MIDI sound module
 	"mt32":           {{Type: TagTypeAddon, Value: TagAddonMidiMT32}},            // Roland MT-32 (no dash)
+
+	// ============================================================================
+	// PLAYER COUNT MAPPINGS
+	// ============================================================================
+	// Maps player count tags from arcade filenames to canonical player count tags.
+	// MiSTer Arcade MRA convention uses short form: "(2P)", "(4P)"
+	// Other conventions use long form: "(2 Players)", "(4 Players)"
+
+	// Short form: "2P", "4P" → normalized to "2p", "4p"
+	"1p": {{Type: TagTypePlayers, Value: TagPlayers1}},
+	"2p": {{Type: TagTypePlayers, Value: TagPlayers2}},
+	"3p": {{Type: TagTypePlayers, Value: TagPlayers3}},
+	"4p": {{Type: TagTypePlayers, Value: TagPlayers4}},
+	"5p": {{Type: TagTypePlayers, Value: TagPlayers5}},
+	"6p": {{Type: TagTypePlayers, Value: TagPlayers6}},
+	"7p": {{Type: TagTypePlayers, Value: TagPlayers7}},
+	"8p": {{Type: TagTypePlayers, Value: TagPlayers8}},
+	// Long form: "2 Players", "4 Players" → normalized to "2-players", "4-players"
+	"1-player":  {{Type: TagTypePlayers, Value: TagPlayers1}},
+	"2-players": {{Type: TagTypePlayers, Value: TagPlayers2}},
+	"3-players": {{Type: TagTypePlayers, Value: TagPlayers3}},
+	"4-players": {{Type: TagTypePlayers, Value: TagPlayers4}},
+	"5-players": {{Type: TagTypePlayers, Value: TagPlayers5}},
+	"6-players": {{Type: TagTypePlayers, Value: TagPlayers6}},
+	"7-players": {{Type: TagTypePlayers, Value: TagPlayers7}},
+	"8-players": {{Type: TagTypePlayers, Value: TagPlayers8}},
 
 	// ============================================================================
 	// MULTICART AND COMPILATION MAPPINGS

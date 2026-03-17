@@ -44,8 +44,8 @@ func TestSqlGetLaunchCommandForMedia_Success_WithYear(t *testing.T) {
 	expectedName := "Super Mario Bros."
 	expectedYear := "1985"
 
-	rows := sqlmock.NewRows([]string{"Name", "Year"}).
-		AddRow(expectedName, expectedYear)
+	rows := sqlmock.NewRows([]string{"Name", "Year", "Players"}).
+		AddRow(expectedName, expectedYear, nil)
 
 	mock.ExpectPrepare(`SELECT.*mt\.Name.*FROM Media.*`).
 		ExpectQuery().
@@ -68,9 +68,9 @@ func TestSqlGetLaunchCommandForMedia_Success_WithoutYear(t *testing.T) {
 	path := "/games/super-mario-world.smc"
 	expectedName := "Super Mario World"
 
-	// Year is NULL
-	rows := sqlmock.NewRows([]string{"Name", "Year"}).
-		AddRow(expectedName, nil)
+	// Year and Players are NULL
+	rows := sqlmock.NewRows([]string{"Name", "Year", "Players"}).
+		AddRow(expectedName, nil, nil)
 
 	mock.ExpectPrepare(`SELECT.*mt\.Name.*FROM Media.*`).
 		ExpectQuery().
@@ -93,9 +93,9 @@ func TestSqlGetLaunchCommandForMedia_Success_EmptyYear(t *testing.T) {
 	path := "/games/sonic.bin"
 	expectedName := "Sonic the Hedgehog"
 
-	// Year is empty string
-	rows := sqlmock.NewRows([]string{"Name", "Year"}).
-		AddRow(expectedName, "")
+	// Year is empty string, Players is NULL
+	rows := sqlmock.NewRows([]string{"Name", "Year", "Players"}).
+		AddRow(expectedName, "", nil)
 
 	mock.ExpectPrepare(`SELECT.*mt\.Name.*FROM Media.*`).
 		ExpectQuery().
@@ -204,8 +204,8 @@ func TestSqlGetLaunchCommandForMedia_ComplexTitle(t *testing.T) {
 	expectedName := "Final Fantasy VII"
 	expectedYear := "1997"
 
-	rows := sqlmock.NewRows([]string{"Name", "Year"}).
-		AddRow(expectedName, expectedYear)
+	rows := sqlmock.NewRows([]string{"Name", "Year", "Players"}).
+		AddRow(expectedName, expectedYear, nil)
 
 	mock.ExpectPrepare(`SELECT.*mt\.Name.*FROM Media.*`).
 		ExpectQuery().
@@ -318,6 +318,28 @@ func TestMediaDB_GetLaunchCommandForMedia_Integration(t *testing.T) {
 		TagDBID:   insertedYearTag.DBID,
 	}
 	_, err = mediaDB.InsertMediaTag(marioMediaTag)
+	require.NoError(t, err)
+
+	// Insert a sibling variant with a different year to trigger disambiguation
+	marioAltMedia := database.Media{
+		MediaTitleDBID: insertedMarioTitle.DBID,
+		SystemDBID:     insertedSystem.DBID,
+		Path:           "/games/super-mario-bros-alt.nes",
+	}
+	insertedMarioAltMedia, err := mediaDB.InsertMedia(marioAltMedia)
+	require.NoError(t, err)
+
+	altYearTag := database.Tag{
+		TypeDBID: yearTagType.DBID,
+		Tag:      "1986",
+	}
+	insertedAltYearTag, err := mediaDB.FindOrInsertTag(altYearTag)
+	require.NoError(t, err)
+
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{
+		MediaDBID: insertedMarioAltMedia.DBID,
+		TagDBID:   insertedAltYearTag.DBID,
+	})
 	require.NoError(t, err)
 
 	// Insert MediaTitle without year tag

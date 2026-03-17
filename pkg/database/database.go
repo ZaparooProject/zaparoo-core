@@ -182,28 +182,42 @@ func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []za
 }
 
 type SearchResultWithCursor struct {
-	Year     *string
-	SystemID string
-	Name     string
-	Path     string
-	Tags     []TagInfo
-	MediaID  int64
+	SystemID      string
+	Name          string
+	Path          string
+	Tags          []TagInfo
+	ZapScriptTags []TagInfo // Disambiguating tags only (tags that differ across sibling variants)
+	MediaID       int64
 }
 
+// ZapScriptTagTypes defines which tag types are eligible for inclusion in ZapScript
+// title commands. Only these types are considered when checking for disambiguation.
+var ZapScriptTagTypes = []string{"year", "players"}
+
 // BuildTitleZapScript builds a ZapScript title command string from a system ID,
-// media name, and optional year. Format: @SystemID/Name (year:YYYY)
-// This will be expanded to include additional tags as appropriate.
-func BuildTitleZapScript(systemID, name string, year *string) string {
+// media name, and disambiguating tags. Format: @SystemID/Name (year:YYYY) (players:N)
+// Only includes tags that are present in the provided slice.
+func BuildTitleZapScript(systemID, name string, tags []TagInfo) string {
 	s := "@" + systemID + "/" + name
-	if year != nil && *year != "" {
-		s += " (year:" + *year + ")"
+	for _, tag := range tags {
+		switch tag.Type {
+		case "year":
+			if len(tag.Tag) == 4 {
+				s += " (year:" + tag.Tag + ")"
+			}
+		case "players":
+			s += " (players:" + tag.Tag + ")"
+		}
 	}
 	return s
 }
 
 // ZapScript returns the ZapScript title command string for this search result.
+// Uses ZapScriptTags (disambiguating tags only). If ZapScriptTags has not been
+// computed (nil), no tags are emitted — callers that need disambiguation must
+// ensure ZapScriptTags is populated via computeZapScriptTags or equivalent.
 func (r *SearchResultWithCursor) ZapScript() string {
-	return BuildTitleZapScript(r.SystemID, r.Name, r.Year)
+	return BuildTitleZapScript(r.SystemID, r.Name, r.ZapScriptTags)
 }
 
 // TitleWithSystem represents a MediaTitle with its associated System information
@@ -345,7 +359,7 @@ type MediaDBI interface {
 	InvalidateSlugCache(ctx context.Context) error
 	InvalidateSlugCacheForSystems(ctx context.Context, systemIDs []string) error
 	GetMediaByDBID(ctx context.Context, mediaDBID int64) (SearchResultWithCursor, error)
-	GetYearBySystemAndPath(ctx context.Context, systemID, path string) (string, error)
+	GetZapScriptTagsBySystemAndPath(ctx context.Context, systemID, path string) ([]TagInfo, error)
 
 	SetIndexingStatus(status string) error
 	GetIndexingStatus() (string, error)

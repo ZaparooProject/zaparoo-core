@@ -1576,12 +1576,20 @@ func (m *MockMediaDBI) GetMediaByDBID(ctx context.Context, mediaDBID int64) (dat
 	return database.SearchResultWithCursor{}, nil
 }
 
-func (m *MockMediaDBI) GetYearBySystemAndPath(ctx context.Context, systemID, path string) (string, error) {
+func (m *MockMediaDBI) GetZapScriptTagsBySystemAndPath(
+	ctx context.Context, systemID, path string,
+) ([]database.TagInfo, error) {
 	args := m.Called(ctx, systemID, path)
-	if err := args.Error(1); err != nil {
-		return "", fmt.Errorf("mock operation failed: %w", err)
+	if result, ok := args.Get(0).([]database.TagInfo); ok {
+		if err := args.Error(1); err != nil {
+			return result, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return result, nil
 	}
-	return args.String(0), nil
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
 }
 
 func (m *MockMediaDBI) RandomGameWithQuery(query *database.MediaQuery) (database.SearchResult, error) {

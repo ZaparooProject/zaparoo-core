@@ -83,6 +83,21 @@ func HandleMediaLookup(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 
+	// Populate disambiguating ZapScript tags if not already computed
+	// (e.g., cache-hit path in ResolveTitle skips tag computation)
+	if result.Result.ZapScriptTags == nil && env.Database.MediaDB != nil {
+		zapTags, tagErr := env.Database.MediaDB.GetZapScriptTagsBySystemAndPath(
+			ctx, result.Result.SystemID, result.Result.Path,
+		)
+		if tagErr != nil {
+			log.Debug().Err(tagErr).Msgf(
+				"could not get tags for %s:%s", result.Result.SystemID, result.Result.Path,
+			)
+		} else {
+			result.Result.ZapScriptTags = zapTags
+		}
+	}
+
 	zapScript := result.Result.ZapScript()
 
 	return models.MediaLookupResponse{
