@@ -59,11 +59,12 @@ func TestHandleMediaLookup_MatchFound(t *testing.T) {
 		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
 	).Return([]database.SearchResultWithCursor{
 		{
-			MediaID:  1,
-			SystemID: "NES",
-			Name:     "Super Mario Bros",
-			Path:     "/games/nes/smb.nes",
-			Tags:     []database.TagInfo{{Type: "year", Tag: "1985"}},
+			MediaID:       1,
+			SystemID:      "NES",
+			Name:          "Super Mario Bros",
+			Path:          "/games/nes/smb.nes",
+			Tags:          []database.TagInfo{{Type: "year", Tag: "1985"}},
+			ZapScriptTags: []database.TagInfo{},
 		},
 	}, nil)
 
@@ -117,11 +118,12 @@ func TestHandleMediaLookup_NilLauncherCache(t *testing.T) {
 		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
 	).Return([]database.SearchResultWithCursor{
 		{
-			MediaID:  1,
-			SystemID: "NES",
-			Name:     "Super Mario Bros",
-			Path:     "/games/nes/smb.nes",
-			Tags:     []database.TagInfo{{Type: "year", Tag: "1985"}},
+			MediaID:       1,
+			SystemID:      "NES",
+			Name:          "Super Mario Bros",
+			Path:          "/games/nes/smb.nes",
+			Tags:          []database.TagInfo{{Type: "year", Tag: "1985"}},
+			ZapScriptTags: []database.TagInfo{},
 		},
 	}, nil)
 
@@ -260,10 +262,11 @@ func TestHandleMediaLookup_TagsReturned(t *testing.T) {
 		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
 	).Return([]database.SearchResultWithCursor{
 		{
-			MediaID:  1,
-			SystemID: "NES",
-			Name:     "Super Mario Bros",
-			Path:     "/games/nes/smb.nes",
+			MediaID:       1,
+			SystemID:      "NES",
+			Name:          "Super Mario Bros",
+			Path:          "/games/nes/smb.nes",
+			ZapScriptTags: []database.TagInfo{},
 			Tags: []database.TagInfo{
 				{Tag: "platformer", Type: "genre"},
 				{Tag: "1985", Type: "year"},
