@@ -49,7 +49,6 @@ func TestHandleMediaLookup_MatchFound(t *testing.T) {
 	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
 	require.NoError(t, err)
 
-	year := "1985"
 	// Cache miss
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
@@ -64,7 +63,7 @@ func TestHandleMediaLookup_MatchFound(t *testing.T) {
 			SystemID: "NES",
 			Name:     "Super Mario Bros",
 			Path:     "/games/nes/smb.nes",
-			Year:     &year,
+			Tags:     []database.TagInfo{{Type: "year", Tag: "1985"}},
 		},
 	}, nil)
 
@@ -110,7 +109,6 @@ func TestHandleMediaLookup_NilLauncherCache(t *testing.T) {
 	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
 	require.NoError(t, err)
 
-	year := "1985"
 	mockMediaDB.On("GetCachedSlugResolution",
 		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
 	).Return(int64(0), "", false)
@@ -123,7 +121,7 @@ func TestHandleMediaLookup_NilLauncherCache(t *testing.T) {
 			SystemID: "NES",
 			Name:     "Super Mario Bros",
 			Path:     "/games/nes/smb.nes",
-			Year:     &year,
+			Tags:     []database.TagInfo{{Type: "year", Tag: "1985"}},
 		},
 	}, nil)
 

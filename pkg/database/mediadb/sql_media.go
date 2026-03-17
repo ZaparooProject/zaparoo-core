@@ -275,7 +275,9 @@ func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]
 }
 
 // sqlGetLaunchCommandForMedia generates a title-based launch command for media at the given path.
-// Returns a command in the format: @systemID/titleName or @systemID/titleName (year:XXXX)
+// Returns a command in the format: @systemID/titleName (year:XXXX) (players:N)
+// Only includes tags that are disambiguating (siblings under the same title have
+// different values for that tag type).
 func sqlGetLaunchCommandForMedia(
 	ctx context.Context,
 	db *sql.DB,
@@ -293,8 +295,47 @@ func sqlGetLaunchCommandForMedia(
 				WHERE mtags.MediaDBID = m.DBID
 				  AND tt.Type = 'year'
 				  AND t.Tag GLOB '[0-9][0-9][0-9][0-9]'
+				  AND (
+					SELECT COUNT(DISTINCT all_tags.Tag) FROM (
+						SELECT st.Tag FROM Media sib
+						INNER JOIN MediaTags smt ON sib.DBID = smt.MediaDBID
+						INNER JOIN Tags st ON smt.TagDBID = st.DBID
+						INNER JOIN TagTypes stt ON st.TypeDBID = stt.DBID
+						WHERE sib.MediaTitleDBID = m.MediaTitleDBID AND stt.Type = 'year'
+						UNION
+						SELECT st.Tag
+						FROM MediaTitleTags mtt
+						INNER JOIN Tags st ON mtt.TagDBID = st.DBID
+						INNER JOIN TagTypes stt ON st.TypeDBID = stt.DBID
+						WHERE mtt.MediaTitleDBID = m.MediaTitleDBID AND stt.Type = 'year'
+					) all_tags
+				  ) > 1
 				LIMIT 1
-			) as Year
+			) as Year,
+			(
+				SELECT t.Tag
+				FROM MediaTags mtags
+				INNER JOIN Tags t ON mtags.TagDBID = t.DBID
+				INNER JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+				WHERE mtags.MediaDBID = m.DBID
+				  AND tt.Type = 'players'
+				  AND (
+					SELECT COUNT(DISTINCT all_tags.Tag) FROM (
+						SELECT st.Tag FROM Media sib
+						INNER JOIN MediaTags smt ON sib.DBID = smt.MediaDBID
+						INNER JOIN Tags st ON smt.TagDBID = st.DBID
+						INNER JOIN TagTypes stt ON st.TypeDBID = stt.DBID
+						WHERE sib.MediaTitleDBID = m.MediaTitleDBID AND stt.Type = 'players'
+						UNION
+						SELECT st.Tag
+						FROM MediaTitleTags mtt
+						INNER JOIN Tags st ON mtt.TagDBID = st.DBID
+						INNER JOIN TagTypes stt ON st.TypeDBID = stt.DBID
+						WHERE mtt.MediaTitleDBID = m.MediaTitleDBID AND stt.Type = 'players'
+					) all_tags
+				  ) > 1
+				LIMIT 1
+			) as Players
 		FROM Media m
 		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
 		INNER JOIN Systems s ON mt.SystemDBID = s.DBID
@@ -313,9 +354,9 @@ func sqlGetLaunchCommandForMedia(
 	}()
 
 	var titleName string
-	var year sql.NullString
+	var year, players sql.NullString
 
-	err = stmt.QueryRowContext(ctx, systemID, path).Scan(&titleName, &year)
+	err = stmt.QueryRowContext(ctx, systemID, path).Scan(&titleName, &year, &players)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// No media title found, return empty string
@@ -324,10 +365,13 @@ func sqlGetLaunchCommandForMedia(
 		return "", fmt.Errorf("failed to query launch command: %w", err)
 	}
 
-	var yearPtr *string
+	var tags []database.TagInfo
 	if year.Valid && year.String != "" {
-		yearPtr = &year.String
+		tags = append(tags, database.TagInfo{Type: "year", Tag: year.String})
+	}
+	if players.Valid && players.String != "" {
+		tags = append(tags, database.TagInfo{Type: "players", Tag: players.String})
 	}
 
-	return database.BuildTitleZapScript(systemID, titleName, yearPtr), nil
+	return database.BuildTitleZapScript(systemID, titleName, tags), nil
 }

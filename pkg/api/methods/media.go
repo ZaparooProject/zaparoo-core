@@ -663,19 +663,19 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			return nil, fmt.Errorf("error getting system metadata: %w", err)
 		}
 
-		// Build zapScript with optional year from MediaDB
-		var year *string
+		// Build zapScript with disambiguating tags from MediaDB
+		var zapScriptTags []database.TagInfo
 		if env.Database.MediaDB != nil {
-			y, yearErr := env.Database.MediaDB.GetYearBySystemAndPath(
+			tags, tagsErr := env.Database.MediaDB.GetZapScriptTagsBySystemAndPath(
 				env.Context, system.ID, activeMedia.Path,
 			)
-			if yearErr != nil {
-				log.Debug().Err(yearErr).Msgf("could not get year for %s:%s", system.ID, activeMedia.Path)
-			} else if y != "" {
-				year = &y
+			if tagsErr != nil {
+				log.Debug().Err(tagsErr).Msgf("could not get tags for %s:%s", system.ID, activeMedia.Path)
+			} else {
+				zapScriptTags = tags
 			}
 		}
-		zapScript := database.BuildTitleZapScript(system.ID, activeMedia.Name, year)
+		zapScript := database.BuildTitleZapScript(system.ID, activeMedia.Name, zapScriptTags)
 
 		activeResp := models.ActiveMediaResponse{
 			ActiveMedia: models.ActiveMedia{
@@ -797,19 +797,19 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, nil //nolint:nilnil // nil response means no active media
 	}
 
-	// Build zapScript with optional year from MediaDB
-	var year *string
+	// Build zapScript with disambiguating tags from MediaDB
+	var zapScriptTags []database.TagInfo
 	if env.Database.MediaDB != nil {
-		y, yearErr := env.Database.MediaDB.GetYearBySystemAndPath(
+		tags, tagsErr := env.Database.MediaDB.GetZapScriptTagsBySystemAndPath(
 			env.Context, media.SystemID, media.Path,
 		)
-		if yearErr != nil {
-			log.Debug().Err(yearErr).Msgf("could not get year for %s:%s", media.SystemID, media.Path)
-		} else if y != "" {
-			year = &y
+		if tagsErr != nil {
+			log.Debug().Err(tagsErr).Msgf("could not get tags for %s:%s", media.SystemID, media.Path)
+		} else {
+			zapScriptTags = tags
 		}
 	}
-	zapScript := database.BuildTitleZapScript(media.SystemID, media.Name, year)
+	zapScript := database.BuildTitleZapScript(media.SystemID, media.Name, zapScriptTags)
 
 	resp := models.ActiveMediaResponse{
 		ActiveMedia: models.ActiveMedia{

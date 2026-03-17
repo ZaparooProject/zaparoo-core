@@ -63,8 +63,8 @@ func TestHandleActiveMedia_WithZapScript(t *testing.T) {
 				"launcher1",
 			),
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("GetYearBySystemAndPath", mock.Anything, "snes", "/roms/snes/Super Mario World.sfc").
-					Return("1990", nil)
+				m.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "snes", "/roms/snes/Super Mario World.sfc").
+					Return([]database.TagInfo{{Type: "year", Tag: "1990"}}, nil)
 			},
 			expectedZapScript: "@snes/Super Mario World (year:1990)",
 			expectNil:         false,
@@ -79,8 +79,8 @@ func TestHandleActiveMedia_WithZapScript(t *testing.T) {
 				"launcher1",
 			),
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("GetYearBySystemAndPath", mock.Anything, "snes", "/roms/snes/Unknown Game.sfc").
-					Return("", nil)
+				m.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "snes", "/roms/snes/Unknown Game.sfc").
+					Return([]database.TagInfo{}, nil)
 			},
 			expectedZapScript: "@snes/Unknown Game",
 			expectNil:         false,
@@ -95,8 +95,8 @@ func TestHandleActiveMedia_WithZapScript(t *testing.T) {
 				"launcher1",
 			),
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("GetYearBySystemAndPath", mock.Anything, "snes", "/roms/snes/Error Game.sfc").
-					Return("", errors.New("db error"))
+				m.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "snes", "/roms/snes/Error Game.sfc").
+					Return([]database.TagInfo(nil), errors.New("db error"))
 			},
 			expectedZapScript: "@snes/Error Game",
 			expectNil:         false,
@@ -179,8 +179,8 @@ func TestHandleMedia_WithActiveMediaZapScript(t *testing.T) {
 			),
 			setupMock: func(m *helpers.MockMediaDBI) {
 				// HandleMedia uses system.ID from GetSystemMetadata which returns uppercase "SNES"
-				m.On("GetYearBySystemAndPath", mock.Anything, "SNES", "/roms/snes/Super Mario World.sfc").
-					Return("1990", nil)
+				m.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "SNES", "/roms/snes/Super Mario World.sfc").
+					Return([]database.TagInfo{{Type: "year", Tag: "1990"}}, nil)
 			},
 			expectedZapScript: "@SNES/Super Mario World (year:1990)",
 			expectedSystemID:  "SNES",
@@ -197,8 +197,8 @@ func TestHandleMedia_WithActiveMediaZapScript(t *testing.T) {
 			),
 			setupMock: func(m *helpers.MockMediaDBI) {
 				// HandleMedia uses system.ID from GetSystemMetadata which returns uppercase "SNES"
-				m.On("GetYearBySystemAndPath", mock.Anything, "SNES", "/roms/snes/Unknown Game.sfc").
-					Return("", nil)
+				m.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "SNES", "/roms/snes/Unknown Game.sfc").
+					Return([]database.TagInfo{}, nil)
 			},
 			expectedZapScript: "@SNES/Unknown Game",
 			expectedSystemID:  "SNES",
@@ -215,8 +215,8 @@ func TestHandleMedia_WithActiveMediaZapScript(t *testing.T) {
 			),
 			setupMock: func(m *helpers.MockMediaDBI) {
 				// HandleMedia uses system.ID from GetSystemMetadata which returns uppercase "SNES"
-				m.On("GetYearBySystemAndPath", mock.Anything, "SNES", "/roms/snes/Error Game.sfc").
-					Return("", errors.New("db error"))
+				m.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "SNES", "/roms/snes/Error Game.sfc").
+					Return([]database.TagInfo(nil), errors.New("db error"))
 			},
 			expectedZapScript: "@SNES/Error Game",
 			expectedSystemID:  "SNES",
@@ -296,8 +296,8 @@ func TestHandleActiveMedia_WithLauncherControls(t *testing.T) {
 	st.SetActiveMedia(activeMedia)
 
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("GetYearBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
-		Return("", nil)
+	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.TagInfo{}, nil)
 
 	env := requests.RequestEnv{
 		Context:  context.Background(),
@@ -326,8 +326,8 @@ func TestHandleActiveMedia_WithoutLauncherControls(t *testing.T) {
 	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher"))
 
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("GetYearBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
-		Return("", nil)
+	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.TagInfo{}, nil)
 
 	env := requests.RequestEnv{
 		Context:  context.Background(),

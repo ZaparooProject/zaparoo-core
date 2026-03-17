@@ -38,13 +38,11 @@ import (
 // fetchAndAttachTags fetches tags for a slice of search results and attaches them to the results.
 // This helper consolidates duplicated tag-fetching logic across multiple search functions.
 // Uses LEFT JOIN to handle tags with missing TypeDBID defensively.
-// If extractYear is true, also extracts 4-digit year tags into the Year field.
 // Modifies results in-place.
 func fetchAndAttachTags(
 	ctx context.Context,
 	db sqlQueryable,
 	results []database.SearchResultWithCursor,
-	extractYear bool,
 ) error {
 	if len(results) == 0 {
 		return nil
@@ -118,37 +116,72 @@ func fetchAndAttachTags(
 		return fmt.Errorf("tags rows iteration error: %w", err)
 	}
 
-	// Merge tags into results and optionally extract year tag
+	// Merge tags into results
 	for i := range results {
 		if tags, exists := tagsMap[results[i].MediaID]; exists {
 			results[i].Tags = tags
-
-			// Extract 4-digit year tag if requested
-			if extractYear {
-				for _, tag := range tags {
-					if tag.Type == "year" && len(tag.Tag) == 4 {
-						// Validate it's actually 4 digits
-						isYear := true
-						for _, ch := range tag.Tag {
-							if ch < '0' || ch > '9' {
-								isYear = false
-								break
-							}
-						}
-						if isYear {
-							results[i].Year = &tag.Tag //nolint:gosec // G602: indexing within loop bounds
-							break
-						}
-					}
-				}
-			}
 		} else {
 			// Initialize empty tags slice for media with no tags
 			results[i].Tags = []database.TagInfo{}
 		}
 	}
 
+	// Compute disambiguating ZapScript tags in-memory.
+	// A tag type is disambiguating when results sharing the same title name
+	// have different values for that tag type (e.g., "2" vs "4" for players).
+	computeZapScriptTags(results)
+
 	return nil
+}
+
+// computeZapScriptTags determines which tags are disambiguating across sibling
+// variants (results with the same Name) and populates ZapScriptTags on each result.
+// A tag type is disambiguating when multiple results sharing the same Name have
+// different values for that tag type.
+func computeZapScriptTags(results []database.SearchResultWithCursor) {
+	if len(results) == 0 {
+		return
+	}
+
+	// Group results by SystemID+Name to find siblings (same title within a system)
+	nameGroups := make(map[string][]int) // "SystemID/Name" → indices into results
+	for i := range results {
+		key := results[i].SystemID + "/" + results[i].Name
+		nameGroups[key] = append(nameGroups[key], i)
+	}
+
+	for _, indices := range nameGroups {
+		// For each eligible tag type, collect distinct values across siblings
+		disambiguating := make(map[string]bool) // tag types that need disambiguation
+
+		for _, tagType := range database.ZapScriptTagTypes {
+			values := make(map[string]bool)
+			for _, idx := range indices {
+				for _, tag := range results[idx].Tags {
+					if tag.Type == tagType {
+						values[tag.Tag] = true
+					}
+				}
+			}
+			if len(values) > 1 {
+				disambiguating[tagType] = true
+			}
+		}
+
+		// Populate ZapScriptTags with only disambiguating tags for each result
+		for _, idx := range indices {
+			var zapTags []database.TagInfo
+			for _, tag := range results[idx].Tags {
+				if disambiguating[tag.Type] {
+					zapTags = append(zapTags, tag)
+				}
+			}
+			results[idx].ZapScriptTags = zapTags
+			if results[idx].ZapScriptTags == nil {
+				results[idx].ZapScriptTags = []database.TagInfo{}
+			}
+		}
+	}
 }
 
 func sqlSearchMediaPathExact(
@@ -480,8 +513,8 @@ func sqlSearchMediaWithFilters(
 		return results, fmt.Errorf("media rows iteration error: %w", err)
 	}
 
-	// Fetch and attach tags for all results (including year extraction)
-	if err := fetchAndAttachTags(ctx, db, results, true); err != nil {
+	// Fetch and attach tags for all results
+	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return results, err
 	}
 
@@ -580,7 +613,7 @@ func sqlSearchMediaByTitleDBIDs(
 		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 
-	if err := fetchAndAttachTags(ctx, db, results, true); err != nil {
+	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return nil, err
 	}
 
@@ -665,7 +698,7 @@ func sqlSearchMediaBySlug(
 	}
 
 	// Fetch and attach tags for all results
-	if err := fetchAndAttachTags(ctx, db, results, false); err != nil {
+	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return results, err
 	}
 
@@ -750,7 +783,7 @@ func sqlSearchMediaBySecondarySlug(
 	}
 
 	// Fetch and attach tags for all results
-	if err := fetchAndAttachTags(ctx, db, results, false); err != nil {
+	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return results, err
 	}
 
@@ -835,7 +868,7 @@ func sqlSearchMediaBySlugPrefix(
 	}
 
 	// Fetch and attach tags for all results
-	if err := fetchAndAttachTags(ctx, db, results, false); err != nil {
+	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return results, err
 	}
 
@@ -942,7 +975,7 @@ func sqlSearchMediaBySlugIn(
 	}
 
 	// Fetch and attach tags for all results
-	if err := fetchAndAttachTags(ctx, db, results, false); err != nil {
+	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return results, err
 	}
 
