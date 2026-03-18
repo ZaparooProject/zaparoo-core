@@ -21,11 +21,10 @@ package pn532
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
-
-	"errors"
 
 	pn533 "github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/detection"
