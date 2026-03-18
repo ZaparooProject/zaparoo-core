@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -300,4 +301,64 @@ func TestHandleMediaLookup_TagsReturned(t *testing.T) {
 	assert.Equal(t, "genre", resp.Match.Tags[0].Type)
 	assert.Equal(t, "1985", resp.Match.Tags[1].Tag)
 	assert.Equal(t, "year", resp.Match.Tags[1].Type)
+}
+
+func TestHandleMediaLookup_RelativePath(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+
+	mockMediaDB.On("GetCachedSlugResolution",
+		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
+	).Return(int64(0), "", false)
+
+	// Return a path under the mock rootDir "/mock/roms" + launcher folder "NES"
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything,
+	).Return([]database.SearchResultWithCursor{
+		{
+			MediaID:       1,
+			SystemID:      "NES",
+			Name:          "Super Mario Bros",
+			Path:          "/mock/roms/NES/smb.nes",
+			Tags:          []database.TagInfo{{Type: "year", Tag: "1985"}},
+			ZapScriptTags: []database.TagInfo{},
+		},
+	}, nil)
+
+	mockMediaDB.On("SetCachedSlugResolution",
+		mock.Anything, "NES", mock.AnythingOfType("string"), mock.Anything, int64(1), mock.AnythingOfType("string"),
+	).Return(nil)
+
+	// LauncherCache with NES launcher folder matching the mock rootDir
+	launcherCache := &helpers.LauncherCache{}
+	launcherCache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "nes-launcher", SystemID: "NES", Folders: []string{"NES"}},
+	})
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		Platform:      pl,
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		Config:        cfg,
+		LauncherCache: launcherCache,
+		Params:        json.RawMessage(`{"name": "Super Mario Bros", "system": "NES"}`),
+	}
+
+	result, err := HandleMediaLookup(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaLookupResponse)
+	require.True(t, ok)
+	require.NotNil(t, resp.Match)
+	assert.Equal(t, "NES/smb.nes", resp.Match.Path)
 }

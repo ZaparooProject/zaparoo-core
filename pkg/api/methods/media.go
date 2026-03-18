@@ -539,6 +539,10 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	// Convert to API models
+	var rootDirs []string
+	if env.LauncherCache != nil && env.Platform != nil {
+		rootDirs = env.Platform.RootDirs(env.Config)
+	}
 	results := make([]models.SearchResultMedia, 0, len(searchResults))
 	for _, result := range searchResults {
 		system, err := systemdefs.GetSystem(result.SystemID)
@@ -567,10 +571,15 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 		zapScript := result.ZapScript()
 
+		resultPath := result.Path
+		if env.LauncherCache != nil {
+			resultPath = env.LauncherCache.ToRelativePath(rootDirs, result.SystemID, resultPath)
+		}
+
 		results = append(results, models.SearchResultMedia{
 			System:    resultSystem,
 			Name:      result.Name,
-			Path:      result.Path,
+			Path:      resultPath,
 			ZapScript: zapScript,
 			Tags:      result.Tags,
 		})
