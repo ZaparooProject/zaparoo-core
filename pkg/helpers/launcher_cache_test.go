@@ -20,6 +20,7 @@
 package helpers
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -175,12 +176,17 @@ func TestToRelativePath(t *testing.T) {
 func TestToRelativePath_AbsoluteFolder(t *testing.T) {
 	t.Parallel()
 
+	// Use t.TempDir() to get a path that is absolute on all platforms
+	// (including Windows where /custom/ps2 is not considered absolute).
+	absFolder := filepath.Join(t.TempDir(), "ps2")
+	absPath := filepath.Join(absFolder, "game.iso")
+
 	cache := &LauncherCache{}
 	cache.InitializeFromSlice([]platforms.Launcher{
-		{ID: "custom-ps2", SystemID: "ps2", Folders: []string{"/custom/ps2"}},
+		{ID: "custom-ps2", SystemID: "ps2", Folders: []string{absFolder}},
 	})
 
-	got := cache.ToRelativePath(nil, "ps2", "/custom/ps2/game.iso")
+	got := cache.ToRelativePath(nil, "ps2", absPath)
 	assert.Equal(t, "ps2/game.iso", got)
 }
 
