@@ -25,6 +25,8 @@ import (
 	"testing"
 	"time"
 
+	"errors"
+
 	pn533 "github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/detection"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -219,6 +221,96 @@ func TestCancelWrite_WithActiveWrite(t *testing.T) {
 
 	// Verify the context was cancelled
 	assert.Error(t, ctx.Err(), "context should be cancelled")
+}
+
+// TestClose_ClearsFailedProbe verifies that closing a reader removes its
+// path from the failed probe cache, allowing re-probing on next detection
+// cycle. Not parallel because it modifies package-level state.
+func TestClose_ClearsFailedProbe(t *testing.T) {
+	// Save and restore package state
+	probeStateMu.Lock()
+	origFailed := failedProbePaths
+	defer func() {
+		probeStateMu.Lock()
+		failedProbePaths = origFailed
+		probeStateMu.Unlock()
+	}()
+	probeStateMu.Unlock()
+
+	// Pre-populate failed probes for two paths
+	probeStateMu.Lock()
+	failedProbePaths = map[string]failedProbeEntry{
+		"/dev/ttyUSB0": {deviceModTime: time.Now()},
+		"/dev/ttyUSB1": {deviceModTime: time.Now()},
+	}
+	probeStateMu.Unlock()
+
+	reader := &Reader{
+		session: &mockPollingSession{},
+		device:  &mockPN532Device{},
+		deviceInfo: config.ReadersConnect{
+			Driver: "pn532_uart",
+			Path:   "/dev/ttyUSB0",
+		},
+	}
+
+	err := reader.Close()
+	require.NoError(t, err)
+
+	probeStateMu.RLock()
+	assert.NotContains(t, failedProbePaths, "/dev/ttyUSB0",
+		"closed reader's path should be removed from failed probes")
+	assert.Contains(t, failedProbePaths, "/dev/ttyUSB1",
+		"other failed probe paths should be preserved")
+	probeStateMu.RUnlock()
+}
+
+// TestClose_SessionError verifies that Close returns an error when the
+// session fails to close. Not parallel because it modifies package-level state.
+func TestClose_SessionError(t *testing.T) {
+	reader := &Reader{
+		session: &mockPollingSession{
+			closeFunc: func() error {
+				return errors.New("session close failed")
+			},
+		},
+		device: &mockPN532Device{},
+		deviceInfo: config.ReadersConnect{
+			Driver: "pn532_uart",
+			Path:   "/dev/ttyUSB0",
+		},
+	}
+
+	err := reader.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to close PN532 session")
+}
+
+// TestClose_DeviceError verifies that Close returns an error when the
+// device fails to close. Not parallel because it modifies package-level state.
+func TestClose_DeviceError(t *testing.T) {
+	// Save and restore package state
+	probeStateMu.Lock()
+	origFailed := failedProbePaths
+	defer func() {
+		probeStateMu.Lock()
+		failedProbePaths = origFailed
+		probeStateMu.Unlock()
+	}()
+	probeStateMu.Unlock()
+
+	reader := &Reader{
+		session: &mockPollingSession{},
+		device:  &mockPN532Device{closeErr: errors.New("device close failed")},
+		deviceInfo: config.ReadersConnect{
+			Driver: "pn532_uart",
+			Path:   "/dev/ttyUSB0",
+		},
+	}
+
+	err := reader.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to close PN532 device")
 }
 
 // TODO: Detect() integration with failed probe tracking is untested because
