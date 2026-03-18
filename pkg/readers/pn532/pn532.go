@@ -498,6 +498,11 @@ func (r *Reader) processNewTag(ctx context.Context, detectedTag *pn532.DetectedT
 }
 
 func (r *Reader) Close() error {
+	// Always clear caches so the port can be re-probed on reconnection,
+	// even if session or device close fails.
+	defer detection.ClearDetectionCache()
+	defer ClearFailedProbe(r.deviceInfo.Path)
+
 	r.mutex.Lock()
 
 	r.connected = false
@@ -530,9 +535,6 @@ func (r *Reader) Close() error {
 			return fmt.Errorf("failed to close PN532 device: %w", err)
 		}
 	}
-
-	detection.ClearDetectionCache()
-	ClearFailedProbe(r.deviceInfo.Path)
 
 	return nil
 }

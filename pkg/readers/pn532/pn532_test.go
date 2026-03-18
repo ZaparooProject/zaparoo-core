@@ -265,8 +265,22 @@ func TestClose_ClearsFailedProbe(t *testing.T) {
 }
 
 // TestClose_SessionError verifies that Close returns an error when the
-// session fails to close. Not parallel because it modifies package-level state.
+// session fails to close, but still clears the failed probe cache.
+// Not parallel because it modifies package-level state.
 func TestClose_SessionError(t *testing.T) {
+	// Save and restore package state
+	probeStateMu.Lock()
+	origFailed := failedProbePaths
+	defer func() {
+		probeStateMu.Lock()
+		failedProbePaths = origFailed
+		probeStateMu.Unlock()
+	}()
+	failedProbePaths = map[string]failedProbeEntry{
+		"/dev/ttyUSB0": {deviceModTime: time.Now()},
+	}
+	probeStateMu.Unlock()
+
 	reader := &Reader{
 		session: &mockPollingSession{
 			closeFunc: func() error {
@@ -283,10 +297,17 @@ func TestClose_SessionError(t *testing.T) {
 	err := reader.Close()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to close PN532 session")
+
+	// Probe cache should still be cleared despite the error
+	probeStateMu.RLock()
+	assert.NotContains(t, failedProbePaths, "/dev/ttyUSB0",
+		"failed probe should be cleared even when session close fails")
+	probeStateMu.RUnlock()
 }
 
 // TestClose_DeviceError verifies that Close returns an error when the
-// device fails to close. Not parallel because it modifies package-level state.
+// device fails to close, but still clears the failed probe cache.
+// Not parallel because it modifies package-level state.
 func TestClose_DeviceError(t *testing.T) {
 	// Save and restore package state
 	probeStateMu.Lock()
@@ -296,6 +317,9 @@ func TestClose_DeviceError(t *testing.T) {
 		failedProbePaths = origFailed
 		probeStateMu.Unlock()
 	}()
+	failedProbePaths = map[string]failedProbeEntry{
+		"/dev/ttyUSB0": {deviceModTime: time.Now()},
+	}
 	probeStateMu.Unlock()
 
 	reader := &Reader{
@@ -310,6 +334,12 @@ func TestClose_DeviceError(t *testing.T) {
 	err := reader.Close()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to close PN532 device")
+
+	// Probe cache should still be cleared despite the error
+	probeStateMu.RLock()
+	assert.NotContains(t, failedProbePaths, "/dev/ttyUSB0",
+		"failed probe should be cleared even when device close fails")
+	probeStateMu.RUnlock()
 }
 
 // TODO: Detect() integration with failed probe tracking is untested because
