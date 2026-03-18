@@ -30,6 +30,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -964,4 +966,56 @@ func TestResolveSystems_DeduplicatesForGenerateMedia(t *testing.T) {
 	}
 	assert.Contains(t, ids, "NES")
 	assert.Contains(t, ids, "SNES")
+}
+
+func TestHandleMediaSearch_RelativePaths(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+
+	// LauncherCache with NES launcher folder matching the mock rootDir "/mock/roms"
+	launcherCache := &phelpers.LauncherCache{}
+	launcherCache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "nes-launcher", SystemID: "NES", Folders: []string{"NES"}},
+	})
+
+	// Return a result with an absolute path under the rootDir + launcher folder
+	mockMediaDB.On("SearchMediaWithFilters",
+		mock.Anything,
+		mock.Anything,
+	).Return([]database.SearchResultWithCursor{
+		{SystemID: "NES", Name: "Mario Bros", Path: "/mock/roms/NES/mario.nes", MediaID: 1},
+	}, nil)
+
+	query := "mario"
+	params := models.SearchParams{Query: &query}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	defer appState.StopService()
+	drainNotifications(t, ns)
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+		Platform:      mockPlatform,
+		State:         appState,
+		Config:        &config.Instance{},
+		LauncherCache: launcherCache,
+		ClientID:      "127.0.0.1:12345",
+	}
+
+	result, err := HandleMediaSearch(env)
+	require.NoError(t, err)
+
+	searchResults, ok := result.(models.SearchResults)
+	require.True(t, ok)
+	require.Len(t, searchResults.Results, 1)
+	assert.Equal(t, "NES/mario.nes", searchResults.Results[0].Path)
 }
