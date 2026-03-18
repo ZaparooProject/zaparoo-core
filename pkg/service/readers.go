@@ -285,6 +285,7 @@ func readerManager(
 	var lastError time.Time
 
 	proc := &scanPreprocessor{}
+	connectScanSeen := make(map[string]bool)
 	var exitTimer clockwork.Timer
 
 	var autoDetector *AutoDetector
@@ -413,6 +414,18 @@ preprocessing:
 			continue preprocessing
 
 		case scanNewToken:
+			// Suppress the first scan from each newly-connected reader when ignore_on_connect is enabled
+			if svc.Config.ScanIgnoreOnConnect() && scan.ReaderID != "" && !connectScanSeen[scan.ReaderID] {
+				connectScanSeen[scan.ReaderID] = true
+				log.Info().
+					Str("readerID", scan.ReaderID).
+					Msg("suppressing initial detection from reader (ignore_on_connect enabled)")
+				continue preprocessing
+			}
+			if svc.Config.ScanIgnoreOnConnect() && scan.ReaderID != "" {
+				connectScanSeen[scan.ReaderID] = true
+			}
+
 			log.Info().Msgf("new token scanned: %v", scan)
 
 			// Run on_scan hook before SetActiveCard so last_scanned refers to previous token
@@ -461,6 +474,10 @@ preprocessing:
 				Str("source", scanSource).
 				Bool("prevTokenSet", proc.PrevToken() != nil).
 				Msg("token removal due to reader error, keeping media running")
+			// Clear acknowledged state so reconnection triggers a fresh suppression
+			if pt := proc.PrevToken(); pt != nil && pt.ReaderID != "" {
+				delete(connectScanSeen, pt.ReaderID)
+			}
 			if exitTimer != nil {
 				if stopped := exitTimer.Stop(); stopped {
 					log.Debug().Msg("cancelled exit timer due to reader error")
