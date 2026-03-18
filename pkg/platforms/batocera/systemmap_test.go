@@ -175,6 +175,9 @@ func TestBatoceraOfficialExtensions(t *testing.T) {
 			".mod", ".xm", ".stm", ".s3m", ".far", ".it", ".669", ".mtm",
 		},
 
+		// Handheld systems
+		"3ds": {".3ds", ".cci", ".cxi", ".squashfs", ".zcci"},
+
 		// Modern console systems
 		"ps2":     {".iso", ".mdf", ".nrg", ".bin", ".img", ".dump", ".gz", ".cso", ".chd", ".m3u"},
 		"ps3":     {".ps3", ".psn", ".squashfs"},

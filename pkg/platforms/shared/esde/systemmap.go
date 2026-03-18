@@ -55,7 +55,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"3ds": {
 		SystemID:   systemdefs.System3DS,
-		Extensions: []string{".3ds", ".cci", ".cxi"},
+		Extensions: []string{".3ds", ".cci", ".cxi", ".squashfs", ".zcci"},
 		LauncherID: "3DS",
 	},
 	"abuse": {
