@@ -20,6 +20,9 @@
 package helpers
 
 import (
+	"path/filepath"
+	"strings"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -109,4 +112,85 @@ func (lc *LauncherCache) GetLauncherByID(id string) *platforms.Launcher {
 // This can be called via API to refresh the cache without restarting.
 func (lc *LauncherCache) Refresh(pl platforms.Platform, cfg *config.Instance) {
 	lc.Initialize(pl, cfg)
+}
+
+// ToRelativePath converts an absolute media path to a relative path with the
+// system ID as the first component. It strips the matching rootDir+folder
+// prefix and replaces it with the systemID.
+//
+// Example: "/mnt/games/SNES/USA/game.sfc" with systemID "snes" becomes
+// "snes/USA/game.sfc".
+//
+// Returns the original path unchanged if it is a URI or no prefix matches.
+func (lc *LauncherCache) ToRelativePath(
+	rootDirs []string,
+	systemID string,
+	path string,
+) string {
+	if ReURI.MatchString(path) {
+		return path
+	}
+
+	launchers := lc.GetLaunchersBySystem(systemID)
+	if len(launchers) == 0 {
+		return path
+	}
+
+	// Collect unique folders from all launchers for this system.
+	var relFolders, absFolders []string
+	seen := make(map[string]bool)
+	for i := range launchers {
+		if launchers[i].SkipFilesystemScan {
+			continue
+		}
+		for _, folder := range launchers[i].Folders {
+			if seen[folder] {
+				continue
+			}
+			seen[folder] = true
+			if filepath.IsAbs(folder) {
+				absFolders = append(absFolders, folder)
+			} else {
+				relFolders = append(relFolders, folder)
+			}
+		}
+	}
+
+	// Try rootDir + relative folder combinations.
+	for _, root := range rootDirs {
+		for _, folder := range relFolders {
+			prefix := filepath.Join(root, folder)
+			if PathHasPrefix(path, prefix) {
+				return stripPrefixAndPrepend(systemID, path, prefix)
+			}
+		}
+	}
+
+	// Try absolute folders.
+	for _, folder := range absFolders {
+		if PathHasPrefix(path, folder) {
+			return stripPrefixAndPrepend(systemID, path, folder)
+		}
+	}
+
+	return path
+}
+
+// stripPrefixAndPrepend removes prefix from path and prepends systemID.
+func stripPrefixAndPrepend(systemID, path, prefix string) string {
+	normPath := filepath.ToSlash(filepath.Clean(path))
+	normPrefix := filepath.ToSlash(filepath.Clean(prefix))
+	if !strings.HasSuffix(normPrefix, "/") {
+		normPrefix += "/"
+	}
+
+	// Use case-insensitive match to find where the prefix ends.
+	lowerPath := strings.ToLower(normPath)
+	lowerPrefix := strings.ToLower(normPrefix)
+	if !strings.HasPrefix(lowerPath, lowerPrefix) {
+		return path
+	}
+
+	remainder := normPath[len(normPrefix):]
+	return systemID + "/" + remainder
 }
