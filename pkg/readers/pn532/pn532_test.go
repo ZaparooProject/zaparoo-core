@@ -21,7 +21,10 @@ package pn532
 
 import (
 	"context"
+	"errors"
+	"os"
 	"testing"
+	"time"
 
 	pn533 "github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/detection"
@@ -217,6 +220,222 @@ func TestCancelWrite_WithActiveWrite(t *testing.T) {
 
 	// Verify the context was cancelled
 	assert.Error(t, ctx.Err(), "context should be cancelled")
+}
+
+// TestClose_ClearsFailedProbe verifies that closing a reader removes its
+// path from the failed probe cache, allowing re-probing on next detection
+// cycle. Not parallel because it modifies package-level state.
+func TestClose_ClearsFailedProbe(t *testing.T) {
+	// Save and restore package state
+	probeStateMu.Lock()
+	origFailed := failedProbePaths
+	defer func() {
+		probeStateMu.Lock()
+		failedProbePaths = origFailed
+		probeStateMu.Unlock()
+	}()
+	probeStateMu.Unlock()
+
+	// Pre-populate failed probes for two paths
+	probeStateMu.Lock()
+	failedProbePaths = map[string]failedProbeEntry{
+		"/dev/ttyUSB0": {deviceModTime: time.Now()},
+		"/dev/ttyUSB1": {deviceModTime: time.Now()},
+	}
+	probeStateMu.Unlock()
+
+	reader := &Reader{
+		session: &mockPollingSession{},
+		device:  &mockPN532Device{},
+		deviceInfo: config.ReadersConnect{
+			Driver: "pn532_uart",
+			Path:   "/dev/ttyUSB0",
+		},
+	}
+
+	err := reader.Close()
+	require.NoError(t, err)
+
+	probeStateMu.RLock()
+	assert.NotContains(t, failedProbePaths, "/dev/ttyUSB0",
+		"closed reader's path should be removed from failed probes")
+	assert.Contains(t, failedProbePaths, "/dev/ttyUSB1",
+		"other failed probe paths should be preserved")
+	probeStateMu.RUnlock()
+}
+
+// TestClose_SessionError verifies that Close returns an error when the
+// session fails to close, but still clears the failed probe cache.
+// Not parallel because it modifies package-level state.
+func TestClose_SessionError(t *testing.T) {
+	// Save and restore package state
+	probeStateMu.Lock()
+	origFailed := failedProbePaths
+	defer func() {
+		probeStateMu.Lock()
+		failedProbePaths = origFailed
+		probeStateMu.Unlock()
+	}()
+	failedProbePaths = map[string]failedProbeEntry{
+		"/dev/ttyUSB0": {deviceModTime: time.Now()},
+	}
+	probeStateMu.Unlock()
+
+	reader := &Reader{
+		session: &mockPollingSession{
+			closeFunc: func() error {
+				return errors.New("session close failed")
+			},
+		},
+		device: &mockPN532Device{},
+		deviceInfo: config.ReadersConnect{
+			Driver: "pn532_uart",
+			Path:   "/dev/ttyUSB0",
+		},
+	}
+
+	err := reader.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to close PN532 session")
+
+	// Probe cache should still be cleared despite the error
+	probeStateMu.RLock()
+	assert.NotContains(t, failedProbePaths, "/dev/ttyUSB0",
+		"failed probe should be cleared even when session close fails")
+	probeStateMu.RUnlock()
+}
+
+// TestClose_DeviceError verifies that Close returns an error when the
+// device fails to close, but still clears the failed probe cache.
+// Not parallel because it modifies package-level state.
+func TestClose_DeviceError(t *testing.T) {
+	// Save and restore package state
+	probeStateMu.Lock()
+	origFailed := failedProbePaths
+	defer func() {
+		probeStateMu.Lock()
+		failedProbePaths = origFailed
+		probeStateMu.Unlock()
+	}()
+	failedProbePaths = map[string]failedProbeEntry{
+		"/dev/ttyUSB0": {deviceModTime: time.Now()},
+	}
+	probeStateMu.Unlock()
+
+	reader := &Reader{
+		session: &mockPollingSession{},
+		device:  &mockPN532Device{closeErr: errors.New("device close failed")},
+		deviceInfo: config.ReadersConnect{
+			Driver: "pn532_uart",
+			Path:   "/dev/ttyUSB0",
+		},
+	}
+
+	err := reader.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to close PN532 device")
+
+	// Probe cache should still be cleared despite the error
+	probeStateMu.RLock()
+	assert.NotContains(t, failedProbePaths, "/dev/ttyUSB0",
+		"failed probe should be cleared even when device close fails")
+	probeStateMu.RUnlock()
+}
+
+// TODO: Detect() integration with failed probe tracking is untested because
+// detection.DetectAll and helpers.GetSerialDeviceList aren't injectable.
+// Making those dependencies injectable would allow testing the full flow.
+
+// TestRefreshFailedProbes verifies device file fingerprinting used by the
+// failed probe tracking system. Not parallel because it modifies package-level state.
+func TestRefreshFailedProbes(t *testing.T) {
+	// Save and restore package state
+	probeStateMu.Lock()
+	origFailed := failedProbePaths
+	defer func() {
+		probeStateMu.Lock()
+		failedProbePaths = origFailed
+		probeStateMu.Unlock()
+	}()
+	probeStateMu.Unlock()
+
+	t.Run("device gone", func(t *testing.T) {
+		probeStateMu.Lock()
+		defer probeStateMu.Unlock()
+		failedProbePaths = map[string]failedProbeEntry{
+			"/dev/nonexistent_device_xyz": {deviceModTime: time.Now()},
+		}
+		refreshFailedProbes()
+		assert.Empty(t, failedProbePaths, "entry should be removed when device file is gone")
+	})
+
+	t.Run("device unchanged", func(t *testing.T) {
+		// Create a temp file to simulate a device file
+		tmpFile, err := os.CreateTemp("", "pn532test")
+		require.NoError(t, err)
+		defer func() { _ = os.Remove(tmpFile.Name()) }()
+		_ = tmpFile.Close()
+
+		info, err := os.Stat(tmpFile.Name())
+		require.NoError(t, err)
+
+		probeStateMu.Lock()
+		defer probeStateMu.Unlock()
+		failedProbePaths = map[string]failedProbeEntry{
+			tmpFile.Name(): {deviceModTime: info.ModTime()},
+		}
+		refreshFailedProbes()
+		assert.Contains(t, failedProbePaths, tmpFile.Name(),
+			"entry should persist when ModTime unchanged")
+	})
+
+	t.Run("device changed", func(t *testing.T) {
+		// Create a temp file and record a stale ModTime
+		tmpFile, err := os.CreateTemp("", "pn532test")
+		require.NoError(t, err)
+		defer func() { _ = os.Remove(tmpFile.Name()) }()
+		_ = tmpFile.Close()
+
+		staleTime := time.Now().Add(-time.Hour)
+
+		probeStateMu.Lock()
+		defer probeStateMu.Unlock()
+		failedProbePaths = map[string]failedProbeEntry{
+			tmpFile.Name(): {deviceModTime: staleTime},
+		}
+		refreshFailedProbes()
+		assert.Empty(t, failedProbePaths,
+			"entry should be removed when ModTime differs (device was swapped)")
+	})
+}
+
+// TestClearFailedProbe verifies that ClearFailedProbe removes only the
+// specified path. Not parallel because it modifies package-level state.
+func TestClearFailedProbe(t *testing.T) {
+	probeStateMu.Lock()
+	origFailed := failedProbePaths
+	defer func() {
+		probeStateMu.Lock()
+		failedProbePaths = origFailed
+		probeStateMu.Unlock()
+	}()
+	probeStateMu.Unlock()
+
+	probeStateMu.Lock()
+	failedProbePaths = map[string]failedProbeEntry{
+		"/dev/ttyUSB0": {deviceModTime: time.Now()},
+		"/dev/ttyUSB1": {deviceModTime: time.Now()},
+	}
+	probeStateMu.Unlock()
+
+	ClearFailedProbe("/dev/ttyUSB0")
+
+	probeStateMu.RLock()
+	assert.NotContains(t, failedProbePaths, "/dev/ttyUSB0",
+		"cleared path should be removed")
+	assert.Contains(t, failedProbePaths, "/dev/ttyUSB1",
+		"other paths should be preserved")
+	probeStateMu.RUnlock()
 }
 
 func TestCreateVIDPIDBlocklist(t *testing.T) {

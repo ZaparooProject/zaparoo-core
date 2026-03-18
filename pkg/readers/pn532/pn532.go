@@ -24,6 +24,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,47 @@ const (
 	deviceTimeout         = 5 * time.Second
 	writeRetryCount       = 3
 )
+
+// failedProbeEntry records a failed probe with the device file's ModTime.
+// When the device file is recreated (unplug/replug or swap), the ModTime
+// changes, letting us detect that the physical device changed even if the
+// path (e.g. /dev/ttyUSB0) is reused.
+type failedProbeEntry struct {
+	deviceModTime time.Time
+}
+
+// Package-level state for tracking serial ports that failed PN532 probing.
+// Entries persist until the device file changes (ModTime differs) or
+// disappears, indicating a physical device change at that path.
+// TODO: consider moving this state into AutoDetector or Reader instances
+// to follow the project's dependency-injection patterns.
+var (
+	probeStateMu     syncutil.RWMutex
+	failedProbePaths = make(map[string]failedProbeEntry)
+)
+
+// refreshFailedProbes removes entries where the device file has changed
+// (ModTime differs) or disappeared. This detects device swaps even when
+// the same /dev/ttyUSB* path is reused by a different physical device.
+// Must be called with probeStateMu held for writing.
+func refreshFailedProbes() {
+	for path, entry := range failedProbePaths {
+		info, err := os.Stat(path)
+		if err != nil {
+			delete(failedProbePaths, path)
+		} else if !info.ModTime().Equal(entry.deviceModTime) {
+			delete(failedProbePaths, path)
+		}
+	}
+}
+
+// ClearFailedProbe removes the failed probe entry for a single path.
+// Called when a reader disconnects so its port is re-probed on next cycle.
+func ClearFailedProbe(path string) {
+	probeStateMu.Lock()
+	defer probeStateMu.Unlock()
+	delete(failedProbePaths, path)
+}
 
 // PN532Device abstracts the pn532.Device for testing.
 type PN532Device interface {
@@ -456,6 +498,11 @@ func (r *Reader) processNewTag(ctx context.Context, detectedTag *pn532.DetectedT
 }
 
 func (r *Reader) Close() error {
+	// Always clear caches so the port can be re-probed on reconnection,
+	// even if session or device close fails.
+	defer detection.ClearDetectionCache()
+	defer ClearFailedProbe(r.deviceInfo.Path)
+
 	r.mutex.Lock()
 
 	r.connected = false
@@ -489,8 +536,6 @@ func (r *Reader) Close() error {
 		}
 	}
 
-	detection.ClearDetectionCache()
-
 	return nil
 }
 
@@ -503,6 +548,22 @@ func (*Reader) Detect(connected []string) string {
 			ignorePaths = append(ignorePaths, parts[1])
 		}
 	}
+
+	// Build set of connected paths for quick lookup
+	connectedPathSet := make(map[string]bool, len(ignorePaths))
+	for _, p := range ignorePaths {
+		connectedPathSet[p] = true
+	}
+
+	// Refresh failed probes: remove entries where the device file changed
+	// (unplugged, replugged, or swapped with a different device).
+	probeStateMu.Lock()
+	refreshFailedProbes()
+	for path := range failedProbePaths {
+		ignorePaths = append(ignorePaths, path)
+	}
+	probeStateMu.Unlock()
+
 	log.Trace().Msgf("PN532: ignoring paths: %v", ignorePaths)
 
 	// Try to detect PN532 devices
@@ -518,6 +579,37 @@ func (*Reader) Detect(connected []string) string {
 	if err != nil {
 		log.Trace().Err(err).Msg("PN532 detection failed")
 		return ""
+	}
+
+	// Track which enumerated ports were NOT detected as PN532 devices.
+	// Store the device file's ModTime so we can detect device swaps at
+	// the same path (the file is recreated with a new ModTime on replug).
+	// TODO: this re-enumerates serial ports redundantly since DetectAll
+	// already does so internally. Could be eliminated if DetectAll
+	// returned the full list of candidate paths it tried.
+	currentPorts, enumErr := helpers.GetSerialDeviceList()
+	if enumErr == nil {
+		detectedPaths := make(map[string]bool, len(devices))
+		for _, device := range devices {
+			detectedPaths[device.Path] = true
+		}
+		probeStateMu.Lock()
+		for _, port := range currentPorts {
+			if !detectedPaths[port] && !connectedPathSet[port] {
+				if _, alreadyFailed := failedProbePaths[port]; !alreadyFailed {
+					info, statErr := os.Stat(port)
+					if statErr == nil {
+						failedProbePaths[port] = failedProbeEntry{
+							deviceModTime: info.ModTime(),
+						}
+						log.Debug().
+							Str("path", port).
+							Msg("PN532: marking port as failed probe")
+					}
+				}
+			}
+		}
+		probeStateMu.Unlock()
 	}
 
 	if len(devices) == 0 {
