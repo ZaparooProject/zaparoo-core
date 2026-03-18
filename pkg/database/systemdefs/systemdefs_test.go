@@ -796,3 +796,122 @@ func TestMediaTypeStringValues(t *testing.T) {
 		})
 	}
 }
+
+// TestMediaSystemFallbacks verifies that media systems have correct fallback definitions
+func TestMediaSystemFallbacks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		systemID      string
+		wantFallbacks []string
+	}{
+		{SystemTVEpisode, []string{SystemVideo}},
+		{SystemMovie, []string{SystemVideo}},
+		{SystemTVShow, []string{SystemVideo}},
+		{SystemMusicTrack, []string{SystemAudio}},
+		{SystemMusicAlbum, []string{SystemAudio}},
+		{SystemMusicArtist, []string{SystemAudio}},
+		{SystemVideo, nil},
+		{SystemAudio, nil},
+		{SystemImage, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.systemID, func(t *testing.T) {
+			t.Parallel()
+
+			system, err := GetSystem(tt.systemID)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFallbacks, system.Fallbacks,
+				"System %s should have correct fallbacks", tt.systemID)
+		})
+	}
+}
+
+// TestSystemsWithFallbacks verifies the fallback expansion helper
+func TestSystemsWithFallbacks(t *testing.T) {
+	t.Parallel()
+
+	t.Run("single system with fallback", func(t *testing.T) {
+		t.Parallel()
+
+		tvEpisode, err := GetSystem(SystemTVEpisode)
+		require.NoError(t, err)
+
+		result := SystemsWithFallbacks([]System{*tvEpisode})
+		ids := make([]string, len(result))
+		for i, s := range result {
+			ids[i] = s.ID
+		}
+
+		assert.Equal(t, []string{SystemTVEpisode, SystemVideo}, ids)
+	})
+
+	t.Run("system without fallback", func(t *testing.T) {
+		t.Parallel()
+
+		video, err := GetSystem(SystemVideo)
+		require.NoError(t, err)
+
+		result := SystemsWithFallbacks([]System{*video})
+		assert.Len(t, result, 1)
+		assert.Equal(t, SystemVideo, result[0].ID)
+	})
+
+	t.Run("deduplicates fallbacks", func(t *testing.T) {
+		t.Parallel()
+
+		tvEpisode, err := GetSystem(SystemTVEpisode)
+		require.NoError(t, err)
+		movie, err := GetSystem(SystemMovie)
+		require.NoError(t, err)
+
+		// Both TVEpisode and Movie fall back to Video — should appear only once
+		result := SystemsWithFallbacks([]System{*tvEpisode, *movie})
+		ids := make([]string, len(result))
+		for i, s := range result {
+			ids[i] = s.ID
+		}
+
+		assert.Equal(t, []string{SystemTVEpisode, SystemVideo, SystemMovie}, ids)
+	})
+
+	t.Run("does not duplicate when fallback already in input", func(t *testing.T) {
+		t.Parallel()
+
+		tvEpisode, err := GetSystem(SystemTVEpisode)
+		require.NoError(t, err)
+		video, err := GetSystem(SystemVideo)
+		require.NoError(t, err)
+
+		result := SystemsWithFallbacks([]System{*tvEpisode, *video})
+		ids := make([]string, len(result))
+		for i, s := range result {
+			ids[i] = s.ID
+		}
+
+		assert.Equal(t, []string{SystemTVEpisode, SystemVideo}, ids)
+	})
+
+	t.Run("empty input", func(t *testing.T) {
+		t.Parallel()
+
+		result := SystemsWithFallbacks([]System{})
+		assert.Empty(t, result)
+	})
+
+	t.Run("game system with fallback", func(t *testing.T) {
+		t.Parallel()
+
+		amigaCD32, err := GetSystem(SystemAmigaCD32)
+		require.NoError(t, err)
+
+		result := SystemsWithFallbacks([]System{*amigaCD32})
+		ids := make([]string, len(result))
+		for i, s := range result {
+			ids[i] = s.ID
+		}
+
+		assert.Equal(t, []string{SystemAmigaCD32, SystemAmiga}, ids)
+	})
+}

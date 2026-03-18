@@ -168,7 +168,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			} else if system == nil {
 				return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
 			}
-			systems = []systemdefs.System{*system}
+			systems = systemdefs.SystemsWithFallbacks([]systemdefs.System{*system})
 		}
 
 		// Handle the special case of /* pattern - use RandomGameWithQuery
@@ -233,6 +233,8 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 		systems = append(systems, *system)
 	}
+
+	systems = systemdefs.SystemsWithFallbacks(systems)
 
 	systemIDs := make([]string, len(systems))
 	for i, sys := range systems {
@@ -541,7 +543,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, errors.New("no query specified")
 	}
 
-	systems := make([]systemdefs.System, 0)
+	var systems []systemdefs.System
 
 	if strings.EqualFold(systemID, "all") {
 		systems = systemdefs.AllSystems()
@@ -551,7 +553,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("failed to lookup system '%s': %w", systemID, lookupErr)
 		}
 
-		systems = append(systems, *system)
+		systems = systemdefs.SystemsWithFallbacks([]systemdefs.System{*system})
 	}
 
 	searchFilters := database.SearchFilters{
