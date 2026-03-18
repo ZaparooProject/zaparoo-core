@@ -767,6 +767,39 @@ func BuildMain(
 	pages := tview.NewPages()
 	BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName, nil)
 
+	if !tuiCfg.ErrorReportingPrompted && !cfg.ErrorReporting() && isRunning() {
+		configDir := helpers.ConfigDir(pl)
+		svc := NewSettingsService(client.NewLocalAPIClient(cfg))
+		markPrompted := func() {
+			updated := config.GetTUIConfig()
+			updated.ErrorReportingPrompted = true
+			config.SetTUIConfig(updated)
+			go func() {
+				if err := config.SaveTUIConfig(configDir); err != nil {
+					log.Error().Err(err).Msg("failed to save TUI config")
+				}
+			}()
+		}
+		ShowErrorReportingPrompt(pages, app,
+			func() {
+				enabled := true
+				ctx, cancel := tuiContext()
+				defer cancel()
+				err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+					ErrorReporting: &enabled,
+				})
+				if err != nil {
+					log.Error().Err(err).Msg("error enabling error reporting")
+					ShowErrorModal(pages, app, "Failed to enable error reporting", nil)
+					return
+				}
+				markPrompted()
+			},
+			nil,
+			markPrompted,
+		)
+	}
+
 	var rootWidget tview.Primitive
 	if tuiCfg.CRTMode {
 		rootWidget = CenterWidget(75, 15, pages)

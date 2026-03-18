@@ -140,11 +140,12 @@ func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, wid
 
 // Modal page name constants for consistent overlay management.
 const (
-	infoModalPage    = "info_modal"
-	errorModalPage   = "error_modal"
-	confirmModalPage = "confirm_modal"
-	waitingModalPage = "waiting_modal"
-	oskModalPage     = "osk_modal"
+	infoModalPage            = "info_modal"
+	errorModalPage           = "error_modal"
+	confirmModalPage         = "confirm_modal"
+	waitingModalPage         = "waiting_modal"
+	oskModalPage             = "osk_modal"
+	errorReportingPromptPage = "error_reporting_prompt"
 )
 
 // ShowInfoModal displays an informational modal with a title and OK button.
@@ -204,6 +205,48 @@ func ShowConfirmModal(pages *tview.Pages, app *tview.Application, message string
 			}
 		})
 	pages.AddPage(confirmModalPage, modal, false, true)
+	app.SetFocus(modal)
+}
+
+// ShowErrorReportingPrompt displays the first-run error reporting opt-in modal.
+// onEnable is called when the user clicks "Enable".
+// onNotNow is called when the user clicks "Not Now" or presses Escape.
+// onDontAsk is called when the user clicks "Don't Ask Again".
+func ShowErrorReportingPrompt(
+	pages *tview.Pages,
+	app *tview.Application,
+	onEnable, onNotNow, onDontAsk func(),
+) {
+	modal := tview.NewModal().
+		SetText(
+			"Help improve Zaparoo?\n\n" +
+				"Anonymous error reports help fix bugs faster.\n" +
+				"Only sent when errors occur. No personal data collected.\n" +
+				"You can change this in Settings at any time.",
+		).
+		AddButtons([]string{"Enable", "Not Now", "Don't Ask Again"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			pages.HidePage(errorReportingPromptPage)
+			pages.RemovePage(errorReportingPromptPage)
+			switch buttonIndex {
+			case 0:
+				if onEnable != nil {
+					onEnable()
+				}
+			case 2:
+				if onDontAsk != nil {
+					onDontAsk()
+				}
+			default:
+				if onNotNow != nil {
+					onNotNow()
+				}
+			}
+		})
+	modal.SetTitle(" Error Reporting ").
+		SetBorder(true).
+		SetTitleAlign(tview.AlignCenter)
+	pages.AddPage(errorReportingPromptPage, modal, false, true)
 	app.SetFocus(modal)
 }
 
