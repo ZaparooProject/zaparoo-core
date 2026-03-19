@@ -21,11 +21,13 @@ package api
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/google/uuid"
+	"github.com/olahol/melody"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
@@ -154,6 +156,51 @@ func TestLogSafeRequest(t *testing.T) {
 				assert.Contains(t, logOutput, tt.request.Method)
 				assert.Contains(t, logOutput, "jsonrpc")
 			}
+		})
+	}
+}
+
+func TestLogWSWriteError(t *testing.T) {
+	tests := []struct {
+		name          string
+		err           error
+		expectLevel   string
+		unexpectLevel string
+	}{
+		{
+			name:          "session closed logs at warn level",
+			err:           melody.ErrSessionClosed,
+			expectLevel:   `"level":"warn"`,
+			unexpectLevel: `"level":"error"`,
+		},
+		{
+			name:          "wrapped session closed logs at warn level",
+			err:           errors.Join(errors.New("write failed"), melody.ErrSessionClosed),
+			expectLevel:   `"level":"warn"`,
+			unexpectLevel: `"level":"error"`,
+		},
+		{
+			name:          "other error logs at error level",
+			err:           errors.New("unexpected write failure"),
+			expectLevel:   `"level":"error"`,
+			unexpectLevel: `"level":"warn"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			originalLogger := log.Logger
+			log.Logger = zerolog.New(&buf)
+
+			logWSWriteError(tt.err, "test message")
+
+			log.Logger = originalLogger
+
+			logOutput := buf.String()
+			assert.Contains(t, logOutput, tt.expectLevel)
+			assert.NotContains(t, logOutput, tt.unexpectLevel)
+			assert.Contains(t, logOutput, "test message")
 		})
 	}
 }

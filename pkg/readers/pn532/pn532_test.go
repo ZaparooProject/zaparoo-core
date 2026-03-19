@@ -20,6 +20,7 @@
 package pn532
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -31,6 +32,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -503,6 +506,58 @@ func TestConvertTagType(t *testing.T) {
 
 			result := reader.convertTagType(tt.inputTagType)
 			assert.Equal(t, tt.expectedTokenType, result)
+		})
+	}
+}
+
+func TestLogTraceableError(t *testing.T) {
+	tests := []struct {
+		name          string
+		err           error
+		expectLevel   string
+		unexpectLevel string
+	}{
+		{
+			name:          "context canceled logs at debug level",
+			err:           context.Canceled,
+			expectLevel:   `"level":"debug"`,
+			unexpectLevel: `"level":"error"`,
+		},
+		{
+			name:          "fatal hardware error logs at warn level",
+			err:           pn533.ErrDeviceNotFound,
+			expectLevel:   `"level":"warn"`,
+			unexpectLevel: `"level":"error"`,
+		},
+		{
+			name:          "transport closed logs at warn level",
+			err:           pn533.ErrTransportClosed,
+			expectLevel:   `"level":"warn"`,
+			unexpectLevel: `"level":"error"`,
+		},
+		{
+			name:          "other error logs at error level",
+			err:           errors.New("unexpected communication failure"),
+			expectLevel:   `"level":"error"`,
+			unexpectLevel: `"level":"warn"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			originalLogger := log.Logger
+			log.Logger = zerolog.New(&buf)
+
+			logTraceableError(tt.err, "test operation")
+
+			log.Logger = originalLogger
+
+			logOutput := buf.String()
+			assert.Contains(t, logOutput, tt.expectLevel)
+			assert.NotContains(t, logOutput, tt.unexpectLevel)
+			assert.Contains(t, logOutput, "PN532 error")
+			assert.Contains(t, logOutput, "test operation")
 		})
 	}
 }
