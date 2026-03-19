@@ -223,6 +223,7 @@ func TestCmdControl_NoControls(t *testing.T) {
 
 	_, err := cmdControl(mockPlatform, env)
 	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNoControlCapabilities)
 	assert.Contains(t, err.Error(), "no control capabilities")
 }
 

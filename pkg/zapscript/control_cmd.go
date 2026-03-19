@@ -30,8 +30,9 @@ import (
 )
 
 var (
-	ErrNoActiveMedia = errors.New("no active media")
-	ErrNoLauncher    = errors.New("no launcher associated with active media")
+	ErrNoActiveMedia         = errors.New("no active media")
+	ErrNoLauncher            = errors.New("no launcher associated with active media")
+	ErrNoControlCapabilities = errors.New("no control capabilities")
 )
 
 //nolint:gocritic // single-use parameter in command handler
@@ -66,7 +67,7 @@ func cmdControl(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 	}
 
 	if len(launcher.Controls) == 0 {
-		return platforms.CmdResult{}, fmt.Errorf("launcher %s has no control capabilities", launcherID)
+		return platforms.CmdResult{}, fmt.Errorf("launcher %s: %w", launcherID, ErrNoControlCapabilities)
 	}
 
 	control, ok := launcher.Controls[action]
