@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,6 +120,7 @@ func TestHandleMediaControl_NoControls(t *testing.T) {
 
 	_, err := HandleMediaControl(env)
 	require.Error(t, err)
+	require.ErrorIs(t, err, zapscript.ErrNoControlCapabilities)
 	assert.Contains(t, err.Error(), "no control capabilities")
 }
 
