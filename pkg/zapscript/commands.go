@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
 )
 
@@ -363,9 +364,12 @@ func RunCommand(
 	log.Info().Msgf("running command: %s", cmd)
 	res, err := cmdFn(pl, env)
 	if err != nil {
-		if errors.Is(err, ErrFileNotFound) {
+		switch {
+		case errors.Is(err, ErrFileNotFound),
+			errors.Is(err, titles.ErrNoMatch),
+			errors.Is(err, ErrNoControlCapabilities):
 			log.Warn().Err(err).Msgf("error running command: %s", cmd)
-		} else {
+		default:
 			log.Error().Err(err).Msgf("error running command: %s", cmd)
 		}
 		return platforms.CmdResult{}, err

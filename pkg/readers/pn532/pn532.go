@@ -232,13 +232,17 @@ func DefaultSessionFactory(device PN532Device, sessionConfig *polling.Config) Po
 
 // logTraceableError logs PN532 errors with wire trace data if available.
 // This helps with debugging hardware communication issues by showing TX/RX data.
-// Logs at Error level so traces are captured by Sentry for remote debugging.
 // Context cancellation errors are logged at Debug level since they're expected.
+// Fatal hardware errors (device disconnected, etc.) are logged at Warn level
+// since they represent expected physical conditions, not software bugs.
 func logTraceableError(err error, operation string) {
 	var event *zerolog.Event
-	if errors.Is(err, context.Canceled) {
+	switch {
+	case errors.Is(err, context.Canceled):
 		event = log.Debug().Err(err).Str("operation", operation)
-	} else {
+	case pn532.IsFatal(err):
+		event = log.Warn().Err(err).Str("operation", operation)
+	default:
 		event = log.Error().Err(err).Str("operation", operation)
 	}
 

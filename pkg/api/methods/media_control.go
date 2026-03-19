@@ -52,7 +52,7 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	}
 
 	if len(launcher.Controls) == 0 {
-		return nil, fmt.Errorf("launcher %s has no control capabilities", media.LauncherID)
+		return nil, fmt.Errorf("launcher %s: %w", media.LauncherID, zapscript.ErrNoControlCapabilities)
 	}
 
 	control, ok := launcher.Controls[params.Action]

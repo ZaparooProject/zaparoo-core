@@ -22,6 +22,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,6 +55,11 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap) {
 
 	err = methodMap.AddMethod("test.error", func(_ requests.RequestEnv) (any, error) {
 		return nil, errors.New("test error")
+	})
+	require.NoError(t, err)
+
+	err = methodMap.AddMethod("test.expectederror", func(_ requests.RequestEnv) (any, error) {
+		return nil, fmt.Errorf("test-launcher: %w", zapscript.ErrNoControlCapabilities)
 	})
 	require.NoError(t, err)
 
@@ -229,6 +236,30 @@ func TestHandlePostRequest_MethodError(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.Error)
 	require.Contains(t, resp.Error.Message, "test error")
+}
+
+// TestHandlePostRequest_ExpectedError tests that expected errors (like no control capabilities)
+// return a proper JSON-RPC error and are logged at warn level instead of error.
+func TestHandlePostRequest_ExpectedError(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := createTestPostHandler(t)
+
+	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.expectederror"}`
+	//nolint:noctx // test helper, no context needed
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp models.ResponseErrorObject
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	require.NotNil(t, resp.Error)
+	assert.Contains(t, resp.Error.Message, "no control capabilities")
 }
 
 // TestHandlePostRequest_OversizedBody tests that oversized request bodies are rejected.

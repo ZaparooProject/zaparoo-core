@@ -405,7 +405,11 @@ func WaitNotifications(
 		for {
 			_, message, readErr := c.ReadMessage()
 			if readErr != nil {
-				log.Error().Err(readErr).Msg("error reading message")
+				if errors.Is(readErr, net.ErrClosed) {
+					log.Warn().Err(readErr).Msg("error reading message")
+				} else {
+					log.Error().Err(readErr).Msg("error reading message")
+				}
 				return
 			}
 

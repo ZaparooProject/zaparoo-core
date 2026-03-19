@@ -295,7 +295,11 @@ func handleRequest(
 
 	resp, err := fn(env)
 	if err != nil {
-		log.Error().Err(err).Msg("error handling request")
+		if errors.Is(err, zapscript.ErrNoControlCapabilities) {
+			log.Warn().Err(err).Msg("error handling request")
+		} else {
+			log.Error().Err(err).Msg("error handling request")
+		}
 		// TODO: return error object from methods
 		rpcError := makeJSONRPCError(1, err.Error())
 		return nil, &rpcError
@@ -344,6 +348,16 @@ func sendWSError(session *melody.Session, id models.RPCID, errObj models.ErrorOb
 		return fmt.Errorf("failed to write to session: %w", err)
 	}
 	return nil
+}
+
+// logWSWriteError logs WebSocket write errors at the appropriate level.
+// Session closed errors are expected (client disconnected) and logged as Warn.
+func logWSWriteError(err error, msg string) {
+	if errors.Is(err, melody.ErrSessionClosed) {
+		log.Warn().Err(err).Msg(msg)
+	} else {
+		log.Error().Err(err).Msg(msg)
+	}
 }
 
 func handleResponse(resp models.ResponseObject) error {
@@ -669,7 +683,7 @@ func broadcastNotifications(
 			// another level of async that would cause out-of-order delivery.
 			err = session.Broadcast(data)
 			if err != nil {
-				log.Error().Err(err).Msg("broadcasting notification")
+				logWSWriteError(err, "broadcasting notification")
 			}
 		}
 	}
@@ -767,7 +781,7 @@ func handleWSMessage(
 				log.Error().Interface("panic", r).Msg("panic in websocket handler")
 				err := sendWSError(session, models.NullRPCID, JSONRPCErrorInternalError)
 				if err != nil {
-					log.Error().Err(err).Msg("error sending panic error response")
+					logWSWriteError(err, "error sending panic error response")
 				}
 			}
 		}()
@@ -776,7 +790,7 @@ func handleWSMessage(
 		if bytes.Equal(msg, []byte("ping")) {
 			err := session.Write([]byte("pong"))
 			if err != nil {
-				log.Error().Err(err).Msg("sending pong")
+				logWSWriteError(err, "sending pong")
 			}
 			return
 		}
@@ -808,12 +822,12 @@ func handleWSMessage(
 		if result.Error != nil {
 			err := sendWSError(session, result.ID, *result.Error)
 			if err != nil {
-				log.Error().Err(err).Msg("error sending error response")
+				logWSWriteError(err, "error sending error response")
 			}
 		} else {
 			err := sendWSResponse(session, result.ID, result.Result)
 			if err != nil {
-				log.Error().Err(err).Msg("error sending response")
+				logWSWriteError(err, "error sending response")
 			}
 		}
 		if result.AfterWrite != nil {
