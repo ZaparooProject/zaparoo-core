@@ -541,6 +541,16 @@ func TestLogTraceableError(t *testing.T) {
 			expectLevel:   `"level":"error"`,
 			unexpectLevel: `"level":"warn"`,
 		},
+		{
+			name: "error with wire trace includes trace data",
+			err: &pn533.TraceableError{
+				Err:       errors.New("communication failed"),
+				Transport: "UART",
+				Port:      "/dev/ttyUSB0",
+			},
+			expectLevel:   `"level":"error"`,
+			unexpectLevel: `"level":"warn"`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -558,6 +568,14 @@ func TestLogTraceableError(t *testing.T) {
 			assert.NotContains(t, logOutput, tt.unexpectLevel)
 			assert.Contains(t, logOutput, "PN532 error")
 			assert.Contains(t, logOutput, "test operation")
+
+			// Verify wire trace data is included when present
+			var te *pn533.TraceableError
+			if errors.As(tt.err, &te) {
+				assert.Contains(t, logOutput, te.Transport)
+				assert.Contains(t, logOutput, te.Port)
+				assert.Contains(t, logOutput, "wire_trace")
+			}
 		})
 	}
 }
