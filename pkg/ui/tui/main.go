@@ -774,6 +774,14 @@ func BuildMain(
 	pages := tview.NewPages()
 	BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName, nil)
 
+	var rootWidget tview.Primitive
+	if tuiCfg.CRTMode {
+		rootWidget = CenterWidget(75, 15, pages)
+	} else {
+		rootWidget = ResponsiveMaxWidget(DefaultMaxWidth, DefaultMaxHeight, pages)
+	}
+	app.SetRoot(rootWidget, true)
+
 	if !tuiCfg.ErrorReportingPrompted && !cfg.ErrorReporting() && isRunning() {
 		configDir := helpers.ConfigDir(pl)
 		svc := NewSettingsService(client.NewLocalAPIClient(cfg))
@@ -807,11 +815,5 @@ func BuildMain(
 		)
 	}
 
-	var rootWidget tview.Primitive
-	if tuiCfg.CRTMode {
-		rootWidget = CenterWidget(75, 15, pages)
-	} else {
-		rootWidget = ResponsiveMaxWidget(DefaultMaxWidth, DefaultMaxHeight, pages)
-	}
-	return app.SetRoot(rootWidget, true), nil
+	return app, nil
 }
