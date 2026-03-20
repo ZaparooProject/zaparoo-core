@@ -222,9 +222,11 @@ func (db *MediaDB) Open() error {
 	}
 
 	if exists {
-		if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
-			log.Warn().Err(cacheErr).Msg("failed to build slug search cache on startup")
-		}
+		go func() {
+			if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
+				log.Warn().Err(cacheErr).Msg("failed to build slug search cache on startup")
+			}
+		}()
 	}
 
 	return nil
