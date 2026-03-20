@@ -32,21 +32,23 @@ import (
 
 // TUIConfig holds TUI-specific configuration.
 type TUIConfig struct {
-	Theme            string `toml:"theme"`
-	WriteFormat      string `toml:"write_format"`
-	Mouse            bool   `toml:"mouse"`
-	CRTMode          bool   `toml:"crt_mode"`
-	OnScreenKeyboard bool   `toml:"on_screen_keyboard"`
+	Theme                  string `toml:"theme"`
+	WriteFormat            string `toml:"write_format"`
+	Mouse                  bool   `toml:"mouse"`
+	CRTMode                bool   `toml:"crt_mode"`
+	OnScreenKeyboard       bool   `toml:"on_screen_keyboard"`
+	ErrorReportingPrompted bool   `toml:"error_reporting_prompted"`
 }
 
 // tuiConfigRaw is used for TOML unmarshalling with pointer fields
 // to distinguish between missing values and explicit false/empty.
 type tuiConfigRaw struct {
-	Theme            *string `toml:"theme"`
-	WriteFormat      *string `toml:"write_format"`
-	Mouse            *bool   `toml:"mouse"`
-	CRTMode          *bool   `toml:"crt_mode"`
-	OnScreenKeyboard *bool   `toml:"on_screen_keyboard"`
+	Theme                  *string `toml:"theme"`
+	WriteFormat            *string `toml:"write_format"`
+	Mouse                  *bool   `toml:"mouse"`
+	CRTMode                *bool   `toml:"crt_mode"`
+	OnScreenKeyboard       *bool   `toml:"on_screen_keyboard"`
+	ErrorReportingPrompted *bool   `toml:"error_reporting_prompted"`
 }
 
 const (
@@ -108,6 +110,9 @@ func applyTUIDefaults(raw tuiConfigRaw, platformID string) TUIConfig {
 	}
 	if raw.OnScreenKeyboard != nil {
 		cfg.OnScreenKeyboard = *raw.OnScreenKeyboard
+	}
+	if raw.ErrorReportingPrompted != nil {
+		cfg.ErrorReportingPrompted = *raw.ErrorReportingPrompted
 	}
 	return cfg
 }

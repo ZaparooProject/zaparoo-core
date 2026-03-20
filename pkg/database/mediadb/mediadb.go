@@ -221,12 +221,6 @@ func (db *MediaDB) Open() error {
 		log.Warn().Err(err).Msg("failed to run WAL checkpoint on startup")
 	}
 
-	if exists {
-		if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
-			log.Warn().Err(cacheErr).Msg("failed to build slug search cache on startup")
-		}
-	}
-
 	return nil
 }
 

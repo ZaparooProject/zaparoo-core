@@ -780,5 +780,52 @@ func BuildMain(
 	} else {
 		rootWidget = ResponsiveMaxWidget(DefaultMaxWidth, DefaultMaxHeight, pages)
 	}
-	return app.SetRoot(rootWidget, true), nil
+	app.SetRoot(rootWidget, true)
+
+	if !tuiCfg.ErrorReportingPrompted && isRunning() {
+		// Check the service's actual error reporting state via API, not the
+		// local config. The service daemon may run as a separate process with
+		// different in-memory state than what's on disk.
+		apiClient := client.NewLocalAPIClient(cfg)
+		svc := NewSettingsService(apiClient)
+		ctx, cancel := tuiContext()
+		settings, err := svc.GetSettings(ctx)
+		cancel()
+
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to check error reporting state")
+		} else if !settings.ErrorReporting {
+			configDir := helpers.ConfigDir(pl)
+			markPrompted := func() {
+				updated := config.GetTUIConfig()
+				updated.ErrorReportingPrompted = true
+				config.SetTUIConfig(updated)
+				go func() {
+					if err := config.SaveTUIConfig(configDir); err != nil {
+						log.Error().Err(err).Msg("failed to save TUI config")
+					}
+				}()
+			}
+			ShowErrorReportingPrompt(pages, app,
+				func() {
+					enabled := true
+					ctx, cancel := tuiContext()
+					defer cancel()
+					err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+						ErrorReporting: &enabled,
+					})
+					if err != nil {
+						log.Error().Err(err).Msg("error enabling error reporting")
+						ShowErrorModal(pages, app, "Failed to enable error reporting", nil)
+						return
+					}
+					markPrompted()
+				},
+				nil,
+				markPrompted,
+			)
+		}
+	}
+
+	return app, nil
 }
