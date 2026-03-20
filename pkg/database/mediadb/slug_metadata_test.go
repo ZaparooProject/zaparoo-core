@@ -26,6 +26,29 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func BenchmarkGenerateSlugWithMetadata(b *testing.B) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"Latin_simple", "Super Mario Bros"},
+		{"Latin_complex", "The Legend of Zelda: Ocarina of Time (USA) [!]"},
+		{"CJK_Japanese", "ゼルダの伝説 時のオカリナ"}, //nolint:gosmopolitan // CJK benchmark
+		{"CJK_Chinese", "最终幻想七 重制版"},      //nolint:gosmopolitan // CJK benchmark
+		{"With_secondary", "The Legend of Zelda: Ocarina of Time"},
+		{"Long_ROM", "Shin Megami Tensei - Digital Devil Saga 2 - Avatar Tuner (Japan) (Rev 1) (Disc 1 of 2)"},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				GenerateSlugWithMetadata(slugs.MediaTypeGame, tc.input)
+			}
+		})
+	}
+}
+
 func TestSlugMetadata(t *testing.T) {
 	t.Parallel()
 

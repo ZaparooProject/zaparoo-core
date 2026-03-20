@@ -124,6 +124,32 @@ tasks:
     cmds:
       - go-mutesting {{.CLI_ARGS}}
 
+  # Benchmark workflow:
+  #   1. task bench-baseline  (generates testdata/benchmarks/baseline.txt, commit this)
+  #   2. make changes
+  #   3. task bench-compare   (compares current vs committed baseline via benchstat)
+  # Quick runs: task bench (count=3) or task bench-db (database only)
+  bench:
+    desc: Run all benchmarks
+    cmds:
+      - go test -bench=. -benchmem -count=3 -timeout=30m ./...
+
+  bench-db:
+    desc: Run database benchmarks only
+    cmds:
+      - go test -bench=. -benchmem -count=3 -timeout=20m ./pkg/database/...
+
+  bench-baseline:
+    desc: Generate benchmark baseline (commit the output)
+    cmds:
+      - go test -bench=. -benchmem -count=6 -timeout=45m ./... | tee testdata/benchmarks/baseline.txt
+
+  bench-compare:
+    desc: Compare current benchmarks against baseline (requires benchstat, install with go install golang.org/x/perf/cmd/benchstat@latest)
+    cmds:
+      - go test -bench=. -benchmem -count=6 -timeout=45m ./... > /tmp/zaparoo-bench-current.txt
+      - benchstat testdata/benchmarks/baseline.txt /tmp/zaparoo-bench-current.txt
+
   get-logs:
     desc: Download and decode logs from Zaparoo API
     vars:

@@ -615,6 +615,7 @@ func TestSlugSearchCache_RandomEntry_NilCache(t *testing.T) {
 }
 
 func BenchmarkSlugSearchCacheBuild(b *testing.B) {
+	b.ReportAllocs()
 	// Benchmark cache struct population speed (excludes SQL)
 	for b.Loop() {
 		buildSyntheticCache(250_000)
@@ -630,4 +631,143 @@ func BenchmarkSlugSearchCacheMemory(b *testing.B) {
 	runtime.ReadMemStats(&after)
 	_ = cache
 	b.ReportMetric(float64(after.HeapAlloc-before.HeapAlloc)/(1024*1024), "MB")
+}
+
+func BenchmarkSlugSearchCacheSearch_500k(b *testing.B) {
+	b.ReportAllocs()
+	cache := buildSyntheticCache(500_000)
+	query := [][][]byte{{[]byte("mario")}, {[]byte("super")}}
+	b.ResetTimer()
+	for b.Loop() {
+		cache.Search(nil, query)
+	}
+}
+
+func BenchmarkSlugSearchCacheBuild_500k(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		buildSyntheticCache(500_000)
+	}
+}
+
+func BenchmarkSlugSearchCacheBuild_1M(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		buildSyntheticCache(1_000_000)
+	}
+}
+
+func BenchmarkSlugSearchCacheMemory_500k(b *testing.B) {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	cache := buildSyntheticCache(500_000)
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	_ = cache
+	b.ReportMetric(float64(after.HeapAlloc-before.HeapAlloc)/(1024*1024), "MB")
+}
+
+func BenchmarkSlugSearchCacheMemory_1M(b *testing.B) {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	cache := buildSyntheticCache(1_000_000)
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	_ = cache
+	b.ReportMetric(float64(after.HeapAlloc-before.HeapAlloc)/(1024*1024), "MB")
+}
+
+func BenchmarkSlugSearchCacheSearch_QueryComplexity(b *testing.B) {
+	cache := buildSyntheticCache(500_000)
+
+	b.Run("SingleWord", func(b *testing.B) {
+		b.ReportAllocs()
+		query := [][][]byte{{[]byte("mario")}}
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(nil, query)
+		}
+	})
+
+	b.Run("TwoWords", func(b *testing.B) {
+		b.ReportAllocs()
+		query := [][][]byte{{[]byte("mario")}, {[]byte("super")}}
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(nil, query)
+		}
+	})
+
+	b.Run("ThreeWords", func(b *testing.B) {
+		b.ReportAllocs()
+		query := [][][]byte{{[]byte("mario")}, {[]byte("super")}, {[]byte("3")}}
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(nil, query)
+		}
+	})
+
+	b.Run("CommonSubstring", func(b *testing.B) {
+		b.ReportAllocs()
+		query := [][][]byte{{[]byte("the")}}
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(nil, query)
+		}
+	})
+}
+
+func BenchmarkSlugSearchCacheSearch_SystemFiltered_500k(b *testing.B) {
+	cache := buildSyntheticCache(500_000)
+	query := [][][]byte{{[]byte("mario")}, {[]byte("super")}}
+
+	b.Run("NoFilter", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(nil, query)
+		}
+	})
+
+	b.Run("SingleSystem", func(b *testing.B) {
+		b.ReportAllocs()
+		systemFilter := []int64{1}
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(systemFilter, query)
+		}
+	})
+
+	b.Run("ThreeSystems", func(b *testing.B) {
+		b.ReportAllocs()
+		systemFilter := []int64{1, 2, 3}
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(systemFilter, query)
+		}
+	})
+}
+
+func BenchmarkSlugSearchCacheSearch_NoMatch_500k(b *testing.B) {
+	b.ReportAllocs()
+	cache := buildSyntheticCache(500_000)
+	query := [][][]byte{{[]byte("zzzznotarealentry")}}
+	b.ResetTimer()
+	for b.Loop() {
+		cache.Search(nil, query)
+	}
+}
+
+func BenchmarkSlugSearchCacheSearch_Concurrent_500k(b *testing.B) {
+	b.ReportAllocs()
+	cache := buildSyntheticCache(500_000)
+	query := [][][]byte{{[]byte("mario")}, {[]byte("super")}}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			cache.Search(nil, query)
+		}
+	})
 }

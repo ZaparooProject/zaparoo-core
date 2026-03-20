@@ -27,6 +27,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func BenchmarkParse_GlobalArgs(b *testing.B) {
+	b.ReportAllocs()
+	raw := map[string]string{}
+	for b.Loop() {
+		var args zapscript.GlobalArgs
+		_ = Parse(raw, &args, nil)
+	}
+}
+
+func BenchmarkParse_LaunchArgs(b *testing.B) {
+	b.ReportAllocs()
+	ctx := NewParseContext([]string{"steam", "retroarch", "mister"})
+	raw := map[string]string{
+		"launcher": "steam",
+		"system":   "NES",
+		"action":   "run",
+		"tags":     "genre:rpg,region:usa",
+	}
+	for b.Loop() {
+		var args zapscript.LaunchRandomArgs
+		_ = Parse(raw, &args, ctx)
+	}
+}
+
+func BenchmarkParse_LaunchSearchArgs(b *testing.B) {
+	b.ReportAllocs()
+	ctx := NewParseContext([]string{"steam", "retroarch", "mister", "dolphin", "pcsx2"})
+	raw := map[string]string{
+		"launcher": "retroarch",
+		"action":   "details",
+		"tags":     "genre:rpg,region:usa,players:2",
+	}
+	for b.Loop() {
+		var args zapscript.LaunchSearchArgs
+		_ = Parse(raw, &args, ctx)
+	}
+}
+
 func TestParse_GlobalArgs(t *testing.T) {
 	t.Parallel()
 

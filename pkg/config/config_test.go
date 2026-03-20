@@ -1118,3 +1118,25 @@ func TestSave_OmitsGamepadEnabledWhenNil(t *testing.T) {
 	assert.NotContains(t, content, "gamepad_enabled", "gamepad_enabled should not be in config when nil")
 	assert.NotContains(t, content, "[input]", "input section should not be in config when all fields nil")
 }
+
+func BenchmarkConfig_Read(b *testing.B) {
+	b.ReportAllocs()
+	cfg := &Instance{vals: BaseDefaults}
+	b.ResetTimer()
+	for b.Loop() {
+		_ = cfg.IsExecuteAllowed("some-command")
+	}
+}
+
+func BenchmarkConfig_Load(b *testing.B) {
+	b.ReportAllocs()
+	tempDir := b.TempDir()
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		_ = cfg.Load()
+	}
+}

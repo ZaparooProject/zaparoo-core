@@ -20,6 +20,7 @@
 package tags
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1745,5 +1746,63 @@ func TestParseFilenameToCanonicalTags_MixedTagTypes(t *testing.T) {
 				assert.Contains(t, gotStrings, want, "Expected tag %s not found in %v", want, gotStrings)
 			}
 		})
+	}
+}
+
+func BenchmarkParseFilenameToCanonicalTags(b *testing.B) {
+	b.Run("Simple", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			ParseFilenameToCanonicalTags("Game (USA) [!].zip")
+		}
+	})
+
+	b.Run("Complex", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			ParseFilenameToCanonicalTags("Game Title (USA, Europe) (En,Fr,De) (Rev A) (v1.2) [!] [h1].zip")
+		}
+	})
+
+	b.Run("Scene_release", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			ParseFilenameToCanonicalTags("The.Dark.Knight.2008.1080p.BluRay.x264-GROUP.mkv")
+		}
+	})
+}
+
+func benchGenerateNumberedFilenames(n int) []string {
+	filenames := make([]string, n)
+	for i := range n {
+		num := i + 1
+		if num < 10 {
+			filenames[i] = "0" + strconv.Itoa(num) + " - Game.zip"
+		} else {
+			filenames[i] = strconv.Itoa(num) + " - Game.zip"
+		}
+	}
+	return filenames
+}
+
+func BenchmarkDetectNumberingPattern(b *testing.B) {
+	for _, scale := range []int{100, 1000, 10000} {
+		filenames := benchGenerateNumberedFilenames(scale)
+		b.Run(strconv.Itoa(scale), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				for _, fn := range filenames {
+					ParseFilenameToCanonicalTags(fn)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkFilenameParser_ExtractSpecialPatterns(b *testing.B) {
+	filename := "Game Title (Disc 1 of 3) (Rev A) (v1.2) (1998) S02E05.zip"
+	b.ReportAllocs()
+	for b.Loop() {
+		extractSpecialPatterns(filename)
 	}
 }
