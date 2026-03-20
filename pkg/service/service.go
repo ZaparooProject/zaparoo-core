@@ -315,7 +315,9 @@ func Start(
 
 	// Build slug search cache after API is listening to avoid blocking startup
 	if db.MediaDB != nil {
+		db.MediaDB.TrackBackgroundOperation()
 		go func() {
+			defer db.MediaDB.BackgroundOperationDone()
 			if cacheErr := db.MediaDB.RebuildSlugSearchCache(); cacheErr != nil {
 				log.Warn().Err(cacheErr).Msg("failed to build slug search cache")
 			}
