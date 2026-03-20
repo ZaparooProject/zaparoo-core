@@ -143,8 +143,9 @@ func TestOpen_ErrorCountExceedsMaxWithActiveToken(t *testing.T) {
 	assert.True(t, scan2.ReaderError, "ReaderError should be true to prevent on_remove execution")
 
 	// Reader should have stopped polling
-	time.Sleep(100 * time.Millisecond)
-	assert.False(t, reader.Connected(), "reader should have stopped after max errors")
+	assert.True(t, testutils.WaitForCondition(func() bool {
+		return !reader.Connected()
+	}, 2*time.Second), "reader should have stopped after max errors")
 }
 
 // TestOpen_ErrorCountExceedsMaxWithoutActiveToken verifies that ReaderError is sent
@@ -191,7 +192,9 @@ func TestOpen_ErrorCountExceedsMaxWithoutActiveToken(t *testing.T) {
 	assert.True(t, scan.ReaderError, "ReaderError should be sent even without active token")
 
 	// Reader should have stopped polling
-	assert.False(t, reader.Connected(), "reader should have stopped after max errors")
+	assert.True(t, testutils.WaitForCondition(func() bool {
+		return !reader.Connected()
+	}, 2*time.Second), "reader should have stopped after max errors")
 }
 
 // TestOpen_TokenDetectionAndRemoval tests normal token detection and removal flow.
