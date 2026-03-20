@@ -313,6 +313,15 @@ func Start(
 	apiNotifications, _ := notifBroker.Subscribe(100)
 	go api.Start(pl, cfg, st, itq, db, limitsManager, apiNotifications, discoveryService.InstanceName(), player)
 
+	// Build slug search cache after API is listening to avoid blocking startup
+	if db.MediaDB != nil {
+		go func() {
+			if err := db.MediaDB.RebuildSlugSearchCache(); err != nil {
+				log.Warn().Err(err).Msg("failed to build slug search cache")
+			}
+		}()
+	}
+
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)
 	activePublishers, cancelPublisherFanOut := startPublishers(st, cfg, publisherNotifications)
