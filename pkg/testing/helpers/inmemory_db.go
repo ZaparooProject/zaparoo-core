@@ -68,18 +68,18 @@ func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 	return db, cleanup
 }
 
-func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
-	t.Helper()
+func NewInMemoryMediaDB(tb testing.TB) (db *mediadb.MediaDB, cleanup func()) {
+	tb.Helper()
 
 	// Create temporary directory for test database
-	tempDir := t.TempDir()
+	tempDir := tb.TempDir()
 	dbPath := filepath.Join(tempDir, "mediadb_test.db")
 
 	// Open SQLite database using temp file with foreign keys enabled
 	// This matches the production database configuration and ensures CASCADE deletes work
 	sqlDB, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=ON")
 	if err != nil {
-		t.Fatalf("Failed to open test database: %v", err)
+		tb.Fatalf("Failed to open test database: %v", err)
 	}
 
 	db = &mediadb.MediaDB{}
@@ -89,15 +89,15 @@ func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
 	err = db.SetSQLForTesting(ctx, sqlDB, mockPlatform)
 	if err != nil {
 		if closeErr := sqlDB.Close(); closeErr != nil {
-			t.Errorf("Failed to close SQL database after setup error: %v", closeErr)
+			tb.Errorf("Failed to close SQL database after setup error: %v", closeErr)
 		}
-		t.Fatalf("Failed to set up MediaDB for testing: %v", err)
+		tb.Fatalf("Failed to set up MediaDB for testing: %v", err)
 	}
 	db.SetDBPathForTesting(dbPath)
 
 	cleanup = func() {
 		if err := db.Close(); err != nil {
-			t.Errorf("Failed to close MediaDB: %v", err)
+			tb.Errorf("Failed to close MediaDB: %v", err)
 		}
 	}
 

@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"runtime"
 	"testing"
@@ -770,4 +771,100 @@ func BenchmarkSlugSearchCacheSearch_Concurrent_500k(b *testing.B) {
 			cache.Search(nil, query)
 		}
 	})
+}
+
+// populateBenchTitles inserts systems and titles into a raw *sql.DB for cache
+// build benchmarks. Uses batch inserters with the production schema.
+func populateBenchTitles(ctx context.Context, b *testing.B, sqlDB *sql.DB, n int) {
+	b.Helper()
+
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// Insert 5 systems
+	systems := []struct {
+		code string
+		name string
+		id   int64
+	}{
+		{id: 1, code: "nes", name: "NES"},
+		{id: 2, code: "snes", name: "SNES"},
+		{id: 3, code: "genesis", name: "Genesis"},
+		{id: 4, code: "psx", name: "PSX"},
+		{id: 5, code: "n64", name: "N64"},
+	}
+	for _, sys := range systems {
+		if _, execErr := tx.ExecContext(ctx,
+			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)",
+			sys.id, sys.code, sys.name); execErr != nil {
+			b.Fatal(execErr)
+		}
+	}
+
+	// Insert titles via batch inserter
+	bi, err := NewBatchInserterWithOptions(
+		ctx, tx, "MediaTitles", titleCols, 5000, false)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	words := []string{
+		"super", "mario", "zelda", "sonic", "metroid", "castlevania",
+		"mega", "man", "final", "fantasy", "dragon", "quest",
+		"street", "fighter", "mortal", "kombat", "donkey", "kong",
+	}
+
+	for i := range n {
+		id := int64(i + 1)
+		sysDBID := int64((i % 5) + 1)
+		// Build slug from word combos + unique suffix
+		w1 := words[i%len(words)]
+		w2 := words[(i*7)%len(words)]
+		slug := fmt.Sprintf("%s-%s-%d", w1, w2, i)
+		wordCount := 3
+		var secSlug any
+		if i%5 == 0 {
+			secSlug = fmt.Sprintf("%s-%d", w1, i)
+		}
+		if err := bi.Add(id, sysDBID, slug, slug, len(slug), wordCount, secSlug); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	if err := bi.Close(); err != nil {
+		b.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+}
+
+func BenchmarkSlugSearchCacheBuild_FromDB(b *testing.B) {
+	sizes := []struct {
+		name string
+		n    int
+	}{
+		{name: "10k", n: 10_000},
+		{name: "50k", n: 50_000},
+	}
+
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			b.ReportAllocs()
+			sqlDB, cleanup := newBenchSQLite(b)
+			ctx := context.Background()
+			populateBenchTitles(ctx, b, sqlDB, sz.n)
+			b.ResetTimer()
+			for b.Loop() {
+				_, err := buildSlugSearchCache(ctx, sqlDB)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			cleanup()
+		})
+	}
 }

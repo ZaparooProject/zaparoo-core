@@ -26,6 +26,8 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/stretchr/testify/mock"
 )
 
 func BenchmarkGetPathFragments(b *testing.B) {
@@ -151,6 +153,244 @@ func BenchmarkFlushScanStateMaps(b *testing.B) {
 				}
 				b.StartTimer()
 				FlushScanStateMaps(ss)
+			}
+		})
+	}
+}
+
+// buildSyntheticFilenamesMultiSystem distributes n filenames across multiple
+// systems with a Zipf-like distribution to mimic real-world collections.
+func buildSyntheticFilenamesMultiSystem(n int, systems []string) map[string][]string {
+	if len(systems) == 0 {
+		return nil
+	}
+
+	prefixes := []string{
+		"Super", "Mega", "Ultra", "Final", "Grand", "Dark", "Crystal",
+		"Shadow", "Iron", "Bright", "Neo", "Hyper", "Royal", "Star",
+	}
+	middles := []string{
+		"Mario", "Fighter", "Quest", "Fantasy", "Dragon", "Knight",
+		"Warrior", "Battle", "Storm", "Legend", "World", "Racer",
+	}
+	suffixes := []string{
+		"Bros", "Adventure", "Saga", "Chronicles", "Wars", "Legacy",
+		"Origins", "Legends", "Rising", "Revolution", "Arena", "Force",
+	}
+	regions := []string{
+		"(USA)", "(Europe)", "(Japan)", "(USA, Europe)", "(World)",
+	}
+	extensions := []string{".nes", ".sfc", ".md", ".gba", ".z64", ".iso"}
+
+	// Distribute with decreasing weight: first system gets most files
+	//nolint:gosec // Deterministic seed for reproducible benchmarks
+	rng := rand.New(rand.NewSource(42))
+	weights := make([]float64, len(systems))
+	total := 0.0
+	for i := range systems {
+		w := 1.0 / float64(i+1) // Inverse-rank weighted: 1, 0.5, 0.33, 0.25, ...
+		weights[i] = w
+		total += w
+	}
+
+	result := make(map[string][]string, len(systems))
+	remaining := n
+	for i, sys := range systems {
+		count := int(float64(n) * weights[i] / total)
+		if i == len(systems)-1 {
+			count = remaining // Last system gets remainder
+		}
+		if count > remaining {
+			count = remaining
+		}
+		remaining -= count
+
+		fns := make([]string, count)
+		for j := range count {
+			fns[j] = fmt.Sprintf("/roms/%s/%s %s %s %d %s%s",
+				sys,
+				prefixes[rng.Intn(len(prefixes))],
+				middles[rng.Intn(len(middles))],
+				suffixes[rng.Intn(len(suffixes))],
+				rng.Intn(99)+1,
+				regions[rng.Intn(len(regions))],
+				extensions[rng.Intn(len(extensions))],
+			)
+		}
+		result[sys] = fns
+	}
+	return result
+}
+
+// newScanState creates a fresh ScanState for benchmarking.
+func newScanState() *database.ScanState {
+	return &database.ScanState{
+		SystemIDs:  make(map[string]int),
+		TitleIDs:   make(map[string]int),
+		MediaIDs:   make(map[string]int),
+		TagTypeIDs: make(map[string]int),
+		TagIDs:     make(map[string]int),
+	}
+}
+
+// setupMockMediaDB creates a MockMediaDBI with all Insert/Find methods stubbed
+// for benchmarking AddMediaPath without real SQLite.
+func setupMockMediaDB() *helpers.MockMediaDBI {
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("InsertSystem", mock.Anything).Return(database.System{}, nil)
+	mockDB.On("InsertMediaTitle", mock.Anything).Return(database.MediaTitle{}, nil)
+	mockDB.On("InsertMedia", mock.Anything).Return(database.Media{}, nil)
+	mockDB.On("InsertTag", mock.Anything).Return(database.Tag{}, nil)
+	mockDB.On("InsertTagType", mock.Anything).Return(database.TagType{}, nil)
+	mockDB.On("InsertMediaTag", mock.Anything).Return(database.MediaTag{}, nil)
+	mockDB.On("FindTagType", mock.Anything).Return(database.TagType{DBID: 1}, nil)
+	mockDB.On("BeginTransaction", mock.Anything).Return(nil)
+	mockDB.On("CommitTransaction").Return(nil)
+	return mockDB
+}
+
+// seedMockScanState populates a ScanState with tag types and tags
+// matching what SeedCanonicalTags would produce, but without hitting a real DB.
+func seedMockScanState(ss *database.ScanState) {
+	// Seed the tag types that AddMediaPath looks up
+	ss.TagTypesIndex = 2
+	ss.TagTypeIDs["extension"] = 1
+	ss.TagTypeIDs["unknown"] = 2
+	ss.TagsIndex = 1
+	ss.TagIDs["unknown:unknown"] = 1
+}
+
+func BenchmarkAddMediaPath_MockDB(b *testing.B) {
+	sizes := []struct {
+		name string
+		n    int
+	}{
+		{name: "1k", n: 1_000},
+		{name: "10k", n: 10_000},
+		{name: "100k", n: 100_000},
+	}
+
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			b.ReportAllocs()
+			mockDB := setupMockMediaDB()
+			filenames := buildSyntheticFilenames(sz.n)
+			b.ResetTimer()
+			for b.Loop() {
+				ss := newScanState()
+				seedMockScanState(ss)
+				for i, fn := range filenames {
+					_, _, err := AddMediaPath(mockDB, ss, "nes", fn, false, false, nil)
+					if i == 0 && err != nil {
+						b.Fatal(err)
+					}
+					// Match production pattern: flush every 10k files
+					if sz.n > 10_000 && (i+1)%10_000 == 0 {
+						FlushScanStateMaps(ss)
+					}
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkAddMediaPath_RealDB(b *testing.B) {
+	sizes := []struct {
+		name string
+		n    int
+	}{
+		{name: "1k", n: 1_000},
+		{name: "10k", n: 10_000},
+		{name: "50k", n: 50_000},
+	}
+
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			b.ReportAllocs()
+			filenames := buildSyntheticFilenames(sz.n)
+
+			// Each iteration needs a fresh DB. Setup cost is included in
+			// timing but is constant (~20-50ms) and doesn't affect comparisons.
+			for b.Loop() {
+				db, cleanup := helpers.NewInMemoryMediaDB(b)
+				ss := newScanState()
+				_ = SeedCanonicalTags(db, ss)
+				_ = db.BeginTransaction(true)
+
+				// Measured: insert all files with production commit pattern
+				for i, fn := range filenames {
+					_, _, err := AddMediaPath(db, ss, "nes", fn, false, false, nil)
+					if i == 0 && err != nil {
+						b.Fatal(err)
+					}
+					if sz.n > 10_000 && (i+1)%10_000 == 0 {
+						_ = db.CommitTransaction()
+						FlushScanStateMaps(ss)
+						_ = db.BeginTransaction(true)
+					}
+				}
+
+				_ = db.CommitTransaction()
+				cleanup()
+			}
+		})
+	}
+}
+
+func BenchmarkIndexingPipeline_EndToEnd(b *testing.B) {
+	systems := []string{"nes", "snes", "gba", "n64", "psx", "genesis", "megadrive", "gamegear", "mastersystem", "gb"}
+
+	type endToEndCase struct {
+		name    string
+		systems []string
+		n       int
+	}
+	sizes := []endToEndCase{
+		{name: "10k_1sys", systems: systems[:1], n: 10_000},
+		{name: "50k_5sys", systems: systems[:5], n: 50_000},
+		{name: "100k_10sys", systems: systems, n: 100_000},
+	}
+
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			b.ReportAllocs()
+			filesBySystem := buildSyntheticFilenamesMultiSystem(sz.n, sz.systems)
+			for b.Loop() {
+				db, cleanup := helpers.NewInMemoryMediaDB(b)
+				ss := newScanState()
+				_ = SeedCanonicalTags(db, ss)
+
+				filesInBatch := 0
+				batchStarted := false
+
+				for _, sys := range sz.systems {
+					fns := filesBySystem[sys]
+					for _, fn := range fns {
+						if !batchStarted {
+							_ = db.BeginTransaction(true)
+							batchStarted = true
+						}
+
+						_, _, err := AddMediaPath(db, ss, sys, fn, false, false, nil)
+						if filesInBatch == 0 && err != nil {
+							b.Fatal(err)
+						}
+						filesInBatch++
+
+						if filesInBatch >= 10_000 {
+							_ = db.CommitTransaction()
+							FlushScanStateMaps(ss)
+							filesInBatch = 0
+							batchStarted = false
+						}
+					}
+				}
+
+				if batchStarted {
+					_ = db.CommitTransaction()
+				}
+
+				cleanup()
 			}
 		})
 	}
