@@ -23,7 +23,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"runtime"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -615,14 +614,8 @@ func BenchmarkSlugSearchCacheBuild(b *testing.B) {
 }
 
 func BenchmarkSlugSearchCacheMemory(b *testing.B) {
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
 	cache := buildSyntheticCache(250_000)
-	runtime.GC()
-	runtime.ReadMemStats(&after)
-	_ = cache
-	b.ReportMetric(float64(after.HeapAlloc-before.HeapAlloc)/(1024*1024), "MB")
+	b.ReportMetric(float64(cache.Size())/(1024*1024), "MB")
 }
 
 func BenchmarkSlugSearchCacheSearch_500k(b *testing.B) {
@@ -643,14 +636,8 @@ func BenchmarkSlugSearchCacheBuild_500k(b *testing.B) {
 }
 
 func BenchmarkSlugSearchCacheMemory_500k(b *testing.B) {
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
 	cache := buildSyntheticCache(500_000)
-	runtime.GC()
-	runtime.ReadMemStats(&after)
-	_ = cache
-	b.ReportMetric(float64(after.HeapAlloc-before.HeapAlloc)/(1024*1024), "MB")
+	b.ReportMetric(float64(cache.Size())/(1024*1024), "MB")
 }
 
 func BenchmarkSlugSearchCacheSearch_QueryComplexity(b *testing.B) {

@@ -152,6 +152,7 @@ func BenchmarkFlushScanStateMaps(b *testing.B) {
 				}
 				b.StartTimer()
 				FlushScanStateMaps(ss)
+				runtime.KeepAlive(ss)
 			}
 		})
 	}
