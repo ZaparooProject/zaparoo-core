@@ -30,6 +30,51 @@ import (
 	"github.com/hsanjuan/go-ndef"
 )
 
+func BenchmarkParseToText_TextRecord(b *testing.B) {
+	b.ReportAllocs()
+	data, err := BuildTextMessage("super mario bros 3")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = ParseToText(data)
+	}
+}
+
+func BenchmarkParseToText_URIRecord(b *testing.B) {
+	b.ReportAllocs()
+	msg := ndef.NewURIMessage("https://example.com/games/super-mario-bros")
+	payload, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	header, err := calculateNDEFHeader(payload)
+	if err != nil {
+		b.Fatal(err)
+	}
+	data := make([]byte, 0, len(header)+len(payload)+1)
+	data = append(data, header...)
+	data = append(data, payload...)
+	data = append(data, 0xFE)
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = ParseToText(data)
+	}
+}
+
+func BenchmarkValidateNDEFMessage(b *testing.B) {
+	b.ReportAllocs()
+	data, err := BuildTextMessage("test validation")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		_ = ValidateNDEFMessage(data)
+	}
+}
+
 func TestParseToText_TextRecord(t *testing.T) {
 	t.Parallel()
 

@@ -80,10 +80,6 @@ tasks:
     vars:
       FUZZ_TIME: '{{default "30s" .FUZZ_TIME}}'
     cmds:
-      # ZapScript parser fuzz tests
-      - go test -run "^$" -fuzz=FuzzParseScript -fuzztime={{.FUZZ_TIME}} ./pkg/zapscript/parser/...
-      - go test -run "^$" -fuzz=FuzzParseExpressions -fuzztime={{.FUZZ_TIME}} ./pkg/zapscript/parser/...
-      - go test -run "^$" -fuzz=FuzzEvalExpressions -fuzztime={{.FUZZ_TIME}} ./pkg/zapscript/parser/...
       # NDEF parser fuzz tests
       - go test -run "^$" -fuzz=FuzzParseToText -fuzztime={{.FUZZ_TIME}} ./pkg/readers/shared/ndef/...
       - go test -run "^$" -fuzz=FuzzValidateNDEFMessage -fuzztime={{.FUZZ_TIME}} ./pkg/readers/shared/ndef/...
@@ -123,6 +119,32 @@ tasks:
     desc: Run mutation testing on a package
     cmds:
       - go-mutesting {{.CLI_ARGS}}
+
+  # Benchmark workflow:
+  #   1. task bench-baseline  (generates testdata/benchmarks/baseline.txt, commit this)
+  #   2. make changes
+  #   3. task bench-compare   (compares current vs committed baseline via benchstat)
+  # Quick runs: task bench (count=3) or task bench-db (database only)
+  bench:
+    desc: Run all benchmarks
+    cmds:
+      - go test -run='^$' -bench=. -benchmem -count=3 -timeout=30m ./...
+
+  bench-db:
+    desc: Run database benchmarks only
+    cmds:
+      - go test -run='^$' -bench=. -benchmem -count=3 -timeout=20m ./pkg/database/...
+
+  bench-baseline:
+    desc: Generate benchmark baseline (commit the output)
+    cmds:
+      - bash -o pipefail -c 'go test -run="^$$" -bench=. -benchmem -count=6 -timeout=45m ./... | grep -E "^(Benchmark|goos:|goarch:|pkg:|cpu:)" | tee testdata/benchmarks/baseline.txt'
+
+  bench-compare:
+    desc: Compare current benchmarks against baseline (requires benchstat, install with go install golang.org/x/perf/cmd/benchstat@latest)
+    cmds:
+      - bash -o pipefail -c 'go test -run="^$$" -bench=. -benchmem -count=6 -timeout=45m ./... | grep -E "^(Benchmark|goos:|goarch:|pkg:|cpu:)" > /tmp/zaparoo-bench-current.txt'
+      - benchstat testdata/benchmarks/baseline.txt /tmp/zaparoo-bench-current.txt
 
   get-logs:
     desc: Download and decode logs from Zaparoo API

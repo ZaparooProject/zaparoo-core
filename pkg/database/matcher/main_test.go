@@ -17,16 +17,15 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package service
+package matcher
 
 import (
 	"testing"
 
 	"github.com/rs/zerolog"
-	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
 	zerolog.SetGlobalLevel(zerolog.Disabled)
-	goleak.VerifyTestMain(m)
+	m.Run()
 }

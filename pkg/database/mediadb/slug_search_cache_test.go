@@ -21,8 +21,8 @@ package mediadb
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
-	"runtime"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -395,15 +395,6 @@ func BenchmarkSlugSearchCacheSearch_250k(b *testing.B) {
 	}
 }
 
-func BenchmarkSlugSearchCacheSearch_1M(b *testing.B) {
-	cache := buildSyntheticCache(1_000_000)
-	query := [][][]byte{{[]byte("mario")}, {[]byte("super")}}
-	b.ResetTimer()
-	for b.Loop() {
-		cache.Search(nil, query)
-	}
-}
-
 // --- ExactSlugMatch tests ---
 
 func TestSlugSearchCache_ExactSlugMatch(t *testing.T) {
@@ -615,6 +606,7 @@ func TestSlugSearchCache_RandomEntry_NilCache(t *testing.T) {
 }
 
 func BenchmarkSlugSearchCacheBuild(b *testing.B) {
+	b.ReportAllocs()
 	// Benchmark cache struct population speed (excludes SQL)
 	for b.Loop() {
 		buildSyntheticCache(250_000)
@@ -622,12 +614,217 @@ func BenchmarkSlugSearchCacheBuild(b *testing.B) {
 }
 
 func BenchmarkSlugSearchCacheMemory(b *testing.B) {
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
 	cache := buildSyntheticCache(250_000)
-	runtime.GC()
-	runtime.ReadMemStats(&after)
-	_ = cache
-	b.ReportMetric(float64(after.HeapAlloc-before.HeapAlloc)/(1024*1024), "MB")
+	b.ReportMetric(float64(cache.Size())/(1024*1024), "MB")
+}
+
+func BenchmarkSlugSearchCacheSearch_500k(b *testing.B) {
+	b.ReportAllocs()
+	cache := buildSyntheticCache(500_000)
+	query := [][][]byte{{[]byte("mario")}, {[]byte("super")}}
+	b.ResetTimer()
+	for b.Loop() {
+		cache.Search(nil, query)
+	}
+}
+
+func BenchmarkSlugSearchCacheBuild_500k(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		buildSyntheticCache(500_000)
+	}
+}
+
+func BenchmarkSlugSearchCacheMemory_500k(b *testing.B) {
+	cache := buildSyntheticCache(500_000)
+	b.ReportMetric(float64(cache.Size())/(1024*1024), "MB")
+}
+
+func BenchmarkSlugSearchCacheSearch_QueryComplexity(b *testing.B) {
+	cache := buildSyntheticCache(500_000)
+
+	b.Run("SingleWord", func(b *testing.B) {
+		b.ReportAllocs()
+		query := [][][]byte{{[]byte("mario")}}
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(nil, query)
+		}
+	})
+
+	b.Run("TwoWords", func(b *testing.B) {
+		b.ReportAllocs()
+		query := [][][]byte{{[]byte("mario")}, {[]byte("super")}}
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(nil, query)
+		}
+	})
+
+	b.Run("ThreeWords", func(b *testing.B) {
+		b.ReportAllocs()
+		query := [][][]byte{{[]byte("mario")}, {[]byte("super")}, {[]byte("3")}}
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(nil, query)
+		}
+	})
+
+	b.Run("CommonSubstring", func(b *testing.B) {
+		b.ReportAllocs()
+		query := [][][]byte{{[]byte("the")}}
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(nil, query)
+		}
+	})
+}
+
+func BenchmarkSlugSearchCacheSearch_SystemFiltered_500k(b *testing.B) {
+	cache := buildSyntheticCache(500_000)
+	query := [][][]byte{{[]byte("mario")}, {[]byte("super")}}
+
+	b.Run("NoFilter", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(nil, query)
+		}
+	})
+
+	b.Run("SingleSystem", func(b *testing.B) {
+		b.ReportAllocs()
+		systemFilter := []int64{1}
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(systemFilter, query)
+		}
+	})
+
+	b.Run("ThreeSystems", func(b *testing.B) {
+		b.ReportAllocs()
+		systemFilter := []int64{1, 2, 3}
+		b.ResetTimer()
+		for b.Loop() {
+			cache.Search(systemFilter, query)
+		}
+	})
+}
+
+func BenchmarkSlugSearchCacheSearch_NoMatch_500k(b *testing.B) {
+	b.ReportAllocs()
+	cache := buildSyntheticCache(500_000)
+	query := [][][]byte{{[]byte("zzzznotarealentry")}}
+	b.ResetTimer()
+	for b.Loop() {
+		cache.Search(nil, query)
+	}
+}
+
+func BenchmarkSlugSearchCacheSearch_Concurrent_500k(b *testing.B) {
+	b.ReportAllocs()
+	cache := buildSyntheticCache(500_000)
+	query := [][][]byte{{[]byte("mario")}, {[]byte("super")}}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			cache.Search(nil, query)
+		}
+	})
+}
+
+// populateBenchTitles inserts systems and titles into a raw *sql.DB for cache
+// build benchmarks. Uses batch inserters with the production schema.
+func populateBenchTitles(ctx context.Context, b *testing.B, sqlDB *sql.DB, n int) {
+	b.Helper()
+
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// Insert 5 systems
+	systems := []struct {
+		code string
+		name string
+		id   int64
+	}{
+		{id: 1, code: "nes", name: "NES"},
+		{id: 2, code: "snes", name: "SNES"},
+		{id: 3, code: "genesis", name: "Genesis"},
+		{id: 4, code: "psx", name: "PSX"},
+		{id: 5, code: "n64", name: "N64"},
+	}
+	for _, sys := range systems {
+		if _, execErr := tx.ExecContext(ctx,
+			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)",
+			sys.id, sys.code, sys.name); execErr != nil {
+			b.Fatal(execErr)
+		}
+	}
+
+	// Insert titles via batch inserter
+	bi, err := NewBatchInserterWithOptions(
+		ctx, tx, "MediaTitles", titleCols, 5000, false)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	words := []string{
+		"super", "mario", "zelda", "sonic", "metroid", "castlevania",
+		"mega", "man", "final", "fantasy", "dragon", "quest",
+		"street", "fighter", "mortal", "kombat", "donkey", "kong",
+	}
+
+	for i := range n {
+		id := int64(i + 1)
+		sysDBID := int64((i % 5) + 1)
+		// Build slug from word combos + unique suffix
+		w1 := words[i%len(words)]
+		w2 := words[(i*7)%len(words)]
+		slug := fmt.Sprintf("%s-%s-%d", w1, w2, i)
+		wordCount := 3
+		var secSlug any
+		if i%5 == 0 {
+			secSlug = fmt.Sprintf("%s-%d", w1, i)
+		}
+		if err := bi.Add(id, sysDBID, slug, slug, len(slug), wordCount, secSlug); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	if err := bi.Close(); err != nil {
+		b.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+}
+
+func BenchmarkSlugSearchCacheBuild_FromDB(b *testing.B) {
+	sizes := []struct {
+		name string
+		n    int
+	}{
+		{name: "10k", n: 10_000},
+		{name: "50k", n: 50_000},
+	}
+
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			b.ReportAllocs()
+			sqlDB, cleanup := newBenchSQLite(b)
+			ctx := context.Background()
+			populateBenchTitles(ctx, b, sqlDB, sz.n)
+			b.ResetTimer()
+			for b.Loop() {
+				_, err := buildSlugSearchCache(ctx, sqlDB)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			cleanup()
+		})
+	}
 }

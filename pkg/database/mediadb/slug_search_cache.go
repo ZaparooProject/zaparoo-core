@@ -56,6 +56,16 @@ type SlugSearchCache struct {
 	entryCount     int
 }
 
+// Size returns the approximate memory footprint of the cache in bytes.
+func (c *SlugSearchCache) Size() int {
+	if c == nil {
+		return 0
+	}
+	return len(c.slugData) + len(c.secSlugData) +
+		len(c.slugOffsets)*4 + len(c.secSlugOffsets)*4 +
+		len(c.titleDBIDs)*8 + len(c.systemDBIDs)*8
+}
+
 // buildSlugSearchCache reads all slug data from the database into an in-memory cache.
 func buildSlugSearchCache(ctx context.Context, db *sql.DB) (*SlugSearchCache, error) {
 	// Build system lookup maps
@@ -385,12 +395,9 @@ func (db *MediaDB) RebuildSlugSearchCache() error {
 		return fmt.Errorf("failed to build slug search cache: %w", err)
 	}
 	db.slugSearchCache.Store(cache)
-	sizeBytes := len(cache.slugData) + len(cache.secSlugData) +
-		len(cache.slugOffsets)*4 + len(cache.secSlugOffsets)*4 +
-		len(cache.titleDBIDs)*8 + len(cache.systemDBIDs)*8
 	log.Info().
 		Int("entries", cache.entryCount).
-		Str("size", formatBytes(sizeBytes)).
+		Str("size", formatBytes(cache.Size())).
 		Msg("slug search cache built")
 	return nil
 }

@@ -148,6 +148,63 @@ Before committing: run `task lint-fix` then `task test`.
 
 Pull requests should NOT include a test plan section.
 
+## Benchmarks
+
+Naming convention: `Benchmark{Component}_{Operation}_{Scale}` (e.g., `BenchmarkSlugSearchCache_Search_500k`)
+
+All benchmarks must:
+- Call `b.ReportAllocs()` for allocation tracking
+- Use `b.Run()` subtests for scale tiers or variants
+- Set up data before `b.ResetTimer()`
+- Use `for b.Loop()` iteration pattern
+
+```bash
+task bench              # Run all benchmarks
+task bench-db           # Run database benchmarks only
+task bench-baseline     # Generate baseline (commit the output)
+task bench-compare      # Compare current vs baseline via benchstat
+```
+
+Optimization targets and thresholds: [docs/optimization-targets.md](docs/optimization-targets.md)
+
+## Background Agent Mode
+
+When running as a background agent (scheduled, headless, or autonomous):
+
+### Always Allowed
+- Run `task test`, `task lint`, `task vulncheck`, `task nilcheck`, `task deadlock`
+- Run `task bench` and `task bench-compare`
+- Read any file, run `go vet`, analyze code
+- Report findings as GitHub issues with `agent-finding` label
+- Run `task fuzz` with default time limits
+
+### Create PR with Evidence (Human Review Required)
+- Performance optimizations — must include before/after benchstat output in PR description
+- Refactoring that changes function signatures or public API
+- Adding new dependencies
+- Changes to security-sensitive files:
+  - `pkg/api/middleware/` (auth)
+  - `pkg/zapscript/utils.go` (command execution)
+  - `pkg/readers/shared/ndef/` (untrusted input parsing)
+  - `pkg/config/auth.go` (auth config)
+- Database schema changes or migrations
+
+### Never
+- Modify tests to make failing code pass (fix the code, not the test)
+- Remove or weaken linter rules
+- Add `nolint` directives without justification
+- Disable security checks (gosec, govulncheck)
+- Change the `forbidigo` rules for sync.Mutex/RWMutex
+- Modify CI workflow files
+- Push directly to main
+- Change benchmark baselines without human review
+
+### Reporting Format
+Title: `[agent:{type}] {summary}` — types: security, perf, quality
+Body: evidence, affected files, proposed fix, risk assessment
+Label: `agent-finding`
+For perf findings: include benchstat comparison
+
 ## When Stuck
 
 Don't guess — ask for help or gather more information first.

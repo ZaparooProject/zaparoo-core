@@ -37,6 +37,63 @@ tasks:
       - scp _build/mister_{{.CLI_ARGS}}/zaparoo.sh root@${MISTER_IP}:/media/fat/Scripts/zaparoo.sh
       - ssh root@${MISTER_IP} /media/fat/Scripts/zaparoo.sh -service restart
 
+  bench-build:
+    desc: Cross-compile benchmark test binaries for MiSTer ARM
+    cmds:
+      - task: :zigcc:setup
+      - task: :docker:run
+        vars:
+          IMAGE_NAME: zaparoo/zigcc
+          BUILD_OS: linux
+          BUILD_ARCH: arm
+          NO_STATIC: true
+          CC: "zig cc -target arm-linux-gnueabihf"
+          CXX: "zig c++ -target arm-linux-gnueabihf"
+          EXTRA_LDFLAGS: "-linkmode external"
+          EXTRA_TAGS: ""
+          EXTRA_DOCKER_ARGS: >-
+            -e CGO_ENABLED=1
+            -e GOOS=linux
+            -e GOARCH=arm
+            -e GO111MODULE=on
+            -e CGO_CFLAGS="-I/opt/libnfc/arm-linux-gnueabihf/include"
+            -e CGO_LDFLAGS="-L/opt/libnfc/arm-linux-gnueabihf/lib -L/opt/deps/arm-linux-gnueabihf/lib /opt/libnfc/arm-linux-gnueabihf/lib/libnfc.a /opt/deps/arm-linux-gnueabihf/lib/libusb.a /opt/deps/arm-linux-gnueabihf/lib/libusb-1.0.a -ldl"
+          EXEC: >-
+            bash -c 'set -e && mkdir -p _build/bench_arm &&
+            PKGS=$(find ./pkg -name "*_bench_test.go" -o -name "*_test.go" | xargs grep -l "func Benchmark" | xargs -I{} dirname {} | sort -u) &&
+            for pkg in $PKGS; do
+            name=$(basename $pkg) &&
+            echo "Building $pkg -> ${name}.test" &&
+            go test -c
+            -tags "netgo,osusergo,sqlite_omit_load_extension"
+            -ldflags "-linkmode external -s -w"
+            -o "_build/bench_arm/${name}.test" "$pkg"
+            ; done &&
+            echo "Done: $(ls _build/bench_arm/*.test | wc -l) binaries"'
+
+  bench-run:
+    desc: Run benchmark binaries on MiSTer and save baseline
+    vars:
+      BENCH_COUNT: '{{default "3" .BENCH_COUNT}}'
+      BENCH_TIMEOUT: '{{default "60m" .BENCH_TIMEOUT}}'
+      SSH_OPTS: -o ServerAliveInterval=30 -o ServerAliveCountMax=120
+    cmds:
+      - ssh {{.SSH_OPTS}} root@${MISTER_IP} "mkdir -p /media/fat/zaparoo-bench"
+      - scp _build/bench_arm/*.test root@${MISTER_IP}:/media/fat/zaparoo-bench/
+      - |
+        (for bin in _build/bench_arm/*.test; do
+          name=$(basename $bin)
+          echo "Running $name..." >&2
+          ssh {{.SSH_OPTS}} root@${MISTER_IP} "/media/fat/zaparoo-bench/$name -test.run='^\$' -test.bench=. -test.benchmem -test.count={{.BENCH_COUNT}} -test.timeout={{.BENCH_TIMEOUT}}"
+        done) | grep -E "^(Benchmark.* ns/op|goos:|goarch:|pkg:|cpu:)" | tee testdata/benchmarks/baseline-mister.txt
+      - ssh {{.SSH_OPTS}} root@${MISTER_IP} "rm -rf /media/fat/zaparoo-bench"
+
+  bench:
+    desc: Build and run benchmarks on MiSTer
+    cmds:
+      - task: bench-build
+      - task: bench-run
+
   build-ffmpeg-libs:
     desc: Build FFmpeg static libraries for MiSTer
     vars:
