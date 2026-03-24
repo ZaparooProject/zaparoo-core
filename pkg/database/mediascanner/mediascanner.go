@@ -1304,7 +1304,15 @@ func NewNamesIndex(
 	status.SystemID = ""
 	update(status)
 
-	scanState.TagIDs = make(map[string]int)
+	// Nil out all ScanState maps to release backing memory. Go maps retain
+	// their allocated bucket array even after all keys are deleted, so the
+	// only way to reclaim that memory is to drop all references and let GC
+	// collect the backing arrays. With 250k titles this can be 20-40MB.
+	scanState.SystemIDs = nil
+	scanState.TitleIDs = nil
+	scanState.MediaIDs = nil
+	scanState.TagTypeIDs = nil
+	scanState.TagIDs = nil
 
 	// Phase 1: Complete data operations (foreground) - commit all data
 	// Note: We may not have an active transaction here due to batching

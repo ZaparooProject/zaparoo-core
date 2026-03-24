@@ -131,8 +131,8 @@ func AddMediaPath(
 			mediaType = system.GetMediaType()
 		}
 
-		// Generate slug metadata for fuzzy matching prefilter
-		metadata := mediadb.GenerateSlugWithMetadata(mediaType, pf.Title)
+		// Generate slug metadata from pre-computed tokens (avoids redundant slugification)
+		metadata := mediadb.GenerateSlugMetadataFromTokens(mediaType, pf.Title, pf.Slug, pf.SlugTokens)
 
 		_, err := db.InsertMediaTitle(&database.MediaTitle{
 			DBID:          int64(titleIndex),
@@ -290,12 +290,13 @@ func AddMediaPath(
 }
 
 type MediaPathFragments struct {
-	Path     string
-	FileName string
-	Title    string
-	Slug     string
-	Ext      string
-	Tags     []string
+	Path       string
+	FileName   string
+	Title      string
+	Slug       string
+	SlugTokens []string
+	Ext        string
+	Tags       []string
 }
 
 func getTagsFromFileName(filename string) []string {
@@ -845,8 +846,11 @@ func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 		}
 	}
 
-	// Use media-type-aware slugification for TV shows, movies, music, etc.
-	f.Slug = slugs.Slugify(mediaType, f.Title)
+	// SlugifyWithTokens computes both slug and tokens in a single pass,
+	// avoiding redundant re-slugification in AddMediaPath.
+	slugResult := slugs.SlugifyWithTokens(mediaType, f.Title)
+	f.Slug = slugResult.Slug
+	f.SlugTokens = slugResult.Tokens
 
 	// For non-Latin titles that don't produce a slug, store the lowercase
 	// original title. This ensures Slug is never empty while the search

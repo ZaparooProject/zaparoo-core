@@ -67,6 +67,8 @@ var (
 	reTrackNumber   = regexp.MustCompile(`^(\d{1,3})[\s.\-_]+|(?i)^track\s*(\d{1,3})[\s.\-_]+`)
 	reVolumeNumber  = regexp.MustCompile(`(?i)\((?:vol\.|volume)\s*(\d+)\)`) // Only explicit keywords, not bare "v"
 	reYear4Digit    = regexp.MustCompile(`^(19\d{2}|20\d{2})`)               // For detecting 4-digit years
+	// Unbracketed year for scene artifact stripping
+	reYearScene = regexp.MustCompile(`\b(19[789]\d|20\d{2})\b`)
 )
 
 // langMap maps 3-letter ROM language codes to 2-letter ISO 639-1 codes.
@@ -1092,8 +1094,6 @@ func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
 	// Step 4: Strip scene release artifacts CONTEXTUALLY (AFTER separator normalization)
 	// CRITICAL: Only strip artifacts from the portion AFTER the year to avoid corrupting titles
 	// Example: "Cam (2018)" should NOT have "Cam" removed as a scene tag
-	// Use a more robust year regex that matches both bracketed (2018) and unbracketed 2018
-	reYearScene := regexp.MustCompile(`\b(19[789]\d|20\d{2})\b`)
 	yearMatch := reYearScene.FindStringSubmatchIndex(title)
 
 	var extractedYearForStripping string

@@ -62,10 +62,13 @@ const (
 // defaultSlugSearchLimit is the max results returned by slug-based search methods.
 const defaultSlugSearchLimit = 50
 
-// getSqliteConnParams constructs the SQLite connection string
+// getSqliteConnParams constructs the SQLite connection string.
+// cache_size=-2048 sets a 2MB page cache (negative = KiB). Reduced from 8MB
+// to lower idle RSS on memory-constrained devices (MiSTer has 492MB total).
+// Indexing performance is unaffected because writes are batched in transactions.
 func getSqliteConnParams() string {
 	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
-		"&_cache_size=-8192&_temp_store=FILE&_mmap_size=0" +
+		"&_cache_size=-2048&_temp_store=FILE&_mmap_size=0" +
 		"&_page_size=8192&_foreign_keys=ON"
 }
 

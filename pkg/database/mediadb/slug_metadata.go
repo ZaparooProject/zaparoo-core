@@ -80,6 +80,34 @@ func GenerateSlugWithMetadata(mediaType slugs.MediaType, input string) SlugMetad
 	return metadata
 }
 
+// GenerateSlugMetadataFromTokens computes slug metadata from a pre-computed
+// slug and tokens. This avoids redundant slugification when the slug and
+// tokens have already been computed (e.g., during GetPathFragments). The
+// secondary slug still requires slugification since it is derived from the
+// original title, not the pre-computed slug.
+func GenerateSlugMetadataFromTokens(
+	mediaType slugs.MediaType,
+	input string,
+	slug string,
+	tokens []string,
+) SlugMetadata {
+	cleaned := slugs.StripLeadingArticle(input)
+	_, secondaryTitle, hasSecondary := slugs.SplitTitle(cleaned)
+
+	metadata := SlugMetadata{
+		Slug:          slug,
+		SlugLength:    utf8.RuneCountInString(slug),
+		SlugWordCount: computeWordCount(slug, tokens),
+	}
+
+	if hasSecondary && secondaryTitle != "" {
+		secondaryTitle = slugs.StripLeadingArticle(secondaryTitle)
+		metadata.SecondarySlug = slugs.Slugify(mediaType, secondaryTitle)
+	}
+
+	return metadata
+}
+
 // computeWordCount returns token count for Latin, bigram count for CJK.
 // This provides orthogonal filtering dimension from character length.
 //

@@ -25,6 +25,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -346,6 +348,13 @@ func GenerateMediaDB(
 			Indexing:   false,
 			TotalFiles: &total,
 		})
+
+		// Release indexing memory before rebuilding the slug cache.
+		// NewNamesIndex's ScanState maps are already nil'd but GC hasn't
+		// run yet. Force collection and return pages to the OS so idle RSS
+		// drops from peak indexing levels.
+		runtime.GC()
+		debug.FreeOSMemory()
 
 		if cacheErr := db.MediaDB.RebuildSlugSearchCache(); cacheErr != nil {
 			log.Warn().Err(cacheErr).Msg("failed to rebuild slug search cache after indexing")

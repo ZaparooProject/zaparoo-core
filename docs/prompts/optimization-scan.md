@@ -28,22 +28,35 @@ Read the specific source files referenced in the target prompt. Understand the c
 ### 2. Propose a Single Change
 One optimization per experiment. Keep changes small and focused. Don't combine multiple ideas — test them individually so you can attribute improvements accurately.
 
-### 3. Measure
+### 3. Measure BEFORE
 
-Run the specific benchmarks for the component being optimized:
+Before making any changes, run benchmarks to capture your local baseline. This is critical — you must compare your own before vs after, not against the committed baseline file (which may have been generated on different hardware).
 
 ```bash
 go test -run='^$' -bench='BenchmarkAffected' -benchmem -count=6 -timeout=30m ./pkg/specific/ \
-  | grep -E '^(Benchmark|goos:|goarch:|pkg:|cpu:)' > /tmp/bench-current.txt
+  | grep -E '^(Benchmark|goos:|goarch:|pkg:|cpu:)' > /tmp/bench-before.txt
 ```
 
-Compare against baseline:
+### 4. Implement the Change
+
+Make your single, focused optimization.
+
+### 5. Measure AFTER
+
+Run the same benchmarks again:
 
 ```bash
-benchstat testdata/benchmarks/baseline.txt /tmp/bench-current.txt
+go test -run='^$' -bench='BenchmarkAffected' -benchmem -count=6 -timeout=30m ./pkg/specific/ \
+  | grep -E '^(Benchmark|goos:|goarch:|pkg:|cpu:)' > /tmp/bench-after.txt
 ```
 
-### 4. Decide: Keep or Discard
+Compare your before vs after:
+
+```bash
+benchstat /tmp/bench-before.txt /tmp/bench-after.txt
+```
+
+### 6. Decide: Keep or Discard
 
 **Keep if ALL of**:
 - Improvement >= 10% in the target metric (ns/op for latency, B/op for memory)
@@ -58,21 +71,21 @@ benchstat testdata/benchmarks/baseline.txt /tmp/bench-current.txt
 
 If discarding: revert the change (`git checkout -- .`) and try a different approach.
 
-### 5. Verify
+### 7. Verify
 
 If keeping the change:
 - Run `task lint-fix` — must pass clean
 - Run `task test` — all tests must pass
 - Run the full package benchmarks (not just the targeted one) to check for regressions
 
-### 6. Create PR
+### 8. Commit
 
-Create a PR with:
-- Title: `perf(<component>): <what changed>`
-- Body must include:
-  - The benchstat comparison output (before/after)
-  - Predicted MiSTer impact using the appropriate multiplier band from `docs/optimization-targets.md`
-  - Which optimization target this addresses and the remaining gap
+Commit each optimization separately with a clear message:
+- Format: `perf(<component>): <what changed>`
+- Include the benchstat comparison in the commit message body
+- Include predicted MiSTer impact using the multiplier band
+
+**You must commit your work in the worktree.** The maintainer will review your commits and cherry-pick changes individually during their review process. Uncommitted work is much harder to review.
 
 ## Scope Constraints
 
@@ -80,7 +93,7 @@ Create a PR with:
 - Never change benchmark code — benchmarks measure, they don't get optimized
 - Never change test assertions to make tests pass — fix the code, not the tests
 - Never add `nolint` directives without justification
-- One optimization per commit, one concern per PR
+- One optimization per commit
 - Always run in a worktree or branch — never modify main directly
 
 ## MiSTer Performance Prediction
@@ -98,6 +111,19 @@ After measuring x86 improvement, predict MiSTer impact using the multiplier band
 Example: If x86 slug search improves from 8ms to 2ms, predicted MiSTer improvement is 280ms to 70ms (using 35x search band).
 
 Concurrent benchmarks are NOT predictable across platforms due to core count differences (MiSTer: 1 core, x86: 16 threads).
+
+## Review Workflow
+
+After you commit, the maintainer will:
+1. Run benchmarks against the baseline to get official numbers on their machine
+2. Review each commit one at a time, staging approved changes
+3. Commit with benchstat output in the PR description
+
+This means your commits should be clean and self-contained — one optimization per commit, with a clear message explaining what changed and why.
+
+## Baseline Management
+
+The baseline (`testdata/benchmarks/baseline.txt`) is a fixed reference point. It does NOT get regenerated after every optimization. It gets regenerated at milestones (releases, large accumulations of changes, or when the delta is so large that comparisons become meaningless).
 
 ## Reference
 
