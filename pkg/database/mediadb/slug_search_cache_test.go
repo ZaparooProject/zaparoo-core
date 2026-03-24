@@ -396,15 +396,6 @@ func BenchmarkSlugSearchCacheSearch_250k(b *testing.B) {
 	}
 }
 
-func BenchmarkSlugSearchCacheSearch_1M(b *testing.B) {
-	cache := buildSyntheticCache(1_000_000)
-	query := [][][]byte{{[]byte("mario")}, {[]byte("super")}}
-	b.ResetTimer()
-	for b.Loop() {
-		cache.Search(nil, query)
-	}
-}
-
 // --- ExactSlugMatch tests ---
 
 func TestSlugSearchCache_ExactSlugMatch(t *testing.T) {
@@ -651,29 +642,11 @@ func BenchmarkSlugSearchCacheBuild_500k(b *testing.B) {
 	}
 }
 
-func BenchmarkSlugSearchCacheBuild_1M(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		buildSyntheticCache(1_000_000)
-	}
-}
-
 func BenchmarkSlugSearchCacheMemory_500k(b *testing.B) {
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
 	cache := buildSyntheticCache(500_000)
-	runtime.GC()
-	runtime.ReadMemStats(&after)
-	_ = cache
-	b.ReportMetric(float64(after.HeapAlloc-before.HeapAlloc)/(1024*1024), "MB")
-}
-
-func BenchmarkSlugSearchCacheMemory_1M(b *testing.B) {
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	cache := buildSyntheticCache(1_000_000)
 	runtime.GC()
 	runtime.ReadMemStats(&after)
 	_ = cache

@@ -1,0 +1,379 @@
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkParse_GlobalArgs-2         	   24648	     49061 ns/op	     256 B/op	      14 allocs/op
+BenchmarkParse_GlobalArgs-2         	   24268	     49666 ns/op	     256 B/op	      14 allocs/op
+BenchmarkParse_GlobalArgs-2         	   24217	     49549 ns/op	     256 B/op	      14 allocs/op
+BenchmarkParse_LaunchArgs-2         	    4660	    252330 ns/op	    1672 B/op	      79 allocs/op
+BenchmarkParse_LaunchArgs-2         	    4485	    253625 ns/op	    1656 B/op	      79 allocs/op
+BenchmarkParse_LaunchArgs-2         	    4872	    258126 ns/op	    1656 B/op	      79 allocs/op
+BenchmarkParse_LaunchSearchArgs-2   	    4489	    250972 ns/op	    1529 B/op	      80 allocs/op
+BenchmarkParse_LaunchSearchArgs-2   	    4800	    249356 ns/op	    1535 B/op	      80 allocs/op
+BenchmarkParse_LaunchSearchArgs-2   	    4498	    253818 ns/op	    1536 B/op	      80 allocs/op
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/config
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkConfig_Read-2   	 2811254	       428.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfig_Read-2   	 2816776	       426.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfig_Read-2   	 2818622	       424.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfig_Load-2   	    3818	    296832 ns/op	    3147 B/op	      22 allocs/op
+BenchmarkConfig_Load-2   	    4350	    291012 ns/op	    3147 B/op	      22 allocs/op
+BenchmarkConfig_Load-2   	    4335	    291541 ns/op	    3147 B/op	      22 allocs/op
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkRegexCacheVsStandard/Standard-2         	   20037	     58037 ns/op	    1426 B/op	      21 allocs/op
+BenchmarkRegexCacheVsStandard/Standard-2         	   19598	     59720 ns/op	    1429 B/op	      21 allocs/op
+BenchmarkRegexCacheVsStandard/Standard-2         	   20290	     61087 ns/op	    1427 B/op	      21 allocs/op
+BenchmarkRegexCacheVsStandard/Cached-2           	  300430	      3750 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/Cached-2           	  321820	      3763 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/Cached-2           	  316654	      3763 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/GlobalCached-2     	  317647	      3779 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/GlobalCached-2     	  317545	      3744 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/GlobalCached-2     	  305358	      3779 ns/op	       0 B/op	       0 allocs/op
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkIDExtraction/ManualParsing-2         	  971332	      1153 ns/op	      16 B/op	       1 allocs/op
+BenchmarkIDExtraction/ManualParsing-2         	 1000000	      1124 ns/op	      16 B/op	       1 allocs/op
+BenchmarkIDExtraction/ManualParsing-2         	 1000000	      1124 ns/op	      16 B/op	       1 allocs/op
+BenchmarkIDExtraction/ExtractSchemeID-2       	  152916	      7881 ns/op	      64 B/op	       2 allocs/op
+BenchmarkIDExtraction/ExtractSchemeID-2       	  156736	      7876 ns/op	      64 B/op	       2 allocs/op
+BenchmarkIDExtraction/ExtractSchemeID-2       	  156498	      7942 ns/op	      64 B/op	       2 allocs/op
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkFindFuzzyMatches_500k-2              	       7	 169700321 ns/op	 2649344 B/op	   41406 allocs/op
+BenchmarkFindFuzzyMatches_500k-2              	       7	 168552010 ns/op	 2649344 B/op	   41406 allocs/op
+BenchmarkFindFuzzyMatches_500k-2              	       7	 168813607 ns/op	 2649344 B/op	   41406 allocs/op
+BenchmarkFindFuzzyMatches_1M-2                	       4	 353216175 ns/op	 4661888 B/op	   72852 allocs/op
+BenchmarkFindFuzzyMatches_1M-2                	       4	 299366806 ns/op	 4661888 B/op	   72852 allocs/op
+BenchmarkFindFuzzyMatches_1M-2                	       4	 290810525 ns/op	 4661888 B/op	   72852 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=3-2         	       4	 362272398 ns/op	 6137328 B/op	   89832 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=3-2         	       3	 362482625 ns/op	 6137312 B/op	   89832 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=3-2         	       3	 362663075 ns/op	 6137312 B/op	   89832 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=10-2        	       1	2007279874 ns/op	33934912 B/op	  456750 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=10-2        	       1	1782451465 ns/op	33934912 B/op	  456750 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=10-2        	       1	1785945393 ns/op	33934912 B/op	  456750 allocs/op
+BenchmarkFindFuzzyMatches_NoMatch_500k-2                          	       1	1297268181 ns/op	21503056 B/op	  228742 allocs/op
+BenchmarkFindFuzzyMatches_NoMatch_500k-2                          	       1	1283317574 ns/op	21503056 B/op	  228742 allocs/op
+BenchmarkFindFuzzyMatches_NoMatch_500k-2                          	       1	1267346024 ns/op	21503056 B/op	  228742 allocs/op
+BenchmarkJaroWinkler_Similarity-2                                 	  228436	      5645 ns/op	     128 B/op	       2 allocs/op
+BenchmarkJaroWinkler_Similarity-2                                 	  230190	      5801 ns/op	     128 B/op	       2 allocs/op
+BenchmarkJaroWinkler_Similarity-2                                 	  226496	      5755 ns/op	     128 B/op	       2 allocs/op
+BenchmarkGenerateTokenSignature_500k-2                            	       1	94935159263 ns/op	443778296 B/op	19422689 allocs/op
+BenchmarkGenerateTokenSignature_500k-2                            	       1	94753405997 ns/op	443562936 B/op	19422661 allocs/op
+BenchmarkGenerateTokenSignature_500k-2                            	       1	94825576957 ns/op	443634632 B/op	19422677 allocs/op
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkBatchInserter_Insert/10k-2                    	       1	13440648013 ns/op	18533016 B/op	  141771 allocs/op
+BenchmarkBatchInserter_Insert/10k-2                    	       1	13362666508 ns/op	18531816 B/op	  141767 allocs/op
+BenchmarkBatchInserter_Insert/10k-2                    	       1	13444755599 ns/op	18532232 B/op	  141772 allocs/op
+BenchmarkBatchInserter_Insert/50k-2                    	       1	70863740237 ns/op	55888304 B/op	  702721 allocs/op
+BenchmarkBatchInserter_Insert/50k-2                    	       1	71199735252 ns/op	60082688 B/op	  702727 allocs/op
+BenchmarkBatchInserter_Insert/50k-2                    	       1	70851910539 ns/op	55893048 B/op	  702727 allocs/op
+BenchmarkBatchInserter_FlushCost/100rows-2             	       2	 516326080 ns/op	 4357332 B/op	    2966 allocs/op
+BenchmarkBatchInserter_FlushCost/100rows-2             	       3	 499229434 ns/op	 2921610 B/op	    2950 allocs/op
+BenchmarkBatchInserter_FlushCost/100rows-2             	       2	 501459622 ns/op	  124648 B/op	    2952 allocs/op
+BenchmarkBatchInserter_FlushCost/1000rows-2            	       2	 849278222 ns/op	  542248 B/op	    8944 allocs/op
+BenchmarkBatchInserter_FlushCost/1000rows-2            	       2	 870223399 ns/op	  524216 B/op	    8941 allocs/op
+BenchmarkBatchInserter_FlushCost/1000rows-2            	       2	 864677224 ns/op	  510480 B/op	    8941 allocs/op
+BenchmarkBatchInserter_FlushCost/5000rows-2            	       1	3430328783 ns/op	 3011320 B/op	   36993 allocs/op
+BenchmarkBatchInserter_FlushCost/5000rows-2            	       1	3422565316 ns/op	 3011880 B/op	   36998 allocs/op
+BenchmarkBatchInserter_FlushCost/5000rows-2            	       1	3416848734 ns/op	 7207304 B/op	   37006 allocs/op
+BenchmarkTransactionCycle_CommitCost/1k-2              	       2	 854809338 ns/op	 4985160 B/op	    8958 allocs/op
+BenchmarkTransactionCycle_CommitCost/1k-2              	       2	 855553130 ns/op	  739816 B/op	    8940 allocs/op
+BenchmarkTransactionCycle_CommitCost/1k-2              	       2	 872400210 ns/op	 4948108 B/op	    8945 allocs/op
+BenchmarkTransactionCycle_CommitCost/5k-2              	       1	3434312658 ns/op	15668648 B/op	   37028 allocs/op
+BenchmarkTransactionCycle_CommitCost/5k-2              	       1	3386247756 ns/op	 3011192 B/op	   36991 allocs/op
+BenchmarkTransactionCycle_CommitCost/5k-2              	       1	3411192483 ns/op	 7206104 B/op	   36998 allocs/op
+BenchmarkTransactionCycle_CommitCost/10k-2             	       1	6650111679 ns/op	14059480 B/op	   72074 allocs/op
+BenchmarkTransactionCycle_CommitCost/10k-2             	       1	6444043084 ns/op	18340112 B/op	   72105 allocs/op
+BenchmarkTransactionCycle_CommitCost/10k-2             	       1	6466838987 ns/op	14071832 B/op	   72075 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_simple-2       	    5731	    189245 ns/op	     886 B/op	      39 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_simple-2       	    5893	    190914 ns/op	     880 B/op	      39 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_simple-2       	    6375	    189208 ns/op	     885 B/op	      39 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_complex-2      	    2647	    473056 ns/op	    2072 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_complex-2      	    2563	    477796 ns/op	    2072 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_complex-2      	    2536	    473604 ns/op	    2072 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Japanese-2       	    4741	    236667 ns/op	    1520 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Japanese-2       	    4476	    238538 ns/op	    1544 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Japanese-2       	    5164	    237591 ns/op	    1520 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Chinese-2        	    6284	    199885 ns/op	    1323 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Chinese-2        	    6049	    198930 ns/op	    1324 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Chinese-2        	    6253	    199202 ns/op	    1323 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/With_secondary-2     	    2623	    469130 ns/op	    2003 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/With_secondary-2     	    2528	    472067 ns/op	    1990 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/With_secondary-2     	    2268	    466153 ns/op	    1976 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/Long_ROM-2           	    1562	    786591 ns/op	    4440 B/op	     104 allocs/op
+BenchmarkGenerateSlugWithMetadata/Long_ROM-2           	    1562	    778411 ns/op	    4440 B/op	     104 allocs/op
+BenchmarkGenerateSlugWithMetadata/Long_ROM-2           	    1557	    787260 ns/op	    4486 B/op	     104 allocs/op
+BenchmarkSlugSearchCacheSearch_50k-2                   	      43	  28007769 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_50k-2                   	      42	  27868119 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_50k-2                   	      42	  28855200 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_250k-2                  	       8	 140681309 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_250k-2                  	       8	 141277539 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_250k-2                  	       7	 143338441 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheBuild-2                        	       2	 992598319 ns/op	26955104 B/op	  599362 allocs/op
+BenchmarkSlugSearchCacheBuild-2                        	       2	 977905874 ns/op	26955120 B/op	  599362 allocs/op
+BenchmarkSlugSearchCacheBuild-2                        	       1	1004479823 ns/op	26955008 B/op	  599357 allocs/op
+BenchmarkSlugSearchCacheMemory-2                       	       1	1023498652 ns/op	         0.0008316 MB	26955376 B/op	  599365 allocs/op
+BenchmarkSlugSearchCacheMemory-2                       	       1	1028276271 ns/op	         0.0008316 MB	26955184 B/op	  599363 allocs/op
+BenchmarkSlugSearchCacheMemory-2                       	       1	1022901573 ns/op	         0.0008316 MB	26955312 B/op	  599365 allocs/op
+BenchmarkSlugSearchCacheSearch_500k-2                  	       4	 281308475 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_500k-2                  	       4	 278871568 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_500k-2                  	       4	 285024020 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheBuild_500k-2                   	       1	1945141506 ns/op	53871144 B/op	 1199115 allocs/op
+BenchmarkSlugSearchCacheBuild_500k-2                   	       1	1958598895 ns/op	53871176 B/op	 1199115 allocs/op
+BenchmarkSlugSearchCacheBuild_500k-2                   	       1	1966762759 ns/op	53871160 B/op	 1199115 allocs/op
+BenchmarkSlugSearchCacheMemory_500k-2                  	       1	1998989764 ns/op	         0.0008316 MB	53871144 B/op	 1199115 allocs/op
+BenchmarkSlugSearchCacheMemory_500k-2                  	       1	2006100869 ns/op	         0.0008316 MB	53871128 B/op	 1199115 allocs/op
+BenchmarkSlugSearchCacheMemory_500k-2                  	       1	1986779915 ns/op	         0.0008316 MB	53871272 B/op	 1199115 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/SingleWord-2         	       4	 274349642 ns/op	 2160640 B/op	      15 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/SingleWord-2         	       4	 273376744 ns/op	 2160640 B/op	      15 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/SingleWord-2         	       4	 274205162 ns/op	 2160640 B/op	      15 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/TwoWords-2           	       4	 283953706 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/TwoWords-2           	       4	 282630979 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/TwoWords-2           	       4	 282572848 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/ThreeWords-2         	       4	 281517126 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/ThreeWords-2         	       4	 282183272 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/ThreeWords-2         	       4	 283363731 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/CommonSubstring-2    	       4	 272006324 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/CommonSubstring-2    	       4	 268025661 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/CommonSubstring-2    	       4	 268214549 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/NoFilter-2       	       4	 282911429 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/NoFilter-2       	       4	 280762379 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/NoFilter-2       	       4	 280869978 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/SingleSystem-2   	       8	 135714410 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/SingleSystem-2   	       8	 136654966 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/SingleSystem-2   	       8	 135643931 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/ThreeSystems-2   	       4	 258199101 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/ThreeSystems-2   	       4	 257128764 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/ThreeSystems-2   	       4	 258306820 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_NoMatch_500k-2                       	       6	 177820725 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_NoMatch_500k-2                       	       6	 179789132 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_NoMatch_500k-2                       	       6	 180431483 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_Concurrent_500k-2                    	       5	 220091364 ns/op	  145441 B/op	       7 allocs/op
+BenchmarkSlugSearchCacheSearch_Concurrent_500k-2                    	       5	 213659115 ns/op	  145441 B/op	       7 allocs/op
+BenchmarkSlugSearchCacheSearch_Concurrent_500k-2                    	       5	 219908469 ns/op	  145441 B/op	       7 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/10k-2                          	       2	 876542606 ns/op	 3697576 B/op	   63816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/10k-2                          	       2	 821211840 ns/op	 3697584 B/op	   63816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/10k-2                          	       2	 870849548 ns/op	 3697576 B/op	   63816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/50k-2                          	       1	4383020624 ns/op	 7039816 B/op	  319816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/50k-2                          	       1	4403425441 ns/op	 7039816 B/op	  319816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/50k-2                          	       1	4404283949 ns/op	 7039800 B/op	  319816 allocs/op
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkGetPathFragments/Simple-2       	    1791	    650270 ns/op	    3861 B/op	     115 allocs/op
+BenchmarkGetPathFragments/Simple-2       	    1893	    626217 ns/op	    3860 B/op	     115 allocs/op
+BenchmarkGetPathFragments/Simple-2       	    1905	    630695 ns/op	    3878 B/op	     115 allocs/op
+BenchmarkGetPathFragments/Complex-2      	    1130	   1068401 ns/op	    5353 B/op	     166 allocs/op
+BenchmarkGetPathFragments/Complex-2      	    1069	   1080365 ns/op	    5321 B/op	     166 allocs/op
+BenchmarkGetPathFragments/Complex-2      	    1082	   1080784 ns/op	    5388 B/op	     166 allocs/op
+BenchmarkGetPathFragments/Long_path-2    	     817	   1483116 ns/op	    5954 B/op	     175 allocs/op
+BenchmarkGetPathFragments/Long_path-2    	     822	   1487207 ns/op	    5954 B/op	     175 allocs/op
+BenchmarkGetPathFragments/Long_path-2    	     823	   1471991 ns/op	    6041 B/op	     175 allocs/op
+BenchmarkGetPathFragments/Scene_release-2         	    1773	    704130 ns/op	    3897 B/op	     118 allocs/op
+BenchmarkGetPathFragments/Scene_release-2         	    1710	    702826 ns/op	    3939 B/op	     118 allocs/op
+BenchmarkGetPathFragments/Scene_release-2         	    1707	    696044 ns/op	    3939 B/op	     118 allocs/op
+BenchmarkGetPathFragments/URI_scheme-2            	    2200	    546725 ns/op	    3730 B/op	     114 allocs/op
+BenchmarkGetPathFragments/URI_scheme-2            	    2222	    545347 ns/op	    3713 B/op	     114 allocs/op
+BenchmarkGetPathFragments/URI_scheme-2            	    2184	    556315 ns/op	    3713 B/op	     114 allocs/op
+BenchmarkGetPathFragments/NoExt-2                 	    1941	    652553 ns/op	    3841 B/op	     115 allocs/op
+BenchmarkGetPathFragments/NoExt-2                 	    1891	    637944 ns/op	    3860 B/op	     115 allocs/op
+BenchmarkGetPathFragments/NoExt-2                 	    1882	    640654 ns/op	    3860 B/op	     115 allocs/op
+BenchmarkGetPathFragments/CJK-2                   	    2036	    596874 ns/op	    4625 B/op	     116 allocs/op
+BenchmarkGetPathFragments/CJK-2                   	    2023	    612388 ns/op	    4625 B/op	     116 allocs/op
+BenchmarkGetPathFragments/CJK-2                   	    2059	    598148 ns/op	    4625 B/op	     116 allocs/op
+BenchmarkGetPathFragments_Batch/10k-2             	       1	9263924155 ns/op	46710232 B/op	 1351173 allocs/op
+BenchmarkGetPathFragments_Batch/10k-2             	       1	9298682763 ns/op	46782216 B/op	 1351190 allocs/op
+BenchmarkGetPathFragments_Batch/10k-2             	       1	9525152496 ns/op	46746024 B/op	 1351172 allocs/op
+BenchmarkGetPathFragments_Batch/50k-2             	       1	47577056316 ns/op	233797072 B/op	 6759488 allocs/op
+BenchmarkGetPathFragments_Batch/50k-2             	       1	47537835905 ns/op	233796984 B/op	 6759494 allocs/op
+BenchmarkGetPathFragments_Batch/50k-2             	       1	47608003407 ns/op	233689168 B/op	 6759469 allocs/op
+BenchmarkFlushScanStateMaps/10k-2                 	    1650	    741512 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/10k-2                 	    1584	    745878 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/10k-2                 	    1608	    748312 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/50k-2                 	     144	   7807193 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/50k-2                 	     132	   9437968 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/50k-2                 	     158	   7588500 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAddMediaPath_MockDB/1k-2                 	       1	2366319347 ns/op	13177680 B/op	  310076 allocs/op
+BenchmarkAddMediaPath_MockDB/1k-2                 	       1	2349426859 ns/op	13179080 B/op	  310086 allocs/op
+BenchmarkAddMediaPath_MockDB/1k-2                 	       1	2328032586 ns/op	13105152 B/op	  310049 allocs/op
+BenchmarkAddMediaPath_MockDB/10k-2                	       1	23518854528 ns/op	133254056 B/op	 3084794 allocs/op
+BenchmarkAddMediaPath_MockDB/10k-2                	       1	23667538941 ns/op	133184504 B/op	 3084806 allocs/op
+BenchmarkAddMediaPath_MockDB/10k-2                	       1	23782310373 ns/op	133329440 B/op	 3084844 allocs/op
+BenchmarkAddMediaPath_RealDB/1k-2                 	       1	3932384588 ns/op	16857400 B/op	  212844 allocs/op
+BenchmarkAddMediaPath_RealDB/1k-2                 	       1	3900002105 ns/op	21051632 B/op	  212848 allocs/op
+BenchmarkAddMediaPath_RealDB/1k-2                 	       1	3846782797 ns/op	16846496 B/op	  211645 allocs/op
+BenchmarkAddMediaPath_RealDB/10k-2                	       1	32081800328 ns/op	84512896 B/op	 2014597 allocs/op
+BenchmarkAddMediaPath_RealDB/10k-2                	       1	32033072308 ns/op	84569784 B/op	 2014556 allocs/op
+BenchmarkAddMediaPath_RealDB/10k-2                	       1	32136946154 ns/op	84485392 B/op	 2014560 allocs/op
+BenchmarkIndexingPipeline_EndToEnd/10k_1sys-2     	       1	32111076973 ns/op	88379944 B/op	 1996611 allocs/op
+BenchmarkIndexingPipeline_EndToEnd/10k_1sys-2     	       1	32134510714 ns/op	80284824 B/op	 2014632 allocs/op
+BenchmarkIndexingPipeline_EndToEnd/10k_1sys-2     	       1	32135468323 ns/op	80027736 B/op	 2002664 allocs/op
+BenchmarkGetPathFragments_PeakMemory-2            	       1	48641408318 ns/op	       225.1 total-MB	241203152 B/op	 7059182 allocs/op
+BenchmarkGetPathFragments_PeakMemory-2            	       1	48513068549 ns/op	       225.3 total-MB	241347704 B/op	 7059214 allocs/op
+BenchmarkGetPathFragments_PeakMemory-2            	       1	48624398839 ns/op	       225.0 total-MB	241022648 B/op	 7059127 allocs/op
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/ndef
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkParseToText_TextRecord-2   	  933998	      1118 ns/op	      24 B/op	       1 allocs/op
+BenchmarkParseToText_TextRecord-2   	 1000000	      1135 ns/op	      24 B/op	       1 allocs/op
+BenchmarkParseToText_TextRecord-2   	  911221	      1127 ns/op	      24 B/op	       1 allocs/op
+BenchmarkParseToText_URIRecord-2    	  506664	      2524 ns/op	      96 B/op	       2 allocs/op
+BenchmarkParseToText_URIRecord-2    	  513064	      2524 ns/op	      96 B/op	       2 allocs/op
+BenchmarkParseToText_URIRecord-2    	  526834	      2541 ns/op	      96 B/op	       2 allocs/op
+BenchmarkValidateNDEFMessage-2      	24840550	        48.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateNDEFMessage-2      	24203143	        59.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateNDEFMessage-2      	24245438	        49.59 ns/op	       0 B/op	       0 allocs/op
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/service
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkMatchMapping_Exact_50rules-2    	    3669	    346250 ns/op	    2832 B/op	     218 allocs/op
+BenchmarkMatchMapping_Exact_50rules-2    	    3542	    346538 ns/op	    2832 B/op	     218 allocs/op
+BenchmarkMatchMapping_Exact_50rules-2    	    3362	    343181 ns/op	    2832 B/op	     218 allocs/op
+BenchmarkMatchMapping_Regex_50rules-2    	    1261	    898107 ns/op	    3511 B/op	     219 allocs/op
+BenchmarkMatchMapping_Regex_50rules-2    	    1339	    906962 ns/op	    3376 B/op	     218 allocs/op
+BenchmarkMatchMapping_Regex_50rules-2    	    1332	    906725 ns/op	    3376 B/op	     218 allocs/op
+BenchmarkMatchMapping_Mixed_100rules-2   	    1530	    809399 ns/op	    5697 B/op	     412 allocs/op
+BenchmarkMatchMapping_Mixed_100rules-2   	    1484	    820260 ns/op	    5696 B/op	     412 allocs/op
+BenchmarkMatchMapping_Mixed_100rules-2   	    1490	    816512 ns/op	    5696 B/op	     412 allocs/op
+BenchmarkScanToLaunch_ExactMatch-2       	      75	  14630869 ns/op	   35737 B/op	     539 allocs/op
+BenchmarkScanToLaunch_ExactMatch-2       	      81	  14652720 ns/op	   32550 B/op	     432 allocs/op
+BenchmarkScanToLaunch_ExactMatch-2       	      87	  14045763 ns/op	   32354 B/op	     432 allocs/op
+BenchmarkScanToLaunch_DirectPath-2       	     429	   2508154 ns/op	   30228 B/op	     387 allocs/op
+BenchmarkScanToLaunch_DirectPath-2       	     414	   2512168 ns/op	   30275 B/op	     387 allocs/op
+BenchmarkScanToLaunch_DirectPath-2       	     430	   2499493 ns/op	   30228 B/op	     387 allocs/op
+BenchmarkScanToLaunch_WithMapping-2      	      82	  14352988 ns/op	   30519 B/op	     406 allocs/op
+BenchmarkScanToLaunch_WithMapping-2      	      81	  14690353 ns/op	   30527 B/op	     406 allocs/op
+BenchmarkScanToLaunch_WithMapping-2      	      75	  14696297 ns/op	   30671 B/op	     406 allocs/op
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkSlugifyBasic/The_Legend_of_Zelda:_Ocarina_of_Time_(USA)_[!]-2         	    4258	    289304 ns/op	    1249 B/op	      43 allocs/op
+BenchmarkSlugifyBasic/The_Legend_of_Zelda:_Ocarina_of_Time_(USA)_[!]-2         	    4236	    288499 ns/op	    1232 B/op	      43 allocs/op
+BenchmarkSlugifyBasic/The_Legend_of_Zelda:_Ocarina_of_Time_(USA)_[!]-2         	    4027	    284540 ns/op	    1241 B/op	      43 allocs/op
+BenchmarkSlugifyBasic/Pokémon_Stadium_2-2                                      	    3909	    328993 ns/op	   10491 B/op	      47 allocs/op
+BenchmarkSlugifyBasic/Pokémon_Stadium_2-2                                      	    3812	    331514 ns/op	   10539 B/op	      47 allocs/op
+BenchmarkSlugifyBasic/Pokémon_Stadium_2-2                                      	    3812	    336815 ns/op	   10501 B/op	      47 allocs/op
+BenchmarkSlugifyBasic/Final_Fantasy_VII-2                                      	    6741	    172049 ns/op	     837 B/op	      37 allocs/op
+BenchmarkSlugifyBasic/Final_Fantasy_VII-2                                      	    6862	    172875 ns/op	     842 B/op	      37 allocs/op
+BenchmarkSlugifyBasic/Final_Fantasy_VII-2                                      	    7171	    170461 ns/op	     847 B/op	      37 allocs/op
+BenchmarkSlugifyBasic/Super_Mario_Bros-2                                       	    6330	    185448 ns/op	     875 B/op	      38 allocs/op
+BenchmarkSlugifyBasic/Super_Mario_Bros-2                                       	    6714	    184947 ns/op	     880 B/op	      38 allocs/op
+BenchmarkSlugifyBasic/Super_Mario_Bros-2                                       	    5630	    182553 ns/op	     876 B/op	      38 allocs/op
+BenchmarkSlugifyBasic/Sonic_&_Knuckles-2                                       	    6980	    175966 ns/op	     810 B/op	      36 allocs/op
+BenchmarkSlugifyBasic/Sonic_&_Knuckles-2                                       	    7166	    180548 ns/op	     815 B/op	      36 allocs/op
+BenchmarkSlugifyBasic/Sonic_&_Knuckles-2                                       	    6794	    177408 ns/op	     810 B/op	      36 allocs/op
+BenchmarkSlugify_LongTitle/ROM_with_tags-2                                     	    2160	    547723 ns/op	    3369 B/op	      61 allocs/op
+BenchmarkSlugify_LongTitle/ROM_with_tags-2                                     	    2247	    549173 ns/op	    3352 B/op	      61 allocs/op
+BenchmarkSlugify_LongTitle/ROM_with_tags-2                                     	    2155	    548411 ns/op	    3352 B/op	      61 allocs/op
+BenchmarkSlugify_LongTitle/Japanese_RPG-2                                      	    2696	    448861 ns/op	    2509 B/op	      55 allocs/op
+BenchmarkSlugify_LongTitle/Japanese_RPG-2                                      	    2679	    448400 ns/op	    2509 B/op	      55 allocs/op
+BenchmarkSlugify_LongTitle/Japanese_RPG-2                                      	    2716	    450056 ns/op	    2496 B/op	      55 allocs/op
+BenchmarkSlugify_LongTitle/Scene_release-2                                     	    1585	    784382 ns/op	    4552 B/op	      70 allocs/op
+BenchmarkSlugify_LongTitle/Scene_release-2                                     	    1552	    776614 ns/op	    4552 B/op	      70 allocs/op
+BenchmarkSlugify_LongTitle/Scene_release-2                                     	    1584	    771637 ns/op	    4575 B/op	      70 allocs/op
+BenchmarkSlugify_CJK/Japanese-2                                                	    5136	    219326 ns/op	    1527 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Japanese-2                                                	    5367	    222980 ns/op	    1520 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Japanese-2                                                	    5564	    222875 ns/op	    1520 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Chinese-2                                                 	    6166	    186141 ns/op	    1312 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Chinese-2                                                 	    5650	    186202 ns/op	    1318 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Chinese-2                                                 	    6439	    185287 ns/op	    1317 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Korean-2                                                  	    3072	    383320 ns/op	    1676 B/op	      35 allocs/op
+BenchmarkSlugify_CJK/Korean-2                                                  	    2977	    376624 ns/op	    1664 B/op	      35 allocs/op
+BenchmarkSlugify_CJK/Korean-2                                                  	    3224	    378133 ns/op	    1664 B/op	      35 allocs/op
+BenchmarkSlugify_CJK/Mixed_CJK_Latin-2                                         	    2912	    397740 ns/op	    1704 B/op	      37 allocs/op
+BenchmarkSlugify_CJK/Mixed_CJK_Latin-2                                         	    3066	    399741 ns/op	    1704 B/op	      37 allocs/op
+BenchmarkSlugify_CJK/Mixed_CJK_Latin-2                                         	    3019	    401543 ns/op	    1716 B/op	      37 allocs/op
+BenchmarkSlugify_Batch_500k-2                                                  	       1	108523553385 ns/op	493628768 B/op	19317637 allocs/op
+BenchmarkSlugify_Batch_500k-2                                                  	       1	108454301156 ns/op	493700184 B/op	19317645 allocs/op
+BenchmarkSlugify_Batch_500k-2                                                  	       1	108458500199 ns/op	493628768 B/op	19317641 allocs/op
+BenchmarkNormalizeToWords/Simple-2                                             	    8620	    140883 ns/op	     692 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Simple-2                                             	    7192	    139745 ns/op	     688 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Simple-2                                             	    8892	    137044 ns/op	     688 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/With_metadata-2                                      	    5380	    218444 ns/op	    1040 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/With_metadata-2                                      	    5361	    217390 ns/op	    1040 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/With_metadata-2                                      	    5316	    220931 ns/op	    1040 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/Roman_numerals-2                                     	    6265	    185103 ns/op	     960 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/Roman_numerals-2                                     	    6558	    183204 ns/op	     960 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/Roman_numerals-2                                     	    6260	    185606 ns/op	     960 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/Ampersand-2                                          	    8802	    138689 ns/op	     704 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Ampersand-2                                          	    8662	    138740 ns/op	     704 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Ampersand-2                                          	    7329	    137492 ns/op	     704 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Long_title-2                                         	    3590	    346265 ns/op	    2116 B/op	      43 allocs/op
+BenchmarkNormalizeToWords/Long_title-2                                         	    3531	    347031 ns/op	    2096 B/op	      43 allocs/op
+BenchmarkNormalizeToWords/Long_title-2                                         	    3500	    344894 ns/op	    2106 B/op	      43 allocs/op
+BenchmarkSlugifyWithTokens/Simple-2                                            	    6501	    185813 ns/op	     869 B/op	      38 allocs/op
+BenchmarkSlugifyWithTokens/Simple-2                                            	    5518	    181839 ns/op	     864 B/op	      38 allocs/op
+BenchmarkSlugifyWithTokens/Simple-2                                            	    6610	    183632 ns/op	     869 B/op	      38 allocs/op
+BenchmarkSlugifyWithTokens/Complex-2                                           	    4101	    290088 ns/op	    1232 B/op	      43 allocs/op
+BenchmarkSlugifyWithTokens/Complex-2                                           	    4297	    285588 ns/op	    1249 B/op	      43 allocs/op
+BenchmarkSlugifyWithTokens/Complex-2                                           	    4003	    285917 ns/op	    1232 B/op	      43 allocs/op
+BenchmarkSlugifyWithTokens/CJK-2                                               	    5523	    220974 ns/op	    1533 B/op	      30 allocs/op
+BenchmarkSlugifyWithTokens/CJK-2                                               	    4750	    222583 ns/op	    1527 B/op	      30 allocs/op
+BenchmarkSlugifyWithTokens/CJK-2                                               	    5407	    233541 ns/op	    1527 B/op	      30 allocs/op
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkLookupSystemExact-2   	  390000	      2973 ns/op	      72 B/op	       2 allocs/op
+BenchmarkLookupSystemExact-2   	  433425	      2961 ns/op	      72 B/op	       2 allocs/op
+BenchmarkLookupSystemExact-2   	  437542	      3006 ns/op	      72 B/op	       2 allocs/op
+BenchmarkLookupSystemSlug-2    	    7592	    143039 ns/op	     790 B/op	      37 allocs/op
+BenchmarkLookupSystemSlug-2    	    7118	    144584 ns/op	     781 B/op	      37 allocs/op
+BenchmarkLookupSystemSlug-2    	    8053	    142867 ns/op	     785 B/op	      37 allocs/op
+BenchmarkLookupSystemAlias-2   	  375480	      3415 ns/op	      80 B/op	       2 allocs/op
+BenchmarkLookupSystemAlias-2   	  383223	      3350 ns/op	      80 B/op	       2 allocs/op
+BenchmarkLookupSystemAlias-2   	  360746	      3291 ns/op	      80 B/op	       2 allocs/op
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkParseFilenameToCanonicalTags/Simple-2     	    8910	    134606 ns/op	     360 B/op	      13 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Simple-2     	    8326	    136011 ns/op	     352 B/op	      13 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Simple-2     	    8541	    134145 ns/op	     352 B/op	      13 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Complex-2    	    2560	    475256 ns/op	    1894 B/op	      90 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Complex-2    	    2592	    469909 ns/op	    1880 B/op	      90 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Complex-2    	    2500	    473242 ns/op	    1894 B/op	      90 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Scene_release-2         	    6097	    192996 ns/op	     101 B/op	       2 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Scene_release-2         	    6332	    190869 ns/op	     101 B/op	       2 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Scene_release-2         	    5686	    192064 ns/op	      96 B/op	       2 allocs/op
+BenchmarkDetectNumberingPattern/100-2                         	     151	   8030112 ns/op	   22883 B/op	     900 allocs/op
+BenchmarkDetectNumberingPattern/100-2                         	     150	   7997696 ns/op	   22405 B/op	     900 allocs/op
+BenchmarkDetectNumberingPattern/100-2                         	     151	   7965125 ns/op	   22405 B/op	     900 allocs/op
+BenchmarkDetectNumberingPattern/1000-2                        	      14	  81267063 ns/op	  226514 B/op	    8994 allocs/op
+BenchmarkDetectNumberingPattern/1000-2                        	      14	  80325356 ns/op	  226516 B/op	    8994 allocs/op
+BenchmarkDetectNumberingPattern/1000-2                        	      13	  80560297 ns/op	  226716 B/op	    8994 allocs/op
+BenchmarkDetectNumberingPattern/10000-2                       	       2	 869024178 ns/op	 1088272 B/op	   26997 allocs/op
+BenchmarkDetectNumberingPattern/10000-2                       	       2	 862790680 ns/op	 1088116 B/op	   26996 allocs/op
+BenchmarkDetectNumberingPattern/10000-2                       	       2	 872757266 ns/op	 1124344 B/op	   27004 allocs/op
+BenchmarkFilenameParser_ExtractSpecialPatterns-2              	    6619	    193336 ns/op	     843 B/op	      19 allocs/op
+BenchmarkFilenameParser_ExtractSpecialPatterns-2              	    6007	    189308 ns/op	     838 B/op	      19 allocs/op
+BenchmarkFilenameParser_ExtractSpecialPatterns-2              	    6536	    187659 ns/op	     843 B/op	      19 allocs/op
+goos: linux
+goarch: arm
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles
+cpu: ARMv7 Processor rev 0 (v7l)
+BenchmarkResolveTitle_CacheHit/10k-2    	      93	  11910591 ns/op	    3497 B/op	     139 allocs/op
+BenchmarkResolveTitle_CacheHit/10k-2    	     100	  12310100 ns/op	    3464 B/op	     139 allocs/op
+BenchmarkResolveTitle_CacheHit/10k-2    	      91	  12017048 ns/op	    3497 B/op	     139 allocs/op
+BenchmarkResolveTitle_ExactMatch/10k-2  	      57	  23281367 ns/op	   11609 B/op	     256 allocs/op
+BenchmarkResolveTitle_ExactMatch/10k-2  	      57	  21379026 ns/op	   11611 B/op	     256 allocs/op
+BenchmarkResolveTitle_ExactMatch/10k-2  	      52	  23847991 ns/op	   11726 B/op	     256 allocs/op
+BenchmarkResolveTitle_FuzzyFallback/10k-2         	       1	2269245124 ns/op	 6876408 B/op	  209081 allocs/op
+BenchmarkResolveTitle_FuzzyFallback/10k-2         	       1	2270620265 ns/op	 6840408 B/op	  209075 allocs/op
+BenchmarkResolveTitle_FuzzyFallback/10k-2         	       1	2250706323 ns/op	 6876504 B/op	  209083 allocs/op

@@ -114,7 +114,6 @@ func BenchmarkResolveTitle_CacheHit(b *testing.B) {
 		n    int
 	}{
 		{name: "10k", n: 10_000},
-		{name: "50k", n: 50_000},
 	}
 
 	for _, sz := range sizes {
@@ -154,7 +153,6 @@ func BenchmarkResolveTitle_ExactMatch(b *testing.B) {
 		n    int
 	}{
 		{name: "10k", n: 10_000},
-		{name: "50k", n: 50_000},
 	}
 
 	for _, sz := range sizes {
@@ -195,7 +193,6 @@ func BenchmarkResolveTitle_FuzzyFallback(b *testing.B) {
 		n    int
 	}{
 		{name: "10k", n: 10_000},
-		{name: "50k", n: 50_000},
 	}
 
 	for _, sz := range sizes {

@@ -131,8 +131,7 @@ func BenchmarkFlushScanStateMaps(b *testing.B) {
 		n    int
 	}{
 		{"10k", 10_000},
-		{"100k", 100_000},
-		{"500k", 500_000},
+		{"50k", 50_000},
 	}
 
 	for _, sz := range sizes {
@@ -267,7 +266,6 @@ func BenchmarkAddMediaPath_MockDB(b *testing.B) {
 	}{
 		{name: "1k", n: 1_000},
 		{name: "10k", n: 10_000},
-		{name: "100k", n: 100_000},
 	}
 
 	for _, sz := range sizes {
@@ -301,7 +299,6 @@ func BenchmarkAddMediaPath_RealDB(b *testing.B) {
 	}{
 		{name: "1k", n: 1_000},
 		{name: "10k", n: 10_000},
-		{name: "50k", n: 50_000},
 	}
 
 	for _, sz := range sizes {
@@ -347,8 +344,6 @@ func BenchmarkIndexingPipeline_EndToEnd(b *testing.B) {
 	}
 	sizes := []endToEndCase{
 		{name: "10k_1sys", systems: systems[:1], n: 10_000},
-		{name: "50k_5sys", systems: systems[:5], n: 50_000},
-		{name: "100k_10sys", systems: systems, n: 100_000},
 	}
 
 	for _, sz := range sizes {
@@ -397,7 +392,7 @@ func BenchmarkIndexingPipeline_EndToEnd(b *testing.B) {
 }
 
 func BenchmarkGetPathFragments_PeakMemory(b *testing.B) {
-	filenames := buildSyntheticFilenames(500_000)
+	filenames := buildSyntheticFilenames(50_000)
 
 	// Force GC and get baseline before allocating results
 	runtime.GC()

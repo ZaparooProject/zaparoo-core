@@ -138,12 +138,12 @@ tasks:
   bench-baseline:
     desc: Generate benchmark baseline (commit the output)
     cmds:
-      - bash -o pipefail -c 'go test -run="^$$" -bench=. -benchmem -count=6 -timeout=45m ./... 2>&1 | grep -E "^(Benchmark|goos:|goarch:|pkg:|cpu:)" | tee testdata/benchmarks/baseline.txt'
+      - bash -o pipefail -c 'go test -run="^$$" -bench=. -benchmem -count=6 -timeout=45m ./... | grep -E "^(Benchmark|goos:|goarch:|pkg:|cpu:)" | tee testdata/benchmarks/baseline.txt'
 
   bench-compare:
     desc: Compare current benchmarks against baseline (requires benchstat, install with go install golang.org/x/perf/cmd/benchstat@latest)
     cmds:
-      - bash -o pipefail -c 'go test -run="^$$" -bench=. -benchmem -count=6 -timeout=45m ./... 2>&1 | grep -E "^(Benchmark|goos:|goarch:|pkg:|cpu:)" > /tmp/zaparoo-bench-current.txt'
+      - bash -o pipefail -c 'go test -run="^$$" -bench=. -benchmem -count=6 -timeout=45m ./... | grep -E "^(Benchmark|goos:|goarch:|pkg:|cpu:)" > /tmp/zaparoo-bench-current.txt'
       - benchstat testdata/benchmarks/baseline.txt /tmp/zaparoo-bench-current.txt
 
   get-logs:
