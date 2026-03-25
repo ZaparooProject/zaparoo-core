@@ -51,6 +51,7 @@ type PathFragmentParams struct {
 	Config              *config.Instance
 	Path                string
 	SystemID            string
+	MediaType           slugs.MediaType // Pre-resolved media type; skips systemdefs lookup if set
 	NoExt               bool
 	StripLeadingNumbers bool
 }
@@ -93,6 +94,7 @@ func AddMediaPath(
 	noExt bool,
 	stripLeadingNumbers bool,
 	cfg *config.Instance,
+	mediaType slugs.MediaType,
 ) (titleIndex, mediaIndex int, err error) {
 	pf := GetPathFragments(PathFragmentParams{
 		Config:              cfg,
@@ -100,6 +102,7 @@ func AddMediaPath(
 		NoExt:               noExt,
 		StripLeadingNumbers: stripLeadingNumbers,
 		SystemID:            systemID,
+		MediaType:           mediaType,
 	})
 
 	systemIndex := 0
@@ -124,12 +127,6 @@ func AddMediaPath(
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
-
-		// Look up mediaType for consistent slugification
-		mediaType := slugs.MediaTypeGame // Default
-		if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
-			mediaType = system.GetMediaType()
-		}
 
 		// Generate slug metadata from pre-computed tokens (avoids redundant slugification)
 		metadata := mediadb.GenerateSlugMetadataFromTokens(mediaType, pf.Title, pf.Slug, pf.SlugTokens)
@@ -838,11 +835,14 @@ func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 
 	f.Title = tags.ParseTitleFromFilename(f.FileName, params.StripLeadingNumbers)
 
-	// Look up the media type for this system to enable media-type-aware slugification
-	mediaType := slugs.MediaTypeGame // Default to Game
-	if params.SystemID != "" {
-		if system, err := systemdefs.GetSystem(params.SystemID); err == nil {
-			mediaType = system.GetMediaType()
+	// Use pre-resolved media type if provided, otherwise look up from system ID
+	mediaType := params.MediaType
+	if mediaType == "" {
+		mediaType = slugs.MediaTypeGame // Default to Game
+		if params.SystemID != "" {
+			if system, err := systemdefs.GetSystem(params.SystemID); err == nil {
+				mediaType = system.GetMediaType()
+			}
 		}
 	}
 

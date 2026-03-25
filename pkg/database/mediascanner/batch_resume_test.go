@@ -113,7 +113,7 @@ func TestBatchModeResumeIndexing(t *testing.T) {
 			entries := batch.Entries[systemID]
 			for _, entry := range entries {
 				titleIndex, mediaIndex, addErr := AddMediaPath(
-					mediaDB, scanState, systemID, entry.Path, false, false, nil,
+					mediaDB, scanState, systemID, entry.Path, false, false, nil, "",
 				)
 				require.NoError(t, addErr)
 				assert.Positive(t, titleIndex, "Title index should be > 0")
@@ -170,7 +170,7 @@ func TestBatchModeResumeIndexing(t *testing.T) {
 		newEntries := testdata.CreateReproducibleBatch([]string{"Genesis"}, 2)
 		for _, entry := range newEntries.Entries["Genesis"] {
 			titleIndex, mediaIndex, addErr := AddMediaPath(
-				mediaDB, resumeState, "Genesis", entry.Path, false, false, nil,
+				mediaDB, resumeState, "Genesis", entry.Path, false, false, nil, "",
 			)
 			require.NoError(t, addErr)
 
@@ -233,7 +233,7 @@ func TestBatchModeResumeIndexing(t *testing.T) {
 		// This should NOT create duplicates thanks to scanState maps
 		nesEntries := batch.Entries["NES"]
 		for _, entry := range nesEntries {
-			_, _, addErr := AddMediaPath(mediaDB, reindexState, "NES", entry.Path, false, false, nil)
+			_, _, addErr := AddMediaPath(mediaDB, reindexState, "NES", entry.Path, false, false, nil, "")
 			require.NoError(t, addErr, "Re-indexing should not fail")
 		}
 
@@ -325,7 +325,7 @@ func TestBatchModeSelectiveIndexing(t *testing.T) {
 		for _, systemID := range testSystems {
 			entries := batch.Entries[systemID]
 			for _, entry := range entries {
-				_, _, addErr := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false, false, nil)
+				_, _, addErr := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false, false, nil, "")
 				require.NoError(t, addErr)
 			}
 		}
@@ -408,7 +408,7 @@ func TestBatchModeSelectiveIndexing(t *testing.T) {
 		nesEntries := batch.Entries["NES"]
 		for _, entry := range nesEntries {
 			titleIndex, mediaIndex, addErr := AddMediaPath(
-				mediaDB, selectiveState, "NES", entry.Path, false, false, nil,
+				mediaDB, selectiveState, "NES", entry.Path, false, false, nil, "",
 			)
 			require.NoError(t, addErr)
 
@@ -519,10 +519,10 @@ func TestBatchMode_DuplicateDetection(t *testing.T) {
 
 		// Add same file twice
 		testPath := "/roms/nes/game1.nes"
-		title1, media1, addErr1 := AddMediaPath(mediaDB, scanState, "NES", testPath, false, false, nil)
+		title1, media1, addErr1 := AddMediaPath(mediaDB, scanState, "NES", testPath, false, false, nil, "")
 		require.NoError(t, addErr1)
 
-		title2, media2, addErr2 := AddMediaPath(mediaDB, scanState, "NES", testPath, false, false, nil)
+		title2, media2, addErr2 := AddMediaPath(mediaDB, scanState, "NES", testPath, false, false, nil, "")
 		require.NoError(t, addErr2)
 
 		// Second attempt should return same IDs (no duplicate insert)
@@ -570,7 +570,7 @@ func TestBatchMode_DuplicateDetection(t *testing.T) {
 
 		// Try to add the same file again (it's in the database and scanState)
 		testPath := "/roms/nes/game1.nes"
-		_, media, err := AddMediaPath(mediaDB, scanState, "NES", testPath, false, false, nil)
+		_, media, err := AddMediaPath(mediaDB, scanState, "NES", testPath, false, false, nil, "")
 		require.NoError(t, err)
 
 		// Should not create a new entry

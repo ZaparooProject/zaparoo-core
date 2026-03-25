@@ -200,6 +200,8 @@ func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
 ) (*StartResult, error) {
+	helpers.ConfigureMemoryLimit()
+
 	log.Info().Msgf("version: %s", config.AppVersion)
 
 	// Generate boot UUID for this session (for timestamp healing on MiSTer)

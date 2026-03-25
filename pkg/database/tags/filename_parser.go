@@ -20,6 +20,7 @@
 package tags
 
 import (
+	"bytes"
 	"regexp"
 	"strings"
 
@@ -1004,7 +1005,56 @@ func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
 //   - "The.Dark.Knight.2008.1080p.BluRay.x264-GROUP" → "The.Dark.Knight.2008"
 //   - "Movie.Title.2010.WEB-DL.DD5.1.H264" → "Movie.Title.2010"
 //   - "Show.S01E01.PROPER.720p.HDTV" → "Show.S01E01"
+//
+// sceneMarkerBytes contains byte sequences that indicate scene release
+// artifacts may be present. If none are found, stripSceneArtifacts can skip
+// 7 regex evaluations. These are chosen to catch all patterns matched by the
+// scene regexes while being absent from typical ROM filenames.
+var sceneMarkerBytes = [][]byte{
+	[]byte("264"), []byte("265"), // x264, h264, x265, h265
+	[]byte("480"), []byte("720"), []byte("108"), []byte("216"), // resolutions
+	[]byte("4K"), []byte("4k"), []byte("8K"), []byte("8k"), []byte("UHD"), []byte("uhd"),
+	[]byte("BluRay"), []byte("bluray"), []byte("WEBDL"), []byte("webdl"),
+	[]byte("WEB-DL"), []byte("web-dl"), []byte("WEBRip"), []byte("webrip"),
+	[]byte("BDRip"), []byte("bdrip"), []byte("DVDRip"), []byte("dvdrip"),
+	[]byte("HDTV"), []byte("hdtv"),
+	[]byte("HEVC"), []byte("hevc"), []byte("AVC"), []byte("avc"),
+	[]byte("XviD"), []byte("xvid"), []byte("AAC"), []byte("aac"),
+	[]byte("DTS"), []byte("dts"), []byte("FLAC"), []byte("flac"),
+	[]byte("HDR"), []byte("hdr"),
+	[]byte("PROPER"), []byte("proper"), []byte("REPACK"), []byte("repack"),
+}
+
+// hasSceneMarkers does a cheap byte scan for substrings that indicate scene
+// release artifacts may be present. Returns false for typical ROM filenames,
+// allowing stripSceneArtifacts to skip 7 regex evaluations.
+func hasSceneMarkers(s string) bool {
+	sb := []byte(s)
+	for _, marker := range sceneMarkerBytes {
+		if bytes.Contains(sb, marker) {
+			return true
+		}
+	}
+	// Check for release group suffix: -GROUP at end of string
+	if n := len(s); n > 3 && s[n-1] >= 'A' && s[n-1] <= 'Z' {
+		for i := n - 2; i >= 0; i-- {
+			if s[i] == '-' {
+				return true
+			}
+			if (s[i] < 'A' || s[i] > 'Z') && (s[i] < '0' || s[i] > '9') {
+				break
+			}
+		}
+	}
+	return false
+}
+
 func stripSceneArtifacts(input string) string {
+	// Fast path: skip 7 regex evaluations if no scene markers present
+	if !hasSceneMarkers(input) {
+		return input
+	}
+
 	result := input
 
 	// Remove resolution markers

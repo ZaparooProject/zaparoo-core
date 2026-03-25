@@ -248,15 +248,6 @@ func TestRunBackgroundOptimization_Success(t *testing.T) {
 	mock.ExpectExec("(?i)analyze;?").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Mock setting step to vacuum
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "vacuum").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Mock Vacuum
-	mock.ExpectExec("(?i)vacuum;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
 	// Mock setting status to completed
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").
@@ -351,13 +342,6 @@ func TestConcurrentOptimization(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("(?i)analyze;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "vacuum").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)vacuum;?").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -463,13 +447,6 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
 		mock.ExpectExec("(?i)analyze;?").
-			WillReturnResult(sqlmock.NewResult(1, 1))
-
-		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-			WithArgs(DBConfigOptimizationStep, "vacuum").
-			WillReturnResult(sqlmock.NewResult(1, 1))
-
-		mock.ExpectExec("(?i)vacuum;?").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -589,13 +566,6 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
 		mock.ExpectExec("(?i)analyze;?").
-			WillReturnResult(sqlmock.NewResult(1, 1))
-
-		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-			WithArgs(DBConfigOptimizationStep, "vacuum").
-			WillReturnResult(sqlmock.NewResult(1, 1))
-
-		mock.ExpectExec("(?i)vacuum;?").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").

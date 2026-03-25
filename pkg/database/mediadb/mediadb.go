@@ -63,12 +63,9 @@ const (
 const defaultSlugSearchLimit = 50
 
 // getSqliteConnParams constructs the SQLite connection string.
-// cache_size=-2048 sets a 2MB page cache (negative = KiB). Reduced from 8MB
-// to lower idle RSS on memory-constrained devices (MiSTer has 492MB total).
-// Indexing performance is unaffected because writes are batched in transactions.
 func getSqliteConnParams() string {
 	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
-		"&_cache_size=-2048&_temp_store=FILE&_mmap_size=0" +
+		"&_cache_size=-8192&_temp_store=FILE&_mmap_size=0" +
 		"&_page_size=8192&_foreign_keys=ON"
 }
 
@@ -1923,7 +1920,11 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 
 	steps := []optimizationStep{
 		{name: "analyze", fn: db.Analyze, maxRetries: 2, retryDelay: db.analyzeRetryDelay},
-		{name: "vacuum", fn: db.Vacuum, maxRetries: 3, retryDelay: db.vacuumRetryDelay},
+		// NOTE: VACUUM is intentionally omitted. It takes an exclusive lock
+		// for the entire duration, blocking all reads (including card scans)
+		// on a single-connection SQLite setup. ANALYZE alone is sufficient
+		// for query planner performance. SQLite reuses free pages on the
+		// next INSERT, so disk reclamation is not needed.
 	}
 
 	// Execute each step with retry logic

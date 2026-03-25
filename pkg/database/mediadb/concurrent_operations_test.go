@@ -62,13 +62,6 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "vacuum").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)vacuum;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -298,13 +291,6 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "vacuum").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)vacuum;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -460,13 +446,6 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("(?i)analyze;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "vacuum").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)vacuum;?").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").

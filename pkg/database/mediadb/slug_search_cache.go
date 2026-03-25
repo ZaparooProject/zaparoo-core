@@ -24,6 +24,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
@@ -152,6 +153,14 @@ func buildSlugSearchCache(ctx context.Context, db *sql.DB) (*SlugSearchCache, er
 	//nolint:gosec // Safe: slug data won't exceed 4GB
 	cache.secSlugOffsets = append(cache.secSlugOffsets, uint32(len(cache.secSlugData)))
 	cache.entryCount = count
+
+	// Trim backing arrays to exact size to release over-allocated capacity.
+	cache.slugData = slices.Clip(cache.slugData)
+	cache.slugOffsets = slices.Clip(cache.slugOffsets)
+	cache.secSlugData = slices.Clip(cache.secSlugData)
+	cache.secSlugOffsets = slices.Clip(cache.secSlugOffsets)
+	cache.titleDBIDs = slices.Clip(cache.titleDBIDs)
+	cache.systemDBIDs = slices.Clip(cache.systemDBIDs)
 
 	return cache, nil
 }

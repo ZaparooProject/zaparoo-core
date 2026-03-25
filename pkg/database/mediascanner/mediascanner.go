@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -824,6 +825,12 @@ func NewNamesIndex(
 
 		systemID := k
 
+		// Resolve media type once per system to avoid repeated map lookups
+		mediaType := slugs.MediaTypeGame
+		if system, sysErr := systemdefs.GetSystem(systemID); sysErr == nil && system != nil {
+			mediaType = system.GetMediaType()
+		}
+
 		if completedSystems[systemID] {
 			log.Debug().Msgf("skipping already indexed system: %s", systemID)
 			status.Step++
@@ -956,7 +963,7 @@ func NewNamesIndex(
 			dir := filepath.Dir(file.Path)
 			shouldStrip := stripPolicyByDir[dir]
 
-			_, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, shouldStrip, cfg)
+			_, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, shouldStrip, cfg, mediaType)
 			if addErr != nil {
 				var sqliteErr sqlite3.Error
 				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
@@ -1084,6 +1091,10 @@ func NewNamesIndex(
 	for i := range launchers {
 		l := &launchers[i]
 		systemID := l.SystemID
+		mediaType := slugs.MediaTypeGame
+		if system, sysErr := systemdefs.GetSystem(systemID); sysErr == nil && system != nil {
+			mediaType = system.GetMediaType()
+		}
 		log.Debug().Msgf("launcher %s for system %s: scanner=%v scanned=%v",
 			l.ID, systemID, l.Scanner != nil, scannedLaunchers[l.ID])
 
@@ -1130,7 +1141,9 @@ func NewNamesIndex(
 					}
 
 					// Custom scanner files: don't apply number stripping heuristic (false)
-					_, _, addErr := AddMediaPath(db, &scanState, systemID, result.Path, result.NoExt, false, cfg)
+					_, _, addErr := AddMediaPath(
+						db, &scanState, systemID, result.Path, result.NoExt, false, cfg, mediaType,
+					)
 					if addErr != nil {
 						var sqliteErr sqlite3.Error
 						if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
@@ -1194,6 +1207,10 @@ func NewNamesIndex(
 		l := &anyScanners[i]
 		for _, s := range systems {
 			systemID := s.ID
+			mediaType := slugs.MediaTypeGame
+			if system, sysErr := systemdefs.GetSystem(systemID); sysErr == nil && system != nil {
+				mediaType = system.GetMediaType()
+			}
 			if completedSystems[systemID] {
 				log.Debug().Msgf("skipping 'any' scanner for already completed system: %s", systemID)
 				continue // Skip if system already fully processed
@@ -1240,7 +1257,7 @@ func NewNamesIndex(
 
 					// 'Any' scanner files: don't apply number stripping heuristic (false)
 					_, _, addErr := AddMediaPath(
-						db, &scanState, systemID, scanResult.Path, scanResult.NoExt, false, cfg,
+						db, &scanState, systemID, scanResult.Path, scanResult.NoExt, false, cfg, mediaType,
 					)
 					if addErr != nil {
 						var sqliteErr sqlite3.Error
