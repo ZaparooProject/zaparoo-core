@@ -25,6 +25,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -39,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
@@ -273,6 +276,10 @@ func GenerateMediaDB(
 	db.MediaDB.TrackBackgroundOperation()
 	go func() {
 		defer db.MediaDB.BackgroundOperationDone()
+		// Suspend memory limit during indexing — speed matters more than RSS
+		helpers.SuspendMemoryLimit()
+		defer helpers.RestoreMemoryLimit()
+
 		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			var desc string
 			switch {
@@ -347,11 +354,15 @@ func GenerateMediaDB(
 			TotalFiles: &total,
 		})
 
-		if cacheErr := db.MediaDB.RebuildSlugSearchCache(); cacheErr != nil {
-			log.Warn().Err(cacheErr).Msg("failed to rebuild slug search cache after indexing")
-		}
+		// Release indexing memory. ScanState maps are already nil'd but GC
+		// hasn't collected them yet. Force collection and return pages to
+		// the OS so idle RSS drops from peak.
+		runtime.GC()
+		debug.FreeOSMemory()
 
 		// Start background optimization with notification callback
+		// Index rebuilds, cache population, ANALYZE, and WAL checkpoint
+		// run as background steps so launches/searches aren't blocked.
 		// Track the optimization operation BEFORE starting the goroutine to prevent a race
 		// where Close() → Wait() could return between this goroutine's Done() and
 		// RunBackgroundOptimization's internal Add(). The wrapper ensures Done() is called

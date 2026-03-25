@@ -279,7 +279,7 @@ func BenchmarkAddMediaPath_MockDB(b *testing.B) {
 				ss := newScanState()
 				seedMockScanState(ss)
 				for i, fn := range filenames {
-					_, _, err := AddMediaPath(mockDB, ss, "nes", fn, false, false, nil)
+					_, _, err := AddMediaPath(mockDB, ss, "nes", fn, false, false, nil, "")
 					if i == 0 && err != nil {
 						b.Fatal(err)
 					}
@@ -317,7 +317,7 @@ func BenchmarkAddMediaPath_RealDB(b *testing.B) {
 
 				// Measured: insert all files with production commit pattern
 				for i, fn := range filenames {
-					_, _, err := AddMediaPath(db, ss, "nes", fn, false, false, nil)
+					_, _, err := AddMediaPath(db, ss, "nes", fn, false, false, nil, "")
 					if i == 0 && err != nil {
 						b.Fatal(err)
 					}
@@ -367,7 +367,7 @@ func BenchmarkIndexingPipeline_EndToEnd(b *testing.B) {
 							batchStarted = true
 						}
 
-						_, _, err := AddMediaPath(db, ss, sys, fn, false, false, nil)
+						_, _, err := AddMediaPath(db, ss, sys, fn, false, false, nil, "")
 						if filesInBatch == 0 && err != nil {
 							b.Fatal(err)
 						}

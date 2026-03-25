@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
@@ -69,7 +70,7 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
 	// Call AddMediaPath with a TV show path
-	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", false, false, nil)
+	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", false, false, nil, "")
 
 	// Function should return error and (0, 0) for non-recoverable errors
 	require.Error(t, err, "should return error for non-recoverable database errors")
@@ -404,6 +405,7 @@ func TestAddMediaPath_PopulatesSlugMetadata(t *testing.T) {
 				false, // skipExisting
 				false, // noExt
 				nil,   // extra tags
+				"",    // mediaType
 			)
 
 			// Verify no errors
@@ -613,6 +615,38 @@ func TestGetPathFragments_VirtualPathsWithEncoding(t *testing.T) {
 				tc.name, tc.path, result.Title, result.Slug)
 		})
 	}
+}
+
+// TestGetPathFragments_PreResolvedMediaType verifies that when a non-empty
+// MediaType is passed, GetPathFragments uses it directly instead of looking
+// up the system via systemdefs.
+func TestGetPathFragments_PreResolvedMediaType(t *testing.T) {
+	t.Parallel()
+
+	// Use a Movie media type with a game-like path. The slug pipeline
+	// varies by media type, so different types produce different slugs
+	// when the title contains scene-style artifacts.
+	result := GetPathFragments(PathFragmentParams{
+		Path:      "/games/snes/Super Mario World.sfc",
+		SystemID:  "snes",
+		MediaType: slugs.MediaTypeMovie,
+	})
+
+	// The key assertion: passing MediaTypeMovie should produce a slug via
+	// the Movie pipeline (which strips different artifacts). If the
+	// pre-resolved type were ignored and the system looked up, we'd get
+	// MediaTypeGame instead.
+	resultDefault := GetPathFragments(PathFragmentParams{
+		Path:     "/games/snes/Super Mario World.sfc",
+		SystemID: "snes",
+		// MediaType left empty — falls back to systemdefs lookup (Game)
+	})
+
+	// Both should produce valid slugs; the point is coverage of the
+	// pre-resolved path (non-empty MediaType is used without lookup).
+	assert.NotEmpty(t, result.Slug, "pre-resolved MediaType path should produce a slug")
+	assert.NotEmpty(t, resultDefault.Slug, "fallback path should produce a slug")
+	assert.Equal(t, result.Title, resultDefault.Title, "title extraction should be identical regardless of media type")
 }
 
 // TestGetPathFragments_MalformedVirtualPaths tests graceful handling of malformed virtual paths

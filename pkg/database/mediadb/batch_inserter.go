@@ -31,16 +31,18 @@ import (
 
 // BatchInserter manages batched multi-row inserts for a specific table
 type BatchInserter struct {
-	ctx          context.Context
-	tx           *sql.Tx
-	tableName    string
-	columns      []string
-	buffer       []any
-	dependencies []*BatchInserter
-	batchSize    int
-	columnCount  int
-	currentCount int
-	orIgnore     bool
+	ctx            context.Context
+	tx             *sql.Tx
+	cachedStmt     *sql.Stmt
+	tableName      string
+	columns        []string
+	buffer         []any
+	dependencies   []*BatchInserter
+	batchSize      int
+	columnCount    int
+	currentCount   int
+	cachedRowCount int
+	orIgnore       bool
 }
 
 // NewBatchInserter creates a batch inserter for the given table
@@ -139,11 +141,21 @@ func (b *BatchInserter) Flush() error {
 		}
 	}
 
-	// Generate statement for current batch size
+	// Reuse cached statement for full-batch flushes (the common case)
+	if b.currentCount == b.cachedRowCount && b.cachedStmt != nil {
+		_, err := b.cachedStmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
+		if err != nil {
+			return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
+		}
+		b.buffer = b.buffer[:0]
+		b.currentCount = 0
+		return nil
+	}
+
+	// Generate and prepare statement for this batch size
 	sqlStmt := b.generateMultiRowInsertSQL(b.currentCount)
 	stmt, err := b.tx.PrepareContext(b.ctx, sqlStmt)
 	if err != nil {
-		// Check if error is due to exceeding SQLite's SQLITE_MAX_VARIABLE_NUMBER limit
 		if strings.Contains(err.Error(), "too many SQL variables") {
 			log.Debug().
 				Str("table", b.tableName).
@@ -154,20 +166,24 @@ func (b *BatchInserter) Flush() error {
 		}
 		return fmt.Errorf("failed to prepare batch insert: %w", err)
 	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close batch insert statement")
-		}
-	}()
 
-	// Execute batch insert
+	// Cache the statement if this is a full batch
+	if b.currentCount == b.batchSize {
+		b.cachedStmt = stmt
+		b.cachedRowCount = b.currentCount
+	} else {
+		defer func() {
+			if closeErr := stmt.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close batch insert statement")
+			}
+		}()
+	}
+
 	_, err = stmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
 	if err != nil {
-		// Fail fast - batch insert errors indicate data integrity issues that should be surfaced immediately
 		return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
 	}
 
-	// Reset buffer
 	b.buffer = b.buffer[:0]
 	b.currentCount = 0
 	return nil
@@ -284,9 +300,16 @@ func (b *BatchInserter) flushSingleRow() error {
 	return nil
 }
 
-// Close flushes remaining items and closes the statement
+// Close flushes remaining items and closes cached statements
 func (b *BatchInserter) Close() error {
-	return b.Flush()
+	err := b.Flush()
+	if b.cachedStmt != nil {
+		if closeErr := b.cachedStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Str("table", b.tableName).Msg("failed to close cached batch statement")
+		}
+		b.cachedStmt = nil
+	}
+	return err
 }
 
 // generateMultiRowInsertSQL creates a multi-row INSERT statement

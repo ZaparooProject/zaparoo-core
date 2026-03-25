@@ -38,7 +38,8 @@ import (
 
 var ErrNullSQL = errors.New("UserDB is not connected")
 
-const sqliteConnParams = "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000"
+const sqliteConnParams = "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000" +
+	"&_cache_size=-512&_mmap_size=0"
 
 type UserDB struct {
 	sql *sql.DB

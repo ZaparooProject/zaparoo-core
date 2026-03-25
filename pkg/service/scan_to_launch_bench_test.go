@@ -83,7 +83,7 @@ func setupPipelineBench(b *testing.B, n int) *pipelineBenchEnv {
 		b.Fatal(err)
 	}
 	for i, fn := range filenames {
-		_, _, err := mediascanner.AddMediaPath(mediaDB, ss, "NES", fn, false, false, nil)
+		_, _, err := mediascanner.AddMediaPath(mediaDB, ss, "NES", fn, false, false, nil, "")
 		if i == 0 && err != nil {
 			b.Fatal(err)
 		}

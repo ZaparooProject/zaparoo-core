@@ -1120,6 +1120,26 @@ func (m *MockMediaDBI) BackgroundOperationDone() {
 	m.Called()
 }
 
+func (*MockMediaDBI) SetIndexingCacheSize(_ bool) {
+	// No-op for mock — cache_size is a SQLite-specific optimization
+}
+
+func (m *MockMediaDBI) DropSecondaryIndexes() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock drop indexes failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) CreateSecondaryIndexes() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock create indexes failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) SetIndexingStatus(status string) error {
 	args := m.Called(status)
 	if err := args.Error(0); err != nil {

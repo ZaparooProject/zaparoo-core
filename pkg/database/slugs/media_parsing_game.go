@@ -47,7 +47,10 @@ func ParseGame(title string) string {
 
 	// Normalize width first so fullwidth separators are detected by SplitAndStripArticles
 	// This converts "：" (fullwidth colon) to ":" (ASCII colon)
-	s = NormalizeWidth(s)
+	// Skip for ASCII-only strings (no fullwidth characters possible)
+	if !isASCII(s) {
+		s = NormalizeWidth(s)
+	}
 	s = strings.TrimSpace(s)
 
 	// MUST happen first: Split titles and strip articles
@@ -88,11 +91,9 @@ func ParseGame(title string) string {
 	s = strings.ReplaceAll(s, ".", " ")
 	s = strings.TrimSpace(s)
 
-	// Expand common abbreviations
-	s = ExpandAbbreviations(s)
-
-	// Expand number words
-	s = ExpandNumberWords(s)
+	// Expand abbreviations and number words in a single pass to avoid
+	// splitting/joining the string twice
+	s = expandAbbreviationsAndNumbers(s)
 
 	// Normalize ordinals
 	s = NormalizeOrdinals(s)

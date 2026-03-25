@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -359,6 +360,8 @@ func GetFiles(
 		Follow: true,
 	}
 
+	matcher := helpers.NewLauncherMatcher(cfg, platform)
+
 	log.Debug().Str("system", systemID).Str("path", path).Msg("starting directory walk")
 	err = fastwalk.Walk(conf, path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -402,12 +405,12 @@ func GetFiles(
 			mu.Lock()
 			for i := range zipFiles {
 				abs := filepath.Join(p, zipFiles[i])
-				if helpers.MatchSystemFile(cfg, platform, system.ID, abs) {
+				if matcher.MatchSystemFile(system.ID, abs) {
 					results = append(results, abs)
 				}
 			}
 			mu.Unlock()
-		} else if helpers.MatchSystemFile(cfg, platform, system.ID, p) {
+		} else if matcher.MatchSystemFile(system.ID, p) {
 			mu.Lock()
 			results = append(results, p)
 			mu.Unlock()
@@ -503,6 +506,10 @@ func NewNamesIndex(
 ) (int, error) {
 	db := fdb.MediaDB
 	indexStartTime := time.Now()
+
+	// Temporarily increase SQLite cache to 32MB for bulk indexing
+	db.SetIndexingCacheSize(true)
+	defer db.SetIndexingCacheSize(false)
 
 	log.Info().
 		Int("systemCount", len(systems)).
@@ -667,6 +674,13 @@ func NewNamesIndex(
 			if err != nil {
 				return 0, fmt.Errorf("failed to truncate database: %w", err)
 			}
+
+			// Drop secondary indexes for faster bulk inserts — they'll be
+			// rebuilt during background optimization after indexing completes.
+			if dropErr := db.DropSecondaryIndexes(); dropErr != nil {
+				log.Warn().Err(dropErr).Msg("failed to drop secondary indexes, continuing with indexes in place")
+			}
+
 			log.Info().Msg("database truncation completed")
 		} else {
 			// Selective indexing
@@ -824,6 +838,12 @@ func NewNamesIndex(
 
 		systemID := k
 
+		// Resolve media type once per system to avoid repeated map lookups
+		mediaType := slugs.MediaTypeGame
+		if system, sysErr := systemdefs.GetSystem(systemID); sysErr == nil && system != nil {
+			mediaType = system.GetMediaType()
+		}
+
 		if completedSystems[systemID] {
 			log.Debug().Msgf("skipping already indexed system: %s", systemID)
 			status.Step++
@@ -956,7 +976,7 @@ func NewNamesIndex(
 			dir := filepath.Dir(file.Path)
 			shouldStrip := stripPolicyByDir[dir]
 
-			_, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, shouldStrip, cfg)
+			_, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, shouldStrip, cfg, mediaType)
 			if addErr != nil {
 				var sqliteErr sqlite3.Error
 				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
@@ -1084,6 +1104,10 @@ func NewNamesIndex(
 	for i := range launchers {
 		l := &launchers[i]
 		systemID := l.SystemID
+		mediaType := slugs.MediaTypeGame
+		if system, sysErr := systemdefs.GetSystem(systemID); sysErr == nil && system != nil {
+			mediaType = system.GetMediaType()
+		}
 		log.Debug().Msgf("launcher %s for system %s: scanner=%v scanned=%v",
 			l.ID, systemID, l.Scanner != nil, scannedLaunchers[l.ID])
 
@@ -1130,7 +1154,9 @@ func NewNamesIndex(
 					}
 
 					// Custom scanner files: don't apply number stripping heuristic (false)
-					_, _, addErr := AddMediaPath(db, &scanState, systemID, result.Path, result.NoExt, false, cfg)
+					_, _, addErr := AddMediaPath(
+						db, &scanState, systemID, result.Path, result.NoExt, false, cfg, mediaType,
+					)
 					if addErr != nil {
 						var sqliteErr sqlite3.Error
 						if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
@@ -1194,6 +1220,10 @@ func NewNamesIndex(
 		l := &anyScanners[i]
 		for _, s := range systems {
 			systemID := s.ID
+			mediaType := slugs.MediaTypeGame
+			if system, sysErr := systemdefs.GetSystem(systemID); sysErr == nil && system != nil {
+				mediaType = system.GetMediaType()
+			}
 			if completedSystems[systemID] {
 				log.Debug().Msgf("skipping 'any' scanner for already completed system: %s", systemID)
 				continue // Skip if system already fully processed
@@ -1240,7 +1270,7 @@ func NewNamesIndex(
 
 					// 'Any' scanner files: don't apply number stripping heuristic (false)
 					_, _, addErr := AddMediaPath(
-						db, &scanState, systemID, scanResult.Path, scanResult.NoExt, false, cfg,
+						db, &scanState, systemID, scanResult.Path, scanResult.NoExt, false, cfg, mediaType,
 					)
 					if addErr != nil {
 						var sqliteErr sqlite3.Error
@@ -1304,7 +1334,15 @@ func NewNamesIndex(
 	status.SystemID = ""
 	update(status)
 
-	scanState.TagIDs = make(map[string]int)
+	// Nil out all ScanState maps to release backing memory. Go maps retain
+	// their allocated bucket array even after all keys are deleted, so the
+	// only way to reclaim that memory is to drop all references and let GC
+	// collect the backing arrays. With 250k titles this can be 20-40MB.
+	scanState.SystemIDs = nil
+	scanState.TitleIDs = nil
+	scanState.MediaIDs = nil
+	scanState.TagTypeIDs = nil
+	scanState.TagIDs = nil
 
 	// Phase 1: Complete data operations (foreground) - commit all data
 	// Note: We may not have an active transaction here due to batching
@@ -1313,6 +1351,21 @@ func NewNamesIndex(
 		if err != nil {
 			return 0, fmt.Errorf("failed to commit final transaction: %w", err)
 		}
+	}
+
+	// Rebuild all secondary indexes before marking indexing as complete.
+	// This ensures the database is fully searchable when indexing finishes.
+	if idxErr := db.CreateSecondaryIndexes(); idxErr != nil {
+		log.Error().Err(idxErr).Msg("failed to create secondary indexes")
+	}
+
+	// Populate caches before marking complete. These must run synchronously
+	// so searches return correct results the moment indexing finishes.
+	if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
+	}
+	if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
 	}
 
 	// Mark database as complete and ready for use
@@ -1337,26 +1390,9 @@ func NewNamesIndex(
 		log.Error().Err(cacheErr).Msg("failed to invalidate media count cache after indexing")
 	}
 
-	// Populate system tags cache for fast tag lookups
-	log.Info().Msg("populating system tags cache after indexing completion")
-	if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
-		log.Error().Err(cacheErr).Msg("failed to populate system tags cache after indexing")
-	} else {
-		log.Info().Msg("successfully populated system tags cache")
-	}
-
-	// Force WAL checkpoint to ensure all pending writes are flushed to disk
-	// This prevents stale locks from persisting if the process is interrupted
-	log.Info().Msg("forcing WAL checkpoint after indexing completion")
-	if sqlDB := db.UnsafeGetSQLDb(); sqlDB != nil {
-		if _, walErr := sqlDB.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);"); walErr != nil {
-			log.Warn().Err(walErr).Msg("failed to checkpoint WAL after indexing")
-		} else {
-			log.Info().Msg("WAL checkpoint completed successfully")
-		}
-	}
-
-	// Mark optimization as pending
+	// Mark optimization as pending — background optimization will handle
+	// index rebuilds, cache population, and WAL checkpoint without blocking
+	// game launches or search queries.
 	err = db.SetOptimizationStatus("pending")
 	if err != nil {
 		err = fmt.Errorf("failed to set optimization status to pending: %w", err)

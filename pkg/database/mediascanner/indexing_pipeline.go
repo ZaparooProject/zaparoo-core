@@ -51,6 +51,7 @@ type PathFragmentParams struct {
 	Config              *config.Instance
 	Path                string
 	SystemID            string
+	MediaType           slugs.MediaType // Pre-resolved media type; skips systemdefs lookup if set
 	NoExt               bool
 	StripLeadingNumbers bool
 }
@@ -93,6 +94,7 @@ func AddMediaPath(
 	noExt bool,
 	stripLeadingNumbers bool,
 	cfg *config.Instance,
+	mediaType slugs.MediaType,
 ) (titleIndex, mediaIndex int, err error) {
 	pf := GetPathFragments(PathFragmentParams{
 		Config:              cfg,
@@ -100,6 +102,7 @@ func AddMediaPath(
 		NoExt:               noExt,
 		StripLeadingNumbers: stripLeadingNumbers,
 		SystemID:            systemID,
+		MediaType:           mediaType,
 	})
 
 	systemIndex := 0
@@ -125,14 +128,8 @@ func AddMediaPath(
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
 
-		// Look up mediaType for consistent slugification
-		mediaType := slugs.MediaTypeGame // Default
-		if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
-			mediaType = system.GetMediaType()
-		}
-
-		// Generate slug metadata for fuzzy matching prefilter
-		metadata := mediadb.GenerateSlugWithMetadata(mediaType, pf.Title)
+		// Generate slug metadata from pre-computed tokens (avoids redundant slugification)
+		metadata := mediadb.GenerateSlugMetadataFromTokens(mediaType, pf.Title, pf.Slug, pf.SlugTokens)
 
 		_, err := db.InsertMediaTitle(&database.MediaTitle{
 			DBID:          int64(titleIndex),
@@ -290,12 +287,13 @@ func AddMediaPath(
 }
 
 type MediaPathFragments struct {
-	Path     string
-	FileName string
-	Title    string
-	Slug     string
-	Ext      string
-	Tags     []string
+	Path       string
+	FileName   string
+	Title      string
+	Slug       string
+	SlugTokens []string
+	Ext        string
+	Tags       []string
 }
 
 func getTagsFromFileName(filename string) []string {
@@ -837,16 +835,22 @@ func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 
 	f.Title = tags.ParseTitleFromFilename(f.FileName, params.StripLeadingNumbers)
 
-	// Look up the media type for this system to enable media-type-aware slugification
-	mediaType := slugs.MediaTypeGame // Default to Game
-	if params.SystemID != "" {
-		if system, err := systemdefs.GetSystem(params.SystemID); err == nil {
-			mediaType = system.GetMediaType()
+	// Use pre-resolved media type if provided, otherwise look up from system ID
+	mediaType := params.MediaType
+	if mediaType == "" {
+		mediaType = slugs.MediaTypeGame // Default to Game
+		if params.SystemID != "" {
+			if system, err := systemdefs.GetSystem(params.SystemID); err == nil {
+				mediaType = system.GetMediaType()
+			}
 		}
 	}
 
-	// Use media-type-aware slugification for TV shows, movies, music, etc.
-	f.Slug = slugs.Slugify(mediaType, f.Title)
+	// SlugifyWithTokens computes both slug and tokens in a single pass,
+	// avoiding redundant re-slugification in AddMediaPath.
+	slugResult := slugs.SlugifyWithTokens(mediaType, f.Title)
+	f.Slug = slugResult.Slug
+	f.SlugTokens = slugResult.Tokens
 
 	// For non-Latin titles that don't produce a slug, store the lowercase
 	// original title. This ensures Slug is never empty while the search

@@ -65,6 +65,10 @@ var (
 	//   - Episode markers like "-S01E02" or "-E001" (second char is digit)
 	sceneGroupRegex = regexp.MustCompile(`-(?i)[A-Z]{2}[A-Z0-9]*$`)
 
+	// Pre-compiled regexes for NormalizeDotSeparators (avoid re-compilation per call)
+	episodeDotRegex = regexp.MustCompile(`(?i)(S\d+)(\.)(E\d+)`)
+	dateDotRegex    = regexp.MustCompile(`(\d{2,4})(\.(\d{2})\.(\d{2,4}))`)
+
 	// Movie-specific scene release tag patterns
 	// HDR tags: HDR, HDR10, HDR10+, Dolby Vision, HLG
 	sceneHDRRegex = regexp.MustCompile(`(?i)\b(hdr|hdr10|hdr10plus|hdr10\+|dv|dolby\.?vision|hlg)\b`)
@@ -302,6 +306,28 @@ func ExpandNumberWords(s string) string {
 	return strings.Join(words, " ")
 }
 
+// expandAbbreviationsAndNumbers combines ExpandAbbreviations and ExpandNumberWords
+// into a single pass to avoid splitting and joining the string twice.
+// It checks each word against both abbreviation and number word maps.
+func expandAbbreviationsAndNumbers(s string) string {
+	words := strings.Fields(s)
+	changed := false
+	for i, word := range words {
+		lowerWord := strings.ToLower(word)
+		if expansion, found := checkAbbreviation(lowerWord); found {
+			words[i] = expansion
+			changed = true
+		} else if expansion, found := checkNumberWord(lowerWord); found {
+			words[i] = expansion
+			changed = true
+		}
+	}
+	if !changed {
+		return s
+	}
+	return strings.Join(words, " ")
+}
+
 // NormalizeOrdinals removes ordinal suffixes from numbers.
 // This allows "2nd" and "II" to both normalize to "2" for consistent matching.
 //
@@ -402,14 +428,15 @@ func ConvertRomanNumerals(s string) string {
 
 // matchesRomanNumeralPattern performs a case-insensitive comparison of rune slice
 // elements at the given position against a Roman numeral pattern string.
+// The pattern must be ASCII-only (all roman numeral patterns are uppercase ASCII).
 func matchesRomanNumeralPattern(runeSlice []rune, pos int, pattern string) bool {
-	patternRunes := []rune(pattern)
-	if pos+len(patternRunes) > len(runeSlice) {
+	if pos+len(pattern) > len(runeSlice) {
 		return false
 	}
-	// Case-insensitive comparison
-	for i, p := range patternRunes {
-		if unicode.ToUpper(runeSlice[pos+i]) != unicode.ToUpper(p) {
+	// Case-insensitive comparison: patterns are uppercase ASCII, so we just
+	// need to uppercase the candidate runes for comparison
+	for i := range len(pattern) {
+		if unicode.ToUpper(runeSlice[pos+i]) != rune(pattern[i]) {
 			return false
 		}
 	}
@@ -594,6 +621,11 @@ func StripSceneTags(s string) string {
 //   - "Show.Episode.Title" → "Show Episode Title"
 //   - "Show.2024.01.15" → "Show 2024.01.15" (date preserved)
 func NormalizeDotSeparators(s string) string {
+	// Early exit: if no dots present, nothing to normalize
+	if !strings.Contains(s, ".") {
+		return s
+	}
+
 	// Use regex-based approach to preserve dots in specific contexts:
 	// 1. Episode markers: S\d+\.E\d+ (e.g., S01.E02)
 	// 2. Dates: \d{2,4}\.\d{2}\.\d{2,4} (e.g., 2024.01.15)
@@ -607,12 +639,10 @@ func NormalizeDotSeparators(s string) string {
 	)
 
 	// Protect episode markers (S01.E02 → S01<U+E000>E02)
-	episodeDotPattern := regexp.MustCompile(`(?i)(S\d+)(\.)(E\d+)`)
-	s = episodeDotPattern.ReplaceAllString(s, "${1}"+episodeDotPlaceholder+"${3}")
+	s = episodeDotRegex.ReplaceAllString(s, "${1}"+episodeDotPlaceholder+"${3}")
 
 	// Protect dates (both YYYY.MM.DD and DD.MM.YYYY formats)
-	dateDotPattern := regexp.MustCompile(`(\d{2,4})(\.(\d{2})\.(\d{2,4}))`)
-	s = dateDotPattern.ReplaceAllString(s, "${1}"+dateDotPlaceholder+"${3}"+dateDotPlaceholder+"${4}")
+	s = dateDotRegex.ReplaceAllString(s, "${1}"+dateDotPlaceholder+"${3}"+dateDotPlaceholder+"${4}")
 
 	// Now replace all remaining dots with spaces
 	s = strings.ReplaceAll(s, ".", " ")
