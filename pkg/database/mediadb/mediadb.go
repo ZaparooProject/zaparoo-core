@@ -249,93 +249,61 @@ func (db *MediaDB) SetIndexingCacheSize(enable bool) {
 	}
 }
 
-// searchCriticalIndexes are indexes required for the scan→launch path to be
-// fast. These are created synchronously at the end of indexing, before the
-// database is marked as ready for use. Includes slug lookup indexes and the
-// Media→MediaTitles join index used by every search query.
-var searchCriticalIndexes = []string{
-	"CREATE INDEX mediatitles_slug_idx ON MediaTitles(Slug)",
-	"CREATE INDEX mediatitles_system_slug_idx ON MediaTitles(SystemDBID, Slug)",
-	"CREATE INDEX mediatitles_secondary_slug_idx ON MediaTitles(SecondarySlug)",
-	"CREATE INDEX mediatitles_prefilter_idx ON MediaTitles(SlugLength, SlugWordCount)",
-	"CREATE INDEX media_mediatitle_idx ON Media(MediaTitleDBID)",
-}
-
-// deferredIndexes are indexes for joins, tag lookups, and cache tables. These
-// are rebuilt during background optimization and don't affect the core search
-// path — queries degrade gracefully without them.
-var deferredIndexes = []string{
-	"CREATE INDEX media_system_path_idx ON Media(SystemDBID, Path)",
-	"CREATE INDEX tags_tag_idx ON Tags(Tag)",
-	"CREATE INDEX tags_tagtype_idx ON Tags(TypeDBID)",
-	"CREATE INDEX tags_type_tag_idx ON Tags(TypeDBID, Tag)",
-	"CREATE INDEX mediatags_tag_media_idx ON MediaTags(TagDBID, MediaDBID)",
-	"CREATE INDEX supportingmedia_mediatitle_idx ON SupportingMedia(MediaTitleDBID)",
-	"CREATE INDEX supportingmedia_typetag_idx ON SupportingMedia(TypeTagDBID)",
-	"CREATE INDEX idx_systemtagscache_type_tag ON SystemTagsCache(SystemDBID, TagType, Tag)",
-	"CREATE INDEX idx_slug_cache_system ON SlugResolutionCache(SystemID)",
-	"CREATE INDEX idx_slug_cache_media ON SlugResolutionCache(MediaDBID)",
-}
-
-// allSecondaryIndexes returns the combined list of all secondary indexes.
-func allSecondaryIndexes() []string {
-	all := make([]string, 0, len(searchCriticalIndexes)+len(deferredIndexes))
-	all = append(all, searchCriticalIndexes...)
-	all = append(all, deferredIndexes...)
-	return all
+// secondaryIndexes lists all secondary indexes that can be dropped before bulk
+// inserts and recreated afterward. Created synchronously at the end of indexing
+// so the database is fully searchable when indexing completes.
+var secondaryIndexes = []string{
+	"CREATE INDEX IF NOT EXISTS mediatitles_slug_idx ON MediaTitles(Slug)",
+	"CREATE INDEX IF NOT EXISTS mediatitles_system_slug_idx ON MediaTitles(SystemDBID, Slug)",
+	"CREATE INDEX IF NOT EXISTS mediatitles_secondary_slug_idx ON MediaTitles(SecondarySlug)",
+	"CREATE INDEX IF NOT EXISTS mediatitles_prefilter_idx ON MediaTitles(SlugLength, SlugWordCount)",
+	"CREATE INDEX IF NOT EXISTS media_mediatitle_idx ON Media(MediaTitleDBID)",
+	"CREATE INDEX IF NOT EXISTS media_system_path_idx ON Media(SystemDBID, Path)",
+	"CREATE INDEX IF NOT EXISTS tags_tag_idx ON Tags(Tag)",
+	"CREATE INDEX IF NOT EXISTS tags_tagtype_idx ON Tags(TypeDBID)",
+	"CREATE INDEX IF NOT EXISTS tags_type_tag_idx ON Tags(TypeDBID, Tag)",
+	"CREATE INDEX IF NOT EXISTS mediatags_tag_media_idx ON MediaTags(TagDBID, MediaDBID)",
+	"CREATE INDEX IF NOT EXISTS supportingmedia_mediatitle_idx ON SupportingMedia(MediaTitleDBID)",
+	"CREATE INDEX IF NOT EXISTS supportingmedia_typetag_idx ON SupportingMedia(TypeTagDBID)",
+	"CREATE INDEX IF NOT EXISTS idx_systemtagscache_type_tag ON SystemTagsCache(SystemDBID, TagType, Tag)",
+	"CREATE INDEX IF NOT EXISTS idx_slug_cache_system ON SlugResolutionCache(SystemID)",
+	"CREATE INDEX IF NOT EXISTS idx_slug_cache_media ON SlugResolutionCache(MediaDBID)",
 }
 
 // DropSecondaryIndexes drops all secondary indexes to speed up bulk inserts.
-// Call before a full reindex, then call CreateSearchCriticalIndexes after
-// data insertion and CreateDeferredIndexes during background optimization.
+// Call before a full reindex, then call CreateSecondaryIndexes after.
 func (db *MediaDB) DropSecondaryIndexes() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	all := allSecondaryIndexes()
-	for _, ddl := range all {
-		// Extract index name from "CREATE INDEX <name> ON ..."
-		name := strings.Fields(ddl)[2]
+	for _, ddl := range secondaryIndexes {
+		// Extract index name from "CREATE INDEX IF NOT EXISTS <name> ON ..."
+		fields := strings.Fields(ddl)
+		name := fields[5] // Skip: CREATE INDEX IF NOT EXISTS
 		_, err := db.sql.ExecContext(db.ctx, "DROP INDEX IF EXISTS "+name)
 		if err != nil {
 			return fmt.Errorf("failed to drop index %s: %w", name, err)
 		}
 	}
 	db.needsIndexRebuild.Store(true)
-	log.Debug().Int("count", len(all)).Msg("dropped secondary indexes for bulk insert")
+	log.Debug().Int("count", len(secondaryIndexes)).Msg("dropped secondary indexes for bulk insert")
 	return nil
 }
 
-// CreateSearchCriticalIndexes creates the indexes required for the core
-// scan→launch search path. Called synchronously at the end of indexing so
-// the database is immediately searchable when indexing completes.
-func (db *MediaDB) CreateSearchCriticalIndexes() error {
+// CreateSecondaryIndexes recreates all secondary indexes after bulk inserts.
+// Called synchronously at the end of indexing so the database is fully
+// searchable when indexing completes.
+func (db *MediaDB) CreateSecondaryIndexes() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	for _, ddl := range searchCriticalIndexes {
+	for _, ddl := range secondaryIndexes {
 		_, err := db.sql.ExecContext(db.ctx, ddl)
 		if err != nil {
 			return fmt.Errorf("failed to create index: %w", err)
 		}
 	}
-	log.Debug().Int("count", len(searchCriticalIndexes)).Msg("created search-critical indexes")
-	return nil
-}
-
-// CreateDeferredIndexes creates the remaining indexes for joins, tag lookups,
-// and cache tables. Called during background optimization.
-func (db *MediaDB) CreateDeferredIndexes() error {
-	if db.sql == nil {
-		return ErrNullSQL
-	}
-	for _, ddl := range deferredIndexes {
-		_, err := db.sql.ExecContext(db.ctx, ddl)
-		if err != nil {
-			return fmt.Errorf("failed to create index: %w", err)
-		}
-	}
-	log.Debug().Int("count", len(deferredIndexes)).Msg("created deferred indexes")
+	log.Debug().Int("count", len(secondaryIndexes)).Msg("recreated secondary indexes")
 	return nil
 }
 
@@ -2045,24 +2013,12 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 
 	rd := db.analyzeRetryDelay
 
-	// Rebuild indexes only if they were dropped during a full reindex
-	if db.needsIndexRebuild.CompareAndSwap(true, false) {
-		steps = append(steps, optimizationStep{
-			name: "create_indexes", fn: db.CreateDeferredIndexes,
-			maxRetries: 1, retryDelay: rd,
-		})
-	}
+	// NOTE: Indexes, tags cache, and slug search cache are built synchronously
+	// at the end of NewNamesIndex so the database is fully searchable when
+	// indexing completes. Only lightweight housekeeping runs in background.
+	db.needsIndexRebuild.Store(false)
 
 	steps = append(steps,
-		optimizationStep{
-			name: "populate_tags_cache", fn: func() error {
-				return db.PopulateSystemTagsCache(db.ctx)
-			}, maxRetries: 1, retryDelay: rd,
-		},
-		optimizationStep{
-			name: "slug_search_cache", fn: db.RebuildSlugSearchCache,
-			maxRetries: 1, retryDelay: rd,
-		},
 		optimizationStep{
 			name: "analyze", fn: db.Analyze,
 			maxRetries: 2, retryDelay: rd,

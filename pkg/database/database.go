@@ -363,8 +363,7 @@ type MediaDBI interface {
 
 	SetIndexingCacheSize(enable bool)
 	DropSecondaryIndexes() error
-	CreateSearchCriticalIndexes() error
-	CreateDeferredIndexes() error
+	CreateSecondaryIndexes() error
 	SetIndexingStatus(status string) error
 	GetIndexingStatus() (string, error)
 	SetLastIndexedSystem(systemID string) error

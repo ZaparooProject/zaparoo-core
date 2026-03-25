@@ -1353,11 +1353,19 @@ func NewNamesIndex(
 		}
 	}
 
-	// Create search-critical indexes before marking indexing as complete.
-	// These are required for the scan→launch path to be fast. The remaining
-	// indexes are deferred to background optimization.
-	if idxErr := db.CreateSearchCriticalIndexes(); idxErr != nil {
-		log.Error().Err(idxErr).Msg("failed to create search-critical indexes")
+	// Rebuild all secondary indexes before marking indexing as complete.
+	// This ensures the database is fully searchable when indexing finishes.
+	if idxErr := db.CreateSecondaryIndexes(); idxErr != nil {
+		log.Error().Err(idxErr).Msg("failed to create secondary indexes")
+	}
+
+	// Populate caches before marking complete. These must run synchronously
+	// so searches return correct results the moment indexing finishes.
+	if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
+	}
+	if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
 	}
 
 	// Mark database as complete and ready for use

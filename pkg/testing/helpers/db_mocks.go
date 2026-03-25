@@ -1132,18 +1132,10 @@ func (m *MockMediaDBI) DropSecondaryIndexes() error {
 	return nil
 }
 
-func (m *MockMediaDBI) CreateSearchCriticalIndexes() error {
+func (m *MockMediaDBI) CreateSecondaryIndexes() error {
 	args := m.Called()
 	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock create search critical indexes failed: %w", err)
-	}
-	return nil
-}
-
-func (m *MockMediaDBI) CreateDeferredIndexes() error {
-	args := m.Called()
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock create deferred indexes failed: %w", err)
+		return fmt.Errorf("mock create indexes failed: %w", err)
 	}
 	return nil
 }
