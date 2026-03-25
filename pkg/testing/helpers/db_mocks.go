@@ -1541,6 +1541,14 @@ func (m *MockMediaDBI) RebuildSlugSearchCache() error {
 	return nil
 }
 
+func (m *MockMediaDBI) RebuildTagCache() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock RebuildTagCache: %w", err)
+	}
+	return nil
+}
+
 // Slug resolution cache methods
 func (m *MockMediaDBI) GetCachedSlugResolution(
 	ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
@@ -1725,6 +1733,7 @@ func NewMockMediaDBI() *MockMediaDBI {
 	// This is called during media search and should succeed by default
 	mockMediaDB.On("GetLaunchCommandForMedia", mock.Anything, mock.Anything, mock.Anything).Return("", nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	return mockMediaDB
 }
 

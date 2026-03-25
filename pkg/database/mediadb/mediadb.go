@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -88,6 +89,7 @@ type MediaDB struct {
 	stmtInsertMediaTag    *sql.Stmt
 	stmtInsertMediaTitle  *sql.Stmt
 	slugSearchCache       atomic.Pointer[SlugSearchCache]
+	inMemoryTagCache      atomic.Pointer[tagCache]
 	dbPath                string
 	backgroundOps         sync.WaitGroup
 	vacuumRetryDelay      time.Duration
@@ -125,6 +127,9 @@ type invalidationScope struct {
 
 // invalidateCaches handles all cache invalidation in one place
 func (db *MediaDB) invalidateCaches(scope invalidationScope) {
+	// In-memory tag cache: always clear (rebuilt after indexing)
+	db.inMemoryTagCache.Store(nil)
+
 	// MediaCountCache: always nuke everything (queries are too complex to selectively invalidate)
 	if err := db.InvalidateCountCache(); err != nil {
 		log.Warn().Err(err).Msg("failed to invalidate media count cache")
@@ -1166,6 +1171,9 @@ func (db *MediaDB) GetAllUsedTags(ctx context.Context) ([]database.TagInfo, erro
 	if db.sql == nil {
 		return make([]database.TagInfo, 0), ErrNullSQL
 	}
+	if cache := db.inMemoryTagCache.Load(); cache != nil {
+		return slices.Clone(cache.allTags), nil
+	}
 	return sqlGetAllUsedTags(ctx, db.sql)
 }
 
@@ -1194,7 +1202,12 @@ func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs
 		return make([]database.TagInfo, 0), ErrNullSQL
 	}
 
-	// Try cached approach first
+	// Try in-memory cache first (instant)
+	if cache := db.inMemoryTagCache.Load(); cache != nil {
+		return cache.tagsForSystems(systems), nil
+	}
+
+	// Fallback: try SQL cached approach
 	tags, err := sqlGetSystemTagsCached(ctx, db.sql, systems)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get cached tags, falling back to optimized query")
