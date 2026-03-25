@@ -361,6 +361,10 @@ type MediaDBI interface {
 	GetMediaByDBID(ctx context.Context, mediaDBID int64) (SearchResultWithCursor, error)
 	GetZapScriptTagsBySystemAndPath(ctx context.Context, systemID, path string) ([]TagInfo, error)
 
+	SetIndexingCacheSize(enable bool)
+	DropSecondaryIndexes() error
+	CreateSearchCriticalIndexes() error
+	CreateDeferredIndexes() error
 	SetIndexingStatus(status string) error
 	GetIndexingStatus() (string, error)
 	SetLastIndexedSystem(systemID string) error

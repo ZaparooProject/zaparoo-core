@@ -198,6 +198,180 @@ func MatchSystemFile(
 	return false
 }
 
+// pathHasPrefixNormalized checks if normPath is within normRoot directory.
+// Both arguments must already be normalized via NormalizePathForComparison.
+func pathHasPrefixNormalized(normPath, normRoot string) bool {
+	if normPath == normRoot {
+		return true
+	}
+	if normRoot == "" {
+		return false
+	}
+	if !strings.HasPrefix(normPath, normRoot) {
+		return false
+	}
+	// Ensure the match is at a directory boundary, not a partial name match
+	// (e.g., "/roms" should not match "/roms2/game.nes")
+	if normRoot[len(normRoot)-1] == '/' {
+		return true
+	}
+	return len(normPath) > len(normRoot) && normPath[len(normRoot)] == '/'
+}
+
+// LauncherMatcher provides optimized path matching with pre-normalized paths.
+// All data is immutable after construction, making it safe for concurrent use
+// from fastwalk callbacks.
+type LauncherMatcher struct {
+	cfg             *config.Instance
+	normFolderCache map[string]string
+	normDataDir     string
+	normRootDirs    []string
+	rawRootDirs     []string
+}
+
+// NewLauncherMatcher creates a matcher with pre-normalized root dirs and folder paths.
+// Call once before a file walk and reuse for all files to avoid redundant normalization.
+func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMatcher {
+	rawRoots := pl.RootDirs(cfg)
+	normRoots := make([]string, len(rawRoots))
+	for i, r := range rawRoots {
+		normRoots[i] = NormalizePathForComparison(r)
+	}
+
+	folderCache := make(map[string]string)
+	allLaunchers := GlobalLauncherCache.GetAllLaunchers()
+	for i := range allLaunchers {
+		for _, f := range allLaunchers[i].Folders {
+			if _, ok := folderCache[f]; !ok {
+				folderCache[f] = NormalizePathForComparison(f)
+			}
+		}
+	}
+
+	return &LauncherMatcher{
+		cfg:             cfg,
+		normRootDirs:    normRoots,
+		rawRootDirs:     rawRoots,
+		normDataDir:     NormalizePathForComparison(DataDir(pl)),
+		normFolderCache: folderCache,
+	}
+}
+
+// MatchSystemFile returns true if path matches a launcher for the given system.
+// The file path is normalized once and compared against pre-normalized roots.
+func (m *LauncherMatcher) MatchSystemFile(systemID, path string) bool {
+	normPath := NormalizePathForComparison(path)
+	lp := strings.ToLower(path)
+
+	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
+	for i := range launchers {
+		if m.pathIsLauncher(&launchers[i], path, lp, normPath) {
+			return true
+		}
+	}
+
+	log.Debug().
+		Str("system", systemID).
+		Str("path", path).
+		Int("launchersChecked", len(launchers)).
+		Msg("no launcher matched file")
+
+	return false
+}
+
+func (m *LauncherMatcher) pathIsLauncher(
+	l *platforms.Launcher,
+	path, lp, normPath string,
+) bool {
+	if path == "" {
+		return false
+	}
+
+	base := filepath.Base(lp)
+	if base != "" && base[0] == '.' {
+		return false
+	}
+
+	for _, scheme := range l.Schemes {
+		if strings.HasPrefix(lp, scheme+":") {
+			return true
+		}
+	}
+
+	inDataDir := false
+	if l.SystemID != "" {
+		normZaparooMedia := m.normDataDir + "/" +
+			strings.ToLower(config.MediaDir) + "/" +
+			strings.ToLower(l.SystemID)
+		if pathHasPrefixNormalized(normPath, normZaparooMedia) {
+			inDataDir = true
+		}
+	}
+
+	if !inDataDir && len(l.Folders) > 0 {
+		inRoot := false
+		isAbs := false
+
+		for _, normRoot := range m.normRootDirs {
+			if inRoot {
+				break
+			}
+			for _, folder := range l.Folders {
+				normFolder := m.normFolderCache[folder]
+				normFull := normRoot + "/" + normFolder
+				if pathHasPrefixNormalized(normPath, normFull) {
+					inRoot = true
+					break
+				}
+			}
+		}
+
+		if !inRoot {
+			for _, folder := range l.Folders {
+				if filepath.IsAbs(folder) {
+					normFolder := m.normFolderCache[folder]
+					if pathHasPrefixNormalized(normPath, normFolder) {
+						isAbs = true
+						break
+					}
+				}
+			}
+		}
+
+		if !inRoot && !isAbs {
+			log.Trace().
+				Str("launcher", l.ID).
+				Str("path", path).
+				Strs("folders", l.Folders).
+				Strs("rootDirs", m.rawRootDirs).
+				Msg("path not in any launcher folder (root or absolute)")
+			return false
+		}
+	}
+
+	if len(l.Extensions) > 0 {
+		for _, e := range l.Extensions {
+			if strings.HasSuffix(lp, strings.ToLower(e)) {
+				return true
+			}
+		}
+		if l.Test != nil {
+			return l.Test(m.cfg, lp)
+		}
+		log.Trace().
+			Str("launcher", l.ID).
+			Str("path", path).
+			Strs("extensions", l.Extensions).
+			Msg("path extension did not match any launcher extension")
+		return false
+	}
+
+	if l.Test != nil {
+		return l.Test(m.cfg, lp)
+	}
+	return false
+}
+
 // PathToLaunchers is a reverse lookup to match a given path against all
 // possible launchers in a platform. Returns all matched launchers.
 func PathToLaunchers(

@@ -30,21 +30,12 @@ import (
 // Package-level compiled regexes for filename parsing.
 // These are compiled once at initialization for optimal performance.
 var (
-	// Special pattern extraction
-	reDisc               = regexp.MustCompile(`(?i)\(Disc\s+(\d+)\s+of\s+(\d+)\)`)
-	reRev                = regexp.MustCompile(`(?i)\(Rev[\s-]([A-Z0-9]+)\)`)
-	reVersion            = regexp.MustCompile(`(?i)\(v(\d+(?:\.\d+)*)\)`)
-	reYear               = regexp.MustCompile(`\((19[789]\d|20\d{2})\)`)
-	reTrans              = regexp.MustCompile(`(^|\s)(T)([+-])([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
-	reTransBracketed     = regexp.MustCompile(`^T([+-]?)([A-Za-z]{2,3})(?:.*?v(\d+(?:\.\d+)*))?`)
-	reBracketlessVersion = regexp.MustCompile(`\bv(\d+(?:\.\d+)*)`)
-	reEditionWord        = regexp.MustCompile(
+	// Special pattern extraction (complex patterns that still use regex)
+	reTrans          = regexp.MustCompile(`(^|\s)(T)([+-])([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
+	reTransBracketed = regexp.MustCompile(`^T([+-]?)([A-Za-z]{2,3})(?:.*?v(\d+(?:\.\d+)*))?`)
+	reEditionWord    = regexp.MustCompile(
 		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|バージョン|エディション|ヴァージョン)(\s*[\(\[{<]|\s*$)`,
 	)
-
-	// Title parsing
-	reMultiSpace = regexp.MustCompile(`\s+`)
-	reLeadingNum = regexp.MustCompile(`^\d+[.\s\-]+`)
 
 	// Scene release artifact patterns (for modern media: movies, TV shows)
 	// Note: These patterns match AFTER separator normalization, so hyphens have become spaces
@@ -61,15 +52,9 @@ var (
 	reSceneStatus = regexp.MustCompile(
 		`(?i)\b(PROPER|REPACK|INTERNAL|LIMITED|READNFO|DIRFIX|NFOFIX|UNRATED|EXTENDED)\b`,
 	)
-	// Uppercase group at end like "-GROUP" (min 3 chars)
-	reReleaseGroup  = regexp.MustCompile(`-([A-Z][A-Z0-9]{2,})$`)
-	reSeasonEpisode = regexp.MustCompile(`(?i)[Ss](\d{1,2})[Ee](\d{1,3})`)
-	reIssueNumber   = regexp.MustCompile(`(?i)#(\d+)|(?:Issue|No\.?)\s*(\d+)`)
-	reTrackNumber   = regexp.MustCompile(`^(\d{1,3})[\s.\-_]+|(?i)^track\s*(\d{1,3})[\s.\-_]+`)
-	reVolumeNumber  = regexp.MustCompile(`(?i)\((?:vol\.|volume)\s*(\d+)\)`) // Only explicit keywords, not bare "v"
-	reYear4Digit    = regexp.MustCompile(`^(19\d{2}|20\d{2})`)               // For detecting 4-digit years
-	// Unbracketed year for scene artifact stripping
-	reYearScene = regexp.MustCompile(`\b(19[789]\d|20\d{2})\b`)
+	reReleaseGroup = regexp.MustCompile(`-([A-Z][A-Z0-9]{2,})$`)
+	reIssueNumber  = regexp.MustCompile(`(?i)#(\d+)|(?:Issue|No\.?)\s*(\d+)`)
+	reTrackNumber  = regexp.MustCompile(`^(\d{1,3})[\s.\-_]+|(?i)^track\s*(\d{1,3})[\s.\-_]+`)
 )
 
 // langMap maps 3-letter ROM language codes to 2-letter ISO 639-1 codes.
@@ -298,8 +283,7 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	remaining = filename
 
 	// Pattern 1: "Disc X of Y" - most common multi-disc format
-	if indices := reDisc.FindStringSubmatchIndex(remaining); len(indices) > 0 {
-		// indices[0:2] = full match, indices[2:4] = first capture, indices[4:6] = second capture
+	if m := findDiscPattern(remaining); m.ok {
 		tags = append(tags,
 			CanonicalTag{
 				Type:   TagTypeMedia,
@@ -308,30 +292,28 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 			},
 			CanonicalTag{
 				Type:   TagTypeDisc,
-				Value:  TagValue(remaining[indices[2]:indices[3]]),
+				Value:  TagValue(remaining[m.cap1s:m.cap1e]),
 				Source: TagSourceBracketed,
 			},
 			CanonicalTag{
 				Type:   TagTypeDiscTotal,
-				Value:  TagValue(remaining[indices[4]:indices[5]]),
+				Value:  TagValue(remaining[m.cap2s:m.cap2e]),
 				Source: TagSourceBracketed,
 			},
 		)
-		// Remove matched pattern
-		remaining = remaining[:indices[0]] + remaining[indices[1]:]
+		remaining = remaining[:m.start] + remaining[m.end:]
 	}
 
 	// Pattern 2: Revision tags - "Rev 1", "Rev A", "Rev-1"
-	if indices := reRev.FindStringSubmatchIndex(remaining); len(indices) > 0 {
-		revValue := strings.ToLower(remaining[indices[2]:indices[3]])
-		// Normalize periods to dashes (e.g., "1.2" → "1-2")
+	if m := findRevPattern(remaining); m.ok {
+		revValue := strings.ToLower(remaining[m.cap1s:m.cap1e])
 		revValue = strings.ReplaceAll(revValue, ".", "-")
 		tags = append(tags, CanonicalTag{
 			Type:   TagTypeRev,
 			Value:  TagValue(revValue),
 			Source: TagSourceBracketed,
 		})
-		remaining = remaining[:indices[0]] + remaining[indices[1]:]
+		remaining = remaining[:m.start] + remaining[m.end:]
 	}
 
 	// Pattern 3: Volume numbers - "(Vol. 2)", "(Volume 3)"
@@ -340,10 +322,7 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	// Volume numbers are for comics/manga/books and use explicit keywords
 	// Version tags are for ROM revisions and use bare "v" or have dots (v1.2)
 	// Examples: "Book Title (Vol. 2).epub", "Comic Series (Volume 3).cbr"
-	if matches := reVolumeNumber.FindStringSubmatch(remaining); len(matches) > 1 {
-		volumeNum := matches[1]
-
-		// Strip leading zeros from volume numbers
+	if volumeNum, found := findVolumeNumber(remaining); found {
 		volumeNum = strings.TrimLeft(volumeNum, "0")
 		if volumeNum == "" {
 			volumeNum = "0"
@@ -355,45 +334,42 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 			Source: TagSourceBracketed,
 		})
 
-		// Remove pattern from remaining to clean title
-		remaining = reVolumeNumber.ReplaceAllString(remaining, " ")
+		remaining = removeVolumeNumber(remaining)
 	}
 
 	// Pattern 4: Version tags - "v1.2", "v1.2.3"
-	if indices := reVersion.FindStringSubmatchIndex(remaining); len(indices) > 0 {
-		versionValue := remaining[indices[2]:indices[3]]
-		// Normalize periods to dashes (e.g., "1.2.3" → "1-2-3")
+	if m := findBracketedVersion(remaining); m.ok {
+		versionValue := remaining[m.cap1s:m.cap1e]
 		versionValue = strings.ReplaceAll(versionValue, ".", "-")
 		tags = append(tags, CanonicalTag{
 			Type:   TagTypeRev,
 			Value:  TagValue(versionValue),
 			Source: TagSourceBracketed,
 		})
-		remaining = remaining[:indices[0]] + remaining[indices[1]:]
+		remaining = remaining[:m.start] + remaining[m.end:]
 	}
 
 	// Pattern 5: Year tags - "(1995)", "(2004)"
 	// Matches years 1970-2099 in parentheses
-	if indices := reYear.FindStringSubmatchIndex(remaining); len(indices) > 0 {
-		yearValue := remaining[indices[2]:indices[3]]
+	if m := findBracketedYear(remaining); m.ok {
+		yearValue := remaining[m.cap1s:m.cap1e]
 		tags = append(tags, CanonicalTag{
 			Type:   TagTypeYear,
 			Value:  TagValue(yearValue),
 			Source: TagSourceBracketed,
 		})
-		remaining = remaining[:indices[0]] + remaining[indices[1]:]
+		remaining = remaining[:m.start] + remaining[m.end:]
 	}
 
 	// Pattern 6: TV show season/episode - "S01E02", "s02e15"
 	// Common format for TV show episode identification
 	// Examples: "Show.Name.S01E01", "Series.S02E05.Episode.Title"
-	if matches := reSeasonEpisode.FindStringSubmatch(remaining); len(matches) > 0 {
-		// Strip leading zeros from season and episode numbers
-		season := strings.TrimLeft(matches[1], "0")
+	if seasonStr, episodeStr, found := findSeasonEpisode(remaining); found {
+		season := strings.TrimLeft(seasonStr, "0")
 		if season == "" {
-			season = "0" // Handle case where it's "00"
+			season = "0"
 		}
-		episode := strings.TrimLeft(matches[2], "0")
+		episode := strings.TrimLeft(episodeStr, "0")
 		if episode == "" {
 			episode = "0"
 		}
@@ -411,8 +387,7 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 			},
 		)
 
-		// Remove pattern from remaining to clean title
-		remaining = reSeasonEpisode.ReplaceAllString(remaining, " ")
+		remaining = removeSeasonEpisode(remaining)
 	}
 
 	// Pattern 7: Comic issue numbers - "#47", "Issue 5"
@@ -458,7 +433,7 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 			// CRITICAL: Check if this is actually a 4-digit year being mis-parsed as a 3-digit track
 			// Example: "1985.mp3" should NOT be parsed as track 198
 			// Check if the original filename starts with a 4-digit year
-			isYear := reYear4Digit.MatchString(remaining)
+			isYear := startsWithYear(remaining)
 
 			if !isYear {
 				// Strip leading zeros from track numbers
@@ -508,8 +483,7 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 
 	// Pattern 7: Bracketless version tags (if not part of translation) - "v1.0", "v1.2.3"
 	// Only extract if not already processed as part of translation pattern
-	if indices := reBracketlessVersion.FindStringSubmatchIndex(remaining); len(indices) > 0 {
-		// Check if we already extracted a version from translation pattern
+	if m := findBracketlessVersion(remaining); m.ok {
 		hasVersion := false
 		for _, tag := range tags {
 			if tag.Type == TagTypeRev {
@@ -518,16 +492,14 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 			}
 		}
 		if !hasVersion {
-			versionValue := remaining[indices[2]:indices[3]]
-			// Normalize periods to dashes (e.g., "1.2.3" → "1-2-3")
+			versionValue := remaining[m.cap1s:m.cap1e]
 			versionValue = strings.ReplaceAll(versionValue, ".", "-")
-			// Inferred from plain text (bracketless)
 			tags = append(tags, CanonicalTag{
 				Type:   TagTypeRev,
 				Value:  TagValue(versionValue),
 				Source: TagSourceInferred,
 			})
-			remaining = remaining[:indices[0]] + remaining[indices[1]:]
+			remaining = remaining[:m.start] + remaining[m.end:]
 		}
 	}
 
@@ -1144,13 +1116,12 @@ func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
 	// Step 4: Strip scene release artifacts CONTEXTUALLY (AFTER separator normalization)
 	// CRITICAL: Only strip artifacts from the portion AFTER the year to avoid corrupting titles
 	// Example: "Cam (2018)" should NOT have "Cam" removed as a scene tag
-	yearMatch := reYearScene.FindStringSubmatchIndex(title)
+	yearMatch := findUnbracketedYear(title)
 
 	var extractedYearForStripping string
-	if len(yearMatch) > 0 {
-		// Found a year - split title and only strip artifacts from the part AFTER the year
-		yearIdx := yearMatch[0]
-		extractedYearForStripping = title[yearMatch[2]:yearMatch[3]]
+	if yearMatch.ok {
+		yearIdx := yearMatch.start
+		extractedYearForStripping = title[yearMatch.cap1s:yearMatch.cap1e]
 
 		beforeYear := title[:yearIdx]
 		afterYear := title[yearIdx+len(extractedYearForStripping):]
@@ -1165,12 +1136,12 @@ func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
 
 	// Step 5: Strip S##E## patterns (TV show episode markers) from titles
 	// These are useful as metadata but clutter the display title
-	title = reSeasonEpisode.ReplaceAllString(title, " ")
+	title = removeSeasonEpisode(title)
 
 	// Step 6: Optionally strip leading number prefixes (e.g., "1. ", "01 - ")
 	// Only done when contextual detection confirms list-based numbering
 	if stripLeadingNumbers {
-		title = reLeadingNum.ReplaceAllString(title, "")
+		title = stripLeadingNumberPrefix(title)
 		title = strings.TrimSpace(title)
 	}
 
@@ -1181,7 +1152,7 @@ func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
 
 	// Step 8: Normalize multiple spaces to single space
 	// This handles cases where bracket removal creates gaps like "Game [USA] [!]" → "Game  "
-	title = reMultiSpace.ReplaceAllString(title, " ")
+	title = collapseSpaces(title)
 
 	return strings.TrimSpace(title)
 }

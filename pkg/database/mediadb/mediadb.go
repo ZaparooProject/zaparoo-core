@@ -66,7 +66,7 @@ const defaultSlugSearchLimit = 50
 func getSqliteConnParams() string {
 	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
 		"&_cache_size=-8192&_temp_store=FILE&_mmap_size=0" +
-		"&_page_size=8192&_foreign_keys=ON"
+		"&_page_size=8192&_foreign_keys=ON&_txlock=immediate"
 }
 
 type MediaDB struct {
@@ -95,6 +95,7 @@ type MediaDB struct {
 	batchSize             int
 	sqlMu                 syncutil.RWMutex
 	isOptimizing          atomic.Bool
+	needsIndexRebuild     atomic.Bool
 	inTransaction         bool
 }
 
@@ -196,7 +197,7 @@ func (db *MediaDB) Open() error {
 	if err != nil {
 		return fmt.Errorf("failed to open media database: %w", err)
 	}
-	sqlInstance.SetMaxOpenConns(1)
+	sqlInstance.SetMaxOpenConns(2)
 	db.sql = sqlInstance
 
 	if !exists {
@@ -226,6 +227,116 @@ func (db *MediaDB) Open() error {
 
 func (db *MediaDB) GetDBPath() string {
 	return filepath.Join(helpers.DataDir(db.pl), config.MediaDbFile)
+}
+
+// SetIndexingCacheSize temporarily increases SQLite cache_size for bulk indexing.
+// Call with enable=true before indexing starts, and enable=false after it completes.
+// When enabled, sets 32MB cache (vs default 8MB) to reduce page eviction during
+// heavy insert workloads with non-sequential index keys.
+func (db *MediaDB) SetIndexingCacheSize(enable bool) {
+	if db.sql == nil {
+		return
+	}
+
+	cacheSize := "-8192" // 8MB default
+	if enable {
+		cacheSize = "-32768" // 32MB for indexing
+	}
+
+	_, err := db.sql.ExecContext(db.ctx, "PRAGMA cache_size = "+cacheSize)
+	if err != nil {
+		log.Warn().Err(err).Bool("enable", enable).Msg("failed to set indexing cache size")
+	}
+}
+
+// searchCriticalIndexes are indexes required for the scan→launch path to be
+// fast. These are created synchronously at the end of indexing, before the
+// database is marked as ready for use. Includes slug lookup indexes and the
+// Media→MediaTitles join index used by every search query.
+var searchCriticalIndexes = []string{
+	"CREATE INDEX mediatitles_slug_idx ON MediaTitles(Slug)",
+	"CREATE INDEX mediatitles_system_slug_idx ON MediaTitles(SystemDBID, Slug)",
+	"CREATE INDEX mediatitles_secondary_slug_idx ON MediaTitles(SecondarySlug)",
+	"CREATE INDEX mediatitles_prefilter_idx ON MediaTitles(SlugLength, SlugWordCount)",
+	"CREATE INDEX media_mediatitle_idx ON Media(MediaTitleDBID)",
+}
+
+// deferredIndexes are indexes for joins, tag lookups, and cache tables. These
+// are rebuilt during background optimization and don't affect the core search
+// path — queries degrade gracefully without them.
+var deferredIndexes = []string{
+	"CREATE INDEX media_system_path_idx ON Media(SystemDBID, Path)",
+	"CREATE INDEX tags_tag_idx ON Tags(Tag)",
+	"CREATE INDEX tags_tagtype_idx ON Tags(TypeDBID)",
+	"CREATE INDEX tags_type_tag_idx ON Tags(TypeDBID, Tag)",
+	"CREATE INDEX mediatags_tag_media_idx ON MediaTags(TagDBID, MediaDBID)",
+	"CREATE INDEX supportingmedia_mediatitle_idx ON SupportingMedia(MediaTitleDBID)",
+	"CREATE INDEX supportingmedia_typetag_idx ON SupportingMedia(TypeTagDBID)",
+	"CREATE INDEX idx_systemtagscache_type_tag ON SystemTagsCache(SystemDBID, TagType, Tag)",
+	"CREATE INDEX idx_slug_cache_system ON SlugResolutionCache(SystemID)",
+	"CREATE INDEX idx_slug_cache_media ON SlugResolutionCache(MediaDBID)",
+}
+
+// allSecondaryIndexes returns the combined list of all secondary indexes.
+func allSecondaryIndexes() []string {
+	all := make([]string, 0, len(searchCriticalIndexes)+len(deferredIndexes))
+	all = append(all, searchCriticalIndexes...)
+	all = append(all, deferredIndexes...)
+	return all
+}
+
+// DropSecondaryIndexes drops all secondary indexes to speed up bulk inserts.
+// Call before a full reindex, then call CreateSearchCriticalIndexes after
+// data insertion and CreateDeferredIndexes during background optimization.
+func (db *MediaDB) DropSecondaryIndexes() error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	all := allSecondaryIndexes()
+	for _, ddl := range all {
+		// Extract index name from "CREATE INDEX <name> ON ..."
+		name := strings.Fields(ddl)[2]
+		_, err := db.sql.ExecContext(db.ctx, "DROP INDEX IF EXISTS "+name)
+		if err != nil {
+			return fmt.Errorf("failed to drop index %s: %w", name, err)
+		}
+	}
+	db.needsIndexRebuild.Store(true)
+	log.Debug().Int("count", len(all)).Msg("dropped secondary indexes for bulk insert")
+	return nil
+}
+
+// CreateSearchCriticalIndexes creates the indexes required for the core
+// scan→launch search path. Called synchronously at the end of indexing so
+// the database is immediately searchable when indexing completes.
+func (db *MediaDB) CreateSearchCriticalIndexes() error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	for _, ddl := range searchCriticalIndexes {
+		_, err := db.sql.ExecContext(db.ctx, ddl)
+		if err != nil {
+			return fmt.Errorf("failed to create index: %w", err)
+		}
+	}
+	log.Debug().Int("count", len(searchCriticalIndexes)).Msg("created search-critical indexes")
+	return nil
+}
+
+// CreateDeferredIndexes creates the remaining indexes for joins, tag lookups,
+// and cache tables. Called during background optimization.
+func (db *MediaDB) CreateDeferredIndexes() error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	for _, ddl := range deferredIndexes {
+		_, err := db.sql.ExecContext(db.ctx, ddl)
+		if err != nil {
+			return fmt.Errorf("failed to create index: %w", err)
+		}
+	}
+	log.Debug().Int("count", len(deferredIndexes)).Msg("created deferred indexes")
+	return nil
 }
 
 func (db *MediaDB) Exists() bool {
@@ -828,6 +939,18 @@ func (db *MediaDB) Analyze() error {
 		return ErrNullSQL
 	}
 	return sqlAnalyze(db.ctx, db.sql)
+}
+
+// WALCheckpoint forces a WAL checkpoint to flush pending writes to the main database file.
+func (db *MediaDB) WALCheckpoint() error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	_, err := db.sql.ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
+	if err != nil {
+		return fmt.Errorf("WAL checkpoint failed: %w", err)
+	}
+	return nil
 }
 
 // SearchMediaPathExact returns indexed names matching an exact query (case-insensitive).
@@ -1918,14 +2041,41 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 		retryDelay time.Duration
 	}
 
-	steps := []optimizationStep{
-		{name: "analyze", fn: db.Analyze, maxRetries: 2, retryDelay: db.analyzeRetryDelay},
-		// NOTE: VACUUM is intentionally omitted. It takes an exclusive lock
-		// for the entire duration, blocking all reads (including card scans)
-		// on a single-connection SQLite setup. ANALYZE alone is sufficient
-		// for query planner performance. SQLite reuses free pages on the
-		// next INSERT, so disk reclamation is not needed.
+	steps := make([]optimizationStep, 0, 5)
+
+	rd := db.analyzeRetryDelay
+
+	// Rebuild indexes only if they were dropped during a full reindex
+	if db.needsIndexRebuild.CompareAndSwap(true, false) {
+		steps = append(steps, optimizationStep{
+			name: "create_indexes", fn: db.CreateDeferredIndexes,
+			maxRetries: 1, retryDelay: rd,
+		})
 	}
+
+	steps = append(steps,
+		optimizationStep{
+			name: "populate_tags_cache", fn: func() error {
+				return db.PopulateSystemTagsCache(db.ctx)
+			}, maxRetries: 1, retryDelay: rd,
+		},
+		optimizationStep{
+			name: "slug_search_cache", fn: db.RebuildSlugSearchCache,
+			maxRetries: 1, retryDelay: rd,
+		},
+		optimizationStep{
+			name: "analyze", fn: db.Analyze,
+			maxRetries: 2, retryDelay: rd,
+		},
+		optimizationStep{
+			name: "wal_checkpoint", fn: db.WALCheckpoint,
+			maxRetries: 1, retryDelay: rd,
+		},
+		// NOTE: VACUUM is intentionally omitted. It takes an exclusive lock
+		// for the entire duration, blocking all reads (including card scans).
+		// ANALYZE alone is sufficient for query planner performance. SQLite
+		// reuses free pages on the next INSERT, so disk reclamation is not needed.
+	)
 
 	// Execute each step with retry logic
 	for _, step := range steps {
