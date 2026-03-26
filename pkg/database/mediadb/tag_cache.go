@@ -40,7 +40,8 @@ type tagCache struct {
 // tagsForSystems collects and deduplicates tags across the requested systems.
 func (c *tagCache) tagsForSystems(systems []systemdefs.System) []database.TagInfo {
 	if len(systems) == 1 {
-		return slices.Clone(c.bySystem[systems[0].ID])
+		first := systems[0] //nolint:gosec // G602 false positive: len==1 guarantees valid index
+		return slices.Clone(c.bySystem[first.ID])
 	}
 
 	seen := make(map[database.TagInfo]struct{})
