@@ -73,6 +73,8 @@ func buildTestCache(entries []struct {
 	//nolint:gosec // Safe: test data won't overflow uint32
 	cache.secSlugOffsets = append(cache.secSlugOffsets, uint32(len(cache.secSlugData)))
 	cache.entryCount = len(entries)
+
+	finalizeCache(cache)
 	return cache
 }
 
@@ -374,6 +376,7 @@ func buildSyntheticCache(n int) *SlugSearchCache {
 	//nolint:gosec // Safe: test data won't overflow uint32
 	cache.secSlugOffsets = append(cache.secSlugOffsets, uint32(len(cache.secSlugData)))
 
+	finalizeCache(cache)
 	return cache
 }
 

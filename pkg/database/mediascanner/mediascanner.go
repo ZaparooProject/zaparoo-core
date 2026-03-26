@@ -1367,6 +1367,9 @@ func NewNamesIndex(
 	if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
 		log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
 	}
+	if cacheErr := db.RebuildTagCache(); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
+	}
 
 	// Mark database as complete and ready for use
 	err = db.UpdateLastGenerated()

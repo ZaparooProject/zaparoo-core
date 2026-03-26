@@ -379,6 +379,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
@@ -480,6 +481,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
@@ -573,6 +575,7 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
@@ -733,6 +736,7 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
@@ -822,6 +826,7 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
@@ -909,6 +914,7 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
@@ -1012,6 +1018,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
@@ -1085,6 +1092,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
