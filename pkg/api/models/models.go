@@ -92,6 +92,7 @@ const (
 	MethodUpdateApply          = "update.apply"
 	MethodInputKeyboard        = "input.keyboard"
 	MethodInputGamepad         = "input.gamepad"
+	MethodScreenshot           = "screenshot"
 )
 
 // ResponseWithCallback wraps a method result with a function that should be

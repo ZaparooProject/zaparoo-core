@@ -372,3 +372,9 @@ type UpdateApplyResponse struct {
 	PreviousVersion string `json:"previousVersion"`
 	NewVersion      string `json:"newVersion"`
 }
+
+type ScreenshotResponse struct {
+	Path string `json:"path"`
+	Data string `json:"data"` // base64 encoded
+	Size int    `json:"size"` // original byte count
+}

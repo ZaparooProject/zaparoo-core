@@ -168,6 +168,13 @@ func TestIsMediaLaunchingCommand(t *testing.T) {
 			want:    false,
 		},
 
+		// Screenshot command - should NOT be blocked
+		{
+			name:    "screenshot command",
+			cmdName: zapscript.ZapScriptCmdScreenshot,
+			want:    false,
+		},
+
 		// Input commands - should NOT be blocked
 		{
 			name:    "input.keyboard command",
@@ -297,6 +304,7 @@ func TestIsMediaLaunchingCommand_ComprehensiveCoverage(t *testing.T) {
 		zapscript.ZapScriptCmdMisterScript,
 		zapscript.ZapScriptCmdHTTPGet,
 		zapscript.ZapScriptCmdHTTPPost,
+		zapscript.ZapScriptCmdScreenshot,
 		zapscript.ZapScriptCmdInputKeyboard,
 		zapscript.ZapScriptCmdInputGamepad,
 		zapscript.ZapScriptCmdInputCoinP1,
@@ -492,6 +500,7 @@ func TestIsValidCommand(t *testing.T) {
 		{name: "http.get", cmdName: zapscript.ZapScriptCmdHTTPGet, want: true},
 		{name: "input.keyboard", cmdName: zapscript.ZapScriptCmdInputKeyboard, want: true},
 		{name: "control", cmdName: zapscript.ZapScriptCmdControl, want: true},
+		{name: "screenshot", cmdName: zapscript.ZapScriptCmdScreenshot, want: true},
 		// Invalid commands
 		{name: "unknown command", cmdName: "unknown.cmd", want: false},
 		{name: "empty string", cmdName: "", want: false},

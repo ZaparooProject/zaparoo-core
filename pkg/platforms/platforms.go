@@ -37,6 +37,14 @@ import (
 
 var ErrNotSupported = errors.New("operation not supported on this platform")
 
+// ScreenshotResult is the result of a platform screenshot capture.
+type ScreenshotResult struct {
+	// Path is the absolute path where the screenshot was saved on disk.
+	Path string
+	// Data is the raw image bytes of the screenshot.
+	Data []byte
+}
+
 // LauncherContextManager manages launcher lifecycle contexts.
 // When a new launcher starts, it creates a new context and cancels the old one,
 // allowing previous launcher cleanup routines to detect they've been superseded.
@@ -311,6 +319,9 @@ type Platform interface {
 	// GamepadPress presses and then releases a single gamepad button on a
 	// virtual gamepad, using a button name from the ZapScript format.
 	GamepadPress(string) error
+	// Screenshot captures a screenshot of the current platform display,
+	// saves it to disk, and returns the file path and raw image bytes.
+	Screenshot() (*ScreenshotResult, error)
 	// ForwardCmd processes a platform-specific ZapScript command.
 	ForwardCmd(*CmdEnv) (CmdResult, error)
 	// LookupMapping is a platform-specific method of matching a token to a

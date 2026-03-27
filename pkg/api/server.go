@@ -110,14 +110,22 @@ func logSafeRequest(req *models.RequestObject) {
 
 // logSafeResponse logs a response but truncates large content to prevent recursive logging issues
 func logSafeResponse(result any) {
-	if logResp, ok := result.(models.LogDownloadResponse); ok {
-		truncated := logResp
+	switch resp := result.(type) {
+	case models.LogDownloadResponse:
+		truncated := resp
 		if len(truncated.Content) > 100 {
 			truncated.Content = truncated.Content[:100] + "... [truncated " +
-				strconv.Itoa(len(logResp.Content)-100) + " more chars]"
+				strconv.Itoa(len(resp.Content)-100) + " more chars]"
 		}
 		log.Debug().Interface("result", truncated).Msg("sending response")
-	} else {
+	case models.ScreenshotResponse:
+		truncated := resp
+		if len(truncated.Data) > 100 {
+			truncated.Data = truncated.Data[:100] + "... [truncated " +
+				strconv.Itoa(len(resp.Data)-100) + " more chars]"
+		}
+		log.Debug().Interface("result", truncated).Msg("sending response")
+	default:
 		log.Debug().Interface("result", result).Msg("sending response")
 	}
 }
@@ -248,6 +256,8 @@ func NewMethodMap() *MethodMap {
 		// input
 		models.MethodInputKeyboard: methods.HandleInputKeyboard,
 		models.MethodInputGamepad:  methods.HandleInputGamepad,
+		// screenshot
+		models.MethodScreenshot: methods.HandleScreenshot,
 		// utils
 		models.MethodVersion:     methods.HandleVersion,
 		models.MethodHealthCheck: methods.HandleHealthCheck,

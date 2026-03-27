@@ -303,6 +303,11 @@ func (*Base) GamepadPress(_ string) error {
 	return nil
 }
 
+// Screenshot is not supported on generic Linux platforms.
+func (*Base) Screenshot() (*platforms.ScreenshotResult, error) {
+	return nil, platforms.ErrNotSupported
+}
+
 // ForwardCmd returns an empty result (no command forwarding on Linux platforms).
 func (*Base) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, nil

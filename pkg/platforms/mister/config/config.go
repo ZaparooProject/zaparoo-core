@@ -25,6 +25,7 @@ const (
 	MainFeaturesFile   = "/tmp/MAINFEATURES"
 	MainFeaturePicker  = "PICKER"
 	MainFeatureNotice  = "NOTICE"
+	ScreenshotsDir     = SDRootDir + "/screenshots"
 	MenuCore           = "MENU"
 	LinuxFolder        = SDRootDir + "/linux"
 	StartupFile        = LinuxFolder + "/user-startup.sh"

@@ -614,6 +614,10 @@ func (p *Platform) LaunchMedia(
 	return nil
 }
 
+func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
+	return nil, platforms.ErrNotSupported
+}
+
 func (*Platform) ForwardCmd(env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, fmt.Errorf("command not supported on batocera: %s", env.Cmd)
 }
