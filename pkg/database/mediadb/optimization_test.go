@@ -34,6 +34,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStep, "browse_cache").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	// PopulateBrowseCache: SELECT (empty), BEGIN, DELETE, Prepare, COMMIT
+	mock.ExpectQuery("SELECT Path FROM Media").
+		WillReturnRows(sqlmock.NewRows([]string{"Path"}))
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM BrowseCache").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectPrepare("INSERT INTO BrowseCache")
+	mock.ExpectCommit()
+}
+
 func expectPostAnalyzeSteps(mock sqlmock.Sqlmock) {
 	// Step: wal_checkpoint
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -248,6 +262,8 @@ func TestRunBackgroundOptimization_Success(t *testing.T) {
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
+	expectBrowseCacheStep(mock)
+
 	// Mock setting step to analyze
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "analyze").
@@ -295,6 +311,8 @@ func TestRunBackgroundOptimization_FailureHandling(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	expectBrowseCacheStep(mock)
 
 	// Mock setting step to analyze
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -347,6 +365,8 @@ func TestConcurrentOptimization(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	expectBrowseCacheStep(mock)
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "analyze").
@@ -455,6 +475,8 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 			WithArgs(DBConfigOptimizationStatus, "running").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
+		expectBrowseCacheStep(mock)
+
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStep, "analyze").
 			WillReturnResult(sqlmock.NewResult(1, 1))
@@ -516,6 +538,8 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 			WithArgs(DBConfigOptimizationStatus, "running").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
+		expectBrowseCacheStep(mock)
+
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStep, "analyze").
 			WillReturnResult(sqlmock.NewResult(1, 1))
@@ -575,6 +599,8 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "running").
 			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		expectBrowseCacheStep(mock)
 
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStep, "analyze").

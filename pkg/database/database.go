@@ -131,6 +131,7 @@ type MediaTitle struct {
 
 type Media struct {
 	Path           string
+	ParentDir      string
 	DBID           int64
 	MediaTitleDBID int64
 	SystemDBID     int64
@@ -179,6 +180,35 @@ func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []za
 		}
 	}
 	return and, not, or
+}
+
+// BrowseDirectoryResult represents a subdirectory found during browse navigation.
+type BrowseDirectoryResult struct {
+	Name      string
+	FileCount int
+}
+
+// BrowseCursor holds the keyset pagination state for browse queries.
+// SortValue is the value of the sort column (Name or Path) from the last
+// result, and LastID is the DBID tiebreaker.
+type BrowseCursor struct {
+	SortValue string
+	LastID    int64
+}
+
+// BrowseFilesOptions contains parameters for the BrowseFiles query.
+type BrowseFilesOptions struct {
+	Cursor     *BrowseCursor
+	Letter     *string
+	PathPrefix string
+	Sort       string
+	Limit      int
+}
+
+// BrowseVirtualScheme represents a virtual URI scheme with indexed content.
+type BrowseVirtualScheme struct {
+	Scheme    string // e.g., "steam://"
+	FileCount int
 }
 
 type SearchResultWithCursor struct {
@@ -397,6 +427,15 @@ type MediaDBI interface {
 	GetSystemTagsCached(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	InvalidateSystemTagsCache(ctx context.Context, systems []systemdefs.System) error
 	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
+
+	// Browse methods for directory-style navigation of indexed content
+	BrowseDirectories(ctx context.Context, pathPrefix string) ([]BrowseDirectoryResult, error)
+	BrowseFiles(ctx context.Context, opts *BrowseFilesOptions) ([]SearchResultWithCursor, error)
+	BrowseFileCount(ctx context.Context, pathPrefix string, letter *string) (int, error)
+	BrowseVirtualSchemes(ctx context.Context) ([]BrowseVirtualScheme, error)
+	BrowseRootCounts(ctx context.Context, rootDirs []string) (map[string]*int, error)
+	PopulateBrowseCache(ctx context.Context) error
+
 	IndexedSystems() ([]string, error)
 	SystemIndexed(system *systemdefs.System) bool
 	RandomGame(systems []systemdefs.System) (SearchResult, error)

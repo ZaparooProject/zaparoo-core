@@ -153,9 +153,19 @@ func AddMediaPath(
 	if foundMediaIndex, ok := ss.MediaIDs[mediaKey]; !ok {
 		ss.MediaIndex++
 		mediaIndex = ss.MediaIndex
+
+		// Compute immediate parent directory for indexed browse lookups.
+		var parentDir string
+		if idx := strings.Index(pf.Path, "://"); idx >= 0 {
+			parentDir = pf.Path[:idx+3]
+		} else if lastSlash := strings.LastIndex(pf.Path, "/"); lastSlash >= 0 {
+			parentDir = pf.Path[:lastSlash+1]
+		}
+
 		_, err := db.InsertMedia(database.Media{
 			DBID:           int64(mediaIndex),
 			Path:           pf.Path,
+			ParentDir:      parentDir,
 			MediaTitleDBID: int64(titleIndex),
 			SystemDBID:     int64(systemIndex),
 		})
