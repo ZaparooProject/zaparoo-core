@@ -35,10 +35,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const (
-	backgroundModeNone      byte = 0
-	backgroundModeWallpaper byte = 2
-)
+const backgroundModeWallpaper byte = 2
 
 // wallpaperPaths holds filesystem paths used by wallpaper operations.
 // Production code uses defaultWallpaperPaths(); tests can override.
@@ -147,10 +144,6 @@ func unsetWallpaper(paths wallpaperPaths) (platforms.CmdResult, error) {
 
 	if !removed {
 		log.Debug().Msg("no wallpaper symlink to remove")
-	}
-
-	if err := setBackgroundMode(paths.menuCfgFile, backgroundModeNone); err != nil {
-		log.Warn().Err(err).Msg("failed to reset background mode in MENU.CFG")
 	}
 
 	relaunchMenuIfActive()

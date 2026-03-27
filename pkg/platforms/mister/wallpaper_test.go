@@ -254,12 +254,6 @@ func TestUnsetWallpaper_RemovesSymlink(t *testing.T) {
 
 	_, statErr := os.Lstat(filepath.Join(paths.sdRoot, "menu.png"))
 	assert.True(t, os.IsNotExist(statErr), "symlink should be removed")
-
-	// Verify MENU.CFG was reset to none mode
-	//nolint:gosec // G304: test file path from t.TempDir()
-	cfgData, err := os.ReadFile(paths.menuCfgFile)
-	require.NoError(t, err)
-	assert.Equal(t, backgroundModeNone, cfgData[0])
 }
 
 func TestUnsetWallpaper_SkipsRegularFile(t *testing.T) {
