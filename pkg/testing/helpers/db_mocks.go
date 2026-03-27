@@ -1822,6 +1822,99 @@ func SystemMatcher() any {
 // Example usage:
 //
 //	mediaDB.On("GetMediaByText", helpers.TextMatcher()).Return(fixtures.SampleMedia()[0], nil)
+
+// Browse methods
+
+func (m *MockMediaDBI) BrowseDirectories(
+	ctx context.Context, pathPrefix string,
+) ([]database.BrowseDirectoryResult, error) {
+	args := m.Called(ctx, pathPrefix)
+	if results, ok := args.Get(0).([]database.BrowseDirectoryResult); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.BrowseDirectoryResult{}, nil
+}
+
+func (m *MockMediaDBI) BrowseFiles(
+	ctx context.Context, opts *database.BrowseFilesOptions,
+) ([]database.SearchResultWithCursor, error) {
+	args := m.Called(ctx, opts)
+	if results, ok := args.Get(0).([]database.SearchResultWithCursor); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.SearchResultWithCursor{}, nil
+}
+
+func (m *MockMediaDBI) BrowseFileCount(
+	ctx context.Context, pathPrefix string, letter *string,
+) (int, error) {
+	args := m.Called(ctx, pathPrefix, letter)
+	if count, ok := args.Get(0).(int); ok {
+		if err := args.Error(1); err != nil {
+			return count, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return count, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
+func (m *MockMediaDBI) BrowseVirtualSchemes(
+	ctx context.Context,
+) ([]database.BrowseVirtualScheme, error) {
+	args := m.Called(ctx)
+	if results, ok := args.Get(0).([]database.BrowseVirtualScheme); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.BrowseVirtualScheme{}, nil
+}
+
+func (m *MockMediaDBI) BrowseRootCounts(
+	ctx context.Context, rootDirs []string,
+) (map[string]*int, error) {
+	args := m.Called(ctx, rootDirs)
+	if results, ok := args.Get(0).(map[string]*int); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return map[string]*int{}, nil
+}
+
+func (m *MockMediaDBI) PopulateBrowseCache(
+	ctx context.Context,
+) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func TextMatcher() any {
 	return mock.MatchedBy(func(text string) bool {
 		// Accept any non-empty string

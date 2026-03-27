@@ -52,6 +52,25 @@ type TagsResponse struct {
 	Tags []database.TagInfo `json:"tags"`
 }
 
+type BrowseEntry struct {
+	SystemID  *string            `json:"systemId,omitempty"`
+	RelPath   *string            `json:"relativePath,omitempty"`
+	ZapScript *string            `json:"zapScript,omitempty"`
+	FileCount *int               `json:"fileCount,omitempty"`
+	Group     *string            `json:"group,omitempty"`
+	Name      string             `json:"name"`
+	Path      string             `json:"path"`
+	Type      string             `json:"type"`
+	Tags      []database.TagInfo `json:"tags,omitempty"`
+}
+
+type BrowseResults struct {
+	Pagination *PaginationInfo `json:"pagination,omitempty"`
+	Path       string          `json:"path"`
+	Entries    []BrowseEntry   `json:"entries"`
+	TotalFiles int             `json:"totalFiles"`
+}
+
 type SettingsResponse struct {
 	ReadersScanMode         string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem []string           `json:"readersScanIgnoreSystems"`

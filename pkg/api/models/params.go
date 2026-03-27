@@ -32,6 +32,14 @@ type SearchParams struct {
 	Query       *string   `json:"query"`
 }
 
+type BrowseParams struct {
+	Path       *string `json:"path,omitempty"`
+	MaxResults *int    `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
+	Cursor     *string `json:"cursor,omitempty"`
+	Letter     *string `json:"letter,omitempty" validate:"omitempty,letter"`
+	Sort       *string `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+}
+
 type MediaIndexParams struct {
 	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
 	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`

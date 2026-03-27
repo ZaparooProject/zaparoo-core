@@ -446,21 +446,10 @@ func sqlSearchMediaWithFilters(
 
 	// Add letter filtering condition
 	letterFilterCondition := ""
-	if letter != nil && *letter != "" {
-		letterValue := strings.ToUpper(*letter)
-		switch {
-		case letterValue == "0-9":
-			// Filter for games starting with numbers
-			letterFilterCondition = " AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) BETWEEN '0' AND '9' "
-		case letterValue == "#":
-			// Filter for games starting with symbols (not letters or numbers)
-			letterFilterCondition = " AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) NOT BETWEEN 'A' AND 'Z' " +
-				"AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) NOT BETWEEN '0' AND '9' "
-		case len(letterValue) == 1 && letterValue >= "A" && letterValue <= "Z":
-			// Filter for games starting with specific letter
-			letterFilterCondition = " AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) = ? "
-			variantArgs = append(variantArgs, letterValue)
-		}
+	letterClauses, letterArgs := BuildLetterFilterSQL(letter, "MediaTitles.Name")
+	if len(letterClauses) > 0 {
+		letterFilterCondition = " AND " + strings.Join(letterClauses, " AND ")
+		variantArgs = append(variantArgs, letterArgs...)
 	}
 
 	//nolint:gosec // Safe: WHERE clause built from sanitized components, no direct user input interpolation
@@ -561,22 +550,9 @@ func sqlSearchMediaByTitleDBIDs(
 	extraConditions = append(extraConditions, tagFilterClauses...)
 	extraArgs = append(extraArgs, tagFilterArgs...)
 
-	if letter != nil && *letter != "" {
-		letterValue := strings.ToUpper(*letter)
-		switch {
-		case letterValue == "0-9":
-			extraConditions = append(extraConditions,
-				"UPPER(SUBSTR(MediaTitles.Name, 1, 1)) BETWEEN '0' AND '9'")
-		case letterValue == "#":
-			extraConditions = append(extraConditions,
-				"UPPER(SUBSTR(MediaTitles.Name, 1, 1)) NOT BETWEEN 'A' AND 'Z'",
-				"UPPER(SUBSTR(MediaTitles.Name, 1, 1)) NOT BETWEEN '0' AND '9'")
-		case len(letterValue) == 1 && letterValue >= "A" && letterValue <= "Z":
-			extraConditions = append(extraConditions,
-				"UPPER(SUBSTR(MediaTitles.Name, 1, 1)) = ?")
-			extraArgs = append(extraArgs, letterValue)
-		}
-	}
+	letterClauses, letterArgs := BuildLetterFilterSQL(letter, "MediaTitles.Name")
+	extraConditions = append(extraConditions, letterClauses...)
+	extraArgs = append(extraArgs, letterArgs...)
 
 	whereExtra := ""
 	if len(extraConditions) > 0 {

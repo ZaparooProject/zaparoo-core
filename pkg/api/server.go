@@ -200,6 +200,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaGenerateCancel: methods.HandleMediaGenerateCancel,
 		models.MethodMediaIndex:          methods.HandleGenerateMedia,
 		models.MethodMediaSearch:         methods.HandleMediaSearch,
+		models.MethodMediaBrowse:         methods.HandleMediaBrowse,
 		models.MethodMediaTags:           methods.HandleMediaTags,
 		models.MethodMediaActive:         methods.HandleActiveMedia,
 		models.MethodMediaActiveUpdate:   methods.HandleUpdateActiveMedia,

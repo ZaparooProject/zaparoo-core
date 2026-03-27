@@ -263,6 +263,7 @@ var secondaryIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS mediatitles_secondary_slug_idx ON MediaTitles(SecondarySlug)",
 	"CREATE INDEX IF NOT EXISTS mediatitles_prefilter_idx ON MediaTitles(SlugLength, SlugWordCount)",
 	"CREATE INDEX IF NOT EXISTS media_mediatitle_idx ON Media(MediaTitleDBID)",
+	"CREATE INDEX IF NOT EXISTS media_path_idx ON Media(Path)",
 	"CREATE INDEX IF NOT EXISTS media_system_path_idx ON Media(SystemDBID, Path)",
 	"CREATE INDEX IF NOT EXISTS tags_tag_idx ON Tags(Tag)",
 	"CREATE INDEX IF NOT EXISTS tags_tagtype_idx ON Tags(TypeDBID)",
@@ -273,6 +274,8 @@ var secondaryIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS idx_systemtagscache_type_tag ON SystemTagsCache(SystemDBID, TagType, Tag)",
 	"CREATE INDEX IF NOT EXISTS idx_slug_cache_system ON SlugResolutionCache(SystemID)",
 	"CREATE INDEX IF NOT EXISTS idx_slug_cache_media ON SlugResolutionCache(MediaDBID)",
+	"CREATE INDEX IF NOT EXISTS idx_browsecache_parent ON BrowseCache(ParentPath)",
+	"CREATE INDEX IF NOT EXISTS idx_media_parentdir ON Media(ParentDir)",
 }
 
 // DropSecondaryIndexes drops all secondary indexes to speed up bulk inserts.
@@ -686,7 +689,7 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 		}
 
 		if db.batchInsertMedia, err = NewBatchInserterWithOptions(db.ctx, tx, "Media",
-			[]string{"DBID", "MediaTitleDBID", "SystemDBID", "Path"}, db.batchSize, false); err != nil {
+			[]string{"DBID", "MediaTitleDBID", "SystemDBID", "Path", "ParentDir"}, db.batchSize, false); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for media: %w", err)
 		}
@@ -924,6 +927,66 @@ func (db *MediaDB) WALCheckpoint() error {
 		return fmt.Errorf("WAL checkpoint failed: %w", err)
 	}
 	return nil
+}
+
+// BrowseDirectories returns distinct immediate subdirectory names under the given path prefix.
+func (db *MediaDB) BrowseDirectories(
+	ctx context.Context, pathPrefix string,
+) ([]database.BrowseDirectoryResult, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	return sqlBrowseDirectories(ctx, db.conn(), pathPrefix)
+}
+
+// BrowseFiles returns indexed media files that are immediate children of the given path prefix.
+func (db *MediaDB) BrowseFiles(
+	ctx context.Context, opts *database.BrowseFilesOptions,
+) ([]database.SearchResultWithCursor, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	return sqlBrowseFiles(ctx, db.conn(), opts)
+}
+
+// BrowseFileCount returns the total number of immediate child files under a path prefix.
+func (db *MediaDB) BrowseFileCount(
+	ctx context.Context, pathPrefix string, letter *string,
+) (int, error) {
+	if db.sql == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlBrowseFileCount(ctx, db.conn(), pathPrefix, letter)
+}
+
+// BrowseVirtualSchemes returns distinct URI schemes present in indexed media.
+func (db *MediaDB) BrowseVirtualSchemes(
+	ctx context.Context,
+) ([]database.BrowseVirtualScheme, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	return sqlBrowseVirtualSchemes(ctx, db.conn())
+}
+
+// BrowseRootCounts returns a map of root directory to count of indexed media
+// under each root. A nil *int means the count is not yet available (cache not
+// populated). A non-nil *int is the actual count (which may be 0).
+func (db *MediaDB) BrowseRootCounts(
+	ctx context.Context, rootDirs []string,
+) (map[string]*int, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	return sqlBrowseRootCounts(ctx, db.conn(), rootDirs)
+}
+
+// PopulateBrowseCache rebuilds the BrowseCache table from the current Media data.
+func (db *MediaDB) PopulateBrowseCache(ctx context.Context) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlPopulateBrowseCache(ctx, db.sql)
 }
 
 // SearchMediaPathExact returns indexed names matching an exact query (case-insensitive).
@@ -1719,7 +1782,7 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 
 	// Use batch inserter if available
 	if db.batchInsertMedia != nil {
-		err = db.batchInsertMedia.Add(row.DBID, row.MediaTitleDBID, row.SystemDBID, row.Path)
+		err = db.batchInsertMedia.Add(row.DBID, row.MediaTitleDBID, row.SystemDBID, row.Path, row.ParentDir)
 		if err != nil {
 			return row, fmt.Errorf("failed to add media to batch: %w", err)
 		}
@@ -2032,6 +2095,12 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 	db.needsIndexRebuild.Store(false)
 
 	steps = append(steps,
+		optimizationStep{
+			name: "browse_cache", fn: func() error {
+				return db.PopulateBrowseCache(db.ctx)
+			},
+			maxRetries: 0, retryDelay: rd,
+		},
 		optimizationStep{
 			name: "analyze", fn: db.Analyze,
 			maxRetries: 2, retryDelay: rd,
