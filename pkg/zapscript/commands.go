@@ -103,10 +103,11 @@ func lookupCmd(name string) (cmdFunc, bool) {
 			zapscript.ZapScriptCmdControl:    cmdControl,
 			zapscript.ZapScriptCmdScreenshot: cmdScreenshot,
 
-			zapscript.ZapScriptCmdMisterINI:    forwardCmd,
-			zapscript.ZapScriptCmdMisterCore:   forwardCmd,
-			zapscript.ZapScriptCmdMisterScript: forwardCmd,
-			zapscript.ZapScriptCmdMisterMGL:    forwardCmd,
+			zapscript.ZapScriptCmdMisterINI:       forwardCmd,
+			zapscript.ZapScriptCmdMisterCore:      forwardCmd,
+			zapscript.ZapScriptCmdMisterScript:    forwardCmd,
+			zapscript.ZapScriptCmdMisterMGL:       forwardCmd,
+			zapscript.ZapScriptCmdMisterWallpaper: forwardCmd,
 
 			zapscript.ZapScriptCmdHTTPGet:  cmdHTTPGet,
 			zapscript.ZapScriptCmdHTTPPost: cmdHTTPPost,
