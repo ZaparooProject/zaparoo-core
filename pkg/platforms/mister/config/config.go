@@ -26,6 +26,7 @@ const (
 	MainFeaturePicker  = "PICKER"
 	MainFeatureNotice  = "NOTICE"
 	ScreenshotsDir     = SDRootDir + "/screenshots"
+	WallpapersDir      = SDRootDir + "/wallpapers"
 	MenuCore           = "MENU"
 	LinuxFolder        = SDRootDir + "/linux"
 	StartupFile        = LinuxFolder + "/user-startup.sh"
@@ -34,6 +35,7 @@ const (
 	CoreNameFile       = "/tmp/CORENAME"
 	CurrentPathFile    = "/tmp/CURRENTPATH"
 	CoreConfigFolder   = SDRootDir + "/config"
+	MenuConfigFile     = CoreConfigFolder + "/MENU.CFG"
 	DefaultIniFilename = "MiSTer.ini"
 )
 

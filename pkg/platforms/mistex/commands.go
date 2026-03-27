@@ -11,7 +11,8 @@ var commandsMappings = map[string]func(platforms.Platform, *platforms.CmdEnv) (p
 	"mister.ini":  mister.CmdIni,
 	"mister.core": mister.CmdLaunchCore,
 	// "mister.script": cmdMisterScript,
-	"mister.mgl": mister.CmdMisterMgl,
+	"mister.mgl":       mister.CmdMisterMgl,
+	"mister.wallpaper": mister.CmdWallpaper,
 
 	"ini": mister.CmdIni, // DEPRECATED
 }

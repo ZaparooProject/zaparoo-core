@@ -128,6 +128,11 @@ func TestIsMediaLaunchingCommand(t *testing.T) {
 			cmdName: zapscript.ZapScriptCmdMisterScript,
 			want:    false,
 		},
+		{
+			name:    "mister.wallpaper command - should NOT be blocked",
+			cmdName: zapscript.ZapScriptCmdMisterWallpaper,
+			want:    false,
+		},
 
 		// Utility commands - should NOT be blocked
 		{
@@ -302,6 +307,7 @@ func TestIsMediaLaunchingCommand_ComprehensiveCoverage(t *testing.T) {
 		zapscript.ZapScriptCmdMisterINI,
 		zapscript.ZapScriptCmdMisterCore,
 		zapscript.ZapScriptCmdMisterScript,
+		zapscript.ZapScriptCmdMisterWallpaper,
 		zapscript.ZapScriptCmdHTTPGet,
 		zapscript.ZapScriptCmdHTTPPost,
 		zapscript.ZapScriptCmdScreenshot,
@@ -501,6 +507,7 @@ func TestIsValidCommand(t *testing.T) {
 		{name: "input.keyboard", cmdName: zapscript.ZapScriptCmdInputKeyboard, want: true},
 		{name: "control", cmdName: zapscript.ZapScriptCmdControl, want: true},
 		{name: "screenshot", cmdName: zapscript.ZapScriptCmdScreenshot, want: true},
+		{name: "mister.wallpaper", cmdName: zapscript.ZapScriptCmdMisterWallpaper, want: true},
 		// Invalid commands
 		{name: "unknown command", cmdName: "unknown.cmd", want: false},
 		{name: "empty string", cmdName: "", want: false},

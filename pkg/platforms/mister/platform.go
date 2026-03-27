@@ -175,10 +175,11 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 	p.stopMappingsWatcher = closeMappingsWatcher
 
 	p.cmdMappings = map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error){
-		"mister.ini":    CmdIni,
-		"mister.core":   CmdLaunchCore,
-		"mister.script": cmdMisterScript(p),
-		"mister.mgl":    CmdMisterMgl,
+		"mister.ini":       CmdIni,
+		"mister.core":      CmdLaunchCore,
+		"mister.script":    cmdMisterScript(p),
+		"mister.mgl":       CmdMisterMgl,
+		"mister.wallpaper": CmdWallpaper,
 
 		"ini": CmdIni, // DEPRECATED
 	}
