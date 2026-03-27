@@ -1,5 +1,3 @@
-//go:build linux
-
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -19,40 +17,30 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package mistermain
+package methods
 
 import (
-	"errors"
+	"encoding/base64"
 	"fmt"
-	"os"
-	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/rs/zerolog/log"
 )
 
-// ReadCoreName reads the active core name from MiSTer's temp file.
-func ReadCoreName() (string, error) {
-	data, err := os.ReadFile(config.CoreNameFile)
+func HandleScreenshot(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+	log.Info().Msg("received screenshot request")
+
+	result, err := env.Platform.Screenshot()
 	if err != nil {
-		return "", fmt.Errorf("read core name file: %w", err)
+		return nil, fmt.Errorf("screenshot failed: %w", err)
 	}
 
-	name := strings.TrimSpace(string(data))
-	if name == "" {
-		return "", errors.New("core name file is empty")
-	}
+	encoded := base64.StdEncoding.EncodeToString(result.Data)
 
-	return name, nil
-}
-
-// GetActiveCoreName returns the active core name, or empty string on error.
-func GetActiveCoreName() string {
-	name, err := ReadCoreName()
-	if err != nil {
-		log.Error().Err(err).Msg("error trying to get the core name")
-		return ""
-	}
-
-	return name
+	return models.ScreenshotResponse{
+		Path: result.Path,
+		Data: encoded,
+		Size: len(result.Data),
+	}, nil
 }

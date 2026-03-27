@@ -187,6 +187,18 @@ func (m *MockPlatform) GamepadPress(button string) error {
 	return nil
 }
 
+// Screenshot captures a screenshot of the current platform display
+func (m *MockPlatform) Screenshot() (*platforms.ScreenshotResult, error) {
+	args := m.Called()
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	if result, ok := args.Get(0).(*platforms.ScreenshotResult); ok {
+		return result, nil
+	}
+	return &platforms.ScreenshotResult{}, nil
+}
+
 // ForwardCmd processes a platform-specific ZapScript command
 func (m *MockPlatform) ForwardCmd(env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	args := m.Called(env)

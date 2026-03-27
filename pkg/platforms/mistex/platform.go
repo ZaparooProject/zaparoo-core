@@ -330,6 +330,10 @@ func (p *Platform) LaunchMedia(
 	return nil
 }
 
+func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
+	return nil, platforms.ErrNotSupported
+}
+
 func (p *Platform) ForwardCmd(env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	if f, ok := commandsMappings[env.Cmd.Name]; ok {
 		return f(p, env)
