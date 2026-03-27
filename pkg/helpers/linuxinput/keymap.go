@@ -18,7 +18,7 @@ func ToKeyboardCode(name string) (int, bool) {
 var GamepadMap = map[string]int{
 	"^":        uinput.ButtonDpadUp,
 	"{up}":     uinput.ButtonDpadUp,
-	"v":        uinput.ButtonDpadUp,
+	"v":        uinput.ButtonDpadDown,
 	"V":        uinput.ButtonDpadDown,
 	"{down}":   uinput.ButtonDpadDown,
 	"<":        uinput.ButtonDpadLeft,

@@ -482,6 +482,113 @@ An object:
 }
 ```
 
+### media.browse
+
+Browse indexed media content by directory, similar to navigating a file manager. Supports filesystem paths, virtual URI schemes (e.g. `mame-arcade://`), and paginated results.
+
+When called without a `path` parameter (or with an empty path), returns top-level root entries including filesystem roots and virtual scheme roots.
+
+#### Parameters
+
+All parameters are optional. When called with no parameters, returns root entries.
+
+| Key        | Type   | Required | Description                                                                                                |
+| :--------- | :----- | :------- | :--------------------------------------------------------------------------------------------------------- |
+| path       | string | No       | Directory path to browse. Omit or set empty to list root entries. Supports filesystem paths and virtual URI schemes (e.g. `mame-arcade://`). |
+| maxResults | number | No       | Maximum results per page. Default is 100, maximum is 1000.                                                 |
+| cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page.                     |
+| letter     | string | No       | Filter results to entries starting with this letter.                                                       |
+| sort       | string | No       | Sort order. One of: `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. The `filename` variants sort by full file path. |
+
+#### Result
+
+| Key        | Type                                  | Required | Description                                                              |
+| :--------- | :------------------------------------ | :------- | :----------------------------------------------------------------------- |
+| path       | string                                | Yes      | The browsed directory path. Empty string when listing roots.             |
+| entries    | [BrowseEntry](#browse-entry-object)[] | Yes      | Array of entries in the current path.                                    |
+| totalFiles | number                                | Yes      | Total count of media files in the current directory (respects `letter` filter). |
+| pagination | [Pagination](#browse-pagination-object) | No     | Pagination info. Omitted when there are no file results.                 |
+
+##### Browse entry object
+
+| Key          | Type     | Required | Description                                                                                      |
+| :----------- | :------- | :------- | :----------------------------------------------------------------------------------------------- |
+| name         | string   | Yes      | Display name of the entry.                                                                       |
+| path         | string   | Yes      | Full path to the entry.                                                                          |
+| type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
+| fileCount    | number   | No       | Number of files in this directory. Present on `root` and `directory` entries.                     |
+| group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
+| systemId     | string   | No       | System ID for the media (e.g. `snes`). Present on `media` entries.                               |
+| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries.                              |
+| relativePath | string   | No       | Relative path from root directory. Present on `media` entries.                                   |
+| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries. |
+
+##### Browse pagination object
+
+| Key         | Type   | Required | Description                                              |
+| :---------- | :----- | :------- | :------------------------------------------------------- |
+| hasNextPage | bool   | Yes      | Whether more results exist beyond the current page.      |
+| pageSize    | number | Yes      | The requested page size.                                 |
+| nextCursor  | string | No       | Opaque cursor for the next page. Absent on the last page. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-3456-7890-bcde-f01234567890",
+  "method": "media.browse",
+  "params": {
+    "path": "/media/fat/games/SNES",
+    "maxResults": 3
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-3456-7890-bcde-f01234567890",
+  "result": {
+    "path": "/media/fat/games/SNES",
+    "entries": [
+      {
+        "name": "RPGs",
+        "path": "/media/fat/games/SNES/RPGs",
+        "type": "directory",
+        "fileCount": 42
+      },
+      {
+        "name": "Super Mario World",
+        "path": "/media/fat/games/SNES/Super Mario World.sfc",
+        "type": "media",
+        "systemId": "snes",
+        "zapScript": "**launch:/media/fat/games/SNES/Super Mario World.sfc",
+        "relativePath": "Super Mario World.sfc"
+      },
+      {
+        "name": "The Legend of Zelda - A Link to the Past",
+        "path": "/media/fat/games/SNES/The Legend of Zelda - A Link to the Past.sfc",
+        "type": "media",
+        "systemId": "snes",
+        "zapScript": "**launch:/media/fat/games/SNES/The Legend of Zelda - A Link to the Past.sfc",
+        "relativePath": "The Legend of Zelda - A Link to the Past.sfc"
+      }
+    ],
+    "totalFiles": 150,
+    "pagination": {
+      "hasNextPage": true,
+      "pageSize": 3,
+      "nextCursor": "eyJzb3J0VmFsdWUiOiJUaGUgTGVnZW5kIG9mIFplbGRhIiwibGFzdElkIjo0Mn0="
+    }
+  }
+}
+```
+
 ### media.tags
 
 Query the media database and return available tags for filtering.
@@ -2172,6 +2279,7 @@ Returns `null` on success.
 
 ### inbox.clear
 
+
 Delete all inbox messages.
 
 #### Parameters
@@ -2202,3 +2310,92 @@ Returns `null` on success.
   "id": "0e8b1a8a-7e48-11ef-9b5e-020304050607",
   "result": null
 }
+```
+
+## Input
+
+Direct platform input control for remote control use cases. These methods bypass the token pipeline entirely — no hooks, history, or sound effects are triggered.
+
+The input macro format is identical to what goes after the `:` in a ZapScript `input.keyboard` or `input.gamepad` command on a token. Each character is a separate keypress, `{...}` groups are special keys/combos, and `\` is the escape character.
+
+### input.keyboard
+
+Press keyboard keys using the ZapScript input macro format.
+
+#### Parameters
+
+An object:
+
+| Key  | Type   | Required | Description                                                                                                                                          |
+| :--- | :----- | :------- | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
+| keys | string | Yes      | Input macro string. Each character is a keypress, `{...}` for special keys (e.g. `{enter}`, `{f9}`, `{ctrl+q}`). Same format as ZapScript on a token. |
+
+#### Result
+
+Returns `null` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "method": "input.keyboard",
+  "params": {
+    "keys": "abc{enter}"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "result": null
+}
+```
+
+### input.gamepad
+
+Press gamepad buttons using the ZapScript input macro format.
+
+#### Parameters
+
+An object:
+
+| Key     | Type   | Required | Description                                                                                                                                                  |
+| :------ | :----- | :------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| buttons | string | Yes      | Input macro string. Each character is a button press, `{...}` for named buttons (e.g. `{up}`, `{start}`, `{l1}`). Same format as ZapScript on a token. |
+
+#### Result
+
+Returns `null` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-2345-6789-abcd-ef0123456789",
+  "method": "input.gamepad",
+  "params": {
+    "buttons": "^^vv<><>BA{start}"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-2345-6789-abcd-ef0123456789",
+  "result": null
+}
+```

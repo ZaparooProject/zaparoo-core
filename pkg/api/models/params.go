@@ -182,3 +182,11 @@ type SettingsAuthClaimParams struct {
 	ClaimURL string `json:"claimUrl" validate:"required,url"`
 	Token    string `json:"token" validate:"required"`
 }
+
+type InputKeyboardParams struct {
+	Keys string `json:"keys" validate:"required,min=1"`
+}
+
+type InputGamepadParams struct {
+	Buttons string `json:"buttons" validate:"required,min=1"`
+}

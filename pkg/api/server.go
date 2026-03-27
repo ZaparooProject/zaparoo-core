@@ -245,6 +245,9 @@ func NewMethodMap() *MethodMap {
 				env.State.ListReaders(),
 			)
 		},
+		// input
+		models.MethodInputKeyboard: methods.HandleInputKeyboard,
+		models.MethodInputGamepad:  methods.HandleInputGamepad,
 		// utils
 		models.MethodVersion:     methods.HandleVersion,
 		models.MethodHealthCheck: methods.HandleHealthCheck,

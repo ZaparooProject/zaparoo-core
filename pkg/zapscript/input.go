@@ -53,6 +53,30 @@ func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, e
 	return platforms.CmdResult{}, nil
 }
 
+// PressKeyboardSequence presses each key in args sequentially with a delay
+// between each press. Used by both ZapScript commands and API handlers.
+func PressKeyboardSequence(pl platforms.Platform, args []string) error {
+	for _, name := range args {
+		if err := pl.KeyboardPress(name); err != nil {
+			return fmt.Errorf("failed to press keyboard key '%s': %w", name, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil
+}
+
+// PressGamepadSequence presses each button in args sequentially with a delay
+// between each press. Used by both ZapScript commands and API handlers.
+func PressGamepadSequence(pl platforms.Platform, args []string) error {
+	for _, name := range args {
+		if err := pl.GamepadPress(name); err != nil {
+			return fmt.Errorf("failed to press gamepad button '%s': %w", name, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil
+}
+
 //nolint:gocritic // single-use parameter in command handler
 func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Unsafe {
@@ -64,11 +88,8 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 	// TODO: stuff like adjust delay, only press, etc.
 	//	     basically a filled out mini macro language for key presses
 
-	for _, name := range env.Cmd.Args {
-		if err := pl.KeyboardPress(name); err != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to press keyboard key '%s': %w", name, err)
-		}
-		time.Sleep(100 * time.Millisecond)
+	if err := PressKeyboardSequence(pl, env.Cmd.Args); err != nil {
+		return platforms.CmdResult{}, err
 	}
 
 	return platforms.CmdResult{}, nil
@@ -82,11 +103,8 @@ func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 
 	log.Info().Msgf("gamepad input: %v", env.Cmd.Args)
 
-	for _, name := range env.Cmd.Args {
-		if err := pl.GamepadPress(name); err != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to press gamepad button '%s': %w", name, err)
-		}
-		time.Sleep(100 * time.Millisecond)
+	if err := PressGamepadSequence(pl, env.Cmd.Args); err != nil {
+		return platforms.CmdResult{}, err
 	}
 
 	return platforms.CmdResult{}, nil
