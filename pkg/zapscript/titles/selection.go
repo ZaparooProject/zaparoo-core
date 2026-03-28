@@ -191,7 +191,14 @@ func HasAllTags(result *database.SearchResultWithCursor, tagFilters []zapscript.
 
 	// Check AND filters: must have ALL
 	for _, requiredTag := range andFilters {
-		if value, exists := resultTags[requiredTag.Type]; !exists || value != requiredTag.Value {
+		value, exists := resultTags[requiredTag.Type]
+		if !exists {
+			// Tag type not present on result — can't evaluate.
+			// Missing metadata is not a conflict, so skip rather
+			// than rejecting results that simply lack this tag type.
+			continue
+		}
+		if value != requiredTag.Value {
 			return false
 		}
 	}
@@ -555,11 +562,12 @@ func selectByQualityScore(results []database.SearchResultWithCursor) database.Se
 
 // CalculateTagMatchConfidence calculates a confidence score based on how well
 // a result's tags match the requested tag filters.
+// Only tag types present on the result are evaluated — missing tag types are
+// skipped (neutral), not penalized. Each conflict carries a 0.2 penalty.
 // Returns a value between 0.0 and 1.0, where:
-// - 1.0 = perfect match (all tags match or no tags required)
-// - 0.7-0.9 = good match (most tags match)
-// - 0.5-0.7 = partial match (some tags match or no tags on result)
-// - <0.5 = poor match (few tags match or conflicts exist)
+// - 1.0 = all applicable filters match, or no applicable filters
+// - 0.65 = result has no tags at all (moderate confidence)
+// - <0.5 = tag conflicts exist
 func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFilters []zapscript.TagFilter) float64 {
 	// No tag requirements = perfect match
 	if len(tagFilters) == 0 {
@@ -584,19 +592,20 @@ func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFil
 	// Group filters by operator
 	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(tagFilters)
 
-	// Check AND filters
-	yearConflicts := 0
+	// Check AND filters — only count filters where the tag type exists
+	// on the result. Missing metadata is not a conflict.
+	applicableAndFilters := 0
 	for _, requiredTag := range andFilters {
-		if value, exists := resultTags[requiredTag.Type]; exists && value == requiredTag.Value {
+		value, exists := resultTags[requiredTag.Type]
+		if !exists {
+			// Tag type not present — can't evaluate, skip.
+			continue
+		}
+		applicableAndFilters++
+		if value == requiredTag.Value {
 			matched++
-		} else if exists {
-			// Has a different value for this tag type (e.g., wants USA, has Japan)
-			if requiredTag.Type == string(tags.TagTypeYear) {
-				// Year tags get a smaller penalty - they're soft preferences
-				yearConflicts++
-			} else {
-				conflicts++
-			}
+		} else {
+			conflicts++
 		}
 	}
 
@@ -626,7 +635,7 @@ func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFil
 		}
 	}
 
-	totalFilters := len(andFilters) + len(notFilters)
+	totalFilters := applicableAndFilters + len(notFilters)
 	if len(orFilters) > 0 {
 		totalFilters++ // OR group counts as one requirement
 	}
@@ -636,10 +645,8 @@ func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFil
 	}
 
 	// Calculate confidence: matched ratio minus conflict penalty
-	// Year conflicts use a smaller penalty (0.05) than other tags (0.2)
-	// so year acts as a soft preference rather than a hard filter
 	matchRatio := float64(matched) / float64(totalFilters)
-	conflictPenalty := float64(conflicts)*0.2 + float64(yearConflicts)*0.05
+	conflictPenalty := float64(conflicts) * 0.2
 
 	confidence := matchRatio - conflictPenalty
 	if confidence < 0.0 {

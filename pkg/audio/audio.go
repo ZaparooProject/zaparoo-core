@@ -33,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/gen2brain/malgo"
@@ -54,6 +55,7 @@ type Player interface {
 // MalgoPlayer implements Player using malgo for real audio hardware output.
 type MalgoPlayer struct {
 	currentCancel context.CancelFunc
+	currentDone   <-chan struct{} // closed when current playback goroutine finishes
 	fileCache     map[string][]byte
 	playbackGen   uint64
 	fileCacheMu   syncutil.RWMutex
@@ -79,18 +81,42 @@ func (p *MalgoPlayer) playWAV(r io.ReadCloser) error {
 	// Resample to 48000 Hz for HDMI audio compatibility (MiSTer, etc.)
 	resampled := beep.Resample(4, format.SampleRate, beep.SampleRate(48000), streamer)
 
-	// Cancel any currently playing sound
+	// Cancel any currently playing sound and capture previous done channel.
 	p.playbackMu.Lock()
 	if p.currentCancel != nil {
 		p.currentCancel()
 	}
+	prevDone := p.currentDone
 	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: stored in p.currentCancel
 	p.currentCancel = cancel
+	done := make(chan struct{})
+	p.currentDone = done
 	p.playbackGen++
 	thisGen := p.playbackGen
 	p.playbackMu.Unlock()
 
+	// Wait for the previous playback goroutine to fully release the audio
+	// device before initializing a new one. Concurrent ALSA device access
+	// from overlapping init/uninit calls crashes miniaudio on MiSTer.
+	if prevDone != nil {
+		select {
+		case <-prevDone:
+		case <-time.After(3 * time.Second):
+			log.Warn().Msg("timeout waiting for previous audio playback cleanup")
+		}
+	}
+
 	go func() {
+		// Outermost: recover from any panic so audio issues never kill the service.
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Error().Any("panic", rec).Msg("recovered panic in audio playback")
+			}
+		}()
+
+		// Signal that this goroutine has finished and the device is released.
+		defer close(done)
+
 		defer func() {
 			if err := streamer.Close(); err != nil {
 				log.Warn().Err(err).Msg("failed to close audio streamer")
@@ -157,17 +183,40 @@ func (p *MalgoPlayer) PlayFile(path string) error {
 	// Resample to 48000 Hz for HDMI audio compatibility (MiSTer, etc.)
 	resampled := beep.Resample(4, format.SampleRate, beep.SampleRate(48000), streamer)
 
+	// Cancel any currently playing sound and capture previous done channel.
 	p.playbackMu.Lock()
 	if p.currentCancel != nil {
 		p.currentCancel()
 	}
+	prevDone := p.currentDone
 	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: stored in p.currentCancel
 	p.currentCancel = cancel
+	done := make(chan struct{})
+	p.currentDone = done
 	p.playbackGen++
 	thisGen := p.playbackGen
 	p.playbackMu.Unlock()
 
+	// Wait for the previous playback goroutine to fully release the audio
+	// device before initializing a new one. Concurrent ALSA device access
+	// from overlapping init/uninit calls crashes miniaudio on MiSTer.
+	if prevDone != nil {
+		select {
+		case <-prevDone:
+		case <-time.After(3 * time.Second):
+			log.Warn().Msg("timeout waiting for previous audio playback cleanup")
+		}
+	}
+
 	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Error().Any("panic", rec).Msg("recovered panic in audio playback")
+			}
+		}()
+
+		defer close(done)
+
 		defer func() {
 			if err := streamer.Close(); err != nil {
 				log.Warn().Err(err).Msg("failed to close audio streamer")

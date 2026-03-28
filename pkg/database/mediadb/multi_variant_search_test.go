@@ -73,9 +73,9 @@ func TestSearchMediaWithFilters_MultipleSameMediaTypeSystems(t *testing.T) {
 			AddRow("NES", "Super Mario Bros", "/games/mario.nes", int64(1)))
 
 	// Mock tags query
-	mock.ExpectPrepare("SELECT DISTINCT.*FROM Media.*WHERE Media.DBID IN").
+	mock.ExpectPrepare("SELECT MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
-		WithArgs(int64(1)).
+		WithArgs(int64(1), int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
 
 	results, err := sqlSearchMediaWithFilters(
@@ -183,9 +183,9 @@ func TestSearchMediaWithFilters_MultipleWordsMultipleSystems(t *testing.T) {
 			AddRow("SNES", "Super Mario World", "/games/smw.sfc", int64(1)))
 
 	// Mock tags query
-	mock.ExpectPrepare("SELECT DISTINCT.*FROM Media.*WHERE Media.DBID IN").
+	mock.ExpectPrepare("SELECT MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
-		WithArgs(int64(1)).
+		WithArgs(int64(1), int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
 
 	results, err := sqlSearchMediaWithFilters(

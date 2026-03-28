@@ -1297,7 +1297,7 @@ func TestHasAllTags(t *testing.T) {
 				{Type: "region", Value: "us"},
 				{Type: "lang", Value: "en"},
 			},
-			expected: false,
+			expected: true, // missing tag type is neutral, not a conflict
 		},
 		{
 			name: "wrong tag value",

@@ -729,9 +729,10 @@ func TestResolveTitle_ErrLowConfidence(t *testing.T) {
 
 	setupCacheMiss(mockMediaDB)
 
-	// Strategy 1: Single result with only a region tag.
-	// With 2 AND filters (region:us matches, lang:en absent from result):
-	// matchRatio=0.5, tagConfidence=0.5, confidence = 1.0 * 0.5 = 0.5
+	// Strategy 1: Single result with conflicting tag values.
+	// With 2 AND filters (region:us conflicts with result's region:jp,
+	// lang:en matches): matchRatio=1/2=0.5, conflictPenalty=0.2,
+	// tagConfidence=0.3, confidence = 1.0 * 0.3 = 0.3
 	// This is > 0.0 but < ConfidenceMinimum (0.60) → ErrLowConfidence
 	mockMediaDB.On("SearchMediaBySlug",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
@@ -742,7 +743,8 @@ func TestResolveTitle_ErrLowConfidence(t *testing.T) {
 			Name:     "Super Mario Bros",
 			Path:     "/games/nes/smb.nes",
 			Tags: []database.TagInfo{
-				{Type: string(tags.TagTypeRegion), Tag: string(tags.TagRegionUS)},
+				{Type: string(tags.TagTypeRegion), Tag: string(tags.TagRegionJP)},
+				{Type: string(tags.TagTypeLang), Tag: string(tags.TagLangEN)},
 			},
 		},
 	}, nil)
@@ -811,10 +813,9 @@ func TestResolveTitle_BestCandidateCachedAndReturned(t *testing.T) {
 
 	setupCacheMiss(mockMediaDB)
 
-	// Strategy 1: Single result with moderate confidence (above minimum
-	// but below high). 3 AND tag filters where 2 match, 1 missing:
-	// matchRatio=2/3, confidence≈0.667 → above 0.60 but below 0.95
-	// Stored as bestCandidate, continues to strategies 2-6 (all empty).
+	// Strategy 1: Single result where region and lang match, year tag is
+	// missing from the result. Missing tag types are neutral (skipped),
+	// so confidence = 1.0 * 1.0 = 1.0 → high confidence early exit.
 	mockMediaDB.On("SearchMediaBySlug",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Return([]database.SearchResultWithCursor{
@@ -829,19 +830,6 @@ func TestResolveTitle_BestCandidateCachedAndReturned(t *testing.T) {
 			},
 		},
 	}, nil)
-
-	mockMediaDB.On("SearchMediaBySecondarySlug",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-	).Return([]database.SearchResultWithCursor{}, nil)
-	mockMediaDB.On("SearchMediaBySlugPrefix",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-	).Return([]database.SearchResultWithCursor{}, nil)
-	mockMediaDB.On("SearchMediaBySlugIn",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-	).Return([]database.SearchResultWithCursor{}, nil)
-	mockMediaDB.On("GetTitlesWithPreFilter",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-	).Return([]database.MediaTitle{}, nil)
 
 	setupCacheWrite(mockMediaDB)
 
@@ -861,10 +849,54 @@ func TestResolveTitle_BestCandidateCachedAndReturned(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, StrategyExactMatch, result.Strategy)
-	assert.Greater(t, result.Confidence, ConfidenceMinimum)
-	assert.Less(t, result.Confidence, ConfidenceHigh)
+	assert.GreaterOrEqual(t, result.Confidence, ConfidenceHigh)
 	mockMediaDB.AssertCalled(t, "SetCachedSlugResolution",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, int64(1), StrategyExactMatch)
+}
+
+func TestResolveTitle_MissingTagTypeIsNeutral(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+
+	setupCacheMiss(mockMediaDB)
+
+	// Result has region:us but no lang tag at all. Filters request both
+	// region:us AND lang:en. The missing lang tag type should be neutral
+	// (skipped), so only region is evaluated → matches → high confidence.
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{
+		{
+			MediaID:  1,
+			SystemID: "NES",
+			Name:     "Super Mario Bros",
+			Path:     "/games/nes/smb.nes",
+			Tags: []database.TagInfo{
+				{Type: string(tags.TagTypeRegion), Tag: string(tags.TagRegionUS)},
+			},
+		},
+	}, nil)
+
+	setupCacheWrite(mockMediaDB)
+
+	result, err := ResolveTitle(context.Background(), &ResolveParams{
+		SystemID:  "NES",
+		GameName:  "Super Mario Bros",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+		AdditionalTags: []zapscript.TagFilter{
+			{Type: string(tags.TagTypeRegion), Value: string(tags.TagRegionUS), Operator: zapscript.TagOperatorAND},
+			{Type: string(tags.TagTypeLang), Value: string(tags.TagLangEN), Operator: zapscript.TagOperatorAND},
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.GreaterOrEqual(t, result.Confidence, ConfidenceHigh)
 }
 
 func TestResolveTitle_FilenameTagExtraction(t *testing.T) {
