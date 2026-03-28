@@ -33,15 +33,15 @@ var ErrUnclosedQuote = errors.New("unclosed quote in command string")
 //
 // There is no escape character. ZapScript's ^ escape handles escaping before
 // text reaches this function. Use single quotes to include literal double
-// quotes and vice versa. Use quote doubling ("" or '') to include a literal
-// quote inside a same-type quoted group.
+// quotes and vice versa. Use quote doubling to include a literal quote
+// inside a same-type quoted group (e.g. “some “”arg”).
 //
 // Rules:
 //   - Unquoted whitespace (space, tab) separates arguments
 //   - Double-quoted strings group content; all characters inside are literal
 //   - Single-quoted strings group content; all characters inside are literal
 //   - Inside double quotes, "" produces a literal "
-//   - Inside single quotes, '' produces a literal '
+//   - Inside single quotes, two consecutive ' produce a literal '
 //   - All other characters (including backslash) are literal
 //   - Empty quoted strings produce an empty argument ("")
 //   - Unclosed quotes return an error
