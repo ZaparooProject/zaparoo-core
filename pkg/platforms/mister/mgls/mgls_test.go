@@ -288,6 +288,75 @@ func TestGenerateMgl(t *testing.T) {
 	}
 }
 
+func TestWriteCurrentPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		path            string
+		wantCurrentPath string
+		wantFullPath    string
+	}{
+		{
+			name:            "standard arcade MRA path",
+			path:            "/media/fat/_Arcade/Pac-Man.mra",
+			wantCurrentPath: "Pac-Man.mra",
+			wantFullPath:    "/media/fat/_Arcade/Pac-Man.mra",
+		},
+		{
+			name:            "MRA in subdirectory",
+			path:            "/media/fat/_Arcade/cores/jotego/Street Fighter II.mra",
+			wantCurrentPath: "Street Fighter II.mra",
+			wantFullPath:    "/media/fat/_Arcade/cores/jotego/Street Fighter II.mra",
+		},
+		{
+			name:            "USB path",
+			path:            "/media/usb0/games/_Arcade/Donkey Kong.mra",
+			wantCurrentPath: "Donkey Kong.mra",
+			wantFullPath:    "/media/usb0/games/_Arcade/Donkey Kong.mra",
+		},
+		{
+			name:            "bare filename without directory",
+			path:            "game.mra",
+			wantCurrentPath: "game.mra",
+			wantFullPath:    "game.mra",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			currentPathFile := filepath.Join(tmpDir, "CURRENTPATH")
+			fullPathFile := filepath.Join(tmpDir, "FULLPATH")
+			fileSelectFile := filepath.Join(tmpDir, "FILESELECT")
+
+			writeCurrentPathTo(
+				tt.path,
+				currentPathFile,
+				fullPathFile,
+				fileSelectFile,
+			)
+
+			got, err := os.ReadFile(currentPathFile) //nolint:gosec // test file
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantCurrentPath, string(got),
+				"CURRENTPATH should be filename only, no trailing newline")
+
+			got, err = os.ReadFile(fullPathFile) //nolint:gosec // test file
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFullPath, string(got),
+				"FULLPATH should be the full path, no trailing newline")
+
+			got, err = os.ReadFile(fileSelectFile) //nolint:gosec // test file
+			require.NoError(t, err)
+			assert.Equal(t, "selected", string(got),
+				"FILESELECT should be exactly 'selected'")
+		})
+	}
+}
+
 func TestGenerateMgl_NoMatchingSlot(t *testing.T) {
 	t.Parallel()
 
