@@ -21,9 +21,11 @@ package zapscript
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	posixpath "path"
 	"path/filepath"
 	"strings"
@@ -132,12 +134,40 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// absolute path, use database query to find random media with this path prefix
 	// this includes virtual paths and zips as options
 	if filepath.IsAbs(query) {
+		cleanedPath := posixpath.Clean(query)
 		mediaQuery := database.MediaQuery{
-			PathPrefix: posixpath.Clean(query),
+			PathPrefix: cleanedPath,
 			Tags:       tagFilters,
 		}
 		searchResult, searchErr := gamesdb.RandomGameWithQuery(&mediaQuery)
-		if searchErr != nil {
+		if errors.Is(searchErr, sql.ErrNoRows) {
+			// Fallback: pick random file directly from disk for unindexed paths
+			entries, readErr := os.ReadDir(cleanedPath)
+			if readErr != nil {
+				return platforms.CmdResult{}, fmt.Errorf("failed to read path '%s': %w", cleanedPath, readErr)
+			}
+			var files []string
+			for _, e := range entries {
+				if !e.IsDir() {
+					files = append(files, filepath.Join(cleanedPath, e.Name()))
+				}
+			}
+			if len(files) == 0 {
+				return platforms.CmdResult{}, fmt.Errorf("no files found in: %s", cleanedPath)
+			}
+			file, randomErr := helpers.RandomElem(files)
+			if randomErr != nil {
+				return platforms.CmdResult{}, fmt.Errorf("failed to select random file: %w", randomErr)
+			}
+			if launchErr := launch(file); launchErr != nil {
+				return platforms.CmdResult{
+					MediaChanged: true,
+				}, fmt.Errorf("failed to launch file '%s': %w", file, launchErr)
+			}
+			return platforms.CmdResult{
+				MediaChanged: true,
+			}, nil
+		} else if searchErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to find random media for path '%s': %w", query, searchErr)
 		}
 

@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -393,4 +394,56 @@ func TestCmdRandom_DoubleSlashPathCleaned(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
 	mockMediaDB.AssertExpectations(t)
+}
+
+// TestCmdRandom_AbsolutePathFallbackToFilesystem is a regression test for #576.
+// When an absolute path has no entries in the media database, launch.random
+// should fall back to picking a random file directly from disk.
+func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
+	t.Parallel()
+
+	// Create temp dir with some files and a subdirectory
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "game1.vhd"), []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "game2.vhd"), []byte("x"), 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o750))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	// Database has no entries for this path
+	mockMediaDB.On("RandomGameWithQuery",
+		mock.MatchedBy(func(q *database.MediaQuery) bool {
+			return q.PathPrefix == dir
+		}),
+	).Return(database.SearchResult{}, sql.ErrNoRows)
+
+	// Accept launch of either file (but not the subdirectory)
+	mockPlatform.On("LaunchMedia", cfg,
+		mock.MatchedBy(func(path string) bool {
+			return path == filepath.Join(dir, "game1.vhd") ||
+				path == filepath.Join(dir, "game2.vhd")
+		}),
+		(*platforms.Launcher)(nil),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{dir},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
 }
