@@ -604,6 +604,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 	return []platforms.Launcher{
 		// Consoles
 		{
+			ID:         systemdefs.System3DO,
+			SystemID:   systemdefs.System3DO,
+			Folders:    []string{"3DO"},
+			Extensions: []string{".iso", ".cue"},
+			Launch:     launch(pl, systemdefs.System3DO),
+		},
+		{
 			ID:         systemdefs.SystemAdventureVision,
 			SystemID:   systemdefs.SystemAdventureVision,
 			Folders:    []string{"AVision"},
