@@ -27,16 +27,24 @@ import (
 var ErrUnclosedQuote = errors.New("unclosed quote in command string")
 
 // SplitCommand splits a command string into a slice of arguments, respecting
-// double quotes, single quotes, and backslash escaping. Quotes are stripped
-// from the output. This is used instead of shell invocation (sh -c) to avoid
-// shell injection vulnerabilities.
+// double quotes and single quotes for grouping. Quotes are stripped from the
+// output. This is used instead of shell invocation (sh -c) to avoid shell
+// injection vulnerabilities.
+//
+// There is no escape character. ZapScript's ^ escape handles escaping before
+// text reaches this function. Use single quotes to include literal double
+// quotes and vice versa. Use quote doubling to include a literal quote
+// inside a same-type quoted group (e.g. “some “”arg”).
 //
 // Rules:
 //   - Unquoted whitespace (space, tab) separates arguments
-//   - Double-quoted strings preserve spaces; backslash escapes \" and \\
-//   - Single-quoted strings preserve spaces; no escape sequences are recognized
-//   - Backslash outside quotes escapes the next character
+//   - Double-quoted strings group content; all characters inside are literal
+//   - Single-quoted strings group content; all characters inside are literal
+//   - Inside double quotes, "" produces a literal "
+//   - Inside single quotes, two consecutive ' produce a literal '
+//   - All other characters (including backslash) are literal
 //   - Empty quoted strings produce an empty argument ("")
+//   - Unclosed quotes return an error
 func SplitCommand(s string) ([]string, error) {
 	var args []string
 	var current strings.Builder
@@ -48,40 +56,20 @@ func SplitCommand(s string) ([]string, error) {
 	for i < len(runes) {
 		ch := runes[i]
 
-		switch {
-		case ch == '\\' && i+1 < len(runes):
-			_, _ = current.WriteRune(runes[i+1])
-			hasContent = true
-			i += 2
-
-		case ch == '"':
-			hasContent = true
-			i++
-			closed := false
-			for i < len(runes) && !closed {
-				switch {
-				case runes[i] == '\\' && i+1 < len(runes) && (runes[i+1] == '"' || runes[i+1] == '\\'):
-					_, _ = current.WriteRune(runes[i+1])
-					i += 2
-				case runes[i] == '"':
-					i++
-					closed = true
-				default:
-					_, _ = current.WriteRune(runes[i])
-					i++
-				}
-			}
-			if !closed {
-				return nil, ErrUnclosedQuote
-			}
-
-		case ch == '\'':
+		switch ch {
+		case '"':
 			hasContent = true
 			i++
 			closed := false
 			for i < len(runes) {
-				if runes[i] == '\'' {
+				if runes[i] == '"' {
 					i++
+					if i < len(runes) && runes[i] == '"' {
+						// "" inside double quotes produces a literal "
+						_, _ = current.WriteRune('"')
+						i++
+						continue
+					}
 					closed = true
 					break
 				}
@@ -92,7 +80,30 @@ func SplitCommand(s string) ([]string, error) {
 				return nil, ErrUnclosedQuote
 			}
 
-		case ch == ' ' || ch == '\t':
+		case '\'':
+			hasContent = true
+			i++
+			closed := false
+			for i < len(runes) {
+				if runes[i] == '\'' {
+					i++
+					if i < len(runes) && runes[i] == '\'' {
+						// '' inside single quotes produces a literal '
+						_, _ = current.WriteRune('\'')
+						i++
+						continue
+					}
+					closed = true
+					break
+				}
+				_, _ = current.WriteRune(runes[i])
+				i++
+			}
+			if !closed {
+				return nil, ErrUnclosedQuote
+			}
+
+		case ' ', '\t':
 			if hasContent {
 				args = append(args, current.String())
 				current.Reset()
