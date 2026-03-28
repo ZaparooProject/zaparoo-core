@@ -81,22 +81,17 @@ func TestSplitCommand(t *testing.T) {
 			want:  []string{"echo", "hello", "world"},
 		},
 		{
-			name:  "escaped space outside quotes",
+			name:  "backslash space outside quotes is not escape",
 			input: `echo hello\ world`,
-			want:  []string{"echo", "hello world"},
+			want:  []string{"echo", `hello\`, "world"},
 		},
 		{
-			name:  "escaped quote in double quotes",
-			input: `echo "hello \"world\""`,
-			want:  []string{"echo", `hello "world"`},
-		},
-		{
-			name:  "escaped backslash in double quotes",
+			name:  "backslash in double quotes is literal",
 			input: `echo "hello\\world"`,
-			want:  []string{"echo", `hello\world`},
+			want:  []string{"echo", `hello\\world`},
 		},
 		{
-			name:  "no escaping in single quotes",
+			name:  "backslash in single quotes is literal",
 			input: `echo 'hello \"world\"'`,
 			want:  []string{"echo", `hello \"world\"`},
 		},
@@ -161,8 +156,8 @@ func TestSplitCommand(t *testing.T) {
 			},
 		},
 		{
-			name:  "windows style path",
-			input: `"C:\\Program Files\\RetroArch\\retroarch.exe" --fullscreen "C:\\Games\\game.sfc"`,
+			name:  "windows path in quotes",
+			input: `"C:\Program Files\RetroArch\retroarch.exe" --fullscreen "C:\Games\game.sfc"`,
 			want:  []string{`C:\Program Files\RetroArch\retroarch.exe`, "--fullscreen", `C:\Games\game.sfc`},
 		},
 		{
@@ -186,14 +181,14 @@ func TestSplitCommand(t *testing.T) {
 			want:  []string{"echo", "\u201Chello\u201D"},
 		},
 		{
-			name:  "backslash before non-special in double quotes is literal",
+			name:  "backslash before any char in double quotes is literal",
 			input: `echo "hello\nworld"`,
 			want:  []string{"echo", `hello\nworld`},
 		},
 		{
-			name:    "backslash-escaped closing quote is unclosed",
-			input:   `echo "hello\"`,
-			wantErr: ErrUnclosedQuote,
+			name:  "backslash before closing quote is literal",
+			input: `echo "hello\"`,
+			want:  []string{"echo", `hello\`},
 		},
 		{
 			name:  "shell metacharacters are literal",
@@ -226,13 +221,13 @@ func TestSplitCommand(t *testing.T) {
 			want:  []string{"hello"},
 		},
 		{
-			name:  "escaped backslash outside quotes",
+			name:  "backslash outside quotes is literal",
 			input: `echo \\hello`,
-			want:  []string{"echo", `\hello`},
+			want:  []string{"echo", `\\hello`},
 		},
 		{
-			name:  "windows UNC path",
-			input: `"\\\\server\\share\\path with spaces"`,
+			name:  "windows UNC path in quotes",
+			input: `"\\server\share\path with spaces"`,
 			want:  []string{`\\server\share\path with spaces`},
 		},
 		{
@@ -265,6 +260,56 @@ func TestSplitCommand(t *testing.T) {
 			input: `echo "%PATH%" %USERPROFILE%`,
 			want:  []string{"echo", "%PATH%", "%USERPROFILE%"},
 		},
+		{
+			name:  "unquoted windows path",
+			input: `C:\Games\retroarch.exe --fullscreen`,
+			want:  []string{`C:\Games\retroarch.exe`, "--fullscreen"},
+		},
+		{
+			name:  "unquoted windows path with quoted arg",
+			input: `C:\path\app.exe "arg with spaces" --flag`,
+			want:  []string{`C:\path\app.exe`, "arg with spaces", "--flag"},
+		},
+		{
+			name:  "single quotes wrap double quotes",
+			input: `notify-send '"Game started"'`,
+			want:  []string{"notify-send", `"Game started"`},
+		},
+		{
+			name:  "double quotes wrap single quotes",
+			input: `echo "it's here"`,
+			want:  []string{"echo", "it's here"},
+		},
+		{
+			name:  "backslash inside double quotes is literal",
+			input: `"C:\Program Files\app.exe"`,
+			want:  []string{`C:\Program Files\app.exe`},
+		},
+		{
+			name:  "doubled double quote inside double quotes",
+			input: `program "some ""arg"`,
+			want:  []string{"program", `some "arg`},
+		},
+		{
+			name:  "doubled single quote inside single quotes",
+			input: `program 'it''s here'`,
+			want:  []string{"program", "it's here"},
+		},
+		{
+			name:  "multiple doubled quotes",
+			input: `echo "she said ""hello"" to me"`,
+			want:  []string{"echo", `she said "hello" to me`},
+		},
+		{
+			name:  "doubled quote at start of quoted string",
+			input: `echo """hello"`,
+			want:  []string{"echo", `"hello`},
+		},
+		{
+			name:  "doubled quote at end of quoted string",
+			input: `echo "hello"""`,
+			want:  []string{"echo", `hello"`},
+		},
 	}
 
 	for _, tt := range tests {
@@ -286,10 +331,11 @@ func FuzzSplitCommand(f *testing.F) {
 	f.Add(`echo "hello world"`)
 	f.Add(`echo 'hello world'`)
 	f.Add(`echo hello\ world`)
-	f.Add(`echo "hello \"world\""`)
+	f.Add(`echo "she said ""hello"""`)
 	f.Add(`echo "hello\\world"`)
 	f.Add(`"" "" ""`)
-	f.Add(`"C:\\Program Files\\app.exe" --flag "C:\\path"`)
+	f.Add(`"C:\Program Files\app.exe" --flag "C:\path"`)
+	f.Add(`program 'it''s here'`)
 	f.Add(`echo "hello"'world'"!"`)
 	f.Add(`echo "$HOME" '%PATH%'`)
 	f.Add("echo hello\nworld")
