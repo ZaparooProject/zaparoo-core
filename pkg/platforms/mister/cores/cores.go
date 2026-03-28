@@ -97,6 +97,20 @@ func PathToMGLDef(system *Core, path string) (*MGLParams, error) {
 
 var Systems = map[string]Core{
 	// Consoles
+	"3DO": {
+		ID:  "3DO",
+		RBF: "_Console/3DO",
+		Slots: []Slot{
+			{
+				Exts: []string{".iso", ".cue"},
+				Mgl: &MGLParams{
+					Delay:  1,
+					Method: "s",
+					Index:  1,
+				},
+			},
+		},
+	},
 	"AdventureVision": {
 		ID:  "AdventureVision",
 		RBF: "_Console/AdventureVision",
