@@ -201,6 +201,44 @@ func LaunchShortCore(path string) error {
 	return launchFile(tmpFile)
 }
 
+// writeCurrentPath writes the CURRENTPATH, FULLPATH, and FILESELECT files
+// to match the format mister_main uses when launching a game from the menu.
+// mister_main doesn't write these files when launching .mra files via
+// load_core, so we do it here to keep external tools (e.g. marquee displays)
+// working correctly.
+func writeCurrentPath(path string) {
+	writeCurrentPathTo(
+		path,
+		misterconfig.CurrentPathFile,
+		misterconfig.FullPathFile,
+		misterconfig.FileSelectFile,
+	)
+}
+
+func writeCurrentPathTo(
+	path, currentPathFile, fullPathFile, fileSelectFile string,
+) {
+	fname := filepath.Base(path)
+	//nolint:gosec // MiSTer system files, need to be readable by other apps
+	if err := os.WriteFile(
+		currentPathFile, []byte(fname), 0o644,
+	); err != nil {
+		log.Error().Err(err).Msg("failed to write CURRENTPATH")
+	}
+	//nolint:gosec // MiSTer system files
+	if err := os.WriteFile(
+		fullPathFile, []byte(path), 0o644,
+	); err != nil {
+		log.Error().Err(err).Msg("failed to write FULLPATH")
+	}
+	//nolint:gosec // MiSTer system files
+	if err := os.WriteFile(
+		fileSelectFile, []byte("selected"), 0o644,
+	); err != nil {
+		log.Error().Err(err).Msg("failed to write FILESELECT")
+	}
+}
+
 func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
 	ext := s.ToLower(filepath.Ext(path))
 	log.Info().Str("system", system.ID).Str("path", path).Str("type", ext).Msg("launching game")
@@ -211,6 +249,7 @@ func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
+		writeCurrentPath(path)
 		log.Debug().Str("path", path).Msg("arcade game launched via MRA")
 	case ".mgl":
 		err := launchFile(path)
@@ -284,6 +323,7 @@ func LaunchBasicFile(path string) error {
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
+		writeCurrentPath(path)
 	case ".mgl":
 		err = launchFile(path)
 		if err != nil {
