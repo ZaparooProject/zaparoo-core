@@ -452,6 +452,9 @@ func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
 func TestCmdRandom_AbsolutePathFallback_NonExistentPath(t *testing.T) {
 	t.Parallel()
 
+	// Use a subdirectory of TempDir so the path is absolute on all platforms
+	nonexistent := filepath.Join(t.TempDir(), "nonexistent")
+
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
@@ -463,7 +466,7 @@ func TestCmdRandom_AbsolutePathFallback_NonExistentPath(t *testing.T) {
 	env := platforms.CmdEnv{
 		Cmd: zapscript.Command{
 			Name: "launch.random",
-			Args: []string{"/nonexistent/path/that/does/not/exist"},
+			Args: []string{nonexistent},
 		},
 		Cfg:      cfg,
 		Database: &database.Database{MediaDB: mockMediaDB},
@@ -508,6 +511,9 @@ func TestCmdRandom_AbsolutePathFallback_OnlySubdirectories(t *testing.T) {
 func TestCmdRandom_AbsolutePathDBError_NoFallback(t *testing.T) {
 	t.Parallel()
 
+	// Use TempDir so the path is absolute on all platforms (including Windows)
+	dir := t.TempDir()
+
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
@@ -519,7 +525,7 @@ func TestCmdRandom_AbsolutePathDBError_NoFallback(t *testing.T) {
 	env := platforms.CmdEnv{
 		Cmd: zapscript.Command{
 			Name: "launch.random",
-			Args: []string{"/some/absolute/path"},
+			Args: []string{dir},
 		},
 		Cfg:      cfg,
 		Database: &database.Database{MediaDB: mockMediaDB},
