@@ -227,6 +227,12 @@ func (db *MediaDB) Open() error {
 		log.Warn().Err(err).Msg("failed to run WAL checkpoint on startup")
 	}
 
+	// Pre-warm in-memory tag cache from the SystemTagsCache table so the
+	// first media.tags request is served from memory instead of hitting SQL.
+	if warmErr := db.RebuildTagCache(); warmErr != nil {
+		log.Warn().Err(warmErr).Msg("failed to warm tag cache on startup")
+	}
+
 	return nil
 }
 
@@ -1092,7 +1098,6 @@ func (db *MediaDB) slugCacheSearch(
 	ctx context.Context,
 	systemID string,
 	input string,
-	tags []zapscript.TagFilter,
 	matchFn func(*SlugSearchCache, []int64, []byte) []int64,
 ) ([]database.SearchResultWithCursor, bool, error) {
 	cache := db.slugSearchCache.Load()
@@ -1115,7 +1120,10 @@ func (db *MediaDB) slugCacheSearch(
 	if len(candidates) == 0 {
 		return []database.SearchResultWithCursor{}, true, nil
 	}
-	results, err := sqlSearchMediaByTitleDBIDs(ctx, db.conn(), candidates, tags, nil, nil, defaultSlugSearchLimit)
+	// Skip SQL-level tag filters for cache path — the Go-side selection
+	// logic handles missing/conflicting tags gracefully, and the INTERSECT
+	// subqueries are the most expensive part of the query on slow storage.
+	results, err := sqlSearchMediaByTitleDBIDs(ctx, db.conn(), candidates, nil, nil, nil, defaultSlugSearchLimit)
 	return results, true, err
 }
 
@@ -1125,10 +1133,13 @@ func (db *MediaDB) SearchMediaBySlug(
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
-	if results, ok, err := db.slugCacheSearch(ctx, systemID, slug, tags,
+	if results, ok, err := db.slugCacheSearch(ctx, systemID, slug,
 		(*SlugSearchCache).ExactSlugMatch); ok || err != nil {
 		return results, err
 	}
+	// SQL fallback (cache not ready) still applies tag filters in the query
+	// for performance. The cache path skips SQL tag filters — Go-side
+	// selection handles tag matching in both cases.
 	return sqlSearchMediaBySlug(ctx, db.conn(), systemID, slug, tags)
 }
 
@@ -1138,7 +1149,7 @@ func (db *MediaDB) SearchMediaBySecondarySlug(
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
-	if results, ok, err := db.slugCacheSearch(ctx, systemID, secondarySlug, tags,
+	if results, ok, err := db.slugCacheSearch(ctx, systemID, secondarySlug,
 		(*SlugSearchCache).ExactSecondarySlugMatch); ok || err != nil {
 		return results, err
 	}
@@ -1151,7 +1162,7 @@ func (db *MediaDB) SearchMediaBySlugPrefix(
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
-	if results, ok, err := db.slugCacheSearch(ctx, systemID, slugPrefix, tags,
+	if results, ok, err := db.slugCacheSearch(ctx, systemID, slugPrefix,
 		(*SlugSearchCache).PrefixSlugMatch); ok || err != nil {
 		return results, err
 	}
@@ -1264,6 +1275,9 @@ func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs
 	if db.sql == nil {
 		return make([]database.TagInfo, 0), ErrNullSQL
 	}
+	if len(systems) == 0 {
+		return nil, errors.New("no systems provided for cached tag search")
+	}
 
 	// Try in-memory cache first (instant)
 	if cache := db.inMemoryTagCache.Load(); cache != nil {
@@ -1282,16 +1296,25 @@ func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs
 	if len(tags) == 0 {
 		log.Debug().Int("system_count", len(systems)).Msg("cache miss, populating for requested systems")
 
-		// Self-healing: populate cache for requested systems (best effort)
+		// Self-healing: populate cache for requested systems
 		if populateErr := db.PopulateSystemTagsCacheForSystems(ctx, systems); populateErr != nil {
 			log.Warn().Err(populateErr).Msg("failed to populate cache, using direct query")
-		} else {
-			log.Debug().Int("system_count", len(systems)).Msg("successfully populated cache for systems")
+			return sqlGetTags(ctx, db.sql, systems)
 		}
 
-		// Always fall back to direct SQL query when cache returns no results
-		// This ensures we return data even if cache population fails or systems have no tags
-		return sqlGetTags(ctx, db.sql, systems)
+		// Populate succeeded — re-read from cache table instead of running
+		// another expensive 6-table join query via sqlGetTags
+		tags, err = sqlGetSystemTagsCached(ctx, db.sql, systems)
+		if err != nil || len(tags) == 0 {
+			return sqlGetTags(ctx, db.sql, systems)
+		}
+
+		// Rebuild in-memory cache so subsequent requests are instant
+		go func() {
+			if cacheErr := db.RebuildTagCache(); cacheErr != nil {
+				log.Warn().Err(cacheErr).Msg("failed to rebuild tag cache after self-healing")
+			}
+		}()
 	}
 
 	return tags, nil

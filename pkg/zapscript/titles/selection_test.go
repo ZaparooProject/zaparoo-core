@@ -197,7 +197,7 @@ func TestHasAllTagsOperators(t *testing.T) {
 				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
 				{Type: "lang", Value: "en", Operator: zapscript.TagOperatorAND},
 			},
-			expected: false,
+			expected: true, // missing tag type is neutral, not a conflict
 		},
 		{
 			name: "NOT operator - excluded tag present",
@@ -1037,21 +1037,19 @@ func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 			description: "exact year match should give full confidence",
 		},
 		{
-			name: "year mismatch has small penalty (not dealbreaker)",
+			name: "year mismatch has same penalty as other tags",
 			result: database.SearchResultWithCursor{
 				Tags: []database.TagInfo{{Type: "year", Tag: "1992"}},
 			},
 			tagFilters: []zapscript.TagFilter{
 				{Type: "year", Value: "1991", Operator: zapscript.TagOperatorAND},
 			},
-			// Year penalty is 0.05 vs normal 0.2 penalty
-			// With 1 filter and 0 matches: matchRatio = 0, penalty = 0.05
-			// confidence = 0 - 0.05 = 0 (clamped)
-			// But wait - there's no match so matchRatio = 0
-			// The key is that it's not as harsh as other tag conflicts
+			// 1 filter, 0 matches, 1 conflict
+			// matchRatio = 0/1 = 0, penalty = 1*0.2 = 0.2
+			// confidence = 0 - 0.2 = -0.2 (clamped to 0)
 			minExpected: 0.0,
-			maxExpected: 0.05, // Should be near 0 but not a hard failure
-			description: "year mismatch should have small penalty",
+			maxExpected: 0.01,
+			description: "year mismatch penalized same as any other tag conflict",
 		},
 		{
 			name: "year missing from result has no penalty",
@@ -1061,11 +1059,11 @@ func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 			tagFilters: []zapscript.TagFilter{
 				{Type: "year", Value: "1991", Operator: zapscript.TagOperatorAND},
 			},
-			// Year not present = no conflict counted
-			// matchRatio = 0/1 = 0, penalty = 0
-			minExpected: 0.0,
-			maxExpected: 0.05,
-			description: "missing year should not penalize",
+			// Year tag type not present on result — filter is skipped entirely.
+			// applicableAndFilters=0, totalFilters=0 → returns 1.0
+			minExpected: 0.95,
+			maxExpected: 1.0,
+			description: "missing tag type should be neutral, not a penalty",
 		},
 		{
 			name: "region mismatch has normal penalty",
@@ -1082,7 +1080,7 @@ func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 			description: "region mismatch should have normal penalty",
 		},
 		{
-			name: "year mismatch with region match still acceptable",
+			name: "year mismatch with region match",
 			result: database.SearchResultWithCursor{
 				Tags: []database.TagInfo{
 					{Type: "year", Tag: "1992"},
@@ -1093,18 +1091,15 @@ func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 				{Type: "year", Value: "1991", Operator: zapscript.TagOperatorAND},
 				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
 			},
-			// 2 filters total
-			// region matches (matched = 1)
-			// year conflicts with small penalty (yearConflicts = 1)
-			// matchRatio = 1/2 = 0.5
-			// penalty = 0*0.2 + 1*0.05 = 0.05
-			// confidence = 0.5 - 0.05 = 0.45
-			minExpected: 0.40,
-			maxExpected: 0.50,
-			description: "year mismatch with good region match should still be acceptable",
+			// 2 filters: region matches (matched=1), year conflicts (conflicts=1)
+			// matchRatio = 1/2 = 0.5, penalty = 1*0.2 = 0.2
+			// confidence = 0.5 - 0.2 = 0.3
+			minExpected: 0.25,
+			maxExpected: 0.35,
+			description: "year mismatch penalized same as other tag conflicts",
 		},
 		{
-			name: "compare year vs region mismatch severity",
+			name: "both year and region mismatch",
 			result: database.SearchResultWithCursor{
 				Tags: []database.TagInfo{
 					{Type: "year", Tag: "wrong"},
@@ -1115,11 +1110,9 @@ func TestCalculateTagMatchConfidence_YearSoftPreference(t *testing.T) {
 				{Type: "year", Value: "1991", Operator: zapscript.TagOperatorAND},
 				{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
 			},
-			// 2 filters, 0 matches
-			// 1 year conflict (0.05 penalty) + 1 region conflict (0.2 penalty)
-			// matchRatio = 0/2 = 0
-			// penalty = 0.2 + 0.05 = 0.25
-			// confidence = 0 - 0.25 = -0.25 (clamped to 0)
+			// 2 filters, 0 matches, 2 conflicts
+			// matchRatio = 0/2 = 0, penalty = 2*0.2 = 0.4
+			// confidence = 0 - 0.4 = -0.4 (clamped to 0)
 			minExpected: 0.0,
 			maxExpected: 0.01,
 			description: "both mismatches should result in low confidence",

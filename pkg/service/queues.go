@@ -346,6 +346,12 @@ func processTokenQueue(
 
 			// launch tokens in a separate thread
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Error().Any("panic", r).Msg("recovered panic in token launch")
+					}
+				}()
+
 				plsc := playlists.PlaylistController{
 					Active: svc.State.GetActivePlaylist(),
 					Queue:  svc.PlaylistQueue,

@@ -130,9 +130,9 @@ func TestSqlBrowseFiles_BasicQuery(t *testing.T) {
 		)
 
 	// fetchAndAttachTags uses Prepare + Query
-	mock.ExpectPrepare(`SELECT DISTINCT`).
+	mock.ExpectPrepare(`SELECT MediaDBID.*Tag.*Type FROM`).
 		ExpectQuery().
-		WithArgs(int64(1), int64(2)).
+		WithArgs(int64(1), int64(2), int64(1), int64(2)).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
 
 	results, err := sqlBrowseFiles(context.Background(), db, &database.BrowseFilesOptions{

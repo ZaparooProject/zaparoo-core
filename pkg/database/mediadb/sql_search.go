@@ -37,7 +37,7 @@ import (
 
 // fetchAndAttachTags fetches tags for a slice of search results and attaches them to the results.
 // This helper consolidates duplicated tag-fetching logic across multiple search functions.
-// Uses LEFT JOIN to handle tags with missing TypeDBID defensively.
+// Uses UNION of file-level (MediaTags) and title-level (MediaTitleTags) queries for indexable joins.
 // Modifies results in-place.
 func fetchAndAttachTags(
 	ctx context.Context,
@@ -54,26 +54,44 @@ func fetchAndAttachTags(
 		mediaIDs[i] = result.MediaID
 	}
 
-	// Query tags for all media IDs from both MediaTags (file-level) and MediaTitleTags (title-level)
+	// Query tags for all media IDs from both MediaTags (file-level) and
+	// MediaTitleTags (title-level). Uses UNION of two indexed queries
+	// instead of an OR JOIN which SQLite can't optimize.
+	placeholders := prepareVariadic("?", ",", len(mediaIDs))
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
 	tagsQuery := `
-		SELECT DISTINCT
-			Media.DBID as MediaDBID,
-			Tags.Tag,
-			COALESCE(TagTypes.Type, '') as Type
-		FROM Media
-		LEFT JOIN MediaTags ON MediaTags.MediaDBID = Media.DBID
-		LEFT JOIN MediaTitleTags ON MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
-		LEFT JOIN Tags ON (Tags.DBID = MediaTags.TagDBID OR Tags.DBID = MediaTitleTags.TagDBID)
-		LEFT JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-		WHERE Media.DBID IN (` +
-		prepareVariadic("?", ",", len(mediaIDs)) +
-		`) AND Tags.DBID IS NOT NULL
-		ORDER BY Media.DBID, TagTypes.Type, Tags.Tag`
+		SELECT MediaDBID, Tag, Type FROM (
+			SELECT
+				Media.DBID as MediaDBID,
+				Tags.Tag,
+				TagTypes.Type
+			FROM Media
+			JOIN MediaTags ON MediaTags.MediaDBID = Media.DBID
+			JOIN Tags ON Tags.DBID = MediaTags.TagDBID
+			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+			WHERE Media.DBID IN (` + placeholders + `)
 
-	tagsArgs := make([]any, len(mediaIDs))
-	for i, id := range mediaIDs {
-		tagsArgs[i] = id
+			UNION
+
+			SELECT
+				Media.DBID as MediaDBID,
+				Tags.Tag,
+				TagTypes.Type
+			FROM Media
+			JOIN MediaTitleTags ON MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
+			JOIN Tags ON Tags.DBID = MediaTitleTags.TagDBID
+			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+			WHERE Media.DBID IN (` + placeholders + `)
+		)
+		ORDER BY MediaDBID, Type, Tag`
+
+	// UNION needs the media ID list twice (once per leg)
+	tagsArgs := make([]any, 0, len(mediaIDs)*2)
+	for _, id := range mediaIDs {
+		tagsArgs = append(tagsArgs, id)
+	}
+	for _, id := range mediaIDs {
+		tagsArgs = append(tagsArgs, id)
 	}
 
 	tagsStmt, err := db.PrepareContext(ctx, tagsQuery)
