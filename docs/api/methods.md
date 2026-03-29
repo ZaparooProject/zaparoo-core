@@ -2408,17 +2408,19 @@ Capture a screenshot of the current platform display. Returns the image as base6
 
 Currently supported on MiSTer only. Other platforms will return an error.
 
-##### Parameters
+#### Parameters
 
 None.
 
-##### Result
+#### Result
 
-| Name   | Type   | Required | Description                                    |
-| :----- | :----- | :------- | :--------------------------------------------- |
-| `path` | string | Yes      | Path where the screenshot was saved on disk.   |
-| `data` | string | Yes      | Base64-encoded image data.                     |
-| `size` | number | Yes      | Size of the image data in bytes.               |
+| Key  | Type   | Required | Description                                  |
+| :--- | :----- | :------- | :------------------------------------------- |
+| path | string | Yes      | Path where the screenshot was saved on disk. |
+| data | string | Yes      | Base64-encoded image data.                   |
+| size | number | Yes      | Size of the image data in bytes.             |
+
+#### Example
 
 ##### Request
 
@@ -2450,18 +2452,20 @@ None.
 
 Check if a newer version of Zaparoo Core is available. Returns version information and release notes. On development builds, always returns `updateAvailable: false`.
 
-##### Parameters
+#### Parameters
 
 None.
 
-##### Result
+#### Result
 
-| Name              | Type    | Required | Description                                          |
-| :---------------- | :------ | :------- | :--------------------------------------------------- |
-| `currentVersion`  | string  | Yes      | The currently running version.                       |
-| `latestVersion`   | string  | No       | The latest available version (if check succeeded).   |
-| `updateAvailable` | boolean | Yes      | Whether a newer version is available.                |
-| `releaseNotes`    | string  | No       | Release notes for the latest version.                |
+| Key             | Type    | Required | Description                                        |
+| :-------------- | :------ | :------- | :------------------------------------------------- |
+| currentVersion  | string  | Yes      | The currently running version.                     |
+| latestVersion   | string  | No       | The latest available version (if check succeeded). |
+| updateAvailable | boolean | Yes      | Whether a newer version is available.              |
+| releaseNotes    | string  | No       | Release notes for the latest version.              |
+
+#### Example
 
 ##### Request
 
@@ -2492,16 +2496,18 @@ None.
 
 Download and apply the latest available update, then gracefully restart the service. The response is sent to the client before the restart occurs. Returns an error if media indexing is in progress or if running a development build.
 
-##### Parameters
+#### Parameters
 
 None.
 
-##### Result
+#### Result
 
-| Name              | Type   | Required | Description                      |
-| :---------------- | :----- | :------- | :------------------------------- |
-| `previousVersion` | string | Yes      | The version before the update.   |
-| `newVersion`      | string | Yes      | The version after the update.    |
+| Key             | Type   | Required | Description                    |
+| :-------------- | :----- | :------- | :----------------------------- |
+| previousVersion | string | Yes      | The version before the update. |
+| newVersion      | string | Yes      | The version after the update.  |
+
+#### Example
 
 ##### Request
 
