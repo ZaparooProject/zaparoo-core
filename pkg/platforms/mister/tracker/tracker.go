@@ -360,22 +360,23 @@ func (tr *Tracker) loadGame() {
 	}
 }
 
-// loadStartPath reads the STARTPATH file (written by MiSTer when log_file_entry=1)
-// and sets it as the active game. This triggers loadGame() via the ACTIVEGAME watcher.
-func (*Tracker) loadStartPath() {
-	data, err := os.ReadFile(misterconfig.StartPathFile)
+// loadFullPath reads the FULLPATH file (written by MiSTer when log_file_entry=1
+// and a game is selected in the OSD) and sets it as the active game. This
+// triggers loadGame() via the ACTIVEGAME watcher.
+func (*Tracker) loadFullPath() {
+	data, err := os.ReadFile(misterconfig.FullPathFile)
 	if err != nil {
-		log.Error().Err(err).Msg("error reading STARTPATH")
+		log.Error().Err(err).Msg("error reading FULLPATH")
 		return
 	}
 	path := strings.TrimSpace(string(data))
 	if path == "" {
 		return
 	}
-	log.Info().Str("path", path).Msg("STARTPATH launch detected")
+	log.Info().Str("path", path).Msg("FULLPATH launch detected")
 
 	if err := activegame.SetActiveGame(path); err != nil {
-		log.Error().Err(err).Msg("error setting active game from STARTPATH")
+		log.Error().Err(err).Msg("error setting active game from FULLPATH")
 	}
 }
 
@@ -497,8 +498,8 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 						tr.LoadCore()
 					case event.Name == misterconfig.ActiveGameFile:
 						tr.loadGame()
-					case event.Name == misterconfig.StartPathFile:
-						tr.loadStartPath()
+					case event.Name == misterconfig.FullPathFile:
+						tr.loadFullPath()
 					case strings.HasPrefix(event.Name, misterconfig.CoreConfigFolder):
 						err = loadRecent(event.Name)
 						if err != nil {
@@ -534,18 +535,28 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}
 
 	// Check if STARTPATH exists (indicates MiSTer's log_file_entry=1 is enabled).
-	// If so, use STARTPATH for tracking instead of recents files.
-	useStartPath := false
+	// STARTPATH contains the core/MRA path (not ROM), but its presence signals
+	// that FULLPATH will be written when games are selected. Watch FULLPATH for
+	// actual game tracking instead of the recents files.
+	useLogFileEntry := false
 	if _, statErr := os.Stat(misterconfig.StartPathFile); statErr == nil {
-		useStartPath = true
-		log.Info().Msg("STARTPATH exists, using log_file_entry for tracking")
+		useLogFileEntry = true
+		log.Info().Msg("STARTPATH exists, using FULLPATH for game tracking (log_file_entry mode)")
 	}
 
-	if useStartPath {
-		log.Debug().Msgf("adding watcher for STARTPATH file: %s", misterconfig.StartPathFile)
-		err = watcher.Add(misterconfig.StartPathFile)
+	if useLogFileEntry {
+		if _, statErr := os.Stat(misterconfig.FullPathFile); os.IsNotExist(statErr) {
+			//nolint:gosec // MiSTer system file, needs to be readable by other apps
+			writeErr := os.WriteFile(misterconfig.FullPathFile, []byte(""), 0o644)
+			if writeErr != nil {
+				return nil, fmt.Errorf("failed to create FULLPATH file: %w", writeErr)
+			}
+		}
+
+		log.Debug().Msgf("adding watcher for FULLPATH file: %s", misterconfig.FullPathFile)
+		err = watcher.Add(misterconfig.FullPathFile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to watch STARTPATH file (%s): %w", misterconfig.StartPathFile, err)
+			return nil, fmt.Errorf("failed to watch FULLPATH file (%s): %w", misterconfig.FullPathFile, err)
 		}
 	} else {
 		if _, statErr := os.Stat(misterconfig.CoreConfigFolder); os.IsNotExist(statErr) {

@@ -31,60 +31,52 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadStartPath(t *testing.T) {
-	// Clean up any existing files before and after test
+func TestLoadFullPath(t *testing.T) {
 	cleanup := func() {
-		_ = os.Remove(misterconfig.StartPathFile)
+		_ = os.Remove(misterconfig.FullPathFile)
 		_ = os.Remove(misterconfig.ActiveGameFile)
 	}
 	cleanup()
 	t.Cleanup(cleanup)
 
 	tests := []struct {
-		name             string
-		startPathContent string
-		wantActiveGame   string
+		name            string
+		fullPathContent string
+		wantActiveGame  string
 	}{
 		{
-			name:             "reads path and sets active game",
-			startPathContent: "/media/fat/games/SNES/SuperMarioWorld.sfc",
-			wantActiveGame:   "/media/fat/games/SNES/SuperMarioWorld.sfc",
+			name:            "reads path and sets active game",
+			fullPathContent: "/media/fat/games/SNES/SuperMarioWorld.sfc",
+			wantActiveGame:  "/media/fat/games/SNES/SuperMarioWorld.sfc",
 		},
 		{
-			name:             "trims whitespace from path",
-			startPathContent: "  /media/fat/games/Genesis/Sonic.md  \n",
-			wantActiveGame:   "/media/fat/games/Genesis/Sonic.md",
+			name:            "trims whitespace from path",
+			fullPathContent: "  /media/fat/games/Genesis/Sonic.md  \n",
+			wantActiveGame:  "/media/fat/games/Genesis/Sonic.md",
 		},
 		{
-			name:             "empty file does not set active game",
-			startPathContent: "",
-			wantActiveGame:   "",
+			name:            "empty file does not set active game",
+			fullPathContent: "",
+			wantActiveGame:  "",
 		},
 		{
-			name:             "whitespace-only file does not set active game",
-			startPathContent: "   \n\t  ",
-			wantActiveGame:   "",
+			name:            "whitespace-only file does not set active game",
+			fullPathContent: "   \n\t  ",
+			wantActiveGame:  "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Clean up before each subtest
 			cleanup()
 
-			// Create STARTPATH file with test content
-			err := os.WriteFile(misterconfig.StartPathFile, []byte(tt.startPathContent), 0o600)
+			err := os.WriteFile(misterconfig.FullPathFile, []byte(tt.fullPathContent), 0o600)
 			require.NoError(t, err)
 
-			// Create a minimal tracker (we only need it to call the method)
 			tr := &Tracker{}
+			tr.loadFullPath()
 
-			// Call loadStartPath
-			tr.loadStartPath()
-
-			// Verify active game was set correctly
 			if tt.wantActiveGame == "" {
-				// If we expect no active game, check that file wasn't created or is empty
 				if _, statErr := os.Stat(misterconfig.ActiveGameFile); statErr == nil {
 					content, readErr := os.ReadFile(misterconfig.ActiveGameFile)
 					if readErr == nil {
@@ -100,22 +92,19 @@ func TestLoadStartPath(t *testing.T) {
 	}
 }
 
-func TestLoadStartPath_FileNotFound(t *testing.T) {
-	// Clean up any existing files
+func TestLoadFullPath_FileNotFound(t *testing.T) {
 	cleanup := func() {
-		_ = os.Remove(misterconfig.StartPathFile)
+		_ = os.Remove(misterconfig.FullPathFile)
 		_ = os.Remove(misterconfig.ActiveGameFile)
 	}
 	cleanup()
 	t.Cleanup(cleanup)
 
-	// Create a minimal tracker
 	tr := &Tracker{}
 
 	// Should not panic when file doesn't exist
-	tr.loadStartPath()
+	tr.loadFullPath()
 
-	// Verify no active game was set (file should not exist)
 	_, err := os.Stat(misterconfig.ActiveGameFile)
 	assert.True(t, os.IsNotExist(err), "active game file should not exist")
 }
