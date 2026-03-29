@@ -2399,3 +2399,135 @@ Returns `null` on success.
   "result": null
 }
 ```
+
+## Screenshot
+
+### screenshot
+
+Capture a screenshot of the current platform display. Returns the image as base64-encoded data and the path where it was saved on disk.
+
+Currently supported on MiSTer only. Other platforms will return an error.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key  | Type   | Required | Description                                  |
+| :--- | :----- | :------- | :------------------------------------------- |
+| path | string | Yes      | Path where the screenshot was saved on disk. |
+| data | string | Yes      | Base64-encoded image data.                   |
+| size | number | Yes      | Size of the image data in bytes.             |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "method": "screenshot"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "result": {
+    "path": "/media/fat/screenshots/MiSTer_20260329_181500.png",
+    "data": "iVBORw0KGgo...",
+    "size": 245760
+  }
+}
+```
+
+## Updates
+
+### update.check
+
+Check if a newer version of Zaparoo Core is available. Returns version information and release notes. On development builds, always returns `updateAvailable: false`.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key             | Type    | Required | Description                                        |
+| :-------------- | :------ | :------- | :------------------------------------------------- |
+| currentVersion  | string  | Yes      | The currently running version.                     |
+| latestVersion   | string  | No       | The latest available version (if check succeeded). |
+| updateAvailable | boolean | Yes      | Whether a newer version is available.              |
+| releaseNotes    | string  | No       | Release notes for the latest version.              |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "method": "update.check"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "result": {
+    "currentVersion": "2.9.1",
+    "latestVersion": "2.10.0",
+    "updateAvailable": true,
+    "releaseNotes": "..."
+  }
+}
+```
+
+### update.apply
+
+Download and apply the latest available update, then gracefully restart the service. The response is sent to the client before the restart occurs. Returns an error if media indexing is in progress or if running a development build.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key             | Type   | Required | Description                    |
+| :-------------- | :----- | :------- | :----------------------------- |
+| previousVersion | string | Yes      | The version before the update. |
+| newVersion      | string | Yes      | The version after the update.  |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "method": "update.apply"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "result": {
+    "previousVersion": "2.9.1",
+    "newVersion": "2.10.0"
+  }
+}
+```
