@@ -200,7 +200,7 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods are used to execute actions and request data back from the API. The current API provides **36 methods** across core functionality areas. See the [API Methods](./methods) page for detailed definitions and examples of each method.
+Methods are used to execute actions and request data back from the API. The current API provides **44 methods** across core functionality areas. See the [API Methods](./methods) page for detailed definitions and examples of each method.
 
 | ID                              | Description                                                                           |
 | :------------------------------ | :------------------------------------------------------------------------------------ |
@@ -218,11 +218,14 @@ Methods are used to execute actions and request data back from the API. The curr
 | media.history                   | Return paginated media play history.                                                  |
 | media.lookup                    | Resolve a game name and system to a media database match.                             |
 | media.control                   | Send a control action to the active media's launcher.                                 |
+| media.browse                    | Browse indexed media in a directory-style hierarchy.                                  |
+| media.history.top               | Return most-played media ranked by total play time.                                   |
 | playtime                        | Query current playtime session status and usage statistics.                           |
 | systems                         | List all currently indexed systems.                                                   |
 | settings                        | List current configuration settings.                                                  |
 | settings.update                 | Update one or more settings in-memory and save changes to disk.                       |
 | settings.reload                 | Reload settings from disk.                                                            |
+| settings.auth.claim             | Claim API credentials from a remote server.                                           |
 | settings.logs.download          | Download the current log file as base64-encoded content.                              |
 | settings.playtime.limits        | Get current playtime limit configuration.                                             |
 | settings.playtime.limits.update | Update playtime limit settings.                                                       |
@@ -240,6 +243,11 @@ Methods are used to execute actions and request data back from the API. The curr
 | inbox                           | List all inbox messages.                                                              |
 | inbox.delete                    | Delete a specific inbox message by ID.                                                |
 | inbox.clear                     | Delete all inbox messages.                                                            |
+| input.keyboard                  | Send a keyboard input sequence.                                                       |
+| input.gamepad                   | Send a gamepad input sequence.                                                        |
+| screenshot                      | Capture a screenshot of the current platform display.                                 |
+| update.check                    | Check if a newer version is available.                                                |
+| update.apply                    | Download and apply the latest update with graceful restart.                           |
 
 ## Notifications
 
