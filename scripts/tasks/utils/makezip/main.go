@@ -24,7 +24,6 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -160,6 +159,51 @@ func addDocFooter(content, platformID string) string {
 	return content + footer
 }
 
+func fetchWithRetries(url string, maxRetries int) ([]byte, error) {
+	var lastErr error
+	for attempt := range maxRetries {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+		}
+
+		resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: hardcoded doc download URL
+		if err != nil {
+			cancel()
+			lastErr = fmt.Errorf("attempt %d: %w", attempt+1, err)
+			_, _ = fmt.Printf("Retry %d/%d: request failed: %v\n", attempt+1, maxRetries, err)
+			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			cancel()
+			lastErr = fmt.Errorf(
+				"attempt %d: HTTP %d: %s", attempt+1, resp.StatusCode, http.StatusText(resp.StatusCode),
+			)
+			_, _ = fmt.Printf("Retry %d/%d: HTTP %d\n", attempt+1, maxRetries, resp.StatusCode)
+			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+			continue
+		}
+
+		content, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		cancel()
+		if err != nil {
+			lastErr = fmt.Errorf("attempt %d: failed to read body: %w", attempt+1, err)
+			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+			continue
+		}
+
+		return content, nil
+	}
+	return nil, fmt.Errorf("all %d attempts failed, last error: %w", maxRetries, lastErr)
+}
+
 func downloadDoc(platformID, toDir string) error {
 	fileName, ok := platformDocs[platformID]
 	if !ok {
@@ -168,34 +212,9 @@ func downloadDoc(platformID, toDir string) error {
 
 	url := baseURL + fileName
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	content, err := fetchWithRetries(url, 5)
 	if err != nil {
-		return fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: hardcoded doc download URL
-	if err != nil {
-		return fmt.Errorf("failed to execute HTTP request: %w", err)
-	}
-	if resp == nil {
-		return errors.New("received nil response")
-	}
-	if resp.StatusCode != http.StatusOK {
-		_ = resp.Body.Close()
-		return fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			_, _ = fmt.Printf("error closing response body: %v\n", closeErr)
-		}
-	}()
-
-	content, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
+		return fmt.Errorf("downloading %s docs: %w", platformID, err)
 	}
 
 	processedContent := string(content)
