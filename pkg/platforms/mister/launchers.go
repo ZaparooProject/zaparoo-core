@@ -841,6 +841,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemJaguar),
 		},
 		{
+			ID:         systemdefs.SystemJaguarCD,
+			SystemID:   systemdefs.SystemJaguarCD,
+			Folders:    []string{"Jaguar"},
+			Extensions: []string{".cdi"},
+			Launch:     launch(pl, systemdefs.SystemJaguarCD),
+		},
+		{
 			ID:         systemdefs.SystemMasterSystem,
 			SystemID:   systemdefs.SystemMasterSystem,
 			Folders:    []string{"SMS"},

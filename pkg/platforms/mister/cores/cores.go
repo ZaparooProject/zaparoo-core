@@ -56,6 +56,7 @@ var CoreGroups = map[string][]Core{
 	"Atari7800": {Systems["Atari7800"], Systems["Atari2600"]},
 	"Coleco":    {Systems["ColecoVision"], Systems["SG1000"]},
 	"Gameboy":   {Systems["Gameboy"], Systems["GameboyColor"]},
+	"Jaguar":    {Systems["Jaguar"], Systems["JaguarCD"]},
 	"NES":       {Systems["NES"], Systems["NESMusic"], Systems["FDS"]},
 	"SMS": {Systems["MasterSystem"], Systems["GameGear"], Core{
 		ID: "SG1000",
@@ -497,6 +498,22 @@ var Systems = map[string]Core{
 					Delay:      1,
 					Method:     "f",
 					Index:      0,
+					ResetDelay: 1,
+					ResetHold:  1,
+				},
+			},
+		},
+	},
+	"JaguarCD": {
+		ID:  "JaguarCD",
+		RBF: "_Console/Jaguar",
+		Slots: []Slot{
+			{
+				Exts: []string{".cdi"},
+				Mgl: &MGLParams{
+					Delay:      1,
+					Method:     "s",
+					Index:      1,
 					ResetDelay: 1,
 					ResetHold:  1,
 				},
