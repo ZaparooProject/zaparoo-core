@@ -534,45 +534,38 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		return nil, fmt.Errorf("failed to watch core name file (%s): %w", misterconfig.CoreNameFile, err)
 	}
 
-	// Check if STARTPATH exists (indicates MiSTer's log_file_entry=1 is enabled).
-	// STARTPATH contains the core/MRA path (not ROM), but its presence signals
-	// that FULLPATH will be written when games are selected. Watch FULLPATH for
-	// actual game tracking instead of the recents files.
-	useLogFileEntry := false
-	if _, statErr := os.Stat(misterconfig.StartPathFile); statErr == nil {
-		useLogFileEntry = true
-		log.Info().Msg("STARTPATH exists, using FULLPATH for game tracking (log_file_entry mode)")
+	// Watch recents folder for game tracking (standard method).
+	if _, statErr := os.Stat(misterconfig.CoreConfigFolder); os.IsNotExist(statErr) {
+		//nolint:gosec // MiSTer system directory, needs to be accessible by other apps
+		mkdirErr := os.MkdirAll(misterconfig.CoreConfigFolder, 0o755)
+		if mkdirErr != nil {
+			return nil, fmt.Errorf("failed to create core config folder: %w", mkdirErr)
+		}
+		log.Info().Msgf("created core config folder: %s", misterconfig.CoreConfigFolder)
 	}
 
-	if useLogFileEntry {
-		if _, statErr := os.Stat(misterconfig.FullPathFile); os.IsNotExist(statErr) {
-			//nolint:gosec // MiSTer system file, needs to be readable by other apps
-			writeErr := os.WriteFile(misterconfig.FullPathFile, []byte(""), 0o644)
-			if writeErr != nil {
-				return nil, fmt.Errorf("failed to create FULLPATH file: %w", writeErr)
-			}
-		}
+	log.Debug().Msgf("adding watcher for core config folder: %s", misterconfig.CoreConfigFolder)
+	err = watcher.Add(misterconfig.CoreConfigFolder)
+	if err != nil {
+		return nil, fmt.Errorf("failed to watch core config folder (%s): %w", misterconfig.CoreConfigFolder, err)
+	}
 
-		log.Debug().Msgf("adding watcher for FULLPATH file: %s", misterconfig.FullPathFile)
-		err = watcher.Add(misterconfig.FullPathFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to watch FULLPATH file (%s): %w", misterconfig.FullPathFile, err)
+	// Also watch FULLPATH for game tracking (log_file_entry method).
+	// When log_file_entry=1 is set in mister.ini, MiSTer writes the selected
+	// game path to FULLPATH on OSD file selection. Both methods feed into the
+	// same SetActiveGame pipeline — whichever fires, the tracker handles it.
+	if _, statErr := os.Stat(misterconfig.FullPathFile); os.IsNotExist(statErr) {
+		//nolint:gosec // MiSTer system file, needs to be readable by other apps
+		writeErr := os.WriteFile(misterconfig.FullPathFile, []byte(""), 0o644)
+		if writeErr != nil {
+			return nil, fmt.Errorf("failed to create FULLPATH file: %w", writeErr)
 		}
-	} else {
-		if _, statErr := os.Stat(misterconfig.CoreConfigFolder); os.IsNotExist(statErr) {
-			//nolint:gosec // MiSTer system directory, needs to be accessible by other apps
-			mkdirErr := os.MkdirAll(misterconfig.CoreConfigFolder, 0o755)
-			if mkdirErr != nil {
-				return nil, fmt.Errorf("failed to create core config folder: %w", mkdirErr)
-			}
-			log.Info().Msgf("created core config folder: %s", misterconfig.CoreConfigFolder)
-		}
+	}
 
-		log.Debug().Msgf("adding watcher for core config folder: %s", misterconfig.CoreConfigFolder)
-		err = watcher.Add(misterconfig.CoreConfigFolder)
-		if err != nil {
-			return nil, fmt.Errorf("failed to watch core config folder (%s): %w", misterconfig.CoreConfigFolder, err)
-		}
+	log.Debug().Msgf("adding watcher for FULLPATH file: %s", misterconfig.FullPathFile)
+	err = watcher.Add(misterconfig.FullPathFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to watch FULLPATH file (%s): %w", misterconfig.FullPathFile, err)
 	}
 
 	if _, statActiveErr := os.Stat(misterconfig.ActiveGameFile); os.IsNotExist(statActiveErr) {

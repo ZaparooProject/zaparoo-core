@@ -37,7 +37,6 @@ func cleanupTmpFiles(t *testing.T) {
 	files := []string{
 		misterconfig.FullPathFile,
 		misterconfig.ActiveGameFile,
-		misterconfig.StartPathFile,
 	}
 	for _, f := range files {
 		_ = os.Remove(f)
@@ -267,21 +266,4 @@ func TestStopCore(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestStartPathDetectsLogFileEntryMode(t *testing.T) {
-	cleanupTmpFiles(t)
-	t.Cleanup(func() { cleanupTmpFiles(t) })
-
-	// Without STARTPATH, log_file_entry mode should not be detected
-	_, err := os.Stat(misterconfig.StartPathFile)
-	assert.True(t, os.IsNotExist(err))
-
-	// Create STARTPATH to simulate log_file_entry=1
-	//nolint:gosec // test file
-	err = os.WriteFile(misterconfig.StartPathFile, []byte("/media/fat/_Console/SNES.rbf"), 0o644)
-	require.NoError(t, err)
-
-	_, err = os.Stat(misterconfig.StartPathFile)
-	assert.NoError(t, err, "STARTPATH should exist to signal log_file_entry mode")
 }
