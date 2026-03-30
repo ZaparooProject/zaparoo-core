@@ -55,14 +55,17 @@ func TestBuildManifest_ValidAssets(t *testing.T) {
 	assert.Equal(t, int64(3), m.LastAssetID)
 	assert.Equal(t, int64(1), m.LastReleaseID)
 
-	// Verify assets have correct sizes
+	// Verify assets have correct sizes and version-prefixed URLs
 	assetsByName := make(map[string]*asset)
 	for _, a := range m.Releases[0].Assets {
 		assetsByName[a.Name] = a
 	}
 	assert.Equal(t, int64(1024), assetsByName["zaparoo-linux_amd64.tar.gz"].Size)
+	assert.Equal(t, "v2.10.0/zaparoo-linux_amd64.tar.gz", assetsByName["zaparoo-linux_amd64.tar.gz"].URL)
 	assert.Equal(t, int64(2048), assetsByName["zaparoo-windows_amd64.zip"].Size)
+	assert.Equal(t, "v2.10.0/zaparoo-windows_amd64.zip", assetsByName["zaparoo-windows_amd64.zip"].URL)
 	assert.Equal(t, int64(256), assetsByName["checksums.txt"].Size)
+	assert.Equal(t, "checksums.txt", assetsByName["checksums.txt"].URL)
 }
 
 func TestBuildManifest_SkipsNonAssetFiles(t *testing.T) {
@@ -138,7 +141,7 @@ func TestBuildManifest_NonexistentDirectory(t *testing.T) {
 	assert.Nil(t, m)
 }
 
-func TestBuildManifest_AssetURLMatchesName(t *testing.T) {
+func TestBuildManifest_AssetURLIncludesVersion(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -147,7 +150,7 @@ func TestBuildManifest_AssetURLMatchesName(t *testing.T) {
 	m, err := buildManifest("v1.0.0", dir, "")
 	require.NoError(t, err)
 
-	assert.Equal(t, "zaparoo-mister_arm.tar.gz", m.Releases[0].Assets[0].URL)
+	assert.Equal(t, "v1.0.0/zaparoo-mister_arm.tar.gz", m.Releases[0].Assets[0].URL)
 }
 
 func TestBuildManifest_ReleaseNotes(t *testing.T) {
