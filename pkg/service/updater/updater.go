@@ -54,8 +54,9 @@ func makeUpdater(platformID string) (*selfupdate.Updater, selfupdate.Repository,
 	filter := fmt.Sprintf("^zaparoo-%s_%s", platformID, runtime.GOARCH)
 
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source:  source,
-		Filters: []string{filter},
+		Source:    source,
+		Validator: &selfupdate.ChecksumValidator{UniqueFilename: "checksums.txt"},
+		Filters:   []string{filter},
 	})
 	if err != nil {
 		return nil, selfupdate.RepositorySlug{}, fmt.Errorf("creating updater: %w", err)

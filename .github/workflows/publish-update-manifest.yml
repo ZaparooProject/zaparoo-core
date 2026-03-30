@@ -34,23 +34,25 @@ jobs:
           gh release download "${{ github.event.release.tag_name }}" --dir _assets \
             --pattern "zaparoo-*.tar.gz" \
             --pattern "zaparoo-*.zip"
-      - name: Generate checksums and manifest
+      - name: Generate checksums
+        run: cd _assets && sha256sum zaparoo-* > checksums.txt && cd ..
+      - name: Generate manifest
         env:
           RELEASE_NOTES: ${{ github.event.release.body }}
         run: |
-          cd _assets && sha256sum * > checksums.txt && cd ..
           go run scripts/generate-update-manifest/main.go \
             --version "${{ github.event.release.tag_name }}" \
             --assets-dir _assets \
             --release-notes "$RELEASE_NOTES" \
-            --output _assets/manifest.yaml
-      - name: Upload to Bunny.net storage
+            --output _manifest/manifest.yaml
+          cp _assets/checksums.txt _manifest/checksums.txt
+      - name: Upload manifest to Bunny.net storage
         uses: R-J-dev/bunny-deploy@v2.1.1
         with:
           storage-zone-password: ${{ secrets.BUNNY_STORAGE_ZONE_PASSWORD }}
           storage-endpoint: "https://storage.bunnycdn.com"
           storage-zone-name: ${{ secrets.BUNNY_STORAGE_ZONE }}
-          directory-to-upload: "_assets"
+          directory-to-upload: "_manifest"
           target-directory: "ZaparooProject/zaparoo-core"
           concurrency: "10"
           access-key: ${{ secrets.BUNNY_API_KEY }}

@@ -85,7 +85,7 @@ jobs:
               --title="${TITLE}" \
               --draft \
               ${PRERELEASE} \
-              --generate-notes
+              --notes ""
 
   build:
     runs-on: ubuntu-latest

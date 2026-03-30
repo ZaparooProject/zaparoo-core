@@ -93,12 +93,17 @@ func buildManifest(version, assetsDir, releaseNotes string) (*manifest, error) {
 			return nil, fmt.Errorf("getting file info for %s: %w", name, infoErr)
 		}
 
+		assetURL := version + "/" + name
+		if name == "checksums.txt" {
+			assetURL = name
+		}
+
 		assetID++
 		assets = append(assets, &asset{
 			ID:   assetID,
 			Name: name,
 			Size: info.Size(),
-			URL:  name,
+			URL:  assetURL,
 		})
 	}
 
