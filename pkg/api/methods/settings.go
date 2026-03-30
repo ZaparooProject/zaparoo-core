@@ -46,15 +46,18 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	}
 
 	resp := models.SettingsResponse{
-		RunZapScript:            env.State.RunZapScriptEnabled(),
-		DebugLogging:            env.Config.DebugLogging(),
-		AudioScanFeedback:       env.Config.AudioFeedback(),
-		ReadersAutoDetect:       env.Config.Readers().AutoDetect,
-		ReadersScanMode:         env.Config.ReadersScan().Mode,
-		ReadersScanExitDelay:    env.Config.ReadersScan().ExitDelay,
-		ReadersScanIgnoreSystem: make([]string, 0),
-		ReadersConnect:          readersConnect,
-		ErrorReporting:          env.Config.ErrorReporting(),
+		RunZapScript:              env.State.RunZapScriptEnabled(),
+		DebugLogging:              env.Config.DebugLogging(),
+		AudioScanFeedback:         env.Config.AudioFeedback(),
+		ReadersAutoDetect:         env.Config.Readers().AutoDetect,
+		ReadersScanMode:           env.Config.ReadersScan().Mode,
+		ReadersScanExitDelay:      env.Config.ReadersScan().ExitDelay,
+		ReadersScanIgnoreSystem:   make([]string, 0),
+		ReadersConnect:            readersConnect,
+		ErrorReporting:            env.Config.ErrorReporting(),
+		LaunchGuardEnabled:        env.Config.LaunchGuardEnabled(),
+		LaunchGuardTimeout:        env.Config.LaunchGuardTimeout(),
+		LaunchGuardRequireConfirm: env.Config.LaunchGuardRequireConfirm(),
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
@@ -148,6 +151,21 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.ReadersScanIgnoreSystem != nil {
 		log.Debug().Strs("readersScanIgnoreSystem", *params.ReadersScanIgnoreSystem).Msg("updating setting")
 		env.Config.SetScanIgnoreSystem(*params.ReadersScanIgnoreSystem)
+	}
+
+	if params.LaunchGuardEnabled != nil {
+		log.Debug().Bool("launchGuardEnabled", *params.LaunchGuardEnabled).Msg("updating setting")
+		env.Config.SetLaunchGuard(*params.LaunchGuardEnabled)
+	}
+
+	if params.LaunchGuardTimeout != nil {
+		log.Debug().Float32("launchGuardTimeout", *params.LaunchGuardTimeout).Msg("updating setting")
+		env.Config.SetLaunchGuardTimeout(*params.LaunchGuardTimeout)
+	}
+
+	if params.LaunchGuardRequireConfirm != nil {
+		log.Debug().Bool("launchGuardRequireConfirm", *params.LaunchGuardRequireConfirm).Msg("updating setting")
+		env.Config.SetLaunchGuardRequireConfirm(*params.LaunchGuardRequireConfirm)
 	}
 
 	if params.ReadersConnect != nil {

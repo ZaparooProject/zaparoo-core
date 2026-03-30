@@ -34,7 +34,7 @@ type SettingsService interface {
 	GetSettings(ctx context.Context) (*models.SettingsResponse, error)
 
 	// UpdateSettings sends a settings update to the API.
-	UpdateSettings(ctx context.Context, params models.UpdateSettingsParams) error
+	UpdateSettings(ctx context.Context, params *models.UpdateSettingsParams) error
 
 	// GetSystems fetches available systems from the API.
 	GetSystems(ctx context.Context) ([]models.System, error)
@@ -79,7 +79,7 @@ func (s *DefaultSettingsService) GetSettings(ctx context.Context) (*models.Setti
 }
 
 // UpdateSettings sends a settings update to the API.
-func (s *DefaultSettingsService) UpdateSettings(ctx context.Context, params models.UpdateSettingsParams) error {
+func (s *DefaultSettingsService) UpdateSettings(ctx context.Context, params *models.UpdateSettingsParams) error {
 	data, err := json.Marshal(params)
 	if err != nil {
 		return fmt.Errorf("failed to marshal params: %w", err)

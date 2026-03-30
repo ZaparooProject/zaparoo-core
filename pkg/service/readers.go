@@ -20,11 +20,13 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -37,6 +39,10 @@ import (
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
+
+// ErrNoStagedToken is returned when a confirm request is received but no
+// token is currently staged by the launch guard.
+var ErrNoStagedToken = errors.New("no staged token to confirm")
 
 type toConnectDevice struct {
 	connectionString string
@@ -288,6 +294,9 @@ func readerManager(
 	connectScanSeen := make(map[string]bool)
 	var exitTimer clockwork.Timer
 
+	var stagedToken *tokens.Token
+	var guardTimeout <-chan time.Time
+
 	var autoDetector *AutoDetector
 	if svc.Config.AutoDetect() {
 		autoDetector = NewAutoDetector(svc.Config)
@@ -403,6 +412,45 @@ preprocessing:
 			}
 			svc.State.SetSoftwareToken(stoken)
 			continue preprocessing
+		case result := <-svc.ConfirmQueue:
+			// API confirm request — launch the staged token if one exists
+			if stagedToken == nil {
+				result <- ErrNoStagedToken
+				continue preprocessing
+			}
+			log.Info().Msgf("launch guard: API confirmed staged token: %v", stagedToken)
+			guardTimeout = nil
+			confirmed := *stagedToken
+			stagedToken = nil
+			svc.State.SetActiveCard(confirmed)
+			itq <- confirmed
+			result <- nil
+			continue preprocessing
+		case <-guardTimeout:
+			// Staged token expired
+			log.Info().Msg("launch guard: staged token expired")
+			stagedToken = nil
+			guardTimeout = nil
+			continue preprocessing
+		}
+
+		// Launch guard confirmation: check BEFORE the preprocessor so that
+		// a re-scan of the staged token is not eaten as a duplicate. This is
+		// needed for barcode scanners which don't send removal events between
+		// scans — the preprocessor would see the re-scan as a duplicate.
+		if scan != nil && stagedToken != nil &&
+			svc.Config.LaunchGuardEnabled() && !svc.Config.LaunchGuardRequireConfirm() {
+			if helpers.TokensEqual(scan, stagedToken) && svc.State.ActiveMedia() != nil {
+				log.Info().Msg("launch guard: re-tap confirmed, launching staged token")
+				guardTimeout = nil
+				confirmed := *stagedToken
+				stagedToken = nil
+				// Let the preprocessor know what's on the reader now
+				proc.Process(scan, readerError)
+				svc.State.SetActiveCard(confirmed)
+				itq <- confirmed
+				continue preprocessing
+			}
 		}
 
 		switch proc.Process(scan, readerError) {
@@ -465,8 +513,34 @@ preprocessing:
 			}
 			svc.State.SetWroteToken(nil)
 
-			log.Info().Msgf("sending token to queue: %v", scan)
+			// Launch guard: when enabled and media is playing, stage the token
+			// instead of launching it immediately. A re-tap or API confirm is
+			// required to actually launch.
+			if svc.Config.LaunchGuardEnabled() && svc.State.ActiveMedia() != nil {
+				log.Info().Msgf("launch guard: staging token: %v", scan)
+				stagedToken = scan
 
+				notifications.TokensStaged(svc.State.Notifications, models.TokenResponse{
+					Type:     scan.Type,
+					UID:      scan.UID,
+					Text:     scan.Text,
+					Data:     scan.Data,
+					ScanTime: scan.ScanTime,
+				})
+
+				path, enabled := svc.Config.PendingSoundPath(helpers.DataDir(svc.Platform))
+				helpers.PlayConfiguredSound(player, path, enabled, assets.PendingSound, "pending")
+
+				// Start/reset timeout timer
+				if timeout := svc.Config.LaunchGuardTimeout(); timeout > 0 {
+					guardTimeout = clock.After(time.Duration(timeout * float32(time.Second)))
+				} else {
+					guardTimeout = nil
+				}
+				continue preprocessing
+			}
+
+			log.Info().Msgf("sending token to queue: %v", scan)
 			itq <- *scan
 
 		case scanReaderErrorRemoval:

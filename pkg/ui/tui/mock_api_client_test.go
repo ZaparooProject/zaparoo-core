@@ -78,7 +78,7 @@ func (m *MockSettingsService) GetSettings(ctx context.Context) (*models.Settings
 }
 
 // UpdateSettings mocks updating settings.
-func (m *MockSettingsService) UpdateSettings(ctx context.Context, params models.UpdateSettingsParams) error {
+func (m *MockSettingsService) UpdateSettings(ctx context.Context, params *models.UpdateSettingsParams) error {
 	m.updateSettingsCallCount.Add(1)
 	select {
 	case m.updateSettingsCalled <- struct{}{}:

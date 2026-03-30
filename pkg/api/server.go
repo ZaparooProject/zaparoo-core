@@ -196,9 +196,10 @@ func NewMethodMap() *MethodMap {
 
 	defaultMethods := map[string]func(requests.RequestEnv) (any, error){
 		// run
-		models.MethodLaunch: methods.HandleRun, // DEPRECATED
-		models.MethodRun:    methods.HandleRun,
-		models.MethodStop:   methods.HandleStop,
+		models.MethodLaunch:  methods.HandleRun, // DEPRECATED
+		models.MethodRun:     methods.HandleRun,
+		models.MethodStop:    methods.HandleStop,
+		models.MethodConfirm: methods.HandleConfirm,
 		// tokens
 		models.MethodTokens:  methods.HandleTokens,
 		models.MethodHistory: methods.HandleHistory,
@@ -785,6 +786,7 @@ func handleWSMessage(
 	cfg *config.Instance,
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
+	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
@@ -824,6 +826,7 @@ func handleWSMessage(
 			LauncherCache: helpers.GlobalLauncherCache,
 			Player:        player,
 			TokenQueue:    inTokenQueue,
+			ConfirmQueue:  confirmQueue,
 			IsLocal:       clientIP.IsLoopback(),
 			ClientID:      session.Request.RemoteAddr,
 		}
@@ -856,6 +859,7 @@ func handlePostRequest(
 	cfg *config.Instance,
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
+	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
@@ -900,6 +904,7 @@ func handlePostRequest(
 			LauncherCache: helpers.GlobalLauncherCache,
 			Player:        player,
 			TokenQueue:    inTokenQueue,
+			ConfirmQueue:  confirmQueue,
 			IsLocal:       clientIP.IsLoopback(),
 			ClientID:      r.RemoteAddr,
 		}
@@ -959,6 +964,7 @@ func Start(
 	cfg *config.Instance,
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
+	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
 	notifications <-chan models.Notification,
@@ -1081,17 +1087,22 @@ func Start(
 		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
 			wsHandler(w, r, "latest")
 		})
-		r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player))
+		postHandler := handlePostRequest(
+			methodMap, platform, cfg, st,
+			inTokenQueue, confirmQueue,
+			db, limitsManager, player,
+		)
+		r.Post("/api", postHandler)
 
 		r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
 			wsHandler(w, r, "v0")
 		})
-		r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player))
+		r.Post("/api/v0", postHandler)
 
 		r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
 			wsHandler(w, r, "v0.1")
 		})
-		r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player))
+		r.Post("/api/v0.1", postHandler)
 
 		// REST action endpoints
 		r.Get("/l/*", methods.HandleRunRest(cfg, st, inTokenQueue)) // DEPRECATED
@@ -1101,7 +1112,7 @@ func Start(
 
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,
-		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player),
+		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, player),
 	))
 
 	// Static app assets

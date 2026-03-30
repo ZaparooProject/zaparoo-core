@@ -72,15 +72,18 @@ type BrowseResults struct {
 }
 
 type SettingsResponse struct {
-	ReadersScanMode         string             `json:"readersScanMode"`
-	ReadersScanIgnoreSystem []string           `json:"readersScanIgnoreSystems"`
-	ReadersConnect          []ReaderConnection `json:"readersConnect"`
-	ReadersScanExitDelay    float32            `json:"readersScanExitDelay"`
-	RunZapScript            bool               `json:"runZapScript"`
-	DebugLogging            bool               `json:"debugLogging"`
-	AudioScanFeedback       bool               `json:"audioScanFeedback"`
-	ReadersAutoDetect       bool               `json:"readersAutoDetect"`
-	ErrorReporting          bool               `json:"errorReporting"`
+	ReadersScanMode           string             `json:"readersScanMode"`
+	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
+	ReadersConnect            []ReaderConnection `json:"readersConnect"`
+	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
+	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
+	RunZapScript              bool               `json:"runZapScript"`
+	DebugLogging              bool               `json:"debugLogging"`
+	AudioScanFeedback         bool               `json:"audioScanFeedback"`
+	ReadersAutoDetect         bool               `json:"readersAutoDetect"`
+	ErrorReporting            bool               `json:"errorReporting"`
+	LaunchGuardEnabled        bool               `json:"launchGuardEnabled"`
+	LaunchGuardRequireConfirm bool               `json:"launchGuardRequireConfirm"`
 }
 
 type PlaytimeLimitsResponse struct {

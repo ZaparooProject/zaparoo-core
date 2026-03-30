@@ -47,6 +47,7 @@ const (
 	SuccessSoundFilename = "success.wav"
 	FailSoundFilename    = "fail.wav"
 	LimitSoundFilename   = "limit.wav"
+	PendingSoundFilename = "pending.wav"
 	AssetsDir            = "assets"
 	MappingsDir          = "mappings"
 	LaunchersDir         = "launchers"

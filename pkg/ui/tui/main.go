@@ -811,7 +811,7 @@ func BuildMain(
 					enabled := true
 					ctx, cancel := tuiContext()
 					defer cancel()
-					err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+					err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 						ErrorReporting: &enabled,
 					})
 					if err != nil {

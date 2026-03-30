@@ -221,6 +221,7 @@ func Start(
 	itq := make(chan tokens.Token)        // input token queue
 	lsq := make(chan *tokens.Token)       // launch software queue
 	plq := make(chan *playlists.Playlist) // playlist event queue
+	cfq := make(chan chan error)          // launch guard confirm queue
 
 	err := setupEnvironment(pl)
 	if err != nil {
@@ -273,6 +274,7 @@ func Start(
 		DB:                  db,
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
+		ConfirmQueue:        cfq,
 	}
 
 	// Set up the OnMediaStart hook
@@ -313,7 +315,7 @@ func Start(
 
 	log.Info().Msg("starting API service")
 	apiNotifications, _ := notifBroker.Subscribe(100)
-	go api.Start(pl, cfg, st, itq, db, limitsManager, apiNotifications, discoveryService.InstanceName(), player)
+	go api.Start(pl, cfg, st, itq, cfq, db, limitsManager, apiNotifications, discoveryService.InstanceName(), player)
 
 	// Build slug search cache after API is listening to avoid blocking startup
 	if db.MediaDB != nil {
@@ -382,6 +384,7 @@ func Start(
 		close(plq)
 		close(lsq)
 		close(itq)
+		close(cfq)
 
 		log.Info().Msg("service cleanup completed")
 		close(doneCh)

@@ -48,6 +48,12 @@ var FailSound []byte
 //go:embed sounds/limit.wav
 var LimitSound []byte
 
+// PendingSound AnthonyRamirez (https://freesound.org/people/AnthonyRamirez/sounds/455411/)
+// Licence: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication
+//
+//go:embed sounds/pending.wav
+var PendingSound []byte
+
 //go:embed systems/*
 var Systems embed.FS
 

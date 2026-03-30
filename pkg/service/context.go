@@ -37,4 +37,5 @@ type ServiceContext struct {
 	DB                  *database.Database
 	LaunchSoftwareQueue chan *tokens.Token
 	PlaylistQueue       chan *playlists.Playlist
+	ConfirmQueue        chan chan error
 }

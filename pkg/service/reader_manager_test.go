@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -32,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,12 +44,19 @@ const (
 )
 
 type readerManagerEnv struct {
-	st        *state.State
-	scanQueue chan readers.Scan
-	itq       chan tokens.Token
+	st           *state.State
+	scanQueue    chan readers.Scan
+	itq          chan tokens.Token
+	confirmQueue chan chan error
+	notifCh      <-chan models.Notification
+	clock        clockwork.Clock
 }
 
 func setupReaderManager(t *testing.T, opts ...func(*config.Instance)) *readerManagerEnv {
+	return setupReaderManagerWithClock(t, nil, opts...)
+}
+
+func setupReaderManagerWithClock(t *testing.T, clk clockwork.Clock, opts ...func(*config.Instance)) *readerManagerEnv {
 	t.Helper()
 
 	fs := testhelpers.NewMemoryFS()
@@ -75,6 +84,7 @@ func setupReaderManager(t *testing.T, opts ...func(*config.Instance)) *readerMan
 	itq := make(chan tokens.Token, 10)
 	lsq := make(chan *tokens.Token, 10)
 	plq := make(chan *playlists.Playlist, 10)
+	cfq := make(chan chan error, 10)
 
 	svc := &ServiceContext{
 		Platform:            mockPlatform,
@@ -83,9 +93,10 @@ func setupReaderManager(t *testing.T, opts ...func(*config.Instance)) *readerMan
 		DB:                  db,
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
+		ConfirmQueue:        cfq,
 	}
 
-	go readerManager(svc, itq, scanQueue, mockPlayer, nil)
+	go readerManager(svc, itq, scanQueue, mockPlayer, clk)
 
 	t.Cleanup(func() {
 		st.StopService()
@@ -99,9 +110,12 @@ func setupReaderManager(t *testing.T, opts ...func(*config.Instance)) *readerMan
 	})
 
 	return &readerManagerEnv{
-		st:        st,
-		scanQueue: scanQueue,
-		itq:       itq,
+		st:           st,
+		scanQueue:    scanQueue,
+		itq:          itq,
+		confirmQueue: cfq,
+		notifCh:      notifCh,
+		clock:        clk,
 	}
 }
 
@@ -516,4 +530,446 @@ func TestReaderManager_IgnoreOnConnect_ReaderReconnection(t *testing.T) {
 	})
 	tok2 := env.expectToken(t)
 	assert.Equal(t, "card-c", tok2.UID)
+}
+
+func withLaunchGuard(cfg *config.Instance) {
+	cfg.SetLaunchGuard(true)
+}
+
+func withLaunchGuardRequireConfirm(cfg *config.Instance) {
+	cfg.SetLaunchGuard(true)
+	cfg.SetLaunchGuardRequireConfirm(true)
+}
+
+func TestReaderManager_LaunchGuard_NoMediaPlaying(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	// No media playing — token should pass through immediately
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-a",
+			Text:     "**launch.system:nes",
+			ScanTime: time.Now(),
+		},
+	})
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-a", tok.UID)
+}
+
+func TestReaderManager_LaunchGuard_StagesWhenMediaPlaying(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	// Set active media to simulate a game running
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	// Scan a new card — should be staged, not launched
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-b",
+			Text:     "**launch.system:snes",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+}
+
+func TestReaderManager_LaunchGuard_DoubleTapConfirms(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	// Set active media
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	cardB := &tokens.Token{
+		UID:      "card-b",
+		Text:     "**launch.system:snes",
+		ScanTime: time.Now(),
+	}
+
+	// First tap — staged
+	env.sendScan(readers.Scan{Source: "test-reader", Token: cardB})
+	env.expectNoToken(t)
+
+	// Remove card (clears preprocessor prevToken via normal removal path)
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.expectNoToken(t)
+
+	// Second tap — should confirm and launch
+	env.sendScan(readers.Scan{Source: "test-reader", Token: cardB})
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-b", tok.UID)
+}
+
+func TestReaderManager_LaunchGuard_DifferentCardReplacesStaged(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	// Stage card B
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-b",
+			Text:     "game-b",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+
+	// Remove card
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.expectNoToken(t)
+
+	// Stage card C (replaces B) — verify by double-tapping C succeeds
+	cardC := &tokens.Token{
+		UID:      "card-c",
+		Text:     "game-c",
+		ScanTime: time.Now(),
+	}
+	env.sendScan(readers.Scan{Source: "test-reader", Token: cardC})
+	env.expectNoToken(t)
+
+	// Remove and re-tap card C to confirm
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.expectNoToken(t)
+
+	env.sendScan(readers.Scan{Source: "test-reader", Token: cardC})
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-c", tok.UID)
+}
+
+func TestReaderManager_LaunchGuard_RequireConfirm_BlocksDoubleTap(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuardRequireConfirm)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	cardB := &tokens.Token{
+		UID:      "card-b",
+		Text:     "**launch.system:snes",
+		ScanTime: time.Now(),
+	}
+
+	// First tap — staged
+	env.sendScan(readers.Scan{Source: "test-reader", Token: cardB})
+	env.expectNoToken(t)
+
+	// Remove
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.expectNoToken(t)
+
+	// Re-tap — should NOT confirm because require_confirm is true
+	env.sendScan(readers.Scan{Source: "test-reader", Token: cardB})
+	env.expectNoToken(t)
+}
+
+func TestReaderManager_LaunchGuard_APIConfirm(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuardRequireConfirm)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	// Stage a token
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-b",
+			Text:     "**launch.system:snes",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+
+	// Send confirm via channel
+	result := make(chan error, 1)
+	env.confirmQueue <- result
+	err := <-result
+	require.NoError(t, err)
+
+	// Token should now be on itq
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-b", tok.UID)
+}
+
+func TestReaderManager_LaunchGuard_APIConfirmNoStaged(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	// Confirm with nothing staged — should return error
+	result := make(chan error, 1)
+	env.confirmQueue <- result
+	err := <-result
+	assert.Error(t, err)
+}
+
+func withLaunchGuardNoTimeout(cfg *config.Instance) {
+	cfg.SetLaunchGuard(true)
+	cfg.SetLaunchGuardTimeout(-1) // negative = no timeout (0 returns default)
+}
+
+// Timeout expiry — staged token should be discarded after timeout fires
+func TestReaderManager_LaunchGuard_TimeoutExpiry(t *testing.T) {
+	t.Parallel()
+	fakeClock := clockwork.NewFakeClock()
+	env := setupReaderManagerWithClock(t, fakeClock, withLaunchGuard)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	cardB := &tokens.Token{
+		UID:      "card-b",
+		Text:     "**launch.system:snes",
+		ScanTime: time.Now(),
+	}
+
+	// Stage token
+	env.sendScan(readers.Scan{Source: "test-reader", Token: cardB})
+	env.expectNoToken(t)
+
+	// Advance past timeout (default 15s)
+	fakeClock.Advance(16 * time.Second)
+
+	// Remove and re-tap — should stage again, not confirm (old staged was cleared)
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.expectNoToken(t)
+
+	env.sendScan(readers.Scan{Source: "test-reader", Token: cardB})
+	env.expectNoToken(t) // staged again, not launched
+}
+
+// Zero/negative timeout — staged token persists until re-tap or confirm
+func TestReaderManager_LaunchGuard_NoTimeout(t *testing.T) {
+	t.Parallel()
+	fakeClock := clockwork.NewFakeClock()
+	env := setupReaderManagerWithClock(t, fakeClock, withLaunchGuardNoTimeout)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	cardB := &tokens.Token{
+		UID:      "card-b",
+		Text:     "**launch.system:snes",
+		ScanTime: time.Now(),
+	}
+
+	// Stage token
+	env.sendScan(readers.Scan{Source: "test-reader", Token: cardB})
+	env.expectNoToken(t)
+
+	// Advance time significantly — token should still be staged (no timeout)
+	fakeClock.Advance(10 * time.Minute)
+
+	// Remove and re-tap — should confirm since token is still staged
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.expectNoToken(t)
+
+	env.sendScan(readers.Scan{Source: "test-reader", Token: cardB})
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-b", tok.UID)
+}
+
+// Barcode scanner double-tap — same card scanned twice with no removal
+func TestReaderManager_LaunchGuard_BarcodeScannerDoubleTap(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	cardB := &tokens.Token{
+		UID:      "card-b",
+		Text:     "**launch.system:snes",
+		ScanTime: time.Now(),
+	}
+
+	// First scan — staged
+	env.sendScan(readers.Scan{Source: "barcode-reader", Token: cardB})
+	env.expectNoToken(t)
+
+	// Second scan of same card WITHOUT removal in between
+	// This is the barcode scanner case — no nil scan between reads
+	env.sendScan(readers.Scan{Source: "barcode-reader", Token: cardB})
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-b", tok.UID)
+}
+
+// API confirm after card replacement — should launch the latest staged card
+func TestReaderManager_LaunchGuard_APIConfirmAfterReplacement(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuardRequireConfirm)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	// Stage card B
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-b",
+			Text:     "game-b",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+
+	// Remove
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.expectNoToken(t)
+
+	// Stage card C (replaces B)
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-c",
+			Text:     "game-c",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+
+	// API confirm — should launch C, not B
+	result := make(chan error, 1)
+	env.confirmQueue <- result
+	require.NoError(t, <-result)
+
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-c", tok.UID)
+}
+
+// Media stops while token is staged — next scan should launch directly
+func TestReaderManager_LaunchGuard_MediaStopsClearsGuard(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	// Stage a token
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-b",
+			Text:     "game-b",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+
+	// Media stops
+	env.st.SetActiveMedia(nil)
+
+	// Remove old card
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.expectNoToken(t)
+
+	// New scan — media is no longer playing, should launch directly
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-c",
+			Text:     "game-c",
+			ScanTime: time.Now(),
+		},
+	})
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-c", tok.UID)
+}
+
+// tokens.staged notification emitted when staging
+func TestReaderManager_LaunchGuard_EmitsStagedNotification(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-b",
+			Text:     "game-b",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+
+	// Drain notifications until we find tokens.staged
+	found := false
+	timeout := time.After(2 * time.Second)
+	for !found {
+		select {
+		case notif := <-env.notifCh:
+			if notif.Method == models.NotificationTokensStaged {
+				found = true
+			}
+		case <-timeout:
+			t.Fatal("expected tokens.staged notification")
+		}
+	}
+}
+
+func TestReaderManager_LaunchGuard_Disabled(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t) // no launch guard
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	// Even with media playing, token should pass through immediately
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-a",
+			Text:     "**launch.system:snes",
+			ScanTime: time.Now(),
+		},
+	})
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-a", tok.UID)
 }

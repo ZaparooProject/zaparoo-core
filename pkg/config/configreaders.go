@@ -40,12 +40,19 @@ type DriverConfig struct {
 }
 
 type ReadersScan struct {
-	Mode            string   `toml:"mode"`
-	OnScan          string   `toml:"on_scan,omitempty"`
-	OnRemove        string   `toml:"on_remove,omitempty"`
-	IgnoreSystem    []string `toml:"ignore_system,omitempty"`
-	ExitDelay       float32  `toml:"exit_delay,omitempty"`
-	IgnoreOnConnect bool     `toml:"ignore_on_connect,omitempty"`
+	Mode            string          `toml:"mode"`
+	OnScan          string          `toml:"on_scan,omitempty"`
+	OnRemove        string          `toml:"on_remove,omitempty"`
+	IgnoreSystem    []string        `toml:"ignore_system,omitempty"`
+	ExitDelay       float32         `toml:"exit_delay,omitempty"`
+	IgnoreOnConnect bool            `toml:"ignore_on_connect,omitempty"`
+	LaunchGuard     ScanLaunchGuard `toml:"launch_guard,omitempty"`
+}
+
+type ScanLaunchGuard struct {
+	Timeout        float32 `toml:"timeout,omitempty"`
+	Enabled        bool    `toml:"enabled,omitempty"`
+	RequireConfirm bool    `toml:"require_confirm,omitempty"`
 }
 
 type ReadersConnect struct {
@@ -131,6 +138,49 @@ func (c *Instance) SetScanIgnoreOnConnect(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Readers.Scan.IgnoreOnConnect = enabled
+}
+
+// DefaultLaunchGuardTimeout is the default timeout in seconds for staged tokens
+// when launch_guard is enabled and no custom timeout is set.
+const DefaultLaunchGuardTimeout float32 = 15
+
+func (c *Instance) LaunchGuardEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Readers.Scan.LaunchGuard.Enabled
+}
+
+func (c *Instance) LaunchGuardTimeout() float32 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Readers.Scan.LaunchGuard.Timeout == 0 {
+		return DefaultLaunchGuardTimeout
+	}
+	return c.vals.Readers.Scan.LaunchGuard.Timeout
+}
+
+func (c *Instance) LaunchGuardRequireConfirm() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Readers.Scan.LaunchGuard.RequireConfirm
+}
+
+func (c *Instance) SetLaunchGuard(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Readers.Scan.LaunchGuard.Enabled = enabled
+}
+
+func (c *Instance) SetLaunchGuardTimeout(timeout float32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Readers.Scan.LaunchGuard.Timeout = timeout
+}
+
+func (c *Instance) SetLaunchGuardRequireConfirm(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Readers.Scan.LaunchGuard.RequireConfirm = enabled
 }
 
 func (c *Instance) Readers() Readers {
