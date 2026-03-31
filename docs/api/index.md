@@ -69,6 +69,32 @@ This would return a response like:
 
 Unlike WebSocket connections, HTTP requests are stateless and do not support notifications. Each request requires a complete JSON-RPC 2.0 payload and will receive a single response.
 
+### Server-Sent Events (SSE)
+
+The API provides a [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) endpoint for receiving notifications over a standard HTTP connection. This is useful for clients that only need to receive notifications without the full bidirectional communication of WebSocket, and works with any HTTP client without additional libraries.
+
+These SSE endpoints are available:
+
+- `/api/v0.1/events`
+- `/api/v0/events`
+- `/api/events`
+
+An example using `curl`:
+
+```bash
+curl -N http://10.0.0.123:7497/api/v0.1/events
+```
+
+Each notification is sent as an SSE `data` field containing the same JSON-RPC 2.0 notification object used by WebSocket:
+
+```
+data: {"jsonrpc":"2.0","method":"tokens.added","params":{"type":"nfc","uid":"04E1234567890","text":"**launch:game.rom"}}
+
+data: {"jsonrpc":"2.0","method":"media.started","params":{"systemId":"NES","systemName":"NES","name":"game.rom"}}
+```
+
+SSE connections are long-lived and will continue receiving events until the client disconnects. To call methods, use HTTP POST to the standard API endpoint alongside the SSE connection.
+
 ### JSON Payloads
 
 Server and clients communicate back and forth using JSON payloads, following the [JSON-RPC 2.0](https://www.jsonrpc.org/specification) protocol.
@@ -200,12 +226,13 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods are used to execute actions and request data back from the API. The current API provides **44 methods** across core functionality areas. See the [API Methods](./methods) page for detailed definitions and examples of each method.
+Methods are used to execute actions and request data back from the API. The current API provides **45 methods** across core functionality areas. See the [API Methods](./methods) page for detailed definitions and examples of each method.
 
 | ID                              | Description                                                                           |
 | :------------------------------ | :------------------------------------------------------------------------------------ |
 | run                             | Run supplied ZapScript.                                                               |
 | stop                            | Kill any active launcher, if possible.                                                |
+| confirm                         | Confirm and launch the currently staged token.                                        |
 | tokens                          | List active tokens.                                                                   |
 | tokens.history                  | Return a list of the latest token launches.                                           |
 | media                           | Return status and statistics about media database.                                    |
@@ -259,6 +286,7 @@ Notifications let a server or client know an event has occurred. See the [API No
 | readers.removed        | A connected reader was disconnected from the server.                              |
 | tokens.added           | A new token detected by a reader.                                                 |
 | tokens.removed         | A token was removed.                                                              |
+| tokens.staged          | A token was staged by launch guard and is awaiting confirmation.                  |
 | media.started          | New media was started on server.                                                  |
 | media.stopped          | Media has stopped on server.                                                      |
 | media.indexing         | The state of the indexing or optimization process has changed.                    |

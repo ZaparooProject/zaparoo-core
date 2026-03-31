@@ -20,14 +20,18 @@
 package api
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -35,6 +39,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newTestBroker(ctx context.Context, source <-chan models.Notification) *broker.Broker {
+	b := broker.NewBroker(ctx, source)
+	b.Start()
+	return b
+}
 
 // TestServerStartupConcurrency validates that the API server properly synchronizes
 // startup and is ready to accept connections when multiple goroutines attempt
@@ -61,7 +71,8 @@ func TestServerStartupConcurrency(t *testing.T) {
 			cfg, err := helpers.NewTestConfigWithPort(fs, configDir, testPort)
 			require.NoError(t, err)
 
-			st, notifications := state.NewState(platform, "test-boot-uuid")
+			st, notifCh := state.NewState(platform, "test-boot-uuid")
+			notifBroker := newTestBroker(st.GetContext(), notifCh)
 
 			db := &database.Database{
 				UserDB:  helpers.NewMockUserDBI(),
@@ -74,7 +85,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 			serverDone := make(chan struct{})
 			go func() {
 				defer close(serverDone)
-				Start(platform, cfg, st, tokenQueue, nil, db, nil, notifications, "", nil)
+				Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil)
 			}()
 			// Cleanup: stop service first, then wait for server goroutine to fully exit
 			defer func() {
@@ -129,7 +140,8 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	cfg, err := helpers.NewTestConfigWithPort(fs, configDir, 0)
 	require.NoError(t, err)
 
-	st, notifications := state.NewState(platform, "test-boot-uuid")
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
+	notifBroker := newTestBroker(st.GetContext(), notifCh)
 
 	db := &database.Database{
 		UserDB:  helpers.NewMockUserDBI(),
@@ -142,7 +154,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifications, "", nil)
+		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil)
 	}()
 	// Cleanup: stop service first, then wait for server goroutine to fully exit
 	defer func() {
@@ -204,7 +216,8 @@ func TestServerListenContextCancellation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a state with a context that we can cancel
-	st, notifications := state.NewState(platform, "test-boot-uuid")
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
+	notifBroker := newTestBroker(st.GetContext(), notifCh)
 
 	// Cancel the state context immediately to test context cancellation during listen
 	st.StopService()
@@ -225,7 +238,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifications, "", nil)
+		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil)
 	}()
 
 	// Wait for completion or timeout
@@ -504,7 +517,8 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	cfg1, err := helpers.NewTestConfigWithPort(fs1, configDir1, testPort)
 	require.NoError(t, err)
 
-	st1, notifications1 := state.NewState(platform1, "test-boot-uuid-1")
+	st1, notifCh1 := state.NewState(platform1, "test-boot-uuid-1")
+	notifBroker1 := newTestBroker(st1.GetContext(), notifCh1)
 	db1 := &database.Database{
 		UserDB:  helpers.NewMockUserDBI(),
 		MediaDB: helpers.NewMockMediaDBI(),
@@ -515,7 +529,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	server1Done := make(chan struct{})
 	go func() {
 		defer close(server1Done)
-		Start(platform1, cfg1, st1, tokenQueue1, nil, db1, nil, notifications1, "", nil)
+		Start(platform1, cfg1, st1, tokenQueue1, nil, db1, nil, notifBroker1, "", nil)
 	}()
 
 	// Wait for first server to be ready
@@ -546,7 +560,8 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	cfg2, err := helpers.NewTestConfigWithPort(fs2, configDir2, testPort) // Same port!
 	require.NoError(t, err)
 
-	st2, notifications2 := state.NewState(platform2, "test-boot-uuid-2")
+	st2, notifCh2 := state.NewState(platform2, "test-boot-uuid-2")
+	notifBroker2 := newTestBroker(st2.GetContext(), notifCh2)
 	db2 := &database.Database{
 		UserDB:  helpers.NewMockUserDBI(),
 		MediaDB: helpers.NewMockMediaDBI(),
@@ -557,7 +572,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	server2Done := make(chan struct{})
 	go func() {
 		defer close(server2Done)
-		Start(platform2, cfg2, st2, tokenQueue2, nil, db2, nil, notifications2, "", nil)
+		Start(platform2, cfg2, st2, tokenQueue2, nil, db2, nil, notifBroker2, "", nil)
 	}()
 
 	// Wait for the second server's context to be cancelled (StopService called)
@@ -690,4 +705,110 @@ func TestMakeOriginValidator_HotReload(t *testing.T) {
 
 	// Static origins still work
 	assert.True(t, validator(nil, "http://localhost:7497"))
+}
+
+func TestSSE_ReceivesNotifications(t *testing.T) {
+	t.Parallel()
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+
+	fs := helpers.NewMemoryFS()
+	configDir := t.TempDir()
+	cfg, err := helpers.NewTestConfigWithPort(fs, configDir, 0)
+	require.NoError(t, err)
+
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
+	notifBroker := newTestBroker(st.GetContext(), notifCh)
+
+	db := &database.Database{
+		UserDB:  helpers.NewMockUserDBI(),
+		MediaDB: helpers.NewMockMediaDBI(),
+	}
+
+	tokenQueue := make(chan tokens.Token, 1)
+
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil)
+	}()
+	defer func() {
+		st.StopService()
+		close(tokenQueue)
+		<-serverDone
+	}()
+
+	// Wait for server to be ready
+	port := cfg.APIPort()
+	sseURL := fmt.Sprintf("http://localhost:%d/api/v0.1/events", port)
+	client := &http.Client{Timeout: 100 * time.Millisecond}
+	var serverReady bool
+	for range 50 {
+		healthURL := fmt.Sprintf("http://localhost:%d/health", port)
+		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, healthURL, http.NoBody)
+		if reqErr != nil {
+			continue
+		}
+		resp, connErr := client.Do(req) //nolint:gosec // test hitting local test server
+		if connErr == nil {
+			_ = resp.Body.Close()
+			serverReady = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.True(t, serverReady, "server should start successfully")
+
+	// Connect to SSE endpoint (no timeout for the streaming connection)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sseURL, http.NoBody)
+	require.NoError(t, err)
+
+	sseClient := &http.Client{}
+	resp, err := sseClient.Do(req) //nolint:gosec // test hitting local test server
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+
+	// Send a notification through the broker
+	payload, _ := json.Marshal(map[string]string{"uid": "test-123", "text": "**launch:game.rom"})
+	st.Notifications <- models.Notification{
+		Method: "tokens.staged",
+		Params: payload,
+	}
+
+	// Read the SSE event
+	scanner := bufio.NewScanner(resp.Body)
+	var eventData string
+	deadline := time.After(5 * time.Second)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "data: ") {
+				eventData = strings.TrimPrefix(line, "data: ")
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-deadline:
+		cancel()
+		t.Fatal("timed out waiting for SSE event")
+	}
+
+	require.NotEmpty(t, eventData)
+
+	var obj models.NotificationObject
+	require.NoError(t, json.Unmarshal([]byte(eventData), &obj))
+	assert.Equal(t, "2.0", obj.JSONRPC)
+	assert.Equal(t, "tokens.staged", obj.Method)
 }

@@ -314,8 +314,7 @@ func Start(
 	}
 
 	log.Info().Msg("starting API service")
-	apiNotifications, _ := notifBroker.Subscribe(100)
-	go api.Start(pl, cfg, st, itq, cfq, db, limitsManager, apiNotifications, discoveryService.InstanceName(), player)
+	go api.Start(pl, cfg, st, itq, cfq, db, limitsManager, notifBroker, discoveryService.InstanceName(), player)
 
 	// Build slug search cache after API is listening to avoid blocking startup
 	if db.MediaDB != nil {
