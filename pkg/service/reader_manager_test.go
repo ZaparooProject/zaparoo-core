@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,11 +73,14 @@ func setupReaderManagerWithClock(t *testing.T, clk clockwork.Clock, opts ...func
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.SetupBasicMock()
+	mockPlatform.On("LookupMapping", mock.Anything).Return("", false)
 
 	st, notifCh := state.NewState(mockPlatform, "test-boot-uuid")
 
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil)
 	db := &database.Database{
-		UserDB:  testhelpers.NewMockUserDBI(),
+		UserDB:  mockUserDB,
 		MediaDB: testhelpers.NewMockMediaDBI(),
 	}
 
@@ -752,17 +756,20 @@ func TestReaderManager_LaunchGuard_TimeoutExpiry(t *testing.T) {
 
 	// Stage token
 	env.sendScan(readers.Scan{Source: "test-reader", Token: cardB})
-	env.expectNoToken(t)
+	// Barrier: goroutine must finish processing the stage (including
+	// clock.After registration) before it can receive this removal.
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
 
-	// Advance past timeout (default 15s)
+	// Safe to advance — timer is definitely registered
 	fakeClock.Advance(16 * time.Second)
 
-	// Remove and re-tap — should stage again, not confirm (old staged was cleared)
+	// Barrier: goroutine processes this removal AND the fired timeout
+	// (whichever order the select picks, both are consumed before this returns)
 	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
-	env.expectNoToken(t)
 
+	// Re-tap — should stage again, not confirm (old staged was cleared by timeout)
 	env.sendScan(readers.Scan{Source: "test-reader", Token: cardB})
-	env.expectNoToken(t) // staged again, not launched
+	env.expectNoToken(t)
 }
 
 // Zero/negative timeout — staged token persists until re-tap or confirm
@@ -949,6 +956,183 @@ func TestReaderManager_LaunchGuard_EmitsStagedNotification(t *testing.T) {
 			t.Fatal("expected tokens.staged notification")
 		}
 	}
+}
+
+// Utility commands pass through launch guard without staging
+func TestReaderManager_LaunchGuard_UtilityCommandPassesThrough(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	// Coin insert should pass through immediately
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "coin-card",
+			Text:     "**coin.p1",
+			ScanTime: time.Now(),
+		},
+	})
+	tok := env.expectToken(t)
+	assert.Equal(t, "coin-card", tok.UID)
+}
+
+// Stop command gets staged by launch guard
+func TestReaderManager_LaunchGuard_StopCommandStaged(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "stop-card",
+			Text:     "**stop",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+}
+
+// Playlist command gets staged by launch guard
+func TestReaderManager_LaunchGuard_PlaylistCommandStaged(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "playlist-card",
+			Text:     "**playlist.next",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+}
+
+// Mapping-resolved token gets staged when mapped script is disrupting
+func TestReaderManager_LaunchGuard_MappedTokenStaged(t *testing.T) {
+	t.Parallel()
+
+	// Custom setup: platform maps this specific token to a launch command
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetLaunchGuard(true)
+
+	mockPlayer := mocks.NewMockPlayer()
+	mockPlayer.SetupNoOpMock()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	// Default: no mapping
+	// This specific token maps to a launch command; all others return no mapping
+	mockPlatform.On("LookupMapping", mock.MatchedBy(func(t *tokens.Token) bool {
+		return t.UID == "mapped-card"
+	})).Return("**launch.system:snes", true)
+	mockPlatform.On("LookupMapping", mock.Anything).Return("", false)
+
+	st, notifCh := state.NewState(mockPlatform, "test-boot-uuid")
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil)
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: testhelpers.NewMockMediaDBI(),
+	}
+
+	scanQueue := make(chan readers.Scan)
+	itq := make(chan tokens.Token, 10)
+	lsq := make(chan *tokens.Token, 10)
+	plq := make(chan *playlists.Playlist, 10)
+	cfq := make(chan chan error, 10)
+
+	svc := &ServiceContext{
+		Platform:            mockPlatform,
+		Config:              cfg,
+		State:               st,
+		DB:                  db,
+		LaunchSoftwareQueue: lsq,
+		PlaylistQueue:       plq,
+		ConfirmQueue:        cfq,
+	}
+
+	go readerManager(svc, itq, scanQueue, mockPlayer, nil)
+
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-notifCh:
+			default:
+				return
+			}
+		}
+	})
+
+	env := &readerManagerEnv{
+		st:           st,
+		scanQueue:    scanQueue,
+		itq:          itq,
+		confirmQueue: cfq,
+		notifCh:      notifCh,
+	}
+
+	st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	// Token text looks like a utility command, but mapping resolves to a launch
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "mapped-card",
+			Text:     "**coin.p1",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t) // staged because mapping resolved to launch command
+}
+
+// Unparseable ZapScript gets staged conservatively
+func TestReaderManager_LaunchGuard_UnparseableScriptStaged(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	// Plain path (no ** prefix) — not valid ZapScript but commonly used for game launches
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "plain-path-card",
+			Text:     "/roms/snes/game.sfc",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
 }
 
 func TestReaderManager_LaunchGuard_Disabled(t *testing.T) {

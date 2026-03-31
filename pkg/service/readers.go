@@ -513,31 +513,43 @@ preprocessing:
 			}
 			svc.State.SetWroteToken(nil)
 
-			// Launch guard: when enabled and media is playing, stage the token
-			// instead of launching it immediately. A re-tap or API confirm is
-			// required to actually launch.
+			// Launch guard: when enabled and media is playing, stage tokens that
+			// would disrupt the current media (launches, playlist changes, stop).
+			// Utility commands (coin, keyboard, execute, etc.) pass through.
 			if svc.Config.LaunchGuardEnabled() && svc.State.ActiveMedia() != nil {
-				log.Info().Msgf("launch guard: staging token: %v", scan)
-				stagedToken = scan
-
-				notifications.TokensStaged(svc.State.Notifications, models.TokenResponse{
-					Type:     scan.Type,
-					UID:      scan.UID,
-					Text:     scan.Text,
-					Data:     scan.Data,
-					ScanTime: scan.ScanTime,
-				})
-
-				path, enabled := svc.Config.PendingSoundPath(helpers.DataDir(svc.Platform))
-				helpers.PlayConfiguredSound(player, path, enabled, assets.PendingSound, "pending")
-
-				// Start/reset timeout timer
-				if timeout := svc.Config.LaunchGuardTimeout(); timeout > 0 {
-					guardTimeout = clock.After(time.Duration(timeout * float32(time.Second)))
-				} else {
-					guardTimeout = nil
+				mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, *scan)
+				scriptText := scan.Text
+				if hasMapping {
+					scriptText = mappedValue
 				}
-				continue preprocessing
+				parser := gozapscript.NewParser(scriptText)
+				script, parseErr := parser.ParseScript()
+
+				// Stage conservatively: if parsing fails we can't confirm the token
+				// is a safe utility command, so stage it. Only pass through tokens
+				// we can positively identify as non-disrupting.
+				if parseErr != nil || scriptHasMediaDisruptingCommand(&script) {
+					log.Info().Msgf("launch guard: staging token: %v", scan)
+					stagedToken = scan
+
+					notifications.TokensStaged(svc.State.Notifications, models.TokenResponse{
+						Type:     scan.Type,
+						UID:      scan.UID,
+						Text:     scan.Text,
+						Data:     scan.Data,
+						ScanTime: scan.ScanTime,
+					})
+
+					path, enabled := svc.Config.PendingSoundPath(helpers.DataDir(svc.Platform))
+					helpers.PlayConfiguredSound(player, path, enabled, assets.PendingSound, "pending")
+
+					if timeout := svc.Config.LaunchGuardTimeout(); timeout > 0 {
+						guardTimeout = clock.After(time.Duration(timeout * float32(time.Second)))
+					} else {
+						guardTimeout = nil
+					}
+					continue preprocessing
+				}
 			}
 
 			log.Info().Msgf("sending token to queue: %v", scan)
