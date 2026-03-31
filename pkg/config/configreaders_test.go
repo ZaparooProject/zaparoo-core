@@ -446,3 +446,51 @@ func TestIsHoldModeIgnoredSystemWithInvalidConfig(t *testing.T) {
 	// Invalid entries should not cause matches
 	assert.False(t, cfg.IsHoldModeIgnoredSystem("InvalidSystemID"))
 }
+
+func TestLaunchGuardTimeout_DefaultWhenZero(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	assert.InDelta(t, DefaultLaunchGuardTimeout, cfg.LaunchGuardTimeout(), 0)
+}
+
+func TestLaunchGuardTimeout_CustomValue(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{Timeout: 30},
+				},
+			},
+		},
+	}
+	assert.InDelta(t, 30, cfg.LaunchGuardTimeout(), 0)
+}
+
+func TestLaunchGuardTimeout_NegativeDisablesTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	cfg.SetLaunchGuardTimeout(-1)
+	assert.InDelta(t, -1, cfg.LaunchGuardTimeout(), 0)
+}
+
+func TestLaunchGuardSettersAndGetters(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+
+	assert.False(t, cfg.LaunchGuardEnabled())
+	assert.False(t, cfg.LaunchGuardRequireConfirm())
+
+	cfg.SetLaunchGuard(true)
+	cfg.SetLaunchGuardRequireConfirm(true)
+
+	assert.True(t, cfg.LaunchGuardEnabled())
+	assert.True(t, cfg.LaunchGuardRequireConfirm())
+
+	cfg.SetLaunchGuard(false)
+	assert.False(t, cfg.LaunchGuardEnabled())
+}

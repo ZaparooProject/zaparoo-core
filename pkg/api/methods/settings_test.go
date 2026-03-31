@@ -475,6 +475,76 @@ func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {
 	assert.Equal(t, "uid", readers[0].IDSource)
 }
 
+func TestHandleSettings_LaunchGuardDefaults(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	}
+
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+
+	assert.False(t, resp.LaunchGuardEnabled)
+	assert.InDelta(t, 15, resp.LaunchGuardTimeout, 0)
+	assert.False(t, resp.LaunchGuardRequireConfirm)
+}
+
+func TestHandleSettingsUpdate_LaunchGuard(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	enabled := true
+	timeout := float32(30)
+	requireConfirm := true
+	params := models.UpdateSettingsParams{
+		LaunchGuardEnabled:        &enabled,
+		LaunchGuardTimeout:        &timeout,
+		LaunchGuardRequireConfirm: &requireConfirm,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.LaunchGuardEnabled())
+	assert.InDelta(t, 30, cfg.LaunchGuardTimeout(), 0)
+	assert.True(t, cfg.LaunchGuardRequireConfirm())
+}
+
 // TestHandleSettingsReload_RefreshesLauncherCache tests that HandleSettingsReload
 // refreshes the launcher cache after reloading config and custom launcher files.
 func TestHandleSettingsReload_RefreshesLauncherCache(t *testing.T) {
