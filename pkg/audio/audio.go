@@ -47,7 +47,7 @@ import (
 
 // Player is the interface for audio playback, allowing tests to mock sound output.
 type Player interface {
-	PlayWAVBytes(data []byte) error
+	PlayBytes(data []byte) error
 	PlayFile(path string) error
 	ClearFileCache()
 }
@@ -144,9 +144,110 @@ func (p *MalgoPlayer) playWAV(r io.ReadCloser) error {
 	return nil
 }
 
-// PlayWAVBytes plays WAV audio from a byte slice asynchronously.
-func (p *MalgoPlayer) PlayWAVBytes(data []byte) error {
-	return p.playWAV(io.NopCloser(bytes.NewReader(data)))
+// PlayBytes plays audio from a byte slice asynchronously, detecting format
+// from magic bytes. Supports WAV, OGG (Vorbis), MP3, and FLAC.
+func (p *MalgoPlayer) PlayBytes(data []byte) error {
+	r := io.NopCloser(bytes.NewReader(data))
+
+	switch detectAudioFormat(data) {
+	case "wav":
+		return p.playWAV(r)
+	case "ogg":
+		streamer, format, err := vorbis.Decode(r)
+		if err != nil {
+			return fmt.Errorf("failed to decode OGG stream: %w", err)
+		}
+		return p.playStream(streamer, format)
+	case "mp3":
+		streamer, format, err := mp3.Decode(r)
+		if err != nil {
+			return fmt.Errorf("failed to decode MP3 stream: %w", err)
+		}
+		return p.playStream(streamer, format)
+	case "flac":
+		streamer, format, err := flac.Decode(bytes.NewReader(data))
+		if err != nil {
+			return fmt.Errorf("failed to decode FLAC stream: %w", err)
+		}
+		return p.playStream(streamer, format)
+	default:
+		return errors.New("unsupported audio format (expected WAV, OGG, MP3, or FLAC)")
+	}
+}
+
+// detectAudioFormat returns a format name based on file magic bytes.
+func detectAudioFormat(data []byte) string {
+	if len(data) >= 4 && string(data[:4]) == "RIFF" {
+		return "wav"
+	}
+	if len(data) >= 4 && string(data[:4]) == "OggS" {
+		return "ogg"
+	}
+	if len(data) >= 4 && string(data[:4]) == "fLaC" {
+		return "flac"
+	}
+	if len(data) >= 3 && string(data[:3]) == "ID3" {
+		return "mp3"
+	}
+	if len(data) >= 2 && data[0] == 0xFF && (data[1]&0xE0) == 0xE0 {
+		return "mp3"
+	}
+	return ""
+}
+
+// playStream plays a decoded audio stream asynchronously, resampling to 48000 Hz.
+func (p *MalgoPlayer) playStream(streamer beep.StreamSeekCloser, format beep.Format) error {
+	resampled := beep.Resample(4, format.SampleRate, beep.SampleRate(48000), streamer)
+
+	p.playbackMu.Lock()
+	if p.currentCancel != nil {
+		p.currentCancel()
+	}
+	prevDone := p.currentDone
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: stored in p.currentCancel
+	p.currentCancel = cancel
+	done := make(chan struct{})
+	p.currentDone = done
+	p.playbackGen++
+	thisGen := p.playbackGen
+	p.playbackMu.Unlock()
+
+	if prevDone != nil {
+		select {
+		case <-prevDone:
+		case <-time.After(3 * time.Second):
+			log.Warn().Msg("timeout waiting for previous audio playback cleanup")
+		}
+	}
+
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Error().Any("panic", rec).Msg("recovered panic in audio playback")
+			}
+		}()
+		defer close(done)
+		defer func() {
+			if err := streamer.Close(); err != nil {
+				log.Warn().Err(err).Msg("failed to close audio streamer")
+			}
+			p.playbackMu.Lock()
+			if p.playbackGen == thisGen {
+				p.currentCancel = nil
+			}
+			p.playbackMu.Unlock()
+		}()
+
+		if err := playWAVWithMalgo(ctx, resampled); err != nil {
+			if ctx.Err() != context.Canceled {
+				log.Warn().Err(err).Msg("failed to play audio")
+			}
+			return
+		}
+		log.Debug().Msg("completed audio playback")
+	}()
+
+	return nil
 }
 
 // PlayFile plays an audio file asynchronously, detecting format by extension.

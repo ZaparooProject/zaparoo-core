@@ -47,6 +47,7 @@ type RequestEnv struct {
 	LauncherCache *helpers.LauncherCache
 	Player        audio.Player
 	TokenQueue    chan<- tokens.Token
+	ConfirmQueue  chan<- chan error
 	ClientID      string
 	Params        json.RawMessage
 	IsLocal       bool

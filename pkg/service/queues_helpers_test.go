@@ -306,6 +306,86 @@ func TestScriptHasMediaLaunchingCommand(t *testing.T) {
 	}
 }
 
+func TestScriptHasMediaDisruptingCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		script   *gozapscript.Script
+		name     string
+		expected bool
+	}{
+		{
+			name:     "nil script",
+			script:   nil,
+			expected: false,
+		},
+		{
+			name: "launch command is disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{Name: gozapscript.ZapScriptCmdLaunch}},
+			},
+			expected: true,
+		},
+		{
+			name: "stop command is disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{Name: gozapscript.ZapScriptCmdStop}},
+			},
+			expected: true,
+		},
+		{
+			name: "playlist.next is disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{Name: gozapscript.ZapScriptCmdPlaylistNext}},
+			},
+			expected: true,
+		},
+		{
+			name: "coin insert is not disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{Name: gozapscript.ZapScriptCmdInputCoinP1}},
+			},
+			expected: false,
+		},
+		{
+			name: "keyboard input is not disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{Name: gozapscript.ZapScriptCmdInputKeyboard}},
+			},
+			expected: false,
+		},
+		{
+			name: "mixed script with disrupting command",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{
+					{Name: gozapscript.ZapScriptCmdDelay},
+					{Name: gozapscript.ZapScriptCmdLaunchSystem},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "utility-only script",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{
+					{Name: gozapscript.ZapScriptCmdInputCoinP1},
+					{Name: gozapscript.ZapScriptCmdDelay},
+					{Name: gozapscript.ZapScriptCmdEcho},
+				},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := scriptHasMediaDisruptingCommand(tt.script)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestInjectCommands(t *testing.T) {
 	t.Parallel()
 

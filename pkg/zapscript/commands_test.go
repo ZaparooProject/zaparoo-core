@@ -338,6 +338,63 @@ func TestIsMediaLaunchingCommand_ComprehensiveCoverage(t *testing.T) {
 	}
 }
 
+func TestIsMediaDisruptingCommand(t *testing.T) {
+	t.Parallel()
+
+	// Commands that disrupt media (launches + playlists + stop)
+	disruptingCommands := []string{
+		// All media-launching commands
+		zapscript.ZapScriptCmdLaunch,
+		zapscript.ZapScriptCmdLaunchSystem,
+		zapscript.ZapScriptCmdLaunchRandom,
+		zapscript.ZapScriptCmdLaunchSearch,
+		zapscript.ZapScriptCmdLaunchTitle,
+		zapscript.ZapScriptCmdMisterMGL,
+		zapscript.ZapScriptCmdRandom,
+		zapscript.ZapScriptCmdSystem,
+		// Playlist commands
+		zapscript.ZapScriptCmdPlaylistPlay,
+		zapscript.ZapScriptCmdPlaylistStop,
+		zapscript.ZapScriptCmdPlaylistNext,
+		zapscript.ZapScriptCmdPlaylistPrevious,
+		zapscript.ZapScriptCmdPlaylistGoto,
+		zapscript.ZapScriptCmdPlaylistPause,
+		zapscript.ZapScriptCmdPlaylistLoad,
+		zapscript.ZapScriptCmdPlaylistOpen,
+		// Stop
+		zapscript.ZapScriptCmdStop,
+	}
+
+	// Utility commands that should NOT be disrupting
+	utilityCommands := []string{
+		zapscript.ZapScriptCmdExecute,
+		zapscript.ZapScriptCmdDelay,
+		zapscript.ZapScriptCmdEcho,
+		zapscript.ZapScriptCmdControl,
+		zapscript.ZapScriptCmdHTTPGet,
+		zapscript.ZapScriptCmdHTTPPost,
+		zapscript.ZapScriptCmdScreenshot,
+		zapscript.ZapScriptCmdInputKeyboard,
+		zapscript.ZapScriptCmdInputGamepad,
+		zapscript.ZapScriptCmdInputCoinP1,
+		zapscript.ZapScriptCmdInputCoinP2,
+		zapscript.ZapScriptCmdMisterINI,
+		zapscript.ZapScriptCmdMisterCore,
+		zapscript.ZapScriptCmdMisterScript,
+		zapscript.ZapScriptCmdMisterWallpaper,
+	}
+
+	for _, cmd := range disruptingCommands {
+		assert.True(t, IsMediaDisruptingCommand(cmd),
+			"Command %q should be media-disrupting", cmd)
+	}
+
+	for _, cmd := range utilityCommands {
+		assert.False(t, IsMediaDisruptingCommand(cmd),
+			"Command %q should NOT be media-disrupting", cmd)
+	}
+}
+
 // TestGetExprEnv_ScannedContext verifies that Scanned fields are populated.
 func TestGetExprEnv_ScannedContext(t *testing.T) {
 	t.Parallel()

@@ -446,3 +446,139 @@ func TestIsHoldModeIgnoredSystemWithInvalidConfig(t *testing.T) {
 	// Invalid entries should not cause matches
 	assert.False(t, cfg.IsHoldModeIgnoredSystem("InvalidSystemID"))
 }
+
+func TestLaunchGuardTimeout_DefaultWhenZero(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	assert.InDelta(t, DefaultLaunchGuardTimeout, cfg.LaunchGuardTimeout(), 0)
+}
+
+func TestLaunchGuardTimeout_CustomValue(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{Timeout: 30},
+				},
+			},
+		},
+	}
+	assert.InDelta(t, 30, cfg.LaunchGuardTimeout(), 0)
+}
+
+func TestLaunchGuardTimeout_NegativeDisablesTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	cfg.SetLaunchGuardTimeout(-1)
+	assert.InDelta(t, -1, cfg.LaunchGuardTimeout(), 0)
+}
+
+func TestLaunchGuardSettersAndGetters(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+
+	assert.False(t, cfg.LaunchGuardEnabled())
+	assert.False(t, cfg.LaunchGuardRequireConfirm())
+
+	cfg.SetLaunchGuard(true)
+	cfg.SetLaunchGuardRequireConfirm(true)
+
+	assert.True(t, cfg.LaunchGuardEnabled())
+	assert.True(t, cfg.LaunchGuardRequireConfirm())
+
+	cfg.SetLaunchGuard(false)
+	assert.False(t, cfg.LaunchGuardEnabled())
+}
+
+func TestLaunchGuardDelay_DefaultZero(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	assert.InDelta(t, 0, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_CustomValue(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{
+						Timeout: 15,
+						Delay:   5,
+					},
+				},
+			},
+		},
+	}
+	assert.InDelta(t, 5, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_ClampedWhenExceedsTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{
+						Timeout: 10,
+						Delay:   10,
+					},
+				},
+			},
+		},
+	}
+	assert.InDelta(t, 5, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_ClampedWithDefaultTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{
+						Delay: 20,
+					},
+				},
+			},
+		},
+	}
+	// timeout defaults to 15, delay 20 >= 15, so clamped to 15/2 = 7.5
+	assert.InDelta(t, 7.5, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_NegativeTimeoutReturnsZero(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{
+						Timeout: -1,
+						Delay:   5,
+					},
+				},
+			},
+		},
+	}
+	assert.InDelta(t, 0, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_SetterAndGetter(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	cfg.SetLaunchGuardTimeout(20)
+	cfg.SetLaunchGuardDelay(8)
+	assert.InDelta(t, 8, cfg.LaunchGuardDelay(), 0)
+}

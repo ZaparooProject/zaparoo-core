@@ -17,31 +17,33 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package helpers
+package methods
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
+	"fmt"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/rs/zerolog/log"
 )
 
-// PlayConfiguredSound plays a sound based on configuration. Custom sound files
-// fall back to the embedded default on error.
-func PlayConfiguredSound(player audio.Player, path string, enabled bool, defaultSound []byte, soundName string) {
-	if !enabled {
-		return
+func HandleConfirm(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+	log.Info().Msg("received confirm request")
+
+	result := make(chan error, 1)
+
+	select {
+	case env.ConfirmQueue <- result:
+	case <-env.Context.Done():
+		return nil, fmt.Errorf("confirm cancelled: %w", env.Context.Err())
 	}
 
-	if path == "" {
-		if err := player.PlayBytes(defaultSound); err != nil {
-			log.Warn().Err(err).Msgf("error playing %s sound", soundName)
+	select {
+	case err := <-result:
+		if err != nil {
+			return nil, fmt.Errorf("confirm failed: %w", err)
 		}
-		return
-	}
-
-	if err := player.PlayFile(path); err != nil {
-		log.Warn().Str("path", path).Err(err).Msgf("error playing custom %s sound, falling back to default", soundName)
-		if fbErr := player.PlayBytes(defaultSound); fbErr != nil {
-			log.Warn().Err(fbErr).Msgf("error playing fallback %s sound", soundName)
-		}
+		return NoContent{}, nil
+	case <-env.Context.Done():
+		return nil, fmt.Errorf("confirm cancelled: %w", env.Context.Err())
 	}
 }

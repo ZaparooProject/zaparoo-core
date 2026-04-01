@@ -48,6 +48,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -196,9 +197,10 @@ func NewMethodMap() *MethodMap {
 
 	defaultMethods := map[string]func(requests.RequestEnv) (any, error){
 		// run
-		models.MethodLaunch: methods.HandleRun, // DEPRECATED
-		models.MethodRun:    methods.HandleRun,
-		models.MethodStop:   methods.HandleStop,
+		models.MethodLaunch:  methods.HandleRun, // DEPRECATED
+		models.MethodRun:     methods.HandleRun,
+		models.MethodStop:    methods.HandleStop,
+		models.MethodConfirm: methods.HandleConfirm,
 		// tokens
 		models.MethodTokens:  methods.HandleTokens,
 		models.MethodHistory: methods.HandleHistory,
@@ -703,6 +705,59 @@ func broadcastNotifications(
 	}
 }
 
+// handleSSE returns an HTTP handler that streams notifications as Server-Sent
+// Events. Each connected client gets its own broker subscription which is
+// cleaned up on disconnect.
+func handleSSE(notifBroker *broker.Broker, st *state.State) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		notifs, subID := notifBroker.Subscribe(100)
+		defer notifBroker.Unsubscribe(subID)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher.Flush()
+
+		log.Info().Int("subscriber_id", subID).Msg("SSE client connected")
+
+		for {
+			select {
+			case <-r.Context().Done():
+				log.Info().Int("subscriber_id", subID).Msg("SSE client disconnected")
+				return
+			case <-st.GetContext().Done():
+				return
+			case notif, ok := <-notifs:
+				if !ok {
+					return
+				}
+
+				obj := models.NotificationObject{
+					JSONRPC: "2.0",
+					Method:  notif.Method,
+					Params:  notif.Params,
+				}
+
+				data, err := json.Marshal(obj)
+				if err != nil {
+					log.Error().Err(err).Msg("marshalling SSE notification")
+					continue
+				}
+
+				if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+					log.Debug().Err(err).Msg("SSE write failed, client likely disconnected")
+					return
+				}
+				flusher.Flush()
+			}
+		}
+	}
+}
+
 // requestResult holds the result of processing a JSON-RPC request.
 type requestResult struct {
 	Result      any
@@ -785,6 +840,7 @@ func handleWSMessage(
 	cfg *config.Instance,
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
+	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
@@ -824,6 +880,7 @@ func handleWSMessage(
 			LauncherCache: helpers.GlobalLauncherCache,
 			Player:        player,
 			TokenQueue:    inTokenQueue,
+			ConfirmQueue:  confirmQueue,
 			IsLocal:       clientIP.IsLoopback(),
 			ClientID:      session.Request.RemoteAddr,
 		}
@@ -856,6 +913,7 @@ func handlePostRequest(
 	cfg *config.Instance,
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
+	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
@@ -900,6 +958,7 @@ func handlePostRequest(
 			LauncherCache: helpers.GlobalLauncherCache,
 			Player:        player,
 			TokenQueue:    inTokenQueue,
+			ConfirmQueue:  confirmQueue,
 			IsLocal:       clientIP.IsLoopback(),
 			ClientID:      r.RemoteAddr,
 		}
@@ -959,9 +1018,10 @@ func Start(
 	cfg *config.Instance,
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
+	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
-	notifications <-chan models.Notification,
+	notifBroker *broker.Broker,
 	mdnsHostname string,
 	player audio.Player,
 ) {
@@ -1028,7 +1088,6 @@ func Start(
 	// Global middleware for all routes
 	r.Use(apimiddleware.HTTPIPFilterMiddleware(ipFilter))
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(config.APIRequestTimeout))
 	r.Use(cors.Handler(cors.Options{
 		AllowOriginFunc: originValidator,
 		AllowedMethods:  []string{"GET", "POST", "OPTIONS"},
@@ -1058,13 +1117,18 @@ func Start(
 		log.Debug().Msgf("websocket origin: %s", origin)
 		return checkWebSocketOrigin(origin, staticOrigins, cfg.AllowedOrigins, port)
 	}
-	go broadcastNotifications(st, session, notifications)
+	wsNotifications, wsSubID := notifBroker.Subscribe(100)
+	go func() {
+		broadcastNotifications(st, session, wsNotifications)
+		notifBroker.Unsubscribe(wsSubID)
+	}()
 
-	// API routes
+	// API routes (with request timeout)
 	r.Group(func(r chi.Router) {
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
+		r.Use(middleware.Timeout(config.APIRequestTimeout))
 
 		// WebSocket handler that checks auth before upgrade
 		wsHandler := func(w http.ResponseWriter, r *http.Request, version string) {
@@ -1081,17 +1145,22 @@ func Start(
 		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
 			wsHandler(w, r, "latest")
 		})
-		r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player))
+		postHandler := handlePostRequest(
+			methodMap, platform, cfg, st,
+			inTokenQueue, confirmQueue,
+			db, limitsManager, player,
+		)
+		r.Post("/api", postHandler)
 
 		r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
 			wsHandler(w, r, "v0")
 		})
-		r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player))
+		r.Post("/api/v0", postHandler)
 
 		r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
 			wsHandler(w, r, "v0.1")
 		})
-		r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player))
+		r.Post("/api/v0.1", postHandler)
 
 		// REST action endpoints
 		r.Get("/l/*", methods.HandleRunRest(cfg, st, inTokenQueue)) // DEPRECATED
@@ -1099,9 +1168,21 @@ func Start(
 		r.Get("/run/*", methods.HandleRunRest(cfg, st, inTokenQueue))
 	})
 
+	// SSE routes (long-lived connections, no request timeout)
+	r.Group(func(r chi.Router) {
+		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		r.Use(apiRateLimitMiddleware)
+		r.Use(middleware.NoCache)
+
+		sseHandler := handleSSE(notifBroker, st)
+		r.Get("/api/events", sseHandler)
+		r.Get("/api/v0/events", sseHandler)
+		r.Get("/api/v0.1/events", sseHandler)
+	})
+
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,
-		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player),
+		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, player),
 	))
 
 	// Static app assets

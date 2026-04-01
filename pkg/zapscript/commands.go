@@ -133,6 +133,13 @@ func lookupCmd(name string) (cmdFunc, bool) {
 	return f, ok
 }
 
+// IsMediaDisruptingCommand returns true if the command would change or stop
+// the currently playing media. Used by launch guard to decide whether a token
+// should be staged for confirmation.
+func IsMediaDisruptingCommand(cmdName string) bool {
+	return IsMediaLaunchingCommand(cmdName) || IsPlaylistCommand(cmdName) || cmdName == zapscript.ZapScriptCmdStop
+}
+
 // IsMediaLaunchingCommand returns true if the command launches media and should be subject to playtime limits.
 func IsMediaLaunchingCommand(cmdName string) bool {
 	switch cmdName {

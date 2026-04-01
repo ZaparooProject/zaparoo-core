@@ -26,7 +26,7 @@ type MockPlayer struct {
 	mock.Mock
 }
 
-func (m *MockPlayer) PlayWAVBytes(data []byte) error {
+func (m *MockPlayer) PlayBytes(data []byte) error {
 	args := m.Called(data)
 	return args.Error(0) //nolint:wrapcheck // mock
 }
@@ -47,7 +47,7 @@ func NewMockPlayer() *MockPlayer {
 
 // SetupNoOpMock configures all methods to succeed silently.
 func (m *MockPlayer) SetupNoOpMock() {
-	m.On("PlayWAVBytes", mock.Anything).Return(nil).Maybe()
+	m.On("PlayBytes", mock.Anything).Return(nil).Maybe()
 	m.On("PlayFile", mock.Anything).Return(nil).Maybe()
 	m.On("ClearFileCache").Return().Maybe()
 }

@@ -163,7 +163,7 @@ func buildAudioSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.
 	menu.AddToggle("Audio feedback on scan", "Play sound when token is scanned", &audioFeedback, func(value bool) {
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			AudioScanFeedback: &value,
 		})
 		if err != nil {
@@ -256,7 +256,7 @@ func buildReadersSettingsMenu(
 	menu.AddToggle("Auto-detect readers", "Automatically find connected readers", &autoDetect, func(value bool) {
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			ReadersAutoDetect: &value,
 		})
 		if err != nil {
@@ -273,7 +273,7 @@ func buildReadersSettingsMenu(
 		mode := strings.ToLower(option)
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			ReadersScanMode: &mode,
 		})
 		if err != nil {
@@ -291,7 +291,7 @@ func buildReadersSettingsMenu(
 		delayF := ExitDelayOptions[idx].Value
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			ReadersScanExitDelay: &delayF,
 		})
 		if err != nil {
@@ -312,7 +312,7 @@ func buildReadersSettingsMenu(
 			mode := strings.ToLower(scanModeOptions[scanModeIndex])
 			ctx, cancel := tuiContext()
 			defer cancel()
-			err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+			err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 				ReadersScanMode: &mode,
 			})
 			if err != nil {
@@ -328,7 +328,7 @@ func buildReadersSettingsMenu(
 			delayF := ExitDelayOptions[exitDelayIndex].Value
 			ctx, cancel := tuiContext()
 			defer cancel()
-			err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+			err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 				ReadersScanExitDelay: &delayF,
 			})
 			if err != nil {
@@ -404,7 +404,7 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 	menu.AddToggle("Debug logging", "Enable verbose debug output", &debugLogging, func(value bool) {
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			DebugLogging: &value,
 		})
 		if err != nil {
@@ -436,7 +436,7 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 					enabled := true
 					ctx, cancel := tuiContext()
 					defer cancel()
-					err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+					err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 						ErrorReporting: &enabled,
 					})
 					if err != nil {
@@ -459,7 +459,7 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 			// Disable without confirmation
 			ctx, cancel := tuiContext()
 			defer cancel()
-			err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+			err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 				ErrorReporting: &value,
 			})
 			if err != nil {
@@ -567,7 +567,7 @@ func buildReaderListPage(
 				updatedReaders := slices.Delete(slices.Clone(readers), idx, idx+1)
 				ctx, cancel := tuiContext()
 				defer cancel()
-				err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+				err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 					ReadersConnect: &updatedReaders,
 				})
 				if err != nil {
@@ -691,7 +691,7 @@ func buildReaderEditPage(
 
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			ReadersConnect: readers,
 		})
 		if err != nil {
@@ -896,7 +896,7 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 		selected := systemSelector.GetSelected()
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			ReadersScanIgnoreSystem: &selected,
 		})
 		if err != nil {

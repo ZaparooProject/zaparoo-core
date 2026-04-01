@@ -94,6 +94,42 @@ Currently, it is not reported if a process was killed or not.
 }
 ```
 
+### confirm
+
+Confirm and launch a staged token from the launch guard.
+
+When launch guard is enabled and media is playing, scanned tokens are staged instead of launched immediately. This method confirms the currently staged token and launches it.
+
+#### Parameters
+
+None.
+
+#### Result
+
+Returns `null` on success. Returns an error if no token is currently staged.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5b-11ef-b318-020304050607",
+  "method": "confirm"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5b-11ef-b318-020304050607",
+  "result": null
+}
+```
+
 ## Tokens
 
 ### tokens
