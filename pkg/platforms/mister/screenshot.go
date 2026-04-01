@@ -22,6 +22,8 @@
 package mister
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -37,6 +39,84 @@ import (
 )
 
 const screenshotTimeout = 3 * time.Second
+
+// pngIENDTail is the fixed 12-byte sequence that ends every valid PNG:
+// 4 bytes data length (0), 4 bytes chunk type "IEND", 4 bytes CRC.
+var pngIENDTail = []byte{0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82}
+
+// screenshotFileComplete checks whether a screenshot file has been fully
+// written using format-specific markers. This avoids reading a partial file
+// when fsnotify fires before the writer has flushed and closed.
+func screenshotFileComplete(path, ext string) (bool, error) {
+	switch ext {
+	case ".png":
+		return pngFileComplete(path)
+	case ".bmp":
+		return bmpFileComplete(path)
+	default:
+		return false, fmt.Errorf("unsupported screenshot format: %s", ext)
+	}
+}
+
+// pngFileComplete returns true when the file ends with the IEND chunk.
+func pngFileComplete(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, fmt.Errorf("stat png: %w", err)
+	}
+	if info.Size() < int64(len(pngIENDTail)) {
+		return false, nil
+	}
+
+	//nolint:gosec // Safe: reads screenshot from controlled application directory
+	f, err := os.Open(path)
+	if err != nil {
+		return false, fmt.Errorf("open png: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	tail := make([]byte, len(pngIENDTail))
+	if _, err := f.ReadAt(tail, info.Size()-int64(len(tail))); err != nil {
+		return false, fmt.Errorf("read png tail: %w", err)
+	}
+
+	return bytes.Equal(tail, pngIENDTail), nil
+}
+
+// bmpFileComplete returns true when the actual file size matches the size
+// declared in the BMP header (little-endian uint32 at bytes 2-5).
+func bmpFileComplete(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, fmt.Errorf("stat bmp: %w", err)
+	}
+	if info.Size() < 6 {
+		return false, nil
+	}
+
+	//nolint:gosec // Safe: reads screenshot from controlled application directory
+	f, err := os.Open(path)
+	if err != nil {
+		return false, fmt.Errorf("open bmp: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	header := make([]byte, 6)
+	if _, err := f.ReadAt(header, 0); err != nil {
+		return false, fmt.Errorf("read bmp header: %w", err)
+	}
+
+	if header[0] != 'B' || header[1] != 'M' {
+		return false, nil
+	}
+
+	declaredSize := int64(binary.LittleEndian.Uint32(header[2:6]))
+	if declaredSize == 0 {
+		return false, nil
+	}
+
+	return info.Size() == declaredSize, nil
+}
 
 // Screenshot triggers a MiSTer screenshot via the command interface and waits
 // for the resulting file to appear in the screenshots directory. The full image
@@ -95,9 +175,27 @@ func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
 
 			log.Info().Str("path", event.Name).Msg("screenshot captured")
 
-			// Wait for the file to be fully written. fsnotify fires Create
+			// Poll until the file is fully written. fsnotify fires Create
 			// when the inode appears, before the writer has flushed and closed.
-			time.Sleep(200 * time.Millisecond)
+			// Use format-specific checks to know when the file is complete:
+			//   PNG: must end with a 12-byte IEND chunk
+			//   BMP: header bytes 2-5 declare the total file size
+			pollInterval := 250 * time.Millisecond
+			for {
+				complete, checkErr := screenshotFileComplete(event.Name, ext)
+				if checkErr != nil {
+					return nil, fmt.Errorf("check screenshot file: %w", checkErr)
+				}
+				if complete {
+					break
+				}
+
+				select {
+				case <-timeout.C:
+					return nil, fmt.Errorf("screenshot file incomplete after %s", screenshotTimeout)
+				case <-time.After(pollInterval):
+				}
+			}
 
 			//nolint:gosec // Safe: reads screenshot from controlled application directory
 			data, readErr := os.ReadFile(event.Name)

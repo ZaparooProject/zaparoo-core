@@ -206,7 +206,7 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 // table (i.e., have indexed content). Preserves input order.
 func sqlFilterIndexedSystems(ctx context.Context, db sqlQueryable, systemIDs []string) ([]string, error) {
 	if len(systemIDs) == 0 {
-		return nil, nil
+		return []string{}, nil
 	}
 
 	args := make([]any, len(systemIDs))
