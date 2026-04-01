@@ -6,14 +6,12 @@ Monitors the Zaparoo API for staged token notifications (launch guard) and
 provides physical feedback via an LED and a confirm button using GPIO pins.
 
 When a token is staged:
-  - An LED blinks slowly to indicate a pending confirmation
-  - If a delay is configured, the LED switches to solid ON when the delay
-    expires (tokens.staged.ready), indicating the button can now be pressed
+  - The LED turns on to indicate a pending confirmation
   - Pressing the confirm button sends the confirm command to the API
-  - The LED turns off after confirmation or when the timeout expires
+  - The LED turns off after confirmation or timeout
 
-The API confirm bypasses any configured delay, so pressing the button during
-the delay period will still work immediately.
+API confirm bypasses any configured delay, so the button always works
+immediately regardless of launch guard delay settings.
 
 This script runs on a Raspberry Pi (or similar SBC with GPIO) and connects
 to Zaparoo over the network. The Zaparoo device can be a MiSTer, Batocera,
@@ -38,9 +36,10 @@ import sys
 import time
 import urllib.request
 
-# GPIO pin assignments (BCM numbering)
-LED_PIN = 17
-BUTTON_PIN = 27
+# --- Configuration ---
+LED_PIN = 17  # GPIO pin for the LED (BCM numbering)
+BUTTON_PIN = 27  # GPIO pin for the confirm button (BCM numbering)
+BUTTON_TIMEOUT = 30  # Seconds to wait for a button press before giving up
 
 gpio_available = False
 try:
@@ -52,16 +51,12 @@ except ImportError:
 
 
 def setup_gpio():
-    if not gpio_available:
-        return
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(LED_PIN, GPIO.OUT, initial=GPIO.LOW)
     GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
 
 def cleanup_gpio():
-    if not gpio_available:
-        return
     GPIO.output(LED_PIN, GPIO.LOW)
     GPIO.cleanup()
 
@@ -69,88 +64,36 @@ def cleanup_gpio():
 def set_led(on):
     if gpio_available:
         GPIO.output(LED_PIN, GPIO.HIGH if on else GPIO.LOW)
-    state = "ON" if on else "OFF"
-    print(f"[LED] {state}")
+    print(f"[LED] {'ON' if on else 'OFF'}")
 
 
-def read_button():
-    if gpio_available:
-        return GPIO.input(BUTTON_PIN) == GPIO.HIGH
-    return False
-
-
-def rpc_post(base_url, method, params=None):
-    """Send a JSON-RPC 2.0 request via HTTP POST and return the result."""
-    body = {"jsonrpc": "2.0", "id": "1", "method": method}
-    if params is not None:
-        body["params"] = params
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(
-        base_url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        return json.loads(resp.read())
-
-
-def get_guard_settings(base_url):
-    """Query the API for the launch guard settings."""
-    try:
-        result = rpc_post(base_url, "settings")
-        settings = result.get("result", {})
-        return {
-            "timeout": settings.get("launchGuardTimeout", 15),
-            "delay": settings.get("launchGuardDelay", 0),
-        }
-    except Exception as e:
-        print(f"[API] Failed to get settings: {e}")
-        return {"timeout": 15, "delay": 0}
-
-
-def send_confirm(base_url):
-    """Send the confirm command to launch the staged token."""
-    try:
-        result = rpc_post(base_url, "confirm")
-        if "error" in result:
-            print(f"[API] Confirm error: {result['error'].get('message', 'unknown')}")
-        else:
-            print("[API] Confirmed! Token launched.")
-    except Exception as e:
-        print(f"[API] Confirm failed: {e}")
-
-
-def wait_for_button(timeout):
-    """Poll for a button press within the given timeout (seconds)."""
-    deadline = time.monotonic() + timeout
+def wait_for_button():
+    """Poll for a button press. Returns True if pressed within timeout."""
+    deadline = time.monotonic() + BUTTON_TIMEOUT
     while time.monotonic() < deadline:
-        if read_button():
-            # Debounce
-            time.sleep(0.05)
-            if read_button():
+        if gpio_available and GPIO.input(BUTTON_PIN) == GPIO.HIGH:
+            time.sleep(0.05)  # debounce
+            if GPIO.input(BUTTON_PIN) == GPIO.HIGH:
                 return True
         time.sleep(0.02)
     return False
 
 
-def blink_led(duration, interval=0.5):
-    """Blink the LED for the given duration. Returns True if button pressed."""
-    deadline = time.monotonic() + duration
-    led_on = False
-    while time.monotonic() < deadline:
-        led_on = not led_on
-        set_led(led_on)
-        # Check for button press during blink
-        blink_deadline = time.monotonic() + interval
-        while time.monotonic() < blink_deadline:
-            if read_button():
-                time.sleep(0.05)
-                if read_button():
-                    set_led(True)
-                    return True
-            time.sleep(0.02)
-    set_led(False)
-    return False
+def send_confirm(base_url):
+    """Send the confirm command to launch the staged token."""
+    body = json.dumps({"jsonrpc": "2.0", "id": "1", "method": "confirm"}).encode()
+    req = urllib.request.Request(
+        base_url, data=body, headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            result = json.loads(resp.read())
+            if "error" in result:
+                print(f"[API] Confirm error: {result['error'].get('message')}")
+            else:
+                print("[API] Confirmed! Token launched.")
+    except Exception as e:
+        print(f"[API] Confirm failed: {e}")
 
 
 def run(host, port, no_gpio):
@@ -160,11 +103,6 @@ def run(host, port, no_gpio):
     base_url = f"http://{host}:{port}/api/v0.1"
     sse_url = f"{base_url}/events"
 
-    settings = get_guard_settings(base_url)
-    timeout = settings["timeout"]
-    delay = settings["delay"]
-    print(f"[CONFIG] Launch guard timeout: {timeout}s, delay: {delay}s")
-
     print(f"[SSE] Connecting to {sse_url}")
 
     try:
@@ -172,85 +110,41 @@ def run(host, port, no_gpio):
             try:
                 req = urllib.request.Request(sse_url)
                 with urllib.request.urlopen(req) as resp:
-                    print("[SSE] Connected")
-                    staged = False
+                    print("[SSE] Connected, waiting for staged tokens...")
 
                     for raw_line in resp:
                         line = raw_line.decode().strip()
-
                         if not line.startswith("data: "):
                             continue
 
                         msg = json.loads(line[6:])
-                        method = msg.get("method")
+                        if msg.get("method") != "tokens.staged":
+                            continue
 
-                        if method == "tokens.staged":
-                            params = msg.get("params", {})
-                            token_text = params.get("text", "unknown")
-                            token_uid = params.get("uid", "")
-                            print(f"[STAGED] Token staged: {token_text} (UID: {token_uid})")
-                            staged = True
+                        # A token was staged — wait for button press to confirm
+                        params = msg.get("params", {})
+                        print(f"[STAGED] {params.get('text', '?')} (UID: {params.get('uid', '?')})")
 
-                            if no_gpio:
-                                if delay > 0:
-                                    print(f"[NO-GPIO] Delay active ({delay}s), waiting for ready...")
-                                else:
-                                    print(f"[NO-GPIO] Would wait {timeout}s for button press")
-                                    print("[NO-GPIO] Simulating button press in 1s...")
-                                    time.sleep(1)
-                                    send_confirm(base_url)
-                                    staged = False
-                            else:
-                                if delay > 0:
-                                    # Blink LED during delay period
-                                    print(f"[DELAY] Waiting {delay}s before accepting confirmation...")
-                                    pressed = blink_led(delay)
-                                    if pressed:
-                                        # API confirm bypasses delay
-                                        print("[BUTTON] Button pressed during delay (API bypasses delay)")
-                                        send_confirm(base_url)
-                                        set_led(False)
-                                        staged = False
-                                    # If not pressed during delay, wait for ready notification
-                                else:
-                                    # No delay — LED on, wait for button
-                                    set_led(True)
-                                    pressed = wait_for_button(timeout)
-                                    if pressed:
-                                        print("[BUTTON] Confirm button pressed!")
-                                        send_confirm(base_url)
-                                    else:
-                                        print("[TIMEOUT] No button press, staged token expired")
-                                    set_led(False)
-                                    staged = False
+                        set_led(True)
 
-                        elif method == "tokens.staged.ready" and staged:
-                            print("[READY] Delay expired, ready for confirmation!")
+                        if no_gpio:
+                            print("[NO-GPIO] Simulating button press in 1s...")
+                            time.sleep(1)
+                            pressed = True
+                        else:
+                            pressed = wait_for_button()
 
-                            if no_gpio:
-                                print("[NO-GPIO] Simulating button press in 1s...")
-                                time.sleep(1)
-                                send_confirm(base_url)
-                            else:
-                                # Solid LED — ready for confirmation
-                                set_led(True)
-                                remaining = max(0, timeout - delay)
-                                pressed = wait_for_button(remaining)
-                                if pressed:
-                                    print("[BUTTON] Confirm button pressed!")
-                                    send_confirm(base_url)
-                                else:
-                                    print("[TIMEOUT] No button press, staged token expired")
-                                set_led(False)
+                        if pressed:
+                            print("[BUTTON] Confirm button pressed!")
+                            send_confirm(base_url)
+                        else:
+                            print("[TIMEOUT] No button press, giving up")
 
-                            staged = False
+                        set_led(False)
 
             except (ConnectionError, urllib.error.URLError) as e:
                 print(f"[SSE] Connection lost ({e}), reconnecting in 2s...")
                 time.sleep(2)
-                settings = get_guard_settings(base_url)
-                timeout = settings["timeout"]
-                delay = settings["delay"]
 
     except KeyboardInterrupt:
         print("\n[EXIT] Shutting down")
