@@ -33,26 +33,32 @@ var App embed.FS
 // SuccessSound Breviceps (https://freesound.org/people/Breviceps/sounds/445978/)
 // Licence: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication
 //
-//go:embed sounds/success.wav
+//go:embed sounds/success.ogg
 var SuccessSound []byte
 
 // FailSound PaulMorek (https://freesound.org/people/PaulMorek/sounds/330046/)
 // Licence: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication
 //
-//go:embed sounds/fail.wav
+//go:embed sounds/fail.ogg
 var FailSound []byte
 
 // LimitSound CogFireStudios (https://freesound.org/people/CogFireStudios/sounds/636679/)
 // Licence: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication
 //
-//go:embed sounds/limit.wav
+//go:embed sounds/limit.ogg
 var LimitSound []byte
 
 // PendingSound AnthonyRamirez (https://freesound.org/people/AnthonyRamirez/sounds/455411/)
 // Licence: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication
 //
-//go:embed sounds/pending.wav
+//go:embed sounds/pending.ogg
 var PendingSound []byte
+
+// ReadySound craigscottuk (https://freesound.org/people/craigscottuk/sounds/644958/)
+// Licence: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication
+//
+//go:embed sounds/ready.ogg
+var ReadySound []byte
 
 //go:embed systems/*
 var Systems embed.FS
