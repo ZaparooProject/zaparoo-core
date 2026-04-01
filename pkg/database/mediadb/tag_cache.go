@@ -41,11 +41,15 @@ type tagCache struct {
 func (c *tagCache) tagsForSystems(systems []systemdefs.System) []database.TagInfo {
 	if len(systems) == 1 {
 		first := systems[0] //nolint:gosec // G602 false positive: len==1 guarantees valid index
-		return slices.Clone(c.bySystem[first.ID])
+		tags := c.bySystem[first.ID]
+		if tags == nil {
+			return []database.TagInfo{}
+		}
+		return slices.Clone(tags)
 	}
 
 	seen := make(map[database.TagInfo]struct{})
-	var result []database.TagInfo
+	result := []database.TagInfo{}
 	for _, sys := range systems {
 		for _, tag := range c.bySystem[sys.ID] {
 			if _, exists := seen[tag]; !exists {
@@ -72,6 +76,7 @@ func buildTagCache(ctx context.Context, db *sql.DB) (*tagCache, error) {
 
 	cache := &tagCache{
 		bySystem: make(map[string][]database.TagInfo),
+		allTags:  []database.TagInfo{},
 	}
 	seen := make(map[database.TagInfo]struct{})
 
@@ -104,6 +109,9 @@ func (db *MediaDB) RebuildTagCache() error {
 		return fmt.Errorf("failed to build tag cache: %w", err)
 	}
 	db.inMemoryTagCache.Store(cache)
+	if len(cache.allTags) == 0 {
+		log.Warn().Msg("tag cache is empty, media re-index may be required")
+	}
 	log.Info().
 		Int("tags", len(cache.allTags)).
 		Int("systems", len(cache.bySystem)).

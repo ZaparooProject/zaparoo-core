@@ -288,21 +288,20 @@ func sqlGetMapping(ctx context.Context, db *sql.DB, id int64) (database.Mapping,
 }
 
 func sqlDeleteMapping(ctx context.Context, db *sql.DB, id int64) error {
-	stmt, err := db.PrepareContext(ctx, `
-		delete from Mappings where DBID = ?;
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to prepare mapping delete statement: %w", err)
-	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}()
-	_, err = stmt.ExecContext(ctx, id)
+	result, err := db.ExecContext(ctx, `delete from Mappings where DBID = ?;`, id)
 	if err != nil {
 		return fmt.Errorf("failed to execute mapping delete: %w", err)
 	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("mapping not found: %d", id)
+	}
+
 	return nil
 }
 

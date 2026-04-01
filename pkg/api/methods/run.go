@@ -70,16 +70,12 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 			t.Type = *params.Type
 		}
 
-		hasArg := false
-
 		if params.UID != nil {
 			t.UID = *params.UID
-			hasArg = true
 		}
 
 		if params.Text != nil {
 			t.Text = norm.NFC.String(*params.Text)
-			hasArg = true
 		}
 
 		if params.Data != nil {
@@ -89,11 +85,9 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 			if _, err := hex.DecodeString(t.Data); err != nil {
 				return nil, validation.ErrInvalidParams
 			}
-
-			hasArg = true
 		}
 
-		if !hasArg {
+		if t.UID == "" && t.Text == "" && t.Data == "" {
 			return nil, validation.ErrInvalidParams
 		}
 
@@ -171,6 +165,8 @@ func HandleRunRest(
 
 func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received stop request")
+	// TODO: return an error when nothing is active, requires StopActiveLauncher
+	// to report whether anything was actually stopped
 	err := env.Platform.StopActiveLauncher(platforms.StopForMenu)
 	if err != nil {
 		return nil, fmt.Errorf("failed to stop active launcher: %w", err)

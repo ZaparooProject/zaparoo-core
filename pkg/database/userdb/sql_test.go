@@ -331,10 +331,9 @@ func TestSqlDeleteMapping_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectPrepare(`delete from Mappings where DBID`).
-		ExpectExec().
+	mock.ExpectExec(`delete from Mappings where DBID`).
 		WithArgs(int64(123)).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err = sqlDeleteMapping(context.Background(), db, 123)
 	require.NoError(t, err)
@@ -347,14 +346,13 @@ func TestSqlDeleteMapping_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectPrepare(`delete from Mappings where DBID`).
-		ExpectExec().
+	mock.ExpectExec(`delete from Mappings where DBID`).
 		WithArgs(int64(999)).
-		WillReturnError(sqlmock.ErrCancelled)
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err = sqlDeleteMapping(context.Background(), db, 999)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to execute mapping delete")
+	assert.Contains(t, err.Error(), "mapping not found: 999")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

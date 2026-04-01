@@ -52,7 +52,7 @@ func HandleMappings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	mrs := make([]models.MappingResponse, 0)
 
 	for _, m := range mappings {
-		t := time.Unix(0, m.Added*int64(time.Millisecond))
+		t := time.Unix(m.Added, 0)
 
 		// keep compatibility for v0.1 api
 		switch m.Type {
