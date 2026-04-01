@@ -51,6 +51,7 @@ type ReadersScan struct {
 
 type ScanLaunchGuard struct {
 	Timeout        float32 `toml:"timeout,omitempty"`
+	Delay          float32 `toml:"delay,omitempty"`
 	Enabled        bool    `toml:"enabled,omitempty"`
 	RequireConfirm bool    `toml:"require_confirm,omitempty"`
 }
@@ -181,6 +182,32 @@ func (c *Instance) SetLaunchGuardRequireConfirm(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Readers.Scan.LaunchGuard.RequireConfirm = enabled
+}
+
+func (c *Instance) LaunchGuardDelay() float32 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	delay := c.vals.Readers.Scan.LaunchGuard.Delay
+	if delay == 0 {
+		return 0
+	}
+	timeout := c.vals.Readers.Scan.LaunchGuard.Timeout
+	if timeout == 0 {
+		timeout = DefaultLaunchGuardTimeout
+	}
+	if timeout < 0 {
+		return 0
+	}
+	if delay >= timeout {
+		return timeout / 2
+	}
+	return delay
+}
+
+func (c *Instance) SetLaunchGuardDelay(delay float32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Readers.Scan.LaunchGuard.Delay = delay
 }
 
 func (c *Instance) Readers() Readers {

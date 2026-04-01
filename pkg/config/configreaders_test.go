@@ -494,3 +494,91 @@ func TestLaunchGuardSettersAndGetters(t *testing.T) {
 	cfg.SetLaunchGuard(false)
 	assert.False(t, cfg.LaunchGuardEnabled())
 }
+
+func TestLaunchGuardDelay_DefaultZero(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	assert.InDelta(t, 0, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_CustomValue(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{
+						Timeout: 15,
+						Delay:   5,
+					},
+				},
+			},
+		},
+	}
+	assert.InDelta(t, 5, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_ClampedWhenExceedsTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{
+						Timeout: 10,
+						Delay:   10,
+					},
+				},
+			},
+		},
+	}
+	assert.InDelta(t, 5, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_ClampedWithDefaultTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{
+						Delay: 20,
+					},
+				},
+			},
+		},
+	}
+	// timeout defaults to 15, delay 20 >= 15, so clamped to 15/2 = 7.5
+	assert.InDelta(t, 7.5, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_NegativeTimeoutReturnsZero(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{
+						Timeout: -1,
+						Delay:   5,
+					},
+				},
+			},
+		},
+	}
+	assert.InDelta(t, 0, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_SetterAndGetter(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	cfg.SetLaunchGuardTimeout(20)
+	cfg.SetLaunchGuardDelay(8)
+	assert.InDelta(t, 8, cfg.LaunchGuardDelay(), 0)
+}

@@ -110,6 +110,7 @@ type UpdateSettingsParams struct {
 	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty"`
 	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`
+	LaunchGuardDelay          *float32            `json:"launchGuardDelay" validate:"omitempty,gte=0"`
 	LaunchGuardRequireConfirm *bool               `json:"launchGuardRequireConfirm"`
 }
 

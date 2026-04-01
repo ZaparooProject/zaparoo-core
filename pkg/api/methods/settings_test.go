@@ -503,6 +503,7 @@ func TestHandleSettings_LaunchGuardDefaults(t *testing.T) {
 
 	assert.False(t, resp.LaunchGuardEnabled)
 	assert.InDelta(t, 15, resp.LaunchGuardTimeout, 0)
+	assert.InDelta(t, 0, resp.LaunchGuardDelay, 0)
 	assert.False(t, resp.LaunchGuardRequireConfirm)
 }
 
@@ -520,10 +521,12 @@ func TestHandleSettingsUpdate_LaunchGuard(t *testing.T) {
 
 	enabled := true
 	timeout := float32(30)
+	delay := float32(10)
 	requireConfirm := true
 	params := models.UpdateSettingsParams{
 		LaunchGuardEnabled:        &enabled,
 		LaunchGuardTimeout:        &timeout,
+		LaunchGuardDelay:          &delay,
 		LaunchGuardRequireConfirm: &requireConfirm,
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -542,6 +545,7 @@ func TestHandleSettingsUpdate_LaunchGuard(t *testing.T) {
 
 	assert.True(t, cfg.LaunchGuardEnabled())
 	assert.InDelta(t, 30, cfg.LaunchGuardTimeout(), 0)
+	assert.InDelta(t, 10, cfg.LaunchGuardDelay(), 0)
 	assert.True(t, cfg.LaunchGuardRequireConfirm())
 }
 

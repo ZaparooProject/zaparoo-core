@@ -57,6 +57,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		ErrorReporting:            env.Config.ErrorReporting(),
 		LaunchGuardEnabled:        env.Config.LaunchGuardEnabled(),
 		LaunchGuardTimeout:        env.Config.LaunchGuardTimeout(),
+		LaunchGuardDelay:          env.Config.LaunchGuardDelay(),
 		LaunchGuardRequireConfirm: env.Config.LaunchGuardRequireConfirm(),
 	}
 
@@ -161,6 +162,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.LaunchGuardTimeout != nil {
 		log.Debug().Float32("launchGuardTimeout", *params.LaunchGuardTimeout).Msg("updating setting")
 		env.Config.SetLaunchGuardTimeout(*params.LaunchGuardTimeout)
+	}
+
+	if params.LaunchGuardDelay != nil {
+		log.Debug().Float32("launchGuardDelay", *params.LaunchGuardDelay).Msg("updating setting")
+		env.Config.SetLaunchGuardDelay(*params.LaunchGuardDelay)
 	}
 
 	if params.LaunchGuardRequireConfirm != nil {

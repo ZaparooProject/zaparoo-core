@@ -287,6 +287,7 @@ Notifications let a server or client know an event has occurred. See the [API No
 | tokens.added           | A new token detected by a reader.                                                 |
 | tokens.removed         | A token was removed.                                                              |
 | tokens.staged          | A token was staged by launch guard and is awaiting confirmation.                  |
+| tokens.staged.ready    | A staged token's delay period has expired and is ready for confirmation.          |
 | media.started          | New media was started on server.                                                  |
 | media.stopped          | Media has stopped on server.                                                      |
 | media.indexing         | The state of the indexing or optimization process has changed.                    |

@@ -1157,3 +1157,227 @@ func TestReaderManager_LaunchGuard_Disabled(t *testing.T) {
 	tok := env.expectToken(t)
 	assert.Equal(t, "card-a", tok.UID)
 }
+
+func withLaunchGuardDelay(cfg *config.Instance) {
+	cfg.SetLaunchGuard(true)
+	cfg.SetLaunchGuardTimeout(15)
+	cfg.SetLaunchGuardDelay(5)
+}
+
+// Re-tap during delay resets both timers and does not confirm
+func TestReaderManager_LaunchGuard_Delay_RetapDuringDelayResets(t *testing.T) {
+	t.Parallel()
+	fakeClock := clockwork.NewFakeClock()
+	env := setupReaderManagerWithClock(t, fakeClock, withLaunchGuardDelay)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	card := &tokens.Token{
+		UID:      "card-a",
+		Text:     "**launch.system:snes",
+		ScanTime: time.Now(),
+	}
+
+	// Stage token
+	env.sendScan(readers.Scan{Source: "test-reader", Token: card})
+	// Barrier: ensure staging (including clock.After) completes
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+
+	// Advance 3s (within 5s delay)
+	fakeClock.Advance(3 * time.Second)
+	// Barrier
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+
+	// Re-tap during delay — should NOT confirm, should reset timers
+	env.sendScan(readers.Scan{Source: "test-reader", Token: card})
+	env.expectNoToken(t)
+
+	// Remove and barrier
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+
+	// Advance another 3s — delay was reset so still within new delay period
+	fakeClock.Advance(3 * time.Second)
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+
+	// Re-tap again — still in delay, should NOT confirm
+	env.sendScan(readers.Scan{Source: "test-reader", Token: card})
+	env.expectNoToken(t)
+}
+
+// Re-tap after delay expires should confirm and launch
+func TestReaderManager_LaunchGuard_Delay_RetapAfterDelayConfirms(t *testing.T) {
+	t.Parallel()
+	fakeClock := clockwork.NewFakeClock()
+	env := setupReaderManagerWithClock(t, fakeClock, withLaunchGuardDelay)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	card := &tokens.Token{
+		UID:      "card-a",
+		Text:     "**launch.system:snes",
+		ScanTime: time.Now(),
+	}
+
+	// Stage token
+	env.sendScan(readers.Scan{Source: "test-reader", Token: card})
+	// Barrier
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+
+	// Advance past delay (5s) but within timeout (15s)
+	fakeClock.Advance(6 * time.Second)
+	// Barrier: consume delay timer firing
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+
+	// Re-tap after delay — should confirm
+	env.sendScan(readers.Scan{Source: "test-reader", Token: card})
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-a", tok.UID)
+}
+
+// API confirm bypasses delay entirely
+func TestReaderManager_LaunchGuard_Delay_APIConfirmBypassesDelay(t *testing.T) {
+	t.Parallel()
+	fakeClock := clockwork.NewFakeClock()
+	env := setupReaderManagerWithClock(t, fakeClock, withLaunchGuardDelay)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	// Stage token
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-a",
+			Text:     "**launch.system:snes",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+
+	// API confirm immediately — should bypass delay
+	result := make(chan error, 1)
+	env.confirmQueue <- result
+	err := <-result
+	require.NoError(t, err)
+
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-a", tok.UID)
+}
+
+// Delay=0 (default) — same behavior as before, re-tap confirms immediately
+func TestReaderManager_LaunchGuard_Delay_ZeroDelayRetapConfirmsImmediately(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuard) // no delay set
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	card := &tokens.Token{
+		UID:      "card-a",
+		Text:     "**launch.system:snes",
+		ScanTime: time.Now(),
+	}
+
+	// Stage token
+	env.sendScan(readers.Scan{Source: "test-reader", Token: card})
+	env.expectNoToken(t)
+
+	// Remove and immediate re-tap — should confirm (no delay)
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	env.sendScan(readers.Scan{Source: "test-reader", Token: card})
+	tok := env.expectToken(t)
+	assert.Equal(t, "card-a", tok.UID)
+}
+
+// Delay emits tokens.staged.ready notification when delay expires
+func TestReaderManager_LaunchGuard_Delay_EmitsReadyNotification(t *testing.T) {
+	t.Parallel()
+	fakeClock := clockwork.NewFakeClock()
+	env := setupReaderManagerWithClock(t, fakeClock, withLaunchGuardDelay)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	// Stage token
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-a",
+			Text:     "**launch.system:snes",
+			ScanTime: time.Now(),
+		},
+	})
+	// Barrier
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+
+	// Advance past delay
+	fakeClock.Advance(6 * time.Second)
+	// Barrier: consume delay timer
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+
+	// Drain notifications until we find tokens.staged.ready
+	found := false
+	timeout := time.After(2 * time.Second)
+	for !found {
+		select {
+		case notif := <-env.notifCh:
+			if notif.Method == models.NotificationTokensStagedReady {
+				found = true
+			}
+		case <-timeout:
+			t.Fatal("expected tokens.staged.ready notification")
+		}
+	}
+}
+
+// API confirm returns error when media has stopped (stale staged token)
+func TestReaderManager_LaunchGuard_APIConfirmAfterMediaStops(t *testing.T) {
+	t.Parallel()
+	env := setupReaderManager(t, withLaunchGuardRequireConfirm)
+
+	env.st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	// Stage a token
+	env.sendScan(readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-a",
+			Text:     "**launch.system:snes",
+			ScanTime: time.Now(),
+		},
+	})
+	env.expectNoToken(t)
+
+	// Media stops
+	env.st.SetActiveMedia(nil)
+
+	// Send a scan to trigger the stale-stage check
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+
+	// API confirm — should fail because staged token was cleared
+	result := make(chan error, 1)
+	env.confirmQueue <- result
+	err := <-result
+	assert.Error(t, err)
+}

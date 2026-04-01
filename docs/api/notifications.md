@@ -59,6 +59,20 @@ A token was staged by the launch guard and is waiting for confirmation. Sent whe
 | data     | string | No       | Raw binary data of the token (base64 encoded). |
 | scanTime | string | Yes      | ISO 8601 timestamp when token was scanned.     |
 
+### tokens.staged.ready
+
+A staged token's delay period has expired and is now ready for confirmation. Sent when launch guard delay is configured and the mandatory waiting period completes.
+
+#### Response
+
+| Key      | Type   | Required | Description                                    |
+| :------- | :----- | :------- | :--------------------------------------------- |
+| type     | string | Yes      | Type of token (e.g., "nfc", "barcode").        |
+| uid      | string | Yes      | Unique identifier of the token.                |
+| text     | string | No       | Text data associated with the token.           |
+| data     | string | No       | Raw binary data of the token (base64 encoded). |
+| scanTime | string | Yes      | ISO 8601 timestamp when token was scanned.     |
+
 ### tokens.removed
 
 A token was removed from a connected reader.

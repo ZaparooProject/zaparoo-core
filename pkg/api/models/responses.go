@@ -77,6 +77,7 @@ type SettingsResponse struct {
 	ReadersConnect            []ReaderConnection `json:"readersConnect"`
 	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
 	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
+	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
 	RunZapScript              bool               `json:"runZapScript"`
 	DebugLogging              bool               `json:"debugLogging"`
 	AudioScanFeedback         bool               `json:"audioScanFeedback"`

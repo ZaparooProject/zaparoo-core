@@ -68,6 +68,7 @@ type Audio struct {
 	FailSound    *string `toml:"fail_sound,omitempty"`
 	LimitSound   *string `toml:"limit_sound,omitempty"`
 	PendingSound *string `toml:"pending_sound,omitempty"`
+	ReadySound   *string `toml:"ready_sound,omitempty"`
 	ScanFeedback bool    `toml:"scan_feedback"`
 }
 
@@ -515,6 +516,40 @@ func (c *Instance) PendingSoundPath(dataDir string) (string, bool) {
 	}
 
 	path := *c.vals.Audio.PendingSound
+
+	// absolute path = use as-is
+	if filepath.IsAbs(path) {
+		return path, true
+	}
+
+	// relative path = resolve to dataDir/assets/path
+	return filepath.Join(dataDir, AssetsDir, path), true
+}
+
+// ReadySoundPath resolves the launch guard ready sound file path. See SuccessSoundPath for return semantics.
+func (c *Instance) ReadySoundPath(dataDir string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.vals.Audio.ScanFeedback {
+		return "", false
+	}
+
+	// nil = check for file override on disk, then use embedded default
+	if c.vals.Audio.ReadySound == nil {
+		overridePath := filepath.Join(dataDir, AssetsDir, ReadySoundFilename)
+		if _, err := c.getFs().Stat(overridePath); err == nil {
+			return overridePath, true
+		}
+		return "", true
+	}
+
+	// empty string = disabled
+	if *c.vals.Audio.ReadySound == "" {
+		return "", false
+	}
+
+	path := *c.vals.Audio.ReadySound
 
 	// absolute path = use as-is
 	if filepath.IsAbs(path) {
