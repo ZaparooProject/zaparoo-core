@@ -570,9 +570,12 @@ func (c *Instance) SetDebugLogging(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.DebugLogging = enabled
-	if enabled {
+	switch {
+	case os.Getenv("ZAPAROO_TRACE") != "":
+		zerolog.SetGlobalLevel(zerolog.TraceLevel)
+	case enabled:
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	} else {
+	default:
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
 }

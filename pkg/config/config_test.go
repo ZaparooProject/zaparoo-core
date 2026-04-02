@@ -27,6 +27,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1126,6 +1127,39 @@ func BenchmarkConfig_Read(b *testing.B) {
 	for b.Loop() {
 		_ = cfg.IsExecuteAllowed("some-command")
 	}
+}
+
+func TestSetDebugLogging(t *testing.T) {
+	// Not parallel: mutates zerolog global level and os env.
+
+	t.Run("enables debug level", func(t *testing.T) {
+		cfg := &Instance{}
+		cfg.SetDebugLogging(true)
+		assert.True(t, cfg.DebugLogging())
+		assert.Equal(t, zerolog.DebugLevel, zerolog.GlobalLevel())
+	})
+
+	t.Run("disables to info level", func(t *testing.T) {
+		cfg := &Instance{}
+		cfg.SetDebugLogging(false)
+		assert.False(t, cfg.DebugLogging())
+		assert.Equal(t, zerolog.InfoLevel, zerolog.GlobalLevel())
+	})
+
+	t.Run("ZAPAROO_TRACE overrides to trace level", func(t *testing.T) {
+		t.Setenv("ZAPAROO_TRACE", "1")
+
+		cfg := &Instance{}
+		cfg.SetDebugLogging(false)
+		assert.Equal(t, zerolog.TraceLevel, zerolog.GlobalLevel())
+
+		// Even with debug enabled, trace still wins
+		cfg.SetDebugLogging(true)
+		assert.Equal(t, zerolog.TraceLevel, zerolog.GlobalLevel())
+	})
+
+	// Reset to a sane default after test
+	zerolog.SetGlobalLevel(zerolog.Disabled)
 }
 
 func BenchmarkConfig_Load(b *testing.B) {
