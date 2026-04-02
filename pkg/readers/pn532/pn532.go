@@ -31,6 +31,7 @@ import (
 
 	"github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/detection"
+	_ "github.com/ZaparooProject/go-pn532/detection/i2c"
 	_ "github.com/ZaparooProject/go-pn532/detection/uart"
 	"github.com/ZaparooProject/go-pn532/polling"
 	"github.com/ZaparooProject/go-pn532/tagops"
@@ -344,10 +345,13 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	var err error
 
 	// Manual device specification
-	// Extract transport type from driver (e.g., "pn532_uart" -> "uart")
+	// Extract transport type from driver (e.g., "pn532_uart" or "pn532uart" -> "uart")
 	transportType := strings.TrimPrefix(device.Driver, "pn532_")
 	if transportType == device.Driver {
-		// If no prefix was removed, assume it's just "pn532" and default to uart
+		// No underscore variant, try stripping just "pn532" prefix
+		transportType = strings.TrimPrefix(device.Driver, "pn532")
+	}
+	if transportType == "" || transportType == device.Driver {
 		transportType = "uart"
 	}
 
@@ -581,8 +585,17 @@ func (*Reader) Detect(connected []string) string {
 	defer cancel()
 	devices, err := detection.DetectAll(ctx, &opts)
 	if err != nil {
-		log.Trace().Err(err).Msg("PN532 detection failed")
+		log.Debug().Err(err).Msg("PN532 detection returned error")
 		return ""
+	}
+	if len(devices) > 0 {
+		for _, d := range devices {
+			log.Trace().
+				Str("transport", d.Transport).
+				Str("path", d.Path).
+				Str("name", d.Name).
+				Msg("PN532 detection found device")
+		}
 	}
 
 	// Track which enumerated ports were NOT detected as PN532 devices.
