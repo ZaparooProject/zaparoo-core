@@ -561,6 +561,12 @@ func TestLogTraceableError(t *testing.T) {
 			unexpectLevel: `"level":"error"`,
 		},
 		{
+			name:          "context deadline exceeded logs at debug level",
+			err:           context.DeadlineExceeded,
+			expectLevel:   `"level":"debug"`,
+			unexpectLevel: `"level":"error"`,
+		},
+		{
 			name:          "fatal hardware error logs at warn level",
 			err:           pn533.ErrDeviceNotFound,
 			expectLevel:   `"level":"warn"`,

@@ -239,7 +239,7 @@ func DefaultSessionFactory(device PN532Device, sessionConfig *polling.Config) Po
 func logTraceableError(err error, operation string) {
 	var event *zerolog.Event
 	switch {
-	case errors.Is(err, context.Canceled):
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		event = log.Debug().Err(err).Str("operation", operation)
 	case pn532.IsFatal(err):
 		event = log.Warn().Err(err).Str("operation", operation)
