@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
 	"github.com/ebfe/scard"
 	"github.com/stretchr/testify/assert"
@@ -174,7 +175,7 @@ func TestOpen_ReaderListingErrorAfterTagRemoval(t *testing.T) {
 		Path:   "ACS ACR122U PICC Interface",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -260,7 +261,7 @@ func TestOpen_ReaderDisconnectedAfterTagRemoval(t *testing.T) {
 		Path:   "ACS ACR122U PICC Interface",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -340,7 +341,7 @@ func TestOpen_NormalTagDetectionAndRemoval(t *testing.T) {
 		Path:   "ACS ACR122U PICC Interface",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -396,7 +397,7 @@ func TestOpen_ConnectFails(t *testing.T) {
 		Path:   "ACS ACR122U PICC Interface",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -479,7 +480,7 @@ func TestOpen_NDEFDataReading(t *testing.T) {
 		Path:   "ACS ACR122U PICC Interface",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -518,7 +519,7 @@ func TestClose(t *testing.T) {
 		Path:   "ACS ACR122U PICC Interface",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// Verify reader is connected

@@ -189,7 +189,7 @@ func (*Reader) IDs() []string {
 	return []string{"externaldrive", "external_drive"}
 }
 
-func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
+func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ readers.OpenOpts) error {
 	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}

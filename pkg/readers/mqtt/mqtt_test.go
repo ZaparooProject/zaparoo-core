@@ -128,7 +128,7 @@ func TestOpen_ValidConnection(t *testing.T) {
 		Path:   "localhost:1883/test/topic",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 
 	require.NoError(t, err)
 	assert.True(t, mockClient.IsConnected())
@@ -155,7 +155,7 @@ func TestOpen_ConnectionError(t *testing.T) {
 		Path:   "localhost:1883/topic",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to connect to MQTT broker")
@@ -178,7 +178,7 @@ func TestOpen_SubscribeError(t *testing.T) {
 		Path:   "localhost:1883/topic",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 
 	// Should still succeed - subscription error is handled in callback
 	require.NoError(t, err)
@@ -207,7 +207,7 @@ func TestOpen_InvalidDriver(t *testing.T) {
 		Path:   "localhost:1883/topic",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid reader id")
@@ -250,7 +250,7 @@ func TestOpen_InvalidPath(t *testing.T) {
 				Path:   tt.path,
 			}
 
-			err := reader.Open(device, scanQueue)
+			err := reader.Open(device, scanQueue, readers.OpenOpts{})
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errContains)

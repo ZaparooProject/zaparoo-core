@@ -300,7 +300,7 @@ func TestOpen_InvalidPath_NotAbsolute(t *testing.T) {
 		Path:   "relative/path",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must be absolute")
@@ -324,7 +324,7 @@ func TestOpen_ParentDirectoryDoesNotExist(t *testing.T) {
 		Path:   "/dev/sr0",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to stat device parent directory")
@@ -360,7 +360,7 @@ func TestOpen_SuccessfulDiscDetection(t *testing.T) {
 		IDSource: IDSourceMerged,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// Wait for disc detection (1 second poll interval)
@@ -413,7 +413,7 @@ func TestOpen_DeviceDisappearsWithActiveToken(t *testing.T) {
 		Path:   "/dev/sr0",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// First scan: disc detected
@@ -470,7 +470,7 @@ func TestOpen_BlkidFailsNormalDiscRemoval(t *testing.T) {
 		Path:   "/dev/sr0",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// First scan: disc detected
@@ -525,7 +525,7 @@ func TestOpen_EmptyUUIDAndLabel_RemovesToken(t *testing.T) {
 		Path:   "/dev/sr0",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// First scan: disc detected
@@ -572,7 +572,7 @@ func TestOpen_IDSourceUUID(t *testing.T) {
 		IDSource: IDSourceUUID,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	scan := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
@@ -614,7 +614,7 @@ func TestOpen_IDSourceLabel(t *testing.T) {
 		IDSource: IDSourceLabel,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	scan := testutils.AssertScanReceived(t, scanQueue, 2*time.Second)
@@ -645,7 +645,7 @@ func TestOpen_InvalidDevicePath_NotUnderDev(t *testing.T) {
 		Path:   "/tmp/not-a-device",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// The reader should reject the path during polling (not under /dev/)
@@ -680,7 +680,7 @@ func TestOpen_DeviceDisappearsWithoutToken_NoReaderError(t *testing.T) {
 		Path:   "/dev/sr0",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// Wait for first poll - no token, device missing → no scan sent

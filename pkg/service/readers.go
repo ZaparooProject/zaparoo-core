@@ -129,7 +129,7 @@ func connectReaders(
 				}
 				if helpers.Contains(normalizedIDs, rt) {
 					log.Debug().Msgf("connecting to reader: %s", device)
-					err := r.Open(device.device, iq)
+					err := r.Open(device.device, iq, readers.OpenOpts{})
 					if err != nil {
 						log.Warn().Msgf("error opening reader: %s", err)
 						continue

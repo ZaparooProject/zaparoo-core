@@ -211,7 +211,7 @@ func TestOpen_TransportTypeParsing(t *testing.T) {
 			_ = reader.Open(config.ReadersConnect{
 				Driver: tt.driver,
 				Path:   "/dev/test",
-			}, nil)
+			}, nil, readers.OpenOpts{})
 
 			assert.Equal(t, tt.wantTransport, gotTransport)
 		})

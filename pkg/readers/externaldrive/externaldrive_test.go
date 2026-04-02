@@ -293,7 +293,7 @@ func TestOpen_InvalidDriver(t *testing.T) {
 		Driver: "invalid",
 	}
 
-	err := reader.Open(device, scanChan)
+	err := reader.Open(device, scanChan, readers.OpenOpts{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid reader id")

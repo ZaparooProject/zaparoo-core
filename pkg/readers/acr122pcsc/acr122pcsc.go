@@ -136,7 +136,7 @@ func (*ACR122PCSC) IDs() []string {
 	return []string{"acr122pcsc", "acr122_pcsc"}
 }
 
-func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
+func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ readers.OpenOpts) error {
 	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}

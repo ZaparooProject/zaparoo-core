@@ -183,7 +183,7 @@ func (ad *AutoDetector) connectReader(
 		Path:   path,
 	}
 
-	err := reader.Open(device, iq)
+	err := reader.Open(device, iq, readers.OpenOpts{Probing: true})
 	if err != nil {
 		return fmt.Errorf("error opening detected reader %s: %w", connectionString, err)
 	}
