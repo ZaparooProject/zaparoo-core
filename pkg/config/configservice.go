@@ -49,7 +49,8 @@ type Service struct {
 }
 
 type Publishers struct {
-	MQTT []MQTTPublisher `toml:"mqtt,omitempty"`
+	MQTT      []MQTTPublisher      `toml:"mqtt,omitempty"`
+	PixelCade []PixelCadePublisher `toml:"pixelcade,omitempty"`
 }
 
 type MQTTPublisher struct {
@@ -57,6 +58,15 @@ type MQTTPublisher struct {
 	Broker  string   `toml:"broker"`
 	Topic   string   `toml:"topic"`
 	Filter  []string `toml:"filter,omitempty,multiline"`
+}
+
+type PixelCadePublisher struct {
+	Enabled *bool    `toml:"enabled,omitempty"`
+	Host    string   `toml:"host"`
+	Mode    string   `toml:"mode,omitempty"`
+	OnStop  string   `toml:"on_stop,omitempty"`
+	Filter  []string `toml:"filter,omitempty,multiline"`
+	Port    int      `toml:"port,omitempty"`
 }
 
 type Discovery struct {
@@ -109,6 +119,12 @@ func (c *Instance) GetMQTTPublishers() []MQTTPublisher {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Service.Publishers.MQTT
+}
+
+func (c *Instance) GetPixelCadePublishers() []PixelCadePublisher {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Service.Publishers.PixelCade
 }
 
 func (c *Instance) APIListen() string {

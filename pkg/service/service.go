@@ -611,8 +611,8 @@ func startPublishers(
 	st *state.State,
 	cfg *config.Instance,
 	notifChan <-chan models.Notification,
-) ([]*publishers.MQTTPublisher, context.CancelFunc) {
-	activePublishers := make([]*publishers.MQTTPublisher, 0)
+) ([]publishers.Publisher, context.CancelFunc) {
+	activePublishers := make([]publishers.Publisher, 0)
 
 	mqttConfigs := cfg.GetMQTTPublishers()
 	if len(mqttConfigs) > 0 {
@@ -634,8 +634,26 @@ func startPublishers(
 		}
 	}
 
+	for _, pcCfg := range cfg.GetPixelCadePublishers() {
+		if pcCfg.Enabled != nil && !*pcCfg.Enabled {
+			continue
+		}
+
+		log.Info().Msgf("starting PixelCade publisher: %s:%d", pcCfg.Host, pcCfg.Port)
+
+		publisher := publishers.NewPixelCadePublisher(
+			pcCfg.Host, pcCfg.Port, pcCfg.Mode, pcCfg.OnStop, pcCfg.Filter,
+		)
+		if err := publisher.Start(st.GetContext()); err != nil {
+			log.Error().Err(err).Msgf("failed to start PixelCade publisher for %s", pcCfg.Host)
+			continue
+		}
+
+		activePublishers = append(activePublishers, publisher)
+	}
+
 	if len(activePublishers) > 0 {
-		log.Info().Msgf("started %d MQTT publisher(s)", len(activePublishers))
+		log.Info().Msgf("started %d publisher(s)", len(activePublishers))
 	}
 
 	// CRITICAL: Always start the drain goroutine, even if there are no active publishers.
@@ -646,11 +664,11 @@ func startPublishers(
 		for {
 			select {
 			case <-ctx.Done():
-				log.Debug().Msg("mqtt publisher fan-out: stopping")
+				log.Debug().Msg("publisher fan-out: stopping")
 				return
 			case notif, ok := <-notifChan:
 				if !ok {
-					log.Debug().Msg("mqtt publisher fan-out: notification channel closed")
+					log.Debug().Msg("publisher fan-out: notification channel closed")
 					return
 				}
 				// Publish to all active publishers sequentially

@@ -171,7 +171,7 @@ func (p *MQTTPublisher) Publish(notif models.Notification) error {
 		return fmt.Errorf("mqtt publisher for %s is not connected", p.broker)
 	}
 
-	if !p.matchesFilter(notif.Method) {
+	if !MatchesFilter(p.filter, notif.Method) {
 		return nil
 	}
 
@@ -193,21 +193,4 @@ func (p *MQTTPublisher) Publish(notif models.Notification) error {
 
 	log.Debug().Msgf("mqtt publisher: published %s notification to %s", notif.Method, p.broker)
 	return nil
-}
-
-// matchesFilter checks if a notification method matches the configured filter.
-// If filter is empty, all notifications pass. Otherwise, only notifications
-// in the filter list are published.
-func (p *MQTTPublisher) matchesFilter(method string) bool {
-	if len(p.filter) == 0 {
-		return true
-	}
-
-	for _, f := range p.filter {
-		if f == method {
-			return true
-		}
-	}
-
-	return false
 }
