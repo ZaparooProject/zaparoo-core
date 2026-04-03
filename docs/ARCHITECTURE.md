@@ -45,4 +45,4 @@ Reference material for Zaparoo Core's architecture, APIs, and subsystems. For de
 
 ## Reader Auto-Detection
 
-11 reader types: acr122pcsc, externaldrive, file, libnfc, mqtt, opticaldrive, pn532, pn532uart, rs232barcode, simpleserial, tty2oled
+10 reader types: acr122pcsc, externaldrive, file, libnfc, mqtt, opticaldrive, pn532, rs232barcode, simpleserial, tty2oled
