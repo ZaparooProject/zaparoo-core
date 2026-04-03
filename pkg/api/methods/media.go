@@ -292,9 +292,7 @@ func GenerateMediaDB(
 	db.MediaDB.TrackBackgroundOperation()
 	go func() {
 		defer db.MediaDB.BackgroundOperationDone()
-		// Suspend memory limit during indexing — speed matters more than RSS
-		helpers.SuspendMemoryLimit()
-		defer helpers.RestoreMemoryLimit()
+		defer debug.FreeOSMemory()
 
 		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			var desc string
