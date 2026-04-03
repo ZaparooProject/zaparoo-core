@@ -65,7 +65,7 @@ func HandleUpdateApply(
 	if env.Database != nil {
 		if status, err := env.Database.MediaDB.GetIndexingStatus(); err == nil {
 			if status == mediadb.IndexingStatusRunning || status == mediadb.IndexingStatusPending {
-				return nil, errors.New("cannot apply update while media indexing is in progress")
+				return nil, models.ClientErrf("cannot apply update while media indexing is in progress")
 			}
 		}
 	}
@@ -74,7 +74,7 @@ func HandleUpdateApply(
 
 	newVersion, err := applyFn(env.Context, env.Platform.ID())
 	if errors.Is(err, updater.ErrDevelopmentVersion) {
-		return nil, errors.New("cannot apply updates on development builds")
+		return nil, models.ClientErrf("cannot apply updates on development builds")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("update apply failed: %w", err)

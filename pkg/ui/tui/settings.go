@@ -128,7 +128,7 @@ func buildAudioSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.
 	defer cancel()
 	settings, err := svc.GetSettings(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("error fetching settings")
+		log.Warn().Err(err).Msg("error fetching settings")
 		ShowErrorModal(pages, app, "Failed to load audio settings", func() {
 			pages.SwitchToPage(PageSettingsMain)
 		})
@@ -163,11 +163,11 @@ func buildAudioSettingsMenu(svc SettingsService, pages *tview.Pages, app *tview.
 	menu.AddToggle("Audio feedback on scan", "Play sound when token is scanned", &audioFeedback, func(value bool) {
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			AudioScanFeedback: &value,
 		})
 		if err != nil {
-			log.Error().Err(err).Msg("error updating audio feedback")
+			log.Warn().Err(err).Msg("error updating audio feedback")
 			ShowErrorModal(pages, app, "Failed to save audio settings", func() {
 				app.SetFocus(menu.List)
 			})
@@ -213,7 +213,7 @@ func buildReadersSettingsMenu(
 	defer cancel()
 	settings, err := svc.GetSettings(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("error fetching settings")
+		log.Warn().Err(err).Msg("error fetching settings")
 		ShowErrorModal(pages, app, "Failed to load reader settings", func() {
 			pages.SwitchToPage(PageSettingsMain)
 		})
@@ -256,11 +256,11 @@ func buildReadersSettingsMenu(
 	menu.AddToggle("Auto-detect readers", "Automatically find connected readers", &autoDetect, func(value bool) {
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			ReadersAutoDetect: &value,
 		})
 		if err != nil {
-			log.Error().Err(err).Msg("error updating auto-detect")
+			log.Warn().Err(err).Msg("error updating auto-detect")
 			ShowErrorModal(pages, app, "Failed to save auto-detect setting", func() {
 				app.SetFocus(menu.List)
 			})
@@ -273,11 +273,11 @@ func buildReadersSettingsMenu(
 		mode := strings.ToLower(option)
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			ReadersScanMode: &mode,
 		})
 		if err != nil {
-			log.Error().Err(err).Msg("error updating scan mode")
+			log.Warn().Err(err).Msg("error updating scan mode")
 			ShowErrorModal(pages, app, "Failed to save scan mode", func() {
 				app.SetFocus(menu.List)
 			})
@@ -291,11 +291,11 @@ func buildReadersSettingsMenu(
 		delayF := ExitDelayOptions[idx].Value
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			ReadersScanExitDelay: &delayF,
 		})
 		if err != nil {
-			log.Error().Err(err).Msg("error updating exit delay")
+			log.Warn().Err(err).Msg("error updating exit delay")
 			ShowErrorModal(pages, app, "Failed to save exit delay", func() {
 				app.SetFocus(menu.List)
 			})
@@ -312,11 +312,11 @@ func buildReadersSettingsMenu(
 			mode := strings.ToLower(scanModeOptions[scanModeIndex])
 			ctx, cancel := tuiContext()
 			defer cancel()
-			err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+			err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 				ReadersScanMode: &mode,
 			})
 			if err != nil {
-				log.Error().Err(err).Msg("error updating scan mode")
+				log.Warn().Err(err).Msg("error updating scan mode")
 				ShowErrorModal(pages, app, "Failed to save scan mode", func() {
 					app.SetFocus(menu.List)
 				})
@@ -328,11 +328,11 @@ func buildReadersSettingsMenu(
 			delayF := ExitDelayOptions[exitDelayIndex].Value
 			ctx, cancel := tuiContext()
 			defer cancel()
-			err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+			err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 				ReadersScanExitDelay: &delayF,
 			})
 			if err != nil {
-				log.Error().Err(err).Msg("error updating exit delay")
+				log.Warn().Err(err).Msg("error updating exit delay")
 				ShowErrorModal(pages, app, "Failed to save exit delay", func() {
 					app.SetFocus(menu.List)
 				})
@@ -357,7 +357,7 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 	defer cancel()
 	settings, err := svc.GetSettings(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("error fetching settings")
+		log.Warn().Err(err).Msg("error fetching settings")
 		ShowErrorModal(pages, app, "Failed to load advanced settings", func() {
 			pages.SwitchToPage(PageSettingsMain)
 		})
@@ -404,11 +404,11 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 	menu.AddToggle("Debug logging", "Enable verbose debug output", &debugLogging, func(value bool) {
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			DebugLogging: &value,
 		})
 		if err != nil {
-			log.Error().Err(err).Msg("error updating debug logging")
+			log.Warn().Err(err).Msg("error updating debug logging")
 			ShowErrorModal(pages, app, "Failed to save debug logging setting", func() {
 				app.SetFocus(menu.List)
 			})
@@ -436,11 +436,11 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 					enabled := true
 					ctx, cancel := tuiContext()
 					defer cancel()
-					err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+					err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 						ErrorReporting: &enabled,
 					})
 					if err != nil {
-						log.Error().Err(err).Msg("error enabling error reporting")
+						log.Warn().Err(err).Msg("error enabling error reporting")
 						ShowErrorModal(pages, app, "Failed to save error reporting setting", func() {
 							app.SetFocus(menu.List)
 						})
@@ -459,11 +459,11 @@ func buildAdvancedSettingsMenu(svc SettingsService, pages *tview.Pages, app *tvi
 			// Disable without confirmation
 			ctx, cancel := tuiContext()
 			defer cancel()
-			err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+			err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 				ErrorReporting: &value,
 			})
 			if err != nil {
-				log.Error().Err(err).Msg("error disabling error reporting")
+				log.Warn().Err(err).Msg("error disabling error reporting")
 				errorReporting = true
 				menu.refreshAllItems(currentIdx)
 				ShowErrorModal(pages, app, "Failed to save error reporting setting", func() {
@@ -493,7 +493,7 @@ func buildReaderListPage(
 	defer cancel()
 	settings, err := svc.GetSettings(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("error fetching settings")
+		log.Warn().Err(err).Msg("error fetching settings")
 		ShowErrorModal(pages, app, "Failed to load reader list", func() {
 			pages.SwitchToPage(PageSettingsReadersMenu)
 		})
@@ -567,11 +567,11 @@ func buildReaderListPage(
 				updatedReaders := slices.Delete(slices.Clone(readers), idx, idx+1)
 				ctx, cancel := tuiContext()
 				defer cancel()
-				err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+				err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 					ReadersConnect: &updatedReaders,
 				})
 				if err != nil {
-					log.Error().Err(err).Msg("error deleting reader")
+					log.Warn().Err(err).Msg("error deleting reader")
 					ShowErrorModal(pages, app, "Failed to delete reader", func() {
 						app.SetFocus(readerList)
 					})
@@ -691,11 +691,11 @@ func buildReaderEditPage(
 
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			ReadersConnect: readers,
 		})
 		if err != nil {
-			log.Error().Err(err).Msg("error saving reader")
+			log.Warn().Err(err).Msg("error saving reader")
 			ShowErrorModal(pages, app, "Failed to save reader", func() {
 				app.SetFocus(driverDisplay)
 			})
@@ -838,7 +838,7 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 	defer cancel()
 	settings, err := svc.GetSettings(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("error fetching settings")
+		log.Warn().Err(err).Msg("error fetching settings")
 		ShowErrorModal(pages, app, "Failed to load settings", func() {
 			pages.SwitchToPage(PageSettingsAdvanced)
 		})
@@ -847,7 +847,7 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 
 	systems, err := svc.GetSystems(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("error fetching systems")
+		log.Warn().Err(err).Msg("error fetching systems")
 		ShowErrorModal(pages, app, "Failed to load systems list", func() {
 			pages.SwitchToPage(PageSettingsAdvanced)
 		})
@@ -896,11 +896,11 @@ func buildIgnoreSystemsPage(svc SettingsService, pages *tview.Pages, app *tview.
 		selected := systemSelector.GetSelected()
 		ctx, cancel := tuiContext()
 		defer cancel()
-		err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+		err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 			ReadersScanIgnoreSystem: &selected,
 		})
 		if err != nil {
-			log.Error().Err(err).Msg("error updating ignored systems")
+			log.Warn().Err(err).Msg("error updating ignored systems")
 			ShowErrorModal(pages, app, "Failed to save ignored systems", func() {
 				app.SetFocus(systemSelector)
 			})

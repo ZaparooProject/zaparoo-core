@@ -554,7 +554,7 @@ func BuildMainPage(
 		readers, err := svc.GetReaders(ctx)
 		cancel()
 		if err != nil {
-			log.Error().Err(err).Msg("failed to get readers")
+			log.Warn().Err(err).Msg("failed to get readers")
 		} else {
 			driver := ""
 			if len(readers.Readers) > 0 {
@@ -644,14 +644,7 @@ func BuildMainPage(
 					readers, err := svc.GetReaders(ctx)
 					cancel()
 					if err != nil {
-						switch {
-						case errors.Is(err, context.DeadlineExceeded),
-							errors.Is(err, context.Canceled),
-							errors.Is(err, client.ErrRequestTimeout):
-							log.Warn().Err(err).Msg("failed to refresh reader status")
-						default:
-							log.Error().Err(err).Msg("failed to refresh reader status")
-						}
+						log.Warn().Err(err).Msg("failed to refresh reader status")
 						continue
 					}
 					driver := ""
@@ -811,11 +804,11 @@ func BuildMain(
 					enabled := true
 					ctx, cancel := tuiContext()
 					defer cancel()
-					err := svc.UpdateSettings(ctx, models.UpdateSettingsParams{
+					err := svc.UpdateSettings(ctx, &models.UpdateSettingsParams{
 						ErrorReporting: &enabled,
 					})
 					if err != nil {
-						log.Error().Err(err).Msg("error enabling error reporting")
+						log.Warn().Err(err).Msg("error enabling error reporting")
 						ShowErrorModal(pages, app, "Failed to enable error reporting", nil)
 						return
 					}

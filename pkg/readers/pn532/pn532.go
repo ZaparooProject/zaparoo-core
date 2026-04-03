@@ -31,6 +31,7 @@ import (
 
 	"github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/detection"
+	_ "github.com/ZaparooProject/go-pn532/detection/i2c"
 	_ "github.com/ZaparooProject/go-pn532/detection/uart"
 	"github.com/ZaparooProject/go-pn532/polling"
 	"github.com/ZaparooProject/go-pn532/tagops"
@@ -238,7 +239,7 @@ func DefaultSessionFactory(device PN532Device, sessionConfig *polling.Config) Po
 func logTraceableError(err error, operation string) {
 	var event *zerolog.Event
 	switch {
-	case errors.Is(err, context.Canceled):
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		event = log.Debug().Err(err).Str("operation", operation)
 	case pn532.IsFatal(err):
 		event = log.Warn().Err(err).Str("operation", operation)
@@ -331,7 +332,7 @@ func (*Reader) IDs() []string {
 	}
 }
 
-func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
+func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts readers.OpenOpts) error {
 	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
@@ -344,10 +345,13 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	var err error
 
 	// Manual device specification
-	// Extract transport type from driver (e.g., "pn532_uart" -> "uart")
+	// Extract transport type from driver (e.g., "pn532_uart" or "pn532uart" -> "uart")
 	transportType := strings.TrimPrefix(device.Driver, "pn532_")
 	if transportType == device.Driver {
-		// If no prefix was removed, assume it's just "pn532" and default to uart
+		// No underscore variant, try stripping just "pn532" prefix
+		transportType = strings.TrimPrefix(device.Driver, "pn532")
+	}
+	if transportType == "" || transportType == device.Driver {
 		transportType = "uart"
 	}
 
@@ -384,7 +388,11 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	defer initCancel()
 	err = r.device.Init(initCtx)
 	if err != nil {
-		logTraceableError(err, "device init")
+		if opts.Probing {
+			log.Trace().Err(err).Str("operation", "device init").Msg("PN532 probe failed")
+		} else {
+			log.Warn().Err(err).Str("operation", "device init").Msg("PN532 device init failed")
+		}
 		_ = r.device.Close()
 		return fmt.Errorf("failed to initialize PN532 device: %w", err)
 	}
@@ -392,7 +400,11 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	// Set timeout to match cmd/reader behavior (prevents constant LED blinking)
 	err = r.device.SetTimeout(deviceTimeout)
 	if err != nil {
-		logTraceableError(err, "set timeout")
+		if opts.Probing {
+			log.Trace().Err(err).Str("operation", "set timeout").Msg("PN532 probe failed")
+		} else {
+			log.Warn().Err(err).Str("operation", "set timeout").Msg("PN532 device init failed")
+		}
 		_ = r.device.Close()
 		return fmt.Errorf("failed to set device timeout: %w", err)
 	}
@@ -581,8 +593,17 @@ func (*Reader) Detect(connected []string) string {
 	defer cancel()
 	devices, err := detection.DetectAll(ctx, &opts)
 	if err != nil {
-		log.Trace().Err(err).Msg("PN532 detection failed")
+		log.Debug().Err(err).Msg("PN532 detection returned error")
 		return ""
+	}
+	if len(devices) > 0 {
+		for _, d := range devices {
+			log.Trace().
+				Str("transport", d.Transport).
+				Str("path", d.Path).
+				Str("name", d.Name).
+				Msg("PN532 detection found device")
+		}
 	}
 
 	// Track which enumerated ports were NOT detected as PN532 devices.

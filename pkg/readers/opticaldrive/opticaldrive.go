@@ -115,6 +115,7 @@ func (*FileReader) IDs() []string {
 func (r *FileReader) Open(
 	device config.ReadersConnect,
 	iq chan<- readers.Scan,
+	_ readers.OpenOpts,
 ) error {
 	log.Info().Msgf("opening optical drive reader: %s", device.ConnectionString())
 	if !helpers.Contains(r.IDs(), device.Driver) {

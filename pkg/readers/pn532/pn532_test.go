@@ -181,6 +181,43 @@ func TestCreateTransport_InvalidType(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported transport type")
 }
 
+func TestOpen_TransportTypeParsing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		driver        string
+		wantTransport string
+	}{
+		{"pn532", "uart"},
+		{"pn532uart", "uart"},
+		{"pn532_uart", "uart"},
+		{"pn532i2c", "i2c"},
+		{"pn532_i2c", "i2c"},
+		{"pn532spi", "spi"},
+		{"pn532_spi", "spi"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.driver, func(t *testing.T) {
+			t.Parallel()
+
+			var gotTransport string
+			reader := NewReader(&config.Instance{})
+			reader.transportFactory = func(di detection.DeviceInfo) (pn533.Transport, error) {
+				gotTransport = di.Transport
+				return nil, errors.New("stop here")
+			}
+
+			_ = reader.Open(config.ReadersConnect{
+				Driver: tt.driver,
+				Path:   "/dev/test",
+			}, nil, readers.OpenOpts{})
+
+			assert.Equal(t, tt.wantTransport, gotTransport)
+		})
+	}
+}
+
 func TestDevice(t *testing.T) {
 	t.Parallel()
 
@@ -520,6 +557,12 @@ func TestLogTraceableError(t *testing.T) {
 		{
 			name:          "context canceled logs at debug level",
 			err:           context.Canceled,
+			expectLevel:   `"level":"debug"`,
+			unexpectLevel: `"level":"error"`,
+		},
+		{
+			name:          "context deadline exceeded logs at debug level",
+			err:           context.DeadlineExceeded,
 			expectLevel:   `"level":"debug"`,
 			unexpectLevel: `"level":"error"`,
 		},

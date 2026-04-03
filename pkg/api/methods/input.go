@@ -20,7 +20,6 @@
 package methods
 
 import (
-	"errors"
 	"fmt"
 
 	zapscriptlib "github.com/ZaparooProject/go-zapscript"
@@ -34,10 +33,10 @@ import (
 func parseInputMacro(cmdName, macro string) ([]string, error) {
 	script, err := zapscriptlib.NewParser("**" + cmdName + ":" + macro).ParseScript()
 	if err != nil {
-		return nil, fmt.Errorf("invalid input macro: %w", err)
+		return nil, models.ClientErrf("invalid input macro: %w", err)
 	}
 	if len(script.Cmds) == 0 {
-		return nil, errors.New("invalid input macro: no commands parsed")
+		return nil, models.ClientErrf("invalid input macro: no commands parsed")
 	}
 	return script.Cmds[0].Args, nil
 }
@@ -46,7 +45,7 @@ func parseInputMacro(cmdName, macro string) ([]string, error) {
 func HandleInputKeyboard(env requests.RequestEnv) (any, error) {
 	var params models.InputKeyboardParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	args, err := parseInputMacro(zapscriptlib.ZapScriptCmdInputKeyboard, params.Keys)
@@ -67,7 +66,7 @@ func HandleInputKeyboard(env requests.RequestEnv) (any, error) {
 func HandleInputGamepad(env requests.RequestEnv) (any, error) {
 	var params models.InputGamepadParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	args, err := parseInputMacro(zapscriptlib.ZapScriptCmdInputGamepad, params.Buttons)

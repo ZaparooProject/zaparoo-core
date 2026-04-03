@@ -79,7 +79,6 @@ func (r *Reader) readNDEFData(ctx context.Context, detectedTag *pn532.DetectedTa
 	ndefMessage, err := r.tagOps.ReadNDEF(ctx)
 	log.Debug().Err(err).Str("uid", detectedTag.UID).Msg("NDEF: tagOps.ReadNDEF completed")
 	if err != nil {
-		logTraceableError(err, "read NDEF")
 		log.Warn().Err(err).
 			Str("uid", detectedTag.UID).
 			Str("tagType", string(detectedTag.Type)).

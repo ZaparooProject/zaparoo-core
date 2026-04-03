@@ -46,15 +46,19 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	}
 
 	resp := models.SettingsResponse{
-		RunZapScript:            env.State.RunZapScriptEnabled(),
-		DebugLogging:            env.Config.DebugLogging(),
-		AudioScanFeedback:       env.Config.AudioFeedback(),
-		ReadersAutoDetect:       env.Config.Readers().AutoDetect,
-		ReadersScanMode:         env.Config.ReadersScan().Mode,
-		ReadersScanExitDelay:    env.Config.ReadersScan().ExitDelay,
-		ReadersScanIgnoreSystem: make([]string, 0),
-		ReadersConnect:          readersConnect,
-		ErrorReporting:          env.Config.ErrorReporting(),
+		RunZapScript:              env.State.RunZapScriptEnabled(),
+		DebugLogging:              env.Config.DebugLogging(),
+		AudioScanFeedback:         env.Config.AudioFeedback(),
+		ReadersAutoDetect:         env.Config.Readers().AutoDetect,
+		ReadersScanMode:           env.Config.ReadersScan().Mode,
+		ReadersScanExitDelay:      env.Config.ReadersScan().ExitDelay,
+		ReadersScanIgnoreSystem:   make([]string, 0),
+		ReadersConnect:            readersConnect,
+		ErrorReporting:            env.Config.ErrorReporting(),
+		LaunchGuardEnabled:        env.Config.LaunchGuardEnabled(),
+		LaunchGuardTimeout:        env.Config.LaunchGuardTimeout(),
+		LaunchGuardDelay:          env.Config.LaunchGuardDelay(),
+		LaunchGuardRequireConfirm: env.Config.LaunchGuardRequireConfirm(),
 	}
 
 	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
@@ -102,7 +106,7 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	var params models.UpdateSettingsParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	if params.RunZapScript != nil {
@@ -148,6 +152,26 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.ReadersScanIgnoreSystem != nil {
 		log.Debug().Strs("readersScanIgnoreSystem", *params.ReadersScanIgnoreSystem).Msg("updating setting")
 		env.Config.SetScanIgnoreSystem(*params.ReadersScanIgnoreSystem)
+	}
+
+	if params.LaunchGuardEnabled != nil {
+		log.Debug().Bool("launchGuardEnabled", *params.LaunchGuardEnabled).Msg("updating setting")
+		env.Config.SetLaunchGuard(*params.LaunchGuardEnabled)
+	}
+
+	if params.LaunchGuardTimeout != nil {
+		log.Debug().Float32("launchGuardTimeout", *params.LaunchGuardTimeout).Msg("updating setting")
+		env.Config.SetLaunchGuardTimeout(*params.LaunchGuardTimeout)
+	}
+
+	if params.LaunchGuardDelay != nil {
+		log.Debug().Float32("launchGuardDelay", *params.LaunchGuardDelay).Msg("updating setting")
+		env.Config.SetLaunchGuardDelay(*params.LaunchGuardDelay)
+	}
+
+	if params.LaunchGuardRequireConfirm != nil {
+		log.Debug().Bool("launchGuardRequireConfirm", *params.LaunchGuardRequireConfirm).Msg("updating setting")
+		env.Config.SetLaunchGuardRequireConfirm(*params.LaunchGuardRequireConfirm)
 	}
 
 	if params.ReadersConnect != nil {
@@ -217,7 +241,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 	var params models.UpdatePlaytimeLimitsParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	if params.Enabled != nil {
@@ -242,7 +266,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		log.Info().Str("daily", *params.Daily).Msg("playtime limits update")
 		err := env.Config.SetDailyLimit(*params.Daily)
 		if err != nil {
-			return nil, fmt.Errorf("invalid daily limit duration: %w", err)
+			return nil, models.ClientErrf("invalid daily limit duration: %w", err)
 		}
 	}
 
@@ -250,7 +274,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		log.Info().Str("session", *params.Session).Msg("playtime limits update")
 		err := env.Config.SetSessionLimit(*params.Session)
 		if err != nil {
-			return nil, fmt.Errorf("invalid session limit duration: %w", err)
+			return nil, models.ClientErrf("invalid session limit duration: %w", err)
 		}
 	}
 
@@ -258,7 +282,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		log.Info().Str("session_reset", *params.SessionReset).Msg("playtime limits update")
 		err := env.Config.SetSessionResetTimeout(params.SessionReset)
 		if err != nil {
-			return nil, fmt.Errorf("invalid session reset duration: %w", err)
+			return nil, models.ClientErrf("invalid session reset duration: %w", err)
 		}
 	}
 
@@ -266,7 +290,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		log.Info().Strs("warnings", *params.Warnings).Msg("playtime limits update")
 		err := env.Config.SetWarningIntervals(*params.Warnings)
 		if err != nil {
-			return nil, fmt.Errorf("invalid warning intervals: %w", err)
+			return nil, models.ClientErrf("invalid warning intervals: %w", err)
 		}
 	}
 

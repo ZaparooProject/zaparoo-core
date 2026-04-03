@@ -194,6 +194,8 @@ linters:
     wrapcheck:
       extra-ignore-sigs:
         - .Err(
+        - models.ClientErr(
+        - models.ClientErrf(
     forbidigo:
       forbid:
         - pattern: 'sync\.Mutex'

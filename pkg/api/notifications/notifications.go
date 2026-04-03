@@ -31,6 +31,8 @@ import (
 var criticalNotifications = map[string]bool{
 	models.NotificationTokensAdded:         true,
 	models.NotificationTokensRemoved:       true,
+	models.NotificationTokensStaged:        true,
+	models.NotificationTokensStagedReady:   true,
 	models.NotificationReadersConnected:    true,
 	models.NotificationReadersDisconnected: true,
 	models.NotificationStarted:             true,
@@ -86,6 +88,16 @@ func MediaStarted(ns chan<- models.Notification, payload models.MediaStartedPara
 //nolint:gocritic // single-use parameter in notification
 func TokensAdded(ns chan<- models.Notification, payload models.TokenResponse) {
 	sendNotification(ns, models.NotificationTokensAdded, payload)
+}
+
+//nolint:gocritic // single-use parameter in notification
+func TokensStaged(ns chan<- models.Notification, payload models.TokenResponse) {
+	sendNotification(ns, models.NotificationTokensStaged, payload)
+}
+
+//nolint:gocritic // single-use parameter in notification
+func TokensStagedReady(ns chan<- models.Notification, payload models.TokenResponse) {
+	sendNotification(ns, models.NotificationTokensStagedReady, payload)
 }
 
 func TokensRemoved(ns chan<- models.Notification) {

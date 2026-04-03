@@ -35,7 +35,7 @@ import (
 func HandleMediaLookup(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	var params models.MediaLookupParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	fuzzy := params.FuzzySystem != nil && *params.FuzzySystem

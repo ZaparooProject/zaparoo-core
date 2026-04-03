@@ -22,7 +22,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,7 +59,7 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap) {
 	require.NoError(t, err)
 
 	err = methodMap.AddMethod("test.expectederror", func(_ requests.RequestEnv) (any, error) {
-		return nil, fmt.Errorf("test-launcher: %w", zapscript.ErrNoControlCapabilities)
+		return nil, models.ClientErrf("test-launcher: %w", zapscript.ErrNoControlCapabilities)
 	})
 	require.NoError(t, err)
 
@@ -86,7 +86,8 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap) {
 		close(tokenQueue)
 	})
 
-	handler := handlePostRequest(methodMap, platform, cfg, st, tokenQueue, db, nil, nil)
+	confirmQueue := make(chan chan error, 10)
+	handler := handlePostRequest(methodMap, platform, cfg, st, tokenQueue, confirmQueue, db, nil, nil)
 	return handler, methodMap
 }
 
@@ -238,8 +239,8 @@ func TestHandlePostRequest_MethodError(t *testing.T) {
 	require.Contains(t, resp.Error.Message, "test error")
 }
 
-// TestHandlePostRequest_ExpectedError tests that expected errors (like no control capabilities)
-// return a proper JSON-RPC error and are logged at warn level instead of error.
+// TestHandlePostRequest_ExpectedError tests that ClientError errors return a proper
+// JSON-RPC error and are logged at warn level instead of error.
 func TestHandlePostRequest_ExpectedError(t *testing.T) {
 	t.Parallel()
 
@@ -302,6 +303,32 @@ func TestHandlePostRequest_EmptyBody(t *testing.T) {
 	err := json.Unmarshal(rr.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	require.NotNil(t, resp.Error)
+}
+
+// errReader is an io.Reader that returns a specified error after reading some data.
+type errReader struct {
+	err error
+}
+
+func (r *errReader) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+// TestHandlePostRequest_ClientDisconnect tests that a client disconnecting mid-request
+// is handled gracefully with a 400 response instead of a 500.
+func TestHandlePostRequest_ClientDisconnect(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := createTestPostHandler(t)
+
+	//nolint:noctx // test helper, no context needed
+	req := httptest.NewRequest(http.MethodPost, "/api", &errReader{err: io.ErrUnexpectedEOF})
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 // TestHandlePostRequest_InvalidJSONRPCVersion tests that wrong JSON-RPC version is rejected.

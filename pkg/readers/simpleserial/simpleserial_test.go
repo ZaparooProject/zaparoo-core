@@ -266,7 +266,7 @@ func TestOpen_InvalidDriver(t *testing.T) {
 		Path:   "/dev/ttyUSB0",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid reader id")
@@ -289,7 +289,7 @@ func TestOpen_SetReadTimeoutError(t *testing.T) {
 		Path:   testutils.CreateTempDevicePath(t),
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to set read timeout")
@@ -313,7 +313,7 @@ func TestOpen_SuccessfulConnection(t *testing.T) {
 		Path:   devicePath,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	assert.True(t, reader.Connected())
@@ -364,7 +364,7 @@ func TestOpen_ReaderErrorWithActiveToken(t *testing.T) {
 		Path:   devicePath,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// First scan: token detected
@@ -404,7 +404,7 @@ func TestOpen_ReaderErrorWithoutActiveToken(t *testing.T) {
 		Path:   testutils.CreateTempDevicePath(t),
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// Wait briefly for error to be processed
@@ -447,7 +447,7 @@ func TestOpen_TokenTimeout(t *testing.T) {
 		Path:   testutils.CreateTempDevicePath(t),
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// First scan: token detected
@@ -502,7 +502,7 @@ func TestOpen_MultipleTokens(t *testing.T) {
 		Path:   testutils.CreateTempDevicePath(t),
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// First token
@@ -563,7 +563,7 @@ func TestOpen_DuplicateTokenIgnored(t *testing.T) {
 		Path:   testutils.CreateTempDevicePath(t),
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// First scan: token received

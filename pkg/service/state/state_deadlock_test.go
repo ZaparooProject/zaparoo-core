@@ -286,14 +286,16 @@ func (*mockPanicReader) Metadata() readers.DriverMetadata {
 	return readers.DriverMetadata{ID: "mock"}
 }
 
-func (*mockPanicReader) IDs() []string                                             { return []string{"mock"} }
-func (*mockPanicReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan) error { return nil }
-func (m *mockPanicReader) Close() error                                            { m.closed.Store(true); return nil }
-func (*mockPanicReader) Detect(_ []string) string                                  { return "" }
-func (*mockPanicReader) Path() string                                              { return "/dev/mock-panic" }
-func (*mockPanicReader) ReaderID() string                                          { return "mock-panic-test" }
-func (m *mockPanicReader) Connected() bool                                         { return !m.closed.Load() }
-func (*mockPanicReader) Info() string                                              { return "mock panic reader" }
+func (*mockPanicReader) IDs() []string { return []string{"mock"} }
+func (*mockPanicReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan, _ readers.OpenOpts) error {
+	return nil
+}
+func (m *mockPanicReader) Close() error           { m.closed.Store(true); return nil }
+func (*mockPanicReader) Detect(_ []string) string { return "" }
+func (*mockPanicReader) Path() string             { return "/dev/mock-panic" }
+func (*mockPanicReader) ReaderID() string         { return "mock-panic-test" }
+func (m *mockPanicReader) Connected() bool        { return !m.closed.Load() }
+func (*mockPanicReader) Info() string             { return "mock panic reader" }
 
 //nolint:nilnil // mock implementation
 func (*mockPanicReader) Write(_ string) (*tokens.Token, error) { return nil, nil }
@@ -354,14 +356,16 @@ func (*mockRacyReader) Metadata() readers.DriverMetadata {
 	return readers.DriverMetadata{ID: "mock"}
 }
 
-func (*mockRacyReader) IDs() []string                                             { return []string{"mock"} }
-func (*mockRacyReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan) error { return nil }
-func (*mockRacyReader) Close() error                                              { return nil }
-func (*mockRacyReader) Detect(_ []string) string                                  { return "" }
-func (*mockRacyReader) Path() string                                              { return "/dev/mock-racy" }
-func (*mockRacyReader) ReaderID() string                                          { return "mock-racy-test" }
-func (*mockRacyReader) Connected() bool                                           { return true } // Lies!
-func (*mockRacyReader) Info() string                                              { return "mock racy reader" }
+func (*mockRacyReader) IDs() []string { return []string{"mock"} }
+func (*mockRacyReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan, _ readers.OpenOpts) error {
+	return nil
+}
+func (*mockRacyReader) Close() error             { return nil }
+func (*mockRacyReader) Detect(_ []string) string { return "" }
+func (*mockRacyReader) Path() string             { return "/dev/mock-racy" }
+func (*mockRacyReader) ReaderID() string         { return "mock-racy-test" }
+func (*mockRacyReader) Connected() bool          { return true } // Lies!
+func (*mockRacyReader) Info() string             { return "mock racy reader" }
 
 //nolint:nilnil // mock implementation
 func (*mockRacyReader) Write(_ string) (*tokens.Token, error) { return nil, nil }
@@ -420,8 +424,11 @@ func (*mockClosableReader) Metadata() readers.DriverMetadata {
 	return readers.DriverMetadata{ID: "closable"}
 }
 
-func (*mockClosableReader) IDs() []string                                             { return []string{"closable"} }
-func (*mockClosableReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan) error { return nil }
+func (*mockClosableReader) IDs() []string { return []string{"closable"} }
+func (*mockClosableReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan, _ readers.OpenOpts) error {
+	return nil
+}
+
 func (m *mockClosableReader) Close() error {
 	m.closeCalled.Store(true)
 	return m.closeErr

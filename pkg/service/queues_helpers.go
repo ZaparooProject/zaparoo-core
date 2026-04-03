@@ -71,6 +71,20 @@ func scriptHasMediaLaunchingCommand(script *zapscript.Script) bool {
 	return false
 }
 
+// scriptHasMediaDisruptingCommand checks if any command in the script would
+// change or stop the currently playing media. Used by launch guard.
+func scriptHasMediaDisruptingCommand(script *zapscript.Script) bool {
+	if script == nil {
+		return false
+	}
+	for _, cmd := range script.Cmds {
+		if zscript.IsMediaDisruptingCommand(cmd.Name) {
+			return true
+		}
+	}
+	return false
+}
+
 // injectCommands inserts new commands into the command slice after the given index.
 // Returns the updated slice with new commands injected.
 func injectCommands(cmds []zapscript.Command, afterIndex int, newCmds []zapscript.Command) []zapscript.Command {

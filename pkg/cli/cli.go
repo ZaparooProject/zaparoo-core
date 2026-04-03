@@ -282,6 +282,9 @@ func Setup(
 	} else {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
+	if os.Getenv("ZAPAROO_TRACE") != "" {
+		zerolog.SetGlobalLevel(zerolog.TraceLevel)
+	}
 
 	// Initialize error reporting (opt-in)
 	if err := telemetry.Init(

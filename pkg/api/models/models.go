@@ -32,6 +32,8 @@ const (
 	NotificationStopped              = "media.stopped"
 	NotificationStarted              = "media.started"
 	NotificationMediaIndexing        = "media.indexing" // TODO: rename to generating
+	NotificationTokensStaged         = "tokens.staged"
+	NotificationTokensStagedReady    = "tokens.staged.ready" //nolint:gosec // not a credential
 	NotificationPlaytimeLimitReached = "playtime.limit.reached"
 	NotificationPlaytimeLimitWarning = "playtime.limit.warning"
 	NotificationInboxAdded           = "inbox.added"
@@ -45,6 +47,7 @@ const (
 const (
 	MethodLaunch               = "launch" // DEPRECATED
 	MethodRun                  = "run"
+	MethodConfirm              = "confirm"
 	MethodRunScript            = "run.script"
 	MethodStop                 = "stop"
 	MethodTokens               = "tokens"

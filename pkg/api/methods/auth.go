@@ -69,16 +69,16 @@ type wellKnownFetcher func(baseURL string) (*zapscript.WellKnown, error)
 func HandleSettingsAuthClaim(env requests.RequestEnv, fetchWK wellKnownFetcher) (any, error) {
 	var params models.SettingsAuthClaimParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	// Extract root domain (scheme + host) from the claim URL
 	claimURL, err := url.Parse(params.ClaimURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid claim URL: %w", err)
+		return nil, models.ClientErrf("invalid claim URL: %w", err)
 	}
 	if claimURL.Scheme != "https" {
-		return nil, errors.New("claim URL must use HTTPS")
+		return nil, models.ClientErrf("claim URL must use HTTPS")
 	}
 	rootDomain := "https://" + claimURL.Host
 
@@ -88,10 +88,10 @@ func HandleSettingsAuthClaim(env requests.RequestEnv, fetchWK wellKnownFetcher) 
 	// window between the well-known check and the claim redemption.
 	wk, err := fetchWK(rootDomain)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch well-known for %s: %w", rootDomain, err)
+		return nil, models.ClientErrf("failed to fetch well-known for %s: %w", rootDomain, err)
 	}
 	if wk.Auth != 1 {
-		return nil, fmt.Errorf("domain %s does not support auth (auth=%d)", rootDomain, wk.Auth)
+		return nil, models.ClientErrf("domain %s does not support auth (auth=%d)", rootDomain, wk.Auth)
 	}
 
 	// Update ZapLink cache for root domain

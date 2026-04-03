@@ -102,7 +102,7 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 	systems, err := svc.GetSystems(ctx)
 	cancel()
 	if err != nil {
-		log.Error().Err(err).Msg("error getting system list")
+		log.Warn().Err(err).Msg("error getting system list")
 	} else {
 		sort.Slice(systems, func(i, j int) bool {
 			return systems[i].Name < systems[j].Name
@@ -185,7 +185,7 @@ func BuildSearchMedia(svc SettingsService, pages *tview.Pages, app *tview.Applic
 		results, err := svc.SearchMedia(searchCtx, params)
 		searchCancel()
 		if err != nil {
-			log.Error().Err(err).Msg("error executing search query")
+			log.Warn().Err(err).Msg("error executing search query")
 			frame.SetHelpText("An error occurred during search")
 			return
 		}

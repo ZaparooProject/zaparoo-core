@@ -237,7 +237,7 @@ func (db *MediaDB) Open() error {
 }
 
 func (db *MediaDB) GetDBPath() string {
-	return filepath.Join(helpers.DataDir(db.pl), config.MediaDbFile)
+	return db.dbPath
 }
 
 // SetIndexingCacheSize temporarily increases SQLite cache_size for bulk indexing.
@@ -330,7 +330,7 @@ func (db *MediaDB) UpdateLastGenerated() error {
 		return ErrNullSQL
 	}
 
-	err := sqlUpdateLastGenerated(db.ctx, db.sql)
+	err := sqlUpdateLastGenerated(db.ctx, db.conn())
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
 	if err == nil && !db.inTransaction {
@@ -351,7 +351,7 @@ func (db *MediaDB) SetOptimizationStatus(status string) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlSetOptimizationStatus(db.ctx, db.sql, status)
+	return sqlSetOptimizationStatus(db.ctx, db.conn(), status)
 }
 
 func (db *MediaDB) GetOptimizationStatus() (string, error) {
@@ -365,7 +365,7 @@ func (db *MediaDB) SetOptimizationStep(step string) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlSetOptimizationStep(db.ctx, db.sql, step)
+	return sqlSetOptimizationStep(db.ctx, db.conn(), step)
 }
 
 func (db *MediaDB) GetOptimizationStep() (string, error) {
@@ -376,12 +376,10 @@ func (db *MediaDB) GetOptimizationStep() (string, error) {
 }
 
 func (db *MediaDB) SetIndexingStatus(status string) error {
-	db.sqlMu.RLock()
-	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlSetIndexingStatus(db.ctx, db.sql, status)
+	return sqlSetIndexingStatus(db.ctx, db.conn(), status)
 }
 
 func (db *MediaDB) GetIndexingStatus() (string, error) {
@@ -397,7 +395,7 @@ func (db *MediaDB) SetLastIndexedSystem(systemID string) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlSetLastIndexedSystem(db.ctx, db.sql, systemID)
+	return sqlSetLastIndexedSystem(db.ctx, db.conn(), systemID)
 }
 
 func (db *MediaDB) GetLastIndexedSystem() (string, error) {
@@ -411,7 +409,7 @@ func (db *MediaDB) SetIndexingSystems(systemIDs []string) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlSetIndexingSystems(db.ctx, db.sql, systemIDs)
+	return sqlSetIndexingSystems(db.ctx, db.conn(), systemIDs)
 }
 
 func (db *MediaDB) GetIndexingSystems() ([]string, error) {

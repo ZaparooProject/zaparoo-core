@@ -44,12 +44,15 @@ const (
 	UserDir              = "user"
 	LogsDir              = "logs"
 	APIRequestTimeout    = 30 * time.Second
-	SuccessSoundFilename = "success.wav"
-	FailSoundFilename    = "fail.wav"
-	LimitSoundFilename   = "limit.wav"
+	SuccessSoundFilename = "success.ogg"
+	FailSoundFilename    = "fail.ogg"
+	LimitSoundFilename   = "limit.ogg"
+	PendingSoundFilename = "pending.ogg"
+	ReadySoundFilename   = "ready.ogg"
 	AssetsDir            = "assets"
 	MappingsDir          = "mappings"
 	LaunchersDir         = "launchers"
 	MediaDir             = "media"
 	LogUploadURL         = "https://logs.zaparoo.org/"
+	MinFreeDiskBytes     = 500 * 1024 * 1024 // 500 MB
 )
