@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -261,6 +262,21 @@ func GenerateMediaDB(
 		statusInstance.clear()
 		return models.ClientErrf("database optimization in progress")
 	}
+
+	// Check available disk space before starting indexing
+	dbDir := filepath.Dir(db.MediaDB.GetDBPath())
+	freeBytes, err := helpers.FreeDiskSpace(dbDir)
+	if err != nil {
+		log.Warn().Err(err).Msg("unable to check free disk space before indexing")
+	} else if freeBytes < config.MinFreeDiskBytes {
+		statusInstance.clear()
+		freeMB := freeBytes / (1024 * 1024)
+		needMB := config.MinFreeDiskBytes / (1024 * 1024)
+		return models.ClientErrf(
+			"insufficient disk space for indexing: %d MB free, need at least %d MB", freeMB, needMB,
+		)
+	}
+
 	startTime := time.Now()
 
 	// Create cancellable context for indexing

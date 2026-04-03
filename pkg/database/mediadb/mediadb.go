@@ -237,7 +237,7 @@ func (db *MediaDB) Open() error {
 }
 
 func (db *MediaDB) GetDBPath() string {
-	return filepath.Join(helpers.DataDir(db.pl), config.MediaDbFile)
+	return db.dbPath
 }
 
 // SetIndexingCacheSize temporarily increases SQLite cache_size for bulk indexing.
