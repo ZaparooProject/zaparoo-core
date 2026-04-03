@@ -744,7 +744,7 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 	sseURL := fmt.Sprintf("http://localhost:%d/api/v0.1/events", port)
 	client := &http.Client{Timeout: 100 * time.Millisecond}
 	var serverReady bool
-	for range 50 {
+	for range 100 {
 		healthURL := fmt.Sprintf("http://localhost:%d/health", port)
 		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, healthURL, http.NoBody)
 		if reqErr != nil {
@@ -775,14 +775,8 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
 
-	// Send a notification through the broker
-	payload, _ := json.Marshal(map[string]string{"uid": "test-123", "text": "**launch:game.rom"})
-	st.Notifications <- models.Notification{
-		Method: "tokens.staged",
-		Params: payload,
-	}
-
-	// Read the SSE event
+	// Start reading SSE events before sending the notification to avoid
+	// a race where the notification is delivered before the reader starts.
 	scanner := bufio.NewScanner(resp.Body)
 	var eventData string
 	deadline := time.After(5 * time.Second)
@@ -797,6 +791,13 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 			}
 		}
 	}()
+
+	// Send a notification through the broker
+	payload, _ := json.Marshal(map[string]string{"uid": "test-123", "text": "**launch:game.rom"})
+	st.Notifications <- models.Notification{
+		Method: "tokens.staged",
+		Params: payload,
+	}
 
 	select {
 	case <-done:
