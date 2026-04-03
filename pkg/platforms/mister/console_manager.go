@@ -189,7 +189,9 @@ func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
 
 	// Timeout - log final state
 	finalTTY, _ := m.getTTY()
-	log.Error().Msgf("timeout after 5s - stuck on %s, expected tty%s", finalTTY, f9ConsoleVT)
+	log.Error().Str("currentTTY", finalTTY).Str("expectedTTY", "tty"+f9ConsoleVT).
+		Str("targetVT", vt).Str("core", coreName).
+		Msg("timeout waiting for console switch")
 	return errors.New("timeout waiting for console switch after 5s")
 }
 
