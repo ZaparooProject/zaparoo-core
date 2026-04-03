@@ -503,6 +503,9 @@ func TestHandleMediaBrowse_PathTraversalRejected(t *testing.T) {
 			_, err := HandleMediaBrowse(env)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errMatch)
+
+			var clientErr *models.ClientError
+			require.ErrorAs(t, err, &clientErr)
 		})
 	}
 }
@@ -527,6 +530,9 @@ func TestHandleMediaBrowse_UnknownVirtualScheme(t *testing.T) {
 	_, err := HandleMediaBrowse(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown virtual scheme")
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
 }
 
 func TestHandleMediaBrowse_VirtualGrouping(t *testing.T) {

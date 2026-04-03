@@ -22,6 +22,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -302,6 +303,32 @@ func TestHandlePostRequest_EmptyBody(t *testing.T) {
 	err := json.Unmarshal(rr.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	require.NotNil(t, resp.Error)
+}
+
+// errReader is an io.Reader that returns a specified error after reading some data.
+type errReader struct {
+	err error
+}
+
+func (r *errReader) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+// TestHandlePostRequest_ClientDisconnect tests that a client disconnecting mid-request
+// is handled gracefully with a 400 response instead of a 500.
+func TestHandlePostRequest_ClientDisconnect(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := createTestPostHandler(t)
+
+	//nolint:noctx // test helper, no context needed
+	req := httptest.NewRequest(http.MethodPost, "/api", &errReader{err: io.ErrUnexpectedEOF})
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 // TestHandlePostRequest_InvalidJSONRPCVersion tests that wrong JSON-RPC version is rejected.

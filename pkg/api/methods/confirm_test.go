@@ -24,6 +24,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -65,6 +66,9 @@ func TestHandleConfirm_Error(t *testing.T) {
 	_, err := HandleConfirm(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no staged token to confirm")
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
 }
 
 func TestHandleConfirm_ContextCancelledBeforeSend(t *testing.T) {
@@ -83,6 +87,9 @@ func TestHandleConfirm_ContextCancelledBeforeSend(t *testing.T) {
 	_, err := HandleConfirm(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "confirm cancelled")
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
 }
 
 func TestHandleConfirm_ContextCancelledBeforeResult(t *testing.T) {
@@ -105,4 +112,7 @@ func TestHandleConfirm_ContextCancelledBeforeResult(t *testing.T) {
 	_, err := HandleConfirm(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "confirm cancelled")
+
+	var clientErr2 *models.ClientError
+	require.ErrorAs(t, err, &clientErr2)
 }

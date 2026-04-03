@@ -25,6 +25,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -115,6 +116,9 @@ func TestHandleInputKeyboard_MissingParams(t *testing.T) {
 	_, err := HandleInputKeyboard(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid params")
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
 }
 
 func TestHandleInputKeyboard_PlatformError(t *testing.T) {
@@ -198,6 +202,9 @@ func TestHandleInputGamepad_MissingParams(t *testing.T) {
 	_, err := HandleInputGamepad(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid params")
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
 }
 
 func TestHandleInputGamepad_PlatformError(t *testing.T) {
