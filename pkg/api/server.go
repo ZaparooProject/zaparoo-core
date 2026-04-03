@@ -931,13 +931,18 @@ func handlePostRequest(
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to read request body")
 			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
+			switch {
+			case errors.As(err, &maxBytesErr):
+				log.Warn().Err(err).Msg("request body too large")
 				http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
-				return
+			case errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF):
+				log.Warn().Err(err).Msg("client disconnected during request body read")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			default:
+				log.Error().Err(err).Msg("failed to read request body")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
