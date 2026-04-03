@@ -1144,7 +1144,7 @@ func Start(
 			}
 			err := session.HandleRequest(w, r)
 			if err != nil {
-				log.Error().Err(err).Msgf("handling websocket request: %s", version)
+				log.Warn().Err(err).Str("version", version).Msg("websocket upgrade failed")
 			}
 		}
 
