@@ -391,7 +391,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 		if opts.Probing {
 			log.Trace().Err(err).Str("operation", "device init").Msg("PN532 probe failed")
 		} else {
-			logTraceableError(err, "device init")
+			log.Warn().Err(err).Str("operation", "device init").Msg("PN532 device init failed")
 		}
 		_ = r.device.Close()
 		return fmt.Errorf("failed to initialize PN532 device: %w", err)
@@ -403,7 +403,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts
 		if opts.Probing {
 			log.Trace().Err(err).Str("operation", "set timeout").Msg("PN532 probe failed")
 		} else {
-			logTraceableError(err, "set timeout")
+			log.Warn().Err(err).Str("operation", "set timeout").Msg("PN532 device init failed")
 		}
 		_ = r.device.Close()
 		return fmt.Errorf("failed to set device timeout: %w", err)

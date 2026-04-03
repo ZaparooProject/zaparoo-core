@@ -44,7 +44,7 @@ func TestClientErr_UnwrapsToOriginal(t *testing.T) {
 func TestClientErr_DetectedByErrorsAs(t *testing.T) {
 	wrapped := models.ClientErr(errSentinel)
 	var clientErr *models.ClientError
-	assert.ErrorAs(t, wrapped, &clientErr)
+	require.ErrorAs(t, wrapped, &clientErr)
 	assert.Equal(t, errSentinel, clientErr.Err)
 }
 
