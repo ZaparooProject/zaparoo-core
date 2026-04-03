@@ -644,14 +644,7 @@ func BuildMainPage(
 					readers, err := svc.GetReaders(ctx)
 					cancel()
 					if err != nil {
-						switch {
-						case errors.Is(err, context.DeadlineExceeded),
-							errors.Is(err, context.Canceled),
-							errors.Is(err, client.ErrRequestTimeout):
-							log.Warn().Err(err).Msg("failed to refresh reader status")
-						default:
-							log.Warn().Err(err).Msg("failed to refresh reader status")
-						}
+						log.Warn().Err(err).Msg("failed to refresh reader status")
 						continue
 					}
 					driver := ""
