@@ -106,7 +106,7 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	var params models.UpdateSettingsParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	if params.RunZapScript != nil {
@@ -241,7 +241,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 	var params models.UpdatePlaytimeLimitsParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	if params.Enabled != nil {
@@ -266,7 +266,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		log.Info().Str("daily", *params.Daily).Msg("playtime limits update")
 		err := env.Config.SetDailyLimit(*params.Daily)
 		if err != nil {
-			return nil, fmt.Errorf("invalid daily limit duration: %w", err)
+			return nil, models.ClientErrf("invalid daily limit duration: %w", err)
 		}
 	}
 
@@ -274,7 +274,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		log.Info().Str("session", *params.Session).Msg("playtime limits update")
 		err := env.Config.SetSessionLimit(*params.Session)
 		if err != nil {
-			return nil, fmt.Errorf("invalid session limit duration: %w", err)
+			return nil, models.ClientErrf("invalid session limit duration: %w", err)
 		}
 	}
 
@@ -282,7 +282,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		log.Info().Str("session_reset", *params.SessionReset).Msg("playtime limits update")
 		err := env.Config.SetSessionResetTimeout(params.SessionReset)
 		if err != nil {
-			return nil, fmt.Errorf("invalid session reset duration: %w", err)
+			return nil, models.ClientErrf("invalid session reset duration: %w", err)
 		}
 	}
 
@@ -290,7 +290,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		log.Info().Strs("warnings", *params.Warnings).Msg("playtime limits update")
 		err := env.Config.SetWarningIntervals(*params.Warnings)
 		if err != nil {
-			return nil, fmt.Errorf("invalid warning intervals: %w", err)
+			return nil, models.ClientErrf("invalid warning intervals: %w", err)
 		}
 	}
 

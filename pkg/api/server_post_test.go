@@ -22,7 +22,6 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,7 +58,7 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap) {
 	require.NoError(t, err)
 
 	err = methodMap.AddMethod("test.expectederror", func(_ requests.RequestEnv) (any, error) {
-		return nil, fmt.Errorf("test-launcher: %w", zapscript.ErrNoControlCapabilities)
+		return nil, models.ClientErrf("test-launcher: %w", zapscript.ErrNoControlCapabilities)
 	})
 	require.NoError(t, err)
 
@@ -239,8 +238,8 @@ func TestHandlePostRequest_MethodError(t *testing.T) {
 	require.Contains(t, resp.Error.Message, "test error")
 }
 
-// TestHandlePostRequest_ExpectedError tests that expected errors (like no control capabilities)
-// return a proper JSON-RPC error and are logged at warn level instead of error.
+// TestHandlePostRequest_ExpectedError tests that ClientError errors return a proper
+// JSON-RPC error and are logged at warn level instead of error.
 func TestHandlePostRequest_ExpectedError(t *testing.T) {
 	t.Parallel()
 

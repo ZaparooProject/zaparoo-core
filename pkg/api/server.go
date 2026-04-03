@@ -311,10 +311,11 @@ func handleRequest(
 
 	resp, err := fn(env)
 	if err != nil {
-		if errors.Is(err, zapscript.ErrNoControlCapabilities) {
-			log.Warn().Err(err).Msg("error handling request")
+		var clientErr *models.ClientError
+		if errors.As(err, &clientErr) {
+			log.Warn().Err(err).Str("method", req.Method).Msg("client error")
 		} else {
-			log.Error().Err(err).Msg("error handling request")
+			log.Error().Err(err).Str("method", req.Method).Msg("error handling request")
 		}
 		// TODO: return error object from methods
 		rpcError := makeJSONRPCError(1, err.Error())

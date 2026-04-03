@@ -40,10 +40,10 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	if len(env.Params) > 0 {
 		var params models.MediaHistoryParams
 		if err := json.Unmarshal(env.Params, &params); err != nil {
-			return nil, validation.ErrInvalidParams
+			return nil, models.ClientErr(validation.ErrInvalidParams)
 		}
 		if err := validation.DefaultValidator.Validate(&params); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
+			return nil, models.ClientErrf("invalid params: %w", err)
 		}
 
 		if params.Limit != nil {
@@ -53,7 +53,7 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		if params.Cursor != nil {
 			cursor, err := decodeCursor(*params.Cursor)
 			if err != nil {
-				return nil, fmt.Errorf("invalid cursor: %w", err)
+				return nil, models.ClientErrf("invalid cursor: %w", err)
 			}
 			if cursor != nil {
 				lastID = *cursor

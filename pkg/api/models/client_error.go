@@ -17,32 +17,32 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package methods
+package models
 
-import (
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
-	"github.com/rs/zerolog/log"
-)
+import "fmt"
 
-func HandleConfirm(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
-	log.Info().Msg("received confirm request")
+// ClientError wraps an error to indicate it is an expected client-facing
+// error (bad input, validation failure, expected operational state) rather
+// than an internal server error. The API server uses this to log at Warn
+// level instead of Error, keeping expected failures out of Sentry.
+type ClientError struct {
+	Err error
+}
 
-	result := make(chan error, 1)
+func (e *ClientError) Error() string {
+	return e.Err.Error()
+}
 
-	select {
-	case env.ConfirmQueue <- result:
-	case <-env.Context.Done():
-		return nil, models.ClientErrf("confirm cancelled: %w", env.Context.Err())
-	}
+func (e *ClientError) Unwrap() error {
+	return e.Err
+}
 
-	select {
-	case err := <-result:
-		if err != nil {
-			return nil, models.ClientErrf("confirm failed: %w", err)
-		}
-		return NoContent{}, nil
-	case <-env.Context.Done():
-		return nil, models.ClientErrf("confirm cancelled: %w", env.Context.Err())
-	}
+// ClientErr wraps an error as a ClientError.
+func ClientErr(err error) error {
+	return &ClientError{Err: err}
+}
+
+// ClientErrf creates a new formatted ClientError.
+func ClientErrf(format string, a ...any) error {
+	return &ClientError{Err: fmt.Errorf(format, a...)}
 }

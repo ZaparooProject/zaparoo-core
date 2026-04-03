@@ -81,7 +81,7 @@ func resolveSystems(ids []string, fuzzy bool) ([]systemdefs.System, error) {
 	for _, id := range ids {
 		sys, err := resolveSystem(id, fuzzy)
 		if err != nil {
-			return nil, fmt.Errorf("invalid system ID %s: %w", id, err)
+			return nil, models.ClientErrf("invalid system ID %s: %w", id, err)
 		}
 		if seen[sys.ID] {
 			continue
@@ -112,13 +112,13 @@ func decodeCursor(cursor string) (*int64, error) {
 
 	bytes, err := base64.StdEncoding.DecodeString(cursor)
 	if err != nil {
-		return nil, fmt.Errorf("invalid cursor format: %w", err)
+		return nil, models.ClientErrf("invalid cursor format: %w", err)
 	}
 
 	var data cursorData
 	err = json.Unmarshal(bytes, &data)
 	if err != nil {
-		return nil, fmt.Errorf("invalid cursor data: %w", err)
+		return nil, models.ClientErrf("invalid cursor data: %w", err)
 	}
 
 	return &data.LastID, nil
@@ -249,7 +249,7 @@ func GenerateMediaDB(
 	db *database.Database,
 ) error {
 	if !statusInstance.startIfNotRunning() {
-		return errors.New("indexing already in progress")
+		return models.ClientErrf("indexing already in progress")
 	}
 
 	// Also prevent indexing if optimization is running
@@ -259,7 +259,7 @@ func GenerateMediaDB(
 		return fmt.Errorf("failed to get optimization status during indexing check: %w", err)
 	} else if optimizationStatus == "running" {
 		statusInstance.clear()
-		return errors.New("database optimization in progress")
+		return models.ClientErrf("database optimization in progress")
 	}
 	startTime := time.Now()
 
@@ -397,13 +397,13 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	if len(env.Params) > 0 {
 		var params models.MediaIndexParams
 		if unmarshalErr := json.Unmarshal(env.Params, &params); unmarshalErr != nil {
-			return nil, validation.ErrInvalidParams
+			return nil, models.ClientErr(validation.ErrInvalidParams)
 		}
 
 		// Validate params (systems are validated by struct tags)
 		if validateErr := validation.DefaultValidator.Validate(&params); validateErr != nil {
 			log.Warn().Err(validateErr).Msg("invalid params")
-			return nil, fmt.Errorf("invalid params: %w", validateErr)
+			return nil, models.ClientErrf("invalid params: %w", validateErr)
 		}
 
 		fuzzy := params.FuzzySystem != nil && *params.FuzzySystem
@@ -434,12 +434,14 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 			return nil, fmt.Errorf("unable to verify optimization status for selective indexing: %w", err)
 		}
 		if optimizationStatus == "running" {
-			return nil, errors.New("selective indexing cannot be performed while database optimization is running")
+			return nil, models.ClientErrf(
+				"selective indexing cannot be performed while database optimization is running",
+			)
 		}
 
 		// Ensure at least one system is specified for selective indexing
 		if len(systems) == 0 {
-			return nil, errors.New("at least one system must be specified for selective indexing")
+			return nil, models.ClientErrf("at least one system must be specified for selective indexing")
 		}
 	}
 
@@ -469,7 +471,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	var params models.SearchParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	maxResults := defaultMaxResults
@@ -486,7 +488,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 	cursor, err := decodeCursor(cursorStr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid cursor: %w", err)
+		return nil, models.ClientErrf("invalid cursor: %w", err)
 	}
 
 	system := params.Systems
@@ -503,7 +505,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		var parseErr error
 		tagFilters, parseErr = filters.ParseTagFilters(*tagParams)
 		if parseErr != nil {
-			return nil, fmt.Errorf("failed to parse tag filters: %w", parseErr)
+			return nil, models.ClientErrf("failed to parse tag filters: %w", parseErr)
 		}
 	}
 
@@ -631,13 +633,13 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	if len(env.Params) > 0 {
 		err := json.Unmarshal(env.Params, &params)
 		if err != nil {
-			return nil, validation.ErrInvalidParams
+			return nil, models.ClientErr(validation.ErrInvalidParams)
 		}
 
 		// Validate params (systems are validated by struct tags)
 		if err := validation.DefaultValidator.Validate(&params); err != nil {
 			log.Warn().Err(err).Msg("invalid params")
-			return nil, fmt.Errorf("invalid params: %w", err)
+			return nil, models.ClientErrf("invalid params: %w", err)
 		}
 	}
 
@@ -784,12 +786,12 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 	var params models.UpdateActiveMediaParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	system, err := systemdefs.LookupSystem(params.SystemID)
 	if err != nil {
-		return nil, fmt.Errorf("error looking up system: %w", err)
+		return nil, models.ClientErrf("error looking up system: %w", err)
 	}
 
 	systemMeta, err := assets.GetSystemMetadata(system.ID)

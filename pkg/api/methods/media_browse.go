@@ -22,7 +22,6 @@ package methods
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -57,12 +56,12 @@ func decodeBrowseCursor(cursor string) (*database.BrowseCursor, error) {
 
 	b, err := base64.StdEncoding.DecodeString(cursor)
 	if err != nil {
-		return nil, fmt.Errorf("invalid cursor format: %w", err)
+		return nil, models.ClientErrf("invalid cursor format: %w", err)
 	}
 
 	var data browseCursorData
 	if err := json.Unmarshal(b, &data); err != nil {
-		return nil, fmt.Errorf("invalid cursor data: %w", err)
+		return nil, models.ClientErrf("invalid cursor data: %w", err)
 	}
 
 	return &database.BrowseCursor{
@@ -90,7 +89,7 @@ func HandleMediaBrowse(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	if len(env.Params) > 0 {
 		if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 			log.Warn().Err(err).Msg("invalid browse params")
-			return nil, fmt.Errorf("invalid params: %w", err)
+			return nil, models.ClientErrf("invalid params: %w", err)
 		}
 	}
 
@@ -105,7 +104,7 @@ func HandleMediaBrowse(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 	cursor, err := decodeBrowseCursor(cursorStr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid cursor: %w", err)
+		return nil, models.ClientErrf("invalid cursor: %w", err)
 	}
 
 	var sort string
@@ -205,7 +204,7 @@ func browseFilesystem(
 
 	// Security: reject path traversal attempts
 	if cleaned != filepath.ToSlash(path) && cleaned+"/" != filepath.ToSlash(path) {
-		return nil, errors.New("invalid path: contains disallowed components")
+		return nil, models.ClientErrf("invalid path: contains disallowed components")
 	}
 
 	// Security: verify path is within an allowed root
@@ -214,7 +213,7 @@ func browseFilesystem(
 		rootDirs = env.Platform.RootDirs(env.Config)
 	}
 	if !isPathUnderRoots(cleaned, rootDirs) {
-		return nil, errors.New("path is not within an allowed root directory")
+		return nil, models.ClientErrf("path is not within an allowed root directory")
 	}
 
 	// Ensure trailing slash for prefix matching
@@ -271,7 +270,7 @@ func browseVirtual(
 ) (any, error) {
 	// Validate scheme is known
 	if !isKnownVirtualScheme(env, schemePath) {
-		return nil, fmt.Errorf("unknown virtual scheme: %s", schemePath)
+		return nil, models.ClientErrf("unknown virtual scheme: %s", schemePath)
 	}
 
 	ctx := env.Context
