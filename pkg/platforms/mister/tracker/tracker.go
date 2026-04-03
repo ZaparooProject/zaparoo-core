@@ -294,7 +294,7 @@ func (tr *Tracker) loadGame() {
 	if filepath.Ext(strings.ToLower(filename)) == ".mgl" {
 		mgl, mglErr := mgls.ReadMgl(path)
 		if mglErr != nil {
-			log.Error().Msgf("error reading mgl: %s", mglErr)
+			log.Error().Err(mglErr).Str("path", path).Msg("error reading mgl")
 		} else {
 			path = ResolvePath(mgl.File.Path)
 			log.Info().Msgf("mgl path: %s", path)
@@ -313,16 +313,21 @@ func (tr *Tracker) loadGame() {
 	}
 	log.Debug().Msgf("tracker detected launchers: %v", launchers)
 
+	if launchers[0].SystemID == "" {
+		log.Warn().Str("path", path).Msg("launcher has empty system ID")
+		return
+	}
+
 	system, err := systemdefs.GetSystem(launchers[0].SystemID)
 	if err != nil {
-		log.Error().Msgf("error getting system %s", err)
+		log.Error().Err(err).Str("systemID", launchers[0].SystemID).Msg("error getting system")
 		return
 	}
 	log.Debug().Msgf("tracker detected system: %v", system)
 
 	meta, err := assets.GetSystemMetadata(system.ID)
 	if err != nil {
-		log.Error().Msgf("error getting system metadata %s", err)
+		log.Error().Err(err).Str("systemID", system.ID).Msg("error getting system metadata")
 		return
 	}
 
