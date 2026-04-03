@@ -23,7 +23,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
@@ -40,7 +39,7 @@ func HandleReaderWrite(
 ) (any, error) {
 	var p models.ReaderWriteParams
 	if err := validation.ValidateAndUnmarshal(params, &p); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	var r readers.Reader
@@ -57,7 +56,7 @@ func HandleReaderWrite(
 		r, err = readers.SelectWriterPreferred(allReaders, prefs)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to select writer: %w", err)
+		return nil, models.ClientErrf("failed to select writer: %w", err)
 	}
 
 	t, err := r.Write(p.Text)
@@ -83,13 +82,13 @@ func HandleReaderWriteCancel(
 ) (any, error) {
 	var p models.ReaderWriteCancelParams
 	if err := validation.ValidateAndUnmarshal(params, &p); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	if p.ReaderID != nil && *p.ReaderID != "" {
 		r, err := readers.SelectWriterStrict(allReaders, *p.ReaderID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to select reader: %w", err)
+			return nil, models.ClientErrf("failed to select reader: %w", err)
 		}
 		r.CancelWrite()
 	} else {

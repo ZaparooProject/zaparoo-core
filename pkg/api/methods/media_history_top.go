@@ -39,10 +39,10 @@ func HandleMediaHistoryTop(env requests.RequestEnv) (any, error) {
 	if len(env.Params) > 0 {
 		var params models.MediaHistoryTopParams
 		if err := json.Unmarshal(env.Params, &params); err != nil {
-			return nil, validation.ErrInvalidParams
+			return nil, models.ClientErr(validation.ErrInvalidParams)
 		}
 		if err := validation.DefaultValidator.Validate(&params); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
+			return nil, models.ClientErrf("invalid params: %w", err)
 		}
 
 		if params.Limit != nil {
@@ -64,7 +64,7 @@ func HandleMediaHistoryTop(env requests.RequestEnv) (any, error) {
 		if params.Since != nil {
 			t, err := time.Parse(time.RFC3339, *params.Since)
 			if err != nil {
-				return nil, fmt.Errorf("invalid since timestamp: %w", err)
+				return nil, models.ClientErrf("invalid since timestamp: %w", err)
 			}
 			since = &t
 		}

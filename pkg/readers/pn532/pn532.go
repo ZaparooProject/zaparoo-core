@@ -239,7 +239,7 @@ func DefaultSessionFactory(device PN532Device, sessionConfig *polling.Config) Po
 func logTraceableError(err error, operation string) {
 	var event *zerolog.Event
 	switch {
-	case errors.Is(err, context.Canceled):
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		event = log.Debug().Err(err).Str("operation", operation)
 	case pn532.IsFatal(err):
 		event = log.Warn().Err(err).Str("operation", operation)
@@ -332,7 +332,7 @@ func (*Reader) IDs() []string {
 	}
 }
 
-func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
+func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, opts readers.OpenOpts) error {
 	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
@@ -388,7 +388,11 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	defer initCancel()
 	err = r.device.Init(initCtx)
 	if err != nil {
-		logTraceableError(err, "device init")
+		if opts.Probing {
+			log.Trace().Err(err).Str("operation", "device init").Msg("PN532 probe failed")
+		} else {
+			log.Warn().Err(err).Str("operation", "device init").Msg("PN532 device init failed")
+		}
 		_ = r.device.Close()
 		return fmt.Errorf("failed to initialize PN532 device: %w", err)
 	}
@@ -396,7 +400,11 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	// Set timeout to match cmd/reader behavior (prevents constant LED blinking)
 	err = r.device.SetTimeout(deviceTimeout)
 	if err != nil {
-		logTraceableError(err, "set timeout")
+		if opts.Probing {
+			log.Trace().Err(err).Str("operation", "set timeout").Msg("PN532 probe failed")
+		} else {
+			log.Warn().Err(err).Str("operation", "set timeout").Msg("PN532 device init failed")
+		}
 		_ = r.device.Close()
 		return fmt.Errorf("failed to set device timeout: %w", err)
 	}

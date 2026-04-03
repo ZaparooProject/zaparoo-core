@@ -50,7 +50,7 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 	log.Info().Msg("received run request")
 
 	if len(env.Params) == 0 {
-		return nil, validation.ErrMissingParams
+		return nil, models.ClientErr(validation.ErrMissingParams)
 	}
 
 	var t tokens.Token
@@ -61,7 +61,7 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 		// Validate the params
 		if err := validation.DefaultValidator.Validate(&params); err != nil {
 			log.Warn().Err(err).Msg("invalid params")
-			return nil, fmt.Errorf("invalid params: %w", err)
+			return nil, models.ClientErrf("invalid params: %w", err)
 		}
 
 		log.Debug().Msgf("unmarshalled run params: %+v", params)
@@ -83,12 +83,12 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 			t.Data = strings.ReplaceAll(t.Data, " ", "")
 
 			if _, err := hex.DecodeString(t.Data); err != nil {
-				return nil, validation.ErrInvalidParams
+				return nil, models.ClientErr(validation.ErrInvalidParams)
 			}
 		}
 
 		if t.UID == "" && t.Text == "" && t.Data == "" {
-			return nil, validation.ErrInvalidParams
+			return nil, models.ClientErr(validation.ErrInvalidParams)
 		}
 
 		if params.Unsafe {
@@ -100,11 +100,11 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 		var text string
 		err := json.Unmarshal(env.Params, &text)
 		if err != nil {
-			return nil, validation.ErrInvalidParams
+			return nil, models.ClientErr(validation.ErrInvalidParams)
 		}
 
 		if text == "" {
-			return nil, validation.ErrMissingParams
+			return nil, models.ClientErr(validation.ErrMissingParams)
 		}
 
 		t.Text = norm.NFC.String(text)

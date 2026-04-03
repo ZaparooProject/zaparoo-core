@@ -211,7 +211,7 @@ func TestOpen_TransportTypeParsing(t *testing.T) {
 			_ = reader.Open(config.ReadersConnect{
 				Driver: tt.driver,
 				Path:   "/dev/test",
-			}, nil)
+			}, nil, readers.OpenOpts{})
 
 			assert.Equal(t, tt.wantTransport, gotTransport)
 		})
@@ -557,6 +557,12 @@ func TestLogTraceableError(t *testing.T) {
 		{
 			name:          "context canceled logs at debug level",
 			err:           context.Canceled,
+			expectLevel:   `"level":"debug"`,
+			unexpectLevel: `"level":"error"`,
+		},
+		{
+			name:          "context deadline exceeded logs at debug level",
+			err:           context.DeadlineExceeded,
 			expectLevel:   `"level":"debug"`,
 			unexpectLevel: `"level":"error"`,
 		},

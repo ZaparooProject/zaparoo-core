@@ -396,7 +396,7 @@ func WriteTagWithModal(
 			if ctx.Err() == context.Canceled {
 				return
 			}
-			log.Error().Err(err).Msg("error writing tag")
+			log.Warn().Err(err).Msg("error writing tag")
 			app.QueueUpdateDraw(func() {
 				pages.RemovePage(writeModalPage)
 				ShowErrorModal(pages, app, "Write failed: "+err.Error(), func() {

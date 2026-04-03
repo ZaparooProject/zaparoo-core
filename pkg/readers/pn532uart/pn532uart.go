@@ -143,7 +143,7 @@ func connect(name string) (serial.Port, error) {
 	return port, nil
 }
 
-func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
+func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ readers.OpenOpts) error {
 	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}

@@ -54,4 +54,5 @@ const (
 	LaunchersDir         = "launchers"
 	MediaDir             = "media"
 	LogUploadURL         = "https://logs.zaparoo.org/"
+	MinFreeDiskBytes     = 500 * 1024 * 1024 // 500 MB
 )

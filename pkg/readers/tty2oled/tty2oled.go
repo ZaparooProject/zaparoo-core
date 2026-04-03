@@ -274,7 +274,7 @@ queueNew:
 	}
 }
 
-func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan) error {
+func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan, _ readers.OpenOpts) error {
 	// Set device config without holding mutex
 	r.mu.Lock()
 	r.deviceConfig = device

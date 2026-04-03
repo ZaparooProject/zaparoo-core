@@ -297,11 +297,12 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 			)
 		})
 		if err != nil {
-			log.Error().Err(err).Msg("error running UI")
-			return fmt.Errorf("error running UI: %w", err)
+			log.Warn().Err(err).Msg("TUI unavailable, running headless")
+			_, _ = fmt.Fprintf(os.Stderr,
+				"TUI unavailable (%s), running headless. Press Ctrl+C to stop.\n", err)
+		} else {
+			exit <- true
 		}
-
-		exit <- true
 	}
 
 	select {

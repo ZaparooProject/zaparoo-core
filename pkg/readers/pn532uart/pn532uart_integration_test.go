@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
@@ -123,7 +124,7 @@ func TestOpen_ErrorCountExceedsMaxWithActiveToken(t *testing.T) {
 		Path:   devicePath,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -180,7 +181,7 @@ func TestOpen_ErrorCountExceedsMaxWithoutActiveToken(t *testing.T) {
 		Path:   devicePath,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -246,7 +247,7 @@ func TestOpen_TokenDetectionAndRemoval(t *testing.T) {
 		Path:   devicePath,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -308,7 +309,7 @@ func TestOpen_MifareTokenRejected(t *testing.T) {
 		Path:   devicePath,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -358,7 +359,7 @@ func TestOpen_DuplicateTokenIgnored(t *testing.T) {
 		Path:   devicePath,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -404,7 +405,7 @@ func TestClose(t *testing.T) {
 		Path:   devicePath,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// Verify reader is connected

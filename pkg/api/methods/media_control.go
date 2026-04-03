@@ -20,7 +20,6 @@
 package methods
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -34,16 +33,16 @@ import (
 func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	var params models.MediaControlParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	media := env.State.ActiveMedia()
 	if media == nil {
-		return nil, errors.New("no active media")
+		return nil, models.ClientErrf("no active media")
 	}
 
 	if env.LauncherCache == nil || media.LauncherID == "" {
-		return nil, errors.New("no launcher associated with active media")
+		return nil, models.ClientErrf("no launcher associated with active media")
 	}
 
 	launcher := env.LauncherCache.GetLauncherByID(media.LauncherID)
@@ -52,12 +51,12 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	}
 
 	if len(launcher.Controls) == 0 {
-		return nil, fmt.Errorf("launcher %s: %w", media.LauncherID, zapscript.ErrNoControlCapabilities)
+		return nil, models.ClientErrf("launcher %s: %w", media.LauncherID, zapscript.ErrNoControlCapabilities)
 	}
 
 	control, ok := launcher.Controls[params.Action]
 	if !ok {
-		return nil, fmt.Errorf("action %q not supported by launcher %s", params.Action, media.LauncherID)
+		return nil, models.ClientErrf("action %q not supported by launcher %s", params.Action, media.LauncherID)
 	}
 
 	log.Info().Str("action", params.Action).Str("launcher", media.LauncherID).Msg("executing media control action")

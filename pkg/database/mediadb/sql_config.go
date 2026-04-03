@@ -38,7 +38,7 @@ const (
 	DBConfigIndexingSystems    = "IndexingSystems"
 )
 
-func sqlUpdateLastGenerated(ctx context.Context, db *sql.DB) error {
+func sqlUpdateLastGenerated(ctx context.Context, db sqlQueryable) error {
 	_, err := db.ExecContext(ctx,
 		fmt.Sprintf(
 			"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES ('%s', ?)",
@@ -74,7 +74,7 @@ func sqlGetLastGenerated(ctx context.Context, db *sql.DB) (time.Time, error) {
 	return time.Unix(int64(timestamp), 0), nil
 }
 
-func sqlSetOptimizationStatus(ctx context.Context, db *sql.DB, status string) error {
+func sqlSetOptimizationStatus(ctx context.Context, db sqlQueryable, status string) error {
 	_, err := db.ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
 		DBConfigOptimizationStatus,
@@ -100,7 +100,7 @@ func sqlGetOptimizationStatus(ctx context.Context, db *sql.DB) (string, error) {
 	return status, nil
 }
 
-func sqlSetOptimizationStep(ctx context.Context, db *sql.DB, step string) error {
+func sqlSetOptimizationStep(ctx context.Context, db sqlQueryable, step string) error {
 	_, err := db.ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
 		DBConfigOptimizationStep,
@@ -126,7 +126,7 @@ func sqlGetOptimizationStep(ctx context.Context, db *sql.DB) (string, error) {
 	return step, nil
 }
 
-func sqlSetIndexingStatus(ctx context.Context, db *sql.DB, status string) error {
+func sqlSetIndexingStatus(ctx context.Context, db sqlQueryable, status string) error {
 	_, err := db.ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
 		DBConfigIndexingStatus,
@@ -152,7 +152,7 @@ func sqlGetIndexingStatus(ctx context.Context, db *sql.DB) (string, error) {
 	return status, nil
 }
 
-func sqlSetLastIndexedSystem(ctx context.Context, db *sql.DB, systemID string) error {
+func sqlSetLastIndexedSystem(ctx context.Context, db sqlQueryable, systemID string) error {
 	_, err := db.ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
 		DBConfigLastIndexedSystem,
@@ -178,7 +178,7 @@ func sqlGetLastIndexedSystem(ctx context.Context, db *sql.DB) (string, error) {
 	return systemID, nil
 }
 
-func sqlSetIndexingSystems(ctx context.Context, db *sql.DB, systemIDs []string) error {
+func sqlSetIndexingSystems(ctx context.Context, db sqlQueryable, systemIDs []string) error {
 	systemsJSON, err := json.Marshal(systemIDs)
 	if err != nil {
 		return fmt.Errorf("failed to marshal systems to JSON: %w", err)

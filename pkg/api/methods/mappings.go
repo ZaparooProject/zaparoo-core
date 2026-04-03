@@ -87,7 +87,7 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	var params models.AddMappingParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	// convert old type names
@@ -101,7 +101,7 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	// validate regex pattern compiles if match type is regex
 	if params.Match == userdb.MatchTypeRegex {
 		if err := validation.ValidateRegexPattern(params.Pattern); err != nil {
-			return nil, fmt.Errorf("invalid pattern: %w", err)
+			return nil, models.ClientErrf("invalid pattern: %w", err)
 		}
 	}
 
@@ -129,7 +129,7 @@ func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 	var params models.DeleteMappingParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	err := env.Database.UserDB.DeleteMapping(int64(params.ID))
@@ -143,7 +143,7 @@ func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 func validateUpdateMappingHasFields(params *models.UpdateMappingParams) error {
 	if params.Label == nil && params.Enabled == nil && params.Type == nil &&
 		params.Match == nil && params.Pattern == nil && params.Override == nil {
-		return errors.New("at least one field must be provided")
+		return models.ClientErrf("at least one field must be provided")
 	}
 	return nil
 }
@@ -155,7 +155,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 	var params models.UpdateMappingParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	// check at least one field is provided
@@ -176,10 +176,10 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 	// validate regex pattern compiles if match type is regex
 	if params.Match != nil && *params.Match == userdb.MatchTypeRegex {
 		if params.Pattern == nil {
-			return nil, errors.New("pattern is required for regex match")
+			return nil, models.ClientErrf("pattern is required for regex match")
 		}
 		if err := validation.ValidateRegexPattern(*params.Pattern); err != nil {
-			return nil, fmt.Errorf("invalid pattern: %w", err)
+			return nil, models.ClientErrf("invalid pattern: %w", err)
 		}
 	}
 

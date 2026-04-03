@@ -224,7 +224,7 @@ func BuildGenerateDBPage(
 		bar.AddButton("Update", func() {
 			_, err := client.LocalClient(context.Background(), cfg, models.MethodMediaGenerate, "")
 			if err != nil {
-				log.Error().Err(err).Msg("error generating media db")
+				log.Warn().Err(err).Msg("error generating media db")
 				return
 			}
 			statePages.SwitchToPage("progress")
@@ -305,7 +305,7 @@ func BuildGenerateDBPage(
 					if errors.Is(err, client.ErrRequestCancelled) {
 						return
 					}
-					log.Error().Err(err).Msg("error waiting for indexing update")
+					log.Warn().Err(err).Msg("error waiting for indexing update")
 					return
 				}
 

@@ -311,10 +311,11 @@ func handleRequest(
 
 	resp, err := fn(env)
 	if err != nil {
-		if errors.Is(err, zapscript.ErrNoControlCapabilities) {
-			log.Warn().Err(err).Msg("error handling request")
+		var clientErr *models.ClientError
+		if errors.As(err, &clientErr) {
+			log.Warn().Err(err).Str("method", req.Method).Msg("client error")
 		} else {
-			log.Error().Err(err).Msg("error handling request")
+			log.Error().Err(err).Str("method", req.Method).Msg("error handling request")
 		}
 		// TODO: return error object from methods
 		rpcError := makeJSONRPCError(1, err.Error())
@@ -930,13 +931,18 @@ func handlePostRequest(
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to read request body")
 			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
+			switch {
+			case errors.As(err, &maxBytesErr):
+				log.Warn().Err(err).Msg("request body too large")
 				http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
-				return
+			case errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF):
+				log.Warn().Err(err).Msg("client disconnected during request body read")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			default:
+				log.Error().Err(err).Msg("failed to read request body")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
@@ -1138,7 +1144,7 @@ func Start(
 			}
 			err := session.HandleRequest(w, r)
 			if err != nil {
-				log.Error().Err(err).Msgf("handling websocket request: %s", version)
+				log.Warn().Err(err).Str("version", version).Msg("websocket upgrade failed")
 			}
 		}
 

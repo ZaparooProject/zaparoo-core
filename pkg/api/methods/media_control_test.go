@@ -54,6 +54,9 @@ func TestHandleMediaControl_NoActiveMedia(t *testing.T) {
 	_, err := HandleMediaControl(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no active media")
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
 }
 
 func TestHandleMediaControl_UnknownAction(t *testing.T) {
@@ -90,6 +93,9 @@ func TestHandleMediaControl_UnknownAction(t *testing.T) {
 	_, err := HandleMediaControl(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not supported")
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
 }
 
 func TestHandleMediaControl_NoControls(t *testing.T) {
@@ -122,6 +128,9 @@ func TestHandleMediaControl_NoControls(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, zapscript.ErrNoControlCapabilities)
 	assert.Contains(t, err.Error(), "no control capabilities")
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
 }
 
 func TestHandleMediaControl_Success(t *testing.T) {

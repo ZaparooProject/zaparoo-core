@@ -63,7 +63,7 @@ func HandleInboxDelete(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	var params models.DeleteInboxParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
-		return nil, fmt.Errorf("invalid params: %w", err)
+		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
 	err := env.Database.UserDB.DeleteInboxMessage(params.ID)
