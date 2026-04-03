@@ -405,8 +405,13 @@ func WaitNotifications(
 		for {
 			_, message, readErr := c.ReadMessage()
 			if readErr != nil {
-				if errors.Is(readErr, net.ErrClosed) {
-					log.Warn().Err(readErr).Msg("error reading message")
+				if errors.Is(readErr, net.ErrClosed) ||
+					websocket.IsCloseError(readErr,
+						websocket.CloseNormalClosure,
+						websocket.CloseGoingAway,
+						websocket.CloseNoStatusReceived,
+					) {
+					log.Warn().Err(readErr).Msg("websocket closed")
 				} else {
 					log.Error().Err(readErr).Msg("error reading message")
 				}
