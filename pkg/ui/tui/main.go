@@ -554,7 +554,7 @@ func BuildMainPage(
 		readers, err := svc.GetReaders(ctx)
 		cancel()
 		if err != nil {
-			log.Error().Err(err).Msg("failed to get readers")
+			log.Warn().Err(err).Msg("failed to get readers")
 		} else {
 			driver := ""
 			if len(readers.Readers) > 0 {
@@ -650,7 +650,7 @@ func BuildMainPage(
 							errors.Is(err, client.ErrRequestTimeout):
 							log.Warn().Err(err).Msg("failed to refresh reader status")
 						default:
-							log.Error().Err(err).Msg("failed to refresh reader status")
+							log.Warn().Err(err).Msg("failed to refresh reader status")
 						}
 						continue
 					}
@@ -815,7 +815,7 @@ func BuildMain(
 						ErrorReporting: &enabled,
 					})
 					if err != nil {
-						log.Error().Err(err).Msg("error enabling error reporting")
+						log.Warn().Err(err).Msg("error enabling error reporting")
 						ShowErrorModal(pages, app, "Failed to enable error reporting", nil)
 						return
 					}
