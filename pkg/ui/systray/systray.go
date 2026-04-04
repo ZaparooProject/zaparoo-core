@@ -22,7 +22,6 @@ package systray
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -45,16 +44,6 @@ func systrayOnReady(
 	notify func(string),
 ) func() {
 	return func() {
-		openCmd := ""
-		switch runtime.GOOS {
-		case "windows":
-			openCmd = "explorer"
-		case "darwin":
-			openCmd = "open"
-		default:
-			openCmd = "xdg-open"
-		}
-
 		systray.SetIcon(icon)
 		if runtime.GOOS != "darwin" {
 			systray.SetTitle("Zaparoo Core")
@@ -106,41 +95,31 @@ func systrayOnReady(
 					notify("Copied address to clipboard.")
 				case <-mWebUI.ClickedCh:
 					url := fmt.Sprintf("http://localhost:%d/app/", cfg.APIPort())
-					//nolint:gosec // Safe: opens system file manager with localhost URL
-					err := exec.CommandContext(context.Background(), openCmd, url).Start()
-					if err != nil {
+					if err := openPath(url); err != nil {
 						log.Error().Err(err).Msg("failed to open web page")
 						notify("Error opening Web UI.")
 					}
 				case <-mOpenLog.ClickedCh:
 					logPath := filepath.Join(pl.Settings().LogDir, config.LogFile)
-					//nolint:gosec // Safe: opens system file manager with internal log path
-					err := exec.CommandContext(context.Background(), openCmd, logPath).Start()
-					if err != nil {
+					if err := openPath(logPath); err != nil {
 						log.Error().Err(err).Msg("failed to open log file")
 						notify("Error opening log file.")
 					}
 				case <-mEditConfig.ClickedCh:
 					configPath := filepath.Join(helpers.ConfigDir(pl), config.CfgFile)
-					//nolint:gosec // Safe: opens system file manager with internal config path
-					err := exec.CommandContext(context.Background(), openCmd, configPath).Start()
-					if err != nil {
+					if err := openPath(configPath); err != nil {
 						log.Error().Err(err).Msg("failed to open config file")
 						notify("Error opening config file.")
 					}
 				case <-mOpenMappings.ClickedCh:
 					mappingsPath := filepath.Join(helpers.DataDir(pl), config.MappingsDir)
-					//nolint:gosec // Safe: opens system file manager with internal mappings directory
-					err := exec.CommandContext(context.Background(), openCmd, mappingsPath).Start()
-					if err != nil {
+					if err := openPath(mappingsPath); err != nil {
 						log.Error().Err(err).Msg("failed to open mappings dir")
 						notify("Error opening mappings directory.")
 					}
 				case <-mOpenLaunchers.ClickedCh:
 					launchersPath := filepath.Join(helpers.DataDir(pl), config.LaunchersDir)
-					//nolint:gosec // Safe: opens system file manager with internal launchers directory
-					err := exec.CommandContext(context.Background(), openCmd, launchersPath).Start()
-					if err != nil {
+					if err := openPath(launchersPath); err != nil {
 						log.Error().Err(err).Msg("failed to open launchers dir")
 						notify("Error opening launchers directory.")
 					}
@@ -154,9 +133,7 @@ func systrayOnReady(
 						notify("Core config successfully reloaded.")
 					}
 				case <-mOpenDataDir.ClickedCh:
-					//nolint:gosec // Safe: opens file manager to internal data directory
-					err := exec.CommandContext(context.Background(), openCmd, helpers.DataDir(pl)).Start()
-					if err != nil {
+					if err := openPath(helpers.DataDir(pl)); err != nil {
 						log.Error().Err(err).Msg("failed to open data dir")
 						notify("Error opening data directory.")
 					}
