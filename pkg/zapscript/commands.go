@@ -48,6 +48,7 @@ var (
 	ErrRequiredArgs = errors.New("arguments are required")
 	ErrRemoteSource = errors.New("cannot run from remote source")
 	ErrFileNotFound = errors.New("file not found")
+	ErrNoHistory    = errors.New("no play history available")
 )
 
 // getLauncherIDs extracts launcher IDs from the platform for validation context.
@@ -85,6 +86,7 @@ func lookupCmd(name string) (cmdFunc, bool) {
 			zapscript.ZapScriptCmdLaunchRandom: cmdRandom,
 			zapscript.ZapScriptCmdLaunchSearch: cmdSearch,
 			zapscript.ZapScriptCmdLaunchTitle:  cmdTitle,
+			zapscript.ZapScriptCmdLaunchLast:   cmdLaunchLast,
 
 			zapscript.ZapScriptCmdPlaylistPlay:     cmdPlaylistPlay,
 			zapscript.ZapScriptCmdPlaylistStop:     cmdPlaylistStop,
@@ -148,7 +150,8 @@ func IsMediaLaunchingCommand(cmdName string) bool {
 		zapscript.ZapScriptCmdLaunchSystem,
 		zapscript.ZapScriptCmdLaunchRandom,
 		zapscript.ZapScriptCmdLaunchSearch,
-		zapscript.ZapScriptCmdLaunchTitle:
+		zapscript.ZapScriptCmdLaunchTitle,
+		zapscript.ZapScriptCmdLaunchLast:
 		return true
 
 	// MiSTer MGL launches games
@@ -376,7 +379,8 @@ func RunCommand(
 		switch {
 		case errors.Is(err, ErrFileNotFound),
 			errors.Is(err, titles.ErrNoMatch),
-			errors.Is(err, ErrNoControlCapabilities):
+			errors.Is(err, ErrNoControlCapabilities),
+			errors.Is(err, ErrNoHistory):
 			log.Warn().Err(err).Msgf("error running command: %s", cmd)
 		default:
 			log.Error().Err(err).Msgf("error running command: %s", cmd)

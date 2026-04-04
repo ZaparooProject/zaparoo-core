@@ -64,6 +64,11 @@ func TestIsMediaLaunchingCommand(t *testing.T) {
 			cmdName: zapscript.ZapScriptCmdLaunchTitle,
 			want:    true,
 		},
+		{
+			name:    "launch.last command",
+			cmdName: zapscript.ZapScriptCmdLaunchLast,
+			want:    true,
+		},
 
 		// Playlist commands - should NOT be blocked (they queue state changes, actual launch happens asynchronously)
 		{
@@ -283,6 +288,7 @@ func TestIsMediaLaunchingCommand_ComprehensiveCoverage(t *testing.T) {
 		zapscript.ZapScriptCmdLaunchRandom,
 		zapscript.ZapScriptCmdLaunchSearch,
 		zapscript.ZapScriptCmdLaunchTitle,
+		zapscript.ZapScriptCmdLaunchLast,
 		zapscript.ZapScriptCmdMisterMGL,
 		zapscript.ZapScriptCmdRandom, // deprecated
 		zapscript.ZapScriptCmdSystem, // deprecated
@@ -349,6 +355,7 @@ func TestIsMediaDisruptingCommand(t *testing.T) {
 		zapscript.ZapScriptCmdLaunchRandom,
 		zapscript.ZapScriptCmdLaunchSearch,
 		zapscript.ZapScriptCmdLaunchTitle,
+		zapscript.ZapScriptCmdLaunchLast,
 		zapscript.ZapScriptCmdMisterMGL,
 		zapscript.ZapScriptCmdRandom,
 		zapscript.ZapScriptCmdSystem,
@@ -556,6 +563,7 @@ func TestIsValidCommand(t *testing.T) {
 		{name: "launch.random", cmdName: zapscript.ZapScriptCmdLaunchRandom, want: true},
 		{name: "launch.search", cmdName: zapscript.ZapScriptCmdLaunchSearch, want: true},
 		{name: "launch.title", cmdName: zapscript.ZapScriptCmdLaunchTitle, want: true},
+		{name: "launch.last", cmdName: zapscript.ZapScriptCmdLaunchLast, want: true},
 		{name: "playlist.play", cmdName: zapscript.ZapScriptCmdPlaylistPlay, want: true},
 		{name: "execute", cmdName: zapscript.ZapScriptCmdExecute, want: true},
 		{name: "delay", cmdName: zapscript.ZapScriptCmdDelay, want: true},
