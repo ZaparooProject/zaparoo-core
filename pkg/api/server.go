@@ -1232,6 +1232,14 @@ func Start(
 			return
 		}
 
+		// If port 0 was requested, update config with the actual bound port
+		// so callers can discover which port the server is listening on.
+		if port == 0 {
+			if addr, ok := listener.Addr().(*net.TCPAddr); ok {
+				_ = cfg.SetAPIPort(addr.Port)
+			}
+		}
+
 		// Signal that server is ready to accept connections
 		log.Debug().Msg("HTTP server bound to port, ready to accept connections")
 		close(serverReady)

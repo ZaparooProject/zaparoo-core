@@ -739,12 +739,15 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 		<-serverDone
 	}()
 
-	// Wait for server to be ready
-	port := cfg.APIPort()
-	sseURL := fmt.Sprintf("http://localhost:%d/api/v0.1/events", port)
+	// Wait for server to bind and update config with actual port
 	client := &http.Client{Timeout: 100 * time.Millisecond}
 	var serverReady bool
 	for range 100 {
+		port := cfg.APIPort()
+		if port == 0 {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
 		healthURL := fmt.Sprintf("http://localhost:%d/health", port)
 		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, healthURL, http.NoBody)
 		if reqErr != nil {
@@ -758,7 +761,11 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	require.NotEqual(t, 0, cfg.APIPort(), "server should have bound to a port")
 	require.True(t, serverReady, "server should start successfully")
+
+	port := cfg.APIPort()
+	sseURL := fmt.Sprintf("http://localhost:%d/api/v0.1/events", port)
 
 	// Connect to SSE endpoint (no timeout for the streaming connection)
 	ctx, cancel := context.WithCancel(context.Background())

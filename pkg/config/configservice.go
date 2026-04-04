@@ -81,11 +81,17 @@ func (c *Instance) APIPort() int {
 }
 
 // apiPortLocked returns the API port. Caller must hold mu.
+// Port 0 is allowed when set programmatically (e.g. tests) to request an
+// OS-assigned random port via net.Listen. It is rejected by SetAPIPort and
+// isValidAPIPort so users cannot set it via config file or API.
 func (c *Instance) apiPortLocked() int {
 	if c.vals.Service.APIPort == nil {
 		return DefaultAPIPort
 	}
 	port := *c.vals.Service.APIPort
+	if port == 0 {
+		return 0
+	}
 	if !isValidAPIPort(port) {
 		return DefaultAPIPort
 	}

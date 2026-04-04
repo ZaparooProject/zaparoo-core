@@ -403,9 +403,7 @@ func NewTestConfig(fs *FSHelper, configDir string) (*config.Instance, error) {
 // If fs is nil, the real OS filesystem is used.
 func NewTestConfigWithPort(fs *FSHelper, configDir string, port int) (*config.Instance, error) {
 	defaults := config.BaseDefaults
-	if port != 0 {
-		defaults.Service.APIPort = &port
-	}
+	defaults.Service.APIPort = &port
 
 	if fs != nil {
 		cfg, err := config.NewConfigWithFs(configDir, defaults, fs.Fs)

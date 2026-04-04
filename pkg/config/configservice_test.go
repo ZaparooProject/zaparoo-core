@@ -237,9 +237,9 @@ func TestAPIPort_Validation(t *testing.T) {
 			want:    DefaultAPIPort,
 		},
 		{
-			name:    "zero port returns default",
+			name:    "zero port (random, programmatic only)",
 			apiPort: intPtr(0),
-			want:    DefaultAPIPort,
+			want:    0,
 		},
 	}
 
