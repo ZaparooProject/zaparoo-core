@@ -28,6 +28,7 @@ import (
 	"os"
 	posixpath "path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -605,4 +606,87 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	return platforms.CmdResult{
 		MediaChanged: true,
 	}, launch(res[0].Path)
+}
+
+// getUniqueRecentMedia returns the Nth most recently played unique game from
+// media history, deduplicated by MediaPath (1-indexed: offset=1 is most recent).
+func getUniqueRecentMedia(
+	userDB database.UserDBI, offset int,
+) (database.MediaHistoryEntry, error) {
+	fetchLimit := min(offset*10, 100)
+	entries, err := userDB.GetMediaHistory(nil, 0, fetchLimit)
+	if err != nil {
+		return database.MediaHistoryEntry{}, fmt.Errorf("failed to query media history: %w", err)
+	}
+
+	seen := make(map[string]bool)
+	var unique []database.MediaHistoryEntry
+	for i := range entries {
+		if seen[entries[i].MediaPath] {
+			continue
+		}
+		seen[entries[i].MediaPath] = true
+		unique = append(unique, entries[i])
+		if len(unique) >= offset {
+			break
+		}
+	}
+
+	if len(unique) < offset {
+		return database.MediaHistoryEntry{}, fmt.Errorf(
+			"%w: need %d unique games but only found %d",
+			ErrNoHistory, offset, len(unique),
+		)
+	}
+
+	return unique[offset-1], nil
+}
+
+//nolint:gocritic // single-use parameter in command handler
+func cmdLaunchLast(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	offset := 1
+	if len(env.Cmd.Args) > 0 && env.Cmd.Args[0] != "" {
+		n, err := strconv.Atoi(env.Cmd.Args[0])
+		if err != nil {
+			return platforms.CmdResult{}, fmt.Errorf("invalid offset: %w", err)
+		}
+		if n <= 0 {
+			return platforms.CmdResult{}, fmt.Errorf("offset must be positive, got %d", n)
+		}
+		offset = n
+	}
+
+	var args zapscript.LaunchLastArgs
+	if err := ParseAdvArgs(pl, &env, &args); err != nil {
+		return platforms.CmdResult{}, err
+	}
+
+	entry, err := getUniqueRecentMedia(env.Database.UserDB, offset)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+
+	path, err := findFile(pl, env.Cfg, entry.MediaPath)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+
+	applySystemDefaultLauncher(&env, entry.SystemID)
+	launch := getLaunchClosure(pl, &env)
+
+	log.Info().
+		Str("media", entry.MediaName).
+		Str("system", entry.SystemID).
+		Int("offset", offset).
+		Msgf("launching last played game")
+
+	if err := launch(path); err != nil {
+		return platforms.CmdResult{
+			MediaChanged: true,
+		}, fmt.Errorf("failed to launch last played game '%s': %w", entry.MediaPath, err)
+	}
+
+	return platforms.CmdResult{
+		MediaChanged: true,
+	}, nil
 }
