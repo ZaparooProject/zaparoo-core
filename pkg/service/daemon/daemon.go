@@ -152,18 +152,61 @@ func (s *Service) stopService() error {
 		return err
 	}
 
-	// remove temporary binary
-	tempPath, err := os.Executable()
-	if err != nil {
-		log.Error().Err(err).Msg("error getting executable path")
-	} else if strings.HasPrefix(tempPath, s.pl.Settings().TempDir) {
-		err = os.Remove(tempPath)
-		if err != nil {
-			log.Error().Err(err).Msg("error removing temporary binary")
-		}
-	}
+	s.cleanupServiceBinary()
 
 	return nil
+}
+
+// prepareBinary copies the binary into DataDir so the original can be
+// replaced by external updaters while the service is running.
+func (s *Service) prepareBinary(binPath string) (string, error) {
+	ext := filepath.Ext(binPath)
+	name := strings.TrimSuffix(filepath.Base(binPath), ext)
+	copyName := name + ".service" + ext
+	dataDir := helpers.DataDir(s.pl)
+	copyPath := filepath.Join(dataDir, copyName)
+
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return "", fmt.Errorf("error creating data directory: %w", err)
+	}
+
+	//nolint:gosec // G304: binPath from os.Executable()
+	binFile, err := os.Open(binPath)
+	if err != nil {
+		return "", fmt.Errorf("error opening binary: %w", err)
+	}
+	defer func() { _ = binFile.Close() }()
+
+	//nolint:gosec // creates service binary copy in data dir
+	copyFile, err := os.OpenFile(
+		copyPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o700,
+	)
+	if err != nil {
+		return "", fmt.Errorf("error creating service binary: %w", err)
+	}
+	defer func() { _ = copyFile.Close() }()
+
+	_, err = io.Copy(copyFile, binFile)
+	if err != nil {
+		return "", fmt.Errorf("error copying binary: %w", err)
+	}
+
+	return copyPath, nil
+}
+
+// cleanupServiceBinary removes the service binary copy from DataDir.
+func (s *Service) cleanupServiceBinary() {
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Error().Err(err).Msg("error getting executable path")
+		return
+	}
+	if !strings.HasPrefix(exePath, helpers.DataDir(s.pl)) {
+		return
+	}
+	if rmErr := os.Remove(exePath); rmErr != nil {
+		log.Error().Err(rmErr).Msg("error removing service binary")
+	}
 }
 
 // Set up signal handler to stop service on SIGINT or SIGTERM.
@@ -238,11 +281,7 @@ func (s *Service) startService() {
 	if result.RestartRequested != nil && result.RestartRequested() {
 		log.Info().Msg("restart requested, re-executing binary")
 
-		// Remove the temp binary copy before re-exec
-		tempPath, exeErr := os.Executable()
-		if exeErr == nil && strings.HasPrefix(tempPath, s.pl.Settings().TempDir) {
-			_ = os.Remove(tempPath)
-		}
+		s.cleanupServiceBinary()
 
 		if execErr := restart.Exec(); execErr != nil {
 			log.Error().Err(execErr).Msg("failed to re-exec for restart")
@@ -259,7 +298,6 @@ func (s *Service) Start() error {
 		return errors.New("service already running")
 	}
 
-	// create a copy in binary in tmp so the original can be updated
 	binPath := ""
 	appPath := os.Getenv(config.AppEnv)
 	if appPath != "" {
@@ -272,36 +310,15 @@ func (s *Service) Start() error {
 		binPath = exePath
 	}
 
-	binFile, err := os.Open(binPath) //nolint:gosec // G703: binPath from os.Executable()
+	serviceBin, err := s.prepareBinary(binPath)
 	if err != nil {
-		return fmt.Errorf("error opening binary: %w", err)
-	}
-
-	tempPath := filepath.Join(s.pl.Settings().TempDir, filepath.Base(binPath))
-	//nolint:gosec // Safe: creates temporary binary file for service restart in controlled directory
-	tempFile, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o700)
-	if err != nil {
-		return fmt.Errorf("error creating temp binary: %w", err)
-	}
-
-	_, err = io.Copy(tempFile, binFile)
-	if err != nil {
-		return fmt.Errorf("error copying binary to temp: %w", err)
-	}
-
-	err = tempFile.Close()
-	if err != nil {
-		return fmt.Errorf("failed to close temp file: %w", err)
-	}
-	err = binFile.Close()
-	if err != nil {
-		return fmt.Errorf("failed to close binary file: %w", err)
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	//nolint:gosec // Safe: executes copy of current binary for service restart
-	cmd := exec.CommandContext(ctx, tempPath, "-service", "exec")
+	cmd := exec.CommandContext(ctx, serviceBin, "-service", "exec")
 	env := os.Environ()
 	cmd.Env = env
 
