@@ -299,11 +299,15 @@ func Start(
 	log.Info().Msg("initializing launcher cache")
 	helpers.GlobalLauncherCache.Initialize(pl, cfg)
 
+	// Create index pauser to pause media indexing while a game is running.
+	indexPauser := syncutil.NewPauser()
+	go watchGameForIndexPause(st.GetContext(), notifBroker, st, st.Notifications, indexPauser)
+
 	log.Info().Msg("checking for interrupted media indexing")
-	go checkAndResumeIndexing(pl, cfg, db, st)
+	go checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
 
 	log.Info().Msg("checking for interrupted media optimization")
-	go checkAndResumeOptimization(db, st.Notifications)
+	go checkAndResumeOptimization(db, st.Notifications, indexPauser)
 
 	log.Info().Msg("starting mDNS discovery service")
 	discoveryService := discovery.New(cfg, pl.ID())
@@ -312,7 +316,10 @@ func Start(
 	}
 
 	log.Info().Msg("starting API service")
-	go api.Start(pl, cfg, st, itq, cfq, db, limitsManager, notifBroker, discoveryService.InstanceName(), player)
+	go api.Start(
+		pl, cfg, st, itq, cfq, db, limitsManager,
+		notifBroker, discoveryService.InstanceName(), player, indexPauser,
+	)
 
 	// Build slug search cache after API is listening to avoid blocking startup
 	if db.MediaDB != nil {
@@ -690,6 +697,7 @@ func checkAndResumeIndexing(
 	cfg *config.Instance,
 	db *database.Database,
 	st *state.State,
+	pauser *syncutil.Pauser,
 ) {
 	// Check if indexing was interrupted
 	indexingStatus, err := db.MediaDB.GetIndexingStatus()
@@ -733,14 +741,14 @@ func checkAndResumeIndexing(
 
 	// Resume using the proper function with full notification support
 	// GenerateMediaDB spawns its own goroutine and returns immediately
-	err = methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications, systems, db)
+	err = methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications, systems, db, pauser)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to start auto-resume of media indexing")
 	}
 }
 
 // checkAndResumeOptimization checks if optimization was interrupted and automatically resumes it
-func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notification) {
+func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notification, pauser *syncutil.Pauser) {
 	status, err := db.MediaDB.GetOptimizationStatus()
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to get optimization status during startup check")
@@ -758,7 +766,7 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 				Indexing:   false,
 				Optimizing: optimizing,
 			})
-		})
+		}, pauser)
 	} else {
 		log.Debug().Msgf("optimization status is '%s', no auto-resume needed", status)
 	}

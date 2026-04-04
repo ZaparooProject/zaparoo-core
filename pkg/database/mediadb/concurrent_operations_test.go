@@ -83,7 +83,7 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	for range numGoroutines {
 		go func() {
 			defer wg.Done()
-			mediaDB.RunBackgroundOptimization(nil)
+			mediaDB.RunBackgroundOptimization(nil, nil)
 			mu.Lock()
 			completedCount++
 			mu.Unlock()
@@ -314,7 +314,7 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 
 			// Track if this goroutine actually performed optimization
 			initialFlag := mediaDB.isOptimizing.Load()
-			mediaDB.RunBackgroundOptimization(nil)
+			mediaDB.RunBackgroundOptimization(nil, nil)
 
 			// If the flag was false initially and is now false again,
 			// this goroutine might have done the optimization
@@ -375,7 +375,7 @@ func TestOptimizationInterruption(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Run optimization - should complete quickly with 1ms delays
-	mediaDB.RunBackgroundOptimization(nil)
+	mediaDB.RunBackgroundOptimization(nil, nil)
 
 	// Verify that optimization is no longer running after failure
 	assert.False(t, mediaDB.isOptimizing.Load())
@@ -492,7 +492,7 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mediaDB.RunBackgroundOptimization(nil)
+		mediaDB.RunBackgroundOptimization(nil, nil)
 	}()
 
 	// Concurrently check status many times

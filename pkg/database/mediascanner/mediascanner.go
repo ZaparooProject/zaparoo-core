@@ -503,6 +503,7 @@ func NewNamesIndex(
 	systems []systemdefs.System,
 	fdb *database.Database,
 	update func(IndexStatus),
+	pauser *syncutil.Pauser,
 ) (int, error) {
 	db := fdb.MediaDB
 	indexStartTime := time.Now()
@@ -591,11 +592,14 @@ func NewNamesIndex(
 
 	update(IndexStatus{Phase: PhaseInitializing})
 
-	// Check for cancellation
+	// Check for cancellation or pause
 	select {
 	case <-ctx.Done():
 		return handleCancellation(ctx, db, "Media indexing cancelled during initialization")
 	default:
+	}
+	if waitErr := pauser.Wait(ctx); waitErr != nil {
+		return handleCancellation(ctx, db, "Media indexing cancelled while paused during initialization")
 	}
 
 	// Validate resume point against current system list
@@ -829,11 +833,14 @@ func NewNamesIndex(
 
 	// Main loop for systems
 	for _, k := range sysPathIDs {
-		// Check for cancellation
+		// Check for cancellation or pause
 		select {
 		case <-ctx.Done():
 			return handleCancellationWithRollback(ctx, db, "Media indexing cancelled")
 		default:
+		}
+		if waitErr := pauser.Wait(ctx); waitErr != nil {
+			return handleCancellationWithRollback(ctx, db, "Media indexing cancelled while paused")
 		}
 
 		systemID := k
@@ -957,11 +964,15 @@ func NewNamesIndex(
 		}
 
 		for _, file := range files {
-			// Check for cancellation between file processing
+			// Check for cancellation or pause between file processing
 			select {
 			case <-ctx.Done():
 				return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during file processing")
 			default:
+			}
+			if waitErr := pauser.Wait(ctx); waitErr != nil {
+				return handleCancellationWithRollback(ctx, db,
+					"Media indexing cancelled while paused during file processing")
 			}
 
 			// Start transaction if needed (at start of system OR after mid-system commit)
@@ -1090,11 +1101,15 @@ func NewNamesIndex(
 		systemsInBatch = 0
 	}
 
-	// Check for cancellation before custom scanners
+	// Check for cancellation or pause before custom scanners
 	select {
 	case <-ctx.Done():
 		return handleCancellationWithRollback(ctx, db, "Media indexing cancelled before custom scanners")
 	default:
+	}
+	if waitErr := pauser.Wait(ctx); waitErr != nil {
+		return handleCancellationWithRollback(ctx, db,
+			"Media indexing cancelled while paused before custom scanners")
 	}
 
 	// run each custom scanner at least once, even if there are no paths
@@ -1137,12 +1152,16 @@ func NewNamesIndex(
 				status.Files += len(results)
 
 				for _, result := range results {
-					// Check for cancellation between file processing
+					// Check for cancellation or pause between file processing
 					select {
 					case <-ctx.Done():
 						return handleCancellationWithRollback(ctx, db,
 							"Media indexing cancelled during custom scanner file processing")
 					default:
+					}
+					if waitErr := pauser.Wait(ctx); waitErr != nil {
+						return handleCancellationWithRollback(ctx, db,
+							"Media indexing cancelled while paused during custom scanner file processing")
 					}
 
 					// Start transaction if needed (at start OR after mid-system commit)
@@ -1252,12 +1271,16 @@ func NewNamesIndex(
 				status.Files += len(results)
 
 				for _, scanResult := range results {
-					// Check for cancellation between file processing
+					// Check for cancellation or pause between file processing
 					select {
 					case <-ctx.Done():
 						return handleCancellationWithRollback(ctx, db,
 							"Media indexing cancelled during 'any' scanner file processing")
 					default:
+					}
+					if waitErr := pauser.Wait(ctx); waitErr != nil {
+						return handleCancellationWithRollback(ctx, db,
+							"Media indexing cancelled while paused during 'any' scanner file processing")
 					}
 
 					// Start transaction if needed (at start OR after mid-system commit)

@@ -2050,7 +2050,7 @@ func (db *MediaDB) GetMediaWithFullPathExcluding(excludeSystemIDs []string) ([]d
 // RunBackgroundOptimization performs database optimization operations in the background.
 // This includes creating indexes, running ANALYZE, and vacuuming the database.
 // It can be safely interrupted and resumed later.
-func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool)) {
+func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser) {
 	if !db.isOptimizing.CompareAndSwap(false, true) {
 		log.Info().Msg("background optimization is already running, skipping")
 		return
@@ -2138,6 +2138,18 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 
 	// Execute each step with retry logic
 	for _, step := range steps {
+		// Wait if paused (e.g. game is running)
+		if err := pauser.Wait(db.ctx); err != nil {
+			log.Info().Msg("background optimization cancelled while paused")
+			if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
+				log.Error().Err(setErr).Msg("failed to set optimization status to failed")
+			}
+			if statusCallback != nil {
+				statusCallback(false)
+			}
+			return
+		}
+
 		log.Info().Msgf("running optimization step: %s", step.name)
 
 		if err := db.SetOptimizationStep(step.name); err != nil {
@@ -2175,8 +2187,6 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 			if statusCallback != nil {
 				statusCallback(false)
 			}
-			// Reset optimization flag
-			db.isOptimizing.Store(false)
 			return
 		}
 
@@ -2197,9 +2207,6 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 	if statusCallback != nil {
 		statusCallback(false)
 	}
-
-	// Reset optimization flag
-	db.isOptimizing.Store(false)
 
 	log.Info().Msg("background database optimization completed")
 }

@@ -26,6 +26,7 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
 // This file contains shared database types and interfaces.
@@ -371,7 +372,7 @@ type MediaDBI interface {
 	GetOptimizationStatus() (string, error)
 	SetOptimizationStep(step string) error
 	GetOptimizationStep() (string, error)
-	RunBackgroundOptimization(statusCallback func(optimizing bool))
+	RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser)
 	WaitForBackgroundOperations()
 	TrackBackgroundOperation()
 	BackgroundOperationDone()

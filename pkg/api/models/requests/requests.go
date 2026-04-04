@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -48,6 +49,7 @@ type RequestEnv struct {
 	Player        audio.Player
 	TokenQueue    chan<- tokens.Token
 	ConfirmQueue  chan<- chan error
+	IndexPauser   *syncutil.Pauser
 	ClientID      string
 	Params        json.RawMessage
 	IsLocal       bool

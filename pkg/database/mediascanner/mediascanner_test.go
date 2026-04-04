@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -112,7 +113,7 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 
 	// Run the media indexer
 	systems := []systemdefs.System{{ID: systemdefs.SystemTVEpisode}}
-	_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {})
+	_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Both scanners should have been called
@@ -382,7 +383,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -447,7 +448,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	}
 
 	// Run the indexer - should resume from 'nes'
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, updateFunc)
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, updateFunc, nil)
 	require.NoError(t, err)
 
 	// Verify that resume logic was called
@@ -485,7 +486,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -544,7 +545,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	}
 
 	// Run the indexer - should fall back to full reindex
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify mock expectations
@@ -580,7 +581,7 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -632,7 +633,7 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	systems := []systemdefs.System{{ID: "nes"}}
 
 	// Run the indexer - should start fresh after failed status
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify mock expectations
@@ -667,7 +668,7 @@ func TestNewNamesIndex_DatabaseErrorDuringResume(t *testing.T) {
 	systems := []systemdefs.System{{ID: "nes"}}
 
 	// Run the indexer - should fail fast when database is not ready
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.Error(t, err, "Should fail when database is not ready")
 	assert.Contains(t, err.Error(), "database not ready for indexing", "Error should indicate database readiness issue")
 
@@ -694,7 +695,7 @@ func TestNewNamesIndex_StateCleanupOnCompletion(t *testing.T) {
 	systems := []systemdefs.System{{ID: "nes"}}
 
 	// Run the indexer
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify completion state cleanup by checking the actual database state
@@ -742,7 +743,7 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -797,7 +798,7 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 	}
 
 	// Run the indexer - should use TruncateSystems() since not indexing all defined systems
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify mock expectations - specifically that TruncateSystems() was called, not Truncate()
@@ -833,7 +834,7 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -885,7 +886,7 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 	}
 
 	// Run the indexer - should use TruncateSystems() since only indexing subset
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify mock expectations - specifically that TruncateSystems() was called, not Truncate()
@@ -922,7 +923,7 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -990,7 +991,7 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	}
 
 	// Run the indexer - should detect system change and start fresh
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify mock expectations
@@ -1027,7 +1028,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -1069,7 +1070,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	systems := []systemdefs.System{}
 
 	// Run the indexer - should use TruncateSystems() even for empty list since 0 != 197 systems
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify mock expectations
@@ -1102,7 +1103,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -1158,7 +1159,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	systems := []systemdefs.System{{ID: "nes"}}
 
 	// Run the indexer
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err, "Indexing should not fail")
 
 	// Verify that operations outside transactions are only for setup/cleanup, not file processing
@@ -1253,7 +1254,7 @@ func TestAnyScannerProgressUpdates(t *testing.T) {
 	// Since there are no root dirs, the system won't be processed in the main loop
 	// and will only be picked up by the "any" scanner
 	systems := []systemdefs.System{{ID: "test-system-for-any-scanner"}}
-	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, updateFunc)
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, updateFunc, nil)
 	require.NoError(t, err)
 
 	// Verify the "any" scanner was called for our system
@@ -1504,7 +1505,7 @@ func TestNewNamesIndex_CustomLauncherE2E(t *testing.T) {
 
 	// Run the full indexer
 	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
-	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {})
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, filesIndexed, "Should have indexed 2 files from custom launcher")
@@ -1587,7 +1588,7 @@ func TestNewNamesIndex_MixedSkipFilesystemScanAndCustomLauncher(t *testing.T) {
 
 	// Run the full indexer
 	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
-	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {})
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// The custom launcher's files should be indexed even though
@@ -1674,7 +1675,7 @@ func TestNewNamesIndex_IndependentScannerDoesNotWipeFiles(t *testing.T) {
 
 	// Run the full indexer
 	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
-	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {})
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Both launchers' files should be indexed: 2 from filesystem + 2 from scanner
@@ -2060,4 +2061,53 @@ func TestGetFiles_ZipsAsDirs(t *testing.T) {
 	assert.True(t, foundFiles["game1.nes"])
 	assert.True(t, foundFiles["game2.nes"])
 	assert.False(t, foundFiles["readme.txt"])
+}
+
+func TestNewNamesIndex_PausesAndResumes(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	systems := []systemdefs.System{{ID: "nes"}}
+
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+
+	type indexResult struct {
+		err   error
+		count int
+	}
+	done := make(chan indexResult, 1)
+	go func() {
+		count, err := NewNamesIndex(
+			context.Background(), mockPlatform, cfg,
+			systems, db, func(IndexStatus) {}, pauser,
+		)
+		done <- indexResult{count: count, err: err}
+	}()
+
+	// Indexing should be blocked while paused
+	select {
+	case <-done:
+		t.Fatal("indexing completed while pauser was paused")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Resume and let it complete
+	pauser.Resume()
+
+	select {
+	case result := <-done:
+		require.NoError(t, result.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("indexing did not complete after resume")
+	}
 }

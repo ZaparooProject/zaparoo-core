@@ -56,6 +56,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -1104,8 +1105,8 @@ func (m *MockMediaDBI) GetOptimizationStep() (string, error) {
 	return args.String(0), args.Error(1)
 }
 
-func (m *MockMediaDBI) RunBackgroundOptimization(statusCallback func(optimizing bool)) {
-	m.Called(statusCallback)
+func (m *MockMediaDBI) RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser) {
+	m.Called(statusCallback, pauser)
 }
 
 func (m *MockMediaDBI) WaitForBackgroundOperations() {

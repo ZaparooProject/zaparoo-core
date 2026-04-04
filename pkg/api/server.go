@@ -47,6 +47,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
@@ -208,6 +209,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodMedia:               methods.HandleMedia,
 		models.MethodMediaGenerate:       methods.HandleGenerateMedia,
 		models.MethodMediaGenerateCancel: methods.HandleMediaGenerateCancel,
+		models.MethodMediaGenerateResume: methods.HandleMediaGenerateResume,
 		models.MethodMediaIndex:          methods.HandleGenerateMedia,
 		models.MethodMediaSearch:         methods.HandleMediaSearch,
 		models.MethodMediaBrowse:         methods.HandleMediaBrowse,
@@ -845,6 +847,7 @@ func handleWSMessage(
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
+	indexPauser *syncutil.Pauser,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
 		defer func() {
@@ -882,6 +885,7 @@ func handleWSMessage(
 			Player:        player,
 			TokenQueue:    inTokenQueue,
 			ConfirmQueue:  confirmQueue,
+			IndexPauser:   indexPauser,
 			IsLocal:       clientIP.IsLoopback(),
 			ClientID:      session.Request.RemoteAddr,
 		}
@@ -918,6 +922,7 @@ func handlePostRequest(
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
+	indexPauser *syncutil.Pauser,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -965,6 +970,7 @@ func handlePostRequest(
 			Player:        player,
 			TokenQueue:    inTokenQueue,
 			ConfirmQueue:  confirmQueue,
+			IndexPauser:   indexPauser,
 			IsLocal:       clientIP.IsLoopback(),
 			ClientID:      r.RemoteAddr,
 		}
@@ -1030,6 +1036,7 @@ func Start(
 	notifBroker *broker.Broker,
 	mdnsHostname string,
 	player audio.Player,
+	indexPauser *syncutil.Pauser,
 ) {
 	// Extract port from listen address or use default
 	port := cfg.APIPort()
@@ -1155,6 +1162,7 @@ func Start(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
 			db, limitsManager, player,
+			indexPauser,
 		)
 		r.Post("/api", postHandler)
 
@@ -1188,7 +1196,10 @@ func Start(
 
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,
-		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager, player),
+		handleWSMessage(
+			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
+			db, limitsManager, player, indexPauser,
+		),
 	))
 
 	// Static app assets
