@@ -176,6 +176,7 @@ type IndexingStatusResponse struct {
 	Exists             bool    `json:"exists"`
 	Indexing           bool    `json:"indexing"`
 	Optimizing         bool    `json:"optimizing"`
+	Paused             bool    `json:"paused"`
 }
 
 type ReaderResponse struct {

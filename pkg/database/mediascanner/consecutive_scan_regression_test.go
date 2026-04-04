@@ -87,7 +87,7 @@ func TestConsecutiveFullScansProduceIdenticalCounts(t *testing.T) {
 
 	t.Run("First Full Scan", func(t *testing.T) {
 		// Perform first full scan
-		count, err := NewNamesIndex(ctx, platform, cfg, testSystems, db, func(_ IndexStatus) {})
+		count, err := NewNamesIndex(ctx, platform, cfg, testSystems, db, func(_ IndexStatus) {}, nil)
 		require.NoError(t, err)
 		firstScanCount = count
 
@@ -98,7 +98,7 @@ func TestConsecutiveFullScansProduceIdenticalCounts(t *testing.T) {
 
 	t.Run("Second Full Scan - Identical Count", func(t *testing.T) {
 		// Perform second full scan with exact same data
-		count, err := NewNamesIndex(ctx, platform, cfg, testSystems, db, func(_ IndexStatus) {})
+		count, err := NewNamesIndex(ctx, platform, cfg, testSystems, db, func(_ IndexStatus) {}, nil)
 		require.NoError(t, err)
 		secondScanCount = count
 
@@ -111,7 +111,7 @@ func TestConsecutiveFullScansProduceIdenticalCounts(t *testing.T) {
 
 	t.Run("Third Full Scan - Still Identical", func(t *testing.T) {
 		// Perform third scan to ensure stability
-		count, err := NewNamesIndex(ctx, platform, cfg, testSystems, db, func(_ IndexStatus) {})
+		count, err := NewNamesIndex(ctx, platform, cfg, testSystems, db, func(_ IndexStatus) {}, nil)
 		require.NoError(t, err)
 		thirdScanCount = count
 
@@ -161,7 +161,7 @@ func TestFullVsSelectiveTruncation(t *testing.T) {
 	t.Run("Full Scan - All Systems", func(t *testing.T) {
 		// Index all systems
 		allSystems := systemdefs.AllSystems()
-		_, err := NewNamesIndex(ctx, platform, cfg, allSystems, db, func(_ IndexStatus) {})
+		_, err := NewNamesIndex(ctx, platform, cfg, allSystems, db, func(_ IndexStatus) {}, nil)
 		require.NoError(t, err)
 
 		// Verify indexing completed successfully
@@ -176,7 +176,7 @@ func TestFullVsSelectiveTruncation(t *testing.T) {
 		require.NoError(t, err)
 
 		// Reindex only NES - this should use selective truncation
-		_, err = NewNamesIndex(ctx, platform, cfg, []systemdefs.System{*nesSys}, db, func(_ IndexStatus) {})
+		_, err = NewNamesIndex(ctx, platform, cfg, []systemdefs.System{*nesSys}, db, func(_ IndexStatus) {}, nil)
 		require.NoError(t, err)
 
 		// Test passes if no error - we can't verify systems are indexed
@@ -187,7 +187,7 @@ func TestFullVsSelectiveTruncation(t *testing.T) {
 	t.Run("Full Scan After Selective - Works Correctly", func(t *testing.T) {
 		// Do another full scan - should use full truncation again
 		allSystems := systemdefs.AllSystems()
-		_, err := NewNamesIndex(ctx, platform, cfg, allSystems, db, func(_ IndexStatus) {})
+		_, err := NewNamesIndex(ctx, platform, cfg, allSystems, db, func(_ IndexStatus) {}, nil)
 		require.NoError(t, err)
 
 		// Verify scan completed without errors

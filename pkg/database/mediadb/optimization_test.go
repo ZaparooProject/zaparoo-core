@@ -222,7 +222,7 @@ func TestRunBackgroundOptimization_AlreadyRunning(t *testing.T) {
 	mediaDB.isOptimizing.Store(true)
 
 	// This should return immediately without doing anything
-	mediaDB.RunBackgroundOptimization(nil)
+	mediaDB.RunBackgroundOptimization(nil, nil)
 
 	// Verify it's still marked as running
 	assert.True(t, mediaDB.isOptimizing.Load())
@@ -237,7 +237,7 @@ func TestRunBackgroundOptimization_NilDatabase(t *testing.T) {
 	}
 
 	// This should return immediately without panicking
-	mediaDB.RunBackgroundOptimization(nil)
+	mediaDB.RunBackgroundOptimization(nil, nil)
 
 	// Verify optimization flag is not set
 	assert.False(t, mediaDB.isOptimizing.Load())
@@ -285,7 +285,7 @@ func TestRunBackgroundOptimization_Success(t *testing.T) {
 		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	mediaDB.RunBackgroundOptimization(nil)
+	mediaDB.RunBackgroundOptimization(nil, nil)
 
 	// Verify optimization is no longer running
 	assert.False(t, mediaDB.isOptimizing.Load())
@@ -339,7 +339,7 @@ func TestRunBackgroundOptimization_FailureHandling(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Run optimization - should complete quickly with 1ms delays
-	mediaDB.RunBackgroundOptimization(nil)
+	mediaDB.RunBackgroundOptimization(nil, nil)
 
 	// Verify optimization is no longer running
 	assert.False(t, mediaDB.isOptimizing.Load())
@@ -394,7 +394,7 @@ func TestConcurrentOptimization(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mediaDB.RunBackgroundOptimization(nil)
+		mediaDB.RunBackgroundOptimization(nil, nil)
 		mu.Lock()
 		firstStarted = true
 		mu.Unlock()
@@ -407,7 +407,7 @@ func TestConcurrentOptimization(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mediaDB.RunBackgroundOptimization(nil)
+		mediaDB.RunBackgroundOptimization(nil, nil)
 		mu.Lock()
 		secondSkipped = true
 		mu.Unlock()
@@ -447,7 +447,7 @@ func TestOptimizationDatabaseError(t *testing.T) {
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnError(statusError)
 
-	mediaDB.RunBackgroundOptimization(nil)
+	mediaDB.RunBackgroundOptimization(nil, nil)
 
 	// Verify optimization is no longer running
 	assert.False(t, mediaDB.isOptimizing.Load())
@@ -504,7 +504,7 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 			mu.Unlock()
 		}
 
-		mediaDB.RunBackgroundOptimization(callback)
+		mediaDB.RunBackgroundOptimization(callback, nil)
 
 		mu.Lock()
 		calls := make([]bool, len(callbackCalls))
@@ -566,7 +566,7 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 			mu.Unlock()
 		}
 
-		mediaDB.RunBackgroundOptimization(callback)
+		mediaDB.RunBackgroundOptimization(callback, nil)
 
 		mu.Lock()
 		calls := make([]bool, len(callbackCalls))
@@ -621,7 +621,7 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 
 		// Should not panic with nil callback
 		assert.NotPanics(t, func() {
-			mediaDB.RunBackgroundOptimization(nil)
+			mediaDB.RunBackgroundOptimization(nil, nil)
 		})
 
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -657,7 +657,7 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 			mu.Unlock()
 		}
 
-		mediaDB.RunBackgroundOptimization(callback)
+		mediaDB.RunBackgroundOptimization(callback, nil)
 
 		mu.Lock()
 		calls := make([]bool, len(callbackCalls))
@@ -671,4 +671,65 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 		assert.False(t, mediaDB.isOptimizing.Load())
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
+}
+
+func TestRunBackgroundOptimization_PausesAndResumes(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	mediaDB := &MediaDB{
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewFakeClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
+	}
+
+	// Set up expectations for a full successful run
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStatus, "running").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectBrowseCacheStep(mock)
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStep, "analyze").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("(?i)analyze;?").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectPostAnalyzeSteps(mock)
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStatus, "completed").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStep, "").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		mediaDB.RunBackgroundOptimization(nil, pauser)
+	}()
+
+	// Optimization should be blocked while paused
+	select {
+	case <-done:
+		t.Fatal("optimization completed while pauser was paused")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// Resume and let it complete
+	pauser.Resume()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("optimization did not complete after resume")
+	}
+
+	assert.False(t, mediaDB.isOptimizing.Load())
+	assert.NoError(t, mock.ExpectationsWereMet())
 }

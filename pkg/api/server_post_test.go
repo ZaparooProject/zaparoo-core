@@ -87,7 +87,7 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap) {
 	})
 
 	confirmQueue := make(chan chan error, 10)
-	handler := handlePostRequest(methodMap, platform, cfg, st, tokenQueue, confirmQueue, db, nil, nil)
+	handler := handlePostRequest(methodMap, platform, cfg, st, tokenQueue, confirmQueue, db, nil, nil, nil)
 	return handler, methodMap
 }
 

@@ -85,7 +85,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 			serverDone := make(chan struct{})
 			go func() {
 				defer close(serverDone)
-				Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil)
+				Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 			}()
 			// Cleanup: stop service first, then wait for server goroutine to fully exit
 			defer func() {
@@ -154,7 +154,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil)
+		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 	}()
 	// Cleanup: stop service first, then wait for server goroutine to fully exit
 	defer func() {
@@ -238,7 +238,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil)
+		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 	}()
 
 	// Wait for completion or timeout
@@ -529,7 +529,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	server1Done := make(chan struct{})
 	go func() {
 		defer close(server1Done)
-		Start(platform1, cfg1, st1, tokenQueue1, nil, db1, nil, notifBroker1, "", nil)
+		Start(platform1, cfg1, st1, tokenQueue1, nil, db1, nil, notifBroker1, "", nil, nil)
 	}()
 
 	// Wait for first server to be ready
@@ -572,7 +572,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	server2Done := make(chan struct{})
 	go func() {
 		defer close(server2Done)
-		Start(platform2, cfg2, st2, tokenQueue2, nil, db2, nil, notifBroker2, "", nil)
+		Start(platform2, cfg2, st2, tokenQueue2, nil, db2, nil, notifBroker2, "", nil, nil)
 	}()
 
 	// Wait for the second server's context to be cancelled (StopService called)
@@ -731,7 +731,7 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil)
+		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 	}()
 	defer func() {
 		st.StopService()

@@ -185,6 +185,11 @@ func ClearIndexingStatus() {
 	statusInstance.clear()
 }
 
+// IsIndexing reports whether media indexing is currently in progress.
+func IsIndexing() bool {
+	return statusInstance.get().indexing
+}
+
 // CancelIndexing cancels the currently running indexing operation - used for testing
 func CancelIndexing() bool {
 	return statusInstance.cancel()
@@ -248,6 +253,7 @@ func GenerateMediaDB(
 	ns chan<- models.Notification,
 	systems []systemdefs.System,
 	db *database.Database,
+	pauser *syncutil.Pauser,
 ) error {
 	if !statusInstance.startIfNotRunning() {
 		return models.ClientErrf("indexing already in progress")
@@ -287,6 +293,7 @@ func GenerateMediaDB(
 	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 		Exists:   false,
 		Indexing: true,
+		Paused:   pauser != nil && pauser.IsPaused(),
 	})
 
 	db.MediaDB.TrackBackgroundOperation()
@@ -327,6 +334,7 @@ func GenerateMediaDB(
 			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 				Exists:             false,
 				Indexing:           true,
+				Paused:             pauser != nil && pauser.IsPaused(),
 				TotalSteps:         &status.Total,
 				CurrentStep:        &status.Step,
 				CurrentStepDisplay: &desc,
@@ -340,7 +348,7 @@ func GenerateMediaDB(
 				currentDesc: desc,
 				totalFiles:  status.Files,
 			})
-		})
+		}, pauser)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				log.Info().Msg("media indexing was cancelled")
@@ -391,7 +399,7 @@ func GenerateMediaDB(
 					Optimizing: optimizing,
 					TotalFiles: &total,
 				})
-			})
+			}, pauser)
 		}()
 
 		statusInstance.clear()
@@ -467,6 +475,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		env.State.Notifications,
 		systems,
 		env.Database,
+		env.IndexPauser,
 	)
 
 	return nil, err
@@ -739,10 +748,13 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		optimizationStatus = ""
 	}
 
+	paused := env.IndexPauser != nil && env.IndexPauser.IsPaused()
+
 	switch {
 	case resp.Database.Indexing:
 		// During indexing, don't show optimizing even if optimization is running
 		resp.Database.Optimizing = false
+		resp.Database.Paused = paused
 		resp.Database.Exists = false
 		resp.Database.TotalSteps = &status.totalSteps
 		resp.Database.CurrentStep = &status.currentStep
@@ -750,6 +762,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		resp.Database.TotalFiles = &status.totalFiles
 	case optimizationStatus == "running":
 		resp.Database.Optimizing = true
+		resp.Database.Paused = paused
 		// If optimizing, show the current optimization step
 		optimizationStep, stepErr := env.Database.MediaDB.GetOptimizationStep()
 		if stepErr != nil {
@@ -876,5 +889,23 @@ func HandleMediaGenerateCancel(env requests.RequestEnv) (any, error) {
 
 	return map[string]any{
 		"message": "No media indexing operation is currently running or it has already been cancelled",
+	}, nil
+}
+
+//nolint:gocritic // single-use parameter in API handler
+func HandleMediaGenerateResume(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received media generate resume request")
+
+	if env.IndexPauser == nil || !env.IndexPauser.IsPaused() {
+		return map[string]any{
+			"message": "Media indexing is not paused",
+		}, nil
+	}
+
+	env.IndexPauser.Resume()
+	log.Info().Msg("media indexing manually resumed")
+
+	return map[string]any{
+		"message": "Media indexing resumed",
 	}, nil
 }

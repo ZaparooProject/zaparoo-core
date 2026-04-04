@@ -54,6 +54,7 @@ const (
 	MethodMedia                = "media"
 	MethodMediaGenerate        = "media.generate"
 	MethodMediaGenerateCancel  = "media.generate.cancel"
+	MethodMediaGenerateResume  = "media.generate.resume"
 	MethodMediaIndex           = "media.index" // DEPRECATED
 	MethodMediaSearch          = "media.search"
 	MethodMediaTags            = "media.tags"
