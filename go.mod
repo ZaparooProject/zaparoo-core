@@ -41,7 +41,7 @@ require (
 	github.com/nixinwang/dialog v0.0.0-20240524023314-b4bad92eff4d
 	github.com/olahol/melody v1.4.0
 	github.com/pelletier/go-toml/v2 v2.2.3
-	github.com/pressly/goose/v3 v3.24.3
+	github.com/pressly/goose/v3 v3.27.0
 	github.com/rivo/tview v0.0.0-20250625164341-a4a78f1e05cb
 	github.com/rs/zerolog v1.34.0
 	github.com/sasha-s/go-deadlock v0.3.6
@@ -52,7 +52,7 @@ require (
 	go.etcd.io/bbolt v1.4.0
 	go.uber.org/goleak v1.3.0
 	golang.design/x/clipboard v0.7.1
-	golang.org/x/exp v0.0.0-20250813145105-42675adae3e6
+	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.42.0
 	golang.org/x/text v0.35.0
