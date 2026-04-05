@@ -97,9 +97,7 @@ var ErrSchemaAhead = errors.New("database schema is newer than this binary suppo
 func CheckSchemaVersion(db *sql.DB, migrationFiles embed.FS, migrationDir string) error {
 	dbVersion, err := goose.GetDBVersion(db)
 	if err != nil {
-		// Can't determine version (e.g. fresh DB with no version table).
-		// Proceed with migration which will create the table.
-		return nil //nolint:nilerr // expected for fresh databases
+		return fmt.Errorf("checking database schema version: %w", err)
 	}
 	if dbVersion == 0 {
 		return nil
