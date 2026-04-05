@@ -42,7 +42,7 @@ jobs:
         run: |
           python3 scripts/mister/repo/generate.py ${{ steps.zaparooreleaseinfo.outputs.tag_name }}
       - name: Commit repo database
-        uses: EndBug/add-and-commit@v9
+        uses: EndBug/add-and-commit@v10
         with:
           add: scripts/mister/repo/tapto.json -f -A
           default_author: github_actions
