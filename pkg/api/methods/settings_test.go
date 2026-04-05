@@ -434,6 +434,40 @@ func TestHandleSettingsUpdate_ErrorReportingDisable(t *testing.T) {
 	assert.False(t, cfg.ErrorReporting(), "errorReporting should be disabled after update")
 }
 
+func TestHandleSettingsUpdate_UpdateChannel(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+	assert.Equal(t, config.UpdateChannelStable, cfg.UpdateChannel())
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	beta := config.UpdateChannelBeta
+	params := models.UpdateSettingsParams{
+		UpdateChannel: &beta,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	assert.Equal(t, config.UpdateChannelBeta, cfg.UpdateChannel())
+}
+
 // TestHandleSettingsUpdate_ReaderConnectionsWithIDSource tests that IDSource
 // field is preserved when updating reader connections.
 func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {

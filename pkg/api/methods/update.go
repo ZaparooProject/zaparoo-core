@@ -34,9 +34,9 @@ import (
 
 func HandleUpdateCheck(
 	env requests.RequestEnv, //nolint:gocritic // hugeParam
-	checkFn func(ctx context.Context, platformID string) (*updater.Result, error),
+	checkFn func(ctx context.Context, platformID, channel string) (*updater.Result, error),
 ) (any, error) {
-	result, err := checkFn(env.Context, env.Platform.ID())
+	result, err := checkFn(env.Context, env.Platform.ID(), env.Config.UpdateChannel())
 	if errors.Is(err, updater.ErrDevelopmentVersion) {
 		return models.UpdateCheckResponse{
 			CurrentVersion:  config.AppVersion,
@@ -57,7 +57,7 @@ func HandleUpdateCheck(
 
 func HandleUpdateApply(
 	env requests.RequestEnv, //nolint:gocritic // hugeParam
-	applyFn func(ctx context.Context, platformID string) (string, error),
+	applyFn func(ctx context.Context, platformID, channel string) (string, error),
 	restartFn func(),
 ) (any, error) {
 	// Reject updates while media indexing is in progress to avoid
@@ -72,7 +72,7 @@ func HandleUpdateApply(
 
 	previousVersion := config.AppVersion
 
-	newVersion, err := applyFn(env.Context, env.Platform.ID())
+	newVersion, err := applyFn(env.Context, env.Platform.ID(), env.Config.UpdateChannel())
 	if errors.Is(err, updater.ErrDevelopmentVersion) {
 		return nil, models.ClientErrf("cannot apply updates on development builds")
 	}

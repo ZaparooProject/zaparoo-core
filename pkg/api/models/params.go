@@ -104,6 +104,7 @@ type UpdateSettingsParams struct {
 	AudioScanFeedback         *bool               `json:"audioScanFeedback"`
 	ReadersAutoDetect         *bool               `json:"readersAutoDetect"`
 	ErrorReporting            *bool               `json:"errorReporting"`
+	UpdateChannel             *string             `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
 	ReadersScanMode           *string             `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
 	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
 	ReadersScanIgnoreSystem   *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`

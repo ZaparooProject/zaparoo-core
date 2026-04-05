@@ -43,7 +43,7 @@ type Result struct {
 	UpdateAvailable bool
 }
 
-func makeUpdater(platformID string) (*selfupdate.Updater, selfupdate.Repository, error) {
+func makeUpdater(platformID, channel string) (*selfupdate.Updater, selfupdate.Repository, error) {
 	source, err := selfupdate.NewHttpSource(selfupdate.HttpConfig{
 		BaseURL: updateURL,
 	})
@@ -54,9 +54,10 @@ func makeUpdater(platformID string) (*selfupdate.Updater, selfupdate.Repository,
 	filter := fmt.Sprintf("^zaparoo-%s_%s", platformID, runtime.GOARCH)
 
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source:    source,
-		Validator: &selfupdate.ChecksumValidator{UniqueFilename: "checksums.txt"},
-		Filters:   []string{filter},
+		Source:     source,
+		Validator:  &selfupdate.ChecksumValidator{UniqueFilename: "checksums.txt"},
+		Filters:    []string{filter},
+		Prerelease: channel == config.UpdateChannelBeta,
 	})
 	if err != nil {
 		return nil, selfupdate.RepositorySlug{}, fmt.Errorf("creating updater: %w", err)
@@ -66,12 +67,12 @@ func makeUpdater(platformID string) (*selfupdate.Updater, selfupdate.Repository,
 	return updater, repo, nil
 }
 
-func Check(ctx context.Context, platformID string) (*Result, error) {
+func Check(ctx context.Context, platformID, channel string) (*Result, error) {
 	if config.IsDevelopmentVersion() {
 		return nil, ErrDevelopmentVersion
 	}
 
-	updater, repo, err := makeUpdater(platformID)
+	updater, repo, err := makeUpdater(platformID, channel)
 	if err != nil {
 		return nil, err
 	}
@@ -94,12 +95,12 @@ func Check(ctx context.Context, platformID string) (*Result, error) {
 	return result, nil
 }
 
-func Apply(ctx context.Context, platformID string) (string, error) {
+func Apply(ctx context.Context, platformID, channel string) (string, error) {
 	if config.IsDevelopmentVersion() {
 		return "", ErrDevelopmentVersion
 	}
 
-	u, repo, err := makeUpdater(platformID)
+	u, repo, err := makeUpdater(platformID, channel)
 	if err != nil {
 		return "", err
 	}
@@ -121,7 +122,7 @@ func Apply(ctx context.Context, platformID string) (string, error) {
 }
 
 // CheckFn is the signature for a function that checks for updates.
-type CheckFn func(ctx context.Context, platformID string) (*Result, error)
+type CheckFn func(ctx context.Context, platformID, channel string) (*Result, error)
 
 // CheckAndNotify checks for updates and posts an inbox message if one is
 // available. Intended to be called as a fire-and-forget goroutine on startup.
@@ -144,7 +145,8 @@ func CheckAndNotify(
 		return
 	}
 
-	result, err := checkFn(ctx, platformID)
+	channel := cfg.UpdateChannel()
+	result, err := checkFn(ctx, platformID, channel)
 	if errors.Is(err, ErrDevelopmentVersion) {
 		log.Debug().Msg("development version, skipping update check")
 		return

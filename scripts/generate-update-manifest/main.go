@@ -64,15 +64,38 @@ type asset struct {
 
 var errNoAssets = errors.New("no release assets found in directory")
 
+// loadManifest reads an existing manifest YAML file for merging.
+func loadManifest(path string) (*manifest, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // Path from CLI flag, not user input
+	if err != nil {
+		return nil, fmt.Errorf("reading existing manifest: %w", err)
+	}
+
+	var m manifest
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("parsing existing manifest: %w", err)
+	}
+
+	return &m, nil
+}
+
 // buildManifest reads assetsDir for release files and returns a manifest.
-func buildManifest(version, assetsDir, releaseNotes string) (*manifest, error) {
+// When merging with an existing manifest, IDs continue from the existing values.
+func buildManifest(version, assetsDir, releaseNotes string, prerelease bool, existing *manifest) (*manifest, error) {
 	entries, err := os.ReadDir(assetsDir)
 	if err != nil {
 		return nil, fmt.Errorf("reading assets directory: %w", err)
 	}
 
+	var startReleaseID int64
+	var startAssetID int64
+	if existing != nil {
+		startReleaseID = existing.LastReleaseID
+		startAssetID = existing.LastAssetID
+	}
+
 	var assets []*asset
-	var assetID int64
+	assetID := startAssetID
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -111,20 +134,28 @@ func buildManifest(version, assetsDir, releaseNotes string) (*manifest, error) {
 		return nil, errNoAssets
 	}
 
+	releaseID := startReleaseID + 1
+	newRelease := &release{
+		ID:           releaseID,
+		Name:         version,
+		TagName:      version,
+		URL:          "",
+		ReleaseNotes: releaseNotes,
+		PublishedAt:  time.Now().UTC(),
+		Assets:       assets,
+		Prerelease:   prerelease,
+	}
+
+	var releases []*release
+	if existing != nil {
+		releases = append(releases, existing.Releases...)
+	}
+	releases = append(releases, newRelease)
+
 	return &manifest{
-		LastReleaseID: 1,
+		LastReleaseID: releaseID,
 		LastAssetID:   assetID,
-		Releases: []*release{
-			{
-				ID:           1,
-				Name:         version,
-				TagName:      version,
-				URL:          "",
-				ReleaseNotes: releaseNotes,
-				PublishedAt:  time.Now().UTC(),
-				Assets:       assets,
-			},
-		},
+		Releases:      releases,
 	}, nil
 }
 
@@ -155,13 +186,26 @@ func main() {
 	assetsDir := flag.String("assets-dir", "", "directory containing release asset files")
 	releaseNotes := flag.String("release-notes", "", "release notes text to include in manifest")
 	output := flag.String("output", "manifest.yaml", "output manifest file path")
+	prerelease := flag.Bool("prerelease", false, "mark release as pre-release in manifest")
+	merge := flag.String("merge", "", "path to existing manifest to merge into")
 	flag.Parse()
 
 	if *version == "" || *assetsDir == "" {
-		log.Fatal().Msg("usage: generate-update-manifest --version <tag> --assets-dir <dir> [--output <path>]")
+		log.Fatal().Msg("usage: generate-update-manifest --version <tag> --assets-dir <dir> " +
+			"[--output <path>] [--prerelease] [--merge <path>]")
 	}
 
-	m, err := buildManifest(*version, *assetsDir, *releaseNotes)
+	var existing *manifest
+	if *merge != "" {
+		var err error
+		existing, err = loadManifest(*merge)
+		if err != nil {
+			log.Fatal().Err(err).Msg("error loading existing manifest for merge")
+		}
+		log.Info().Int("releases", len(existing.Releases)).Msg("loaded existing manifest for merge")
+	}
+
+	m, err := buildManifest(*version, *assetsDir, *releaseNotes, *prerelease, existing)
 	if err != nil {
 		log.Fatal().Err(err).Msg("error building manifest")
 	}
@@ -170,5 +214,9 @@ func main() {
 		log.Fatal().Err(err).Msg("error writing manifest")
 	}
 
-	log.Info().Str("path", *output).Int("assets", len(m.Releases[0].Assets)).Msg("manifest written")
+	log.Info().
+		Str("path", *output).
+		Int("releases", len(m.Releases)).
+		Int("new_assets", len(m.Releases[len(m.Releases)-1].Assets)).
+		Msg("manifest written")
 }
