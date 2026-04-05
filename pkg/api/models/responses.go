@@ -72,6 +72,7 @@ type BrowseResults struct {
 }
 
 type SettingsResponse struct {
+	UpdateChannel             string             `json:"updateChannel"`
 	ReadersScanMode           string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
 	ReadersConnect            []ReaderConnection `json:"readersConnect"`

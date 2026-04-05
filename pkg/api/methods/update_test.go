@@ -51,6 +51,7 @@ func TestHandleUpdateCheck_DevelopmentVersion(t *testing.T) {
 			env := requests.RequestEnv{
 				Context:  t.Context(),
 				Platform: mockPlatform,
+				Config:   &config.Instance{},
 			}
 
 			result, err := HandleUpdateCheck(env, updater.Check)
@@ -74,9 +75,10 @@ func TestHandleUpdateCheck_UpdateAvailable(t *testing.T) {
 	env := requests.RequestEnv{
 		Context:  t.Context(),
 		Platform: mockPlatform,
+		Config:   &config.Instance{},
 	}
 
-	checkFn := func(_ context.Context, _ string) (*updater.Result, error) {
+	checkFn := func(_ context.Context, _, _ string) (*updater.Result, error) {
 		return &updater.Result{
 			CurrentVersion:  "2.9.0",
 			LatestVersion:   "2.10.0",
@@ -96,6 +98,36 @@ func TestHandleUpdateCheck_UpdateAvailable(t *testing.T) {
 	assert.Equal(t, "New features", resp.ReleaseNotes)
 }
 
+func TestHandleUpdateCheck_BetaChannel(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+
+	cfg := &config.Instance{}
+	cfg.SetUpdateChannel(config.UpdateChannelBeta)
+
+	env := requests.RequestEnv{
+		Context:  t.Context(),
+		Platform: mockPlatform,
+		Config:   cfg,
+	}
+
+	var receivedChannel string
+	checkFn := func(_ context.Context, _, channel string) (*updater.Result, error) {
+		receivedChannel = channel
+		return &updater.Result{
+			CurrentVersion:  "2.9.0",
+			LatestVersion:   "2.10.0-beta1",
+			UpdateAvailable: true,
+		}, nil
+	}
+
+	_, err := HandleUpdateCheck(env, checkFn)
+	require.NoError(t, err)
+	assert.Equal(t, "beta", receivedChannel)
+}
+
 func TestHandleUpdateCheck_NoUpdateAvailable(t *testing.T) {
 	t.Parallel()
 
@@ -105,9 +137,10 @@ func TestHandleUpdateCheck_NoUpdateAvailable(t *testing.T) {
 	env := requests.RequestEnv{
 		Context:  t.Context(),
 		Platform: mockPlatform,
+		Config:   &config.Instance{},
 	}
 
-	checkFn := func(_ context.Context, _ string) (*updater.Result, error) {
+	checkFn := func(_ context.Context, _, _ string) (*updater.Result, error) {
 		return &updater.Result{
 			CurrentVersion:  "2.10.0",
 			LatestVersion:   "2.10.0",
@@ -133,9 +166,10 @@ func TestHandleUpdateCheck_Error(t *testing.T) {
 	env := requests.RequestEnv{
 		Context:  t.Context(),
 		Platform: mockPlatform,
+		Config:   &config.Instance{},
 	}
 
-	checkFn := func(_ context.Context, _ string) (*updater.Result, error) {
+	checkFn := func(_ context.Context, _, _ string) (*updater.Result, error) {
 		return nil, errors.New("network timeout")
 	}
 
@@ -161,6 +195,7 @@ func TestHandleUpdateApply_DevelopmentVersion(t *testing.T) {
 			env := requests.RequestEnv{
 				Context:  t.Context(),
 				Platform: mockPlatform,
+				Config:   &config.Instance{},
 			}
 
 			result, err := HandleUpdateApply(env, updater.Apply, func() {})
@@ -180,9 +215,10 @@ func TestHandleUpdateApply_Error(t *testing.T) {
 	env := requests.RequestEnv{
 		Context:  t.Context(),
 		Platform: mockPlatform,
+		Config:   &config.Instance{},
 	}
 
-	applyFn := func(_ context.Context, _ string) (string, error) {
+	applyFn := func(_ context.Context, _, _ string) (string, error) {
 		return "", errors.New("download failed")
 	}
 
@@ -214,10 +250,11 @@ func TestHandleUpdateApply_IndexingInProgress(t *testing.T) {
 			env := requests.RequestEnv{
 				Context:  t.Context(),
 				Platform: mockPlatform,
+				Config:   &config.Instance{},
 				Database: &database.Database{MediaDB: mockMediaDB},
 			}
 
-			applyFn := func(_ context.Context, _ string) (string, error) {
+			applyFn := func(_ context.Context, _, _ string) (string, error) {
 				t.Fatal("applyFn should not be called during indexing")
 				return "", nil
 			}
@@ -244,10 +281,11 @@ func TestHandleUpdateApply_IndexingCompleted(t *testing.T) {
 	env := requests.RequestEnv{
 		Context:  t.Context(),
 		Platform: mockPlatform,
+		Config:   &config.Instance{},
 		Database: &database.Database{MediaDB: mockMediaDB},
 	}
 
-	applyFn := func(_ context.Context, _ string) (string, error) {
+	applyFn := func(_ context.Context, _, _ string) (string, error) {
 		return "2.10.0", nil
 	}
 

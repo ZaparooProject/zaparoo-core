@@ -38,17 +38,20 @@ import (
 )
 
 const (
-	SchemaVersion = 1
-	CfgEnv        = "ZAPAROO_CFG"
-	AppEnv        = "ZAPAROO_APP"
-	ScanModeTap   = "tap"
-	ScanModeHold  = "hold"
+	SchemaVersion       = 1
+	CfgEnv              = "ZAPAROO_CFG"
+	AppEnv              = "ZAPAROO_APP"
+	ScanModeTap         = "tap"
+	ScanModeHold        = "hold"
+	UpdateChannelStable = "stable"
+	UpdateChannelBeta   = "beta"
 )
 
 type Values struct {
 	Groovy         Groovy    `toml:"groovy,omitempty"`
 	Input          Input     `toml:"input,omitempty"`
 	AutoUpdate     *bool     `toml:"auto_update,omitempty"`
+	UpdateChannel  *string   `toml:"update_channel,omitempty"`
 	Audio          Audio     `toml:"audio"`
 	Service        Service   `toml:"service,omitempty"`
 	Launchers      Launchers `toml:"launchers,omitempty"`
@@ -704,4 +707,22 @@ func (c *Instance) SetAutoUpdate(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.AutoUpdate = &enabled
+}
+
+// UpdateChannel returns the configured update channel.
+// Defaults to "stable" when not explicitly set.
+func (c *Instance) UpdateChannel() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.UpdateChannel == nil {
+		return UpdateChannelStable
+	}
+	return *c.vals.UpdateChannel
+}
+
+// SetUpdateChannel sets the update channel. Valid values are "stable" and "beta".
+func (c *Instance) SetUpdateChannel(channel string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.UpdateChannel = &channel
 }

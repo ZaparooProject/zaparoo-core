@@ -22,7 +22,11 @@ package database
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
+	"io/fs"
+	"strconv"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/pressly/goose/v3"
@@ -67,10 +71,88 @@ func MigrateUp(db *sql.DB, migrationFiles embed.FS, migrationDir string) error {
 		return fmt.Errorf("error setting goose dialect: %w", err)
 	}
 
+	// Check if the database schema is ahead of this binary. This happens
+	// when switching from a newer binary (e.g. beta) to an older one.
+	if err := CheckSchemaVersion(db, migrationFiles, migrationDir); err != nil {
+		return err
+	}
+
 	log.Debug().Str("migration_dir", migrationDir).Msg("running goose up migrations")
 	if err := goose.Up(db, migrationDir); err != nil {
 		return fmt.Errorf("error running migrations up: %w", err)
 	}
 
 	return nil
+}
+
+// ErrSchemaAhead is returned when the database schema version is newer than
+// the binary supports. This happens when switching from a newer binary
+// (e.g. beta) to an older one (e.g. stable).
+var ErrSchemaAhead = errors.New("database schema is newer than this binary supports")
+
+// CheckSchemaVersion compares the database's migration version against the
+// latest migration embedded in the current binary. Returns ErrSchemaAhead
+// if the database is ahead, preventing the older binary from running against
+// an incompatible schema.
+func CheckSchemaVersion(db *sql.DB, migrationFiles embed.FS, migrationDir string) error {
+	dbVersion, err := goose.GetDBVersion(db)
+	if err != nil {
+		// Can't determine version (e.g. fresh DB with no version table).
+		// Proceed with migration which will create the table.
+		return nil //nolint:nilerr // expected for fresh databases
+	}
+	if dbVersion == 0 {
+		return nil
+	}
+
+	latest, err := latestEmbeddedVersion(migrationFiles, migrationDir)
+	if err != nil {
+		return fmt.Errorf("reading embedded migrations: %w", err)
+	}
+
+	if dbVersion > latest {
+		return fmt.Errorf(
+			"%w: database is at version %d but this binary only supports up to %d, "+
+				"update to a newer version or reinstall the previous version",
+			ErrSchemaAhead, dbVersion, latest,
+		)
+	}
+
+	return nil
+}
+
+// latestEmbeddedVersion returns the highest goose version number from the
+// embedded migration filenames (e.g. 20250605021915_init.sql).
+func latestEmbeddedVersion(migrationFiles embed.FS, migrationDir string) (int64, error) {
+	entries, err := fs.ReadDir(migrationFiles, migrationDir)
+	if err != nil {
+		return 0, fmt.Errorf("reading embedded migrations: %w", err)
+	}
+
+	var maxVersion int64
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		parts := strings.SplitN(entry.Name(), "_", 2)
+		if len(parts) == 0 {
+			continue
+		}
+
+		version, parseErr := strconv.ParseInt(parts[0], 10, 64)
+		if parseErr != nil {
+			continue
+		}
+
+		if version > maxVersion {
+			maxVersion = version
+		}
+	}
+
+	if maxVersion == 0 {
+		return 0, errors.New("no valid migration versions found in embedded files")
+	}
+
+	return maxVersion, nil
 }

@@ -46,6 +46,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	}
 
 	resp := models.SettingsResponse{
+		UpdateChannel:             env.Config.UpdateChannel(),
 		RunZapScript:              env.State.RunZapScriptEnabled(),
 		DebugLogging:              env.Config.DebugLogging(),
 		AudioScanFeedback:         env.Config.AudioFeedback(),
@@ -112,6 +113,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.RunZapScript != nil {
 		log.Debug().Bool("runZapScript", *params.RunZapScript).Msg("updating setting")
 		env.State.SetRunZapScript(*params.RunZapScript)
+	}
+
+	if params.UpdateChannel != nil {
+		log.Debug().Str("updateChannel", *params.UpdateChannel).Msg("updating setting")
+		env.Config.SetUpdateChannel(*params.UpdateChannel)
 	}
 
 	if params.DebugLogging != nil {

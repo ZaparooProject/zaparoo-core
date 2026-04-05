@@ -43,7 +43,7 @@ func TestCheck_DevelopmentVersion(t *testing.T) {
 			config.AppVersion = v
 			t.Cleanup(func() { config.AppVersion = original })
 
-			result, err := Check(t.Context(), "linux")
+			result, err := Check(t.Context(), "linux", "stable")
 			require.ErrorIs(t, err, ErrDevelopmentVersion)
 			assert.Nil(t, result)
 		})
@@ -59,7 +59,7 @@ func TestApply_DevelopmentVersion(t *testing.T) {
 			config.AppVersion = v
 			t.Cleanup(func() { config.AppVersion = original })
 
-			version, err := Apply(t.Context(), "linux")
+			version, err := Apply(t.Context(), "linux", "stable")
 			require.ErrorIs(t, err, ErrDevelopmentVersion)
 			assert.Empty(t, version)
 		})
@@ -134,7 +134,7 @@ func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
 	ns := make(chan models.Notification, 10)
 	inboxSvc := inbox.NewService(mockUserDB, ns)
 
-	checkFn := func(_ context.Context, _ string) (*Result, error) {
+	checkFn := func(_ context.Context, _, _ string) (*Result, error) {
 		return &Result{
 			CurrentVersion:  "2.9.0",
 			LatestVersion:   "2.10.0",
@@ -148,13 +148,35 @@ func TestCheckAndNotify_UpdateAvailable(t *testing.T) {
 	mockUserDB.AssertExpectations(t)
 }
 
+func TestCheckAndNotify_BetaChannel(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetAutoUpdate(true)
+	cfg.SetUpdateChannel(config.UpdateChannelBeta)
+
+	var receivedChannel string
+	checkFn := func(_ context.Context, _, channel string) (*Result, error) {
+		receivedChannel = channel
+		return &Result{
+			CurrentVersion:  "2.10.0",
+			LatestVersion:   "2.10.0",
+			UpdateAvailable: false,
+		}, nil
+	}
+
+	CheckAndNotify(t.Context(), cfg, "linux", nil, alwaysOnline, checkFn, false)
+
+	assert.Equal(t, "beta", receivedChannel)
+}
+
 func TestCheckAndNotify_NoUpdateAvailable(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
 	cfg.SetAutoUpdate(true)
 
-	checkFn := func(_ context.Context, _ string) (*Result, error) {
+	checkFn := func(_ context.Context, _, _ string) (*Result, error) {
 		return &Result{
 			CurrentVersion:  "2.10.0",
 			LatestVersion:   "2.10.0",
@@ -172,7 +194,7 @@ func TestCheckAndNotify_CheckError(t *testing.T) {
 	cfg := &config.Instance{}
 	cfg.SetAutoUpdate(true)
 
-	checkFn := func(_ context.Context, _ string) (*Result, error) {
+	checkFn := func(_ context.Context, _, _ string) (*Result, error) {
 		return nil, errors.New("network timeout")
 	}
 
@@ -188,7 +210,7 @@ func TestCheck_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	result, err := Check(ctx, "linux")
+	result, err := Check(ctx, "linux", "stable")
 	require.Error(t, err)
 	assert.Nil(t, result)
 }
@@ -201,7 +223,7 @@ func TestApply_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	version, err := Apply(ctx, "linux")
+	version, err := Apply(ctx, "linux", "stable")
 	require.Error(t, err)
 	assert.Empty(t, version)
 }
