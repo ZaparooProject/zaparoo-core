@@ -45,7 +45,7 @@ require (
 	github.com/rivo/tview v0.0.0-20250625164341-a4a78f1e05cb
 	github.com/rs/zerolog v1.34.0
 	github.com/sasha-s/go-deadlock v0.3.6
-	github.com/shirou/gopsutil/v4 v4.25.11
+	github.com/shirou/gopsutil/v4 v4.26.3
 	github.com/spf13/afero v1.14.0
 	github.com/stretchr/testify v1.11.1
 	go.bug.st/serial v1.6.4
@@ -54,7 +54,7 @@ require (
 	golang.design/x/clipboard v0.7.1
 	golang.org/x/exp v0.0.0-20250813145105-42675adae3e6
 	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.39.0
+	golang.org/x/sys v0.41.0
 	golang.org/x/text v0.35.0
 	golang.org/x/time v0.14.0
 	gopkg.in/ini.v1 v1.67.0
@@ -75,7 +75,7 @@ require (
 	github.com/creack/goselect v0.1.3 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
-	github.com/ebitengine/purego v0.9.1 // indirect
+	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.10 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
