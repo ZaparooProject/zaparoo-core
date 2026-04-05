@@ -54,7 +54,7 @@ require (
 	golang.design/x/clipboard v0.7.1
 	golang.org/x/exp v0.0.0-20250813145105-42675adae3e6
 	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.41.0
+	golang.org/x/sys v0.42.0
 	golang.org/x/text v0.35.0
 	golang.org/x/time v0.14.0
 	gopkg.in/ini.v1 v1.67.0
