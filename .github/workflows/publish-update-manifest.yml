@@ -47,7 +47,7 @@ jobs:
             --output _manifest/manifest.yaml
           cp _assets/checksums.txt _manifest/checksums.txt
       - name: Upload manifest to Bunny.net storage
-        uses: R-J-dev/bunny-deploy@v2.1.1
+        uses: R-J-dev/bunny-deploy@v3.0.0
         with:
           storage-zone-password: ${{ secrets.BUNNY_STORAGE_ZONE_PASSWORD }}
           storage-endpoint: "https://storage.bunnycdn.com"
