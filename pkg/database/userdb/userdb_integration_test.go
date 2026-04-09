@@ -453,3 +453,139 @@ func TestInbox_CategoryUpsert_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, messages, 3, "Should have 3 messages (category is per-profile)")
 }
+
+func TestClientCRUD_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	// Empty list initially
+	clients, err := userDB.ListClients()
+	require.NoError(t, err)
+	assert.Empty(t, clients, "Clients should be empty initially")
+
+	count, err := userDB.CountClients()
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "Client count should be 0 initially")
+
+	// Create two clients
+	c1 := database.Client{
+		ClientID:   "client-1",
+		ClientName: "First App",
+		AuthToken:  "token-1",
+		PairingKey: []byte("key-1-key-1-key-1-key-1-key-1-12"),
+		CreatedAt:  1700000000,
+		LastSeenAt: 1700000000,
+	}
+	err = userDB.CreateClient(&c1)
+	require.NoError(t, err, "Should be able to create first client")
+	assert.Positive(t, c1.DBID, "Should have assigned a DBID")
+
+	c2 := database.Client{
+		ClientID:   "client-2",
+		ClientName: "Second App",
+		AuthToken:  "token-2",
+		PairingKey: []byte("key-2-key-2-key-2-key-2-key-2-12"),
+		CreatedAt:  1700001000,
+		LastSeenAt: 1700001000,
+	}
+	err = userDB.CreateClient(&c2)
+	require.NoError(t, err, "Should be able to create second client")
+
+	// Count
+	count, err = userDB.CountClients()
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	// List — ordered by CreatedAt DESC, so c2 first
+	clients, err = userDB.ListClients()
+	require.NoError(t, err)
+	require.Len(t, clients, 2)
+	assert.Equal(t, "client-2", clients[0].ClientID)
+	assert.Equal(t, "client-1", clients[1].ClientID)
+
+	// Get by token
+	got, err := userDB.GetClientByToken("token-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "client-1", got.ClientID)
+	assert.Equal(t, "First App", got.ClientName)
+	assert.Equal(t, c1.PairingKey, got.PairingKey)
+
+	// Get by missing token
+	_, err = userDB.GetClientByToken("nonexistent")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client not found")
+
+	// Update last seen
+	err = userDB.UpdateClientLastSeen("token-1", 1700009999)
+	require.NoError(t, err)
+
+	got, err = userDB.GetClientByToken("token-1")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1700009999), got.LastSeenAt)
+
+	// Delete one
+	err = userDB.DeleteClient("client-1")
+	require.NoError(t, err)
+
+	count, err = userDB.CountClients()
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	// Delete missing
+	err = userDB.DeleteClient("nonexistent")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client not found")
+
+	// Unique constraints — duplicate ClientID rejected
+	dupID := database.Client{
+		ClientID:   "client-2",
+		ClientName: "dup",
+		AuthToken:  "token-3",
+		PairingKey: []byte("key-3-key-3-key-3-key-3-key-3-12"),
+		CreatedAt:  1700002000,
+		LastSeenAt: 1700002000,
+	}
+	err = userDB.CreateClient(&dupID)
+	require.Error(t, err, "Duplicate ClientID should be rejected")
+
+	// Unique constraints — duplicate AuthToken rejected
+	dupTok := database.Client{
+		ClientID:   "client-3",
+		ClientName: "dup",
+		AuthToken:  "token-2",
+		PairingKey: []byte("key-3-key-3-key-3-key-3-key-3-12"),
+		CreatedAt:  1700002000,
+		LastSeenAt: 1700002000,
+	}
+	err = userDB.CreateClient(&dupTok)
+	require.Error(t, err, "Duplicate AuthToken should be rejected")
+}
+
+// TestClientAuthTokenColonCheckConstraint_Integration pins the SQL CHECK
+// constraint that forbids `:` in AuthToken at the schema level. The Go-side
+// check in sqlCreateClient is exercised by clients_test.go; this test
+// bypasses the Go check via raw SQL so a regression that removed only the
+// schema constraint would still be caught.
+func TestClientAuthTokenColonCheckConstraint_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	// Bypass sqlCreateClient by inserting directly into the underlying
+	// *sql.DB. The Clients table CHECK clause must reject the colon-bearing
+	// token without any Go-level validation involved.
+	pairingKey := []byte("key-x-key-x-key-x-key-x-key-x-12")
+	_, err := userDB.sql.ExecContext(context.Background(), `
+		INSERT INTO Clients (ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt)
+		VALUES (?, ?, ?, ?, ?, ?);
+	`, "raw-id", "Raw App", "evil:token", pairingKey, int64(1700000000), int64(1700000000))
+	require.Error(t, err, "SQL CHECK constraint must reject AuthToken containing ':'")
+	assert.Contains(t, err.Error(), "CHECK",
+		"the failure should originate from a CHECK constraint, not a different error path")
+}

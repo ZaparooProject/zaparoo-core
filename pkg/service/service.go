@@ -310,7 +310,7 @@ func Start(
 	go checkAndResumeOptimization(db, st.Notifications, indexPauser)
 
 	log.Info().Msg("starting mDNS discovery service")
-	discoveryService := discovery.New(cfg, pl.ID())
+	discoveryService := discovery.New(cfg)
 	if discoveryErr := discoveryService.Start(); discoveryErr != nil {
 		log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
 	}

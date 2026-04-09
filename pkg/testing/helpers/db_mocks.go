@@ -416,6 +416,70 @@ func (m *MockUserDBI) DeleteAllInboxMessages() (int64, error) {
 	return rowsDeleted, nil
 }
 
+func (m *MockUserDBI) CreateClient(c *database.Client) error {
+	args := m.Called(c)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI create client failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) GetClientByToken(authToken string) (*database.Client, error) {
+	args := m.Called(authToken)
+	if result, ok := args.Get(0).(*database.Client); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock UserDBI get client by token failed: %w", err)
+		}
+		return result, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get client by token failed: %w", err)
+	}
+	return nil, nil //nolint:nilnil // mock returns nil when no client is configured
+}
+
+func (m *MockUserDBI) ListClients() ([]database.Client, error) {
+	args := m.Called()
+	if clients, ok := args.Get(0).([]database.Client); ok {
+		if err := args.Error(1); err != nil {
+			return clients, fmt.Errorf("mock UserDBI list clients failed: %w", err)
+		}
+		return clients, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI list clients failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockUserDBI) DeleteClient(clientID string) error {
+	args := m.Called(clientID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI delete client failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) UpdateClientLastSeen(authToken string, lastSeenAt int64) error {
+	args := m.Called(authToken, lastSeenAt)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI update client last seen failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) CountClients() (int, error) {
+	args := m.Called()
+	count, ok := args.Get(0).(int)
+	if !ok {
+		count = 0
+	}
+	if err := args.Error(1); err != nil {
+		return count, fmt.Errorf("mock UserDBI count clients failed: %w", err)
+	}
+	return count, nil
+}
+
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock
 type MockMediaDBI struct {
 	mock.Mock

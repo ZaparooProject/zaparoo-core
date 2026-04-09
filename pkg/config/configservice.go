@@ -37,15 +37,21 @@ func isValidAPIPort(port int) bool {
 }
 
 type Service struct {
-	APIPort        *int      `toml:"api_port,omitempty"`
-	Discovery      Discovery `toml:"discovery,omitempty"`
-	DeviceID       string    `toml:"device_id"`
-	APIListen      string    `toml:"api_listen,omitempty"`
-	AllowRun       []string  `toml:"allow_run,omitempty,multiline"`
+	APIPort   *int      `toml:"api_port,omitempty"`
+	Discovery Discovery `toml:"discovery,omitempty"`
+	DeviceID  string    `toml:"device_id"`
+	APIListen string    `toml:"api_listen,omitempty"`
+	// AllowRun is the list of allowed run patterns.
+	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
 	allowRunRe     []*regexp.Regexp
 	AllowedOrigins []string   `toml:"allowed_origins,omitempty"`
 	AllowedIPs     []string   `toml:"allowed_ips,omitempty"`
 	Publishers     Publishers `toml:"publishers,omitempty"`
+	// Encryption enables PAKE pairing + AES-256-GCM on the WebSocket
+	// transport. False (the default) accepts plaintext WebSocket connections
+	// with API key authentication. True requires paired clients for remote
+	// WebSocket connections; localhost is always exempt.
+	Encryption bool `toml:"encryption,omitempty"`
 }
 
 type Publishers struct {
