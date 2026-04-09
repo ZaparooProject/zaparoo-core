@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 10
     name: Publish stable update manifest to CDN
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           sparse-checkout: |
             scripts/generate-update-manifest/
@@ -22,7 +22,7 @@ jobs:
             go.sum
           sparse-checkout-cone-mode: false
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: false
@@ -51,7 +51,7 @@ jobs:
             --output _manifest/manifest.yaml
           cp _assets/checksums.txt _manifest/checksums.txt
       - name: Upload manifest to Bunny.net storage
-        uses: R-J-dev/bunny-deploy@v3.0.0
+        uses: R-J-dev/bunny-deploy@ae25fa670b732ffc8dba84c872fb203d2a365229 # v3.0.0
         with:
           storage-zone-password: ${{ secrets.BUNNY_STORAGE_ZONE_PASSWORD }}
           storage-endpoint: "https://storage.bunnycdn.com"
@@ -74,7 +74,7 @@ jobs:
     timeout-minutes: 10
     name: Publish beta update manifest to CDN
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           sparse-checkout: |
             scripts/generate-update-manifest/
@@ -82,7 +82,7 @@ jobs:
             go.sum
           sparse-checkout-cone-mode: false
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: false
@@ -118,20 +118,20 @@ jobs:
         env:
           RELEASE_NOTES: ${{ github.event.release.body }}
         run: |
-          MERGE_FLAG=""
+          MERGE_FLAG=()
           if [ -f _existing/manifest.yaml ]; then
-            MERGE_FLAG="--merge _existing/manifest.yaml"
+            MERGE_FLAG=(--merge _existing/manifest.yaml)
           fi
           go run scripts/generate-update-manifest/main.go \
             --version "${{ github.event.release.tag_name }}" \
             --assets-dir _assets \
             --release-notes "$RELEASE_NOTES" \
             --prerelease \
-            $MERGE_FLAG \
+            "${MERGE_FLAG[@]}" \
             --output _manifest/manifest.yaml
           cp _assets/checksums.txt _manifest/checksums.txt
       - name: Upload manifest to Bunny.net storage
-        uses: R-J-dev/bunny-deploy@v3.0.0
+        uses: R-J-dev/bunny-deploy@ae25fa670b732ffc8dba84c872fb203d2a365229 # v3.0.0
         with:
           storage-zone-password: ${{ secrets.BUNNY_STORAGE_ZONE_PASSWORD }}
           storage-endpoint: "https://storage.bunnycdn.com"
