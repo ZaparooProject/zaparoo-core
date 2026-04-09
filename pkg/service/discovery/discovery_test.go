@@ -29,41 +29,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNew(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		platformID string
-	}{
-		{"mister platform", "mister"},
-		{"linux platform", "linux"},
-		{"steamos platform", "steamos"},
-		{"windows platform", "windows"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			svc := New(nil, tt.platformID)
-
-			assert.NotNil(t, svc)
-			assert.Equal(t, tt.platformID, svc.platformID)
-		})
-	}
-}
-
 func TestServiceType(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, "_zaparoo._tcp", ServiceType)
 }
 
+// TestDefaultTXTRecordsAreEmpty pins the security-driven design that mDNS
+// service announcements carry NO TXT records. See defaultTXTRecords doc
+// comment for the rationale.
+func TestDefaultTXTRecordsAreEmpty(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, defaultTXTRecords,
+		"mDNS TXT records must remain empty to avoid leaking version/platform/id on the LAN")
+}
+
 func TestStopIdempotent(t *testing.T) {
 	t.Parallel()
 
-	svc := New(nil, "test")
+	svc := New(nil)
 
 	// Stop should be safe to call multiple times even when not started
 	svc.Stop()
@@ -77,7 +62,7 @@ func TestStopIdempotent(t *testing.T) {
 func TestInstanceNameBeforeStart(t *testing.T) {
 	t.Parallel()
 
-	svc := New(nil, "test")
+	svc := New(nil)
 
 	// InstanceName should return empty string before Start() is called
 	assert.Empty(t, svc.InstanceName())
@@ -94,7 +79,7 @@ func TestInstanceNameWhenDiscoveryDisabled(t *testing.T) {
 	// Disable discovery
 	cfg.SetDiscoveryEnabled(false)
 
-	svc := New(cfg, "test")
+	svc := New(cfg)
 	err = svc.Start()
 	require.NoError(t, err)
 
@@ -114,7 +99,7 @@ func TestInstanceNameUsesHostname(t *testing.T) {
 	expectedHostname, err := os.Hostname()
 	require.NoError(t, err)
 
-	svc := New(cfg, "test")
+	svc := New(cfg)
 
 	// Start will fail at zeroconf.Register, but instanceName is set
 	// before Register is called, so we can still verify the resolution
@@ -134,7 +119,7 @@ func TestInstanceNameUsesConfigOverride(t *testing.T) {
 	// Set a custom instance name in config
 	cfg.SetDiscoveryInstanceName("my-custom-name")
 
-	svc := New(cfg, "test")
+	svc := New(cfg)
 	_ = svc.Start() // Ignore error - Register may fail without network
 
 	// instanceName should use the config override, not hostname
