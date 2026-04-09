@@ -683,14 +683,18 @@ func TestSqlGetZapLinkCache_NotFound(t *testing.T) {
 
 // Database Management Function Tests
 
+// TestSqlTruncate_Success pins that sqlTruncate wipes every user table
+// (History, Mappings, Clients) and runs VACUUM. The Clients clause is
+// load-bearing: paired clients must not survive a Truncate, otherwise
+// auth tokens would outlive the data the user thought they erased.
 func TestSqlTruncate_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectExec(`delete from History.*delete from Mappings.*vacuum`).
-		WillReturnResult(sqlmock.NewResult(0, 2)) // 2 tables affected
+	mock.ExpectExec(`(?s)delete from History.*delete from Mappings.*delete from Clients.*vacuum`).
+		WillReturnResult(sqlmock.NewResult(0, 3)) // 3 tables affected
 
 	err = sqlTruncate(context.Background(), db)
 	require.NoError(t, err)
@@ -703,7 +707,7 @@ func TestSqlTruncate_DatabaseError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectExec(`delete from History.*delete from Mappings.*vacuum`).
+	mock.ExpectExec(`(?s)delete from History.*delete from Mappings.*delete from Clients.*vacuum`).
 		WillReturnError(sqlmock.ErrCancelled)
 
 	err = sqlTruncate(context.Background(), db)

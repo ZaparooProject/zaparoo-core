@@ -37,6 +37,7 @@ const (
 	NotificationPlaytimeLimitReached = "playtime.limit.reached"
 	NotificationPlaytimeLimitWarning = "playtime.limit.warning"
 	NotificationInboxAdded           = "inbox.added"
+	NotificationClientsPaired        = "clients.paired"
 )
 
 const (
@@ -73,7 +74,6 @@ const (
 	MethodPlaytimeLimitsUpdate = "settings.playtime.limits.update"
 	MethodPlaytime             = "playtime"
 	MethodClients              = "clients"
-	MethodClientsNew           = "clients.new"
 	MethodClientsDelete        = "clients.delete"
 	MethodSystems              = "systems"
 	MethodLaunchersRefresh     = "launchers.refresh"
@@ -127,6 +127,9 @@ type RequestObject struct {
 }
 
 type ErrorObject struct {
+	// Data is optional structured detail about the error. Per JSON-RPC 2.0
+	// §5.1 it MUST be a member of the error object, not a sibling.
+	Data    any    `json:"data,omitempty"`
 	Message string `json:"message"`
 	Code    int    `json:"code"`
 }

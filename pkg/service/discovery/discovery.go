@@ -49,6 +49,13 @@ var virtualInterfacePrefixes = []string{
 	"cni", "flannel", "cali", "tunl", "wg",
 }
 
+// defaultTXTRecords is intentionally empty: device ID, version, and platform
+// are exposed only via the authenticated API. Broadcasting them on the LAN
+// would expose information useful for targeted attacks (version → known
+// vulnerabilities, platform → attack surface). Any change to this slice must
+// be pinned by TestDefaultTXTRecordsAreEmpty.
+var defaultTXTRecords = []string{}
+
 // getPreferredInterfaces returns network interfaces suitable for mDNS registration.
 // It filters out loopback, down, non-multicast, and virtual interfaces.
 func getPreferredInterfaces() ([]net.Interface, error) {
@@ -106,17 +113,15 @@ type Service struct {
 	server       *zeroconf.Server
 	cfg          *config.Instance
 	cancelFunc   context.CancelFunc
-	platformID   string
 	instanceName string
 	stopped      bool
 	mu           syncutil.Mutex
 }
 
 // New creates a new discovery service.
-func New(cfg *config.Instance, platformID string) *Service {
+func New(cfg *config.Instance) *Service {
 	return &Service{
-		cfg:        cfg,
-		platformID: platformID,
+		cfg: cfg,
 	}
 }
 
@@ -158,11 +163,9 @@ func (s *Service) Start() error {
 func (s *Service) tryRegister() bool {
 	port := s.cfg.APIPort()
 
-	txtRecords := []string{
-		"id=" + s.cfg.DeviceID(),
-		"version=" + config.AppVersion,
-		"platform=" + s.platformID,
-	}
+	// See defaultTXTRecords for the rationale behind broadcasting an empty
+	// TXT record set.
+	txtRecords := defaultTXTRecords
 
 	ifaces, err := getPreferredInterfaces()
 	if err != nil {

@@ -114,6 +114,18 @@ type InboxMessage struct {
 	ProfileID int64     `json:"profileId"`
 }
 
+// Client represents a paired API client. AuthToken and PairingKey are
+// hidden from JSON (API uses models.PairedClient instead).
+type Client struct {
+	ClientID   string `json:"clientId"`
+	ClientName string `json:"clientName"`
+	AuthToken  string `json:"-"`
+	PairingKey []byte `json:"-"`
+	DBID       int64  `json:"-"`
+	CreatedAt  int64  `json:"createdAt"`
+	LastSeenAt int64  `json:"lastSeenAt"`
+}
+
 type System struct {
 	SystemID string
 	Name     string
@@ -357,6 +369,12 @@ type UserDBI interface {
 	GetInboxMessages() ([]InboxMessage, error)
 	DeleteInboxMessage(id int64) error
 	DeleteAllInboxMessages() (int64, error)
+	CreateClient(c *Client) error
+	GetClientByToken(authToken string) (*Client, error)
+	ListClients() ([]Client, error)
+	DeleteClient(clientID string) error
+	UpdateClientLastSeen(authToken string, lastSeenAt int64) error
+	CountClients() (int, error)
 }
 
 type MediaDBI interface {

@@ -20,9 +20,11 @@
 package models
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestActiveMedia_Equal(t *testing.T) {
@@ -213,5 +215,112 @@ func TestActiveMedia_Equal(t *testing.T) {
 			result := tt.a.Equal(tt.b)
 			assert.Equal(t, tt.expected, result)
 		})
+	}
+}
+
+// TestPairedClient_JSONShape pins the wire shape of the PairedClient
+// type returned by the `clients` RPC method. This test exists to catch a
+// future regression where someone embeds *database.Client (which contains
+// AuthToken and PairingKey fields) into PairedClient — that would silently
+// leak the auth token and the long-term pairing key over the API.
+//
+// The pin works by asserting the marshalled JSON has EXACTLY the expected
+// keys and that several variants of the sensitive field names are absent.
+func TestPairedClient_JSONShape(t *testing.T) {
+	t.Parallel()
+
+	pc := PairedClient{
+		ClientID:   "client-123",
+		ClientName: "Test Client",
+		CreatedAt:  1700000000,
+		LastSeenAt: 1700001000,
+	}
+	raw, err := json.Marshal(pc)
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(raw, &got))
+
+	expectedKeys := map[string]bool{
+		"clientId":   true,
+		"clientName": true,
+		"createdAt":  true,
+		"lastSeenAt": true,
+	}
+	for k := range got {
+		assert.True(t, expectedKeys[k],
+			"unexpected JSON key %q in PairedClient — could indicate a struct embed leaking sensitive fields", k)
+	}
+	for k := range expectedKeys {
+		_, ok := got[k]
+		assert.True(t, ok, "expected JSON key %q missing from PairedClient", k)
+	}
+
+	// Defense in depth: explicitly assert sensitive field names are absent
+	// even if some future serializer adds them under a different naming.
+	forbidden := []string{
+		"authToken", "auth_token", "AuthToken",
+		"pairingKey", "pairing_key", "PairingKey",
+	}
+	for _, k := range forbidden {
+		_, present := got[k]
+		assert.False(t, present,
+			"sensitive field %q must NEVER appear in PairedClient JSON", k)
+	}
+}
+
+// TestClientsResponse_JSONShape pins the wire shape of the `clients` RPC
+// list response. Catches accidental key renames.
+func TestClientsResponse_JSONShape(t *testing.T) {
+	t.Parallel()
+
+	cr := ClientsResponse{
+		Clients: []PairedClient{
+			{ClientID: "a", ClientName: "First", CreatedAt: 1, LastSeenAt: 2},
+			{ClientID: "b", ClientName: "Second", CreatedAt: 3, LastSeenAt: 4},
+		},
+	}
+	raw, err := json.Marshal(cr)
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(raw, &got))
+
+	clients, ok := got["clients"].([]any)
+	require.True(t, ok, "ClientsResponse must marshal to {clients: [...]}")
+	assert.Len(t, clients, 2)
+}
+
+// TestClientsDeleteParams_JSONShape pins the wire shape of the
+// `clients.delete` RPC parameters object.
+func TestClientsDeleteParams_JSONShape(t *testing.T) {
+	t.Parallel()
+
+	p := ClientsDeleteParams{ClientID: "abc"}
+	raw, err := json.Marshal(p)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"clientId":"abc"}`, string(raw))
+}
+
+// TestClientsPairedNotification_JSONShape pins the wire shape of the
+// `clients.paired` notification payload broadcast on successful pairing.
+func TestClientsPairedNotification_JSONShape(t *testing.T) {
+	t.Parallel()
+
+	n := ClientsPairedNotification{
+		ClientID:   "id-1",
+		ClientName: "App",
+	}
+	raw, err := json.Marshal(n)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"clientId":"id-1","clientName":"App"}`, string(raw))
+
+	// Also assert no sensitive fields can leak from this notification.
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(raw, &got))
+	for _, k := range []string{"authToken", "pairingKey"} {
+		_, present := got[k]
+		assert.False(t, present,
+			"clients.paired notification must never include %q", k)
 	}
 }

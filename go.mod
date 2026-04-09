@@ -45,6 +45,7 @@ require (
 	github.com/rivo/tview v0.0.0-20250625164341-a4a78f1e05cb
 	github.com/rs/zerolog v1.34.0
 	github.com/sasha-s/go-deadlock v0.3.6
+	github.com/schollz/pake/v3 v3.1.1
 	github.com/shirou/gopsutil/v4 v4.26.3
 	github.com/spf13/afero v1.14.0
 	github.com/stretchr/testify v1.11.1
@@ -65,6 +66,7 @@ require (
 
 require (
 	code.gitea.io/sdk/gitea v0.22.1 // indirect
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/42wim/httpsig v1.2.3 // indirect
 	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
@@ -118,6 +120,7 @@ require (
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
+	github.com/tscholl2/siec v0.0.0-20240310163802-c2c6f6198406 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	gitlab.com/gitlab-org/api/client-go v1.9.1 // indirect

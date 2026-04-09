@@ -363,6 +363,33 @@ type InboxResponse struct {
 	Messages []InboxMessage `json:"messages"`
 }
 
+// PairedClient represents a client paired via the API encryption flow.
+// PairingKey and AuthToken are intentionally omitted from the public API
+// surface — only the metadata identifying the client is exposed.
+type PairedClient struct {
+	ClientID   string `json:"clientId"`
+	ClientName string `json:"clientName"`
+	CreatedAt  int64  `json:"createdAt"`
+	LastSeenAt int64  `json:"lastSeenAt"`
+}
+
+// ClientsResponse is the response for the clients RPC method.
+type ClientsResponse struct {
+	Clients []PairedClient `json:"clients"`
+}
+
+// ClientsDeleteParams is the parameters object for the clients.delete RPC method.
+type ClientsDeleteParams struct {
+	ClientID string `json:"clientId"`
+}
+
+// ClientsPairedNotification is the payload for the clients.paired notification,
+// broadcast when a client successfully completes the PAKE pairing flow.
+type ClientsPairedNotification struct {
+	ClientID   string `json:"clientId"`
+	ClientName string `json:"clientName"`
+}
+
 type SettingsAuthClaimResponse struct {
 	Domains []string `json:"domains"`
 }
