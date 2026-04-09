@@ -8,7 +8,7 @@ The Zaparoo API supports application-layer encryption on the WebSocket transport
 
 - **Pairing**: One-time PAKE2 (P-256) handshake. The user enters a 6-digit PIN displayed on the Zaparoo device into the client app. A shared 32-byte pairing key is derived without ever transmitting the PIN.
 - **Encryption**: AES-256-GCM with implicit counter-derived nonces on every WebSocket frame after the first.
-- **Per-session keys**: On each new WebSocket connection the client generates a random 16-byte session salt; both sides derive ephemeral session keys via HKDF from `pairingKey || salt`. Counters reset to 0 each session.
+- **Per-session keys**: On each new WebSocket connection the client generates a random 16-byte session salt; both sides derive ephemeral session keys via HKDF-SHA256 using the pairing key as IKM and the session salt as the HKDF salt. Counters reset to 0 each session.
 - **Scope**: Encryption applies to **WebSocket only**. Non-WebSocket transports (HTTP POST, SSE, REST GET) are restricted to localhost by default and require an explicit IP allowlist for remote access.
 
 ## Encryption setting
@@ -213,7 +213,7 @@ Two phases with different requirements:
 |---|---|
 | JavaScript | [`@noble/curves`](https://github.com/paulmillr/noble-curves) (audited, zero deps) |
 | Python | `ecdsa` or `cryptography` |
-| Swift | OpenSSL binding or hand-rolled EC math |
+| Swift | [Swift Crypto](https://github.com/apple/swift-crypto) or OpenSSL binding |
 | Kotlin/Android | Bouncy Castle `ECPoint` (ships on Android) |
 | C#/.NET | BouncyCastle NuGet |
 | Rust | `p256` crate |
@@ -308,7 +308,13 @@ async function connectEncrypted(wsUrl, authToken, pairingKey) {
 
     const ws = new WebSocket(wsUrl);
 
+    const opened = new Promise((resolve, reject) => {
+        ws.onopen = () => resolve();
+        ws.onerror = (e) => reject(e);
+    });
+
     async function sendRPC(method, params) {
+        await opened;
         const payload = JSON.stringify({ jsonrpc: "2.0", method, params, id: Date.now() });
         const counter = sendCounter++;
         const nonce = buildNonce(keys.c2sBase, counter);
@@ -341,6 +347,7 @@ async function connectEncrypted(wsUrl, authToken, pairingKey) {
         handleResponse(JSON.parse(new TextDecoder().decode(pt)));
     };
 
+    await opened;
     return { sendRPC };
 }
 ```

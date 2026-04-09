@@ -684,13 +684,17 @@ func TestHandlePairFinish_AuditLogsExhaustion(t *testing.T) {
 	t.Cleanup(func() { log.Logger = originalLogger })
 
 	h := newPairingHarness(t, WithPairingMaxAttempts(1))
-	_, _, err := h.mgr.StartPairing()
+	pin, _, err := h.mgr.StartPairing()
 	require.NoError(t, err)
 
 	// One allowed attempt → first failure trips errPairingExhausted.
 	// Drive the failed attempt through the HTTP handler so the audit log
 	// path is exercised.
-	wrongPake, err := pake.InitCurve([]byte("000000"), 0, pairingCurve)
+	wrongPIN := "000000"
+	if pin == wrongPIN {
+		wrongPIN = "111111"
+	}
+	wrongPake, err := pake.InitCurve([]byte(wrongPIN), 0, pairingCurve)
 	require.NoError(t, err)
 	msgA := wrongPake.Bytes()
 	startBody, err := json.Marshal(pairStartRequest{
