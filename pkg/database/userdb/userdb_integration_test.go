@@ -580,7 +580,7 @@ func TestClientAuthTokenColonCheckConstraint_Integration(t *testing.T) {
 	// Bypass sqlCreateClient by inserting directly into the underlying
 	// *sql.DB. The Clients table CHECK clause must reject the colon-bearing
 	// token without any Go-level validation involved.
-	pairingKey := []byte("key-x-key-x-key-x-key-x-key-x-12")
+	pairingKey := []byte("key-x-key-x-key-x-key-x-key-x-ab")
 	_, err := userDB.sql.ExecContext(context.Background(), `
 		INSERT INTO Clients (ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt)
 		VALUES (?, ?, ?, ?, ?, ?);

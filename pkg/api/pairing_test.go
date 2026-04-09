@@ -160,12 +160,12 @@ func TestStartPairing_AfterCancel(t *testing.T) {
 
 func TestStartPairing_AfterExpiry(t *testing.T) {
 	t.Parallel()
-	h := newPairingHarness(t, WithPairingPINTTL(10*time.Millisecond))
+	h := newPairingHarness(t, WithPairingPINTTL(50*time.Millisecond))
 
 	_, _, err := h.mgr.StartPairing()
 	require.NoError(t, err)
 
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	_, _, err = h.mgr.StartPairing()
 	require.NoError(t, err, "expired PIN should not block a new one")

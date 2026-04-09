@@ -8,7 +8,8 @@ create table Clients
     ClientName text    not null,
     AuthToken  text    not null unique
         check (instr(AuthToken, ':') = 0),
-    PairingKey blob    not null,
+    PairingKey blob    not null
+        check (length(PairingKey) = 32),
     CreatedAt  integer not null,
     LastSeenAt integer not null
 );

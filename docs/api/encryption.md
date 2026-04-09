@@ -26,7 +26,7 @@ The `encryption` setting only affects the WebSocket transport. HTTP POST, SSE, a
 
 Pairing happens over plain HTTP (the PAKE protocol provides its own security). Two round trips establish a shared 32-byte pairing key.
 
-```
+```text
 TUI                     Server                       Client App
 ───                     ──────                       ──────────
 User: "Pair device"
@@ -80,13 +80,13 @@ PIN cleared
 
 The HMAC inputs use length-prefixed encoding to prevent canonicalization attacks: each variable-length field is encoded as a 4-byte big-endian length prefix followed by the bytes.
 
-```
+```text
 LP(field) = 4-byte big-endian uint32 length || field bytes
 ```
 
 The HMAC transcript is:
 
-```
+```text
 LP("zaparoo-v1") || LP("p256") || LP(role) || LP(clientName) || LP(MsgA) || LP(MsgB)
 ```
 
@@ -152,7 +152,7 @@ Once decrypted, the payload is standard JSON-RPC 2.0:
 
 On each new WebSocket connection (NOT once per pairing), the client generates a random session salt and derives ephemeral session keys via HKDF-SHA256.
 
-```
+```text
 prk     = HKDF-Extract(SHA-256, ikm=pairingKey, salt=sessionSalt)
 c2sKey  = HKDF-Expand(SHA-256, prk, info="zaparoo-c2s-v1",       length=32)
 s2cKey  = HKDF-Expand(SHA-256, prk, info="zaparoo-s2c-v1",       length=32)
@@ -166,7 +166,7 @@ Separate keys + nonce bases per direction prevent reflection attacks and elimina
 
 The 12-byte AES-GCM nonce for each frame is derived by XORing a 64-bit big-endian counter into the **last 8 bytes** of the 12-byte nonce base. The first 4 bytes of the base are unchanged.
 
-```
+```text
 nonce[0:4] = base[0:4]
 nonce[4:12] = base[4:12] XOR (counter as 8 bytes big-endian)
 ```
@@ -177,7 +177,7 @@ Counters never wrap or reuse — disconnect and reconnect with a fresh salt to s
 
 Every encrypt/decrypt operation binds the ciphertext to the auth token via AAD:
 
-```
+```text
 aad = authToken + ":ws"
 ```
 

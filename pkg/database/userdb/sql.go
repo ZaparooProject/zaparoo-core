@@ -824,6 +824,9 @@ func sqlDeleteClient(ctx context.Context, db *sql.DB, clientID string) error {
 	return nil
 }
 
+// sqlUpdateClientLastSeen is a fire-and-forget used by the async LastSeenTracker.
+// It intentionally does not check RowsAffected — a deleted client is a normal
+// no-op here, unlike sqlDeleteClient which reports "not found" to the caller.
 func sqlUpdateClientLastSeen(ctx context.Context, db *sql.DB, authToken string, lastSeenAt int64) error {
 	_, err := db.ExecContext(ctx,
 		`UPDATE Clients SET LastSeenAt = ? WHERE AuthToken = ?;`,

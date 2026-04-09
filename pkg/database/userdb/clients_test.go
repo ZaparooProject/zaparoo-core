@@ -101,6 +101,7 @@ func TestSqlCreateClient_DatabaseError(t *testing.T) {
 	err = sqlCreateClient(context.Background(), db, c)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to insert client")
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestSqlGetClientByToken_Success(t *testing.T) {
@@ -142,6 +143,7 @@ func TestSqlGetClientByToken_NotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, got)
 	assert.Contains(t, err.Error(), "client not found")
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestSqlListClients_Success(t *testing.T) {
@@ -178,6 +180,7 @@ func TestSqlListClients_Empty(t *testing.T) {
 	got, err := sqlListClients(context.Background(), db)
 	require.NoError(t, err)
 	assert.Empty(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestSqlDeleteClient_Success(t *testing.T) {
@@ -208,6 +211,7 @@ func TestSqlDeleteClient_NotFound(t *testing.T) {
 	err = sqlDeleteClient(context.Background(), db, "missing")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "client not found")
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestSqlUpdateClientLastSeen_Success(t *testing.T) {
@@ -237,6 +241,7 @@ func TestSqlCountClients_Success(t *testing.T) {
 	got, err := sqlCountClients(context.Background(), db)
 	require.NoError(t, err)
 	assert.Equal(t, 5, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestSqlCountClients_Empty(t *testing.T) {
@@ -251,4 +256,5 @@ func TestSqlCountClients_Empty(t *testing.T) {
 	got, err := sqlCountClients(context.Background(), db)
 	require.NoError(t, err)
 	assert.Equal(t, 0, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }

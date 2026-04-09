@@ -322,6 +322,27 @@ func TestNonWSIPFilterMiddleware_RemoteNotInAllowlist(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
 }
 
+func TestNonWSIPFilterMiddleware_MalformedRemoteAddr(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := NonWSIPFilterMiddleware(ipsProvider([]string{"192.168.1.0/24"}))
+	wrapped := mw(next)
+
+	//nolint:noctx // test helper
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req.RemoteAddr = "bad-addr"
+	recorder := httptest.NewRecorder()
+	wrapped.ServeHTTP(recorder, req)
+
+	assert.False(t, called, "next must not be called when ParseRemoteIP returns nil")
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
 func TestNonWSIPFilterMiddleware_HotReload(t *testing.T) {
 	t.Parallel()
 
