@@ -17,3 +17,5 @@ jobs:
 
       - name: Dependency Review
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
+        with:
+          deny-licenses: AGPL-3.0-only, AGPL-3.0-or-later, SSPL-1.0, EUPL-1.1, EUPL-1.2, CPAL-1.0, Watcom-1.0
