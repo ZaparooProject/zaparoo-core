@@ -383,6 +383,12 @@ type ClientsDeleteParams struct {
 	ClientID string `json:"clientId"`
 }
 
+// ClientsPairStartResponse is the response for the clients.pair.start RPC method.
+type ClientsPairStartResponse struct {
+	PIN       string `json:"pin"`
+	ExpiresAt int64  `json:"expiresAt"`
+}
+
 // ClientsPairedNotification is the payload for the clients.paired notification,
 // broadcast when a client successfully completes the PAKE pairing flow.
 type ClientsPairedNotification struct {
