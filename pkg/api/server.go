@@ -1397,6 +1397,17 @@ func Start(
 	pairingMgr := NewPairingManager(db.UserDB, st.Notifications)
 	pairingMgr.StartCleanup(st.GetContext())
 
+	// Register pairing RPC methods. These close over the pairingMgr so
+	// they must be added after it is created, not in NewMethodMap().
+	if err := methodMap.AddMethod(models.MethodClientsPairStart,
+		methods.HandleClientsPairStart(pairingMgr)); err != nil {
+		log.Error().Err(err).Msg("error adding clients.pair.start method")
+	}
+	if err := methodMap.AddMethod(models.MethodClientsPairCancel,
+		methods.HandleClientsPairCancel(pairingMgr)); err != nil {
+		log.Error().Err(err).Msg("error adding clients.pair.cancel method")
+	}
+
 	encGateway := apimiddleware.NewEncryptionGateway(db.UserDB)
 	encGateway.StartCleanup(st.GetContext())
 

@@ -10,7 +10,7 @@ Build scripts work on Linux, Mac and Windows (natively or WSL). Just make sure a
 
 - [Go](https://go.dev/)
 
-  Version 1.25 or newer. The build script assumes your Go path is in the default location, for caching between Docker build environments: `$HOME/go`
+  Version 1.26 or newer. The build script assumes your Go path is in the default location, for caching between Docker build environments: `$HOME/go`
 
 - [Task](https://taskfile.dev/)
 - [Docker](https://www.docker.com/)

@@ -75,6 +75,8 @@ const (
 	MethodPlaytime             = "playtime"
 	MethodClients              = "clients"
 	MethodClientsDelete        = "clients.delete"
+	MethodClientsPairStart     = "clients.pair.start"
+	MethodClientsPairCancel    = "clients.pair.cancel"
 	MethodSystems              = "systems"
 	MethodLaunchersRefresh     = "launchers.refresh"
 	MethodHistory              = "tokens.history"
