@@ -29,12 +29,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jonboulle/clockwork"
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/crypto"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/jonboulle/clockwork"
+	"github.com/rs/zerolog/log"
 )
 
 // EncryptionProtoVersion is the current encryption protocol version. The
