@@ -29,13 +29,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jonboulle/clockwork"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/crypto"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // pairedClient builds a fake paired client. Used by tests to drive the
@@ -801,9 +803,11 @@ func TestEstablishSession_FailSeenCapEvictsOldest(t *testing.T) {
 	c, _ := pairedClient(t)
 	db := helpers.NewMockUserDBI()
 	db.On("GetClientByToken", c.AuthToken).Return(c, nil)
+	fakeClock := clockwork.NewFakeClock()
 	mgr := middleware.NewEncryptionGateway(db,
 		middleware.WithFailedFrameThreshold(2),
 		middleware.WithMaxFailEntries(3),
+		middleware.WithClock(fakeClock),
 	)
 
 	// Build a frame that will fail decryption (so recordFailure is called)
@@ -819,10 +823,13 @@ func TestEstablishSession_FailSeenCapEvictsOldest(t *testing.T) {
 		}
 	}
 
+	// Advance the fake clock between iterations so each entry gets a
+	// distinct lastFailureAt timestamp, making LRU eviction deterministic.
 	ips := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"}
 	for _, ip := range ips {
 		_, _, err := mgr.EstablishSession(mkFrame(), ip)
 		require.Error(t, err)
+		fakeClock.Advance(time.Second)
 	}
 
 	// 10.0.0.1 (the oldest) was evicted. Hitting it once more should fail
