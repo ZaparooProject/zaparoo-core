@@ -12,7 +12,7 @@ require (
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
 	github.com/charlievieth/fastwalk v1.0.14
-	github.com/clausecker/nfc/v2 v2.1.4
+	github.com/clausecker/nfc/v2 v2.2.0
 	github.com/cloudsoda/go-smb2 v0.0.0-20250228001242-d4c70e6251cc
 	github.com/creativeprojects/go-selfupdate v1.5.2
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
