@@ -282,7 +282,9 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		}
 
 		_, _ = fmt.Fprint(os.Stderr, "Pairing successful!\n")
-		_, _ = fmt.Println(result)
+		sanitizedResult := strings.ReplaceAll(result, "\n", "")
+		sanitizedResult = strings.ReplaceAll(sanitizedResult, "\r", "")
+		_, _ = fmt.Println(sanitizedResult)
 		os.Exit(0)
 	case *f.Reload:
 		_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")
