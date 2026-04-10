@@ -28,7 +28,7 @@ It's highly recommended to target your application at the specific minor version
 
 An example address for connecting to the API: `ws://10.0.0.123:7497/api/v0.1`
 
-The connection requires no special configuration or authentication to initiate.
+The connection requires no special configuration or authentication to initiate. When [encryption](./encryption) is enabled, remote clients must complete a one-time pairing and encrypt all WebSocket traffic.
 
 ### HTTP POST
 
