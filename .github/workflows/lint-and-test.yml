@@ -17,30 +17,8 @@ permissions:
   pull-requests: read
 
 jobs:
-  # Detect what files changed to skip tests on doc-only changes
-  changes:
-    name: Detect Changes
-    runs-on: ubuntu-latest
-    outputs:
-      code: ${{ steps.filter.outputs.code }}
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3
-        id: filter
-        with:
-          filters: |
-            code:
-              - 'pkg/**'
-              - 'cmd/**'
-              - 'go.mod'
-              - 'go.sum'
-              - '.github/workflows/**'
-              - '.golangci.yml'
-
   lint:
     name: Lint
-    needs: changes
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     timeout-minutes: 10
     strategy:
       fail-fast: false # Continue testing on other OS even if one fails
@@ -115,8 +93,6 @@ jobs:
 
   quick-test:
     name: Quick Test (Unit)
-    needs: changes
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     timeout-minutes: 10
     strategy:
       fail-fast: false # Continue testing on other OS even if one fails
@@ -211,8 +187,6 @@ jobs:
 
   full-test:
     name: Full Test (Unit + Integration)
-    needs: changes
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     timeout-minutes: 20
     # Only run on Linux for PRs, all platforms for main/tags
     strategy:
