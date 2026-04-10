@@ -442,7 +442,7 @@ jobs:
     timeout-minutes: 15
     name: Attest release artifacts
     needs: [sign-windows, build-batocera-any]
-    if: ${{ !cancelled() && !inputs.test_build && needs.sign-windows.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.test_build && needs.sign-windows.result == 'success' && needs.build-batocera-any.result == 'success' }}
     permissions:
       contents: write
       id-token: write
