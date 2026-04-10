@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -126,4 +127,121 @@ func TestCleanupServiceBinary_RemovesFromDataDir(t *testing.T) {
 	// and won't remove anything. This verifies the safety guard works.
 	svc.cleanupServiceBinary()
 	assert.FileExists(t, result)
+}
+
+func TestFilesEqual_IdenticalFiles(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a")
+	b := filepath.Join(dir, "b")
+	content := []byte("same content")
+	require.NoError(t, os.WriteFile(a, content, 0o600))
+	require.NoError(t, os.WriteFile(b, content, 0o600))
+
+	equal, err := filesEqual(a, b)
+	require.NoError(t, err)
+	assert.True(t, equal)
+}
+
+func TestFilesEqual_EmptyFiles(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a")
+	b := filepath.Join(dir, "b")
+	require.NoError(t, os.WriteFile(a, []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(b, []byte{}, 0o600))
+
+	equal, err := filesEqual(a, b)
+	require.NoError(t, err)
+	assert.True(t, equal)
+}
+
+func TestFilesEqual_DifferentContent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a")
+	b := filepath.Join(dir, "b")
+	require.NoError(t, os.WriteFile(a, []byte("content a"), 0o600))
+	require.NoError(t, os.WriteFile(b, []byte("content b"), 0o600))
+
+	equal, err := filesEqual(a, b)
+	require.NoError(t, err)
+	assert.False(t, equal)
+}
+
+func TestFilesEqual_DifferentSizes(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a")
+	b := filepath.Join(dir, "b")
+	require.NoError(t, os.WriteFile(a, []byte("short"), 0o600))
+	require.NoError(t, os.WriteFile(b, []byte("much longer content"), 0o600))
+
+	equal, err := filesEqual(a, b)
+	require.NoError(t, err)
+	assert.False(t, equal)
+}
+
+func TestFilesEqual_DestinationMissing(t *testing.T) {
+	t.Parallel()
+	a := filepath.Join(t.TempDir(), "a")
+	require.NoError(t, os.WriteFile(a, []byte("data"), 0o600))
+
+	equal, err := filesEqual(a, "/nonexistent/file")
+	require.NoError(t, err)
+	assert.False(t, equal)
+}
+
+func TestFilesEqual_SourceMissing(t *testing.T) {
+	t.Parallel()
+	_, err := filesEqual("/nonexistent/file", "/also/nonexistent")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error statting source")
+}
+
+func TestPrepareBinary_SkipsCopyWhenIdentical(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	// Set mtime to a known past value so any rewrite is detectable.
+	pastTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(result, pastTime, pastTime))
+
+	result2, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, result, result2)
+
+	info, err := os.Stat(result2)
+	require.NoError(t, err)
+	assert.Equal(t, pastTime.Unix(), info.ModTime().Unix(), "file should not have been rewritten")
+}
+
+func TestPrepareBinary_CopiesWhenContentDiffers(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo")
+	require.NoError(t, os.WriteFile(srcPath, []byte("version-1"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	// Update the source binary.
+	require.NoError(t, os.WriteFile(srcPath, []byte("version-2"), 0o600))
+
+	result2, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, result, result2)
+
+	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
+	require.NoError(t, err)
+	assert.Equal(t, "version-2", string(content))
 }
