@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/crypto"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
@@ -204,6 +205,7 @@ type failedFrameTracker struct {
 // all sessions. Sessions are stored on the melody session after establishment.
 type EncryptionGateway struct {
 	db                       database.UserDBI
+	clock                    clockwork.Clock
 	saltSeen                 map[string]map[string]time.Time
 	failSeen                 map[string]*failedFrameTracker
 	maxSaltsPerClient        int
@@ -263,6 +265,11 @@ func WithMaxFailEntries(n int) EncryptionGatewayOption {
 	return func(m *EncryptionGateway) { m.maxFailEntries = n }
 }
 
+// WithClock overrides the clock used for timestamps (useful for testing).
+func WithClock(c clockwork.Clock) EncryptionGatewayOption {
+	return func(m *EncryptionGateway) { m.clock = c }
+}
+
 // NewEncryptionGateway constructs a EncryptionGateway with default limits.
 func NewEncryptionGateway(db database.UserDBI, opts ...EncryptionGatewayOption) *EncryptionGateway {
 	m := &EncryptionGateway{
@@ -280,6 +287,9 @@ func NewEncryptionGateway(db database.UserDBI, opts ...EncryptionGatewayOption) 
 	}
 	for _, opt := range opts {
 		opt(m)
+	}
+	if m.clock == nil {
+		m.clock = clockwork.NewRealClock()
 	}
 	return m
 }
@@ -439,7 +449,7 @@ func (m *EncryptionGateway) isBlocked(authToken, sourceIP string) bool {
 	if !ok {
 		return false
 	}
-	if time.Now().Before(t.blockedUntil) {
+	if m.clock.Now().Before(t.blockedUntil) {
 		return true
 	}
 	return false
@@ -461,7 +471,7 @@ func (m *EncryptionGateway) recordFailure(authToken, sourceIP string) {
 		m.failSeen[key] = t
 	}
 	t.failures++
-	t.lastFailureAt = time.Now()
+	t.lastFailureAt = m.clock.Now()
 
 	if t.failures >= m.failedFrameThreshold {
 		// Apply backoff. blockCount starts at 0 → 1x duration.
@@ -473,7 +483,7 @@ func (m *EncryptionGateway) recordFailure(authToken, sourceIP string) {
 		if dur > m.failedFrameMaxBlock {
 			dur = m.failedFrameMaxBlock
 		}
-		t.blockedUntil = time.Now().Add(dur)
+		t.blockedUntil = m.clock.Now().Add(dur)
 		t.blockCount++
 		t.failures = 0
 		log.Warn().
@@ -586,13 +596,13 @@ func (m *EncryptionGateway) checkAndRecordSalt(authToken string, salt []byte) er
 		delete(t, oldestKey)
 	}
 
-	t[saltHex] = time.Now()
+	t[saltHex] = m.clock.Now()
 	return nil
 }
 
 // cleanupExpired evicts old salt entries and stale failure trackers.
 func (m *EncryptionGateway) cleanupExpired() {
-	now := time.Now()
+	now := m.clock.Now()
 
 	m.saltMu.Lock()
 	for token, tracker := range m.saltSeen {
