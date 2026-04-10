@@ -1,600 +1,263 @@
-# Title Normalization and Matching System
+# Title normalization and matching
 
-Zaparoo Core's title normalization and matching system enables users to launch games using natural language titles (e.g., "The Legend of Zelda: Ocarina of Time") that are fuzzy-matched against indexed ROM filenames. This document provides a high-level overview of how the system works.
+Zaparoo matches games by title, not filename. Write a game name like "The Legend of Zelda: Ocarina of Time" and it gets fuzzy-matched against indexed ROM filenames. Both the query and the filenames go through the same slug pipeline, so naming differences wash out.
 
-## Overview
+Slugs are not IDs. They're a normalized form used for matching. The original titles and filenames stick around for display and fallback matching.
 
-The system lets users look up games by **natural language titles** rather than exact filenames or unique identifiers. Titles can be written in various forms (with or without articles, with Roman numerals or digits, with typos, etc.) and the system will find matching games through progressive normalization and fallback strategies.
+Offline-first, no hashing (too slow on MiSTer FPGA / older Pis). English heuristics only for now.
 
-**Key Concept:** Slugs are **not IDs**. They are an intermediary normalization step that enables fuzzy matching between user queries and indexed filenames. The system normalizes both sides:
+## How it works
 
-- **User input** → normalize → slug → match against database
-- **Filenames** → normalize → slug → store in database
-
-The original input title and filename are preserved for additional context during resolution.
-
-## Why This Approach?
-
-The system works around several constraints:
-
-- **No hashing**: Too slow on low-resource devices (MiSTer FPGA, older Raspberry Pis)
-- **Offline-first**: No dependency on online services or internet access
-- **Cross-device portability**: Tokens work across different devices despite different file naming schemes
-
-**Advantages:**
-
-- Natural language names on NFC/QR tokens work universally
-- Third-party apps don't need special integration - just write the game name
-- System can be improved over time without breaking compatibility
-- Makes local media search much more useful
-
-**Limitations:**
-
-- No cross-language support (and currently prioritizes English heuristics)
-- Conflicts can occur (mitigated by system namespacing and tags)
-- Best-effort normalization rather than perfect accuracy
-
-## How It Works
-
-### 1. Indexing
+### Indexing
 
 When scanning media, Zaparoo:
 
-1. Cleans path and extracts filename (strips file extension and path)
-2. Parses filename to extract clean display title (8-step pipeline - see Filename Parser section)
-3. Extracts tags from filename using bracket disambiguation (4-step pipeline - see Filename Parser section)
-4. Determines media type from system (Game, TVShow, Movie, Music, Image, Audio, Video, Application)
-5. Runs media-type-aware slugification on title (two-phase normalization - see Slug Normalization section)
-6. Stores path, title, slug, tags, and metadata in database for fast searching
+1. Cleans path and extracts filename (strips extension and path)
+2. Parses filename to extract a clean display title (see [Filename parser](#filename-parser))
+3. Extracts tags from brackets/parentheses (see [Tag extraction](#tag-extraction))
+4. Determines media type from the system (Game, TVShow, Movie, Music, Image, Audio, Video, Application)
+5. Slugifies the title using media-type-aware normalization (see [Slug normalization](#slug-normalization))
+6. Stores path, title, slug, tags, and metadata in the database
 
-### 2. Resolution (Query-Based Launching)
+### Resolution
 
-When launching by title query (e.g., `launch.title("NES/Super Mario Bros")`), Zaparoo:
+When launching by title (e.g. `launch.title` with arg `NES/Super Mario Bros`):
 
 1. Parses `SystemID/GameName` format
-2. Validates format and looks up system in database
-3. Extracts tags from three sources in user query (advanced args, canonical tags, filename-style metadata)
-4. Merges tags with priority hierarchy
-5. Slugifies game name using media-type-aware normalization (same as indexing)
-6. Checks cache for previous resolutions
-7. Tries multiple matching strategies in order until finding a match (see Matching Strategies section)
-8. Applies confidence scoring and filtering to select best result
-9. Caches successful resolution for future queries
-
-**Note:** The user's query is processed separately from filenames. Users can include tags in their queries using filename-style `(USA)`, canonical `(+region:us)`, or advanced args `?tags=region:us` formats.
+2. Extracts and merges tags from the query (three sources — see [Tags in queries](#tags-in-queries))
+3. Slugifies the game name using the same normalization as indexing
+4. Tries matching strategies in order until finding a result (see [Matching strategies](#matching-strategies))
+5. Scores and filters results to pick the best match
+6. Caches the resolution for future queries
 
 ---
 
-## Slug Normalization
+## Slug normalization
 
-Slug normalization uses a **two-phase architecture** that converts titles into a canonical form. Both indexing and resolution use identical normalization.
+Two-phase pipeline that converts titles into a canonical form. Indexing and resolution run the same normalization.
 
-**Implementation:** `pkg/database/slugs/slugify.go` → `Slugify(mediaType MediaType, input string)`
+`pkg/database/slugs/slugify.go` → `Slugify(mediaType, input)`
 
-### Two-Phase Architecture
+### Phase 1: Media-specific parsing
 
-#### Phase 1: Media-Specific Parsing
+Format-specific normalization runs before the universal pass.
 
-Applies format-specific normalization based on media type **before** universal normalization.
+**Games** (`pkg/database/slugs/media_parsing_game.go`):
 
-**For Games** (`ParseGame`):
+Width normalization first (fullwidth → ASCII), then:
 
-Width normalization is applied first (fullwidth separators → ASCII for detection), then 9 steps:
-
-1. Split titles and strip articles: "The Zelda: Link's Awakening" → "Zelda Link's Awakening"
+1. Split on `:` and strip leading articles: "The Zelda: Link's Awakening" → "Zelda Link's Awakening"
 2. Strip trailing articles: "Legend, The" → "Legend"
 3. Strip metadata brackets: `(USA)`, `[!]`, `{Europe}` → removed
 4. Strip edition/version suffixes: "Edition", "Version", "v1.0" → removed
-5. Normalize symbols/separators (preserve commas for trailing articles)
+5. Normalize symbols/separators (preserve commas for trailing article detection)
 6. Expand abbreviations: "Bros" → "brothers", "vs" → "versus", "Dr" → "doctor"
 7. Expand number words: "one" → "1", "two" → "2" (1-20)
 8. Normalize ordinals: "2nd" → "2", "3rd" → "3"
 9. Convert roman numerals: "VII" → "7", "II" → "2" (preserves "X" in "Mega Man X")
 
-**For TV Shows** (`ParseTVShow`):
+**TV Shows** (`pkg/database/slugs/media_parsing_tv.go`):
 
-Width normalization is applied first, then 9 steps:
+Width normalization first, then:
 
-1. Scene tag stripping: quality, codec, source tags (1080p, x264, BluRay, etc.)
-2. Dot normalization: scene release dots → spaces
-3. Strip metadata brackets: `[720p]`, `(extended)` → removed
-4. Normalize date episodes: YYYY-MM-DD, DD-MM-YYYY (with `.`, `/`, `-` separators) → canonical `YYYY-MM-DD`
-5. Normalize season-based formats: `S01E02`, `s01e02`, `1x02`, `S01.E02`, `S01_E02`, multi-episode (`S01E01-E02`) → `s01e02`
-6. Normalize absolute numbering: `Episode 001`, `Ep 42`, `E001`, `#001` (anime), leading numbers → `e001`
-7. Component reordering: episode marker placed after show name ("S01E02 - Show - Title" → "Show s01e02 Title")
-8. Split titles and strip articles: "The Show: Episode Title" → "Show Episode Title"
-9. Strip trailing articles: "Show, The" → "Show"
+1. Strip scene tags: quality, codec, source (1080p, x264, BluRay, etc.)
+2. Dots → spaces (scene release convention)
+3. Strip metadata brackets
+4. Normalize date episodes: various date formats → `YYYY-MM-DD`
+5. Normalize season-based: `S01E02`, `1x02`, `S01.E02` → `s01e02`
+6. Normalize absolute numbering: `Episode 001`, `Ep 42`, `#001` → `e001`
+7. Reorder components: episode marker placed after show name
+8. Split titles and strip articles
+9. Strip trailing articles
 
-**For Movies** (`ParseMovie`):
-1. Width normalization (fullwidth separators → ASCII for detection)
-2. Scene tag stripping: quality, codec, source, HDR, 3D tags (preserves edition qualifiers like "Extended", "Unrated", "Director's Cut")
-3. Dot normalization: scene release dots → spaces
-4. Edition suffix stripping: trailing "Edition", "Version", "Cut", "Release" removed (preserves qualifiers: "Director's Cut Edition" → "Director's")
-5. Bracket stripping: `(2024)`, `{imdb-tt1234567}` → removed (years extracted as tags)
-6. Split titles and strip articles: "The Movie: Subtitle" → "Movie Subtitle"
-7. Strip trailing articles: "Movie, The" → "Movie"
+**Movies** (`pkg/database/slugs/media_parsing_movie.go`):
 
-**For Music** (`ParseMusic`):
-1. Width normalization (fullwidth separators → ASCII for detection)
-2. Scene tag stripping: format (FLAC, MP3), quality (V0, 320, 24bit), source (CD, Vinyl, WEB), release group (preserves edition qualifiers like "Remastered", "Deluxe")
-3. Separator normalization: dots, underscores, dashes → spaces
-4. Bracket stripping: `(1979)`, `[FLAC]` → removed (years extracted as tags)
-5. Disc number stripping: CD1, CD2, Disc 1 → removed
-6. Strip leading article: "The Beatles Abbey Road" → "Beatles Abbey Road"
-7. Strip trailing articles: "Album, The" → "Album"
-8. Whitespace collapse: multiple spaces → single space
+1. Width normalization
+2. Strip scene tags (preserves edition qualifiers like "Extended", "Director's Cut")
+3. Dots → spaces
+4. Strip edition suffixes: "Edition", "Version", "Cut", "Release"
+5. Strip brackets (years extracted as tags)
+6. Split titles and strip articles
+7. Strip trailing articles
 
-**For Image/Audio/Video/Application**:
-- Pass through to Phase 2 universal normalization only (no media-specific parsing yet)
+**Music** (`pkg/database/slugs/media_parsing_music.go`):
 
-#### Phase 2: Universal Normalization (`normalizeInternal`)
+1. Width normalization
+2. Strip scene tags: format (FLAC, MP3), quality (V0, 320), source (CD, Vinyl, WEB)
+3. Separators → spaces (dots, underscores, dashes)
+4. Strip brackets (years extracted as tags)
+5. Strip disc numbers: CD1, Disc 1 → removed
+6. Strip leading article: "The Beatles" → "Beatles"
+7. Strip trailing articles
+8. Collapse whitespace
+
+**Image/Audio/Video/Application**: Pass through to Phase 2 only.
+
+### Phase 2: Universal normalization
+
+`pkg/database/slugs/slugify.go` → `normalizeInternal()`
 
 Applied after media-specific parsing:
 
-1. **Width Normalization** - Fullwidth → Halfwidth (ASCII), Halfwidth → Fullwidth (CJK)
-2. **Punctuation Normalization** - Curly quotes, fancy dashes → standard ASCII
-3. **Unicode Normalization** - Remove symbols (™©®), remove diacritics (Pokémon → Pokemon), script-aware processing
-4. **Symbols & Separators** - `&` → `and`, separators → spaces: "Sonic & Knuckles" → "Sonic and Knuckles"
-5. **Period Conversion** - All periods → spaces (safe after abbreviations expanded)
-6. **Lowercasing** - Convert to lowercase
+1. Width normalization — fullwidth → halfwidth (ASCII), halfwidth → fullwidth (CJK)
+2. Punctuation normalization — curly quotes, fancy dashes → ASCII equivalents
+3. Unicode normalization — remove symbols (™©®), strip diacritics (Pokémon → Pokemon)
+4. Symbols and separators — `&` → `and`, separators → spaces
+5. Periods → spaces (safe after abbreviation expansion)
+6. Lowercase
 
-**Final Stage** (in `Slugify`/`SlugifyWithTokens`):
+Final: strip all non-alphanumeric characters (script-aware for non-Latin text).
 
-7. **Character Filtering** - Remove non-alphanumeric, multi-script aware
-
-### Complete Example (Games)
+### Example
 
 ```
 Input:  "The Legend of Zelda: Ocarina of Time (USA) [!]"
 
-Phase 1 (ParseGame):
-  Step 1: Split & strip articles → "Legend of Zelda Ocarina of Time (USA) [!]"
-  Step 3:   Strip brackets → "Legend of Zelda Ocarina of Time"
-  Step 9:   Roman numerals (none) → "Legend of Zelda Ocarina of Time"
+Phase 1 (Game):
+  Split & strip articles → "Legend of Zelda Ocarina of Time (USA) [!]"
+  Strip brackets         → "Legend of Zelda Ocarina of Time"
 
-Phase 2 (normalizeInternal):
-  Step 6:   Lowercase → "legend of zelda ocarina of time"
+Phase 2:
+  Lowercase              → "legend of zelda ocarina of time"
 
 Final:
-  Character filtering → "legendofzeldaocarinaoftime"
-
-Output: "legendofzeldaocarinaoftime"
+  Strip non-alphanumeric → "legendofzeldaocarinaoftime"
 ```
 
-### Multi-Script Support
+### Multi-script support
 
-The system preserves non-Latin scripts (CJK, Cyrillic, Arabic, etc.) while aggressively normalizing Latin text:
+`pkg/database/slugs/scripts.go`
 
-- **Latin titles**: Full normalization, ASCII output
-- **CJK titles**: Preserved characters, essential marks kept
-- **Mixed titles**: Both portions concatenated, searchable by either part
-
-**Example:**
+Non-Latin scripts (CJK, Cyrillic, Arabic, etc.) are kept intact while Latin text gets full normalization. Mixed titles just concatenate both parts:
 
 ```
-Input:  "Street Fighter ストリートファイター"
-Output: "streetfighterストリートファイター"
+"Street Fighter ストリートファイター" → "streetfighterストリートファイター"
 ```
 
-This makes the title searchable by either the Latin or CJK portion.
+You can search by either portion. Script-specific rules handle diacritics differently per writing system (Arabic vowel marks get stripped, Indic vowel marks are preserved, etc.).
 
 ---
 
-## Filename Parser (Indexing)
+## Filename parser
 
-During media indexing, Zaparoo parses filenames to extract clean titles and metadata tags. This happens when scanning ROM directories, media libraries, or individual files.
+Filenames are parsed during indexing to pull out clean titles and metadata tags.
 
-**Implementation:** `pkg/database/mediascanner/indexing_pipeline.go` → `GetPathFragments()`, `pkg/database/tags/filename_parser.go`
+`pkg/database/mediascanner/indexing_pipeline.go` → `GetPathFragments()`
+`pkg/database/tags/filename_parser.go`
 
-### Indexing Pipeline
+### Title extraction
 
-When a file is indexed, the system:
+`tags.ParseTitleFromFilename(filename, stripLeadingNumbers)` — 8-step pipeline:
 
-1. **Cleans path** - Normalizes to forward slashes, handles URIs
-2. **Extracts filename** - Strips file extension and path
-3. **Parses title** - Extracts clean display title from filename
-4. **Extracts tags** - Parses metadata from brackets/parentheses
-5. **Slugifies title** - Creates normalized slug for matching
-6. **Stores in database** - Saves path, title, slug, and tags
+1. **Remove extension** — strips `.zip`, `.nes`, `.mkv` etc. (2-4 char extensions only)
+2. **Strip release group** — `-YIFY`, `-SPARKS` at end (uppercase, 3+ chars)
+3. **Normalize separators** — if filename has no spaces and 2+ dots/underscores/dashes, convert all to spaces. Detects scene releases and ROM naming conventions.
+4. **Strip scene artifacts** — only after a year if found. Removes resolution, source, codec, audio, HDR, status tags. Protects titles like "Cam (2018)" where "Cam" is the actual title.
+5. **Strip episode markers** — `S01E02`, `s1e2` removed from display title (kept for tag extraction)
+6. **Strip leading numbers** — optional, only when directory context shows list-style numbering (`01 - Game Name` → `Game Name`)
+7. **Remove bracket content** — all `()`, `[]`, `{}`, `<>` and their contents
+8. **Normalize whitespace** — collapse multiple spaces, trim
 
-### Title Extraction from Filename
+Examples:
 
-**Function:** `tags.ParseTitleFromFilename(filename, stripLeadingNumbers)`
-
-Extracts a clean display title from a filename by removing metadata and normalizing artifacts.
-
-#### The 8-Step Pipeline
-
-1. **Remove File Extension**
-   - Strips `.zip`, `.nes`, `.mkv`, etc.
-   - Only removes if 2-4 characters after last dot
-   - Example: `"game.nes"` → `"game"`
-
-2. **Strip Release Group**
-   - Removes scene release group suffix: `-GROUP` at end
-   - Must be uppercase, 3+ characters
-   - Example: `"Movie-YIFY"` → `"Movie"`
-   - **Done early** before hyphen → space conversion
-
-3. **Normalize Filename Separators** (contextual)
-   - **Trigger:** Filename has no spaces AND 2+ separators (dots, underscores, or dashes)
-   - **Action:** Convert all `.`, `_`, `-` → spaces
-   - Examples:
-     - `"The.Dark.Knight.2008.mkv"` → `"The Dark Knight 2008"`
-     - `"super_mario_bros.sfc"` → `"super mario bros"`
-     - `"mega-man-x.nes"` → `"mega man x"`
-   - **Heuristic:** Detects scene releases and ROM naming conventions
-
-4. **Strip Scene Release Artifacts** (contextual)
-   - **Trigger:** Only strips from text AFTER a year (if found)
-   - **Protects titles:** `"Cam (2018)"` keeps "Cam" (it's the title, not a scene tag)
-   - **Removed patterns:**
-     - Resolution: `720p`, `1080p`, `2160p`, `4K`, `UHD`
-     - Source: `BluRay`, `WEB-DL`, `WEBRip`, `HDTV`, `DVDRip`, `CAM`, `TS`
-     - Video codec: `x264`, `x265`, `h264`, `HEVC`, `AVC`
-     - Audio codec: `AAC`, `AC3`, `DTS`, `DD5.1`, `TrueHD`, `Atmos`
-     - HDR: `HDR`, `HDR10`, `Dolby Vision`
-     - Status: `PROPER`, `REPACK`, `INTERNAL`, `LIMITED`
-   - Example: `"The Dark Knight 2008 1080p BluRay x264"` → `"The Dark Knight 2008"`
-
-5. **Strip Episode Markers**
-   - Removes TV show episode patterns: `S01E02`, `s1e2`
-   - Keeps them for tag extraction but removes from display title
-   - Example: `"Breaking Bad S01E02 Title"` → `"Breaking Bad Title"`
-
-6. **Strip Leading Numbers** (optional)
-   - Only when `stripLeadingNumbers=true` (detected from directory context)
-   - Removes list prefixes: `"1. "`, `"01 - "`, `"05-"`
-   - Example: `"01 - Game Name"` → `"Game Name"`
-   - **Contextual:** Only enabled when directory shows list-style numbering
-
-7. **Remove All Bracket Content**
-   - **Function:** `slugs.StripMetadataBrackets()`
-   - Removes: `()`, `[]`, `{}`, `<>`
-   - Handles nested brackets
-   - Example: `"Game (USA) [!] {Europe}"` → `"Game"`
-   - Example: `"Movie (2008) (Blu-ray)"` → `"Movie"`
-
-8. **Normalize Whitespace**
-   - Collapses multiple spaces to single space
-   - Trims leading/trailing spaces
-   - Final cleanup after all transformations
-
-### Title Extraction Examples
-
-**ROM filename:**
 ```
-Input:  "Super Mario Bros. III (USA) (Rev A) [!].nes"
-Step 1: Remove extension → "Super Mario Bros. III (USA) (Rev A) [!]"
-Step 7: Remove brackets → "Super Mario Bros. III"
-Step 8: Normalize whitespace → "Super Mario Bros. III"
-Output: "Super Mario Bros. III"
+"Super Mario Bros. III (USA) (Rev A) [!].nes"
+  → remove ext → strip brackets → "Super Mario Bros. III"
+
+"The.Dark.Knight.2008.1080p.BluRay.x264-YIFY.mkv"
+  → remove ext → strip group → normalize seps → strip scene → "The Dark Knight 2008"
+
+"Breaking.Bad.S01E02.Gray.Matter.720p.mkv"
+  → normalize seps → strip scene → strip episode → "Breaking Bad Gray Matter"
 ```
 
-**Scene release:**
+### Tag extraction
+
+`tags.ParseFilenameToCanonicalTags(filename)` — 4-step pipeline:
+
+**Step 1: Special patterns** — extracts patterns outside brackets: disc numbers (`Disc 1 of 2` → `disc:1`), revisions (`Rev A` → `rev:a`), versions (`v1.2` → `rev:1-2`), years (`1997` → `year:1997`), episodes (`S01E02` → `season:1`, `episode:2`), issues, tracks, translations.
+
+**Step 2: Bracket content** — state machine parser extracts `()`, `{}`, `<>` tags separately from `[]` tags.
+
+**Step 3: Parentheses tags** — context-aware disambiguation:
+- First paren tag → region if it matches the known region list (USA, Europe, Japan, etc.)
+- Subsequent tags → language, version, dev status
+- Multi-value: `(En,Fr,De)` → `lang:en`, `lang:fr`, `lang:de`
+
+**Step 4: Square bracket tags** — always dump info or modifications:
+- `[!]` → `dump:verified`, `[b]` → `dump:bad`, `[h]` → `hack:yes`, `[T+En]` → `translation:en`
+
+Example:
+
 ```
-Input:  "The.Dark.Knight.2008.1080p.BluRay.x264-YIFY.mkv"
-Step 1: Remove extension → "The.Dark.Knight.2008.1080p.BluRay.x264-YIFY"
-Step 2: Strip release group → "The.Dark.Knight.2008.1080p.BluRay.x264"
-Step 3: Normalize separators → "The Dark Knight 2008 1080p BluRay x264"
-Step 4: Strip scene artifacts (after year) → "The Dark Knight 2008"
-Output: "The Dark Knight 2008"
+"Super Mario Bros. 3 (USA) (Rev A) [!].nes"
+  → [rev:a, region:us, dump:verified]
+
+"Zelda (Europe) (En,Fr,De,Es,It).gba"
+  → [region:eu, lang:en, lang:fr, lang:de, lang:es, lang:it]
 ```
-
-**TV show:**
-```
-Input:  "Breaking.Bad.S01E02.Gray.Matter.720p.mkv"
-Step 3: Normalize separators → "Breaking Bad S01E02 Gray Matter 720p"
-Step 4: Strip scene artifacts → "Breaking Bad S01E02 Gray Matter"
-Step 5: Strip episode marker → "Breaking Bad Gray Matter"
-Output: "Breaking Bad Gray Matter"
-```
-
-### Tag Extraction from Filename
-
-**Function:** `tags.ParseFilenameToCanonicalTags(filename)`
-
-Extracts metadata tags from filenames following No-Intro and TOSEC conventions.
-
-#### The 4-Step Pipeline
-
-**Step 1: Extract Special Patterns**
-- **Function:** `extractSpecialPatterns()`
-- Finds patterns that appear outside brackets:
-  - **Disc numbers**: `(Disc 1 of 2)` → `disc:1`, `discof:2`
-  - **Revisions**: `(Rev A)`, `(Rev 1)` → `rev:a`, `rev:1`
-  - **Volumes**: `(Vol. 2)`, `(Volume 3)` → `volume:2`
-  - **Versions**: `(v1.2)`, `v3.0` → `rev:1-2`, `rev:3-0`
-  - **Years**: `(1997)` → `year:1997`
-  - **Episodes**: `S01E02`, `1x05` → `season:1`, `episode:2`
-  - **Issues**: `#12`, `Issue 5` → `issue:12`
-  - **Tracks**: `01 -`, `Track 03` → `track:1`
-  - **Translations**: `T+En`, `T-Fr v1.0` → `translation:en`, `translation-:fr`
-  - **Bracketless versions**: `v1.0`, `v1.2.3` outside brackets → `rev:1-0` (only if no version already extracted)
-  - **Edition/version words**: "Edition", "Version" (+ multi-language equivalents) → `edition:edition` or `edition:version` (inferred, not removed from title)
-- Removes matched patterns from string for cleaner bracket extraction
-
-**Step 2: Extract Bracket Content**
-- **Function:** `extractTags()`
-- State machine parser for brackets:
-  - `()`, `{}`, `<>` → parentheses tags (region, language, dev status)
-  - `[]` → square bracket tags (dump info, hacks)
-- Returns two separate lists for disambiguation
-
-**Step 3: Process Parentheses Tags**
-- **Function:** `disambiguateTag()` with `BracketTypeParen`
-- Context-aware parsing with positional rules:
-  - **First paren tag** → usually region (if matches known region)
-  - **Subsequent tags** → language, version, dev status, etc.
-- Handles multi-value tags: `(En,Fr,De)` → `lang:en`, `lang:fr`, `lang:de`
-- **Tag types recognized:**
-  - Regions: `USA`, `Europe`, `Japan`, `World`, etc.
-  - Languages: `En`, `Fr`, `De`, `Ja`, etc. (2-3 letter codes)
-  - Dev status: `Beta`, `Proto`, `Alpha`, `Demo`
-  - Versions: `v1.0`, `Rev A`, `Alt`
-  - Years: `1997`, `2008`
-
-**Step 4: Process Square Bracket Tags**
-- **Function:** `disambiguateTag()` with `BracketTypeSquare`
-- Always dump-related or modification info:
-  - **Dump status**: `[!]` → `dump:verified`, `[b]` → `dump:bad`
-  - **Hacks**: `[h]`, `[h1]` → `hack:yes`, `hack:1`
-  - **Translations**: `[T+En]` → `translation:en`
-  - **Trainer**: `[t]`, `[t1]` → `trainer:yes`, `trainer:1`
-  - **Fixes**: `[f]` → `fix:yes`
-  - **Overdumps**: `[o]` → `overdump:yes`
-
-### Tag Extraction Examples
-
-**ROM filename:**
-```
-Input:  "Super Mario Bros. 3 (USA) (Rev A) [!].nes"
-
-Step 1: Extract special patterns
-  → Rev: rev:a (from "(Rev A)")
-  → Remaining: "Super Mario Bros. 3 (USA) [!].nes"
-
-Step 2: Extract brackets
-  → Paren tags: ["USA"]
-  → Square tags: ["!"]
-
-Step 3: Process paren tags
-  → "USA" (position 0, first tag) → region:us
-
-Step 4: Process square tags
-  → "!" → dump:verified
-
-Output: [rev:a, region:us, dump:verified]
-```
-
-**Multi-language ROM:**
-```
-Input:  "Zelda (Europe) (En,Fr,De,Es,It).gba"
-
-Step 2: Extract brackets
-  → Paren tags: ["Europe", "En,Fr,De,Es,It"]
-
-Step 3: Process paren tags (position 0)
-  → "Europe" → region:eu
-
-Step 3: Process paren tags (position 1)
-  → "En,Fr,De,Es,It" (multi-value) → lang:en, lang:fr, lang:de, lang:es, lang:it
-
-Output: [region:eu, lang:en, lang:fr, lang:de, lang:es, lang:it]
-```
-
-**Unfinished ROM:**
-```
-Input:  "Star Fox 2 (Beta) (1995).sfc"
-
-Step 1: Extract special patterns
-  → Year: year:1995
-  → Remaining: "Star Fox 2 (Beta).sfc"
-
-Step 3: Process paren tags
-  → "Beta" → unfinished:beta
-
-Output: [year:1995, unfinished:beta]
-```
-
-**Scene release:**
-```
-Input:  "The.Dark.Knight.2008.1080p.BluRay.x264-YIFY.mkv"
-
-Step 1: Extract special patterns
-  → Year: year:2008
-  → Remaining: (no brackets to extract)
-
-Output: [year:2008]
-```
-
-### Disambiguation Rules
-
-The system uses **positional** and **bracket-type** rules for disambiguation:
-
-**Positional Rules** (parentheses):
-1. **First tag** → region (if matches known region list)
-2. **Subsequent tags** → language, version, dev status
-3. **Context-aware** → checks previously processed tags
-
-**Bracket Type Rules:**
-- **Parentheses/Braces/Angles** → metadata (region, language, version, dev status)
-- **Square brackets** → always dump info or modifications (hacks, trainers, fixes)
-
-**Special Handling:**
-- **Multi-value tags**: `(En,Fr,De)` → creates multiple lang tags
-- **Composite tags**: `(En,Fr)` in Europe ROM → both languages extracted
-- **Inferred tags**: "Edition" in plain text → marked as `TagSourceInferred`, skipped for filtering
 
 ---
 
-## Matching Strategies
+## Matching strategies
 
-Resolution tries strategies **in order** until finding results. Each strategy is more lenient than the last.
+Resolution tries strategies in order, each more lenient than the last, until something matches.
 
-**Implementation:** `pkg/zapscript/titles.go` → `cmdTitle()`
-
-### Strategy Flow
+`pkg/zapscript/titles/resolve.go`
 
 ```
-1. Check cache
-   ↓ (miss)
-2. Exact match (with tags)
-   ↓ (no results OR low confidence)
-3. Exact match (without tags)
-   ↓ (no results)
+1. Cache lookup
+   ↓ miss
+2. Exact slug match (with tag filters)
+   ↓ no results or low confidence
+3. Exact slug match (without tags)
+   ↓ no results
 4. Secondary title match
-   ↓ (no results)
-5. Advanced fuzzy matching
-   ├─ Token signature (word-order independent)
-   ├─ Jaro-Winkler (typo tolerance)
-   └─ Damerau-Levenshtein tie-breaking
-   ↓ (no results)
+   ↓ no results
+5. Fuzzy matching
+   ↓ no results
 6. Main title only
-   ↓ (no results)
-7. Progressive trim (last resort)
+   ↓ no results
+7. Progressive trim
 ```
 
-### Strategy Details
+**Cache** — keyed by SystemID + Slug + Tags. Returns immediately on hit.
 
-#### 1. Cache Lookup
+**Exact match with tags** — direct slug lookup with tags as filters. Early exit if confidence >= 0.95.
 
-- Fast path: checks previous resolutions
-- Keyed by: SystemID + Slug + Tags
+**Exact match without tags** — same lookup, tags ignored. Tags become soft preferences during result selection.
 
-#### 2. Exact Match (with tags)
+**Secondary title** — handles mismatched subtitles. Bidirectional: "Zelda: Ocarina of Time" matches "Ocarina of Time" and vice versa.
 
-- Direct slug lookup
-- Tags applied as filters
-- **Early exit** if confidence ≥ 0.95 (high confidence)
+**Fuzzy matching** — pre-filter (±2 chars length diff), then: token signature (word-order-independent), Jaro-Winkler (typo tolerance, 0.85+ similarity), Damerau-Levenshtein for tie-breaking top candidates.
 
-#### 3. Exact Match (without tags)
+**Main title only** — uses just the part before the first delimiter. "Zelda: Ocarina" matches "Zelda" and "Zelda: Ocarina of Time".
 
-- Same slug lookup, tags ignored
-- Tags become soft preferences during result selection
+**Progressive trim** — removes words from the end of the query, max 3 iterations. "Legend of Zelda Link's Awakening DX" tries progressively shorter slugs.
 
-#### 4. Secondary Title Match
+### Tags in queries
 
-Handles mismatched secondary titles (bidirectional):
+Tags come from three sources (highest priority wins):
 
-- Query has secondary, DB doesn't: "Zelda: Ocarina" → matches "Ocarina of Time"
-- Query simple, DB has secondary: "Ocarina" → matches "Zelda: Ocarina of Time"
+1. **Advanced args**: `NES/Zelda?tags=region:us,-unfinished:beta` — explicit, overrides everything
+2. **Inline canonical**: `NES/Zelda (+region:us) (-unfinished:beta)` — `+` for AND, `-` for NOT
+3. **Filename-style**: `NES/Zelda (USA) (1986)` — auto-extracted, lowest priority
 
-#### 5. Advanced Fuzzy Matching
+### Result selection
 
-Uses a pre-filter (±3 chars, ±1 word) then tries three algorithms:
+When multiple results match, they get filtered and scored:
 
-- **Token signature**: Order-independent word matching
-- **Jaro-Winkler**: Typo tolerance, prefix-weighted (0.85+ similarity)
-- **Damerau-Levenshtein**: Tie-breaking for top 5 candidates
+**Confidence** is a base score from the strategy (0.85–1.0), adjusted by tag matching:
+- >= 0.95: launch immediately
+- >= 0.70: launch with info
+- >= 0.60: launch with warning
+- < 0.60: error
 
-#### 6. Main Title Only
-
-Searches using just the main title portion (bidirectional):
-
-- Query has secondary, DB doesn't: "Zelda: Ocarina" → matches "Zelda"
-- Query simple, DB has secondary: "Zelda" → matches "Zelda: Ocarina of Time"
-
-#### 7. Progressive Trim
-
-Progressively removes words from the end of the original query (max 3 iterations):
-
-- "Legend of Zelda Link's Awakening DX" → tries "...Awakening", "...Link's", "...Zelda" (then slugifies each)
-
----
-
-## Result Selection
-
-When multiple results match, the system applies filtering and scoring:
-
-### Confidence Scoring
-
-Base confidence from strategy (0.85-1.0) is adjusted by tag matching:
-
-- **High confidence (≥0.95)**: Launch immediately
-- **Acceptable (≥0.70)**: Launch with info message
-- **Minimum (≥0.60)**: Launch with warning
-- **Below 0.60**: Error out
-
-### Filtering Priority
-
-1. **User-specified tags** - Filter to exact matches (if provided)
-2. **Exclude variants** - Remove unfinished (demo, beta, proto, alpha, sample, preview, prerelease), unlicensed (hack, translation, bootleg, clone), and bad dumps
-3. **Exclude re-releases** - Remove reboxed editions, re-releases
-4. **Preferred regions** - Match user's region config
-5. **Preferred languages** - Match user's language config
-6. **File type priority** - Prefer file types based on launcher extension order (earlier = better)
-7. **Quality-based tie-breaking** - Select best file using:
-   - Numeric suffix penalty (avoids duplicates like "game (1).zip")
-   - Path depth (prefers files in organized folders over deep backups)
-   - Character density (cleaner filenames preferred)
-   - Filename length (shorter is simpler)
-
----
-
-## Tag System
-
-Tags are used for filtering and disambiguation during indexing and resolution.
-
-### Tag Extraction (During Indexing)
-
-Tags are automatically extracted from filenames during media scanning using the **Filename Parser** (see section above for complete details).
-
-**Common tag types:**
-- **Regions**: `(USA)`, `(Europe)`, `(Japan)` → `region:us`, `region:eu`, `region:jp`
-- **Languages**: `(En)`, `(Fr,De)` → `lang:en`, `lang:fr`, `lang:de`
-- **Years**: `(1997)` → `year:1997`
-- **Dump info**: `[!]` → `dump:verified`, `[b]` → `dump:bad`
-- **Development**: `(Beta)`, `(Proto)` → `unfinished:beta`, `unfinished:proto`
-- **Revisions**: `(Rev A)` → `rev:a`
-- **Episodes**: `S01E02`, `1x05` → `season:01`, `episode:02`
-- **Discs**: `(Disc 1 of 2)` → `disc:1`, `discof:2`
-
-**See "Filename Parser" section** for the complete 4-step tag extraction pipeline with disambiguation rules.
-
-### Tag Usage in Queries
-
-Tags can be specified in three ways (with priority hierarchy):
-
-1. **Advanced args** (highest priority): `NES/Zelda?tags=region:us,-unfinished:beta`
-   - Explicit user requirements via `?tags=` parameter
-   - Format: `tag:value` or `-tag:value` (NOT operator)
-   - Overrides all other tag sources
-
-2. **Inline canonical tags** (medium priority): `NES/Zelda (+region:us) (-unfinished:beta)`
-   - Explicit tag filters with operators in parentheses
-   - Supports: `(+tag:value)` AND, `(-tag:value)` NOT, `(tag:value)` AND (default)
-   - Overrides filename-style tags
-
-3. **Filename-style** (lowest priority): `NES/Zelda (USA) (1986)` (auto-extracted)
-   - Automatically parsed from filename metadata in parentheses
-   - Always treated as AND filters
-   - Used only when no conflicting higher-priority tags exist
-
----
-
-## Implementation Notes
-
-### Key Files
-
-**Indexing Pipeline:**
-- **Main indexing orchestrator**: `pkg/database/mediascanner/indexing_pipeline.go`
-- **Filename title extraction**: `pkg/database/tags/filename_parser.go` → `ParseTitleFromFilename()`
-- **Filename tag extraction**: `pkg/database/tags/filename_parser.go` → `ParseFilenameToCanonicalTags()`
-
-**Slug Normalization:**
-- **Core slugification**: `pkg/database/slugs/slugify.go`
-- **Media parsing (dispatcher)**: `pkg/database/slugs/media_parsing.go`
-- **Game parsing**: `pkg/database/slugs/media_parsing_game.go`
-- **TV show parsing**: `pkg/database/slugs/media_parsing_tv.go`
-- **Movie parsing**: `pkg/database/slugs/media_parsing_movie.go`
-- **Music parsing**: `pkg/database/slugs/media_parsing_music.go`
-- **Normalization helpers**: `pkg/database/slugs/normalization.go`
-- **Script detection**: `pkg/database/slugs/scripts.go`
-
-**Query Resolution (Title-based launching):**
-- **Query parser & resolution**: `pkg/zapscript/titles.go` → `cmdTitle()`
-- **Matching strategies**: `pkg/zapscript/titles/strategies.go`
-- **Result selection**: `pkg/zapscript/titles/selection.go`
-- **Fuzzy matching**: `pkg/database/matcher/fuzzy.go`
-- **Query tag extraction & merging**: `pkg/zapscript/titles/tags.go`
+**Filtering** (in order):
+1. User-specified tag filters
+2. Exclude variants: unfinished (demo, beta, proto), unlicensed (hack, translation, bootleg), bad dumps
+3. Exclude re-releases
+4. Preferred regions from user config
+5. Preferred languages from user config
+6. File type priority based on launcher extension order
+7. Quality tie-breaking: numeric suffix penalty, path depth, character density, filename length
