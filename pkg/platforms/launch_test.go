@@ -49,9 +49,11 @@ func TestResolveAction(t *testing.T) {
 		require.NoError(t, err)
 
 		// Configure launcher with action=details in config
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "Steam", Action: "details"},
-		})
+		require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Steam"
+action = "details"
+`))
 
 		// Opts specifies action=run, should override config
 		opts := &platforms.LaunchOptions{Action: "run"}
@@ -68,9 +70,11 @@ func TestResolveAction(t *testing.T) {
 		require.NoError(t, err)
 
 		// Configure launcher with action=details in config
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "Steam", Action: "details"},
-		})
+		require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Steam"
+action = "details"
+`))
 
 		// Opts has empty action
 		opts := &platforms.LaunchOptions{Action: ""}
@@ -87,9 +91,11 @@ func TestResolveAction(t *testing.T) {
 		require.NoError(t, err)
 
 		// Configure launcher with action=details in config
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "Steam", Action: "details"},
-		})
+		require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Steam"
+action = "details"
+`))
 
 		action := platforms.ResolveAction(nil, cfg, steamLauncher)
 
@@ -124,9 +130,11 @@ func TestResolveAction(t *testing.T) {
 		cfg, err := helpers.NewTestConfig(fs, t.TempDir())
 		require.NoError(t, err)
 
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "Steam", Action: "details"},
-		})
+		require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Steam"
+action = "details"
+`))
 
 		action := platforms.ResolveAction(nil, cfg, emptyLauncher)
 
@@ -141,9 +149,11 @@ func TestResolveAction(t *testing.T) {
 		require.NoError(t, err)
 
 		// Configure action for "PC" group, not specific launcher ID
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "PC", Action: "browse"},
-		})
+		require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "PC"
+action = "browse"
+`))
 
 		action := platforms.ResolveAction(nil, cfg, steamWithGroups)
 

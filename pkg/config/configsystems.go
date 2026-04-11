@@ -55,10 +55,3 @@ func (c *Instance) LookupSystemDefaults(systemID string) (SystemsDefault, bool) 
 	}
 	return SystemsDefault{}, false
 }
-
-// SetSystemDefaultsForTesting sets system defaults for testing purposes
-func (c *Instance) SetSystemDefaultsForTesting(defaults []SystemsDefault) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.Systems.Default = defaults
-}

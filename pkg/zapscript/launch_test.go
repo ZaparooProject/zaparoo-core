@@ -44,12 +44,11 @@ func TestCmdLaunch_SystemArgAppliesDefaults(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 
 	cfg := &config.Instance{}
-	cfg.SetSystemDefaultsForTesting([]config.SystemsDefault{
-		{
-			System:   "genesis",
-			Launcher: "genesis-retroarch",
-		},
-	})
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-retroarch"
+`))
 
 	genesisLauncher := platforms.Launcher{
 		ID:       "genesis-retroarch",
@@ -95,12 +94,11 @@ func TestCmdLaunch_LauncherArgOverridesSystemArg(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 
 	cfg := &config.Instance{}
-	cfg.SetSystemDefaultsForTesting([]config.SystemsDefault{
-		{
-			System:   "genesis",
-			Launcher: "genesis-default",
-		},
-	})
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-default"
+`))
 
 	explicitLauncher := platforms.Launcher{
 		ID:       "genesis-explicit",
@@ -210,12 +208,11 @@ func TestCmdLaunch_DelegationToTitlePreservesLauncher(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 
 	cfg := &config.Instance{}
-	cfg.SetSystemDefaultsForTesting([]config.SystemsDefault{
-		{
-			System:   "snes",
-			Launcher: "snes-retroarch",
-		},
-	})
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "snes"
+launcher = "snes-retroarch"
+`))
 
 	snesLauncher := platforms.Launcher{
 		ID:       "snes-retroarch",
@@ -274,12 +271,11 @@ func TestCmdLaunch_SystemPathFormatUsesDefaultLauncher(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "game.sfc"), []byte("test"), 0o600))
 
 	cfg := &config.Instance{}
-	cfg.SetSystemDefaultsForTesting([]config.SystemsDefault{
-		{
-			System:   "snes",
-			Launcher: "snes-retroarch",
-		},
-	})
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "snes"
+launcher = "snes-retroarch"
+`))
 
 	snesLauncher := platforms.Launcher{
 		ID:       "snes-retroarch",
