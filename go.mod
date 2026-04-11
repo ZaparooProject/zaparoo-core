@@ -12,23 +12,23 @@ require (
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
 	github.com/charlievieth/fastwalk v1.0.14
-	github.com/clausecker/nfc/v2 v2.1.4
+	github.com/clausecker/nfc/v2 v2.2.0
 	github.com/cloudsoda/go-smb2 v0.0.0-20250228001242-d4c70e6251cc
 	github.com/creativeprojects/go-selfupdate v1.5.2
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
 	github.com/eclipse/paho.mqtt.golang v1.5.1
-	github.com/fsnotify/fsnotify v1.6.0
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/gen2brain/malgo v0.11.24
-	github.com/getsentry/sentry-go v0.40.0
-	github.com/getsentry/sentry-go/zerolog v0.40.0
+	github.com/getsentry/sentry-go v0.45.0
+	github.com/getsentry/sentry-go/zerolog v0.45.0
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-chi/cors v1.2.1
 	github.com/go-ole/go-ole v1.3.0
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/gocarina/gocsv v0.0.0-20230616125104-99d496ca653d
-	github.com/godbus/dbus/v5 v5.2.0
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/uuid v1.6.0
 	github.com/gopxl/beep/v2 v2.1.1
 	github.com/gorilla/websocket v1.5.3
