@@ -23,6 +23,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -170,6 +171,14 @@ func (s *Service) prepareBinary(binPath string) (string, error) {
 		return "", fmt.Errorf("error creating data directory: %w", err)
 	}
 
+	equal, eqErr := filesEqual(binPath, copyPath)
+	if eqErr != nil {
+		log.Warn().Err(eqErr).Msg("error comparing binaries, proceeding with copy")
+	} else if equal {
+		log.Debug().Msg("skipping binary copy, service binary already up to date")
+		return copyPath, nil
+	}
+
 	//nolint:gosec // G304: binPath from os.Executable()
 	binFile, err := os.Open(binPath)
 	if err != nil {
@@ -206,6 +215,63 @@ func (s *Service) cleanupServiceBinary() {
 	}
 	if rmErr := os.Remove(exePath); rmErr != nil {
 		log.Error().Err(rmErr).Msg("error removing service binary")
+	}
+}
+
+// filesEqual reports whether the files at pathA and pathB have identical
+// contents. Returns false (not an error) if pathB does not exist. A size
+// comparison is performed first as a fast pre-filter before streaming.
+func filesEqual(pathA, pathB string) (bool, error) {
+	infoA, err := os.Stat(pathA) //nolint:gosec // G703: paths from os.Executable() and internal DataDir
+	if err != nil {
+		return false, fmt.Errorf("error statting source: %w", err)
+	}
+
+	infoB, err := os.Stat(pathB) //nolint:gosec // G703: paths from os.Executable() and internal DataDir
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("error statting destination: %w", err)
+	}
+
+	if infoA.Size() != infoB.Size() {
+		return false, nil
+	}
+
+	//nolint:gosec // G304: paths from os.Executable() and internal DataDir
+	fa, err := os.Open(pathA)
+	if err != nil {
+		return false, fmt.Errorf("error opening source: %w", err)
+	}
+	defer func() { _ = fa.Close() }()
+
+	//nolint:gosec // G304: paths from os.Executable() and internal DataDir
+	fb, err := os.Open(pathB)
+	if err != nil {
+		return false, fmt.Errorf("error opening destination: %w", err)
+	}
+	defer func() { _ = fb.Close() }()
+
+	bufA := make([]byte, 32*1024)
+	bufB := make([]byte, 32*1024)
+	for {
+		nA, errA := fa.Read(bufA)
+		nB, errB := fb.Read(bufB)
+
+		if !bytes.Equal(bufA[:nA], bufB[:nB]) {
+			return false, nil
+		}
+
+		if errA == io.EOF && errB == io.EOF {
+			return true, nil
+		}
+		if errA != nil {
+			return false, fmt.Errorf("error reading source: %w", errA)
+		}
+		if errB != nil {
+			return false, fmt.Errorf("error reading destination: %w", errB)
+		}
 	}
 }
 
