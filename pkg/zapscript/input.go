@@ -73,10 +73,15 @@ func isDesktopPlatform(platformID string) bool {
 	}
 }
 
-// isSpecialKey returns true if the key is wrapped in braces (special key or
-// combo). Single characters like "a", "p", "5" return false.
+// isSpecialKey returns true if the key is a braced special key or combo
+// (e.g. {f1}, {enter}, {ctrl+q}). Single characters like "a" and braced
+// single characters like "{a}" both return false.
 func isSpecialKey(key string) bool {
-	return len(key) > 2 && key[0] == '{' && key[len(key)-1] == '}'
+	if len(key) < 4 || key[0] != '{' || key[len(key)-1] != '}' {
+		return false
+	}
+	inner := key[1 : len(key)-1]
+	return len(inner) > 1
 }
 
 // isKeyInList checks if a key is in a list (case-insensitive).

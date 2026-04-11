@@ -20,7 +20,6 @@
 package zapscript
 
 import (
-	"errors"
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -44,6 +43,8 @@ func TestIsSpecialKey(t *testing.T) {
 	assert.False(t, isSpecialKey("5"))
 	assert.False(t, isSpecialKey("+"))
 	assert.False(t, isSpecialKey(""))
+	assert.False(t, isSpecialKey("{a}"), "braced single char is not a special key")
+	assert.False(t, isSpecialKey("{5}"), "braced single digit is not a special key")
 }
 
 func TestDefaultInputMode(t *testing.T) {
@@ -229,6 +230,24 @@ func TestCheckInputKey_UnrestrictedDefaultOnEmbedded(t *testing.T) {
 	assert.NoError(t, checkInputKey(cfg, platformids.Mister, "{ctrl+alt+t}"))
 }
 
+func TestCheckInputKey_UnknownModeDefaultsToCombos(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	bogus := "bogus-mode"
+	cfg.SetInputModeForTesting(&bogus)
+	cfg.SetInputBlockListForTesting([]string{})
+
+	// Special keys allowed
+	assert.NoError(t, checkInputKey(cfg, platformids.Linux, "{f1}"))
+	assert.NoError(t, checkInputKey(cfg, platformids.Linux, "{ctrl+q}"))
+
+	// Single characters blocked (combos behavior)
+	err := checkInputKey(cfg, platformids.Linux, "a")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrInputNotAllowed)
+}
+
 func TestCmdKeyboard_CombosBlocksSingleChar(t *testing.T) {
 	t.Parallel()
 
@@ -278,10 +297,10 @@ func TestCmdKeyboard_BracedSingleCharRejected(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("ID").Return(platformids.Mister)
-	mockPlatform.On("KeyboardPress", "{a}").Return(errors.New("unknown key"))
+	mockPlatform.On("ID").Return(platformids.Linux)
 
 	cfg := &config.Instance{}
+	cfg.SetInputBlockListForTesting([]string{})
 
 	env := platforms.CmdEnv{
 		Cmd: gozapscript.Command{
@@ -292,7 +311,8 @@ func TestCmdKeyboard_BracedSingleCharRejected(t *testing.T) {
 	}
 
 	_, err := cmdKeyboard(mockPlatform, env)
-	require.Error(t, err, "{a} should be rejected by platform key parser")
+	require.ErrorIs(t, err, ErrInputNotAllowed)
+	mockPlatform.AssertNotCalled(t, "KeyboardPress", "{a}")
 }
 
 func TestCmdGamepad_CombosBlocksSingleChar(t *testing.T) {
