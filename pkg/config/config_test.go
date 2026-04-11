@@ -1239,12 +1239,21 @@ allow_execute = ["echo"]
 `))
 	assert.True(t, cfg.IsExecuteAllowed("echo"))
 
-	// Invalid TOML must return error and preserve existing state
-	err := cfg.LoadTOML(`[invalid toml !!!`)
+	// TOML that decodes debug_logging (bool) then fails on a type error
+	// for allow_execute (string where array expected). This tests that
+	// partially-applied fields are rolled back.
+	err := cfg.LoadTOML(`
+debug_logging = true
+
+[zapscript]
+allow_execute = "not-an-array"
+`)
 	require.Error(t, err)
 
 	assert.True(t, cfg.IsExecuteAllowed("echo"),
 		"state must be preserved after LoadTOML error")
+	assert.False(t, cfg.IsExecuteAllowed("not-an-array"),
+		"partial decode must not leak into state")
 }
 
 func TestLoadTOML_RebuildsDerivedFields(t *testing.T) {
@@ -1279,6 +1288,16 @@ allow_execute = ["rm"]
 		"regex must be recompiled after LoadTOML")
 	assert.False(t, cfg.IsExecuteAllowed("echo"),
 		"old regex must be replaced")
+
+	// Other derived fields must be retained from the first LoadTOML
+	assert.True(t, cfg.IsHTTPAllowed("https://example.com/foo"),
+		"allowHTTPRe must be retained")
+	assert.False(t, cfg.IsHTTPAllowed("https://evil.com"),
+		"allowHTTPRe must still block non-matching URLs")
+	assert.True(t, cfg.IsCommandBlocked("http.get"),
+		"blockCommandSet must be retained")
+	assert.True(t, cfg.IsRunAllowed("**launch:test"),
+		"allowRunRe must be retained")
 }
 
 func TestLoad_RollbackOnSchemaError(t *testing.T) {
@@ -1295,9 +1314,15 @@ allow_execute = ["echo"]
 `))
 	assert.True(t, cfg.IsExecuteAllowed("echo"))
 
-	// Write a config file with wrong schema version
+	// Write a config file with wrong schema version but valid fields —
+	// Load() will decode allow_execute = ["rm"] before schema check fails,
+	// so this verifies rollback undoes the partial decode.
 	cfgPath := filepath.Join(tempDir, CfgFile)
-	err = os.WriteFile(cfgPath, []byte(`config_schema = 9999`), 0o600)
+	err = os.WriteFile(cfgPath, []byte(`config_schema = 9999
+
+[zapscript]
+allow_execute = ["rm"]
+`), 0o600)
 	require.NoError(t, err)
 
 	// Load should fail but preserve running config
@@ -1305,6 +1330,8 @@ allow_execute = ["echo"]
 	require.Error(t, err)
 	assert.True(t, cfg.IsExecuteAllowed("echo"),
 		"Load must preserve running config on schema error")
+	assert.False(t, cfg.IsExecuteAllowed("rm"),
+		"bad config values must not leak into running config")
 }
 
 func TestAutoAnchorPreventsSubstringMatch(t *testing.T) {
