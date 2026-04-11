@@ -242,6 +242,7 @@ func sqlSearchMediaPathExact(
 		prepareVariadic("?", ",", len(systems))+
 		`)
 		and Media.Path = ?
+		and Media.IsMissing = 0
 		LIMIT 1
 	`)
 	if err != nil {
@@ -343,7 +344,8 @@ func sqlSearchMediaPathParts(
 			on MediaTitles.DBID = Media.MediaTitleDBID
 		where Systems.SystemID IN (`+
 		prepareVariadic("?", ",", len(systems))+
-		`)`+
+		`)
+		and Media.IsMissing = 0`+
 		variantCondition+
 		` LIMIT 250
 	`)
@@ -482,7 +484,8 @@ func sqlSearchMediaWithFilters(
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE Systems.SystemID IN (` +
 		prepareVariadic("?", ",", len(systems)) +
-		`)` +
+		`)
+		AND Media.IsMissing = 0` +
 		variantCondition +
 		cursorCondition +
 		tagFilterCondition +
@@ -587,7 +590,7 @@ func sqlSearchMediaByTitleDBIDs(
 		FROM MediaTitles
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
-		WHERE ` + titleCondition + whereExtra + `
+		WHERE ` + titleCondition + ` AND Media.IsMissing = 0` + whereExtra + `
 		ORDER BY Media.DBID ASC
 		LIMIT ?`
 
@@ -642,8 +645,8 @@ func sqlSearchMediaBySlug(
 	args = append(args, systemID, slugified)
 
 	tagClauses, tagArgs := BuildTagFilterSQL(tags)
-	whereConditions := make([]string, 0, 2+len(tagClauses))
-	whereConditions = append(whereConditions, "Systems.SystemID = ?", "MediaTitles.Slug = ?")
+	whereConditions := make([]string, 0, 3+len(tagClauses))
+	whereConditions = append(whereConditions, "Systems.SystemID = ?", "MediaTitles.Slug = ?", "Media.IsMissing = 0")
 	whereConditions = append(whereConditions, tagClauses...)
 	args = append(args, tagArgs...)
 
@@ -728,7 +731,7 @@ func sqlSearchMediaBySecondarySlug(
 
 	tagClauses, tagArgs := BuildTagFilterSQL(tags)
 	whereConditions := make([]string, 0, 2+len(tagClauses))
-	whereConditions = append(whereConditions, "Systems.SystemID = ?", "MediaTitles.SecondarySlug = ?")
+	whereConditions = append(whereConditions, "Systems.SystemID = ?", "MediaTitles.SecondarySlug = ?", "Media.IsMissing = 0")
 	whereConditions = append(whereConditions, tagClauses...)
 	args = append(args, tagArgs...)
 
@@ -813,7 +816,7 @@ func sqlSearchMediaBySlugPrefix(
 
 	tagClauses, tagArgs := BuildTagFilterSQL(tags)
 	whereConditions := make([]string, 0, 2+len(tagClauses))
-	whereConditions = append(whereConditions, "Systems.SystemID = ?", "MediaTitles.Slug LIKE ?")
+	whereConditions = append(whereConditions, "Systems.SystemID = ?", "MediaTitles.Slug LIKE ?", "Media.IsMissing = 0")
 	whereConditions = append(whereConditions, tagClauses...)
 	args = append(args, tagArgs...)
 
@@ -920,6 +923,7 @@ func sqlSearchMediaBySlugIn(
 	whereConditions = append(whereConditions,
 		"Systems.SystemID = ?",
 		"MediaTitles.Slug IN ("+prepareVariadic("?", ",", len(slugified))+")",
+		"Media.IsMissing = 0",
 	)
 	whereConditions = append(whereConditions, tagClauses...)
 	args = append(args, tagArgs...)
@@ -991,7 +995,7 @@ func sqlGetRandomMediaForTitle(ctx context.Context, db sqlQueryable, titleDBID i
 		FROM Media
 		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
-		WHERE Media.MediaTitleDBID = ?
+		WHERE Media.MediaTitleDBID = ? AND Media.IsMissing = 0
 		ORDER BY RANDOM() LIMIT 1
 	`, titleDBID).Scan(&row.SystemID, &row.Path)
 	if err != nil {
@@ -1010,7 +1014,7 @@ func sqlRandomGame(ctx context.Context, db sqlQueryable, system *systemdefs.Syst
 		FROM Media
 		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
-		WHERE Systems.SystemID = ?
+		WHERE Systems.SystemID = ? AND Media.IsMissing = 0
 	`
 	var count int
 	var minDBID, maxDBID int64
@@ -1037,7 +1041,7 @@ func sqlRandomGame(ctx context.Context, db sqlQueryable, system *systemdefs.Syst
 		FROM Media
 		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
-		WHERE Systems.SystemID = ? AND Media.DBID >= ?
+		WHERE Systems.SystemID = ? AND Media.IsMissing = 0 AND Media.DBID >= ?
 		ORDER BY Media.DBID ASC
 		LIMIT 1
 	`
@@ -1052,7 +1056,7 @@ func sqlRandomGame(ctx context.Context, db sqlQueryable, system *systemdefs.Syst
 			FROM Media
 			INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 			INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
-			WHERE Systems.SystemID = ? AND Media.DBID < ?
+			WHERE Systems.SystemID = ? AND Media.IsMissing = 0 AND Media.DBID < ?
 			ORDER BY Media.DBID DESC
 			LIMIT 1
 		`

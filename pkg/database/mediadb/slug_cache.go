@@ -215,7 +215,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 		FROM Media
 		INNER JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
 		INNER JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
-		WHERE Media.DBID = ?
+		WHERE Media.DBID = ? AND Media.IsMissing = 0
 	`, mediaDBID).Scan(
 		&result.SystemID,
 		&result.Name,
@@ -289,7 +289,7 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 			FROM Media
 			JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
 			JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
-			WHERE Systems.SystemID = ? AND Media.Path = ?
+			WHERE Systems.SystemID = ? AND Media.Path = ? AND Media.IsMissing = 0
 		),
 		-- All eligible tags for the target (file-level + title-level)
 		TargetTags AS (

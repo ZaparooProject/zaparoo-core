@@ -333,13 +333,14 @@ func sqlGetTags(
 			JOIN Media m ON mt.MediaDBID = m.DBID
 			JOIN MediaTitles mtl ON m.MediaTitleDBID = mtl.DBID
 			JOIN Systems s ON mtl.SystemDBID = s.DBID
-			WHERE s.SystemID IN (` + placeholders + `)
+			WHERE s.SystemID IN (` + placeholders + `) AND m.IsMissing = 0
 			UNION
 			SELECT DISTINCT mtt.TagDBID
 			FROM MediaTitleTags mtt
 			JOIN MediaTitles mtl ON mtt.MediaTitleDBID = mtl.DBID
+			JOIN Media m ON mtl.DBID = m.MediaTitleDBID
 			JOIN Systems s ON mtl.SystemDBID = s.DBID
-			WHERE s.SystemID IN (` + placeholders + `)
+			WHERE s.SystemID IN (` + placeholders + `) AND m.IsMissing = 0
 		)
 		ORDER BY TagTypes.Type, Tags.Tag`
 

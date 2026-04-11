@@ -62,22 +62,30 @@ type PathFragmentParams struct {
 // Batching should be able to run with an assumed IDs
 // database.ScanState and DB transactions allow accumulation
 
-// FlushScanStateMaps clears the in-memory maps for titles and media to free memory
-// between transaction commits during batch indexing.
+// FlushScanStateMaps clears the per-system in-memory maps (TitleIDs, MediaIDs)
+// to free memory after a system finishes indexing.
 //
-// IMPORTANT: SystemIDs, TagIDs, and TagTypeIDs are NOT cleared because:
-//   - They are global entities reused across all batches/systems
-//   - There are relatively few of them (~100-200 systems, ~40 tag types)
-//   - Clearing SystemIDs causes duplicate insert attempts with batch inserts enabled
-//   - Preserving them prevents UNIQUE constraint violations on subsequent inserts
+// IMPORTANT: This must only be called BETWEEN systems, never mid-system. Both
+// TitleIDs and MediaIDs hold dedup state for the current system; clearing them
+// while still inside the per-file loop would cause:
+//   - InsertMediaTitle UNIQUE failures for multi-file titles (e.g. multi-disc
+//     games sharing one MediaTitle row), silently dropping the later files
+//   - In persistent mode, InsertMedia UNIQUE failures for already-existing
+//     media, leaving stale MissingMedia entries that get falsely marked missing
+//
+// Cross-system safety: MediaKey/TitleKey are systemID-prefixed, so clearing
+// these maps between systems can never collide with the next system's keys.
+// In resume/persistent mode the next system's data is reloaded by
+// PopulateScanStateForSystem / PopulatePersistentScanStateForSystem.
+//
+// Other maps are intentionally NOT cleared:
+//   - SystemIDs preserved — DO NOT clear (UNIQUE violations with batch inserts)
+//   - TagIDs / TagTypeIDs preserved — reused across systems
+//   - MissingMedia preserved — accumulates across all systems and is flushed
+//     in a single BulkSetMediaMissing call at the end of indexing
 func FlushScanStateMaps(ss *database.ScanState) {
 	// Clear maps by deleting all keys instead of reallocating
 	// This reuses the underlying memory allocation
-
-	// SystemIDs preserved - DO NOT clear (causes UNIQUE constraint violations with batch inserts)
-	// TagIDs preserved - reused across systems
-	// TagTypeIDs preserved - reused across systems
-
 	for k := range ss.TitleIDs {
 		delete(ss.TitleIDs, k)
 	}
@@ -176,6 +184,10 @@ func AddMediaPath(
 		ss.MediaIDs[mediaKey] = mediaIndex
 	} else {
 		mediaIndex = foundMediaIndex
+		// Mark as found during persistent indexing (not missing)
+		if ss.MissingMedia != nil {
+			delete(ss.MissingMedia, int64(foundMediaIndex))
+		}
 	}
 
 	// Extract extension tag only if filename tags are enabled
@@ -628,6 +640,39 @@ func PopulateScanStateForSystem(
 		Int("media", len(media)).
 		Dur("elapsed", time.Since(startTime)).
 		Msg("loaded existing data for system resume")
+
+	return nil
+}
+
+// PopulatePersistentScanStateForSystem loads existing Media DBIDs for a system into
+// ss.MissingMedia. As AddMediaPath processes files, found entries are removed.
+// After the system is fully scanned, remaining entries represent missing media.
+// This also populates MediaIDs and TitleIDs via PopulateScanStateForSystem.
+func PopulatePersistentScanStateForSystem(
+	ctx context.Context, db database.MediaDBI, ss *database.ScanState, systemID string,
+) error {
+	// Load titles and media into scan state maps (reuse existing resume logic)
+	if err := PopulateScanStateForSystem(ctx, db, ss, systemID); err != nil {
+		return err
+	}
+
+	// Load media for this system into MissingMedia (keyed by DBID)
+	media, err := db.GetMediaBySystemID(systemID)
+	if err != nil {
+		return fmt.Errorf("failed to get media for missing tracking, system %s: %w", systemID, err)
+	}
+
+	if ss.MissingMedia == nil {
+		ss.MissingMedia = make(map[int64]struct{}, len(media))
+	}
+	for _, m := range media {
+		ss.MissingMedia[m.DBID] = struct{}{}
+	}
+
+	log.Debug().
+		Str("system", systemID).
+		Int("missingMediaCandidates", len(media)).
+		Msg("populated missing media tracking for system")
 
 	return nil
 }

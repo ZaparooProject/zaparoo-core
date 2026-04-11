@@ -276,6 +276,63 @@ func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]
 	return media, rows.Err()
 }
 
+// sqlBulkSetMediaMissing marks media records as missing by DBID. Batches in chunks
+// of 500 to stay within SQLite variable limits.
+func sqlBulkSetMediaMissing(ctx context.Context, db *sql.DB, dbids map[int64]struct{}) error {
+	if len(dbids) == 0 {
+		return nil
+	}
+
+	ids := make([]int64, 0, len(dbids))
+	for id := range dbids {
+		ids = append(ids, id)
+	}
+
+	const chunkSize = 500
+	for i := 0; i < len(ids); i += chunkSize {
+		end := i + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[i:end]
+
+		placeholders := prepareVariadic("?", ",", len(chunk))
+		args := make([]any, len(chunk))
+		for j, id := range chunk {
+			args[j] = id
+		}
+
+		//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+		stmt := fmt.Sprintf("UPDATE Media SET IsMissing = 1 WHERE IsMissing = 0 AND DBID IN (%s)", placeholders)
+		if _, err := db.ExecContext(ctx, stmt, args...); err != nil {
+			return fmt.Errorf("failed to bulk set media missing: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// sqlResetMissingFlags clears IsMissing for all media belonging to the given system DBIDs.
+func sqlResetMissingFlags(ctx context.Context, db *sql.DB, systemDBIDs []int64) error {
+	if len(systemDBIDs) == 0 {
+		return nil
+	}
+
+	placeholders := prepareVariadic("?", ",", len(systemDBIDs))
+	args := make([]any, len(systemDBIDs))
+	for i, id := range systemDBIDs {
+		args[i] = id
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	stmt := fmt.Sprintf("UPDATE Media SET IsMissing = 0 WHERE IsMissing = 1 AND SystemDBID IN (%s)", placeholders)
+	if _, err := db.ExecContext(ctx, stmt, args...); err != nil {
+		return fmt.Errorf("failed to reset missing flags: %w", err)
+	}
+
+	return nil
+}
+
 // sqlGetLaunchCommandForMedia generates a title-based launch command for media at the given path.
 // Returns a command in the format: @systemID/titleName (year:XXXX) (players:N)
 // Only includes tags that are disambiguating (siblings under the same title have

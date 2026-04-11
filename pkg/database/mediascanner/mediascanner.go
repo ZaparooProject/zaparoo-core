@@ -640,30 +640,25 @@ func NewNamesIndex(
 		TagIDs:        make(map[string]int),
 	}
 
-	// 3. Truncate and Initial Status Set
+	// 3. Determine fresh vs persistent indexing mode and set up scan state
 	if !shouldResume {
-		log.Info().Msg("preparing database for fresh indexing")
-		// Set indexing systems before truncating
+		log.Info().Msg("preparing database for indexing")
 		if setErr := db.SetIndexingSystems(currentSystemIDs); setErr != nil {
 			return 0, fmt.Errorf("failed to set indexing systems: %w", setErr)
 		}
 
-		// Clear data for the specified systems (smart truncation)
 		log.Info().Msgf("starting indexing for systems: %v", currentSystemIDs)
 
-		// Use smart truncation - if indexing all systems, use full truncate for performance
-		allSystems := systemdefs.AllSystems()
-		allSystemIDs := make([]string, len(allSystems))
-		for i, sys := range allSystems {
-			allSystemIDs[i] = sys.ID
+		// Detect whether we have existing data (persistent re-index vs fresh)
+		existingCount, countErr := db.GetTotalMediaCount()
+		if countErr != nil {
+			return 0, fmt.Errorf("failed to check existing media count: %w", countErr)
 		}
 
-		// Sort currentSystemIDs to ensure order-insensitive comparison
-		sort.Strings(currentSystemIDs)
-		// Sort allSystemIDs as well to ensure consistent comparison
-		sort.Strings(allSystemIDs)
+		if existingCount == 0 {
+			// Fresh database — use fast bulk insert path with truncate for clean slate
+			log.Info().Msg("fresh database detected, using bulk insert path")
 
-		if len(currentSystemIDs) == len(allSystemIDs) && helpers.EqualStringSlices(currentSystemIDs, allSystemIDs) {
 			log.Info().Msg("checkpointing WAL before full database truncation")
 			if sqlDB := db.UnsafeGetSQLDb(); sqlDB != nil {
 				_, walErr := sqlDB.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
@@ -672,50 +667,49 @@ func NewNamesIndex(
 				}
 			}
 
-			// Full truncate - foreign keys not needed since we're deleting everything
-			log.Info().Msgf("performing full database truncation (indexing %d systems)", len(currentSystemIDs))
 			err = db.Truncate()
 			if err != nil {
 				return 0, fmt.Errorf("failed to truncate database: %w", err)
 			}
 
-			// Drop secondary indexes for faster bulk inserts — they'll be
-			// rebuilt during background optimization after indexing completes.
 			if dropErr := db.DropSecondaryIndexes(); dropErr != nil {
 				log.Warn().Err(dropErr).Msg("failed to drop secondary indexes, continuing with indexes in place")
 			}
 
 			log.Info().Msg("database truncation completed")
 		} else {
-			// Selective indexing
-			// DELETE mode disables FKs for performance, but TruncateSystems() relies on CASCADE
-			// to properly delete Media/MediaTitles/MediaTags when a System is deleted
-			log.Info().Msgf(
-				"performing selective truncation for systems: %v",
-				currentSystemIDs,
-			)
-			err = db.TruncateSystems(currentSystemIDs)
-			if err != nil {
-				return 0, fmt.Errorf("failed to truncate systems %v: %w", currentSystemIDs, err)
-			}
-			log.Info().Msg("selective truncation completed")
+			// Persistent re-index — scan over existing records, mark missing
+			log.Info().Int("existingMedia", existingCount).
+				Msg("existing data detected, using persistent indexing mode")
+			scanState.Persistent = true
 
-			// For selective indexing, populate scan state with max IDs, global data, and
-			// maps for systems NOT being reindexed to avoid conflicts with existing data
-			log.Info().Msgf(
-				"Populating scan state for selective indexing (excluding systems: %v)", currentSystemIDs,
-			)
-			if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, currentSystemIDs); err != nil {
-				// Check if this is a cancellation error
+			// Populate scan state from existing data so AddMediaPath can
+			// detect existing records and skip re-inserts
+			if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, []string{}); err != nil {
 				if errors.Is(err, context.Canceled) {
 					return handleCancellation(
-						ctx, db, "Media indexing cancelled during selective scan state population",
+						ctx, db, "Media indexing cancelled during persistent scan state population",
 					)
 				}
-				log.Error().Err(err).Msg("failed to populate scan state for selective indexing")
-				return 0, fmt.Errorf("failed to populate scan state for selective indexing: %w", err)
+				return 0, fmt.Errorf("failed to populate scan state for persistent indexing: %w", err)
 			}
-			log.Info().Msg("successfully populated scan state for selective indexing")
+
+			// Reset IsMissing flags for systems being indexed so we start
+			// with a clean slate — anything not re-found will be marked missing
+			systemDBIDs := make([]int64, 0, len(currentSystemIDs))
+			for _, sysID := range currentSystemIDs {
+				if dbid, ok := scanState.SystemIDs[sysID]; ok {
+					systemDBIDs = append(systemDBIDs, int64(dbid))
+				}
+			}
+			if len(systemDBIDs) > 0 {
+				if resetErr := db.ResetMissingFlags(systemDBIDs); resetErr != nil {
+					return 0, fmt.Errorf("failed to reset missing flags: %w", resetErr)
+				}
+				log.Info().Int("systems", len(systemDBIDs)).Msg("reset IsMissing flags for indexed systems")
+			}
+
+			log.Info().Msg("successfully prepared persistent indexing state")
 		}
 
 		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
@@ -725,8 +719,7 @@ func NewNamesIndex(
 			log.Error().Err(setErr).Msg("failed to clear last indexed system on fresh start")
 		}
 
-		// Selective indexing already seeds tags via PopulateScanStateForSelectiveIndexing;
-		// only seed here for full truncate where TagTypesIndex is still 0.
+		// Seed canonical tags if not already populated
 		if scanState.TagTypesIndex == 0 {
 			log.Info().Msg("seeding known tags for fresh indexing")
 			// SeedCanonicalTags runs in its own non-batch transaction for safety.
@@ -772,7 +765,15 @@ func NewNamesIndex(
 			log.Error().Err(err).Msg("failed to populate scan state from database")
 			return 0, fmt.Errorf("failed to populate scan state from database: %w", err)
 		}
-		log.Info().Msg("successfully populated scan state for resume")
+
+		// Resume with persistent mode if existing data is present
+		existingCount, countErr := db.GetTotalMediaCount()
+		if countErr == nil && existingCount > 0 {
+			scanState.Persistent = true
+		}
+
+		log.Info().Bool("persistent", scanState.Persistent).
+			Msg("successfully populated scan state for resume")
 	}
 
 	// Ensure transaction cleanup and status update on completion or error
@@ -858,15 +859,27 @@ func NewNamesIndex(
 			continue // Skip this system if it was already completed in a previous run
 		}
 
-		// Lazy load this system's existing data for resume
-		if shouldResume {
-			log.Debug().Str("system", systemID).Msg("loading existing data for system resume")
-			if loadErr := PopulateScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
-				// Check if this is a cancellation error
-				if errors.Is(loadErr, context.Canceled) {
-					return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
+		// Lazy load this system's existing data for resume or persistent mode
+		if shouldResume || scanState.Persistent {
+			log.Debug().Str("system", systemID).
+				Bool("persistent", scanState.Persistent).
+				Msg("loading existing data for system")
+			if scanState.Persistent {
+				// Persistent mode: populate MissingMedia to track which files are removed
+				if loadErr := PopulatePersistentScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
+					if errors.Is(loadErr, context.Canceled) {
+						return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
+					}
+					return 0, fmt.Errorf("failed to load system data for persistent indexing: %w", loadErr)
 				}
-				return 0, fmt.Errorf("failed to load system data for resume: %w", loadErr)
+			} else {
+				// Resume mode: only need scan state, not missing tracking
+				if loadErr := PopulateScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
+					if errors.Is(loadErr, context.Canceled) {
+						return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
+					}
+					return 0, fmt.Errorf("failed to load system data for resume: %w", loadErr)
+				}
 			}
 		}
 
@@ -1022,7 +1035,10 @@ func NewNamesIndex(
 					log.Error().Err(setErr).Msgf(
 						"failed to set last indexed system to %s after file limit commit", systemID)
 				}
-				FlushScanStateMaps(&scanState)
+				// NOTE: Do not flush TitleIDs/MediaIDs here — we are still
+				// mid-system. Clearing them would break dedup for remaining
+				// files in this system (multi-disc titles, persistent-mode
+				// existing-media tracking). Flush only happens between systems.
 				filesInBatch = 0
 				systemsInBatch = 0
 				batchStarted = false
@@ -1036,6 +1052,11 @@ func NewNamesIndex(
 
 		// Mark system as processed (even if split across multiple commits)
 		completedSystems[systemID] = true
+
+		// In persistent mode, MissingMedia accumulates across all systems and is
+		// flushed once at the end of indexing via a single BulkSetMediaMissing
+		// call (after the final commit, since that writes through db.sql and
+		// would otherwise contend with the open batch transaction).
 
 		systemElapsed := time.Since(systemStartTime)
 		log.Info().
@@ -1191,13 +1212,14 @@ func NewNamesIndex(
 					}
 					filesInBatch++
 
-					// Commit if we hit file limit (memory safety)
+					// Commit if we hit file limit (memory safety).
+					// Mid-system: do NOT flush TitleIDs/MediaIDs (would break
+					// dedup for remaining files in this system).
 					if filesInBatch >= maxFilesPerTransaction {
 						if commitErr := db.CommitTransaction(); commitErr != nil {
 							return 0, fmt.Errorf(
 								"failed to commit batch transaction for custom scanner (file limit): %w", commitErr)
 						}
-						FlushScanStateMaps(&scanState)
 						filesInBatch = 0
 						systemsInBatch = 0
 						batchStarted = false
@@ -1310,13 +1332,14 @@ func NewNamesIndex(
 					}
 					filesInBatch++
 
-					// Commit if we hit file limit (memory safety)
+					// Commit if we hit file limit (memory safety).
+					// Mid-system: do NOT flush TitleIDs/MediaIDs (would break
+					// dedup for remaining files in this system).
 					if filesInBatch >= maxFilesPerTransaction {
 						if commitErr := db.CommitTransaction(); commitErr != nil {
 							return 0, fmt.Errorf(
 								"failed to commit batch transaction for 'any' scanner (file limit): %w", commitErr)
 						}
-						FlushScanStateMaps(&scanState)
 						filesInBatch = 0
 						systemsInBatch = 0
 						batchStarted = false
@@ -1374,7 +1397,23 @@ func NewNamesIndex(
 		if err != nil {
 			return 0, fmt.Errorf("failed to commit final transaction: %w", err)
 		}
+		batchStarted = false
 	}
+
+	// Flush accumulated missing-media markers in a single bulk update.
+	// MissingMedia accumulates across all systems during persistent indexing
+	// (FlushScanStateMaps preserves it). BulkSetMediaMissing writes through
+	// db.sql, so it must run after every batch transaction has been committed
+	// to avoid contending with the SQLite write lock.
+	if scanState.Persistent && len(scanState.MissingMedia) > 0 {
+		log.Info().
+			Int("missingCount", len(scanState.MissingMedia)).
+			Msg("marking missing media")
+		if missErr := db.BulkSetMediaMissing(scanState.MissingMedia); missErr != nil {
+			log.Error().Err(missErr).Msg("failed to mark missing media")
+		}
+	}
+	scanState.MissingMedia = nil
 
 	// Rebuild all secondary indexes before marking indexing as complete.
 	// This ensures the database is fully searchable when indexing finishes.

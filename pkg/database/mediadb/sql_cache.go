@@ -63,6 +63,7 @@ func sqlPopulateSystemTagsCache(ctx context.Context, db *sql.DB) error {
 		JOIN MediaTags mt ON m.DBID = mt.MediaDBID
 		JOIN Tags t ON mt.TagDBID = t.DBID
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE m.IsMissing = 0
 		UNION
 		SELECT DISTINCT
 			s.DBID as SystemDBID,
@@ -71,9 +72,11 @@ func sqlPopulateSystemTagsCache(ctx context.Context, db *sql.DB) error {
 			t.Tag as Tag
 		FROM Systems s
 		JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
+		JOIN Media m ON mtl.DBID = m.MediaTitleDBID
 		JOIN MediaTitleTags mtt ON mtl.DBID = mtt.MediaTitleDBID
 		JOIN Tags t ON mtt.TagDBID = t.DBID
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE m.IsMissing = 0
 		ORDER BY SystemDBID, TagType, Tag`
 
 	populateStmt, err := db.PrepareContext(ctx, populateSQL)
@@ -169,7 +172,7 @@ func sqlPopulateSystemTagsCacheForSystems(
 		JOIN MediaTags mt ON m.DBID = mt.MediaDBID
 		JOIN Tags t ON mt.TagDBID = t.DBID
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		WHERE s.DBID IN (%s)
+		WHERE s.DBID IN (%s) AND m.IsMissing = 0
 		UNION
 		SELECT DISTINCT
 			s.DBID as SystemDBID,
@@ -178,10 +181,11 @@ func sqlPopulateSystemTagsCacheForSystems(
 			t.Tag as Tag
 		FROM Systems s
 		JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
+		JOIN Media m ON mtl.DBID = m.MediaTitleDBID
 		JOIN MediaTitleTags mtt ON mtl.DBID = mtt.MediaTitleDBID
 		JOIN Tags t ON mtt.TagDBID = t.DBID
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		WHERE s.DBID IN (%s)
+		WHERE s.DBID IN (%s) AND m.IsMissing = 0
 		ORDER BY SystemDBID, TagType, Tag`, placeholders, placeholders)
 
 	populateStmt, err := db.PrepareContext(ctx, populateSQL)

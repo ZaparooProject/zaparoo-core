@@ -31,6 +31,105 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestFlushScanStateMaps_MidSystemFileLimitBoundary is a regression test for
+// the multi-disc / file-limit interaction. Multi-file titles (multi-disc games,
+// region variants, revisions) all share a single MediaTitle row keyed in
+// memory by (systemID, slug) via TitleIDs. If FlushScanStateMaps were called
+// mid-system between two files of the same title, the second file would
+// re-issue InsertMediaTitle and silently create a duplicate MediaTitle row —
+// the schema has only an index on (SystemDBID, Slug), no UNIQUE constraint —
+// fragmenting the title across two DBIDs. The two media rows would then point
+// at different titles, breaking title-based browse and launch lookups.
+//
+// The fix: FlushScanStateMaps must only be called BETWEEN systems, never
+// between mid-system file-limit commits. This test pins both halves:
+//   - "without flush" (current/correct behaviour): both discs land in the DB
+//     and share one MediaTitle row.
+//   - "with flush" (the historical bug): two MediaTitle rows with the same
+//     slug, each disc pointing at a different one — silent fragmentation.
+func TestFlushScanStateMaps_MidSystemFileLimitBoundary(t *testing.T) {
+	t.Parallel()
+
+	const (
+		systemID  = "PSX"
+		disc1Path = "/roms/PSX/Final Fantasy VII (Disc 1).cue"
+		disc2Path = "/roms/PSX/Final Fantasy VII (Disc 2).cue"
+	)
+
+	// addBothDiscsAcrossCommit adds disc 1, commits, optionally flushes the
+	// scan state maps, reopens a transaction, then adds disc 2 — mirroring
+	// what happens when a file-limit commit lands between two files of the
+	// same title.
+	addBothDiscsAcrossCommit := func(t *testing.T, flushBetween bool) (mediaTitleDBIDs []int64) {
+		t.Helper()
+
+		mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+		t.Cleanup(cleanup)
+
+		scanState := &database.ScanState{
+			SystemIDs:  make(map[string]int),
+			TitleIDs:   make(map[string]int),
+			MediaIDs:   make(map[string]int),
+			TagTypeIDs: make(map[string]int),
+			TagIDs:     make(map[string]int),
+		}
+
+		require.NoError(t, SeedCanonicalTags(mediaDB, scanState))
+
+		require.NoError(t, mediaDB.BeginTransaction(true))
+		_, _, err := AddMediaPath(
+			mediaDB, scanState, systemID, disc1Path, false, false, nil, slugs.MediaTypeGame,
+		)
+		require.NoError(t, err, "disc 1 insert should succeed")
+		require.NoError(t, mediaDB.CommitTransaction())
+
+		if flushBetween {
+			FlushScanStateMaps(scanState)
+		}
+
+		require.NoError(t, mediaDB.BeginTransaction(true))
+		_, _, err = AddMediaPath(
+			mediaDB, scanState, systemID, disc2Path, false, false, nil, slugs.MediaTypeGame,
+		)
+		require.NoError(t, err, "disc 2 insert should succeed")
+		require.NoError(t, mediaDB.CommitTransaction())
+
+		mediaRows, err := mediaDB.GetMediaBySystemID(systemID)
+		require.NoError(t, err)
+		require.Len(t, mediaRows, 2, "both discs should be persisted as Media rows")
+
+		dbids := make([]int64, 0, len(mediaRows))
+		for _, m := range mediaRows {
+			dbids = append(dbids, m.MediaTitleDBID)
+		}
+		return dbids
+	}
+
+	t.Run("without mid-system flush both discs share one title", func(t *testing.T) {
+		t.Parallel()
+
+		titleDBIDs := addBothDiscsAcrossCommit(t, false)
+		require.Len(t, titleDBIDs, 2)
+		assert.Equal(t, titleDBIDs[0], titleDBIDs[1],
+			"both discs must reference the same MediaTitle row")
+	})
+
+	t.Run("with mid-system flush silently fragments the title", func(t *testing.T) {
+		t.Parallel()
+
+		// This subtest pins the *bug* that the fix prevents: if mid-system
+		// flushing were reintroduced, AddMediaPath for disc 2 would re-issue
+		// InsertMediaTitle and create a second MediaTitle row with the same
+		// slug. There is no UNIQUE constraint on (SystemDBID, Slug) — only an
+		// index — so the duplicate is silently inserted.
+		titleDBIDs := addBothDiscsAcrossCommit(t, true)
+		require.Len(t, titleDBIDs, 2)
+		assert.NotEqual(t, titleDBIDs[0], titleDBIDs[1],
+			"flushing TitleIDs between discs should produce a fragmented title "+
+				"(two MediaTitle rows for the same slug)")
+	})
+}
+
 // TestAddMediaPath_NonUniqueError tests that non-UNIQUE errors fail immediately
 // without attempting to find existing system
 func TestAddMediaPath_NonUniqueError(t *testing.T) {

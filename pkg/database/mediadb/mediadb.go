@@ -1826,6 +1826,14 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 	return result, err
 }
 
+func (db *MediaDB) BulkSetMediaMissing(dbids map[int64]struct{}) error {
+	return sqlBulkSetMediaMissing(db.ctx, db.sql, dbids)
+}
+
+func (db *MediaDB) ResetMissingFlags(systemDBIDs []int64) error {
+	return sqlResetMissingFlags(db.ctx, db.sql, systemDBIDs)
+}
+
 func (db *MediaDB) FindOrInsertMedia(row database.Media) (database.Media, error) {
 	system, err := db.FindMedia(row)
 	if errors.Is(err, sql.ErrNoRows) {

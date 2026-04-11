@@ -1261,6 +1261,22 @@ func (m *MockMediaDBI) TruncateSystems(systemIDs []string) error {
 	return nil
 }
 
+func (m *MockMediaDBI) BulkSetMediaMissing(dbids map[int64]struct{}) error {
+	args := m.Called(dbids)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) ResetMissingFlags(systemDBIDs []int64) error {
+	args := m.Called(systemDBIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 // Batch insert control methods
 func (m *MockMediaDBI) EnableBatchInserts(enable bool) {
 	m.Called(enable)

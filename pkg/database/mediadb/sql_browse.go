@@ -66,8 +66,8 @@ func browseFilesBaseCondition(
 ) (where string, args []any) {
 	letterClauses, letterArgs := BuildLetterFilterSQL(opts.Letter, "mt.Name")
 
-	conditions := make([]string, 0, 1+len(letterClauses))
-	conditions = append(conditions, `m.ParentDir = ?`)
+	conditions := make([]string, 0, 2+len(letterClauses))
+	conditions = append(conditions, `m.ParentDir = ?`, `m.IsMissing = 0`)
 	conditions = append(conditions, letterClauses...)
 
 	args = make([]any, 0, 1+len(letterArgs))
