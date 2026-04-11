@@ -1162,6 +1162,261 @@ func TestSetDebugLogging(t *testing.T) {
 	zerolog.SetGlobalLevel(zerolog.Disabled)
 }
 
+func TestAnchorPattern(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "simple pattern",
+			input:    "echo",
+			expected: "^(?:echo)$",
+		},
+		{
+			name:     "pattern with wildcard",
+			input:    "/usr/bin/.*",
+			expected: "^(?:/usr/bin/.*)$",
+		},
+		{
+			name:     "already anchored pattern",
+			input:    "^echo$",
+			expected: "^(?:^echo$)$",
+		},
+		{
+			name:     "case insensitive prefix",
+			input:    "(?i)C:\\\\Users\\\\.*",
+			expected: "^(?:(?i)C:\\\\Users\\\\.*)$",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := anchorPattern(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestAutoAnchorPreventsSubstringMatch(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+
+	// Without anchoring, "echo" would match "echo && rm -rf /"
+	// With anchoring, it should only match exactly "echo"
+	cfg.SetExecuteAllowListForTesting([]string{"echo"})
+
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"exact match should be allowed")
+	assert.False(t, cfg.IsExecuteAllowed("echo && rm -rf /"),
+		"substring match should be blocked after anchoring")
+	assert.False(t, cfg.IsExecuteAllowed("notecho"),
+		"prefix substring should be blocked")
+
+	// Pattern with .* should still allow intended matches
+	cfg.SetExecuteAllowListForTesting([]string{"/usr/bin/.*"})
+
+	assert.True(t, cfg.IsExecuteAllowed("/usr/bin/notify-send"),
+		"wildcard suffix should match")
+	assert.False(t, cfg.IsExecuteAllowed("/opt/usr/bin/notify-send"),
+		"path prefix should not match without .*")
+
+	// Explicit substring pattern should still work
+	cfg.SetExecuteAllowListForTesting([]string{".*mister.*"})
+
+	assert.True(t, cfg.IsExecuteAllowed("misterious"),
+		"explicit .*pattern.* should allow substring match")
+}
+
+func TestAutoAnchorLoadPath(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfgPath := filepath.Join(tempDir, CfgFile)
+
+	// Write config with an unanchored allow_execute pattern
+	configContent := fmt.Sprintf(`config_schema = %d
+
+[zapscript]
+allow_execute = ["echo"]
+`, SchemaVersion)
+
+	err := os.WriteFile(cfgPath, []byte(configContent), 0o600)
+	require.NoError(t, err)
+
+	cfg := &Instance{
+		cfgPath:  cfgPath,
+		vals:     BaseDefaults,
+		defaults: BaseDefaults,
+	}
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"exact match should pass through Load path")
+	assert.False(t, cfg.IsExecuteAllowed("echo && rm -rf /"),
+		"substring should be blocked through Load path")
+}
+
+func TestIsRunAllowed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		allowList []string
+		expected  bool
+	}{
+		{
+			name:      "empty list rejects all",
+			allowList: nil,
+			input:     "**launch:SNES",
+			expected:  false,
+		},
+		{
+			name:      "single command matches",
+			allowList: []string{`\*\*launch\.random:.*`},
+			input:     "**launch.random:SNES",
+			expected:  true,
+		},
+		{
+			name:      "single command no match",
+			allowList: []string{`\*\*launch\.random:.*`},
+			input:     "**execute:rm -rf /",
+			expected:  false,
+		},
+		{
+			name:      "chained commands all match",
+			allowList: []string{`\*\*launch\.random:.*`},
+			input:     "**launch.random:SNES||**launch.random:NES",
+			expected:  true,
+		},
+		{
+			name:      "chained commands one fails",
+			allowList: []string{`\*\*launch\.random:.*`},
+			input:     "**launch.random:SNES||**execute:rm -rf /",
+			expected:  false,
+		},
+		{
+			name:      "auto-launch path normalizes to launch command",
+			allowList: []string{`\*\*launch:/games/.*`},
+			input:     "/games/snes/mario.sfc",
+			expected:  true,
+		},
+		{
+			name:      "malformed input rejected",
+			allowList: []string{".*"},
+			input:     "**",
+			expected:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Instance{}
+			cfg.SetRunAllowListForTesting(tt.allowList)
+			assert.Equal(t, tt.expected, cfg.IsRunAllowed(tt.input),
+				"input: %s, allowList: %v", tt.input, tt.allowList)
+		})
+	}
+}
+
+func TestIsHTTPAllowed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		url       string
+		allowList []string
+		expected  bool
+	}{
+		{
+			name:      "empty list allows all",
+			allowList: nil,
+			url:       "https://anything.com",
+			expected:  true,
+		},
+		{
+			name:      "matching URL allowed",
+			allowList: []string{`https://example\.com/.*`},
+			url:       "https://example.com/api/test",
+			expected:  true,
+		},
+		{
+			name:      "non-matching URL blocked",
+			allowList: []string{`https://example\.com/.*`},
+			url:       "https://evil.com/attack",
+			expected:  false,
+		},
+		{
+			name:      "anchoring prevents partial match",
+			allowList: []string{`https://example\.com`},
+			url:       "https://example.com.evil.com",
+			expected:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Instance{}
+			cfg.SetHTTPAllowListForTesting(tt.allowList)
+			assert.Equal(t, tt.expected, cfg.IsHTTPAllowed(tt.url))
+		})
+	}
+}
+
+func TestIsCommandBlocked(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		command       string
+		blockCommands []string
+		expected      bool
+	}{
+		{
+			name:          "empty block list allows all",
+			blockCommands: nil,
+			command:       "execute",
+			expected:      false,
+		},
+		{
+			name:          "exact match is blocked",
+			blockCommands: []string{"execute", "http.get"},
+			command:       "execute",
+			expected:      true,
+		},
+		{
+			name:          "non-matching command is allowed",
+			blockCommands: []string{"execute", "http.get"},
+			command:       "launch",
+			expected:      false,
+		},
+		{
+			name:          "partial name is not blocked",
+			blockCommands: []string{"execute"},
+			command:       "execute.something",
+			expected:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Instance{}
+			cfg.SetBlockCommandsForTesting(tt.blockCommands)
+			assert.Equal(t, tt.expected, cfg.IsCommandBlocked(tt.command))
+		})
+	}
+}
+
 func BenchmarkConfig_Load(b *testing.B) {
 	b.ReportAllocs()
 	tempDir := b.TempDir()

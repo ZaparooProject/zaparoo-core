@@ -177,6 +177,106 @@ func TestCmdHTTPPost_AppliesBearerAuth(t *testing.T) {
 	}
 }
 
+func TestCmdHTTPGet_AllowListEmpty_AllAllowed(t *testing.T) {
+	received := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		received <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config.ClearAuthCfgForTesting()
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	cfg := &config.Instance{}
+	// No allow list set — should allow all URLs
+
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: gozapscript.Command{
+			Name: gozapscript.ZapScriptCmdHTTPGet,
+			Args: []string{server.URL + "/open"},
+		},
+	}
+
+	_, err := cmdHTTPGet(nil, env)
+	require.NoError(t, err)
+
+	select {
+	case <-received:
+		// request went through
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for HTTP request")
+	}
+}
+
+func TestCmdHTTPGet_AllowListBlocks(t *testing.T) {
+	cfg := &config.Instance{}
+	cfg.SetHTTPAllowListForTesting([]string{`https://example\.com/.*`})
+
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: gozapscript.Command{
+			Name: gozapscript.ZapScriptCmdHTTPGet,
+			Args: []string{"https://evil.com/attack"},
+		},
+	}
+
+	_, err := cmdHTTPGet(nil, env)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrHTTPNotAllowed)
+}
+
+func TestCmdHTTPGet_AllowListPermits(t *testing.T) {
+	received := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		received <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config.ClearAuthCfgForTesting()
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	cfg := &config.Instance{}
+	cfg.SetHTTPAllowListForTesting([]string{server.URL + "/.*"})
+
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: gozapscript.Command{
+			Name: gozapscript.ZapScriptCmdHTTPGet,
+			Args: []string{server.URL + "/allowed"},
+		},
+	}
+
+	_, err := cmdHTTPGet(nil, env)
+	require.NoError(t, err)
+
+	select {
+	case <-received:
+		// request went through
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for HTTP request")
+	}
+}
+
+func TestCmdHTTPPost_AllowListBlocks(t *testing.T) {
+	cfg := &config.Instance{}
+	cfg.SetHTTPAllowListForTesting([]string{`https://example\.com/.*`})
+
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: gozapscript.Command{
+			Name: gozapscript.ZapScriptCmdHTTPPost,
+			Args: []string{"https://evil.com/attack", "application/json", "{}"},
+		},
+	}
+
+	_, err := cmdHTTPPost(nil, env)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrHTTPNotAllowed)
+}
+
 func TestCmdHTTPGet_ArgValidation(t *testing.T) {
 	t.Parallel()
 

@@ -145,7 +145,7 @@ func HandleRunRest(
 		text := chi.URLParam(r, "*")
 
 		if !isLocalRequest(r) && !cfg.IsRunAllowed(text) {
-			log.Warn().Msgf("run not allowed: %s", text)
+			log.Warn().Msgf("REST run not allowed: %s", text)
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
 		}

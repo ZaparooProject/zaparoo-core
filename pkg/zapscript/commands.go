@@ -361,6 +361,10 @@ func RunCommand(
 		return platforms.CmdResult{}, fmt.Errorf("unknown command: %s", cmd)
 	}
 
+	if cfg.IsCommandBlocked(cmd.Name) {
+		return platforms.CmdResult{}, fmt.Errorf("command blocked: %s", cmd.Name)
+	}
+
 	// Acquire launch guard for media-launching commands to prevent concurrent launches
 	if IsMediaLaunchingCommand(cmd.Name) {
 		if lm == nil {

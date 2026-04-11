@@ -24,6 +24,8 @@ import (
 	"net"
 	"regexp"
 	"strconv"
+
+	zapscript "github.com/ZaparooProject/go-zapscript"
 )
 
 const (
@@ -121,10 +123,48 @@ func (c *Instance) AllowedOrigins() []string {
 	return c.vals.Service.AllowedOrigins
 }
 
+// IsRunAllowed checks whether a ZapScript text is permitted by the allow_run
+// patterns. Each command in the script is parsed and checked individually
+// against the patterns — all commands must match for the text to be allowed.
+// Returns false when allow_run is empty (not configured).
 func (c *Instance) IsRunAllowed(s string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return checkAllow(c.vals.Service.AllowRun, c.vals.Service.allowRunRe, s)
+	if len(c.vals.Service.AllowRun) == 0 {
+		return false
+	}
+	reader := zapscript.NewParser(s)
+	script, err := reader.ParseScript()
+	if err != nil || len(script.Cmds) == 0 {
+		return false
+	}
+	for _, cmd := range script.Cmds {
+		if !checkAllow(c.vals.Service.AllowRun, c.vals.Service.allowRunRe, cmd.String()) {
+			return false
+		}
+	}
+	return true
+}
+
+// HasAllowRun returns true if the allow_run list is configured (non-empty).
+func (c *Instance) HasAllowRun() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.vals.Service.AllowRun) > 0
+}
+
+// SetRunAllowListForTesting configures the run allow list for tests.
+func (c *Instance) SetRunAllowListForTesting(allowList []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Service.AllowRun = allowList
+	c.vals.Service.allowRunRe = make([]*regexp.Regexp, len(allowList))
+	for i, pattern := range allowList {
+		re, err := regexp.Compile(anchorPattern(pattern))
+		if err == nil {
+			c.vals.Service.allowRunRe[i] = re
+		}
+	}
 }
 
 func (c *Instance) GetMQTTPublishers() []MQTTPublisher {

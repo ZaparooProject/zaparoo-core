@@ -21,6 +21,8 @@ package zapscript
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -29,6 +31,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/rs/zerolog/log"
 )
+
+var ErrHTTPNotAllowed = errors.New("HTTP URL not allowed")
 
 var httpCmdClient = &http.Client{
 	Transport: &installer.AuthTransport{},
@@ -43,6 +47,10 @@ func cmdHTTPGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	url := env.Cmd.Args[0]
+
+	if !env.Cfg.IsHTTPAllowed(url) {
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrHTTPNotAllowed, url)
+	}
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -78,6 +86,10 @@ func cmdHTTPPost(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 	url := env.Cmd.Args[0]
 	mime := env.Cmd.Args[1]
 	payload := env.Cmd.Args[2]
+
+	if !env.Cfg.IsHTTPAllowed(url) {
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrHTTPNotAllowed, url)
+	}
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

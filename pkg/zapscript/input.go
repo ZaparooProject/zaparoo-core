@@ -20,14 +20,119 @@
 package zapscript
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput/keyboardmap"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/rs/zerolog/log"
 )
+
+var (
+	ErrInputNotAllowed = errors.New("input key not allowed")
+	ErrInputBlocked    = errors.New("input key blocked")
+)
+
+var defaultDesktopBlockList = []string{
+	// Linux: TTY switching
+	"{ctrl+alt+f1}", "{ctrl+alt+f2}", "{ctrl+alt+f3}", "{ctrl+alt+f4}",
+	"{ctrl+alt+f5}", "{ctrl+alt+f6}", "{ctrl+alt+f7}",
+	// Linux: system/shell access
+	"{ctrl+alt+delete}", "{ctrl+alt+t}", "{alt+sysrq}", "{super}", "{meta}",
+	// Windows: close application
+	"{alt+f4}",
+	// macOS: launcher/quit
+	"{cmd+space}", "{cmd+q}",
+}
+
+// defaultInputMode returns the default input mode for a platform.
+func defaultInputMode(platformID string) string {
+	switch platformID {
+	case platformids.Mister, platformids.Mistex, platformids.Batocera,
+		platformids.Recalbox, platformids.LibreELEC, platformids.RetroPie:
+		return config.InputModeUnrestricted
+	default:
+		return config.InputModeCombos
+	}
+}
+
+// isDesktopPlatform returns true for platforms where the default block list
+// should be applied.
+func isDesktopPlatform(platformID string) bool {
+	switch platformID {
+	case platformids.Linux, platformids.Windows, platformids.Mac,
+		platformids.SteamOS, platformids.ChimeraOS, platformids.Bazzite:
+		return true
+	default:
+		return false
+	}
+}
+
+// isSpecialKey returns true if the key is wrapped in braces (special key or
+// combo). Single characters like "a", "p", "5" return false.
+func isSpecialKey(key string) bool {
+	return len(key) > 2 && key[0] == '{' && key[len(key)-1] == '}'
+}
+
+// isKeyInList checks if a key is in a list (case-insensitive).
+func isKeyInList(key string, list []string) bool {
+	for _, item := range list {
+		if strings.EqualFold(key, item) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkInputKey checks whether a key is allowed under the current input config.
+//
+// Logic (in order):
+//  1. If allow list is set → strict mode, only listed keys permitted
+//  2. Check effective block list (custom or default desktop)
+//  3. Mode check: combos allows only braced keys, unrestricted allows all
+func checkInputKey(cfg *config.Instance, platformID, key string) error {
+	// 1. Strict allow mode — overrides everything
+	allowList := cfg.InputAllowList()
+	if len(allowList) > 0 {
+		if !isKeyInList(key, allowList) {
+			return fmt.Errorf("%w: %s", ErrInputNotAllowed, key)
+		}
+		return nil
+	}
+
+	// 2. Block list check — nil means not configured (use defaults),
+	// empty slice means explicitly cleared (block = [])
+	blockList := cfg.InputBlockList()
+	if blockList == nil && isDesktopPlatform(platformID) {
+		blockList = defaultDesktopBlockList
+	}
+	if isKeyInList(key, blockList) {
+		return fmt.Errorf("%w: %s", ErrInputBlocked, key)
+	}
+
+	// 3. Mode check
+	mode := cfg.InputMode(defaultInputMode(platformID))
+	switch mode {
+	case config.InputModeCombos:
+		if !isSpecialKey(key) {
+			return fmt.Errorf("%w: %s", ErrInputNotAllowed, key)
+		}
+		return nil
+	case config.InputModeUnrestricted:
+		return nil
+	default:
+		log.Warn().Str("mode", mode).Msg("unknown input mode, defaulting to combos")
+		if !isSpecialKey(key) {
+			return fmt.Errorf("%w: %s", ErrInputNotAllowed, key)
+		}
+		return nil
+	}
+}
 
 // DEPRECATED
 //
@@ -46,6 +151,9 @@ func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, e
 	code := keyboardmap.GetLegacyKey(legacyCode)
 	if code == "" {
 		return platforms.CmdResult{}, fmt.Errorf("invalid legacy key code: %s", env.Cmd.Args[0])
+	}
+	if err := checkInputKey(env.Cfg, pl.ID(), code); err != nil {
+		return platforms.CmdResult{}, err
 	}
 	if err := pl.KeyboardPress(code); err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to press keyboard key: %w", err)
@@ -83,6 +191,12 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 		return platforms.CmdResult{}, ErrRemoteSource
 	}
 
+	for _, key := range env.Cmd.Args {
+		if err := checkInputKey(env.Cfg, pl.ID(), key); err != nil {
+			return platforms.CmdResult{}, err
+		}
+	}
+
 	log.Info().Msgf("keyboard input: %v", env.Cmd.Args)
 
 	// TODO: stuff like adjust delay, only press, etc.
@@ -99,6 +213,12 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Unsafe {
 		return platforms.CmdResult{}, ErrRemoteSource
+	}
+
+	for _, btn := range env.Cmd.Args {
+		if err := checkInputKey(env.Cfg, pl.ID(), btn); err != nil {
+			return platforms.CmdResult{}, err
+		}
 	}
 
 	log.Info().Msgf("gamepad input: %v", env.Cmd.Args)
