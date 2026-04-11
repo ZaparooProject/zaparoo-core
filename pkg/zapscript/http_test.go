@@ -21,6 +21,7 @@ package zapscript
 
 import (
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -212,7 +213,8 @@ func TestCmdHTTPGet_AllowListEmpty_AllAllowed(t *testing.T) {
 
 func TestCmdHTTPGet_AllowListBlocks(t *testing.T) {
 	cfg := &config.Instance{}
-	cfg.SetHTTPAllowListForTesting([]string{`https://example\.com/.*`})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_http = ['https://example\.com/.*']`))
 
 	env := platforms.CmdEnv{
 		Cfg: cfg,
@@ -239,7 +241,7 @@ func TestCmdHTTPGet_AllowListPermits(t *testing.T) {
 	t.Cleanup(config.ClearAuthCfgForTesting)
 
 	cfg := &config.Instance{}
-	cfg.SetHTTPAllowListForTesting([]string{server.URL + "/.*"})
+	require.NoError(t, cfg.LoadTOML(fmt.Sprintf("[zapscript]\nallow_http = ['%s/.*']", server.URL)))
 
 	env := platforms.CmdEnv{
 		Cfg: cfg,
@@ -262,7 +264,8 @@ func TestCmdHTTPGet_AllowListPermits(t *testing.T) {
 
 func TestCmdHTTPPost_AllowListBlocks(t *testing.T) {
 	cfg := &config.Instance{}
-	cfg.SetHTTPAllowListForTesting([]string{`https://example\.com/.*`})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_http = ['https://example\.com/.*']`))
 
 	env := platforms.CmdEnv{
 		Cfg: cfg,
@@ -289,7 +292,7 @@ func TestCmdHTTPPost_AllowListPermits(t *testing.T) {
 	t.Cleanup(config.ClearAuthCfgForTesting)
 
 	cfg := &config.Instance{}
-	cfg.SetHTTPAllowListForTesting([]string{server.URL + "/.*"})
+	require.NoError(t, cfg.LoadTOML(fmt.Sprintf("[zapscript]\nallow_http = ['%s/.*']", server.URL)))
 
 	env := platforms.CmdEnv{
 		Cfg: cfg,

@@ -153,20 +153,6 @@ func (c *Instance) HasAllowRun() bool {
 	return len(c.vals.Service.AllowRun) > 0
 }
 
-// SetRunAllowListForTesting configures the run allow list for tests.
-func (c *Instance) SetRunAllowListForTesting(allowList []string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.Service.AllowRun = allowList
-	c.vals.Service.allowRunRe = make([]*regexp.Regexp, len(allowList))
-	for i, pattern := range allowList {
-		re, err := regexp.Compile(anchorPattern(pattern))
-		if err == nil {
-			c.vals.Service.allowRunRe[i] = re
-		}
-	}
-}
-
 func (c *Instance) GetMQTTPublishers() []MQTTPublisher {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

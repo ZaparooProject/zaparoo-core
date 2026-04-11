@@ -1201,14 +1201,149 @@ func TestAnchorPattern(t *testing.T) {
 	}
 }
 
-func TestAutoAnchorPreventsSubstringMatch(t *testing.T) {
+func TestLoadTOML_PartialMerge(t *testing.T) {
 	t.Parallel()
 
 	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+block_commands = ["http.get"]
+`))
+
+	// Baseline
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+	assert.True(t, cfg.IsCommandBlocked("http.get"))
+
+	// Partial update — only change block_commands, leave allow_execute untouched
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+block_commands = ["execute"]
+`))
+
+	// allow_execute unchanged
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"partial merge must not clear unrelated fields")
+	// block_commands updated
+	assert.False(t, cfg.IsCommandBlocked("http.get"))
+	assert.True(t, cfg.IsCommandBlocked("execute"))
+}
+
+func TestLoadTOML_InvalidTOMLPreservesState(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+`))
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+
+	// TOML that decodes debug_logging (bool) then fails on a type error
+	// for allow_execute (string where array expected). This tests that
+	// partially-applied fields are rolled back.
+	err := cfg.LoadTOML(`
+debug_logging = true
+
+[zapscript]
+allow_execute = "not-an-array"
+`)
+	require.Error(t, err)
+
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"state must be preserved after LoadTOML error")
+	assert.False(t, cfg.IsExecuteAllowed("not-an-array"),
+		"partial decode must not leak into state")
+}
+
+func TestLoadTOML_RebuildsDerivedFields(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+allow_http = ['https://example\.com/.*']
+block_commands = ["http.get"]
+
+[service]
+allow_run = ['.*']
+`))
+
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+	assert.False(t, cfg.IsExecuteAllowed("rm"))
+	assert.True(t, cfg.IsHTTPAllowed("https://example.com/foo"))
+	assert.False(t, cfg.IsHTTPAllowed("https://evil.com"))
+	assert.True(t, cfg.IsCommandBlocked("http.get"))
+	assert.False(t, cfg.IsCommandBlocked("launch"))
+	assert.True(t, cfg.IsRunAllowed("**launch:test"))
+
+	// Update regexes — derived fields must be rebuilt
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["rm"]
+`))
+
+	assert.True(t, cfg.IsExecuteAllowed("rm"),
+		"regex must be recompiled after LoadTOML")
+	assert.False(t, cfg.IsExecuteAllowed("echo"),
+		"old regex must be replaced")
+
+	// Other derived fields must be retained from the first LoadTOML
+	assert.True(t, cfg.IsHTTPAllowed("https://example.com/foo"),
+		"allowHTTPRe must be retained")
+	assert.False(t, cfg.IsHTTPAllowed("https://evil.com"),
+		"allowHTTPRe must still block non-matching URLs")
+	assert.True(t, cfg.IsCommandBlocked("http.get"),
+		"blockCommandSet must be retained")
+	assert.True(t, cfg.IsRunAllowed("**launch:test"),
+		"allowRunRe must be retained")
+}
+
+func TestLoad_RollbackOnSchemaError(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+
+	// Set up known state
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+`))
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+
+	// Write a config file with wrong schema version but valid fields —
+	// Load() will decode allow_execute = ["rm"] before schema check fails,
+	// so this verifies rollback undoes the partial decode.
+	cfgPath := filepath.Join(tempDir, CfgFile)
+	err = os.WriteFile(cfgPath, []byte(`config_schema = 9999
+
+[zapscript]
+allow_execute = ["rm"]
+`), 0o600)
+	require.NoError(t, err)
+
+	// Load should fail but preserve running config
+	err = cfg.Load()
+	require.Error(t, err)
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"Load must preserve running config on schema error")
+	assert.False(t, cfg.IsExecuteAllowed("rm"),
+		"bad config values must not leak into running config")
+}
+
+func TestAutoAnchorPreventsSubstringMatch(t *testing.T) {
+	t.Parallel()
 
 	// Without anchoring, "echo" would match "echo && rm -rf /"
 	// With anchoring, it should only match exactly "echo"
-	cfg.SetExecuteAllowListForTesting([]string{"echo"})
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+`))
 
 	assert.True(t, cfg.IsExecuteAllowed("echo"),
 		"exact match should be allowed")
@@ -1218,17 +1353,25 @@ func TestAutoAnchorPreventsSubstringMatch(t *testing.T) {
 		"prefix substring should be blocked")
 
 	// Pattern with .* should still allow intended matches
-	cfg.SetExecuteAllowListForTesting([]string{"/usr/bin/.*"})
+	cfg2 := &Instance{}
+	require.NoError(t, cfg2.LoadTOML(`
+[zapscript]
+allow_execute = ["/usr/bin/.*"]
+`))
 
-	assert.True(t, cfg.IsExecuteAllowed("/usr/bin/notify-send"),
+	assert.True(t, cfg2.IsExecuteAllowed("/usr/bin/notify-send"),
 		"wildcard suffix should match")
-	assert.False(t, cfg.IsExecuteAllowed("/opt/usr/bin/notify-send"),
+	assert.False(t, cfg2.IsExecuteAllowed("/opt/usr/bin/notify-send"),
 		"path prefix should not match without .*")
 
 	// Explicit substring pattern should still work
-	cfg.SetExecuteAllowListForTesting([]string{".*mister.*"})
+	cfg3 := &Instance{}
+	require.NoError(t, cfg3.LoadTOML(`
+[zapscript]
+allow_execute = [".*mister.*"]
+`))
 
-	assert.True(t, cfg.IsExecuteAllowed("misterious"),
+	assert.True(t, cfg3.IsExecuteAllowed("misterious"),
 		"explicit .*pattern.* should allow substring match")
 }
 
@@ -1267,52 +1410,52 @@ func TestIsRunAllowed(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		input     string
-		allowList []string
-		expected  bool
+		name     string
+		input    string
+		toml     string
+		expected bool
 	}{
 		{
-			name:      "empty list rejects all",
-			allowList: nil,
-			input:     "**launch:SNES",
-			expected:  false,
+			name:     "empty list rejects all",
+			toml:     "",
+			input:    "**launch:SNES",
+			expected: false,
 		},
 		{
-			name:      "single command matches",
-			allowList: []string{`\*\*launch\.random:.*`},
-			input:     "**launch.random:SNES",
-			expected:  true,
+			name:     "single command matches",
+			toml:     "[service]\nallow_run = ['\\*\\*launch\\.random:.*']",
+			input:    "**launch.random:SNES",
+			expected: true,
 		},
 		{
-			name:      "single command no match",
-			allowList: []string{`\*\*launch\.random:.*`},
-			input:     "**execute:rm -rf /",
-			expected:  false,
+			name:     "single command no match",
+			toml:     "[service]\nallow_run = ['\\*\\*launch\\.random:.*']",
+			input:    "**execute:rm -rf /",
+			expected: false,
 		},
 		{
-			name:      "chained commands all match",
-			allowList: []string{`\*\*launch\.random:.*`},
-			input:     "**launch.random:SNES||**launch.random:NES",
-			expected:  true,
+			name:     "chained commands all match",
+			toml:     "[service]\nallow_run = ['\\*\\*launch\\.random:.*']",
+			input:    "**launch.random:SNES||**launch.random:NES",
+			expected: true,
 		},
 		{
-			name:      "chained commands one fails",
-			allowList: []string{`\*\*launch\.random:.*`},
-			input:     "**launch.random:SNES||**execute:rm -rf /",
-			expected:  false,
+			name:     "chained commands one fails",
+			toml:     "[service]\nallow_run = ['\\*\\*launch\\.random:.*']",
+			input:    "**launch.random:SNES||**execute:rm -rf /",
+			expected: false,
 		},
 		{
-			name:      "auto-launch path normalizes to launch command",
-			allowList: []string{`\*\*launch:/games/.*`},
-			input:     "/games/snes/mario.sfc",
-			expected:  true,
+			name:     "auto-launch path normalizes to launch command",
+			toml:     "[service]\nallow_run = ['\\*\\*launch:/games/.*']",
+			input:    "/games/snes/mario.sfc",
+			expected: true,
 		},
 		{
-			name:      "malformed input rejected",
-			allowList: []string{".*"},
-			input:     "**",
-			expected:  false,
+			name:     "malformed input rejected",
+			toml:     "[service]\nallow_run = ['.*']",
+			input:    "**",
+			expected: false,
 		},
 	}
 
@@ -1320,9 +1463,11 @@ func TestIsRunAllowed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &Instance{}
-			cfg.SetRunAllowListForTesting(tt.allowList)
+			if tt.toml != "" {
+				require.NoError(t, cfg.LoadTOML(tt.toml))
+			}
 			assert.Equal(t, tt.expected, cfg.IsRunAllowed(tt.input),
-				"input: %s, allowList: %v", tt.input, tt.allowList)
+				"input: %s, toml: %s", tt.input, tt.toml)
 		})
 	}
 }
@@ -1331,34 +1476,34 @@ func TestIsHTTPAllowed(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		url       string
-		allowList []string
-		expected  bool
+		name     string
+		url      string
+		toml     string
+		expected bool
 	}{
 		{
-			name:      "empty list allows all",
-			allowList: nil,
-			url:       "https://anything.com",
-			expected:  true,
+			name:     "empty list allows all",
+			toml:     "",
+			url:      "https://anything.com",
+			expected: true,
 		},
 		{
-			name:      "matching URL allowed",
-			allowList: []string{`https://example\.com/.*`},
-			url:       "https://example.com/api/test",
-			expected:  true,
+			name:     "matching URL allowed",
+			toml:     `[zapscript]` + "\nallow_http = ['https://example\\.com/.*']",
+			url:      "https://example.com/api/test",
+			expected: true,
 		},
 		{
-			name:      "non-matching URL blocked",
-			allowList: []string{`https://example\.com/.*`},
-			url:       "https://evil.com/attack",
-			expected:  false,
+			name:     "non-matching URL blocked",
+			toml:     `[zapscript]` + "\nallow_http = ['https://example\\.com/.*']",
+			url:      "https://evil.com/attack",
+			expected: false,
 		},
 		{
-			name:      "anchoring prevents partial match",
-			allowList: []string{`https://example\.com`},
-			url:       "https://example.com.evil.com",
-			expected:  false,
+			name:     "anchoring prevents partial match",
+			toml:     `[zapscript]` + "\nallow_http = ['https://example\\.com']",
+			url:      "https://example.com.evil.com",
+			expected: false,
 		},
 	}
 
@@ -1366,7 +1511,9 @@ func TestIsHTTPAllowed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &Instance{}
-			cfg.SetHTTPAllowListForTesting(tt.allowList)
+			if tt.toml != "" {
+				require.NoError(t, cfg.LoadTOML(tt.toml))
+			}
 			assert.Equal(t, tt.expected, cfg.IsHTTPAllowed(tt.url))
 		})
 	}
@@ -1376,34 +1523,34 @@ func TestIsCommandBlocked(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name          string
-		command       string
-		blockCommands []string
-		expected      bool
+		name     string
+		command  string
+		toml     string
+		expected bool
 	}{
 		{
-			name:          "empty block list allows all",
-			blockCommands: nil,
-			command:       "execute",
-			expected:      false,
+			name:     "empty block list allows all",
+			toml:     "",
+			command:  "execute",
+			expected: false,
 		},
 		{
-			name:          "exact match is blocked",
-			blockCommands: []string{"execute", "http.get"},
-			command:       "execute",
-			expected:      true,
+			name:     "exact match is blocked",
+			toml:     "[zapscript]\nblock_commands = [\"execute\", \"http.get\"]",
+			command:  "execute",
+			expected: true,
 		},
 		{
-			name:          "non-matching command is allowed",
-			blockCommands: []string{"execute", "http.get"},
-			command:       "launch",
-			expected:      false,
+			name:     "non-matching command is allowed",
+			toml:     "[zapscript]\nblock_commands = [\"execute\", \"http.get\"]",
+			command:  "launch",
+			expected: false,
 		},
 		{
-			name:          "partial name is not blocked",
-			blockCommands: []string{"execute"},
-			command:       "execute.something",
-			expected:      false,
+			name:     "partial name is not blocked",
+			toml:     "[zapscript]\nblock_commands = [\"execute\"]",
+			command:  "execute.something",
+			expected: false,
 		},
 	}
 
@@ -1411,7 +1558,9 @@ func TestIsCommandBlocked(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &Instance{}
-			cfg.SetBlockCommandsForTesting(tt.blockCommands)
+			if tt.toml != "" {
+				require.NoError(t, cfg.LoadTOML(tt.toml))
+			}
 			assert.Equal(t, tt.expected, cfg.IsCommandBlocked(tt.command))
 		})
 	}

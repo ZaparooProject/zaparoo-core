@@ -233,25 +233,52 @@ func (c *Instance) Load() error {
 
 	// Start with defaults, then unmarshal file values on top.
 	// This ensures fields not present in the file retain their default values.
-	newVals := c.defaults
-	err = toml.Unmarshal(data, &newVals)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal config: %w", err)
+	// Save old vals so we can restore on error (Load is called at runtime for
+	// config reloads — a bad file must not destroy the running config).
+	oldVals := c.vals
+	c.vals = c.defaults
+
+	if err := c.applyTOML(string(data)); err != nil {
+		c.vals = oldVals
+		return err
 	}
 
-	if newVals.ConfigSchema != SchemaVersion {
+	if c.vals.ConfigSchema != SchemaVersion {
 		log.Error().Msgf(
 			"schema version mismatch: got %d, expecting %d",
-			newVals.ConfigSchema,
+			c.vals.ConfigSchema,
 			SchemaVersion,
 		)
+		c.vals = oldVals
 		return errors.New("schema version mismatch")
 	}
 
-	c.vals = newVals
-
 	// load auth file
 	c.reloadAuth()
+
+	return nil
+}
+
+// LoadTOML unmarshals a TOML string onto the current config values and
+// rebuilds derived fields (compiled regexes, lookup maps). Fields not
+// present in the TOML are left unchanged.
+func (c *Instance) LoadTOML(data string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	oldVals := c.vals
+	if err := c.applyTOML(data); err != nil {
+		c.vals = oldVals
+		return err
+	}
+	return nil
+}
+
+// applyTOML is the shared unmarshal + post-processing core.
+// Caller must hold c.mu.
+func (c *Instance) applyTOML(data string) error {
+	if err := toml.Unmarshal([]byte(data), &c.vals); err != nil {
+		return fmt.Errorf("failed to unmarshal config: %w", err)
+	}
 
 	// prepare allow files regexes
 	c.vals.Launchers.allowFileRe = make([]*regexp.Regexp, len(c.vals.Launchers.AllowFile))
@@ -698,20 +725,6 @@ func (c *Instance) IsHTTPAllowed(url string) bool {
 	return checkAllow(c.vals.ZapScript.AllowHTTP, c.vals.ZapScript.allowHTTPRe, url)
 }
 
-// SetHTTPAllowListForTesting configures the HTTP allow list for tests.
-func (c *Instance) SetHTTPAllowListForTesting(allowList []string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.ZapScript.AllowHTTP = allowList
-	c.vals.ZapScript.allowHTTPRe = make([]*regexp.Regexp, len(allowList))
-	for i, pattern := range allowList {
-		re, err := regexp.Compile(anchorPattern(pattern))
-		if err == nil {
-			c.vals.ZapScript.allowHTTPRe[i] = re
-		}
-	}
-}
-
 // InputMode returns the configured input restriction mode.
 // defaultMode is the platform-provided default (e.g., "hotkeys" for desktop,
 // "unrestricted" for embedded).
@@ -747,38 +760,6 @@ func (c *Instance) InputBlockList() []string {
 	return c.vals.ZapScript.Input.Block
 }
 
-// SetBlockCommandsForTesting sets the command block list for tests.
-func (c *Instance) SetBlockCommandsForTesting(cmds []string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.ZapScript.BlockCommands = cmds
-	c.vals.ZapScript.blockCommandSet = make(map[string]struct{}, len(cmds))
-	for _, cmd := range cmds {
-		c.vals.ZapScript.blockCommandSet[cmd] = struct{}{}
-	}
-}
-
-// SetInputModeForTesting sets the input mode for tests.
-func (c *Instance) SetInputModeForTesting(mode *string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.ZapScript.Input.Mode = mode
-}
-
-// SetInputAllowListForTesting sets the input allow list for tests.
-func (c *Instance) SetInputAllowListForTesting(keys []string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.ZapScript.Input.Allow = keys
-}
-
-// SetInputBlockListForTesting sets the input block list for tests.
-func (c *Instance) SetInputBlockListForTesting(keys []string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.ZapScript.Input.Block = keys
-}
-
 // SetAuthCfgForTesting sets the global auth config for testing purposes
 func SetAuthCfgForTesting(creds map[string]CredentialEntry) {
 	authCfg.Store(creds)
@@ -787,20 +768,6 @@ func SetAuthCfgForTesting(creds map[string]CredentialEntry) {
 // ClearAuthCfgForTesting clears the global auth config for testing purposes
 func ClearAuthCfgForTesting() {
 	authCfg.Store(map[string]CredentialEntry{})
-}
-
-// SetExecuteAllowListForTesting configures the execute allow list for tests.
-func (c *Instance) SetExecuteAllowListForTesting(allowList []string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.ZapScript.AllowExecute = allowList
-	c.vals.ZapScript.allowExecuteRe = make([]*regexp.Regexp, len(allowList))
-	for i, pattern := range allowList {
-		re, err := regexp.Compile(anchorPattern(pattern))
-		if err == nil {
-			c.vals.ZapScript.allowExecuteRe[i] = re
-		}
-	}
 }
 
 // VirtualGamepadEnabled returns whether virtual gamepad emulation is enabled.

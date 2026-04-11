@@ -73,56 +73,56 @@ func TestLaunchersBeforeMediaStart(t *testing.T) {
 	}
 }
 
-func TestSetExecuteAllowListForTesting(t *testing.T) {
+func TestLoadTOML_ExecuteAllowList(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		testCmd   string
-		allowList []string
-		expected  bool
+		name     string
+		testCmd  string
+		toml     string
+		expected bool
 	}{
 		{
-			name:      "empty allow list blocks all",
-			allowList: []string{},
-			testCmd:   "echo hello",
-			expected:  false,
+			name:     "empty allow list blocks all",
+			toml:     `[zapscript]` + "\n" + `allow_execute = []`,
+			testCmd:  "echo hello",
+			expected: false,
 		},
 		{
-			name:      "wildcard allows all",
-			allowList: []string{".*"},
-			testCmd:   "echo hello",
-			expected:  true,
+			name:     "wildcard allows all",
+			toml:     `[zapscript]` + "\n" + `allow_execute = [".*"]`,
+			testCmd:  "echo hello",
+			expected: true,
 		},
 		{
-			name:      "specific command allowed",
-			allowList: []string{"^echo$"},
-			testCmd:   "echo",
-			expected:  true,
+			name:     "specific command allowed",
+			toml:     `[zapscript]` + "\n" + `allow_execute = ["^echo$"]`,
+			testCmd:  "echo",
+			expected: true,
 		},
 		{
-			name:      "specific command not in list blocked",
-			allowList: []string{"^echo$"},
-			testCmd:   "rm -rf",
-			expected:  false,
+			name:     "specific command not in list blocked",
+			toml:     `[zapscript]` + "\n" + `allow_execute = ["^echo$"]`,
+			testCmd:  "rm -rf",
+			expected: false,
 		},
 		{
-			name:      "path pattern matching",
-			allowList: []string{"/usr/bin/.*"},
-			testCmd:   "/usr/bin/notify-send",
-			expected:  true,
+			name:     "path pattern matching",
+			toml:     `[zapscript]` + "\n" + `allow_execute = ["/usr/bin/.*"]`,
+			testCmd:  "/usr/bin/notify-send",
+			expected: true,
 		},
 		{
-			name:      "multiple patterns",
-			allowList: []string{"^echo$", "^notify-send$"},
-			testCmd:   "notify-send",
-			expected:  true,
+			name:     "multiple patterns",
+			toml:     `[zapscript]` + "\n" + `allow_execute = ["^echo$", "^notify-send$"]`,
+			testCmd:  "notify-send",
+			expected: true,
 		},
 		{
-			name:      "invalid regex is skipped gracefully",
-			allowList: []string{"[invalid", "^echo$"},
-			testCmd:   "echo",
-			expected:  true,
+			name:     "invalid regex is skipped gracefully",
+			toml:     `[zapscript]` + "\n" + `allow_execute = ["[invalid", "^echo$"]`,
+			testCmd:  "echo",
+			expected: true,
 		},
 	}
 
@@ -131,25 +131,26 @@ func TestSetExecuteAllowListForTesting(t *testing.T) {
 			t.Parallel()
 
 			cfg := &Instance{}
-			cfg.SetExecuteAllowListForTesting(tt.allowList)
+			require.NoError(t, cfg.LoadTOML(tt.toml))
 
 			result := cfg.IsExecuteAllowed(tt.testCmd)
-			assert.Equal(t, tt.expected, result, "command: %s, allowList: %v", tt.testCmd, tt.allowList)
+			assert.Equal(t, tt.expected, result, "command: %s, toml: %s", tt.testCmd, tt.toml)
 		})
 	}
 }
 
-func TestSetExecuteAllowListForTesting_CompilesRegex(t *testing.T) {
+func TestLoadTOML_CompilesExecuteRegex(t *testing.T) {
 	t.Parallel()
 
 	cfg := &Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{"^test.*", "^echo$"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = ["^test.*", "^echo$"]`))
 
-	// Verify internal state was set correctly
-	assert.Len(t, cfg.vals.ZapScript.AllowExecute, 2)
-	assert.Len(t, cfg.vals.ZapScript.allowExecuteRe, 2)
-	assert.NotNil(t, cfg.vals.ZapScript.allowExecuteRe[0])
-	assert.NotNil(t, cfg.vals.ZapScript.allowExecuteRe[1])
+	// Verify behavior: matching commands are allowed
+	assert.True(t, cfg.IsExecuteAllowed("testing123"))
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+	// Verify behavior: non-matching commands are blocked
+	assert.False(t, cfg.IsExecuteAllowed("rm -rf"))
 }
 
 func TestLookupLauncherDefaults(t *testing.T) {
@@ -345,20 +346,21 @@ func TestLookupLauncherDefaults(t *testing.T) {
 	}
 }
 
-func TestSetLauncherDefaultsForTesting(t *testing.T) {
+func TestLoadTOML_LauncherDefaults(t *testing.T) {
 	t.Parallel()
 
 	cfg := &Instance{}
 
-	defaults := []LaunchersDefault{
-		{Launcher: "Steam", Action: "details"},
-		{Launcher: "GOG", Action: "run", InstallDir: "/opt/gog"},
-	}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Steam"
+action = "details"
 
-	cfg.SetLauncherDefaultsForTesting(defaults)
-
-	// Verify defaults were set
-	assert.Len(t, cfg.vals.Launchers.Default, 2)
+[[launchers.default]]
+launcher = "GOG"
+action = "run"
+install_dir = "/opt/gog"
+`))
 
 	// Verify Steam default
 	steamDefault := cfg.LookupLauncherDefaults("Steam", nil)
@@ -433,11 +435,17 @@ func TestLauncherDefaults_SaveLoadRoundTrip(t *testing.T) {
 	cfg, err := NewConfig(tempDir, BaseDefaults)
 	require.NoError(t, err)
 
-	// Set launcher defaults using the testing helper
-	cfg.SetLauncherDefaultsForTesting([]LaunchersDefault{
-		{Launcher: "Steam", Action: "details"},
-		{Launcher: "GOG", Action: "run", InstallDir: "/games/gog"},
-	})
+	// Set launcher defaults using LoadTOML
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Steam"
+action = "details"
+
+[[launchers.default]]
+launcher = "GOG"
+action = "run"
+install_dir = "/games/gog"
+`))
 
 	// Save and reload
 	err = cfg.Save()

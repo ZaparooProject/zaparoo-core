@@ -38,7 +38,8 @@ func TestCmdExecute_ZaparooEnvironmentSet(t *testing.T) {
 
 	// Create a minimal config that allows execute
 	cfg := &config.Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{".*"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = [".*"]`))
 
 	// Create expression env
 	exprEnv := &zapscript.ArgExprEnv{
@@ -90,7 +91,8 @@ func TestCmdExecute_ZaparooEnvironmentContainsExpectedFields(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{".*"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = [".*"]`))
 
 	exprEnv := &zapscript.ArgExprEnv{
 		Platform: "mister",
@@ -133,7 +135,8 @@ func TestCmdExecute_StderrCapture(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{".*"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = [".*"]`))
 
 	// Create a command that writes to stderr and exits with error
 	// Use bash with proper quoting
@@ -167,7 +170,8 @@ func TestCmdExecute_UnsafeBlocked(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{".*"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = [".*"]`))
 
 	cmd := zapscript.Command{
 		Name: "execute",
@@ -215,7 +219,8 @@ func TestCmdExecute_EmptyArgs(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{".*"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = [".*"]`))
 
 	cmd := zapscript.Command{
 		Name: "execute",
@@ -265,7 +270,8 @@ func TestCmdExecute_SourceControlAllowedWhenInList(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{"echo.*"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = ["echo.*"]`))
 
 	cmd := zapscript.Command{
 		Name: "execute",

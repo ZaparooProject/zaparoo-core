@@ -76,8 +76,8 @@ func setupScanBehavior(
 
 	cfg.SetScanMode(scanMode)
 	cfg.SetScanExitDelay(exitDelay)
-	unrestricted := config.InputModeUnrestricted
-	cfg.SetInputModeForTesting(&unrestricted)
+	require.NoError(t, cfg.LoadTOML(`[zapscript.input]
+mode = "unrestricted"`))
 
 	mockPlayer := mocks.NewMockPlayer()
 	mockPlayer.SetupNoOpMock()

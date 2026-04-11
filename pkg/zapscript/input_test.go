@@ -31,6 +31,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newCfgFromTOML(t testing.TB, toml string) *config.Instance {
+	t.Helper()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(toml))
+	return cfg
+}
+
 func TestIsSpecialKey(t *testing.T) {
 	t.Parallel()
 
@@ -70,10 +77,11 @@ func TestDefaultInputMode(t *testing.T) {
 func TestCheckInputKey_CombosMode(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{}
-	mode := config.InputModeCombos
-	cfg.SetInputModeForTesting(&mode)
-	cfg.SetInputBlockListForTesting([]string{})
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+mode = "combos"
+block = []
+`)
 
 	// Special keys and combos allowed
 	assert.NoError(t, checkInputKey(cfg, platformids.Linux, "{f1}"))
@@ -94,9 +102,10 @@ func TestCheckInputKey_CombosMode(t *testing.T) {
 func TestCheckInputKey_UnrestrictedMode(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{}
-	mode := config.InputModeUnrestricted
-	cfg.SetInputModeForTesting(&mode)
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+mode = "unrestricted"
+`)
 
 	// Everything passes on embedded (no default block list)
 	assert.NoError(t, checkInputKey(cfg, platformids.Mister, "a"))
@@ -108,9 +117,10 @@ func TestCheckInputKey_UnrestrictedMode(t *testing.T) {
 func TestCheckInputKey_DefaultBlockList(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{}
-	mode := config.InputModeUnrestricted
-	cfg.SetInputModeForTesting(&mode)
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+mode = "unrestricted"
+`)
 
 	// Default block list applied on desktop
 	err := checkInputKey(cfg, platformids.Linux, "{ctrl+alt+t}")
@@ -133,10 +143,11 @@ func TestCheckInputKey_DefaultBlockList(t *testing.T) {
 func TestCheckInputKey_CustomBlockList(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{}
-	mode := config.InputModeUnrestricted
-	cfg.SetInputModeForTesting(&mode)
-	cfg.SetInputBlockListForTesting([]string{"{f12}", "{ctrl+q}"})
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+mode = "unrestricted"
+block = ["{f12}", "{ctrl+q}"]
+`)
 
 	// Custom blocked key
 	err := checkInputKey(cfg, platformids.Linux, "{f12}")
@@ -151,10 +162,11 @@ func TestCheckInputKey_CustomBlockList(t *testing.T) {
 func TestCheckInputKey_EmptyBlockListClearsDefaults(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{}
-	mode := config.InputModeUnrestricted
-	cfg.SetInputModeForTesting(&mode)
-	cfg.SetInputBlockListForTesting([]string{})
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+mode = "unrestricted"
+block = []
+`)
 
 	// Default-blocked keys now allowed because block = [] clears defaults
 	assert.NoError(t, checkInputKey(cfg, platformids.Linux, "{ctrl+alt+t}"))
@@ -164,10 +176,11 @@ func TestCheckInputKey_EmptyBlockListClearsDefaults(t *testing.T) {
 func TestCheckInputKey_AllowStrictMode(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{}
-	mode := config.InputModeCombos
-	cfg.SetInputModeForTesting(&mode)
-	cfg.SetInputAllowListForTesting([]string{"p", "{f1}", "{ctrl+q}"})
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+mode = "combos"
+allow = ["p", "{f1}", "{ctrl+q}"]
+`)
 
 	// Only allowed keys pass
 	assert.NoError(t, checkInputKey(cfg, platformids.Linux, "p"))
@@ -188,11 +201,12 @@ func TestCheckInputKey_AllowStrictMode(t *testing.T) {
 func TestCheckInputKey_AllowOverridesBlockList(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{}
-	mode := config.InputModeUnrestricted
-	cfg.SetInputModeForTesting(&mode)
 	// Allow includes a default-blocked key
-	cfg.SetInputAllowListForTesting([]string{"{ctrl+alt+delete}", "{f1}"})
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+mode = "unrestricted"
+allow = ["{ctrl+alt+delete}", "{f1}"]
+`)
 
 	// Allowed even though it's in default block list — allow is strict mode,
 	// block list doesn't apply when allow is set
@@ -233,10 +247,11 @@ func TestCheckInputKey_UnrestrictedDefaultOnEmbedded(t *testing.T) {
 func TestCheckInputKey_UnknownModeDefaultsToCombos(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Instance{}
-	bogus := "bogus-mode"
-	cfg.SetInputModeForTesting(&bogus)
-	cfg.SetInputBlockListForTesting([]string{})
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+mode = "bogus-mode"
+block = []
+`)
 
 	// Special keys allowed
 	assert.NoError(t, checkInputKey(cfg, platformids.Linux, "{f1}"))
@@ -254,8 +269,10 @@ func TestCmdKeyboard_CombosBlocksSingleChar(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return(platformids.Linux)
 
-	cfg := &config.Instance{}
-	cfg.SetInputBlockListForTesting([]string{})
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+block = []
+`)
 
 	env := platforms.CmdEnv{
 		Cmd: gozapscript.Command{
@@ -277,8 +294,10 @@ func TestCmdKeyboard_CombosAllowsSpecialKey(t *testing.T) {
 	mockPlatform.On("ID").Return(platformids.Linux)
 	mockPlatform.On("KeyboardPress", "{f1}").Return(nil)
 
-	cfg := &config.Instance{}
-	cfg.SetInputBlockListForTesting([]string{})
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+block = []
+`)
 
 	env := platforms.CmdEnv{
 		Cmd: gozapscript.Command{
@@ -299,8 +318,10 @@ func TestCmdKeyboard_BracedSingleCharRejected(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return(platformids.Linux)
 
-	cfg := &config.Instance{}
-	cfg.SetInputBlockListForTesting([]string{})
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+block = []
+`)
 
 	env := platforms.CmdEnv{
 		Cmd: gozapscript.Command{
@@ -321,8 +342,10 @@ func TestCmdGamepad_CombosBlocksSingleChar(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return(platformids.Linux)
 
-	cfg := &config.Instance{}
-	cfg.SetInputBlockListForTesting([]string{})
+	cfg := newCfgFromTOML(t, `
+[zapscript.input]
+block = []
+`)
 
 	env := platforms.CmdEnv{
 		Cmd: gozapscript.Command{
