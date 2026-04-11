@@ -104,7 +104,8 @@ func TestPrepareBinary_MissingSource(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
 
-	_, err := svc.prepareBinary("/nonexistent/binary")
+	missing := filepath.Join(t.TempDir(), "does-not-exist", "binary")
+	_, err := svc.prepareBinary(missing)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error opening binary")
 }
@@ -187,14 +188,17 @@ func TestFilesEqual_DestinationMissing(t *testing.T) {
 	a := filepath.Join(t.TempDir(), "a")
 	require.NoError(t, os.WriteFile(a, []byte("data"), 0o600))
 
-	equal, err := filesEqual(a, "/nonexistent/file")
+	missing := filepath.Join(t.TempDir(), "does-not-exist", "file")
+	equal, err := filesEqual(a, missing)
 	require.NoError(t, err)
 	assert.False(t, equal)
 }
 
 func TestFilesEqual_SourceMissing(t *testing.T) {
 	t.Parallel()
-	_, err := filesEqual("/nonexistent/file", "/also/nonexistent")
+	missingA := filepath.Join(t.TempDir(), "does-not-exist", "source")
+	missingB := filepath.Join(t.TempDir(), "does-not-exist", "dest")
+	_, err := filesEqual(missingA, missingB)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error statting source")
 }
