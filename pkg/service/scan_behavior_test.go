@@ -76,6 +76,8 @@ func setupScanBehavior(
 
 	cfg.SetScanMode(scanMode)
 	cfg.SetScanExitDelay(exitDelay)
+	unrestricted := config.InputModeUnrestricted
+	cfg.SetInputModeForTesting(&unrestricted)
 
 	mockPlayer := mocks.NewMockPlayer()
 	mockPlayer.SetupNoOpMock()

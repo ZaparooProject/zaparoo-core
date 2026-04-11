@@ -1546,11 +1546,22 @@ func Start(
 		r.Post("/api", postHandler)
 		r.Post("/api/v0", postHandler)
 		r.Post("/api/v0.1", postHandler)
+	})
 
-		// REST action endpoints
-		r.Get("/l/*", methods.HandleRunRest(cfg, st, inTokenQueue)) // DEPRECATED
-		r.Get("/r/*", methods.HandleRunRest(cfg, st, inTokenQueue))
-		r.Get("/run/*", methods.HandleRunRest(cfg, st, inTokenQueue))
+	// REST run endpoints — allow_run bypasses IP filter when configured,
+	// since the handler validates content against the allow_run patterns.
+	runIPFilter := apimiddleware.RunIPFilterMiddleware(cfg.AllowedIPs, cfg.HasAllowRun)
+	r.Group(func(r chi.Router) {
+		r.Use(runIPFilter)
+		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		r.Use(apiRateLimitMiddleware)
+		r.Use(middleware.NoCache)
+		r.Use(middleware.Timeout(config.APIRequestTimeout))
+
+		runHandler := methods.HandleRunRest(cfg, st, inTokenQueue)
+		r.Get("/l/*", runHandler) // DEPRECATED
+		r.Get("/r/*", runHandler)
+		r.Get("/run/*", runHandler)
 	})
 
 	// SSE routes (long-lived connections, no request timeout). Same

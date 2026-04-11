@@ -88,6 +88,23 @@ func matchAllowedIPs(ip net.IP, allowed []string) bool {
 	return false
 }
 
+// RunIPFilterMiddleware allows remote access to run endpoints when allow_run
+// is configured (the handler validates content). Otherwise falls back to the
+// standard AllowedIPs check.
+func RunIPFilterMiddleware(ipsProvider IPsProvider, hasAllowRun func() bool) func(http.Handler) http.Handler {
+	ipFilter := NonWSIPFilterMiddleware(ipsProvider)
+	return func(next http.Handler) http.Handler {
+		filtered := ipFilter(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if IsLoopbackAddr(r.RemoteAddr) || hasAllowRun() {
+				next.ServeHTTP(w, r)
+				return
+			}
+			filtered.ServeHTTP(w, r)
+		})
+	}
+}
+
 // NonWSIPFilterMiddleware denies non-loopback access unless AllowedIPs is configured.
 func NonWSIPFilterMiddleware(ipsProvider IPsProvider) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

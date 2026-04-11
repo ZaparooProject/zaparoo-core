@@ -76,8 +76,24 @@ type Audio struct {
 }
 
 type ZapScript struct {
-	AllowExecute   []string `toml:"allow_execute,omitempty,multiline"`
-	allowExecuteRe []*regexp.Regexp
+	AllowExecute    []string `toml:"allow_execute,omitempty,multiline"`
+	allowExecuteRe  []*regexp.Regexp
+	AllowHTTP       []string `toml:"allow_http,omitempty,multiline"`
+	allowHTTPRe     []*regexp.Regexp
+	BlockCommands   []string `toml:"block_commands,omitempty,multiline"`
+	blockCommandSet map[string]struct{}
+	Input           InputConfig `toml:"input,omitempty"`
+}
+
+const (
+	InputModeCombos       = "combos"
+	InputModeUnrestricted = "unrestricted"
+)
+
+type InputConfig struct {
+	Mode  *string  `toml:"mode,omitempty"`
+	Allow []string `toml:"allow,omitempty,multiline"`
+	Block []string `toml:"block,omitempty,multiline"`
 }
 
 type Input struct {
@@ -249,7 +265,7 @@ func (c *Instance) Load() error {
 			allowFile = strings.ReplaceAll(allowFile, "/", "\\\\")
 		}
 
-		re, err := regexp.Compile(allowFile)
+		re, err := regexp.Compile(anchorPattern(allowFile))
 		if err != nil {
 			log.Warn().Msgf("invalid allow file regex: %s", allowFile)
 			continue
@@ -260,7 +276,7 @@ func (c *Instance) Load() error {
 	// prepare allow executes regexes
 	c.vals.ZapScript.allowExecuteRe = make([]*regexp.Regexp, len(c.vals.ZapScript.AllowExecute))
 	for i, allowExecute := range c.vals.ZapScript.AllowExecute {
-		re, err := regexp.Compile(allowExecute)
+		re, err := regexp.Compile(anchorPattern(allowExecute))
 		if err != nil {
 			log.Warn().Msgf("invalid allow execute regex: %s", allowExecute)
 			continue
@@ -268,15 +284,32 @@ func (c *Instance) Load() error {
 		c.vals.ZapScript.allowExecuteRe[i] = re
 	}
 
+	// prepare allow HTTP regexes
+	c.vals.ZapScript.allowHTTPRe = make([]*regexp.Regexp, len(c.vals.ZapScript.AllowHTTP))
+	for i, allowHTTP := range c.vals.ZapScript.AllowHTTP {
+		re, err := regexp.Compile(anchorPattern(allowHTTP))
+		if err != nil {
+			log.Warn().Msgf("invalid allow HTTP regex: %s", allowHTTP)
+			continue
+		}
+		c.vals.ZapScript.allowHTTPRe[i] = re
+	}
+
 	// prepare allow runs regexes
 	c.vals.Service.allowRunRe = make([]*regexp.Regexp, len(c.vals.Service.AllowRun))
 	for i, allowRun := range c.vals.Service.AllowRun {
-		re, err := regexp.Compile(allowRun)
+		re, err := regexp.Compile(anchorPattern(allowRun))
 		if err != nil {
 			log.Warn().Msgf("invalid allow run regex: %s", allowRun)
 			continue
 		}
 		c.vals.Service.allowRunRe[i] = re
+	}
+
+	// prepare block commands set
+	c.vals.ZapScript.blockCommandSet = make(map[string]struct{}, len(c.vals.ZapScript.BlockCommands))
+	for _, cmd := range c.vals.ZapScript.BlockCommands {
+		c.vals.ZapScript.blockCommandSet[cmd] = struct{}{}
 	}
 
 	return nil
@@ -604,6 +637,13 @@ func isWindowsStylePath(path string) bool {
 	return false
 }
 
+// anchorPattern wraps a regex pattern with ^(?:...)$ so it matches the
+// entire string rather than a substring. Patterns that need substring
+// matching can use .*pattern.* explicitly.
+func anchorPattern(pattern string) string {
+	return "^(?:" + pattern + ")$"
+}
+
 func checkAllow(allow []string, allowRe []*regexp.Regexp, s string) bool {
 	if s == "" {
 		return false
@@ -632,6 +672,113 @@ func (c *Instance) IsExecuteAllowed(s string) bool {
 	return checkAllow(c.vals.ZapScript.AllowExecute, c.vals.ZapScript.allowExecuteRe, s)
 }
 
+// IsCommandBlocked returns true if the command name is in the block list.
+// An empty block list means no commands are blocked.
+func (c *Instance) IsCommandBlocked(name string) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	_, denied := c.vals.ZapScript.blockCommandSet[name]
+	return denied
+}
+
+// IsHTTPAllowed returns true if the URL matches the HTTP allow list.
+// When the allow list is empty (not configured), all URLs are allowed.
+func (c *Instance) IsHTTPAllowed(url string) bool {
+	if c == nil {
+		return true
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.vals.ZapScript.AllowHTTP) == 0 {
+		return true
+	}
+	return checkAllow(c.vals.ZapScript.AllowHTTP, c.vals.ZapScript.allowHTTPRe, url)
+}
+
+// SetHTTPAllowListForTesting configures the HTTP allow list for tests.
+func (c *Instance) SetHTTPAllowListForTesting(allowList []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.ZapScript.AllowHTTP = allowList
+	c.vals.ZapScript.allowHTTPRe = make([]*regexp.Regexp, len(allowList))
+	for i, pattern := range allowList {
+		re, err := regexp.Compile(anchorPattern(pattern))
+		if err == nil {
+			c.vals.ZapScript.allowHTTPRe[i] = re
+		}
+	}
+}
+
+// InputMode returns the configured input restriction mode.
+// defaultMode is the platform-provided default (e.g., "hotkeys" for desktop,
+// "unrestricted" for embedded).
+func (c *Instance) InputMode(defaultMode string) string {
+	if c == nil {
+		return defaultMode
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.ZapScript.Input.Mode == nil {
+		return defaultMode
+	}
+	return *c.vals.ZapScript.Input.Mode
+}
+
+// InputAllowList returns the input allow list for "allow" mode.
+func (c *Instance) InputAllowList() []string {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.ZapScript.Input.Allow
+}
+
+// InputBlockList returns the input block list for "unrestricted" mode.
+func (c *Instance) InputBlockList() []string {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.ZapScript.Input.Block
+}
+
+// SetBlockCommandsForTesting sets the command block list for tests.
+func (c *Instance) SetBlockCommandsForTesting(cmds []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.ZapScript.BlockCommands = cmds
+	c.vals.ZapScript.blockCommandSet = make(map[string]struct{}, len(cmds))
+	for _, cmd := range cmds {
+		c.vals.ZapScript.blockCommandSet[cmd] = struct{}{}
+	}
+}
+
+// SetInputModeForTesting sets the input mode for tests.
+func (c *Instance) SetInputModeForTesting(mode *string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.ZapScript.Input.Mode = mode
+}
+
+// SetInputAllowListForTesting sets the input allow list for tests.
+func (c *Instance) SetInputAllowListForTesting(keys []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.ZapScript.Input.Allow = keys
+}
+
+// SetInputBlockListForTesting sets the input block list for tests.
+func (c *Instance) SetInputBlockListForTesting(keys []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.ZapScript.Input.Block = keys
+}
+
 // SetAuthCfgForTesting sets the global auth config for testing purposes
 func SetAuthCfgForTesting(creds map[string]CredentialEntry) {
 	authCfg.Store(creds)
@@ -649,7 +796,7 @@ func (c *Instance) SetExecuteAllowListForTesting(allowList []string) {
 	c.vals.ZapScript.AllowExecute = allowList
 	c.vals.ZapScript.allowExecuteRe = make([]*regexp.Regexp, len(allowList))
 	for i, pattern := range allowList {
-		re, err := regexp.Compile(pattern)
+		re, err := regexp.Compile(anchorPattern(pattern))
 		if err == nil {
 			c.vals.ZapScript.allowExecuteRe[i] = re
 		}

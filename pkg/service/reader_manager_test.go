@@ -147,6 +147,21 @@ func (env *readerManagerEnv) sendScan(scan readers.Scan) {
 	env.scanQueue <- scan
 }
 
+func (env *readerManagerEnv) expectNotification(t *testing.T, method string) {
+	t.Helper()
+	timeout := time.After(tokenTimeout)
+	for {
+		select {
+		case notif := <-env.notifCh:
+			if notif.Method == method {
+				return
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for %s notification", method)
+		}
+	}
+}
+
 func TestReaderManager_NormalScanFlow(t *testing.T) {
 	t.Parallel()
 	env := setupReaderManager(t)
@@ -1233,8 +1248,11 @@ func TestReaderManager_LaunchGuard_Delay_RetapAfterDelayConfirms(t *testing.T) {
 
 	// Advance past delay (5s) but within timeout (15s)
 	fakeClock.Advance(6 * time.Second)
-	// Barrier: consume delay timer firing
-	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
+	// Wait for the delay timer to be consumed — the goroutine emits
+	// tokens.staged.ready when delayExpired is set. Without this,
+	// the re-tap may race with the timer in the select and be
+	// misinterpreted as a re-tap during the delay period.
+	env.expectNotification(t, models.NotificationTokensStagedReady)
 
 	// Re-tap after delay — should confirm
 	env.sendScan(readers.Scan{Source: "test-reader", Token: card})
@@ -1329,22 +1347,9 @@ func TestReaderManager_LaunchGuard_Delay_EmitsReadyNotification(t *testing.T) {
 
 	// Advance past delay
 	fakeClock.Advance(6 * time.Second)
-	// Barrier: consume delay timer
-	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
 
-	// Drain notifications until we find tokens.staged.ready
-	found := false
-	timeout := time.After(2 * time.Second)
-	for !found {
-		select {
-		case notif := <-env.notifCh:
-			if notif.Method == models.NotificationTokensStagedReady {
-				found = true
-			}
-		case <-timeout:
-			t.Fatal("expected tokens.staged.ready notification")
-		}
-	}
+	// Verify tokens.staged.ready notification is emitted
+	env.expectNotification(t, models.NotificationTokensStagedReady)
 }
 
 // API confirm returns error when media has stopped (stale staged token)
