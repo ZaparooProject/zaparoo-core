@@ -124,7 +124,7 @@ jobs:
           - platform: libreelec
             arch: arm
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - id: zaparooapprel
         uses: pozetroninc/github-action-get-latest-release@2a61c339ea7ef0a336d1daa35ef0cb1418e7676c # v0.8.0
         with:
@@ -263,7 +263,7 @@ jobs:
       contents: write
       actions: read
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             scripts/
@@ -341,7 +341,7 @@ jobs:
           path: _signing_bundle/
           retention-days: 30
       - name: Sign all Windows binaries
-        uses: signpath/github-action-submit-signing-request@3f9250c56651ff692d6729a2fbb0603a42d7d322 # v2
+        uses: signpath/github-action-submit-signing-request@bc66d86b015a46e9c6d9700de73143a82f9570ff # v2
         with:
           api-token: "${{ secrets.SIGNPATH_API_TOKEN }}"
           organization-id: "${{ secrets.SIGNPATH_ORGANIZATION_ID }}"
@@ -385,7 +385,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             scripts/
@@ -448,7 +448,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Download release assets
         env:
