@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"errors"
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -254,10 +255,11 @@ func TestCmdKeyboard_CombosAllowsSpecialKey(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("ID").Return(platformids.Mister)
+	mockPlatform.On("ID").Return(platformids.Linux)
 	mockPlatform.On("KeyboardPress", "{f1}").Return(nil)
 
 	cfg := &config.Instance{}
+	cfg.SetInputBlockListForTesting([]string{})
 
 	env := platforms.CmdEnv{
 		Cmd: gozapscript.Command{
@@ -270,6 +272,27 @@ func TestCmdKeyboard_CombosAllowsSpecialKey(t *testing.T) {
 	_, err := cmdKeyboard(mockPlatform, env)
 	require.NoError(t, err)
 	mockPlatform.AssertCalled(t, "KeyboardPress", "{f1}")
+}
+
+func TestCmdKeyboard_BracedSingleCharRejected(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return(platformids.Mister)
+	mockPlatform.On("KeyboardPress", "{a}").Return(errors.New("unknown key"))
+
+	cfg := &config.Instance{}
+
+	env := platforms.CmdEnv{
+		Cmd: gozapscript.Command{
+			Name: gozapscript.ZapScriptCmdInputKeyboard,
+			Args: []string{"{a}"},
+		},
+		Cfg: cfg,
+	}
+
+	_, err := cmdKeyboard(mockPlatform, env)
+	require.Error(t, err, "{a} should be rejected by platform key parser")
 }
 
 func TestCmdGamepad_CombosBlocksSingleChar(t *testing.T) {

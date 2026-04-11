@@ -277,6 +277,39 @@ func TestCmdHTTPPost_AllowListBlocks(t *testing.T) {
 	assert.ErrorIs(t, err, ErrHTTPNotAllowed)
 }
 
+func TestCmdHTTPPost_AllowListPermits(t *testing.T) {
+	received := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		received <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config.ClearAuthCfgForTesting()
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	cfg := &config.Instance{}
+	cfg.SetHTTPAllowListForTesting([]string{server.URL + "/.*"})
+
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: gozapscript.Command{
+			Name: gozapscript.ZapScriptCmdHTTPPost,
+			Args: []string{server.URL + "/allowed", "application/json", `{}`},
+		},
+	}
+
+	_, err := cmdHTTPPost(nil, env)
+	require.NoError(t, err)
+
+	select {
+	case <-received:
+		// request went through
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for HTTP request")
+	}
+}
+
 func TestCmdHTTPGet_ArgValidation(t *testing.T) {
 	t.Parallel()
 
