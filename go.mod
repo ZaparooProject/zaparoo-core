@@ -6,7 +6,7 @@ require (
 	fyne.io/systray v1.11.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/ZaparooProject/go-pn532 v0.21.0
+	github.com/ZaparooProject/go-pn532 v0.21.1
 	github.com/ZaparooProject/go-zapscript v0.7.0
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
@@ -44,7 +44,7 @@ require (
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/rivo/tview v0.0.0-20250625164341-a4a78f1e05cb
 	github.com/rs/zerolog v1.34.0
-	github.com/sasha-s/go-deadlock v0.3.6
+	github.com/sasha-s/go-deadlock v0.3.9
 	github.com/schollz/pake/v3 v3.1.1
 	github.com/shirou/gopsutil/v4 v4.26.3
 	github.com/spf13/afero v1.14.0
