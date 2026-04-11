@@ -265,7 +265,12 @@ func (c *Instance) Load() error {
 func (c *Instance) LoadTOML(data string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.applyTOML(data)
+	oldVals := c.vals
+	if err := c.applyTOML(data); err != nil {
+		c.vals = oldVals
+		return err
+	}
+	return nil
 }
 
 // applyTOML is the shared unmarshal + post-processing core.

@@ -1201,6 +1201,112 @@ func TestAnchorPattern(t *testing.T) {
 	}
 }
 
+func TestLoadTOML_PartialMerge(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+block_commands = ["http.get"]
+`))
+
+	// Baseline
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+	assert.True(t, cfg.IsCommandBlocked("http.get"))
+
+	// Partial update — only change block_commands, leave allow_execute untouched
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+block_commands = ["execute"]
+`))
+
+	// allow_execute unchanged
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"partial merge must not clear unrelated fields")
+	// block_commands updated
+	assert.False(t, cfg.IsCommandBlocked("http.get"))
+	assert.True(t, cfg.IsCommandBlocked("execute"))
+}
+
+func TestLoadTOML_InvalidTOMLPreservesState(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+`))
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+
+	// Invalid TOML must return error and preserve existing state
+	err := cfg.LoadTOML(`[invalid toml !!!`)
+	require.Error(t, err)
+
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"state must be preserved after LoadTOML error")
+}
+
+func TestLoadTOML_RebuildsDerivedFields(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+allow_http = ['https://example\.com/.*']
+block_commands = ["http.get"]
+
+[service]
+allow_run = ['.*']
+`))
+
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+	assert.False(t, cfg.IsExecuteAllowed("rm"))
+	assert.True(t, cfg.IsHTTPAllowed("https://example.com/foo"))
+	assert.False(t, cfg.IsHTTPAllowed("https://evil.com"))
+	assert.True(t, cfg.IsCommandBlocked("http.get"))
+	assert.False(t, cfg.IsCommandBlocked("launch"))
+	assert.True(t, cfg.IsRunAllowed("**launch:test"))
+
+	// Update regexes — derived fields must be rebuilt
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["rm"]
+`))
+
+	assert.True(t, cfg.IsExecuteAllowed("rm"),
+		"regex must be recompiled after LoadTOML")
+	assert.False(t, cfg.IsExecuteAllowed("echo"),
+		"old regex must be replaced")
+}
+
+func TestLoad_RollbackOnSchemaError(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+
+	// Set up known state
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+`))
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+
+	// Write a config file with wrong schema version
+	cfgPath := filepath.Join(tempDir, CfgFile)
+	err = os.WriteFile(cfgPath, []byte(`config_schema = 9999`), 0o600)
+	require.NoError(t, err)
+
+	// Load should fail but preserve running config
+	err = cfg.Load()
+	require.Error(t, err)
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"Load must preserve running config on schema error")
+}
+
 func TestAutoAnchorPreventsSubstringMatch(t *testing.T) {
 	t.Parallel()
 
