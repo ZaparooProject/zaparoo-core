@@ -30,10 +30,14 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// executeProcessLimit caps concurrent processes in the job. Allows the command
-// plus one child (covers shell wrappers). Windows-only — Linux/macOS use
-// process groups for tree management instead.
-const executeProcessLimit = 2
+const (
+	// executeMemoryLimit caps total memory for the job (process + any children).
+	executeMemoryLimit = 512 * 1024 * 1024 // 512 MiB
+
+	// executeProcessLimit allows the command plus one child (covers shell
+	// wrappers). Linux/macOS use process groups for tree management instead.
+	executeProcessLimit = 2
+)
 
 // RunInJob starts the command in a suspended state, assigns it to a restricted
 // Windows Job Object, then resumes execution. The Job Object enforces:

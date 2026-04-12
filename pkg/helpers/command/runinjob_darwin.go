@@ -31,6 +31,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// executeCPULimit caps CPU time in seconds. RLIMIT_AS is not used on macOS
+// because enforcement is unreliable.
+const executeCPULimit = 5
+
 // rlimitMu serializes the getrlimit/setrlimit/start/restore sequence.
 // macOS has no prlimit (cannot set limits on another PID), so we must
 // temporarily modify the parent's limits before fork. The mutex prevents

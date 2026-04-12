@@ -31,6 +31,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const (
+	// executeMemoryLimit caps address space via RLIMIT_AS.
+	executeMemoryLimit = 512 * 1024 * 1024 // 512 MiB
+
+	// executeCPULimit caps CPU time in seconds.
+	executeCPULimit = 5
+)
+
 // RunInJob runs the command in a new process group with resource limits.
 //   - Process group ensures the entire tree is killed on timeout/cleanup
 //   - Pdeathsig kills the child if the parent dies unexpectedly
