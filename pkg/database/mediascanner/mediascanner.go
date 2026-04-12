@@ -505,6 +505,7 @@ func NewNamesIndex(
 	update func(IndexStatus),
 	pauser *syncutil.Pauser,
 ) (int, error) {
+	// JBONE: this is the main entry point
 	db := fdb.MediaDB
 	indexStartTime := time.Now()
 
@@ -641,6 +642,7 @@ func NewNamesIndex(
 	}
 
 	// 3. Determine fresh vs persistent indexing mode and set up scan state
+	// JBONE: with changes here we don't need this fresh/not check
 	if !shouldResume {
 		log.Info().Msg("preparing database for indexing")
 		if setErr := db.SetIndexingSystems(currentSystemIDs); setErr != nil {
@@ -832,6 +834,7 @@ func NewNamesIndex(
 	systemsInBatch := 0
 	batchStarted := false
 
+	// JBONE Loop 1 Main Systems
 	// Main loop for systems
 	for _, k := range sysPathIDs {
 		// Check for cancellation or pause
@@ -860,6 +863,7 @@ func NewNamesIndex(
 		}
 
 		// Lazy load this system's existing data for resume or persistent mode
+		// JBONE: Don't think we need Persistent as a flag
 		if shouldResume || scanState.Persistent {
 			log.Debug().Str("system", systemID).
 				Bool("persistent", scanState.Persistent).
@@ -926,6 +930,7 @@ func NewNamesIndex(
 		// pipeline: they receive the current files and their output *replaces*
 		// files, allowing them to filter, reorder, or add metadata.
 		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(k)
+		// JBONE what does this mean?
 		for i := range launchers {
 			l := &launchers[i]
 			if l.Scanner != nil {
@@ -1133,9 +1138,11 @@ func NewNamesIndex(
 			"Media indexing cancelled while paused before custom scanners")
 	}
 
+	// JBONE Loop 2 Launchers with custom scanners for known systems
 	// run each custom scanner at least once, even if there are no paths
 	// defined or results from a regular index
 	launchers := helpers.GlobalLauncherCache.GetAllLaunchers()
+	// JBONE: Can we sort by system and then do a state sync
 	log.Debug().Msgf("checking %d launchers for custom scanners", len(launchers))
 	for i := range launchers {
 		l := &launchers[i]
@@ -1154,6 +1161,8 @@ func NewNamesIndex(
 				log.Debug().Msgf("skipping %s scanner for system %s (not in current index)", l.ID, systemID)
 				continue
 			}
+
+			// JBONE: System needs ScanState update for Media and Titles
 
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 			results, scanErr := l.Scanner(ctx, cfg, systemID, []platforms.ScanResult{})
@@ -1257,6 +1266,7 @@ func NewNamesIndex(
 		}
 	}
 
+	// JBONE Loop 3 Launchers with custom scanners without a known SystemID (tries all unless system was completed)
 	for i := range anyScanners {
 		l := &anyScanners[i]
 		for _, s := range systems {
@@ -1269,6 +1279,8 @@ func NewNamesIndex(
 				log.Debug().Msgf("skipping 'any' scanner for already completed system: %s", systemID)
 				continue // Skip if system already fully processed
 			}
+
+			// JBONE: System needs ScanState update for Media and Titles
 
 			log.Debug().Msgf("running %s 'any' scanner for system: %s", l.ID, s.ID)
 			results, scanErr := l.Scanner(ctx, cfg, s.ID, []platforms.ScanResult{})
