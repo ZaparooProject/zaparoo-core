@@ -666,3 +666,42 @@ func TestFetchWellKnown_AuthOnly(t *testing.T) {
 	assert.Equal(t, 1, wk.Auth)
 	assert.Nil(t, wk.Trusted)
 }
+
+// getRemoteZapScript Tests
+
+func TestGetRemoteZapScript_OversizedResponse(t *testing.T) {
+	t.Parallel()
+
+	const oversizedLen = 2 * 1024 * 1024 // 2 MiB
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", MIMEZaparooZapScript)
+		// Write a body larger than MaxResponseBodySize (1 MiB)
+		data := make([]byte, oversizedLen)
+		for i := range data {
+			data[i] = 'A'
+		}
+		_, _ = w.Write(data)
+	}))
+	defer server.Close()
+
+	body, err := getRemoteZapScript(server.URL, "test")
+	require.NoError(t, err)
+	assert.Len(t, body, 1<<20, "response body should be limited to MaxResponseBodySize (1 MiB)")
+}
+
+func TestGetRemoteZapScript_NormalResponse(t *testing.T) {
+	t.Parallel()
+
+	expected := []byte("**launch.system:snes")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", MIMEZaparooZapScript)
+		_, _ = w.Write(expected)
+	}))
+	defer server.Close()
+
+	body, err := getRemoteZapScript(server.URL, "test")
+	require.NoError(t, err)
+	assert.Equal(t, expected, body)
+}

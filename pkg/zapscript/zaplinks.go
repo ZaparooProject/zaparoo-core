@@ -247,7 +247,7 @@ func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
 		return nil, errors.New("no valid content type")
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, helpers.MaxResponseBodySize))
 	if err != nil {
 		return nil, fmt.Errorf("error reading body: %w", err)
 	}
