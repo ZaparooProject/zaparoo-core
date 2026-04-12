@@ -66,6 +66,7 @@ func RunInJob(cmd *exec.Cmd) error {
 		JobMemoryLimit: executeMemoryLimit,
 	}
 
+	//nolint:gosec // G103: unsafe.Pointer required for Windows API interop
 	_, err = windows.SetInformationJobObject(
 		job,
 		windows.JobObjectExtendedLimitInformation,
@@ -83,15 +84,17 @@ func RunInJob(cmd *exec.Cmd) error {
 	}
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
 
-	if err := cmd.Start(); err != nil {
-		return err //nolint:wrapcheck // Wrapping exec errors loses important context
+	startErr := cmd.Start()
+	if startErr != nil {
+		return startErr //nolint:wrapcheck // Wrapping exec errors loses important context
 	}
 
 	// Assign the suspended process to the job object.
+	pid := uint32(cmd.Process.Pid) //nolint:gosec // G115: Windows PIDs are always positive uint32
 	proc, err := windows.OpenProcess(
 		windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE,
 		false,
-		uint32(cmd.Process.Pid),
+		pid,
 	)
 	if err != nil {
 		_ = cmd.Process.Kill()
@@ -108,7 +111,7 @@ func RunInJob(cmd *exec.Cmd) error {
 	_ = windows.CloseHandle(proc)
 
 	// Resume the main thread now that job restrictions are in effect.
-	if err := resumeProcessThreads(uint32(cmd.Process.Pid)); err != nil {
+	if err := resumeProcessThreads(pid); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		return fmt.Errorf("resuming process after job assignment: %w", err)
