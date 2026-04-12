@@ -307,18 +307,17 @@ type SearchFilters struct {
 }
 
 type ScanState struct {
-	SystemIDs    map[string]int
-	TitleIDs     map[string]int
-	MediaIDs     map[string]int
-	TagTypeIDs   map[string]int
-	TagIDs       map[string]int
-	MissingMedia map[int64]struct{} // DBIDs of media not yet re-found during scan
+	SystemIDs     map[string]int
+	TitleIDs      map[string]int
+	MediaIDs      map[string]int
+	TagTypeIDs    map[string]int
+	TagIDs        map[string]int
+	MissingMedia  map[int]struct{} // DBIDs of media not yet re-found during scan
 	SystemsIndex  int
 	TitlesIndex   int
 	MediaIndex    int
 	TagTypesIndex int
 	TagsIndex     int
-	Persistent    bool // When true, indexing preserves existing records instead of truncating
 }
 
 // JournalMode represents SQLite journal mode
@@ -490,7 +489,7 @@ type MediaDBI interface {
 	FindOrInsertMediaTag(row MediaTag) (MediaTag, error)
 
 	// Missing media methods for persistent indexing
-	BulkSetMediaMissing(dbids map[int64]struct{}) error
+	BulkSetMediaMissing(dbids map[int]struct{}) error
 	ResetMissingFlags(systemDBIDs []int64) error
 
 	// GetMax*ID methods for resume functionality

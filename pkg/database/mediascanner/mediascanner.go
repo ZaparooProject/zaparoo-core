@@ -637,6 +637,7 @@ func NewNamesIndex(
 		TagTypeIDs:    make(map[string]int),
 		TagsIndex:     0,
 		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
 	}
 
 	// 3. Set up scan state — persistent mode is always active
@@ -644,8 +645,6 @@ func NewNamesIndex(
 		return 0, fmt.Errorf("failed to set indexing systems: %w", setErr)
 	}
 	log.Info().Msgf("starting indexing for systems: %v", currentSystemIDs)
-
-	scanState.Persistent = true
 
 	// Populate scan state from existing DB (max IDs, system map, tag maps)
 	if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, []string{}); err != nil {
@@ -1084,7 +1083,7 @@ func NewNamesIndex(
 	// (FlushScanStateMaps preserves it). BulkSetMediaMissing writes through
 	// db.sql, so it must run after every batch transaction has been committed
 	// to avoid contending with the SQLite write lock.
-	if scanState.Persistent && len(scanState.MissingMedia) > 0 {
+	if len(scanState.MissingMedia) > 0 {
 		log.Info().
 			Int("missingCount", len(scanState.MissingMedia)).
 			Msg("marking missing media")

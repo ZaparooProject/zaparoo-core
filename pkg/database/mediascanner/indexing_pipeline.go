@@ -186,7 +186,7 @@ func AddMediaPath(
 		mediaIndex = foundMediaIndex
 		// Mark as found during persistent indexing (not missing)
 		if ss.MissingMedia != nil {
-			delete(ss.MissingMedia, int64(foundMediaIndex))
+			delete(ss.MissingMedia, foundMediaIndex)
 		}
 	}
 
@@ -662,11 +662,8 @@ func PopulatePersistentScanStateForSystem(
 		return fmt.Errorf("failed to get media for missing tracking, system %s: %w", systemID, err)
 	}
 
-	if ss.MissingMedia == nil {
-		ss.MissingMedia = make(map[int64]struct{}, len(media))
-	}
 	for _, m := range media {
-		ss.MissingMedia[m.DBID] = struct{}{}
+		ss.MissingMedia[int(m.DBID)] = struct{}{}
 	}
 
 	log.Debug().
