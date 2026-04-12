@@ -57,6 +57,7 @@ jobs:
           key: no-match-${{ runner.os }}
           restore-keys: |
             ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+            ${{ runner.os }}-go-
 
       - name: Restore Go cache (Windows)
         if: matrix.os == 'windows-latest'
@@ -68,6 +69,7 @@ jobs:
           key: no-match-${{ runner.os }}
           restore-keys: |
             ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+            ${{ runner.os }}-go-
 
       - name: Download Go modules
         run: go mod download
@@ -131,6 +133,7 @@ jobs:
           key: no-match-${{ runner.os }}
           restore-keys: |
             ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+            ${{ runner.os }}-go-
 
       - name: Restore Go cache (Windows)
         if: matrix.os == 'windows-latest'
@@ -142,6 +145,7 @@ jobs:
           key: no-match-${{ runner.os }}
           restore-keys: |
             ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+            ${{ runner.os }}-go-
 
       - name: Download Go modules
         run: go mod download
@@ -226,6 +230,7 @@ jobs:
           key: no-match-${{ runner.os }}
           restore-keys: |
             ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+            ${{ runner.os }}-go-
 
       - name: Restore Go cache (Windows)
         if: matrix.os == 'windows-latest'
@@ -237,6 +242,7 @@ jobs:
           key: no-match-${{ runner.os }}
           restore-keys: |
             ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+            ${{ runner.os }}-go-
 
       - name: Download Go modules
         run: go mod download
