@@ -639,141 +639,55 @@ func NewNamesIndex(
 		TagIDs:        make(map[string]int),
 	}
 
-	// 3. Determine fresh vs persistent indexing mode and set up scan state
-	// JBONE: with changes here we don't need this fresh/not check
+	// 3. Set up scan state — persistent mode is always active
+	if setErr := db.SetIndexingSystems(currentSystemIDs); setErr != nil {
+		return 0, fmt.Errorf("failed to set indexing systems: %w", setErr)
+	}
+	log.Info().Msgf("starting indexing for systems: %v", currentSystemIDs)
+
+	scanState.Persistent = true
+
+	// Populate scan state from existing DB (max IDs, system map, tag maps)
+	if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, []string{}); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return handleCancellation(ctx, db, "Media indexing cancelled during scan state population")
+		}
+		return 0, fmt.Errorf("failed to populate scan state: %w", err)
+	}
+
+	// Reset IsMissing flags for all systems being indexed — anything not
+	// re-found during this run will be marked missing at the end
+	systemDBIDs := make([]int64, 0, len(currentSystemIDs))
+	for _, sysID := range currentSystemIDs {
+		if dbid, ok := scanState.SystemIDs[sysID]; ok {
+			systemDBIDs = append(systemDBIDs, int64(dbid))
+		}
+	}
+	if len(systemDBIDs) > 0 {
+		if resetErr := db.ResetMissingFlags(systemDBIDs); resetErr != nil {
+			return 0, fmt.Errorf("failed to reset missing flags: %w", resetErr)
+		}
+		log.Info().Int("systems", len(systemDBIDs)).Msg("reset IsMissing flags for indexed systems")
+	}
+
+	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to set indexing status to running")
+	}
 	if !shouldResume {
-		log.Info().Msg("preparing database for indexing")
-		if setErr := db.SetIndexingSystems(currentSystemIDs); setErr != nil {
-			return 0, fmt.Errorf("failed to set indexing systems: %w", setErr)
-		}
-
-		log.Info().Msgf("starting indexing for systems: %v", currentSystemIDs)
-
-		// Detect whether we have existing data (persistent re-index vs fresh)
-		existingCount, countErr := db.GetTotalMediaCount()
-		if countErr != nil {
-			return 0, fmt.Errorf("failed to check existing media count: %w", countErr)
-		}
-
-		if existingCount == 0 {
-			// Fresh database — use fast bulk insert path with truncate for clean slate
-			log.Info().Msg("fresh database detected, using bulk insert path")
-
-			log.Info().Msg("checkpointing WAL before full database truncation")
-			if sqlDB := db.UnsafeGetSQLDb(); sqlDB != nil {
-				_, walErr := sqlDB.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
-				if walErr != nil {
-					log.Warn().Err(walErr).Msg("WAL checkpoint failed, continuing anyway")
-				}
-			}
-
-			err = db.Truncate()
-			if err != nil {
-				return 0, fmt.Errorf("failed to truncate database: %w", err)
-			}
-
-			if dropErr := db.DropSecondaryIndexes(); dropErr != nil {
-				log.Warn().Err(dropErr).Msg("failed to drop secondary indexes, continuing with indexes in place")
-			}
-
-			log.Info().Msg("database truncation completed")
-		} else {
-			// Persistent re-index — scan over existing records, mark missing
-			log.Info().Int("existingMedia", existingCount).
-				Msg("existing data detected, using persistent indexing mode")
-			scanState.Persistent = true
-
-			// Populate scan state from existing data so AddMediaPath can
-			// detect existing records and skip re-inserts
-			if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, []string{}); err != nil {
-				if errors.Is(err, context.Canceled) {
-					return handleCancellation(
-						ctx, db, "Media indexing cancelled during persistent scan state population",
-					)
-				}
-				return 0, fmt.Errorf("failed to populate scan state for persistent indexing: %w", err)
-			}
-
-			// Reset IsMissing flags for systems being indexed so we start
-			// with a clean slate — anything not re-found will be marked missing
-			systemDBIDs := make([]int64, 0, len(currentSystemIDs))
-			for _, sysID := range currentSystemIDs {
-				if dbid, ok := scanState.SystemIDs[sysID]; ok {
-					systemDBIDs = append(systemDBIDs, int64(dbid))
-				}
-			}
-			if len(systemDBIDs) > 0 {
-				if resetErr := db.ResetMissingFlags(systemDBIDs); resetErr != nil {
-					return 0, fmt.Errorf("failed to reset missing flags: %w", resetErr)
-				}
-				log.Info().Int("systems", len(systemDBIDs)).Msg("reset IsMissing flags for indexed systems")
-			}
-
-			log.Info().Msg("successfully prepared persistent indexing state")
-		}
-
-		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
-			log.Error().Err(setErr).Msg("failed to set indexing status to running on fresh start")
-		}
 		if setErr := db.SetLastIndexedSystem(""); setErr != nil {
-			log.Error().Err(setErr).Msg("failed to clear last indexed system on fresh start")
+			log.Error().Err(setErr).Msg("failed to clear last indexed system")
 		}
+	}
 
-		// Seed canonical tags if not already populated
-		if scanState.TagTypesIndex == 0 {
-			log.Info().Msg("seeding known tags for fresh indexing")
-			// SeedCanonicalTags runs in its own non-batch transaction for safety.
-			err = SeedCanonicalTags(db, &scanState)
-			if err != nil {
-				return 0, fmt.Errorf("failed to seed known tags: %w", err)
-			}
-			log.Info().Msg("successfully seeded known tags")
-		}
-	} else {
-		// If resuming, ensure status is "running" and populate existing scan state indexes
-		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
-			log.Error().Err(setErr).Msg("failed to set indexing status to running during resume")
-		}
-
-		// Check if we're resuming a full index (all systems) - if so, we need to restore WAL mode on completion
-		// This handles the case where a full index was interrupted after switching to DELETE mode
-		allSystems := systemdefs.AllSystems()
-		allSystemIDs := make([]string, len(allSystems))
-		for i, sys := range allSystems {
-			allSystemIDs[i] = sys.ID
-		}
-		sortedCurrent := make([]string, len(currentSystemIDs))
-		copy(sortedCurrent, currentSystemIDs)
-		sort.Strings(sortedCurrent)
-		sortedAll := make([]string, len(allSystemIDs))
-		copy(sortedAll, allSystemIDs)
-		sort.Strings(sortedAll)
-
-		if len(sortedCurrent) == len(sortedAll) && helpers.EqualStringSlices(sortedCurrent, sortedAll) {
-			log.Info().Msg("resuming full index")
-		}
-
-		// When resuming, we need to populate the scan state with existing data
-		// to avoid ID conflicts and continue from where we left off
-		log.Info().Msg("populating scan state from existing database for resume")
-		err = PopulateScanStateFromDB(ctx, db, &scanState)
+	// Seed canonical tags based on tag existence, independent of resume state
+	if scanState.TagTypesIndex == 0 {
+		log.Info().Msg("seeding known tags")
+		// SeedCanonicalTags runs in its own non-batch transaction for safety.
+		err = SeedCanonicalTags(db, &scanState)
 		if err != nil {
-			// Check if this is a cancellation error
-			if errors.Is(err, context.Canceled) {
-				return handleCancellation(ctx, db, "Media indexing cancelled during scan state population")
-			}
-			log.Error().Err(err).Msg("failed to populate scan state from database")
-			return 0, fmt.Errorf("failed to populate scan state from database: %w", err)
+			return 0, fmt.Errorf("failed to seed known tags: %w", err)
 		}
-
-		// Resume with persistent mode if existing data is present
-		existingCount, countErr := db.GetTotalMediaCount()
-		if countErr == nil && existingCount > 0 {
-			scanState.Persistent = true
-		}
-
-		log.Info().Bool("persistent", scanState.Persistent).
-			Msg("successfully populated scan state for resume")
+		log.Info().Msg("successfully seeded known tags")
 	}
 
 	// Ensure transaction cleanup and status update on completion or error
@@ -877,30 +791,12 @@ func NewNamesIndex(
 			continue
 		}
 
-		// Load existing scan state for this system (resume and persistent modes).
-		// Previously only done in loop 1; now covers all systems including those
-		// with launcher-only sources (no filesystem paths).
-		if shouldResume || scanState.Persistent {
-			log.Debug().Str("system", systemID).
-				Bool("persistent", scanState.Persistent).
-				Msg("loading existing data for system")
-			if scanState.Persistent {
-				// Persistent mode: populate MissingMedia to track which files are removed
-				if loadErr := PopulatePersistentScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
-					if errors.Is(loadErr, context.Canceled) {
-						return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
-					}
-					return 0, fmt.Errorf("failed to load system data for persistent indexing: %w", loadErr)
-				}
-			} else {
-				// Resume mode: only need scan state, not missing tracking
-				if loadErr := PopulateScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
-					if errors.Is(loadErr, context.Canceled) {
-						return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
-					}
-					return 0, fmt.Errorf("failed to load system data for resume: %w", loadErr)
-				}
+		// Load existing data for this system — always persistent
+		if loadErr := PopulatePersistentScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
+			if errors.Is(loadErr, context.Canceled) {
+				return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
 			}
+			return 0, fmt.Errorf("failed to load system data for persistent indexing: %w", loadErr)
 		}
 
 		files := make([]platforms.ScanResult, 0)
