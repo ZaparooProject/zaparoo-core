@@ -22,6 +22,7 @@
 package command
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"syscall"
@@ -134,6 +135,8 @@ func resumeProcessThreads(pid uint32) error {
 		return fmt.Errorf("enumerating threads: %w", err)
 	}
 
+	var resumed int
+	var lastErr error
 	for {
 		if entry.OwnerProcessID == pid {
 			thread, openErr := windows.OpenThread(
@@ -141,16 +144,32 @@ func resumeProcessThreads(pid uint32) error {
 				false,
 				entry.ThreadID,
 			)
-			if openErr == nil {
-				_, _ = windows.ResumeThread(thread)
+			if openErr != nil {
+				lastErr = fmt.Errorf("opening thread %d: %w", entry.ThreadID, openErr)
+			} else {
+				if _, resumeErr := windows.ResumeThread(thread); resumeErr != nil {
+					lastErr = fmt.Errorf("resuming thread %d: %w", entry.ThreadID, resumeErr)
+				} else {
+					resumed++
+				}
 				_ = windows.CloseHandle(thread)
 			}
 		}
 
 		err = windows.Thread32Next(snap, &entry)
 		if err != nil {
-			break
+			if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+				break
+			}
+			return fmt.Errorf("enumerating threads: %w", err)
 		}
+	}
+
+	if resumed == 0 {
+		if lastErr != nil {
+			return fmt.Errorf("no threads resumed: %w", lastErr)
+		}
+		return errors.New("no threads found for process")
 	}
 
 	return nil

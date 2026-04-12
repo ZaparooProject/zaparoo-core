@@ -65,17 +65,26 @@ func RunInJob(cmd *exec.Cmd) error {
 	// concurrent calls from clobbering each other.
 	rlimitMu.Lock()
 	var oldCPU unix.Rlimit
+	var cpuLowered bool
 	if err := unix.Getrlimit(unix.RLIMIT_CPU, &oldCPU); err == nil {
-		newCPU := unix.Rlimit{Cur: executeCPULimit, Max: executeCPULimit}
+		// Only lower the soft limit — lowering the hard limit is irreversible
+		// for unprivileged processes on macOS.
+		newCPU := unix.Rlimit{Cur: executeCPULimit, Max: oldCPU.Max}
 		if err := unix.Setrlimit(unix.RLIMIT_CPU, &newCPU); err != nil {
 			log.Debug().Err(err).Msg("failed to set RLIMIT_CPU before fork")
+		} else {
+			cpuLowered = true
 		}
 	}
 
 	startErr := cmd.Start()
 
 	// Restore parent limits and release the mutex immediately after fork.
-	_ = unix.Setrlimit(unix.RLIMIT_CPU, &oldCPU)
+	if cpuLowered {
+		if restoreErr := unix.Setrlimit(unix.RLIMIT_CPU, &oldCPU); restoreErr != nil {
+			log.Debug().Err(restoreErr).Msg("failed to restore RLIMIT_CPU after fork")
+		}
+	}
 	rlimitMu.Unlock()
 
 	if startErr != nil {

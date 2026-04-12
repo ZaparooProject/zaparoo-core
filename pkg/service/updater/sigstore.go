@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/rs/zerolog/log"
@@ -141,7 +142,8 @@ func doFetchAttestations(ctx context.Context, url string) ([]json.RawMessage, er
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("requesting attestations: %w", err)
 	}

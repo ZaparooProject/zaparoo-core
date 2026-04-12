@@ -22,8 +22,10 @@
 package command
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -45,6 +47,12 @@ const (
 //   - prlimit64 sets RLIMIT_AS (memory) and RLIMIT_CPU on the child
 //   - cmd.Cancel kills the process group (not just the top-level PID)
 func RunInJob(cmd *exec.Cmd) error {
+	// Lock this goroutine to its OS thread so that Pdeathsig (which is tied
+	// to the creating thread, not the process) remains valid for the lifetime
+	// of the child process.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
@@ -61,10 +69,17 @@ func RunInJob(cmd *exec.Cmd) error {
 		return err //nolint:wrapcheck // Wrapping exec errors loses important context
 	}
 
-	// Apply resource limits to the child process via prlimit64.
+	// Apply resource limits to the child process via prlimit64. If limits
+	// cannot be set, kill the process rather than letting it run unbounded.
 	pid := cmd.Process.Pid
 	if err := applyResourceLimits(pid); err != nil {
-		log.Warn().Err(err).Int("pid", pid).Msg("failed to apply resource limits")
+		// ESRCH means the process already exited — limits are irrelevant.
+		if !errors.Is(err, syscall.ESRCH) {
+			log.Warn().Err(err).Int("pid", pid).Msg("failed to apply resource limits, killing process")
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return fmt.Errorf("applying resource limits: %w", err)
+		}
 	}
 
 	return cmd.Wait() //nolint:wrapcheck // Wrapping exec errors loses important context

@@ -31,6 +31,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -687,7 +688,7 @@ func TestGetRemoteZapScript_OversizedResponse(t *testing.T) {
 
 	body, err := getRemoteZapScript(server.URL, "test")
 	require.NoError(t, err)
-	assert.Len(t, body, 1<<20, "response body should be limited to MaxResponseBodySize (1 MiB)")
+	assert.Len(t, body, helpers.MaxResponseBodySize, "response body should be limited to MaxResponseBodySize (1 MiB)")
 }
 
 func TestGetRemoteZapScript_NormalResponse(t *testing.T) {
