@@ -34,12 +34,21 @@ jobs:
           gh release download "${{ github.event.release.tag_name }}" --dir _assets \
             --pattern "zaparoo-*.tar.gz" \
             --pattern "zaparoo-*.zip"
-      - name: Generate checksums
+      - name: Generate and sign checksums
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           if ! ls _assets/zaparoo-* >/dev/null 2>&1; then
             echo "No release assets found" >&2; exit 1
           fi
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "UPDATE_SIGNING_KEY secret is not configured" >&2; exit 1
+          fi
           cd _assets && sha256sum zaparoo-* > checksums.txt && cd ..
+          install -m 600 /dev/stdin /tmp/signing.pem <<< "$UPDATE_SIGNING_KEY"
+          openssl pkeyutl -sign -inkey /tmp/signing.pem -rawin \
+            -in _assets/checksums.txt > _assets/checksums.txt.sig
+          rm /tmp/signing.pem
       - name: Generate manifest
         env:
           RELEASE_NOTES: ${{ github.event.release.body }}
@@ -50,6 +59,7 @@ jobs:
             --release-notes "$RELEASE_NOTES" \
             --output _manifest/manifest.yaml
           cp _assets/checksums.txt _manifest/checksums.txt
+          cp _assets/checksums.txt.sig _manifest/checksums.txt.sig
       - name: Upload manifest to Bunny.net storage
         uses: R-J-dev/bunny-deploy@ae25fa670b732ffc8dba84c872fb203d2a365229 # v3.0.0
         with:
@@ -102,10 +112,15 @@ jobs:
           gh release download "${{ github.event.release.tag_name }}" --dir _assets \
             --pattern "zaparoo-*.tar.gz" \
             --pattern "zaparoo-*.zip"
-      - name: Generate checksums and merge with existing
+      - name: Generate checksums, merge with existing, and sign
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           if ! ls _assets/zaparoo-* >/dev/null 2>&1; then
             echo "No release assets found" >&2; exit 1
+          fi
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "UPDATE_SIGNING_KEY secret is not configured" >&2; exit 1
           fi
           cd _assets && sha256sum zaparoo-* > checksums.txt && cd ..
           # Merge with existing checksums if available, dedup by filename (newest wins)
@@ -114,6 +129,10 @@ jobs:
               | awk '{ key=$2 } !seen[key]++ { print }' > _merged_checksums.txt
             mv _merged_checksums.txt _assets/checksums.txt
           fi
+          install -m 600 /dev/stdin /tmp/signing.pem <<< "$UPDATE_SIGNING_KEY"
+          openssl pkeyutl -sign -inkey /tmp/signing.pem -rawin \
+            -in _assets/checksums.txt > _assets/checksums.txt.sig
+          rm /tmp/signing.pem
       - name: Generate manifest
         env:
           RELEASE_NOTES: ${{ github.event.release.body }}
@@ -130,6 +149,7 @@ jobs:
             "${MERGE_FLAG[@]}" \
             --output _manifest/manifest.yaml
           cp _assets/checksums.txt _manifest/checksums.txt
+          cp _assets/checksums.txt.sig _manifest/checksums.txt.sig
       - name: Upload manifest to Bunny.net storage
         uses: R-J-dev/bunny-deploy@ae25fa670b732ffc8dba84c872fb203d2a365229 # v3.0.0
         with:

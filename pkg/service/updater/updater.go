@@ -43,7 +43,7 @@ type Result struct {
 	UpdateAvailable bool
 }
 
-func makeUpdater(ctx context.Context, platformID, channel string) (*selfupdate.Updater, selfupdate.Repository, error) {
+func makeUpdater(_ context.Context, platformID, channel string) (*selfupdate.Updater, selfupdate.Repository, error) {
 	source, err := selfupdate.NewHttpSource(selfupdate.HttpConfig{
 		BaseURL: updateURL,
 	})
@@ -53,12 +53,14 @@ func makeUpdater(ctx context.Context, platformID, channel string) (*selfupdate.U
 
 	filter := fmt.Sprintf("^zaparoo-%s_%s", platformID, runtime.GOARCH)
 
+	validator, err := newSignedChecksumValidator()
+	if err != nil {
+		return nil, selfupdate.RepositorySlug{}, fmt.Errorf("creating validator: %w", err)
+	}
+
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source: source,
-		Validator: &sigstoreValidator{
-			inner: &selfupdate.ChecksumValidator{UniqueFilename: "checksums.txt"},
-			ctx:   ctx,
-		},
+		Source:     source,
+		Validator:  validator,
 		Filters:    []string{filter},
 		Prerelease: channel == config.UpdateChannelBeta,
 	})
