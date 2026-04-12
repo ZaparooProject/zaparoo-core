@@ -21,9 +21,11 @@ package updater
 
 import (
 	"crypto/ed25519"
+	_ "embed"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 
 	selfupdate "github.com/creativeprojects/go-selfupdate"
 )
@@ -31,7 +33,11 @@ import (
 // updateSigningPublicKey is the ed25519 public key used to verify the
 // signature on checksums.txt. The corresponding private key is stored as
 // a GitHub Actions secret and used to sign checksums at release time.
-const updateSigningPublicKey = "/Lk2OtGRI9eAaQ+F+Nuwk4k0bSmWfhVsNUGm159QkJg="
+// Changes to update_signing.pub require review from @ZaparooProject/admins
+// via CODEOWNERS.
+//
+//go:embed update_signing.pub
+var updateSigningPublicKey string
 
 var errInvalidSignature = errors.New("ed25519 signature verification failed")
 
@@ -55,7 +61,7 @@ func (*ed25519Validator) GetValidationAssetName(releaseFilename string) string {
 // archives against checksums.txt, and verifies checksums.txt itself against
 // an ed25519 signature in checksums.txt.sig.
 func newSignedChecksumValidator() (*selfupdate.PatternValidator, error) {
-	pubKeyBytes, err := base64.StdEncoding.DecodeString(updateSigningPublicKey)
+	pubKeyBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(updateSigningPublicKey))
 	if err != nil {
 		return nil, fmt.Errorf("decoding update signing public key: %w", err)
 	}

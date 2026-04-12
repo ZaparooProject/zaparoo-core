@@ -1,1 +1,2 @@
 /.signpath/ @ZaparooProject/admins
+/pkg/service/updater/update_signing.pub @ZaparooProject/admins
