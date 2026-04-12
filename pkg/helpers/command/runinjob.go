@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -21,12 +19,14 @@
 
 package command
 
-import "os/exec"
+// Resource limits for RunInJob. Platform implementations use the subset
+// relevant to their OS — see runinjob_*.go files.
+const (
+	// executeMemoryLimit caps address space (Linux RLIMIT_AS) or total job
+	// memory (Windows JOB_MEMORY). Not enforced on macOS (unreliable).
+	executeMemoryLimit = 512 * 1024 * 1024 // 512 MiB
 
-// RunInJob runs the command directly on non-Windows platforms.
-// Job Object restrictions are Windows-only.
-//
-//nolint:wrapcheck // Wrapping exec errors loses important context
-func RunInJob(cmd *exec.Cmd) error {
-	return cmd.Run()
-}
+	// executeCPULimit caps CPU time in seconds. Backstop for busy-loop
+	// scenarios — the context timeout handles wall-clock time.
+	executeCPULimit = 5
+)

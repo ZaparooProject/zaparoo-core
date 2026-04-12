@@ -1,4 +1,4 @@
-//go:build windows
+//go:build linux
 
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
@@ -22,8 +22,10 @@
 package command
 
 import (
+	"context"
 	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +34,7 @@ import (
 func TestRunInJob_Success(t *testing.T) {
 	t.Parallel()
 
-	cmd := exec.CommandContext(t.Context(), "cmd", "/c", "echo", "hello")
+	cmd := exec.CommandContext(t.Context(), "echo", "hello")
 	err := RunInJob(cmd)
 	require.NoError(t, err)
 }
@@ -40,7 +42,7 @@ func TestRunInJob_Success(t *testing.T) {
 func TestRunInJob_FailedCommand(t *testing.T) {
 	t.Parallel()
 
-	cmd := exec.CommandContext(t.Context(), "cmd", "/c", "exit", "1")
+	cmd := exec.CommandContext(t.Context(), "false")
 	err := RunInJob(cmd)
 	assert.Error(t, err)
 }
@@ -53,13 +55,15 @@ func TestRunInJob_NonexistentCommand(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestRunInJob_ChildProcessBlocked(t *testing.T) {
+func TestRunInJob_ProcessGroupKill(t *testing.T) {
 	t.Parallel()
 
-	// The job object limits active processes to 1. When cmd.exe (the primary
-	// process) tries to spawn a child via "start", it should fail because the
-	// limit would be exceeded.
-	cmd := exec.CommandContext(t.Context(), "cmd", "/c", "start", "/wait", "cmd", "/c", "echo", "child")
+	// Short timeout so the context cancellation triggers cmd.Cancel, which
+	// kills the entire process group (not just the top-level PID).
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", "sleep 60 & wait")
 	err := RunInJob(cmd)
 	assert.Error(t, err)
 }

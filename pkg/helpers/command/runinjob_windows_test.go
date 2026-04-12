@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build windows
 
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
@@ -32,7 +32,7 @@ import (
 func TestRunInJob_Success(t *testing.T) {
 	t.Parallel()
 
-	cmd := exec.CommandContext(t.Context(), "echo", "hello")
+	cmd := exec.CommandContext(t.Context(), "cmd", "/c", "echo", "hello")
 	err := RunInJob(cmd)
 	require.NoError(t, err)
 }
@@ -40,7 +40,7 @@ func TestRunInJob_Success(t *testing.T) {
 func TestRunInJob_FailedCommand(t *testing.T) {
 	t.Parallel()
 
-	cmd := exec.CommandContext(t.Context(), "false")
+	cmd := exec.CommandContext(t.Context(), "cmd", "/c", "exit", "1")
 	err := RunInJob(cmd)
 	assert.Error(t, err)
 }
@@ -49,6 +49,16 @@ func TestRunInJob_NonexistentCommand(t *testing.T) {
 	t.Parallel()
 
 	cmd := exec.CommandContext(t.Context(), "nonexistent-command-that-does-not-exist")
+	err := RunInJob(cmd)
+	assert.Error(t, err)
+}
+
+func TestRunInJob_ProcessTreeLimited(t *testing.T) {
+	t.Parallel()
+
+	// ActiveProcessLimit=2 allows one child (shell wrappers). A chain of 3
+	// cmd.exe processes exceeds the limit — the innermost spawn should fail.
+	cmd := exec.CommandContext(t.Context(), "cmd", "/c", "cmd", "/c", "cmd", "/c", "echo", "deep")
 	err := RunInJob(cmd)
 	assert.Error(t, err)
 }
