@@ -137,7 +137,7 @@ func bigIntToStr(n *big.Int) string {
 
 func strToBigInt(s, field string) (*big.Int, error) {
 	if s == "" {
-		return new(big.Int), nil
+		return nil, fmt.Errorf("%w: field %q has empty coordinate", ErrInvalidPakeMessage, field)
 	}
 	n, ok := new(big.Int).SetString(s, 10)
 	if !ok {

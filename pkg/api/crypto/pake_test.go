@@ -215,6 +215,13 @@ func TestDecodePakeMessage_NegativeCoordinate(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidPakeMessage)
 }
 
+func TestDecodePakeMessage_EmptyCoordinate(t *testing.T) {
+	t.Parallel()
+	empty := `{"role":0,"ux":"","uy":"0","vx":"0","vy":"0","xx":"0","xy":"0","yx":"0","yy":"0"}`
+	_, err := DecodePakeMessage([]byte(empty))
+	assert.ErrorIs(t, err, ErrInvalidPakeMessage)
+}
+
 func TestEncodePakeMessage_InvalidJSON(t *testing.T) {
 	t.Parallel()
 	_, err := EncodePakeMessage([]byte("not json"))

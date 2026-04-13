@@ -797,6 +797,26 @@ func TestHTTPHandler_BadBase64(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func TestHTTPHandler_MalformedPakeMessage(t *testing.T) {
+	t.Parallel()
+	h := newPairingHarness(t)
+
+	_, _, err := h.mgr.StartPairing()
+	require.NoError(t, err)
+
+	// Valid base64 but invalid PAKE wire format JSON inside.
+	malformed := base64.StdEncoding.EncodeToString([]byte(`{"role":0,"ux":"not_a_number"}`))
+	body, err := json.Marshal(pairStartRequest{PAKE: malformed, Name: "App"})
+	require.NoError(t, err)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/pair/start",
+		strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.mgr.HandlePairStart().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 func TestGeneratePIN_AllDigits(t *testing.T) {
 	t.Parallel()
 	for range 100 {

@@ -621,6 +621,8 @@ func pairingErrorStatus(err error) (status int, msg string) {
 		return http.StatusBadRequest, "client name required"
 	case errors.Is(err, errPairingMessageTooLong):
 		return http.StatusBadRequest, "PAKE message too long"
+	case errors.Is(err, crypto.ErrInvalidPakeMessage):
+		return http.StatusBadRequest, "invalid PAKE message"
 	case errors.Is(err, errTooManyClients):
 		return http.StatusForbidden, "maximum paired clients reached"
 	case errors.Is(err, errPairingHMACMismatch):
