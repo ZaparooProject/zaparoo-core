@@ -22,7 +22,6 @@ package service
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -1434,12 +1433,27 @@ func TestReaderManager_ContextCancellation_ItqSend(t *testing.T) {
 		ConfirmQueue:        cfq,
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	done := make(chan struct{})
 	go func() {
-		defer wg.Done()
 		readerManager(svc, itq, scanQueue, mockPlayer, nil)
+		close(done)
 	}()
+
+	t.Cleanup(func() {
+		st.StopService()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("readerManager did not exit during cleanup")
+		}
+		for {
+			select {
+			case <-notifCh:
+			default:
+				return
+			}
+		}
+	})
 
 	// Send a scan — readerManager will block on itq <- because nothing reads itq.
 	// scanQueue is unbuffered so this returns once readerManager reads it.
@@ -1472,26 +1486,10 @@ ready:
 	// Cancel context — readerManager must exit despite blocked itq send
 	st.StopService()
 
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
 	select {
 	case <-done:
-		// readerManager exited cleanly
 	case <-time.After(5 * time.Second):
 		t.Fatal("readerManager did not exit after context cancellation (deadlock)")
-	}
-
-	// Drain notifications
-	for {
-		select {
-		case <-notifCh:
-		default:
-			return
-		}
 	}
 }
 
@@ -1546,12 +1544,27 @@ func TestReaderManager_ContextCancellation_ConfirmItqSend(t *testing.T) {
 		Name:       "Current Game",
 	})
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	done := make(chan struct{})
 	go func() {
-		defer wg.Done()
 		readerManager(svc, itq, scanQueue, mockPlayer, nil)
+		close(done)
 	}()
+
+	t.Cleanup(func() {
+		st.StopService()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("readerManager did not exit during cleanup")
+		}
+		for {
+			select {
+			case <-notifCh:
+			default:
+				return
+			}
+		}
+	})
 
 	// Send a media-launching scan — gets staged, not sent to itq
 	scanQueue <- readers.Scan{
@@ -1612,14 +1625,9 @@ confirmed:
 		t.Fatal("confirm result never received (deadlock)")
 	}
 
-	wg.Wait()
-
-	// Drain notifications
-	for {
-		select {
-		case <-notifCh:
-		default:
-			return
-		}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("readerManager did not exit after context cancellation (deadlock)")
 	}
 }
