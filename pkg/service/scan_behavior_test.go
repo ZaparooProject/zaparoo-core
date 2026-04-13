@@ -157,9 +157,7 @@ mode = "unrestricted"`))
 	// lsq is buffered so goroutines spawned by processTokenQueue and timedExit
 	// can complete their sends after context cancellation.
 	scanQueue := make(chan readers.Scan)
-	// Buffer itq so readerManager doesn't block on processTokenQueue,
-	// reducing scheduling sensitivity under deadlock+race.
-	itq := make(chan tokens.Token, 1)
+	itq := make(chan tokens.Token)
 	lsq := make(chan *tokens.Token, 10)
 	plq := make(chan *playlists.Playlist, 10)
 

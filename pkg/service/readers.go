@@ -428,7 +428,12 @@ preprocessing:
 			confirmed := *stagedToken
 			stagedToken = nil
 			svc.State.SetActiveCard(confirmed)
-			itq <- confirmed
+			select {
+			case itq <- confirmed:
+			case <-svc.State.GetContext().Done():
+				result <- svc.State.GetContext().Err()
+				break preprocessing
+			}
 			result <- nil
 			continue preprocessing
 		case <-guardDelay:
@@ -495,7 +500,11 @@ preprocessing:
 				// Let the preprocessor know what's on the reader now
 				proc.Process(scan, readerError)
 				svc.State.SetActiveCard(confirmed)
-				itq <- confirmed
+				select {
+				case itq <- confirmed:
+				case <-svc.State.GetContext().Done():
+					break preprocessing
+				}
 				continue preprocessing
 			}
 		}
@@ -608,7 +617,11 @@ preprocessing:
 			}
 
 			log.Info().Msgf("sending token to queue: %v", scan)
-			itq <- *scan
+			select {
+			case itq <- *scan:
+			case <-svc.State.GetContext().Done():
+				break preprocessing
+			}
 
 		case scanReaderErrorRemoval:
 			log.Warn().

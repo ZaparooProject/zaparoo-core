@@ -20,6 +20,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -1387,4 +1388,246 @@ func TestReaderManager_LaunchGuard_APIConfirmAfterMediaStops(t *testing.T) {
 	env.confirmQueue <- result
 	err := <-result
 	assert.Error(t, err)
+}
+
+// TestReaderManager_ContextCancellation_ItqSend verifies that readerManager
+// exits cleanly when context is canceled while blocked on an itq send.
+// This is a regression test for a deadlock where bare itq sends had no
+// context cancellation support.
+func TestReaderManager_ContextCancellation_ItqSend(t *testing.T) {
+	t.Parallel()
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	mockPlayer := mocks.NewMockPlayer()
+	mockPlayer.SetupNoOpMock()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	mockPlatform.On("LookupMapping", mock.Anything).Return("", false)
+
+	st, notifCh := state.NewState(mockPlatform, "test-boot-uuid")
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil)
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: testhelpers.NewMockMediaDBI(),
+	}
+
+	scanQueue := make(chan readers.Scan)
+	itq := make(chan tokens.Token) // unbuffered, no consumer
+	lsq := make(chan *tokens.Token, 10)
+	plq := make(chan *playlists.Playlist, 10)
+	cfq := make(chan chan error, 10)
+
+	svc := &ServiceContext{
+		Platform:            mockPlatform,
+		Config:              cfg,
+		State:               st,
+		DB:                  db,
+		LaunchSoftwareQueue: lsq,
+		PlaylistQueue:       plq,
+		ConfirmQueue:        cfq,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		readerManager(svc, itq, scanQueue, mockPlayer, nil)
+		close(done)
+	}()
+
+	t.Cleanup(func() {
+		st.StopService()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("readerManager did not exit during cleanup")
+		}
+		for {
+			select {
+			case <-notifCh:
+			default:
+				return
+			}
+		}
+	})
+
+	// Send a scan — readerManager will block on itq <- because nothing reads itq.
+	// scanQueue is unbuffered so this returns once readerManager reads it.
+	scanQueue <- readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-1",
+			Text:     "/rom/game.rom",
+			ScanTime: time.Now(),
+			Source:   tokens.SourceReader,
+		},
+	}
+
+	// Wait for TokensAdded notification — SetActiveCard fires this immediately
+	// before the itq send, so readerManager is at the blocked send when we
+	// receive it.
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case n := <-notifCh:
+			if n.Method == models.NotificationTokensAdded {
+				goto ready
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for TokensAdded notification")
+		}
+	}
+ready:
+
+	// Cancel context — readerManager must exit despite blocked itq send
+	st.StopService()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("readerManager did not exit after context cancellation (deadlock)")
+	}
+}
+
+// TestReaderManager_ContextCancellation_ConfirmItqSend verifies that when
+// context is canceled while the confirm path is blocked sending to itq, the
+// result channel receives a context error (not ErrNoStagedToken).
+func TestReaderManager_ContextCancellation_ConfirmItqSend(t *testing.T) {
+	t.Parallel()
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetLaunchGuard(true)
+	cfg.SetLaunchGuardRequireConfirm(true)
+
+	mockPlayer := mocks.NewMockPlayer()
+	mockPlayer.SetupNoOpMock()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	mockPlatform.On("LookupMapping", mock.Anything).Return("", false)
+
+	st, notifCh := state.NewState(mockPlatform, "test-boot-uuid")
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil)
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: testhelpers.NewMockMediaDBI(),
+	}
+
+	scanQueue := make(chan readers.Scan)
+	itq := make(chan tokens.Token) // unbuffered, no consumer
+	lsq := make(chan *tokens.Token, 10)
+	plq := make(chan *playlists.Playlist, 10)
+	cfq := make(chan chan error, 10)
+
+	svc := &ServiceContext{
+		Platform:            mockPlatform,
+		Config:              cfg,
+		State:               st,
+		DB:                  db,
+		LaunchSoftwareQueue: lsq,
+		PlaylistQueue:       plq,
+		ConfirmQueue:        cfq,
+	}
+
+	// Set active media so launch guard stages instead of sending directly
+	st.SetActiveMedia(&models.ActiveMedia{
+		LauncherID: "test",
+		SystemID:   "nes",
+		Name:       "Current Game",
+	})
+
+	done := make(chan struct{})
+	go func() {
+		readerManager(svc, itq, scanQueue, mockPlayer, nil)
+		close(done)
+	}()
+
+	t.Cleanup(func() {
+		st.StopService()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("readerManager did not exit during cleanup")
+		}
+		for {
+			select {
+			case <-notifCh:
+			default:
+				return
+			}
+		}
+	})
+
+	// Send a media-launching scan — gets staged, not sent to itq
+	scanQueue <- readers.Scan{
+		Source: "test-reader",
+		Token: &tokens.Token{
+			UID:      "card-1",
+			Text:     "**launch.system:snes",
+			ScanTime: time.Now(),
+			Source:   tokens.SourceReader,
+		},
+	}
+
+	// Wait for the staged notification
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case n := <-notifCh:
+			if n.Method == models.NotificationTokensStaged {
+				goto staged
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for staged notification")
+		}
+	}
+staged:
+
+	// Send a removal to clear the active card. This doesn't clear the staged
+	// token (media is still active). scanQueue is unbuffered so this returns
+	// once readerManager has processed it and is back at its select.
+	scanQueue <- readers.Scan{Source: "test-reader", Token: nil}
+
+	// Send confirm — readerManager reads from cfq, calls SetActiveCard
+	// (fires TokensAdded since we cleared the card above), then blocks on
+	// itq <- confirmed.
+	resultCh := make(chan error, 1)
+	cfq <- resultCh
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case n := <-notifCh:
+			if n.Method == models.NotificationTokensAdded {
+				goto confirmed
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for TokensAdded notification from confirm path")
+		}
+	}
+confirmed:
+
+	// Cancel context — confirm path should return context error, not ErrNoStagedToken
+	st.StopService()
+
+	select {
+	case err := <-resultCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("confirm result never received (deadlock)")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("readerManager did not exit after context cancellation (deadlock)")
+	}
 }
