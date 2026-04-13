@@ -15,6 +15,7 @@ concurrency:
 permissions:
   contents: read
   pull-requests: read
+  packages: read
   security-events: write
 
 jobs:
@@ -197,7 +198,7 @@ jobs:
           key: ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-${{ github.run_id }}
 
   cross-lint:
-    name: Cross-Platform Lint
+    name: Cross Lint
     if: github.event_name == 'pull_request'
     needs: [ensure-zigcc]
     runs-on: ubicloud-standard-4
@@ -205,33 +206,37 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target_os: windows
-            target_arch: amd64
-            cc: "zig cc -w --target=x86_64-windows-gnu"
-            cxx: "zig c++ -w --target=x86_64-windows-gnu"
-            cgo_cflags: ""
-            cgo_ldflags: "-Wl,--subsystem,windows"
-          - target_os: darwin
-            target_arch: amd64
-            cc: "zig cc -w --target=x86_64-macos -I/opt/macosx-sdk/usr/include -L/opt/macosx-sdk/usr/lib -F/opt/macosx-sdk/System/Library/Frameworks"
-            cxx: "zig c++ -w --target=x86_64-macos -I/opt/macosx-sdk/usr/include -L/opt/macosx-sdk/usr/lib -F/opt/macosx-sdk/System/Library/Frameworks"
-            cgo_cflags: ""
-            cgo_ldflags: ""
+        target: [windows, darwin]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Set lowercase repository owner
+      - name: Set image reference
         run: |
-          echo "OWNER_LC=${OWNER,,}" >> "$GITHUB_ENV"
+          OWNER_LC="${OWNER,,}"
+          VERSION=$(cat scripts/zigcc/VERSION)
+          echo "ZIGCC_IMAGE=ghcr.io/${OWNER_LC}/zigcc:${VERSION}" >> "$GITHUB_ENV"
         env:
           OWNER: ${{ github.repository_owner }}
 
-      - name: Read zigcc version
-        id: zigcc
-        run: echo "version=$(cat scripts/zigcc/VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Set cross-compilation environment
+        run: |
+          if [ "${{ matrix.target }}" = "windows" ]; then
+            {
+              echo "TARGET_CC=zig cc -w --target=x86_64-windows-gnu"
+              echo "TARGET_CXX=zig c++ -w --target=x86_64-windows-gnu"
+              echo "TARGET_CGO_CFLAGS="
+              echo "TARGET_CGO_LDFLAGS=-Wl,--subsystem,windows"
+            } >> "$GITHUB_ENV"
+          elif [ "${{ matrix.target }}" = "darwin" ]; then
+            {
+              echo "TARGET_CC=zig cc -w --target=x86_64-macos -I/opt/macosx-sdk/usr/include -L/opt/macosx-sdk/usr/lib -F/opt/macosx-sdk/System/Library/Frameworks"
+              echo "TARGET_CXX=zig c++ -w --target=x86_64-macos -I/opt/macosx-sdk/usr/include -L/opt/macosx-sdk/usr/lib -F/opt/macosx-sdk/System/Library/Frameworks"
+              echo "TARGET_CGO_CFLAGS="
+              echo "TARGET_CGO_LDFLAGS="
+            } >> "$GITHUB_ENV"
+          fi
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
@@ -241,20 +246,20 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull zigcc image
-        run: docker pull ghcr.io/${{ env.OWNER_LC }}/zigcc:${{ steps.zigcc.outputs.version }}
+        run: docker pull ${{ env.ZIGCC_IMAGE }}
 
-      - name: Cross-platform lint (${{ matrix.target_os }})
+      - name: Cross-platform lint (${{ matrix.target }})
         run: |
           docker run --rm \
             -v "${PWD}:/build" \
-            -e GOOS=${{ matrix.target_os }} \
-            -e GOARCH=${{ matrix.target_arch }} \
+            -e GOOS=${{ matrix.target }} \
+            -e GOARCH=amd64 \
             -e CGO_ENABLED=1 \
-            -e CC="${{ matrix.cc }}" \
-            -e CXX="${{ matrix.cxx }}" \
-            -e CGO_CFLAGS="${{ matrix.cgo_cflags }}" \
-            -e CGO_LDFLAGS="${{ matrix.cgo_ldflags }}" \
-            ghcr.io/${{ env.OWNER_LC }}/zigcc:${{ steps.zigcc.outputs.version }} \
+            -e CC="${TARGET_CC}" \
+            -e CXX="${TARGET_CXX}" \
+            -e CGO_CFLAGS="${TARGET_CGO_CFLAGS}" \
+            -e CGO_LDFLAGS="${TARGET_CGO_LDFLAGS}" \
+            ${{ env.ZIGCC_IMAGE }} \
             bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1 && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
 
   ci-status:
