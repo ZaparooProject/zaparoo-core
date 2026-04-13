@@ -256,7 +256,7 @@ func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
 		return nil, errors.New("invalid content type")
 	}
 
-	log.Debug().Msgf("zap link body: %s", string(body))
+	log.Debug().Int("size", len(body)).Msg("received zap link body")
 
 	return body, nil
 }

@@ -21,7 +21,7 @@ permissions:
 jobs:
   ci:
     name: CI
-    timeout-minutes: 45
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
