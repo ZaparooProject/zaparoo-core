@@ -193,12 +193,13 @@ jobs:
   cross-lint:
     name: Cross Lint
     if: github.event_name == 'pull_request'
-    runs-on: ubicloud-standard-4
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         target: [windows, darwin]
+        runner: [ubicloud-standard-4]
 
     steps:
       - name: Checkout code

@@ -431,7 +431,7 @@ preprocessing:
 			select {
 			case itq <- confirmed:
 			case <-svc.State.GetContext().Done():
-				result <- ErrNoStagedToken
+				result <- svc.State.GetContext().Err()
 				break preprocessing
 			}
 			result <- nil
