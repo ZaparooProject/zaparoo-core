@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -115,7 +116,7 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}
 	}
 
-	if err := execCmd.Run(); err != nil {
+	if err := command.RunInJob(execCmd); err != nil {
 		stderrStr := strings.TrimSpace(stderr.String())
 		if stderrStr != "" {
 			log.Debug().Str("stderr", stderrStr).Msg("execute command stderr")

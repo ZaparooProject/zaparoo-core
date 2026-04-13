@@ -22,7 +22,7 @@ require (
 	github.com/gen2brain/malgo v0.11.24
 	github.com/getsentry/sentry-go v0.45.0
 	github.com/getsentry/sentry-go/zerolog v0.45.0
-	github.com/go-chi/chi/v5 v5.2.2
+	github.com/go-chi/chi/v5 v5.2.4
 	github.com/go-chi/cors v1.2.1
 	github.com/go-ole/go-ole v1.3.0
 	github.com/go-playground/validator/v10 v10.30.2
@@ -47,7 +47,7 @@ require (
 	github.com/sasha-s/go-deadlock v0.3.9
 	github.com/schollz/pake/v3 v3.1.1
 	github.com/shirou/gopsutil/v4 v4.26.3
-	github.com/spf13/afero v1.14.0
+	github.com/spf13/afero v1.15.0
 	github.com/stretchr/testify v1.11.1
 	go.bug.st/serial v1.6.4
 	go.etcd.io/bbolt v1.4.0
@@ -58,8 +58,8 @@ require (
 	golang.org/x/sys v0.42.0
 	golang.org/x/text v0.35.0
 	golang.org/x/time v0.14.0
-	gopkg.in/ini.v1 v1.67.0
-	gopkg.in/natefinch/lumberjack.v2 v2.0.0
+	gopkg.in/ini.v1 v1.67.1
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 	pgregory.net/rapid v1.2.0
 )
@@ -68,17 +68,17 @@ require (
 	code.gitea.io/sdk/gitea v0.22.1 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/42wim/httpsig v1.2.3 // indirect
-	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
 	github.com/creack/goselect v0.1.3 // indirect
-	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/expr-lang/expr v1.17.8 // indirect
+	github.com/fatih/color v1.18.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/geoffgarside/ber v1.1.0 // indirect
@@ -101,10 +101,11 @@ require (
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/jfreymuth/oggvorbis v1.0.5 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
-	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/mewkiz/flac v1.0.12 // indirect
@@ -113,9 +114,10 @@ require (
 	github.com/miekg/dns v1.1.27 // indirect
 	github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect

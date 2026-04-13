@@ -1,0 +1,190 @@
+//go:build windows
+
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package command
+
+import (
+	"errors"
+	"fmt"
+	"os/exec"
+	"sync"
+	"syscall"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+)
+
+const (
+	// executeMemoryLimit caps total memory for the job (process + any children).
+	executeMemoryLimit = 512 * 1024 * 1024 // 512 MiB
+
+	// executeProcessLimit allows the command plus one child (covers shell
+	// wrappers). Linux/macOS use process groups for tree management instead.
+	executeProcessLimit = 2
+)
+
+// RunInJob starts the command in a suspended state, assigns it to a restricted
+// Windows Job Object, then resumes execution. The Job Object enforces:
+//   - Kill on job close (cleanup guarantee)
+//   - Active process limit of 2 (command + one child for shell wrappers)
+//   - Total job memory limit of 512 MiB
+//
+// The process is created suspended (CREATE_SUSPENDED) so that Job Object
+// restrictions are in effect before any user code runs, closing the TOCTOU
+// window between process creation and job assignment.
+func RunInJob(cmd *exec.Cmd) error {
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return fmt.Errorf("creating job object: %w", err)
+	}
+
+	var closeOnce sync.Once
+	closeJob := func() { closeOnce.Do(func() { _ = windows.CloseHandle(job) }) }
+	defer closeJob()
+
+	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
+		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
+			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+				windows.JOB_OBJECT_LIMIT_ACTIVE_PROCESS |
+				windows.JOB_OBJECT_LIMIT_JOB_MEMORY,
+			ActiveProcessLimit: executeProcessLimit,
+		},
+		JobMemoryLimit: executeMemoryLimit,
+	}
+
+	//nolint:gosec // G103: unsafe.Pointer required for Windows API interop
+	_, err = windows.SetInformationJobObject(
+		job,
+		windows.JobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&info)),
+		uint32(unsafe.Sizeof(info)),
+	)
+	if err != nil {
+		return fmt.Errorf("configuring job object: %w", err)
+	}
+
+	// Create the process suspended so we can assign it to the job before
+	// any user code runs.
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+
+	// Close the job handle on context cancellation to immediately terminate
+	// all processes in the job, matching Linux process-group kill behavior.
+	cmd.Cancel = func() error {
+		closeJob()
+		return nil
+	}
+
+	startErr := cmd.Start()
+	if startErr != nil {
+		return startErr //nolint:wrapcheck // Wrapping exec errors loses important context
+	}
+
+	// Assign the suspended process to the job object.
+	pid := uint32(cmd.Process.Pid) //nolint:gosec // G115: Windows PIDs are always positive uint32
+	proc, err := windows.OpenProcess(
+		windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE,
+		false,
+		pid,
+	)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("opening process for job assignment: %w", err)
+	}
+
+	if err := windows.AssignProcessToJobObject(job, proc); err != nil {
+		_ = windows.CloseHandle(proc)
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("assigning process to job object: %w", err)
+	}
+	_ = windows.CloseHandle(proc)
+
+	// Resume the main thread now that job restrictions are in effect.
+	if err := resumeProcessThreads(pid); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("resuming process after job assignment: %w", err)
+	}
+
+	return cmd.Wait() //nolint:wrapcheck // Wrapping exec errors loses important context
+}
+
+// resumeProcessThreads enumerates and resumes all threads belonging to the
+// given process ID. Used after creating a process with CREATE_SUSPENDED and
+// assigning it to a Job Object.
+func resumeProcessThreads(pid uint32) error {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	if err != nil {
+		return fmt.Errorf("creating thread snapshot: %w", err)
+	}
+	defer func() { _ = windows.CloseHandle(snap) }()
+
+	var entry windows.ThreadEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+
+	err = windows.Thread32First(snap, &entry)
+	if err != nil {
+		return fmt.Errorf("enumerating threads: %w", err)
+	}
+
+	var resumed int
+	var lastErr error
+	for {
+		if entry.OwnerProcessID == pid {
+			thread, openErr := windows.OpenThread(
+				windows.THREAD_SUSPEND_RESUME,
+				false,
+				entry.ThreadID,
+			)
+			if openErr != nil {
+				lastErr = fmt.Errorf("opening thread %d: %w", entry.ThreadID, openErr)
+			} else {
+				if _, resumeErr := windows.ResumeThread(thread); resumeErr != nil {
+					lastErr = fmt.Errorf("resuming thread %d: %w", entry.ThreadID, resumeErr)
+				} else {
+					resumed++
+				}
+				_ = windows.CloseHandle(thread)
+			}
+		}
+
+		err = windows.Thread32Next(snap, &entry)
+		if err != nil {
+			if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+				break
+			}
+			return fmt.Errorf("enumerating threads: %w", err)
+		}
+	}
+
+	if resumed == 0 {
+		if lastErr != nil {
+			return fmt.Errorf("no threads resumed: %w", lastErr)
+		}
+		return errors.New("no threads found for process")
+	}
+
+	return nil
+}
