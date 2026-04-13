@@ -15,6 +15,7 @@ concurrency:
 permissions:
   contents: read
   pull-requests: read
+  security-events: write
 
 jobs:
   ensure-zigcc:
@@ -27,9 +28,6 @@ jobs:
   ci:
     name: CI
     timeout-minutes: 15
-    permissions:
-      contents: read
-      security-events: write
     strategy:
       fail-fast: false
       matrix:
