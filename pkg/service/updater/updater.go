@@ -43,7 +43,7 @@ type Result struct {
 	UpdateAvailable bool
 }
 
-func makeUpdater(platformID, channel string) (*selfupdate.Updater, selfupdate.Repository, error) {
+func makeUpdater(_ context.Context, platformID, channel string) (*selfupdate.Updater, selfupdate.Repository, error) {
 	source, err := selfupdate.NewHttpSource(selfupdate.HttpConfig{
 		BaseURL: updateURL,
 	})
@@ -53,9 +53,14 @@ func makeUpdater(platformID, channel string) (*selfupdate.Updater, selfupdate.Re
 
 	filter := fmt.Sprintf("^zaparoo-%s_%s", platformID, runtime.GOARCH)
 
+	validator, err := newSignedChecksumValidator()
+	if err != nil {
+		return nil, selfupdate.RepositorySlug{}, fmt.Errorf("creating validator: %w", err)
+	}
+
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{
 		Source:     source,
-		Validator:  &selfupdate.ChecksumValidator{UniqueFilename: "checksums.txt"},
+		Validator:  validator,
 		Filters:    []string{filter},
 		Prerelease: channel == config.UpdateChannelBeta,
 	})
@@ -72,7 +77,7 @@ func Check(ctx context.Context, platformID, channel string) (*Result, error) {
 		return nil, ErrDevelopmentVersion
 	}
 
-	updater, repo, err := makeUpdater(platformID, channel)
+	updater, repo, err := makeUpdater(ctx, platformID, channel)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +105,7 @@ func Apply(ctx context.Context, platformID, channel string) (string, error) {
 		return "", ErrDevelopmentVersion
 	}
 
-	u, repo, err := makeUpdater(platformID, channel)
+	u, repo, err := makeUpdater(ctx, platformID, channel)
 	if err != nil {
 		return "", err
 	}

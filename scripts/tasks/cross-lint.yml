@@ -1,0 +1,88 @@
+version: "3"
+
+tasks:
+  setup:
+    internal: true
+    cmds:
+      - task: :docker:build-image
+        vars:
+          IMAGE_NAME: zaparoo/zigcc
+          DOCKERFILE: "./scripts/zigcc"
+
+  windows:
+    desc: Run golangci-lint targeting Windows via zigcc
+    cmds:
+      - task: setup
+      - task: :docker:run
+        vars:
+          IMAGE_NAME: zaparoo/zigcc
+          PLATFORM: windows
+          BUILD_OS: windows
+          BUILD_ARCH: amd64
+          CC: "zig cc -w --target=x86_64-windows-gnu"
+          CXX: "zig c++ -w --target=x86_64-windows-gnu"
+          EXEC: >-
+            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1
+            && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
+          EXTRA_DOCKER_ARGS: >-
+            -e GOOS=windows
+            -e GOARCH=amd64
+            -e CGO_ENABLED=1
+            -e CGO_LDFLAGS="-Wl,--subsystem,windows"
+
+  mac:
+    desc: Run golangci-lint targeting macOS via zigcc
+    cmds:
+      - task: setup
+      - task: :docker:run
+        vars:
+          IMAGE_NAME: zaparoo/zigcc
+          PLATFORM: mac
+          BUILD_OS: darwin
+          BUILD_ARCH: amd64
+          CC: >-
+            zig cc -w --target=x86_64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+          CXX: >-
+            zig c++ -w --target=x86_64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+          EXEC: >-
+            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1
+            && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
+          EXTRA_DOCKER_ARGS: >-
+            -e GOOS=darwin
+            -e GOARCH=amd64
+            -e CGO_ENABLED=1
+
+  linux:
+    desc: Run golangci-lint targeting Linux via zigcc (for non-Linux developers)
+    cmds:
+      - task: setup
+      - task: :docker:run
+        vars:
+          IMAGE_NAME: zaparoo/zigcc
+          PLATFORM: linux
+          BUILD_OS: linux
+          BUILD_ARCH: amd64
+          CC: "zig cc -target x86_64-linux-gnu"
+          CXX: "zig c++ -target x86_64-linux-gnu"
+          EXEC: >-
+            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1
+            && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
+          EXTRA_DOCKER_ARGS: >-
+            -e GOOS=linux
+            -e GOARCH=amd64
+            -e CGO_ENABLED=1
+            -e CGO_CFLAGS="-I/opt/libnfc/x86_64-linux-gnu/include"
+            -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-gnu/lib -L/opt/deps/x86_64-linux-gnu/lib /opt/libnfc/x86_64-linux-gnu/lib/libnfc.a /opt/deps/x86_64-linux-gnu/lib/libusb.a /opt/deps/x86_64-linux-gnu/lib/libusb-1.0.a -ldl"
+
+  all:
+    desc: Run golangci-lint for all platforms via zigcc
+    cmds:
+      - task: windows
+      - task: mac
+      - task: linux

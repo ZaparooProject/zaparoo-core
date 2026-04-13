@@ -15,16 +15,27 @@ concurrency:
 permissions:
   contents: read
   pull-requests: read
+  packages: read
+  security-events: write
 
 jobs:
-  lint:
-    name: Lint
-    timeout-minutes: 10
+  ci:
+    name: CI
+    timeout-minutes: 45
     strategy:
-      fail-fast: false # Continue testing on other OS even if one fails
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        include: >-
+          ${{
+            github.event_name == 'pull_request'
+              && fromJSON('[{"os":"ubuntu","runner":"ubicloud-standard-4"}]')
+              || fromJSON('[
+                   {"os":"ubuntu","runner":"ubicloud-standard-4"},
+                   {"os":"macos","runner":"macos-latest"},
+                   {"os":"windows","runner":"windows-latest"}
+                 ]')
+          }}
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout code
@@ -37,7 +48,7 @@ jobs:
           cache: false
 
       - name: Configure Go paths for Windows
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "D:\go-cache" | Out-Null
@@ -48,7 +59,7 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "GOTMPDIR=D:\go-tmp"
 
       - name: Restore Go cache (Unix)
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != 'windows'
         uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: |
@@ -57,9 +68,10 @@ jobs:
           key: no-match-${{ runner.os }}
           restore-keys: |
             ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+            ${{ runner.os }}-go-
 
       - name: Restore Go cache (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows'
         uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: |
@@ -68,16 +80,38 @@ jobs:
           key: no-match-${{ runner.os }}
           restore-keys: |
             ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+            ${{ runner.os }}-go-
 
       - name: Download Go modules
         run: go mod download
 
       - name: Cache APT packages (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu'
         uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
         with:
           packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
           version: 1.1
+
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos'
+        run: |
+          brew install libusb pkg-config
+
+      - name: Cache scoop packages (Windows)
+        if: matrix.os == 'windows'
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: ~\scoop
+          key: ${{ runner.os }}-scoop-pkg-config
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
+            irm get.scoop.sh | iex
+          }
+          scoop install pkg-config
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
@@ -86,200 +120,34 @@ jobs:
           args: --timeout=5m
 
       - name: Install govulncheck
+        if: matrix.os == 'ubuntu'
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
-      - name: Run govulncheck
+      - name: Run govulncheck (SARIF)
+        if: matrix.os == 'ubuntu'
+        run: govulncheck -format sarif -o govulncheck.sarif ./...
+        continue-on-error: true
+
+      - name: Run govulncheck (CI gate)
+        if: matrix.os == 'ubuntu'
         run: govulncheck ./...
 
-  quick-test:
-    name: Quick Test (Unit)
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false # Continue testing on other OS even if one fails
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+      - name: Upload govulncheck SARIF
+        if: matrix.os == 'ubuntu' && !cancelled() && github.event_name != 'workflow_call' && hashFiles('govulncheck.sarif') != ''
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
         with:
-          go-version-file: go.mod
-          cache: false
+          sarif_file: govulncheck.sarif
+          category: govulncheck
 
-      - name: Configure Go paths for Windows
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "D:\go-cache" | Out-Null
-          New-Item -ItemType Directory -Force -Path "D:\go-mod-cache" | Out-Null
-          New-Item -ItemType Directory -Force -Path "D:\go-tmp" | Out-Null
-          Add-Content -Path $env:GITHUB_ENV -Value "GOCACHE=D:\go-cache"
-          Add-Content -Path $env:GITHUB_ENV -Value "GOMODCACHE=D:\go-mod-cache"
-          Add-Content -Path $env:GITHUB_ENV -Value "GOTMPDIR=D:\go-tmp"
-
-      - name: Restore Go cache (Unix)
-        if: matrix.os != 'windows-latest'
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: no-match-${{ runner.os }}
-          restore-keys: |
-            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
-
-      - name: Restore Go cache (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: |
-            D:\go-mod-cache
-            D:\go-cache
-          key: no-match-${{ runner.os }}
-          restore-keys: |
-            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
-
-      - name: Download Go modules
-        run: go mod download
-
-      - name: Cache APT packages (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
-        with:
-          packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
-          version: 1.1
-
-      - name: Install dependencies (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          brew install libusb pkg-config
-
-      - name: Cache scoop packages (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: ~\scoop
-          key: ${{ runner.os }}-scoop-pkg-config
-
-      - name: Install dependencies (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
-            irm get.scoop.sh | iex
-          }
-          scoop install pkg-config
-
-      - name: Run unit tests (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: bash
-        env:
-          GOMAXPROCS: 2
-        run: go test -v -short -race ./...
-
-      - name: Run unit tests (Unix)
-        if: matrix.os != 'windows-latest'
-        run: go test -v -short -race ./...
-
-  full-test:
-    name: Full Test (Unit + Integration)
-    timeout-minutes: 20
-    # Only run on Linux for PRs, all platforms for main/tags
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version-file: go.mod
-          cache: false
-
-      - name: Configure Go paths for Windows
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "D:\go-cache" | Out-Null
-          New-Item -ItemType Directory -Force -Path "D:\go-mod-cache" | Out-Null
-          New-Item -ItemType Directory -Force -Path "D:\go-tmp" | Out-Null
-          Add-Content -Path $env:GITHUB_ENV -Value "GOCACHE=D:\go-cache"
-          Add-Content -Path $env:GITHUB_ENV -Value "GOMODCACHE=D:\go-mod-cache"
-          Add-Content -Path $env:GITHUB_ENV -Value "GOTMPDIR=D:\go-tmp"
-
-      - name: Restore Go cache (Unix)
-        if: matrix.os != 'windows-latest'
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: no-match-${{ runner.os }}
-          restore-keys: |
-            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
-
-      - name: Restore Go cache (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: |
-            D:\go-mod-cache
-            D:\go-cache
-          key: no-match-${{ runner.os }}
-          restore-keys: |
-            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
-
-      - name: Download Go modules
-        run: go mod download
-
-      - name: Cache APT packages (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
-        with:
-          packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
-          version: 1.1
-
-      - name: Install dependencies (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          brew install libusb pkg-config
-
-      - name: Cache scoop packages (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: ~\scoop
-          key: ${{ runner.os }}-scoop-pkg-config
-
-      - name: Install dependencies (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
-            irm get.scoop.sh | iex
-          }
-          scoop install pkg-config
-
-      # Tests include property-based tests (rapid) which run ~100 iterations each.
-      # On failure, rapid generates .fail files which are uploaded as artifacts.
       - name: Run full tests (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows'
         shell: bash
         env:
           GOMAXPROCS: 2
         run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Run full tests (Unix)
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != 'windows'
         run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Upload rapid failure artifacts
@@ -291,12 +159,11 @@ jobs:
           if-no-files-found: ignore
 
       - name: Run deadlock detection tests
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu'
         run: go test -tags=deadlock -race -count=1 ./...
 
       - name: Upload coverage to Codecov
-        # Skip on tag pushes
-        if: matrix.os == 'ubuntu-latest' && !startsWith(github.ref, 'refs/tags/')
+        if: matrix.os == 'ubuntu' && !startsWith(github.ref, 'refs/tags/')
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -306,7 +173,7 @@ jobs:
           fail_ci_if_error: true
 
       - name: Save Go cache (Unix)
-        if: github.ref == 'refs/heads/main' && matrix.os != 'windows-latest'
+        if: matrix.os != 'windows'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: |
@@ -315,10 +182,98 @@ jobs:
           key: ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-${{ github.run_id }}
 
       - name: Save Go cache (Windows)
-        if: github.ref == 'refs/heads/main' && matrix.os == 'windows-latest'
+        if: matrix.os == 'windows'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: |
             D:\go-mod-cache
             D:\go-cache
           key: ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-${{ github.run_id }}
+
+  cross-lint:
+    name: Cross Lint
+    if: github.event_name == 'pull_request'
+    runs-on: ubicloud-standard-4
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [windows, darwin]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set image reference
+        run: |
+          OWNER_LC="${OWNER,,}"
+          VERSION=$(cat scripts/zigcc/VERSION)
+          echo "ZIGCC_IMAGE=ghcr.io/${OWNER_LC}/zigcc:${VERSION}" >> "$GITHUB_ENV"
+        env:
+          OWNER: ${{ github.repository_owner }}
+
+      - name: Set cross-compilation environment
+        run: |
+          if [ "${{ matrix.target }}" = "windows" ]; then
+            {
+              echo "TARGET_CC=zig cc -w --target=x86_64-windows-gnu"
+              echo "TARGET_CXX=zig c++ -w --target=x86_64-windows-gnu"
+              echo "TARGET_CGO_CFLAGS="
+              echo "TARGET_CGO_LDFLAGS=-Wl,--subsystem,windows"
+            } >> "$GITHUB_ENV"
+          elif [ "${{ matrix.target }}" = "darwin" ]; then
+            {
+              echo "TARGET_CC=zig cc -w --target=x86_64-macos -I/opt/macosx-sdk/usr/include -L/opt/macosx-sdk/usr/lib -F/opt/macosx-sdk/System/Library/Frameworks"
+              echo "TARGET_CXX=zig c++ -w --target=x86_64-macos -I/opt/macosx-sdk/usr/include -L/opt/macosx-sdk/usr/lib -F/opt/macosx-sdk/System/Library/Frameworks"
+              echo "TARGET_CGO_CFLAGS="
+              echo "TARGET_CGO_LDFLAGS="
+            } >> "$GITHUB_ENV"
+          fi
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull or build zigcc image
+        run: |
+          if ! docker pull "${{ env.ZIGCC_IMAGE }}" 2>/dev/null; then
+            echo "Image not in registry, building locally..."
+            docker build --build-arg UID=1001 --build-arg GID=1001 \
+              -t "${{ env.ZIGCC_IMAGE }}" scripts/zigcc
+          fi
+
+      - name: Cross-platform lint (${{ matrix.target }})
+        run: |
+          docker run --rm \
+            -v "${PWD}:/build" \
+            -e GOOS=${{ matrix.target }} \
+            -e GOARCH=amd64 \
+            -e CGO_ENABLED=1 \
+            -e CC="${TARGET_CC}" \
+            -e CXX="${TARGET_CXX}" \
+            -e CGO_CFLAGS="${TARGET_CGO_CFLAGS}" \
+            -e CGO_LDFLAGS="${TARGET_CGO_LDFLAGS}" \
+            ${{ env.ZIGCC_IMAGE }} \
+            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1 && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
+
+  ci-status:
+    name: CI Status
+    if: always() && !cancelled()
+    needs: [ci, cross-lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check CI results
+        run: |
+          if [ "${{ needs.ci.result }}" != "success" ]; then
+            echo "CI failed: ci=${{ needs.ci.result }}"
+            exit 1
+          fi
+          CROSS_RESULT="${{ needs.cross-lint.result }}"
+          if [ "$CROSS_RESULT" != "success" ] && [ "$CROSS_RESULT" != "skipped" ]; then
+            echo "CI failed: cross-lint=$CROSS_RESULT"
+            exit 1
+          fi
+          echo "CI passed"

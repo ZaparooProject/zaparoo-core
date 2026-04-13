@@ -778,8 +778,10 @@ func TestReaderManager_LaunchGuard_TimeoutExpiry(t *testing.T) {
 	// Safe to advance — timer is definitely registered
 	fakeClock.Advance(16 * time.Second)
 
-	// Barrier: goroutine processes this removal AND the fired timeout
-	// (whichever order the select picks, both are consumed before this returns)
+	// Two barriers: after Advance, both guardTimeout and scanQueue are ready
+	// in the select. Go picks randomly, so the first barrier may consume
+	// either one. The second barrier guarantees both have been processed.
+	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
 	env.sendScan(readers.Scan{Source: "test-reader", Token: nil})
 
 	// Re-tap — should stage again, not confirm (old staged was cleared by timeout)
