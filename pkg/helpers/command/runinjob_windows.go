@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -54,7 +55,10 @@ func RunInJob(cmd *exec.Cmd) error {
 	if err != nil {
 		return fmt.Errorf("creating job object: %w", err)
 	}
-	defer func() { _ = windows.CloseHandle(job) }()
+
+	var closeOnce sync.Once
+	closeJob := func() { closeOnce.Do(func() { _ = windows.CloseHandle(job) }) }
+	defer closeJob()
 
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
 		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
@@ -83,6 +87,13 @@ func RunInJob(cmd *exec.Cmd) error {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+
+	// Close the job handle on context cancellation to immediately terminate
+	// all processes in the job, matching Linux process-group kill behavior.
+	cmd.Cancel = func() error {
+		closeJob()
+		return nil
+	}
 
 	startErr := cmd.Start()
 	if startErr != nil {

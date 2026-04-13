@@ -88,6 +88,7 @@ jobs:
         with:
           sparse-checkout: |
             scripts/generate-update-manifest/
+            pkg/service/updater/update_signing.pub
             go.mod
             go.sum
           sparse-checkout-cone-mode: false
@@ -99,11 +100,13 @@ jobs:
       - name: Download existing manifest from CDN
         run: |
           mkdir -p _existing
-          # Download existing manifest and checksums (may not exist yet)
+          # Download existing manifest, checksums, and signature (may not exist yet)
           curl -sf "https://updates.zaparoo.org/ZaparooProject/zaparoo-core/manifest.yaml" \
             -o _existing/manifest.yaml || true
           curl -sf "https://updates.zaparoo.org/ZaparooProject/zaparoo-core/checksums.txt" \
             -o _existing/checksums.txt || true
+          curl -sf "https://updates.zaparoo.org/ZaparooProject/zaparoo-core/checksums.txt.sig" \
+            -o _existing/checksums.txt.sig || true
       - name: Download release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -123,11 +126,27 @@ jobs:
             echo "UPDATE_SIGNING_KEY secret is not configured" >&2; exit 1
           fi
           cd _assets && sha256sum zaparoo-* > checksums.txt && cd ..
-          # Merge with existing checksums if available, dedup by filename (newest wins)
-          if [ -f _existing/checksums.txt ]; then
-            cat _assets/checksums.txt _existing/checksums.txt \
-              | awk '{ key=$2 } !seen[key]++ { print }' > _merged_checksums.txt
-            mv _merged_checksums.txt _assets/checksums.txt
+          # Merge with existing checksums only after verifying their signature
+          if [ -f _existing/checksums.txt ] && [ -f _existing/checksums.txt.sig ]; then
+            # Convert embedded ed25519 public key to PEM for OpenSSL
+            RAW_PUB=$(tr -d '[:space:]' < pkg/service/updater/update_signing.pub)
+            {
+              echo "-----BEGIN PUBLIC KEY-----"
+              (echo -n 'MCowBQYDK2VwAyEA' | base64 -d; echo -n "$RAW_PUB" | base64 -d) | base64 | fold -w 64
+              echo "-----END PUBLIC KEY-----"
+            } > /tmp/verify.pem
+            if openssl pkeyutl -verify -pubin -inkey /tmp/verify.pem -rawin \
+                 -in _existing/checksums.txt -sigfile _existing/checksums.txt.sig; then
+              echo "Existing checksums signature verified, merging"
+              cat _assets/checksums.txt _existing/checksums.txt \
+                | awk '{ key=$2 } !seen[key]++ { print }' > _merged_checksums.txt
+              mv _merged_checksums.txt _assets/checksums.txt
+            else
+              echo "WARNING: Existing checksums signature verification failed, skipping merge" >&2
+            fi
+            rm -f /tmp/verify.pem
+          elif [ -f _existing/checksums.txt ]; then
+            echo "WARNING: Existing checksums found without signature, skipping merge" >&2
           fi
           install -m 600 /dev/stdin /tmp/signing.pem <<< "$UPDATE_SIGNING_KEY"
           openssl pkeyutl -sign -inkey /tmp/signing.pem -rawin \
