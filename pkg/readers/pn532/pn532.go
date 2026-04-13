@@ -500,7 +500,7 @@ func (r *Reader) processNewTag(ctx context.Context, detectedTag *pn532.DetectedT
 
 	log.Info().Msgf("detected %s tag: %s", token.Type, token.UID)
 	if token.Text != "" {
-		log.Info().Msgf("NDEF text: %s", token.Text)
+		log.Debug().Msgf("NDEF text: %s", token.Text)
 	}
 
 	iq <- readers.Scan{
@@ -760,7 +760,8 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 				return writeErr
 			}
 
-			log.Info().Msgf("successfully wrote text to PN532 tag: %s", text)
+			log.Info().Msg("successfully wrote text to PN532 tag")
+			log.Debug().Msgf("wrote NDEF text: %s", text)
 
 			// Create result token with UID from the tag
 			tagType := tag.Type()
