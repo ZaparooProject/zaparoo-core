@@ -65,7 +65,7 @@ func runTokenZapScript(
 		return fmt.Errorf("failed to parse script: %w", err)
 	}
 
-	log.Info().Msgf("running script (%d cmds): %s", len(script.Cmds), token.Text)
+	log.Info().Msgf("running script (%d cmds)", len(script.Cmds))
 
 	pls := plsc.Active
 
@@ -151,7 +151,7 @@ func runTokenZapScript(
 		// if a command results in additional commands to run (like from a
 		// remote query) inject them to be run immediately after this command
 		if len(result.NewCommands) > 0 {
-			log.Info().Msgf("injecting %d new commands: %v", len(result.NewCommands), result.NewCommands)
+			log.Info().Msgf("injecting %d new commands", len(result.NewCommands))
 			cmds = injectCommands(cmds, i, result.NewCommands)
 		}
 	}

@@ -202,7 +202,7 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 		}
 	}
 
-	log.Info().Msgf("keyboard input: %v", env.Cmd.Args)
+	log.Info().Int("key_count", len(env.Cmd.Args)).Msg("keyboard input")
 
 	// TODO: stuff like adjust delay, only press, etc.
 	//	     basically a filled out mini macro language for key presses
@@ -226,7 +226,7 @@ func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		}
 	}
 
-	log.Info().Msgf("gamepad input: %v", env.Cmd.Args)
+	log.Info().Int("button_count", len(env.Cmd.Args)).Msg("gamepad input")
 
 	if err := PressGamepadSequence(pl, env.Cmd.Args); err != nil {
 		return platforms.CmdResult{}, err

@@ -402,6 +402,54 @@ func TestIsMediaDisruptingCommand(t *testing.T) {
 	}
 }
 
+func TestIsSensitiveCommand(t *testing.T) {
+	t.Parallel()
+
+	sensitiveCommands := []string{
+		zapscript.ZapScriptCmdHTTPGet,
+		zapscript.ZapScriptCmdHTTPPost,
+		zapscript.ZapScriptCmdInputKeyboard,
+		zapscript.ZapScriptCmdInputGamepad,
+		zapscript.ZapScriptCmdExecute,
+		zapscript.ZapScriptCmdInputKey, // deprecated
+		zapscript.ZapScriptCmdKey,      // deprecated
+		zapscript.ZapScriptCmdGet,      // deprecated
+		zapscript.ZapScriptCmdShell,    // deprecated
+		zapscript.ZapScriptCmdCommand,  // deprecated
+	}
+
+	nonSensitiveCommands := []string{
+		zapscript.ZapScriptCmdLaunch,
+		zapscript.ZapScriptCmdLaunchSystem,
+		zapscript.ZapScriptCmdLaunchRandom,
+		zapscript.ZapScriptCmdLaunchSearch,
+		zapscript.ZapScriptCmdLaunchTitle,
+		zapscript.ZapScriptCmdLaunchLast,
+		zapscript.ZapScriptCmdDelay,
+		zapscript.ZapScriptCmdStop,
+		zapscript.ZapScriptCmdEcho,
+		zapscript.ZapScriptCmdControl,
+		zapscript.ZapScriptCmdScreenshot,
+		zapscript.ZapScriptCmdPlaylistPlay,
+		zapscript.ZapScriptCmdPlaylistStop,
+		zapscript.ZapScriptCmdMisterINI,
+		zapscript.ZapScriptCmdMisterCore,
+		zapscript.ZapScriptCmdMisterScript,
+		zapscript.ZapScriptCmdMisterMGL,
+		zapscript.ZapScriptCmdMisterWallpaper,
+	}
+
+	for _, cmd := range sensitiveCommands {
+		assert.True(t, isSensitiveCommand(cmd),
+			"Command %q should be sensitive", cmd)
+	}
+
+	for _, cmd := range nonSensitiveCommands {
+		assert.False(t, isSensitiveCommand(cmd),
+			"Command %q should NOT be sensitive", cmd)
+	}
+}
+
 // TestGetExprEnv_ScannedContext verifies that Scanned fields are populated.
 func TestGetExprEnv_ScannedContext(t *testing.T) {
 	t.Parallel()

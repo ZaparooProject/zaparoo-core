@@ -104,11 +104,7 @@ func makeJSONRPCError(code int, message string) models.ErrorObject {
 
 // logSafeRequest logs a request but avoids logging sensitive or large content
 func logSafeRequest(req *models.RequestObject) {
-	if req.Method == models.MethodSettingsLogsDownload {
-		log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received logs download request")
-	} else {
-		log.Debug().Interface("request", req).Msg("received request")
-	}
+	log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received request")
 }
 
 // logSafeResponse logs a response but truncates large content to prevent recursive logging issues
@@ -838,7 +834,7 @@ func processRequestObject(
 		if req.ID.IsAbsent() {
 			// Missing ID = notification per JSON-RPC 2.0 spec
 			// Server MUST NOT reply to notifications
-			log.Info().Interface("req", req).Msg("received notification, ignoring")
+			log.Info().Str("method", req.Method).Msg("received notification, ignoring")
 			return requestResult{ShouldReply: false}
 		}
 
