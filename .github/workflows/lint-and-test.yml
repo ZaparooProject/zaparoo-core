@@ -35,9 +35,9 @@ jobs:
         include: >-
           ${{
             github.event_name == 'pull_request'
-              && fromJSON('[{"os":"ubuntu","runner":"ubuntu-latest"}]')
+              && fromJSON('[{"os":"ubuntu","runner":"ubicloud-standard-4"}]')
               || fromJSON('[
-                   {"os":"ubuntu","runner":"ubuntu-latest"},
+                   {"os":"ubuntu","runner":"ubicloud-standard-4"},
                    {"os":"macos","runner":"macos-latest"},
                    {"os":"windows","runner":"windows-latest"}
                  ]')
@@ -201,7 +201,7 @@ jobs:
     name: Cross Lint
     if: github.event_name == 'pull_request'
     needs: [ensure-zigcc]
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     timeout-minutes: 15
     strategy:
       fail-fast: false
