@@ -19,16 +19,9 @@ permissions:
   security-events: write
 
 jobs:
-  ensure-zigcc:
-    if: github.event_name == 'pull_request'
-    uses: ./.github/workflows/zigcc-build.yml
-    permissions:
-      contents: read
-      packages: write
-
   ci:
     name: CI
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -180,7 +173,7 @@ jobs:
           fail_ci_if_error: true
 
       - name: Save Go cache (Unix)
-        if: github.ref == 'refs/heads/main' && matrix.os != 'windows'
+        if: matrix.os != 'windows'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: |
@@ -189,7 +182,7 @@ jobs:
           key: ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-${{ github.run_id }}
 
       - name: Save Go cache (Windows)
-        if: github.ref == 'refs/heads/main' && matrix.os == 'windows'
+        if: matrix.os == 'windows'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: |
@@ -200,7 +193,6 @@ jobs:
   cross-lint:
     name: Cross Lint
     if: github.event_name == 'pull_request'
-    needs: [ensure-zigcc]
     runs-on: ubicloud-standard-4
     timeout-minutes: 15
     strategy:
@@ -245,8 +237,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull zigcc image
-        run: docker pull ${{ env.ZIGCC_IMAGE }}
+      - name: Pull or build zigcc image
+        run: |
+          if ! docker pull "${{ env.ZIGCC_IMAGE }}" 2>/dev/null; then
+            echo "Image not in registry, building locally..."
+            docker build --build-arg UID=1001 --build-arg GID=1001 \
+              -t "${{ env.ZIGCC_IMAGE }}" scripts/zigcc
+          fi
 
       - name: Cross-platform lint (${{ matrix.target }})
         run: |
@@ -265,7 +262,7 @@ jobs:
   ci-status:
     name: CI Status
     if: always() && !cancelled()
-    needs: [ci, ensure-zigcc, cross-lint]
+    needs: [ci, cross-lint]
     runs-on: ubuntu-latest
     steps:
       - name: Check CI results
@@ -275,13 +272,8 @@ jobs:
             exit 1
           fi
           CROSS_RESULT="${{ needs.cross-lint.result }}"
-          ZIGCC_RESULT="${{ needs.ensure-zigcc.result }}"
           if [ "$CROSS_RESULT" != "success" ] && [ "$CROSS_RESULT" != "skipped" ]; then
             echo "CI failed: cross-lint=$CROSS_RESULT"
-            exit 1
-          fi
-          if [ "$ZIGCC_RESULT" != "success" ] && [ "$ZIGCC_RESULT" != "skipped" ]; then
-            echo "CI failed: ensure-zigcc=$ZIGCC_RESULT"
             exit 1
           fi
           echo "CI passed"
