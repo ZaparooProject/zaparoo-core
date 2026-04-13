@@ -109,7 +109,8 @@ func pairAndDeriveKey(
 
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pakeCurve)
 	require.NoError(t, err)
-	msgA := clientPake.Bytes()
+	msgA, err := crypto.EncodePakeMessage(clientPake.Bytes())
+	require.NoError(t, err)
 
 	// Drive the start session via the HTTP handler so we exercise the
 	// real request/response shapes.
@@ -130,7 +131,9 @@ func pairAndDeriveKey(
 
 	msgB, err := base64.StdEncoding.DecodeString(startResult.PAKE)
 	require.NoError(t, err)
-	require.NoError(t, clientPake.Update(msgB))
+	msgBInternal, err := crypto.DecodePakeMessage(msgB)
+	require.NoError(t, err)
+	require.NoError(t, clientPake.Update(msgBInternal))
 	clientSessionKey, err := clientPake.SessionKey()
 	require.NoError(t, err)
 

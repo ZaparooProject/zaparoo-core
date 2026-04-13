@@ -315,12 +315,18 @@ func (m *PairingManager) startSession(name string, msgA []byte) (sessionID strin
 		return "", nil, errPairingExhausted
 	}
 
+	// Decode the wire-format PAKE message into the library's internal format.
+	msgAInternal, err := crypto.DecodePakeMessage(msgA)
+	if err != nil {
+		return "", nil, fmt.Errorf("decode client pake message: %w", err)
+	}
+
 	// Server initializes as responder (role 1).
 	server, err := pake.InitCurve([]byte(m.pin), 1, pairingCurve)
 	if err != nil {
 		return "", nil, fmt.Errorf("pake init: %w", err)
 	}
-	if updateErr := server.Update(msgA); updateErr != nil {
+	if updateErr := server.Update(msgAInternal); updateErr != nil {
 		return "", nil, fmt.Errorf("pake update with client message: %w", updateErr)
 	}
 
@@ -329,8 +335,11 @@ func (m *PairingManager) startSession(name string, msgA []byte) (sessionID strin
 		return "", nil, fmt.Errorf("derive pake session key: %w", err)
 	}
 
-	// Capture serialized state before mutation.
-	msgB = server.Bytes()
+	// Encode the server's PAKE response into the clean wire format.
+	msgB, err = crypto.EncodePakeMessage(server.Bytes())
+	if err != nil {
+		return "", nil, fmt.Errorf("encode server pake message: %w", err)
+	}
 
 	sessionID = uuid.New().String()
 	m.sessions[sessionID] = &pairingSession{
@@ -612,6 +621,8 @@ func pairingErrorStatus(err error) (status int, msg string) {
 		return http.StatusBadRequest, "client name required"
 	case errors.Is(err, errPairingMessageTooLong):
 		return http.StatusBadRequest, "PAKE message too long"
+	case errors.Is(err, crypto.ErrInvalidPakeMessage):
+		return http.StatusBadRequest, "invalid PAKE message"
 	case errors.Is(err, errTooManyClients):
 		return http.StatusForbidden, "maximum paired clients reached"
 	case errors.Is(err, errPairingHMACMismatch):
