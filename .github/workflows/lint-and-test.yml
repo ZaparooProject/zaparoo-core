@@ -35,9 +35,9 @@ jobs:
         include: >-
           ${{
             github.event_name == 'pull_request'
-              && fromJSON('[{"os":"ubuntu","runner":"ubicloud-standard-4"}]')
+              && fromJSON('[{"os":"ubuntu","runner":"ubuntu-latest"}]')
               || fromJSON('[
-                   {"os":"ubuntu","runner":"ubicloud-standard-4"},
+                   {"os":"ubuntu","runner":"ubuntu-latest"},
                    {"os":"macos","runner":"macos-latest"},
                    {"os":"windows","runner":"windows-latest"}
                  ]')
@@ -140,7 +140,7 @@ jobs:
         run: govulncheck ./...
 
       - name: Upload govulncheck SARIF
-        if: matrix.os == 'ubuntu' && !cancelled() && github.event_name != 'workflow_call'
+        if: matrix.os == 'ubuntu' && !cancelled() && github.event_name != 'workflow_call' && hashFiles('govulncheck.sarif') != ''
         uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4
         with:
           sarif_file: govulncheck.sarif
@@ -201,7 +201,7 @@ jobs:
     name: Cross Lint
     if: github.event_name == 'pull_request'
     needs: [ensure-zigcc]
-    runs-on: ubicloud-standard-4
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
