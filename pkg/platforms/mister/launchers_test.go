@@ -434,6 +434,26 @@ func TestBuildScummVMCommand_DifferentTargets(t *testing.T) {
 	}
 }
 
+// Regression test: LLAPISuperGrafx launcher must exist for .sgx files on LLAPI cores (#635)
+func TestLLAPISuperGrafxLauncherExists(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	var found *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "LLAPISuperGrafx" {
+			found = &launchers[i]
+			break
+		}
+	}
+
+	require.NotNil(t, found, "LLAPISuperGrafx launcher should exist")
+	assert.Equal(t, "SuperGrafx", found.SystemID,
+		"LLAPISuperGrafx must use SystemSuperGrafx so .sgx slots are found")
+}
+
 // Regression test: N64 launcher should support .v64 extension (byte-swapped ROM format)
 func TestN64LauncherExtensions(t *testing.T) {
 	t.Parallel()
