@@ -247,6 +247,30 @@ func TestGenerateMgl(t *testing.T) {
 </mistergamedescription>`,
 		},
 		{
+			name: "Saturn CHD with special characters in filename",
+			core: &cores.Core{
+				ID:  "Saturn",
+				RBF: "_Console/Saturn",
+				Slots: []cores.Slot{
+					{
+						Label: "Disk",
+						Exts:  []string{".cue", ".chd"},
+						Mgl: &cores.MGLParams{
+							Delay:  2,
+							Method: "s",
+							Index:  0,
+						},
+					},
+				},
+			},
+			path: "/media/fat/games/Saturn/America/NiGHTS into Dreams... (USA, Brazil).chd",
+			want: "<mistergamedescription>\n\t<rbf>_Console/Saturn</rbf>\n" +
+				"\t<file delay=\"2\" type=\"s\" index=\"0\" " +
+				"path=\"../../../../../media/fat/games/Saturn/America/" +
+				"NiGHTS into Dreams... (USA, Brazil).chd\"/>\n" +
+				"</mistergamedescription>",
+		},
+		{
 			name: "override takes precedence over path",
 			core: &cores.Core{
 				ID:  "NES",

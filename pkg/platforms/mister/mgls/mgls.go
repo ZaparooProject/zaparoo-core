@@ -175,7 +175,12 @@ func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error 
 	if err != nil {
 		return fmt.Errorf("failed to generate MGL: %w", err)
 	}
-	log.Debug().Str("system", system.ID).Str("rbf", system.RBF).Msg("MGL generated successfully")
+	resolvedRBF := cores.ResolveRBFPathForLauncher(system.LauncherID, system.ID, system.RBF)
+	log.Debug().
+		Str("system", system.ID).
+		Str("rbf", resolvedRBF).
+		Msg("MGL generated successfully")
+	log.Debug().Str("mgl_content", mgl).Msg("generated MGL content")
 
 	tmpFile, err := writeTempFile(mgl)
 	if err != nil {
