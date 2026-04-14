@@ -20,6 +20,7 @@
 package advargs
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -84,17 +85,29 @@ func FuzzAdvargsParse(f *testing.F) {
 		if (err1 == nil) != (err1b == nil) {
 			t.Errorf("non-deterministic error for LaunchRandomArgs with key=%q value=%q", key, value)
 		}
+		if err1 == nil && err1b == nil && !reflect.DeepEqual(launchArgs, launchArgs2) {
+			t.Errorf("non-deterministic result for LaunchRandomArgs "+
+				"key=%q value=%q: %+v vs %+v", key, value, launchArgs, launchArgs2)
+		}
 
 		var playlistArgs2 zapscript.PlaylistArgs
 		err2b := Parse(raw, &playlistArgs2, nil)
 		if (err2 == nil) != (err2b == nil) {
 			t.Errorf("non-deterministic error for PlaylistArgs with key=%q value=%q", key, value)
 		}
+		if err2 == nil && err2b == nil && !reflect.DeepEqual(playlistArgs, playlistArgs2) {
+			t.Errorf("non-deterministic result for PlaylistArgs "+
+				"key=%q value=%q: %+v vs %+v", key, value, playlistArgs, playlistArgs2)
+		}
 
 		var globalArgs2 zapscript.GlobalArgs
 		err3b := Parse(raw, &globalArgs2, nil)
 		if (err3 == nil) != (err3b == nil) {
 			t.Errorf("non-deterministic error for GlobalArgs with key=%q value=%q", key, value)
+		}
+		if err3 == nil && err3b == nil && !reflect.DeepEqual(globalArgs, globalArgs2) {
+			t.Errorf("non-deterministic result for GlobalArgs "+
+				"key=%q value=%q: %+v vs %+v", key, value, globalArgs, globalArgs2)
 		}
 	})
 }

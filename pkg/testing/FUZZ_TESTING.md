@@ -68,7 +68,7 @@ task test
 go test ./pkg/helpers/
 
 # Manual fuzzing for specific function (runs until failure or Ctrl+C)
-go test -fuzz=FuzzParseVirtualPathStr ./pkg/helpers/
+go test -fuzz=FuzzParseVirtualPathStr ./pkg/helpers/virtualpath/
 
 # Time-boxed fuzzing (30 seconds)
 go test -fuzz=FuzzParseVirtualPathStr -fuzztime=30s ./pkg/helpers/

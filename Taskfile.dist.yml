@@ -94,7 +94,6 @@ tasks:
           "FuzzParseTitleFromFilename ./pkg/database/tags"
           "FuzzExtractSpecialPatterns ./pkg/database/tags"
           "FuzzParseLine ./pkg/readers/rs232barcode"
-          "FuzzParseVirtualPathStr ./pkg/helpers"
           "FuzzDecodeURIIfNeeded ./pkg/helpers"
           "FuzzIsValidExtension ./pkg/helpers"
           "FuzzFilenameFromPath ./pkg/helpers"

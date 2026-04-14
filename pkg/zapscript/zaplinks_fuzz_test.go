@@ -107,6 +107,19 @@ func FuzzFetchWellKnown(f *testing.F) {
 			if wk.ZapScript != wk2.ZapScript || wk.Auth != wk2.Auth {
 				t.Errorf("non-deterministic result for body %q", body)
 			}
+			if len(wk.Trusted) != len(wk2.Trusted) {
+				t.Errorf("non-deterministic Trusted length for body %q: "+
+					"%d vs %d", body, len(wk.Trusted), len(wk2.Trusted))
+			} else {
+				for i := range wk.Trusted {
+					if wk.Trusted[i] != wk2.Trusted[i] {
+						t.Errorf("non-deterministic Trusted[%d] "+
+							"for body %q: %q vs %q",
+							i, body, wk.Trusted[i], wk2.Trusted[i])
+						break
+					}
+				}
+			}
 		}
 	})
 }
