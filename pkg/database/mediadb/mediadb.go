@@ -1826,11 +1826,11 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 	return result, err
 }
 
-func (db *MediaDB) BulkSetMediaMissing(dbids map[int64]struct{}) error {
+func (db *MediaDB) BulkSetMediaMissing(dbids map[int]struct{}) error {
 	return sqlBulkSetMediaMissing(db.ctx, db.sql, dbids)
 }
 
-func (db *MediaDB) ResetMissingFlags(systemDBIDs []int64) error {
+func (db *MediaDB) ResetMissingFlags(systemDBIDs []int) error {
 	return sqlResetMissingFlags(db.ctx, db.sql, systemDBIDs)
 }
 

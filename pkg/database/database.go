@@ -490,7 +490,7 @@ type MediaDBI interface {
 
 	// Missing media methods for persistent indexing
 	BulkSetMediaMissing(dbids map[int]struct{}) error
-	ResetMissingFlags(systemDBIDs []int64) error
+	ResetMissingFlags(systemDBIDs []int) error
 
 	// GetMax*ID methods for resume functionality
 	GetMaxSystemID() (int64, error)

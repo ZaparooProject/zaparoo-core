@@ -656,10 +656,10 @@ func NewNamesIndex(
 
 	// Reset IsMissing flags for all systems being indexed — anything not
 	// re-found during this run will be marked missing at the end
-	systemDBIDs := make([]int64, 0, len(currentSystemIDs))
+	systemDBIDs := make([]int, 0, len(currentSystemIDs))
 	for _, sysID := range currentSystemIDs {
 		if dbid, ok := scanState.SystemIDs[sysID]; ok {
-			systemDBIDs = append(systemDBIDs, int64(dbid))
+			systemDBIDs = append(systemDBIDs, dbid)
 		}
 	}
 	if len(systemDBIDs) > 0 {

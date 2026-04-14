@@ -448,6 +448,7 @@ const (
 	SystemJ2ME        = "J2ME"
 	SystemGroovy      = "Groovy"
 	SystemPlugNPlay   = "PlugNPlay"
+	SystemDevErr      = "DevErr" // Debugger for launch/scan dynamics
 )
 
 var Systems = map[string]System{
@@ -1337,5 +1338,9 @@ var Systems = map[string]System{
 	SystemHikaru: {
 		ID:    SystemHikaru,
 		Slugs: []string{"segahikaru"},
+	},
+	SystemDevErr: {
+		ID:    SystemDevErr,
+		Slugs: []string{"deverr"},
 	},
 }

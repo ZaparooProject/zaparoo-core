@@ -278,12 +278,12 @@ func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]
 
 // sqlBulkSetMediaMissing marks media records as missing by DBID. Batches in chunks
 // of 500 to stay within SQLite variable limits.
-func sqlBulkSetMediaMissing(ctx context.Context, db *sql.DB, dbids map[int64]struct{}) error {
+func sqlBulkSetMediaMissing(ctx context.Context, db *sql.DB, dbids map[int]struct{}) error {
 	if len(dbids) == 0 {
 		return nil
 	}
 
-	ids := make([]int64, 0, len(dbids))
+	ids := make([]int, 0, len(dbids))
 	for id := range dbids {
 		ids = append(ids, id)
 	}
@@ -313,7 +313,7 @@ func sqlBulkSetMediaMissing(ctx context.Context, db *sql.DB, dbids map[int64]str
 }
 
 // sqlResetMissingFlags clears IsMissing for all media belonging to the given system DBIDs.
-func sqlResetMissingFlags(ctx context.Context, db *sql.DB, systemDBIDs []int64) error {
+func sqlResetMissingFlags(ctx context.Context, db *sql.DB, systemDBIDs []int) error {
 	if len(systemDBIDs) == 0 {
 		return nil
 	}

@@ -1261,7 +1261,7 @@ func (m *MockMediaDBI) TruncateSystems(systemIDs []string) error {
 	return nil
 }
 
-func (m *MockMediaDBI) BulkSetMediaMissing(dbids map[int64]struct{}) error {
+func (m *MockMediaDBI) BulkSetMediaMissing(dbids map[int]struct{}) error {
 	args := m.Called(dbids)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
@@ -1269,7 +1269,7 @@ func (m *MockMediaDBI) BulkSetMediaMissing(dbids map[int64]struct{}) error {
 	return nil
 }
 
-func (m *MockMediaDBI) ResetMissingFlags(systemDBIDs []int64) error {
+func (m *MockMediaDBI) ResetMissingFlags(systemDBIDs []int) error {
 	args := m.Called(systemDBIDs)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
