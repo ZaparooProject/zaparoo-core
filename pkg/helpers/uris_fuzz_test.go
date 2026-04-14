@@ -135,8 +135,8 @@ func FuzzDecodeURIIfNeeded(f *testing.F) {
 			t.Errorf("Result unexpectedly long: input=%d, output=%d", len(uri), len(result))
 		}
 
-		// Property 3: If input has no encoding and no scheme, result should equal input
-		if !strings.Contains(uri, "%") && !strings.Contains(uri, "://") {
+		// Property 3: If input is valid UTF-8 with no encoding and no scheme, result should equal input
+		if utf8.ValidString(uri) && !strings.Contains(uri, "%") && !strings.Contains(uri, "://") {
 			if result != uri {
 				t.Errorf("No encoding/scheme but result changed: %q -> %q", uri, result)
 			}

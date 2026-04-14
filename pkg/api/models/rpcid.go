@@ -42,7 +42,10 @@ func (id *RPCID) UnmarshalJSON(data []byte) error {
 	// Trim whitespace before checking type to handle edge cases where
 	// json.RawMessage may contain leading whitespace
 	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+	if len(trimmed) == 0 {
+		return ErrInvalidRPCID
+	}
+	if trimmed[0] == '{' || trimmed[0] == '[' {
 		return ErrInvalidRPCID
 	}
 	id.RawMessage = make([]byte, len(data))
