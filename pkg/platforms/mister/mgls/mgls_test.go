@@ -247,6 +247,54 @@ func TestGenerateMgl(t *testing.T) {
 </mistergamedescription>`,
 		},
 		{
+			name: "Saturn CHD with special characters in filename",
+			core: &cores.Core{
+				ID:  "Saturn",
+				RBF: "_Console/Saturn",
+				Slots: []cores.Slot{
+					{
+						Label: "Disk",
+						Exts:  []string{".cue", ".chd"},
+						Mgl: &cores.MGLParams{
+							Delay:  2,
+							Method: "s",
+							Index:  0,
+						},
+					},
+				},
+			},
+			path: "/media/fat/games/Saturn/America/NiGHTS into Dreams... (USA, Brazil).chd",
+			want: "<mistergamedescription>\n\t<rbf>_Console/Saturn</rbf>\n" +
+				"\t<file delay=\"2\" type=\"s\" index=\"0\" " +
+				"path=\"../../../../../media/fat/games/Saturn/America/" +
+				"NiGHTS into Dreams... (USA, Brazil).chd\"/>\n" +
+				"</mistergamedescription>",
+		},
+		{
+			name: "path with XML-reserved characters is escaped",
+			core: &cores.Core{
+				ID:  "Genesis",
+				RBF: "_Console/MegaDrive",
+				Slots: []cores.Slot{
+					{
+						Exts: []string{".bin", ".gen", ".md"},
+						Mgl: &cores.MGLParams{
+							Delay:  1,
+							Method: "f",
+							Index:  1,
+						},
+					},
+				},
+			},
+			path: `/media/fat/games/MegaDrive/Sonic & Knuckles "Lock-On".bin`,
+			want: "<mistergamedescription>\n" +
+				"\t<rbf>_Console/MegaDrive</rbf>\n" +
+				"\t<file delay=\"1\" type=\"f\" index=\"1\" " +
+				"path=\"../../../../../media/fat/games/MegaDrive/" +
+				"Sonic &amp; Knuckles &quot;Lock-On&quot;.bin\"/>\n" +
+				"</mistergamedescription>",
+		},
+		{
 			name: "override takes precedence over path",
 			core: &cores.Core{
 				ID:  "NES",

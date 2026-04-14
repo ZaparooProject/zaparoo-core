@@ -70,6 +70,18 @@ func ReadMRA(path string) (MRA, error) {
 	return mra, nil
 }
 
+// xmlEscapeAttr escapes XML-reserved characters for use in attribute values.
+// MiSTer's MGL parser (SXMLC) decodes these entities when reading paths.
+func xmlEscapeAttr(v string) string {
+	r := s.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+	)
+	return r.Replace(v)
+}
+
 func GenerateMgl(core *cores.Core, path, override string) (string, error) {
 	if core == nil {
 		return "", errors.New("no core supplied for MGL generation")
@@ -103,7 +115,7 @@ func GenerateMgl(core *cores.Core, path, override string) (string, error) {
 
 	mgl += fmt.Sprintf(
 		"\t<file delay=\"%d\" type=%q index=\"%d\" path=\"../../../../..%s\"/>\n",
-		mglDef.Delay, mglDef.Method, mglDef.Index, path,
+		mglDef.Delay, mglDef.Method, mglDef.Index, xmlEscapeAttr(path),
 	)
 
 	if mglDef.ResetDelay > 0 {
@@ -175,7 +187,12 @@ func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error 
 	if err != nil {
 		return fmt.Errorf("failed to generate MGL: %w", err)
 	}
-	log.Debug().Str("system", system.ID).Str("rbf", system.RBF).Msg("MGL generated successfully")
+	resolvedRBF := cores.ResolveRBFPathForLauncher(system.LauncherID, system.ID, system.RBF)
+	log.Debug().
+		Str("system", system.ID).
+		Str("rbf", resolvedRBF).
+		Msg("MGL generated successfully")
+	log.Debug().Str("mgl_content", mgl).Msg("generated MGL content")
 
 	tmpFile, err := writeTempFile(mgl)
 	if err != nil {

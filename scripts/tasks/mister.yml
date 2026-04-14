@@ -65,7 +65,7 @@ tasks:
             name=$(basename $pkg) &&
             echo "Building $pkg -> ${name}.test" &&
             go test -c
-            -tags "netgo,osusergo,sqlite_omit_load_extension"
+            -tags "netgo,osusergo,sqlite_omit_load_extension,nopkgconfig"
             -ldflags "-linkmode external -s -w"
             -o "_build/bench_arm/${name}.test" "$pkg"
             ; done &&
