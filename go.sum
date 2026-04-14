@@ -16,8 +16,8 @@ github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d h1:2xp1BQbqcDDaik
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d/go.mod h1:peYoMncQljjNS6tZwI9WVyQB3qZS6u79/N3mBOcnd3I=
 github.com/ZaparooProject/go-pn532 v0.21.1 h1:tVfOQBfDM4bAo3o+bZdlAxEq6qDQFcs+ILP/XxbWRx8=
 github.com/ZaparooProject/go-pn532 v0.21.1/go.mod h1:D2kfG4cxUMxVCa1gYuuMSmk7y7tWPglSQE3cr/4gJdc=
-github.com/ZaparooProject/go-zapscript v0.7.0 h1:MEpIoiX/ETOKWdYPoCaGDkUUtSCGa3ooKZI+cI8S8SQ=
-github.com/ZaparooProject/go-zapscript v0.7.0/go.mod h1:P5qov6iCMzYiSF3tqr8BAanvNNh/YjPuUENfmPo6Yj4=
+github.com/ZaparooProject/go-zapscript v0.7.1 h1:ovnhqHADS6M++YcRGb0CBTdsXxWuR91rKHDzwaXz3RA=
+github.com/ZaparooProject/go-zapscript v0.7.1/go.mod h1:P5qov6iCMzYiSF3tqr8BAanvNNh/YjPuUENfmPo6Yj4=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/andygrunwald/vdf v1.1.0 h1:gmstp0R7DOepIZvWoSJY97ix7QOrsxpGPU6KusKXqvw=
