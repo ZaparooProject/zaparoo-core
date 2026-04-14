@@ -96,7 +96,7 @@ func TestMyService(t *testing.T) {
 task test
 
 # Manual fuzzing (runs until failure or Ctrl+C)
-go test -fuzz=FuzzParseVirtualPathStr ./pkg/helpers/
+go test -fuzz=FuzzParseVirtualPathStr ./pkg/helpers/virtualpath/
 
 # Time-boxed fuzzing
 go test -fuzz=FuzzName -fuzztime=30s ./pkg/helpers/

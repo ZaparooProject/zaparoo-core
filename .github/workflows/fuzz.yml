@@ -1,0 +1,81 @@
+name: Fuzz Testing
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzz-time:
+        description: "Time per fuzz target (Go duration format)"
+        required: false
+        default: "2m"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  fuzz:
+    name: Fuzz
+    runs-on: ubicloud-standard-4
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Task
+        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2
+
+      - name: Install system dependencies
+        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
+        with:
+          packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
+          version: 1.1
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Run fuzz tests
+        run: task fuzz
+        env:
+          FUZZ_TIME: ${{ inputs.fuzz-time || '2m' }}
+
+      - name: Upload crash corpus
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-crashes
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore
+
+      - name: Create issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "Nightly fuzz: crash found ($(date -u +%Y-%m-%d))" \
+            --label "bug" \
+            --body "$(cat <<'EOF'
+          The nightly fuzz run found a crash. The failing corpus entry is attached as an artifact on the workflow run.
+
+          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Download the `fuzz-crashes` artifact from that run and place the corpus file into the appropriate `testdata/fuzz/FuzzName/` directory to reproduce locally:
+
+          ```
+          go test -run FuzzName/corpus_filename ./pkg/path/to/package
+          ```
+          EOF
+          )"

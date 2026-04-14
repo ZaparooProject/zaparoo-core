@@ -8,7 +8,7 @@ For architecture details, API reference, and key concepts: [docs/ARCHITECTURE.md
 
 ## Safety & Permissions
 
-**Allowed without asking**: Read files, run file-scoped tests (`go test ./pkg/specific/`), run `task lint-fix`, package-level linting, `gofumpt`, view git history.
+**Allowed without asking**: Read files, run file-scoped tests (`go test ./pkg/specific/`), run `task lint-fix`, package-level linting, `gofumpt`, `actionlint`, view git history.
 
 **Ask before**: Installing dependencies, `git push`/`git commit`, deleting files, changing DB schema/migrations, modifying config schema, adding platform support, breaking API changes.
 
@@ -69,6 +69,10 @@ task deadlock          # Detect lock ordering violations
 
 # DON'T use file-level golangci-lint (not well supported)
 # golangci-lint run pkg/config/config.go  # BAD
+
+# GitHub Actions workflow linting (use when editing .github/workflows/*.yml)
+actionlint .github/workflows/fuzz.yml    # Lint a specific workflow
+actionlint                                # Lint all workflows
 ```
 
 ## Project Structure

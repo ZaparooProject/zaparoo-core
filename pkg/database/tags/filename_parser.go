@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 )
@@ -280,6 +281,11 @@ func parseTranslationPattern(tag string, source TagSource, isBracketed bool) ([]
 // to eliminate intermediate string allocations (~5MB savings per 400K files).
 func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining string) {
 	tags = make([]CanonicalTag, 0) // Initialize to empty slice, not nil
+
+	if !utf8.ValidString(filename) {
+		return tags, ""
+	}
+
 	remaining = filename
 
 	// Pattern 1: "Disc X of Y" - most common multi-disc format

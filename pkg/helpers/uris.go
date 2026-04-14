@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -55,6 +56,9 @@ func isValidPort(port string) bool {
 // Returns the original URI on decoding errors (graceful fallback)
 // Uses manual parsing to handle malformed URLs gracefully
 func DecodeURIIfNeeded(uri string) string {
+	if !utf8.ValidString(uri) {
+		return ""
+	}
 	// Quick check: only decode if contains both :// and % (URL encoding)
 	if !strings.Contains(uri, "://") || !strings.Contains(uri, "%") {
 		return uri
@@ -211,7 +215,7 @@ func DecodeURIIfNeeded(uri string) string {
 }
 
 func FilenameFromPath(p string) string {
-	if p == "" {
+	if p == "" || !utf8.ValidString(p) {
 		return ""
 	}
 

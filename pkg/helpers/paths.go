@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -467,6 +468,9 @@ func getPathDir(path string) string {
 	if path == "" {
 		return "."
 	}
+	if !utf8.ValidString(path) {
+		return "."
+	}
 
 	// Remove trailing separators first
 	cleanPath := path
@@ -499,6 +503,9 @@ func getPathBase(path string) string {
 	if path == "" {
 		return "."
 	}
+	if !utf8.ValidString(path) {
+		return "."
+	}
 
 	// Find the last separator (either / or \)
 	lastSlash := -1
@@ -518,6 +525,9 @@ func getPathBase(path string) string {
 
 // getPathExt returns the file extension
 func getPathExt(path string) string {
+	if !utf8.ValidString(path) {
+		return ""
+	}
 	base := getPathBase(path)
 
 	// Special cases that should return empty extension

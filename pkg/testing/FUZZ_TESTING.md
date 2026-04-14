@@ -68,16 +68,16 @@ task test
 go test ./pkg/helpers/
 
 # Manual fuzzing for specific function (runs until failure or Ctrl+C)
-go test -fuzz=FuzzParseVirtualPathStr ./pkg/helpers/
+go test -fuzz=FuzzParseVirtualPathStr ./pkg/helpers/virtualpath/
 
 # Time-boxed fuzzing (30 seconds)
-go test -fuzz=FuzzParseVirtualPathStr -fuzztime=30s ./pkg/helpers/
+go test -fuzz=FuzzParseVirtualPathStr -fuzztime=30s ./pkg/helpers/virtualpath/
 
 # Run with more parallel workers (8 cores)
-go test -fuzz=FuzzParseVirtualPathStr -parallel=8 ./pkg/helpers/
+go test -fuzz=FuzzParseVirtualPathStr -parallel=8 ./pkg/helpers/virtualpath/
 
 # Disable minimization for faster fuzzing
-go test -fuzz=FuzzParseVirtualPathStr -fuzzminimizetime=0 ./pkg/helpers/
+go test -fuzz=FuzzParseVirtualPathStr -fuzzminimizetime=0 ./pkg/helpers/virtualpath/
 ```
 
 ### Property-Based Testing
