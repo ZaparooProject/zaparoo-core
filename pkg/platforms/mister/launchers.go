@@ -1112,6 +1112,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemSuperGrafx),
 		},
 		{
+			ID:       "LLAPISuperGrafx",
+			SystemID: systemdefs.SystemSuperGrafx,
+			Launch:   launchAltCore("LLAPISuperGrafx", systemdefs.SystemSuperGrafx, "_LLAPI/TurboGrafx16_LLAPI"),
+		},
+		{
 			ID:         systemdefs.SystemTurboGrafx16,
 			SystemID:   systemdefs.SystemTurboGrafx16,
 			Folders:    []string{"TGFX16"},
