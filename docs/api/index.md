@@ -1,7 +1,7 @@
 # Core API
 
 :::warning
-This API is not finalized. A version 1 release will be announced when it is ready for production. You're welcome to use the API as is, but be aware parts may breaking changes may still happen.
+This API is not finalized. A version 1 release will be announced when it is ready for production. You're welcome to use the API as is, but be aware that breaking changes may still happen.
 :::
 
 The **Core API** is available on and published by every device running the [Zaparoo Core](../../core) software. This API allows management of all Zaparoo features locally and remotely. The [Zaparoo](https://zaparoo.app/) app uses this API for all communication with Zaparoo devices, as do most of the flags when Zaparoo is run via the command line.
@@ -146,17 +146,23 @@ Every request sent must have a matching response. An example response to the `me
   "jsonrpc": "2.0",
   "id": "4b5da056-a5d4-436b-b4e6-b96231e99969",
   "result": {
-    "media": [
+    "results": [
       {
         "system": {
           "id": "Gameboy",
           "name": "Gameboy"
         },
         "name": "240p Test Suite (PD) v0.03 tepples",
-        "path": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb"
+        "path": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
+        "zapScript": "@Gameboy/240p Test Suite (PD) v0.03 tepples",
+        "tags": []
       }
     ],
-    "total": 1
+    "total": 1,
+    "pagination": {
+      "hasNextPage": false,
+      "pageSize": 100
+    }
   }
 }
 ```
@@ -165,12 +171,12 @@ Every request sent must have a matching response. An example response to the `me
 
 | Key     | Type   | Required | Description                                                                                                                                                     |
 | :------ | :----- | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| jsonrpc | number | Yes      | Same as a [request](#requests).                                                                                                                                 |
+| jsonrpc | string | Yes      | Same as a [request](#requests).                                                                                                                                 |
 | id      | string | Yes      | Same as a [request](#requests). The same ID sent by the original request.                                                                                       |
 | result  | any    | No\*     | Return value of the method. May be `null` depending on the method, will be missing if there was an error. See [methods](#methods) for possible values.          |
 | error   | Error  | No\*     | If a method failed, this key will be populated with the error details and the result key will be empty. See [below](#response-errors) for details about errors. |
 
-##### Response Errors
+##### Response errors
 
 If a method fails, it will populate the `error` key in the response object with details about the failure. An example of a failed request:
 
