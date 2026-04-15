@@ -191,7 +191,10 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	p.processMu.Lock()
 
 	customKill := p.lastLauncher.Kill
+	p.lastLauncher = platforms.Launcher{}
+
 	if customKill != nil {
+		p.trackedProcess = nil
 		p.processMu.Unlock()
 		log.Debug().Msg("using custom Kill function for launcher")
 		if err := customKill(&config.Instance{}); err != nil {

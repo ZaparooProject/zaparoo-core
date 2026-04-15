@@ -876,8 +876,8 @@ func TestResolveRelativePath(t *testing.T) {
 		},
 		{
 			name:     "absolute path unchanged",
-			path:     "/usr/share/games",
-			expected: "/usr/share/games",
+			path:     exeDir,
+			expected: exeDir,
 		},
 		{
 			name:     "relative path resolved to ExeDir",

@@ -683,11 +683,13 @@ func TestIndexRoots_ResolvesRelativePaths(t *testing.T) {
 	}
 	exeDir := filepath.Dir(exe)
 
+	absDir := t.TempDir()
+
 	cfg := &Instance{
 		vals: Values{
 			Launchers: Launchers{
 				MediaDir:  "roms",
-				IndexRoot: []string{"/absolute/path", "relative/dir"},
+				IndexRoot: []string{absDir, "relative/dir"},
 			},
 		},
 	}
@@ -695,7 +697,7 @@ func TestIndexRoots_ResolvesRelativePaths(t *testing.T) {
 	roots := cfg.IndexRoots()
 	require.Len(t, roots, 3)
 	assert.Equal(t, filepath.Join(exeDir, "roms"), roots[0])
-	assert.Equal(t, "/absolute/path", roots[1])
+	assert.Equal(t, absDir, roots[1])
 	assert.Equal(t, filepath.Join(exeDir, "relative", "dir"), roots[2])
 }
 
