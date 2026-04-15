@@ -117,15 +117,20 @@ func ParseCustomLaunchers(
 
 		exts := formatExtensions(v.FileExts)
 
+		resolvedDirs := make([]string, len(v.MediaDirs))
+		for j, dir := range v.MediaDirs {
+			resolvedDirs[j] = ResolveRelativePath(dir)
+		}
+
 		log.Info().Str("launcherID", launcherID).Str("systemID", launcherSystemID).
-			Strs("folders", v.MediaDirs).Strs("extensions", exts).
+			Strs("folders", resolvedDirs).Strs("extensions", exts).
 			Int("lifecycle", int(lifecycle)).
 			Msg("registered custom launcher")
 
 		launcher := platforms.Launcher{
 			ID:            launcherID,
 			SystemID:      launcherSystemID,
-			Folders:       v.MediaDirs,
+			Folders:       resolvedDirs,
 			Extensions:    exts,
 			Groups:        launcherGroups,
 			Schemes:       v.Schemes,
@@ -194,6 +199,7 @@ func ParseCustomLaunchers(
 
 				//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
 				cmd := exec.Command(parts[0], parts[1:]...)
+				cmd.Dir = ExeDir()
 
 				// Pass ZAPAROO_ENVIRONMENT JSON env var
 				envJSON, jsonErr := json.Marshal(exprEnv)

@@ -674,6 +674,33 @@ execute = "echo good"
 	assert.Equal(t, "GoodLauncher", customs[0].ID)
 }
 
+func TestIndexRoots_ResolvesRelativePaths(t *testing.T) {
+	t.Parallel()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip("os.Executable() unavailable")
+	}
+	exeDir := filepath.Dir(exe)
+
+	absDir := t.TempDir()
+
+	cfg := &Instance{
+		vals: Values{
+			Launchers: Launchers{
+				MediaDir:  "roms",
+				IndexRoot: []string{absDir, "relative/dir"},
+			},
+		},
+	}
+
+	roots := cfg.IndexRoots()
+	require.Len(t, roots, 3)
+	assert.Equal(t, filepath.Join(exeDir, "roms"), roots[0])
+	assert.Equal(t, absDir, roots[1])
+	assert.Equal(t, filepath.Join(exeDir, "relative", "dir"), roots[2])
+}
+
 func TestLoadCustomLaunchers_NestedDirectories(t *testing.T) {
 	t.Parallel()
 

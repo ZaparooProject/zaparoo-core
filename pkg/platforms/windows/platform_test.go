@@ -22,9 +22,14 @@
 package windows
 
 import (
+	"context"
+	"os/exec"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,6 +57,82 @@ func TestWindowsHasKodiLocalLauncher(t *testing.T) {
 	}
 
 	require.NotNil(t, kodiLocal, "KodiLocalVideo launcher should exist")
+}
+
+func TestStopActiveLauncher_CustomKill(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		customKillFunc    func(*config.Instance) error
+		name              string
+		customKillCalled  bool
+		hasTrackedProcess bool
+	}{
+		{
+			name: "custom Kill function is called when defined",
+			customKillFunc: func(_ *config.Instance) error {
+				return nil
+			},
+			customKillCalled:  true,
+			hasTrackedProcess: true,
+		},
+		{
+			name: "custom Kill function error is logged but not fatal",
+			customKillFunc: func(_ *config.Instance) error {
+				return assert.AnError
+			},
+			customKillCalled:  true,
+			hasTrackedProcess: true,
+		},
+		{
+			name:              "tracked process killed when no custom Kill defined",
+			customKillFunc:    nil,
+			customKillCalled:  false,
+			hasTrackedProcess: true,
+		},
+		{
+			name:              "no kill attempted when no tracked process and no custom Kill",
+			customKillFunc:    nil,
+			customKillCalled:  false,
+			hasTrackedProcess: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := &Platform{}
+			p.setActiveMedia = func(_ *models.ActiveMedia) {}
+
+			killCalled := false
+			var launcher platforms.Launcher
+			if tt.customKillFunc != nil {
+				launcher.Kill = func(cfg *config.Instance) error {
+					killCalled = true
+					return tt.customKillFunc(cfg)
+				}
+			}
+			p.setLastLauncher(&launcher)
+
+			if tt.hasTrackedProcess {
+				cmd := exec.CommandContext(context.Background(), "cmd", "/C", "timeout", "/T", "10")
+				err := cmd.Start()
+				require.NoError(t, err)
+				defer func() {
+					if cmd.Process != nil {
+						_ = cmd.Process.Kill()
+					}
+				}()
+				p.SetTrackedProcess(cmd.Process)
+			}
+
+			err := p.StopActiveLauncher(platforms.StopForPreemption)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.customKillCalled, killCalled, "custom Kill called mismatch")
+		})
+	}
 }
 
 func TestWindowsHasAllKodiLaunchers(t *testing.T) {

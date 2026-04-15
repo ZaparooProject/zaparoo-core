@@ -20,6 +20,7 @@
 package helpers
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -268,7 +269,7 @@ func TestParseCustomLaunchers_EmptyExecuteLeavesLaunchNil(t *testing.T) {
 
 	assert.Equal(t, "movies", l.ID)
 	assert.Equal(t, "Video", l.SystemID)
-	assert.Equal(t, []string{"movies"}, l.Folders)
+	assert.Equal(t, []string{filepath.Join(ExeDir(), "movies")}, l.Folders)
 	assert.Equal(t, []string{".mp4", ".mkv"}, l.Extensions)
 	assert.Nil(t, l.Launch, "Launch should be nil when Execute is empty")
 }
