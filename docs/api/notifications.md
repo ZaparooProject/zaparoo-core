@@ -164,7 +164,7 @@ Sent during media database generation to indicate indexing progress and completi
 
 #### Examples
 
-##### Indexing In Progress
+##### Indexing in progress
 
 ```json
 {
@@ -182,7 +182,7 @@ Sent during media database generation to indicate indexing progress and completi
 }
 ```
 
-##### Optimization In Progress
+##### Optimization in progress
 
 ```json
 {
@@ -198,7 +198,7 @@ Sent during media database generation to indicate indexing progress and completi
 }
 ```
 
-##### Database Ready
+##### Database ready
 
 ```json
 {
@@ -227,7 +227,7 @@ Sent when a playtime limit (session or daily) has been reached and enforced by t
 
 #### Examples
 
-##### Session Limit Reached
+##### Session limit reached
 
 ```json
 {
@@ -239,7 +239,7 @@ Sent when a playtime limit (session or daily) has been reached and enforced by t
 }
 ```
 
-##### Daily Limit Reached
+##### Daily limit reached
 
 ```json
 {
