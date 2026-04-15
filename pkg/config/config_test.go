@@ -1671,14 +1671,15 @@ func TestSave_PreservesExternalEdits(t *testing.T) {
 func TestSave_ConfigHeader(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
-	cfg, err := NewConfig(tempDir, BaseDefaults)
+	memFs := afero.NewMemMapFs()
+	configDir := "/config"
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, memFs)
 	require.NoError(t, err)
 
 	err = cfg.Save()
 	require.NoError(t, err)
 
-	data, err := os.ReadFile(filepath.Join(tempDir, CfgFile)) //nolint:gosec // test path from t.TempDir()
+	data, err := afero.ReadFile(memFs, filepath.Join(configDir, CfgFile))
 	require.NoError(t, err)
 
 	assert.Contains(t, string(data), "# Zaparoo Core configuration file.",
@@ -1688,12 +1689,13 @@ func TestSave_ConfigHeader(t *testing.T) {
 func TestLoad_WithComments(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
-	cfg, err := NewConfig(tempDir, BaseDefaults)
+	memFs := afero.NewMemMapFs()
+	configDir := "/config"
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, memFs)
 	require.NoError(t, err)
 
 	// Write a config file with comments
-	cfgPath := filepath.Join(tempDir, CfgFile)
+	cfgPath := filepath.Join(configDir, CfgFile)
 	content := fmt.Sprintf(`# My custom comment
 config_schema = %d
 debug_logging = true
@@ -1702,7 +1704,7 @@ debug_logging = true
 [audio]
 volume = 80
 `, SchemaVersion)
-	err = os.WriteFile(cfgPath, []byte(content), 0o600)
+	err = afero.WriteFile(memFs, cfgPath, []byte(content), 0o600)
 	require.NoError(t, err)
 
 	err = cfg.Load()
