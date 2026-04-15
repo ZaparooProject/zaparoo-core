@@ -23,7 +23,7 @@ tasks:
           CXX: "zig c++ -w --target=x86_64-windows-gnu"
           EXEC: >-
             bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1
-            && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
+            && PATH="/home/build/bin:$PATH" golangci-lint run --fix --timeout=5m'
           EXTRA_DOCKER_ARGS: >-
             -e GOOS=windows
             -e GOARCH=amd64
@@ -52,7 +52,7 @@ tasks:
             -F/opt/macosx-sdk/System/Library/Frameworks
           EXEC: >-
             bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1
-            && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
+            && PATH="/home/build/bin:$PATH" golangci-lint run --fix --timeout=5m'
           EXTRA_DOCKER_ARGS: >-
             -e GOOS=darwin
             -e GOARCH=amd64
@@ -72,7 +72,7 @@ tasks:
           CXX: "zig c++ -target x86_64-linux-gnu"
           EXEC: >-
             bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1
-            && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
+            && PATH="/home/build/bin:$PATH" golangci-lint run --fix --timeout=5m'
           EXTRA_DOCKER_ARGS: >-
             -e GOOS=linux
             -e GOARCH=amd64

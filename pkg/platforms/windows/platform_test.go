@@ -22,6 +22,7 @@
 package windows
 
 import (
+	"context"
 	"os/exec"
 	"testing"
 
@@ -62,8 +63,8 @@ func TestStopActiveLauncher_CustomKill(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name              string
 		customKillFunc    func(*config.Instance) error
+		name              string
 		customKillCalled  bool
 		hasTrackedProcess bool
 	}{
@@ -115,7 +116,7 @@ func TestStopActiveLauncher_CustomKill(t *testing.T) {
 			p.setLastLauncher(&launcher)
 
 			if tt.hasTrackedProcess {
-				cmd := exec.Command("cmd", "/C", "timeout", "/T", "10")
+				cmd := exec.CommandContext(context.Background(), "cmd", "/C", "timeout", "/T", "10")
 				err := cmd.Start()
 				require.NoError(t, err)
 				defer func() {
