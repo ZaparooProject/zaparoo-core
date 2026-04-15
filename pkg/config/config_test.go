@@ -1631,8 +1631,9 @@ func TestAudioVolume_SaveLoadRoundTrip(t *testing.T) {
 func TestSave_PreservesExternalEdits(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
-	cfg, err := NewConfig(tempDir, BaseDefaults)
+	memFs := afero.NewMemMapFs()
+	configDir := "/config"
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, memFs)
 	require.NoError(t, err)
 
 	// Save initial config
@@ -1640,14 +1641,14 @@ func TestSave_PreservesExternalEdits(t *testing.T) {
 	require.NoError(t, err)
 
 	// Externally edit the file to add audio volume
-	cfgPath := filepath.Join(tempDir, CfgFile)
-	data, err := os.ReadFile(cfgPath) //nolint:gosec // test path from t.TempDir()
+	cfgPath := filepath.Join(configDir, CfgFile)
+	data, err := afero.ReadFile(memFs, cfgPath)
 	require.NoError(t, err)
 
 	// Add volume to the existing [audio] section by inserting after "scan_feedback"
 	content := strings.Replace(string(data), "scan_feedback = true", "scan_feedback = true\nvolume = 42", 1)
 	require.NotEqual(t, string(data), content, "replacement should have occurred")
-	err = os.WriteFile(cfgPath, []byte(content), 0o600) //nolint:gosec // test path from t.TempDir()
+	err = afero.WriteFile(memFs, cfgPath, []byte(content), 0o600)
 	require.NoError(t, err)
 
 	// Reload to pick up external edits, then modify a different field
@@ -1655,7 +1656,7 @@ func TestSave_PreservesExternalEdits(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 42, cfg.AudioVolume(), "should have loaded external edit")
 
-	cfg.SetDebugLogging(true)
+	cfg.SetErrorReporting(true)
 
 	err = cfg.Save()
 	require.NoError(t, err)
@@ -1664,7 +1665,7 @@ func TestSave_PreservesExternalEdits(t *testing.T) {
 	err = cfg.Load()
 	require.NoError(t, err)
 	assert.Equal(t, 42, cfg.AudioVolume(), "external volume edit should be preserved")
-	assert.True(t, cfg.DebugLogging(), "API change should be present")
+	assert.True(t, cfg.ErrorReporting(), "API change should be present")
 }
 
 func TestSave_ConfigHeader(t *testing.T) {

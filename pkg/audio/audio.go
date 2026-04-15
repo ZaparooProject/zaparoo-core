@@ -58,7 +58,7 @@ type MalgoPlayer struct {
 	currentCancel context.CancelFunc
 	currentDone   <-chan struct{} // closed when current playback goroutine finishes
 	fileCache     map[string][]byte
-	volume        float64 // 0.0-1.0, protected by playbackMu
+	volume        float64 // 0.0-2.0, protected by playbackMu
 	playbackGen   uint64
 	fileCacheMu   syncutil.RWMutex
 	playbackMu    syncutil.Mutex
@@ -72,7 +72,7 @@ func NewMalgoPlayer() *MalgoPlayer {
 	}
 }
 
-// SetVolume sets the playback volume (0.0-1.0). Applies to subsequent playback calls.
+// SetVolume sets the playback volume (0.0-2.0). Applies to subsequent playback calls.
 func (p *MalgoPlayer) SetVolume(volume float64) {
 	p.playbackMu.Lock()
 	defer p.playbackMu.Unlock()
@@ -387,7 +387,7 @@ func (p *MalgoPlayer) ClearFileCache() {
 }
 
 // playWAVWithMalgo plays audio samples through malgo, blocking until complete or ctx is cancelled.
-// The volume parameter (0.0-1.0) scales sample amplitude before output.
+// The volume parameter (0.0-2.0) scales sample amplitude before output.
 func playWAVWithMalgo(ctx context.Context, streamer beep.Streamer, volume float64) error {
 	malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {

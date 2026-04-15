@@ -22,6 +22,8 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -581,6 +583,59 @@ func TestHandleSettingsUpdate_LaunchGuard(t *testing.T) {
 	assert.InDelta(t, 30, cfg.LaunchGuardTimeout(), 0)
 	assert.InDelta(t, 10, cfg.LaunchGuardDelay(), 0)
 	assert.True(t, cfg.LaunchGuardRequireConfirm())
+}
+
+// TestHandleSettingsUpdate_PreservesExternalEdits verifies that calling
+// HandleSettingsUpdate does not overwrite external edits to config.toml.
+// Regression test for the pre-save reload introduced for issue #653.
+func TestHandleSettingsUpdate_PreservesExternalEdits(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	// Save initial config so the file exists on disk
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	// Externally modify config.toml to add volume=42
+	cfgPath := tmpDir + "/" + config.CfgFile
+	data, err := os.ReadFile(cfgPath) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	content := strings.Replace(string(data),
+		"scan_feedback = false", "scan_feedback = false\nvolume = 42", 1)
+	require.NotEqual(t, string(data), content, "replacement should have occurred")
+	err = os.WriteFile(cfgPath, []byte(content), 0o600) //nolint:gosec // test path
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	// Call HandleSettingsUpdate changing a different field (error_reporting)
+	enabled := true
+	params := models.UpdateSettingsParams{
+		ErrorReporting: &enabled,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	// Both the external edit and the API change should be present
+	assert.Equal(t, 42, cfg.AudioVolume(), "external volume edit should survive settings update")
+	assert.True(t, cfg.ErrorReporting(), "API change should be applied")
 }
 
 func TestHandleSettings_AudioVolumeDefault(t *testing.T) {
