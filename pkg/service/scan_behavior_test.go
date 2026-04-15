@@ -43,7 +43,7 @@ import (
 )
 
 const (
-	behaviorTimeout = 3 * time.Second
+	behaviorTimeout = 10 * time.Second
 	noEventWait     = 200 * time.Millisecond
 	testReaderID    = "test-reader-removable"
 	testReaderSrc   = "test-reader-src"

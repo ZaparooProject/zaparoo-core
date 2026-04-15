@@ -47,6 +47,13 @@ const (
 	UpdateChannelBeta   = "beta"
 )
 
+const configHeader = `# Zaparoo Core configuration file.
+# https://zaparoo.org/docs/core/config/
+#
+# This file is managed by the Zaparoo service. Manual edits to values are
+# preserved on next save, but comments will be lost.
+`
+
 type Values struct {
 	Groovy         Groovy    `toml:"groovy,omitempty"`
 	Input          Input     `toml:"input,omitempty"`
@@ -72,6 +79,7 @@ type Audio struct {
 	LimitSound   *string `toml:"limit_sound,omitempty"`
 	PendingSound *string `toml:"pending_sound,omitempty"`
 	ReadySound   *string `toml:"ready_sound,omitempty"`
+	Volume       *int    `toml:"volume,omitempty"`
 	ScanFeedback bool    `toml:"scan_feedback"`
 }
 
@@ -238,9 +246,24 @@ func (c *Instance) Load() error {
 	oldVals := c.vals
 	c.vals = c.defaults
 
+	// Save mappings and custom launchers — they're normally loaded from
+	// separate files via LoadMappings/LoadCustomLaunchers, not config.toml.
+	// Save() strips them before marshal, so after a round-trip they'd be
+	// empty. Restore the old values only when the TOML didn't provide new
+	// ones (a user might hand-edit config.toml to include them).
+	savedMappings := oldVals.Mappings
+	savedCustomLaunchers := oldVals.Launchers.Custom
+
 	if err := c.applyTOML(string(data)); err != nil {
 		c.vals = oldVals
 		return err
+	}
+
+	if len(c.vals.Mappings.Entry) == 0 {
+		c.vals.Mappings = savedMappings
+	}
+	if len(c.vals.Launchers.Custom) == 0 {
+		c.vals.Launchers.Custom = savedCustomLaunchers
 	}
 
 	if c.vals.ConfigSchema != SchemaVersion {
@@ -373,7 +396,8 @@ func (c *Instance) Save() error {
 	c.vals.Mappings = tmpMappings
 	c.vals.Launchers.Custom = tmpCustomLauncher
 
-	if err := afero.WriteFile(c.getFs(), c.cfgPath, data, 0o600); err != nil {
+	output := append([]byte(configHeader), data...)
+	if err := afero.WriteFile(c.getFs(), c.cfgPath, output, 0o600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 	return nil
@@ -447,6 +471,24 @@ func (c *Instance) SetAudioFeedback(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Audio.ScanFeedback = enabled
+}
+
+// AudioVolume returns the configured volume level (0-200). Defaults to 100 if unset.
+// Values above 100 amplify the audio. Clamped to [0, 200].
+func (c *Instance) AudioVolume() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Audio.Volume == nil {
+		return 100
+	}
+	return max(0, min(200, *c.vals.Audio.Volume))
+}
+
+// SetAudioVolume sets the audio volume level (0-200, default 100).
+func (c *Instance) SetAudioVolume(v int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Audio.Volume = &v
 }
 
 // SuccessSoundPath resolves the success sound file path based on config and disk overrides.
