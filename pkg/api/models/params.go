@@ -109,6 +109,7 @@ type UpdateSettingsParams struct {
 	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
 	ReadersScanIgnoreSystem   *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
 	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty"`
+	AudioVolume               *int                `json:"audioVolume" validate:"omitempty,gte=0,lte=200"`
 	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`
 	LaunchGuardDelay          *float32            `json:"launchGuardDelay" validate:"omitempty,gte=0"`

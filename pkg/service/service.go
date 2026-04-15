@@ -207,6 +207,7 @@ func Start(
 	log.Info().Msgf("boot session UUID: %s", bootUUID)
 
 	player := audio.NewMalgoPlayer()
+	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
 
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)

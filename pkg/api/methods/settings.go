@@ -50,6 +50,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		RunZapScript:              env.State.RunZapScriptEnabled(),
 		DebugLogging:              env.Config.DebugLogging(),
 		AudioScanFeedback:         env.Config.AudioFeedback(),
+		AudioVolume:               env.Config.AudioVolume(),
 		ReadersAutoDetect:         env.Config.Readers().AutoDetect,
 		ReadersScanMode:           env.Config.ReadersScan().Mode,
 		ReadersScanExitDelay:      env.Config.ReadersScan().ExitDelay,
@@ -95,6 +96,7 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 
 	if env.Player != nil {
 		env.Player.ClearFileCache()
+		env.Player.SetVolume(float64(env.Config.AudioVolume()) / 100.0)
 	}
 
 	return NoContent{}, nil
@@ -108,6 +110,14 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+
+	// Reload config from disk before applying mutations so that external
+	// edits (e.g. user hand-editing config.toml) are not lost on save.
+	// TODO: Load+Set+Save is not atomic — concurrent handler calls can
+	// interleave. Needs a config-level transaction lock to fix properly.
+	if err := env.Config.Load(); err != nil {
+		log.Warn().Err(err).Msg("failed to reload config before settings update, using in-memory values")
 	}
 
 	if params.RunZapScript != nil {
@@ -128,6 +138,14 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if params.AudioScanFeedback != nil {
 		log.Debug().Bool("audioScanFeedback", *params.AudioScanFeedback).Msg("updating setting")
 		env.Config.SetAudioFeedback(*params.AudioScanFeedback)
+	}
+
+	if params.AudioVolume != nil {
+		log.Debug().Int("audioVolume", *params.AudioVolume).Msg("updating setting")
+		env.Config.SetAudioVolume(*params.AudioVolume)
+		if env.Player != nil {
+			env.Player.SetVolume(float64(*params.AudioVolume) / 100.0)
+		}
 	}
 
 	if params.ReadersAutoDetect != nil {
@@ -248,6 +266,12 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+
+	// Reload config from disk before applying mutations so that external
+	// edits (e.g. user hand-editing config.toml) are not lost on save.
+	if err := env.Config.Load(); err != nil {
+		log.Warn().Err(err).Msg("failed to reload config before playtime limits update, using in-memory values")
 	}
 
 	if params.Enabled != nil {

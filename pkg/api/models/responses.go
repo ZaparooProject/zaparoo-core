@@ -79,6 +79,7 @@ type SettingsResponse struct {
 	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
 	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
 	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
+	AudioVolume               int                `json:"audioVolume"`
 	RunZapScript              bool               `json:"runZapScript"`
 	DebugLogging              bool               `json:"debugLogging"`
 	AudioScanFeedback         bool               `json:"audioScanFeedback"`

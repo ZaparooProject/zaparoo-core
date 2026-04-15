@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -1577,4 +1578,135 @@ func BenchmarkConfig_Load(b *testing.B) {
 	for b.Loop() {
 		_ = cfg.Load()
 	}
+}
+
+func TestAudioVolume_Default(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewConfig(t.TempDir(), BaseDefaults)
+	require.NoError(t, err)
+
+	assert.Equal(t, 100, cfg.AudioVolume(), "default volume should be 100")
+}
+
+func TestAudioVolume_SetGet(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewConfig(t.TempDir(), BaseDefaults)
+	require.NoError(t, err)
+
+	cfg.SetAudioVolume(50)
+	assert.Equal(t, 50, cfg.AudioVolume())
+
+	cfg.SetAudioVolume(0)
+	assert.Equal(t, 0, cfg.AudioVolume())
+
+	cfg.SetAudioVolume(200)
+	assert.Equal(t, 200, cfg.AudioVolume(), "max boundary should work")
+
+	cfg.SetAudioVolume(300)
+	assert.Equal(t, 200, cfg.AudioVolume(), "values above 200 should be clamped")
+
+	cfg.SetAudioVolume(-10)
+	assert.Equal(t, 0, cfg.AudioVolume(), "negative values should be clamped to 0")
+}
+
+func TestAudioVolume_SaveLoadRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewConfig(t.TempDir(), BaseDefaults)
+	require.NoError(t, err)
+
+	cfg.SetAudioVolume(75)
+
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 75, cfg.AudioVolume(), "volume should persist after save/load")
+}
+
+func TestSave_PreservesExternalEdits(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+
+	// Save initial config
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	// Externally edit the file to add audio volume
+	cfgPath := filepath.Join(tempDir, CfgFile)
+	data, err := os.ReadFile(cfgPath) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+
+	// Add volume to the existing [audio] section by inserting after "scan_feedback"
+	content := strings.Replace(string(data), "scan_feedback = true", "scan_feedback = true\nvolume = 42", 1)
+	require.NotEqual(t, string(data), content, "replacement should have occurred")
+	err = os.WriteFile(cfgPath, []byte(content), 0o600) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+
+	// Reload to pick up external edits, then modify a different field
+	err = cfg.Load()
+	require.NoError(t, err)
+	assert.Equal(t, 42, cfg.AudioVolume(), "should have loaded external edit")
+
+	cfg.SetDebugLogging(true)
+
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	// Reload and verify both the API change and external edit are present
+	err = cfg.Load()
+	require.NoError(t, err)
+	assert.Equal(t, 42, cfg.AudioVolume(), "external volume edit should be preserved")
+	assert.True(t, cfg.DebugLogging(), "API change should be present")
+}
+
+func TestSave_ConfigHeader(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(tempDir, CfgFile)) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+
+	assert.Contains(t, string(data), "# Zaparoo Core configuration file.",
+		"saved config should contain header comment")
+}
+
+func TestLoad_WithComments(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+
+	// Write a config file with comments
+	cfgPath := filepath.Join(tempDir, CfgFile)
+	content := fmt.Sprintf(`# My custom comment
+config_schema = %d
+debug_logging = true
+
+# Audio settings
+[audio]
+volume = 80
+`, SchemaVersion)
+	err = os.WriteFile(cfgPath, []byte(content), 0o600)
+	require.NoError(t, err)
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	assert.True(t, cfg.DebugLogging())
+	assert.Equal(t, 80, cfg.AudioVolume())
 }
