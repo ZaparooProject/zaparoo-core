@@ -20,6 +20,7 @@
 package helpers
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -851,6 +852,55 @@ func TestGetPathInfo_VirtualPathNoPanic(t *testing.T) {
 				result := GetPathInfo(path)
 				t.Logf("Malformed path handled: %q → Filename=%q", path, result.Filename)
 			}, "Should not panic on malformed path: %s", path)
+		})
+	}
+}
+
+func TestResolveRelativePath(t *testing.T) {
+	t.Parallel()
+
+	exeDir := ExeDir()
+	if exeDir == "" {
+		t.Skip("ExeDir() returned empty, cannot test relative path resolution")
+	}
+
+	tests := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		{
+			name:     "empty string unchanged",
+			path:     "",
+			expected: "",
+		},
+		{
+			name:     "absolute path unchanged",
+			path:     "/usr/share/games",
+			expected: "/usr/share/games",
+		},
+		{
+			name:     "relative path resolved to ExeDir",
+			path:     filepath.Join("roms", "nes"),
+			expected: filepath.Join(exeDir, "roms", "nes"),
+		},
+		{
+			name:     "dot relative path resolved",
+			path:     "./games",
+			expected: filepath.Join(exeDir, "games"),
+		},
+		{
+			name:     "single filename resolved",
+			path:     "roms",
+			expected: filepath.Join(exeDir, "roms"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ResolveRelativePath(tt.path)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

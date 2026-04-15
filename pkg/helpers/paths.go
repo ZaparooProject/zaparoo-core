@@ -29,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
@@ -391,12 +392,13 @@ func PathToLaunchers(
 }
 
 func ExeDir() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return ""
-	}
+	return pathutil.ExeDir()
+}
 
-	return filepath.Dir(exe)
+// ResolveRelativePath resolves a path relative to ExeDir if it is not
+// absolute. Absolute and empty paths are returned unchanged.
+func ResolveRelativePath(path string) string {
+	return pathutil.ResolveRelativePath(path)
 }
 
 type PathInfo struct {

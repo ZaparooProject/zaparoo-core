@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -68,7 +69,7 @@ type LaunchersCustom struct {
 func (c *Instance) DefaultMediaDir() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Launchers.MediaDir
+	return pathutil.ResolveRelativePath(c.vals.Launchers.MediaDir)
 }
 
 func (c *Instance) LaunchersBeforeMediaStart() string {
@@ -243,8 +244,12 @@ func (c *Instance) IndexRoots() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	var roots []string
 	if c.vals.Launchers.MediaDir != "" {
-		return append([]string{c.vals.Launchers.MediaDir}, c.vals.Launchers.IndexRoot...)
+		roots = append(roots, pathutil.ResolveRelativePath(c.vals.Launchers.MediaDir))
 	}
-	return c.vals.Launchers.IndexRoot
+	for _, r := range c.vals.Launchers.IndexRoot {
+		roots = append(roots, pathutil.ResolveRelativePath(r))
+	}
+	return roots
 }
