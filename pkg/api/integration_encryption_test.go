@@ -30,6 +30,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -138,7 +139,8 @@ func pairAndDeriveKey(
 	require.NoError(t, err)
 
 	// Derive the same confirmation keys + pairing key the server will.
-	prk, err := hkdf.Extract(sha256.New, clientSessionKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientSessionKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, infoConfirmA, sha256.Size)
 	require.NoError(t, err)

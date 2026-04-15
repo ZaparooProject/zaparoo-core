@@ -33,6 +33,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/crypto"
@@ -393,7 +394,10 @@ func (m *PairingManager) finishSessionLocked(
 	}
 
 	// Derive confirmation keys + pairing key from the raw PAKE session key.
-	prk, err := hkdf.Extract(sha256.New, sess.sessionKey, nil)
+	// Use the concatenated PAKE wire messages as HKDF salt to bind key
+	// derivation to this specific handshake transcript.
+	salt := slices.Concat(sess.msgA, sess.msgB)
+	prk, err := hkdf.Extract(sha256.New, sess.sessionKey, salt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("hkdf extract: %w", err)
 	}

@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -103,7 +104,8 @@ func (h *pairingTestHarness) runHandshake(
 	clientSessionKey, err := clientPake.SessionKey()
 	require.NoError(t, err)
 
-	prk, err := hkdf.Extract(sha256.New, clientSessionKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientSessionKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -269,7 +271,8 @@ func TestWrongPIN_Rejected(t *testing.T) {
 	clientKey, err := wrongPake.SessionKey()
 	require.NoError(t, err)
 
-	prk, err := hkdf.Extract(sha256.New, clientKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -410,7 +413,8 @@ func TestPairFinish_ConcurrentCallsOneWins(t *testing.T) {
 	sessionKey, err := clientPake.SessionKey()
 	require.NoError(t, err)
 
-	prk, err := hkdf.Extract(sha256.New, sessionKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, sessionKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -495,7 +499,8 @@ func TestMaxClients_FinishSessionDefenseInDepth(t *testing.T) {
 	require.NoError(t, clientPake.Update(msgBInternal))
 	clientKey, err := clientPake.SessionKey()
 	require.NoError(t, err)
-	prk, err := hkdf.Extract(sha256.New, clientKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -568,7 +573,8 @@ func TestHTTPHandlers_FullFlow(t *testing.T) {
 	require.NoError(t, clientPake.Update(msgBInternal))
 	clientKey, err := clientPake.SessionKey()
 	require.NoError(t, err)
-	prk, err := hkdf.Extract(sha256.New, clientKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -671,7 +677,8 @@ func TestHandlePairFinish_AuditLogsHMACMismatch(t *testing.T) {
 	require.NoError(t, wrongPake.Update(msgBInternal))
 	clientKey, err := wrongPake.SessionKey()
 	require.NoError(t, err)
-	prk, err := hkdf.Extract(sha256.New, clientKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -743,7 +750,8 @@ func TestHandlePairFinish_AuditLogsExhaustion(t *testing.T) {
 	require.NoError(t, wrongPake.Update(msgBInternal))
 	clientKey, err := wrongPake.SessionKey()
 	require.NoError(t, err)
-	prk, err := hkdf.Extract(sha256.New, clientKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
