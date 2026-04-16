@@ -386,11 +386,29 @@ func GetFiles(
 		}
 
 		if d.IsDir() {
+			dirName := filepath.Base(p)
+			// Skip macOS metadata directories and hidden directories.
+			// __MACOSX contains Apple resource fork files that are not
+			// real archives. Dot-prefixed directories are OS metadata
+			// that never contain game ROMs. The walk root is exempt so
+			// that a user-configured dot-prefixed folder still works.
+			if p != path && (dirName == "__MACOSX" || dirName[0] == '.') {
+				return filepath.SkipDir
+			}
+
 			markerPath := filepath.Join(p, ".zaparooignore")
 			if _, statErr := statWithContext(ctx, markerPath); statErr == nil {
 				log.Info().Str("path", p).Msg("skipping directory with .zaparooignore marker")
 				return filepath.SkipDir
 			}
+			return nil
+		}
+
+		// Skip macOS AppleDouble resource fork files before the zip
+		// check — they carry valid-looking extensions (.zip etc.) but
+		// are not real archives.
+		baseName := filepath.Base(p)
+		if len(baseName) >= 2 && baseName[0] == '.' && baseName[1] == '_' {
 			return nil
 		}
 
@@ -441,13 +459,25 @@ func GetFiles(
 			Msg("directory walk found entries but no files matched any launcher")
 	}
 
-	if walkElapsed > 15*time.Second {
-		log.Warn().
-			Str("system", systemID).
-			Str("path", path).
-			Int64("entriesScanned", scanned).
-			Dur("elapsed", walkElapsed).
-			Msg("directory walk took longer than expected - large directory or slow storage")
+	// Warn when the walk rate is slow rather than when absolute elapsed
+	// time is high. A 33K-entry directory legitimately takes ~19s on
+	// MiSTer ARM + USB 2.0; only warn when the filesystem is genuinely
+	// sluggish (< 500 entries/sec sustained over at least 5 seconds).
+	const (
+		minSlowWalkElapsed = 5 * time.Second
+		minEntriesPerSec   = 500.0
+	)
+	if walkElapsed > minSlowWalkElapsed && scanned > 0 {
+		rate := float64(scanned) / walkElapsed.Seconds()
+		if rate < minEntriesPerSec {
+			log.Warn().
+				Str("system", systemID).
+				Str("path", path).
+				Int64("entriesScanned", scanned).
+				Dur("elapsed", walkElapsed).
+				Float64("entriesPerSec", rate).
+				Msg("directory walk is slow - possible stale mount or degraded storage")
+		}
 	}
 
 	return results, nil

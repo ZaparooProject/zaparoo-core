@@ -301,6 +301,9 @@ func GenerateMediaDB(
 		defer db.MediaDB.BackgroundOperationDone()
 		defer debug.FreeOSMemory()
 
+		var lastNotifTime time.Time
+		const notifThrottleInterval = 250 * time.Millisecond
+
 		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			var desc string
 			switch {
@@ -323,6 +326,8 @@ func GenerateMediaDB(
 					}
 				}
 			}
+
+			// Always update in-memory status for polling clients.
 			statusInstance.set(indexingStatusVals{
 				indexing:    true,
 				totalSteps:  status.Total,
@@ -330,6 +335,19 @@ func GenerateMediaDB(
 				currentDesc: desc,
 				totalFiles:  status.Files,
 			})
+
+			// Throttle WebSocket push notifications to prevent
+			// channel overflow during bursts (e.g. resume skipping
+			// many completed systems). Phase changes and the final
+			// step are always sent so clients see start/end.
+			now := time.Now()
+			isPhaseChange := status.Phase == mediascanner.PhaseDiscovering ||
+				status.Phase == mediascanner.PhaseInitializing
+			isFinalStep := status.Step == status.Total
+			if !isPhaseChange && !isFinalStep && now.Sub(lastNotifTime) < notifThrottleInterval {
+				return
+			}
+			lastNotifTime = now
 
 			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 				Exists:             false,
