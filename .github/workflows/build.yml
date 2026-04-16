@@ -119,11 +119,13 @@ jobs:
             arch: arm
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - id: zaparooapprel
-        uses: pozetroninc/github-action-get-latest-release@2a61c339ea7ef0a336d1daa35ef0cb1418e7676c # v0.8.0
-        with:
-          repository: ZaparooProject/zaparoo-app
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Get latest Zaparoo App release tag
+        id: zaparooapprel
+        run: |
+          RELEASE=$(gh api repos/ZaparooProject/zaparoo-app/releases/latest --jq '.tag_name')
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Get latest Zaparoo App web build
         run: |
           APP_TAG="${{ steps.zaparooapprel.outputs.release }}"
@@ -147,15 +149,16 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install Task
-        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download -R go-task/task -p 'task_linux_amd64.tar.gz' -O /tmp/task.tar.gz
+          sudo tar -xzf /tmp/task.tar.gz -C /usr/local/bin task
+          rm /tmp/task.tar.gz
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker CLI
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
         with:
           use: true
-          install: true
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
@@ -179,7 +182,7 @@ jobs:
         run: APP_VERSION=${VERSION} task ${{matrix.platform}}:build-${{matrix.arch}}
       - name: Upload unsigned Windows exe
         if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: unsigned-windows-exe-${{matrix.arch}}
           path: _build/windows_${{matrix.arch}}/Zaparoo.exe
@@ -191,14 +194,14 @@ jobs:
              "_build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe"
       - name: Upload unsigned Windows installer
         if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: unsigned-windows-installer-${{matrix.arch}}
           path: _build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe
           retention-days: 30
       - name: Upload Windows distribution files
         if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-dist-${{matrix.arch}}
           path: |
@@ -241,7 +244,7 @@ jobs:
           gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${PKG_VERSION}-1-${PKG_ARCH}.pkg.tar.zst" --clobber
       - name: Upload Batocera binary as artifact
         if: matrix.platform == 'batocera'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: batocera-binary-${{matrix.arch}}
           path: _build/batocera_${{matrix.arch}}/zaparoo
@@ -276,47 +279,47 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
       - name: Download unsigned exe (amd64)
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: unsigned-windows-exe-amd64
           path: _unsigned/amd64/
       - name: Download unsigned exe (arm64)
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: unsigned-windows-exe-arm64
           path: _unsigned/arm64/
       - name: Download unsigned exe (386)
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: unsigned-windows-exe-386
           path: _unsigned/386/
       - name: Download unsigned installer (amd64)
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: unsigned-windows-installer-amd64
           path: _unsigned/amd64/
       - name: Download unsigned installer (arm64)
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: unsigned-windows-installer-arm64
           path: _unsigned/arm64/
       - name: Download unsigned installer (386)
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: unsigned-windows-installer-386
           path: _unsigned/386/
       - name: Download distribution files (amd64)
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: windows-dist-amd64
           path: _dist/amd64/
       - name: Download distribution files (arm64)
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: windows-dist-arm64
           path: _dist/arm64/
       - name: Download distribution files (386)
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: windows-dist-386
           path: _dist/386/
@@ -329,7 +332,7 @@ jobs:
           done
       - name: Upload signing bundle
         id: upload-bundle
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: unsigned-windows-bundle
           path: _signing_bundle/
@@ -400,22 +403,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zstd
       - name: Install Task
-        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download -R go-task/task -p 'task_linux_amd64.tar.gz' -O /tmp/task.tar.gz
+          sudo tar -xzf /tmp/task.tar.gz -C /usr/local/bin task
+          rm /tmp/task.tar.gz
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Download Batocera amd64 binary
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: batocera-binary-amd64
           path: _build/batocera_amd64/
       - name: Download Batocera arm64 binary
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: batocera-binary-arm64
           path: _build/batocera_arm64/
       - name: Download Batocera arm binary
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: batocera-binary-arm
           path: _build/batocera_arm/
