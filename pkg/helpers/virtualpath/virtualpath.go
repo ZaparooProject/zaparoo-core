@@ -174,8 +174,8 @@ func ParseVirtualPathStr(virtualPath string) (VirtualPathResult, error) {
 	}
 
 	if len(idAndName) == 2 {
-		// Remove trailing slash
-		namePart := strings.TrimSuffix(idAndName[1], "/")
+		// Remove trailing slashes
+		namePart := strings.TrimRight(idAndName[1], "/")
 		if namePart != "" {
 			decoded, err := decodePathComponent(namePart)
 			if err != nil {

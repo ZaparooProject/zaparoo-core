@@ -1,0 +1,2 @@
+go test fuzz v1
+string("https://000000/0000%80")

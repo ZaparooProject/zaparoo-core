@@ -74,17 +74,19 @@ func DecodeURIIfNeeded(uri string) string {
 
 	// Handle Zaparoo custom virtual paths
 	if shared.IsCustomScheme(schemeLower) {
-		result, err := virtualpath.ParseVirtualPathStr(uri)
-		if err != nil {
-			log.Debug().Err(err).Str("uri", uri).Msg("failed to parse custom scheme URI, using as-is")
-			return uri
+		// Decode each path segment independently to preserve unencoded
+		// slash structure while decoding percent-encoded characters.
+		rest := strings.TrimRight(parsed.Rest, "/")
+		segments := strings.Split(rest, "/")
+		for i, seg := range segments {
+			decoded, err := url.PathUnescape(seg)
+			if err == nil && utf8.ValidString(decoded) {
+				// Re-encode any slashes from %2F so they don't become
+				// structural separators on subsequent passes
+				segments[i] = strings.ReplaceAll(decoded, "/", "%2F")
+			}
 		}
-		// Reconstruct with decoded name
-		reconstructed := result.Scheme + "://" + result.ID
-		if result.Name != "" {
-			reconstructed += "/" + result.Name
-		}
-		// Query params preserved (fragments are kept as part of query if present)
+		reconstructed := parsed.Scheme + "://" + strings.Join(segments, "/")
 		if parsed.Query != "" {
 			reconstructed += "?" + parsed.Query
 		}
@@ -187,9 +189,9 @@ func DecodeURIIfNeeded(uri string) string {
 		decodedPath := pathPart
 		if pathPart != "" {
 			decoded, err := url.PathUnescape(pathPart)
-			if err == nil {
+			if err == nil && utf8.ValidString(decoded) {
 				decodedPath = decoded
-			} else {
+			} else if err != nil {
 				log.Debug().Err(err).Str("uri", uri).Msg("failed to decode web URI path, using as-is")
 			}
 		}
@@ -291,7 +293,7 @@ func FilenameFromPath(p string) string {
 					}
 					// Decode URL encoding and return with extension intact
 					decoded, err := url.PathUnescape(lastSegment)
-					if err == nil {
+					if err == nil && utf8.ValidString(decoded) {
 						return decoded
 					}
 				}
@@ -306,6 +308,9 @@ func FilenameFromPath(p string) string {
 	// Replace backslashes with forward slashes to handle Windows paths on any OS
 	normalizedPath := strings.ReplaceAll(p, "\\", "/")
 	b := path.Base(normalizedPath)
+	if b == "/" || b == "." {
+		return ""
+	}
 	e := path.Ext(normalizedPath)
 	if !IsValidExtension(e) {
 		e = ""

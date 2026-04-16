@@ -39,7 +39,7 @@ func TestDecodeURIIfNeeded(t *testing.T) {
 		{
 			name:     "steam_with_url_encoding",
 			input:    "steam://123/Super%20Hot%2FCold",
-			expected: "steam://123/Super Hot/Cold",
+			expected: "steam://123/Super Hot%2FCold",
 		},
 		{
 			name:     "kodi_movie_with_url_encoding",
