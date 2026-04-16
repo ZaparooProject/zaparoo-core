@@ -509,7 +509,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	// When system not found, we clear state and then do fresh start
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()            // Clear after detecting missing system
 	mockMediaDB.On("SetIndexingStatus", "").Return(nil).Once()               // Clear status after missing system
-	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Maybe()   // Not called; present for defensive coverage
+	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Maybe()   // Not called; defensive coverage
 	mockMediaDB.On("SetIndexingSystems", []string{"nes"}).Return(nil).Once() // Set current systems for fresh start
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()        // Set running for fresh start
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()            // Clear for fresh start

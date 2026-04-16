@@ -731,7 +731,12 @@ func sqlSearchMediaBySecondarySlug(
 
 	tagClauses, tagArgs := BuildTagFilterSQL(tags)
 	whereConditions := make([]string, 0, 2+len(tagClauses))
-	whereConditions = append(whereConditions, "Systems.SystemID = ?", "MediaTitles.SecondarySlug = ?", "Media.IsMissing = 0")
+	whereConditions = append(
+		whereConditions,
+		"Systems.SystemID = ?",
+		"MediaTitles.SecondarySlug = ?",
+		"Media.IsMissing = 0",
+	)
 	whereConditions = append(whereConditions, tagClauses...)
 	args = append(args, tagArgs...)
 
