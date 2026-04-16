@@ -2111,3 +2111,165 @@ func TestNewNamesIndex_PausesAndResumes(t *testing.T) {
 		t.Fatal("indexing did not complete after resume")
 	}
 }
+
+// TestGetFiles_SkipsMacOSDirectories verifies that __MACOSX directories are
+// completely skipped during the directory walk, preventing wasted I/O on
+// Apple resource fork files that masquerade as valid zip archives.
+func TestGetFiles_SkipsMacOSDirectories(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+
+	// Create a real game file
+	require.NoError(t, os.WriteFile(filepath.Join(rootDir, "game.nes"), []byte("data"), 0o600))
+
+	// Create a __MACOSX directory with a fake .nes file inside
+	macDir := filepath.Join(rootDir, "__MACOSX")
+	require.NoError(t, os.MkdirAll(macDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(macDir, "._game.nes"), []byte("apple"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(macDir, "ghost.nes"), []byte("apple"), 0o600))
+
+	launcher := platforms.Launcher{
+		ID:         "nes-launcher",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{rootDir},
+		Extensions: []string{".nes"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir)
+	require.NoError(t, err)
+
+	assert.Len(t, files, 1, "should only find the real game file")
+	assert.Equal(t, filepath.Join(rootDir, "game.nes"), files[0])
+}
+
+// TestGetFiles_SkipsDotDirectories verifies that hidden directories (starting
+// with .) are skipped during the walk. These include .Spotlight-V100, .Trashes,
+// .fseventsd, etc.
+func TestGetFiles_SkipsDotDirectories(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+
+	// Create a real game file
+	require.NoError(t, os.WriteFile(filepath.Join(rootDir, "zelda.nes"), []byte("data"), 0o600))
+
+	// Create hidden directories with files that would match
+	for _, dir := range []string{".Spotlight-V100", ".Trashes", ".fseventsd"} {
+		hiddenDir := filepath.Join(rootDir, dir)
+		require.NoError(t, os.MkdirAll(hiddenDir, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(hiddenDir, "fake.nes"), []byte("data"), 0o600))
+	}
+
+	launcher := platforms.Launcher{
+		ID:         "nes-launcher",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{rootDir},
+		Extensions: []string{".nes"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir)
+	require.NoError(t, err)
+
+	assert.Len(t, files, 1, "should only find the real game file, not files in hidden dirs")
+	assert.Equal(t, filepath.Join(rootDir, "zelda.nes"), files[0])
+}
+
+// TestGetFiles_SkipsAppleDoubleFiles verifies that macOS AppleDouble resource
+// fork files (._Something.zip) are skipped before the zip check, preventing
+// wasted I/O on files that look like zip archives but are not.
+func TestGetFiles_SkipsAppleDoubleFiles(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+
+	// Create a real zip with a game inside
+	zipPath := filepath.Join(rootDir, "games.zip")
+	zipFile, err := os.Create(zipPath) //nolint:gosec // test file in t.TempDir()
+	require.NoError(t, err)
+	w := zip.NewWriter(zipFile)
+	fw, createErr := w.Create("game.nes")
+	require.NoError(t, createErr)
+	_, writeErr := fw.Write([]byte("data"))
+	require.NoError(t, writeErr)
+	require.NoError(t, w.Close())
+	require.NoError(t, zipFile.Close())
+
+	// Create an AppleDouble resource fork file with .zip extension.
+	// This is not a valid zip and would cause an error if opened.
+	require.NoError(t, os.WriteFile(filepath.Join(rootDir, "._games.zip"), []byte("apple-resource-fork"), 0o600))
+
+	launcher := platforms.Launcher{
+		ID:         "nes-launcher",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{rootDir},
+		Extensions: []string{".nes"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir)
+	require.NoError(t, err)
+
+	// Should find only the game inside the real zip, not the ._games.zip
+	assert.Len(t, files, 1, "should find only the game inside the real zip")
+	assert.Contains(t, files[0], "game.nes")
+}
