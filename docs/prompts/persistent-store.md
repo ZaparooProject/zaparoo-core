@@ -1,10 +1,10 @@
 # Persistent MediaDB
 
-This document serves a planning document for agent work around a new feature. Please use and update this document as a living requirements spec.
+This document serves as a planning document for agent work around a new feature. Please use and update this document as a living requirements spec.
 
 ## Goal
 
-Media indexing truncates existing records for speed. The primary bottleneck of our indexing implementation is that a primary build target is a very low spec ARM hardware patform with _very slow_ read/write to SD.
+Media indexing truncates existing records for speed. The primary bottleneck of our indexing implementation is that a primary build target is a very low-spec ARM hardware platform with _very slow_ read/write to SD.
 
 Many strides were made to assist this indexing speed by using maps in memory to track DBIDs. This allows checks against existing records to not require DB reads or complex insert conditions. It also unlocked batching which has been very useful.
 

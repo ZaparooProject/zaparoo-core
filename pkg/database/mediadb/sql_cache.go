@@ -72,11 +72,10 @@ func sqlPopulateSystemTagsCache(ctx context.Context, db *sql.DB) error {
 			t.Tag as Tag
 		FROM Systems s
 		JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
-		JOIN Media m ON mtl.DBID = m.MediaTitleDBID
 		JOIN MediaTitleTags mtt ON mtl.DBID = mtt.MediaTitleDBID
 		JOIN Tags t ON mtt.TagDBID = t.DBID
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		WHERE m.IsMissing = 0
+		WHERE EXISTS(SELECT 1 FROM Media m WHERE m.MediaTitleDBID = mtl.DBID AND m.IsMissing = 0)
 		ORDER BY SystemDBID, TagType, Tag`
 
 	populateStmt, err := db.PrepareContext(ctx, populateSQL)
@@ -181,11 +180,10 @@ func sqlPopulateSystemTagsCacheForSystems(
 			t.Tag as Tag
 		FROM Systems s
 		JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
-		JOIN Media m ON mtl.DBID = m.MediaTitleDBID
 		JOIN MediaTitleTags mtt ON mtl.DBID = mtt.MediaTitleDBID
 		JOIN Tags t ON mtt.TagDBID = t.DBID
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		WHERE s.DBID IN (%s) AND m.IsMissing = 0
+		WHERE s.DBID IN (%s) AND EXISTS(SELECT 1 FROM Media m WHERE m.MediaTitleDBID = mtl.DBID AND m.IsMissing = 0)
 		ORDER BY SystemDBID, TagType, Tag`, placeholders, placeholders)
 
 	populateStmt, err := db.PrepareContext(ctx, populateSQL)

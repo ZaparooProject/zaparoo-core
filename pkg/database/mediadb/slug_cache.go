@@ -316,6 +316,7 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 			JOIN Tags t ON smt.TagDBID = t.DBID
 			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
 			WHERE tt.Type IN ('year', 'players')
+			AND sibling.IsMissing = 0
 			UNION
 			SELECT DISTINCT t.Tag, t.TypeDBID
 			FROM Target

@@ -1397,8 +1397,6 @@ func (db *MediaDB) SystemIndexed(system *systemdefs.System) bool {
 
 // IndexedSystems returns all systems indexed in the media database.
 func (db *MediaDB) IndexedSystems() ([]string, error) {
-	// TODO: what is a JBONE??
-	// JBONE: return string map of Systems.Key, Systems.Indexed
 	var systems []string
 	if db.sql == nil {
 		return systems, ErrNullSQL
@@ -1827,10 +1825,16 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 }
 
 func (db *MediaDB) BulkSetMediaMissing(dbids map[int]struct{}) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
 	return sqlBulkSetMediaMissing(db.ctx, db.sql, dbids)
 }
 
 func (db *MediaDB) ResetMissingFlags(systemDBIDs []int) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
 	return sqlResetMissingFlags(db.ctx, db.sql, systemDBIDs)
 }
 

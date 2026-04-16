@@ -1817,6 +1817,8 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("GetDBPath").Return("/tmp/mock-media.db").Maybe()
 	mockMediaDB.On("DropSecondaryIndexes").Return(nil).Maybe()
+	mockMediaDB.On("BulkSetMediaMissing", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("ResetMissingFlags", mock.Anything).Return(nil).Maybe()
 	return mockMediaDB
 }
 

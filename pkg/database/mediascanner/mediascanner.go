@@ -505,7 +505,6 @@ func NewNamesIndex(
 	update func(IndexStatus),
 	pauser *syncutil.Pauser,
 ) (int, error) {
-	// JBONE: this is the main entry point
 	db := fdb.MediaDB
 	indexStartTime := time.Now()
 
@@ -721,11 +720,11 @@ func NewNamesIndex(
 	})
 
 	// Build any-scanner list once — launchers with no SystemID run for every system.
-	var anyScanners []platforms.Launcher
-	for _, l := range helpers.GlobalLauncherCache.GetAllLaunchers() {
-		if l.SystemID == "" && l.Scanner != nil {
-			log.Info().Str("launcher", fmt.Sprintf("%#v", l)).Msg("ANY SCANNER FOUND")
-			anyScanners = append(anyScanners, l)
+	var anyScanners []*platforms.Launcher
+	allLaunchers := helpers.GlobalLauncherCache.GetAllLaunchers()
+	for i := range allLaunchers {
+		if allLaunchers[i].SystemID == "" && allLaunchers[i].Scanner != nil {
+			anyScanners = append(anyScanners, &allLaunchers[i])
 		}
 	}
 
@@ -1050,8 +1049,6 @@ func NewNamesIndex(
 			log.Error().Err(setErr).Msg("failed to set last indexed system after final commit")
 		}
 		batchStarted = false
-		filesInBatch = 0
-		systemsInBatch = 0
 	}
 
 	status.Step++
@@ -1075,7 +1072,6 @@ func NewNamesIndex(
 		if err != nil {
 			return 0, fmt.Errorf("failed to commit final transaction: %w", err)
 		}
-		batchStarted = false
 	}
 
 	// Flush accumulated missing-media markers in a single bulk update.

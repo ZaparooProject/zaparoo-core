@@ -366,7 +366,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 	launchers = append(launchers, getRetroBatLaunchers()...)
 
-	// DEV DEBUG
+	// @BossRighteous convenience system while I work on indexing and scrapers
 	launchers = append(launchers, deverr.GetDevErrLaunchers()...)
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
