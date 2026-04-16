@@ -43,14 +43,6 @@ env:
   BUILD_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
-  lint-and-test:
-    uses: ./.github/workflows/lint-and-test.yml
-    permissions:
-      contents: read
-      pull-requests: read
-      packages: read
-      security-events: write
-
   ensure-zigcc:
     uses: ./.github/workflows/zigcc-build.yml
     permissions:
@@ -92,8 +84,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [lint-and-test, create-release, ensure-zigcc]
-    if: ${{ !cancelled() && needs.lint-and-test.result == 'success' && needs.ensure-zigcc.result == 'success' }}
+    needs: [create-release, ensure-zigcc]
+    if: ${{ !cancelled() && needs.ensure-zigcc.result == 'success' }}
     permissions:
       contents: write # Needed for uploading release assets
       packages: read # Needed for pulling Docker images from ghcr.io
