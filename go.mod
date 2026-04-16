@@ -6,7 +6,7 @@ require (
 	fyne.io/systray v1.11.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/ZaparooProject/go-pn532 v0.21.1
+	github.com/ZaparooProject/go-pn532 v0.22.0
 	github.com/ZaparooProject/go-zapscript v0.7.1
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
@@ -55,7 +55,7 @@ require (
 	golang.design/x/clipboard v0.7.1
 	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa
 	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.42.0
+	golang.org/x/sys v0.43.0
 	golang.org/x/text v0.35.0
 	golang.org/x/time v0.14.0
 	gopkg.in/ini.v1 v1.67.1
@@ -134,6 +134,6 @@ require (
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/term v0.41.0 // indirect
-	periph.io/x/conn/v3 v3.7.2 // indirect
+	periph.io/x/conn/v3 v3.7.3 // indirect
 	periph.io/x/host/v3 v3.8.5 // indirect
 )
