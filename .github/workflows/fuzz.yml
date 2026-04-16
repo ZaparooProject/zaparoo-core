@@ -35,7 +35,12 @@ jobs:
           cache: true
 
       - name: Set up Task
-        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2
+        run: |
+          gh release download -R go-task/task -p 'task_linux_amd64.tar.gz' -O /tmp/task.tar.gz
+          sudo tar -xzf /tmp/task.tar.gz -C /usr/local/bin task
+          rm /tmp/task.tar.gz
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install system dependencies
         uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
@@ -53,7 +58,7 @@ jobs:
 
       - name: Upload crash corpus
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: fuzz-crashes
           path: "**/testdata/fuzz/**"
