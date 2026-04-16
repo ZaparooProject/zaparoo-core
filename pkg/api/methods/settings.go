@@ -39,6 +39,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	readersConnect := make([]models.ReaderConnection, 0, len(connectCfg))
 	for _, rc := range connectCfg {
 		readersConnect = append(readersConnect, models.ReaderConnection{
+			Enabled:  rc.Enabled,
 			Driver:   rc.Driver,
 			Path:     rc.Path,
 			IDSource: rc.IDSource,
@@ -203,6 +204,7 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		connections := make([]config.ReadersConnect, 0, len(*params.ReadersConnect))
 		for _, rc := range *params.ReadersConnect {
 			connections = append(connections, config.ReadersConnect{
+				Enabled:  rc.Enabled,
 				Driver:   rc.Driver,
 				Path:     rc.Path,
 				IDSource: rc.IDSource,

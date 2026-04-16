@@ -22,9 +22,12 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package config
 
 import (
+	"path/filepath"
 	"testing"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestConnectionStringNormalization(t *testing.T) {
@@ -349,6 +352,86 @@ func TestIsDriverAutoDetectEnabledNormalization(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestReadersConnect_EnabledRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	memFs := afero.NewMemMapFs()
+	configDir := "/config"
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, memFs)
+	require.NoError(t, err)
+
+	// Set connections with mixed enabled states
+	cfg.SetReaderConnections([]ReadersConnect{
+		{Driver: "pn532", Path: "/dev/ttyUSB0"},
+		{Driver: "externaldrive", Enabled: boolPtr(true)},
+		{Driver: "libnfc", Enabled: boolPtr(false)},
+	})
+
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	readers := cfg.Readers().Connect
+	require.Len(t, readers, 3)
+
+	assert.Nil(t, readers[0].Enabled, "nil should survive round-trip")
+	assert.Equal(t, "pn532", readers[0].Driver)
+
+	require.NotNil(t, readers[1].Enabled)
+	assert.True(t, *readers[1].Enabled, "explicit true should survive round-trip")
+	assert.Equal(t, "externaldrive", readers[1].Driver)
+
+	require.NotNil(t, readers[2].Enabled)
+	assert.False(t, *readers[2].Enabled, "explicit false should survive round-trip")
+	assert.Equal(t, "libnfc", readers[2].Driver)
+}
+
+func TestReadersConnect_EnabledFromTOML(t *testing.T) {
+	t.Parallel()
+
+	memFs := afero.NewMemMapFs()
+	configDir := "/config"
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, memFs)
+	require.NoError(t, err)
+
+	// Write config with enabled = true in [[readers.connect]] (matches docs)
+	cfgPath := filepath.Join(configDir, CfgFile)
+	content := `config_schema = 1
+
+[readers]
+auto_detect = true
+
+[[readers.connect]]
+driver = "externaldrive"
+enabled = true
+
+[readers.scan]
+mode = 'tap'
+`
+	err = afero.WriteFile(memFs, cfgPath, []byte(content), 0o600)
+	require.NoError(t, err)
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	readers := cfg.Readers().Connect
+	require.Len(t, readers, 1)
+	assert.Equal(t, "externaldrive", readers[0].Driver)
+	require.NotNil(t, readers[0].Enabled, "enabled should be parsed from TOML")
+	assert.True(t, *readers[0].Enabled)
+
+	// Save and verify enabled survives
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	saved, err := afero.ReadFile(memFs, cfgPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(saved), "enabled = true",
+		"enabled = true should survive Load/Save round-trip")
 }
 
 func boolPtr(b bool) *bool {

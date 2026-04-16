@@ -93,9 +93,16 @@ type ReaderWriteCancelParams struct {
 }
 
 type ReaderConnection struct {
+	Enabled  *bool  `json:"enabled,omitempty"`
 	Driver   string `json:"driver" validate:"required,min=1"`
 	Path     string `json:"path"`
 	IDSource string `json:"idSource,omitempty"`
+}
+
+// IsEnabled returns whether this connection is enabled.
+// nil (omitted) and true both mean enabled; only explicit false disables.
+func (r ReaderConnection) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
 }
 
 type UpdateSettingsParams struct {

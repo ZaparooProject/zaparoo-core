@@ -23,12 +23,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -670,6 +673,66 @@ func TestReaderErrorRecovery_PrevTokenPreservation(t *testing.T) {
 				"prevToken should match expected value after Process")
 		})
 	}
+}
+
+// TestConnectReaders_SkipsDisabledEntries verifies that connectReaders
+// does not attempt to open readers whose Enabled field is explicitly false.
+func TestConnectReaders_SkipsDisabledEntries(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	enabledReader := mocks.NewMockReader()
+	enabledReader.On("Metadata").Return(readers.DriverMetadata{
+		ID:             "pn532",
+		DefaultEnabled: true,
+	})
+	enabledReader.On("IDs").Return([]string{"pn532"})
+	enabledReader.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	enabledReader.On("ReaderID").Return("pn532-abc").Maybe()
+	enabledReader.On("Connected").Return(true).Maybe()
+	enabledReader.On("Path").Return("/dev/ttyUSB0").Maybe()
+	enabledReader.On("Info").Return("PN532").Maybe()
+	enabledReader.On("Capabilities").Return([]readers.Capability{}).Maybe()
+
+	mockPlatform.On("SupportedReaders", mock.Anything).Return([]readers.Reader{enabledReader})
+
+	f := false
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetReaderConnections([]config.ReadersConnect{
+		{Driver: "pn532", Path: "/dev/ttyUSB0"},
+		{Driver: "pn532", Path: "/dev/ttyUSB1", Enabled: &f},
+	})
+
+	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+
+	iq := make(chan readers.Scan, 10)
+	err = connectReaders(mockPlatform, cfg, st, iq, nil)
+	require.NoError(t, err)
+
+	// The enabled reader should have been opened with the first connection
+	enabledReader.AssertCalled(t, "Open",
+		config.ReadersConnect{Driver: "pn532", Path: "/dev/ttyUSB0"},
+		mock.Anything, mock.Anything,
+	)
+
+	// The disabled connection should NOT have triggered an Open call
+	enabledReader.AssertNotCalled(t, "Open",
+		config.ReadersConnect{Driver: "pn532", Path: "/dev/ttyUSB1", Enabled: &f},
+		mock.Anything, mock.Anything,
+	)
 }
 
 // TestReaderErrorRecovery_FullSequence simulates the complete sequence from
