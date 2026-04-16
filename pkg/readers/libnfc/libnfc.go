@@ -290,7 +290,7 @@ func (r *Reader) Close() error {
 	r.pnd = nil
 	r.mu.Unlock()
 
-	log.Debug().Msgf("closing device: %s", r.conn)
+	log.Debug().Msgf("closing device: %s", r.conn.ConnectionString())
 	err := pnd.Close()
 	if err != nil {
 		return fmt.Errorf("failed to close NFC device: %w", err)

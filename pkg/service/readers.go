@@ -77,9 +77,13 @@ func connectReaders(
 	}
 
 	for _, device := range cfg.Readers().Connect {
+		if !device.IsEnabled() {
+			log.Debug().Msgf("config device disabled, skipping: %s", device.ConnectionString())
+			continue
+		}
 		if !isPathConnected(rs, device.Path) &&
 			!helpers.Contains(toConnectStrs(), device.ConnectionString()) {
-			log.Debug().Msgf("config device not connected, adding: %s", device)
+			log.Debug().Msgf("config device not connected, adding: %s", device.ConnectionString())
 			toConnect = append(toConnect, toConnectDevice{
 				connectionString: device.ConnectionString(),
 				device:           device,
@@ -128,14 +132,14 @@ func connectReaders(
 					normalizedIDs[i] = readers.NormalizeDriverID(id)
 				}
 				if helpers.Contains(normalizedIDs, rt) {
-					log.Debug().Msgf("connecting to reader: %s", device)
+					log.Debug().Msgf("connecting to reader: %s", device.connectionString)
 					err := r.Open(device.device, iq, readers.OpenOpts{})
 					if err != nil {
 						log.Warn().Msgf("error opening reader: %s", err)
 						continue
 					}
 					st.SetReader(r)
-					log.Info().Msgf("opened reader: %s", device)
+					log.Info().Msgf("opened reader: %s", device.connectionString)
 					break
 				}
 			}

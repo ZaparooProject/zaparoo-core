@@ -1301,6 +1301,7 @@ None.
 | driver   | string | Yes      | Reader driver type (e.g., "pn532uart", "acr122pcsc"). |
 | path     | string | Yes      | Path or address for the reader connection.       |
 | idSource | string | No       | Source for the reader ID.                        |
+| enabled  | bool   | No       | Whether the connection is enabled. Defaults to true if omitted. |
 
 #### Example
 

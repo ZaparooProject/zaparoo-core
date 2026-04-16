@@ -57,9 +57,16 @@ type ScanLaunchGuard struct {
 }
 
 type ReadersConnect struct {
+	Enabled  *bool  `toml:"enabled,omitempty"`
 	Driver   string `toml:"driver"`
 	Path     string `toml:"path,omitempty"`
 	IDSource string `toml:"id_source,omitempty"`
+}
+
+// IsEnabled returns whether this connection is enabled.
+// nil (omitted) and true both mean enabled; only explicit false disables.
+func (r ReadersConnect) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
 }
 
 func (r ReadersConnect) ConnectionString() string {
