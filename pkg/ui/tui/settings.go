@@ -703,7 +703,7 @@ func buildReaderEditPage(
 		if !enabledVal {
 			f := false
 			reader.Enabled = &f
-		} else if isNew {
+		} else if reader.Enabled != nil && !*reader.Enabled {
 			reader.Enabled = nil
 		}
 

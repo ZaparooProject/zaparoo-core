@@ -354,6 +354,39 @@ func TestIsDriverAutoDetectEnabledNormalization(t *testing.T) {
 	}
 }
 
+func TestReadersConnect_IsEnabled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		rc       ReadersConnect
+		expected bool
+	}{
+		{
+			name:     "nil enabled means enabled (default)",
+			rc:       ReadersConnect{Driver: "pn532"},
+			expected: true,
+		},
+		{
+			name:     "explicit true means enabled",
+			rc:       ReadersConnect{Driver: "pn532", Enabled: boolPtr(true)},
+			expected: true,
+		},
+		{
+			name:     "explicit false means disabled",
+			rc:       ReadersConnect{Driver: "pn532", Enabled: boolPtr(false)},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.rc.IsEnabled())
+		})
+	}
+}
+
 func TestReadersConnect_EnabledRoundTrip(t *testing.T) {
 	t.Parallel()
 
