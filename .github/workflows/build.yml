@@ -48,6 +48,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      packages: read
+      security-events: write
 
   ensure-zigcc:
     uses: ./.github/workflows/zigcc-build.yml
