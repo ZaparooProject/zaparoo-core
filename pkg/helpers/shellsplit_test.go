@@ -310,6 +310,44 @@ func TestSplitCommand(t *testing.T) {
 			input: `echo "hello"""`,
 			want:  []string{"echo", `hello"`},
 		},
+		// Windows DuckStation-style launcher: reporter wrapped [[media_path]] in '"..."' expecting
+		// the double-quotes to survive into PowerShell -ArgumentList. SplitCommand correctly
+		// preserves the literal " chars (single-quote group keeps them), but PowerShell
+		// subsequently evaluates "D:\..." as a double-quoted string literal and strips the outer
+		// ", leaving an unquoted path that Windows re-splits on spaces — yielding "Unknown
+		// parameter: '-'". This case pins the current SplitCommand output so any future change
+		// must explicitly acknowledge the downstream quoting impact.
+		{
+			name: "Windows PS Start-Process: single-quoted double-quoted path (current behaviour)",
+			input: `powershell -Command Start-Process -FilePath duckstation.exe ` +
+				`-ArgumentList '"D:\path with spaces\game.bin"'`,
+			want: []string{
+				"powershell", "-Command", "Start-Process", "-FilePath", "duckstation.exe",
+				"-ArgumentList", `"D:\path with spaces\game.bin"`,
+			},
+		},
+		// Fix 1: drop PowerShell entirely. Direct exe with a double-quoted path. SplitCommand
+		// strips the " group markers and returns the bare path as a single token; Go re-quotes
+		// it correctly for Windows argv parsing, so the program receives the full path intact.
+		{
+			name:  "Windows direct exe with quoted path (fix: no nested shell)",
+			input: `"D:\Emulation\duckstation.exe" "D:\path with spaces\game.bin"`,
+			want:  []string{`D:\Emulation\duckstation.exe`, `D:\path with spaces\game.bin`},
+		},
+		// Fix 2: keep PowerShell, use the & call operator. The entire PS script is wrapped in
+		// a single double-quoted token, so SplitCommand delivers it as one argv entry. PS
+		// receives the script text via -Command and invokes & with the path as a single-quoted
+		// PS string, which PS quotes correctly for the child without a Start-Process re-parse.
+		{
+			name: "Windows PS with & call operator: -Command script as single argv token (fix)",
+			input: `powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass ` +
+				`-Command "& 'D:\Emulation\duckstation.exe' 'D:\path with spaces\game.bin'"`,
+			want: []string{
+				"powershell", "-WindowStyle", "Hidden", "-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-Command", `& 'D:\Emulation\duckstation.exe' 'D:\path with spaces\game.bin'`,
+			},
+		},
 	}
 
 	for _, tt := range tests {

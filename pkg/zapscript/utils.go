@@ -98,6 +98,8 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, errors.New("execute command is empty")
 	}
 
+	log.Debug().Str("command", execStr).Strs("argv", tokenArgs).Msg("executing zapscript command")
+
 	ctx, cancel := context.WithTimeout(context.Background(), ExecuteTimeout)
 	defer cancel()
 
