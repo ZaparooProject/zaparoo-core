@@ -304,7 +304,7 @@ func TestParseCustomLaunchers_LaunchLogsArgvAndFailsOnMissingBinary(t *testing.T
 
 	// Calling Launch hits the argv log line then fails at cmd.Start because the
 	// binary does not exist. The error confirms we reached the execution path.
-	_, err = launchers[0].Launch(cfg, "/some/game.bin", nil)
+	_, err = launchers[0].Launch(cfg, filepath.Join("some", "game.bin"), nil)
 	assert.Error(t, err, "expected error for nonexistent binary")
 }
 
