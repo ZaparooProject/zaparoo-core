@@ -1,5 +1,3 @@
-//go:build linux
-
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -19,7 +17,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package mister
+package shared
 
 import (
 	"encoding/binary"
@@ -31,46 +29,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPngFileComplete_ValidPNG(t *testing.T) {
+func TestPNGFileComplete_ValidPNG(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "test.png")
-	// Minimal valid PNG: 8-byte header + IEND chunk
 	data := append([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, pngIENDTail...)
 	require.NoError(t, os.WriteFile(path, data, 0o600))
 
-	complete, err := pngFileComplete(path)
+	complete, err := PNGFileComplete(path)
 	require.NoError(t, err)
 	assert.True(t, complete)
 }
 
-func TestPngFileComplete_Truncated(t *testing.T) {
+func TestPNGFileComplete_Truncated(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "test.png")
-	// PNG header only, no IEND
 	data := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x00}
 	require.NoError(t, os.WriteFile(path, data, 0o600))
 
-	complete, err := pngFileComplete(path)
+	complete, err := PNGFileComplete(path)
 	require.NoError(t, err)
 	assert.False(t, complete)
 }
 
-func TestPngFileComplete_TooSmall(t *testing.T) {
+func TestPNGFileComplete_TooSmall(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "test.png")
 	require.NoError(t, os.WriteFile(path, []byte{0x89, 0x50}, 0o600))
 
-	complete, err := pngFileComplete(path)
+	complete, err := PNGFileComplete(path)
 	require.NoError(t, err)
 	assert.False(t, complete)
 }
 
-func TestPngFileComplete_EmptyFile(t *testing.T) {
+func TestPNGFileComplete_EmptyFile(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "test.png")
 	require.NoError(t, os.WriteFile(path, []byte{}, 0o600))
 
-	complete, err := pngFileComplete(path)
+	complete, err := PNGFileComplete(path)
 	require.NoError(t, err)
 	assert.False(t, complete)
 }
@@ -88,49 +84,48 @@ func writeBMP(t *testing.T, dir string, magic [2]byte, declaredSize uint32, actu
 	return path
 }
 
-func TestBmpFileComplete_ValidBMP(t *testing.T) {
+func TestBMPFileComplete_ValidBMP(t *testing.T) {
 	t.Parallel()
 	path := writeBMP(t, t.TempDir(), [2]byte{'B', 'M'}, 100, 100)
 
-	complete, err := bmpFileComplete(path)
+	complete, err := BMPFileComplete(path)
 	require.NoError(t, err)
 	assert.True(t, complete)
 }
 
-func TestBmpFileComplete_PartiallyWritten(t *testing.T) {
+func TestBMPFileComplete_PartiallyWritten(t *testing.T) {
 	t.Parallel()
-	// File exists but is smaller than declared size
 	path := writeBMP(t, t.TempDir(), [2]byte{'B', 'M'}, 100, 50)
 
-	complete, err := bmpFileComplete(path)
+	complete, err := BMPFileComplete(path)
 	require.NoError(t, err)
 	assert.False(t, complete)
 }
 
-func TestBmpFileComplete_ZeroDeclaredSize(t *testing.T) {
+func TestBMPFileComplete_ZeroDeclaredSize(t *testing.T) {
 	t.Parallel()
 	path := writeBMP(t, t.TempDir(), [2]byte{'B', 'M'}, 0, 10)
 
-	complete, err := bmpFileComplete(path)
+	complete, err := BMPFileComplete(path)
 	require.NoError(t, err)
 	assert.False(t, complete)
 }
 
-func TestBmpFileComplete_InvalidMagic(t *testing.T) {
+func TestBMPFileComplete_InvalidMagic(t *testing.T) {
 	t.Parallel()
 	path := writeBMP(t, t.TempDir(), [2]byte{0x00, 0x00}, 100, 100)
 
-	complete, err := bmpFileComplete(path)
+	complete, err := BMPFileComplete(path)
 	require.NoError(t, err)
 	assert.False(t, complete)
 }
 
-func TestBmpFileComplete_TooSmall(t *testing.T) {
+func TestBMPFileComplete_TooSmall(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "test.bmp")
 	require.NoError(t, os.WriteFile(path, []byte{0x42, 0x4d, 0x00}, 0o600))
 
-	complete, err := bmpFileComplete(path)
+	complete, err := BMPFileComplete(path)
 	require.NoError(t, err)
 	assert.False(t, complete)
 }
@@ -140,7 +135,7 @@ func TestScreenshotFileComplete_UnsupportedFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.jpg")
 	require.NoError(t, os.WriteFile(path, []byte{0xFF, 0xD8}, 0o600))
 
-	_, err := screenshotFileComplete(path, ".jpg")
+	_, err := ScreenshotFileComplete(path, ".jpg")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported screenshot format")
 }
