@@ -521,7 +521,9 @@ install_replayos() {
 
     # Install binary
     info "Installing to /media/sd/zaparoo/..."
-    mkdir -p /media/sd/zaparoo
+    if ! mkdir -p /media/sd/zaparoo; then
+        abort "Failed to create /media/sd/zaparoo"
+    fi
 
     if ! cp "${ZAPAROO_BIN}" /media/sd/zaparoo/zaparoo; then
         abort "Failed to copy binary to /media/sd/zaparoo/zaparoo"

@@ -147,6 +147,22 @@ func TestDetectStorages(t *testing.T) {
 		assert.Equal(t, []string{sdMount}, all)
 	})
 
+	t.Run("active mount has no roms, falls back to first detected", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		sdMount := filepath.Join(dir, "sd")
+		usbMount := filepath.Join(dir, "usb")
+		// Only usb has a roms/ directory; sd is listed in replay.cfg but has none.
+		mkRoms(t, usbMount)
+		cfgPath := writeCfg(t, dir, "sd")
+		tokenMap := map[string]string{"sd": sdMount, "usb": usbMount}
+
+		active, all, err := detectStorages(cfgPath, []string{sdMount, usbMount}, tokenMap)
+		require.NoError(t, err)
+		assert.Equal(t, usbMount, active)
+		assert.Equal(t, []string{usbMount}, all)
+	})
+
 	t.Run("preserves mount probe order, skips empty mounts", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()

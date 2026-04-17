@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -415,6 +416,12 @@ func detectStorages(
 		return "", all, fmt.Errorf("no ReplayOS storage found (system_storage=%s)", token)
 	}
 
+	if !slices.Contains(all, mount) {
+		log.Warn().Str("token", token).Str("resolved", mount).Str("fallback", all[0]).
+			Msg("system_storage mount has no roms directory, using first detected mount")
+		return all[0], all, nil
+	}
+
 	return mount, all, nil
 }
 
@@ -488,10 +495,14 @@ func writeAutostart(storagePath, romPath string) error {
 
 func deleteAutostart(storagePath string) {
 	filePath := filepath.Join(storagePath, "roms", autostartDir, autostartFile)
-	if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		log.Warn().Err(err).Msg("failed to delete autostart file")
-	} else {
-		log.Debug().Msg("deleted autostart file")
+	err := os.Remove(filePath)
+	switch {
+	case err == nil:
+		log.Debug().Str("file", filePath).Msg("deleted autostart file")
+	case errors.Is(err, os.ErrNotExist):
+		// Nothing to delete; not an error.
+	default:
+		log.Warn().Err(err).Str("file", filePath).Msg("failed to delete autostart file")
 	}
 }
 

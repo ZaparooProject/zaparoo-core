@@ -91,7 +91,9 @@ func (p *Platform) triggerScreenshot() error {
 	if err := p.KeyboardPress("s"); err != nil {
 		if p.keyboardRealMode {
 			// Best-effort: try to restore Real Mode even after the screenshot key failed.
-			_ = p.KeyboardPress("{capslock}")
+			if kbErr := p.KeyboardPress("{capslock}"); kbErr != nil {
+				log.Trace().Err(kbErr).Msg("best-effort restore keyboard real mode after failed screenshot")
+			}
 		}
 		return fmt.Errorf("send screenshot key: %w", err)
 	}
