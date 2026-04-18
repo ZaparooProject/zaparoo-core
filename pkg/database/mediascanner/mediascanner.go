@@ -838,6 +838,9 @@ func NewNamesIndex(
 	scannedLaunchers := make(map[string]bool)
 	// This map tracks systems that have been fully processed and committed
 	completedSystems := make(map[string]bool)
+	// Tracks whether the lastIndexedSystem's partial rows were cleaned up on resume.
+	// The truncate must fire exactly once, before the system's first file is processed.
+	resumedSystemTruncated := false
 
 	// Populate completedSystems if resuming
 	if shouldResume {
@@ -890,6 +893,43 @@ func NewNamesIndex(
 
 		// Lazy load this system's existing data for resume
 		if shouldResume {
+			// On the first encounter of the lastIndexedSystem, remove any
+			// partially-committed rows from the previous interrupted run so the
+			// re-index starts clean. Without this, FlushScanStateMaps clearing
+			// MediaIDs mid-system leaves the scanner blind to pre-existing paths,
+			// causing a UNIQUE constraint storm at ~1 file/sec.
+			if systemID == lastIndexedSystemID && !resumedSystemTruncated {
+				log.Info().Str("system", systemID).
+					Msg("truncating partial system data before resume re-index")
+				if truncErr := db.TruncateSystems([]string{systemID}); truncErr != nil {
+					return 0, fmt.Errorf("failed to truncate partial system data for resume: %w", truncErr)
+				}
+				resumedSystemTruncated = true
+
+				// TruncateSystems deletes the Systems row (invalidating the DBID cached in
+				// scanState.SystemIDs) and orphan-cleans any Tags no longer referenced by
+				// MediaTags/MediaTitleTags/SupportingMedia (invalidating DBIDs in scanState.TagIDs).
+				// Both maps were populated by PopulateScanStateFromDB before the main loop; they
+				// must be reconciled now so AddMediaPath doesn't pass stale foreign keys.
+				delete(scanState.SystemIDs, systemID)
+
+				allTags, tagsErr := db.GetAllTags()
+				if tagsErr != nil {
+					return 0, fmt.Errorf("failed to reload tags after resume truncate: %w", tagsErr)
+				}
+				tagTypeByDBID := make(map[int64]string, len(scanState.TagTypeIDs))
+				for t, id := range scanState.TagTypeIDs {
+					tagTypeByDBID[int64(id)] = t
+				}
+				scanState.TagIDs = make(map[string]int, len(allTags))
+				for _, tag := range allTags {
+					scanState.TagIDs[database.TagKey(tagTypeByDBID[tag.TypeDBID], tag.Tag)] = int(tag.DBID)
+				}
+				if seedErr := SeedCanonicalTags(db, &scanState); seedErr != nil {
+					return 0, fmt.Errorf("failed to re-seed canonical tags after resume truncate: %w", seedErr)
+				}
+			}
+
 			log.Debug().Str("system", systemID).Msg("loading existing data for system resume")
 			if loadErr := PopulateScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
 				// Check if this is a cancellation error

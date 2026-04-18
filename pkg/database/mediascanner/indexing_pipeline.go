@@ -225,7 +225,8 @@ func AddMediaPath(
 			})
 			if err != nil {
 				var sqliteErr sqlite3.Error
-				if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+				if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
+					!errors.Is(err, mediadb.ErrDependencyFlush) {
 					log.Trace().Err(err).Msgf("media tag relationship already exists for extension: %s", extWithoutDot)
 				} else {
 					log.Error().Err(err).Msgf("error inserting media tag relationship for extension: %s", extWithoutDot)
@@ -290,7 +291,13 @@ func AddMediaPath(
 			MediaDBID: int64(mediaIndex),
 		})
 		if err != nil {
-			log.Debug().Err(err).Msgf("media tag relationship already exists: %s", tagStr)
+			var sqliteErr sqlite3.Error
+			if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
+				!errors.Is(err, mediadb.ErrDependencyFlush) {
+				log.Trace().Err(err).Msgf("media tag relationship already exists: %s", tagStr)
+			} else {
+				log.Error().Err(err).Str("tag", tagStr).Msgf("error inserting media tag")
+			}
 		}
 	}
 	return titleIndex, mediaIndex, nil

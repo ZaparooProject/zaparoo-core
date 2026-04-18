@@ -700,3 +700,125 @@ func TestBatchInserter_MultipleDependencies(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
 }
+
+// TestBatchInserter_BufferResetOnFlushFailure verifies that when a batch flush fails
+// (e.g. UNIQUE constraint), the buffer is reset so subsequent Add calls don't
+// re-trigger the same failing flush on every call.
+func TestBatchInserter_BufferResetOnFlushFailure(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+
+	_, err = db.ExecContext(ctx, `CREATE TABLE t (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	// Pre-insert row 1 (committed) so it conflicts with anything that tries to
+	// re-insert id=1.
+	_, err = db.ExecContext(ctx, `INSERT INTO t VALUES (1)`)
+	require.NoError(t, err)
+
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	// batchSize=2: the second Add triggers an auto-flush.
+	bi, err := NewBatchInserter(ctx, tx, "t", []string{"id"}, 2)
+	require.NoError(t, err)
+
+	// Add(2): count=1, no flush yet.
+	require.NoError(t, bi.Add(int64(2)))
+
+	// Add(1): count=2 → auto-flush → INSERT (2, 1) → UNIQUE fail on id=1.
+	// Error should be returned; buffer must be reset.
+	flushErr := bi.Add(int64(1))
+	require.Error(t, flushErr, "flush should fail: UNIQUE constraint on id=1")
+	require.Contains(t, flushErr.Error(), "batch insert failed")
+
+	// Buffer reset: Flush with nothing queued should be a no-op.
+	require.NoError(t, bi.Flush(), "Flush on empty buffer should be a no-op")
+
+	// Subsequent Add should not re-trigger the old failing rows.
+	require.NoError(t, bi.Add(int64(3)))
+	require.NoError(t, bi.Flush(), "Flush of row 3 only should succeed")
+
+	// Commit and confirm: pre-existing row 1 and newly inserted row 3; row 2
+	// was in the failed batch and must NOT be present.
+	require.NoError(t, tx.Commit())
+
+	var ids []int
+	rows, err := db.QueryContext(ctx, "SELECT id FROM t ORDER BY id")
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id int
+		require.NoError(t, rows.Scan(&id))
+		ids = append(ids, id)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []int{1, 3}, ids, "only pre-existing 1 and newly added 3 should be present")
+}
+
+// TestBatchInserter_BufferResetOnDependencyFlushFailure verifies that when a parent
+// (dependency) batch fails to flush, the child's buffer is also cleared so that
+// subsequent Add calls don't replay the poisoned rows.
+func TestBatchInserter_BufferResetOnDependencyFlushFailure(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=ON")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+
+	_, err = db.ExecContext(ctx, `CREATE TABLE parent (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE child (
+			id        INTEGER PRIMARY KEY,
+			parent_id INTEGER NOT NULL,
+			FOREIGN KEY (parent_id) REFERENCES parent(id)
+		)`)
+	require.NoError(t, err)
+
+	// Pre-insert parent row 10 (committed) so any batch that re-inserts id=10 will
+	// UNIQUE-fail.
+	_, err = db.ExecContext(ctx, `INSERT INTO parent VALUES (10)`)
+	require.NoError(t, err)
+
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	// parentBI batchSize=3: two Adds queue without auto-flushing, so the parent
+	// buffer is still populated when childBI.Flush() triggers dep.Flush().
+	parentBI, err := NewBatchInserter(ctx, tx, "parent", []string{"id"}, 3)
+	require.NoError(t, err)
+
+	// childBI batchSize=10: won't auto-flush within this test.
+	childBI, err := NewBatchInserter(ctx, tx, "child", []string{"id", "parent_id"}, 10)
+	require.NoError(t, err)
+	childBI.SetDependencies(parentBI)
+
+	// Queue two parent rows (id=20 ok, id=10 conflicts with the pre-inserted row).
+	// Neither Add auto-flushes because batchSize=3.
+	require.NoError(t, parentBI.Add(int64(20)))
+	require.NoError(t, parentBI.Add(int64(10)))
+
+	// Queue a child row that references parent id=20.
+	require.NoError(t, childBI.Add(int64(1), int64(20)))
+
+	// childBI.Flush() calls dep (parentBI).Flush() first. The parent INSERT contains
+	// id=10, which UNIQUE-conflicts → dep.Flush() fails → childBI must return
+	// ErrDependencyFlush and must clear its own buffer (Finding 1 fix).
+	childFlushErr := childBI.Flush()
+	require.Error(t, childFlushErr)
+	require.ErrorIs(t, childFlushErr, ErrDependencyFlush, "child flush error must wrap ErrDependencyFlush")
+
+	// Child buffer cleared: a second Flush must be a no-op (currentCount==0).
+	require.NoError(t, childBI.Flush(), "second Flush on empty child buffer must be a no-op")
+
+	// Add a new child row; currentCount must be 1 (not 2) — no old poisoned row carried over.
+	require.NoError(t, childBI.Add(int64(99), int64(10)))
+	require.Equal(t, 1, childBI.currentCount,
+		"child buffer must contain only the new row, not the previously-failed one")
+}

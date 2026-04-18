@@ -19,7 +19,7 @@ For architecture details, API reference, and key concepts: [docs/ARCHITECTURE.md
 - Keep diffs small and focused — one concern per change
 - Use file-scoped commands for faster feedback over full-suite runs
 - Reference existing patterns before writing new code
-- Use `filepath.Join` for path construction — cross-platform compatibility
+- Use `filepath.Join` for path construction everywhere, including test files — never hardcode POSIX-style paths like `"/roms/snes/game.sfc"` as string literals
 - Use afero for filesystem operations in testable code
 - NEVER use `sync.Mutex`/`sync.RWMutex` — use `syncutil.Mutex`/`syncutil.RWMutex` (forbidigo linter enforces this)
 - NEVER use standard `log` or `fmt.Println` — use zerolog (depguard enforces this)

@@ -29,6 +29,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// ErrDependencyFlush is returned by Flush when a dependency batch inserter fails.
+// Callers can detect this via errors.Is to distinguish a parent-table flush failure
+// from a local constraint violation.
+var ErrDependencyFlush = errors.New("dependency flush failed")
+
 // BatchInserter manages batched multi-row inserts for a specific table
 type BatchInserter struct {
 	ctx            context.Context
@@ -137,18 +142,20 @@ func (b *BatchInserter) Flush() error {
 				Msg("flushing dependency batch before child")
 		}
 		if err := dep.Flush(); err != nil {
-			return fmt.Errorf("failed to flush dependency for %s: %w", b.tableName, err)
+			b.buffer = b.buffer[:0]
+			b.currentCount = 0
+			return fmt.Errorf("failed to flush dependency for %s: %w: %w", b.tableName, ErrDependencyFlush, err)
 		}
 	}
 
 	// Reuse cached statement for full-batch flushes (the common case)
 	if b.currentCount == b.cachedRowCount && b.cachedStmt != nil {
 		_, err := b.cachedStmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
+		b.buffer = b.buffer[:0]
+		b.currentCount = 0
 		if err != nil {
 			return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
 		}
-		b.buffer = b.buffer[:0]
-		b.currentCount = 0
 		return nil
 	}
 
@@ -180,12 +187,11 @@ func (b *BatchInserter) Flush() error {
 	}
 
 	_, err = stmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
+	b.buffer = b.buffer[:0]
+	b.currentCount = 0
 	if err != nil {
 		return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
 	}
-
-	b.buffer = b.buffer[:0]
-	b.currentCount = 0
 	return nil
 }
 
@@ -220,6 +226,8 @@ func (b *BatchInserter) flushChunked() error {
 
 		// Execute chunk (extracted to separate function to satisfy both sqlclosecheck and revive linters)
 		if err := b.executeChunk(chunkSize, chunkBuffer); err != nil {
+			b.buffer = b.buffer[:0]
+			b.currentCount = 0
 			return err
 		}
 
@@ -271,6 +279,8 @@ func (b *BatchInserter) flushSingleRow() error {
 	singleRowSQL := b.generateSingleRowInsertSQL()
 	stmt, err := b.tx.PrepareContext(b.ctx, singleRowSQL)
 	if err != nil {
+		b.buffer = b.buffer[:0]
+		b.currentCount = 0
 		return fmt.Errorf("failed to prepare single-row fallback insert: %w", err)
 	}
 	defer func() {
@@ -290,6 +300,8 @@ func (b *BatchInserter) flushSingleRow() error {
 				Int("row", i).
 				Msg("failed to insert row in fallback mode")
 			// Fail fast on any error to prevent silent data inconsistencies.
+			b.buffer = b.buffer[:0]
+			b.currentCount = 0
 			return fmt.Errorf("unrecoverable error during single-row fallback on row %d: %w", i, err)
 		}
 	}
