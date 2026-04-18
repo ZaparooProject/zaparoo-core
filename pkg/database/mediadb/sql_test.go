@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -237,12 +238,15 @@ func TestSqlInsertSystemWithPreparedStmt_Success(t *testing.T) {
 
 // setupTruncateTestDB inserts minimal data into a real SQLite media DB:
 //   - Two TagTypes ("genre", "platform")
-//   - Three Tags: "Action" (genre, id=1), "RPG" (genre, id=2), "Extension" (platform, id=3)
+//   - Four Tags: "Action" (genre, id=1), "RPG" (genre, id=2), "Extension" (platform, id=3), "Cover" (platform, id=4)
 //   - Systems NES (id=1) and SNES (id=2)
 //   - One MediaTitle + one Media per system
 //   - MediaTags: NES media → Tag 1 ("Action") + Tag 2 ("RPG"); SNES media → Tag 1 ("Action") only
+//   - MediaTitleTags: NES mario title → Tag 2 ("RPG")
+//   - SupportingMedia: NES mario title → Tag 4 ("Cover")
 //
-// Tag 1 is shared by both systems; Tag 2 is NES-only; Tag 3 is never referenced by any media.
+// Tag 1 is shared by both systems; Tag 2 is NES-only (via MediaTags and MediaTitleTags);
+// Tag 3 is never referenced; Tag 4 is NES-only (via SupportingMedia).
 // Returns the *sql.DB handle from the opened MediaDB so callers can run assertions.
 func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 	t.Helper()
@@ -254,15 +258,29 @@ func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO TagTypes (DBID, Type) VALUES (1, 'genre'), (2, 'platform');
-		INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (1, 1, 'Action'), (2, 1, 'RPG'), (3, 2, 'Extension');
+		INSERT INTO Tags (DBID, TypeDBID, Tag)
+		    VALUES (1, 1, 'Action'), (2, 1, 'RPG'), (3, 2, 'Extension'), (4, 2, 'Cover');
 		INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'NES', 'Nintendo'), (2, 'SNES', 'Super Nintendo');
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name)
 		    VALUES (1, 1, 'mario', 'Mario'), (2, 2, 'zelda', 'Zelda');
-		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES
-		    (1, 1, 1, '/roms/nes/mario.nes'),
-		    (2, 2, 2, '/roms/snes/zelda.sfc');
-		INSERT INTO MediaTags (MediaDBID, TagDBID) VALUES (1, 1), (1, 2), (2, 1);
+		INSERT INTO MediaTitleTags (MediaTitleDBID, TagDBID) VALUES (1, 2);
 	`)
+	require.NoError(t, err)
+
+	mediaPath1 := filepath.Join("roms", "nes", "mario.nes")
+	mediaPath2 := filepath.Join("roms", "snes", "zelda.sfc")
+	_, err = db.ExecContext(ctx,
+		"INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (1, 1, 1, ?), (2, 2, 2, ?)",
+		mediaPath1, mediaPath2)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, "INSERT INTO MediaTags (MediaDBID, TagDBID) VALUES (1, 1), (1, 2), (2, 1)")
+	require.NoError(t, err)
+
+	coverPath := filepath.Join("roms", "nes", "mario.png")
+	_, err = db.ExecContext(ctx,
+		"INSERT INTO SupportingMedia (DBID, MediaTitleDBID, TypeTagDBID, Path, ContentType) VALUES (1, 1, 4, ?, ?)",
+		coverPath, "image/png")
 	require.NoError(t, err)
 
 	return mediaDB, db
@@ -293,7 +311,7 @@ func TestSqlTruncateSystems_Success(t *testing.T) {
 	assert.Equal(t, 0, systemCount, "all systems should be deleted")
 	assert.Equal(t, 0, mediaCount, "all media should be deleted")
 	assert.Equal(t, 0, titleCount, "all media titles should be deleted")
-	// Tags 1 and 2 were in MediaTags → now orphans → deleted. Tag 3 was never in MediaTags → kept.
+	// Tags 1, 2, 4 were referenced by deleted systems → now orphans → deleted. Tag 3 never referenced → kept.
 	assert.Equal(t, 1, tagCount, "only the unreferenced tag should remain")
 
 	// TagTypes must never be deleted
@@ -320,16 +338,19 @@ func TestSqlTruncateSystems_SingleSystem(t *testing.T) {
 	assert.Equal(t, 0, nesCount, "NES media should be deleted")
 	assert.Equal(t, 1, snesCount, "SNES media should remain")
 
-	// Tag 2 ("RPG") was only referenced by NES media → deleted as orphan.
+	// Tag 2 ("RPG") was only referenced by NES (MediaTags + MediaTitleTags) → deleted as orphan.
+	// Tag 4 ("Cover") was only in SupportingMedia for NES → deleted as orphan.
 	// Tag 1 ("Action") is still referenced by SNES media → must survive.
 	// Tag 3 ("Extension") was never referenced → must survive.
-	var tag1, tag2, tag3 int
+	var tag1, tag2, tag3, tag4 int
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Tags WHERE DBID = 1").Scan(&tag1))
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Tags WHERE DBID = 2").Scan(&tag2))
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Tags WHERE DBID = 3").Scan(&tag3))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Tags WHERE DBID = 4").Scan(&tag4))
 	assert.Equal(t, 1, tag1, "shared tag (Action) must survive")
 	assert.Equal(t, 0, tag2, "NES-only tag (RPG) should be deleted")
 	assert.Equal(t, 1, tag3, "unreferenced tag (Extension) must survive")
+	assert.Equal(t, 0, tag4, "NES-only SupportingMedia tag (Cover) should be deleted")
 }
 
 func TestSqlTruncateSystems_NonExistent(t *testing.T) {

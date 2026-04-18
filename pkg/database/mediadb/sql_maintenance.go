@@ -127,7 +127,7 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 		return fmt.Errorf("failed to create candidate tags temp table: %w", err)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(ctx, "DROP TABLE IF EXISTS _tts_candidate_tags")
+		_, _ = conn.ExecContext(context.Background(), "DROP TABLE IF EXISTS _tts_candidate_tags")
 	}()
 
 	// Each UNION branch needs its own copy of the system DBID args.
@@ -154,7 +154,7 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 		return fmt.Errorf("failed to disable foreign keys: %w", err)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(ctx, "PRAGMA foreign_keys = ON")
+		_, _ = conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON")
 	}()
 
 	// Delete children in reverse dependency order, scoped to target SystemDBIDs.
