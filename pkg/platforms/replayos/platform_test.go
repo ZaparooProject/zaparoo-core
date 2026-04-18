@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -561,14 +562,28 @@ func TestDeleteAutostart(t *testing.T) {
 func TestRestartReplayService(t *testing.T) {
 	t.Parallel()
 
-	mockCmd := helpers.NewMockCommandExecutor()
-	mockCmd.ExpectedCalls = nil
-	mockCmd.On("Run", mock.Anything, "systemctl", []string{"restart", "replay.service"}).Return(nil)
+	t.Run("success returns nil", func(t *testing.T) {
+		t.Parallel()
+		mockCmd := helpers.NewMockCommandExecutor()
+		mockCmd.ExpectedCalls = nil
+		mockCmd.On("Run", mock.Anything, "systemctl", []string{"restart", "replay.service"}).Return(nil)
 
-	p := &Platform{cmd: mockCmd}
-	p.restartReplayService()
+		p := &Platform{cmd: mockCmd}
+		require.NoError(t, p.restartReplayService())
+		mockCmd.AssertExpectations(t)
+	})
 
-	mockCmd.AssertExpectations(t)
+	t.Run("systemctl error is propagated", func(t *testing.T) {
+		t.Parallel()
+		mockCmd := helpers.NewMockCommandExecutor()
+		mockCmd.ExpectedCalls = nil
+		mockCmd.On("Run", mock.Anything, "systemctl", []string{"restart", "replay.service"}).Return(assert.AnError)
+
+		p := &Platform{cmd: mockCmd}
+		err := p.restartReplayService()
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "restart replay.service")
+	})
 }
 
 func TestPlatform_StopActiveLauncher(t *testing.T) {
@@ -612,6 +627,34 @@ func TestPlatform_StopActiveLauncher(t *testing.T) {
 	assert.Nil(t, received)
 }
 
+func TestPlatform_StopActiveLauncher_RestartFails(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mockCmd := helpers.NewMockCommandExecutor()
+	mockCmd.ExpectedCalls = nil
+	mockCmd.On("Run", mock.Anything, "systemctl", []string{"restart", "replay.service"}).Return(assert.AnError)
+
+	mediaCallCount := 0
+	p := &Platform{
+		cmd:           mockCmd,
+		activeStorage: dir,
+	}
+	p.trackerMu.Lock()
+	p.lastKnownCore = "snes9x_libretro.so"
+	p.trackerMu.Unlock()
+	p.setActiveMedia = func(_ *models.ActiveMedia) { mediaCallCount++ }
+
+	err := p.StopActiveLauncher(platforms.StopForMenu)
+	require.Error(t, err)
+
+	// State must NOT have been mutated on failure.
+	assert.Equal(t, 0, mediaCallCount, "setActiveMedia must not be called on restart failure")
+	p.trackerMu.RLock()
+	assert.Equal(t, "snes9x_libretro.so", p.lastKnownCore, "lastKnownCore must not be cleared on restart failure")
+	p.trackerMu.RUnlock()
+}
+
 func TestPlatform_LaunchGame_SuccessPath(t *testing.T) {
 	t.Parallel()
 
@@ -644,6 +687,31 @@ func TestPlatform_LaunchGame_SuccessPath(t *testing.T) {
 	p.trackerMu.RUnlock()
 
 	mockCmd.AssertExpectations(t)
+}
+
+func TestPlatform_LaunchGame_RestartFails(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mkRoms(t, dir)
+	romPath := filepath.Join(dir, "roms", "nintendo_snes", "game.sfc")
+
+	mockCmd := helpers.NewMockCommandExecutor()
+	mockCmd.ExpectedCalls = nil
+	mockCmd.On("Run", mock.Anything, "systemctl", []string{"restart", "replay.service"}).Return(assert.AnError)
+
+	mediaCallCount := 0
+	p := &Platform{cmd: mockCmd, activeStorage: dir, storagePaths: []string{dir}}
+	p.ctx, p.cancel = context.WithCancel(context.Background())
+	t.Cleanup(p.cancel)
+	p.setActiveMedia = func(_ *models.ActiveMedia) { mediaCallCount++ }
+
+	_, err := p.launchGame(nil, romPath, nil)
+	require.Error(t, err)
+
+	// Health-check goroutine must NOT have been started; setActiveMedia stays unset.
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 0, mediaCallCount, "setActiveMedia must not be called when restart fails")
 }
 
 func TestPlatform_StartPre_InitDevicesWithMockFactory(t *testing.T) {

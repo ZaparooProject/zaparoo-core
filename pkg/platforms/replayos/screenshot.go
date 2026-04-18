@@ -69,12 +69,16 @@ func (p *Platform) Screenshot() (*platforms.ScreenshotResult, error) {
 		return nil, fmt.Errorf("create captures dir: %w", err)
 	}
 
-	triggerTime := time.Now()
+	baselinePath, baselineMtime, err := newestPNG(capturesDir)
+	if err != nil {
+		return nil, fmt.Errorf("scan captures dir: %w", err)
+	}
+
 	if err := p.triggerScreenshot(); err != nil {
 		return nil, err
 	}
 
-	return waitForScreenshot(capturesDir, triggerTime, screenshotTimeout)
+	return waitForScreenshot(capturesDir, baselinePath, baselineMtime, screenshotTimeout)
 }
 
 // triggerScreenshot sends the key sequence that makes RePlayOS take a
@@ -108,21 +112,24 @@ func (p *Platform) triggerScreenshot() error {
 	return nil
 }
 
-// waitForScreenshot polls capturesDir for a new .png file with mtime >=
-// triggerTime. Once found, it waits for the IEND chunk to confirm the file is
-// fully written before reading and returning it.
+// waitForScreenshot polls capturesDir for a PNG that was not present before the
+// trigger. A file is considered new if its path differs from baselinePath OR its
+// mtime is strictly after baselineMtime. Using the path check as the primary
+// signal avoids false negatives on filesystems with coarse mtime resolution
+// (e.g. exFAT at 10 ms, ext4 at 1 s): a file created after the trigger may
+// carry a rounded-down mtime that compares as equal to or before the baseline.
 func waitForScreenshot(
-	capturesDir string, triggerTime time.Time, timeout time.Duration,
+	capturesDir, baselinePath string, baselineMtime time.Time, timeout time.Duration,
 ) (*platforms.ScreenshotResult, error) {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		path, err := findNewestPNG(capturesDir, triggerTime)
+		path, mtime, err := newestPNG(capturesDir)
 		if err != nil {
 			return nil, fmt.Errorf("scan captures dir: %w", err)
 		}
 
-		if path != "" {
+		if path != "" && (path != baselinePath || mtime.After(baselineMtime)) {
 			complete, checkErr := shared.PNGFileComplete(path)
 			if checkErr != nil {
 				return nil, fmt.Errorf("check screenshot file: %w", checkErr)
@@ -144,18 +151,15 @@ func waitForScreenshot(
 	return nil, fmt.Errorf("screenshot timed out after %s", timeout)
 }
 
-// findNewestPNG walks capturesDir/{system}/ looking for the newest .png file
-// with mtime >= since. Returns its path, or "" if none found.
-func findNewestPNG(capturesDir string, since time.Time) (string, error) {
-	var bestPath string
-	var bestTime time.Time
-
-	systemDirs, err := os.ReadDir(capturesDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
+// newestPNG walks capturesDir/{system}/ and returns the path and mtime of the
+// most recently modified .png file. Returns ("", zero, nil) when no files exist.
+func newestPNG(capturesDir string) (path string, mtime time.Time, err error) {
+	systemDirs, readErr := os.ReadDir(capturesDir)
+	if readErr != nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			return "", time.Time{}, nil
 		}
-		return "", fmt.Errorf("read captures dir: %w", err)
+		return "", time.Time{}, fmt.Errorf("read captures dir: %w", readErr)
 	}
 
 	for _, sysEntry := range systemDirs {
@@ -164,8 +168,8 @@ func findNewestPNG(capturesDir string, since time.Time) (string, error) {
 		}
 
 		subDir := filepath.Join(capturesDir, sysEntry.Name())
-		files, err := os.ReadDir(subDir)
-		if err != nil {
+		files, dirErr := os.ReadDir(subDir)
+		if dirErr != nil {
 			continue
 		}
 
@@ -173,17 +177,16 @@ func findNewestPNG(capturesDir string, since time.Time) (string, error) {
 			if f.IsDir() || filepath.Ext(f.Name()) != ".png" {
 				continue
 			}
-			info, err := f.Info()
-			if err != nil {
+			info, infoErr := f.Info()
+			if infoErr != nil {
 				continue
 			}
-			mtime := info.ModTime()
-			if !mtime.Before(since) && mtime.After(bestTime) {
-				bestPath = filepath.Join(subDir, f.Name())
-				bestTime = mtime
+			if t := info.ModTime(); t.After(mtime) {
+				path = filepath.Join(subDir, f.Name())
+				mtime = t
 			}
 		}
 	}
 
-	return bestPath, nil
+	return path, mtime, nil
 }

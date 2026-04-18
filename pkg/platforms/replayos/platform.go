@@ -220,7 +220,9 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 		deleteAutostart(p.activeStorage)
 	}
 
-	p.restartReplayService()
+	if err := p.restartReplayService(); err != nil {
+		return err
+	}
 
 	p.trackerMu.Lock()
 	p.lastKnownCore = ""
@@ -365,7 +367,9 @@ func (p *Platform) launchGame(
 	p.pendingROMPath = path
 	p.trackerMu.Unlock()
 
-	p.restartReplayService()
+	if err := p.restartReplayService(); err != nil {
+		return nil, err
+	}
 
 	activeStorage := p.activeStorage
 	ctx := p.ctx
@@ -530,11 +534,12 @@ func deleteAutostart(storagePath string) {
 	}
 }
 
-func (p *Platform) restartReplayService() {
+func (p *Platform) restartReplayService() error {
 	log.Debug().Msg("restarting replay.service")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := p.cmdExec().Run(ctx, "systemctl", "restart", "replay.service"); err != nil {
-		log.Error().Err(err).Msg("failed to restart replay.service")
+		return fmt.Errorf("restart replay.service: %w", err)
 	}
+	return nil
 }

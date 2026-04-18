@@ -67,15 +67,15 @@ func writeCapture(t *testing.T, capturesDir, system, name string, mtime time.Tim
 func TestWaitForScreenshot(t *testing.T) {
 	t.Parallel()
 
-	t.Run("returns result when complete PNG appears before deadline", func(t *testing.T) {
+	t.Run("returns result when new PNG appears before deadline", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		since := time.Now().Add(-time.Second)
 		pngPath := filepath.Join(dir, "nintendo_snes", "shot.png")
 		require.NoError(t, os.MkdirAll(filepath.Dir(pngPath), 0o750))
 		require.NoError(t, os.WriteFile(pngPath, pngBytes(), 0o600))
 
-		result, err := waitForScreenshot(dir, since, time.Second)
+		// Empty baseline: no pre-existing file.
+		result, err := waitForScreenshot(dir, "", time.Time{}, time.Second)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 		assert.Equal(t, pngPath, result.Path)
@@ -85,25 +85,46 @@ func TestWaitForScreenshot(t *testing.T) {
 	t.Run("times out when no PNG arrives", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		_, err := waitForScreenshot(dir, time.Now(), 200*time.Millisecond)
+		_, err := waitForScreenshot(dir, "", time.Time{}, 200*time.Millisecond)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "screenshot timed out")
 	})
 
-	t.Run("ignores PNG older than triggerTime", func(t *testing.T) {
+	t.Run("pre-existing file matching baseline is ignored", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		oldTime := time.Now().Add(-5 * time.Second)
-		// Write a complete PNG, but stamp it before triggerTime.
+		// Write a complete PNG and capture it as the baseline (as Screenshot() does).
 		pngPath := filepath.Join(dir, "sega_smd", "old.png")
 		require.NoError(t, os.MkdirAll(filepath.Dir(pngPath), 0o750))
 		require.NoError(t, os.WriteFile(pngPath, pngBytes(), 0o600))
-		require.NoError(t, os.Chtimes(pngPath, oldTime, oldTime))
+		baselinePath, baselineMtime, err := newestPNG(dir)
+		require.NoError(t, err)
 
-		since := time.Now()
-		_, err := waitForScreenshot(dir, since, 200*time.Millisecond)
+		// No new file arrives — should time out.
+		_, err = waitForScreenshot(dir, baselinePath, baselineMtime, 200*time.Millisecond)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "screenshot timed out")
+	})
+
+	t.Run("file with same mtime as baseline but different path is accepted", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		// Simulate coarse mtime: pre-existing and new file have the same mtime.
+		sharedMtime := time.Now().Add(-time.Second).Truncate(time.Second)
+		oldPath := filepath.Join(dir, "sega_smd", "old.png")
+		require.NoError(t, os.MkdirAll(filepath.Dir(oldPath), 0o750))
+		require.NoError(t, os.WriteFile(oldPath, []byte{}, 0o600))
+		require.NoError(t, os.Chtimes(oldPath, sharedMtime, sharedMtime))
+
+		newPath := filepath.Join(dir, "sega_smd", "new.png")
+		require.NoError(t, os.WriteFile(newPath, pngBytes(), 0o600))
+		require.NoError(t, os.Chtimes(newPath, sharedMtime, sharedMtime))
+
+		// Baseline is the old file; new file has same mtime but different path.
+		result, err := waitForScreenshot(dir, oldPath, sharedMtime, time.Second)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, newPath, result.Path)
 	})
 }
 
@@ -208,57 +229,46 @@ var (
 	_ uinput.Keyboard = (*callCountKeyboard)(nil)
 )
 
-func TestFindNewestPNG(t *testing.T) {
+func TestNewestPNG(t *testing.T) {
 	t.Parallel()
 
 	t.Run("missing captures dir returns empty", func(t *testing.T) {
 		t.Parallel()
-		path, err := findNewestPNG("/nonexistent/captures", time.Now())
+		path, mtime, err := newestPNG("/nonexistent/captures")
 		require.NoError(t, err)
 		assert.Empty(t, path)
+		assert.True(t, mtime.IsZero())
 	})
 
 	t.Run("empty captures dir returns empty", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		path, err := findNewestPNG(dir, time.Now())
+		path, mtime, err := newestPNG(dir)
 		require.NoError(t, err)
 		assert.Empty(t, path)
+		assert.True(t, mtime.IsZero())
 	})
 
-	t.Run("file newer than since is returned", func(t *testing.T) {
+	t.Run("returns the only file", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		since := time.Now().Add(-1 * time.Second)
 		expected := writeCapture(t, dir, "nintendo_snes", "game_20260101_120000.png", time.Now())
 
-		path, err := findNewestPNG(dir, since)
+		path, mtime, err := newestPNG(dir)
 		require.NoError(t, err)
 		assert.Equal(t, expected, path)
+		assert.False(t, mtime.IsZero())
 	})
 
-	t.Run("file older than since is not returned", func(t *testing.T) {
+	t.Run("returns newest of multiple files regardless of age", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		oldTime := time.Now().Add(-10 * time.Second)
-		writeCapture(t, dir, "nintendo_snes", "old.png", oldTime)
-
-		since := time.Now().Add(-1 * time.Second)
-		path, err := findNewestPNG(dir, since)
-		require.NoError(t, err)
-		assert.Empty(t, path)
-	})
-
-	t.Run("returns newest of multiple qualifying files", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		since := time.Now().Add(-5 * time.Second)
-		base := time.Now().Add(-2 * time.Second)
+		base := time.Now().Add(-10 * time.Second)
 
 		writeCapture(t, dir, "nintendo_snes", "older.png", base)
 		expected := writeCapture(t, dir, "nintendo_snes", "newer.png", base.Add(time.Second))
 
-		path, err := findNewestPNG(dir, since)
+		path, _, err := newestPNG(dir)
 		require.NoError(t, err)
 		assert.Equal(t, expected, path)
 	})
@@ -266,11 +276,10 @@ func TestFindNewestPNG(t *testing.T) {
 	t.Run("non-png files are ignored", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		since := time.Now().Add(-1 * time.Second)
 		writeCapture(t, dir, "sega_smd", "game.jpg", time.Now())
 		writeCapture(t, dir, "sega_smd", "game.bmp", time.Now())
 
-		path, err := findNewestPNG(dir, since)
+		path, _, err := newestPNG(dir)
 		require.NoError(t, err)
 		assert.Empty(t, path)
 	})
@@ -278,13 +287,12 @@ func TestFindNewestPNG(t *testing.T) {
 	t.Run("files across system subdirs, newest wins", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		since := time.Now().Add(-5 * time.Second)
 		base := time.Now().Add(-2 * time.Second)
 
 		writeCapture(t, dir, "nintendo_snes", "snes.png", base)
 		expected := writeCapture(t, dir, "sega_smd", "sega.png", base.Add(time.Second))
 
-		path, err := findNewestPNG(dir, since)
+		path, _, err := newestPNG(dir)
 		require.NoError(t, err)
 		assert.Equal(t, expected, path)
 	})
@@ -292,13 +300,12 @@ func TestFindNewestPNG(t *testing.T) {
 	t.Run("files at top level of captures dir are ignored", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		since := time.Now().Add(-1 * time.Second)
 		// PNG directly in capturesDir (not in a system subdir)
-		path := filepath.Join(dir, "game.png")
-		require.NoError(t, os.WriteFile(path, []byte{}, 0o600))
-		require.NoError(t, os.Chtimes(path, time.Now(), time.Now()))
+		topPath := filepath.Join(dir, "game.png")
+		require.NoError(t, os.WriteFile(topPath, []byte{}, 0o600))
+		require.NoError(t, os.Chtimes(topPath, time.Now(), time.Now()))
 
-		got, err := findNewestPNG(dir, since)
+		got, _, err := newestPNG(dir)
 		require.NoError(t, err)
 		assert.Empty(t, got)
 	})
