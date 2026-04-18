@@ -546,7 +546,7 @@ func TestDeleteAutostart(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(autostartPath), 0o750)) //nolint:gosec // test temp dir
 		require.NoError(t, os.WriteFile(autostartPath, []byte("test\n"), 0o600))
 
-		deleteAutostart(dir)
+		require.NoError(t, deleteAutostart(dir))
 
 		_, err := os.Stat(autostartPath)
 		assert.ErrorIs(t, err, os.ErrNotExist)
@@ -555,7 +555,21 @@ func TestDeleteAutostart(t *testing.T) {
 	t.Run("no-op when file absent", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		assert.NotPanics(t, func() { deleteAutostart(dir) })
+		require.NoError(t, deleteAutostart(dir))
+	})
+
+	t.Run("returns error when directory is unreadable", func(t *testing.T) {
+		t.Parallel()
+		// Make the autostart dir a file so os.Remove gets ENOTDIR-like error.
+		dir := t.TempDir()
+		autostartParent := filepath.Join(dir, "roms", autostartDir)
+		require.NoError(t, os.MkdirAll(filepath.Dir(autostartParent), 0o750)) //nolint:gosec // test temp dir
+		// Create a file where the directory should be so Remove fails with a real error.
+		require.NoError(t, os.WriteFile(autostartParent, []byte("blocker"), 0o600))
+
+		err := deleteAutostart(dir)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "delete autostart file")
 	})
 }
 
@@ -706,8 +720,20 @@ func TestPlatform_LaunchGame_RestartFails(t *testing.T) {
 	t.Cleanup(p.cancel)
 	p.setActiveMedia = func(_ *models.ActiveMedia) { mediaCallCount++ }
 
+	autostartPath := filepath.Join(dir, "roms", autostartDir, autostartFile)
+
 	_, err := p.launchGame(nil, romPath, nil)
 	require.Error(t, err)
+
+	// Autostart file must be rolled back.
+	_, statErr := os.Stat(autostartPath)
+	require.ErrorIs(t, statErr, os.ErrNotExist, "autostart file must be deleted on rollback")
+
+	// pendingROMPath must be cleared.
+	p.trackerMu.Lock()
+	pending := p.pendingROMPath
+	p.trackerMu.Unlock()
+	assert.Empty(t, pending, "pendingROMPath must be cleared on rollback")
 
 	// Health-check goroutine must NOT have been started; setActiveMedia stays unset.
 	time.Sleep(50 * time.Millisecond)

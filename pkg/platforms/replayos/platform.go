@@ -217,7 +217,9 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	log.Info().Msg("stopping active launcher")
 
 	if p.activeStorage != "" {
-		deleteAutostart(p.activeStorage)
+		if err := deleteAutostart(p.activeStorage); err != nil {
+			return err
+		}
 	}
 
 	if err := p.restartReplayService(); err != nil {
@@ -368,6 +370,12 @@ func (p *Platform) launchGame(
 	p.trackerMu.Unlock()
 
 	if err := p.restartReplayService(); err != nil {
+		if rmErr := deleteAutostart(p.activeStorage); rmErr != nil {
+			log.Warn().Err(rmErr).Msg("failed to roll back autostart after restart failure")
+		}
+		p.trackerMu.Lock()
+		p.pendingROMPath = ""
+		p.trackerMu.Unlock()
 		return nil, err
 	}
 
@@ -381,7 +389,9 @@ func (p *Platform) launchGame(
 			return
 		case <-t1.C:
 		}
-		deleteAutostart(activeStorage)
+		if err := deleteAutostart(activeStorage); err != nil {
+			log.Warn().Err(err).Msg("failed to clear autostart after launch")
+		}
 
 		t2 := time.NewTimer(healthCheckDelay)
 		defer t2.Stop()
@@ -521,16 +531,17 @@ func writeAutostart(storagePath, romPath string) error {
 	return nil
 }
 
-func deleteAutostart(storagePath string) {
+func deleteAutostart(storagePath string) error {
 	filePath := filepath.Join(storagePath, "roms", autostartDir, autostartFile)
 	err := os.Remove(filePath)
 	switch {
 	case err == nil:
 		log.Debug().Str("file", filePath).Msg("deleted autostart file")
+		return nil
 	case errors.Is(err, os.ErrNotExist):
-		// Nothing to delete; not an error.
+		return nil
 	default:
-		log.Warn().Err(err).Str("file", filePath).Msg("failed to delete autostart file")
+		return fmt.Errorf("delete autostart file %s: %w", filePath, err)
 	}
 }
 
