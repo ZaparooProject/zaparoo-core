@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -235,105 +236,147 @@ func TestSqlInsertSystemWithPreparedStmt_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSqlTruncateSystems_Success(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
+// setupTruncateTestDB inserts minimal data into a real SQLite media DB:
+//   - Two TagTypes ("genre", "platform")
+//   - Four Tags: "Action" (genre, id=1), "RPG" (genre, id=2), "Extension" (platform, id=3), "Cover" (platform, id=4)
+//   - Systems NES (id=1) and SNES (id=2)
+//   - One MediaTitle + one Media per system
+//   - MediaTags: NES media → Tag 1 ("Action") + Tag 2 ("RPG"); SNES media → Tag 1 ("Action") only
+//   - MediaTitleTags: NES mario title → Tag 2 ("RPG")
+//   - SupportingMedia: NES mario title → Tag 4 ("Cover")
+//
+// Tag 1 is shared by both systems; Tag 2 is NES-only (via MediaTags and MediaTitleTags);
+// Tag 3 is never referenced; Tag 4 is NES-only (via SupportingMedia).
+// Returns the *sql.DB handle from the opened MediaDB so callers can run assertions.
+func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
+	t.Helper()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	db := mediaDB.sql
+
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO TagTypes (DBID, Type) VALUES (1, 'genre'), (2, 'platform');
+		INSERT INTO Tags (DBID, TypeDBID, Tag)
+		    VALUES (1, 1, 'Action'), (2, 1, 'RPG'), (3, 2, 'Extension'), (4, 2, 'Cover');
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'NES', 'Nintendo'), (2, 'SNES', 'Super Nintendo');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name)
+		    VALUES (1, 1, 'mario', 'Mario'), (2, 2, 'zelda', 'Zelda');
+		INSERT INTO MediaTitleTags (MediaTitleDBID, TagDBID) VALUES (1, 2);
+	`)
 	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
 
-	systemIDs := []string{"NES", "SNES", "Genesis"}
+	mediaPath1 := filepath.Join("roms", "nes", "mario.nes")
+	mediaPath2 := filepath.Join("roms", "snes", "zelda.sfc")
+	_, err = db.ExecContext(ctx,
+		"INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (1, 1, 1, ?), (2, 2, 2, ?)",
+		mediaPath1, mediaPath2)
+	require.NoError(t, err)
 
-	// Expect Systems deletion (CASCADE handles all related records)
-	mock.ExpectExec(`DELETE FROM Systems WHERE SystemID IN \(\?,\?,\?\)`).
-		WithArgs("NES", "SNES", "Genesis").
-		WillReturnResult(sqlmock.NewResult(0, 3))
+	_, err = db.ExecContext(ctx, "INSERT INTO MediaTags (MediaDBID, TagDBID) VALUES (1, 1), (1, 2), (2, 1)")
+	require.NoError(t, err)
 
-	// Expect cleanup of orphaned tags (RESTRICT prevented cascade, so we clean separately)
-	// Note: TagTypes are NOT deleted as they are global infrastructure shared across systems
-	mock.ExpectExec(`DELETE FROM Tags WHERE DBID NOT IN`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	coverPath := filepath.Join("roms", "nes", "mario.png")
+	_, err = db.ExecContext(ctx,
+		"INSERT INTO SupportingMedia (DBID, MediaTitleDBID, TypeTagDBID, Path, ContentType) VALUES (1, 1, 4, ?, ?)",
+		coverPath, "image/png")
+	require.NoError(t, err)
 
-	err = sqlTruncateSystems(context.Background(), db, systemIDs)
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
+	return mediaDB, db
 }
 
 func TestSqlTruncateSystems_EmptyList(t *testing.T) {
 	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
 
-	// Should return immediately without any database operations
-	err = sqlTruncateSystems(context.Background(), db, []string{})
+	err := sqlTruncateSystems(context.Background(), mediaDB.sql, []string{})
 	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlTruncateSystems_Success(t *testing.T) {
+	t.Parallel()
+	_, db := setupTruncateTestDB(t)
+	ctx := context.Background()
+
+	err := sqlTruncateSystems(ctx, db, []string{"NES", "SNES"})
+	require.NoError(t, err)
+
+	var systemCount, mediaCount, titleCount, tagCount int
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Systems").Scan(&systemCount))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Media").Scan(&mediaCount))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaTitles").Scan(&titleCount))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Tags").Scan(&tagCount))
+	assert.Equal(t, 0, systemCount, "all systems should be deleted")
+	assert.Equal(t, 0, mediaCount, "all media should be deleted")
+	assert.Equal(t, 0, titleCount, "all media titles should be deleted")
+	// Tags 1, 2, 4 were referenced by deleted systems → now orphans → deleted. Tag 3 never referenced → kept.
+	assert.Equal(t, 1, tagCount, "only the unreferenced tag should remain")
+
+	// TagTypes must never be deleted
+	var typeCount int
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM TagTypes").Scan(&typeCount))
+	assert.Equal(t, 2, typeCount, "TagTypes must be preserved")
 }
 
 func TestSqlTruncateSystems_SingleSystem(t *testing.T) {
 	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
+	_, db := setupTruncateTestDB(t)
+	ctx := context.Background()
+
+	err := sqlTruncateSystems(ctx, db, []string{"NES"})
 	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
 
-	systemIDs := []string{"NES"}
+	var nesCount, snesCount int
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM Media WHERE SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = 'NES')
+	`).Scan(&nesCount))
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM Media WHERE SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = 'SNES')
+	`).Scan(&snesCount))
+	assert.Equal(t, 0, nesCount, "NES media should be deleted")
+	assert.Equal(t, 1, snesCount, "SNES media should remain")
 
-	// Expect Systems deletion (CASCADE handles all related records)
-	mock.ExpectExec(`DELETE FROM Systems WHERE SystemID IN \(\?\)`).
-		WithArgs("NES").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// Expect cleanup of orphaned tags (RESTRICT prevented cascade, so we clean separately)
-	// Note: TagTypes are NOT deleted as they are global infrastructure shared across systems
-	mock.ExpectExec(`DELETE FROM Tags WHERE DBID NOT IN`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	err = sqlTruncateSystems(context.Background(), db, systemIDs)
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
+	// Tag 2 ("RPG") was only referenced by NES (MediaTags + MediaTitleTags) → deleted as orphan.
+	// Tag 4 ("Cover") was only in SupportingMedia for NES → deleted as orphan.
+	// Tag 1 ("Action") is still referenced by SNES media → must survive.
+	// Tag 3 ("Extension") was never referenced → must survive.
+	var tag1, tag2, tag3, tag4 int
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Tags WHERE DBID = 1").Scan(&tag1))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Tags WHERE DBID = 2").Scan(&tag2))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Tags WHERE DBID = 3").Scan(&tag3))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Tags WHERE DBID = 4").Scan(&tag4))
+	assert.Equal(t, 1, tag1, "shared tag (Action) must survive")
+	assert.Equal(t, 0, tag2, "NES-only tag (RPG) should be deleted")
+	assert.Equal(t, 1, tag3, "unreferenced tag (Extension) must survive")
+	assert.Equal(t, 0, tag4, "NES-only SupportingMedia tag (Cover) should be deleted")
 }
 
-func TestSqlTruncateSystems_SystemsDeletionFailure(t *testing.T) {
+func TestSqlTruncateSystems_NonExistent(t *testing.T) {
 	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
+	_, db := setupTruncateTestDB(t)
+	ctx := context.Background()
+
+	// Truncating a system that doesn't exist should be a no-op without error.
+	err := sqlTruncateSystems(ctx, db, []string{"GameBoy"})
 	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
 
-	systemIDs := []string{"NES"}
-
-	// Expect Systems deletion to fail
-	mock.ExpectExec(`DELETE FROM Systems WHERE SystemID IN \(\?\)`).
-		WithArgs("NES").
-		WillReturnError(sql.ErrConnDone)
-
-	err = sqlTruncateSystems(context.Background(), db, systemIDs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to delete systems")
-	assert.NoError(t, mock.ExpectationsWereMet())
+	var systemCount int
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Systems").Scan(&systemCount))
+	assert.Equal(t, 2, systemCount, "existing systems should be untouched")
 }
 
-func TestSqlTruncateSystems_CleanupFailure(t *testing.T) {
+func TestSqlTruncateSystems_CancelledContext(t *testing.T) {
 	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
 
-	systemIDs := []string{"NES"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
 
-	// Expect Systems deletion to succeed
-	mock.ExpectExec(`DELETE FROM Systems WHERE SystemID IN \(\?\)`).
-		WithArgs("NES").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// Expect cleanup to fail
-	// Note: TagTypes are NOT deleted as they are global infrastructure shared across systems
-	mock.ExpectExec(`DELETE FROM Tags WHERE DBID NOT IN`).
-		WillReturnError(sql.ErrConnDone)
-
-	err = sqlTruncateSystems(context.Background(), db, systemIDs)
+	err := sqlTruncateSystems(ctx, mediaDB.sql, []string{"NES"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to clean up orphaned tags")
-	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestPrepareVariadic_Success(t *testing.T) {

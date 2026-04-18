@@ -70,6 +70,9 @@ task deadlock          # Detect lock ordering violations
 # DON'T use file-level golangci-lint (not well supported)
 # golangci-lint run pkg/config/config.go  # BAD
 
+# Find total index duration from MCP logs:
+# grep "media indexing completed" <log-file>
+
 # GitHub Actions workflow linting (use when editing .github/workflows/*.yml)
 actionlint .github/workflows/fuzz.yml    # Lint a specific workflow
 actionlint                                # Lint all workflows
