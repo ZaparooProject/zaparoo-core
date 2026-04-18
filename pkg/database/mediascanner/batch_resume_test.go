@@ -650,9 +650,10 @@ func TestResumeTruncatesPartialSystem(t *testing.T) {
 	require.NoError(t, row.Scan(&beforeCount))
 	require.Equal(t, int64(partialFiles), beforeCount, "partial index should have inserted %d rows", partialFiles)
 
-	// Step 2: simulate resume — truncate the partial system, then re-index all files.
-	require.NoError(t, mediaDB.TruncateSystems([]string{systemID}))
-
+	// Step 2: simulate resume — mirrors production ordering in mediascanner.go:
+	// PopulateScanStateFromDB runs first (before the main loop), then TruncateSystems
+	// fires inside the loop for the partial system. This order populates SystemIDs and
+	// TagIDs with pre-truncate DBIDs, which become stale after the truncate.
 	resumeState := &database.ScanState{
 		SystemIDs:     make(map[string]int),
 		TitleIDs:      make(map[string]int),
@@ -662,7 +663,29 @@ func TestResumeTruncatesPartialSystem(t *testing.T) {
 		TagTypesIndex: baseState.TagTypesIndex,
 		TagsIndex:     baseState.TagsIndex,
 	}
+	// Populate BEFORE truncate (production order). After this, resumeState.SystemIDs
+	// contains the stale DBID for systemID, and resumeState.TagIDs may contain DBIDs
+	// for tags that the orphan-cleanup inside TruncateSystems will delete.
 	require.NoError(t, PopulateScanStateFromDB(ctx, mediaDB, resumeState))
+
+	require.NoError(t, mediaDB.TruncateSystems([]string{systemID}))
+
+	// Reconcile stale scan state after truncate — mirrors the fix in mediascanner.go.
+	// Without this block, AddMediaPath would use the stale SystemIDs DBID for InsertMediaTitle
+	// and any stale TagIDs DBIDs for InsertMediaTag, causing FK violations.
+	delete(resumeState.SystemIDs, systemID)
+	allTags, tagsErr := mediaDB.GetAllTags()
+	require.NoError(t, tagsErr)
+	tagTypeByDBID := make(map[int64]string, len(resumeState.TagTypeIDs))
+	for tt, id := range resumeState.TagTypeIDs {
+		tagTypeByDBID[int64(id)] = tt
+	}
+	resumeState.TagIDs = make(map[string]int, len(allTags))
+	for _, tag := range allTags {
+		resumeState.TagIDs[database.TagKey(tagTypeByDBID[tag.TypeDBID], tag.Tag)] = int(tag.DBID)
+	}
+	require.NoError(t, SeedCanonicalTags(mediaDB, resumeState))
+
 	// After truncation, this system has no rows — population should find nothing.
 	require.NoError(t, PopulateScanStateForSystem(ctx, mediaDB, resumeState, systemID))
 	assert.Empty(t, resumeState.MediaIDs, "MediaIDs should be empty after truncating the partial system")

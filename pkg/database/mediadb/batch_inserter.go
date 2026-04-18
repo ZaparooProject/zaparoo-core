@@ -142,6 +142,8 @@ func (b *BatchInserter) Flush() error {
 				Msg("flushing dependency batch before child")
 		}
 		if err := dep.Flush(); err != nil {
+			b.buffer = b.buffer[:0]
+			b.currentCount = 0
 			return fmt.Errorf("failed to flush dependency for %s: %w: %w", b.tableName, ErrDependencyFlush, err)
 		}
 	}

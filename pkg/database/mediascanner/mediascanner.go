@@ -905,6 +905,29 @@ func NewNamesIndex(
 					return 0, fmt.Errorf("failed to truncate partial system data for resume: %w", truncErr)
 				}
 				resumedSystemTruncated = true
+
+				// TruncateSystems deletes the Systems row (invalidating the DBID cached in
+				// scanState.SystemIDs) and orphan-cleans any Tags no longer referenced by
+				// MediaTags/MediaTitleTags/SupportingMedia (invalidating DBIDs in scanState.TagIDs).
+				// Both maps were populated by PopulateScanStateFromDB before the main loop; they
+				// must be reconciled now so AddMediaPath doesn't pass stale foreign keys.
+				delete(scanState.SystemIDs, systemID)
+
+				allTags, tagsErr := db.GetAllTags()
+				if tagsErr != nil {
+					return 0, fmt.Errorf("failed to reload tags after resume truncate: %w", tagsErr)
+				}
+				tagTypeByDBID := make(map[int64]string, len(scanState.TagTypeIDs))
+				for t, id := range scanState.TagTypeIDs {
+					tagTypeByDBID[int64(id)] = t
+				}
+				scanState.TagIDs = make(map[string]int, len(allTags))
+				for _, tag := range allTags {
+					scanState.TagIDs[database.TagKey(tagTypeByDBID[tag.TypeDBID], tag.Tag)] = int(tag.DBID)
+				}
+				if seedErr := SeedCanonicalTags(db, &scanState); seedErr != nil {
+					return 0, fmt.Errorf("failed to re-seed canonical tags after resume truncate: %w", seedErr)
+				}
 			}
 
 			log.Debug().Str("system", systemID).Msg("loading existing data for system resume")
