@@ -142,13 +142,13 @@ func TestRBFCacheGetBySystemID_CacheHit(t *testing.T) {
 				MglName:   "_Console/NES",
 			},
 		},
-		byShortName: map[string]RBFInfo{
-			"nes": {
+		byShortName: map[string][]RBFInfo{
+			"nes": {{
 				Path:      "/media/fat/_Console/NES_20231212.rbf",
 				Filename:  "NES_20231212.rbf",
 				ShortName: "NES",
 				MglName:   "_Console/NES",
-			},
+			}},
 		},
 	}
 
@@ -285,7 +285,7 @@ func TestGetByLauncherID_RegisteredButNotInShortNameCache(t *testing.T) {
 	t.Parallel()
 
 	cache := &RBFCache{
-		byShortName: make(map[string]RBFInfo),
+		byShortName: make(map[string][]RBFInfo),
 	}
 
 	// Register an alt core
@@ -300,13 +300,13 @@ func TestGetByLauncherID_CacheHit(t *testing.T) {
 	t.Parallel()
 
 	cache := &RBFCache{
-		byShortName: map[string]RBFInfo{
-			"psx2xcpu": {
+		byShortName: map[string][]RBFInfo{
+			"psx2xcpu": {{
 				Path:      "/media/fat/_Other/PSX2XCPU_20240101.rbf",
 				Filename:  "PSX2XCPU_20240101.rbf",
 				ShortName: "PSX2XCPU",
 				MglName:   "_Other/PSX2XCPU",
-			},
+			}},
 		},
 	}
 
@@ -324,13 +324,13 @@ func TestGetByLauncherID_ExtractsShortNameFromPath(t *testing.T) {
 	t.Parallel()
 
 	cache := &RBFCache{
-		byShortName: map[string]RBFInfo{
-			"n64_80mhz": {
+		byShortName: map[string][]RBFInfo{
+			"n64_80mhz": {{
 				Path:      "/media/fat/_Other/N64_80MHz_20240101.rbf",
 				Filename:  "N64_80MHz_20240101.rbf",
 				ShortName: "N64_80MHz",
 				MglName:   "_Other/N64_80MHz",
-			},
+			}},
 		},
 	}
 
@@ -366,19 +366,19 @@ func TestResolveRBFPathForLauncher_LauncherIDTakesPriority(t *testing.T) {
 			MglName:   "_Console/PSX",
 		},
 	}
-	GlobalRBFCache.byShortName = map[string]RBFInfo{
-		"psx": {
+	GlobalRBFCache.byShortName = map[string][]RBFInfo{
+		"psx": {{
 			Path:      "/media/fat/_Console/PSX_20240101.rbf",
 			Filename:  "PSX_20240101.rbf",
 			ShortName: "PSX",
 			MglName:   "_Console/PSX",
-		},
-		"psx2xcpu": {
+		}},
+		"psx2xcpu": {{
 			Path:      "/media/fat/_Other/PSX2XCPU_20240101.rbf",
 			Filename:  "PSX2XCPU_20240101.rbf",
 			ShortName: "PSX2XCPU",
 			MglName:   "_Other/PSX2XCPU",
-		},
+		}},
 	}
 	GlobalRBFCache.byLauncherID = map[string]string{
 		"2XPSX": "_Other/PSX2XCPU",
@@ -410,7 +410,7 @@ func TestResolveRBFPathForLauncher_FallbackChain(t *testing.T) {
 	// Setup empty cache
 	GlobalRBFCache.mu.Lock()
 	GlobalRBFCache.bySystemID = make(map[string]RBFInfo)
-	GlobalRBFCache.byShortName = make(map[string]RBFInfo)
+	GlobalRBFCache.byShortName = make(map[string][]RBFInfo)
 	GlobalRBFCache.byLauncherID = make(map[string]string)
 	GlobalRBFCache.mu.Unlock()
 
@@ -442,7 +442,7 @@ func TestResolveRBFPathForLauncher_LauncherNotFoundFallsBackToSystemID(t *testin
 			MglName:   "_Console/PSX",
 		},
 	}
-	GlobalRBFCache.byShortName = make(map[string]RBFInfo)
+	GlobalRBFCache.byShortName = make(map[string][]RBFInfo)
 	GlobalRBFCache.byLauncherID = make(map[string]string)
 	GlobalRBFCache.mu.Unlock()
 
@@ -478,19 +478,19 @@ func TestRegression_Issue477_AltCoreUsesWrongRBFPath(t *testing.T) {
 			MglName:   "_Console/PSX",
 		},
 	}
-	GlobalRBFCache.byShortName = map[string]RBFInfo{
-		"psx": {
+	GlobalRBFCache.byShortName = map[string][]RBFInfo{
+		"psx": {{
 			Path:      "/media/fat/_Console/PSX_20240101.rbf",
 			Filename:  "PSX_20240101.rbf",
 			ShortName: "PSX",
 			MglName:   "_Console/PSX",
-		},
-		"psx2xcpu": {
+		}},
+		"psx2xcpu": {{
 			Path:      "/media/fat/_Other/PSX2XCPU_20240101.rbf",
 			Filename:  "PSX2XCPU_20240101.rbf",
 			ShortName: "PSX2XCPU",
 			MglName:   "_Other/PSX2XCPU",
-		},
+		}},
 	}
 	GlobalRBFCache.byLauncherID = map[string]string{
 		"2XPSX": "_Other/PSX2XCPU",
@@ -514,4 +514,234 @@ func TestRegression_Issue477_AltCoreUsesWrongRBFPath(t *testing.T) {
 	// Test 3: Verify they are different - this is the core of the bug
 	assert.NotEqual(t, mainPSXPath, altCorePath,
 		"alt core should resolve to different path than main core even though they share systemID")
+}
+
+func TestSplitRBFPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input     string
+		wantDir   string
+		wantShort string
+	}{
+		{"_Console/SNES", "_Console", "SNES"},
+		{"_ConsolePWM/_Turbo/PSX2XCPU_PWM", "_ConsolePWM/_Turbo", "PSX2XCPU_PWM"},
+		{"SNES", "", "SNES"},
+		{"", "", ""},
+		{"_Console/", "_Console", ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
+
+			dir, short := splitRBFPath(tc.input)
+			assert.Equal(t, tc.wantDir, dir)
+			assert.Equal(t, tc.wantShort, short)
+		})
+	}
+}
+
+func TestSelectByCanonicalDir(t *testing.T) {
+	t.Parallel()
+
+	console := RBFInfo{Path: "/media/fat/_Console/SNES_20240101.rbf", ShortName: "SNES", MglName: "_Console/SNES"}
+	unstable := RBFInfo{Path: "/media/fat/_Unstable/SNES_20251001.rbf", ShortName: "SNES", MglName: "_Unstable/SNES"}
+	rootLevel := RBFInfo{Path: "/media/fat/SNES_20240101.rbf", ShortName: "SNES", MglName: "SNES"}
+
+	tests := []struct {
+		name         string
+		canonicalDir string
+		wantMglName  string
+		candidates   []RBFInfo
+		wantOk       bool
+	}{
+		{
+			name:         "empty candidates",
+			candidates:   nil,
+			canonicalDir: "_Console",
+			wantOk:       false,
+		},
+		{
+			name:         "single candidate any dir",
+			candidates:   []RBFInfo{unstable},
+			canonicalDir: "_Console",
+			wantOk:       true,
+			wantMglName:  "_Unstable/SNES",
+		},
+		{
+			name:         "canonical match wins",
+			candidates:   []RBFInfo{unstable, console},
+			canonicalDir: "_Console",
+			wantOk:       true,
+			wantMglName:  "_Console/SNES",
+		},
+		{
+			name:         "canonical match wins reversed order",
+			candidates:   []RBFInfo{console, unstable},
+			canonicalDir: "_Console",
+			wantOk:       true,
+			wantMglName:  "_Console/SNES",
+		},
+		{
+			name:         "no canonical match falls back to first",
+			candidates:   []RBFInfo{unstable, console},
+			canonicalDir: "_Homebrew",
+			wantOk:       true,
+			wantMglName:  "_Unstable/SNES",
+		},
+		{
+			name:         "empty canonical dir falls back to first when no root-level core",
+			candidates:   []RBFInfo{unstable, console},
+			canonicalDir: "",
+			wantOk:       true,
+			wantMglName:  "_Unstable/SNES",
+		},
+		{
+			name:         "empty canonical dir selects root-level core",
+			candidates:   []RBFInfo{console, unstable, rootLevel},
+			canonicalDir: "",
+			wantOk:       true,
+			wantMglName:  "SNES",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := selectByCanonicalDir(tc.candidates, tc.canonicalDir)
+			assert.Equal(t, tc.wantOk, ok)
+			if ok {
+				assert.Equal(t, tc.wantMglName, got.MglName)
+			}
+		})
+	}
+}
+
+func TestBuildFromRBFs_PrefersCanonicalDir(t *testing.T) {
+	t.Parallel()
+
+	console := RBFInfo{
+		Path:      "/media/fat/_Console/SNES_20240101.rbf",
+		Filename:  "SNES_20240101.rbf",
+		ShortName: "SNES",
+		MglName:   "_Console/SNES",
+	}
+	unstable := RBFInfo{
+		Path:      "/media/fat/_Unstable/SNES_20251001.rbf",
+		Filename:  "SNES_20251001.rbf",
+		ShortName: "SNES",
+		MglName:   "_Unstable/SNES",
+	}
+
+	// Canonical dir wins regardless of iteration order
+	for _, files := range [][]RBFInfo{
+		{console, unstable},
+		{unstable, console},
+	} {
+		cache := &RBFCache{}
+		cache.buildFromRBFs(files)
+
+		rbf, ok := cache.bySystemID["SNES"]
+		assert.True(t, ok, "SNES should be mapped")
+		assert.Equal(t, "_Console/SNES", rbf.MglName, "canonical dir must win")
+	}
+}
+
+func TestBuildFromRBFs_FallsBackToNonCanonical(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.buildFromRBFs([]RBFInfo{{
+		Path:      "/media/fat/_Unstable/SNES_20251001.rbf",
+		Filename:  "SNES_20251001.rbf",
+		ShortName: "SNES",
+		MglName:   "_Unstable/SNES",
+	}})
+
+	rbf, ok := cache.bySystemID["SNES"]
+	assert.True(t, ok, "SNES should be mapped via fallback")
+	assert.Equal(t, "_Unstable/SNES", rbf.MglName, "fallback to non-canonical when canonical absent")
+}
+
+func TestGetByLauncherID_PrefersCanonicalDir(t *testing.T) {
+	t.Parallel()
+
+	other := RBFInfo{
+		Path:      "/media/fat/_Other/PSX2XCPU_20240101.rbf",
+		Filename:  "PSX2XCPU_20240101.rbf",
+		ShortName: "PSX2XCPU",
+		MglName:   "_Other/PSX2XCPU",
+	}
+	unstable := RBFInfo{
+		Path:      "/media/fat/_Unstable/PSX2XCPU_20251001.rbf",
+		Filename:  "PSX2XCPU_20251001.rbf",
+		ShortName: "PSX2XCPU",
+		MglName:   "_Unstable/PSX2XCPU",
+	}
+
+	cache := &RBFCache{
+		byShortName: map[string][]RBFInfo{
+			"psx2xcpu": {unstable, other},
+		},
+	}
+	cache.RegisterAltCore("2XPSX", "_Other/PSX2XCPU")
+
+	rbf, found := cache.GetByLauncherID("2XPSX")
+	assert.True(t, found)
+	assert.Equal(t, "_Other/PSX2XCPU", rbf.MglName, "registered canonical dir must win")
+
+	// Fallback when only non-canonical dir present
+	cache2 := &RBFCache{
+		byShortName: map[string][]RBFInfo{
+			"psx2xcpu": {unstable},
+		},
+	}
+	cache2.RegisterAltCore("2XPSX", "_Other/PSX2XCPU")
+
+	rbf, found = cache2.GetByLauncherID("2XPSX")
+	assert.True(t, found)
+	assert.Equal(t, "_Unstable/PSX2XCPU", rbf.MglName, "falls back to available dir when canonical absent")
+}
+
+func TestGetByMglPath(t *testing.T) {
+	t.Parallel()
+
+	console := RBFInfo{
+		Path:      "/media/fat/_Console/SNES_20240101.rbf",
+		Filename:  "SNES_20240101.rbf",
+		ShortName: "SNES",
+		MglName:   "_Console/SNES",
+	}
+	unstable := RBFInfo{
+		Path:      "/media/fat/_Unstable/SNES_20251001.rbf",
+		Filename:  "SNES_20251001.rbf",
+		ShortName: "SNES",
+		MglName:   "_Unstable/SNES",
+	}
+
+	cache := &RBFCache{
+		byShortName: map[string][]RBFInfo{
+			"snes": {console, unstable},
+		},
+	}
+
+	// Prefers the directory embedded in the mgl path
+	rbf, ok := cache.GetByMglPath("_Unstable/SNES")
+	assert.True(t, ok)
+	assert.Equal(t, "_Unstable/SNES", rbf.MglName)
+
+	rbf, ok = cache.GetByMglPath("_Console/SNES")
+	assert.True(t, ok)
+	assert.Equal(t, "_Console/SNES", rbf.MglName)
+
+	// Falls back to first candidate when dir not found
+	rbf, ok = cache.GetByMglPath("_Homebrew/SNES")
+	assert.True(t, ok)
+	assert.Equal(t, "_Console/SNES", rbf.MglName)
+
+	// Returns false when short name unknown
+	_, ok = cache.GetByMglPath("_Console/Unknown12345")
+	assert.False(t, ok)
 }

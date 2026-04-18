@@ -837,7 +837,9 @@ func TestNewClient_UsesConfigurationSystem(t *testing.T) {
 	}
 }
 
-// Helper function to create config instance with Kodi defaults for testing
+// Helper function to create config instance with Kodi defaults for testing.
+//
+//nolint:gocritic // hugeParam: value copy is intentional — pointer would introduce nil-deref risk in test helper
 func createTestConfigWithKodiDefaults(t *testing.T, defaults config.LaunchersDefault) *config.Instance {
 	t.Helper()
 

@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -323,7 +324,8 @@ func TestGenerateMgl(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := GenerateMgl(tt.core, tt.path, tt.override)
+			cfg := &config.Instance{}
+			got, err := GenerateMgl(cfg, tt.core, tt.path, tt.override)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -405,6 +407,98 @@ func TestWriteCurrentPath(t *testing.T) {
 	}
 }
 
+func TestGenerateMgl_LoadPathOverride(t *testing.T) {
+	t.Parallel()
+
+	core := &cores.Core{
+		ID:  "SNES",
+		RBF: "_Console/SNES",
+		Slots: []cores.Slot{
+			{
+				Exts: []string{".sfc"},
+				Mgl: &cores.MGLParams{
+					Delay:  2,
+					Method: "f",
+					Index:  1,
+				},
+			},
+		},
+	}
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "SNES"
+load_path = "_Unstable/SNES"
+`))
+
+	got, err := GenerateMgl(cfg, core, "/media/fat/games/SNES/game.sfc", "")
+	require.NoError(t, err)
+	assert.Contains(t, got, "<rbf>_Unstable/SNES</rbf>", "load_path override must appear in MGL")
+	assert.NotContains(t, got, "_Console/SNES", "canonical path must not appear when overridden")
+}
+
+func TestGenerateMgl_LoadPathOverride_UsesLauncherID(t *testing.T) {
+	t.Parallel()
+
+	// LauncherID is set (alt core). load_path is configured under the LauncherID,
+	// not the system ID. GenerateMgl must prefer LauncherID as the lookup key.
+	core := &cores.Core{
+		ID:         "PSX",
+		LauncherID: "2XPSX",
+		RBF:        "_Console/PSX",
+		Slots: []cores.Slot{
+			{
+				Exts: []string{".chd"},
+				Mgl: &cores.MGLParams{
+					Delay:  1,
+					Method: "f",
+					Index:  1,
+				},
+			},
+		},
+	}
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "2XPSX"
+load_path = "_Other/PSX2XCPU"
+`))
+
+	got, err := GenerateMgl(cfg, core, "/media/fat/games/PSX/game.chd", "")
+	require.NoError(t, err)
+	assert.Contains(t, got, "<rbf>_Other/PSX2XCPU</rbf>", "LauncherID-keyed load_path must win")
+	assert.NotContains(t, got, "_Console/PSX", "system ID path must not appear when LauncherID is set")
+}
+
+func TestGenerateMgl_NoLoadPath_FallsBackToCoreRBF(t *testing.T) {
+	t.Parallel()
+
+	// Use a fake system ID that is never present in GlobalRBFCache so the
+	// fallback to core.RBF is guaranteed regardless of other tests' cache state.
+	core := &cores.Core{
+		ID:  "FakeSystem_NotInCache",
+		RBF: "_Custom/FakeCore",
+		Slots: []cores.Slot{
+			{
+				Exts: []string{".rom"},
+				Mgl: &cores.MGLParams{
+					Delay:  1,
+					Method: "f",
+					Index:  1,
+				},
+			},
+		},
+	}
+
+	cfg := &config.Instance{}
+
+	got, err := GenerateMgl(cfg, core, "/media/fat/games/Fake/game.rom", "")
+	require.NoError(t, err)
+	assert.Contains(t, got, "<rbf>_Custom/FakeCore</rbf>", "no load_path should fall back to core.RBF")
+}
+
 func TestGenerateMgl_NoMatchingSlot(t *testing.T) {
 	t.Parallel()
 
@@ -424,7 +518,8 @@ func TestGenerateMgl_NoMatchingSlot(t *testing.T) {
 	}
 
 	// Try to launch a .sfc file with NES core - no matching slot
-	_, err := GenerateMgl(core, "/media/fat/games/NES/game.sfc", "")
+	cfg := &config.Instance{}
+	_, err := GenerateMgl(cfg, core, "/media/fat/games/NES/game.sfc", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no matching mgl args")
 }
