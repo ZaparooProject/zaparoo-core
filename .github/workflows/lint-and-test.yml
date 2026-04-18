@@ -60,7 +60,7 @@ jobs:
 
       - name: Restore Go cache (Unix)
         if: matrix.os != 'windows'
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             ~/go/pkg/mod
@@ -72,7 +72,7 @@ jobs:
 
       - name: Restore Go cache (Windows)
         if: matrix.os == 'windows'
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             D:\go-mod-cache
@@ -99,7 +99,7 @@ jobs:
 
       - name: Cache scoop packages (Windows)
         if: matrix.os == 'windows'
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~\scoop
           key: ${{ runner.os }}-scoop-pkg-config
@@ -174,7 +174,7 @@ jobs:
 
       - name: Save Go cache (Unix)
         if: matrix.os != 'windows'
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             ~/go/pkg/mod
@@ -183,7 +183,7 @@ jobs:
 
       - name: Save Go cache (Windows)
         if: matrix.os == 'windows'
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             D:\go-mod-cache

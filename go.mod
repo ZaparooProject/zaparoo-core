@@ -20,10 +20,10 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/gen2brain/malgo v0.11.24
-	github.com/getsentry/sentry-go v0.45.0
+	github.com/getsentry/sentry-go v0.45.1
 	github.com/getsentry/sentry-go/zerolog v0.45.0
 	github.com/go-chi/chi/v5 v5.2.4
-	github.com/go-chi/cors v1.2.1
+	github.com/go-chi/cors v1.2.2
 	github.com/go-ole/go-ole v1.3.0
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/go-viper/mapstructure/v2 v2.4.0
@@ -36,8 +36,8 @@ require (
 	github.com/hbollon/go-edlib v1.7.0
 	github.com/hsanjuan/go-ndef v0.0.1
 	github.com/jonboulle/clockwork v0.5.0
-	github.com/mackerelio/go-osstat v0.2.6
-	github.com/mattn/go-sqlite3 v1.14.28
+	github.com/mackerelio/go-osstat v0.2.7
+	github.com/mattn/go-sqlite3 v1.14.42
 	github.com/nixinwang/dialog v0.0.0-20240524023314-b4bad92eff4d
 	github.com/olahol/melody v1.4.0
 	github.com/pelletier/go-toml/v2 v2.3.0
@@ -50,7 +50,7 @@ require (
 	github.com/spf13/afero v1.15.0
 	github.com/stretchr/testify v1.11.1
 	go.bug.st/serial v1.6.4
-	go.etcd.io/bbolt v1.4.0
+	go.etcd.io/bbolt v1.4.3
 	go.uber.org/goleak v1.3.0
 	golang.design/x/clipboard v0.7.1
 	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa

@@ -197,6 +197,9 @@ func ParseCustomLaunchers(
 					return nil, errors.New("execute command is empty after parsing")
 				}
 
+				log.Debug().Str("launcherID", launcherID).Str("command", output).Strs("argv", parts).
+					Msg("executing custom launcher")
+
 				//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
 				cmd := exec.Command(parts[0], parts[1:]...)
 				cmd.Dir = ExeDir()
@@ -208,9 +211,6 @@ func ParseCustomLaunchers(
 				} else {
 					cmd.Env = append(os.Environ(), "ZAPAROO_ENVIRONMENT="+string(envJSON))
 				}
-
-				log.Debug().Str("launcherID", launcherID).Str("command", output).
-					Msg("executing custom launcher")
 
 				if err = cmd.Start(); err != nil {
 					log.Error().Err(err).Msgf("error running custom launcher: %s", output)

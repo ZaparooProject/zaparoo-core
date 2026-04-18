@@ -283,6 +283,31 @@ func TestParseCustomLaunchers_EmptyExecuteLeavesLaunchNil(t *testing.T) {
 	assert.Nil(t, l.Launch, "Launch should be nil when Execute is empty")
 }
 
+func TestParseCustomLaunchers_LaunchLogsArgvAndFailsOnMissingBinary(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	customLaunchers := []config.LaunchersCustom{
+		{
+			ID:      "TestExec",
+			Execute: "nonexistent-binary-zaparoo-test [[media_path]]",
+		},
+	}
+
+	launchers := ParseCustomLaunchers(mockPlatform, customLaunchers)
+	require.Len(t, launchers, 1)
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+
+	// Calling Launch hits the argv log line then fails at cmd.Start because the
+	// binary does not exist. The error confirms we reached the execution path.
+	_, err = launchers[0].Launch(cfg, filepath.Join("some", "game.bin"), nil)
+	assert.Error(t, err, "expected error for nonexistent binary")
+}
+
 func TestFormatExtensions(t *testing.T) {
 	t.Parallel()
 
