@@ -57,7 +57,7 @@ func selectByCanonicalDir(candidates []RBFInfo, canonicalDir string) (RBFInfo, b
 	}
 	for _, c := range candidates {
 		dir, _ := splitRBFPath(c.MglName)
-		if dir == canonicalDir {
+		if strings.EqualFold(dir, canonicalDir) {
 			return c, true
 		}
 	}

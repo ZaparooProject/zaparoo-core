@@ -402,6 +402,20 @@ func TestLookupLauncherDefaults_LaterEntryOverridesLoadPath(t *testing.T) {
 	assert.Equal(t, "_Unstable/SNES", result.LoadPath, "later entry must win")
 }
 
+func TestLookupLauncherDefaults_LoadPathTOMLRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Nintendo64"
+load_path = "_LLAPI/N64_LLAPI"
+`))
+
+	result := cfg.LookupLauncherDefaults("Nintendo64", nil)
+	assert.Equal(t, "_LLAPI/N64_LLAPI", result.LoadPath, "load_path must survive TOML round-trip")
+}
+
 func TestLoadTOML_LauncherDefaults(t *testing.T) {
 	t.Parallel()
 
