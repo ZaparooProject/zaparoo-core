@@ -353,7 +353,7 @@ func TestDecodeURIIfNeeded_EdgeCases(t *testing.T) {
 		{
 			name:     "kodi_with_fragment",
 			input:    "kodi-movie://456/The%20Matrix#play",
-			expected: "kodi-movie://456/The Matrix#play", // Fragment kept as part of name
+			expected: "kodi-movie://456/The Matrix%23play", // '#' re-encoded to keep it in path, not fragment
 		},
 		{
 			name:     "http_with_query_and_fragment",

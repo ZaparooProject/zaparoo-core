@@ -78,12 +78,13 @@ func DecodeURIIfNeeded(uri string) string {
 		// slash structure while decoding percent-encoded characters.
 		rest := strings.TrimRight(parsed.Rest, "/")
 		segments := strings.Split(rest, "/")
+		// Re-encoder for gen-delims that would change URI structure on a
+		// second parse pass: / (path sep), ? (query), # (fragment).
+		reenc := strings.NewReplacer("/", "%2F", "?", "%3F", "#", "%23")
 		for i, seg := range segments {
 			decoded, err := url.PathUnescape(seg)
 			if err == nil && utf8.ValidString(decoded) {
-				// Re-encode any slashes from %2F so they don't become
-				// structural separators on subsequent passes
-				segments[i] = strings.ReplaceAll(decoded, "/", "%2F")
+				segments[i] = reenc.Replace(decoded)
 			}
 		}
 		reconstructed := parsed.Scheme + "://" + strings.Join(segments, "/")
@@ -95,18 +96,23 @@ func DecodeURIIfNeeded(uri string) string {
 
 	// Handle standard web schemes (http/https)
 	if shared.IsStandardSchemeForDecoding(schemeLower) {
-		// Extract fragment from query if present (only for http/https)
+		// Per RFC 3986, '#' introduces the fragment and takes precedence over
+		// '?', which ParseURIComponents picks up as the query separator.
+		// Extract fragment from the raw URI first so that a fragment containing
+		// '?' doesn't shift on a second parse pass (idempotence).
 		var fragment string
-		query := parsed.Query
-		if idx := strings.Index(query, "#"); idx >= 0 {
-			fragment = query[idx+1:]
-			query = query[:idx]
+		fragURI := uri
+		if idx := strings.Index(uri, "#"); idx >= 0 {
+			fragment = uri[idx+1:]
+			fragURI = uri[:idx]
 		}
+		hParsed := virtualpath.ParseURIComponents(fragURI)
+		query := hParsed.Query
 
 		// Split rest into userinfo@host and path
 		// Format: [userinfo@]host/path
 		var userinfo, host, pathPart string
-		rest := parsed.Rest
+		rest := hParsed.Rest
 
 		// Check for userinfo (use LastIndex to handle @ in passwords)
 		if idx := strings.LastIndex(rest, "@"); idx >= 0 {
