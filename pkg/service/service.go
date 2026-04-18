@@ -212,8 +212,10 @@ func Start(
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
 
-	// Create and start notification broker to broadcast to all consumers
-	notifBroker := broker.NewBroker(st.GetContext(), ns)
+	// Create and start notification broker to broadcast to all consumers.
+	// media.indexing is coalesceable: bursts during index/resume collapse to
+	// latest-wins so slow WebSocket consumers don't drop discrete events.
+	notifBroker := broker.NewBroker(st.GetContext(), ns, models.NotificationMediaIndexing)
 	notifBroker.Start()
 
 	// TODO: convert this to a *token channel
