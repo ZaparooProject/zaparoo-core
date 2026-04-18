@@ -22,6 +22,7 @@ package mediascanner
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -829,10 +830,8 @@ func TestAddMediaPath_ExtensionTag_UniqueConstraintClassification(t *testing.T) 
 	zerolog.SetGlobalLevel(zerolog.TraceLevel)
 	t.Cleanup(func() { zerolog.SetGlobalLevel(prevGlobalLevel) })
 
-	const (
-		systemID = "SNES"
-		path     = "/roms/snes/SuperMario.sfc"
-	)
+	const systemID = "SNES"
+	path := filepath.Join("roms", "snes", "SuperMario.sfc")
 	const extTagDBID = int64(99)
 
 	// Pre-populate the extension tag so the InsertTag branch is skipped and only
