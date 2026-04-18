@@ -50,19 +50,17 @@ var defaultDesktopBlockList = []string{
 	"{cmd+space}", "{cmd+q}",
 }
 
-// defaultInputMode returns the default input mode for a platform.
 func defaultInputMode(platformID string) string {
 	switch platformID {
 	case platformids.Mister, platformids.Mistex, platformids.Batocera,
-		platformids.Recalbox, platformids.LibreELEC, platformids.RetroPie:
+		platformids.Recalbox, platformids.LibreELEC, platformids.RetroPie,
+		platformids.ReplayOS:
 		return config.InputModeUnrestricted
 	default:
 		return config.InputModeCombos
 	}
 }
 
-// isDesktopPlatform returns true for platforms where the default block list
-// should be applied.
 func isDesktopPlatform(platformID string) bool {
 	switch platformID {
 	case platformids.Linux, platformids.Windows, platformids.Mac,
@@ -73,9 +71,8 @@ func isDesktopPlatform(platformID string) bool {
 	}
 }
 
-// isSpecialKey returns true if the key is a braced special key or combo
-// (e.g. {f1}, {enter}, {ctrl+q}). Single characters like "a" and braced
-// single characters like "{a}" both return false.
+// isSpecialKey returns true for braced keys with more than one inner character
+// (e.g. {f1}, {enter}, {ctrl+q}). Single chars like "a" and "{a}" return false.
 func isSpecialKey(key string) bool {
 	if len(key) < 4 || key[0] != '{' || key[len(key)-1] != '}' {
 		return false
@@ -84,7 +81,6 @@ func isSpecialKey(key string) bool {
 	return len(inner) > 1
 }
 
-// isKeyInList checks if a key is in a list (case-insensitive).
 func isKeyInList(key string, list []string) bool {
 	for _, item := range list {
 		if strings.EqualFold(key, item) {
@@ -94,12 +90,8 @@ func isKeyInList(key string, list []string) bool {
 	return false
 }
 
-// checkInputKey checks whether a key is allowed under the current input config.
-//
-// Logic (in order):
-//  1. If allow list is set → strict mode, only listed keys permitted
-//  2. Check effective block list (custom or default desktop)
-//  3. Mode check: combos allows only braced keys, unrestricted allows all
+// checkInputKey returns an error if the key is not permitted under the current
+// input config. Precedence: allow list → block list → mode check.
 func checkInputKey(cfg *config.Instance, platformID, key string) error {
 	// 1. Strict allow mode — overrides everything
 	allowList := cfg.InputAllowList()
@@ -166,8 +158,7 @@ func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, e
 	return platforms.CmdResult{}, nil
 }
 
-// PressKeyboardSequence presses each key in args sequentially with a delay
-// between each press. Used by both ZapScript commands and API handlers.
+// PressKeyboardSequence is shared between ZapScript commands and API handlers.
 func PressKeyboardSequence(pl platforms.Platform, args []string) error {
 	for _, name := range args {
 		if err := pl.KeyboardPress(name); err != nil {
@@ -178,8 +169,7 @@ func PressKeyboardSequence(pl platforms.Platform, args []string) error {
 	return nil
 }
 
-// PressGamepadSequence presses each button in args sequentially with a delay
-// between each press. Used by both ZapScript commands and API handlers.
+// PressGamepadSequence is shared between ZapScript commands and API handlers.
 func PressGamepadSequence(pl platforms.Platform, args []string) error {
 	for _, name := range args {
 		if err := pl.GamepadPress(name); err != nil {

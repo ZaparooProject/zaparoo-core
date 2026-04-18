@@ -117,6 +117,8 @@ jobs:
             arch: 386
           - platform: libreelec
             arch: arm
+          - platform: replayos
+            arch: arm64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Get latest Zaparoo App release tag

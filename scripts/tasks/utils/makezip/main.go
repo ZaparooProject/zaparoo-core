@@ -46,6 +46,7 @@ var platformDocs = map[string]string{
 	"mister":    "mister/index.md",
 	"mistex":    "mistex.md",
 	"recalbox":  "recalbox.mdx",
+	"replayos":  "replayos.md",
 	"steamos":   "steamos.md",
 	"windows":   "windows/index.md",
 }
@@ -61,6 +62,7 @@ var platformURLs = map[string]string{
 	"mister":    "https://zaparoo.org/docs/platforms/mister/",
 	"mistex":    "https://zaparoo.org/docs/platforms/mistex/",
 	"recalbox":  "https://zaparoo.org/docs/platforms/recalbox/",
+	"replayos":  "https://zaparoo.org/docs/platforms/replayos/",
 	"steamos":   "https://zaparoo.org/docs/platforms/steamos/",
 	"windows":   "https://zaparoo.org/docs/platforms/windows/",
 }
