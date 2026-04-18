@@ -82,25 +82,11 @@ func xmlEscapeAttr(v string) string {
 	return r.Replace(v)
 }
 
-func GenerateMgl(cfg *config.Instance, core *cores.Core, path, override string) (string, error) {
+func GenerateMgl(core *cores.Core, rbfPath, path, override string) (string, error) {
 	if core == nil {
 		return "", errors.New("no core supplied for MGL generation")
 	}
 
-	key := core.LauncherID
-	if key == "" {
-		key = core.ID
-	}
-	var rbfPath string
-	if cfg != nil {
-		if lp := cfg.LookupLauncherDefaults(key, nil).LoadPath; lp != "" {
-			rbfPath = lp
-			log.Debug().Str("launcher", key).Str("load_path", lp).Msg("RBF overridden by config load_path")
-		}
-	}
-	if rbfPath == "" {
-		rbfPath = cores.ResolveRBFPathForLauncher(core.LauncherID, core.ID, core.RBF)
-	}
 	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", rbfPath)
 
 	if core.SetName != "" {
@@ -188,6 +174,11 @@ func launchFile(path string) error {
 }
 
 func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error {
+	rbfInfo, err := cores.GlobalRBFCache.Resolve(cfg, system)
+	if err != nil {
+		return fmt.Errorf("resolving core RBF: %w", err)
+	}
+
 	override, err := cores.RunSystemHook(cfg, system, path)
 	if err != nil {
 		return fmt.Errorf("failed to run system hook: %w", err)
@@ -196,7 +187,7 @@ func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error 
 		log.Debug().Str("system", system.ID).Str("hook_result", override).Msg("system hook executed")
 	}
 
-	mgl, err := GenerateMgl(cfg, system, path, override)
+	mgl, err := GenerateMgl(system, rbfInfo.MglName, path, override)
 	if err != nil {
 		return fmt.Errorf("failed to generate MGL: %w", err)
 	}
@@ -316,23 +307,9 @@ func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *cores.Core) 
 		return LaunchGame(cfg, system, "")
 	}
 
-	var rbfInfo cores.RBFInfo
-	var ok bool
-	coreKey := system.LauncherID
-	if coreKey == "" {
-		coreKey = system.ID
-	}
-	if lp := cfg.LookupLauncherDefaults(coreKey, nil).LoadPath; lp != "" {
-		rbfInfo, ok = cores.GlobalRBFCache.GetByMglPath(lp)
-		if !ok {
-			return fmt.Errorf("configured load_path %q for system %s not found in RBF cache", lp, system.ID)
-		}
-		log.Debug().Str("system", system.ID).Str("load_path", lp).Msg("core overridden by config load_path")
-	} else {
-		rbfInfo, ok = cores.GlobalRBFCache.GetBySystemID(system.ID)
-		if !ok {
-			return fmt.Errorf("no core found for system %s (not in cache)", system.ID)
-		}
+	rbfInfo, err := cores.GlobalRBFCache.Resolve(cfg, system)
+	if err != nil {
+		return fmt.Errorf("resolving core RBF: %w", err)
 	}
 	path := rbfInfo.Path
 

@@ -22,8 +22,10 @@
 package cores
 
 import (
+	"fmt"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 )
@@ -75,20 +77,20 @@ func (c *RBFCache) populateCache() {
 	rbfFiles, err := shallowScanRBF()
 	if err != nil {
 		log.Warn().Err(err).Msg("RBF cache: scan failed, using empty cache")
-		c.buildFromRBFs(nil)
+		c.BuildFromRBFs(nil)
 		return
 	}
-	c.buildFromRBFs(rbfFiles)
+	c.BuildFromRBFs(rbfFiles)
 	log.Info().
 		Int("rbf_files", len(rbfFiles)).
 		Int("systems_mapped", len(c.bySystemID)).
 		Msg("RBF cache initialized")
 }
 
-// buildFromRBFs deterministically rebuilds bySystemID and byShortName from a
+// BuildFromRBFs deterministically rebuilds bySystemID and byShortName from a
 // scanned RBF list, preferring each system's canonical directory when multiple
 // RBFs share a short name. No filesystem access; safe to call in tests.
-func (c *RBFCache) buildFromRBFs(rbfFiles []RBFInfo) {
+func (c *RBFCache) BuildFromRBFs(rbfFiles []RBFInfo) {
 	c.bySystemID = make(map[string]RBFInfo)
 	c.byShortName = make(map[string][]RBFInfo)
 
@@ -168,46 +170,41 @@ func (c *RBFCache) GetByLauncherID(launcherID string) (RBFInfo, bool) {
 	return selectByCanonicalDir(c.byShortName[strings.ToLower(shortName)], canonicalDir)
 }
 
-// ResolveRBFPath returns the cached RBF path for a system, or falls back to
-// the hardcoded path if not cached.
-func ResolveRBFPath(systemID, hardcodedRBF string) string {
-	if cached, ok := GlobalRBFCache.GetBySystemID(systemID); ok {
-		log.Debug().
-			Str("system", systemID).
-			Str("cached_path", cached.MglName).
-			Str("hardcoded_path", hardcodedRBF).
-			Msg("RBF resolved from cache")
-		return cached.MglName
+// Resolve returns the RBFInfo for a core, honoring config load_path override,
+// then alt core LauncherID, then system ID. It errors if load_path is set but
+// doesn't match a scanned RBF, or if no lookup succeeds.
+func (c *RBFCache) Resolve(cfg *config.Instance, core *Core) (RBFInfo, error) {
+	key := core.LauncherID
+	if key == "" {
+		key = core.ID
 	}
 
-	return hardcodedRBF
-}
-
-// ResolveRBFPathForLauncher resolves RBF path using launcherID if available,
-// falling back to systemID lookup for main cores.
-func ResolveRBFPathForLauncher(launcherID, systemID, hardcodedRBF string) string {
-	// Try launcherID first (for alt cores)
-	if launcherID != "" {
-		if cached, ok := GlobalRBFCache.GetByLauncherID(launcherID); ok {
-			log.Debug().
-				Str("launcher", launcherID).
-				Str("cached_path", cached.MglName).
-				Msg("RBF resolved by launcher ID")
-			return cached.MglName
+	if cfg != nil {
+		if lp := cfg.LookupLauncherDefaults(key, nil).LoadPath; lp != "" {
+			rbfInfo, ok := c.GetByMglPath(lp)
+			if !ok {
+				return RBFInfo{}, fmt.Errorf(
+					"configured load_path %q for %s not found in RBF cache", lp, core.ID,
+				)
+			}
+			log.Debug().Str("system", core.ID).Str("load_path", lp).Msg("core overridden by config load_path")
+			return rbfInfo, nil
 		}
 	}
 
-	// Fall back to systemID lookup (for main cores)
-	if cached, ok := GlobalRBFCache.GetBySystemID(systemID); ok {
-		log.Debug().
-			Str("system", systemID).
-			Str("cached_path", cached.MglName).
-			Msg("RBF resolved by system ID")
-		return cached.MglName
+	if core.LauncherID != "" {
+		if rbfInfo, ok := c.GetByLauncherID(core.LauncherID); ok {
+			return rbfInfo, nil
+		}
 	}
 
-	// Final fallback to hardcoded path
-	return hardcodedRBF
+	rbfInfo, ok := c.GetBySystemID(core.ID)
+	if !ok {
+		return RBFInfo{}, fmt.Errorf(
+			"no core found for system %s (launcher %s, not in cache)", core.ID, key,
+		)
+	}
+	return rbfInfo, nil
 }
 
 // Count returns the number of cached entries.
