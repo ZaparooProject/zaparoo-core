@@ -130,6 +130,18 @@ func TestBMPFileComplete_TooSmall(t *testing.T) {
 	assert.False(t, complete)
 }
 
+func TestPNGFileComplete_MissingFile(t *testing.T) {
+	t.Parallel()
+	_, err := PNGFileComplete("/nonexistent/path/missing.png")
+	require.Error(t, err)
+}
+
+func TestBMPFileComplete_MissingFile(t *testing.T) {
+	t.Parallel()
+	_, err := BMPFileComplete("/nonexistent/path/missing.bmp")
+	require.Error(t, err)
+}
+
 func TestScreenshotFileComplete_UnsupportedFormat(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "test.jpg")

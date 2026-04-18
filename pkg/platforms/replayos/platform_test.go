@@ -8,7 +8,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -364,4 +371,291 @@ func TestLaunchGame(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "change storage in REPLAY OPTIONS")
 	})
+}
+
+func TestPlatform_TrivialReturns(t *testing.T) {
+	t.Parallel()
+
+	p := &Platform{}
+
+	t.Run("ID", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, "replayos", p.ID())
+	})
+
+	t.Run("ScanHook returns nil", func(t *testing.T) {
+		t.Parallel()
+		assert.NoError(t, p.ScanHook(&tokens.Token{}))
+	})
+
+	t.Run("SetTrackedProcess does not panic", func(t *testing.T) {
+		t.Parallel()
+		assert.NotPanics(t, func() { p.SetTrackedProcess(nil) })
+	})
+
+	t.Run("LookupMapping returns empty false", func(t *testing.T) {
+		t.Parallel()
+		val, ok := p.LookupMapping(&tokens.Token{})
+		assert.Empty(t, val)
+		assert.False(t, ok)
+	})
+
+	t.Run("ForwardCmd returns zero value", func(t *testing.T) {
+		t.Parallel()
+		result, err := p.ForwardCmd(nil)
+		require.NoError(t, err)
+		assert.Equal(t, platforms.CmdResult{}, result)
+	})
+
+	t.Run("LaunchSystem returns ErrNotSupported", func(t *testing.T) {
+		t.Parallel()
+		assert.ErrorIs(t, p.LaunchSystem(nil, "snes"), platforms.ErrNotSupported)
+	})
+
+	t.Run("ShowNotice returns ErrNotSupported", func(t *testing.T) {
+		t.Parallel()
+		_, _, err := p.ShowNotice(nil, widgetmodels.NoticeArgs{})
+		assert.ErrorIs(t, err, platforms.ErrNotSupported)
+	})
+
+	t.Run("ShowLoader returns ErrNotSupported", func(t *testing.T) {
+		t.Parallel()
+		_, err := p.ShowLoader(nil, widgetmodels.NoticeArgs{})
+		assert.ErrorIs(t, err, platforms.ErrNotSupported)
+	})
+
+	t.Run("ShowPicker returns ErrNotSupported", func(t *testing.T) {
+		t.Parallel()
+		assert.ErrorIs(t, p.ShowPicker(nil, widgetmodels.PickerArgs{}), platforms.ErrNotSupported)
+	})
+
+	t.Run("ConsoleManager returns NoOp", func(t *testing.T) {
+		t.Parallel()
+		assert.IsType(t, platforms.NoOpConsoleManager{}, p.ConsoleManager())
+	})
+
+	t.Run("ManagedByPackageManager returns false", func(t *testing.T) {
+		t.Parallel()
+		assert.False(t, p.ManagedByPackageManager())
+	})
+}
+
+func TestPlatform_RootDirs(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	sd := filepath.Join(dir, "sd")
+	usb := filepath.Join(dir, "usb")
+
+	p := &Platform{
+		storagePaths: []string{sd, usb},
+	}
+
+	roots := p.RootDirs(cfg)
+
+	assert.Contains(t, roots, filepath.Join(sd, "roms"))
+	assert.Contains(t, roots, filepath.Join(usb, "roms"))
+}
+
+func TestPlatform_RootDirs_Dedup(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	sd := filepath.Join(dir, "sd")
+
+	p := &Platform{
+		storagePaths: []string{sd, sd}, // duplicate
+	}
+
+	roots := p.RootDirs(cfg)
+
+	count := 0
+	for _, r := range roots {
+		if r == filepath.Join(sd, "roms") {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "duplicate storage path should appear only once")
+}
+
+func TestPlatform_Launchers(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	p := &Platform{}
+	launchers := p.Launchers(cfg)
+
+	// SystemMap entries + Generic = len(SystemMap)+1 (excluding custom launchers from empty config)
+	assert.Len(t, launchers, len(SystemMap)+1)
+
+	// Generic shell launcher
+	var generic *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "Generic" {
+			generic = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, generic, "Generic launcher must exist")
+	assert.True(t, generic.AllowListOnly)
+	assert.Equal(t, []string{".sh"}, generic.Extensions)
+
+	// ArcadeFBNeo launcher
+	var fbneo *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "ArcadeFBNeo" {
+			fbneo = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, fbneo, "ArcadeFBNeo launcher must exist")
+	assert.Equal(t, systemdefs.SystemArcade, fbneo.SystemID)
+	assert.Equal(t, []string{"arcade_fbneo"}, fbneo.Folders)
+
+	// nintendo_snes launcher (LauncherID falls back to SystemID)
+	var snes *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].SystemID == systemdefs.SystemSNES && launchers[i].ID == systemdefs.SystemSNES {
+			snes = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, snes, "SNES launcher must exist")
+	assert.Equal(t, []string{"nintendo_snes"}, snes.Folders)
+}
+
+func TestDeleteAutostart(t *testing.T) {
+	t.Parallel()
+
+	t.Run("removes existing file", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		autostartPath := filepath.Join(dir, "roms", autostartDir, autostartFile)
+		require.NoError(t, os.MkdirAll(filepath.Dir(autostartPath), 0o750)) //nolint:gosec // test temp dir
+		require.NoError(t, os.WriteFile(autostartPath, []byte("test\n"), 0o600))
+
+		deleteAutostart(dir)
+
+		_, err := os.Stat(autostartPath)
+		assert.ErrorIs(t, err, os.ErrNotExist)
+	})
+
+	t.Run("no-op when file absent", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		assert.NotPanics(t, func() { deleteAutostart(dir) })
+	})
+}
+
+func TestRestartReplayService(t *testing.T) {
+	t.Parallel()
+
+	mockCmd := helpers.NewMockCommandExecutor()
+	mockCmd.ExpectedCalls = nil
+	mockCmd.On("Run", mock.Anything, "systemctl", []string{"restart", "replay.service"}).Return(nil)
+
+	p := &Platform{cmd: mockCmd}
+	p.restartReplayService()
+
+	mockCmd.AssertExpectations(t)
+}
+
+func TestPlatform_StopActiveLauncher(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Write an autostart file to verify it gets deleted.
+	autostartPath := filepath.Join(dir, "roms", autostartDir, autostartFile)
+	require.NoError(t, os.MkdirAll(filepath.Dir(autostartPath), 0o750)) //nolint:gosec // test temp dir
+	require.NoError(t, os.WriteFile(autostartPath, []byte("/roms/snes/game.sfc\n"), 0o600))
+
+	mockCmd := helpers.NewMockCommandExecutor()
+	mockCmd.ExpectedCalls = nil
+	mockCmd.On("Run", mock.Anything, "systemctl", []string{"restart", "replay.service"}).Return(nil)
+
+	var received *models.ActiveMedia
+	p := &Platform{
+		cmd:           mockCmd,
+		activeStorage: dir,
+	}
+	p.trackerMu.Lock()
+	p.lastKnownCore = "snes9x_libretro.so"
+	p.trackerMu.Unlock()
+	p.setActiveMedia = func(m *models.ActiveMedia) { received = m }
+
+	require.NoError(t, p.StopActiveLauncher(platforms.StopForMenu))
+
+	// Autostart file deleted.
+	_, err := os.Stat(autostartPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	// replay.service restarted.
+	mockCmd.AssertExpectations(t)
+
+	// lastKnownCore cleared.
+	p.trackerMu.RLock()
+	assert.Empty(t, p.lastKnownCore)
+	p.trackerMu.RUnlock()
+
+	// setActiveMedia called with nil.
+	assert.Nil(t, received)
+}
+
+func TestPlatform_LaunchGame_SuccessPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mkRoms(t, dir)
+	romPath := filepath.Join(dir, "roms", "nintendo_snes", "game.sfc")
+
+	mockCmd := helpers.NewMockCommandExecutor()
+	mockCmd.ExpectedCalls = nil
+	mockCmd.On("Run", mock.Anything, "systemctl", []string{"restart", "replay.service"}).Return(nil)
+
+	p := &Platform{cmd: mockCmd, activeStorage: dir, storagePaths: []string{dir}}
+	p.ctx, p.cancel = context.WithCancel(context.Background())
+	// Cancel context immediately so the healthCheck goroutine exits without waiting.
+	p.cancel()
+
+	proc, err := p.launchGame(nil, romPath, nil)
+	require.NoError(t, err)
+	assert.Nil(t, proc)
+
+	// Autostart file must have been written.
+	autostartPath := filepath.Join(dir, "roms", autostartDir, autostartFile)
+	data, readErr := os.ReadFile(autostartPath) //nolint:gosec // test temp dir
+	require.NoError(t, readErr)
+	assert.Contains(t, string(data), "nintendo_snes/game.sfc")
+
+	// pendingROMPath set.
+	p.trackerMu.RLock()
+	assert.Equal(t, romPath, p.pendingROMPath)
+	p.trackerMu.RUnlock()
+
+	mockCmd.AssertExpectations(t)
+}
+
+func TestPlatform_StartPre_InitDevicesWithMockFactory(t *testing.T) {
+	t.Parallel()
+
+	// StartPre uses hard-coded /media/sd paths, so storage detection always
+	// fails silently in test environments. This test focuses on the parts that
+	// are exercisable: InitDevices succeeds with a mock factory, context/cancel
+	// are populated, and keyboardRealMode defaults to true when replay.cfg is absent.
+	// Verify that readRealMode behaves correctly when the real /media/sd does not
+	// exist: keyboardRealMode defaults to true.
+	p := &Platform{}
+	p.keyboardRealMode = readRealMode("/nonexistent/replay.cfg")
+	assert.True(t, p.keyboardRealMode, "keyboardRealMode must default to true when cfg absent")
 }

@@ -85,7 +85,7 @@ func (p *Platform) triggerScreenshot() error {
 		if err := p.KeyboardPress("{capslock}"); err != nil {
 			return fmt.Errorf("toggle real mode off: %w", err)
 		}
-		time.Sleep(screenshotOSDDelay)
+		p.getClock().Sleep(screenshotOSDDelay)
 	}
 
 	if err := p.KeyboardPress("s"); err != nil {
@@ -99,7 +99,7 @@ func (p *Platform) triggerScreenshot() error {
 	}
 
 	if p.keyboardRealMode {
-		time.Sleep(screenshotKeyDelay)
+		p.getClock().Sleep(screenshotKeyDelay)
 		if err := p.KeyboardPress("{capslock}"); err != nil {
 			log.Warn().Err(err).Msg("failed to restore keyboard real mode after screenshot")
 		}

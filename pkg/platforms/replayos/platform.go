@@ -26,7 +26,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -36,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
@@ -44,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
@@ -71,18 +72,42 @@ const (
 
 // Platform implements the platforms.Platform interface for ReplayOS.
 type Platform struct {
+	cmd            command.Executor
+	ctx            context.Context
+	clock          clockwork.Clock
+	activeMedia    func() *models.ActiveMedia
+	setActiveMedia func(*models.ActiveMedia)
+	stopTracker    func() error
+	cancel         context.CancelFunc
 	shared.LinuxInput
-	activeMedia      func() *models.ActiveMedia
-	setActiveMedia   func(*models.ActiveMedia)
-	stopTracker      func() error
-	ctx              context.Context
-	cancel           context.CancelFunc
 	activeStorage    string
-	lastKnownCore    string
 	pendingROMPath   string
+	lastKnownCore    string
+	procPath         string
 	storagePaths     []string
 	trackerMu        syncutil.RWMutex
-	keyboardRealMode bool // mirrors input_kbd_real_mode from replay.cfg; default true
+	keyboardRealMode bool
+}
+
+func (p *Platform) cmdExec() command.Executor {
+	if p.cmd == nil {
+		return &command.RealExecutor{}
+	}
+	return p.cmd
+}
+
+func (p *Platform) getClock() clockwork.Clock {
+	if p.clock == nil {
+		return clockwork.NewRealClock()
+	}
+	return p.clock
+}
+
+func (p *Platform) procDir() string {
+	if p.procPath == "" {
+		return "/proc"
+	}
+	return p.procPath
 }
 
 func (*Platform) ID() string {
@@ -195,7 +220,7 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 		deleteAutostart(p.activeStorage)
 	}
 
-	restartReplayService()
+	p.restartReplayService()
 
 	p.trackerMu.Lock()
 	p.lastKnownCore = ""
@@ -273,8 +298,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		Extensions:    []string{".sh"},
 		AllowListOnly: true,
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			err := exec.CommandContext(context.Background(), path).Start()
-			if err != nil {
+			if err := p.cmdExec().Start(context.Background(), path); err != nil {
 				return nil, fmt.Errorf("failed to start command: %w", err)
 			}
 			return nil, nil //nolint:nilnil // Command launches don't return a process handle
@@ -341,7 +365,7 @@ func (p *Platform) launchGame(
 	p.pendingROMPath = path
 	p.trackerMu.Unlock()
 
-	restartReplayService()
+	p.restartReplayService()
 
 	activeStorage := p.activeStorage
 	ctx := p.ctx
@@ -362,7 +386,7 @@ func (p *Platform) launchGame(
 			return
 		case <-t2.C:
 		}
-		healthCheck(path)
+		p.healthCheck(path)
 	}()
 
 	return nil, nil //nolint:nilnil // Autostart launches don't return a process handle
@@ -506,12 +530,11 @@ func deleteAutostart(storagePath string) {
 	}
 }
 
-func restartReplayService() {
+func (p *Platform) restartReplayService() {
 	log.Debug().Msg("restarting replay.service")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "systemctl", "restart", "replay.service")
-	if err := cmd.Run(); err != nil {
+	if err := p.cmdExec().Run(ctx, "systemctl", "restart", "replay.service"); err != nil {
 		log.Error().Err(err).Msg("failed to restart replay.service")
 	}
 }

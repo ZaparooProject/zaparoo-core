@@ -26,7 +26,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -144,12 +143,12 @@ var coreSystemMap = map[string]string{
 
 // getReplayPID returns the PID of the replay binary. replay.service's MainPID
 // is a bash launcher, so the actual binary is found via its child processes.
-func getReplayPID() (int, error) {
+func (p *Platform) getReplayPID() (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(
+	out, err := p.cmdExec().Output(
 		ctx, "systemctl", "show", "-p", "MainPID", "--value", "replay.service",
-	).Output()
+	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get replay service PID: %w", err)
 	}
@@ -164,11 +163,11 @@ func getReplayPID() (int, error) {
 		return 0, fmt.Errorf("invalid PID %q: %w", pidStr, err)
 	}
 
-	if isReplayBinary(mainPID) {
+	if p.isReplayBinary(mainPID) {
 		return mainPID, nil
 	}
 
-	childPID, err := findReplayChild(mainPID)
+	childPID, err := p.findReplayChild(mainPID)
 	if err != nil {
 		return 0, err
 	}
@@ -176,8 +175,8 @@ func getReplayPID() (int, error) {
 	return childPID, nil
 }
 
-func isReplayBinary(pid int) bool {
-	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+func (p *Platform) isReplayBinary(pid int) bool {
+	exe, err := os.Readlink(filepath.Join(p.procDir(), strconv.Itoa(pid), "exe"))
 	if err != nil {
 		return false
 	}
@@ -186,8 +185,9 @@ func isReplayBinary(pid int) bool {
 
 // findReplayChild reads /proc/{pid}/task/{pid}/children and returns the PID
 // of the first child whose executable is the replay binary.
-func findReplayChild(parentPID int) (int, error) {
-	childrenPath := fmt.Sprintf("/proc/%d/task/%d/children", parentPID, parentPID)
+func (p *Platform) findReplayChild(parentPID int) (int, error) {
+	pidStr := strconv.Itoa(parentPID)
+	childrenPath := filepath.Join(p.procDir(), pidStr, "task", pidStr, "children")
 	data, err := os.ReadFile(childrenPath) //nolint:gosec // PID comes from systemctl
 	if err != nil {
 		return 0, fmt.Errorf("failed to read children of PID %d: %w", parentPID, err)
@@ -198,7 +198,7 @@ func findReplayChild(parentPID int) (int, error) {
 		if _, err := fmt.Sscanf(field, "%d", &childPID); err != nil {
 			continue
 		}
-		if isReplayBinary(childPID) {
+		if p.isReplayBinary(childPID) {
 			return childPID, nil
 		}
 	}
@@ -206,8 +206,8 @@ func findReplayChild(parentPID int) (int, error) {
 	return 0, fmt.Errorf("replay binary not found among children of PID %d", parentPID)
 }
 
-func getLoadedCore(pid int) string {
-	mapsPath := fmt.Sprintf("/proc/%d/maps", pid)
+func (p *Platform) getLoadedCore(pid int) string {
+	mapsPath := filepath.Join(p.procDir(), strconv.Itoa(pid), "maps")
 
 	f, err := os.Open(mapsPath) //nolint:gosec // PID comes from systemctl
 	if err != nil {
@@ -348,7 +348,7 @@ func (p *Platform) startGameTracker(
 	setActiveMedia func(*models.ActiveMedia),
 ) (func() error, error) {
 	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel returned in closure
-	ticker := time.NewTicker(trackerInterval)
+	ticker := p.getClock().NewTicker(trackerInterval)
 
 	recentWatcher, watcherDone, err := p.startRecentWatcher()
 	if err != nil {
@@ -362,7 +362,7 @@ func (p *Platform) startGameTracker(
 
 		for {
 			select {
-			case <-ticker.C:
+			case <-ticker.Chan():
 				p.checkAndUpdateRunningGame(setActiveMedia)
 			case <-ctx.Done():
 				return
@@ -386,7 +386,7 @@ func (p *Platform) startGameTracker(
 func (p *Platform) checkAndUpdateRunningGame(
 	setActiveMedia func(*models.ActiveMedia),
 ) {
-	pid, err := getReplayPID()
+	pid, err := p.getReplayPID()
 	if err != nil {
 		log.Trace().Err(err).Msg("tracker: replay service not running")
 
@@ -402,7 +402,7 @@ func (p *Platform) checkAndUpdateRunningGame(
 		return
 	}
 
-	core := getLoadedCore(pid)
+	core := p.getLoadedCore(pid)
 
 	p.trackerMu.Lock()
 	lastCore := p.lastKnownCore
@@ -471,14 +471,14 @@ func (p *Platform) checkAndUpdateRunningGame(
 
 // healthCheck logs a warning if no core is loaded after a game launch. Does not
 // restart the service; the game may still be loading or in an unexpected state.
-func healthCheck(romPath string) {
-	pid, err := getReplayPID()
+func (p *Platform) healthCheck(romPath string) {
+	pid, err := p.getReplayPID()
 	if err != nil {
 		log.Warn().Err(err).Str("rom", romPath).Msg("health check: replay service not running after launch")
 		return
 	}
 
-	core := getLoadedCore(pid)
+	core := p.getLoadedCore(pid)
 	if core == "" {
 		log.Warn().Str("rom", romPath).Msg("health check: no game core loaded after launch")
 	} else {
