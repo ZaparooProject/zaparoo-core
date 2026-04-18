@@ -717,9 +717,9 @@ func NewNamesIndex(
 
 			log.Info().Msg("database truncation completed")
 		} else {
-			// Selective indexing
-			// DELETE mode disables FKs for performance, but TruncateSystems() relies on CASCADE
-			// to properly delete Media/MediaTitles/MediaTags when a System is deleted
+			// Selective indexing — same optimised TruncateSystems path as resume:
+			// FKs are disabled internally, children are deleted in explicit order,
+			// no CASCADE walk.
 			log.Info().Msgf(
 				"performing selective truncation for systems: %v",
 				currentSystemIDs,
