@@ -191,7 +191,32 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 		}
 	}
 
-	// Strategy 4: Advanced fuzzy matching
+	// Strategy 4: Shared secondary title — both titles have the same secondary slug but different
+	// main titles, e.g. "Touhou 06: The Embodiment of Scarlet Devil" vs
+	// "Touhou Koumakyou: The Embodiment of Scarlet Devil".
+	if bestCandidate == nil {
+		var strategyErr error
+		var resolvedStrategy string
+		results, resolvedStrategy, strategyErr = TrySharedSecondaryTitle(
+			ctx, mediadb, systemID, slug, matchInfo, nil, mediaType)
+		if strategyErr != nil {
+			return nil, fmt.Errorf("shared secondary title match failed: %w", strategyErr)
+		}
+		if len(results) > 0 {
+			selectedResult, confidence := SelectBestResult(
+				results, tagFilters, params.Cfg, MatchQualitySecondaryTitle, params.Launchers,
+			)
+			if confidence > 0.0 {
+				bestCandidate = &candidate{
+					result:     selectedResult,
+					confidence: confidence,
+					strategy:   resolvedStrategy,
+				}
+			}
+		}
+	}
+
+	// Strategy 5: Advanced fuzzy matching
 	if bestCandidate == nil {
 		fuzzyResult, strategyErr := TryAdvancedFuzzyMatching(
 			ctx, mediadb, systemID, gameName, slug, nil, mediaType)
@@ -212,7 +237,7 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 		}
 	}
 
-	// Strategy 5: Main title search
+	// Strategy 6: Main title search
 	if bestCandidate == nil {
 		var strategyErr error
 		var resolvedStrategy string
@@ -235,7 +260,7 @@ func ResolveTitle(ctx context.Context, params *ResolveParams) (*ResolveResult, e
 		}
 	}
 
-	// Strategy 6: Progressive trim
+	// Strategy 7: Progressive trim
 	if bestCandidate == nil {
 		var strategyErr error
 		var resolvedStrategy string
