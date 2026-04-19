@@ -34,9 +34,10 @@ var (
 		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|` +
 			`バージョン|エディション|ヴァージョン)$`,
 	)
-	versionSuffixRegex   = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
-	ordinalSuffixRegex   = regexp.MustCompile(`\b(\d+)(?:st|nd|rd|th)\b`)
-	trailingArticleRegex = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
+	versionSuffixRegex    = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
+	ordinalSuffixRegex    = regexp.MustCompile(`\b(\d+)(?:st|nd|rd|th)\b`)
+	ordinalCamelCaseRegex = regexp.MustCompile(`\b(\d+(?:st|nd|rd|th))([A-Z])`)
+	trailingArticleRegex  = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
 
 	// Scene release tag patterns for TV shows
 	sceneQualityRegex = regexp.MustCompile(`(?i)\b(480p|576p|720p|1080p|2160p|4k|hd|sd|uhd)\b`)
@@ -358,15 +359,17 @@ func expandAbbreviationsAndNumbers(s string) string {
 // NormalizeOrdinals removes ordinal suffixes from numbers.
 // This allows "2nd" and "II" to both normalize to "2" for consistent matching.
 //
-// Useful for:
-//   - Games: "Sonic the Hedgehog 2nd" → "Sonic the Hedgehog 2"
-//   - Movies: "21st Century" → "21 Century"
+// Also handles camelCase compounds where the ordinal suffix runs directly into
+// the next word (e.g. "2ndMix" → "2nd Mix") so the suffix can then be stripped.
+// This normalizes IGDB-style "2ndMix" to the same slug as LaunchBox-style "2nd MIX".
 //
 // Examples:
 //   - "Street Fighter 2nd Impact" → "Street Fighter 2 Impact"
+//   - "Beatmania 2ndMix" → "Beatmania 2 Mix" → "Beatmania 2"
 //   - "21st Century" → "21 Century"
 //   - "3rd Strike" → "3 Strike"
 func NormalizeOrdinals(s string) string {
+	s = ordinalCamelCaseRegex.ReplaceAllString(s, "$1 $2")
 	return ordinalSuffixRegex.ReplaceAllString(s, "$1")
 }
 
