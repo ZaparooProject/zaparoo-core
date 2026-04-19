@@ -942,14 +942,14 @@ func TestDecodeURIIfNeeded_MalformedGracefulFallback(t *testing.T) {
 		{
 			name:        "double_encoding",
 			input:       "steam://999/Name%2520Here",
-			expected:    "steam://999/Name%20Here",
-			description: "Double encoding should decode once only",
+			expected:    "steam://999/Name%2520Here",
+			description: "Literal % in decoded segment is re-encoded for idempotence",
 		},
 		{
 			name:        "triple_encoding",
 			input:       "kodi-movie://100/Name%252520Here",
-			expected:    "kodi-movie://100/Name%2520Here",
-			description: "Triple encoding should decode once only",
+			expected:    "kodi-movie://100/Name%252520Here",
+			description: "Literal % in decoded segment is re-encoded for idempotence",
 		},
 		{
 			name:        "mixed_encoding_quality",

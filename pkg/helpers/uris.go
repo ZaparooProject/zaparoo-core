@@ -78,9 +78,12 @@ func DecodeURIIfNeeded(uri string) string {
 		// slash structure while decoding percent-encoded characters.
 		rest := strings.TrimRight(parsed.Rest, "/")
 		segments := strings.Split(rest, "/")
-		// Re-encoder for gen-delims that would change URI structure on a
-		// second parse pass: / (path sep), ? (query), # (fragment).
-		reenc := strings.NewReplacer("/", "%2F", "?", "%3F", "#", "%23")
+		// Re-encoder for characters that would change URI structure or
+		// re-decoding behavior on a second parse pass:
+		// % (re-triggers pct-decode), / (path sep), ? (query), # (fragment).
+		// % must come first so the %2F/%3F/%23 replacements below are not
+		// themselves re-encoded by a later % match.
+		reenc := strings.NewReplacer("%", "%25", "/", "%2F", "?", "%3F", "#", "%23")
 		for i, seg := range segments {
 			decoded, err := url.PathUnescape(seg)
 			if err == nil && utf8.ValidString(decoded) {
