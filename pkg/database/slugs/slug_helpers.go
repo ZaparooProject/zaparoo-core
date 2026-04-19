@@ -74,6 +74,11 @@ var (
 	sceneHDRRegex = regexp.MustCompile(`(?i)\b(hdr|hdr10|hdr10plus|hdr10\+|dv|dolby\.?vision|hlg)\b`)
 	// 3D tags: 3D, HSBS (Half Side-by-Side), HOU (Half Over-Under), SBS, OU
 	scene3DRegex = regexp.MustCompile(`(?i)\b(3d|hsbs|hou|half-sbs|half-ou|sbs|ou)\b`)
+
+	// Matches 2+ consecutive single-letter-plus-period sequences at a word boundary.
+	// Targets dotted initialisms like "T.V.", "U.S.A.", "M.A.S.K." while leaving
+	// multi-letter abbreviations like "Bros." and "Dr." untouched (single pair only).
+	dottedInitialismRegex = regexp.MustCompile(`\b(?:[A-Za-z]\.){2,}`)
 )
 
 // periodRequiredAbbreviations maps period-required abbreviations to their expansions
@@ -216,6 +221,28 @@ func StripEditionAndVersionSuffixes(s string) string {
 	s = strings.TrimSpace(s)
 
 	return s
+}
+
+// CollapseDottedInitialisms removes internal periods from dotted single-letter
+// initialisms so that subsequent period-to-space conversion does not split them
+// into standalone letters. This prevents the Roman numeral pass from converting
+// letters like "V" in "T.V." to digits.
+//
+// Requires 2+ consecutive letter-period pairs at a word boundary, so single-pair
+// abbreviations like "Bros.", "Dr.", "Mr." and "vs." are left untouched.
+//
+// Examples:
+//   - "T.V." → "TV"
+//   - "M.A.S.K." → "MASK"
+//   - "Super Mario Bros." → "Super Mario Bros."
+//   - "Dr. Mario" → "Dr. Mario"
+func CollapseDottedInitialisms(s string) string {
+	if !strings.Contains(s, ".") {
+		return s
+	}
+	return dottedInitialismRegex.ReplaceAllStringFunc(s, func(m string) string {
+		return strings.ReplaceAll(m, ".", "")
+	})
 }
 
 // checkAbbreviation checks if a word (in lowercase) matches a known abbreviation.
