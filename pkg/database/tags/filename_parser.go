@@ -676,6 +676,24 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 		return multiLang
 	}
 
+	// Check full-tag mapping before trying dash/comma splitting.
+	// Tags like "disc-1" must map to [media:disc, disc:1] rather than being
+	// split into "disc"→media:disc and "1"→nothing.
+	if fullMapped := mapFilenameTagToCanonical(normalized); len(fullMapped) > 1 {
+		types := make(map[TagType]bool, len(fullMapped))
+		conflict := false
+		for _, ct := range fullMapped {
+			if types[ct.Type] {
+				conflict = true
+				break
+			}
+			types[ct.Type] = true
+		}
+		if !conflict {
+			return withSource(fullMapped, TagSourceBracketed)
+		}
+	}
+
 	// Check if it's comma-separated mixed tags (JP, Rev B) or (USA, Europe)
 	if mixedTags := parseCommaSeparatedTags(normalized); mixedTags != nil {
 		return mixedTags

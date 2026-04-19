@@ -513,6 +513,21 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 			wantTags: []string{"media:disc", "disc:1", "disctotal:3", "region:us", "lang:en"},
 		},
 		{
+			name:     "No-Intro disc 1 without total",
+			filename: "Final Fantasy VII (USA) (Disc 1).chd",
+			wantTags: []string{"region:us", "lang:en", "media:disc", "disc:1"},
+		},
+		{
+			name:     "No-Intro disc 2 without total",
+			filename: "Final Fantasy VII (USA) (Disc 2).chd",
+			wantTags: []string{"region:us", "lang:en", "media:disc", "disc:2"},
+		},
+		{
+			name:     "No-Intro disc 4 without total",
+			filename: "Final Fantasy IX (USA) (Disc 4) (Rev 1).chd",
+			wantTags: []string{"rev:1", "region:us", "lang:en", "media:disc", "disc:4"},
+		},
+		{
 			name:     "revision tag",
 			filename: "Sonic (Rev 1)(USA).md",
 			wantTags: []string{"rev:1", "region:us"}, // usa region, language not auto-added
