@@ -135,14 +135,28 @@ func (c *RBFCache) GetByShortName(shortName string) (RBFInfo, bool) {
 }
 
 // GetByMglPath resolves a user-supplied MGL path (e.g. "_Unstable/SNES") to a
-// scanned RBFInfo, preferring the directory embedded in the path. Returns false
-// if no scanned RBF matches the short name.
+// scanned RBFInfo. When the path includes a directory, the match is strict: a
+// wrong directory returns (RBFInfo{}, false) instead of a silent fallback to
+// another core. A bare short name (no directory) returns the first candidate.
 func (c *RBFCache) GetByMglPath(mglPath string) (RBFInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	canonicalDir, shortName := splitRBFPath(mglPath)
-	return selectByCanonicalDir(c.byShortName[strings.ToLower(shortName)], canonicalDir)
+	candidates := c.byShortName[strings.ToLower(shortName)]
+	if len(candidates) == 0 {
+		return RBFInfo{}, false
+	}
+	if canonicalDir == "" {
+		return candidates[0], true
+	}
+	for _, candidate := range candidates {
+		dir, _ := splitRBFPath(candidate.MglName)
+		if strings.EqualFold(dir, canonicalDir) {
+			return candidate, true
+		}
+	}
+	return RBFInfo{}, false
 }
 
 // RegisterAltCore registers an alt core's expected RBF path.
@@ -156,8 +170,10 @@ func (c *RBFCache) RegisterAltCore(launcherID, rbfPath string) {
 	c.byLauncherID[launcherID] = rbfPath
 }
 
-// GetByLauncherID returns the resolved RBF path for an alt core launcher,
-// preferring the directory registered for that launcher.
+// GetByLauncherID returns the resolved RBF path for an alt core launcher.
+// When the registered path includes a directory, the match is strict: a
+// directory mismatch returns (RBFInfo{}, false) rather than silently falling
+// back to a different directory's core.
 func (c *RBFCache) GetByLauncherID(launcherID string) (RBFInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -168,7 +184,20 @@ func (c *RBFCache) GetByLauncherID(launcherID string) (RBFInfo, bool) {
 	}
 
 	canonicalDir, shortName := splitRBFPath(rbfPath)
-	return selectByCanonicalDir(c.byShortName[strings.ToLower(shortName)], canonicalDir)
+	candidates := c.byShortName[strings.ToLower(shortName)]
+	if len(candidates) == 0 {
+		return RBFInfo{}, false
+	}
+	if canonicalDir == "" {
+		return candidates[0], true
+	}
+	for _, candidate := range candidates {
+		dir, _ := splitRBFPath(candidate.MglName)
+		if strings.EqualFold(dir, canonicalDir) {
+			return candidate, true
+		}
+	}
+	return RBFInfo{}, false
 }
 
 // Resolve returns the RBFInfo for a core, honoring config load_path override,

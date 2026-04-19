@@ -554,7 +554,7 @@ func TestGetByLauncherID_PrefersCanonicalDir(t *testing.T) {
 	assert.True(t, found)
 	assert.Equal(t, "_Other/PSX2XCPU", rbf.MglName, "registered canonical dir must win")
 
-	// Fallback when only non-canonical dir present
+	// Returns false when only a non-matching directory is present
 	cache2 := &RBFCache{
 		byShortName: map[string][]RBFInfo{
 			"psx2xcpu": {unstable},
@@ -562,9 +562,8 @@ func TestGetByLauncherID_PrefersCanonicalDir(t *testing.T) {
 	}
 	cache2.RegisterAltCore("2XPSX", "_Other/PSX2XCPU")
 
-	rbf, found = cache2.GetByLauncherID("2XPSX")
-	assert.True(t, found)
-	assert.Equal(t, "_Unstable/PSX2XCPU", rbf.MglName, "falls back to available dir when canonical absent")
+	_, found = cache2.GetByLauncherID("2XPSX")
+	assert.False(t, found, "directory mismatch should not resolve")
 }
 
 func TestGetByMglPath(t *testing.T) {
@@ -598,10 +597,9 @@ func TestGetByMglPath(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "_Console/SNES", rbf.MglName)
 
-	// Falls back to first candidate when dir not found
-	rbf, ok = cache.GetByMglPath("_Homebrew/SNES")
-	assert.True(t, ok)
-	assert.Equal(t, "_Console/SNES", rbf.MglName)
+	// Returns false when dir doesn't match any candidate
+	_, ok = cache.GetByMglPath("_Homebrew/SNES")
+	assert.False(t, ok)
 
 	// Returns false when short name unknown
 	_, ok = cache.GetByMglPath("_Console/Unknown12345")
