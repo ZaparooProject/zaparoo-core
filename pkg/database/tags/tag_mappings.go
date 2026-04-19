@@ -409,14 +409,14 @@ var allTagMappings = map[string][]CanonicalTag{
 	// "st" is ambiguous: Sufami Turbo vs other uses - handled in filename_parser.go
 	"sufami-turbo": {{Type: TagTypeAddon, Value: TagAddonPeripheralSufami}}, // Sufami Turbo cartridge adapter
 	// "np" is ambiguous: Nintendo Power vs other uses - handled in filename_parser.go
-	"nintendo-power": {{Type: TagTypeAddon, Value: TagAddonOnlineNintendopower}}, // Nintendo Power kiosk service
-	"j-cart":         {{Type: TagTypeAddon, Value: TagAddonControllerJCart}},     // J-Cart (Genesis controller ports)
-	"sn":             {{Type: TagTypeAddon, Value: TagAddonOnlineSeganet}},       // Sega-Net online service
-	"sega-net":       {{Type: TagTypeAddon, Value: TagAddonOnlineSeganet}},       // Sega-Net (full name)
-	"sachen":         {{Type: TagTypeUnlicensed, Value: TagUnlicensedSachen}},    // Sachen unlicensed (NES)
-	"rumble-version": {{Type: TagTypeAddon, Value: TagAddonControllerRumble}},    // Rumble Pak version
-	"mt-32":          {{Type: TagTypeAddon, Value: TagAddonMidiMT32}},            // Roland MT-32 MIDI sound module
-	"mt32":           {{Type: TagTypeAddon, Value: TagAddonMidiMT32}},            // Roland MT-32 (no dash)
+	"nintendo-power": {{Type: TagTypeAddon, Value: TagAddonOnlineNintendopower}},   // Nintendo Power kiosk service
+	"j-cart":         {{Type: TagTypeEmbedded, Value: TagEmbeddedSlotJCart}},       // J-Cart (Genesis controller ports)
+	"sn":             {{Type: TagTypeAddon, Value: TagAddonOnlineSeganet}},         // Sega-Net online service
+	"sega-net":       {{Type: TagTypeAddon, Value: TagAddonOnlineSeganet}},         // Sega-Net (full name)
+	"sachen":         {{Type: TagTypeUnlicensed, Value: TagUnlicensedSachen}},      // Sachen unlicensed (NES)
+	"rumble-version": {{Type: TagTypeEmbedded, Value: TagEmbeddedVibrationRumble}}, // Rumble built into cartridge
+	"mt-32":          {{Type: TagTypeAddon, Value: TagAddonMidiMT32}},              // Roland MT-32 MIDI sound module
+	"mt32":           {{Type: TagTypeAddon, Value: TagAddonMidiMT32}},              // Roland MT-32 (no dash)
 
 	// ============================================================================
 	// PLAYER COUNT MAPPINGS

@@ -142,7 +142,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagInputLightgun, TagInputOptical,
 
 		// Positional controls - crank-based controls with fixed positions
-		TagInputPositional2, TagInputPositional3,
+		TagInputPositional2, TagInputPositional3, TagInputPositional4,
 
 		// Buttons - number of in-game action buttons
 		// Note: pneumatic = air-pressure activated button (arcade boxing games)
@@ -152,6 +152,12 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 
 		// Pedals - foot controls
 		TagInputPedals1, TagInputPedals2,
+
+		// Keyboard input
+		TagInputKeyboard, TagInputKeyboardMahjong,
+
+		// Touchscreen input
+		TagInputTouchscreen, TagInputTouchscreenResistive, TagInputTouchscreenCapacitive,
 
 		// Other input types
 		TagInputPuncher, // Physical punching bag input
@@ -284,7 +290,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagAddonControllerLifefitness, TagAddonControllerTaptapmat, TagAddonControllerTeevgolf,
 		TagAddonControllerLasabirdie, TagAddonControllerGrip, TagAddonControllerTsurikon64,
 		TagAddonControllerPartytap, TagAddonControllerClimberstick, TagAddonControllerJuujikeycover,
-		TagAddonControllerJCart, TagAddonControllerRumble,
+		TagAddonControllerDDRGB, TagAddonControllerFullchanger,
 		// Light guns
 		TagAddonLightgunLightphaser, TagAddonLightgunMenacer, TagAddonLightgunVirtuagun,
 		TagAddonLightgunZapper, TagAddonLightgunSuperscope, TagAddonLightgunJustifier,
@@ -333,7 +339,12 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagAddonMidiMiracle, TagAddonMidiPianokeyboard, TagAddonMidiMT32,
 		TagAddonRobGyro, TagAddonRobBlock,
 		TagAddonPrinterPocketprinter, TagAddonPrinterPrintbooster,
-		TagAddonBarcodeboy, TagAddonRSS, TagAddonPocketcamera, TagAddonCapturecassette,
+		TagAddonBarcodeBarcodeboy, TagAddonBarcodeBarcodereader,
+		TagAddonLinkMobileadaptergb,
+		TagAddonGlassesMVD,
+		TagAddonLEDPowerantenna, TagAddonLEDBugsensor,
+		TagAddonPocketsakura, TagAddonSpectrumcommunicator,
+		TagAddonRSS, TagAddonPocketcamera, TagAddonCapturecassette,
 		TagAddonPhotoreader, TagAddonDevelobox, TagAddonTeststation,
 	},
 	TagTypeEmbedded: {
@@ -364,6 +375,12 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagEmbeddedSlotGamelink,   // Link cable port
 		TagEmbeddedSlotSmartmedia, // SmartMedia card slot
 
+		// Vibration - built into the cartridge
+		TagEmbeddedVibrationRumble,
+
+		// Motion
+		TagEmbeddedAccelerometer,
+
 		// Other embedded hardware
 		TagEmbeddedLED,         // LED indicator
 		TagEmbeddedGBKiss,      // Hudson GB Kiss (IR communication)
@@ -380,6 +397,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagArcadeBoardCapcomCPS, TagArcadeBoardCapcomCPSDash, TagArcadeBoardCapcomCPSChanger,
 		TagArcadeBoardCapcomCPS2, TagArcadeBoardCapcomCPS3,
 		// SEGA
+		TagArcadeBoardSegaVicDual, TagArcadeBoardSegaG80, TagArcadeBoardSegaH1,
 		TagArcadeBoardSegaVCO, TagArcadeBoardSegaSystem1, TagArcadeBoardSegaSystem2,
 		TagArcadeBoardSegaSystem16,
 		TagArcadeBoardSegaSystem16A, TagArcadeBoardSegaSystem16B, TagArcadeBoardSegaSystem16C,
@@ -388,6 +406,11 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagArcadeBoardSegaSystemC,
 		TagArcadeBoardSegaSystemC2, TagArcadeBoardSegaSystemE, TagArcadeBoardSegaXBoard,
 		TagArcadeBoardSegaYBoard, TagArcadeBoardSegaSTV,
+		TagArcadeBoardSegaModel1,
+		TagArcadeBoardSegaModel2A, TagArcadeBoardSegaModel2B, TagArcadeBoardSegaModel2C,
+		TagArcadeBoardSegaModel3,
+		TagArcadeBoardSegaModel3S15, TagArcadeBoardSegaModel3S2, TagArcadeBoardSegaModel3S21,
+		TagArcadeBoardSegaNaomi,
 		TagArcadeBoardSegaMegaplay, // Sega MegaPlay
 		// Irem
 		TagArcadeBoardIremM10, TagArcadeBoardIremM15, TagArcadeBoardIremM27, TagArcadeBoardIremM52,
@@ -408,6 +431,14 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagArcadeBoardToaplanVersion1, TagArcadeBoardToaplanVersion2,
 		// Jaleco
 		TagArcadeBoardJalecoMegaSystem1,
+		// Nichibutsu
+		TagArcadeBoardNichibutsu,
+		// Taiyo
+		TagArcadeBoardTaiyo,
+		// Tecfri
+		TagArcadeBoardTecfriAmbush,
+		// Tourvision
+		TagArcadeBoardTourvision,
 		// Nintendo
 		TagArcadeBoardNintendoVS, TagArcadeBoardNintendoNSS,
 	},
@@ -424,6 +455,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagCompatibilityDisksystem, TagCompatibilityDisksystemDW,
 		TagCompatibilityGameboy, TagCompatibilityGameboyMono, TagCompatibilityGameboyColor,
 		TagCompatibilityGameboySGB, TagCompatibilityGameboyNP,
+		TagCompatibilityGameboyInfrared, TagCompatibilityGameboyGBA,
 		TagCompatibilitySuperfamicom, TagCompatibilitySuperfamicomHiROM, TagCompatibilitySuperfamicomLoROM,
 		TagCompatibilitySuperfamicomExHiROM, TagCompatibilitySuperfamicomExLoROM, TagCompatibilitySuperfamicomNSS,
 		TagCompatibilitySuperfamicomSoundlink, TagCompatibilitySuperfamicomNP, TagCompatibilitySuperfamicomGS,
@@ -517,6 +549,9 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagSearch3DStereo,   // Stereoscopic 3D (requires 3D glasses)
 		TagSearch3DAnaglyph, // Anaglyph 3D (red/blue glasses)
 
+		// VR
+		TagSearchVR,
+
 		// Keywords - special features and attributes
 		TagSearchKeywordStrip,    // Adult content (strip rewards)
 		TagSearchKeywordPromo,    // Promotional/not-for-sale release
@@ -526,6 +561,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagSearchKeywordOfficial, // Official licensed sports game
 		TagSearchKeywordEndorsed, // Endorsed by public figure
 		TagSearchKeywordBrand,    // Branded by company/product
+		TagSearchKeywordUbikey,   // Ubikey protection
 	},
 	TagTypeMultigame: {
 		TagMultigameCompilation, // Compilation of multiple games in one title
@@ -543,6 +579,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagReboxedGamenokanzume, TagReboxedSoundware, TagReboxedPlayerschoice, TagReboxedClassicserie,
 		TagReboxedKousenjuu, TagReboxedDisneysclassic, TagReboxedSNKBestcollection, TagReboxedXeye,
 		TagReboxedLimitedrun, TagReboxedFamicombox, TagReboxedSuperfamicombox,
+		TagReboxedComicclassics, TagReboxedSeganet,
 		// Bundles
 		TagReboxedBundle, TagReboxedBundleGenesis,
 	},
@@ -560,14 +597,17 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPortSegaMegaCD, TagPortSegaSaturn, TagPortSegaDreamcast,
 		TagPortNintendoFamicom, TagPortNintendoSuperfamicom, TagPortNintendoN64,
 		TagPortNintendoGameboy, TagPortNintendoGBC, TagPortNintendoGBA,
+		TagPortNintendoDiskSystem, TagPortNintendoGameAndWatch,
 		TagPortSonyPlayStation,
 		TagPort3DO, TagPortCDI, TagPortLaseractive, TagPortFMTowns,
+		TagPortArchimedes, TagPortAtariFalcon, TagPortSega32X, TagPortWonderSwan,
 	},
 	TagTypeLang: {
 		TagLangEN, TagLangES, TagLangFR, TagLangPT, TagLangDE, TagLangIT, TagLangSV, TagLangNL,
 		TagLangDA, TagLangNO, TagLangFI,
 		TagLangCS, TagLangSL, TagLangRU, TagLangPL, TagLangJA, TagLangZH, TagLangCH,
 		TagLangKO,
+		TagLangCA,
 		TagLangAR, TagLangBG, TagLangBS, TagLangCY, TagLangEL, TagLangEO, TagLangET, TagLangFA, TagLangGA, TagLangGU,
 		TagLangHE, TagLangHI, TagLangHR, TagLangHU, TagLangIS, TagLangLT, TagLangLV, TagLangMS, TagLangRO, TagLangSK,
 		TagLangSQ, TagLangSR, TagLangTH, TagLangTR, TagLangUR, TagLangVI, TagLangYI,
@@ -615,15 +655,16 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagRereleaseSteam, TagRereleaseSonicclassic, TagRereleaseSonicmegacollection,
 		TagRereleaseMDClassics, TagRereleaseSmashpack,
 		TagRereleaseSegaages, TagRereleaseSegaages2500,
-		TagRerelease3DFukkoku,
+		TagRerelease3DFukkoku, TagRerelease3DFukkoku1, TagRerelease3DFukkoku2,
 		TagRereleaseMDMini1, TagRereleaseMDMini2,
 		TagRereleaseSFCMini,
 		TagRereleaseGamenokanzume1, TagRereleaseGamenokanzume2,
 		TagRereleaseFightnightround2,
+		TagRereleaseNinjajajamaru, TagRereleaseZeldacollection, TagRereleasePCEMini,
 	},
 	TagTypeRev: {
 		TagRev1, TagRev2, TagRev3, TagRev4, TagRev5,
-		TagRevA, TagRevB, TagRevC, TagRevD, TagRevE, TagRevG,
+		TagRevA, TagRevB, TagRevC, TagRevD, TagRevE, TagRevF, TagRevG,
 		// Program revisions (NES-specific)
 		TagRevPRG, TagRevPRG0, TagRevPRG1, TagRevPRG2, TagRevPRG3,
 		// Note: Dotted versions (v1.0, v1.2.3, etc.) are handled dynamically
@@ -631,9 +672,10 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 	},
 	TagTypeSet: {
 		TagSet1, TagSet2, TagSet3, TagSet4, TagSet5, TagSet6, TagSet7, TagSet8,
+		TagSetF1, TagSetF2,
 	},
 	TagTypeAlt: {
-		TagAlt, TagAlt1, TagAlt2, TagAlt3,
+		TagAlt, TagAlt1, TagAlt2, TagAlt3, TagAlt4, TagAlt5, TagAlt6,
 	},
 	TagTypeUnlicensed: {
 		// Unofficial/unlicensed releases

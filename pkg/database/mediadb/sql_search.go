@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	dbtags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
@@ -125,7 +126,7 @@ func fetchAndAttachTags(
 
 		// Append tag to the slice for this media ID
 		tagInfo := database.TagInfo{
-			Tag:  tag,
+			Tag:  dbtags.UnpadTagValue(tag),
 			Type: tagType,
 		}
 		tagsMap[mediaID] = append(tagsMap[mediaID], tagInfo)
@@ -136,8 +137,8 @@ func fetchAndAttachTags(
 
 	// Merge tags into results
 	for i := range results {
-		if tags, exists := tagsMap[results[i].MediaID]; exists {
-			results[i].Tags = tags
+		if tagList, exists := tagsMap[results[i].MediaID]; exists {
+			results[i].Tags = tagList
 		} else {
 			// Initialize empty tags slice for media with no tags
 			results[i].Tags = []database.TagInfo{}

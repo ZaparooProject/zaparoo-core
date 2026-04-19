@@ -269,7 +269,7 @@ func AddMediaPath(
 			tagIndex = ss.TagsIndex
 			_, insertErr := db.InsertTag(database.Tag{
 				DBID:     int64(tagIndex),
-				Tag:      revValue,
+				Tag:      tags.PadTagValue(revValue),
 				TypeDBID: int64(revTypeID),
 			})
 			if insertErr != nil {
@@ -419,7 +419,7 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 			ss.TagsIndex++
 			_, err := db.InsertTag(database.Tag{
 				DBID:     int64(ss.TagsIndex),
-				Tag:      tagValue,
+				Tag:      tags.PadTagValue(tagValue),
 				TypeDBID: int64(typeID),
 			})
 			if err != nil {

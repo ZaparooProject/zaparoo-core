@@ -272,12 +272,43 @@ func TestBuildTagFilterSQL_ArgumentOrder(t *testing.T) {
 		assert.Equal(t, "demo", args[9])
 		assert.Equal(t, "unfinished", args[10])
 		assert.Equal(t, "demo", args[11])
-		// OR: players/2 for MediaTags, players/2 for MediaTitleTags
+		// OR: players/2 padded to 0002 for MediaTags, players/0002 for MediaTitleTags
 		assert.Equal(t, "players", args[12])
-		assert.Equal(t, "2", args[13])
+		assert.Equal(t, "0002", args[13])
 		assert.Equal(t, "players", args[14])
-		assert.Equal(t, "2", args[15])
+		assert.Equal(t, "0002", args[15])
 	})
+}
+
+// TestBuildTagFilterSQL_AliasCanonicalisation verifies that deprecated tag forms are rewritten
+// to their canonical equivalents in the SQL arguments produced by BuildTagFilterSQL.
+func TestBuildTagFilterSQL_AliasCanonicalisation(t *testing.T) {
+	filters := []zapscript.TagFilter{
+		{Type: "addon", Value: "barcodeboy", Operator: zapscript.TagOperatorAND},
+		{Type: "addon", Value: "controller:jcart", Operator: zapscript.TagOperatorNOT},
+		{Type: "addon", Value: "controller:rumble", Operator: zapscript.TagOperatorOR},
+	}
+
+	_, args := BuildTagFilterSQL(filters)
+
+	// AND: addon:barcodeboy → addon / barcode:barcodeboy (doubled for UNION)
+	require.Greater(t, len(args), 7)
+	assert.Equal(t, "addon", args[0])
+	assert.Equal(t, "barcode:barcodeboy", args[1])
+	assert.Equal(t, "addon", args[2])
+	assert.Equal(t, "barcode:barcodeboy", args[3])
+
+	// NOT: addon:controller:jcart → embedded / slot:jcart (doubled)
+	assert.Equal(t, "embedded", args[4])
+	assert.Equal(t, "slot:jcart", args[5])
+	assert.Equal(t, "embedded", args[6])
+	assert.Equal(t, "slot:jcart", args[7])
+
+	// OR: addon:controller:rumble → embedded / vibration:rumble (doubled)
+	assert.Equal(t, "embedded", args[8])
+	assert.Equal(t, "vibration:rumble", args[9])
+	assert.Equal(t, "embedded", args[10])
+	assert.Equal(t, "vibration:rumble", args[11])
 }
 
 // TestBuildTagFilterSQL_SQLInjectionSafety tests that generated SQL is safe from injection
@@ -582,21 +613,21 @@ func TestBuildTagFilterSQL_Regression(t *testing.T) {
 			description: "Arguments must match SQL clause order with MediaTags + MediaTitleTags",
 			validate: func(t *testing.T, _ []string, args []any) {
 				require.Len(t, args, 12) // 3 filters * 4 args each
-				// AND: a/1 for MediaTags, a/1 for MediaTitleTags
+				// AND: a/1 padded to 0001 for MediaTags, a/0001 for MediaTitleTags
 				assert.Equal(t, "a", args[0])
-				assert.Equal(t, "1", args[1])
+				assert.Equal(t, "0001", args[1])
 				assert.Equal(t, "a", args[2])
-				assert.Equal(t, "1", args[3])
-				// NOT: b/2 for MediaTags, b/2 for MediaTitleTags
+				assert.Equal(t, "0001", args[3])
+				// NOT: b/2 padded to 0002 for MediaTags, b/0002 for MediaTitleTags
 				assert.Equal(t, "b", args[4])
-				assert.Equal(t, "2", args[5])
+				assert.Equal(t, "0002", args[5])
 				assert.Equal(t, "b", args[6])
-				assert.Equal(t, "2", args[7])
-				// OR: c/3 for MediaTags, c/3 for MediaTitleTags
+				assert.Equal(t, "0002", args[7])
+				// OR: c/3 padded to 0003 for MediaTags, c/0003 for MediaTitleTags
 				assert.Equal(t, "c", args[8])
-				assert.Equal(t, "3", args[9])
+				assert.Equal(t, "0003", args[9])
 				assert.Equal(t, "c", args[10])
-				assert.Equal(t, "3", args[11])
+				assert.Equal(t, "0003", args[11])
 			},
 		},
 	}

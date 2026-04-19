@@ -25,7 +25,24 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 )
+
+// resolveFilter applies deprecated-alias canonicalization then numeric padding to a
+// raw type/value pair from a TagFilter. Returns the storage-ready type and value.
+// Alias resolution is intentionally applied here (query/filter layer only); the
+// indexing parser (tag_mappings.go) already emits canonical forms directly.
+// strings.Index (first colon) is correct because tag values can be hierarchical
+// (e.g. "keyboard:mahjong", "barcode:barcodeboy") — the type is always the
+// first segment; everything after the first colon is the value.
+func resolveFilter(filterType, filterValue string) (tagType, tagValue string) {
+	fullTag := tags.CanonicalizeTagAlias(filterType + ":" + filterValue)
+	idx := strings.Index(fullTag, ":")
+	if idx < 0 {
+		return fullTag, ""
+	}
+	return fullTag[:idx], tags.PadTagValue(fullTag[idx+1:])
+}
 
 // BuildTagFilterSQL constructs SQL WHERE clauses and arguments for tag filtering
 // using a hybrid strategy optimized for SQLite performance:
@@ -65,8 +82,9 @@ func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []
 
 		var intersectSelects []string
 		for _, f := range andFilters {
+			typ, val := resolveFilter(f.Type, f.Value)
 			intersectSelects = append(intersectSelects, selectTpl)
-			args = append(args, f.Type, f.Value, f.Type, f.Value)
+			args = append(args, typ, val, typ, val)
 		}
 
 		intersectClause := fmt.Sprintf("Media.DBID IN (%s)", strings.Join(intersectSelects, " INTERSECT "))
@@ -76,6 +94,7 @@ func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []
 	// Build NOT EXISTS clauses for NOT filters
 	// Each NOT filter excludes media that has the specified tag at either level
 	for _, f := range notFilters {
+		typ, val := resolveFilter(f.Type, f.Value)
 		clause := `NOT EXISTS (
 			SELECT 1 FROM MediaTags
 			JOIN Tags ON MediaTags.TagDBID = Tags.DBID
@@ -90,22 +109,26 @@ func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []
 			AND TagTypes.Type = ? AND Tags.Tag = ?
 		)`
 		clauses = append(clauses, clause)
-		args = append(args, f.Type, f.Value, f.Type, f.Value)
+		args = append(args, typ, val, typ, val)
 	}
 
 	// Build a single EXISTS clause with OR for all OR filters
 	// Media must have at least ONE of the OR tags from either level
 	if len(orFilters) > 0 {
 		var orConditions []string
+		var orTyps, orVals []string
 		for _, f := range orFilters {
+			typ, val := resolveFilter(f.Type, f.Value)
+			orTyps = append(orTyps, typ)
+			orVals = append(orVals, val)
 			orConditions = append(orConditions, "(TagTypes.Type = ? AND Tags.Tag = ?)")
-			args = append(args, f.Type, f.Value)
+			args = append(args, typ, val)
 		}
 		orJoined := strings.Join(orConditions, " OR ")
 
 		// Duplicate args for the second EXISTS (MediaTitleTags)
-		for _, f := range orFilters {
-			args = append(args, f.Type, f.Value)
+		for i := range orTyps {
+			args = append(args, orTyps[i], orVals[i])
 		}
 
 		orClause := fmt.Sprintf(`(EXISTS (

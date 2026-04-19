@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
@@ -275,15 +276,15 @@ func sqlGetSystemTagsCached(
 		}
 	}()
 
-	tags := make([]database.TagInfo, 0, 100)
+	result := make([]database.TagInfo, 0, 100)
 	for rows.Next() {
 		var tagType, tag string
 		if scanErr := rows.Scan(&tagType, &tag); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan cached tag result: %w", scanErr)
 		}
-		tags = append(tags, database.TagInfo{
+		result = append(result, database.TagInfo{
 			Type: tagType,
-			Tag:  tag,
+			Tag:  tags.UnpadTagValue(tag),
 		})
 	}
 
@@ -291,7 +292,7 @@ func sqlGetSystemTagsCached(
 		return nil, err
 	}
 
-	return tags, nil
+	return result, nil
 }
 
 // sqlInvalidateSystemTagsCache - Invalidates cache for specific systems
