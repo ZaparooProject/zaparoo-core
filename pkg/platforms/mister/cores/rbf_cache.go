@@ -22,6 +22,7 @@
 package cores
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -174,6 +175,9 @@ func (c *RBFCache) GetByLauncherID(launcherID string) (RBFInfo, bool) {
 // then alt core LauncherID, then system ID. It errors if load_path is set but
 // doesn't match a scanned RBF, or if no lookup succeeds.
 func (c *RBFCache) Resolve(cfg *config.Instance, core *Core) (RBFInfo, error) {
+	if core == nil {
+		return RBFInfo{}, errors.New("nil core")
+	}
 	key := core.LauncherID
 	if key == "" {
 		key = core.ID
