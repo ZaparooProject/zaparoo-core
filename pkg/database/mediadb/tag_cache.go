@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	dbtags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
@@ -41,11 +42,11 @@ type tagCache struct {
 func (c *tagCache) tagsForSystems(systems []systemdefs.System) []database.TagInfo {
 	if len(systems) == 1 {
 		first := systems[0] //nolint:gosec // G602 false positive: len==1 guarantees valid index
-		tags := c.bySystem[first.ID]
-		if tags == nil {
+		tagList := c.bySystem[first.ID]
+		if tagList == nil {
 			return []database.TagInfo{}
 		}
-		return slices.Clone(tags)
+		return slices.Clone(tagList)
 	}
 
 	seen := make(map[database.TagInfo]struct{})
@@ -86,7 +87,7 @@ func buildTagCache(ctx context.Context, db *sql.DB) (*tagCache, error) {
 			return nil, fmt.Errorf("failed to scan tag cache row: %w", err)
 		}
 
-		ti := database.TagInfo{Type: tagType, Tag: tag}
+		ti := database.TagInfo{Type: tagType, Tag: dbtags.UnpadTagValue(tag)}
 		cache.bySystem[systemID] = append(cache.bySystem[systemID], ti)
 
 		if _, exists := seen[ti]; !exists {

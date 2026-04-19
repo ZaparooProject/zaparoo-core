@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
@@ -143,7 +144,7 @@ func sqlFindTag(ctx context.Context, db sqlQueryable, tagType database.Tag) (dat
 	}()
 	err = stmt.QueryRowContext(ctx,
 		tagType.DBID,
-		tagType.Tag,
+		tags.PadTagValue(tagType.Tag),
 	).Scan(
 		&row.DBID,
 		&row.TypeDBID,
@@ -152,6 +153,7 @@ func sqlFindTag(ctx context.Context, db sqlQueryable, tagType database.Tag) (dat
 	if err != nil {
 		return row, fmt.Errorf("failed to scan tag row: %w", err)
 	}
+	row.Tag = tags.UnpadTagValue(row.Tag)
 	return row, nil
 }
 
@@ -216,15 +218,16 @@ func sqlGetAllTags(ctx context.Context, db *sql.DB) ([]database.Tag, error) {
 		}
 	}()
 
-	tags := make([]database.Tag, 0)
+	dbTags := make([]database.Tag, 0)
 	for rows.Next() {
 		var tag database.Tag
 		if err := rows.Scan(&tag.DBID, &tag.Tag, &tag.TypeDBID); err != nil {
 			return nil, fmt.Errorf("failed to scan tag: %w", err)
 		}
-		tags = append(tags, tag)
+		tag.Tag = tags.UnpadTagValue(tag.Tag)
+		dbTags = append(dbTags, tag)
 	}
-	return tags, rows.Err()
+	return dbTags, rows.Err()
 }
 
 func sqlGetAllTagTypes(ctx context.Context, db *sql.DB) ([]database.TagType, error) {
@@ -283,15 +286,15 @@ func sqlGetAllUsedTags(ctx context.Context, db *sql.DB) ([]database.TagInfo, err
 		}
 	}()
 
-	tags := make([]database.TagInfo, 0, 100)
+	result := make([]database.TagInfo, 0, 100)
 	for rows.Next() {
 		var tagType, tag string
 		if scanErr := rows.Scan(&tagType, &tag); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan all used tag result: %w", scanErr)
 		}
-		tags = append(tags, database.TagInfo{
+		result = append(result, database.TagInfo{
 			Type: tagType,
-			Tag:  tag,
+			Tag:  tags.UnpadTagValue(tag),
 		})
 	}
 
@@ -299,7 +302,7 @@ func sqlGetAllUsedTags(ctx context.Context, db *sql.DB) ([]database.TagInfo, err
 		return nil, err
 	}
 
-	return tags, nil
+	return result, nil
 }
 
 // sqlGetTags - Optimized query using subquery approach
@@ -363,15 +366,15 @@ func sqlGetTags(
 		}
 	}()
 
-	tags := make([]database.TagInfo, 0, 100)
+	result := make([]database.TagInfo, 0, 100)
 	for rows.Next() {
 		var tagType, tag string
 		if scanErr := rows.Scan(&tagType, &tag); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan optimized tag result: %w", scanErr)
 		}
-		tags = append(tags, database.TagInfo{
+		result = append(result, database.TagInfo{
 			Type: tagType,
-			Tag:  tag,
+			Tag:  tags.UnpadTagValue(tag),
 		})
 	}
 
@@ -379,5 +382,5 @@ func sqlGetTags(
 		return nil, err
 	}
 
-	return tags, nil
+	return result, nil
 }
