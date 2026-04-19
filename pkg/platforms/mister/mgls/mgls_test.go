@@ -323,7 +323,11 @@ func TestGenerateMgl(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := GenerateMgl(tt.core, tt.path, tt.override)
+			rbfPath := ""
+			if tt.core != nil {
+				rbfPath = tt.core.RBF
+			}
+			got, err := GenerateMgl(tt.core, rbfPath, tt.path, tt.override)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -424,7 +428,7 @@ func TestGenerateMgl_NoMatchingSlot(t *testing.T) {
 	}
 
 	// Try to launch a .sfc file with NES core - no matching slot
-	_, err := GenerateMgl(core, "/media/fat/games/NES/game.sfc", "")
+	_, err := GenerateMgl(core, core.RBF, "/media/fat/games/NES/game.sfc", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no matching mgl args")
 }

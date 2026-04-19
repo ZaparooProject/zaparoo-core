@@ -51,6 +51,11 @@ type LaunchersDefault struct {
 	// - "" or "run": Default behavior (launch/play the media)
 	// - "details": Show media details/info page instead of launching
 	Action string `toml:"action,omitempty"`
+	// LoadPath specifies the implementation file the launcher should load.
+	// Format is launcher-specific. For MiSTer, this is an MGL-form RBF path
+	// like "_Unstable/SNES" (no extension, relative to /media/fat). Launchers
+	// that do not load an implementation file ignore this field.
+	LoadPath string `toml:"load_path,omitempty"`
 }
 
 type LaunchersCustom struct {
@@ -142,6 +147,9 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 			if entry.Action != "" {
 				result.Action = entry.Action
 			}
+			if entry.LoadPath != "" {
+				result.LoadPath = entry.LoadPath
+			}
 		}
 	}
 
@@ -150,6 +158,7 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 		Str("resolvedServerURL", result.ServerURL).
 		Str("resolvedAction", result.Action).
 		Str("resolvedInstallDir", result.InstallDir).
+		Str("resolvedLoadPath", result.LoadPath).
 		Msg("LookupLauncherDefaults: resolution complete")
 
 	return result

@@ -162,6 +162,7 @@ func TestLookupLauncherDefaults(t *testing.T) {
 		expectedServerURL string
 		expectedAction    string
 		expectedInstall   string
+		expectedLoadPath  string
 		groups            []string
 		defaults          []LaunchersDefault
 	}{
@@ -322,6 +323,25 @@ func TestLookupLauncherDefaults(t *testing.T) {
 			expectedAction:    "details",
 			expectedInstall:   "/movies",
 		},
+		{
+			name:       "group match propagates load_path",
+			launcherID: "SNES",
+			groups:     []string{"MiSTer"},
+			defaults: []LaunchersDefault{
+				{Launcher: "MiSTer", LoadPath: "_Unstable/SNES"},
+			},
+			expectedLoadPath: "_Unstable/SNES",
+		},
+		{
+			name:       "exact launcher overrides group load_path",
+			launcherID: "SNES",
+			groups:     []string{"MiSTer"},
+			defaults: []LaunchersDefault{
+				{Launcher: "MiSTer", LoadPath: "_Unstable/SNES"},
+				{Launcher: "SNES", LoadPath: "_Console/SNES"},
+			},
+			expectedLoadPath: "_Console/SNES",
+		},
 	}
 
 	for _, tt := range tests {
@@ -342,8 +362,58 @@ func TestLookupLauncherDefaults(t *testing.T) {
 			assert.Equal(t, tt.expectedServerURL, result.ServerURL, "ServerURL mismatch")
 			assert.Equal(t, tt.expectedAction, result.Action, "Action mismatch")
 			assert.Equal(t, tt.expectedInstall, result.InstallDir, "InstallDir mismatch")
+			assert.Equal(t, tt.expectedLoadPath, result.LoadPath, "LoadPath mismatch")
 		})
 	}
+}
+
+func TestLookupLauncherDefaults_MergesLoadPath(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Launchers: Launchers{
+				Default: []LaunchersDefault{
+					{Launcher: "SNES", LoadPath: "_Unstable/SNES"},
+				},
+			},
+		},
+	}
+
+	result := cfg.LookupLauncherDefaults("SNES", nil)
+	assert.Equal(t, "_Unstable/SNES", result.LoadPath)
+}
+
+func TestLookupLauncherDefaults_LaterEntryOverridesLoadPath(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Launchers: Launchers{
+				Default: []LaunchersDefault{
+					{Launcher: "SNES", LoadPath: "_Homebrew/SNES"},
+					{Launcher: "SNES", LoadPath: "_Unstable/SNES"},
+				},
+			},
+		},
+	}
+
+	result := cfg.LookupLauncherDefaults("SNES", nil)
+	assert.Equal(t, "_Unstable/SNES", result.LoadPath, "later entry must win")
+}
+
+func TestLookupLauncherDefaults_LoadPathTOMLRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Nintendo64"
+load_path = "_LLAPI/N64_LLAPI"
+`))
+
+	result := cfg.LookupLauncherDefaults("Nintendo64", nil)
+	assert.Equal(t, "_LLAPI/N64_LLAPI", result.LoadPath, "load_path must survive TOML round-trip")
 }
 
 func TestLoadTOML_LauncherDefaults(t *testing.T) {
