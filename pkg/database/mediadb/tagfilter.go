@@ -44,6 +44,34 @@ func resolveFilter(filterType, filterValue string) (tagType, tagValue string) {
 	return fullTag[:idx], tags.PadTagValue(fullTag[idx+1:])
 }
 
+// expandCreditFilters replaces NOT and OR "credit" filters with three filters covering
+// developer, publisher, and credit tag types, implementing union-match semantics:
+//   - AND credit → passed through unchanged; BuildTagFilterSQL generates a per-filter EXISTS clause
+//   - NOT credit → three NOT filters (absent from all credit types)
+//   - OR credit → three OR filters (union with other OR conditions)
+func expandCreditFilters(filters []zapscript.TagFilter) []zapscript.TagFilter {
+	expanded := make([]zapscript.TagFilter, 0, len(filters))
+	for _, f := range filters {
+		if f.Type != string(tags.TagTypeCredit) || f.Operator == zapscript.TagOperatorAND {
+			expanded = append(expanded, f)
+			continue
+		}
+		creditTypes := []string{
+			string(tags.TagTypeDeveloper),
+			string(tags.TagTypePublisher),
+			string(tags.TagTypeCredit),
+		}
+		op := zapscript.TagOperatorOR
+		if f.Operator == zapscript.TagOperatorNOT {
+			op = zapscript.TagOperatorNOT
+		}
+		for _, t := range creditTypes {
+			expanded = append(expanded, zapscript.TagFilter{Type: t, Value: f.Value, Operator: op})
+		}
+	}
+	return expanded
+}
+
 // BuildTagFilterSQL constructs SQL WHERE clauses and arguments for tag filtering
 // using a hybrid strategy optimized for SQLite performance:
 //   - AND filters: INTERSECT pattern
@@ -57,16 +85,32 @@ func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []
 		return nil, nil
 	}
 
+	filters = expandCreditFilters(filters)
+
 	// Group filters by operator using shared logic
 	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(filters)
 
 	clauses = make([]string, 0, len(filters))
 	args = make([]any, 0, len(filters)*4)
 
-	// Build INTERSECT clause for AND filters (optimal performance on SQLite)
+	// Separate AND credit filters from regular AND filters.
+	// AND credit:X must match any of developer/publisher/credit for value X, so each one
+	// gets its own EXISTS clause (appended directly to clauses, joined with AND by the caller).
+	// Merging them into the INTERSECT path would require type-parameterized sub-selects; a
+	// separate EXISTS clause per filter is simpler and correct.
+	var andCreditFilters, regularAndFilters []zapscript.TagFilter
+	for _, f := range andFilters {
+		if f.Type == string(tags.TagTypeCredit) {
+			andCreditFilters = append(andCreditFilters, f)
+		} else {
+			regularAndFilters = append(regularAndFilters, f)
+		}
+	}
+
+	// Build INTERSECT clause for regular AND filters (optimal performance on SQLite)
 	// Each INTERSECT reduces the result set, making this extremely fast
 	// Each select unions MediaTags (file-level) and MediaTitleTags (title-level)
-	if len(andFilters) > 0 {
+	if len(regularAndFilters) > 0 {
 		selectTpl := `SELECT MediaDBID FROM (
 			SELECT MediaDBID FROM MediaTags
 			JOIN Tags ON MediaTags.TagDBID = Tags.DBID
@@ -81,7 +125,7 @@ func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []
 		)`
 
 		var intersectSelects []string
-		for _, f := range andFilters {
+		for _, f := range regularAndFilters {
 			typ, val := resolveFilter(f.Type, f.Value)
 			intersectSelects = append(intersectSelects, selectTpl)
 			args = append(args, typ, val, typ, val)
@@ -89,6 +133,32 @@ func BuildTagFilterSQL(filters []zapscript.TagFilter) (clauses []string, args []
 
 		intersectClause := fmt.Sprintf("Media.DBID IN (%s)", strings.Join(intersectSelects, " INTERSECT "))
 		clauses = append(clauses, intersectClause)
+	}
+
+	// Build per-filter forward-lookup IN clause for AND credit filters.
+	// Each clause independently requires the game to be credited to that company in any role.
+	// Multiple AND credit clauses are joined with AND by the caller, preserving intersection semantics.
+	// Uses forward lookup (Media.DBID IN SELECT) rather than correlated EXISTS to avoid O(N) table scan.
+	//nolint:gosec // False positive: "cred" in variable name is not a credential
+	const andCreditSelect = `SELECT MediaDBID FROM (
+		SELECT MediaDBID FROM MediaTags
+		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE Tags.Tag = ? AND TagTypes.Type IN (?, ?, ?)
+		UNION
+		SELECT m.DBID AS MediaDBID FROM Media m
+		JOIN MediaTitleTags mtt ON m.MediaTitleDBID = mtt.MediaTitleDBID
+		JOIN Tags ON mtt.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE Tags.Tag = ? AND TagTypes.Type IN (?, ?, ?)
+	)`
+	for _, f := range andCreditFilters {
+		_, val := resolveFilter(f.Type, f.Value)
+		clauses = append(clauses, fmt.Sprintf("Media.DBID IN (%s)", andCreditSelect))
+		devType := string(tags.TagTypeDeveloper)
+		pubType := string(tags.TagTypePublisher)
+		credType := string(tags.TagTypeCredit)
+		args = append(args, val, devType, pubType, credType, val, devType, pubType, credType)
 	}
 
 	// Build NOT EXISTS clauses for NOT filters

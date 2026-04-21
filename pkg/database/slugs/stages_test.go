@@ -765,6 +765,39 @@ func TestContextNilVsPopulated(t *testing.T) {
 // - slug_helpers_test.go: TestExpandAbbreviations, TestExpandNumberWords
 // - media_parsing_test.go: TestParseGame_AbbreviationExpansion, TestParseGame_NumberWordExpansion
 
+func TestConvertRomanNumerals(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		// Trailing single-letter numerals must still convert.
+		{"trailing V", "Rocky V", "rocky 5"},
+		{"trailing I", "Part I", "part 1"},
+		// Multi-letter patterns must convert even at position 0.
+		{"leading II", "II Judgment Day", "2 judgment day"},
+		{"leading III whole string", "III", "3"},
+		{"leading VII whole string", "VII", "7"},
+		// Single-letter numerals at position 0 must NOT convert (initials/pronouns).
+		{"leading V initial", "V Gabriel", "v gabriel"},
+		{"leading V-Rally title", "V-Rally", "v-rally"},
+		{"leading I pronoun", "I Robot", "i robot"},
+		// Mid-string multi-letter conversions.
+		{"mid VII", "Final Fantasy VII", "final fantasy 7"},
+		{"mid II", "Street Fighter II", "street fighter 2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ConvertRomanNumerals(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // boolPtr is a helper to create bool pointers for test assertions
 func boolPtr(b bool) *bool {
 	return &b

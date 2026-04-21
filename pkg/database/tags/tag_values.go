@@ -286,6 +286,7 @@ const (
 	TagRegionLT TagValue = "lt"
 	TagRegionLU TagValue = "lu"
 	TagRegionLV TagValue = "lv"
+	TagRegionAR TagValue = "ar"
 	TagRegionMN TagValue = "mn"
 	TagRegionMX TagValue = "mx"
 	TagRegionMY TagValue = "my"
@@ -430,6 +431,7 @@ const (
 	TagUnfinishedCompetition TagValue = "competition"
 	TagUnfinishedPreview     TagValue = "preview"
 	TagUnfinishedPrerelease  TagValue = "prerelease"
+	TagUnfinishedFinal       TagValue = "final"
 )
 
 // Unlicensed tag values
@@ -442,6 +444,18 @@ const (
 	TagUnlicensedTranslation    TagValue = "translation"
 	TagUnlicensedTranslationOld TagValue = "translation:old"
 	TagUnlicensedAftermarket    TagValue = "aftermarket"
+)
+
+// Release tag values
+const (
+	TagReleaseHomebrew     TagValue = "homebrew"
+	TagReleaseUnreleased   TagValue = "unreleased"
+	TagReleasePublicDomain TagValue = "public-domain"
+	TagReleaseReissue      TagValue = "reissue"
+	TagReleaseClassics     TagValue = "classics"
+	TagReleasePromo        TagValue = "promo"
+	TagReleaseNotForResale TagValue = "not-for-resale"
+	TagReleaseKiosk        TagValue = "kiosk"
 )
 
 // Dump tag values
@@ -865,6 +879,7 @@ const (
 	TagCompatibilityGameboyNP             TagValue = "gameboy:np"
 	TagCompatibilityGameboyInfrared       TagValue = "gameboy:infrared"
 	TagCompatibilityGameboyGBA            TagValue = "gameboy:gba"
+	TagCompatibilityDSi                   TagValue = "dsi"
 	TagCompatibilitySuperfamicom          TagValue = "superfamicom"
 	TagCompatibilitySuperfamicomHiROM     TagValue = "superfamicom:hirom"
 	TagCompatibilitySuperfamicomLoROM     TagValue = "superfamicom:lorom"
@@ -1382,9 +1397,21 @@ const (
 
 // Edition tag values
 const (
-	TagEditionVersion  TagValue = "version"
-	TagEditionEdition  TagValue = "edition"
-	TagEditionRemaster TagValue = "remaster"
+	TagEditionVersion      TagValue = "version"
+	TagEditionEdition      TagValue = "edition"
+	TagEditionRemaster     TagValue = "remaster"
+	TagEditionRemake       TagValue = "remake"
+	TagEditionRemix        TagValue = "remix"
+	TagEditionCut          TagValue = "cut"
+	TagEditionSpecial      TagValue = "special"
+	TagEditionCollectors   TagValue = "collectors"
+	TagEditionLimited      TagValue = "limited"
+	TagEditionDeluxe       TagValue = "deluxe"
+	TagEditionUltimate     TagValue = "ultimate"
+	TagEditionComplete     TagValue = "complete"
+	TagEditionAnniversary  TagValue = "anniversary"
+	TagEditionGoty         TagValue = "goty"
+	TagEditionDirectorsCut TagValue = "directors-cut"
 )
 
 // Perspective tag values
@@ -1440,10 +1467,22 @@ const (
 
 // Distribution platform tag values
 const (
-	TagDistributionVirtualConsole TagValue = "virtualconsole"
+	TagDistributionVirtualConsole TagValue = "virtual-console"
 	TagDistributionWiiWare        TagValue = "wiiware"
 	TagDistributionXBLIG          TagValue = "xblig"
 	TagDistributionDSiWare        TagValue = "dsiware"
+	TagDistributionGameCube       TagValue = "gamecube"
+	TagDistributionSwitchOnline   TagValue = "switch-online"
+	TagDistributionDiskWriter     TagValue = "disk-writer"
+	TagDistributionSteam          TagValue = "steam"
+	TagDistributionSegaChannel    TagValue = "sega-channel"
+	TagDistributionGenesisMini    TagValue = "genesis-mini"
+	TagDistributionSegaAges       TagValue = "sega-ages"
+	TagDistributionSegaSmashPack  TagValue = "sega-smash-pack"
+	TagDistributionWii            TagValue = "wii"
+	TagDistributionClubNintendo   TagValue = "club-nintendo"
+	TagDistributionGBAEReader     TagValue = "gba-e-reader"
+	TagDistributionCompilation    TagValue = "compilation"
 )
 
 // Apple II compatibility tag values

@@ -434,6 +434,13 @@ func ConvertRomanNumerals(s string) string {
 		matched := false
 		for _, num := range romanNumeralReplacementTable {
 			if matchesRomanNumeralPattern(runeSlice, i, num.pattern) {
+				// Single-letter Roman numerals (V, I) at the start of the string are
+				// almost always initials ("V. Gabriel") or pronoun/title "I", not numbers.
+				// Multi-letter patterns (II, III, IV, VII…) remain unambiguous and still
+				// convert even at position 0.
+				if i == 0 && len(num.pattern) == 1 {
+					continue
+				}
 				// Check word boundary after numeral
 				endIdx := i + len(num.pattern)
 				atEnd := endIdx == len(runeSlice) || !isLatinWordCharForRoman(runeSlice[endIdx])

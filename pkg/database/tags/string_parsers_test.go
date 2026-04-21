@@ -87,11 +87,33 @@ func TestFindBracketedYear(t *testing.T) {
 	m = findBracketedYear("Game (USA) title")
 	assert.False(t, m.ok)
 
+	// 1969 is now in range for bracketed years (1950-2099 covers early computing era)
 	m = findBracketedYear("Game (1969) title")
+	assert.True(t, m.ok)
+	assert.Equal(t, "1969", "Game (1969) title"[m.cap1s:m.cap1e])
+
+	m = findBracketedYear("Game (1950) title")
+	assert.True(t, m.ok)
+
+	m = findBracketedYear("Game (1949) title")
 	assert.False(t, m.ok)
 
 	m = findBracketedYear("")
 	assert.False(t, m.ok)
+}
+
+func TestIsBracketedYearValue(t *testing.T) {
+	t.Parallel()
+	assert.True(t, isBracketedYearValue("1950"))
+	assert.True(t, isBracketedYearValue("1969"))
+	assert.True(t, isBracketedYearValue("1970"))
+	assert.True(t, isBracketedYearValue("1999"))
+	assert.True(t, isBracketedYearValue("2000"))
+	assert.True(t, isBracketedYearValue("2099"))
+	assert.False(t, isBracketedYearValue("1949"))
+	assert.False(t, isBracketedYearValue("2100"))
+	assert.False(t, isBracketedYearValue("abcd"))
+	assert.False(t, isBracketedYearValue(""))
 }
 
 func TestFindDiscPattern(t *testing.T) {
@@ -115,6 +137,33 @@ func TestFindDiscPattern(t *testing.T) {
 	assert.False(t, findDiscPattern("Game (Disc 1 of2)").ok)
 	assert.False(t, findDiscPattern("Game (Disc 1 of 2").ok)
 	assert.False(t, findDiscPattern("").ok)
+
+	// "Disk" (with k) accepted as synonym.
+	m = findDiscPattern("Game (Disk 1 of 3)")
+	assert.True(t, m.ok)
+	assert.Equal(t, "1", "Game (Disk 1 of 3)"[m.cap1s:m.cap1e])
+	assert.Equal(t, "3", "Game (Disk 1 of 3)"[m.cap2s:m.cap2e])
+	assert.Equal(t, byte(0), m.side)
+
+	// Side suffix — letter.
+	m = findDiscPattern("Game (Disc 1 of 3 Side A)")
+	assert.True(t, m.ok)
+	assert.Equal(t, byte('A'), m.side)
+
+	m = findDiscPattern("Game (Disk 2 of 2 Side B)")
+	assert.True(t, m.ok)
+	assert.Equal(t, byte('B'), m.side)
+
+	// Side suffix — numeric alias.
+	m = findDiscPattern("Game (Disk 1 of 2 Side 1)")
+	assert.True(t, m.ok)
+	assert.Equal(t, byte('A'), m.side)
+
+	// Invalid side letter — no match.
+	assert.False(t, findDiscPattern("Game (Disk 1 of 3 Side Z)").ok)
+
+	// "Disco" must not match (extra letter after prefix).
+	assert.False(t, findDiscPattern("Game (Disco 1 of 2)").ok)
 }
 
 func TestFindRevPattern(t *testing.T) {

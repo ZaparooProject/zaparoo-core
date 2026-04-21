@@ -35,7 +35,9 @@ func TestCanonicalizeTagAlias(t *testing.T) {
 		{"addon:barcodeboy", "addon:barcode:barcodeboy"},
 		{"addon:controller:jcart", "embedded:slot:jcart"},
 		{"addon:controller:rumble", "embedded:vibration:rumble"},
+		{"distribution:virtualconsole", "distribution:virtual-console"},
 		// pass-through: canonical or unknown tags are unchanged
+		{"distribution:virtual-console", "distribution:virtual-console"},
 		{"addon:barcode:barcodeboy", "addon:barcode:barcodeboy"},
 		{"embedded:slot:jcart", "embedded:slot:jcart"},
 		{"disc:1", "disc:1"},

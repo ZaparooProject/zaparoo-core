@@ -58,6 +58,169 @@ var (
 	reTrackNumber  = regexp.MustCompile(`^(\d{1,3})[\s.\-_]+|(?i)^track\s*(\d{1,3})[\s.\-_]+`)
 )
 
+// editionSuffixFallbacks maps trailing dash-tokens that mark a paren group as an edition
+// variant to the generic TagEdition value used when the qualifier is absent or unrecognized.
+// Used both as a membership test (key presence) and a fallback value lookup.
+var editionSuffixFallbacks = map[string]TagValue{
+	"edition": TagEditionEdition,
+	"remake":  TagEditionRemake,
+	"remix":   TagEditionRemix,
+	"cut":     TagEditionCut,
+}
+
+// editionQualifiers maps recognized qualifier strings (after stripping the suffix and "the-")
+// to their canonical TagEdition* values. Unrecognized qualifiers fall back to the generic
+// suffix marker via editionSuffixFallbacks.
+var editionQualifiers = map[string]TagValue{
+	"special":          TagEditionSpecial,
+	"collectors":       TagEditionCollectors,
+	"collector":        TagEditionCollectors,
+	"limited":          TagEditionLimited,
+	"deluxe":           TagEditionDeluxe,
+	"ultimate":         TagEditionUltimate,
+	"complete":         TagEditionComplete,
+	"anniversary":      TagEditionAnniversary,
+	"goty":             TagEditionGoty,
+	"game-of-the-year": TagEditionGoty,
+	"directors-cut":    TagEditionDirectorsCut, // "Director's Cut Edition" slugs to "directors-cut" + suffix "edition"
+	"directors":        TagEditionDirectorsCut, // "Director's Cut" slugs to "directors" + suffix "cut"
+}
+
+// resolveEditionTag returns the canonical edition CanonicalTag for a paren group
+// whose last token is a recognized edition suffix. tokens must already have the suffix
+// stripped; suffix is the raw suffix string (e.g. "edition", "remake").
+func resolveEditionTag(qualifier, suffix string, src TagSource) CanonicalTag {
+	if v, ok := editionQualifiers[qualifier]; ok {
+		return CanonicalTag{Type: TagTypeEdition, Value: v, Source: src}
+	}
+	fallback := editionSuffixFallbacks[suffix]
+	if fallback == "" {
+		fallback = TagEditionEdition
+	}
+	return CanonicalTag{Type: TagTypeEdition, Value: fallback, Source: src}
+}
+
+// structuralPrefixes are leading dash-tokens that mark a paren group as a media-structure
+// descriptor (disc/part number, etc.) rather than a company name. Only triggered when the
+// group has two or more tokens (e.g. "disc-3", not bare "disc" which allTagMappings handles).
+var structuralPrefixes = map[string]bool{
+	"disc":    true,
+	"part":    true,
+	"book":    true,
+	"program": true,
+	"chapter": true,
+	"episode": true,
+	"ep":      true,
+	"track":   true,
+	"vol":     true,
+	"volume":  true,
+}
+
+// catalogNumberRE matches catalog/part-number shapes like "kd02", "ap009", "pbpx-95205", "v512".
+var catalogNumberRE = regexp.MustCompile(`^[a-z]{1,5}-?\d{2,}[a-z0-9-]*$`)
+
+// adminNoiseSubstrings are substrings (in normalized form) that mark a paren group as admin
+// metadata noise rather than real game metadata — typically LaunchBox database artifacts.
+var adminNoiseSubstrings = []string{
+	"duplicate",
+	"please-remove",
+	"not-in-the-right-place",
+	"in-several-wrong-places",
+	"included-game",
+}
+
+// slugifyCompanyName converts a raw company/person name to a dash-joined slug suitable
+// for storage as an open-valued tag (publisher, developer, credit). Uses the full slug
+// pipeline via NormalizeToWords so "&", accents, punctuation etc. are handled correctly
+// ("T&E Soft" → "t-and-e-soft", "Coktel Vision" → "coktel-vision").
+func slugifyCompanyName(raw string) TagValue {
+	words := slugs.NormalizeToWords(raw)
+	if len(words) == 0 {
+		return TagValue(NormalizeTag(raw))
+	}
+	return TagValue(strings.Join(words, "-"))
+}
+
+// classifyUnmappedParen inspects a normalized paren group that allTagMappings did not match
+// and returns the appropriate CanonicalTag slice plus a classified flag.
+//   - classified=false: unrecognized — caller should emit unknown: tag.
+//   - classified=true, nil tags: recognized as noise/structural — caller should emit no tag.
+//   - classified=true, non-nil tags: emit these tags.
+//
+// Called from mapParenthesisTag after allTagMappings lookup fails and only if the TOSEC
+// positional publisher heuristic does not apply. normalized is the NormalizeTag'd form
+// (used for shape checks and pattern matching); original is the raw paren content
+// (used for the emitted tag value so the slug pipeline handles it properly).
+func classifyUnmappedParen(normalized, original string) ([]CanonicalTag, bool) {
+	// Admin/meta noise — drop, no tag
+	if normalized == "unknown" || normalized == "untitled" {
+		return nil, true
+	}
+	for _, sub := range adminNoiseSubstrings {
+		if strings.Contains(normalized, sub) {
+			return nil, true
+		}
+	}
+
+	// Catalog/part-number shape — drop, no tag
+	if catalogNumberRE.MatchString(normalized) {
+		return nil, true
+	}
+
+	tokens := strings.Split(normalized, "-")
+	last := tokens[len(tokens)-1]
+	first := tokens[0]
+
+	// Edition suffix: "special-edition" → edition:special, "vga-remake" → edition:remake (generic)
+	if _, ok := editionSuffixFallbacks[last]; ok && len(tokens) >= 2 {
+		qualifier := strings.Join(tokens[:len(tokens)-1], "-")
+		qualifier = strings.TrimPrefix(qualifier, "the-")
+		return []CanonicalTag{resolveEditionTag(qualifier, last, TagSourceBracketed)}, true
+	}
+
+	// Classics re-release: "ps1-classics", "sega-saturn-classics" → release:classics
+	if last == "classics" {
+		return []CanonicalTag{{Type: TagTypeRelease, Value: TagReleaseClassics, Source: TagSourceBracketed}}, true
+	}
+
+	// Version phrases — drop, no tag ("version" or its Romance-language equivalents)
+	for _, t := range tokens {
+		if t == "version" || t == "versione" || t == "versao" {
+			return nil, true
+		}
+	}
+
+	// Structural prefixes with a qualifier — drop, no tag ("disc-3", "part-ii")
+	if structuralPrefixes[first] && len(tokens) >= 2 {
+		return nil, true
+	}
+
+	// Shape filter for company-name promotion: require 2–50 runes and ≥2 ASCII letters.
+	// This admits "CRL", "Konami", "Nintendo-RD1" while rejecting "12345", "N", and empty strings.
+	asciiLetters := 0
+	runeCount := utf8.RuneCountInString(normalized)
+	for _, r := range normalized {
+		if r >= 'a' && r <= 'z' {
+			asciiLetters++
+		}
+	}
+	if runeCount < 2 || runeCount > 50 || asciiLetters < 2 {
+		return nil, false // unrecognized, caller emits unknown:
+	}
+
+	return []CanonicalTag{{Type: TagTypeCredit, Value: slugifyCompanyName(original), Source: TagSourceBracketed}}, true
+}
+
+// hasTagType reports whether any tag in the slice has the given type.
+func hasTagType(ts []CanonicalTag, tt TagType) bool {
+	for _, t := range ts {
+		if t.Type == tt {
+			return true
+		}
+	}
+	return false
+}
+
 // langMap maps 3-letter ROM language codes to 2-letter ISO 639-1 codes.
 var langMap = map[string]string{
 	"eng": "en", "ger": "de", "fre": "fr", "spa": "es", "ita": "it",
@@ -85,13 +248,14 @@ const (
 // This follows the No-Intro/TOSEC convention of using tag position and bracket type
 // to determine meaning.
 type ParseContext struct {
-	Filename           string
-	CurrentTag         string
-	ParenTags          []string
-	BracketTags        []string
-	ProcessedTags      []CanonicalTag
-	CurrentIndex       int
-	CurrentBracketType BracketType
+	Filename              string
+	CurrentTag            string
+	ParenTags             []string
+	BracketTags           []string
+	ProcessedTags         []CanonicalTag
+	CurrentIndex          int
+	CurrentBracketType    BracketType
+	YearExtractedFromFile bool // true only when extractSpecialPatterns found a year in the filename
 }
 
 // RawTag represents an extracted tag before canonical mapping
@@ -288,7 +452,7 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 
 	remaining = filename
 
-	// Pattern 1: "Disc X of Y" - most common multi-disc format
+	// Pattern 1: "Disc/Disk X of Y [Side A/B/C/D]" - most common multi-disc format
 	if m := findDiscPattern(remaining); m.ok {
 		tags = append(tags,
 			CanonicalTag{
@@ -307,6 +471,24 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 				Source: TagSourceBracketed,
 			},
 		)
+		if m.side != 0 {
+			var sideVal TagValue
+			switch m.side {
+			case 'A':
+				sideVal = TagMediaSideA
+			case 'B':
+				sideVal = TagMediaSideB
+			case 'C':
+				sideVal = TagMediaSideC
+			case 'D':
+				sideVal = TagMediaSideD
+			}
+			tags = append(tags, CanonicalTag{
+				Type:   TagTypeMedia,
+				Value:  sideVal,
+				Source: TagSourceBracketed,
+			})
+		}
 		remaining = remaining[:m.start] + remaining[m.end:]
 	}
 
@@ -623,8 +805,48 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 	case strings.Contains(tag, ","):
 		parts = strings.Split(tag, ",")
 	case strings.Contains(tag, "-"):
-		// Split by dash (handles "EU-US")
+		// Split by dash (handles "EU-US"). For dash-split, every non-empty part must
+		// match a known tag — otherwise a single-letter token like "v" in "v-gabriel"
+		// would spuriously fire as rev:1.
+		//
+		// However, if the full slug is already a known atomic mapping (e.g. "side-a"),
+		// return it directly rather than splitting — both halves of "side-a" are
+		// independently mapped to unrelated types, which produces wrong compound tags.
+		if fullMapped := mapFilenameTagToCanonical(tag); len(fullMapped) > 0 {
+			var atomicResults []CanonicalTag
+			for _, ct := range fullMapped {
+				if ct.Type != TagTypeUnknown {
+					ct.Source = TagSourceBracketed
+					atomicResults = append(atomicResults, ct)
+				}
+			}
+			if len(atomicResults) > 0 {
+				return atomicResults
+			}
+		}
 		parts = strings.Split(tag, "-")
+		var dashResults []CanonicalTag
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			part = strings.Trim(part, "-")
+			if part == "" {
+				return nil // empty part = consecutive dashes, not a compound tag
+			}
+			normalized := NormalizeTag(part)
+			mapped := mapFilenameTagToCanonical(normalized)
+			var partTags []CanonicalTag
+			for _, ct := range mapped {
+				if ct.Type != TagTypeUnknown {
+					ct.Source = TagSourceBracketed
+					partTags = append(partTags, ct)
+				}
+			}
+			if len(partTags) == 0 {
+				return nil // unrecognized part — not a compound tag
+			}
+			dashResults = append(dashResults, partTags...)
+		}
+		return dashResults
 	default:
 		return nil // Single value
 	}
@@ -691,6 +913,20 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 		}
 		if !conflict {
 			return withSource(fullMapped, TagSourceBracketed)
+		}
+	}
+
+	// Check for edition/release suffix before dash-splitting to prevent compound strings
+	// like "vga-remake" from matching only the first token ("vga"→video:vga) and dropping the rest.
+	// Edition/classics detection runs here so it takes priority over the multi-token split path.
+	if tokens := strings.Split(normalized, "-"); len(tokens) >= 2 {
+		last := tokens[len(tokens)-1]
+		if _, ok := editionSuffixFallbacks[last]; ok {
+			qualifier := strings.Join(tokens[:len(tokens)-1], "-")
+			qualifier = strings.TrimPrefix(qualifier, "the-")
+			return []CanonicalTag{resolveEditionTag(qualifier, last, TagSourceBracketed)}
+		} else if last == "classics" {
+			return []CanonicalTag{{Type: TagTypeRelease, Value: TagReleaseClassics, Source: TagSourceBracketed}}
 		}
 	}
 
@@ -855,11 +1091,61 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 		}
 		// Otherwise, fallback to map
 		return withSource(mapFilenameTagToCanonical(tag), TagSourceBracketed)
+
+	// GoodTools single-letter region codes used in parentheses:
+	// (U)=USA, (E)=Europe, (J)=Japan, (A)=Australia.
+	// In square brackets [u]/[a] these are dump markers handled by mapBracketTag;
+	// in parentheses they are region indicators and must not reach the generic lookup.
+	case "u":
+		if !hasRegion && ctx.CurrentIndex < 3 {
+			return []CanonicalTag{
+				{Type: TagTypeRegion, Value: TagRegionUS, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+			}
+		}
+		return nil
+	case "e":
+		if !hasRegion && ctx.CurrentIndex < 3 {
+			return []CanonicalTag{{Type: TagTypeRegion, Value: TagRegionEU, Source: TagSourceBracketed}}
+		}
+		return nil
+	case "j":
+		if !hasRegion && ctx.CurrentIndex < 3 {
+			return []CanonicalTag{
+				{Type: TagTypeRegion, Value: TagRegionJP, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangJA, Source: TagSourceBracketed},
+			}
+		}
+		return nil
+	case "a":
+		if !hasRegion && ctx.CurrentIndex < 3 {
+			return []CanonicalTag{
+				{Type: TagTypeRegion, Value: TagRegionAU, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+			}
+		}
+		return nil
 	}
 
 	// Try default mapping
 	mapped := mapFilenameTagToCanonical(tag)
 	if len(mapped) == 0 {
+		// TOSEC positional rule: Title (year)(publisher)[flags]
+		// extractSpecialPatterns removes the year paren before extractTags runs, so the
+		// TOSEC publisher lands at paren position 0. YearExtractedFromFile is set only by
+		// extractSpecialPatterns, so this check cannot fire from year tags from other sources.
+		if ctx.CurrentIndex == 0 && ctx.YearExtractedFromFile {
+			return []CanonicalTag{{
+				Type:   TagTypePublisher,
+				Value:  slugifyCompanyName(ctx.CurrentTag),
+				Source: TagSourceBracketed,
+			}}
+		}
+		// Classify the unmatched group: may produce edition:, release:, credit:, or nothing.
+		result, classified := classifyUnmappedParen(tag, ctx.CurrentTag)
+		if classified {
+			return result // nil means "drop silently"; non-nil means "use these tags"
+		}
 		return []CanonicalTag{{Type: TagTypeUnknown, Value: TagValue(tag), Source: TagSourceBracketed}}
 	}
 
@@ -954,10 +1240,11 @@ func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
 
 	// Step 3: Process parentheses tags (region, language, version, dev status)
 	ctx := &ParseContext{
-		Filename:      filename,
-		ParenTags:     parenTags,
-		BracketTags:   bracketTags,
-		ProcessedTags: allTags,
+		Filename:              filename,
+		ParenTags:             parenTags,
+		BracketTags:           bracketTags,
+		ProcessedTags:         allTags,
+		YearExtractedFromFile: hasTagType(specialTags, TagTypeYear),
 	}
 
 	for i, tag := range parenTags {

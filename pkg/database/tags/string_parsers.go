@@ -103,20 +103,34 @@ func isYearValue(s string) bool {
 	return s[0] == '2' && s[1] == '0'
 }
 
+// isBracketedYearValue checks if a 4-character string is a valid year in range 1950-2099.
+// Used for bracketed year detection in TOSEC filenames where early computing-era dates
+// (1950s–1960s) appear, unlike the stricter 1970+ bound used for unbracketed scene years.
+func isBracketedYearValue(s string) bool {
+	if len(s) != 4 || !isDigit(s[0]) || !isDigit(s[1]) || !isDigit(s[2]) || !isDigit(s[3]) {
+		return false
+	}
+	if s[0] == '1' && s[1] == '9' && (s[2] >= '5') { // 1950-1999
+		return true
+	}
+	return s[0] == '2' && s[1] == '0' // 2000-2099
+}
+
 // parseMatch holds the result of a string-based pattern match, replacing []int
 // from FindStringSubmatchIndex. Fields are indices into the original string.
 type parseMatch struct {
-	start, end   int // full match bounds
-	cap1s, cap1e int // first capture group
-	cap2s, cap2e int // second capture group (if applicable)
+	start, end   int  // full match bounds
+	cap1s, cap1e int  // first capture group
+	cap2s, cap2e int  // second capture group (if applicable)
+	side         byte // optional side letter ('A'–'D'), 0 if absent
 	ok           bool
 }
 
-// findBracketedYear finds "(YYYY)" where YYYY is 1970-2099.
+// findBracketedYear finds "(YYYY)" where YYYY is 1950-2099.
 // Replaces: reYear = regexp.MustCompile(`\((19[789]\d|20\d{2})\)`)
 func findBracketedYear(s string) parseMatch {
 	for i := 0; i <= len(s)-6; i++ {
-		if s[i] == '(' && s[i+5] == ')' && isYearValue(s[i+1:i+5]) {
+		if s[i] == '(' && s[i+5] == ')' && isBracketedYearValue(s[i+1:i+5]) {
 			return parseMatch{
 				start: i, end: i + 6,
 				cap1s: i + 1, cap1e: i + 5,
@@ -127,21 +141,28 @@ func findBracketedYear(s string) parseMatch {
 	return parseMatch{}
 }
 
-// findDiscPattern finds "(Disc X of Y)" case-insensitively.
+// findDiscPattern finds "(Disc X of Y)" or "(Disk X of Y)" case-insensitively,
+// with an optional "Side A/B/C/D" (or numeric aliases 1–4) suffix before the ")".
 // Replaces: reDisc = regexp.MustCompile(`(?i)\(Disc\s+(\d+)\s+of\s+(\d+)\)`)
 func findDiscPattern(s string) parseMatch {
 	lower := strings.ToLower(s)
+	// Try "(disc" first, then "(disk".
+	prefixLen := 5
 	idx := strings.Index(lower, "(disc")
 	if idx == -1 {
+		idx = strings.Index(lower, "(disk")
+		if idx == -1 {
+			return parseMatch{}
+		}
+	}
+	pos := idx + prefixLen // after "(disc" or "(disk"
+	// The character immediately after the prefix must be whitespace (not "o" in "Disco", "ette" in "Diskette").
+	if pos >= len(s) || !isWhitespace(s[pos]) {
 		return parseMatch{}
 	}
-	pos := idx + 5 // after "(disc"
 	// skip whitespace
 	for pos < len(s) && isWhitespace(s[pos]) {
 		pos++
-	}
-	if pos == idx+5 || pos >= len(s) {
-		return parseMatch{}
 	}
 	// parse first number
 	numStart := pos
@@ -182,6 +203,36 @@ func findDiscPattern(s string) parseMatch {
 		return parseMatch{}
 	}
 	num2End := pos
+	// Optional "Side X" suffix — whitespace + "side" + whitespace + letter/digit.
+	var side byte
+	if pos < len(s) && isWhitespace(s[pos]) {
+		tmp := pos
+		for tmp < len(s) && isWhitespace(s[tmp]) {
+			tmp++
+		}
+		if tmp+4 <= len(s) && lower[tmp:tmp+4] == "side" {
+			tmp += 4
+			for tmp < len(s) && isWhitespace(s[tmp]) {
+				tmp++
+			}
+			if tmp < len(s) {
+				switch lower[tmp] {
+				case 'a', '1':
+					side = 'A'
+					pos = tmp + 1
+				case 'b', '2':
+					side = 'B'
+					pos = tmp + 1
+				case 'c', '3':
+					side = 'C'
+					pos = tmp + 1
+				case 'd', '4':
+					side = 'D'
+					pos = tmp + 1
+				}
+			}
+		}
+	}
 	// expect ")"
 	if pos >= len(s) || s[pos] != ')' {
 		return parseMatch{}
@@ -190,7 +241,8 @@ func findDiscPattern(s string) parseMatch {
 		start: idx, end: pos + 1,
 		cap1s: numStart, cap1e: numEnd,
 		cap2s: num2Start, cap2e: num2End,
-		ok: true,
+		side: side,
+		ok:   true,
 	}
 }
 

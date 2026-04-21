@@ -507,7 +507,7 @@ func TestParseTagFilters_Whitespace(t *testing.T) {
 			name:  "Multiple spaces become multiple hyphens",
 			input: []string{"name:super  mario  world"},
 			expected: []zapscript.TagFilter{
-				{Type: "name", Value: "super--mario--world", Operator: zapscript.TagOperatorAND},
+				{Type: "name", Value: "super-mario-world", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{
@@ -591,7 +591,7 @@ func TestParseTagFilters_SpecialCharacters(t *testing.T) {
 			name:  "Ampersand removed by normalization (spaces to hyphen first)",
 			input: []string{"game:sonic & knuckles"},
 			expected: []zapscript.TagFilter{
-				{Type: "game", Value: "sonic--knuckles", Operator: zapscript.TagOperatorAND},
+				{Type: "game", Value: "sonic-knuckles", Operator: zapscript.TagOperatorAND},
 			},
 		},
 		{

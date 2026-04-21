@@ -282,8 +282,9 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 	// Single query: find tag types where siblings under the same title have
 	// different values, then return only the target media's tags for those types.
 	// Checks both MediaTags (file-level) and MediaTitleTags (title-level) tags.
-	//nolint:gosec // Safe: ZapScriptTagTypes is internal, not user input
-	rows, err := db.conn().QueryContext(ctx, `
+	//nolint:gosec // Safe: ZapScriptTagTypes contains internal compile-time constants, not user input
+	typeList := "'" + strings.Join(database.ZapScriptTagTypes, "', '") + "'"
+	rows, err := db.conn().QueryContext(ctx, fmt.Sprintf(`
 		WITH Target AS (
 			SELECT Media.DBID, Media.MediaTitleDBID
 			FROM Media
@@ -298,14 +299,14 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 			JOIN MediaTags mt ON Target.DBID = mt.MediaDBID
 			JOIN Tags t ON mt.TagDBID = t.DBID
 			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			WHERE tt.Type IN ('year', 'players')
+			WHERE tt.Type IN (%s)
 			UNION
 			SELECT DISTINCT tt.DBID as TypeDBID, tt.Type, t.Tag
 			FROM Target
 			JOIN MediaTitleTags mtt ON Target.MediaTitleDBID = mtt.MediaTitleDBID
 			JOIN Tags t ON mtt.TagDBID = t.DBID
 			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			WHERE tt.Type IN ('year', 'players')
+			WHERE tt.Type IN (%s)
 		),
 		-- All eligible tags across siblings (file-level + title-level)
 		SiblingTags AS (
@@ -315,14 +316,14 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 			JOIN MediaTags smt ON sibling.DBID = smt.MediaDBID
 			JOIN Tags t ON smt.TagDBID = t.DBID
 			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			WHERE tt.Type IN ('year', 'players')
+			WHERE tt.Type IN (%s)
 			UNION
 			SELECT DISTINCT t.Tag, t.TypeDBID
 			FROM Target
 			JOIN MediaTitleTags mtt ON Target.MediaTitleDBID = mtt.MediaTitleDBID
 			JOIN Tags t ON mtt.TagDBID = t.DBID
 			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			WHERE tt.Type IN ('year', 'players')
+			WHERE tt.Type IN (%s)
 		)
 		SELECT tt.Type, tt.Tag
 		FROM TargetTags tt
@@ -332,7 +333,7 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 			WHERE st.TypeDBID = tt.TypeDBID
 		) > 1
 		ORDER BY tt.Type, tt.Tag
-	`, systemID, path)
+	`, typeList, typeList, typeList, typeList), systemID, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get zapscript tags by system and path: %w", err)
 	}
