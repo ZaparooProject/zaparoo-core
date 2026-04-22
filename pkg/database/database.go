@@ -175,8 +175,9 @@ type SearchResult struct {
 }
 
 type TagInfo struct {
-	Tag  string `json:"tag"`
-	Type string `json:"type"`
+	Tag   string `json:"tag"`
+	Type  string `json:"type"`
+	Count int64  `json:"count,omitempty"`
 }
 
 // GroupTagFiltersByOperator groups tag filters by operator type for consistent processing.

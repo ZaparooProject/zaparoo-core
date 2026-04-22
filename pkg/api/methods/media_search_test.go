@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -922,6 +923,57 @@ func TestHandleMediaTags_DeduplicatesSystems(t *testing.T) {
 
 	_, err = HandleMediaTags(env)
 	require.NoError(t, err)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaTags_CapsAtPerCategoryLimit(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+
+	// Return 101 genre tags — one over the 100-per-category cap.
+	// Tags have unique names and ascending counts so we can assert which one is dropped.
+	overLimitTags := make([]database.TagInfo, 0, tagsPerCategoryLimit+1)
+	for i := range tagsPerCategoryLimit + 1 {
+		overLimitTags = append(overLimitTags, database.TagInfo{
+			Type:  "genre",
+			Tag:   fmt.Sprintf("genre%03d", i),
+			Count: int64(i + 1),
+		})
+	}
+
+	mockMediaDB.On("GetSystemTagsCached", mock.Anything, mock.Anything).
+		Return(overLimitTags, nil)
+
+	params := models.SearchParams{Systems: &[]string{"NES"}}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
+	}
+
+	result, err := HandleMediaTags(env)
+	require.NoError(t, err)
+
+	tagsResponse, ok := result.(models.TagsResponse)
+	require.True(t, ok)
+	assert.Len(t, tagsResponse.Tags, tagsPerCategoryLimit, "tags must be capped at per-category limit")
+	// The lowest-count tag (genre000, Count:1) must have been dropped.
+	for _, tag := range tagsResponse.Tags {
+		assert.NotEqual(t, "genre000", tag.Tag, "lowest-count tag must be excluded by cap")
+	}
 	mockMediaDB.AssertExpectations(t)
 }
 

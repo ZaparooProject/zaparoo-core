@@ -583,6 +583,64 @@ func TestSqlGetTags(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlGetAllUsedTags_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectPrepare(`SELECT tt\.Type, t\.Tag, SUM\(cnt\) AS Count`).
+		ExpectQuery().
+		WillReturnRows(sqlmock.NewRows([]string{"Type", "Tag", "Count"}).
+			AddRow("genre", "Action", int64(7)).
+			AddRow("genre", "RPG", int64(3)).
+			AddRow("year", "1990", int64(12)))
+
+	results, err := sqlGetAllUsedTags(context.Background(), db)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 3)
+	assert.Equal(t, []database.TagInfo{
+		{Type: "genre", Tag: "Action", Count: 7},
+		{Type: "genre", Tag: "RPG", Count: 3},
+		{Type: "year", Tag: "1990", Count: 12},
+	}, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetAllUsedTags_ScanError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectPrepare(`SELECT tt\.Type, t\.Tag, SUM\(cnt\) AS Count`).
+		ExpectQuery().
+		WillReturnRows(sqlmock.NewRows([]string{"Type", "Tag"}). // missing Count column
+										AddRow("genre", "Action"))
+
+	_, err = sqlGetAllUsedTags(context.Background(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to scan all used tag result")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetAllUsedTags_Empty(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectPrepare(`SELECT tt\.Type, t\.Tag, SUM\(cnt\) AS Count`).
+		ExpectQuery().
+		WillReturnRows(sqlmock.NewRows([]string{"Type", "Tag", "Count"}))
+
+	results, err := sqlGetAllUsedTags(context.Background(), db)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlPopulateSystemTagsCache_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
@@ -640,12 +698,12 @@ func TestSqlGetSystemTagsCached_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(2))
 
 	// Mock main query
-	mock.ExpectPrepare(`SELECT DISTINCT TagType, Tag FROM SystemTagsCache WHERE SystemDBID IN.*`).
+	mock.ExpectPrepare(`SELECT TagType, Tag, SUM\(Count\) AS Count FROM SystemTagsCache WHERE SystemDBID IN.*`).
 		ExpectQuery().WithArgs(1, 2).
-		WillReturnRows(sqlmock.NewRows([]string{"TagType", "Tag"}).
-			AddRow("genre", "Action").
-			AddRow("genre", "Adventure").
-			AddRow("year", "1990"))
+		WillReturnRows(sqlmock.NewRows([]string{"TagType", "Tag", "Count"}).
+			AddRow("genre", "Action", int64(12)).
+			AddRow("genre", "Adventure", int64(4)).
+			AddRow("year", "1990", int64(7)))
 
 	results, err := sqlGetSystemTagsCached(context.Background(), db, systems)
 
@@ -653,9 +711,9 @@ func TestSqlGetSystemTagsCached_Success(t *testing.T) {
 	assert.Len(t, results, 3)
 
 	expectedTags := []database.TagInfo{
-		{Type: "genre", Tag: "Action"},
-		{Type: "genre", Tag: "Adventure"},
-		{Type: "year", Tag: "1990"},
+		{Type: "genre", Tag: "Action", Count: 12},
+		{Type: "genre", Tag: "Adventure", Count: 4},
+		{Type: "year", Tag: "1990", Count: 7},
 	}
 
 	assert.Equal(t, expectedTags, results)

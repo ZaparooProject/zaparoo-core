@@ -1452,8 +1452,17 @@ func NewNamesIndex(
 		log.Error().Err(idxErr).Msg("failed to create secondary indexes")
 	}
 
-	// Populate caches before marking complete. These must run synchronously
-	// so searches return correct results the moment indexing finishes.
+	// Mark database as complete and ready for use. UpdateLastGenerated clears
+	// SystemTagsCache and SlugResolutionCache via invalidateCaches, so cache
+	// population must happen after this call.
+	err = db.UpdateLastGenerated()
+	if err != nil {
+		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
+	}
+
+	// Populate caches after UpdateLastGenerated. These run synchronously so
+	// searches return correct results the moment indexing finishes, and the
+	// populated SystemTagsCache persists across service restarts.
 	if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
 		log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
 	}
@@ -1462,12 +1471,6 @@ func NewNamesIndex(
 	}
 	if cacheErr := db.RebuildTagCache(); cacheErr != nil {
 		log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
-	}
-
-	// Mark database as complete and ready for use
-	err = db.UpdateLastGenerated()
-	if err != nil {
-		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
 	}
 
 	// Mark indexing as completed and clear indexing metadata

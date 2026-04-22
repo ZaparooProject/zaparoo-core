@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -28,6 +29,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,6 +51,40 @@ import (
 )
 
 const defaultMaxResults = 100
+
+// tagsPerCategoryLimit caps the number of tags returned per type in media.tags
+// responses. Tags are sorted by usage count (most popular first) before capping,
+// so long-tail categories like credit: don't flood the response.
+const tagsPerCategoryLimit = 100
+
+// capTagsByCategory returns at most limit tags per type, sorted by count desc
+// then tag asc within each group.
+func capTagsByCategory(tagList []database.TagInfo, limit int) []database.TagInfo {
+	grouped := make(map[string][]database.TagInfo)
+	typeOrder := make([]string, 0, 8)
+	for _, t := range tagList {
+		if _, exists := grouped[t.Type]; !exists {
+			typeOrder = append(typeOrder, t.Type)
+		}
+		grouped[t.Type] = append(grouped[t.Type], t)
+	}
+
+	result := make([]database.TagInfo, 0, len(tagList))
+	for _, typ := range typeOrder {
+		group := grouped[typ]
+		slices.SortFunc(group, func(a, b database.TagInfo) int {
+			if c := cmp.Compare(b.Count, a.Count); c != 0 {
+				return c
+			}
+			return cmp.Compare(a.Tag, b.Tag)
+		})
+		if len(group) > limit {
+			group = group[:limit]
+		}
+		result = append(result, group...)
+	}
+	return result
+}
 
 // searchSem limits concurrent media.search requests to 3 to avoid saturating
 // SQLite with long-running LIKE queries. Additional callers block until a slot
@@ -708,7 +744,7 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	}
 
 	return models.TagsResponse{
-		Tags: tagList,
+		Tags: capTagsByCategory(tagList, tagsPerCategoryLimit),
 	}, nil
 }
 

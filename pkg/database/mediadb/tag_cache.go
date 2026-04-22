@@ -31,6 +31,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// tagKey uniquely identifies a tag by its type and value. Used as a map key
+// to deduplicate and accumulate counts across multiple systems.
+type tagKey struct{ typ, tag string }
+
 // tagCache holds pre-computed tag lists in memory for instant lookups.
 // Built from the SystemTagsCache SQL table after media indexing completes.
 type tagCache struct {
@@ -38,7 +42,8 @@ type tagCache struct {
 	allTags  []database.TagInfo
 }
 
-// tagsForSystems collects and deduplicates tags across the requested systems.
+// tagsForSystems collects and deduplicates tags across the requested systems,
+// summing counts when the same (type, tag) appears in multiple systems.
 func (c *tagCache) tagsForSystems(systems []systemdefs.System) []database.TagInfo {
 	if len(systems) == 1 {
 		first := systems[0] //nolint:gosec // G602 false positive: len==1 guarantees valid index
@@ -49,24 +54,31 @@ func (c *tagCache) tagsForSystems(systems []systemdefs.System) []database.TagInf
 		return slices.Clone(tagList)
 	}
 
-	seen := make(map[database.TagInfo]struct{})
-	result := []database.TagInfo{}
+	counts := make(map[tagKey]int64)
+	order := make([]tagKey, 0)
 	for _, sys := range systems {
 		for _, tag := range c.bySystem[sys.ID] {
-			if _, exists := seen[tag]; !exists {
-				seen[tag] = struct{}{}
-				result = append(result, tag)
+			k := tagKey{tag.Type, tag.Tag}
+			if _, exists := counts[k]; !exists {
+				order = append(order, k)
 			}
+			counts[k] += tag.Count
 		}
+	}
+
+	result := make([]database.TagInfo, 0, len(order))
+	for _, k := range order {
+		result = append(result, database.TagInfo{Type: k.typ, Tag: k.tag, Count: counts[k]})
 	}
 	return result
 }
 
 // buildTagCache reads the SystemTagsCache table and builds both the allTags
-// and bySystem views in a single pass.
+// and bySystem views in a single pass. allTags accumulates counts across all
+// systems so the global list reflects aggregate popularity.
 func buildTagCache(ctx context.Context, db *sql.DB) (*tagCache, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT s.SystemID, stc.TagType, stc.Tag
+		SELECT s.SystemID, stc.TagType, stc.Tag, stc.Count
 		FROM SystemTagsCache stc
 		JOIN Systems s ON stc.SystemDBID = s.DBID
 		ORDER BY stc.TagType, stc.Tag`)
@@ -77,26 +89,37 @@ func buildTagCache(ctx context.Context, db *sql.DB) (*tagCache, error) {
 
 	cache := &tagCache{
 		bySystem: make(map[string][]database.TagInfo),
-		allTags:  []database.TagInfo{},
 	}
-	seen := make(map[database.TagInfo]struct{})
+
+	allCounts := make(map[tagKey]int64)
+	allOrder := make([]tagKey, 0)
 
 	for rows.Next() {
 		var systemID, tagType, tag string
-		if err := rows.Scan(&systemID, &tagType, &tag); err != nil {
+		var count int64
+		if err := rows.Scan(&systemID, &tagType, &tag, &count); err != nil {
 			return nil, fmt.Errorf("failed to scan tag cache row: %w", err)
 		}
 
-		ti := database.TagInfo{Type: tagType, Tag: dbtags.UnpadTagValue(tag)}
+		unpadded := dbtags.UnpadTagValue(tag)
+		ti := database.TagInfo{Type: tagType, Tag: unpadded, Count: count}
 		cache.bySystem[systemID] = append(cache.bySystem[systemID], ti)
 
-		if _, exists := seen[ti]; !exists {
-			seen[ti] = struct{}{}
-			cache.allTags = append(cache.allTags, ti)
+		k := tagKey{tagType, unpadded}
+		if _, exists := allCounts[k]; !exists {
+			allOrder = append(allOrder, k)
 		}
+		allCounts[k] += count
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("tag cache rows iteration error: %w", err)
+	}
+
+	cache.allTags = make([]database.TagInfo, 0, len(allOrder))
+	for _, k := range allOrder {
+		cache.allTags = append(cache.allTags, database.TagInfo{
+			Type: k.typ, Tag: k.tag, Count: allCounts[k],
+		})
 	}
 
 	return cache, nil
@@ -109,10 +132,12 @@ func (db *MediaDB) RebuildTagCache() error {
 	if err != nil {
 		return fmt.Errorf("failed to build tag cache: %w", err)
 	}
-	db.inMemoryTagCache.Store(cache)
 	if len(cache.allTags) == 0 {
-		log.Warn().Msg("tag cache is empty, media re-index may be required")
+		log.Debug().Msg("tag cache is empty after rebuild, falling back to SQL")
+		db.inMemoryTagCache.Store(nil)
+		return nil
 	}
+	db.inMemoryTagCache.Store(cache)
 	log.Info().
 		Int("tags", len(cache.allTags)).
 		Int("systems", len(cache.bySystem)).

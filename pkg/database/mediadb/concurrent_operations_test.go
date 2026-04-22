@@ -53,22 +53,11 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	expectBrowseCacheStep(mock)
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "analyze").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)analyze;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
+	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
-
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -286,22 +275,11 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	expectBrowseCacheStep(mock)
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "analyze").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)analyze;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
+	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
-
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -348,28 +326,22 @@ func TestOptimizationInterruption(t *testing.T) {
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
-	// Mock optimization that fails partway through
+	// analyze is now first; failure aborts before page_prefetch/browse_cache
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	expectBrowseCacheStep(mock)
-
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "analyze").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Analyze step fails repeatedly
 	analyzeError := errors.New("database locked")
 	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
 	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
 	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError) // Final failure
 
-	// Mock failure handling
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "failed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -451,15 +423,7 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	expectBrowseCacheStep(mock)
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "analyze").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)analyze;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
+	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
