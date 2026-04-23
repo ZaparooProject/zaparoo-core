@@ -952,6 +952,24 @@ func TestDecodeURIIfNeeded_MalformedGracefulFallback(t *testing.T) {
 			description: "Literal % in decoded segment is re-encoded for idempotence",
 		},
 		{
+			name:        "custom_scheme_literal_hashes_stay_literal",
+			input:       "steAm://############%2F",
+			expected:    "steAm://############%2F",
+			description: "Literal # characters should not be re-escaped when only an encoded slash needs preserving",
+		},
+		{
+			name:        "custom_scheme_invalid_escape_does_not_expand_literal_hashes",
+			input:       "steAm://###########/%",
+			expected:    "steAm://###########/%",
+			description: "Malformed custom-scheme segments should not expand surrounding literal # characters",
+		},
+		{
+			name:        "custom_scheme_encoded_control_char_preserves_escape",
+			input:       "sTeAm://###%00############",
+			expected:    "sTeAm://###%00############",
+			description: "Escaped control bytes should stay encoded without expanding surrounding literal # characters",
+		},
+		{
 			name:        "mixed_encoding_quality",
 			input:       "steam://200/Game%20Name%ZZTitle",
 			expected:    "steam://200/Game%20Name%ZZTitle",
