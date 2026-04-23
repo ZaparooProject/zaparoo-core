@@ -1014,7 +1014,7 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 func mapBracketTag(tag string, mediaType slugs.MediaType) []CanonicalTag {
 	// Check for translation patterns first (T+Eng, T-Chi, etc.)
 	// This must come before normalization to preserve the T+/T- prefix
-	if mediaType != slugs.MediaTypeGame {
+	if mediaType == "" || mediaType == slugs.MediaTypeGame {
 		if transTags, matched := parseTranslationPattern(tag, TagSourceBracketed, true); matched {
 			return transTags
 		}

@@ -200,7 +200,10 @@ func TestTryMainTitleOnly(t *testing.T) {
 func TestTrySharedSecondaryTitle(t *testing.T) {
 	t.Parallel()
 
+	sharedSearchErr := errors.New("database error")
+
 	tests := []struct {
+		expectedErr      error
 		setupMock        func(*helpers.MockMediaDBI)
 		name             string
 		slug             string
@@ -338,9 +341,10 @@ func TestTrySharedSecondaryTitle(t *testing.T) {
 			setupMock: func(m *helpers.MockMediaDBI) {
 				m.On("SearchMediaBySecondarySlug", mock.Anything, "PC", "embodimentofscarletdevil",
 					[]zapscript.TagFilter(nil)).
-					Return([]database.SearchResultWithCursor{}, errors.New("database error"))
+					Return([]database.SearchResultWithCursor{}, sharedSearchErr)
 			},
 			expectedCount:    0,
+			expectedErr:      sharedSearchErr,
 			expectedStrategy: "",
 			shouldError:      true,
 		},
@@ -365,6 +369,10 @@ func TestTrySharedSecondaryTitle(t *testing.T) {
 
 			if tt.shouldError {
 				require.Error(t, err)
+				if tt.expectedErr != nil {
+					require.ErrorIs(t, err, tt.expectedErr)
+					require.ErrorContains(t, err, "SearchMediaBySecondarySlug")
+				}
 			} else {
 				require.NoError(t, err)
 				assert.Len(t, results, tt.expectedCount)
@@ -379,6 +387,7 @@ func TestTrySharedSecondaryTitle(t *testing.T) {
 func TestTrySecondaryTitleExact(t *testing.T) {
 	t.Parallel()
 
+	exactSearchErr := errors.New("database error")
 	partialSearchErr := errors.New("database error")
 
 	tests := []struct {
@@ -523,7 +532,7 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			shouldError:      false,
 		},
 		{
-			name: "exact search returns error - continues to partial",
+			name: "exact search returns error",
 			matchInfo: GameMatchInfo{
 				HasSecondaryTitle: false,
 				MainTitleSlug:     "testgame",
@@ -533,16 +542,12 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
 				m.On("SearchMediaBySlug", mock.Anything, "SNES", "testgame", []zapscript.TagFilter(nil)).
-					Return([]database.SearchResultWithCursor{}, errors.New("database error"))
-				// Should still try partial search
-				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "testgame", []zapscript.TagFilter(nil)).
-					Return([]database.SearchResultWithCursor{
-						{SystemID: "SNES", Name: "Some Game: Test Game", Path: "/test.rom"},
-					}, nil)
+					Return([]database.SearchResultWithCursor{}, exactSearchErr)
 			},
 			expectedCount:    1,
+			expectedErr:      exactSearchErr,
 			expectedStrategy: StrategySecondaryTitleExact,
-			shouldError:      false,
+			shouldError:      true,
 		},
 		{
 			name: "partial search returns error",
@@ -587,7 +592,12 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 				require.Error(t, err)
 				if tt.expectedErr != nil {
 					require.ErrorIs(t, err, tt.expectedErr)
-					require.ErrorContains(t, err, "partial secondary title search failed")
+					if tt.name == "partial search returns error" {
+						require.ErrorContains(t, err, "partial secondary title search failed")
+					}
+					if tt.name == "exact search returns error" {
+						require.ErrorContains(t, err, "exact secondary title search failed")
+					}
 				}
 			} else {
 				require.NoError(t, err)

@@ -1160,7 +1160,7 @@ func TestParseBracketedTranslation_FullPipeline(t *testing.T) {
 	}
 }
 
-func TestParseFilenameToCanonicalTagsForMedia_GameSkipsTVAndTranslationPatterns(t *testing.T) {
+func TestParseFilenameToCanonicalTagsForMedia_GameSkipsTVButKeepsRomTranslationPatterns(t *testing.T) {
 	t.Parallel()
 
 	filename := "Game Title S01E02 (USA) [T+Eng].smc"
@@ -1182,11 +1182,12 @@ func TestParseFilenameToCanonicalTagsForMedia_GameSkipsTVAndTranslationPatterns(
 	}
 	assert.NotContains(t, gameStrings, "season:1")
 	assert.NotContains(t, gameStrings, "episode:2")
-	assert.NotContains(t, gameStrings, "unlicensed:translation")
+	assert.Contains(t, gameStrings, "unlicensed:translation")
+	assert.Contains(t, gameStrings, "lang:en")
 	assert.Contains(t, gameStrings, "region:us")
 }
 
-func TestParseFilenameToCanonicalTagsForMedia_GameSkipsTranslationLanguageTags(t *testing.T) {
+func TestParseFilenameToCanonicalTagsForMedia_NonGameSkipsRomTranslationLanguageTags(t *testing.T) {
 	t.Parallel()
 
 	filename := "Game Title [T+Eng].smc"
@@ -1199,13 +1200,13 @@ func TestParseFilenameToCanonicalTagsForMedia_GameSkipsTranslationLanguageTags(t
 	assert.Contains(t, defaultStrings, "unlicensed:translation")
 	assert.Contains(t, defaultStrings, "lang:en")
 
-	gameTags := ParseFilenameToCanonicalTagsForMedia(filename, slugs.MediaTypeGame)
-	gameStrings := make([]string, len(gameTags))
-	for i, tag := range gameTags {
-		gameStrings[i] = tag.String()
+	nonGameTags := ParseFilenameToCanonicalTagsForMedia(filename, slugs.MediaTypeMovie)
+	nonGameStrings := make([]string, len(nonGameTags))
+	for i, tag := range nonGameTags {
+		nonGameStrings[i] = tag.String()
 	}
-	assert.NotContains(t, gameStrings, "unlicensed:translation")
-	assert.NotContains(t, gameStrings, "lang:en")
+	assert.NotContains(t, nonGameStrings, "unlicensed:translation")
+	assert.NotContains(t, nonGameStrings, "lang:en")
 }
 
 func TestParseBracesAndAngles_FullPipeline(t *testing.T) {

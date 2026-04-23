@@ -22,9 +22,9 @@ package telemetry
 import (
 	"testing"
 
+	th "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -129,7 +129,7 @@ func TestThresholdWriter(t *testing.T) {
 	msg := []byte("test message")
 
 	t.Run("Debug is dropped when threshold is Error", func(t *testing.T) {
-		mockWriter := &mockLevelWriter{}
+		mockWriter := &th.MockLevelWriter{}
 		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
 		n, err := tw.WriteLevel(zerolog.DebugLevel, msg)
 		assert.Equal(t, len(msg), n)
@@ -138,7 +138,7 @@ func TestThresholdWriter(t *testing.T) {
 	})
 
 	t.Run("Info is dropped when threshold is Error", func(t *testing.T) {
-		mockWriter := &mockLevelWriter{}
+		mockWriter := &th.MockLevelWriter{}
 		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
 		n, err := tw.WriteLevel(zerolog.InfoLevel, msg)
 		assert.Equal(t, len(msg), n)
@@ -147,7 +147,7 @@ func TestThresholdWriter(t *testing.T) {
 	})
 
 	t.Run("Warn is dropped when threshold is Error", func(t *testing.T) {
-		mockWriter := &mockLevelWriter{}
+		mockWriter := &th.MockLevelWriter{}
 		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
 		n, err := tw.WriteLevel(zerolog.WarnLevel, msg)
 		assert.Equal(t, len(msg), n)
@@ -156,7 +156,7 @@ func TestThresholdWriter(t *testing.T) {
 	})
 
 	t.Run("Error passes through when threshold is Error", func(t *testing.T) {
-		mockWriter := &mockLevelWriter{}
+		mockWriter := &th.MockLevelWriter{}
 		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
 		mockWriter.On("WriteLevel", zerolog.ErrorLevel, msg).Return(len(msg), nil).Once()
 		n, err := tw.WriteLevel(zerolog.ErrorLevel, msg)
@@ -166,7 +166,7 @@ func TestThresholdWriter(t *testing.T) {
 	})
 
 	t.Run("Fatal passes through when threshold is Error", func(t *testing.T) {
-		mockWriter := &mockLevelWriter{}
+		mockWriter := &th.MockLevelWriter{}
 		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
 		mockWriter.On("WriteLevel", zerolog.FatalLevel, msg).Return(len(msg), nil).Once()
 		n, err := tw.WriteLevel(zerolog.FatalLevel, msg)
@@ -176,7 +176,7 @@ func TestThresholdWriter(t *testing.T) {
 	})
 
 	t.Run("Panic passes through when threshold is Error", func(t *testing.T) {
-		mockWriter := &mockLevelWriter{}
+		mockWriter := &th.MockLevelWriter{}
 		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
 		mockWriter.On("WriteLevel", zerolog.PanicLevel, msg).Return(len(msg), nil).Once()
 		n, err := tw.WriteLevel(zerolog.PanicLevel, msg)
@@ -186,7 +186,7 @@ func TestThresholdWriter(t *testing.T) {
 	})
 
 	t.Run("NoLevel is always dropped", func(t *testing.T) {
-		mockWriter := &mockLevelWriter{}
+		mockWriter := &th.MockLevelWriter{}
 		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
 		n, err := tw.WriteLevel(zerolog.NoLevel, msg)
 		assert.Equal(t, len(msg), n)
@@ -195,7 +195,7 @@ func TestThresholdWriter(t *testing.T) {
 	})
 
 	t.Run("Disabled is always dropped", func(t *testing.T) {
-		mockWriter := &mockLevelWriter{}
+		mockWriter := &th.MockLevelWriter{}
 		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
 		n, err := tw.WriteLevel(zerolog.Disabled, msg)
 		assert.Equal(t, len(msg), n)
@@ -204,7 +204,7 @@ func TestThresholdWriter(t *testing.T) {
 	})
 
 	t.Run("Write is always passed through", func(t *testing.T) {
-		mockWriter := &mockLevelWriter{}
+		mockWriter := &th.MockLevelWriter{}
 		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
 		mockWriter.On("Write", msg).Return(len(msg), nil).Once()
 		n, err := tw.Write(msg)
@@ -212,18 +212,4 @@ func TestThresholdWriter(t *testing.T) {
 		require.NoError(t, err)
 		mockWriter.AssertExpectations(t)
 	})
-}
-
-type mockLevelWriter struct {
-	mock.Mock
-}
-
-func (m *mockLevelWriter) Write(p []byte) (int, error) {
-	args := m.Called(p)
-	return args.Int(0), args.Error(1)
-}
-
-func (m *mockLevelWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
-	args := m.Called(level, p)
-	return args.Int(0), args.Error(1)
 }

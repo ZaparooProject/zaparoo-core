@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -660,7 +661,7 @@ func TestGetMediaByDBID_UnpadsNumericTags_Integration(t *testing.T) {
 	media := database.Media{
 		SystemDBID:     insertedSystem.DBID,
 		MediaTitleDBID: insertedTitle.DBID,
-		Path:           "/roms/nes/numeric.nes",
+		Path:           filepath.Join("roms", "nes", "numeric.nes"),
 	}
 	insertedMedia, err := mediaDB.InsertMedia(media)
 	require.NoError(t, err)
@@ -924,7 +925,7 @@ func TestGetZapScriptTagsBySystemAndPath_UnpadsNumericTags_Integration(t *testin
 	media := database.Media{
 		SystemDBID:     insertedSystem.DBID,
 		MediaTitleDBID: insertedTitle.DBID,
-		Path:           "/roms/nes/players2.nes",
+		Path:           filepath.Join("roms", "nes", "players2.nes"),
 	}
 	insertedMedia, err := mediaDB.InsertMedia(media)
 	require.NoError(t, err)
@@ -937,7 +938,7 @@ func TestGetZapScriptTagsBySystemAndPath_UnpadsNumericTags_Integration(t *testin
 	siblingMedia := database.Media{
 		SystemDBID:     insertedSystem.DBID,
 		MediaTitleDBID: insertedTitle.DBID,
-		Path:           "/roms/nes/players4.nes",
+		Path:           filepath.Join("roms", "nes", "players4.nes"),
 	}
 	insertedSibling, err := mediaDB.InsertMedia(siblingMedia)
 	require.NoError(t, err)
@@ -950,7 +951,11 @@ func TestGetZapScriptTagsBySystemAndPath_UnpadsNumericTags_Integration(t *testin
 	err = mediaDB.CommitTransaction()
 	require.NoError(t, err)
 
-	resultTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, nesSystem.ID, "/roms/nes/players2.nes")
+	resultTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(
+		ctx,
+		nesSystem.ID,
+		filepath.Join("roms", "nes", "players2.nes"),
+	)
 	require.NoError(t, err)
 	require.Len(t, resultTags, 1)
 	assert.Equal(t, "players", resultTags[0].Type)

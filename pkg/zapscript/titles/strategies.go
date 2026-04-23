@@ -153,6 +153,7 @@ func TrySecondaryTitleExact(
 	exactResults, exactErr := gamesdb.SearchMediaBySlug(ctx, systemID, searchSlug, tagFilters)
 	if exactErr != nil {
 		log.Warn().Err(exactErr).Msgf("exact secondary title search failed for '%s'", searchSlug)
+		return nil, "", fmt.Errorf("exact secondary title search failed: %w", exactErr)
 	} else if len(exactResults) > 0 {
 		// Post-filter: only keep DB entries WITHOUT secondary title
 		var filtered []database.SearchResultWithCursor
@@ -264,6 +265,9 @@ func TrySharedSecondaryTitle(
 	}
 
 	queryFirstToken := firstMainTitleToken(mediaType, matchInfo.OriginalInput)
+	if queryFirstToken == "" {
+		return nil, "", nil
+	}
 
 	var filtered []database.SearchResultWithCursor
 	for _, result := range results {
@@ -280,9 +284,6 @@ func TrySharedSecondaryTitle(
 		}
 
 		// Guard: main titles must share a first token to prevent cross-franchise collisions.
-		if queryFirstToken == "" {
-			continue
-		}
 		dbFirstToken := firstMainTitleToken(mediaType, dbMatchInfo.OriginalInput)
 		if dbFirstToken != queryFirstToken {
 			continue

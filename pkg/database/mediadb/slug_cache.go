@@ -352,7 +352,7 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 		}
 	}()
 
-	var resultTags []database.TagInfo
+	resultTags := make([]database.TagInfo, 0)
 	for rows.Next() {
 		var tag database.TagInfo
 		if scanErr := rows.Scan(&tag.Type, &tag.Tag); scanErr != nil {
