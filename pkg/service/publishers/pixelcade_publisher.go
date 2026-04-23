@@ -27,6 +27,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	pathpkg "path"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -145,10 +147,22 @@ func (p *PixelCadePublisher) handleMediaStarted(params json.RawMessage) error {
 	}
 
 	console := url.PathEscape(pixelCadeConsoleName(started.SystemID))
-	rom := url.PathEscape(started.MediaName)
+	rom := url.PathEscape(pixelCadeMediaIdentifier(started.MediaPath))
+	query := url.Values{"event": {"GameStart"}}
 
-	reqURL := fmt.Sprintf("%s/arcade/%s/%s/%s", p.baseURL, p.mode, console, rom)
+	reqURL := fmt.Sprintf("%s/arcade/%s/%s/%s?%s", p.baseURL, p.mode, console, rom, query.Encode())
 	return p.doRequest(reqURL)
+}
+
+func pixelCadeMediaIdentifier(mediaPath string) string {
+	normalizedPath := strings.ReplaceAll(mediaPath, "\\", "/")
+	identifier := pathpkg.Base(normalizedPath)
+
+	if ext := pathpkg.Ext(identifier); ext != "" {
+		identifier = strings.TrimSuffix(identifier, ext)
+	}
+
+	return identifier
 }
 
 func (p *PixelCadePublisher) handleMediaStopped() error {

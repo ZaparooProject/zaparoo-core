@@ -118,7 +118,7 @@ func TestPixelCadePublisher_Publish_MediaStarted(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "/arcade/stream/nes/Super%20Mario%20Bros", receivedURI)
+	assert.Equal(t, "/arcade/stream/nes/smb?event=GameStart", receivedURI)
 }
 
 func TestPixelCadePublisher_Publish_MediaStarted_WriteMode(t *testing.T) {
@@ -150,7 +150,39 @@ func TestPixelCadePublisher_Publish_MediaStarted_WriteMode(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "/arcade/write/genesis/Sonic%20The%20Hedgehog", receivedURI)
+	assert.Equal(t, "/arcade/write/genesis/sonic?event=GameStart", receivedURI)
+}
+
+func TestPixelCadePublisher_Publish_MediaStarted_PathWithoutExtension(t *testing.T) {
+	t.Parallel()
+
+	var receivedURI string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedURI = r.RequestURI
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	host, port := splitHostPort(t, server.URL)
+	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, PixelCadeOnStopNone, nil)
+	require.NoError(t, pub.Start(context.Background()))
+	defer pub.Stop()
+
+	params, err := json.Marshal(models.MediaStartedParams{
+		SystemID:   "ScummVM",
+		SystemName: "ScummVM",
+		MediaName:  "Day of the Tentacle",
+		MediaPath:  "scummvm://games/dayoftentacle",
+	})
+	require.NoError(t, err)
+
+	err = pub.Publish(models.Notification{
+		Method: models.NotificationStarted,
+		Params: params,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "/arcade/stream/scummvm/dayoftentacle?event=GameStart", receivedURI)
 }
 
 func TestPixelCadePublisher_Publish_MediaStopped_Blank(t *testing.T) {
@@ -370,6 +402,28 @@ func TestPixelCadeConsoleName(t *testing.T) {
 		t.Run(tt.systemID, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want, pixelCadeConsoleName(tt.systemID))
+		})
+	}
+}
+
+func TestPixelCadeMediaIdentifier(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		mediaPath string
+		want      string
+	}{
+		{name: "posix path", mediaPath: "/roms/nes/Super Mario Bros.nes", want: "Super Mario Bros"},
+		{name: "windows path", mediaPath: `C:\ROMs\MAME\4dwarrio.zip`, want: "4dwarrio"},
+		{name: "virtual path", mediaPath: "scummvm://games/dayoftentacle", want: "dayoftentacle"},
+		{name: "no extension", mediaPath: "/roms/ports/Celeste", want: "Celeste"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, pixelCadeMediaIdentifier(tt.mediaPath))
 		})
 	}
 }
