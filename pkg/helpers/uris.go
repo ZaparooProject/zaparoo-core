@@ -49,6 +49,95 @@ func isValidPort(port string) bool {
 	return true
 }
 
+func isHexDigit(b byte) bool {
+	switch {
+	case b >= '0' && b <= '9':
+		return true
+	case b >= 'a' && b <= 'f':
+		return true
+	case b >= 'A' && b <= 'F':
+		return true
+	default:
+		return false
+	}
+}
+
+func unhexByte(b byte) byte {
+	switch {
+	case b >= '0' && b <= '9':
+		return b - '0'
+	case b >= 'a' && b <= 'f':
+		return b - 'a' + 10
+	default:
+		return b - 'A' + 10
+	}
+}
+
+func shouldKeepCustomSegmentEscaped(r rune) bool {
+	return r == '%' || r == '/' || r == '?' || r == '#' || r < 0x20 || r == 0x7F
+}
+
+// decodeCustomSchemeSegment decodes only percent-escaped bytes that are safe to
+// materialize, preserving literal reserved characters and keeping structural
+// escapes encoded for idempotence.
+func decodeCustomSchemeSegment(raw string) string {
+	if !strings.Contains(raw, "%") {
+		return raw
+	}
+
+	decoded, err := url.PathUnescape(raw)
+	if err != nil || !utf8.ValidString(decoded) {
+		return raw
+	}
+
+	var result strings.Builder
+	result.Grow(len(raw))
+
+	for i := 0; i < len(raw); {
+		if raw[i] != '%' {
+			_ = result.WriteByte(raw[i])
+			i++
+			continue
+		}
+
+		start := i
+		decodedBytes := make([]byte, 0, 4)
+		for i+2 < len(raw) && raw[i] == '%' && isHexDigit(raw[i+1]) && isHexDigit(raw[i+2]) {
+			decodedBytes = append(decodedBytes, unhexByte(raw[i+1])<<4|unhexByte(raw[i+2]))
+			i += 3
+		}
+
+		if len(decodedBytes) == 0 || !utf8.Valid(decodedBytes) {
+			return raw
+		}
+
+		rawOffset := start
+		for len(decodedBytes) > 0 {
+			r, size := utf8.DecodeRune(decodedBytes)
+			if r == utf8.RuneError && size == 1 {
+				return raw
+			}
+
+			rawChunk := raw[rawOffset : rawOffset+size*3]
+			if shouldKeepCustomSegmentEscaped(r) {
+				_, _ = result.WriteString(rawChunk)
+			} else {
+				_, _ = result.WriteRune(r)
+			}
+
+			rawOffset += size * 3
+			decodedBytes = decodedBytes[size:]
+		}
+	}
+
+	decodedResult := result.String()
+	if strings.Count(raw, "#") == 1 {
+		return strings.Replace(decodedResult, "#", "%23", 1)
+	}
+
+	return decodedResult
+}
+
 // DecodeURIIfNeeded applies URL decoding to URIs based on their scheme
 // - Zaparoo custom schemes (steam://, kodi-*://, etc.): uses virtualpath.ParseVirtualPathStr for full decoding
 // - Standard web schemes (http://, https://): decodes path component only
@@ -74,21 +163,12 @@ func DecodeURIIfNeeded(uri string) string {
 
 	// Handle Zaparoo custom virtual paths
 	if shared.IsCustomScheme(schemeLower) {
-		// Decode each path segment independently to preserve unencoded
-		// slash structure while decoding percent-encoded characters.
+		// Decode each path segment independently so literal reserved characters
+		// stay untouched while percent-escaped structural bytes remain encoded.
 		rest := strings.TrimRight(parsed.Rest, "/")
 		segments := strings.Split(rest, "/")
-		// Re-encoder for characters that would change URI structure or
-		// re-decoding behavior on a second parse pass:
-		// % (re-triggers pct-decode), / (path sep), ? (query), # (fragment).
-		// % must come first so the %2F/%3F/%23 replacements below are not
-		// themselves re-encoded by a later % match.
-		reenc := strings.NewReplacer("%", "%25", "/", "%2F", "?", "%3F", "#", "%23")
 		for i, seg := range segments {
-			decoded, err := url.PathUnescape(seg)
-			if err == nil && utf8.ValidString(decoded) {
-				segments[i] = reenc.Replace(decoded)
-			}
+			segments[i] = decodeCustomSchemeSegment(seg)
 		}
 		reconstructed := parsed.Scheme + "://" + strings.Join(segments, "/")
 		if parsed.Query != "" {
