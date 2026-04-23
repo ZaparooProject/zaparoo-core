@@ -698,24 +698,22 @@ var allTagMappings = map[string][]CanonicalTag{
 	// ============================================================================
 	// Full adjective forms of languages, absent from allTagMappings until now.
 	// These match parenthesis groups like (German), (French), (Spanish) in filenames.
-	// Where the language is closely tied to one country (french→France, etc.) we also
-	// emit the corresponding region tag, mirroring the existing france/germany/italy
-	// entries in the mapping. "English" and "Russian" have no single dominant region.
+	// Keep these language-only: adjectives describe the text/audio language, not the release region.
 	"english":    {{Type: TagTypeLang, Value: TagLangEN}},
-	"french":     {{Type: TagTypeLang, Value: TagLangFR}, {Type: TagTypeRegion, Value: TagRegionFR}},
-	"german":     {{Type: TagTypeLang, Value: TagLangDE}, {Type: TagTypeRegion, Value: TagRegionDE}},
-	"spanish":    {{Type: TagTypeLang, Value: TagLangES}, {Type: TagTypeRegion, Value: TagRegionES}},
-	"italian":    {{Type: TagTypeLang, Value: TagLangIT}, {Type: TagTypeRegion, Value: TagRegionIT}},
-	"japanese":   {{Type: TagTypeLang, Value: TagLangJA}, {Type: TagTypeRegion, Value: TagRegionJP}},
-	"dutch":      {{Type: TagTypeLang, Value: TagLangNL}, {Type: TagTypeRegion, Value: TagRegionNL}},
-	"swedish":    {{Type: TagTypeLang, Value: TagLangSV}, {Type: TagTypeRegion, Value: TagRegionSE}},
-	"norwegian":  {{Type: TagTypeLang, Value: TagLangNO}, {Type: TagTypeRegion, Value: TagRegionNO}},
-	"finnish":    {{Type: TagTypeLang, Value: TagLangFI}, {Type: TagTypeRegion, Value: TagRegionFI}},
-	"polish":     {{Type: TagTypeLang, Value: TagLangPL}, {Type: TagTypeRegion, Value: TagRegionPL}},
-	"portuguese": {{Type: TagTypeLang, Value: TagLangPT}, {Type: TagTypeRegion, Value: TagRegionPT}},
+	"french":     {{Type: TagTypeLang, Value: TagLangFR}},
+	"german":     {{Type: TagTypeLang, Value: TagLangDE}},
+	"spanish":    {{Type: TagTypeLang, Value: TagLangES}},
+	"italian":    {{Type: TagTypeLang, Value: TagLangIT}},
+	"japanese":   {{Type: TagTypeLang, Value: TagLangJA}},
+	"dutch":      {{Type: TagTypeLang, Value: TagLangNL}},
+	"swedish":    {{Type: TagTypeLang, Value: TagLangSV}},
+	"norwegian":  {{Type: TagTypeLang, Value: TagLangNO}},
+	"finnish":    {{Type: TagTypeLang, Value: TagLangFI}},
+	"polish":     {{Type: TagTypeLang, Value: TagLangPL}},
+	"portuguese": {{Type: TagTypeLang, Value: TagLangPT}},
 	"russian":    {{Type: TagTypeLang, Value: TagLangRU}},
 	"chinese":    {{Type: TagTypeLang, Value: TagLangZH}},
-	"korean":     {{Type: TagTypeLang, Value: TagLangKO}, {Type: TagTypeRegion, Value: TagRegionKR}},
+	"korean":     {{Type: TagTypeLang, Value: TagLangKO}},
 
 	// ============================================================================
 	// RELEASE / DISTRIBUTION STATUS

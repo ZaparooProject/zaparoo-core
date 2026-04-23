@@ -261,7 +261,7 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 	}
 
 	normDataDir := NormalizePathForComparison(DataDir(pl))
-	normMediaPrefix := normDataDir + "/" + config.MediaDir + "/"
+	normMediaPrefix := NormalizePathForComparison(filepath.Join(normDataDir, config.MediaDir))
 
 	precomp := make(map[string]*launcherPrecomp, len(allLaunchers))
 	for i := range allLaunchers {
@@ -269,14 +269,14 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 		lp := &launcherPrecomp{}
 
 		if l.SystemID != "" {
-			lp.normMediaPath = normMediaPrefix + strings.ToLower(l.SystemID)
+			lp.normMediaPath = NormalizePathForComparison(filepath.Join(normMediaPrefix, strings.ToLower(l.SystemID)))
 		}
 
 		for _, normRoot := range normRoots {
 			for _, folder := range l.Folders {
 				if !filepath.IsAbs(folder) {
 					normFolder := folderCache[folder]
-					lp.rootPairs = append(lp.rootPairs, normRoot+"/"+normFolder)
+					lp.rootPairs = append(lp.rootPairs, NormalizePathForComparison(filepath.Join(normRoot, normFolder)))
 				}
 			}
 		}
@@ -353,7 +353,9 @@ func (m *LauncherMatcher) pathIsLauncher(
 			inDataDir = true
 		}
 	} else if l.SystemID != "" {
-		normZaparooMedia := m.normDataDir + "/" + config.MediaDir + "/" + strings.ToLower(l.SystemID)
+		normZaparooMedia := NormalizePathForComparison(
+			filepath.Join(m.normDataDir, config.MediaDir, strings.ToLower(l.SystemID)),
+		)
 		if pathHasPrefixNormalized(normPath, normZaparooMedia) {
 			inDataDir = true
 		}
@@ -385,7 +387,7 @@ func (m *LauncherMatcher) pathIsLauncher(
 				}
 				for _, folder := range l.Folders {
 					normFolder := m.normFolderCache[folder]
-					normFull := normRoot + "/" + normFolder
+					normFull := NormalizePathForComparison(filepath.Join(normRoot, normFolder))
 					if pathHasPrefixNormalized(normPath, normFull) {
 						inRoot = true
 						break

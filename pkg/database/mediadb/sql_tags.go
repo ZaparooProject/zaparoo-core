@@ -125,16 +125,15 @@ func sqlInsertTagType(ctx context.Context, db *sql.DB, row database.TagType) (da
 
 func sqlFindTag(ctx context.Context, db sqlQueryable, tagType database.Tag) (database.Tag, error) {
 	var row database.Tag
+	paddedTag := tags.PadTagValue(tagType.Tag)
 	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, TypeDBID, Tag
 		from Tags
-		where DBID = ?
-		or Tag = ?
-		or Tag = ?
+		where (DBID = ? and TypeDBID = ?)
+		or (TypeDBID = ? and (Tag = ? or Tag = ?))
 		LIMIT 1;
 	`)
-	// TODO: Add TagType dependency when unknown tags supported
 	if err != nil {
 		return row, fmt.Errorf("failed to prepare find tag statement: %w", err)
 	}
@@ -145,8 +144,10 @@ func sqlFindTag(ctx context.Context, db sqlQueryable, tagType database.Tag) (dat
 	}()
 	err = stmt.QueryRowContext(ctx,
 		tagType.DBID,
+		tagType.TypeDBID,
+		tagType.TypeDBID,
 		tagType.Tag,
-		tags.PadTagValue(tagType.Tag),
+		paddedTag,
 	).Scan(
 		&row.DBID,
 		&row.TypeDBID,

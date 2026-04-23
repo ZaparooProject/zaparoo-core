@@ -52,7 +52,7 @@ var (
 	// Patterns to strip usernames from file paths
 	homePathRe    = regexp.MustCompile(`(?i)/home/[^/]+/`)
 	usersPathRe   = regexp.MustCompile(`(?i)/Users/[^/]+/`)
-	windowsUserRe = regexp.MustCompile(`(?i)[a-zA-Z]:\\Users\\[^\\]+\\`)
+	windowsUserRe = regexp.MustCompile(`(?i)([a-zA-Z]:\\Users\\)[^\\]+\\`)
 )
 
 // thresholdWriter wraps a zerolog.LevelWriter and discards events below the
@@ -214,9 +214,7 @@ func sanitizePath(path string) string {
 
 	result := homePathRe.ReplaceAllString(path, "/home/<user>/")
 	result = usersPathRe.ReplaceAllString(result, "/Users/<user>/")
-	result = windowsUserRe.ReplaceAllStringFunc(result, func(match string) string {
-		return match[:3] + "<user>\\"
-	})
+	result = windowsUserRe.ReplaceAllString(result, `$1<user>\`)
 
 	return result
 }

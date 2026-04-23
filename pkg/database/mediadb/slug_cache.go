@@ -33,6 +33,7 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
@@ -257,6 +258,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 		if scanErr := rows.Scan(&tag.Tag, &tag.Type); scanErr != nil {
 			return result, fmt.Errorf("failed to scan tag: %w", scanErr)
 		}
+		tag.Tag = tags.UnpadTagValue(tag.Tag)
 		result.Tags = append(result.Tags, tag)
 	}
 
@@ -282,8 +284,15 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 	// Single query: find tag types where siblings under the same title have
 	// different values, then return only the target media's tags for those types.
 	// Checks both MediaTags (file-level) and MediaTitleTags (title-level) tags.
-	typeList := "'" + strings.Join(database.ZapScriptTagTypes, "', '") + "'"
-	//nolint:gosec // ZapScriptTagTypes is a compile-time constant list, not user input
+	typePlaceholders := prepareVariadic("?", ",", len(database.ZapScriptTagTypes))
+	args := make([]any, 0, 2+len(database.ZapScriptTagTypes)*4)
+	args = append(args, systemID, path)
+	for range 4 {
+		for _, tagType := range database.ZapScriptTagTypes {
+			args = append(args, tagType)
+		}
+	}
+
 	rows, err := db.conn().QueryContext(ctx, fmt.Sprintf(`
 		WITH Target AS (
 			SELECT Media.DBID, Media.MediaTitleDBID
@@ -333,7 +342,7 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 			WHERE st.TypeDBID = tt.TypeDBID
 		) > 1
 		ORDER BY tt.Type, tt.Tag
-	`, typeList, typeList, typeList, typeList), systemID, path)
+	`, typePlaceholders, typePlaceholders, typePlaceholders, typePlaceholders), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get zapscript tags by system and path: %w", err)
 	}
@@ -343,17 +352,18 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 		}
 	}()
 
-	var tags []database.TagInfo
+	var resultTags []database.TagInfo
 	for rows.Next() {
 		var tag database.TagInfo
 		if scanErr := rows.Scan(&tag.Type, &tag.Tag); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan tag: %w", scanErr)
 		}
-		tags = append(tags, tag)
+		tag.Tag = tags.UnpadTagValue(tag.Tag)
+		resultTags = append(resultTags, tag)
 	}
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 
-	return tags, nil
+	return resultTags, nil
 }

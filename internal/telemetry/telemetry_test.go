@@ -69,17 +69,17 @@ func TestSanitizePath(t *testing.T) {
 		{
 			name:     "windows path",
 			input:    "C:\\Users\\callan\\AppData\\Local\\zaparoo\\config.toml",
-			expected: "C:\\<user>\\AppData\\Local\\zaparoo\\config.toml",
+			expected: "C:\\Users\\<user>\\AppData\\Local\\zaparoo\\config.toml",
 		},
 		{
 			name:     "windows path lowercase drive",
 			input:    "c:\\Users\\JohnDoe\\Documents\\zaparoo",
-			expected: "c:\\<user>\\Documents\\zaparoo",
+			expected: "c:\\Users\\<user>\\Documents\\zaparoo",
 		},
 		{
 			name:     "windows path different drive",
 			input:    "D:\\Users\\admin\\zaparoo\\logs",
-			expected: "D:\\<user>\\zaparoo\\logs",
+			expected: "D:\\Users\\<user>\\zaparoo\\logs",
 		},
 		{
 			name:     "error message with path",

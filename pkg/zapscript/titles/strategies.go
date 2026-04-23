@@ -187,7 +187,7 @@ func TrySecondaryTitleExact(
 		partialResults, partialErr := gamesdb.SearchMediaBySecondarySlug(ctx, systemID, searchSlug, tagFilters)
 		if partialErr != nil {
 			log.Warn().Err(partialErr).Msgf("partial secondary title search failed for '%s'", searchSlug)
-			return nil, "", nil
+			return nil, "", fmt.Errorf("partial secondary title search failed: %w", partialErr)
 		}
 
 		if len(partialResults) > 0 {

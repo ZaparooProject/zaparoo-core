@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -674,6 +675,16 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 			wantTags: []string{"edition:goty"},
 		},
 		{
+			name:     "GOTY standalone produces edition:goty",
+			filename: "Game (GOTY).rom",
+			wantTags: []string{"edition:goty"},
+		},
+		{
+			name:     "Game of the Year standalone produces edition:goty",
+			filename: "Game (Game of the Year).rom",
+			wantTags: []string{"edition:goty"},
+		},
+		{
 			name:     "Deluxe Edition produces edition:deluxe",
 			filename: "Game (Deluxe Edition).rom",
 			wantTags: []string{"edition:deluxe"},
@@ -701,14 +712,14 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 		},
 		// Language full-name aliases
 		{
-			name:     "German maps to lang:de and region:de",
+			name:     "German maps to lang:de",
 			filename: "Game (German).rom",
-			wantTags: []string{"lang:de", "region:de"},
+			wantTags: []string{"lang:de"},
 		},
 		{
-			name:     "French maps to lang:fr and region:fr",
+			name:     "French maps to lang:fr",
 			filename: "Game (French).rom",
-			wantTags: []string{"lang:fr", "region:fr"},
+			wantTags: []string{"lang:fr"},
 		},
 		// Version phrase skip
 		{
@@ -1147,6 +1158,54 @@ func TestParseBracketedTranslation_FullPipeline(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseFilenameToCanonicalTagsForMedia_GameSkipsTVAndTranslationPatterns(t *testing.T) {
+	t.Parallel()
+
+	filename := "Game Title S01E02 (USA) [T+Eng].smc"
+
+	defaultTags := ParseFilenameToCanonicalTags(filename)
+	defaultStrings := make([]string, len(defaultTags))
+	for i, tag := range defaultTags {
+		defaultStrings[i] = tag.String()
+	}
+	assert.Contains(t, defaultStrings, "season:1")
+	assert.Contains(t, defaultStrings, "episode:2")
+	assert.Contains(t, defaultStrings, "unlicensed:translation")
+	assert.Contains(t, defaultStrings, "lang:en")
+
+	gameTags := ParseFilenameToCanonicalTagsForMedia(filename, slugs.MediaTypeGame)
+	gameStrings := make([]string, len(gameTags))
+	for i, tag := range gameTags {
+		gameStrings[i] = tag.String()
+	}
+	assert.NotContains(t, gameStrings, "season:1")
+	assert.NotContains(t, gameStrings, "episode:2")
+	assert.NotContains(t, gameStrings, "unlicensed:translation")
+	assert.Contains(t, gameStrings, "region:us")
+}
+
+func TestParseFilenameToCanonicalTagsForMedia_GameSkipsTranslationLanguageTags(t *testing.T) {
+	t.Parallel()
+
+	filename := "Game Title [T+Eng].smc"
+
+	defaultTags := ParseFilenameToCanonicalTags(filename)
+	defaultStrings := make([]string, len(defaultTags))
+	for i, tag := range defaultTags {
+		defaultStrings[i] = tag.String()
+	}
+	assert.Contains(t, defaultStrings, "unlicensed:translation")
+	assert.Contains(t, defaultStrings, "lang:en")
+
+	gameTags := ParseFilenameToCanonicalTagsForMedia(filename, slugs.MediaTypeGame)
+	gameStrings := make([]string, len(gameTags))
+	for i, tag := range gameTags {
+		gameStrings[i] = tag.String()
+	}
+	assert.NotContains(t, gameStrings, "unlicensed:translation")
+	assert.NotContains(t, gameStrings, "lang:en")
 }
 
 func TestParseBracesAndAngles_FullPipeline(t *testing.T) {

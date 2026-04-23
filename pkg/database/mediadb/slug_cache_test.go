@@ -629,6 +629,58 @@ func TestGetMediaByDBID_Integration(t *testing.T) {
 	assert.Equal(t, "platform", tagMap["genre"])
 }
 
+func TestGetMediaByDBID_UnpadsNumericTags_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	playersTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "players"})
+	require.NoError(t, err)
+
+	err = mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	system := database.System{SystemID: nesSystem.ID, Name: "NES"}
+	insertedSystem, err := mediaDB.InsertSystem(system)
+	require.NoError(t, err)
+
+	title := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Numeric Tag Game"),
+		Name:       "Numeric Tag Game",
+	}
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
+	require.NoError(t, err)
+
+	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/nes/numeric.nes",
+	}
+	insertedMedia, err := mediaDB.InsertMedia(media)
+	require.NoError(t, err)
+
+	playersTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: playersTagType.DBID, Tag: "2"})
+	require.NoError(t, err)
+
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: insertedMedia.DBID, TagDBID: playersTag.DBID})
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	result, err := mediaDB.GetMediaByDBID(ctx, insertedMedia.DBID)
+	require.NoError(t, err)
+	require.Len(t, result.Tags, 1)
+	assert.Equal(t, "players", result.Tags[0].Type)
+	assert.Equal(t, "2", result.Tags[0].Tag)
+}
+
 // TestGetMediaByDBID_NoTags verifies media with no tags
 func TestGetMediaByDBID_NoTags_Integration(t *testing.T) {
 	t.Parallel()
@@ -839,6 +891,70 @@ func TestGetZapScriptTagsBySystemAndPath_WithYear_Integration(t *testing.T) {
 	require.Len(t, tags, 1)
 	assert.Equal(t, "year", tags[0].Type)
 	assert.Equal(t, "1985", tags[0].Tag)
+}
+
+func TestGetZapScriptTagsBySystemAndPath_UnpadsNumericTags_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	playersTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "players"})
+	require.NoError(t, err)
+
+	err = mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	system := database.System{SystemID: nesSystem.ID, Name: "NES"}
+	insertedSystem, err := mediaDB.InsertSystem(system)
+	require.NoError(t, err)
+
+	title := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Players Variant Game"),
+		Name:       "Players Variant Game",
+	}
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
+	require.NoError(t, err)
+
+	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/nes/players2.nes",
+	}
+	insertedMedia, err := mediaDB.InsertMedia(media)
+	require.NoError(t, err)
+
+	players2Tag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: playersTagType.DBID, Tag: "2"})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: insertedMedia.DBID, TagDBID: players2Tag.DBID})
+	require.NoError(t, err)
+
+	siblingMedia := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/nes/players4.nes",
+	}
+	insertedSibling, err := mediaDB.InsertMedia(siblingMedia)
+	require.NoError(t, err)
+
+	players4Tag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: playersTagType.DBID, Tag: "4"})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: insertedSibling.DBID, TagDBID: players4Tag.DBID})
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	resultTags, err := mediaDB.GetZapScriptTagsBySystemAndPath(ctx, nesSystem.ID, "/roms/nes/players2.nes")
+	require.NoError(t, err)
+	require.Len(t, resultTags, 1)
+	assert.Equal(t, "players", resultTags[0].Type)
+	assert.Equal(t, "2", resultTags[0].Tag)
 }
 
 // TestGetZapScriptTagsBySystemAndPath_NoTags verifies empty slice returned when media has no relevant tags

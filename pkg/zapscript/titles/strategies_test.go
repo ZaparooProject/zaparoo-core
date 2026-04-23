@@ -379,7 +379,10 @@ func TestTrySharedSecondaryTitle(t *testing.T) {
 func TestTrySecondaryTitleExact(t *testing.T) {
 	t.Parallel()
 
+	partialSearchErr := errors.New("database error")
+
 	tests := []struct {
+		expectedErr      error
 		setupMock        func(*helpers.MockMediaDBI)
 		name             string
 		slug             string
@@ -542,7 +545,7 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			shouldError:      false,
 		},
 		{
-			name: "partial search returns error - returns nil",
+			name: "partial search returns error",
 			matchInfo: GameMatchInfo{
 				HasSecondaryTitle: false,
 				MainTitleSlug:     "errorgame",
@@ -554,11 +557,12 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 				m.On("SearchMediaBySlug", mock.Anything, "SNES", "errorgame", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
 				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "errorgame", []zapscript.TagFilter(nil)).
-					Return([]database.SearchResultWithCursor{}, errors.New("database error"))
+					Return([]database.SearchResultWithCursor{}, partialSearchErr)
 			},
 			expectedCount:    0,
+			expectedErr:      partialSearchErr,
 			expectedStrategy: "",
-			shouldError:      false, // Errors are logged, not returned
+			shouldError:      true,
 		},
 	}
 
@@ -581,6 +585,10 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 
 			if tt.shouldError {
 				require.Error(t, err)
+				if tt.expectedErr != nil {
+					require.ErrorIs(t, err, tt.expectedErr)
+					require.ErrorContains(t, err, "partial secondary title search failed")
+				}
 			} else {
 				require.NoError(t, err)
 				assert.Len(t, results, tt.expectedCount)

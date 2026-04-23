@@ -148,21 +148,24 @@ func (b *BatchInserter) Flush() error {
 		}
 	}
 
-	// Reuse cached statement for this row count when available
-	if stmt, ok := b.stmtCache[b.currentCount]; ok {
-		_, err := stmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
-		b.buffer = b.buffer[:0]
-		b.currentCount = 0
-		if err != nil {
-			return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
+	cacheStmt := b.currentCount == b.batchSize
+
+	// Reuse cached statement for the steady-state full batch size when available
+	if cacheStmt {
+		if stmt, ok := b.stmtCache[b.currentCount]; ok {
+			_, err := stmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
+			b.buffer = b.buffer[:0]
+			b.currentCount = 0
+			if err != nil {
+				return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
+			}
+			return nil
 		}
-		return nil
 	}
 
 	// Generate and prepare statement for this batch size.
-	// stmt is closed via stmtCache in Close() — not deferred here.
 	sqlStmt := b.generateMultiRowInsertSQL(b.currentCount)
-	stmt, err := b.tx.PrepareContext(b.ctx, sqlStmt) //nolint:sqlclosecheck // closed in Close() via stmtCache
+	stmt, err := b.tx.PrepareContext(b.ctx, sqlStmt)
 	if err != nil {
 		if strings.Contains(err.Error(), "too many SQL variables") {
 			log.Debug().
@@ -174,9 +177,15 @@ func (b *BatchInserter) Flush() error {
 		}
 		return fmt.Errorf("failed to prepare batch insert: %w", err)
 	}
-
-	// Cache for reuse across future flushes with the same row count
-	b.stmtCache[b.currentCount] = stmt
+	if cacheStmt {
+		b.stmtCache[b.currentCount] = stmt
+	} else {
+		defer func() {
+			if closeErr := stmt.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Str("table", b.tableName).Msg("failed to close ad-hoc batch statement")
+			}
+		}()
+	}
 
 	_, err = stmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
 	b.buffer = b.buffer[:0]

@@ -341,6 +341,41 @@ func TestRunBackgroundOptimization_FailureHandling(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestRunBackgroundOptimization_PagePrefetchCancellationAborts(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mediaDB := &MediaDB{
+		sql:               db,
+		ctx:               context.Background(),
+		clock:             clockwork.NewRealClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
+	}
+
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStatus, "running").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectAnalyzeStep(mock)
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStep, "page_prefetch").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("^SELECT COUNT\\(\\*\\) FROM Tags$").
+		WillReturnError(context.Canceled)
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStatus, "failed").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStep, "").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	mediaDB.RunBackgroundOptimization(nil, nil)
+
+	assert.False(t, mediaDB.isOptimizing.Load())
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestConcurrentOptimization(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

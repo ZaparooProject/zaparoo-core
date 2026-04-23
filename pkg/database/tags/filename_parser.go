@@ -209,6 +209,9 @@ func classifyUnmappedParen(normalized, _ string) ([]CanonicalTag, bool) {
 	tokens := strings.Split(normalized, "-")
 	last := tokens[len(tokens)-1]
 	first := tokens[0]
+	if qualifier, ok := editionQualifiers[normalized]; ok {
+		return []CanonicalTag{{Type: TagTypeEdition, Value: qualifier, Source: TagSourceBracketed}}, true
+	}
 
 	// Edition suffix: "special-edition" → edition:special, "vga-remake" → edition:remake (generic)
 	if _, ok := editionSuffixFallbacks[last]; ok && len(tokens) >= 2 {
@@ -292,6 +295,7 @@ const (
 // to determine meaning.
 type ParseContext struct {
 	Filename              string
+	MediaType             slugs.MediaType
 	CurrentTag            string
 	ParenTags             []string
 	BracketTags           []string
@@ -605,30 +609,32 @@ func extractSpecialPatternsForMedia(
 	// Pattern 6: TV show season/episode - "S01E02", "s02e15"
 	// Common format for TV show episode identification
 	// Examples: "Show.Name.S01E01", "Series.S02E05.Episode.Title"
-	if seasonStr, episodeStr, found := findSeasonEpisode(remaining); found {
-		season := strings.TrimLeft(seasonStr, "0")
-		if season == "" {
-			season = "0"
-		}
-		episode := strings.TrimLeft(episodeStr, "0")
-		if episode == "" {
-			episode = "0"
-		}
+	if mediaType != slugs.MediaTypeGame {
+		if seasonStr, episodeStr, found := findSeasonEpisode(remaining); found {
+			season := strings.TrimLeft(seasonStr, "0")
+			if season == "" {
+				season = "0"
+			}
+			episode := strings.TrimLeft(episodeStr, "0")
+			if episode == "" {
+				episode = "0"
+			}
 
-		tags = append(tags,
-			CanonicalTag{
-				Type:   TagTypeSeason,
-				Value:  TagValue(season),
-				Source: TagSourceInferred,
-			},
-			CanonicalTag{
-				Type:   TagTypeEpisode,
-				Value:  TagValue(episode),
-				Source: TagSourceInferred,
-			},
-		)
+			tags = append(tags,
+				CanonicalTag{
+					Type:   TagTypeSeason,
+					Value:  TagValue(season),
+					Source: TagSourceInferred,
+				},
+				CanonicalTag{
+					Type:   TagTypeEpisode,
+					Value:  TagValue(episode),
+					Source: TagSourceInferred,
+				},
+			)
 
-		remaining = removeSeasonEpisode(remaining)
+			remaining = removeSeasonEpisode(remaining)
+		}
 	}
 
 	// Pattern 7: Comic issue numbers - "#47", "Issue 5"
@@ -949,7 +955,7 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 	// Bracket tags need special handling BEFORE normalization
 	// because some dump markers (!, !p) contain special characters
 	if ctx.CurrentBracketType == BracketTypeSquare {
-		return mapBracketTag(ctx.CurrentTag)
+		return mapBracketTag(ctx.CurrentTag, ctx.MediaType)
 	}
 
 	// For parentheses tags, normalize and process
@@ -1005,11 +1011,13 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 // These are typically dump-related: verified, bad, hacked, cracked, fixed, translated, etc.
 // Also handles multi-language patterns (en-fr-de, En,Fr,De, En+Fr) and translation patterns (T+Eng).
 // NOTE: This function receives the raw tag (not normalized) to preserve special characters like !
-func mapBracketTag(tag string) []CanonicalTag {
+func mapBracketTag(tag string, mediaType slugs.MediaType) []CanonicalTag {
 	// Check for translation patterns first (T+Eng, T-Chi, etc.)
 	// This must come before normalization to preserve the T+/T- prefix
-	if transTags, matched := parseTranslationPattern(tag, TagSourceBracketed, true); matched {
-		return transTags
+	if mediaType != slugs.MediaTypeGame {
+		if transTags, matched := parseTranslationPattern(tag, TagSourceBracketed, true); matched {
+			return transTags
+		}
 	}
 
 	// Special handling for dump markers with special characters (must come BEFORE normalization)
@@ -1318,6 +1326,7 @@ func ParseFilenameToCanonicalTagsForMedia(filename string, mediaType slugs.Media
 	// Step 3: Process parentheses tags (region, language, version, dev status)
 	ctx := &ParseContext{
 		Filename:              filename,
+		MediaType:             mediaType,
 		ParenTags:             parenTags,
 		BracketTags:           bracketTags,
 		ProcessedTags:         allTags,

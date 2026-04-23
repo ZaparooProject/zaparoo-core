@@ -124,6 +124,34 @@ func TestSqlFindSystem_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlFindTag_ScopesByTypeDBID(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	searchTag := database.Tag{
+		DBID:     10,
+		TypeDBID: 2,
+		Tag:      "2",
+	}
+
+	rows := sqlmock.NewRows([]string{"DBID", "TypeDBID", "Tag"}).
+		AddRow(10, 2, "0002")
+
+	mock.ExpectPrepare(`select.*from Tags.*where.*TypeDBID.*LIMIT 1;`).
+		ExpectQuery().
+		WithArgs(searchTag.DBID, searchTag.TypeDBID, searchTag.TypeDBID, searchTag.Tag, "0002").
+		WillReturnRows(rows)
+
+	result, err := sqlFindTag(context.Background(), db, searchTag)
+	require.NoError(t, err)
+	assert.Equal(t, int64(10), result.DBID)
+	assert.Equal(t, int64(2), result.TypeDBID)
+	assert.Equal(t, "2", result.Tag)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlInsertSystem_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
