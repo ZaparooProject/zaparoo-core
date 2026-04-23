@@ -1265,6 +1265,7 @@ func TestListZip(t *testing.T) {
 	tests := []struct {
 		name          string
 		path          string
+		errContains   string
 		expectedFiles []string
 		wantErr       bool
 	}{
@@ -1290,12 +1291,14 @@ func TestListZip(t *testing.T) {
 			path:          "testdata/nonexistent.zip",
 			expectedFiles: nil,
 			wantErr:       true,
+			errContains:   "failed to open zip file",
 		},
 		{
 			name:          "non_zip_file",
 			path:          "testdata/test.txt",
 			expectedFiles: nil,
 			wantErr:       true,
+			errContains:   "zip EOCD signature not found",
 		},
 	}
 
@@ -1306,7 +1309,9 @@ func TestListZip(t *testing.T) {
 
 			if tt.wantErr {
 				require.Error(t, err, "ListZip should return error for invalid zip file")
-				assert.Contains(t, err.Error(), "failed to open zip file")
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
 			} else {
 				require.NoError(t, err)
 				assert.ElementsMatch(t, tt.expectedFiles, result, "ListZip result mismatch")

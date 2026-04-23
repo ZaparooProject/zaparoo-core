@@ -347,6 +347,10 @@ func GenerateMediaDB(
 				desc = "Finding media folders"
 			case status.Phase == mediascanner.PhaseInitializing:
 				desc = "Initializing database"
+			case status.Phase == mediascanner.PhaseCreatingIndexes:
+				desc = "Creating indexes"
+			case status.Phase == mediascanner.PhaseBuildingCaches:
+				desc = "Building search caches"
 			case status.Step == status.Total:
 				desc = "Writing database"
 			default:
@@ -378,7 +382,9 @@ func GenerateMediaDB(
 			// step are always sent so clients see start/end.
 			now := time.Now()
 			isPhaseChange := status.Phase == mediascanner.PhaseDiscovering ||
-				status.Phase == mediascanner.PhaseInitializing
+				status.Phase == mediascanner.PhaseInitializing ||
+				status.Phase == mediascanner.PhaseCreatingIndexes ||
+				status.Phase == mediascanner.PhaseBuildingCaches
 			isFinalStep := status.Step == status.Total
 			if !isPhaseChange && !isFinalStep && now.Sub(lastNotifTime) < notifThrottleInterval {
 				return

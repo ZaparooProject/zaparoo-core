@@ -318,8 +318,8 @@ type MediaPathFragments struct {
 	Tags       []string
 }
 
-func getTagsFromFileName(filename string) []string {
-	canonicalStructs := tags.ParseFilenameToCanonicalTags(filename)
+func getTagsFromFileName(filename string, mediaType slugs.MediaType) []string {
+	canonicalStructs := tags.ParseFilenameToCanonicalTagsForMedia(filename, mediaType)
 
 	// Convert CanonicalTag structs to "type:value" format for database compatibility
 	// This matches the composite keys used in the TagIDs map
@@ -883,7 +883,7 @@ func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 
 	// Extract tags from filename only if enabled in config (default to enabled for nil config)
 	if params.Config == nil || params.Config.FilenameTags() {
-		f.Tags = getTagsFromFileName(f.FileName)
+		f.Tags = getTagsFromFileName(f.FileName, mediaType)
 	} else {
 		f.Tags = []string{}
 	}

@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -505,8 +506,10 @@ func handleCancellationWithRollback(ctx context.Context, db database.MediaDBI, m
 }
 
 const (
-	PhaseDiscovering  = "discovering"
-	PhaseInitializing = "initializing"
+	PhaseDiscovering     = "discovering"
+	PhaseInitializing    = "initializing"
+	PhaseCreatingIndexes = "creating_indexes"
+	PhaseBuildingCaches  = "building_caches"
 )
 
 type IndexStatus struct {
@@ -537,6 +540,12 @@ func NewNamesIndex(
 ) (int, error) {
 	db := fdb.MediaDB
 	indexStartTime := time.Now()
+
+	// Activate the NormalizeTag cache for the duration of this indexing run.
+	// The bracket vocabulary is small (~200–400 unique strings), so the cache
+	// stabilises early and collapses the repeated regex cost across 100k+ files.
+	tags.SetNormalizeTagCache(make(map[string]string))
+	defer tags.SetNormalizeTagCache(nil)
 
 	// Temporarily increase SQLite cache to 32MB for bulk indexing
 	db.SetIndexingCacheSize(true)
@@ -1446,11 +1455,16 @@ func NewNamesIndex(
 		}
 	}
 
+	status.Phase = PhaseCreatingIndexes
+	update(status)
+
 	// Rebuild all secondary indexes before marking indexing as complete.
 	// This ensures the database is fully searchable when indexing finishes.
+	t0 := time.Now()
 	if idxErr := db.CreateSecondaryIndexes(); idxErr != nil {
 		log.Error().Err(idxErr).Msg("failed to create secondary indexes")
 	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("CreateSecondaryIndexes complete")
 
 	// Mark database as complete and ready for use. UpdateLastGenerated clears
 	// SystemTagsCache and SlugResolutionCache via invalidateCaches, so cache
@@ -1460,18 +1474,29 @@ func NewNamesIndex(
 		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
 	}
 
+	status.Phase = PhaseBuildingCaches
+	update(status)
+
 	// Populate caches after UpdateLastGenerated. These run synchronously so
 	// searches return correct results the moment indexing finishes, and the
 	// populated SystemTagsCache persists across service restarts.
+	t0 = time.Now()
 	if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
 		log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
 	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
+
+	t0 = time.Now()
 	if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
 		log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
 	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
+
+	t0 = time.Now()
 	if cacheErr := db.RebuildTagCache(); cacheErr != nil {
 		log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
 	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
 
 	// Mark indexing as completed and clear indexing metadata
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {

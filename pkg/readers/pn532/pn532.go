@@ -593,7 +593,11 @@ func (*Reader) Detect(connected []string) string {
 	defer cancel()
 	devices, err := detection.DetectAll(ctx, &opts)
 	if err != nil {
-		log.Debug().Err(err).Msg("PN532 detection returned error")
+		if errors.Is(err, detection.ErrNoDevicesFound) {
+			log.Trace().Msg("no PN532 devices found during detection")
+		} else {
+			log.Warn().Err(err).Msg("PN532 detection returned unexpected error")
+		}
 		return ""
 	}
 	if len(devices) > 0 {

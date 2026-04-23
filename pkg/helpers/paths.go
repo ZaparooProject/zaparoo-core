@@ -191,7 +191,7 @@ func MatchSystemFile(
 		}
 	}
 
-	log.Debug().
+	log.Trace().
 		Str("system", systemID).
 		Str("path", path).
 		Int("launchersChecked", len(launchers)).
@@ -220,12 +220,22 @@ func pathHasPrefixNormalized(normPath, normRoot string) bool {
 	return len(normPath) > len(normRoot) && normPath[len(normRoot)] == '/'
 }
 
+// launcherPrecomp holds per-launcher precomputed values to eliminate repeated
+// string allocations inside the hot pathIsLauncher loop.
+type launcherPrecomp struct {
+	normMediaPath string   // normDataDir + "/media/" + lower(SystemID), empty when SystemID is ""
+	rootPairs     []string // normRoot + "/" + normFolder for every root × relative-folder combination
+	absFolders    []string // normalized absolute folder paths (already normalized from folderCache)
+	extensions    []string // pre-lowercased extensions
+}
+
 // LauncherMatcher provides optimized path matching with pre-normalized paths.
 // All data is immutable after construction, making it safe for concurrent use
 // from fastwalk callbacks.
 type LauncherMatcher struct {
 	cfg             *config.Instance
 	normFolderCache map[string]string
+	precomp         map[string]*launcherPrecomp
 	normDataDir     string
 	normRootDirs    []string
 	rawRootDirs     []string
@@ -250,12 +260,47 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 		}
 	}
 
+	normDataDir := NormalizePathForComparison(DataDir(pl))
+	normMediaPrefix := normDataDir + "/" + config.MediaDir + "/"
+
+	precomp := make(map[string]*launcherPrecomp, len(allLaunchers))
+	for i := range allLaunchers {
+		l := &allLaunchers[i]
+		lp := &launcherPrecomp{}
+
+		if l.SystemID != "" {
+			lp.normMediaPath = normMediaPrefix + strings.ToLower(l.SystemID)
+		}
+
+		for _, normRoot := range normRoots {
+			for _, folder := range l.Folders {
+				if !filepath.IsAbs(folder) {
+					normFolder := folderCache[folder]
+					lp.rootPairs = append(lp.rootPairs, normRoot+"/"+normFolder)
+				}
+			}
+		}
+
+		for _, folder := range l.Folders {
+			if filepath.IsAbs(folder) {
+				lp.absFolders = append(lp.absFolders, folderCache[folder])
+			}
+		}
+
+		for _, e := range l.Extensions {
+			lp.extensions = append(lp.extensions, strings.ToLower(e))
+		}
+
+		precomp[l.ID] = lp
+	}
+
 	return &LauncherMatcher{
 		cfg:             cfg,
 		normRootDirs:    normRoots,
 		rawRootDirs:     rawRoots,
-		normDataDir:     NormalizePathForComparison(DataDir(pl)),
+		normDataDir:     normDataDir,
 		normFolderCache: folderCache,
+		precomp:         precomp,
 	}
 }
 
@@ -263,16 +308,15 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 // The file path is normalized once and compared against pre-normalized roots.
 func (m *LauncherMatcher) MatchSystemFile(systemID, path string) bool {
 	normPath := NormalizePathForComparison(path)
-	lp := strings.ToLower(path)
 
 	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
 	for i := range launchers {
-		if m.pathIsLauncher(&launchers[i], path, lp, normPath) {
+		if m.pathIsLauncher(&launchers[i], path, normPath, normPath) {
 			return true
 		}
 	}
 
-	log.Debug().
+	log.Trace().
 		Str("system", systemID).
 		Str("path", path).
 		Int("launchersChecked", len(launchers)).
@@ -300,11 +344,15 @@ func (m *LauncherMatcher) pathIsLauncher(
 		}
 	}
 
+	lc := m.precomp[l.ID]
+
 	inDataDir := false
-	if l.SystemID != "" {
-		normZaparooMedia := m.normDataDir + "/" +
-			strings.ToLower(config.MediaDir) + "/" +
-			strings.ToLower(l.SystemID)
+	if lc != nil && lc.normMediaPath != "" {
+		if pathHasPrefixNormalized(normPath, lc.normMediaPath) {
+			inDataDir = true
+		}
+	} else if l.SystemID != "" {
+		normZaparooMedia := m.normDataDir + "/" + config.MediaDir + "/" + strings.ToLower(l.SystemID)
 		if pathHasPrefixNormalized(normPath, normZaparooMedia) {
 			inDataDir = true
 		}
@@ -314,27 +362,43 @@ func (m *LauncherMatcher) pathIsLauncher(
 		inRoot := false
 		isAbs := false
 
-		for _, normRoot := range m.normRootDirs {
-			if inRoot {
-				break
-			}
-			for _, folder := range l.Folders {
-				normFolder := m.normFolderCache[folder]
-				normFull := normRoot + "/" + normFolder
+		if lc != nil {
+			for _, normFull := range lc.rootPairs {
 				if pathHasPrefixNormalized(normPath, normFull) {
 					inRoot = true
 					break
 				}
 			}
-		}
-
-		if !inRoot {
-			for _, folder := range l.Folders {
-				if filepath.IsAbs(folder) {
-					normFolder := m.normFolderCache[folder]
+			if !inRoot {
+				for _, normFolder := range lc.absFolders {
 					if pathHasPrefixNormalized(normPath, normFolder) {
 						isAbs = true
 						break
+					}
+				}
+			}
+		} else {
+			for _, normRoot := range m.normRootDirs {
+				if inRoot {
+					break
+				}
+				for _, folder := range l.Folders {
+					normFolder := m.normFolderCache[folder]
+					normFull := normRoot + "/" + normFolder
+					if pathHasPrefixNormalized(normPath, normFull) {
+						inRoot = true
+						break
+					}
+				}
+			}
+			if !inRoot {
+				for _, folder := range l.Folders {
+					if filepath.IsAbs(folder) {
+						normFolder := m.normFolderCache[folder]
+						if pathHasPrefixNormalized(normPath, normFolder) {
+							isAbs = true
+							break
+						}
 					}
 				}
 			}
@@ -351,7 +415,22 @@ func (m *LauncherMatcher) pathIsLauncher(
 		}
 	}
 
-	if len(l.Extensions) > 0 {
+	if lc != nil && len(lc.extensions) > 0 {
+		for _, e := range lc.extensions {
+			if strings.HasSuffix(lp, e) {
+				return true
+			}
+		}
+		if l.Test != nil {
+			return l.Test(m.cfg, lp)
+		}
+		log.Trace().
+			Str("launcher", l.ID).
+			Str("path", path).
+			Strs("extensions", l.Extensions).
+			Msg("path extension did not match any launcher extension")
+		return false
+	} else if len(l.Extensions) > 0 {
 		for _, e := range l.Extensions {
 			if strings.HasSuffix(lp, strings.ToLower(e)) {
 				return true

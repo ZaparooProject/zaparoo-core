@@ -767,3 +767,63 @@ func TestReaderErrorRecovery_FullSequence(t *testing.T) {
 	assert.Equal(t, scanSkipDuplicate, action,
 		"re-scan of same card after reader error recovery must be detected as duplicate")
 }
+
+// TestConnectReaders_ClosesNonMatchingReaders is a regression test for the goroutine
+// leak where SupportedReaders() was called every second and returned fresh reader
+// instances, but only the one matching the configured driver was opened — the others
+// were silently discarded without Close, leaking any goroutines they started.
+func TestConnectReaders_ClosesNonMatchingReaders(t *testing.T) {
+	t.Parallel()
+
+	// Two readers from SupportedReaders; only pn532 matches the configured driver.
+	nonMatchingReader := mocks.NewMockReader()
+	nonMatchingReader.On("Metadata").Return(readers.DriverMetadata{
+		ID:             "tty2oled",
+		DefaultEnabled: true,
+	})
+	nonMatchingReader.On("IDs").Return([]string{"tty2oled"})
+
+	matchingReader := mocks.NewMockReader()
+	matchingReader.On("Metadata").Return(readers.DriverMetadata{
+		ID:             "pn532",
+		DefaultEnabled: true,
+	})
+	matchingReader.On("IDs").Return([]string{"pn532"})
+	matchingReader.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	matchingReader.On("Path").Return("/dev/ttyUSB0").Maybe()
+	matchingReader.On("ReaderID").Return("pn532-abc").Maybe()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(
+		[]readers.Reader{nonMatchingReader, matchingReader},
+	)
+
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetReaderConnections([]config.ReadersConnect{
+		{Driver: "pn532", Path: "/dev/ttyUSB0"},
+	})
+
+	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+
+	iq := make(chan readers.Scan, 10)
+	err = connectReaders(mockPlatform, cfg, st, iq, nil)
+	require.NoError(t, err)
+
+	// The non-matching reader must be closed — not doing so leaked a goroutine per tick.
+	nonMatchingReader.AssertCalled(t, "Close")
+	nonMatchingReader.AssertNotCalled(t, "Open", mock.Anything, mock.Anything, mock.Anything)
+
+	// The matching reader must be opened.
+	matchingReader.AssertCalled(t, "Open", mock.Anything, mock.Anything, mock.Anything)
+}

@@ -87,9 +87,6 @@ func NewReader(cfg *config.Instance, pl platforms.Platform) *Reader {
 		operationWorkerCancel: operationCancel,
 	}
 
-	r.wg.Add(1)
-	go r.operationWorker()
-
 	return r
 }
 
@@ -362,11 +359,17 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan, _ rea
 	// r.startHealthCheck()
 	log.Debug().Str("device", r.getDevicePath()).Msg("tty2oled: health check temporarily disabled for testing")
 
+	// Start the operation worker only after the device is fully connected.
+	// Deferred from NewReader so that detection probes that don't call Open
+	// don't leak goroutines.
+	r.wg.Add(1)
+	go r.operationWorker()
+
 	return nil
 }
 
 func (r *Reader) Close() error {
-	r.setState(StateDisconnected)
+	r.stateManager.ForceState(StateDisconnected)
 
 	r.mu.Lock()
 	if r.operationWorkerCancel != nil {

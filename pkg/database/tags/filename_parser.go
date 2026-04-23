@@ -26,6 +26,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
 // Package-level compiled regexes for filename parsing.
@@ -129,6 +130,45 @@ var adminNoiseSubstrings = []string{
 	"included-game",
 }
 
+// normTagCache and its mutex protect cached NormalizeTag results for the duration
+// of an indexing run. The bracket vocabulary is small (~200–400 unique strings) so
+// the cache stabilises quickly. nil map means caching is disabled.
+var (
+	normTagCacheMu syncutil.RWMutex
+	normTagCache   map[string]string
+)
+
+// SetNormalizeTagCache replaces the normalizeTag cache. Pass a freshly allocated
+// map before each indexing run; pass nil to disable caching.
+func SetNormalizeTagCache(m map[string]string) {
+	normTagCacheMu.Lock()
+	normTagCache = m
+	normTagCacheMu.Unlock()
+}
+
+func cachedNormalizeTag(s string) string {
+	normTagCacheMu.RLock()
+	m := normTagCache
+	if m != nil {
+		if v, ok := m[s]; ok {
+			normTagCacheMu.RUnlock()
+			return v
+		}
+	}
+	normTagCacheMu.RUnlock()
+
+	v := NormalizeTag(s)
+
+	if m != nil {
+		normTagCacheMu.Lock()
+		if normTagCache != nil {
+			normTagCache[s] = v
+		}
+		normTagCacheMu.Unlock()
+	}
+	return v
+}
+
 // slugifyCompanyName converts a raw company/person name to a dash-joined slug suitable
 // for storage as an open-valued tag (publisher, developer, credit). Uses the full slug
 // pipeline via NormalizeToWords so "&", accents, punctuation etc. are handled correctly
@@ -136,7 +176,7 @@ var adminNoiseSubstrings = []string{
 func slugifyCompanyName(raw string) TagValue {
 	words := slugs.NormalizeToWords(raw)
 	if len(words) == 0 {
-		return TagValue(NormalizeTag(raw))
+		return TagValue(cachedNormalizeTag(raw))
 	}
 	return TagValue(strings.Join(words, "-"))
 }
@@ -444,6 +484,16 @@ func parseTranslationPattern(tag string, source TagSource, isBracketed bool) ([]
 // Optimization: Uses FindStringSubmatchIndex instead of FindStringSubmatch + ReplaceAllString
 // to eliminate intermediate string allocations (~5MB savings per 400K files).
 func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining string) {
+	return extractSpecialPatternsForMedia(filename, "")
+}
+
+// extractSpecialPatternsForMedia is the media-type-aware variant of extractSpecialPatterns.
+// Patterns irrelevant to the given mediaType are skipped to reduce regex overhead.
+// Pass an empty mediaType to run all patterns (equivalent to extractSpecialPatterns).
+func extractSpecialPatternsForMedia(
+	filename string,
+	mediaType slugs.MediaType,
+) (tags []CanonicalTag, remaining string) {
 	tags = make([]CanonicalTag, 0) // Initialize to empty slice, not nil
 
 	if !utf8.ValidString(filename) {
@@ -581,28 +631,31 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	// Pattern 7: Comic issue numbers - "#47", "Issue 5"
 	// Common format for comic book issue identification
 	// Examples: "Amazing Spider-Man #47", "Batman Issue 100"
-	if matches := reIssueNumber.FindStringSubmatch(remaining); len(matches) > 0 {
-		// The regex has two capture groups - try both
-		issueNum := matches[1]
-		if issueNum == "" && len(matches) > 2 {
-			issueNum = matches[2]
-		}
-
-		if issueNum != "" {
-			// Strip leading zeros from issue numbers
-			issueNum = strings.TrimLeft(issueNum, "0")
-			if issueNum == "" {
-				issueNum = "0"
+	// Skipped for Game and Music — not applicable to those media types.
+	if mediaType != slugs.MediaTypeGame && mediaType != slugs.MediaTypeMusic {
+		if matches := reIssueNumber.FindStringSubmatch(remaining); len(matches) > 0 {
+			// The regex has two capture groups - try both
+			issueNum := matches[1]
+			if issueNum == "" && len(matches) > 2 {
+				issueNum = matches[2]
 			}
 
-			tags = append(tags, CanonicalTag{
-				Type:   TagTypeIssue,
-				Value:  TagValue(issueNum),
-				Source: TagSourceInferred,
-			})
+			if issueNum != "" {
+				// Strip leading zeros from issue numbers
+				issueNum = strings.TrimLeft(issueNum, "0")
+				if issueNum == "" {
+					issueNum = "0"
+				}
 
-			// Remove pattern from remaining to clean title
-			remaining = reIssueNumber.ReplaceAllString(remaining, " ")
+				tags = append(tags, CanonicalTag{
+					Type:   TagTypeIssue,
+					Value:  TagValue(issueNum),
+					Source: TagSourceInferred,
+				})
+
+				// Remove pattern from remaining to clean title
+				remaining = reIssueNumber.ReplaceAllString(remaining, " ")
+			}
 		}
 	}
 
@@ -610,34 +663,37 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	// Common format for music file track numbering
 	// Examples: "01 - Song Title", "Track 03 Artist Name"
 	// Only extract if at start of filename (not in middle of title)
-	if matches := reTrackNumber.FindStringSubmatch(remaining); len(matches) > 0 {
-		// The regex has two capture groups - try both
-		trackNum := matches[1]
-		if trackNum == "" && len(matches) > 2 {
-			trackNum = matches[2]
-		}
+	// Skipped for non-Music types when mediaType is specified.
+	if mediaType == "" || mediaType == slugs.MediaTypeMusic {
+		if matches := reTrackNumber.FindStringSubmatch(remaining); len(matches) > 0 {
+			// The regex has two capture groups - try both
+			trackNum := matches[1]
+			if trackNum == "" && len(matches) > 2 {
+				trackNum = matches[2]
+			}
 
-		if trackNum != "" {
-			// CRITICAL: Check if this is actually a 4-digit year being mis-parsed as a 3-digit track
-			// Example: "1985.mp3" should NOT be parsed as track 198
-			// Check if the original filename starts with a 4-digit year
-			isYear := startsWithYear(remaining)
+			if trackNum != "" {
+				// CRITICAL: Check if this is actually a 4-digit year being mis-parsed as a 3-digit track
+				// Example: "1985.mp3" should NOT be parsed as track 198
+				// Check if the original filename starts with a 4-digit year
+				isYear := startsWithYear(remaining)
 
-			if !isYear {
-				// Strip leading zeros from track numbers
-				trackNum = strings.TrimLeft(trackNum, "0")
-				if trackNum == "" {
-					trackNum = "0"
+				if !isYear {
+					// Strip leading zeros from track numbers
+					trackNum = strings.TrimLeft(trackNum, "0")
+					if trackNum == "" {
+						trackNum = "0"
+					}
+
+					tags = append(tags, CanonicalTag{
+						Type:   TagTypeTrack,
+						Value:  TagValue(trackNum),
+						Source: TagSourceInferred,
+					})
+
+					// Remove pattern from remaining to clean title
+					remaining = reTrackNumber.ReplaceAllString(remaining, "")
 				}
-
-				tags = append(tags, CanonicalTag{
-					Type:   TagTypeTrack,
-					Value:  TagValue(trackNum),
-					Source: TagSourceInferred,
-				})
-
-				// Remove pattern from remaining to clean title
-				remaining = reTrackNumber.ReplaceAllString(remaining, "")
 			}
 		}
 	}
@@ -647,26 +703,29 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	// Examples: "T+Eng", "T-Ger", "T+Eng v1.0", "T+Spa v2.1.3"
 	// Note: +/- is REQUIRED to avoid false positives (e.g., "FTL", "The Legend")
 	// Must be standalone: preceded by space (captured) OR at start, followed by space/dot/end
-	if indices := reTrans.FindStringSubmatchIndex(remaining); len(indices) >= 10 {
-		// indices[0:2] = full match
-		// indices[2:4] = prefix (^ or space)
-		// indices[4:6] = "T"
-		// indices[6:8] = +/- (required)
-		// indices[8:10] = language code
-		// indices[10:12] = version number or empty (if present)
-		plusMinus := remaining[indices[6]:indices[7]]
-		langCode := strings.ToLower(remaining[indices[8]:indices[9]])
-		versionNum := ""
-		if len(indices) > 11 && indices[10] != -1 {
-			versionNum = remaining[indices[10]:indices[11]]
+	// Skipped for non-Game types when mediaType is specified (ROM-specific naming convention).
+	if mediaType == "" || mediaType == slugs.MediaTypeGame {
+		if indices := reTrans.FindStringSubmatchIndex(remaining); len(indices) >= 10 {
+			// indices[0:2] = full match
+			// indices[2:4] = prefix (^ or space)
+			// indices[4:6] = "T"
+			// indices[6:8] = +/- (required)
+			// indices[8:10] = language code
+			// indices[10:12] = version number or empty (if present)
+			plusMinus := remaining[indices[6]:indices[7]]
+			langCode := strings.ToLower(remaining[indices[8]:indices[9]])
+			versionNum := ""
+			if len(indices) > 11 && indices[10] != -1 {
+				versionNum = remaining[indices[10]:indices[11]]
+			}
+
+			// Use shared tag building logic (inferred from plain text, not bracketed)
+			transTags := buildTranslationTags(plusMinus, langCode, versionNum, TagSourceInferred)
+			tags = append(tags, transTags...)
+
+			// Replace the matched pattern with a space to preserve word boundaries
+			remaining = remaining[:indices[0]] + " " + remaining[indices[1]:]
 		}
-
-		// Use shared tag building logic (inferred from plain text, not bracketed)
-		transTags := buildTranslationTags(plusMinus, langCode, versionNum, TagSourceInferred)
-		tags = append(tags, transTags...)
-
-		// Replace the matched pattern with a space to preserve word boundaries
-		remaining = remaining[:indices[0]] + " " + remaining[indices[1]:]
 	}
 
 	// Pattern 7: Bracketless version tags (if not part of translation) - "v1.0", "v1.2.3"
@@ -749,7 +808,7 @@ func parseMultiLanguageTag(tag string) []CanonicalTag {
 		tempParts := strings.Split(tag, "-")
 		allShortCodes := true
 		for _, part := range tempParts {
-			normalized := NormalizeTag(part)
+			normalized := cachedNormalizeTag(part)
 			if len(normalized) < 2 || len(normalized) > 3 {
 				allShortCodes = false
 				break
@@ -766,7 +825,7 @@ func parseMultiLanguageTag(tag string) []CanonicalTag {
 	var langs []CanonicalTag
 
 	for _, part := range parts {
-		normalized := NormalizeTag(part)
+		normalized := cachedNormalizeTag(part)
 		// Check if it's a known language code (2-3 chars typically)
 		if len(normalized) >= 2 && len(normalized) <= 3 {
 			// Try to map as language
@@ -832,7 +891,7 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 			if part == "" {
 				return nil // empty part = consecutive dashes, not a compound tag
 			}
-			normalized := NormalizeTag(part)
+			normalized := cachedNormalizeTag(part)
 			mapped := mapFilenameTagToCanonical(normalized)
 			var partTags []CanonicalTag
 			for _, ct := range mapped {
@@ -861,7 +920,7 @@ func parseCommaSeparatedTags(tag string) []CanonicalTag {
 			continue
 		}
 
-		normalized := NormalizeTag(part)
+		normalized := cachedNormalizeTag(part)
 		mapped := mapFilenameTagToCanonical(normalized)
 
 		for _, ct := range mapped {
@@ -891,7 +950,7 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 	}
 
 	// For parentheses tags, normalize and process
-	normalized := NormalizeTag(ctx.CurrentTag)
+	normalized := cachedNormalizeTag(ctx.CurrentTag)
 
 	// First check if it's a multi-language tag (En,Fr,De)
 	if multiLang := parseMultiLanguageTag(normalized); multiLang != nil {
@@ -959,7 +1018,7 @@ func mapBracketTag(tag string) []CanonicalTag {
 	}
 
 	// Normalize the tag for regular processing
-	normalized := NormalizeTag(tag)
+	normalized := cachedNormalizeTag(tag)
 
 	// Check for multi-language patterns (en-fr-de, En,Fr,De, En+Fr)
 	if langTags := parseMultiLanguageTag(normalized); langTags != nil {
@@ -1228,8 +1287,15 @@ func selectBestMapping(options []CanonicalTag, hasRegion, hasLanguage, hasVersio
 // It extracts and disambiguates tags following No-Intro/TOSEC conventions.
 // Returns a slice of canonical tags ready for database insertion.
 func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
+	return ParseFilenameToCanonicalTagsForMedia(filename, "")
+}
+
+// ParseFilenameToCanonicalTagsForMedia is the media-type-aware variant.
+// Patterns not applicable to the given mediaType are skipped, reducing regex overhead.
+// Pass an empty mediaType to run all patterns (equivalent to ParseFilenameToCanonicalTags).
+func ParseFilenameToCanonicalTagsForMedia(filename string, mediaType slugs.MediaType) []CanonicalTag {
 	// Step 1: Extract special patterns first
-	specialTags, remaining := extractSpecialPatterns(filename)
+	specialTags, remaining := extractSpecialPatternsForMedia(filename, mediaType)
 
 	// Step 2: Extract parentheses and bracket tags
 	parenTags, bracketTags := extractTags(remaining)
