@@ -2129,7 +2129,11 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 		},
 		optimizationStep{
 			name: "page_prefetch", fn: func() error {
-				return db.prefetchSearchPages(db.ctx)
+				if err := db.prefetchSearchPages(db.ctx); err != nil {
+					log.Warn().Err(err).Msg("page_prefetch failed, continuing anyway")
+					return nil
+				}
+				return nil
 			},
 			maxRetries: 0, retryDelay: rd,
 		},

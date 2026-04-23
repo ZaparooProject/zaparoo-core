@@ -21,7 +21,6 @@ package tags
 
 import (
 	"strings"
-	"unicode"
 )
 
 // Storage-only padding: tag values that are purely numeric (or whose terminal
@@ -84,7 +83,7 @@ func isAllDigits(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if !unicode.IsDigit(r) {
+		if r < '0' || r > '9' {
 			return false
 		}
 	}

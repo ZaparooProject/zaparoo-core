@@ -731,7 +731,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagRegionBR, TagRegionCA, TagRegionCN,
 		TagRegionFR, TagRegionDE, TagRegionHK, TagRegionIT, TagRegionKR, TagRegionNL, TagRegionES,
 		TagRegionSE, TagRegionPL, TagRegionFI,
-		TagRegionDK, TagRegionPT, TagRegionNO,
+		TagRegionDK, TagRegionPT, TagRegionNO, TagRegionScandinavia,
 		// TOSEC regions
 		TagRegionAE, TagRegionAL, TagRegionAS, TagRegionAT, TagRegionBA, TagRegionBE, TagRegionBG,
 		TagRegionCH, TagRegionCL, TagRegionCS,

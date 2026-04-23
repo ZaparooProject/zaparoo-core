@@ -79,7 +79,7 @@ var allTagMappings = map[string][]CanonicalTag{
 	"taiwan":         {{Type: TagTypeRegion, Value: TagRegionTW}, {Type: TagTypeLang, Value: TagLangZH}},
 	"argentina":      {{Type: TagTypeRegion, Value: TagRegionAR}, {Type: TagTypeLang, Value: TagLangES}},
 	"mexico":         {{Type: TagTypeRegion, Value: TagRegionMX}, {Type: TagTypeLang, Value: TagLangES}},
-	"scandinavia":    {{Type: TagTypeRegion, Value: TagRegionEU}}, // multi-country region, no single lang
+	"scandinavia":    {{Type: TagTypeRegion, Value: TagRegionScandinavia}}, // multi-country region, no single lang
 	"united-kingdom": {{Type: TagTypeRegion, Value: TagRegionGB}, {Type: TagTypeLang, Value: TagLangEN}},
 	"uk":             {{Type: TagTypeRegion, Value: TagRegionGB}, {Type: TagTypeLang, Value: TagLangEN}},
 

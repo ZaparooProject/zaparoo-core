@@ -291,8 +291,8 @@ func TestBuildTagFilterSQL_AliasCanonicalisation(t *testing.T) {
 
 	_, args := BuildTagFilterSQL(filters)
 
+	require.Len(t, args, 12)
 	// AND: addon:barcodeboy → addon / barcode:barcodeboy (doubled for UNION)
-	require.Greater(t, len(args), 7)
 	assert.Equal(t, "addon", args[0])
 	assert.Equal(t, "barcode:barcodeboy", args[1])
 	assert.Equal(t, "addon", args[2])

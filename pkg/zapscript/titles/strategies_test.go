@@ -325,7 +325,7 @@ func TestTrySharedSecondaryTitle(t *testing.T) {
 			shouldError:      false,
 		},
 		{
-			name: "DB search error — returns nil without propagating",
+			name: "DB search error — propagates to caller",
 			matchInfo: GameMatchInfo{
 				HasSecondaryTitle:  true,
 				MainTitleSlug:      "touhou06",
@@ -342,7 +342,7 @@ func TestTrySharedSecondaryTitle(t *testing.T) {
 			},
 			expectedCount:    0,
 			expectedStrategy: "",
-			shouldError:      false,
+			shouldError:      true,
 		},
 	}
 

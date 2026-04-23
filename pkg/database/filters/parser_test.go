@@ -504,7 +504,7 @@ func TestParseTagFilters_Whitespace(t *testing.T) {
 			},
 		},
 		{
-			name:  "Multiple spaces become multiple hyphens",
+			name:  "Multiple spaces collapse to a single hyphen",
 			input: []string{"name:super  mario  world"},
 			expected: []zapscript.TagFilter{
 				{Type: "name", Value: "super-mario-world", Operator: zapscript.TagOperatorAND},

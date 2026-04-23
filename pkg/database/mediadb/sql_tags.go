@@ -131,6 +131,7 @@ func sqlFindTag(ctx context.Context, db sqlQueryable, tagType database.Tag) (dat
 		from Tags
 		where DBID = ?
 		or Tag = ?
+		or Tag = ?
 		LIMIT 1;
 	`)
 	// TODO: Add TagType dependency when unknown tags supported
@@ -144,6 +145,7 @@ func sqlFindTag(ctx context.Context, db sqlQueryable, tagType database.Tag) (dat
 	}()
 	err = stmt.QueryRowContext(ctx,
 		tagType.DBID,
+		tagType.Tag,
 		tags.PadTagValue(tagType.Tag),
 	).Scan(
 		&row.DBID,
@@ -163,7 +165,8 @@ func sqlInsertTagWithPreparedStmt(ctx context.Context, stmt *sql.Stmt, row datab
 		dbID = row.DBID
 	}
 
-	res, err := stmt.ExecContext(ctx, dbID, row.TypeDBID, row.Tag)
+	paddedTag := tags.PadTagValue(row.Tag)
+	res, err := stmt.ExecContext(ctx, dbID, row.TypeDBID, paddedTag)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute prepared insert tag statement: %w", err)
 	}
@@ -193,7 +196,8 @@ func sqlInsertTag(ctx context.Context, db *sql.DB, row database.Tag) (database.T
 		}
 	}()
 
-	res, err := stmt.ExecContext(ctx, dbID, row.TypeDBID, row.Tag)
+	paddedTag := tags.PadTagValue(row.Tag)
+	res, err := stmt.ExecContext(ctx, dbID, row.TypeDBID, paddedTag)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert tag statement: %w", err)
 	}

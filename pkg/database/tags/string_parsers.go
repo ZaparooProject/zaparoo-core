@@ -146,20 +146,63 @@ func findBracketedYear(s string) parseMatch {
 // Replaces: reDisc = regexp.MustCompile(`(?i)\(Disc\s+(\d+)\s+of\s+(\d+)\)`)
 func findDiscPattern(s string) parseMatch {
 	lower := strings.ToLower(s)
-	// Try "(disc" first, then "(disk".
-	prefixLen := 5
-	idx := strings.Index(lower, "(disc")
-	if idx == -1 {
-		idx = strings.Index(lower, "(disk")
-		if idx == -1 {
-			return parseMatch{}
+
+	// Loop to find the next "(disc" or "(disk" with whitespace after.
+	// This handles cases like "Discotheque (Disc 1 of 2)" where the first
+	// "(disc" is part of the word, but a later occurrence is the pattern.
+	idx := -1
+	prefixLen := 0
+	found := false
+
+	searchFrom := 0
+	for {
+		nextDisc := strings.Index(lower[searchFrom:], "(disc")
+		nextDisk := strings.Index(lower[searchFrom:], "(disk")
+
+		// Determine which comes first (or if neither exists)
+		var candidateIdx int
+		var foundMatch bool
+		switch {
+		case nextDisc != -1 && nextDisk != -1:
+			if nextDisc < nextDisk {
+				candidateIdx = searchFrom + nextDisc
+			} else {
+				candidateIdx = searchFrom + nextDisk
+			}
+			foundMatch = true
+		case nextDisc != -1:
+			candidateIdx = searchFrom + nextDisc
+			foundMatch = true
+		case nextDisk != -1:
+			candidateIdx = searchFrom + nextDisk
+			foundMatch = true
+		default:
+			// No more occurrences
 		}
+
+		if !foundMatch {
+			break
+		}
+
+		// Determine prefix length (5 for both "(disc" and "(disk")
+		prefixLen = 5
+		// Check if the char immediately after the prefix is whitespace
+		pos := candidateIdx + prefixLen
+		if pos < len(s) && isWhitespace(s[pos]) {
+			idx = candidateIdx
+			found = true
+			break
+		}
+
+		// Continue searching from after this occurrence
+		searchFrom = candidateIdx + 1
 	}
-	pos := idx + prefixLen // after "(disc" or "(disk"
-	// The character immediately after the prefix must be whitespace (not "o" in "Disco", "ette" in "Diskette").
-	if pos >= len(s) || !isWhitespace(s[pos]) {
+
+	if !found {
 		return parseMatch{}
 	}
+
+	pos := idx + prefixLen // after "(disc" or "(disk"
 	// skip whitespace
 	for pos < len(s) && isWhitespace(s[pos]) {
 		pos++

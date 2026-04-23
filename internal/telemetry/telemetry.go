@@ -68,6 +68,9 @@ func (w *thresholdWriter) Write(p []byte) (int, error) {
 }
 
 func (w *thresholdWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
+	if level == zerolog.NoLevel || level == zerolog.Disabled {
+		return len(p), nil
+	}
 	if level < w.threshold {
 		return len(p), nil
 	}
@@ -211,7 +214,9 @@ func sanitizePath(path string) string {
 
 	result := homePathRe.ReplaceAllString(path, "/home/<user>/")
 	result = usersPathRe.ReplaceAllString(result, "/Users/<user>/")
-	result = windowsUserRe.ReplaceAllString(result, "C:\\Users\\<user>\\")
+	result = windowsUserRe.ReplaceAllStringFunc(result, func(match string) string {
+		return match[:3] + "<user>\\"
+	})
 
 	return result
 }

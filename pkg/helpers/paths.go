@@ -307,11 +307,12 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 // MatchSystemFile returns true if path matches a launcher for the given system.
 // The file path is normalized once and compared against pre-normalized roots.
 func (m *LauncherMatcher) MatchSystemFile(systemID, path string) bool {
+	lowerPath := strings.ToLower(path)
 	normPath := NormalizePathForComparison(path)
 
 	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
 	for i := range launchers {
-		if m.pathIsLauncher(&launchers[i], path, normPath, normPath) {
+		if m.pathIsLauncher(&launchers[i], path, lowerPath, normPath) {
 			return true
 		}
 	}

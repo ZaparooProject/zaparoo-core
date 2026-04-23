@@ -932,13 +932,13 @@ func TestHandleMediaTags_CapsAtPerCategoryLimit(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
-	// Return 101 genre tags — one over the 100-per-category cap.
+	// Return 101 credit tags — one over the 100-per-category cap.
 	// Tags have unique names and ascending counts so we can assert which one is dropped.
 	overLimitTags := make([]database.TagInfo, 0, tagsPerCategoryLimit+1)
 	for i := range tagsPerCategoryLimit + 1 {
 		overLimitTags = append(overLimitTags, database.TagInfo{
-			Type:  "genre",
-			Tag:   fmt.Sprintf("genre%03d", i),
+			Type:  "credit",
+			Tag:   fmt.Sprintf("company%03d", i),
 			Count: int64(i + 1),
 		})
 	}
@@ -970,9 +970,9 @@ func TestHandleMediaTags_CapsAtPerCategoryLimit(t *testing.T) {
 	tagsResponse, ok := result.(models.TagsResponse)
 	require.True(t, ok)
 	assert.Len(t, tagsResponse.Tags, tagsPerCategoryLimit, "tags must be capped at per-category limit")
-	// The lowest-count tag (genre000, Count:1) must have been dropped.
+	// The lowest-count tag (company000, Count:1) must have been dropped.
 	for _, tag := range tagsResponse.Tags {
-		assert.NotEqual(t, "genre000", tag.Tag, "lowest-count tag must be excluded by cap")
+		assert.NotEqual(t, "company000", tag.Tag, "lowest-count tag must be excluded by cap")
 	}
 	mockMediaDB.AssertExpectations(t)
 }

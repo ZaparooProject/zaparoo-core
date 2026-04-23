@@ -652,6 +652,12 @@ This method returns all available tags (with their types) for the specified syst
 | :--- | :----------------------- | :------- | :----------------------------- |
 | tags | [TagInfo](#taginfo-object)[] | Yes      | Array of available tags.       |
 
+**Tag Capping:** To prevent large responses, long-tail tag types are capped at 100 entries
+per type. Tags within each type are sorted by usage count (most popular first), then
+alphabetically. The following types are capped: `credit`, `developer`, `mameparent`,
+`publisher`, `search`. Taxonomy types (e.g., `region`, `year`, `lang`, `genre`, `series`)
+have finite vocabularies per system and are always returned in full without truncation.
+
 ##### TagInfo object
 
 | Key  | Type   | Required | Description                           |

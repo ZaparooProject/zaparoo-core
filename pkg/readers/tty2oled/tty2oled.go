@@ -362,6 +362,9 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan, _ rea
 	// Start the operation worker only after the device is fully connected.
 	// Deferred from NewReader so that detection probes that don't call Open
 	// don't leak goroutines.
+	// Always create a fresh context so that re-Open after Close starts with
+	// a non-canceled context.
+	r.operationWorkerCtx, r.operationWorkerCancel = context.WithCancel(context.Background())
 	r.wg.Add(1)
 	go r.operationWorker()
 

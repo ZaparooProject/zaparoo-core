@@ -256,7 +256,7 @@ func TrySharedSecondaryTitle(
 	results, err := gamesdb.SearchMediaBySecondarySlug(ctx, systemID, matchInfo.SecondaryTitleSlug, tagFilters)
 	if err != nil {
 		log.Warn().Err(err).Msgf("shared secondary title search failed for '%s'", matchInfo.SecondaryTitleSlug)
-		return nil, "", nil
+		return nil, "", fmt.Errorf("SearchMediaBySecondarySlug: %w", err)
 	}
 
 	if len(results) == 0 {

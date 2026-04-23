@@ -282,8 +282,8 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 	// Single query: find tag types where siblings under the same title have
 	// different values, then return only the target media's tags for those types.
 	// Checks both MediaTags (file-level) and MediaTitleTags (title-level) tags.
-	//nolint:gosec // Safe: ZapScriptTagTypes contains internal compile-time constants, not user input
 	typeList := "'" + strings.Join(database.ZapScriptTagTypes, "', '") + "'"
+	//nolint:gosec // ZapScriptTagTypes is a compile-time constant list, not user input
 	rows, err := db.conn().QueryContext(ctx, fmt.Sprintf(`
 		WITH Target AS (
 			SELECT Media.DBID, Media.MediaTitleDBID

@@ -274,6 +274,20 @@ func TestBuildTitleZapScript(t *testing.T) {
 			tags:     []TagInfo{{Tag: "homebrew", Type: "release"}},
 			want:     "@SNES/Game (release:homebrew)",
 		},
+		{
+			name:     "rev tag uses generic format",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "1", Type: "rev"}},
+			want:     "@SNES/Game (rev:1)",
+		},
+		{
+			name:     "empty tag is skipped",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "", Type: "publisher"}, {Tag: "nintendo", Type: "publisher"}},
+			want:     "@SNES/Game (publisher:nintendo)",
+		},
 	}
 
 	for _, tt := range tests {

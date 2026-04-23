@@ -21,6 +21,7 @@ package tags
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -609,18 +610,18 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 		},
 		// TOSEC positional publisher detection
 		{
-			name:     "TOSEC year-then-publisher promotes to publisher",
+			name:     "TOSEC year-then-publisher produces publisher",
 			filename: "Legend of TOSEC, The (1986)(DevStudio)[!].rom",
 			wantTags: []string{"year:1986", "publisher:devstudio", "dump:verified"},
 		},
 		{
-			name:     "TOSEC year-then-publisher with region flags",
+			name:     "TOSEC year-then-publisher with region flags produces publisher",
 			filename: "Game, The (1993)(Konami)[!][US].rom",
 			wantTags: []string{"year:1993", "publisher:konami", "dump:verified"},
 		},
 		{
 			// Pre-1970 TOSEC files (early computing era) — year within 1950-2099 range
-			name:     "TOSEC pre-1970 year still promotes publisher",
+			name:     "TOSEC pre-1970 year produces publisher",
 			filename: "ELIZA (1966)(MIT)[!].rom",
 			wantTags: []string{"year:1966", "publisher:mit", "dump:verified"},
 		},
@@ -744,6 +745,16 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 
 			// Check we don't have unexpected extras (allow some flexibility)
 			assert.LessOrEqual(t, len(gotStrings), len(tt.wantTags)+2, "Too many tags returned")
+
+			// Negative assertions: no-Intro filenames should not produce credit:/publisher: tags
+			if tt.name == "No-Intro format produces no publisher or credit" {
+				for _, tagStr := range gotStrings {
+					assert.False(t, strings.HasPrefix(tagStr, "credit:"),
+						"No-Intro format should not produce credit: tag, got %q", tagStr)
+					assert.False(t, strings.HasPrefix(tagStr, "publisher:"),
+						"No-Intro format should not produce publisher: tag, got %q", tagStr)
+				}
+			}
 		})
 	}
 }
@@ -1182,7 +1193,7 @@ func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
 			wantContains: []string{"unfinished:final"},
 		},
 		{
-			name:     "Disk N of M with Side A",
+			name:     "Disk N of M with Side A - publisher from TOSEC slot",
 			filename: "Alter Ego (1985)(Activision)(Disk 1 of 3 Side A)[cr].do",
 			wantContains: []string{
 				"publisher:activision", "media:disc", "disc:1", "disctotal:3", "media:side-a", "dump:cracked",
@@ -1200,14 +1211,14 @@ func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
 		},
 		// Bug: (Side A) standalone was split into "side"→media:side + "a"→dump:alternate.
 		{
-			name:     "TOSEC standalone Side A",
+			name:     "TOSEC standalone Side A - publisher from TOSEC slot",
 			filename: "Barbarian (1987)(Palace Software)(Side A)[u].tap",
 			wantContains: []string{
 				"publisher:palace-software", "year:1987", "media:side-a", "dump:underdump",
 			},
 		},
 		{
-			name:         "TOSEC standalone Side B",
+			name:         "TOSEC standalone Side B - publisher from TOSEC slot",
 			filename:     "Batman - The Movie (1989)(Ocean)(Side B)[u].tap",
 			wantContains: []string{"publisher:ocean", "year:1989", "media:side-b", "dump:underdump"},
 		},
@@ -1313,7 +1324,7 @@ func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
 		{
 			name:            "Scandinavia region",
 			filename:        "Devil World (Scandinavia) (En).nes",
-			wantContains:    []string{"region:eu"},
+			wantContains:    []string{"region:scandinavia"},
 			wantNotContains: []string{"credit:scandinavia"},
 		},
 		// Bug: (prototype) full word was credit:prototype instead of unfinished:proto.

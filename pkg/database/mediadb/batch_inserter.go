@@ -306,17 +306,24 @@ func (b *BatchInserter) flushSingleRow() error {
 
 // Close flushes remaining items and closes all cached statements
 func (b *BatchInserter) Close() error {
-	err := b.Flush()
+	flushErr := b.Flush()
+	var firstCloseErr error
 	for rowCount, stmt := range b.stmtCache {
 		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).
 				Str("table", b.tableName).
 				Int("rows", rowCount).
 				Msg("failed to close cached batch statement")
+			if firstCloseErr == nil {
+				firstCloseErr = closeErr
+			}
 		}
 	}
 	b.stmtCache = nil
-	return err
+	if flushErr != nil {
+		return flushErr
+	}
+	return firstCloseErr
 }
 
 // generateMultiRowInsertSQL creates a multi-row INSERT statement

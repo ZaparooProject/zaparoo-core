@@ -45,6 +45,9 @@ func (db *MediaDB) prefetchSearchPages(ctx context.Context) error {
 		var count int64
 		//nolint:gosec // table names are hardcoded literals, not user input
 		if err := db.sql.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			log.Warn().Err(err).Str("table", table).Msg("page prefetch failed, skipping")
 			continue
 		}

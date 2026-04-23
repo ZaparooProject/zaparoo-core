@@ -183,15 +183,14 @@ func slugifyCompanyName(raw string) TagValue {
 
 // classifyUnmappedParen inspects a normalized paren group that allTagMappings did not match
 // and returns the appropriate CanonicalTag slice plus a classified flag.
-//   - classified=false: unrecognized — caller should emit unknown: tag.
+//   - classified=false: unrecognized — caller should try positional heuristics or emit unknown:.
 //   - classified=true, nil tags: recognized as noise/structural — caller should emit no tag.
 //   - classified=true, non-nil tags: emit these tags.
 //
-// Called from mapParenthesisTag after allTagMappings lookup fails and only if the TOSEC
-// positional publisher heuristic does not apply. normalized is the NormalizeTag'd form
-// (used for shape checks and pattern matching); original is the raw paren content
-// (used for the emitted tag value so the slug pipeline handles it properly).
-func classifyUnmappedParen(normalized, original string) ([]CanonicalTag, bool) {
+// Called from mapParenthesisTag after allTagMappings lookup fails but before any generic
+// company-name fallback. normalized is the NormalizeTag'd form (used for shape checks and
+// pattern matching); original is the raw paren content (used by later caller-side fallbacks).
+func classifyUnmappedParen(normalized, _ string) ([]CanonicalTag, bool) {
 	// Admin/meta noise — drop, no tag
 	if normalized == "unknown" || normalized == "untitled" {
 		return nil, true
@@ -235,7 +234,14 @@ func classifyUnmappedParen(normalized, original string) ([]CanonicalTag, bool) {
 		return nil, true
 	}
 
-	// Shape filter for company-name promotion: require 2–50 runes and ≥2 ASCII letters.
+	return nil, false
+}
+
+// looksLikeCompanyName reports whether an otherwise-unmapped paren group is plausibly a
+// company/developer credit. This stays separate from classifyUnmappedParen so positional
+// heuristics like TOSEC's (year)(publisher) rule can run first.
+func looksLikeCompanyName(normalized string) bool {
+	// Require 2–50 runes and at least 2 ASCII letters.
 	// This admits "CRL", "Konami", "Nintendo-RD1" while rejecting "12345", "N", and empty strings.
 	asciiLetters := 0
 	runeCount := utf8.RuneCountInString(normalized)
@@ -244,11 +250,8 @@ func classifyUnmappedParen(normalized, original string) ([]CanonicalTag, bool) {
 			asciiLetters++
 		}
 	}
-	if runeCount < 2 || runeCount > 50 || asciiLetters < 2 {
-		return nil, false // unrecognized, caller emits unknown:
-	}
 
-	return []CanonicalTag{{Type: TagTypeCredit, Value: slugifyCompanyName(original), Source: TagSourceBracketed}}, true
+	return runeCount >= 2 && runeCount <= 50 && asciiLetters >= 2
 }
 
 // hasTagType reports whether any tag in the slice has the given type.
@@ -1189,6 +1192,12 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 	// Try default mapping
 	mapped := mapFilenameTagToCanonical(tag)
 	if len(mapped) == 0 {
+		// Classify the unmatched group first: may produce edition:, release:, credit:,
+		// or nothing (nil means "drop silently").
+		result, classified := classifyUnmappedParen(tag, ctx.CurrentTag)
+		if classified {
+			return result
+		}
 		// TOSEC positional rule: Title (year)(publisher)[flags]
 		// extractSpecialPatterns removes the year paren before extractTags runs, so the
 		// TOSEC publisher lands at paren position 0. YearExtractedFromFile is set only by
@@ -1200,10 +1209,12 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 				Source: TagSourceBracketed,
 			}}
 		}
-		// Classify the unmatched group: may produce edition:, release:, credit:, or nothing.
-		result, classified := classifyUnmappedParen(tag, ctx.CurrentTag)
-		if classified {
-			return result // nil means "drop silently"; non-nil means "use these tags"
+		if looksLikeCompanyName(tag) {
+			return []CanonicalTag{{
+				Type:   TagTypeCredit,
+				Value:  slugifyCompanyName(ctx.CurrentTag),
+				Source: TagSourceBracketed,
+			}}
 		}
 		return []CanonicalTag{{Type: TagTypeUnknown, Value: TagValue(tag), Source: TagSourceBracketed}}
 	}

@@ -22,7 +22,10 @@ package telemetry
 import (
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSanitizePath(t *testing.T) {
@@ -66,17 +69,17 @@ func TestSanitizePath(t *testing.T) {
 		{
 			name:     "windows path",
 			input:    "C:\\Users\\callan\\AppData\\Local\\zaparoo\\config.toml",
-			expected: "C:\\Users\\<user>\\AppData\\Local\\zaparoo\\config.toml",
+			expected: "C:\\<user>\\AppData\\Local\\zaparoo\\config.toml",
 		},
 		{
 			name:     "windows path lowercase drive",
 			input:    "c:\\Users\\JohnDoe\\Documents\\zaparoo",
-			expected: "C:\\Users\\<user>\\Documents\\zaparoo",
+			expected: "c:\\<user>\\Documents\\zaparoo",
 		},
 		{
 			name:     "windows path different drive",
 			input:    "D:\\Users\\admin\\zaparoo\\logs",
-			expected: "C:\\Users\\<user>\\zaparoo\\logs",
+			expected: "D:\\<user>\\zaparoo\\logs",
 		},
 		{
 			name:     "error message with path",
@@ -99,19 +102,6 @@ func TestSanitizePath(t *testing.T) {
 	}
 }
 
-func TestSanitizeEvent(t *testing.T) {
-	t.Parallel()
-
-	// Import sentry for Event type
-	// This test verifies sanitizeEvent clears ServerName and sanitizes paths
-
-	t.Run("clears server name", func(t *testing.T) {
-		t.Parallel()
-		// Can't easily test without importing sentry types
-		// The function is tested indirectly through Init integration
-	})
-}
-
 func TestEnabled(t *testing.T) {
 	t.Parallel()
 
@@ -131,4 +121,109 @@ func TestFlushWhenDisabled(t *testing.T) {
 
 	// Should not panic when called while disabled
 	Flush()
+}
+
+func TestThresholdWriter(t *testing.T) {
+	t.Parallel()
+
+	msg := []byte("test message")
+
+	t.Run("Debug is dropped when threshold is Error", func(t *testing.T) {
+		mockWriter := &mockLevelWriter{}
+		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
+		n, err := tw.WriteLevel(zerolog.DebugLevel, msg)
+		assert.Equal(t, len(msg), n)
+		require.NoError(t, err)
+		mockWriter.AssertNotCalled(t, "WriteLevel", zerolog.DebugLevel, msg)
+	})
+
+	t.Run("Info is dropped when threshold is Error", func(t *testing.T) {
+		mockWriter := &mockLevelWriter{}
+		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
+		n, err := tw.WriteLevel(zerolog.InfoLevel, msg)
+		assert.Equal(t, len(msg), n)
+		require.NoError(t, err)
+		mockWriter.AssertNotCalled(t, "WriteLevel", zerolog.InfoLevel, msg)
+	})
+
+	t.Run("Warn is dropped when threshold is Error", func(t *testing.T) {
+		mockWriter := &mockLevelWriter{}
+		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
+		n, err := tw.WriteLevel(zerolog.WarnLevel, msg)
+		assert.Equal(t, len(msg), n)
+		require.NoError(t, err)
+		mockWriter.AssertNotCalled(t, "WriteLevel", zerolog.WarnLevel, msg)
+	})
+
+	t.Run("Error passes through when threshold is Error", func(t *testing.T) {
+		mockWriter := &mockLevelWriter{}
+		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
+		mockWriter.On("WriteLevel", zerolog.ErrorLevel, msg).Return(len(msg), nil).Once()
+		n, err := tw.WriteLevel(zerolog.ErrorLevel, msg)
+		assert.Equal(t, len(msg), n)
+		require.NoError(t, err)
+		mockWriter.AssertExpectations(t)
+	})
+
+	t.Run("Fatal passes through when threshold is Error", func(t *testing.T) {
+		mockWriter := &mockLevelWriter{}
+		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
+		mockWriter.On("WriteLevel", zerolog.FatalLevel, msg).Return(len(msg), nil).Once()
+		n, err := tw.WriteLevel(zerolog.FatalLevel, msg)
+		assert.Equal(t, len(msg), n)
+		require.NoError(t, err)
+		mockWriter.AssertExpectations(t)
+	})
+
+	t.Run("Panic passes through when threshold is Error", func(t *testing.T) {
+		mockWriter := &mockLevelWriter{}
+		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
+		mockWriter.On("WriteLevel", zerolog.PanicLevel, msg).Return(len(msg), nil).Once()
+		n, err := tw.WriteLevel(zerolog.PanicLevel, msg)
+		assert.Equal(t, len(msg), n)
+		require.NoError(t, err)
+		mockWriter.AssertExpectations(t)
+	})
+
+	t.Run("NoLevel is always dropped", func(t *testing.T) {
+		mockWriter := &mockLevelWriter{}
+		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
+		n, err := tw.WriteLevel(zerolog.NoLevel, msg)
+		assert.Equal(t, len(msg), n)
+		require.NoError(t, err)
+		mockWriter.AssertNotCalled(t, "WriteLevel", zerolog.NoLevel, msg)
+	})
+
+	t.Run("Disabled is always dropped", func(t *testing.T) {
+		mockWriter := &mockLevelWriter{}
+		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
+		n, err := tw.WriteLevel(zerolog.Disabled, msg)
+		assert.Equal(t, len(msg), n)
+		require.NoError(t, err)
+		mockWriter.AssertNotCalled(t, "WriteLevel", zerolog.Disabled, msg)
+	})
+
+	t.Run("Write is always passed through", func(t *testing.T) {
+		mockWriter := &mockLevelWriter{}
+		tw := &thresholdWriter{inner: mockWriter, threshold: zerolog.ErrorLevel}
+		mockWriter.On("Write", msg).Return(len(msg), nil).Once()
+		n, err := tw.Write(msg)
+		assert.Equal(t, len(msg), n)
+		require.NoError(t, err)
+		mockWriter.AssertExpectations(t)
+	})
+}
+
+type mockLevelWriter struct {
+	mock.Mock
+}
+
+func (m *mockLevelWriter) Write(p []byte) (int, error) {
+	args := m.Called(p)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *mockLevelWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
+	args := m.Called(level, p)
+	return args.Int(0), args.Error(1)
 }
