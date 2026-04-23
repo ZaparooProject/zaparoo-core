@@ -34,9 +34,10 @@ var (
 		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|` +
 			`バージョン|エディション|ヴァージョン)$`,
 	)
-	versionSuffixRegex   = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
-	ordinalSuffixRegex   = regexp.MustCompile(`\b(\d+)(?:st|nd|rd|th)\b`)
-	trailingArticleRegex = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
+	versionSuffixRegex    = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
+	ordinalSuffixRegex    = regexp.MustCompile(`\b(\d+)(?:st|nd|rd|th)\b`)
+	ordinalCamelCaseRegex = regexp.MustCompile(`\b(\d+(?:st|nd|rd|th))([A-Z])`)
+	trailingArticleRegex  = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
 
 	// Scene release tag patterns for TV shows
 	sceneQualityRegex = regexp.MustCompile(`(?i)\b(480p|576p|720p|1080p|2160p|4k|hd|sd|uhd)\b`)
@@ -74,6 +75,11 @@ var (
 	sceneHDRRegex = regexp.MustCompile(`(?i)\b(hdr|hdr10|hdr10plus|hdr10\+|dv|dolby\.?vision|hlg)\b`)
 	// 3D tags: 3D, HSBS (Half Side-by-Side), HOU (Half Over-Under), SBS, OU
 	scene3DRegex = regexp.MustCompile(`(?i)\b(3d|hsbs|hou|half-sbs|half-ou|sbs|ou)\b`)
+
+	// Matches 2+ consecutive single-letter-plus-period sequences at a word boundary.
+	// Targets dotted initialisms like "T.V.", "U.S.A.", "M.A.S.K." while leaving
+	// multi-letter abbreviations like "Bros." and "Dr." untouched (single pair only).
+	dottedInitialismRegex = regexp.MustCompile(`\b(?:[A-Za-z]\.){2,}`)
 )
 
 // periodRequiredAbbreviations maps period-required abbreviations to their expansions
@@ -218,6 +224,28 @@ func StripEditionAndVersionSuffixes(s string) string {
 	return s
 }
 
+// CollapseDottedInitialisms removes internal periods from dotted single-letter
+// initialisms so that subsequent period-to-space conversion does not split them
+// into standalone letters. This prevents the Roman numeral pass from converting
+// letters like "V" in "T.V." to digits.
+//
+// Requires 2+ consecutive letter-period pairs at a word boundary, so single-pair
+// abbreviations like "Bros.", "Dr.", "Mr." and "vs." are left untouched.
+//
+// Examples:
+//   - "T.V." → "TV"
+//   - "M.A.S.K." → "MASK"
+//   - "Super Mario Bros." → "Super Mario Bros."
+//   - "Dr. Mario" → "Dr. Mario"
+func CollapseDottedInitialisms(s string) string {
+	if !strings.Contains(s, ".") {
+		return s
+	}
+	return dottedInitialismRegex.ReplaceAllStringFunc(s, func(m string) string {
+		return strings.ReplaceAll(m, ".", "")
+	})
+}
+
 // checkAbbreviation checks if a word (in lowercase) matches a known abbreviation.
 // Returns (expansion, found).
 func checkAbbreviation(lowerWord string) (string, bool) {
@@ -331,15 +359,17 @@ func expandAbbreviationsAndNumbers(s string) string {
 // NormalizeOrdinals removes ordinal suffixes from numbers.
 // This allows "2nd" and "II" to both normalize to "2" for consistent matching.
 //
-// Useful for:
-//   - Games: "Sonic the Hedgehog 2nd" → "Sonic the Hedgehog 2"
-//   - Movies: "21st Century" → "21 Century"
+// Also handles camelCase compounds where the ordinal suffix runs directly into
+// the next word (e.g. "2ndMix" → "2nd Mix") so the suffix can then be stripped.
+// This normalizes IGDB-style "2ndMix" to the same slug as LaunchBox-style "2nd MIX".
 //
 // Examples:
 //   - "Street Fighter 2nd Impact" → "Street Fighter 2 Impact"
+//   - "Beatmania 2ndMix" → "Beatmania 2 Mix" → "Beatmania 2"
 //   - "21st Century" → "21 Century"
 //   - "3rd Strike" → "3 Strike"
 func NormalizeOrdinals(s string) string {
+	s = ordinalCamelCaseRegex.ReplaceAllString(s, "$1 $2")
 	return ordinalSuffixRegex.ReplaceAllString(s, "$1")
 }
 
@@ -404,6 +434,13 @@ func ConvertRomanNumerals(s string) string {
 		matched := false
 		for _, num := range romanNumeralReplacementTable {
 			if matchesRomanNumeralPattern(runeSlice, i, num.pattern) {
+				// Single-letter Roman numerals (V, I) at the start of the string are
+				// almost always initials ("V. Gabriel") or pronoun/title "I", not numbers.
+				// Multi-letter patterns (II, III, IV, VII…) remain unambiguous and still
+				// convert even at position 0.
+				if i == 0 && len(num.pattern) == 1 {
+					continue
+				}
 				// Check word boundary after numeral
 				endIdx := i + len(num.pattern)
 				atEnd := endIdx == len(runeSlice) || !isLatinWordCharForRoman(runeSlice[endIdx])

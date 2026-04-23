@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -36,6 +37,48 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// insertNESGameWithTag inserts a single NES system with a "Super Mario Bros" title,
+// one media file, and a "genre:platform" tag on that file inside a committed transaction.
+// Used by tests that need a minimal tagged-media fixture without caring about the returned entities.
+func insertNESGameWithTag(t *testing.T, mediaDB *MediaDB) {
+	t.Helper()
+
+	genreTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "genre"})
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	err = mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: nesSystem.ID, Name: "NES"})
+	require.NoError(t, err)
+
+	insertedTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       "supermariobros",
+		Name:       "Super Mario Bros",
+	})
+	require.NoError(t, err)
+
+	insertedMedia, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           filepath.Join("roms", "nes", "smb.nes"),
+	})
+	require.NoError(t, err)
+
+	platformTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreTagType.DBID, Tag: "platform"})
+	require.NoError(t, err)
+
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: insertedMedia.DBID, TagDBID: platformTag.DBID})
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+}
 
 func setupTempMediaDB(t *testing.T) (db *MediaDB, cleanup func()) {
 	// Create temp directory that the mock platform will use
@@ -2089,4 +2132,160 @@ func TestMediaDB_GetMediaByDBID_TitleTags_Integration(t *testing.T) {
 	assert.Len(t, result3.Tags, 2, "DISTINCT should deduplicate tag present at both levels")
 	assert.Contains(t, result3.Tags, database.TagInfo{Type: "region", Tag: "usa"})
 	assert.Contains(t, result3.Tags, database.TagInfo{Type: "genre", Tag: "platform"})
+}
+
+// TestMediaDB_UpdateLastGenerated_ClearsSystemTagsCache_Integration is a regression
+// test for the bug where PopulateSystemTagsCache was called before UpdateLastGenerated
+// in NewNamesIndex, so the cache was wiped immediately after population. After the fix,
+// caches are populated after UpdateLastGenerated, so they persist across service restarts.
+func TestMediaDB_UpdateLastGenerated_ClearsSystemTagsCache_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	insertNESGameWithTag(t, mediaDB)
+
+	// Populate cache (as NewNamesIndex does before the fix).
+	err := mediaDB.PopulateSystemTagsCache(ctx)
+	require.NoError(t, err)
+
+	err = mediaDB.RebuildTagCache()
+	require.NoError(t, err)
+
+	// UpdateLastGenerated deletes all SystemTagsCache rows (via invalidateCaches).
+	err = mediaDB.UpdateLastGenerated()
+	require.NoError(t, err)
+
+	// Directly verify the cache table is empty — this is the invariant the fix relies on.
+	var cacheRowCount int
+	err = mediaDB.UnsafeGetSQLDb().QueryRowContext(ctx, "SELECT COUNT(*) FROM SystemTagsCache").Scan(&cacheRowCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, cacheRowCount, "UpdateLastGenerated must wipe SystemTagsCache rows")
+
+	// Simulate what OpenMediaDB does on a service restart: RebuildTagCache reads
+	// from SystemTagsCache, which is now empty after UpdateLastGenerated.
+	err = mediaDB.RebuildTagCache()
+	require.NoError(t, err)
+
+	// After the fix: RebuildTagCache stores nil when SQL is empty; GetAllUsedTags
+	// also guards len(allTags)>0, so both empty and nil caches fall through to
+	// sqlGetAllUsedTags, returning the underlying data directly.
+	allTags, err := mediaDB.GetAllUsedTags(ctx)
+	require.NoError(t, err)
+	assert.NotEmpty(t, allTags, "GetAllUsedTags must return tags even after UpdateLastGenerated wipes SystemTagsCache")
+	assert.Contains(t, allTags, database.TagInfo{Type: "genre", Tag: "platform", Count: 1})
+
+	// Repopulate as the corrected NewNamesIndex does (after UpdateLastGenerated).
+	err = mediaDB.PopulateSystemTagsCache(ctx)
+	require.NoError(t, err)
+
+	err = mediaDB.RebuildTagCache()
+	require.NoError(t, err)
+
+	allTagsAfter, err := mediaDB.GetAllUsedTags(ctx)
+	require.NoError(t, err)
+	assert.NotEmpty(t, allTagsAfter, "GetAllUsedTags must return tags after post-UpdateLastGenerated repopulation")
+	assert.Contains(t, allTagsAfter, database.TagInfo{Type: "genre", Tag: "platform", Count: 1})
+}
+
+// TestMediaDB_GetAllUsedTags_NilInMemoryCache_Integration is a regression test for
+// the bug where a service restart with an empty SystemTagsCache left inMemoryTagCache
+// nil, causing GetAllUsedTags to return no results. The fix: RebuildTagCache refuses
+// to store an empty cache (leaves it nil), and GetAllUsedTags falls through to SQL
+// when the cache is nil.
+func TestMediaDB_GetAllUsedTags_NilInMemoryCache_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	insertNESGameWithTag(t, mediaDB)
+
+	// RebuildTagCache with an empty SystemTagsCache leaves the in-memory cache nil
+	// (no data to store). GetAllUsedTags must fall through to the SQL query.
+	err := mediaDB.RebuildTagCache()
+	require.NoError(t, err)
+
+	assert.Nil(t, mediaDB.inMemoryTagCache.Load(), "cache must stay nil when SystemTagsCache has no rows")
+
+	allTags, err := mediaDB.GetAllUsedTags(ctx)
+	require.NoError(t, err)
+	assert.NotEmpty(t, allTags, "GetAllUsedTags must fall through to SQL when in-memory cache is nil")
+	assert.Contains(t, allTags, database.TagInfo{Type: "genre", Tag: "platform", Count: 1})
+}
+
+// TestMediaDB_PopulateSystemTagsCache_CountAggregation_Integration verifies that
+// sqlPopulateSystemTagsCache correctly sums contributions from both MediaTags
+// (file-level) and MediaTitleTags (title-level) via its UNION ALL + GROUP BY/SUM.
+func TestMediaDB_PopulateSystemTagsCache_CountAggregation_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Set up: one tag that appears at both file-level (MediaTags) and title-level
+	// (MediaTitleTags). After PopulateSystemTagsCache, Count must equal 2.
+	genreTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "genre"})
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	err = mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: nesSystem.ID, Name: "NES"})
+	require.NoError(t, err)
+
+	insertedTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       "smb",
+		Name:       "Super Mario Bros",
+	})
+	require.NoError(t, err)
+
+	insertedMedia, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           filepath.Join("roms", "nes", "smb.nes"),
+	})
+	require.NoError(t, err)
+
+	platformTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreTagType.DBID, Tag: "platform"})
+	require.NoError(t, err)
+
+	// File-level contribution (MediaTags): Count += 1
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: insertedMedia.DBID, TagDBID: platformTag.DBID})
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Title-level contribution (MediaTitleTags): Count += 1
+	_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
+		"INSERT INTO MediaTitleTags (MediaTitleDBID, TagDBID) VALUES (?, ?)",
+		insertedTitle.DBID, platformTag.DBID)
+	require.NoError(t, err)
+
+	// Rebuild cache — this runs the UNION ALL + SUM query.
+	err = mediaDB.PopulateSystemTagsCache(ctx)
+	require.NoError(t, err)
+
+	// Query the cache table directly to verify Count = 2 (1 MediaTags + 1 MediaTitleTags).
+	var count int64
+	err = mediaDB.UnsafeGetSQLDb().QueryRowContext(ctx,
+		"SELECT Count FROM SystemTagsCache WHERE TagDBID = ?", platformTag.DBID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), count, "Count must sum file-level and title-level contributions")
 }

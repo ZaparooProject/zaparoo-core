@@ -386,6 +386,39 @@ func TestStageEdgeCases(t *testing.T) {
 	})
 }
 
+// TestCollapseDottedInitialisms tests the dotted-initialism collapsing helper.
+func TestCollapseDottedInitialisms(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"two_letter", "T.V.", "TV"},
+		{"three_letter", "U.S.A.", "USA"},
+		{"four_letter", "M.A.S.K.", "MASK"},
+		{"in_sentence", "Super Smash T.V.", "Super Smash TV"},
+		{"lowercase", "t.v.", "tv"},
+		{"mixed_case", "T.v.", "Tv"},
+		{"jrr_tolkien", "J.R.R. Tolkien", "JRR Tolkien"},
+		// Single letter-period pairs must NOT be collapsed.
+		{"single_pair_bros", "Super Mario Bros.", "Super Mario Bros."},
+		{"single_pair_dr", "Dr. Mario", "Dr. Mario"},
+		{"single_pair_mr", "Mr. Do!", "Mr. Do!"},
+		{"single_pair_vs", "Sonic vs. Knuckles", "Sonic vs. Knuckles"},
+		// No periods — fast-path return.
+		{"no_periods", "no periods here", "no periods here"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, CollapseDottedInitialisms(tt.input))
+		})
+	}
+}
+
 // TestNormalizeUnicodeWithContext tests NormalizeUnicode with real pipelineContext
 func TestNormalizeUnicodeWithContext(t *testing.T) {
 	t.Parallel()
@@ -731,6 +764,39 @@ func TestContextNilVsPopulated(t *testing.T) {
 // Tests for abbreviation and number expansion are in:
 // - slug_helpers_test.go: TestExpandAbbreviations, TestExpandNumberWords
 // - media_parsing_test.go: TestParseGame_AbbreviationExpansion, TestParseGame_NumberWordExpansion
+
+func TestConvertRomanNumerals(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		// Trailing single-letter numerals must still convert.
+		{"trailing V", "Rocky V", "rocky 5"},
+		{"trailing I", "Part I", "part 1"},
+		// Multi-letter patterns must convert even at position 0.
+		{"leading II", "II Judgment Day", "2 judgment day"},
+		{"leading III whole string", "III", "3"},
+		{"leading VII whole string", "VII", "7"},
+		// Single-letter numerals at position 0 must NOT convert (initials/pronouns).
+		{"leading V initial", "V Gabriel", "v gabriel"},
+		{"leading V-Rally title", "V-Rally", "v-rally"},
+		{"leading I pronoun", "I Robot", "i robot"},
+		// Mid-string multi-letter conversions.
+		{"mid VII", "Final Fantasy VII", "final fantasy 7"},
+		{"mid II", "Street Fighter II", "street fighter 2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ConvertRomanNumerals(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
 
 // boolPtr is a helper to create bool pointers for test assertions
 func boolPtr(b bool) *bool {

@@ -28,6 +28,8 @@ var deprecatedTagAliases = map[string]string{
 	// jcart and rumble are features embedded in the cartridge, not external add-ons
 	"addon:controller:jcart":  "embedded:slot:jcart",
 	"addon:controller:rumble": "embedded:vibration:rumble",
+	// virtualconsole → virtual-console (dash added for multi-word consistency)
+	"distribution:virtualconsole": "distribution:virtual-console",
 }
 
 // CanonicalizeTagAlias rewrites a deprecated full "type:value" tag string to its

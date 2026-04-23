@@ -354,11 +354,32 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 		shouldError        bool
 	}{
 		{
+			// Tests TrySharedSecondaryTitle: both query and DB have secondary titles, same subtitle,
+			// different main titles that share the same first token.
+			// "Quest 01: Ancient Temple" → secondary slug "ancienttemple"
+			// DB "Quest Named: Ancient Temple" → same secondary slug, first token "quest" matches.
 			name:               "subtitle fallback triggers when no initial results",
-			input:              "snes/zelda: ocarina",
+			input:              "snes/Quest 01: Ancient Temple",
 			systemID:           "SNES",
-			initialSearchSlug:  "zeldaocarina",
-			fallbackSearchSlug: "ocarina", // Secondary title is now tried in Strategy 2
+			initialSearchSlug:  "quest01ancienttemple",
+			fallbackSearchSlug: "ancienttemple", // Secondary title slug searched by TrySharedSecondaryTitle
+			initialResults:     []database.SearchResultWithCursor{},
+			fallbackResults: []database.SearchResultWithCursor{
+				{SystemID: "snes", Name: "Quest Named: Ancient Temple", Path: "/test/quest-named.sfc"},
+			},
+			expectFallback:   true,
+			shouldError:      false,
+			expectedStrategy: "strategy_shared_secondary_title",
+		},
+		{
+			// Tests TrySecondaryTitleExact Case 2 (asymmetric): query has no secondary title,
+			// so the full slug is searched as a secondary slug against DB entries that have one.
+			// "ocarina of time" → slug "ocarinaoftime" → found as secondary slug of "Zelda: Ocarina of Time".
+			name:               "subtitle fallback asymmetric: query is subtitle only",
+			input:              "snes/ocarina of time",
+			systemID:           "SNES",
+			initialSearchSlug:  "ocarinaoftime",
+			fallbackSearchSlug: "ocarinaoftime",
 			initialResults:     []database.SearchResultWithCursor{},
 			fallbackResults: []database.SearchResultWithCursor{
 				{SystemID: "snes", Name: "Zelda: Ocarina of Time", Path: "/test/zelda-ocarina.smc"},

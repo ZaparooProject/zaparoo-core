@@ -106,6 +106,10 @@ const (
 	TagTypeArt           TagType = "art"           // Art style and visual presentation
 	TagTypeAccessibility TagType = "accessibility" // Accessibility features
 	TagTypeUnknown       TagType = "unknown"       // Unknown tags
+	TagTypeDeveloper     TagType = "developer"     // Game developer (studio that made the game)
+	TagTypePublisher     TagType = "publisher"     // Game publisher (company that released the game)
+	TagTypeCredit        TagType = "credit"        // Company credit with unspecified developer/publisher role
+	TagTypeRelease       TagType = "release"       // Distribution/release status (homebrew, unreleased, reissue, etc.)
 )
 
 // Tag Format:
@@ -456,6 +460,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagCompatibilityGameboy, TagCompatibilityGameboyMono, TagCompatibilityGameboyColor,
 		TagCompatibilityGameboySGB, TagCompatibilityGameboyNP,
 		TagCompatibilityGameboyInfrared, TagCompatibilityGameboyGBA,
+		TagCompatibilityDSi,
 		TagCompatibilitySuperfamicom, TagCompatibilitySuperfamicomHiROM, TagCompatibilitySuperfamicomLoROM,
 		TagCompatibilitySuperfamicomExHiROM, TagCompatibilitySuperfamicomExLoROM, TagCompatibilitySuperfamicomNSS,
 		TagCompatibilitySuperfamicomSoundlink, TagCompatibilitySuperfamicomNP, TagCompatibilitySuperfamicomGS,
@@ -507,8 +512,12 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagSupplementTheme, TagSupplementAvatar,
 	},
 	TagTypeDistribution: {
-		// Digital distribution platforms
+		// Digital distribution platforms and sourced releases
 		TagDistributionVirtualConsole, TagDistributionWiiWare, TagDistributionXBLIG, TagDistributionDSiWare,
+		TagDistributionGameCube, TagDistributionSwitchOnline, TagDistributionDiskWriter, TagDistributionSteam,
+		TagDistributionSegaChannel, TagDistributionGenesisMini, TagDistributionSegaAges, TagDistributionSegaSmashPack,
+		TagDistributionWii, TagDistributionClubNintendo, TagDistributionGBAEReader,
+		TagDistributionCompilation,
 	},
 	TagTypeDisc: {
 		// Disc number for multi-disc games (which disc this file is)
@@ -631,6 +640,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagUnfinishedCompetition, // Competition version
 		TagUnfinishedPreview,     // Preview version (our addition)
 		TagUnfinishedPrerelease,  // Pre-release version (our addition)
+		TagUnfinishedFinal,       // Final release (TOSEC/demo-scene: completed version)
 		// Demo variants
 		TagUnfinishedDemoPlayable, TagUnfinishedDemoRolling, TagUnfinishedDemoSlideshow,
 	},
@@ -696,20 +706,39 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// MAME parent ROM relationship (empty - values are dynamic ROM names)
 	},
 
+	TagTypeDeveloper: {
+		// Dynamic values - populated during indexing from TOSEC filenames and external metadata
+	},
+
+	TagTypePublisher: {
+		// Dynamic values - populated during indexing from TOSEC filenames and external metadata
+	},
+
+	TagTypeCredit: {
+		// Dynamic values - company credits where developer/publisher role is unspecified
+	},
+
+	TagTypeRelease: {
+		// Closed canonical type — all values come from allTagMappings or classifyUnmappedParen.
+		TagReleaseHomebrew, TagReleaseUnreleased, TagReleasePublicDomain,
+		TagReleaseReissue, TagReleaseClassics, TagReleasePromo,
+		TagReleaseNotForResale, TagReleaseKiosk,
+	},
+
 	TagTypeRegion: {
 		// Release regions - mix of No-Intro and TOSEC conventions
 		TagRegionWorld, TagRegionUS, TagRegionEU, TagRegionJP, TagRegionAsia, TagRegionAU,
 		TagRegionBR, TagRegionCA, TagRegionCN,
 		TagRegionFR, TagRegionDE, TagRegionHK, TagRegionIT, TagRegionKR, TagRegionNL, TagRegionES,
 		TagRegionSE, TagRegionPL, TagRegionFI,
-		TagRegionDK, TagRegionPT, TagRegionNO,
+		TagRegionDK, TagRegionPT, TagRegionNO, TagRegionScandinavia,
 		// TOSEC regions
 		TagRegionAE, TagRegionAL, TagRegionAS, TagRegionAT, TagRegionBA, TagRegionBE, TagRegionBG,
 		TagRegionCH, TagRegionCL, TagRegionCS,
 		TagRegionCY, TagRegionCZ, TagRegionEE, TagRegionEG, TagRegionGB, TagRegionGR, TagRegionHR,
 		TagRegionHU, TagRegionID, TagRegionIE,
 		TagRegionIL, TagRegionIN, TagRegionIR, TagRegionIS, TagRegionJO, TagRegionLT, TagRegionLU,
-		TagRegionLV, TagRegionMN, TagRegionMX,
+		TagRegionAR, TagRegionLV, TagRegionMN, TagRegionMX,
 		TagRegionMY, TagRegionNP, TagRegionNZ, TagRegionOM, TagRegionPE, TagRegionPH, TagRegionQA,
 		TagRegionRO, TagRegionRU, TagRegionSG,
 		TagRegionSI, TagRegionSK, TagRegionTH, TagRegionTR, TagRegionTW, TagRegionVN, TagRegionYU,
@@ -798,12 +827,23 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 	},
 
 	TagTypeEdition: {
-		// Edition markers - indicates presence of edition/version words that are stripped from slugs
-		// These are generic markers without specific descriptors (e.g., "Special", "Ultimate")
-		// TODO: could add specific edition tags
+		// Generic suffix markers (fallback for unrecognized qualifiers)
 		TagEditionVersion,  // "Version" or equivalent in any language
-		TagEditionEdition,  // "Edition" or equivalent in any language
+		TagEditionEdition,  // unknown "X Edition" qualifier
 		TagEditionRemaster, // "Remaster" or "Remastered"
+		TagEditionRemake,   // unknown "X Remake" qualifier
+		TagEditionRemix,    // unknown "X Remix" qualifier
+		TagEditionCut,      // unknown "X Cut" qualifier (not Director's)
+		// Specific well-known edition types
+		TagEditionSpecial,
+		TagEditionCollectors,
+		TagEditionLimited,
+		TagEditionDeluxe,
+		TagEditionUltimate,
+		TagEditionComplete,
+		TagEditionAnniversary,
+		TagEditionGoty,
+		TagEditionDirectorsCut,
 	},
 
 	TagTypePerspective: {

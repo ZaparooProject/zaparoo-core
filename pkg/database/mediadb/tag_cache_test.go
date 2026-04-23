@@ -55,17 +55,18 @@ func TestTagsForSystems_SingleSystemReturnsClone(t *testing.T) {
 	cache := &tagCache{
 		bySystem: map[string][]database.TagInfo{
 			"nes": {
-				{Type: "genre", Tag: "Action"},
+				{Type: "genre", Tag: "Action", Count: 5},
 			},
 		},
 	}
 
 	result := cache.tagsForSystems([]systemdefs.System{{ID: "nes"}})
 	require.Len(t, result, 1)
+	assert.Equal(t, int64(5), result[0].Count, "Count must be preserved through clone")
 
 	// Mutating the result must not affect the cache.
 	result[0] = database.TagInfo{Type: "year", Tag: "1999"}
-	assert.Equal(t, database.TagInfo{Type: "genre", Tag: "Action"}, cache.bySystem["nes"][0])
+	assert.Equal(t, database.TagInfo{Type: "genre", Tag: "Action", Count: 5}, cache.bySystem["nes"][0])
 }
 
 func TestTagsForSystems_MultiSystemDedup(t *testing.T) {
@@ -73,12 +74,12 @@ func TestTagsForSystems_MultiSystemDedup(t *testing.T) {
 	cache := &tagCache{
 		bySystem: map[string][]database.TagInfo{
 			"nes": {
-				{Type: "genre", Tag: "Action"},
-				{Type: "genre", Tag: "RPG"},
+				{Type: "genre", Tag: "Action", Count: 10},
+				{Type: "genre", Tag: "RPG", Count: 4},
 			},
 			"snes": {
-				{Type: "genre", Tag: "Action"},
-				{Type: "genre", Tag: "Puzzle"},
+				{Type: "genre", Tag: "Action", Count: 7},
+				{Type: "genre", Tag: "Puzzle", Count: 2},
 			},
 		},
 	}
@@ -86,9 +87,10 @@ func TestTagsForSystems_MultiSystemDedup(t *testing.T) {
 	result := cache.tagsForSystems([]systemdefs.System{{ID: "nes"}, {ID: "snes"}})
 
 	assert.Len(t, result, 3)
-	assert.Contains(t, result, database.TagInfo{Type: "genre", Tag: "Action"})
-	assert.Contains(t, result, database.TagInfo{Type: "genre", Tag: "RPG"})
-	assert.Contains(t, result, database.TagInfo{Type: "genre", Tag: "Puzzle"})
+	assert.Contains(t, result, database.TagInfo{Type: "genre", Tag: "RPG", Count: 4})
+	assert.Contains(t, result, database.TagInfo{Type: "genre", Tag: "Puzzle", Count: 2})
+	// Action appears in both systems; counts must be summed.
+	assert.Contains(t, result, database.TagInfo{Type: "genre", Tag: "Action", Count: 17})
 }
 
 func TestTagsForSystems_UnknownSystem(t *testing.T) {
@@ -121,19 +123,29 @@ func TestBuildTagCache_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag`).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "TagType", "Tag"}).
-			AddRow("nes", "genre", "Action").
-			AddRow("nes", "genre", "RPG").
-			AddRow("snes", "genre", "Action").
-			AddRow("snes", "year", "1992"))
+	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag, stc.Count`).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "TagType", "Tag", "Count"}).
+			AddRow("nes", "genre", "Action", int64(5)).
+			AddRow("nes", "genre", "RPG", int64(3)).
+			AddRow("snes", "genre", "Action", int64(2)).
+			AddRow("snes", "year", "1992", int64(1)))
 
 	cache, err := buildTagCache(context.Background(), db)
 
 	require.NoError(t, err)
-	assert.Len(t, cache.allTags, 3) // Action deduped
+	assert.Len(t, cache.allTags, 3) // Action deduped; count summed across systems
 	assert.Len(t, cache.bySystem["nes"], 2)
 	assert.Len(t, cache.bySystem["snes"], 2)
+
+	// Verify cross-system count accumulation for Action tag
+	var actionTag database.TagInfo
+	for _, ti := range cache.allTags {
+		if ti.Tag == "Action" {
+			actionTag = ti
+			break
+		}
+	}
+	assert.Equal(t, int64(7), actionTag.Count) // 5 (nes) + 2 (snes)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -143,8 +155,8 @@ func TestBuildTagCache_EmptyTable(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag`).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "TagType", "Tag"}))
+	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag, stc.Count`).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "TagType", "Tag", "Count"}))
 
 	cache, err := buildTagCache(context.Background(), db)
 
@@ -160,7 +172,7 @@ func TestBuildTagCache_QueryError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag`).
+	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag, stc.Count`).
 		WillReturnError(errors.New("connection lost"))
 
 	_, err = buildTagCache(context.Background(), db)
@@ -176,9 +188,9 @@ func TestBuildTagCache_ScanError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag`).
+	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag, stc.Count`).
 		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "TagType"}).
-			AddRow("nes", "genre")) // Missing Tag column
+			AddRow("nes", "genre")) // Missing Tag and Count columns
 
 	_, err = buildTagCache(context.Background(), db)
 

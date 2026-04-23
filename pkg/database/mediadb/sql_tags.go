@@ -125,15 +125,15 @@ func sqlInsertTagType(ctx context.Context, db *sql.DB, row database.TagType) (da
 
 func sqlFindTag(ctx context.Context, db sqlQueryable, tagType database.Tag) (database.Tag, error) {
 	var row database.Tag
+	paddedTag := tags.PadTagValue(tagType.Tag)
 	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, TypeDBID, Tag
 		from Tags
-		where DBID = ?
-		or Tag = ?
+		where (DBID = ? and TypeDBID = ?)
+		or (TypeDBID = ? and (Tag = ? or Tag = ?))
 		LIMIT 1;
 	`)
-	// TODO: Add TagType dependency when unknown tags supported
 	if err != nil {
 		return row, fmt.Errorf("failed to prepare find tag statement: %w", err)
 	}
@@ -144,7 +144,10 @@ func sqlFindTag(ctx context.Context, db sqlQueryable, tagType database.Tag) (dat
 	}()
 	err = stmt.QueryRowContext(ctx,
 		tagType.DBID,
-		tags.PadTagValue(tagType.Tag),
+		tagType.TypeDBID,
+		tagType.TypeDBID,
+		tagType.Tag,
+		paddedTag,
 	).Scan(
 		&row.DBID,
 		&row.TypeDBID,
@@ -163,7 +166,8 @@ func sqlInsertTagWithPreparedStmt(ctx context.Context, stmt *sql.Stmt, row datab
 		dbID = row.DBID
 	}
 
-	res, err := stmt.ExecContext(ctx, dbID, row.TypeDBID, row.Tag)
+	paddedTag := tags.PadTagValue(row.Tag)
+	res, err := stmt.ExecContext(ctx, dbID, row.TypeDBID, paddedTag)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute prepared insert tag statement: %w", err)
 	}
@@ -193,7 +197,8 @@ func sqlInsertTag(ctx context.Context, db *sql.DB, row database.Tag) (database.T
 		}
 	}()
 
-	res, err := stmt.ExecContext(ctx, dbID, row.TypeDBID, row.Tag)
+	paddedTag := tags.PadTagValue(row.Tag)
+	res, err := stmt.ExecContext(ctx, dbID, row.TypeDBID, paddedTag)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert tag statement: %w", err)
 	}
@@ -252,19 +257,23 @@ func sqlGetAllTagTypes(ctx context.Context, db *sql.DB) ([]database.TagType, err
 	return tagTypes, rows.Err()
 }
 
-// sqlGetAllUsedTags queries for all tags that are currently in use
-// This queries both MediaTags (file-level) and MediaTitleTags (title-level)
+// sqlGetAllUsedTags queries for all tags that are currently in use with their
+// aggregate usage counts across both MediaTags and MediaTitleTags.
 func sqlGetAllUsedTags(ctx context.Context, db *sql.DB) ([]database.TagInfo, error) {
+	// UNION ALL aggregates counts from file-level (MediaTags) and title-level
+	// (MediaTitleTags) sources; the outer GROUP BY+SUM merges them per tag.
+	// mediatags_tag_media_idx and mediatitletags_tag_idx make both GROUP BYs fast.
 	sqlQuery := `
-		SELECT DISTINCT TagTypes.Type, Tags.Tag
-		FROM TagTypes
-		JOIN Tags ON TagTypes.DBID = Tags.TypeDBID
-		WHERE Tags.DBID IN (
-			SELECT DISTINCT TagDBID FROM MediaTags
-			UNION
-			SELECT DISTINCT TagDBID FROM MediaTitleTags
-		)
-		ORDER BY TagTypes.Type, Tags.Tag`
+		SELECT tt.Type, t.Tag, SUM(cnt) AS Count
+		FROM (
+			SELECT TagDBID, COUNT(*) AS cnt FROM MediaTags GROUP BY TagDBID
+			UNION ALL
+			SELECT TagDBID, COUNT(*) AS cnt FROM MediaTitleTags GROUP BY TagDBID
+		) agg
+		JOIN Tags t ON agg.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		GROUP BY t.DBID, tt.Type, t.Tag
+		ORDER BY tt.Type, t.Tag`
 
 	stmt, err := db.PrepareContext(ctx, sqlQuery)
 	if err != nil {
@@ -289,12 +298,14 @@ func sqlGetAllUsedTags(ctx context.Context, db *sql.DB) ([]database.TagInfo, err
 	result := make([]database.TagInfo, 0, 100)
 	for rows.Next() {
 		var tagType, tag string
-		if scanErr := rows.Scan(&tagType, &tag); scanErr != nil {
+		var count int64
+		if scanErr := rows.Scan(&tagType, &tag, &count); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan all used tag result: %w", scanErr)
 		}
 		result = append(result, database.TagInfo{
-			Type: tagType,
-			Tag:  tags.UnpadTagValue(tag),
+			Type:  tagType,
+			Tag:   tags.UnpadTagValue(tag),
+			Count: count,
 		})
 	}
 

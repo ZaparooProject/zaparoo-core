@@ -70,6 +70,11 @@ func ParseGame(title string) string {
 	s = StripEditionAndVersionSuffixes(s)
 	s = strings.TrimSpace(s)
 
+	// Collapse dotted initialisms (T.V. → TV) before TrimRight strips the trailing
+	// period, leaving only one letter-period pair and defeating the {2,} threshold.
+	// Must happen here so the Roman numeral pass below doesn't see isolated "V"→"5".
+	s = CollapseDottedInitialisms(s)
+
 	// Trim trailing separators before abbreviation expansion
 	// This ensures "Bros-" → "Bros" so abbreviation matching works
 	s = strings.TrimRight(s, "-:;.,_/\\ ")

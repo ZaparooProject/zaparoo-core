@@ -242,42 +242,47 @@ func AddMediaPath(
 			tagIndex = foundTagIndex
 		}
 
-		// Dynamically create revision tags if they don't exist
-		// This allows version numbers like "v7.2502" to be stored as "rev:7-2502"
-		if tagIndex == 0 && strings.HasPrefix(tagStr, string(tags.TagTypeRev)+":") {
-			// Extract the revision value (everything after "rev:")
-			revValue := strings.TrimPrefix(tagStr, string(tags.TagTypeRev)+":")
-
-			// Get or create the Rev tag type ID dynamically
-			revTypeID, found := ss.TagTypeIDs[string(tags.TagTypeRev)]
-			if !found {
-				// Rev tag type doesn't exist in cache, try to look it up
-				existingTagType, getErr := db.FindTagType(database.TagType{Type: string(tags.TagTypeRev)})
-				if getErr != nil || existingTagType.DBID == 0 {
-					log.Error().Err(getErr).Msgf(
-						"rev tag type not found and not in cache " +
-							"(should not happen after SeedCanonicalTags)",
-					)
+		// Dynamically create open-ended string tags for rev, developer, publisher, and credit.
+		// These types allow arbitrary values (e.g. "rev:7-2502", "credit:nintendo-r-and-d1").
+		if tagIndex == 0 {
+			var dynType string
+			switch {
+			case strings.HasPrefix(tagStr, string(tags.TagTypeRev)+":"):
+				dynType = string(tags.TagTypeRev)
+			case strings.HasPrefix(tagStr, string(tags.TagTypeDeveloper)+":"):
+				dynType = string(tags.TagTypeDeveloper)
+			case strings.HasPrefix(tagStr, string(tags.TagTypePublisher)+":"):
+				dynType = string(tags.TagTypePublisher)
+			case strings.HasPrefix(tagStr, string(tags.TagTypeCredit)+":"):
+				dynType = string(tags.TagTypeCredit)
+			}
+			if dynType != "" {
+				tagValue := strings.TrimPrefix(tagStr, dynType+":")
+				typeID, found := ss.TagTypeIDs[dynType]
+				if !found {
+					existingTagType, getErr := db.FindTagType(database.TagType{Type: dynType})
+					if getErr != nil || existingTagType.DBID == 0 {
+						log.Error().Err(getErr).Msgf(
+							"%s tag type not found (should not happen after SeedCanonicalTags)", dynType)
+						continue
+					}
+					typeID = int(existingTagType.DBID)
+					ss.TagTypeIDs[dynType] = typeID
+				}
+				ss.TagsIndex++
+				tagIndex = ss.TagsIndex
+				_, insertErr := db.InsertTag(database.Tag{
+					DBID:     int64(tagIndex),
+					Tag:      tags.PadTagValue(tagValue),
+					TypeDBID: int64(typeID),
+				})
+				if insertErr != nil {
+					ss.TagsIndex--
+					log.Error().Err(insertErr).Msgf("error inserting %s tag: %s", dynType, tagValue)
 					continue
 				}
-				revTypeID = int(existingTagType.DBID)
-				ss.TagTypeIDs[string(tags.TagTypeRev)] = revTypeID
+				ss.TagIDs[tagStr] = tagIndex
 			}
-
-			// Create the new revision tag
-			ss.TagsIndex++
-			tagIndex = ss.TagsIndex
-			_, insertErr := db.InsertTag(database.Tag{
-				DBID:     int64(tagIndex),
-				Tag:      tags.PadTagValue(revValue),
-				TypeDBID: int64(revTypeID),
-			})
-			if insertErr != nil {
-				ss.TagsIndex-- // Rollback index increment on failure
-				log.Error().Err(insertErr).Msgf("error inserting revision tag: %s", revValue)
-				continue
-			}
-			ss.TagIDs[tagStr] = tagIndex
 		}
 
 		if tagIndex == 0 {
@@ -313,8 +318,8 @@ type MediaPathFragments struct {
 	Tags       []string
 }
 
-func getTagsFromFileName(filename string) []string {
-	canonicalStructs := tags.ParseFilenameToCanonicalTags(filename)
+func getTagsFromFileName(filename string, mediaType slugs.MediaType) []string {
+	canonicalStructs := tags.ParseFilenameToCanonicalTagsForMedia(filename, mediaType)
 
 	// Convert CanonicalTag structs to "type:value" format for database compatibility
 	// This matches the composite keys used in the TagIDs map
@@ -878,7 +883,7 @@ func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 
 	// Extract tags from filename only if enabled in config (default to enabled for nil config)
 	if params.Config == nil || params.Config.FilenameTags() {
-		f.Tags = getTagsFromFileName(f.FileName)
+		f.Tags = getTagsFromFileName(f.FileName, mediaType)
 	} else {
 		f.Tags = []string{}
 	}

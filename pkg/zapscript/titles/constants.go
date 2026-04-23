@@ -47,6 +47,7 @@ const (
 	StrategyPrefixMatch           = "strategy_prefix_match"
 	StrategyMainTitleOnly         = "strategy_main_title_only"
 	StrategySecondaryTitleExact   = "strategy_secondary_title_exact"
+	StrategySharedSecondaryTitle  = "strategy_shared_secondary_title"
 	StrategyTokenSignature        = "strategy_token_signature"
 	StrategyJaroWinklerDamerau    = "strategy_jarowinkler_damerau"
 	StrategyProgressiveTrim       = "strategy_progressive_trim"

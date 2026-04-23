@@ -55,6 +55,51 @@ func TestPathHasPrefixNormalized(t *testing.T) {
 	}
 }
 
+func TestLauncherMatcher_PassesSamePathToTestFunc(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	var directSeen string
+	var matcherSeen string
+
+	launcher := platforms.Launcher{
+		ID:       "GenericLauncher",
+		SystemID: "Custom",
+		Test: func(_ *config.Instance, p string) bool {
+			if directSeen == "" {
+				directSeen = p
+			} else {
+				matcherSeen = p
+			}
+			return p == `c:\roms\custom\game.rom`
+		},
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	path := `C:\ROMS\Custom\Game.rom`
+	assert.True(t, MatchSystemFile(cfg, mockPlatform, "Custom", path))
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+	assert.True(t, matcher.MatchSystemFile("Custom", path))
+
+	assert.Equal(t, directSeen, matcherSeen)
+	assert.Equal(t, `c:\roms\custom\game.rom`, matcherSeen)
+}
+
 func TestLauncherMatcher_MatchSystemFile(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	tmpDir := t.TempDir()
@@ -108,6 +153,38 @@ func TestLauncherMatcher_MatchSystemFile(t *testing.T) {
 
 	// Dot file
 	assert.False(t, matcher.MatchSystemFile("NES", "/roms/nes/.hidden.nes"))
+}
+
+func TestLauncherMatcher_RootSlashAndDotFolder(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/"})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{
+			ID:         "RootLauncher",
+			SystemID:   "ROOT",
+			Folders:    []string{"."},
+			Extensions: []string{".nes"},
+		},
+	})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+
+	assert.True(t, matcher.MatchSystemFile("ROOT", "/game.nes"))
+	assert.False(t, matcher.MatchSystemFile("ROOT", "/game.txt"))
 }
 
 func TestLauncherMatcher_EquivalentToMatchSystemFile(t *testing.T) {

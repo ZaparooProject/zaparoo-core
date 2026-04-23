@@ -189,6 +189,8 @@ func TestAutoDetector_DetectReaders_DriverNotEnabled(t *testing.T) {
 	require.NoError(t, err)
 	// Detect should not be called since driver is not enabled
 	mockReader.AssertNotCalled(t, "Detect", mock.Anything)
+	// Regression: reader must be closed even when skipped due to disabled driver.
+	mockReader.AssertCalled(t, "Close")
 }
 
 func TestAutoDetector_DetectReaders_AutoDetectDisabled(t *testing.T) {
@@ -244,6 +246,10 @@ func TestAutoDetector_DetectReaders_NoDeviceDetected(t *testing.T) {
 	err := ad.DetectReaders(mockPlatform, cfg, st, scanChan)
 
 	require.NoError(t, err)
+	// Regression: reader must be closed when Detect returns empty to prevent goroutine leak.
+	// SupportedReaders creates a new instance on every call; without Close the goroutine
+	// started by the reader's constructor runs forever.
+	mockReader.AssertCalled(t, "Close")
 	mockReader.AssertExpectations(t)
 }
 
@@ -272,6 +278,8 @@ func TestAutoDetector_DetectReaders_InvalidDetectString(t *testing.T) {
 	err := ad.DetectReaders(mockPlatform, cfg, st, scanChan)
 
 	require.NoError(t, err)
+	// Regression: reader must be closed when detect string is malformed.
+	mockReader.AssertCalled(t, "Close")
 	mockReader.AssertExpectations(t)
 }
 
@@ -406,6 +414,8 @@ func TestAutoDetector_DetectReaders_OpenError(t *testing.T) {
 	// Path should be marked as failed
 	failed := ad.getFailedPaths()
 	assert.Contains(t, failed, "/dev/ttyUSB0")
+	// Regression: reader must be closed when Open fails, not left running.
+	mockReader.AssertCalled(t, "Close")
 }
 
 func TestAutoDetector_DetectReaders_ConnectedReturnsFalse(t *testing.T) {

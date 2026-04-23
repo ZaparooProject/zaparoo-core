@@ -190,6 +190,38 @@ func TestIntegratedNewNormalizations(t *testing.T) {
 			input:    "Mario Kart 8+",
 			expected: "mariokart8plus",
 		},
+
+		// CamelCase ordinal compounds (IGDB style vs LaunchBox style)
+		{
+			name:     "beatmania_2nd_mix_spaced",
+			input:    "beatmania 2nd MIX",
+			expected: "beatmania2mix",
+		},
+		{
+			name:     "beatmania_2ndmix_camel",
+			input:    "Beatmania 2ndMix",
+			expected: "beatmania2mix",
+		},
+		{
+			name:     "ddr_3rd_mix_plus_spaced",
+			input:    "Dance Dance Revolution 3rd Mix Plus",
+			expected: "dancedancerevolution3mixplus",
+		},
+		{
+			name:     "ddr_3rdmix_plus_camel",
+			input:    "Dance Dance Revolution 3rdMix Plus",
+			expected: "dancedancerevolution3mixplus",
+		},
+		{
+			name:     "beatmania_iii_6th_mix_spaced",
+			input:    "beatmania III: Append 6th Mix",
+			expected: "beatmania3append6mix",
+		},
+		{
+			name:     "beatmania_iii_6thmix_camel",
+			input:    "Beatmania III: Append 6thMix",
+			expected: "beatmania3append6mix",
+		},
 	}
 
 	for _, tt := range tests {
@@ -282,6 +314,12 @@ func TestNormalizeOrdinalsInWords(t *testing.T) {
 			name:     "multiple_ordinals_in_words",
 			input:    "From 1st to 3rd Place",
 			expected: []string{"from", "1", "to", "3", "place"},
+		},
+		{
+			// "th" embedded in a real word — must not strip the suffix.
+			name:     "th_inside_word_no_digit",
+			input:    "500thousand",
+			expected: []string{"500thousand"},
 		},
 	}
 

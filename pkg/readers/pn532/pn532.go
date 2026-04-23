@@ -580,6 +580,10 @@ func (*Reader) Detect(connected []string) string {
 	}
 	probeStateMu.Unlock()
 
+	// TODO: The error branches for detection.DetectAll and helpers.GetSerialDeviceList
+	// are not unit-tested because both functions depend on hardware enumeration
+	// which is not injectable. Consider extracting a DeviceDetector interface to
+	// allow mock-based testing.
 	log.Trace().Msgf("PN532: ignoring paths: %v", ignorePaths)
 
 	// Try to detect PN532 devices
@@ -593,7 +597,11 @@ func (*Reader) Detect(connected []string) string {
 	defer cancel()
 	devices, err := detection.DetectAll(ctx, &opts)
 	if err != nil {
-		log.Debug().Err(err).Msg("PN532 detection returned error")
+		if errors.Is(err, detection.ErrNoDevicesFound) {
+			log.Trace().Msg("no PN532 devices found during detection")
+		} else {
+			log.Warn().Err(err).Msg("PN532 detection returned unexpected error")
+		}
 		return ""
 	}
 	if len(devices) > 0 {

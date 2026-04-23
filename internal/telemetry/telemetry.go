@@ -52,8 +52,30 @@ var (
 	// Patterns to strip usernames from file paths
 	homePathRe    = regexp.MustCompile(`(?i)/home/[^/]+/`)
 	usersPathRe   = regexp.MustCompile(`(?i)/Users/[^/]+/`)
-	windowsUserRe = regexp.MustCompile(`(?i)[a-zA-Z]:\\Users\\[^\\]+\\`)
+	windowsUserRe = regexp.MustCompile(`(?i)([a-zA-Z]:\\Users\\)[^\\]+\\`)
 )
+
+// thresholdWriter wraps a zerolog.LevelWriter and discards events below the
+// threshold level without delegating to the inner writer. This prevents the
+// Sentry zerolog hook from JSON-parsing sub-error events on every log call.
+type thresholdWriter struct {
+	inner     zerolog.LevelWriter
+	threshold zerolog.Level
+}
+
+func (w *thresholdWriter) Write(p []byte) (int, error) {
+	return w.inner.Write(p) //nolint:wrapcheck // transparent passthrough — wrapping changes error identity
+}
+
+func (w *thresholdWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
+	if level == zerolog.NoLevel || level == zerolog.Disabled {
+		return len(p), nil
+	}
+	if level < w.threshold {
+		return len(p), nil
+	}
+	return w.inner.WriteLevel(level, p) //nolint:wrapcheck // transparent passthrough — wrapping changes error identity
+}
 
 // tunnelTransport rewrites Sentry API requests to go through the tunnel.
 type tunnelTransport struct {
@@ -120,11 +142,12 @@ func Init(reportingEnabled bool, deviceID, appVersion, platformID string) error 
 		return fmt.Errorf("failed to create sentry zerolog writer: %w", err)
 	}
 
-	// Add Sentry writer alongside the existing log writer
+	// Add Sentry writer alongside the existing log writer, gated so that only
+	// error-level and above events reach the Sentry hook's JSON parser.
 	log.Logger = log.Output(zerolog.MultiLevelWriter(
 		helpers.LogWriter(),
-		sentryWriter,
-	)).With().Caller().Logger()
+		&thresholdWriter{inner: sentryWriter, threshold: zerolog.ErrorLevel},
+	))
 
 	enabled = true
 	log.Info().Msg("error reporting enabled")
@@ -191,7 +214,7 @@ func sanitizePath(path string) string {
 
 	result := homePathRe.ReplaceAllString(path, "/home/<user>/")
 	result = usersPathRe.ReplaceAllString(result, "/Users/<user>/")
-	result = windowsUserRe.ReplaceAllString(result, "C:\\Users\\<user>\\")
+	result = windowsUserRe.ReplaceAllString(result, `$1<user>\`)
 
 	return result
 }

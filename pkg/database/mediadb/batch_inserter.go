@@ -36,18 +36,17 @@ var ErrDependencyFlush = errors.New("dependency flush failed")
 
 // BatchInserter manages batched multi-row inserts for a specific table
 type BatchInserter struct {
-	ctx            context.Context
-	tx             *sql.Tx
-	cachedStmt     *sql.Stmt
-	tableName      string
-	columns        []string
-	buffer         []any
-	dependencies   []*BatchInserter
-	batchSize      int
-	columnCount    int
-	currentCount   int
-	cachedRowCount int
-	orIgnore       bool
+	ctx          context.Context
+	tx           *sql.Tx
+	stmtCache    map[int]*sql.Stmt // prepared statements keyed by row count for reuse
+	tableName    string
+	columns      []string
+	buffer       []any
+	dependencies []*BatchInserter
+	batchSize    int
+	columnCount  int
+	currentCount int
+	orIgnore     bool
 }
 
 // NewBatchInserter creates a batch inserter for the given table
@@ -93,6 +92,7 @@ func NewBatchInserterWithOptions(
 		buffer:       make([]any, 0, batchSize*len(columns)),
 		currentCount: 0,
 		orIgnore:     orIgnore,
+		stmtCache:    make(map[int]*sql.Stmt),
 	}, nil
 }
 
@@ -148,18 +148,22 @@ func (b *BatchInserter) Flush() error {
 		}
 	}
 
-	// Reuse cached statement for full-batch flushes (the common case)
-	if b.currentCount == b.cachedRowCount && b.cachedStmt != nil {
-		_, err := b.cachedStmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
-		b.buffer = b.buffer[:0]
-		b.currentCount = 0
-		if err != nil {
-			return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
+	cacheStmt := b.currentCount == b.batchSize
+
+	// Reuse cached statement for the steady-state full batch size when available
+	if cacheStmt {
+		if stmt, ok := b.stmtCache[b.currentCount]; ok {
+			_, err := stmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
+			b.buffer = b.buffer[:0]
+			b.currentCount = 0
+			if err != nil {
+				return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
+			}
+			return nil
 		}
-		return nil
 	}
 
-	// Generate and prepare statement for this batch size
+	// Generate and prepare statement for this batch size.
 	sqlStmt := b.generateMultiRowInsertSQL(b.currentCount)
 	stmt, err := b.tx.PrepareContext(b.ctx, sqlStmt)
 	if err != nil {
@@ -173,15 +177,12 @@ func (b *BatchInserter) Flush() error {
 		}
 		return fmt.Errorf("failed to prepare batch insert: %w", err)
 	}
-
-	// Cache the statement if this is a full batch
-	if b.currentCount == b.batchSize {
-		b.cachedStmt = stmt
-		b.cachedRowCount = b.currentCount
+	if cacheStmt {
+		b.stmtCache[b.currentCount] = stmt
 	} else {
 		defer func() {
 			if closeErr := stmt.Close(); closeErr != nil {
-				log.Warn().Err(closeErr).Msg("failed to close batch insert statement")
+				log.Warn().Err(closeErr).Str("table", b.tableName).Msg("failed to close ad-hoc batch statement")
 			}
 		}()
 	}
@@ -312,16 +313,26 @@ func (b *BatchInserter) flushSingleRow() error {
 	return nil
 }
 
-// Close flushes remaining items and closes cached statements
+// Close flushes remaining items and closes all cached statements
 func (b *BatchInserter) Close() error {
-	err := b.Flush()
-	if b.cachedStmt != nil {
-		if closeErr := b.cachedStmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Str("table", b.tableName).Msg("failed to close cached batch statement")
+	flushErr := b.Flush()
+	var firstCloseErr error
+	for rowCount, stmt := range b.stmtCache {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).
+				Str("table", b.tableName).
+				Int("rows", rowCount).
+				Msg("failed to close cached batch statement")
+			if firstCloseErr == nil {
+				firstCloseErr = closeErr
+			}
 		}
-		b.cachedStmt = nil
 	}
-	return err
+	b.stmtCache = nil
+	if flushErr != nil {
+		return flushErr
+	}
+	return firstCloseErr
 }
 
 // generateMultiRowInsertSQL creates a multi-row INSERT statement

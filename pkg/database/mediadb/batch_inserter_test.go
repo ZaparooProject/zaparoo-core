@@ -150,6 +150,39 @@ func TestBatchInserter_EmptyFlush(t *testing.T) {
 	assert.Equal(t, 0, count)
 }
 
+func TestBatchInserter_CachesOnlyFullBatchStatements(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+
+	_, err = db.ExecContext(ctx,
+		`CREATE TABLE test_table (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, value INTEGER)`)
+	require.NoError(t, err)
+
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	bi, err := NewBatchInserter(ctx, tx, "test_table", []string{"name", "value"}, 3)
+	require.NoError(t, err)
+
+	require.NoError(t, bi.Add("a", 1))
+	require.NoError(t, bi.Add("b", 2))
+	require.NoError(t, bi.Flush())
+	assert.Empty(t, bi.stmtCache, "partial flush should not keep an ad-hoc prepared statement cached")
+
+	require.NoError(t, bi.Add("c", 3))
+	require.NoError(t, bi.Add("d", 4))
+	require.NoError(t, bi.Add("e", 5))
+	assert.Len(t, bi.stmtCache, 1, "full-size flush should cache the reusable prepared statement")
+	assert.Contains(t, bi.stmtCache, 3)
+
+	require.NoError(t, bi.Close())
+	require.NoError(t, tx.Commit())
+}
+
 func TestBatchInserter_InvalidColumnCount(t *testing.T) {
 	// Setup in-memory database
 	db, err := sql.Open("sqlite3", ":memory:")

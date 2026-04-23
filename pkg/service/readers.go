@@ -111,7 +111,16 @@ func connectReaders(
 	for _, device := range validToConnect {
 		if !isPathConnected(st.ListReaders(), device.device.Path) {
 			rt := readers.NormalizeDriverID(device.device.Driver)
+			// SupportedReaders creates new instances; close every reader we don't keep.
+			connected := false
 			for _, r := range pl.SupportedReaders(cfg) {
+				if connected {
+					if closeErr := r.Close(); closeErr != nil {
+						log.Debug().Err(closeErr).Msg("error closing unused reader")
+					}
+					continue
+				}
+
 				metadata := r.Metadata()
 				driver := config.DriverInfo{
 					ID:                metadata.ID,
@@ -122,6 +131,9 @@ func connectReaders(
 				// For user-defined connect entries, driver is implicitly enabled
 				// unless explicitly disabled in config.
 				if !cfg.IsDriverEnabledForConnect(driver) {
+					if closeErr := r.Close(); closeErr != nil {
+						log.Debug().Err(closeErr).Msg("error closing unused reader")
+					}
 					continue
 				}
 
@@ -131,17 +143,25 @@ func connectReaders(
 				for i, id := range ids {
 					normalizedIDs[i] = readers.NormalizeDriverID(id)
 				}
-				if helpers.Contains(normalizedIDs, rt) {
-					log.Debug().Msgf("connecting to reader: %s", device.connectionString)
-					err := r.Open(device.device, iq, readers.OpenOpts{})
-					if err != nil {
-						log.Warn().Msgf("error opening reader: %s", err)
-						continue
+				if !helpers.Contains(normalizedIDs, rt) {
+					if closeErr := r.Close(); closeErr != nil {
+						log.Debug().Err(closeErr).Msg("error closing unused reader")
 					}
-					st.SetReader(r)
-					log.Info().Msgf("opened reader: %s", device.connectionString)
-					break
+					continue
 				}
+
+				log.Debug().Msgf("connecting to reader: %s", device.connectionString)
+				err := r.Open(device.device, iq, readers.OpenOpts{})
+				if err != nil {
+					log.Warn().Msgf("error opening reader: %s", err)
+					if closeErr := r.Close(); closeErr != nil {
+						log.Debug().Err(closeErr).Msg("error closing reader after failed open")
+					}
+					continue
+				}
+				st.SetReader(r)
+				log.Info().Msgf("opened reader: %s", device.connectionString)
+				connected = true
 			}
 		}
 	}
