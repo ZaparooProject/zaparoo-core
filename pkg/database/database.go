@@ -22,6 +22,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -175,8 +176,9 @@ type SearchResult struct {
 }
 
 type TagInfo struct {
-	Tag  string `json:"tag"`
-	Type string `json:"type"`
+	Tag   string `json:"tag"`
+	Type  string `json:"type"`
+	Count int64  `json:"count,omitempty"`
 }
 
 // GroupTagFiltersByOperator groups tag filters by operator type for consistent processing.
@@ -236,24 +238,27 @@ type SearchResultWithCursor struct {
 
 // ZapScriptTagTypes defines which tag types are eligible for inclusion in ZapScript
 // title commands. Only these types are considered when checking for disambiguation.
-var ZapScriptTagTypes = []string{"year", "players"}
+var ZapScriptTagTypes = []string{"year", "players", "rev", "developer", "publisher", "credit", "edition", "release"}
 
 // BuildTitleZapScript builds a ZapScript title command string from a system ID,
-// media name, and disambiguating tags. Format: @SystemID/Name (year:YYYY) (players:N)
+// media name, and disambiguating tags. Format: @SystemID/Name (year:YYYY) (type:value)
 // Only includes tags that are present in the provided slice.
 func BuildTitleZapScript(systemID, name string, tags []TagInfo) string {
-	s := "@" + systemID + "/" + name
+	var sb strings.Builder
+	_, _ = sb.WriteString("@" + systemID + "/" + name)
 	for _, tag := range tags {
-		switch tag.Type {
-		case "year":
-			if len(tag.Tag) == 4 {
-				s += " (year:" + tag.Tag + ")"
-			}
-		case "players":
-			s += " (players:" + tag.Tag + ")"
+		if tag.Tag == "" {
+			continue
 		}
+		if tag.Type == "year" {
+			if len(tag.Tag) == 4 {
+				_, _ = sb.WriteString(" (year:" + tag.Tag + ")")
+			}
+			continue
+		}
+		_, _ = sb.WriteString(" (" + tag.Type + ":" + tag.Tag + ")")
 	}
-	return s
+	return sb.String()
 }
 
 // ZapScript returns the ZapScript title command string for this search result.

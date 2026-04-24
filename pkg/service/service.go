@@ -207,12 +207,15 @@ func Start(
 	log.Info().Msgf("boot session UUID: %s", bootUUID)
 
 	player := audio.NewMalgoPlayer()
+	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
 
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
 
-	// Create and start notification broker to broadcast to all consumers
-	notifBroker := broker.NewBroker(st.GetContext(), ns)
+	// Create and start notification broker to broadcast to all consumers.
+	// media.indexing is coalesceable: bursts during index/resume collapse to
+	// latest-wins so slow WebSocket consumers don't drop discrete events.
+	notifBroker := broker.NewBroker(st.GetContext(), ns, models.NotificationMediaIndexing)
 	notifBroker.Start()
 
 	// TODO: convert this to a *token channel
@@ -647,7 +650,7 @@ func startPublishers(
 		log.Info().Msgf("starting PixelCade publisher: %s:%d", pcCfg.Host, pcCfg.Port)
 
 		publisher := publishers.NewPixelCadePublisher(
-			pcCfg.Host, pcCfg.Port, pcCfg.Mode, pcCfg.OnStop, pcCfg.Filter,
+			pcCfg.Host, pcCfg.Port, pcCfg.Mode, pcCfg.Filter,
 		)
 		if err := publisher.Start(st.GetContext()); err != nil {
 			log.Error().Err(err).Msgf("failed to start PixelCade publisher for %s", pcCfg.Host)

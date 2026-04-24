@@ -359,11 +359,11 @@ func TestSpecificTagTypeRules(t *testing.T) {
 		tags := CanonicalTagDefinitions[TagTypeRegion]
 
 		for _, tag := range tags {
-			// Should be 2-5 characters (ISO country codes or special like "world")
+			// Should be 2-12 characters (ISO country codes or multi-country regions like "world", "scandinavia")
 			assert.GreaterOrEqual(t, len(tag), 2,
 				"Region code should be at least 2 characters: %s", tag)
-			assert.LessOrEqual(t, len(tag), 5,
-				"Region code should not exceed 5 characters: %s", tag)
+			assert.LessOrEqual(t, len(tag), 12,
+				"Region code should not exceed 12 characters: %s", tag)
 		}
 	})
 }

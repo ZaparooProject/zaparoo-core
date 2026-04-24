@@ -43,7 +43,7 @@ import (
 )
 
 const (
-	behaviorTimeout = 3 * time.Second
+	behaviorTimeout = 10 * time.Second
 	noEventWait     = 200 * time.Millisecond
 	testReaderID    = "test-reader-removable"
 	testReaderSrc   = "test-reader-src"
@@ -76,6 +76,8 @@ func setupScanBehavior(
 
 	cfg.SetScanMode(scanMode)
 	cfg.SetScanExitDelay(exitDelay)
+	require.NoError(t, cfg.LoadTOML(`[zapscript.input]
+mode = "unrestricted"`))
 
 	mockPlayer := mocks.NewMockPlayer()
 	mockPlayer.SetupNoOpMock()

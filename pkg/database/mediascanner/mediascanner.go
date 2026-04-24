@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -386,11 +387,29 @@ func GetFiles(
 		}
 
 		if d.IsDir() {
+			dirName := filepath.Base(p)
+			// Skip macOS metadata directories and hidden directories.
+			// __MACOSX contains Apple resource fork files that are not
+			// real archives. Dot-prefixed directories are OS metadata
+			// that never contain game ROMs. The walk root is exempt so
+			// that a user-configured dot-prefixed folder still works.
+			if p != path && (dirName == "__MACOSX" || dirName[0] == '.') {
+				return filepath.SkipDir
+			}
+
 			markerPath := filepath.Join(p, ".zaparooignore")
 			if _, statErr := statWithContext(ctx, markerPath); statErr == nil {
 				log.Info().Str("path", p).Msg("skipping directory with .zaparooignore marker")
 				return filepath.SkipDir
 			}
+			return nil
+		}
+
+		// Skip macOS AppleDouble resource fork files before the zip
+		// check — they carry valid-looking extensions (.zip etc.) but
+		// are not real archives.
+		baseName := filepath.Base(p)
+		if len(baseName) >= 2 && baseName[0] == '.' && baseName[1] == '_' {
 			return nil
 		}
 
@@ -441,13 +460,25 @@ func GetFiles(
 			Msg("directory walk found entries but no files matched any launcher")
 	}
 
-	if walkElapsed > 15*time.Second {
-		log.Warn().
-			Str("system", systemID).
-			Str("path", path).
-			Int64("entriesScanned", scanned).
-			Dur("elapsed", walkElapsed).
-			Msg("directory walk took longer than expected - large directory or slow storage")
+	// Warn when the walk rate is slow rather than when absolute elapsed
+	// time is high. A 33K-entry directory legitimately takes ~19s on
+	// MiSTer ARM + USB 2.0; only warn when the filesystem is genuinely
+	// sluggish (< 500 entries/sec sustained over at least 5 seconds).
+	const (
+		minSlowWalkElapsed = 5 * time.Second
+		minEntriesPerSec   = 500.0
+	)
+	if walkElapsed > minSlowWalkElapsed && scanned > 0 {
+		rate := float64(scanned) / walkElapsed.Seconds()
+		if rate < minEntriesPerSec {
+			log.Warn().
+				Str("system", systemID).
+				Str("path", path).
+				Int64("entriesScanned", scanned).
+				Dur("elapsed", walkElapsed).
+				Float64("entriesPerSec", rate).
+				Msg("directory walk is slow - possible stale mount or degraded storage")
+		}
 	}
 
 	return results, nil
@@ -475,8 +506,10 @@ func handleCancellationWithRollback(ctx context.Context, db database.MediaDBI, m
 }
 
 const (
-	PhaseDiscovering  = "discovering"
-	PhaseInitializing = "initializing"
+	PhaseDiscovering     = "discovering"
+	PhaseInitializing    = "initializing"
+	PhaseCreatingIndexes = "creating_indexes"
+	PhaseBuildingCaches  = "building_caches"
 )
 
 type IndexStatus struct {
@@ -507,6 +540,12 @@ func NewNamesIndex(
 ) (int, error) {
 	db := fdb.MediaDB
 	indexStartTime := time.Now()
+
+	// Activate the NormalizeTag cache for the duration of this indexing run.
+	// The bracket vocabulary is small (~200–400 unique strings), so the cache
+	// stabilises early and collapses the repeated regex cost across 100k+ files.
+	tags.SetNormalizeTagCache(make(map[string]string))
+	defer tags.SetNormalizeTagCache(nil)
 
 	// Temporarily increase SQLite cache to 32MB for bulk indexing
 	db.SetIndexingCacheSize(true)
@@ -653,21 +692,6 @@ func NewNamesIndex(
 		return 0, fmt.Errorf("failed to populate scan state: %w", err)
 	}
 
-	// Reset IsMissing flags for all systems being indexed — anything not
-	// re-found during this run will be marked missing at the end
-	systemDBIDs := make([]int, 0, len(currentSystemIDs))
-	for _, sysID := range currentSystemIDs {
-		if dbid, ok := scanState.SystemIDs[sysID]; ok {
-			systemDBIDs = append(systemDBIDs, dbid)
-		}
-	}
-	if len(systemDBIDs) > 0 {
-		if resetErr := db.ResetMissingFlags(systemDBIDs); resetErr != nil {
-			return 0, fmt.Errorf("failed to reset missing flags: %w", resetErr)
-		}
-		log.Info().Int("systems", len(systemDBIDs)).Msg("reset IsMissing flags for indexed systems")
-	}
-
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
 		log.Error().Err(setErr).Msg("failed to set indexing status to running")
 	}
@@ -753,6 +777,24 @@ func NewNamesIndex(
 		}
 	}
 
+	// Reset IsMissing flags only for systems that will actually be processed in
+	// this run. On resume, skipped systems must keep their persisted markers.
+	processableSystemDBIDs := make([]int, 0, len(sortedSystems))
+	for _, sys := range sortedSystems {
+		if completedSystems[sys.ID] {
+			continue
+		}
+		if dbid, ok := scanState.SystemIDs[sys.ID]; ok {
+			processableSystemDBIDs = append(processableSystemDBIDs, dbid)
+		}
+	}
+	if len(processableSystemDBIDs) > 0 {
+		if resetErr := db.ResetMissingFlags(processableSystemDBIDs); resetErr != nil {
+			return 0, fmt.Errorf("failed to reset missing flags: %w", resetErr)
+		}
+		log.Info().Int("systems", len(processableSystemDBIDs)).Msg("reset IsMissing flags for indexed systems")
+	}
+
 	// Batch tracking variables for adaptive transaction management
 	filesInBatch := 0
 	systemsInBatch := 0
@@ -789,7 +831,7 @@ func NewNamesIndex(
 			continue
 		}
 
-		// Load existing data for this system — always persistent
+		// Load existing data for this system — always persistent.
 		if loadErr := PopulatePersistentScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
 			if errors.Is(loadErr, context.Canceled) {
 				return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
@@ -1084,34 +1126,52 @@ func NewNamesIndex(
 			Int("missingCount", len(scanState.MissingMedia)).
 			Msg("marking missing media")
 		if missErr := db.BulkSetMediaMissing(scanState.MissingMedia); missErr != nil {
-			log.Error().Err(missErr).Msg("failed to mark missing media")
+			return 0, fmt.Errorf("failed to mark missing media: %w", missErr)
 		}
 	}
 	scanState.MissingMedia = nil
+	status.Phase = PhaseCreatingIndexes
+	update(status)
 
 	// Rebuild all secondary indexes before marking indexing as complete.
 	// This ensures the database is fully searchable when indexing finishes.
+	t0 := time.Now()
 	if idxErr := db.CreateSecondaryIndexes(); idxErr != nil {
 		log.Error().Err(idxErr).Msg("failed to create secondary indexes")
 	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("CreateSecondaryIndexes complete")
 
-	// Populate caches before marking complete. These must run synchronously
-	// so searches return correct results the moment indexing finishes.
-	if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
-		log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
-	}
-	if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
-		log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
-	}
-	if cacheErr := db.RebuildTagCache(); cacheErr != nil {
-		log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
-	}
-
-	// Mark database as complete and ready for use
+	// Mark database as complete and ready for use. UpdateLastGenerated clears
+	// SystemTagsCache and SlugResolutionCache via invalidateCaches, so cache
+	// population must happen after this call.
 	err = db.UpdateLastGenerated()
 	if err != nil {
 		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
 	}
+
+	status.Phase = PhaseBuildingCaches
+	update(status)
+
+	// Populate caches after UpdateLastGenerated. These run synchronously so
+	// searches return correct results the moment indexing finishes, and the
+	// populated SystemTagsCache persists across service restarts.
+	t0 = time.Now()
+	if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
+	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
+
+	t0 = time.Now()
+	if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
+	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
+
+	t0 = time.Now()
+	if cacheErr := db.RebuildTagCache(); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
+	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
 
 	// Mark indexing as completed and clear indexing metadata
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {

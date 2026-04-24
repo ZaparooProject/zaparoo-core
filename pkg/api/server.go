@@ -104,11 +104,7 @@ func makeJSONRPCError(code int, message string) models.ErrorObject {
 
 // logSafeRequest logs a request but avoids logging sensitive or large content
 func logSafeRequest(req *models.RequestObject) {
-	if req.Method == models.MethodSettingsLogsDownload {
-		log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received logs download request")
-	} else {
-		log.Debug().Interface("request", req).Msg("received request")
-	}
+	log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received request")
 }
 
 // logSafeResponse logs a response but truncates large content to prevent recursive logging issues
@@ -838,7 +834,7 @@ func processRequestObject(
 		if req.ID.IsAbsent() {
 			// Missing ID = notification per JSON-RPC 2.0 spec
 			// Server MUST NOT reply to notifications
-			log.Info().Interface("req", req).Msg("received notification, ignoring")
+			log.Info().Str("method", req.Method).Msg("received notification, ignoring")
 			return requestResult{ShouldReply: false}
 		}
 
@@ -1546,11 +1542,22 @@ func Start(
 		r.Post("/api", postHandler)
 		r.Post("/api/v0", postHandler)
 		r.Post("/api/v0.1", postHandler)
+	})
 
-		// REST action endpoints
-		r.Get("/l/*", methods.HandleRunRest(cfg, st, inTokenQueue)) // DEPRECATED
-		r.Get("/r/*", methods.HandleRunRest(cfg, st, inTokenQueue))
-		r.Get("/run/*", methods.HandleRunRest(cfg, st, inTokenQueue))
+	// REST run endpoints — allow_run bypasses IP filter when configured,
+	// since the handler validates content against the allow_run patterns.
+	runIPFilter := apimiddleware.RunIPFilterMiddleware(cfg.AllowedIPs, cfg.HasAllowRun)
+	r.Group(func(r chi.Router) {
+		r.Use(runIPFilter)
+		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		r.Use(apiRateLimitMiddleware)
+		r.Use(middleware.NoCache)
+		r.Use(middleware.Timeout(config.APIRequestTimeout))
+
+		runHandler := methods.HandleRunRest(cfg, st, inTokenQueue)
+		r.Get("/l/*", runHandler) // DEPRECATED
+		r.Get("/r/*", runHandler)
+		r.Get("/run/*", runHandler)
 	})
 
 	// SSE routes (long-lived connections, no request timeout). Same

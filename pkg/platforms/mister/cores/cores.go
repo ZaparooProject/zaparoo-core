@@ -815,7 +815,7 @@ var Systems = map[string]Core{
 				Label: "Disk",
 				Exts:  []string{".cue", ".chd"},
 				Mgl: &MGLParams{
-					Delay:  1,
+					Delay:  2,
 					Method: "s",
 					Index:  0,
 				},

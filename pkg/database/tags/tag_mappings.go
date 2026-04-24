@@ -53,28 +53,35 @@ var allTagMappings = map[string][]CanonicalTag{
 	// language tags as there's no single predominant language.
 
 	// No-Intro style regions (full names)
-	"world":       {{Type: TagTypeRegion, Value: TagRegionWorld}},
-	"europe":      {{Type: TagTypeRegion, Value: TagRegionEU}},
-	"asia":        {{Type: TagTypeRegion, Value: TagRegionAsia}},
-	"australia":   {{Type: TagTypeRegion, Value: TagRegionAU}, {Type: TagTypeLang, Value: TagLangEN}},
-	"brazil":      {{Type: TagTypeRegion, Value: TagRegionBR}, {Type: TagTypeLang, Value: TagLangPT}},
-	"canada":      {{Type: TagTypeRegion, Value: TagRegionCA}, {Type: TagTypeLang, Value: TagLangEN}},
-	"china":       {{Type: TagTypeRegion, Value: TagRegionCN}, {Type: TagTypeLang, Value: TagLangZH}},
-	"france":      {{Type: TagTypeRegion, Value: TagRegionFR}, {Type: TagTypeLang, Value: TagLangFR}},
-	"germany":     {{Type: TagTypeRegion, Value: TagRegionDE}, {Type: TagTypeLang, Value: TagLangDE}},
-	"hong-kong":   {{Type: TagTypeRegion, Value: TagRegionHK}}, // Multilingual: Chinese/English
-	"italy":       {{Type: TagTypeRegion, Value: TagRegionIT}, {Type: TagTypeLang, Value: TagLangIT}},
-	"japan":       {{Type: TagTypeRegion, Value: TagRegionJP}, {Type: TagTypeLang, Value: TagLangJA}},
-	"korea":       {{Type: TagTypeRegion, Value: TagRegionKR}, {Type: TagTypeLang, Value: TagLangKO}},
-	"netherlands": {{Type: TagTypeRegion, Value: TagRegionNL}, {Type: TagTypeLang, Value: TagLangNL}},
-	"spain":       {{Type: TagTypeRegion, Value: TagRegionES}, {Type: TagTypeLang, Value: TagLangES}},
-	"sweden":      {{Type: TagTypeRegion, Value: TagRegionSE}, {Type: TagTypeLang, Value: TagLangSV}},
-	"usa":         {{Type: TagTypeRegion, Value: TagRegionUS}, {Type: TagTypeLang, Value: TagLangEN}},
-	"poland":      {{Type: TagTypeRegion, Value: TagRegionPL}, {Type: TagTypeLang, Value: TagLangPL}},
-	"finland":     {{Type: TagTypeRegion, Value: TagRegionFI}, {Type: TagTypeLang, Value: TagLangFI}},
-	"denmark":     {{Type: TagTypeRegion, Value: TagRegionDK}, {Type: TagTypeLang, Value: TagLangDA}},
-	"portugal":    {{Type: TagTypeRegion, Value: TagRegionPT}, {Type: TagTypeLang, Value: TagLangPT}},
-	"norway":      {{Type: TagTypeRegion, Value: TagRegionNO}, {Type: TagTypeLang, Value: TagLangNO}},
+	"world":          {{Type: TagTypeRegion, Value: TagRegionWorld}},
+	"europe":         {{Type: TagTypeRegion, Value: TagRegionEU}},
+	"asia":           {{Type: TagTypeRegion, Value: TagRegionAsia}},
+	"australia":      {{Type: TagTypeRegion, Value: TagRegionAU}, {Type: TagTypeLang, Value: TagLangEN}},
+	"brazil":         {{Type: TagTypeRegion, Value: TagRegionBR}, {Type: TagTypeLang, Value: TagLangPT}},
+	"canada":         {{Type: TagTypeRegion, Value: TagRegionCA}, {Type: TagTypeLang, Value: TagLangEN}},
+	"china":          {{Type: TagTypeRegion, Value: TagRegionCN}, {Type: TagTypeLang, Value: TagLangZH}},
+	"france":         {{Type: TagTypeRegion, Value: TagRegionFR}, {Type: TagTypeLang, Value: TagLangFR}},
+	"germany":        {{Type: TagTypeRegion, Value: TagRegionDE}, {Type: TagTypeLang, Value: TagLangDE}},
+	"hong-kong":      {{Type: TagTypeRegion, Value: TagRegionHK}}, // Multilingual: Chinese/English
+	"italy":          {{Type: TagTypeRegion, Value: TagRegionIT}, {Type: TagTypeLang, Value: TagLangIT}},
+	"japan":          {{Type: TagTypeRegion, Value: TagRegionJP}, {Type: TagTypeLang, Value: TagLangJA}},
+	"korea":          {{Type: TagTypeRegion, Value: TagRegionKR}, {Type: TagTypeLang, Value: TagLangKO}},
+	"netherlands":    {{Type: TagTypeRegion, Value: TagRegionNL}, {Type: TagTypeLang, Value: TagLangNL}},
+	"spain":          {{Type: TagTypeRegion, Value: TagRegionES}, {Type: TagTypeLang, Value: TagLangES}},
+	"sweden":         {{Type: TagTypeRegion, Value: TagRegionSE}, {Type: TagTypeLang, Value: TagLangSV}},
+	"usa":            {{Type: TagTypeRegion, Value: TagRegionUS}, {Type: TagTypeLang, Value: TagLangEN}},
+	"poland":         {{Type: TagTypeRegion, Value: TagRegionPL}, {Type: TagTypeLang, Value: TagLangPL}},
+	"finland":        {{Type: TagTypeRegion, Value: TagRegionFI}, {Type: TagTypeLang, Value: TagLangFI}},
+	"denmark":        {{Type: TagTypeRegion, Value: TagRegionDK}, {Type: TagTypeLang, Value: TagLangDA}},
+	"portugal":       {{Type: TagTypeRegion, Value: TagRegionPT}, {Type: TagTypeLang, Value: TagLangPT}},
+	"norway":         {{Type: TagTypeRegion, Value: TagRegionNO}, {Type: TagTypeLang, Value: TagLangNO}},
+	"russia":         {{Type: TagTypeRegion, Value: TagRegionRU}, {Type: TagTypeLang, Value: TagLangRU}},
+	"taiwan":         {{Type: TagTypeRegion, Value: TagRegionTW}, {Type: TagTypeLang, Value: TagLangZH}},
+	"argentina":      {{Type: TagTypeRegion, Value: TagRegionAR}, {Type: TagTypeLang, Value: TagLangES}},
+	"mexico":         {{Type: TagTypeRegion, Value: TagRegionMX}, {Type: TagTypeLang, Value: TagLangES}},
+	"scandinavia":    {{Type: TagTypeRegion, Value: TagRegionScandinavia}}, // multi-country region, no single lang
+	"united-kingdom": {{Type: TagTypeRegion, Value: TagRegionGB}, {Type: TagTypeLang, Value: TagLangEN}},
+	"uk":             {{Type: TagTypeRegion, Value: TagRegionGB}, {Type: TagTypeLang, Value: TagLangEN}},
 
 	// TOSEC style regions (country codes)
 	"ae": {{Type: TagTypeRegion, Value: TagRegionAE}, {Type: TagTypeLang, Value: TagLangAR}}, // United Arab Emirates
@@ -200,31 +207,37 @@ var allTagMappings = map[string][]CanonicalTag{
 	// ============================================================================
 	// DEVELOPMENT STATUS MAPPINGS
 	// ============================================================================
-	"alpha":          {{Type: TagTypeUnfinished, Value: TagUnfinishedAlpha}},
-	"beta":           {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta}},
-	"beta-1":         {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta1}},
-	"beta-2":         {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta2}},
-	"beta-3":         {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta3}},
-	"beta-4":         {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta4}},
-	"beta-5":         {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta5}},
-	"preview":        {{Type: TagTypeUnfinished, Value: TagUnfinishedPreview}},
-	"pre-release":    {{Type: TagTypeUnfinished, Value: TagUnfinishedPrerelease}},
-	"proto":          {{Type: TagTypeUnfinished, Value: TagUnfinishedProto}},
-	"proto-1":        {{Type: TagTypeUnfinished, Value: TagUnfinishedProto1}},
-	"proto-2":        {{Type: TagTypeUnfinished, Value: TagUnfinishedProto2}},
-	"proto-3":        {{Type: TagTypeUnfinished, Value: TagUnfinishedProto3}},
-	"proto-4":        {{Type: TagTypeUnfinished, Value: TagUnfinishedProto4}},
-	"sample":         {{Type: TagTypeUnfinished, Value: TagUnfinishedSample}},
-	"demo":           {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo}},
-	"demo-1":         {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo1}},
-	"demo-2":         {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo2}},
-	"demo-auto":      {{Type: TagTypeUnfinished, Value: TagUnfinishedDemoAuto}},
-	"demo-kiosk":     {{Type: TagTypeUnfinished, Value: TagUnfinishedDemoKiosk}},
-	"demo-playable":  {{Type: TagTypeUnfinished, Value: TagUnfinishedDemoPlayable}},
-	"demo-rolling":   {{Type: TagTypeUnfinished, Value: TagUnfinishedDemoRolling}},
-	"demo-slideshow": {{Type: TagTypeUnfinished, Value: TagUnfinishedDemoSlideshow}},
-	"debug":          {{Type: TagTypeUnfinished, Value: TagUnfinishedDebug}},
-	"competition":    {{Type: TagTypeUnfinished, Value: TagUnfinishedCompetition}},
+	"alpha":                {{Type: TagTypeUnfinished, Value: TagUnfinishedAlpha}},
+	"beta":                 {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta}},
+	"beta-1":               {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta1}},
+	"beta-2":               {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta2}},
+	"beta-3":               {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta3}},
+	"beta-4":               {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta4}},
+	"beta-5":               {{Type: TagTypeUnfinished, Value: TagUnfinishedBeta5}},
+	"preview":              {{Type: TagTypeUnfinished, Value: TagUnfinishedPreview}},
+	"pre-release":          {{Type: TagTypeUnfinished, Value: TagUnfinishedPrerelease}},
+	"proto":                {{Type: TagTypeUnfinished, Value: TagUnfinishedProto}},
+	"prototype":            {{Type: TagTypeUnfinished, Value: TagUnfinishedProto}},
+	"engineering-sample":   {{Type: TagTypeUnfinished, Value: TagUnfinishedProto}},
+	"proto-1":              {{Type: TagTypeUnfinished, Value: TagUnfinishedProto1}},
+	"proto-2":              {{Type: TagTypeUnfinished, Value: TagUnfinishedProto2}},
+	"proto-3":              {{Type: TagTypeUnfinished, Value: TagUnfinishedProto3}},
+	"proto-4":              {{Type: TagTypeUnfinished, Value: TagUnfinishedProto4}},
+	"sample":               {{Type: TagTypeUnfinished, Value: TagUnfinishedSample}},
+	"demo":                 {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo}},
+	"playable-demo":        {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo}},
+	"taikenban-sample-rom": {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo}},
+	"location-test":        {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo}},
+	"demo-1":               {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo1}},
+	"demo-2":               {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo2}},
+	"demo-auto":            {{Type: TagTypeUnfinished, Value: TagUnfinishedDemoAuto}},
+	"demo-kiosk":           {{Type: TagTypeUnfinished, Value: TagUnfinishedDemoKiosk}},
+	"demo-playable":        {{Type: TagTypeUnfinished, Value: TagUnfinishedDemoPlayable}},
+	"demo-rolling":         {{Type: TagTypeUnfinished, Value: TagUnfinishedDemoRolling}},
+	"demo-slideshow":       {{Type: TagTypeUnfinished, Value: TagUnfinishedDemoSlideshow}},
+	"debug":                {{Type: TagTypeUnfinished, Value: TagUnfinishedDebug}},
+	"competition":          {{Type: TagTypeUnfinished, Value: TagUnfinishedCompetition}},
+	"final":                {{Type: TagTypeUnfinished, Value: TagUnfinishedFinal}},
 
 	// ============================================================================
 	// VERSION/REVISION MAPPINGS
@@ -259,7 +272,8 @@ var allTagMappings = map[string][]CanonicalTag{
 	// ============================================================================
 	// UNLICENSED/PIRATE MAPPINGS
 	// ============================================================================
-	"pirate": {{Type: TagTypeUnlicensed, Value: TagUnlicensedPirate}}, // Pirate/unauthorized release
+	"pirate":  {{Type: TagTypeUnlicensed, Value: TagUnlicensedPirate}},  // Pirate/unauthorized release
+	"bootleg": {{Type: TagTypeUnlicensed, Value: TagUnlicensedBootleg}}, // Bootleg/counterfeit hardware copy
 
 	// ============================================================================
 	// ALTERNATE VERSION MAPPINGS
@@ -331,6 +345,20 @@ var allTagMappings = map[string][]CanonicalTag{
 	// ============================================================================
 	// TOSEC SYSTEM-SPECIFIC MAPPINGS
 	// ============================================================================
+	// Nintendo handheld compatibility
+	"gbc":           {{Type: TagTypeCompatibility, Value: TagCompatibilityGameboyColor}},
+	"dsi":           {{Type: TagTypeCompatibility, Value: TagCompatibilityDSi}},
+	"gb-compatible": {{Type: TagTypeCompatibility, Value: TagCompatibilityGameboy}},
+	"sgb-enhanced":  {{Type: TagTypeCompatibility, Value: TagCompatibilityGameboySGB}},
+	"sg-enhanced":   {{Type: TagTypeCompatibility, Value: TagCompatibilityPCEngineSupergrafx}},
+	"cgb+sgb-enhanced": {
+		{Type: TagTypeCompatibility, Value: TagCompatibilityGameboyColor},
+		{Type: TagTypeCompatibility, Value: TagCompatibilityGameboySGB},
+	},
+	"sgb-enhanced-gb-compatible": {
+		{Type: TagTypeCompatibility, Value: TagCompatibilityGameboySGB},
+		{Type: TagTypeCompatibility, Value: TagCompatibilityGameboy},
+	},
 	// Apple II systems
 	"ii+": {{Type: TagTypeCompatibility, Value: TagCompatibilityApple2Plus}},
 	"iie": {{Type: TagTypeCompatibility, Value: TagCompatibilityApple2E}},
@@ -409,14 +437,14 @@ var allTagMappings = map[string][]CanonicalTag{
 	// "st" is ambiguous: Sufami Turbo vs other uses - handled in filename_parser.go
 	"sufami-turbo": {{Type: TagTypeAddon, Value: TagAddonPeripheralSufami}}, // Sufami Turbo cartridge adapter
 	// "np" is ambiguous: Nintendo Power vs other uses - handled in filename_parser.go
-	"nintendo-power": {{Type: TagTypeAddon, Value: TagAddonOnlineNintendopower}}, // Nintendo Power kiosk service
-	"j-cart":         {{Type: TagTypeAddon, Value: TagAddonControllerJCart}},     // J-Cart (Genesis controller ports)
-	"sn":             {{Type: TagTypeAddon, Value: TagAddonOnlineSeganet}},       // Sega-Net online service
-	"sega-net":       {{Type: TagTypeAddon, Value: TagAddonOnlineSeganet}},       // Sega-Net (full name)
-	"sachen":         {{Type: TagTypeUnlicensed, Value: TagUnlicensedSachen}},    // Sachen unlicensed (NES)
-	"rumble-version": {{Type: TagTypeAddon, Value: TagAddonControllerRumble}},    // Rumble Pak version
-	"mt-32":          {{Type: TagTypeAddon, Value: TagAddonMidiMT32}},            // Roland MT-32 MIDI sound module
-	"mt32":           {{Type: TagTypeAddon, Value: TagAddonMidiMT32}},            // Roland MT-32 (no dash)
+	"nintendo-power": {{Type: TagTypeAddon, Value: TagAddonOnlineNintendopower}},   // Nintendo Power kiosk service
+	"j-cart":         {{Type: TagTypeEmbedded, Value: TagEmbeddedSlotJCart}},       // J-Cart (Genesis controller ports)
+	"sn":             {{Type: TagTypeAddon, Value: TagAddonOnlineSeganet}},         // Sega-Net online service
+	"sega-net":       {{Type: TagTypeAddon, Value: TagAddonOnlineSeganet}},         // Sega-Net (full name)
+	"sachen":         {{Type: TagTypeUnlicensed, Value: TagUnlicensedSachen}},      // Sachen unlicensed (NES)
+	"rumble-version": {{Type: TagTypeEmbedded, Value: TagEmbeddedVibrationRumble}}, // Rumble built into cartridge
+	"mt-32":          {{Type: TagTypeAddon, Value: TagAddonMidiMT32}},              // Roland MT-32 MIDI sound module
+	"mt32":           {{Type: TagTypeAddon, Value: TagAddonMidiMT32}},              // Roland MT-32 (no dash)
 
 	// ============================================================================
 	// PLAYER COUNT MAPPINGS
@@ -481,11 +509,47 @@ var allTagMappings = map[string][]CanonicalTag{
 	// ============================================================================
 	// DISTRIBUTION PLATFORM MAPPINGS
 	// ============================================================================
-	// Digital distribution platforms and online services
-	"virtual-console": {{Type: TagTypeDistribution, Value: TagDistributionVirtualConsole}}, // Nintendo Virtual Console
-	"wiiware":         {{Type: TagTypeDistribution, Value: TagDistributionWiiWare}},        // Nintendo WiiWare
-	"xblig":           {{Type: TagTypeDistribution, Value: TagDistributionXBLIG}},          // Xbox Live Indie Games
-	"dsiware":         {{Type: TagTypeDistribution, Value: TagDistributionDSiWare}},        // Nintendo DSiWare
+	// Digital distribution platforms, online services, and sourced releases
+	"virtual-console":               {{Type: TagTypeDistribution, Value: TagDistributionVirtualConsole}},
+	"wii-virtual-console":           {{Type: TagTypeDistribution, Value: TagDistributionVirtualConsole}},
+	"wii-u-virtual-console":         {{Type: TagTypeDistribution, Value: TagDistributionVirtualConsole}},
+	"wii-and-wii-u-virtual-console": {{Type: TagTypeDistribution, Value: TagDistributionVirtualConsole}},
+	"3ds-virtual-console":           {{Type: TagTypeDistribution, Value: TagDistributionVirtualConsole}},
+	"wiiware":                       {{Type: TagTypeDistribution, Value: TagDistributionWiiWare}},
+	"xblig":                         {{Type: TagTypeDistribution, Value: TagDistributionXBLIG}},
+	"dsiware":                       {{Type: TagTypeDistribution, Value: TagDistributionDSiWare}},
+	"gamecube":                      {{Type: TagTypeDistribution, Value: TagDistributionGameCube}},
+	"switch-online":                 {{Type: TagTypeDistribution, Value: TagDistributionSwitchOnline}},
+	"nintendo-switch":               {{Type: TagTypeDistribution, Value: TagDistributionSwitchOnline}},
+	"disk-writer":                   {{Type: TagTypeDistribution, Value: TagDistributionDiskWriter}},
+	"steam":                         {{Type: TagTypeDistribution, Value: TagDistributionSteam}},
+	"sega-channel":                  {{Type: TagTypeDistribution, Value: TagDistributionSegaChannel}},
+	"genesis-mini":                  {{Type: TagTypeDistribution, Value: TagDistributionGenesisMini}},
+	"mega-drive-mini":               {{Type: TagTypeDistribution, Value: TagDistributionGenesisMini}},
+	"genesis-mini-mega-drive-mini":  {{Type: TagTypeDistribution, Value: TagDistributionGenesisMini}},
+	"sega-ages":                     {{Type: TagTypeDistribution, Value: TagDistributionSegaAges}},
+	"sega-smash-pack":               {{Type: TagTypeDistribution, Value: TagDistributionSegaSmashPack}},
+	"sega-smash-pack-2":             {{Type: TagTypeDistribution, Value: TagDistributionSegaSmashPack}},
+	"wii":                           {{Type: TagTypeDistribution, Value: TagDistributionWii}},
+	"club-nintendo":                 {{Type: TagTypeDistribution, Value: TagDistributionClubNintendo}},
+	"gba-e-reader":                  {{Type: TagTypeDistribution, Value: TagDistributionGBAEReader}},
+
+	// Digital compilation releases — ROMs sourced from named publisher compilation packages
+	"castlevania-anniversary-collection": {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"castlevania-advance-collection":     {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"contra-anniversary-collection":      {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"mega-man-legacy-collection":         {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"mega-man-x-legacy-collection":       {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"disney-classic-games":               {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"the-disney-afternoon-collection":    {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"seiken-densetsu-collection":         {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"namcot-collection":                  {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"darius-cozmic-collection":           {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"bomberman-collection":               {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"sega-classic-collection":            {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"collection-of-mana":                 {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"collection-of-saga":                 {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
+	"arcade-classic-pak":                 {{Type: TagTypeDistribution, Value: TagDistributionCompilation}},
 
 	// ============================================================================
 	// MEDIA TYPE MAPPINGS
@@ -626,5 +690,51 @@ var allTagMappings = map[string][]CanonicalTag{
 	// ============================================================================
 	// Edition markers (remaster, special, deluxe, etc.)
 	"remaster":   {{Type: TagTypeEdition, Value: TagEditionRemaster}},
-	"remastered": {{Type: TagTypeEdition, Value: TagEditionRemaster}}, // Normalize to same value
+	"remastered": {{Type: TagTypeEdition, Value: TagEditionRemaster}},
+	"enhanced":   {{Type: TagTypeEdition, Value: TagEditionRemaster}},
+
+	// ============================================================================
+	// LANGUAGE FULL-NAME ALIASES
+	// ============================================================================
+	// Full adjective forms of languages, absent from allTagMappings until now.
+	// These match parenthesis groups like (German), (French), (Spanish) in filenames.
+	// Keep these language-only: adjectives describe the text/audio language, not the release region.
+	"english":    {{Type: TagTypeLang, Value: TagLangEN}},
+	"french":     {{Type: TagTypeLang, Value: TagLangFR}},
+	"german":     {{Type: TagTypeLang, Value: TagLangDE}},
+	"spanish":    {{Type: TagTypeLang, Value: TagLangES}},
+	"italian":    {{Type: TagTypeLang, Value: TagLangIT}},
+	"japanese":   {{Type: TagTypeLang, Value: TagLangJA}},
+	"dutch":      {{Type: TagTypeLang, Value: TagLangNL}},
+	"swedish":    {{Type: TagTypeLang, Value: TagLangSV}},
+	"norwegian":  {{Type: TagTypeLang, Value: TagLangNO}},
+	"finnish":    {{Type: TagTypeLang, Value: TagLangFI}},
+	"polish":     {{Type: TagTypeLang, Value: TagLangPL}},
+	"portuguese": {{Type: TagTypeLang, Value: TagLangPT}},
+	"russian":    {{Type: TagTypeLang, Value: TagLangRU}},
+	"chinese":    {{Type: TagTypeLang, Value: TagLangZH}},
+	"korean":     {{Type: TagTypeLang, Value: TagLangKO}},
+
+	// ============================================================================
+	// RELEASE / DISTRIBUTION STATUS
+	// ============================================================================
+	// Words that appear as unmatched paren groups in filenames and describe how a
+	// game was distributed, not who made it. Mapping these here means they are
+	// resolved before the credit-promotion fallback runs.
+	"homebrew":       {{Type: TagTypeRelease, Value: TagReleaseHomebrew}},
+	"promo":          {{Type: TagTypeRelease, Value: TagReleasePromo}},
+	"not-for-resale": {{Type: TagTypeRelease, Value: TagReleaseNotForResale}},
+	"kiosk":          {{Type: TagTypeRelease, Value: TagReleaseKiosk}},
+	"aftermarket":    {{Type: TagTypeUnlicensed, Value: TagUnlicensedAftermarket}},
+	"hack":           {{Type: TagTypeUnlicensed, Value: TagUnlicensedHack}},
+	"unreleased":     {{Type: TagTypeRelease, Value: TagReleaseUnreleased}},
+	"unpublished":    {{Type: TagTypeRelease, Value: TagReleaseUnreleased}},
+	"public-domain":  {{Type: TagTypeRelease, Value: TagReleasePublicDomain}},
+
+	// Japanese release/edition descriptors
+	"reprint":            {{Type: TagTypeRelease, Value: TagReleaseReissue}},
+	"fukkokuban":         {{Type: TagTypeRelease, Value: TagReleaseReissue}},
+	"taikenban":          {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo}}, // Demo/trial version
+	"shinsaku-taikenban": {{Type: TagTypeUnfinished, Value: TagUnfinishedDemo}}, // New demo/trial
+	"ura":                {{Type: TagTypeAlt, Value: TagAlt}},                   // Alternate/secret version
 }

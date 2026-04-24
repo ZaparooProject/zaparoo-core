@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 )
 
 // We can use actual URIs for paths, but we also define a "Virtual Path", which
@@ -122,6 +123,19 @@ func ParseURIComponents(uri string) URIComponents {
 	return result
 }
 
+// decodePathComponent URL-decodes a path component and validates UTF-8.
+// Falls back to the raw value if decoding fails but UTF-8 is valid.
+func decodePathComponent(raw string) (string, error) {
+	decoded, err := url.PathUnescape(raw)
+	if err == nil && utf8.ValidString(decoded) {
+		return decoded, nil
+	}
+	if utf8.ValidString(raw) {
+		return raw, nil
+	}
+	return "", errors.New("invalid byte sequence")
+}
+
 // ParseVirtualPathStr parses a virtual path and returns its components with string ID
 // Virtual path format: scheme://id/name (e.g., "steam://123/Game%20Name")
 // Maps to URL structure: scheme://host/path where host=id, path=name
@@ -152,27 +166,22 @@ func ParseVirtualPathStr(virtualPath string) (VirtualPathResult, error) {
 	// Decode the ID component for future-proofing (handles encoded characters)
 	idPart := idAndName[0]
 	if idPart != "" {
-		decodedID, err := url.PathUnescape(idPart)
-		if err == nil {
-			result.ID = decodedID
-		} else {
-			result.ID = idPart // Graceful fallback for invalid encoding
+		decoded, err := decodePathComponent(idPart)
+		if err != nil {
+			return result, fmt.Errorf("invalid UTF-8 in virtual path ID: %w", err)
 		}
-	} else {
-		result.ID = idPart // Empty ID allowed for legacy support
+		result.ID = decoded
 	}
 
 	if len(idAndName) == 2 {
-		// Remove trailing slash
-		namePart := strings.TrimSuffix(idAndName[1], "/")
+		// Remove trailing slashes
+		namePart := strings.TrimRight(idAndName[1], "/")
 		if namePart != "" {
-			// Try to decode, fallback to raw on error
-			decoded, err := url.PathUnescape(namePart)
-			if err == nil {
-				result.Name = decoded
-			} else {
-				result.Name = namePart // Graceful fallback for invalid encoding
+			decoded, err := decodePathComponent(namePart)
+			if err != nil {
+				return result, fmt.Errorf("invalid UTF-8 in virtual path name: %w", err)
 			}
+			result.Name = decoded
 		}
 	}
 

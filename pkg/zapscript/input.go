@@ -20,14 +20,116 @@
 package zapscript
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput/keyboardmap"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/rs/zerolog/log"
 )
+
+var (
+	ErrInputNotAllowed = errors.New("input key not allowed")
+	ErrInputBlocked    = errors.New("input key blocked")
+)
+
+var defaultDesktopBlockList = []string{
+	// Linux: TTY switching
+	"{ctrl+alt+f1}", "{ctrl+alt+f2}", "{ctrl+alt+f3}", "{ctrl+alt+f4}",
+	"{ctrl+alt+f5}", "{ctrl+alt+f6}", "{ctrl+alt+f7}",
+	// Linux: system/shell access
+	"{ctrl+alt+delete}", "{ctrl+alt+t}", "{alt+sysrq}", "{super}", "{meta}",
+	// Windows: close application
+	"{alt+f4}",
+	// macOS: launcher/quit
+	"{cmd+space}", "{cmd+q}",
+}
+
+func defaultInputMode(platformID string) string {
+	switch platformID {
+	case platformids.Mister, platformids.Mistex, platformids.Batocera,
+		platformids.Recalbox, platformids.LibreELEC, platformids.RetroPie,
+		platformids.ReplayOS:
+		return config.InputModeUnrestricted
+	default:
+		return config.InputModeCombos
+	}
+}
+
+func isDesktopPlatform(platformID string) bool {
+	switch platformID {
+	case platformids.Linux, platformids.Windows, platformids.Mac,
+		platformids.SteamOS, platformids.ChimeraOS, platformids.Bazzite:
+		return true
+	default:
+		return false
+	}
+}
+
+// isSpecialKey returns true for braced keys with more than one inner character
+// (e.g. {f1}, {enter}, {ctrl+q}). Single chars like "a" and "{a}" return false.
+func isSpecialKey(key string) bool {
+	if len(key) < 4 || key[0] != '{' || key[len(key)-1] != '}' {
+		return false
+	}
+	inner := key[1 : len(key)-1]
+	return len(inner) > 1
+}
+
+func isKeyInList(key string, list []string) bool {
+	for _, item := range list {
+		if strings.EqualFold(key, item) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkInputKey returns an error if the key is not permitted under the current
+// input config. Precedence: allow list → block list → mode check.
+func checkInputKey(cfg *config.Instance, platformID, key string) error {
+	// 1. Strict allow mode — overrides everything
+	allowList := cfg.InputAllowList()
+	if len(allowList) > 0 {
+		if !isKeyInList(key, allowList) {
+			return fmt.Errorf("%w: %s", ErrInputNotAllowed, key)
+		}
+		return nil
+	}
+
+	// 2. Block list check — nil means not configured (use defaults),
+	// empty slice means explicitly cleared (block = [])
+	blockList := cfg.InputBlockList()
+	if blockList == nil && isDesktopPlatform(platformID) {
+		blockList = defaultDesktopBlockList
+	}
+	if isKeyInList(key, blockList) {
+		return fmt.Errorf("%w: %s", ErrInputBlocked, key)
+	}
+
+	// 3. Mode check
+	mode := cfg.InputMode(defaultInputMode(platformID))
+	switch mode {
+	case config.InputModeCombos:
+		if !isSpecialKey(key) {
+			return fmt.Errorf("%w: %s", ErrInputNotAllowed, key)
+		}
+		return nil
+	case config.InputModeUnrestricted:
+		return nil
+	default:
+		log.Warn().Str("mode", mode).Msg("unknown input mode, defaulting to combos")
+		if !isSpecialKey(key) {
+			return fmt.Errorf("%w: %s", ErrInputNotAllowed, key)
+		}
+		return nil
+	}
+}
 
 // DEPRECATED
 //
@@ -47,14 +149,16 @@ func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, e
 	if code == "" {
 		return platforms.CmdResult{}, fmt.Errorf("invalid legacy key code: %s", env.Cmd.Args[0])
 	}
+	if err := checkInputKey(env.Cfg, pl.ID(), code); err != nil {
+		return platforms.CmdResult{}, err
+	}
 	if err := pl.KeyboardPress(code); err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to press keyboard key: %w", err)
 	}
 	return platforms.CmdResult{}, nil
 }
 
-// PressKeyboardSequence presses each key in args sequentially with a delay
-// between each press. Used by both ZapScript commands and API handlers.
+// PressKeyboardSequence is shared between ZapScript commands and API handlers.
 func PressKeyboardSequence(pl platforms.Platform, args []string) error {
 	for _, name := range args {
 		if err := pl.KeyboardPress(name); err != nil {
@@ -65,8 +169,7 @@ func PressKeyboardSequence(pl platforms.Platform, args []string) error {
 	return nil
 }
 
-// PressGamepadSequence presses each button in args sequentially with a delay
-// between each press. Used by both ZapScript commands and API handlers.
+// PressGamepadSequence is shared between ZapScript commands and API handlers.
 func PressGamepadSequence(pl platforms.Platform, args []string) error {
 	for _, name := range args {
 		if err := pl.GamepadPress(name); err != nil {
@@ -83,7 +186,13 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 		return platforms.CmdResult{}, ErrRemoteSource
 	}
 
-	log.Info().Msgf("keyboard input: %v", env.Cmd.Args)
+	for _, key := range env.Cmd.Args {
+		if err := checkInputKey(env.Cfg, pl.ID(), key); err != nil {
+			return platforms.CmdResult{}, err
+		}
+	}
+
+	log.Info().Int("key_count", len(env.Cmd.Args)).Msg("keyboard input")
 
 	// TODO: stuff like adjust delay, only press, etc.
 	//	     basically a filled out mini macro language for key presses
@@ -101,7 +210,13 @@ func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		return platforms.CmdResult{}, ErrRemoteSource
 	}
 
-	log.Info().Msgf("gamepad input: %v", env.Cmd.Args)
+	for _, btn := range env.Cmd.Args {
+		if err := checkInputKey(env.Cfg, pl.ID(), btn); err != nil {
+			return platforms.CmdResult{}, err
+		}
+	}
+
+	log.Info().Int("button_count", len(env.Cmd.Args)).Msg("gamepad input")
 
 	if err := PressGamepadSequence(pl, env.Cmd.Args); err != nil {
 		return platforms.CmdResult{}, err

@@ -37,6 +37,10 @@ var ErrFsTimeout = errors.New("filesystem operation timed out")
 // operation before giving up. This prevents indefinite hangs on stale
 // network mounts (CIFS, NFS with hard mounts).
 //
+// 30 seconds gives plenty of headroom for slow SD cards and loaded ARM devices
+// without masking genuinely stale NFS/CIFS mounts (which typically hang for
+// minutes or indefinitely).
+//
 // Limitation: when a timeout or context cancellation fires, the underlying
 // goroutine performing the syscall (os.Stat, os.ReadDir, etc.) cannot be
 // interrupted and will remain blocked until the kernel returns. On a stale
@@ -44,7 +48,7 @@ var ErrFsTimeout = errors.New("filesystem operation timed out")
 // bounded by the number of distinct paths checked during a scan (typically
 // <50 root/system folders), after which context cancellation prevents
 // further operations from being started.
-const defaultFsTimeout = 10 * time.Second
+const defaultFsTimeout = 30 * time.Second
 
 // doWithTimeout runs fn in a goroutine and waits for it to complete, the
 // context to be cancelled, or the defaultFsTimeout to elapse — whichever

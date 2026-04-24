@@ -21,6 +21,7 @@ package zapscript
 
 import (
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +35,70 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRedactURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{
+			name: "strips query params",
+			url:  "https://example.com/path?api_key=secret&foo=bar",
+			want: "https://example.com/path",
+		},
+		{ //nolint:gosec // G101: test data for URL redaction
+			name: "strips userinfo",
+			url:  "https://user:pass@example.com/path",
+			want: "https://example.com/path",
+		},
+		{ //nolint:gosec // G101: test data for URL redaction
+			name: "strips both userinfo and query",
+			url:  "https://apikey:secret@example.com/path?token=abc",
+			want: "https://example.com/path",
+		},
+		{
+			name: "preserves fragment",
+			url:  "https://example.com/path#section",
+			want: "https://example.com/path#section",
+		},
+		{
+			name: "preserves path",
+			url:  "https://example.com/api/v2/launch",
+			want: "https://example.com/api/v2/launch",
+		},
+		{
+			name: "handles URL with port",
+			url:  "http://localhost:8080/webhook?key=secret",
+			want: "http://localhost:8080/webhook",
+		},
+		{
+			name: "handles empty string",
+			url:  "",
+			want: "",
+		},
+		{
+			name: "handles path only",
+			url:  "/api/endpoint?secret=value",
+			want: "/api/endpoint",
+		},
+		{
+			name: "handles malformed URL",
+			url:  "://not-a-url",
+			want: "<invalid URL>",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := redactURL(tt.url)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
 
 func TestCmdHTTPGet_AppliesBearerAuth(t *testing.T) {
 	received := make(chan http.Header, 1)
@@ -172,6 +237,141 @@ func TestCmdHTTPPost_AppliesBearerAuth(t *testing.T) {
 		assert.Equal(t, "Bearer post-token-xyz", rc.headers.Get("Authorization"))
 		assert.Equal(t, "application/json", rc.contentType)
 		assert.JSONEq(t, `{"key":"value"}`, rc.body)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for HTTP request")
+	}
+}
+
+func TestCmdHTTPGet_AllowListEmpty_AllAllowed(t *testing.T) {
+	received := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		received <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config.ClearAuthCfgForTesting()
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	cfg := &config.Instance{}
+	// No allow list set — should allow all URLs
+
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: gozapscript.Command{
+			Name: gozapscript.ZapScriptCmdHTTPGet,
+			Args: []string{server.URL + "/open"},
+		},
+	}
+
+	_, err := cmdHTTPGet(nil, env)
+	require.NoError(t, err)
+
+	select {
+	case <-received:
+		// request went through
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for HTTP request")
+	}
+}
+
+func TestCmdHTTPGet_AllowListBlocks(t *testing.T) {
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_http = ['https://example\.com/.*']`))
+
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: gozapscript.Command{
+			Name: gozapscript.ZapScriptCmdHTTPGet,
+			Args: []string{"https://evil.com/attack"},
+		},
+	}
+
+	_, err := cmdHTTPGet(nil, env)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrHTTPNotAllowed)
+}
+
+func TestCmdHTTPGet_AllowListPermits(t *testing.T) {
+	received := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		received <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config.ClearAuthCfgForTesting()
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(fmt.Sprintf("[zapscript]\nallow_http = ['%s/.*']", server.URL)))
+
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: gozapscript.Command{
+			Name: gozapscript.ZapScriptCmdHTTPGet,
+			Args: []string{server.URL + "/allowed"},
+		},
+	}
+
+	_, err := cmdHTTPGet(nil, env)
+	require.NoError(t, err)
+
+	select {
+	case <-received:
+		// request went through
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for HTTP request")
+	}
+}
+
+func TestCmdHTTPPost_AllowListBlocks(t *testing.T) {
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_http = ['https://example\.com/.*']`))
+
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: gozapscript.Command{
+			Name: gozapscript.ZapScriptCmdHTTPPost,
+			Args: []string{"https://evil.com/attack", "application/json", "{}"},
+		},
+	}
+
+	_, err := cmdHTTPPost(nil, env)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrHTTPNotAllowed)
+}
+
+func TestCmdHTTPPost_AllowListPermits(t *testing.T) {
+	received := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		received <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config.ClearAuthCfgForTesting()
+	t.Cleanup(config.ClearAuthCfgForTesting)
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(fmt.Sprintf("[zapscript]\nallow_http = ['%s/.*']", server.URL)))
+
+	env := platforms.CmdEnv{
+		Cfg: cfg,
+		Cmd: gozapscript.Command{
+			Name: gozapscript.ZapScriptCmdHTTPPost,
+			Args: []string{server.URL + "/allowed", "application/json", `{}`},
+		},
+	}
+
+	_, err := cmdHTTPPost(nil, env)
+	require.NoError(t, err)
+
+	select {
+	case <-received:
+		// request went through
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for HTTP request")
 	}

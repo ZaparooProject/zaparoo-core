@@ -4,7 +4,7 @@ Zaparoo encrypts WebSocket traffic using PAKE-based pairing and AES-256-GCM with
 
 ## Overview
 
-- **Pairing**: One-time PAKE2 (P-256) handshake. User enters a 6-digit PIN from the Zaparoo device into the client app. Both sides derive a shared 32-byte pairing key — the PIN is never transmitted.
+- **Pairing**: One-time PAKE2 (P-256) handshake. User enters a 6-digit PIN from the Zaparoo device into the client app. Both sides derive a shared 32-byte pairing key. The PIN is never transmitted.
 - **Encryption**: AES-256-GCM with counter-derived nonces on every WebSocket frame.
 - **Per-session keys**: Each WebSocket connection generates a random 16-byte session salt. Both sides derive ephemeral keys via HKDF-SHA256 (pairing key as IKM, session salt as HKDF salt).
 - **Scope**: WebSocket only. HTTP POST, SSE, and REST GET are localhost-restricted by default.
@@ -33,11 +33,11 @@ sequenceDiagram
     Note over C: User types PIN into client
     Note over C: A = pake.InitCurve(pin, 0, "p256")
 
-    C->>Z: POST /api/pair/start<br/>{ pake: base64(A.Bytes()), name: "MyApp" }
-    Note over Z: B = pake.InitCurve(pin, 1, "p256")<br/>B.Update(A.Bytes())
-    Z->>C: 200 { session: uuid, pake: base64(B.Bytes()) }
+    C->>Z: POST /api/pair/start<br/>{ pake: base64(wireFormat(A)), name: "MyApp" }
+    Note over Z: B = pake.InitCurve(pin, 1, "p256")<br/>B.Update(wireFormat(A))
+    Z->>C: 200 { session: uuid, pake: base64(wireFormat(B)) }
 
-    Note over C: A.Update(B.Bytes())<br/>sessionKey = A.SessionKey()<br/>prk = HKDF-Extract(sessionKey, nil)<br/>confirmKeyA = HKDF-Expand(prk, "zaparoo-confirm-A", 32)<br/>confirmKeyB = HKDF-Expand(prk, "zaparoo-confirm-B", 32)<br/>pairingKey = HKDF-Expand(prk, "zaparoo-pairing-v1", 32)
+    Note over C: A.Update(wireFormat(B))<br/>sessionKey = A.SessionKey()<br/>salt = msgA || msgB<br/>prk = HKDF-Extract(sessionKey, salt)<br/>confirmKeyA = HKDF-Expand(prk, "zaparoo-confirm-A", 32)<br/>confirmKeyB = HKDF-Expand(prk, "zaparoo-confirm-B", 32)<br/>pairingKey = HKDF-Expand(prk, "zaparoo-pairing-v1", 32)
 
     C->>Z: POST /api/pair/finish<br/>{ session: uuid, confirm: base64(HMAC) }
     Note over Z: Verify client HMAC, persist client
@@ -62,6 +62,40 @@ LP("zaparoo-v1") || LP("p256") || LP(role) || LP(clientName) || LP(MsgA) || LP(M
 ```
 
 Where `role` is `"client"` or `"server"`, and `MsgA`/`MsgB` are the **raw bytes sent over the wire** (not the result of calling `pake.Bytes()` again after `Update()`).
+
+### PAKE message format
+
+The `pake` field in `/pair/start` request and response carries a base64-encoded JSON object. The PAKE protocol is based on [schollz/pake](https://github.com/schollz/pake) v3 using the P-256 curve. Coordinates are string-encoded for cross-language compatibility.
+
+| Field | Type | Description |
+|---|---|---|
+| `role` | number | `0` (initiator/client) or `1` (responder/server) |
+| `ux` | string | U-point x-coordinate, decimal integer |
+| `uy` | string | U-point y-coordinate, decimal integer |
+| `vx` | string | V-point x-coordinate, decimal integer |
+| `vy` | string | V-point y-coordinate, decimal integer |
+| `xx` | string | X-point x-coordinate, decimal integer |
+| `xy` | string | X-point y-coordinate, decimal integer |
+| `yx` | string | Y-point x-coordinate, decimal integer |
+| `yy` | string | Y-point y-coordinate, decimal integer |
+
+All coordinate values are arbitrary-precision integers encoded as **quoted decimal strings** (not bare JSON numbers). This avoids precision loss in JSON parsers that use IEEE 754 doubles. Fields for points not yet computed in the current protocol step are `"0"`.
+
+Example client message (role 0, message A, Y not yet computed):
+
+```json
+{
+  "role": 0,
+  "ux": "793136080485469241208656611513609866400481671852",
+  "uy": "59748757929350367369315811184980635230185250460108398961713395032485227207304",
+  "vx": "1086685267857089638167386722555472967068468061489",
+  "vy": "9157340230202296554417312816309453883742349874205386245733062928888341584123",
+  "xx": "48439561293906451759052585252797914202762949526041747995844080717082404635286",
+  "xy": "36134250956749795798585127919587881956611106672985015071877198253568414405109",
+  "yx": "0",
+  "yy": "0"
+}
+```
 
 ### Pairing limits
 
@@ -92,7 +126,7 @@ Every encrypted WebSocket connection starts with a first frame that establishes 
 |---|---|
 | `v` | Protocol version. Currently `1`. Server returns a plaintext error if unsupported (see [Errors](#errors)). |
 | `e` | AES-256-GCM ciphertext of the JSON-RPC request, base64-encoded. |
-| `t` | Auth token (UUID) identifying the paired client. Not a secret — used for key lookup. |
+| `t` | Auth token (UUID) identifying the paired client. Not a secret; used for key lookup only. |
 | `s` | 16-byte random session salt, base64-encoded. Must be exactly 16 bytes. |
 
 ### Subsequent frames (both directions)
@@ -202,7 +236,7 @@ WebSocket errors (plaintext JSON-RPC error, then connection closed):
 | Code | Meaning |
 |---|---|
 | -32001 | Unsupported encryption version |
-| -32002 | Encryption required — server requires an encrypted first frame from remote clients |
+| -32002 | Encryption required. Remote clients must send an encrypted first frame. |
 
 ## Connection lifecycle
 

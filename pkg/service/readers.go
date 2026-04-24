@@ -77,9 +77,13 @@ func connectReaders(
 	}
 
 	for _, device := range cfg.Readers().Connect {
+		if !device.IsEnabled() {
+			log.Debug().Msgf("config device disabled, skipping: %s", device.ConnectionString())
+			continue
+		}
 		if !isPathConnected(rs, device.Path) &&
 			!helpers.Contains(toConnectStrs(), device.ConnectionString()) {
-			log.Debug().Msgf("config device not connected, adding: %s", device)
+			log.Debug().Msgf("config device not connected, adding: %s", device.ConnectionString())
 			toConnect = append(toConnect, toConnectDevice{
 				connectionString: device.ConnectionString(),
 				device:           device,
@@ -107,7 +111,16 @@ func connectReaders(
 	for _, device := range validToConnect {
 		if !isPathConnected(st.ListReaders(), device.device.Path) {
 			rt := readers.NormalizeDriverID(device.device.Driver)
+			// SupportedReaders creates new instances; close every reader we don't keep.
+			connected := false
 			for _, r := range pl.SupportedReaders(cfg) {
+				if connected {
+					if closeErr := r.Close(); closeErr != nil {
+						log.Debug().Err(closeErr).Msg("error closing unused reader")
+					}
+					continue
+				}
+
 				metadata := r.Metadata()
 				driver := config.DriverInfo{
 					ID:                metadata.ID,
@@ -118,6 +131,9 @@ func connectReaders(
 				// For user-defined connect entries, driver is implicitly enabled
 				// unless explicitly disabled in config.
 				if !cfg.IsDriverEnabledForConnect(driver) {
+					if closeErr := r.Close(); closeErr != nil {
+						log.Debug().Err(closeErr).Msg("error closing unused reader")
+					}
 					continue
 				}
 
@@ -127,17 +143,25 @@ func connectReaders(
 				for i, id := range ids {
 					normalizedIDs[i] = readers.NormalizeDriverID(id)
 				}
-				if helpers.Contains(normalizedIDs, rt) {
-					log.Debug().Msgf("connecting to reader: %s", device)
-					err := r.Open(device.device, iq, readers.OpenOpts{})
-					if err != nil {
-						log.Warn().Msgf("error opening reader: %s", err)
-						continue
+				if !helpers.Contains(normalizedIDs, rt) {
+					if closeErr := r.Close(); closeErr != nil {
+						log.Debug().Err(closeErr).Msg("error closing unused reader")
 					}
-					st.SetReader(r)
-					log.Info().Msgf("opened reader: %s", device)
-					break
+					continue
 				}
+
+				log.Debug().Msgf("connecting to reader: %s", device.connectionString)
+				err := r.Open(device.device, iq, readers.OpenOpts{})
+				if err != nil {
+					log.Warn().Msgf("error opening reader: %s", err)
+					if closeErr := r.Close(); closeErr != nil {
+						log.Debug().Err(closeErr).Msg("error closing reader after failed open")
+					}
+					continue
+				}
+				st.SetReader(r)
+				log.Info().Msgf("opened reader: %s", device.connectionString)
+				connected = true
 			}
 		}
 	}
@@ -428,7 +452,12 @@ preprocessing:
 			confirmed := *stagedToken
 			stagedToken = nil
 			svc.State.SetActiveCard(confirmed)
-			itq <- confirmed
+			select {
+			case itq <- confirmed:
+			case <-svc.State.GetContext().Done():
+				result <- svc.State.GetContext().Err()
+				break preprocessing
+			}
 			result <- nil
 			continue preprocessing
 		case <-guardDelay:
@@ -495,7 +524,11 @@ preprocessing:
 				// Let the preprocessor know what's on the reader now
 				proc.Process(scan, readerError)
 				svc.State.SetActiveCard(confirmed)
-				itq <- confirmed
+				select {
+				case itq <- confirmed:
+				case <-svc.State.GetContext().Done():
+					break preprocessing
+				}
 				continue preprocessing
 			}
 		}
@@ -608,7 +641,11 @@ preprocessing:
 			}
 
 			log.Info().Msgf("sending token to queue: %v", scan)
-			itq <- *scan
+			select {
+			case itq <- *scan:
+			case <-svc.State.GetContext().Done():
+				break preprocessing
+			}
 
 		case scanReaderErrorRemoval:
 			log.Warn().

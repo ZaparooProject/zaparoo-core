@@ -1,0 +1,39 @@
+[Unit]
+Description=Zaparoo Core
+Documentation=https://zaparoo.org/docs/
+After=replay.service network-online.target
+Wants=network-online.target
+RequiresMountsFor=/media/sd
+
+[Service]
+Type=simple
+WorkingDirectory=/media/sd/zaparoo
+ExecStart=/media/sd/zaparoo/zaparoo -daemon
+Restart=on-failure
+RestartSec=5s
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+# Scheduling: always yield to replay
+Nice=10
+CPUSchedulingPolicy=batch
+CPUWeight=10
+CPUAffinity=0-2
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+IOWeight=10
+TasksMax=64
+OOMScoreAdjust=500
+
+# Security
+NoNewPrivileges=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

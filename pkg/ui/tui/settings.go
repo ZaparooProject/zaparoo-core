@@ -531,6 +531,9 @@ func buildReaderListPage(
 			if reader.Path != "" {
 				display += ":" + reader.Path
 			}
+			if !reader.IsEnabled() {
+				display += " (disabled)"
+			}
 			secondary := ""
 			if reader.IDSource != "" {
 				t := CurrentTheme()
@@ -676,12 +679,33 @@ func buildReaderEditPage(
 	SetInputLabel(idSourceInput, "ID Source")
 	setupInputFieldFocus(idSourceInput)
 
+	enabledVal := reader.Enabled == nil || *reader.Enabled
+	enabledDisplay := tview.NewTextView().SetDynamicColors(true)
+	updateEnabledDisplay := func() {
+		t := CurrentTheme()
+		label := "Yes"
+		if !enabledVal {
+			label = "No"
+		}
+		enabledDisplay.SetText(fmt.Sprintf(
+			"[%s::b]Enabled:[-::-] < %s >",
+			t.LabelColorName, label,
+		))
+	}
+	updateEnabledDisplay()
+
 	buttonBar := NewButtonBar(app)
 
 	buttonBar.AddButtonWithHelp("Save", "Save reader configuration", func() {
 		reader.Driver = availableDrivers[driverIndex]
 		reader.Path = pathInput.GetText()
 		reader.IDSource = idSourceInput.GetText()
+		if !enabledVal {
+			f := false
+			reader.Enabled = &f
+		} else if reader.Enabled != nil && !*reader.Enabled {
+			reader.Enabled = nil
+		}
 
 		if isNew || index >= len(*readers) {
 			*readers = append(*readers, reader)
@@ -715,8 +739,9 @@ func buildReaderEditPage(
 	formContent.AddItem(driverDisplay, 1, 0, true)
 	formContent.AddItem(pathInput, 1, 0, false)
 	formContent.AddItem(idSourceInput, 1, 0, false)
+	formContent.AddItem(enabledDisplay, 1, 0, false)
 
-	focusOrder := []tview.Primitive{driverDisplay, pathInput, idSourceInput, buttonBar.GetFirstButton()}
+	focusOrder := []tview.Primitive{driverDisplay, pathInput, idSourceInput, enabledDisplay, buttonBar.GetFirstButton()}
 
 	setFocus := func(idx int) {
 		if idx < 0 {
@@ -818,8 +843,30 @@ func buildReaderEditPage(
 		return event
 	})
 
+	enabledDisplay.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		key := event.Key()
+		if key == tcell.KeyLeft || key == tcell.KeyRight {
+			enabledVal = !enabledVal
+			updateEnabledDisplay()
+			return nil
+		}
+		if key == tcell.KeyDown || key == tcell.KeyEnter || key == tcell.KeyTab {
+			setFocus(4)
+			return nil
+		}
+		if key == tcell.KeyUp || key == tcell.KeyBacktab {
+			setFocus(2)
+			return nil
+		}
+		if key == tcell.KeyEscape {
+			goBack()
+			return nil
+		}
+		return event
+	})
+
 	buttonBar.SetOnUp(func() {
-		setFocus(2) // idSourceInput
+		setFocus(3) // enabledDisplay
 	})
 	buttonBar.SetOnDown(func() {
 		setFocus(0) // driverDisplay (wrap)

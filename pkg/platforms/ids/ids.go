@@ -31,6 +31,7 @@ const (
 	Mister    = "mister"
 	Mistex    = "mistex"
 	Recalbox  = "recalbox"
+	ReplayOS  = "replayos"
 	RetroPie  = "retropie"
 	SteamOS   = "steamos"
 	Windows   = "windows"

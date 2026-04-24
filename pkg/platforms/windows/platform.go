@@ -65,14 +65,15 @@ import (
 type Platform struct {
 	activeMedia             func() *models.ActiveMedia
 	setActiveMedia          func(*models.ActiveMedia)
-	customPlatformToSystem  map[string]string   // e.g., "Mame Arcade" -> "arcade"
-	systemToCustomPlatforms map[string][]string // e.g., "arcade" -> ["Mame Arcade", "Mame Classics"]
+	customPlatformToSystem  map[string]string
+	systemToCustomPlatforms map[string][]string
 	trackedProcess          *os.Process
 	launchBoxPipe           *LaunchBoxPipeServer
 	steamTracker            *steamtracker.WindowsPlatformIntegration
+	lastLauncher            platforms.Launcher
 	processMu               syncutil.RWMutex
-	launchBoxPipeLock       syncutil.Mutex
 	platformMappingsMu      syncutil.RWMutex
+	launchBoxPipeLock       syncutil.Mutex
 }
 
 func (*Platform) ID() string {
@@ -181,17 +182,35 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	log.Debug().Msgf("set tracked process: %v", proc)
 }
 
-func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
+func (p *Platform) setLastLauncher(l *platforms.Launcher) {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
+	p.lastLauncher = *l
+}
 
-	// Kill tracked process if exists
-	if p.trackedProcess != nil {
-		if err := p.trackedProcess.Kill(); err != nil {
-			log.Warn().Err(err).Msg("failed to kill tracked process")
-		}
+func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
+	p.processMu.Lock()
+
+	customKill := p.lastLauncher.Kill
+	p.lastLauncher = platforms.Launcher{}
+
+	if customKill != nil {
 		p.trackedProcess = nil
-		log.Debug().Msg("killed tracked process")
+		p.processMu.Unlock()
+		log.Debug().Msg("using custom Kill function for launcher")
+		if err := customKill(&config.Instance{}); err != nil {
+			log.Warn().Err(err).Msg("custom Kill function failed")
+		}
+	} else {
+		// Kill tracked process if exists
+		if p.trackedProcess != nil {
+			if err := p.trackedProcess.Kill(); err != nil {
+				log.Warn().Err(err).Msg("failed to kill tracked process")
+			}
+			p.trackedProcess = nil
+			log.Debug().Msg("killed tracked process")
+		}
+		p.processMu.Unlock()
 	}
 
 	p.setActiveMedia(nil)
@@ -234,6 +253,8 @@ func (p *Platform) LaunchMedia(
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
+
+	p.setLastLauncher(launcher)
 
 	return nil
 }
@@ -366,7 +387,6 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 	launchers = append(launchers, getRetroBatLaunchers()...)
 
-	// @BossRighteous convenience system while I work on indexing and scrapers
 	launchers = append(launchers, deverr.GetDevErrLaunchers()...)
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)

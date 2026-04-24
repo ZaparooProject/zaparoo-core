@@ -29,10 +29,10 @@ RUN ARCH=$(uname -m | sed 's/arm64/aarch64/g') && \
     curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz" | \
     tar -C /usr/local/bin --strip-components=1 -xJ
 
-# Install macOS SDK (12.3 required for SecTrustCopyCertificateChain)
+# Install macOS SDK (14.5 required for SecTrustCopyCertificateChain tbd stubs, needed by Go 1.26+ crypto/tls)
 RUN mkdir -p /opt/macosx-sdk && \
     curl -sSL -o /tmp/macosx-sdk.tar.xz \
-    "https://github.com/joseluisq/macosx-sdks/releases/download/12.3/MacOSX12.3.sdk.tar.xz" && \
+    "https://github.com/joseluisq/macosx-sdks/releases/download/14.5/MacOSX14.5.sdk.tar.xz" && \
     tar --strip-components=1 -C /opt/macosx-sdk -xf /tmp/macosx-sdk.tar.xz && \
     rm /tmp/macosx-sdk.tar.xz
 

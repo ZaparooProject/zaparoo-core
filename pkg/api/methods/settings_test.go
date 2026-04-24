@@ -22,6 +22,8 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +43,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func drainCh(ch <-chan models.Notification) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
 // TestHandlePlaytimeLimitsUpdate_ReEnableWithActiveMedia tests that re-enabling
 // playtime limits while a game is already running correctly triggers a session start.
 // This is a regression test for the bug where disabling then re-enabling limits
@@ -57,7 +69,8 @@ func TestHandlePlaytimeLimitsUpdate_ReEnableWithActiveMedia(t *testing.T) {
 	require.NoError(t, err)
 	cfg.SetPlaytimeLimitsEnabled(false) // Start with limits disabled
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	// Use a reliable time (2025) so clock checks pass
 	baseTime := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
@@ -132,7 +145,8 @@ func TestHandlePlaytimeLimitsUpdate_ReEnableWithNoActiveMedia(t *testing.T) {
 	require.NoError(t, err)
 	cfg.SetPlaytimeLimitsEnabled(false) // Start with limits disabled
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	// No active media - simulate no game running
 
@@ -199,7 +213,8 @@ func TestHandleSettings_ReaderConnections(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	env := requests.RequestEnv{
 		Context:  context.Background(),
@@ -234,7 +249,8 @@ func TestHandleSettings_EmptyReaderConnections(t *testing.T) {
 	cfg, err := config.NewConfig(tmpDir, config.Values{})
 	require.NoError(t, err)
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	env := requests.RequestEnv{
 		Context:  context.Background(),
@@ -265,7 +281,8 @@ func TestHandleSettingsUpdate_ReaderConnections(t *testing.T) {
 	cfg, err := config.NewConfig(tmpDir, config.Values{})
 	require.NoError(t, err)
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	params := models.UpdateSettingsParams{
 		ReadersConnect: &[]models.ReaderConnection{
@@ -308,7 +325,8 @@ func TestHandleSettings_ErrorReportingDefault(t *testing.T) {
 	cfg, err := config.NewConfig(tmpDir, config.Values{})
 	require.NoError(t, err)
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	env := requests.RequestEnv{
 		Context:  context.Background(),
@@ -341,7 +359,8 @@ func TestHandleSettings_ErrorReportingEnabled(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	env := requests.RequestEnv{
 		Context:  context.Background(),
@@ -373,7 +392,8 @@ func TestHandleSettingsUpdate_ErrorReportingEnable(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, cfg.ErrorReporting(), "errorReporting should start as false")
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	enabled := true
 	params := models.UpdateSettingsParams{
@@ -411,7 +431,8 @@ func TestHandleSettingsUpdate_ErrorReportingDisable(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, cfg.ErrorReporting(), "errorReporting should start as true")
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	disabled := false
 	params := models.UpdateSettingsParams{
@@ -445,7 +466,8 @@ func TestHandleSettingsUpdate_UpdateChannel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, config.UpdateChannelStable, cfg.UpdateChannel())
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	beta := config.UpdateChannelBeta
 	params := models.UpdateSettingsParams{
@@ -480,7 +502,8 @@ func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {
 	cfg, err := config.NewConfig(tmpDir, config.Values{})
 	require.NoError(t, err)
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	params := models.UpdateSettingsParams{
 		ReadersConnect: &[]models.ReaderConnection{
@@ -509,6 +532,96 @@ func TestHandleSettingsUpdate_ReaderConnectionsWithIDSource(t *testing.T) {
 	assert.Equal(t, "uid", readers[0].IDSource)
 }
 
+// TestHandleSettings_ReaderConnectionsEnabled tests that the enabled field
+// is passed through in the settings response.
+func TestHandleSettings_ReaderConnectionsEnabled(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	f := false
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{
+		Readers: config.Readers{
+			Connect: []config.ReadersConnect{
+				{Driver: "pn532"},
+				{Driver: "externaldrive", Enabled: &f},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	}
+
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+
+	require.Len(t, resp.ReadersConnect, 2)
+	assert.Nil(t, resp.ReadersConnect[0].Enabled)
+	require.NotNil(t, resp.ReadersConnect[1].Enabled)
+	assert.False(t, *resp.ReadersConnect[1].Enabled)
+}
+
+// TestHandleSettingsUpdate_ReaderConnectionsEnabled tests that the enabled
+// field is preserved when updating reader connections via the API.
+func TestHandleSettingsUpdate_ReaderConnectionsEnabled(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	f := false
+	tr := true
+	params := models.UpdateSettingsParams{
+		ReadersConnect: &[]models.ReaderConnection{
+			{Driver: "pn532", Path: "/dev/ttyUSB0"},
+			{Driver: "externaldrive", Enabled: &tr},
+			{Driver: "libnfc", Enabled: &f},
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	readers := cfg.Readers().Connect
+	require.Len(t, readers, 3)
+	assert.Nil(t, readers[0].Enabled, "nil enabled should pass through")
+	require.NotNil(t, readers[1].Enabled)
+	assert.True(t, *readers[1].Enabled, "explicit true should pass through")
+	require.NotNil(t, readers[2].Enabled)
+	assert.False(t, *readers[2].Enabled, "explicit false should pass through")
+}
+
 func TestHandleSettings_LaunchGuardDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -519,7 +632,8 @@ func TestHandleSettings_LaunchGuardDefaults(t *testing.T) {
 	cfg, err := config.NewConfig(tmpDir, config.Values{})
 	require.NoError(t, err)
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	env := requests.RequestEnv{
 		Context:  context.Background(),
@@ -551,7 +665,8 @@ func TestHandleSettingsUpdate_LaunchGuard(t *testing.T) {
 	cfg, err := config.NewConfig(tmpDir, config.Values{})
 	require.NoError(t, err)
 
-	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
 
 	enabled := true
 	timeout := float32(30)
@@ -581,6 +696,129 @@ func TestHandleSettingsUpdate_LaunchGuard(t *testing.T) {
 	assert.InDelta(t, 30, cfg.LaunchGuardTimeout(), 0)
 	assert.InDelta(t, 10, cfg.LaunchGuardDelay(), 0)
 	assert.True(t, cfg.LaunchGuardRequireConfirm())
+}
+
+// TestHandleSettingsUpdate_PreservesExternalEdits verifies that calling
+// HandleSettingsUpdate does not overwrite external edits to config.toml.
+// Regression test for the pre-save reload introduced for issue #653.
+func TestHandleSettingsUpdate_PreservesExternalEdits(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	// Save initial config so the file exists on disk
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	// Externally modify config.toml to add volume=42
+	cfgPath := tmpDir + "/" + config.CfgFile
+	data, err := os.ReadFile(cfgPath) //nolint:gosec // test path from t.TempDir()
+	require.NoError(t, err)
+	content := strings.Replace(string(data),
+		"scan_feedback = false", "scan_feedback = false\nvolume = 42", 1)
+	require.NotEqual(t, string(data), content, "replacement should have occurred")
+	err = os.WriteFile(cfgPath, []byte(content), 0o600) //nolint:gosec // test path
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	// Call HandleSettingsUpdate changing a different field (error_reporting)
+	enabled := true
+	params := models.UpdateSettingsParams{
+		ErrorReporting: &enabled,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	// Both the external edit and the API change should be present
+	assert.Equal(t, 42, cfg.AudioVolume(), "external volume edit should survive settings update")
+	assert.True(t, cfg.ErrorReporting(), "API change should be applied")
+}
+
+func TestHandleSettings_AudioVolumeDefault(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	}
+
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+
+	assert.Equal(t, 100, resp.AudioVolume, "audioVolume should default to 100")
+}
+
+func TestHandleSettingsUpdate_AudioVolume(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	mockPlayer := mocks.NewMockPlayer()
+	mockPlayer.SetupNoOpMock()
+
+	vol := 50
+	params := models.UpdateSettingsParams{
+		AudioVolume: &vol,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Player:   mockPlayer,
+		Params:   paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	assert.Equal(t, 50, cfg.AudioVolume())
+	mockPlayer.AssertCalled(t, "SetVolume", 0.5)
 }
 
 // TestHandleSettingsReload_RefreshesLauncherCache tests that HandleSettingsReload

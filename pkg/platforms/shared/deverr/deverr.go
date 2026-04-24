@@ -1,23 +1,21 @@
-/*
-Zaparoo Core
-Copyright (c) 2026 The Zaparoo Project Contributors.
-SPDX-License-Identifier: GPL-3.0-or-later
-
-This file is part of Zaparoo Core.
-
-Zaparoo Core is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-Zaparoo Core is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 package deverr
 
@@ -31,7 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
-// No-op Dev Launchers to verify scanning and indexing routines
+// DevErr launchers provide predictable failures for indexing and launcher tests.
 
 var deverrLaunchFn = func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 	return nil, fmt.Errorf("DevErr Path Launched (Error Expected) %s", path)
@@ -77,21 +75,3 @@ func GetDevErrLaunchers() []platforms.Launcher {
 		NewDevErrAnyLauncher(),
 	}
 }
-
-// DevErr System Launcher
-// zaparoo/config.toml
-/*
-[launchers]
-index_root = ["PATH_HERE"]
-*/
-
-// DevErr Custom Launcher
-// zaparoo/launchers/CustomDevErr.toml
-/*
-[[launchers.custom]]
-id = "CustomDevErr"
-system = "DevErr"
-media_dirs = ["PATH_HERE"]
-file_exts = [".deverr"]
-execute = "badbinpath"
-*/

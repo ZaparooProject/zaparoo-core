@@ -32,8 +32,8 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
@@ -86,7 +86,7 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	if env.Unsafe {
 		return platforms.CmdResult{}, errors.New("command cannot be run from a remote source")
-	} else if env.Source != tokens.SourceControl && !env.Cfg.IsExecuteAllowed(execStr) {
+	} else if !env.Cfg.IsExecuteAllowed(execStr) {
 		return platforms.CmdResult{}, fmt.Errorf("execute not allowed: %s", execStr)
 	}
 
@@ -97,6 +97,8 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if len(tokenArgs) == 0 {
 		return platforms.CmdResult{}, errors.New("execute command is empty")
 	}
+
+	log.Debug().Str("command", execStr).Strs("argv", tokenArgs).Msg("executing zapscript command")
 
 	ctx, cancel := context.WithTimeout(context.Background(), ExecuteTimeout)
 	defer cancel()
@@ -116,7 +118,7 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}
 	}
 
-	if err := execCmd.Run(); err != nil {
+	if err := command.RunInJob(execCmd); err != nil {
 		stderrStr := strings.TrimSpace(stderr.String())
 		if stderrStr != "" {
 			log.Debug().Str("stderr", stderrStr).Msg("execute command stderr")

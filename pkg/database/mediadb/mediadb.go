@@ -275,6 +275,7 @@ var secondaryIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS tags_tagtype_idx ON Tags(TypeDBID)",
 	"CREATE INDEX IF NOT EXISTS tags_type_tag_idx ON Tags(TypeDBID, Tag)",
 	"CREATE INDEX IF NOT EXISTS mediatags_tag_media_idx ON MediaTags(TagDBID, MediaDBID)",
+	"CREATE INDEX IF NOT EXISTS mediatitletags_tag_idx ON MediaTitleTags(TagDBID)",
 	"CREATE INDEX IF NOT EXISTS supportingmedia_mediatitle_idx ON SupportingMedia(MediaTitleDBID)",
 	"CREATE INDEX IF NOT EXISTS supportingmedia_typetag_idx ON SupportingMedia(TypeTagDBID)",
 	"CREATE INDEX IF NOT EXISTS idx_systemtagscache_type_tag ON SystemTagsCache(SystemDBID, TagType, Tag)",
@@ -2124,19 +2125,38 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 
 	// NOTE: Indexes, tags cache, and slug search cache are built synchronously
 	// at the end of NewNamesIndex so the database is fully searchable when
-	// indexing completes. Only lightweight housekeeping runs in background.
+	// indexing completes. Background optimization improves query performance
+	// after the database is already open for searches.
+	//
+	// Step order matters: ANALYZE runs first to update query-planner statistics,
+	// improving plan quality for early searches. The page-prefetch warms the OS
+	// buffer cache for the tables the search path joins. BrowseCache and WAL
+	// checkpoint follow as non-critical housekeeping.
 	db.needsIndexRebuild.Store(false)
 
 	steps = append(steps,
+		optimizationStep{
+			name: "analyze", fn: db.Analyze,
+			maxRetries: 2, retryDelay: rd,
+		},
+		optimizationStep{
+			name: "page_prefetch", fn: func() error {
+				if err := db.prefetchSearchPages(db.ctx); err != nil {
+					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+						return err
+					}
+					log.Warn().Err(err).Msg("page_prefetch failed, continuing anyway")
+					return nil
+				}
+				return nil
+			},
+			maxRetries: 0, retryDelay: rd,
+		},
 		optimizationStep{
 			name: "browse_cache", fn: func() error {
 				return db.PopulateBrowseCache(db.ctx)
 			},
 			maxRetries: 0, retryDelay: rd,
-		},
-		optimizationStep{
-			name: "analyze", fn: db.Analyze,
-			maxRetries: 2, retryDelay: rd,
 		},
 		optimizationStep{
 			name: "wal_checkpoint", fn: db.WALCheckpoint,

@@ -272,12 +272,43 @@ func TestBuildTagFilterSQL_ArgumentOrder(t *testing.T) {
 		assert.Equal(t, "demo", args[9])
 		assert.Equal(t, "unfinished", args[10])
 		assert.Equal(t, "demo", args[11])
-		// OR: players/2 for MediaTags, players/2 for MediaTitleTags
+		// OR: players/2 padded to 0002 for MediaTags, players/0002 for MediaTitleTags
 		assert.Equal(t, "players", args[12])
-		assert.Equal(t, "2", args[13])
+		assert.Equal(t, "0002", args[13])
 		assert.Equal(t, "players", args[14])
-		assert.Equal(t, "2", args[15])
+		assert.Equal(t, "0002", args[15])
 	})
+}
+
+// TestBuildTagFilterSQL_AliasCanonicalisation verifies that deprecated tag forms are rewritten
+// to their canonical equivalents in the SQL arguments produced by BuildTagFilterSQL.
+func TestBuildTagFilterSQL_AliasCanonicalisation(t *testing.T) {
+	filters := []zapscript.TagFilter{
+		{Type: "addon", Value: "barcodeboy", Operator: zapscript.TagOperatorAND},
+		{Type: "addon", Value: "controller:jcart", Operator: zapscript.TagOperatorNOT},
+		{Type: "addon", Value: "controller:rumble", Operator: zapscript.TagOperatorOR},
+	}
+
+	_, args := BuildTagFilterSQL(filters)
+
+	require.Len(t, args, 12)
+	// AND: addon:barcodeboy → addon / barcode:barcodeboy (doubled for UNION)
+	assert.Equal(t, "addon", args[0])
+	assert.Equal(t, "barcode:barcodeboy", args[1])
+	assert.Equal(t, "addon", args[2])
+	assert.Equal(t, "barcode:barcodeboy", args[3])
+
+	// NOT: addon:controller:jcart → embedded / slot:jcart (doubled)
+	assert.Equal(t, "embedded", args[4])
+	assert.Equal(t, "slot:jcart", args[5])
+	assert.Equal(t, "embedded", args[6])
+	assert.Equal(t, "slot:jcart", args[7])
+
+	// OR: addon:controller:rumble → embedded / vibration:rumble (doubled)
+	assert.Equal(t, "embedded", args[8])
+	assert.Equal(t, "vibration:rumble", args[9])
+	assert.Equal(t, "embedded", args[10])
+	assert.Equal(t, "vibration:rumble", args[11])
 }
 
 // TestBuildTagFilterSQL_SQLInjectionSafety tests that generated SQL is safe from injection
@@ -582,21 +613,21 @@ func TestBuildTagFilterSQL_Regression(t *testing.T) {
 			description: "Arguments must match SQL clause order with MediaTags + MediaTitleTags",
 			validate: func(t *testing.T, _ []string, args []any) {
 				require.Len(t, args, 12) // 3 filters * 4 args each
-				// AND: a/1 for MediaTags, a/1 for MediaTitleTags
+				// AND: a/1 padded to 0001 for MediaTags, a/0001 for MediaTitleTags
 				assert.Equal(t, "a", args[0])
-				assert.Equal(t, "1", args[1])
+				assert.Equal(t, "0001", args[1])
 				assert.Equal(t, "a", args[2])
-				assert.Equal(t, "1", args[3])
-				// NOT: b/2 for MediaTags, b/2 for MediaTitleTags
+				assert.Equal(t, "0001", args[3])
+				// NOT: b/2 padded to 0002 for MediaTags, b/0002 for MediaTitleTags
 				assert.Equal(t, "b", args[4])
-				assert.Equal(t, "2", args[5])
+				assert.Equal(t, "0002", args[5])
 				assert.Equal(t, "b", args[6])
-				assert.Equal(t, "2", args[7])
-				// OR: c/3 for MediaTags, c/3 for MediaTitleTags
+				assert.Equal(t, "0002", args[7])
+				// OR: c/3 padded to 0003 for MediaTags, c/0003 for MediaTitleTags
 				assert.Equal(t, "c", args[8])
-				assert.Equal(t, "3", args[9])
+				assert.Equal(t, "0003", args[9])
 				assert.Equal(t, "c", args[10])
-				assert.Equal(t, "3", args[11])
+				assert.Equal(t, "0003", args[11])
 			},
 		},
 	}
@@ -607,4 +638,161 @@ func TestBuildTagFilterSQL_Regression(t *testing.T) {
 			tt.validate(t, clauses, args)
 		})
 	}
+}
+
+func TestExpandCreditFilters(t *testing.T) {
+	t.Parallel()
+
+	t.Run("AND credit passes through unchanged", func(t *testing.T) {
+		input := []zapscript.TagFilter{
+			{Type: "credit", Value: "konami", Operator: zapscript.TagOperatorAND},
+		}
+		got := expandCreditFilters(input)
+		require.Len(t, got, 1)
+		assert.Equal(t, zapscript.TagOperatorAND, got[0].Operator)
+		assert.Equal(t, "credit", got[0].Type)
+		assert.Equal(t, "konami", got[0].Value)
+	})
+
+	t.Run("NOT credit expands to three NOT filters", func(t *testing.T) {
+		input := []zapscript.TagFilter{
+			{Type: "credit", Value: "sega", Operator: zapscript.TagOperatorNOT},
+		}
+		got := expandCreditFilters(input)
+		require.Len(t, got, 3)
+		for _, f := range got {
+			assert.Equal(t, zapscript.TagOperatorNOT, f.Operator)
+			assert.Equal(t, "sega", f.Value)
+		}
+	})
+
+	t.Run("OR credit expands to three OR filters", func(t *testing.T) {
+		input := []zapscript.TagFilter{
+			{Type: "credit", Value: "nintendo", Operator: zapscript.TagOperatorOR},
+		}
+		got := expandCreditFilters(input)
+		require.Len(t, got, 3)
+		for _, f := range got {
+			assert.Equal(t, zapscript.TagOperatorOR, f.Operator)
+		}
+	})
+
+	t.Run("Non-credit filters pass through unchanged", func(t *testing.T) {
+		input := []zapscript.TagFilter{
+			{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+			{Type: "credit", Value: "capcom", Operator: zapscript.TagOperatorAND},
+			{Type: "lang", Value: "en", Operator: zapscript.TagOperatorAND},
+		}
+		got := expandCreditFilters(input)
+		// region, AND credit, and lang all pass through unchanged (AND credit is not expanded here)
+		require.Len(t, got, 3)
+		assert.Equal(t, "region", got[0].Type)
+		assert.Equal(t, "credit", got[1].Type)
+		assert.Equal(t, "lang", got[2].Type)
+	})
+
+	t.Run("Empty input returns empty", func(t *testing.T) {
+		assert.Empty(t, expandCreditFilters(nil))
+		assert.Empty(t, expandCreditFilters([]zapscript.TagFilter{}))
+	})
+}
+
+func TestBuildTagFilterSQL_CreditUnion(t *testing.T) {
+	t.Parallel()
+
+	t.Run("AND credit generates IN clause covering all credit roles", func(t *testing.T) {
+		filters := []zapscript.TagFilter{
+			{Type: "credit", Value: "nintendo", Operator: zapscript.TagOperatorAND},
+		}
+		clauses, args := BuildTagFilterSQL(filters)
+		// Single AND credit → one per-filter IN clause (not via OR expansion)
+		require.Len(t, clauses, 1)
+		assert.Contains(t, clauses[0], "Media.DBID IN (")
+		// Types are in args (placeholders), not embedded in SQL
+		argStrs := make([]string, 0, len(args))
+		for _, a := range args {
+			if s, ok := a.(string); ok {
+				argStrs = append(argStrs, s)
+			}
+		}
+		assert.Contains(t, argStrs, "developer")
+		assert.Contains(t, argStrs, "publisher")
+		assert.Contains(t, argStrs, "credit")
+		assert.Contains(t, argStrs, "nintendo")
+	})
+
+	t.Run("two AND credit filters intersect, not union", func(t *testing.T) {
+		filters := []zapscript.TagFilter{
+			{Type: "credit", Value: "konami", Operator: zapscript.TagOperatorAND},
+			{Type: "credit", Value: "capcom", Operator: zapscript.TagOperatorAND},
+		}
+		clauses, args := BuildTagFilterSQL(filters)
+		// Two AND credit filters → two separate IN clauses, joined with AND by caller
+		require.Len(t, clauses, 2)
+		assert.Contains(t, clauses[0], "Media.DBID IN (")
+		assert.Contains(t, clauses[1], "Media.DBID IN (")
+		argStrs := make([]string, 0, len(args))
+		for _, a := range args {
+			if s, ok := a.(string); ok {
+				argStrs = append(argStrs, s)
+			}
+		}
+		assert.Contains(t, argStrs, "konami")
+		assert.Contains(t, argStrs, "capcom")
+	})
+
+	t.Run("credit AND combined with region AND", func(t *testing.T) {
+		filters := []zapscript.TagFilter{
+			{Type: "region", Value: "us", Operator: zapscript.TagOperatorAND},
+			{Type: "credit", Value: "konami", Operator: zapscript.TagOperatorAND},
+		}
+		clauses, _ := BuildTagFilterSQL(filters)
+		// One INTERSECT clause for region (AND), one IN clause for credit
+		require.Len(t, clauses, 2)
+	})
+}
+
+func TestBuildTagFilterSQL_EditionAndRelease(t *testing.T) {
+	t.Parallel()
+
+	t.Run("edition filter is strict (no expansion)", func(t *testing.T) {
+		filters := []zapscript.TagFilter{
+			{Type: "edition", Value: "special", Operator: zapscript.TagOperatorAND},
+		}
+		clauses, args := BuildTagFilterSQL(filters)
+		require.Len(t, clauses, 1)
+		// AND path: Media.DBID IN (...), not an OR EXISTS
+		assert.Contains(t, clauses[0], "Media.DBID IN")
+		assert.NotContains(t, clauses[0], "EXISTS")
+		argStrs := make([]string, 0, len(args))
+		for _, a := range args {
+			if s, ok := a.(string); ok {
+				argStrs = append(argStrs, s)
+			}
+		}
+		assert.Contains(t, argStrs, "edition")
+		assert.Contains(t, argStrs, "special")
+		// Must not expand to developer/publisher/credit
+		assert.NotContains(t, argStrs, "developer")
+		assert.NotContains(t, argStrs, "publisher")
+		assert.NotContains(t, argStrs, "credit")
+	})
+
+	t.Run("release filter is strict (no expansion)", func(t *testing.T) {
+		filters := []zapscript.TagFilter{
+			{Type: "release", Value: "homebrew", Operator: zapscript.TagOperatorAND},
+		}
+		clauses, args := BuildTagFilterSQL(filters)
+		require.Len(t, clauses, 1)
+		assert.Contains(t, clauses[0], "Media.DBID IN")
+		assert.NotContains(t, clauses[0], "EXISTS")
+		argStrs := make([]string, 0, len(args))
+		for _, a := range args {
+			if s, ok := a.(string); ok {
+				argStrs = append(argStrs, s)
+			}
+		}
+		assert.Contains(t, argStrs, "release")
+		assert.Contains(t, argStrs, "homebrew")
+	})
 }

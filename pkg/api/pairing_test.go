@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -91,16 +92,20 @@ func (h *pairingTestHarness) runHandshake(
 	t.Helper()
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
 	require.NoError(t, err)
-	msgA := clientPake.Bytes()
+	msgA, err := crypto.EncodePakeMessage(clientPake.Bytes())
+	require.NoError(t, err)
 
 	sessionID, msgB, err := h.mgr.startSession(name, msgA)
 	require.NoError(t, err)
 
-	require.NoError(t, clientPake.Update(msgB))
+	msgBInternal, err := crypto.DecodePakeMessage(msgB)
+	require.NoError(t, err)
+	require.NoError(t, clientPake.Update(msgBInternal))
 	clientSessionKey, err := clientPake.SessionKey()
 	require.NoError(t, err)
 
-	prk, err := hkdf.Extract(sha256.New, clientSessionKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientSessionKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -255,15 +260,19 @@ func TestWrongPIN_Rejected(t *testing.T) {
 	// Use a wrong PIN — different session key, HMAC will not match.
 	wrongPake, err := pake.InitCurve([]byte("999999"), 0, pairingCurve)
 	require.NoError(t, err)
-	msgA := wrongPake.Bytes()
+	msgA, err := crypto.EncodePakeMessage(wrongPake.Bytes())
+	require.NoError(t, err)
 	sessionID, msgB, err := h.mgr.startSession("App", msgA)
 	require.NoError(t, err)
 
-	require.NoError(t, wrongPake.Update(msgB))
+	msgBInternal, err := crypto.DecodePakeMessage(msgB)
+	require.NoError(t, err)
+	require.NoError(t, wrongPake.Update(msgBInternal))
 	clientKey, err := wrongPake.SessionKey()
 	require.NoError(t, err)
 
-	prk, err := hkdf.Extract(sha256.New, clientKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -284,7 +293,8 @@ func TestMaxAttempts_PINInvalidatedAfterExhaustion(t *testing.T) {
 	for i := range 2 {
 		wrongPake, pkErr := pake.InitCurve([]byte("999999"), 0, pairingCurve)
 		require.NoError(t, pkErr)
-		msgA := wrongPake.Bytes()
+		msgA, encErr := crypto.EncodePakeMessage(wrongPake.Bytes())
+		require.NoError(t, encErr)
 		sessionID, _, sErr := h.mgr.startSession("App", msgA)
 		require.NoError(t, sErr)
 		_, finishErr := h.mgr.finishSession(sessionID, []byte("garbage hmac"))
@@ -359,7 +369,9 @@ func TestPairFinish_SessionExpired(t *testing.T) {
 
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
 	require.NoError(t, err)
-	sessionID, _, err := h.mgr.startSession("App", clientPake.Bytes())
+	msgA, err := crypto.EncodePakeMessage(clientPake.Bytes())
+	require.NoError(t, err)
+	sessionID, _, err := h.mgr.startSession("App", msgA)
 	require.NoError(t, err)
 
 	time.Sleep(15 * time.Millisecond)
@@ -389,16 +401,20 @@ func TestPairFinish_ConcurrentCallsOneWins(t *testing.T) {
 
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
 	require.NoError(t, err)
-	msgA := clientPake.Bytes()
+	msgA, err := crypto.EncodePakeMessage(clientPake.Bytes())
+	require.NoError(t, err)
 
 	sessionID, msgB, err := h.mgr.startSession("ConcurrentApp", msgA)
 	require.NoError(t, err)
 
-	require.NoError(t, clientPake.Update(msgB))
+	msgBInternal, err := crypto.DecodePakeMessage(msgB)
+	require.NoError(t, err)
+	require.NoError(t, clientPake.Update(msgBInternal))
 	sessionKey, err := clientPake.SessionKey()
 	require.NoError(t, err)
 
-	prk, err := hkdf.Extract(sha256.New, sessionKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, sessionKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -473,14 +489,18 @@ func TestMaxClients_FinishSessionDefenseInDepth(t *testing.T) {
 
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
 	require.NoError(t, err)
-	msgA := clientPake.Bytes()
+	msgA, err := crypto.EncodePakeMessage(clientPake.Bytes())
+	require.NoError(t, err)
 	sessionID, msgB, err := mgr.startSession("App", msgA)
 	require.NoError(t, err)
 
-	require.NoError(t, clientPake.Update(msgB))
+	msgBInternal, err := crypto.DecodePakeMessage(msgB)
+	require.NoError(t, err)
+	require.NoError(t, clientPake.Update(msgBInternal))
 	clientKey, err := clientPake.SessionKey()
 	require.NoError(t, err)
-	prk, err := hkdf.Extract(sha256.New, clientKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -499,7 +519,9 @@ func TestStartPairing_WipesOldSessions(t *testing.T) {
 
 	clientPake, err := pake.InitCurve([]byte(pin1), 0, pairingCurve)
 	require.NoError(t, err)
-	sessionID, _, err := h.mgr.startSession("App", clientPake.Bytes())
+	msgA, err := crypto.EncodePakeMessage(clientPake.Bytes())
+	require.NoError(t, err)
+	sessionID, _, err := h.mgr.startSession("App", msgA)
 	require.NoError(t, err)
 
 	h.mgr.CancelPairing()
@@ -523,7 +545,8 @@ func TestHTTPHandlers_FullFlow(t *testing.T) {
 
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
 	require.NoError(t, err)
-	msgA := clientPake.Bytes()
+	msgA, err := crypto.EncodePakeMessage(clientPake.Bytes())
+	require.NoError(t, err)
 
 	startBody, err := json.Marshal(pairStartRequest{
 		PAKE: base64.StdEncoding.EncodeToString(msgA),
@@ -545,10 +568,13 @@ func TestHTTPHandlers_FullFlow(t *testing.T) {
 	msgB, err := base64.StdEncoding.DecodeString(startResp.PAKE)
 	require.NoError(t, err)
 
-	require.NoError(t, clientPake.Update(msgB))
+	msgBInternal, err := crypto.DecodePakeMessage(msgB)
+	require.NoError(t, err)
+	require.NoError(t, clientPake.Update(msgBInternal))
 	clientKey, err := clientPake.SessionKey()
 	require.NoError(t, err)
-	prk, err := hkdf.Extract(sha256.New, clientKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -626,7 +652,8 @@ func TestHandlePairFinish_AuditLogsHMACMismatch(t *testing.T) {
 		wrongPake, err = pake.InitCurve([]byte("111111"), 0, pairingCurve)
 		require.NoError(t, err)
 	}
-	msgA := wrongPake.Bytes()
+	msgA, err := crypto.EncodePakeMessage(wrongPake.Bytes())
+	require.NoError(t, err)
 
 	startBody, err := json.Marshal(pairStartRequest{
 		PAKE: base64.StdEncoding.EncodeToString(msgA),
@@ -645,10 +672,13 @@ func TestHandlePairFinish_AuditLogsHMACMismatch(t *testing.T) {
 	require.NoError(t, json.Unmarshal(startRec.Body.Bytes(), &startResp))
 	msgB, err := base64.StdEncoding.DecodeString(startResp.PAKE)
 	require.NoError(t, err)
-	require.NoError(t, wrongPake.Update(msgB))
+	msgBInternal, err := crypto.DecodePakeMessage(msgB)
+	require.NoError(t, err)
+	require.NoError(t, wrongPake.Update(msgBInternal))
 	clientKey, err := wrongPake.SessionKey()
 	require.NoError(t, err)
-	prk, err := hkdf.Extract(sha256.New, clientKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -696,7 +726,8 @@ func TestHandlePairFinish_AuditLogsExhaustion(t *testing.T) {
 	}
 	wrongPake, err := pake.InitCurve([]byte(wrongPIN), 0, pairingCurve)
 	require.NoError(t, err)
-	msgA := wrongPake.Bytes()
+	msgA, err := crypto.EncodePakeMessage(wrongPake.Bytes())
+	require.NoError(t, err)
 	startBody, err := json.Marshal(pairStartRequest{
 		PAKE: base64.StdEncoding.EncodeToString(msgA),
 		Name: "App",
@@ -714,10 +745,13 @@ func TestHandlePairFinish_AuditLogsExhaustion(t *testing.T) {
 	require.NoError(t, json.Unmarshal(startRec.Body.Bytes(), &startResp))
 	msgB, err := base64.StdEncoding.DecodeString(startResp.PAKE)
 	require.NoError(t, err)
-	require.NoError(t, wrongPake.Update(msgB))
+	msgBInternal, err := crypto.DecodePakeMessage(msgB)
+	require.NoError(t, err)
+	require.NoError(t, wrongPake.Update(msgBInternal))
 	clientKey, err := wrongPake.SessionKey()
 	require.NoError(t, err)
-	prk, err := hkdf.Extract(sha256.New, clientKey, nil)
+	salt := slices.Concat(msgA, msgB)
+	prk, err := hkdf.Extract(sha256.New, clientKey, salt)
 	require.NoError(t, err)
 	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
 	require.NoError(t, err)
@@ -768,6 +802,26 @@ func TestHTTPHandler_BadBase64(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	startHandler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestHTTPHandler_MalformedPakeMessage(t *testing.T) {
+	t.Parallel()
+	h := newPairingHarness(t)
+
+	_, _, err := h.mgr.StartPairing()
+	require.NoError(t, err)
+
+	// Valid base64 but invalid PAKE wire format JSON inside.
+	malformed := base64.StdEncoding.EncodeToString([]byte(`{"role":0,"ux":"not_a_number"}`))
+	body, err := json.Marshal(pairStartRequest{PAKE: malformed, Name: "App"})
+	require.NoError(t, err)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/pair/start",
+		strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.mgr.HandlePairStart().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
@@ -850,7 +904,9 @@ func TestCleanupExpired_RemovesOldSessions(t *testing.T) {
 
 	clientPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
 	require.NoError(t, err)
-	_, _, err = h.mgr.startSession("App", clientPake.Bytes())
+	msgA, err := crypto.EncodePakeMessage(clientPake.Bytes())
+	require.NoError(t, err)
+	_, _, err = h.mgr.startSession("App", msgA)
 	require.NoError(t, err)
 
 	time.Sleep(15 * time.Millisecond)

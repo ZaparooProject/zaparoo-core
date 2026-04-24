@@ -500,7 +500,7 @@ func (r *Reader) processNewTag(ctx context.Context, detectedTag *pn532.DetectedT
 
 	log.Info().Msgf("detected %s tag: %s", token.Type, token.UID)
 	if token.Text != "" {
-		log.Info().Msgf("NDEF text: %s", token.Text)
+		log.Debug().Msgf("NDEF text: %s", token.Text)
 	}
 
 	iq <- readers.Scan{
@@ -580,6 +580,10 @@ func (*Reader) Detect(connected []string) string {
 	}
 	probeStateMu.Unlock()
 
+	// TODO: The error branches for detection.DetectAll and helpers.GetSerialDeviceList
+	// are not unit-tested because both functions depend on hardware enumeration
+	// which is not injectable. Consider extracting a DeviceDetector interface to
+	// allow mock-based testing.
 	log.Trace().Msgf("PN532: ignoring paths: %v", ignorePaths)
 
 	// Try to detect PN532 devices
@@ -593,7 +597,11 @@ func (*Reader) Detect(connected []string) string {
 	defer cancel()
 	devices, err := detection.DetectAll(ctx, &opts)
 	if err != nil {
-		log.Debug().Err(err).Msg("PN532 detection returned error")
+		if errors.Is(err, detection.ErrNoDevicesFound) {
+			log.Trace().Msg("no PN532 devices found during detection")
+		} else {
+			log.Warn().Err(err).Msg("PN532 detection returned unexpected error")
+		}
 		return ""
 	}
 	if len(devices) > 0 {
@@ -760,7 +768,8 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 				return writeErr
 			}
 
-			log.Info().Msgf("successfully wrote text to PN532 tag: %s", text)
+			log.Info().Msg("successfully wrote text to PN532 tag")
+			log.Debug().Msgf("wrote NDEF text: %s", text)
 
 			// Create result token with UID from the tag
 			tagType := tag.Type()

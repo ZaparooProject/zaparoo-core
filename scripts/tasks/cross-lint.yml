@@ -1,0 +1,65 @@
+version: "3"
+
+tasks:
+  setup:
+    internal: true
+    cmds:
+      - task: :docker:build-image
+        vars:
+          IMAGE_NAME: zaparoo/zigcc
+          DOCKERFILE: "./scripts/zigcc"
+
+  windows:
+    desc: Run golangci-lint targeting Windows via zigcc
+    cmds:
+      - task: setup
+      - task: :docker:run
+        vars:
+          IMAGE_NAME: zaparoo/zigcc
+          PLATFORM: windows
+          BUILD_OS: windows
+          BUILD_ARCH: amd64
+          CC: "zig cc -w --target=x86_64-windows-gnu"
+          CXX: "zig c++ -w --target=x86_64-windows-gnu"
+          EXEC: >-
+            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1
+            && PATH="/home/build/bin:$PATH" golangci-lint run --fix --timeout=5m'
+          EXTRA_DOCKER_ARGS: >-
+            -e GOOS=windows
+            -e GOARCH=amd64
+            -e CGO_ENABLED=1
+            -e CGO_LDFLAGS="-Wl,--subsystem,windows"
+
+  mac:
+    desc: Run golangci-lint targeting macOS via zigcc
+    cmds:
+      - task: setup
+      - task: :docker:run
+        vars:
+          IMAGE_NAME: zaparoo/zigcc
+          PLATFORM: mac
+          BUILD_OS: darwin
+          BUILD_ARCH: amd64
+          CC: >-
+            zig cc -w --target=x86_64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+          CXX: >-
+            zig c++ -w --target=x86_64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+          EXEC: >-
+            bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1
+            && PATH="/home/build/bin:$PATH" golangci-lint run --fix --timeout=5m'
+          EXTRA_DOCKER_ARGS: >-
+            -e GOOS=darwin
+            -e GOARCH=amd64
+            -e CGO_ENABLED=1
+
+  all:
+    desc: Run golangci-lint for Windows and macOS via zigcc
+    cmds:
+      - task: windows
+      - task: mac

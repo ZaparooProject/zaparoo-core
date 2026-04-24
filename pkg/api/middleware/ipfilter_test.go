@@ -376,6 +376,90 @@ func TestNonWSIPFilterMiddleware_HotReload(t *testing.T) {
 	assert.Equal(t, http.StatusOK, recorder.Code)
 }
 
+func TestRunIPFilterMiddleware_LoopbackBypass(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := RunIPFilterMiddleware(ipsProvider(nil), func() bool { return false })
+	wrapped := mw(next)
+
+	//nolint:noctx // test helper
+	req := httptest.NewRequest(http.MethodGet, "/run/test", http.NoBody)
+	req.RemoteAddr = "127.0.0.1:12345"
+	recorder := httptest.NewRecorder()
+	wrapped.ServeHTTP(recorder, req)
+
+	assert.True(t, called, "loopback must bypass all checks")
+	assert.Equal(t, http.StatusOK, recorder.Code)
+}
+
+func TestRunIPFilterMiddleware_AllowRunBypass(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := RunIPFilterMiddleware(ipsProvider(nil), func() bool { return true })
+	wrapped := mw(next)
+
+	//nolint:noctx // test helper
+	req := httptest.NewRequest(http.MethodGet, "/run/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.50:12345"
+	recorder := httptest.NewRecorder()
+	wrapped.ServeHTTP(recorder, req)
+
+	assert.True(t, called, "remote must be admitted when hasAllowRun returns true")
+	assert.Equal(t, http.StatusOK, recorder.Code)
+}
+
+func TestRunIPFilterMiddleware_AllowedIPsFallback(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := RunIPFilterMiddleware(ipsProvider([]string{"192.168.1.50"}), func() bool { return false })
+	wrapped := mw(next)
+
+	//nolint:noctx // test helper
+	req := httptest.NewRequest(http.MethodGet, "/run/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.50:12345"
+	recorder := httptest.NewRecorder()
+	wrapped.ServeHTTP(recorder, req)
+
+	assert.True(t, called, "IP in AllowedIPs must be admitted via fallback")
+	assert.Equal(t, http.StatusOK, recorder.Code)
+}
+
+func TestRunIPFilterMiddleware_RemoteDenied(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := RunIPFilterMiddleware(ipsProvider(nil), func() bool { return false })
+	wrapped := mw(next)
+
+	//nolint:noctx // test helper
+	req := httptest.NewRequest(http.MethodGet, "/run/test", http.NoBody)
+	req.RemoteAddr = "192.168.1.50:12345"
+	recorder := httptest.NewRecorder()
+	wrapped.ServeHTTP(recorder, req)
+
+	assert.False(t, called, "remote must be denied when hasAllowRun is false and IP not allowed")
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
 func TestMatchAllowedIPs(t *testing.T) {
 	t.Parallel()
 

@@ -33,6 +33,7 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
@@ -257,6 +258,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 		if scanErr := rows.Scan(&tag.Tag, &tag.Type); scanErr != nil {
 			return result, fmt.Errorf("failed to scan tag: %w", scanErr)
 		}
+		tag.Tag = tags.UnpadTagValue(tag.Tag)
 		result.Tags = append(result.Tags, tag)
 	}
 
@@ -282,8 +284,16 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 	// Single query: find tag types where siblings under the same title have
 	// different values, then return only the target media's tags for those types.
 	// Checks both MediaTags (file-level) and MediaTitleTags (title-level) tags.
-	//nolint:gosec // Safe: ZapScriptTagTypes is internal, not user input
-	rows, err := db.conn().QueryContext(ctx, `
+	typePlaceholders := prepareVariadic("?", ",", len(database.ZapScriptTagTypes))
+	args := make([]any, 0, 2+len(database.ZapScriptTagTypes)*4)
+	args = append(args, systemID, path)
+	for range 4 {
+		for _, tagType := range database.ZapScriptTagTypes {
+			args = append(args, tagType)
+		}
+	}
+
+	rows, err := db.conn().QueryContext(ctx, fmt.Sprintf(`
 		WITH Target AS (
 			SELECT Media.DBID, Media.MediaTitleDBID
 			FROM Media
@@ -298,14 +308,14 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 			JOIN MediaTags mt ON Target.DBID = mt.MediaDBID
 			JOIN Tags t ON mt.TagDBID = t.DBID
 			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			WHERE tt.Type IN ('year', 'players')
+			WHERE tt.Type IN (%s)
 			UNION
 			SELECT DISTINCT tt.DBID as TypeDBID, tt.Type, t.Tag
 			FROM Target
 			JOIN MediaTitleTags mtt ON Target.MediaTitleDBID = mtt.MediaTitleDBID
 			JOIN Tags t ON mtt.TagDBID = t.DBID
 			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			WHERE tt.Type IN ('year', 'players')
+			WHERE tt.Type IN (%s)
 		),
 		-- All eligible tags across siblings (file-level + title-level)
 		SiblingTags AS (
@@ -315,7 +325,7 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 			JOIN MediaTags smt ON sibling.DBID = smt.MediaDBID
 			JOIN Tags t ON smt.TagDBID = t.DBID
 			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			WHERE tt.Type IN ('year', 'players')
+			WHERE tt.Type IN (%s)
 			AND sibling.IsMissing = 0
 			UNION
 			SELECT DISTINCT t.Tag, t.TypeDBID
@@ -323,7 +333,7 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 			JOIN MediaTitleTags mtt ON Target.MediaTitleDBID = mtt.MediaTitleDBID
 			JOIN Tags t ON mtt.TagDBID = t.DBID
 			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			WHERE tt.Type IN ('year', 'players')
+			WHERE tt.Type IN (%s)
 		)
 		SELECT tt.Type, tt.Tag
 		FROM TargetTags tt
@@ -333,7 +343,7 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 			WHERE st.TypeDBID = tt.TypeDBID
 		) > 1
 		ORDER BY tt.Type, tt.Tag
-	`, systemID, path)
+	`, typePlaceholders, typePlaceholders, typePlaceholders, typePlaceholders), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get zapscript tags by system and path: %w", err)
 	}
@@ -343,17 +353,18 @@ func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
 		}
 	}()
 
-	var tags []database.TagInfo
+	resultTags := make([]database.TagInfo, 0)
 	for rows.Next() {
 		var tag database.TagInfo
 		if scanErr := rows.Scan(&tag.Type, &tag.Tag); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan tag: %w", scanErr)
 		}
-		tags = append(tags, tag)
+		tag.Tag = tags.UnpadTagValue(tag.Tag)
+		resultTags = append(resultTags, tag)
 	}
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 
-	return tags, nil
+	return resultTags, nil
 }

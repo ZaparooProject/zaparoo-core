@@ -166,6 +166,36 @@ func TestSlugifyBasic(t *testing.T) {
 			expected: "worldwar2",
 		},
 		{
+			name:     "dotted_initialism_tv",
+			input:    "Super Smash T.V.",
+			expected: "supersmashtv",
+		},
+		{
+			name:     "dotted_initialism_tv_no_periods",
+			input:    "Super Smash TV",
+			expected: "supersmashtv",
+		},
+		{
+			name:     "dotted_initialism_mask",
+			input:    "M.A.S.K.",
+			expected: "mask",
+		},
+		{
+			name:     "dotted_initialism_et",
+			input:    "E.T. the Extra-Terrestrial",
+			expected: "ettheextraterrestrial",
+		},
+		{
+			name:     "dotted_initialism_single_pair_bros",
+			input:    "Super Mario Bros.",
+			expected: "supermariobrothers",
+		},
+		{
+			name:     "roman_numeral_v_end_preserved",
+			input:    "Final Fantasy V",
+			expected: "finalfantasy5",
+		},
+		{
 			name:     "separator_colon",
 			input:    "Zelda: Link's Awakening",
 			expected: "zeldalinksawakening",

@@ -611,6 +611,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.System3DO),
 		},
 		{
+			ID:       "DualRAM3DO",
+			SystemID: systemdefs.System3DO,
+			Launch:   launchAltCore("DualRAM3DO", systemdefs.System3DO, "_Console (Dual SDRAM)/3DO"),
+		},
+		{
 			ID:         systemdefs.SystemAdventureVision,
 			SystemID:   systemdefs.SystemAdventureVision,
 			Folders:    []string{"AVision"},
@@ -841,6 +846,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemJaguar),
 		},
 		{
+			ID:       "DualRAMJaguar",
+			SystemID: systemdefs.SystemJaguar,
+			Launch:   launchAltCore("DualRAMJaguar", systemdefs.SystemJaguar, "_Console (Dual SDRAM)/Jaguar"),
+		},
+		{
 			ID:         systemdefs.SystemJaguarCD,
 			SystemID:   systemdefs.SystemJaguarCD,
 			Folders:    []string{"Jaguar"},
@@ -1026,6 +1036,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchAltCore("PWM2XPSX", systemdefs.SystemPSX, "_ConsolePWM/_Turbo/PSX2XCPU_PWM"),
 		},
 		{
+			ID:       "DualRAMPSX",
+			SystemID: systemdefs.SystemPSX,
+			Launch:   launchAltCore("DualRAMPSX", systemdefs.SystemPSX, "_Console (Dual SDRAM)/PSX"),
+		},
+		{
 			ID:         systemdefs.SystemSega32X,
 			SystemID:   systemdefs.SystemSega32X,
 			Folders:    []string{"S32X"},
@@ -1081,6 +1096,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchAltCore("PWMSaturn", systemdefs.SystemSaturn, "_ConsolePWM/Saturn_PWM"),
 		},
 		{
+			ID:       "DualRAMSaturn",
+			SystemID: systemdefs.SystemSaturn,
+			Launch:   launchAltCore("DualRAMSaturn", systemdefs.SystemSaturn, "_Console (Dual SDRAM)/Saturn"),
+		},
+		{
 			ID:         systemdefs.SystemSNES,
 			SystemID:   systemdefs.SystemSNES,
 			Folders:    []string{"SNES"},
@@ -1110,6 +1130,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"TGFX16"},
 			Extensions: []string{".sgx"},
 			Launch:     launch(pl, systemdefs.SystemSuperGrafx),
+		},
+		{
+			ID:       "LLAPISuperGrafx",
+			SystemID: systemdefs.SystemSuperGrafx,
+			Launch:   launchAltCore("LLAPISuperGrafx", systemdefs.SystemSuperGrafx, "_LLAPI/TurboGrafx16_LLAPI"),
 		},
 		{
 			ID:         systemdefs.SystemTurboGrafx16,

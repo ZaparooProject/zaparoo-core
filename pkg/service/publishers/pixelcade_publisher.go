@@ -27,6 +27,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	pathpkg "path"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -39,10 +41,6 @@ const (
 
 	PixelCadeModeStream = "stream"
 	PixelCadeModeWrite  = "write"
-
-	PixelCadeOnStopBlank   = "blank"
-	PixelCadeOnStopMarquee = "marquee"
-	PixelCadeOnStopNone    = "none"
 )
 
 // PixelCadePublisher transforms Zaparoo notifications into PixelCade REST API
@@ -54,27 +52,22 @@ type PixelCadePublisher struct {
 	host    string
 	baseURL string
 	mode    string
-	onStop  string
 	filter  []string
 }
 
 // NewPixelCadePublisher creates a new PixelCade publisher for the given host
 // and configuration options.
-func NewPixelCadePublisher(host string, port int, mode, onStop string, filter []string) *PixelCadePublisher {
+func NewPixelCadePublisher(host string, port int, mode string, filter []string) *PixelCadePublisher {
 	if port == 0 {
 		port = pixelCadeDefaultPort
 	}
 	if mode == "" {
 		mode = PixelCadeModeStream
 	}
-	if onStop == "" {
-		onStop = PixelCadeOnStopBlank
-	}
 	return &PixelCadePublisher{
 		host:    host,
 		baseURL: fmt.Sprintf("http://%s:%d", host, port),
 		mode:    mode,
-		onStop:  onStop,
 		filter:  filter,
 		client: &http.Client{
 			Timeout: pixelCadeRequestTimeout,
@@ -96,25 +89,18 @@ func (p *PixelCadePublisher) Start(ctx context.Context) error {
 			p.mode, PixelCadeModeStream, PixelCadeModeWrite)
 	}
 
-	switch p.onStop {
-	case PixelCadeOnStopBlank, PixelCadeOnStopMarquee, PixelCadeOnStopNone:
-	default:
-		return fmt.Errorf("pixelcade publisher: invalid on_stop %q (must be %q, %q, or %q)",
-			p.onStop, PixelCadeOnStopBlank, PixelCadeOnStopMarquee, PixelCadeOnStopNone)
-	}
-
 	p.ctx, p.cancel = context.WithCancel(ctx)
 
 	log.Info().Msgf(
-		"pixelcade publisher: initialized (%s, mode: %s, on_stop: %s)",
-		p.baseURL, p.mode, p.onStop,
+		"pixelcade publisher: initialized (%s, mode: %s)",
+		p.baseURL, p.mode,
 	)
 	return nil
 }
 
 // Publish handles a notification by transforming it into a PixelCade API call.
-// Only media.started and media.stopped notifications are handled; all others
-// are silently ignored.
+// Only media.started notifications are transformed into PixelCade API calls;
+// all other notifications are silently ignored.
 func (p *PixelCadePublisher) Publish(notif models.Notification) error {
 	if !MatchesFilter(p.filter, notif.Method) {
 		return nil
@@ -123,8 +109,6 @@ func (p *PixelCadePublisher) Publish(notif models.Notification) error {
 	switch notif.Method {
 	case models.NotificationStarted:
 		return p.handleMediaStarted(notif.Params)
-	case models.NotificationStopped:
-		return p.handleMediaStopped()
 	default:
 		return nil
 	}
@@ -145,23 +129,22 @@ func (p *PixelCadePublisher) handleMediaStarted(params json.RawMessage) error {
 	}
 
 	console := url.PathEscape(pixelCadeConsoleName(started.SystemID))
-	rom := url.PathEscape(started.MediaName)
+	rom := url.PathEscape(pixelCadeMediaIdentifier(started.MediaPath))
+	query := url.Values{"event": {"GameStart"}}
 
-	reqURL := fmt.Sprintf("%s/arcade/%s/%s/%s", p.baseURL, p.mode, console, rom)
+	reqURL := fmt.Sprintf("%s/arcade/%s/%s/%s?%s", p.baseURL, p.mode, console, rom, query.Encode())
 	return p.doRequest(reqURL)
 }
 
-func (p *PixelCadePublisher) handleMediaStopped() error {
-	switch p.onStop {
-	case PixelCadeOnStopBlank:
-		return p.doRequest(p.baseURL + "/arcade/stream/black/dummy")
-	case PixelCadeOnStopMarquee:
-		return p.doRequest(p.baseURL + "/arcade/write/marquee/dummy")
-	case PixelCadeOnStopNone:
-		return nil
-	default:
-		return nil
+func pixelCadeMediaIdentifier(mediaPath string) string {
+	normalizedPath := strings.ReplaceAll(mediaPath, "\\", "/")
+	identifier := pathpkg.Base(normalizedPath)
+
+	if ext := pathpkg.Ext(identifier); ext != "" {
+		identifier = strings.TrimSuffix(identifier, ext)
 	}
+
+	return identifier
 }
 
 func (p *PixelCadePublisher) doRequest(reqURL string) error {

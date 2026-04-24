@@ -72,12 +72,20 @@ func (ad *AutoDetector) DetectReaders(
 			DefaultAutoDetect: metadata.DefaultAutoDetect,
 		}
 
+		closeUnused := func() {
+			if closeErr := reader.Close(); closeErr != nil {
+				log.Debug().Err(closeErr).Msg("error closing unused reader")
+			}
+		}
+
 		// Check if driver is enabled (explicit config or default)
 		if !cfg.IsDriverEnabledForAutoDetect(driver) {
+			closeUnused()
 			continue
 		}
 
 		if !cfg.IsDriverAutoDetectEnabled(metadata.ID, metadata.DefaultAutoDetect) {
+			closeUnused()
 			continue
 		}
 
@@ -101,12 +109,14 @@ func (ad *AutoDetector) DetectReaders(
 		}
 		detect := reader.Detect(excludeList)
 		if detect == "" {
+			closeUnused()
 			continue
 		}
 
 		parts := strings.SplitN(detect, ":", 2)
 		if len(parts) != 2 {
 			log.Error().Msgf("invalid auto-detect string: %s", detect)
+			closeUnused()
 			continue
 		}
 
@@ -185,6 +195,9 @@ func (ad *AutoDetector) connectReader(
 
 	err := reader.Open(device, iq, readers.OpenOpts{Probing: true})
 	if err != nil {
+		if closeErr := reader.Close(); closeErr != nil {
+			log.Debug().Err(closeErr).Msg("error closing reader after failed open")
+		}
 		return fmt.Errorf("error opening detected reader %s: %w", connectionString, err)
 	}
 

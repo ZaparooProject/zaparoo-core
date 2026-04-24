@@ -24,41 +24,47 @@ package tags
 
 // Input tag values
 const (
-	TagInputJoystick2H       TagValue = "joystick:2h"
-	TagInputJoystick2V       TagValue = "joystick:2v"
-	TagInputJoystick3        TagValue = "joystick:3"
-	TagInputJoystick4        TagValue = "joystick:4"
-	TagInputJoystick8        TagValue = "joystick:8"
-	TagInputJoystickDouble   TagValue = "joystick:double"
-	TagInputJoystickRotary   TagValue = "joystick:rotary"
-	TagInputStickTwin        TagValue = "stick:twin"
-	TagInputTrackball        TagValue = "trackball"
-	TagInputPaddle           TagValue = "paddle"
-	TagInputSpinner          TagValue = "spinner"
-	TagInputWheel            TagValue = "wheel"
-	TagInputDial             TagValue = "dial"
-	TagInputLightgun         TagValue = "lightgun"
-	TagInputOptical          TagValue = "optical"
-	TagInputPositional2      TagValue = "positional:2"
-	TagInputPositional3      TagValue = "positional:3"
-	TagInputButtons1         TagValue = "buttons:1"
-	TagInputButtons2         TagValue = "buttons:2"
-	TagInputButtons3         TagValue = "buttons:3"
-	TagInputButtons4         TagValue = "buttons:4"
-	TagInputButtons5         TagValue = "buttons:5"
-	TagInputButtons6         TagValue = "buttons:6"
-	TagInputButtons7         TagValue = "buttons:7"
-	TagInputButtons8         TagValue = "buttons:8"
-	TagInputButtons11        TagValue = "buttons:11"
-	TagInputButtons12        TagValue = "buttons:12"
-	TagInputButtons19        TagValue = "buttons:19"
-	TagInputButtons23        TagValue = "buttons:23"
-	TagInputButtons27        TagValue = "buttons:27"
-	TagInputButtonsPneumatic TagValue = "buttons:pneumatic"
-	TagInputPedals1          TagValue = "pedals:1"
-	TagInputPedals2          TagValue = "pedals:2"
-	TagInputPuncher          TagValue = "puncher"
-	TagInputMotion           TagValue = "motion"
+	TagInputJoystick2H            TagValue = "joystick:2h"
+	TagInputJoystick2V            TagValue = "joystick:2v"
+	TagInputJoystick3             TagValue = "joystick:3"
+	TagInputJoystick4             TagValue = "joystick:4"
+	TagInputJoystick8             TagValue = "joystick:8"
+	TagInputJoystickDouble        TagValue = "joystick:double"
+	TagInputJoystickRotary        TagValue = "joystick:rotary"
+	TagInputStickTwin             TagValue = "stick:twin"
+	TagInputTrackball             TagValue = "trackball"
+	TagInputPaddle                TagValue = "paddle"
+	TagInputSpinner               TagValue = "spinner"
+	TagInputWheel                 TagValue = "wheel"
+	TagInputDial                  TagValue = "dial"
+	TagInputLightgun              TagValue = "lightgun"
+	TagInputOptical               TagValue = "optical"
+	TagInputPositional2           TagValue = "positional:2"
+	TagInputPositional3           TagValue = "positional:3"
+	TagInputPositional4           TagValue = "positional:4"
+	TagInputButtons1              TagValue = "buttons:1"
+	TagInputButtons2              TagValue = "buttons:2"
+	TagInputButtons3              TagValue = "buttons:3"
+	TagInputButtons4              TagValue = "buttons:4"
+	TagInputButtons5              TagValue = "buttons:5"
+	TagInputButtons6              TagValue = "buttons:6"
+	TagInputButtons7              TagValue = "buttons:7"
+	TagInputButtons8              TagValue = "buttons:8"
+	TagInputButtons11             TagValue = "buttons:11"
+	TagInputButtons12             TagValue = "buttons:12"
+	TagInputButtons19             TagValue = "buttons:19"
+	TagInputButtons23             TagValue = "buttons:23"
+	TagInputButtons27             TagValue = "buttons:27"
+	TagInputButtonsPneumatic      TagValue = "buttons:pneumatic"
+	TagInputPedals1               TagValue = "pedals:1"
+	TagInputPedals2               TagValue = "pedals:2"
+	TagInputPuncher               TagValue = "puncher"
+	TagInputMotion                TagValue = "motion"
+	TagInputKeyboard              TagValue = "keyboard"
+	TagInputKeyboardMahjong       TagValue = "keyboard:mahjong"
+	TagInputTouchscreen           TagValue = "touchscreen"
+	TagInputTouchscreenResistive  TagValue = "touchscreen:resistive"
+	TagInputTouchscreenCapacitive TagValue = "touchscreen:capacitive"
 )
 
 // Players tag values
@@ -229,28 +235,29 @@ const (
 
 // Region tag values
 const (
-	TagRegionWorld TagValue = "world"
-	TagRegionUS    TagValue = "us"
-	TagRegionEU    TagValue = "eu"
-	TagRegionJP    TagValue = "jp"
-	TagRegionAsia  TagValue = "asia"
-	TagRegionAU    TagValue = "au"
-	TagRegionBR    TagValue = "br"
-	TagRegionCA    TagValue = "ca"
-	TagRegionCN    TagValue = "cn"
-	TagRegionFR    TagValue = "fr"
-	TagRegionDE    TagValue = "de"
-	TagRegionHK    TagValue = "hk"
-	TagRegionIT    TagValue = "it"
-	TagRegionKR    TagValue = "kr"
-	TagRegionNL    TagValue = "nl"
-	TagRegionES    TagValue = "es"
-	TagRegionSE    TagValue = "se"
-	TagRegionPL    TagValue = "pl"
-	TagRegionFI    TagValue = "fi"
-	TagRegionDK    TagValue = "dk"
-	TagRegionPT    TagValue = "pt"
-	TagRegionNO    TagValue = "no"
+	TagRegionWorld       TagValue = "world"
+	TagRegionUS          TagValue = "us"
+	TagRegionEU          TagValue = "eu"
+	TagRegionJP          TagValue = "jp"
+	TagRegionAsia        TagValue = "asia"
+	TagRegionAU          TagValue = "au"
+	TagRegionBR          TagValue = "br"
+	TagRegionCA          TagValue = "ca"
+	TagRegionCN          TagValue = "cn"
+	TagRegionFR          TagValue = "fr"
+	TagRegionDE          TagValue = "de"
+	TagRegionHK          TagValue = "hk"
+	TagRegionIT          TagValue = "it"
+	TagRegionKR          TagValue = "kr"
+	TagRegionNL          TagValue = "nl"
+	TagRegionES          TagValue = "es"
+	TagRegionSE          TagValue = "se"
+	TagRegionPL          TagValue = "pl"
+	TagRegionFI          TagValue = "fi"
+	TagRegionDK          TagValue = "dk"
+	TagRegionPT          TagValue = "pt"
+	TagRegionNO          TagValue = "no"
+	TagRegionScandinavia TagValue = "scandinavia"
 	// TOSEC regions
 	TagRegionAE TagValue = "ae"
 	TagRegionAL TagValue = "al"
@@ -280,6 +287,7 @@ const (
 	TagRegionLT TagValue = "lt"
 	TagRegionLU TagValue = "lu"
 	TagRegionLV TagValue = "lv"
+	TagRegionAR TagValue = "ar"
 	TagRegionMN TagValue = "mn"
 	TagRegionMX TagValue = "mx"
 	TagRegionMY TagValue = "my"
@@ -326,6 +334,7 @@ const (
 	TagLangAR TagValue = "ar"
 	TagLangBG TagValue = "bg"
 	TagLangBS TagValue = "bs"
+	TagLangCA TagValue = "ca"
 	TagLangCY TagValue = "cy"
 	TagLangEL TagValue = "el"
 	TagLangEO TagValue = "eo"
@@ -395,6 +404,7 @@ const (
 	TagRevC TagValue = "c"
 	TagRevD TagValue = "d"
 	TagRevE TagValue = "e"
+	TagRevF TagValue = "f"
 	TagRevG TagValue = "g"
 )
 
@@ -422,6 +432,7 @@ const (
 	TagUnfinishedCompetition TagValue = "competition"
 	TagUnfinishedPreview     TagValue = "preview"
 	TagUnfinishedPrerelease  TagValue = "prerelease"
+	TagUnfinishedFinal       TagValue = "final"
 )
 
 // Unlicensed tag values
@@ -434,6 +445,18 @@ const (
 	TagUnlicensedTranslation    TagValue = "translation"
 	TagUnlicensedTranslationOld TagValue = "translation:old"
 	TagUnlicensedAftermarket    TagValue = "aftermarket"
+)
+
+// Release tag values
+const (
+	TagReleaseHomebrew     TagValue = "homebrew"
+	TagReleaseUnreleased   TagValue = "unreleased"
+	TagReleasePublicDomain TagValue = "public-domain"
+	TagReleaseReissue      TagValue = "reissue"
+	TagReleaseClassics     TagValue = "classics"
+	TagReleasePromo        TagValue = "promo"
+	TagReleaseNotForResale TagValue = "not-for-resale"
+	TagReleaseKiosk        TagValue = "kiosk"
 )
 
 // Dump tag values
@@ -519,8 +542,8 @@ const (
 	TagAddonControllerPartytap         TagValue = "controller:partytap"
 	TagAddonControllerClimberstick     TagValue = "controller:climberstick"
 	TagAddonControllerJuujikeycover    TagValue = "controller:juujikeycover"
-	TagAddonControllerJCart            TagValue = "controller:jcart"  // J-Cart (Genesis controller ports on cartridge)
-	TagAddonControllerRumble           TagValue = "controller:rumble" // Rumble support
+	TagAddonControllerDDRGB            TagValue = "controller:ddrgb"
+	TagAddonControllerFullchanger      TagValue = "controller:fullchanger"
 
 	// Light guns
 	TagAddonLightgunLightphaser     TagValue = "lightgun:lightphaser"
@@ -647,7 +670,24 @@ const (
 	TagAddonRobBlock             TagValue = "rob:block"
 	TagAddonPrinterPocketprinter TagValue = "printer:pocketprinter"
 	TagAddonPrinterPrintbooster  TagValue = "printer:printbooster"
-	TagAddonBarcodeboy           TagValue = "barcodeboy"
+
+	// Barcode readers
+	TagAddonBarcodeBarcodeboy    TagValue = "barcode:barcodeboy"
+	TagAddonBarcodeBarcodereader TagValue = "barcode:barcodereader"
+
+	// Link cables
+	TagAddonLinkMobileadaptergb TagValue = "link:mobileadaptergb"
+
+	// 3D glasses
+	TagAddonGlassesMVD TagValue = "glasses:mvd"
+
+	// LED accessories
+	TagAddonLEDPowerantenna TagValue = "led:powerantenna"
+	TagAddonLEDBugsensor    TagValue = "led:bugsensor"
+
+	// Misc
+	TagAddonPocketsakura         TagValue = "pocketsakura"
+	TagAddonSpectrumcommunicator TagValue = "spectrumcommunicator"
 	TagAddonRSS                  TagValue = "rss"
 	TagAddonPocketcamera         TagValue = "pocketcamera"
 	TagAddonCapturecassette      TagValue = "capturecassette"
@@ -704,6 +744,12 @@ const (
 	TagEmbeddedSlotGamelink   TagValue = "slot:gamelink"
 	TagEmbeddedSlotSmartmedia TagValue = "slot:smartmedia"
 
+	// Vibration
+	TagEmbeddedVibrationRumble TagValue = "vibration:rumble"
+
+	// Motion
+	TagEmbeddedAccelerometer TagValue = "accelerometer"
+
 	// Other embedded hardware
 	TagEmbeddedLED         TagValue = "led"
 	TagEmbeddedGBKiss      TagValue = "gbkiss"
@@ -720,6 +766,9 @@ const (
 	TagArcadeBoardCapcomCPS3       TagValue = "capcom:cps3"
 
 	// SEGA
+	TagArcadeBoardSegaVicDual   TagValue = "sega:vicdual"
+	TagArcadeBoardSegaG80       TagValue = "sega:g80"
+	TagArcadeBoardSegaH1        TagValue = "sega:h1"
 	TagArcadeBoardSegaVCO       TagValue = "sega:vco"
 	TagArcadeBoardSegaSystem1   TagValue = "sega:system1"
 	TagArcadeBoardSegaSystem2   TagValue = "sega:system2"
@@ -737,6 +786,15 @@ const (
 	TagArcadeBoardSegaXBoard    TagValue = "sega:xboard"
 	TagArcadeBoardSegaYBoard    TagValue = "sega:yboard"
 	TagArcadeBoardSegaSTV       TagValue = "sega:stv"
+	TagArcadeBoardSegaModel1    TagValue = "sega:model1"
+	TagArcadeBoardSegaModel2A   TagValue = "sega:model2a"
+	TagArcadeBoardSegaModel2B   TagValue = "sega:model2b"
+	TagArcadeBoardSegaModel2C   TagValue = "sega:model2c"
+	TagArcadeBoardSegaModel3    TagValue = "sega:model3"
+	TagArcadeBoardSegaModel3S15 TagValue = "sega:model3s15"
+	TagArcadeBoardSegaModel3S2  TagValue = "sega:model3s2"
+	TagArcadeBoardSegaModel3S21 TagValue = "sega:model3s21"
+	TagArcadeBoardSegaNaomi     TagValue = "sega:naomi"
 
 	// Irem
 	TagArcadeBoardIremM10  TagValue = "irem:m10"
@@ -780,6 +838,18 @@ const (
 
 	// Jaleco
 	TagArcadeBoardJalecoMegaSystem1 TagValue = "jaleco:megasystem1"
+
+	// Nichibutsu
+	TagArcadeBoardNichibutsu TagValue = "nichibutsu"
+
+	// Taiyo
+	TagArcadeBoardTaiyo TagValue = "taiyo"
+
+	// Tecfri
+	TagArcadeBoardTecfriAmbush TagValue = "tecfri:ambush"
+
+	// Tourvision
+	TagArcadeBoardTourvision TagValue = "tourvision"
 )
 
 // Compatibility tag values
@@ -808,6 +878,9 @@ const (
 	TagCompatibilityGameboyColor          TagValue = "gameboy:color"
 	TagCompatibilityGameboySGB            TagValue = "gameboy:sgb"
 	TagCompatibilityGameboyNP             TagValue = "gameboy:np"
+	TagCompatibilityGameboyInfrared       TagValue = "gameboy:infrared"
+	TagCompatibilityGameboyGBA            TagValue = "gameboy:gba"
+	TagCompatibilityDSi                   TagValue = "dsi"
 	TagCompatibilitySuperfamicom          TagValue = "superfamicom"
 	TagCompatibilitySuperfamicomHiROM     TagValue = "superfamicom:hirom"
 	TagCompatibilitySuperfamicomLoROM     TagValue = "superfamicom:lorom"
@@ -952,6 +1025,9 @@ const (
 	TagSearch3DStereo   TagValue = "3d:stereo"
 	TagSearch3DAnaglyph TagValue = "3d:anaglyph"
 
+	// VR
+	TagSearchVR TagValue = "vr"
+
 	// Keywords
 	TagSearchKeywordStrip    TagValue = "keyword:strip"
 	TagSearchKeywordPromo    TagValue = "keyword:promo"
@@ -961,6 +1037,7 @@ const (
 	TagSearchKeywordOfficial TagValue = "keyword:official"
 	TagSearchKeywordEndorsed TagValue = "keyword:endorsed"
 	TagSearchKeywordBrand    TagValue = "keyword:brand"
+	TagSearchKeywordUbikey   TagValue = "keyword:ubikey"
 )
 
 // Multigame tag values
@@ -1000,6 +1077,8 @@ const (
 	TagReboxedLimitedrun        TagValue = "limitedrun"
 	TagReboxedFamicombox        TagValue = "famicombox"
 	TagReboxedSuperfamicombox   TagValue = "superfamicombox"
+	TagReboxedComicclassics     TagValue = "comicclassics"
+	TagReboxedSeganet           TagValue = "seganet"
 )
 
 // Port tag values
@@ -1043,11 +1122,17 @@ const (
 	TagPortNintendoGameboy      TagValue = "nintendo:gameboy"
 	TagPortNintendoGBC          TagValue = "nintendo:gbc"
 	TagPortNintendoGBA          TagValue = "nintendo:gba"
+	TagPortNintendoDiskSystem   TagValue = "nintendo:disksystem"
+	TagPortNintendoGameAndWatch TagValue = "nintendo:gameandwatch"
 	TagPortSonyPlayStation      TagValue = "sony:playstation"
 	TagPort3DO                  TagValue = "3do"
 	TagPortCDI                  TagValue = "cdi"
 	TagPortLaseractive          TagValue = "laseractive"
 	TagPortFMTowns              TagValue = "fmtowns"
+	TagPortArchimedes           TagValue = "archimedes"
+	TagPortAtariFalcon          TagValue = "atari:falcon"
+	TagPortSega32X              TagValue = "sega:32x"
+	TagPortWonderSwan           TagValue = "wonderswan"
 )
 
 // Rerelease tag values
@@ -1094,24 +1179,31 @@ const (
 	TagRereleaseSegaages                 TagValue = "segaages"
 	TagRereleaseSegaages2500             TagValue = "segaages:2500"
 	TagRerelease3DFukkoku                TagValue = "3dfukkoku"
+	TagRerelease3DFukkoku1               TagValue = "3dfukkoku:1"
+	TagRerelease3DFukkoku2               TagValue = "3dfukkoku:2"
 	TagRereleaseMDMini1                  TagValue = "mdmini:1"
 	TagRereleaseMDMini2                  TagValue = "mdmini:2"
 	TagRereleaseSFCMini                  TagValue = "sfcmini"
 	TagRereleaseGamenokanzume1           TagValue = "gamenokanzume:1"
 	TagRereleaseGamenokanzume2           TagValue = "gamenokanzume:2"
 	TagRereleaseFightnightround2         TagValue = "fightnightround2"
+	TagRereleaseNinjajajamaru            TagValue = "ninjajajamaru"
+	TagRereleaseZeldacollection          TagValue = "zeldacollection"
+	TagRereleasePCEMini                  TagValue = "pcemini"
 )
 
 // Set tag values
 const (
-	TagSet1 TagValue = "1"
-	TagSet2 TagValue = "2"
-	TagSet3 TagValue = "3"
-	TagSet4 TagValue = "4"
-	TagSet5 TagValue = "5"
-	TagSet6 TagValue = "6"
-	TagSet7 TagValue = "7"
-	TagSet8 TagValue = "8"
+	TagSet1  TagValue = "1"
+	TagSet2  TagValue = "2"
+	TagSet3  TagValue = "3"
+	TagSet4  TagValue = "4"
+	TagSet5  TagValue = "5"
+	TagSet6  TagValue = "6"
+	TagSet7  TagValue = "7"
+	TagSet8  TagValue = "8"
+	TagSetF1 TagValue = "f1"
+	TagSetF2 TagValue = "f2"
 )
 
 // Alt tag values
@@ -1120,6 +1212,9 @@ const (
 	TagAlt1 TagValue = "1"
 	TagAlt2 TagValue = "2"
 	TagAlt3 TagValue = "3"
+	TagAlt4 TagValue = "4"
+	TagAlt5 TagValue = "5"
+	TagAlt6 TagValue = "6"
 )
 
 // Language variant tag values (specific regional variants)
@@ -1303,9 +1398,21 @@ const (
 
 // Edition tag values
 const (
-	TagEditionVersion  TagValue = "version"
-	TagEditionEdition  TagValue = "edition"
-	TagEditionRemaster TagValue = "remaster"
+	TagEditionVersion      TagValue = "version"
+	TagEditionEdition      TagValue = "edition"
+	TagEditionRemaster     TagValue = "remaster"
+	TagEditionRemake       TagValue = "remake"
+	TagEditionRemix        TagValue = "remix"
+	TagEditionCut          TagValue = "cut"
+	TagEditionSpecial      TagValue = "special"
+	TagEditionCollectors   TagValue = "collectors"
+	TagEditionLimited      TagValue = "limited"
+	TagEditionDeluxe       TagValue = "deluxe"
+	TagEditionUltimate     TagValue = "ultimate"
+	TagEditionComplete     TagValue = "complete"
+	TagEditionAnniversary  TagValue = "anniversary"
+	TagEditionGoty         TagValue = "goty"
+	TagEditionDirectorsCut TagValue = "directors-cut"
 )
 
 // Perspective tag values
@@ -1361,10 +1468,22 @@ const (
 
 // Distribution platform tag values
 const (
-	TagDistributionVirtualConsole TagValue = "virtualconsole"
+	TagDistributionVirtualConsole TagValue = "virtual-console"
 	TagDistributionWiiWare        TagValue = "wiiware"
 	TagDistributionXBLIG          TagValue = "xblig"
 	TagDistributionDSiWare        TagValue = "dsiware"
+	TagDistributionGameCube       TagValue = "gamecube"
+	TagDistributionSwitchOnline   TagValue = "switch-online"
+	TagDistributionDiskWriter     TagValue = "disk-writer"
+	TagDistributionSteam          TagValue = "steam"
+	TagDistributionSegaChannel    TagValue = "sega-channel"
+	TagDistributionGenesisMini    TagValue = "genesis-mini"
+	TagDistributionSegaAges       TagValue = "sega-ages"
+	TagDistributionSegaSmashPack  TagValue = "sega-smash-pack"
+	TagDistributionWii            TagValue = "wii"
+	TagDistributionClubNintendo   TagValue = "club-nintendo"
+	TagDistributionGBAEReader     TagValue = "gba-e-reader"
+	TagDistributionCompilation    TagValue = "compilation"
 )
 
 // Apple II compatibility tag values

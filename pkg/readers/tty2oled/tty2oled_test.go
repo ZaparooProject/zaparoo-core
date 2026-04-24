@@ -785,3 +785,22 @@ func TestPictureFormats(t *testing.T) {
 	assert.Equal(t, "XBM", PictureFormats[3])
 	assert.Equal(t, "XBM_TEXT", PictureFormats[4])
 }
+
+// TestNewReader_DoesNotLeakGoroutine is a regression test for the goroutine leak
+// where the auto-detector called SupportedReaders every second, tty2oled.NewReader
+// immediately started an operationWorker goroutine, and the reader was discarded
+// without Close when no device was detected — leaking one goroutine per tick.
+//
+// This test creates a Reader without calling Open or Close. If NewReader starts any
+// goroutines, goleak.VerifyTestMain (in TestMain) will catch the leak when the suite
+// finishes. Note: not parallel so it runs cleanly under the suite-level goleak check.
+func TestNewReader_DoesNotLeakGoroutine(t *testing.T) {
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{
+		DataDir: t.TempDir(),
+	})
+
+	// Discard without closing — any goroutine started here would be a leak.
+	_ = NewReader(cfg, mockPlatform)
+}

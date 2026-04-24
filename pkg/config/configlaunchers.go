@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/pathutil"
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -50,6 +51,11 @@ type LaunchersDefault struct {
 	// - "" or "run": Default behavior (launch/play the media)
 	// - "details": Show media details/info page instead of launching
 	Action string `toml:"action,omitempty"`
+	// LoadPath specifies the implementation file the launcher should load.
+	// Format is launcher-specific. For MiSTer, this is an MGL-form RBF path
+	// like "_Unstable/SNES" (no extension, relative to /media/fat). Launchers
+	// that do not load an implementation file ignore this field.
+	LoadPath string `toml:"load_path,omitempty"`
 }
 
 type LaunchersCustom struct {
@@ -68,7 +74,7 @@ type LaunchersCustom struct {
 func (c *Instance) DefaultMediaDir() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Launchers.MediaDir
+	return pathutil.ResolveRelativePath(c.vals.Launchers.MediaDir)
 }
 
 func (c *Instance) LaunchersBeforeMediaStart() string {
@@ -141,6 +147,9 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 			if entry.Action != "" {
 				result.Action = entry.Action
 			}
+			if entry.LoadPath != "" {
+				result.LoadPath = entry.LoadPath
+			}
 		}
 	}
 
@@ -149,16 +158,10 @@ func (c *Instance) LookupLauncherDefaults(launcherID string, groups []string) La
 		Str("resolvedServerURL", result.ServerURL).
 		Str("resolvedAction", result.Action).
 		Str("resolvedInstallDir", result.InstallDir).
+		Str("resolvedLoadPath", result.LoadPath).
 		Msg("LookupLauncherDefaults: resolution complete")
 
 	return result
-}
-
-// SetLauncherDefaultsForTesting sets launcher defaults for testing purposes.
-func (c *Instance) SetLauncherDefaultsForTesting(defaults []LaunchersDefault) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.Launchers.Default = defaults
 }
 
 func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
@@ -250,8 +253,12 @@ func (c *Instance) IndexRoots() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	var roots []string
 	if c.vals.Launchers.MediaDir != "" {
-		return append([]string{c.vals.Launchers.MediaDir}, c.vals.Launchers.IndexRoot...)
+		roots = append(roots, pathutil.ResolveRelativePath(c.vals.Launchers.MediaDir))
 	}
-	return c.vals.Launchers.IndexRoot
+	for _, r := range c.vals.Launchers.IndexRoot {
+		roots = append(roots, pathutil.ResolveRelativePath(r))
+	}
+	return roots
 }

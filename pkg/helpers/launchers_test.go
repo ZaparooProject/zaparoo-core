@@ -20,6 +20,7 @@
 package helpers
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -90,11 +91,15 @@ func TestParseCustomLaunchers_NewFields(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test")
 
+	// Use t.TempDir() so paths are absolute on all platforms (including Windows)
+	absDir := t.TempDir()
+	mediaDir := filepath.Join(absDir, "media", "videos")
+
 	customLaunchers := []config.LaunchersCustom{
 		{
 			ID:         "TestLauncher",
 			Execute:    "echo [[media_path]]",
-			MediaDirs:  []string{"/media/videos"},
+			MediaDirs:  []string{mediaDir},
 			FileExts:   []string{".mp4", ".mkv"},
 			Groups:     []string{"Video", "MediaPlayers"},
 			Schemes:    []string{"test", "mytest"},
@@ -124,7 +129,7 @@ func TestParseCustomLaunchers_NewFields(t *testing.T) {
 	assert.Equal(t, []string{"test", "mytest"}, launcher1.Schemes)
 	assert.True(t, launcher1.AllowListOnly)
 	assert.Equal(t, platforms.LifecycleFireAndForget, launcher1.Lifecycle)
-	assert.Equal(t, []string{"/media/videos"}, launcher1.Folders)
+	assert.Equal(t, []string{mediaDir}, launcher1.Folders)
 	assert.Equal(t, []string{".mp4", ".mkv"}, launcher1.Extensions)
 
 	// Test second launcher with blocking lifecycle
@@ -221,12 +226,17 @@ func TestParseCustomLaunchers_AbsolutePathWithSystemID(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test")
 
+	// Use t.TempDir() so paths are absolute on all platforms (including Windows)
+	absDir := t.TempDir()
+	romsDir := filepath.Join(absDir, "emulation", "roms", "ps2")
+	gamesDir := filepath.Join(absDir, "mnt", "games", "ps2")
+
 	customLaunchers := []config.LaunchersCustom{
 		{
 			ID:        "ps2-custom",
 			System:    "PS2",
 			Execute:   "pcsx2 [[media_path]]",
-			MediaDirs: []string{"/emulation/roms/ps2", "/mnt/games/ps2"},
+			MediaDirs: []string{romsDir, gamesDir},
 			FileExts:  []string{"iso", ".bin", "MDF", " .chd "},
 		},
 	}
@@ -238,7 +248,7 @@ func TestParseCustomLaunchers_AbsolutePathWithSystemID(t *testing.T) {
 
 	assert.Equal(t, "ps2-custom", l.ID)
 	assert.Equal(t, "PS2", l.SystemID, "SystemID should be the canonical ID from LookupSystem")
-	assert.Equal(t, []string{"/emulation/roms/ps2", "/mnt/games/ps2"}, l.Folders,
+	assert.Equal(t, []string{romsDir, gamesDir}, l.Folders,
 		"MediaDirs should map directly to Folders")
 	assert.Equal(t, []string{".iso", ".bin", ".mdf", ".chd"}, l.Extensions,
 		"FileExts should be dot-prefixed and lowercased")
@@ -268,9 +278,34 @@ func TestParseCustomLaunchers_EmptyExecuteLeavesLaunchNil(t *testing.T) {
 
 	assert.Equal(t, "movies", l.ID)
 	assert.Equal(t, "Video", l.SystemID)
-	assert.Equal(t, []string{"movies"}, l.Folders)
+	assert.Equal(t, []string{filepath.Join(ExeDir(), "movies")}, l.Folders)
 	assert.Equal(t, []string{".mp4", ".mkv"}, l.Extensions)
 	assert.Nil(t, l.Launch, "Launch should be nil when Execute is empty")
+}
+
+func TestParseCustomLaunchers_LaunchLogsArgvAndFailsOnMissingBinary(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	customLaunchers := []config.LaunchersCustom{
+		{
+			ID:      "TestExec",
+			Execute: "nonexistent-binary-zaparoo-test [[media_path]]",
+		},
+	}
+
+	launchers := ParseCustomLaunchers(mockPlatform, customLaunchers)
+	require.Len(t, launchers, 1)
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{})
+	require.NoError(t, err)
+
+	// Calling Launch hits the argv log line then fails at cmd.Start because the
+	// binary does not exist. The error confirms we reached the execution path.
+	_, err = launchers[0].Launch(cfg, filepath.Join("some", "game.bin"), nil)
+	assert.Error(t, err, "expected error for nonexistent binary")
 }
 
 func TestFormatExtensions(t *testing.T) {

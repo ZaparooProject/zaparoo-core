@@ -306,7 +306,7 @@ None.
 }
 ```
 
-##### Response (Database Ready)
+##### Response (database ready)
 
 ```json
 {
@@ -324,7 +324,7 @@ None.
 }
 ```
 
-##### Response (Optimization in Progress)
+##### Response (optimization in progress)
 
 ```json
 {
@@ -554,7 +554,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
 | fileCount    | number   | No       | Number of files in this directory. Present on `root` and `directory` entries.                     |
 | group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
-| systemId     | string   | No       | System ID for the media (e.g. `snes`). Present on `media` entries.                               |
+| systemId     | string   | No       | System ID for the media (e.g. `SNES`). Present on `media` entries.                               |
 | zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries.                              |
 | relativePath | string   | No       | Relative path from root directory. Present on `media` entries.                                   |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries. |
@@ -574,10 +574,10 @@ All parameters are optional. When called with no parameters, returns root entrie
 ```json
 {
   "jsonrpc": "2.0",
-  "id": "d4e5f6a7-3456-7890-bcde-f01234567890",
+  "id": 1,
   "method": "media.browse",
   "params": {
-    "path": "/media/fat/games/SNES",
+    "path": "/roms/SNES",
     "maxResults": 3
   }
 }
@@ -588,38 +588,46 @@ All parameters are optional. When called with no parameters, returns root entrie
 ```json
 {
   "jsonrpc": "2.0",
-  "id": "d4e5f6a7-3456-7890-bcde-f01234567890",
+  "id": 1,
   "result": {
-    "path": "/media/fat/games/SNES",
+    "path": "/roms/SNES",
     "entries": [
       {
         "name": "RPGs",
-        "path": "/media/fat/games/SNES/RPGs",
+        "path": "/roms/SNES/RPGs",
         "type": "directory",
         "fileCount": 42
       },
       {
         "name": "Super Mario World",
-        "path": "/media/fat/games/SNES/Super Mario World.sfc",
+        "path": "/roms/SNES/Super Mario World.sfc",
         "type": "media",
-        "systemId": "snes",
-        "zapScript": "**launch:/media/fat/games/SNES/Super Mario World.sfc",
-        "relativePath": "Super Mario World.sfc"
+        "systemId": "SNES",
+        "zapScript": "@SNES/Super Mario World",
+        "relativePath": "Super Mario World.sfc",
+        "tags": [
+          {"tag": "1990", "type": "year"},
+          {"tag": "2", "type": "players"}
+        ]
       },
       {
         "name": "The Legend of Zelda - A Link to the Past",
-        "path": "/media/fat/games/SNES/The Legend of Zelda - A Link to the Past.sfc",
+        "path": "/roms/SNES/The Legend of Zelda - A Link to the Past.sfc",
         "type": "media",
-        "systemId": "snes",
-        "zapScript": "**launch:/media/fat/games/SNES/The Legend of Zelda - A Link to the Past.sfc",
-        "relativePath": "The Legend of Zelda - A Link to the Past.sfc"
+        "systemId": "SNES",
+        "zapScript": "@SNES/The Legend of Zelda - A Link to the Past",
+        "relativePath": "The Legend of Zelda - A Link to the Past.sfc",
+        "tags": [
+          {"tag": "1991", "type": "year"},
+          {"tag": "1", "type": "players"}
+        ]
       }
     ],
     "totalFiles": 150,
     "pagination": {
       "hasNextPage": true,
       "pageSize": 3,
-      "nextCursor": "eyJzb3J0VmFsdWUiOiJUaGUgTGVnZW5kIG9mIFplbGRhIiwibGFzdElkIjo0Mn0="
+      "nextCursor": "eyJzb3J0VmFsdWUiOiJUaGUgTGVnZW5kIG9mIFplbGRhIC0gQSBMaW5rIHRvIHRoZSBQYXN0IiwibGFzdElkIjo0Mn0="
     }
   }
 }
@@ -643,6 +651,12 @@ This method returns all available tags (with their types) for the specified syst
 | Key  | Type                     | Required | Description                    |
 | :--- | :----------------------- | :------- | :----------------------------- |
 | tags | [TagInfo](#taginfo-object)[] | Yes      | Array of available tags.       |
+
+**Tag Capping:** To prevent large responses, long-tail tag types are capped at 100 entries
+per type. Tags within each type are sorted by usage count (most popular first), then
+alphabetically. The following types are capped: `credit`, `developer`, `mameparent`,
+`publisher`, `search`. Taxonomy types (e.g., `region`, `year`, `lang`, `genre`, `series`)
+have finite vocabularies per system and are always returned in full without truncation.
 
 ##### TagInfo object
 
@@ -725,7 +739,7 @@ Returns `null` on success. Indexing runs in the background after the response is
 
 #### Examples
 
-##### Full Index Request
+##### Full index request
 
 ```json
 {
@@ -745,7 +759,7 @@ Returns `null` on success. Indexing runs in the background after the response is
 }
 ```
 
-##### Selective Index Request
+##### Selective index request
 
 ```json
 {
@@ -794,7 +808,7 @@ None.
 }
 ```
 
-##### Response (Indexing was running)
+##### Response (indexing was running)
 
 ```json
 {
@@ -806,7 +820,7 @@ None.
 }
 ```
 
-##### Response (No indexing running)
+##### Response (no indexing running)
 
 ```json
 {
@@ -842,7 +856,7 @@ Returns an [ActiveMedia](#active-media-object) object if media is currently acti
 }
 ```
 
-##### Response (No Active Media)
+##### Response (no active media)
 
 ```json
 {
@@ -852,7 +866,7 @@ Returns an [ActiveMedia](#active-media-object) object if media is currently acti
 }
 ```
 
-##### Response (Media Active)
+##### Response (media active)
 
 ```json
 {
@@ -1113,7 +1127,7 @@ An object:
 }
 ```
 
-##### Response (Match Found)
+##### Response (match found)
 
 ```json
 {
@@ -1147,7 +1161,7 @@ An object:
 }
 ```
 
-##### Response (No Match)
+##### Response (no match)
 
 ```json
 {
@@ -1293,6 +1307,7 @@ None.
 | driver   | string | Yes      | Reader driver type (e.g., "pn532uart", "acr122pcsc"). |
 | path     | string | Yes      | Path or address for the reader connection.       |
 | idSource | string | No       | Source for the reader ID.                        |
+| enabled  | bool   | No       | Whether the connection is enabled. Defaults to true if omitted. |
 
 #### Example
 
@@ -1551,7 +1566,7 @@ None.
 }
 ```
 
-##### Response (Reset State)
+##### Response (reset state)
 
 ```json
 {
@@ -1567,7 +1582,7 @@ None.
 }
 ```
 
-##### Response (Active Game with Limits)
+##### Response (active game with limits)
 
 ```json
 {
@@ -1587,7 +1602,7 @@ None.
 }
 ```
 
-##### Response (Cooldown State)
+##### Response (cooldown state)
 
 ```json
 {
@@ -2350,7 +2365,7 @@ Returns `null` on success.
 
 ## Input
 
-Direct platform input control for remote control use cases. These methods bypass the token pipeline entirely — no hooks, history, or sound effects are triggered.
+Direct platform input control for remote control use cases. These methods bypass the token pipeline entirely: no hooks, history, or sound effects are triggered.
 
 The input macro format is identical to what goes after the `:` in a ZapScript `input.keyboard` or `input.gamepad` command on a token. Each character is a separate keypress, `{...}` groups are special keys/combos, and `\` is the escape character.
 

@@ -365,8 +365,8 @@ func TestPropertyParseTagFiltersNormalization(t *testing.T) {
 		if !strings.EqualFold(result[0].Type, tagType) {
 			t.Fatalf("Expected normalized type %q, got %q", strings.ToLower(tagType), result[0].Type)
 		}
-		if !strings.EqualFold(result[0].Value, tagValue) {
-			t.Fatalf("Expected normalized value %q, got %q", strings.ToLower(tagValue), result[0].Value)
+		if result[0].Value != zapscript.NormalizeTag(tagValue) {
+			t.Fatalf("Expected normalized value %q, got %q", zapscript.NormalizeTag(tagValue), result[0].Value)
 		}
 	})
 }

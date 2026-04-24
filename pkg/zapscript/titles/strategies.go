@@ -153,6 +153,7 @@ func TrySecondaryTitleExact(
 	exactResults, exactErr := gamesdb.SearchMediaBySlug(ctx, systemID, searchSlug, tagFilters)
 	if exactErr != nil {
 		log.Warn().Err(exactErr).Msgf("exact secondary title search failed for '%s'", searchSlug)
+		return nil, "", fmt.Errorf("exact secondary title search failed: %w", exactErr)
 	} else if len(exactResults) > 0 {
 		// Post-filter: only keep DB entries WITHOUT secondary title
 		var filtered []database.SearchResultWithCursor
@@ -178,38 +179,134 @@ func TrySecondaryTitleExact(
 	// Case 2 (Partial): Input simple, DB has secondary - search DB's SecondarySlug column
 	// Example: Input "Ocarina of Time" (slug="ocarinaoftime")
 	//          matches DB "Legend of Zelda: Ocarina of Time" (secondary_slug="ocarinaoftime")
-	partialResults, partialErr := gamesdb.SearchMediaBySecondarySlug(ctx, systemID, searchSlug, tagFilters)
-	if partialErr != nil {
-		log.Warn().Err(partialErr).Msgf("partial secondary title search failed for '%s'", searchSlug)
-		return nil, "", nil
-	}
-
-	if len(partialResults) > 0 {
-		// Post-filter: only keep DB entries WITH secondary title
-		var filtered []database.SearchResultWithCursor
-		for _, result := range partialResults {
-			dbMatchInfo := GenerateMatchInfo(mediaType, result.Name)
-			if dbMatchInfo.HasSecondaryTitle {
-				filtered = append(filtered, result)
-			}
+	//
+	// Only handles the asymmetric case where the INPUT has no secondary title. When input also
+	// has a secondary title, the symmetric case (both have secondary, same subtitle) is handled
+	// by TrySharedSecondaryTitle which applies a first-token guard to prevent cross-franchise
+	// collisions.
+	if !matchInfo.HasSecondaryTitle {
+		partialResults, partialErr := gamesdb.SearchMediaBySecondarySlug(ctx, systemID, searchSlug, tagFilters)
+		if partialErr != nil {
+			log.Warn().Err(partialErr).Msgf("partial secondary title search failed for '%s'", searchSlug)
+			return nil, "", fmt.Errorf("partial secondary title search failed: %w", partialErr)
 		}
 
-		if len(filtered) > 0 {
-			log.Info().Msgf("found %d partial secondary title matches (filtered from %d): '%s'",
-				len(filtered), len(partialResults), searchSlug)
-			log.Debug().
-				Str("strategy", StrategySecondaryTitleExact).
-				Str("query", searchSlug).
-				Int("result_count", len(filtered)).
-				Msg("partial match found via secondary title exact strategy")
-			return filtered, StrategySecondaryTitleExact, nil
+		if len(partialResults) > 0 {
+			// Post-filter: only keep DB entries WITH secondary title
+			var filtered []database.SearchResultWithCursor
+			for _, result := range partialResults {
+				dbMatchInfo := GenerateMatchInfo(mediaType, result.Name)
+				if dbMatchInfo.HasSecondaryTitle {
+					filtered = append(filtered, result)
+				}
+			}
+
+			if len(filtered) > 0 {
+				log.Info().Msgf("found %d partial secondary title matches (filtered from %d): '%s'",
+					len(filtered), len(partialResults), searchSlug)
+				log.Debug().
+					Str("strategy", StrategySecondaryTitleExact).
+					Str("query", searchSlug).
+					Int("result_count", len(filtered)).
+					Msg("partial match found via secondary title exact strategy")
+				return filtered, StrategySecondaryTitleExact, nil
+			}
 		}
 	}
 
 	return nil, "", nil
 }
 
-// TryAdvancedFuzzyMatching attempts Strategy 3: Advanced fuzzy matching with single prefilter.
+// firstMainTitleToken returns the first slugified token of the main title portion of an original
+// game title. Used as a guard to prevent cross-franchise subtitle collisions in shared-secondary
+// matching (e.g. "Touhou 06" and "Touhou Koumakyou" both yield "touhou").
+func firstMainTitleToken(mediaType slugs.MediaType, originalInput string) string {
+	stripped := slugs.StripLeadingArticle(strings.TrimSpace(originalInput))
+	mainTitle, _, _ := slugs.SplitTitle(stripped)
+	result := slugs.SlugifyWithTokens(mediaType, mainTitle)
+	if len(result.Tokens) == 0 {
+		return ""
+	}
+	return result.Tokens[0]
+}
+
+// TrySharedSecondaryTitle handles the case where both query and DB entry have secondary titles
+// (colon-separated) and their secondary slugs are identical, but the main titles differ.
+// This is the numbered-vs-named series pattern: "Touhou 06: The Embodiment of Scarlet Devil"
+// matches "Touhou Koumakyou: The Embodiment of Scarlet Devil" because the English subtitle
+// is the shared identifier.
+//
+// A first-token guard on the main titles prevents cross-franchise collisions: both main titles
+// must share the same first slugified token (e.g. "touhou") before a match is accepted.
+func TrySharedSecondaryTitle(
+	ctx context.Context,
+	gamesdb database.MediaDBI,
+	systemID string,
+	slug string,
+	matchInfo GameMatchInfo,
+	tagFilters []zapscript.TagFilter,
+	mediaType slugs.MediaType,
+) ([]database.SearchResultWithCursor, string, error) {
+	if !matchInfo.HasSecondaryTitle {
+		return nil, "", nil
+	}
+
+	log.Info().Msgf("trying shared secondary title search: '%s' (from full slug: '%s')",
+		matchInfo.SecondaryTitleSlug, slug)
+
+	results, err := gamesdb.SearchMediaBySecondarySlug(ctx, systemID, matchInfo.SecondaryTitleSlug, tagFilters)
+	if err != nil {
+		log.Warn().Err(err).Msgf("shared secondary title search failed for '%s'", matchInfo.SecondaryTitleSlug)
+		return nil, "", fmt.Errorf("SearchMediaBySecondarySlug: %w", err)
+	}
+
+	if len(results) == 0 {
+		return nil, "", nil
+	}
+
+	queryFirstToken := firstMainTitleToken(mediaType, matchInfo.OriginalInput)
+	if queryFirstToken == "" {
+		return nil, "", nil
+	}
+
+	var filtered []database.SearchResultWithCursor
+	for _, result := range results {
+		dbMatchInfo := GenerateMatchInfo(mediaType, result.Name)
+
+		// Require DB entry also has a secondary title with the same slug.
+		if !dbMatchInfo.HasSecondaryTitle || dbMatchInfo.SecondaryTitleSlug != matchInfo.SecondaryTitleSlug {
+			continue
+		}
+
+		// Skip entries where the full slug is identical — those are exact matches handled earlier.
+		if dbMatchInfo.CanonicalSlug == matchInfo.CanonicalSlug {
+			continue
+		}
+
+		// Guard: main titles must share a first token to prevent cross-franchise collisions.
+		dbFirstToken := firstMainTitleToken(mediaType, dbMatchInfo.OriginalInput)
+		if dbFirstToken != queryFirstToken {
+			continue
+		}
+
+		filtered = append(filtered, result)
+	}
+
+	if len(filtered) == 0 {
+		return nil, "", nil
+	}
+
+	log.Info().Msgf("found %d shared secondary title matches (filtered from %d): '%s'",
+		len(filtered), len(results), matchInfo.SecondaryTitleSlug)
+	log.Debug().
+		Str("strategy", StrategySharedSecondaryTitle).
+		Str("query", slug).
+		Int("result_count", len(filtered)).
+		Msg("match found via shared secondary title strategy")
+	return filtered, StrategySharedSecondaryTitle, nil
+}
+
+// TryAdvancedFuzzyMatching attempts Strategy 5: Advanced fuzzy matching with single prefilter.
 // Uses a single prefilter query, then tries three algorithms in sequence:
 // 1. Token signature (word-order independent)
 // 2. Jaro-Winkler (typo tolerance, prefix matching)
@@ -275,7 +372,7 @@ func TryAdvancedFuzzyMatching(
 		candidateSlugs = append(candidateSlugs, title.Slug)
 	}
 
-	// Sub-strategy 3a: Token signature matching (word-order independent)
+	// Sub-strategy 5a: Token signature matching (word-order independent)
 	// Uses original game names (not slugs) to preserve word boundaries
 	log.Info().Msg("trying token signature matching")
 	tokenMatches := matcher.FindTokenSignatureMatches(mediaType, gameName, candidateTitles)
@@ -302,7 +399,7 @@ func TryAdvancedFuzzyMatching(
 		}
 	}
 
-	// Sub-strategy 3b: Jaro-Winkler fuzzy matching
+	// Sub-strategy 5b: Jaro-Winkler fuzzy matching
 	log.Info().Msg("trying Jaro-Winkler fuzzy matching")
 	fuzzyMatches := matcher.FindFuzzyMatches(
 		slug, candidateSlugs, FuzzyMatchMaxLengthDiff, FuzzyMatchMinSimilarity)
@@ -310,7 +407,7 @@ func TryAdvancedFuzzyMatching(
 	if len(fuzzyMatches) > 0 {
 		log.Debug().Int("count", len(fuzzyMatches)).Msg("found Jaro-Winkler candidates")
 
-		// Sub-strategy 3c: Apply Damerau-Levenshtein tie-breaking
+		// Sub-strategy 5c: Apply Damerau-Levenshtein tie-breaking
 		// Only run on top 5 candidates for performance
 		const dlTopN = 5
 		fuzzyMatches = matcher.ApplyDamerauLevenshteinTieBreaker(slug, fuzzyMatches, dlTopN)
@@ -345,7 +442,7 @@ func TryAdvancedFuzzyMatching(
 	return FuzzyMatchResult{}, nil
 }
 
-// TryProgressiveTrim attempts Strategy 5: Progressive trim candidates (last resort).
+// TryProgressiveTrim attempts Strategy 7: Progressive trim candidates (last resort).
 // Handles overly-verbose queries by progressively trimming words from the end.
 // Uses a single IN query for all candidates (max depth: 3).
 func TryProgressiveTrim(

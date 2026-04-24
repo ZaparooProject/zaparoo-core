@@ -93,9 +93,16 @@ type ReaderWriteCancelParams struct {
 }
 
 type ReaderConnection struct {
+	Enabled  *bool  `json:"enabled,omitempty"`
 	Driver   string `json:"driver" validate:"required,min=1"`
 	Path     string `json:"path"`
 	IDSource string `json:"idSource,omitempty"`
+}
+
+// IsEnabled returns whether this connection is enabled.
+// nil (omitted) and true both mean enabled; only explicit false disables.
+func (r ReaderConnection) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
 }
 
 type UpdateSettingsParams struct {
@@ -109,6 +116,7 @@ type UpdateSettingsParams struct {
 	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
 	ReadersScanIgnoreSystem   *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
 	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty"`
+	AudioVolume               *int                `json:"audioVolume" validate:"omitempty,gte=0,lte=200"`
 	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`
 	LaunchGuardDelay          *float32            `json:"launchGuardDelay" validate:"omitempty,gte=0"`

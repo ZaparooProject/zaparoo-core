@@ -23,6 +23,7 @@ package broker
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -348,4 +349,81 @@ func TestBroker_MultipleNotificationTypes(t *testing.T) {
 		received := <-subscriber
 		assert.Equal(t, notifications[i].Method, received.Method)
 	}
+}
+
+// TestBroker_CoalesceDropsRedundantUpdates checks that when a subscriber's channel
+// is full and a coalesceable method fires in a burst, only the latest payload is
+// delivered rather than all intermediate values being dropped silently.
+func TestBroker_CoalesceDropsRedundantUpdates(t *testing.T) {
+	t.Parallel()
+
+	const totalSent = 200
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	source := make(chan models.Notification, totalSent+10)
+	b := NewBroker(ctx, source, "progress.event")
+	b.Start()
+
+	// Small buffer so it fills after the first two direct sends.
+	sub, _ := b.Subscribe(2)
+
+	// Send all notifications before broker has had much time to run.
+	for i := range totalSent {
+		source <- models.Notification{
+			Method: "progress.event",
+			Params: []byte(fmt.Sprintf(`{"step":%d}`, i)),
+		}
+	}
+
+	// Drain with a timeout so we don't exit before the coalesce goroutine delivers.
+	var received []models.Notification
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case n := <-sub:
+			received = append(received, n)
+		case <-deadline:
+			goto done
+		}
+	}
+done:
+
+	// Coalescing must have reduced the message count substantially.
+	assert.NotEmpty(t, received, "subscriber should have received at least one notification")
+	assert.Less(t, len(received), totalSent,
+		"coalescing should deliver fewer messages than were sent")
+	// With buffer=2 and 200 sends, 2 go direct and at least 1 is delivered by the drain
+	// goroutine. If coalescing is broken entirely, received==2 (drops only) — this catches that.
+	assert.GreaterOrEqual(t, len(received), 3,
+		"subscriber should have received direct sends plus at least one coalesced delivery")
+}
+
+// TestBroker_CoalesceDoesNotAffectCriticalEvents verifies that non-coalesceable
+// notifications (e.g. tokens.added) are never merged or silently dropped via the
+// coalescing path — they follow the original drop-with-warning path.
+func TestBroker_CoalesceDoesNotAffectCriticalEvents(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	source := make(chan models.Notification, 10)
+	// Only "progress.event" is coalesceable; tokens.added is not.
+	b := NewBroker(ctx, source, "progress.event")
+	b.Start()
+
+	// Buffer=4 so we can fill it with progress events then send a critical one.
+	sub, _ := b.Subscribe(4)
+
+	// Send a critical event first so it's received.
+	source <- models.Notification{Method: models.NotificationTokensAdded, Params: []byte(`{}`)}
+
+	// Give broker time to process.
+	time.Sleep(10 * time.Millisecond)
+
+	notif := <-sub
+	assert.Equal(t, models.NotificationTokensAdded, notif.Method,
+		"critical notification must be delivered intact")
 }

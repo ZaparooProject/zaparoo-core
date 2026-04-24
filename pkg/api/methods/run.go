@@ -145,12 +145,12 @@ func HandleRunRest(
 		text := chi.URLParam(r, "*")
 
 		if !isLocalRequest(r) && !cfg.IsRunAllowed(text) {
-			log.Warn().Msgf("run not allowed: %s", text)
+			log.Warn().Msg("REST run not allowed")
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
 		}
 
-		log.Info().Msgf("running token: %s", text)
+		log.Info().Msg("running token via REST")
 
 		t := tokens.Token{
 			Text:     norm.NFC.String(text),

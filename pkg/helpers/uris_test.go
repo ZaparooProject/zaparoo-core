@@ -39,7 +39,7 @@ func TestDecodeURIIfNeeded(t *testing.T) {
 		{
 			name:     "steam_with_url_encoding",
 			input:    "steam://123/Super%20Hot%2FCold",
-			expected: "steam://123/Super Hot/Cold",
+			expected: "steam://123/Super Hot%2FCold",
 		},
 		{
 			name:     "kodi_movie_with_url_encoding",
@@ -353,7 +353,7 @@ func TestDecodeURIIfNeeded_EdgeCases(t *testing.T) {
 		{
 			name:     "kodi_with_fragment",
 			input:    "kodi-movie://456/The%20Matrix#play",
-			expected: "kodi-movie://456/The Matrix#play", // Fragment kept as part of name
+			expected: "kodi-movie://456/The Matrix%23play", // '#' re-encoded to keep it in path, not fragment
 		},
 		{
 			name:     "http_with_query_and_fragment",
@@ -942,14 +942,32 @@ func TestDecodeURIIfNeeded_MalformedGracefulFallback(t *testing.T) {
 		{
 			name:        "double_encoding",
 			input:       "steam://999/Name%2520Here",
-			expected:    "steam://999/Name%20Here",
-			description: "Double encoding should decode once only",
+			expected:    "steam://999/Name%2520Here",
+			description: "Literal % in decoded segment is re-encoded for idempotence",
 		},
 		{
 			name:        "triple_encoding",
 			input:       "kodi-movie://100/Name%252520Here",
-			expected:    "kodi-movie://100/Name%2520Here",
-			description: "Triple encoding should decode once only",
+			expected:    "kodi-movie://100/Name%252520Here",
+			description: "Literal % in decoded segment is re-encoded for idempotence",
+		},
+		{
+			name:        "custom_scheme_literal_hashes_stay_literal",
+			input:       "steAm://############%2F",
+			expected:    "steAm://############%2F",
+			description: "Literal # characters should not be re-escaped when only an encoded slash needs preserving",
+		},
+		{
+			name:        "custom_scheme_invalid_escape_does_not_expand_literal_hashes",
+			input:       "steAm://###########/%",
+			expected:    "steAm://###########/%",
+			description: "Malformed custom-scheme segments should not expand surrounding literal # characters",
+		},
+		{
+			name:        "custom_scheme_encoded_control_char_preserves_escape",
+			input:       "sTeAm://###%00############",
+			expected:    "sTeAm://###%00############",
+			description: "Escaped control bytes should stay encoded without expanding surrounding literal # characters",
 		},
 		{
 			name:        "mixed_encoding_quality",

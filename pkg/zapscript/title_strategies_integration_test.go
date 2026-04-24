@@ -54,10 +54,11 @@ func newMockPlatformForCmdTitle() *mocks.MockPlatform {
 // STRATEGY EXECUTION ORDER (from first to last):
 //  1. ExactMatch - Exact slug match with tag scoring
 //  2. SecondaryTitleExact - Matches secondary title after colon/dash
-//  3. MainTitleOnly - Matches main title before colon/dash
-//  4. TokenSignature - Word-order-independent matching (2-3 word tokens)
-//  5. JaroWinklerDamerau - Fuzzy matching with typo correction
-//  6. ProgressiveTrim - Iteratively removes words from end of query
+//  3. SharedSecondaryTitle - Same subtitle, different main title (numbered vs named series)
+//  4. MainTitleOnly - Matches main title before colon/dash
+//  5. TokenSignature - Word-order-independent matching (2-3 word tokens)
+//  6. JaroWinklerDamerau - Fuzzy matching with typo correction
+//  7. ProgressiveTrim - Iteratively removes words from end of query
 //
 // COVERAGE:
 //   - ~100 games across 5 systems (SNES, NES, Genesis, N64, PC)
@@ -396,6 +397,22 @@ func setupTestMediaDBWithAllGames(t *testing.T) (db *mediadb.MediaDB, cleanup fu
 	// For secondary title with dash (already have colon tests)
 	addGame(insertedN64.DBID, "Racing - Speed Edition (USA)", "/roms/n64/Racing Speed (USA).z64", usaTag.DBID)
 
+	// Touhou series — IGDB-style names (Japanese subtitle) in DB
+	// Pairs: LaunchBox "Touhou NN: <English subtitle>" ↔ IGDB "Touhou <Japanese>: <English subtitle>"
+	addGame(insertedPC.DBID, "Touhou Koumakyou: The Embodiment of Scarlet Devil",
+		"/games/pc/th06/th06.exe")
+	addGame(insertedPC.DBID, "Touhou Kaeizuka: Phantasmagoria of Flower View",
+		"/games/pc/th09/th09.exe")
+	addGame(insertedPC.DBID, "Touhou Tenkuushou: Hidden Star in Four Seasons",
+		"/games/pc/th16/th16.exe")
+	addGame(insertedPC.DBID, "Touhou Kikeijuu: Wily Beast and Weakest Creature",
+		"/games/pc/th17/th17.exe")
+	addGame(insertedPC.DBID, "Touhou Juuouen: Unfinished Dream of All Living Ghost",
+		"/games/pc/th19/th19.exe")
+	// Noise: another franchise with an identical secondary title to verify first-token guard
+	addGame(insertedPC.DBID, "Galaxy Quest: Phantasmagoria of Flower View",
+		"/games/pc/galaxy-quest/gq.exe")
+
 	// Additional test data for Priority 3 edge case tests
 	// For extreme length tests
 	// Very short (1 char)
@@ -468,6 +485,7 @@ func makeConfigWithPreferences(t *testing.T, regions, langs []string) *config.In
 //   - Exact Match Strategy
 //   - Strategy Precedence
 //   - Secondary Title Exact Match
+//   - Shared Secondary Title (numbered vs named series)
 //   - Main Title Only
 //   - Token Signature
 //   - Fuzzy Match (Jaro-Winkler)
@@ -809,6 +827,66 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			description: "Ambiguous secondary title 'Arena Masters' matches multiple games, selects " +
 				"first by natural order",
 		},
+		// ============================================================
+		// SHARED SECONDARY TITLE STRATEGY
+		// Matches numbered-series vs named-series titles via shared subtitle.
+		// Both query and DB have secondary titles (colon-separated) with identical
+		// secondary slugs, but different main titles.
+		// Example: "Touhou 06: ..." ↔ "Touhou Koumakyou: ..."
+		// First-token guard prevents cross-franchise collisions.
+		// ============================================================
+
+		{
+			name:             "shared_secondary_touhou06",
+			input:            "PC/Touhou 06: The Embodiment of Scarlet Devil",
+			expectedPath:     "/games/pc/th06/th06.exe",
+			expectedStrategy: titles.StrategySharedSecondaryTitle,
+			description: "LaunchBox 'Touhou 06: ...' matches IGDB 'Touhou Koumakyou: ...' " +
+				"via identical English subtitle",
+		},
+		{
+			name:             "shared_secondary_touhou09",
+			input:            "PC/Touhou 09: Phantasmagoria of Flower View",
+			expectedPath:     "/games/pc/th09/th09.exe",
+			expectedStrategy: titles.StrategySharedSecondaryTitle,
+			description: "LaunchBox 'Touhou 09: ...' matches IGDB 'Touhou Kaeizuka: ...' " +
+				"via identical English subtitle",
+		},
+		{
+			name:             "shared_secondary_touhou16",
+			input:            "PC/Touhou 16: Hidden Star in Four Seasons",
+			expectedPath:     "/games/pc/th16/th16.exe",
+			expectedStrategy: titles.StrategySharedSecondaryTitle,
+			description: "LaunchBox 'Touhou 16: ...' matches IGDB 'Touhou Tenkuushou: ...' " +
+				"via identical English subtitle",
+		},
+		{
+			name:             "shared_secondary_touhou17",
+			input:            "PC/Touhou 17: Wily Beast and Weakest Creature",
+			expectedPath:     "/games/pc/th17/th17.exe",
+			expectedStrategy: titles.StrategySharedSecondaryTitle,
+			description: "LaunchBox 'Touhou 17: ...' matches IGDB 'Touhou Kikeijuu: ...' " +
+				"via identical English subtitle",
+		},
+		{
+			name:             "shared_secondary_touhou19",
+			input:            "PC/Touhou 19: Unfinished Dream of All Living Ghost",
+			expectedPath:     "/games/pc/th19/th19.exe",
+			expectedStrategy: titles.StrategySharedSecondaryTitle,
+			description: "LaunchBox 'Touhou 19: ...' matches IGDB 'Touhou Juuouen: ...' " +
+				"via identical English subtitle",
+		},
+		{
+			name: "negative_shared_secondary_different_franchise_rejected",
+			// "Touhou 09: Phantasmagoria of Flower View" and "Galaxy Quest: Phantasmagoria of Flower View"
+			// share the same secondary slug but different first main tokens — must not cross-match.
+			input:            "PC/Galaxy Quest: Phantasmagoria of Flower View",
+			expectedPath:     "/games/pc/galaxy-quest/gq.exe",
+			expectedStrategy: titles.StrategyExactMatch,
+			description: "Exact match found for Galaxy Quest — shared secondary title strategy " +
+				"does not cross-match into Touhou",
+		},
+
 		// ============================================================
 		// MAIN TITLE ONLY STRATEGY
 		// Matches text before colon/dash in titles with separators

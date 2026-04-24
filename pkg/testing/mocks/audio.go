@@ -40,6 +40,10 @@ func (m *MockPlayer) ClearFileCache() {
 	m.Called()
 }
 
+func (m *MockPlayer) SetVolume(volume float64) {
+	m.Called(volume)
+}
+
 // NewMockPlayer creates a new MockPlayer instance.
 func NewMockPlayer() *MockPlayer {
 	return &MockPlayer{}
@@ -50,4 +54,5 @@ func (m *MockPlayer) SetupNoOpMock() {
 	m.On("PlayBytes", mock.Anything).Return(nil).Maybe()
 	m.On("PlayFile", mock.Anything).Return(nil).Maybe()
 	m.On("ClearFileCache").Return().Maybe()
+	m.On("SetVolume", mock.Anything).Return().Maybe()
 }

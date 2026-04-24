@@ -135,6 +135,27 @@ func lookupCmd(name string) (cmdFunc, bool) {
 	return f, ok
 }
 
+// isSensitiveCommand returns true if the command's arguments may contain
+// sensitive data (URLs with API keys, keyboard input sequences, etc.) and
+// should not be included in log output.
+func isSensitiveCommand(cmdName string) bool {
+	switch cmdName {
+	case zapscript.ZapScriptCmdHTTPGet,
+		zapscript.ZapScriptCmdHTTPPost,
+		zapscript.ZapScriptCmdInputKeyboard,
+		zapscript.ZapScriptCmdInputGamepad,
+		zapscript.ZapScriptCmdExecute,
+		zapscript.ZapScriptCmdInputKey, // DEPRECATED
+		zapscript.ZapScriptCmdKey,      // DEPRECATED
+		zapscript.ZapScriptCmdGet,      // DEPRECATED
+		zapscript.ZapScriptCmdShell,    // DEPRECATED
+		zapscript.ZapScriptCmdCommand:  // DEPRECATED
+		return true
+	default:
+		return false
+	}
+}
+
 // IsMediaDisruptingCommand returns true if the command would change or stop
 // the currently playing media. Used by launch guard to decide whether a token
 // should be staged for confirmation.
@@ -358,7 +379,11 @@ func RunCommand(
 
 	cmdFn, ok := lookupCmd(cmd.Name)
 	if !ok {
-		return platforms.CmdResult{}, fmt.Errorf("unknown command: %s", cmd)
+		return platforms.CmdResult{}, fmt.Errorf("unknown command: %s", cmd.Name)
+	}
+
+	if cfg.IsCommandBlocked(cmd.Name) {
+		return platforms.CmdResult{}, fmt.Errorf("command blocked: %s", cmd.Name)
 	}
 
 	// Acquire launch guard for media-launching commands to prevent concurrent launches
@@ -373,7 +398,12 @@ func RunCommand(
 		env.LauncherCtx = lm.GetContext()
 	}
 
-	log.Info().Msgf("running command: %s", cmd)
+	logCmd := cmd.String()
+	if isSensitiveCommand(cmd.Name) {
+		logCmd = cmd.Name
+	}
+
+	log.Info().Msgf("running command: %s", logCmd)
 	res, err := cmdFn(pl, env)
 	if err != nil {
 		switch {
@@ -381,9 +411,9 @@ func RunCommand(
 			errors.Is(err, titles.ErrNoMatch),
 			errors.Is(err, ErrNoControlCapabilities),
 			errors.Is(err, ErrNoHistory):
-			log.Warn().Err(err).Msgf("error running command: %s", cmd)
+			log.Warn().Err(err).Msgf("error running command: %s", logCmd)
 		default:
-			log.Error().Err(err).Msgf("error running command: %s", cmd)
+			log.Error().Err(err).Msgf("error running command: %s", logCmd)
 		}
 		return platforms.CmdResult{}, err
 	}

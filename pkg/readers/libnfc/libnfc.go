@@ -290,7 +290,7 @@ func (r *Reader) Close() error {
 	r.pnd = nil
 	r.mu.Unlock()
 
-	log.Debug().Msgf("closing device: %s", r.conn)
+	log.Debug().Msgf("closing device: %s", r.conn.ConnectionString())
 	err := pnd.Close()
 	if err != nil {
 		return fmt.Errorf("failed to close NFC device: %w", err)
@@ -768,7 +768,7 @@ func (r *Reader) pollDevice(
 	if tagText == "" {
 		log.Warn().Msg("no text NDEF found")
 	} else {
-		log.Info().Msgf("decoded text NDEF: %s", tagText)
+		log.Debug().Msgf("decoded text NDEF: %s", tagText)
 	}
 
 	card := &tokens.Token{
@@ -785,7 +785,8 @@ func (r *Reader) pollDevice(
 }
 
 func (r *Reader) writeTag(req WriteRequest) {
-	log.Info().Msgf("libnfc write request: %s", req.Text)
+	log.Info().Msg("libnfc write request received")
+	log.Debug().Msgf("libnfc write text: %s", req.Text)
 
 	r.mu.RLock()
 	pnd := r.pnd
@@ -929,7 +930,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 	}
 
 	if t.Text != req.Text {
-		log.Error().Msgf("text mismatch after write: %s != %s", t.Text, req.Text)
+		log.Error().Msg("text mismatch after write")
 		req.Result <- WriteRequestResult{
 			Err: &DataCorruptedError{
 				Device: r.conn.ConnectionString(),

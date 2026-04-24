@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -28,6 +29,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,6 +51,56 @@ import (
 )
 
 const defaultMaxResults = 100
+
+// tagsPerCategoryLimit caps the number of tags returned per type in media.tags
+// responses. Tags are sorted by usage count (most popular first) before capping,
+// so long-tail categories like credit: don't flood the response.
+const tagsPerCategoryLimit = 100
+
+// cappedTagTypes is the set of tag types that are long-tail (have many values
+// per system) and should be capped when returning tag lists. Taxonomy tags
+// like region, year, and lang have a finite set of values per system and are
+// returned in full without truncation. Set-like types with closed vocabularies
+// (e.g., dump, edition, rerelease) are also not capped since they rarely exceed
+// 100 distinct values even in large collections.
+var cappedTagTypes = map[string]bool{
+	"credit":     true,
+	"publisher":  true,
+	"developer":  true,
+	"mameparent": true,
+	"search":     true,
+}
+
+// capTagsByCategory returns at most limit tags per type, sorted by count desc
+// then tag asc within each group. Long-tail types (credit, publisher, etc.)
+// are capped at limit; taxonomy types (region, year, lang, etc.) are returned
+// in full.
+func capTagsByCategory(tagList []database.TagInfo, limit int) []database.TagInfo {
+	grouped := make(map[string][]database.TagInfo)
+	typeOrder := make([]string, 0, 8)
+	for _, t := range tagList {
+		if _, exists := grouped[t.Type]; !exists {
+			typeOrder = append(typeOrder, t.Type)
+		}
+		grouped[t.Type] = append(grouped[t.Type], t)
+	}
+
+	result := make([]database.TagInfo, 0, len(tagList))
+	for _, typ := range typeOrder {
+		group := grouped[typ]
+		slices.SortFunc(group, func(a, b database.TagInfo) int {
+			if c := cmp.Compare(b.Count, a.Count); c != 0 {
+				return c
+			}
+			return cmp.Compare(a.Tag, b.Tag)
+		})
+		if cappedTagTypes[typ] && len(group) > limit {
+			group = group[:limit]
+		}
+		result = append(result, group...)
+	}
+	return result
+}
 
 // searchSem limits concurrent media.search requests to 3 to avoid saturating
 // SQLite with long-running LIKE queries. Additional callers block until a slot
@@ -301,6 +353,9 @@ func GenerateMediaDB(
 		defer db.MediaDB.BackgroundOperationDone()
 		defer debug.FreeOSMemory()
 
+		var lastNotifTime time.Time
+		const notifThrottleInterval = 250 * time.Millisecond
+
 		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			var desc string
 			switch {
@@ -308,6 +363,10 @@ func GenerateMediaDB(
 				desc = "Finding media folders"
 			case status.Phase == mediascanner.PhaseInitializing:
 				desc = "Initializing database"
+			case status.Phase == mediascanner.PhaseCreatingIndexes:
+				desc = "Creating indexes"
+			case status.Phase == mediascanner.PhaseBuildingCaches:
+				desc = "Building search caches"
 			case status.Step == status.Total:
 				desc = "Writing database"
 			default:
@@ -323,6 +382,8 @@ func GenerateMediaDB(
 					}
 				}
 			}
+
+			// Always update in-memory status for polling clients.
 			statusInstance.set(indexingStatusVals{
 				indexing:    true,
 				totalSteps:  status.Total,
@@ -330,6 +391,21 @@ func GenerateMediaDB(
 				currentDesc: desc,
 				totalFiles:  status.Files,
 			})
+
+			// Throttle WebSocket push notifications to prevent
+			// channel overflow during bursts (e.g. resume skipping
+			// many completed systems). Phase changes and the final
+			// step are always sent so clients see start/end.
+			now := time.Now()
+			isPhaseChange := status.Phase == mediascanner.PhaseDiscovering ||
+				status.Phase == mediascanner.PhaseInitializing ||
+				status.Phase == mediascanner.PhaseCreatingIndexes ||
+				status.Phase == mediascanner.PhaseBuildingCaches
+			isFinalStep := status.Step == status.Total
+			if !isPhaseChange && !isFinalStep && now.Sub(lastNotifTime) < notifThrottleInterval {
+				return
+			}
+			lastNotifTime = now
 
 			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 				Exists:             false,
@@ -690,7 +766,7 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	}
 
 	return models.TagsResponse{
-		Tags: tagList,
+		Tags: capTagsByCategory(tagList, tagsPerCategoryLimit),
 	}, nil
 }
 
