@@ -650,7 +650,7 @@ func startPublishers(
 		log.Info().Msgf("starting PixelCade publisher: %s:%d", pcCfg.Host, pcCfg.Port)
 
 		publisher := publishers.NewPixelCadePublisher(
-			pcCfg.Host, pcCfg.Port, pcCfg.Mode, pcCfg.OnStop, pcCfg.Filter,
+			pcCfg.Host, pcCfg.Port, pcCfg.Mode, pcCfg.Filter,
 		)
 		if err := publisher.Start(st.GetContext()); err != nil {
 			log.Error().Err(err).Msgf("failed to start PixelCade publisher for %s", pcCfg.Host)

@@ -72,7 +72,6 @@ type PixelCadePublisher struct {
 	Enabled *bool    `toml:"enabled,omitempty"`
 	Host    string   `toml:"host"`
 	Mode    string   `toml:"mode,omitempty"`
-	OnStop  string   `toml:"on_stop,omitempty"`
 	Filter  []string `toml:"filter,omitempty,multiline"`
 	Port    int      `toml:"port,omitempty"`
 }
