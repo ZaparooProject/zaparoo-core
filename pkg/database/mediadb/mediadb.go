@@ -1825,18 +1825,44 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 	return result, err
 }
 
+func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	err := sqlUpdateMediaTitle(db.ctx, db.conn(), mediaDBID, mediaTitleDBID)
+	if err == nil && !db.inTransaction {
+		db.invalidateCaches(invalidationScope{AllSystems: true})
+	}
+
+	return err
+}
+
+func (db *MediaDB) DeleteMediaTags(mediaDBID int64) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	err := sqlDeleteMediaTags(db.ctx, db.conn(), mediaDBID)
+	if err == nil && !db.inTransaction {
+		db.invalidateCaches(invalidationScope{AllSystems: true})
+	}
+
+	return err
+}
+
 func (db *MediaDB) BulkSetMediaMissing(dbids map[int]struct{}) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlBulkSetMediaMissing(db.ctx, db.sql, dbids)
+	return sqlBulkSetMediaMissing(db.ctx, db.conn(), dbids)
 }
 
 func (db *MediaDB) ResetMissingFlags(systemDBIDs []int) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlResetMissingFlags(db.ctx, db.sql, systemDBIDs)
+	return sqlResetMissingFlags(db.ctx, db.conn(), systemDBIDs)
 }
 
 func (db *MediaDB) FindOrInsertMedia(row database.Media) (database.Media, error) {

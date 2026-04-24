@@ -128,6 +128,42 @@ func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (databa
 	return row, nil
 }
 
+func sqlUpdateMediaTitle(ctx context.Context, db sqlQueryable, mediaDBID, mediaTitleDBID int64) error {
+	stmt, err := db.PrepareContext(ctx, `UPDATE Media SET MediaTitleDBID = ? WHERE DBID = ?`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare update media title statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	if _, err := stmt.ExecContext(ctx, mediaTitleDBID, mediaDBID); err != nil {
+		return fmt.Errorf("failed to update media title: %w", err)
+	}
+
+	return nil
+}
+
+func sqlDeleteMediaTags(ctx context.Context, db sqlQueryable, mediaDBID int64) error {
+	stmt, err := db.PrepareContext(ctx, `DELETE FROM MediaTags WHERE MediaDBID = ?`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare delete media tags statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	if _, err := stmt.ExecContext(ctx, mediaDBID); err != nil {
+		return fmt.Errorf("failed to delete media tags: %w", err)
+	}
+
+	return nil
+}
+
 func sqlGetAllMedia(ctx context.Context, db *sql.DB) ([]database.Media, error) {
 	rows, err := db.QueryContext(ctx,
 		"SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir FROM Media ORDER BY DBID")
@@ -278,7 +314,7 @@ func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]
 
 // sqlBulkSetMediaMissing marks media records as missing by DBID. Batches in chunks
 // of 500 to stay within SQLite variable limits.
-func sqlBulkSetMediaMissing(ctx context.Context, db *sql.DB, dbids map[int]struct{}) error {
+func sqlBulkSetMediaMissing(ctx context.Context, db sqlQueryable, dbids map[int]struct{}) error {
 	if len(dbids) == 0 {
 		return nil
 	}
@@ -313,7 +349,7 @@ func sqlBulkSetMediaMissing(ctx context.Context, db *sql.DB, dbids map[int]struc
 }
 
 // sqlResetMissingFlags clears IsMissing for all media belonging to the given system DBIDs.
-func sqlResetMissingFlags(ctx context.Context, db *sql.DB, systemDBIDs []int) error {
+func sqlResetMissingFlags(ctx context.Context, db sqlQueryable, systemDBIDs []int) error {
 	if len(systemDBIDs) == 0 {
 		return nil
 	}

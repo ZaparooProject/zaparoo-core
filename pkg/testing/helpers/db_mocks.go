@@ -1012,6 +1012,22 @@ func (m *MockMediaDBI) FindOrInsertMedia(row database.Media) (database.Media, er
 	return database.Media{}, nil
 }
 
+func (m *MockMediaDBI) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
+	args := m.Called(mediaDBID, mediaTitleDBID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) DeleteMediaTags(mediaDBID int64) error {
+	args := m.Called(mediaDBID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 // TagType CRUD methods
 func (m *MockMediaDBI) FindTagType(row database.TagType) (database.TagType, error) {
 	args := m.Called(row)
@@ -1819,6 +1835,8 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("DropSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("BulkSetMediaMissing", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("ResetMissingFlags", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("UpdateMediaTitle", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("DeleteMediaTags", mock.Anything).Return(nil).Maybe()
 	return mockMediaDB
 }
 

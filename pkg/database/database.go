@@ -480,6 +480,8 @@ type MediaDBI interface {
 	FindMedia(row Media) (Media, error)
 	InsertMedia(row Media) (Media, error)
 	FindOrInsertMedia(row Media) (Media, error)
+	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error
+	DeleteMediaTags(mediaDBID int64) error
 
 	FindTagType(row TagType) (TagType, error)
 	InsertTagType(row TagType) (TagType, error)

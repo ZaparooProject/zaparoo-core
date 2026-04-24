@@ -48,8 +48,7 @@ import (
 
 // Batch configuration for transaction optimization
 const (
-	maxFilesPerTransaction   = 10000
-	maxSystemsPerTransaction = 10
+	maxFilesPerTransaction = 10000
 )
 
 // listNumberingRegex matches file list numbering patterns like "1. ", "01 - ", "42. "
@@ -777,27 +776,8 @@ func NewNamesIndex(
 		}
 	}
 
-	// Reset IsMissing flags only for systems that will actually be processed in
-	// this run. On resume, skipped systems must keep their persisted markers.
-	processableSystemDBIDs := make([]int, 0, len(sortedSystems))
-	for _, sys := range sortedSystems {
-		if completedSystems[sys.ID] {
-			continue
-		}
-		if dbid, ok := scanState.SystemIDs[sys.ID]; ok {
-			processableSystemDBIDs = append(processableSystemDBIDs, dbid)
-		}
-	}
-	if len(processableSystemDBIDs) > 0 {
-		if resetErr := db.ResetMissingFlags(processableSystemDBIDs); resetErr != nil {
-			return 0, fmt.Errorf("failed to reset missing flags: %w", resetErr)
-		}
-		log.Info().Int("systems", len(processableSystemDBIDs)).Msg("reset IsMissing flags for indexed systems")
-	}
-
 	// Batch tracking variables for adaptive transaction management
 	filesInBatch := 0
-	systemsInBatch := 0
 	batchStarted := false
 
 	// Unified loop: each system is processed exactly once regardless of source.
@@ -830,6 +810,8 @@ func NewNamesIndex(
 			update(status)
 			continue
 		}
+
+		scanState.MissingMedia = make(map[int]struct{})
 
 		// Load existing data for this system — always persistent.
 		if loadErr := PopulatePersistentScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
@@ -1011,23 +993,59 @@ func NewNamesIndex(
 				// files in this system (multi-disc titles, persistent-mode
 				// existing-media tracking). Flush only happens between systems.
 				filesInBatch = 0
-				systemsInBatch = 0
 				batchStarted = false
 			}
 		}
 
-		// Only count system in batch if we have pending uncommitted work
 		if batchStarted {
-			systemsInBatch++
+			commitStart := time.Now()
+			if commitErr := db.CommitTransaction(); commitErr != nil {
+				return 0, fmt.Errorf("failed to commit system transaction: %w", commitErr)
+			}
+			commitElapsed := time.Since(commitStart)
+			log.Debug().
+				Str("system", systemID).
+				Int("files", filesInBatch).
+				Dur("commitTime", commitElapsed).
+				Msg("committed system transaction")
+			if commitElapsed > 5*time.Second {
+				log.Warn().
+					Int("files", filesInBatch).
+					Dur("commitTime", commitElapsed).
+					Msg("database commit took longer than expected")
+			}
+			filesInBatch = 0
+			batchStarted = false
 		}
 
-		// Mark system as processed (even if split across multiple commits)
-		completedSystems[systemID] = true
+		systemDBID, found := scanState.SystemIDs[systemID]
+		if !found {
+			completedSystems[systemID] = true
+			FlushScanStateMaps(&scanState)
+			continue
+		}
 
-		// In persistent mode, MissingMedia accumulates across all systems and is
-		// flushed once at the end of indexing via a single BulkSetMediaMissing
-		// call (after the final commit, since that writes through db.sql and
-		// would otherwise contend with the open batch transaction).
+		if beginErr := db.BeginTransaction(true); beginErr != nil {
+			return 0, fmt.Errorf("failed to begin missing-state transaction: %w", beginErr)
+		}
+		if resetErr := db.ResetMissingFlags([]int{systemDBID}); resetErr != nil {
+			return 0, fmt.Errorf("failed to reset missing flags for system %s: %w", systemID, resetErr)
+		}
+		if len(scanState.MissingMedia) > 0 {
+			if missErr := db.BulkSetMediaMissing(scanState.MissingMedia); missErr != nil {
+				return 0, fmt.Errorf("failed to mark missing media for system %s: %w", systemID, missErr)
+			}
+		}
+		if commitErr := db.CommitTransaction(); commitErr != nil {
+			return 0, fmt.Errorf("failed to commit missing-state transaction: %w", commitErr)
+		}
+
+		if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
+			log.Error().Err(setErr).Msgf("failed to set last indexed system to %s after system completion", systemID)
+		}
+
+		// Mark system as processed only after its missing-state finalization commits.
+		completedSystems[systemID] = true
 
 		systemElapsed := time.Since(systemStartTime)
 		log.Info().
@@ -1044,38 +1062,9 @@ func NewNamesIndex(
 				Msg("system indexing took longer than expected - check for slow storage or large directories")
 		}
 
-		// Commit after N small systems OR when file limit forces it
-		if batchStarted && systemsInBatch >= maxSystemsPerTransaction {
-			commitStart := time.Now()
-			if commitErr := db.CommitTransaction(); commitErr != nil {
-				return 0, fmt.Errorf("failed to commit batch transaction (system limit): %w", commitErr)
-			}
-			commitElapsed := time.Since(commitStart)
-			log.Debug().
-				Int("systems", systemsInBatch).
-				Int("files", filesInBatch).
-				Dur("commitTime", commitElapsed).
-				Msg("committed batch (system limit)")
-			if commitElapsed > 5*time.Second {
-				log.Warn().
-					Int("files", filesInBatch).
-					Dur("commitTime", commitElapsed).
-					Msg("database commit took longer than expected")
-			}
-			// Update progress after successful commit
-			if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
-				log.Error().Err(setErr).Msgf(
-					"failed to set last indexed system to %s after system limit commit", systemID)
-			}
-			FlushScanStateMaps(&scanState)
-			filesInBatch = 0
-			systemsInBatch = 0
-			batchStarted = false
-		} else {
-			// Always flush between systems even without a commit — TitleIDs/MediaIDs
-			// are system-scoped and Populate* re-loads them for the next system.
-			FlushScanStateMaps(&scanState)
-		}
+		// Always flush between systems — TitleIDs/MediaIDs are system-scoped and
+		// Populate* re-loads them for the next system.
+		FlushScanStateMaps(&scanState)
 	}
 
 	// Commit any remaining uncommitted data from the unified loop
@@ -1116,19 +1105,6 @@ func NewNamesIndex(
 		}
 	}
 
-	// Flush accumulated missing-media markers in a single bulk update.
-	// MissingMedia accumulates across all systems during persistent indexing
-	// (FlushScanStateMaps preserves it). BulkSetMediaMissing writes through
-	// db.sql, so it must run after every batch transaction has been committed
-	// to avoid contending with the SQLite write lock.
-	if len(scanState.MissingMedia) > 0 {
-		log.Info().
-			Int("missingCount", len(scanState.MissingMedia)).
-			Msg("marking missing media")
-		if missErr := db.BulkSetMediaMissing(scanState.MissingMedia); missErr != nil {
-			return 0, fmt.Errorf("failed to mark missing media: %w", missErr)
-		}
-	}
 	scanState.MissingMedia = nil
 	status.Phase = PhaseCreatingIndexes
 	update(status)

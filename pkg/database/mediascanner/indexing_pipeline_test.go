@@ -21,6 +21,7 @@ package mediascanner
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -189,6 +190,107 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 
 	// Verify all mocks were called as expected (FindSystem should NOT have been called)
 	mockDB.AssertExpectations(t)
+}
+
+func TestAddMediaPath_ReindexesExistingMediaRefreshesDerivedMetadata(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	initialState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
+		SystemsIndex:  0,
+		TitlesIndex:   0,
+		MediaIndex:    0,
+		TagTypesIndex: 0,
+		TagsIndex:     0,
+	}
+
+	require.NoError(t, SeedCanonicalTags(mediaDB, initialState))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	correctTitleID, mediaID, err := AddMediaPath(
+		mediaDB, initialState, "NES", path, false, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	sqlDB := mediaDB.UnsafeGetSQLDb()
+	const (
+		wrongTitleID = int64(9997)
+		staleTypeID  = int64(9998)
+		staleTagID   = int64(9999)
+	)
+
+	_, err = sqlDB.ExecContext(ctx,
+		`INSERT INTO MediaTitles (DBID, Slug, Name, SystemDBID, SlugLength, SlugWordCount) VALUES (?, ?, ?, ?, ?, ?)`,
+		wrongTitleID, "wrong-title", "Wrong Title", 1, len("wrong-title"), 2,
+	)
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, `UPDATE Media SET MediaTitleDBID = ? WHERE DBID = ?`, wrongTitleID, mediaID)
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, `INSERT INTO TagTypes (DBID, Type) VALUES (?, ?)`, staleTypeID, "stale-test-type")
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx,
+		`INSERT INTO Tags (DBID, Tag, TypeDBID) VALUES (?, ?, ?)`,
+		staleTagID, "stale-test-tag", staleTypeID,
+	)
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, `INSERT INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`, mediaID, staleTagID)
+	require.NoError(t, err)
+
+	refreshState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
+		SystemsIndex:  0,
+		TitlesIndex:   0,
+		MediaIndex:    0,
+		TagTypesIndex: 0,
+		TagsIndex:     0,
+	}
+	require.NoError(t, PopulateScanStateFromDB(ctx, mediaDB, refreshState))
+	require.NoError(t, PopulatePersistentScanStateForSystem(ctx, mediaDB, refreshState, "NES"))
+
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, _, err = AddMediaPath(mediaDB, refreshState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	var refreshedTitleID int64
+	err = sqlDB.QueryRowContext(ctx, `SELECT MediaTitleDBID FROM Media WHERE DBID = ?`, mediaID).Scan(&refreshedTitleID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(correctTitleID), refreshedTitleID)
+
+	var staleTagCount int
+	err = sqlDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM MediaTags WHERE MediaDBID = ? AND TagDBID = ?`,
+		mediaID, staleTagID,
+	).Scan(&staleTagCount)
+	require.NoError(t, err)
+	assert.Zero(t, staleTagCount)
+
+	var extensionTagCount int
+	err = sqlDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM MediaTags mt
+		JOIN Tags t ON t.DBID = mt.TagDBID
+		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE mt.MediaDBID = ? AND tt.Type = ? AND t.Tag = ?`,
+		mediaID, string(tags.TagTypeExtension), "nes",
+	).Scan(&extensionTagCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, extensionTagCount)
 }
 
 func TestGetTitleFromFilename(t *testing.T) {

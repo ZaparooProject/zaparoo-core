@@ -188,6 +188,12 @@ func AddMediaPath(
 		if ss.MissingMedia != nil {
 			delete(ss.MissingMedia, foundMediaIndex)
 		}
+		if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex)); err != nil {
+			return 0, 0, fmt.Errorf("error updating media title %s: %w", pf.Path, err)
+		}
+		if err := db.DeleteMediaTags(int64(mediaIndex)); err != nil {
+			return 0, 0, fmt.Errorf("error deleting media tags %s: %w", pf.Path, err)
+		}
 	}
 
 	// Extract extension tag only if filename tags are enabled

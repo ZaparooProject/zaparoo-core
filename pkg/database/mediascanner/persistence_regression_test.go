@@ -118,3 +118,48 @@ func TestNewNamesIndex_ResumeResetMissingFlagsSkipsCompletedSystems(t *testing.T
 	mockMediaDB.AssertCalled(t, "ResetMissingFlags", []int{3})
 	mockMediaDB.AssertExpectations(t)
 }
+
+func TestNewNamesIndex_CancelledSystemDoesNotResetMissingFlags(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+
+	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
+	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
+	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+	mockMediaDB.On("GetIndexingStatus").Return("running", nil).Maybe()
+	mockMediaDB.On("GetLastIndexedSystem").Return("", nil).Maybe()
+	mockMediaDB.On("GetIndexingSystems").Return([]string{"snes"}, nil).Maybe()
+	mockMediaDB.On("SetIndexingSystems", []string{"snes"}).Return(nil).Maybe()
+	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Maybe()
+	mockMediaDB.On("SetIndexingStatus", "cancelled").Return(nil).Maybe()
+	mockMediaDB.On("SetIndexingStatus", "failed").Return(nil).Maybe()
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Maybe()
+	mockMediaDB.On("GetMaxSystemID").Return(int64(1), nil).Maybe()
+	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Maybe()
+	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Maybe()
+	mockMediaDB.On("GetMaxTagTypeID").Return(int64(1), nil).Maybe()
+	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
+	mockMediaDB.On("GetAllSystems").Return([]database.System{{DBID: 1, SystemID: "snes"}}, nil).Maybe()
+	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{{DBID: 1, Type: "genre"}}, nil).Maybe()
+	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Maybe()
+	_, err := NewNamesIndex(ctx, mockPlatform, cfg, []systemdefs.System{{ID: "snes"}},
+		&database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}, func(IndexStatus) {}, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	mockMediaDB.AssertNotCalled(t, "ResetMissingFlags", mock.Anything)
+	mockMediaDB.AssertNotCalled(t, "BulkSetMediaMissing", mock.Anything)
+	mockMediaDB.AssertExpectations(t)
+}
