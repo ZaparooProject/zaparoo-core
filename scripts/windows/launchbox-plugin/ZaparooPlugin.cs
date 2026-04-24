@@ -46,6 +46,11 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     private static bool _isShuttingDown;
     private static bool _isBigBoxRunning;
     private static System.Windows.Threading.Dispatcher? _uiDispatcher;
+    private static bool _hasPendingBigBoxRestore;
+    private static bool _shouldRestoreBigBoxView;
+    private static IPlatform? _previousBigBoxPlatform;
+    private static string? _pendingRestoreGameId;
+    private static string? _pendingRestoreAdditionalAppId;
 
     // Instance-specific state
     private IGame? _currentGame;
@@ -72,18 +77,18 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     {
         if (eventType == SystemEventTypes.PluginInitialized)
         {
-            _uiDispatcher ??= System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            _uiDispatcher ??= System.Windows.Application.Current?.Dispatcher;
         }
         else if (eventType == SystemEventTypes.LaunchBoxStartupCompleted)
         {
-            _uiDispatcher ??= System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            _uiDispatcher ??= System.Windows.Application.Current?.Dispatcher;
             _isBigBoxRunning = false;
             _isShuttingDown = false;
             StartConnectionTask();
         }
         else if (eventType == SystemEventTypes.BigBoxStartupCompleted)
         {
-            _uiDispatcher ??= System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            _uiDispatcher ??= System.Windows.Application.Current?.Dispatcher;
             _isBigBoxRunning = true;
             _isShuttingDown = false;
             StartConnectionTask();
@@ -92,6 +97,9 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                  eventType == SystemEventTypes.BigBoxShutdownBeginning)
         {
             _isShuttingDown = true;
+            ClearPendingBigBoxRestore();
+            _shouldRestoreBigBoxView = false;
+            _previousBigBoxPlatform = null;
             DisconnectFromPipe();
         }
     }
@@ -104,6 +112,16 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     {
         // Track the game that's about to launch
         _currentGame = game;
+
+        if (MatchesPendingBigBoxRestore(game, app))
+        {
+            _shouldRestoreBigBoxView = true;
+            ClearPendingBigBoxRestore();
+        }
+        else
+        {
+            ClearPendingBigBoxRestore();
+        }
     }
 
     public void OnAfterGameLaunched(IGame game, IAdditionalApplication? app, IEmulator? emulator)
@@ -132,6 +150,8 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             });
             _currentGame = null;
         }
+
+        RestoreBigBoxView();
     }
 
     #endregion
@@ -464,6 +484,8 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                 {
                     if (_isBigBoxRunning)
                     {
+                        CaptureBigBoxLaunchContext(game.Id, null);
+
                         // ShowGame navigates BigBox UI to the game, which fires
                         // LEDBlinky Event 9 (game selection). Without this, LEDBlinky
                         // shows controls for whichever game was highlighted in the menu.
@@ -486,6 +508,7 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                 {
                     if (_isBigBoxRunning)
                     {
+                        CaptureBigBoxLaunchContext(parentGame.Id, additionalApp.Id);
                         PluginHelper.BigBoxMainViewModel?.ShowGame(parentGame, FilterType.None);
                         PluginHelper.BigBoxMainViewModel?.PlayGame(parentGame, additionalApp, null, null);
                     }
@@ -507,7 +530,9 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
 
     private static void InvokeOnUiThread(Action action)
     {
-        var dispatcher = _uiDispatcher ?? System.Windows.Application.Current?.Dispatcher;
+        _uiDispatcher ??= System.Windows.Application.Current?.Dispatcher;
+
+        var dispatcher = _uiDispatcher;
         if (dispatcher != null && !dispatcher.CheckAccess())
         {
             dispatcher.Invoke(action);
@@ -516,6 +541,65 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
         {
             action();
         }
+    }
+
+    private static void CaptureBigBoxLaunchContext(string gameId, string? additionalAppId)
+    {
+        _previousBigBoxPlatform = PluginHelper.StateManager?.GetSelectedPlatform();
+        _pendingRestoreGameId = gameId;
+        _pendingRestoreAdditionalAppId = additionalAppId;
+        _hasPendingBigBoxRestore = true;
+        _shouldRestoreBigBoxView = false;
+    }
+
+    private static bool MatchesPendingBigBoxRestore(IGame game, IAdditionalApplication? app)
+    {
+        if (!_hasPendingBigBoxRestore || _pendingRestoreGameId != game.Id)
+        {
+            return false;
+        }
+
+        return _pendingRestoreAdditionalAppId == app?.Id;
+    }
+
+    private static void ClearPendingBigBoxRestore()
+    {
+        _hasPendingBigBoxRestore = false;
+        _pendingRestoreGameId = null;
+        _pendingRestoreAdditionalAppId = null;
+    }
+
+    private static void RestoreBigBoxView()
+    {
+        if (!_shouldRestoreBigBoxView || !_isBigBoxRunning)
+        {
+            return;
+        }
+
+        InvokeOnUiThread(() =>
+        {
+            try
+            {
+                if (_previousBigBoxPlatform != null)
+                {
+                    PluginHelper.BigBoxMainViewModel?.ShowGames(_previousBigBoxPlatform);
+                }
+                else
+                {
+                    PluginHelper.BigBoxMainViewModel?.ShowPlatforms();
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Failed to restore BigBox view: {ex.Message}");
+            }
+            finally
+            {
+                ClearPendingBigBoxRestore();
+                _previousBigBoxPlatform = null;
+                _shouldRestoreBigBoxView = false;
+            }
+        });
     }
 
     private (IGame?, IAdditionalApplication?) FindAdditionalApplicationById(string id)
