@@ -319,16 +319,17 @@ func AddMediaPath(
 				return 0, 0, fmt.Errorf("error reconciling media tags %s: %w", pf.Path, err)
 			}
 		} else {
-			if err := db.DeleteMediaTags(int64(mediaIndex)); err != nil {
-				return 0, 0, fmt.Errorf("error deleting media tags %s: %w", pf.Path, err)
+			if err := insertDesiredMediaTags(db, mediaIndex, desiredTagIDs, extensionTagIndex); err != nil {
+				return 0, 0, fmt.Errorf("error inserting media tags %s without prior state: %w", pf.Path, err)
 			}
-			insertDesiredMediaTags(db, mediaIndex, desiredTagIDs, extensionTagIndex)
 		}
 
 		return titleIndex, mediaIndex, nil
 	}
 
-	insertDesiredMediaTags(db, mediaIndex, desiredTagIDs, extensionTagIndex)
+	if err := insertDesiredMediaTags(db, mediaIndex, desiredTagIDs, extensionTagIndex); err != nil {
+		return 0, 0, fmt.Errorf("error inserting media tags %s: %w", pf.Path, err)
+	}
 
 	return titleIndex, mediaIndex, nil
 }
@@ -358,7 +359,9 @@ func reconcileExistingMediaTags(
 		if _, ok := existingTagIDs[tagIndex]; ok {
 			continue
 		}
-		insertMediaTagLink(db, mediaIndex, tagIndex, tagLogLabel(tagIndex, extensionTagIndex))
+		if err := insertMediaTagLink(db, mediaIndex, tagIndex, tagLogLabel(tagIndex, extensionTagIndex)); err != nil {
+			return err
+		}
 	}
 
 	ss.MediaTagIDs[mediaIndex] = cloneMediaTagSet(desiredTagIDs)
@@ -371,10 +374,14 @@ func insertDesiredMediaTags(
 	mediaIndex int,
 	desiredTagIDs map[int]struct{},
 	extensionTagIndex int,
-) {
+) error {
 	for tagIndex := range desiredTagIDs {
-		insertMediaTagLink(db, mediaIndex, tagIndex, tagLogLabel(tagIndex, extensionTagIndex))
+		if err := insertMediaTagLink(db, mediaIndex, tagIndex, tagLogLabel(tagIndex, extensionTagIndex)); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 func tagLogLabel(tagIndex, extensionTagIndex int) string {
@@ -385,32 +392,41 @@ func tagLogLabel(tagIndex, extensionTagIndex int) string {
 	return ""
 }
 
-func insertMediaTagLink(db database.MediaDBI, mediaIndex, tagIndex int, tagStr string) {
+func insertMediaTagLink(db database.MediaDBI, mediaIndex, tagIndex int, tagStr string) error {
 	_, err := db.InsertMediaTag(database.MediaTag{
 		TagDBID:   int64(tagIndex),
 		MediaDBID: int64(mediaIndex),
 	})
-	if err != nil {
-		var sqliteErr sqlite3.Error
-		switch {
-		case errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
-			!errors.Is(err, mediadb.ErrDependencyFlush):
-			switch tagStr {
-			case "extension":
-				log.Trace().Err(err).Msg("media tag relationship already exists for extension")
-			case "":
-				log.Trace().Err(err).Msg("media tag relationship already exists")
-			default:
-				log.Trace().Err(err).Msgf("media tag relationship already exists: %s", tagStr)
-			}
-		case tagStr == "extension":
-			log.Error().Err(err).Msg("error inserting media tag relationship for extension")
-		case tagStr == "":
-			log.Error().Err(err).Msg("error inserting media tag")
-		default:
-			log.Error().Err(err).Str("tag", tagStr).Msg("error inserting media tag")
-		}
+	if err == nil {
+		return nil
 	}
+
+	var sqliteErr sqlite3.Error
+	switch {
+	case errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
+		!errors.Is(err, mediadb.ErrDependencyFlush):
+		switch tagStr {
+		case "extension":
+			log.Trace().Err(err).Msg("media tag relationship already exists for extension")
+		case "":
+			log.Trace().Err(err).Msg("media tag relationship already exists")
+		default:
+			log.Trace().Err(err).Msgf("media tag relationship already exists: %s", tagStr)
+		}
+		return nil
+	case tagStr == "extension":
+		log.Error().Err(err).Msg("error inserting media tag relationship for extension")
+	case tagStr == "":
+		log.Error().Err(err).Msg("error inserting media tag")
+	default:
+		log.Error().Err(err).Str("tag", tagStr).Msg("error inserting media tag")
+	}
+
+	if tagStr == "" {
+		return fmt.Errorf("insert media tag for media %d: %w", mediaIndex, err)
+	}
+
+	return fmt.Errorf("insert media tag %q for media %d: %w", tagStr, mediaIndex, err)
 }
 
 type systemStateData struct {

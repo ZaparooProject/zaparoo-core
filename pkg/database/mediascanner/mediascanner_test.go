@@ -453,7 +453,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("GetMaxTagTypeID").Return(int64(3), nil).Once()
 	mockMediaDB.On("GetMaxTagID").Return(int64(20), nil).Once()
 	// Mock GetAll* methods to populate maps
-	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Once()
+	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Twice()
 	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Once()
 	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Once()
 	// Mock per-system loading (PopulatePersistentScanStateForSystem calls both)
@@ -1266,6 +1266,7 @@ func TestFilterRunnableSystems_FiltersUnsupportedSystems(t *testing.T) {
 		systems,
 		map[string][]string{},
 		map[string]bool{systemdefs.SystemNES: true},
+		map[string]bool{},
 		false,
 	)
 	require.Len(t, filtered, 1)
@@ -1273,8 +1274,9 @@ func TestFilterRunnableSystems_FiltersUnsupportedSystems(t *testing.T) {
 
 	filteredWithPath := filterRunnableSystems(
 		systems,
-		map[string][]string{systemdefs.SystemNGage: {"/tmp/NGage"}},
+		map[string][]string{systemdefs.SystemNGage: {filepath.Join("tmp", "NGage")}},
 		map[string]bool{systemdefs.SystemNES: true},
+		map[string]bool{},
 		false,
 	)
 	require.Len(t, filteredWithPath, 2)
@@ -1285,9 +1287,20 @@ func TestFilterRunnableSystems_FiltersUnsupportedSystems(t *testing.T) {
 		systems,
 		map[string][]string{},
 		map[string]bool{},
+		map[string]bool{},
 		false,
 	)
 	require.Empty(t, filteredLaunchOnly)
+
+	filteredExisting := filterRunnableSystems(
+		systems,
+		map[string][]string{},
+		map[string]bool{},
+		map[string]bool{systemdefs.SystemNGage: true},
+		false,
+	)
+	require.Len(t, filteredExisting, 1)
+	assert.Equal(t, systemdefs.SystemNGage, filteredExisting[0].ID)
 }
 
 // TestGetFiles_CustomLauncherMatchesFiles is the critical reproduction test:

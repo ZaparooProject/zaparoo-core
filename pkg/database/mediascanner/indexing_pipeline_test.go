@@ -351,6 +351,64 @@ func TestAddMediaPath_SkipsTitleAndTagWritesWhenExistingMetadataMatches(t *testi
 	mockDB.AssertExpectations(t)
 }
 
+func TestAddMediaPath_ExistingMediaWithoutTagStateDoesNotDeleteAllTags(t *testing.T) {
+	t.Parallel()
+
+	mockDB := helpers.NewMockMediaDBI()
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	scanState := &database.ScanState{
+		SystemIDs:     map[string]int{"NES": 1},
+		TitleIDs:      map[string]int{"NES:supermariobrothers": 10},
+		MediaIDs:      map[string]int{database.MediaKey("NES", path): 20},
+		MediaTitleIDs: map[int]int{20: 10},
+		MediaTagIDs:   nil,
+		TagTypeIDs:    map[string]int{string(tags.TagTypeExtension): 7},
+		TagIDs:        map[string]int{database.TagKey(string(tags.TagTypeExtension), "nes"): 8},
+		MissingMedia:  map[int]struct{}{20: {}},
+	}
+
+	mockDB.On("InsertMediaTag", database.MediaTag{TagDBID: 8, MediaDBID: 20}).
+		Return(database.MediaTag{}, nil).Once()
+
+	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	require.NoError(t, err)
+	assert.Equal(t, 10, titleIndex)
+	assert.Equal(t, 20, mediaIndex)
+	assert.NotContains(t, scanState.MissingMedia, 20)
+	mockDB.AssertNotCalled(t, "DeleteMediaTags", mock.Anything)
+	mockDB.AssertExpectations(t)
+}
+
+func TestAddMediaPath_ReconcileExistingMediaTagsDoesNotMutateStateOnInsertFailure(t *testing.T) {
+	t.Parallel()
+
+	mockDB := helpers.NewMockMediaDBI()
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	scanState := &database.ScanState{
+		SystemIDs:     map[string]int{"NES": 1},
+		TitleIDs:      map[string]int{"NES:supermariobrothers": 10},
+		MediaIDs:      map[string]int{database.MediaKey("NES", path): 20},
+		MediaTitleIDs: map[int]int{20: 10},
+		MediaTagIDs:   map[int]map[int]struct{}{20: {}},
+		TagTypeIDs:    map[string]int{string(tags.TagTypeExtension): 7},
+		TagIDs:        map[string]int{database.TagKey(string(tags.TagTypeExtension), "nes"): 8},
+		MissingMedia:  map[int]struct{}{20: {}},
+	}
+
+	depFlushErr := fmt.Errorf("failed to flush dependency for MediaTags: %w: %w",
+		mediadb.ErrDependencyFlush,
+		sqlite3.Error{Code: sqlite3.ErrConstraint, ExtendedCode: sqlite3.ErrConstraintUnique},
+	)
+	mockDB.On("InsertMediaTag", database.MediaTag{TagDBID: 8, MediaDBID: 20}).
+		Return(database.MediaTag{}, depFlushErr).Once()
+
+	_, _, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error reconciling media tags")
+	assert.Empty(t, scanState.MediaTagIDs[20])
+	mockDB.AssertExpectations(t)
+}
+
 func TestGetTitleFromFilename(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1081,7 +1139,7 @@ func TestGetPathFragments_VirtualPathsVsRegularPaths(t *testing.T) {
 // does NOT find ErrDependencyFlush → logged at Trace, not propagated.
 //
 // Branch B (Error): the same sqlite3 error is wrapped inside ErrDependencyFlush →
-// condition fails, logged at Error, not propagated.
+// condition fails, logged at Error, and propagated.
 //
 // Global zerolog state is mutated to capture output; must not be parallel.
 func TestAddMediaPath_ExtensionTag_UniqueConstraintClassification(t *testing.T) {
@@ -1165,7 +1223,7 @@ func TestAddMediaPath_ExtensionTag_UniqueConstraintClassification(t *testing.T) 
 
 		_, _, err := AddMediaPath(mockDB, newScanState(), systemID, path, false, false, nil, "")
 
-		require.NoError(t, err, "dep-flush error must not propagate from AddMediaPath")
+		require.Error(t, err, "dep-flush error must propagate from AddMediaPath")
 		output := buf.String()
 		assert.Contains(t, output, `"level":"error"`, "dep-flush UNIQUE must be logged at error level")
 		assert.Contains(t, output, "error inserting media tag relationship for extension",

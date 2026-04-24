@@ -339,6 +339,7 @@ func filterRunnableSystems(
 	systems []systemdefs.System,
 	systemPaths map[string][]string,
 	systemsWithScanners map[string]bool,
+	existingSystemIDs map[string]bool,
 	hasAnyScanner bool,
 ) []systemdefs.System {
 	filtered := make([]systemdefs.System, 0, len(systems))
@@ -349,6 +350,11 @@ func filterRunnableSystems(
 		}
 
 		if systemsWithScanners[system.ID] {
+			filtered = append(filtered, system)
+			continue
+		}
+
+		if existingSystemIDs[system.ID] {
 			filtered = append(filtered, system)
 			continue
 		}
@@ -669,7 +675,16 @@ func NewNamesIndex(
 		}
 	}
 
-	systems = filterRunnableSystems(systems, systemPaths, systemsWithScanners, len(anyScanners) > 0)
+	existingSystems, getExistingSystemsErr := db.GetAllSystems()
+	if getExistingSystemsErr != nil {
+		return 0, fmt.Errorf("failed to load existing systems for runnable-system filtering: %w", getExistingSystemsErr)
+	}
+	existingSystemIDs := make(map[string]bool, len(existingSystems))
+	for _, system := range existingSystems {
+		existingSystemIDs[system.SystemID] = true
+	}
+
+	systems = filterRunnableSystems(systems, systemPaths, systemsWithScanners, existingSystemIDs, len(anyScanners) > 0)
 	currentSystemIDs := make([]string, 0, len(systems))
 	for _, sys := range systems {
 		currentSystemIDs = append(currentSystemIDs, sys.ID)
@@ -997,7 +1012,8 @@ func NewNamesIndex(
 			_, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, shouldStrip, cfg, mediaType)
 			if addErr != nil {
 				var sqliteErr sqlite3.Error
-				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
+					!errors.Is(addErr, mediadb.ErrDependencyFlush) {
 					uniqueConstraintFailures++
 					log.Debug().Err(addErr).Str("path", file.Path).Msg("skipping duplicate media entry")
 					continue

@@ -29,7 +29,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
-// DevErr launchers provide predictable failures for indexing and launcher tests.
+// DevErr launchers provide predictable developer-facing failure cases for
+// launcher and indexing tests.
 
 var deverrLaunchFn = func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 	return nil, fmt.Errorf("DevErr Path Launched (Error Expected) %s", path)
@@ -54,10 +55,10 @@ func NewDevErrAnyLauncher() platforms.Launcher {
 		Scanner: func(
 			_ context.Context,
 			_ *config.Instance,
-			systemdID string,
+			systemID string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
-			if systemdID != systemdefs.SystemDevErr {
+			if systemID != systemdefs.SystemDevErr {
 				return results, nil
 			}
 			results = append(results, platforms.ScanResult{

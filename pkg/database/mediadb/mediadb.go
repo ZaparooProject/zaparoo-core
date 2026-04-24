@@ -2237,6 +2237,10 @@ func (db *MediaDB) GetMediaBySystemID(systemID string) ([]database.MediaWithFull
 
 // GetMediaTagsBySystemID retrieves all media-tag links for a specific system.
 func (db *MediaDB) GetMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
 	return sqlGetMediaTagsBySystemID(db.ctx, db.sql, systemID)
 }
 
