@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -37,11 +38,10 @@ import (
 func TestNewPixelCadePublisher_Defaults(t *testing.T) {
 	t.Parallel()
 
-	pub := NewPixelCadePublisher("192.168.1.50", 0, "", "", nil)
+	pub := NewPixelCadePublisher("192.168.1.50", 0, "", nil)
 
 	assert.Equal(t, "http://192.168.1.50:8080", pub.baseURL)
 	assert.Equal(t, PixelCadeModeStream, pub.mode)
-	assert.Equal(t, PixelCadeOnStopBlank, pub.onStop)
 	assert.Nil(t, pub.filter)
 }
 
@@ -49,13 +49,12 @@ func TestNewPixelCadePublisher_CustomValues(t *testing.T) {
 	t.Parallel()
 
 	pub := NewPixelCadePublisher(
-		"10.0.0.5", 9090, PixelCadeModeWrite, PixelCadeOnStopMarquee,
+		"10.0.0.5", 9090, PixelCadeModeWrite,
 		[]string{"media.started"},
 	)
 
 	assert.Equal(t, "http://10.0.0.5:9090", pub.baseURL)
 	assert.Equal(t, PixelCadeModeWrite, pub.mode)
-	assert.Equal(t, PixelCadeOnStopMarquee, pub.onStop)
 	assert.Equal(t, []string{"media.started"}, pub.filter)
 }
 
@@ -64,7 +63,7 @@ func TestPixelCadePublisher_Start_EmptyHost(t *testing.T) {
 
 	t.Run("default port", func(t *testing.T) {
 		t.Parallel()
-		pub := NewPixelCadePublisher("", 0, "", "", nil)
+		pub := NewPixelCadePublisher("", 0, "", nil)
 		err := pub.Start(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "host is required")
@@ -72,7 +71,7 @@ func TestPixelCadePublisher_Start_EmptyHost(t *testing.T) {
 
 	t.Run("custom port", func(t *testing.T) {
 		t.Parallel()
-		pub := NewPixelCadePublisher("", 9090, "", "", nil)
+		pub := NewPixelCadePublisher("", 9090, "", nil)
 		err := pub.Start(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "host is required")
@@ -82,7 +81,7 @@ func TestPixelCadePublisher_Start_EmptyHost(t *testing.T) {
 func TestPixelCadePublisher_Start_Success(t *testing.T) {
 	t.Parallel()
 
-	pub := NewPixelCadePublisher("192.168.1.50", 0, "", "", nil)
+	pub := NewPixelCadePublisher("192.168.1.50", 0, "", nil)
 	err := pub.Start(context.Background())
 
 	require.NoError(t, err)
@@ -100,7 +99,7 @@ func TestPixelCadePublisher_Publish_MediaStarted(t *testing.T) {
 	defer server.Close()
 
 	host, port := splitHostPort(t, server.URL)
-	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, PixelCadeOnStopNone, nil)
+	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, nil)
 	require.NoError(t, pub.Start(context.Background()))
 	defer pub.Stop()
 
@@ -118,7 +117,7 @@ func TestPixelCadePublisher_Publish_MediaStarted(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "/arcade/stream/nes/Super%20Mario%20Bros", receivedURI)
+	assert.Equal(t, "/arcade/stream/nes/smb?event=GameStart", receivedURI)
 }
 
 func TestPixelCadePublisher_Publish_MediaStarted_WriteMode(t *testing.T) {
@@ -132,7 +131,7 @@ func TestPixelCadePublisher_Publish_MediaStarted_WriteMode(t *testing.T) {
 	defer server.Close()
 
 	host, port := splitHostPort(t, server.URL)
-	pub := NewPixelCadePublisher(host, port, PixelCadeModeWrite, PixelCadeOnStopNone, nil)
+	pub := NewPixelCadePublisher(host, port, PixelCadeModeWrite, nil)
 	require.NoError(t, pub.Start(context.Background()))
 	defer pub.Stop()
 
@@ -150,10 +149,10 @@ func TestPixelCadePublisher_Publish_MediaStarted_WriteMode(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "/arcade/write/genesis/Sonic%20The%20Hedgehog", receivedURI)
+	assert.Equal(t, "/arcade/write/genesis/sonic?event=GameStart", receivedURI)
 }
 
-func TestPixelCadePublisher_Publish_MediaStopped_Blank(t *testing.T) {
+func TestPixelCadePublisher_Publish_MediaStarted_PathWithoutExtension(t *testing.T) {
 	t.Parallel()
 
 	var receivedURI string
@@ -164,44 +163,28 @@ func TestPixelCadePublisher_Publish_MediaStopped_Blank(t *testing.T) {
 	defer server.Close()
 
 	host, port := splitHostPort(t, server.URL)
-	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, PixelCadeOnStopBlank, nil)
+	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, nil)
 	require.NoError(t, pub.Start(context.Background()))
 	defer pub.Stop()
 
-	err := pub.Publish(models.Notification{
-		Method: models.NotificationStopped,
-		Params: json.RawMessage(`{}`),
+	params, err := json.Marshal(models.MediaStartedParams{
+		SystemID:   "ScummVM",
+		SystemName: "ScummVM",
+		MediaName:  "Day of the Tentacle",
+		MediaPath:  "scummvm://games/dayoftentacle",
+	})
+	require.NoError(t, err)
+
+	err = pub.Publish(models.Notification{
+		Method: models.NotificationStarted,
+		Params: params,
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "/arcade/stream/black/dummy", receivedURI)
+	assert.Equal(t, "/arcade/stream/scummvm/dayoftentacle?event=GameStart", receivedURI)
 }
 
-func TestPixelCadePublisher_Publish_MediaStopped_Marquee(t *testing.T) {
-	t.Parallel()
-
-	var receivedURI string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedURI = r.RequestURI
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	host, port := splitHostPort(t, server.URL)
-	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, PixelCadeOnStopMarquee, nil)
-	require.NoError(t, pub.Start(context.Background()))
-	defer pub.Stop()
-
-	err := pub.Publish(models.Notification{
-		Method: models.NotificationStopped,
-		Params: json.RawMessage(`{}`),
-	})
-
-	require.NoError(t, err)
-	assert.Equal(t, "/arcade/write/marquee/dummy", receivedURI)
-}
-
-func TestPixelCadePublisher_Publish_MediaStopped_None(t *testing.T) {
+func TestPixelCadePublisher_Publish_MediaStopped_NoRequest(t *testing.T) {
 	t.Parallel()
 
 	var requestCount atomic.Int32
@@ -212,7 +195,7 @@ func TestPixelCadePublisher_Publish_MediaStopped_None(t *testing.T) {
 	defer server.Close()
 
 	host, port := splitHostPort(t, server.URL)
-	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, PixelCadeOnStopNone, nil)
+	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, nil)
 	require.NoError(t, pub.Start(context.Background()))
 	defer pub.Stop()
 
@@ -236,7 +219,7 @@ func TestPixelCadePublisher_Publish_FilteredOut(t *testing.T) {
 	defer server.Close()
 
 	host, port := splitHostPort(t, server.URL)
-	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, PixelCadeOnStopBlank, []string{"media.started"})
+	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, []string{"media.started"})
 	require.NoError(t, pub.Start(context.Background()))
 	defer pub.Stop()
 
@@ -261,7 +244,7 @@ func TestPixelCadePublisher_Publish_UnhandledMethod(t *testing.T) {
 	defer server.Close()
 
 	host, port := splitHostPort(t, server.URL)
-	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, PixelCadeOnStopBlank, nil)
+	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, nil)
 	require.NoError(t, pub.Start(context.Background()))
 	defer pub.Stop()
 
@@ -283,7 +266,7 @@ func TestPixelCadePublisher_Publish_ServerError(t *testing.T) {
 	defer server.Close()
 
 	host, port := splitHostPort(t, server.URL)
-	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, PixelCadeOnStopNone, nil)
+	pub := NewPixelCadePublisher(host, port, PixelCadeModeStream, nil)
 	require.NoError(t, pub.Start(context.Background()))
 	defer pub.Stop()
 
@@ -307,7 +290,7 @@ func TestPixelCadePublisher_Publish_ServerError(t *testing.T) {
 func TestPixelCadePublisher_Publish_ConnectionError(t *testing.T) {
 	t.Parallel()
 
-	pub := NewPixelCadePublisher("127.0.0.1", 1, PixelCadeModeStream, PixelCadeOnStopNone, nil)
+	pub := NewPixelCadePublisher("127.0.0.1", 1, PixelCadeModeStream, nil)
 	require.NoError(t, pub.Start(context.Background()))
 	defer pub.Stop()
 
@@ -331,7 +314,7 @@ func TestPixelCadePublisher_Publish_ConnectionError(t *testing.T) {
 func TestPixelCadePublisher_Stop(t *testing.T) {
 	t.Parallel()
 
-	pub := NewPixelCadePublisher("192.168.1.50", 0, "", "", nil)
+	pub := NewPixelCadePublisher("192.168.1.50", 0, "", nil)
 	require.NoError(t, pub.Start(context.Background()))
 
 	pub.Stop()
@@ -359,9 +342,11 @@ func TestPixelCadeConsoleName(t *testing.T) {
 		{"Arcade", "mame"},
 		{"CPS2", "capcom_play_system_ii"},
 		{"NeoGeo", "neogeo"},
+		{"FDS", "nintendo_famicom_disk_system"},
 		{"TurboGrafx16", "pcengine"},
 		{"C64", "c64"},
 		{"Amiga", "amiga"},
+		{"Odyssey2", "magnavox_odyssey_2"},
 		// Unmapped system falls back to lowercase
 		{"UnknownSystem", "unknownsystem"},
 	}
@@ -370,6 +355,36 @@ func TestPixelCadeConsoleName(t *testing.T) {
 		t.Run(tt.systemID, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want, pixelCadeConsoleName(tt.systemID))
+		})
+	}
+}
+
+func TestPixelCadeMediaIdentifier(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		mediaPath string
+		want      string
+	}{
+		{
+			name:      "posix path",
+			mediaPath: string(filepath.Separator) + filepath.Join("roms", "nes", "Super Mario Bros.nes"),
+			want:      "Super Mario Bros",
+		},
+		{name: "windows path", mediaPath: `C:\ROMs\MAME\4dwarrio.zip`, want: "4dwarrio"},
+		{name: "virtual path", mediaPath: "scummvm://games/dayoftentacle", want: "dayoftentacle"},
+		{
+			name:      "no extension",
+			mediaPath: string(filepath.Separator) + filepath.Join("roms", "ports", "Celeste"),
+			want:      "Celeste",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, pixelCadeMediaIdentifier(tt.mediaPath))
 		})
 	}
 }
