@@ -39,6 +39,7 @@ type BatchInserter struct {
 	ctx          context.Context
 	tx           *sql.Tx
 	stmtCache    map[int]*sql.Stmt // prepared statements keyed by row count for reuse
+	stmtCacheLRU []int
 	tableName    string
 	columns      []string
 	buffer       []any
@@ -48,6 +49,8 @@ type BatchInserter struct {
 	currentCount int
 	orIgnore     bool
 }
+
+const maxCachedBatchStatements = 8
 
 // NewBatchInserter creates a batch inserter for the given table
 func NewBatchInserter(
@@ -93,6 +96,7 @@ func NewBatchInserterWithOptions(
 		currentCount: 0,
 		orIgnore:     orIgnore,
 		stmtCache:    make(map[int]*sql.Stmt),
+		stmtCacheLRU: make([]int, 0, maxCachedBatchStatements),
 	}, nil
 }
 
@@ -148,23 +152,20 @@ func (b *BatchInserter) Flush() error {
 		}
 	}
 
-	cacheStmt := b.currentCount == b.batchSize
-
-	// Reuse cached statement for the steady-state full batch size when available
-	if cacheStmt {
-		if stmt, ok := b.stmtCache[b.currentCount]; ok {
-			_, err := stmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
-			b.buffer = b.buffer[:0]
-			b.currentCount = 0
-			if err != nil {
-				return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
-			}
-			return nil
+	rowCount := b.currentCount
+	if stmt, ok := b.stmtCache[rowCount]; ok {
+		_, err := stmt.ExecContext(b.ctx, b.buffer[:rowCount*b.columnCount]...)
+		b.buffer = b.buffer[:0]
+		b.currentCount = 0
+		if err != nil {
+			return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
 		}
+		b.touchCachedStatementRowCount(rowCount)
+		return nil
 	}
 
 	// Generate and prepare statement for this batch size.
-	sqlStmt := b.generateMultiRowInsertSQL(b.currentCount)
+	sqlStmt := b.generateMultiRowInsertSQL(rowCount)
 	stmt, err := b.tx.PrepareContext(b.ctx, sqlStmt)
 	if err != nil {
 		if strings.Contains(err.Error(), "too many SQL variables") {
@@ -177,8 +178,8 @@ func (b *BatchInserter) Flush() error {
 		}
 		return fmt.Errorf("failed to prepare batch insert: %w", err)
 	}
-	if cacheStmt {
-		b.stmtCache[b.currentCount] = stmt
+	if b.shouldCacheStatement(rowCount) {
+		b.cachePreparedStatement(rowCount, stmt)
 	} else {
 		defer func() {
 			if closeErr := stmt.Close(); closeErr != nil {
@@ -187,13 +188,86 @@ func (b *BatchInserter) Flush() error {
 		}()
 	}
 
-	_, err = stmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
+	_, err = stmt.ExecContext(b.ctx, b.buffer[:rowCount*b.columnCount]...)
 	b.buffer = b.buffer[:0]
 	b.currentCount = 0
 	if err != nil {
 		return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
 	}
 	return nil
+}
+
+func (b *BatchInserter) shouldCacheStatement(rowCount int) bool {
+	if rowCount == b.batchSize {
+		return true
+	}
+
+	if _, ok := b.stmtCache[rowCount]; ok {
+		return true
+	}
+
+	return len(b.stmtCache) < maxCachedBatchStatements
+}
+
+func (b *BatchInserter) cachePreparedStatement(rowCount int, stmt *sql.Stmt) {
+	if existingStmt, ok := b.stmtCache[rowCount]; ok {
+		if existingStmt != stmt {
+			if closeErr := existingStmt.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).
+					Str("table", b.tableName).
+					Int("rows", rowCount).
+					Msg("failed to close replaced cached batch statement")
+			}
+		}
+		b.stmtCache[rowCount] = stmt
+		b.touchCachedStatementRowCount(rowCount)
+		return
+	}
+
+	if len(b.stmtCache) >= maxCachedBatchStatements {
+		b.evictCachedStatement()
+	}
+
+	b.stmtCache[rowCount] = stmt
+	b.stmtCacheLRU = append(b.stmtCacheLRU, rowCount)
+}
+
+func (b *BatchInserter) evictCachedStatement() {
+	for len(b.stmtCacheLRU) > 0 {
+		rowCount := b.stmtCacheLRU[0]
+		b.stmtCacheLRU = b.stmtCacheLRU[1:]
+
+		if rowCount == b.batchSize {
+			b.stmtCacheLRU = append(b.stmtCacheLRU, rowCount)
+			continue
+		}
+
+		stmt, ok := b.stmtCache[rowCount]
+		if !ok {
+			continue
+		}
+
+		delete(b.stmtCache, rowCount)
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).
+				Str("table", b.tableName).
+				Int("rows", rowCount).
+				Msg("failed to close evicted cached batch statement")
+		}
+		return
+	}
+}
+
+func (b *BatchInserter) touchCachedStatementRowCount(rowCount int) {
+	for i, cachedRowCount := range b.stmtCacheLRU {
+		if cachedRowCount != rowCount {
+			continue
+		}
+
+		copy(b.stmtCacheLRU[i:], b.stmtCacheLRU[i+1:])
+		b.stmtCacheLRU[len(b.stmtCacheLRU)-1] = rowCount
+		return
+	}
 }
 
 // flushChunked splits the batch into smaller chunks when SQLite variable limit is exceeded
@@ -329,6 +403,7 @@ func (b *BatchInserter) Close() error {
 		}
 	}
 	b.stmtCache = nil
+	b.stmtCacheLRU = nil
 	if flushErr != nil {
 		return flushErr
 	}

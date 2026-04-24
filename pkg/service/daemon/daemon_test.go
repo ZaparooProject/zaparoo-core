@@ -24,6 +24,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -248,4 +249,40 @@ func TestPrepareBinary_CopiesWhenContentDiffers(t *testing.T) {
 	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
 	require.NoError(t, err)
 	assert.Equal(t, "version-2", string(content))
+}
+
+func TestWaitForPIDExit_ReturnsImmediatelyForInvalidPID(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	err := waitForPIDExit(0, time.Second, time.Millisecond, func(int) bool {
+		called = true
+		return true
+	})
+
+	require.NoError(t, err)
+	assert.False(t, called)
+}
+
+func TestWaitForPIDExit_WaitsUntilProcessStops(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	err := waitForPIDExit(123, time.Second, time.Millisecond, func(int) bool {
+		return calls.Add(1) < 3
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), calls.Load())
+}
+
+func TestWaitForPIDExit_TimesOutWhileProcessStillRunning(t *testing.T) {
+	t.Parallel()
+
+	err := waitForPIDExit(123, 5*time.Millisecond, time.Millisecond, func(int) bool {
+		return true
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout waiting for process 123 to stop")
 }

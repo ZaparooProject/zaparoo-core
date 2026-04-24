@@ -81,8 +81,8 @@ type PathFragmentParams struct {
 // Other maps are intentionally NOT cleared:
 //   - SystemIDs preserved — DO NOT clear (UNIQUE violations with batch inserts)
 //   - TagIDs / TagTypeIDs preserved — reused across systems
-//   - MissingMedia preserved — accumulates across all systems and is flushed
-//     in a single BulkSetMediaMissing call at the end of indexing
+//   - MissingMedia preserved — reinitialized per system before loading that
+//     system's existing media and finalized immediately after that system ends
 func FlushScanStateMaps(ss *database.ScanState) {
 	// Clear maps by deleting all keys instead of reallocating
 	// This reuses the underlying memory allocation
@@ -91,6 +91,12 @@ func FlushScanStateMaps(ss *database.ScanState) {
 	}
 	for k := range ss.MediaIDs {
 		delete(ss.MediaIDs, k)
+	}
+	for k := range ss.MediaTitleIDs {
+		delete(ss.MediaTitleIDs, k)
+	}
+	for mediaID := range ss.MediaTagIDs {
+		delete(ss.MediaTagIDs, mediaID)
 	}
 }
 
@@ -104,6 +110,7 @@ func AddMediaPath(
 	cfg *config.Instance,
 	mediaType slugs.MediaType,
 ) (titleIndex, mediaIndex int, err error) {
+	existingMedia := false
 	pf := GetPathFragments(PathFragmentParams{
 		Config:              cfg,
 		Path:                path,
@@ -183,18 +190,24 @@ func AddMediaPath(
 		}
 		ss.MediaIDs[mediaKey] = mediaIndex
 	} else {
+		existingMedia = true
 		mediaIndex = foundMediaIndex
 		// Mark as found during persistent indexing (not missing)
 		if ss.MissingMedia != nil {
 			delete(ss.MissingMedia, foundMediaIndex)
 		}
-		if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex)); err != nil {
-			return 0, 0, fmt.Errorf("error updating media title %s: %w", pf.Path, err)
-		}
-		if err := db.DeleteMediaTags(int64(mediaIndex)); err != nil {
-			return 0, 0, fmt.Errorf("error deleting media tags %s: %w", pf.Path, err)
+		if existingTitleIndex, ok := ss.MediaTitleIDs[mediaIndex]; !ok || existingTitleIndex != titleIndex {
+			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex)); err != nil {
+				return 0, 0, fmt.Errorf("error updating media title %s: %w", pf.Path, err)
+			}
+			if ss.MediaTitleIDs != nil {
+				ss.MediaTitleIDs[mediaIndex] = titleIndex
+			}
 		}
 	}
+
+	desiredTagIDs := make(map[int]struct{})
+	extensionTagIndex := 0
 
 	// Extract extension tag only if filename tags are enabled
 	if pf.Ext != "" && (cfg == nil || cfg.FilenameTags()) {
@@ -235,21 +248,9 @@ func AddMediaPath(
 		}
 
 		// Link the extension tag to the media
-		extensionTagIndex := ss.TagIDs[extensionKey]
+		extensionTagIndex = ss.TagIDs[extensionKey]
 		if extensionTagIndex > 0 {
-			_, err := db.InsertMediaTag(database.MediaTag{
-				TagDBID:   int64(extensionTagIndex),
-				MediaDBID: int64(mediaIndex),
-			})
-			if err != nil {
-				var sqliteErr sqlite3.Error
-				if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
-					!errors.Is(err, mediadb.ErrDependencyFlush) {
-					log.Trace().Err(err).Msgf("media tag relationship already exists for extension: %s", extWithoutDot)
-				} else {
-					log.Error().Err(err).Msgf("error inserting media tag relationship for extension: %s", extWithoutDot)
-				}
-			}
+			desiredTagIDs[extensionTagIndex] = struct{}{}
 		}
 	}
 
@@ -309,21 +310,122 @@ func AddMediaPath(
 			continue
 		}
 
-		_, err := db.InsertMediaTag(database.MediaTag{
-			TagDBID:   int64(tagIndex),
-			MediaDBID: int64(mediaIndex),
-		})
-		if err != nil {
-			var sqliteErr sqlite3.Error
-			if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
-				!errors.Is(err, mediadb.ErrDependencyFlush) {
-				log.Trace().Err(err).Msgf("media tag relationship already exists: %s", tagStr)
-			} else {
-				log.Error().Err(err).Str("tag", tagStr).Msgf("error inserting media tag")
+		desiredTagIDs[tagIndex] = struct{}{}
+	}
+
+	if existingMedia {
+		if ss.MediaTagIDs != nil {
+			if err := reconcileExistingMediaTags(db, ss, mediaIndex, desiredTagIDs, extensionTagIndex); err != nil {
+				return 0, 0, fmt.Errorf("error reconciling media tags %s: %w", pf.Path, err)
 			}
+		} else {
+			if err := db.DeleteMediaTags(int64(mediaIndex)); err != nil {
+				return 0, 0, fmt.Errorf("error deleting media tags %s: %w", pf.Path, err)
+			}
+			insertDesiredMediaTags(db, mediaIndex, desiredTagIDs, extensionTagIndex)
+		}
+
+		return titleIndex, mediaIndex, nil
+	}
+
+	insertDesiredMediaTags(db, mediaIndex, desiredTagIDs, extensionTagIndex)
+
+	return titleIndex, mediaIndex, nil
+}
+
+func reconcileExistingMediaTags(
+	db database.MediaDBI,
+	ss *database.ScanState,
+	mediaIndex int,
+	desiredTagIDs map[int]struct{},
+	extensionTagIndex int,
+) error {
+	existingTagIDs := ss.MediaTagIDs[mediaIndex]
+	if existingTagIDs == nil {
+		existingTagIDs = make(map[int]struct{})
+	}
+
+	for tagIndex := range existingTagIDs {
+		if _, ok := desiredTagIDs[tagIndex]; ok {
+			continue
+		}
+		if err := db.DeleteMediaTag(int64(mediaIndex), int64(tagIndex)); err != nil {
+			return fmt.Errorf("failed to delete media tag %d: %w", tagIndex, err)
 		}
 	}
-	return titleIndex, mediaIndex, nil
+
+	for tagIndex := range desiredTagIDs {
+		if _, ok := existingTagIDs[tagIndex]; ok {
+			continue
+		}
+		insertMediaTagLink(db, mediaIndex, tagIndex, tagLogLabel(tagIndex, extensionTagIndex))
+	}
+
+	ss.MediaTagIDs[mediaIndex] = cloneMediaTagSet(desiredTagIDs)
+
+	return nil
+}
+
+func insertDesiredMediaTags(
+	db database.MediaDBI,
+	mediaIndex int,
+	desiredTagIDs map[int]struct{},
+	extensionTagIndex int,
+) {
+	for tagIndex := range desiredTagIDs {
+		insertMediaTagLink(db, mediaIndex, tagIndex, tagLogLabel(tagIndex, extensionTagIndex))
+	}
+}
+
+func tagLogLabel(tagIndex, extensionTagIndex int) string {
+	if tagIndex == extensionTagIndex {
+		return "extension"
+	}
+
+	return ""
+}
+
+func insertMediaTagLink(db database.MediaDBI, mediaIndex, tagIndex int, tagStr string) {
+	_, err := db.InsertMediaTag(database.MediaTag{
+		TagDBID:   int64(tagIndex),
+		MediaDBID: int64(mediaIndex),
+	})
+	if err != nil {
+		var sqliteErr sqlite3.Error
+		switch {
+		case errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
+			!errors.Is(err, mediadb.ErrDependencyFlush):
+			switch tagStr {
+			case "extension":
+				log.Trace().Err(err).Msg("media tag relationship already exists for extension")
+			case "":
+				log.Trace().Err(err).Msg("media tag relationship already exists")
+			default:
+				log.Trace().Err(err).Msgf("media tag relationship already exists: %s", tagStr)
+			}
+		case tagStr == "extension":
+			log.Error().Err(err).Msg("error inserting media tag relationship for extension")
+		case tagStr == "":
+			log.Error().Err(err).Msg("error inserting media tag")
+		default:
+			log.Error().Err(err).Str("tag", tagStr).Msg("error inserting media tag")
+		}
+	}
+}
+
+type systemStateData struct {
+	titles    []database.TitleWithSystem
+	media     []database.MediaWithFullPath
+	mediaTags []database.MediaTagLink
+}
+
+func cloneMediaTagSet(tagIDs map[int]struct{}) map[int]struct{} {
+	cloned := make(map[int]struct{}, len(tagIDs))
+	for tagID := range tagIDs {
+		cloned[tagID] = struct{}{}
+	}
+
+	return cloned
 }
 
 type MediaPathFragments struct {
@@ -616,19 +718,32 @@ func PopulateScanStateFromDB(ctx context.Context, db database.MediaDBI, ss *data
 func PopulateScanStateForSystem(
 	ctx context.Context, db database.MediaDBI, ss *database.ScanState, systemID string,
 ) error {
-	titles, media, err := loadSystemStateData(ctx, db, systemID)
+	stateData, err := loadSystemStateData(ctx, db, systemID)
 	if err != nil {
 		return err
 	}
 
-	for _, title := range titles {
+	for _, title := range stateData.titles {
 		titleKey := database.TitleKey(title.SystemID, title.Slug)
 		ss.TitleIDs[titleKey] = int(title.DBID)
 	}
 
-	for _, m := range media {
+	for _, m := range stateData.media {
 		mediaKey := database.MediaKey(m.SystemID, m.Path)
 		ss.MediaIDs[mediaKey] = int(m.DBID)
+		if ss.MediaTitleIDs != nil {
+			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
+		}
+	}
+
+	if ss.MediaTagIDs != nil {
+		for _, link := range stateData.mediaTags {
+			mediaDBID := int(link.MediaDBID)
+			if ss.MediaTagIDs[mediaDBID] == nil {
+				ss.MediaTagIDs[mediaDBID] = make(map[int]struct{})
+			}
+			ss.MediaTagIDs[mediaDBID][int(link.TagDBID)] = struct{}{}
+		}
 	}
 
 	return nil
@@ -636,43 +751,49 @@ func PopulateScanStateForSystem(
 
 func loadSystemStateData(
 	ctx context.Context, db database.MediaDBI, systemID string,
-) ([]database.TitleWithSystem, []database.MediaWithFullPath, error) {
+) (systemStateData, error) {
 	startTime := time.Now()
 
 	// Check for cancellation before starting
 	select {
 	case <-ctx.Done():
-		return nil, nil, ctx.Err()
+		return systemStateData{}, ctx.Err()
 	default:
 	}
 
 	// Load titles for this system
 	titles, err := db.GetTitlesBySystemID(systemID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get titles for system %s: %w", systemID, err)
+		return systemStateData{}, fmt.Errorf("failed to get titles for system %s: %w", systemID, err)
 	}
 
 	// Check for cancellation between operations
 	select {
 	case <-ctx.Done():
-		return nil, nil, ctx.Err()
+		return systemStateData{}, ctx.Err()
 	default:
 	}
 
 	// Load media for this system
 	media, err := db.GetMediaBySystemID(systemID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get media for system %s: %w", systemID, err)
+		return systemStateData{}, fmt.Errorf("failed to get media for system %s: %w", systemID, err)
+	}
+
+	mediaTags, err := db.GetMediaTagsBySystemID(systemID)
+	if err != nil {
+		return systemStateData{}, fmt.Errorf("failed to get media tags for system %s: %w", systemID, err)
 	}
 
 	log.Debug().
 		Str("system", systemID).
 		Int("titles", len(titles)).
 		Int("media", len(media)).
+		Int("mediaTags", len(mediaTags)).
 		Dur("elapsed", time.Since(startTime)).
 		Msg("loaded existing data for system resume")
 
-	return titles, media, nil
+	return systemStateData{titles: titles, media: media, mediaTags: mediaTags}, nil
 }
 
 // PopulatePersistentScanStateForSystem loads existing Media DBIDs for a system into
@@ -682,25 +803,38 @@ func loadSystemStateData(
 func PopulatePersistentScanStateForSystem(
 	ctx context.Context, db database.MediaDBI, ss *database.ScanState, systemID string,
 ) error {
-	titles, media, err := loadSystemStateData(ctx, db, systemID)
+	stateData, err := loadSystemStateData(ctx, db, systemID)
 	if err != nil {
 		return err
 	}
 
-	for _, title := range titles {
+	for _, title := range stateData.titles {
 		titleKey := database.TitleKey(title.SystemID, title.Slug)
 		ss.TitleIDs[titleKey] = int(title.DBID)
 	}
 
-	for _, m := range media {
+	for _, m := range stateData.media {
 		mediaKey := database.MediaKey(m.SystemID, m.Path)
 		ss.MediaIDs[mediaKey] = int(m.DBID)
+		if ss.MediaTitleIDs != nil {
+			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
+		}
 		ss.MissingMedia[int(m.DBID)] = struct{}{}
+	}
+
+	if ss.MediaTagIDs != nil {
+		for _, link := range stateData.mediaTags {
+			mediaDBID := int(link.MediaDBID)
+			if ss.MediaTagIDs[mediaDBID] == nil {
+				ss.MediaTagIDs[mediaDBID] = make(map[int]struct{})
+			}
+			ss.MediaTagIDs[mediaDBID][int(link.TagDBID)] = struct{}{}
+		}
 	}
 
 	log.Debug().
 		Str("system", systemID).
-		Int("missingMediaCandidates", len(media)).
+		Int("missingMediaCandidates", len(stateData.media)).
 		Msg("populated missing media tracking for system")
 
 	return nil

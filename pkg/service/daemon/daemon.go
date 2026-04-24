@@ -453,21 +453,53 @@ func (s *Service) Stop() error {
 	return nil
 }
 
+func pidRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+
+	err := syscall.Kill(pid, syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func waitForPIDExit(
+	pid int,
+	timeout time.Duration,
+	pollInterval time.Duration,
+	isRunning func(int) bool,
+) error {
+	if pid <= 0 {
+		return nil
+	}
+
+	deadline := time.Now().Add(timeout)
+	for isRunning(pid) {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for process %d to stop", pid)
+		}
+		time.Sleep(pollInterval)
+	}
+
+	return nil
+}
+
 func (s *Service) Restart() error {
+	oldPID := 0
 	if s.Running() {
-		err := s.Stop()
+		var err error
+		oldPID, err = s.Pid()
+		if err != nil {
+			return err
+		}
+
+		err = s.Stop()
 		if err != nil {
 			return err
 		}
 	}
 
-	// Wait for service to stop with timeout
-	deadline := time.Now().Add(10 * time.Second)
-	for s.Running() {
-		if time.Now().After(deadline) {
-			return errors.New("timeout waiting for service to stop")
-		}
-		time.Sleep(500 * time.Millisecond)
+	if err := waitForPIDExit(oldPID, 10*time.Second, 500*time.Millisecond, pidRunning); err != nil {
+		return err
 	}
 
 	err := s.Start()

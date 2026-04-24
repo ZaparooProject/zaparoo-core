@@ -127,8 +127,17 @@ type invalidationScope struct {
 
 // invalidateCaches handles all cache invalidation in one place
 func (db *MediaDB) invalidateCaches(scope invalidationScope) {
-	// In-memory tag cache: always clear (rebuilt after indexing)
 	db.inMemoryTagCache.Store(nil)
+	switch {
+	case scope.AllSystems:
+		db.slugSearchCache.Store(nil)
+	case len(scope.SystemIDs) > 0:
+		if cache := db.slugSearchCache.Load(); cache != nil {
+			db.slugSearchCache.Store(cache.withoutSystems(scope.SystemIDs))
+		}
+	default:
+		db.slugSearchCache.Store(nil)
+	}
 
 	// MediaCountCache: always nuke everything (queries are too complex to selectively invalidate)
 	if err := db.InvalidateCountCache(); err != nil {
@@ -260,29 +269,67 @@ func (db *MediaDB) SetIndexingCacheSize(enable bool) {
 	}
 }
 
+type secondaryIndex struct {
+	name string
+	ddl  string
+}
+
 // secondaryIndexes lists all secondary indexes that can be dropped before bulk
 // inserts and recreated afterward. Created synchronously at the end of indexing
 // so the database is fully searchable when indexing completes.
-var secondaryIndexes = []string{
-	"CREATE INDEX IF NOT EXISTS mediatitles_slug_idx ON MediaTitles(Slug)",
-	"CREATE INDEX IF NOT EXISTS mediatitles_system_slug_idx ON MediaTitles(SystemDBID, Slug)",
-	"CREATE INDEX IF NOT EXISTS mediatitles_secondary_slug_idx ON MediaTitles(SecondarySlug)",
-	"CREATE INDEX IF NOT EXISTS mediatitles_prefilter_idx ON MediaTitles(SlugLength, SlugWordCount)",
-	"CREATE INDEX IF NOT EXISTS media_mediatitle_idx ON Media(MediaTitleDBID)",
-	"CREATE INDEX IF NOT EXISTS media_path_idx ON Media(Path)",
-	"CREATE INDEX IF NOT EXISTS media_system_path_idx ON Media(SystemDBID, Path)",
-	"CREATE INDEX IF NOT EXISTS tags_tag_idx ON Tags(Tag)",
-	"CREATE INDEX IF NOT EXISTS tags_tagtype_idx ON Tags(TypeDBID)",
-	"CREATE INDEX IF NOT EXISTS tags_type_tag_idx ON Tags(TypeDBID, Tag)",
-	"CREATE INDEX IF NOT EXISTS mediatags_tag_media_idx ON MediaTags(TagDBID, MediaDBID)",
-	"CREATE INDEX IF NOT EXISTS mediatitletags_tag_idx ON MediaTitleTags(TagDBID)",
-	"CREATE INDEX IF NOT EXISTS supportingmedia_mediatitle_idx ON SupportingMedia(MediaTitleDBID)",
-	"CREATE INDEX IF NOT EXISTS supportingmedia_typetag_idx ON SupportingMedia(TypeTagDBID)",
-	"CREATE INDEX IF NOT EXISTS idx_systemtagscache_type_tag ON SystemTagsCache(SystemDBID, TagType, Tag)",
-	"CREATE INDEX IF NOT EXISTS idx_slug_cache_system ON SlugResolutionCache(SystemID)",
-	"CREATE INDEX IF NOT EXISTS idx_slug_cache_media ON SlugResolutionCache(MediaDBID)",
-	"CREATE INDEX IF NOT EXISTS idx_browsecache_parent ON BrowseCache(ParentPath)",
-	"CREATE INDEX IF NOT EXISTS idx_media_parentdir ON Media(ParentDir)",
+var secondaryIndexes = []secondaryIndex{
+	{name: "mediatitles_slug_idx", ddl: "CREATE INDEX IF NOT EXISTS mediatitles_slug_idx ON MediaTitles(Slug)"},
+	{
+		name: "mediatitles_system_slug_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediatitles_system_slug_idx ON MediaTitles(SystemDBID, Slug)",
+	},
+	{
+		name: "mediatitles_secondary_slug_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediatitles_secondary_slug_idx ON MediaTitles(SecondarySlug)",
+	},
+	{
+		name: "mediatitles_prefilter_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediatitles_prefilter_idx ON MediaTitles(SlugLength, SlugWordCount)",
+	},
+	{name: "media_mediatitle_idx", ddl: "CREATE INDEX IF NOT EXISTS media_mediatitle_idx ON Media(MediaTitleDBID)"},
+	{name: "media_path_idx", ddl: "CREATE INDEX IF NOT EXISTS media_path_idx ON Media(Path)"},
+	{name: "media_system_path_idx", ddl: "CREATE INDEX IF NOT EXISTS media_system_path_idx ON Media(SystemDBID, Path)"},
+	{name: "tags_tag_idx", ddl: "CREATE INDEX IF NOT EXISTS tags_tag_idx ON Tags(Tag)"},
+	{name: "tags_tagtype_idx", ddl: "CREATE INDEX IF NOT EXISTS tags_tagtype_idx ON Tags(TypeDBID)"},
+	{name: "tags_type_tag_idx", ddl: "CREATE INDEX IF NOT EXISTS tags_type_tag_idx ON Tags(TypeDBID, Tag)"},
+	{
+		name: "mediatags_tag_media_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediatags_tag_media_idx ON MediaTags(TagDBID, MediaDBID)",
+	},
+	{
+		name: "mediatitletags_tag_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediatitletags_tag_idx ON MediaTitleTags(TagDBID)",
+	},
+	{
+		name: "supportingmedia_mediatitle_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS supportingmedia_mediatitle_idx ON SupportingMedia(MediaTitleDBID)",
+	},
+	{
+		name: "supportingmedia_typetag_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS supportingmedia_typetag_idx ON SupportingMedia(TypeTagDBID)",
+	},
+	{
+		name: "idx_systemtagscache_type_tag",
+		ddl:  "CREATE INDEX IF NOT EXISTS idx_systemtagscache_type_tag ON SystemTagsCache(SystemDBID, TagType, Tag)",
+	},
+	{
+		name: "idx_slug_cache_system",
+		ddl:  "CREATE INDEX IF NOT EXISTS idx_slug_cache_system ON SlugResolutionCache(SystemID)",
+	},
+	{
+		name: "idx_slug_cache_media",
+		ddl:  "CREATE INDEX IF NOT EXISTS idx_slug_cache_media ON SlugResolutionCache(MediaDBID)",
+	},
+	{
+		name: "idx_browsecache_parent",
+		ddl:  "CREATE INDEX IF NOT EXISTS idx_browsecache_parent ON BrowseCache(ParentPath)",
+	},
+	{name: "idx_media_parentdir", ddl: "CREATE INDEX IF NOT EXISTS idx_media_parentdir ON Media(ParentDir)"},
 }
 
 // DropSecondaryIndexes drops all secondary indexes to speed up bulk inserts.
@@ -291,13 +338,10 @@ func (db *MediaDB) DropSecondaryIndexes() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	for _, ddl := range secondaryIndexes {
-		// Extract index name from "CREATE INDEX IF NOT EXISTS <name> ON ..."
-		fields := strings.Fields(ddl)
-		name := fields[5] // Skip: CREATE INDEX IF NOT EXISTS
-		_, err := db.sql.ExecContext(db.ctx, "DROP INDEX IF EXISTS "+name)
+	for _, idx := range secondaryIndexes {
+		_, err := db.sql.ExecContext(db.ctx, "DROP INDEX IF EXISTS "+idx.name)
 		if err != nil {
-			return fmt.Errorf("failed to drop index %s: %w", name, err)
+			return fmt.Errorf("failed to drop index %s: %w", idx.name, err)
 		}
 	}
 	db.needsIndexRebuild.Store(true)
@@ -305,20 +349,74 @@ func (db *MediaDB) DropSecondaryIndexes() error {
 	return nil
 }
 
-// CreateSecondaryIndexes recreates all secondary indexes after bulk inserts.
+func (db *MediaDB) secondaryIndexExists(indexName string) (bool, error) {
+	var exists int
+	err := db.sql.QueryRowContext(
+		db.ctx,
+		"SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
+		indexName,
+	).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to check index %s existence: %w", indexName, err)
+	}
+	return true, nil
+}
+
+func (db *MediaDB) missingSecondaryIndexes() ([]secondaryIndex, error) {
+	missing := make([]secondaryIndex, 0)
+	for _, idx := range secondaryIndexes {
+		exists, err := db.secondaryIndexExists(idx.name)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			missing = append(missing, idx)
+		}
+	}
+	return missing, nil
+}
+
+// CreateSecondaryIndexes recreates dropped secondary indexes after bulk inserts
+// and self-heals any required indexes missing from existing databases.
 // Called synchronously at the end of indexing so the database is fully
 // searchable when indexing completes.
 func (db *MediaDB) CreateSecondaryIndexes() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	for _, ddl := range secondaryIndexes {
-		_, err := db.sql.ExecContext(db.ctx, ddl)
+	rebuildRequested := db.needsIndexRebuild.Load()
+	indexesToEnsure := secondaryIndexes
+	if !rebuildRequested {
+		missingIndexes, err := db.missingSecondaryIndexes()
 		if err != nil {
-			return fmt.Errorf("failed to create index: %w", err)
+			return err
 		}
+		if len(missingIndexes) == 0 {
+			log.Debug().
+				Bool("rebuildRequested", rebuildRequested).
+				Int("count", len(secondaryIndexes)).
+				Msg("all secondary indexes already present")
+			return nil
+		}
+		indexesToEnsure = missingIndexes
 	}
-	log.Debug().Int("count", len(secondaryIndexes)).Msg("recreated secondary indexes")
+
+	for _, idx := range indexesToEnsure {
+		started := time.Now()
+		_, err := db.sql.ExecContext(db.ctx, idx.ddl)
+		if err != nil {
+			return fmt.Errorf("failed to create index %s: %w", idx.name, err)
+		}
+		log.Debug().Str("index", idx.name).Dur("elapsed", time.Since(started)).Msg("ensured secondary index exists")
+	}
+	db.needsIndexRebuild.Store(false)
+	log.Debug().
+		Bool("rebuildRequested", rebuildRequested).
+		Int("count", len(indexesToEnsure)).
+		Msg("ensured secondary indexes exist")
 	return nil
 }
 
@@ -335,7 +433,17 @@ func (db *MediaDB) UpdateLastGenerated() error {
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
 	if err == nil && !db.inTransaction {
-		db.invalidateCaches(invalidationScope{AllSystems: true})
+		systemIDs, getSystemsErr := db.GetIndexingSystems()
+		switch {
+		case getSystemsErr != nil:
+			log.Warn().Err(getSystemsErr).
+				Msg("failed to load indexing systems for cache invalidation; clearing all caches")
+			db.invalidateCaches(invalidationScope{AllSystems: true})
+		case len(systemIDs) > 0:
+			db.invalidateCaches(invalidationScope{SystemIDs: systemIDs})
+		default:
+			db.invalidateCaches(invalidationScope{AllSystems: true})
+		}
 	}
 
 	return err
@@ -490,6 +598,32 @@ func (db *MediaDB) Close() error {
 		return fmt.Errorf("failed to close database: %w", err)
 	}
 	return nil
+}
+
+func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationScope {
+	// CommitTransaction already holds db.sqlMu, so use the SQL helpers directly
+	// instead of getters that would try to take the lock again.
+	status, statusErr := sqlGetIndexingStatus(db.ctx, db.sql)
+	if statusErr != nil {
+		log.Warn().Err(statusErr).Msg("failed to determine indexing status for cache invalidation")
+		return invalidationScope{AllSystems: true}
+	}
+
+	if status != IndexingStatusRunning && status != IndexingStatusPending {
+		return invalidationScope{AllSystems: true}
+	}
+
+	systemIDs, getSystemsErr := sqlGetIndexingSystems(db.ctx, db.sql)
+	if getSystemsErr != nil {
+		log.Warn().Err(getSystemsErr).Msg("failed to load indexing systems for cache invalidation")
+		return invalidationScope{AllSystems: true}
+	}
+
+	if len(systemIDs) == 0 {
+		return invalidationScope{AllSystems: true}
+	}
+
+	return invalidationScope{SystemIDs: systemIDs}
 }
 
 // SetSQLForTesting allows injection of a sql.DB instance for testing purposes.
@@ -871,8 +1005,9 @@ func (db *MediaDB) CommitTransaction() error {
 	db.tx = nil
 	db.inTransaction = false
 
-	// Invalidate all caches after successful transaction commit
-	db.invalidateCaches(invalidationScope{AllSystems: true})
+	// During selective indexing, preserve unaffected in-memory slug cache coverage
+	// so post-index searches for untouched systems stay warm.
+	db.invalidateCaches(db.cacheInvalidationScopeForCommittedTransaction())
 
 	// Run manual WAL checkpoint after commit to keep WAL size bounded during indexing
 	// Use TRUNCATE to reset the WAL file after commit, keeping reads fast
@@ -1055,11 +1190,17 @@ func (db *MediaDB) SearchMediaWithFilters(
 
 	// Try in-memory cache path when we have slug variants and no Name fallback
 	cache := db.slugSearchCache.Load()
-	if cache != nil && len(variantGroups) > 0 && !includeName {
-		systemIDs := make([]string, len(filters.Systems))
-		for i, sys := range filters.Systems {
-			systemIDs[i] = sys.ID
-		}
+	systemIDs := make([]string, len(filters.Systems))
+	for i, sys := range filters.Systems {
+		systemIDs[i] = sys.ID
+	}
+	cacheReady := cache != nil && cache.CanServeSystems(systemIDs)
+	if cacheReady && len(variantGroups) > 0 && !includeName {
+		log.Debug().
+			Strs("systems", systemIDs).
+			Int("variantGroups", len(variantGroups)).
+			Bool("includeName", includeName).
+			Msg("media search using in-memory slug cache")
 		systemDBIDs := cache.ResolveSystemDBIDs(systemIDs)
 
 		// Convert string variant groups to byte variant groups
@@ -1082,6 +1223,13 @@ func (db *MediaDB) SearchMediaWithFilters(
 	}
 
 	// Fallback: SQL LIKE path (no cache, non-Latin query, or browse-only)
+	log.Debug().
+		Strs("systems", systemIDs).
+		Bool("cachePresent", cache != nil).
+		Bool("cacheReady", cacheReady).
+		Int("variantGroups", len(variantGroups)).
+		Bool("includeName", includeName).
+		Msg("media search falling back to SQL LIKE path")
 	results, err := sqlSearchMediaWithFilters(
 		ctx, db.conn(), filters.Systems, variantGroups, qWords, filters.Tags,
 		filters.Letter, filters.Cursor, filters.Limit, includeName)
@@ -1100,7 +1248,11 @@ func (db *MediaDB) slugCacheSearch(
 	matchFn func(*SlugSearchCache, []int64, []byte) []int64,
 ) ([]database.SearchResultWithCursor, bool, error) {
 	cache := db.slugSearchCache.Load()
-	if cache == nil {
+	if cache == nil || !cache.CanServeSystems([]string{systemID}) {
+		log.Debug().
+			Str("system", systemID).
+			Bool("cachePresent", cache != nil).
+			Msg("slug search falling back to SQL path")
 		return nil, false, nil
 	}
 	mediaType := slugs.MediaTypeGame
@@ -1123,6 +1275,10 @@ func (db *MediaDB) slugCacheSearch(
 	// logic handles missing/conflicting tags gracefully, and the INTERSECT
 	// subqueries are the most expensive part of the query on slow storage.
 	results, err := sqlSearchMediaByTitleDBIDs(ctx, db.conn(), candidates, nil, nil, nil, defaultSlugSearchLimit)
+	log.Debug().
+		Str("system", systemID).
+		Int("candidates", len(candidates)).
+		Msg("slug search using in-memory slug cache")
 	return results, true, err
 }
 
@@ -1178,7 +1334,7 @@ func (db *MediaDB) SearchMediaBySlugIn(
 	}
 
 	cache := db.slugSearchCache.Load()
-	if cache != nil {
+	if cache != nil && cache.CanServeSystems([]string{systemID}) {
 		mediaType := slugs.MediaTypeGame
 		if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
 			mediaType = system.GetMediaType()
@@ -1414,12 +1570,12 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 
 	if len(systems) > 0 {
 		cache := db.slugSearchCache.Load()
-		if cache != nil {
+		systemIDs := make([]string, len(systems))
+		for i, sys := range systems {
+			systemIDs[i] = sys.ID
+		}
+		if cache != nil && cache.CanServeSystems(systemIDs) {
 			// Resolve to only systems that have indexed content
-			systemIDs := make([]string, len(systems))
-			for i, sys := range systems {
-				systemIDs[i] = sys.ID
-			}
 			systemDBIDs := cache.ResolveSystemDBIDs(systemIDs)
 			if len(systemDBIDs) == 0 {
 				return result, sql.ErrNoRows
@@ -1473,7 +1629,7 @@ func (db *MediaDB) RandomGameWithQuery(query *database.MediaQuery) (database.Sea
 	isSystemsOnly := query.PathPrefix == "" && query.PathGlob == "" && len(query.Tags) == 0 && len(query.Systems) > 0
 	if isSystemsOnly {
 		cache := db.slugSearchCache.Load()
-		if cache != nil {
+		if cache != nil && cache.CanServeSystems(query.Systems) {
 			// Resolve to only systems that have indexed content
 			systemDBIDs := cache.ResolveSystemDBIDs(query.Systems)
 			if len(systemDBIDs) == 0 {
@@ -1851,6 +2007,19 @@ func (db *MediaDB) DeleteMediaTags(mediaDBID int64) error {
 	return err
 }
 
+func (db *MediaDB) DeleteMediaTag(mediaDBID, tagDBID int64) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	err := sqlDeleteMediaTag(db.ctx, db.conn(), mediaDBID, tagDBID)
+	if err == nil && !db.inTransaction {
+		db.invalidateCaches(invalidationScope{AllSystems: true})
+	}
+
+	return err
+}
+
 func (db *MediaDB) BulkSetMediaMissing(dbids map[int]struct{}) error {
 	if db.sql == nil {
 		return ErrNullSQL
@@ -2064,6 +2233,11 @@ func (db *MediaDB) GetTitlesBySystemID(systemID string) ([]database.TitleWithSys
 // This is used for lazy loading during resume to avoid loading ALL media upfront.
 func (db *MediaDB) GetMediaBySystemID(systemID string) ([]database.MediaWithFullPath, error) {
 	return sqlGetMediaBySystemID(db.ctx, db.sql, systemID)
+}
+
+// GetMediaTagsBySystemID retrieves all media-tag links for a specific system.
+func (db *MediaDB) GetMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
+	return sqlGetMediaTagsBySystemID(db.ctx, db.sql, systemID)
 }
 
 // GetSystemsExcluding retrieves all systems except those in the excludeSystemIDs list.

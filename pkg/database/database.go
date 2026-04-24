@@ -169,6 +169,11 @@ type MediaTag struct {
 	TagDBID   int64
 }
 
+type MediaTagLink struct {
+	MediaDBID int64
+	TagDBID   int64
+}
+
 type SearchResult struct {
 	SystemID string
 	Name     string
@@ -315,6 +320,8 @@ type ScanState struct {
 	SystemIDs     map[string]int
 	TitleIDs      map[string]int
 	MediaIDs      map[string]int
+	MediaTitleIDs map[int]int // Existing media DBID -> MediaTitleDBID for persistent reconciliation
+	MediaTagIDs   map[int]map[int]struct{}
 	TagTypeIDs    map[string]int
 	TagIDs        map[string]int
 	MissingMedia  map[int]struct{} // DBIDs of media not yet re-found during scan
@@ -450,6 +457,8 @@ type MediaDBI interface {
 	GetTags(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	GetAllUsedTags(ctx context.Context) ([]TagInfo, error)
 	PopulateSystemTagsCache(ctx context.Context) error
+	PopulateSystemTagsCacheForSystems(ctx context.Context, systems []systemdefs.System) error
+	RefreshSlugSearchCacheForSystems(ctx context.Context, systemIDs []string) error
 	GetSystemTagsCached(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	InvalidateSystemTagsCache(ctx context.Context, systems []systemdefs.System) error
 	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
@@ -482,6 +491,7 @@ type MediaDBI interface {
 	FindOrInsertMedia(row Media) (Media, error)
 	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error
 	DeleteMediaTags(mediaDBID int64) error
+	DeleteMediaTag(mediaDBID, tagDBID int64) error
 
 	FindTagType(row TagType) (TagType, error)
 	InsertTagType(row TagType) (TagType, error)
@@ -526,4 +536,5 @@ type MediaDBI interface {
 	// Per-system query methods for lazy loading during resume
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
 	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
+	GetMediaTagsBySystemID(systemID string) ([]MediaTagLink, error)
 }

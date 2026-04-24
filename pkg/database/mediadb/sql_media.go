@@ -129,17 +129,12 @@ func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (databa
 }
 
 func sqlUpdateMediaTitle(ctx context.Context, db sqlQueryable, mediaDBID, mediaTitleDBID int64) error {
-	stmt, err := db.PrepareContext(ctx, `UPDATE Media SET MediaTitleDBID = ? WHERE DBID = ?`)
-	if err != nil {
-		return fmt.Errorf("failed to prepare update media title statement: %w", err)
-	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}()
-
-	if _, err := stmt.ExecContext(ctx, mediaTitleDBID, mediaDBID); err != nil {
+	if _, err := db.ExecContext(
+		ctx,
+		`UPDATE Media SET MediaTitleDBID = ? WHERE DBID = ?`,
+		mediaTitleDBID,
+		mediaDBID,
+	); err != nil {
 		return fmt.Errorf("failed to update media title: %w", err)
 	}
 
@@ -147,17 +142,7 @@ func sqlUpdateMediaTitle(ctx context.Context, db sqlQueryable, mediaDBID, mediaT
 }
 
 func sqlDeleteMediaTags(ctx context.Context, db sqlQueryable, mediaDBID int64) error {
-	stmt, err := db.PrepareContext(ctx, `DELETE FROM MediaTags WHERE MediaDBID = ?`)
-	if err != nil {
-		return fmt.Errorf("failed to prepare delete media tags statement: %w", err)
-	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}()
-
-	if _, err := stmt.ExecContext(ctx, mediaDBID); err != nil {
+	if _, err := db.ExecContext(ctx, `DELETE FROM MediaTags WHERE MediaDBID = ?`, mediaDBID); err != nil {
 		return fmt.Errorf("failed to delete media tags: %w", err)
 	}
 

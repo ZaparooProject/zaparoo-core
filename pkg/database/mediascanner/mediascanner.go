@@ -335,6 +335,32 @@ func GetSystemPaths(
 	return deduplicated
 }
 
+func filterRunnableSystems(
+	systems []systemdefs.System,
+	systemPaths map[string][]string,
+	systemsWithScanners map[string]bool,
+	hasAnyScanner bool,
+) []systemdefs.System {
+	filtered := make([]systemdefs.System, 0, len(systems))
+	for _, system := range systems {
+		if len(systemPaths[system.ID]) > 0 {
+			filtered = append(filtered, system)
+			continue
+		}
+
+		if systemsWithScanners[system.ID] {
+			filtered = append(filtered, system)
+			continue
+		}
+
+		if hasAnyScanner {
+			filtered = append(filtered, system)
+		}
+	}
+
+	return filtered
+}
+
 // GetFiles searches for all valid games in a given path and returns a list of
 // files. Uses fastwalk for parallel directory traversal with built-in symlink
 // cycle detection. Deep searches .zip files when ZipsAsDirs is enabled.
@@ -557,12 +583,10 @@ func NewNamesIndex(
 	var indexedFiles int
 	var err error
 
-	// Create list of system IDs for storage
-	currentSystemIDs := make([]string, 0, len(systems))
-	systemIDMap := make(map[string]bool, len(systems))
+	// Track requested systems for resume validation before platform/path filtering.
+	requestedSystemIDs := make([]string, 0, len(systems))
 	for _, sys := range systems {
-		currentSystemIDs = append(currentSystemIDs, sys.ID)
-		systemIDMap[sys.ID] = true
+		requestedSystemIDs = append(requestedSystemIDs, sys.ID)
 	}
 
 	// 1. Check for database locks or issues before starting
@@ -601,7 +625,7 @@ func NewNamesIndex(
 			switch {
 			case getStoredErr != nil:
 				log.Warn().Err(getStoredErr).Msg("failed to get stored indexing configuration, assuming fresh start")
-			case !helpers.EqualStringSlices(storedSystems, currentSystemIDs):
+			case !helpers.EqualStringSlices(storedSystems, requestedSystemIDs):
 				log.Warn().Msg("system list changed from previous indexing, reverting to fresh index")
 			default:
 				log.Info().Msgf("previous indexing interrupted. attempting to resume from system: %s",
@@ -627,6 +651,29 @@ func NewNamesIndex(
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
 	update(IndexStatus{Phase: PhaseInitializing})
+
+	// Build launcher metadata once so runnable-system filtering uses the current
+	// platform launcher set even in tests where the global cache is not initialized.
+	allLaunchers := platform.Launchers(cfg)
+
+	systemsWithScanners := make(map[string]bool, len(allLaunchers))
+	// Build any-scanner list once so runnable-system filtering can preserve
+	// platforms that intentionally discover media via scanner-only sources.
+	var anyScanners []*platforms.Launcher
+	for i := range allLaunchers {
+		if allLaunchers[i].SystemID != "" && allLaunchers[i].Scanner != nil {
+			systemsWithScanners[allLaunchers[i].SystemID] = true
+		}
+		if allLaunchers[i].SystemID == "" && allLaunchers[i].Scanner != nil {
+			anyScanners = append(anyScanners, &allLaunchers[i])
+		}
+	}
+
+	systems = filterRunnableSystems(systems, systemPaths, systemsWithScanners, len(anyScanners) > 0)
+	currentSystemIDs := make([]string, 0, len(systems))
+	for _, sys := range systems {
+		currentSystemIDs = append(currentSystemIDs, sys.ID)
+	}
 
 	// Check for cancellation or pause
 	select {
@@ -670,6 +717,8 @@ func NewNamesIndex(
 		TitleIDs:      make(map[string]int),
 		MediaIndex:    0,
 		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
 		TagTypesIndex: 0,
 		TagTypeIDs:    make(map[string]int),
 		TagsIndex:     0,
@@ -678,10 +727,10 @@ func NewNamesIndex(
 	}
 
 	// 3. Set up scan state — persistent mode is always active
-	if setErr := db.SetIndexingSystems(currentSystemIDs); setErr != nil {
+	if setErr := db.SetIndexingSystems(requestedSystemIDs); setErr != nil {
 		return 0, fmt.Errorf("failed to set indexing systems: %w", setErr)
 	}
-	log.Info().Msgf("starting indexing for systems: %v", currentSystemIDs)
+	log.Info().Msgf("starting indexing for requested systems: %v (runnable: %v)", requestedSystemIDs, currentSystemIDs)
 
 	// Populate scan state from existing DB (max IDs, system map, tag maps)
 	if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, []string{}); err != nil {
@@ -742,15 +791,6 @@ func NewNamesIndex(
 		return sortedSystems[i].ID < sortedSystems[j].ID
 	})
 
-	// Build any-scanner list once — launchers with no SystemID run for every system.
-	var anyScanners []*platforms.Launcher
-	allLaunchers := helpers.GlobalLauncherCache.GetAllLaunchers()
-	for i := range allLaunchers {
-		if allLaunchers[i].SystemID == "" && allLaunchers[i].Scanner != nil {
-			anyScanners = append(anyScanners, &allLaunchers[i])
-		}
-	}
-
 	status := IndexStatus{
 		Total: len(sortedSystems) + 1, // +1 for final "Writing database" step
 		Step:  0,
@@ -806,6 +846,7 @@ func NewNamesIndex(
 
 		if completedSystems[systemID] {
 			log.Debug().Msgf("skipping already indexed system: %s", systemID)
+			status.SystemID = systemID
 			status.Step++
 			update(status)
 			continue
@@ -1093,6 +1134,8 @@ func NewNamesIndex(
 	scanState.SystemIDs = nil
 	scanState.TitleIDs = nil
 	scanState.MediaIDs = nil
+	scanState.MediaTitleIDs = nil
+	scanState.MediaTagIDs = nil
 	scanState.TagTypeIDs = nil
 	scanState.TagIDs = nil
 
@@ -1128,26 +1171,75 @@ func NewNamesIndex(
 	status.Phase = PhaseBuildingCaches
 	update(status)
 
-	// Populate caches after UpdateLastGenerated. These run synchronously so
-	// searches return correct results the moment indexing finishes, and the
-	// populated SystemTagsCache persists across service restarts.
-	t0 = time.Now()
-	if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
-		log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
+	indexedSystems := make([]string, 0)
+	log.Debug().Msgf("processed systems: %v", completedSystems)
+	for k, v := range completedSystems {
+		if v {
+			indexedSystems = append(indexedSystems, k)
+		}
 	}
-	log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
+	sort.Strings(indexedSystems)
+	log.Debug().Msgf("indexed systems: %v", indexedSystems)
 
-	t0 = time.Now()
-	if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
-		log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
+	indexedSystemDefs := make([]systemdefs.System, 0, len(indexedSystems))
+	for _, systemID := range indexedSystems {
+		system, getSystemErr := systemdefs.GetSystem(systemID)
+		if getSystemErr != nil {
+			log.Warn().Err(getSystemErr).Str("system", systemID).Msg("skipping scoped cache rebuild for unknown system")
+			continue
+		}
+		indexedSystemDefs = append(indexedSystemDefs, *system)
 	}
-	log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
 
+	selectiveRun := len(requestedSystemIDs) > 0 && len(requestedSystemIDs) < len(systemdefs.AllSystems())
+
+	// Populate caches after UpdateLastGenerated. For selective scans we rebuild
+	// the persisted per-system SQL cache, refresh in-memory slug coverage for the
+	// indexed systems, and rebuild the in-memory tag cache from the mixed
+	// preserved+refreshed SystemTagsCache table so first-entry requests for the
+	// touched systems stay warm too.
 	t0 = time.Now()
-	if cacheErr := db.RebuildTagCache(); cacheErr != nil {
-		log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
+	if selectiveRun {
+		if cacheErr := db.PopulateSystemTagsCacheForSystems(ctx, indexedSystemDefs); cacheErr != nil {
+			log.Error().Err(cacheErr).Msg("failed to populate system tags cache for indexed systems")
+		}
+		log.Info().
+			Dur("elapsed", time.Since(t0)).
+			Int("systems", len(indexedSystemDefs)).
+			Msg("PopulateSystemTagsCacheForSystems complete")
+
+		t0 = time.Now()
+		if cacheErr := db.RebuildTagCache(); cacheErr != nil {
+			log.Error().Err(cacheErr).Msg("failed to rebuild tag cache after selective indexing")
+		}
+		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
+
+		t0 = time.Now()
+		if cacheErr := db.RefreshSlugSearchCacheForSystems(ctx, indexedSystems); cacheErr != nil {
+			log.Error().Err(cacheErr).Msg("failed to refresh slug search cache for indexed systems")
+		}
+		log.Info().
+			Dur("elapsed", time.Since(t0)).
+			Int("systems", len(indexedSystems)).
+			Msg("RefreshSlugSearchCacheForSystems complete")
+	} else {
+		if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
+			log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
+		}
+		log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
+
+		t0 = time.Now()
+		if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
+			log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
+		}
+		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
+
+		t0 = time.Now()
+		if cacheErr := db.RebuildTagCache(); cacheErr != nil {
+			log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
+		}
+		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
 	}
-	log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
 
 	// Mark indexing as completed and clear indexing metadata
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {
@@ -1173,15 +1265,6 @@ func NewNamesIndex(
 		err = fmt.Errorf("failed to set optimization status to pending: %w", err)
 		log.Error().Err(err).Msg("failed to set optimization status to pending")
 	}
-
-	indexedSystems := make([]string, 0)
-	log.Debug().Msgf("processed systems: %v", completedSystems)
-	for k, v := range completedSystems {
-		if v {
-			indexedSystems = append(indexedSystems, k)
-		}
-	}
-	log.Debug().Msgf("indexed systems: %v", indexedSystems)
 
 	if uniqueConstraintFailures > 0 {
 		log.Warn().Int("count", uniqueConstraintFailures).

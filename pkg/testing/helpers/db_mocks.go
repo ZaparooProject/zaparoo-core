@@ -1028,6 +1028,14 @@ func (m *MockMediaDBI) DeleteMediaTags(mediaDBID int64) error {
 	return nil
 }
 
+func (m *MockMediaDBI) DeleteMediaTag(mediaDBID, tagDBID int64) error {
+	args := m.Called(mediaDBID, tagDBID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 // TagType CRUD methods
 func (m *MockMediaDBI) FindTagType(row database.TagType) (database.TagType, error) {
 	args := m.Called(row)
@@ -1608,6 +1616,29 @@ func (m *MockMediaDBI) GetMediaBySystemID(systemID string) ([]database.MediaWith
 	return []database.MediaWithFullPath{}, nil
 }
 
+// GetMediaTagsBySystemID mock method for per-system lazy loading during resume.
+func (m *MockMediaDBI) GetMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
+	if len(m.ExpectedCalls) > 0 {
+		for _, call := range m.ExpectedCalls {
+			if call.Method == "GetMediaTagsBySystemID" {
+				args := m.Called(systemID)
+				if links, ok := args.Get(0).([]database.MediaTagLink); ok {
+					if err := args.Error(1); err != nil {
+						return links, fmt.Errorf("mock operation failed: %w", err)
+					}
+					return links, nil
+				}
+				if err := args.Error(1); err != nil {
+					return nil, fmt.Errorf("mock operation failed: %w", err)
+				}
+				return []database.MediaTagLink{}, nil
+			}
+		}
+	}
+
+	return []database.MediaTagLink{}, nil
+}
+
 func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
 	args := m.Called()
 	if count, ok := args.Get(0).(int); ok {
@@ -1642,6 +1673,22 @@ func (m *MockMediaDBI) RebuildTagCache() error {
 	args := m.Called()
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock RebuildTagCache: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) PopulateSystemTagsCacheForSystems(ctx context.Context, systems []systemdefs.System) error {
+	args := m.Called(ctx, systems)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock PopulateSystemTagsCacheForSystems: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) RefreshSlugSearchCacheForSystems(ctx context.Context, systemIDs []string) error {
+	args := m.Called(ctx, systemIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock RefreshSlugSearchCacheForSystems: %w", err)
 	}
 	return nil
 }

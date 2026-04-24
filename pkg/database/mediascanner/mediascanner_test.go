@@ -364,8 +364,47 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 	mockPlatform.On("Settings").Return(platforms.Settings{})
-	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	launchers := []platforms.Launcher{
+		{
+			ID:       "genesis-launcher",
+			SystemID: "genesis",
+			Scanner: func(
+				context.Context, *config.Instance, string, []platforms.ScanResult,
+			) ([]platforms.ScanResult, error) {
+				return nil, nil
+			},
+		},
+		{
+			ID:       "nes-launcher",
+			SystemID: "nes",
+			Scanner: func(
+				context.Context, *config.Instance, string, []platforms.ScanResult,
+			) ([]platforms.ScanResult, error) {
+				return nil, nil
+			},
+		},
+		{
+			ID:       "snes-launcher",
+			SystemID: "snes",
+			Scanner: func(
+				context.Context, *config.Instance, string, []platforms.ScanResult,
+			) ([]platforms.ScanResult, error) {
+				return nil, nil
+			},
+		},
+	}
+	mockPlatform.On("Launchers", mock.Anything).Return(launchers)
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice(launchers)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
@@ -379,6 +418,8 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
@@ -420,6 +461,8 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 		Return([]database.TitleWithSystem{}, nil).Maybe()
 	mockMediaDB.On("GetMediaBySystemID", mock.AnythingOfType("string")).
 		Return([]database.MediaWithFullPath{}, nil).Maybe()
+	mockMediaDB.On("GetMediaTagsBySystemID", mock.AnythingOfType("string")).
+		Return([]database.MediaTagLink{}, nil).Maybe()
 	// Subsequent calls: normal operation (no truncate because resuming successfully)
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
 	mockMediaDB.On("SetLastIndexedSystem", "genesis").Return(nil).Maybe() // Update progress during processing
@@ -467,8 +510,27 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 	mockPlatform.On("Settings").Return(platforms.Settings{})
-	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	launchers := []platforms.Launcher{{
+		ID:       "nes-launcher",
+		SystemID: "nes",
+		Scanner: func(
+			context.Context, *config.Instance, string, []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			return nil, nil
+		},
+	}}
+	mockPlatform.On("Launchers", mock.Anything).Return(launchers)
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice(launchers)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	// Setup database mocks
 	mockUserDB := &testhelpers.MockUserDBI{}
@@ -482,6 +544,8 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
@@ -507,18 +571,25 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("GetLastIndexedSystem").Return("removed_system", nil).Once()
 	mockMediaDB.On("GetIndexingSystems").Return([]string{"nes"}, nil).Once() // Current systems
 	// When system not found, we clear state and then do fresh start
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()            // Clear after detecting missing system
-	mockMediaDB.On("SetIndexingStatus", "").Return(nil).Once()               // Clear status after missing system
-	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Maybe()   // Not called; defensive coverage
-	mockMediaDB.On("SetIndexingSystems", []string{"nes"}).Return(nil).Once() // Set current systems for fresh start
-	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()        // Set running for fresh start
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()            // Clear for fresh start
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()          // Clear after detecting missing system
+	mockMediaDB.On("SetIndexingStatus", "").Return(nil).Once()             // Clear status after missing system
+	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Maybe() // Not called; defensive coverage
+	mockMediaDB.On("SetIndexingSystems", []string{"nes"}).Return(nil).Once()
+	// Filtered runnable systems for fresh start
+	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once() // Set running for fresh start
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()     // Clear for fresh start
 	// Mock GetAll* methods for PopulateScanStateFromDB
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()
 	mockMediaDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, nil).Maybe()
 	mockMediaDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, nil).Maybe()
 	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Maybe()
 	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Maybe()
+	mockMediaDB.On("GetTitlesBySystemID", mock.AnythingOfType("string")).
+		Return([]database.TitleWithSystem{}, nil).Maybe()
+	mockMediaDB.On("GetMediaBySystemID", mock.AnythingOfType("string")).
+		Return([]database.MediaWithFullPath{}, nil).Maybe()
+	mockMediaDB.On("GetMediaTagsBySystemID", mock.AnythingOfType("string")).
+		Return([]database.MediaTagLink{}, nil).Maybe()
 	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Maybe()
 	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Maybe()
 	// Mock GetMax*ID methods for PopulateScanStateFromDB
@@ -561,7 +632,7 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 	mockPlatform.On("Settings").Return(platforms.Settings{})
-	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
 
 	// Setup database mocks
@@ -577,6 +648,8 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
@@ -649,7 +722,7 @@ func TestNewNamesIndex_DatabaseErrorDuringResume(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 	mockPlatform.On("Settings").Return(platforms.Settings{})
-	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
 
 	// Setup database mocks
@@ -685,7 +758,7 @@ func TestNewNamesIndex_StateCleanupOnCompletion(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 	mockPlatform.On("Settings").Return(platforms.Settings{})
-	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
 
 	// Use real database
@@ -722,7 +795,7 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 	mockPlatform.On("Settings").Return(platforms.Settings{})
-	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
 
 	// Setup database mocks
@@ -738,6 +811,8 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
@@ -826,7 +901,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 	mockPlatform.On("Settings").Return(platforms.Settings{})
-	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
 
 	// Setup database mocks
@@ -842,6 +917,8 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
@@ -903,7 +980,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 	mockPlatform.On("Settings").Return(platforms.Settings{})
-	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
 
 	// Setup database mocks
@@ -917,6 +994,8 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
@@ -1154,6 +1233,61 @@ func TestGetSystemPaths_CustomLauncherAbsolutePaths(t *testing.T) {
 	require.Len(t, results, 1, "Should find exactly one path for PS2 custom launcher")
 	assert.Equal(t, systemdefs.SystemPS2, results[0].System.ID)
 	assert.Equal(t, ps2Dir, results[0].Path)
+}
+
+func TestFilterRunnableSystems_FiltersUnsupportedSystems(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.InitializeFromSlice([]platforms.Launcher{{
+		ID:       "nes-launcher",
+		SystemID: systemdefs.SystemNES,
+		Scanner: func(
+			context.Context, *config.Instance, string, []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			return nil, nil
+		},
+	}})
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	systems := []systemdefs.System{
+		{ID: systemdefs.SystemNES},
+		{ID: systemdefs.SystemNGage},
+		{ID: systemdefs.SystemMusicArtist},
+	}
+
+	filtered := filterRunnableSystems(
+		systems,
+		map[string][]string{},
+		map[string]bool{systemdefs.SystemNES: true},
+		false,
+	)
+	require.Len(t, filtered, 1)
+	assert.Equal(t, systemdefs.SystemNES, filtered[0].ID)
+
+	filteredWithPath := filterRunnableSystems(
+		systems,
+		map[string][]string{systemdefs.SystemNGage: {"/tmp/NGage"}},
+		map[string]bool{systemdefs.SystemNES: true},
+		false,
+	)
+	require.Len(t, filteredWithPath, 2)
+	assert.Equal(t, systemdefs.SystemNES, filteredWithPath[0].ID)
+	assert.Equal(t, systemdefs.SystemNGage, filteredWithPath[1].ID)
+
+	filteredLaunchOnly := filterRunnableSystems(
+		systems,
+		map[string][]string{},
+		map[string]bool{},
+		false,
+	)
+	require.Empty(t, filteredLaunchOnly)
 }
 
 // TestGetFiles_CustomLauncherMatchesFiles is the critical reproduction test:
@@ -1888,7 +2022,7 @@ func TestNewNamesIndex_PausesAndResumes(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 	mockPlatform.On("Settings").Return(platforms.Settings{})
-	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
 
 	db, cleanup := testhelpers.NewTestDatabase(t)

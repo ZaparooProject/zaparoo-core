@@ -138,6 +138,32 @@ func TestFlushScanStateMaps_MidSystemFileLimitBoundary(t *testing.T) {
 	})
 }
 
+func TestFlushScanStateMaps_ClearsPerSystemMetadataCaches(t *testing.T) {
+	t.Parallel()
+
+	scanState := &database.ScanState{
+		TitleIDs: map[string]int{"title": 1},
+		MediaIDs: map[string]int{"media": 2},
+		MediaTitleIDs: map[int]int{
+			10: 20,
+		},
+		MediaTagIDs: map[int]map[int]struct{}{
+			10: {30: {}},
+		},
+		SystemIDs: map[string]int{"system": 1},
+		TagIDs:    map[string]int{"tag": 1},
+	}
+
+	FlushScanStateMaps(scanState)
+
+	assert.Empty(t, scanState.TitleIDs)
+	assert.Empty(t, scanState.MediaIDs)
+	assert.Empty(t, scanState.MediaTitleIDs)
+	assert.Empty(t, scanState.MediaTagIDs)
+	assert.Equal(t, 1, scanState.SystemIDs["system"])
+	assert.Equal(t, 1, scanState.TagIDs["tag"])
+}
+
 // TestAddMediaPath_NonUniqueError tests that non-UNIQUE errors fail immediately
 // without attempting to find existing system
 func TestAddMediaPath_NonUniqueError(t *testing.T) {
@@ -204,6 +230,8 @@ func TestAddMediaPath_ReindexesExistingMediaRefreshesDerivedMetadata(t *testing.
 		SystemIDs:     make(map[string]int),
 		TitleIDs:      make(map[string]int),
 		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
 		TagTypeIDs:    make(map[string]int),
 		TagIDs:        make(map[string]int),
 		MissingMedia:  make(map[int]struct{}),
@@ -250,6 +278,8 @@ func TestAddMediaPath_ReindexesExistingMediaRefreshesDerivedMetadata(t *testing.
 		SystemIDs:     make(map[string]int),
 		TitleIDs:      make(map[string]int),
 		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
 		TagTypeIDs:    make(map[string]int),
 		TagIDs:        make(map[string]int),
 		MissingMedia:  make(map[int]struct{}),
@@ -291,6 +321,34 @@ func TestAddMediaPath_ReindexesExistingMediaRefreshesDerivedMetadata(t *testing.
 	).Scan(&extensionTagCount)
 	require.NoError(t, err)
 	assert.Equal(t, 1, extensionTagCount)
+}
+
+func TestAddMediaPath_SkipsTitleAndTagWritesWhenExistingMetadataMatches(t *testing.T) {
+	t.Parallel()
+
+	mockDB := helpers.NewMockMediaDBI()
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	scanState := &database.ScanState{
+		SystemIDs:     map[string]int{"NES": 1},
+		TitleIDs:      map[string]int{"NES:supermariobrothers": 10},
+		MediaIDs:      map[string]int{database.MediaKey("NES", path): 20},
+		MediaTitleIDs: map[int]int{20: 10},
+		MediaTagIDs:   map[int]map[int]struct{}{20: {8: {}}},
+		TagTypeIDs:    map[string]int{string(tags.TagTypeExtension): 7},
+		TagIDs:        map[string]int{database.TagKey(string(tags.TagTypeExtension), "nes"): 8},
+		MissingMedia:  map[int]struct{}{20: {}},
+	}
+
+	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	require.NoError(t, err)
+	assert.Equal(t, 10, titleIndex)
+	assert.Equal(t, 20, mediaIndex)
+	assert.NotContains(t, scanState.MissingMedia, 20)
+	mockDB.AssertNotCalled(t, "UpdateMediaTitle", mock.Anything, mock.Anything)
+	mockDB.AssertNotCalled(t, "DeleteMediaTag", mock.Anything, mock.Anything)
+	mockDB.AssertNotCalled(t, "DeleteMediaTags", mock.Anything)
+	mockDB.AssertNotCalled(t, "InsertMediaTag", mock.Anything)
+	mockDB.AssertExpectations(t)
 }
 
 func TestGetTitleFromFilename(t *testing.T) {
