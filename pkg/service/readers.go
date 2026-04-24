@@ -20,25 +20,29 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
+
+// ErrNoStagedToken is returned when a confirm request is received but no
+// token is currently staged by the launch guard.
+var ErrNoStagedToken = errors.New("no staged token to confirm")
 
 type toConnectDevice struct {
 	connectionString string
@@ -73,9 +77,13 @@ func connectReaders(
 	}
 
 	for _, device := range cfg.Readers().Connect {
+		if !device.IsEnabled() {
+			log.Debug().Msgf("config device disabled, skipping: %s", device.ConnectionString())
+			continue
+		}
 		if !isPathConnected(rs, device.Path) &&
 			!helpers.Contains(toConnectStrs(), device.ConnectionString()) {
-			log.Debug().Msgf("config device not connected, adding: %s", device)
+			log.Debug().Msgf("config device not connected, adding: %s", device.ConnectionString())
 			toConnect = append(toConnect, toConnectDevice{
 				connectionString: device.ConnectionString(),
 				device:           device,
@@ -103,7 +111,16 @@ func connectReaders(
 	for _, device := range validToConnect {
 		if !isPathConnected(st.ListReaders(), device.device.Path) {
 			rt := readers.NormalizeDriverID(device.device.Driver)
+			// SupportedReaders creates new instances; close every reader we don't keep.
+			connected := false
 			for _, r := range pl.SupportedReaders(cfg) {
+				if connected {
+					if closeErr := r.Close(); closeErr != nil {
+						log.Debug().Err(closeErr).Msg("error closing unused reader")
+					}
+					continue
+				}
+
 				metadata := r.Metadata()
 				driver := config.DriverInfo{
 					ID:                metadata.ID,
@@ -114,6 +131,9 @@ func connectReaders(
 				// For user-defined connect entries, driver is implicitly enabled
 				// unless explicitly disabled in config.
 				if !cfg.IsDriverEnabledForConnect(driver) {
+					if closeErr := r.Close(); closeErr != nil {
+						log.Debug().Err(closeErr).Msg("error closing unused reader")
+					}
 					continue
 				}
 
@@ -123,17 +143,25 @@ func connectReaders(
 				for i, id := range ids {
 					normalizedIDs[i] = readers.NormalizeDriverID(id)
 				}
-				if helpers.Contains(normalizedIDs, rt) {
-					log.Debug().Msgf("connecting to reader: %s", device)
-					err := r.Open(device.device, iq)
-					if err != nil {
-						log.Warn().Msgf("error opening reader: %s", err)
-						continue
+				if !helpers.Contains(normalizedIDs, rt) {
+					if closeErr := r.Close(); closeErr != nil {
+						log.Debug().Err(closeErr).Msg("error closing unused reader")
 					}
-					st.SetReader(r)
-					log.Info().Msgf("opened reader: %s", device)
-					break
+					continue
 				}
+
+				log.Debug().Msgf("connecting to reader: %s", device.connectionString)
+				err := r.Open(device.device, iq, readers.OpenOpts{})
+				if err != nil {
+					log.Warn().Msgf("error opening reader: %s", err)
+					if closeErr := r.Close(); closeErr != nil {
+						log.Debug().Err(closeErr).Msg("error closing reader after failed open")
+					}
+					continue
+				}
+				st.SetReader(r)
+				log.Info().Msgf("opened reader: %s", device.connectionString)
+				connected = true
 			}
 		}
 	}
@@ -149,16 +177,11 @@ func connectReaders(
 }
 
 func runBeforeExitHook(
-	pl platforms.Platform,
-	cfg *config.Instance,
-	st *state.State,
-	db *database.Database,
-	lsq chan *tokens.Token,
-	plq chan *playlists.Playlist,
+	svc *ServiceContext,
 	activeMedia models.ActiveMedia, //nolint:gocritic // single-use parameter in service function
 ) {
 	var systemIDs []string
-	launchers := pl.Launchers(cfg)
+	launchers := svc.Platform.Launchers(svc.Config)
 	for i := range launchers {
 		l := &launchers[i]
 		if l.ID == activeMedia.SystemID {
@@ -173,12 +196,12 @@ func runBeforeExitHook(
 
 	if len(systemIDs) > 0 {
 		for _, systemID := range systemIDs {
-			defaults, ok := cfg.LookupSystemDefaults(systemID)
+			defaults, ok := svc.Config.LookupSystemDefaults(systemID)
 			if !ok || defaults.BeforeExit == "" {
 				continue
 			}
 
-			if err := runHook(pl, cfg, st, db, lsq, plq, "before_exit", defaults.BeforeExit, nil); err != nil {
+			if err := runHook(svc, "before_exit", defaults.BeforeExit, nil, nil); err != nil {
 				log.Error().Err(err).Msg("error running before_exit script")
 			}
 
@@ -188,14 +211,10 @@ func runBeforeExitHook(
 }
 
 func timedExit(
-	pl platforms.Platform,
-	cfg *config.Instance,
-	st *state.State,
-	db *database.Database,
-	lsq chan *tokens.Token,
-	plq chan *playlists.Playlist,
-	exitTimer *time.Timer,
-) *time.Timer {
+	svc *ServiceContext,
+	clock clockwork.Clock,
+	exitTimer clockwork.Timer,
+) clockwork.Timer {
 	if exitTimer != nil {
 		stopped := exitTimer.Stop()
 		if stopped {
@@ -203,20 +222,20 @@ func timedExit(
 		}
 	}
 
-	if !cfg.HoldModeEnabled() {
+	if !svc.Config.HoldModeEnabled() {
 		log.Debug().Msg("hold mode not enabled, skipping exit timer")
 		return exitTimer
 	}
 
 	// Only hardware readers support hold mode exit
-	lastToken := st.GetLastScanned()
+	lastToken := svc.State.GetLastScanned()
 	if lastToken.Source != tokens.SourceReader {
 		log.Debug().Str("source", lastToken.Source).Msg("skipping exit timer for non-reader source")
 		return exitTimer
 	}
 
 	// Check if the reader supports removal detection
-	r, ok := st.GetReader(lastToken.ReaderID)
+	r, ok := svc.State.GetReader(lastToken.ReaderID)
 	if !ok {
 		log.Debug().Str("readerID", lastToken.ReaderID).Msg("reader not found in state, skipping exit timer")
 		return exitTimer
@@ -226,43 +245,47 @@ func timedExit(
 		return exitTimer
 	}
 
-	timerLen := time.Second * time.Duration(cfg.ReadersScan().ExitDelay)
+	timerLen := time.Duration(float64(svc.Config.ReadersScan().ExitDelay) * float64(time.Second))
 	log.Debug().Msgf("exit timer set to: %s seconds", timerLen)
-	exitTimer = time.NewTimer(timerLen)
+	exitTimer = clock.NewTimer(timerLen)
 
 	go func() {
-		<-exitTimer.C
+		select {
+		case <-exitTimer.Chan():
+		case <-svc.State.GetContext().Done():
+			return
+		}
 
-		if !cfg.HoldModeEnabled() {
+		if !svc.Config.HoldModeEnabled() {
 			log.Debug().Msg("exit timer expired, but hold mode disabled")
 			return
 		}
 
-		activeMedia := st.ActiveMedia()
+		activeMedia := svc.State.ActiveMedia()
 		if activeMedia == nil {
 			log.Debug().Msg("no active media, cancelling exit")
 			return
 		}
 
-		if st.GetSoftwareToken() == nil {
+		if svc.State.GetSoftwareToken() == nil {
 			log.Debug().Msg("no active software token, cancelling exit")
 			return
 		}
 
-		if cfg.IsHoldModeIgnoredSystem(activeMedia.SystemID) {
+		if svc.Config.IsHoldModeIgnoredSystem(activeMedia.SystemID) {
 			log.Debug().Msg("active system ignored in config, cancelling exit")
 			return
 		}
 
-		runBeforeExitHook(pl, cfg, st, db, lsq, plq, *activeMedia)
+		runBeforeExitHook(svc, *activeMedia)
 
 		log.Info().Msg("exiting media")
-		err := pl.StopActiveLauncher(platforms.StopForMenu)
+		err := svc.Platform.StopActiveLauncher(platforms.StopForMenu)
 		if err != nil {
 			log.Warn().Msgf("error killing launcher: %s", err)
 		}
 
-		lsq <- nil
+		svc.LaunchSoftwareQueue <- nil
 	}()
 
 	return exitTimer
@@ -279,60 +302,66 @@ func timedExit(
 // This manager also handles the logic of what to do when a token is removed
 // from the reader.
 func readerManager(
-	pl platforms.Platform,
-	cfg *config.Instance,
-	st *state.State,
-	db *database.Database,
+	svc *ServiceContext,
 	itq chan<- tokens.Token,
-	lsq chan *tokens.Token,
-	plq chan *playlists.Playlist,
 	scanQueue chan readers.Scan,
 	player audio.Player,
+	clock clockwork.Clock,
 ) {
+	if clock == nil {
+		clock = clockwork.NewRealClock()
+	}
+
 	var lastError time.Time
 
 	proc := &scanPreprocessor{}
-	var exitTimer *time.Timer
+	connectScanSeen := make(map[string]bool)
+	var exitTimer clockwork.Timer
+
+	var stagedToken *tokens.Token
+	var guardTimeout <-chan time.Time
+	var guardDelay <-chan time.Time
+	var delayExpired bool
 
 	var autoDetector *AutoDetector
-	if cfg.AutoDetect() {
-		autoDetector = NewAutoDetector(cfg)
+	if svc.Config.AutoDetect() {
+		autoDetector = NewAutoDetector(svc.Config)
 	}
 
 	readerTicker := time.NewTicker(1 * time.Second)
 
 	playFail := func() {
 		if time.Since(lastError) > 1*time.Second {
-			path, enabled := cfg.FailSoundPath(helpers.DataDir(pl))
+			path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
 			helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 		}
 	}
 
 	// manage reader connections
 	go func() {
-		log.Info().Msgf("reader manager started, auto-detect=%v", cfg.AutoDetect())
+		log.Info().Msgf("reader manager started, auto-detect=%v", svc.Config.AutoDetect())
 		sleepMonitor := helpers.NewSleepWakeMonitor(5 * time.Second)
 		readerConnectAttempts := 0
 		lastReaderCount := 0
 		for {
 			select {
-			case <-st.GetContext().Done():
+			case <-svc.State.GetContext().Done():
 				log.Info().Msg("reader manager shutting down via context cancellation")
 				return
 			case <-readerTicker.C:
 				// Check for wake from sleep and reconnect all readers if detected
 				if sleepMonitor.Check() {
 					log.Info().Msg("detected wake from sleep, reconnecting all readers")
-					for _, r := range st.ListReaders() {
+					for _, r := range svc.State.ListReaders() {
 						if r != nil {
-							st.RemoveReader(r.ReaderID())
+							svc.State.RemoveReader(r.ReaderID())
 						}
 					}
 					lastReaderCount = 0
 				}
 
 				readerConnectAttempts++
-				rs := st.ListReaders()
+				rs := svc.State.ListReaders()
 
 				if len(rs) != lastReaderCount {
 					if len(rs) == 0 {
@@ -345,7 +374,7 @@ func readerManager(
 					// Only log if no readers for 2 minutes
 					log.Debug().
 						Int("attempts", readerConnectAttempts).
-						Bool("autoDetect", cfg.AutoDetect()).
+						Bool("autoDetect", svc.Config.AutoDetect()).
 						Msg("no readers connected")
 				}
 
@@ -357,7 +386,7 @@ func readerManager(
 							Str("path", r.Path()).
 							Str("info", r.Info()).
 							Msg("pruning disconnected reader")
-						st.RemoveReader(readerID)
+						svc.State.RemoveReader(readerID)
 						if autoDetector != nil {
 							autoDetector.ClearPath(r.Path())
 							autoDetector.ClearFailedPath(r.Path())
@@ -365,7 +394,8 @@ func readerManager(
 					}
 				}
 
-				if connectErr := connectReaders(pl, cfg, st, scanQueue, autoDetector); connectErr != nil {
+				connectErr := connectReaders(svc.Platform, svc.Config, svc.State, scanQueue, autoDetector)
+				if connectErr != nil {
 					log.Warn().Msgf("error connecting rs: %s", connectErr)
 				}
 				// Reset monitor after potentially blocking operations to avoid
@@ -383,7 +413,7 @@ preprocessing:
 		var scanSource string
 
 		select {
-		case <-st.GetContext().Done():
+		case <-svc.State.GetContext().Done():
 			log.Debug().Msg("closing reader manager via context cancellation")
 			break preprocessing
 		case t := <-scanQueue:
@@ -398,16 +428,109 @@ preprocessing:
 			scan = t.Token
 			readerError = t.ReaderError
 			scanSource = t.Source
-		case stoken := <-lsq:
+		case stoken := <-svc.LaunchSoftwareQueue:
 			// a token has been launched that starts software, used for managing exits
-			log.Debug().Msgf("new software token: %v", st)
-			if exitTimer != nil && !helpers.TokensEqual(stoken, st.GetSoftwareToken()) {
+			log.Debug().Msgf("new software token: %v", stoken)
+			if exitTimer != nil && !helpers.TokensEqual(stoken, svc.State.GetSoftwareToken()) {
 				if stopped := exitTimer.Stop(); stopped {
 					log.Info().Msg("different software token inserted, cancelling exit")
 				}
 			}
-			st.SetSoftwareToken(stoken)
+			svc.State.SetSoftwareToken(stoken)
 			continue preprocessing
+		case result := <-svc.ConfirmQueue:
+			// API confirm request — launch the staged token if one exists.
+			// API confirm bypasses any active delay.
+			if stagedToken == nil {
+				result <- ErrNoStagedToken
+				continue preprocessing
+			}
+			log.Info().Msgf("launch guard: API confirmed staged token: %v", stagedToken)
+			guardTimeout = nil
+			guardDelay = nil
+			delayExpired = false
+			confirmed := *stagedToken
+			stagedToken = nil
+			svc.State.SetActiveCard(confirmed)
+			select {
+			case itq <- confirmed:
+			case <-svc.State.GetContext().Done():
+				result <- svc.State.GetContext().Err()
+				break preprocessing
+			}
+			result <- nil
+			continue preprocessing
+		case <-guardDelay:
+			// Delay period expired — token is now ready for re-tap confirmation
+			log.Info().Msg("launch guard: delay expired, ready for confirmation")
+			delayExpired = true
+			guardDelay = nil
+			notifications.TokensStagedReady(svc.State.Notifications, models.TokenResponse{
+				Type:     stagedToken.Type,
+				UID:      stagedToken.UID,
+				Text:     stagedToken.Text,
+				Data:     stagedToken.Data,
+				ScanTime: stagedToken.ScanTime,
+			})
+			path, enabled := svc.Config.ReadySoundPath(helpers.DataDir(svc.Platform))
+			helpers.PlayConfiguredSound(player, path, enabled, assets.ReadySound, "ready")
+			continue preprocessing
+		case <-guardTimeout:
+			// Staged token expired
+			log.Info().Msg("launch guard: staged token expired")
+			stagedToken = nil
+			guardTimeout = nil
+			guardDelay = nil
+			delayExpired = false
+			continue preprocessing
+		}
+
+		// Clear stale staged token if media has stopped since staging
+		if stagedToken != nil && svc.State.ActiveMedia() == nil {
+			log.Info().Msg("launch guard: media stopped, clearing stale staged token")
+			stagedToken = nil
+			guardTimeout = nil
+			guardDelay = nil
+			delayExpired = false
+		}
+
+		// Launch guard confirmation: check BEFORE the preprocessor so that
+		// a re-scan of the staged token is not eaten as a duplicate. This is
+		// needed for barcode scanners which don't send removal events between
+		// scans — the preprocessor would see the re-scan as a duplicate.
+		if scan != nil && stagedToken != nil &&
+			svc.Config.LaunchGuardEnabled() && !svc.Config.LaunchGuardRequireConfirm() {
+			if helpers.TokensEqual(scan, stagedToken) && svc.State.ActiveMedia() != nil {
+				if !delayExpired {
+					// Re-tap during delay period — reset both timers as punishment
+					log.Info().Msg("launch guard: re-tap during delay, resetting timers")
+					timeout := svc.Config.LaunchGuardTimeout()
+					delay := svc.Config.LaunchGuardDelay()
+					if timeout > 0 {
+						guardTimeout = clock.After(time.Duration(timeout * float32(time.Second)))
+					}
+					if delay > 0 {
+						guardDelay = clock.After(time.Duration(delay * float32(time.Second)))
+					}
+					proc.Process(scan, readerError)
+					continue preprocessing
+				}
+				log.Info().Msg("launch guard: re-tap confirmed, launching staged token")
+				guardTimeout = nil
+				guardDelay = nil
+				delayExpired = false
+				confirmed := *stagedToken
+				stagedToken = nil
+				// Let the preprocessor know what's on the reader now
+				proc.Process(scan, readerError)
+				svc.State.SetActiveCard(confirmed)
+				select {
+				case itq <- confirmed:
+				case <-svc.State.GetContext().Done():
+					break preprocessing
+				}
+				continue preprocessing
+			}
 		}
 
 		switch proc.Process(scan, readerError) {
@@ -419,83 +542,148 @@ preprocessing:
 			continue preprocessing
 
 		case scanNewToken:
+			// Suppress the first scan from each newly-connected reader when ignore_on_connect is enabled
+			if svc.Config.ScanIgnoreOnConnect() && scan.ReaderID != "" && !connectScanSeen[scan.ReaderID] {
+				connectScanSeen[scan.ReaderID] = true
+				log.Info().
+					Str("readerID", scan.ReaderID).
+					Msg("suppressing initial detection from reader (ignore_on_connect enabled)")
+				continue preprocessing
+			}
+			if svc.Config.ScanIgnoreOnConnect() && scan.ReaderID != "" {
+				connectScanSeen[scan.ReaderID] = true
+			}
+
 			log.Info().Msgf("new token scanned: %v", scan)
 
 			// Run on_scan hook before SetActiveCard so last_scanned refers to previous token
-			if onScanScript := cfg.ReadersScan().OnScan; onScanScript != "" {
-				scannedOpts := &zapscript.ExprEnvOptions{
-					Scanned: &gozapscript.ExprEnvScanned{
-						ID:    scan.UID,
-						Value: scan.Text,
-						Data:  scan.Data,
-					},
+			if onScanScript := svc.Config.ReadersScan().OnScan; onScanScript != "" {
+				scanned := &gozapscript.ExprEnvScanned{
+					ID:    scan.UID,
+					Value: scan.Text,
+					Data:  scan.Data,
 				}
-				if err := runHook(pl, cfg, st, db, lsq, plq, "on_scan", onScanScript, scannedOpts); err != nil {
+				if err := runHook(svc, "on_scan", onScanScript, scanned, nil); err != nil {
 					log.Warn().Err(err).Msg("on_scan hook blocked token processing")
 					continue preprocessing
 				}
 			}
 
-			st.SetActiveCard(*scan)
+			svc.State.SetActiveCard(*scan)
 
 			if exitTimer != nil {
 				stopped := exitTimer.Stop()
-				activeToken := st.GetActiveCard()
-				if stopped && helpers.TokensEqual(scan, &activeToken) {
+				stoken := svc.State.GetSoftwareToken()
+				if stopped && helpers.TokensEqual(scan, stoken) {
 					log.Info().Msg("same token reinserted, cancelling exit")
 					continue preprocessing
 				} else if stopped {
 					log.Info().Msg("new token inserted, restarting exit timer")
-					exitTimer = timedExit(pl, cfg, st, db, lsq, plq, exitTimer)
+					exitTimer = timedExit(svc, clock, exitTimer)
 				}
 			}
 
 			// avoid launching a token that was just written by a reader
 			// NOTE: This check requires both UID and Text to match (see helpers.TokensEqual).
-			wt := st.GetWroteToken()
+			wt := svc.State.GetWroteToken()
 			if wt != nil && helpers.TokensEqual(scan, wt) {
 				log.Info().Msg("skipping launching just written token")
-				st.SetWroteToken(nil)
+				svc.State.SetWroteToken(nil)
 				continue preprocessing
 			}
-			st.SetWroteToken(nil)
+			svc.State.SetWroteToken(nil)
+
+			// Launch guard: when enabled and media is playing, stage tokens that
+			// would disrupt the current media (launches, playlist changes, stop).
+			// Utility commands (coin, keyboard, execute, etc.) pass through.
+			if svc.Config.LaunchGuardEnabled() && svc.State.ActiveMedia() != nil {
+				mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, *scan)
+				scriptText := scan.Text
+				if hasMapping {
+					scriptText = mappedValue
+				}
+				parser := gozapscript.NewParser(scriptText)
+				script, parseErr := parser.ParseScript()
+
+				// Stage conservatively: if parsing fails we can't confirm the token
+				// is a safe utility command, so stage it. Only pass through tokens
+				// we can positively identify as non-disrupting.
+				if parseErr != nil || scriptHasMediaDisruptingCommand(&script) {
+					log.Info().Msgf("launch guard: staging token: %v", scan)
+					stagedToken = scan
+
+					notifications.TokensStaged(svc.State.Notifications, models.TokenResponse{
+						Type:     scan.Type,
+						UID:      scan.UID,
+						Text:     scan.Text,
+						Data:     scan.Data,
+						ScanTime: scan.ScanTime,
+					})
+
+					path, enabled := svc.Config.PendingSoundPath(helpers.DataDir(svc.Platform))
+					helpers.PlayConfiguredSound(player, path, enabled, assets.PendingSound, "pending")
+
+					if timeout := svc.Config.LaunchGuardTimeout(); timeout > 0 {
+						guardTimeout = clock.After(time.Duration(timeout * float32(time.Second)))
+					} else {
+						guardTimeout = nil
+					}
+
+					if delay := svc.Config.LaunchGuardDelay(); delay > 0 {
+						guardDelay = clock.After(time.Duration(delay * float32(time.Second)))
+						delayExpired = false
+					} else {
+						guardDelay = nil
+						delayExpired = true
+					}
+					continue preprocessing
+				}
+			}
 
 			log.Info().Msgf("sending token to queue: %v", scan)
-
-			itq <- *scan
+			select {
+			case itq <- *scan:
+			case <-svc.State.GetContext().Done():
+				break preprocessing
+			}
 
 		case scanReaderErrorRemoval:
 			log.Warn().
 				Str("source", scanSource).
 				Bool("prevTokenSet", proc.PrevToken() != nil).
 				Msg("token removal due to reader error, keeping media running")
+			// Clear acknowledged state so reconnection triggers a fresh suppression
+			if pt := proc.PrevToken(); pt != nil && pt.ReaderID != "" {
+				delete(connectScanSeen, pt.ReaderID)
+			}
 			if exitTimer != nil {
 				if stopped := exitTimer.Stop(); stopped {
 					log.Debug().Msg("cancelled exit timer due to reader error")
 				}
 			}
-			st.SetActiveCard(tokens.Token{})
+			svc.State.SetActiveCard(tokens.Token{})
 
 		case scanNormalRemoval:
 			log.Info().Msg("token was removed")
 
 			// Clear ActiveCard before hook to prevent blocked removals from affecting new scans
-			st.SetActiveCard(tokens.Token{})
+			svc.State.SetActiveCard(tokens.Token{})
 
 			// Run on_remove hook; errors skip exit timer but card state is already cleared
-			if onRemoveScript := cfg.ReadersScan().OnRemove; cfg.HoldModeEnabled() && onRemoveScript != "" {
-				if err := runHook(pl, cfg, st, db, lsq, plq, "on_remove", onRemoveScript, nil); err != nil {
+			onRemoveScript := svc.Config.ReadersScan().OnRemove
+			if svc.Config.HoldModeEnabled() && onRemoveScript != "" {
+				if err := runHook(svc, "on_remove", onRemoveScript, nil, nil); err != nil {
 					log.Warn().Err(err).Msg("on_remove hook blocked exit, media will keep running")
 					continue preprocessing
 				}
 			}
 
-			exitTimer = timedExit(pl, cfg, st, db, lsq, plq, exitTimer)
+			exitTimer = timedExit(svc, clock, exitTimer)
 		}
 	}
 
 	// daemon shutdown
-	rs := st.ListReaders()
+	rs := svc.State.ListReaders()
 	for _, r := range rs {
 		if r != nil {
 			err := r.Close()

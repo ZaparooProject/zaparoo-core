@@ -51,6 +51,7 @@ type Flags struct {
 	ShowLoader *string
 	ShowPicker *string
 	Reload     *bool
+	Pair       *bool
 }
 
 // SetupFlags defines all common CLI flags between platforms.
@@ -95,6 +96,11 @@ func SetupFlags() *Flags {
 			"reload",
 			false,
 			"reload config and mappings from disk",
+		),
+		Pair: flag.Bool(
+			"pair",
+			false,
+			"start pairing flow and display PIN for client to enter",
 		),
 	}
 }
@@ -239,6 +245,47 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 
 		_, _ = fmt.Println(resp)
 		os.Exit(0)
+	case *f.Pair:
+		resp, err := client.LocalClient(context.Background(), cfg, models.MethodClientsPairStart, "")
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error starting pairing: %v\n", err)
+			os.Exit(1)
+		}
+
+		var pairResp models.ClientsPairStartResponse
+		unmarshalErr := json.Unmarshal([]byte(resp), &pairResp)
+		if unmarshalErr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", unmarshalErr)
+			os.Exit(1)
+		}
+
+		_, _ = fmt.Fprintf(os.Stderr, "Pairing PIN: %s\n", pairResp.PIN)
+		_, _ = fmt.Fprint(os.Stderr, "Enter this PIN in your client app. Waiting for pairing...\n")
+
+		// Cancel pairing on ctrl-c.
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigs
+			_, _ = client.LocalClient(context.Background(), cfg, models.MethodClientsPairCancel, "")
+			_, _ = fmt.Fprint(os.Stderr, "\nPairing cancelled.\n")
+			os.Exit(0)
+		}()
+
+		result, err := client.WaitNotification(
+			context.Background(), -1,
+			cfg, models.NotificationClientsPaired,
+		)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error waiting for pairing: %v\n", err)
+			os.Exit(1)
+		}
+
+		_, _ = fmt.Fprint(os.Stderr, "Pairing successful!\n")
+		sanitizedResult := strings.ReplaceAll(result, "\n", "")
+		sanitizedResult = strings.ReplaceAll(sanitizedResult, "\r", "")
+		_, _ = fmt.Println(sanitizedResult)
+		os.Exit(0)
 	case *f.Reload:
 		_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")
 		if err != nil {
@@ -281,6 +328,9 @@ func Setup(
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	} else {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	}
+	if os.Getenv("ZAPAROO_TRACE") != "" {
+		zerolog.SetGlobalLevel(zerolog.TraceLevel)
 	}
 
 	// Initialize error reporting (opt-in)

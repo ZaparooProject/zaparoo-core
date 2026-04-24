@@ -27,6 +27,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func BenchmarkParse_GlobalArgs(b *testing.B) {
+	b.ReportAllocs()
+	raw := map[string]string{}
+	for b.Loop() {
+		var args zapscript.GlobalArgs
+		_ = Parse(raw, &args, nil)
+	}
+}
+
+func BenchmarkParse_LaunchArgs(b *testing.B) {
+	b.ReportAllocs()
+	ctx := NewParseContext([]string{"steam", "retroarch", "mister"})
+	raw := map[string]string{
+		"launcher": "steam",
+		"system":   "NES",
+		"action":   "run",
+		"tags":     "genre:rpg,region:usa",
+	}
+	for b.Loop() {
+		var args zapscript.LaunchRandomArgs
+		_ = Parse(raw, &args, ctx)
+	}
+}
+
+func BenchmarkParse_LaunchSearchArgs(b *testing.B) {
+	b.ReportAllocs()
+	ctx := NewParseContext([]string{"steam", "retroarch", "mister", "dolphin", "pcsx2"})
+	raw := map[string]string{
+		"launcher": "retroarch",
+		"action":   "details",
+		"tags":     "genre:rpg,region:usa,players:2",
+	}
+	for b.Loop() {
+		var args zapscript.LaunchSearchArgs
+		_ = Parse(raw, &args, ctx)
+	}
+}
+
 func TestParse_GlobalArgs(t *testing.T) {
 	t.Parallel()
 
@@ -70,34 +108,6 @@ func TestParse_GlobalArgs(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantWhen, args.When)
-		})
-	}
-}
-
-func TestGlobalArgs_ShouldRun(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		when string
-		want bool
-	}{
-		{name: "empty when", when: "", want: true},
-		{name: "true", when: "true", want: true},
-		{name: "yes", when: "yes", want: true},
-		{name: "false", when: "false", want: false},
-		{name: "no", when: "no", want: false},
-		// IsTruthy only accepts "true" and "yes", all other values are falsey
-		{name: "1 is falsey", when: "1", want: false},
-		{name: "0 is falsey", when: "0", want: false},
-		{name: "random string is falsey", when: "random", want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			args := zapscript.GlobalArgs{When: tt.when}
-			assert.Equal(t, tt.want, ShouldRun(args))
 		})
 	}
 }

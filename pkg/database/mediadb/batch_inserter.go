@@ -29,10 +29,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// ErrDependencyFlush is returned by Flush when a dependency batch inserter fails.
+// Callers can detect this via errors.Is to distinguish a parent-table flush failure
+// from a local constraint violation.
+var ErrDependencyFlush = errors.New("dependency flush failed")
+
 // BatchInserter manages batched multi-row inserts for a specific table
 type BatchInserter struct {
 	ctx          context.Context
 	tx           *sql.Tx
+	stmtCache    map[int]*sql.Stmt // prepared statements keyed by row count for reuse
 	tableName    string
 	columns      []string
 	buffer       []any
@@ -86,6 +92,7 @@ func NewBatchInserterWithOptions(
 		buffer:       make([]any, 0, batchSize*len(columns)),
 		currentCount: 0,
 		orIgnore:     orIgnore,
+		stmtCache:    make(map[int]*sql.Stmt),
 	}, nil
 }
 
@@ -135,15 +142,31 @@ func (b *BatchInserter) Flush() error {
 				Msg("flushing dependency batch before child")
 		}
 		if err := dep.Flush(); err != nil {
-			return fmt.Errorf("failed to flush dependency for %s: %w", b.tableName, err)
+			b.buffer = b.buffer[:0]
+			b.currentCount = 0
+			return fmt.Errorf("failed to flush dependency for %s: %w: %w", b.tableName, ErrDependencyFlush, err)
 		}
 	}
 
-	// Generate statement for current batch size
+	cacheStmt := b.currentCount == b.batchSize
+
+	// Reuse cached statement for the steady-state full batch size when available
+	if cacheStmt {
+		if stmt, ok := b.stmtCache[b.currentCount]; ok {
+			_, err := stmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
+			b.buffer = b.buffer[:0]
+			b.currentCount = 0
+			if err != nil {
+				return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
+			}
+			return nil
+		}
+	}
+
+	// Generate and prepare statement for this batch size.
 	sqlStmt := b.generateMultiRowInsertSQL(b.currentCount)
 	stmt, err := b.tx.PrepareContext(b.ctx, sqlStmt)
 	if err != nil {
-		// Check if error is due to exceeding SQLite's SQLITE_MAX_VARIABLE_NUMBER limit
 		if strings.Contains(err.Error(), "too many SQL variables") {
 			log.Debug().
 				Str("table", b.tableName).
@@ -154,22 +177,22 @@ func (b *BatchInserter) Flush() error {
 		}
 		return fmt.Errorf("failed to prepare batch insert: %w", err)
 	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close batch insert statement")
-		}
-	}()
-
-	// Execute batch insert
-	_, err = stmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
-	if err != nil {
-		// Fail fast - batch insert errors indicate data integrity issues that should be surfaced immediately
-		return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
+	if cacheStmt {
+		b.stmtCache[b.currentCount] = stmt
+	} else {
+		defer func() {
+			if closeErr := stmt.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Str("table", b.tableName).Msg("failed to close ad-hoc batch statement")
+			}
+		}()
 	}
 
-	// Reset buffer
+	_, err = stmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
 	b.buffer = b.buffer[:0]
 	b.currentCount = 0
+	if err != nil {
+		return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
+	}
 	return nil
 }
 
@@ -204,6 +227,8 @@ func (b *BatchInserter) flushChunked() error {
 
 		// Execute chunk (extracted to separate function to satisfy both sqlclosecheck and revive linters)
 		if err := b.executeChunk(chunkSize, chunkBuffer); err != nil {
+			b.buffer = b.buffer[:0]
+			b.currentCount = 0
 			return err
 		}
 
@@ -255,6 +280,8 @@ func (b *BatchInserter) flushSingleRow() error {
 	singleRowSQL := b.generateSingleRowInsertSQL()
 	stmt, err := b.tx.PrepareContext(b.ctx, singleRowSQL)
 	if err != nil {
+		b.buffer = b.buffer[:0]
+		b.currentCount = 0
 		return fmt.Errorf("failed to prepare single-row fallback insert: %w", err)
 	}
 	defer func() {
@@ -274,6 +301,8 @@ func (b *BatchInserter) flushSingleRow() error {
 				Int("row", i).
 				Msg("failed to insert row in fallback mode")
 			// Fail fast on any error to prevent silent data inconsistencies.
+			b.buffer = b.buffer[:0]
+			b.currentCount = 0
 			return fmt.Errorf("unrecoverable error during single-row fallback on row %d: %w", i, err)
 		}
 	}
@@ -284,9 +313,26 @@ func (b *BatchInserter) flushSingleRow() error {
 	return nil
 }
 
-// Close flushes remaining items and closes the statement
+// Close flushes remaining items and closes all cached statements
 func (b *BatchInserter) Close() error {
-	return b.Flush()
+	flushErr := b.Flush()
+	var firstCloseErr error
+	for rowCount, stmt := range b.stmtCache {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).
+				Str("table", b.tableName).
+				Int("rows", rowCount).
+				Msg("failed to close cached batch statement")
+			if firstCloseErr == nil {
+				firstCloseErr = closeErr
+			}
+		}
+	}
+	b.stmtCache = nil
+	if flushErr != nil {
+		return flushErr
+	}
+	return firstCloseErr
 }
 
 // generateMultiRowInsertSQL creates a multi-row INSERT statement

@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/retropie"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -95,7 +96,7 @@ func run() error {
 
 	flags.Post(cfg, pl)
 
-	stop, done, err := service.Start(pl, cfg)
+	svcResult, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("error starting service")
 		return fmt.Errorf("error starting service: %w", err)
@@ -103,14 +104,16 @@ func run() error {
 
 	select {
 	case <-sigs:
-	case <-done:
+		err = svcResult.Stop()
+		if err != nil {
+			log.Error().Err(err).Msg("error stopping service")
+			return fmt.Errorf("error stopping service: %w", err)
+		}
+	case <-svcResult.Done:
 		log.Info().Msg("service shut down internally")
-	}
-
-	err = stop()
-	if err != nil {
-		log.Error().Err(err).Msg("error stopping service")
-		return fmt.Errorf("error stopping service: %w", err)
+		if err := restart.ExecIfRequested(svcResult.RestartRequested); err != nil {
+			return fmt.Errorf("failed to re-exec for restart: %w", err)
+		}
 	}
 
 	return nil

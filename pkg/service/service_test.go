@@ -61,7 +61,7 @@ func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
 
 	// Call the function
-	checkAndResumeIndexing(mockPlatform, cfg, db, st)
+	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
 
 	mockMediaDB.AssertExpectations(t)
 
@@ -102,7 +102,7 @@ func TestCheckAndResumeIndexing_WithRunningStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	// Call the function
-	checkAndResumeIndexing(mockPlatform, cfg, db, st)
+	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
 
 	// Wait for async operation to start and complete
 	// With minimal system list (just NES), this should complete quickly
@@ -177,7 +177,7 @@ func TestCheckAndResumeIndexing_WithPendingStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	// Call the function
-	checkAndResumeIndexing(mockPlatform, cfg, db, st)
+	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
 
 	// Wait for status to change from "pending" - this confirms resume was triggered
 	// We only need to see it start (change from pending), not complete
@@ -241,7 +241,7 @@ func TestCheckAndResumeIndexing_DatabaseError(t *testing.T) {
 	mockMediaDB.On("GetIndexingStatus").Return("", assert.AnError)
 
 	// Call the function
-	checkAndResumeIndexing(mockPlatform, cfg, db, st)
+	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
 
 	mockMediaDB.AssertExpectations(t)
 
@@ -274,7 +274,7 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusFailed, nil)
 
 	// Call the function
-	checkAndResumeIndexing(mockPlatform, cfg, db, st)
+	checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
 
 	mockMediaDB.AssertExpectations(t)
 
@@ -501,7 +501,7 @@ func TestCheckAndResumeIndexing_WaitGroupRace(t *testing.T) {
 			require.NoError(t, err)
 
 			// Call the function - this starts async indexing + optimization
-			checkAndResumeIndexing(mockPlatform, cfg, db, st)
+			checkAndResumeIndexing(mockPlatform, cfg, db, st, nil)
 
 			// The critical test: WaitForBackgroundOperations should NOT panic
 			// If the race condition exists, this could panic with:

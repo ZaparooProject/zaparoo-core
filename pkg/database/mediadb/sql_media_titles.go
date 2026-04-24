@@ -35,7 +35,7 @@ const insertMediaTitleSQL = `
 	VALUES (?, ?, ?, ?, ?, ?, ?)
 `
 
-func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title *database.MediaTitle) (database.MediaTitle, error) {
+func sqlFindMediaTitle(ctx context.Context, db sqlQueryable, title *database.MediaTitle) (database.MediaTitle, error) {
 	var row database.MediaTitle
 
 	// Prefer exact DBID lookup when provided

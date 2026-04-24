@@ -52,6 +52,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/publishers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/google/uuid"
 	"github.com/jonboulle/clockwork"
@@ -188,10 +189,17 @@ func pruneExpiredZapLinkHosts(db *database.Database) {
 	}
 }
 
+// StartResult holds the return values from Start.
+type StartResult struct {
+	Stop             func() error
+	Done             <-chan struct{}
+	RestartRequested func() bool
+}
+
 func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
-) (stop func() error, done <-chan struct{}, err error) {
+) (*StartResult, error) {
 	log.Info().Msgf("version: %s", config.AppVersion)
 
 	// Generate boot UUID for this session (for timestamp healing on MiSTer)
@@ -199,48 +207,58 @@ func Start(
 	log.Info().Msgf("boot session UUID: %s", bootUUID)
 
 	player := audio.NewMalgoPlayer()
+	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
 
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
 
-	// Create and start notification broker to broadcast to all consumers
-	notifBroker := broker.NewBroker(st.GetContext(), ns)
+	// Create and start notification broker to broadcast to all consumers.
+	// media.indexing is coalesceable: bursts during index/resume collapse to
+	// latest-wins so slow WebSocket consumers don't drop discrete events.
+	notifBroker := broker.NewBroker(st.GetContext(), ns, models.NotificationMediaIndexing)
 	notifBroker.Start()
 
 	// TODO: convert this to a *token channel
 	itq := make(chan tokens.Token)        // input token queue
 	lsq := make(chan *tokens.Token)       // launch software queue
 	plq := make(chan *playlists.Playlist) // playlist event queue
+	cfq := make(chan chan error)          // launch guard confirm queue
 
-	err = setupEnvironment(pl)
+	err := setupEnvironment(pl)
 	if err != nil {
 		log.Error().Err(err).Msg("error setting up environment")
-		return nil, nil, err
+		return nil, err
 	}
 
 	log.Info().Msg("running platform pre start")
 	err = pl.StartPre(cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
-		return nil, nil, fmt.Errorf("platform start pre failed: %w", err)
+		return nil, fmt.Errorf("platform start pre failed: %w", err)
 	}
 
 	log.Info().Msg("opening databases")
 	db, err := makeDatabase(st.GetContext(), pl)
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening databases")
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Perform all history cleanup operations
 	cleanupHistoryOnStartup(cfg, db)
 
 	pruneExpiredZapLinkHosts(db)
-	go zapscript.PreWarmZapLinkHosts(db, pl.ID(), helpers.WaitForInternet)
+	go zapscript.PreWarmZapLinkHosts(db, helpers.WaitForInternet)
 
 	// Initialize inbox service for system notifications
 	log.Info().Msg("initializing inbox service")
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
+
+	go updater.CheckAndNotify(
+		st.GetContext(), cfg, pl.ID(), st.Inbox(),
+		helpers.WaitForInternet, updater.Check,
+		pl.ManagedByPackageManager(),
+	)
 
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")
@@ -250,10 +268,20 @@ func Start(
 		limitsManager.SetEnabled(true)
 	}
 
+	svc := &ServiceContext{
+		Platform:            pl,
+		Config:              cfg,
+		State:               st,
+		DB:                  db,
+		LaunchSoftwareQueue: lsq,
+		PlaylistQueue:       plq,
+		ConfirmQueue:        cfq,
+	}
+
 	// Set up the OnMediaStart hook
 	st.SetOnMediaStartHook(func(_ *models.ActiveMedia) {
 		if script := cfg.LaunchersOnMediaStart(); script != "" {
-			if hookErr := runHook(pl, cfg, st, db, lsq, plq, "on_media_start", script, nil); hookErr != nil {
+			if hookErr := runHook(svc, "on_media_start", script, nil, nil); hookErr != nil {
 				log.Error().Err(hookErr).Msg("error running on_media_start script")
 			}
 		}
@@ -274,21 +302,38 @@ func Start(
 	log.Info().Msg("initializing launcher cache")
 	helpers.GlobalLauncherCache.Initialize(pl, cfg)
 
+	// Create index pauser to pause media indexing while a game is running.
+	indexPauser := syncutil.NewPauser()
+	go watchGameForIndexPause(st.GetContext(), notifBroker, st, st.Notifications, indexPauser)
+
 	log.Info().Msg("checking for interrupted media indexing")
-	go checkAndResumeIndexing(pl, cfg, db, st)
+	go checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
 
 	log.Info().Msg("checking for interrupted media optimization")
-	go checkAndResumeOptimization(db, st.Notifications)
+	go checkAndResumeOptimization(db, st.Notifications, indexPauser)
 
 	log.Info().Msg("starting mDNS discovery service")
-	discoveryService := discovery.New(cfg, pl.ID())
+	discoveryService := discovery.New(cfg)
 	if discoveryErr := discoveryService.Start(); discoveryErr != nil {
 		log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
 	}
 
 	log.Info().Msg("starting API service")
-	apiNotifications, _ := notifBroker.Subscribe(100)
-	go api.Start(pl, cfg, st, itq, db, limitsManager, apiNotifications, discoveryService.InstanceName(), player)
+	go api.Start(
+		pl, cfg, st, itq, cfq, db, limitsManager,
+		notifBroker, discoveryService.InstanceName(), player, indexPauser,
+	)
+
+	// Build slug search cache after API is listening to avoid blocking startup
+	if db.MediaDB != nil {
+		db.MediaDB.TrackBackgroundOperation()
+		go func() {
+			defer db.MediaDB.BackgroundOperationDone()
+			if cacheErr := db.MediaDB.RebuildSlugSearchCache(); cacheErr != nil {
+				log.Warn().Err(cacheErr).Msg("failed to build slug search cache")
+			}
+		}()
+	}
 
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)
@@ -316,16 +361,16 @@ func Start(
 	}
 
 	log.Info().Msg("starting reader manager")
-	go readerManager(pl, cfg, st, db, itq, lsq, plq, make(chan readers.Scan), player)
+	go readerManager(svc, itq, make(chan readers.Scan), player, nil)
 
 	log.Info().Msg("starting input token queue manager")
-	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq, limitsManager, player)
+	go processTokenQueue(svc, itq, limitsManager, player)
 
 	log.Info().Msg("running platform post start")
 	err = pl.StartPost(cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia, db)
 	if err != nil {
 		log.Error().Err(err).Msg("platform post start error")
-		return nil, nil, fmt.Errorf("platform start post failed: %w", err)
+		return nil, fmt.Errorf("platform start post failed: %w", err)
 	}
 	log.Info().Msg("platform post start completed, service fully initialized")
 
@@ -346,18 +391,21 @@ func Start(
 		close(plq)
 		close(lsq)
 		close(itq)
+		close(cfq)
 
 		log.Info().Msg("service cleanup completed")
 		close(doneCh)
 	}()
 
-	stop = func() error {
-		st.StopService()
-		<-doneCh
-		return nil
-	}
-	done = doneCh
-	return stop, done, nil
+	return &StartResult{
+		Stop: func() error {
+			st.StopService()
+			<-doneCh
+			return nil
+		},
+		Done:             doneCh,
+		RestartRequested: st.RestartRequested,
+	}, nil
 }
 
 // monitorClockAndHealTimestamps monitors the system clock and heals timestamps when NTP syncs.
@@ -571,8 +619,8 @@ func startPublishers(
 	st *state.State,
 	cfg *config.Instance,
 	notifChan <-chan models.Notification,
-) ([]*publishers.MQTTPublisher, context.CancelFunc) {
-	activePublishers := make([]*publishers.MQTTPublisher, 0)
+) ([]publishers.Publisher, context.CancelFunc) {
+	activePublishers := make([]publishers.Publisher, 0)
 
 	mqttConfigs := cfg.GetMQTTPublishers()
 	if len(mqttConfigs) > 0 {
@@ -594,23 +642,41 @@ func startPublishers(
 		}
 	}
 
+	for _, pcCfg := range cfg.GetPixelCadePublishers() {
+		if pcCfg.Enabled != nil && !*pcCfg.Enabled {
+			continue
+		}
+
+		log.Info().Msgf("starting PixelCade publisher: %s:%d", pcCfg.Host, pcCfg.Port)
+
+		publisher := publishers.NewPixelCadePublisher(
+			pcCfg.Host, pcCfg.Port, pcCfg.Mode, pcCfg.Filter,
+		)
+		if err := publisher.Start(st.GetContext()); err != nil {
+			log.Error().Err(err).Msgf("failed to start PixelCade publisher for %s", pcCfg.Host)
+			continue
+		}
+
+		activePublishers = append(activePublishers, publisher)
+	}
+
 	if len(activePublishers) > 0 {
-		log.Info().Msgf("started %d MQTT publisher(s)", len(activePublishers))
+		log.Info().Msgf("started %d publisher(s)", len(activePublishers))
 	}
 
 	// CRITICAL: Always start the drain goroutine, even if there are no active publishers.
 	// The notifChan MUST be consumed or it will fill up and block the notification system.
 	// If there are no publishers, notifications are simply discarded after being consumed.
-	ctx, cancel := context.WithCancel(st.GetContext())
+	ctx, cancel := context.WithCancel(st.GetContext()) //nolint:gosec // G118: cancel returned to caller
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
-				log.Debug().Msg("mqtt publisher fan-out: stopping")
+				log.Debug().Msg("publisher fan-out: stopping")
 				return
 			case notif, ok := <-notifChan:
 				if !ok {
-					log.Debug().Msg("mqtt publisher fan-out: notification channel closed")
+					log.Debug().Msg("publisher fan-out: notification channel closed")
 					return
 				}
 				// Publish to all active publishers sequentially
@@ -634,6 +700,7 @@ func checkAndResumeIndexing(
 	cfg *config.Instance,
 	db *database.Database,
 	st *state.State,
+	pauser *syncutil.Pauser,
 ) {
 	// Check if indexing was interrupted
 	indexingStatus, err := db.MediaDB.GetIndexingStatus()
@@ -677,14 +744,14 @@ func checkAndResumeIndexing(
 
 	// Resume using the proper function with full notification support
 	// GenerateMediaDB spawns its own goroutine and returns immediately
-	err = methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications, systems, db)
+	err = methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications, systems, db, pauser)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to start auto-resume of media indexing")
 	}
 }
 
 // checkAndResumeOptimization checks if optimization was interrupted and automatically resumes it
-func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notification) {
+func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notification, pauser *syncutil.Pauser) {
 	status, err := db.MediaDB.GetOptimizationStatus()
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to get optimization status during startup check")
@@ -702,7 +769,7 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 				Indexing:   false,
 				Optimizing: optimizing,
 			})
-		})
+		}, pauser)
 	} else {
 		log.Debug().Msgf("optimization status is '%s', no auto-resume needed", status)
 	}

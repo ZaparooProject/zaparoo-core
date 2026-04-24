@@ -79,6 +79,7 @@ func TestPrivateNetworkAccessMiddleware(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			//nolint:noctx // test helper, no context needed
 			req := httptest.NewRequest(tt.method, "/api", http.NoBody)
 			if tt.requestPNAHeader != "" {
 				req.Header.Set("Access-Control-Request-Private-Network", tt.requestPNAHeader)

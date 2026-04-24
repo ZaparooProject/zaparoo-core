@@ -21,7 +21,6 @@ package middleware
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -40,6 +39,8 @@ const (
 type IPRateLimiter struct {
 	limiters map[string]*rateLimiterEntry
 	mu       syncutil.RWMutex
+	rate     rate.Limit
+	burst    int
 }
 
 type rateLimiterEntry struct {
@@ -47,10 +48,20 @@ type rateLimiterEntry struct {
 	lastSeen time.Time
 }
 
-// NewIPRateLimiter creates a new IP-based rate limiter with hardcoded limits
+// NewIPRateLimiter creates a new IP-based rate limiter with the default
+// API limits (100 req/min per IP, burst 20).
 func NewIPRateLimiter() *IPRateLimiter {
+	return NewIPRateLimiterWithLimits(rate.Limit(float64(RequestsPerMinute)/60.0), BurstSize)
+}
+
+// NewIPRateLimiterWithLimits creates a new IP-based rate limiter with custom
+// rate and burst settings. Used by the pairing endpoints which require a much
+// more aggressive limit (1 req/sec per IP) to throttle online PIN guessing.
+func NewIPRateLimiterWithLimits(r rate.Limit, burst int) *IPRateLimiter {
 	return &IPRateLimiter{
 		limiters: make(map[string]*rateLimiterEntry),
+		rate:     r,
+		burst:    burst,
 	}
 }
 
@@ -61,8 +72,7 @@ func (rl *IPRateLimiter) GetLimiter(ip string) *rate.Limiter {
 
 	entry, exists := rl.limiters[ip]
 	if !exists {
-		// Create new limiter with hardcoded constants
-		limiter := rate.NewLimiter(rate.Limit(float64(RequestsPerMinute)/60.0), BurstSize)
+		limiter := rate.NewLimiter(rl.rate, rl.burst)
 		entry = &rateLimiterEntry{
 			limiter:  limiter,
 			lastSeen: time.Now(),
@@ -132,7 +142,12 @@ func HTTPRateLimitMiddleware(limiter *IPRateLimiter) func(http.Handler) http.Han
 	}
 }
 
-// WebSocketRateLimitHandler wraps a WebSocket message handler with rate limiting
+// WebSocketRateLimitHandler wraps a WebSocket message handler with rate
+// limiting. When the per-IP rate limit is exceeded the connection is closed
+// rather than receiving a structured JSON-RPC error: this avoids leaking
+// plaintext frames onto encrypted sessions (which would not match the
+// {"e":...} envelope and could not be decrypted by the client) and gives
+// well-behaved clients an unambiguous "back off and reconnect" signal.
 func WebSocketRateLimitHandler(
 	limiter *IPRateLimiter,
 	handler func(*melody.Session, []byte),
@@ -146,32 +161,10 @@ func WebSocketRateLimitHandler(
 			log.Warn().
 				Str("ip", host).
 				Int("msg_size", len(msg)).
-				Msg("WebSocket rate limit exceeded")
+				Msg("WebSocket rate limit exceeded, closing connection")
 
-			type jsonRPCError struct {
-				Message string `json:"message"`
-				Code    int    `json:"code"`
-			}
-			type jsonRPCErrorResponse struct {
-				JSONRPC string       `json:"jsonrpc"`
-				ID      any          `json:"id"`
-				Error   jsonRPCError `json:"error"`
-			}
-			resp := jsonRPCErrorResponse{
-				JSONRPC: "2.0",
-				ID:      nil,
-				Error: jsonRPCError{
-					Code:    -32000,
-					Message: "Rate limit exceeded",
-				},
-			}
-			errorMsg, marshalErr := json.Marshal(resp)
-			if marshalErr != nil {
-				log.Error().Err(marshalErr).Msg("failed to marshal rate limit error")
-				return
-			}
-			if err := session.Write(errorMsg); err != nil {
-				log.Error().Err(err).Msg("failed to send rate limit error")
+			if err := session.Close(); err != nil {
+				log.Debug().Err(err).Msg("failed to close rate-limited session")
 			}
 			return
 		}

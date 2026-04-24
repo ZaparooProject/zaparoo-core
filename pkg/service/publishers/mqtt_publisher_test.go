@@ -72,82 +72,6 @@ func TestNewMQTTPublisher(t *testing.T) {
 	}
 }
 
-func TestMatchesFilter(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		method  string
-		wantMsg string
-		filter  []string
-		want    bool
-	}{
-		{
-			name:    "empty filter matches all",
-			filter:  []string{},
-			method:  "media.started",
-			want:    true,
-			wantMsg: "empty filter should match all notifications",
-		},
-		{
-			name:    "nil filter matches all",
-			filter:  nil,
-			method:  "tokens.added",
-			want:    true,
-			wantMsg: "nil filter should match all notifications",
-		},
-		{
-			name:    "method in filter",
-			filter:  []string{"media.started", "media.stopped"},
-			method:  "media.started",
-			want:    true,
-			wantMsg: "should match when method is in filter",
-		},
-		{
-			name:    "method not in filter",
-			filter:  []string{"media.started", "media.stopped"},
-			method:  "readers.added",
-			want:    false,
-			wantMsg: "should not match when method not in filter",
-		},
-		{
-			name:    "single item filter match",
-			filter:  []string{"tokens.added"},
-			method:  "tokens.added",
-			want:    true,
-			wantMsg: "should match single item in filter",
-		},
-		{
-			name:    "single item filter no match",
-			filter:  []string{"tokens.added"},
-			method:  "tokens.removed",
-			want:    false,
-			wantMsg: "should not match when not in single-item filter",
-		},
-		{
-			name:    "case sensitive",
-			filter:  []string{"media.started"},
-			method:  "Media.Started",
-			want:    false,
-			wantMsg: "filter matching should be case-sensitive",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			publisher := &MQTTPublisher{
-				filter: tt.filter,
-			}
-
-			result := publisher.matchesFilter(tt.method)
-
-			assert.Equal(t, tt.want, result, tt.wantMsg)
-		})
-	}
-}
-
 func TestStop(t *testing.T) {
 	t.Parallel()
 
@@ -283,7 +207,7 @@ func TestPublish_Concurrent(t *testing.T) {
 		go func(id int) {
 			err := publisher.Publish(models.Notification{
 				Method: "test.notification",
-				Params: []byte(`{"id": ` + string(rune(id+'0')) + `}`),
+				Params: []byte(`{"id": ` + string(rune(id+'0')) + `}`), //nolint:gosec // G115: int->rune
 			})
 			assert.NoError(t, err)
 			done <- true

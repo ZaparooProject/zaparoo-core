@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -37,10 +38,11 @@ import (
 // MockPlatform is a mock implementation of the Platform interface using testify/mock
 type MockPlatform struct {
 	mock.Mock
-	launchedMedia   []string // Track launched media for verification
-	launchedSystems []string // Track launched systems for verification
-	keyboardPresses []string // Track keyboard presses for verification
-	gamepadPresses  []string // Track gamepad presses for verification
+	launchedMedia   []string
+	launchedSystems []string
+	keyboardPresses []string
+	gamepadPresses  []string
+	mu              syncutil.Mutex
 }
 
 // ID returns the unique ID of this platform
@@ -137,7 +139,9 @@ func (m *MockPlatform) ReturnToMenu() error {
 // LaunchSystem launches a system by ID
 func (m *MockPlatform) LaunchSystem(cfg *config.Instance, systemID string) error {
 	args := m.Called(cfg, systemID)
+	m.mu.Lock()
 	m.launchedSystems = append(m.launchedSystems, systemID)
+	m.mu.Unlock()
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
@@ -150,7 +154,9 @@ func (m *MockPlatform) LaunchMedia(
 	opts *platforms.LaunchOptions,
 ) error {
 	args := m.Called(cfg, path, launcher, db, opts)
+	m.mu.Lock()
 	m.launchedMedia = append(m.launchedMedia, path)
+	m.mu.Unlock()
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
@@ -160,7 +166,9 @@ func (m *MockPlatform) LaunchMedia(
 // KeyboardPress presses and then releases a single keyboard button
 func (m *MockPlatform) KeyboardPress(key string) error {
 	args := m.Called(key)
+	m.mu.Lock()
 	m.keyboardPresses = append(m.keyboardPresses, key)
+	m.mu.Unlock()
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
@@ -170,11 +178,25 @@ func (m *MockPlatform) KeyboardPress(key string) error {
 // GamepadPress presses and then releases a single gamepad button
 func (m *MockPlatform) GamepadPress(button string) error {
 	args := m.Called(button)
+	m.mu.Lock()
 	m.gamepadPresses = append(m.gamepadPresses, button)
+	m.mu.Unlock()
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
 	return nil
+}
+
+// Screenshot captures a screenshot of the current platform display
+func (m *MockPlatform) Screenshot() (*platforms.ScreenshotResult, error) {
+	args := m.Called()
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	if result, ok := args.Get(0).(*platforms.ScreenshotResult); ok {
+		return result, nil
+	}
+	return &platforms.ScreenshotResult{}, nil
 }
 
 // ForwardCmd processes a platform-specific ZapScript command
@@ -256,30 +278,46 @@ func (m *MockPlatform) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
 }
 
+// ManagedByPackageManager returns whether this install is managed by a package manager
+func (m *MockPlatform) ManagedByPackageManager() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+
 // Helper methods for testing
 
 // GetLaunchedMedia returns a slice of all media paths that were launched
 func (m *MockPlatform) GetLaunchedMedia() []string {
-	return append([]string(nil), m.launchedMedia...) // Return a copy
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.launchedMedia...)
 }
 
 // GetLaunchedSystems returns a slice of all system IDs that were launched
 func (m *MockPlatform) GetLaunchedSystems() []string {
-	return append([]string(nil), m.launchedSystems...) // Return a copy
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.launchedSystems...)
 }
 
 // GetKeyboardPresses returns a slice of all keyboard keys that were pressed
 func (m *MockPlatform) GetKeyboardPresses() []string {
-	return append([]string(nil), m.keyboardPresses...) // Return a copy
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.keyboardPresses...)
 }
 
 // GetGamepadPresses returns a slice of all gamepad buttons that were pressed
 func (m *MockPlatform) GetGamepadPresses() []string {
-	return append([]string(nil), m.gamepadPresses...) // Return a copy
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.gamepadPresses...)
 }
 
 // ClearHistory clears all tracked interactions
 func (m *MockPlatform) ClearHistory() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.launchedMedia = m.launchedMedia[:0]
 	m.launchedSystems = m.launchedSystems[:0]
 	m.keyboardPresses = m.keyboardPresses[:0]
@@ -310,6 +348,7 @@ func (m *MockPlatform) SetupBasicMock() {
 	m.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/mock/roms"})
 	m.On("SupportedReaders", mock.AnythingOfType("*config.Instance")).Return([]readers.Reader{})
 	m.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
+	m.On("ManagedByPackageManager").Return(false)
 
 	// Setup common stub functions for UI methods
 	noopFunc := func() error { return nil }

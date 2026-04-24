@@ -208,6 +208,35 @@ func AllSystems() []System {
 	return systems
 }
 
+// SystemsWithFallbacks returns the input systems plus any fallback systems,
+// with duplicates removed. Original systems appear first, followed by
+// fallback systems in the order they were encountered.
+// Only direct fallbacks are included, not transitive.
+func SystemsWithFallbacks(systems []System) []System {
+	seen := make(map[string]struct{}, len(systems)*2)
+	result := make([]System, 0, len(systems)*2)
+
+	for _, sys := range systems {
+		if _, ok := seen[sys.ID]; ok {
+			continue
+		}
+		seen[sys.ID] = struct{}{}
+		result = append(result, sys)
+
+		for _, fbID := range sys.Fallbacks {
+			if _, ok := seen[fbID]; ok {
+				continue
+			}
+			seen[fbID] = struct{}{}
+			if fbSys, err := GetSystem(fbID); err == nil {
+				result = append(result, *fbSys)
+			}
+		}
+	}
+
+	return result
+}
+
 // Consoles
 const (
 	System3DO               = "3DO"
@@ -1151,33 +1180,39 @@ var Systems = map[string]System{
 		ID:        SystemMovie,
 		Slugs:     []string{"movies", "film", "cinema"},
 		MediaType: MediaTypeMovie,
+		Fallbacks: []string{SystemVideo},
 	},
 	SystemTVEpisode: {
 		ID:        SystemTVEpisode,
 		Aliases:   []string{"TV"},
 		Slugs:     []string{"television", "tvchannel"},
 		MediaType: MediaTypeTVShow,
+		Fallbacks: []string{SystemVideo},
 	},
 	SystemTVShow: {
 		ID:        SystemTVShow,
 		Slugs:     []string{"tvshows", "tvseries"},
 		MediaType: MediaTypeTVShow,
+		Fallbacks: []string{SystemVideo},
 	},
 	SystemMusicTrack: {
 		ID:        SystemMusicTrack,
 		Aliases:   []string{"Music"},
 		Slugs:     []string{"musicfile", "song", "songs"},
 		MediaType: MediaTypeMusic,
+		Fallbacks: []string{SystemAudio},
 	},
 	SystemMusicArtist: {
 		ID:        SystemMusicArtist,
 		Slugs:     []string{"musician", "musicians", "band", "bands"},
 		MediaType: MediaTypeMusic,
+		Fallbacks: []string{SystemAudio},
 	},
 	SystemMusicAlbum: {
 		ID:        SystemMusicAlbum,
 		Slugs:     []string{"lp", "album", "albums"},
 		MediaType: MediaTypeMusic,
+		Fallbacks: []string{SystemAudio},
 	},
 	SystemImage: {
 		ID:        SystemImage,

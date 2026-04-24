@@ -53,25 +53,11 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "analyze").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)analyze;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "vacuum").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)vacuum;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
+	expectAnalyzeStep(mock)
+	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -86,7 +72,7 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	for range numGoroutines {
 		go func() {
 			defer wg.Done()
-			mediaDB.RunBackgroundOptimization(nil)
+			mediaDB.RunBackgroundOptimization(nil, nil)
 			mu.Lock()
 			completedCount++
 			mu.Unlock()
@@ -289,25 +275,11 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "analyze").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)analyze;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "vacuum").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)vacuum;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
+	expectAnalyzeStep(mock)
+	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -320,7 +292,7 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 
 			// Track if this goroutine actually performed optimization
 			initialFlag := mediaDB.isOptimizing.Load()
-			mediaDB.RunBackgroundOptimization(nil)
+			mediaDB.RunBackgroundOptimization(nil, nil)
 
 			// If the flag was false initially and is now false again,
 			// this goroutine might have done the optimization
@@ -354,32 +326,28 @@ func TestOptimizationInterruption(t *testing.T) {
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
-	// Mock optimization that fails partway through
+	// analyze is now first; failure aborts before page_prefetch/browse_cache
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "analyze").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Second step fails repeatedly
 	analyzeError := errors.New("database locked")
 	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
 	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
 	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError) // Final failure
 
-	// Mock failure handling
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "failed").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Run optimization - should complete quickly with 1ms delays
-	mediaDB.RunBackgroundOptimization(nil)
+	mediaDB.RunBackgroundOptimization(nil, nil)
 
 	// Verify that optimization is no longer running after failure
 	assert.False(t, mediaDB.isOptimizing.Load())
@@ -445,7 +413,7 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 	mediaDB := &MediaDB{
 		sql:               db,
 		ctx:               ctx,
-		clock:             clockwork.NewFakeClock(),
+		clock:             clockwork.NewRealClock(),
 		analyzeRetryDelay: 1 * time.Millisecond,
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
@@ -455,19 +423,8 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "analyze").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)analyze;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "vacuum").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("(?i)vacuum;?").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectAnalyzeStep(mock)
+	expectPostAnalyzeSteps(mock)
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "completed").
@@ -499,7 +456,7 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mediaDB.RunBackgroundOptimization(nil)
+		mediaDB.RunBackgroundOptimization(nil, nil)
 	}()
 
 	// Concurrently check status many times

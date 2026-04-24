@@ -461,7 +461,7 @@ func (p *Platform) stopKodi(cfg *config.Instance, reason platforms.StopIntent) e
 	// just stop playback but keep Kodi running ("Kodi mode" stays active)
 	if reason == platforms.StopForMenu {
 		log.Info().Msg("stopping Kodi playback (Kodi mode stays active)")
-		if err := client.Stop(); err != nil {
+		if err := client.Stop(context.Background()); err != nil {
 			return fmt.Errorf("failed to stop Kodi playback: %w", err)
 		}
 		// Don't clear activeMedia - Kodi is still running and we're still in "Kodi mode"
@@ -614,6 +614,10 @@ func (p *Platform) LaunchMedia(
 	return nil
 }
 
+func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
+	return nil, platforms.ErrNotSupported
+}
+
 func (*Platform) ForwardCmd(env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, fmt.Errorf("command not supported on batocera: %s", env.Cmd)
 }
@@ -633,18 +637,6 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
-		platforms.Launcher{
-			ID:            "Generic",
-			Extensions:    []string{".sh"},
-			AllowListOnly: true,
-			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-				err := exec.CommandContext(context.Background(), path).Start()
-				if err != nil {
-					return nil, fmt.Errorf("failed to start command: %w", err)
-				}
-				return nil, nil //nolint:nilnil // Command launches don't return a process handle
-			},
-		},
 	)
 
 	for folder, info := range esde.SystemMap {
@@ -746,7 +738,65 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		})
 	}
 
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
+	launchers = append(launchers, platforms.Launcher{
+		ID:            "Generic",
+		Extensions:    []string{".sh"},
+		AllowListOnly: true,
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			err := exec.CommandContext(context.Background(), path).Start()
+			if err != nil {
+				return nil, fmt.Errorf("failed to start command: %w", err)
+			}
+			return nil, nil //nolint:nilnil // Command launches don't return a process handle
+		},
+	})
+
+	customLaunchers := helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers())
+	esCfg := p.getESConfig()
+	for i := range customLaunchers {
+		cl := &customLaunchers[i]
+
+		// Fill in missing extensions from ES overlay config. When a custom
+		// launcher's folder matches an ES system name, use that system's
+		// extensions so the user doesn't have to duplicate them.
+		if len(cl.Extensions) == 0 && esCfg != nil {
+			for _, folder := range cl.Folders {
+				// Try exact folder name first, then fall back to basename
+				// to handle absolute paths like "/userdata/roms/movies".
+				esSys, ok := esCfg.Systems[folder]
+				if !ok {
+					esSys, ok = esCfg.Systems[filepath.Base(folder)]
+				}
+				if ok {
+					if exts := esSys.ParseExtensions(); len(exts) > 0 {
+						cl.Extensions = exts
+						log.Debug().Str("launcherID", cl.ID).Str("esSystem", folder).
+							Strs("extensions", exts).
+							Msg("enriched custom launcher extensions from ES overlay")
+						break
+					}
+				}
+			}
+		}
+
+		// When no execute command was defined, use the ES API to launch.
+		// This integrates with Batocera's game tracking and exit handling.
+		// Lifecycle must be FireAndForget since ES API returns no process
+		// handle — Batocera's background tracker manages active media state.
+		if cl.Launch == nil {
+			cl.Lifecycle = platforms.LifecycleFireAndForget
+			cl.Launch = func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+				err := esapi.APILaunch(path)
+				if err != nil {
+					return nil, fmt.Errorf("failed to launch via API: %w", err)
+				}
+				return nil, nil //nolint:nilnil // API launches don't return a process handle
+			}
+			log.Debug().Str("launcherID", cl.ID).Msg("custom launcher using ES API launch")
+		}
+	}
+
+	return append(customLaunchers, launchers...)
 }
 
 func (*Platform) ShowNotice(
@@ -778,4 +828,11 @@ func (*Platform) ShowPicker(
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
+}
+
+// ManagedByPackageManager checks if this install was done via the Batocera
+// pacman package by looking for the batoexec hook file created during install.
+func (*Platform) ManagedByPackageManager() bool {
+	_, err := os.Stat("/userdata/system/pacman/batoexec/zaparoo-core_0")
+	return err == nil
 }

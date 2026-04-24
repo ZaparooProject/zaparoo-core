@@ -32,9 +32,12 @@ const (
 	NotificationStopped              = "media.stopped"
 	NotificationStarted              = "media.started"
 	NotificationMediaIndexing        = "media.indexing" // TODO: rename to generating
+	NotificationTokensStaged         = "tokens.staged"
+	NotificationTokensStagedReady    = "tokens.staged.ready" //nolint:gosec // not a credential
 	NotificationPlaytimeLimitReached = "playtime.limit.reached"
 	NotificationPlaytimeLimitWarning = "playtime.limit.warning"
 	NotificationInboxAdded           = "inbox.added"
+	NotificationClientsPaired        = "clients.paired"
 )
 
 const (
@@ -45,16 +48,23 @@ const (
 const (
 	MethodLaunch               = "launch" // DEPRECATED
 	MethodRun                  = "run"
+	MethodConfirm              = "confirm"
 	MethodRunScript            = "run.script"
 	MethodStop                 = "stop"
 	MethodTokens               = "tokens"
 	MethodMedia                = "media"
 	MethodMediaGenerate        = "media.generate"
 	MethodMediaGenerateCancel  = "media.generate.cancel"
+	MethodMediaGenerateResume  = "media.generate.resume"
 	MethodMediaIndex           = "media.index" // DEPRECATED
 	MethodMediaSearch          = "media.search"
 	MethodMediaTags            = "media.tags"
 	MethodMediaActive          = "media.active"
+	MethodMediaHistory         = "media.history"
+	MethodMediaHistoryTop      = "media.history.top"
+	MethodMediaLookup          = "media.lookup"
+	MethodMediaBrowse          = "media.browse"
+	MethodMediaControl         = "media.control"
 	MethodMediaActiveUpdate    = "media.active.update"
 	MethodSettings             = "settings"
 	MethodSettingsUpdate       = "settings.update"
@@ -64,8 +74,9 @@ const (
 	MethodPlaytimeLimitsUpdate = "settings.playtime.limits.update"
 	MethodPlaytime             = "playtime"
 	MethodClients              = "clients"
-	MethodClientsNew           = "clients.new"
 	MethodClientsDelete        = "clients.delete"
+	MethodClientsPairStart     = "clients.pair.start"
+	MethodClientsPairCancel    = "clients.pair.cancel"
 	MethodSystems              = "systems"
 	MethodLaunchersRefresh     = "launchers.refresh"
 	MethodHistory              = "tokens.history"
@@ -82,7 +93,22 @@ const (
 	MethodInbox                = "inbox"
 	MethodInboxDelete          = "inbox.delete"
 	MethodInboxClear           = "inbox.clear"
+	MethodSettingsAuthClaim    = "settings.auth.claim"
+	MethodUpdateCheck          = "update.check"
+	MethodUpdateApply          = "update.apply"
+	MethodInputKeyboard        = "input.keyboard"
+	MethodInputGamepad         = "input.gamepad"
+	MethodScreenshot           = "screenshot"
 )
+
+// ResponseWithCallback wraps a method result with a function that should be
+// called after the response has been written to the client. This allows
+// handlers to defer side effects (like triggering a restart) until the client
+// has received the response, without relying on arbitrary sleep timers.
+type ResponseWithCallback struct {
+	Result     any
+	AfterWrite func()
+}
 
 type Notification struct {
 	Method string          `json:"method"`
@@ -103,6 +129,9 @@ type RequestObject struct {
 }
 
 type ErrorObject struct {
+	// Data is optional structured detail about the error. Per JSON-RPC 2.0
+	// §5.1 it MUST be a member of the error object, not a sibling.
+	Data    any    `json:"data,omitempty"`
 	Message string `json:"message"`
 	Code    int    `json:"code"`
 }

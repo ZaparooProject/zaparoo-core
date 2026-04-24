@@ -19,9 +19,18 @@
 
 package config
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 var AppVersion = "DEVELOPMENT"
+
+// IsDevelopmentVersion returns true if AppVersion indicates a non-release build.
+// This includes the literal "DEVELOPMENT" default and "<hash>-dev" builds.
+func IsDevelopmentVersion() bool {
+	return AppVersion == "DEVELOPMENT" || strings.HasSuffix(AppVersion, "-dev")
+}
 
 const (
 	AppName              = "zaparoo"
@@ -35,12 +44,15 @@ const (
 	UserDir              = "user"
 	LogsDir              = "logs"
 	APIRequestTimeout    = 30 * time.Second
-	SuccessSoundFilename = "success.wav"
-	FailSoundFilename    = "fail.wav"
-	LimitSoundFilename   = "limit.wav"
+	SuccessSoundFilename = "success.ogg"
+	FailSoundFilename    = "fail.ogg"
+	LimitSoundFilename   = "limit.ogg"
+	PendingSoundFilename = "pending.ogg"
+	ReadySoundFilename   = "ready.ogg"
 	AssetsDir            = "assets"
 	MappingsDir          = "mappings"
 	LaunchersDir         = "launchers"
 	MediaDir             = "media"
 	LogUploadURL         = "https://logs.zaparoo.org/"
+	MinFreeDiskBytes     = 500 * 1024 * 1024 // 500 MB
 )

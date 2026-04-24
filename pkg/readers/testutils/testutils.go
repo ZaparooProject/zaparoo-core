@@ -60,6 +60,19 @@ func AssertNoScan(t *testing.T, ch chan readers.Scan, timeout time.Duration) {
 	}
 }
 
+// WaitForCondition polls a condition function until it returns true or the timeout expires.
+// Returns true if the condition was met, false if timed out.
+func WaitForCondition(condition func() bool, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
+}
+
 // CreateTempDevicePath creates a temporary file to represent a device path for testing.
 // On Windows systems, it returns a COM port path. On Unix systems, it creates a temporary
 // file and registers cleanup with t.Cleanup().

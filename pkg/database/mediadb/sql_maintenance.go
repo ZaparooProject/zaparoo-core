@@ -72,65 +72,151 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 		return nil
 	}
 
-	// Create placeholders for IN clause
-	placeholders := prepareVariadic("?", ",", len(systemIDs))
-
-	// Convert systemIDs to interface slice for query parameters
-	args := make([]any, len(systemIDs))
+	// String placeholders for SystemID lookups (e.g. SlugResolutionCache keyed by string).
+	strPlaceholders := prepareVariadic("?", ",", len(systemIDs))
+	strArgs := make([]any, len(systemIDs))
 	for i, id := range systemIDs {
-		args[i] = id
+		strArgs[i] = id
 	}
 
-	// With proper foreign keys, just delete Systems
-	// CASCADE handles: MediaTitles → Media → MediaTags
-	//                  MediaTitles → SupportingMedia
-	//                  MediaTitles → MediaTitleTags
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	deleteStmt := fmt.Sprintf("DELETE FROM Systems WHERE SystemID IN (%s)", placeholders)
-	_, err := db.ExecContext(ctx, deleteStmt, args...)
+	// Pin to a single connection: PRAGMA foreign_keys is session-local, so the PRAGMA
+	// and the subsequent DELETEs must execute on the same connection.
+	conn, err := db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to delete systems: %w", err)
+		return fmt.Errorf("failed to acquire connection for system truncation: %w", err)
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Str("systems", fmt.Sprintf("%v", systemIDs)).
+				Msg("failed to release connection after system truncation")
+		}
+	}()
+
+	// Resolve SystemID strings → SystemDBID integers so subsequent statements
+	// use primary-key lookups instead of string scans.
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	rows, err := conn.QueryContext(ctx,
+		fmt.Sprintf("SELECT DBID FROM Systems WHERE SystemID IN (%s)", strPlaceholders), strArgs...)
+	if err != nil {
+		return fmt.Errorf("failed to resolve system DBIDs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var systemDBIDs []any
+	for rows.Next() {
+		var dbid int64
+		if scanErr := rows.Scan(&dbid); scanErr != nil {
+			return fmt.Errorf("failed to scan system DBID: %w", scanErr)
+		}
+		systemDBIDs = append(systemDBIDs, dbid)
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("failed to iterate system DBIDs: %w", err)
 	}
 
-	// Clean up orphaned tags (RESTRICT prevents cascade, so we handle these separately)
-	// Only deletes truly orphaned tags that aren't referenced anywhere
-	// IMPORTANT: Do NOT delete TagTypes during selective indexing - they are global infrastructure
-	// shared across all systems. Deleting them would break other systems' media that reference
-	// TagTypes not used by the system being reindexed (e.g., "Extension" TagType).
-	cleanupStmt := `
-		DELETE FROM Tags WHERE DBID NOT IN (
-			SELECT TagDBID FROM MediaTags WHERE TagDBID IS NOT NULL
-			UNION
-			SELECT TagDBID FROM MediaTitleTags WHERE TagDBID IS NOT NULL
-			UNION
-			SELECT TypeTagDBID FROM SupportingMedia WHERE TypeTagDBID IS NOT NULL
-		);
-	`
-	_, err = db.ExecContext(ctx, cleanupStmt)
-	if err != nil {
+	if len(systemDBIDs) == 0 {
+		return nil // None of the given systemIDs exist; nothing to do.
+	}
+
+	dbidPlaceholders := prepareVariadic("?", ",", len(systemDBIDs))
+
+	// Step 1: collect Tag DBIDs referenced by the target systems BEFORE any deletes.
+	// Only these tags can become orphans — bounding the later cleanup to this set
+	// avoids a full-table scan of MediaTags/MediaTitleTags/SupportingMedia.
+	if _, err = conn.ExecContext(ctx,
+		"CREATE TEMP TABLE IF NOT EXISTS _tts_candidate_tags (DBID INTEGER PRIMARY KEY)"); err != nil {
+		return fmt.Errorf("failed to create candidate tags temp table: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(context.Background(), "DROP TABLE IF EXISTS _tts_candidate_tags")
+	}()
+
+	// Each UNION branch needs its own copy of the system DBID args.
+	candidateArgs := append(append(append([]any{}, systemDBIDs...), systemDBIDs...), systemDBIDs...)
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, err = conn.ExecContext(ctx, fmt.Sprintf(`
+		INSERT OR IGNORE INTO _tts_candidate_tags (DBID)
+		    SELECT TagDBID FROM MediaTags
+		        WHERE MediaDBID IN (SELECT DBID FROM Media WHERE SystemDBID IN (%[1]s))
+		UNION
+		    SELECT TagDBID FROM MediaTitleTags
+		        WHERE MediaTitleDBID IN (SELECT DBID FROM MediaTitles WHERE SystemDBID IN (%[1]s))
+		UNION
+		    SELECT TypeTagDBID FROM SupportingMedia
+		        WHERE MediaTitleDBID IN (SELECT DBID FROM MediaTitles WHERE SystemDBID IN (%[1]s))`,
+		dbidPlaceholders), candidateArgs...); err != nil {
+		return fmt.Errorf("failed to collect candidate tags: %w", err)
+	}
+
+	// Disable FK enforcement to delete children in explicit order without CASCADE overhead.
+	// On MiSTer SD card, cascading 50K–200K child rows is orders of magnitude slower than
+	// scoped explicit DELETEs.
+	if _, err = conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return fmt.Errorf("failed to disable foreign keys: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON")
+	}()
+
+	// Delete children in reverse dependency order, scoped to target SystemDBIDs.
+	// MediaTags references Media(DBID) — must route through Media.SystemDBID.
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, err = conn.ExecContext(ctx, fmt.Sprintf(
+		"DELETE FROM MediaTags WHERE MediaDBID IN (SELECT DBID FROM Media WHERE SystemDBID IN (%s))",
+		dbidPlaceholders), systemDBIDs...); err != nil {
+		return fmt.Errorf("failed to delete MediaTags: %w", err)
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, err = conn.ExecContext(ctx, fmt.Sprintf(
+		"DELETE FROM MediaTitleTags WHERE MediaTitleDBID IN (SELECT DBID FROM MediaTitles WHERE SystemDBID IN (%s))",
+		dbidPlaceholders), systemDBIDs...); err != nil {
+		return fmt.Errorf("failed to delete MediaTitleTags: %w", err)
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, err = conn.ExecContext(ctx, fmt.Sprintf(
+		"DELETE FROM SupportingMedia WHERE MediaTitleDBID IN (SELECT DBID FROM MediaTitles WHERE SystemDBID IN (%s))",
+		dbidPlaceholders), systemDBIDs...); err != nil {
+		return fmt.Errorf("failed to delete SupportingMedia: %w", err)
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, err = conn.ExecContext(ctx,
+		fmt.Sprintf("DELETE FROM Media WHERE SystemDBID IN (%s)", dbidPlaceholders), systemDBIDs...); err != nil {
+		return fmt.Errorf("failed to delete Media: %w", err)
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, err = conn.ExecContext(ctx,
+		fmt.Sprintf("DELETE FROM MediaTitles WHERE SystemDBID IN (%s)", dbidPlaceholders), systemDBIDs...); err != nil {
+		return fmt.Errorf("failed to delete MediaTitles: %w", err)
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, err = conn.ExecContext(ctx,
+		fmt.Sprintf("DELETE FROM Systems WHERE DBID IN (%s)", dbidPlaceholders), systemDBIDs...); err != nil {
+		return fmt.Errorf("failed to delete Systems: %w", err)
+	}
+
+	// Orphan tag cleanup: delete Tags that were only referenced by the truncated systems.
+	// NOT EXISTS uses the mediatags_tag_media_idx / MediaTitleTags PK / SupportingMedia index
+	// for O(log n) lookups rather than a full-table scan.
+	// IMPORTANT: TagTypes are deliberately NOT deleted — they are global infrastructure shared
+	// across all systems; deleting them would break remaining systems' tag references.
+	if _, err = conn.ExecContext(ctx, `
+		DELETE FROM Tags
+		    WHERE DBID IN (SELECT DBID FROM _tts_candidate_tags)
+		      AND NOT EXISTS (SELECT 1 FROM MediaTags       WHERE TagDBID     = Tags.DBID)
+		      AND NOT EXISTS (SELECT 1 FROM MediaTitleTags  WHERE TagDBID     = Tags.DBID)
+		      AND NOT EXISTS (SELECT 1 FROM SupportingMedia WHERE TypeTagDBID = Tags.DBID)`); err != nil {
 		return fmt.Errorf("failed to clean up orphaned tags: %w", err)
 	}
 
-	// Invalidate media count cache since system data was modified
-	_, err = db.ExecContext(ctx, "DELETE FROM MediaCountCache")
-	if err != nil {
-		// Log warning but don't fail the operation - cache invalidation is not critical
+	// Cache invalidation — not FK-dependent, so these run after PRAGMA FK ON restores.
+	if _, err = conn.ExecContext(ctx, "DELETE FROM MediaCountCache"); err != nil {
 		log.Warn().Err(err).Msg("failed to invalidate media count cache during system truncation")
 	}
-
-	// Invalidate system tags cache since system data was modified
-	_, err = db.ExecContext(ctx, "DELETE FROM SystemTagsCache")
-	if err != nil {
-		// Log warning but don't fail the operation - cache invalidation is not critical
+	if _, err = conn.ExecContext(ctx, "DELETE FROM SystemTagsCache"); err != nil {
 		log.Warn().Err(err).Msg("failed to invalidate system tags cache during system truncation")
 	}
-
-	// Invalidate slug resolution cache for the affected systems
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	slugCacheDeleteStmt := fmt.Sprintf("DELETE FROM SlugResolutionCache WHERE SystemID IN (%s)", placeholders)
-	_, err = db.ExecContext(ctx, slugCacheDeleteStmt, args...)
-	if err != nil {
-		// Log warning but don't fail the operation - cache invalidation is not critical
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	slugStmt := fmt.Sprintf("DELETE FROM SlugResolutionCache WHERE SystemID IN (%s)", strPlaceholders)
+	if _, err = conn.ExecContext(ctx, slugStmt, strArgs...); err != nil {
 		log.Warn().Err(err).Msg("failed to invalidate slug resolution cache during system truncation")
 	}
 

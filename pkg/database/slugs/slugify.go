@@ -124,6 +124,39 @@ func isASCII(s string) bool {
 	return true
 }
 
+// isASCIIAlnum checks if a byte is an ASCII letter or digit.
+func isASCIIAlnum(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
+}
+
+// stripNonAlphanumASCII removes all characters that aren't a-z or 0-9.
+// This is equivalent to nonAlphanumRegex.ReplaceAllString(s, "") but avoids
+// regex overhead for the common case of ASCII-only lowercase strings.
+func stripNonAlphanumASCII(s string) string {
+	// Check if any stripping is needed (common case: already clean)
+	needsStrip := false
+	for i := range len(s) {
+		b := s[i]
+		if (b < 'a' || b > 'z') && (b < '0' || b > '9') {
+			needsStrip = true
+			break
+		}
+	}
+	if !needsStrip {
+		return s
+	}
+
+	var buf strings.Builder
+	buf.Grow(len(s))
+	for i := range len(s) {
+		b := s[i]
+		if (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') {
+			_ = buf.WriteByte(b)
+		}
+	}
+	return buf.String()
+}
+
 // NormalizeWidth performs width normalization on a string.
 // Converts fullwidth ASCII characters to halfwidth (for Latin text processing).
 // Converts halfwidth CJK characters to fullwidth (for consistent display and matching).
@@ -310,12 +343,8 @@ func SlugifyWithTokens(mediaType MediaType, input string) SlugifyResult {
 	// Extract tokens using shared tokenization logic
 	tokens := tokenizeNormalized(s)
 
-	// Stage 14: Apply final character filtering to create slug
-	// This is the existing Stage 14 logic from Slugify()
-	asciiSlug := nonAlphanumRegex.ReplaceAllString(s, "")
-	unicodeSlug := nonAlphanumKeepUnicodeRegex.ReplaceAllString(s, "")
-
-	var slug string
+	// Stage 14: Apply final character filtering to create slug.
+	// Only run the regex that will actually be used, based on script detection.
 	var script ScriptType
 	if ctx.scriptCached {
 		script = ctx.script
@@ -323,10 +352,13 @@ func SlugifyWithTokens(mediaType MediaType, input string) SlugifyResult {
 		script = DetectScript(s)
 	}
 
+	var slug string
 	if needsUnicodeSlug(script) {
-		slug = strings.TrimSpace(unicodeSlug)
+		slug = strings.TrimSpace(nonAlphanumKeepUnicodeRegex.ReplaceAllString(s, ""))
 	} else {
-		slug = strings.TrimSpace(asciiSlug)
+		// Fast path: manually strip non-alphanumeric characters instead of using regex.
+		// The input is already lowercased (Stage 6), so we only need to keep a-z and 0-9.
+		slug = stripNonAlphanumASCII(s)
 	}
 
 	return SlugifyResult{
@@ -392,33 +424,53 @@ func NormalizeSymbolsAndSeparators(s string) string {
 	// NOTE: Hyphens WITHOUT spaces around them are kept (for compound words like "Spider-Man")
 	// " - " (space-hyphen-space) was already handled by Stage 5 (SplitTitle)
 	// Process character by character to handle context-sensitive hyphen normalization
+
+	// Fast path: if no separators or hyphens are present, return as-is
+	if !strings.ContainsAny(s, ":_/\\,;-") {
+		return s
+	}
+
 	var result strings.Builder
 	result.Grow(len(s))
 
-	inputRunes := []rune(s)
-	for i, r := range inputRunes {
-		switch r {
-		case ':', '_', '/', '\\', ',', ';':
-			// Always convert these to spaces
-			_, _ = result.WriteRune(' ')
-		case '-':
-			// Note: Unicode hyphen variants (\u2010, \u2011) already normalized to - in Stage 2
-			// Keep hyphen if it's between letters/numbers (compound word like "Spider-Man")
-			// Convert to space if it's isolated or has spaces around it
-			prevIsAlnum := i > 0 &&
-				(unicode.IsLetter(inputRunes[i-1]) || unicode.IsNumber(inputRunes[i-1]))
-			nextIsAlnum := i < len(inputRunes)-1 &&
-				(unicode.IsLetter(inputRunes[i+1]) || unicode.IsNumber(inputRunes[i+1]))
-
-			if prevIsAlnum && nextIsAlnum {
-				// Keep hyphen for compound words: "Spider-Man", "F-Zero"
-				_, _ = result.WriteRune(r)
-			} else {
-				// Convert to space for standalone or spaced hyphens
-				_, _ = result.WriteRune(' ')
+	// Use byte-level processing for ASCII strings to avoid []rune allocation
+	if isASCII(s) {
+		for i := range len(s) {
+			b := s[i]
+			switch b {
+			case ':', '_', '/', '\\', ',', ';':
+				_ = result.WriteByte(' ')
+			case '-':
+				prevIsAlnum := i > 0 && isASCIIAlnum(s[i-1])
+				nextIsAlnum := i < len(s)-1 && isASCIIAlnum(s[i+1])
+				if prevIsAlnum && nextIsAlnum {
+					_ = result.WriteByte('-')
+				} else {
+					_ = result.WriteByte(' ')
+				}
+			default:
+				_ = result.WriteByte(b)
 			}
-		default:
-			_, _ = result.WriteRune(r)
+		}
+	} else {
+		inputRunes := []rune(s)
+		for i, r := range inputRunes {
+			switch r {
+			case ':', '_', '/', '\\', ',', ';':
+				_, _ = result.WriteRune(' ')
+			case '-':
+				prevIsAlnum := i > 0 &&
+					(unicode.IsLetter(inputRunes[i-1]) || unicode.IsNumber(inputRunes[i-1]))
+				nextIsAlnum := i < len(inputRunes)-1 &&
+					(unicode.IsLetter(inputRunes[i+1]) || unicode.IsNumber(inputRunes[i+1]))
+				if prevIsAlnum && nextIsAlnum {
+					_, _ = result.WriteRune(r)
+				} else {
+					_, _ = result.WriteRune(' ')
+				}
+			default:
+				_, _ = result.WriteRune(r)
+			}
 		}
 	}
 

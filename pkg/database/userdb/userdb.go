@@ -38,7 +38,8 @@ import (
 
 var ErrNullSQL = errors.New("UserDB is not connected")
 
-const sqliteConnParams = "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000"
+const sqliteConnParams = "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000" +
+	"&_cache_size=-512&_mmap_size=0"
 
 type UserDB struct {
 	sql *sql.DB
@@ -157,7 +158,7 @@ func (db *UserDB) AddHistory(entry *database.HistoryEntry) error {
 	return sqlAddHistory(db.ctx, db.sql, *entry)
 }
 
-func (db *UserDB) GetHistory(lastID int) ([]database.HistoryEntry, error) {
+func (db *UserDB) GetHistory(lastID int64) ([]database.HistoryEntry, error) {
 	return sqlGetHistoryWithOffset(db.ctx, db.sql, lastID)
 }
 

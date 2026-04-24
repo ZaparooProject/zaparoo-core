@@ -22,6 +22,7 @@ package userdb
 import (
 	"context"
 	"database/sql"
+	"math"
 	"testing"
 	"time"
 
@@ -178,7 +179,7 @@ func TestSqlGetHistoryWithOffset_NoRows(t *testing.T) {
 
 	mock.ExpectPrepare(`select.*from History.*where DBID.*order by.*limit`).
 		ExpectQuery().
-		WithArgs(2147483646). // MaxInt32-1: sentinel value when lastID=0 to get latest records
+		WithArgs(int64(math.MaxInt64)). // sentinel value when lastID=0 to get latest records
 		WillReturnRows(rows)
 
 	result, err := sqlGetHistoryWithOffset(context.Background(), db, 0)
@@ -330,10 +331,9 @@ func TestSqlDeleteMapping_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectPrepare(`delete from Mappings where DBID`).
-		ExpectExec().
+	mock.ExpectExec(`delete from Mappings where DBID`).
 		WithArgs(int64(123)).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err = sqlDeleteMapping(context.Background(), db, 123)
 	require.NoError(t, err)
@@ -346,14 +346,13 @@ func TestSqlDeleteMapping_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectPrepare(`delete from Mappings where DBID`).
-		ExpectExec().
+	mock.ExpectExec(`delete from Mappings where DBID`).
 		WithArgs(int64(999)).
-		WillReturnError(sqlmock.ErrCancelled)
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err = sqlDeleteMapping(context.Background(), db, 999)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to execute mapping delete")
+	assert.Contains(t, err.Error(), "mapping not found: 999")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -684,14 +683,18 @@ func TestSqlGetZapLinkCache_NotFound(t *testing.T) {
 
 // Database Management Function Tests
 
+// TestSqlTruncate_Success pins that sqlTruncate wipes every user table
+// (History, Mappings, Clients) and runs VACUUM. The Clients clause is
+// load-bearing: paired clients must not survive a Truncate, otherwise
+// auth tokens would outlive the data the user thought they erased.
 func TestSqlTruncate_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectExec(`delete from History.*delete from Mappings.*vacuum`).
-		WillReturnResult(sqlmock.NewResult(0, 2)) // 2 tables affected
+	mock.ExpectExec(`(?s)delete from History.*delete from Mappings.*delete from Clients.*vacuum`).
+		WillReturnResult(sqlmock.NewResult(0, 3)) // 3 tables affected
 
 	err = sqlTruncate(context.Background(), db)
 	require.NoError(t, err)
@@ -704,7 +707,7 @@ func TestSqlTruncate_DatabaseError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectExec(`delete from History.*delete from Mappings.*vacuum`).
+	mock.ExpectExec(`(?s)delete from History.*delete from Mappings.*delete from Clients.*vacuum`).
 		WillReturnError(sqlmock.ErrCancelled)
 
 	err = sqlTruncate(context.Background(), db)

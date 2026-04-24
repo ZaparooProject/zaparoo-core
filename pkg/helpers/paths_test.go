@@ -20,6 +20,7 @@
 package helpers
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -527,10 +528,6 @@ func TestGetPathExt(t *testing.T) {
 	}
 }
 
-// Note: PathIsLauncher tests are in the integration tests (pkg/database/mediascanner)
-// to avoid import cycles with the platforms package. The function is thoroughly tested
-// through those integration tests which exercise all code paths.
-
 // TestGetPathInfo_VirtualPathEdgeCases tests edge cases in GetPathInfo with virtual paths
 // that could cause issues with encoding/decoding, parsing, or display
 func TestGetPathInfo_VirtualPathEdgeCases(t *testing.T) {
@@ -641,10 +638,10 @@ func TestGetPathInfo_VirtualPathEdgeCases(t *testing.T) {
 			},
 			notes: "HTTP URLs with ports should decode path component",
 		},
-		{
+		{ //nolint:gosec // G101: test data with credentials in URL
 			name: "http_with_userinfo",
 			path: "http://user:pass@server.com/File%20Name.iso",
-			expected: PathInfo{
+			expected: PathInfo{ //nolint:gosec // G101: test data with credentials in URL
 				Path:      "http://user:pass@server.com/File%20Name.iso",
 				Filename:  "File Name.iso",
 				Extension: ".iso",
@@ -855,6 +852,55 @@ func TestGetPathInfo_VirtualPathNoPanic(t *testing.T) {
 				result := GetPathInfo(path)
 				t.Logf("Malformed path handled: %q → Filename=%q", path, result.Filename)
 			}, "Should not panic on malformed path: %s", path)
+		})
+	}
+}
+
+func TestResolveRelativePath(t *testing.T) {
+	t.Parallel()
+
+	exeDir := ExeDir()
+	if exeDir == "" {
+		t.Skip("ExeDir() returned empty, cannot test relative path resolution")
+	}
+
+	tests := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		{
+			name:     "empty string unchanged",
+			path:     "",
+			expected: "",
+		},
+		{
+			name:     "absolute path unchanged",
+			path:     exeDir,
+			expected: exeDir,
+		},
+		{
+			name:     "relative path resolved to ExeDir",
+			path:     filepath.Join("roms", "nes"),
+			expected: filepath.Join(exeDir, "roms", "nes"),
+		},
+		{
+			name:     "dot relative path resolved",
+			path:     "./games",
+			expected: filepath.Join(exeDir, "games"),
+		},
+		{
+			name:     "single filename resolved",
+			path:     "roms",
+			expected: filepath.Join(exeDir, "roms"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ResolveRelativePath(tt.path)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

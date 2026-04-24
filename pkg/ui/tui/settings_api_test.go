@@ -82,7 +82,7 @@ func TestDefaultSettingsService_UpdateSettings(t *testing.T) {
 	svc := NewSettingsService(mockClient)
 
 	audioFeedback := true
-	err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+	err := svc.UpdateSettings(context.Background(), &models.UpdateSettingsParams{
 		AudioScanFeedback: &audioFeedback,
 	})
 
@@ -99,7 +99,7 @@ func TestDefaultSettingsService_UpdateSettings_Error(t *testing.T) {
 	svc := NewSettingsService(mockClient)
 
 	audioFeedback := true
-	err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+	err := svc.UpdateSettings(context.Background(), &models.UpdateSettingsParams{
 		AudioScanFeedback: &audioFeedback,
 	})
 
@@ -170,7 +170,7 @@ func TestMockSettingsService_UpdateSettings(t *testing.T) {
 	mockSvc.SetupUpdateSettingsSuccess()
 
 	audioFeedback := false
-	err := mockSvc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+	err := mockSvc.UpdateSettings(context.Background(), &models.UpdateSettingsParams{
 		AudioScanFeedback: &audioFeedback,
 	})
 
@@ -244,7 +244,7 @@ func TestSettingsService_Integration_WithMockClient(t *testing.T) {
 
 	// Update settings
 	audioFeedback := true
-	err = svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+	err = svc.UpdateSettings(context.Background(), &models.UpdateSettingsParams{
 		AudioScanFeedback: &audioFeedback,
 	})
 	require.NoError(t, err)
@@ -265,7 +265,7 @@ func TestSettingsService_UpdateMultipleFields(t *testing.T) {
 	scanMode := "hold"
 	exitDelay := float32(10)
 
-	err := svc.UpdateSettings(context.Background(), models.UpdateSettingsParams{
+	err := svc.UpdateSettings(context.Background(), &models.UpdateSettingsParams{
 		AudioScanFeedback:    &audioFeedback,
 		DebugLogging:         &debugLogging,
 		ReadersScanMode:      &scanMode,

@@ -158,7 +158,7 @@ func TestOpen_InvalidDriverID(t *testing.T) {
 		Path:   "/tmp/test.txt",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid reader id")
 }
@@ -175,7 +175,7 @@ func TestOpen_RelativePath(t *testing.T) {
 		Path:   "relative/path/token.txt", // Not absolute
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must be absolute")
 }
@@ -195,7 +195,7 @@ func TestOpen_NonExistentParentDirectory(t *testing.T) {
 		Path:   nonExistentPath,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to stat parent directory")
 }
@@ -220,7 +220,7 @@ func TestOpen_CreatesFileIfNotExists(t *testing.T) {
 		Path:   tokenFile,
 	}
 
-	err = reader.Open(device, scanQueue)
+	err = reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -249,7 +249,7 @@ func TestOpen_InitialFileContent_TokenDetected(t *testing.T) {
 		Path:   tokenFile,
 	}
 
-	err = reader.Open(device, scanQueue)
+	err = reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -282,7 +282,7 @@ func TestOpen_FileContentChange_NewToken(t *testing.T) {
 		Path:   tokenFile,
 	}
 
-	err = reader.Open(device, scanQueue)
+	err = reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -324,7 +324,7 @@ func TestOpen_FileBecomesEmpty_TokenRemoval(t *testing.T) {
 		Path:   tokenFile,
 	}
 
-	err = reader.Open(device, scanQueue)
+	err = reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -364,7 +364,7 @@ func TestOpen_DuplicateContent_Ignored(t *testing.T) {
 		Path:   tokenFile,
 	}
 
-	err = reader.Open(device, scanQueue)
+	err = reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -402,7 +402,7 @@ func TestOpen_EmptyFileInitially_NoToken(t *testing.T) {
 		Path:   tokenFile,
 	}
 
-	err = reader.Open(device, scanQueue)
+	err = reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -440,7 +440,7 @@ func TestOpen_WhitespaceHandling(t *testing.T) {
 		Path:   tokenFile,
 	}
 
-	err = reader.Open(device, scanQueue)
+	err = reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -471,7 +471,7 @@ func TestClose_StopsPolling(t *testing.T) {
 		Path:   tokenFile,
 	}
 
-	err = reader.Open(device, scanQueue)
+	err = reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// Verify reader is connected
@@ -534,7 +534,7 @@ func TestOpen_ConsecutiveReadErrors_SendsReaderError(t *testing.T) {
 		Path:   tokenFile,
 	}
 
-	err = reader.Open(device, scanQueue)
+	err = reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// First scan: initial token detected

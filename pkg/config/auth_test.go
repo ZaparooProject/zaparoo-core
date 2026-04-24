@@ -22,6 +22,7 @@ package config
 import (
 	"testing"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -604,4 +605,198 @@ func TestLoadAPIKeysFromData_InvalidTOML(t *testing.T) {
 
 	result := LoadAPIKeysFromData([]byte("this is not valid toml [[["))
 	assert.Nil(t, result)
+}
+
+func TestMarshalAuthFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("credentials only", func(t *testing.T) {
+		t.Parallel()
+
+		creds := map[string]CredentialEntry{
+			"https://api.example.com": {Bearer: "token123"},
+		}
+
+		data, err := marshalAuthFile(creds, nil)
+		require.NoError(t, err)
+
+		// Verify round-trip
+		result := LoadAuthFromData(data)
+		require.Len(t, result, 1)
+		assert.Equal(t, "token123", result["https://api.example.com"].Bearer)
+	})
+
+	t.Run("credentials and api keys", func(t *testing.T) {
+		t.Parallel()
+
+		creds := map[string]CredentialEntry{
+			"https://api.example.com": {Bearer: "token123"},
+		}
+		keys := []string{"key1", "key2"}
+
+		data, err := marshalAuthFile(creds, keys)
+		require.NoError(t, err)
+
+		// Verify round-trip
+		result := LoadAuthFromData(data)
+		require.Len(t, result, 1)
+		assert.Equal(t, "token123", result["https://api.example.com"].Bearer)
+
+		resultKeys := LoadAPIKeysFromData(data)
+		assert.Equal(t, []string{"key1", "key2"}, resultKeys)
+	})
+
+	t.Run("multiple credentials", func(t *testing.T) {
+		t.Parallel()
+
+		creds := map[string]CredentialEntry{
+			"https://api.example.com": {Bearer: "token1"},
+			"https://zpr.au":          {Bearer: "token2"},
+		}
+
+		data, err := marshalAuthFile(creds, nil)
+		require.NoError(t, err)
+
+		result := LoadAuthFromData(data)
+		require.Len(t, result, 2)
+		assert.Equal(t, "token1", result["https://api.example.com"].Bearer)
+		assert.Equal(t, "token2", result["https://zpr.au"].Bearer)
+	})
+
+	t.Run("username and password credentials", func(t *testing.T) {
+		t.Parallel()
+
+		creds := map[string]CredentialEntry{
+			"https://api.example.com": {Username: "user", Password: "pass"},
+		}
+
+		data, err := marshalAuthFile(creds, nil)
+		require.NoError(t, err)
+
+		result := LoadAuthFromData(data)
+		require.Len(t, result, 1)
+		assert.Equal(t, "user", result["https://api.example.com"].Username)
+		assert.Equal(t, "pass", result["https://api.example.com"].Password)
+	})
+
+	t.Run("empty credentials and keys", func(t *testing.T) {
+		t.Parallel()
+
+		data, err := marshalAuthFile(nil, nil)
+		require.NoError(t, err)
+
+		result := LoadAuthFromData(data)
+		assert.Empty(t, result)
+	})
+}
+
+// newTestConfigInstance creates a minimal config Instance for testing with
+// an in-memory filesystem. It writes a valid config.toml so Load() succeeds.
+func newTestConfigInstance(t *testing.T) *Instance {
+	t.Helper()
+	fs := afero.NewMemMapFs()
+	cfg, err := NewConfigWithFs(t.TempDir(), BaseDefaults, fs)
+	require.NoError(t, err)
+	return cfg
+}
+
+// readAuthFromInstance reads auth.toml from the config instance's filesystem
+// and returns the parsed credential entries. Avoids using global atomic state
+// which causes races in parallel tests.
+func readAuthFromInstance(t *testing.T, cfg *Instance) map[string]CredentialEntry {
+	t.Helper()
+	data, err := afero.ReadFile(cfg.getFs(), cfg.authPath)
+	require.NoError(t, err)
+	return LoadAuthFromData(data)
+}
+
+// readAPIKeysFromInstance reads API keys from auth.toml on the config
+// instance's filesystem.
+func readAPIKeysFromInstance(t *testing.T, cfg *Instance) []string {
+	t.Helper()
+	data, err := afero.ReadFile(cfg.getFs(), cfg.authPath)
+	require.NoError(t, err)
+	return LoadAPIKeysFromData(data)
+}
+
+func TestSaveAuthEntry_CreateNewFile(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	err := cfg.SaveAuthEntry("https://api.zaparoo.com", CredentialEntry{
+		Bearer: "test-token",
+	})
+	require.NoError(t, err)
+
+	creds := readAuthFromInstance(t, cfg)
+	require.Len(t, creds, 1)
+	assert.Equal(t, "test-token", creds["https://api.zaparoo.com"].Bearer)
+}
+
+func TestSaveAuthEntry_UpdateExisting(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	err := cfg.SaveAuthEntry("https://api.zaparoo.com", CredentialEntry{
+		Bearer: "old-token",
+	})
+	require.NoError(t, err)
+
+	err = cfg.SaveAuthEntry("https://api.zaparoo.com", CredentialEntry{
+		Bearer: "new-token",
+	})
+	require.NoError(t, err)
+
+	creds := readAuthFromInstance(t, cfg)
+	assert.Equal(t, "new-token", creds["https://api.zaparoo.com"].Bearer)
+}
+
+func TestSaveAuthEntry_PreservesExistingEntries(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	err := cfg.SaveAuthEntry("https://api.zaparoo.com", CredentialEntry{
+		Bearer: "token1",
+	})
+	require.NoError(t, err)
+
+	err = cfg.SaveAuthEntry("https://zpr.au", CredentialEntry{
+		Bearer: "token2",
+	})
+	require.NoError(t, err)
+
+	creds := readAuthFromInstance(t, cfg)
+	require.Len(t, creds, 2)
+	assert.Equal(t, "token1", creds["https://api.zaparoo.com"].Bearer)
+	assert.Equal(t, "token2", creds["https://zpr.au"].Bearer)
+}
+
+func TestSaveAuthEntry_PreservesAPIKeys(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfigInstance(t)
+
+	// Write auth.toml with API keys and a credential using creds format
+	existingData := []byte(`api_keys = ["key1", "key2"]
+
+[creds."https://existing.com"]
+bearer = "existing-token"
+`)
+	err := afero.WriteFile(cfg.getFs(), cfg.authPath, existingData, 0o600)
+	require.NoError(t, err)
+
+	err = cfg.SaveAuthEntry("https://api.zaparoo.com", CredentialEntry{
+		Bearer: "new-token",
+	})
+	require.NoError(t, err)
+
+	keys := readAPIKeysFromInstance(t, cfg)
+	assert.Equal(t, []string{"key1", "key2"}, keys)
+
+	creds := readAuthFromInstance(t, cfg)
+	assert.Equal(t, "existing-token", creds["https://existing.com"].Bearer)
+	assert.Equal(t, "new-token", creds["https://api.zaparoo.com"].Bearer)
 }

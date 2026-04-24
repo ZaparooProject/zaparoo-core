@@ -330,6 +330,10 @@ func (p *Platform) LaunchMedia(
 	return nil
 }
 
+func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
+	return nil, platforms.ErrNotSupported
+}
+
 func (p *Platform) ForwardCmd(env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	if f, ok := commandsMappings[env.Cmd.Name]; ok {
 		return f(p, env)
@@ -348,6 +352,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
+}
+
+func (*Platform) ManagedByPackageManager() bool {
+	return false
 }
 
 func (*Platform) ShowNotice(

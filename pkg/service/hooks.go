@@ -22,11 +22,8 @@ package service
 import (
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
@@ -34,22 +31,19 @@ import (
 
 // runHook executes a hook script with the standard playlist from state.
 // Returns error if the script fails (for blocking hooks) or nil on success.
+// The scanned/launching params provide optional context for the expression env.
 func runHook(
-	pl platforms.Platform,
-	cfg *config.Instance,
-	st *state.State,
-	db *database.Database,
-	lsq chan<- *tokens.Token,
-	plq chan *playlists.Playlist,
+	svc *ServiceContext,
 	hookName string,
 	script string,
-	exprOpts *zapscript.ExprEnvOptions,
+	scanned *gozapscript.ExprEnvScanned,
+	launching *gozapscript.ExprEnvLaunching,
 ) error {
 	log.Info().Msgf("running %s: %s", hookName, script)
 
 	plsc := playlists.PlaylistController{
-		Active: st.GetActivePlaylist(),
-		Queue:  plq,
+		Active: svc.State.GetActivePlaylist(),
+		Queue:  svc.PlaylistQueue,
 	}
 
 	t := tokens.Token{
@@ -58,12 +52,6 @@ func runHook(
 		Source:   tokens.SourceHook,
 	}
 
-	// Ensure InHookContext is set to prevent recursive hook execution
-	hookOpts := &zapscript.ExprEnvOptions{InHookContext: true}
-	if exprOpts != nil {
-		hookOpts.Scanned = exprOpts.Scanned
-		hookOpts.Launching = exprOpts.Launching
-	}
-
-	return runTokenZapScript(pl, cfg, st, t, db, lsq, plsc, hookOpts)
+	hookEnv := zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, scanned, launching)
+	return runTokenZapScript(svc, t, plsc, &hookEnv, true)
 }

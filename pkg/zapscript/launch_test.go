@@ -20,6 +20,8 @@
 package zapscript
 
 import (
+	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,12 +44,11 @@ func TestCmdLaunch_SystemArgAppliesDefaults(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 
 	cfg := &config.Instance{}
-	cfg.SetSystemDefaultsForTesting([]config.SystemsDefault{
-		{
-			System:   "genesis",
-			Launcher: "genesis-retroarch",
-		},
-	})
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-retroarch"
+`))
 
 	genesisLauncher := platforms.Launcher{
 		ID:       "genesis-retroarch",
@@ -93,12 +94,11 @@ func TestCmdLaunch_LauncherArgOverridesSystemArg(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 
 	cfg := &config.Instance{}
-	cfg.SetSystemDefaultsForTesting([]config.SystemsDefault{
-		{
-			System:   "genesis",
-			Launcher: "genesis-default",
-		},
-	})
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-default"
+`))
 
 	explicitLauncher := platforms.Launcher{
 		ID:       "genesis-explicit",
@@ -208,12 +208,11 @@ func TestCmdLaunch_DelegationToTitlePreservesLauncher(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 
 	cfg := &config.Instance{}
-	cfg.SetSystemDefaultsForTesting([]config.SystemsDefault{
-		{
-			System:   "snes",
-			Launcher: "snes-retroarch",
-		},
-	})
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "snes"
+launcher = "snes-retroarch"
+`))
 
 	snesLauncher := platforms.Launcher{
 		ID:       "snes-retroarch",
@@ -272,12 +271,11 @@ func TestCmdLaunch_SystemPathFormatUsesDefaultLauncher(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "game.sfc"), []byte("test"), 0o600))
 
 	cfg := &config.Instance{}
-	cfg.SetSystemDefaultsForTesting([]config.SystemsDefault{
-		{
-			System:   "snes",
-			Launcher: "snes-retroarch",
-		},
-	})
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "snes"
+launcher = "snes-retroarch"
+`))
 
 	snesLauncher := platforms.Launcher{
 		ID:       "snes-retroarch",
@@ -349,4 +347,188 @@ func TestCmdLaunch_FileNotFound(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrFileNotFound, "should return ErrFileNotFound for missing file")
 	mockPlatform.AssertExpectations(t)
+}
+
+// TestCmdRandom_DoubleSlashPathCleaned verifies that a double-slash prefix
+// (e.g. from **launch.random://path) is normalized before querying the DB.
+func TestCmdRandom_DoubleSlashPathCleaned(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	// Expect the cleaned path (single slash) in the PathPrefix
+	mockMediaDB.On("RandomGameWithQuery",
+		mock.MatchedBy(func(q *database.MediaQuery) bool {
+			return q.PathPrefix == "/media/fat/_#Insert-Coin/_#Essentials"
+		}),
+	).Return(database.SearchResult{
+		Path:     "/media/fat/_#Insert-Coin/_#Essentials/game.zip",
+		SystemID: "arcade",
+	}, nil)
+
+	mockPlatform.On("LaunchMedia", cfg,
+		"/media/fat/_#Insert-Coin/_#Essentials/game.zip",
+		(*platforms.Launcher)(nil),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			// Double slash — as parsed from **launch.random://media/fat/...
+			Args: []string{"//media/fat/_#Insert-Coin/_#Essentials"},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestCmdRandom_AbsolutePathFallbackToFilesystem is a regression test for #576.
+// When an absolute path has no entries in the media database, launch.random
+// should fall back to picking a random file directly from disk.
+func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
+	t.Parallel()
+
+	// Create temp dir with some files and a subdirectory
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "game1.vhd"), []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "game2.vhd"), []byte("x"), 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o750))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	// Database has no entries for this path
+	mockMediaDB.On("RandomGameWithQuery",
+		mock.MatchedBy(func(q *database.MediaQuery) bool {
+			return q.PathPrefix == dir
+		}),
+	).Return(database.SearchResult{}, sql.ErrNoRows)
+
+	// Accept launch of either file (but not the subdirectory)
+	mockPlatform.On("LaunchMedia", cfg,
+		mock.MatchedBy(func(path string) bool {
+			return path == filepath.Join(dir, "game1.vhd") ||
+				path == filepath.Join(dir, "game2.vhd")
+		}),
+		(*platforms.Launcher)(nil),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{dir},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_AbsolutePathFallback_NonExistentPath(t *testing.T) {
+	t.Parallel()
+
+	// Use a subdirectory of TempDir so the path is absolute on all platforms
+	nonexistent := filepath.Join(t.TempDir(), "nonexistent")
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything).
+		Return(database.SearchResult{}, sql.ErrNoRows)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{nonexistent},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	_, err := cmdRandom(mockPlatform, env)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read path")
+}
+
+func TestCmdRandom_AbsolutePathFallback_OnlySubdirectories(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir1"), 0o750))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir2"), 0o750))
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything).
+		Return(database.SearchResult{}, sql.ErrNoRows)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{dir},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	_, err := cmdRandom(mockPlatform, env)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no files found in")
+}
+
+func TestCmdRandom_AbsolutePathDBError_NoFallback(t *testing.T) {
+	t.Parallel()
+
+	// Use TempDir so the path is absolute on all platforms (including Windows)
+	dir := t.TempDir()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything).
+		Return(database.SearchResult{}, errors.New("connection lost"))
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{dir},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	_, err := cmdRandom(mockPlatform, env)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection lost")
 }

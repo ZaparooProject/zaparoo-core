@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +38,8 @@ func TestCmdExecute_ZaparooEnvironmentSet(t *testing.T) {
 
 	// Create a minimal config that allows execute
 	cfg := &config.Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{".*"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = [".*"]`))
 
 	// Create expression env
 	exprEnv := &zapscript.ArgExprEnv{
@@ -89,7 +91,8 @@ func TestCmdExecute_ZaparooEnvironmentContainsExpectedFields(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{".*"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = [".*"]`))
 
 	exprEnv := &zapscript.ArgExprEnv{
 		Platform: "mister",
@@ -132,7 +135,8 @@ func TestCmdExecute_StderrCapture(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{".*"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = [".*"]`))
 
 	// Create a command that writes to stderr and exits with error
 	// Use bash with proper quoting
@@ -166,7 +170,8 @@ func TestCmdExecute_UnsafeBlocked(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{".*"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = [".*"]`))
 
 	cmd := zapscript.Command{
 		Name: "execute",
@@ -214,7 +219,8 @@ func TestCmdExecute_EmptyArgs(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{".*"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = [".*"]`))
 
 	cmd := zapscript.Command{
 		Name: "execute",
@@ -230,6 +236,58 @@ func TestCmdExecute_EmptyArgs(t *testing.T) {
 	_, err := cmdExecute(nil, env)
 
 	require.Error(t, err, "execute should fail with no args")
+}
+
+// TestCmdExecute_SourceControlRequiresAllowList verifies that commands from
+// SourceControl are subject to the execute allowlist (no bypass).
+func TestCmdExecute_SourceControlRequiresAllowList(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	// No allowlist set — all commands should be blocked
+
+	cmd := zapscript.Command{
+		Name: "execute",
+		Args: []string{"echo hello"},
+	}
+
+	env := platforms.CmdEnv{
+		Cmd:    cmd,
+		Cfg:    cfg,
+		Source: tokens.SourceControl,
+		Unsafe: false,
+	}
+
+	_, err := cmdExecute(nil, env)
+
+	require.Error(t, err, "SourceControl commands should be checked against allowlist")
+	assert.Contains(t, err.Error(), "not allowed")
+}
+
+// TestCmdExecute_SourceControlAllowedWhenInList verifies SourceControl commands
+// pass when the command matches the allowlist.
+func TestCmdExecute_SourceControlAllowedWhenInList(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = ["echo.*"]`))
+
+	cmd := zapscript.Command{
+		Name: "execute",
+		Args: []string{"echo hello"},
+	}
+
+	env := platforms.CmdEnv{
+		Cmd:    cmd,
+		Cfg:    cfg,
+		Source: tokens.SourceControl,
+		Unsafe: false,
+	}
+
+	_, err := cmdExecute(nil, env)
+
+	require.NoError(t, err, "SourceControl command matching allowlist should succeed")
 }
 
 // TestCmdDelay verifies delay command works correctly.

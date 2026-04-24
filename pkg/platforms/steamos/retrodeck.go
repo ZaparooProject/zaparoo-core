@@ -89,6 +89,7 @@ func LaunchViaRetroDECK(ctx context.Context, romPath string) (*os.Process, error
 		Msg("launching game via RetroDECK")
 
 	// Use flatpak run with the RetroDECK app ID
+	//nolint:gosec // G204: romPath is the game to launch, launcher's purpose
 	cmd := exec.CommandContext(ctx, "flatpak", "run", RetroDECKFlatpakID, romPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

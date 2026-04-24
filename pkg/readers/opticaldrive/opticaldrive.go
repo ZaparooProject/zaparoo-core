@@ -72,6 +72,7 @@ func (DefaultFSChecker) Stat(path string) (os.FileInfo, error) {
 type DefaultCommandRunner struct{}
 
 func (DefaultCommandRunner) RunBlkid(ctx context.Context, valueType, devicePath string) ([]byte, error) {
+	//nolint:gosec // G204: valueType and devicePath from OS, blkid reader's purpose
 	out, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", valueType, devicePath).Output()
 	if err != nil {
 		return nil, fmt.Errorf("blkid command failed: %w", err)
@@ -114,6 +115,7 @@ func (*FileReader) IDs() []string {
 func (r *FileReader) Open(
 	device config.ReadersConnect,
 	iq chan<- readers.Scan,
+	_ readers.OpenOpts,
 ) error {
 	log.Info().Msgf("opening optical drive reader: %s", device.ConnectionString())
 	if !helpers.Contains(r.IDs(), device.Driver) {

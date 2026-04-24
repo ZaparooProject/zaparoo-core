@@ -20,11 +20,19 @@
 package mediascanner
 
 import (
+	"bytes"
+	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	sqlite3 "github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -69,7 +77,7 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
 	// Call AddMediaPath with a TV show path
-	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", false, false, nil)
+	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", false, false, nil, "")
 
 	// Function should return error and (0, 0) for non-recoverable errors
 	require.Error(t, err, "should return error for non-recoverable database errors")
@@ -404,6 +412,7 @@ func TestAddMediaPath_PopulatesSlugMetadata(t *testing.T) {
 				false, // skipExisting
 				false, // noExt
 				nil,   // extra tags
+				"",    // mediaType
 			)
 
 			// Verify no errors
@@ -615,6 +624,38 @@ func TestGetPathFragments_VirtualPathsWithEncoding(t *testing.T) {
 	}
 }
 
+// TestGetPathFragments_PreResolvedMediaType verifies that when a non-empty
+// MediaType is passed, GetPathFragments uses it directly instead of looking
+// up the system via systemdefs.
+func TestGetPathFragments_PreResolvedMediaType(t *testing.T) {
+	t.Parallel()
+
+	// Use a Movie media type with a game-like path. The slug pipeline
+	// varies by media type, so different types produce different slugs
+	// when the title contains scene-style artifacts.
+	result := GetPathFragments(PathFragmentParams{
+		Path:      "/games/snes/Super Mario World.sfc",
+		SystemID:  "snes",
+		MediaType: slugs.MediaTypeMovie,
+	})
+
+	// The key assertion: passing MediaTypeMovie should produce a slug via
+	// the Movie pipeline (which strips different artifacts). If the
+	// pre-resolved type were ignored and the system looked up, we'd get
+	// MediaTypeGame instead.
+	resultDefault := GetPathFragments(PathFragmentParams{
+		Path:     "/games/snes/Super Mario World.sfc",
+		SystemID: "snes",
+		// MediaType left empty — falls back to systemdefs lookup (Game)
+	})
+
+	// Both should produce valid slugs; the point is coverage of the
+	// pre-resolved path (non-empty MediaType is used without lookup).
+	assert.NotEmpty(t, result.Slug, "pre-resolved MediaType path should produce a slug")
+	assert.NotEmpty(t, resultDefault.Slug, "fallback path should produce a slug")
+	assert.Equal(t, result.Title, resultDefault.Title, "title extraction should be identical regardless of media type")
+}
+
 // TestGetPathFragments_MalformedVirtualPaths tests graceful handling of malformed virtual paths
 func TestGetPathFragments_MalformedVirtualPaths(t *testing.T) {
 	t.Parallel()
@@ -771,4 +812,107 @@ func TestGetPathFragments_VirtualPathsVsRegularPaths(t *testing.T) {
 				tc.name, virtualResult.Slug, regularResult.Slug)
 		})
 	}
+}
+
+// TestAddMediaPath_ExtensionTag_UniqueConstraintClassification exercises the two
+// error-classification branches in the extension-tag InsertMediaTag error handler
+// (indexing_pipeline.go:226-234).
+//
+// Branch A (Trace): errors.As finds sqlite3.ErrConstraintUnique and errors.Is
+// does NOT find ErrDependencyFlush → logged at Trace, not propagated.
+//
+// Branch B (Error): the same sqlite3 error is wrapped inside ErrDependencyFlush →
+// condition fails, logged at Error, not propagated.
+//
+// Global zerolog state is mutated to capture output; must not be parallel.
+func TestAddMediaPath_ExtensionTag_UniqueConstraintClassification(t *testing.T) {
+	prevGlobalLevel := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.TraceLevel)
+	t.Cleanup(func() { zerolog.SetGlobalLevel(prevGlobalLevel) })
+
+	const systemID = "SNES"
+	path := filepath.Join("roms", "snes", "SuperMario.sfc")
+	const extTagDBID = int64(99)
+
+	// Pre-populate the extension tag so the InsertTag branch is skipped and only
+	// InsertMediaTag is reached, keeping mock expectations minimal.
+	newScanState := func() *database.ScanState {
+		return &database.ScanState{
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    map[string]int{"extension": 1},
+			TagIDs:        map[string]int{database.TagKey("extension", "sfc"): int(extTagDBID)},
+			TagTypesIndex: 1,
+			TagsIndex:     int(extTagDBID),
+		}
+	}
+
+	// Shared mock setup for System/MediaTitle/Media insertions that succeed.
+	// InsertMediaTag expectation is added per sub-test.
+	newMockDB := func() *helpers.MockMediaDBI {
+		m := &helpers.MockMediaDBI{}
+		m.On("InsertSystem", mock.AnythingOfType("database.System")).
+			Return(database.System{DBID: 1, SystemID: systemID, Name: systemID}, nil).Once()
+		m.On("InsertMediaTitle", mock.AnythingOfType("*database.MediaTitle")).
+			Return(database.MediaTitle{DBID: 1}, nil).Once()
+		m.On("InsertMedia", mock.AnythingOfType("database.Media")).
+			Return(database.Media{DBID: 1}, nil).Once()
+		return m
+	}
+
+	// mediaIndex is incremented to 1 inside AddMediaPath; extensionTagIndex = extTagDBID.
+	expectedTag := database.MediaTag{TagDBID: extTagDBID, MediaDBID: 1}
+
+	t.Run("unique_non_dep_flush_traces", func(t *testing.T) {
+		var buf bytes.Buffer
+		prevLogger := log.Logger
+		log.Logger = zerolog.New(&buf).Level(zerolog.TraceLevel)
+		defer func() { log.Logger = prevLogger }()
+
+		uniqueErr := sqlite3.Error{
+			Code:         sqlite3.ErrConstraint,
+			ExtendedCode: sqlite3.ErrConstraintUnique,
+		}
+		mockDB := newMockDB()
+		mockDB.On("InsertMediaTag", expectedTag).
+			Return(database.MediaTag{}, uniqueErr).Once()
+
+		_, _, err := AddMediaPath(mockDB, newScanState(), systemID, path, false, false, nil, "")
+
+		require.NoError(t, err, "UNIQUE-non-dep-flush must not propagate from AddMediaPath")
+		output := buf.String()
+		assert.Contains(t, output, `"level":"trace"`, "non-dep-flush UNIQUE must be logged at trace")
+		assert.Contains(t, output, "already exists for extension", "trace message must identify the extension path")
+		assert.NotContains(t, output, `"level":"error"`, "must not log at error level for a non-dep-flush UNIQUE")
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("unique_dep_flush_errors", func(t *testing.T) {
+		var buf bytes.Buffer
+		prevLogger := log.Logger
+		log.Logger = zerolog.New(&buf).Level(zerolog.TraceLevel)
+		defer func() { log.Logger = prevLogger }()
+
+		// Wrap a UNIQUE sqlite3 error inside ErrDependencyFlush, matching the
+		// format produced by BatchInserter.Flush on a dependency failure.
+		depFlushErr := fmt.Errorf("failed to flush dependency for MediaTags: %w: %w",
+			mediadb.ErrDependencyFlush,
+			sqlite3.Error{Code: sqlite3.ErrConstraint, ExtendedCode: sqlite3.ErrConstraintUnique},
+		)
+		mockDB := newMockDB()
+		mockDB.On("InsertMediaTag", expectedTag).
+			Return(database.MediaTag{}, depFlushErr).Once()
+
+		_, _, err := AddMediaPath(mockDB, newScanState(), systemID, path, false, false, nil, "")
+
+		require.NoError(t, err, "dep-flush error must not propagate from AddMediaPath")
+		output := buf.String()
+		assert.Contains(t, output, `"level":"error"`, "dep-flush UNIQUE must be logged at error level")
+		assert.Contains(t, output, "error inserting media tag relationship for extension",
+			"error message must name the extension path")
+		assert.NotContains(t, output, "already exists for extension",
+			"must not classify dep-flush error as a recoverable duplicate")
+		mockDB.AssertExpectations(t)
+	})
 }

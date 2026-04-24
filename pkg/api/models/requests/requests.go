@@ -20,12 +20,14 @@
 package requests
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -33,6 +35,11 @@ import (
 )
 
 type RequestEnv struct {
+	// Context is the per-request context. It should be derived from the app's
+	// state context (st.GetContext()) with config.APIRequestTimeout, so it
+	// cancels on app shutdown and on timeout. For HTTP, it should also cancel
+	// when the HTTP connection closes.
+	Context       context.Context
 	Platform      platforms.Platform
 	Config        *config.Instance
 	State         *state.State
@@ -41,6 +48,8 @@ type RequestEnv struct {
 	LauncherCache *helpers.LauncherCache
 	Player        audio.Player
 	TokenQueue    chan<- tokens.Token
+	ConfirmQueue  chan<- chan error
+	IndexPauser   *syncutil.Pauser
 	ClientID      string
 	Params        json.RawMessage
 	IsLocal       bool

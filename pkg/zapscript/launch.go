@@ -21,10 +21,14 @@ package zapscript
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	posixpath "path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -131,12 +135,40 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// absolute path, use database query to find random media with this path prefix
 	// this includes virtual paths and zips as options
 	if filepath.IsAbs(query) {
+		cleanedPath := posixpath.Clean(query)
 		mediaQuery := database.MediaQuery{
-			PathPrefix: query,
+			PathPrefix: cleanedPath,
 			Tags:       tagFilters,
 		}
 		searchResult, searchErr := gamesdb.RandomGameWithQuery(&mediaQuery)
-		if searchErr != nil {
+		if errors.Is(searchErr, sql.ErrNoRows) {
+			// Fallback: pick random file directly from disk for unindexed paths
+			entries, readErr := os.ReadDir(cleanedPath)
+			if readErr != nil {
+				return platforms.CmdResult{}, fmt.Errorf("failed to read path '%s': %w", cleanedPath, readErr)
+			}
+			var files []string
+			for _, e := range entries {
+				if !e.IsDir() {
+					files = append(files, filepath.Join(cleanedPath, e.Name()))
+				}
+			}
+			if len(files) == 0 {
+				return platforms.CmdResult{}, fmt.Errorf("no files found in: %s", cleanedPath)
+			}
+			file, randomErr := helpers.RandomElem(files)
+			if randomErr != nil {
+				return platforms.CmdResult{}, fmt.Errorf("failed to select random file: %w", randomErr)
+			}
+			if launchErr := launch(file); launchErr != nil {
+				return platforms.CmdResult{
+					MediaChanged: true,
+				}, fmt.Errorf("failed to launch file '%s': %w", file, launchErr)
+			}
+			return platforms.CmdResult{
+				MediaChanged: true,
+			}, nil
+		} else if searchErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to find random media for path '%s': %w", query, searchErr)
 		}
 
@@ -167,7 +199,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			} else if system == nil {
 				return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
 			}
-			systems = []systemdefs.System{*system}
+			systems = systemdefs.SystemsWithFallbacks([]systemdefs.System{*system})
 		}
 
 		// Handle the special case of /* pattern - use RandomGameWithQuery
@@ -232,6 +264,8 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 		systems = append(systems, *system)
 	}
+
+	systems = systemdefs.SystemsWithFallbacks(systems)
 
 	systemIDs := make([]string, len(systems))
 	for i, sys := range systems {
@@ -540,7 +574,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, errors.New("no query specified")
 	}
 
-	systems := make([]systemdefs.System, 0)
+	var systems []systemdefs.System
 
 	if strings.EqualFold(systemID, "all") {
 		systems = systemdefs.AllSystems()
@@ -550,7 +584,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("failed to lookup system '%s': %w", systemID, lookupErr)
 		}
 
-		systems = append(systems, *system)
+		systems = systemdefs.SystemsWithFallbacks([]systemdefs.System{*system})
 	}
 
 	searchFilters := database.SearchFilters{
@@ -572,4 +606,87 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	return platforms.CmdResult{
 		MediaChanged: true,
 	}, launch(res[0].Path)
+}
+
+// getUniqueRecentMedia returns the Nth most recently played unique game from
+// media history, deduplicated by MediaPath (1-indexed: offset=1 is most recent).
+func getUniqueRecentMedia(
+	userDB database.UserDBI, offset int,
+) (database.MediaHistoryEntry, error) {
+	fetchLimit := min(offset*10, 100)
+	entries, err := userDB.GetMediaHistory(nil, 0, fetchLimit)
+	if err != nil {
+		return database.MediaHistoryEntry{}, fmt.Errorf("failed to query media history: %w", err)
+	}
+
+	seen := make(map[string]bool)
+	var unique []database.MediaHistoryEntry
+	for i := range entries {
+		if seen[entries[i].MediaPath] {
+			continue
+		}
+		seen[entries[i].MediaPath] = true
+		unique = append(unique, entries[i])
+		if len(unique) >= offset {
+			break
+		}
+	}
+
+	if len(unique) < offset {
+		return database.MediaHistoryEntry{}, fmt.Errorf(
+			"%w: need %d unique games but only found %d",
+			ErrNoHistory, offset, len(unique),
+		)
+	}
+
+	return unique[offset-1], nil
+}
+
+//nolint:gocritic // single-use parameter in command handler
+func cmdLaunchLast(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	offset := 1
+	if len(env.Cmd.Args) > 0 && env.Cmd.Args[0] != "" {
+		n, err := strconv.Atoi(env.Cmd.Args[0])
+		if err != nil {
+			return platforms.CmdResult{}, fmt.Errorf("invalid offset: %w", err)
+		}
+		if n <= 0 {
+			return platforms.CmdResult{}, fmt.Errorf("offset must be positive, got %d", n)
+		}
+		offset = n
+	}
+
+	var args zapscript.LaunchLastArgs
+	if err := ParseAdvArgs(pl, &env, &args); err != nil {
+		return platforms.CmdResult{}, err
+	}
+
+	entry, err := getUniqueRecentMedia(env.Database.UserDB, offset)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+
+	path, err := findFile(pl, env.Cfg, entry.MediaPath)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+
+	applySystemDefaultLauncher(&env, entry.SystemID)
+	launch := getLaunchClosure(pl, &env)
+
+	log.Info().
+		Str("media", entry.MediaName).
+		Str("system", entry.SystemID).
+		Int("offset", offset).
+		Msgf("launching last played game")
+
+	if err := launch(path); err != nil {
+		return platforms.CmdResult{
+			MediaChanged: true,
+		}, fmt.Errorf("failed to launch last played game '%s': %w", entry.MediaPath, err)
+	}
+
+	return platforms.CmdResult{
+		MediaChanged: true,
+	}, nil
 }

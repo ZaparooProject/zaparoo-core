@@ -21,6 +21,7 @@ package state
 
 import (
 	"context"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
@@ -60,6 +61,7 @@ type State struct {
 	activeToken      tokens.Token
 	mu               syncutil.RWMutex
 	stopService      bool
+	restartRequested bool
 	runZapScript     bool
 }
 
@@ -131,6 +133,25 @@ func (s *State) StopService() {
 	s.stopService = true
 	s.mu.Unlock()
 	s.ctxCancelFunc()
+}
+
+// RestartService signals the service to shut down and restart with the new
+// binary. Used after applying an update for graceful restart instead of
+// os.Exit.
+func (s *State) RestartService() {
+	s.mu.Lock()
+	s.restartRequested = true
+	s.stopService = true
+	s.mu.Unlock()
+	s.ctxCancelFunc()
+}
+
+// RestartRequested returns true if the service shutdown was triggered by a
+// restart request (e.g. after applying an update).
+func (s *State) RestartRequested() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.restartRequested
 }
 
 func (s *State) SetRunZapScript(run bool) {
@@ -294,7 +315,8 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		s.mu.Unlock()
 
 		// Send notifications outside lock to prevent deadlock
-		notifications.MediaStopped(s.Notifications)
+		stoppedParams := buildMediaStoppedParams(oldMedia)
+		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		s.notifyDisplayReaders(media)
 		return
 	}
@@ -326,7 +348,8 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		s.mu.Unlock()
 
 		// Send notifications outside lock to prevent deadlock
-		notifications.MediaStopped(s.Notifications)
+		changedStoppedParams := buildMediaStoppedParams(oldMedia)
+		notifications.MediaStopped(s.Notifications, &changedStoppedParams)
 		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
 			SystemID:   media.SystemID,
 			SystemName: media.SystemName,
@@ -344,6 +367,18 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 
 	// No changes
 	s.mu.Unlock()
+}
+
+func buildMediaStoppedParams(media *models.ActiveMedia) models.MediaStoppedParams {
+	elapsed := max(0, int(time.Since(media.Started).Seconds()))
+	return models.MediaStoppedParams{
+		SystemID:   media.SystemID,
+		SystemName: media.SystemName,
+		MediaName:  media.Name,
+		MediaPath:  media.Path,
+		LauncherID: media.LauncherID,
+		Elapsed:    elapsed,
+	}
 }
 
 // notifyDisplayReaders calls OnMediaChange for all readers with display capability.

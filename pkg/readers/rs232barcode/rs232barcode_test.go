@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
@@ -268,7 +269,7 @@ func TestOpen_InvalidDriver(t *testing.T) {
 		Path:   "/dev/ttyUSB0",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid reader id")
@@ -291,7 +292,7 @@ func TestOpen_SetReadTimeoutError(t *testing.T) {
 		Path:   testutils.CreateTempDevicePath(t),
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to set read timeout")
@@ -315,7 +316,7 @@ func TestOpen_SuccessfulConnection(t *testing.T) {
 		Path:   devicePath,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	assert.True(t, reader.Connected())
@@ -367,7 +368,7 @@ func TestOpen_ReaderError(t *testing.T) {
 		Path:   devicePath,
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// First scan: barcode detected
@@ -424,7 +425,7 @@ func TestOpen_MultipleBarcodes(t *testing.T) {
 		Path:   testutils.CreateTempDevicePath(t),
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// First barcode
@@ -491,7 +492,7 @@ func TestOpen_SplitReads(t *testing.T) {
 		Path:   testutils.CreateTempDevicePath(t),
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// Should receive complete barcode after all chunks arrive
@@ -531,7 +532,7 @@ func TestOpen_BufferOverflow(t *testing.T) {
 		Path:   testutils.CreateTempDevicePath(t),
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// Should receive the valid barcode after buffer overflow recovery
@@ -570,7 +571,7 @@ func TestOpen_LargeQRCode(t *testing.T) {
 		Path:   testutils.CreateTempDevicePath(t),
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// Should successfully receive large QR code (7000 characters)
@@ -661,7 +662,7 @@ func TestOpen_CarriageReturnDelimiter(t *testing.T) {
 		Path:   testutils.CreateTempDevicePath(t),
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// First barcode with \r
@@ -710,7 +711,7 @@ func TestOpen_EmptyLinesIgnored(t *testing.T) {
 		Path:   testutils.CreateTempDevicePath(t),
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// Should only receive one scan for the valid barcode

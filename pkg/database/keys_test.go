@@ -186,3 +186,114 @@ func TestTagKey(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildTitleZapScript(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		systemID string
+		gameName string
+		want     string
+		tags     []TagInfo
+	}{
+		{
+			name:     "no tags",
+			systemID: "SNES",
+			gameName: "Super Mario World",
+			tags:     []TagInfo{},
+			want:     "@SNES/Super Mario World",
+		},
+		{
+			name:     "year tag only",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "1994", Type: "year"}},
+			want:     "@SNES/Game (year:1994)",
+		},
+		{
+			name:     "year tag with wrong length skipped",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "94", Type: "year"}},
+			want:     "@SNES/Game",
+		},
+		{
+			name:     "year tag with 5 chars skipped",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "19941", Type: "year"}},
+			want:     "@SNES/Game",
+		},
+		{
+			name:     "players tag",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "2", Type: "players"}},
+			want:     "@SNES/Game (players:2)",
+		},
+		{
+			name:     "publisher tag uses generic format",
+			systemID: "SNES",
+			gameName: "Donkey Kong Country",
+			tags:     []TagInfo{{Tag: "nintendo", Type: "publisher"}},
+			want:     "@SNES/Donkey Kong Country (publisher:nintendo)",
+		},
+		{
+			name:     "developer tag uses generic format",
+			systemID: "SNES",
+			gameName: "Donkey Kong Country",
+			tags:     []TagInfo{{Tag: "rare", Type: "developer"}},
+			want:     "@SNES/Donkey Kong Country (developer:rare)",
+		},
+		{
+			name:     "credit tag uses generic format",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "capcom", Type: "credit"}},
+			want:     "@SNES/Game (credit:capcom)",
+		},
+		{
+			name:     "year and publisher combined",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "1994", Type: "year"}, {Tag: "nintendo", Type: "publisher"}},
+			want:     "@SNES/Game (year:1994) (publisher:nintendo)",
+		},
+		{
+			name:     "edition tag uses generic format",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "special", Type: "edition"}},
+			want:     "@SNES/Game (edition:special)",
+		},
+		{
+			name:     "release tag uses generic format",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "homebrew", Type: "release"}},
+			want:     "@SNES/Game (release:homebrew)",
+		},
+		{
+			name:     "rev tag uses generic format",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "1", Type: "rev"}},
+			want:     "@SNES/Game (rev:1)",
+		},
+		{
+			name:     "empty tag is skipped",
+			systemID: "SNES",
+			gameName: "Game",
+			tags:     []TagInfo{{Tag: "", Type: "publisher"}, {Tag: "nintendo", Type: "publisher"}},
+			want:     "@SNES/Game (publisher:nintendo)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := BuildTitleZapScript(tt.systemID, tt.gameName, tt.tags)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

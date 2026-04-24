@@ -1,7 +1,7 @@
 # Core API
 
 :::warning
-This API is not finalized. A version 1 release will be announced when it is ready for production. You're welcome to use the API as is, but be aware parts may breaking changes may still happen.
+This API is not finalized. A version 1 release will be announced when it is ready for production. You're welcome to use the API as is, but be aware that breaking changes may still happen.
 :::
 
 The **Core API** is available on and published by every device running the [Zaparoo Core](../../core) software. This API allows management of all Zaparoo features locally and remotely. The [Zaparoo](https://zaparoo.app/) app uses this API for all communication with Zaparoo devices, as do most of the flags when Zaparoo is run via the command line.
@@ -28,7 +28,7 @@ It's highly recommended to target your application at the specific minor version
 
 An example address for connecting to the API: `ws://10.0.0.123:7497/api/v0.1`
 
-The connection requires no special configuration or authentication to initiate.
+The connection requires no special configuration or authentication to initiate. When [encryption](./encryption) is enabled, remote clients must complete a one-time pairing and encrypt all WebSocket traffic.
 
 ### HTTP POST
 
@@ -68,6 +68,32 @@ This would return a response like:
 ```
 
 Unlike WebSocket connections, HTTP requests are stateless and do not support notifications. Each request requires a complete JSON-RPC 2.0 payload and will receive a single response.
+
+### Server-Sent Events (SSE)
+
+The API provides a [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) endpoint for receiving notifications over a standard HTTP connection. This is useful for clients that only need to receive notifications without the full bidirectional communication of WebSocket, and works with any HTTP client without additional libraries.
+
+These SSE endpoints are available:
+
+- `/api/v0.1/events`
+- `/api/v0/events`
+- `/api/events`
+
+An example using `curl`:
+
+```bash
+curl -N http://10.0.0.123:7497/api/v0.1/events
+```
+
+Each notification is sent as an SSE `data` field containing the same JSON-RPC 2.0 notification object used by WebSocket:
+
+```
+data: {"jsonrpc":"2.0","method":"tokens.added","params":{"type":"nfc","uid":"04E1234567890","text":"**launch:game.rom"}}
+
+data: {"jsonrpc":"2.0","method":"media.started","params":{"systemId":"NES","systemName":"NES","name":"game.rom"}}
+```
+
+SSE connections are long-lived and will continue receiving events until the client disconnects. To call methods, use HTTP POST to the standard API endpoint alongside the SSE connection.
 
 ### JSON Payloads
 
@@ -120,17 +146,23 @@ Every request sent must have a matching response. An example response to the `me
   "jsonrpc": "2.0",
   "id": "4b5da056-a5d4-436b-b4e6-b96231e99969",
   "result": {
-    "media": [
+    "results": [
       {
         "system": {
           "id": "Gameboy",
           "name": "Gameboy"
         },
         "name": "240p Test Suite (PD) v0.03 tepples",
-        "path": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb"
+        "path": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
+        "zapScript": "@Gameboy/240p Test Suite (PD) v0.03 tepples",
+        "tags": []
       }
     ],
-    "total": 1
+    "total": 1,
+    "pagination": {
+      "hasNextPage": false,
+      "pageSize": 100
+    }
   }
 }
 ```
@@ -139,12 +171,12 @@ Every request sent must have a matching response. An example response to the `me
 
 | Key     | Type   | Required | Description                                                                                                                                                     |
 | :------ | :----- | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| jsonrpc | number | Yes      | Same as a [request](#requests).                                                                                                                                 |
+| jsonrpc | string | Yes      | Same as a [request](#requests).                                                                                                                                 |
 | id      | string | Yes      | Same as a [request](#requests). The same ID sent by the original request.                                                                                       |
 | result  | any    | No\*     | Return value of the method. May be `null` depending on the method, will be missing if there was an error. See [methods](#methods) for possible values.          |
 | error   | Error  | No\*     | If a method failed, this key will be populated with the error details and the result key will be empty. See [below](#response-errors) for details about errors. |
 
-##### Response Errors
+##### Response errors
 
 If a method fails, it will populate the `error` key in the response object with details about the failure. An example of a failed request:
 
@@ -184,11 +216,15 @@ If sent the bytes `ping`, the API will immediately respond with the bytes `pong`
 
 ## Launch Endpoint
 
-The HTTP server has an additional endpoint which allows restricted access to launch ZapScript using a GET request. This endpoint is specifically meant to support uses such as QR codes scanned by a phone's camera app or simple launch testing.
+The HTTP server has additional endpoints which allow restricted access to launch ZapScript using a GET request. These endpoints are specifically meant to support uses such as QR codes scanned by a phone's camera app or simple launch testing.
 
-The endpoint is: `/l/`
+The following endpoints are available:
 
-An example request: `GET http://10.0.0.123:7497/l/**launch.system:snes`
+- `/run/` - Preferred endpoint for launching ZapScript.
+- `/r/` - Alias for `/run/`.
+- `/l/` - **Deprecated.** Use `/run/` instead.
+
+An example request: `GET http://10.0.0.123:7497/run/**launch.system:snes`
 
 This would act as though a token with the text `**launch.system:snes` had been scanned.
 
@@ -196,12 +232,13 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods are used to execute actions and request data back from the API. The current API provides **26 methods** across core functionality areas. See the [API Methods](./methods) page for detailed definitions and examples of each method.
+Methods are used to execute actions and request data back from the API. The current API provides **45 methods** across core functionality areas. See the [API Methods](./methods) page for detailed definitions and examples of each method.
 
 | ID                              | Description                                                                           |
 | :------------------------------ | :------------------------------------------------------------------------------------ |
 | run                             | Run supplied ZapScript.                                                               |
 | stop                            | Kill any active launcher, if possible.                                                |
+| confirm                         | Confirm and launch the currently staged token.                                        |
 | tokens                          | List active tokens.                                                                   |
 | tokens.history                  | Return a list of the latest token launches.                                           |
 | media                           | Return status and statistics about media database.                                    |
@@ -211,11 +248,17 @@ Methods are used to execute actions and request data back from the API. The curr
 | media.tags                      | Query available tags for filtering media search results.                              |
 | media.generate                  | Start a new media database index.                                                     |
 | media.generate.cancel           | Cancel any currently running media database indexing operation.                       |
+| media.history                   | Return paginated media play history.                                                  |
+| media.lookup                    | Resolve a game name and system to a media database match.                             |
+| media.control                   | Send a control action to the active media's launcher.                                 |
+| media.browse                    | Browse indexed media in a directory-style hierarchy.                                  |
+| media.history.top               | Return most-played media ranked by total play time.                                   |
 | playtime                        | Query current playtime session status and usage statistics.                           |
 | systems                         | List all currently indexed systems.                                                   |
 | settings                        | List current configuration settings.                                                  |
 | settings.update                 | Update one or more settings in-memory and save changes to disk.                       |
 | settings.reload                 | Reload settings from disk.                                                            |
+| settings.auth.claim             | Claim API credentials from a remote server.                                           |
 | settings.logs.download          | Download the current log file as base64-encoded content.                              |
 | settings.playtime.limits        | Get current playtime limit configuration.                                             |
 | settings.playtime.limits.update | Update playtime limit settings.                                                       |
@@ -229,6 +272,15 @@ Methods are used to execute actions and request data back from the API. The curr
 | readers.write.cancel            | Cancel any active write operation.                                                    |
 | launchers.refresh               | Refresh the internal launcher cache, forcing a reload of launcher configurations.     |
 | version                         | Return server's current version and platform.                                         |
+| health                          | Simple health check to verify the server is running and responding.                   |
+| inbox                           | List all inbox messages.                                                              |
+| inbox.delete                    | Delete a specific inbox message by ID.                                                |
+| inbox.clear                     | Delete all inbox messages.                                                            |
+| input.keyboard                  | Send a keyboard input sequence.                                                       |
+| input.gamepad                   | Send a gamepad input sequence.                                                        |
+| screenshot                      | Capture a screenshot of the current platform display.                                 |
+| update.check                    | Check if a newer version is available.                                                |
+| update.apply                    | Download and apply the latest update with graceful restart.                           |
 
 ## Notifications
 
@@ -236,13 +288,15 @@ Notifications let a server or client know an event has occurred. See the [API No
 
 | ID                     | Description                                                                       |
 | :--------------------- | :-------------------------------------------------------------------------------- |
-| running                | New ZapScript has been added to the launch queue.                                 |
 | readers.added          | A new reader was connected to the server.                                         |
 | readers.removed        | A connected reader was disconnected from the server.                              |
 | tokens.added           | A new token detected by a reader.                                                 |
 | tokens.removed         | A token was removed.                                                              |
+| tokens.staged          | A token was staged by launch guard and is awaiting confirmation.                  |
+| tokens.staged.ready    | A staged token's delay period has expired and is ready for confirmation.          |
 | media.started          | New media was started on server.                                                  |
 | media.stopped          | Media has stopped on server.                                                      |
 | media.indexing         | The state of the indexing or optimization process has changed.                    |
 | playtime.limit.reached | A playtime limit (session or daily) has been reached and enforced.                |
 | playtime.limit.warning | A playtime warning notification sent at configured intervals before limit reached. |
+| inbox.added            | A new inbox message was added to the server.                                      |

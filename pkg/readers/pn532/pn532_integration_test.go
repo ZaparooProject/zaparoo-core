@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/go-pn532/detection"
 	"github.com/ZaparooProject/go-pn532/polling"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
@@ -269,7 +270,7 @@ func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
 		Path:   "/dev/test",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -335,7 +336,7 @@ func TestOpen_SessionErrorWithoutActiveToken(t *testing.T) {
 		Path:   "/dev/test",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -405,7 +406,7 @@ func TestOpen_SessionErrorAfterRemoval(t *testing.T) {
 		Path:   "/dev/test",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -468,7 +469,7 @@ func TestOpen_SessionContextCanceled(t *testing.T) {
 		Path:   "/dev/test",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// Close reader (triggers context cancellation)
@@ -539,7 +540,7 @@ func TestOpen_TagDetectionAndRemoval(t *testing.T) {
 		Path:   "/dev/test",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -621,7 +622,7 @@ func TestOpen_TagChanged(t *testing.T) {
 		Path:   "/dev/test",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 	defer func() {
 		_ = reader.Close()
@@ -680,7 +681,7 @@ func TestClose(t *testing.T) {
 		Path:   "/dev/test",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.NoError(t, err)
 
 	// Verify reader is connected
@@ -727,7 +728,43 @@ func TestOpen_DeviceInitError(t *testing.T) {
 		Path:   "/dev/test",
 	}
 
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to initialize PN532 device")
+	assert.True(t, mockDevice.initCalled)
+	assert.True(t, mockDevice.closeCalled, "device should be closed on init error")
+}
+
+// TestOpen_DeviceInitError_Probing verifies that device initialization errors during
+// auto-detection probing still return errors correctly.
+func TestOpen_DeviceInitError_Probing(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	scanQueue := testutils.CreateTestScanChannel(t)
+
+	mockDevice := &mockPN532Device{
+		initErr: assert.AnError,
+	}
+
+	reader.transportFactory = func(_ detection.DeviceInfo) (pn532.Transport, error) {
+		return &mockTransport{}, nil
+	}
+
+	reader.deviceFactory = func(_ pn532.Transport) (PN532Device, error) {
+		return mockDevice, nil
+	}
+
+	device := config.ReadersConnect{
+		Driver: "pn532",
+		Path:   "/dev/test",
+	}
+
+	err := reader.Open(device, scanQueue, readers.OpenOpts{Probing: true})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to initialize PN532 device")
 	assert.True(t, mockDevice.initCalled)
@@ -910,7 +947,7 @@ func TestOpen_NilSessionFactory(t *testing.T) {
 	}
 
 	// Open should fail with specific error
-	err := reader.Open(device, scanQueue)
+	err := reader.Open(device, scanQueue, readers.OpenOpts{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "session factory returned nil")
 

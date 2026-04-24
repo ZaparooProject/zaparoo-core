@@ -22,9 +22,12 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package config
 
 import (
+	"path/filepath"
 	"testing"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestConnectionStringNormalization(t *testing.T) {
@@ -351,6 +354,119 @@ func TestIsDriverAutoDetectEnabledNormalization(t *testing.T) {
 	}
 }
 
+func TestReadersConnect_IsEnabled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		rc       ReadersConnect
+		expected bool
+	}{
+		{
+			name:     "nil enabled means enabled (default)",
+			rc:       ReadersConnect{Driver: "pn532"},
+			expected: true,
+		},
+		{
+			name:     "explicit true means enabled",
+			rc:       ReadersConnect{Driver: "pn532", Enabled: boolPtr(true)},
+			expected: true,
+		},
+		{
+			name:     "explicit false means disabled",
+			rc:       ReadersConnect{Driver: "pn532", Enabled: boolPtr(false)},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.rc.IsEnabled())
+		})
+	}
+}
+
+func TestReadersConnect_EnabledRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	memFs := afero.NewMemMapFs()
+	configDir := "/config"
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, memFs)
+	require.NoError(t, err)
+
+	// Set connections with mixed enabled states
+	cfg.SetReaderConnections([]ReadersConnect{
+		{Driver: "pn532", Path: "/dev/ttyUSB0"},
+		{Driver: "externaldrive", Enabled: boolPtr(true)},
+		{Driver: "libnfc", Enabled: boolPtr(false)},
+	})
+
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	readers := cfg.Readers().Connect
+	require.Len(t, readers, 3)
+
+	assert.Nil(t, readers[0].Enabled, "nil should survive round-trip")
+	assert.Equal(t, "pn532", readers[0].Driver)
+
+	require.NotNil(t, readers[1].Enabled)
+	assert.True(t, *readers[1].Enabled, "explicit true should survive round-trip")
+	assert.Equal(t, "externaldrive", readers[1].Driver)
+
+	require.NotNil(t, readers[2].Enabled)
+	assert.False(t, *readers[2].Enabled, "explicit false should survive round-trip")
+	assert.Equal(t, "libnfc", readers[2].Driver)
+}
+
+func TestReadersConnect_EnabledFromTOML(t *testing.T) {
+	t.Parallel()
+
+	memFs := afero.NewMemMapFs()
+	configDir := "/config"
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, memFs)
+	require.NoError(t, err)
+
+	// Write config with enabled = true in [[readers.connect]] (matches docs)
+	cfgPath := filepath.Join(configDir, CfgFile)
+	content := `config_schema = 1
+
+[readers]
+auto_detect = true
+
+[[readers.connect]]
+driver = "externaldrive"
+enabled = true
+
+[readers.scan]
+mode = 'tap'
+`
+	err = afero.WriteFile(memFs, cfgPath, []byte(content), 0o600)
+	require.NoError(t, err)
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	readers := cfg.Readers().Connect
+	require.Len(t, readers, 1)
+	assert.Equal(t, "externaldrive", readers[0].Driver)
+	require.NotNil(t, readers[0].Enabled, "enabled should be parsed from TOML")
+	assert.True(t, *readers[0].Enabled)
+
+	// Save and verify enabled survives
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	saved, err := afero.ReadFile(memFs, cfgPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(saved), "enabled = true",
+		"enabled = true should survive Load/Save round-trip")
+}
+
 func boolPtr(b bool) *bool {
 	return &b
 }
@@ -445,4 +561,140 @@ func TestIsHoldModeIgnoredSystemWithInvalidConfig(t *testing.T) {
 
 	// Invalid entries should not cause matches
 	assert.False(t, cfg.IsHoldModeIgnoredSystem("InvalidSystemID"))
+}
+
+func TestLaunchGuardTimeout_DefaultWhenZero(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	assert.InDelta(t, DefaultLaunchGuardTimeout, cfg.LaunchGuardTimeout(), 0)
+}
+
+func TestLaunchGuardTimeout_CustomValue(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{Timeout: 30},
+				},
+			},
+		},
+	}
+	assert.InDelta(t, 30, cfg.LaunchGuardTimeout(), 0)
+}
+
+func TestLaunchGuardTimeout_NegativeDisablesTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	cfg.SetLaunchGuardTimeout(-1)
+	assert.InDelta(t, -1, cfg.LaunchGuardTimeout(), 0)
+}
+
+func TestLaunchGuardSettersAndGetters(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+
+	assert.False(t, cfg.LaunchGuardEnabled())
+	assert.False(t, cfg.LaunchGuardRequireConfirm())
+
+	cfg.SetLaunchGuard(true)
+	cfg.SetLaunchGuardRequireConfirm(true)
+
+	assert.True(t, cfg.LaunchGuardEnabled())
+	assert.True(t, cfg.LaunchGuardRequireConfirm())
+
+	cfg.SetLaunchGuard(false)
+	assert.False(t, cfg.LaunchGuardEnabled())
+}
+
+func TestLaunchGuardDelay_DefaultZero(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	assert.InDelta(t, 0, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_CustomValue(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{
+						Timeout: 15,
+						Delay:   5,
+					},
+				},
+			},
+		},
+	}
+	assert.InDelta(t, 5, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_ClampedWhenExceedsTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{
+						Timeout: 10,
+						Delay:   10,
+					},
+				},
+			},
+		},
+	}
+	assert.InDelta(t, 5, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_ClampedWithDefaultTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{
+						Delay: 20,
+					},
+				},
+			},
+		},
+	}
+	// timeout defaults to 15, delay 20 >= 15, so clamped to 15/2 = 7.5
+	assert.InDelta(t, 7.5, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_NegativeTimeoutReturnsZero(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					LaunchGuard: ScanLaunchGuard{
+						Timeout: -1,
+						Delay:   5,
+					},
+				},
+			},
+		},
+	}
+	assert.InDelta(t, 0, cfg.LaunchGuardDelay(), 0)
+}
+
+func TestLaunchGuardDelay_SetterAndGetter(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	cfg.SetLaunchGuardTimeout(20)
+	cfg.SetLaunchGuardDelay(8)
+	assert.InDelta(t, 8, cfg.LaunchGuardDelay(), 0)
 }

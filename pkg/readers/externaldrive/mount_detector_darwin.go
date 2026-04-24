@@ -292,7 +292,7 @@ func (*darwinMountDetector) isRemovableVolume(mountPath string) bool {
 	// Convert []int8 to string
 	fstypeBytes := make([]byte, len(stat.Fstypename))
 	for i, b := range stat.Fstypename {
-		fstypeBytes[i] = byte(b)
+		fstypeBytes[i] = byte(b) //nolint:gosec // Safe: Fstypename contains ASCII filesystem type names
 	}
 	fstype := string(fstypeBytes)
 	fstype = strings.TrimRight(fstype, "\x00")

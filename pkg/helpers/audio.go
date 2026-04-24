@@ -32,7 +32,7 @@ func PlayConfiguredSound(player audio.Player, path string, enabled bool, default
 	}
 
 	if path == "" {
-		if err := player.PlayWAVBytes(defaultSound); err != nil {
+		if err := player.PlayBytes(defaultSound); err != nil {
 			log.Warn().Err(err).Msgf("error playing %s sound", soundName)
 		}
 		return
@@ -40,7 +40,7 @@ func PlayConfiguredSound(player audio.Player, path string, enabled bool, default
 
 	if err := player.PlayFile(path); err != nil {
 		log.Warn().Str("path", path).Err(err).Msgf("error playing custom %s sound, falling back to default", soundName)
-		if fbErr := player.PlayWAVBytes(defaultSound); fbErr != nil {
+		if fbErr := player.PlayBytes(defaultSound); fbErr != nil {
 			log.Warn().Err(fbErr).Msgf("error playing fallback %s sound", soundName)
 		}
 	}

@@ -20,6 +20,7 @@
 package config
 
 import (
+	"fmt"
 	"maps"
 	"net/url"
 	"strings"
@@ -31,7 +32,7 @@ import (
 // CredentialEntry holds authentication credentials for a URL.
 type CredentialEntry struct {
 	Username string `toml:"username"`
-	Password string `toml:"password"`
+	Password string `toml:"password"` //nolint:gosec // G117: auth config struct field
 	Bearer   string `toml:"bearer"`
 }
 
@@ -64,7 +65,7 @@ type authAuthCredsFormat struct {
 
 // authAPIKeysFormat represents root-level api_keys in auth.toml
 type authAPIKeysFormat struct {
-	APIKeys []string `toml:"api_keys"`
+	APIKeys []string `toml:"api_keys"` //nolint:gosec // G101: auth config struct field
 }
 
 // isValidAuthKey filters out TOML structural keys that get captured when
@@ -212,4 +213,31 @@ func LookupAuth(creds map[string]CredentialEntry, reqURL string) *CredentialEntr
 	}
 
 	return nil
+}
+
+// marshalAuthFile serializes credentials and API keys into auth.toml format.
+// Uses the [creds."url"] format for credential entries, which is compatible
+// with the root-level api_keys field (the root format fails to parse when
+// api_keys is present because go-toml can't unmarshal mixed types).
+func marshalAuthFile(
+	creds map[string]CredentialEntry,
+	keys []string,
+) ([]byte, error) {
+	//nolint:gosec // G117: field name matches existing TOML key, not a secret
+	type authFile struct {
+		Creds   map[string]CredentialEntry `toml:"creds,omitempty"`
+		APIKeys []string                   `toml:"api_keys,omitempty"`
+	}
+
+	file := authFile{
+		APIKeys: keys,
+		Creds:   creds,
+	}
+
+	data, err := toml.Marshal(file) //nolint:gosec // G117: field name matches existing TOML key, not a secret
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal auth file: %w", err)
+	}
+
+	return data, nil
 }

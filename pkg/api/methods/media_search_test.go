@@ -20,14 +20,19 @@
 package methods
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -149,7 +154,8 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -239,7 +245,8 @@ func TestHandleMediaSearch_WithCursor(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -290,6 +297,7 @@ func TestHandleMediaSearch_InvalidCursor(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
+		Context:  context.Background(),
 		Params:   paramsJSON,
 		ClientID: "127.0.0.1:12345",
 		State:    appState,
@@ -336,7 +344,8 @@ func TestHandleMediaTags_Success(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -383,7 +392,8 @@ func TestHandleMediaTags_NoParams(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: []byte("{}"), // Empty params should still work
+		Context: context.Background(),
+		Params:  []byte("{}"), // Empty params should still work
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -430,7 +440,8 @@ func TestHandleMediaSearch_WithLetterFiltering(t *testing.T) {
 
 	// Create request environment
 	env := requests.RequestEnv{
-		Params: paramBytes,
+		Context: context.Background(),
+		Params:  paramBytes,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -484,7 +495,8 @@ func TestHandleMediaSearch_FullyBlankQuery(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -552,7 +564,8 @@ func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -609,7 +622,8 @@ func TestHandleMediaSearch_SystemMetadata(t *testing.T) {
 	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Context: context.Background(),
+		Params:  paramsJSON,
 		Database: &database.Database{
 			UserDB:  mockUserDB,
 			MediaDB: mockMediaDB,
@@ -652,4 +666,408 @@ func TestHandleMediaSearch_SystemMetadata(t *testing.T) {
 	// Verify mock was called
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
+}
+
+func TestResolveSystem_StrictRejectsNonCanonical(t *testing.T) {
+	_, err := resolveSystem("sega genesis", false)
+	require.Error(t, err)
+}
+
+func TestResolveSystem_StrictAcceptsCanonical(t *testing.T) {
+	sys, err := resolveSystem("Genesis", false)
+	require.NoError(t, err)
+	assert.Equal(t, "Genesis", sys.ID)
+}
+
+func TestResolveSystem_SoftMatchAcceptsAll(t *testing.T) {
+	sys, err := resolveSystem("sega genesis", true)
+	require.NoError(t, err)
+	assert.Equal(t, "Genesis", sys.ID)
+}
+
+func TestHandleMediaSearch_RejectsNonCanonicalSystemByDefault(t *testing.T) {
+	query := "test"
+	params := models.SearchParams{
+		Systems: &[]string{"sega genesis"},
+		Query:   &query,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Params:   paramsJSON,
+		State:    appState,
+		ClientID: "127.0.0.1:12345",
+	}
+
+	_, err = HandleMediaSearch(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sega genesis")
+}
+
+func TestHandleMediaSearch_AcceptsFuzzySystem(t *testing.T) {
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+
+	mockMediaDB.On("SearchMediaWithFilters",
+		mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1 && filters.Systems[0].ID == "Genesis"
+		}),
+	).Return([]database.SearchResultWithCursor{}, nil)
+
+	query := "test"
+	fuzzyMatch := true
+	params := models.SearchParams{
+		Systems:     &[]string{"sega genesis"},
+		FuzzySystem: &fuzzyMatch,
+		Query:       &query,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
+	}
+
+	_, err = HandleMediaSearch(env)
+	require.NoError(t, err)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaTags_RejectsNonCanonicalSystemByDefault(t *testing.T) {
+	params := models.SearchParams{
+		Systems: &[]string{"sega genesis"},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Params:   paramsJSON,
+		State:    appState,
+		ClientID: "127.0.0.1:12345",
+	}
+
+	_, err = HandleMediaTags(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sega genesis")
+}
+
+func TestHandleGenerateMedia_RejectsNonCanonicalSystemByDefault(t *testing.T) {
+	params := models.MediaIndexParams{
+		Systems: &[]string{"sega genesis"},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
+	}
+
+	ClearIndexingStatus()
+	_, err = HandleGenerateMedia(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sega genesis")
+}
+
+func TestResolveSystems_NilReturnsAll(t *testing.T) {
+	t.Parallel()
+	systems, err := resolveSystems(nil, false)
+	require.NoError(t, err)
+	assert.Len(t, systems, len(systemdefs.AllSystems()))
+}
+
+func TestResolveSystems_EmptyReturnsAll(t *testing.T) {
+	t.Parallel()
+	systems, err := resolveSystems([]string{}, false)
+	require.NoError(t, err)
+	assert.Len(t, systems, len(systemdefs.AllSystems()))
+}
+
+func TestResolveSystems_DeduplicatesExactDuplicates(t *testing.T) {
+	t.Parallel()
+	systems, err := resolveSystems([]string{"NES", "NES", "SNES"}, false)
+	require.NoError(t, err)
+	assert.Len(t, systems, 2)
+	assert.Equal(t, "NES", systems[0].ID)
+	assert.Equal(t, "SNES", systems[1].ID)
+}
+
+func TestResolveSystems_DeduplicatesFuzzyAliases(t *testing.T) {
+	t.Parallel()
+	systems, err := resolveSystems([]string{"sega genesis", "Genesis", "MegaDrive"}, true)
+	require.NoError(t, err)
+	assert.Len(t, systems, 1)
+	assert.Equal(t, "Genesis", systems[0].ID)
+}
+
+func TestResolveSystems_InvalidSystemReturnsError(t *testing.T) {
+	t.Parallel()
+	_, err := resolveSystems([]string{"NES", "NOT_A_SYSTEM"}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NOT_A_SYSTEM")
+}
+
+func TestResolveSystems_PreservesOrder(t *testing.T) {
+	t.Parallel()
+	systems, err := resolveSystems([]string{"SNES", "NES", "Genesis"}, false)
+	require.NoError(t, err)
+	require.Len(t, systems, 3)
+	assert.Equal(t, "SNES", systems[0].ID)
+	assert.Equal(t, "NES", systems[1].ID)
+	assert.Equal(t, "Genesis", systems[2].ID)
+}
+
+func TestHandleMediaSearch_DeduplicatesSystems(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+
+	mockMediaDB.On("SearchMediaWithFilters",
+		mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return len(filters.Systems) == 1
+		}),
+	).Return([]database.SearchResultWithCursor{}, nil)
+
+	query := "test"
+	params := models.SearchParams{
+		Systems: &[]string{"NES", "NES"},
+		Query:   &query,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
+	}
+
+	_, err = HandleMediaSearch(env)
+	require.NoError(t, err)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaTags_DeduplicatesSystems(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+
+	mockMediaDB.On("GetSystemTagsCached",
+		mock.Anything,
+		mock.MatchedBy(func(systems []systemdefs.System) bool {
+			return len(systems) == 1
+		}),
+	).Return([]database.TagInfo{}, nil)
+
+	params := models.SearchParams{
+		Systems: &[]string{"NES", "NES"},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
+	}
+
+	_, err = HandleMediaTags(env)
+	require.NoError(t, err)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaTags_CapsAtPerCategoryLimit(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+
+	// Return 101 credit tags — one over the 100-per-category cap.
+	// Tags have unique names and ascending counts so we can assert which one is dropped.
+	overLimitTags := make([]database.TagInfo, 0, tagsPerCategoryLimit+1)
+	for i := range tagsPerCategoryLimit + 1 {
+		overLimitTags = append(overLimitTags, database.TagInfo{
+			Type:  "credit",
+			Tag:   fmt.Sprintf("company%03d", i),
+			Count: int64(i + 1),
+		})
+	}
+
+	mockMediaDB.On("GetSystemTagsCached", mock.Anything, mock.Anything).
+		Return(overLimitTags, nil)
+
+	params := models.SearchParams{Systems: &[]string{"NES"}}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
+	}
+
+	result, err := HandleMediaTags(env)
+	require.NoError(t, err)
+
+	tagsResponse, ok := result.(models.TagsResponse)
+	require.True(t, ok)
+	assert.Len(t, tagsResponse.Tags, tagsPerCategoryLimit, "tags must be capped at per-category limit")
+	// The lowest-count tag (company000, Count:1) must have been dropped.
+	for _, tag := range tagsResponse.Tags {
+		assert.NotEqual(t, "company000", tag.Tag, "lowest-count tag must be excluded by cap")
+	}
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestSearchSemaphore_BlocksWhenFull(t *testing.T) {
+	t.Parallel()
+
+	// Fill the semaphore to capacity
+	for range cap(searchSem) {
+		searchSem <- struct{}{}
+	}
+	defer func() {
+		for range cap(searchSem) {
+			<-searchSem
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	env := requests.RequestEnv{
+		Context: ctx,
+		Params:  json.RawMessage(`{"query": "test"}`),
+	}
+
+	_, err := HandleMediaSearch(env)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestResolveSystems_DeduplicatesForGenerateMedia(t *testing.T) {
+	t.Parallel()
+
+	// Verify that duplicate system IDs (as would come from HandleGenerateMedia params)
+	// are deduplicated by resolveSystems before reaching the indexing pipeline.
+	systems, err := resolveSystems([]string{"NES", "NES", "SNES"}, false)
+	require.NoError(t, err)
+	assert.Len(t, systems, 2)
+
+	ids := make([]string, len(systems))
+	for i, s := range systems {
+		ids[i] = s.ID
+	}
+	assert.Contains(t, ids, "NES")
+	assert.Contains(t, ids, "SNES")
+}
+
+func TestHandleMediaSearch_RelativePaths(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+
+	// LauncherCache with NES launcher folder matching the mock rootDir "/mock/roms"
+	launcherCache := &phelpers.LauncherCache{}
+	launcherCache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "nes-launcher", SystemID: "NES", Folders: []string{"NES"}},
+	})
+
+	// Return a result with an absolute path under the rootDir + launcher folder
+	mockMediaDB.On("SearchMediaWithFilters",
+		mock.Anything,
+		mock.Anything,
+	).Return([]database.SearchResultWithCursor{
+		{SystemID: "NES", Name: "Mario Bros", Path: "/mock/roms/NES/mario.nes", MediaID: 1},
+	}, nil)
+
+	query := "mario"
+	params := models.SearchParams{Query: &query}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	defer appState.StopService()
+	drainNotifications(t, ns)
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		Params:  paramsJSON,
+		Database: &database.Database{
+			MediaDB: mockMediaDB,
+		},
+		Platform:      mockPlatform,
+		State:         appState,
+		Config:        &config.Instance{},
+		LauncherCache: launcherCache,
+		ClientID:      "127.0.0.1:12345",
+	}
+
+	result, err := HandleMediaSearch(env)
+	require.NoError(t, err)
+
+	searchResults, ok := result.(models.SearchResults)
+	require.True(t, ok)
+	require.Len(t, searchResults.Results, 1)
+	assert.Equal(t, "NES/mario.nes", searchResults.Results[0].Path)
 }

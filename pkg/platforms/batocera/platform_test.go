@@ -1209,3 +1209,97 @@ func TestStopActiveLauncher_NoActiveState_ReturnsEarly(t *testing.T) {
 	err = platform.StopActiveLauncher(platforms.StopForPreemption)
 	require.NoError(t, err, "should return nil for any stop intent when nothing is active")
 }
+
+func TestCustomLauncherESOverlayEnrichment(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	launchersDir := "/launchers"
+	err := fs.WriteFile(launchersDir+"/movies.toml", []byte(`[[launchers.custom]]
+id = "Movies"
+system = "Video"
+media_dirs = ["movies"]
+`), 0o600)
+	require.NoError(t, err)
+
+	cfg, err := helpers.NewTestConfig(fs, "/config")
+	require.NoError(t, err)
+	err = cfg.LoadCustomLaunchers(launchersDir)
+	require.NoError(t, err)
+
+	// Set up platform with ES config containing a "movies" system
+	p := &Platform{}
+	p.esConfigCache = &ESSystemConfig{
+		Systems: map[string]ESSystem{
+			"movies": {
+				Name:      "movies",
+				Path:      "/userdata/roms/movies",
+				Extension: ".mp4 .mkv .avi .mov",
+			},
+		},
+	}
+
+	launchers := p.Launchers(cfg)
+
+	// Find our custom launcher
+	var moviesLauncher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "Movies" {
+			moviesLauncher = &launchers[i]
+			break
+		}
+	}
+
+	require.NotNil(t, moviesLauncher, "Movies custom launcher should exist")
+	assert.Equal(t, "Video", moviesLauncher.SystemID)
+	assert.Equal(t, []string{".mp4", ".mkv", ".avi", ".mov"}, moviesLauncher.Extensions,
+		"Extensions should be enriched from ES overlay config")
+	assert.NotNil(t, moviesLauncher.Launch,
+		"Launch should be set to ES API launch")
+	assert.Equal(t, platforms.LifecycleFireAndForget, moviesLauncher.Lifecycle,
+		"Lifecycle should be FireAndForget for ES API launches")
+}
+
+func TestCustomLauncherESOverlayEnrichment_AbsolutePath(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	launchersDir := "/launchers"
+	err := fs.WriteFile(launchersDir+"/movies.toml", []byte(`[[launchers.custom]]
+id = "Movies"
+system = "Video"
+media_dirs = ["/userdata/roms/movies"]
+`), 0o600)
+	require.NoError(t, err)
+
+	cfg, err := helpers.NewTestConfig(fs, "/config")
+	require.NoError(t, err)
+	err = cfg.LoadCustomLaunchers(launchersDir)
+	require.NoError(t, err)
+
+	// ES config keys are bare names, not absolute paths
+	p := &Platform{}
+	p.esConfigCache = &ESSystemConfig{
+		Systems: map[string]ESSystem{
+			"movies": {
+				Name:      "movies",
+				Path:      "/userdata/roms/movies",
+				Extension: ".mp4 .mkv",
+			},
+		},
+	}
+
+	launchers := p.Launchers(cfg)
+
+	var moviesLauncher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "Movies" {
+			moviesLauncher = &launchers[i]
+			break
+		}
+	}
+
+	require.NotNil(t, moviesLauncher, "Movies custom launcher should exist")
+	assert.Equal(t, []string{".mp4", ".mkv"}, moviesLauncher.Extensions,
+		"Extensions should be enriched via filepath.Base() fallback")
+}

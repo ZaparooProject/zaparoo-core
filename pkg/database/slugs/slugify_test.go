@@ -20,6 +20,8 @@
 package slugs
 
 import (
+	"fmt"
+	"math/rand"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -162,6 +164,36 @@ func TestSlugifyBasic(t *testing.T) {
 			name:     "roman_numeral_wwii",
 			input:    "World War II",
 			expected: "worldwar2",
+		},
+		{
+			name:     "dotted_initialism_tv",
+			input:    "Super Smash T.V.",
+			expected: "supersmashtv",
+		},
+		{
+			name:     "dotted_initialism_tv_no_periods",
+			input:    "Super Smash TV",
+			expected: "supersmashtv",
+		},
+		{
+			name:     "dotted_initialism_mask",
+			input:    "M.A.S.K.",
+			expected: "mask",
+		},
+		{
+			name:     "dotted_initialism_et",
+			input:    "E.T. the Extra-Terrestrial",
+			expected: "ettheextraterrestrial",
+		},
+		{
+			name:     "dotted_initialism_single_pair_bros",
+			input:    "Super Mario Bros.",
+			expected: "supermariobrothers",
+		},
+		{
+			name:     "roman_numeral_v_end_preserved",
+			input:    "Final Fantasy V",
+			expected: "finalfantasy5",
 		},
 		{
 			name:     "separator_colon",
@@ -928,6 +960,146 @@ func BenchmarkSlugifyBasic(b *testing.B) {
 		b.Run(tc, func(b *testing.B) {
 			for range b.N {
 				Slugify(MediaTypeGame, tc)
+			}
+		})
+	}
+}
+
+func BenchmarkSlugify_LongTitle(b *testing.B) {
+	//nolint:lll // Long titles are intentional — benchmarking worst-case slug generation
+	titles := []struct {
+		name  string
+		input string
+	}{
+		{
+			"ROM_with_tags",
+			"Super Ultra Mega Championship Edition Turbo Hyper Fighting - " +
+				"The Definitive Collection (USA, Europe) (Rev A) (v1.2.3) [!] [T+Eng1.0]",
+		},
+		{
+			"Japanese_RPG",
+			"Shin Megami Tensei - Digital Devil Saga 2 - " +
+				"Avatar Tuner (Japan) (Rev 1) (Disc 1 of 2)",
+		},
+		{
+			"Scene_release",
+			"The.Extremely.Long.Movie.Title.Directors.Cut." +
+				"Extended.Edition.2024.2160p.UHD.BluRay.x265.HDR10.DTS-HD.MA.7.1-GROUP",
+		},
+	}
+
+	for _, tt := range titles {
+		b.Run(tt.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				Slugify(MediaTypeGame, tt.input)
+			}
+		})
+	}
+}
+
+func BenchmarkSlugify_CJK(b *testing.B) {
+	titles := []struct {
+		name  string
+		input string
+	}{
+		{"Japanese", "ゼルダの伝説 時のオカリナ"},                         //nolint:gosmopolitan // CJK benchmark
+		{"Chinese", "最终幻想七 重制版"},                              //nolint:gosmopolitan // CJK benchmark
+		{"Korean", "파이널 판타지 VII 리메이크"},                        //nolint:gosmopolitan // CJK benchmark
+		{"Mixed_CJK_Latin", "ファイナルファンタジー VII Remake (Japan)"}, //nolint:gosmopolitan // CJK benchmark
+	}
+
+	for _, tt := range titles {
+		b.Run(tt.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				Slugify(MediaTypeGame, tt.input)
+			}
+		})
+	}
+}
+
+// buildSyntheticTitles generates deterministic game-title-like strings for benchmarking.
+func buildSyntheticTitles(n int) []string {
+	prefixes := []string{
+		"Super", "Mega", "Ultra", "Hyper", "Neo", "Final", "Grand",
+		"Royal", "Dark", "Bright", "Iron", "Crystal", "Shadow",
+	}
+	middles := []string{
+		"Mario", "Fighter", "Quest", "Fantasy", "Dragon", "Knight",
+		"Warrior", "Battle", "Storm", "Legend", "World", "Star",
+	}
+	suffixes := []string{
+		"Bros", "Adventure", "Saga", "Chronicles", "Wars", "Legacy",
+		"Origins", "Legends", "Rising", "Revolution", "Arena", "Force",
+	}
+	regions := []string{
+		"(USA)", "(Europe)", "(Japan)", "(USA, Europe)", "(World)",
+	}
+
+	rng := rand.New(rand.NewSource(42)) //nolint:gosec // Deterministic seed for reproducible benchmarks
+	titles := make([]string, n)
+	for i := range titles {
+		title := fmt.Sprintf("%s %s %s %d %s",
+			prefixes[rng.Intn(len(prefixes))],
+			middles[rng.Intn(len(middles))],
+			suffixes[rng.Intn(len(suffixes))],
+			rng.Intn(99)+1,
+			regions[rng.Intn(len(regions))],
+		)
+		titles[i] = title
+	}
+	return titles
+}
+
+func BenchmarkSlugify_Batch_500k(b *testing.B) {
+	b.ReportAllocs()
+	titles := buildSyntheticTitles(500_000)
+	b.ResetTimer()
+	for b.Loop() {
+		for _, t := range titles {
+			Slugify(MediaTypeGame, t)
+		}
+	}
+}
+
+func BenchmarkNormalizeToWords(b *testing.B) {
+	titles := []struct {
+		name  string
+		input string
+	}{
+		{"Simple", "Super Mario Bros"},
+		{"With_metadata", "The Legend of Zelda: Ocarina of Time (USA) [!]"},
+		{"Roman_numerals", "Final Fantasy VII Part II"},
+		{"Ampersand", "Sonic & Knuckles"},
+		{"Long_title", "Shin Megami Tensei - Digital Devil Saga 2 - Avatar Tuner (Japan) (Rev 1)"},
+	}
+
+	for _, tt := range titles {
+		b.Run(tt.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				NormalizeToWords(tt.input)
+			}
+		})
+	}
+}
+
+func BenchmarkSlugifyWithTokens(b *testing.B) {
+	titles := []struct {
+		name  string
+		input string
+	}{
+		{"Simple", "Super Mario Bros"},
+		{"Complex", "The Legend of Zelda: Ocarina of Time (USA) [!]"},
+		{"CJK", "ゼルダの伝説 時のオカリナ"}, //nolint:gosmopolitan // CJK benchmark
+	}
+
+	for _, tt := range titles {
+		b.Run(tt.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				SlugifyWithTokens(MediaTypeGame, tt.input)
 			}
 		})
 	}

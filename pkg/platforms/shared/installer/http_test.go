@@ -103,6 +103,7 @@ func TestDownloadHTTPFile_ContextCancellation(t *testing.T) {
 	finalPath := filepath.Join(tempDir, "game.rom")
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Cancel after a short delay
 	go func() {

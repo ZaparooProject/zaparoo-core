@@ -20,6 +20,7 @@
 package mediascanner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,7 +64,8 @@ func FuzzFindPath(f *testing.F) {
 		fullPath := filepath.Join(tmpDir, pathFragment)
 
 		// EXECUTE: Call FindPath
-		result, err := FindPath(fullPath)
+		ctx := context.Background()
+		result, err := FindPath(ctx, fullPath)
 
 		// INVARIANT CHECKS
 		if err == nil {
@@ -78,7 +80,7 @@ func FuzzFindPath(f *testing.F) {
 			}
 
 			// INVARIANT 4: Idempotency - calling FindPath on result should return same result
-			result2, err2 := FindPath(result)
+			result2, err2 := FindPath(ctx, result)
 			if err2 != nil {
 				t.Errorf("FindPath failed on its own output: %s (error: %v)", result, err2)
 			} else if result != result2 {

@@ -21,13 +21,35 @@ package zapscript
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/rs/zerolog/log"
 )
+
+// redactURL strips query parameters from a URL for safe logging.
+func redactURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "<invalid URL>"
+	}
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.User = nil
+	return u.String()
+}
+
+var ErrHTTPNotAllowed = errors.New("HTTP URL not allowed")
+
+var httpCmdClient = &http.Client{
+	Transport: &installer.AuthTransport{},
+}
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdHTTPGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -37,21 +59,25 @@ func cmdHTTPGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
-	url := env.Cmd.Args[0]
+	rawURL := env.Cmd.Args[0]
+
+	if !env.Cfg.IsHTTPAllowed(rawURL) {
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrHTTPNotAllowed, redactURL(rawURL))
+	}
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, http.NoBody)
 		if err != nil {
-			log.Error().Err(err).Msgf("creating request for url: %s", url)
+			log.Error().Err(err).Msgf("creating request for url: %s", redactURL(rawURL))
 			return
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpCmdClient.Do(req) //nolint:gosec // G704: URL from user's ZapScript command
 		if err != nil {
-			log.Error().Err(err).Msgf("getting url: %s", url)
+			log.Error().Err(err).Msgf("getting url: %s", redactURL(rawURL))
 			return
 		}
 		err = resp.Body.Close()
@@ -70,24 +96,28 @@ func cmdHTTPPost(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		return platforms.CmdResult{}, ErrArgCount
 	}
 
-	url := env.Cmd.Args[0]
+	rawURL := env.Cmd.Args[0]
 	mime := env.Cmd.Args[1]
 	payload := env.Cmd.Args[2]
+
+	if !env.Cfg.IsHTTPAllowed(rawURL) {
+		return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrHTTPNotAllowed, redactURL(rawURL))
+	}
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, strings.NewReader(payload))
 		if err != nil {
-			log.Error().Err(err).Msgf("creating request for url: %s", url)
+			log.Error().Err(err).Msgf("creating request for url: %s", redactURL(rawURL))
 			return
 		}
 		req.Header.Set("Content-Type", mime)
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpCmdClient.Do(req) //nolint:gosec // G704: URL from user's ZapScript command
 		if err != nil {
-			log.Error().Err(err).Msgf("error posting to url: %s", url)
+			log.Error().Err(err).Msgf("error posting to url: %s", redactURL(rawURL))
 			return
 		}
 		err = resp.Body.Close()

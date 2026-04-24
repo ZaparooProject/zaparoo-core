@@ -61,7 +61,7 @@ var ignoreDevices = []serialDevice{
 }
 
 func ignoreSerialDevice(path string) bool {
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(path); err != nil { //nolint:gosec // G703: device path from OS
 		return true
 	}
 

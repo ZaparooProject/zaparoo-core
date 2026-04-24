@@ -51,8 +51,12 @@ func (m *MockReader) IDs() []string {
 }
 
 // Open any necessary connections to the device and start polling
-func (m *MockReader) Open(readerConfig config.ReadersConnect, scanChan chan<- readers.Scan) error {
-	args := m.Called(readerConfig, scanChan)
+func (m *MockReader) Open(
+	readerConfig config.ReadersConnect,
+	scanChan chan<- readers.Scan,
+	opts readers.OpenOpts,
+) error {
+	args := m.Called(readerConfig, scanChan, opts)
 	return args.Error(0) //nolint:wrapcheck // mock returns configured error directly
 }
 

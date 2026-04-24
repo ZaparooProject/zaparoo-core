@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -48,6 +49,95 @@ func isValidPort(port string) bool {
 	return true
 }
 
+func isHexDigit(b byte) bool {
+	switch {
+	case b >= '0' && b <= '9':
+		return true
+	case b >= 'a' && b <= 'f':
+		return true
+	case b >= 'A' && b <= 'F':
+		return true
+	default:
+		return false
+	}
+}
+
+func unhexByte(b byte) byte {
+	switch {
+	case b >= '0' && b <= '9':
+		return b - '0'
+	case b >= 'a' && b <= 'f':
+		return b - 'a' + 10
+	default:
+		return b - 'A' + 10
+	}
+}
+
+func shouldKeepCustomSegmentEscaped(r rune) bool {
+	return r == '%' || r == '/' || r == '?' || r == '#' || r < 0x20 || r == 0x7F
+}
+
+// decodeCustomSchemeSegment decodes only percent-escaped bytes that are safe to
+// materialize, preserving literal reserved characters and keeping structural
+// escapes encoded for idempotence.
+func decodeCustomSchemeSegment(raw string) string {
+	if !strings.Contains(raw, "%") {
+		return raw
+	}
+
+	decoded, err := url.PathUnescape(raw)
+	if err != nil || !utf8.ValidString(decoded) {
+		return raw
+	}
+
+	var result strings.Builder
+	result.Grow(len(raw))
+
+	for i := 0; i < len(raw); {
+		if raw[i] != '%' {
+			_ = result.WriteByte(raw[i])
+			i++
+			continue
+		}
+
+		start := i
+		decodedBytes := make([]byte, 0, 4)
+		for i+2 < len(raw) && raw[i] == '%' && isHexDigit(raw[i+1]) && isHexDigit(raw[i+2]) {
+			decodedBytes = append(decodedBytes, unhexByte(raw[i+1])<<4|unhexByte(raw[i+2]))
+			i += 3
+		}
+
+		if len(decodedBytes) == 0 || !utf8.Valid(decodedBytes) {
+			return raw
+		}
+
+		rawOffset := start
+		for len(decodedBytes) > 0 {
+			r, size := utf8.DecodeRune(decodedBytes)
+			if r == utf8.RuneError && size == 1 {
+				return raw
+			}
+
+			rawChunk := raw[rawOffset : rawOffset+size*3]
+			if shouldKeepCustomSegmentEscaped(r) {
+				_, _ = result.WriteString(rawChunk)
+			} else {
+				_, _ = result.WriteRune(r)
+			}
+
+			rawOffset += size * 3
+			decodedBytes = decodedBytes[size:]
+		}
+	}
+
+	decodedResult := result.String()
+	if strings.Count(raw, "#") == 1 {
+		return strings.Replace(decodedResult, "#", "%23", 1)
+	}
+
+	return decodedResult
+}
+
 // DecodeURIIfNeeded applies URL decoding to URIs based on their scheme
 // - Zaparoo custom schemes (steam://, kodi-*://, etc.): uses virtualpath.ParseVirtualPathStr for full decoding
 // - Standard web schemes (http://, https://): decodes path component only
@@ -55,6 +145,9 @@ func isValidPort(port string) bool {
 // Returns the original URI on decoding errors (graceful fallback)
 // Uses manual parsing to handle malformed URLs gracefully
 func DecodeURIIfNeeded(uri string) string {
+	if !utf8.ValidString(uri) {
+		return ""
+	}
 	// Quick check: only decode if contains both :// and % (URL encoding)
 	if !strings.Contains(uri, "://") || !strings.Contains(uri, "%") {
 		return uri
@@ -70,17 +163,14 @@ func DecodeURIIfNeeded(uri string) string {
 
 	// Handle Zaparoo custom virtual paths
 	if shared.IsCustomScheme(schemeLower) {
-		result, err := virtualpath.ParseVirtualPathStr(uri)
-		if err != nil {
-			log.Debug().Err(err).Str("uri", uri).Msg("failed to parse custom scheme URI, using as-is")
-			return uri
+		// Decode each path segment independently so literal reserved characters
+		// stay untouched while percent-escaped structural bytes remain encoded.
+		rest := strings.TrimRight(parsed.Rest, "/")
+		segments := strings.Split(rest, "/")
+		for i, seg := range segments {
+			segments[i] = decodeCustomSchemeSegment(seg)
 		}
-		// Reconstruct with decoded name
-		reconstructed := result.Scheme + "://" + result.ID
-		if result.Name != "" {
-			reconstructed += "/" + result.Name
-		}
-		// Query params preserved (fragments are kept as part of query if present)
+		reconstructed := parsed.Scheme + "://" + strings.Join(segments, "/")
 		if parsed.Query != "" {
 			reconstructed += "?" + parsed.Query
 		}
@@ -89,18 +179,23 @@ func DecodeURIIfNeeded(uri string) string {
 
 	// Handle standard web schemes (http/https)
 	if shared.IsStandardSchemeForDecoding(schemeLower) {
-		// Extract fragment from query if present (only for http/https)
+		// Per RFC 3986, '#' introduces the fragment and takes precedence over
+		// '?', which ParseURIComponents picks up as the query separator.
+		// Extract fragment from the raw URI first so that a fragment containing
+		// '?' doesn't shift on a second parse pass (idempotence).
 		var fragment string
-		query := parsed.Query
-		if idx := strings.Index(query, "#"); idx >= 0 {
-			fragment = query[idx+1:]
-			query = query[:idx]
+		fragURI := uri
+		if idx := strings.Index(uri, "#"); idx >= 0 {
+			fragment = uri[idx+1:]
+			fragURI = uri[:idx]
 		}
+		hParsed := virtualpath.ParseURIComponents(fragURI)
+		query := hParsed.Query
 
 		// Split rest into userinfo@host and path
 		// Format: [userinfo@]host/path
 		var userinfo, host, pathPart string
-		rest := parsed.Rest
+		rest := hParsed.Rest
 
 		// Check for userinfo (use LastIndex to handle @ in passwords)
 		if idx := strings.LastIndex(rest, "@"); idx >= 0 {
@@ -183,9 +278,9 @@ func DecodeURIIfNeeded(uri string) string {
 		decodedPath := pathPart
 		if pathPart != "" {
 			decoded, err := url.PathUnescape(pathPart)
-			if err == nil {
+			if err == nil && utf8.ValidString(decoded) {
 				decodedPath = decoded
-			} else {
+			} else if err != nil {
 				log.Debug().Err(err).Str("uri", uri).Msg("failed to decode web URI path, using as-is")
 			}
 		}
@@ -211,7 +306,7 @@ func DecodeURIIfNeeded(uri string) string {
 }
 
 func FilenameFromPath(p string) string {
-	if p == "" {
+	if p == "" || !utf8.ValidString(p) {
 		return ""
 	}
 
@@ -287,7 +382,7 @@ func FilenameFromPath(p string) string {
 					}
 					// Decode URL encoding and return with extension intact
 					decoded, err := url.PathUnescape(lastSegment)
-					if err == nil {
+					if err == nil && utf8.ValidString(decoded) {
 						return decoded
 					}
 				}
@@ -302,6 +397,9 @@ func FilenameFromPath(p string) string {
 	// Replace backslashes with forward slashes to handle Windows paths on any OS
 	normalizedPath := strings.ReplaceAll(p, "\\", "/")
 	b := path.Base(normalizedPath)
+	if b == "/" || b == "." {
+		return ""
+	}
 	e := path.Ext(normalizedPath)
 	if !IsValidExtension(e) {
 		e = ""

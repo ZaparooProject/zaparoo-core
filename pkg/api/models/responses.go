@@ -52,16 +52,41 @@ type TagsResponse struct {
 	Tags []database.TagInfo `json:"tags"`
 }
 
+type BrowseEntry struct {
+	SystemID  *string            `json:"systemId,omitempty"`
+	RelPath   *string            `json:"relativePath,omitempty"`
+	ZapScript *string            `json:"zapScript,omitempty"`
+	FileCount *int               `json:"fileCount,omitempty"`
+	Group     *string            `json:"group,omitempty"`
+	Name      string             `json:"name"`
+	Path      string             `json:"path"`
+	Type      string             `json:"type"`
+	Tags      []database.TagInfo `json:"tags,omitempty"`
+}
+
+type BrowseResults struct {
+	Pagination *PaginationInfo `json:"pagination,omitempty"`
+	Path       string          `json:"path"`
+	Entries    []BrowseEntry   `json:"entries"`
+	TotalFiles int             `json:"totalFiles"`
+}
+
 type SettingsResponse struct {
-	ReadersScanMode         string             `json:"readersScanMode"`
-	ReadersScanIgnoreSystem []string           `json:"readersScanIgnoreSystems"`
-	ReadersConnect          []ReaderConnection `json:"readersConnect"`
-	ReadersScanExitDelay    float32            `json:"readersScanExitDelay"`
-	RunZapScript            bool               `json:"runZapScript"`
-	DebugLogging            bool               `json:"debugLogging"`
-	AudioScanFeedback       bool               `json:"audioScanFeedback"`
-	ReadersAutoDetect       bool               `json:"readersAutoDetect"`
-	ErrorReporting          bool               `json:"errorReporting"`
+	UpdateChannel             string             `json:"updateChannel"`
+	ReadersScanMode           string             `json:"readersScanMode"`
+	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
+	ReadersConnect            []ReaderConnection `json:"readersConnect"`
+	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
+	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
+	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
+	AudioVolume               int                `json:"audioVolume"`
+	RunZapScript              bool               `json:"runZapScript"`
+	DebugLogging              bool               `json:"debugLogging"`
+	AudioScanFeedback         bool               `json:"audioScanFeedback"`
+	ReadersAutoDetect         bool               `json:"readersAutoDetect"`
+	ErrorReporting            bool               `json:"errorReporting"`
+	LaunchGuardEnabled        bool               `json:"launchGuardEnabled"`
+	LaunchGuardRequireConfirm bool               `json:"launchGuardRequireConfirm"`
 }
 
 type PlaytimeLimitsResponse struct {
@@ -153,6 +178,7 @@ type IndexingStatusResponse struct {
 	Exists             bool    `json:"exists"`
 	Indexing           bool    `json:"indexing"`
 	Optimizing         bool    `json:"optimizing"`
+	Paused             bool    `json:"paused"`
 }
 
 type ReaderResponse struct {
@@ -161,13 +187,57 @@ type ReaderResponse struct {
 	Connected bool   `json:"connected"`
 }
 
+type MediaHistoryResponseEntry struct {
+	EndedAt    *string `json:"endedAt,omitempty"`
+	SystemID   string  `json:"systemId"`
+	SystemName string  `json:"systemName"`
+	MediaName  string  `json:"mediaName"`
+	MediaPath  string  `json:"mediaPath"`
+	LauncherID string  `json:"launcherId"`
+	StartedAt  string  `json:"startedAt"`
+	PlayTime   int     `json:"playTime"`
+}
+
+type MediaHistoryResponse struct {
+	Pagination *PaginationInfo             `json:"pagination,omitempty"`
+	Entries    []MediaHistoryResponseEntry `json:"entries"`
+}
+
+type MediaHistoryTopEntry struct {
+	SystemID      string `json:"systemId"`
+	SystemName    string `json:"systemName"`
+	MediaName     string `json:"mediaName"`
+	MediaPath     string `json:"mediaPath"`
+	LastPlayedAt  string `json:"lastPlayedAt"`
+	TotalPlayTime int    `json:"totalPlayTime"`
+	SessionCount  int    `json:"sessionCount"`
+}
+
+type MediaHistoryTopResponse struct {
+	Entries []MediaHistoryTopEntry `json:"entries"`
+}
+
+type MediaLookupMatch struct {
+	System     System             `json:"system"`
+	Name       string             `json:"name"`
+	Path       string             `json:"path"`
+	ZapScript  string             `json:"zapScript"`
+	Tags       []database.TagInfo `json:"tags"`
+	Confidence float64            `json:"confidence"`
+}
+
+type MediaLookupResponse struct {
+	Match *MediaLookupMatch `json:"match"`
+}
+
 type ActiveMedia struct {
-	Started    time.Time `json:"started"`
-	LauncherID string    `json:"launcherId"`
-	SystemID   string    `json:"systemId"`
-	SystemName string    `json:"systemName"`
-	Path       string    `json:"mediaPath"`
-	Name       string    `json:"mediaName"`
+	Started          time.Time `json:"started"`
+	LauncherID       string    `json:"launcherId"`
+	SystemID         string    `json:"systemId"`
+	SystemName       string    `json:"systemName"`
+	Path             string    `json:"mediaPath"`
+	Name             string    `json:"mediaName"`
+	LauncherControls []string  `json:"launcherControls,omitempty"`
 }
 
 // NewActiveMedia creates a new ActiveMedia with the current timestamp.
@@ -184,8 +254,8 @@ func NewActiveMedia(systemID, systemName, path, name, launcherID string) *Active
 
 // ActiveMediaResponse is the API response type for active media, including ZapScript.
 type ActiveMediaResponse struct {
-	ActiveMedia
 	ZapScript string `json:"zapScript"`
+	ActiveMedia
 }
 
 func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
@@ -257,7 +327,7 @@ type TokensResponse struct {
 type ClientResponse struct {
 	Name    string    `json:"name"`
 	Address string    `json:"address"`
-	Secret  string    `json:"secret"`
+	Secret  string    `json:"secret"` //nolint:gosec // G117: pairing secret, not a credential
 	ID      uuid.UUID `json:"id"`
 }
 
@@ -292,4 +362,59 @@ type InboxMessage struct {
 
 type InboxResponse struct {
 	Messages []InboxMessage `json:"messages"`
+}
+
+// PairedClient represents a client paired via the API encryption flow.
+// PairingKey and AuthToken are intentionally omitted from the public API
+// surface — only the metadata identifying the client is exposed.
+type PairedClient struct {
+	ClientID   string `json:"clientId"`
+	ClientName string `json:"clientName"`
+	CreatedAt  int64  `json:"createdAt"`
+	LastSeenAt int64  `json:"lastSeenAt"`
+}
+
+// ClientsResponse is the response for the clients RPC method.
+type ClientsResponse struct {
+	Clients []PairedClient `json:"clients"`
+}
+
+// ClientsDeleteParams is the parameters object for the clients.delete RPC method.
+type ClientsDeleteParams struct {
+	ClientID string `json:"clientId"`
+}
+
+// ClientsPairStartResponse is the response for the clients.pair.start RPC method.
+type ClientsPairStartResponse struct {
+	PIN       string `json:"pin"`
+	ExpiresAt int64  `json:"expiresAt"`
+}
+
+// ClientsPairedNotification is the payload for the clients.paired notification,
+// broadcast when a client successfully completes the PAKE pairing flow.
+type ClientsPairedNotification struct {
+	ClientID   string `json:"clientId"`
+	ClientName string `json:"clientName"`
+}
+
+type SettingsAuthClaimResponse struct {
+	Domains []string `json:"domains"`
+}
+
+type UpdateCheckResponse struct {
+	CurrentVersion  string `json:"currentVersion"`
+	LatestVersion   string `json:"latestVersion,omitempty"`
+	ReleaseNotes    string `json:"releaseNotes,omitempty"`
+	UpdateAvailable bool   `json:"updateAvailable"`
+}
+
+type UpdateApplyResponse struct {
+	PreviousVersion string `json:"previousVersion"`
+	NewVersion      string `json:"newVersion"`
+}
+
+type ScreenshotResponse struct {
+	Path string `json:"path"`
+	Data string `json:"data"` // base64 encoded
+	Size int    `json:"size"` // original byte count
 }

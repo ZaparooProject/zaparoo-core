@@ -133,8 +133,7 @@ func BuildGenerateDBPage(
 	pages *tview.Pages,
 	app *tview.Application,
 ) {
-	ctx, cancel := context.WithCancel(context.Background())
-
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel called in goBack
 	// Create page frame
 	frame := NewPageFrame(app).
 		SetTitle("Update Media DB")
@@ -225,7 +224,7 @@ func BuildGenerateDBPage(
 		bar.AddButton("Update", func() {
 			_, err := client.LocalClient(context.Background(), cfg, models.MethodMediaGenerate, "")
 			if err != nil {
-				log.Error().Err(err).Msg("error generating media db")
+				log.Warn().Err(err).Msg("error generating media db")
 				return
 			}
 			statePages.SwitchToPage("progress")
@@ -306,7 +305,7 @@ func BuildGenerateDBPage(
 					if errors.Is(err, client.ErrRequestCancelled) {
 						return
 					}
-					log.Error().Err(err).Msg("error waiting for indexing update")
+					log.Warn().Err(err).Msg("error waiting for indexing update")
 					return
 				}
 

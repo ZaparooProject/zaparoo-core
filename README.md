@@ -2,8 +2,6 @@ This is the development repository for Zaparoo Core.
 
 Visit [Zaparoo.org](https://zaparoo.org/) for more information about the Zaparoo project or the [Downloads](https://zaparoo.org/downloads/#zaparoo-core) page to download Zaparoo Core for your platform.
 
-Automated nightly builds are available for testing the latest development changes. Check the [Releases](https://github.com/ZaparooProject/zaparoo-core/releases) page for pre-releases.
-
 ## Contributors
 
 See the [Contributors](https://zaparoo.org/docs/community/contributors/) page for a complete list of all contributors to the Zaparoo project. Contributions are welcome and appreciated!
@@ -149,6 +147,13 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <img src="https://avatars.githubusercontent.com/u/130571429?v=4" width="100;" alt="staydata"/>
                     <br />
                     <sub><b>staydata</b></sub>
+                </a>
+            </td>
+            <td align="center">
+                <a href="https://github.com/tomaioo">
+                    <img src="https://avatars.githubusercontent.com/u/203048277?v=4" width="100;" alt="tomaioo"/>
+                    <br />
+                    <sub><b>tomaioo</b></sub>
                 </a>
             </td>
 		</tr>

@@ -189,6 +189,8 @@ func TestAutoDetector_DetectReaders_DriverNotEnabled(t *testing.T) {
 	require.NoError(t, err)
 	// Detect should not be called since driver is not enabled
 	mockReader.AssertNotCalled(t, "Detect", mock.Anything)
+	// Regression: reader must be closed even when skipped due to disabled driver.
+	mockReader.AssertCalled(t, "Close")
 }
 
 func TestAutoDetector_DetectReaders_AutoDetectDisabled(t *testing.T) {
@@ -244,6 +246,10 @@ func TestAutoDetector_DetectReaders_NoDeviceDetected(t *testing.T) {
 	err := ad.DetectReaders(mockPlatform, cfg, st, scanChan)
 
 	require.NoError(t, err)
+	// Regression: reader must be closed when Detect returns empty to prevent goroutine leak.
+	// SupportedReaders creates a new instance on every call; without Close the goroutine
+	// started by the reader's constructor runs forever.
+	mockReader.AssertCalled(t, "Close")
 	mockReader.AssertExpectations(t)
 }
 
@@ -272,6 +278,8 @@ func TestAutoDetector_DetectReaders_InvalidDetectString(t *testing.T) {
 	err := ad.DetectReaders(mockPlatform, cfg, st, scanChan)
 
 	require.NoError(t, err)
+	// Regression: reader must be closed when detect string is malformed.
+	mockReader.AssertCalled(t, "Close")
 	mockReader.AssertExpectations(t)
 }
 
@@ -341,7 +349,7 @@ func TestAutoDetector_DetectReaders_SuccessfulConnection(t *testing.T) {
 	})
 	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	mockReader.On("Detect", mock.Anything).Return("simpleserial:/dev/ttyUSB0")
-	mockReader.On("Open", mock.Anything, mock.Anything).Return(nil)
+	mockReader.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockReader.On("Connected").Return(true)
 	mockReader.On("Path").Return("/dev/ttyUSB0")
 	mockReader.On("ReaderID").Return("simpleserial-abc123")
@@ -392,7 +400,7 @@ func TestAutoDetector_DetectReaders_OpenError(t *testing.T) {
 	})
 	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	mockReader.On("Detect", mock.Anything).Return("simpleserial:/dev/ttyUSB0")
-	mockReader.On("Open", mock.Anything, mock.Anything).Return(errors.New("open failed"))
+	mockReader.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("open failed"))
 
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("SupportedReaders", cfg).Return([]readers.Reader{mockReader})
@@ -406,6 +414,8 @@ func TestAutoDetector_DetectReaders_OpenError(t *testing.T) {
 	// Path should be marked as failed
 	failed := ad.getFailedPaths()
 	assert.Contains(t, failed, "/dev/ttyUSB0")
+	// Regression: reader must be closed when Open fails, not left running.
+	mockReader.AssertCalled(t, "Close")
 }
 
 func TestAutoDetector_DetectReaders_ConnectedReturnsFalse(t *testing.T) {
@@ -423,7 +433,7 @@ func TestAutoDetector_DetectReaders_ConnectedReturnsFalse(t *testing.T) {
 	})
 	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	mockReader.On("Detect", mock.Anything).Return("simpleserial:/dev/ttyUSB0")
-	mockReader.On("Open", mock.Anything, mock.Anything).Return(nil)
+	mockReader.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockReader.On("Connected").Return(false) // Connection failed
 	mockReader.On("Close").Return(nil)
 
@@ -448,7 +458,7 @@ func TestAutoDetector_ConnectReader_Success(t *testing.T) {
 	ad := NewAutoDetector(nil)
 
 	mockReader := mocks.NewMockReader()
-	mockReader.On("Open", mock.Anything, mock.Anything).Return(nil)
+	mockReader.On("Open", mock.Anything, mock.Anything, readers.OpenOpts{Probing: true}).Return(nil)
 	mockReader.On("Connected").Return(true)
 	mockReader.On("Path").Return("/dev/ttyUSB0")
 	mockReader.On("ReaderID").Return("simpleserial-abc123")
@@ -482,7 +492,7 @@ func TestAutoDetector_ConnectReader_OpenError(t *testing.T) {
 	ad := NewAutoDetector(nil)
 
 	mockReader := mocks.NewMockReader()
-	mockReader.On("Open", mock.Anything, mock.Anything).Return(errors.New("permission denied"))
+	mockReader.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("permission denied"))
 
 	mockPlatform := mocks.NewMockPlatform()
 	st, _ := state.NewState(mockPlatform, "test-uuid")
@@ -500,7 +510,7 @@ func TestAutoDetector_ConnectReader_NotConnected(t *testing.T) {
 	ad := NewAutoDetector(nil)
 
 	mockReader := mocks.NewMockReader()
-	mockReader.On("Open", mock.Anything, mock.Anything).Return(nil)
+	mockReader.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockReader.On("Connected").Return(false)
 	mockReader.On("Close").Return(nil)
 
@@ -521,7 +531,7 @@ func TestAutoDetector_ConnectReader_CloseError(t *testing.T) {
 	ad := NewAutoDetector(nil)
 
 	mockReader := mocks.NewMockReader()
-	mockReader.On("Open", mock.Anything, mock.Anything).Return(nil)
+	mockReader.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockReader.On("Connected").Return(false)
 	mockReader.On("Close").Return(errors.New("close failed"))
 
@@ -706,7 +716,7 @@ func TestAutoDetector_DetectReaders_ClearsFailedOnSuccess(t *testing.T) {
 	})
 	mockReader.On("IDs").Return([]string{"simpleserial"}).Maybe()
 	mockReader.On("Detect", mock.Anything).Return("simpleserial:/dev/ttyUSB0")
-	mockReader.On("Open", mock.Anything, mock.Anything).Return(nil)
+	mockReader.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockReader.On("Connected").Return(true)
 	mockReader.On("Path").Return("/dev/ttyUSB0")
 	mockReader.On("ReaderID").Return("simpleserial-abc123")
@@ -809,7 +819,7 @@ func TestAutoDetector_ConnectReader_CloseError_AfterFailedConnect(t *testing.T) 
 
 	// Don't use NewMockReader to avoid the default Close().Maybe() setup
 	mockReader := &mocks.MockReader{}
-	mockReader.On("Open", mock.Anything, mock.Anything).Return(nil)
+	mockReader.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockReader.On("Connected").Return(false) // Connection failed
 	mockReader.On("Close").Return(errors.New("close failed"))
 
@@ -841,7 +851,7 @@ func TestAutoDetector_DetectReaders_EmptyPath(t *testing.T) {
 	mockReader.On("IDs").Return([]string{"mqtt"}).Maybe()
 	// MQTT returns driver with empty path
 	mockReader.On("Detect", mock.Anything).Return("mqtt:")
-	mockReader.On("Open", mock.Anything, mock.Anything).Return(nil)
+	mockReader.On("Open", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockReader.On("Connected").Return(true)
 	mockReader.On("Path").Return("")
 	mockReader.On("ReaderID").Return("mqtt-broker")

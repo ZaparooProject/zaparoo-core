@@ -31,6 +31,8 @@ import (
 var criticalNotifications = map[string]bool{
 	models.NotificationTokensAdded:         true,
 	models.NotificationTokensRemoved:       true,
+	models.NotificationTokensStaged:        true,
+	models.NotificationTokensStagedReady:   true,
 	models.NotificationReadersConnected:    true,
 	models.NotificationReadersDisconnected: true,
 	models.NotificationStarted:             true,
@@ -75,8 +77,8 @@ func MediaIndexing(ns chan<- models.Notification, payload models.IndexingStatusR
 	sendNotification(ns, models.NotificationMediaIndexing, payload)
 }
 
-func MediaStopped(ns chan<- models.Notification) {
-	sendNotification(ns, models.NotificationStopped, nil)
+func MediaStopped(ns chan<- models.Notification, payload *models.MediaStoppedParams) {
+	sendNotification(ns, models.NotificationStopped, payload)
 }
 
 func MediaStarted(ns chan<- models.Notification, payload models.MediaStartedParams) {
@@ -86,6 +88,16 @@ func MediaStarted(ns chan<- models.Notification, payload models.MediaStartedPara
 //nolint:gocritic // single-use parameter in notification
 func TokensAdded(ns chan<- models.Notification, payload models.TokenResponse) {
 	sendNotification(ns, models.NotificationTokensAdded, payload)
+}
+
+//nolint:gocritic // single-use parameter in notification
+func TokensStaged(ns chan<- models.Notification, payload models.TokenResponse) {
+	sendNotification(ns, models.NotificationTokensStaged, payload)
+}
+
+//nolint:gocritic // single-use parameter in notification
+func TokensStagedReady(ns chan<- models.Notification, payload models.TokenResponse) {
+	sendNotification(ns, models.NotificationTokensStagedReady, payload)
 }
 
 func TokensRemoved(ns chan<- models.Notification) {
@@ -110,4 +122,8 @@ func PlaytimeLimitWarning(ns chan<- models.Notification, payload models.Playtime
 
 func InboxAdded(ns chan<- models.Notification, payload *models.InboxMessage) {
 	sendNotification(ns, models.NotificationInboxAdded, payload)
+}
+
+func ClientsPaired(ns chan<- models.Notification, payload models.ClientsPairedNotification) {
+	sendNotification(ns, models.NotificationClientsPaired, payload)
 }

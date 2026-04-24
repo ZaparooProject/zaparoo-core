@@ -20,11 +20,13 @@
 package mediascanner
 
 import (
+	"archive/zip"
 	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -111,7 +113,7 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 
 	// Run the media indexer
 	systems := []systemdefs.System{{ID: systemdefs.SystemTVEpisode}}
-	_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {})
+	_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Both scanners should have been called
@@ -165,7 +167,7 @@ func TestGetSystemPathsRespectsSkipFilesystemScan(t *testing.T) {
 
 	// Call GetSystemPaths - this will test the folder aggregation logic
 	// Even with empty root folders, we can verify the function respects SkipFilesystemScan
-	results := GetSystemPaths(cfg, mockPlatform, []string{}, systems)
+	results := GetSystemPaths(context.Background(), cfg, mockPlatform, []string{}, systems)
 
 	// Since GetSystemPaths tries to resolve actual paths and we have no real folders,
 	// we expect empty results, but the important part is that the function
@@ -375,8 +377,13 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -417,10 +424,10 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
 	mockMediaDB.On("SetLastIndexedSystem", "genesis").Return(nil).Maybe() // Update progress during processing
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
-	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()                  // Finally complete
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()               // Clear on completion
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()      // Clear systems on completion
-	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
+	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()             // Finally complete
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()          // Clear on completion
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear systems on completion
+	// PopulateSystemTagsCache now runs in background optimization, not in NewNamesIndex
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -441,7 +448,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	}
 
 	// Run the indexer - should resume from 'nes'
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, updateFunc)
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, updateFunc, nil)
 	require.NoError(t, err)
 
 	// Verify that resume logic was called
@@ -473,8 +480,13 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -517,10 +529,10 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
 	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Maybe()
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
-	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()                  // Finally complete
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()               // Clear on completion
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()      // Clear systems on completion
-	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
+	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()             // Finally complete
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()          // Clear on completion
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear systems on completion
+	// PopulateSystemTagsCache now runs in background optimization, not in NewNamesIndex
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -533,7 +545,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	}
 
 	// Run the indexer - should fall back to full reindex
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify mock expectations
@@ -563,8 +575,13 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -590,8 +607,8 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 
 	// Mock SetIndexingSystems calls
 	mockMediaDB.On("SetIndexingSystems", []string{"nes"}).Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe()     // Clear on completion
-	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe() // Clear on completion
+	// PopulateSystemTagsCache now runs in background optimization, not in NewNamesIndex
 
 	// Mock GetMax*ID methods for scan state population
 	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()
@@ -616,7 +633,7 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	systems := []systemdefs.System{{ID: "nes"}}
 
 	// Run the indexer - should start fresh after failed status
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify mock expectations
@@ -651,7 +668,7 @@ func TestNewNamesIndex_DatabaseErrorDuringResume(t *testing.T) {
 	systems := []systemdefs.System{{ID: "nes"}}
 
 	// Run the indexer - should fail fast when database is not ready
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.Error(t, err, "Should fail when database is not ready")
 	assert.Contains(t, err.Error(), "database not ready for indexing", "Error should indicate database readiness issue")
 
@@ -678,7 +695,7 @@ func TestNewNamesIndex_StateCleanupOnCompletion(t *testing.T) {
 	systems := []systemdefs.System{{ID: "nes"}}
 
 	// Run the indexer
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify completion state cleanup by checking the actual database state
@@ -720,8 +737,13 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -759,8 +781,8 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(2) // Clear on start + completion
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
 	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()      // Clear on completion
-	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear on completion
+	// PopulateSystemTagsCache now runs in background optimization, not in NewNamesIndex
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -776,7 +798,7 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 	}
 
 	// Run the indexer - should use TruncateSystems() since not indexing all defined systems
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify mock expectations - specifically that TruncateSystems() was called, not Truncate()
@@ -806,8 +828,13 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -845,8 +872,8 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(2) // Clear on start + completion
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
 	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()      // Clear on completion
-	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear on completion
+	// PopulateSystemTagsCache now runs in background optimization, not in NewNamesIndex
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -859,7 +886,7 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 	}
 
 	// Run the indexer - should use TruncateSystems() since only indexing subset
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify mock expectations - specifically that TruncateSystems() was called, not Truncate()
@@ -890,8 +917,13 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -944,8 +976,8 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
 	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()      // Clear on completion
-	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear on completion
+	// PopulateSystemTagsCache now runs in background optimization, not in NewNamesIndex
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -959,7 +991,7 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	}
 
 	// Run the indexer - should detect system change and start fresh
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify mock expectations
@@ -990,8 +1022,13 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -1021,8 +1058,8 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(2) // Clear on start + completion
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
 	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe()     // Clear on completion
-	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe() // Clear on completion
+	// PopulateSystemTagsCache now runs in background optimization, not in NewNamesIndex
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -1033,7 +1070,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	systems := []systemdefs.System{}
 
 	// Run the indexer - should use TruncateSystems() even for empty list since 0 != 197 systems
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err)
 
 	// Verify mock expectations
@@ -1060,8 +1097,13 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -1103,10 +1145,10 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 
 	mockMediaDB.On("SetLastIndexedSystem", mock.AnythingOfType("string")).Return(nil).Maybe()
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Maybe()              // Allow empty string calls
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()      // Clear systems on completion
-	mockMediaDB.On("InvalidateCountCache").Return(nil).Once()                   // Cache invalidation after indexing
-	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Maybe()         // Allow empty string calls
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear systems on completion
+	mockMediaDB.On("InvalidateCountCache").Return(nil).Once()              // Cache invalidation after indexing
+	// PopulateSystemTagsCache now runs in background optimization, not in NewNamesIndex
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -1117,7 +1159,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	systems := []systemdefs.System{{ID: "nes"}}
 
 	// Run the indexer
-	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {}, nil)
 	require.NoError(t, err, "Indexing should not fail")
 
 	// Verify that operations outside transactions are only for setup/cleanup, not file processing
@@ -1212,7 +1254,7 @@ func TestAnyScannerProgressUpdates(t *testing.T) {
 	// Since there are no root dirs, the system won't be processed in the main loop
 	// and will only be picked up by the "any" scanner
 	systems := []systemdefs.System{{ID: "test-system-for-any-scanner"}}
-	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, updateFunc)
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, updateFunc, nil)
 	require.NoError(t, err)
 
 	// Verify the "any" scanner was called for our system
@@ -1235,13 +1277,425 @@ func TestAnyScannerProgressUpdates(t *testing.T) {
 		"Status update should have been called with the test system ID from 'any' scanner")
 
 	// Verify that status.Total was dynamically expanded (should be > initial value)
-	// Initial total is len(sysPathIDs) + 2, but since there are no paths, it starts at 2
+	// Initial total is len(sysPathIDs) + 1, but since there are no paths, it starts at 1
 	// After "any" scanner finds results, Total should be incremented
 	if len(statusUpdates) > 0 {
 		lastStatus := statusUpdates[len(statusUpdates)-1]
-		assert.GreaterOrEqual(t, lastStatus.Total, 3,
+		assert.GreaterOrEqual(t, lastStatus.Total, 2,
 			"Total should be dynamically expanded when 'any' scanner finds results")
 	}
+}
+
+// TestGetSystemPaths_CustomLauncherAbsolutePaths tests that GetSystemPaths returns
+// valid paths for a custom launcher with absolute Folders pointing to real temp directories.
+func TestGetSystemPaths_CustomLauncherAbsolutePaths(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create temp directories to simulate custom launcher media dirs
+	ps2Dir := t.TempDir()
+
+	// Create test files in the directory
+	require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, "game1.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, "game2.iso"), []byte("test"), 0o600))
+
+	// Create a custom launcher with absolute path Folders
+	launcher := platforms.Launcher{
+		ID:         "custom-ps2",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{ps2Dir},
+		Extensions: []string{".iso", ".bin"},
+	}
+
+	// Create config
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock platform
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	// Initialize launcher cache
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Call GetSystemPaths with no root folders (custom launchers use absolute paths)
+	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
+	results := GetSystemPaths(context.Background(), cfg, platform, []string{}, systems)
+
+	// The custom launcher's absolute folder should be resolved
+	require.Len(t, results, 1, "Should find exactly one path for PS2 custom launcher")
+	assert.Equal(t, systemdefs.SystemPS2, results[0].System.ID)
+	assert.Equal(t, ps2Dir, results[0].Path)
+}
+
+// TestGetFiles_CustomLauncherMatchesFiles is the critical reproduction test:
+// it verifies that GetFiles() actually finds and matches files when walking
+// a directory from a custom launcher with absolute paths.
+func TestGetFiles_CustomLauncherMatchesFiles(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create temp directory with test files
+	ps2Dir := t.TempDir()
+	testFiles := []string{"Final Fantasy X.iso", "Metal Gear Solid 3.iso", "Shadow of the Colossus.bin"}
+	for _, f := range testFiles {
+		require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, f), []byte("test"), 0o600))
+	}
+	// Also create a file that should NOT match
+	require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, "readme.txt"), []byte("test"), 0o600))
+
+	// Create a custom launcher with absolute path
+	launcher := platforms.Launcher{
+		ID:         "custom-ps2",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{ps2Dir},
+		Extensions: []string{".iso", ".bin"},
+	}
+
+	// Create config
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock platform - RootDirs is needed by PathIsLauncher for root-relative folder matching
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	// Initialize launcher cache
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Call GetFiles with the custom launcher's directory
+	ctx := context.Background()
+	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemPS2, ps2Dir)
+	require.NoError(t, err)
+
+	// Should find all matching files (.iso and .bin) but not .txt
+	assert.Len(t, files, 3, "Should find 3 matching files (.iso and .bin)")
+
+	// Verify the right files were found
+	foundFiles := make(map[string]bool)
+	for _, f := range files {
+		foundFiles[filepath.Base(f)] = true
+	}
+	assert.True(t, foundFiles["Final Fantasy X.iso"])
+	assert.True(t, foundFiles["Metal Gear Solid 3.iso"])
+	assert.True(t, foundFiles["Shadow of the Colossus.bin"])
+	assert.False(t, foundFiles["readme.txt"], "Non-matching extension should be excluded")
+}
+
+// TestGetFiles_CustomLauncherNestedDirectories verifies that GetFiles walks
+// subdirectories within a custom launcher's absolute path.
+func TestGetFiles_CustomLauncherNestedDirectories(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create temp directory with nested structure
+	ps2Dir := t.TempDir()
+	rpgDir := filepath.Join(ps2Dir, "RPG")
+	actionDir := filepath.Join(ps2Dir, "Action")
+	require.NoError(t, os.MkdirAll(rpgDir, 0o750))
+	require.NoError(t, os.MkdirAll(actionDir, 0o750))
+
+	require.NoError(t, os.WriteFile(filepath.Join(rpgDir, "FFX.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(actionDir, "DMC3.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, "root_game.iso"), []byte("test"), 0o600))
+
+	// Create a custom launcher with absolute path
+	launcher := platforms.Launcher{
+		ID:         "custom-ps2",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{ps2Dir},
+		Extensions: []string{".iso"},
+	}
+
+	// Create config
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock platform
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	// Initialize launcher cache
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Call GetFiles
+	ctx := context.Background()
+	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemPS2, ps2Dir)
+	require.NoError(t, err)
+
+	assert.Len(t, files, 3, "Should find files in root and nested directories")
+}
+
+// TestNewNamesIndex_CustomLauncherE2E is a full end-to-end test:
+// custom launcher → GetSystemPaths → GetFiles → AddMediaPath → verify DB has entries.
+func TestNewNamesIndex_CustomLauncherE2E(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create temp directory with test files
+	ps2Dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, "Final Fantasy X.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(ps2Dir, "Metal Gear Solid 3.bin"), []byte("test"), 0o600))
+
+	// Create a custom launcher with absolute path
+	launcher := platforms.Launcher{
+		ID:         "custom-ps2-e2e",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{ps2Dir},
+		Extensions: []string{".iso", ".bin"},
+	}
+
+	// Create config
+	fsHelper := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock platform
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	// Use real database
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	// Initialize launcher cache
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Run the full indexer
+	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, filesIndexed, "Should have indexed 2 files from custom launcher")
+
+	// Verify files are actually in the database
+	mediaEntries, err := db.MediaDB.GetMediaBySystemID(systemdefs.SystemPS2)
+	require.NoError(t, err)
+	assert.Len(t, mediaEntries, 2, "Database should contain 2 media entries for PS2")
+
+	// Verify the paths are correct
+	foundPaths := make(map[string]bool)
+	for _, entry := range mediaEntries {
+		foundPaths[filepath.Base(entry.Path)] = true
+	}
+	assert.True(t, foundPaths["Final Fantasy X.iso"], "Should find Final Fantasy X.iso in DB")
+	assert.True(t, foundPaths["Metal Gear Solid 3.bin"], "Should find Metal Gear Solid 3.bin in DB")
+}
+
+// TestNewNamesIndex_MixedSkipFilesystemScanAndCustomLauncher tests the scenario where
+// a SkipFilesystemScan launcher (e.g., RetroBat) AND a custom launcher both target
+// the same system (e.g., PS2). Verifies the custom launcher's files still get indexed.
+func TestNewNamesIndex_MixedSkipFilesystemScanAndCustomLauncher(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create temp directory with test files for the custom launcher
+	customDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(customDir, "game1.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(customDir, "game2.mdf"), []byte("test"), 0o600))
+
+	// SkipFilesystemScan launcher with a Scanner that ignores its input and
+	// returns empty — simulates RetroBat when gamelist.xml is missing.
+	skipLauncher := platforms.Launcher{
+		ID:                 "retrobat-ps2",
+		SystemID:           systemdefs.SystemPS2,
+		Folders:            []string{"ps2"},
+		Extensions:         []string{".iso", ".bin", ".chd"},
+		SkipFilesystemScan: true,
+		Scanner: func(_ context.Context, _ *config.Instance, _ string,
+			_ []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			return nil, nil
+		},
+	}
+
+	// Custom launcher with absolute path and additional extensions
+	customLauncher := platforms.Launcher{
+		ID:         "custom-ps2-emulator",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{customDir},
+		Extensions: []string{".iso", ".mdf"},
+	}
+
+	// Create config
+	fsHelper := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock platform
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{skipLauncher, customLauncher})
+
+	// Use real database
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	// Initialize launcher cache
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Run the full indexer
+	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+
+	// The custom launcher's files should be indexed even though
+	// the SkipFilesystemScan launcher also targets PS2
+	assert.Equal(t, 2, filesIndexed, "Should have indexed 2 files from custom launcher")
+
+	// Verify files are actually in the database
+	mediaEntries, err := db.MediaDB.GetMediaBySystemID(systemdefs.SystemPS2)
+	require.NoError(t, err)
+	assert.Len(t, mediaEntries, 2, "Database should contain 2 media entries for PS2")
+
+	// Verify both file types were indexed
+	foundPaths := make(map[string]bool)
+	for _, entry := range mediaEntries {
+		foundPaths[filepath.Base(entry.Path)] = true
+	}
+	assert.True(t, foundPaths["game1.iso"], "Should find .iso file in DB")
+	assert.True(t, foundPaths["game2.mdf"], "Should find .mdf file in DB")
+}
+
+// TestNewNamesIndex_IndependentScannerDoesNotWipeFiles is the critical regression
+// test for the scanner isolation fix. A custom launcher provides filesystem files,
+// and a SkipFilesystemScan launcher has a Scanner that ignores its input and returns
+// its own results. Both launchers' files must end up in the DB.
+func TestNewNamesIndex_IndependentScannerDoesNotWipeFiles(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create temp directory with test files for the custom (filesystem) launcher
+	customDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(customDir, "game1.iso"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(customDir, "game2.bin"), []byte("test"), 0o600))
+
+	// SkipFilesystemScan launcher whose Scanner ignores input and generates its own
+	// results (e.g. Kodi API, gamelist.xml with independent paths).
+	skipLauncher := platforms.Launcher{
+		ID:                 "independent-scanner",
+		SystemID:           systemdefs.SystemPS2,
+		SkipFilesystemScan: true,
+		Scanner: func(_ context.Context, _ *config.Instance, _ string,
+			_ []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			return []platforms.ScanResult{
+				{Name: "Scanner Game A", Path: "/virtual/scanner-game-a.iso"},
+				{Name: "Scanner Game B", Path: "/virtual/scanner-game-b.iso"},
+			}, nil
+		},
+	}
+
+	// Custom launcher with real filesystem files
+	customLauncher := platforms.Launcher{
+		ID:         "custom-ps2",
+		SystemID:   systemdefs.SystemPS2,
+		Folders:    []string{customDir},
+		Extensions: []string{".iso", ".bin"},
+	}
+
+	// Create config
+	fsHelper := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fsHelper, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock platform
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(
+		[]platforms.Launcher{skipLauncher, customLauncher})
+
+	// Use real database
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	// Initialize launcher cache
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	// Run the full indexer
+	systems := []systemdefs.System{{ID: systemdefs.SystemPS2}}
+	filesIndexed, err := NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {}, nil)
+	require.NoError(t, err)
+
+	// Both launchers' files should be indexed: 2 from filesystem + 2 from scanner
+	assert.Equal(t, 4, filesIndexed,
+		"Should have indexed 4 files total (2 filesystem + 2 from independent scanner)")
+
+	// Verify files are actually in the database
+	mediaEntries, err := db.MediaDB.GetMediaBySystemID(systemdefs.SystemPS2)
+	require.NoError(t, err)
+	assert.Len(t, mediaEntries, 4, "Database should contain 4 media entries for PS2")
+
+	// Verify all files are present
+	foundPaths := make(map[string]bool)
+	for _, entry := range mediaEntries {
+		foundPaths[filepath.Base(entry.Path)] = true
+	}
+	assert.True(t, foundPaths["game1.iso"], "Should find filesystem game1.iso in DB")
+	assert.True(t, foundPaths["game2.bin"], "Should find filesystem game2.bin in DB")
+	assert.True(t, foundPaths["scanner-game-a.iso"], "Should find scanner game A in DB")
+	assert.True(t, foundPaths["scanner-game-b.iso"], "Should find scanner game B in DB")
 }
 
 // TestZaparooignoreMarker tests that directories containing a .zaparooignore file
@@ -1385,6 +1839,7 @@ func TestZaparooignoreMarker(t *testing.T) {
 			platform := mocks.NewMockPlatform()
 			platform.On("ID").Return("test-platform")
 			platform.On("Settings").Return(platforms.Settings{})
+			platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
 			platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
 
 			// Initialize launcher cache
@@ -1430,4 +1885,391 @@ func TestZaparooignoreMarker(t *testing.T) {
 				"total number of found files should match expected count")
 		})
 	}
+}
+
+func TestGetSystemPaths_RelativeFolderResolution(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	// Create a root directory with system subdirectories
+	rootDir := t.TempDir()
+	nesDir := filepath.Join(rootDir, "NES")
+	snesDir := filepath.Join(rootDir, "SNES")
+	require.NoError(t, os.MkdirAll(nesDir, 0o750))
+	require.NoError(t, os.MkdirAll(snesDir, 0o750))
+
+	// Create launchers with relative folder names (the common case)
+	launchers := []platforms.Launcher{
+		{
+			ID:         "nes-launcher",
+			SystemID:   systemdefs.SystemNES,
+			Folders:    []string{"NES"},
+			Extensions: []string{".nes"},
+		},
+		{
+			ID:         "snes-launcher",
+			SystemID:   systemdefs.SystemSNES,
+			Folders:    []string{"SNES"},
+			Extensions: []string{".sfc"},
+		},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(launchers)
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	systems := []systemdefs.System{
+		{ID: systemdefs.SystemNES},
+		{ID: systemdefs.SystemSNES},
+	}
+	results := GetSystemPaths(context.Background(), cfg, platform, []string{rootDir}, systems)
+
+	require.Len(t, results, 2)
+
+	pathsBySystem := make(map[string]string)
+	for _, r := range results {
+		pathsBySystem[r.System.ID] = r.Path
+	}
+	assert.Equal(t, nesDir, pathsBySystem[systemdefs.SystemNES])
+	assert.Equal(t, snesDir, pathsBySystem[systemdefs.SystemSNES])
+}
+
+func TestGetSystemPaths_NonexistentFolderSkipped(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+	// Only create NES, not SNES
+	nesDir := filepath.Join(rootDir, "NES")
+	require.NoError(t, os.MkdirAll(nesDir, 0o750))
+
+	launchers := []platforms.Launcher{
+		{
+			ID:         "nes-launcher",
+			SystemID:   systemdefs.SystemNES,
+			Folders:    []string{"NES"},
+			Extensions: []string{".nes"},
+		},
+		{
+			ID:         "snes-launcher",
+			SystemID:   systemdefs.SystemSNES,
+			Folders:    []string{"SNES"},
+			Extensions: []string{".sfc"},
+		},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(launchers)
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	systems := []systemdefs.System{
+		{ID: systemdefs.SystemNES},
+		{ID: systemdefs.SystemSNES},
+	}
+	results := GetSystemPaths(context.Background(), cfg, platform, []string{rootDir}, systems)
+
+	// Only NES should be found, SNES folder doesn't exist
+	require.Len(t, results, 1)
+	assert.Equal(t, systemdefs.SystemNES, results[0].System.ID)
+	assert.Equal(t, nesDir, results[0].Path)
+}
+
+func TestGetFiles_ZipsAsDirs(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+
+	// Create a zip file containing game ROMs
+	zipPath := filepath.Join(rootDir, "games.zip")
+	zipFile, err := os.Create(zipPath) //nolint:gosec // test file in t.TempDir()
+	require.NoError(t, err)
+	w := zip.NewWriter(zipFile)
+	for _, name := range []string{"game1.nes", "game2.nes", "readme.txt"} {
+		fw, createErr := w.Create(name)
+		require.NoError(t, createErr)
+		_, writeErr := fw.Write([]byte("data"))
+		require.NoError(t, writeErr)
+	}
+	require.NoError(t, w.Close())
+	require.NoError(t, zipFile.Close())
+
+	launcher := platforms.Launcher{
+		ID:         "nes-launcher",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{rootDir},
+		Extensions: []string{".nes"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	ctx := context.Background()
+	files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir)
+	require.NoError(t, err)
+
+	// Should find the 2 .nes files inside the zip, but not readme.txt
+	assert.Len(t, files, 2)
+	foundFiles := make(map[string]bool)
+	for _, f := range files {
+		foundFiles[filepath.Base(f)] = true
+	}
+	assert.True(t, foundFiles["game1.nes"])
+	assert.True(t, foundFiles["game2.nes"])
+	assert.False(t, foundFiles["readme.txt"])
+}
+
+func TestNewNamesIndex_PausesAndResumes(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
+
+	systems := []systemdefs.System{{ID: "nes"}}
+
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+
+	type indexResult struct {
+		err   error
+		count int
+	}
+	done := make(chan indexResult, 1)
+	go func() {
+		count, err := NewNamesIndex(
+			context.Background(), mockPlatform, cfg,
+			systems, db, func(IndexStatus) {}, pauser,
+		)
+		done <- indexResult{count: count, err: err}
+	}()
+
+	// Indexing should be blocked while paused
+	select {
+	case <-done:
+		t.Fatal("indexing completed while pauser was paused")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Resume and let it complete
+	pauser.Resume()
+
+	select {
+	case result := <-done:
+		require.NoError(t, result.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("indexing did not complete after resume")
+	}
+}
+
+// TestGetFiles_SkipsMacOSDirectories verifies that __MACOSX directories are
+// completely skipped during the directory walk, preventing wasted I/O on
+// Apple resource fork files that masquerade as valid zip archives.
+func TestGetFiles_SkipsMacOSDirectories(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+
+	// Create a real game file
+	require.NoError(t, os.WriteFile(filepath.Join(rootDir, "game.nes"), []byte("data"), 0o600))
+
+	// Create a __MACOSX directory with a fake .nes file inside
+	macDir := filepath.Join(rootDir, "__MACOSX")
+	require.NoError(t, os.MkdirAll(macDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(macDir, "._game.nes"), []byte("apple"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(macDir, "ghost.nes"), []byte("apple"), 0o600))
+
+	launcher := platforms.Launcher{
+		ID:         "nes-launcher",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{rootDir},
+		Extensions: []string{".nes"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir)
+	require.NoError(t, err)
+
+	assert.Len(t, files, 1, "should only find the real game file")
+	assert.Equal(t, filepath.Join(rootDir, "game.nes"), files[0])
+}
+
+// TestGetFiles_SkipsDotDirectories verifies that hidden directories (starting
+// with .) are skipped during the walk. These include .Spotlight-V100, .Trashes,
+// .fseventsd, etc.
+func TestGetFiles_SkipsDotDirectories(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+
+	// Create a real game file
+	require.NoError(t, os.WriteFile(filepath.Join(rootDir, "zelda.nes"), []byte("data"), 0o600))
+
+	// Create hidden directories with files that would match
+	for _, dir := range []string{".Spotlight-V100", ".Trashes", ".fseventsd"} {
+		hiddenDir := filepath.Join(rootDir, dir)
+		require.NoError(t, os.MkdirAll(hiddenDir, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(hiddenDir, "fake.nes"), []byte("data"), 0o600))
+	}
+
+	launcher := platforms.Launcher{
+		ID:         "nes-launcher",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{rootDir},
+		Extensions: []string{".nes"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir)
+	require.NoError(t, err)
+
+	assert.Len(t, files, 1, "should only find the real game file, not files in hidden dirs")
+	assert.Equal(t, filepath.Join(rootDir, "zelda.nes"), files[0])
+}
+
+// TestGetFiles_SkipsAppleDoubleFiles verifies that macOS AppleDouble resource
+// fork files (._Something.zip) are skipped before the zip check, preventing
+// wasted I/O on files that look like zip archives but are not.
+func TestGetFiles_SkipsAppleDoubleFiles(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	rootDir := t.TempDir()
+
+	// Create a real zip with a game inside
+	zipPath := filepath.Join(rootDir, "games.zip")
+	zipFile, err := os.Create(zipPath) //nolint:gosec // test file in t.TempDir()
+	require.NoError(t, err)
+	w := zip.NewWriter(zipFile)
+	fw, createErr := w.Create("game.nes")
+	require.NoError(t, createErr)
+	_, writeErr := fw.Write([]byte("data"))
+	require.NoError(t, writeErr)
+	require.NoError(t, w.Close())
+	require.NoError(t, zipFile.Close())
+
+	// Create an AppleDouble resource fork file with .zip extension.
+	// This is not a valid zip and would cause an error if opened.
+	require.NoError(t, os.WriteFile(filepath.Join(rootDir, "._games.zip"), []byte("apple-resource-fork"), 0o600))
+
+	launcher := platforms.Launcher{
+		ID:         "nes-launcher",
+		SystemID:   systemdefs.SystemNES,
+		Folders:    []string{rootDir},
+		Extensions: []string{".nes"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, rootDir)
+	require.NoError(t, err)
+
+	// Should find only the game inside the real zip, not the ._games.zip
+	assert.Len(t, files, 1, "should find only the game inside the real zip")
+	assert.Contains(t, files[0], "game.nes")
 }

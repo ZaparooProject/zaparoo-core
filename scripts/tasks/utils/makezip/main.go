@@ -24,7 +24,6 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,6 +46,7 @@ var platformDocs = map[string]string{
 	"mister":    "mister/index.md",
 	"mistex":    "mistex.md",
 	"recalbox":  "recalbox.mdx",
+	"replayos":  "replayos.md",
 	"steamos":   "steamos.md",
 	"windows":   "windows/index.md",
 }
@@ -62,6 +62,7 @@ var platformURLs = map[string]string{
 	"mister":    "https://zaparoo.org/docs/platforms/mister/",
 	"mistex":    "https://zaparoo.org/docs/platforms/mistex/",
 	"recalbox":  "https://zaparoo.org/docs/platforms/recalbox/",
+	"replayos":  "https://zaparoo.org/docs/platforms/replayos/",
 	"steamos":   "https://zaparoo.org/docs/platforms/steamos/",
 	"windows":   "https://zaparoo.org/docs/platforms/windows/",
 }
@@ -160,6 +161,51 @@ func addDocFooter(content, platformID string) string {
 	return content + footer
 }
 
+func fetchWithRetries(url string, maxRetries int) ([]byte, error) {
+	var lastErr error
+	for attempt := range maxRetries {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+		}
+
+		resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: hardcoded doc download URL
+		if err != nil {
+			cancel()
+			lastErr = fmt.Errorf("attempt %d: %w", attempt+1, err)
+			_, _ = fmt.Printf("Retry %d/%d: request failed: %v\n", attempt+1, maxRetries, err)
+			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			cancel()
+			lastErr = fmt.Errorf(
+				"attempt %d: HTTP %d: %s", attempt+1, resp.StatusCode, http.StatusText(resp.StatusCode),
+			)
+			_, _ = fmt.Printf("Retry %d/%d: HTTP %d\n", attempt+1, maxRetries, resp.StatusCode)
+			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+			continue
+		}
+
+		content, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		cancel()
+		if err != nil {
+			lastErr = fmt.Errorf("attempt %d: failed to read body: %w", attempt+1, err)
+			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+			continue
+		}
+
+		return content, nil
+	}
+	return nil, fmt.Errorf("all %d attempts failed, last error: %w", maxRetries, lastErr)
+}
+
 func downloadDoc(platformID, toDir string) error {
 	fileName, ok := platformDocs[platformID]
 	if !ok {
@@ -168,34 +214,9 @@ func downloadDoc(platformID, toDir string) error {
 
 	url := baseURL + fileName
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	content, err := fetchWithRetries(url, 5)
 	if err != nil {
-		return fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to execute HTTP request: %w", err)
-	}
-	if resp == nil {
-		return errors.New("received nil response")
-	}
-	if resp.StatusCode != http.StatusOK {
-		_ = resp.Body.Close()
-		return fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			_, _ = fmt.Printf("error closing response body: %v\n", closeErr)
-		}
-	}()
-
-	content, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
+		return fmt.Errorf("downloading %s docs: %w", platformID, err)
 	}
 
 	processedContent := string(content)
@@ -213,6 +234,7 @@ func downloadDoc(platformID, toDir string) error {
 
 	readmePath := filepath.Join(toDir, "README.txt")
 	readmeContent := []byte(processedContent + "\n")
+	//nolint:gosec // G703: build script, not user-facing
 	if err := os.WriteFile(readmePath, readmeContent, 0o600); err != nil {
 		return fmt.Errorf("failed to write README.txt: %w", err)
 	}
@@ -234,19 +256,19 @@ func main() {
 		os.Exit(0)
 	}
 
-	if _, err := os.Stat(buildDir); os.IsNotExist(err) {
+	if _, err := os.Stat(buildDir); os.IsNotExist(err) { //nolint:gosec // G703: build script
 		_, _ = fmt.Printf("The specified directory '%s' does not exist\n", buildDir)
 		os.Exit(1)
 	}
 
 	licensePath := filepath.Join(buildDir, "LICENSE.txt")
-	if _, err := os.Stat(licensePath); os.IsNotExist(err) {
+	if _, err := os.Stat(licensePath); os.IsNotExist(err) { //nolint:gosec // G703: build script
 		input, err := os.ReadFile("LICENSE")
 		if err != nil {
 			_, _ = fmt.Printf("Error reading LICENSE file: %v\n", err)
 			os.Exit(1)
 		}
-		err = os.WriteFile(licensePath, input, 0o600)
+		err = os.WriteFile(licensePath, input, 0o600) //nolint:gosec // G703: build script
 		if err != nil {
 			_, _ = fmt.Printf("Error copying LICENSE file: %v\n", err)
 			os.Exit(1)
@@ -254,16 +276,16 @@ func main() {
 	}
 
 	appPath := filepath.Join(buildDir, appBin)
-	if _, err := os.Stat(appPath); os.IsNotExist(err) {
+	if _, err := os.Stat(appPath); os.IsNotExist(err) { //nolint:gosec // G703: build script
 		_, _ = fmt.Printf("The specified binary file '%s' does not exist\n", appPath)
 		os.Exit(1)
 	}
 
 	archivePath := filepath.Join(buildDir, archiveName)
-	_ = os.Remove(archivePath)
+	_ = os.Remove(archivePath) //nolint:gosec // G703: build script
 
 	readmePath := filepath.Join(buildDir, "README.txt")
-	if _, err := os.Stat(readmePath); os.IsNotExist(err) {
+	if _, err := os.Stat(readmePath); os.IsNotExist(err) { //nolint:gosec // G703: build script
 		if err := downloadDoc(platform, buildDir); err != nil {
 			_, _ = fmt.Printf("Error downloading documentation: %v\n", err)
 			os.Exit(1)
@@ -386,6 +408,7 @@ func addDirToZip(zipWriter *zip.Writer, dirPath, buildDir string) error {
 			}
 
 			destPath := filepath.Join(buildDir, filepath.Base(dirPath), relPath)
+			//nolint:gosec // G703: paths from internal walk, not user input
 			if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 				return fmt.Errorf("failed to create directory: %w", err)
 			}
@@ -409,7 +432,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("operation failed: %w", err)
 	}
-	if err := os.WriteFile(dst, input, 0o600); err != nil {
+	if err := os.WriteFile(dst, input, 0o600); err != nil { //nolint:gosec // G703: build script
 		return fmt.Errorf("failed to write file %s: %w", dst, err)
 	}
 	return nil
@@ -523,6 +546,7 @@ func addDirToTar(tarWriter *tar.Writer, dirPath, buildDir string) error {
 			}
 
 			destPath := filepath.Join(buildDir, filepath.Base(dirPath), relPath)
+			//nolint:gosec // G703: paths from internal walk, not user input
 			if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 				return fmt.Errorf("failed to create directory: %w", err)
 			}

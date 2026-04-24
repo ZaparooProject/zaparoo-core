@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -140,15 +141,82 @@ func (c *Client) LaunchTVEpisode(path string) error {
 	return err
 }
 
+// getFirstActivePlayer returns the first active player, or an error if none are active.
+func (c *Client) getFirstActivePlayer(ctx context.Context) (*Player, error) {
+	players, err := c.GetActivePlayers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(players) == 0 {
+		return nil, errors.New("no active players")
+	}
+	return &players[0], nil
+}
+
+// PlayPause toggles play/pause on the first active player
+func (c *Client) PlayPause(ctx context.Context) error {
+	player, err := c.getFirstActivePlayer(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = c.APIRequest(ctx, APIMethodPlayerPlayPause, PlayerPlayPauseParams{
+		PlayerID: player.ID,
+	})
+	return err
+}
+
+// FastForward increases playback speed of the first active player
+func (c *Client) FastForward(ctx context.Context) error {
+	player, err := c.getFirstActivePlayer(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = c.APIRequest(ctx, APIMethodPlayerSetSpeed, PlayerSetSpeedParams{
+		PlayerID: player.ID,
+		Speed:    "increment",
+	})
+	return err
+}
+
+// Rewind decreases playback speed of the first active player
+func (c *Client) Rewind(ctx context.Context) error {
+	player, err := c.getFirstActivePlayer(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = c.APIRequest(ctx, APIMethodPlayerSetSpeed, PlayerSetSpeedParams{
+		PlayerID: player.ID,
+		Speed:    "decrement",
+	})
+	return err
+}
+
+// GoTo navigates to next or previous item in playlist.
+// Direction must be "next" or "previous".
+func (c *Client) GoTo(ctx context.Context, direction string) error {
+	if direction != "next" && direction != "previous" {
+		return fmt.Errorf("invalid GoTo direction: %q (must be \"next\" or \"previous\")", direction)
+	}
+	player, err := c.getFirstActivePlayer(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = c.APIRequest(ctx, APIMethodPlayerGoTo, PlayerGoToParams{
+		PlayerID: player.ID,
+		To:       direction,
+	})
+	return err
+}
+
 // Stop stops all active players in Kodi
-func (c *Client) Stop() error {
-	players, err := c.GetActivePlayers(context.Background())
+func (c *Client) Stop(ctx context.Context) error {
+	players, err := c.GetActivePlayers(ctx)
 	if err != nil {
 		return err
 	}
 
 	for _, player := range players {
-		_, err := c.APIRequest(context.Background(), APIMethodPlayerStop, PlayerStopParams{
+		_, err := c.APIRequest(ctx, APIMethodPlayerStop, PlayerStopParams{
 			PlayerID: player.ID,
 		})
 		if err != nil {
@@ -499,7 +567,7 @@ func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (
 	}
 
 	client := &http.Client{}
-	resp, err := client.Do(kodiReq)
+	resp, err := client.Do(kodiReq) //nolint:gosec // G704: URL from user config, Kodi client's purpose
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}

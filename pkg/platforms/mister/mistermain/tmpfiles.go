@@ -22,18 +22,37 @@
 package mistermain
 
 import (
+	"errors"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/rs/zerolog/log"
 )
 
-func GetActiveCoreName() string {
+// ReadCoreName reads the active core name from MiSTer's temp file.
+func ReadCoreName() (string, error) {
 	data, err := os.ReadFile(config.CoreNameFile)
 	if err != nil {
-		log.Error().Msgf("error trying to get the core name: %s", err)
+		return "", fmt.Errorf("read core name file: %w", err)
+	}
+
+	name := strings.TrimSpace(string(data))
+	if name == "" {
+		return "", errors.New("core name file is empty")
+	}
+
+	return name, nil
+}
+
+// GetActiveCoreName returns the active core name, or empty string on error.
+func GetActiveCoreName() string {
+	name, err := ReadCoreName()
+	if err != nil {
+		log.Error().Err(err).Msg("error trying to get the core name")
 		return ""
 	}
 
-	return string(data)
+	return name
 }

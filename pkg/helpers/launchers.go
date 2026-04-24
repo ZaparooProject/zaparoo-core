@@ -21,6 +21,7 @@ package helpers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -57,6 +58,34 @@ func parseLifecycle(lifecycle string) platforms.LauncherLifecycle {
 	return platforms.LifecycleBlocking
 }
 
+// parseCustomControls builds a Controls map from TOML control definitions.
+// Values are zapscript strings (e.g., "**input.keyboard:{f2}").
+// Scripts are validated at load time; entries with invalid syntax are skipped.
+func parseCustomControls(commands map[string]string) map[string]platforms.Control {
+	if len(commands) == 0 {
+		return nil
+	}
+	controls := make(map[string]platforms.Control, len(commands))
+	for action, script := range commands {
+		parser := zapscript.NewParser(script)
+		_, err := parser.ParseScript()
+		if err != nil {
+			log.Warn().Err(err).Str("action", action).Str("script", script).
+				Msg("skipping custom control: invalid zapscript syntax")
+			continue
+		}
+		controls[action] = platforms.Control{Script: script}
+	}
+	if len(controls) == 0 {
+		return nil
+	}
+	return controls
+}
+
+// ParseCustomLaunchers converts user-configured custom launchers into platform
+// launchers. When a custom launcher has an empty Execute field, the returned
+// launcher's Launch function will be nil — the platform is expected to fill in
+// its own default launch mechanism (e.g., ES API on Batocera).
 func ParseCustomLaunchers(
 	pl platforms.Platform,
 	customLaunchers []config.LaunchersCustom,
@@ -88,20 +117,34 @@ func ParseCustomLaunchers(
 
 		exts := formatExtensions(v.FileExts)
 
-		log.Debug().Str("launcherID", launcherID).Str("systemID", launcherSystemID).
-			Int("folders", len(v.MediaDirs)).Int("extensions", len(exts)).
-			Msg("parsed custom launcher")
+		resolvedDirs := make([]string, len(v.MediaDirs))
+		for j, dir := range v.MediaDirs {
+			resolvedDirs[j] = ResolveRelativePath(dir)
+		}
 
-		launchers = append(launchers, platforms.Launcher{
+		log.Info().Str("launcherID", launcherID).Str("systemID", launcherSystemID).
+			Strs("folders", resolvedDirs).Strs("extensions", exts).
+			Int("lifecycle", int(lifecycle)).
+			Msg("registered custom launcher")
+
+		launcher := platforms.Launcher{
 			ID:            launcherID,
 			SystemID:      launcherSystemID,
-			Folders:       v.MediaDirs,
+			Folders:       resolvedDirs,
 			Extensions:    exts,
 			Groups:        launcherGroups,
 			Schemes:       v.Schemes,
 			AllowListOnly: v.Restricted,
 			Lifecycle:     lifecycle,
-			Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
+			Controls:      parseCustomControls(v.Controls),
+		}
+
+		// When execute is empty, leave Launch nil so the platform can
+		// fill in its own default launch mechanism (e.g., ES API on Batocera).
+		if executeCmd != "" {
+			launcher.Launch = func(
+				cfg *config.Instance, path string, opts *platforms.LaunchOptions,
+			) (*os.Process, error) {
 				hostname, err := os.Hostname()
 				if err != nil {
 					log.Debug().Err(err).Msgf("error getting hostname, continuing")
@@ -146,15 +189,20 @@ func ParseCustomLaunchers(
 					return nil, fmt.Errorf("error evaluating execute expression: %w", err)
 				}
 
-				var cmd *exec.Cmd
-
-				if runtime.GOOS == "windows" {
-					//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
-					cmd = exec.Command("cmd", "/c", output)
-				} else {
-					//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
-					cmd = exec.Command("sh", "-c", output)
+				parts, splitErr := SplitCommand(output)
+				if splitErr != nil {
+					return nil, fmt.Errorf("failed to parse execute command: %w", splitErr)
 				}
+				if len(parts) == 0 {
+					return nil, errors.New("execute command is empty after parsing")
+				}
+
+				log.Debug().Str("launcherID", launcherID).Str("command", output).Strs("argv", parts).
+					Msg("executing custom launcher")
+
+				//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
+				cmd := exec.Command(parts[0], parts[1:]...)
+				cmd.Dir = ExeDir()
 
 				// Pass ZAPAROO_ENVIRONMENT JSON env var
 				envJSON, jsonErr := json.Marshal(exprEnv)
@@ -164,9 +212,6 @@ func ParseCustomLaunchers(
 					cmd.Env = append(os.Environ(), "ZAPAROO_ENVIRONMENT="+string(envJSON))
 				}
 
-				log.Debug().Str("launcherID", launcherID).Str("command", output).
-					Msg("executing custom launcher")
-
 				if err = cmd.Start(); err != nil {
 					log.Error().Err(err).Msgf("error running custom launcher: %s", output)
 					return nil, fmt.Errorf("failed to start custom launcher command: %w", err)
@@ -174,8 +219,10 @@ func ParseCustomLaunchers(
 
 				// Custom launchers can be tracked - return process for lifecycle management
 				return cmd.Process, nil
-			},
-		})
+			}
+		}
+
+		launchers = append(launchers, launcher)
 	}
 
 	if skipped > 0 {

@@ -21,11 +21,13 @@ package api
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/google/uuid"
+	"github.com/olahol/melody"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
@@ -100,10 +102,8 @@ func TestLogSafeRequest(t *testing.T) {
 	testID := models.NewStringID(uuid.New().String())
 
 	tests := []struct {
-		name              string
-		request           models.RequestObject
-		expectMethodOnly  bool
-		expectFullRequest bool
+		name    string
+		request models.RequestObject
 	}{
 		{
 			name: "logs download request should log method only",
@@ -112,18 +112,14 @@ func TestLogSafeRequest(t *testing.T) {
 				ID:      testID,
 				JSONRPC: "2.0",
 			},
-			expectMethodOnly:  true,
-			expectFullRequest: false,
 		},
 		{
-			name: "other requests should log full request",
+			name: "other requests should log method only",
 			request: models.RequestObject{
 				Method:  models.MethodSettings,
 				ID:      testID,
 				JSONRPC: "2.0",
 			},
-			expectMethodOnly:  false,
-			expectFullRequest: true,
 		},
 	}
 
@@ -142,18 +138,55 @@ func TestLogSafeRequest(t *testing.T) {
 
 			logOutput := buf.String()
 
-			if tt.expectMethodOnly {
-				assert.Contains(t, logOutput, "received logs download request")
-				assert.Contains(t, logOutput, tt.request.Method)
-				// Should not contain full request data
-				assert.NotContains(t, logOutput, "jsonrpc")
-			}
+			assert.Contains(t, logOutput, "received request")
+			assert.Contains(t, logOutput, tt.request.Method)
+			// Should not contain full request params
+			assert.NotContains(t, logOutput, "jsonrpc")
+		})
+	}
+}
 
-			if tt.expectFullRequest {
-				assert.Contains(t, logOutput, "received request")
-				assert.Contains(t, logOutput, tt.request.Method)
-				assert.Contains(t, logOutput, "jsonrpc")
-			}
+func TestLogWSWriteError(t *testing.T) {
+	tests := []struct {
+		name          string
+		err           error
+		expectLevel   string
+		unexpectLevel string
+	}{
+		{
+			name:          "session closed logs at warn level",
+			err:           melody.ErrSessionClosed,
+			expectLevel:   `"level":"warn"`,
+			unexpectLevel: `"level":"error"`,
+		},
+		{
+			name:          "wrapped session closed logs at warn level",
+			err:           errors.Join(errors.New("write failed"), melody.ErrSessionClosed),
+			expectLevel:   `"level":"warn"`,
+			unexpectLevel: `"level":"error"`,
+		},
+		{
+			name:          "other error logs at error level",
+			err:           errors.New("unexpected write failure"),
+			expectLevel:   `"level":"error"`,
+			unexpectLevel: `"level":"warn"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			originalLogger := log.Logger
+			log.Logger = zerolog.New(&buf)
+
+			logWSWriteError(tt.err, "test message")
+
+			log.Logger = originalLogger
+
+			logOutput := buf.String()
+			assert.Contains(t, logOutput, tt.expectLevel)
+			assert.NotContains(t, logOutput, tt.unexpectLevel)
+			assert.Contains(t, logOutput, "test message")
 		})
 	}
 }

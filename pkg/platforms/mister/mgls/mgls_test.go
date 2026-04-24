@@ -247,6 +247,54 @@ func TestGenerateMgl(t *testing.T) {
 </mistergamedescription>`,
 		},
 		{
+			name: "Saturn CHD with special characters in filename",
+			core: &cores.Core{
+				ID:  "Saturn",
+				RBF: "_Console/Saturn",
+				Slots: []cores.Slot{
+					{
+						Label: "Disk",
+						Exts:  []string{".cue", ".chd"},
+						Mgl: &cores.MGLParams{
+							Delay:  2,
+							Method: "s",
+							Index:  0,
+						},
+					},
+				},
+			},
+			path: "/media/fat/games/Saturn/America/NiGHTS into Dreams... (USA, Brazil).chd",
+			want: "<mistergamedescription>\n\t<rbf>_Console/Saturn</rbf>\n" +
+				"\t<file delay=\"2\" type=\"s\" index=\"0\" " +
+				"path=\"../../../../../media/fat/games/Saturn/America/" +
+				"NiGHTS into Dreams... (USA, Brazil).chd\"/>\n" +
+				"</mistergamedescription>",
+		},
+		{
+			name: "path with XML-reserved characters is escaped",
+			core: &cores.Core{
+				ID:  "Genesis",
+				RBF: "_Console/MegaDrive",
+				Slots: []cores.Slot{
+					{
+						Exts: []string{".bin", ".gen", ".md"},
+						Mgl: &cores.MGLParams{
+							Delay:  1,
+							Method: "f",
+							Index:  1,
+						},
+					},
+				},
+			},
+			path: `/media/fat/games/MegaDrive/Sonic & Knuckles "Lock-On".bin`,
+			want: "<mistergamedescription>\n" +
+				"\t<rbf>_Console/MegaDrive</rbf>\n" +
+				"\t<file delay=\"1\" type=\"f\" index=\"1\" " +
+				"path=\"../../../../../media/fat/games/MegaDrive/" +
+				"Sonic &amp; Knuckles &quot;Lock-On&quot;.bin\"/>\n" +
+				"</mistergamedescription>",
+		},
+		{
 			name: "override takes precedence over path",
 			core: &cores.Core{
 				ID:  "NES",
@@ -275,7 +323,11 @@ func TestGenerateMgl(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := GenerateMgl(tt.core, tt.path, tt.override)
+			rbfPath := ""
+			if tt.core != nil {
+				rbfPath = tt.core.RBF
+			}
+			got, err := GenerateMgl(tt.core, rbfPath, tt.path, tt.override)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -284,6 +336,75 @@ func TestGenerateMgl(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestWriteCurrentPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		path            string
+		wantCurrentPath string
+		wantFullPath    string
+	}{
+		{
+			name:            "standard arcade MRA path",
+			path:            "/media/fat/_Arcade/Pac-Man.mra",
+			wantCurrentPath: "Pac-Man.mra",
+			wantFullPath:    "/media/fat/_Arcade/Pac-Man.mra",
+		},
+		{
+			name:            "MRA in subdirectory",
+			path:            "/media/fat/_Arcade/cores/jotego/Street Fighter II.mra",
+			wantCurrentPath: "Street Fighter II.mra",
+			wantFullPath:    "/media/fat/_Arcade/cores/jotego/Street Fighter II.mra",
+		},
+		{
+			name:            "USB path",
+			path:            "/media/usb0/games/_Arcade/Donkey Kong.mra",
+			wantCurrentPath: "Donkey Kong.mra",
+			wantFullPath:    "/media/usb0/games/_Arcade/Donkey Kong.mra",
+		},
+		{
+			name:            "bare filename without directory",
+			path:            "game.mra",
+			wantCurrentPath: "game.mra",
+			wantFullPath:    "game.mra",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			currentPathFile := filepath.Join(tmpDir, "CURRENTPATH")
+			fullPathFile := filepath.Join(tmpDir, "FULLPATH")
+			fileSelectFile := filepath.Join(tmpDir, "FILESELECT")
+
+			writeCurrentPathTo(
+				tt.path,
+				currentPathFile,
+				fullPathFile,
+				fileSelectFile,
+			)
+
+			got, err := os.ReadFile(currentPathFile) //nolint:gosec // test file
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantCurrentPath, string(got),
+				"CURRENTPATH should be filename only, no trailing newline")
+
+			got, err = os.ReadFile(fullPathFile) //nolint:gosec // test file
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFullPath, string(got),
+				"FULLPATH should be the full path, no trailing newline")
+
+			got, err = os.ReadFile(fileSelectFile) //nolint:gosec // test file
+			require.NoError(t, err)
+			assert.Equal(t, "selected", string(got),
+				"FILESELECT should be exactly 'selected'")
 		})
 	}
 }
@@ -307,7 +428,7 @@ func TestGenerateMgl_NoMatchingSlot(t *testing.T) {
 	}
 
 	// Try to launch a .sfc file with NES core - no matching slot
-	_, err := GenerateMgl(core, "/media/fat/games/NES/game.sfc", "")
+	_, err := GenerateMgl(core, core.RBF, "/media/fat/games/NES/game.sfc", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no matching mgl args")
 }

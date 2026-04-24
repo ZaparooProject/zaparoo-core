@@ -152,7 +152,7 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 
 	p.setActiveMedia(nil)
 	client := kodi.NewClient(p.cfg)
-	if err := client.Stop(); err != nil {
+	if err := client.Stop(context.Background()); err != nil {
 		return fmt.Errorf("failed to stop Kodi client: %w", err)
 	}
 	return nil
@@ -204,6 +204,10 @@ func (*Platform) KeyboardPress(_ string) error {
 
 func (*Platform) GamepadPress(_ string) error {
 	return nil
+}
+
+func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
+	return nil, platforms.ErrNotSupported
 }
 
 func (*Platform) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -264,4 +268,8 @@ func (*Platform) ShowPicker(
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
+}
+
+func (*Platform) ManagedByPackageManager() bool {
+	return false
 }

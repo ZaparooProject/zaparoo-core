@@ -22,10 +22,12 @@ package database
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
 // This file contains shared database types and interfaces.
@@ -82,6 +84,16 @@ type MediaHistoryEntry struct {
 	IsDeleted      bool       `json:"isDeleted,omitempty"`
 }
 
+type MediaHistoryTopEntry struct {
+	LastPlayedAt  time.Time
+	SystemID      string
+	SystemName    string
+	MediaName     string
+	MediaPath     string
+	TotalPlayTime int
+	SessionCount  int
+}
+
 type Mapping struct {
 	Label    string `json:"label"`
 	Type     string `json:"type"`
@@ -103,6 +115,18 @@ type InboxMessage struct {
 	ProfileID int64     `json:"profileId"`
 }
 
+// Client represents a paired API client. AuthToken and PairingKey are
+// hidden from JSON (API uses models.PairedClient instead).
+type Client struct {
+	ClientID   string `json:"clientId"`
+	ClientName string `json:"clientName"`
+	AuthToken  string `json:"-"`
+	PairingKey []byte `json:"-"`
+	DBID       int64  `json:"-"`
+	CreatedAt  int64  `json:"createdAt"`
+	LastSeenAt int64  `json:"lastSeenAt"`
+}
+
 type System struct {
 	SystemID string
 	Name     string
@@ -121,6 +145,7 @@ type MediaTitle struct {
 
 type Media struct {
 	Path           string
+	ParentDir      string
 	DBID           int64
 	MediaTitleDBID int64
 	SystemDBID     int64
@@ -150,8 +175,9 @@ type SearchResult struct {
 }
 
 type TagInfo struct {
-	Tag  string `json:"tag"`
-	Type string `json:"type"`
+	Tag   string `json:"tag"`
+	Type  string `json:"type"`
+	Count int64  `json:"count,omitempty"`
 }
 
 // GroupTagFiltersByOperator groups tag filters by operator type for consistent processing.
@@ -171,13 +197,75 @@ func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []za
 	return and, not, or
 }
 
+// BrowseDirectoryResult represents a subdirectory found during browse navigation.
+type BrowseDirectoryResult struct {
+	Name      string
+	FileCount int
+}
+
+// BrowseCursor holds the keyset pagination state for browse queries.
+// SortValue is the value of the sort column (Name or Path) from the last
+// result, and LastID is the DBID tiebreaker.
+type BrowseCursor struct {
+	SortValue string
+	LastID    int64
+}
+
+// BrowseFilesOptions contains parameters for the BrowseFiles query.
+type BrowseFilesOptions struct {
+	Cursor     *BrowseCursor
+	Letter     *string
+	PathPrefix string
+	Sort       string
+	Limit      int
+}
+
+// BrowseVirtualScheme represents a virtual URI scheme with indexed content.
+type BrowseVirtualScheme struct {
+	Scheme    string // e.g., "steam://"
+	FileCount int
+}
+
 type SearchResultWithCursor struct {
-	Year     *string
-	SystemID string
-	Name     string
-	Path     string
-	Tags     []TagInfo
-	MediaID  int64
+	SystemID      string
+	Name          string
+	Path          string
+	Tags          []TagInfo
+	ZapScriptTags []TagInfo // Disambiguating tags only (tags that differ across sibling variants)
+	MediaID       int64
+}
+
+// ZapScriptTagTypes defines which tag types are eligible for inclusion in ZapScript
+// title commands. Only these types are considered when checking for disambiguation.
+var ZapScriptTagTypes = []string{"year", "players", "rev", "developer", "publisher", "credit", "edition", "release"}
+
+// BuildTitleZapScript builds a ZapScript title command string from a system ID,
+// media name, and disambiguating tags. Format: @SystemID/Name (year:YYYY) (type:value)
+// Only includes tags that are present in the provided slice.
+func BuildTitleZapScript(systemID, name string, tags []TagInfo) string {
+	var sb strings.Builder
+	_, _ = sb.WriteString("@" + systemID + "/" + name)
+	for _, tag := range tags {
+		if tag.Tag == "" {
+			continue
+		}
+		if tag.Type == "year" {
+			if len(tag.Tag) == 4 {
+				_, _ = sb.WriteString(" (year:" + tag.Tag + ")")
+			}
+			continue
+		}
+		_, _ = sb.WriteString(" (" + tag.Type + ":" + tag.Tag + ")")
+	}
+	return sb.String()
+}
+
+// ZapScript returns the ZapScript title command string for this search result.
+// Uses ZapScriptTags (disambiguating tags only). If ZapScriptTags has not been
+// computed (nil), no tags are emitted — callers that need disambiguation must
+// ensure ZapScriptTags is populated via computeZapScriptTags or equivalent.
+func (r *SearchResultWithCursor) ZapScript() string {
+	return BuildTitleZapScript(r.SystemID, r.Name, r.ZapScriptTags)
 }
 
 // TitleWithSystem represents a MediaTitle with its associated System information
@@ -260,12 +348,13 @@ type GenericDBI interface {
 type UserDBI interface {
 	GenericDBI
 	AddHistory(entry *HistoryEntry) error
-	GetHistory(lastID int) ([]HistoryEntry, error)
+	GetHistory(lastID int64) ([]HistoryEntry, error)
 	CleanupHistory(retentionDays int) (int64, error)
 	AddMediaHistory(entry *MediaHistoryEntry) (int64, error)
 	UpdateMediaHistoryTime(dbid int64, playTime int) error
 	CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error
-	GetMediaHistory(lastID, limit int) ([]MediaHistoryEntry, error)
+	GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]MediaHistoryEntry, error)
+	GetMediaHistoryTop(systemIDs []string, since *time.Time, limit int) ([]MediaHistoryTopEntry, error)
 	CloseHangingMediaHistory() error
 	CleanupMediaHistory(retentionDays int) (int64, error)
 	HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error)
@@ -285,6 +374,12 @@ type UserDBI interface {
 	GetInboxMessages() ([]InboxMessage, error)
 	DeleteInboxMessage(id int64) error
 	DeleteAllInboxMessages() (int64, error)
+	CreateClient(c *Client) error
+	GetClientByToken(authToken string) (*Client, error)
+	ListClients() ([]Client, error)
+	DeleteClient(clientID string) error
+	UpdateClientLastSeen(authToken string, lastSeenAt int64) error
+	CountClients() (int, error)
 }
 
 type MediaDBI interface {
@@ -300,12 +395,14 @@ type MediaDBI interface {
 	GetOptimizationStatus() (string, error)
 	SetOptimizationStep(step string) error
 	GetOptimizationStep() (string, error)
-	RunBackgroundOptimization(statusCallback func(optimizing bool))
+	RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser)
 	WaitForBackgroundOperations()
 	TrackBackgroundOperation()
 	BackgroundOperationDone()
 
 	InvalidateCountCache() error
+	RebuildSlugSearchCache() error
+	RebuildTagCache() error
 
 	// Slug resolution cache methods
 	GetCachedSlugResolution(
@@ -317,8 +414,11 @@ type MediaDBI interface {
 	InvalidateSlugCache(ctx context.Context) error
 	InvalidateSlugCacheForSystems(ctx context.Context, systemIDs []string) error
 	GetMediaByDBID(ctx context.Context, mediaDBID int64) (SearchResultWithCursor, error)
-	GetYearBySystemAndPath(ctx context.Context, systemID, path string) (string, error)
+	GetZapScriptTagsBySystemAndPath(ctx context.Context, systemID, path string) ([]TagInfo, error)
 
+	SetIndexingCacheSize(enable bool)
+	DropSecondaryIndexes() error
+	CreateSecondaryIndexes() error
 	SetIndexingStatus(status string) error
 	GetIndexingStatus() (string, error)
 	SetLastIndexedSystem(systemID string) error
@@ -351,6 +451,15 @@ type MediaDBI interface {
 	GetSystemTagsCached(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	InvalidateSystemTagsCache(ctx context.Context, systems []systemdefs.System) error
 	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
+
+	// Browse methods for directory-style navigation of indexed content
+	BrowseDirectories(ctx context.Context, pathPrefix string) ([]BrowseDirectoryResult, error)
+	BrowseFiles(ctx context.Context, opts *BrowseFilesOptions) ([]SearchResultWithCursor, error)
+	BrowseFileCount(ctx context.Context, pathPrefix string, letter *string) (int, error)
+	BrowseVirtualSchemes(ctx context.Context) ([]BrowseVirtualScheme, error)
+	BrowseRootCounts(ctx context.Context, rootDirs []string) (map[string]*int, error)
+	PopulateBrowseCache(ctx context.Context) error
+
 	IndexedSystems() ([]string, error)
 	SystemIndexed(system *systemdefs.System) bool
 	RandomGame(systems []systemdefs.System) (SearchResult, error)

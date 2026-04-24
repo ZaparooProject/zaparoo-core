@@ -94,6 +94,42 @@ Currently, it is not reported if a process was killed or not.
 }
 ```
 
+### confirm
+
+Confirm and launch a staged token from the launch guard.
+
+When launch guard is enabled and media is playing, scanned tokens are staged instead of launched immediately. This method confirms the currently staged token and launches it.
+
+#### Parameters
+
+None.
+
+#### Result
+
+Returns `null` on success. Returns an error if no token is currently staged.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5b-11ef-b318-020304050607",
+  "method": "confirm"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5b-11ef-b318-020304050607",
+  "result": null
+}
+```
+
 ## Tokens
 
 ### tokens
@@ -120,6 +156,7 @@ None.
 | text     | string  | Yes      | Text content of the token.                       |
 | data     | string  | Yes      | Raw data of the token as hexadecimal string.     |
 | scanTime | string  | Yes      | Timestamp of when the token was scanned in RFC3339 format. |
+| readerId | string  | No       | ID of the reader that scanned the token.         |
 
 #### Example
 
@@ -246,14 +283,16 @@ None.
 
 ##### Active media object
 
-| Key        | Type   | Required | Description                                |
-| :--------- | :----- | :------- | :----------------------------------------- |
-| launcherId | string | Yes      | ID of the launcher.                        |
-| systemId   | string | Yes      | ID of the system.                          |
-| systemName | string | Yes      | Display name of the system.                |
-| mediaPath  | string | Yes      | Path to the media file.                    |
-| mediaName  | string | Yes      | Display name of the media.                 |
-| started    | string | Yes      | Timestamp when media started in RFC3339 format. |
+| Key              | Type     | Required | Description                                |
+| :--------------- | :------- | :------- | :----------------------------------------- |
+| launcherId       | string   | Yes      | ID of the launcher.                        |
+| systemId         | string   | Yes      | ID of the system.                          |
+| systemName       | string   | Yes      | Display name of the system.                |
+| mediaPath        | string   | Yes      | Path to the media file.                    |
+| mediaName        | string   | Yes      | Display name of the media.                 |
+| started          | string   | Yes      | Timestamp when media started in RFC3339 format. |
+| zapScript        | string   | Yes      | ZapScript command to launch this media item. |
+| launcherControls | string[] | No       | List of control action names supported by the active launcher. Only present if the launcher supports controls. See [media.control](#mediacontrol). |
 
 #### Example
 
@@ -267,7 +306,7 @@ None.
 }
 ```
 
-##### Response (Database Ready)
+##### Response (database ready)
 
 ```json
 {
@@ -285,7 +324,7 @@ None.
 }
 ```
 
-##### Response (Optimization in Progress)
+##### Response (optimization in progress)
 
 ```json
 {
@@ -322,6 +361,7 @@ An object:
 | cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages.                     |
 | tags       | string[] | No       | Filter results by tags. Maximum 50 tags, each up to 128 characters. Tags are case-sensitive and results must match all provided tags. Can be used without query or systems for tag-only searches. |
 | letter     | string   | No       | Filter results by first character of game name. Supports: A-Z (single letters), "0-9" (numbers), "#" (symbols). Case-insensitive. |
+| fuzzySystem | boolean | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 
 #### Result
 
@@ -333,12 +373,13 @@ An object:
 
 ##### Media object
 
-| Key    | Type                     | Required | Description                                                                                                 |
-| :----- | :----------------------- | :------- | :---------------------------------------------------------------------------------------------------------- |
-| system | [System](#system-object) | Yes      | System which the media has been indexed under.                                                              |
-| name   | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
-| path   | string                   | Yes      | Path to the media file. If possible, this path will be compressed into the `<system>/<path>` launch format. |
-| tags   | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
+| Key       | Type                     | Required | Description                                                                                                 |
+| :-------- | :----------------------- | :------- | :---------------------------------------------------------------------------------------------------------- |
+| system    | [System](#system-object) | Yes      | System which the media has been indexed under.                                                              |
+| name      | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
+| path      | string                   | Yes      | Path to the media file. If possible, this path will be compressed into the `<system>/<path>` launch format. |
+| zapScript | string                   | Yes      | ZapScript command to launch this media item.                                                                |
+| tags      | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
 
 ##### System object
 
@@ -354,7 +395,7 @@ An object:
 
 | Key         | Type    | Required | Description                                                                 |
 | :---------- | :------ | :------- | :-------------------------------------------------------------------------- |
-| nextCursor  | string  | No       | Cursor for the next page of results. `null` if no more pages available.    |
+| nextCursor  | string  | No       | Cursor for the next page of results. Omitted if no more pages available.   |
 | hasNextPage | boolean | Yes      | Whether there are more results available after the current page.           |
 | pageSize    | number  | Yes      | Number of results requested for this page (matches `maxResults` parameter). |
 
@@ -391,6 +432,7 @@ An object:
       {
         "name": "240p Test Suite (PD) v0.03 tepples",
         "path": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
+        "zapScript": "@Gameboy/240p Test Suite (PD) v0.03 tepples",
         "system": {
           "category": "Handheld",
           "id": "Gameboy",
@@ -410,7 +452,6 @@ An object:
     ],
     "total": 1,
     "pagination": {
-      "nextCursor": null,
       "hasNextPage": false,
       "pageSize": 100
     }
@@ -446,6 +487,7 @@ An object:
       {
         "name": "Super Mario Bros.",
         "path": "NES/Super Mario Bros.nes",
+        "zapScript": "@NES/Super Mario Bros. (year:1985)",
         "system": {
           "category": "Console",
           "id": "NES",
@@ -469,9 +511,123 @@ An object:
     ],
     "total": 1,
     "pagination": {
-      "nextCursor": null,
       "hasNextPage": false,
       "pageSize": 10
+    }
+  }
+}
+```
+
+### media.browse
+
+Browse indexed media content by directory, similar to navigating a file manager. Supports filesystem paths, virtual URI schemes (e.g. `mame-arcade://`), and paginated results.
+
+When called without a `path` parameter (or with an empty path), returns top-level root entries including filesystem roots and virtual scheme roots.
+
+#### Parameters
+
+All parameters are optional. When called with no parameters, returns root entries.
+
+| Key        | Type   | Required | Description                                                                                                |
+| :--------- | :----- | :------- | :--------------------------------------------------------------------------------------------------------- |
+| path       | string | No       | Directory path to browse. Omit or set empty to list root entries. Supports filesystem paths and virtual URI schemes (e.g. `mame-arcade://`). |
+| maxResults | number | No       | Maximum results per page. Default is 100, maximum is 1000.                                                 |
+| cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page.                     |
+| letter     | string | No       | Filter results to entries starting with this letter.                                                       |
+| sort       | string | No       | Sort order. One of: `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. The `filename` variants sort by full file path. |
+
+#### Result
+
+| Key        | Type                                  | Required | Description                                                              |
+| :--------- | :------------------------------------ | :------- | :----------------------------------------------------------------------- |
+| path       | string                                | Yes      | The browsed directory path. Empty string when listing roots.             |
+| entries    | [BrowseEntry](#browse-entry-object)[] | Yes      | Array of entries in the current path.                                    |
+| totalFiles | number                                | Yes      | Total count of media files in the current directory (respects `letter` filter). |
+| pagination | [Pagination](#browse-pagination-object) | No     | Pagination info. Omitted when there are no file results.                 |
+
+##### Browse entry object
+
+| Key          | Type     | Required | Description                                                                                      |
+| :----------- | :------- | :------- | :----------------------------------------------------------------------------------------------- |
+| name         | string   | Yes      | Display name of the entry.                                                                       |
+| path         | string   | Yes      | Full path to the entry.                                                                          |
+| type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
+| fileCount    | number   | No       | Number of files in this directory. Present on `root` and `directory` entries.                     |
+| group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
+| systemId     | string   | No       | System ID for the media (e.g. `SNES`). Present on `media` entries.                               |
+| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries.                              |
+| relativePath | string   | No       | Relative path from root directory. Present on `media` entries.                                   |
+| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries. |
+
+##### Browse pagination object
+
+| Key         | Type   | Required | Description                                              |
+| :---------- | :----- | :------- | :------------------------------------------------------- |
+| hasNextPage | bool   | Yes      | Whether more results exist beyond the current page.      |
+| pageSize    | number | Yes      | The requested page size.                                 |
+| nextCursor  | string | No       | Opaque cursor for the next page. Absent on the last page. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "media.browse",
+  "params": {
+    "path": "/roms/SNES",
+    "maxResults": 3
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "path": "/roms/SNES",
+    "entries": [
+      {
+        "name": "RPGs",
+        "path": "/roms/SNES/RPGs",
+        "type": "directory",
+        "fileCount": 42
+      },
+      {
+        "name": "Super Mario World",
+        "path": "/roms/SNES/Super Mario World.sfc",
+        "type": "media",
+        "systemId": "SNES",
+        "zapScript": "@SNES/Super Mario World",
+        "relativePath": "Super Mario World.sfc",
+        "tags": [
+          {"tag": "1990", "type": "year"},
+          {"tag": "2", "type": "players"}
+        ]
+      },
+      {
+        "name": "The Legend of Zelda - A Link to the Past",
+        "path": "/roms/SNES/The Legend of Zelda - A Link to the Past.sfc",
+        "type": "media",
+        "systemId": "SNES",
+        "zapScript": "@SNES/The Legend of Zelda - A Link to the Past",
+        "relativePath": "The Legend of Zelda - A Link to the Past.sfc",
+        "tags": [
+          {"tag": "1991", "type": "year"},
+          {"tag": "1", "type": "players"}
+        ]
+      }
+    ],
+    "totalFiles": 150,
+    "pagination": {
+      "hasNextPage": true,
+      "pageSize": 3,
+      "nextCursor": "eyJzb3J0VmFsdWUiOiJUaGUgTGVnZW5kIG9mIFplbGRhIC0gQSBMaW5rIHRvIHRoZSBQYXN0IiwibGFzdElkIjo0Mn0="
     }
   }
 }
@@ -487,13 +643,20 @@ This method returns all available tags (with their types) for the specified syst
 
 | Key     | Type     | Required | Description                                                                                         |
 | :------ | :------- | :------- | :-------------------------------------------------------------------------------------------------- |
-| systems | string[] | No       | Case-sensitive list of system IDs to restrict tags to. A missing key or empty list will get all systems. |
+| systems     | string[] | No       | Case-sensitive list of system IDs to restrict tags to. A missing key or empty list will get all systems. |
+| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 
 #### Result
 
 | Key  | Type                     | Required | Description                    |
 | :--- | :----------------------- | :------- | :----------------------------- |
 | tags | [TagInfo](#taginfo-object)[] | Yes      | Array of available tags.       |
+
+**Tag Capping:** To prevent large responses, long-tail tag types are capped at 100 entries
+per type. Tags within each type are sorted by usage count (most popular first), then
+alphabetically. The following types are capped: `credit`, `developer`, `mameparent`,
+`publisher`, `search`. Taxonomy types (e.g., `region`, `year`, `lang`, `genre`, `series`)
+have finite vocabularies per system and are always returned in full without truncation.
 
 ##### TagInfo object
 
@@ -558,7 +721,8 @@ Optionally, an object:
 
 | Key     | Type     | Required | Description                                                                         |
 | :------ | :------- | :------- | :---------------------------------------------------------------------------------- |
-| systems | string[] | No       | List of system IDs to restrict indexing to. Other system indexes will remain as is. |
+| systems     | string[] | No       | List of system IDs to restrict indexing to. Other system indexes will remain as is. |
+| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 
 An omitted or `null` value parameters key is also valid and will index every system.
 
@@ -571,11 +735,11 @@ An omitted or `null` value parameters key is also valid and will index every sys
 
 #### Result
 
-Returns `null` on success once indexing is complete.
+Returns `null` on success. Indexing runs in the background after the response is sent. Track progress using [media.indexing](./notifications.md) notifications.
 
 #### Examples
 
-##### Full Index Request
+##### Full index request
 
 ```json
 {
@@ -595,7 +759,7 @@ Returns `null` on success once indexing is complete.
 }
 ```
 
-##### Selective Index Request
+##### Selective index request
 
 ```json
 {
@@ -644,7 +808,7 @@ None.
 }
 ```
 
-##### Response (Indexing was running)
+##### Response (indexing was running)
 
 ```json
 {
@@ -656,7 +820,7 @@ None.
 }
 ```
 
-##### Response (No indexing running)
+##### Response (no indexing running)
 
 ```json
 {
@@ -678,7 +842,7 @@ None.
 
 #### Result
 
-Returns a list of [ActiveMedia](#active-media-object) objects or an empty array if no media is active.
+Returns an [ActiveMedia](#active-media-object) object if media is currently active, or `null` if no media is active.
 
 #### Example
 
@@ -692,13 +856,32 @@ Returns a list of [ActiveMedia](#active-media-object) objects or an empty array 
 }
 ```
 
-##### Response
+##### Response (no active media)
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": "47f80537-7a5d-11ef-9c7b-020304050607",
-  "result": []
+  "result": null
+}
+```
+
+##### Response (media active)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "47f80537-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "started": "2024-09-24T17:49:42.938167429+08:00",
+    "launcherId": "SNES",
+    "systemId": "SNES",
+    "systemName": "Super Nintendo Entertainment System",
+    "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+    "mediaName": "Super Mario World",
+    "zapScript": "@SNES/Super Mario World",
+    "launcherControls": ["load_state", "save_state", "toggle_menu"]
+  }
 }
 ```
 
@@ -744,6 +927,295 @@ Returns `null` on success.
   "jsonrpc": "2.0",
   "id": "47f80537-7a5d-11ef-9c7b-020304050607",
   "result": null
+}
+```
+
+### media.history
+
+Return paginated media play history.
+
+#### Parameters
+
+Optionally, an object:
+
+| Key         | Type     | Required | Description                                                                                     |
+| :---------- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
+| limit       | number   | No       | Maximum number of entries to return. Default is 25, maximum is 100.                              |
+| cursor      | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages. |
+| systems     | string[] | No       | Filter to one or more system IDs (e.g., `["SNES", "NES"]`).                                     |
+| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs.                                                            |
+
+#### Result
+
+| Key        | Type                                                 | Required | Description                              |
+| :--------- | :--------------------------------------------------- | :------- | :--------------------------------------- |
+| entries    | [MediaHistoryEntry](#media-history-entry-object)[]   | Yes      | A list of media play history entries.    |
+| pagination | [Pagination](#pagination-object)                     | No       | Pagination information for cursor-based navigation. Only present when entries are returned. |
+
+##### Media history entry object
+
+| Key        | Type   | Required | Description                                            |
+| :--------- | :----- | :------- | :----------------------------------------------------- |
+| systemId   | string | Yes      | ID of the system.                                      |
+| systemName | string | Yes      | Display name of the system.                            |
+| mediaName  | string | Yes      | Display name of the media.                             |
+| mediaPath  | string | Yes      | Path to the media file.                                |
+| launcherId | string | Yes      | ID of the launcher used.                               |
+| startedAt  | string | Yes      | Timestamp when media started in RFC3339 format.        |
+| endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Omitted if media is still active. |
+| playTime   | number | Yes      | Duration of the play session in seconds.               |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "method": "media.history",
+  "params": {
+    "limit": 10
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "entries": [
+      {
+        "systemId": "SNES",
+        "systemName": "Super Nintendo Entertainment System",
+        "mediaName": "Super Mario World",
+        "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+        "launcherId": "SNES",
+        "startedAt": "2025-01-22T14:30:00Z",
+        "endedAt": "2025-01-22T15:15:30Z",
+        "playTime": 2730
+      }
+    ],
+    "pagination": {
+      "hasNextPage": false,
+      "pageSize": 10
+    }
+  }
+}
+```
+
+### media.history.top
+
+Return aggregated media play history grouped by game, sorted by total play time descending. Useful for "most played" displays.
+
+#### Parameters
+
+Optionally, an object:
+
+| Key         | Type     | Required | Description                                                                                     |
+| :---------- | :------- | :------- | :---------------------------------------------------------------------------------------------- |
+| limit       | number   | No       | Maximum number of entries to return. Default is 25, maximum is 100.                              |
+| systems     | string[] | No       | Filter to one or more system IDs (e.g., `["SNES", "NES"]`).                                     |
+| fuzzySystem | boolean  | No       | Enable fuzzy matching for system IDs.                                                            |
+| since       | string   | No       | Only count sessions starting after this RFC3339 timestamp.                                       |
+
+#### Result
+
+| Key     | Type                                                         | Required | Description                              |
+| :------ | :----------------------------------------------------------- | :------- | :--------------------------------------- |
+| entries | [MediaHistoryTopEntry](#media-history-top-entry-object)[]    | Yes      | A ranked list of games by total play time. |
+
+##### Media history top entry object
+
+| Key           | Type   | Required | Description                                            |
+| :------------ | :----- | :------- | :----------------------------------------------------- |
+| systemId      | string | Yes      | ID of the system.                                      |
+| systemName    | string | Yes      | Display name of the system.                            |
+| mediaName     | string | Yes      | Display name of the media.                             |
+| mediaPath     | string | Yes      | Path to the media file (from most recent session).     |
+| totalPlayTime | number | Yes      | Total play time across all sessions in seconds.        |
+| sessionCount  | number | Yes      | Number of play sessions.                               |
+| lastPlayedAt  | string | Yes      | Timestamp of the most recent session in RFC3339 format. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-8b6e-12f0-ad8c-030405060708",
+  "method": "media.history.top",
+  "params": {
+    "limit": 5,
+    "systems": ["SNES"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-8b6e-12f0-ad8c-030405060708",
+  "result": {
+    "entries": [
+      {
+        "systemId": "SNES",
+        "systemName": "Super Nintendo Entertainment System",
+        "mediaName": "Super Mario World",
+        "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+        "totalPlayTime": 7200,
+        "sessionCount": 12,
+        "lastPlayedAt": "2026-02-14T20:30:00Z"
+      }
+    ]
+  }
+}
+```
+
+### media.lookup
+
+Resolve a game name and system to a media database match.
+
+Given a system ID and game name, searches the media database for the best matching title. Uses fuzzy matching to handle minor differences in naming. Returns `null` for the match when no title is found or confidence is too low.
+
+#### Parameters
+
+An object:
+
+| Key         | Type    | Required | Description                                                                            |
+| :---------- | :------ | :------- | :------------------------------------------------------------------------------------- |
+| system      | string  | Yes      | System ID to search within (e.g., `"SNES"`, `"Genesis"`).                             |
+| name        | string  | Yes      | Game name to look up.                                                                   |
+| fuzzySystem | boolean | No       | Enable fuzzy matching for the system ID (e.g., `"snes"` matches `"SNES"`).             |
+
+#### Result
+
+| Key   | Type                                         | Required | Description                                            |
+| :---- | :------------------------------------------- | :------- | :----------------------------------------------------- |
+| match | [MediaLookupMatch](#media-lookup-match-object) | No       | The best matching media entry, or `null` if no match found. |
+
+##### Media lookup match object
+
+| Key        | Type                         | Required | Description                                                                                 |
+| :--------- | :--------------------------- | :------- | :------------------------------------------------------------------------------------------ |
+| system     | [System](#system-object)     | Yes      | System the media was found in.                                                              |
+| name       | string                       | Yes      | Display name of the matched media.                                                          |
+| path       | string                       | Yes      | Path to the media file.                                                                     |
+| zapScript  | string                       | Yes      | ZapScript command to launch this media item.                                                |
+| tags       | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                              |
+| confidence | number                       | Yes      | Match confidence score from 0.0 to 1.0.                                                    |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
+  "method": "media.lookup",
+  "params": {
+    "system": "SNES",
+    "name": "Super Mario World"
+  }
+}
+```
+
+##### Response (match found)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "match": {
+      "system": {
+        "id": "SNES",
+        "name": "Super Nintendo Entertainment System",
+        "category": "Console",
+        "releaseDate": "1990-11-21",
+        "manufacturer": "Nintendo"
+      },
+      "name": "Super Mario World",
+      "path": "SNES/Super Mario World (USA).sfc",
+      "zapScript": "@SNES/Super Mario World",
+      "tags": [
+        {
+          "tag": "platformer",
+          "type": "genre"
+        },
+        {
+          "tag": "1990",
+          "type": "year"
+        }
+      ],
+      "confidence": 0.95
+    }
+  }
+}
+```
+
+##### Response (no match)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "match": null
+  }
+}
+```
+
+### media.control
+
+Send a control action to the active media's launcher.
+
+Requires active media with a launcher that supports control capabilities. The available control actions depend on the launcher. Use the `launcherControls` field from `media.active` or `media` to discover supported actions.
+
+Control actions run in a restricted runtime that blocks media-launching and playlist commands. Utility commands like `input.keyboard`, `execute`, `delay` and `echo` are allowed. The `execute` command bypasses the `allow_execute` allowlist for control scripts defined in launcher configuration.
+
+#### Parameters
+
+An object:
+
+| Key    | Type   | Required | Description                                                       |
+| :----- | :----- | :------- | :---------------------------------------------------------------- |
+| action | string | Yes      | The control action to execute (e.g., `"save_state"`, `"toggle_pause"`). |
+| args   | object | No       | Optional key-value arguments for the control action. Values are strings. |
+
+#### Result
+
+Returns an empty object `{}` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-7a5d-11ef-9c7b-020304050607",
+  "method": "media.control",
+  "params": {
+    "action": "save_state"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-7a5d-11ef-9c7b-020304050607",
+  "result": {}
 }
 ```
 
@@ -835,6 +1307,7 @@ None.
 | driver   | string | Yes      | Reader driver type (e.g., "pn532uart", "acr122pcsc"). |
 | path     | string | Yes      | Path or address for the reader connection.       |
 | idSource | string | No       | Source for the reader ID.                        |
+| enabled  | bool   | No       | Whether the connection is enabled. Defaults to true if omitted. |
 
 #### Example
 
@@ -859,7 +1332,7 @@ None.
     "debugLogging": false,
     "audioScanFeedback": true,
     "readersAutoDetect": true,
-    "readersScanMode": "insert",
+    "readersScanMode": "tap",
     "readersScanExitDelay": 0.0,
     "readersScanIgnoreSystems": ["DOS"],
     "errorReporting": true,
@@ -953,6 +1426,58 @@ Returns `null` on success.
 }
 ```
 
+### settings.auth.claim
+
+Redeem a claim token against a remote auth server and store the resulting credentials in `auth.toml`.
+
+This method performs trust discovery using the `.well-known/zaparoo` protocol. It first verifies that the claim URL's root domain supports auth (`auth: 1` in the well-known response), then redeems the claim token to obtain a bearer credential. If the root domain's well-known response includes a `trusted` list, each related domain is checked for bidirectional trust confirmation before extending the credential.
+
+#### Parameters
+
+An object:
+
+| Key      | Type   | Required | Description                                                    |
+| :------- | :----- | :------- | :------------------------------------------------------------- |
+| claimUrl | string | Yes      | HTTPS URL of the claim endpoint to redeem the token against.   |
+| token    | string | Yes      | The one-time claim token to redeem.                            |
+
+#### Result
+
+| Key     | Type     | Required | Description                                                        |
+| :------ | :------- | :------- | :----------------------------------------------------------------- |
+| domains | string[] | Yes      | List of domains the credential was stored for (root + any trusted). |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-auth-claim-example",
+  "method": "settings.auth.claim",
+  "params": {
+    "claimUrl": "https://api.example.com/auth/claim",
+    "token": "claim-token-abc123"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-auth-claim-example",
+  "result": {
+    "domains": [
+      "https://api.example.com",
+      "https://cdn.example.com"
+    ]
+  }
+}
+```
+
 ### settings.logs.download
 
 Download the current log file as base64-encoded content.
@@ -1041,7 +1566,7 @@ None.
 }
 ```
 
-##### Response (Reset State)
+##### Response (reset state)
 
 ```json
 {
@@ -1057,7 +1582,7 @@ None.
 }
 ```
 
-##### Response (Active Game with Limits)
+##### Response (active game with limits)
 
 ```json
 {
@@ -1077,7 +1602,7 @@ None.
 }
 ```
 
-##### Response (Cooldown State)
+##### Response (cooldown state)
 
 ```json
 {
@@ -1286,9 +1811,7 @@ An object:
 
 #### Result
 
-| Key | Type   | Required | Description                       |
-| :-- | :----- | :------- | :-------------------------------- |
-| id  | string | Yes      | Database ID of new mapping entry. |
+Returns an empty object `{}` on success.
 
 #### Example
 
@@ -1316,9 +1839,7 @@ An object:
 {
   "jsonrpc": "2.0",
   "id": "562c0b60-7ae8-11ef-87d7-020304050607",
-  "result": {
-    "id": "2"
-  }
+  "result": {}
 }
 ```
 
@@ -1467,7 +1988,9 @@ None.
 
 | Key          | Type     | Required | Description                                   |
 | :----------- | :------- | :------- | :-------------------------------------------- |
-| id           | string   | Yes      | Unique identifier for the reader.             |
+| id           | string   | Yes      | Device path or system identifier of the reader. Legacy field, prefer `readerId` for stable identification. |
+| readerId     | string   | Yes      | Stable reader ID, deterministic across restarts. Format: `{driver}-{hash}`. |
+| driver       | string   | Yes      | Driver type for the reader (e.g., `"pn532"`, `"acr122pcsc"`, `"file"`). |
 | info         | string   | Yes      | Human-readable information about the reader.  |
 | connected    | boolean  | Yes      | Whether the reader is currently connected.    |
 | capabilities | string[] | Yes      | List of capabilities supported by the reader. |
@@ -1493,10 +2016,12 @@ None.
   "result": {
     "readers": [
       {
-        "id": "pn532_1",
-        "info": "PN532 NFC Reader",
-        "connected": true,
-        "capabilities": ["read", "write"]
+        "id": "/dev/ttyUSB0",
+        "readerId": "pn532-ujqixjv6",
+        "driver": "pn532",
+        "info": "PN532 (1-2.3.1)",
+        "capabilities": ["read", "write"],
+        "connected": true
       }
     ]
   }
@@ -1511,9 +2036,10 @@ Attempt to write given text to the first available write-capable reader, if poss
 
 An object:
 
-| Key  | Type   | Required | Description                           |
-| :--- | :----- | :------- | :------------------------------------ |
-| text | string | Yes      | ZapScript to be written to the token. |
+| Key      | Type   | Required | Description                                                                  |
+| :------- | :----- | :------- | :--------------------------------------------------------------------------- |
+| text     | string | Yes      | ZapScript to be written to the token.                                        |
+| readerId | string | No       | ID of a specific reader to write to. If omitted, uses the first available write-capable reader. |
 
 #### Result
 
@@ -1550,7 +2076,11 @@ Cancel any ongoing write operation.
 
 #### Parameters
 
-None.
+Optionally, an object:
+
+| Key      | Type   | Required | Description                                                                    |
+| :------- | :----- | :------- | :----------------------------------------------------------------------------- |
+| readerId | string | No       | ID of a specific reader to cancel write on. If omitted, cancels on all readers. |
 
 #### Result
 
@@ -1800,6 +2330,7 @@ Returns `null` on success.
 
 ### inbox.clear
 
+
 Delete all inbox messages.
 
 #### Parameters
@@ -1830,3 +2361,224 @@ Returns `null` on success.
   "id": "0e8b1a8a-7e48-11ef-9b5e-020304050607",
   "result": null
 }
+```
+
+## Input
+
+Direct platform input control for remote control use cases. These methods bypass the token pipeline entirely: no hooks, history, or sound effects are triggered.
+
+The input macro format is identical to what goes after the `:` in a ZapScript `input.keyboard` or `input.gamepad` command on a token. Each character is a separate keypress, `{...}` groups are special keys/combos, and `\` is the escape character.
+
+### input.keyboard
+
+Press keyboard keys using the ZapScript input macro format.
+
+#### Parameters
+
+An object:
+
+| Key  | Type   | Required | Description                                                                                                                                          |
+| :--- | :----- | :------- | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
+| keys | string | Yes      | Input macro string. Each character is a keypress, `{...}` for special keys (e.g. `{enter}`, `{f9}`, `{ctrl+q}`). Same format as ZapScript on a token. |
+
+#### Result
+
+Returns `null` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "method": "input.keyboard",
+  "params": {
+    "keys": "abc{enter}"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "result": null
+}
+```
+
+### input.gamepad
+
+Press gamepad buttons using the ZapScript input macro format.
+
+#### Parameters
+
+An object:
+
+| Key     | Type   | Required | Description                                                                                                                                                  |
+| :------ | :----- | :------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| buttons | string | Yes      | Input macro string. Each character is a button press, `{...}` for named buttons (e.g. `{up}`, `{start}`, `{l1}`). Same format as ZapScript on a token. |
+
+#### Result
+
+Returns `null` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-2345-6789-abcd-ef0123456789",
+  "method": "input.gamepad",
+  "params": {
+    "buttons": "^^vv<><>BA{start}"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-2345-6789-abcd-ef0123456789",
+  "result": null
+}
+```
+
+## Screenshot
+
+### screenshot
+
+Capture a screenshot of the current platform display. Returns the image as base64-encoded data and the path where it was saved on disk.
+
+Currently supported on MiSTer only. Other platforms will return an error.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key  | Type   | Required | Description                                  |
+| :--- | :----- | :------- | :------------------------------------------- |
+| path | string | Yes      | Path where the screenshot was saved on disk. |
+| data | string | Yes      | Base64-encoded image data.                   |
+| size | number | Yes      | Size of the image data in bytes.             |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "method": "screenshot"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "result": {
+    "path": "/media/fat/screenshots/MiSTer_20260329_181500.png",
+    "data": "iVBORw0KGgo...",
+    "size": 245760
+  }
+}
+```
+
+## Updates
+
+### update.check
+
+Check if a newer version of Zaparoo Core is available. Returns version information and release notes. On development builds, always returns `updateAvailable: false`.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key             | Type    | Required | Description                                        |
+| :-------------- | :------ | :------- | :------------------------------------------------- |
+| currentVersion  | string  | Yes      | The currently running version.                     |
+| latestVersion   | string  | No       | The latest available version (if check succeeded). |
+| updateAvailable | boolean | Yes      | Whether a newer version is available.              |
+| releaseNotes    | string  | No       | Release notes for the latest version.              |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "method": "update.check"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "result": {
+    "currentVersion": "2.9.1",
+    "latestVersion": "2.10.0",
+    "updateAvailable": true,
+    "releaseNotes": "..."
+  }
+}
+```
+
+### update.apply
+
+Download and apply the latest available update, then gracefully restart the service. The response is sent to the client before the restart occurs. Returns an error if media indexing is in progress or if running a development build.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key             | Type   | Required | Description                    |
+| :-------------- | :----- | :------- | :----------------------------- |
+| previousVersion | string | Yes      | The version before the update. |
+| newVersion      | string | Yes      | The version after the update.  |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "method": "update.apply"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "result": {
+    "previousVersion": "2.9.1",
+    "newVersion": "2.10.0"
+  }
+}
+```

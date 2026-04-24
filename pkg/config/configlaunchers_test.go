@@ -73,56 +73,56 @@ func TestLaunchersBeforeMediaStart(t *testing.T) {
 	}
 }
 
-func TestSetExecuteAllowListForTesting(t *testing.T) {
+func TestLoadTOML_ExecuteAllowList(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		testCmd   string
-		allowList []string
-		expected  bool
+		name     string
+		testCmd  string
+		toml     string
+		expected bool
 	}{
 		{
-			name:      "empty allow list blocks all",
-			allowList: []string{},
-			testCmd:   "echo hello",
-			expected:  false,
+			name:     "empty allow list blocks all",
+			toml:     `[zapscript]` + "\n" + `allow_execute = []`,
+			testCmd:  "echo hello",
+			expected: false,
 		},
 		{
-			name:      "wildcard allows all",
-			allowList: []string{".*"},
-			testCmd:   "echo hello",
-			expected:  true,
+			name:     "wildcard allows all",
+			toml:     `[zapscript]` + "\n" + `allow_execute = [".*"]`,
+			testCmd:  "echo hello",
+			expected: true,
 		},
 		{
-			name:      "specific command allowed",
-			allowList: []string{"^echo$"},
-			testCmd:   "echo",
-			expected:  true,
+			name:     "specific command allowed",
+			toml:     `[zapscript]` + "\n" + `allow_execute = ["^echo$"]`,
+			testCmd:  "echo",
+			expected: true,
 		},
 		{
-			name:      "specific command not in list blocked",
-			allowList: []string{"^echo$"},
-			testCmd:   "rm -rf",
-			expected:  false,
+			name:     "specific command not in list blocked",
+			toml:     `[zapscript]` + "\n" + `allow_execute = ["^echo$"]`,
+			testCmd:  "rm -rf",
+			expected: false,
 		},
 		{
-			name:      "path pattern matching",
-			allowList: []string{"/usr/bin/.*"},
-			testCmd:   "/usr/bin/notify-send",
-			expected:  true,
+			name:     "path pattern matching",
+			toml:     `[zapscript]` + "\n" + `allow_execute = ["/usr/bin/.*"]`,
+			testCmd:  "/usr/bin/notify-send",
+			expected: true,
 		},
 		{
-			name:      "multiple patterns",
-			allowList: []string{"^echo$", "^notify-send$"},
-			testCmd:   "notify-send",
-			expected:  true,
+			name:     "multiple patterns",
+			toml:     `[zapscript]` + "\n" + `allow_execute = ["^echo$", "^notify-send$"]`,
+			testCmd:  "notify-send",
+			expected: true,
 		},
 		{
-			name:      "invalid regex is skipped gracefully",
-			allowList: []string{"[invalid", "^echo$"},
-			testCmd:   "echo",
-			expected:  true,
+			name:     "invalid regex is skipped gracefully",
+			toml:     `[zapscript]` + "\n" + `allow_execute = ["[invalid", "^echo$"]`,
+			testCmd:  "echo",
+			expected: true,
 		},
 	}
 
@@ -131,25 +131,26 @@ func TestSetExecuteAllowListForTesting(t *testing.T) {
 			t.Parallel()
 
 			cfg := &Instance{}
-			cfg.SetExecuteAllowListForTesting(tt.allowList)
+			require.NoError(t, cfg.LoadTOML(tt.toml))
 
 			result := cfg.IsExecuteAllowed(tt.testCmd)
-			assert.Equal(t, tt.expected, result, "command: %s, allowList: %v", tt.testCmd, tt.allowList)
+			assert.Equal(t, tt.expected, result, "command: %s, toml: %s", tt.testCmd, tt.toml)
 		})
 	}
 }
 
-func TestSetExecuteAllowListForTesting_CompilesRegex(t *testing.T) {
+func TestLoadTOML_CompilesExecuteRegex(t *testing.T) {
 	t.Parallel()
 
 	cfg := &Instance{}
-	cfg.SetExecuteAllowListForTesting([]string{"^test.*", "^echo$"})
+	require.NoError(t, cfg.LoadTOML(`[zapscript]
+allow_execute = ["^test.*", "^echo$"]`))
 
-	// Verify internal state was set correctly
-	assert.Len(t, cfg.vals.ZapScript.AllowExecute, 2)
-	assert.Len(t, cfg.vals.ZapScript.allowExecuteRe, 2)
-	assert.NotNil(t, cfg.vals.ZapScript.allowExecuteRe[0])
-	assert.NotNil(t, cfg.vals.ZapScript.allowExecuteRe[1])
+	// Verify behavior: matching commands are allowed
+	assert.True(t, cfg.IsExecuteAllowed("testing123"))
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+	// Verify behavior: non-matching commands are blocked
+	assert.False(t, cfg.IsExecuteAllowed("rm -rf"))
 }
 
 func TestLookupLauncherDefaults(t *testing.T) {
@@ -161,6 +162,7 @@ func TestLookupLauncherDefaults(t *testing.T) {
 		expectedServerURL string
 		expectedAction    string
 		expectedInstall   string
+		expectedLoadPath  string
 		groups            []string
 		defaults          []LaunchersDefault
 	}{
@@ -321,6 +323,25 @@ func TestLookupLauncherDefaults(t *testing.T) {
 			expectedAction:    "details",
 			expectedInstall:   "/movies",
 		},
+		{
+			name:       "group match propagates load_path",
+			launcherID: "SNES",
+			groups:     []string{"MiSTer"},
+			defaults: []LaunchersDefault{
+				{Launcher: "MiSTer", LoadPath: "_Unstable/SNES"},
+			},
+			expectedLoadPath: "_Unstable/SNES",
+		},
+		{
+			name:       "exact launcher overrides group load_path",
+			launcherID: "SNES",
+			groups:     []string{"MiSTer"},
+			defaults: []LaunchersDefault{
+				{Launcher: "MiSTer", LoadPath: "_Unstable/SNES"},
+				{Launcher: "SNES", LoadPath: "_Console/SNES"},
+			},
+			expectedLoadPath: "_Console/SNES",
+		},
 	}
 
 	for _, tt := range tests {
@@ -341,24 +362,75 @@ func TestLookupLauncherDefaults(t *testing.T) {
 			assert.Equal(t, tt.expectedServerURL, result.ServerURL, "ServerURL mismatch")
 			assert.Equal(t, tt.expectedAction, result.Action, "Action mismatch")
 			assert.Equal(t, tt.expectedInstall, result.InstallDir, "InstallDir mismatch")
+			assert.Equal(t, tt.expectedLoadPath, result.LoadPath, "LoadPath mismatch")
 		})
 	}
 }
 
-func TestSetLauncherDefaultsForTesting(t *testing.T) {
+func TestLookupLauncherDefaults_MergesLoadPath(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Launchers: Launchers{
+				Default: []LaunchersDefault{
+					{Launcher: "SNES", LoadPath: "_Unstable/SNES"},
+				},
+			},
+		},
+	}
+
+	result := cfg.LookupLauncherDefaults("SNES", nil)
+	assert.Equal(t, "_Unstable/SNES", result.LoadPath)
+}
+
+func TestLookupLauncherDefaults_LaterEntryOverridesLoadPath(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Launchers: Launchers{
+				Default: []LaunchersDefault{
+					{Launcher: "SNES", LoadPath: "_Homebrew/SNES"},
+					{Launcher: "SNES", LoadPath: "_Unstable/SNES"},
+				},
+			},
+		},
+	}
+
+	result := cfg.LookupLauncherDefaults("SNES", nil)
+	assert.Equal(t, "_Unstable/SNES", result.LoadPath, "later entry must win")
+}
+
+func TestLookupLauncherDefaults_LoadPathTOMLRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Nintendo64"
+load_path = "_LLAPI/N64_LLAPI"
+`))
+
+	result := cfg.LookupLauncherDefaults("Nintendo64", nil)
+	assert.Equal(t, "_LLAPI/N64_LLAPI", result.LoadPath, "load_path must survive TOML round-trip")
+}
+
+func TestLoadTOML_LauncherDefaults(t *testing.T) {
 	t.Parallel()
 
 	cfg := &Instance{}
 
-	defaults := []LaunchersDefault{
-		{Launcher: "Steam", Action: "details"},
-		{Launcher: "GOG", Action: "run", InstallDir: "/opt/gog"},
-	}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Steam"
+action = "details"
 
-	cfg.SetLauncherDefaultsForTesting(defaults)
-
-	// Verify defaults were set
-	assert.Len(t, cfg.vals.Launchers.Default, 2)
+[[launchers.default]]
+launcher = "GOG"
+action = "run"
+install_dir = "/opt/gog"
+`))
 
 	// Verify Steam default
 	steamDefault := cfg.LookupLauncherDefaults("Steam", nil)
@@ -433,11 +505,17 @@ func TestLauncherDefaults_SaveLoadRoundTrip(t *testing.T) {
 	cfg, err := NewConfig(tempDir, BaseDefaults)
 	require.NoError(t, err)
 
-	// Set launcher defaults using the testing helper
-	cfg.SetLauncherDefaultsForTesting([]LaunchersDefault{
-		{Launcher: "Steam", Action: "details"},
-		{Launcher: "GOG", Action: "run", InstallDir: "/games/gog"},
-	})
+	// Set launcher defaults using LoadTOML
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Steam"
+action = "details"
+
+[[launchers.default]]
+launcher = "GOG"
+action = "run"
+install_dir = "/games/gog"
+`))
 
 	// Save and reload
 	err = cfg.Save()
@@ -664,6 +742,33 @@ execute = "echo good"
 	customs := cfg.CustomLaunchers()
 	require.Len(t, customs, 1)
 	assert.Equal(t, "GoodLauncher", customs[0].ID)
+}
+
+func TestIndexRoots_ResolvesRelativePaths(t *testing.T) {
+	t.Parallel()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip("os.Executable() unavailable")
+	}
+	exeDir := filepath.Dir(exe)
+
+	absDir := t.TempDir()
+
+	cfg := &Instance{
+		vals: Values{
+			Launchers: Launchers{
+				MediaDir:  "roms",
+				IndexRoot: []string{absDir, "relative/dir"},
+			},
+		},
+	}
+
+	roots := cfg.IndexRoots()
+	require.Len(t, roots, 3)
+	assert.Equal(t, filepath.Join(exeDir, "roms"), roots[0])
+	assert.Equal(t, absDir, roots[1])
+	assert.Equal(t, filepath.Join(exeDir, "relative", "dir"), roots[2])
 }
 
 func TestLoadCustomLaunchers_NestedDirectories(t *testing.T) {

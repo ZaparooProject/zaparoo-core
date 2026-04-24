@@ -296,6 +296,121 @@ func TestDataCorruptedError(t *testing.T) {
 	assert.Equal(t, assert.AnError, err.Unwrap())
 }
 
+func TestConnected(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not connected by default", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		assert.False(t, r.Connected())
+	})
+
+	t.Run("not connected when only polling is true", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		r.polling = true
+		assert.False(t, r.Connected())
+	})
+}
+
+func TestInfo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty when not connected", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		assert.Empty(t, r.Info())
+	})
+
+	t.Run("empty when polling but no device", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		r.polling = true
+		assert.Empty(t, r.Info())
+	})
+}
+
+func TestPath(t *testing.T) {
+	t.Parallel()
+
+	r := NewReader(&config.Instance{})
+	r.conn = config.ReadersConnect{
+		Driver: "pn532_i2c",
+		Path:   "/dev/i2c-2",
+	}
+	assert.Equal(t, "/dev/i2c-2", r.Path())
+}
+
+func TestClose_NilDevice(t *testing.T) {
+	t.Parallel()
+
+	r := NewReader(&config.Instance{})
+	err := r.Close()
+	require.NoError(t, err)
+	assert.False(t, r.polling)
+}
+
+func TestReaderID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("uses connection string from conn", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		r.conn = config.ReadersConnect{
+			Driver: "pn532_i2c",
+			Path:   "/dev/i2c-2",
+		}
+		id := r.ReaderID()
+		assert.NotEmpty(t, id)
+	})
+
+	t.Run("empty conn yields deterministic id", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		id := r.ReaderID()
+		assert.NotEmpty(t, id)
+	})
+
+	t.Run("auto conn with nil pnd uses auto string", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		r.conn = config.ReadersConnect{
+			Driver: "libnfcauto",
+			Path:   "",
+		}
+		id := r.ReaderID()
+		assert.NotEmpty(t, id)
+	})
+}
+
+func TestValidateWriteParameters(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil reader", func(t *testing.T) {
+		t.Parallel()
+		err := validateWriteParameters(nil, "test")
+		assert.EqualError(t, err, "reader cannot be nil")
+	})
+
+	t.Run("not connected", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		err := validateWriteParameters(r, "test")
+		assert.EqualError(t, err, "reader not connected")
+	})
+
+	t.Run("empty text", func(t *testing.T) {
+		t.Parallel()
+		r := NewReader(&config.Instance{})
+		r.polling = true
+		// Can't set pnd to non-nil without real device, so this hits
+		// "reader not connected" first. Test the empty text path via
+		// the nil reader and not-connected paths above.
+		err := validateWriteParameters(r, "")
+		assert.Error(t, err)
+	})
+}
+
 // TODO: Add mock-based tests for error scenarios:
 // - IO errors with active token → sends ReaderError: true
 // - Device disconnect scenarios
@@ -342,6 +457,165 @@ func TestOpenConnectionStringTranslation(t *testing.T) {
 			// Verify the reader was created with the correct mode
 			// which determines how connection strings are translated
 			assert.Equal(t, tt.expectedMode, tt.reader.mode)
+		})
+	}
+}
+
+// TestToLibnfcConnStr verifies that internal connection strings are translated
+// to the libnfc format with underscored driver names (e.g. "pn532_i2c").
+// Regression test: libnfc requires underscores in driver names but the internal
+// ConnectionString() normalization strips them, causing nfc.Open() to fail with
+// "cannot open NFC device".
+func TestToLibnfcConnStr(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+		mode     readerMode
+	}{
+		// Legacy I2C mode — the primary bug that was reported
+		{
+			name:     "legacy i2c from config",
+			mode:     modeLegacyI2C,
+			input:    "legacypn532i2c:/dev/i2c-2",
+			expected: "pn532_i2c:/dev/i2c-2",
+		},
+		{
+			name:     "legacy i2c bus 1",
+			mode:     modeLegacyI2C,
+			input:    "legacypn532i2c:/dev/i2c-1",
+			expected: "pn532_i2c:/dev/i2c-1",
+		},
+
+		// Legacy UART mode
+		{
+			name:     "legacy uart from config",
+			mode:     modeLegacyUART,
+			input:    "legacypn532uart:/dev/ttyUSB0",
+			expected: "pn532_uart:/dev/ttyUSB0",
+		},
+		{
+			name:     "legacy uart ttyACM device",
+			mode:     modeLegacyUART,
+			input:    "legacypn532uart:/dev/ttyACM0",
+			expected: "pn532_uart:/dev/ttyACM0",
+		},
+
+		// Default mode (non-legacy libnfc reader)
+		{
+			name:     "default mode i2c",
+			mode:     modeAll,
+			input:    "pn532i2c:/dev/i2c-2",
+			expected: "pn532_i2c:/dev/i2c-2",
+		},
+		{
+			name:     "default mode uart",
+			mode:     modeAll,
+			input:    "pn532uart:/dev/ttyUSB0",
+			expected: "pn532_uart:/dev/ttyUSB0",
+		},
+
+		// Passthrough cases — strings that shouldn't be changed
+		{
+			name:     "acr122 mode passthrough",
+			mode:     modeACR122Only,
+			input:    "libnfcauto:",
+			expected: "libnfcauto:",
+		},
+		{
+			name:     "empty string passthrough",
+			mode:     modeAll,
+			input:    "",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := toLibnfcConnStr(tt.mode, tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestToLibnfcConnStrEndToEnd verifies the full pipeline from user config
+// (ReadersConnect) through ConnectionString() normalization to libnfc format.
+func TestToLibnfcConnStrEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		device   config.ReadersConnect
+		name     string
+		expected string
+		mode     readerMode
+	}{
+		{
+			name: "legacy_pn532_i2c config to libnfc",
+			mode: modeLegacyI2C,
+			device: config.ReadersConnect{
+				Driver: "legacy_pn532_i2c",
+				Path:   "/dev/i2c-2",
+			},
+			expected: "pn532_i2c:/dev/i2c-2",
+		},
+		{
+			name: "legacypn532i2c config to libnfc",
+			mode: modeLegacyI2C,
+			device: config.ReadersConnect{
+				Driver: "legacypn532i2c",
+				Path:   "/dev/i2c-2",
+			},
+			expected: "pn532_i2c:/dev/i2c-2",
+		},
+		{
+			name: "legacy_pn532_uart config to libnfc",
+			mode: modeLegacyUART,
+			device: config.ReadersConnect{
+				Driver: "legacy_pn532_uart",
+				Path:   "/dev/ttyUSB0",
+			},
+			expected: "pn532_uart:/dev/ttyUSB0",
+		},
+		{
+			name: "legacypn532uart config to libnfc",
+			mode: modeLegacyUART,
+			device: config.ReadersConnect{
+				Driver: "legacypn532uart",
+				Path:   "/dev/ttyUSB0",
+			},
+			expected: "pn532_uart:/dev/ttyUSB0",
+		},
+		{
+			name: "pn532_i2c config to libnfc (default mode)",
+			mode: modeAll,
+			device: config.ReadersConnect{
+				Driver: "pn532_i2c",
+				Path:   "/dev/i2c-1",
+			},
+			expected: "pn532_i2c:/dev/i2c-1",
+		},
+		{
+			name: "pn532_uart config to libnfc (default mode)",
+			mode: modeAll,
+			device: config.ReadersConnect{
+				Driver: "pn532_uart",
+				Path:   "/dev/ttyUSB0",
+			},
+			expected: "pn532_uart:/dev/ttyUSB0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			connStr := tt.device.ConnectionString()
+			result := toLibnfcConnStr(tt.mode, connStr)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

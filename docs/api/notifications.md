@@ -43,6 +43,35 @@ A token was detected by a connected reader.
 | text     | string | No       | Text data associated with the token.           |
 | data     | string | No       | Raw binary data of the token (base64 encoded). |
 | scanTime | string | Yes      | ISO 8601 timestamp when token was scanned.     |
+| readerId | string | No       | ID of the reader that scanned the token.       |
+
+### tokens.staged
+
+A token was staged by the launch guard and is waiting for confirmation. Sent when launch guard is enabled and media is currently playing.
+
+#### Response
+
+| Key      | Type   | Required | Description                                    |
+| :------- | :----- | :------- | :--------------------------------------------- |
+| type     | string | Yes      | Type of token (e.g., "nfc", "barcode").        |
+| uid      | string | Yes      | Unique identifier of the token.                |
+| text     | string | No       | Text data associated with the token.           |
+| data     | string | No       | Raw binary data of the token (base64 encoded). |
+| scanTime | string | Yes      | ISO 8601 timestamp when token was scanned.     |
+
+### tokens.staged.ready
+
+A staged token's delay period has expired and is now ready for confirmation. Sent when launch guard delay is configured and the mandatory waiting period completes.
+
+#### Response
+
+| Key      | Type   | Required | Description                                    |
+| :------- | :----- | :------- | :--------------------------------------------- |
+| type     | string | Yes      | Type of token (e.g., "nfc", "barcode").        |
+| uid      | string | Yes      | Unique identifier of the token.                |
+| text     | string | No       | Text data associated with the token.           |
+| data     | string | No       | Raw binary data of the token (base64 encoded). |
+| scanTime | string | Yes      | ISO 8601 timestamp when token was scanned.     |
 
 ### tokens.removed
 
@@ -84,7 +113,31 @@ Media has stopped on server.
 
 #### Response
 
-Returns `null`.
+| Key        | Type   | Required | Description                                    |
+| :--------- | :----- | :------- | :--------------------------------------------- |
+| systemId   | string | Yes      | ID of the system.                              |
+| systemName | string | Yes      | Display name of the system.                    |
+| mediaName  | string | Yes      | Display name of the media.                     |
+| mediaPath  | string | Yes      | Path to media file on server.                  |
+| launcherId | string | Yes      | ID of the launcher.                            |
+| elapsed    | number | Yes      | Duration of the media session in seconds.      |
+
+#### Example
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "media.stopped",
+  "params": {
+    "systemId": "SNES",
+    "systemName": "Super Nintendo Entertainment System",
+    "mediaName": "Super Mario World",
+    "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+    "launcherId": "SNES",
+    "elapsed": 2730
+  }
+}
+```
 
 ### media.indexing
 
@@ -111,7 +164,7 @@ Sent during media database generation to indicate indexing progress and completi
 
 #### Examples
 
-##### Indexing In Progress
+##### Indexing in progress
 
 ```json
 {
@@ -129,7 +182,7 @@ Sent during media database generation to indicate indexing progress and completi
 }
 ```
 
-##### Optimization In Progress
+##### Optimization in progress
 
 ```json
 {
@@ -145,7 +198,7 @@ Sent during media database generation to indicate indexing progress and completi
 }
 ```
 
-##### Database Ready
+##### Database ready
 
 ```json
 {
@@ -174,7 +227,7 @@ Sent when a playtime limit (session or daily) has been reached and enforced by t
 
 #### Examples
 
-##### Session Limit Reached
+##### Session limit reached
 
 ```json
 {
@@ -186,7 +239,7 @@ Sent when a playtime limit (session or daily) has been reached and enforced by t
 }
 ```
 
-##### Daily Limit Reached
+##### Daily limit reached
 
 ```json
 {

@@ -51,6 +51,7 @@ type PathFragmentParams struct {
 	Config              *config.Instance
 	Path                string
 	SystemID            string
+	MediaType           slugs.MediaType // Pre-resolved media type; skips systemdefs lookup if set
 	NoExt               bool
 	StripLeadingNumbers bool
 }
@@ -93,6 +94,7 @@ func AddMediaPath(
 	noExt bool,
 	stripLeadingNumbers bool,
 	cfg *config.Instance,
+	mediaType slugs.MediaType,
 ) (titleIndex, mediaIndex int, err error) {
 	pf := GetPathFragments(PathFragmentParams{
 		Config:              cfg,
@@ -100,6 +102,7 @@ func AddMediaPath(
 		NoExt:               noExt,
 		StripLeadingNumbers: stripLeadingNumbers,
 		SystemID:            systemID,
+		MediaType:           mediaType,
 	})
 
 	systemIndex := 0
@@ -125,14 +128,8 @@ func AddMediaPath(
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
 
-		// Look up mediaType for consistent slugification
-		mediaType := slugs.MediaTypeGame // Default
-		if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
-			mediaType = system.GetMediaType()
-		}
-
-		// Generate slug metadata for fuzzy matching prefilter
-		metadata := mediadb.GenerateSlugWithMetadata(mediaType, pf.Title)
+		// Generate slug metadata from pre-computed tokens (avoids redundant slugification)
+		metadata := mediadb.GenerateSlugMetadataFromTokens(mediaType, pf.Title, pf.Slug, pf.SlugTokens)
 
 		_, err := db.InsertMediaTitle(&database.MediaTitle{
 			DBID:          int64(titleIndex),
@@ -156,9 +153,19 @@ func AddMediaPath(
 	if foundMediaIndex, ok := ss.MediaIDs[mediaKey]; !ok {
 		ss.MediaIndex++
 		mediaIndex = ss.MediaIndex
+
+		// Compute immediate parent directory for indexed browse lookups.
+		var parentDir string
+		if idx := strings.Index(pf.Path, "://"); idx >= 0 {
+			parentDir = pf.Path[:idx+3]
+		} else if lastSlash := strings.LastIndex(pf.Path, "/"); lastSlash >= 0 {
+			parentDir = pf.Path[:lastSlash+1]
+		}
+
 		_, err := db.InsertMedia(database.Media{
 			DBID:           int64(mediaIndex),
 			Path:           pf.Path,
+			ParentDir:      parentDir,
 			MediaTitleDBID: int64(titleIndex),
 			SystemDBID:     int64(systemIndex),
 		})
@@ -218,7 +225,8 @@ func AddMediaPath(
 			})
 			if err != nil {
 				var sqliteErr sqlite3.Error
-				if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+				if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
+					!errors.Is(err, mediadb.ErrDependencyFlush) {
 					log.Trace().Err(err).Msgf("media tag relationship already exists for extension: %s", extWithoutDot)
 				} else {
 					log.Error().Err(err).Msgf("error inserting media tag relationship for extension: %s", extWithoutDot)
@@ -234,42 +242,47 @@ func AddMediaPath(
 			tagIndex = foundTagIndex
 		}
 
-		// Dynamically create revision tags if they don't exist
-		// This allows version numbers like "v7.2502" to be stored as "rev:7-2502"
-		if tagIndex == 0 && strings.HasPrefix(tagStr, string(tags.TagTypeRev)+":") {
-			// Extract the revision value (everything after "rev:")
-			revValue := strings.TrimPrefix(tagStr, string(tags.TagTypeRev)+":")
-
-			// Get or create the Rev tag type ID dynamically
-			revTypeID, found := ss.TagTypeIDs[string(tags.TagTypeRev)]
-			if !found {
-				// Rev tag type doesn't exist in cache, try to look it up
-				existingTagType, getErr := db.FindTagType(database.TagType{Type: string(tags.TagTypeRev)})
-				if getErr != nil || existingTagType.DBID == 0 {
-					log.Error().Err(getErr).Msgf(
-						"rev tag type not found and not in cache " +
-							"(should not happen after SeedCanonicalTags)",
-					)
+		// Dynamically create open-ended string tags for rev, developer, publisher, and credit.
+		// These types allow arbitrary values (e.g. "rev:7-2502", "credit:nintendo-r-and-d1").
+		if tagIndex == 0 {
+			var dynType string
+			switch {
+			case strings.HasPrefix(tagStr, string(tags.TagTypeRev)+":"):
+				dynType = string(tags.TagTypeRev)
+			case strings.HasPrefix(tagStr, string(tags.TagTypeDeveloper)+":"):
+				dynType = string(tags.TagTypeDeveloper)
+			case strings.HasPrefix(tagStr, string(tags.TagTypePublisher)+":"):
+				dynType = string(tags.TagTypePublisher)
+			case strings.HasPrefix(tagStr, string(tags.TagTypeCredit)+":"):
+				dynType = string(tags.TagTypeCredit)
+			}
+			if dynType != "" {
+				tagValue := strings.TrimPrefix(tagStr, dynType+":")
+				typeID, found := ss.TagTypeIDs[dynType]
+				if !found {
+					existingTagType, getErr := db.FindTagType(database.TagType{Type: dynType})
+					if getErr != nil || existingTagType.DBID == 0 {
+						log.Error().Err(getErr).Msgf(
+							"%s tag type not found (should not happen after SeedCanonicalTags)", dynType)
+						continue
+					}
+					typeID = int(existingTagType.DBID)
+					ss.TagTypeIDs[dynType] = typeID
+				}
+				ss.TagsIndex++
+				tagIndex = ss.TagsIndex
+				_, insertErr := db.InsertTag(database.Tag{
+					DBID:     int64(tagIndex),
+					Tag:      tags.PadTagValue(tagValue),
+					TypeDBID: int64(typeID),
+				})
+				if insertErr != nil {
+					ss.TagsIndex--
+					log.Error().Err(insertErr).Msgf("error inserting %s tag: %s", dynType, tagValue)
 					continue
 				}
-				revTypeID = int(existingTagType.DBID)
-				ss.TagTypeIDs[string(tags.TagTypeRev)] = revTypeID
+				ss.TagIDs[tagStr] = tagIndex
 			}
-
-			// Create the new revision tag
-			ss.TagsIndex++
-			tagIndex = ss.TagsIndex
-			_, insertErr := db.InsertTag(database.Tag{
-				DBID:     int64(tagIndex),
-				Tag:      revValue,
-				TypeDBID: int64(revTypeID),
-			})
-			if insertErr != nil {
-				ss.TagsIndex-- // Rollback index increment on failure
-				log.Error().Err(insertErr).Msgf("error inserting revision tag: %s", revValue)
-				continue
-			}
-			ss.TagIDs[tagStr] = tagIndex
 		}
 
 		if tagIndex == 0 {
@@ -283,23 +296,30 @@ func AddMediaPath(
 			MediaDBID: int64(mediaIndex),
 		})
 		if err != nil {
-			log.Debug().Err(err).Msgf("media tag relationship already exists: %s", tagStr)
+			var sqliteErr sqlite3.Error
+			if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
+				!errors.Is(err, mediadb.ErrDependencyFlush) {
+				log.Trace().Err(err).Msgf("media tag relationship already exists: %s", tagStr)
+			} else {
+				log.Error().Err(err).Str("tag", tagStr).Msgf("error inserting media tag")
+			}
 		}
 	}
 	return titleIndex, mediaIndex, nil
 }
 
 type MediaPathFragments struct {
-	Path     string
-	FileName string
-	Title    string
-	Slug     string
-	Ext      string
-	Tags     []string
+	Path       string
+	FileName   string
+	Title      string
+	Slug       string
+	SlugTokens []string
+	Ext        string
+	Tags       []string
 }
 
-func getTagsFromFileName(filename string) []string {
-	canonicalStructs := tags.ParseFilenameToCanonicalTags(filename)
+func getTagsFromFileName(filename string, mediaType slugs.MediaType) []string {
+	canonicalStructs := tags.ParseFilenameToCanonicalTagsForMedia(filename, mediaType)
 
 	// Convert CanonicalTag structs to "type:value" format for database compatibility
 	// This matches the composite keys used in the TagIDs map
@@ -404,7 +424,7 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 			ss.TagsIndex++
 			_, err := db.InsertTag(database.Tag{
 				DBID:     int64(ss.TagsIndex),
-				Tag:      tagValue,
+				Tag:      tags.PadTagValue(tagValue),
 				TypeDBID: int64(typeID),
 			})
 			if err != nil {
@@ -837,16 +857,22 @@ func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 
 	f.Title = tags.ParseTitleFromFilename(f.FileName, params.StripLeadingNumbers)
 
-	// Look up the media type for this system to enable media-type-aware slugification
-	mediaType := slugs.MediaTypeGame // Default to Game
-	if params.SystemID != "" {
-		if system, err := systemdefs.GetSystem(params.SystemID); err == nil {
-			mediaType = system.GetMediaType()
+	// Use pre-resolved media type if provided, otherwise look up from system ID
+	mediaType := params.MediaType
+	if mediaType == "" {
+		mediaType = slugs.MediaTypeGame // Default to Game
+		if params.SystemID != "" {
+			if system, err := systemdefs.GetSystem(params.SystemID); err == nil {
+				mediaType = system.GetMediaType()
+			}
 		}
 	}
 
-	// Use media-type-aware slugification for TV shows, movies, music, etc.
-	f.Slug = slugs.Slugify(mediaType, f.Title)
+	// SlugifyWithTokens computes both slug and tokens in a single pass,
+	// avoiding redundant re-slugification in AddMediaPath.
+	slugResult := slugs.SlugifyWithTokens(mediaType, f.Title)
+	f.Slug = slugResult.Slug
+	f.SlugTokens = slugResult.Tokens
 
 	// For non-Latin titles that don't produce a slug, store the lowercase
 	// original title. This ensures Slug is never empty while the search
@@ -857,7 +883,7 @@ func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 
 	// Extract tags from filename only if enabled in config (default to enabled for nil config)
 	if params.Config == nil || params.Config.FilenameTags() {
-		f.Tags = getTagsFromFileName(f.FileName)
+		f.Tags = getTagsFromFileName(f.FileName, mediaType)
 	} else {
 		f.Tags = []string{}
 	}

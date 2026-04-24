@@ -52,7 +52,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532uart"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
@@ -65,14 +64,15 @@ import (
 type Platform struct {
 	activeMedia             func() *models.ActiveMedia
 	setActiveMedia          func(*models.ActiveMedia)
-	customPlatformToSystem  map[string]string   // e.g., "Mame Arcade" -> "arcade"
-	systemToCustomPlatforms map[string][]string // e.g., "arcade" -> ["Mame Arcade", "Mame Classics"]
+	customPlatformToSystem  map[string]string
+	systemToCustomPlatforms map[string][]string
 	trackedProcess          *os.Process
 	launchBoxPipe           *LaunchBoxPipeServer
 	steamTracker            *steamtracker.WindowsPlatformIntegration
+	lastLauncher            platforms.Launcher
 	processMu               syncutil.RWMutex
-	launchBoxPipeLock       syncutil.Mutex
 	platformMappingsMu      syncutil.RWMutex
+	launchBoxPipeLock       syncutil.Mutex
 }
 
 func (*Platform) ID() string {
@@ -82,7 +82,6 @@ func (*Platform) ID() string {
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	allReaders := []readers.Reader{
 		pn532.NewReader(cfg),
-		pn532uart.NewReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
 		rs232barcode.NewReader(cfg),
@@ -182,17 +181,35 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	log.Debug().Msgf("set tracked process: %v", proc)
 }
 
-func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
+func (p *Platform) setLastLauncher(l *platforms.Launcher) {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
+	p.lastLauncher = *l
+}
 
-	// Kill tracked process if exists
-	if p.trackedProcess != nil {
-		if err := p.trackedProcess.Kill(); err != nil {
-			log.Warn().Err(err).Msg("failed to kill tracked process")
-		}
+func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
+	p.processMu.Lock()
+
+	customKill := p.lastLauncher.Kill
+	p.lastLauncher = platforms.Launcher{}
+
+	if customKill != nil {
 		p.trackedProcess = nil
-		log.Debug().Msg("killed tracked process")
+		p.processMu.Unlock()
+		log.Debug().Msg("using custom Kill function for launcher")
+		if err := customKill(&config.Instance{}); err != nil {
+			log.Warn().Err(err).Msg("custom Kill function failed")
+		}
+	} else {
+		// Kill tracked process if exists
+		if p.trackedProcess != nil {
+			if err := p.trackedProcess.Kill(); err != nil {
+				log.Warn().Err(err).Msg("failed to kill tracked process")
+			}
+			p.trackedProcess = nil
+			log.Debug().Msg("killed tracked process")
+		}
+		p.processMu.Unlock()
 	}
 
 	p.setActiveMedia(nil)
@@ -236,6 +253,8 @@ func (p *Platform) LaunchMedia(
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
 
+	p.setLastLauncher(launcher)
+
 	return nil
 }
 
@@ -245,6 +264,10 @@ func (*Platform) KeyboardPress(_ string) error {
 
 func (*Platform) GamepadPress(_ string) error {
 	return nil
+}
+
+func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
+	return nil, platforms.ErrNotSupported
 }
 
 func (*Platform) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -304,6 +327,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Schemes:   []string{"http", "https"},
 			Lifecycle: platforms.LifecycleFireAndForget,
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+				//nolint:gosec // Safe: opens URL in default browser via cmd start
 				cmd := exec.CommandContext(context.Background(),
 					"cmd", "/c",
 					"start",
@@ -323,6 +347,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			AllowListOnly: true,
 			Lifecycle:     platforms.LifecycleBlocking,
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+				//nolint:gosec // Safe: executes user-configured allow-listed executable
 				cmd := exec.CommandContext(context.Background(), path)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				if err := cmd.Start(); err != nil {
@@ -341,9 +366,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				var cmd *exec.Cmd
 				// Extensions not in default PATHEXT need START command for proper execution
 				if ext == ".lnk" || ext == ".a3x" || ext == ".ahk" {
+					//nolint:gosec // Safe: executes user-configured allow-listed script
 					cmd = exec.CommandContext(context.Background(), "cmd", "/c", "start", "", path)
 				} else {
 					// .bat, .cmd work fine with direct execution
+					//nolint:gosec // Safe: executes user-configured allow-listed script
 					cmd = exec.CommandContext(context.Background(), "cmd", "/c", path)
 				}
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -385,4 +412,8 @@ func (*Platform) ShowPicker(
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
+}
+
+func (*Platform) ManagedByPackageManager() bool {
+	return false
 }

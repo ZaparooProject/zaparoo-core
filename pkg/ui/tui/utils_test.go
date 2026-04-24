@@ -668,6 +668,160 @@ func TestShowOSKModal_Integration(t *testing.T) {
 	assert.True(t, runner.WaitForSignal(cancelCalled, 100*time.Millisecond), "Cancel callback should be called")
 }
 
+func TestShowErrorReportingPrompt_Enable_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	mainPage := tview.NewTextView().SetText("Main Page")
+	pages.AddPage("main", mainPage, true, true)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	enableCalled := make(chan struct{}, 1)
+	notNowCalled := make(chan struct{}, 1)
+	dontAskCalled := make(chan struct{}, 1)
+
+	runner.QueueUpdateDraw(func() {
+		ShowErrorReportingPrompt(pages, runner.App(),
+			func() { close(enableCalled) },
+			func() { close(notNowCalled) },
+			func() { close(dontAskCalled) },
+		)
+	})
+
+	require.True(t, runner.WaitForText("Help improve Zaparoo?", 100*time.Millisecond))
+	assert.True(t, runner.ContainsText("Enable"))
+	assert.True(t, runner.ContainsText("Not Now"))
+
+	// Press Enter on first button (Enable)
+	runner.Screen().InjectEnter()
+	runner.Draw()
+
+	assert.True(t, runner.WaitForSignal(enableCalled, 100*time.Millisecond), "Enable callback should be called")
+
+	select {
+	case <-notNowCalled:
+		t.Fatal("Not Now callback should not be called")
+	case <-dontAskCalled:
+		t.Fatal("Don't Ask Again callback should not be called")
+	default:
+	}
+}
+
+func TestShowErrorReportingPrompt_NotNow_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	mainPage := tview.NewTextView().SetText("Main Page")
+	pages.AddPage("main", mainPage, true, true)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	notNowCalled := make(chan struct{}, 1)
+
+	runner.QueueUpdateDraw(func() {
+		ShowErrorReportingPrompt(pages, runner.App(),
+			nil,
+			func() { close(notNowCalled) },
+			nil,
+		)
+	})
+
+	require.True(t, runner.WaitForText("Help improve Zaparoo?", 100*time.Millisecond))
+
+	// Tab to "Not Now" and press Enter
+	runner.Screen().InjectTab()
+	runner.Draw()
+	runner.Screen().InjectEnter()
+	runner.Draw()
+
+	assert.True(t, runner.WaitForSignal(notNowCalled, 100*time.Millisecond), "Not Now callback should be called")
+}
+
+func TestShowErrorReportingPrompt_DontAsk_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	mainPage := tview.NewTextView().SetText("Main Page")
+	pages.AddPage("main", mainPage, true, true)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	dontAskCalled := make(chan struct{}, 1)
+
+	runner.QueueUpdateDraw(func() {
+		ShowErrorReportingPrompt(pages, runner.App(),
+			nil,
+			nil,
+			func() { close(dontAskCalled) },
+		)
+	})
+
+	require.True(t, runner.WaitForText("Help improve Zaparoo?", 100*time.Millisecond))
+
+	// Tab twice to "Don't Ask Again" and press Enter
+	runner.Screen().InjectTab()
+	runner.Draw()
+	runner.Screen().InjectTab()
+	runner.Draw()
+	runner.Screen().InjectEnter()
+	runner.Draw()
+
+	assert.True(t, runner.WaitForSignal(dontAskCalled, 100*time.Millisecond),
+		"Don't Ask Again callback should be called")
+}
+
+func TestShowErrorReportingPrompt_Escape_Integration(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	mainPage := tview.NewTextView().SetText("Main Page")
+	pages.AddPage("main", mainPage, true, true)
+
+	runner.Start(pages)
+	runner.Draw()
+
+	notNowCalled := make(chan struct{}, 1)
+	dontAskCalled := make(chan struct{}, 1)
+
+	runner.QueueUpdateDraw(func() {
+		ShowErrorReportingPrompt(pages, runner.App(),
+			nil,
+			func() { close(notNowCalled) },
+			func() { close(dontAskCalled) },
+		)
+	})
+
+	require.True(t, runner.WaitForText("Help improve Zaparoo?", 100*time.Millisecond))
+
+	// Press Escape — should trigger Not Now, not Don't Ask Again
+	runner.Screen().InjectEscape()
+	runner.Draw()
+
+	assert.True(t, runner.WaitForSignal(notNowCalled, 100*time.Millisecond), "Escape should trigger Not Now callback")
+
+	select {
+	case <-dontAskCalled:
+		t.Fatal("Don't Ask Again should not be called on Escape")
+	default:
+	}
+}
+
 func TestTimeoutConstants(t *testing.T) {
 	t.Parallel()
 

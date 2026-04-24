@@ -29,14 +29,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/google/uuid"
@@ -45,21 +42,18 @@ import (
 )
 
 func runTokenZapScript(
-	platform platforms.Platform,
-	cfg *config.Instance,
-	st *state.State,
+	svc *ServiceContext,
 	token tokens.Token, //nolint:gocritic // single-use parameter in service function
-	db *database.Database,
-	lsq chan<- *tokens.Token,
 	plsc playlists.PlaylistController,
-	exprOpts *zapscript.ExprEnvOptions,
+	exprEnv *gozapscript.ArgExprEnv,
+	inHookContext bool,
 ) error {
-	if !st.RunZapScriptEnabled() {
+	if !svc.State.RunZapScriptEnabled() {
 		log.Warn().Msg("ignoring ZapScript, run ZapScript is disabled")
 		return nil
 	}
 
-	mappedValue, hasMapping := getMapping(cfg, db, platform, token)
+	mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, token)
 	if hasMapping {
 		log.Info().Msgf("found mapping: %s", mappedValue)
 		token.Text = mappedValue
@@ -71,7 +65,7 @@ func runTokenZapScript(
 		return fmt.Errorf("failed to parse script: %w", err)
 	}
 
-	log.Info().Msgf("running script (%d cmds): %s", len(script.Cmds), token.Text)
+	log.Info().Msgf("running script (%d cmds)", len(script.Cmds))
 
 	pls := plsc.Active
 
@@ -80,8 +74,8 @@ func runTokenZapScript(
 		cmd := cmds[i]
 
 		// Run before_media_start hook; errors block the launch.
-		beforeMediaStartScript := cfg.LaunchersBeforeMediaStart()
-		if shouldRunBeforeMediaStartHook(exprOpts, beforeMediaStartScript, cmd.Name) {
+		beforeMediaStartScript := svc.Config.LaunchersBeforeMediaStart()
+		if shouldRunBeforeMediaStartHook(inHookContext, beforeMediaStartScript, cmd.Name) {
 			log.Info().Msgf("running before_media_start hook: %s", beforeMediaStartScript)
 			hookPlsc := playlists.PlaylistController{
 				Active: pls,
@@ -91,15 +85,23 @@ func runTokenZapScript(
 				ScanTime: time.Now(),
 				Text:     beforeMediaStartScript,
 			}
-			launchingOpts := buildLaunchingExprOpts(cmd)
-			hookErr := runTokenZapScript(platform, cfg, st, hookToken, db, lsq, hookPlsc, launchingOpts)
+			launching := buildLaunchingContext(cmd)
+			hookEnv := zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, nil, launching)
+			hookErr := runTokenZapScript(svc, hookToken, hookPlsc, &hookEnv, true)
 			if hookErr != nil {
 				return fmt.Errorf("before_media_start hook blocked launch: %w", hookErr)
 			}
 		}
 
+		var cmdEnv gozapscript.ArgExprEnv
+		if exprEnv != nil {
+			cmdEnv = *exprEnv
+		} else {
+			cmdEnv = zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, nil, nil)
+		}
+
 		result, err := zapscript.RunCommand(
-			platform, cfg,
+			svc.Platform, svc.Config,
 			playlists.PlaylistController{
 				Active: pls,
 				Queue:  plsc.Queue,
@@ -108,18 +110,32 @@ func runTokenZapScript(
 			cmd,
 			len(script.Cmds),
 			i,
-			db,
-			st,
-			exprOpts,
+			svc.DB,
+			svc.State.LauncherManager(),
+			&cmdEnv,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to run zapscript command: %w", err)
 		}
 
+		if result.MediaChanged && token.Source != tokens.SourcePlaylist {
+			log.Debug().Any("token", token).Msg("cmd launch: clearing current playlist")
+			select {
+			case plsc.Queue <- nil:
+			case <-svc.State.GetContext().Done():
+				return errors.New("service shutting down")
+			}
+		}
+
 		if result.MediaChanged && token.ReaderID != "" {
-			if r, ok := st.GetReader(token.ReaderID); ok && readers.HasCapability(r, readers.CapabilityRemovable) {
+			r, ok := svc.State.GetReader(token.ReaderID)
+			if ok && readers.HasCapability(r, readers.CapabilityRemovable) {
 				log.Debug().Any("token", token).Msg("media changed, updating software token")
-				lsq <- &token
+				select {
+				case svc.LaunchSoftwareQueue <- &token:
+				case <-svc.State.GetContext().Done():
+					return errors.New("service shutting down")
+				}
 			}
 		}
 
@@ -135,7 +151,7 @@ func runTokenZapScript(
 		// if a command results in additional commands to run (like from a
 		// remote query) inject them to be run immediately after this command
 		if len(result.NewCommands) > 0 {
-			log.Info().Msgf("injecting %d new commands: %v", len(result.NewCommands), result.NewCommands)
+			log.Info().Msgf("injecting %d new commands", len(result.NewCommands))
 			cmds = injectCommands(cmds, i, result.NewCommands)
 		}
 	}
@@ -144,13 +160,8 @@ func runTokenZapScript(
 }
 
 func launchPlaylistMedia(
-	platform platforms.Platform,
-	cfg *config.Instance,
-	st *state.State,
-	db *database.Database,
-	lsq chan<- *tokens.Token,
+	svc *ServiceContext,
 	pls *playlists.Playlist,
-	plq chan<- *playlists.Playlist,
 	activePlaylist *playlists.Playlist,
 	player audio.Player,
 ) {
@@ -161,13 +172,13 @@ func launchPlaylistMedia(
 	}
 	plsc := playlists.PlaylistController{
 		Active: activePlaylist,
-		Queue:  plq,
+		Queue:  svc.PlaylistQueue,
 	}
 
-	err := runTokenZapScript(platform, cfg, st, t, db, lsq, plsc, nil)
+	err := runTokenZapScript(svc, t, plsc, nil, false)
 	if err != nil {
 		log.Error().Err(err).Msgf("error launching token")
-		path, enabled := cfg.FailSoundPath(helpers.DataDir(platform))
+		path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
 		helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 	}
 
@@ -187,28 +198,23 @@ func launchPlaylistMedia(
 		TokenValue:     t.Text,
 		TokenData:      t.Data,
 		ClockReliable:  helpers.IsClockReliable(now),
-		BootUUID:       st.BootUUID(),
+		BootUUID:       svc.State.BootUUID(),
 		MonotonicStart: monotonicStart,
 		CreatedAt:      now,
 	}
 	he.Success = err == nil
-	err = db.UserDB.AddHistory(&he)
+	err = svc.DB.UserDB.AddHistory(&he)
 	if err != nil {
 		log.Error().Err(err).Msgf("error adding history")
 	}
 }
 
 func handlePlaylist(
-	cfg *config.Instance,
-	pl platforms.Platform,
-	db *database.Database,
-	st *state.State,
+	svc *ServiceContext,
 	pls *playlists.Playlist,
-	lsq chan<- *tokens.Token,
-	plq chan<- *playlists.Playlist,
 	player audio.Player,
 ) {
-	activePlaylist := st.GetActivePlaylist()
+	activePlaylist := svc.State.GetActivePlaylist()
 
 	switch {
 	case pls == nil:
@@ -216,14 +222,14 @@ func handlePlaylist(
 		if activePlaylist != nil {
 			log.Info().Msg("clearing playlist")
 		}
-		st.SetActivePlaylist(nil)
+		svc.State.SetActivePlaylist(nil)
 		return
 	case activePlaylist == nil:
 		// new playlist loaded
-		st.SetActivePlaylist(pls)
+		svc.State.SetActivePlaylist(pls)
 		if pls.Playing {
 			log.Info().Any("pls", pls).Msg("setting new playlist, launching token")
-			go launchPlaylistMedia(pl, cfg, st, db, lsq, pls, plq, activePlaylist, player)
+			go launchPlaylistMedia(svc, pls, activePlaylist, player)
 		} else {
 			log.Info().Any("pls", pls).Msg("setting new playlist")
 		}
@@ -235,10 +241,10 @@ func handlePlaylist(
 			return
 		}
 
-		st.SetActivePlaylist(pls)
+		svc.State.SetActivePlaylist(pls)
 		if pls.Playing {
 			log.Info().Any("pls", pls).Msg("updating playlist, launching token")
-			go launchPlaylistMedia(pl, cfg, st, db, lsq, pls, plq, activePlaylist, player)
+			go launchPlaylistMedia(svc, pls, activePlaylist, player)
 		} else {
 			log.Info().Any("pls", pls).Msg("updating playlist")
 		}
@@ -247,20 +253,15 @@ func handlePlaylist(
 }
 
 func processTokenQueue(
-	platform platforms.Platform,
-	cfg *config.Instance,
-	st *state.State,
+	svc *ServiceContext,
 	itq <-chan tokens.Token,
-	db *database.Database,
-	lsq chan<- *tokens.Token,
-	plq chan *playlists.Playlist,
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
 ) {
 	for {
 		select {
-		case pls := <-plq:
-			handlePlaylist(cfg, platform, db, st, pls, lsq, plq, player)
+		case pls := <-svc.PlaylistQueue:
+			handlePlaylist(svc, pls, player)
 			continue
 		case t := <-itq:
 			// TODO: change this channel to send a token pointer or something
@@ -271,10 +272,10 @@ func processTokenQueue(
 
 			log.Info().Msgf("processing token: %v", t)
 
-			path, enabled := cfg.SuccessSoundPath(helpers.DataDir(platform))
+			path, enabled := svc.Config.SuccessSoundPath(helpers.DataDir(svc.Platform))
 			helpers.PlayConfiguredSound(player, path, enabled, assets.SuccessSound, "success")
 
-			err := platform.ScanHook(&t)
+			err := svc.Platform.ScanHook(&t)
 			if err != nil {
 				log.Error().Err(err).Msgf("error writing tmp scan result")
 			}
@@ -295,14 +296,14 @@ func processTokenQueue(
 				TokenValue:     t.Text,
 				TokenData:      t.Data,
 				ClockReliable:  helpers.IsClockReliable(now),
-				BootUUID:       st.BootUUID(),
+				BootUUID:       svc.State.BootUUID(),
 				MonotonicStart: monotonicStart,
 				CreatedAt:      now,
 			}
 
 			// Parse script early to check if playtime limits apply
 			// Only block media-launching commands, not utility commands (execute, delay, echo, etc.)
-			mappedValue, hasMapping := getMapping(cfg, db, platform, t)
+			mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, t)
 			scriptText := t.Text
 			if hasMapping {
 				scriptText = mappedValue
@@ -324,15 +325,15 @@ func processTokenQueue(
 					log.Warn().Err(limitErr).Msg("playtime: launch blocked by daily limit")
 
 					// Send playtime limit notification
-					notifications.PlaytimeLimitReached(st.Notifications, models.PlaytimeLimitReachedParams{
+					notifications.PlaytimeLimitReached(svc.State.Notifications, models.PlaytimeLimitReachedParams{
 						Reason: models.PlaytimeLimitReasonDaily,
 					})
 
-					path, enabled := cfg.LimitSoundPath(helpers.DataDir(platform))
+					path, enabled := svc.Config.LimitSoundPath(helpers.DataDir(svc.Platform))
 					helpers.PlayConfiguredSound(player, path, enabled, assets.LimitSound, "limit")
 
 					he.Success = false
-					if histErr := db.UserDB.AddHistory(&he); histErr != nil {
+					if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
 						log.Error().Err(histErr).Msgf("error adding history")
 					}
 
@@ -345,12 +346,18 @@ func processTokenQueue(
 
 			// launch tokens in a separate thread
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Error().Any("panic", r).Msg("recovered panic in token launch")
+					}
+				}()
+
 				plsc := playlists.PlaylistController{
-					Active: st.GetActivePlaylist(),
-					Queue:  plq,
+					Active: svc.State.GetActivePlaylist(),
+					Queue:  svc.PlaylistQueue,
 				}
 
-				err = runTokenZapScript(platform, cfg, st, t, db, lsq, plsc, nil)
+				err = runTokenZapScript(svc, t, plsc, nil, false)
 				if err != nil {
 					if errors.Is(err, zapscript.ErrFileNotFound) {
 						log.Warn().Err(err).Msgf("error launching token")
@@ -360,17 +367,17 @@ func processTokenQueue(
 				}
 
 				if err != nil {
-					path, enabled := cfg.FailSoundPath(helpers.DataDir(platform))
+					path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
 					helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 				}
 
 				he.Success = err == nil
-				err = db.UserDB.AddHistory(&he)
+				err = svc.DB.UserDB.AddHistory(&he)
 				if err != nil {
 					log.Error().Err(err).Msgf("error adding history")
 				}
 			}()
-		case <-st.GetContext().Done():
+		case <-svc.State.GetContext().Done():
 			log.Debug().Msg("exiting service worker via context cancellation")
 			return
 		}

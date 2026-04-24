@@ -23,16 +23,26 @@ package models
 import "github.com/ZaparooProject/go-zapscript"
 
 type SearchParams struct {
-	Systems    *[]string `json:"systems" validate:"omitempty,dive,system"`
-	MaxResults *int      `json:"maxResults" validate:"omitempty,gt=0,max=1000"`
-	Cursor     *string   `json:"cursor,omitempty"`
-	Tags       *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
-	Letter     *string   `json:"letter,omitempty" validate:"omitempty,letter"`
-	Query      *string   `json:"query"`
+	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	MaxResults  *int      `json:"maxResults" validate:"omitempty,gt=0,max=1000"`
+	Cursor      *string   `json:"cursor,omitempty"`
+	Tags        *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
+	Query       *string   `json:"query"`
+}
+
+type BrowseParams struct {
+	Path       *string `json:"path,omitempty"`
+	MaxResults *int    `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
+	Cursor     *string `json:"cursor,omitempty"`
+	Letter     *string `json:"letter,omitempty" validate:"omitempty,letter"`
+	Sort       *string `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
 }
 
 type MediaIndexParams struct {
-	Systems *[]string `json:"systems" validate:"omitempty,dive,system"`
+	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
 }
 
 type RunParams struct {
@@ -83,21 +93,34 @@ type ReaderWriteCancelParams struct {
 }
 
 type ReaderConnection struct {
+	Enabled  *bool  `json:"enabled,omitempty"`
 	Driver   string `json:"driver" validate:"required,min=1"`
 	Path     string `json:"path"`
 	IDSource string `json:"idSource,omitempty"`
 }
 
+// IsEnabled returns whether this connection is enabled.
+// nil (omitted) and true both mean enabled; only explicit false disables.
+func (r ReaderConnection) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
+}
+
 type UpdateSettingsParams struct {
-	RunZapScript            *bool               `json:"runZapScript"`
-	DebugLogging            *bool               `json:"debugLogging"`
-	AudioScanFeedback       *bool               `json:"audioScanFeedback"`
-	ReadersAutoDetect       *bool               `json:"readersAutoDetect"`
-	ErrorReporting          *bool               `json:"errorReporting"`
-	ReadersScanMode         *string             `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
-	ReadersScanExitDelay    *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
-	ReadersScanIgnoreSystem *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
-	ReadersConnect          *[]ReaderConnection `json:"readersConnect,omitempty"`
+	RunZapScript              *bool               `json:"runZapScript"`
+	DebugLogging              *bool               `json:"debugLogging"`
+	AudioScanFeedback         *bool               `json:"audioScanFeedback"`
+	ReadersAutoDetect         *bool               `json:"readersAutoDetect"`
+	ErrorReporting            *bool               `json:"errorReporting"`
+	UpdateChannel             *string             `json:"updateChannel" validate:"omitempty,oneof=stable beta"`
+	ReadersScanMode           *string             `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
+	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
+	ReadersScanIgnoreSystem   *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
+	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty"`
+	AudioVolume               *int                `json:"audioVolume" validate:"omitempty,gte=0,lte=200"`
+	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`
+	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`
+	LaunchGuardDelay          *float32            `json:"launchGuardDelay" validate:"omitempty,gte=0"`
+	LaunchGuardRequireConfirm *bool               `json:"launchGuardRequireConfirm"`
 }
 
 type UpdatePlaytimeLimitsParams struct {
@@ -130,6 +153,53 @@ type UpdateActiveMediaParams struct {
 	MediaName string `json:"mediaName" validate:"required"`
 }
 
+type MediaStoppedParams struct {
+	SystemID   string `json:"systemId"`
+	SystemName string `json:"systemName"`
+	MediaName  string `json:"mediaName"`
+	MediaPath  string `json:"mediaPath"`
+	LauncherID string `json:"launcherId"`
+	Elapsed    int    `json:"elapsed"`
+}
+
+type MediaHistoryParams struct {
+	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
+	Cursor      *string   `json:"cursor,omitempty"`
+}
+
+type MediaHistoryTopParams struct {
+	Systems     *[]string `json:"systems,omitempty" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	Since       *string   `json:"since,omitempty"`
+	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
+}
+
+type MediaLookupParams struct {
+	FuzzySystem *bool  `json:"fuzzySystem,omitempty"`
+	Name        string `json:"name" validate:"required,min=1"`
+	System      string `json:"system" validate:"required,min=1"`
+}
+
+type MediaControlParams struct {
+	Args   map[string]string `json:"args,omitempty"`
+	Action string            `json:"action" validate:"required,min=1"`
+}
+
 type DeleteInboxParams struct {
 	ID int64 `json:"id" validate:"gt=0"`
+}
+
+type SettingsAuthClaimParams struct {
+	ClaimURL string `json:"claimUrl" validate:"required,url"`
+	Token    string `json:"token" validate:"required"`
+}
+
+type InputKeyboardParams struct {
+	Keys string `json:"keys" validate:"required,min=1"`
+}
+
+type InputGamepadParams struct {
+	Buttons string `json:"buttons" validate:"required,min=1"`
 }

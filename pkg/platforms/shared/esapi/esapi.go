@@ -69,7 +69,7 @@ func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
 			Msg("ES API request")
 	}
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // G704: URL from user config
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}

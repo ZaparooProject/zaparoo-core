@@ -199,6 +199,10 @@ func (*Platform) GamepadPress(_ string) error {
 	return nil
 }
 
+func (*Platform) Screenshot() (*platforms.ScreenshotResult, error) {
+	return nil, platforms.ErrNotSupported
+}
+
 func (*Platform) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, nil
 }
@@ -249,4 +253,8 @@ func (*Platform) ShowPicker(
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
+}
+
+func (*Platform) ManagedByPackageManager() bool {
+	return false
 }

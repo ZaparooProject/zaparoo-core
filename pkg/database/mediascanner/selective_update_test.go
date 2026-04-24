@@ -69,7 +69,7 @@ func TestSelectiveUpdate_EmptyCache(t *testing.T) {
 	for _, systemID := range testSystems {
 		entries := batch.Entries[systemID]
 		for _, entry := range entries {
-			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil)
+			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil, "")
 			require.NoError(t, addErr)
 		}
 	}
@@ -126,7 +126,7 @@ func TestSelectiveUpdate_EmptyCache(t *testing.T) {
 
 	nesEntries := batch.Entries["nes"]
 	for _, entry := range nesEntries {
-		_, _, addErr := AddMediaPath(db, selectiveState, "nes", entry.Path, false, false, nil)
+		_, _, addErr := AddMediaPath(db, selectiveState, "nes", entry.Path, false, false, nil, "")
 		require.NoError(t, addErr)
 	}
 
@@ -176,7 +176,7 @@ func TestSelectiveUpdate_MultipleSystemsEmpty(t *testing.T) {
 	for _, systemID := range testSystems {
 		entries := batch.Entries[systemID]
 		for _, entry := range entries {
-			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil)
+			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil, "")
 			require.NoError(t, addErr)
 		}
 	}
@@ -216,7 +216,7 @@ func TestSelectiveUpdate_MultipleSystemsEmpty(t *testing.T) {
 	for _, systemID := range systemsToReindex {
 		entries := batch.Entries[systemID]
 		for _, entry := range entries {
-			_, _, addErr := AddMediaPath(db, selectiveState, systemID, entry.Path, false, false, nil)
+			_, _, addErr := AddMediaPath(db, selectiveState, systemID, entry.Path, false, false, nil, "")
 			require.NoError(t, addErr)
 		}
 	}
@@ -274,7 +274,7 @@ func TestSelectiveUpdate_LargeDatabase(t *testing.T) {
 	for _, systemID := range testSystems {
 		entries := batch.Entries[systemID]
 		for _, entry := range entries {
-			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil)
+			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil, "")
 			require.NoError(t, addErr)
 		}
 	}
@@ -349,7 +349,7 @@ func TestSelectiveUpdate_GlobalEntitiesLazyLoad(t *testing.T) {
 	for _, systemID := range testSystems {
 		entries := batch.Entries[systemID]
 		for _, entry := range entries {
-			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil)
+			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil, "")
 			require.NoError(t, addErr)
 		}
 	}
@@ -403,7 +403,7 @@ func TestSelectiveUpdate_GlobalEntitiesLazyLoad(t *testing.T) {
 
 	nesEntries := batch.Entries["nes"]
 	for _, entry := range nesEntries {
-		_, _, addErr := AddMediaPath(db, selectiveState, "nes", entry.Path, false, false, nil)
+		_, _, addErr := AddMediaPath(db, selectiveState, "nes", entry.Path, false, false, nil, "")
 		require.NoError(t, addErr)
 	}
 
@@ -512,7 +512,7 @@ func TestSelectiveUpdate_DuplicateTagPrevention(t *testing.T) {
 	for _, systemID := range testSystems {
 		entries := batch.Entries[systemID]
 		for _, entry := range entries {
-			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil)
+			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil, "")
 			require.NoError(t, addErr)
 		}
 	}
@@ -560,7 +560,7 @@ func TestSelectiveUpdate_DuplicateTagPrevention(t *testing.T) {
 
 	nesEntries := batch.Entries["nes"]
 	for _, entry := range nesEntries {
-		_, _, addErr := AddMediaPath(db, selectiveState, "nes", entry.Path, false, false, nil)
+		_, _, addErr := AddMediaPath(db, selectiveState, "nes", entry.Path, false, false, nil, "")
 		require.NoError(t, addErr)
 	}
 
@@ -628,7 +628,7 @@ func TestSelectiveUpdate_MediaTagAssociationsPreserved(t *testing.T) {
 	for _, systemID := range testSystems {
 		entries := batch.Entries[systemID]
 		for _, entry := range entries {
-			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil)
+			_, _, addErr := AddMediaPath(db, initialState, systemID, entry.Path, false, false, nil, "")
 			require.NoError(t, addErr)
 		}
 	}
@@ -671,7 +671,7 @@ func TestSelectiveUpdate_MediaTagAssociationsPreserved(t *testing.T) {
 
 	nesEntries := batch.Entries["nes"]
 	for _, entry := range nesEntries {
-		_, _, addErr := AddMediaPath(db, selectiveState, "nes", entry.Path, false, false, nil)
+		_, _, addErr := AddMediaPath(db, selectiveState, "nes", entry.Path, false, false, nil, "")
 		require.NoError(t, addErr)
 	}
 

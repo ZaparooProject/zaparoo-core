@@ -30,13 +30,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const insertMediaSQL = `INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (?, ?, ?, ?)`
+const insertMediaSQL = `INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (?, ?, ?, ?, ?)`
 
-func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (database.Media, error) {
+func sqlFindMedia(ctx context.Context, db sqlQueryable, media database.Media) (database.Media, error) {
 	var row database.Media
 	stmt, err := db.PrepareContext(ctx, `
 		select
-		DBID, MediaTitleDBID, SystemDBID, Path
+		DBID, MediaTitleDBID, SystemDBID, Path, ParentDir
 		from Media
 		where DBID = ?
 		or (
@@ -70,6 +70,7 @@ func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (databa
 		&row.MediaTitleDBID,
 		&row.SystemDBID,
 		&row.Path,
+		&row.ParentDir,
 	)
 	if err != nil {
 		return row, fmt.Errorf("failed to scan media row: %w", err)
@@ -83,7 +84,7 @@ func sqlInsertMediaWithPreparedStmt(ctx context.Context, stmt *sql.Stmt, row dat
 		dbID = row.DBID
 	}
 
-	res, err := stmt.ExecContext(ctx, dbID, row.MediaTitleDBID, row.SystemDBID, row.Path)
+	res, err := stmt.ExecContext(ctx, dbID, row.MediaTitleDBID, row.SystemDBID, row.Path, row.ParentDir)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute prepared insert media statement: %w", err)
 	}
@@ -113,7 +114,7 @@ func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (databa
 		}
 	}()
 
-	res, err := stmt.ExecContext(ctx, dbID, row.MediaTitleDBID, row.SystemDBID, row.Path)
+	res, err := stmt.ExecContext(ctx, dbID, row.MediaTitleDBID, row.SystemDBID, row.Path, row.ParentDir)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert media statement: %w", err)
 	}
@@ -128,7 +129,8 @@ func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (databa
 }
 
 func sqlGetAllMedia(ctx context.Context, db *sql.DB) ([]database.Media, error) {
-	rows, err := db.QueryContext(ctx, "SELECT DBID, MediaTitleDBID, SystemDBID, Path FROM Media ORDER BY DBID")
+	rows, err := db.QueryContext(ctx,
+		"SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir FROM Media ORDER BY DBID")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query media: %w", err)
 	}
@@ -141,7 +143,7 @@ func sqlGetAllMedia(ctx context.Context, db *sql.DB) ([]database.Media, error) {
 	media := make([]database.Media, 0)
 	for rows.Next() {
 		var m database.Media
-		if err := rows.Scan(&m.DBID, &m.MediaTitleDBID, &m.SystemDBID, &m.Path); err != nil {
+		if err := rows.Scan(&m.DBID, &m.MediaTitleDBID, &m.SystemDBID, &m.Path, &m.ParentDir); err != nil {
 			return nil, fmt.Errorf("failed to scan media: %w", err)
 		}
 		media = append(media, m)
@@ -275,7 +277,9 @@ func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]
 }
 
 // sqlGetLaunchCommandForMedia generates a title-based launch command for media at the given path.
-// Returns a command in the format: @systemID/titleName or @systemID/titleName (year:XXXX)
+// Returns a command in the format: @systemID/titleName (year:XXXX) (players:N)
+// Only includes tags that are disambiguating (siblings under the same title have
+// different values for that tag type).
 func sqlGetLaunchCommandForMedia(
 	ctx context.Context,
 	db *sql.DB,
@@ -293,8 +297,47 @@ func sqlGetLaunchCommandForMedia(
 				WHERE mtags.MediaDBID = m.DBID
 				  AND tt.Type = 'year'
 				  AND t.Tag GLOB '[0-9][0-9][0-9][0-9]'
+				  AND (
+					SELECT COUNT(DISTINCT all_tags.Tag) FROM (
+						SELECT st.Tag FROM Media sib
+						INNER JOIN MediaTags smt ON sib.DBID = smt.MediaDBID
+						INNER JOIN Tags st ON smt.TagDBID = st.DBID
+						INNER JOIN TagTypes stt ON st.TypeDBID = stt.DBID
+						WHERE sib.MediaTitleDBID = m.MediaTitleDBID AND stt.Type = 'year'
+						UNION
+						SELECT st.Tag
+						FROM MediaTitleTags mtt
+						INNER JOIN Tags st ON mtt.TagDBID = st.DBID
+						INNER JOIN TagTypes stt ON st.TypeDBID = stt.DBID
+						WHERE mtt.MediaTitleDBID = m.MediaTitleDBID AND stt.Type = 'year'
+					) all_tags
+				  ) > 1
 				LIMIT 1
-			) as Year
+			) as Year,
+			(
+				SELECT t.Tag
+				FROM MediaTags mtags
+				INNER JOIN Tags t ON mtags.TagDBID = t.DBID
+				INNER JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+				WHERE mtags.MediaDBID = m.DBID
+				  AND tt.Type = 'players'
+				  AND (
+					SELECT COUNT(DISTINCT all_tags.Tag) FROM (
+						SELECT st.Tag FROM Media sib
+						INNER JOIN MediaTags smt ON sib.DBID = smt.MediaDBID
+						INNER JOIN Tags st ON smt.TagDBID = st.DBID
+						INNER JOIN TagTypes stt ON st.TypeDBID = stt.DBID
+						WHERE sib.MediaTitleDBID = m.MediaTitleDBID AND stt.Type = 'players'
+						UNION
+						SELECT st.Tag
+						FROM MediaTitleTags mtt
+						INNER JOIN Tags st ON mtt.TagDBID = st.DBID
+						INNER JOIN TagTypes stt ON st.TypeDBID = stt.DBID
+						WHERE mtt.MediaTitleDBID = m.MediaTitleDBID AND stt.Type = 'players'
+					) all_tags
+				  ) > 1
+				LIMIT 1
+			) as Players
 		FROM Media m
 		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
 		INNER JOIN Systems s ON mt.SystemDBID = s.DBID
@@ -313,9 +356,9 @@ func sqlGetLaunchCommandForMedia(
 	}()
 
 	var titleName string
-	var year sql.NullString
+	var year, players sql.NullString
 
-	err = stmt.QueryRowContext(ctx, systemID, path).Scan(&titleName, &year)
+	err = stmt.QueryRowContext(ctx, systemID, path).Scan(&titleName, &year, &players)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// No media title found, return empty string
@@ -324,11 +367,13 @@ func sqlGetLaunchCommandForMedia(
 		return "", fmt.Errorf("failed to query launch command: %w", err)
 	}
 
-	// Build the launch command
-	launchCmd := fmt.Sprintf("@%s/%s", systemID, titleName)
+	var tags []database.TagInfo
 	if year.Valid && year.String != "" {
-		launchCmd = fmt.Sprintf("%s (year:%s)", launchCmd, year.String)
+		tags = append(tags, database.TagInfo{Type: "year", Tag: year.String})
+	}
+	if players.Valid && players.String != "" {
+		tags = append(tags, database.TagInfo{Type: "players", Tag: players.String})
 	}
 
-	return launchCmd, nil
+	return database.BuildTitleZapScript(systemID, titleName, tags), nil
 }

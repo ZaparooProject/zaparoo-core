@@ -24,20 +24,25 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/charlievieth/fastwalk"
+	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
 
@@ -92,9 +97,9 @@ type PathResult struct {
 //   - Linux: Prefers exact match before case-insensitive match (handles File.txt vs file.txt)
 //   - Windows: Handles 8.3 short names (PROGRA~1) via fallback to os.Stat
 //   - All platforms: Works with symlinks, UNC paths, network drives
-func FindPath(path string) (string, error) {
+func FindPath(ctx context.Context, path string) (string, error) {
 	// Check if path exists first
-	if _, err := os.Stat(path); err != nil {
+	if _, err := statWithContext(ctx, path); err != nil {
 		return "", fmt.Errorf("path does not exist: %s", path)
 	}
 
@@ -134,11 +139,17 @@ func FindPath(path string) (string, error) {
 	parts := strings.Split(relPath, string(filepath.Separator))
 
 	for _, part := range parts {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
+
 		if part == "" || part == "." {
 			continue
 		}
 
-		entries, err := os.ReadDir(currentPath)
+		entries, err := readDirWithContext(ctx, currentPath)
 		if err != nil {
 			return "", fmt.Errorf("failed to read directory %s: %w", currentPath, err)
 		}
@@ -173,7 +184,7 @@ func FindPath(path string) (string, error) {
 		// it might be a short name or special filesystem entry
 		if !found {
 			targetCheck := filepath.Join(currentPath, part)
-			if _, err := os.Stat(targetCheck); err == nil {
+			if _, err := statWithContext(ctx, targetCheck); err == nil {
 				// Path exists but wasn't found in directory listing
 				// Accept the component as-is (likely 8.3 short name)
 				currentPath = targetCheck
@@ -190,6 +201,7 @@ func FindPath(path string) (string, error) {
 }
 
 func GetSystemPaths(
+	ctx context.Context,
 	_ *config.Instance,
 	_ platforms.Platform,
 	rootFolders []string,
@@ -197,43 +209,84 @@ func GetSystemPaths(
 ) []PathResult {
 	var matches []PathResult
 
+	log.Info().
+		Int("rootFolders", len(rootFolders)).
+		Int("systems", len(systems)).
+		Msg("starting path discovery")
+
 	// Validate root folders ONCE before iterating systems
 	// This prevents logging the same error 200+ times (once per system)
 	validRootFolders := make([]string, 0, len(rootFolders))
 	for _, folder := range rootFolders {
-		gf, err := FindPath(folder)
+		gf, err := FindPath(ctx, folder)
 		if err != nil {
-			log.Debug().Err(err).Str("path", folder).Msg("skipping root folder - not found or inaccessible")
+			switch {
+			case errors.Is(err, ErrFsTimeout):
+				log.Warn().Str("path", folder).Dur("timeout", defaultFsTimeout).
+					Msg("root folder timed out (possible stale mount)")
+			case ctx.Err() != nil:
+				log.Info().Msg("path discovery cancelled")
+				return matches
+			default:
+				log.Debug().Err(err).Str("path", folder).Msg("skipping root folder - not found or inaccessible")
+			}
 			continue
 		}
 		validRootFolders = append(validRootFolders, gf)
 	}
 
+	log.Info().
+		Int("validRoots", len(validRootFolders)).
+		Int("totalRoots", len(rootFolders)).
+		Msg("root folder validation complete")
+
 	for _, system := range systems {
+		select {
+		case <-ctx.Done():
+			log.Info().Msg("path discovery cancelled")
+			return matches
+		default:
+		}
+
 		// GlobalLauncherCache is assumed to be read-only after initialization
 		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
 
 		var folders []string
-		for i := range launchers {
+		for j := range launchers {
 			// Skip filesystem scanning for launchers that don't need it
-			if launchers[i].SkipFilesystemScan {
+			if launchers[j].SkipFilesystemScan {
+				log.Trace().
+					Str("launcher", launchers[j].ID).
+					Str("system", system.ID).
+					Msg("skipping filesystem scan for launcher")
 				continue
 			}
-			for _, folder := range launchers[i].Folders {
+			for _, folder := range launchers[j].Folders {
 				if !helpers.Contains(folders, folder) {
 					folders = append(folders, folder)
 				}
 			}
 		}
 
-		// check for <root>/<folder>
+		log.Trace().
+			Str("system", system.ID).
+			Int("launchers", len(launchers)).
+			Strs("folders", folders).
+			Strs("rootFolders", validRootFolders).
+			Msg("resolving system paths")
+
 		for _, gf := range validRootFolders {
 			for _, folder := range folders {
+				if filepath.IsAbs(folder) {
+					continue // handled separately below
+				}
+
 				systemFolder := filepath.Join(gf, folder)
-				path, err := FindPath(systemFolder)
+				path, err := FindPath(ctx, systemFolder)
 				if err != nil {
-					log.Debug().Err(err).Str("path", systemFolder).Str("system", system.ID).
-						Msg("skipping system folder - not found or inaccessible")
+					if ctx.Err() != nil {
+						return matches
+					}
 					continue
 				}
 
@@ -244,58 +297,48 @@ func GetSystemPaths(
 			}
 		}
 
-		// check for absolute paths
 		for _, folder := range folders {
-			if filepath.IsAbs(folder) {
-				systemFolder := folder
-				path, err := FindPath(systemFolder)
-				if err != nil {
-					log.Debug().Err(err).Str("path", systemFolder).Str("system", system.ID).
-						Msg("skipping absolute path - not found or inaccessible")
-					continue
-				}
-				matches = append(matches, PathResult{
-					System: system,
-					Path:   path,
-				})
+			if !filepath.IsAbs(folder) {
+				continue
 			}
+
+			path, err := FindPath(ctx, folder)
+			if err != nil {
+				if ctx.Err() != nil {
+					return matches
+				}
+				continue
+			}
+			matches = append(matches, PathResult{
+				System: system,
+				Path:   path,
+			})
 		}
 	}
 
-	return matches
-}
-
-type resultsStack struct {
-	results [][]string
-}
-
-func newResultsStack() *resultsStack {
-	return &resultsStack{
-		results: make([][]string, 0),
+	// Deduplicate by (SystemID, resolved Path) to prevent UNIQUE constraint
+	// failures when multiple root folders resolve to the same directory
+	seen := make(map[string]bool)
+	deduplicated := make([]PathResult, 0, len(matches))
+	for _, m := range matches {
+		key := m.System.ID + ":" + m.Path
+		if !seen[key] {
+			seen[key] = true
+			deduplicated = append(deduplicated, m)
+		}
 	}
-}
 
-func (r *resultsStack) push() {
-	r.results = append(r.results, make([]string, 0))
-}
+	log.Info().
+		Int("matches", len(deduplicated)).
+		Int("duplicatesRemoved", len(matches)-len(deduplicated)).
+		Msg("path discovery complete")
 
-func (r *resultsStack) pop() {
-	if len(r.results) == 0 {
-		return
-	}
-	r.results = r.results[:len(r.results)-1]
-}
-
-func (r *resultsStack) get() (*[]string, error) {
-	if len(r.results) == 0 {
-		return nil, errors.New("nothing on stack")
-	}
-	return &r.results[len(r.results)-1], nil
+	return deduplicated
 }
 
 // GetFiles searches for all valid games in a given path and returns a list of
-// files. This function deep searches .zip files and handles symlinks at all
-// levels.
+// files. Uses fastwalk for parallel directory traversal with built-in symlink
+// cycle detection. Deep searches .zip files when ZipsAsDirs is enabled.
 func GetFiles(
 	ctx context.Context,
 	cfg *config.Instance,
@@ -303,198 +346,142 @@ func GetFiles(
 	systemID string,
 	path string,
 ) ([]string, error) {
-	var allResults []string
-	stack := newResultsStack()
-	visited := make(map[string]struct{})
-
 	system, err := systemdefs.GetSystem(systemID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
 	}
 
-	entriesScanned := 0
+	var entriesScanned atomic.Int64
 	walkStartTime := time.Now()
-	lastProgressLog := time.Now()
 
-	var scanner func(path string, file fs.DirEntry, err error) error
-	scanner = func(path string, file fs.DirEntry, _ error) error {
-		// Check for cancellation
+	var mu syncutil.Mutex
+	var results []string
+
+	conf := &fastwalk.Config{
+		Follow: true,
+	}
+
+	matcher := helpers.NewLauncherMatcher(cfg, platform)
+
+	log.Debug().Str("system", systemID).Str("path", path).Msg("starting directory walk")
+	err = fastwalk.Walk(conf, path, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			log.Warn().Err(err).Str("path", p).Msg("walk error")
+			return nil
+		}
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		entriesScanned++
-		if entriesScanned%5000 == 0 || time.Since(lastProgressLog) > 10*time.Second {
+		n := entriesScanned.Add(1)
+		if n%5000 == 0 {
 			log.Debug().
 				Str("system", systemID).
-				Str("path", path).
-				Int("entriesScanned", entriesScanned).
+				Str("path", p).
+				Int64("entriesScanned", n).
 				Dur("elapsed", time.Since(walkStartTime)).
 				Msg("directory walk progress")
-			lastProgressLog = time.Now()
 		}
 
-		// avoid recursive symlinks
-		if file.IsDir() {
-			key := path
-			if file.Type()&os.ModeSymlink != 0 {
-				realPath, symlinkErr := filepath.EvalSymlinks(path)
-				if symlinkErr != nil {
-					return fmt.Errorf("failed to evaluate symlink %s: %w", path, symlinkErr)
-				}
-				key = realPath
-			}
-			if _, seen := visited[key]; seen {
+		if d.IsDir() {
+			dirName := filepath.Base(p)
+			// Skip macOS metadata directories and hidden directories.
+			// __MACOSX contains Apple resource fork files that are not
+			// real archives. Dot-prefixed directories are OS metadata
+			// that never contain game ROMs. The walk root is exempt so
+			// that a user-configured dot-prefixed folder still works.
+			if p != path && (dirName == "__MACOSX" || dirName[0] == '.') {
 				return filepath.SkipDir
 			}
-			visited[key] = struct{}{}
 
-			// Check for .zaparooignore marker file
-			markerPath := filepath.Join(path, ".zaparooignore")
-			if _, statErr := os.Stat(markerPath); statErr == nil {
-				log.Info().Str("path", path).Msg("skipping directory with .zaparooignore marker")
+			markerPath := filepath.Join(p, ".zaparooignore")
+			if _, statErr := statWithContext(ctx, markerPath); statErr == nil {
+				log.Info().Str("path", p).Msg("skipping directory with .zaparooignore marker")
 				return filepath.SkipDir
 			}
+			return nil
 		}
 
-		// handle symlinked directories
-		if file.Type()&os.ModeSymlink != 0 {
-			log.Trace().Str("path", path).Msg("processing symlink")
-			absSym, absErr := filepath.Abs(path)
-			if absErr != nil {
-				return fmt.Errorf("failed to get absolute path for %s: %w", path, absErr)
-			}
-
-			realPath, realPathErr := filepath.EvalSymlinks(absSym)
-			if realPathErr != nil {
-				return fmt.Errorf("failed to evaluate symlink %s: %w", absSym, realPathErr)
-			}
-			log.Trace().Str("symlink", path).Str("target", realPath).Msg("resolved symlink")
-
-			file, statErr := os.Stat(realPath)
-			if statErr != nil {
-				return fmt.Errorf("failed to stat symlink target %s: %w", realPath, statErr)
-			}
-
-			if file.IsDir() {
-				stack.push()
-				defer stack.pop()
-
-				walkErr := filepath.WalkDir(realPath, scanner)
-				if walkErr != nil {
-					return fmt.Errorf("failed to walk directory %s: %w", realPath, walkErr)
-				}
-
-				results, stackErr := stack.get()
-				if stackErr != nil {
-					return stackErr
-				}
-
-				for i := range *results {
-					allResults = append(allResults, strings.Replace((*results)[i], realPath, path, 1))
-				}
-
-				return nil
-			}
+		// Skip macOS AppleDouble resource fork files before the zip
+		// check — they carry valid-looking extensions (.zip etc.) but
+		// are not real archives.
+		baseName := filepath.Base(p)
+		if len(baseName) >= 2 && baseName[0] == '.' && baseName[1] == '_' {
+			return nil
 		}
 
-		results, stackErr := stack.get()
-		if stackErr != nil {
-			return stackErr
-		}
-
-		if helpers.IsZip(path) && platform.Settings().ZipsAsDirs {
-			// zip files
-			log.Trace().Str("path", path).Msg("opening zip file for indexing")
-			zipFiles, zipErr := helpers.ListZip(path)
+		if helpers.IsZip(p) && platform.Settings().ZipsAsDirs {
+			log.Trace().Str("path", p).Msg("opening zip file for indexing")
+			zipFiles, zipErr := helpers.ListZip(p)
 			if zipErr != nil {
-				// skip invalid zip files
-				log.Warn().Err(zipErr).Msgf("error listing zip: %s", path)
+				log.Warn().Err(zipErr).Msgf("error listing zip: %s", p)
 				return nil
 			}
 
+			mu.Lock()
 			for i := range zipFiles {
-				abs := filepath.Join(path, zipFiles[i])
-				if helpers.MatchSystemFile(cfg, platform, system.ID, abs) {
-					*results = append(*results, abs)
+				abs := filepath.Join(p, zipFiles[i])
+				if matcher.MatchSystemFile(system.ID, abs) {
+					results = append(results, abs)
 				}
 			}
-		} else if helpers.MatchSystemFile(cfg, platform, system.ID, path) {
-			// regular files
-			*results = append(*results, path)
+			mu.Unlock()
+		} else if matcher.MatchSystemFile(system.ID, p) {
+			mu.Lock()
+			results = append(results, p)
+			mu.Unlock()
 		}
 
 		return nil
-	}
-
-	stack.push()
-	defer stack.pop()
-
-	root, err := os.Lstat(path)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to stat path %s: %w", path, err)
+		return nil, fmt.Errorf("failed to walk directory %s: %w", path, err)
 	}
 
-	// handle symlinks on the root game folder because WalkDir fails silently on them
-	var realPath string
-	if root.Mode()&os.ModeSymlink == 0 {
-		realPath = path
-	} else {
-		realPath, err = filepath.EvalSymlinks(path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate symlink %s: %w", path, err)
-		}
-	}
-
-	realRoot, err := os.Stat(realPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat real path %s: %w", realPath, err)
-	}
-
-	if !realRoot.IsDir() {
-		return nil, errors.New("root is not a directory")
-	}
-
-	log.Debug().Str("system", systemID).Str("path", realPath).Msg("starting directory walk")
-	err = filepath.WalkDir(realPath, scanner)
-	if err != nil {
-		return nil, fmt.Errorf("failed to walk directory %s: %w", realPath, err)
-	}
+	scanned := entriesScanned.Load()
 	walkElapsed := time.Since(walkStartTime)
+
 	log.Debug().
 		Str("system", systemID).
-		Str("path", realPath).
-		Int("entriesScanned", entriesScanned).
-		Int("filesFound", len(allResults)).
+		Str("path", path).
+		Int64("entriesScanned", scanned).
+		Int("filesFound", len(results)).
 		Dur("elapsed", walkElapsed).
 		Msg("completed directory walk")
 
-	if walkElapsed > 15*time.Second {
-		log.Warn().
+	if scanned > 0 && len(results) == 0 {
+		log.Info().
 			Str("system", systemID).
-			Str("path", realPath).
-			Int("entriesScanned", entriesScanned).
-			Dur("elapsed", walkElapsed).
-			Msg("directory walk took longer than expected - large directory or slow storage")
+			Str("path", path).
+			Int64("entriesScanned", scanned).
+			Msg("directory walk found entries but no files matched any launcher")
 	}
 
-	results, err := stack.get()
-	if err != nil {
-		return nil, err
-	}
-
-	allResults = append(allResults, *results...)
-
-	// change root back to symlink
-	if realPath != path {
-		for i := range allResults {
-			allResults[i] = strings.Replace(allResults[i], realPath, path, 1)
+	// Warn when the walk rate is slow rather than when absolute elapsed
+	// time is high. A 33K-entry directory legitimately takes ~19s on
+	// MiSTer ARM + USB 2.0; only warn when the filesystem is genuinely
+	// sluggish (< 500 entries/sec sustained over at least 5 seconds).
+	const (
+		minSlowWalkElapsed = 5 * time.Second
+		minEntriesPerSec   = 500.0
+	)
+	if walkElapsed > minSlowWalkElapsed && scanned > 0 {
+		rate := float64(scanned) / walkElapsed.Seconds()
+		if rate < minEntriesPerSec {
+			log.Warn().
+				Str("system", systemID).
+				Str("path", path).
+				Int64("entriesScanned", scanned).
+				Dur("elapsed", walkElapsed).
+				Float64("entriesPerSec", rate).
+				Msg("directory walk is slow - possible stale mount or degraded storage")
 		}
 	}
 
-	return allResults, nil
+	return results, nil
 }
 
 // handleCancellation performs cleanup when media indexing is cancelled
@@ -518,8 +505,16 @@ func handleCancellationWithRollback(ctx context.Context, db database.MediaDBI, m
 	return 0, ctx.Err()
 }
 
+const (
+	PhaseDiscovering     = "discovering"
+	PhaseInitializing    = "initializing"
+	PhaseCreatingIndexes = "creating_indexes"
+	PhaseBuildingCaches  = "building_caches"
+)
+
 type IndexStatus struct {
 	SystemID string
+	Phase    string // PhaseDiscovering, PhaseInitializing, or empty during indexing
 	Total    int
 	Step     int
 	Files    int
@@ -541,9 +536,20 @@ func NewNamesIndex(
 	systems []systemdefs.System,
 	fdb *database.Database,
 	update func(IndexStatus),
+	pauser *syncutil.Pauser,
 ) (int, error) {
 	db := fdb.MediaDB
 	indexStartTime := time.Now()
+
+	// Activate the NormalizeTag cache for the duration of this indexing run.
+	// The bracket vocabulary is small (~200–400 unique strings), so the cache
+	// stabilises early and collapses the repeated regex cost across 100k+ files.
+	tags.SetNormalizeTagCache(make(map[string]string))
+	defer tags.SetNormalizeTagCache(nil)
+
+	// Temporarily increase SQLite cache to 32MB for bulk indexing
+	db.SetIndexingCacheSize(true)
+	defer db.SetIndexingCacheSize(false)
 
 	log.Info().
 		Int("systemCount", len(systems)).
@@ -582,7 +588,8 @@ func NewNamesIndex(
 	case "":
 		log.Info().Msg("starting fresh indexing (no previous indexing status)")
 	case mediadb.IndexingStatusRunning, mediadb.IndexingStatusPending:
-		log.Info().Msgf("found interrupted indexing with status: %s", indexingStatus)
+		log.Warn().Str("status", indexingStatus).
+			Msg("previous indexing was interrupted, attempting to resume")
 		var getSystemErr error
 		lastIndexedSystemID, getSystemErr = db.GetLastIndexedSystem()
 		if getSystemErr != nil {
@@ -615,17 +622,23 @@ func NewNamesIndex(
 	}
 
 	// Get the ordered list of systems for this run (deterministic by ID)
+	update(IndexStatus{Phase: PhaseDiscovering})
 	systemPaths := make(map[string][]string)
-	for _, v := range GetSystemPaths(cfg, platform, platform.RootDirs(cfg), systems) {
+	for _, v := range GetSystemPaths(ctx, cfg, platform, platform.RootDirs(cfg), systems) {
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
 	sysPathIDs := helpers.AlphaMapKeys(systemPaths)
 
-	// Check for cancellation
+	update(IndexStatus{Phase: PhaseInitializing})
+
+	// Check for cancellation or pause
 	select {
 	case <-ctx.Done():
 		return handleCancellation(ctx, db, "Media indexing cancelled during initialization")
 	default:
+	}
+	if waitErr := pauser.Wait(ctx); waitErr != nil {
+		return handleCancellation(ctx, db, "Media indexing cancelled while paused during initialization")
 	}
 
 	// Validate resume point against current system list
@@ -704,11 +717,18 @@ func NewNamesIndex(
 			if err != nil {
 				return 0, fmt.Errorf("failed to truncate database: %w", err)
 			}
+
+			// Drop secondary indexes for faster bulk inserts — they'll be
+			// rebuilt during background optimization after indexing completes.
+			if dropErr := db.DropSecondaryIndexes(); dropErr != nil {
+				log.Warn().Err(dropErr).Msg("failed to drop secondary indexes, continuing with indexes in place")
+			}
+
 			log.Info().Msg("database truncation completed")
 		} else {
-			// Selective indexing
-			// DELETE mode disables FKs for performance, but TruncateSystems() relies on CASCADE
-			// to properly delete Media/MediaTitles/MediaTags when a System is deleted
+			// Selective indexing — same optimised TruncateSystems path as resume:
+			// FKs are disabled internally, children are deleted in explicit order,
+			// no CASCADE walk.
 			log.Info().Msgf(
 				"performing selective truncation for systems: %v",
 				currentSystemIDs,
@@ -816,14 +836,20 @@ func NewNamesIndex(
 	}()
 
 	status := IndexStatus{
-		Total: len(sysPathIDs) + 2, // Adjusted total steps for the current list
-		Step:  1,
+		Total: len(sysPathIDs) + 1, // +1 for final "Writing database" step
+		Step:  0,
 	}
+
+	// Track UNIQUE constraint failures across all systems
+	var uniqueConstraintFailures int
 
 	// Track which launchers have already been scanned to prevent double-execution
 	scannedLaunchers := make(map[string]bool)
 	// This map tracks systems that have been fully processed and committed
 	completedSystems := make(map[string]bool)
+	// Tracks whether the lastIndexedSystem's partial rows were cleaned up on resume.
+	// The truncate must fire exactly once, before the system's first file is processed.
+	resumedSystemTruncated := false
 
 	// Populate completedSystems if resuming
 	if shouldResume {
@@ -837,8 +863,6 @@ func NewNamesIndex(
 		}
 	}
 
-	update(status)
-
 	scannedSystems := make(map[string]bool)
 	for _, s := range systemdefs.AllSystems() {
 		scannedSystems[s.ID] = false
@@ -851,14 +875,23 @@ func NewNamesIndex(
 
 	// Main loop for systems
 	for _, k := range sysPathIDs {
-		// Check for cancellation
+		// Check for cancellation or pause
 		select {
 		case <-ctx.Done():
 			return handleCancellationWithRollback(ctx, db, "Media indexing cancelled")
 		default:
 		}
+		if waitErr := pauser.Wait(ctx); waitErr != nil {
+			return handleCancellationWithRollback(ctx, db, "Media indexing cancelled while paused")
+		}
 
 		systemID := k
+
+		// Resolve media type once per system to avoid repeated map lookups
+		mediaType := slugs.MediaTypeGame
+		if system, sysErr := systemdefs.GetSystem(systemID); sysErr == nil && system != nil {
+			mediaType = system.GetMediaType()
+		}
 
 		if completedSystems[systemID] {
 			log.Debug().Msgf("skipping already indexed system: %s", systemID)
@@ -869,6 +902,43 @@ func NewNamesIndex(
 
 		// Lazy load this system's existing data for resume
 		if shouldResume {
+			// On the first encounter of the lastIndexedSystem, remove any
+			// partially-committed rows from the previous interrupted run so the
+			// re-index starts clean. Without this, FlushScanStateMaps clearing
+			// MediaIDs mid-system leaves the scanner blind to pre-existing paths,
+			// causing a UNIQUE constraint storm at ~1 file/sec.
+			if systemID == lastIndexedSystemID && !resumedSystemTruncated {
+				log.Info().Str("system", systemID).
+					Msg("truncating partial system data before resume re-index")
+				if truncErr := db.TruncateSystems([]string{systemID}); truncErr != nil {
+					return 0, fmt.Errorf("failed to truncate partial system data for resume: %w", truncErr)
+				}
+				resumedSystemTruncated = true
+
+				// TruncateSystems deletes the Systems row (invalidating the DBID cached in
+				// scanState.SystemIDs) and orphan-cleans any Tags no longer referenced by
+				// MediaTags/MediaTitleTags/SupportingMedia (invalidating DBIDs in scanState.TagIDs).
+				// Both maps were populated by PopulateScanStateFromDB before the main loop; they
+				// must be reconciled now so AddMediaPath doesn't pass stale foreign keys.
+				delete(scanState.SystemIDs, systemID)
+
+				allTags, tagsErr := db.GetAllTags()
+				if tagsErr != nil {
+					return 0, fmt.Errorf("failed to reload tags after resume truncate: %w", tagsErr)
+				}
+				tagTypeByDBID := make(map[int64]string, len(scanState.TagTypeIDs))
+				for t, id := range scanState.TagTypeIDs {
+					tagTypeByDBID[int64(id)] = t
+				}
+				scanState.TagIDs = make(map[string]int, len(allTags))
+				for _, tag := range allTags {
+					scanState.TagIDs[database.TagKey(tagTypeByDBID[tag.TypeDBID], tag.Tag)] = int(tag.DBID)
+				}
+				if seedErr := SeedCanonicalTags(db, &scanState); seedErr != nil {
+					return 0, fmt.Errorf("failed to re-seed canonical tags after resume truncate: %w", seedErr)
+				}
+			}
+
 			log.Debug().Str("system", systemID).Msg("loading existing data for system resume")
 			if loadErr := PopulateScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
 				// Check if this is a cancellation error
@@ -910,17 +980,35 @@ func NewNamesIndex(
 			}
 		}
 
-		// for each system launcher in a platform, run the results through its
-		// custom scan function if one exists
+		// Run each system launcher's custom scanner if one exists.
+		//
+		// SkipFilesystemScan launchers (e.g. RetroBat, Kodi) generate results
+		// independently — they don't filter/enrich the shared file list, so they
+		// receive empty input and their results are *appended* to files. This
+		// prevents an independent scanner that ignores its input from wiping out
+		// files discovered by other launchers or the filesystem walk.
+		//
+		// Non-skip launchers (e.g. Batocera gamelist.xml enrichment) act as a
+		// pipeline: they receive the current files and their output *replaces*
+		// files, allowing them to filter, reorder, or add metadata.
 		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(k)
 		for i := range launchers {
 			l := &launchers[i]
 			if l.Scanner != nil {
 				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 				var scanErr error
-				files, scanErr = l.Scanner(ctx, cfg, systemID, files)
+				if l.SkipFilesystemScan {
+					// Isolated: scanner gets empty input, results accumulated
+					var independent []platforms.ScanResult
+					independent, scanErr = l.Scanner(ctx, cfg, systemID, nil)
+					if scanErr == nil {
+						files = append(files, independent...)
+					}
+				} else {
+					// Pipeline: scanner filters/enriches existing files
+					files, scanErr = l.Scanner(ctx, cfg, systemID, files)
+				}
 				if scanErr != nil {
-					// Check if this is a cancellation error
 					if errors.Is(scanErr, context.Canceled) {
 						return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
 					}
@@ -955,11 +1043,15 @@ func NewNamesIndex(
 		}
 
 		for _, file := range files {
-			// Check for cancellation between file processing
+			// Check for cancellation or pause between file processing
 			select {
 			case <-ctx.Done():
 				return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during file processing")
 			default:
+			}
+			if waitErr := pauser.Wait(ctx); waitErr != nil {
+				return handleCancellationWithRollback(ctx, db,
+					"Media indexing cancelled while paused during file processing")
 			}
 
 			// Start transaction if needed (at start of system OR after mid-system commit)
@@ -974,8 +1066,14 @@ func NewNamesIndex(
 			dir := filepath.Dir(file.Path)
 			shouldStrip := stripPolicyByDir[dir]
 
-			_, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, shouldStrip, cfg)
+			_, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, shouldStrip, cfg, mediaType)
 			if addErr != nil {
+				var sqliteErr sqlite3.Error
+				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+					uniqueConstraintFailures++
+					log.Debug().Err(addErr).Str("path", file.Path).Msg("skipping duplicate media entry")
+					continue
+				}
 				return 0, fmt.Errorf("unrecoverable error adding media path %q: %w", file.Path, addErr)
 			}
 			filesInBatch++
@@ -1082,11 +1180,15 @@ func NewNamesIndex(
 		systemsInBatch = 0
 	}
 
-	// Check for cancellation before custom scanners
+	// Check for cancellation or pause before custom scanners
 	select {
 	case <-ctx.Done():
 		return handleCancellationWithRollback(ctx, db, "Media indexing cancelled before custom scanners")
 	default:
+	}
+	if waitErr := pauser.Wait(ctx); waitErr != nil {
+		return handleCancellationWithRollback(ctx, db,
+			"Media indexing cancelled while paused before custom scanners")
 	}
 
 	// run each custom scanner at least once, even if there are no paths
@@ -1096,6 +1198,10 @@ func NewNamesIndex(
 	for i := range launchers {
 		l := &launchers[i]
 		systemID := l.SystemID
+		mediaType := slugs.MediaTypeGame
+		if system, sysErr := systemdefs.GetSystem(systemID); sysErr == nil && system != nil {
+			mediaType = system.GetMediaType()
+		}
 		log.Debug().Msgf("launcher %s for system %s: scanner=%v scanned=%v",
 			l.ID, systemID, l.Scanner != nil, scannedLaunchers[l.ID])
 
@@ -1125,12 +1231,16 @@ func NewNamesIndex(
 				status.Files += len(results)
 
 				for _, result := range results {
-					// Check for cancellation between file processing
+					// Check for cancellation or pause between file processing
 					select {
 					case <-ctx.Done():
 						return handleCancellationWithRollback(ctx, db,
 							"Media indexing cancelled during custom scanner file processing")
 					default:
+					}
+					if waitErr := pauser.Wait(ctx); waitErr != nil {
+						return handleCancellationWithRollback(ctx, db,
+							"Media indexing cancelled while paused during custom scanner file processing")
 					}
 
 					// Start transaction if needed (at start OR after mid-system commit)
@@ -1142,8 +1252,16 @@ func NewNamesIndex(
 					}
 
 					// Custom scanner files: don't apply number stripping heuristic (false)
-					_, _, addErr := AddMediaPath(db, &scanState, systemID, result.Path, result.NoExt, false, cfg)
+					_, _, addErr := AddMediaPath(
+						db, &scanState, systemID, result.Path, result.NoExt, false, cfg, mediaType,
+					)
 					if addErr != nil {
+						var sqliteErr sqlite3.Error
+						if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+							uniqueConstraintFailures++
+							log.Debug().Err(addErr).Str("path", result.Path).Msg("skipping duplicate media entry")
+							continue
+						}
 						return 0, fmt.Errorf(
 							"unrecoverable error adding custom scanner path %q: %w",
 							result.Path,
@@ -1200,6 +1318,10 @@ func NewNamesIndex(
 		l := &anyScanners[i]
 		for _, s := range systems {
 			systemID := s.ID
+			mediaType := slugs.MediaTypeGame
+			if system, sysErr := systemdefs.GetSystem(systemID); sysErr == nil && system != nil {
+				mediaType = system.GetMediaType()
+			}
 			if completedSystems[systemID] {
 				log.Debug().Msgf("skipping 'any' scanner for already completed system: %s", systemID)
 				continue // Skip if system already fully processed
@@ -1228,12 +1350,16 @@ func NewNamesIndex(
 				status.Files += len(results)
 
 				for _, scanResult := range results {
-					// Check for cancellation between file processing
+					// Check for cancellation or pause between file processing
 					select {
 					case <-ctx.Done():
 						return handleCancellationWithRollback(ctx, db,
 							"Media indexing cancelled during 'any' scanner file processing")
 					default:
+					}
+					if waitErr := pauser.Wait(ctx); waitErr != nil {
+						return handleCancellationWithRollback(ctx, db,
+							"Media indexing cancelled while paused during 'any' scanner file processing")
 					}
 
 					// Start transaction if needed (at start OR after mid-system commit)
@@ -1246,9 +1372,15 @@ func NewNamesIndex(
 
 					// 'Any' scanner files: don't apply number stripping heuristic (false)
 					_, _, addErr := AddMediaPath(
-						db, &scanState, systemID, scanResult.Path, scanResult.NoExt, false, cfg,
+						db, &scanState, systemID, scanResult.Path, scanResult.NoExt, false, cfg, mediaType,
 					)
 					if addErr != nil {
+						var sqliteErr sqlite3.Error
+						if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+							uniqueConstraintFailures++
+							log.Debug().Err(addErr).Str("path", scanResult.Path).Msg("skipping duplicate media entry")
+							continue
+						}
 						return 0, fmt.Errorf(
 							"unrecoverable error adding 'any' scanner path %q: %w",
 							scanResult.Path,
@@ -1304,7 +1436,15 @@ func NewNamesIndex(
 	status.SystemID = ""
 	update(status)
 
-	scanState.TagIDs = make(map[string]int)
+	// Nil out all ScanState maps to release backing memory. Go maps retain
+	// their allocated bucket array even after all keys are deleted, so the
+	// only way to reclaim that memory is to drop all references and let GC
+	// collect the backing arrays. With 250k titles this can be 20-40MB.
+	scanState.SystemIDs = nil
+	scanState.TitleIDs = nil
+	scanState.MediaIDs = nil
+	scanState.TagTypeIDs = nil
+	scanState.TagIDs = nil
 
 	// Phase 1: Complete data operations (foreground) - commit all data
 	// Note: We may not have an active transaction here due to batching
@@ -1315,11 +1455,48 @@ func NewNamesIndex(
 		}
 	}
 
-	// Mark database as complete and ready for use
+	status.Phase = PhaseCreatingIndexes
+	update(status)
+
+	// Rebuild all secondary indexes before marking indexing as complete.
+	// This ensures the database is fully searchable when indexing finishes.
+	t0 := time.Now()
+	if idxErr := db.CreateSecondaryIndexes(); idxErr != nil {
+		log.Error().Err(idxErr).Msg("failed to create secondary indexes")
+	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("CreateSecondaryIndexes complete")
+
+	// Mark database as complete and ready for use. UpdateLastGenerated clears
+	// SystemTagsCache and SlugResolutionCache via invalidateCaches, so cache
+	// population must happen after this call.
 	err = db.UpdateLastGenerated()
 	if err != nil {
 		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
 	}
+
+	status.Phase = PhaseBuildingCaches
+	update(status)
+
+	// Populate caches after UpdateLastGenerated. These run synchronously so
+	// searches return correct results the moment indexing finishes, and the
+	// populated SystemTagsCache persists across service restarts.
+	t0 = time.Now()
+	if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
+	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
+
+	t0 = time.Now()
+	if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
+	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
+
+	t0 = time.Now()
+	if cacheErr := db.RebuildTagCache(); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
+	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
 
 	// Mark indexing as completed and clear indexing metadata
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {
@@ -1337,26 +1514,9 @@ func NewNamesIndex(
 		log.Error().Err(cacheErr).Msg("failed to invalidate media count cache after indexing")
 	}
 
-	// Populate system tags cache for fast tag lookups
-	log.Info().Msg("populating system tags cache after indexing completion")
-	if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
-		log.Error().Err(cacheErr).Msg("failed to populate system tags cache after indexing")
-	} else {
-		log.Info().Msg("successfully populated system tags cache")
-	}
-
-	// Force WAL checkpoint to ensure all pending writes are flushed to disk
-	// This prevents stale locks from persisting if the process is interrupted
-	log.Info().Msg("forcing WAL checkpoint after indexing completion")
-	if sqlDB := db.UnsafeGetSQLDb(); sqlDB != nil {
-		if _, walErr := sqlDB.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);"); walErr != nil {
-			log.Warn().Err(walErr).Msg("failed to checkpoint WAL after indexing")
-		} else {
-			log.Info().Msg("WAL checkpoint completed successfully")
-		}
-	}
-
-	// Mark optimization as pending
+	// Mark optimization as pending — background optimization will handle
+	// index rebuilds, cache population, and WAL checkpoint without blocking
+	// game launches or search queries.
 	err = db.SetOptimizationStatus("pending")
 	if err != nil {
 		err = fmt.Errorf("failed to set optimization status to pending: %w", err)
@@ -1371,6 +1531,11 @@ func NewNamesIndex(
 		}
 	}
 	log.Debug().Msgf("indexed systems: %v", indexedSystems)
+
+	if uniqueConstraintFailures > 0 {
+		log.Warn().Int("count", uniqueConstraintFailures).
+			Msg("UNIQUE constraint failures during indexing (possible duplicate paths)")
+	}
 
 	indexedFiles = status.Files
 	indexElapsed := time.Since(indexStartTime)

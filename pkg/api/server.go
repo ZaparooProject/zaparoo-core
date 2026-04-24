@@ -47,15 +47,20 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/updater"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/time/rate"
 )
 
 var allowedOrigins = []string{
@@ -99,23 +104,27 @@ func makeJSONRPCError(code int, message string) models.ErrorObject {
 
 // logSafeRequest logs a request but avoids logging sensitive or large content
 func logSafeRequest(req *models.RequestObject) {
-	if req.Method == models.MethodSettingsLogsDownload {
-		log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received logs download request")
-	} else {
-		log.Debug().Interface("request", req).Msg("received request")
-	}
+	log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received request")
 }
 
 // logSafeResponse logs a response but truncates large content to prevent recursive logging issues
 func logSafeResponse(result any) {
-	if logResp, ok := result.(models.LogDownloadResponse); ok {
-		truncated := logResp
+	switch resp := result.(type) {
+	case models.LogDownloadResponse:
+		truncated := resp
 		if len(truncated.Content) > 100 {
 			truncated.Content = truncated.Content[:100] + "... [truncated " +
-				strconv.Itoa(len(logResp.Content)-100) + " more chars]"
+				strconv.Itoa(len(resp.Content)-100) + " more chars]"
 		}
 		log.Debug().Interface("result", truncated).Msg("sending response")
-	} else {
+	case models.ScreenshotResponse:
+		truncated := resp
+		if len(truncated.Data) > 100 {
+			truncated.Data = truncated.Data[:100] + "... [truncated " +
+				strconv.Itoa(len(resp.Data)-100) + " more chars]"
+		}
+		log.Debug().Interface("result", truncated).Msg("sending response")
+	default:
 		log.Debug().Interface("result", result).Msg("sending response")
 	}
 }
@@ -186,9 +195,10 @@ func NewMethodMap() *MethodMap {
 
 	defaultMethods := map[string]func(requests.RequestEnv) (any, error){
 		// run
-		models.MethodLaunch: methods.HandleRun, // DEPRECATED
-		models.MethodRun:    methods.HandleRun,
-		models.MethodStop:   methods.HandleStop,
+		models.MethodLaunch:  methods.HandleRun, // DEPRECATED
+		models.MethodRun:     methods.HandleRun,
+		models.MethodStop:    methods.HandleStop,
+		models.MethodConfirm: methods.HandleConfirm,
 		// tokens
 		models.MethodTokens:  methods.HandleTokens,
 		models.MethodHistory: methods.HandleHistory,
@@ -196,11 +206,17 @@ func NewMethodMap() *MethodMap {
 		models.MethodMedia:               methods.HandleMedia,
 		models.MethodMediaGenerate:       methods.HandleGenerateMedia,
 		models.MethodMediaGenerateCancel: methods.HandleMediaGenerateCancel,
+		models.MethodMediaGenerateResume: methods.HandleMediaGenerateResume,
 		models.MethodMediaIndex:          methods.HandleGenerateMedia,
 		models.MethodMediaSearch:         methods.HandleMediaSearch,
+		models.MethodMediaBrowse:         methods.HandleMediaBrowse,
 		models.MethodMediaTags:           methods.HandleMediaTags,
 		models.MethodMediaActive:         methods.HandleActiveMedia,
 		models.MethodMediaActiveUpdate:   methods.HandleUpdateActiveMedia,
+		models.MethodMediaHistory:        methods.HandleMediaHistory,
+		models.MethodMediaHistoryTop:     methods.HandleMediaHistoryTop,
+		models.MethodMediaLookup:         methods.HandleMediaLookup,
+		models.MethodMediaControl:        methods.HandleMediaControl,
 		// settings
 		models.MethodSettings:             methods.HandleSettings,
 		models.MethodSettingsUpdate:       methods.HandleSettingsUpdate,
@@ -238,6 +254,11 @@ func NewMethodMap() *MethodMap {
 				env.State.ListReaders(),
 			)
 		},
+		// input
+		models.MethodInputKeyboard: methods.HandleInputKeyboard,
+		models.MethodInputGamepad:  methods.HandleInputGamepad,
+		// screenshot
+		models.MethodScreenshot: methods.HandleScreenshot,
 		// utils
 		models.MethodVersion:     methods.HandleVersion,
 		models.MethodHealthCheck: methods.HandleHealthCheck,
@@ -245,6 +266,20 @@ func NewMethodMap() *MethodMap {
 		models.MethodInbox:       methods.HandleInbox,
 		models.MethodInboxDelete: methods.HandleInboxDelete,
 		models.MethodInboxClear:  methods.HandleInboxClear,
+		// clients (paired API clients)
+		models.MethodClients:       methods.HandleClients,
+		models.MethodClientsDelete: methods.HandleClientsDelete,
+		// auth
+		models.MethodSettingsAuthClaim: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleSettingsAuthClaim(env, zapscript.FetchWellKnown)
+		},
+		// update
+		models.MethodUpdateCheck: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleUpdateCheck(env, updater.Check)
+		},
+		models.MethodUpdateApply: func(env requests.RequestEnv) (any, error) {
+			return methods.HandleUpdateApply(env, updater.Apply, env.State.RestartService)
+		},
 	}
 
 	for name, fn := range defaultMethods {
@@ -278,7 +313,12 @@ func handleRequest(
 
 	resp, err := fn(env)
 	if err != nil {
-		log.Error().Err(err).Msg("error handling request")
+		var clientErr *models.ClientError
+		if errors.As(err, &clientErr) {
+			log.Warn().Err(err).Str("method", req.Method).Msg("client error")
+		} else {
+			log.Error().Err(err).Str("method", req.Method).Msg("error handling request")
+		}
 		// TODO: return error object from methods
 		rpcError := makeJSONRPCError(1, err.Error())
 		return nil, &rpcError
@@ -327,6 +367,16 @@ func sendWSError(session *melody.Session, id models.RPCID, errObj models.ErrorOb
 		return fmt.Errorf("failed to write to session: %w", err)
 	}
 	return nil
+}
+
+// logWSWriteError logs WebSocket write errors at the appropriate level.
+// Session closed errors are expected (client disconnected) and logged as Warn.
+func logWSWriteError(err error, msg string) {
+	if errors.Is(err, melody.ErrSessionClosed) {
+		log.Warn().Err(err).Msg(msg)
+	} else {
+		log.Error().Err(err).Msg(msg)
+	}
 }
 
 func handleResponse(resp models.ResponseObject) error {
@@ -622,6 +672,10 @@ func privateNetworkAccessMiddleware(next http.Handler) http.Handler {
 
 // broadcastNotifications consumes and broadcasts all incoming API
 // notifications to all connected clients.
+//
+// Iteration is synchronous to preserve strict notification ordering (e.g.
+// media.started/stopped sequences): each session's encrypt + write completes
+// before the next session is touched.
 func broadcastNotifications(
 	st *state.State,
 	session *melody.Melody,
@@ -645,14 +699,99 @@ func broadcastNotifications(
 				continue
 			}
 
-			// TODO: this will not work with encryption
-			// Broadcast synchronously to maintain strict notification ordering.
-			// This is critical for media.started/stopped sequences where order matters.
-			// The broadcastNotifications goroutine already runs async, so we don't need
-			// another level of async that would cause out-of-order delivery.
-			err = session.Broadcast(data)
-			if err != nil {
-				log.Error().Err(err).Msg("broadcasting notification")
+			broadcastToSessions(session, data)
+		}
+	}
+}
+
+// broadcastToSessions sends a notification to every connected session,
+// encrypting per-session for sessions that have established encryption.
+// Errors on individual sessions are logged but do not stop the broadcast.
+func broadcastToSessions(session *melody.Melody, plaintext []byte) {
+	sessions, err := session.Sessions()
+	if err != nil {
+		logWSWriteError(err, "fetching sessions for broadcast")
+		return
+	}
+	for _, s := range sessions {
+		if s == nil || s.IsClosed() {
+			continue
+		}
+		writeNotificationToSession(s, plaintext)
+	}
+}
+
+// writeNotificationToSession writes a single notification to a single
+// melody session, encrypting if the session has an established encryption
+// session. For encrypted sessions the encrypt + enqueue happens under the
+// per-session mutex via SendEncryptedFrame so concurrent writers cannot
+// reorder counters on the wire.
+//
+// On any send-side encryption failure (counter exhaustion, AEAD setup
+// error, write failure) the session is closed: a desynced session
+// cannot recover and keeping it open hides the bug from the client.
+func writeNotificationToSession(s *melody.Session, plaintext []byte) {
+	cs := getClientSession(s)
+	if cs == nil {
+		if err := s.Write(plaintext); err != nil {
+			logWSWriteError(err, "broadcasting plaintext notification")
+		}
+		return
+	}
+	if err := cs.SendEncryptedFrame(plaintext, s.Write); err != nil {
+		logWSWriteError(err, "broadcasting encrypted notification")
+		closeMelodySession(s)
+	}
+}
+
+// handleSSE returns an HTTP handler that streams notifications as Server-Sent
+// Events. Each connected client gets its own broker subscription which is
+// cleaned up on disconnect.
+func handleSSE(notifBroker *broker.Broker, st *state.State) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		notifs, subID := notifBroker.Subscribe(100)
+		defer notifBroker.Unsubscribe(subID)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher.Flush()
+
+		log.Info().Int("subscriber_id", subID).Msg("SSE client connected")
+
+		for {
+			select {
+			case <-r.Context().Done():
+				log.Info().Int("subscriber_id", subID).Msg("SSE client disconnected")
+				return
+			case <-st.GetContext().Done():
+				return
+			case notif, ok := <-notifs:
+				if !ok {
+					return
+				}
+
+				obj := models.NotificationObject{
+					JSONRPC: "2.0",
+					Method:  notif.Method,
+					Params:  notif.Params,
+				}
+
+				data, err := json.Marshal(obj)
+				if err != nil {
+					log.Error().Err(err).Msg("marshalling SSE notification")
+					continue
+				}
+
+				if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+					log.Debug().Err(err).Msg("SSE write failed, client likely disconnected")
+					return
+				}
+				flusher.Flush()
 			}
 		}
 	}
@@ -662,6 +801,7 @@ func broadcastNotifications(
 type requestResult struct {
 	Result      any
 	Error       *models.ErrorObject
+	AfterWrite  func() // called after the response has been written to the client
 	ID          models.RPCID
 	ShouldReply bool
 }
@@ -694,7 +834,7 @@ func processRequestObject(
 		if req.ID.IsAbsent() {
 			// Missing ID = notification per JSON-RPC 2.0 spec
 			// Server MUST NOT reply to notifications
-			log.Info().Interface("req", req).Msg("received notification, ignoring")
+			log.Info().Str("method", req.Method).Msg("received notification, ignoring")
 			return requestResult{ShouldReply: false}
 		}
 
@@ -703,7 +843,15 @@ func processRequestObject(
 		if rpcError != nil {
 			return requestResult{ID: req.ID, Error: rpcError, ShouldReply: true}
 		}
-		return requestResult{ID: req.ID, Result: resp, ShouldReply: true}
+
+		// Unwrap ResponseWithCallback to extract the AfterWrite hook
+		var afterWrite func()
+		if rwc, ok := resp.(models.ResponseWithCallback); ok {
+			resp = rwc.Result
+			afterWrite = rwc.AfterWrite
+		}
+
+		return requestResult{ID: req.ID, Result: resp, AfterWrite: afterWrite, ShouldReply: true}
 	}
 
 	// otherwise try parse a response, which has an id field
@@ -725,15 +873,24 @@ func processRequestObject(
 // handleWSMessage parses all incoming WS requests, identifies what type of
 // JSON-RPC object they may be and forwards them to the appropriate function
 // to handle that type of message.
+//
+// When encryption is enabled the handler also performs transparent
+// decryption of encrypted frames and encryption of responses. The first
+// frame on a new connection determines whether the session is encrypted
+// (has v + e + t + s) or plaintext.
 func handleWSMessage(
 	methodMap *MethodMap,
 	platform platforms.Platform,
 	cfg *config.Instance,
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
+	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
+	indexPauser *syncutil.Pauser,
+	encGateway *apimiddleware.EncryptionGateway,
+	lastSeenTracker *apimiddleware.LastSeenTracker,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
 		defer func() {
@@ -741,23 +898,74 @@ func handleWSMessage(
 				log.Error().Interface("panic", r).Msg("panic in websocket handler")
 				err := sendWSError(session, models.NullRPCID, JSONRPCErrorInternalError)
 				if err != nil {
-					log.Error().Err(err).Msg("error sending panic error response")
+					logWSWriteError(err, "error sending panic error response")
 				}
 			}
 		}()
 
-		// ping command for heartbeat operation
-		if bytes.Equal(msg, []byte("ping")) {
-			err := session.Write([]byte("pong"))
-			if err != nil {
-				log.Error().Err(err).Msg("sending pong")
+		clientIP := apimiddleware.ParseRemoteIP(session.Request.RemoteAddr)
+		isLocal := apimiddleware.IsLoopbackAddr(session.Request.RemoteAddr)
+		var sourceIP string
+		if clientIP != nil {
+			sourceIP = clientIP.String()
+		}
+		encryptionEnabled := cfg.EncryptionEnabled()
+
+		// An unparseable RemoteAddr would collapse all such clients onto a
+		// shared empty-string rate-limit bucket — a false positive could
+		// then block every other unparseable client for the same auth
+		// token. In practice net/http always populates RemoteAddr from the
+		// underlying TCP conn, so this only fires if a future reverse-proxy
+		// header parser writes a malformed value. Reject the connection
+		// rather than risk a degenerate limiter state. Plaintext local
+		// connections do not need a sourceIP and are not rate-limited per
+		// (token, IP), so they are exempt.
+		if sourceIP == "" && encryptionEnabled && !isLocal {
+			log.Warn().
+				Str("remote_addr", session.Request.RemoteAddr).
+				Msg("ws: rejecting encrypted connection from unparseable remote addr")
+			closeMelodySession(session)
+			return
+		}
+
+		// Decrypt the incoming frame if needed and update the per-session
+		// encryption state. Returns the plaintext to dispatch and the
+		// resolved client session (or nil for plaintext sessions).
+		plaintext, cs, ok := decryptIncomingFrame(
+			session, msg, encGateway, encryptionEnabled, isLocal, sourceIP)
+		if !ok {
+			return
+		}
+
+		// Mark the paired client as recently seen. The tracker batches
+		// these in memory and the flush goroutine persists them on a
+		// 30-second cadence (and once more on graceful shutdown).
+		// Plaintext sessions have no associated paired client, so cs is
+		// nil and Touch is skipped.
+		if cs != nil && lastSeenTracker != nil {
+			lastSeenTracker.Touch(cs.AuthToken(), time.Now().Unix())
+		}
+
+		// Heartbeat ping/pong runs on the decrypted plaintext so encrypted
+		// sessions get an encrypted pong, and remote plaintext probes are
+		// rejected by decryptIncomingFrame before reaching this point.
+		if bytes.Equal(plaintext, []byte("ping")) {
+			if err := writePong(session.Write, cs); err != nil {
+				// Encrypted send failed (counter exhausted, write error,
+				// etc.) — the encrypted session is desynced and cannot
+				// recover. Plaintext sessions are also closed because a
+				// write failure means the wire is gone.
+				logWSWriteError(err, "sending pong")
+				closeMelodySession(session)
 			}
 			return
 		}
 
-		rawIP := strings.SplitN(session.Request.RemoteAddr, ":", 2)
-		clientIP := net.ParseIP(rawIP[0])
+		reqCtx, reqCancel := context.WithTimeout(st.GetContext(), config.APIRequestTimeout)
+		defer reqCancel()
+
 		env := requests.RequestEnv{
+			Context:       reqCtx,
 			Platform:      platform,
 			Config:        cfg,
 			State:         st,
@@ -766,27 +974,204 @@ func handleWSMessage(
 			LauncherCache: helpers.GlobalLauncherCache,
 			Player:        player,
 			TokenQueue:    inTokenQueue,
-			IsLocal:       clientIP.IsLoopback(),
+			ConfirmQueue:  confirmQueue,
+			IndexPauser:   indexPauser,
+			IsLocal:       isLocal,
 			ClientID:      session.Request.RemoteAddr,
 		}
 
-		result := processRequestObject(methodMap, env, msg)
+		result := processRequestObject(methodMap, env, plaintext)
 		if !result.ShouldReply {
 			// Notifications and incoming responses don't get replies
 			return
 		}
 		if result.Error != nil {
-			err := sendWSError(session, result.ID, *result.Error)
+			err := sendWSEncryptedError(session, cs, result.ID, *result.Error)
 			if err != nil {
-				log.Error().Err(err).Msg("error sending error response")
+				logWSWriteError(err, "error sending error response")
+				// Encrypted send failed (counter exhausted, write
+				// error, etc.) — the encrypted session is desynced
+				// and cannot recover. Plaintext sessions are also
+				// closed because a write failure means the wire is
+				// gone.
+				closeMelodySession(session)
 			}
 		} else {
-			err := sendWSResponse(session, result.ID, result.Result)
+			err := sendWSEncryptedResponse(session, cs, result.ID, result.Result)
 			if err != nil {
-				log.Error().Err(err).Msg("error sending response")
+				logWSWriteError(err, "error sending response")
+				closeMelodySession(session)
 			}
 		}
+		if result.AfterWrite != nil {
+			result.AfterWrite()
+		}
 	}
+}
+
+// decryptIncomingFrame is the encryption decision point for WebSocket frames.
+// It handles three cases:
+//
+//   - The session already has an encryption state attached → decrypt with it.
+//   - The session has no state and the frame looks like an encrypted first
+//     frame → establish a new session.
+//   - The frame is plaintext → allowed only when encryption is disabled or
+//     the connection is loopback.
+//
+// Returns (plaintext bytes to dispatch, the active client session if any, ok).
+// On policy rejection or decryption failure, the WebSocket is closed and the
+// caller should return immediately.
+func decryptIncomingFrame(
+	session *melody.Session,
+	msg []byte,
+	encGateway *apimiddleware.EncryptionGateway,
+	encryptionEnabled bool,
+	isLocal bool,
+	sourceIP string,
+) (plaintext []byte, cs *apimiddleware.ClientSession, ok bool) {
+	// Already-established encrypted session: decrypt with the stored state.
+	if cs = getClientSession(session); cs != nil {
+		var frame apimiddleware.EncryptedFrame
+		if err := json.Unmarshal(msg, &frame); err != nil || frame.Ciphertext == "" {
+			log.Warn().Err(err).Msg("ws: malformed encrypted frame on established session")
+			closeMelodySession(session)
+			return nil, nil, false
+		}
+		pt, err := cs.DecryptSubsequent(frame)
+		if err != nil {
+			log.Warn().Err(err).Msg("ws: decryption failed on established session")
+			closeMelodySession(session)
+			return nil, nil, false
+		}
+		return pt, cs, true
+	}
+
+	// No session yet: detect whether this is an encrypted first frame.
+	if apimiddleware.IsEncryptedFirstFrame(msg) {
+		var frame apimiddleware.EncryptedFirstFrame
+		if err := json.Unmarshal(msg, &frame); err != nil {
+			log.Warn().Err(err).Msg("ws: malformed encrypted first frame")
+			closeMelodySession(session)
+			return nil, nil, false
+		}
+		if frame.Version != apimiddleware.EncryptionProtoVersion {
+			data, marshalErr := unsupportedEncryptionVersionResponse()
+			if marshalErr == nil {
+				sendWSPlaintext(session, data)
+			}
+			closeMelodySession(session)
+			return nil, nil, false
+		}
+		newSession, pt, err := encGateway.EstablishSession(frame, sourceIP)
+		if err != nil {
+			log.Warn().Err(err).Msg("ws: failed to establish encrypted session")
+			closeMelodySession(session)
+			return nil, nil, false
+		}
+		setClientSession(session, newSession)
+		return pt, newSession, true
+	}
+
+	// Plaintext frame: only allowed when encryption is disabled, or from
+	// loopback (localhost is always exempt so the TUI / local clients keep
+	// working without pairing).
+	if encryptionEnabled && !isLocal {
+		data, marshalErr := encryptionRequiredErrorResponse()
+		if marshalErr == nil {
+			sendWSPlaintext(session, data)
+		}
+		closeMelodySession(session)
+		return nil, nil, false
+	}
+	return msg, nil, true
+}
+
+// closeMelodySession best-effort closes a melody WebSocket session, logging
+// any error at debug level (the connection may already be closed).
+func closeMelodySession(session *melody.Session) {
+	if err := session.Close(); err != nil {
+		log.Debug().Err(err).Msg("ws: failed to close session")
+	}
+}
+
+// writePong sends a "pong" heartbeat reply to the client. Plaintext
+// sessions get the raw "pong" bytes; encrypted sessions go through
+// SendEncryptedFrame so the encrypt + enqueue happens under the
+// per-session mutex (preventing wire reorder against concurrent
+// broadcasts).
+//
+// writeFn receives the bytes to emit on the wire. Production callers pass
+// session.Write from a melody session; tests pass a capturing function to
+// inspect the wire shape without mocking melody.
+func writePong(writeFn func([]byte) error, cs *apimiddleware.ClientSession) error {
+	if cs == nil {
+		if err := writeFn([]byte("pong")); err != nil {
+			return fmt.Errorf("write plaintext pong: %w", err)
+		}
+		return nil
+	}
+	if err := cs.SendEncryptedFrame([]byte("pong"), writeFn); err != nil {
+		return fmt.Errorf("send encrypted pong: %w", err)
+	}
+	return nil
+}
+
+// sendWSEncryptedResponse marshals a JSON-RPC response and sends it over the
+// WebSocket, encrypting it if the session has an established encryption
+// session, otherwise sending it as plaintext. For encrypted sessions the
+// encrypt + enqueue happens under the per-session mutex via
+// SendEncryptedFrame so concurrent writers cannot reorder counters on the
+// wire.
+func sendWSEncryptedResponse(
+	session *melody.Session,
+	cs *apimiddleware.ClientSession,
+	id models.RPCID,
+	result any,
+) error {
+	if cs == nil {
+		return sendWSResponse(session, id, result)
+	}
+	resp := models.ResponseObject{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result:  result,
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return fmt.Errorf("marshal response: %w", err)
+	}
+	if err := cs.SendEncryptedFrame(data, session.Write); err != nil {
+		return fmt.Errorf("send encrypted response: %w", err)
+	}
+	return nil
+}
+
+// sendWSEncryptedError sends a JSON-RPC error, encrypted if the session is
+// encrypted. For encrypted sessions the encrypt + enqueue happens under
+// the per-session mutex via SendEncryptedFrame so concurrent writers
+// cannot reorder counters on the wire.
+func sendWSEncryptedError(
+	session *melody.Session,
+	cs *apimiddleware.ClientSession,
+	id models.RPCID,
+	rpcErr models.ErrorObject,
+) error {
+	if cs == nil {
+		return sendWSError(session, id, rpcErr)
+	}
+	resp := models.ResponseErrorObject{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error:   &rpcErr,
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return fmt.Errorf("marshal error response: %w", err)
+	}
+	if err := cs.SendEncryptedFrame(data, session.Write); err != nil {
+		return fmt.Errorf("send encrypted error: %w", err)
+	}
+	return nil
 }
 
 func handlePostRequest(
@@ -795,9 +1180,11 @@ func handlePostRequest(
 	cfg *config.Instance,
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
+	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
+	indexPauser *syncutil.Pauser,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -811,19 +1198,29 @@ func handlePostRequest(
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to read request body")
 			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
+			switch {
+			case errors.As(err, &maxBytesErr):
+				log.Warn().Err(err).Msg("request body too large")
 				http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
-				return
+			case errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF):
+				log.Warn().Err(err).Msg("client disconnected during request body read")
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			default:
+				log.Error().Err(err).Msg("failed to read request body")
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			}
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
-		rawIP := strings.SplitN(r.RemoteAddr, ":", 2)
-		clientIP := net.ParseIP(rawIP[0])
+		// Derive from r.Context() (already has APIRequestTimeout from middleware)
+		// but also cancel on app shutdown via st.GetContext().
+		reqCtx, reqCancel := context.WithCancel(r.Context())
+		context.AfterFunc(st.GetContext(), reqCancel)
+		defer reqCancel()
+
 		env := requests.RequestEnv{
+			Context:       reqCtx,
 			Platform:      platform,
 			Config:        cfg,
 			State:         st,
@@ -832,7 +1229,9 @@ func handlePostRequest(
 			LauncherCache: helpers.GlobalLauncherCache,
 			Player:        player,
 			TokenQueue:    inTokenQueue,
-			IsLocal:       clientIP.IsLoopback(),
+			ConfirmQueue:  confirmQueue,
+			IndexPauser:   indexPauser,
+			IsLocal:       apimiddleware.IsLoopbackAddr(r.RemoteAddr),
 			ClientID:      r.RemoteAddr,
 		}
 
@@ -876,6 +1275,12 @@ func handlePostRequest(
 		if err != nil {
 			log.Error().Err(err).Msg("failed to write response")
 		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		if result.AfterWrite != nil {
+			result.AfterWrite()
+		}
 	}
 }
 
@@ -885,11 +1290,13 @@ func Start(
 	cfg *config.Instance,
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
+	confirmQueue chan<- chan error,
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
-	notifications <-chan models.Notification,
+	notifBroker *broker.Broker,
 	mdnsHostname string,
 	player audio.Player,
+	indexPauser *syncutil.Pauser,
 ) {
 	// Extract port from listen address or use default
 	port := cfg.APIPort()
@@ -948,13 +1355,20 @@ func Start(
 	rateLimiter := apimiddleware.NewIPRateLimiter()
 	rateLimiter.StartCleanup(st.GetContext())
 
-	ipFilter := apimiddleware.NewIPFilter(cfg.AllowedIPs)
+	// Pairing endpoints have a much more aggressive rate limit (1 req/sec
+	// per IP) to throttle online PIN guessing attacks. The PAKE protocol
+	// itself prevents offline attacks, but rate limiting is defense in
+	// depth against the only feasible online attack: trying many PINs.
+	pairingRateLimiter := apimiddleware.NewIPRateLimiterWithLimits(rate.Limit(1), 1)
+	pairingRateLimiter.StartCleanup(st.GetContext())
+
 	authConfig := apimiddleware.NewAuthConfig(config.GetAPIKeys)
 
-	// Global middleware for all routes
-	r.Use(apimiddleware.HTTPIPFilterMiddleware(ipFilter))
+	// Global middleware applied to all routes. IP filtering is applied
+	// per-group: non-WS transports use NonWSIPFilterMiddleware
+	// (deny-by-default for remote), while pairing, app, health, and
+	// WebSocket routes remain remote-accessible.
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(config.APIRequestTimeout))
 	r.Use(cors.Handler(cors.Options{
 		AllowOriginFunc: originValidator,
 		AllowedMethods:  []string{"GET", "POST", "OPTIONS"},
@@ -965,13 +1379,39 @@ func Start(
 
 	// Rate limiting only for API routes, not static assets
 	apiRateLimitMiddleware := apimiddleware.HTTPRateLimitMiddleware(rateLimiter)
+	nonWSIPFilter := apimiddleware.NonWSIPFilterMiddleware(cfg.AllowedIPs)
 
-	if strings.HasSuffix(config.AppVersion, "-dev") {
+	if config.IsDevelopmentVersion() {
 		r.Mount("/debug", middleware.Profiler())
 		log.Info().Msg("pprof endpoints enabled at /debug/pprof/")
 	}
 
 	methodMap := NewMethodMap()
+
+	// Construct the pairing manager and the encryption session manager.
+	// Both have background cleanup goroutines tied to the service context.
+	pairingMgr := NewPairingManager(db.UserDB, st.Notifications)
+	pairingMgr.StartCleanup(st.GetContext())
+
+	// Register pairing RPC methods. These close over the pairingMgr so
+	// they must be added after it is created, not in NewMethodMap().
+	if err := methodMap.AddMethod(models.MethodClientsPairStart,
+		methods.HandleClientsPairStart(pairingMgr)); err != nil {
+		log.Error().Err(err).Msg("error adding clients.pair.start method")
+	}
+	if err := methodMap.AddMethod(models.MethodClientsPairCancel,
+		methods.HandleClientsPairCancel(pairingMgr)); err != nil {
+		log.Error().Err(err).Msg("error adding clients.pair.cancel method")
+	}
+
+	encGateway := apimiddleware.NewEncryptionGateway(db.UserDB)
+	encGateway.StartCleanup(st.GetContext())
+
+	// LastSeen tracker batches paired-client activity in memory and
+	// flushes to Clients.LastSeenAt every 30 seconds. A final flush runs
+	// on graceful shutdown via StartFlushLoop's ctx.Done() branch.
+	lastSeenTracker := apimiddleware.NewLastSeenTracker(db.UserDB)
+	lastSeenTracker.StartFlushLoop(st.GetContext(), apimiddleware.DefaultLastSeenFlushInterval)
 
 	session := melody.New()
 	defer func() {
@@ -984,50 +1424,163 @@ func Start(
 		log.Debug().Msgf("websocket origin: %s", origin)
 		return checkWebSocketOrigin(origin, staticOrigins, cfg.AllowedOrigins, port)
 	}
-	go broadcastNotifications(st, session, notifications)
+	// melody's Session.Write is a non-blocking enqueue onto a per-session
+	// output channel (default size 256). When that channel fills, the
+	// frame is silently dropped and Write still returns nil — for
+	// encrypted sessions this would silently desync the send counter
+	// against the wire and the client's next decrypt would fail GCM auth.
+	// Force-close the underlying TCP connection so the session is torn
+	// down promptly and the client reconnects cleanly instead of seeing
+	// unexplained decryption errors.
+	//
+	// We bypass session.Close() here because it would enqueue a
+	// CloseMessage envelope onto the same full output channel and re-enter
+	// this errorHandler in an infinite recursion. Closing the underlying
+	// conn directly causes writePump to fail on its next write, exit, and
+	// run the normal session close path.
+	session.HandleError(func(s *melody.Session, herr error) {
+		if errors.Is(herr, melody.ErrMessageBufferFull) {
+			cs := getClientSession(s)
+			if cs != nil {
+				tok := cs.AuthToken()
+				if len(tok) > 8 {
+					tok = tok[:8] + "..."
+				}
+				log.Warn().
+					Str("auth_token", tok).
+					Msg("ws: encrypted session output buffer full, force-closing to avoid counter desync")
+			} else {
+				log.Warn().Msg("ws: plaintext session output buffer full, force-closing")
+			}
+			if conn := s.WebsocketConnection(); conn != nil {
+				if cerr := conn.Close(); cerr != nil {
+					log.Debug().Err(cerr).Msg("ws: error force-closing overflowed session")
+				}
+			}
+		}
+	})
+	wsNotifications, wsSubID := notifBroker.Subscribe(100)
+	go func() {
+		broadcastNotifications(st, session, wsNotifications)
+		notifBroker.Unsubscribe(wsSubID)
+	}()
 
-	// API routes
+	// Pairing endpoints — accessible to remote clients (rate-limited only).
+	// Unencrypted by design: PAKE establishes the shared key without ever
+	// transmitting it.
+	//
+	// Both limiters are stacked: the general apiRateLimitMiddleware runs
+	// first (cheap check, shared budget) and the stricter pairingRateMiddleware
+	// (1 req/sec per IP) runs second. Stacking prevents a client from
+	// pairing while simultaneously scraping other endpoints from the same
+	// IP, and provides defense in depth if pairingRateLimiter is ever
+	// misconfigured.
+	pairingRateMiddleware := apimiddleware.HTTPRateLimitMiddleware(pairingRateLimiter)
 	r.Group(func(r chi.Router) {
-		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
 		r.Use(apiRateLimitMiddleware)
+		r.Use(pairingRateMiddleware)
 		r.Use(middleware.NoCache)
+		r.Use(middleware.Timeout(config.APIRequestTimeout))
+		r.Post("/api/pair/start", pairingMgr.HandlePairStart())
+		r.Post("/api/pair/finish", pairingMgr.HandlePairFinish())
+	})
 
-		// WebSocket handler that checks auth before upgrade
-		wsHandler := func(w http.ResponseWriter, r *http.Request, version string) {
+	// WebSocket handler. When encryption is disabled, API key auth is
+	// enforced at upgrade time. When encryption is enabled, auth is
+	// deferred to the first encrypted frame — successful first-frame
+	// decryption proves the client holds a valid pairing key. Localhost is
+	// always exempt.
+	wsHandler := func(w http.ResponseWriter, r *http.Request, version string) {
+		if !cfg.EncryptionEnabled() {
 			if !apimiddleware.WebSocketAuthHandler(authConfig, r) {
 				http.Error(w, "Unauthorized: API key required", http.StatusUnauthorized)
 				return
 			}
-			err := session.HandleRequest(w, r)
-			if err != nil {
-				log.Error().Err(err).Msgf("handling websocket request: %s", version)
-			}
 		}
+		err := session.HandleRequest(w, r)
+		if err != nil {
+			log.Warn().Err(err).Str("version", version).Msg("websocket upgrade failed")
+		}
+	}
+
+	// WebSocket routes — open to remote clients regardless of AllowedIPs.
+	// Encryption (when enabled) or API key auth (when disabled) is the
+	// security mechanism here.
+	r.Group(func(r chi.Router) {
+		r.Use(apiRateLimitMiddleware)
+		r.Use(middleware.NoCache)
+		r.Use(middleware.Timeout(config.APIRequestTimeout))
 
 		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
 			wsHandler(w, r, "latest")
 		})
-		r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player))
-
 		r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
 			wsHandler(w, r, "v0")
 		})
-		r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player))
-
 		r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
 			wsHandler(w, r, "v0.1")
 		})
-		r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player))
+	})
 
-		// REST action endpoints
-		r.Get("/l/*", methods.HandleRunRest(cfg, st, inTokenQueue)) // DEPRECATED
-		r.Get("/r/*", methods.HandleRunRest(cfg, st, inTokenQueue))
-		r.Get("/run/*", methods.HandleRunRest(cfg, st, inTokenQueue))
+	// Non-WebSocket API routes (HTTP POST + REST GET) — restricted to
+	// localhost by default; remote access requires explicit AllowedIPs.
+	// These transports do not support encryption; the IP allowlist plus
+	// API key auth are the security boundary.
+	r.Group(func(r chi.Router) {
+		r.Use(nonWSIPFilter)
+		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		r.Use(apiRateLimitMiddleware)
+		r.Use(middleware.NoCache)
+		r.Use(middleware.Timeout(config.APIRequestTimeout))
+
+		postHandler := handlePostRequest(
+			methodMap, platform, cfg, st,
+			inTokenQueue, confirmQueue,
+			db, limitsManager, player,
+			indexPauser,
+		)
+		r.Post("/api", postHandler)
+		r.Post("/api/v0", postHandler)
+		r.Post("/api/v0.1", postHandler)
+	})
+
+	// REST run endpoints — allow_run bypasses IP filter when configured,
+	// since the handler validates content against the allow_run patterns.
+	runIPFilter := apimiddleware.RunIPFilterMiddleware(cfg.AllowedIPs, cfg.HasAllowRun)
+	r.Group(func(r chi.Router) {
+		r.Use(runIPFilter)
+		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		r.Use(apiRateLimitMiddleware)
+		r.Use(middleware.NoCache)
+		r.Use(middleware.Timeout(config.APIRequestTimeout))
+
+		runHandler := methods.HandleRunRest(cfg, st, inTokenQueue)
+		r.Get("/l/*", runHandler) // DEPRECATED
+		r.Get("/r/*", runHandler)
+		r.Get("/run/*", runHandler)
+	})
+
+	// SSE routes (long-lived connections, no request timeout). Same
+	// localhost-by-default policy as the non-WS API routes.
+	r.Group(func(r chi.Router) {
+		r.Use(nonWSIPFilter)
+		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		r.Use(apiRateLimitMiddleware)
+		r.Use(middleware.NoCache)
+
+		sseHandler := handleSSE(notifBroker, st)
+		r.Get("/api/events", sseHandler)
+		r.Get("/api/v0/events", sseHandler)
+		r.Get("/api/v0.1/events", sseHandler)
 	})
 
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,
-		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager, player),
+		handleWSMessage(
+			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
+			db, limitsManager, player, indexPauser, encGateway,
+			lastSeenTracker,
+		),
 	))
 
 	// Static app assets
@@ -1036,9 +1589,11 @@ func Start(
 		http.Redirect(w, r, "/app/", http.StatusFound)
 	})
 
-	// the health endpoint is behind every standard middleware we added
-	// the response is a simple string on purpose, we want just to be able
-	// to see if the server is up and answering
+	// /health is intentionally remote-accessible with no IP filter, no
+	// API key auth, and no rate limiting (only the global Recoverer/CORS
+	// middleware applies) so load balancers, uptime checks, and the
+	// app's discovery flow can reach it without credentials. The plain
+	// "OK" response intentionally leaks no information beyond liveness.
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
@@ -1069,6 +1624,14 @@ func Start(
 			log.Error().Err(err).Msg("failed to bind to port")
 			serverDone <- err
 			return
+		}
+
+		// If port 0 was requested, update config with the actual bound port
+		// so callers can discover which port the server is listening on.
+		if port == 0 {
+			if addr, ok := listener.Addr().(*net.TCPAddr); ok {
+				_ = cfg.SetAPIPort(addr.Port)
+			}
 		}
 
 		// Signal that server is ready to accept connections

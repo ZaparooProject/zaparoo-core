@@ -92,6 +92,12 @@ detect_linux_distro() {
         return
     fi
 
+    # Check for RePlayOS (before os-release check — it reports as plain Debian)
+    if [ -d /opt/replay ]; then
+        echo "replayos"
+        return
+    fi
+
     # Detect Linux distribution from /etc/os-release
     if [ ! -f /etc/os-release ]; then
         echo "generic"
@@ -228,6 +234,11 @@ install_linux_generic() {
         mister)
             # MiSTer FPGA has its own installation method
             install_mister
+            return 0
+            ;;
+        replayos)
+            # RePlayOS has its own installation method
+            install_replayos
             return 0
             ;;
         batocera)
@@ -483,6 +494,55 @@ install_mister_startup_dryrun() {
 }
 
 # ============================================================================
+# RePlayOS Installation
+# ============================================================================
+
+install_replayos() {
+    info "Installing Zaparoo Core for RePlayOS..."
+
+    local archive_name download_url
+    archive_name="zaparoo-replayos_arm64-${VERSION}.tar.gz"
+    download_url="${BASE_URL}/download/v${VERSION}/${archive_name}"
+
+    info "Downloading Zaparoo Core ${VERSION}..."
+    info "URL: ${download_url}"
+
+    if [ "$DRY_RUN" = true ]; then
+        info "[DRY-RUN] Would download: ${archive_name}"
+        info "[DRY-RUN] Would create: /media/sd/zaparoo/"
+        info "[DRY-RUN] Would install binary to: /media/sd/zaparoo/zaparoo"
+        info "[DRY-RUN] Would run: /media/sd/zaparoo/zaparoo -install"
+        success "[DRY-RUN] RePlayOS installation simulated"
+        return 0
+    fi
+
+    # Download and extract
+    download_and_extract "replayos"
+
+    # Install binary
+    info "Installing to /media/sd/zaparoo/..."
+    if ! mkdir -p /media/sd/zaparoo; then
+        abort "Failed to create /media/sd/zaparoo"
+    fi
+
+    if ! cp "${ZAPAROO_BIN}" /media/sd/zaparoo/zaparoo; then
+        abort "Failed to copy binary to /media/sd/zaparoo/zaparoo"
+    fi
+
+    chmod +x /media/sd/zaparoo/zaparoo
+    success "Installed to /media/sd/zaparoo/zaparoo"
+
+    # Install and start the systemd service
+    info "Installing systemd service..."
+    if ! /media/sd/zaparoo/zaparoo -install; then
+        abort "Failed to install systemd service"
+    fi
+
+    success "RePlayOS installation complete!"
+    info "Run via SSH: /media/sd/zaparoo/zaparoo"
+}
+
+# ============================================================================
 # Batocera Installation
 # ============================================================================
 
@@ -726,5 +786,3 @@ EOF
 
 # Run main function
 main "$@"
-
-# Powered by Octocode MCP ⭐🐙 link:(https://github.com/bgauryy/octocode-mcp)

@@ -27,8 +27,51 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
+
+// buildPopulateTagsSQL returns the INSERT INTO SystemTagsCache SQL with whereClause
+// injected into both UNION ALL branches. Pass "" for the full-database variant;
+// pass a literal WHERE clause (e.g. "WHERE s.DBID IN (?, ?)") for selective rebuilds.
+func buildPopulateTagsSQL(whereClause string) string {
+	where := ""
+	if whereClause != "" {
+		where = "\n\t\t\t\t" + whereClause
+	}
+	return fmt.Sprintf(`
+		INSERT INTO SystemTagsCache (SystemDBID, TagDBID, TagType, Tag, Count)
+		SELECT SystemDBID, TagDBID, TagType, Tag, SUM(Cnt) AS Count
+		FROM (
+			SELECT
+				s.DBID AS SystemDBID,
+				t.DBID AS TagDBID,
+				tt.Type AS TagType,
+				t.Tag AS Tag,
+				COUNT(*) AS Cnt
+			FROM Systems s
+			JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
+			JOIN Media m ON mtl.DBID = m.MediaTitleDBID
+			JOIN MediaTags mt ON m.DBID = mt.MediaDBID
+			JOIN Tags t ON mt.TagDBID = t.DBID
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID%s
+			GROUP BY s.DBID, t.DBID, tt.Type, t.Tag
+			UNION ALL
+			SELECT
+				s.DBID AS SystemDBID,
+				t.DBID AS TagDBID,
+				tt.Type AS TagType,
+				t.Tag AS Tag,
+				COUNT(*) AS Cnt
+			FROM Systems s
+			JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
+			JOIN MediaTitleTags mtt ON mtl.DBID = mtt.MediaTitleDBID
+			JOIN Tags t ON mtt.TagDBID = t.DBID
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID%s
+			GROUP BY s.DBID, t.DBID, tt.Type, t.Tag
+		)
+		GROUP BY SystemDBID, TagDBID, TagType, Tag`, where, where)
+}
 
 // sqlPopulateSystemTagsCache - Populates the SystemTagsCache table for fast tag lookups
 // This should be called after media indexing to ensure cache is up to date
@@ -48,23 +91,7 @@ func sqlPopulateSystemTagsCache(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("failed to clear system tags cache: %w", execErr)
 	}
 
-	// Populate cache with all system-tag combinations
-	populateSQL := `
-		INSERT INTO SystemTagsCache (SystemDBID, TagDBID, TagType, Tag)
-		SELECT DISTINCT
-			s.DBID as SystemDBID,
-			t.DBID as TagDBID,
-			tt.Type as TagType,
-			t.Tag as Tag
-		FROM Systems s
-		JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
-		JOIN Media m ON mtl.DBID = m.MediaTitleDBID
-		JOIN MediaTags mt ON m.DBID = mt.MediaDBID
-		JOIN Tags t ON mt.TagDBID = t.DBID
-		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		ORDER BY s.DBID, tt.Type, t.Tag`
-
-	populateStmt, err := db.PrepareContext(ctx, populateSQL)
+	populateStmt, err := db.PrepareContext(ctx, buildPopulateTagsSQL(""))
 	if err != nil {
 		return fmt.Errorf("failed to prepare populate cache statement: %w", err)
 	}
@@ -141,25 +168,9 @@ func sqlPopulateSystemTagsCacheForSystems(
 		return fmt.Errorf("failed to clear cache for specific systems: %w", execErr)
 	}
 
-	// Step 3: Populate cache for these systems only
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	populateSQL := fmt.Sprintf(`
-		INSERT INTO SystemTagsCache (SystemDBID, TagDBID, TagType, Tag)
-		SELECT DISTINCT
-			s.DBID as SystemDBID,
-			t.DBID as TagDBID,
-			tt.Type as TagType,
-			t.Tag as Tag
-		FROM Systems s
-		JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
-		JOIN Media m ON mtl.DBID = m.MediaTitleDBID
-		JOIN MediaTags mt ON m.DBID = mt.MediaDBID
-		JOIN Tags t ON mt.TagDBID = t.DBID
-		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		WHERE s.DBID IN (%s)
-		ORDER BY s.DBID, tt.Type, t.Tag`, placeholders)
-
-	populateStmt, err := db.PrepareContext(ctx, populateSQL)
+	whereClause := fmt.Sprintf("WHERE s.DBID IN (%s)", placeholders)
+	populateStmt, err := db.PrepareContext(ctx, buildPopulateTagsSQL(whereClause))
 	if err != nil {
 		return fmt.Errorf("failed to prepare selective cache populate statement: %w", err)
 	}
@@ -169,7 +180,12 @@ func sqlPopulateSystemTagsCacheForSystems(
 		}
 	}()
 
-	if _, execErr := populateStmt.ExecContext(ctx, args...); execErr != nil {
+	// Double args for the UNION's second WHERE clause
+	populateArgs := make([]any, 0, len(args)*2)
+	populateArgs = append(populateArgs, args...)
+	populateArgs = append(populateArgs, args...)
+
+	if _, execErr := populateStmt.ExecContext(ctx, populateArgs...); execErr != nil {
 		return fmt.Errorf("failed to populate cache for specific systems: %w", execErr)
 	}
 
@@ -218,11 +234,12 @@ func sqlGetSystemTagsCached(
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	sqlQuery := `
-		SELECT DISTINCT TagType, Tag
+		SELECT TagType, Tag, SUM(Count) AS Count
 		FROM SystemTagsCache
 		WHERE SystemDBID IN (` +
 		prepareVariadic("?", ",", len(args)) +
 		`)
+		GROUP BY TagType, Tag
 		ORDER BY TagType, Tag`
 
 	stmt, err := db.PrepareContext(ctx, sqlQuery)
@@ -245,15 +262,17 @@ func sqlGetSystemTagsCached(
 		}
 	}()
 
-	tags := make([]database.TagInfo, 0, 100)
+	result := make([]database.TagInfo, 0, 100)
 	for rows.Next() {
 		var tagType, tag string
-		if scanErr := rows.Scan(&tagType, &tag); scanErr != nil {
+		var count int64
+		if scanErr := rows.Scan(&tagType, &tag, &count); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan cached tag result: %w", scanErr)
 		}
-		tags = append(tags, database.TagInfo{
-			Type: tagType,
-			Tag:  tag,
+		result = append(result, database.TagInfo{
+			Type:  tagType,
+			Tag:   tags.UnpadTagValue(tag),
+			Count: count,
 		})
 	}
 
@@ -261,7 +280,7 @@ func sqlGetSystemTagsCached(
 		return nil, err
 	}
 
-	return tags, nil
+	return result, nil
 }
 
 // sqlInvalidateSystemTagsCache - Invalidates cache for specific systems

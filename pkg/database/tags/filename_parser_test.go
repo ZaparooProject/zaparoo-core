@@ -20,8 +20,11 @@
 package tags
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -512,6 +515,21 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 			wantTags: []string{"media:disc", "disc:1", "disctotal:3", "region:us", "lang:en"},
 		},
 		{
+			name:     "No-Intro disc 1 without total",
+			filename: "Final Fantasy VII (USA) (Disc 1).chd",
+			wantTags: []string{"region:us", "lang:en", "media:disc", "disc:1"},
+		},
+		{
+			name:     "No-Intro disc 2 without total",
+			filename: "Final Fantasy VII (USA) (Disc 2).chd",
+			wantTags: []string{"region:us", "lang:en", "media:disc", "disc:2"},
+		},
+		{
+			name:     "No-Intro disc 4 without total",
+			filename: "Final Fantasy IX (USA) (Disc 4) (Rev 1).chd",
+			wantTags: []string{"rev:1", "region:us", "lang:en", "media:disc", "disc:4"},
+		},
+		{
 			name:     "revision tag",
 			filename: "Sonic (Rev 1)(USA).md",
 			wantTags: []string{"rev:1", "region:us"}, // usa region, language not auto-added
@@ -591,6 +609,136 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 			filename: "Game (Japan)[ja][!].rom",
 			wantTags: []string{"region:jp", "lang:ja", "dump:verified"},
 		},
+		// TOSEC positional publisher detection
+		{
+			name:     "TOSEC year-then-publisher produces publisher",
+			filename: "Legend of TOSEC, The (1986)(DevStudio)[!].rom",
+			wantTags: []string{"year:1986", "publisher:devstudio", "dump:verified"},
+		},
+		{
+			name:     "TOSEC year-then-publisher with region flags produces publisher",
+			filename: "Game, The (1993)(Konami)[!][US].rom",
+			wantTags: []string{"year:1993", "publisher:konami", "dump:verified"},
+		},
+		{
+			// Pre-1970 TOSEC files (early computing era) — year within 1950-2099 range
+			name:     "TOSEC pre-1970 year produces publisher",
+			filename: "ELIZA (1966)(MIT)[!].rom",
+			wantTags: []string{"year:1966", "publisher:mit", "dump:verified"},
+		},
+		// Generic credit detection
+		{
+			name:     "Unknown company name in parens promotes to credit",
+			filename: "Super Metroid (Nintendo R&D1) (USA).smc",
+			wantTags: []string{"credit:nintendo-r-and-d1", "region:us"},
+		},
+		{
+			name:     "Short company abbreviation promotes to credit",
+			filename: "Game (CRL) (USA).rom",
+			wantTags: []string{"credit:crl", "region:us"},
+		},
+		// Edition phrase detection
+		{
+			name:     "Special Edition produces edition:special",
+			filename: "Game (Special Edition) (USA).rom",
+			wantTags: []string{"edition:special", "region:us"},
+		},
+		{
+			name:     "Collector's Edition produces edition:collectors",
+			filename: "Game (Collector's Edition).rom",
+			wantTags: []string{"edition:collectors"},
+		},
+		{
+			name:     "VGA Remake produces edition:remake (unrecognized qualifier falls back to generic)",
+			filename: "Game (VGA Remake).rom",
+			wantTags: []string{"edition:remake"},
+		},
+		{
+			name:     "Director's Cut produces edition:directors-cut",
+			filename: "Game (The Director's Cut).rom",
+			wantTags: []string{"edition:directors-cut"},
+		},
+		// Additional edition cases
+		{
+			name:     "Dreambor Edition falls back to edition:edition",
+			filename: "Game (Dreambor Edition).rom",
+			wantTags: []string{"edition:edition"},
+		},
+		{
+			name:     "X-Mas Edition falls back to edition:edition",
+			filename: "Game (X-Mas Edition).rom",
+			wantTags: []string{"edition:edition"},
+		},
+		{
+			name:     "GOTY Edition produces edition:goty",
+			filename: "Game (GOTY Edition).rom",
+			wantTags: []string{"edition:goty"},
+		},
+		{
+			name:     "GOTY standalone produces edition:goty",
+			filename: "Game (GOTY).rom",
+			wantTags: []string{"edition:goty"},
+		},
+		{
+			name:     "Game of the Year standalone produces edition:goty",
+			filename: "Game (Game of the Year).rom",
+			wantTags: []string{"edition:goty"},
+		},
+		{
+			name:     "Deluxe Edition produces edition:deluxe",
+			filename: "Game (Deluxe Edition).rom",
+			wantTags: []string{"edition:deluxe"},
+		},
+		{
+			name:     "Director's Cut without leading The produces edition:directors-cut",
+			filename: "Game (Director's Cut).rom",
+			wantTags: []string{"edition:directors-cut"},
+		},
+		// Release detection
+		{
+			name:     "PS1 Classics produces release:classics",
+			filename: "Game (PS1 Classics).rom",
+			wantTags: []string{"release:classics"},
+		},
+		{
+			name:     "Homebrew mapped to release:homebrew",
+			filename: "Game (Homebrew).rom",
+			wantTags: []string{"release:homebrew"},
+		},
+		{
+			name:     "Public Domain mapped to release:public-domain",
+			filename: "Game (Public Domain).rom",
+			wantTags: []string{"release:public-domain"},
+		},
+		// Language full-name aliases
+		{
+			name:     "German maps to lang:de",
+			filename: "Game (German).rom",
+			wantTags: []string{"lang:de"},
+		},
+		{
+			name:     "French maps to lang:fr",
+			filename: "Game (French).rom",
+			wantTags: []string{"lang:fr"},
+		},
+		// Version phrase skip
+		{
+			name:     "Version phrase produces no tag",
+			filename: "Game (Version 2) (USA).rom",
+			wantTags: []string{"region:us"},
+		},
+		// Catalog number skip
+		{
+			name:     "Catalog number produces no tag",
+			filename: "Game (KD02) (USA).rom",
+			wantTags: []string{"region:us"},
+		},
+		// No-Intro (no dev/pub in filename)
+		{
+			name:     "No-Intro format produces no publisher or credit",
+			filename: "Super Mario World (USA).sfc",
+			wantTags: []string{"region:us", "lang:en"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -608,6 +756,16 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 
 			// Check we don't have unexpected extras (allow some flexibility)
 			assert.LessOrEqual(t, len(gotStrings), len(tt.wantTags)+2, "Too many tags returned")
+
+			// Negative assertions: no-Intro filenames should not produce credit:/publisher: tags
+			if tt.name == "No-Intro format produces no publisher or credit" {
+				for _, tagStr := range gotStrings {
+					assert.False(t, strings.HasPrefix(tagStr, "credit:"),
+						"No-Intro format should not produce credit: tag, got %q", tagStr)
+					assert.False(t, strings.HasPrefix(tagStr, "publisher:"),
+						"No-Intro format should not produce publisher: tag, got %q", tagStr)
+				}
+			}
 		})
 	}
 }
@@ -1002,12 +1160,62 @@ func TestParseBracketedTranslation_FullPipeline(t *testing.T) {
 	}
 }
 
+func TestParseFilenameToCanonicalTagsForMedia_GameSkipsTVButKeepsRomTranslationPatterns(t *testing.T) {
+	t.Parallel()
+
+	filename := "Game Title S01E02 (USA) [T+Eng].smc"
+
+	defaultTags := ParseFilenameToCanonicalTags(filename)
+	defaultStrings := make([]string, len(defaultTags))
+	for i, tag := range defaultTags {
+		defaultStrings[i] = tag.String()
+	}
+	assert.Contains(t, defaultStrings, "season:1")
+	assert.Contains(t, defaultStrings, "episode:2")
+	assert.Contains(t, defaultStrings, "unlicensed:translation")
+	assert.Contains(t, defaultStrings, "lang:en")
+
+	gameTags := ParseFilenameToCanonicalTagsForMedia(filename, slugs.MediaTypeGame)
+	gameStrings := make([]string, len(gameTags))
+	for i, tag := range gameTags {
+		gameStrings[i] = tag.String()
+	}
+	assert.NotContains(t, gameStrings, "season:1")
+	assert.NotContains(t, gameStrings, "episode:2")
+	assert.Contains(t, gameStrings, "unlicensed:translation")
+	assert.Contains(t, gameStrings, "lang:en")
+	assert.Contains(t, gameStrings, "region:us")
+}
+
+func TestParseFilenameToCanonicalTagsForMedia_NonGameSkipsRomTranslationLanguageTags(t *testing.T) {
+	t.Parallel()
+
+	filename := "Game Title [T+Eng].smc"
+
+	defaultTags := ParseFilenameToCanonicalTags(filename)
+	defaultStrings := make([]string, len(defaultTags))
+	for i, tag := range defaultTags {
+		defaultStrings[i] = tag.String()
+	}
+	assert.Contains(t, defaultStrings, "unlicensed:translation")
+	assert.Contains(t, defaultStrings, "lang:en")
+
+	nonGameTags := ParseFilenameToCanonicalTagsForMedia(filename, slugs.MediaTypeMovie)
+	nonGameStrings := make([]string, len(nonGameTags))
+	for i, tag := range nonGameTags {
+		nonGameStrings[i] = tag.String()
+	}
+	assert.NotContains(t, nonGameStrings, "unlicensed:translation")
+	assert.NotContains(t, nonGameStrings, "lang:en")
+}
+
 func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
 	tests := []struct {
-		name         string
-		filename     string
-		wantTags     []CanonicalTag
-		wantContains []string
+		name            string
+		filename        string
+		wantTags        []CanonicalTag
+		wantContains    []string
+		wantNotContains []string
 	}{
 		{
 			name:         "region in braces",
@@ -1034,6 +1242,340 @@ func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
 			filename:     "Zelda {v1.0}.rom",
 			wantContains: []string{"rev:1-0"},
 		},
+		{
+			name:         "TOSEC Final dev-status",
+			filename:     "The Fall (Final)(2018)(Disk 2 of 2).adf",
+			wantContains: []string{"unfinished:final", "year:2018", "media:disc", "disc:2", "disctotal:2"},
+		},
+		{
+			name:         "TOSEC Final without year",
+			filename:     "Game (Final)(1997).rom",
+			wantContains: []string{"unfinished:final"},
+		},
+		{
+			name:     "Disk N of M with Side A - publisher from TOSEC slot",
+			filename: "Alter Ego (1985)(Activision)(Disk 1 of 3 Side A)[cr].do",
+			wantContains: []string{
+				"publisher:activision", "media:disc", "disc:1", "disctotal:3", "media:side-a", "dump:cracked",
+			},
+		},
+		{
+			name:         "Disk N of M with Side A no publisher",
+			filename:     "Game (Disk 1 of 3 Side A).do",
+			wantContains: []string{"disc:1", "disctotal:3", "media:side-a"},
+		},
+		{
+			name:         "Disc N of M with Side B",
+			filename:     "Game (Disc 2 of 2 Side B)(USA).iso",
+			wantContains: []string{"media:disc", "disc:2", "disctotal:2", "media:side-b", "region:us"},
+		},
+		// Bug: (Side A) standalone was split into "side"→media:side + "a"→dump:alternate.
+		{
+			name:     "TOSEC standalone Side A - publisher from TOSEC slot",
+			filename: "Barbarian (1987)(Palace Software)(Side A)[u].tap",
+			wantContains: []string{
+				"publisher:palace-software", "year:1987", "media:side-a", "dump:underdump",
+			},
+		},
+		{
+			name:         "TOSEC standalone Side B - publisher from TOSEC slot",
+			filename:     "Batman - The Movie (1989)(Ocean)(Side B)[u].tap",
+			wantContains: []string{"publisher:ocean", "year:1989", "media:side-b", "dump:underdump"},
+		},
+		// Bug: (Russia) was falling through to credit:russia.
+		{
+			name:         "Russia full-name region",
+			filename:     "Adventures of the Gummi Bears (Russia) (Unl).md",
+			wantContains: []string{"region:ru", "lang:ru", "unlicensed:unlicensed"},
+		},
+		// Bug: GoodTools (U)/(E)/(J)/(A) paren codes mapped to dump tags instead of regions.
+		{
+			name:         "GoodTools (U) USA",
+			filename:     "Legend of Zelda, The - Ocarina of Time (U) (V1.2) [!].z64",
+			wantContains: []string{"region:us", "lang:en", "rev:1-2", "dump:verified"},
+		},
+		{
+			name:         "GoodTools (J) Japan",
+			filename:     "Super Mario 64 (J) [!].z64",
+			wantContains: []string{"region:jp", "lang:ja", "dump:verified"},
+		},
+		{
+			name:         "GoodTools (E) Europe",
+			filename:     "Some Game (E) [!].z64",
+			wantContains: []string{"region:eu", "dump:verified"},
+		},
+		{
+			name:         "GoodTools (A) Australia",
+			filename:     "Some Game (A) [!].z64",
+			wantContains: []string{"region:au", "lang:en", "dump:verified"},
+		},
+		// Regression: square-bracket [u] and [a] must still produce dump tags.
+		{
+			name:         "TOSEC [u] underdump in brackets",
+			filename:     "Some File [u].z64",
+			wantContains: []string{"dump:underdump"},
+		},
+		{
+			name:         "TOSEC [a] alternate in brackets",
+			filename:     "Some File [a].z64",
+			wantContains: []string{"dump:alternate"},
+		},
+		// Bug: (GameCube) was tagged as credit:gamecube instead of distribution:gamecube.
+		{
+			name:     "GameCube distribution provenance",
+			filename: "Legend of Zelda, The - Ocarina of Time - Master Quest (USA) (GameCube).z64",
+			wantContains: []string{
+				"region:us", "lang:en", "distribution:gamecube",
+			},
+		},
+		// Bug: (Disk Writer) was falling through to credit:disk-writer.
+		{
+			name:         "FDS Disk Writer kiosk distribution",
+			filename:     "Super Mario Bros. (Japan) (Disk Writer).fds",
+			wantContains: []string{"region:jp", "distribution:disk-writer"},
+		},
+		// Bug: VC phrase variants were falling through to credit:*.
+		{
+			name:         "Wii Virtual Console phrase",
+			filename:     "Zelda no Densetsu - The Hyrule Fantasy (Japan) (Wii Virtual Console).fds",
+			wantContains: []string{"region:jp", "distribution:virtual-console"},
+		},
+		{
+			name:         "Wii and Wii U Virtual Console phrase",
+			filename:     "Metroid (World) (Wii and Wii U Virtual Console).fds",
+			wantContains: []string{"distribution:virtual-console"},
+		},
+		{
+			name:         "3DS Virtual Console phrase",
+			filename:     "Some Game (World) (3DS Virtual Console).nes",
+			wantContains: []string{"distribution:virtual-console"},
+		},
+		// Bug: (Switch Online) was falling through to credit:switch-online.
+		{
+			name:         "Switch Online distribution",
+			filename:     "Sonic the Hedgehog (Japan) (Switch Online).md",
+			wantContains: []string{"region:jp", "distribution:switch-online"},
+		},
+		// Bug: (Promo) was falling through to credit:promo.
+		{
+			name:         "Promo release",
+			filename:     "Some Game (USA) (Promo).nes",
+			wantContains: []string{"region:us", "release:promo"},
+		},
+		// Bug: full-name region countries (taiwan/argentina/mexico/scandinavia) were credit:*.
+		{
+			name:            "Taiwan full-name region",
+			filename:        "Zaxxon (Taiwan) (En) (Unl).col",
+			wantContains:    []string{"region:tw", "lang:zh"},
+			wantNotContains: []string{"credit:taiwan"},
+		},
+		{
+			name:            "Argentina full-name region",
+			filename:        "Futbol Argentino (Argentina) (Pirate).md",
+			wantContains:    []string{"region:ar", "lang:es"},
+			wantNotContains: []string{"credit:argentina"},
+		},
+		{
+			name:            "Mexico full-name region",
+			filename:        "Chavez II (Mexico).md",
+			wantContains:    []string{"region:mx", "lang:es"},
+			wantNotContains: []string{"credit:mexico"},
+		},
+		{
+			name:            "Scandinavia region",
+			filename:        "Devil World (Scandinavia) (En).nes",
+			wantContains:    []string{"region:scandinavia"},
+			wantNotContains: []string{"credit:scandinavia"},
+		},
+		// Bug: (prototype) full word was credit:prototype instead of unfinished:proto.
+		{
+			name:            "Prototype full word",
+			filename:        "Clockwork Aquario (prototype).mra",
+			wantContains:    []string{"unfinished:proto"},
+			wantNotContains: []string{"credit:prototype"},
+		},
+		// Bug: (Not For Resale) was credit:not-for-resale.
+		{
+			name:            "Not For Resale release",
+			filename:        "Yasuda Fire & Marine - Safety Rally (Japan) (Not for Resale).nes",
+			wantContains:    []string{"region:jp", "release:not-for-resale"},
+			wantNotContains: []string{"credit:not-for-resale"},
+		},
+		// Bug: (Kiosk) was credit:kiosk.
+		{
+			name:            "Kiosk release",
+			filename:        "DK - King of Swing (USA) (Demo) (Kiosk).gba",
+			wantContains:    []string{"region:us", "unfinished:demo", "release:kiosk"},
+			wantNotContains: []string{"credit:kiosk"},
+		},
+		// Bug: (Steam) was credit:steam.
+		{
+			name:            "Steam distribution",
+			filename:        "Sonic & Knuckles + Sonic The Hedgehog 3 (Japan) (En) (Steam).md",
+			wantContains:    []string{"region:jp", "distribution:steam"},
+			wantNotContains: []string{"credit:steam"},
+		},
+		// Bug: (GBC) on non-GB files was credit:gbc instead of compatibility:gameboy:color.
+		{
+			name:            "GBC compatibility",
+			filename:        "Some Music (GBC).nsf",
+			wantContains:    []string{"compatibility:gameboy:color"},
+			wantNotContains: []string{"credit:gbc"},
+		},
+		// Bug: (DSI) on GBA files was credit:dsi instead of compatibility:dsi.
+		{
+			name:            "DSI compatibility",
+			filename:        "Polly Pocket! - Super Splash Island (Europe) (En,Fr,De,Es,It) (DSI).gba",
+			wantContains:    []string{"region:eu", "compatibility:dsi"},
+			wantNotContains: []string{"credit:dsi"},
+		},
+		// Bug: distribution service/mini console tags were credit:*.
+		{
+			name:            "Sega Channel distribution",
+			filename:        "Game no Kanzume Otokuyou (Japan) (Sega Channel).md",
+			wantContains:    []string{"region:jp", "distribution:sega-channel"},
+			wantNotContains: []string{"credit:sega-channel"},
+		},
+		{
+			name:            "Genesis Mini distribution",
+			filename:        "Mega Man - The Wily Wars (USA) (Genesis Mini).md",
+			wantContains:    []string{"region:us", "distribution:genesis-mini"},
+			wantNotContains: []string{"credit:genesis-mini"},
+		},
+		{
+			name:            "Mega Drive Mini distribution (regional alias)",
+			filename:        "Castlevania - The New Generation (Europe) (Mega Drive Mini).md",
+			wantContains:    []string{"region:eu", "distribution:genesis-mini"},
+			wantNotContains: []string{"credit:mega-drive-mini"},
+		},
+		{
+			name:            "Sega Ages distribution",
+			filename:        "Thunder Force IV (World) (Sega Ages).md",
+			wantContains:    []string{"distribution:sega-ages"},
+			wantNotContains: []string{"credit:sega-ages"},
+		},
+		{
+			name:            "Sega Smash Pack distribution",
+			filename:        "Golden Axe (World) (Rev B) (Sega Smash Pack).md",
+			wantContains:    []string{"distribution:sega-smash-pack"},
+			wantNotContains: []string{"credit:sega-smash-pack"},
+		},
+		{
+			name:            "Wii distribution",
+			filename:        "Super Mario All-Stars (Europe) (Wii).sfc",
+			wantContains:    []string{"region:eu", "distribution:wii"},
+			wantNotContains: []string{"credit:wii"},
+		},
+		{
+			name:            "Club Nintendo distribution",
+			filename:        "Some Game (USA) (Beta) (Club Nintendo).sfc",
+			wantContains:    []string{"distribution:club-nintendo"},
+			wantNotContains: []string{"credit:club-nintendo"},
+		},
+		// Bug: (United Kingdom) was credit:united-kingdom instead of region:gb.
+		{
+			name:            "United Kingdom region",
+			filename:        "TG Rally 2 (United Kingdom).gbc",
+			wantContains:    []string{"region:gb", "lang:en"},
+			wantNotContains: []string{"credit:united-kingdom"},
+		},
+		// Bug: Game Boy compatibility markers on GBC/GB files were credit:*.
+		{
+			name:            "GB Compatible on GBC file",
+			filename:        "Metal Walker (USA) (GB Compatible).gbc",
+			wantContains:    []string{"region:us", "compatibility:gameboy"},
+			wantNotContains: []string{"credit:gb-compatible"},
+		},
+		{
+			name:            "SGB Enhanced on GB file",
+			filename:        "Battle Arena Toshinden (USA) (SGB Enhanced).gb",
+			wantContains:    []string{"region:us", "compatibility:gameboy:sgb"},
+			wantNotContains: []string{"credit:sgb-enhanced"},
+		},
+		{
+			name:            "CGB+SGB Enhanced on GB file",
+			filename:        "Pokemon - Yellow Version - Special Pikachu Edition (USA, Europe) (CGB+SGB Enhanced).gb",
+			wantContains:    []string{"compatibility:gameboy:color", "compatibility:gameboy:sgb"},
+			wantNotContains: []string{"credit:cgb-plus-sgb-enhanced"},
+		},
+		{
+			name:            "SG Enhanced on PC Engine file",
+			filename:        "Darius Plus (Japan) (SG Enhanced).pce",
+			wantContains:    []string{"region:jp", "compatibility:pcengine:supergrafx"},
+			wantNotContains: []string{"credit:sg-enhanced"},
+		},
+		{
+			name:            "GBA e-Reader distribution",
+			filename:        "Ice Climber (U) (GBA e-Reader).nes",
+			wantContains:    []string{"distribution:gba-e-reader"},
+			wantNotContains: []string{"credit:gba-e-reader"},
+		},
+		{
+			name:            "Playable Demo is unfinished demo",
+			filename:        "Kill Barney In Tokyo (1997 Daniel Bienvenu) (Playable Demo).col",
+			wantContains:    []string{"unfinished:demo"},
+			wantNotContains: []string{"credit:playable-demo"},
+		},
+		{
+			name:            "Taikenban Sample ROM is unfinished demo",
+			filename:        "Seiken Densetsu 3 (Japan) (Taikenban Sample ROM).sfc",
+			wantContains:    []string{"region:jp", "unfinished:demo"},
+			wantNotContains: []string{"credit:taikenban-sample-rom"},
+		},
+		{
+			name:            "Bootleg is unlicensed:bootleg",
+			filename:        "Tutankham (Bootleg).mra",
+			wantContains:    []string{"unlicensed:bootleg"},
+			wantNotContains: []string{"credit:bootleg"},
+		},
+		{
+			name:            "Enhanced is edition:remaster",
+			filename:        "King's Quest I (Enhanced) (OCS).adf",
+			wantContains:    []string{"edition:remaster"},
+			wantNotContains: []string{"credit:enhanced"},
+		},
+		{
+			name:            "Engineering Sample is unfinished:proto",
+			filename:        "Jump Shot (Engineering Sample).mra",
+			wantContains:    []string{"unfinished:proto"},
+			wantNotContains: []string{"credit:engineering-sample"},
+		},
+		{
+			name:            "Location Test is unfinished:demo",
+			filename:        "Battle Garegga (Location Test).mra",
+			wantContains:    []string{"unfinished:demo"},
+			wantNotContains: []string{"credit:location-test"},
+		},
+		{
+			name:            "Reprint is release:reissue",
+			filename:        "Armored Core (USA) (Reprint).chd",
+			wantContains:    []string{"release:reissue"},
+			wantNotContains: []string{"credit:reprint"},
+		},
+		{
+			name:            "Nintendo Switch is distribution:switch-online",
+			filename:        "Steins;Gate (USA) (Nintendo Switch).nes",
+			wantContains:    []string{"distribution:switch-online"},
+			wantNotContains: []string{"credit:nintendo-switch"},
+		},
+		{
+			name:            "Named compilation collection is distribution:compilation",
+			filename:        "Mega Man (World) (Mega Man Legacy Collection).nes",
+			wantContains:    []string{"distribution:compilation"},
+			wantNotContains: []string{"credit:mega-man-legacy-collection"},
+		},
+		{
+			name:            "The Disney Afternoon Collection strips leading article for lookup",
+			filename:        "Chip 'n Dale - Rescue Rangers (World) (The Disney Afternoon Collection).nes",
+			wantContains:    []string{"distribution:compilation"},
+			wantNotContains: []string{"credit:disney-afternoon-collection"},
+		},
+		{
+			name:            "Castlevania Anniversary Collection is distribution:compilation",
+			filename:        "Castlevania - The Adventure (USA) (Castlevania Anniversary Collection).gb",
+			wantContains:    []string{"distribution:compilation"},
+			wantNotContains: []string{"credit:castlevania-anniversary-collection"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1047,6 +1589,9 @@ func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
 
 			for _, expected := range tt.wantContains {
 				assert.Contains(t, tagStrings, expected, "Expected tag %s not found in %v", expected, tagStrings)
+			}
+			for _, unexpected := range tt.wantNotContains {
+				assert.NotContains(t, tagStrings, unexpected, "Unexpected tag %s found in %v", unexpected, tagStrings)
 			}
 		})
 	}
@@ -1745,5 +2290,63 @@ func TestParseFilenameToCanonicalTags_MixedTagTypes(t *testing.T) {
 				assert.Contains(t, gotStrings, want, "Expected tag %s not found in %v", want, gotStrings)
 			}
 		})
+	}
+}
+
+func BenchmarkParseFilenameToCanonicalTags(b *testing.B) {
+	b.Run("Simple", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			ParseFilenameToCanonicalTags("Game (USA) [!].zip")
+		}
+	})
+
+	b.Run("Complex", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			ParseFilenameToCanonicalTags("Game Title (USA, Europe) (En,Fr,De) (Rev A) (v1.2) [!] [h1].zip")
+		}
+	})
+
+	b.Run("Scene_release", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			ParseFilenameToCanonicalTags("The.Dark.Knight.2008.1080p.BluRay.x264-GROUP.mkv")
+		}
+	})
+}
+
+func benchGenerateNumberedFilenames(n int) []string {
+	filenames := make([]string, n)
+	for i := range n {
+		num := i + 1
+		if num < 10 {
+			filenames[i] = "0" + strconv.Itoa(num) + " - Game.zip"
+		} else {
+			filenames[i] = strconv.Itoa(num) + " - Game.zip"
+		}
+	}
+	return filenames
+}
+
+func BenchmarkDetectNumberingPattern(b *testing.B) {
+	for _, scale := range []int{100, 1000, 10000} {
+		filenames := benchGenerateNumberedFilenames(scale)
+		b.Run(strconv.Itoa(scale), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				for _, fn := range filenames {
+					ParseFilenameToCanonicalTags(fn)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkFilenameParser_ExtractSpecialPatterns(b *testing.B) {
+	filename := "Game Title (Disc 1 of 3) (Rev A) (v1.2) (1998) S02E05.zip"
+	b.ReportAllocs()
+	for b.Loop() {
+		extractSpecialPatterns(filename)
 	}
 }

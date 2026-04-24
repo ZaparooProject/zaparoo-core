@@ -24,7 +24,6 @@ import (
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,108 +31,108 @@ func TestShouldRunBeforeMediaStartHook(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		exprOpts   *zapscript.ExprEnvOptions
-		hookScript string
-		cmdName    string
-		expected   bool
+		name          string
+		hookScript    string
+		cmdName       string
+		inHookContext bool
+		expected      bool
 	}{
 		{
-			name:       "runs when all conditions met",
-			exprOpts:   nil,
-			hookScript: "**echo:before launch",
-			cmdName:    gozapscript.ZapScriptCmdLaunch,
-			expected:   true,
+			name:          "runs when all conditions met",
+			inHookContext: false,
+			hookScript:    "**echo:before launch",
+			cmdName:       gozapscript.ZapScriptCmdLaunch,
+			expected:      true,
 		},
 		{
-			name:       "runs with non-hook exprOpts",
-			exprOpts:   &zapscript.ExprEnvOptions{InHookContext: false},
-			hookScript: "**echo:test",
-			cmdName:    gozapscript.ZapScriptCmdLaunch,
-			expected:   true,
+			name:          "runs when not in hook context",
+			inHookContext: false,
+			hookScript:    "**echo:test",
+			cmdName:       gozapscript.ZapScriptCmdLaunch,
+			expected:      true,
 		},
 		{
-			name:       "blocked when in hook context",
-			exprOpts:   &zapscript.ExprEnvOptions{InHookContext: true},
-			hookScript: "**echo:test",
-			cmdName:    gozapscript.ZapScriptCmdLaunch,
-			expected:   false,
+			name:          "blocked when in hook context",
+			inHookContext: true,
+			hookScript:    "**echo:test",
+			cmdName:       gozapscript.ZapScriptCmdLaunch,
+			expected:      false,
 		},
 		{
-			name:       "blocked when hook script empty",
-			exprOpts:   nil,
-			hookScript: "",
-			cmdName:    gozapscript.ZapScriptCmdLaunch,
-			expected:   false,
+			name:          "blocked when hook script empty",
+			inHookContext: false,
+			hookScript:    "",
+			cmdName:       gozapscript.ZapScriptCmdLaunch,
+			expected:      false,
 		},
 		{
-			name:       "blocked when command is not media-launching",
-			exprOpts:   nil,
-			hookScript: "**echo:test",
-			cmdName:    gozapscript.ZapScriptCmdExecute,
-			expected:   false,
+			name:          "blocked when command is not media-launching",
+			inHookContext: false,
+			hookScript:    "**echo:test",
+			cmdName:       gozapscript.ZapScriptCmdExecute,
+			expected:      false,
 		},
 		{
-			name:       "blocked when command is echo",
-			exprOpts:   nil,
-			hookScript: "**echo:test",
-			cmdName:    gozapscript.ZapScriptCmdEcho,
-			expected:   false,
+			name:          "blocked when command is echo",
+			inHookContext: false,
+			hookScript:    "**echo:test",
+			cmdName:       gozapscript.ZapScriptCmdEcho,
+			expected:      false,
 		},
 		{
-			name:       "blocked when command is delay",
-			exprOpts:   nil,
-			hookScript: "**echo:test",
-			cmdName:    gozapscript.ZapScriptCmdDelay,
-			expected:   false,
+			name:          "blocked when command is delay",
+			inHookContext: false,
+			hookScript:    "**echo:test",
+			cmdName:       gozapscript.ZapScriptCmdDelay,
+			expected:      false,
 		},
 		{
-			name:       "runs for launch.system command",
-			exprOpts:   nil,
-			hookScript: "**echo:test",
-			cmdName:    gozapscript.ZapScriptCmdLaunchSystem,
-			expected:   true,
+			name:          "runs for launch.system command",
+			inHookContext: false,
+			hookScript:    "**echo:test",
+			cmdName:       gozapscript.ZapScriptCmdLaunchSystem,
+			expected:      true,
 		},
 		{
-			name:       "runs for launch.random command",
-			exprOpts:   nil,
-			hookScript: "**echo:test",
-			cmdName:    gozapscript.ZapScriptCmdLaunchRandom,
-			expected:   true,
+			name:          "runs for launch.random command",
+			inHookContext: false,
+			hookScript:    "**echo:test",
+			cmdName:       gozapscript.ZapScriptCmdLaunchRandom,
+			expected:      true,
 		},
 		{
-			name:       "runs for launch.search command",
-			exprOpts:   nil,
-			hookScript: "**echo:test",
-			cmdName:    gozapscript.ZapScriptCmdLaunchSearch,
-			expected:   true,
+			name:          "runs for launch.search command",
+			inHookContext: false,
+			hookScript:    "**echo:test",
+			cmdName:       gozapscript.ZapScriptCmdLaunchSearch,
+			expected:      true,
 		},
 		{
-			name:       "blocked for playlist.play command (queues state change)",
-			exprOpts:   nil,
-			hookScript: "**echo:test",
-			cmdName:    gozapscript.ZapScriptCmdPlaylistPlay,
-			expected:   false,
+			name:          "blocked for playlist.play command (queues state change)",
+			inHookContext: false,
+			hookScript:    "**echo:test",
+			cmdName:       gozapscript.ZapScriptCmdPlaylistPlay,
+			expected:      false,
 		},
 		{
-			name:       "blocked for playlist.stop command",
-			exprOpts:   nil,
-			hookScript: "**echo:test",
-			cmdName:    gozapscript.ZapScriptCmdPlaylistStop,
-			expected:   false,
+			name:          "blocked for playlist.stop command",
+			inHookContext: false,
+			hookScript:    "**echo:test",
+			cmdName:       gozapscript.ZapScriptCmdPlaylistStop,
+			expected:      false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := shouldRunBeforeMediaStartHook(tt.exprOpts, tt.hookScript, tt.cmdName)
+			result := shouldRunBeforeMediaStartHook(tt.inHookContext, tt.hookScript, tt.cmdName)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
-func TestBuildLaunchingExprOpts(t *testing.T) {
+func TestBuildLaunchingContext(t *testing.T) {
 	t.Parallel()
 
 	t.Run("empty command", func(t *testing.T) {
@@ -144,14 +143,12 @@ func TestBuildLaunchingExprOpts(t *testing.T) {
 			Args: []string{},
 		}
 
-		opts := buildLaunchingExprOpts(cmd)
+		launching := buildLaunchingContext(cmd)
 
-		assert.NotNil(t, opts)
-		assert.NotNil(t, opts.Launching)
-		assert.True(t, opts.InHookContext, "InHookContext should always be true")
-		assert.Empty(t, opts.Launching.Path)
-		assert.Empty(t, opts.Launching.SystemID)
-		assert.Empty(t, opts.Launching.LauncherID)
+		assert.NotNil(t, launching)
+		assert.Empty(t, launching.Path)
+		assert.Empty(t, launching.SystemID)
+		assert.Empty(t, launching.LauncherID)
 	})
 
 	t.Run("with path only", func(t *testing.T) {
@@ -162,12 +159,11 @@ func TestBuildLaunchingExprOpts(t *testing.T) {
 			Args: []string{"/games/snes/mario.sfc"},
 		}
 
-		opts := buildLaunchingExprOpts(cmd)
+		launching := buildLaunchingContext(cmd)
 
-		assert.Equal(t, "/games/snes/mario.sfc", opts.Launching.Path)
-		assert.Empty(t, opts.Launching.SystemID)
-		assert.Empty(t, opts.Launching.LauncherID)
-		assert.True(t, opts.InHookContext)
+		assert.Equal(t, "/games/snes/mario.sfc", launching.Path)
+		assert.Empty(t, launching.SystemID)
+		assert.Empty(t, launching.LauncherID)
 	})
 
 	t.Run("with system ID", func(t *testing.T) {
@@ -179,11 +175,11 @@ func TestBuildLaunchingExprOpts(t *testing.T) {
 			AdvArgs: gozapscript.NewAdvArgs(map[string]string{"system": "genesis"}),
 		}
 
-		opts := buildLaunchingExprOpts(cmd)
+		launching := buildLaunchingContext(cmd)
 
-		assert.Equal(t, "/games/sonic.bin", opts.Launching.Path)
-		assert.Equal(t, "genesis", opts.Launching.SystemID)
-		assert.Empty(t, opts.Launching.LauncherID)
+		assert.Equal(t, "/games/sonic.bin", launching.Path)
+		assert.Equal(t, "genesis", launching.SystemID)
+		assert.Empty(t, launching.LauncherID)
 	})
 
 	t.Run("with launcher ID", func(t *testing.T) {
@@ -195,11 +191,11 @@ func TestBuildLaunchingExprOpts(t *testing.T) {
 			AdvArgs: gozapscript.NewAdvArgs(map[string]string{"launcher": "retroarch"}),
 		}
 
-		opts := buildLaunchingExprOpts(cmd)
+		launching := buildLaunchingContext(cmd)
 
-		assert.Equal(t, "/games/game.rom", opts.Launching.Path)
-		assert.Empty(t, opts.Launching.SystemID)
-		assert.Equal(t, "retroarch", opts.Launching.LauncherID)
+		assert.Equal(t, "/games/game.rom", launching.Path)
+		assert.Empty(t, launching.SystemID)
+		assert.Equal(t, "retroarch", launching.LauncherID)
 	})
 
 	t.Run("with all fields", func(t *testing.T) {
@@ -211,13 +207,11 @@ func TestBuildLaunchingExprOpts(t *testing.T) {
 			AdvArgs: gozapscript.NewAdvArgs(map[string]string{"system": "snes", "launcher": "mister"}),
 		}
 
-		opts := buildLaunchingExprOpts(cmd)
+		launching := buildLaunchingContext(cmd)
 
-		assert.Equal(t, "/roms/snes/zelda.sfc", opts.Launching.Path)
-		assert.Equal(t, "snes", opts.Launching.SystemID)
-		assert.Equal(t, "mister", opts.Launching.LauncherID)
-		assert.True(t, opts.InHookContext)
-		assert.Nil(t, opts.Scanned, "Scanned should not be set")
+		assert.Equal(t, "/roms/snes/zelda.sfc", launching.Path)
+		assert.Equal(t, "snes", launching.SystemID)
+		assert.Equal(t, "mister", launching.LauncherID)
 	})
 
 	t.Run("multiple args uses first as path", func(t *testing.T) {
@@ -228,9 +222,9 @@ func TestBuildLaunchingExprOpts(t *testing.T) {
 			Args: []string{"/path/to/game.rom", "extra", "args"},
 		}
 
-		opts := buildLaunchingExprOpts(cmd)
+		launching := buildLaunchingContext(cmd)
 
-		assert.Equal(t, "/path/to/game.rom", opts.Launching.Path)
+		assert.Equal(t, "/path/to/game.rom", launching.Path)
 	})
 }
 
@@ -307,6 +301,86 @@ func TestScriptHasMediaLaunchingCommand(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			result := scriptHasMediaLaunchingCommand(tt.script)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestScriptHasMediaDisruptingCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		script   *gozapscript.Script
+		name     string
+		expected bool
+	}{
+		{
+			name:     "nil script",
+			script:   nil,
+			expected: false,
+		},
+		{
+			name: "launch command is disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{Name: gozapscript.ZapScriptCmdLaunch}},
+			},
+			expected: true,
+		},
+		{
+			name: "stop command is disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{Name: gozapscript.ZapScriptCmdStop}},
+			},
+			expected: true,
+		},
+		{
+			name: "playlist.next is disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{Name: gozapscript.ZapScriptCmdPlaylistNext}},
+			},
+			expected: true,
+		},
+		{
+			name: "coin insert is not disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{Name: gozapscript.ZapScriptCmdInputCoinP1}},
+			},
+			expected: false,
+		},
+		{
+			name: "keyboard input is not disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{Name: gozapscript.ZapScriptCmdInputKeyboard}},
+			},
+			expected: false,
+		},
+		{
+			name: "mixed script with disrupting command",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{
+					{Name: gozapscript.ZapScriptCmdDelay},
+					{Name: gozapscript.ZapScriptCmdLaunchSystem},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "utility-only script",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{
+					{Name: gozapscript.ZapScriptCmdInputCoinP1},
+					{Name: gozapscript.ZapScriptCmdDelay},
+					{Name: gozapscript.ZapScriptCmdEcho},
+				},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := scriptHasMediaDisruptingCommand(tt.script)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

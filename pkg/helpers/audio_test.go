@@ -35,7 +35,7 @@ func TestPlayConfiguredSound_Disabled(t *testing.T) {
 
 	PlayConfiguredSound(player, "", false, []byte("default"), "test")
 
-	player.AssertNotCalled(t, "PlayWAVBytes", mock.Anything)
+	player.AssertNotCalled(t, "PlayBytes", mock.Anything)
 	player.AssertNotCalled(t, "PlayFile", mock.Anything)
 }
 
@@ -44,7 +44,7 @@ func TestPlayConfiguredSound_DefaultSound(t *testing.T) {
 
 	player := mocks.NewMockPlayer()
 	defaultData := []byte("default-wav-data")
-	player.On("PlayWAVBytes", defaultData).Return(nil).Once()
+	player.On("PlayBytes", defaultData).Return(nil).Once()
 
 	PlayConfiguredSound(player, "", true, defaultData, "success")
 
@@ -60,7 +60,7 @@ func TestPlayConfiguredSound_CustomSound(t *testing.T) {
 	PlayConfiguredSound(player, "/path/to/custom.wav", true, []byte("default"), "success")
 
 	player.AssertExpectations(t)
-	player.AssertNotCalled(t, "PlayWAVBytes", mock.Anything)
+	player.AssertNotCalled(t, "PlayBytes", mock.Anything)
 }
 
 func TestPlayConfiguredSound_CustomSoundFailsFallsBackToDefault(t *testing.T) {
@@ -69,7 +69,7 @@ func TestPlayConfiguredSound_CustomSoundFailsFallsBackToDefault(t *testing.T) {
 	player := mocks.NewMockPlayer()
 	defaultData := []byte("default-wav-data")
 	player.On("PlayFile", "/bad/path.wav").Return(errors.New("file not found")).Once()
-	player.On("PlayWAVBytes", defaultData).Return(nil).Once()
+	player.On("PlayBytes", defaultData).Return(nil).Once()
 
 	PlayConfiguredSound(player, "/bad/path.wav", true, defaultData, "success")
 
@@ -82,7 +82,7 @@ func TestPlayConfiguredSound_BothCustomAndFallbackFail(t *testing.T) {
 	player := mocks.NewMockPlayer()
 	defaultData := []byte("default-wav-data")
 	player.On("PlayFile", "/bad/path.wav").Return(errors.New("file not found")).Once()
-	player.On("PlayWAVBytes", defaultData).Return(errors.New("decode error")).Once()
+	player.On("PlayBytes", defaultData).Return(errors.New("decode error")).Once()
 
 	// Should not panic — errors are logged
 	PlayConfiguredSound(player, "/bad/path.wav", true, defaultData, "success")
@@ -95,7 +95,7 @@ func TestPlayConfiguredSound_DefaultSoundError(t *testing.T) {
 
 	player := mocks.NewMockPlayer()
 	defaultData := []byte("bad-data")
-	player.On("PlayWAVBytes", defaultData).Return(errors.New("decode error")).Once()
+	player.On("PlayBytes", defaultData).Return(errors.New("decode error")).Once()
 
 	// Should not panic — error is logged
 	PlayConfiguredSound(player, "", true, defaultData, "fail")

@@ -96,8 +96,16 @@ func (m *SleepWakeMonitor) Check() bool {
 	// but monotonic clock pauses during system sleep. We need wall clock
 	// to detect the time jump that occurs during sleep.
 	now := time.Now().Round(0)
+	wasReliable := IsClockReliable(m.lastCheck)
 	elapsed := now.Sub(m.lastCheck)
 	m.lastCheck = now
+
+	// If the previous check was from an unreliable clock (e.g. epoch on MiSTer
+	// before NTP sync), the elapsed time is meaningless — an NTP clock jump
+	// from 1970 to 2025 is not a wake-from-sleep event.
+	if !wasReliable {
+		return false
+	}
 
 	// If wall clock jumped more than threshold, we likely woke from sleep
 	return elapsed > m.threshold

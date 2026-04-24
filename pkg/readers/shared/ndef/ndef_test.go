@@ -23,10 +23,57 @@ package ndef
 
 import (
 	"bytes"
+	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/hsanjuan/go-ndef"
 )
+
+func BenchmarkParseToText_TextRecord(b *testing.B) {
+	b.ReportAllocs()
+	data, err := BuildTextMessage("super mario bros 3")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = ParseToText(data)
+	}
+}
+
+func BenchmarkParseToText_URIRecord(b *testing.B) {
+	b.ReportAllocs()
+	msg := ndef.NewURIMessage("https://example.com/games/super-mario-bros")
+	payload, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	header, err := calculateNDEFHeader(payload)
+	if err != nil {
+		b.Fatal(err)
+	}
+	data := make([]byte, 0, len(header)+len(payload)+1)
+	data = append(data, header...)
+	data = append(data, payload...)
+	data = append(data, 0xFE)
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = ParseToText(data)
+	}
+}
+
+func BenchmarkValidateNDEFMessage(b *testing.B) {
+	b.ReportAllocs()
+	data, err := BuildTextMessage("test validation")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		_ = ValidateNDEFMessage(data)
+	}
+}
 
 func TestParseToText_TextRecord(t *testing.T) {
 	t.Parallel()
@@ -403,7 +450,7 @@ func TestValidateNDEFMessage(t *testing.T) {
 	}
 }
 
-func TestValidateNDEFRecordHeader(t *testing.T) {
+func TestParseNDEFRecord(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -421,6 +468,12 @@ func TestValidateNDEFRecordHeader(t *testing.T) {
 			name: "Valid short URI record",
 			// flags=0xD1 (MB=1,ME=1,CF=0,SR=1,IL=0,TNF=1), typeLen=1, payloadLen=4, type='U', payload
 			payload: []byte{0xD1, 0x01, 0x04, 'U', 0x03, 'a', '.', 'b'},
+			wantErr: "",
+		},
+		{
+			name: "Valid long text record",
+			// flags=0xC1 (MB=1,ME=1,CF=0,SR=0,IL=0,TNF=1), typeLen=1, payloadLen=1(4-byte), type='T', payload
+			payload: []byte{0xC1, 0x01, 0x00, 0x00, 0x00, 0x01, 'T', 'x'},
 			wantErr: "",
 		},
 		{
@@ -453,12 +506,6 @@ func TestValidateNDEFRecordHeader(t *testing.T) {
 			wantErr: "chunked records not supported",
 		},
 		{
-			name: "Long record (SR not set)",
-			// flags=0xC1 (MB=1,ME=1,CF=0,SR=0,IL=0,TNF=1)
-			payload: []byte{0xC1, 0x01, 0x00, 0x00, 0x00, 0x01, 'T', 'x'},
-			wantErr: "long records not supported",
-		},
-		{
 			name: "Record with ID (IL set)",
 			// flags=0xD9 (MB=1,ME=1,CF=0,SR=1,IL=1,TNF=1)
 			payload: []byte{0xD9, 0x01, 0x01, 0x02, 'T', 'x', 'i', 'd'},
@@ -475,6 +522,24 @@ func TestValidateNDEFRecordHeader(t *testing.T) {
 			// flags=0xD1, typeLen=1, payloadLen=10, but only 1 payload byte
 			payload: []byte{0xD1, 0x01, 0x0A, 'T', 'x'},
 			wantErr: "truncated payload",
+		},
+		{
+			name: "Truncated long record header",
+			// flags=0xC1 (long), but only 4 bytes total (need at least 6 for payload length)
+			payload: []byte{0xC1, 0x01, 0x00, 0x00},
+			wantErr: "truncated record header",
+		},
+		{
+			name: "Truncated long record payload",
+			// flags=0xC1, typeLen=1, payloadLen=10(4-byte), type='T', but only 1 payload byte
+			payload: []byte{0xC1, 0x01, 0x00, 0x00, 0x00, 0x0A, 'T', 'x'},
+			wantErr: "truncated payload",
+		},
+		{
+			name: "Long record payload length exceeds maximum",
+			// flags=0xC1, typeLen=1, payloadLen=0x00010000 (exceeds 0xFFFF cap)
+			payload: []byte{0xC1, 0x01, 0x00, 0x01, 0x00, 0x00, 'T'},
+			wantErr: "payload length 65536 exceeds maximum",
 		},
 		{
 			name: "Empty record with non-zero type length",
@@ -505,18 +570,108 @@ func TestValidateNDEFRecordHeader(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateNDEFRecordHeader(tt.payload)
+			_, err := parseNDEFRecord(tt.payload)
 
 			if tt.wantErr == "" {
 				if err != nil {
-					t.Errorf("validateNDEFRecordHeader() unexpected error: %v", err)
+					t.Errorf("parseNDEFRecord() unexpected error: %v", err)
 				}
 			} else {
 				if err == nil {
-					t.Errorf("validateNDEFRecordHeader() expected error containing %q but got none", tt.wantErr)
+					t.Errorf("parseNDEFRecord() expected error containing %q but got none", tt.wantErr)
 				} else if !bytes.Contains([]byte(err.Error()), []byte(tt.wantErr)) {
-					t.Errorf("validateNDEFRecordHeader() error = %v, want error containing %q", err, tt.wantErr)
+					t.Errorf("parseNDEFRecord() error = %v, want error containing %q", err, tt.wantErr)
 				}
+			}
+		})
+	}
+}
+
+func TestParseToText_LongRecord(t *testing.T) {
+	t.Parallel()
+
+	// Exact bytes from issue #552 bug report — a long MGL ZapScript on an NTAG
+	issueBytes, err := hex.DecodeString(
+		"03ff0162c1010000015b5402656e2a2a6d69737465722e6d676c3a3c6d6973746572" +
+			"67616d656465736372697074696f6e3e203c7262663e5f436f6d70757465722f5469" +
+			"393934613c2f7262663e203c7365746e616d652073616d655f6469723d2231223e42" +
+			"6c6173746f3c2f7365746e616d653e203c66696c652064656c61793d223022207479" +
+			"70653d22662220696e6465783d22332220706174683d2254492d39395f34412e7a69" +
+			"702f54492d39395f34412f5353535f47616d65732f47524f4d20466f726d61742f42" +
+			"6c6173746f20283139383029284d696c746f6e20427261646c6579292850484d2033" +
+			"303332295f5b475d2e62696e222f3e203c72657365742064656c61793d2231222f3e" +
+			"203c2f6d697374657267616d656465736372697074696f6e3e207c7c2a2a64656c61" +
+			"793a333030307c7c2a2a696e7075742e6b6579626f6172643a7b656e7465727d7c7c" +
+			"2a2a696e7075742e6b6579626f6172643a32fe000000000000000000")
+	if err != nil {
+		t.Fatalf("bad test hex data: %v", err)
+	}
+
+	expectedText := "**mister.mgl:<mistergamedescription> <rbf>_Computer/Ti994a</rbf>" +
+		" <setname same_dir=\"1\">Blasto</setname>" +
+		" <file delay=\"0\" type=\"f\" index=\"3\"" +
+		" path=\"TI-99_4A.zip/TI-99_4A/SSS_Games/GROM Format/" +
+		"Blasto (1980)(Milton Bradley)(PHM 3032)_[G].bin\"/>" +
+		" <reset delay=\"1\"/> </mistergamedescription>" +
+		" ||**delay:3000||**input.keyboard:{enter}||**input.keyboard:2"
+
+	result, err := ParseToText(issueBytes)
+	if err != nil {
+		t.Fatalf("ParseToText() failed on issue #552 bytes: %v", err)
+	}
+
+	if result != expectedText {
+		t.Errorf("ParseToText() = %q, expected %q", result, expectedText)
+	}
+}
+
+func TestBuildTextMessage_RoundTrip_LongRecord(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+	}{
+		{
+			name: "300 byte text (long NDEF record)",
+			text: strings.Repeat("A", 300),
+		},
+		{
+			name: "MGL-style ZapScript",
+			text: "**mister.mgl:<mistergamedescription> <rbf>_Computer/Ti994a</rbf>" +
+				" <setname same_dir=\"1\">Blasto</setname>" +
+				" <file delay=\"0\" type=\"f\" index=\"3\"" +
+				" path=\"TI-99_4A.zip/TI-99_4A/SSS_Games/GROM Format/" +
+				"Blasto (1980)(Milton Bradley)(PHM 3032)_[G].bin\"/>" +
+				" <reset delay=\"1\"/> </mistergamedescription>" +
+				" ||**delay:3000||**input.keyboard:{enter}||**input.keyboard:2",
+		},
+		{
+			name: "Boundary - 252 chars (short record limit)",
+			text: strings.Repeat("B", 252),
+		},
+		{
+			name: "Boundary - 253 chars (just over short record limit)",
+			text: strings.Repeat("C", 253),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			built, err := BuildTextMessage(tt.text)
+			if err != nil {
+				t.Fatalf("BuildTextMessage() failed: %v", err)
+			}
+
+			parsed, err := ParseToText(built)
+			if err != nil {
+				t.Fatalf("ParseToText() failed: %v", err)
+			}
+
+			if parsed != tt.text {
+				t.Errorf("Round trip failed: got %d chars, want %d chars", len(parsed), len(tt.text))
 			}
 		})
 	}

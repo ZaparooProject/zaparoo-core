@@ -1,0 +1,706 @@
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/config
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkConfig_Read-16    	227176653	         5.338 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfig_Read-16    	224147365	         5.325 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfig_Read-16    	227894455	         5.269 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfig_Read-16    	225218870	         5.290 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfig_Read-16    	224065615	         5.325 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfig_Read-16    	227593274	         5.262 ns/op	       0 B/op	       0 allocs/op
+BenchmarkConfig_Load-16    	   95050	     12285 ns/op	    4939 B/op	      22 allocs/op
+BenchmarkConfig_Load-16    	   98173	     12268 ns/op	    4939 B/op	      22 allocs/op
+BenchmarkConfig_Load-16    	   96198	     12426 ns/op	    4939 B/op	      22 allocs/op
+BenchmarkConfig_Load-16    	   95577	     12258 ns/op	    4939 B/op	      22 allocs/op
+BenchmarkConfig_Load-16    	   97832	     12360 ns/op	    4939 B/op	      22 allocs/op
+BenchmarkConfig_Load-16    	   97525	     12278 ns/op	    4939 B/op	      22 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkFindFuzzyMatches_500k-16               	     226	   5207101 ns/op	 4937882 B/op	   41406 allocs/op
+BenchmarkFindFuzzyMatches_500k-16               	     226	   5173699 ns/op	 4937784 B/op	   41406 allocs/op
+BenchmarkFindFuzzyMatches_500k-16               	     226	   5259453 ns/op	 4937784 B/op	   41406 allocs/op
+BenchmarkFindFuzzyMatches_500k-16               	     226	   5286286 ns/op	 4937784 B/op	   41406 allocs/op
+BenchmarkFindFuzzyMatches_500k-16               	     229	   5169008 ns/op	 4937784 B/op	   41406 allocs/op
+BenchmarkFindFuzzyMatches_500k-16               	     229	   5212586 ns/op	 4937784 B/op	   41406 allocs/op
+BenchmarkFindFuzzyMatches_1M-16                 	     118	   9942974 ns/op	 8696648 B/op	   72852 allocs/op
+BenchmarkFindFuzzyMatches_1M-16                 	     120	   9930649 ns/op	 8696648 B/op	   72852 allocs/op
+BenchmarkFindFuzzyMatches_1M-16                 	     115	  10263297 ns/op	 8696648 B/op	   72852 allocs/op
+BenchmarkFindFuzzyMatches_1M-16                 	     120	   9924721 ns/op	 8696648 B/op	   72852 allocs/op
+BenchmarkFindFuzzyMatches_1M-16                 	     120	   9844638 ns/op	 8696648 B/op	   72852 allocs/op
+BenchmarkFindFuzzyMatches_1M-16                 	     118	   9932746 ns/op	 8696648 B/op	   72852 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=3-16         	      90	  12511605 ns/op	11139016 B/op	   89832 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=3-16         	      96	  12799729 ns/op	11139016 B/op	   89832 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=3-16         	      93	  12556427 ns/op	11139018 B/op	   89832 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=3-16         	      98	  12720050 ns/op	11139016 B/op	   89832 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=3-16         	      92	  12672499 ns/op	11139016 B/op	   89832 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=3-16         	      93	  12227166 ns/op	11139016 B/op	   89832 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=10-16        	      15	  73968361 ns/op	62712280 B/op	  456750 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=10-16        	      14	  74648334 ns/op	62712280 B/op	  456750 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=10-16        	      15	  75479407 ns/op	62712287 B/op	  456750 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=10-16        	      14	  74208568 ns/op	62712280 B/op	  456750 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=10-16        	      14	  74295758 ns/op	62712280 B/op	  456750 allocs/op
+BenchmarkFindFuzzyMatches_LengthPreFilter/maxDistance=10-16        	      15	  74975378 ns/op	62712280 B/op	  456750 allocs/op
+BenchmarkFindFuzzyMatches_NoMatch_500k-16                          	      24	  49354105 ns/op	40628560 B/op	  228742 allocs/op
+BenchmarkFindFuzzyMatches_NoMatch_500k-16                          	      21	  48507571 ns/op	40628560 B/op	  228742 allocs/op
+BenchmarkFindFuzzyMatches_NoMatch_500k-16                          	      24	  48492456 ns/op	40628560 B/op	  228742 allocs/op
+BenchmarkFindFuzzyMatches_NoMatch_500k-16                          	      21	  48515953 ns/op	40628560 B/op	  228742 allocs/op
+BenchmarkFindFuzzyMatches_NoMatch_500k-16                          	      21	  48706715 ns/op	40628560 B/op	  228742 allocs/op
+BenchmarkFindFuzzyMatches_NoMatch_500k-16                          	      21	  48911160 ns/op	40628560 B/op	  228742 allocs/op
+BenchmarkJaroWinkler_Similarity-16                                 	 5699025	       210.4 ns/op	     224 B/op	       2 allocs/op
+BenchmarkJaroWinkler_Similarity-16                                 	 5550780	       211.4 ns/op	     224 B/op	       2 allocs/op
+BenchmarkJaroWinkler_Similarity-16                                 	 5635578	       211.3 ns/op	     224 B/op	       2 allocs/op
+BenchmarkJaroWinkler_Similarity-16                                 	 5737680	       213.7 ns/op	     224 B/op	       2 allocs/op
+BenchmarkJaroWinkler_Similarity-16                                 	 5510902	       213.6 ns/op	     224 B/op	       2 allocs/op
+BenchmarkJaroWinkler_Similarity-16                                 	 5670583	       209.9 ns/op	     224 B/op	       2 allocs/op
+BenchmarkGenerateTokenSignature_500k-16                            	       1	2174742222 ns/op	519345144 B/op	19422629 allocs/op
+BenchmarkGenerateTokenSignature_500k-16                            	       1	2205740504 ns/op	519642216 B/op	19422682 allocs/op
+BenchmarkGenerateTokenSignature_500k-16                            	       1	2182250368 ns/op	519456904 B/op	19422654 allocs/op
+BenchmarkGenerateTokenSignature_500k-16                            	       1	2186016541 ns/op	519493944 B/op	19422651 allocs/op
+BenchmarkGenerateTokenSignature_500k-16                            	       1	2173758812 ns/op	519456712 B/op	19422652 allocs/op
+BenchmarkGenerateTokenSignature_500k-16                            	       1	2182314959 ns/op	519382456 B/op	19422638 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkBatchInserter_Insert/10k-16                     	      21	  48550064 ns/op	22715717 B/op	  141758 allocs/op
+BenchmarkBatchInserter_Insert/10k-16                     	      22	  47196771 ns/op	22570815 B/op	  141756 allocs/op
+BenchmarkBatchInserter_Insert/10k-16                     	      22	  48572730 ns/op	21426538 B/op	  141756 allocs/op
+BenchmarkBatchInserter_Insert/10k-16                     	      22	  47946739 ns/op	21232635 B/op	  141755 allocs/op
+BenchmarkBatchInserter_Insert/10k-16                     	      24	  46729401 ns/op	20739296 B/op	  141752 allocs/op
+BenchmarkBatchInserter_Insert/10k-16                     	      22	  47526817 ns/op	21042283 B/op	  141753 allocs/op
+BenchmarkBatchInserter_Insert/50k-16                     	       4	 252508888 ns/op	82399508 B/op	  702712 allocs/op
+BenchmarkBatchInserter_Insert/50k-16                     	       5	 244848930 ns/op	81786545 B/op	  702711 allocs/op
+BenchmarkBatchInserter_Insert/50k-16                     	       5	 245654944 ns/op	82612204 B/op	  702711 allocs/op
+BenchmarkBatchInserter_Insert/50k-16                     	       5	 247044053 ns/op	82604729 B/op	  702716 allocs/op
+BenchmarkBatchInserter_Insert/50k-16                     	       5	 246132897 ns/op	82625276 B/op	  702716 allocs/op
+BenchmarkBatchInserter_Insert/50k-16                     	       4	 251034666 ns/op	82421572 B/op	  702714 allocs/op
+BenchmarkBatchInserter_FlushCost/100rows-16              	     444	   2639558 ns/op	  299270 B/op	    2950 allocs/op
+BenchmarkBatchInserter_FlushCost/100rows-16              	     456	   2629506 ns/op	  323670 B/op	    2950 allocs/op
+BenchmarkBatchInserter_FlushCost/100rows-16              	     447	   2672728 ns/op	  345822 B/op	    2950 allocs/op
+BenchmarkBatchInserter_FlushCost/100rows-16              	     441	   2632272 ns/op	  328849 B/op	    2950 allocs/op
+BenchmarkBatchInserter_FlushCost/100rows-16              	     445	   2657806 ns/op	  299061 B/op	    2950 allocs/op
+BenchmarkBatchInserter_FlushCost/100rows-16              	     447	   2637980 ns/op	  317272 B/op	    2950 allocs/op
+BenchmarkBatchInserter_FlushCost/1000rows-16             	     294	   4077205 ns/op	 1307696 B/op	    8940 allocs/op
+BenchmarkBatchInserter_FlushCost/1000rows-16             	     291	   4078473 ns/op	 1269606 B/op	    8940 allocs/op
+BenchmarkBatchInserter_FlushCost/1000rows-16             	     291	   4143221 ns/op	 1313362 B/op	    8940 allocs/op
+BenchmarkBatchInserter_FlushCost/1000rows-16             	     297	   4058848 ns/op	 1332433 B/op	    8940 allocs/op
+BenchmarkBatchInserter_FlushCost/1000rows-16             	     288	   4076364 ns/op	 1333387 B/op	    8940 allocs/op
+BenchmarkBatchInserter_FlushCost/1000rows-16             	     292	   4146429 ns/op	 1385177 B/op	    8940 allocs/op
+BenchmarkBatchInserter_FlushCost/5000rows-16             	      88	  13461628 ns/op	 6179622 B/op	   36995 allocs/op
+BenchmarkBatchInserter_FlushCost/5000rows-16             	      90	  13337239 ns/op	 6141997 B/op	   36994 allocs/op
+BenchmarkBatchInserter_FlushCost/5000rows-16             	      75	  13531487 ns/op	 6188114 B/op	   36995 allocs/op
+BenchmarkBatchInserter_FlushCost/5000rows-16             	      80	  13837232 ns/op	 6453857 B/op	   36995 allocs/op
+BenchmarkBatchInserter_FlushCost/5000rows-16             	      96	  13186553 ns/op	 5950680 B/op	   36993 allocs/op
+BenchmarkBatchInserter_FlushCost/5000rows-16             	      90	  13445214 ns/op	 6517695 B/op	   36996 allocs/op
+BenchmarkTransactionCycle_CommitCost/1k-16               	     283	   4211566 ns/op	 2018386 B/op	    8941 allocs/op
+BenchmarkTransactionCycle_CommitCost/1k-16               	     277	   4263134 ns/op	 2049813 B/op	    8941 allocs/op
+BenchmarkTransactionCycle_CommitCost/1k-16               	     286	   4115549 ns/op	 1787805 B/op	    8941 allocs/op
+BenchmarkTransactionCycle_CommitCost/1k-16               	     288	   4172177 ns/op	 1991540 B/op	    8941 allocs/op
+BenchmarkTransactionCycle_CommitCost/1k-16               	     284	   4198795 ns/op	 1971856 B/op	    8941 allocs/op
+BenchmarkTransactionCycle_CommitCost/1k-16               	     282	   4229584 ns/op	 2020863 B/op	    8941 allocs/op
+BenchmarkTransactionCycle_CommitCost/5k-16               	      85	  13492452 ns/op	 6089609 B/op	   36994 allocs/op
+BenchmarkTransactionCycle_CommitCost/5k-16               	      88	  13468476 ns/op	 6468671 B/op	   36995 allocs/op
+BenchmarkTransactionCycle_CommitCost/5k-16               	      78	  13410614 ns/op	 6394948 B/op	   36995 allocs/op
+BenchmarkTransactionCycle_CommitCost/5k-16               	      84	  13391031 ns/op	 6611568 B/op	   36996 allocs/op
+BenchmarkTransactionCycle_CommitCost/5k-16               	      81	  13439682 ns/op	 6534541 B/op	   36995 allocs/op
+BenchmarkTransactionCycle_CommitCost/5k-16               	      82	  13313642 ns/op	 6252759 B/op	   36995 allocs/op
+BenchmarkTransactionCycle_CommitCost/10k-16              	      43	  24528053 ns/op	11317000 B/op	   72071 allocs/op
+BenchmarkTransactionCycle_CommitCost/10k-16              	      42	  24653618 ns/op	11287198 B/op	   72070 allocs/op
+BenchmarkTransactionCycle_CommitCost/10k-16              	      50	  24348803 ns/op	10903786 B/op	   72070 allocs/op
+BenchmarkTransactionCycle_CommitCost/10k-16              	      45	  24532235 ns/op	11750765 B/op	   72072 allocs/op
+BenchmarkTransactionCycle_CommitCost/10k-16              	      45	  24444897 ns/op	11378128 B/op	   72072 allocs/op
+BenchmarkTransactionCycle_CommitCost/10k-16              	      43	  24300230 ns/op	11121788 B/op	   72071 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_simple-16        	  272719	      4291 ns/op	    1053 B/op	      39 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_simple-16        	  284764	      4340 ns/op	    1054 B/op	      39 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_simple-16        	  269744	      4304 ns/op	    1050 B/op	      39 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_simple-16        	  276866	      4350 ns/op	    1053 B/op	      39 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_simple-16        	  273144	      4406 ns/op	    1053 B/op	      39 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_simple-16        	  283840	      4317 ns/op	    1053 B/op	      39 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_complex-16       	  103712	     11267 ns/op	    2519 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_complex-16       	  105096	     11317 ns/op	    2525 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_complex-16       	  105523	     11265 ns/op	    2526 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_complex-16       	  106472	     11507 ns/op	    2523 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_complex-16       	  107866	     11271 ns/op	    2517 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/Latin_complex-16       	  106512	     11369 ns/op	    2519 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Japanese-16        	  219175	      5472 ns/op	    1682 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Japanese-16        	  216780	      5438 ns/op	    1689 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Japanese-16        	  219266	      5482 ns/op	    1685 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Japanese-16        	  220676	      5566 ns/op	    1687 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Japanese-16        	  207327	      5426 ns/op	    1687 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Japanese-16        	  222039	      5476 ns/op	    1687 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Chinese-16         	  263676	      4439 ns/op	    1476 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Chinese-16         	  269048	      4470 ns/op	    1475 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Chinese-16         	  244083	      4424 ns/op	    1472 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Chinese-16         	  267204	      4386 ns/op	    1479 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Chinese-16         	  250742	      4395 ns/op	    1477 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/CJK_Chinese-16         	  268112	      4498 ns/op	    1472 B/op	      30 allocs/op
+BenchmarkGenerateSlugWithMetadata/With_secondary-16      	  108333	     11216 ns/op	    2422 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/With_secondary-16      	  105516	     11192 ns/op	    2422 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/With_secondary-16      	  105231	     11104 ns/op	    2429 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/With_secondary-16      	  103300	     11405 ns/op	    2429 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/With_secondary-16      	  105756	     11113 ns/op	    2419 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/With_secondary-16      	  109632	     11070 ns/op	    2423 B/op	      80 allocs/op
+BenchmarkGenerateSlugWithMetadata/Long_ROM-16            	   60662	     20175 ns/op	    5111 B/op	     104 allocs/op
+BenchmarkGenerateSlugWithMetadata/Long_ROM-16            	   58718	     20283 ns/op	    5125 B/op	     104 allocs/op
+BenchmarkGenerateSlugWithMetadata/Long_ROM-16            	   60753	     20061 ns/op	    5107 B/op	     104 allocs/op
+BenchmarkGenerateSlugWithMetadata/Long_ROM-16            	   59809	     20068 ns/op	    5110 B/op	     104 allocs/op
+BenchmarkGenerateSlugWithMetadata/Long_ROM-16            	   60325	     20044 ns/op	    5108 B/op	     104 allocs/op
+BenchmarkGenerateSlugWithMetadata/Long_ROM-16            	   59679	     20548 ns/op	    5118 B/op	     104 allocs/op
+BenchmarkSlugSearchCacheSearch_50k-16                    	    1556	    779607 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_50k-16                    	    1544	    774814 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_50k-16                    	    1538	    775852 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_50k-16                    	    1556	    780266 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_50k-16                    	    1528	    781370 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_50k-16                    	    1549	    773405 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_250k-16                   	     300	   3986462 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_250k-16                   	     302	   3981443 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_250k-16                   	     298	   4063399 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_250k-16                   	     298	   3975643 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_250k-16                   	     306	   3916943 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_250k-16                   	     307	   3950418 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheBuild-16                         	      48	  23281451 ns/op	26966618 B/op	  599358 allocs/op
+BenchmarkSlugSearchCacheBuild-16                         	      48	  22982489 ns/op	26966652 B/op	  599358 allocs/op
+BenchmarkSlugSearchCacheBuild-16                         	      44	  23005388 ns/op	26966669 B/op	  599358 allocs/op
+BenchmarkSlugSearchCacheBuild-16                         	      46	  22913494 ns/op	26966630 B/op	  599358 allocs/op
+BenchmarkSlugSearchCacheBuild-16                         	      48	  22831976 ns/op	26966674 B/op	  599358 allocs/op
+BenchmarkSlugSearchCacheBuild-16                         	      46	  23032123 ns/op	26966757 B/op	  599359 allocs/op
+BenchmarkSlugSearchCacheMemory-16                        	1000000000	         0.02485 ns/op	        12.56 MB	       0 B/op	       0 allocs/op
+BenchmarkSlugSearchCacheMemory-16                        	1000000000	         0.02183 ns/op	        12.56 MB	       0 B/op	       0 allocs/op
+BenchmarkSlugSearchCacheMemory-16                        	1000000000	         0.02500 ns/op	        12.56 MB	       0 B/op	       0 allocs/op
+BenchmarkSlugSearchCacheMemory-16                        	1000000000	         0.02415 ns/op	        12.56 MB	       0 B/op	       0 allocs/op
+BenchmarkSlugSearchCacheMemory-16                        	1000000000	         0.02525 ns/op	        12.56 MB	       0 B/op	       0 allocs/op
+BenchmarkSlugSearchCacheMemory-16                        	1000000000	         0.02184 ns/op	        12.56 MB	       0 B/op	       0 allocs/op
+BenchmarkSlugSearchCacheSearch_500k-16                   	     146	   8111483 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_500k-16                   	     147	   8090463 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_500k-16                   	     147	   8057169 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_500k-16                   	     146	   8240347 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_500k-16                   	     146	   8128137 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_500k-16                   	     147	   8094617 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheBuild_500k-16                    	      27	  43697938 ns/op	53880766 B/op	 1199110 allocs/op
+BenchmarkSlugSearchCacheBuild_500k-16                    	      24	  43809391 ns/op	53880700 B/op	 1199110 allocs/op
+BenchmarkSlugSearchCacheBuild_500k-16                    	      25	  43959425 ns/op	53880710 B/op	 1199110 allocs/op
+BenchmarkSlugSearchCacheBuild_500k-16                    	      27	  43648543 ns/op	53880700 B/op	 1199110 allocs/op
+BenchmarkSlugSearchCacheBuild_500k-16                    	      25	  44279638 ns/op	53880678 B/op	 1199109 allocs/op
+BenchmarkSlugSearchCacheBuild_500k-16                    	      26	  44246150 ns/op	53880721 B/op	 1199110 allocs/op
+BenchmarkSlugSearchCacheMemory_500k-16                   	1000000000	         0.04758 ns/op	        25.26 MB	       0 B/op	       0 allocs/op
+BenchmarkSlugSearchCacheMemory_500k-16                   	1000000000	         0.04599 ns/op	        25.26 MB	       0 B/op	       0 allocs/op
+BenchmarkSlugSearchCacheMemory_500k-16                   	1000000000	         0.04488 ns/op	        25.26 MB	       0 B/op	       0 allocs/op
+BenchmarkSlugSearchCacheMemory_500k-16                   	1000000000	         0.04564 ns/op	        25.26 MB	       0 B/op	       0 allocs/op
+BenchmarkSlugSearchCacheMemory_500k-16                   	1000000000	         0.04191 ns/op	        25.26 MB	       0 B/op	       0 allocs/op
+BenchmarkSlugSearchCacheMemory_500k-16                   	1000000000	         0.04718 ns/op	        25.26 MB	       0 B/op	       0 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/SingleWord-16         	     158	   7496184 ns/op	 2160640 B/op	      15 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/SingleWord-16         	     157	   7570040 ns/op	 2160640 B/op	      15 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/SingleWord-16         	     159	   7499437 ns/op	 2160640 B/op	      15 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/SingleWord-16         	     160	   7451545 ns/op	 2160640 B/op	      15 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/SingleWord-16         	     159	   7521846 ns/op	 2160640 B/op	      15 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/SingleWord-16         	     158	   7486846 ns/op	 2160640 B/op	      15 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/TwoWords-16           	     147	   8111127 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/TwoWords-16           	     147	   8101706 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/TwoWords-16           	     147	   8185017 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/TwoWords-16           	     146	   8165311 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/TwoWords-16           	     146	   8138701 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/TwoWords-16           	     148	   8039490 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/ThreeWords-16         	     147	   8089324 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/ThreeWords-16         	     146	   8128379 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/ThreeWords-16         	     150	   7995603 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/ThreeWords-16         	     148	   8026151 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/ThreeWords-16         	     150	   7965025 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/ThreeWords-16         	     147	   8120003 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/CommonSubstring-16    	     169	   7024250 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/CommonSubstring-16    	     169	   7030819 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/CommonSubstring-16    	     171	   6970014 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/CommonSubstring-16    	     171	   6969954 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/CommonSubstring-16    	     171	   6988300 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_QueryComplexity/CommonSubstring-16    	     170	   7019046 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/NoFilter-16       	     146	   8123839 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/NoFilter-16       	     147	   8102208 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/NoFilter-16       	     146	   8188056 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/NoFilter-16       	     145	   8164024 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/NoFilter-16       	     148	   8054318 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/NoFilter-16       	     147	   8140592 ns/op	  145408 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/SingleSystem-16   	     328	   3719948 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/SingleSystem-16   	     327	   3629767 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/SingleSystem-16   	     328	   3608377 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/SingleSystem-16   	     333	   3604646 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/SingleSystem-16   	     328	   3620380 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/SingleSystem-16   	     328	   3630542 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/ThreeSystems-16   	     151	   7898335 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/ThreeSystems-16   	     151	   7890790 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/ThreeSystems-16   	     151	   7946855 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/ThreeSystems-16   	     151	   7877409 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/ThreeSystems-16   	     152	   7877580 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_SystemFiltered_500k/ThreeSystems-16   	     152	   7878780 ns/op	   63488 B/op	       4 allocs/op
+BenchmarkSlugSearchCacheSearch_NoMatch_500k-16                       	     141	   8462744 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_NoMatch_500k-16                       	     141	   8419248 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_NoMatch_500k-16                       	     141	   8407661 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_NoMatch_500k-16                       	     144	   8315876 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_NoMatch_500k-16                       	     142	   8403034 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_NoMatch_500k-16                       	     144	   8341252 ns/op	    8192 B/op	       1 allocs/op
+BenchmarkSlugSearchCacheSearch_Concurrent_500k-16                    	    1262	    919051 ns/op	  145409 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_Concurrent_500k-16                    	    1258	    964900 ns/op	  145409 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_Concurrent_500k-16                    	    1114	    962090 ns/op	  145409 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_Concurrent_500k-16                    	    1203	    914065 ns/op	  145413 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_Concurrent_500k-16                    	    1255	    917612 ns/op	  145409 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheSearch_Concurrent_500k-16                    	    1224	    917228 ns/op	  145409 B/op	       6 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/10k-16                          	     202	   5878764 ns/op	 3954330 B/op	   63816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/10k-16                          	     196	   6034463 ns/op	 3954330 B/op	   63816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/10k-16                          	     200	   5937531 ns/op	 3954330 B/op	   63816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/10k-16                          	     201	   5951884 ns/op	 3954329 B/op	   63816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/10k-16                          	     200	   5963176 ns/op	 3954335 B/op	   63816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/10k-16                          	     201	   5899321 ns/op	 3954335 B/op	   63816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/50k-16                          	      43	  27524523 ns/op	 8320569 B/op	  319816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/50k-16                          	      43	  28280098 ns/op	 8320572 B/op	  319816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/50k-16                          	      44	  27997254 ns/op	 8320573 B/op	  319816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/50k-16                          	      44	  27772385 ns/op	 8320561 B/op	  319816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/50k-16                          	      44	  27851005 ns/op	 8320569 B/op	  319816 allocs/op
+BenchmarkSlugSearchCacheBuild_FromDB/50k-16                          	      44	  27932211 ns/op	 8320562 B/op	  319816 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkGetPathFragments/Simple-16        	   71114	     16370 ns/op	    6058 B/op	     116 allocs/op
+BenchmarkGetPathFragments/Simple-16        	   72738	     16300 ns/op	    6057 B/op	     116 allocs/op
+BenchmarkGetPathFragments/Simple-16        	   70455	     16520 ns/op	    6067 B/op	     116 allocs/op
+BenchmarkGetPathFragments/Simple-16        	   74145	     16320 ns/op	    6062 B/op	     116 allocs/op
+BenchmarkGetPathFragments/Simple-16        	   72921	     16199 ns/op	    6066 B/op	     116 allocs/op
+BenchmarkGetPathFragments/Simple-16        	   72968	     16321 ns/op	    6063 B/op	     116 allocs/op
+BenchmarkGetPathFragments/Complex-16       	   41281	     28690 ns/op	    8244 B/op	     169 allocs/op
+BenchmarkGetPathFragments/Complex-16       	   41751	     29221 ns/op	    8245 B/op	     169 allocs/op
+BenchmarkGetPathFragments/Complex-16       	   41196	     29152 ns/op	    8250 B/op	     169 allocs/op
+BenchmarkGetPathFragments/Complex-16       	   40807	     30996 ns/op	    8268 B/op	     169 allocs/op
+BenchmarkGetPathFragments/Complex-16       	   40390	     29190 ns/op	    8253 B/op	     169 allocs/op
+BenchmarkGetPathFragments/Complex-16       	   40789	     29699 ns/op	    8262 B/op	     169 allocs/op
+BenchmarkGetPathFragments/Long_path-16     	   27343	     42849 ns/op	    8785 B/op	     176 allocs/op
+BenchmarkGetPathFragments/Long_path-16     	   28638	     41039 ns/op	    8783 B/op	     176 allocs/op
+BenchmarkGetPathFragments/Long_path-16     	   29802	     40894 ns/op	    8785 B/op	     176 allocs/op
+BenchmarkGetPathFragments/Long_path-16     	   29654	     40709 ns/op	    8767 B/op	     176 allocs/op
+BenchmarkGetPathFragments/Long_path-16     	   29371	     41162 ns/op	    8790 B/op	     176 allocs/op
+BenchmarkGetPathFragments/Long_path-16     	   29652	     41421 ns/op	    8765 B/op	     176 allocs/op
+BenchmarkGetPathFragments/Scene_release-16 	   70154	     17177 ns/op	    6135 B/op	     119 allocs/op
+BenchmarkGetPathFragments/Scene_release-16 	   71988	     16995 ns/op	    6140 B/op	     119 allocs/op
+BenchmarkGetPathFragments/Scene_release-16 	   69634	     17081 ns/op	    6143 B/op	     119 allocs/op
+BenchmarkGetPathFragments/Scene_release-16 	   71221	     17250 ns/op	    6140 B/op	     119 allocs/op
+BenchmarkGetPathFragments/Scene_release-16 	   70186	     17087 ns/op	    6137 B/op	     119 allocs/op
+BenchmarkGetPathFragments/Scene_release-16 	   68956	     17280 ns/op	    6134 B/op	     119 allocs/op
+BenchmarkGetPathFragments/URI_scheme-16    	   81555	     13850 ns/op	    5939 B/op	     115 allocs/op
+BenchmarkGetPathFragments/URI_scheme-16    	   90573	     13431 ns/op	    5942 B/op	     115 allocs/op
+BenchmarkGetPathFragments/URI_scheme-16    	   88237	     13506 ns/op	    5939 B/op	     115 allocs/op
+BenchmarkGetPathFragments/URI_scheme-16    	   88690	     13318 ns/op	    5938 B/op	     115 allocs/op
+BenchmarkGetPathFragments/URI_scheme-16    	   86011	     13936 ns/op	    5928 B/op	     115 allocs/op
+BenchmarkGetPathFragments/URI_scheme-16    	   88178	     13328 ns/op	    5934 B/op	     115 allocs/op
+BenchmarkGetPathFragments/NoExt-16         	   74520	     16392 ns/op	    6064 B/op	     116 allocs/op
+BenchmarkGetPathFragments/NoExt-16         	   69782	     17024 ns/op	    6071 B/op	     116 allocs/op
+BenchmarkGetPathFragments/NoExt-16         	   71274	     17225 ns/op	    6075 B/op	     116 allocs/op
+BenchmarkGetPathFragments/NoExt-16         	   71022	     16533 ns/op	    6070 B/op	     116 allocs/op
+BenchmarkGetPathFragments/NoExt-16         	   71856	     16801 ns/op	    6064 B/op	     116 allocs/op
+BenchmarkGetPathFragments/NoExt-16         	   72812	     17004 ns/op	    6078 B/op	     116 allocs/op
+BenchmarkGetPathFragments/CJK-16           	   79195	     14589 ns/op	    6955 B/op	     117 allocs/op
+BenchmarkGetPathFragments/CJK-16           	   83684	     14761 ns/op	    6956 B/op	     117 allocs/op
+BenchmarkGetPathFragments/CJK-16           	   77812	     14786 ns/op	    6953 B/op	     117 allocs/op
+BenchmarkGetPathFragments/CJK-16           	   78336	     14476 ns/op	    6963 B/op	     117 allocs/op
+BenchmarkGetPathFragments/CJK-16           	   83208	     14238 ns/op	    6953 B/op	     117 allocs/op
+BenchmarkGetPathFragments/CJK-16           	   80750	     14489 ns/op	    6955 B/op	     117 allocs/op
+BenchmarkGetPathFragments_Batch/10k-16     	       4	 265821097 ns/op	71222872 B/op	 1365375 allocs/op
+BenchmarkGetPathFragments_Batch/10k-16     	       4	 267052618 ns/op	71439756 B/op	 1365421 allocs/op
+BenchmarkGetPathFragments_Batch/10k-16     	       4	 266092980 ns/op	71347728 B/op	 1365418 allocs/op
+BenchmarkGetPathFragments_Batch/10k-16     	       4	 268631296 ns/op	71301072 B/op	 1365402 allocs/op
+BenchmarkGetPathFragments_Batch/10k-16     	       4	 263892646 ns/op	71348642 B/op	 1365415 allocs/op
+BenchmarkGetPathFragments_Batch/10k-16     	       4	 263200428 ns/op	71233066 B/op	 1365371 allocs/op
+BenchmarkGetPathFragments_Batch/50k-16     	       1	1246880520 ns/op	353095640 B/op	 6829556 allocs/op
+BenchmarkGetPathFragments_Batch/50k-16     	       1	1260731290 ns/op	353323384 B/op	 6829670 allocs/op
+BenchmarkGetPathFragments_Batch/50k-16     	       1	1276988156 ns/op	353246440 B/op	 6829625 allocs/op
+BenchmarkGetPathFragments_Batch/50k-16     	       1	1298459374 ns/op	353209896 B/op	 6829617 allocs/op
+BenchmarkGetPathFragments_Batch/50k-16     	       1	1278926795 ns/op	352719216 B/op	 6829501 allocs/op
+BenchmarkGetPathFragments_Batch/50k-16     	       1	1255160672 ns/op	352755152 B/op	 6829484 allocs/op
+BenchmarkFlushScanStateMaps/10k-16         	   20710	     57565 ns/op	       1 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/10k-16         	   20844	     57843 ns/op	       1 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/10k-16         	   20902	     57623 ns/op	       1 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/10k-16         	   20748	     58132 ns/op	       1 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/10k-16         	   20289	     58879 ns/op	       1 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/10k-16         	   20720	     57937 ns/op	       1 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/50k-16         	    8122	    206345 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/50k-16         	    7814	    190016 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/50k-16         	    7951	    160186 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/50k-16         	    7564	    157960 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/50k-16         	    8286	    193490 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlushScanStateMaps/50k-16         	    7990	    181728 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAddMediaPath_MockDB/1k-16         	      19	  55360847 ns/op	21862190 B/op	  314378 allocs/op
+BenchmarkAddMediaPath_MockDB/1k-16         	      20	  54316107 ns/op	21717204 B/op	  314377 allocs/op
+BenchmarkAddMediaPath_MockDB/1k-16         	      19	  54842181 ns/op	21833936 B/op	  314367 allocs/op
+BenchmarkAddMediaPath_MockDB/1k-16         	      20	  54843975 ns/op	21718889 B/op	  314376 allocs/op
+BenchmarkAddMediaPath_MockDB/1k-16         	      19	  55242369 ns/op	21865909 B/op	  314380 allocs/op
+BenchmarkAddMediaPath_MockDB/1k-16         	      20	  54495844 ns/op	21710912 B/op	  314372 allocs/op
+BenchmarkAddMediaPath_MockDB/10k-16        	       2	 539341074 ns/op	215790688 B/op	 3128584 allocs/op
+BenchmarkAddMediaPath_MockDB/10k-16        	       2	 541286642 ns/op	215766120 B/op	 3128557 allocs/op
+BenchmarkAddMediaPath_MockDB/10k-16        	       2	 570343781 ns/op	215639512 B/op	 3128530 allocs/op
+BenchmarkAddMediaPath_MockDB/10k-16        	       2	 568658623 ns/op	215806148 B/op	 3128599 allocs/op
+BenchmarkAddMediaPath_MockDB/10k-16        	       2	 583027929 ns/op	215696016 B/op	 3128547 allocs/op
+BenchmarkAddMediaPath_MockDB/10k-16        	       2	 566603998 ns/op	215865332 B/op	 3128606 allocs/op
+BenchmarkAddMediaPath_RealDB/1k-16         	      22	  47858326 ns/op	21073261 B/op	  213592 allocs/op
+BenchmarkAddMediaPath_RealDB/1k-16         	      25	  47058654 ns/op	20750879 B/op	  213799 allocs/op
+BenchmarkAddMediaPath_RealDB/1k-16         	      25	  46785344 ns/op	21254314 B/op	  213671 allocs/op
+BenchmarkAddMediaPath_RealDB/1k-16         	      24	  46377732 ns/op	21603820 B/op	  213781 allocs/op
+BenchmarkAddMediaPath_RealDB/1k-16         	      26	  44046932 ns/op	18320297 B/op	  213778 allocs/op
+BenchmarkAddMediaPath_RealDB/1k-16         	      25	  45143649 ns/op	20248662 B/op	  213983 allocs/op
+BenchmarkAddMediaPath_RealDB/10k-16        	       3	 407619927 ns/op	116681752 B/op	 2028747 allocs/op
+BenchmarkAddMediaPath_RealDB/10k-16        	       3	 424070762 ns/op	115274704 B/op	 2026741 allocs/op
+BenchmarkAddMediaPath_RealDB/10k-16        	       3	 424098470 ns/op	115242424 B/op	 2024763 allocs/op
+BenchmarkAddMediaPath_RealDB/10k-16        	       3	 443685014 ns/op	115378392 B/op	 2024801 allocs/op
+BenchmarkAddMediaPath_RealDB/10k-16        	       3	 425490344 ns/op	115324613 B/op	 2022784 allocs/op
+BenchmarkAddMediaPath_RealDB/10k-16        	       3	 432541472 ns/op	116664344 B/op	 2024779 allocs/op
+BenchmarkIndexingPipeline_EndToEnd/10k_1sys-16         	       3	 430214186 ns/op	118046674 B/op	 2020824 allocs/op
+BenchmarkIndexingPipeline_EndToEnd/10k_1sys-16         	       3	 423121004 ns/op	116561866 B/op	 2028757 allocs/op
+BenchmarkIndexingPipeline_EndToEnd/10k_1sys-16         	       3	 429348532 ns/op	116586253 B/op	 2024776 allocs/op
+BenchmarkIndexingPipeline_EndToEnd/10k_1sys-16         	       3	 423408839 ns/op	116479178 B/op	 2022756 allocs/op
+BenchmarkIndexingPipeline_EndToEnd/10k_1sys-16         	       3	 425794909 ns/op	115279466 B/op	 2026772 allocs/op
+BenchmarkIndexingPipeline_EndToEnd/10k_1sys-16         	       3	 430034393 ns/op	116475658 B/op	 2022732 allocs/op
+BenchmarkGetPathFragments_PeakMemory-16                	       1	1238585219 ns/op	       340.2 total-MB	364265680 B/op	 7128986 allocs/op
+BenchmarkGetPathFragments_PeakMemory-16                	       1	1233952088 ns/op	       340.4 total-MB	364415440 B/op	 7129025 allocs/op
+BenchmarkGetPathFragments_PeakMemory-16                	       1	1218514926 ns/op	       340.1 total-MB	364190320 B/op	 7128950 allocs/op
+BenchmarkGetPathFragments_PeakMemory-16                	       1	1234001358 ns/op	       340.1 total-MB	364116352 B/op	 7128950 allocs/op
+BenchmarkGetPathFragments_PeakMemory-16                	       1	1254625113 ns/op	       340.1 total-MB	364154640 B/op	 7128975 allocs/op
+BenchmarkGetPathFragments_PeakMemory-16                	       1	1220482945 ns/op	       340.2 total-MB	364266208 B/op	 7128999 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkSlugifyBasic/The_Legend_of_Zelda:_Ocarina_of_Time_(USA)_[!]-16         	  169689	      6863 ns/op	    1506 B/op	      43 allocs/op
+BenchmarkSlugifyBasic/The_Legend_of_Zelda:_Ocarina_of_Time_(USA)_[!]-16         	  179914	      6866 ns/op	    1504 B/op	      43 allocs/op
+BenchmarkSlugifyBasic/The_Legend_of_Zelda:_Ocarina_of_Time_(USA)_[!]-16         	  176973	      6883 ns/op	    1508 B/op	      43 allocs/op
+BenchmarkSlugifyBasic/The_Legend_of_Zelda:_Ocarina_of_Time_(USA)_[!]-16         	  170901	      6804 ns/op	    1507 B/op	      43 allocs/op
+BenchmarkSlugifyBasic/The_Legend_of_Zelda:_Ocarina_of_Time_(USA)_[!]-16         	  177496	      6779 ns/op	    1505 B/op	      43 allocs/op
+BenchmarkSlugifyBasic/The_Legend_of_Zelda:_Ocarina_of_Time_(USA)_[!]-16         	  167762	      6867 ns/op	    1501 B/op	      43 allocs/op
+BenchmarkSlugifyBasic/Pokémon_Stadium_2-16                                      	  138786	      8702 ns/op	   11123 B/op	      47 allocs/op
+BenchmarkSlugifyBasic/Pokémon_Stadium_2-16                                      	  143832	      8758 ns/op	   11124 B/op	      47 allocs/op
+BenchmarkSlugifyBasic/Pokémon_Stadium_2-16                                      	  140700	      8769 ns/op	   11129 B/op	      47 allocs/op
+BenchmarkSlugifyBasic/Pokémon_Stadium_2-16                                      	  131661	      9070 ns/op	   11125 B/op	      47 allocs/op
+BenchmarkSlugifyBasic/Pokémon_Stadium_2-16                                      	  143408	      8976 ns/op	   11129 B/op	      47 allocs/op
+BenchmarkSlugifyBasic/Pokémon_Stadium_2-16                                      	  131208	      8723 ns/op	   11128 B/op	      47 allocs/op
+BenchmarkSlugifyBasic/Final_Fantasy_VII-16                                      	  287622	      4042 ns/op	    1002 B/op	      37 allocs/op
+BenchmarkSlugifyBasic/Final_Fantasy_VII-16                                      	  272420	      4033 ns/op	    1001 B/op	      37 allocs/op
+BenchmarkSlugifyBasic/Final_Fantasy_VII-16                                      	  304593	      4073 ns/op	    1004 B/op	      37 allocs/op
+BenchmarkSlugifyBasic/Final_Fantasy_VII-16                                      	  290689	      4141 ns/op	    1002 B/op	      37 allocs/op
+BenchmarkSlugifyBasic/Final_Fantasy_VII-16                                      	  308628	      4095 ns/op	    1001 B/op	      37 allocs/op
+BenchmarkSlugifyBasic/Final_Fantasy_VII-16                                      	  301753	      3963 ns/op	    1000 B/op	      37 allocs/op
+BenchmarkSlugifyBasic/Super_Mario_Bros-16                                       	  280755	      4155 ns/op	    1033 B/op	      38 allocs/op
+BenchmarkSlugifyBasic/Super_Mario_Bros-16                                       	  293853	      4158 ns/op	    1034 B/op	      38 allocs/op
+BenchmarkSlugifyBasic/Super_Mario_Bros-16                                       	  292281	      4151 ns/op	    1032 B/op	      38 allocs/op
+BenchmarkSlugifyBasic/Super_Mario_Bros-16                                       	  282253	      4194 ns/op	    1035 B/op	      38 allocs/op
+BenchmarkSlugifyBasic/Super_Mario_Bros-16                                       	  285789	      4162 ns/op	    1036 B/op	      38 allocs/op
+BenchmarkSlugifyBasic/Super_Mario_Bros-16                                       	  275672	      4232 ns/op	    1035 B/op	      38 allocs/op
+BenchmarkSlugifyBasic/Sonic_&_Knuckles-16                                       	  294202	      4031 ns/op	     968 B/op	      36 allocs/op
+BenchmarkSlugifyBasic/Sonic_&_Knuckles-16                                       	  279094	      4039 ns/op	     967 B/op	      36 allocs/op
+BenchmarkSlugifyBasic/Sonic_&_Knuckles-16                                       	  290902	      4117 ns/op	     971 B/op	      36 allocs/op
+BenchmarkSlugifyBasic/Sonic_&_Knuckles-16                                       	  296371	      4116 ns/op	     971 B/op	      36 allocs/op
+BenchmarkSlugifyBasic/Sonic_&_Knuckles-16                                       	  298014	      4232 ns/op	     969 B/op	      36 allocs/op
+BenchmarkSlugifyBasic/Sonic_&_Knuckles-16                                       	  279471	      4213 ns/op	     971 B/op	      36 allocs/op
+BenchmarkSlugify_LongTitle/ROM_with_tags-16                                     	   82292	     14852 ns/op	    3797 B/op	      61 allocs/op
+BenchmarkSlugify_LongTitle/ROM_with_tags-16                                     	   79340	     14956 ns/op	    3804 B/op	      61 allocs/op
+BenchmarkSlugify_LongTitle/ROM_with_tags-16                                     	   75550	     14960 ns/op	    3805 B/op	      61 allocs/op
+BenchmarkSlugify_LongTitle/ROM_with_tags-16                                     	   80706	     15110 ns/op	    3806 B/op	      61 allocs/op
+BenchmarkSlugify_LongTitle/ROM_with_tags-16                                     	   83986	     14877 ns/op	    3801 B/op	      61 allocs/op
+BenchmarkSlugify_LongTitle/ROM_with_tags-16                                     	   80534	     14824 ns/op	    3799 B/op	      61 allocs/op
+BenchmarkSlugify_LongTitle/Japanese_RPG-16                                      	  101922	     11789 ns/op	    2901 B/op	      55 allocs/op
+BenchmarkSlugify_LongTitle/Japanese_RPG-16                                      	  107881	     11352 ns/op	    2895 B/op	      55 allocs/op
+BenchmarkSlugify_LongTitle/Japanese_RPG-16                                      	  105474	     11396 ns/op	    2900 B/op	      55 allocs/op
+BenchmarkSlugify_LongTitle/Japanese_RPG-16                                      	  106833	     11703 ns/op	    2900 B/op	      55 allocs/op
+BenchmarkSlugify_LongTitle/Japanese_RPG-16                                      	  104042	     11540 ns/op	    2895 B/op	      55 allocs/op
+BenchmarkSlugify_LongTitle/Japanese_RPG-16                                      	   90033	     11862 ns/op	    2897 B/op	      55 allocs/op
+BenchmarkSlugify_LongTitle/Scene_release-16                                     	   55762	     21772 ns/op	    5364 B/op	      70 allocs/op
+BenchmarkSlugify_LongTitle/Scene_release-16                                     	   57868	     21459 ns/op	    5343 B/op	      70 allocs/op
+BenchmarkSlugify_LongTitle/Scene_release-16                                     	   56238	     20979 ns/op	    5351 B/op	      70 allocs/op
+BenchmarkSlugify_LongTitle/Scene_release-16                                     	   57784	     21055 ns/op	    5343 B/op	      70 allocs/op
+BenchmarkSlugify_LongTitle/Scene_release-16                                     	   57680	     21344 ns/op	    5351 B/op	      70 allocs/op
+BenchmarkSlugify_LongTitle/Scene_release-16                                     	   57414	     20969 ns/op	    5351 B/op	      70 allocs/op
+BenchmarkSlugify_CJK/Japanese-16                                                	  207517	      5582 ns/op	    1686 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Japanese-16                                                	  230176	      5251 ns/op	    1682 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Japanese-16                                                	  236540	      5270 ns/op	    1687 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Japanese-16                                                	  227132	      5389 ns/op	    1687 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Japanese-16                                                	  228060	      5560 ns/op	    1687 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Japanese-16                                                	  226796	      5528 ns/op	    1691 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Chinese-16                                                 	  270247	      4451 ns/op	    1474 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Chinese-16                                                 	  269430	      4452 ns/op	    1471 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Chinese-16                                                 	  276811	      4429 ns/op	    1476 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Chinese-16                                                 	  280778	      4512 ns/op	    1473 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Chinese-16                                                 	  282014	      4442 ns/op	    1474 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Chinese-16                                                 	  273366	      4296 ns/op	    1473 B/op	      30 allocs/op
+BenchmarkSlugify_CJK/Korean-16                                                  	  133551	      9185 ns/op	    1902 B/op	      35 allocs/op
+BenchmarkSlugify_CJK/Korean-16                                                  	  131218	      9118 ns/op	    1901 B/op	      35 allocs/op
+BenchmarkSlugify_CJK/Korean-16                                                  	  134241	      9087 ns/op	    1904 B/op	      35 allocs/op
+BenchmarkSlugify_CJK/Korean-16                                                  	  130831	      9422 ns/op	    1901 B/op	      35 allocs/op
+BenchmarkSlugify_CJK/Korean-16                                                  	  126606	      9428 ns/op	    1909 B/op	      35 allocs/op
+BenchmarkSlugify_CJK/Korean-16                                                  	  127231	      9489 ns/op	    1904 B/op	      35 allocs/op
+BenchmarkSlugify_CJK/Mixed_CJK_Latin-16                                         	  115018	     10353 ns/op	    1920 B/op	      37 allocs/op
+BenchmarkSlugify_CJK/Mixed_CJK_Latin-16                                         	  111649	     10271 ns/op	    1915 B/op	      37 allocs/op
+BenchmarkSlugify_CJK/Mixed_CJK_Latin-16                                         	  119197	     10368 ns/op	    1918 B/op	      37 allocs/op
+BenchmarkSlugify_CJK/Mixed_CJK_Latin-16                                         	  116808	     10166 ns/op	    1913 B/op	      37 allocs/op
+BenchmarkSlugify_CJK/Mixed_CJK_Latin-16                                         	  124014	     10124 ns/op	    1919 B/op	      37 allocs/op
+BenchmarkSlugify_CJK/Mixed_CJK_Latin-16                                         	  117622	     10225 ns/op	    1908 B/op	      37 allocs/op
+BenchmarkSlugify_Batch_500k-16                                                  	       1	2515662320 ns/op	586251064 B/op	19317666 allocs/op
+BenchmarkSlugify_Batch_500k-16                                                  	       1	2494811323 ns/op	586197264 B/op	19317640 allocs/op
+BenchmarkSlugify_Batch_500k-16                                                  	       1	2564338014 ns/op	586048800 B/op	19317618 allocs/op
+BenchmarkSlugify_Batch_500k-16                                                  	       1	2600011742 ns/op	586160240 B/op	19317637 allocs/op
+BenchmarkSlugify_Batch_500k-16                                                  	       1	2479328710 ns/op	586271600 B/op	19317652 allocs/op
+BenchmarkSlugify_Batch_500k-16                                                  	       1	2450548226 ns/op	586160016 B/op	19317631 allocs/op
+BenchmarkNormalizeToWords/Simple-16                                             	  364692	      3216 ns/op	     842 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Simple-16                                             	  383425	      3189 ns/op	     842 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Simple-16                                             	  371844	      3195 ns/op	     842 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Simple-16                                             	  371614	      3202 ns/op	     842 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Simple-16                                             	  390304	      3221 ns/op	     842 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Simple-16                                             	  381891	      3209 ns/op	     844 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/With_metadata-16                                      	  230194	      5403 ns/op	    1299 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/With_metadata-16                                      	  226490	      5420 ns/op	    1303 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/With_metadata-16                                      	  212906	      5544 ns/op	    1301 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/With_metadata-16                                      	  211702	      5511 ns/op	    1297 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/With_metadata-16                                      	  233472	      5543 ns/op	    1300 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/With_metadata-16                                      	  223287	      5510 ns/op	    1298 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/Roman_numerals-16                                     	  267938	      4519 ns/op	    1152 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/Roman_numerals-16                                     	  268030	      4548 ns/op	    1152 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/Roman_numerals-16                                     	  267421	      4546 ns/op	    1154 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/Roman_numerals-16                                     	  258562	      4619 ns/op	    1157 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/Roman_numerals-16                                     	  267189	      4557 ns/op	    1154 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/Roman_numerals-16                                     	  274437	      4555 ns/op	    1151 B/op	      33 allocs/op
+BenchmarkNormalizeToWords/Ampersand-16                                          	  371883	      3189 ns/op	     860 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Ampersand-16                                          	  388911	      3315 ns/op	     859 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Ampersand-16                                          	  358118	      3283 ns/op	     860 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Ampersand-16                                          	  388762	      3299 ns/op	     860 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Ampersand-16                                          	  364858	      3339 ns/op	     860 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Ampersand-16                                          	  355849	      3307 ns/op	     858 B/op	      28 allocs/op
+BenchmarkNormalizeToWords/Long_title-16                                         	  133311	      9041 ns/op	    2479 B/op	      43 allocs/op
+BenchmarkNormalizeToWords/Long_title-16                                         	  138274	      8891 ns/op	    2476 B/op	      43 allocs/op
+BenchmarkNormalizeToWords/Long_title-16                                         	  131178	      9079 ns/op	    2477 B/op	      43 allocs/op
+BenchmarkNormalizeToWords/Long_title-16                                         	  131904	      8876 ns/op	    2477 B/op	      43 allocs/op
+BenchmarkNormalizeToWords/Long_title-16                                         	  124782	      8998 ns/op	    2480 B/op	      43 allocs/op
+BenchmarkNormalizeToWords/Long_title-16                                         	  138519	      9044 ns/op	    2480 B/op	      43 allocs/op
+BenchmarkSlugifyWithTokens/Simple-16                                            	  249988	      4378 ns/op	    1039 B/op	      38 allocs/op
+BenchmarkSlugifyWithTokens/Simple-16                                            	  276308	      4348 ns/op	    1039 B/op	      38 allocs/op
+BenchmarkSlugifyWithTokens/Simple-16                                            	  271279	      4323 ns/op	    1036 B/op	      38 allocs/op
+BenchmarkSlugifyWithTokens/Simple-16                                            	  262936	      4310 ns/op	    1038 B/op	      38 allocs/op
+BenchmarkSlugifyWithTokens/Simple-16                                            	  277640	      4361 ns/op	    1038 B/op	      38 allocs/op
+BenchmarkSlugifyWithTokens/Simple-16                                            	  290056	      4337 ns/op	    1038 B/op	      38 allocs/op
+BenchmarkSlugifyWithTokens/Complex-16                                           	  171063	      6945 ns/op	    1509 B/op	      43 allocs/op
+BenchmarkSlugifyWithTokens/Complex-16                                           	  164527	      7113 ns/op	    1509 B/op	      43 allocs/op
+BenchmarkSlugifyWithTokens/Complex-16                                           	  168714	      7141 ns/op	    1511 B/op	      43 allocs/op
+BenchmarkSlugifyWithTokens/Complex-16                                           	  167740	      7202 ns/op	    1506 B/op	      43 allocs/op
+BenchmarkSlugifyWithTokens/Complex-16                                           	  165955	      7182 ns/op	    1509 B/op	      43 allocs/op
+BenchmarkSlugifyWithTokens/Complex-16                                           	  169821	      7217 ns/op	    1512 B/op	      43 allocs/op
+BenchmarkSlugifyWithTokens/CJK-16                                               	  223392	      5468 ns/op	    1690 B/op	      30 allocs/op
+BenchmarkSlugifyWithTokens/CJK-16                                               	  231399	      5429 ns/op	    1688 B/op	      30 allocs/op
+BenchmarkSlugifyWithTokens/CJK-16                                               	  233990	      5465 ns/op	    1686 B/op	      30 allocs/op
+BenchmarkSlugifyWithTokens/CJK-16                                               	  222405	      5498 ns/op	    1692 B/op	      30 allocs/op
+BenchmarkSlugifyWithTokens/CJK-16                                               	  219867	      5545 ns/op	    1688 B/op	      30 allocs/op
+BenchmarkSlugifyWithTokens/CJK-16                                               	  225477	      5514 ns/op	    1692 B/op	      30 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkLookupSystemExact-16    	16115260	        74.51 ns/op	     120 B/op	       2 allocs/op
+BenchmarkLookupSystemExact-16    	17010116	        74.44 ns/op	     120 B/op	       2 allocs/op
+BenchmarkLookupSystemExact-16    	16100751	        73.63 ns/op	     120 B/op	       2 allocs/op
+BenchmarkLookupSystemExact-16    	16492275	        74.32 ns/op	     120 B/op	       2 allocs/op
+BenchmarkLookupSystemExact-16    	15651214	        73.24 ns/op	     120 B/op	       2 allocs/op
+BenchmarkLookupSystemExact-16    	14706019	        73.14 ns/op	     120 B/op	       2 allocs/op
+BenchmarkLookupSystemSlug-16     	  370530	      3203 ns/op	     947 B/op	      37 allocs/op
+BenchmarkLookupSystemSlug-16     	  344252	      3267 ns/op	     946 B/op	      37 allocs/op
+BenchmarkLookupSystemSlug-16     	  337375	      3165 ns/op	     945 B/op	      37 allocs/op
+BenchmarkLookupSystemSlug-16     	  393228	      3161 ns/op	     946 B/op	      37 allocs/op
+BenchmarkLookupSystemSlug-16     	  362600	      3238 ns/op	     947 B/op	      37 allocs/op
+BenchmarkLookupSystemSlug-16     	  369837	      3117 ns/op	     947 B/op	      37 allocs/op
+BenchmarkLookupSystemAlias-16    	13921628	        82.42 ns/op	     128 B/op	       2 allocs/op
+BenchmarkLookupSystemAlias-16    	14382282	        83.83 ns/op	     128 B/op	       2 allocs/op
+BenchmarkLookupSystemAlias-16    	15190450	        81.74 ns/op	     128 B/op	       2 allocs/op
+BenchmarkLookupSystemAlias-16    	14900523	        81.55 ns/op	     128 B/op	       2 allocs/op
+BenchmarkLookupSystemAlias-16    	14792221	        80.05 ns/op	     128 B/op	       2 allocs/op
+BenchmarkLookupSystemAlias-16    	14993968	        81.96 ns/op	     128 B/op	       2 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkParseFilenameToCanonicalTags/Simple-16      	  319167	      3723 ns/op	     640 B/op	      13 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Simple-16      	  318490	      3800 ns/op	     639 B/op	      13 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Simple-16      	  313530	      3773 ns/op	     640 B/op	      13 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Simple-16      	  328666	      3689 ns/op	     639 B/op	      13 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Simple-16      	  316478	      3745 ns/op	     641 B/op	      13 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Simple-16      	  314308	      3675 ns/op	     640 B/op	      13 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Complex-16     	   89606	     13711 ns/op	    3262 B/op	      93 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Complex-16     	   84764	     13855 ns/op	    3259 B/op	      93 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Complex-16     	   91347	     13572 ns/op	    3257 B/op	      93 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Complex-16     	   93410	     13159 ns/op	    3255 B/op	      93 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Complex-16     	   92354	     13362 ns/op	    3262 B/op	      93 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Complex-16     	   91492	     13610 ns/op	    3256 B/op	      93 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Scene_release-16         	  205272	      5898 ns/op	     192 B/op	       2 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Scene_release-16         	  204640	      5837 ns/op	     193 B/op	       2 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Scene_release-16         	  207896	      5781 ns/op	     192 B/op	       2 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Scene_release-16         	  211542	      5836 ns/op	     193 B/op	       2 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Scene_release-16         	  206772	      5868 ns/op	     193 B/op	       2 allocs/op
+BenchmarkParseFilenameToCanonicalTags/Scene_release-16         	  202653	      5773 ns/op	     192 B/op	       2 allocs/op
+BenchmarkDetectNumberingPattern/100-16                         	    5869	    215788 ns/op	   43746 B/op	     900 allocs/op
+BenchmarkDetectNumberingPattern/100-16                         	    4681	    215506 ns/op	   43681 B/op	     900 allocs/op
+BenchmarkDetectNumberingPattern/100-16                         	    5196	    224713 ns/op	   43738 B/op	     900 allocs/op
+BenchmarkDetectNumberingPattern/100-16                         	    5421	    220685 ns/op	   43670 B/op	     900 allocs/op
+BenchmarkDetectNumberingPattern/100-16                         	    5961	    206544 ns/op	   43619 B/op	     900 allocs/op
+BenchmarkDetectNumberingPattern/100-16                         	    6025	    213258 ns/op	   43702 B/op	     900 allocs/op
+BenchmarkDetectNumberingPattern/1000-16                        	     501	   2323744 ns/op	  436357 B/op	    8994 allocs/op
+BenchmarkDetectNumberingPattern/1000-16                        	     538	   2182897 ns/op	  435938 B/op	    8994 allocs/op
+BenchmarkDetectNumberingPattern/1000-16                        	     546	   2215257 ns/op	  436981 B/op	    8994 allocs/op
+BenchmarkDetectNumberingPattern/1000-16                        	     541	   2214555 ns/op	  436948 B/op	    8994 allocs/op
+BenchmarkDetectNumberingPattern/1000-16                        	     559	   2257323 ns/op	  436407 B/op	    8994 allocs/op
+BenchmarkDetectNumberingPattern/1000-16                        	     546	   2238956 ns/op	  436024 B/op	    8994 allocs/op
+BenchmarkDetectNumberingPattern/10000-16                       	      46	  25628698 ns/op	 2178262 B/op	   26998 allocs/op
+BenchmarkDetectNumberingPattern/10000-16                       	      48	  25544881 ns/op	 2170537 B/op	   26996 allocs/op
+BenchmarkDetectNumberingPattern/10000-16                       	      44	  25152284 ns/op	 2175497 B/op	   26997 allocs/op
+BenchmarkDetectNumberingPattern/10000-16                       	      49	  25206196 ns/op	 2169606 B/op	   26996 allocs/op
+BenchmarkDetectNumberingPattern/10000-16                       	      46	  24841933 ns/op	 2174963 B/op	   26997 allocs/op
+BenchmarkDetectNumberingPattern/10000-16                       	      46	  25359782 ns/op	 2178170 B/op	   26998 allocs/op
+BenchmarkFilenameParser_ExtractSpecialPatterns-16              	  229125	      5491 ns/op	    1386 B/op	      19 allocs/op
+BenchmarkFilenameParser_ExtractSpecialPatterns-16              	  223165	      5334 ns/op	    1383 B/op	      19 allocs/op
+BenchmarkFilenameParser_ExtractSpecialPatterns-16              	  227818	      5308 ns/op	    1381 B/op	      19 allocs/op
+BenchmarkFilenameParser_ExtractSpecialPatterns-16              	  232320	      5322 ns/op	    1383 B/op	      19 allocs/op
+BenchmarkFilenameParser_ExtractSpecialPatterns-16              	  221665	      5305 ns/op	    1383 B/op	      19 allocs/op
+BenchmarkFilenameParser_ExtractSpecialPatterns-16              	  235531	      5292 ns/op	    1383 B/op	      19 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkRegexCacheVsStandard/Standard-16         	  780414	      1599 ns/op	    2373 B/op	      22 allocs/op
+BenchmarkRegexCacheVsStandard/Standard-16         	  682551	      1570 ns/op	    2373 B/op	      22 allocs/op
+BenchmarkRegexCacheVsStandard/Standard-16         	  737780	      1578 ns/op	    2371 B/op	      22 allocs/op
+BenchmarkRegexCacheVsStandard/Standard-16         	  802898	      1618 ns/op	    2368 B/op	      22 allocs/op
+BenchmarkRegexCacheVsStandard/Standard-16         	  760195	      1622 ns/op	    2369 B/op	      22 allocs/op
+BenchmarkRegexCacheVsStandard/Standard-16         	  745045	      1608 ns/op	    2367 B/op	      22 allocs/op
+BenchmarkRegexCacheVsStandard/Cached-16           	12686800	        93.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/Cached-16           	12400378	        93.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/Cached-16           	12845404	       100.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/Cached-16           	12842341	        93.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/Cached-16           	12671840	        94.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/Cached-16           	12658456	        93.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/GlobalCached-16     	12286305	       128.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/GlobalCached-16     	12210376	        96.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/GlobalCached-16     	 8897814	       123.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/GlobalCached-16     	12285897	       129.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/GlobalCached-16     	12383254	       125.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRegexCacheVsStandard/GlobalCached-16     	 9454172	       122.1 ns/op	       0 B/op	       0 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkIDExtraction/ManualParsing-16         	37541112	        31.08 ns/op	      32 B/op	       1 allocs/op
+BenchmarkIDExtraction/ManualParsing-16         	38541189	        31.22 ns/op	      32 B/op	       1 allocs/op
+BenchmarkIDExtraction/ManualParsing-16         	38628298	        30.86 ns/op	      32 B/op	       1 allocs/op
+BenchmarkIDExtraction/ManualParsing-16         	38113039	        31.01 ns/op	      32 B/op	       1 allocs/op
+BenchmarkIDExtraction/ManualParsing-16         	40913943	        30.87 ns/op	      32 B/op	       1 allocs/op
+BenchmarkIDExtraction/ManualParsing-16         	38152203	        31.02 ns/op	      32 B/op	       1 allocs/op
+BenchmarkIDExtraction/ExtractSchemeID-16       	 5073752	       241.3 ns/op	      80 B/op	       2 allocs/op
+BenchmarkIDExtraction/ExtractSchemeID-16       	 4838527	       238.8 ns/op	      80 B/op	       2 allocs/op
+BenchmarkIDExtraction/ExtractSchemeID-16       	 4904144	       245.7 ns/op	      80 B/op	       2 allocs/op
+BenchmarkIDExtraction/ExtractSchemeID-16       	 4895127	       245.3 ns/op	      80 B/op	       2 allocs/op
+BenchmarkIDExtraction/ExtractSchemeID-16       	 4986106	       246.1 ns/op	      80 B/op	       2 allocs/op
+BenchmarkIDExtraction/ExtractSchemeID-16       	 4822728	       251.4 ns/op	      80 B/op	       2 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/ndef
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkParseToText_TextRecord-16    	40431891	        27.81 ns/op	      24 B/op	       1 allocs/op
+BenchmarkParseToText_TextRecord-16    	38535483	        28.38 ns/op	      24 B/op	       1 allocs/op
+BenchmarkParseToText_TextRecord-16    	41265374	        28.47 ns/op	      24 B/op	       1 allocs/op
+BenchmarkParseToText_TextRecord-16    	37403652	        28.17 ns/op	      24 B/op	       1 allocs/op
+BenchmarkParseToText_TextRecord-16    	44157043	        27.47 ns/op	      24 B/op	       1 allocs/op
+BenchmarkParseToText_TextRecord-16    	42296852	        27.38 ns/op	      24 B/op	       1 allocs/op
+BenchmarkParseToText_URIRecord-16     	20432566	        58.70 ns/op	      96 B/op	       2 allocs/op
+BenchmarkParseToText_URIRecord-16     	20793781	        58.81 ns/op	      96 B/op	       2 allocs/op
+BenchmarkParseToText_URIRecord-16     	20703864	        58.39 ns/op	      96 B/op	       2 allocs/op
+BenchmarkParseToText_URIRecord-16     	20847220	        60.01 ns/op	      96 B/op	       2 allocs/op
+BenchmarkParseToText_URIRecord-16     	20749591	        60.45 ns/op	      96 B/op	       2 allocs/op
+BenchmarkParseToText_URIRecord-16     	19471881	        60.29 ns/op	      96 B/op	       2 allocs/op
+BenchmarkValidateNDEFMessage-16       	935104284	         1.301 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateNDEFMessage-16       	920792634	         1.291 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateNDEFMessage-16       	910196300	         1.292 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateNDEFMessage-16       	923392480	         1.256 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateNDEFMessage-16       	955971855	         1.256 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValidateNDEFMessage-16       	899992117	         1.264 ns/op	       0 B/op	       0 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/service
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkMatchMapping_Exact_50rules-16     	  118854	      9701 ns/op	    3632 B/op	     218 allocs/op
+BenchmarkMatchMapping_Exact_50rules-16     	  123813	      9780 ns/op	    3632 B/op	     218 allocs/op
+BenchmarkMatchMapping_Exact_50rules-16     	  124221	      9768 ns/op	    3632 B/op	     218 allocs/op
+BenchmarkMatchMapping_Exact_50rules-16     	  123331	      9829 ns/op	    3632 B/op	     218 allocs/op
+BenchmarkMatchMapping_Exact_50rules-16     	  121194	      9736 ns/op	    3632 B/op	     218 allocs/op
+BenchmarkMatchMapping_Exact_50rules-16     	  117860	      9856 ns/op	    3632 B/op	     218 allocs/op
+BenchmarkMatchMapping_Regex_50rules-16     	   51444	     23373 ns/op	    4259 B/op	     218 allocs/op
+BenchmarkMatchMapping_Regex_50rules-16     	   51151	     23418 ns/op	    4247 B/op	     218 allocs/op
+BenchmarkMatchMapping_Regex_50rules-16     	   49666	     23848 ns/op	    4247 B/op	     218 allocs/op
+BenchmarkMatchMapping_Regex_50rules-16     	   49602	     24441 ns/op	    4249 B/op	     218 allocs/op
+BenchmarkMatchMapping_Regex_50rules-16     	   48558	     24591 ns/op	    4260 B/op	     218 allocs/op
+BenchmarkMatchMapping_Regex_50rules-16     	   49128	     24580 ns/op	    4256 B/op	     218 allocs/op
+BenchmarkMatchMapping_Mixed_100rules-16    	   57831	     20643 ns/op	    7503 B/op	     412 allocs/op
+BenchmarkMatchMapping_Mixed_100rules-16    	   57007	     20988 ns/op	    7500 B/op	     412 allocs/op
+BenchmarkMatchMapping_Mixed_100rules-16    	   58044	     21023 ns/op	    7511 B/op	     412 allocs/op
+BenchmarkMatchMapping_Mixed_100rules-16    	   59283	     20893 ns/op	    7524 B/op	     412 allocs/op
+BenchmarkMatchMapping_Mixed_100rules-16    	   59012	     20035 ns/op	    7504 B/op	     412 allocs/op
+BenchmarkMatchMapping_Mixed_100rules-16    	   59241	     20090 ns/op	    7503 B/op	     412 allocs/op
+BenchmarkScanToLaunch_ExactMatch-16        	    7609	    144201 ns/op	   45035 B/op	     436 allocs/op
+BenchmarkScanToLaunch_ExactMatch-16        	    8547	    145070 ns/op	   45515 B/op	     435 allocs/op
+BenchmarkScanToLaunch_ExactMatch-16        	    7376	    146304 ns/op	   45100 B/op	     435 allocs/op
+BenchmarkScanToLaunch_ExactMatch-16        	    7081	    149698 ns/op	   45299 B/op	     435 allocs/op
+BenchmarkScanToLaunch_ExactMatch-16        	    8092	    149116 ns/op	   45871 B/op	     435 allocs/op
+BenchmarkScanToLaunch_ExactMatch-16        	    8001	    149382 ns/op	   45881 B/op	     435 allocs/op
+BenchmarkScanToLaunch_DirectPath-16        	   19690	     60536 ns/op	   43174 B/op	     389 allocs/op
+BenchmarkScanToLaunch_DirectPath-16        	   19378	     60034 ns/op	   43233 B/op	     389 allocs/op
+BenchmarkScanToLaunch_DirectPath-16        	   20289	     60000 ns/op	   44116 B/op	     389 allocs/op
+BenchmarkScanToLaunch_DirectPath-16        	   21008	     56651 ns/op	   43946 B/op	     389 allocs/op
+BenchmarkScanToLaunch_DirectPath-16        	   21090	     56456 ns/op	   43919 B/op	     389 allocs/op
+BenchmarkScanToLaunch_DirectPath-16        	   21108	     56483 ns/op	   43888 B/op	     389 allocs/op
+BenchmarkScanToLaunch_WithMapping-16       	    8311	    135638 ns/op	   41757 B/op	     409 allocs/op
+BenchmarkScanToLaunch_WithMapping-16       	    7675	    135394 ns/op	   41827 B/op	     409 allocs/op
+BenchmarkScanToLaunch_WithMapping-16       	    8293	    135926 ns/op	   41738 B/op	     409 allocs/op
+BenchmarkScanToLaunch_WithMapping-16       	    8208	    136516 ns/op	   41799 B/op	     409 allocs/op
+BenchmarkScanToLaunch_WithMapping-16       	    8792	    136968 ns/op	   42229 B/op	     409 allocs/op
+BenchmarkScanToLaunch_WithMapping-16       	    8462	    139733 ns/op	   41677 B/op	     409 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkParse_GlobalArgs-16          	  971505	      1169 ns/op	     488 B/op	      14 allocs/op
+BenchmarkParse_GlobalArgs-16          	 1000000	      1203 ns/op	     488 B/op	      14 allocs/op
+BenchmarkParse_GlobalArgs-16          	  887494	      1199 ns/op	     488 B/op	      14 allocs/op
+BenchmarkParse_GlobalArgs-16          	 1000000	      1202 ns/op	     488 B/op	      14 allocs/op
+BenchmarkParse_GlobalArgs-16          	  937125	      1182 ns/op	     488 B/op	      14 allocs/op
+BenchmarkParse_GlobalArgs-16          	  981489	      1192 ns/op	     488 B/op	      14 allocs/op
+BenchmarkParse_LaunchArgs-16          	  222930	      5362 ns/op	    2850 B/op	      79 allocs/op
+BenchmarkParse_LaunchArgs-16          	  232874	      5296 ns/op	    2854 B/op	      79 allocs/op
+BenchmarkParse_LaunchArgs-16          	  232779	      5310 ns/op	    2859 B/op	      79 allocs/op
+BenchmarkParse_LaunchArgs-16          	  225796	      5364 ns/op	    2855 B/op	      79 allocs/op
+BenchmarkParse_LaunchArgs-16          	  225028	      5381 ns/op	    2855 B/op	      79 allocs/op
+BenchmarkParse_LaunchArgs-16          	  228094	      5290 ns/op	    2857 B/op	      79 allocs/op
+BenchmarkParse_LaunchSearchArgs-16    	  223276	      5476 ns/op	    2750 B/op	      80 allocs/op
+BenchmarkParse_LaunchSearchArgs-16    	  218863	      5513 ns/op	    2751 B/op	      80 allocs/op
+BenchmarkParse_LaunchSearchArgs-16    	  208042	      5536 ns/op	    2752 B/op	      80 allocs/op
+BenchmarkParse_LaunchSearchArgs-16    	  224590	      5541 ns/op	    2747 B/op	      80 allocs/op
+BenchmarkParse_LaunchSearchArgs-16    	  223688	      5489 ns/op	    2747 B/op	      80 allocs/op
+BenchmarkParse_LaunchSearchArgs-16    	  212740	      5410 ns/op	    2744 B/op	      80 allocs/op
+goos: linux
+goarch: amd64
+pkg: github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles
+cpu: AMD Ryzen 7 8700G w/ Radeon 780M Graphics      
+BenchmarkResolveTitle_CacheHit/10k-16     	   19180	     62470 ns/op	    4620 B/op	     142 allocs/op
+BenchmarkResolveTitle_CacheHit/10k-16     	   19380	     62067 ns/op	    4615 B/op	     142 allocs/op
+BenchmarkResolveTitle_CacheHit/10k-16     	   19641	     61541 ns/op	    4605 B/op	     142 allocs/op
+BenchmarkResolveTitle_CacheHit/10k-16     	   19476	     62037 ns/op	    4617 B/op	     142 allocs/op
+BenchmarkResolveTitle_CacheHit/10k-16     	   18968	     63360 ns/op	    4631 B/op	     142 allocs/op
+BenchmarkResolveTitle_CacheHit/10k-16     	   18824	     63257 ns/op	    4611 B/op	     142 allocs/op
+BenchmarkResolveTitle_ExactMatch/10k-16   	    3622	    306489 ns/op	   15489 B/op	     262 allocs/op
+BenchmarkResolveTitle_ExactMatch/10k-16   	    3765	    313923 ns/op	   15458 B/op	     262 allocs/op
+BenchmarkResolveTitle_ExactMatch/10k-16   	    3910	    311486 ns/op	   15489 B/op	     262 allocs/op
+BenchmarkResolveTitle_ExactMatch/10k-16   	    3752	    309134 ns/op	   15481 B/op	     262 allocs/op
+BenchmarkResolveTitle_ExactMatch/10k-16   	    3703	    312777 ns/op	   15476 B/op	     262 allocs/op
+BenchmarkResolveTitle_ExactMatch/10k-16   	    3884	    305048 ns/op	   15435 B/op	     262 allocs/op
+BenchmarkResolveTitle_FuzzyFallback/10k-16         	      37	  30718125 ns/op	 8959623 B/op	  209061 allocs/op
+BenchmarkResolveTitle_FuzzyFallback/10k-16         	      38	  30720853 ns/op	 8973685 B/op	  209064 allocs/op
+BenchmarkResolveTitle_FuzzyFallback/10k-16         	      37	  30559423 ns/op	 8974529 B/op	  209064 allocs/op
+BenchmarkResolveTitle_FuzzyFallback/10k-16         	      38	  30712325 ns/op	 8963878 B/op	  209062 allocs/op
+BenchmarkResolveTitle_FuzzyFallback/10k-16         	      38	  31221164 ns/op	 8970734 B/op	  209063 allocs/op
+BenchmarkResolveTitle_FuzzyFallback/10k-16         	      37	  30749301 ns/op	 8972729 B/op	  209064 allocs/op

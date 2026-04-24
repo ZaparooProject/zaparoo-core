@@ -156,7 +156,7 @@ func TestPlayWAV(t *testing.T) {
 	}
 }
 
-func TestPlayWAVBytes(t *testing.T) {
+func TestPlayBytes(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -189,7 +189,7 @@ func TestPlayWAVBytes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := NewMalgoPlayer()
-			err := p.PlayWAVBytes(tt.data)
+			err := p.PlayBytes(tt.data)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -288,7 +288,7 @@ func TestPlayWAV_CancellationBehavior(t *testing.T) {
 	assert.Greater(t, gen2, gen1, "second playback should increment generation")
 }
 
-func TestPlayWAVBytes_CancellationBehavior(t *testing.T) {
+func TestPlayBytes_CancellationBehavior(t *testing.T) {
 	t.Parallel()
 
 	p := NewMalgoPlayer()
@@ -297,7 +297,7 @@ func TestPlayWAVBytes_CancellationBehavior(t *testing.T) {
 	initialGen := p.playbackGen
 	p.playbackMu.Unlock()
 
-	err := p.PlayWAVBytes(validWAVHeader())
+	err := p.PlayBytes(validWAVHeader())
 	require.NoError(t, err)
 
 	p.playbackMu.Lock()
@@ -305,7 +305,7 @@ func TestPlayWAVBytes_CancellationBehavior(t *testing.T) {
 	p.playbackMu.Unlock()
 	assert.Greater(t, gen1, initialGen, "first playback should increment generation")
 
-	err = p.PlayWAVBytes(validWAVHeader())
+	err = p.PlayBytes(validWAVHeader())
 	require.NoError(t, err)
 
 	p.playbackMu.Lock()

@@ -54,6 +54,7 @@ func OpenBrowser(url string) error {
 	if err := ValidateBrowserURL(url); err != nil {
 		return err
 	}
+	//nolint:gosec // G204: url validated by ValidateBrowserURL
 	cmd := exec.CommandContext(context.Background(), "xdg-open", url)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to open browser: %w", err)

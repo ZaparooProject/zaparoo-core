@@ -21,6 +21,7 @@ package platforms_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -48,9 +49,11 @@ func TestResolveAction(t *testing.T) {
 		require.NoError(t, err)
 
 		// Configure launcher with action=details in config
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "Steam", Action: "details"},
-		})
+		require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Steam"
+action = "details"
+`))
 
 		// Opts specifies action=run, should override config
 		opts := &platforms.LaunchOptions{Action: "run"}
@@ -67,9 +70,11 @@ func TestResolveAction(t *testing.T) {
 		require.NoError(t, err)
 
 		// Configure launcher with action=details in config
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "Steam", Action: "details"},
-		})
+		require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Steam"
+action = "details"
+`))
 
 		// Opts has empty action
 		opts := &platforms.LaunchOptions{Action: ""}
@@ -86,9 +91,11 @@ func TestResolveAction(t *testing.T) {
 		require.NoError(t, err)
 
 		// Configure launcher with action=details in config
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "Steam", Action: "details"},
-		})
+		require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Steam"
+action = "details"
+`))
 
 		action := platforms.ResolveAction(nil, cfg, steamLauncher)
 
@@ -123,9 +130,11 @@ func TestResolveAction(t *testing.T) {
 		cfg, err := helpers.NewTestConfig(fs, t.TempDir())
 		require.NoError(t, err)
 
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "Steam", Action: "details"},
-		})
+		require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "Steam"
+action = "details"
+`))
 
 		action := platforms.ResolveAction(nil, cfg, emptyLauncher)
 
@@ -140,9 +149,11 @@ func TestResolveAction(t *testing.T) {
 		require.NoError(t, err)
 
 		// Configure action for "PC" group, not specific launcher ID
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "PC", Action: "browse"},
-		})
+		require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "PC"
+action = "browse"
+`))
 
 		action := platforms.ResolveAction(nil, cfg, steamWithGroups)
 
@@ -465,6 +476,35 @@ func TestDoLaunch_NoSystemIDSkipsActiveMedia(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestDoLaunch_NilLaunchReturnsError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+
+	launcher := &platforms.Launcher{
+		ID:       "no-launch-func",
+		SystemID: "test-system",
+		Launch:   nil,
+	}
+
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) {},
+		Launcher:       launcher,
+		DB:             nil,
+		Path:           "/test/path.rom",
+	}
+
+	err := platforms.DoLaunch(params, func(_ string) string { return "path" })
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no-launch-func")
+	assert.Contains(t, err.Error(), "no launch function configured")
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestDoLaunch_TrackedLauncherError(t *testing.T) {
 	t.Parallel()
 
@@ -494,4 +534,73 @@ func TestDoLaunch_TrackedLauncherError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to launch")
 	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_NativeLaunchPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		inputPath         string
+		expectedLaunchArg string
+	}{
+		{
+			name:              "file_path_converted_to_native",
+			inputPath:         "C:/Games/SNES/mario.sfc",
+			expectedLaunchArg: filepath.FromSlash("C:/Games/SNES/mario.sfc"),
+		},
+		{
+			name:              "uri_path_unchanged",
+			inputPath:         "steam://run/12345",
+			expectedLaunchArg: "steam://run/12345",
+		},
+		{
+			name:              "kodi_uri_unchanged",
+			inputPath:         "kodi://movies/12345",
+			expectedLaunchArg: "kodi://movies/12345",
+		},
+		{
+			name:              "unix_style_path_converted_to_native",
+			inputPath:         "/home/user/roms/game.nes",
+			expectedLaunchArg: filepath.FromSlash("/home/user/roms/game.nes"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+
+			var capturedPath string
+			launcher := &platforms.Launcher{
+				ID:        "test-launcher",
+				SystemID:  "test-system",
+				Lifecycle: platforms.LifecycleFireAndForget,
+				Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+					capturedPath = path
+					var noProcess *os.Process
+					return noProcess, nil
+				},
+			}
+
+			params := &platforms.LaunchParams{
+				Platform:       mockPlatform,
+				Config:         &config.Instance{},
+				SetActiveMedia: func(*models.ActiveMedia) {},
+				Launcher:       launcher,
+				DB:             nil,
+				Path:           tt.inputPath,
+			}
+
+			err := platforms.DoLaunch(params, func(_ string) string { return "game" })
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expectedLaunchArg, capturedPath,
+				"Launch should receive OS-native path")
+
+			mockPlatform.AssertExpectations(t)
+		})
+	}
 }

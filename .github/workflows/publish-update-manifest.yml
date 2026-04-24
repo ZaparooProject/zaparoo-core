@@ -1,0 +1,184 @@
+name: Publish update manifest
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish-stable:
+    # Publish manifest for stable releases (no pre-releases like v2.10.0-rc3)
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Publish stable update manifest to CDN
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: |
+            scripts/generate-update-manifest/
+            go.mod
+            go.sum
+          sparse-checkout-cone-mode: false
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Download release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p _assets
+          gh release download "${{ github.event.release.tag_name }}" --dir _assets \
+            --pattern "zaparoo-*.tar.gz" \
+            --pattern "zaparoo-*.zip"
+      - name: Generate and sign checksums
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if ! ls _assets/zaparoo-* >/dev/null 2>&1; then
+            echo "No release assets found" >&2; exit 1
+          fi
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "UPDATE_SIGNING_KEY secret is not configured" >&2; exit 1
+          fi
+          cd _assets && sha256sum zaparoo-* > checksums.txt && cd ..
+          install -m 600 /dev/stdin /tmp/signing.pem <<< "$UPDATE_SIGNING_KEY"
+          openssl pkeyutl -sign -inkey /tmp/signing.pem -rawin \
+            -in _assets/checksums.txt > _assets/checksums.txt.sig
+          rm /tmp/signing.pem
+      - name: Generate manifest
+        env:
+          RELEASE_NOTES: ${{ github.event.release.body }}
+        run: |
+          go run scripts/generate-update-manifest/main.go \
+            --version "${{ github.event.release.tag_name }}" \
+            --assets-dir _assets \
+            --release-notes "$RELEASE_NOTES" \
+            --output _manifest/manifest.yaml
+          cp _assets/checksums.txt _manifest/checksums.txt
+          cp _assets/checksums.txt.sig _manifest/checksums.txt.sig
+      - name: Upload manifest to Bunny.net storage
+        uses: R-J-dev/bunny-deploy@ae25fa670b732ffc8dba84c872fb203d2a365229 # v3.0.0
+        with:
+          storage-zone-password: ${{ secrets.BUNNY_STORAGE_ZONE_PASSWORD }}
+          storage-endpoint: "https://storage.bunnycdn.com"
+          storage-zone-name: ${{ secrets.BUNNY_STORAGE_ZONE }}
+          directory-to-upload: "_manifest"
+          target-directory: "ZaparooProject/zaparoo-core"
+          concurrency: "10"
+          access-key: ${{ secrets.BUNNY_API_KEY }}
+          pull-zone-id: ${{ secrets.BUNNY_PULL_ZONE_ID }}
+          enable-purge-pull-zone: true
+          replication-timeout: "15000"
+
+  publish-beta:
+    # Publish manifest for pre-releases (beta, rc, alpha) but not nightlies
+    if: ${{ github.event.release.prerelease && !contains(github.event.release.tag_name, 'nightly') }}
+    concurrency:
+      group: publish-update-manifest
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Publish beta update manifest to CDN
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: |
+            scripts/generate-update-manifest/
+            pkg/service/updater/update_signing.pub
+            go.mod
+            go.sum
+          sparse-checkout-cone-mode: false
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Download existing manifest from CDN
+        run: |
+          mkdir -p _existing
+          # Download existing manifest, checksums, and signature (may not exist yet)
+          curl -sf "https://updates.zaparoo.org/ZaparooProject/zaparoo-core/manifest.yaml" \
+            -o _existing/manifest.yaml || true
+          curl -sf "https://updates.zaparoo.org/ZaparooProject/zaparoo-core/checksums.txt" \
+            -o _existing/checksums.txt || true
+          curl -sf "https://updates.zaparoo.org/ZaparooProject/zaparoo-core/checksums.txt.sig" \
+            -o _existing/checksums.txt.sig || true
+      - name: Download release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p _assets
+          gh release download "${{ github.event.release.tag_name }}" --dir _assets \
+            --pattern "zaparoo-*.tar.gz" \
+            --pattern "zaparoo-*.zip"
+      - name: Generate checksums, merge with existing, and sign
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if ! ls _assets/zaparoo-* >/dev/null 2>&1; then
+            echo "No release assets found" >&2; exit 1
+          fi
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "UPDATE_SIGNING_KEY secret is not configured" >&2; exit 1
+          fi
+          cd _assets && sha256sum zaparoo-* > checksums.txt && cd ..
+          # Merge with existing checksums only after verifying their signature
+          if [ -f _existing/checksums.txt ] && [ -f _existing/checksums.txt.sig ]; then
+            # Convert embedded ed25519 public key to PEM for OpenSSL
+            RAW_PUB=$(tr -d '[:space:]' < pkg/service/updater/update_signing.pub)
+            {
+              echo "-----BEGIN PUBLIC KEY-----"
+              (echo -n 'MCowBQYDK2VwAyEA' | base64 -d; echo -n "$RAW_PUB" | base64 -d) | base64 | fold -w 64
+              echo "-----END PUBLIC KEY-----"
+            } > /tmp/verify.pem
+            if openssl pkeyutl -verify -pubin -inkey /tmp/verify.pem -rawin \
+                 -in _existing/checksums.txt -sigfile _existing/checksums.txt.sig; then
+              echo "Existing checksums signature verified, merging"
+              cat _assets/checksums.txt _existing/checksums.txt \
+                | awk '{ key=$2 } !seen[key]++ { print }' > _merged_checksums.txt
+              mv _merged_checksums.txt _assets/checksums.txt
+            else
+              echo "WARNING: Existing checksums signature verification failed, skipping merge" >&2
+            fi
+            rm -f /tmp/verify.pem
+          elif [ -f _existing/checksums.txt ]; then
+            echo "WARNING: Existing checksums found without signature, skipping merge" >&2
+          fi
+          install -m 600 /dev/stdin /tmp/signing.pem <<< "$UPDATE_SIGNING_KEY"
+          openssl pkeyutl -sign -inkey /tmp/signing.pem -rawin \
+            -in _assets/checksums.txt > _assets/checksums.txt.sig
+          rm /tmp/signing.pem
+      - name: Generate manifest
+        env:
+          RELEASE_NOTES: ${{ github.event.release.body }}
+        run: |
+          MERGE_FLAG=()
+          if [ -f _existing/manifest.yaml ]; then
+            MERGE_FLAG=(--merge _existing/manifest.yaml)
+          fi
+          go run scripts/generate-update-manifest/main.go \
+            --version "${{ github.event.release.tag_name }}" \
+            --assets-dir _assets \
+            --release-notes "$RELEASE_NOTES" \
+            --prerelease \
+            "${MERGE_FLAG[@]}" \
+            --output _manifest/manifest.yaml
+          cp _assets/checksums.txt _manifest/checksums.txt
+          cp _assets/checksums.txt.sig _manifest/checksums.txt.sig
+      - name: Upload manifest to Bunny.net storage
+        uses: R-J-dev/bunny-deploy@ae25fa670b732ffc8dba84c872fb203d2a365229 # v3.0.0
+        with:
+          storage-zone-password: ${{ secrets.BUNNY_STORAGE_ZONE_PASSWORD }}
+          storage-endpoint: "https://storage.bunnycdn.com"
+          storage-zone-name: ${{ secrets.BUNNY_STORAGE_ZONE }}
+          directory-to-upload: "_manifest"
+          target-directory: "ZaparooProject/zaparoo-core"
+          concurrency: "10"
+          access-key: ${{ secrets.BUNNY_API_KEY }}
+          pull-zone-id: ${{ secrets.BUNNY_PULL_ZONE_ID }}
+          enable-purge-pull-zone: true
+          replication-timeout: "15000"

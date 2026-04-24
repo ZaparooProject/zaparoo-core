@@ -77,7 +77,7 @@ func TestRateLimiter_AppRoutesNotLimited(t *testing.T) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/app/index.html", http.NoBody)
 		require.NoError(t, err, "creating request %d", i)
 
-		resp, err := client.Do(req)
+		resp, err := client.Do(req) //nolint:gosec // G704: test hitting local test server
 		require.NoError(t, err, "request %d failed", i)
 		_ = resp.Body.Close()
 
@@ -124,7 +124,7 @@ func TestRateLimiter_APIRoutesLimited(t *testing.T) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/api/v0.1", http.NoBody)
 		require.NoError(t, err, "creating request %d", i)
 
-		resp, err := client.Do(req)
+		resp, err := client.Do(req) //nolint:gosec // G704: test hitting local test server
 		require.NoError(t, err, "request %d failed", i)
 		_ = resp.Body.Close()
 
@@ -170,7 +170,7 @@ func TestRateLimiter_RunRoutesLimited(t *testing.T) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/run/test", http.NoBody)
 		require.NoError(t, err, "creating request %d", i)
 
-		resp, err := client.Do(req)
+		resp, err := client.Do(req) //nolint:gosec // G704: test hitting local test server
 		require.NoError(t, err, "request %d failed", i)
 		_ = resp.Body.Close()
 

@@ -25,6 +25,8 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -52,6 +54,7 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	sqlStmt := `
 	delete from History;
 	delete from Mappings;
+	delete from Clients;
 	vacuum;
 	`
 	_, err := db.ExecContext(ctx, sqlStmt)
@@ -147,11 +150,11 @@ func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry)
 	return nil
 }
 
-func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]database.HistoryEntry, error) {
+func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int64) ([]database.HistoryEntry, error) {
 	list := make([]database.HistoryEntry, 0, 25)
 	// Instead of offset, use token-based
 	if lastID == 0 {
-		lastID = 2147483646
+		lastID = math.MaxInt64
 	}
 
 	q, err := db.PrepareContext(ctx, `
@@ -287,21 +290,20 @@ func sqlGetMapping(ctx context.Context, db *sql.DB, id int64) (database.Mapping,
 }
 
 func sqlDeleteMapping(ctx context.Context, db *sql.DB, id int64) error {
-	stmt, err := db.PrepareContext(ctx, `
-		delete from Mappings where DBID = ?;
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to prepare mapping delete statement: %w", err)
-	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}()
-	_, err = stmt.ExecContext(ctx, id)
+	result, err := db.ExecContext(ctx, `delete from Mappings where DBID = ?;`, id)
 	if err != nil {
 		return fmt.Errorf("failed to execute mapping delete: %w", err)
 	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("mapping not found: %d", id)
+	}
+
 	return nil
 }
 
@@ -730,4 +732,117 @@ func sqlDeleteAllInboxMessages(ctx context.Context, db *sql.DB) (int64, error) {
 	}
 
 	return rowsAffected, nil
+}
+
+// ErrInvalidAuthToken rejects ':' in auth tokens (AAD uses `<token>:ws`;
+// also enforced by SQL CHECK).
+var ErrInvalidAuthToken = errors.New("auth token must not contain ':'")
+
+func sqlCreateClient(ctx context.Context, db *sql.DB, c *database.Client) error {
+	if strings.ContainsRune(c.AuthToken, ':') {
+		return ErrInvalidAuthToken
+	}
+	var dbid int64
+	err := db.QueryRowContext(ctx, `
+		INSERT INTO Clients (ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt)
+		VALUES (?, ?, ?, ?, ?, ?)
+		RETURNING DBID;
+	`, c.ClientID, c.ClientName, c.AuthToken, c.PairingKey, c.CreatedAt, c.LastSeenAt).Scan(&dbid)
+	if err != nil {
+		return fmt.Errorf("failed to insert client: %w", err)
+	}
+	c.DBID = dbid
+	return nil
+}
+
+func sqlGetClientByToken(ctx context.Context, db *sql.DB, authToken string) (*database.Client, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT DBID, ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt
+		FROM Clients
+		WHERE AuthToken = ?;
+	`, authToken)
+
+	c := database.Client{}
+	err := row.Scan(&c.DBID, &c.ClientID, &c.ClientName, &c.AuthToken, &c.PairingKey, &c.CreatedAt, &c.LastSeenAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("client not found: %w", err)
+		}
+		return nil, fmt.Errorf("failed to scan client row: %w", err)
+	}
+	return &c, nil
+}
+
+func sqlListClients(ctx context.Context, db *sql.DB) ([]database.Client, error) {
+	list := make([]database.Client, 0)
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT DBID, ClientID, ClientName, AuthToken, PairingKey, CreatedAt, LastSeenAt
+		FROM Clients
+		ORDER BY CreatedAt DESC;
+	`)
+	if err != nil {
+		return list, fmt.Errorf("failed to query clients: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		}
+	}()
+
+	for rows.Next() {
+		c := database.Client{}
+		if scanErr := rows.Scan(
+			&c.DBID, &c.ClientID, &c.ClientName, &c.AuthToken,
+			&c.PairingKey, &c.CreatedAt, &c.LastSeenAt,
+		); scanErr != nil {
+			return list, fmt.Errorf("failed to scan client row: %w", scanErr)
+		}
+		list = append(list, c)
+	}
+
+	if err = rows.Err(); err != nil {
+		return list, fmt.Errorf("error iterating client rows: %w", err)
+	}
+	return list, nil
+}
+
+func sqlDeleteClient(ctx context.Context, db *sql.DB, clientID string) error {
+	result, err := db.ExecContext(ctx, `DELETE FROM Clients WHERE ClientID = ?;`, clientID)
+	if err != nil {
+		return fmt.Errorf("failed to execute client delete: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("client not found: %s", clientID)
+	}
+	return nil
+}
+
+// sqlUpdateClientLastSeen is a fire-and-forget used by the async LastSeenTracker.
+// It intentionally does not check RowsAffected — a deleted client is a normal
+// no-op here, unlike sqlDeleteClient which reports "not found" to the caller.
+func sqlUpdateClientLastSeen(ctx context.Context, db *sql.DB, authToken string, lastSeenAt int64) error {
+	_, err := db.ExecContext(ctx,
+		`UPDATE Clients SET LastSeenAt = ? WHERE AuthToken = ?;`,
+		lastSeenAt, authToken,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update client last seen: %w", err)
+	}
+	return nil
+}
+
+func sqlCountClients(ctx context.Context, db *sql.DB) (int, error) {
+	var count int
+	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM Clients;`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count clients: %w", err)
+	}
+	return count, nil
 }

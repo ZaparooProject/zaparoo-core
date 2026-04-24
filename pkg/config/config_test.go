@@ -25,8 +25,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1117,4 +1119,597 @@ func TestSave_OmitsGamepadEnabledWhenNil(t *testing.T) {
 	// Verify that gamepad_enabled is not written when nil
 	assert.NotContains(t, content, "gamepad_enabled", "gamepad_enabled should not be in config when nil")
 	assert.NotContains(t, content, "[input]", "input section should not be in config when all fields nil")
+}
+
+func BenchmarkConfig_Read(b *testing.B) {
+	b.ReportAllocs()
+	cfg := &Instance{vals: BaseDefaults}
+	b.ResetTimer()
+	for b.Loop() {
+		_ = cfg.IsExecuteAllowed("some-command")
+	}
+}
+
+func TestSetDebugLogging(t *testing.T) {
+	// Not parallel: mutates zerolog global level and os env.
+
+	t.Run("enables debug level", func(t *testing.T) {
+		cfg := &Instance{}
+		cfg.SetDebugLogging(true)
+		assert.True(t, cfg.DebugLogging())
+		assert.Equal(t, zerolog.DebugLevel, zerolog.GlobalLevel())
+	})
+
+	t.Run("disables to info level", func(t *testing.T) {
+		cfg := &Instance{}
+		cfg.SetDebugLogging(false)
+		assert.False(t, cfg.DebugLogging())
+		assert.Equal(t, zerolog.InfoLevel, zerolog.GlobalLevel())
+	})
+
+	t.Run("ZAPAROO_TRACE overrides to trace level", func(t *testing.T) {
+		t.Setenv("ZAPAROO_TRACE", "1")
+
+		cfg := &Instance{}
+		cfg.SetDebugLogging(false)
+		assert.Equal(t, zerolog.TraceLevel, zerolog.GlobalLevel())
+
+		// Even with debug enabled, trace still wins
+		cfg.SetDebugLogging(true)
+		assert.Equal(t, zerolog.TraceLevel, zerolog.GlobalLevel())
+	})
+
+	// Reset to a sane default after test
+	zerolog.SetGlobalLevel(zerolog.Disabled)
+}
+
+func TestAnchorPattern(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "simple pattern",
+			input:    "echo",
+			expected: "^(?:echo)$",
+		},
+		{
+			name:     "pattern with wildcard",
+			input:    "/usr/bin/.*",
+			expected: "^(?:/usr/bin/.*)$",
+		},
+		{
+			name:     "already anchored pattern",
+			input:    "^echo$",
+			expected: "^(?:^echo$)$",
+		},
+		{
+			name:     "case insensitive prefix",
+			input:    "(?i)C:\\\\Users\\\\.*",
+			expected: "^(?:(?i)C:\\\\Users\\\\.*)$",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := anchorPattern(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestLoadTOML_PartialMerge(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+block_commands = ["http.get"]
+`))
+
+	// Baseline
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+	assert.True(t, cfg.IsCommandBlocked("http.get"))
+
+	// Partial update — only change block_commands, leave allow_execute untouched
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+block_commands = ["execute"]
+`))
+
+	// allow_execute unchanged
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"partial merge must not clear unrelated fields")
+	// block_commands updated
+	assert.False(t, cfg.IsCommandBlocked("http.get"))
+	assert.True(t, cfg.IsCommandBlocked("execute"))
+}
+
+func TestLoadTOML_InvalidTOMLPreservesState(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+`))
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+
+	// TOML that decodes debug_logging (bool) then fails on a type error
+	// for allow_execute (string where array expected). This tests that
+	// partially-applied fields are rolled back.
+	err := cfg.LoadTOML(`
+debug_logging = true
+
+[zapscript]
+allow_execute = "not-an-array"
+`)
+	require.Error(t, err)
+
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"state must be preserved after LoadTOML error")
+	assert.False(t, cfg.IsExecuteAllowed("not-an-array"),
+		"partial decode must not leak into state")
+}
+
+func TestLoadTOML_RebuildsDerivedFields(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+allow_http = ['https://example\.com/.*']
+block_commands = ["http.get"]
+
+[service]
+allow_run = ['.*']
+`))
+
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+	assert.False(t, cfg.IsExecuteAllowed("rm"))
+	assert.True(t, cfg.IsHTTPAllowed("https://example.com/foo"))
+	assert.False(t, cfg.IsHTTPAllowed("https://evil.com"))
+	assert.True(t, cfg.IsCommandBlocked("http.get"))
+	assert.False(t, cfg.IsCommandBlocked("launch"))
+	assert.True(t, cfg.IsRunAllowed("**launch:test"))
+
+	// Update regexes — derived fields must be rebuilt
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["rm"]
+`))
+
+	assert.True(t, cfg.IsExecuteAllowed("rm"),
+		"regex must be recompiled after LoadTOML")
+	assert.False(t, cfg.IsExecuteAllowed("echo"),
+		"old regex must be replaced")
+
+	// Other derived fields must be retained from the first LoadTOML
+	assert.True(t, cfg.IsHTTPAllowed("https://example.com/foo"),
+		"allowHTTPRe must be retained")
+	assert.False(t, cfg.IsHTTPAllowed("https://evil.com"),
+		"allowHTTPRe must still block non-matching URLs")
+	assert.True(t, cfg.IsCommandBlocked("http.get"),
+		"blockCommandSet must be retained")
+	assert.True(t, cfg.IsRunAllowed("**launch:test"),
+		"allowRunRe must be retained")
+}
+
+func TestLoad_RollbackOnSchemaError(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+
+	// Set up known state
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+`))
+	assert.True(t, cfg.IsExecuteAllowed("echo"))
+
+	// Write a config file with wrong schema version but valid fields —
+	// Load() will decode allow_execute = ["rm"] before schema check fails,
+	// so this verifies rollback undoes the partial decode.
+	cfgPath := filepath.Join(tempDir, CfgFile)
+	err = os.WriteFile(cfgPath, []byte(`config_schema = 9999
+
+[zapscript]
+allow_execute = ["rm"]
+`), 0o600)
+	require.NoError(t, err)
+
+	// Load should fail but preserve running config
+	err = cfg.Load()
+	require.Error(t, err)
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"Load must preserve running config on schema error")
+	assert.False(t, cfg.IsExecuteAllowed("rm"),
+		"bad config values must not leak into running config")
+}
+
+func TestAutoAnchorPreventsSubstringMatch(t *testing.T) {
+	t.Parallel()
+
+	// Without anchoring, "echo" would match "echo && rm -rf /"
+	// With anchoring, it should only match exactly "echo"
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+allow_execute = ["echo"]
+`))
+
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"exact match should be allowed")
+	assert.False(t, cfg.IsExecuteAllowed("echo && rm -rf /"),
+		"substring match should be blocked after anchoring")
+	assert.False(t, cfg.IsExecuteAllowed("notecho"),
+		"prefix substring should be blocked")
+
+	// Pattern with .* should still allow intended matches
+	cfg2 := &Instance{}
+	require.NoError(t, cfg2.LoadTOML(`
+[zapscript]
+allow_execute = ["/usr/bin/.*"]
+`))
+
+	assert.True(t, cfg2.IsExecuteAllowed("/usr/bin/notify-send"),
+		"wildcard suffix should match")
+	assert.False(t, cfg2.IsExecuteAllowed("/opt/usr/bin/notify-send"),
+		"path prefix should not match without .*")
+
+	// Explicit substring pattern should still work
+	cfg3 := &Instance{}
+	require.NoError(t, cfg3.LoadTOML(`
+[zapscript]
+allow_execute = [".*mister.*"]
+`))
+
+	assert.True(t, cfg3.IsExecuteAllowed("misterious"),
+		"explicit .*pattern.* should allow substring match")
+}
+
+func TestAutoAnchorLoadPath(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfgPath := filepath.Join(tempDir, CfgFile)
+
+	// Write config with an unanchored allow_execute pattern
+	configContent := fmt.Sprintf(`config_schema = %d
+
+[zapscript]
+allow_execute = ["echo"]
+`, SchemaVersion)
+
+	err := os.WriteFile(cfgPath, []byte(configContent), 0o600)
+	require.NoError(t, err)
+
+	cfg := &Instance{
+		cfgPath:  cfgPath,
+		vals:     BaseDefaults,
+		defaults: BaseDefaults,
+	}
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	assert.True(t, cfg.IsExecuteAllowed("echo"),
+		"exact match should pass through Load path")
+	assert.False(t, cfg.IsExecuteAllowed("echo && rm -rf /"),
+		"substring should be blocked through Load path")
+}
+
+func TestIsRunAllowed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		toml     string
+		expected bool
+	}{
+		{
+			name:     "empty list rejects all",
+			toml:     "",
+			input:    "**launch:SNES",
+			expected: false,
+		},
+		{
+			name:     "single command matches",
+			toml:     "[service]\nallow_run = ['\\*\\*launch\\.random:.*']",
+			input:    "**launch.random:SNES",
+			expected: true,
+		},
+		{
+			name:     "single command no match",
+			toml:     "[service]\nallow_run = ['\\*\\*launch\\.random:.*']",
+			input:    "**execute:rm -rf /",
+			expected: false,
+		},
+		{
+			name:     "chained commands all match",
+			toml:     "[service]\nallow_run = ['\\*\\*launch\\.random:.*']",
+			input:    "**launch.random:SNES||**launch.random:NES",
+			expected: true,
+		},
+		{
+			name:     "chained commands one fails",
+			toml:     "[service]\nallow_run = ['\\*\\*launch\\.random:.*']",
+			input:    "**launch.random:SNES||**execute:rm -rf /",
+			expected: false,
+		},
+		{
+			name:     "auto-launch path normalizes to launch command",
+			toml:     "[service]\nallow_run = ['\\*\\*launch:/games/.*']",
+			input:    "/games/snes/mario.sfc",
+			expected: true,
+		},
+		{
+			name:     "malformed input rejected",
+			toml:     "[service]\nallow_run = ['.*']",
+			input:    "**",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Instance{}
+			if tt.toml != "" {
+				require.NoError(t, cfg.LoadTOML(tt.toml))
+			}
+			assert.Equal(t, tt.expected, cfg.IsRunAllowed(tt.input),
+				"input: %s, toml: %s", tt.input, tt.toml)
+		})
+	}
+}
+
+func TestIsHTTPAllowed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		url      string
+		toml     string
+		expected bool
+	}{
+		{
+			name:     "empty list allows all",
+			toml:     "",
+			url:      "https://anything.com",
+			expected: true,
+		},
+		{
+			name:     "matching URL allowed",
+			toml:     `[zapscript]` + "\nallow_http = ['https://example\\.com/.*']",
+			url:      "https://example.com/api/test",
+			expected: true,
+		},
+		{
+			name:     "non-matching URL blocked",
+			toml:     `[zapscript]` + "\nallow_http = ['https://example\\.com/.*']",
+			url:      "https://evil.com/attack",
+			expected: false,
+		},
+		{
+			name:     "anchoring prevents partial match",
+			toml:     `[zapscript]` + "\nallow_http = ['https://example\\.com']",
+			url:      "https://example.com.evil.com",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Instance{}
+			if tt.toml != "" {
+				require.NoError(t, cfg.LoadTOML(tt.toml))
+			}
+			assert.Equal(t, tt.expected, cfg.IsHTTPAllowed(tt.url))
+		})
+	}
+}
+
+func TestIsCommandBlocked(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		command  string
+		toml     string
+		expected bool
+	}{
+		{
+			name:     "empty block list allows all",
+			toml:     "",
+			command:  "execute",
+			expected: false,
+		},
+		{
+			name:     "exact match is blocked",
+			toml:     "[zapscript]\nblock_commands = [\"execute\", \"http.get\"]",
+			command:  "execute",
+			expected: true,
+		},
+		{
+			name:     "non-matching command is allowed",
+			toml:     "[zapscript]\nblock_commands = [\"execute\", \"http.get\"]",
+			command:  "launch",
+			expected: false,
+		},
+		{
+			name:     "partial name is not blocked",
+			toml:     "[zapscript]\nblock_commands = [\"execute\"]",
+			command:  "execute.something",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Instance{}
+			if tt.toml != "" {
+				require.NoError(t, cfg.LoadTOML(tt.toml))
+			}
+			assert.Equal(t, tt.expected, cfg.IsCommandBlocked(tt.command))
+		})
+	}
+}
+
+func BenchmarkConfig_Load(b *testing.B) {
+	b.ReportAllocs()
+	tempDir := b.TempDir()
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		_ = cfg.Load()
+	}
+}
+
+func TestAudioVolume_Default(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewConfig(t.TempDir(), BaseDefaults)
+	require.NoError(t, err)
+
+	assert.Equal(t, 100, cfg.AudioVolume(), "default volume should be 100")
+}
+
+func TestAudioVolume_SetGet(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewConfig(t.TempDir(), BaseDefaults)
+	require.NoError(t, err)
+
+	cfg.SetAudioVolume(50)
+	assert.Equal(t, 50, cfg.AudioVolume())
+
+	cfg.SetAudioVolume(0)
+	assert.Equal(t, 0, cfg.AudioVolume())
+
+	cfg.SetAudioVolume(200)
+	assert.Equal(t, 200, cfg.AudioVolume(), "max boundary should work")
+
+	cfg.SetAudioVolume(300)
+	assert.Equal(t, 200, cfg.AudioVolume(), "values above 200 should be clamped")
+
+	cfg.SetAudioVolume(-10)
+	assert.Equal(t, 0, cfg.AudioVolume(), "negative values should be clamped to 0")
+}
+
+func TestAudioVolume_SaveLoadRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewConfig(t.TempDir(), BaseDefaults)
+	require.NoError(t, err)
+
+	cfg.SetAudioVolume(75)
+
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 75, cfg.AudioVolume(), "volume should persist after save/load")
+}
+
+func TestSave_PreservesExternalEdits(t *testing.T) {
+	t.Parallel()
+
+	memFs := afero.NewMemMapFs()
+	configDir := "/config"
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, memFs)
+	require.NoError(t, err)
+
+	// Save initial config
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	// Externally edit the file to add audio volume
+	cfgPath := filepath.Join(configDir, CfgFile)
+	data, err := afero.ReadFile(memFs, cfgPath)
+	require.NoError(t, err)
+
+	// Add volume to the existing [audio] section by inserting after "scan_feedback"
+	content := strings.Replace(string(data), "scan_feedback = true", "scan_feedback = true\nvolume = 42", 1)
+	require.NotEqual(t, string(data), content, "replacement should have occurred")
+	err = afero.WriteFile(memFs, cfgPath, []byte(content), 0o600)
+	require.NoError(t, err)
+
+	// Reload to pick up external edits, then modify a different field
+	err = cfg.Load()
+	require.NoError(t, err)
+	assert.Equal(t, 42, cfg.AudioVolume(), "should have loaded external edit")
+
+	cfg.SetErrorReporting(true)
+
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	// Reload and verify both the API change and external edit are present
+	err = cfg.Load()
+	require.NoError(t, err)
+	assert.Equal(t, 42, cfg.AudioVolume(), "external volume edit should be preserved")
+	assert.True(t, cfg.ErrorReporting(), "API change should be present")
+}
+
+func TestSave_ConfigHeader(t *testing.T) {
+	t.Parallel()
+
+	memFs := afero.NewMemMapFs()
+	configDir := "/config"
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, memFs)
+	require.NoError(t, err)
+
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	data, err := afero.ReadFile(memFs, filepath.Join(configDir, CfgFile))
+	require.NoError(t, err)
+
+	assert.Contains(t, string(data), "# Zaparoo Core configuration file.",
+		"saved config should contain header comment")
+}
+
+func TestLoad_WithComments(t *testing.T) {
+	t.Parallel()
+
+	memFs := afero.NewMemMapFs()
+	configDir := "/config"
+	cfg, err := NewConfigWithFs(configDir, BaseDefaults, memFs)
+	require.NoError(t, err)
+
+	// Write a config file with comments
+	cfgPath := filepath.Join(configDir, CfgFile)
+	content := fmt.Sprintf(`# My custom comment
+config_schema = %d
+debug_logging = true
+
+# Audio settings
+[audio]
+volume = 80
+`, SchemaVersion)
+	err = afero.WriteFile(memFs, cfgPath, []byte(content), 0o600)
+	require.NoError(t, err)
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	assert.True(t, cfg.DebugLogging())
+	assert.Equal(t, 80, cfg.AudioVolume())
 }

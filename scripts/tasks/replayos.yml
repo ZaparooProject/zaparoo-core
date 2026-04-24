@@ -1,0 +1,23 @@
+version: "3"
+
+tasks:
+  build-arm64:
+    desc: Build ReplayOS ARM64 binary
+    cmds:
+      - task: :zigcc:build-linux-arm64
+        vars:
+          PLATFORM: replayos
+
+  deploy:
+    desc: "Build and deploy binary to ReplayOS device"
+    vars:
+      REPLAYOS_HOST: '{{.REPLAYOS_HOST | default "root@${REPLAYOS_IP}"}}'
+    cmds:
+      - task: build-arm64
+      - ssh {{.REPLAYOS_HOST}} "systemctl stop zaparoo.service 2>/dev/null || true"
+      - echo "Copying binary..."
+      - ssh {{.REPLAYOS_HOST}} "mkdir -p /media/sd/zaparoo"
+      - scp _build/replayos_arm64/zaparoo {{.REPLAYOS_HOST}}:/media/sd/zaparoo/zaparoo
+      - ssh {{.REPLAYOS_HOST}} "chmod +x /media/sd/zaparoo/zaparoo"
+      - ssh {{.REPLAYOS_HOST}} "systemctl start zaparoo.service 2>/dev/null || true"
+      - echo "Deploy complete!"

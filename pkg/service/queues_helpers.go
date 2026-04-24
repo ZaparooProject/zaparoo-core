@@ -31,35 +31,30 @@ import (
 // - A hook script is configured (non-empty)
 // - The command is a media-launching command
 func shouldRunBeforeMediaStartHook(
-	exprOpts *zscript.ExprEnvOptions,
+	inHookContext bool,
 	hookScript string,
 	cmdName string,
 ) bool {
-	inHookContext := exprOpts != nil && exprOpts.InHookContext
 	return !inHookContext && hookScript != "" && zscript.IsMediaLaunchingCommand(cmdName)
 }
 
-// buildLaunchingExprOpts creates ExprEnvOptions for the before_media_start hook.
-// Extracts path, system ID, and launcher ID from the command being launched.
-func buildLaunchingExprOpts(cmd zapscript.Command) *zscript.ExprEnvOptions {
-	opts := &zscript.ExprEnvOptions{
-		Launching:     &zapscript.ExprEnvLaunching{},
-		InHookContext: true,
-	}
+// buildLaunchingContext extracts launching context from a command being launched.
+func buildLaunchingContext(cmd zapscript.Command) *zapscript.ExprEnvLaunching {
+	launching := &zapscript.ExprEnvLaunching{}
 
 	if len(cmd.Args) > 0 {
-		opts.Launching.Path = cmd.Args[0]
+		launching.Path = cmd.Args[0]
 	}
 
 	if sysID := cmd.AdvArgs.Get(zapscript.KeySystem); sysID != "" {
-		opts.Launching.SystemID = sysID
+		launching.SystemID = sysID
 	}
 
 	if launcherID := cmd.AdvArgs.Get(zapscript.KeyLauncher); launcherID != "" {
-		opts.Launching.LauncherID = launcherID
+		launching.LauncherID = launcherID
 	}
 
-	return opts
+	return launching
 }
 
 // scriptHasMediaLaunchingCommand checks if any command in the script launches media.
@@ -70,6 +65,20 @@ func scriptHasMediaLaunchingCommand(script *zapscript.Script) bool {
 	}
 	for _, cmd := range script.Cmds {
 		if zscript.IsMediaLaunchingCommand(cmd.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+// scriptHasMediaDisruptingCommand checks if any command in the script would
+// change or stop the currently playing media. Used by launch guard.
+func scriptHasMediaDisruptingCommand(script *zapscript.Script) bool {
+	if script == nil {
+		return false
+	}
+	for _, cmd := range script.Cmds {
+		if zscript.IsMediaDisruptingCommand(cmd.Name) {
 			return true
 		}
 	}

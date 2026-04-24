@@ -4,6 +4,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   contrib-readme-job:
     runs-on: ubuntu-latest
@@ -13,15 +16,15 @@ jobs:
       pull-requests: write
     steps:
       - name: Generate GitHub App token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3
         id: app-token
         with:
           app-id: ${{ vars.ZAPAROO_APP_ID }}
           private-key: ${{ secrets.ZAPAROO_APP_PRIVATE_KEY }}
 
       - name: Contribute List
-        uses: akhilmhdh/contributors-readme-action@v2.3.10
+        uses: akhilmhdh/contributors-readme-action@83ea0b4f1ac928fbfe88b9e8460a932a528eb79f # v2.3.11
         with:
-          auto_detect_branch_protection: false
+          auto_detect_branch_protection: true
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

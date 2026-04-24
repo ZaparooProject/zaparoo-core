@@ -113,7 +113,7 @@ func TestBatchModeResumeIndexing(t *testing.T) {
 			entries := batch.Entries[systemID]
 			for _, entry := range entries {
 				titleIndex, mediaIndex, addErr := AddMediaPath(
-					mediaDB, scanState, systemID, entry.Path, false, false, nil,
+					mediaDB, scanState, systemID, entry.Path, false, false, nil, "",
 				)
 				require.NoError(t, addErr)
 				assert.Positive(t, titleIndex, "Title index should be > 0")
@@ -170,7 +170,7 @@ func TestBatchModeResumeIndexing(t *testing.T) {
 		newEntries := testdata.CreateReproducibleBatch([]string{"Genesis"}, 2)
 		for _, entry := range newEntries.Entries["Genesis"] {
 			titleIndex, mediaIndex, addErr := AddMediaPath(
-				mediaDB, resumeState, "Genesis", entry.Path, false, false, nil,
+				mediaDB, resumeState, "Genesis", entry.Path, false, false, nil, "",
 			)
 			require.NoError(t, addErr)
 
@@ -233,7 +233,7 @@ func TestBatchModeResumeIndexing(t *testing.T) {
 		// This should NOT create duplicates thanks to scanState maps
 		nesEntries := batch.Entries["NES"]
 		for _, entry := range nesEntries {
-			_, _, addErr := AddMediaPath(mediaDB, reindexState, "NES", entry.Path, false, false, nil)
+			_, _, addErr := AddMediaPath(mediaDB, reindexState, "NES", entry.Path, false, false, nil, "")
 			require.NoError(t, addErr, "Re-indexing should not fail")
 		}
 
@@ -325,7 +325,7 @@ func TestBatchModeSelectiveIndexing(t *testing.T) {
 		for _, systemID := range testSystems {
 			entries := batch.Entries[systemID]
 			for _, entry := range entries {
-				_, _, addErr := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false, false, nil)
+				_, _, addErr := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false, false, nil, "")
 				require.NoError(t, addErr)
 			}
 		}
@@ -408,7 +408,7 @@ func TestBatchModeSelectiveIndexing(t *testing.T) {
 		nesEntries := batch.Entries["NES"]
 		for _, entry := range nesEntries {
 			titleIndex, mediaIndex, addErr := AddMediaPath(
-				mediaDB, selectiveState, "NES", entry.Path, false, false, nil,
+				mediaDB, selectiveState, "NES", entry.Path, false, false, nil, "",
 			)
 			require.NoError(t, addErr)
 
@@ -519,10 +519,10 @@ func TestBatchMode_DuplicateDetection(t *testing.T) {
 
 		// Add same file twice
 		testPath := "/roms/nes/game1.nes"
-		title1, media1, addErr1 := AddMediaPath(mediaDB, scanState, "NES", testPath, false, false, nil)
+		title1, media1, addErr1 := AddMediaPath(mediaDB, scanState, "NES", testPath, false, false, nil, "")
 		require.NoError(t, addErr1)
 
-		title2, media2, addErr2 := AddMediaPath(mediaDB, scanState, "NES", testPath, false, false, nil)
+		title2, media2, addErr2 := AddMediaPath(mediaDB, scanState, "NES", testPath, false, false, nil, "")
 		require.NoError(t, addErr2)
 
 		// Second attempt should return same IDs (no duplicate insert)
@@ -570,7 +570,7 @@ func TestBatchMode_DuplicateDetection(t *testing.T) {
 
 		// Try to add the same file again (it's in the database and scanState)
 		testPath := "/roms/nes/game1.nes"
-		_, media, err := AddMediaPath(mediaDB, scanState, "NES", testPath, false, false, nil)
+		_, media, err := AddMediaPath(mediaDB, scanState, "NES", testPath, false, false, nil, "")
 		require.NoError(t, err)
 
 		// Should not create a new entry
@@ -585,4 +585,123 @@ func TestBatchMode_DuplicateDetection(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, count, "Should still have exactly one media entry")
 	})
+}
+
+// TestResumeTruncatesPartialSystem verifies that truncating the partially-indexed
+// lastIndexedSystem before re-processing it allows the resume to complete without
+// UNIQUE constraint violations.
+//
+// Scenario reproduced here:
+//  1. Index 5 of a system's 10 files and commit (simulating a mid-system commit
+//     that sets lastIndexedSystemID).
+//  2. Simulate resume: truncate the system, re-populate scanState from DB (now empty
+//     for this system), then re-index all 10 files.
+//  3. Assert no errors and that Media rows == total files for the system (not doubled).
+func TestResumeTruncatesPartialSystem(t *testing.T) {
+	sqlDB, err := sql.Open("sqlite3", ":memory:?_foreign_keys=ON")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	ctx := context.Background()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+
+	mediaDB := &mediadb.MediaDB{}
+	err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
+	require.NoError(t, err)
+
+	const systemID = "NES"
+	const totalFiles = 10
+	const partialFiles = 5 // files committed in the "interrupted" first run
+
+	allEntries := testdata.CreateReproducibleBatch([]string{systemID}, totalFiles).Entries[systemID]
+	require.Len(t, allEntries, totalFiles)
+
+	// Shared base scan state (tags, etc.)
+	baseState := &database.ScanState{
+		SystemIDs:  make(map[string]int),
+		TitleIDs:   make(map[string]int),
+		MediaIDs:   make(map[string]int),
+		TagTypeIDs: make(map[string]int),
+		TagIDs:     make(map[string]int),
+	}
+	require.NoError(t, SeedCanonicalTags(mediaDB, baseState))
+
+	// Step 1: index the first partialFiles and commit (interrupted mid-system run).
+	firstRunState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		TagTypeIDs:    baseState.TagTypeIDs,
+		TagIDs:        baseState.TagIDs,
+		TagTypesIndex: baseState.TagTypesIndex,
+		TagsIndex:     baseState.TagsIndex,
+	}
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	for _, entry := range allEntries[:partialFiles] {
+		_, _, addErr := AddMediaPath(mediaDB, firstRunState, systemID, entry.Path, false, false, nil, "")
+		require.NoError(t, addErr, "first partial index should succeed")
+	}
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// Confirm partial state in DB: partialFiles Media rows exist.
+	var beforeCount int64
+	row := sqlDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM Media")
+	require.NoError(t, row.Scan(&beforeCount))
+	require.Equal(t, int64(partialFiles), beforeCount, "partial index should have inserted %d rows", partialFiles)
+
+	// Step 2: simulate resume — mirrors production ordering in mediascanner.go:
+	// PopulateScanStateFromDB runs first (before the main loop), then TruncateSystems
+	// fires inside the loop for the partial system. This order populates SystemIDs and
+	// TagIDs with pre-truncate DBIDs, which become stale after the truncate.
+	resumeState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		TagTypeIDs:    baseState.TagTypeIDs,
+		TagIDs:        baseState.TagIDs,
+		TagTypesIndex: baseState.TagTypesIndex,
+		TagsIndex:     baseState.TagsIndex,
+	}
+	// Populate BEFORE truncate (production order). After this, resumeState.SystemIDs
+	// contains the stale DBID for systemID, and resumeState.TagIDs may contain DBIDs
+	// for tags that the orphan-cleanup inside TruncateSystems will delete.
+	require.NoError(t, PopulateScanStateFromDB(ctx, mediaDB, resumeState))
+
+	require.NoError(t, mediaDB.TruncateSystems([]string{systemID}))
+
+	// Reconcile stale scan state after truncate — mirrors the fix in mediascanner.go.
+	// Without this block, AddMediaPath would use the stale SystemIDs DBID for InsertMediaTitle
+	// and any stale TagIDs DBIDs for InsertMediaTag, causing FK violations.
+	delete(resumeState.SystemIDs, systemID)
+	allTags, tagsErr := mediaDB.GetAllTags()
+	require.NoError(t, tagsErr)
+	tagTypeByDBID := make(map[int64]string, len(resumeState.TagTypeIDs))
+	for tt, id := range resumeState.TagTypeIDs {
+		tagTypeByDBID[int64(id)] = tt
+	}
+	resumeState.TagIDs = make(map[string]int, len(allTags))
+	for _, tag := range allTags {
+		resumeState.TagIDs[database.TagKey(tagTypeByDBID[tag.TypeDBID], tag.Tag)] = int(tag.DBID)
+	}
+	require.NoError(t, SeedCanonicalTags(mediaDB, resumeState))
+
+	// After truncation, this system has no rows — population should find nothing.
+	require.NoError(t, PopulateScanStateForSystem(ctx, mediaDB, resumeState, systemID))
+	assert.Empty(t, resumeState.MediaIDs, "MediaIDs should be empty after truncating the partial system")
+
+	// Re-index all files from scratch — must not produce UNIQUE violations.
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	for _, entry := range allEntries {
+		_, _, addErr := AddMediaPath(mediaDB, resumeState, systemID, entry.Path, false, false, nil, "")
+		require.NoError(t, addErr, "resume re-index must not fail with UNIQUE constraint")
+	}
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// Final check: exactly totalFiles Media rows — no duplicates from the partial run.
+	var afterCount int64
+	row2 := sqlDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM Media")
+	require.NoError(t, row2.Scan(&afterCount))
+	assert.Equal(t, int64(totalFiles), afterCount,
+		"after resume, Media count must equal totalFiles (no duplicates from partial run)")
 }

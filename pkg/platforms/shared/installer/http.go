@@ -83,7 +83,7 @@ func DownloadHTTPFile(opts DownloaderArgs) error {
 		return fmt.Errorf("error creating request: %w", err)
 	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := httpClient.Do(req) //nolint:gosec // G704: URL from installer config
 	if err != nil {
 		return fmt.Errorf("error getting url: %w", err)
 	}

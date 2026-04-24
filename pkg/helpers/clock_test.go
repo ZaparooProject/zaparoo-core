@@ -280,6 +280,66 @@ func TestSleepWakeMonitor_UsesWallClockNotMonotonic(t *testing.T) {
 		"monitor should detect time jump using wall clock, not monotonic")
 }
 
+// TestSleepWakeMonitor_NTPSyncFromEpoch verifies that an NTP clock jump from
+// epoch (1970) to current time is NOT detected as a wake-from-sleep event.
+// This is the root cause of the "keeps disconnecting" bug on MiSTer: NTP sync
+// causes a ~56-year wall clock jump that the monitor misinterprets as wake.
+func TestSleepWakeMonitor_NTPSyncFromEpoch(t *testing.T) {
+	t.Parallel()
+
+	monitor := NewSleepWakeMonitor(5 * time.Second)
+
+	// Simulate MiSTer boot: clock is at epoch (1970-01-01)
+	epochTime := time.Date(1970, 1, 1, 0, 0, 1, 0, time.UTC)
+	monitor.SetLastCheckForTesting(epochTime)
+
+	// NTP sync happens — time.Now() returns 2025+ but lastCheck was epoch.
+	// This must NOT trigger wake detection.
+	assert.False(t, monitor.Check(),
+		"NTP sync from epoch must not trigger wake detection")
+
+	// After NTP sync, lastCheck is now reliable. A normal check should not trigger.
+	assert.False(t, monitor.Check(),
+		"normal check after NTP sync should not trigger")
+}
+
+// TestSleepWakeMonitor_RealSleepWakeStillDetected verifies that genuine
+// sleep/wake events are still detected when both timestamps are reliable.
+func TestSleepWakeMonitor_RealSleepWakeStillDetected(t *testing.T) {
+	t.Parallel()
+
+	monitor := NewSleepWakeMonitor(5 * time.Second)
+
+	// Set lastCheck to a reliable time 10 seconds ago (simulating sleep)
+	reliablePast := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	monitor.SetLastCheckForTesting(reliablePast)
+
+	// time.Now() is current (2025+), so elapsed is huge and both are reliable
+	assert.True(t, monitor.Check(),
+		"real sleep/wake with reliable timestamps must still trigger")
+}
+
+// TestSleepWakeMonitor_UnreliableToUnreliable verifies that when both the
+// previous and current clocks are unreliable, no wake is detected.
+func TestSleepWakeMonitor_UnreliableToUnreliable(t *testing.T) {
+	t.Parallel()
+
+	monitor := NewSleepWakeMonitor(5 * time.Second)
+
+	// Set lastCheck to epoch
+	epoch1 := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+	monitor.SetLastCheckForTesting(epoch1)
+
+	// Simulate another check while clock is still unreliable by setting
+	// lastCheck to slightly later epoch time
+	epoch2 := time.Date(1970, 1, 1, 0, 1, 0, 0, time.UTC)
+	monitor.SetLastCheckForTesting(epoch2)
+
+	// Even though time.Now() will jump forward, lastCheck was unreliable
+	assert.False(t, monitor.Check(),
+		"unreliable-to-unreliable transition must not trigger wake detection")
+}
+
 // TestSleepWakeMonitor_MonotonicVsWallClock demonstrates the difference between
 // monotonic and wall clock behavior that our fix addresses.
 func TestSleepWakeMonitor_MonotonicVsWallClock(t *testing.T) {

@@ -197,6 +197,7 @@ func TestLocalClient_ContextCancellation(t *testing.T) {
 	cfg := testConfigWithPort(t, port)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Cancel context after a short delay
 	go func() {
@@ -456,6 +457,7 @@ func TestWaitNotification_ContextCancellation(t *testing.T) {
 	cfg := testConfigWithPort(t, port)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)

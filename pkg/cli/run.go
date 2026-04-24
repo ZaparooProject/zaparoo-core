@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/linux/installer"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/daemon"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -248,6 +249,8 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 
 	exit := make(chan bool, 1)
 	var svcDone <-chan struct{}
+	var restartRequested func() bool
+	var stopSvc func()
 
 	switch {
 	case daemonMode:
@@ -259,17 +262,18 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 		}
 
 		log.Info().Msg("starting service in daemon mode")
-		stopSvc, done, err := service.Start(pl, cfg)
+		svcResult, err := service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
 			return fmt.Errorf("error starting service: %w", err)
 		}
-		svcDone = done
-		defer func() {
-			if err := stopSvc(); err != nil {
+		svcDone = svcResult.Done
+		restartRequested = svcResult.RestartRequested
+		stopSvc = func() {
+			if err := svcResult.Stop(); err != nil {
 				log.Error().Msgf("error stopping service: %s", err)
 			}
-		}()
+		}
 		log.Info().Msg("started in daemon mode")
 
 	default:
@@ -293,18 +297,28 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 			)
 		})
 		if err != nil {
-			log.Error().Err(err).Msg("error running UI")
-			return fmt.Errorf("error running UI: %w", err)
+			log.Warn().Err(err).Msg("TUI unavailable, running headless")
+			_, _ = fmt.Fprintf(os.Stderr,
+				"TUI unavailable (%s), running headless. Press Ctrl+C to stop.\n", err)
+		} else {
+			exit <- true
 		}
-
-		exit <- true
 	}
 
 	select {
 	case <-sigs:
+		if stopSvc != nil {
+			stopSvc()
+		}
 	case <-exit:
+		if stopSvc != nil {
+			stopSvc()
+		}
 	case <-svcDone:
 		log.Info().Msg("service shut down internally")
+		if err := restart.ExecIfRequested(restartRequested); err != nil {
+			return fmt.Errorf("failed to re-exec for restart: %w", err)
+		}
 	}
 
 	return nil

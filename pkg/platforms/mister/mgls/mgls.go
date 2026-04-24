@@ -70,12 +70,23 @@ func ReadMRA(path string) (MRA, error) {
 	return mra, nil
 }
 
-func GenerateMgl(core *cores.Core, path, override string) (string, error) {
+// xmlEscapeAttr escapes XML-reserved characters for use in attribute values.
+// MiSTer's MGL parser (SXMLC) decodes these entities when reading paths.
+func xmlEscapeAttr(v string) string {
+	r := s.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+	)
+	return r.Replace(v)
+}
+
+func GenerateMgl(core *cores.Core, rbfPath, path, override string) (string, error) {
 	if core == nil {
 		return "", errors.New("no core supplied for MGL generation")
 	}
 
-	rbfPath := cores.ResolveRBFPathForLauncher(core.LauncherID, core.ID, core.RBF)
 	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", rbfPath)
 
 	if core.SetName != "" {
@@ -103,7 +114,7 @@ func GenerateMgl(core *cores.Core, path, override string) (string, error) {
 
 	mgl += fmt.Sprintf(
 		"\t<file delay=\"%d\" type=%q index=\"%d\" path=\"../../../../..%s\"/>\n",
-		mglDef.Delay, mglDef.Method, mglDef.Index, path,
+		mglDef.Delay, mglDef.Method, mglDef.Index, xmlEscapeAttr(path),
 	)
 
 	if mglDef.ResetDelay > 0 {
@@ -163,6 +174,11 @@ func launchFile(path string) error {
 }
 
 func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error {
+	rbfInfo, err := cores.GlobalRBFCache.Resolve(cfg, system)
+	if err != nil {
+		return fmt.Errorf("resolving core RBF: %w", err)
+	}
+
 	override, err := cores.RunSystemHook(cfg, system, path)
 	if err != nil {
 		return fmt.Errorf("failed to run system hook: %w", err)
@@ -171,11 +187,12 @@ func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error 
 		log.Debug().Str("system", system.ID).Str("hook_result", override).Msg("system hook executed")
 	}
 
-	mgl, err := GenerateMgl(system, path, override)
+	mgl, err := GenerateMgl(system, rbfInfo.MglName, path, override)
 	if err != nil {
 		return fmt.Errorf("failed to generate MGL: %w", err)
 	}
-	log.Debug().Str("system", system.ID).Str("rbf", system.RBF).Msg("MGL generated successfully")
+	log.Debug().Str("system", system.ID).Msg("MGL generated successfully")
+	log.Debug().Str("mgl_content", mgl).Msg("generated MGL content")
 
 	tmpFile, err := writeTempFile(mgl)
 	if err != nil {
@@ -201,6 +218,44 @@ func LaunchShortCore(path string) error {
 	return launchFile(tmpFile)
 }
 
+// writeCurrentPath writes the CURRENTPATH, FULLPATH, and FILESELECT files
+// to match the format mister_main uses when launching a game from the menu.
+// mister_main doesn't write these files when launching .mra files via
+// load_core, so we do it here to keep external tools (e.g. marquee displays)
+// working correctly.
+func writeCurrentPath(path string) {
+	writeCurrentPathTo(
+		path,
+		misterconfig.CurrentPathFile,
+		misterconfig.FullPathFile,
+		misterconfig.FileSelectFile,
+	)
+}
+
+func writeCurrentPathTo(
+	path, currentPathFile, fullPathFile, fileSelectFile string,
+) {
+	fname := filepath.Base(path)
+	//nolint:gosec // MiSTer system files, need to be readable by other apps
+	if err := os.WriteFile(
+		currentPathFile, []byte(fname), 0o644,
+	); err != nil {
+		log.Error().Err(err).Msg("failed to write CURRENTPATH")
+	}
+	//nolint:gosec // MiSTer system files
+	if err := os.WriteFile(
+		fullPathFile, []byte(path), 0o644,
+	); err != nil {
+		log.Error().Err(err).Msg("failed to write FULLPATH")
+	}
+	//nolint:gosec // MiSTer system files
+	if err := os.WriteFile(
+		fileSelectFile, []byte("selected"), 0o644,
+	); err != nil {
+		log.Error().Err(err).Msg("failed to write FILESELECT")
+	}
+}
+
 func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
 	ext := s.ToLower(filepath.Ext(path))
 	log.Info().Str("system", system.ID).Str("path", path).Str("type", ext).Msg("launching game")
@@ -211,6 +266,7 @@ func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
+		writeCurrentPath(path)
 		log.Debug().Str("path", path).Msg("arcade game launched via MRA")
 	case ".mgl":
 		err := launchFile(path)
@@ -251,9 +307,9 @@ func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *cores.Core) 
 		return LaunchGame(cfg, system, "")
 	}
 
-	rbfInfo, ok := cores.GlobalRBFCache.GetBySystemID(system.ID)
-	if !ok {
-		return fmt.Errorf("no core found for system %s (not in cache)", system.ID)
+	rbfInfo, err := cores.GlobalRBFCache.Resolve(cfg, system)
+	if err != nil {
+		return fmt.Errorf("resolving core RBF: %w", err)
 	}
 	path := rbfInfo.Path
 
@@ -284,6 +340,7 @@ func LaunchBasicFile(path string) error {
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
+		writeCurrentPath(path)
 	case ".mgl":
 		err = launchFile(path)
 		if err != nil {

@@ -230,9 +230,14 @@ func TestGetTagsFromFileName(t *testing.T) {
 			expected: []string{"region:us", "lang:en", "dump:verified"},
 		},
 		{
-			name:     "Unknown tags create unknown type",
+			name:     "Company-shaped paren group promotes to credit",
 			filename: "Game (Unknown Tag)",
-			expected: []string{"unknown:unknown-tag"}, // New parser tracks unknown tags
+			expected: []string{"credit:unknown-tag"},
+		},
+		{
+			name:     "Pure-digit paren group stays unknown",
+			filename: "Game (12345)",
+			expected: []string{"unknown:12345"},
 		},
 		{
 			name:     "No tags",

@@ -49,6 +49,14 @@ type Scan struct {
 	ReaderError bool // True when Token is nil due to reader error/disconnect vs normal token removal
 }
 
+// OpenOpts provides options for opening a reader connection.
+type OpenOpts struct {
+	// Probing indicates this is an auto-detection probe. Readers should
+	// log connection failures at Trace level instead of Error since
+	// failures are expected when probing devices without a matching reader.
+	Probing bool
+}
+
 type Reader interface {
 	// Metadata returns static configuration for this driver.
 	Metadata() DriverMetadata
@@ -56,7 +64,7 @@ type Reader interface {
 	IDs() []string
 	// Open any necessary connections to the device and start polling.
 	// Takes a device connection string and a channel to send scanned tokens.
-	Open(config.ReadersConnect, chan<- Scan) error
+	Open(config.ReadersConnect, chan<- Scan, OpenOpts) error
 	// Close any open connections to the device and stop polling.
 	Close() error
 	// Detect attempts to search for a connected device and returns the device

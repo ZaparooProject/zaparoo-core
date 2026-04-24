@@ -306,7 +306,7 @@ func (h *HTTPTestHelper) PostJSONRPC(method string, params any) (*http.Response,
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := h.Client.Do(req)
+	resp, err := h.Client.Do(req) //nolint:gosec // G704: test helper hitting local test server
 	if err != nil {
 		return nil, fmt.Errorf("failed to send POST request: %w", err)
 	}
@@ -446,7 +446,7 @@ func (m *MockWebSocketConnection) SetCloseError(err error) {
 
 // CreateTestContext creates a context with timeout for testing
 func CreateTestContext(timeout time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), timeout)
+	return context.WithTimeout(context.Background(), timeout) //nolint:gosec // G118: caller is responsible for cancel
 }
 
 // WaitForMessages waits for a specific number of messages with timeout

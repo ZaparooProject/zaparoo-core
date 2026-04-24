@@ -49,21 +49,6 @@ func IsLoopbackAddr(remoteAddr string) bool {
 // supporting hot-reload of configuration.
 type IPsProvider func() []string
 
-// IPFilter manages IP allowlist filtering for both HTTP and WebSocket connections.
-// It uses a provider function to fetch the allowlist dynamically.
-type IPFilter struct {
-	getAllowedIPs IPsProvider
-}
-
-// NewIPFilter creates a new IP filter with an IPs provider function.
-// The provider is called on each request to get the current allowlist,
-// allowing configuration changes to take effect without server restart.
-func NewIPFilter(ipsProvider IPsProvider) *IPFilter {
-	return &IPFilter{
-		getAllowedIPs: ipsProvider,
-	}
-}
-
 // parseAllowedIPs parses a list of IP strings into nets and individual IPs.
 func parseAllowedIPs(allowedIPs []string) (nets []*net.IPNet, addrs []net.IP) {
 	for _, ipStr := range allowedIPs {
@@ -86,54 +71,71 @@ func parseAllowedIPs(allowedIPs []string) (nets []*net.IPNet, addrs []net.IP) {
 	return nets, addrs
 }
 
-// IsAllowed checks if an IP address is allowed.
-// Returns true if the allowlist is empty (no filtering) or if the IP matches an allowed entry.
-func (f *IPFilter) IsAllowed(remoteAddr string) bool {
-	allowedIPs := f.getAllowedIPs()
-	if len(allowedIPs) == 0 {
-		return true
-	}
-
-	ip := ParseRemoteIP(remoteAddr)
-	if ip == nil {
-		log.Warn().Str("addr", remoteAddr).Msg("failed to parse IP address")
-		return false
-	}
-
-	nets, addrs := parseAllowedIPs(allowedIPs)
-
-	for _, allowedIP := range addrs {
-		if ip.Equal(allowedIP) {
+// matchAllowedIPs reports whether ip matches any entry in the allowed list.
+// Entries can be individual IPs or CIDR ranges. Reuses parseAllowedIPs.
+func matchAllowedIPs(ip net.IP, allowed []string) bool {
+	nets, addrs := parseAllowedIPs(allowed)
+	for _, a := range addrs {
+		if ip.Equal(a) {
 			return true
 		}
 	}
-
 	for _, network := range nets {
 		if network.Contains(ip) {
 			return true
 		}
 	}
-
 	return false
 }
 
-// HTTPIPFilterMiddleware creates an HTTP middleware that filters requests by IP.
-// This middleware applies to both regular HTTP requests and WebSocket upgrade requests.
-func HTTPIPFilterMiddleware(filter *IPFilter) func(http.Handler) http.Handler {
+// RunIPFilterMiddleware allows remote access to run endpoints when allow_run
+// is configured (the handler validates content). Otherwise falls back to the
+// standard AllowedIPs check.
+func RunIPFilterMiddleware(ipsProvider IPsProvider, hasAllowRun func() bool) func(http.Handler) http.Handler {
+	ipFilter := NonWSIPFilterMiddleware(ipsProvider)
+	return func(next http.Handler) http.Handler {
+		filtered := ipFilter(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if IsLoopbackAddr(r.RemoteAddr) || hasAllowRun() {
+				next.ServeHTTP(w, r)
+				return
+			}
+			filtered.ServeHTTP(w, r)
+		})
+	}
+}
+
+// NonWSIPFilterMiddleware denies non-loopback access unless AllowedIPs is configured.
+func NonWSIPFilterMiddleware(ipsProvider IPsProvider) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !filter.IsAllowed(r.RemoteAddr) {
-				ip := ParseRemoteIP(r.RemoteAddr)
+			if IsLoopbackAddr(r.RemoteAddr) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			allowed := ipsProvider()
+			if len(allowed) == 0 {
+				log.Debug().
+					Str("addr", r.RemoteAddr).
+					Str("path", r.URL.Path).
+					Msg("non-WS remote access denied: AllowedIPs empty")
+				http.Error(w, "remote access disabled for this transport", http.StatusForbidden)
+				return
+			}
+			ip := ParseRemoteIP(r.RemoteAddr)
+			if ip == nil {
+				log.Warn().Str("addr", r.RemoteAddr).Msg("non-WS: failed to parse IP")
+				http.Error(w, "invalid remote address", http.StatusForbidden)
+				return
+			}
+			if !matchAllowedIPs(ip, allowed) {
 				log.Debug().
 					Str("ip", ip.String()).
 					Str("path", r.URL.Path).
-					Str("method", r.Method).
-					Msg("request from blocked IP")
-
-				http.Error(w, "Forbidden", http.StatusForbidden)
+					Msg("non-WS remote access denied: not in AllowedIPs")
+				http.Error(w, "remote access denied", http.StatusForbidden)
 				return
 			}
-
 			next.ServeHTTP(w, r)
 		})
 	}

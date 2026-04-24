@@ -303,6 +303,11 @@ func (*Base) GamepadPress(_ string) error {
 	return nil
 }
 
+// Screenshot is not supported on generic Linux platforms.
+func (*Base) Screenshot() (*platforms.ScreenshotResult, error) {
+	return nil, platforms.ErrNotSupported
+}
+
 // ForwardCmd returns an empty result (no command forwarding on Linux platforms).
 func (*Base) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, nil
@@ -340,4 +345,10 @@ func (*Base) ShowPicker(
 // ConsoleManager returns a no-op console manager.
 func (*Base) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
+}
+
+// ManagedByPackageManager returns false. Platforms that embed Base and have
+// package manager detection should override this method.
+func (*Base) ManagedByPackageManager() bool {
+	return false
 }

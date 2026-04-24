@@ -244,6 +244,7 @@ func TestVirtualPath_EndToEndFlow(t *testing.T) {
 				false, // noExt
 				false, // stripLeadingNumbers
 				nil,   // cfg
+				"",    // mediaType
 			)
 			require.NoError(t, err, "AddMediaPath should succeed")
 			assert.Positive(t, titleIndex, "Title index should be assigned")
@@ -395,6 +396,7 @@ func TestVirtualPath_MalformedGracefulHandling(t *testing.T) {
 				false,
 				false,
 				nil,
+				"",
 			)
 
 			if tc.shouldIndex {
@@ -490,6 +492,7 @@ func TestVirtualPath_HTTPURLHandling(t *testing.T) {
 				false,
 				false,
 				nil,
+				"",
 			)
 			require.NoError(t, err)
 

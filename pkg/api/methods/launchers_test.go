@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -60,6 +61,7 @@ func TestHandleLaunchersRefresh_ReloadsFromDisk(t *testing.T) {
 	assert.Empty(t, testCache.GetAllLaunchers())
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Platform:      mockPlatform,
 		Config:        cfg,
 		LauncherCache: testCache,
@@ -115,6 +117,7 @@ func TestHandleLaunchersRefresh_CacheUpdatesOnSecondCall(t *testing.T) {
 	testCache := &corehelpers.LauncherCache{}
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Platform:      mockPlatform,
 		Config:        cfg,
 		LauncherCache: testCache,
@@ -158,6 +161,7 @@ func TestHandleLaunchersRefresh_ConfigLoadError(t *testing.T) {
 	testCache := &corehelpers.LauncherCache{}
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Platform:      mockPlatform,
 		Config:        cfg,
 		LauncherCache: testCache,
@@ -193,6 +197,7 @@ func TestHandleLaunchersRefresh_CustomLaunchersLoadError(t *testing.T) {
 	testCache := &corehelpers.LauncherCache{}
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Platform:      mockPlatform,
 		Config:        cfg,
 		LauncherCache: testCache,

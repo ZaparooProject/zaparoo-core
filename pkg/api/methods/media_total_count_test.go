@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -104,6 +105,7 @@ func TestHandleMedia_TotalMediaCount(t *testing.T) {
 				UserDB:  mockUserDB,
 			}
 			env := requests.RequestEnv{
+				Context:  context.Background(),
 				Database: db,
 				State:    testState,
 			}

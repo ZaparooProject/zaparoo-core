@@ -103,7 +103,7 @@ func TestHealTimestamps_MediaHistory(t *testing.T) {
 	assert.Equal(t, int64(2), rowsAffected, "should heal 2 MediaHistory records")
 
 	// Verify entry1 was healed correctly
-	history, err := db.GetMediaHistory(0, 100)
+	history, err := db.GetMediaHistory(nil, 0, 100)
 	require.NoError(t, err)
 	require.Len(t, history, 2)
 
@@ -284,7 +284,7 @@ func TestHealTimestamps_BootUUID_Isolation(t *testing.T) {
 	assert.Equal(t, int64(1), rowsAffected, "should only heal boot session 1")
 
 	// Verify boot session 1 was healed
-	history, err := db.GetMediaHistory(0, 100)
+	history, err := db.GetMediaHistory(nil, 0, 100)
 	require.NoError(t, err)
 
 	var healed1, unhealed2 *database.MediaHistoryEntry
@@ -351,7 +351,7 @@ func TestHealTimestamps_Idempotent(t *testing.T) {
 	assert.Equal(t, int64(1), rows1, "first heal should affect 1 row")
 
 	// Get healed timestamp
-	history1, err := db.GetMediaHistory(0, 100)
+	history1, err := db.GetMediaHistory(nil, 0, 100)
 	require.NoError(t, err)
 
 	var healed1 database.MediaHistoryEntry
@@ -368,7 +368,7 @@ func TestHealTimestamps_Idempotent(t *testing.T) {
 	assert.Equal(t, int64(0), rows2, "second heal should affect 0 rows (already healed)")
 
 	// Verify timestamp didn't change
-	history2, err := db.GetMediaHistory(0, 100)
+	history2, err := db.GetMediaHistory(nil, 0, 100)
 	require.NoError(t, err)
 
 	var healed2 database.MediaHistoryEntry
@@ -429,7 +429,7 @@ func TestHealTimestamps_WithEndTime(t *testing.T) {
 	assert.Equal(t, int64(1), rowsAffected)
 
 	// Verify both StartTime and EndTime were healed
-	history, err := db.GetMediaHistory(0, 100)
+	history, err := db.GetMediaHistory(nil, 0, 100)
 	require.NoError(t, err)
 
 	var healed database.MediaHistoryEntry

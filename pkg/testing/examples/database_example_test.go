@@ -46,7 +46,7 @@ func TestDatabaseMockUsage(t *testing.T) {
 
 		// Set up expectations
 		mockUserDB.On("GetAllMappings").Return([]database.Mapping{expectedMapping}, nil)
-		mockUserDB.On("GetHistory", 0).Return(expectedHistory, nil)
+		mockUserDB.On("GetHistory", int64(0)).Return(expectedHistory, nil)
 		mockUserDB.On("AddHistory", &expectedHistory[0]).Return(nil)
 
 		// Test the mock

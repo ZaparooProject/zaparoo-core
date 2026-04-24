@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -57,6 +58,7 @@ func TestHandlePlaytime_NoLimitsManager(t *testing.T) {
 	cfg := newTestConfig(t, &config.Values{})
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Config:        cfg,
 		LimitsManager: nil, // No limits manager
 	}
@@ -77,7 +79,7 @@ func TestHandlePlaytime_ResetStateWithDailyFields(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockUserDBI()
-	mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{
+	mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{
 		{
 			DBID:      1,
 			StartTime: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
@@ -107,6 +109,7 @@ func TestHandlePlaytime_ResetStateWithDailyFields(t *testing.T) {
 	// State is already StateReset by default
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Config:        cfg,
 		LimitsManager: tm,
 	}
@@ -155,6 +158,7 @@ func TestHandlePlaytime_ResetStateNilDailyFields(t *testing.T) {
 	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Config:        cfg,
 		LimitsManager: tm,
 	}
@@ -176,7 +180,7 @@ func TestHandlePlaytime_CooldownStateWithDailyFields(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockUserDBI()
-	mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{
+	mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{
 		{
 			DBID:      1,
 			StartTime: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
@@ -211,6 +215,7 @@ func TestHandlePlaytime_CooldownStateWithDailyFields(t *testing.T) {
 	// Since we can't directly set state, let's verify the handler output instead
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Config:        cfg,
 		LimitsManager: tm,
 	}
@@ -255,6 +260,7 @@ func TestHandlePlaytime_SessionFields(t *testing.T) {
 	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Config:        cfg,
 		LimitsManager: tm,
 	}
@@ -301,6 +307,7 @@ func TestHandlePlaytime_UnreliableClockNilDailyFields(t *testing.T) {
 	tm := playtime.NewLimitsManager(db, nil, cfg, fakeClock, newNoOpMockPlayer())
 
 	env := requests.RequestEnv{
+		Context:       context.Background(),
 		Config:        cfg,
 		LimitsManager: tm,
 	}

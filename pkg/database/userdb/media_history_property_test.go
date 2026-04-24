@@ -246,7 +246,7 @@ func TestPropertyGetMediaHistoryLimitClamping(t *testing.T) {
 		limit := rapid.IntRange(-100, 200).Draw(t, "limit")
 
 		// The function should clamp limit to valid range
-		entries, err := sqlGetMediaHistory(ctx, db, 0, limit)
+		entries, err := sqlGetMediaHistory(ctx, db, nil, 0, limit)
 		require.NoError(t, err)
 
 		// With empty table, we get empty results regardless of limit
@@ -293,16 +293,16 @@ func TestPropertyGetMediaHistoryLastIDPagination(t *testing.T) {
 	}
 
 	rapid.Check(t, func(t *rapid.T) {
-		lastID := rapid.IntRange(-10, 30).Draw(t, "lastID")
+		lastID := int64(rapid.IntRange(-10, 30).Draw(t, "lastID"))
 		limit := rapid.IntRange(1, 100).Draw(t, "limit")
 
-		entries, err := sqlGetMediaHistory(ctx, db, lastID, limit)
+		entries, err := sqlGetMediaHistory(ctx, db, nil, lastID, limit)
 		require.NoError(t, err)
 
 		// Verify all returned entries have DBID < lastID (or lastID=0 means all)
 		if lastID > 0 {
 			for _, entry := range entries {
-				if entry.DBID >= int64(lastID) {
+				if entry.DBID >= lastID {
 					t.Fatalf("Entry DBID (%d) should be < lastID (%d)",
 						entry.DBID, lastID)
 				}

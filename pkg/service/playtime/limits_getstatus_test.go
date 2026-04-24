@@ -76,7 +76,7 @@ func TestGetStatus_StateReset(t *testing.T) {
 
 		mockDB := testhelpers.NewMockUserDBI()
 		// Expect DB call to calculate daily usage
-		mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{
 			{
 				DBID:      1,
 				StartTime: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
@@ -163,7 +163,7 @@ func TestGetStatus_StateReset(t *testing.T) {
 
 		mockDB := testhelpers.NewMockUserDBI()
 		// Return 3 hours of usage (over the 2 hour limit)
-		mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{
 			{
 				DBID:      1,
 				StartTime: time.Date(2025, 1, 15, 8, 0, 0, 0, time.UTC),
@@ -209,7 +209,7 @@ func TestGetStatus_StateCooldown(t *testing.T) {
 		t.Parallel()
 
 		mockDB := testhelpers.NewMockUserDBI()
-		mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{
 			{
 				DBID:      1,
 				StartTime: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
@@ -365,7 +365,7 @@ func TestGetStatus_StateActive(t *testing.T) {
 		t.Parallel()
 
 		mockDB := testhelpers.NewMockUserDBI()
-		mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{
 			// Previous session today
 			{
 				DBID:      1,
@@ -484,7 +484,7 @@ func TestGetStatus_StateActive(t *testing.T) {
 		mockDB := testhelpers.NewMockUserDBI()
 		// DB still gets called in buildRuleContext when clock is reliable,
 		// but the result is not used when daily limit is 0
-		mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{}, nil)
+		mockDB.On("GetMediaHistory", []string(nil), int64(0), 100).Return([]database.MediaHistoryEntry{}, nil)
 
 		db := &database.Database{
 			UserDB: mockDB,

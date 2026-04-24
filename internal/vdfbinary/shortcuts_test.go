@@ -79,52 +79,52 @@ func TestParseShortcuts_MissingOptionalFields(t *testing.T) {
 	var buf bytes.Buffer
 
 	// shortcuts map start
-	buf.WriteByte(0x00) // map marker
-	buf.WriteString("shortcuts")
-	buf.WriteByte(0x00) // null terminator
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("shortcuts") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
 
 	// shortcut "0" map start
-	buf.WriteByte(0x00) // map marker
-	buf.WriteString("0")
-	buf.WriteByte(0x00) // null terminator
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+	buf.WriteString("0") //nolint:revive // never fails
+	buf.WriteByte(0x00)  //nolint:revive // never fails
 
 	// appid (number)
-	buf.WriteByte(0x02) // number marker
-	buf.WriteString("appid")
-	buf.WriteByte(0x00)
-	buf.Write([]byte{0x01, 0x02, 0x03, 0x04}) // 0x04030201 in little endian
+	buf.WriteByte(0x02)                       //nolint:revive // never fails
+	buf.WriteString("appid")                  //nolint:revive // never fails
+	buf.WriteByte(0x00)                       //nolint:revive // never fails
+	buf.Write([]byte{0x01, 0x02, 0x03, 0x04}) //nolint:revive // never fails
 
 	// AppName (string)
-	buf.WriteByte(0x01) // string marker
-	buf.WriteString("AppName")
-	buf.WriteByte(0x00)
-	buf.WriteString("Test Game")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)          //nolint:revive // never fails
+	buf.WriteString("AppName")   //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("Test Game") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
 
 	// Exe (string)
-	buf.WriteByte(0x01)
-	buf.WriteString("Exe")
-	buf.WriteByte(0x00)
-	buf.WriteString("/path/to/game")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)              //nolint:revive // never fails
+	buf.WriteString("Exe")           //nolint:revive // never fails
+	buf.WriteByte(0x00)              //nolint:revive // never fails
+	buf.WriteString("/path/to/game") //nolint:revive // never fails
+	buf.WriteByte(0x00)              //nolint:revive // never fails
 
 	// StartDir (string)
-	buf.WriteByte(0x01)
-	buf.WriteString("StartDir")
-	buf.WriteByte(0x00)
-	buf.WriteString("/path/to")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)         //nolint:revive // never fails
+	buf.WriteString("StartDir") //nolint:revive // never fails
+	buf.WriteByte(0x00)         //nolint:revive // never fails
+	buf.WriteString("/path/to") //nolint:revive // never fails
+	buf.WriteByte(0x00)         //nolint:revive // never fails
 
 	// Note: deliberately missing icon, IsHidden, and tags
 
 	// End of shortcut "0" map
-	buf.WriteByte(0x08)
+	buf.WriteByte(0x08) //nolint:revive // never fails
 
 	// End of shortcuts map
-	buf.WriteByte(0x08)
+	buf.WriteByte(0x08) //nolint:revive // never fails
 
 	// End of root map
-	buf.WriteByte(0x08)
+	buf.WriteByte(0x08) //nolint:revive // never fails
 
 	shortcuts, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.NoError(t, err, "should parse shortcuts with missing optional fields")
@@ -144,24 +144,24 @@ func TestParseShortcuts_MissingRequiredField_AppID(t *testing.T) {
 
 	// Shortcut missing required appid field
 	var buf bytes.Buffer
-	buf.WriteByte(0x00) // map marker for shortcuts
-	buf.WriteString("shortcuts")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("shortcuts") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
 
-	buf.WriteByte(0x00) // map marker for "0"
-	buf.WriteString("0")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+	buf.WriteString("0") //nolint:revive // never fails
+	buf.WriteByte(0x00)  //nolint:revive // never fails
 
 	// Only AppName, missing appid
-	buf.WriteByte(0x01)
-	buf.WriteString("AppName")
-	buf.WriteByte(0x00)
-	buf.WriteString("Test")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)        //nolint:revive // never fails
+	buf.WriteString("AppName") //nolint:revive // never fails
+	buf.WriteByte(0x00)        //nolint:revive // never fails
+	buf.WriteString("Test")    //nolint:revive // never fails
+	buf.WriteByte(0x00)        //nolint:revive // never fails
 
-	buf.WriteByte(0x08) // end "0"
-	buf.WriteByte(0x08) // end shortcuts
-	buf.WriteByte(0x08) // end root
+	buf.WriteByte(0x08) //nolint:revive // never fails
+	buf.WriteByte(0x08) //nolint:revive // never fails
+	buf.WriteByte(0x08) //nolint:revive // never fails
 
 	_, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.Error(t, err)
@@ -172,30 +172,30 @@ func TestParseShortcuts_MissingRequiredField_AppName(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	buf.WriteByte(0x00)
-	buf.WriteString("shortcuts")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("shortcuts") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
 
-	buf.WriteByte(0x00)
-	buf.WriteString("0")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+	buf.WriteString("0") //nolint:revive // never fails
+	buf.WriteByte(0x00)  //nolint:revive // never fails
 
 	// appid present
-	buf.WriteByte(0x02)
-	buf.WriteString("appid")
-	buf.WriteByte(0x00)
-	buf.Write([]byte{0x01, 0x00, 0x00, 0x00})
+	buf.WriteByte(0x02)                       //nolint:revive // never fails
+	buf.WriteString("appid")                  //nolint:revive // never fails
+	buf.WriteByte(0x00)                       //nolint:revive // never fails
+	buf.Write([]byte{0x01, 0x00, 0x00, 0x00}) //nolint:revive // never fails
 
 	// Missing AppName, only Exe
-	buf.WriteByte(0x01)
-	buf.WriteString("Exe")
-	buf.WriteByte(0x00)
-	buf.WriteString("/path")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)      //nolint:revive // never fails
+	buf.WriteString("Exe")   //nolint:revive // never fails
+	buf.WriteByte(0x00)      //nolint:revive // never fails
+	buf.WriteString("/path") //nolint:revive // never fails
+	buf.WriteByte(0x00)      //nolint:revive // never fails
 
-	buf.WriteByte(0x08)
-	buf.WriteByte(0x08)
-	buf.WriteByte(0x08)
+	buf.WriteByte(0x08) //nolint:revive // never fails
+	buf.WriteByte(0x08) //nolint:revive // never fails
+	buf.WriteByte(0x08) //nolint:revive // never fails
 
 	_, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.Error(t, err)
@@ -206,35 +206,35 @@ func TestParseShortcuts_MissingRequiredField_Exe(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	buf.WriteByte(0x00)
-	buf.WriteString("shortcuts")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("shortcuts") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
 
-	buf.WriteByte(0x00)
-	buf.WriteString("0")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+	buf.WriteString("0") //nolint:revive // never fails
+	buf.WriteByte(0x00)  //nolint:revive // never fails
 
-	buf.WriteByte(0x02)
-	buf.WriteString("appid")
-	buf.WriteByte(0x00)
-	buf.Write([]byte{0x01, 0x00, 0x00, 0x00})
+	buf.WriteByte(0x02)                       //nolint:revive // never fails
+	buf.WriteString("appid")                  //nolint:revive // never fails
+	buf.WriteByte(0x00)                       //nolint:revive // never fails
+	buf.Write([]byte{0x01, 0x00, 0x00, 0x00}) //nolint:revive // never fails
 
-	buf.WriteByte(0x01)
-	buf.WriteString("AppName")
-	buf.WriteByte(0x00)
-	buf.WriteString("Test")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)        //nolint:revive // never fails
+	buf.WriteString("AppName") //nolint:revive // never fails
+	buf.WriteByte(0x00)        //nolint:revive // never fails
+	buf.WriteString("Test")    //nolint:revive // never fails
+	buf.WriteByte(0x00)        //nolint:revive // never fails
 
 	// Missing Exe, only StartDir
-	buf.WriteByte(0x01)
-	buf.WriteString("StartDir")
-	buf.WriteByte(0x00)
-	buf.WriteString("/path")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)         //nolint:revive // never fails
+	buf.WriteString("StartDir") //nolint:revive // never fails
+	buf.WriteByte(0x00)         //nolint:revive // never fails
+	buf.WriteString("/path")    //nolint:revive // never fails
+	buf.WriteByte(0x00)         //nolint:revive // never fails
 
-	buf.WriteByte(0x08)
-	buf.WriteByte(0x08)
-	buf.WriteByte(0x08)
+	buf.WriteByte(0x08) //nolint:revive // never fails
+	buf.WriteByte(0x08) //nolint:revive // never fails
+	buf.WriteByte(0x08) //nolint:revive // never fails
 
 	_, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.Error(t, err)
@@ -245,35 +245,35 @@ func TestParseShortcuts_MissingRequiredField_StartDir(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	buf.WriteByte(0x00)
-	buf.WriteString("shortcuts")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("shortcuts") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
 
-	buf.WriteByte(0x00)
-	buf.WriteString("0")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+	buf.WriteString("0") //nolint:revive // never fails
+	buf.WriteByte(0x00)  //nolint:revive // never fails
 
-	buf.WriteByte(0x02)
-	buf.WriteString("appid")
-	buf.WriteByte(0x00)
-	buf.Write([]byte{0x01, 0x00, 0x00, 0x00})
+	buf.WriteByte(0x02)                       //nolint:revive // never fails
+	buf.WriteString("appid")                  //nolint:revive // never fails
+	buf.WriteByte(0x00)                       //nolint:revive // never fails
+	buf.Write([]byte{0x01, 0x00, 0x00, 0x00}) //nolint:revive // never fails
 
-	buf.WriteByte(0x01)
-	buf.WriteString("AppName")
-	buf.WriteByte(0x00)
-	buf.WriteString("Test")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)        //nolint:revive // never fails
+	buf.WriteString("AppName") //nolint:revive // never fails
+	buf.WriteByte(0x00)        //nolint:revive // never fails
+	buf.WriteString("Test")    //nolint:revive // never fails
+	buf.WriteByte(0x00)        //nolint:revive // never fails
 
-	buf.WriteByte(0x01)
-	buf.WriteString("Exe")
-	buf.WriteByte(0x00)
-	buf.WriteString("/path/to/exe")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)             //nolint:revive // never fails
+	buf.WriteString("Exe")          //nolint:revive // never fails
+	buf.WriteByte(0x00)             //nolint:revive // never fails
+	buf.WriteString("/path/to/exe") //nolint:revive // never fails
+	buf.WriteByte(0x00)             //nolint:revive // never fails
 
 	// Missing StartDir
-	buf.WriteByte(0x08)
-	buf.WriteByte(0x08)
-	buf.WriteByte(0x08)
+	buf.WriteByte(0x08) //nolint:revive // never fails
+	buf.WriteByte(0x08) //nolint:revive // never fails
+	buf.WriteByte(0x08) //nolint:revive // never fails
 
 	_, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.Error(t, err)
@@ -285,18 +285,18 @@ func TestParseShortcuts_TruncatedNumber(t *testing.T) {
 
 	// Number field with only 2 bytes instead of 4
 	var buf bytes.Buffer
-	buf.WriteByte(0x00)
-	buf.WriteString("shortcuts")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("shortcuts") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
 
-	buf.WriteByte(0x00)
-	buf.WriteString("0")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+	buf.WriteString("0") //nolint:revive // never fails
+	buf.WriteByte(0x00)  //nolint:revive // never fails
 
-	buf.WriteByte(0x02) // number marker
-	buf.WriteString("appid")
-	buf.WriteByte(0x00)
-	buf.Write([]byte{0x01, 0x02}) // Only 2 bytes, needs 4
+	buf.WriteByte(0x02)           //nolint:revive // never fails
+	buf.WriteString("appid")      //nolint:revive // never fails
+	buf.WriteByte(0x00)           //nolint:revive // never fails
+	buf.Write([]byte{0x01, 0x02}) //nolint:revive // never fails
 
 	_, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.Error(t, err)
@@ -316,22 +316,22 @@ func TestParseShortcuts_NonSequentialIndex(t *testing.T) {
 
 	// shortcuts { 1 { ... } } - starts at 1 instead of 0
 	var buf bytes.Buffer
-	buf.WriteByte(0x00)
-	buf.WriteString("shortcuts")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("shortcuts") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
 
-	buf.WriteByte(0x00)
-	buf.WriteString("1") // Index 1 instead of 0
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+	buf.WriteString("1") //nolint:revive // never fails
+	buf.WriteByte(0x00)  //nolint:revive // never fails
 
-	buf.WriteByte(0x02)
-	buf.WriteString("appid")
-	buf.WriteByte(0x00)
-	buf.Write([]byte{0x01, 0x00, 0x00, 0x00})
+	buf.WriteByte(0x02)                       //nolint:revive // never fails
+	buf.WriteString("appid")                  //nolint:revive // never fails
+	buf.WriteByte(0x00)                       //nolint:revive // never fails
+	buf.Write([]byte{0x01, 0x00, 0x00, 0x00}) //nolint:revive // never fails
 
-	buf.WriteByte(0x08)
-	buf.WriteByte(0x08)
-	buf.WriteByte(0x08)
+	buf.WriteByte(0x08) //nolint:revive // never fails
+	buf.WriteByte(0x08) //nolint:revive // never fails
+	buf.WriteByte(0x08) //nolint:revive // never fails
 
 	_, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.Error(t, err)
@@ -343,11 +343,11 @@ func TestParseShortcuts_EmptyShortcutsMap(t *testing.T) {
 
 	// shortcuts { } - empty map
 	var buf bytes.Buffer
-	buf.WriteByte(0x00)
-	buf.WriteString("shortcuts")
-	buf.WriteByte(0x00)
-	buf.WriteByte(0x08) // end shortcuts immediately
-	buf.WriteByte(0x08) // end root
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("shortcuts") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteByte(0x08)          //nolint:revive // never fails
+	buf.WriteByte(0x08)          //nolint:revive // never fails
 
 	shortcuts, err := vdfbinary.ParseShortcuts(bytes.NewReader(buf.Bytes()))
 	require.NoError(t, err)
@@ -360,45 +360,45 @@ func buildShortcutVDF(appNameKey, exeKey, startDirKey string) []byte {
 	var buf bytes.Buffer
 
 	// shortcuts map start
-	buf.WriteByte(0x00)
-	buf.WriteString("shortcuts")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("shortcuts") //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
 
 	// shortcut "0" map start
-	buf.WriteByte(0x00)
-	buf.WriteString("0")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x00)  //nolint:revive // never fails
+	buf.WriteString("0") //nolint:revive // never fails
+	buf.WriteByte(0x00)  //nolint:revive // never fails
 
 	// appid (number)
-	buf.WriteByte(0x02)
-	buf.WriteString("appid")
-	buf.WriteByte(0x00)
-	buf.Write([]byte{0x01, 0x02, 0x03, 0x04})
+	buf.WriteByte(0x02)                       //nolint:revive // never fails
+	buf.WriteString("appid")                  //nolint:revive // never fails
+	buf.WriteByte(0x00)                       //nolint:revive // never fails
+	buf.Write([]byte{0x01, 0x02, 0x03, 0x04}) //nolint:revive // never fails
 
 	// AppName (string) - key name varies
-	buf.WriteByte(0x01)
-	buf.WriteString(appNameKey)
-	buf.WriteByte(0x00)
-	buf.WriteString("Case Test Game")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)               //nolint:revive // never fails
+	buf.WriteString(appNameKey)       //nolint:revive // never fails
+	buf.WriteByte(0x00)               //nolint:revive // never fails
+	buf.WriteString("Case Test Game") //nolint:revive // never fails
+	buf.WriteByte(0x00)               //nolint:revive // never fails
 
 	// Exe (string) - key name varies
-	buf.WriteByte(0x01)
-	buf.WriteString(exeKey)
-	buf.WriteByte(0x00)
-	buf.WriteString("/path/to/game")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)              //nolint:revive // never fails
+	buf.WriteString(exeKey)          //nolint:revive // never fails
+	buf.WriteByte(0x00)              //nolint:revive // never fails
+	buf.WriteString("/path/to/game") //nolint:revive // never fails
+	buf.WriteByte(0x00)              //nolint:revive // never fails
 
 	// StartDir (string) - key name varies
-	buf.WriteByte(0x01)
-	buf.WriteString(startDirKey)
-	buf.WriteByte(0x00)
-	buf.WriteString("/path/to")
-	buf.WriteByte(0x00)
+	buf.WriteByte(0x01)          //nolint:revive // never fails
+	buf.WriteString(startDirKey) //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
+	buf.WriteString("/path/to")  //nolint:revive // never fails
+	buf.WriteByte(0x00)          //nolint:revive // never fails
 
-	buf.WriteByte(0x08) // end shortcut "0"
-	buf.WriteByte(0x08) // end shortcuts
-	buf.WriteByte(0x08) // end root
+	buf.WriteByte(0x08) //nolint:revive // never fails
+	buf.WriteByte(0x08) //nolint:revive // never fails
+	buf.WriteByte(0x08) //nolint:revive // never fails
 
 	return buf.Bytes()
 }

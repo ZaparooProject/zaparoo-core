@@ -33,6 +33,7 @@ import (
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
@@ -91,7 +92,7 @@ func (db *MediaDB) GetCachedSlugResolution(
 		return 0, "", false
 	}
 
-	err = db.sql.QueryRowContext(ctx,
+	err = db.conn().QueryRowContext(ctx,
 		"SELECT MediaDBID, Strategy FROM SlugResolutionCache WHERE CacheKey = ?",
 		cacheKey).Scan(&mediaDBID, &strategy)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -130,7 +131,7 @@ func (db *MediaDB) SetCachedSlugResolution(
 		return fmt.Errorf("failed to marshal tag filters: %w", err)
 	}
 
-	_, err = db.sql.ExecContext(ctx, `
+	_, err = db.conn().ExecContext(ctx, `
 		INSERT OR REPLACE INTO SlugResolutionCache
 		(CacheKey, SystemID, Slug, TagFilters, MediaDBID, Strategy, LastUpdated)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -156,7 +157,7 @@ func (db *MediaDB) InvalidateSlugCache(ctx context.Context) error {
 		return ErrNullSQL
 	}
 
-	_, err := db.sql.ExecContext(ctx, "DELETE FROM SlugResolutionCache")
+	_, err := db.conn().ExecContext(ctx, "DELETE FROM SlugResolutionCache")
 	if err != nil {
 		return fmt.Errorf("failed to invalidate slug resolution cache: %w", err)
 	}
@@ -187,7 +188,7 @@ func (db *MediaDB) InvalidateSlugCacheForSystems(ctx context.Context, systemIDs 
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	deleteStmt := fmt.Sprintf("DELETE FROM SlugResolutionCache WHERE SystemID IN (%s)", placeholders)
-	_, err := db.sql.ExecContext(ctx, deleteStmt, args...)
+	_, err := db.conn().ExecContext(ctx, deleteStmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to invalidate slug cache for systems: %w", err)
 	}
@@ -206,7 +207,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 	result := database.SearchResultWithCursor{}
 
 	// Query for media information
-	err := db.sql.QueryRowContext(ctx, `
+	err := db.conn().QueryRowContext(ctx, `
 		SELECT
 			Systems.SystemID,
 			MediaTitles.Name,
@@ -226,17 +227,22 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 		return result, fmt.Errorf("failed to get media by DBID: %w", err)
 	}
 
-	// Fetch tags for this media
-	rows, err := db.sql.QueryContext(ctx, `
-		SELECT
-			Tags.Tag,
-			TagTypes.Type
+	// Fetch tags from both MediaTags (file-level) and MediaTitleTags (title-level)
+	rows, err := db.conn().QueryContext(ctx, `
+		SELECT Tags.Tag, TagTypes.Type
 		FROM MediaTags
-		INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-		INNER JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
 		WHERE MediaTags.MediaDBID = ?
-		ORDER BY TagTypes.Type, Tags.Tag
-	`, mediaDBID)
+		UNION
+		SELECT Tags.Tag, TagTypes.Type
+		FROM Media
+		JOIN MediaTitleTags ON MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
+		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE Media.DBID = ?
+		ORDER BY Type, Tag
+	`, mediaDBID, mediaDBID)
 	if err != nil {
 		return result, fmt.Errorf("failed to query tags: %w", err)
 	}
@@ -252,6 +258,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 		if scanErr := rows.Scan(&tag.Tag, &tag.Type); scanErr != nil {
 			return result, fmt.Errorf("failed to scan tag: %w", scanErr)
 		}
+		tag.Tag = tags.UnpadTagValue(tag.Tag)
 		result.Tags = append(result.Tags, tag)
 	}
 
@@ -262,42 +269,101 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 	return result, nil
 }
 
-// GetYearBySystemAndPath retrieves the year tag for a media item in a single query.
-// Returns empty string if no year tag exists or media not found.
-func (db *MediaDB) GetYearBySystemAndPath(ctx context.Context, systemID, path string) (string, error) {
+// GetZapScriptTagsBySystemAndPath retrieves disambiguating tags for a media item.
+// A tag is disambiguating when sibling media entries (same title) have different
+// values for that tag type (e.g., 2-player vs 4-player variants of the same game).
+// Returns only the target media's tags for tag types that differ across siblings.
+// Returns empty slice if no disambiguating tags exist or media not found.
+func (db *MediaDB) GetZapScriptTagsBySystemAndPath(
+	ctx context.Context, systemID, path string,
+) ([]database.TagInfo, error) {
 	if db.sql == nil {
-		return "", ErrNullSQL
+		return nil, ErrNullSQL
 	}
 
-	var year string
-	err := db.sql.QueryRowContext(ctx, `
-		SELECT Tags.Tag
-		FROM Media
-		INNER JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
-		INNER JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
-		INNER JOIN MediaTags ON Media.DBID = MediaTags.MediaDBID
-		INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-		INNER JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-		WHERE Systems.SystemID = ?
-		  AND Media.Path = ?
-		  AND TagTypes.Type = 'year'
-		  AND length(Tags.Tag) = 4
-		LIMIT 1
-	`, systemID, path).Scan(&year)
-
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("failed to get year by system and path: %w", err)
-	}
-
-	// Validate it's actually 4 digits
-	for _, ch := range year {
-		if ch < '0' || ch > '9' {
-			return "", nil
+	// Single query: find tag types where siblings under the same title have
+	// different values, then return only the target media's tags for those types.
+	// Checks both MediaTags (file-level) and MediaTitleTags (title-level) tags.
+	typePlaceholders := prepareVariadic("?", ",", len(database.ZapScriptTagTypes))
+	args := make([]any, 0, 2+len(database.ZapScriptTagTypes)*4)
+	args = append(args, systemID, path)
+	for range 4 {
+		for _, tagType := range database.ZapScriptTagTypes {
+			args = append(args, tagType)
 		}
 	}
 
-	return year, nil
+	rows, err := db.conn().QueryContext(ctx, fmt.Sprintf(`
+		WITH Target AS (
+			SELECT Media.DBID, Media.MediaTitleDBID
+			FROM Media
+			JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
+			JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
+			WHERE Systems.SystemID = ? AND Media.Path = ?
+		),
+		-- All eligible tags for the target (file-level + title-level)
+		TargetTags AS (
+			SELECT DISTINCT tt.DBID as TypeDBID, tt.Type, t.Tag
+			FROM Target
+			JOIN MediaTags mt ON Target.DBID = mt.MediaDBID
+			JOIN Tags t ON mt.TagDBID = t.DBID
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			WHERE tt.Type IN (%s)
+			UNION
+			SELECT DISTINCT tt.DBID as TypeDBID, tt.Type, t.Tag
+			FROM Target
+			JOIN MediaTitleTags mtt ON Target.MediaTitleDBID = mtt.MediaTitleDBID
+			JOIN Tags t ON mtt.TagDBID = t.DBID
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			WHERE tt.Type IN (%s)
+		),
+		-- All eligible tags across siblings (file-level + title-level)
+		SiblingTags AS (
+			SELECT DISTINCT t.Tag, t.TypeDBID
+			FROM Target
+			JOIN Media sibling ON sibling.MediaTitleDBID = Target.MediaTitleDBID
+			JOIN MediaTags smt ON sibling.DBID = smt.MediaDBID
+			JOIN Tags t ON smt.TagDBID = t.DBID
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			WHERE tt.Type IN (%s)
+			UNION
+			SELECT DISTINCT t.Tag, t.TypeDBID
+			FROM Target
+			JOIN MediaTitleTags mtt ON Target.MediaTitleDBID = mtt.MediaTitleDBID
+			JOIN Tags t ON mtt.TagDBID = t.DBID
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			WHERE tt.Type IN (%s)
+		)
+		SELECT tt.Type, tt.Tag
+		FROM TargetTags tt
+		WHERE (
+			SELECT COUNT(DISTINCT st.Tag)
+			FROM SiblingTags st
+			WHERE st.TypeDBID = tt.TypeDBID
+		) > 1
+		ORDER BY tt.Type, tt.Tag
+	`, typePlaceholders, typePlaceholders, typePlaceholders, typePlaceholders), args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get zapscript tags by system and path: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	resultTags := make([]database.TagInfo, 0)
+	for rows.Next() {
+		var tag database.TagInfo
+		if scanErr := rows.Scan(&tag.Type, &tag.Tag); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan tag: %w", scanErr)
+		}
+		tag.Tag = tags.UnpadTagValue(tag.Tag)
+		resultTags = append(resultTags, tag)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+
+	return resultTags, nil
 }

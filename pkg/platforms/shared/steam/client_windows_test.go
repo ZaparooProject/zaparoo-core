@@ -23,11 +23,11 @@ package steam
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
@@ -49,9 +49,11 @@ func TestClientFindSteamDir(t *testing.T) {
 		require.NoError(t, err)
 
 		// Configure custom install dir
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "Steam", InstallDir: customPath},
-		})
+		require.NoError(t, cfg.LoadTOML(fmt.Sprintf(`
+[[launchers.default]]
+launcher = "Steam"
+install_dir = %q
+`, customPath)))
 
 		client := NewClient(Options{
 			FallbackPath: "C:\\fallback\\steam",

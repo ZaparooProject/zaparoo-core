@@ -67,7 +67,9 @@ func setZapLinkHeaders(req *http.Request, platform string) {
 }
 
 type WellKnown struct {
-	ZapScript int `json:"zapscript"`
+	Trusted   []string `json:"trusted,omitempty"`
+	ZapScript int      `json:"zapscript"`
+	Auth      int      `json:"auth,omitempty"`
 }
 
 // httpDoer is an interface for making HTTP requests for testing.
@@ -77,41 +79,49 @@ type httpDoer interface {
 
 var zapFetchTransport = &http.Transport{
 	DialContext: (&net.Dialer{
-		Timeout:   1 * time.Second,
+		Timeout:   2 * time.Second,
 		KeepAlive: 10 * time.Second,
 	}).DialContext,
-	TLSHandshakeTimeout:   1 * time.Second,
-	ResponseHeaderTimeout: 1 * time.Second,
-	ExpectContinueTimeout: 500 * time.Millisecond,
+	TLSHandshakeTimeout:   2 * time.Second,
+	ResponseHeaderTimeout: 5 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
 }
 
 var zapFetchClient = &http.Client{
 	Transport: &installer.AuthTransport{
 		Base: zapFetchTransport,
 	},
-	Timeout: 2 * time.Second,
+	Timeout: 10 * time.Second,
 }
 
-func queryZapLinkSupport(u *url.URL, platform string) (int, error) {
-	baseURL := u.Scheme + "://" + u.Host
+// ErrWellKnownNotFound is returned when the .well-known/zaparoo endpoint
+// returns 404, indicating the host does not support Zaparoo.
+var ErrWellKnownNotFound = errors.New("well-known endpoint not found")
+
+// FetchWellKnown fetches and parses the .well-known/zaparoo file from a base URL.
+// Returns ErrWellKnownNotFound if the host returned 404.
+func FetchWellKnown(baseURL string) (*WellKnown, error) {
+	return doFetchWellKnown(baseURL, zapFetchClient)
+}
+
+func doFetchWellKnown(baseURL string, client httpDoer) (*WellKnown, error) {
 	wellKnownURL := baseURL + WellKnownPath
-	log.Debug().Msgf("querying zap link support at %s", wellKnownURL)
+	log.Debug().Msgf("querying well-known at %s", wellKnownURL)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wellKnownURL, http.NoBody)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create request for '%s': %w", wellKnownURL, err)
+		return nil, fmt.Errorf("failed to create request for '%s': %w", wellKnownURL, err)
 	}
-	setZapLinkHeaders(req, platform)
 
-	resp, err := zapFetchClient.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // G704: URL from ZapLink resolution
 	if err != nil {
-		return 0, fmt.Errorf("failed to fetch '%s': %w", wellKnownURL, err)
+		return nil, fmt.Errorf("failed to fetch '%s': %w", wellKnownURL, err)
 	}
 	if resp == nil {
-		return 0, errors.New("received nil response")
+		return nil, errors.New("received nil response")
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -119,27 +129,38 @@ func queryZapLinkSupport(u *url.URL, platform string) (int, error) {
 		}
 	}()
 
-	// 404 = definitive "not supported", return (0, nil) so it gets cached
 	if resp.StatusCode == http.StatusNotFound {
-		return 0, nil
+		return nil, ErrWellKnownNotFound
 	}
 
 	// Other non-200 = transient failure, return error so it's NOT cached
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("server returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("server returned status %d", resp.StatusCode)
 	}
 
 	var wellKnown WellKnown
-	err = json.NewDecoder(resp.Body).Decode(&wellKnown)
+	err = json.NewDecoder(io.LimitReader(resp.Body, helpers.MaxResponseBodySize)).Decode(&wellKnown)
 	if err != nil {
-		return 0, fmt.Errorf("failed to decode JSON from '%s': %w", wellKnownURL, err)
+		return nil, fmt.Errorf("failed to decode JSON from '%s': %w", wellKnownURL, err)
 	}
 
-	log.Debug().Msgf("zap link well known result for %s: %v", wellKnownURL, wellKnown)
-	return wellKnown.ZapScript, nil
+	log.Debug().Msgf("well-known result for %s: %v", wellKnownURL, wellKnown)
+	return &wellKnown, nil
 }
 
-func isZapLink(link string, db *database.Database, platform string) bool {
+func queryZapLinkSupport(u *url.URL) (int, error) {
+	baseURL := u.Scheme + "://" + u.Host
+	wk, err := doFetchWellKnown(baseURL, zapFetchClient)
+	if errors.Is(err, ErrWellKnownNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return wk.ZapScript, nil
+}
+
+func isZapLink(link string, db *database.Database) bool {
 	u, err := url.Parse(link)
 	if err != nil {
 		return false
@@ -156,7 +177,7 @@ func isZapLink(link string, db *database.Database, platform string) bool {
 		return false
 	}
 	if !ok {
-		result, err := queryZapLinkSupport(u, platform)
+		result, err := queryZapLinkSupport(u)
 		if isOfflineError(err) {
 			// don't permanently log as not supported if it may be temp internet access
 			return false
@@ -191,7 +212,7 @@ func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
 	setZapLinkHeaders(req, platform)
 	req.Header.Set("Accept", strings.Join(AcceptedMimeTypes, ", "))
 
-	resp, err := zapFetchClient.Do(req)
+	resp, err := zapFetchClient.Do(req) //nolint:gosec // G704: URL from ZapLink resolution
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch zapscript from '%s': %w", urlStr, err)
 	}
@@ -226,7 +247,7 @@ func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
 		return nil, errors.New("no valid content type")
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, helpers.MaxResponseBodySize))
 	if err != nil {
 		return nil, fmt.Errorf("error reading body: %w", err)
 	}
@@ -235,7 +256,7 @@ func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
 		return nil, errors.New("invalid content type")
 	}
 
-	log.Debug().Msgf("zap link body: %s", string(body))
+	log.Debug().Int("size", len(body)).Msg("received zap link body")
 
 	return body, nil
 }
@@ -299,7 +320,7 @@ func checkZapLink(
 	value := cmd.Args[0]
 	platform := pl.ID()
 
-	if !isZapLink(value, db, platform) {
+	if !isZapLink(value, db) {
 		return "", nil
 	}
 
@@ -332,7 +353,7 @@ func checkZapLink(
 // PreWarmZapLinkHosts pre-warms the DNS and TLS cache for known zaplink hosts.
 // This is called during startup to reduce latency on first zaplink access.
 // It makes HEAD requests to /.well-known/zaparoo for each supported base URL.
-func PreWarmZapLinkHosts(db *database.Database, platform string, checkInternet func(int) bool) {
+func PreWarmZapLinkHosts(db *database.Database, checkInternet func(int) bool) {
 	if !checkInternet(3) {
 		log.Debug().Msg("no internet connectivity, skipping zaplink pre-warming")
 		return
@@ -361,7 +382,7 @@ func PreWarmZapLinkHosts(db *database.Database, platform string, checkInternet f
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			preWarmHost(u, db, platform, zapFetchClient)
+			preWarmHost(u, db, zapFetchClient)
 		}(baseURL)
 	}
 
@@ -370,7 +391,7 @@ func PreWarmZapLinkHosts(db *database.Database, platform string, checkInternet f
 }
 
 // preWarmHost makes a HEAD request to a base URL's well-known endpoint to warm caches.
-func preWarmHost(baseURL string, db *database.Database, platform string, client httpDoer) {
+func preWarmHost(baseURL string, db *database.Database, client httpDoer) {
 	wellKnownURL := baseURL + WellKnownPath
 
 	ctx, cancel := context.WithTimeout(context.Background(), preWarmTimeout)
@@ -381,7 +402,6 @@ func preWarmHost(baseURL string, db *database.Database, platform string, client 
 		log.Debug().Err(err).Msgf("failed to create pre-warm request for %s", baseURL)
 		return
 	}
-	setZapLinkHeaders(req, platform)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -399,7 +419,7 @@ func preWarmHost(baseURL string, db *database.Database, platform string, client 
 		if parseErr != nil {
 			return
 		}
-		result, queryErr := queryZapLinkSupport(u, platform)
+		result, queryErr := queryZapLinkSupport(u)
 		if queryErr == nil && result > 0 {
 			if updateErr := db.UserDB.UpdateZapLinkHost(baseURL, result); updateErr != nil {
 				log.Debug().Err(updateErr).Msgf("failed to update zaplink host timestamp for %s", baseURL)

@@ -197,10 +197,201 @@ func TestTryMainTitleOnly(t *testing.T) {
 	}
 }
 
+func TestTrySharedSecondaryTitle(t *testing.T) {
+	t.Parallel()
+
+	sharedSearchErr := errors.New("database error")
+
+	tests := []struct {
+		expectedErr      error
+		setupMock        func(*helpers.MockMediaDBI)
+		name             string
+		slug             string
+		systemID         string
+		expectedStrategy string
+		matchInfo        GameMatchInfo
+		expectedCount    int
+		shouldError      bool
+	}{
+		{
+			name: "numbered series matches named series via shared subtitle",
+			matchInfo: GameMatchInfo{
+				HasSecondaryTitle:  true,
+				MainTitleSlug:      "touhou06",
+				SecondaryTitleSlug: "embodimentofscarletdevil",
+				CanonicalSlug:      "touhou06embodimentofscarletdevil",
+				OriginalInput:      "Touhou 06: The Embodiment of Scarlet Devil",
+			},
+			slug:     "touhou06embodimentofscarletdevil",
+			systemID: "PC",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "PC", "embodimentofscarletdevil",
+					[]zapscript.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{
+						{
+							SystemID: "PC",
+							Name:     "Touhou Koumakyou: The Embodiment of Scarlet Devil",
+							Path:     "/games/pc/touhou06/th06.exe",
+						},
+					}, nil)
+			},
+			expectedCount:    1,
+			expectedStrategy: StrategySharedSecondaryTitle,
+			shouldError:      false,
+		},
+		{
+			name: "no secondary title on query — strategy skips",
+			matchInfo: GameMatchInfo{
+				HasSecondaryTitle: false,
+				MainTitleSlug:     "touhou06",
+				CanonicalSlug:     "touhou06",
+				OriginalInput:     "Touhou 06",
+			},
+			slug:             "touhou06",
+			systemID:         "PC",
+			setupMock:        func(_ *helpers.MockMediaDBI) {},
+			expectedCount:    0,
+			expectedStrategy: "",
+			shouldError:      false,
+		},
+		{
+			name: "DB entry lacks secondary title — filtered out",
+			matchInfo: GameMatchInfo{
+				HasSecondaryTitle:  true,
+				MainTitleSlug:      "touhou06",
+				SecondaryTitleSlug: "embodimentofscarletdevil",
+				CanonicalSlug:      "touhou06embodimentofscarletdevil",
+				OriginalInput:      "Touhou 06: The Embodiment of Scarlet Devil",
+			},
+			slug:     "touhou06embodimentofscarletdevil",
+			systemID: "PC",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "PC", "embodimentofscarletdevil",
+					[]zapscript.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{
+						// DB entry has no secondary title (just named "Embodiment of Scarlet Devil")
+						{SystemID: "PC", Name: "Embodiment of Scarlet Devil", Path: "/games/pc/eosd.exe"},
+					}, nil)
+			},
+			expectedCount:    0,
+			expectedStrategy: "",
+			shouldError:      false,
+		},
+		{
+			name: "different first main token — cross-franchise collision rejected",
+			matchInfo: GameMatchInfo{
+				HasSecondaryTitle:  true,
+				MainTitleSlug:      "pokemon",
+				SecondaryTitleSlug: "blue",
+				CanonicalSlug:      "pokemonblue",
+				OriginalInput:      "Pokemon: Blue",
+			},
+			slug:     "pokemonblue",
+			systemID: "NES",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "NES", "blue",
+					[]zapscript.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{
+						// Different franchise — main title starts with "megaman" not "pokemon"
+						{SystemID: "NES", Name: "Mega Man Battle Network 3: Blue", Path: "/games/nes/mmbn3b.nes"},
+					}, nil)
+			},
+			expectedCount:    0,
+			expectedStrategy: "",
+			shouldError:      false,
+		},
+		{
+			name: "exact slug match skipped — already covered by exact strategy",
+			matchInfo: GameMatchInfo{
+				HasSecondaryTitle:  true,
+				MainTitleSlug:      "touhoukoumakyou",
+				SecondaryTitleSlug: "embodimentofscarletdevil",
+				CanonicalSlug:      "touhoukoumakyouembodimentofscarletdevil",
+				OriginalInput:      "Touhou Koumakyou: The Embodiment of Scarlet Devil",
+			},
+			slug:     "touhoukoumakyouembodimentofscarletdevil",
+			systemID: "PC",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "PC", "embodimentofscarletdevil",
+					[]zapscript.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{
+						// Same canonical slug as query — exact match, not a shared-secondary situation
+						{
+							SystemID: "PC",
+							Name:     "Touhou Koumakyou: The Embodiment of Scarlet Devil",
+							Path:     "/games/pc/touhou06/th06.exe",
+						},
+					}, nil)
+			},
+			expectedCount:    0,
+			expectedStrategy: "",
+			shouldError:      false,
+		},
+		{
+			name: "DB search error — propagates to caller",
+			matchInfo: GameMatchInfo{
+				HasSecondaryTitle:  true,
+				MainTitleSlug:      "touhou06",
+				SecondaryTitleSlug: "embodimentofscarletdevil",
+				CanonicalSlug:      "touhou06embodimentofscarletdevil",
+				OriginalInput:      "Touhou 06: The Embodiment of Scarlet Devil",
+			},
+			slug:     "touhou06embodimentofscarletdevil",
+			systemID: "PC",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "PC", "embodimentofscarletdevil",
+					[]zapscript.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{}, sharedSearchErr)
+			},
+			expectedCount:    0,
+			expectedErr:      sharedSearchErr,
+			expectedStrategy: "",
+			shouldError:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockDB := helpers.NewMockMediaDBI()
+			tt.setupMock(mockDB)
+
+			results, strategy, err := TrySharedSecondaryTitle(
+				context.Background(),
+				mockDB,
+				tt.systemID,
+				tt.slug,
+				tt.matchInfo,
+				nil,
+				"Game",
+			)
+
+			if tt.shouldError {
+				require.Error(t, err)
+				if tt.expectedErr != nil {
+					require.ErrorIs(t, err, tt.expectedErr)
+					require.ErrorContains(t, err, "SearchMediaBySecondarySlug")
+				}
+			} else {
+				require.NoError(t, err)
+				assert.Len(t, results, tt.expectedCount)
+				assert.Equal(t, tt.expectedStrategy, strategy)
+			}
+
+			mockDB.AssertExpectations(t)
+		})
+	}
+}
+
 func TestTrySecondaryTitleExact(t *testing.T) {
 	t.Parallel()
 
+	exactSearchErr := errors.New("database error")
+	partialSearchErr := errors.New("database error")
+
 	tests := []struct {
+		expectedErr      error
 		setupMock        func(*helpers.MockMediaDBI)
 		name             string
 		slug             string
@@ -293,9 +484,9 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			slug:     "gameii",
 			systemID: "NES",
 			setupMock: func(m *helpers.MockMediaDBI) {
+				// Case 1 only: input has secondary so Case 2 is skipped
+				// (symmetric case deferred to TrySharedSecondaryTitle)
 				m.On("SearchMediaBySlug", mock.Anything, "NES", "ii", []zapscript.TagFilter(nil)).
-					Return([]database.SearchResultWithCursor{}, nil)
-				m.On("SearchMediaBySecondarySlug", mock.Anything, "NES", "ii", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
 			},
 			expectedCount:    0,
@@ -341,7 +532,7 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			shouldError:      false,
 		},
 		{
-			name: "exact search returns error - continues to partial",
+			name: "exact search returns error",
 			matchInfo: GameMatchInfo{
 				HasSecondaryTitle: false,
 				MainTitleSlug:     "testgame",
@@ -351,19 +542,15 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
 				m.On("SearchMediaBySlug", mock.Anything, "SNES", "testgame", []zapscript.TagFilter(nil)).
-					Return([]database.SearchResultWithCursor{}, errors.New("database error"))
-				// Should still try partial search
-				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "testgame", []zapscript.TagFilter(nil)).
-					Return([]database.SearchResultWithCursor{
-						{SystemID: "SNES", Name: "Some Game: Test Game", Path: "/test.rom"},
-					}, nil)
+					Return([]database.SearchResultWithCursor{}, exactSearchErr)
 			},
 			expectedCount:    1,
+			expectedErr:      exactSearchErr,
 			expectedStrategy: StrategySecondaryTitleExact,
-			shouldError:      false,
+			shouldError:      true,
 		},
 		{
-			name: "partial search returns error - returns nil",
+			name: "partial search returns error",
 			matchInfo: GameMatchInfo{
 				HasSecondaryTitle: false,
 				MainTitleSlug:     "errorgame",
@@ -375,11 +562,12 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 				m.On("SearchMediaBySlug", mock.Anything, "SNES", "errorgame", []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
 				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "errorgame", []zapscript.TagFilter(nil)).
-					Return([]database.SearchResultWithCursor{}, errors.New("database error"))
+					Return([]database.SearchResultWithCursor{}, partialSearchErr)
 			},
 			expectedCount:    0,
+			expectedErr:      partialSearchErr,
 			expectedStrategy: "",
-			shouldError:      false, // Errors are logged, not returned
+			shouldError:      true,
 		},
 	}
 
@@ -402,6 +590,15 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 
 			if tt.shouldError {
 				require.Error(t, err)
+				if tt.expectedErr != nil {
+					require.ErrorIs(t, err, tt.expectedErr)
+					if tt.name == "partial search returns error" {
+						require.ErrorContains(t, err, "partial secondary title search failed")
+					}
+					if tt.name == "exact search returns error" {
+						require.ErrorContains(t, err, "exact secondary title search failed")
+					}
+				}
 			} else {
 				require.NoError(t, err)
 				assert.Len(t, results, tt.expectedCount)

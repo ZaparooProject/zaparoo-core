@@ -434,6 +434,26 @@ func TestBuildScummVMCommand_DifferentTargets(t *testing.T) {
 	}
 }
 
+// Regression test: LLAPISuperGrafx launcher must exist for .sgx files on LLAPI cores (#635)
+func TestLLAPISuperGrafxLauncherExists(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	var found *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "LLAPISuperGrafx" {
+			found = &launchers[i]
+			break
+		}
+	}
+
+	require.NotNil(t, found, "LLAPISuperGrafx launcher should exist")
+	assert.Equal(t, "SuperGrafx", found.SystemID,
+		"LLAPISuperGrafx must use SystemSuperGrafx so .sgx slots are found")
+}
+
 // Regression test: N64 launcher should support .v64 extension (byte-swapped ROM format)
 func TestN64LauncherExtensions(t *testing.T) {
 	t.Parallel()
@@ -457,5 +477,39 @@ func TestN64LauncherExtensions(t *testing.T) {
 	for _, ext := range expectedExts {
 		assert.Contains(t, n64Launcher.Extensions, ext,
 			"N64 launcher should support %s extension", ext)
+	}
+}
+
+func TestDualRAMLaunchersExist(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	cases := []struct {
+		id       string
+		systemID string
+	}{
+		{"DualRAM3DO", "3DO"},
+		{"DualRAMJaguar", "Jaguar"},
+		{"DualRAMPSX", "PSX"},
+		{"DualRAMSaturn", "Saturn"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			t.Parallel()
+
+			var found *platforms.Launcher
+			for i := range launchers {
+				if launchers[i].ID == tc.id {
+					found = &launchers[i]
+					break
+				}
+			}
+			require.NotNil(t, found, "%s launcher should exist", tc.id)
+			assert.Equal(t, tc.systemID, found.SystemID,
+				"%s must inherit slots from %s", tc.id, tc.systemID)
+		})
 	}
 }

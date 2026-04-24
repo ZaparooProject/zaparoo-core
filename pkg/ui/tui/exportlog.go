@@ -214,7 +214,7 @@ func uploadLogContent(content []byte, uploadURL string, client *http.Client) (st
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // G704: URL from hardcoded paste service endpoint
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", errUploadConnect, err)
 	}

@@ -56,6 +56,7 @@ var CoreGroups = map[string][]Core{
 	"Atari7800": {Systems["Atari7800"], Systems["Atari2600"]},
 	"Coleco":    {Systems["ColecoVision"], Systems["SG1000"]},
 	"Gameboy":   {Systems["Gameboy"], Systems["GameboyColor"]},
+	"Jaguar":    {Systems["Jaguar"], Systems["JaguarCD"]},
 	"NES":       {Systems["NES"], Systems["NESMusic"], Systems["FDS"]},
 	"SMS": {Systems["MasterSystem"], Systems["GameGear"], Core{
 		ID: "SG1000",
@@ -97,6 +98,20 @@ func PathToMGLDef(system *Core, path string) (*MGLParams, error) {
 
 var Systems = map[string]Core{
 	// Consoles
+	"3DO": {
+		ID:  "3DO",
+		RBF: "_Console/3DO",
+		Slots: []Slot{
+			{
+				Exts: []string{".iso", ".cue"},
+				Mgl: &MGLParams{
+					Delay:  1,
+					Method: "s",
+					Index:  1,
+				},
+			},
+		},
+	},
 	"AdventureVision": {
 		ID:  "AdventureVision",
 		RBF: "_Console/AdventureVision",
@@ -489,6 +504,22 @@ var Systems = map[string]Core{
 			},
 		},
 	},
+	"JaguarCD": {
+		ID:  "JaguarCD",
+		RBF: "_Console/Jaguar",
+		Slots: []Slot{
+			{
+				Exts: []string{".cdi"},
+				Mgl: &MGLParams{
+					Delay:      1,
+					Method:     "s",
+					Index:      1,
+					ResetDelay: 1,
+					ResetHold:  1,
+				},
+			},
+		},
+	},
 	"MasterSystem": {
 		ID:  "MasterSystem",
 		RBF: "_Console/SMS",
@@ -784,7 +815,7 @@ var Systems = map[string]Core{
 				Label: "Disk",
 				Exts:  []string{".cue", ".chd"},
 				Mgl: &MGLParams{
-					Delay:  1,
+					Delay:  2,
 					Method: "s",
 					Index:  0,
 				},

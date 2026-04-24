@@ -47,7 +47,10 @@ func ParseGame(title string) string {
 
 	// Normalize width first so fullwidth separators are detected by SplitAndStripArticles
 	// This converts "：" (fullwidth colon) to ":" (ASCII colon)
-	s = NormalizeWidth(s)
+	// Skip for ASCII-only strings (no fullwidth characters possible)
+	if !isASCII(s) {
+		s = NormalizeWidth(s)
+	}
 	s = strings.TrimSpace(s)
 
 	// MUST happen first: Split titles and strip articles
@@ -66,6 +69,11 @@ func ParseGame(title string) string {
 	// Strip edition and version suffixes
 	s = StripEditionAndVersionSuffixes(s)
 	s = strings.TrimSpace(s)
+
+	// Collapse dotted initialisms (T.V. → TV) before TrimRight strips the trailing
+	// period, leaving only one letter-period pair and defeating the {2,} threshold.
+	// Must happen here so the Roman numeral pass below doesn't see isolated "V"→"5".
+	s = CollapseDottedInitialisms(s)
 
 	// Trim trailing separators before abbreviation expansion
 	// This ensures "Bros-" → "Bros" so abbreviation matching works
@@ -88,11 +96,9 @@ func ParseGame(title string) string {
 	s = strings.ReplaceAll(s, ".", " ")
 	s = strings.TrimSpace(s)
 
-	// Expand common abbreviations
-	s = ExpandAbbreviations(s)
-
-	// Expand number words
-	s = ExpandNumberWords(s)
+	// Expand abbreviations and number words in a single pass to avoid
+	// splitting/joining the string twice
+	s = expandAbbreviationsAndNumbers(s)
 
 	// Normalize ordinals
 	s = NormalizeOrdinals(s)

@@ -141,7 +141,7 @@ func (c *Client) doRequest(ctx context.Context, url string) (statusCode int, bod
 		return 0, nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) //nolint:gosec // G704: URL from arcade DB config
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to execute HTTP request: %w", err)
 	}

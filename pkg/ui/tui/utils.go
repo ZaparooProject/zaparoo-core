@@ -41,12 +41,14 @@ const TagReadTimeout = 30 * time.Second
 // tuiContext creates a context with the TUI request timeout.
 // Use this for API calls from the TUI to avoid long hangs.
 func tuiContext() (context.Context, context.CancelFunc) {
+	//nolint:gosec // G118: caller is responsible for cancel
 	return context.WithTimeout(context.Background(), TUIRequestTimeout)
 }
 
 // tagReadContext creates a context with the tag read timeout.
 // Use this for operations where the user needs to physically interact with a tag.
 func tagReadContext() (context.Context, context.CancelFunc) {
+	//nolint:gosec // G118: caller is responsible for cancel
 	return context.WithTimeout(context.Background(), TagReadTimeout)
 }
 
@@ -138,11 +140,12 @@ func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, wid
 
 // Modal page name constants for consistent overlay management.
 const (
-	infoModalPage    = "info_modal"
-	errorModalPage   = "error_modal"
-	confirmModalPage = "confirm_modal"
-	waitingModalPage = "waiting_modal"
-	oskModalPage     = "osk_modal"
+	infoModalPage            = "info_modal"
+	errorModalPage           = "error_modal"
+	confirmModalPage         = "confirm_modal"
+	waitingModalPage         = "waiting_modal"
+	oskModalPage             = "osk_modal"
+	errorReportingPromptPage = "error_reporting_prompt"
 )
 
 // ShowInfoModal displays an informational modal with a title and OK button.
@@ -202,6 +205,48 @@ func ShowConfirmModal(pages *tview.Pages, app *tview.Application, message string
 			}
 		})
 	pages.AddPage(confirmModalPage, modal, false, true)
+	app.SetFocus(modal)
+}
+
+// ShowErrorReportingPrompt displays the first-run error reporting opt-in modal.
+// onEnable is called when the user clicks "Enable".
+// onNotNow is called when the user clicks "Not Now" or presses Escape.
+// onDontAsk is called when the user clicks "Don't Ask Again".
+func ShowErrorReportingPrompt(
+	pages *tview.Pages,
+	app *tview.Application,
+	onEnable, onNotNow, onDontAsk func(),
+) {
+	modal := tview.NewModal().
+		SetText(
+			"Help improve Zaparoo?\n\n" +
+				"Anonymous error reports help fix bugs faster.\n" +
+				"Only sent when errors occur. No personal data collected.\n" +
+				"You can change this in Settings at any time.",
+		).
+		AddButtons([]string{"Enable", "Not Now", "Don't Ask Again"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			pages.HidePage(errorReportingPromptPage)
+			pages.RemovePage(errorReportingPromptPage)
+			switch buttonIndex {
+			case 0:
+				if onEnable != nil {
+					onEnable()
+				}
+			case 2:
+				if onDontAsk != nil {
+					onDontAsk()
+				}
+			default:
+				if onNotNow != nil {
+					onNotNow()
+				}
+			}
+		})
+	modal.SetTitle(" Error Reporting ").
+		SetBorder(true).
+		SetTitleAlign(tview.AlignCenter)
+	pages.AddPage(errorReportingPromptPage, modal, false, true)
 	app.SetFocus(modal)
 }
 
@@ -351,7 +396,7 @@ func WriteTagWithModal(
 			if ctx.Err() == context.Canceled {
 				return
 			}
-			log.Error().Err(err).Msg("error writing tag")
+			log.Warn().Err(err).Msg("error writing tag")
 			app.QueueUpdateDraw(func() {
 				pages.RemovePage(writeModalPage)
 				ShowErrorModal(pages, app, "Write failed: "+err.Error(), func() {

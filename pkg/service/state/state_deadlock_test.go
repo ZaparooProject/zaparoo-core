@@ -74,7 +74,8 @@ func TestSetActiveCard_NoDeadlockWithSlowConsumer(t *testing.T) {
 			defer wg.Done()
 			for j := range 20 {
 				token := tokens.Token{
-					UID:      "uid-" + string(rune('A'+id)) + "-" + string(rune('0'+j%10)),
+					//nolint:gosec // G115: int->rune for small test ints
+					UID:      "uid-" + string(rune('A'+id)) + "-" + string(rune('0'+j%10)), //nolint:gosec // G115
 					Text:     "test",
 					ScanTime: time.Now(),
 				}
@@ -143,8 +144,8 @@ func TestSetActiveMedia_NoDeadlockWithHook(t *testing.T) {
 			defer wg.Done()
 			for j := range 10 {
 				state.SetActiveMedia(&models.ActiveMedia{
-					SystemID: "system-" + string(rune('0'+id)),
-					Path:     "/path/" + string(rune('0'+j%10)),
+					SystemID: "system-" + string(rune('0'+id)),  //nolint:gosec // G115: small test ints
+					Path:     "/path/" + string(rune('0'+j%10)), //nolint:gosec // G115: small test ints
 				})
 			}
 		}(i)
@@ -261,7 +262,8 @@ func TestSetActiveMedia_RaceCondition(t *testing.T) {
 			for j := range 20 {
 				state.SetActiveMedia(&models.ActiveMedia{
 					SystemID: "system",
-					Path:     "/path/" + string(rune('A'+id)) + "/" + string(rune('0'+j%10)),
+					//nolint:gosec // G115: int->rune for small test ints
+					Path: "/path/" + string(rune('A'+id)) + "/" + string(rune('0'+j%10)), //nolint:gosec // G115
 				})
 			}
 		}(i)
@@ -284,14 +286,16 @@ func (*mockPanicReader) Metadata() readers.DriverMetadata {
 	return readers.DriverMetadata{ID: "mock"}
 }
 
-func (*mockPanicReader) IDs() []string                                             { return []string{"mock"} }
-func (*mockPanicReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan) error { return nil }
-func (m *mockPanicReader) Close() error                                            { m.closed.Store(true); return nil }
-func (*mockPanicReader) Detect(_ []string) string                                  { return "" }
-func (*mockPanicReader) Path() string                                              { return "/dev/mock-panic" }
-func (*mockPanicReader) ReaderID() string                                          { return "mock-panic-test" }
-func (m *mockPanicReader) Connected() bool                                         { return !m.closed.Load() }
-func (*mockPanicReader) Info() string                                              { return "mock panic reader" }
+func (*mockPanicReader) IDs() []string { return []string{"mock"} }
+func (*mockPanicReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan, _ readers.OpenOpts) error {
+	return nil
+}
+func (m *mockPanicReader) Close() error           { m.closed.Store(true); return nil }
+func (*mockPanicReader) Detect(_ []string) string { return "" }
+func (*mockPanicReader) Path() string             { return "/dev/mock-panic" }
+func (*mockPanicReader) ReaderID() string         { return "mock-panic-test" }
+func (m *mockPanicReader) Connected() bool        { return !m.closed.Load() }
+func (*mockPanicReader) Info() string             { return "mock panic reader" }
 
 //nolint:nilnil // mock implementation
 func (*mockPanicReader) Write(_ string) (*tokens.Token, error) { return nil, nil }
@@ -352,14 +356,16 @@ func (*mockRacyReader) Metadata() readers.DriverMetadata {
 	return readers.DriverMetadata{ID: "mock"}
 }
 
-func (*mockRacyReader) IDs() []string                                             { return []string{"mock"} }
-func (*mockRacyReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan) error { return nil }
-func (*mockRacyReader) Close() error                                              { return nil }
-func (*mockRacyReader) Detect(_ []string) string                                  { return "" }
-func (*mockRacyReader) Path() string                                              { return "/dev/mock-racy" }
-func (*mockRacyReader) ReaderID() string                                          { return "mock-racy-test" }
-func (*mockRacyReader) Connected() bool                                           { return true } // Lies!
-func (*mockRacyReader) Info() string                                              { return "mock racy reader" }
+func (*mockRacyReader) IDs() []string { return []string{"mock"} }
+func (*mockRacyReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan, _ readers.OpenOpts) error {
+	return nil
+}
+func (*mockRacyReader) Close() error             { return nil }
+func (*mockRacyReader) Detect(_ []string) string { return "" }
+func (*mockRacyReader) Path() string             { return "/dev/mock-racy" }
+func (*mockRacyReader) ReaderID() string         { return "mock-racy-test" }
+func (*mockRacyReader) Connected() bool          { return true } // Lies!
+func (*mockRacyReader) Info() string             { return "mock racy reader" }
 
 //nolint:nilnil // mock implementation
 func (*mockRacyReader) Write(_ string) (*tokens.Token, error) { return nil, nil }
@@ -418,8 +424,11 @@ func (*mockClosableReader) Metadata() readers.DriverMetadata {
 	return readers.DriverMetadata{ID: "closable"}
 }
 
-func (*mockClosableReader) IDs() []string                                             { return []string{"closable"} }
-func (*mockClosableReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan) error { return nil }
+func (*mockClosableReader) IDs() []string { return []string{"closable"} }
+func (*mockClosableReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan, _ readers.OpenOpts) error {
+	return nil
+}
+
 func (m *mockClosableReader) Close() error {
 	m.closeCalled.Store(true)
 	return m.closeErr

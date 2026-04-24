@@ -229,7 +229,7 @@ func (pm *PictureManager) downloadFile(url, localPath string) error {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	resp, err := pm.httpClient.Do(req)
+	resp, err := pm.httpClient.Do(req) //nolint:gosec // G704: URL from tty2oled config
 	if err != nil {
 		return fmt.Errorf("HTTP request failed: %w", err)
 	}

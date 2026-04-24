@@ -16,7 +16,7 @@ This directory provides comprehensive testing utilities for Zaparoo Core, enabli
 
 #### WebSocket Testing
 - `helpers.NewWebSocketTestServer(t, handler)` - Test WebSocket server
-- `server.NewClient(t)` - WebSocket test client
+- `server.CreateWebSocketClient()` - WebSocket test client
 
 ### Database Testing
 
@@ -96,7 +96,7 @@ func TestMyService(t *testing.T) {
 task test
 
 # Manual fuzzing (runs until failure or Ctrl+C)
-go test -fuzz=FuzzParseVirtualPathStr ./pkg/helpers/
+go test -fuzz=FuzzParseVirtualPathStr ./pkg/helpers/virtualpath/
 
 # Time-boxed fuzzing
 go test -fuzz=FuzzName -fuzztime=30s ./pkg/helpers/
@@ -238,13 +238,6 @@ The `fixtures/` directory provides pre-built test data:
 #### Other Fixtures
 - `fixtures.SamplePlaylists()` - Pre-defined playlist data
 - `fixtures.HistoryEntries` - Pre-populated history entries
-
-## Integration with TDD Guard
-
-All tests are monitored by TDD Guard for strict test-driven development:
-- Use `task test` instead of `go test` for TDD integration
-- Write failing tests first, then implement features
-- TDD Guard ensures code changes are driven by test failures
 
 ## Best Practices
 

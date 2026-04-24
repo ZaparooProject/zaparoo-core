@@ -20,8 +20,13 @@
 package matcher
 
 import (
+	"fmt"
+	"math/rand"
+	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/hbollon/go-edlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -481,4 +486,123 @@ func TestFindFuzzyMatches_MultipleSimilarCandidates(t *testing.T) {
 
 		t.Logf("Found %d matches", len(matches))
 	})
+}
+
+// buildSyntheticCandidates generates n deterministic game-title-like slugs
+// using a fixed seed for reproducible benchmarks.
+func buildSyntheticCandidates(n int) []string {
+	words := []string{
+		"super", "mario", "zelda", "sonic", "metroid", "castlevania",
+		"mega", "man", "final", "fantasy", "dragon", "quest", "street",
+		"fighter", "mortal", "kombat", "donkey", "kong", "kirby", "star",
+		"fox", "fire", "emblem", "pokemon", "contra", "ninja", "gaiden",
+	}
+
+	//nolint:gosec // Deterministic seed for reproducible benchmarks
+	rng := rand.New(rand.NewSource(42))
+	candidates := make([]string, n)
+
+	for i := range n {
+		// Build slug from 2-4 random words
+		wordCount := 2 + rng.Intn(3)
+		parts := make([]string, wordCount)
+		for w := range wordCount {
+			parts[w] = words[rng.Intn(len(words))]
+		}
+		// Append unique suffix to avoid duplicates
+		candidates[i] = fmt.Sprintf("%s-%d", strings.Join(parts, "-"), i)
+	}
+
+	return candidates
+}
+
+func BenchmarkFindFuzzyMatches_500k(b *testing.B) {
+	b.ReportAllocs()
+	candidates := buildSyntheticCandidates(500_000)
+	query := "supermariobros"
+	b.ResetTimer()
+	for b.Loop() {
+		FindFuzzyMatches(query, candidates, 2, 0.85)
+	}
+}
+
+func BenchmarkFindFuzzyMatches_1M(b *testing.B) {
+	b.ReportAllocs()
+	candidates := buildSyntheticCandidates(1_000_000)
+	query := "supermariobros"
+	b.ResetTimer()
+	for b.Loop() {
+		FindFuzzyMatches(query, candidates, 2, 0.85)
+	}
+}
+
+func BenchmarkFindFuzzyMatches_LengthPreFilter(b *testing.B) {
+	candidates := buildSyntheticCandidates(500_000)
+	query := "supermariobros"
+
+	b.Run("maxDistance=3", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			FindFuzzyMatches(query, candidates, 3, 0.85)
+		}
+	})
+
+	b.Run("maxDistance=10", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			FindFuzzyMatches(query, candidates, 10, 0.85)
+		}
+	})
+}
+
+func BenchmarkFindFuzzyMatches_NoMatch_500k(b *testing.B) {
+	b.ReportAllocs()
+	candidates := buildSyntheticCandidates(500_000)
+	query := "zzzzzzzzzznotarealname"
+	b.ResetTimer()
+	for b.Loop() {
+		FindFuzzyMatches(query, candidates, 2, 0.85)
+	}
+}
+
+func BenchmarkJaroWinkler_Similarity(b *testing.B) {
+	b.ReportAllocs()
+	s1 := "supermariobros"
+	s2 := "supermraiobrso"
+	b.ResetTimer()
+	for b.Loop() {
+		edlib.JaroWinklerSimilarity(s1, s2)
+	}
+}
+
+func BenchmarkGenerateTokenSignature_500k(b *testing.B) {
+	b.ReportAllocs()
+
+	words := []string{
+		"Super", "Mario", "Zelda", "Sonic", "Metroid", "Castlevania",
+		"Mega", "Man", "Final", "Fantasy", "Dragon", "Quest", "Street",
+		"Fighter", "Mortal", "Kombat", "Donkey", "Kong", "Kirby", "Star",
+		"Fox", "Fire", "Emblem", "Pokemon", "Contra", "Ninja", "Gaiden",
+	}
+
+	//nolint:gosec // Deterministic seed for reproducible benchmarks
+	rng := rand.New(rand.NewSource(42))
+	titles := make([]string, 500_000)
+	for i := range 500_000 {
+		wordCount := 2 + rng.Intn(3)
+		parts := make([]string, wordCount)
+		for w := range wordCount {
+			parts[w] = words[rng.Intn(len(words))]
+		}
+		titles[i] = strings.Join(parts, " ")
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		for _, title := range titles {
+			GenerateTokenSignature(slugs.MediaTypeGame, title)
+		}
+	}
 }

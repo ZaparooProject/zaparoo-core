@@ -24,6 +24,8 @@ import (
 	"net"
 	"regexp"
 	"strconv"
+
+	zapscript "github.com/ZaparooProject/go-zapscript"
 )
 
 const (
@@ -37,19 +39,26 @@ func isValidAPIPort(port int) bool {
 }
 
 type Service struct {
-	APIPort        *int      `toml:"api_port,omitempty"`
-	Discovery      Discovery `toml:"discovery,omitempty"`
-	DeviceID       string    `toml:"device_id"`
-	APIListen      string    `toml:"api_listen,omitempty"`
-	AllowRun       []string  `toml:"allow_run,omitempty,multiline"`
+	APIPort   *int      `toml:"api_port,omitempty"`
+	Discovery Discovery `toml:"discovery,omitempty"`
+	DeviceID  string    `toml:"device_id"`
+	APIListen string    `toml:"api_listen,omitempty"`
+	// AllowRun is the list of allowed run patterns.
+	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
 	allowRunRe     []*regexp.Regexp
 	AllowedOrigins []string   `toml:"allowed_origins,omitempty"`
 	AllowedIPs     []string   `toml:"allowed_ips,omitempty"`
 	Publishers     Publishers `toml:"publishers,omitempty"`
+	// Encryption enables PAKE pairing + AES-256-GCM on the WebSocket
+	// transport. False (the default) accepts plaintext WebSocket connections
+	// with API key authentication. True requires paired clients for remote
+	// WebSocket connections; localhost is always exempt.
+	Encryption bool `toml:"encryption,omitempty"`
 }
 
 type Publishers struct {
-	MQTT []MQTTPublisher `toml:"mqtt,omitempty"`
+	MQTT      []MQTTPublisher      `toml:"mqtt,omitempty"`
+	PixelCade []PixelCadePublisher `toml:"pixelcade,omitempty"`
 }
 
 type MQTTPublisher struct {
@@ -57,6 +66,14 @@ type MQTTPublisher struct {
 	Broker  string   `toml:"broker"`
 	Topic   string   `toml:"topic"`
 	Filter  []string `toml:"filter,omitempty,multiline"`
+}
+
+type PixelCadePublisher struct {
+	Enabled *bool    `toml:"enabled,omitempty"`
+	Host    string   `toml:"host"`
+	Mode    string   `toml:"mode,omitempty"`
+	Filter  []string `toml:"filter,omitempty,multiline"`
+	Port    int      `toml:"port,omitempty"`
 }
 
 type Discovery struct {
@@ -71,11 +88,17 @@ func (c *Instance) APIPort() int {
 }
 
 // apiPortLocked returns the API port. Caller must hold mu.
+// Port 0 is allowed when set programmatically (e.g. tests) to request an
+// OS-assigned random port via net.Listen. It is rejected by SetAPIPort and
+// isValidAPIPort so users cannot set it via config file or API.
 func (c *Instance) apiPortLocked() int {
 	if c.vals.Service.APIPort == nil {
 		return DefaultAPIPort
 	}
 	port := *c.vals.Service.APIPort
+	if port == 0 {
+		return 0
+	}
 	if !isValidAPIPort(port) {
 		return DefaultAPIPort
 	}
@@ -99,16 +122,46 @@ func (c *Instance) AllowedOrigins() []string {
 	return c.vals.Service.AllowedOrigins
 }
 
+// IsRunAllowed checks whether a ZapScript text is permitted by the allow_run
+// patterns. Each command in the script is parsed and checked individually
+// against the patterns — all commands must match for the text to be allowed.
+// Returns false when allow_run is empty (not configured).
 func (c *Instance) IsRunAllowed(s string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return checkAllow(c.vals.Service.AllowRun, c.vals.Service.allowRunRe, s)
+	if len(c.vals.Service.AllowRun) == 0 {
+		return false
+	}
+	reader := zapscript.NewParser(s)
+	script, err := reader.ParseScript()
+	if err != nil || len(script.Cmds) == 0 {
+		return false
+	}
+	for _, cmd := range script.Cmds {
+		if !checkAllow(c.vals.Service.AllowRun, c.vals.Service.allowRunRe, cmd.String()) {
+			return false
+		}
+	}
+	return true
+}
+
+// HasAllowRun returns true if the allow_run list is configured (non-empty).
+func (c *Instance) HasAllowRun() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.vals.Service.AllowRun) > 0
 }
 
 func (c *Instance) GetMQTTPublishers() []MQTTPublisher {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Service.Publishers.MQTT
+}
+
+func (c *Instance) GetPixelCadePublishers() []PixelCadePublisher {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Service.Publishers.PixelCade
 }
 
 func (c *Instance) APIListen() string {
