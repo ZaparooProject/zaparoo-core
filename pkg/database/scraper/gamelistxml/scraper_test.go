@@ -60,7 +60,7 @@ func TestCleanField_Combined(t *testing.T) {
 
 func TestCleanField_Empty(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "", cleanField(""))
+	assert.Empty(t, cleanField(""))
 }
 
 // --- resolveESPath ---
@@ -90,7 +90,7 @@ func TestResolveESPath_Absolute(t *testing.T) {
 func TestResolveESPath_Empty(t *testing.T) {
 	t.Parallel()
 	got := resolveESPath("", t.TempDir())
-	assert.Equal(t, "", got)
+	assert.Empty(t, got)
 }
 
 func TestResolveESPath_PathTraversal(t *testing.T) {
@@ -98,14 +98,14 @@ func TestResolveESPath_PathTraversal(t *testing.T) {
 	root := t.TempDir()
 	got := resolveESPath("../../etc/passwd", root)
 	// Relative paths that escape systemRootPath must be rejected.
-	assert.Equal(t, "", got, "path traversal outside root must return empty string")
+	assert.Empty(t, got, "path traversal outside root must return empty string")
 }
 
 func TestResolveESPath_TraversalToAbsolute(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	got := resolveESPath("../../../etc/passwd", root)
-	assert.Equal(t, "", got, "deep traversal outside root must return empty string")
+	assert.Empty(t, got, "deep traversal outside root must return empty string")
 }
 
 // --- normalizePlayers ---
@@ -132,12 +132,12 @@ func TestNormalizePlayers_Mixed(t *testing.T) {
 
 func TestNormalizePlayers_Empty(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "", normalizePlayers(""))
+	assert.Empty(t, normalizePlayers(""))
 }
 
 func TestNormalizePlayers_NonNumeric(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "", normalizePlayers("co-op"))
+	assert.Empty(t, normalizePlayers("co-op"))
 }
 
 // --- normalizeRating ---
@@ -165,12 +165,12 @@ func TestNormalizeRating_Rounding(t *testing.T) {
 
 func TestNormalizeRating_Empty(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "", normalizeRating(""))
+	assert.Empty(t, normalizeRating(""))
 }
 
 func TestNormalizeRating_Invalid(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "", normalizeRating("great"))
+	assert.Empty(t, normalizeRating("great"))
 }
 
 // --- extractYear ---
@@ -192,17 +192,17 @@ func TestExtractYear_YearOnly(t *testing.T) {
 
 func TestExtractYear_Short(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "", extractYear("198"))
+	assert.Empty(t, extractYear("198"))
 }
 
 func TestExtractYear_NonNumericStart(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "", extractYear("DATE"))
+	assert.Empty(t, extractYear("DATE"))
 }
 
 func TestExtractYear_Empty(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "", extractYear(""))
+	assert.Empty(t, extractYear(""))
 }
 
 // --- splitCSV ---

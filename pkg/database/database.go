@@ -165,11 +165,11 @@ type TagType struct {
 // The database layer resolves the TypeTagDBID from TypeTag automatically.
 // For reads: TypeTag is populated from the joined Tags row; TypeTagDBID is also set.
 type MediaProperty struct {
-	TypeTag     string // full tag string, e.g. "property:description"
-	TypeTagDBID int64  // DBID of the Tags row; set by reads, resolved at write
+	TypeTag     string
 	Text        string
 	ContentType string
 	Binary      []byte
+	TypeTagDBID int64
 }
 
 type Tag struct {

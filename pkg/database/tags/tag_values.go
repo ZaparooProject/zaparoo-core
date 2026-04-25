@@ -1517,4 +1517,3 @@ const (
 	TagPropertyVideo          TagValue = "video"           // Video clip (filesystem path)
 	TagPropertyManual         TagValue = "manual"          // Game manual PDF (filesystem path)
 )
-

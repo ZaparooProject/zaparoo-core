@@ -505,14 +505,14 @@ func TestUpsertMediaTags_Concurrent(t *testing.T) {
 
 	const goroutines = 5
 	errs := make(chan error, goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			errs <- mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{
 				{Type: "scraper.test", Tag: "concurrent"},
 			})
 		}()
 	}
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		require.NoError(t, <-errs, "concurrent tag write must not return an error")
 	}
 

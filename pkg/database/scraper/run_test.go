@@ -39,10 +39,10 @@ type stubRecord struct {
 }
 
 type stubLoop struct {
-	id      string
-	records []stubRecord
 	matchFn func(r stubRecord) (*scraper.MatchResult, error)
 	mapFn   func(r stubRecord) ([]database.TagInfo, []database.TagInfo, []database.MediaProperty, []database.MediaProperty)
+	id      string
+	records []stubRecord
 }
 
 func (s *stubLoop) ID() string { return s.id }
@@ -86,7 +86,7 @@ func TestRunScraper_NoRecords(t *testing.T) {
 	require.NotEmpty(t, updates)
 	last := updates[len(updates)-1]
 	assert.True(t, last.Done)
-	assert.Nil(t, last.FatalErr)
+	assert.NoError(t, last.FatalErr)
 	db.AssertExpectations(t)
 }
 
@@ -105,7 +105,7 @@ func TestRunScraper_NoMatch_IsSkipped(t *testing.T) {
 
 	last := updates[len(updates)-1]
 	assert.True(t, last.Done)
-	assert.Nil(t, last.FatalErr)
+	assert.NoError(t, last.FatalErr)
 	// No writes should occur for an unmatched record.
 	db.AssertNotCalled(t, "UpsertMediaTags")
 	db.AssertNotCalled(t, "UpsertMediaTitleTags")
@@ -199,11 +199,11 @@ func TestRunScraper_NonFatalMatchError_ContinuesLoop(t *testing.T) {
 
 	last := updates[len(updates)-1]
 	assert.True(t, last.Done)
-	assert.Nil(t, last.FatalErr, "match errors must not be fatal")
+	assert.NoError(t, last.FatalErr, "match errors must not be fatal")
 
 	var errSeen bool
 	for _, u := range updates {
-		if u.Err == matchErr {
+		if errors.Is(u.Err, matchErr) {
 			errSeen = true
 		}
 	}
@@ -263,7 +263,7 @@ func TestRunScraper_FullWrite_HappyPath(t *testing.T) {
 
 	last := updates[len(updates)-1]
 	assert.True(t, last.Done)
-	assert.Nil(t, last.FatalErr)
+	assert.NoError(t, last.FatalErr)
 	// Fix 4: the Done update must carry accumulated totals.
 	assert.Equal(t, 1, last.Processed, "Done update must carry total processed count")
 	assert.Equal(t, 1, last.Matched, "Done update must carry total matched count")

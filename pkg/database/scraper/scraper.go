@@ -77,14 +77,14 @@ type ScrapeOptions struct {
 
 // ScrapeUpdate is one progress event emitted on the channel returned by Scrape.
 type ScrapeUpdate struct {
+	Err       error
+	FatalErr  error
 	SystemID  string
-	Processed int   // records successfully written so far in this system
-	Total     int   // total records in this system (0 if unknown at start)
-	Matched   int   // records that found a DB entry and were written
-	Skipped   int   // records with no match or already sentinel-tagged
-	Err       error // non-fatal per-record error; scraper continues
-	FatalErr  error // fatal error; scraper has stopped
-	Done      bool  // true on the final update
+	Processed int
+	Total     int
+	Matched   int
+	Skipped   int
+	Done      bool
 }
 
 // MatchResult is the output of a successful Match call.
@@ -96,7 +96,7 @@ type MatchResult struct {
 // ScrapeSystem carries the DB identity and filesystem paths needed by the
 // scrape loop and concrete scraper implementations.
 type ScrapeSystem struct {
-	DBID     int64
 	ID       string
 	ROMPaths []string
+	DBID     int64
 }

@@ -39,10 +39,10 @@ import (
 // to any number of SSE subscriber channels. Once the producing goroutine sends
 // the final Done event all subscriber channels are closed.
 type updateFanout struct {
-	mu   sync.Mutex
 	subs map[int]chan scraper.ScrapeUpdate
 	next int
-	done bool // true once the terminal Done update has been broadcast
+	mu   sync.Mutex
+	done bool
 }
 
 func newUpdateFanout() *updateFanout {
@@ -140,10 +140,10 @@ type propertyResponse struct {
 // use after that.
 type ScraperRegistry struct {
 	scrapers map[string]scraper.Scraper
+	cancel   context.CancelFunc
+	fanout   *updateFanout
+	running  string
 	mu       sync.Mutex
-	running  string             // ID of the currently-running scraper, "" if idle
-	cancel   context.CancelFunc // cancels the running scraper's context
-	fanout   *updateFanout      // live fan-out for the current run; nil when idle
 }
 
 // NewScraperRegistry creates an empty registry.
@@ -420,12 +420,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func writeScrapeSSE(w http.ResponseWriter, u scraper.ScrapeUpdate) {
 	type ssePayload struct {
 		SystemID  string `json:"systemId"`
+		Err       string `json:"err,omitempty"`
+		FatalErr  string `json:"fatalErr,omitempty"`
 		Processed int    `json:"processed"`
 		Total     int    `json:"total"`
 		Matched   int    `json:"matched"`
 		Skipped   int    `json:"skipped"`
-		Err       string `json:"err,omitempty"`
-		FatalErr  string `json:"fatalErr,omitempty"`
 		Done      bool   `json:"done"`
 	}
 	p := ssePayload{

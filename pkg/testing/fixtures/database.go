@@ -303,10 +303,10 @@ var Media = struct {
 
 // TagTypes provides sample tag type data
 var TagTypes = struct {
+	Collection []database.TagType
 	Genre      database.TagType
 	Developer  database.TagType
 	Year       database.TagType
-	Collection []database.TagType
 }{
 	Genre: database.TagType{
 		Type: "genre",

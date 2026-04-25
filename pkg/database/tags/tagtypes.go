@@ -35,12 +35,12 @@ var CanonicalIsExclusive = map[TagType]bool{
 	TagTypeRating:    true,
 
 	// File-level single-value types
-	TagTypeRev:       true,
-	TagTypeDisc:      true,
-	TagTypeDiscTotal: true,
-	TagTypePlayers:   true,
-	TagTypeExtension: true,
-	TagTypeMedia:     true,
+	TagTypeRev:         true,
+	TagTypeDisc:        true,
+	TagTypeDiscTotal:   true,
+	TagTypePlayers:     true,
+	TagTypeExtension:   true,
+	TagTypeMedia:       true,
 	TagTypeArcadeBoard: true,
 
 	// Sequential ordering types
