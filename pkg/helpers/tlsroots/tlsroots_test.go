@@ -117,7 +117,7 @@ func TestConfigureDefaults_TrustsFallbackCertificateWithDefaultClient(t *testing
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestConfigureDefaults_NoValidBundleLeavesDefaultsUnchanged(t *testing.T) {
+func TestConfigureDefaults_NoValidBundleUpdatesDefaultsWithoutSettingEnv(t *testing.T) {
 	tempDir := t.TempDir()
 	missingPath := filepath.Join(tempDir, "missing.pem")
 	restoreTLSGlobals(t)
@@ -129,8 +129,12 @@ func TestConfigureDefaults_NoValidBundleLeavesDefaultsUnchanged(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, usedPath)
-	assert.Equal(t, oldDefaultTransport, http.DefaultTransport)
-	assert.Equal(t, oldDefaultClientTransport, http.DefaultClient.Transport)
+	assert.Empty(t, os.Getenv("SSL_CERT_FILE"))
+	require.NotSame(t, oldDefaultTransport, http.DefaultTransport)
+	assert.Same(t, http.DefaultTransport, http.DefaultClient.Transport)
+	assert.Nil(t, oldDefaultClientTransport)
+	assert.NotNil(t, configuredRoots.pool)
+	assert.Empty(t, configuredRoots.path)
 }
 
 func TestTransport_TrustsConfiguredRootsWithCustomTransport(t *testing.T) {

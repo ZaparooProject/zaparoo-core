@@ -74,11 +74,7 @@ func ConfigureDefaults(fallbackPaths []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if path == "" {
-		return "", nil
-	}
-
-	if os.Getenv("SSL_CERT_FILE") != path {
+	if path != "" && os.Getenv("SSL_CERT_FILE") != path {
 		if err := os.Setenv("SSL_CERT_FILE", path); err != nil {
 			return "", fmt.Errorf("setting SSL_CERT_FILE: %w", err)
 		}
