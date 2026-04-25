@@ -570,6 +570,10 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                     {
                         LaunchGameById(command.Id);
                     }
+                    else
+                    {
+                        SendCommandError("Launch", "Missing required field 'Id' for launch");
+                    }
                     break;
 
                 case "showplatforms":
@@ -585,6 +589,10 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                     {
                         ShowPlatform(command.Platform);
                     }
+                    else
+                    {
+                        SendCommandError("ShowPlatform", "Missing required field 'Platform' for showplatform");
+                    }
                     break;
 
                 case "showplaylist":
@@ -592,12 +600,20 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                     {
                         ShowPlaylist(command.Playlist);
                     }
+                    else
+                    {
+                        SendCommandError("ShowPlaylist", "Missing required field 'Playlist' for showplaylist");
+                    }
                     break;
 
                 case "search":
                     if (!string.IsNullOrEmpty(command.Query))
                     {
                         Search(command.Query);
+                    }
+                    else
+                    {
+                        SendCommandError("Search", "Missing required field 'Query' for search");
                     }
                     break;
 
@@ -617,6 +633,10 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                     if (!string.IsNullOrEmpty(command.Platform))
                     {
                         SendGamesForPlatform(command.Platform);
+                    }
+                    else
+                    {
+                        SendCommandError("GetGamesForPlatform", "Missing required field 'Platform' for getgamesforplatform");
                     }
                     break;
 
