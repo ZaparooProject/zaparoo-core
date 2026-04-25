@@ -67,6 +67,7 @@ type SlugSearchCache struct {
 	systemDBIDToID  map[int64]string
 	systemIDToDBID  map[string]int64
 	systemRanges    map[int64][2]int
+	coveredSystems  map[string]struct{}
 	secSlugOffsets  []uint32
 	slugOffsets     []uint32
 	secSlugData     []byte
@@ -77,6 +78,7 @@ type SlugSearchCache struct {
 	trigramPostings []uint32
 	trigramCapped   []bool
 	entryCount      int
+	complete        bool
 }
 
 // Size returns the approximate memory footprint of the cache in bytes.
@@ -132,6 +134,7 @@ func buildSlugSearchCache(ctx context.Context, db *sql.DB) (*SlugSearchCache, er
 		systemDBIDs:    make([]int64, 0, 1<<16),
 		systemDBIDToID: systemDBIDToID,
 		systemIDToDBID: systemIDToDBID,
+		complete:       true,
 	}
 
 	count := 0
@@ -181,13 +184,142 @@ func buildSlugSearchCache(ctx context.Context, db *sql.DB) (*SlugSearchCache, er
 	return cache, nil
 }
 
+func buildSlugSearchCacheForSystems(ctx context.Context, db *sql.DB, systemIDs []string) (*SlugSearchCache, error) {
+	coverage := normalizeCacheSystemIDs(systemIDs)
+	cache := &SlugSearchCache{
+		slugData:       make([]byte, 0, 1<<18),
+		slugOffsets:    make([]uint32, 0, 1<<14),
+		secSlugData:    make([]byte, 0, 1<<16),
+		secSlugOffsets: make([]uint32, 0, 1<<14),
+		titleDBIDs:     make([]int64, 0, 1<<14),
+		systemDBIDs:    make([]int64, 0, 1<<14),
+		systemDBIDToID: make(map[int64]string),
+		systemIDToDBID: make(map[string]int64),
+		coveredSystems: coverage,
+	}
+
+	if len(coverage) == 0 {
+		finalizeCache(cache)
+		return cache, nil
+	}
+
+	ids := sortedCoveredSystems(coverage)
+	placeholders := prepareVariadic("?", ",", len(ids))
+	args := make([]any, len(ids))
+	for i, systemID := range ids {
+		args[i] = systemID
+	}
+
+	//nolint:gosec // Placeholder list is generated internally to match bound args.
+	querySystems := fmt.Sprintf(
+		"SELECT DBID, SystemID FROM Systems WHERE SystemID IN (%s)",
+		placeholders,
+	)
+	systemRows, err := db.QueryContext(ctx, querySystems, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query systems for selective slug cache: %w", err)
+	}
+	defer func() { _ = systemRows.Close() }()
+
+	for systemRows.Next() {
+		var dbid int64
+		var systemID string
+		if scanErr := systemRows.Scan(&dbid, &systemID); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan selective system row: %w", scanErr)
+		}
+		cache.systemDBIDToID[dbid] = systemID
+		cache.systemIDToDBID[systemID] = dbid
+	}
+	if err = systemRows.Err(); err != nil {
+		return nil, fmt.Errorf("selective system rows iteration error: %w", err)
+	}
+
+	//nolint:gosec // Placeholder list is generated internally to match bound args.
+	queryTitles := fmt.Sprintf(`
+		SELECT mt.DBID, mt.SystemDBID, mt.Slug, mt.SecondarySlug
+		FROM MediaTitles mt
+		JOIN Systems s ON mt.SystemDBID = s.DBID
+		WHERE s.SystemID IN (%s)
+		ORDER BY mt.DBID`, placeholders)
+	titleRows, err := db.QueryContext(ctx, queryTitles, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query selective media titles: %w", err)
+	}
+	defer func() { _ = titleRows.Close() }()
+
+	count := 0
+	for titleRows.Next() {
+		if count%ctxCheckInterval == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+		}
+
+		var titleDBID, systemDBID int64
+		var slug string
+		var secSlug sql.NullString
+		if scanErr := titleRows.Scan(&titleDBID, &systemDBID, &slug, &secSlug); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan selective title row: %w", scanErr)
+		}
+
+		//nolint:gosec // Safe: slug data won't exceed 4GB
+		cache.slugOffsets = append(cache.slugOffsets, uint32(len(cache.slugData)))
+		cache.slugData = append(cache.slugData, slug...)
+		cache.slugData = append(cache.slugData, 0)
+
+		//nolint:gosec // Safe: slug data won't exceed 4GB
+		cache.secSlugOffsets = append(cache.secSlugOffsets, uint32(len(cache.secSlugData)))
+		if secSlug.Valid && secSlug.String != "" {
+			cache.secSlugData = append(cache.secSlugData, secSlug.String...)
+			cache.secSlugData = append(cache.secSlugData, 0)
+		}
+
+		cache.titleDBIDs = append(cache.titleDBIDs, titleDBID)
+		cache.systemDBIDs = append(cache.systemDBIDs, systemDBID)
+		count++
+	}
+	if err = titleRows.Err(); err != nil {
+		return nil, fmt.Errorf("selective title rows iteration error: %w", err)
+	}
+
+	cache.entryCount = count
+	finalizeCache(cache)
+	return cache, nil
+}
+
 // finalizeCache sorts entries by system, builds system ranges, and builds the
 // trigram index. Called after raw data population by both production and test paths.
 func finalizeCache(cache *SlugSearchCache) {
+	if cache.coveredSystems == nil && !cache.complete {
+		cache.coveredSystems = make(map[string]struct{})
+	}
+
+	cache.trigramOffsets = nil
+	cache.trigramPostings = nil
+	cache.trigramCapped = nil
+
 	if cache.entryCount == 0 {
 		cache.systemRanges = make(map[int64][2]int)
+		if len(cache.slugOffsets) == 0 {
+			cache.slugOffsets = []uint32{0}
+		}
+		if len(cache.secSlugOffsets) == 0 {
+			cache.secSlugOffsets = []uint32{0}
+		}
 		return
 	}
+
+	if len(cache.slugOffsets) == cache.entryCount {
+		//nolint:gosec // Safe: slug data won't exceed 4GB
+		cache.slugOffsets = append(cache.slugOffsets, uint32(len(cache.slugData)))
+	}
+	if len(cache.secSlugOffsets) == cache.entryCount {
+		//nolint:gosec // Safe: slug data won't exceed 4GB
+		cache.secSlugOffsets = append(cache.secSlugOffsets, uint32(len(cache.secSlugData)))
+	}
+
 	sortCacheBySystem(cache)
 	cache.systemRanges = buildSystemRanges(cache.systemDBIDs, cache.entryCount)
 	buildTrigramIndex(cache)
@@ -200,6 +332,182 @@ func finalizeCache(cache *SlugSearchCache) {
 	cache.systemDBIDs = slices.Clip(cache.systemDBIDs)
 	cache.trigramPostings = slices.Clip(cache.trigramPostings)
 	cache.trigramCapped = slices.Clip(cache.trigramCapped)
+}
+
+func normalizeCacheSystemIDs(systemIDs []string) map[string]struct{} {
+	if len(systemIDs) == 0 {
+		return make(map[string]struct{})
+	}
+	covered := make(map[string]struct{}, len(systemIDs))
+	for _, systemID := range systemIDs {
+		if systemID == "" {
+			continue
+		}
+		covered[systemID] = struct{}{}
+	}
+	return covered
+}
+
+func sortedCoveredSystems(covered map[string]struct{}) []string {
+	ids := make([]string, 0, len(covered))
+	for systemID := range covered {
+		ids = append(ids, systemID)
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+func (c *SlugSearchCache) CanServeSystems(systemIDs []string) bool {
+	if c == nil {
+		return false
+	}
+	if c.complete {
+		return true
+	}
+	if len(systemIDs) == 0 {
+		return false
+	}
+	for _, systemID := range systemIDs {
+		if _, ok := c.coveredSystems[systemID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *SlugSearchCache) withoutSystems(systemIDs []string) *SlugSearchCache {
+	if c == nil {
+		return nil
+	}
+
+	remove := normalizeCacheSystemIDs(systemIDs)
+	if len(remove) == 0 {
+		return c
+	}
+
+	trimmed := &SlugSearchCache{
+		slugData:       make([]byte, 0, len(c.slugData)),
+		slugOffsets:    make([]uint32, 0, len(c.slugOffsets)),
+		secSlugData:    make([]byte, 0, len(c.secSlugData)),
+		secSlugOffsets: make([]uint32, 0, len(c.secSlugOffsets)),
+		titleDBIDs:     make([]int64, 0, len(c.titleDBIDs)),
+		systemDBIDs:    make([]int64, 0, len(c.systemDBIDs)),
+		systemDBIDToID: make(map[int64]string),
+		systemIDToDBID: make(map[string]int64),
+		coveredSystems: make(map[string]struct{}),
+	}
+
+	if c.complete {
+		for systemID := range c.systemIDToDBID {
+			if _, drop := remove[systemID]; !drop {
+				trimmed.coveredSystems[systemID] = struct{}{}
+			}
+		}
+	} else {
+		for systemID := range c.coveredSystems {
+			if _, drop := remove[systemID]; !drop {
+				trimmed.coveredSystems[systemID] = struct{}{}
+			}
+		}
+	}
+
+	for dbid, systemID := range c.systemDBIDToID {
+		if _, drop := remove[systemID]; drop {
+			continue
+		}
+		trimmed.systemDBIDToID[dbid] = systemID
+		trimmed.systemIDToDBID[systemID] = dbid
+	}
+
+	for i := range c.entryCount {
+		systemID := c.systemDBIDToID[c.systemDBIDs[i]]
+		if _, drop := remove[systemID]; drop {
+			continue
+		}
+		appendSlugCacheEntry(trimmed, c, i)
+	}
+
+	trimmed.entryCount = len(trimmed.titleDBIDs)
+	finalizeCache(trimmed)
+	return trimmed
+}
+
+func mergeSlugSearchCaches(base, replacement *SlugSearchCache) *SlugSearchCache {
+	if replacement == nil {
+		return base
+	}
+	if replacement.complete || base == nil {
+		return replacement
+	}
+
+	merged := &SlugSearchCache{
+		slugData:       make([]byte, 0, len(base.slugData)+len(replacement.slugData)),
+		slugOffsets:    make([]uint32, 0, len(base.slugOffsets)+len(replacement.slugOffsets)),
+		secSlugData:    make([]byte, 0, len(base.secSlugData)+len(replacement.secSlugData)),
+		secSlugOffsets: make([]uint32, 0, len(base.secSlugOffsets)+len(replacement.secSlugOffsets)),
+		titleDBIDs:     make([]int64, 0, len(base.titleDBIDs)+len(replacement.titleDBIDs)),
+		systemDBIDs:    make([]int64, 0, len(base.systemDBIDs)+len(replacement.systemDBIDs)),
+		systemDBIDToID: make(map[int64]string),
+		systemIDToDBID: make(map[string]int64),
+		complete:       base.complete,
+	}
+
+	if merged.complete {
+		merged.coveredSystems = nil
+	} else {
+		merged.coveredSystems = make(map[string]struct{})
+		for systemID := range base.coveredSystems {
+			merged.coveredSystems[systemID] = struct{}{}
+		}
+		for systemID := range replacement.coveredSystems {
+			merged.coveredSystems[systemID] = struct{}{}
+		}
+	}
+
+	replace := replacement.coveredSystems
+	for dbid, systemID := range base.systemDBIDToID {
+		if _, drop := replace[systemID]; drop {
+			continue
+		}
+		merged.systemDBIDToID[dbid] = systemID
+		merged.systemIDToDBID[systemID] = dbid
+	}
+	for dbid, systemID := range replacement.systemDBIDToID {
+		merged.systemDBIDToID[dbid] = systemID
+		merged.systemIDToDBID[systemID] = dbid
+	}
+
+	for i := range base.entryCount {
+		systemID := base.systemDBIDToID[base.systemDBIDs[i]]
+		if _, drop := replace[systemID]; drop {
+			continue
+		}
+		appendSlugCacheEntry(merged, base, i)
+	}
+	for i := range replacement.entryCount {
+		appendSlugCacheEntry(merged, replacement, i)
+	}
+
+	merged.entryCount = len(merged.titleDBIDs)
+	finalizeCache(merged)
+	return merged
+}
+
+func appendSlugCacheEntry(dst, src *SlugSearchCache, i int) {
+	//nolint:gosec // Safe: slug data won't exceed 4GB
+	dst.slugOffsets = append(dst.slugOffsets, uint32(len(dst.slugData)))
+	dst.slugData = append(dst.slugData, src.slugForEntry(i)...)
+	dst.slugData = append(dst.slugData, 0)
+
+	//nolint:gosec // Safe: slug data won't exceed 4GB
+	dst.secSlugOffsets = append(dst.secSlugOffsets, uint32(len(dst.secSlugData)))
+	if sec := src.secSlugForEntry(i); len(sec) > 0 {
+		dst.secSlugData = append(dst.secSlugData, sec...)
+		dst.secSlugData = append(dst.secSlugData, 0)
+	}
+
+	dst.titleDBIDs = append(dst.titleDBIDs, src.titleDBIDs[i])
+	dst.systemDBIDs = append(dst.systemDBIDs, src.systemDBIDs[i])
 }
 
 // sortCacheBySystem reorders all parallel arrays so entries are grouped by
@@ -910,5 +1218,23 @@ func (db *MediaDB) RebuildSlugSearchCache() error {
 		Str("size", formatBytes(cache.Size())).
 		Str("trigramIndex", formatBytes(cache.TrigramIndexSize())).
 		Msg("slug search cache built")
+	return nil
+}
+
+func (db *MediaDB) RefreshSlugSearchCacheForSystems(ctx context.Context, systemIDs []string) error {
+	fragment, err := buildSlugSearchCacheForSystems(ctx, db.sql, systemIDs)
+	if err != nil {
+		return fmt.Errorf("failed to build selective slug search cache: %w", err)
+	}
+
+	current := db.slugSearchCache.Load()
+	refreshed := mergeSlugSearchCaches(current, fragment)
+	db.slugSearchCache.Store(refreshed)
+
+	log.Info().
+		Int("entries", refreshed.entryCount).
+		Int("systems", len(fragment.coveredSystems)).
+		Bool("complete", refreshed.complete).
+		Msg("slug search cache refreshed for systems")
 	return nil
 }

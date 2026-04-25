@@ -128,6 +128,27 @@ func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (databa
 	return row, nil
 }
 
+func sqlUpdateMediaTitle(ctx context.Context, db sqlQueryable, mediaDBID, mediaTitleDBID int64) error {
+	if _, err := db.ExecContext(
+		ctx,
+		`UPDATE Media SET MediaTitleDBID = ? WHERE DBID = ?`,
+		mediaTitleDBID,
+		mediaDBID,
+	); err != nil {
+		return fmt.Errorf("failed to update media title: %w", err)
+	}
+
+	return nil
+}
+
+func sqlDeleteMediaTags(ctx context.Context, db sqlQueryable, mediaDBID int64) error {
+	if _, err := db.ExecContext(ctx, `DELETE FROM MediaTags WHERE MediaDBID = ?`, mediaDBID); err != nil {
+		return fmt.Errorf("failed to delete media tags: %w", err)
+	}
+
+	return nil
+}
+
 func sqlGetAllMedia(ctx context.Context, db *sql.DB) ([]database.Media, error) {
 	rows, err := db.QueryContext(ctx,
 		"SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir FROM Media ORDER BY DBID")
@@ -274,6 +295,63 @@ func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]
 		media = append(media, m)
 	}
 	return media, rows.Err()
+}
+
+// sqlBulkSetMediaMissing marks media records as missing by DBID. Batches in chunks
+// of 500 to stay within SQLite variable limits.
+func sqlBulkSetMediaMissing(ctx context.Context, db sqlQueryable, dbids map[int]struct{}) error {
+	if len(dbids) == 0 {
+		return nil
+	}
+
+	ids := make([]int, 0, len(dbids))
+	for id := range dbids {
+		ids = append(ids, id)
+	}
+
+	const chunkSize = 500
+	for i := 0; i < len(ids); i += chunkSize {
+		end := i + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[i:end]
+
+		placeholders := prepareVariadic("?", ",", len(chunk))
+		args := make([]any, len(chunk))
+		for j, id := range chunk {
+			args[j] = id
+		}
+
+		//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+		stmt := fmt.Sprintf("UPDATE Media SET IsMissing = 1 WHERE IsMissing = 0 AND DBID IN (%s)", placeholders)
+		if _, err := db.ExecContext(ctx, stmt, args...); err != nil {
+			return fmt.Errorf("failed to bulk set media missing: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// sqlResetMissingFlags clears IsMissing for all media belonging to the given system DBIDs.
+func sqlResetMissingFlags(ctx context.Context, db sqlQueryable, systemDBIDs []int) error {
+	if len(systemDBIDs) == 0 {
+		return nil
+	}
+
+	placeholders := prepareVariadic("?", ",", len(systemDBIDs))
+	args := make([]any, len(systemDBIDs))
+	for i, id := range systemDBIDs {
+		args[i] = id
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	stmt := fmt.Sprintf("UPDATE Media SET IsMissing = 0 WHERE IsMissing = 1 AND SystemDBID IN (%s)", placeholders)
+	if _, err := db.ExecContext(ctx, stmt, args...); err != nil {
+		return fmt.Errorf("failed to reset missing flags: %w", err)
+	}
+
+	return nil
 }
 
 // sqlGetLaunchCommandForMedia generates a title-based launch command for media at the given path.

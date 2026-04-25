@@ -330,6 +330,11 @@ var SystemMap = map[string]SystemInfo{
 		Extensions: []string{".daphne", ".squashfs"},
 		LauncherID: "Daphne",
 	},
+	"deverr": {
+		SystemID:   systemdefs.SystemDevErr,
+		Extensions: []string{".deverr"},
+		LauncherID: "DevErrSystem",
+	},
 	"devilutionx": {
 		SystemID:   systemdefs.SystemPC,
 		Extensions: []string{".mpq"},

@@ -113,6 +113,9 @@ func buildMediaQueryWhereClause(query *database.MediaQuery) (whereClause string,
 	whereConditions = append(whereConditions, tagClauses...)
 	args = append(args, tagArgs...)
 
+	// Exclude missing media from all query results
+	whereConditions = append(whereConditions, "Media.IsMissing = 0")
+
 	if len(whereConditions) > 0 {
 		whereClause = "WHERE " + strings.Join(whereConditions, " AND ")
 	}

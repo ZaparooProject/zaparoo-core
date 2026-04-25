@@ -150,7 +150,7 @@ func TestBatchInserter_EmptyFlush(t *testing.T) {
 	assert.Equal(t, 0, count)
 }
 
-func TestBatchInserter_CachesOnlyFullBatchStatements(t *testing.T) {
+func TestBatchInserter_CachesBoundedPartialBatchStatements(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
@@ -171,13 +171,58 @@ func TestBatchInserter_CachesOnlyFullBatchStatements(t *testing.T) {
 	require.NoError(t, bi.Add("a", 1))
 	require.NoError(t, bi.Add("b", 2))
 	require.NoError(t, bi.Flush())
-	assert.Empty(t, bi.stmtCache, "partial flush should not keep an ad-hoc prepared statement cached")
+	assert.Len(t, bi.stmtCache, 1, "partial flush should now keep a reusable prepared statement cached")
+	assert.Contains(t, bi.stmtCache, 2)
 
 	require.NoError(t, bi.Add("c", 3))
 	require.NoError(t, bi.Add("d", 4))
 	require.NoError(t, bi.Add("e", 5))
-	assert.Len(t, bi.stmtCache, 1, "full-size flush should cache the reusable prepared statement")
+	assert.Len(t, bi.stmtCache, 2, "full-size flush should also cache the reusable prepared statement")
+	assert.Contains(t, bi.stmtCache, 2)
 	assert.Contains(t, bi.stmtCache, 3)
+
+	require.NoError(t, bi.Close())
+	require.NoError(t, tx.Commit())
+}
+
+func TestBatchInserter_EvictsOldPartialStatementsButKeepsFullBatch(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+
+	_, err = db.ExecContext(ctx,
+		`CREATE TABLE test_table (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, value INTEGER)`)
+	require.NoError(t, err)
+
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	bi, err := NewBatchInserter(ctx, tx, "test_table", []string{"name", "value"}, 10)
+	require.NoError(t, err)
+
+	for flushSize := 1; flushSize <= maxCachedBatchStatements+1; flushSize++ {
+		for i := range flushSize {
+			require.NoError(t, bi.Add(fmt.Sprintf("partial-%d", flushSize), i))
+		}
+		require.NoError(t, bi.Flush())
+	}
+
+	assert.Len(t, bi.stmtCache, maxCachedBatchStatements)
+	assert.Contains(t, bi.stmtCache, 1)
+	assert.NotContains(t, bi.stmtCache, maxCachedBatchStatements+1,
+		"new partial sizes should not be cached once the bounded cache is full")
+	assert.Contains(t, bi.stmtCache, maxCachedBatchStatements)
+
+	for i := range bi.batchSize {
+		require.NoError(t, bi.Add("full", i))
+	}
+
+	assert.Len(t, bi.stmtCache, maxCachedBatchStatements)
+	assert.Contains(t, bi.stmtCache, bi.batchSize, "full batch statement should remain cached")
+	assert.NotContains(t, bi.stmtCache, 1, "oldest partial should be evicted to make room for the full batch")
 
 	require.NoError(t, bi.Close())
 	require.NoError(t, tx.Commit())

@@ -184,7 +184,7 @@ jobs:
         run: APP_VERSION=${VERSION} task ${{matrix.platform}}:build-${{matrix.arch}}
       - name: Upload unsigned Windows exe
         if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-windows-exe-${{matrix.arch}}
           path: _build/windows_${{matrix.arch}}/Zaparoo.exe
@@ -196,14 +196,14 @@ jobs:
              "_build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe"
       - name: Upload unsigned Windows installer
         if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-windows-installer-${{matrix.arch}}
           path: _build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe
           retention-days: 30
       - name: Upload Windows distribution files
         if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-dist-${{matrix.arch}}
           path: |
@@ -246,7 +246,7 @@ jobs:
           gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${PKG_VERSION}-1-${PKG_ARCH}.pkg.tar.zst" --clobber
       - name: Upload Batocera binary as artifact
         if: matrix.platform == 'batocera'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: batocera-binary-${{matrix.arch}}
           path: _build/batocera_${{matrix.arch}}/zaparoo
@@ -334,7 +334,7 @@ jobs:
           done
       - name: Upload signing bundle
         id: upload-bundle
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-windows-bundle
           path: _signing_bundle/

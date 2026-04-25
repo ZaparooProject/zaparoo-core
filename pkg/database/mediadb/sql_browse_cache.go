@@ -34,7 +34,7 @@ import (
 // aggregated counts.
 func sqlPopulateBrowseCache(ctx context.Context, db *sql.DB) error {
 	// Read all paths from Media
-	rows, err := db.QueryContext(ctx, "SELECT Path FROM Media")
+	rows, err := db.QueryContext(ctx, "SELECT Path FROM Media WHERE IsMissing = 0")
 	if err != nil {
 		return fmt.Errorf("browse cache: failed to query paths: %w", err)
 	}

@@ -3,7 +3,7 @@ module github.com/ZaparooProject/zaparoo-core/v2
 go 1.26.2
 
 require (
-	fyne.io/systray v1.11.0
+	fyne.io/systray v1.12.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/ZaparooProject/go-pn532 v0.22.0
@@ -42,7 +42,7 @@ require (
 	github.com/olahol/melody v1.4.0
 	github.com/pelletier/go-toml/v2 v2.3.0
 	github.com/pressly/goose/v3 v3.27.0
-	github.com/rivo/tview v0.0.0-20250625164341-a4a78f1e05cb
+	github.com/rivo/tview v0.42.0
 	github.com/rs/zerolog v1.34.0
 	github.com/sasha-s/go-deadlock v0.3.9
 	github.com/schollz/pake/v3 v3.1.1
@@ -56,7 +56,7 @@ require (
 	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.43.0
-	golang.org/x/text v0.35.0
+	golang.org/x/text v0.36.0
 	golang.org/x/time v0.14.0
 	gopkg.in/ini.v1 v1.67.1
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
