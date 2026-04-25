@@ -1618,24 +1618,16 @@ func (m *MockMediaDBI) GetMediaBySystemID(systemID string) ([]database.MediaWith
 
 // GetMediaTagsBySystemID mock method for per-system lazy loading during resume.
 func (m *MockMediaDBI) GetMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
-	if len(m.ExpectedCalls) > 0 {
-		for _, call := range m.ExpectedCalls {
-			if call.Method == "GetMediaTagsBySystemID" {
-				args := m.Called(systemID)
-				if links, ok := args.Get(0).([]database.MediaTagLink); ok {
-					if err := args.Error(1); err != nil {
-						return links, fmt.Errorf("mock operation failed: %w", err)
-					}
-					return links, nil
-				}
-				if err := args.Error(1); err != nil {
-					return nil, fmt.Errorf("mock operation failed: %w", err)
-				}
-				return []database.MediaTagLink{}, nil
-			}
+	args := m.Called(systemID)
+	if links, ok := args.Get(0).([]database.MediaTagLink); ok {
+		if err := args.Error(1); err != nil {
+			return links, fmt.Errorf("mock operation failed: %w", err)
 		}
+		return links, nil
 	}
-
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
 	return []database.MediaTagLink{}, nil
 }
 

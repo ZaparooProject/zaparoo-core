@@ -121,6 +121,7 @@ func TestNewNamesIndex_ResumeResetMissingFlagsSkipsCompletedSystems(t *testing.T
 
 	mockUserDB := testhelpers.NewMockUserDBI()
 	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("ResetMissingFlags", mock.Anything).Unset()
 
 	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
@@ -157,7 +158,7 @@ func TestNewNamesIndex_ResumeResetMissingFlagsSkipsCompletedSystems(t *testing.T
 	mockMediaDB.On("GetTitlesBySystemID", "snes").Return([]database.TitleWithSystem{}, nil).Once()
 	mockMediaDB.On("GetMediaBySystemID", "snes").Return([]database.MediaWithFullPath{}, nil).Once()
 	mockMediaDB.On("GetMediaTagsBySystemID", "snes").Return([]database.MediaTagLink{}, nil).Once()
-	mockMediaDB.On("ResetMissingFlags", []int{3}).Return(nil).Maybe()
+	mockMediaDB.On("ResetMissingFlags", []int{3}).Return(nil).Once()
 
 	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{
 		{ID: "genesis"},
@@ -360,6 +361,7 @@ func TestNewNamesIndex_DependencyFlushUniqueErrorAbortsIndexing(t *testing.T) {
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Twice()
 	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Once()
 	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Once()
+	mockMediaDB.On("GetMediaTagsBySystemID", "nes").Return([]database.MediaTagLink{}, nil).Once()
 
 	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{{ID: "nes"}},
 		&database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}, func(IndexStatus) {}, nil)

@@ -59,10 +59,10 @@ func TestFlushScanStateMaps_MidSystemFileLimitBoundary(t *testing.T) {
 	t.Parallel()
 
 	const (
-		systemID  = "PSX"
-		disc1Path = "/roms/PSX/Final Fantasy VII (Disc 1).cue"
-		disc2Path = "/roms/PSX/Final Fantasy VII (Disc 2).cue"
+		systemID = "PSX"
 	)
+	disc1Path := filepath.Join(string(filepath.Separator), "roms", systemID, "Final Fantasy VII (Disc 1).cue")
+	disc2Path := filepath.Join(string(filepath.Separator), "roms", systemID, "Final Fantasy VII (Disc 2).cue")
 
 	// addBothDiscsAcrossCommit adds disc 1, commits, optionally flushes the
 	// scan state maps, reopens a transaction, then adds disc 2 — mirroring

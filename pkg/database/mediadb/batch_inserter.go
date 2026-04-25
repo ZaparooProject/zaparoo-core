@@ -202,6 +202,8 @@ func (b *BatchInserter) shouldCacheStatement(rowCount int) bool {
 		return true
 	}
 
+	// Flush returns early for cache hits today, so this branch is defensive for
+	// any future callers that route through shouldCacheStatement directly.
 	if _, ok := b.stmtCache[rowCount]; ok {
 		return true
 	}
@@ -210,6 +212,8 @@ func (b *BatchInserter) shouldCacheStatement(rowCount int) bool {
 }
 
 func (b *BatchInserter) cachePreparedStatement(rowCount int, stmt *sql.Stmt) {
+	// Flush does not currently replace cached statements, but keep this guard so
+	// future callers can safely refresh an entry without leaking the old stmt.
 	if existingStmt, ok := b.stmtCache[rowCount]; ok {
 		if existingStmt != stmt {
 			if closeErr := existingStmt.Close(); closeErr != nil {

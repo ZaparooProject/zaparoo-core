@@ -483,6 +483,10 @@ func waitForPIDExit(
 	return nil
 }
 
+// Restart is intentionally idempotent: if Running reports no live PID, Stop and
+// waitForPIDExit are skipped and Start is called directly. When a PID is still
+// active, Restart follows the full Stop -> waitForPIDExit -> Start sequence so
+// pidRunning has confirmed the old process is gone before the replacement starts.
 func (s *Service) Restart() error {
 	oldPID := 0
 	if s.Running() {

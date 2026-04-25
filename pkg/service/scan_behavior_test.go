@@ -395,6 +395,7 @@ func TestScanBehavior_Tap_DifferentCardLaunchesDirectly(t *testing.T) {
 
 	env.sendGameScan("gameA", env.gamePath("gameA.rom"))
 	require.Equal(t, env.gamePath("gameA.rom"), env.waitForLaunch(t))
+	env.waitForSoftwareToken(t)
 
 	env.sendGameScan("gameB", env.gamePath("gameB.rom"))
 	require.Equal(t, env.gamePath("gameB.rom"), env.waitForLaunch(t))

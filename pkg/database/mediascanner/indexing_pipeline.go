@@ -189,6 +189,9 @@ func AddMediaPath(
 			return 0, 0, fmt.Errorf("error inserting media %s: %w", pf.Path, err)
 		}
 		ss.MediaIDs[mediaKey] = mediaIndex
+		if ss.MediaTitleIDs != nil {
+			ss.MediaTitleIDs[mediaIndex] = titleIndex
+		}
 	} else {
 		existingMedia = true
 		mediaIndex = foundMediaIndex
@@ -329,6 +332,9 @@ func AddMediaPath(
 
 	if err := insertDesiredMediaTags(db, mediaIndex, desiredTagIDs, extensionTagIndex); err != nil {
 		return 0, 0, fmt.Errorf("error inserting media tags %s: %w", pf.Path, err)
+	}
+	if ss.MediaTagIDs != nil {
+		ss.MediaTagIDs[mediaIndex] = cloneMediaTagSet(desiredTagIDs)
 	}
 
 	return titleIndex, mediaIndex, nil
@@ -734,7 +740,7 @@ func PopulateScanStateFromDB(ctx context.Context, db database.MediaDBI, ss *data
 func PopulateScanStateForSystem(
 	ctx context.Context, db database.MediaDBI, ss *database.ScanState, systemID string,
 ) error {
-	stateData, err := loadSystemStateData(ctx, db, systemID)
+	stateData, err := loadSystemStateData(ctx, db, systemID, ss.MediaTagIDs != nil)
 	if err != nil {
 		return err
 	}
@@ -766,7 +772,7 @@ func PopulateScanStateForSystem(
 }
 
 func loadSystemStateData(
-	ctx context.Context, db database.MediaDBI, systemID string,
+	ctx context.Context, db database.MediaDBI, systemID string, loadMediaTags bool,
 ) (systemStateData, error) {
 	startTime := time.Now()
 
@@ -796,9 +802,12 @@ func loadSystemStateData(
 		return systemStateData{}, fmt.Errorf("failed to get media for system %s: %w", systemID, err)
 	}
 
-	mediaTags, err := db.GetMediaTagsBySystemID(systemID)
-	if err != nil {
-		return systemStateData{}, fmt.Errorf("failed to get media tags for system %s: %w", systemID, err)
+	mediaTags := []database.MediaTagLink(nil)
+	if loadMediaTags {
+		mediaTags, err = db.GetMediaTagsBySystemID(systemID)
+		if err != nil {
+			return systemStateData{}, fmt.Errorf("failed to get media tags for system %s: %w", systemID, err)
+		}
 	}
 
 	log.Debug().
@@ -819,7 +828,7 @@ func loadSystemStateData(
 func PopulatePersistentScanStateForSystem(
 	ctx context.Context, db database.MediaDBI, ss *database.ScanState, systemID string,
 ) error {
-	stateData, err := loadSystemStateData(ctx, db, systemID)
+	stateData, err := loadSystemStateData(ctx, db, systemID, ss.MediaTagIDs != nil)
 	if err != nil {
 		return err
 	}

@@ -634,6 +634,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockMediaDB.On("UpdateLastGenerated").Return(nil).Maybe()
 			mockMediaDB.On("Truncate").Return(nil).Maybe()
 			mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
+			mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("TrackBackgroundOperation").Return().Maybe()
 			mockMediaDB.On("BackgroundOperationDone").Return().Maybe()

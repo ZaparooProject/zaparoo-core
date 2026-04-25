@@ -2024,14 +2024,22 @@ func (db *MediaDB) BulkSetMediaMissing(dbids map[int]struct{}) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlBulkSetMediaMissing(db.ctx, db.conn(), dbids)
+	err := sqlBulkSetMediaMissing(db.ctx, db.conn(), dbids)
+	if err == nil && !db.inTransaction {
+		db.invalidateCaches(invalidationScope{AllSystems: true})
+	}
+	return err
 }
 
 func (db *MediaDB) ResetMissingFlags(systemDBIDs []int) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlResetMissingFlags(db.ctx, db.conn(), systemDBIDs)
+	err := sqlResetMissingFlags(db.ctx, db.conn(), systemDBIDs)
+	if err == nil && !db.inTransaction {
+		db.invalidateCaches(invalidationScope{AllSystems: true})
+	}
+	return err
 }
 
 func (db *MediaDB) FindOrInsertMedia(row database.Media) (database.Media, error) {

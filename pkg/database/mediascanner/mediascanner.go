@@ -201,10 +201,22 @@ func FindPath(ctx context.Context, path string) (string, error) {
 
 func GetSystemPaths(
 	ctx context.Context,
-	_ *config.Instance,
-	_ platforms.Platform,
+	cfg *config.Instance,
+	platform platforms.Platform,
 	rootFolders []string,
 	systems []systemdefs.System,
+) []PathResult {
+	launcherCache := &helpers.LauncherCache{}
+	launcherCache.InitializeFromSlice(platform.Launchers(cfg))
+
+	return getSystemPathsForLauncherCache(ctx, rootFolders, systems, launcherCache)
+}
+
+func getSystemPathsForLauncherCache(
+	ctx context.Context,
+	rootFolders []string,
+	systems []systemdefs.System,
+	launcherCache *helpers.LauncherCache,
 ) []PathResult {
 	var matches []PathResult
 
@@ -247,8 +259,7 @@ func GetSystemPaths(
 		default:
 		}
 
-		// GlobalLauncherCache is assumed to be read-only after initialization
-		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
+		launchers := launcherCache.GetLaunchersBySystem(system.ID)
 
 		var folders []string
 		for j := range launchers {
@@ -650,17 +661,19 @@ func NewNamesIndex(
 		}
 	}
 
+	// Build launcher metadata once so runnable-system filtering and scanner
+	// execution both use the same launcher set even when the global cache is stale.
+	allLaunchers := platform.Launchers(cfg)
+	launcherCache := &helpers.LauncherCache{}
+	launcherCache.InitializeFromSlice(allLaunchers)
+
 	// Get the ordered list of systems for this run (deterministic by ID)
 	update(IndexStatus{Phase: PhaseDiscovering})
 	systemPaths := make(map[string][]string)
-	for _, v := range GetSystemPaths(ctx, cfg, platform, platform.RootDirs(cfg), systems) {
+	for _, v := range getSystemPathsForLauncherCache(ctx, platform.RootDirs(cfg), systems, launcherCache) {
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
 	update(IndexStatus{Phase: PhaseInitializing})
-
-	// Build launcher metadata once so runnable-system filtering uses the current
-	// platform launcher set even in tests where the global cache is not initialized.
-	allLaunchers := platform.Launchers(cfg)
 
 	systemsWithScanners := make(map[string]bool, len(allLaunchers))
 	// Build any-scanner list once so runnable-system filtering can preserve
@@ -920,7 +933,7 @@ func NewNamesIndex(
 		// launchers, making this loop a no-op for those systems. This also
 		// replaces the previous loop 2 (launchers with a specific SystemID but
 		// no filesystem paths) since all systems are now visited.
-		sysLaunchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(systemID)
+		sysLaunchers := launcherCache.GetLaunchersBySystem(systemID)
 		for i := range sysLaunchers {
 			l := &sysLaunchers[i]
 			if l.Scanner == nil {

@@ -98,14 +98,11 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/mock/roms"})
 	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(launchers)
 
-	// Initialize cache with our test launchers via the platform mock
+	// Leave the global cache empty to ensure indexing uses the launcher slice it
+	// resolved from the platform rather than whichever global cache is present.
 	testLauncherCacheMutex.Lock()
 	originalCache := helpers.GlobalLauncherCache
-	testCache := &helpers.LauncherCache{}
-
-	testCache.Initialize(platform, cfg)
-
-	helpers.GlobalLauncherCache = testCache
+	helpers.GlobalLauncherCache = &helpers.LauncherCache{}
 	defer func() {
 		helpers.GlobalLauncherCache = originalCache
 		testLauncherCacheMutex.Unlock()

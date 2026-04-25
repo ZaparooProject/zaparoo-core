@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -249,6 +250,39 @@ func TestPrepareBinary_CopiesWhenContentDiffers(t *testing.T) {
 	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
 	require.NoError(t, err)
 	assert.Equal(t, "version-2", string(content))
+}
+
+func TestRestart_StartsWhenServiceNotRunning(t *testing.T) {
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+
+	scriptPath := filepath.Join(t.TempDir(), "fake-service.sh")
+	script := "#!/bin/sh\n" +
+		"pidfile=\"" + pidFile + "\"\n" +
+		"printf '%s' \"$$\" > \"$pidfile\"\n" +
+		"sleep 2\n" +
+		"rm -f \"$pidfile\"\n"
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o600))
+
+	originalAppEnv := os.Getenv(config.AppEnv)
+	require.NoError(t, os.Setenv(config.AppEnv, scriptPath))
+	defer func() {
+		require.NoError(t, os.Setenv(config.AppEnv, originalAppEnv))
+	}()
+
+	require.False(t, svc.Running())
+	require.NoError(t, svc.Restart())
+
+	pid, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Positive(t, pid)
+	assert.True(t, svc.Running())
+
+	require.Eventually(t, func() bool {
+		_, statErr := os.Stat(pidFile)
+		return os.IsNotExist(statErr)
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 func TestWaitForPIDExit_ReturnsImmediatelyForInvalidPID(t *testing.T) {

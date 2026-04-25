@@ -47,6 +47,7 @@ func TestNewDevErrAnyLauncher(t *testing.T) {
 	launcher := NewDevErrAnyLauncher()
 
 	assert.Equal(t, "DevErrAny", launcher.ID)
+	assert.Empty(t, launcher.SystemID)
 	assert.True(t, launcher.SkipFilesystemScan)
 	assert.Equal(t, []string{".deverr"}, launcher.Extensions)
 	assert.NotNil(t, launcher.Launch)
