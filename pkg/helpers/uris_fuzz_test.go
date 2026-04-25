@@ -71,17 +71,24 @@ func FuzzDecodeURIIfNeeded(f *testing.F) {
 			}
 		}
 
-		// Property 4: Should preserve scheme if present and valid
-		if strings.Contains(uri, "://") && !virtualpath.ContainsControlChar(uri) {
+		// Property 4: Should preserve scheme if present
+		if utf8.ValidString(uri) && strings.Contains(uri, "://") && !virtualpath.ContainsControlChar(uri) {
 			schemeEnd := strings.Index(uri, "://")
 			schemeEnd2 := strings.Index(result, "://")
-			if schemeEnd >= 0 && schemeEnd2 >= 0 {
-				origScheme := strings.ToLower(uri[:schemeEnd])
-				resultScheme := strings.ToLower(result[:schemeEnd2])
-				// Only check if original scheme is valid
-				if virtualpath.IsValidScheme(origScheme) {
-					if origScheme != resultScheme {
-						t.Errorf("Scheme changed: %q -> %q", origScheme, resultScheme)
+			if schemeEnd >= 0 {
+				origScheme := uri[:schemeEnd]
+				origSchemeLower := strings.ToLower(origScheme)
+				if schemeEnd2 < 0 {
+					t.Errorf("Scheme separator removed: %q -> %q", uri[:schemeEnd+3], result)
+				} else {
+					resultScheme := result[:schemeEnd2]
+					resultSchemeLower := strings.ToLower(resultScheme)
+					if virtualpath.IsValidScheme(origSchemeLower) {
+						if origSchemeLower != resultSchemeLower {
+							t.Errorf("Scheme changed: %q -> %q", origSchemeLower, resultSchemeLower)
+						}
+					} else if origScheme != resultScheme {
+						t.Errorf("Unsupported scheme changed: %q -> %q", origScheme, resultScheme)
 					}
 				}
 			}
