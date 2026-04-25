@@ -20,6 +20,7 @@
 package tlsroots
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"net/http"
@@ -116,6 +117,22 @@ func TestConfigureDefaults_TrustsFallbackCertificateWithDefaultClient(t *testing
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
+func TestConfigureDefaults_NoValidBundleLeavesDefaultsUnchanged(t *testing.T) {
+	tempDir := t.TempDir()
+	missingPath := filepath.Join(tempDir, "missing.pem")
+	restoreTLSGlobals(t)
+	t.Setenv("SSL_CERT_FILE", "")
+
+	oldDefaultTransport := http.DefaultTransport
+	oldDefaultClientTransport := http.DefaultClient.Transport
+	usedPath, err := ConfigureDefaults([]string{missingPath})
+
+	require.NoError(t, err)
+	assert.Empty(t, usedPath)
+	assert.Equal(t, oldDefaultTransport, http.DefaultTransport)
+	assert.Equal(t, oldDefaultClientTransport, http.DefaultClient.Transport)
+}
+
 func TestTransport_TrustsConfiguredRootsWithCustomTransport(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -141,6 +158,33 @@ func TestTransport_TrustsConfiguredRootsWithCustomTransport(t *testing.T) {
 		assert.NoError(t, resp.Body.Close())
 	}()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestTransportWithRoots_ClonesExistingTLSConfig(t *testing.T) {
+	pool := x509.NewCertPool()
+	baseConfig := &tls.Config{ServerName: "example.com"} //nolint:gosec // test-only client config
+	base := &http.Transport{TLSClientConfig: baseConfig}
+
+	transport := TransportWithRoots(base, pool)
+
+	require.NotSame(t, base, transport)
+	require.NotSame(t, baseConfig, transport.TLSClientConfig)
+	assert.Equal(t, "example.com", transport.TLSClientConfig.ServerName)
+	assert.Same(t, pool, transport.TLSClientConfig.RootCAs)
+	assert.Nil(t, baseConfig.RootCAs)
+}
+
+func TestTransportWithoutConfiguredRootsClonesBase(t *testing.T) {
+	restoreTLSGlobals(t)
+	base := &http.Transport{ResponseHeaderTimeout: 1}
+
+	transport := Transport(base)
+
+	require.NotSame(t, base, transport)
+	assert.Equal(t, base.ResponseHeaderTimeout, transport.ResponseHeaderTimeout)
+	if transport.TLSClientConfig != nil {
+		assert.Nil(t, transport.TLSClientConfig.RootCAs)
+	}
 }
 
 func restoreTLSGlobals(t *testing.T) {

@@ -22,17 +22,21 @@ package zapscript
 import (
 	"context"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -596,6 +600,35 @@ func TestFetchWellKnown_BasicZapScriptOnly(t *testing.T) {
 	assert.Nil(t, wk.Trusted)
 }
 
+func TestConfigureHTTPTransport_TrustsConfiguredTLSRoots(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"zapscript": 1}`))
+	}))
+	defer server.Close()
+
+	oldClient := currentZapFetchClient()
+	t.Cleanup(func() {
+		zapFetchClientMu.Lock()
+		zapFetchClient = oldClient
+		zapFetchClientMu.Unlock()
+	})
+
+	tempDir := t.TempDir()
+	certPath := filepath.Join(tempDir, "cacert.pem")
+	require.NoError(t, os.WriteFile(certPath, zapLinkCertPEM(t, server.Certificate()), 0o600))
+	t.Setenv("SSL_CERT_FILE", "")
+	usedPath, err := tlsroots.ConfigureDefaults([]string{certPath})
+	require.NoError(t, err)
+	require.Equal(t, certPath, usedPath)
+	ConfigureHTTPTransport()
+
+	wk, err := FetchWellKnown(server.URL)
+	require.NoError(t, err)
+	require.NotNil(t, wk)
+	assert.Equal(t, 1, wk.ZapScript)
+}
+
 func TestFetchWellKnown_WithAuthAndTrusted(t *testing.T) {
 	t.Parallel()
 
@@ -719,4 +752,13 @@ func TestGetRemoteZapScript_NormalResponse(t *testing.T) {
 	body, err := getRemoteZapScript(server.URL, "test")
 	require.NoError(t, err)
 	assert.Equal(t, expected, body)
+}
+
+func zapLinkCertPEM(t *testing.T, cert *x509.Certificate) []byte {
+	t.Helper()
+
+	return pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert.Raw,
+	})
 }

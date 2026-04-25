@@ -192,20 +192,26 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 	return nil
 }
 
+var configureTLSDefaults = tlsroots.ConfigureDefaults
+
+var configureZapLinkHTTPTransport = zapscript.ConfigureHTTPTransport
+
+var configureInstallerHTTPTransport = installer.ConfigureHTTPTransport
+
 func configureTLSRootFallback() {
 	fallbackPaths := []string{
 		misterconfig.UpdateAllDownloaderCACert,
 		misterconfig.SystemCACert,
 	}
 
-	usedPath, err := tlsroots.ConfigureDefaults(fallbackPaths)
+	usedPath, err := configureTLSDefaults(fallbackPaths)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to configure MiSTer TLS CA fallback")
 		return
 	}
 
-	zapscript.ConfigureHTTPTransport()
-	installer.ConfigureHTTPTransport()
+	configureZapLinkHTTPTransport()
+	configureInstallerHTTPTransport()
 
 	if usedPath == "" {
 		log.Debug().Msg("no MiSTer TLS CA fallback bundle found")
