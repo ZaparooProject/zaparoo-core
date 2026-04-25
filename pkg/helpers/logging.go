@@ -51,14 +51,22 @@ func EnsureDirectories(pl platforms.Platform) error {
 	return nil
 }
 
-var logWriter io.Writer
+var (
+	logFileWriter *lumberjack.Logger
+	logWriter     io.Writer
+)
 
 func InitLogging(pl platforms.Platform, writers []io.Writer) error {
-	logWriters := []io.Writer{&lumberjack.Logger{
+	if err := CloseLogging(); err != nil {
+		return fmt.Errorf("failed to close previous log file: %w", err)
+	}
+
+	logFileWriter = &lumberjack.Logger{
 		Filename:   filepath.Join(pl.Settings().LogDir, config.LogFile),
 		MaxSize:    1,
 		MaxBackups: 2,
-	}}
+	}
+	logWriters := []io.Writer{logFileWriter}
 
 	if len(writers) > 0 {
 		logWriters = append(logWriters, writers...)
@@ -76,4 +84,17 @@ func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 // This is useful for adding additional writers (e.g., telemetry) after initialization.
 func LogWriter() io.Writer {
 	return logWriter
+}
+
+// CloseLogging closes the active file logger so tests and shutdown paths can
+// safely remove the log directory on Windows.
+func CloseLogging() error {
+	if logFileWriter == nil {
+		return nil
+	}
+
+	err := logFileWriter.Close()
+	logFileWriter = nil
+	logWriter = nil
+	return err
 }

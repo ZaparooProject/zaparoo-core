@@ -328,10 +328,11 @@ func TestAddMediaPath_SkipsTitleAndTagWritesWhenExistingMetadataMatches(t *testi
 
 	mockDB := helpers.NewMockMediaDBI()
 	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	pathKey := filepath.ToSlash(path)
 	scanState := &database.ScanState{
 		SystemIDs:     map[string]int{"NES": 1},
 		TitleIDs:      map[string]int{"NES:supermariobrothers": 10},
-		MediaIDs:      map[string]int{database.MediaKey("NES", path): 20},
+		MediaIDs:      map[string]int{database.MediaKey("NES", pathKey): 20},
 		MediaTitleIDs: map[int]int{20: 10},
 		MediaTagIDs:   map[int]map[int]struct{}{20: {8: {}}},
 		TagTypeIDs:    map[string]int{string(tags.TagTypeExtension): 7},
@@ -356,10 +357,11 @@ func TestAddMediaPath_ExistingMediaWithoutTagStateDoesNotDeleteAllTags(t *testin
 
 	mockDB := helpers.NewMockMediaDBI()
 	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	pathKey := filepath.ToSlash(path)
 	scanState := &database.ScanState{
 		SystemIDs:     map[string]int{"NES": 1},
 		TitleIDs:      map[string]int{"NES:supermariobrothers": 10},
-		MediaIDs:      map[string]int{database.MediaKey("NES", path): 20},
+		MediaIDs:      map[string]int{database.MediaKey("NES", pathKey): 20},
 		MediaTitleIDs: map[int]int{20: 10},
 		MediaTagIDs:   nil,
 		TagTypeIDs:    map[string]int{string(tags.TagTypeExtension): 7},
@@ -384,10 +386,11 @@ func TestAddMediaPath_ReconcileExistingMediaTagsDoesNotMutateStateOnInsertFailur
 
 	mockDB := helpers.NewMockMediaDBI()
 	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	pathKey := filepath.ToSlash(path)
 	scanState := &database.ScanState{
 		SystemIDs:     map[string]int{"NES": 1},
 		TitleIDs:      map[string]int{"NES:supermariobrothers": 10},
-		MediaIDs:      map[string]int{database.MediaKey("NES", path): 20},
+		MediaIDs:      map[string]int{database.MediaKey("NES", pathKey): 20},
 		MediaTitleIDs: map[int]int{20: 10},
 		MediaTagIDs:   map[int]map[int]struct{}{20: {}},
 		TagTypeIDs:    map[string]int{string(tags.TagTypeExtension): 7},
