@@ -605,6 +605,11 @@ func NewNamesIndex(
 	for _, sys := range systems {
 		requestedSystemIDs = append(requestedSystemIDs, sys.ID)
 	}
+	allSystemIDs := make([]string, 0, len(systemdefs.AllSystems()))
+	for _, sys := range systemdefs.AllSystems() {
+		allSystemIDs = append(allSystemIDs, sys.ID)
+	}
+	fullRun := helpers.EqualStringSlices(requestedSystemIDs, allSystemIDs)
 
 	// 1. Check for database locks or issues before starting
 	log.Info().Msg("checking database readiness for indexing")
@@ -1095,7 +1100,7 @@ func NewNamesIndex(
 			continue
 		}
 
-		if beginErr := db.BeginTransaction(true); beginErr != nil {
+		if beginErr := db.BeginTransaction(false); beginErr != nil {
 			return 0, fmt.Errorf("failed to begin missing-state transaction: %w", beginErr)
 		}
 		if resetErr := db.ResetMissingFlags([]int{systemDBID}); resetErr != nil {
@@ -1137,21 +1142,6 @@ func NewNamesIndex(
 		FlushScanStateMaps(&scanState)
 	}
 
-	// Commit any remaining uncommitted data from the unified loop
-	if batchStarted && filesInBatch > 0 {
-		if commitErr := db.CommitTransaction(); commitErr != nil {
-			return 0, fmt.Errorf("failed to commit final batch transaction: %w", commitErr)
-		}
-		lastSystem := ""
-		if len(sortedSystems) > 0 {
-			lastSystem = sortedSystems[len(sortedSystems)-1].ID
-		}
-		if setErr := db.SetLastIndexedSystem(lastSystem); setErr != nil {
-			log.Error().Err(setErr).Msg("failed to set last indexed system after final commit")
-		}
-		batchStarted = false
-	}
-
 	status.Step++
 	status.SystemID = ""
 	update(status)
@@ -1167,15 +1157,6 @@ func NewNamesIndex(
 	scanState.MediaTagIDs = nil
 	scanState.TagTypeIDs = nil
 	scanState.TagIDs = nil
-
-	// Phase 1: Complete data operations (foreground) - commit all data
-	// Note: We may not have an active transaction here due to batching
-	if batchStarted {
-		err = db.CommitTransaction()
-		if err != nil {
-			return 0, fmt.Errorf("failed to commit final transaction: %w", err)
-		}
-	}
 
 	scanState.MissingMedia = nil
 	status.Phase = PhaseCreatingIndexes
@@ -1220,7 +1201,7 @@ func NewNamesIndex(
 		indexedSystemDefs = append(indexedSystemDefs, *system)
 	}
 
-	selectiveRun := len(requestedSystemIDs) > 0 && len(requestedSystemIDs) < len(systemdefs.AllSystems())
+	selectiveRun := len(requestedSystemIDs) > 0 && !fullRun
 
 	// Populate caches after UpdateLastGenerated. For selective scans we rebuild
 	// the persisted per-system SQL cache, refresh in-memory slug coverage for the

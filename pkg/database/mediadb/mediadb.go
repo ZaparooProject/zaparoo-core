@@ -351,7 +351,8 @@ func (db *MediaDB) DropSecondaryIndexes() error {
 
 func (db *MediaDB) secondaryIndexExists(indexName string) (bool, error) {
 	var exists int
-	err := db.sql.QueryRowContext(
+	conn := db.conn()
+	err := conn.QueryRowContext(
 		db.ctx,
 		"SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
 		indexName,

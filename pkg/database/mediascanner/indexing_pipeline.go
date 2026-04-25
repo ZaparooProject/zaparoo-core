@@ -833,6 +833,11 @@ func PopulatePersistentScanStateForSystem(
 		return err
 	}
 
+	// Persistent scan callers may not pre-initialize MissingMedia; this loader owns it.
+	if ss.MissingMedia == nil {
+		ss.MissingMedia = make(map[int]struct{})
+	}
+
 	for _, title := range stateData.titles {
 		titleKey := database.TitleKey(title.SystemID, title.Slug)
 		ss.TitleIDs[titleKey] = int(title.DBID)

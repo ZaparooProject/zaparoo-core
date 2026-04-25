@@ -1013,6 +1013,7 @@ func (m *MockMediaDBI) FindOrInsertMedia(row database.Media) (database.Media, er
 }
 
 func (m *MockMediaDBI) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
+	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(mediaDBID, mediaTitleDBID)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
@@ -1021,6 +1022,7 @@ func (m *MockMediaDBI) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
 }
 
 func (m *MockMediaDBI) DeleteMediaTags(mediaDBID int64) error {
+	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(mediaDBID)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
@@ -1029,6 +1031,7 @@ func (m *MockMediaDBI) DeleteMediaTags(mediaDBID int64) error {
 }
 
 func (m *MockMediaDBI) DeleteMediaTag(mediaDBID, tagDBID int64) error {
+	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(mediaDBID, tagDBID)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
