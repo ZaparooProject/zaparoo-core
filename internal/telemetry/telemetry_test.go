@@ -20,10 +20,17 @@
 package telemetry
 
 import (
+	"io"
+	"sync"
 	"testing"
 
+	corehelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	th "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/getsentry/sentry-go"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,6 +114,80 @@ func TestEnabled(t *testing.T) {
 
 	// enabled starts as false
 	assert.False(t, Enabled(), "telemetry should be disabled by default")
+}
+
+func TestInitConfiguresSentryPrivacyOptions(t *testing.T) {
+	originalLogger := log.Logger
+	t.Cleanup(func() {
+		Close()
+		log.Logger = originalLogger
+		enabled = false
+		sentryWriter = nil
+		closeOnce = sync.Once{}
+		sentry.CurrentHub().BindClient(nil)
+	})
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{LogDir: t.TempDir()})
+	require.NoError(t, corehelpers.InitLogging(mockPlatform, []io.Writer{io.Discard}))
+
+	require.NoError(t, Init(true, "device-id", "1.2.3", "linux"))
+	assert.True(t, Enabled())
+
+	client := sentry.CurrentHub().Client()
+	require.NotNil(t, client)
+	options := client.Options()
+
+	assert.Equal(t, sentryDSN, options.Dsn)
+	assert.Equal(t, "zaparoo-core@1.2.3", options.Release)
+	assert.Equal(t, "linux", options.Environment)
+	assert.True(t, options.AttachStacktrace)
+	assert.True(t, options.DisableTelemetryBuffer)
+	assert.False(t, options.SendDefaultPII)
+	assert.Empty(t, options.ServerName)
+	assert.Zero(t, options.MaxBreadcrumbs)
+	require.NotNil(t, options.BeforeSend)
+	require.NotNil(t, options.HTTPClient)
+	assert.IsType(t, &tunnelTransport{}, options.HTTPClient.Transport)
+}
+
+func TestSanitizeEvent(t *testing.T) {
+	t.Parallel()
+
+	event := &sentry.Event{
+		ServerName: "host.local",
+		Message:    "failed to open /home/callan/.zaparoo/config.toml",
+		Tags: map[string]string{
+			"config_path": "C:\\Users\\callan\\AppData\\Local\\zaparoo\\config.toml",
+			"platform":    "linux",
+		},
+		Exception: []sentry.Exception{
+			{
+				Stacktrace: &sentry.Stacktrace{
+					Frames: []sentry.Frame{
+						{
+							AbsPath:  "/Users/callan/dev/zaparoo-core/internal/telemetry/telemetry.go",
+							Filename: "/home/callan/dev/zaparoo-core/internal/telemetry/telemetry.go",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	sanitized := sanitizeEvent(event)
+
+	assert.Empty(t, sanitized.ServerName)
+	assert.Equal(t, "failed to open /home/<user>/.zaparoo/config.toml", sanitized.Message)
+	assert.Equal(t, "C:\\Users\\<user>\\AppData\\Local\\zaparoo\\config.toml", sanitized.Tags["config_path"])
+	assert.Equal(t, "linux", sanitized.Tags["platform"])
+	require.Len(t, sanitized.Exception, 1)
+	require.NotNil(t, sanitized.Exception[0].Stacktrace)
+	require.Len(t, sanitized.Exception[0].Stacktrace.Frames, 1)
+	assert.Equal(t, "/Users/<user>/dev/zaparoo-core/internal/telemetry/telemetry.go",
+		sanitized.Exception[0].Stacktrace.Frames[0].AbsPath)
+	assert.Equal(t, "/home/<user>/dev/zaparoo-core/internal/telemetry/telemetry.go",
+		sanitized.Exception[0].Stacktrace.Frames[0].Filename)
 }
 
 func TestCloseWhenDisabled(t *testing.T) {

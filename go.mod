@@ -20,8 +20,8 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gdamore/tcell/v2 v2.13.9
 	github.com/gen2brain/malgo v0.11.24
-	github.com/getsentry/sentry-go v0.45.1
-	github.com/getsentry/sentry-go/zerolog v0.45.0
+	github.com/getsentry/sentry-go v0.46.0
+	github.com/getsentry/sentry-go/zerolog v0.46.0
 	github.com/go-chi/chi/v5 v5.2.4
 	github.com/go-chi/cors v1.2.2
 	github.com/go-ole/go-ole v1.3.0

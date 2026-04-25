@@ -108,10 +108,11 @@ func Init(reportingEnabled bool, deviceID, appVersion, platformID string) error 
 	}
 
 	err := sentry.Init(sentry.ClientOptions{
-		Dsn:              sentryDSN,
-		Release:          "zaparoo-core@" + appVersion,
-		Environment:      platformID,
-		AttachStacktrace: true,
+		Dsn:                    sentryDSN,
+		Release:                "zaparoo-core@" + appVersion,
+		Environment:            platformID,
+		AttachStacktrace:       true,
+		DisableTelemetryBuffer: true,
 		// Privacy: explicitly disable PII collection
 		SendDefaultPII: false,
 		ServerName:     "",
@@ -197,10 +198,8 @@ func sanitizeEvent(event *sentry.Event) *sentry.Event {
 
 	event.Message = sanitizePath(event.Message)
 
-	for k, v := range event.Extra {
-		if s, ok := v.(string); ok {
-			event.Extra[k] = sanitizePath(s)
-		}
+	for k, v := range event.Tags {
+		event.Tags[k] = sanitizePath(v)
 	}
 
 	return event
