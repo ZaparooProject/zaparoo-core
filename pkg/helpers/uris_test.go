@@ -73,6 +73,11 @@ func TestDecodeURIIfNeeded(t *testing.T) {
 			input:    "https://example.com/games/My%20Game.iso",
 			expected: "https://example.com/games/My Game.iso",
 		},
+		{
+			name:     "http_double_encoded_percent_sequence",
+			input:    "http:///%25000",
+			expected: "http:///%000",
+		},
 
 		// No encoding (should return as-is)
 		{
@@ -943,13 +948,13 @@ func TestDecodeURIIfNeeded_MalformedGracefulFallback(t *testing.T) {
 			name:        "double_encoding",
 			input:       "steam://999/Name%2520Here",
 			expected:    "steam://999/Name%2520Here",
-			description: "Literal % in decoded segment is re-encoded for idempotence",
+			description: "Literal % in decoded segment stays encoded to preserve custom path structure",
 		},
 		{
 			name:        "triple_encoding",
 			input:       "kodi-movie://100/Name%252520Here",
 			expected:    "kodi-movie://100/Name%252520Here",
-			description: "Literal % in decoded segment is re-encoded for idempotence",
+			description: "Literal % in decoded segment stays encoded to preserve custom path structure",
 		},
 		{
 			name:        "custom_scheme_literal_hashes_stay_literal",
