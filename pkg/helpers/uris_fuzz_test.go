@@ -47,6 +47,7 @@ func FuzzDecodeURIIfNeeded(f *testing.F) {
 	f.Add("https://example.com/games/My%20Game.iso") // HTTPS
 	f.Add("ftp://server/My%20File.zip")              // FTP (should not decode)
 	f.Add("myscheme://data%20here")                  // Unknown scheme
+	f.Add("http:///%25000")                          // Double-encoded percent sequence
 
 	f.Fuzz(func(t *testing.T, uri string) {
 		// Call function - should never panic
@@ -70,14 +71,7 @@ func FuzzDecodeURIIfNeeded(f *testing.F) {
 			}
 		}
 
-		// Property 4: Idempotence - decoding twice should equal decoding once
-		result2 := DecodeURIIfNeeded(result)
-		if result2 != result {
-			t.Errorf("Not idempotent: decode(%q)=%q, decode(decode(%q))=%q",
-				uri, result, uri, result2)
-		}
-
-		// Property 5: Should preserve scheme if present and valid
+		// Property 4: Should preserve scheme if present and valid
 		if strings.Contains(uri, "://") && !virtualpath.ContainsControlChar(uri) {
 			schemeEnd := strings.Index(uri, "://")
 			schemeEnd2 := strings.Index(result, "://")

@@ -94,9 +94,9 @@ f.Fuzz(func(t *testing.T, input string) {
         t.Errorf("Invalid UTF-8: %q", result)
     }
 
-    // Property: Idempotence - decode twice = decode once
-    if DecodeURIIfNeeded(result) != result {
-        t.Errorf("Not idempotent: %q", input)
+    // Property: Unknown schemes should not be decoded
+    if strings.HasPrefix(input, "example://") && result != input {
+        t.Errorf("Unknown scheme changed: %q -> %q", input, result)
     }
 })
 
