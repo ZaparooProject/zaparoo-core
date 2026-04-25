@@ -3,7 +3,7 @@ module github.com/ZaparooProject/zaparoo-core/v2
 go 1.26.2
 
 require (
-	fyne.io/systray v1.11.0
+	fyne.io/systray v1.12.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/ZaparooProject/go-pn532 v0.22.0
