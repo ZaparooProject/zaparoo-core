@@ -27,6 +27,7 @@ import (
 	"runtime"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/rs/zerolog/log"
@@ -45,7 +46,8 @@ type Result struct {
 
 func makeUpdater(_ context.Context, platformID, channel string) (*selfupdate.Updater, selfupdate.Repository, error) {
 	source, err := selfupdate.NewHttpSource(selfupdate.HttpConfig{
-		BaseURL: updateURL,
+		BaseURL:   updateURL,
+		Transport: tlsroots.Transport(nil),
 	})
 	if err != nil {
 		return nil, selfupdate.RepositorySlug{}, fmt.Errorf("creating update source: %w", err)

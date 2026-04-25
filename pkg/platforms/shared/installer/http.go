@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
 	"github.com/rs/zerolog/log"
 )
 
@@ -74,6 +75,17 @@ var httpClient = &http.Client{
 	Transport: &AuthTransport{
 		Base: timeoutTr,
 	},
+}
+
+// ConfigureHTTPTransport applies the process TLS root configuration to the
+// installer's custom timeout transport.
+func ConfigureHTTPTransport() {
+	transport := tlsroots.Transport(timeoutTr)
+	httpClient = &http.Client{
+		Transport: &AuthTransport{
+			Base: transport,
+		},
+	}
 }
 
 func DownloadHTTPFile(opts DownloaderArgs) error {

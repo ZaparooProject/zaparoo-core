@@ -21,6 +21,7 @@ package zapscript
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +40,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/rs/zerolog/log"
@@ -87,11 +90,32 @@ var zapFetchTransport = &http.Transport{
 	ExpectContinueTimeout: 1 * time.Second,
 }
 
-var zapFetchClient = &http.Client{
-	Transport: &installer.AuthTransport{
-		Base: zapFetchTransport,
-	},
-	Timeout: 10 * time.Second,
+var zapFetchClientMu syncutil.RWMutex
+
+var zapFetchClient = newZapFetchClient(zapFetchTransport)
+
+func newZapFetchClient(transport http.RoundTripper) *http.Client {
+	return &http.Client{
+		Transport: &installer.AuthTransport{
+			Base: transport,
+		},
+		Timeout: 10 * time.Second,
+	}
+}
+
+func currentZapFetchClient() *http.Client {
+	zapFetchClientMu.RLock()
+	defer zapFetchClientMu.RUnlock()
+	return zapFetchClient
+}
+
+// ConfigureHTTPTransport applies the process TLS root configuration to ZapLink's
+// custom timeout transport.
+func ConfigureHTTPTransport() {
+	transport := tlsroots.Transport(zapFetchTransport)
+	zapFetchClientMu.Lock()
+	zapFetchClient = newZapFetchClient(transport)
+	zapFetchClientMu.Unlock()
 }
 
 // ErrWellKnownNotFound is returned when the .well-known/zaparoo endpoint
@@ -101,7 +125,7 @@ var ErrWellKnownNotFound = errors.New("well-known endpoint not found")
 // FetchWellKnown fetches and parses the .well-known/zaparoo file from a base URL.
 // Returns ErrWellKnownNotFound if the host returned 404.
 func FetchWellKnown(baseURL string) (*WellKnown, error) {
-	return doFetchWellKnown(baseURL, zapFetchClient)
+	return doFetchWellKnown(baseURL, currentZapFetchClient())
 }
 
 func doFetchWellKnown(baseURL string, client httpDoer) (*WellKnown, error) {
@@ -150,7 +174,7 @@ func doFetchWellKnown(baseURL string, client httpDoer) (*WellKnown, error) {
 
 func queryZapLinkSupport(u *url.URL) (int, error) {
 	baseURL := u.Scheme + "://" + u.Host
-	wk, err := doFetchWellKnown(baseURL, zapFetchClient)
+	wk, err := doFetchWellKnown(baseURL, currentZapFetchClient())
 	if errors.Is(err, ErrWellKnownNotFound) {
 		return 0, nil
 	}
@@ -212,7 +236,7 @@ func getRemoteZapScript(urlStr, platform string) ([]byte, error) {
 	setZapLinkHeaders(req, platform)
 	req.Header.Set("Accept", strings.Join(AcceptedMimeTypes, ", "))
 
-	resp, err := zapFetchClient.Do(req) //nolint:gosec // G704: URL from ZapLink resolution
+	resp, err := currentZapFetchClient().Do(req) //nolint:gosec // G704: URL from ZapLink resolution
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch zapscript from '%s': %w", urlStr, err)
 	}
@@ -276,6 +300,11 @@ func isOfflineError(err error) bool {
 		}
 	}
 
+	var unknownAuthorityErr x509.UnknownAuthorityError
+	if errors.As(err, &unknownAuthorityErr) {
+		return true
+	}
+
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
 		var t *os.SyscallError
@@ -301,7 +330,8 @@ func isOfflineError(err error) bool {
 		strings.Contains(lowerErrStr, "connection refused") ||
 		strings.Contains(lowerErrStr, "host is down") ||
 		strings.Contains(lowerErrStr, "i/o timeout") ||
-		strings.Contains(lowerErrStr, "tls handshake timeout") {
+		strings.Contains(lowerErrStr, "tls handshake timeout") ||
+		strings.Contains(lowerErrStr, "certificate signed by unknown authority") {
 		return true
 	}
 
@@ -382,7 +412,7 @@ func PreWarmZapLinkHosts(db *database.Database, checkInternet func(int) bool) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			preWarmHost(u, db, zapFetchClient)
+			preWarmHost(u, db, currentZapFetchClient())
 		}(baseURL)
 	}
 
