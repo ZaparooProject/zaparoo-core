@@ -79,7 +79,7 @@ func shouldKeepCustomSegmentEscaped(r rune) bool {
 
 // decodeCustomSchemeSegment decodes only percent-escaped bytes that are safe to
 // materialize, preserving literal reserved characters and keeping structural
-// escapes encoded for idempotence.
+// escapes encoded so custom virtual paths keep their parse boundaries.
 func decodeCustomSchemeSegment(raw string) string {
 	if !strings.Contains(raw, "%") {
 		return raw
@@ -181,8 +181,8 @@ func DecodeURIIfNeeded(uri string) string {
 	if shared.IsStandardSchemeForDecoding(schemeLower) {
 		// Per RFC 3986, '#' introduces the fragment and takes precedence over
 		// '?', which ParseURIComponents picks up as the query separator.
-		// Extract fragment from the raw URI first so that a fragment containing
-		// '?' doesn't shift on a second parse pass (idempotence).
+		// Extract fragment from the raw URI first so a fragment containing '?'
+		// does not shift into the query component.
 		var fragment string
 		fragURI := uri
 		if idx := strings.Index(uri, "#"); idx >= 0 {
