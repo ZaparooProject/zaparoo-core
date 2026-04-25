@@ -588,6 +588,8 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockPlatform := mocks.NewMockPlatform()
 			mockPlatform.On("ID").Return("test-platform").Maybe()
 			mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+			mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+				Return([]platforms.Launcher{}).Maybe()
 			mockPlatform.On("RootDirs", mock.Anything).Return([]string{"/test/path"}).Maybe()
 
 			mockUserDB := &helpers.MockUserDBI{}
@@ -631,6 +633,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 			mockMediaDB.On("UpdateLastGenerated").Return(nil).Maybe()
 			mockMediaDB.On("Truncate").Return(nil).Maybe()
+			mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 			mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("TrackBackgroundOperation").Return().Maybe()
 			mockMediaDB.On("BackgroundOperationDone").Return().Maybe()
