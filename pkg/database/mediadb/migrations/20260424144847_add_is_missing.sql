@@ -1,0 +1,5 @@
+-- +goose Up
+ALTER TABLE Media ADD COLUMN IsMissing INTEGER NOT NULL DEFAULT 0;
+
+-- +goose Down
+ALTER TABLE Media DROP COLUMN IsMissing;

@@ -22,11 +22,17 @@
 package daemon
 
 import (
+	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -45,6 +51,27 @@ func newTestService(t *testing.T) *Service {
 	})
 
 	return &Service{pl: pl}
+}
+
+func writeFakeServiceScript(t *testing.T, pidFile, eventLog string) string {
+	t.Helper()
+
+	scriptPath := filepath.Join(t.TempDir(), "fake-service.sh")
+	scriptTemplate := "#!/bin/sh\n" +
+		"pidfile=%q\n" +
+		"eventlog=%q\n" +
+		"printf 'started:%%s\\n' \"$$\" >> \"$eventlog\"\n" +
+		"printf '%%s' \"$$\" > \"$pidfile\"\n" +
+		"sleep 2\n" +
+		"rm -f \"$pidfile\"\n"
+	script := fmt.Sprintf(
+		scriptTemplate,
+		pidFile,
+		eventLog,
+	)
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o600))
+
+	return scriptPath
 }
 
 func TestPrepareBinary_CopiesWithServiceSuffix(t *testing.T) {
@@ -248,4 +275,113 @@ func TestPrepareBinary_CopiesWhenContentDiffers(t *testing.T) {
 	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
 	require.NoError(t, err)
 	assert.Equal(t, "version-2", string(content))
+}
+
+func TestRestart_StartsWhenServiceNotRunning(t *testing.T) {
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
+	t.Cleanup(func() {
+		pid, err := svc.Pid()
+		if err == nil && pid > 0 && svc.Running() {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	require.False(t, svc.Running())
+	require.NoError(t, svc.Restart())
+
+	pid, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Positive(t, pid)
+	assert.True(t, svc.Running())
+
+	require.FileExists(t, pidFile)
+}
+
+func TestRestart_ReplacesRunningService(t *testing.T) {
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
+
+	oldProcess := exec.CommandContext(context.Background(), "sleep", "1000")
+	require.NoError(t, oldProcess.Start())
+	defer func() {
+		_ = oldProcess.Process.Kill()
+	}()
+	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(oldProcess.Process.Pid)), 0o600))
+
+	oldProcessExited := make(chan error, 1)
+	go func() {
+		oldProcessExited <- oldProcess.Wait()
+	}()
+
+	oldPID, err := svc.Pid()
+	require.NoError(t, err)
+	require.Positive(t, oldPID)
+
+	t.Cleanup(func() {
+		pid, pidErr := svc.Pid()
+		if pidErr == nil && pid > 0 && svc.Running() {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	require.NoError(t, svc.Restart())
+	oldExitErr := <-oldProcessExited
+	if oldExitErr != nil {
+		require.Contains(t, oldExitErr.Error(), "terminated", oldExitErr.Error())
+	}
+
+	newPID, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Positive(t, newPID)
+	assert.NotEqual(t, oldPID, newPID)
+	assert.True(t, svc.Running())
+
+	content, err := os.ReadFile(eventLog) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	assert.Contains(t, string(content), fmt.Sprintf("started:%d", newPID))
+}
+
+func TestWaitForPIDExit_ReturnsImmediatelyForInvalidPID(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	err := waitForPIDExit(0, time.Second, time.Millisecond, func(int) bool {
+		called = true
+		return true
+	})
+
+	require.NoError(t, err)
+	assert.False(t, called)
+}
+
+func TestWaitForPIDExit_WaitsUntilProcessStops(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	err := waitForPIDExit(123, time.Second, time.Millisecond, func(int) bool {
+		return calls.Add(1) < 3
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), calls.Load())
+}
+
+func TestWaitForPIDExit_TimesOutWhileProcessStillRunning(t *testing.T) {
+	t.Parallel()
+
+	err := waitForPIDExit(123, 5*time.Millisecond, time.Millisecond, func(int) bool {
+		return true
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout waiting for process 123 to stop")
 }

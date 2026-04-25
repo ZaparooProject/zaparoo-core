@@ -21,6 +21,7 @@ package mediascanner
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -37,6 +38,131 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// TestFlushScanStateMaps_MidSystemFileLimitBoundary is a regression test for
+// the multi-disc / file-limit interaction. Multi-file titles (multi-disc games,
+// region variants, revisions) all share a single MediaTitle row keyed in
+// memory by (systemID, slug) via TitleIDs. If FlushScanStateMaps were called
+// mid-system between two files of the same title, the second file would
+// re-issue InsertMediaTitle and silently create a duplicate MediaTitle row —
+// the schema has only an index on (SystemDBID, Slug), no UNIQUE constraint —
+// fragmenting the title across two DBIDs. The two media rows would then point
+// at different titles, breaking title-based browse and launch lookups.
+//
+// The fix: FlushScanStateMaps must only be called BETWEEN systems, never
+// between mid-system file-limit commits. This test pins both halves:
+//   - "without flush" (current/correct behaviour): both discs land in the DB
+//     and share one MediaTitle row.
+//   - "with flush" (the historical bug): two MediaTitle rows with the same
+//     slug, each disc pointing at a different one — silent fragmentation.
+func TestFlushScanStateMaps_MidSystemFileLimitBoundary(t *testing.T) {
+	t.Parallel()
+
+	const (
+		systemID = "PSX"
+	)
+	disc1Path := filepath.Join(string(filepath.Separator), "roms", systemID, "Final Fantasy VII (Disc 1).cue")
+	disc2Path := filepath.Join(string(filepath.Separator), "roms", systemID, "Final Fantasy VII (Disc 2).cue")
+
+	// addBothDiscsAcrossCommit adds disc 1, commits, optionally flushes the
+	// scan state maps, reopens a transaction, then adds disc 2 — mirroring
+	// what happens when a file-limit commit lands between two files of the
+	// same title.
+	addBothDiscsAcrossCommit := func(t *testing.T, flushBetween bool) (mediaTitleDBIDs []int64) {
+		t.Helper()
+
+		mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+		t.Cleanup(cleanup)
+
+		scanState := &database.ScanState{
+			SystemIDs:  make(map[string]int),
+			TitleIDs:   make(map[string]int),
+			MediaIDs:   make(map[string]int),
+			TagTypeIDs: make(map[string]int),
+			TagIDs:     make(map[string]int),
+		}
+
+		require.NoError(t, SeedCanonicalTags(mediaDB, scanState))
+
+		require.NoError(t, mediaDB.BeginTransaction(true))
+		_, _, err := AddMediaPath(
+			mediaDB, scanState, systemID, disc1Path, false, false, nil, slugs.MediaTypeGame,
+		)
+		require.NoError(t, err, "disc 1 insert should succeed")
+		require.NoError(t, mediaDB.CommitTransaction())
+
+		if flushBetween {
+			FlushScanStateMaps(scanState)
+		}
+
+		require.NoError(t, mediaDB.BeginTransaction(true))
+		_, _, err = AddMediaPath(
+			mediaDB, scanState, systemID, disc2Path, false, false, nil, slugs.MediaTypeGame,
+		)
+		require.NoError(t, err, "disc 2 insert should succeed")
+		require.NoError(t, mediaDB.CommitTransaction())
+
+		mediaRows, err := mediaDB.GetMediaBySystemID(systemID)
+		require.NoError(t, err)
+		require.Len(t, mediaRows, 2, "both discs should be persisted as Media rows")
+
+		dbids := make([]int64, 0, len(mediaRows))
+		for _, m := range mediaRows {
+			dbids = append(dbids, m.MediaTitleDBID)
+		}
+		return dbids
+	}
+
+	t.Run("without mid-system flush both discs share one title", func(t *testing.T) {
+		t.Parallel()
+
+		titleDBIDs := addBothDiscsAcrossCommit(t, false)
+		require.Len(t, titleDBIDs, 2)
+		assert.Equal(t, titleDBIDs[0], titleDBIDs[1],
+			"both discs must reference the same MediaTitle row")
+	})
+
+	t.Run("with mid-system flush silently fragments the title", func(t *testing.T) {
+		t.Parallel()
+
+		// This subtest pins the *bug* that the fix prevents: if mid-system
+		// flushing were reintroduced, AddMediaPath for disc 2 would re-issue
+		// InsertMediaTitle and create a second MediaTitle row with the same
+		// slug. There is no UNIQUE constraint on (SystemDBID, Slug) — only an
+		// index — so the duplicate is silently inserted.
+		titleDBIDs := addBothDiscsAcrossCommit(t, true)
+		require.Len(t, titleDBIDs, 2)
+		assert.NotEqual(t, titleDBIDs[0], titleDBIDs[1],
+			"flushing TitleIDs between discs should produce a fragmented title "+
+				"(two MediaTitle rows for the same slug)")
+	})
+}
+
+func TestFlushScanStateMaps_ClearsPerSystemMetadataCaches(t *testing.T) {
+	t.Parallel()
+
+	scanState := &database.ScanState{
+		TitleIDs: map[string]int{"title": 1},
+		MediaIDs: map[string]int{"media": 2},
+		MediaTitleIDs: map[int]int{
+			10: 20,
+		},
+		MediaTagIDs: map[int]map[int]struct{}{
+			10: {30: {}},
+		},
+		SystemIDs: map[string]int{"system": 1},
+		TagIDs:    map[string]int{"tag": 1},
+	}
+
+	FlushScanStateMaps(scanState)
+
+	assert.Empty(t, scanState.TitleIDs)
+	assert.Empty(t, scanState.MediaIDs)
+	assert.Empty(t, scanState.MediaTitleIDs)
+	assert.Empty(t, scanState.MediaTagIDs)
+	assert.Equal(t, 1, scanState.SystemIDs["system"])
+	assert.Equal(t, 1, scanState.TagIDs["tag"])
+}
 
 // TestAddMediaPath_NonUniqueError tests that non-UNIQUE errors fail immediately
 // without attempting to find existing system
@@ -89,6 +215,197 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 	assert.Empty(t, scanState.SystemIDs, "SystemIDs cache should be empty when non-recoverable error occurs")
 
 	// Verify all mocks were called as expected (FindSystem should NOT have been called)
+	mockDB.AssertExpectations(t)
+}
+
+func TestAddMediaPath_ReindexesExistingMediaRefreshesDerivedMetadata(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	initialState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
+		SystemsIndex:  0,
+		TitlesIndex:   0,
+		MediaIndex:    0,
+		TagTypesIndex: 0,
+		TagsIndex:     0,
+	}
+
+	require.NoError(t, SeedCanonicalTags(mediaDB, initialState))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	correctTitleID, mediaID, err := AddMediaPath(
+		mediaDB, initialState, "NES", path, false, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	sqlDB := mediaDB.UnsafeGetSQLDb()
+	const (
+		wrongTitleID = int64(9997)
+		staleTypeID  = int64(9998)
+		staleTagID   = int64(9999)
+	)
+
+	_, err = sqlDB.ExecContext(ctx,
+		`INSERT INTO MediaTitles (DBID, Slug, Name, SystemDBID, SlugLength, SlugWordCount) VALUES (?, ?, ?, ?, ?, ?)`,
+		wrongTitleID, "wrong-title", "Wrong Title", 1, len("wrong-title"), 2,
+	)
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, `UPDATE Media SET MediaTitleDBID = ? WHERE DBID = ?`, wrongTitleID, mediaID)
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, `INSERT INTO TagTypes (DBID, Type) VALUES (?, ?)`, staleTypeID, "stale-test-type")
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx,
+		`INSERT INTO Tags (DBID, Tag, TypeDBID) VALUES (?, ?, ?)`,
+		staleTagID, "stale-test-tag", staleTypeID,
+	)
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, `INSERT INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`, mediaID, staleTagID)
+	require.NoError(t, err)
+
+	refreshState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
+		SystemsIndex:  0,
+		TitlesIndex:   0,
+		MediaIndex:    0,
+		TagTypesIndex: 0,
+		TagsIndex:     0,
+	}
+	require.NoError(t, PopulateScanStateFromDB(ctx, mediaDB, refreshState))
+	require.NoError(t, PopulatePersistentScanStateForSystem(ctx, mediaDB, refreshState, "NES"))
+
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, _, err = AddMediaPath(mediaDB, refreshState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	var refreshedTitleID int64
+	err = sqlDB.QueryRowContext(ctx, `SELECT MediaTitleDBID FROM Media WHERE DBID = ?`, mediaID).Scan(&refreshedTitleID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(correctTitleID), refreshedTitleID)
+
+	var staleTagCount int
+	err = sqlDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM MediaTags WHERE MediaDBID = ? AND TagDBID = ?`,
+		mediaID, staleTagID,
+	).Scan(&staleTagCount)
+	require.NoError(t, err)
+	assert.Zero(t, staleTagCount)
+
+	var extensionTagCount int
+	err = sqlDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM MediaTags mt
+		JOIN Tags t ON t.DBID = mt.TagDBID
+		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE mt.MediaDBID = ? AND tt.Type = ? AND t.Tag = ?`,
+		mediaID, string(tags.TagTypeExtension), "nes",
+	).Scan(&extensionTagCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, extensionTagCount)
+}
+
+func TestAddMediaPath_SkipsTitleAndTagWritesWhenExistingMetadataMatches(t *testing.T) {
+	t.Parallel()
+
+	mockDB := helpers.NewMockMediaDBI()
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	scanState := &database.ScanState{
+		SystemIDs:     map[string]int{"NES": 1},
+		TitleIDs:      map[string]int{"NES:supermariobrothers": 10},
+		MediaIDs:      map[string]int{database.MediaKey("NES", path): 20},
+		MediaTitleIDs: map[int]int{20: 10},
+		MediaTagIDs:   map[int]map[int]struct{}{20: {8: {}}},
+		TagTypeIDs:    map[string]int{string(tags.TagTypeExtension): 7},
+		TagIDs:        map[string]int{database.TagKey(string(tags.TagTypeExtension), "nes"): 8},
+		MissingMedia:  map[int]struct{}{20: {}},
+	}
+
+	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	require.NoError(t, err)
+	assert.Equal(t, 10, titleIndex)
+	assert.Equal(t, 20, mediaIndex)
+	assert.NotContains(t, scanState.MissingMedia, 20)
+	mockDB.AssertNotCalled(t, "UpdateMediaTitle", mock.Anything, mock.Anything)
+	mockDB.AssertNotCalled(t, "DeleteMediaTag", mock.Anything, mock.Anything)
+	mockDB.AssertNotCalled(t, "DeleteMediaTags", mock.Anything)
+	mockDB.AssertNotCalled(t, "InsertMediaTag", mock.Anything)
+	mockDB.AssertExpectations(t)
+}
+
+func TestAddMediaPath_ExistingMediaWithoutTagStateDoesNotDeleteAllTags(t *testing.T) {
+	t.Parallel()
+
+	mockDB := helpers.NewMockMediaDBI()
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	scanState := &database.ScanState{
+		SystemIDs:     map[string]int{"NES": 1},
+		TitleIDs:      map[string]int{"NES:supermariobrothers": 10},
+		MediaIDs:      map[string]int{database.MediaKey("NES", path): 20},
+		MediaTitleIDs: map[int]int{20: 10},
+		MediaTagIDs:   nil,
+		TagTypeIDs:    map[string]int{string(tags.TagTypeExtension): 7},
+		TagIDs:        map[string]int{database.TagKey(string(tags.TagTypeExtension), "nes"): 8},
+		MissingMedia:  map[int]struct{}{20: {}},
+	}
+
+	mockDB.On("InsertMediaTag", database.MediaTag{TagDBID: 8, MediaDBID: 20}).
+		Return(database.MediaTag{}, nil).Once()
+
+	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	require.NoError(t, err)
+	assert.Equal(t, 10, titleIndex)
+	assert.Equal(t, 20, mediaIndex)
+	assert.NotContains(t, scanState.MissingMedia, 20)
+	mockDB.AssertNotCalled(t, "DeleteMediaTags", mock.Anything)
+	mockDB.AssertExpectations(t)
+}
+
+func TestAddMediaPath_ReconcileExistingMediaTagsDoesNotMutateStateOnInsertFailure(t *testing.T) {
+	t.Parallel()
+
+	mockDB := helpers.NewMockMediaDBI()
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	scanState := &database.ScanState{
+		SystemIDs:     map[string]int{"NES": 1},
+		TitleIDs:      map[string]int{"NES:supermariobrothers": 10},
+		MediaIDs:      map[string]int{database.MediaKey("NES", path): 20},
+		MediaTitleIDs: map[int]int{20: 10},
+		MediaTagIDs:   map[int]map[int]struct{}{20: {}},
+		TagTypeIDs:    map[string]int{string(tags.TagTypeExtension): 7},
+		TagIDs:        map[string]int{database.TagKey(string(tags.TagTypeExtension), "nes"): 8},
+		MissingMedia:  map[int]struct{}{20: {}},
+	}
+
+	depFlushErr := fmt.Errorf("failed to flush dependency for MediaTags: %w: %w",
+		mediadb.ErrDependencyFlush,
+		sqlite3.Error{Code: sqlite3.ErrConstraint, ExtendedCode: sqlite3.ErrConstraintUnique},
+	)
+	mockDB.On("InsertMediaTag", database.MediaTag{TagDBID: 8, MediaDBID: 20}).
+		Return(database.MediaTag{}, depFlushErr).Once()
+
+	_, _, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error reconciling media tags")
+	assert.Empty(t, scanState.MediaTagIDs[20])
 	mockDB.AssertExpectations(t)
 }
 
@@ -822,7 +1139,7 @@ func TestGetPathFragments_VirtualPathsVsRegularPaths(t *testing.T) {
 // does NOT find ErrDependencyFlush → logged at Trace, not propagated.
 //
 // Branch B (Error): the same sqlite3 error is wrapped inside ErrDependencyFlush →
-// condition fails, logged at Error, not propagated.
+// condition fails, logged at Error, and propagated.
 //
 // Global zerolog state is mutated to capture output; must not be parallel.
 func TestAddMediaPath_ExtensionTag_UniqueConstraintClassification(t *testing.T) {
@@ -906,7 +1223,7 @@ func TestAddMediaPath_ExtensionTag_UniqueConstraintClassification(t *testing.T) 
 
 		_, _, err := AddMediaPath(mockDB, newScanState(), systemID, path, false, false, nil, "")
 
-		require.NoError(t, err, "dep-flush error must not propagate from AddMediaPath")
+		require.Error(t, err, "dep-flush error must propagate from AddMediaPath")
 		output := buf.String()
 		assert.Contains(t, output, `"level":"error"`, "dep-flush UNIQUE must be logged at error level")
 		assert.Contains(t, output, "error inserting media tag relationship for extension",

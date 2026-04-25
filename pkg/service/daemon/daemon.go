@@ -453,21 +453,57 @@ func (s *Service) Stop() error {
 	return nil
 }
 
+func pidRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+
+	err := syscall.Kill(pid, syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func waitForPIDExit(
+	pid int,
+	timeout time.Duration,
+	pollInterval time.Duration,
+	isRunning func(int) bool,
+) error {
+	if pid <= 0 {
+		return nil
+	}
+
+	deadline := time.Now().Add(timeout)
+	for isRunning(pid) {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for process %d to stop", pid)
+		}
+		time.Sleep(pollInterval)
+	}
+
+	return nil
+}
+
+// Restart is intentionally idempotent: if Running reports no live PID, Stop and
+// waitForPIDExit are skipped and Start is called directly. When a PID is still
+// active, Restart follows the full Stop -> waitForPIDExit -> Start sequence so
+// pidRunning has confirmed the old process is gone before the replacement starts.
 func (s *Service) Restart() error {
+	oldPID := 0
 	if s.Running() {
-		err := s.Stop()
+		var err error
+		oldPID, err = s.Pid()
+		if err != nil {
+			return err
+		}
+
+		err = s.Stop()
 		if err != nil {
 			return err
 		}
 	}
 
-	// Wait for service to stop with timeout
-	deadline := time.Now().Add(10 * time.Second)
-	for s.Running() {
-		if time.Now().After(deadline) {
-			return errors.New("timeout waiting for service to stop")
-		}
-		time.Sleep(500 * time.Millisecond)
+	if err := waitForPIDExit(oldPID, 10*time.Second, 500*time.Millisecond, pidRunning); err != nil {
+		return err
 	}
 
 	err := s.Start()

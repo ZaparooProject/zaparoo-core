@@ -283,10 +283,6 @@ func BenchmarkAddMediaPath_MockDB(b *testing.B) {
 					if i == 0 && err != nil {
 						b.Fatal(err)
 					}
-					// Match production pattern: flush every 10k files
-					if sz.n > 10_000 && (i+1)%10_000 == 0 {
-						FlushScanStateMaps(ss)
-					}
 				}
 			}
 		})
@@ -315,7 +311,9 @@ func BenchmarkAddMediaPath_RealDB(b *testing.B) {
 				_ = SeedCanonicalTags(db, ss)
 				_ = db.BeginTransaction(true)
 
-				// Measured: insert all files with production commit pattern
+				// Measured: insert all files with production commit pattern.
+				// Mid-system file-limit commits do not flush dedup maps;
+				// flushes only happen between systems (single-system bench).
 				for i, fn := range filenames {
 					_, _, err := AddMediaPath(db, ss, "nes", fn, false, false, nil, "")
 					if i == 0 && err != nil {
@@ -323,7 +321,6 @@ func BenchmarkAddMediaPath_RealDB(b *testing.B) {
 					}
 					if sz.n > 10_000 && (i+1)%10_000 == 0 {
 						_ = db.CommitTransaction()
-						FlushScanStateMaps(ss)
 						_ = db.BeginTransaction(true)
 					}
 				}
@@ -373,13 +370,16 @@ func BenchmarkIndexingPipeline_EndToEnd(b *testing.B) {
 						}
 						filesInBatch++
 
+						// Mid-system file-limit commits do not flush dedup
+						// maps — only between-system flushes do.
 						if filesInBatch >= 10_000 {
 							_ = db.CommitTransaction()
-							FlushScanStateMaps(ss)
 							filesInBatch = 0
 							batchStarted = false
 						}
 					}
+					// Between-system flush mirrors production behaviour.
+					FlushScanStateMaps(ss)
 				}
 
 				if batchStarted {

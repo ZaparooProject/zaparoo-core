@@ -1012,6 +1012,33 @@ func (m *MockMediaDBI) FindOrInsertMedia(row database.Media) (database.Media, er
 	return database.Media{}, nil
 }
 
+func (m *MockMediaDBI) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
+	m.trackDatabaseOperation() // Track if called outside transaction
+	args := m.Called(mediaDBID, mediaTitleDBID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) DeleteMediaTags(mediaDBID int64) error {
+	m.trackDatabaseOperation() // Track if called outside transaction
+	args := m.Called(mediaDBID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) DeleteMediaTag(mediaDBID, tagDBID int64) error {
+	m.trackDatabaseOperation() // Track if called outside transaction
+	args := m.Called(mediaDBID, tagDBID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 // TagType CRUD methods
 func (m *MockMediaDBI) FindTagType(row database.TagType) (database.TagType, error) {
 	args := m.Called(row)
@@ -1255,6 +1282,22 @@ func (m *MockMediaDBI) GetIndexingSystems() ([]string, error) {
 
 func (m *MockMediaDBI) TruncateSystems(systemIDs []string) error {
 	args := m.Called(systemIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) BulkSetMediaMissing(dbids map[int]struct{}) error {
+	args := m.Called(dbids)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) ResetMissingFlags(systemDBIDs []int) error {
+	args := m.Called(systemDBIDs)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
@@ -1576,6 +1619,21 @@ func (m *MockMediaDBI) GetMediaBySystemID(systemID string) ([]database.MediaWith
 	return []database.MediaWithFullPath{}, nil
 }
 
+// GetMediaTagsBySystemID mock method for per-system lazy loading during resume.
+func (m *MockMediaDBI) GetMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
+	args := m.Called(systemID)
+	if links, ok := args.Get(0).([]database.MediaTagLink); ok {
+		if err := args.Error(1); err != nil {
+			return links, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return links, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.MediaTagLink{}, nil
+}
+
 func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
 	args := m.Called()
 	if count, ok := args.Get(0).(int); ok {
@@ -1610,6 +1668,22 @@ func (m *MockMediaDBI) RebuildTagCache() error {
 	args := m.Called()
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock RebuildTagCache: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) PopulateSystemTagsCacheForSystems(ctx context.Context, systems []systemdefs.System) error {
+	args := m.Called(ctx, systems)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock PopulateSystemTagsCacheForSystems: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) RefreshSlugSearchCacheForSystems(ctx context.Context, systemIDs []string) error {
+	args := m.Called(ctx, systemIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock RefreshSlugSearchCacheForSystems: %w", err)
 	}
 	return nil
 }
@@ -1801,6 +1875,10 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
 	mockMediaDB.On("GetDBPath").Return("/tmp/mock-media.db").Maybe()
 	mockMediaDB.On("DropSecondaryIndexes").Return(nil).Maybe()
+	mockMediaDB.On("BulkSetMediaMissing", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("ResetMissingFlags", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("UpdateMediaTitle", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("DeleteMediaTags", mock.Anything).Return(nil).Maybe()
 	return mockMediaDB
 }
 

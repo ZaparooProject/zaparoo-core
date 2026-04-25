@@ -448,6 +448,7 @@ const (
 	SystemJ2ME        = "J2ME"
 	SystemGroovy      = "Groovy"
 	SystemPlugNPlay   = "PlugNPlay"
+	SystemDevErr      = "DevErr"
 )
 
 var Systems = map[string]System{
@@ -1337,5 +1338,8 @@ var Systems = map[string]System{
 	SystemHikaru: {
 		ID:    SystemHikaru,
 		Slugs: []string{"segahikaru"},
+	},
+	SystemDevErr: {
+		ID: SystemDevErr,
 	},
 }
