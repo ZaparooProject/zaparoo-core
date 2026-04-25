@@ -20,11 +20,17 @@
 package telemetry
 
 import (
+	"io"
+	"sync"
 	"testing"
 
+	corehelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	th "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/getsentry/sentry-go"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -108,6 +114,41 @@ func TestEnabled(t *testing.T) {
 
 	// enabled starts as false
 	assert.False(t, Enabled(), "telemetry should be disabled by default")
+}
+
+func TestInitConfiguresSentryPrivacyOptions(t *testing.T) {
+	originalLogger := log.Logger
+	t.Cleanup(func() {
+		Close()
+		log.Logger = originalLogger
+		enabled = false
+		sentryWriter = nil
+		closeOnce = sync.Once{}
+		sentry.CurrentHub().BindClient(nil)
+	})
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{LogDir: t.TempDir()})
+	require.NoError(t, corehelpers.InitLogging(mockPlatform, []io.Writer{io.Discard}))
+
+	require.NoError(t, Init(true, "device-id", "1.2.3", "linux"))
+	assert.True(t, Enabled())
+
+	client := sentry.CurrentHub().Client()
+	require.NotNil(t, client)
+	options := client.Options()
+
+	assert.Equal(t, sentryDSN, options.Dsn)
+	assert.Equal(t, "zaparoo-core@1.2.3", options.Release)
+	assert.Equal(t, "linux", options.Environment)
+	assert.True(t, options.AttachStacktrace)
+	assert.True(t, options.DisableTelemetryBuffer)
+	assert.False(t, options.SendDefaultPII)
+	assert.Empty(t, options.ServerName)
+	assert.Zero(t, options.MaxBreadcrumbs)
+	require.NotNil(t, options.BeforeSend)
+	require.NotNil(t, options.HTTPClient)
+	assert.IsType(t, &tunnelTransport{}, options.HTTPClient.Transport)
 }
 
 func TestSanitizeEvent(t *testing.T) {
