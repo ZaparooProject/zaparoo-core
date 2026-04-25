@@ -21,6 +21,7 @@ package zapscript
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net/http"
@@ -168,6 +169,19 @@ func TestIsOfflineError(t *testing.T) {
 		{
 			name:     "tls handshake timeout",
 			err:      errors.New("tls handshake timeout"),
+			expected: true,
+		},
+		{
+			name:     "unknown certificate authority",
+			err:      x509.UnknownAuthorityError{},
+			expected: true,
+		},
+		{
+			name: "wrapped unknown certificate authority",
+			err: errors.New(
+				"Get \"https://example.com\": tls: failed to verify certificate: " +
+					"x509: certificate signed by unknown authority",
+			),
 			expected: true,
 		},
 		{
