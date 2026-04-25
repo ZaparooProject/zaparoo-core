@@ -53,6 +53,7 @@ package esapi
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
