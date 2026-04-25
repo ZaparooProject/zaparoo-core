@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	th "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/getsentry/sentry-go"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -107,6 +108,45 @@ func TestEnabled(t *testing.T) {
 
 	// enabled starts as false
 	assert.False(t, Enabled(), "telemetry should be disabled by default")
+}
+
+func TestSanitizeEvent(t *testing.T) {
+	t.Parallel()
+
+	event := &sentry.Event{
+		ServerName: "host.local",
+		Message:    "failed to open /home/callan/.zaparoo/config.toml",
+		Tags: map[string]string{
+			"config_path": "C:\\Users\\callan\\AppData\\Local\\zaparoo\\config.toml",
+			"platform":    "linux",
+		},
+		Exception: []sentry.Exception{
+			{
+				Stacktrace: &sentry.Stacktrace{
+					Frames: []sentry.Frame{
+						{
+							AbsPath:  "/Users/callan/dev/zaparoo-core/internal/telemetry/telemetry.go",
+							Filename: "/home/callan/dev/zaparoo-core/internal/telemetry/telemetry.go",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	sanitized := sanitizeEvent(event)
+
+	assert.Empty(t, sanitized.ServerName)
+	assert.Equal(t, "failed to open /home/<user>/.zaparoo/config.toml", sanitized.Message)
+	assert.Equal(t, "C:\\Users\\<user>\\AppData\\Local\\zaparoo\\config.toml", sanitized.Tags["config_path"])
+	assert.Equal(t, "linux", sanitized.Tags["platform"])
+	require.Len(t, sanitized.Exception, 1)
+	require.NotNil(t, sanitized.Exception[0].Stacktrace)
+	require.Len(t, sanitized.Exception[0].Stacktrace.Frames, 1)
+	assert.Equal(t, "/Users/<user>/dev/zaparoo-core/internal/telemetry/telemetry.go",
+		sanitized.Exception[0].Stacktrace.Frames[0].AbsPath)
+	assert.Equal(t, "/home/<user>/dev/zaparoo-core/internal/telemetry/telemetry.go",
+		sanitized.Exception[0].Stacktrace.Frames[0].Filename)
 }
 
 func TestCloseWhenDisabled(t *testing.T) {
