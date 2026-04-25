@@ -31,13 +31,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// buildPopulateTagsSQL returns the INSERT INTO SystemTagsCache SQL with whereClause
-// injected into both UNION ALL branches. Pass "" for the full-database variant;
-// pass a literal WHERE clause (e.g. "WHERE s.DBID IN (?, ?)") for selective rebuilds.
-func buildPopulateTagsSQL(whereClause string) string {
-	where := ""
-	if whereClause != "" {
-		where = "\n\t\t\t\t" + whereClause
+// buildPopulateTagsSQL returns the INSERT INTO SystemTagsCache SQL with an
+// optional system filter injected into both UNION ALL branches. Pass "" for the
+// full-database variant; pass a filter expression such as `s.DBID IN (?, ?)` for
+// selective rebuilds.
+func buildPopulateTagsSQL(systemFilter string) string {
+	mediaWhere := "WHERE m.IsMissing = 0"
+	titleWhere := "WHERE EXISTS(SELECT 1 FROM Media m WHERE m.MediaTitleDBID = mtl.DBID AND m.IsMissing = 0)"
+	if systemFilter != "" {
+		mediaWhere = "WHERE " + systemFilter + " AND m.IsMissing = 0"
+		titleWhere = "WHERE " + systemFilter +
+			" AND EXISTS(SELECT 1 FROM Media m WHERE m.MediaTitleDBID = mtl.DBID AND m.IsMissing = 0)"
 	}
 	return fmt.Sprintf(`
 		INSERT INTO SystemTagsCache (SystemDBID, TagDBID, TagType, Tag, Count)
@@ -54,7 +58,8 @@ func buildPopulateTagsSQL(whereClause string) string {
 			JOIN Media m ON mtl.DBID = m.MediaTitleDBID
 			JOIN MediaTags mt ON m.DBID = mt.MediaDBID
 			JOIN Tags t ON mt.TagDBID = t.DBID
-			JOIN TagTypes tt ON t.TypeDBID = tt.DBID%s
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			%s
 			GROUP BY s.DBID, t.DBID, tt.Type, t.Tag
 			UNION ALL
 			SELECT
@@ -67,10 +72,11 @@ func buildPopulateTagsSQL(whereClause string) string {
 			JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
 			JOIN MediaTitleTags mtt ON mtl.DBID = mtt.MediaTitleDBID
 			JOIN Tags t ON mtt.TagDBID = t.DBID
-			JOIN TagTypes tt ON t.TypeDBID = tt.DBID%s
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			%s
 			GROUP BY s.DBID, t.DBID, tt.Type, t.Tag
 		)
-		GROUP BY SystemDBID, TagDBID, TagType, Tag`, where, where)
+		GROUP BY SystemDBID, TagDBID, TagType, Tag`, mediaWhere, titleWhere)
 }
 
 // sqlPopulateSystemTagsCache - Populates the SystemTagsCache table for fast tag lookups
@@ -169,7 +175,7 @@ func sqlPopulateSystemTagsCacheForSystems(
 	}
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	whereClause := fmt.Sprintf("WHERE s.DBID IN (%s)", placeholders)
+	whereClause := fmt.Sprintf("s.DBID IN (%s)", placeholders)
 	populateStmt, err := db.PrepareContext(ctx, buildPopulateTagsSQL(whereClause))
 	if err != nil {
 		return fmt.Errorf("failed to prepare selective cache populate statement: %w", err)

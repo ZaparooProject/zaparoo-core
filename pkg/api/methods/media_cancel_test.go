@@ -323,6 +323,8 @@ func TestMediaIndexingCancellation_Integration(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{}).Maybe()
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{"/test/roms"})
 
 	// Use real database

@@ -48,8 +48,7 @@ import (
 
 // Batch configuration for transaction optimization
 const (
-	maxFilesPerTransaction   = 10000
-	maxSystemsPerTransaction = 10
+	maxFilesPerTransaction = 10000
 )
 
 // listNumberingRegex matches file list numbering patterns like "1. ", "01 - ", "42. "
@@ -202,10 +201,22 @@ func FindPath(ctx context.Context, path string) (string, error) {
 
 func GetSystemPaths(
 	ctx context.Context,
-	_ *config.Instance,
-	_ platforms.Platform,
+	cfg *config.Instance,
+	platform platforms.Platform,
 	rootFolders []string,
 	systems []systemdefs.System,
+) []PathResult {
+	launcherCache := &helpers.LauncherCache{}
+	launcherCache.InitializeFromSlice(platform.Launchers(cfg))
+
+	return getSystemPathsForLauncherCache(ctx, rootFolders, systems, launcherCache)
+}
+
+func getSystemPathsForLauncherCache(
+	ctx context.Context,
+	rootFolders []string,
+	systems []systemdefs.System,
+	launcherCache *helpers.LauncherCache,
 ) []PathResult {
 	var matches []PathResult
 
@@ -248,8 +259,7 @@ func GetSystemPaths(
 		default:
 		}
 
-		// GlobalLauncherCache is assumed to be read-only after initialization
-		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
+		launchers := launcherCache.GetLaunchersBySystem(system.ID)
 
 		var folders []string
 		for j := range launchers {
@@ -334,6 +344,38 @@ func GetSystemPaths(
 		Msg("path discovery complete")
 
 	return deduplicated
+}
+
+func filterRunnableSystems(
+	systems []systemdefs.System,
+	systemPaths map[string][]string,
+	systemsWithScanners map[string]bool,
+	existingSystemIDs map[string]bool,
+	hasAnyScanner bool,
+) []systemdefs.System {
+	filtered := make([]systemdefs.System, 0, len(systems))
+	for _, system := range systems {
+		if len(systemPaths[system.ID]) > 0 {
+			filtered = append(filtered, system)
+			continue
+		}
+
+		if systemsWithScanners[system.ID] {
+			filtered = append(filtered, system)
+			continue
+		}
+
+		if existingSystemIDs[system.ID] {
+			filtered = append(filtered, system)
+			continue
+		}
+
+		if hasAnyScanner {
+			filtered = append(filtered, system)
+		}
+	}
+
+	return filtered
 }
 
 // GetFiles searches for all valid games in a given path and returns a list of
@@ -558,13 +600,16 @@ func NewNamesIndex(
 	var indexedFiles int
 	var err error
 
-	// Create list of system IDs for storage
-	currentSystemIDs := make([]string, 0, len(systems))
-	systemIDMap := make(map[string]bool, len(systems))
+	// Track requested systems for resume validation before platform/path filtering.
+	requestedSystemIDs := make([]string, 0, len(systems))
 	for _, sys := range systems {
-		currentSystemIDs = append(currentSystemIDs, sys.ID)
-		systemIDMap[sys.ID] = true
+		requestedSystemIDs = append(requestedSystemIDs, sys.ID)
 	}
+	allSystemIDs := make([]string, 0, len(systemdefs.AllSystems()))
+	for _, sys := range systemdefs.AllSystems() {
+		allSystemIDs = append(allSystemIDs, sys.ID)
+	}
+	fullRun := helpers.EqualStringSlices(requestedSystemIDs, allSystemIDs)
 
 	// 1. Check for database locks or issues before starting
 	log.Info().Msg("checking database readiness for indexing")
@@ -602,7 +647,7 @@ func NewNamesIndex(
 			switch {
 			case getStoredErr != nil:
 				log.Warn().Err(getStoredErr).Msg("failed to get stored indexing configuration, assuming fresh start")
-			case !helpers.EqualStringSlices(storedSystems, currentSystemIDs):
+			case !helpers.EqualStringSlices(storedSystems, requestedSystemIDs):
 				log.Warn().Msg("system list changed from previous indexing, reverting to fresh index")
 			default:
 				log.Info().Msgf("previous indexing interrupted. attempting to resume from system: %s",
@@ -621,15 +666,47 @@ func NewNamesIndex(
 		}
 	}
 
+	// Build launcher metadata once so runnable-system filtering and scanner
+	// execution both use the same launcher set even when the global cache is stale.
+	allLaunchers := platform.Launchers(cfg)
+	launcherCache := &helpers.LauncherCache{}
+	launcherCache.InitializeFromSlice(allLaunchers)
+
 	// Get the ordered list of systems for this run (deterministic by ID)
 	update(IndexStatus{Phase: PhaseDiscovering})
 	systemPaths := make(map[string][]string)
-	for _, v := range GetSystemPaths(ctx, cfg, platform, platform.RootDirs(cfg), systems) {
+	for _, v := range getSystemPathsForLauncherCache(ctx, platform.RootDirs(cfg), systems, launcherCache) {
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
-	sysPathIDs := helpers.AlphaMapKeys(systemPaths)
-
 	update(IndexStatus{Phase: PhaseInitializing})
+
+	systemsWithScanners := make(map[string]bool, len(allLaunchers))
+	// Build any-scanner list once so runnable-system filtering can preserve
+	// platforms that intentionally discover media via scanner-only sources.
+	var anyScanners []*platforms.Launcher
+	for i := range allLaunchers {
+		if allLaunchers[i].SystemID != "" && allLaunchers[i].Scanner != nil {
+			systemsWithScanners[allLaunchers[i].SystemID] = true
+		}
+		if allLaunchers[i].SystemID == "" && allLaunchers[i].Scanner != nil {
+			anyScanners = append(anyScanners, &allLaunchers[i])
+		}
+	}
+
+	existingSystems, getExistingSystemsErr := db.GetAllSystems()
+	if getExistingSystemsErr != nil {
+		return 0, fmt.Errorf("failed to load existing systems for runnable-system filtering: %w", getExistingSystemsErr)
+	}
+	existingSystemIDs := make(map[string]bool, len(existingSystems))
+	for _, system := range existingSystems {
+		existingSystemIDs[system.SystemID] = true
+	}
+
+	systems = filterRunnableSystems(systems, systemPaths, systemsWithScanners, existingSystemIDs, len(anyScanners) > 0)
+	currentSystemIDs := make([]string, 0, len(systems))
+	for _, sys := range systems {
+		currentSystemIDs = append(currentSystemIDs, sys.ID)
+	}
 
 	// Check for cancellation or pause
 	select {
@@ -673,145 +750,47 @@ func NewNamesIndex(
 		TitleIDs:      make(map[string]int),
 		MediaIndex:    0,
 		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
 		TagTypesIndex: 0,
 		TagTypeIDs:    make(map[string]int),
 		TagsIndex:     0,
 		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
 	}
 
-	// 3. Truncate and Initial Status Set
+	// 3. Set up scan state — persistent mode is always active
+	if setErr := db.SetIndexingSystems(requestedSystemIDs); setErr != nil {
+		return 0, fmt.Errorf("failed to set indexing systems: %w", setErr)
+	}
+	log.Info().Msgf("starting indexing for requested systems: %v (runnable: %v)", requestedSystemIDs, currentSystemIDs)
+
+	// Populate scan state from existing DB (max IDs, system map, tag maps)
+	if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, []string{}); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return handleCancellation(ctx, db, "Media indexing cancelled during scan state population")
+		}
+		return 0, fmt.Errorf("failed to populate scan state: %w", err)
+	}
+
+	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to set indexing status to running")
+	}
 	if !shouldResume {
-		log.Info().Msg("preparing database for fresh indexing")
-		// Set indexing systems before truncating
-		if setErr := db.SetIndexingSystems(currentSystemIDs); setErr != nil {
-			return 0, fmt.Errorf("failed to set indexing systems: %w", setErr)
-		}
-
-		// Clear data for the specified systems (smart truncation)
-		log.Info().Msgf("starting indexing for systems: %v", currentSystemIDs)
-
-		// Use smart truncation - if indexing all systems, use full truncate for performance
-		allSystems := systemdefs.AllSystems()
-		allSystemIDs := make([]string, len(allSystems))
-		for i, sys := range allSystems {
-			allSystemIDs[i] = sys.ID
-		}
-
-		// Sort currentSystemIDs to ensure order-insensitive comparison
-		sort.Strings(currentSystemIDs)
-		// Sort allSystemIDs as well to ensure consistent comparison
-		sort.Strings(allSystemIDs)
-
-		if len(currentSystemIDs) == len(allSystemIDs) && helpers.EqualStringSlices(currentSystemIDs, allSystemIDs) {
-			log.Info().Msg("checkpointing WAL before full database truncation")
-			if sqlDB := db.UnsafeGetSQLDb(); sqlDB != nil {
-				_, walErr := sqlDB.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
-				if walErr != nil {
-					log.Warn().Err(walErr).Msg("WAL checkpoint failed, continuing anyway")
-				}
-			}
-
-			// Full truncate - foreign keys not needed since we're deleting everything
-			log.Info().Msgf("performing full database truncation (indexing %d systems)", len(currentSystemIDs))
-			err = db.Truncate()
-			if err != nil {
-				return 0, fmt.Errorf("failed to truncate database: %w", err)
-			}
-
-			// Drop secondary indexes for faster bulk inserts — they'll be
-			// rebuilt during background optimization after indexing completes.
-			if dropErr := db.DropSecondaryIndexes(); dropErr != nil {
-				log.Warn().Err(dropErr).Msg("failed to drop secondary indexes, continuing with indexes in place")
-			}
-
-			log.Info().Msg("database truncation completed")
-		} else {
-			// Selective indexing — same optimised TruncateSystems path as resume:
-			// FKs are disabled internally, children are deleted in explicit order,
-			// no CASCADE walk.
-			log.Info().Msgf(
-				"performing selective truncation for systems: %v",
-				currentSystemIDs,
-			)
-			err = db.TruncateSystems(currentSystemIDs)
-			if err != nil {
-				return 0, fmt.Errorf("failed to truncate systems %v: %w", currentSystemIDs, err)
-			}
-			log.Info().Msg("selective truncation completed")
-
-			// For selective indexing, populate scan state with max IDs, global data, and
-			// maps for systems NOT being reindexed to avoid conflicts with existing data
-			log.Info().Msgf(
-				"Populating scan state for selective indexing (excluding systems: %v)", currentSystemIDs,
-			)
-			if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, currentSystemIDs); err != nil {
-				// Check if this is a cancellation error
-				if errors.Is(err, context.Canceled) {
-					return handleCancellation(
-						ctx, db, "Media indexing cancelled during selective scan state population",
-					)
-				}
-				log.Error().Err(err).Msg("failed to populate scan state for selective indexing")
-				return 0, fmt.Errorf("failed to populate scan state for selective indexing: %w", err)
-			}
-			log.Info().Msg("successfully populated scan state for selective indexing")
-		}
-
-		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
-			log.Error().Err(setErr).Msg("failed to set indexing status to running on fresh start")
-		}
 		if setErr := db.SetLastIndexedSystem(""); setErr != nil {
-			log.Error().Err(setErr).Msg("failed to clear last indexed system on fresh start")
+			log.Error().Err(setErr).Msg("failed to clear last indexed system")
 		}
+	}
 
-		// Selective indexing already seeds tags via PopulateScanStateForSelectiveIndexing;
-		// only seed here for full truncate where TagTypesIndex is still 0.
-		if scanState.TagTypesIndex == 0 {
-			log.Info().Msg("seeding known tags for fresh indexing")
-			// SeedCanonicalTags runs in its own non-batch transaction for safety.
-			err = SeedCanonicalTags(db, &scanState)
-			if err != nil {
-				return 0, fmt.Errorf("failed to seed known tags: %w", err)
-			}
-			log.Info().Msg("successfully seeded known tags")
-		}
-	} else {
-		// If resuming, ensure status is "running" and populate existing scan state indexes
-		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
-			log.Error().Err(setErr).Msg("failed to set indexing status to running during resume")
-		}
-
-		// Check if we're resuming a full index (all systems) - if so, we need to restore WAL mode on completion
-		// This handles the case where a full index was interrupted after switching to DELETE mode
-		allSystems := systemdefs.AllSystems()
-		allSystemIDs := make([]string, len(allSystems))
-		for i, sys := range allSystems {
-			allSystemIDs[i] = sys.ID
-		}
-		sortedCurrent := make([]string, len(currentSystemIDs))
-		copy(sortedCurrent, currentSystemIDs)
-		sort.Strings(sortedCurrent)
-		sortedAll := make([]string, len(allSystemIDs))
-		copy(sortedAll, allSystemIDs)
-		sort.Strings(sortedAll)
-
-		if len(sortedCurrent) == len(sortedAll) && helpers.EqualStringSlices(sortedCurrent, sortedAll) {
-			log.Info().Msg("resuming full index")
-		}
-
-		// When resuming, we need to populate the scan state with existing data
-		// to avoid ID conflicts and continue from where we left off
-		log.Info().Msg("populating scan state from existing database for resume")
-		err = PopulateScanStateFromDB(ctx, db, &scanState)
+	// Seed canonical tags based on tag existence, independent of resume state
+	if scanState.TagTypesIndex == 0 {
+		log.Info().Msg("seeding known tags")
+		// SeedCanonicalTags runs in its own non-batch transaction for safety.
+		err = SeedCanonicalTags(db, &scanState)
 		if err != nil {
-			// Check if this is a cancellation error
-			if errors.Is(err, context.Canceled) {
-				return handleCancellation(ctx, db, "Media indexing cancelled during scan state population")
-			}
-			log.Error().Err(err).Msg("failed to populate scan state from database")
-			return 0, fmt.Errorf("failed to populate scan state from database: %w", err)
+			return 0, fmt.Errorf("failed to seed known tags: %w", err)
 		}
-		log.Info().Msg("successfully populated scan state for resume")
+		log.Info().Msg("successfully seeded known tags")
 	}
 
 	// Ensure transaction cleanup and status update on completion or error
@@ -835,8 +814,18 @@ func NewNamesIndex(
 		}
 	}()
 
+	// Build sorted system list as the single loop driver. This covers all three
+	// previous sources: sysPathIDs (systems with paths), launcher-specific
+	// systems that may have no paths (was loop 2), and all systems for
+	// any-scanners (was loop 3).
+	sortedSystems := make([]systemdefs.System, len(systems))
+	copy(sortedSystems, systems)
+	sort.Slice(sortedSystems, func(i, j int) bool {
+		return sortedSystems[i].ID < sortedSystems[j].ID
+	})
+
 	status := IndexStatus{
-		Total: len(sysPathIDs) + 1, // +1 for final "Writing database" step
+		Total: len(sortedSystems) + 1, // +1 for final "Writing database" step
 		Step:  0,
 	}
 
@@ -847,34 +836,29 @@ func NewNamesIndex(
 	scannedLaunchers := make(map[string]bool)
 	// This map tracks systems that have been fully processed and committed
 	completedSystems := make(map[string]bool)
-	// Tracks whether the lastIndexedSystem's partial rows were cleaned up on resume.
-	// The truncate must fire exactly once, before the system's first file is processed.
-	resumedSystemTruncated := false
 
-	// Populate completedSystems if resuming
+	// Populate completedSystems if resuming — use sortedSystems for consistent ordering
 	if shouldResume {
-		for _, k := range sysPathIDs {
-			if k == lastIndexedSystemID {
+		for _, sys := range sortedSystems {
+			if sys.ID == lastIndexedSystemID {
 				// DO NOT mark the last indexed system as completed - we need to resume from it
 				// Only mark systems BEFORE the last indexed system as completed
 				break
 			}
-			completedSystems[k] = true // Mark all systems before the resume point as completed
+			completedSystems[sys.ID] = true
 		}
-	}
-
-	scannedSystems := make(map[string]bool)
-	for _, s := range systemdefs.AllSystems() {
-		scannedSystems[s.ID] = false
 	}
 
 	// Batch tracking variables for adaptive transaction management
 	filesInBatch := 0
-	systemsInBatch := 0
 	batchStarted := false
 
-	// Main loop for systems
-	for _, k := range sysPathIDs {
+	// Unified loop: each system is processed exactly once regardless of source.
+	// Filesystem scan, per-system launcher scanners, and any-scanners are all
+	// collected before the AddMediaPath phase. Populate* and FlushScanStateMaps
+	// are called for every system, fixing the stale-state gaps that existed in
+	// the previous loop 2 and loop 3.
+	for _, sys := range sortedSystems {
 		// Check for cancellation or pause
 		select {
 		case <-ctx.Done():
@@ -885,7 +869,7 @@ func NewNamesIndex(
 			return handleCancellationWithRollback(ctx, db, "Media indexing cancelled while paused")
 		}
 
-		systemID := k
+		systemID := sys.ID
 
 		// Resolve media type once per system to avoid repeated map lookups
 		mediaType := slugs.MediaTypeGame
@@ -895,58 +879,20 @@ func NewNamesIndex(
 
 		if completedSystems[systemID] {
 			log.Debug().Msgf("skipping already indexed system: %s", systemID)
+			status.SystemID = systemID
 			status.Step++
 			update(status)
-			continue // Skip this system if it was already completed in a previous run
+			continue
 		}
 
-		// Lazy load this system's existing data for resume
-		if shouldResume {
-			// On the first encounter of the lastIndexedSystem, remove any
-			// partially-committed rows from the previous interrupted run so the
-			// re-index starts clean. Without this, FlushScanStateMaps clearing
-			// MediaIDs mid-system leaves the scanner blind to pre-existing paths,
-			// causing a UNIQUE constraint storm at ~1 file/sec.
-			if systemID == lastIndexedSystemID && !resumedSystemTruncated {
-				log.Info().Str("system", systemID).
-					Msg("truncating partial system data before resume re-index")
-				if truncErr := db.TruncateSystems([]string{systemID}); truncErr != nil {
-					return 0, fmt.Errorf("failed to truncate partial system data for resume: %w", truncErr)
-				}
-				resumedSystemTruncated = true
+		scanState.MissingMedia = make(map[int]struct{})
 
-				// TruncateSystems deletes the Systems row (invalidating the DBID cached in
-				// scanState.SystemIDs) and orphan-cleans any Tags no longer referenced by
-				// MediaTags/MediaTitleTags/SupportingMedia (invalidating DBIDs in scanState.TagIDs).
-				// Both maps were populated by PopulateScanStateFromDB before the main loop; they
-				// must be reconciled now so AddMediaPath doesn't pass stale foreign keys.
-				delete(scanState.SystemIDs, systemID)
-
-				allTags, tagsErr := db.GetAllTags()
-				if tagsErr != nil {
-					return 0, fmt.Errorf("failed to reload tags after resume truncate: %w", tagsErr)
-				}
-				tagTypeByDBID := make(map[int64]string, len(scanState.TagTypeIDs))
-				for t, id := range scanState.TagTypeIDs {
-					tagTypeByDBID[int64(id)] = t
-				}
-				scanState.TagIDs = make(map[string]int, len(allTags))
-				for _, tag := range allTags {
-					scanState.TagIDs[database.TagKey(tagTypeByDBID[tag.TypeDBID], tag.Tag)] = int(tag.DBID)
-				}
-				if seedErr := SeedCanonicalTags(db, &scanState); seedErr != nil {
-					return 0, fmt.Errorf("failed to re-seed canonical tags after resume truncate: %w", seedErr)
-				}
+		// Load existing data for this system — always persistent.
+		if loadErr := PopulatePersistentScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
+			if errors.Is(loadErr, context.Canceled) {
+				return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
 			}
-
-			log.Debug().Str("system", systemID).Msg("loading existing data for system resume")
-			if loadErr := PopulateScanStateForSystem(ctx, db, &scanState, systemID); loadErr != nil {
-				// Check if this is a cancellation error
-				if errors.Is(loadErr, context.Canceled) {
-					return handleCancellation(ctx, db, "Media indexing cancelled during system data loading")
-				}
-				return 0, fmt.Errorf("failed to load system data for resume: %w", loadErr)
-			}
+			return 0, fmt.Errorf("failed to load system data for persistent indexing: %w", loadErr)
 		}
 
 		files := make([]platforms.ScanResult, 0)
@@ -956,19 +902,17 @@ func NewNamesIndex(
 		status.Step++
 		update(status)
 
-		pathCount := len(systemPaths[k])
 		log.Info().
 			Str("system", systemID).
 			Int("step", status.Step).
 			Int("total", status.Total).
-			Int("paths", pathCount).
+			Int("paths", len(systemPaths[systemID])).
 			Msg("indexing system")
 
-		// scan using standard folder and extensions
-		for _, systemPath := range systemPaths[k] {
-			pathFiles, pathErr := GetFiles(ctx, cfg, platform, k, systemPath)
+		// 1. Filesystem scan (no-op if this system has no configured paths)
+		for _, systemPath := range systemPaths[systemID] {
+			pathFiles, pathErr := GetFiles(ctx, cfg, platform, systemID, systemPath)
 			if pathErr != nil {
-				// Check if this is a cancellation error
 				if errors.Is(pathErr, context.Canceled) {
 					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during file scanning")
 				}
@@ -980,44 +924,63 @@ func NewNamesIndex(
 			}
 		}
 
-		// Run each system launcher's custom scanner if one exists.
+		// 2. Per-system launcher scanners.
 		//
 		// SkipFilesystemScan launchers (e.g. RetroBat, Kodi) generate results
 		// independently — they don't filter/enrich the shared file list, so they
-		// receive empty input and their results are *appended* to files. This
-		// prevents an independent scanner that ignores its input from wiping out
-		// files discovered by other launchers or the filesystem walk.
+		// receive empty input and their results are *appended* to files.
 		//
 		// Non-skip launchers (e.g. Batocera gamelist.xml enrichment) act as a
 		// pipeline: they receive the current files and their output *replaces*
 		// files, allowing them to filter, reorder, or add metadata.
-		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(k)
-		for i := range launchers {
-			l := &launchers[i]
-			if l.Scanner != nil {
-				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
-				var scanErr error
-				if l.SkipFilesystemScan {
-					// Isolated: scanner gets empty input, results accumulated
-					var independent []platforms.ScanResult
-					independent, scanErr = l.Scanner(ctx, cfg, systemID, nil)
-					if scanErr == nil {
-						files = append(files, independent...)
-					}
-				} else {
-					// Pipeline: scanner filters/enriches existing files
-					files, scanErr = l.Scanner(ctx, cfg, systemID, files)
-				}
-				if scanErr != nil {
-					if errors.Is(scanErr, context.Canceled) {
-						return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
-					}
-					log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
-					continue
-				}
-				// Mark launcher as scanned to prevent double-execution
-				scannedLaunchers[l.ID] = true
+		//
+		// GetLaunchersBySystem returns nil for systems with no registered
+		// launchers, making this loop a no-op for those systems. This also
+		// replaces the previous loop 2 (launchers with a specific SystemID but
+		// no filesystem paths) since all systems are now visited.
+		sysLaunchers := launcherCache.GetLaunchersBySystem(systemID)
+		for i := range sysLaunchers {
+			l := &sysLaunchers[i]
+			if l.Scanner == nil {
+				continue
 			}
+			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
+			var scanErr error
+			if l.SkipFilesystemScan {
+				// Isolated: scanner gets empty input, results accumulated
+				var independent []platforms.ScanResult
+				independent, scanErr = l.Scanner(ctx, cfg, systemID, nil)
+				if scanErr == nil {
+					files = append(files, independent...)
+				}
+			} else {
+				// Pipeline: scanner filters/enriches existing files
+				files, scanErr = l.Scanner(ctx, cfg, systemID, files)
+			}
+			if scanErr != nil {
+				if errors.Is(scanErr, context.Canceled) {
+					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
+				}
+				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
+				continue
+			}
+			scannedLaunchers[l.ID] = true
+		}
+
+		// 3. Any-scanners — no SystemID, run for every system.
+		//    Replaces loop 3 (previously a separate outer loop over anyScanners).
+		for i := range anyScanners {
+			log.Debug().Msgf("running %s 'any' scanner for system: %s", anyScanners[i].ID, systemID)
+			results, scanErr := anyScanners[i].Scanner(ctx, cfg, systemID, []platforms.ScanResult{})
+			if scanErr != nil {
+				if errors.Is(scanErr, context.Canceled) {
+					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during 'any' scanner")
+				}
+				log.Error().Err(scanErr).Msgf("error running %s 'any' scanner for system: %s",
+					anyScanners[i].ID, systemID)
+				continue
+			}
+			files = append(files, results...)
 		}
 
 		if len(files) == 0 {
@@ -1026,8 +989,6 @@ func NewNamesIndex(
 			status.Files += len(files)
 			log.Debug().Msgf("scanned %d files for system: %s", len(files), systemID)
 		}
-
-		scannedSystems[systemID] = true
 
 		// Group files by directory and determine stripping policy per directory
 		filesByDir := make(map[string][]platforms.ScanResult)
@@ -1069,7 +1030,8 @@ func NewNamesIndex(
 			_, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, shouldStrip, cfg, mediaType)
 			if addErr != nil {
 				var sqliteErr sqlite3.Error
-				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
+					!errors.Is(addErr, mediadb.ErrDependencyFlush) {
 					uniqueConstraintFailures++
 					log.Debug().Err(addErr).Str("path", file.Path).Msg("skipping duplicate media entry")
 					continue
@@ -1101,19 +1063,63 @@ func NewNamesIndex(
 					log.Error().Err(setErr).Msgf(
 						"failed to set last indexed system to %s after file limit commit", systemID)
 				}
-				FlushScanStateMaps(&scanState)
+				// NOTE: Do not flush TitleIDs/MediaIDs here — we are still
+				// mid-system. Clearing them would break dedup for remaining
+				// files in this system (multi-disc titles, persistent-mode
+				// existing-media tracking). Flush only happens between systems.
 				filesInBatch = 0
-				systemsInBatch = 0
 				batchStarted = false
 			}
 		}
 
-		// Only count system in batch if we have pending uncommitted work
 		if batchStarted {
-			systemsInBatch++
+			commitStart := time.Now()
+			if commitErr := db.CommitTransaction(); commitErr != nil {
+				return 0, fmt.Errorf("failed to commit system transaction: %w", commitErr)
+			}
+			commitElapsed := time.Since(commitStart)
+			log.Debug().
+				Str("system", systemID).
+				Int("files", filesInBatch).
+				Dur("commitTime", commitElapsed).
+				Msg("committed system transaction")
+			if commitElapsed > 5*time.Second {
+				log.Warn().
+					Int("files", filesInBatch).
+					Dur("commitTime", commitElapsed).
+					Msg("database commit took longer than expected")
+			}
+			filesInBatch = 0
+			batchStarted = false
 		}
 
-		// Mark system as processed (even if split across multiple commits)
+		systemDBID, found := scanState.SystemIDs[systemID]
+		if !found {
+			completedSystems[systemID] = true
+			FlushScanStateMaps(&scanState)
+			continue
+		}
+
+		if beginErr := db.BeginTransaction(false); beginErr != nil {
+			return 0, fmt.Errorf("failed to begin missing-state transaction: %w", beginErr)
+		}
+		if resetErr := db.ResetMissingFlags([]int{systemDBID}); resetErr != nil {
+			return 0, fmt.Errorf("failed to reset missing flags for system %s: %w", systemID, resetErr)
+		}
+		if len(scanState.MissingMedia) > 0 {
+			if missErr := db.BulkSetMediaMissing(scanState.MissingMedia); missErr != nil {
+				return 0, fmt.Errorf("failed to mark missing media for system %s: %w", systemID, missErr)
+			}
+		}
+		if commitErr := db.CommitTransaction(); commitErr != nil {
+			return 0, fmt.Errorf("failed to commit missing-state transaction: %w", commitErr)
+		}
+
+		if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
+			log.Error().Err(setErr).Msgf("failed to set last indexed system to %s after system completion", systemID)
+		}
+
+		// Mark system as processed only after its missing-state finalization commits.
 		completedSystems[systemID] = true
 
 		systemElapsed := time.Since(systemStartTime)
@@ -1131,305 +1137,9 @@ func NewNamesIndex(
 				Msg("system indexing took longer than expected - check for slow storage or large directories")
 		}
 
-		// Commit after N small systems OR when file limit forces it
-		if batchStarted && systemsInBatch >= maxSystemsPerTransaction {
-			commitStart := time.Now()
-			if commitErr := db.CommitTransaction(); commitErr != nil {
-				return 0, fmt.Errorf("failed to commit batch transaction (system limit): %w", commitErr)
-			}
-			commitElapsed := time.Since(commitStart)
-			log.Debug().
-				Int("systems", systemsInBatch).
-				Int("files", filesInBatch).
-				Dur("commitTime", commitElapsed).
-				Msg("committed batch (system limit)")
-			if commitElapsed > 5*time.Second {
-				log.Warn().
-					Int("files", filesInBatch).
-					Dur("commitTime", commitElapsed).
-					Msg("database commit took longer than expected")
-			}
-			// Update progress after successful commit
-			if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
-				log.Error().Err(setErr).Msgf(
-					"failed to set last indexed system to %s after system limit commit", systemID)
-			}
-			FlushScanStateMaps(&scanState)
-			filesInBatch = 0
-			systemsInBatch = 0
-			batchStarted = false
-		}
-	}
-
-	// Commit any remaining uncommitted data from main loop
-	if batchStarted && filesInBatch > 0 {
-		if commitErr := db.CommitTransaction(); commitErr != nil {
-			return 0, fmt.Errorf("failed to commit final batch transaction: %w", commitErr)
-		}
-		// Update progress with last processed system
-		lastSystem := ""
-		if len(sysPathIDs) > 0 {
-			lastSystem = sysPathIDs[len(sysPathIDs)-1]
-		}
-		if setErr := db.SetLastIndexedSystem(lastSystem); setErr != nil {
-			log.Error().Err(setErr).Msg("failed to set last indexed system after final commit")
-		}
+		// Always flush between systems — TitleIDs/MediaIDs are system-scoped and
+		// Populate* re-loads them for the next system.
 		FlushScanStateMaps(&scanState)
-		batchStarted = false
-		filesInBatch = 0
-		systemsInBatch = 0
-	}
-
-	// Check for cancellation or pause before custom scanners
-	select {
-	case <-ctx.Done():
-		return handleCancellationWithRollback(ctx, db, "Media indexing cancelled before custom scanners")
-	default:
-	}
-	if waitErr := pauser.Wait(ctx); waitErr != nil {
-		return handleCancellationWithRollback(ctx, db,
-			"Media indexing cancelled while paused before custom scanners")
-	}
-
-	// run each custom scanner at least once, even if there are no paths
-	// defined or results from a regular index
-	launchers := helpers.GlobalLauncherCache.GetAllLaunchers()
-	log.Debug().Msgf("checking %d launchers for custom scanners", len(launchers))
-	for i := range launchers {
-		l := &launchers[i]
-		systemID := l.SystemID
-		mediaType := slugs.MediaTypeGame
-		if system, sysErr := systemdefs.GetSystem(systemID); sysErr == nil && system != nil {
-			mediaType = system.GetMediaType()
-		}
-		log.Debug().Msgf("launcher %s for system %s: scanner=%v scanned=%v",
-			l.ID, systemID, l.Scanner != nil, scannedLaunchers[l.ID])
-
-		// Only run custom scanners for systems in the current indexing operation
-		if !scannedLaunchers[l.ID] && l.Scanner != nil && systemID != "" {
-			// Check if this system is part of the current indexing operation
-			if !systemIDMap[systemID] {
-				log.Debug().Msgf("skipping %s scanner for system %s (not in current index)", l.ID, systemID)
-				continue
-			}
-
-			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
-			results, scanErr := l.Scanner(ctx, cfg, systemID, []platforms.ScanResult{})
-			if scanErr != nil {
-				// Check if this is a cancellation error
-				if errors.Is(scanErr, context.Canceled) {
-					return handleCancellationWithRollback(ctx, db,
-						"Media indexing cancelled during second round custom scanner")
-				}
-				log.Warn().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
-				continue
-			}
-
-			log.Debug().Msgf("scanned %d files for system: %s", len(results), systemID)
-
-			if len(results) > 0 {
-				status.Files += len(results)
-
-				for _, result := range results {
-					// Check for cancellation or pause between file processing
-					select {
-					case <-ctx.Done():
-						return handleCancellationWithRollback(ctx, db,
-							"Media indexing cancelled during custom scanner file processing")
-					default:
-					}
-					if waitErr := pauser.Wait(ctx); waitErr != nil {
-						return handleCancellationWithRollback(ctx, db,
-							"Media indexing cancelled while paused during custom scanner file processing")
-					}
-
-					// Start transaction if needed (at start OR after mid-system commit)
-					if !batchStarted {
-						if beginErr := db.BeginTransaction(true); beginErr != nil {
-							return 0, fmt.Errorf("failed to begin new transaction for custom scanner: %w", beginErr)
-						}
-						batchStarted = true
-					}
-
-					// Custom scanner files: don't apply number stripping heuristic (false)
-					_, _, addErr := AddMediaPath(
-						db, &scanState, systemID, result.Path, result.NoExt, false, cfg, mediaType,
-					)
-					if addErr != nil {
-						var sqliteErr sqlite3.Error
-						if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
-							uniqueConstraintFailures++
-							log.Debug().Err(addErr).Str("path", result.Path).Msg("skipping duplicate media entry")
-							continue
-						}
-						return 0, fmt.Errorf(
-							"unrecoverable error adding custom scanner path %q: %w",
-							result.Path,
-							addErr,
-						)
-					}
-					filesInBatch++
-
-					// Commit if we hit file limit (memory safety)
-					if filesInBatch >= maxFilesPerTransaction {
-						if commitErr := db.CommitTransaction(); commitErr != nil {
-							return 0, fmt.Errorf(
-								"failed to commit batch transaction for custom scanner (file limit): %w", commitErr)
-						}
-						FlushScanStateMaps(&scanState)
-						filesInBatch = 0
-						systemsInBatch = 0
-						batchStarted = false
-					}
-				}
-
-				// Update system count if we have uncommitted work
-				if batchStarted {
-					systemsInBatch++
-				}
-
-				// Commit after N systems OR when file limit forces it
-				if batchStarted && systemsInBatch >= maxSystemsPerTransaction {
-					if commitErr := db.CommitTransaction(); commitErr != nil {
-						return 0, fmt.Errorf(
-							"failed to commit batch transaction for custom scanner (system limit): %w", commitErr)
-					}
-					FlushScanStateMaps(&scanState)
-					filesInBatch = 0
-					systemsInBatch = 0
-					batchStarted = false
-				}
-			}
-			scannedSystems[systemID] = true
-			scannedLaunchers[l.ID] = true // Mark this specific launcher as run
-		}
-	}
-
-	// launcher scanners with no system defined are run against every system
-	var anyScanners []platforms.Launcher
-	allLaunchers := helpers.GlobalLauncherCache.GetAllLaunchers()
-	for i := range allLaunchers {
-		if allLaunchers[i].SystemID == "" && allLaunchers[i].Scanner != nil {
-			anyScanners = append(anyScanners, allLaunchers[i])
-		}
-	}
-
-	for i := range anyScanners {
-		l := &anyScanners[i]
-		for _, s := range systems {
-			systemID := s.ID
-			mediaType := slugs.MediaTypeGame
-			if system, sysErr := systemdefs.GetSystem(systemID); sysErr == nil && system != nil {
-				mediaType = system.GetMediaType()
-			}
-			if completedSystems[systemID] {
-				log.Debug().Msgf("skipping 'any' scanner for already completed system: %s", systemID)
-				continue // Skip if system already fully processed
-			}
-
-			log.Debug().Msgf("running %s 'any' scanner for system: %s", l.ID, s.ID)
-			results, scanErr := l.Scanner(ctx, cfg, s.ID, []platforms.ScanResult{})
-			if scanErr != nil {
-				// Check if this is a cancellation error
-				if errors.Is(scanErr, context.Canceled) {
-					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during 'any' scanner")
-				}
-				log.Error().Err(scanErr).Msgf("error running %s 'any' scanner for system: %s", l.ID, s.ID)
-				continue
-			}
-
-			log.Debug().Msgf("scanned %d files for system: %s", len(results), s.ID)
-
-			if len(results) > 0 {
-				// Dynamically expand total and report progress for systems with results
-				status.Total++
-				status.Step++
-				status.SystemID = systemID
-				update(status)
-
-				status.Files += len(results)
-
-				for _, scanResult := range results {
-					// Check for cancellation or pause between file processing
-					select {
-					case <-ctx.Done():
-						return handleCancellationWithRollback(ctx, db,
-							"Media indexing cancelled during 'any' scanner file processing")
-					default:
-					}
-					if waitErr := pauser.Wait(ctx); waitErr != nil {
-						return handleCancellationWithRollback(ctx, db,
-							"Media indexing cancelled while paused during 'any' scanner file processing")
-					}
-
-					// Start transaction if needed (at start OR after mid-system commit)
-					if !batchStarted {
-						if beginErr := db.BeginTransaction(true); beginErr != nil {
-							return 0, fmt.Errorf("failed to begin new transaction for 'any' scanner: %w", beginErr)
-						}
-						batchStarted = true
-					}
-
-					// 'Any' scanner files: don't apply number stripping heuristic (false)
-					_, _, addErr := AddMediaPath(
-						db, &scanState, systemID, scanResult.Path, scanResult.NoExt, false, cfg, mediaType,
-					)
-					if addErr != nil {
-						var sqliteErr sqlite3.Error
-						if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
-							uniqueConstraintFailures++
-							log.Debug().Err(addErr).Str("path", scanResult.Path).Msg("skipping duplicate media entry")
-							continue
-						}
-						return 0, fmt.Errorf(
-							"unrecoverable error adding 'any' scanner path %q: %w",
-							scanResult.Path,
-							addErr,
-						)
-					}
-					filesInBatch++
-
-					// Commit if we hit file limit (memory safety)
-					if filesInBatch >= maxFilesPerTransaction {
-						if commitErr := db.CommitTransaction(); commitErr != nil {
-							return 0, fmt.Errorf(
-								"failed to commit batch transaction for 'any' scanner (file limit): %w", commitErr)
-						}
-						FlushScanStateMaps(&scanState)
-						filesInBatch = 0
-						systemsInBatch = 0
-						batchStarted = false
-					}
-				}
-
-				// Update system count if we have uncommitted work
-				if batchStarted {
-					systemsInBatch++
-				}
-
-				// Commit after N systems OR when file limit forces it
-				if batchStarted && systemsInBatch >= maxSystemsPerTransaction {
-					if commitErr := db.CommitTransaction(); commitErr != nil {
-						return 0, fmt.Errorf(
-							"failed to commit batch transaction for 'any' scanner (system limit): %w", commitErr)
-					}
-					FlushScanStateMaps(&scanState)
-					filesInBatch = 0
-					systemsInBatch = 0
-					batchStarted = false
-				}
-			}
-			scannedSystems[systemID] = true
-		}
-	}
-
-	// Commit any remaining uncommitted data from all scanner phases
-	if batchStarted && filesInBatch > 0 {
-		if commitErr := db.CommitTransaction(); commitErr != nil {
-			return 0, fmt.Errorf("failed to commit final scanner batch transaction: %w", commitErr)
-		}
-		FlushScanStateMaps(&scanState)
-		batchStarted = false
 	}
 
 	status.Step++
@@ -1443,18 +1153,12 @@ func NewNamesIndex(
 	scanState.SystemIDs = nil
 	scanState.TitleIDs = nil
 	scanState.MediaIDs = nil
+	scanState.MediaTitleIDs = nil
+	scanState.MediaTagIDs = nil
 	scanState.TagTypeIDs = nil
 	scanState.TagIDs = nil
 
-	// Phase 1: Complete data operations (foreground) - commit all data
-	// Note: We may not have an active transaction here due to batching
-	if batchStarted {
-		err = db.CommitTransaction()
-		if err != nil {
-			return 0, fmt.Errorf("failed to commit final transaction: %w", err)
-		}
-	}
-
+	scanState.MissingMedia = nil
 	status.Phase = PhaseCreatingIndexes
 	update(status)
 
@@ -1477,26 +1181,75 @@ func NewNamesIndex(
 	status.Phase = PhaseBuildingCaches
 	update(status)
 
-	// Populate caches after UpdateLastGenerated. These run synchronously so
-	// searches return correct results the moment indexing finishes, and the
-	// populated SystemTagsCache persists across service restarts.
-	t0 = time.Now()
-	if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
-		log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
+	indexedSystems := make([]string, 0)
+	log.Debug().Msgf("processed systems: %v", completedSystems)
+	for k, v := range completedSystems {
+		if v {
+			indexedSystems = append(indexedSystems, k)
+		}
 	}
-	log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
+	sort.Strings(indexedSystems)
+	log.Debug().Msgf("indexed systems: %v", indexedSystems)
 
-	t0 = time.Now()
-	if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
-		log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
+	indexedSystemDefs := make([]systemdefs.System, 0, len(indexedSystems))
+	for _, systemID := range indexedSystems {
+		system, getSystemErr := systemdefs.GetSystem(systemID)
+		if getSystemErr != nil {
+			log.Warn().Err(getSystemErr).Str("system", systemID).Msg("skipping scoped cache rebuild for unknown system")
+			continue
+		}
+		indexedSystemDefs = append(indexedSystemDefs, *system)
 	}
-	log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
 
+	selectiveRun := len(requestedSystemIDs) > 0 && !fullRun
+
+	// Populate caches after UpdateLastGenerated. For selective scans we rebuild
+	// the persisted per-system SQL cache, refresh in-memory slug coverage for the
+	// indexed systems, and rebuild the in-memory tag cache from the mixed
+	// preserved+refreshed SystemTagsCache table so first-entry requests for the
+	// touched systems stay warm too.
 	t0 = time.Now()
-	if cacheErr := db.RebuildTagCache(); cacheErr != nil {
-		log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
+	if selectiveRun {
+		if cacheErr := db.PopulateSystemTagsCacheForSystems(ctx, indexedSystemDefs); cacheErr != nil {
+			log.Error().Err(cacheErr).Msg("failed to populate system tags cache for indexed systems")
+		}
+		log.Info().
+			Dur("elapsed", time.Since(t0)).
+			Int("systems", len(indexedSystemDefs)).
+			Msg("PopulateSystemTagsCacheForSystems complete")
+
+		t0 = time.Now()
+		if cacheErr := db.RebuildTagCache(); cacheErr != nil {
+			log.Error().Err(cacheErr).Msg("failed to rebuild tag cache after selective indexing")
+		}
+		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
+
+		t0 = time.Now()
+		if cacheErr := db.RefreshSlugSearchCacheForSystems(ctx, indexedSystems); cacheErr != nil {
+			log.Error().Err(cacheErr).Msg("failed to refresh slug search cache for indexed systems")
+		}
+		log.Info().
+			Dur("elapsed", time.Since(t0)).
+			Int("systems", len(indexedSystems)).
+			Msg("RefreshSlugSearchCacheForSystems complete")
+	} else {
+		if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
+			log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
+		}
+		log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
+
+		t0 = time.Now()
+		if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
+			log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
+		}
+		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
+
+		t0 = time.Now()
+		if cacheErr := db.RebuildTagCache(); cacheErr != nil {
+			log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
+		}
+		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
 	}
-	log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
 
 	// Mark indexing as completed and clear indexing metadata
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {
@@ -1522,15 +1275,6 @@ func NewNamesIndex(
 		err = fmt.Errorf("failed to set optimization status to pending: %w", err)
 		log.Error().Err(err).Msg("failed to set optimization status to pending")
 	}
-
-	indexedSystems := make([]string, 0)
-	log.Debug().Msgf("processed systems: %v", completedSystems)
-	for k, v := range completedSystems {
-		if v {
-			indexedSystems = append(indexedSystems, k)
-		}
-	}
-	log.Debug().Msgf("indexed systems: %v", indexedSystems)
 
 	if uniqueConstraintFailures > 0 {
 		log.Warn().Int("count", uniqueConstraintFailures).
