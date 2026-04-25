@@ -22,6 +22,7 @@ package api
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +47,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -454,6 +457,9 @@ func serveIndex(w http.ResponseWriter, r *http.Request, root http.FileSystem) {
 	w.Header().Set("Cache-Control", "no-cache")
 	http.ServeContent(w, r, "index.html", stat.ModTime(), index)
 }
+
+//go:embed scraper_util.html
+var scraperUtilHTML []byte
 
 const errMsgAppNotFound = "Zaparoo App files not found. " +
 	"Copy the built zaparoo-app files to pkg/assets/_app/dist/"
@@ -1284,6 +1290,63 @@ func handlePostRequest(
 	}
 }
 
+// makeSystemResolver builds a SystemResolver for the gamelist.xml scraper.
+// It resolves indexed system IDs to ScrapeSystem values (DBID + ROM paths).
+// ROM paths are constructed as <rootDir>/<systemID> for each platform root dir.
+func makeSystemResolver(
+	mdb database.MediaDBI,
+	platform platforms.Platform,
+	cfg *config.Instance,
+) gamelistxml.SystemResolver {
+	return func(ctx context.Context, systemIDs []string) ([]scraper.ScrapeSystem, error) {
+		indexed, err := mdb.IndexedSystems()
+		if err != nil {
+			return nil, fmt.Errorf("makeSystemResolver: list indexed systems: %w", err)
+		}
+
+		// Build a set of IDs to resolve: caller's filter or all indexed.
+		want := make(map[string]struct{}, len(indexed))
+		if len(systemIDs) == 0 {
+			for _, id := range indexed {
+				want[id] = struct{}{}
+			}
+		} else {
+			indexedSet := make(map[string]struct{}, len(indexed))
+			for _, id := range indexed {
+				indexedSet[id] = struct{}{}
+			}
+			for _, id := range systemIDs {
+				if _, ok := indexedSet[id]; ok {
+					want[id] = struct{}{}
+				}
+			}
+		}
+
+		rootDirs := platform.RootDirs(cfg)
+
+		var result []scraper.ScrapeSystem
+		for sysID := range want {
+			sys, err := mdb.FindSystemBySystemID(sysID)
+			if err != nil {
+				log.Warn().Err(err).Str("system", sysID).Msg("makeSystemResolver: system not found in DB, skipping")
+				continue
+			}
+			// Build per-system ROM paths: <rootDir>/<systemID>.
+			// The gamelist.xml scraper looks for gamelist.xml directly inside each path.
+			romPaths := make([]string, 0, len(rootDirs))
+			for _, rootDir := range rootDirs {
+				romPaths = append(romPaths, filepath.Join(rootDir, sysID))
+			}
+			result = append(result, scraper.ScrapeSystem{
+				DBID:     sys.DBID,
+				ID:       sysID,
+				ROMPaths: romPaths,
+			})
+		}
+		return result, nil
+	}
+}
+
 // Start starts the API web server and blocks until it shuts down.
 func Start(
 	platform platforms.Platform,
@@ -1574,6 +1637,41 @@ func Start(
 		r.Get("/api/v0.1/events", sseHandler)
 	})
 
+	// v1 REST API: scrapers and media properties. Localhost-by-default, same as
+	// other non-WS routes. The scraper status SSE is in a separate group without
+	// a request timeout so it can stream for the duration of a full run.
+	scraperReg := methods.NewScraperRegistry()
+	scraperReg.Register(
+		gamelistxml.NewGamelistXMLScraper(
+			db.MediaDB,
+			makeSystemResolver(db.MediaDB, platform, cfg),
+		),
+	)
+
+	r.Group(func(r chi.Router) {
+		r.Use(nonWSIPFilter)
+		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		r.Use(apiRateLimitMiddleware)
+		r.Use(middleware.NoCache)
+		r.Use(middleware.Timeout(config.APIRequestTimeout))
+
+		r.Get("/api/v1/scrapers", scraperReg.HandleListScrapers())
+		r.Post("/api/v1/scrapers/{id}/run", scraperReg.HandleRunScraper(st.GetContext()))
+		r.Post("/api/v1/scrapers/{id}/cancel", scraperReg.HandleCancelScraper())
+		r.Get("/api/v1/titles/{titleDBID}/properties", methods.HandleGetMediaTitleProperties(db.MediaDB))
+		r.Get("/api/v1/media/{mediaDBID}/properties", methods.HandleGetMediaProperties(db.MediaDB))
+	})
+
+	// Scraper status SSE — no request timeout (long-lived connection).
+	r.Group(func(r chi.Router) {
+		r.Use(nonWSIPFilter)
+		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		r.Use(apiRateLimitMiddleware)
+		r.Use(middleware.NoCache)
+
+		r.Get("/api/v1/scrapers/{id}/status", scraperReg.HandleScraperStatus())
+	})
+
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,
 		handleWSMessage(
@@ -1587,6 +1685,16 @@ func Start(
 	r.Get("/app/*", handleApp)
 	r.Get("/app", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/app/", http.StatusFound)
+	})
+
+	// Scraper dev utility — localhost-only, same IP filter as REST API routes.
+	r.Group(func(r chi.Router) {
+		r.Use(nonWSIPFilter)
+		r.Get("/scraper-util", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-cache")
+			_, _ = w.Write(scraperUtilHTML)
+		})
 	})
 
 	// /health is intentionally remote-accessible with no IP filter, no

@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zaparoo Scraper Utility</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0f0f13;
+    color: #e0e0e8;
+    min-height: 100vh;
+    padding: 24px;
+  }
+
+  h1 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: #a78bfa;
+    margin-bottom: 20px;
+    letter-spacing: 0.02em;
+  }
+
+  .card {
+    background: #1a1a24;
+    border: 1px solid #2a2a38;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+
+  .card h2 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #7c7c9a;
+    margin-bottom: 14px;
+  }
+
+  .row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  label {
+    font-size: 0.78rem;
+    color: #9090b0;
+    font-weight: 500;
+  }
+
+  input[type="text"],
+  input[type="number"] {
+    background: #0f0f18;
+    border: 1px solid #30304a;
+    border-radius: 5px;
+    color: #e0e0f0;
+    padding: 7px 10px;
+    font-size: 0.9rem;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  input[type="text"]:focus,
+  input[type="number"]:focus {
+    border-color: #7c5ff0;
+  }
+
+  input[type="text"].wide { width: 220px; }
+  input[type="number"].narrow { width: 90px; }
+  input[type="text"].systems-input { width: 300px; }
+
+  .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 2px;
+  }
+
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #7c5ff0;
+    cursor: pointer;
+  }
+
+  .checkbox-row label {
+    font-size: 0.88rem;
+    color: #c0c0d8;
+    cursor: pointer;
+  }
+
+  button {
+    padding: 8px 18px;
+    border-radius: 5px;
+    border: none;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s, background 0.15s;
+    font-family: inherit;
+  }
+
+  button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .btn-primary {
+    background: #7c5ff0;
+    color: #fff;
+  }
+
+  .btn-primary:hover:not(:disabled) { background: #6b4fe0; }
+
+  .btn-secondary {
+    background: #2a2a3a;
+    color: #c0c0d8;
+    border: 1px solid #40405a;
+  }
+
+  .btn-secondary:hover:not(:disabled) { background: #353548; }
+
+  .btn-danger {
+    background: #c0392b;
+    color: #fff;
+  }
+
+  .btn-danger:hover:not(:disabled) { background: #a93226; }
+
+  .btn-sm {
+    padding: 5px 12px;
+    font-size: 0.8rem;
+  }
+
+  /* Scraper list */
+  #scraper-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .scraper-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: #12121c;
+    border: 1px solid #25253a;
+    border-radius: 6px;
+  }
+
+  .scraper-id {
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    color: #a0a0c8;
+    flex: 1;
+  }
+
+  .scraper-status {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .status-idle {
+    background: #1a2a1a;
+    color: #4caf50;
+    border: 1px solid #2a4a2a;
+  }
+
+  .status-running {
+    background: #2a1a08;
+    color: #ff9800;
+    border: 1px solid #4a3008;
+  }
+
+  /* Progress */
+  #progress-area {
+    display: none;
+  }
+
+  .progress-bar-wrap {
+    background: #0f0f18;
+    border-radius: 4px;
+    height: 8px;
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+
+  .progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #7c5ff0, #a78bfa);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+    width: 0%;
+  }
+
+  .progress-stats {
+    display: flex;
+    gap: 20px;
+    font-size: 0.82rem;
+    color: #8080a0;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .stat-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat-value { font-size: 1.1rem; font-weight: 700; color: #c0c0e0; }
+
+  /* Log */
+  #log {
+    background: #0a0a12;
+    border: 1px solid #1e1e2e;
+    border-radius: 6px;
+    padding: 12px;
+    height: 280px;
+    overflow-y: auto;
+    font-family: 'Courier New', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+  }
+
+  .log-line { margin-bottom: 1px; }
+  .log-info { color: #8080a8; }
+  .log-ok { color: #6adc8a; }
+  .log-warn { color: #e0a050; }
+  .log-err { color: #e05050; }
+  .log-system { color: #7cb0e8; }
+  .log-done { color: #a78bfa; font-weight: bold; }
+
+  #status-banner {
+    font-size: 0.82rem;
+    padding: 6px 12px;
+    border-radius: 5px;
+    margin-bottom: 12px;
+    display: none;
+  }
+
+  .banner-ok { background: #1a2a1a; color: #6adc8a; border: 1px solid #2a4a2a; display: block !important; }
+  .banner-err { background: #2a1a1a; color: #e05050; border: 1px solid #4a2a2a; display: block !important; }
+  .banner-info { background: #1a1a2a; color: #a0a8e0; border: 1px solid #2a2a4a; display: block !important; }
+
+  .controls-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+  }
+
+  #current-system-display {
+    font-size: 0.82rem;
+    color: #7070a0;
+    font-style: italic;
+    align-self: center;
+    flex: 1;
+  }
+
+  .empty-msg {
+    color: #50507a;
+    font-size: 0.85rem;
+    padding: 8px 0;
+  }
+
+</style>
+</head>
+<body>
+
+<h1>Zaparoo Scraper Utility</h1>
+
+<!-- Connection -->
+<div class="card">
+  <h2>Connection</h2>
+  <div class="row">
+    <button class="btn-secondary" onclick="loadScrapers()">Refresh</button>
+    <span id="origin-display" style="font-size:0.82rem;color:#7070a0;align-self:center;font-family:'Courier New',monospace;"></span>
+  </div>
+</div>
+
+<!-- Scrapers -->
+<div class="card">
+  <h2>Scrapers</h2>
+  <div id="scraper-list">
+    <span class="empty-msg">Not connected — click Connect / Refresh</span>
+  </div>
+</div>
+
+<!-- Run options -->
+<div class="card">
+  <h2>Run Options</h2>
+  <div class="row" style="gap:16px; flex-wrap:wrap;">
+    <div class="field">
+      <label for="systems-input">Systems <span style="color:#555">(comma-separated IDs, blank = all)</span></label>
+      <input type="text" id="systems-input" class="systems-input" placeholder="snes, nes, gba …">
+    </div>
+    <div class="field" style="justify-content:flex-end;">
+      <div class="checkbox-row">
+        <input type="checkbox" id="force-check">
+        <label for="force-check">Force re-scrape (ignore sentinel)</label>
+      </div>
+    </div>
+  </div>
+
+  <div id="status-banner"></div>
+
+  <div class="controls-row">
+    <button class="btn-primary" id="run-btn" onclick="runScraper()" disabled>Run gamelist.xml scraper</button>
+    <button class="btn-danger" id="cancel-btn" onclick="cancelScraper()" disabled>Cancel</button>
+    <span id="current-system-display"></span>
+  </div>
+</div>
+
+<!-- Progress -->
+<div class="card" id="progress-area">
+  <h2>Progress</h2>
+  <div class="progress-bar-wrap">
+    <div class="progress-bar-fill" id="progress-fill"></div>
+  </div>
+  <div class="progress-stats">
+    <div class="stat">
+      <span class="stat-label">Processed</span>
+      <span class="stat-value" id="stat-processed">0</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Matched</span>
+      <span class="stat-value" id="stat-matched">0</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Skipped</span>
+      <span class="stat-value" id="stat-skipped">0</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Total</span>
+      <span class="stat-value" id="stat-total">—</span>
+    </div>
+  </div>
+</div>
+
+<!-- Log -->
+<div class="card">
+  <h2>Log <button class="btn-secondary btn-sm" onclick="clearLog()" style="margin-left:8px;">Clear</button></h2>
+  <div id="log"></div>
+</div>
+
+<script>
+const SCRAPER_ID = 'gamelist.xml';
+
+let sseSource = null;
+let isRunning = false;
+
+function baseUrl() {
+  return window.location.origin;
+}
+
+// ── Logging ──────────────────────────────────────────────────────────────────
+
+function log(msg, cls = 'log-info') {
+  const div = document.getElementById('log');
+  const ts = new Date().toLocaleTimeString('en', { hour12: false });
+  const line = document.createElement('div');
+  line.className = `log-line ${cls}`;
+  line.textContent = `[${ts}] ${msg}`;
+  div.appendChild(line);
+  div.scrollTop = div.scrollHeight;
+}
+
+function clearLog() {
+  document.getElementById('log').innerHTML = '';
+}
+
+// ── Banner ────────────────────────────────────────────────────────────────────
+
+function setBanner(msg, type) {
+  const el = document.getElementById('status-banner');
+  el.textContent = msg;
+  el.className = `banner-${type}`;
+}
+
+function hideBanner() {
+  const el = document.getElementById('status-banner');
+  el.className = '';
+  el.style.display = 'none';
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+function updateStats(update) {
+  document.getElementById('stat-processed').textContent = update.processed ?? 0;
+  document.getElementById('stat-matched').textContent   = update.matched   ?? 0;
+  document.getElementById('stat-skipped').textContent   = update.skipped   ?? 0;
+
+  const total = update.total;
+  document.getElementById('stat-total').textContent = total > 0 ? total : '—';
+
+  const processed = update.processed ?? 0;
+  const pct = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
+  document.getElementById('progress-fill').style.width = `${pct}%`;
+}
+
+function resetStats() {
+  updateStats({ processed: 0, matched: 0, skipped: 0, total: 0 });
+}
+
+// ── Scraper list ──────────────────────────────────────────────────────────────
+
+async function loadScrapers() {
+  const listEl = document.getElementById('scraper-list');
+  listEl.innerHTML = '<span class="empty-msg">Loading…</span>';
+  hideBanner();
+
+  try {
+    const res = await fetch(`${baseUrl()}/api/v1/scrapers`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const scrapers = await res.json();
+
+    if (!Array.isArray(scrapers) || scrapers.length === 0) {
+      listEl.innerHTML = '<span class="empty-msg">No scrapers registered.</span>';
+      document.getElementById('run-btn').disabled = true;
+      return;
+    }
+
+    listEl.innerHTML = '';
+    let hasGamelist = false;
+
+    scrapers.forEach(s => {
+      if (s.id === SCRAPER_ID) hasGamelist = true;
+      const item = document.createElement('div');
+      item.className = 'scraper-item';
+      item.id = `scraper-${s.id.replace(/\./g, '-')}`;
+
+      const idEl = document.createElement('span');
+      idEl.className = 'scraper-id';
+      idEl.textContent = s.id;
+
+      const nameEl = document.createElement('span');
+      nameEl.style.cssText = 'font-size:0.85rem;color:#c0c0d8;flex:2;';
+      nameEl.textContent = s.name || '';
+
+      const statusEl = document.createElement('span');
+      statusEl.className = `scraper-status status-${s.status || 'idle'}`;
+      statusEl.textContent = s.status || 'idle';
+
+      item.append(idEl, nameEl, statusEl);
+      listEl.appendChild(item);
+    });
+
+    document.getElementById('run-btn').disabled = !hasGamelist || isRunning;
+    log(`Loaded ${scrapers.length} scraper(s)`, 'log-ok');
+
+  } catch (err) {
+    listEl.innerHTML = '<span class="empty-msg">Failed to connect — is Zaparoo running?</span>';
+    log(`Connect error: ${err.message}`, 'log-err');
+    document.getElementById('run-btn').disabled = true;
+  }
+}
+
+function updateScraperStatus(id, status) {
+  const el = document.getElementById(`scraper-${id.replace(/\./g, '-')}`);
+  if (!el) return;
+  const badge = el.querySelector('.scraper-status');
+  if (!badge) return;
+  badge.textContent = status;
+  badge.className = `scraper-status status-${status}`;
+}
+
+// ── Run ───────────────────────────────────────────────────────────────────────
+
+async function runScraper() {
+  if (isRunning) return;
+
+  hideBanner();
+  clearLog();
+  resetStats();
+
+  const systemsRaw = document.getElementById('systems-input').value.trim();
+  const systems = systemsRaw
+    ? systemsRaw.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+  const force = document.getElementById('force-check').checked;
+
+  const body = { force };
+  if (systems.length > 0) body.systems = systems;
+
+  log(`Starting scraper: ${SCRAPER_ID}`, 'log-info');
+  if (systems.length > 0) log(`Systems: ${systems.join(', ')}`, 'log-info');
+  if (force) log('Force mode: re-processing already-scraped records', 'log-warn');
+
+  try {
+    const res = await fetch(`${baseUrl()}/api/v1/scrapers/${encodeURIComponent(SCRAPER_ID)}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (res.status === 409) {
+      setBanner('A scraper is already running.', 'err');
+      log('Rejected: scraper already running (409)', 'log-err');
+      return;
+    }
+    if (res.status === 404) {
+      setBanner(`Scraper "${SCRAPER_ID}" not found on server.`, 'err');
+      log(`Scraper not found (404)`, 'log-err');
+      return;
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      setBanner(`Run failed: HTTP ${res.status}`, 'err');
+      log(`Run failed: ${res.status} — ${text}`, 'log-err');
+      return;
+    }
+
+    log('Scraper accepted (202) — connecting to status stream…', 'log-ok');
+    setRunning(true);
+    connectSSE();
+
+  } catch (err) {
+    setBanner(`Request failed: ${err.message}`, 'err');
+    log(`Request error: ${err.message}`, 'log-err');
+  }
+}
+
+// ── Cancel ────────────────────────────────────────────────────────────────────
+
+async function cancelScraper() {
+  log('Sending cancel request…', 'log-warn');
+  try {
+    const res = await fetch(`${baseUrl()}/api/v1/scrapers/${encodeURIComponent(SCRAPER_ID)}/cancel`, {
+      method: 'POST',
+    });
+    if (res.ok || res.status === 204) {
+      log('Cancel acknowledged', 'log-warn');
+    } else {
+      log(`Cancel returned HTTP ${res.status}`, 'log-warn');
+    }
+  } catch (err) {
+    log(`Cancel error: ${err.message}`, 'log-err');
+  }
+}
+
+// ── SSE stream ────────────────────────────────────────────────────────────────
+
+function connectSSE() {
+  if (sseSource) {
+    sseSource.close();
+    sseSource = null;
+  }
+
+  document.getElementById('progress-area').style.display = 'block';
+
+  const url = `${baseUrl()}/api/v1/scrapers/${encodeURIComponent(SCRAPER_ID)}/status`;
+  log(`SSE: connecting to ${url}`, 'log-info');
+
+  sseSource = new EventSource(url);
+
+  sseSource.onopen = () => {
+    log('SSE: stream connected', 'log-ok');
+  };
+
+  sseSource.onmessage = (evt) => {
+    let update;
+    try {
+      update = JSON.parse(evt.data);
+    } catch {
+      log(`SSE: unparseable data — ${evt.data}`, 'log-warn');
+      return;
+    }
+
+    handleUpdate(update);
+  };
+
+  // Named event types (if server uses them)
+  sseSource.addEventListener('update', (evt) => {
+    try { handleUpdate(JSON.parse(evt.data)); } catch { /* ignore */ }
+  });
+
+  sseSource.onerror = (evt) => {
+    if (sseSource.readyState === EventSource.CLOSED) {
+      log('SSE: stream closed', 'log-info');
+      // If stream closed without Done=true, server may have already finished
+      if (isRunning) {
+        log('SSE: stream ended — checking final status…', 'log-info');
+        setRunning(false);
+        loadScrapers();
+      }
+    } else {
+      log('SSE: connection error (retrying…)', 'log-warn');
+    }
+  };
+}
+
+function handleUpdate(update) {
+  // System transition
+  if (update.systemId && update.systemId !== document.getElementById('current-system-display').dataset.system) {
+    const sysEl = document.getElementById('current-system-display');
+    sysEl.dataset.system = update.systemId;
+    sysEl.textContent = `System: ${update.systemId}`;
+    log(`System: ${update.systemId}`, 'log-system');
+  }
+
+  // Non-fatal error
+  if (update.err) {
+    log(`  warn: ${update.err}`, 'log-warn');
+  }
+
+  // Stats update
+  updateStats(update);
+
+  // Fatal error
+  if (update.fatalErr) {
+    log(`Fatal error: ${update.fatalErr}`, 'log-err');
+    setBanner(`Scraper failed: ${update.fatalErr}`, 'err');
+    closeScrape(false);
+    return;
+  }
+
+  // Done
+  if (update.done) {
+    const p = update.processed ?? 0;
+    const m = update.matched   ?? 0;
+    const s = update.skipped   ?? 0;
+    log(`Done — processed: ${p}, matched: ${m}, skipped: ${s}`, 'log-done');
+    setBanner(`Scrape complete — ${m} records matched, ${s} skipped`, 'ok');
+    document.getElementById('progress-fill').style.width = '100%';
+    closeScrape(true);
+  }
+}
+
+function closeScrape(success) {
+  if (sseSource) {
+    sseSource.close();
+    sseSource = null;
+  }
+  setRunning(false);
+  document.getElementById('current-system-display').textContent = '';
+  document.getElementById('current-system-display').dataset.system = '';
+  loadScrapers();
+}
+
+// ── UI state ──────────────────────────────────────────────────────────────────
+
+function setRunning(running) {
+  isRunning = running;
+  document.getElementById('run-btn').disabled = running;
+  document.getElementById('cancel-btn').disabled = !running;
+  updateScraperStatus(SCRAPER_ID, running ? 'running' : 'idle');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+document.getElementById('origin-display').textContent = window.location.origin;
+loadScrapers();
+</script>
+</body>
+</html>

@@ -271,10 +271,10 @@ func TestSqlInsertSystemWithPreparedStmt_Success(t *testing.T) {
 //   - One MediaTitle + one Media per system
 //   - MediaTags: NES media → Tag 1 ("Action") + Tag 2 ("RPG"); SNES media → Tag 1 ("Action") only
 //   - MediaTitleTags: NES mario title → Tag 2 ("RPG")
-//   - SupportingMedia: NES mario title → Tag 4 ("Cover")
+//   - MediaTitleProperties: NES mario title → Tag 4 ("Cover") as TypeTagDBID
 //
 // Tag 1 is shared by both systems; Tag 2 is NES-only (via MediaTags and MediaTitleTags);
-// Tag 3 is never referenced; Tag 4 is NES-only (via SupportingMedia).
+// Tag 3 is never referenced; Tag 4 is NES-only (via MediaTitleProperties).
 // Returns the *sql.DB handle from the opened MediaDB so callers can run assertions.
 func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 	t.Helper()
@@ -307,7 +307,7 @@ func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 
 	coverPath := filepath.Join("roms", "nes", "mario.png")
 	_, err = db.ExecContext(ctx,
-		"INSERT INTO SupportingMedia (DBID, MediaTitleDBID, TypeTagDBID, Path, ContentType) VALUES (1, 1, 4, ?, ?)",
+		"INSERT INTO MediaTitleProperties (DBID, MediaTitleDBID, TypeTagDBID, Text, ContentType) VALUES (1, 1, 4, ?, ?)",
 		coverPath, "image/png")
 	require.NoError(t, err)
 
@@ -367,7 +367,7 @@ func TestSqlTruncateSystems_SingleSystem(t *testing.T) {
 	assert.Equal(t, 1, snesCount, "SNES media should remain")
 
 	// Tag 2 ("RPG") was only referenced by NES (MediaTags + MediaTitleTags) → deleted as orphan.
-	// Tag 4 ("Cover") was only in SupportingMedia for NES → deleted as orphan.
+	// Tag 4 ("Cover") was only in MediaTitleProperties for NES → deleted as orphan.
 	// Tag 1 ("Action") is still referenced by SNES media → must survive.
 	// Tag 3 ("Extension") was never referenced → must survive.
 	var tag1, tag2, tag3, tag4 int
@@ -378,7 +378,7 @@ func TestSqlTruncateSystems_SingleSystem(t *testing.T) {
 	assert.Equal(t, 1, tag1, "shared tag (Action) must survive")
 	assert.Equal(t, 0, tag2, "NES-only tag (RPG) should be deleted")
 	assert.Equal(t, 1, tag3, "unreferenced tag (Extension) must survive")
-	assert.Equal(t, 0, tag4, "NES-only SupportingMedia tag (Cover) should be deleted")
+	assert.Equal(t, 0, tag4, "NES-only MediaTitleProperties tag (Cover) should be deleted")
 }
 
 func TestSqlTruncateSystems_NonExistent(t *testing.T) {

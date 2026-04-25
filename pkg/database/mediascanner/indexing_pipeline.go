@@ -501,8 +501,9 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 	if _, exists := ss.TagTypeIDs["unknown"]; !exists {
 		ss.TagTypesIndex++
 		_, err := db.InsertTagType(database.TagType{
-			DBID: int64(ss.TagTypesIndex),
-			Type: "unknown",
+			DBID:        int64(ss.TagTypesIndex),
+			Type:        "unknown",
+			IsExclusive: tags.IsExclusiveType(tags.TagType("unknown")),
 		})
 		if err != nil {
 			ss.TagTypesIndex-- // Rollback index increment on failure
@@ -529,8 +530,9 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 	if _, exists := ss.TagTypeIDs["extension"]; !exists {
 		ss.TagTypesIndex++
 		_, err := db.InsertTagType(database.TagType{
-			DBID: int64(ss.TagTypesIndex),
-			Type: "extension",
+			DBID:        int64(ss.TagTypesIndex),
+			Type:        "extension",
+			IsExclusive: tags.IsExclusiveType(tags.TagTypeExtension),
 		})
 		if err != nil {
 			ss.TagTypesIndex-- // Rollback index increment on failure
@@ -544,8 +546,9 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 		if !exists {
 			ss.TagTypesIndex++
 			_, err := db.InsertTagType(database.TagType{
-				DBID: int64(ss.TagTypesIndex),
-				Type: typeStr,
+				DBID:        int64(ss.TagTypesIndex),
+				Type:        typeStr,
+				IsExclusive: tags.IsExclusiveType(tags.TagType(typeStr)),
 			})
 			if err != nil {
 				ss.TagTypesIndex-- // Rollback index increment on failure

@@ -306,12 +306,20 @@ var secondaryIndexes = []secondaryIndex{
 		ddl:  "CREATE INDEX IF NOT EXISTS mediatitletags_tag_idx ON MediaTitleTags(TagDBID)",
 	},
 	{
-		name: "supportingmedia_mediatitle_idx",
-		ddl:  "CREATE INDEX IF NOT EXISTS supportingmedia_mediatitle_idx ON SupportingMedia(MediaTitleDBID)",
+		name: "mediatitleproperties_mediatitle_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediatitleproperties_mediatitle_idx ON MediaTitleProperties(MediaTitleDBID)",
 	},
 	{
-		name: "supportingmedia_typetag_idx",
-		ddl:  "CREATE INDEX IF NOT EXISTS supportingmedia_typetag_idx ON SupportingMedia(TypeTagDBID)",
+		name: "mediatitleproperties_typetag_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediatitleproperties_typetag_idx ON MediaTitleProperties(TypeTagDBID)",
+	},
+	{
+		name: "mediaproperties_media_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediaproperties_media_idx ON MediaProperties(MediaDBID)",
+	},
+	{
+		name: "mediaproperties_typetag_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediaproperties_typetag_idx ON MediaProperties(TypeTagDBID)",
 	},
 	{
 		name: "idx_systemtagscache_type_tag",
@@ -841,7 +849,7 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 		}
 
 		if db.batchInsertTagType, err = NewBatchInserterWithOptions(db.ctx, tx, "TagTypes",
-			[]string{"DBID", "Type"}, db.batchSize, false); err != nil {
+			[]string{"DBID", "Type", "IsExclusive"}, db.batchSize, false); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for tag types: %w", err)
 		}
@@ -2062,7 +2070,11 @@ func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error)
 
 	// Use batch inserter if available
 	if db.batchInsertTagType != nil {
-		err = db.batchInsertTagType.Add(row.DBID, row.Type)
+		isExclusive := 0
+		if row.IsExclusive {
+			isExclusive = 1
+		}
+		err = db.batchInsertTagType.Add(row.DBID, row.Type, isExclusive)
 		if err != nil {
 			return row, fmt.Errorf("failed to add tag type to batch: %w", err)
 		}

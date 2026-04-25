@@ -33,14 +33,14 @@ import (
 
 const (
 	insertTagSQL     = `INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (?, ?, ?)`
-	insertTagTypeSQL = `INSERT INTO TagTypes (DBID, Type) VALUES (?, ?)`
+	insertTagTypeSQL = `INSERT INTO TagTypes (DBID, Type, IsExclusive) VALUES (?, ?, ?)`
 )
 
 func sqlFindTagType(ctx context.Context, db sqlQueryable, tagType database.TagType) (database.TagType, error) {
 	var row database.TagType
 	stmt, err := db.PrepareContext(ctx, `
 		select
-		DBID, Type
+		DBID, Type, IsExclusive
 		from TagTypes
 		where DBID = ?
 		or Type = ?
@@ -60,6 +60,7 @@ func sqlFindTagType(ctx context.Context, db sqlQueryable, tagType database.TagTy
 	).Scan(
 		&row.DBID,
 		&row.Type,
+		&row.IsExclusive,
 	)
 	if err != nil {
 		return row, fmt.Errorf("failed to scan tag type row: %w", err)
@@ -75,7 +76,12 @@ func sqlInsertTagTypeWithPreparedStmt(
 		dbID = row.DBID
 	}
 
-	res, err := stmt.ExecContext(ctx, dbID, row.Type)
+	isExclusive := 0
+	if row.IsExclusive {
+		isExclusive = 1
+	}
+
+	res, err := stmt.ExecContext(ctx, dbID, row.Type, isExclusive)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute prepared insert tag type statement: %w", err)
 	}
@@ -94,12 +100,7 @@ func sqlInsertTagType(ctx context.Context, db *sql.DB, row database.TagType) (da
 	if row.DBID != 0 {
 		dbID = row.DBID
 	}
-	stmt, err := db.PrepareContext(ctx, `
-		insert into
-		TagTypes
-		(DBID, Type)
-		values (?, ?)
-	`)
+	stmt, err := db.PrepareContext(ctx, insertTagTypeSQL)
 	if err != nil {
 		return row, fmt.Errorf("failed to prepare insert tag type statement: %w", err)
 	}
@@ -108,10 +109,13 @@ func sqlInsertTagType(ctx context.Context, db *sql.DB, row database.TagType) (da
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}()
-	res, err := stmt.ExecContext(ctx,
-		dbID,
-		row.Type,
-	)
+
+	isExclusive := 0
+	if row.IsExclusive {
+		isExclusive = 1
+	}
+
+	res, err := stmt.ExecContext(ctx, dbID, row.Type, isExclusive)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert tag type statement: %w", err)
 	}
@@ -236,7 +240,7 @@ func sqlGetAllTags(ctx context.Context, db *sql.DB) ([]database.Tag, error) {
 }
 
 func sqlGetAllTagTypes(ctx context.Context, db *sql.DB) ([]database.TagType, error) {
-	rows, err := db.QueryContext(ctx, "SELECT DBID, Type FROM TagTypes ORDER BY DBID")
+	rows, err := db.QueryContext(ctx, "SELECT DBID, Type, IsExclusive FROM TagTypes ORDER BY DBID")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tag types: %w", err)
 	}
@@ -249,7 +253,7 @@ func sqlGetAllTagTypes(ctx context.Context, db *sql.DB) ([]database.TagType, err
 	tagTypes := make([]database.TagType, 0)
 	for rows.Next() {
 		var tagType database.TagType
-		if err := rows.Scan(&tagType.DBID, &tagType.Type); err != nil {
+		if err := rows.Scan(&tagType.DBID, &tagType.Type, &tagType.IsExclusive); err != nil {
 			return nil, fmt.Errorf("failed to scan tag type: %w", err)
 		}
 		tagTypes = append(tagTypes, tagType)
