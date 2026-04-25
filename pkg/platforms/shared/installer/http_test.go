@@ -21,6 +21,8 @@ package installer
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +33,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -68,6 +71,44 @@ func TestDownloadHTTPFile_Success(t *testing.T) {
 	// Verify temp file was removed (renamed to final)
 	_, err = os.Stat(tempPath)
 	assert.True(t, os.IsNotExist(err), "temp file should not exist after successful download")
+}
+
+func TestConfigureHTTPTransport_TrustsConfiguredTLSRoots(t *testing.T) {
+	content := []byte("download over custom TLS roots")
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+
+	oldHTTPClient := httpClient
+	t.Cleanup(func() {
+		httpClient = oldHTTPClient
+	})
+
+	tempDir := t.TempDir()
+	certPath := filepath.Join(tempDir, "cacert.pem")
+	require.NoError(t, os.WriteFile(certPath, testCertPEM(t, server.Certificate()), 0o600))
+	t.Setenv("SSL_CERT_FILE", "")
+	usedPath, err := tlsroots.ConfigureDefaults([]string{certPath})
+	require.NoError(t, err)
+	require.Equal(t, certPath, usedPath)
+	ConfigureHTTPTransport()
+
+	tempPath := filepath.Join(tempDir, "game.rom.part")
+	finalPath := filepath.Join(tempDir, "game.rom")
+	err = DownloadHTTPFile(DownloaderArgs{
+		ctx:       context.Background(),
+		url:       server.URL + "/game.rom",
+		tempPath:  tempPath,
+		finalPath: finalPath,
+	})
+
+	require.NoError(t, err)
+	data, err := os.ReadFile(finalPath) //nolint:gosec // Test file path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, content, data)
 }
 
 func TestDownloadHTTPFile_ContextCancellation(t *testing.T) {
@@ -120,6 +161,15 @@ func TestDownloadHTTPFile_ContextCancellation(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "context canceled")
+}
+
+func testCertPEM(t *testing.T, cert *x509.Certificate) []byte {
+	t.Helper()
+
+	return pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert.Raw,
+	})
 }
 
 func TestDownloadHTTPFile_ContextTimeout(t *testing.T) {

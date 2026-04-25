@@ -21,6 +21,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/tlsroots"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/arcadedb"
@@ -30,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
@@ -42,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
 
@@ -142,6 +145,8 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(cfg *config.Instance) error {
+	configureTLSRootFallback()
+
 	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
 		err := os.MkdirAll(misterconfig.MainPickerDir, 0o750)
 		if err != nil {
@@ -185,6 +190,35 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 	}
 
 	return nil
+}
+
+var configureTLSDefaults = tlsroots.ConfigureDefaults
+
+var configureZapLinkHTTPTransport = zapscript.ConfigureHTTPTransport
+
+var configureInstallerHTTPTransport = installer.ConfigureHTTPTransport
+
+func configureTLSRootFallback() {
+	fallbackPaths := []string{
+		misterconfig.UpdateAllDownloaderCACert,
+		misterconfig.SystemCACert,
+	}
+
+	usedPath, err := configureTLSDefaults(fallbackPaths)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to configure MiSTer TLS CA fallback")
+		return
+	}
+
+	configureZapLinkHTTPTransport()
+	configureInstallerHTTPTransport()
+
+	if usedPath == "" {
+		log.Debug().Msg("no MiSTer TLS CA fallback bundle found")
+		return
+	}
+
+	log.Info().Str("path", usedPath).Msg("configured MiSTer TLS CA fallback bundle")
 }
 
 func (p *Platform) StartPost(

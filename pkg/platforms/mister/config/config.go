@@ -4,6 +4,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -39,7 +40,10 @@ const (
 	CoreConfigFolder   = SDRootDir + "/config"
 	MenuConfigFile     = CoreConfigFolder + "/MENU.CFG"
 	DefaultIniFilename = "MiSTer.ini"
+	SystemCACert       = "/etc/ssl/certs/cacert.pem"
 )
+
+var UpdateAllDownloaderCACert = filepath.Join(ScriptsDir, ".config", "downloader", "cacert.pem")
 
 func MainHasFeature(feature string) bool {
 	if _, err := os.Stat(MainFeaturesFile); os.IsNotExist(err) {

@@ -23,6 +23,7 @@ package mister
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,6 +47,60 @@ func (*mockLauncherManager) GetContext() context.Context {
 
 func (*mockLauncherManager) NewContext() context.Context {
 	return context.Background()
+}
+
+func TestConfigureTLSRootFallback_ConfiguresDefaultsAndCustomTransports(t *testing.T) {
+	restoreTLSRootFallbackHooks(t)
+
+	expectedPaths := []string{
+		misterconfig.UpdateAllDownloaderCACert,
+		misterconfig.SystemCACert,
+	}
+	var receivedPaths []string
+	zapLinkConfigured := false
+	installerConfigured := false
+	configureTLSDefaults = func(paths []string) (string, error) {
+		receivedPaths = append([]string(nil), paths...)
+		return misterconfig.UpdateAllDownloaderCACert, nil
+	}
+	configureZapLinkHTTPTransport = func() { zapLinkConfigured = true }
+	configureInstallerHTTPTransport = func() { installerConfigured = true }
+
+	configureTLSRootFallback()
+
+	assert.Equal(t, expectedPaths, receivedPaths)
+	assert.True(t, zapLinkConfigured)
+	assert.True(t, installerConfigured)
+}
+
+func TestConfigureTLSRootFallback_SkipsCustomTransportsOnDefaultError(t *testing.T) {
+	restoreTLSRootFallbackHooks(t)
+
+	zapLinkConfigured := false
+	installerConfigured := false
+	configureTLSDefaults = func(_ []string) (string, error) {
+		return "", errors.New("load roots")
+	}
+	configureZapLinkHTTPTransport = func() { zapLinkConfigured = true }
+	configureInstallerHTTPTransport = func() { installerConfigured = true }
+
+	configureTLSRootFallback()
+
+	assert.False(t, zapLinkConfigured)
+	assert.False(t, installerConfigured)
+}
+
+func restoreTLSRootFallbackHooks(t *testing.T) {
+	t.Helper()
+
+	oldConfigureTLSDefaults := configureTLSDefaults
+	oldConfigureZapLinkHTTPTransport := configureZapLinkHTTPTransport
+	oldConfigureInstallerHTTPTransport := configureInstallerHTTPTransport
+	t.Cleanup(func() {
+		configureTLSDefaults = oldConfigureTLSDefaults
+		configureZapLinkHTTPTransport = oldConfigureZapLinkHTTPTransport
+		configureInstallerHTTPTransport = oldConfigureInstallerHTTPTransport
+	})
 }
 
 func TestStopActiveLauncher_CustomKill(t *testing.T) {
