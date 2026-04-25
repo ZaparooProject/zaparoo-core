@@ -20,9 +20,14 @@
 using System.IO;
 using System.IO.Pipes;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Windows.Input;
+using System.Windows.Threading;
+using System.Xml.Linq;
+using System.Xml.XPath;
 using Unbroken.LaunchBox.Plugins;
 using Unbroken.LaunchBox.Plugins.Data;
 
@@ -35,6 +40,8 @@ namespace ZaparooLaunchBoxPlugin;
 public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMenuItemPlugin
 {
     private const string PipeName = "zaparoo-launchbox-ipc";
+    private const uint WinEventOutOfContext = 0;
+    private const uint EventSystemForeground = 3;
 
     // Static connection state - shared across all plugin instances
     private static NamedPipeClientStream? _pipeClient;
@@ -43,23 +50,61 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     private static CancellationTokenSource? _cancellationTokenSource;
     private static Task? _connectionTask;
     private static readonly object _pipeLock = new();
+    private static readonly object _stateLock = new();
     private static bool _isShuttingDown;
     private static bool _isBigBoxRunning;
-    private static System.Windows.Threading.Dispatcher? _uiDispatcher;
-    private static bool _hasPendingBigBoxRestore;
-    private static bool _shouldRestoreBigBoxView;
-    private static IPlatform? _previousBigBoxPlatform;
-    private static string? _pendingRestoreGameId;
-    private static string? _pendingRestoreAdditionalAppId;
-
-    // Instance-specific state
-    private IGame? _currentGame;
+    private static Dispatcher? _uiDispatcher;
+    private static string _launchBoxRoot = string.Empty;
+    private static IGame? _currentGame;
+    private static IAdditionalApplication? _currentAdditionalApp;
+    private static string? _pendingLaunchGameId;
+    private static string? _pendingLaunchAdditionalAppId;
+    private static bool _pendingLaunchShouldNavigate;
+    private static bool _shouldNavigateBackAfterLaunch;
+    private static bool _shouldShowGameAfterFocusLoss;
+    private static WinEventDelegate? _foregroundDelegate;
+    private static nint _foregroundHook;
 
     public string Name => "Zaparoo LaunchBox Integration";
+
+    private delegate void WinEventDelegate(
+        nint hWinEventHook,
+        uint eventType,
+        nint hwnd,
+        int idObject,
+        int idChild,
+        uint dwEventThread,
+        uint dwmsEventTime
+    );
+
+    [DllImport("user32.dll")]
+    private static extern nint SetWinEventHook(
+        uint eventMin,
+        uint eventMax,
+        nint hmodWinEventProc,
+        WinEventDelegate lpfnWinEventProc,
+        uint idProcess,
+        uint idThread,
+        uint dwFlags
+    );
+
+    [DllImport("user32.dll")]
+    private static extern bool UnhookWinEvent(nint hWinEventHook);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern int GetWindowText(nint hWnd, StringBuilder text, int count);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern void keybd_event(byte bVk, byte bScan, int dwFlags, int dwExtraInfo);
 
     // Constructor - try to connect immediately as fallback
     public ZaparooPlugin()
     {
+        CaptureApplicationContext();
+
         // Try to connect immediately in case system events don't fire
         System.Threading.Tasks.Task.Run(() =>
         {
@@ -75,6 +120,8 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
 
     public void OnEventRaised(string eventType)
     {
+        CaptureApplicationContext();
+
         if (eventType == SystemEventTypes.PluginInitialized)
         {
             _uiDispatcher ??= System.Windows.Application.Current?.Dispatcher;
@@ -91,15 +138,23 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             _uiDispatcher ??= System.Windows.Application.Current?.Dispatcher;
             _isBigBoxRunning = true;
             _isShuttingDown = false;
+            EnsureForegroundHook();
             StartConnectionTask();
+        }
+        else if (eventType == SystemEventTypes.SelectionChanged)
+        {
+            ClearCurrentGameIfSelectionChanged();
+        }
+        else if (eventType == SystemEventTypes.GameExited)
+        {
+            NavigateBackAfterZaparooLaunch();
         }
         else if (eventType == SystemEventTypes.LaunchBoxShutdownBeginning ||
                  eventType == SystemEventTypes.BigBoxShutdownBeginning)
         {
             _isShuttingDown = true;
-            ClearPendingBigBoxRestore();
-            _shouldRestoreBigBoxView = false;
-            _previousBigBoxPlatform = null;
+            ClearPendingLaunchState();
+            StopForegroundHook();
             DisconnectFromPipe();
         }
     }
@@ -110,18 +165,18 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
 
     public void OnBeforeGameLaunching(IGame game, IAdditionalApplication? app, IEmulator? emulator)
     {
-        // Track the game that's about to launch
-        _currentGame = game;
+        lock (_stateLock)
+        {
+            _currentGame = game;
+            _currentAdditionalApp = app;
+            _shouldNavigateBackAfterLaunch = MatchesPendingLaunch(game, app) && _pendingLaunchShouldNavigate;
+            _shouldShowGameAfterFocusLoss = _shouldNavigateBackAfterLaunch;
+            _pendingLaunchGameId = null;
+            _pendingLaunchAdditionalAppId = null;
+            _pendingLaunchShouldNavigate = false;
+        }
 
-        if (MatchesPendingBigBoxRestore(game, app))
-        {
-            _shouldRestoreBigBoxView = true;
-            ClearPendingBigBoxRestore();
-        }
-        else
-        {
-            ClearPendingBigBoxRestore();
-        }
+        Log($"Game launching: {game.Title} ({game.Id})");
     }
 
     public void OnAfterGameLaunched(IGame game, IAdditionalApplication? app, IEmulator? emulator)
@@ -130,28 +185,37 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
         SendEvent(new GameStartedEvent
         {
             Event = "MediaStarted",
-            Id = game.Id,
-            Title = game.Title,
+            Id = app?.Id ?? game.Id,
+            Title = app?.Name ?? game.Title,
             Platform = game.Platform,
-            ApplicationPath = game.ApplicationPath
+            ApplicationPath = app?.ApplicationPath ?? game.ApplicationPath
         });
     }
 
     public void OnGameExited()
     {
-        // Send game exited event to Zaparoo
-        if (_currentGame != null)
+        IGame? game;
+        IAdditionalApplication? app;
+        lock (_stateLock)
+        {
+            game = _currentGame;
+            app = _currentAdditionalApp;
+            _currentGame = null;
+            _currentAdditionalApp = null;
+            _shouldShowGameAfterFocusLoss = false;
+        }
+
+        if (game != null)
         {
             SendEvent(new GameExitedEvent
             {
                 Event = "MediaStopped",
-                Id = _currentGame.Id,
-                Title = _currentGame.Title
+                Id = app?.Id ?? game.Id,
+                Title = app?.Name ?? game.Title
             });
-            _currentGame = null;
         }
 
-        RestoreBigBoxView();
+        NavigateBackAfterZaparooLaunch();
     }
 
     #endregion
@@ -203,6 +267,70 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     public void OnSelected(IGame[] games)
     {
         // Not used since SupportsMultipleGames is false
+    }
+
+    #endregion
+
+    #region LaunchBox Context and Logging
+
+    private static void CaptureApplicationContext()
+    {
+        _uiDispatcher ??= System.Windows.Application.Current?.Dispatcher;
+
+        if (!string.IsNullOrEmpty(_launchBoxRoot))
+        {
+            return;
+        }
+
+        try
+        {
+            string? root = Path.GetDirectoryName(System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName);
+            if (string.IsNullOrEmpty(root))
+            {
+                root = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            }
+
+            if (!string.IsNullOrEmpty(root) &&
+                (root.EndsWith($"{Path.DirectorySeparatorChar}core", StringComparison.OrdinalIgnoreCase) ||
+                 root.EndsWith($"{Path.AltDirectorySeparatorChar}core", StringComparison.OrdinalIgnoreCase)))
+            {
+                root = Directory.GetParent(root)?.FullName;
+            }
+
+            _launchBoxRoot = root ?? string.Empty;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Failed to capture LaunchBox root: {ex.Message}");
+        }
+    }
+
+    private static void Log(string message)
+    {
+        try
+        {
+            CaptureApplicationContext();
+            string root = _launchBoxRoot;
+            if (string.IsNullOrEmpty(root))
+            {
+                root = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty;
+            }
+
+            if (string.IsNullOrEmpty(root))
+            {
+                System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: {message}");
+                return;
+            }
+
+            string logDir = Path.Combine(root, "Logs");
+            Directory.CreateDirectory(logDir);
+            string logPath = Path.Combine(logDir, "ZaparooLaunchBoxPlugin.txt");
+            File.AppendAllText(logPath, $"[{DateTime.Now}] {message}{Environment.NewLine}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: {message} (log failed: {ex.Message})");
+        }
     }
 
     #endregion
@@ -434,41 +562,77 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
                 return;
             }
 
-            switch (command.Command)
+            string commandName = command.Command ?? string.Empty;
+            switch (commandName.ToLowerInvariant())
             {
-                case "Launch":
+                case "launch":
                     if (!string.IsNullOrEmpty(command.Id))
                     {
                         LaunchGameById(command.Id);
                     }
                     break;
 
-                case "GetPlatforms":
+                case "showplatforms":
+                    ShowPlatforms();
+                    break;
+
+                case "showallgames":
+                    ShowAllGames();
+                    break;
+
+                case "showplatform":
+                    if (!string.IsNullOrEmpty(command.Platform))
+                    {
+                        ShowPlatform(command.Platform);
+                    }
+                    break;
+
+                case "showplaylist":
+                    if (!string.IsNullOrEmpty(command.Playlist))
+                    {
+                        ShowPlaylist(command.Playlist);
+                    }
+                    break;
+
+                case "search":
+                    if (!string.IsNullOrEmpty(command.Query))
+                    {
+                        Search(command.Query);
+                    }
+                    break;
+
+                case "openmanual":
+                    OpenManual(command.Id);
+                    break;
+
+                case "getplatforms":
                     SendPlatformsList();
                     break;
 
-                case "GetGames":
+                case "getgames":
                     SendGamesList();
                     break;
 
-                case "GetGamesForPlatform":
+                case "getgamesforplatform":
                     if (!string.IsNullOrEmpty(command.Platform))
                     {
                         SendGamesForPlatform(command.Platform);
                     }
                     break;
 
-                case "Ping":
+                case "ping":
                     // Heartbeat to keep connection alive - no action needed
                     break;
 
                 default:
+                    SendCommandError(commandName, "Unknown command");
                     break;
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Ignore command errors
+            Log($"Command failed: {ex.Message}");
+            SendCommandError("Command", ex.Message);
         }
     }
 
@@ -476,27 +640,18 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
     {
         try
         {
+            if (IsGameRunning())
+            {
+                Log($"Ignoring launch for {gameId}: a game is already running");
+                SendCommandError("Launch", "A game is already running");
+                return;
+            }
+
             // First try to find as a regular game
             var game = PluginHelper.DataManager.GetGameById(gameId);
             if (game != null)
             {
-                InvokeOnUiThread(() =>
-                {
-                    if (_isBigBoxRunning)
-                    {
-                        CaptureBigBoxLaunchContext(game.Id, null);
-
-                        // ShowGame navigates BigBox UI to the game, which fires
-                        // LEDBlinky Event 9 (game selection). Without this, LEDBlinky
-                        // shows controls for whichever game was highlighted in the menu.
-                        PluginHelper.BigBoxMainViewModel?.ShowGame(game, FilterType.None);
-                        PluginHelper.BigBoxMainViewModel?.PlayGame(game, null, null, null);
-                    }
-                    else
-                    {
-                        PluginHelper.LaunchBoxMainViewModel?.PlayGame(game, null, null, null);
-                    }
-                });
+                LaunchGame(game, null);
                 return;
             }
 
@@ -504,102 +659,355 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             var (parentGame, additionalApp) = FindAdditionalApplicationById(gameId);
             if (additionalApp != null && parentGame != null)
             {
-                InvokeOnUiThread(() =>
-                {
-                    if (_isBigBoxRunning)
-                    {
-                        CaptureBigBoxLaunchContext(parentGame.Id, additionalApp.Id);
-                        PluginHelper.BigBoxMainViewModel?.ShowGame(parentGame, FilterType.None);
-                        PluginHelper.BigBoxMainViewModel?.PlayGame(parentGame, additionalApp, null, null);
-                    }
-                    else
-                    {
-                        PluginHelper.LaunchBoxMainViewModel?.PlayGame(parentGame, additionalApp, null, null);
-                    }
-                });
+                LaunchGame(parentGame, additionalApp);
                 return;
             }
 
-            System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Game or additional app not found: {gameId}");
+            Log($"Game or additional app not found: {gameId}");
+            SendCommandError("Launch", $"Game or additional app not found: {gameId}");
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Failed to launch game {gameId}: {ex.Message}");
+            Log($"Failed to launch game {gameId}: {ex.Message}");
+            SendCommandError("Launch", ex.Message);
         }
     }
 
-    private static void InvokeOnUiThread(Action action)
+    private void LaunchGame(IGame game, IAdditionalApplication? app)
     {
-        _uiDispatcher ??= System.Windows.Application.Current?.Dispatcher;
-
-        var dispatcher = _uiDispatcher;
-        if (dispatcher != null && !dispatcher.CheckAccess())
+        InvokeOnUiThread(() =>
         {
-            dispatcher.Invoke(action);
+            if (_isBigBoxRunning || PluginHelper.StateManager?.IsBigBox == true)
+            {
+                EnsureForegroundHook();
+                BeginPendingLaunch(game, app, navigateAfterLaunch: true);
+
+                try
+                {
+                    Log($"Launching BigBox game: {game.Title} ({game.Id})");
+                    PluginHelper.BigBoxMainViewModel.PlayGame(game, app, null, null);
+                }
+                catch
+                {
+                    ClearPendingLaunch(game, app);
+                    throw;
+                }
+                return;
+            }
+
+            BeginPendingLaunch(game, app, navigateAfterLaunch: false);
+            try
+            {
+                Log($"Launching LaunchBox game: {game.Title} ({game.Id})");
+                PluginHelper.LaunchBoxMainViewModel.PlayGame(game, app, null, null);
+            }
+            catch
+            {
+                ClearPendingLaunch(game, app);
+                throw;
+            }
+        }, "Launch game");
+    }
+
+    private static void InvokeOnUiThread(Action action, string description)
+    {
+        CaptureApplicationContext();
+        Dispatcher? dispatcher = _uiDispatcher ?? System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null)
+        {
+            Log($"Cannot run UI action without dispatcher: {description}");
+            return;
         }
-        else
+
+        if (dispatcher.CheckAccess())
         {
             action();
+            return;
         }
+
+        dispatcher.Invoke(action);
     }
 
-    private static void CaptureBigBoxLaunchContext(string gameId, string? additionalAppId)
+    private static bool IsGameRunning()
     {
-        _previousBigBoxPlatform = PluginHelper.StateManager?.GetSelectedPlatform();
-        _pendingRestoreGameId = gameId;
-        _pendingRestoreAdditionalAppId = additionalAppId;
-        _hasPendingBigBoxRestore = true;
-        _shouldRestoreBigBoxView = false;
-    }
-
-    private static bool MatchesPendingBigBoxRestore(IGame game, IAdditionalApplication? app)
-    {
-        if (!_hasPendingBigBoxRestore || _pendingRestoreGameId != game.Id)
+        lock (_stateLock)
         {
-            return false;
+            return _currentGame != null || _pendingLaunchGameId != null;
+        }
+    }
+
+    private static bool MatchesPendingLaunch(IGame game, IAdditionalApplication? app)
+    {
+        return _pendingLaunchGameId == game.Id && _pendingLaunchAdditionalAppId == app?.Id;
+    }
+
+    private static void ClearPendingLaunchState()
+    {
+        lock (_stateLock)
+        {
+            _pendingLaunchGameId = null;
+            _pendingLaunchAdditionalAppId = null;
+            _pendingLaunchShouldNavigate = false;
+            _shouldNavigateBackAfterLaunch = false;
+            _shouldShowGameAfterFocusLoss = false;
+            _currentGame = null;
+            _currentAdditionalApp = null;
+        }
+    }
+
+    private static void BeginPendingLaunch(IGame game, IAdditionalApplication? app, bool navigateAfterLaunch)
+    {
+        lock (_stateLock)
+        {
+            _pendingLaunchGameId = game.Id;
+            _pendingLaunchAdditionalAppId = app?.Id;
+            _pendingLaunchShouldNavigate = navigateAfterLaunch;
+            _shouldNavigateBackAfterLaunch = false;
+            _shouldShowGameAfterFocusLoss = false;
         }
 
-        return _pendingRestoreAdditionalAppId == app?.Id;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(30));
+            lock (_stateLock)
+            {
+                if (_pendingLaunchGameId == game.Id && _pendingLaunchAdditionalAppId == app?.Id)
+                {
+                    Log($"Clearing stale pending launch: {game.Title} ({game.Id})");
+                    _pendingLaunchGameId = null;
+                    _pendingLaunchAdditionalAppId = null;
+                    _pendingLaunchShouldNavigate = false;
+                    _shouldNavigateBackAfterLaunch = false;
+                    _shouldShowGameAfterFocusLoss = false;
+                }
+            }
+        });
     }
 
-    private static void ClearPendingBigBoxRestore()
+    private static void ClearPendingLaunch(IGame game, IAdditionalApplication? app)
     {
-        _hasPendingBigBoxRestore = false;
-        _pendingRestoreGameId = null;
-        _pendingRestoreAdditionalAppId = null;
+        lock (_stateLock)
+        {
+            if (_pendingLaunchGameId == game.Id && _pendingLaunchAdditionalAppId == app?.Id)
+            {
+                _pendingLaunchGameId = null;
+                _pendingLaunchAdditionalAppId = null;
+                _pendingLaunchShouldNavigate = false;
+                _shouldNavigateBackAfterLaunch = false;
+                _shouldShowGameAfterFocusLoss = false;
+            }
+        }
     }
 
-    private static void RestoreBigBoxView()
+    private static void ClearCurrentGameIfSelectionChanged()
     {
-        if (!_shouldRestoreBigBoxView || !_isBigBoxRunning)
+        // CLI Launcher uses selection changes to repair stale in-game state, but Zaparoo relies on
+        // OnGameExited to emit MediaStopped and to keep duplicate launches blocked while a game runs.
+        // Leave running state intact here; stale pending launches are handled by their timeout.
+    }
+
+    private static void EnsureForegroundHook()
+    {
+        lock (_stateLock)
+        {
+            if (_foregroundHook != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                _foregroundDelegate = OnForegroundChanged;
+                _foregroundHook = SetWinEventHook(
+                    EventSystemForeground,
+                    EventSystemForeground,
+                    0,
+                    _foregroundDelegate,
+                    0,
+                    0,
+                    WinEventOutOfContext
+                );
+
+                if (_foregroundHook == 0)
+                {
+                    _foregroundDelegate = null;
+                    Log("Failed to install foreground hook");
+                }
+            }
+            catch (Exception ex)
+            {
+                _foregroundDelegate = null;
+                _foregroundHook = 0;
+                Log($"Failed to install foreground hook: {ex.Message}");
+            }
+        }
+    }
+
+    private static void StopForegroundHook()
+    {
+        lock (_stateLock)
+        {
+            try
+            {
+                if (_foregroundHook != 0)
+                {
+                    UnhookWinEvent(_foregroundHook);
+                    _foregroundHook = 0;
+                }
+
+                _foregroundDelegate = null;
+            }
+            catch (Exception ex)
+            {
+                Log($"Failed to remove foreground hook: {ex.Message}");
+            }
+        }
+    }
+
+    private static void OnForegroundChanged(
+        nint hWinEventHook,
+        uint eventType,
+        nint hwnd,
+        int idObject,
+        int idChild,
+        uint dwEventThread,
+        uint dwmsEventTime
+    )
+    {
+        if (IsLaunchBoxOrBigBoxActiveWindow())
+        {
+            return;
+        }
+
+        IGame? gameToShow = null;
+        lock (_stateLock)
+        {
+            if (_shouldShowGameAfterFocusLoss && _currentGame != null)
+            {
+                _shouldShowGameAfterFocusLoss = false;
+                gameToShow = _currentGame;
+            }
+        }
+
+        if (gameToShow == null)
         {
             return;
         }
 
         InvokeOnUiThread(() =>
         {
-            try
+            Log($"Showing launched game after focus loss: {gameToShow.Title}");
+            PluginHelper.BigBoxMainViewModel.ShowGame(gameToShow, FilterType.Local);
+        }, "Show launched BigBox game");
+    }
+
+    private static bool IsLaunchBoxOrBigBoxActiveWindow()
+    {
+        try
+        {
+            string title = GetActiveWindowTitle();
+            return title.Equals("launchbox", StringComparison.OrdinalIgnoreCase) ||
+                   title.Equals("launchbox big box", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string GetActiveWindowTitle()
+    {
+        nint window = GetForegroundWindow();
+        if (window == 0)
+        {
+            return string.Empty;
+        }
+
+        var title = new StringBuilder(256);
+        return GetWindowText(window, title, title.Capacity) > 0 ? title.ToString() : string.Empty;
+    }
+
+    private static void NavigateBackAfterZaparooLaunch()
+    {
+        bool shouldNavigate;
+        lock (_stateLock)
+        {
+            shouldNavigate = _shouldNavigateBackAfterLaunch;
+            _shouldNavigateBackAfterLaunch = false;
+            _shouldShowGameAfterFocusLoss = false;
+        }
+
+        if (!shouldNavigate || !IsBigBox())
+        {
+            return;
+        }
+
+        InvokeOnUiThread(() =>
+        {
+            if (!SendBigBoxBackKey())
             {
-                if (_previousBigBoxPlatform != null)
-                {
-                    PluginHelper.BigBoxMainViewModel?.ShowGames(_previousBigBoxPlatform);
-                }
-                else
-                {
-                    PluginHelper.BigBoxMainViewModel?.ShowPlatforms();
-                }
+                Log("Falling back to ShowAllGames after BigBox Back was unavailable");
+                PluginHelper.BigBoxMainViewModel.ShowAllGames();
             }
-            catch (Exception ex)
+        }, "Navigate back after BigBox launch");
+    }
+
+    private static bool SendBigBoxBackKey()
+    {
+        string? setting = ReadBigBoxSetting("KeyboardBack");
+        if (string.IsNullOrWhiteSpace(setting) || setting == "0")
+        {
+            return false;
+        }
+
+        if (!int.TryParse(setting, out int keyValue))
+        {
+            Log($"Invalid KeyboardBack setting: {setting}");
+            return false;
+        }
+
+        byte virtualKey = (byte)KeyInterop.VirtualKeyFromKey((Key)keyValue);
+        if (virtualKey == 0)
+        {
+            return false;
+        }
+
+        if (!IsLaunchBoxOrBigBoxActiveWindow())
+        {
+            Log("Skipping BigBox Back key because BigBox is not foreground");
+            return false;
+        }
+
+        Log($"Navigating BigBox back with virtual key: {virtualKey}");
+        keybd_event(virtualKey, 0, 0, 0);
+        keybd_event(virtualKey, 0, 2, 0);
+        return true;
+    }
+
+    private static string? ReadBigBoxSetting(string name)
+    {
+        try
+        {
+            CaptureApplicationContext();
+            if (string.IsNullOrEmpty(_launchBoxRoot))
             {
-                System.Diagnostics.Debug.WriteLine($"Zaparoo plugin: Failed to restore BigBox view: {ex.Message}");
+                return null;
             }
-            finally
+
+            string path = Path.Combine(_launchBoxRoot, "Data", "BigBoxSettings.xml");
+            if (!File.Exists(path))
             {
-                ClearPendingBigBoxRestore();
-                _previousBigBoxPlatform = null;
-                _shouldRestoreBigBoxView = false;
+                return null;
             }
-        });
+
+            XDocument doc = XDocument.Load(path);
+            return doc.XPathSelectElement($"/LaunchBox/BigBoxSettings/{name}")?.Value;
+        }
+        catch (Exception ex)
+        {
+            Log($"Failed to read BigBox setting {name}: {ex.Message}");
+            return null;
+        }
     }
 
     private (IGame?, IAdditionalApplication?) FindAdditionalApplicationById(string id)
@@ -615,6 +1023,164 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
             }
         }
         return (null, null);
+    }
+
+    private void ShowPlatforms()
+    {
+        InvokeOnUiThread(() =>
+        {
+            if (!IsBigBox())
+            {
+                SendCommandError("ShowPlatforms", "Platform navigation only works in BigBox");
+                return;
+            }
+
+            if (IsGameRunning())
+            {
+                SendCommandError("ShowPlatforms", "A game is already running");
+                return;
+            }
+
+            PluginHelper.BigBoxMainViewModel.ShowPlatforms();
+        }, "Show BigBox platforms");
+    }
+
+    private void ShowAllGames()
+    {
+        InvokeOnUiThread(() =>
+        {
+            if (!IsBigBox())
+            {
+                SendCommandError("ShowAllGames", "All Games navigation only works in BigBox");
+                return;
+            }
+
+            if (IsGameRunning())
+            {
+                SendCommandError("ShowAllGames", "A game is already running");
+                return;
+            }
+
+            PluginHelper.BigBoxMainViewModel.ShowAllGames();
+        }, "Show BigBox all games");
+    }
+
+    private void ShowPlatform(string platformName)
+    {
+        InvokeOnUiThread(() =>
+        {
+            if (!IsBigBox())
+            {
+                SendCommandError("ShowPlatform", "Platform navigation only works in BigBox");
+                return;
+            }
+
+            if (IsGameRunning())
+            {
+                SendCommandError("ShowPlatform", "A game is already running");
+                return;
+            }
+
+            IPlatform? platform = PluginHelper.DataManager.GetPlatformByName(platformName);
+            if (platform == null)
+            {
+                SendCommandError("ShowPlatform", $"Platform not found: {platformName}");
+                return;
+            }
+
+            PluginHelper.BigBoxMainViewModel.ShowGames(platform);
+        }, "Show BigBox platform");
+    }
+
+    private void ShowPlaylist(string playlistName)
+    {
+        InvokeOnUiThread(() =>
+        {
+            if (!IsBigBox())
+            {
+                SendCommandError("ShowPlaylist", "Playlist navigation only works in BigBox");
+                return;
+            }
+
+            if (IsGameRunning())
+            {
+                SendCommandError("ShowPlaylist", "A game is already running");
+                return;
+            }
+
+            IPlaylist? playlist = PluginHelper.DataManager.GetAllPlaylists()
+                .FirstOrDefault(p => p.Name.Equals(playlistName, StringComparison.OrdinalIgnoreCase));
+            if (playlist == null)
+            {
+                SendCommandError("ShowPlaylist", $"Playlist not found: {playlistName}");
+                return;
+            }
+
+            PluginHelper.BigBoxMainViewModel.ShowGames(FilterType.PlatformOrCategoryOrPlaylist, playlist.Name);
+        }, "Show BigBox playlist");
+    }
+
+    private void Search(string query)
+    {
+        InvokeOnUiThread(() =>
+        {
+            if (!IsBigBox())
+            {
+                SendCommandError("Search", "Search command only works in BigBox");
+                return;
+            }
+
+            if (IsGameRunning())
+            {
+                SendCommandError("Search", "A game is already running");
+                return;
+            }
+
+            PluginHelper.BigBoxMainViewModel.Search(query);
+        }, "Search BigBox");
+    }
+
+    private void OpenManual(string? gameId)
+    {
+        InvokeOnUiThread(() =>
+        {
+            IGame? game = null;
+            if (!string.IsNullOrEmpty(gameId))
+            {
+                game = PluginHelper.DataManager.GetGameById(gameId);
+            }
+
+            if (game == null)
+            {
+                lock (_stateLock)
+                {
+                    game = _currentGame;
+                }
+            }
+
+            if (game == null)
+            {
+                IGame[]? selectedGames = PluginHelper.StateManager?.GetAllSelectedGames();
+                game = selectedGames is { Length: > 0 } ? selectedGames[0] : null;
+            }
+
+            if (game == null)
+            {
+                SendCommandError("OpenManual", "No game is selected or running");
+                return;
+            }
+
+            string? result = game.OpenManual();
+            if (!string.IsNullOrEmpty(result))
+            {
+                Log($"OpenManual result for {game.Title}: {result}");
+            }
+        }, "Open manual");
+    }
+
+    private static bool IsBigBox()
+    {
+        return _isBigBoxRunning || PluginHelper.StateManager?.IsBigBox == true;
     }
 
     private void SendPlatformsList()
@@ -727,6 +1293,16 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
         }
     }
 
+    private void SendCommandError(string command, string message)
+    {
+        Log($"{command} error: {message}");
+        SendEvent(new ErrorEvent
+        {
+            Command = command,
+            Error = message
+        });
+    }
+
     #endregion
 
     #region Message Types
@@ -760,6 +1336,15 @@ public class ZaparooPlugin : ISystemEventsPlugin, IGameLaunchingPlugin, IGameMen
         public string? Command { get; set; }
         public string? Id { get; set; }
         public string? Platform { get; set; }
+        public string? Playlist { get; set; }
+        public string? Query { get; set; }
+    }
+
+    private class ErrorEvent
+    {
+        public string Event { get; set; } = "Error";
+        public string Command { get; set; } = string.Empty;
+        public string Error { get; set; } = string.Empty;
     }
 
     private class PlatformInfo
