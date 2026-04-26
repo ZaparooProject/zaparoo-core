@@ -79,6 +79,14 @@ func TestIDs(t *testing.T) {
 	assert.Equal(t, expectedIDs, ids)
 }
 
+func TestIsExpectedDetectionMiss(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, isExpectedDetectionMiss(detection.ErrNoDevicesFound))
+	assert.True(t, isExpectedDetectionMiss(detection.ErrDetectionTimeout))
+	assert.False(t, isExpectedDetectionMiss(errors.New("serial permission denied")))
+}
+
 func TestCapabilities(t *testing.T) {
 	t.Parallel()
 

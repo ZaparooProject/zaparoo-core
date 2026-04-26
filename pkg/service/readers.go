@@ -128,9 +128,7 @@ func connectReaders(
 					DefaultAutoDetect: metadata.DefaultAutoDetect,
 				}
 
-				// For user-defined connect entries, driver is implicitly enabled
-				// unless explicitly disabled in config.
-				if !cfg.IsDriverEnabledForConnect(driver) {
+				if !cfg.IsReaderEnabled(driver, config.ReaderEnableContextManualConnect) {
 					if closeErr := r.Close(); closeErr != nil {
 						log.Debug().Err(closeErr).Msg("error closing unused reader")
 					}

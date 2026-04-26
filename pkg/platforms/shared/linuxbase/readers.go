@@ -57,7 +57,12 @@ func SupportedReaders(cfg *config.Instance, p platforms.Platform) []readers.Read
 	var enabled []readers.Reader
 	for _, r := range allReaders {
 		metadata := r.Metadata()
-		if cfg.IsDriverEnabled(metadata.ID, metadata.DefaultEnabled) {
+		driver := config.DriverInfo{
+			ID:                metadata.ID,
+			DefaultEnabled:    metadata.DefaultEnabled,
+			DefaultAutoDetect: metadata.DefaultAutoDetect,
+		}
+		if cfg.IsReaderEnabled(driver, config.ReaderEnableContextCandidate) {
 			enabled = append(enabled, r)
 		}
 	}

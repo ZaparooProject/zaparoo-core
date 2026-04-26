@@ -597,7 +597,7 @@ func (*Reader) Detect(connected []string) string {
 	defer cancel()
 	devices, err := detection.DetectAll(ctx, &opts)
 	if err != nil {
-		if errors.Is(err, detection.ErrNoDevicesFound) {
+		if isExpectedDetectionMiss(err) {
 			log.Trace().Msg("no PN532 devices found during detection")
 		} else {
 			log.Warn().Err(err).Msg("PN532 detection returned unexpected error")
@@ -678,6 +678,10 @@ func (*Reader) Detect(connected []string) string {
 	// All detected devices are already in use
 	log.Trace().Msg("pn532: all detected devices are already connected")
 	return ""
+}
+
+func isExpectedDetectionMiss(err error) bool {
+	return errors.Is(err, detection.ErrNoDevicesFound) || errors.Is(err, detection.ErrDetectionTimeout)
 }
 
 func (r *Reader) Path() string {

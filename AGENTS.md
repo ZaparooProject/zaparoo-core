@@ -19,6 +19,7 @@ For architecture details, API reference, and key concepts: [docs/ARCHITECTURE.md
 - Keep diffs small and focused — one concern per change
 - Use file-scoped commands for faster feedback over full-suite runs
 - Reference existing patterns before writing new code
+- Define Go types and consts near the top of the file, before functions and methods
 - Use `filepath.Join` for path construction everywhere, including test files — never hardcode POSIX-style paths like `"/roms/snes/game.sfc"` as string literals
 - Use afero for filesystem operations in testable code
 - NEVER use `sync.Mutex`/`sync.RWMutex` — use `syncutil.Mutex`/`syncutil.RWMutex` (forbidigo linter enforces this)
