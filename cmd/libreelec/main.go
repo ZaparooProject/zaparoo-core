@@ -69,6 +69,7 @@ func run() error {
 	cfg := cli.Setup(pl, config.BaseDefaults, nil)
 
 	svc, err := daemon.NewService(daemon.ServiceArgs{
+		Config: cfg,
 		Entry: func() (*service.StartResult, error) {
 			return service.Start(pl, cfg)
 		},
