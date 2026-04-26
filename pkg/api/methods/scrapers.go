@@ -27,10 +27,10 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 )
@@ -41,7 +41,7 @@ import (
 type updateFanout struct {
 	subs map[int]chan scraper.ScrapeUpdate
 	next int
-	mu   sync.Mutex
+	mu   syncutil.Mutex
 	done bool
 }
 
@@ -51,15 +51,15 @@ func newUpdateFanout() *updateFanout {
 
 // subscribe returns a buffered channel that receives updates.
 // If the fanout is already done the returned channel is closed immediately.
-func (f *updateFanout) subscribe(buf int) (chan scraper.ScrapeUpdate, int) {
+func (f *updateFanout) subscribe(buf int) (ch chan scraper.ScrapeUpdate, id int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	ch := make(chan scraper.ScrapeUpdate, buf)
+	ch = make(chan scraper.ScrapeUpdate, buf)
 	if f.done {
 		close(ch)
 		return ch, -1
 	}
-	id := f.next
+	id = f.next
 	f.next++
 	f.subs[id] = ch
 	return ch, id
@@ -78,12 +78,12 @@ func (f *updateFanout) unsubscribe(id int) {
 
 // broadcast sends u to all live subscribers, dropping events on full channels.
 // If u.Done is true all subscriber channels are closed afterwards.
-func (f *updateFanout) broadcast(u scraper.ScrapeUpdate) {
+func (f *updateFanout) broadcast(u *scraper.ScrapeUpdate) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, ch := range f.subs {
 		select {
-		case ch <- u:
+		case ch <- *u:
 		default:
 			log.Warn().Msg("scraper SSE subscriber channel full, dropping update")
 		}
@@ -101,14 +101,15 @@ func (f *updateFanout) broadcast(u scraper.ScrapeUpdate) {
 // Blocks until src is closed; always ensures a final Done event is sent.
 func (f *updateFanout) run(src <-chan scraper.ScrapeUpdate) {
 	for u := range src {
-		f.broadcast(u)
+		f.broadcast(&u)
 	}
 	// Guard against a channel close without a terminal Done event.
 	f.mu.Lock()
 	already := f.done
 	f.mu.Unlock()
 	if !already {
-		f.broadcast(scraper.ScrapeUpdate{Done: true})
+		done := scraper.ScrapeUpdate{Done: true}
+		f.broadcast(&done)
 	}
 }
 
@@ -143,7 +144,7 @@ type ScraperRegistry struct {
 	cancel   context.CancelFunc
 	fanout   *updateFanout
 	running  string
-	mu       sync.Mutex
+	mu       syncutil.Mutex
 }
 
 // NewScraperRegistry creates an empty registry.
@@ -276,7 +277,8 @@ func (reg *ScraperRegistry) HandleScraperStatus() http.HandlerFunc {
 
 		// Not running: send an immediate done event and close.
 		if subCh == nil {
-			writeScrapeSSE(w, scraper.ScrapeUpdate{Done: true})
+			done := scraper.ScrapeUpdate{Done: true}
+			writeScrapeSSE(w, &done)
 			flusher.Flush()
 			return
 		}
@@ -290,7 +292,7 @@ func (reg *ScraperRegistry) HandleScraperStatus() http.HandlerFunc {
 				if !more {
 					return
 				}
-				writeScrapeSSE(w, u)
+				writeScrapeSSE(w, &u)
 				flusher.Flush()
 				if u.Done {
 					return
@@ -417,7 +419,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
-func writeScrapeSSE(w http.ResponseWriter, u scraper.ScrapeUpdate) {
+func writeScrapeSSE(w http.ResponseWriter, u *scraper.ScrapeUpdate) {
 	type ssePayload struct {
 		SystemID  string `json:"systemId"`
 		Err       string `json:"err,omitempty"`

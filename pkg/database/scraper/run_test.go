@@ -40,7 +40,7 @@ type stubRecord struct {
 
 type stubLoop struct {
 	matchFn func(r stubRecord) (*scraper.MatchResult, error)
-	mapFn   func(r stubRecord) ([]database.TagInfo, []database.TagInfo, []database.MediaProperty, []database.MediaProperty)
+	mapFn   func(r stubRecord) scraper.MapResult
 	id      string
 	records []stubRecord
 }
@@ -58,11 +58,11 @@ func (s *stubLoop) Match(_ context.Context, r stubRecord, _ scraper.ScrapeSystem
 	return &scraper.MatchResult{MediaDBID: 1, MediaTitleDBID: 1}, nil
 }
 
-func (s *stubLoop) MapToDB(r stubRecord) ([]database.TagInfo, []database.TagInfo, []database.MediaProperty, []database.MediaProperty) {
+func (s *stubLoop) MapToDB(r stubRecord) scraper.MapResult {
 	if s.mapFn != nil {
 		return s.mapFn(r)
 	}
-	return nil, nil, nil, nil
+	return scraper.MapResult{}
 }
 
 // drainUpdates collects all updates from the channel and returns them.
@@ -80,13 +80,14 @@ func TestRunScraper_NoRecords(t *testing.T) {
 	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
 	loop := &stubLoop{id: "test", records: nil}
 
-	ch := scraper.RunScraper(context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{system}, db, loop)
+	ch := scraper.RunScraper(
+		context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{system}, db, loop)
 	updates := drainUpdates(ch)
 
 	require.NotEmpty(t, updates)
 	last := updates[len(updates)-1]
 	assert.True(t, last.Done)
-	assert.NoError(t, last.FatalErr)
+	require.NoError(t, last.FatalErr)
 	db.AssertExpectations(t)
 }
 
@@ -97,15 +98,18 @@ func TestRunScraper_NoMatch_IsSkipped(t *testing.T) {
 	loop := &stubLoop{
 		id:      "test",
 		records: []stubRecord{{id: "mario"}},
-		matchFn: func(_ stubRecord) (*scraper.MatchResult, error) { return nil, nil },
+		matchFn: func(_ stubRecord) (*scraper.MatchResult, error) {
+			return nil, nil //nolint:nilnil
+		},
 	}
 
-	ch := scraper.RunScraper(context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{system}, db, loop)
+	ch := scraper.RunScraper(
+		context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{system}, db, loop)
 	updates := drainUpdates(ch)
 
 	last := updates[len(updates)-1]
 	assert.True(t, last.Done)
-	assert.NoError(t, last.FatalErr)
+	require.NoError(t, last.FatalErr)
 	// No writes should occur for an unmatched record.
 	db.AssertNotCalled(t, "UpsertMediaTags")
 	db.AssertNotCalled(t, "UpsertMediaTitleTags")
@@ -127,7 +131,8 @@ func TestRunScraper_SentinelSkip(t *testing.T) {
 		},
 	}
 
-	ch := scraper.RunScraper(context.Background(), scraper.ScrapeOptions{Force: false}, []scraper.ScrapeSystem{system}, db, loop)
+	ch := scraper.RunScraper(
+		context.Background(), scraper.ScrapeOptions{Force: false}, []scraper.ScrapeSystem{system}, db, loop)
 	updates := drainUpdates(ch)
 
 	last := updates[len(updates)-1]
@@ -152,14 +157,16 @@ func TestRunScraper_Force_IgnoresSentinel(t *testing.T) {
 		matchFn: func(_ stubRecord) (*scraper.MatchResult, error) {
 			return &scraper.MatchResult{MediaDBID: 5, MediaTitleDBID: 10}, nil
 		},
-		mapFn: func(_ stubRecord) ([]database.TagInfo, []database.TagInfo, []database.MediaProperty, []database.MediaProperty) {
-			return []database.TagInfo{{Type: "genre", Tag: "platform"}},
-				[]database.TagInfo{{Type: "developer", Tag: "nintendo"}},
-				nil, nil
+		mapFn: func(_ stubRecord) scraper.MapResult {
+			return scraper.MapResult{
+				MediaTags: []database.TagInfo{{Type: "genre", Tag: "platform"}},
+				TitleTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+			}
 		},
 	}
 
-	ch := scraper.RunScraper(context.Background(), scraper.ScrapeOptions{Force: true}, []scraper.ScrapeSystem{system}, db, loop)
+	ch := scraper.RunScraper(
+		context.Background(), scraper.ScrapeOptions{Force: true}, []scraper.ScrapeSystem{system}, db, loop)
 	updates := drainUpdates(ch)
 
 	last := updates[len(updates)-1]
@@ -190,7 +197,7 @@ func TestRunScraper_NonFatalMatchError_ContinuesLoop(t *testing.T) {
 			if r.id == "mario" {
 				return nil, matchErr
 			}
-			return nil, nil // zelda: no match, skip cleanly
+			return nil, nil // zelda: no match, skip cleanly //nolint:nilnil
 		},
 	}
 
@@ -222,8 +229,8 @@ func TestRunScraper_CtxCancel_EmitsDone(t *testing.T) {
 		id:      "test",
 		records: []stubRecord{{id: "mario"}, {id: "zelda"}, {id: "metroid"}},
 		matchFn: func(_ stubRecord) (*scraper.MatchResult, error) {
-			cancel() // cancel on first match attempt
-			return nil, nil
+			cancel()        // cancel on first match attempt
+			return nil, nil //nolint:nilnil
 		},
 	}
 
@@ -250,20 +257,27 @@ func TestRunScraper_FullWrite_HappyPath(t *testing.T) {
 		matchFn: func(_ stubRecord) (*scraper.MatchResult, error) {
 			return &scraper.MatchResult{MediaDBID: 1, MediaTitleDBID: 2}, nil
 		},
-		mapFn: func(_ stubRecord) ([]database.TagInfo, []database.TagInfo, []database.MediaProperty, []database.MediaProperty) {
-			return []database.TagInfo{{Type: "region", Tag: "usa"}},
-				[]database.TagInfo{{Type: "developer", Tag: "nintendo"}},
-				[]database.MediaProperty{{TypeTag: "property:description", Text: "A classic"}},
-				[]database.MediaProperty{{TypeTag: "property:video", Text: "/roms/nes/mario.mp4"}}
+		mapFn: func(_ stubRecord) scraper.MapResult {
+			return scraper.MapResult{
+				MediaTags: []database.TagInfo{{Type: "region", Tag: "usa"}},
+				TitleTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+				TitleProps: []database.MediaProperty{
+					{TypeTag: "property:description", Text: "A classic"},
+				},
+				MediaProps: []database.MediaProperty{
+					{TypeTag: "property:video", Text: "/roms/nes/mario.mp4"},
+				},
+			}
 		},
 	}
 
-	ch := scraper.RunScraper(context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{system}, db, loop)
+	ch := scraper.RunScraper(
+		context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{system}, db, loop)
 	updates := drainUpdates(ch)
 
 	last := updates[len(updates)-1]
 	assert.True(t, last.Done)
-	assert.NoError(t, last.FatalErr)
+	require.NoError(t, last.FatalErr)
 	// Fix 4: the Done update must carry accumulated totals.
 	assert.Equal(t, 1, last.Processed, "Done update must carry total processed count")
 	assert.Equal(t, 1, last.Matched, "Done update must carry total matched count")

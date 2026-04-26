@@ -140,7 +140,10 @@ func (db *MediaDB) MediaHasTag(ctx context.Context, mediaDBID int64, tagValue st
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
-		return found == 1, err
+		if err != nil {
+			return false, fmt.Errorf("failed to scan MediaHasTag (no-colon): %w", err)
+		}
+		return found == 1, nil
 	}
 
 	tagType := tagValue[:idx]
@@ -189,13 +192,19 @@ func (db *MediaDB) UpsertMediaTags(ctx context.Context, mediaDBID int64, tagInfo
 			`DELETE FROM MediaTags WHERE MediaDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`,
 			mediaDBID, typeDBID,
 		)
-		return err
+		if err != nil {
+			return fmt.Errorf("failed to delete media tags for type: %w", err)
+		}
+		return nil
 	}, func(tx *sql.Tx, tagDBID int64) error {
 		_, err := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`,
 			mediaDBID, tagDBID,
 		)
-		return err
+		if err != nil {
+			return fmt.Errorf("failed to insert media tag link: %w", err)
+		}
+		return nil
 	})
 }
 
@@ -209,13 +218,19 @@ func (db *MediaDB) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int6
 			`DELETE FROM MediaTitleTags WHERE MediaTitleDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`,
 			mediaTitleDBID, typeDBID,
 		)
-		return err
+		if err != nil {
+			return fmt.Errorf("failed to delete media title tags for type: %w", err)
+		}
+		return nil
 	}, func(tx *sql.Tx, tagDBID int64) error {
 		_, err := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO MediaTitleTags (MediaTitleDBID, TagDBID) VALUES (?, ?)`,
 			mediaTitleDBID, tagDBID,
 		)
-		return err
+		if err != nil {
+			return fmt.Errorf("failed to insert media title tag link: %w", err)
+		}
+		return nil
 	})
 }
 

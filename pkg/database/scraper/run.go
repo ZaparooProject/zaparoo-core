@@ -137,12 +137,13 @@ func RunScraper[T any](
 				}
 
 				// Step 4: map source record to tag/property writes.
-				mediaTags, titleTags, titleProps, mediaProps := s.MapToDB(record)
+				mapped := s.MapToDB(record)
 
 				// Step 5: write tags.
-				if len(mediaTags) > 0 {
-					if err := db.UpsertMediaTags(ctx, match.MediaDBID, mediaTags); err != nil {
-						log.Warn().Err(err).Int64("mediaDBID", match.MediaDBID).Msg("scraper: failed to upsert media tags")
+				if len(mapped.MediaTags) > 0 {
+					if err := db.UpsertMediaTags(ctx, match.MediaDBID, mapped.MediaTags); err != nil {
+						log.Warn().Err(err).Int64("mediaDBID", match.MediaDBID).
+							Msg("scraper: failed to upsert media tags")
 						skipped++
 						ch <- ScrapeUpdate{
 							SystemID:  system.ID,
@@ -154,9 +155,10 @@ func RunScraper[T any](
 						continue
 					}
 				}
-				if len(titleTags) > 0 {
-					if err := db.UpsertMediaTitleTags(ctx, match.MediaTitleDBID, titleTags); err != nil {
-						log.Warn().Err(err).Int64("mediaTitleDBID", match.MediaTitleDBID).Msg("scraper: failed to upsert title tags")
+				if len(mapped.TitleTags) > 0 {
+					if err := db.UpsertMediaTitleTags(ctx, match.MediaTitleDBID, mapped.TitleTags); err != nil {
+						log.Warn().Err(err).Int64("mediaTitleDBID", match.MediaTitleDBID).
+							Msg("scraper: failed to upsert title tags")
 						skipped++
 						ch <- ScrapeUpdate{
 							SystemID:  system.ID,
@@ -170,9 +172,10 @@ func RunScraper[T any](
 				}
 
 				// Step 6: write properties.
-				if len(titleProps) > 0 {
-					if err := db.UpsertMediaTitleProperties(ctx, match.MediaTitleDBID, titleProps); err != nil {
-						log.Warn().Err(err).Int64("mediaTitleDBID", match.MediaTitleDBID).Msg("scraper: failed to upsert title properties")
+				if len(mapped.TitleProps) > 0 {
+					if err := db.UpsertMediaTitleProperties(ctx, match.MediaTitleDBID, mapped.TitleProps); err != nil {
+						log.Warn().Err(err).Int64("mediaTitleDBID", match.MediaTitleDBID).
+							Msg("scraper: failed to upsert title properties")
 						skipped++
 						ch <- ScrapeUpdate{
 							SystemID:  system.ID,
@@ -184,9 +187,10 @@ func RunScraper[T any](
 						continue
 					}
 				}
-				if len(mediaProps) > 0 {
-					if err := db.UpsertMediaProperties(ctx, match.MediaDBID, mediaProps); err != nil {
-						log.Warn().Err(err).Int64("mediaDBID", match.MediaDBID).Msg("scraper: failed to upsert media properties")
+				if len(mapped.MediaProps) > 0 {
+					if err := db.UpsertMediaProperties(ctx, match.MediaDBID, mapped.MediaProps); err != nil {
+						log.Warn().Err(err).Int64("mediaDBID", match.MediaDBID).
+							Msg("scraper: failed to upsert media properties")
 						skipped++
 						ch <- ScrapeUpdate{
 							SystemID:  system.ID,

@@ -65,7 +65,9 @@ func (m *mockScraper) Scrape(_ context.Context, _ scraper.ScrapeOptions) (<-chan
 
 // routeRequest wires r into a chi router at path using the given method and
 // handler, then serves it. This lets URL params resolve properly.
-func routeRequest(method, path, pattern string, handler http.HandlerFunc, r *http.Request) *httptest.ResponseRecorder {
+func routeRequest(
+	method, path, pattern string, handler http.HandlerFunc, r *http.Request,
+) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
 	router := chi.NewRouter()
 	router.Method(method, pattern, handler)
@@ -81,7 +83,8 @@ func TestScraperRegistry_ListScrapers_Idle(t *testing.T) {
 	reg := NewScraperRegistry()
 	reg.Register(&mockScraper{id: "test.scraper"})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/scrapers", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/scrapers", http.NoBody)
 	rr := httptest.NewRecorder()
 	reg.HandleListScrapers().ServeHTTP(rr, req)
 
@@ -105,7 +108,8 @@ func TestScraperRegistry_ListScrapers_Running(t *testing.T) {
 	blockingScraper := &blockingMockScraper{id: "test.scraper"}
 	reg.Register(blockingScraper)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/scrapers/test.scraper/run", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/api/v1/scrapers/test.scraper/run", http.NoBody)
 	rr := routeRequest(http.MethodPost, "/api/v1/scrapers/test.scraper/run",
 		"/api/v1/scrapers/{id}/run",
 		reg.HandleRunScraper(ctx),
@@ -119,7 +123,8 @@ func TestScraperRegistry_ListScrapers_Running(t *testing.T) {
 		return reg.running == "test.scraper"
 	}, time.Second, 10*time.Millisecond)
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/scrapers", http.NoBody)
+	listReq := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/scrapers", http.NoBody)
 	listRR := httptest.NewRecorder()
 	reg.HandleListScrapers().ServeHTTP(listRR, listReq)
 
@@ -134,7 +139,8 @@ func TestScraperRegistry_RunScraper_NotFound(t *testing.T) {
 
 	reg := NewScraperRegistry()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/scrapers/unknown/run", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/api/v1/scrapers/unknown/run", http.NoBody)
 	rr := routeRequest(http.MethodPost, "/api/v1/scrapers/unknown/run",
 		"/api/v1/scrapers/{id}/run",
 		reg.HandleRunScraper(context.Background()),
@@ -153,7 +159,8 @@ func TestScraperRegistry_RunScraper_Conflict(t *testing.T) {
 	reg.Register(&blockingMockScraper{id: "b"})
 
 	// Start the first scraper.
-	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/scrapers/a/run", http.NoBody)
+	req1 := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/api/v1/scrapers/a/run", http.NoBody)
 	rr1 := routeRequest(http.MethodPost, "/api/v1/scrapers/a/run",
 		"/api/v1/scrapers/{id}/run",
 		reg.HandleRunScraper(ctx),
@@ -168,7 +175,8 @@ func TestScraperRegistry_RunScraper_Conflict(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 
 	// Attempt to start a second scraper while first is running.
-	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/scrapers/b/run", http.NoBody)
+	req2 := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/api/v1/scrapers/b/run", http.NoBody)
 	rr2 := routeRequest(http.MethodPost, "/api/v1/scrapers/b/run",
 		"/api/v1/scrapers/{id}/run",
 		reg.HandleRunScraper(ctx),
@@ -182,7 +190,8 @@ func TestScraperRegistry_CancelScraper_NotRunning(t *testing.T) {
 	reg := NewScraperRegistry()
 	reg.Register(&mockScraper{id: "test.scraper"})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/scrapers/test.scraper/cancel", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/api/v1/scrapers/test.scraper/cancel", http.NoBody)
 	rr := routeRequest(http.MethodPost, "/api/v1/scrapers/test.scraper/cancel",
 		"/api/v1/scrapers/{id}/cancel",
 		reg.HandleCancelScraper(),
@@ -195,7 +204,8 @@ func TestScraperRegistry_CancelScraper_NotFound(t *testing.T) {
 
 	reg := NewScraperRegistry()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/scrapers/unknown/cancel", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/api/v1/scrapers/unknown/cancel", http.NoBody)
 	rr := routeRequest(http.MethodPost, "/api/v1/scrapers/unknown/cancel",
 		"/api/v1/scrapers/{id}/cancel",
 		reg.HandleCancelScraper(),
@@ -212,7 +222,8 @@ func TestScraperRegistry_CancelScraper_WhileRunning(t *testing.T) {
 	reg := NewScraperRegistry()
 	reg.Register(&blockingMockScraper{id: "test.scraper"})
 
-	runReq := httptest.NewRequest(http.MethodPost, "/api/v1/scrapers/test.scraper/run", http.NoBody)
+	runReq := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/api/v1/scrapers/test.scraper/run", http.NoBody)
 	rr := routeRequest(http.MethodPost, "/api/v1/scrapers/test.scraper/run",
 		"/api/v1/scrapers/{id}/run",
 		reg.HandleRunScraper(ctx),
@@ -225,7 +236,8 @@ func TestScraperRegistry_CancelScraper_WhileRunning(t *testing.T) {
 		return reg.running == "test.scraper"
 	}, time.Second, 10*time.Millisecond)
 
-	cancelReq := httptest.NewRequest(http.MethodPost, "/api/v1/scrapers/test.scraper/cancel", http.NoBody)
+	cancelReq := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/api/v1/scrapers/test.scraper/cancel", http.NoBody)
 	cancelRR := routeRequest(http.MethodPost, "/api/v1/scrapers/test.scraper/cancel",
 		"/api/v1/scrapers/{id}/cancel",
 		reg.HandleCancelScraper(),
@@ -239,7 +251,8 @@ func TestScraperRegistry_Status_Idle(t *testing.T) {
 	reg := NewScraperRegistry()
 	reg.Register(&mockScraper{id: "test.scraper"})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/scrapers/test.scraper/status", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/scrapers/test.scraper/status", http.NoBody)
 	rr := routeRequest(http.MethodGet, "/api/v1/scrapers/test.scraper/status",
 		"/api/v1/scrapers/{id}/status",
 		reg.HandleScraperStatus(),
@@ -258,7 +271,8 @@ func TestScraperRegistry_Status_NotFound(t *testing.T) {
 
 	reg := NewScraperRegistry()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/scrapers/unknown/status", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/scrapers/unknown/status", http.NoBody)
 	rr := routeRequest(http.MethodGet, "/api/v1/scrapers/unknown/status",
 		"/api/v1/scrapers/{id}/status",
 		reg.HandleScraperStatus(),
@@ -288,7 +302,8 @@ func TestScraperRegistry_Status_StreamsUpdates(t *testing.T) {
 	go func() {
 		// Small delay to let the scraper start first.
 		time.Sleep(20 * time.Millisecond)
-		statusReq := httptest.NewRequest(http.MethodGet, "/api/v1/scrapers/test.scraper/status", http.NoBody)
+		statusReq := httptest.NewRequestWithContext(
+			context.Background(), http.MethodGet, "/api/v1/scrapers/test.scraper/status", http.NoBody)
 		statusRR := routeRequest(http.MethodGet, "/api/v1/scrapers/test.scraper/status",
 			"/api/v1/scrapers/{id}/status",
 			reg.HandleScraperStatus(),
@@ -297,7 +312,8 @@ func TestScraperRegistry_Status_StreamsUpdates(t *testing.T) {
 	}()
 
 	// Start the scraper.
-	runReq := httptest.NewRequest(http.MethodPost, "/api/v1/scrapers/test.scraper/run", http.NoBody)
+	runReq := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/api/v1/scrapers/test.scraper/run", http.NoBody)
 	runRR := routeRequest(http.MethodPost, "/api/v1/scrapers/test.scraper/run",
 		"/api/v1/scrapers/{id}/run",
 		reg.HandleRunScraper(ctx),
@@ -330,7 +346,8 @@ func TestHandleGetMediaTitleProperties_TitleNotFound(t *testing.T) {
 	db := helpers.NewMockMediaDBI()
 	db.On("FindMediaTitleByDBID", mock.Anything, int64(999)).Return((*database.MediaTitle)(nil), nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/titles/999/properties", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/titles/999/properties", http.NoBody)
 	rr := routeRequest(http.MethodGet, "/api/v1/titles/999/properties",
 		"/api/v1/titles/{titleDBID}/properties",
 		HandleGetMediaTitleProperties(db),
@@ -347,7 +364,8 @@ func TestHandleGetMediaTitleProperties_EmptyProperties(t *testing.T) {
 	db.On("FindMediaTitleByDBID", mock.Anything, int64(1)).Return(title, nil)
 	db.On("GetMediaTitleProperties", mock.Anything, int64(1)).Return([]database.MediaProperty{}, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/titles/1/properties", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/titles/1/properties", http.NoBody)
 	rr := routeRequest(http.MethodGet, "/api/v1/titles/1/properties",
 		"/api/v1/titles/{titleDBID}/properties",
 		HandleGetMediaTitleProperties(db),
@@ -373,7 +391,8 @@ func TestHandleGetMediaTitleProperties_WithProperties(t *testing.T) {
 	db.On("FindMediaTitleByDBID", mock.Anything, int64(1)).Return(title, nil)
 	db.On("GetMediaTitleProperties", mock.Anything, int64(1)).Return(props, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/titles/1/properties", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/titles/1/properties", http.NoBody)
 	rr := routeRequest(http.MethodGet, "/api/v1/titles/1/properties",
 		"/api/v1/titles/{titleDBID}/properties",
 		HandleGetMediaTitleProperties(db),
@@ -399,7 +418,8 @@ func TestHandleGetMediaTitleProperties_DBError(t *testing.T) {
 	db.On("GetMediaTitleProperties", mock.Anything, int64(1)).Return(
 		[]database.MediaProperty(nil), errors.New("db error"))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/titles/1/properties", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/titles/1/properties", http.NoBody)
 	rr := routeRequest(http.MethodGet, "/api/v1/titles/1/properties",
 		"/api/v1/titles/{titleDBID}/properties",
 		HandleGetMediaTitleProperties(db),
@@ -413,7 +433,8 @@ func TestHandleGetMediaTitleProperties_InvalidID(t *testing.T) {
 
 	db := helpers.NewMockMediaDBI()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/titles/abc/properties", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/titles/abc/properties", http.NoBody)
 	rr := routeRequest(http.MethodGet, "/api/v1/titles/abc/properties",
 		"/api/v1/titles/{titleDBID}/properties",
 		HandleGetMediaTitleProperties(db),
@@ -429,7 +450,8 @@ func TestHandleGetMediaProperties_MediaNotFound(t *testing.T) {
 	db.On("GetMediaByDBID", mock.Anything, int64(999)).Return(
 		database.SearchResultWithCursor{}, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/999/properties", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/media/999/properties", http.NoBody)
 	rr := routeRequest(http.MethodGet, "/api/v1/media/999/properties",
 		"/api/v1/media/{mediaDBID}/properties",
 		HandleGetMediaProperties(db),
@@ -446,7 +468,8 @@ func TestHandleGetMediaProperties_EmptyProperties(t *testing.T) {
 		database.SearchResultWithCursor{MediaID: 1, Name: "Test ROM"}, nil)
 	db.On("GetMediaProperties", mock.Anything, int64(1)).Return([]database.MediaProperty{}, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/1/properties", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/media/1/properties", http.NoBody)
 	rr := routeRequest(http.MethodGet, "/api/v1/media/1/properties",
 		"/api/v1/media/{mediaDBID}/properties",
 		HandleGetMediaProperties(db),
@@ -471,7 +494,8 @@ func TestHandleGetMediaProperties_WithProperties(t *testing.T) {
 		database.SearchResultWithCursor{MediaID: 5, Name: "Test ROM"}, nil)
 	db.On("GetMediaProperties", mock.Anything, int64(5)).Return(props, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/5/properties", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/api/v1/media/5/properties", http.NoBody)
 	rr := routeRequest(http.MethodGet, "/api/v1/media/5/properties",
 		"/api/v1/media/{mediaDBID}/properties",
 		HandleGetMediaProperties(db),
@@ -495,7 +519,9 @@ type blockingMockScraper struct {
 
 func (b *blockingMockScraper) ID() string { return b.id }
 
-func (b *blockingMockScraper) Scrape(ctx context.Context, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
+func (b *blockingMockScraper) Scrape(
+	ctx context.Context, _ scraper.ScrapeOptions,
+) (<-chan scraper.ScrapeUpdate, error) {
 	ch := make(chan scraper.ScrapeUpdate, 1)
 	go func() {
 		defer close(ch)
@@ -513,7 +539,9 @@ type controlledMockScraper struct {
 
 func (c *controlledMockScraper) ID() string { return c.id }
 
-func (c *controlledMockScraper) Scrape(ctx context.Context, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
+func (c *controlledMockScraper) Scrape(
+	ctx context.Context, _ scraper.ScrapeOptions,
+) (<-chan scraper.ScrapeUpdate, error) {
 	ch := make(chan scraper.ScrapeUpdate, 4)
 	go func() {
 		defer close(ch)

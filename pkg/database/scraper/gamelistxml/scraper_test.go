@@ -259,31 +259,31 @@ func TestMapToDB_FullGame(t *testing.T) {
 		},
 	}
 
-	mediaTags, titleTags, titleProps, mediaProps := (&GamelistXMLScraper{}).MapToDB(rec)
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
 
 	// Media-level tags
-	assert.Contains(t, mediaTags, database.TagInfo{Type: string(tags.TagTypeLang), Tag: "en"})
-	assert.Contains(t, mediaTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: "usa"})
-	// players is title-level (Fix 7): assert it is NOT in mediaTags.
-	for _, tag := range mediaTags {
+	assert.Contains(t, result.MediaTags, database.TagInfo{Type: string(tags.TagTypeLang), Tag: "en"})
+	assert.Contains(t, result.MediaTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: "usa"})
+	// players is title-level (Fix 7): assert it is NOT in MediaTags.
+	for _, tag := range result.MediaTags {
 		assert.NotEqual(t, string(tags.TagTypePlayers), tag.Type, "players must not appear in mediaTags")
 	}
 
 	// Title-level tags
-	assert.Contains(t, titleTags, database.TagInfo{Type: string(tags.TagTypeDeveloper), Tag: "Nintendo"})
-	assert.Contains(t, titleTags, database.TagInfo{Type: string(tags.TagTypePublisher), Tag: "Nintendo"})
-	assert.Contains(t, titleTags, database.TagInfo{Type: string(tags.TagTypeYear), Tag: "1985"})
-	assert.Contains(t, titleTags, database.TagInfo{Type: string(tags.TagTypeRating), Tag: "75"})
-	assert.Contains(t, titleTags, database.TagInfo{Type: string(tags.TagTypeGenre), Tag: "Platform"})
+	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeDeveloper), Tag: "Nintendo"})
+	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypePublisher), Tag: "Nintendo"})
+	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeYear), Tag: "1985"})
+	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeRating), Tag: "75"})
+	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeGenre), Tag: "Platform"})
 	// players must be title-level (Fix 7).
-	assert.Contains(t, titleTags, database.TagInfo{Type: string(tags.TagTypePlayers), Tag: "4"})
+	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypePlayers), Tag: "4"})
 
 	// Title-level properties
 	descPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyDescription)
 	imgPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart)
 	videoPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyVideo)
 	var foundDesc, foundImg, foundVideo bool
-	for _, p := range titleProps {
+	for _, p := range result.TitleProps {
 		switch p.TypeTag {
 		case descPropKey:
 			foundDesc = true
@@ -300,7 +300,7 @@ func TestMapToDB_FullGame(t *testing.T) {
 	assert.True(t, foundImg, "boxart property missing")
 	assert.True(t, foundVideo, "video property missing")
 
-	assert.Empty(t, mediaProps, "gamelistxml scraper writes no media-level properties")
+	assert.Empty(t, result.MediaProps, "gamelistxml scraper writes no media-level properties")
 }
 
 func TestMapToDB_MultiLang(t *testing.T) {
@@ -308,7 +308,7 @@ func TestMapToDB_MultiLang(t *testing.T) {
 	rec := GamelistRecord{
 		Game: esapi.Game{Lang: "en, fr, de"},
 	}
-	mediaTags, _, _, _ := (&GamelistXMLScraper{}).MapToDB(rec)
+	mediaTags := (&GamelistXMLScraper{}).MapToDB(&rec).MediaTags
 
 	var langs []string
 	for _, tag := range mediaTags {
@@ -324,7 +324,7 @@ func TestMapToDB_MultiRegion(t *testing.T) {
 	rec := GamelistRecord{
 		Game: esapi.Game{Region: "usa,eur"},
 	}
-	mediaTags, _, _, _ := (&GamelistXMLScraper{}).MapToDB(rec)
+	mediaTags := (&GamelistXMLScraper{}).MapToDB(&rec).MediaTags
 
 	var regions []string
 	for _, tag := range mediaTags {
@@ -337,11 +337,11 @@ func TestMapToDB_MultiRegion(t *testing.T) {
 
 func TestMapToDB_EmptyGame_NoTags(t *testing.T) {
 	t.Parallel()
-	mediaTags, titleTags, titleProps, mediaProps := (&GamelistXMLScraper{}).MapToDB(GamelistRecord{})
-	assert.Empty(t, mediaTags)
-	assert.Empty(t, titleTags)
-	assert.Empty(t, titleProps)
-	assert.Empty(t, mediaProps)
+	result := (&GamelistXMLScraper{}).MapToDB(&GamelistRecord{})
+	assert.Empty(t, result.MediaTags)
+	assert.Empty(t, result.TitleTags)
+	assert.Empty(t, result.TitleProps)
+	assert.Empty(t, result.MediaProps)
 }
 
 func TestMapToDB_PathProp_SkipsUnresolvablePath(t *testing.T) {
@@ -353,7 +353,7 @@ func TestMapToDB_PathProp_SkipsUnresolvablePath(t *testing.T) {
 			Image: "", // empty → skip
 		},
 	}
-	_, _, titleProps, _ := (&GamelistXMLScraper{}).MapToDB(rec)
+	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
 	for _, p := range titleProps {
 		assert.NotEqual(t, string(tags.TagTypeProperty)+":"+string(tags.TagPropertyImageBoxart), p.TypeTag,
 			"empty image path should not produce a boxart property")
@@ -365,7 +365,7 @@ func TestMapToDB_ArcadeBoard(t *testing.T) {
 	rec := GamelistRecord{
 		Game: esapi.Game{ArcadeSystemName: "CPS2"},
 	}
-	_, titleTags, _, _ := (&GamelistXMLScraper{}).MapToDB(rec)
+	titleTags := (&GamelistXMLScraper{}).MapToDB(&rec).TitleTags
 	require.NotEmpty(t, titleTags)
 	assert.Contains(t, titleTags, database.TagInfo{Type: string(tags.TagTypeArcadeBoard), Tag: "CPS2"})
 }
@@ -377,9 +377,7 @@ func TestPathProp_NormalizesSlashes(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	p := pathProp("prop:image", "./images/mario.png", root)
-	if p == nil {
-		t.Fatal("expected non-nil property")
-	}
+	require.NotNil(t, p, "expected non-nil property")
 	if strings.Contains(p.Text, "\\") {
 		t.Errorf("pathProp returned backslashes in path: %q", p.Text)
 	}
@@ -392,7 +390,7 @@ func TestMapToDB_ContentType_Image(t *testing.T) {
 		SystemRootPath: root,
 		Game:           esapi.Game{Image: "./images/mario.png"},
 	}
-	_, _, titleProps, _ := (&GamelistXMLScraper{}).MapToDB(rec)
+	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart)
 	for _, p := range titleProps {
 		if p.TypeTag == propKey {

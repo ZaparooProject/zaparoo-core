@@ -78,7 +78,7 @@ func (g *GamelistXMLScraper) Scrape(ctx context.Context, opts scraper.ScrapeOpti
 	if err != nil {
 		return nil, fmt.Errorf("gamelistxml: failed to resolve systems: %w", err)
 	}
-	return scraper.RunScraper(ctx, opts, systems, g.db, g), nil
+	return scraper.RunScraper[*GamelistRecord](ctx, opts, systems, g.db, g), nil
 }
 
 // LoadRecords searches each of system.ROMPaths for a gamelist.xml and yields
@@ -86,8 +86,8 @@ func (g *GamelistXMLScraper) Scrape(ctx context.Context, opts scraper.ScrapeOpti
 func (g *GamelistXMLScraper) LoadRecords(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
-) ([]GamelistRecord, error) {
-	var records []GamelistRecord
+) ([]*GamelistRecord, error) {
+	var records []*GamelistRecord
 	for _, rootPath := range system.ROMPaths {
 		select {
 		case <-ctx.Done():
@@ -111,10 +111,10 @@ func (g *GamelistXMLScraper) LoadRecords(
 			Int("entries", len(gl.Games)).
 			Msg("gamelistxml: loaded gamelist.xml")
 
-		for _, game := range gl.Games {
-			records = append(records, GamelistRecord{
+		for i := range gl.Games {
+			records = append(records, &GamelistRecord{
 				SystemRootPath: rootPath,
-				Game:           game,
+				Game:           gl.Games[i],
 			})
 		}
 	}
@@ -132,7 +132,7 @@ func (g *GamelistXMLScraper) LoadRecords(
 // cannot be resolved or the Media row does not exist.
 func (g *GamelistXMLScraper) Match(
 	ctx context.Context,
-	record GamelistRecord,
+	record *GamelistRecord,
 	system scraper.ScrapeSystem,
 	db database.MediaDBI,
 ) (*scraper.MatchResult, error) {
@@ -142,7 +142,7 @@ func (g *GamelistXMLScraper) Match(
 			Str("path", record.Game.Path).
 			Str("root", record.SystemRootPath).
 			Msg("gamelistxml: unresolvable path, skipping")
-		return nil, nil
+		return nil, nil //nolint:nilnil
 	}
 
 	media, err := db.FindMediaBySystemAndPathFold(ctx, system.DBID, absPath)
@@ -151,7 +151,7 @@ func (g *GamelistXMLScraper) Match(
 	}
 	if media == nil {
 		log.Info().Str("path", absPath).Int64("systemDBID", system.DBID).Msg("gamelistxml: media not indexed, skipping")
-		return nil, nil
+		return nil, nil //nolint:nilnil
 	}
 
 	log.Debug().
@@ -167,12 +167,11 @@ func (g *GamelistXMLScraper) Match(
 
 // MapToDB converts a GamelistRecord into the tag and property writes to apply
 // to the matched Media and MediaTitle rows.
-func (g *GamelistXMLScraper) MapToDB(record GamelistRecord) (
-	mediaTags []database.TagInfo,
-	titleTags []database.TagInfo,
-	titleProps []database.MediaProperty,
-	mediaProps []database.MediaProperty,
-) {
+func (_ *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
+	var mediaTags []database.TagInfo
+	var titleTags []database.TagInfo
+	var titleProps []database.MediaProperty
+	var mediaProps []database.MediaProperty
 	game := record.Game
 
 	// Normalise all string fields before mapping: unescape HTML entities,
@@ -292,7 +291,12 @@ func (g *GamelistXMLScraper) MapToDB(record GamelistRecord) (
 	}
 
 	// mediaProps: gamelist.xml scraper writes no ROM-level properties.
-	return mediaTags, titleTags, titleProps, mediaProps
+	return scraper.MapResult{
+		MediaTags:  mediaTags,
+		TitleTags:  titleTags,
+		TitleProps: titleProps,
+		MediaProps: mediaProps,
+	}
 }
 
 // resolveESPath converts an EmulationStation path to an absolute filesystem path.

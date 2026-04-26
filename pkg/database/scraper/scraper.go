@@ -63,7 +63,15 @@ type ScraperLoop[T any] interface {
 	Match(ctx context.Context, record T, system ScrapeSystem, db database.MediaDBI) (*MatchResult, error)
 
 	// MapToDB converts a source record into the tag and property writes to apply.
-	MapToDB(record T) (mediaTags []database.TagInfo, titleTags []database.TagInfo, titleProps []database.MediaProperty, mediaProps []database.MediaProperty)
+	MapToDB(record T) MapResult
+}
+
+// MapResult holds the tag and property writes produced by a MapToDB call.
+type MapResult struct {
+	MediaTags  []database.TagInfo
+	TitleTags  []database.TagInfo
+	TitleProps []database.MediaProperty
+	MediaProps []database.MediaProperty
 }
 
 // ScrapeOptions configures a scrape run.

@@ -35,9 +35,9 @@ import (
 //   - MediaTitles: "mario" (DBID=1)
 //   - Media: "roms/mario.nes" (DBID=1) linked to MediaTitle 1
 //   - Tags: "property:description" seeded (DBID=1)
-func setupScraperTestDB(t *testing.T) (*MediaDB, func()) {
+func setupScraperTestDB(t *testing.T) (mediaDB *MediaDB, cleanup func()) {
 	t.Helper()
-	mediaDB, cleanup := setupTempMediaDB(t)
+	mediaDB, cleanup = setupTempMediaDB(t)
 	ctx := context.Background()
 	db := mediaDB.sql
 

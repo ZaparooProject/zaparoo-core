@@ -2062,20 +2062,24 @@ func (m *MockMediaDBI) PopulateBrowseCache(
 
 // --- Scraper support methods ---
 
-func (m *MockMediaDBI) FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*database.Media, error) {
+func (m *MockMediaDBI) FindMediaBySystemAndPath(
+	ctx context.Context, systemDBID int64, path string,
+) (*database.Media, error) {
 	args := m.Called(ctx, systemDBID, path)
 	if result, ok := args.Get(0).(*database.Media); ok {
-		return result, args.Error(1)
+		return result, args.Error(1) //nolint:wrapcheck
 	}
-	return nil, args.Error(1)
+	return nil, args.Error(1) //nolint:wrapcheck
 }
 
-func (m *MockMediaDBI) FindMediaBySystemAndPathFold(ctx context.Context, systemDBID int64, path string) (*database.Media, error) {
+func (m *MockMediaDBI) FindMediaBySystemAndPathFold(
+	ctx context.Context, systemDBID int64, path string,
+) (*database.Media, error) {
 	args := m.Called(ctx, systemDBID, path)
 	if result, ok := args.Get(0).(*database.Media); ok {
-		return result, args.Error(1)
+		return result, args.Error(1) //nolint:wrapcheck
 	}
-	return nil, args.Error(1)
+	return nil, args.Error(1) //nolint:wrapcheck
 }
 
 func (m *MockMediaDBI) MediaHasTag(ctx context.Context, mediaDBID int64, tagValue string) (bool, error) {
@@ -2099,7 +2103,9 @@ func (m *MockMediaDBI) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID 
 	return nil
 }
 
-func (m *MockMediaDBI) UpsertMediaTitleProperties(ctx context.Context, mediaTitleDBID int64, props []database.MediaProperty) error {
+func (m *MockMediaDBI) UpsertMediaTitleProperties(
+	ctx context.Context, mediaTitleDBID int64, props []database.MediaProperty,
+) error {
 	args := m.Called(ctx, mediaTitleDBID, props)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
@@ -2107,7 +2113,9 @@ func (m *MockMediaDBI) UpsertMediaTitleProperties(ctx context.Context, mediaTitl
 	return nil
 }
 
-func (m *MockMediaDBI) UpsertMediaProperties(ctx context.Context, mediaDBID int64, props []database.MediaProperty) error {
+func (m *MockMediaDBI) UpsertMediaProperties(
+	ctx context.Context, mediaDBID int64, props []database.MediaProperty,
+) error {
 	args := m.Called(ctx, mediaDBID, props)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
@@ -2115,7 +2123,9 @@ func (m *MockMediaDBI) UpsertMediaProperties(ctx context.Context, mediaDBID int6
 	return nil
 }
 
-func (m *MockMediaDBI) FindMediaTitlesWithoutSentinel(ctx context.Context, systemDBID int64, sentinelTag string) ([]database.MediaTitle, error) {
+func (m *MockMediaDBI) FindMediaTitlesWithoutSentinel(
+	ctx context.Context, systemDBID int64, sentinelTag string,
+) ([]database.MediaTitle, error) {
 	args := m.Called(ctx, systemDBID, sentinelTag)
 	if result, ok := args.Get(0).([]database.MediaTitle); ok {
 		return result, args.Error(1)
@@ -2131,7 +2141,9 @@ func (m *MockMediaDBI) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*d
 	return nil, args.Error(1)
 }
 
-func (m *MockMediaDBI) GetMediaTitleProperties(ctx context.Context, mediaTitleDBID int64) ([]database.MediaProperty, error) {
+func (m *MockMediaDBI) GetMediaTitleProperties(
+	ctx context.Context, mediaTitleDBID int64,
+) ([]database.MediaProperty, error) {
 	args := m.Called(ctx, mediaTitleDBID)
 	if result, ok := args.Get(0).([]database.MediaProperty); ok {
 		return result, args.Error(1)
