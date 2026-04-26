@@ -217,6 +217,51 @@ type MediaHistoryTopResponse struct {
 	Entries []MediaHistoryTopEntry `json:"entries"`
 }
 
+// MediaMetaPropertyItem represents a single property value in a media.meta response.
+// Data is nil when the property is text-only; otherwise it contains the base64-encoded binary.
+type MediaMetaPropertyItem struct {
+	Text        string  `json:"text"`
+	ContentType string  `json:"contentType"`
+	Data        *string `json:"data"`
+}
+
+// MediaMetaSystemResponse is the System sub-object within a media.meta response.
+// Contains only DB-stored fields (id, name) with no static asset enrichment.
+type MediaMetaSystemResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// MediaMetaTitleResponse is the MediaTitle sub-object within a media.meta response,
+// with its own level-separated tags and properties.
+type MediaMetaTitleResponse struct {
+	SecondarySlug *string                          `json:"secondarySlug,omitempty"`
+	Slug          string                           `json:"slug"`
+	Name          string                           `json:"name"`
+	System        MediaMetaSystemResponse          `json:"system"`
+	Tags          []database.TagInfo               `json:"tags"`
+	Properties    map[string]MediaMetaPropertyItem `json:"properties"`
+	ID            int64                            `json:"id"`
+	SlugLength    int                              `json:"slugLength"`
+	SlugWordCount int                              `json:"slugWordCount"`
+}
+
+// MediaMetaMediaResponse is the top-level Media object in a media.meta response.
+type MediaMetaMediaResponse struct {
+	Title      MediaMetaTitleResponse           `json:"title"`
+	Path       string                           `json:"path"`
+	ParentDir  string                           `json:"parentDir"`
+	Tags       []database.TagInfo               `json:"tags"`
+	Properties map[string]MediaMetaPropertyItem `json:"properties"`
+	ID         int64                            `json:"id"`
+	IsMissing  bool                             `json:"isMissing"`
+}
+
+// MediaMetaResponse is the response envelope for the media.meta method.
+type MediaMetaResponse struct {
+	Media MediaMetaMediaResponse `json:"media"`
+}
+
 type MediaLookupMatch struct {
 	System     System             `json:"system"`
 	Name       string             `json:"name"`

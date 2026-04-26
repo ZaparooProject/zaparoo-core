@@ -2159,6 +2159,36 @@ func (m *MockMediaDBI) GetMediaProperties(ctx context.Context, mediaDBID int64) 
 	return nil, args.Error(1)
 }
 
+func (m *MockMediaDBI) GetMediaWithTitleAndSystem(
+	ctx context.Context, mediaDBID int64,
+) (*database.MediaFullRow, error) {
+	args := m.Called(ctx, mediaDBID)
+	if result, ok := args.Get(0).(*database.MediaFullRow); ok {
+		return result, args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockMediaDBI) GetMediaTagsByMediaDBID(
+	ctx context.Context, mediaDBID int64,
+) ([]database.TagInfo, error) {
+	args := m.Called(ctx, mediaDBID)
+	if result, ok := args.Get(0).([]database.TagInfo); ok {
+		return result, args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockMediaDBI) GetMediaTitleTagsByMediaTitleDBID(
+	ctx context.Context, mediaTitleDBID int64,
+) ([]database.TagInfo, error) {
+	args := m.Called(ctx, mediaTitleDBID)
+	if result, ok := args.Get(0).([]database.TagInfo); ok {
+		return result, args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
 func TextMatcher() any {
 	return mock.MatchedBy(func(text string) bool {
 		// Accept any non-empty string

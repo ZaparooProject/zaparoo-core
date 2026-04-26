@@ -63,6 +63,7 @@ const (
 	MethodMediaHistory         = "media.history"
 	MethodMediaHistoryTop      = "media.history.top"
 	MethodMediaLookup          = "media.lookup"
+	MethodMediaMeta            = "media.meta"
 	MethodMediaBrowse          = "media.browse"
 	MethodMediaControl         = "media.control"
 	MethodMediaActiveUpdate    = "media.active.update"

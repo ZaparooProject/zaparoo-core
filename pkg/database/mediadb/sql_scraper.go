@@ -581,6 +581,138 @@ func (db *MediaDB) GetMediaProperties(ctx context.Context, mediaDBID int64) ([]d
 	return scanProperties(rows)
 }
 
+// GetMediaWithTitleAndSystem fetches a Media record together with its parent
+// MediaTitle and System via a single JOIN query. Returns nil, nil when the
+// mediaDBID does not exist. IsMissing is NOT filtered.
+func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int64) (*database.MediaFullRow, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	stmt, err := db.sql.PrepareContext(ctx, `
+		SELECT
+			m.DBID, m.Path, m.ParentDir, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
+			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
+			s.DBID, s.SystemID, s.Name
+		FROM Media m
+		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
+		INNER JOIN Systems s ON mt.SystemDBID = s.DBID
+		WHERE m.DBID = ?
+		LIMIT 1
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare GetMediaWithTitleAndSystem: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	var row database.MediaFullRow
+	err = stmt.QueryRowContext(ctx, mediaDBID).Scan(
+		&row.Media.DBID, &row.Media.Path, &row.Media.ParentDir, &row.Media.IsMissing,
+		&row.Media.MediaTitleDBID, &row.Media.SystemDBID,
+		&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
+		&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,
+		&row.System.DBID, &row.System.SystemID, &row.System.Name,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan GetMediaWithTitleAndSystem: %w", err)
+	}
+	return &row, nil
+}
+
+// GetMediaTagsByMediaDBID returns the file-level tags (MediaTags) for a single
+// Media row, ordered by type then tag value.
+func (db *MediaDB) GetMediaTagsByMediaDBID(ctx context.Context, mediaDBID int64) ([]database.TagInfo, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	stmt, err := db.sql.PrepareContext(ctx, `
+		SELECT Tags.Tag, TagTypes.Type
+		FROM MediaTags
+		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE MediaTags.MediaDBID = ?
+		ORDER BY TagTypes.Type, Tags.Tag
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare GetMediaTagsByMediaDBID: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	rows, err := stmt.QueryContext(ctx, mediaDBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query GetMediaTagsByMediaDBID: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	return scanTagInfos(rows)
+}
+
+// GetMediaTitleTagsByMediaTitleDBID returns the title-level tags (MediaTitleTags)
+// for a single MediaTitle row, ordered by type then tag value.
+func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBID(ctx context.Context, mediaTitleDBID int64) ([]database.TagInfo, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	stmt, err := db.sql.PrepareContext(ctx, `
+		SELECT Tags.Tag, TagTypes.Type
+		FROM MediaTitleTags
+		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE MediaTitleTags.MediaTitleDBID = ?
+		ORDER BY TagTypes.Type, Tags.Tag
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare GetMediaTitleTagsByMediaTitleDBID: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	rows, err := stmt.QueryContext(ctx, mediaTitleDBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query GetMediaTitleTagsByMediaTitleDBID: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	return scanTagInfos(rows)
+}
+
+func scanTagInfos(rows *sql.Rows) ([]database.TagInfo, error) {
+	result := make([]database.TagInfo, 0)
+	for rows.Next() {
+		var t database.TagInfo
+		if err := rows.Scan(&t.Tag, &t.Type); err != nil {
+			return nil, fmt.Errorf("failed to scan TagInfo: %w", err)
+		}
+		t.Tag = tags.UnpadTagValue(t.Tag)
+		result = append(result, t)
+	}
+	return result, rows.Err()
+}
+
 func scanProperties(rows *sql.Rows) ([]database.MediaProperty, error) {
 	var props []database.MediaProperty
 	for rows.Next() {

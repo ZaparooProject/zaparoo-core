@@ -176,6 +176,10 @@ type MediaHistoryTopParams struct {
 	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
 }
 
+type MediaMetaParams struct {
+	MediaID int64 `json:"mediaId" validate:"required,gt=0"`
+}
+
 type MediaLookupParams struct {
 	FuzzySystem *bool  `json:"fuzzySystem,omitempty"`
 	Name        string `json:"name" validate:"required,min=1"`

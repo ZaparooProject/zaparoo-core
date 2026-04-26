@@ -152,6 +152,14 @@ type Media struct {
 	IsMissing      bool
 }
 
+// MediaFullRow is the result of a joined query fetching a Media record together
+// with its parent MediaTitle and System in a single round-trip.
+type MediaFullRow struct {
+	Media
+	Title  MediaTitle
+	System System
+}
+
 type TagType struct {
 	Type        string
 	DBID        int64
@@ -602,4 +610,18 @@ type MediaDBI interface {
 	// GetMediaProperties returns all properties for a Media row,
 	// with TypeTagDBID resolved to the tag value string.
 	GetMediaProperties(ctx context.Context, mediaDBID int64) ([]MediaProperty, error)
+
+	// GetMediaWithTitleAndSystem fetches a Media record together with its parent
+	// MediaTitle and System via a single JOIN query. Returns nil, nil when no
+	// Media row with the given DBID exists. IsMissing is NOT filtered — metadata
+	// remains accessible for missing files.
+	GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int64) (*MediaFullRow, error)
+
+	// GetMediaTagsByMediaDBID returns the file-level tags (MediaTags) for a
+	// single Media row. Does not include title-level tags.
+	GetMediaTagsByMediaDBID(ctx context.Context, mediaDBID int64) ([]TagInfo, error)
+
+	// GetMediaTitleTagsByMediaTitleDBID returns the title-level tags
+	// (MediaTitleTags) for a single MediaTitle row.
+	GetMediaTitleTagsByMediaTitleDBID(ctx context.Context, mediaTitleDBID int64) ([]TagInfo, error)
 }
