@@ -20,9 +20,11 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,6 +68,94 @@ func TestBuildManifest_ValidAssets(t *testing.T) {
 	assert.Equal(t, "v2.10.0/zaparoo-windows_amd64.zip", assetsByName["zaparoo-windows_amd64.zip"].URL)
 	assert.Equal(t, int64(256), assetsByName["checksums.txt"].Size)
 	assert.Equal(t, "checksums.txt", assetsByName["checksums.txt"].URL)
+}
+
+func TestBuildManifest_IncludesChecksumSignature(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	createAssetFile(t, dir, "zaparoo-linux_amd64.tar.gz", 1024)
+	createAssetFile(t, dir, "checksums.txt", 256)
+	createAssetFile(t, dir, "checksums.txt.sig", 64)
+
+	m, err := buildManifest("v2.10.0", dir, "", false, nil)
+	require.NoError(t, err)
+
+	assetsByName := make(map[string]*asset)
+	for _, a := range m.Releases[0].Assets {
+		assetsByName[a.Name] = a
+	}
+	assert.Equal(t, "checksums.txt", assetsByName["checksums.txt"].URL)
+	assert.Equal(t, "checksums.txt.sig", assetsByName["checksums.txt.sig"].URL)
+}
+
+func TestBuildManifestFromGithubRelease(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	createAssetFile(t, dir, "checksums.txt", 128)
+	createAssetFile(t, dir, "checksums.txt.sig", 64)
+
+	publishedAt := time.Date(2026, 4, 27, 1, 2, 3, 0, time.UTC)
+	release := &githubRelease{
+		TagName:     "v2.11.0",
+		URL:         "https://github.com/ZaparooProject/zaparoo-core/releases/tag/v2.11.0",
+		PublishedAt: publishedAt,
+		Assets: []githubAsset{
+			{
+				Name: "zaparoo-linux_amd64-2.11.0.tar.gz",
+				URL:  "https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.11.0/zaparoo-linux_amd64-2.11.0.tar.gz",
+				Size: 1024,
+			},
+			{
+				Name: "zaparoo-amd64-2.11.0-setup.exe",
+				URL:  "https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.11.0/zaparoo-amd64-2.11.0-setup.exe",
+				Size: 2048,
+			},
+		},
+	}
+
+	assets, err := assetsFromGithubRelease(release, dir)
+	require.NoError(t, err)
+	m, err := buildManifestFromAssets("v2.11.0", release.URL, release.PublishedAt, "notes", false, assets, nil)
+	require.NoError(t, err)
+
+	require.Len(t, m.Releases, 1)
+	releaseManifest := m.Releases[0]
+	assert.Equal(t, release.URL, releaseManifest.URL)
+	assert.Equal(t, publishedAt, releaseManifest.PublishedAt)
+	require.Len(t, releaseManifest.Assets, 3)
+
+	assetsByName := make(map[string]*asset)
+	for _, a := range releaseManifest.Assets {
+		assetsByName[a.Name] = a
+	}
+	assert.Equal(t,
+		"https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.11.0/zaparoo-linux_amd64-2.11.0.tar.gz",
+		assetsByName["zaparoo-linux_amd64-2.11.0.tar.gz"].URL,
+	)
+	assert.NotContains(t, assetsByName, "zaparoo-amd64-2.11.0-setup.exe")
+	assert.Equal(t, "checksums.txt", assetsByName["checksums.txt"].URL)
+	assert.Equal(t, "checksums.txt.sig", assetsByName["checksums.txt.sig"].URL)
+}
+
+func TestLoadGithubRelease(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	releasePath := filepath.Join(dir, "release.json")
+	release := githubRelease{
+		TagName: "v1.0.0",
+		Assets:  []githubAsset{{Name: "zaparoo-linux_amd64-1.0.0.tar.gz", URL: "https://example.com/asset", Size: 100}},
+	}
+	data, err := json.Marshal(release)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(releasePath, data, 0o600))
+
+	loaded, err := loadGithubRelease(releasePath)
+	require.NoError(t, err)
+	assert.Equal(t, "v1.0.0", loaded.TagName)
+	require.Len(t, loaded.Assets, 1)
 }
 
 func TestBuildManifest_SkipsNonAssetFiles(t *testing.T) {
@@ -334,6 +424,45 @@ func TestLoadManifest(t *testing.T) {
 	assert.Equal(t, int64(1), loaded.LastAssetID)
 	require.Len(t, loaded.Releases, 1)
 	assert.Equal(t, "v2.10.0", loaded.Releases[0].TagName)
+}
+
+func TestLoadManifest_NormalizesArchiveURLsToGitHub(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "manifest.yaml")
+
+	original := &manifest{
+		LastReleaseID: 1,
+		LastAssetID:   2,
+		Releases: []*release{
+			{
+				ID:      1,
+				Name:    "v2.10.0",
+				TagName: "v2.10.0",
+				Assets: []*asset{
+					{ID: 1, Name: "zaparoo-linux_amd64-2.10.0.tar.gz", Size: 100, URL: "zaparoo-linux_amd64-2.10.0.tar.gz"},
+					{ID: 2, Name: "checksums.txt", Size: 100, URL: "checksums.txt"},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, writeManifest(original, manifestPath))
+
+	loaded, err := loadManifest(manifestPath)
+	require.NoError(t, err)
+	require.Len(t, loaded.Releases, 1)
+	require.Len(t, loaded.Releases[0].Assets, 3)
+	assert.Equal(t,
+		"https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.10.0/zaparoo-linux_amd64-2.10.0.tar.gz",
+		loaded.Releases[0].Assets[0].URL,
+	)
+	assert.Equal(t, "checksums.txt", loaded.Releases[0].Assets[1].URL)
+	assert.Equal(t, int64(3), loaded.Releases[0].Assets[2].ID)
+	assert.Equal(t, "checksums.txt.sig", loaded.Releases[0].Assets[2].Name)
+	assert.Equal(t, "checksums.txt.sig", loaded.Releases[0].Assets[2].URL)
+	assert.Equal(t, int64(3), loaded.LastAssetID)
 }
 
 func TestLoadManifest_NonexistentFile(t *testing.T) {

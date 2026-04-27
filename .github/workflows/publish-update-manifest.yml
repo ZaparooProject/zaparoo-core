@@ -7,82 +7,15 @@ permissions:
   contents: read
 
 jobs:
-  publish-stable:
-    # Publish manifest for stable releases (no pre-releases like v2.10.0-rc3)
-    if: ${{ !github.event.release.prerelease }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    name: Publish stable update manifest to CDN
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          sparse-checkout: |
-            scripts/generate-update-manifest/
-            go.mod
-            go.sum
-          sparse-checkout-cone-mode: false
-      - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Download release assets
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p _assets
-          gh release download "${{ github.event.release.tag_name }}" --dir _assets \
-            --pattern "zaparoo-*.tar.gz" \
-            --pattern "zaparoo-*.zip"
-      - name: Generate and sign checksums
-        env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        run: |
-          if ! ls _assets/zaparoo-* >/dev/null 2>&1; then
-            echo "No release assets found" >&2; exit 1
-          fi
-          if [ -z "$UPDATE_SIGNING_KEY" ]; then
-            echo "UPDATE_SIGNING_KEY secret is not configured" >&2; exit 1
-          fi
-          cd _assets && sha256sum zaparoo-* > checksums.txt && cd ..
-          install -m 600 /dev/stdin /tmp/signing.pem <<< "$UPDATE_SIGNING_KEY"
-          openssl pkeyutl -sign -inkey /tmp/signing.pem -rawin \
-            -in _assets/checksums.txt > _assets/checksums.txt.sig
-          rm /tmp/signing.pem
-      - name: Generate manifest
-        env:
-          RELEASE_NOTES: ${{ github.event.release.body }}
-        run: |
-          go run scripts/generate-update-manifest/main.go \
-            --version "${{ github.event.release.tag_name }}" \
-            --assets-dir _assets \
-            --release-notes "$RELEASE_NOTES" \
-            --output _manifest/manifest.yaml
-          cp _assets/checksums.txt _manifest/checksums.txt
-          cp _assets/checksums.txt.sig _manifest/checksums.txt.sig
-      - name: Upload manifest to Bunny.net storage
-        uses: R-J-dev/bunny-deploy@ae25fa670b732ffc8dba84c872fb203d2a365229 # v3.0.0
-        with:
-          storage-zone-password: ${{ secrets.BUNNY_STORAGE_ZONE_PASSWORD }}
-          storage-endpoint: "https://storage.bunnycdn.com"
-          storage-zone-name: ${{ secrets.BUNNY_STORAGE_ZONE }}
-          directory-to-upload: "_manifest"
-          target-directory: "ZaparooProject/zaparoo-core"
-          concurrency: "10"
-          access-key: ${{ secrets.BUNNY_API_KEY }}
-          pull-zone-id: ${{ secrets.BUNNY_PULL_ZONE_ID }}
-          enable-purge-pull-zone: true
-          replication-timeout: "15000"
-
-  publish-beta:
-    # Publish manifest for pre-releases (beta, rc, alpha) but not nightlies
-    if: ${{ github.event.release.prerelease && !contains(github.event.release.tag_name, 'nightly') }}
+  publish-update-manifest:
+    # Publish manifests for stable releases and non-nightly pre-releases.
+    if: ${{ !github.event.release.prerelease || !contains(github.event.release.tag_name, 'nightly') }}
     concurrency:
       group: publish-update-manifest
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    name: Publish beta update manifest to CDN
+    name: Publish update manifest to CDN
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -92,83 +25,140 @@ jobs:
             go.mod
             go.sum
           sparse-checkout-cone-mode: false
+
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
           cache: false
-      - name: Download existing manifest from CDN
-        run: |
-          mkdir -p _existing
-          # Download existing manifest, checksums, and signature (may not exist yet)
-          curl -sf "https://updates.zaparoo.org/ZaparooProject/zaparoo-core/manifest.yaml" \
-            -o _existing/manifest.yaml || true
-          curl -sf "https://updates.zaparoo.org/ZaparooProject/zaparoo-core/checksums.txt" \
-            -o _existing/checksums.txt || true
-          curl -sf "https://updates.zaparoo.org/ZaparooProject/zaparoo-core/checksums.txt.sig" \
-            -o _existing/checksums.txt.sig || true
-      - name: Download release assets
+
+      - name: Fetch release metadata
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p _assets
-          gh release download "${{ github.event.release.tag_name }}" --dir _assets \
-            --pattern "zaparoo-*.tar.gz" \
-            --pattern "zaparoo-*.zip"
-      - name: Generate checksums, merge with existing, and sign
+          set -euo pipefail
+          mkdir -p _release
+          gh release view "${{ github.event.release.tag_name }}" \
+            --json assets,tagName,url,publishedAt \
+            > _release/release.json
+
+      - name: Download and verify existing metadata
         env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          ALLOW_BOOTSTRAP_MANIFEST: ${{ vars.ALLOW_BOOTSTRAP_UPDATE_MANIFEST }}
         run: |
-          if ! ls _assets/zaparoo-* >/dev/null 2>&1; then
-            echo "No release assets found" >&2; exit 1
+          set -euo pipefail
+          mkdir -p _existing
+          base_url="https://updates.zaparoo.org/ZaparooProject/zaparoo-core"
+
+          if curl -fsS "$base_url/manifest.yaml" -o _existing/manifest.yaml && \
+             curl -fsS "$base_url/checksums.txt" -o _existing/checksums.txt && \
+             curl -fsS "$base_url/checksums.txt.sig" -o _existing/checksums.txt.sig; then
+            touch _existing/metadata-present
+          elif [ "${ALLOW_BOOTSTRAP_MANIFEST:-false}" = "true" ]; then
+            echo "Existing update metadata missing; bootstrapping because ALLOW_BOOTSTRAP_UPDATE_MANIFEST=true"
+          else
+            echo "Existing update metadata is missing or incomplete; refusing to replace it" >&2
+            exit 1
           fi
-          if [ -z "$UPDATE_SIGNING_KEY" ]; then
-            echo "UPDATE_SIGNING_KEY secret is not configured" >&2; exit 1
-          fi
-          cd _assets && sha256sum zaparoo-* > checksums.txt && cd ..
-          # Merge with existing checksums only after verifying their signature
-          if [ -f _existing/checksums.txt ] && [ -f _existing/checksums.txt.sig ]; then
-            # Convert embedded ed25519 public key to PEM for OpenSSL
-            RAW_PUB=$(tr -d '[:space:]' < pkg/service/updater/update_signing.pub)
+
+          if [ -f _existing/metadata-present ]; then
+            raw_pub=$(tr -d '[:space:]' < pkg/service/updater/update_signing.pub)
             {
               echo "-----BEGIN PUBLIC KEY-----"
-              (echo -n 'MCowBQYDK2VwAyEA' | base64 -d; echo -n "$RAW_PUB" | base64 -d) | base64 | fold -w 64
+              (echo -n 'MCowBQYDK2VwAyEA' | base64 -d; echo -n "$raw_pub" | base64 -d) | base64 | fold -w 64
               echo "-----END PUBLIC KEY-----"
             } > /tmp/verify.pem
-            if openssl pkeyutl -verify -pubin -inkey /tmp/verify.pem -rawin \
-                 -in _existing/checksums.txt -sigfile _existing/checksums.txt.sig; then
-              echo "Existing checksums signature verified, merging"
-              cat _assets/checksums.txt _existing/checksums.txt \
-                | awk '{ key=$2 } !seen[key]++ { print }' > _merged_checksums.txt
-              mv _merged_checksums.txt _assets/checksums.txt
-            else
-              echo "WARNING: Existing checksums signature verification failed, skipping merge" >&2
-            fi
+            openssl pkeyutl -verify -pubin -inkey /tmp/verify.pem -rawin \
+              -in _existing/checksums.txt -sigfile _existing/checksums.txt.sig
             rm -f /tmp/verify.pem
-          elif [ -f _existing/checksums.txt ]; then
-            echo "WARNING: Existing checksums found without signature, skipping merge" >&2
           fi
-          install -m 600 /dev/stdin /tmp/signing.pem <<< "$UPDATE_SIGNING_KEY"
-          openssl pkeyutl -sign -inkey /tmp/signing.pem -rawin \
-            -in _assets/checksums.txt > _assets/checksums.txt.sig
-          rm /tmp/signing.pem
-      - name: Generate manifest
+
+      - name: Generate and sign metadata
         env:
           RELEASE_NOTES: ${{ github.event.release.body }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
-          MERGE_FLAG=()
-          if [ -f _existing/manifest.yaml ]; then
-            MERGE_FLAG=(--merge _existing/manifest.yaml)
+          set -euo pipefail
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "UPDATE_SIGNING_KEY secret is not configured" >&2
+            exit 1
           fi
+
+          mkdir -p _manifest _work
+          selected_count=$(jq '[.assets[] | select((.name | startswith("zaparoo-")) and ((.name | endswith(".tar.gz")) or (.name | endswith(".zip"))))] | length' _release/release.json)
+          digest_count=$(jq '[.assets[] | select((.name | startswith("zaparoo-")) and ((.name | endswith(".tar.gz")) or (.name | endswith(".zip")))) | select((.digest // "") | startswith("sha256:"))] | length' _release/release.json)
+          if [ "$selected_count" -eq 0 ]; then
+            echo "No update release assets found" >&2
+            exit 1
+          fi
+          if [ "$selected_count" -ne "$digest_count" ]; then
+            echo "One or more update release assets are missing sha256 digests" >&2
+            exit 1
+          fi
+
+          jq -r '.assets[]
+            | select((.name | startswith("zaparoo-")) and ((.name | endswith(".tar.gz")) or (.name | endswith(".zip"))))
+            | "\(.digest | sub("^sha256:"; ""))  \(.name)"' \
+            _release/release.json > _work/new-checksums.txt
+
+          if [ -f _existing/metadata-present ]; then
+            cat _work/new-checksums.txt _existing/checksums.txt \
+              | awk '{ key=$2 } !seen[key]++ { print }' > _manifest/checksums.txt
+          else
+            cp _work/new-checksums.txt _manifest/checksums.txt
+          fi
+
+          install -m 600 /dev/stdin /tmp/signing.pem <<< "$UPDATE_SIGNING_KEY"
+          openssl pkeyutl -sign -inkey /tmp/signing.pem -rawin \
+            -in _manifest/checksums.txt > _manifest/checksums.txt.sig
+          rm /tmp/signing.pem
+
+          raw_pub=$(tr -d '[:space:]' < pkg/service/updater/update_signing.pub)
+          {
+            echo "-----BEGIN PUBLIC KEY-----"
+            (echo -n 'MCowBQYDK2VwAyEA' | base64 -d; echo -n "$raw_pub" | base64 -d) | base64 | fold -w 64
+            echo "-----END PUBLIC KEY-----"
+          } > /tmp/verify.pem
+          openssl pkeyutl -verify -pubin -inkey /tmp/verify.pem -rawin \
+            -in _manifest/checksums.txt -sigfile _manifest/checksums.txt.sig
+          rm -f /tmp/verify.pem
+
+          merge_flag=()
+          if [ -f _existing/metadata-present ]; then
+            merge_flag=(--merge _existing/manifest.yaml)
+          fi
+          prerelease_flag=()
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            prerelease_flag=(--prerelease)
+          fi
+
           go run scripts/generate-update-manifest/main.go \
             --version "${{ github.event.release.tag_name }}" \
-            --assets-dir _assets \
+            --github-release _release/release.json \
+            --metadata-dir _manifest \
             --release-notes "$RELEASE_NOTES" \
-            --prerelease \
-            "${MERGE_FLAG[@]}" \
+            "${prerelease_flag[@]}" \
+            "${merge_flag[@]}" \
             --output _manifest/manifest.yaml
-          cp _assets/checksums.txt _manifest/checksums.txt
-          cp _assets/checksums.txt.sig _manifest/checksums.txt.sig
+
+      - name: Validate publish directory
+        run: |
+          set -euo pipefail
+          files=$(find _manifest -maxdepth 1 -type f -printf '%f\n' | sort | paste -sd ',' -)
+          if [ "$files" != "checksums.txt,checksums.txt.sig,manifest.yaml" ]; then
+            echo "Unexpected files in _manifest: $files" >&2
+            exit 1
+          fi
+          if grep -q 'updates.zaparoo.org.*/zaparoo-' _manifest/manifest.yaml; then
+            echo "Manifest contains CDN-hosted release archive URLs" >&2
+            exit 1
+          fi
+          if grep -Eq '^ +url: (zaparoo-|v[^/]+/zaparoo-)' _manifest/manifest.yaml; then
+            echo "Manifest contains relative release archive URLs" >&2
+            exit 1
+          fi
+
       - name: Upload manifest to Bunny.net storage
         uses: R-J-dev/bunny-deploy@ae25fa670b732ffc8dba84c872fb203d2a365229 # v3.0.0
         with:
@@ -180,5 +170,6 @@ jobs:
           concurrency: "10"
           access-key: ${{ secrets.BUNNY_API_KEY }}
           pull-zone-id: ${{ secrets.BUNNY_PULL_ZONE_ID }}
+          enable-delete-action: false
           enable-purge-pull-zone: true
           replication-timeout: "15000"

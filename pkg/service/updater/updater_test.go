@@ -22,6 +22,9 @@ package updater
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -29,10 +32,21 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+type stubSource struct{}
+
+func (stubSource) ListReleases(context.Context, selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
+	return nil, nil
+}
+
+func (stubSource) DownloadReleaseAsset(context.Context, *selfupdate.Release, int64) (io.ReadCloser, error) {
+	return nil, selfupdate.ErrAssetNotFound
+}
 
 func TestCheck_DevelopmentVersion(t *testing.T) {
 	devVersions := []string{"DEVELOPMENT", "abc1234-dev"}
@@ -226,4 +240,35 @@ func TestApply_CancelledContext(t *testing.T) {
 	version, err := Apply(ctx, "linux", "stable")
 	require.Error(t, err)
 	assert.Empty(t, version)
+}
+
+func TestValidationChainHTTPSource_DownloadsNestedValidationAsset(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/checksums.txt.sig", r.URL.Path)
+		_, _ = w.Write([]byte("signature"))
+	}))
+	t.Cleanup(server.Close)
+
+	source := &validationChainHTTPSource{source: stubSource{}, transport: http.DefaultTransport.(*http.Transport).Clone()}
+	release := &selfupdate.Release{
+		AssetID:           1,
+		ValidationAssetID: 2,
+		ValidationChain: []struct {
+			ValidationAssetID                       int64
+			ValidationAssetName, ValidationAssetURL string
+		}{
+			{ValidationAssetID: 2, ValidationAssetName: "checksums.txt", ValidationAssetURL: server.URL + "/checksums.txt"},
+			{ValidationAssetID: 3, ValidationAssetName: "checksums.txt.sig", ValidationAssetURL: server.URL + "/checksums.txt.sig"},
+		},
+	}
+
+	reader, err := source.DownloadReleaseAsset(t.Context(), release, 3)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("signature"), data)
 }
