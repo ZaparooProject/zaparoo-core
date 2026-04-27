@@ -53,9 +53,9 @@ type RequestEnv struct {
 	// Scrapers is a read-only snapshot of all registered scrapers, shared across
 	// all in-flight requests. It is fully populated before any handlers run and
 	// must not be mutated after that point — no locking is used.
-	Scrapers map[string]scraper.Scraper
-	IndexPauser   *syncutil.Pauser
-	ClientID      string
-	Params        json.RawMessage
-	IsLocal       bool
+	Scrapers    map[string]scraper.Scraper
+	IndexPauser *syncutil.Pauser
+	ClientID    string
+	Params      json.RawMessage
+	IsLocal     bool
 }

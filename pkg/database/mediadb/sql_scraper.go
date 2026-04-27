@@ -265,9 +265,9 @@ func upsertTags(
 
 	// Group tags by type so that deleteFn is called at most once per exclusive type.
 	type typeEntry struct {
+		tags        []database.TagInfo
 		dbid        int64
 		isExclusive bool
-		tags        []database.TagInfo
 	}
 	typeOrder := make([]string, 0, len(tagInfos)) // preserve insertion order
 	byType := make(map[string]*typeEntry, len(tagInfos))

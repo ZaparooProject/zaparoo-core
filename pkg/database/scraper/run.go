@@ -222,7 +222,8 @@ func RunScraper[T any](
 				}
 
 				// Step 7: write sentinel last — absent sentinel means safe to retry.
-				if err := db.UpsertMediaTags(ctx, match.MediaDBID, []database.TagInfo{sentinelTagInfo(s.ID())}); err != nil {
+				sentinelTag := []database.TagInfo{sentinelTagInfo(s.ID())}
+				if err := db.UpsertMediaTags(ctx, match.MediaDBID, sentinelTag); err != nil {
 					log.Warn().Err(err).Int64("mediaDBID", match.MediaDBID).Msg("scraper: failed to write sentinel tag")
 					skipped++
 					ch <- ScrapeUpdate{

@@ -56,7 +56,7 @@ func TestUnmarshalGameIDVariants(t *testing.T) {
 		data := []byte(`<game><id>99</id><path>./rom.nes</path></game>`)
 		var g Game
 		require.NoError(t, xml.Unmarshal(data, &g))
-		assert.Equal(t, "", g.ScreenScraperIDAttr, "attribute form should be empty when absent")
+		assert.Empty(t, g.ScreenScraperIDAttr, "attribute form should be empty when absent")
 		assert.Equal(t, 99, g.ScreenScraperID)
 	})
 
@@ -65,7 +65,7 @@ func TestUnmarshalGameIDVariants(t *testing.T) {
 		data := []byte(`<game><path>./rom.nes</path></game>`)
 		var g Game
 		require.NoError(t, xml.Unmarshal(data, &g))
-		assert.Equal(t, "", g.ScreenScraperIDAttr)
+		assert.Empty(t, g.ScreenScraperIDAttr)
 		assert.Equal(t, 0, g.ScreenScraperID)
 	})
 }

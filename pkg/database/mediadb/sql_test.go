@@ -393,7 +393,8 @@ func TestSqlTruncateSystems_SingleSystem(t *testing.T) {
 	assert.Equal(t, 0, tag2, "NES-only tag (RPG) should be deleted")
 	assert.Equal(t, 1, tag3, "unreferenced tag (Extension) must survive")
 	// Tag 4 is referenced by both MediaTitleProperties and MediaProperties for NES → deleted as orphan.
-	assert.Equal(t, 0, tag4, "NES-only tag (Cover) should be deleted — referenced by both MediaTitleProperties and MediaProperties")
+	// Tag 4 referenced by both MediaTitleProperties and MediaProperties for NES → deleted as orphan.
+	assert.Equal(t, 0, tag4, "NES-only tag (Cover) should be deleted")
 
 	// ROM-level property on NES media should be removed; no SNES MediaProperties exist so count is 0.
 	var nesMediaPropCount int
