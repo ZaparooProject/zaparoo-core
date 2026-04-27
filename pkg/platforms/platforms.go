@@ -123,6 +123,7 @@ type Control struct {
 // command. Every command run has access to and can modify it.
 type CmdEnv struct {
 	LauncherCtx   context.Context
+	ServiceCtx    context.Context
 	Playlist      playlists.PlaylistController
 	Cfg           *config.Instance
 	Database      *database.Database

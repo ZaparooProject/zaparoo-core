@@ -20,6 +20,9 @@
 package service
 
 import (
+	"context"
+	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -35,6 +39,47 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStartReturnsErrorWhenAPIPortIsOccupied(t *testing.T) {
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, listener.Close()) }()
+
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+
+	testRoot := t.TempDir()
+	settings := platforms.Settings{
+		ConfigDir: testRoot,
+		DataDir:   testRoot,
+		LogDir:    testRoot,
+		TempDir:   testRoot,
+	}
+
+	cfg, err := testhelpers.NewTestConfigWithPort(nil, testRoot, tcpAddr.Port)
+	require.NoError(t, err)
+	cfg.SetAutoUpdate(false)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("mock-platform")
+	mockPlatform.On("Settings").Return(settings)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{testRoot})
+	mockPlatform.On("SupportedReaders", mock.AnythingOfType("*config.Instance")).Return([]readers.Reader{})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
+	mockPlatform.On("ManagedByPackageManager").Return(false)
+	mockPlatform.On("StartPre", cfg).Return(nil)
+	mockPlatform.On("Stop").Return(nil).Maybe()
+
+	svcResult, err := Start(mockPlatform, cfg)
+	require.Nil(t, svcResult)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "api startup failed")
+	assert.True(t, strings.Contains(err.Error(), "bind") || strings.Contains(err.Error(), "address already in use"))
+	mockPlatform.AssertNotCalled(
+		t, "StartPost", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	)
+	mockPlatform.AssertCalled(t, "Stop")
+}
 
 func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
 	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB

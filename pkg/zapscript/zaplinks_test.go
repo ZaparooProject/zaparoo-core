@@ -292,7 +292,7 @@ func TestPreWarmHost_HTTPError(t *testing.T) {
 	mockClient.On("Do", mock.Anything).Return(nil, errors.New("connection refused"))
 
 	// Should handle error gracefully without panicking
-	preWarmHost("https://example.com", db, mockClient)
+	preWarmHost(t.Context(), "https://example.com", db, mockClient)
 
 	mockClient.AssertExpectations(t)
 	mockUserDB.AssertNotCalled(t, "UpdateZapLinkHost")
@@ -315,7 +315,7 @@ func TestPreWarmHost_NonOKStatus(t *testing.T) {
 	}
 	mockClient.On("Do", mock.Anything).Return(resp, nil)
 
-	preWarmHost("https://example.com", db, mockClient)
+	preWarmHost(t.Context(), "https://example.com", db, mockClient)
 
 	mockClient.AssertExpectations(t)
 	// UpdateZapLinkHost should not be called for non-OK status
@@ -362,7 +362,7 @@ func TestPreWarmHost_Success(t *testing.T) {
 	// Expect UpdateZapLinkHost to be called on success
 	mockUserDB.On("UpdateZapLinkHost", server.URL, 1).Return(nil)
 
-	preWarmHost(server.URL, db, server.Client())
+	preWarmHost(t.Context(), server.URL, db, server.Client())
 
 	assert.True(t, headRequestReceived, "HEAD request should have been made")
 	mockUserDB.AssertExpectations(t)
@@ -387,7 +387,7 @@ func TestPreWarmHost_DoesNotSendHeaders(t *testing.T) {
 		MediaDB: mockMediaDB,
 	}
 
-	preWarmHost("https://example.com", db, mockClient)
+	preWarmHost(t.Context(), "https://example.com", db, mockClient)
 
 	require.NotNil(t, capturedReq)
 	assert.Equal(t, http.MethodHead, capturedReq.Method)

@@ -96,5 +96,8 @@ func CloseLogging() error {
 	err := logFileWriter.Close()
 	logFileWriter = nil
 	logWriter = nil
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to close log file writer: %w", err)
+	}
+	return nil
 }

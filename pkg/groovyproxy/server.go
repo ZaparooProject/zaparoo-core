@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -51,10 +52,28 @@ func Start(
 	coreConn, err := lc.ListenPacket(ctx, "udp4", ":0")
 	if err != nil {
 		log.Error().Err(err).Msg("error creating GMC Groovy Core listener socket, aborting GMC Proxy")
+		return
 	}
+	var proxyConn net.PacketConn
+	var readerWG sync.WaitGroup
+	var beaconTicker *time.Ticker
+	defer func() {
+		if beaconTicker != nil {
+			beaconTicker.Stop()
+		}
+		if closeErr := coreConn.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("error closing core connection")
+		}
+		if proxyConn != nil {
+			if closeErr := proxyConn.Close(); closeErr != nil {
+				log.Error().Err(closeErr).Msg("error closing proxy connection")
+			}
+		}
+		readerWG.Wait()
+	}()
 
 	// Allow external GMC command runners to beacon to this proxy for forwarding
-	proxyConn, err := lc.ListenPacket(ctx, "udp4", fmt.Sprintf(":%v", proxyGMCPort))
+	proxyConn, err = lc.ListenPacket(ctx, "udp4", fmt.Sprintf(":%v", proxyGMCPort))
 	if err != nil {
 		log.Error().Err(err).Msg("error creating GMC Proxy listener socket, aborting GMC Proxy")
 		return
@@ -71,7 +90,9 @@ func Start(
 	var proxyAddr *net.Addr
 	proxyAddrChan := make(chan net.Addr)
 	// Listen for Proxy Server Beacons to get proxyAddr for forwarding
+	readerWG.Add(1)
 	go func() {
+		defer readerWG.Done()
 		defer close(proxyAddrChan)
 		for {
 			select {
@@ -87,14 +108,20 @@ func Start(
 				if errors.Is(readErr, net.ErrClosed) {
 					return
 				}
-				proxyAddrChan <- addr
+				select {
+				case proxyAddrChan <- addr:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
 
 	// Listen for Core GMC commands
 	gmcChan := make(chan []byte)
+	readerWG.Add(1)
 	go func() {
+		defer readerWG.Done()
 		defer close(gmcChan)
 		for {
 			select {
@@ -110,13 +137,17 @@ func Start(
 				if errors.Is(readErr, net.ErrClosed) {
 					return
 				}
-				gmcChan <- buf[:rlen]
+				select {
+				case gmcChan <- buf[:rlen]:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
 
 	freq, _ := time.ParseDuration(beaconInterval)
-	beaconTicker := time.NewTicker(freq)
+	beaconTicker = time.NewTicker(freq)
 	for {
 		select {
 		case <-beaconTicker.C:
@@ -124,9 +155,15 @@ func Start(
 			if writeErr != nil {
 				log.Warn().Err(writeErr).Msg("error sending GMC beacon to Groovy core")
 			}
-		case addr := <-proxyAddrChan:
+		case addr, ok := <-proxyAddrChan:
+			if !ok {
+				return
+			}
 			proxyAddr = &addr
-		case gmcBytes := <-gmcChan:
+		case gmcBytes, ok := <-gmcChan:
+			if !ok {
+				return
+			}
 			log.Debug().Msg("Receieved GMC Load Event")
 			// **local: can prefix any valid Zapscript to run locally without proxy
 			switch {
@@ -139,7 +176,11 @@ func Start(
 					Source:   tokens.SourceGMC,
 				}
 				st.SetActiveCard(t)
-				itq <- t
+				select {
+				case itq <- t:
+				case <-ctx.Done():
+					return
+				}
 			case proxyAddr != nil:
 				_, writeErr := proxyConn.WriteTo(gmcBytes, *proxyAddr)
 				if writeErr != nil {
@@ -150,13 +191,7 @@ func Start(
 			}
 		case <-ctx.Done():
 			log.Debug().Msg("Closing GMC Proxy via context cancellation")
-			beaconTicker.Stop()
-			if err := coreConn.Close(); err != nil {
-				log.Error().Err(err).Msg("error closing core connection")
-			}
-			if err := proxyConn.Close(); err != nil {
-				log.Error().Err(err).Msg("error closing proxy connection")
-			}
+			return
 		}
 	}
 }

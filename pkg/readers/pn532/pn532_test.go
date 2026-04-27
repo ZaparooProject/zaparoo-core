@@ -87,6 +87,20 @@ func TestIsExpectedDetectionMiss(t *testing.T) {
 	assert.False(t, isExpectedDetectionMiss(errors.New("serial permission denied")))
 }
 
+func TestNewDetectionOptions_DefaultsToUARTOnly(t *testing.T) {
+	t.Parallel()
+
+	ignorePaths := []string{"/dev/ttyUSB0"}
+	opts := newDetectionOptions(ignorePaths)
+
+	assert.Equal(t, quickDetectionTimeout, opts.Timeout)
+	assert.Equal(t, detection.Safe, opts.Mode)
+	assert.Equal(t, []string{detection.TransportUART}, opts.Transports)
+	assert.NotContains(t, opts.Transports, detection.TransportI2C)
+	assert.Equal(t, ignorePaths, opts.IgnorePaths)
+	assert.NotEmpty(t, opts.Blocklist)
+}
+
 func TestCapabilities(t *testing.T) {
 	t.Parallel()
 

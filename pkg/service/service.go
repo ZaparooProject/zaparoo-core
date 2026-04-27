@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
@@ -131,6 +132,22 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 	return db, nil
 }
 
+func closeDatabase(db *database.Database) {
+	if db == nil {
+		return
+	}
+	if db.UserDB != nil {
+		if err := db.UserDB.Close(); err != nil {
+			log.Warn().Err(err).Msg("error closing user database")
+		}
+	}
+	if db.MediaDB != nil {
+		if err := db.MediaDB.Close(); err != nil {
+			log.Warn().Err(err).Msg("error closing media database")
+		}
+	}
+}
+
 // cleanupHistoryOnStartup performs all history cleanup operations at service startup
 func cleanupHistoryOnStartup(cfg *config.Instance, db *database.Database) {
 	// Cleanup old scan history entries if retention is configured
@@ -223,6 +240,7 @@ func Start(
 	lsq := make(chan *tokens.Token)       // launch software queue
 	plq := make(chan *playlists.Playlist) // playlist event queue
 	cfq := make(chan chan error)          // launch guard confirm queue
+	backgroundWG := &sync.WaitGroup{}
 
 	err := setupEnvironment(pl)
 	if err != nil {
@@ -248,17 +266,10 @@ func Start(
 	cleanupHistoryOnStartup(cfg, db)
 
 	pruneExpiredZapLinkHosts(db)
-	go zapscript.PreWarmZapLinkHosts(db, helpers.WaitForInternet)
 
 	// Initialize inbox service for system notifications
 	log.Info().Msg("initializing inbox service")
 	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
-
-	go updater.CheckAndNotify(
-		st.GetContext(), cfg, pl.ID(), st.Inbox(),
-		helpers.WaitForInternet, updater.Check,
-		pl.ManagedByPackageManager(),
-	)
 
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")
@@ -276,6 +287,7 @@ func Start(
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
 		ConfirmQueue:        cfq,
+		BackgroundWG:        backgroundWG,
 	}
 
 	// Set up the OnMediaStart hook
@@ -304,25 +316,68 @@ func Start(
 
 	// Create index pauser to pause media indexing while a game is running.
 	indexPauser := syncutil.NewPauser()
-	go watchGameForIndexPause(st.GetContext(), notifBroker, st, st.Notifications, indexPauser)
 
-	log.Info().Msg("checking for interrupted media indexing")
-	go checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
+	discoveryService := discovery.New(cfg)
 
-	log.Info().Msg("checking for interrupted media optimization")
-	go checkAndResumeOptimization(db, st.Notifications, indexPauser)
+	log.Info().Msg("starting API service")
+	apiReady := make(chan error, 1)
+	apiDone := make(chan error, 1)
+	go func() {
+		apiDone <- api.StartWithReady(
+			pl, cfg, st, itq, cfq, db, limitsManager,
+			notifBroker, discoveryService.InstanceName(), player, indexPauser,
+			apiReady,
+		)
+	}()
+
+	if apiErr := <-apiReady; apiErr != nil {
+		discoveryService.Stop()
+		if stopErr := pl.Stop(); stopErr != nil {
+			log.Warn().Msgf("error stopping platform after API startup failure: %s", stopErr)
+		}
+		if apiDoneErr := <-apiDone; apiDoneErr != nil {
+			log.Debug().Err(apiDoneErr).Msg("API service returned after startup failure")
+		}
+		limitsManager.Stop()
+		notifBroker.Stop()
+		closeDatabase(db)
+		return nil, fmt.Errorf("api startup failed: %w", apiErr)
+	}
 
 	log.Info().Msg("starting mDNS discovery service")
-	discoveryService := discovery.New(cfg)
 	if discoveryErr := discoveryService.Start(); discoveryErr != nil {
 		log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
 	}
 
-	log.Info().Msg("starting API service")
-	go api.Start(
-		pl, cfg, st, itq, cfq, db, limitsManager,
-		notifBroker, discoveryService.InstanceName(), player, indexPauser,
-	)
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		zapscript.PreWarmZapLinkHostsContext(st.GetContext(), db, helpers.WaitForInternetContext)
+	}()
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		updater.CheckAndNotify(
+			st.GetContext(), cfg, pl.ID(), st.Inbox(),
+			helpers.WaitForInternetContext, updater.Check,
+			pl.ManagedByPackageManager(),
+		)
+	}()
+	go watchGameForIndexPause(st.GetContext(), notifBroker, st, st.Notifications, indexPauser)
+
+	log.Info().Msg("checking for interrupted media indexing")
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
+	}()
+
+	log.Info().Msg("checking for interrupted media optimization")
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		checkAndResumeOptimization(db, st.Notifications, indexPauser)
+	}()
 
 	// Build slug search cache after API is listening to avoid blocking startup
 	if db.MediaDB != nil {
@@ -347,37 +402,54 @@ func Start(
 		clock: clockwork.NewRealClock(),
 	}
 	historyNotifications, _ := notifBroker.Subscribe(100)
-	go historyTracker.listen(historyNotifications)
+	historyListenDone := make(chan struct{})
+	go func() {
+		defer close(historyListenDone)
+		historyTracker.listen(historyNotifications)
+	}()
 	log.Info().Msg("starting media history PlayTime updater")
-	go historyTracker.updatePlayTime(st.GetContext())
+	historyUpdateDone := make(chan struct{})
+	go func() {
+		defer close(historyUpdateDone)
+		historyTracker.updatePlayTime(st.GetContext())
+	}()
 
 	// Start clock reliability monitor for timestamp healing (MiSTer NTP sync)
 	log.Info().Msg("starting clock reliability monitor")
-	go monitorClockAndHealTimestamps(st.GetContext(), db, bootUUID)
+	clockMonitorDone := make(chan struct{})
+	go func() {
+		defer close(clockMonitorDone)
+		monitorClockAndHealTimestamps(st.GetContext(), db, bootUUID)
+	}()
 
 	if cfg.GmcProxyEnabled() {
 		log.Info().Msg("starting GroovyMiSTer GMC Proxy service")
-		go groovyproxy.Start(cfg, st, itq)
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			groovyproxy.Start(cfg, st, itq)
+		}()
 	}
 
 	log.Info().Msg("starting reader manager")
-	go readerManager(svc, itq, make(chan readers.Scan), player, nil)
+	readerManagerDone := make(chan struct{})
+	go func() {
+		defer close(readerManagerDone)
+		readerManager(svc, itq, make(chan readers.Scan), player, nil)
+	}()
 
 	log.Info().Msg("starting input token queue manager")
-	go processTokenQueue(svc, itq, limitsManager, player)
-
-	log.Info().Msg("running platform post start")
-	err = pl.StartPost(cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia, db)
-	if err != nil {
-		log.Error().Err(err).Msg("platform post start error")
-		return nil, fmt.Errorf("platform start post failed: %w", err)
-	}
-	log.Info().Msg("platform post start completed, service fully initialized")
+	processTokenQueueDone := make(chan struct{})
+	go func() {
+		defer close(processTokenQueueDone)
+		processTokenQueue(svc, itq, limitsManager, player)
+	}()
 
 	doneCh := make(chan struct{})
 	go func() {
 		<-st.GetContext().Done()
 		log.Info().Msg("service context cancelled, running cleanup")
+		indexPauser.Resume()
 
 		discoveryService.Stop()
 		cancelPublisherFanOut()
@@ -387,15 +459,36 @@ func Start(
 		if stopErr := pl.Stop(); stopErr != nil {
 			log.Warn().Msgf("error stopping platform: %s", stopErr)
 		}
+		if apiErr := <-apiDone; apiErr != nil {
+			log.Error().Err(apiErr).Msg("API service stopped with error")
+		}
+		limitsManager.Stop()
 		notifBroker.Stop()
+		<-historyListenDone
+		<-historyUpdateDone
+		<-clockMonitorDone
+		<-processTokenQueueDone
+		<-readerManagerDone
+		backgroundWG.Wait()
 		close(plq)
 		close(lsq)
 		close(itq)
 		close(cfq)
+		closeDatabase(db)
 
 		log.Info().Msg("service cleanup completed")
 		close(doneCh)
 	}()
+
+	log.Info().Msg("running platform post start")
+	err = pl.StartPost(cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia, db)
+	if err != nil {
+		log.Error().Err(err).Msg("platform post start error")
+		st.StopService()
+		<-doneCh
+		return nil, fmt.Errorf("platform start post failed: %w", err)
+	}
+	log.Info().Msg("platform post start completed, service fully initialized")
 
 	return &StartResult{
 		Stop: func() error {
@@ -763,7 +856,7 @@ func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notifica
 		status == mediadb.IndexingStatusRunning ||
 		status == mediadb.IndexingStatusFailed {
 		log.Info().Msgf("detected incomplete optimization (status: %s), automatically resuming", status)
-		go db.MediaDB.RunBackgroundOptimization(func(optimizing bool) {
+		db.MediaDB.RunBackgroundOptimization(func(optimizing bool) {
 			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 				Exists:     true,
 				Indexing:   false,

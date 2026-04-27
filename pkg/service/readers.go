@@ -283,7 +283,11 @@ func timedExit(
 			log.Warn().Msgf("error killing launcher: %s", err)
 		}
 
-		svc.LaunchSoftwareQueue <- nil
+		select {
+		case svc.LaunchSoftwareQueue <- nil:
+		case <-svc.State.GetContext().Done():
+			return
+		}
 	}()
 
 	return exitTimer
@@ -336,7 +340,13 @@ func readerManager(
 	}
 
 	// manage reader connections
+	if svc.BackgroundWG != nil {
+		svc.BackgroundWG.Add(1)
+	}
 	go func() {
+		if svc.BackgroundWG != nil {
+			defer svc.BackgroundWG.Done()
+		}
 		log.Info().Msgf("reader manager started, auto-detect=%v", svc.Config.AutoDetect())
 		sleepMonitor := helpers.NewSleepWakeMonitor(5 * time.Second)
 		readerConnectAttempts := 0

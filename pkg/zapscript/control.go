@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -102,6 +103,7 @@ func RunControlScript(
 
 	for i, cmd := range parsed.Cmds {
 		_, err := RunCommand(
+			context.Background(),
 			pl, cfg,
 			playlists.PlaylistController{},
 			token,

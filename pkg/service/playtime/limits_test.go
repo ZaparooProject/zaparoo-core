@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -33,10 +34,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type limitsStopTestBroker struct {
+	notifications chan models.Notification
+	unsubscribed  chan struct{}
+}
+
+func (b *limitsStopTestBroker) Subscribe(_ int) (notifications <-chan models.Notification, subscriptionID int) {
+	return b.notifications, 1
+}
+
+func (b *limitsStopTestBroker) Unsubscribe(_ int) {
+	close(b.unsubscribed)
+}
+
 func newNoOpMockPlayer() *mocks.MockPlayer {
 	p := mocks.NewMockPlayer()
 	p.SetupNoOpMock()
 	return p
+}
+
+func TestLimitsManagerStopWaitsForNotificationHandler(t *testing.T) {
+	t.Parallel()
+
+	broker := &limitsStopTestBroker{
+		notifications: make(chan models.Notification),
+		unsubscribed:  make(chan struct{}),
+	}
+	tm := NewLimitsManager(&database.Database{}, nil, &config.Instance{}, clockwork.NewFakeClock(), newNoOpMockPlayer())
+
+	tm.Start(broker, make(chan models.Notification, 1))
+	tm.Stop()
+
+	select {
+	case <-broker.unsubscribed:
+	default:
+		t.Fatal("expected Stop to wait for notification handler unsubscribe")
+	}
 }
 
 func TestIsClockReliable(t *testing.T) {

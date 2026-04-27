@@ -20,6 +20,8 @@
 package service
 
 import (
+	"sync"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -38,4 +40,5 @@ type ServiceContext struct {
 	LaunchSoftwareQueue chan *tokens.Token
 	PlaylistQueue       chan *playlists.Playlist
 	ConfirmQueue        chan chan error
+	BackgroundWG        *sync.WaitGroup
 }

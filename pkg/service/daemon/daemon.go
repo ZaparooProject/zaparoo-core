@@ -70,9 +70,9 @@ type ServiceArgs struct {
 type processWaitFunc func(time.Duration) error
 
 type commandWaiter struct {
+	cmd  *exec.Cmd
 	done chan error
 	once sync.Once
-	cmd  *exec.Cmd
 }
 
 const (
@@ -101,6 +101,7 @@ func NewService(args ServiceArgs) (*Service, error) {
 func (s *Service) createPidFile() error {
 	pidPath := filepath.Join(s.pl.Settings().TempDir, config.PidFile)
 	pid := os.Getpid()
+	//nolint:gosec // PID path is derived from the configured temp directory and fixed filename.
 	file, err := os.OpenFile(
 		pidPath,
 		os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW,
@@ -142,8 +143,8 @@ func (s *Service) Pid() (int, error) {
 		}
 		return pid, fmt.Errorf("error checking pid file: %w", err)
 	}
-	if err := validatePIDFileInfo(info); err != nil {
-		return pid, err
+	if validateErr := validatePIDFileInfo(info); validateErr != nil {
+		return pid, validateErr
 	}
 
 	//nolint:gosec // Safe: PID file path is validated before reading
@@ -172,7 +173,7 @@ func validatePIDFileInfo(info os.FileInfo) error {
 		return errors.New("pid file is group or world writable")
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if ok && stat.Uid != uint32(os.Geteuid()) {
+	if ok && int64(stat.Uid) != int64(os.Geteuid()) {
 		return fmt.Errorf("pid file is owned by uid %d, expected %d", stat.Uid, os.Geteuid())
 	}
 	return nil
@@ -193,7 +194,9 @@ func (s *Service) Running() bool {
 		if s.pidMatchesService(pid) {
 			return true
 		}
-		log.Warn().Int("pid", pid).Msg("service PID file points to a live process that does not match the service binary")
+		log.Warn().
+			Int("pid", pid).
+			Msg("service PID file points to live process that does not match service binary")
 		return false
 	}
 
@@ -524,11 +527,7 @@ func (s *Service) Stop() error {
 	if err := s.removePidFile(); err != nil {
 		return err
 	}
-	if err := waitForAPIPortRelease(s.cfg, servicePortReleaseTimeout, serviceStopPollInterval); err != nil {
-		return err
-	}
-
-	return nil
+	return waitForAPIPortRelease(s.cfg, servicePortReleaseTimeout, serviceStopPollInterval)
 }
 
 func stopProcess(process *os.Process, pid int, wait processWaitFunc) error {
@@ -543,29 +542,30 @@ func stopProcess(process *os.Process, pid int, wait processWaitFunc) error {
 		return fmt.Errorf("failed to send SIGTERM to process %d: %w", pid, err)
 	}
 
-	if err := wait(serviceStopTimeout); err == nil {
+	stopErr := wait(serviceStopTimeout)
+	if stopErr == nil {
 		return nil
-	} else {
-		log.Warn().Err(err).Int("pid", pid).Msg("process did not stop after SIGTERM, sending SIGKILL")
 	}
+	log.Warn().Err(stopErr).Int("pid", pid).Msg("process did not stop after SIGTERM, sending SIGKILL")
 
 	if err := signalProcess(process, pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("failed to send SIGKILL to process %d: %w", pid, err)
 	}
-	if err := wait(serviceKillTimeout); err != nil {
-		return err
-	}
-
-	return nil
+	return wait(serviceKillTimeout)
 }
 
-func signalProcess(process *os.Process, pid int, signal syscall.Signal) error {
+func signalProcess(process *os.Process, pid int, sig syscall.Signal) error {
 	if pid > 0 {
-		if err := syscall.Kill(-pid, signal); err == nil || !errors.Is(err, syscall.ESRCH) {
-			return err
+		if err := syscall.Kill(-pid, sig); err == nil {
+			return nil
+		} else if !errors.Is(err, syscall.ESRCH) {
+			return fmt.Errorf("failed to signal process group %d: %w", pid, err)
 		}
 	}
-	return process.Signal(signal)
+	if err := process.Signal(sig); err != nil {
+		return fmt.Errorf("failed to signal process %d: %w", pid, err)
+	}
+	return nil
 }
 
 func pidRunning(pid int) bool {
@@ -581,7 +581,7 @@ func pidRunning(pid int) bool {
 }
 
 func pidIsZombie(pid int) bool {
-	statPath := filepath.Join("/proc", strconv.Itoa(pid), "stat")
+	statPath := filepath.Join(procDir(), strconv.Itoa(pid), "stat")
 	data, err := os.ReadFile(statPath) //nolint:gosec // reads process status for service management
 	if err != nil {
 		return false
@@ -600,12 +600,13 @@ func (s *Service) pidMatchesService(pid int) bool {
 	}
 
 	dataDir := helpers.DataDir(s.pl)
-	exePath, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
+	exePath, err := os.Readlink(filepath.Join(procDir(), strconv.Itoa(pid), "exe"))
 	if err == nil && pathLooksLikeServiceBinary(exePath, dataDir) {
 		return true
 	}
 
-	cmdline, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline")) //nolint:gosec // reads process status for service management
+	cmdlinePath := filepath.Join(procDir(), strconv.Itoa(pid), "cmdline")
+	cmdline, err := os.ReadFile(cmdlinePath) //nolint:gosec // reads process status for service management
 	if err != nil {
 		return false
 	}
@@ -615,6 +616,10 @@ func (s *Service) pidMatchesService(pid int) bool {
 		}
 	}
 	return false
+}
+
+func procDir() string {
+	return string(filepath.Separator) + "proc"
 }
 
 func pathLooksLikeServiceBinary(path, dataDir string) bool {
@@ -659,7 +664,9 @@ func waitForAPIPortRelease(cfg *config.Instance, timeout, pollInterval time.Dura
 	for {
 		released := true
 		for _, addr := range addrs {
-			conn, err := net.DialTimeout("tcp", addr, pollInterval)
+			ctx, cancel := context.WithTimeout(context.Background(), pollInterval)
+			conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+			cancel()
 			if err != nil {
 				continue
 			}
@@ -822,7 +829,10 @@ func SpawnDaemon(cfg *config.Instance) (cleanup func(), err error) {
 	}
 
 	if err := stopProcess(cmd.Process, cmd.Process.Pid, waiter.wait); err != nil {
-		log.Warn().Err(err).Int("pid", cmd.Process.Pid).Msg("failed to clean up daemon subprocess after startup timeout")
+		log.Warn().
+			Err(err).
+			Int("pid", cmd.Process.Pid).
+			Msg("failed to clean up daemon subprocess after startup timeout")
 	}
 	return nil, errors.New("daemon failed to start within 3 seconds")
 }

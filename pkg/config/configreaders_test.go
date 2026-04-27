@@ -113,8 +113,8 @@ func TestIsReaderEnabled(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		driver  DriverInfo
 		context ReaderEnableContext
+		driver  DriverInfo
 		want    bool
 	}{
 		{

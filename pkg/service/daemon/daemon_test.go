@@ -427,11 +427,12 @@ func TestPIDRunningTreatsZombieAsStopped(t *testing.T) {
 func TestWaitForAPIPortRelease(t *testing.T) {
 	t.Parallel()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() { _ = listener.Close() }()
 
-	addr := listener.Addr().(*net.TCPAddr)
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
 	cfg, err := testhelpers.NewTestConfig(testhelpers.NewOSFS(), t.TempDir())
 	require.NoError(t, err)
 	require.NoError(t, cfg.SetAPIPort(addr.Port))
@@ -456,7 +457,7 @@ func TestStopProcessTerminatesCommand(t *testing.T) {
 
 func TestStopProcessTerminatesProcessGroup(t *testing.T) {
 	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
-	process := exec.CommandContext(
+	process := exec.CommandContext( //nolint:gosec // test starts a controlled shell script.
 		context.Background(),
 		"sh",
 		"-c",
@@ -504,6 +505,7 @@ func TestPidRejectsGroupWritableFile(t *testing.T) {
 	settings := svc.pl.Settings()
 	pidFile := filepath.Join(settings.TempDir, config.PidFile)
 	require.NoError(t, os.WriteFile(pidFile, []byte("123"), 0o600))
+	//nolint:gosec // Intentionally invalid permissions for validation test.
 	require.NoError(t, os.Chmod(pidFile, 0o620))
 
 	_, err := svc.Pid()

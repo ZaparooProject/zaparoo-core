@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -44,6 +45,40 @@ func newTestBroker(ctx context.Context, source <-chan models.Notification) *brok
 	b := broker.NewBroker(ctx, source)
 	b.Start()
 	return b
+}
+
+func TestStartWithReadyReportsBindFailure(t *testing.T) {
+	t.Parallel()
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, listener.Close()) }()
+
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+
+	fs := helpers.NewMemoryFS()
+	configDir := t.TempDir()
+	cfg, err := helpers.NewTestConfigWithPort(fs, configDir, tcpAddr.Port)
+	require.NoError(t, err)
+
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
+	notifBroker := newTestBroker(st.GetContext(), notifCh)
+	db := &database.Database{
+		UserDB:  helpers.NewMockUserDBI(),
+		MediaDB: helpers.NewMockMediaDBI(),
+	}
+	tokenQueue := make(chan tokens.Token, 1)
+	ready := make(chan error, 1)
+
+	err = StartWithReady(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, ready)
+	require.Error(t, err)
+	require.Error(t, <-ready)
+	assert.Contains(t, err.Error(), "bind")
+	assert.ErrorIs(t, st.GetContext().Err(), context.Canceled)
 }
 
 // TestServerStartupConcurrency validates that the API server properly synchronizes
@@ -85,7 +120,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 			serverDone := make(chan struct{})
 			go func() {
 				defer close(serverDone)
-				Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
+				_ = Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 			}()
 			// Cleanup: stop service first, then wait for server goroutine to fully exit
 			defer func() {
@@ -154,7 +189,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
+		_ = Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 	}()
 	// Cleanup: stop service first, then wait for server goroutine to fully exit
 	defer func() {
@@ -238,7 +273,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
+		_ = Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 	}()
 
 	// Wait for completion or timeout
@@ -529,7 +564,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	server1Done := make(chan struct{})
 	go func() {
 		defer close(server1Done)
-		Start(platform1, cfg1, st1, tokenQueue1, nil, db1, nil, notifBroker1, "", nil, nil)
+		_ = Start(platform1, cfg1, st1, tokenQueue1, nil, db1, nil, notifBroker1, "", nil, nil)
 	}()
 
 	// Wait for first server to be ready
@@ -572,7 +607,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	server2Done := make(chan struct{})
 	go func() {
 		defer close(server2Done)
-		Start(platform2, cfg2, st2, tokenQueue2, nil, db2, nil, notifBroker2, "", nil, nil)
+		_ = Start(platform2, cfg2, st2, tokenQueue2, nil, db2, nil, notifBroker2, "", nil, nil)
 	}()
 
 	// Wait for the second server's context to be cancelled (StopService called)
@@ -731,7 +766,7 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
+		_ = Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 	}()
 	defer func() {
 		st.StopService()

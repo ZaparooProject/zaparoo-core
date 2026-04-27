@@ -66,7 +66,7 @@ func TestApply_DevelopmentVersion(t *testing.T) {
 	}
 }
 
-func alwaysOnline(_ int) bool { return true }
+func alwaysOnline(_ context.Context, _ int) bool { return true }
 
 func TestCheckAndNotify_ManagedInstallDefaultsOff(t *testing.T) {
 	t.Parallel()
@@ -74,7 +74,7 @@ func TestCheckAndNotify_ManagedInstallDefaultsOff(t *testing.T) {
 	cfg := &config.Instance{} // AutoUpdate is nil
 
 	waitCalled := false
-	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ int) bool {
+	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ context.Context, _ int) bool {
 		waitCalled = true
 		return true
 	}, Check, true)
@@ -89,7 +89,7 @@ func TestCheckAndNotify_DisabledConfig(t *testing.T) {
 	cfg.SetAutoUpdate(false)
 
 	waitCalled := false
-	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ int) bool {
+	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ context.Context, _ int) bool {
 		waitCalled = true
 		return true
 	}, Check, false)
@@ -114,7 +114,7 @@ func TestCheckAndNotify_NoInternet(t *testing.T) {
 	cfg := &config.Instance{}
 	cfg.SetAutoUpdate(true)
 
-	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ int) bool {
+	CheckAndNotify(t.Context(), cfg, "linux", nil, func(_ context.Context, _ int) bool {
 		return false
 	}, Check, false)
 }
