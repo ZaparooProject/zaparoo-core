@@ -49,7 +49,7 @@ func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 		return nil, models.ClientErrf("media not found: %d", params.MediaID)
 	}
 
-	mediaTags, err := db.GetMediaTagsByMediaDBID(ctx, row.Media.DBID)
+	mediaTags, err := db.GetMediaTagsByMediaDBID(ctx, row.DBID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media tags: %w", err)
 	}
@@ -59,7 +59,7 @@ func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 		return nil, fmt.Errorf("failed to get title tags: %w", err)
 	}
 
-	mediaProps, err := db.GetMediaProperties(ctx, row.Media.DBID)
+	mediaProps, err := db.GetMediaProperties(ctx, row.DBID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media properties: %w", err)
 	}
@@ -76,10 +76,10 @@ func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 
 	return models.MediaMetaResponse{
 		Media: models.MediaMetaMediaResponse{
-			ID:         row.Media.DBID,
-			Path:       row.Media.Path,
-			ParentDir:  row.Media.ParentDir,
-			IsMissing:  row.Media.IsMissing,
+			ID:         row.DBID,
+			Path:       row.Path,
+			ParentDir:  row.ParentDir,
+			IsMissing:  row.IsMissing,
 			Tags:       mediaTags,
 			Properties: mapMediaProperties(mediaProps),
 			Title: models.MediaMetaTitleResponse{

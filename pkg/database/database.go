@@ -155,9 +155,9 @@ type Media struct {
 // MediaFullRow is the result of a joined query fetching a Media record together
 // with its parent MediaTitle and System in a single round-trip.
 type MediaFullRow struct {
-	Media
-	Title  MediaTitle
 	System System
+	Media
+	Title MediaTitle
 }
 
 type TagType struct {

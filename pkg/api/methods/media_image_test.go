@@ -60,8 +60,8 @@ func makeMediaImageEnv(t *testing.T, mockMediaDB *testhelpers.MockMediaDBI, para
 
 func makeMediaFullRow(mediaDBID, titleDBID int64) *database.MediaFullRow {
 	return &database.MediaFullRow{
-		Media: database.Media{DBID: mediaDBID, Path: "/games/test.rom"},
-		Title: database.MediaTitle{DBID: titleDBID, Slug: "test-game", Name: "Test Game"},
+		Media:  database.Media{DBID: mediaDBID, Path: "/games/test.rom"},
+		Title:  database.MediaTitle{DBID: titleDBID, Slug: "test-game", Name: "Test Game"},
 		System: database.System{SystemID: "NES", Name: "NES"},
 	}
 }
@@ -134,7 +134,7 @@ func TestHandleMediaImage_BinaryNil_LoadsFromFile(t *testing.T) {
 	dir := t.TempDir()
 	imgPath := filepath.Join(dir, "boxart.png")
 	fileContents := []byte("real-png-data")
-	require.NoError(t, os.WriteFile(imgPath, fileContents, 0600))
+	require.NoError(t, os.WriteFile(imgPath, fileContents, 0o600))
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(3)).
@@ -280,7 +280,7 @@ func TestHandleMediaImage_FileReadError_FallsBackToNextPref(t *testing.T) {
 	dir := t.TempDir()
 	screenshotPath := filepath.Join(dir, "screenshot.png")
 	screenshotData := []byte("screenshot-bytes")
-	require.NoError(t, os.WriteFile(screenshotPath, screenshotData, 0600))
+	require.NoError(t, os.WriteFile(screenshotPath, screenshotData, 0o600))
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	row := makeMediaFullRow(7, 70)

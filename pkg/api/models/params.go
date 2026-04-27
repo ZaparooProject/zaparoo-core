@@ -181,8 +181,8 @@ type MediaMetaParams struct {
 }
 
 type MediaImageParams struct {
-	MediaID    int64    `json:"mediaId"    validate:"required,gt=0"`
 	ImageTypes []string `json:"imageTypes" validate:"omitempty,dive,min=1"`
+	MediaID    int64    `json:"mediaId"    validate:"required,gt=0"`
 }
 
 type MediaScrapeParams struct {

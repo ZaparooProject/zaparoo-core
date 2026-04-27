@@ -74,7 +74,7 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		return nil, models.ClientErrf("media not found: %d", params.MediaID)
 	}
 
-	mediaProps, err := db.GetMediaProperties(ctx, row.Media.DBID)
+	mediaProps, err := db.GetMediaProperties(ctx, row.DBID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media properties: %w", err)
 	}
@@ -119,7 +119,7 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 				// File is gone — remove the stale property and retry from scratch
 				// so the next preference in the list is evaluated cleanly.
 				if _, fromMedia := mediaMap[typeTag]; fromMedia {
-					_ = db.DeleteMediaProperty(ctx, row.Media.DBID, prop.TypeTagDBID)
+					_ = db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID)
 				} else {
 					_ = db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID)
 				}

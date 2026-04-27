@@ -462,7 +462,6 @@ func serveIndex(w http.ResponseWriter, r *http.Request, root http.FileSystem) {
 	http.ServeContent(w, r, "index.html", stat.ModTime(), index)
 }
 
-
 const errMsgAppNotFound = "Zaparoo App files not found. " +
 	"Copy the built zaparoo-app files to pkg/assets/_app/dist/"
 
@@ -1678,7 +1677,6 @@ func Start(
 	r.Get("/app", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/app/", http.StatusFound)
 	})
-
 
 	// /health is intentionally remote-accessible with no IP filter, no
 	// API key auth, and no rate limiting (only the global Recoverer/CORS

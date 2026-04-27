@@ -643,8 +643,8 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 
 	var row database.MediaFullRow
 	err = stmt.QueryRowContext(ctx, mediaDBID).Scan(
-		&row.Media.DBID, &row.Media.Path, &row.Media.ParentDir, &row.Media.IsMissing,
-		&row.Media.MediaTitleDBID, &row.Media.SystemDBID,
+		&row.DBID, &row.Path, &row.ParentDir, &row.IsMissing,
+		&row.MediaTitleDBID, &row.SystemDBID,
 		&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
 		&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,
 		&row.System.DBID, &row.System.SystemID, &row.System.Name,
