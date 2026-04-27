@@ -92,6 +92,9 @@ func TestBuildManifest_IncludesChecksumSignature(t *testing.T) {
 func TestBuildManifestFromGithubRelease(t *testing.T) {
 	t.Parallel()
 
+	archiveURL := githubReleaseDownloadBase + "/v2.11.0/zaparoo-linux_amd64-2.11.0.tar.gz"
+	setupURL := githubReleaseDownloadBase + "/v2.11.0/zaparoo-amd64-2.11.0-setup.exe"
+
 	dir := t.TempDir()
 	createAssetFile(t, dir, "checksums.txt", 128)
 	createAssetFile(t, dir, "checksums.txt.sig", 64)
@@ -104,12 +107,12 @@ func TestBuildManifestFromGithubRelease(t *testing.T) {
 		Assets: []githubAsset{
 			{
 				Name: "zaparoo-linux_amd64-2.11.0.tar.gz",
-				URL:  "https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.11.0/zaparoo-linux_amd64-2.11.0.tar.gz",
+				URL:  archiveURL,
 				Size: 1024,
 			},
 			{
 				Name: "zaparoo-amd64-2.11.0-setup.exe",
-				URL:  "https://github.com/ZaparooProject/zaparoo-core/releases/download/v2.11.0/zaparoo-amd64-2.11.0-setup.exe",
+				URL:  setupURL,
 				Size: 2048,
 			},
 		},
@@ -441,7 +444,12 @@ func TestLoadManifest_NormalizesArchiveURLsToGitHub(t *testing.T) {
 				Name:    "v2.10.0",
 				TagName: "v2.10.0",
 				Assets: []*asset{
-					{ID: 1, Name: "zaparoo-linux_amd64-2.10.0.tar.gz", Size: 100, URL: "zaparoo-linux_amd64-2.10.0.tar.gz"},
+					{
+						ID:   1,
+						Name: "zaparoo-linux_amd64-2.10.0.tar.gz",
+						Size: 100,
+						URL:  "zaparoo-linux_amd64-2.10.0.tar.gz",
+					},
 					{ID: 2, Name: "checksums.txt", Size: 100, URL: "checksums.txt"},
 				},
 			},

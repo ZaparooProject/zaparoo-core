@@ -251,22 +251,36 @@ func TestValidationChainHTTPSource_DownloadsNestedValidationAsset(t *testing.T) 
 	}))
 	t.Cleanup(server.Close)
 
-	source := &validationChainHTTPSource{source: stubSource{}, transport: http.DefaultTransport.(*http.Transport).Clone()}
+	source := &validationChainHTTPSource{
+		source:    stubSource{},
+		transport: http.DefaultTransport.(*http.Transport).Clone(),
+	}
 	release := &selfupdate.Release{
 		AssetID:           1,
 		ValidationAssetID: 2,
+		//nolint:govet // Field order is fixed by go-selfupdate's exported Release type.
 		ValidationChain: []struct {
 			ValidationAssetID                       int64
 			ValidationAssetName, ValidationAssetURL string
 		}{
-			{ValidationAssetID: 2, ValidationAssetName: "checksums.txt", ValidationAssetURL: server.URL + "/checksums.txt"},
-			{ValidationAssetID: 3, ValidationAssetName: "checksums.txt.sig", ValidationAssetURL: server.URL + "/checksums.txt.sig"},
+			{
+				ValidationAssetID:   2,
+				ValidationAssetName: "checksums.txt",
+				ValidationAssetURL:  server.URL + "/checksums.txt",
+			},
+			{
+				ValidationAssetID:   3,
+				ValidationAssetName: "checksums.txt.sig",
+				ValidationAssetURL:  server.URL + "/checksums.txt.sig",
+			},
 		},
 	}
 
 	reader, err := source.DownloadReleaseAsset(t.Context(), release, 3)
 	require.NoError(t, err)
-	defer reader.Close()
+	defer func() {
+		require.NoError(t, reader.Close())
+	}()
 
 	data, err := io.ReadAll(reader)
 	require.NoError(t, err)

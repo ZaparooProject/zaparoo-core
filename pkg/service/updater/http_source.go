@@ -37,7 +37,12 @@ func (s *validationChainHTTPSource) ListReleases(
 	ctx context.Context,
 	repository selfupdate.Repository,
 ) ([]selfupdate.SourceRelease, error) {
-	return s.source.ListReleases(ctx, repository)
+	releases, err := s.source.ListReleases(ctx, repository)
+	if err != nil {
+		return nil, fmt.Errorf("listing releases from wrapped source: %w", err)
+	}
+
+	return releases, nil
 }
 
 func (s *validationChainHTTPSource) DownloadReleaseAsset(
@@ -49,7 +54,12 @@ func (s *validationChainHTTPSource) DownloadReleaseAsset(
 		return nil, selfupdate.ErrInvalidRelease
 	}
 	if rel.AssetID == assetID || rel.ValidationAssetID == assetID {
-		return s.source.DownloadReleaseAsset(ctx, rel, assetID)
+		reader, err := s.source.DownloadReleaseAsset(ctx, rel, assetID)
+		if err != nil {
+			return nil, fmt.Errorf("downloading asset %d from wrapped source: %w", assetID, err)
+		}
+
+		return reader, nil
 	}
 
 	for _, validationAsset := range rel.ValidationChain {
@@ -69,15 +79,21 @@ func (s *validationChainHTTPSource) downloadURL(ctx context.Context, url string)
 	client := &http.Client{Transport: s.transport}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating validation asset request: %w", err)
 	}
 
 	res, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("downloading validation asset: %w", err)
 	}
 	if res.StatusCode != http.StatusOK {
-		res.Body.Close()
+		if closeErr := res.Body.Close(); closeErr != nil {
+			return nil, fmt.Errorf(
+				"HTTP request failed with status code %d and closing response body: %w",
+				res.StatusCode,
+				closeErr,
+			)
+		}
 		return nil, fmt.Errorf("HTTP request failed with status code %d", res.StatusCode)
 	}
 

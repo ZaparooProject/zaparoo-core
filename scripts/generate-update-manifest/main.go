@@ -200,7 +200,7 @@ func buildManifestFromAssets(
 		startAssetID = existing.LastAssetID
 	}
 
-	var assets []*asset
+	assets := make([]*asset, 0, len(releaseAssets))
 	assetID := startAssetID
 	for _, releaseAsset := range releaseAssets {
 		assetID++
@@ -259,7 +259,8 @@ func loadGithubRelease(path string) (*githubRelease, error) {
 }
 
 func isUpdateArchive(name string) bool {
-	return strings.HasPrefix(name, "zaparoo-") && (strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".zip"))
+	return strings.HasPrefix(name, "zaparoo-") &&
+		(strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".zip"))
 }
 
 func assetsFromGithubRelease(release *githubRelease, metadataDir string) ([]releaseAsset, error) {
@@ -271,11 +272,7 @@ func assetsFromGithubRelease(release *githubRelease, metadataDir string) ([]rele
 		if githubAsset.URL == "" {
 			return nil, fmt.Errorf("GitHub asset %s has no download URL", githubAsset.Name)
 		}
-		assets = append(assets, releaseAsset{
-			Name: githubAsset.Name,
-			URL:  githubAsset.URL,
-			Size: githubAsset.Size,
-		})
+		assets = append(assets, releaseAsset(githubAsset))
 	}
 
 	metadataFiles := []string{"checksums.txt", "checksums.txt.sig"}
@@ -353,13 +350,24 @@ func main() {
 			log.Fatal().Err(loadErr).Msg("error loading GitHub release metadata")
 		}
 		if release.TagName != "" && release.TagName != *version {
-			log.Fatal().Str("metadata_tag", release.TagName).Str("version", *version).Msg("GitHub release metadata tag mismatch")
+			log.Fatal().
+				Str("metadata_tag", release.TagName).
+				Str("version", *version).
+				Msg("GitHub release metadata tag mismatch")
 		}
 		assets, assetsErr := assetsFromGithubRelease(release, *metadataDir)
 		if assetsErr != nil {
 			log.Fatal().Err(assetsErr).Msg("error loading GitHub release assets")
 		}
-		m, err = buildManifestFromAssets(*version, release.URL, release.PublishedAt, *releaseNotes, *prerelease, assets, existing)
+		m, err = buildManifestFromAssets(
+			*version,
+			release.URL,
+			release.PublishedAt,
+			*releaseNotes,
+			*prerelease,
+			assets,
+			existing,
+		)
 	} else {
 		m, err = buildManifest(*version, *assetsDir, *releaseNotes, *prerelease, existing)
 	}
