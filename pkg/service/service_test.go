@@ -56,7 +56,7 @@ func TestStartReturnsErrorWhenAPIPortIsOccupied(t *testing.T) {
 		TempDir:   testRoot,
 	}
 
-	cfg, err := testhelpers.NewTestConfigWithPort(nil, testRoot, tcpAddr.Port)
+	cfg, err := testhelpers.NewTestConfigWithListenAndPort(nil, testRoot, "127.0.0.1", tcpAddr.Port)
 	require.NoError(t, err)
 	cfg.SetAutoUpdate(false)
 

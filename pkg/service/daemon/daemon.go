@@ -578,6 +578,8 @@ func signalProcess(process *os.Process, pid int, sig syscall.Signal) error {
 	if pid > 0 {
 		if err := syscall.Kill(-pid, sig); err == nil {
 			return nil
+		} else if errors.Is(err, syscall.EPERM) {
+			log.Debug().Err(err).Int("pid", pid).Msg("failed to signal process group, falling back to process signal")
 		} else if !errors.Is(err, syscall.ESRCH) {
 			return fmt.Errorf("failed to signal process group %d: %w", pid, err)
 		}

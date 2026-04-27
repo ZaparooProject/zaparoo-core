@@ -363,6 +363,10 @@ func TestStop_WaitsForProcessExitAndRemovesPIDFile(t *testing.T) {
 }
 
 func TestStopRemovesStalePIDFileWithoutKillingUnrelatedProcess(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service PID identity checks use Linux /proc")
+	}
+
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
 	pidFile := filepath.Join(settings.TempDir, config.PidFile)
@@ -380,6 +384,10 @@ func TestStopRemovesStalePIDFileWithoutKillingUnrelatedProcess(t *testing.T) {
 }
 
 func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service PID identity checks use Linux /proc")
+	}
+
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
 	pidFile := filepath.Join(settings.TempDir, config.PidFile)
@@ -398,6 +406,10 @@ func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
 }
 
 func TestStartFailsForLiveUnrelatedPID(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service PID identity checks use Linux /proc")
+	}
+
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
 	pidFile := filepath.Join(settings.TempDir, config.PidFile)
@@ -415,6 +427,10 @@ func TestStartFailsForLiveUnrelatedPID(t *testing.T) {
 }
 
 func TestRestartFailsForLiveUnrelatedPID(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service PID identity checks use Linux /proc")
+	}
+
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
 	pidFile := filepath.Join(settings.TempDir, config.PidFile)
@@ -432,6 +448,10 @@ func TestRestartFailsForLiveUnrelatedPID(t *testing.T) {
 }
 
 func TestWaitForAPIReturnsPIDConflict(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service PID identity checks use Linux /proc")
+	}
+
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
 	pidFile := filepath.Join(settings.TempDir, config.PidFile)
