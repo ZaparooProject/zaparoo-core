@@ -58,6 +58,15 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "GOMODCACHE=D:\go-mod-cache"
           Add-Content -Path $env:GITHUB_ENV -Value "GOTMPDIR=D:\go-tmp"
 
+      - name: Set up MSYS2 (Windows)
+        if: matrix.os == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: pkgconf
+          path-type: inherit
+
       - name: Restore Go cache (Unix)
         if: matrix.os != 'windows'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
@@ -82,7 +91,13 @@ jobs:
             ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
             ${{ runner.os }}-go-
 
-      - name: Download Go modules
+      - name: Download Go modules (Windows)
+        if: matrix.os == 'windows'
+        shell: msys2 {0}
+        run: go mod download
+
+      - name: Download Go modules (non-Windows)
+        if: matrix.os != 'windows'
         run: go mod download
 
       - name: Cache APT packages (Ubuntu)
@@ -91,27 +106,6 @@ jobs:
         with:
           packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
           version: 1.1
-
-      - name: Install dependencies (macOS)
-        if: matrix.os == 'macos'
-        run: |
-          brew install libusb pkg-config
-
-      - name: Cache scoop packages (Windows)
-        if: matrix.os == 'windows'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: ~\scoop
-          key: ${{ runner.os }}-scoop-pkg-config
-
-      - name: Install dependencies (Windows)
-        if: matrix.os == 'windows'
-        shell: pwsh
-        run: |
-          if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
-            irm get.scoop.sh | iex
-          }
-          scoop install pkg-config
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
@@ -141,7 +135,7 @@ jobs:
 
       - name: Run full tests (Windows)
         if: matrix.os == 'windows'
-        shell: bash
+        shell: msys2 {0}
         env:
           GOMAXPROCS: 2
         run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
@@ -260,10 +254,124 @@ jobs:
             ${{ env.ZIGCC_IMAGE }} \
             bash -c 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /home/build/bin 2>&1 | tail -1 && PATH="/home/build/bin:$PATH" golangci-lint run --timeout=5m'
 
+  native-pr-tests:
+    name: Native PR Tests
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            runner: macos-latest
+          - os: windows
+            runner: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Configure Go paths for Windows
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "D:\go-cache" | Out-Null
+          New-Item -ItemType Directory -Force -Path "D:\go-mod-cache" | Out-Null
+          New-Item -ItemType Directory -Force -Path "D:\go-tmp" | Out-Null
+          Add-Content -Path $env:GITHUB_ENV -Value "GOCACHE=D:\go-cache"
+          Add-Content -Path $env:GITHUB_ENV -Value "GOMODCACHE=D:\go-mod-cache"
+          Add-Content -Path $env:GITHUB_ENV -Value "GOTMPDIR=D:\go-tmp"
+
+      - name: Set up MSYS2 (Windows)
+        if: matrix.os == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: pkgconf
+          path-type: inherit
+
+      - name: Restore Go cache (macOS)
+        if: matrix.os == 'macos'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: no-match-${{ runner.os }}-native-pr
+          restore-keys: |
+            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+            ${{ runner.os }}-go-
+
+      - name: Restore Go cache (Windows)
+        if: matrix.os == 'windows'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            D:\go-mod-cache
+            D:\go-cache
+          key: no-match-${{ runner.os }}-native-pr
+          restore-keys: |
+            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+            ${{ runner.os }}-go-
+
+      - name: Download Go modules (Windows)
+        if: matrix.os == 'windows'
+        shell: msys2 {0}
+        run: go mod download
+
+      - name: Download Go modules (non-Windows)
+        if: matrix.os != 'windows'
+        run: go mod download
+
+      - name: Run native tests (Windows)
+        if: matrix.os == 'windows'
+        shell: msys2 {0}
+        env:
+          GOMAXPROCS: 2
+        run: |
+          go test -v -race \
+            ./pkg/api \
+            ./pkg/helpers \
+            ./pkg/helpers/command \
+            ./pkg/readers/externaldrive \
+            ./pkg/platforms/shared/steam \
+            ./pkg/platforms/shared/steam/steamtracker \
+            ./pkg/service/restart \
+            ./pkg/ui/systray
+
+      - name: Run native tests (macOS)
+        if: matrix.os == 'macos'
+        run: |
+          go test -v -race \
+            ./pkg/api \
+            ./pkg/helpers \
+            ./pkg/helpers/command \
+            ./pkg/readers/externaldrive \
+            ./pkg/platforms/shared/steam \
+            ./pkg/platforms/shared/steam/steamtracker \
+            ./pkg/service/restart \
+            ./pkg/ui/systray
+
+      - name: Upload rapid failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rapid-failures-native-${{ matrix.os }}
+          path: '**/testdata/rapid/**/*.fail'
+          if-no-files-found: ignore
+
   ci-status:
     name: CI Status
     if: always() && !cancelled()
-    needs: [ci, cross-lint]
+    needs: [ci, cross-lint, native-pr-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check CI results
@@ -275,6 +383,11 @@ jobs:
           CROSS_RESULT="${{ needs.cross-lint.result }}"
           if [ "$CROSS_RESULT" != "success" ] && [ "$CROSS_RESULT" != "skipped" ]; then
             echo "CI failed: cross-lint=$CROSS_RESULT"
+            exit 1
+          fi
+          NATIVE_RESULT="${{ needs.native-pr-tests.result }}"
+          if [ "$NATIVE_RESULT" != "success" ] && [ "$NATIVE_RESULT" != "skipped" ]; then
+            echo "CI failed: native-pr-tests=$NATIVE_RESULT"
             exit 1
           fi
           echo "CI passed"

@@ -62,7 +62,7 @@ func TestStartWithReadyReportsBindFailure(t *testing.T) {
 
 	fs := helpers.NewMemoryFS()
 	configDir := t.TempDir()
-	cfg, err := helpers.NewTestConfigWithPort(fs, configDir, tcpAddr.Port)
+	cfg, err := helpers.NewTestConfigWithListenAndPort(fs, configDir, "127.0.0.1", tcpAddr.Port)
 	require.NoError(t, err)
 
 	st, notifCh := state.NewState(platform, "test-boot-uuid")
@@ -74,7 +74,17 @@ func TestStartWithReadyReportsBindFailure(t *testing.T) {
 	tokenQueue := make(chan tokens.Token, 1)
 	ready := make(chan error, 1)
 
-	err = StartWithReady(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, ready)
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- StartWithReady(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, ready)
+	}()
+
+	select {
+	case err = <-serverErr:
+	case <-time.After(2 * time.Second):
+		st.StopService()
+		t.Fatal("StartWithReady did not return after bind failure")
+	}
 	require.Error(t, err)
 	select {
 	case readyErr := <-ready:
@@ -559,7 +569,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	testPort := 9100 // Use a fixed port for this test
 	fs1 := helpers.NewMemoryFS()
 	configDir1 := t.TempDir()
-	cfg1, err := helpers.NewTestConfigWithPort(fs1, configDir1, testPort)
+	cfg1, err := helpers.NewTestConfigWithListenAndPort(fs1, configDir1, "127.0.0.1", testPort)
 	require.NoError(t, err)
 
 	st1, notifCh1 := state.NewState(platform1, "test-boot-uuid-1")
@@ -603,7 +613,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 
 	fs2 := helpers.NewMemoryFS()
 	configDir2 := t.TempDir()
-	cfg2, err := helpers.NewTestConfigWithPort(fs2, configDir2, testPort) // Same port!
+	cfg2, err := helpers.NewTestConfigWithListenAndPort(fs2, configDir2, "127.0.0.1", testPort) // Same port!
 	require.NoError(t, err)
 
 	st2, notifCh2 := state.NewState(platform2, "test-boot-uuid-2")

@@ -45,9 +45,10 @@ type Result struct {
 }
 
 func makeUpdater(_ context.Context, platformID, channel string) (*selfupdate.Updater, selfupdate.Repository, error) {
+	transport := tlsroots.Transport(nil)
 	source, err := selfupdate.NewHttpSource(selfupdate.HttpConfig{
 		BaseURL:   updateURL,
-		Transport: tlsroots.Transport(nil),
+		Transport: transport,
 	})
 	if err != nil {
 		return nil, selfupdate.RepositorySlug{}, fmt.Errorf("creating update source: %w", err)
@@ -61,7 +62,7 @@ func makeUpdater(_ context.Context, platformID, channel string) (*selfupdate.Upd
 	}
 
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source:     source,
+		Source:     &validationChainHTTPSource{source: source, transport: transport},
 		Validator:  validator,
 		Filters:    []string{filter},
 		Prerelease: channel == config.UpdateChannelBeta,
