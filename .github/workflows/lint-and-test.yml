@@ -345,7 +345,6 @@ jobs:
             ./pkg/platforms/shared/steam \
             ./pkg/platforms/shared/steam/steamtracker \
             ./pkg/service \
-            ./pkg/service/daemon \
             ./pkg/service/restart \
             ./pkg/ui/systray
 
