@@ -270,6 +270,19 @@ type MediaImageResponse struct {
 	TypeTag     string `json:"typeTag"` // e.g. "property:image-boxart"
 }
 
+// ScrapingStatusResponse is broadcast as a "media.scraping" notification for
+// each ScrapeUpdate received from the scraper and on completion/cancellation.
+type ScrapingStatusResponse struct {
+	ScraperID string `json:"scraperId,omitempty"`
+	SystemID  string `json:"systemId,omitempty"`
+	Processed int    `json:"processed"`
+	Total     int    `json:"total"`
+	Matched   int    `json:"matched"`
+	Skipped   int    `json:"skipped"`
+	Scraping  bool   `json:"scraping"`
+	Done      bool   `json:"done"`
+}
+
 type MediaLookupMatch struct {
 	System     System             `json:"system"`
 	Name       string             `json:"name"`

@@ -221,6 +221,8 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaLookup:         methods.HandleMediaLookup,
 		models.MethodMediaMeta:           methods.HandleMediaMeta,
 		models.MethodMediaImage:          methods.HandleMediaImage,
+		models.MethodMediaScrape:         methods.HandleMediaScrape,
+		models.MethodMediaScrapeCancel:   methods.HandleMediaScrapeCancel,
 		models.MethodMediaControl:        methods.HandleMediaControl,
 		// settings
 		models.MethodSettings:             methods.HandleSettings,
@@ -460,8 +462,6 @@ func serveIndex(w http.ResponseWriter, r *http.Request, root http.FileSystem) {
 	http.ServeContent(w, r, "index.html", stat.ModTime(), index)
 }
 
-//go:embed scraper_util.html
-var scraperUtilHTML []byte
 
 const errMsgAppNotFound = "Zaparoo App files not found. " +
 	"Copy the built zaparoo-app files to pkg/assets/_app/dist/"
@@ -899,6 +899,7 @@ func handleWSMessage(
 	indexPauser *syncutil.Pauser,
 	encGateway *apimiddleware.EncryptionGateway,
 	lastSeenTracker *apimiddleware.LastSeenTracker,
+	scrapers map[string]scraper.Scraper,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
 		defer func() {
@@ -983,6 +984,7 @@ func handleWSMessage(
 			Player:        player,
 			TokenQueue:    inTokenQueue,
 			ConfirmQueue:  confirmQueue,
+			Scrapers:      scrapers,
 			IndexPauser:   indexPauser,
 			IsLocal:       isLocal,
 			ClientID:      session.Request.RemoteAddr,
@@ -1193,6 +1195,7 @@ func handlePostRequest(
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
+	scrapers map[string]scraper.Scraper,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -1238,6 +1241,7 @@ func handlePostRequest(
 			Player:        player,
 			TokenQueue:    inTokenQueue,
 			ConfirmQueue:  confirmQueue,
+			Scrapers:      scrapers,
 			IndexPauser:   indexPauser,
 			IsLocal:       apimiddleware.IsLoopbackAddr(r.RemoteAddr),
 			ClientID:      r.RemoteAddr,
@@ -1587,6 +1591,15 @@ func Start(
 		})
 	})
 
+	// Build the scrapers map once; passed into RequestEnv for media.scrape.
+	gamelistScraper := gamelistxml.NewGamelistXMLScraper(
+		db.MediaDB,
+		makeSystemResolver(db.MediaDB, platform, cfg),
+	)
+	scrapers := map[string]scraper.Scraper{
+		gamelistScraper.ID(): gamelistScraper,
+	}
+
 	// Non-WebSocket API routes (HTTP POST + REST GET) — restricted to
 	// localhost by default; remote access requires explicit AllowedIPs.
 	// These transports do not support encryption; the IP allowlist plus
@@ -1602,7 +1615,7 @@ func Start(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
 			db, limitsManager, player,
-			indexPauser,
+			indexPauser, scrapers,
 		)
 		r.Post("/api", postHandler)
 		r.Post("/api/v0", postHandler)
@@ -1639,17 +1652,7 @@ func Start(
 		r.Get("/api/v0.1/events", sseHandler)
 	})
 
-	// v1 REST API: scrapers and media properties. Localhost-by-default, same as
-	// other non-WS routes. The scraper status SSE is in a separate group without
-	// a request timeout so it can stream for the duration of a full run.
-	scraperReg := methods.NewScraperRegistry()
-	scraperReg.Register(
-		gamelistxml.NewGamelistXMLScraper(
-			db.MediaDB,
-			makeSystemResolver(db.MediaDB, platform, cfg),
-		),
-	)
-
+	// v1 REST API: media properties. Scrapers are now JSONRPC methods (media.scrape).
 	r.Group(func(r chi.Router) {
 		r.Use(nonWSIPFilter)
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
@@ -1657,21 +1660,8 @@ func Start(
 		r.Use(middleware.NoCache)
 		r.Use(middleware.Timeout(config.APIRequestTimeout))
 
-		r.Get("/api/v1/scrapers", scraperReg.HandleListScrapers())
-		r.Post("/api/v1/scrapers/{id}/run", scraperReg.HandleRunScraper(st.GetContext()))
-		r.Post("/api/v1/scrapers/{id}/cancel", scraperReg.HandleCancelScraper())
 		r.Get("/api/v1/titles/{titleDBID}/properties", methods.HandleGetMediaTitleProperties(db.MediaDB))
 		r.Get("/api/v1/media/{mediaDBID}/properties", methods.HandleGetMediaProperties(db.MediaDB))
-	})
-
-	// Scraper status SSE — no request timeout (long-lived connection).
-	r.Group(func(r chi.Router) {
-		r.Use(nonWSIPFilter)
-		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
-		r.Use(apiRateLimitMiddleware)
-		r.Use(middleware.NoCache)
-
-		r.Get("/api/v1/scrapers/{id}/status", scraperReg.HandleScraperStatus())
 	})
 
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
@@ -1679,7 +1669,7 @@ func Start(
 		handleWSMessage(
 			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
 			db, limitsManager, player, indexPauser, encGateway,
-			lastSeenTracker,
+			lastSeenTracker, scrapers,
 		),
 	))
 
@@ -1689,15 +1679,6 @@ func Start(
 		http.Redirect(w, r, "/app/", http.StatusFound)
 	})
 
-	// Scraper dev utility — localhost-only, same IP filter as REST API routes.
-	r.Group(func(r chi.Router) {
-		r.Use(nonWSIPFilter)
-		r.Get("/scraper-util", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Header().Set("Cache-Control", "no-cache")
-			_, _ = w.Write(scraperUtilHTML)
-		})
-	})
 
 	// /health is intentionally remote-accessible with no IP filter, no
 	// API key auth, and no rate limiting (only the global Recoverer/CORS

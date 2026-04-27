@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -49,6 +50,7 @@ type RequestEnv struct {
 	Player        audio.Player
 	TokenQueue    chan<- tokens.Token
 	ConfirmQueue  chan<- chan error
+	Scrapers      map[string]scraper.Scraper
 	IndexPauser   *syncutil.Pauser
 	ClientID      string
 	Params        json.RawMessage
