@@ -51,7 +51,7 @@ func TestStartAcceptsZapscriptFromGroovyCore(t *testing.T) {
 
 	mockPlatform := mocks.NewMockPlatform()
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
-	itq := make(chan tokens.Token, 1)
+	itq := make(chan tokens.Token)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -81,5 +81,46 @@ func TestStartAcceptsZapscriptFromGroovyCore(t *testing.T) {
 		assert.False(t, token.ScanTime.IsZero())
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for GMC zapscript token")
+	}
+}
+
+func TestStartStopsWhenZapscriptTokenSendBlocked(t *testing.T) {
+	lc := net.ListenConfig{}
+	coreConn, err := lc.ListenPacket(context.Background(), "udp4", "127.0.0.1:32105")
+	if err != nil {
+		t.Skipf("Groovy Core GMC port unavailable: %v", err)
+	}
+	defer func() { _ = coreConn.Close() }()
+
+	proxyPort := 0
+	beaconInterval := "10ms"
+	defaults := config.BaseDefaults
+	defaults.Groovy.GmcProxyPort = &proxyPort
+	defaults.Groovy.GmcProxyBeaconInterval = &beaconInterval
+	cfg, err := config.NewConfig(t.TempDir(), defaults)
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	itq := make(chan tokens.Token)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Start(cfg, st, itq)
+	}()
+
+	buf := make([]byte, 1)
+	require.NoError(t, coreConn.SetReadDeadline(time.Now().Add(time.Second)))
+	_, coreProxyAddr, err := coreConn.ReadFrom(buf)
+	require.NoError(t, err)
+
+	_, err = coreConn.WriteTo([]byte("zapscript:**input.keyboard:{f2}"), coreProxyAddr)
+	require.NoError(t, err)
+
+	st.StopService()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("GMC proxy did not stop while zapscript token send was blocked")
 	}
 }

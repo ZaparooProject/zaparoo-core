@@ -31,7 +31,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testNoMountEventTimeout = 100 * time.Millisecond
+const (
+	testMountEventTimeout   = time.Second
+	testNoMountEventTimeout = 300 * time.Millisecond
+)
 
 func newLinuxMountDetectorForTest() *linuxMountDetector {
 	return &linuxMountDetector{
@@ -70,7 +73,7 @@ func requireMountEvent(t *testing.T, detector *linuxMountDetector) MountEvent {
 	select {
 	case event := <-detector.events:
 		return event
-	case <-time.After(time.Second):
+	case <-time.After(testMountEventTimeout):
 		require.Fail(t, "timed out waiting for mount event")
 		return MountEvent{}
 	}
@@ -92,7 +95,7 @@ func requireUnmountEvent(t *testing.T, detector *linuxMountDetector) string {
 	select {
 	case deviceID := <-detector.unmounts:
 		return deviceID
-	case <-time.After(time.Second):
+	case <-time.After(testMountEventTimeout):
 		require.Fail(t, "timed out waiting for unmount event")
 		return ""
 	}

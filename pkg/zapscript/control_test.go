@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -154,6 +155,26 @@ func TestRunControlScript_StopsWhenContextCanceled(t *testing.T) {
 	err := RunControlScript(ctx, mockPlatform, &config.Instance{}, nil, "**input.keyboard:{f2}", nil)
 	require.ErrorIs(t, err, context.Canceled)
 	mockPlatform.AssertNotCalled(t, "KeyboardPress", "{f2}")
+}
+
+func TestRunControlScript_CancelsMidExecution(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	mockPlatform.On("KeyboardPress", "{f2}").
+		Run(func(_ mock.Arguments) { cancel() }).
+		Return(nil)
+
+	err := RunControlScript(
+		ctx, mockPlatform, &config.Instance{}, nil,
+		"**input.keyboard:{f2}||**input.keyboard:{f3}", nil,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	mockPlatform.AssertCalled(t, "KeyboardPress", "{f2}")
+	mockPlatform.AssertNotCalled(t, "KeyboardPress", "{f3}")
 }
 
 func TestIsControlCommand(t *testing.T) {

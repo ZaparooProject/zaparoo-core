@@ -79,10 +79,10 @@ func TestStartWithReadyReportsBindFailure(t *testing.T) {
 	select {
 	case readyErr := <-ready:
 		require.Error(t, readyErr)
+		assert.Contains(t, readyErr.Error(), "bind")
 	case <-time.After(time.Second):
 		t.Fatal("StartWithReady returned an error without signaling ready")
 	}
-	assert.Contains(t, err.Error(), "bind")
 	assert.ErrorIs(t, st.GetContext().Err(), context.Canceled)
 }
 
