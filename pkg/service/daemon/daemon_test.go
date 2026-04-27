@@ -72,10 +72,11 @@ func writeFakeServiceScript(t *testing.T, pidFile, eventLog string) string {
 	scriptTemplate := "#!/bin/sh\n" +
 		"pidfile=%q\n" +
 		"eventlog=%q\n" +
+		"cleanup() { rm -f \"$pidfile\"; exit 0; }\n" +
+		"trap cleanup INT TERM HUP\n" +
 		"printf 'started:%%s\\n' \"$$\" >> \"$eventlog\"\n" +
 		"printf '%%s' \"$$\" > \"$pidfile\"\n" +
-		"sleep 2\n" +
-		"rm -f \"$pidfile\"\n"
+		"while :; do sleep 1; done\n"
 	script := fmt.Sprintf(
 		scriptTemplate,
 		pidFile,
@@ -363,6 +364,10 @@ func TestStop_WaitsForProcessExitAndRemovesPIDFile(t *testing.T) {
 }
 
 func TestStopRemovesStalePIDFileWithoutKillingUnrelatedProcess(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service PID identity checks use Linux /proc")
+	}
+
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
 	pidFile := filepath.Join(settings.TempDir, config.PidFile)
@@ -380,6 +385,10 @@ func TestStopRemovesStalePIDFileWithoutKillingUnrelatedProcess(t *testing.T) {
 }
 
 func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service PID identity checks use Linux /proc")
+	}
+
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
 	pidFile := filepath.Join(settings.TempDir, config.PidFile)
@@ -398,6 +407,10 @@ func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
 }
 
 func TestStartFailsForLiveUnrelatedPID(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service PID identity checks use Linux /proc")
+	}
+
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
 	pidFile := filepath.Join(settings.TempDir, config.PidFile)
@@ -415,6 +428,10 @@ func TestStartFailsForLiveUnrelatedPID(t *testing.T) {
 }
 
 func TestRestartFailsForLiveUnrelatedPID(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service PID identity checks use Linux /proc")
+	}
+
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
 	pidFile := filepath.Join(settings.TempDir, config.PidFile)
@@ -432,6 +449,10 @@ func TestRestartFailsForLiveUnrelatedPID(t *testing.T) {
 }
 
 func TestWaitForAPIReturnsPIDConflict(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service PID identity checks use Linux /proc")
+	}
+
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
 	pidFile := filepath.Join(settings.TempDir, config.PidFile)
@@ -497,9 +518,13 @@ func TestWaitForAPIPortRelease(t *testing.T) {
 
 	addr, ok := listener.Addr().(*net.TCPAddr)
 	require.True(t, ok)
-	cfg, err := testhelpers.NewTestConfig(testhelpers.NewOSFS(), t.TempDir())
+	cfg, err := testhelpers.NewTestConfigWithListenAndPort(
+		testhelpers.NewOSFS(),
+		t.TempDir(),
+		"127.0.0.1",
+		addr.Port,
+	)
 	require.NoError(t, err)
-	require.NoError(t, cfg.SetAPIPort(addr.Port))
 
 	err = waitForAPIPortRelease(cfg, 20*time.Millisecond, 5*time.Millisecond)
 	require.Error(t, err)
