@@ -159,7 +159,7 @@ func buildManifest(version, assetsDir, releaseNotes string, prerelease bool, exi
 			continue
 		}
 
-		if !strings.HasPrefix(name, "zaparoo-") && name != "checksums.txt" && name != "checksums.txt.sig" {
+		if !isUpdateArchive(name) && name != "checksums.txt" && name != "checksums.txt.sig" {
 			continue
 		}
 
@@ -263,6 +263,23 @@ func loadGithubRelease(fs afero.Fs, path string) (*githubRelease, error) {
 	return &release, nil
 }
 
+func validateGithubReleaseMetadata(release *githubRelease, version string) error {
+	if release.TagName == "" {
+		return errors.New("GitHub release metadata is missing tagName")
+	}
+	if release.TagName != version {
+		return fmt.Errorf("GitHub release metadata tag %q does not match version %q", release.TagName, version)
+	}
+	if release.URL == "" {
+		return fmt.Errorf("GitHub release metadata for %s is missing url", release.TagName)
+	}
+	if release.PublishedAt.IsZero() {
+		return fmt.Errorf("GitHub release metadata for %s is missing publishedAt", release.TagName)
+	}
+
+	return nil
+}
+
 func isUpdateArchive(name string) bool {
 	return strings.HasPrefix(name, "zaparoo-") &&
 		(strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".zip"))
@@ -359,11 +376,8 @@ func main() {
 		if loadErr != nil {
 			log.Fatal().Err(loadErr).Msg("error loading GitHub release metadata")
 		}
-		if release.TagName != "" && release.TagName != *version {
-			log.Fatal().
-				Str("metadata_tag", release.TagName).
-				Str("version", *version).
-				Msg("GitHub release metadata tag mismatch")
+		if validateErr := validateGithubReleaseMetadata(release, *version); validateErr != nil {
+			log.Fatal().Err(validateErr).Msg("invalid GitHub release metadata")
 		}
 		assets, assetsErr := assetsFromGithubRelease(fs, release, *metadataDir)
 		if assetsErr != nil {

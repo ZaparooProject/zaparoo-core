@@ -107,11 +107,6 @@ jobs:
           packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
           version: 1.1
 
-      - name: Install dependencies (macOS)
-        if: matrix.os == 'macos'
-        run: |
-          brew install libusb pkg-config
-
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
         with:
@@ -335,11 +330,6 @@ jobs:
       - name: Download Go modules (non-Windows)
         if: matrix.os != 'windows'
         run: go mod download
-
-      - name: Install dependencies (macOS)
-        if: matrix.os == 'macos'
-        run: |
-          brew install libusb pkg-config
 
       - name: Run native tests (Windows)
         if: matrix.os == 'windows'

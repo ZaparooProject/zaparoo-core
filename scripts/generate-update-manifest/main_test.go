@@ -162,6 +162,64 @@ func TestLoadGithubRelease(t *testing.T) {
 	require.Len(t, loaded.Assets, 1)
 }
 
+func TestValidateGithubReleaseMetadata(t *testing.T) {
+	t.Parallel()
+
+	publishedAt := time.Date(2026, 4, 27, 1, 2, 3, 0, time.UTC)
+	tests := []struct {
+		name    string
+		release *githubRelease
+		wantErr string
+	}{
+		{
+			name: "valid",
+			release: &githubRelease{
+				TagName:     "v1.0.0",
+				URL:         "https://github.com/ZaparooProject/zaparoo-core/releases/tag/v1.0.0",
+				PublishedAt: publishedAt,
+			},
+		},
+		{
+			name:    "missing tag",
+			release: &githubRelease{URL: "https://example.com", PublishedAt: publishedAt},
+			wantErr: "missing tagName",
+		},
+		{
+			name: "tag mismatch",
+			release: &githubRelease{
+				TagName:     "v1.0.1",
+				URL:         "https://example.com",
+				PublishedAt: publishedAt,
+			},
+			wantErr: "does not match version",
+		},
+		{
+			name:    "missing url",
+			release: &githubRelease{TagName: "v1.0.0", PublishedAt: publishedAt},
+			wantErr: "missing url",
+		},
+		{
+			name:    "missing published at",
+			release: &githubRelease{TagName: "v1.0.0", URL: "https://example.com"},
+			wantErr: "missing publishedAt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateGithubReleaseMetadata(tt.release, "v1.0.0")
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 func TestBuildManifest_OnlyMetadataFiles(t *testing.T) {
 	t.Parallel()
 
@@ -192,6 +250,7 @@ func TestBuildManifest_SkipsNonAssetFiles(t *testing.T) {
 
 	dir := t.TempDir()
 	createAssetFile(t, dir, "zaparoo-linux_amd64.tar.gz", 100)
+	createAssetFile(t, dir, "zaparoo-linux_amd64-setup.exe", 100)
 	createAssetFile(t, dir, "README.md", 50)
 	createAssetFile(t, dir, "random-file.txt", 50)
 
