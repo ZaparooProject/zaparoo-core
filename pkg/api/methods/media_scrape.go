@@ -164,11 +164,13 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		log.Info().Str("scraper", params.ScraperID).Msg("scraper run complete")
 	}()
 
-	return nil, nil
+	return nil, nil //nolint:nilnil // API handler returns nil result and nil error for async start
 }
 
 // HandleMediaScrapeCancel cancels the currently running media.scrape operation.
-func HandleMediaScrapeCancel(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+//
+//nolint:gocritic // API handler signature; large env param cannot be passed by pointer
+func HandleMediaScrapeCancel(_ requests.RequestEnv) (any, error) {
 	if scrapingStatusInstance.cancel() {
 		return map[string]any{"message": "scraping cancelled"}, nil
 	}

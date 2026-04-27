@@ -33,7 +33,9 @@ import (
 
 // FindMediaBySystemAndPath returns the Media row for the given system and path,
 // or nil, nil when not found.
-func (db *MediaDB) FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*database.Media, error) {
+func (db *MediaDB) FindMediaBySystemAndPath(
+	ctx context.Context, systemDBID int64, path string,
+) (*database.Media, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
@@ -62,7 +64,7 @@ func (db *MediaDB) FindMediaBySystemAndPath(ctx context.Context, systemDBID int6
 		&row.IsMissing,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		return nil, nil //nolint:nilnil // sql.ErrNoRows means not found; nil result is the "not found" sentinel
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan FindMediaBySystemAndPath: %w", err)
@@ -73,7 +75,9 @@ func (db *MediaDB) FindMediaBySystemAndPath(ctx context.Context, systemDBID int6
 // FindMediaBySystemAndPathFold returns the Media row for the given system and
 // path using a case-insensitive path comparison, or nil, nil when not found.
 // LOWER() in SQLite covers ASCII only, which is sufficient for filesystem paths.
-func (db *MediaDB) FindMediaBySystemAndPathFold(ctx context.Context, systemDBID int64, path string) (*database.Media, error) {
+func (db *MediaDB) FindMediaBySystemAndPathFold(
+	ctx context.Context, systemDBID int64, path string,
+) (*database.Media, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
@@ -102,7 +106,7 @@ func (db *MediaDB) FindMediaBySystemAndPathFold(ctx context.Context, systemDBID 
 		&row.IsMissing,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		return nil, nil //nolint:nilnil // sql.ErrNoRows means not found; nil result is the "not found" sentinel
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan FindMediaBySystemAndPathFold: %w", err)
@@ -214,10 +218,9 @@ func (db *MediaDB) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int6
 		return ErrNullSQL
 	}
 	return upsertTags(ctx, db.sql, tagInfos, func(tx *sql.Tx, typeDBID int64) error {
-		_, err := tx.ExecContext(ctx,
-			`DELETE FROM MediaTitleTags WHERE MediaTitleDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`,
-			mediaTitleDBID, typeDBID,
-		)
+		const q = `DELETE FROM MediaTitleTags` +
+			` WHERE MediaTitleDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`
+		_, err := tx.ExecContext(ctx, q, mediaTitleDBID, typeDBID)
 		if err != nil {
 			return fmt.Errorf("failed to delete media title tags for type: %w", err)
 		}
@@ -335,7 +338,9 @@ func upsertTags(
 // Conflicts on (MediaTitleDBID, TypeTagDBID) update data columns; DBID is preserved.
 // p.TypeTag must be set to the full "type:value" string; TypeTagDBID is resolved
 // from the Tags table automatically.
-func (db *MediaDB) UpsertMediaTitleProperties(ctx context.Context, mediaTitleDBID int64, props []database.MediaProperty) error {
+func (db *MediaDB) UpsertMediaTitleProperties(
+	ctx context.Context, mediaTitleDBID int64, props []database.MediaProperty,
+) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -389,7 +394,7 @@ func (db *MediaDB) UpsertMediaProperties(ctx context.Context, mediaDBID int64, p
 
 // DeleteMediaTitleProperty removes the property row for (mediaTitleDBID, typeTagDBID)
 // from MediaTitleProperties. It is a no-op when no matching row exists.
-func (db *MediaDB) DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID int64, typeTagDBID int64) error {
+func (db *MediaDB) DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID, typeTagDBID int64) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -398,14 +403,16 @@ func (db *MediaDB) DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID 
 		mediaTitleDBID, typeTagDBID,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to delete MediaTitleProperty (mediaTitleDBID=%d, typeTagDBID=%d): %w", mediaTitleDBID, typeTagDBID, err)
+		return fmt.Errorf(
+			"failed to delete MediaTitleProperty (mediaTitleDBID=%d, typeTagDBID=%d): %w",
+			mediaTitleDBID, typeTagDBID, err)
 	}
 	return nil
 }
 
 // DeleteMediaProperty removes the property row for (mediaDBID, typeTagDBID)
 // from MediaProperties. It is a no-op when no matching row exists.
-func (db *MediaDB) DeleteMediaProperty(ctx context.Context, mediaDBID int64, typeTagDBID int64) error {
+func (db *MediaDB) DeleteMediaProperty(ctx context.Context, mediaDBID, typeTagDBID int64) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -414,7 +421,9 @@ func (db *MediaDB) DeleteMediaProperty(ctx context.Context, mediaDBID int64, typ
 		mediaDBID, typeTagDBID,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to delete MediaProperty (mediaDBID=%d, typeTagDBID=%d): %w", mediaDBID, typeTagDBID, err)
+		return fmt.Errorf(
+			"failed to delete MediaProperty (mediaDBID=%d, typeTagDBID=%d): %w",
+			mediaDBID, typeTagDBID, err)
 	}
 	return nil
 }
@@ -452,7 +461,9 @@ func resolvePropertyTypeTag(ctx context.Context, db *sql.DB, typeTag string) (in
 // FindMediaTitlesWithoutSentinel returns MediaTitle rows for the given system
 // that have no Media row tagged with sentinelTag. sentinelTag must be in
 // "type:value" format (e.g. "scraper.gamelist.xml:scraped").
-func (db *MediaDB) FindMediaTitlesWithoutSentinel(ctx context.Context, systemDBID int64, sentinelTag string) ([]database.MediaTitle, error) {
+func (db *MediaDB) FindMediaTitlesWithoutSentinel(
+	ctx context.Context, systemDBID int64, sentinelTag string,
+) ([]database.MediaTitle, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
@@ -535,7 +546,7 @@ func (db *MediaDB) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*datab
 	var t database.MediaTitle
 	err = stmt.QueryRowContext(ctx, dbid).Scan(&t.DBID, &t.SystemDBID, &t.Slug, &t.Name)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		return nil, nil //nolint:nilnil // sql.ErrNoRows means not found; nil result is the "not found" sentinel
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan FindMediaTitleByDBID: %w", err)
@@ -545,7 +556,9 @@ func (db *MediaDB) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*datab
 
 // GetMediaTitleProperties returns all MediaTitleProperties rows for the given
 // title. TypeTag is populated as "type:value" from the joined Tags/TagTypes rows.
-func (db *MediaDB) GetMediaTitleProperties(ctx context.Context, mediaTitleDBID int64) ([]database.MediaProperty, error) {
+func (db *MediaDB) GetMediaTitleProperties(
+	ctx context.Context, mediaTitleDBID int64,
+) ([]database.MediaProperty, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
@@ -650,7 +663,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 		&row.System.DBID, &row.System.SystemID, &row.System.Name,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		return nil, nil //nolint:nilnil // sql.ErrNoRows means not found; nil result is the "not found" sentinel
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan GetMediaWithTitleAndSystem: %w", err)
@@ -697,7 +710,9 @@ func (db *MediaDB) GetMediaTagsByMediaDBID(ctx context.Context, mediaDBID int64)
 
 // GetMediaTitleTagsByMediaTitleDBID returns the title-level tags (MediaTitleTags)
 // for a single MediaTitle row, ordered by type then tag value.
-func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBID(ctx context.Context, mediaTitleDBID int64) ([]database.TagInfo, error) {
+func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBID(
+	ctx context.Context, mediaTitleDBID int64,
+) ([]database.TagInfo, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}

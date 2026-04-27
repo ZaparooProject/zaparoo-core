@@ -119,7 +119,9 @@ func RunScraper[T any](
 				if !opts.Force {
 					has, sentinelErr := db.MediaHasTag(ctx, match.MediaDBID, sentinel)
 					if sentinelErr != nil {
-						log.Warn().Err(sentinelErr).Int64("mediaDBID", match.MediaDBID).Msg("scraper: sentinel check error")
+						log.Warn().Err(sentinelErr).
+							Int64("mediaDBID", match.MediaDBID).
+							Msg("scraper: sentinel check error")
 						skipped++
 						ch <- ScrapeUpdate{
 							SystemID:  system.ID,

@@ -51,7 +51,9 @@ func (s *stubLoop) LoadRecords(_ context.Context, _ scraper.ScrapeSystem) ([]stu
 	return s.records, nil
 }
 
-func (s *stubLoop) Match(_ context.Context, r stubRecord, _ scraper.ScrapeSystem, _ database.MediaDBI) (*scraper.MatchResult, error) {
+func (s *stubLoop) Match(
+	_ context.Context, r stubRecord, _ scraper.ScrapeSystem, _ database.MediaDBI,
+) (*scraper.MatchResult, error) {
 	if s.matchFn != nil {
 		return s.matchFn(r)
 	}
@@ -99,7 +101,7 @@ func TestRunScraper_NoMatch_IsSkipped(t *testing.T) {
 		id:      "test",
 		records: []stubRecord{{id: "mario"}},
 		matchFn: func(_ stubRecord) (*scraper.MatchResult, error) {
-			return nil, nil //nolint:nilnil
+			return nil, nil //nolint:nilnil // no match; nil result is the "skip" sentinel
 		},
 	}
 
@@ -197,7 +199,7 @@ func TestRunScraper_NonFatalMatchError_ContinuesLoop(t *testing.T) {
 			if r.id == "mario" {
 				return nil, matchErr
 			}
-			return nil, nil // zelda: no match, skip cleanly //nolint:nilnil
+			return nil, nil //nolint:nilnil // no match; nil result is the "skip" sentinel
 		},
 	}
 
@@ -206,7 +208,7 @@ func TestRunScraper_NonFatalMatchError_ContinuesLoop(t *testing.T) {
 
 	last := updates[len(updates)-1]
 	assert.True(t, last.Done)
-	assert.NoError(t, last.FatalErr, "match errors must not be fatal")
+	require.NoError(t, last.FatalErr, "match errors must not be fatal")
 
 	var errSeen bool
 	for _, u := range updates {
@@ -230,7 +232,7 @@ func TestRunScraper_CtxCancel_EmitsDone(t *testing.T) {
 		records: []stubRecord{{id: "mario"}, {id: "zelda"}, {id: "metroid"}},
 		matchFn: func(_ stubRecord) (*scraper.MatchResult, error) {
 			cancel()        // cancel on first match attempt
-			return nil, nil //nolint:nilnil
+			return nil, nil //nolint:nilnil // no match; nil result is the "skip" sentinel
 		},
 	}
 

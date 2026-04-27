@@ -38,7 +38,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func makeMediaImageEnv(t *testing.T, mockMediaDB *testhelpers.MockMediaDBI, params json.RawMessage) requests.RequestEnv {
+func makeMediaImageEnv(
+	t *testing.T, mockMediaDB *testhelpers.MockMediaDBI, params json.RawMessage,
+) requests.RequestEnv {
 	t.Helper()
 	pl := mocks.NewMockPlatform()
 	pl.SetupBasicMock()
@@ -122,7 +124,8 @@ func TestHandleMediaImage_ExplicitPrefs_MediaLevelPriority(t *testing.T) {
 
 	resp, ok := result.(models.MediaImageResponse)
 	require.True(t, ok)
-	assert.Equal(t, base64.StdEncoding.EncodeToString(mediaBlob), resp.Data, "expected media-level blob, not title-level")
+	assert.Equal(t,
+		base64.StdEncoding.EncodeToString(mediaBlob), resp.Data, "expected media-level blob, not title-level")
 	mockDB.AssertExpectations(t)
 }
 
@@ -178,7 +181,7 @@ func TestHandleMediaImage_NoMatchFound(t *testing.T) {
 	require.Error(t, err)
 
 	var clientErr *models.ClientError
-	assert.ErrorAs(t, err, &clientErr)
+	require.ErrorAs(t, err, &clientErr)
 	mockDB.AssertExpectations(t)
 }
 
@@ -196,7 +199,7 @@ func TestHandleMediaImage_MediaNotFound(t *testing.T) {
 	require.Error(t, err)
 
 	var clientErr *models.ClientError
-	assert.ErrorAs(t, err, &clientErr)
+	require.ErrorAs(t, err, &clientErr)
 	mockDB.AssertExpectations(t)
 }
 
@@ -267,7 +270,7 @@ func TestHandleMediaImage_FileReadError_DeletesAndRecurses(t *testing.T) {
 	require.Error(t, err)
 
 	var clientErr *models.ClientError
-	assert.ErrorAs(t, err, &clientErr, "expected ClientError after exhausting all preferences")
+	require.ErrorAs(t, err, &clientErr, "expected ClientError after exhausting all preferences")
 	mockDB.AssertExpectations(t)
 }
 

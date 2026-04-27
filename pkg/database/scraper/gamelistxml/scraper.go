@@ -67,13 +67,15 @@ func NewGamelistXMLScraper(db database.MediaDBI, resolveSystemsFn SystemResolver
 }
 
 // ID returns the stable scraper identifier.
-func (g *GamelistXMLScraper) ID() string {
+func (*GamelistXMLScraper) ID() string {
 	return "gamelist.xml"
 }
 
 // Scrape implements [scraper.Scraper]. It resolves active systems via the
 // injected resolver and delegates to [scraper.RunScraper].
-func (g *GamelistXMLScraper) Scrape(ctx context.Context, opts scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
+func (g *GamelistXMLScraper) Scrape(
+	ctx context.Context, opts scraper.ScrapeOptions,
+) (<-chan scraper.ScrapeUpdate, error) {
 	systems, err := g.resolveSystemsFn(ctx, opts.Systems)
 	if err != nil {
 		return nil, fmt.Errorf("gamelistxml: failed to resolve systems: %w", err)
@@ -83,7 +85,7 @@ func (g *GamelistXMLScraper) Scrape(ctx context.Context, opts scraper.ScrapeOpti
 
 // LoadRecords searches each of system.ROMPaths for a gamelist.xml and yields
 // one GamelistRecord per <game> entry found.
-func (g *GamelistXMLScraper) LoadRecords(
+func (*GamelistXMLScraper) LoadRecords(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
 ) ([]*GamelistRecord, error) {
@@ -130,7 +132,7 @@ func (g *GamelistXMLScraper) LoadRecords(
 // Match resolves the game path from the record to an absolute filesystem path,
 // then looks up the corresponding Media row in the DB. Returns nil when the path
 // cannot be resolved or the Media row does not exist.
-func (g *GamelistXMLScraper) Match(
+func (*GamelistXMLScraper) Match(
 	ctx context.Context,
 	record *GamelistRecord,
 	system scraper.ScrapeSystem,
@@ -142,7 +144,7 @@ func (g *GamelistXMLScraper) Match(
 			Str("path", record.Game.Path).
 			Str("root", record.SystemRootPath).
 			Msg("gamelistxml: unresolvable path, skipping")
-		return nil, nil //nolint:nilnil
+		return nil, nil //nolint:nilnil // unresolvable path means no match; nil result is the "skip" sentinel
 	}
 
 	media, err := db.FindMediaBySystemAndPathFold(ctx, system.DBID, absPath)
@@ -151,7 +153,7 @@ func (g *GamelistXMLScraper) Match(
 	}
 	if media == nil {
 		log.Info().Str("path", absPath).Int64("systemDBID", system.DBID).Msg("gamelistxml: media not indexed, skipping")
-		return nil, nil //nolint:nilnil
+		return nil, nil //nolint:nilnil // media not indexed; nil result is the "skip" sentinel
 	}
 
 	log.Debug().
@@ -167,7 +169,7 @@ func (g *GamelistXMLScraper) Match(
 
 // MapToDB converts a GamelistRecord into the tag and property writes to apply
 // to the matched Media and MediaTitle rows.
-func (_ *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
+func (*GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	var mediaTags []database.TagInfo
 	var titleTags []database.TagInfo
 	var titleProps []database.MediaProperty
@@ -203,7 +205,9 @@ func (_ *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	if game.Lang != "" {
 		for _, lang := range splitCSV(game.Lang) {
 			if lang != "" {
-				mediaTags = append(mediaTags, database.TagInfo{Type: string(tags.TagTypeLang), Tag: strings.ToLower(lang)})
+				mediaTags = append(mediaTags, database.TagInfo{
+					Type: string(tags.TagTypeLang), Tag: strings.ToLower(lang),
+				})
 			}
 		}
 	}
@@ -212,7 +216,9 @@ func (_ *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	if game.Region != "" {
 		for _, region := range splitCSV(game.Region) {
 			if region != "" {
-				mediaTags = append(mediaTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: strings.ToLower(region)})
+				mediaTags = append(mediaTags, database.TagInfo{
+					Type: string(tags.TagTypeRegion), Tag: strings.ToLower(region),
+				})
 			}
 		}
 	}
@@ -249,7 +255,10 @@ func (_ *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		}
 	}
 	if game.ArcadeSystemName != "" {
-		titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypeArcadeBoard), Tag: game.ArcadeSystemName})
+		titleTags = append(titleTags, database.TagInfo{
+			Type: string(tags.TagTypeArcadeBoard),
+			Tag:  game.ArcadeSystemName,
+		})
 	}
 	if game.Family != "" {
 		titleTags = append(titleTags, database.TagInfo{Type: "gamefamily", Tag: game.Family})
@@ -257,36 +266,40 @@ func (_ *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 
 	// --- MediaTitleProperties: title-level static content ---
 
+	propType := string(tags.TagTypeProperty)
+	root := record.SystemRootPath
+
 	if game.Desc != "" {
-		titleProps = append(titleProps, textProp(string(tags.TagTypeProperty)+":"+string(tags.TagPropertyDescription), game.Desc))
+		titleProps = append(titleProps,
+			textProp(propType+":"+string(tags.TagPropertyDescription), game.Desc))
 	}
-	if p := pathProp(string(tags.TagTypeProperty)+":"+string(tags.TagPropertyImageBoxart), game.Image, record.SystemRootPath); p != nil {
+	if p := pathProp(propType+":"+string(tags.TagPropertyImageBoxart), game.Image, root); p != nil {
 		titleProps = append(titleProps, *p)
 	}
 	// game.Thumbnail in most ES forks (RPI, Sky, Batocera, ES-DE) holds cover art.
 	// See esapi/gamelist.go for field-level fork documentation.
-	if p := pathProp(string(tags.TagTypeProperty)+":"+string(tags.TagPropertyImageThumbnail), game.Thumbnail, record.SystemRootPath); p != nil {
+	if p := pathProp(propType+":"+string(tags.TagPropertyImageThumbnail), game.Thumbnail, root); p != nil {
 		titleProps = append(titleProps, *p)
 	}
-	if p := pathProp(string(tags.TagTypeProperty)+":"+string(tags.TagPropertyVideo), game.Video, record.SystemRootPath); p != nil {
+	if p := pathProp(propType+":"+string(tags.TagPropertyVideo), game.Video, root); p != nil {
 		titleProps = append(titleProps, *p)
 	}
-	if p := pathProp(string(tags.TagTypeProperty)+":"+string(tags.TagPropertyImageMarquee), game.Marquee, record.SystemRootPath); p != nil {
+	if p := pathProp(propType+":"+string(tags.TagPropertyImageMarquee), game.Marquee, root); p != nil {
 		titleProps = append(titleProps, *p)
 	}
-	if p := pathProp(string(tags.TagTypeProperty)+":"+string(tags.TagPropertyImageWheel), game.Wheel, record.SystemRootPath); p != nil {
+	if p := pathProp(propType+":"+string(tags.TagPropertyImageWheel), game.Wheel, root); p != nil {
 		titleProps = append(titleProps, *p)
 	}
-	if p := pathProp(string(tags.TagTypeProperty)+":"+string(tags.TagPropertyImageFanart), game.FanArt, record.SystemRootPath); p != nil {
+	if p := pathProp(propType+":"+string(tags.TagPropertyImageFanart), game.FanArt, root); p != nil {
 		titleProps = append(titleProps, *p)
 	}
-	if p := pathProp(string(tags.TagTypeProperty)+":"+string(tags.TagPropertyImageTitleshot), game.TitleShot, record.SystemRootPath); p != nil {
+	if p := pathProp(propType+":"+string(tags.TagPropertyImageTitleshot), game.TitleShot, root); p != nil {
 		titleProps = append(titleProps, *p)
 	}
-	if p := pathProp(string(tags.TagTypeProperty)+":"+string(tags.TagPropertyImageMap), game.Map, record.SystemRootPath); p != nil {
+	if p := pathProp(propType+":"+string(tags.TagPropertyImageMap), game.Map, root); p != nil {
 		titleProps = append(titleProps, *p)
 	}
-	if p := pathProp(string(tags.TagTypeProperty)+":"+string(tags.TagPropertyManual), game.Manual, record.SystemRootPath); p != nil {
+	if p := pathProp(propType+":"+string(tags.TagPropertyManual), game.Manual, root); p != nil {
 		titleProps = append(titleProps, *p)
 	}
 
@@ -352,7 +365,7 @@ func normalizePlayers(s string) string {
 		return ""
 	}
 
-	var max int
+	var maxVal int
 	// Split on commas and hyphens to extract all numeric tokens.
 	for _, part := range strings.FieldsFunc(s, func(r rune) bool {
 		return r == ',' || r == '-' || unicode.IsSpace(r)
@@ -361,14 +374,14 @@ func normalizePlayers(s string) string {
 		if err != nil {
 			continue
 		}
-		if n > max {
-			max = n
+		if n > maxVal {
+			maxVal = n
 		}
 	}
-	if max == 0 {
+	if maxVal == 0 {
 		return ""
 	}
-	return strconv.Itoa(max)
+	return strconv.Itoa(maxVal)
 }
 
 // normalizeRating converts an ES float rating string ("0.75") to an integer

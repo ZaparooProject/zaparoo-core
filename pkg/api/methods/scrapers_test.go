@@ -38,7 +38,7 @@ import (
 // routeRequest wires r into a chi router at path using the given method and
 // handler, then serves it. This lets URL params resolve properly.
 func routeRequest(
-	method, path, pattern string, handler http.HandlerFunc, r *http.Request,
+	method, _, pattern string, handler http.HandlerFunc, r *http.Request,
 ) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
 	router := chi.NewRouter()

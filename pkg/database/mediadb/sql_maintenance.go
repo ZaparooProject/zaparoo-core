@@ -132,7 +132,10 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 	}()
 
 	// Each UNION branch needs its own copy of the system DBID args (4 branches).
-	candidateArgs := append(append(append(append([]any{}, systemDBIDs...), systemDBIDs...), systemDBIDs...), systemDBIDs...)
+	candidateArgs := make([]any, 0, len(systemDBIDs)*4)
+	for range 4 {
+		candidateArgs = append(candidateArgs, systemDBIDs...)
+	}
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
 	if _, err = conn.ExecContext(ctx, fmt.Sprintf(`
 		INSERT OR IGNORE INTO _tts_candidate_tags (DBID)
@@ -177,7 +180,8 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 	}
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
 	if _, err = conn.ExecContext(ctx, fmt.Sprintf(
-		"DELETE FROM MediaTitleProperties WHERE MediaTitleDBID IN (SELECT DBID FROM MediaTitles WHERE SystemDBID IN (%s))",
+		"DELETE FROM MediaTitleProperties"+
+			" WHERE MediaTitleDBID IN (SELECT DBID FROM MediaTitles WHERE SystemDBID IN (%s))",
 		dbidPlaceholders), systemDBIDs...); err != nil {
 		return fmt.Errorf("failed to delete MediaTitleProperties: %w", err)
 	}

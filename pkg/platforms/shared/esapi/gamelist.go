@@ -137,7 +137,7 @@ type Game struct {
 	MultiDisk           string   `xml:"multidisk,omitempty"`
 	CheevosHash         string   `xml:"cheevosHash,omitempty"`
 	Genres              string   `xml:"genres,omitempty"`
-	ScreenScraperID     int      `xml:"id,omitempty"`
+	ScreenScraperID     int      `xml:"id,omitempty"` //nolint:revive // both "id" attr and "id" element exist in real ES forks
 	PlayCount           int      `xml:"playcount,omitempty"`
 	CheevosID           int      `xml:"cheevosId,omitempty"`
 	GameTime            int      `xml:"gametime,omitempty"`

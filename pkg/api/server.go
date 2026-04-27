@@ -1303,7 +1303,7 @@ func makeSystemResolver(
 	platform platforms.Platform,
 	cfg *config.Instance,
 ) gamelistxml.SystemResolver {
-	return func(ctx context.Context, systemIDs []string) ([]scraper.ScrapeSystem, error) {
+	return func(_ context.Context, systemIDs []string) ([]scraper.ScrapeSystem, error) {
 		indexed, err := mdb.IndexedSystems()
 		if err != nil {
 			return nil, fmt.Errorf("makeSystemResolver: list indexed systems: %w", err)

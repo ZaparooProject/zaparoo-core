@@ -307,7 +307,8 @@ func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 
 	coverPath := filepath.Join("roms", "nes", "mario.png")
 	_, err = db.ExecContext(ctx,
-		"INSERT INTO MediaTitleProperties (DBID, MediaTitleDBID, TypeTagDBID, Text, ContentType) VALUES (1, 1, 4, ?, ?)",
+		"INSERT INTO MediaTitleProperties"+
+			" (DBID, MediaTitleDBID, TypeTagDBID, Text, ContentType) VALUES (1, 1, 4, ?, ?)",
 		coverPath, "image/png")
 	require.NoError(t, err)
 
