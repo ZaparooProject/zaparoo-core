@@ -498,18 +498,18 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 		typeMatches[string(tagType)] = strTags
 	}
 
-	if _, exists := ss.TagTypeIDs["unknown"]; !exists {
+	if _, exists := ss.TagTypeIDs[string(tags.TagTypeUnknown)]; !exists {
 		ss.TagTypesIndex++
 		_, err := db.InsertTagType(database.TagType{
 			DBID:        int64(ss.TagTypesIndex),
-			Type:        "unknown",
-			IsExclusive: tags.IsExclusiveType(tags.TagType("unknown")),
+			Type:        string(tags.TagTypeUnknown),
+			IsExclusive: tags.IsExclusiveType(tags.TagTypeUnknown),
 		})
 		if err != nil {
 			ss.TagTypesIndex-- // Rollback index increment on failure
 			return fmt.Errorf("error inserting tag type unknown: %w", err)
 		}
-		ss.TagTypeIDs["unknown"] = ss.TagTypesIndex
+		ss.TagTypeIDs[string(tags.TagTypeUnknown)] = ss.TagTypesIndex
 	}
 
 	unknownKey := database.TagKey("unknown", "unknown")

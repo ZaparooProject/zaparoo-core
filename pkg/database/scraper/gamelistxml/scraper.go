@@ -261,7 +261,7 @@ func (*GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		})
 	}
 	if game.Family != "" {
-		titleTags = append(titleTags, database.TagInfo{Type: "gamefamily", Tag: game.Family})
+		titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypeGameFamily), Tag: game.Family})
 	}
 
 	// --- MediaTitleProperties: title-level static content ---
@@ -488,10 +488,15 @@ func mimeFromExt(path string) string {
 		return "video/avi"
 	case ".pdf":
 		return "application/pdf"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".m4a", ".m4b":
+		return "audio/mp4"
+	case ".mpg", ".mpeg":
+		return "video/mpeg"
+	case ".m4v":
+		return "video/mp4"
 	default:
-		if strings.HasPrefix(ext, ".mp") || strings.HasPrefix(ext, ".m4") {
-			return "video/*"
-		}
 		return "application/octet-stream"
 	}
 }

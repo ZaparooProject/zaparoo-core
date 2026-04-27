@@ -61,6 +61,20 @@ func (s *scrapingStatus) clear() {
 	s.cancelFunc = nil
 }
 
+// clearIfOwner clears state only when the caller's scraperID matches the stored one.
+// This prevents a cancelled goroutine from clobbering a freshly-started scrape that
+// reused the slot after cancel() returned but before the old goroutine reached clear().
+func (s *scrapingStatus) clearIfOwner(scraperID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.scraperID != scraperID {
+		return
+	}
+	s.running = false
+	s.scraperID = ""
+	s.cancelFunc = nil
+}
+
 func (s *scrapingStatus) setCancelFunc(cancelFunc context.CancelFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -72,7 +86,10 @@ func (s *scrapingStatus) cancel() bool {
 	defer s.mu.Unlock()
 	if s.cancelFunc != nil && s.running {
 		s.cancelFunc()
-		s.running = false
+		// Do NOT clear running/scraperID here. The goroutine's deferred
+		// clearIfOwner call is the single writer for those fields, preventing
+		// a new scrape from starting only to have its state cleared by the
+		// old goroutine winding down.
 		return true
 	}
 	return false
@@ -137,14 +154,16 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		Scraping:  true,
 	})
 
+	scraperID := params.ScraperID
 	db.MediaDB.TrackBackgroundOperation()
 	go func() {
 		defer db.MediaDB.BackgroundOperationDone()
 		defer cancelFunc()
+		defer scrapingStatusInstance.clearIfOwner(scraperID)
 
 		for update := range ch {
 			notifications.MediaScraping(ns, models.ScrapingStatusResponse{
-				ScraperID: params.ScraperID,
+				ScraperID: scraperID,
 				SystemID:  update.SystemID,
 				Processed: update.Processed,
 				Total:     update.Total,
@@ -155,13 +174,12 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			})
 		}
 
-		scrapingStatusInstance.clear()
 		notifications.MediaScraping(ns, models.ScrapingStatusResponse{
-			ScraperID: params.ScraperID,
+			ScraperID: scraperID,
 			Scraping:  false,
 			Done:      true,
 		})
-		log.Info().Str("scraper", params.ScraperID).Msg("scraper run complete")
+		log.Info().Str("scraper", scraperID).Msg("scraper run complete")
 	}()
 
 	return nil, nil //nolint:nilnil // API handler returns nil result and nil error for async start

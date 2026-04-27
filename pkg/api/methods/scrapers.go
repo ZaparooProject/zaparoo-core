@@ -83,8 +83,8 @@ func HandleGetMediaProperties(db database.MediaDBI) http.HandlerFunc {
 		}
 
 		// 404 if media does not exist.
-		result, err := db.GetMediaByDBID(r.Context(), dbid)
-		if errors.Is(err, sql.ErrNoRows) || (err == nil && result.MediaID == 0) {
+		_, err = db.GetMediaByDBID(r.Context(), dbid)
+		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "media not found", http.StatusNotFound)
 			return
 		}

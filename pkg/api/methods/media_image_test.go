@@ -62,7 +62,7 @@ func makeMediaImageEnv(
 
 func makeMediaFullRow(mediaDBID, titleDBID int64) *database.MediaFullRow {
 	return &database.MediaFullRow{
-		Media:  database.Media{DBID: mediaDBID, Path: "/games/test.rom"},
+		Media:  database.Media{DBID: mediaDBID, Path: filepath.Join("games", "test.rom")},
 		Title:  database.MediaTitle{DBID: titleDBID, Slug: "test-game", Name: "Test Game"},
 		System: database.System{SystemID: "NES", Name: "NES"},
 	}
@@ -231,37 +231,38 @@ func TestHandleMediaImage_ImageAliasResolvesToBoxart(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-// TestHandleMediaImage_FileReadError_DeletesAndRecurses verifies that when a
-// property's Text path is unreadable, the stale property is deleted and the
-// handler recurses. With no remaining image the final result is a ClientError.
-func TestHandleMediaImage_FileReadError_DeletesAndRecurses(t *testing.T) {
+// TestHandleMediaImage_FileReadError_DeletesAndContinues verifies that when a
+// property's Text path is unreadable, the stale property is deleted (DB + in-memory)
+// and the handler continues to the next preference. With no remaining image the
+// final result is a ClientError.
+func TestHandleMediaImage_FileReadError_DeletesAndContinues(t *testing.T) {
 	t.Parallel()
+
+	// Use a path inside a real temp dir so the dir exists, but the file does not.
+	stalePath := filepath.Join(t.TempDir(), "missing_boxart.png")
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	row := makeMediaFullRow(6, 60)
 
-	// Both call #1 (initial) and call #2 (recursive) fetch the media row.
 	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(6)).
 		Return(row, nil)
 
-	// Stale title-level property with missing file — only present on first fetch.
+	// Stale title-level property with missing file.
 	staleProp := database.MediaProperty{
 		TypeTag:     "property:image-boxart",
 		ContentType: "image/png",
-		Text:        "/nonexistent/path/boxart.png",
+		Text:        stalePath,
 		Binary:      nil,
 		TypeTagDBID: 42,
 	}
+	// Properties are fetched once; the iterative loop deletes from the in-memory map.
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(60)).
-		Return([]database.MediaProperty{staleProp}, nil).Once()
-	// After deletion the second fetch returns nothing.
-	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(60)).
-		Return([]database.MediaProperty{}, nil).Once()
+		Return([]database.MediaProperty{staleProp}, nil)
 
 	mockDB.On("GetMediaProperties", mock.Anything, int64(6)).
 		Return([]database.MediaProperty{}, nil)
 
-	// Expect the stale title-level property to be deleted.
+	// Expect the stale title-level property to be deleted from the DB.
 	mockDB.On("DeleteMediaTitleProperty", mock.Anything, int64(60), int64(42)).
 		Return(nil)
 
@@ -275,12 +276,14 @@ func TestHandleMediaImage_FileReadError_DeletesAndRecurses(t *testing.T) {
 }
 
 // TestHandleMediaImage_FileReadError_FallsBackToNextPref verifies that when a
-// title-level property's file is unreadable, the stale entry is deleted and the
-// recursive call finds the next-preference image successfully.
+// title-level property's file is unreadable, the stale entry is deleted from the
+// DB and the in-memory map, and the handler continues to find the next-preference
+// image successfully without a second round-trip.
 func TestHandleMediaImage_FileReadError_FallsBackToNextPref(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	stalePath := filepath.Join(dir, "missing_boxart.png")
 	screenshotPath := filepath.Join(dir, "screenshot.png")
 	screenshotData := []byte("screenshot-bytes")
 	require.NoError(t, os.WriteFile(screenshotPath, screenshotData, 0o600))
@@ -294,7 +297,7 @@ func TestHandleMediaImage_FileReadError_FallsBackToNextPref(t *testing.T) {
 	staleProp := database.MediaProperty{
 		TypeTag:     "property:image-boxart",
 		ContentType: "image/png",
-		Text:        "/nonexistent/boxart.png",
+		Text:        stalePath,
 		Binary:      nil,
 		TypeTagDBID: 55,
 	}
@@ -306,12 +309,9 @@ func TestHandleMediaImage_FileReadError_FallsBackToNextPref(t *testing.T) {
 		TypeTagDBID: 56,
 	}
 
-	// First fetch: both properties present.
+	// Properties are fetched once; the iterative loop handles both in a single pass.
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(70)).
-		Return([]database.MediaProperty{staleProp, screenshotProp}, nil).Once()
-	// After deletion: only screenshot remains.
-	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(70)).
-		Return([]database.MediaProperty{screenshotProp}, nil).Once()
+		Return([]database.MediaProperty{staleProp, screenshotProp}, nil)
 
 	mockDB.On("GetMediaProperties", mock.Anything, int64(7)).
 		Return([]database.MediaProperty{}, nil)

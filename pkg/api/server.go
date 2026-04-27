@@ -22,6 +22,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -1333,8 +1334,11 @@ func makeSystemResolver(
 		for sysID := range want {
 			sys, err := mdb.FindSystemBySystemID(sysID)
 			if err != nil {
-				log.Warn().Err(err).Str("system", sysID).Msg("makeSystemResolver: system not found in DB, skipping")
-				continue
+				if errors.Is(err, sql.ErrNoRows) {
+					log.Debug().Str("system", sysID).Msg("makeSystemResolver: system not indexed in DB, skipping")
+					continue
+				}
+				return nil, fmt.Errorf("makeSystemResolver: look up system %q: %w", sysID, err)
 			}
 			// Build per-system ROM paths: <rootDir>/<systemID>.
 			// The gamelist.xml scraper looks for gamelist.xml directly inside each path.

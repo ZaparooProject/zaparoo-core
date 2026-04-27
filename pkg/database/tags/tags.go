@@ -113,6 +113,7 @@ const (
 	TagTypeProperty      TagType = "property"      // Static content property (description, artwork paths, video paths)
 	TagTypeRating        TagType = "rating"        // Numeric rating (scraped, stored as integer 0-100)
 	TagTypeGenre         TagType = "genre"         // Game genre (scraped from external sources; additive)
+	TagTypeGameFamily    TagType = "gamefamily"    // Game family/series (scraped from EmulationStation family field)
 )
 
 // Tag Format:
@@ -896,8 +897,9 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPropertyManual,
 	},
 
-	// Rating and genre are scraped from external sources; seeded here so the types
-	// exist after SeedCanonicalTags even before any scraper runs.
-	TagTypeRating: {},
-	TagTypeGenre:  {},
+	// Rating, genre, and game-family are scraped from external sources; seeded here
+	// so the types exist after SeedCanonicalTags even before any scraper runs.
+	TagTypeRating:     {},
+	TagTypeGenre:      {},
+	TagTypeGameFamily: {}, // Dynamic values — populated from EmulationStation "family" field
 }

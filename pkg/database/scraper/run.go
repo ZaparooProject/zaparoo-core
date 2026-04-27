@@ -26,11 +26,20 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// sentinelTag returns the sentinel tag value for the given scraper ID.
-// The sentinel is written to the Media record after a successful scrape so that
-// subsequent runs can skip already-processed records.
+// sentinelTag returns the sentinel tag value for the given scraper ID in
+// "type:value" string format, used for read-side checks (e.g. db.MediaHasTag).
 func sentinelTag(scraperID string) string {
 	return "scraper." + scraperID + ":scraped"
+}
+
+// sentinelTagInfo returns the canonical TagInfo representation of the sentinel
+// for the given scraper ID, used for write-side operations (e.g. db.UpsertMediaTags).
+// It is the TagInfo equivalent of sentinelTag.
+func sentinelTagInfo(scraperID string) database.TagInfo {
+	return database.TagInfo{
+		Type: "scraper." + scraperID,
+		Tag:  "scraped",
+	}
 }
 
 // RunScraper runs the generic scrape loop for scraper s across the given systems.
@@ -67,7 +76,14 @@ func RunScraper[T any](
 			// Step 1: load records for this system from the source.
 			records, err := s.LoadRecords(ctx, system)
 			if err != nil {
-				ch <- ScrapeUpdate{SystemID: system.ID, FatalErr: err, Done: true}
+				ch <- ScrapeUpdate{
+					SystemID:  system.ID,
+					FatalErr:  err,
+					Done:      true,
+					Processed: totalProcessed,
+					Matched:   totalMatched,
+					Skipped:   totalSkipped,
+				}
 				return
 			}
 
@@ -87,9 +103,9 @@ func RunScraper[T any](
 				case <-ctx.Done():
 					ch <- ScrapeUpdate{
 						SystemID:  system.ID,
-						Processed: processed,
-						Matched:   matched,
-						Skipped:   skipped,
+						Processed: totalProcessed + processed,
+						Matched:   totalMatched + matched,
+						Skipped:   totalSkipped + skipped,
 						Done:      true,
 					}
 					return
@@ -206,11 +222,7 @@ func RunScraper[T any](
 				}
 
 				// Step 7: write sentinel last — absent sentinel means safe to retry.
-				sentinelTagInfo := database.TagInfo{
-					Type: "scraper." + s.ID(),
-					Tag:  "scraped",
-				}
-				if err := db.UpsertMediaTags(ctx, match.MediaDBID, []database.TagInfo{sentinelTagInfo}); err != nil {
+				if err := db.UpsertMediaTags(ctx, match.MediaDBID, []database.TagInfo{sentinelTagInfo(s.ID())}); err != nil {
 					log.Warn().Err(err).Int64("mediaDBID", match.MediaDBID).Msg("scraper: failed to write sentinel tag")
 					skipped++
 					ch <- ScrapeUpdate{

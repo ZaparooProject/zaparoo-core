@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/rs/zerolog/log"
 )
 
 // defaultImageTypes is the preference order used when no imageTypes param is provided.
@@ -116,14 +117,23 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		if len(binary) == 0 && prop.Text != "" {
 			binary, err = os.ReadFile(prop.Text)
 			if err != nil {
-				// File is gone — remove the stale property and retry from scratch
-				// so the next preference in the list is evaluated cleanly.
+				// File is gone — remove the stale property and continue to the next
+				// preference in the list without restarting the whole handler (avoids
+				// O(N²) DB round-trips and stack growth from recursive calls).
 				if _, fromMedia := mediaMap[typeTag]; fromMedia {
-					_ = db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID)
+					if delErr := db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID); delErr != nil {
+						log.Warn().Err(delErr).Int64("mediaDBID", row.DBID).Str("typeTag", typeTag).
+							Msg("media.image: failed to delete stale media property")
+					}
+					delete(mediaMap, typeTag)
 				} else {
-					_ = db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID)
+					if delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID); delErr != nil {
+						log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
+							Msg("media.image: failed to delete stale title property")
+					}
+					delete(titleMap, typeTag)
 				}
-				return HandleMediaImage(env)
+				continue
 			}
 		}
 

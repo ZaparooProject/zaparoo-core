@@ -22,6 +22,7 @@ package scraper_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -267,7 +268,7 @@ func TestRunScraper_FullWrite_HappyPath(t *testing.T) {
 					{TypeTag: "property:description", Text: "A classic"},
 				},
 				MediaProps: []database.MediaProperty{
-					{TypeTag: "property:video", Text: "/roms/nes/mario.mp4"},
+					{TypeTag: "property:video", Text: filepath.Join("roms", "nes", "mario.mp4")},
 				},
 			}
 		},

@@ -272,9 +272,10 @@ func TestSqlInsertSystemWithPreparedStmt_Success(t *testing.T) {
 //   - MediaTags: NES media → Tag 1 ("Action") + Tag 2 ("RPG"); SNES media → Tag 1 ("Action") only
 //   - MediaTitleTags: NES mario title → Tag 2 ("RPG")
 //   - MediaTitleProperties: NES mario title → Tag 4 ("Cover") as TypeTagDBID
+//   - MediaProperties: NES media (ROM-level) → Tag 4 ("Cover") as TypeTagDBID
 //
 // Tag 1 is shared by both systems; Tag 2 is NES-only (via MediaTags and MediaTitleTags);
-// Tag 3 is never referenced; Tag 4 is NES-only (via MediaTitleProperties).
+// Tag 3 is never referenced; Tag 4 is NES-only (via MediaTitleProperties and MediaProperties).
 // Returns the *sql.DB handle from the opened MediaDB so callers can run assertions.
 func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 	t.Helper()
@@ -312,6 +313,14 @@ func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 		coverPath, "image/png")
 	require.NoError(t, err)
 
+	// ROM-level property on the NES media row — exercises MediaProperties cleanup.
+	videoPath := filepath.Join("roms", "nes", "mario.mp4")
+	_, err = db.ExecContext(ctx,
+		"INSERT INTO MediaProperties"+
+			" (DBID, MediaDBID, TypeTagDBID, Text, ContentType) VALUES (1, 1, 4, ?, ?)",
+		videoPath, "video/mp4")
+	require.NoError(t, err)
+
 	return mediaDB, db
 }
 
@@ -332,16 +341,20 @@ func TestSqlTruncateSystems_Success(t *testing.T) {
 	err := sqlTruncateSystems(ctx, db, []string{"NES", "SNES"})
 	require.NoError(t, err)
 
-	var systemCount, mediaCount, titleCount, tagCount int
+	var systemCount, mediaCount, titleCount, tagCount, propTitleCount, propMediaCount int
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Systems").Scan(&systemCount))
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Media").Scan(&mediaCount))
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaTitles").Scan(&titleCount))
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Tags").Scan(&tagCount))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaTitleProperties").Scan(&propTitleCount))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaProperties").Scan(&propMediaCount))
 	assert.Equal(t, 0, systemCount, "all systems should be deleted")
 	assert.Equal(t, 0, mediaCount, "all media should be deleted")
 	assert.Equal(t, 0, titleCount, "all media titles should be deleted")
 	// Tags 1, 2, 4 were referenced by deleted systems → now orphans → deleted. Tag 3 never referenced → kept.
 	assert.Equal(t, 1, tagCount, "only the unreferenced tag should remain")
+	assert.Equal(t, 0, propTitleCount, "all title-level properties should be deleted")
+	assert.Equal(t, 0, propMediaCount, "all ROM-level properties should be deleted")
 
 	// TagTypes must never be deleted
 	var typeCount int
@@ -379,7 +392,13 @@ func TestSqlTruncateSystems_SingleSystem(t *testing.T) {
 	assert.Equal(t, 1, tag1, "shared tag (Action) must survive")
 	assert.Equal(t, 0, tag2, "NES-only tag (RPG) should be deleted")
 	assert.Equal(t, 1, tag3, "unreferenced tag (Extension) must survive")
-	assert.Equal(t, 0, tag4, "NES-only MediaTitleProperties tag (Cover) should be deleted")
+	// Tag 4 is referenced by both MediaTitleProperties and MediaProperties for NES → deleted as orphan.
+	assert.Equal(t, 0, tag4, "NES-only tag (Cover) should be deleted — referenced by both MediaTitleProperties and MediaProperties")
+
+	// ROM-level property on NES media should be removed; no SNES MediaProperties exist so count is 0.
+	var nesMediaPropCount int
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaProperties").Scan(&nesMediaPropCount))
+	assert.Equal(t, 0, nesMediaPropCount, "NES ROM-level properties should be deleted")
 }
 
 func TestSqlTruncateSystems_NonExistent(t *testing.T) {

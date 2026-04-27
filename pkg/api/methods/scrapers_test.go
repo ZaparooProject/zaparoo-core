@@ -21,10 +21,12 @@ package methods
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -35,10 +37,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// routeRequest wires r into a chi router at path using the given method and
+// routeRequest wires r into a chi router at pattern using the given method and
 // handler, then serves it. This lets URL params resolve properly.
 func routeRequest(
-	method, _, pattern string, handler http.HandlerFunc, r *http.Request,
+	method, pattern string, handler http.HandlerFunc, r *http.Request,
 ) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
 	router := chi.NewRouter()
@@ -57,7 +59,7 @@ func TestHandleGetMediaTitleProperties_TitleNotFound(t *testing.T) {
 
 	req := httptest.NewRequestWithContext(
 		context.Background(), http.MethodGet, "/api/v1/titles/999/properties", http.NoBody)
-	rr := routeRequest(http.MethodGet, "/api/v1/titles/999/properties",
+	rr := routeRequest(http.MethodGet,
 		"/api/v1/titles/{titleDBID}/properties",
 		HandleGetMediaTitleProperties(db),
 		req)
@@ -75,7 +77,7 @@ func TestHandleGetMediaTitleProperties_EmptyProperties(t *testing.T) {
 
 	req := httptest.NewRequestWithContext(
 		context.Background(), http.MethodGet, "/api/v1/titles/1/properties", http.NoBody)
-	rr := routeRequest(http.MethodGet, "/api/v1/titles/1/properties",
+	rr := routeRequest(http.MethodGet,
 		"/api/v1/titles/{titleDBID}/properties",
 		HandleGetMediaTitleProperties(db),
 		req)
@@ -90,10 +92,11 @@ func TestHandleGetMediaTitleProperties_EmptyProperties(t *testing.T) {
 func TestHandleGetMediaTitleProperties_WithProperties(t *testing.T) {
 	t.Parallel()
 
+	imagePath := "/" + path.Join("roms", "snes", "images", "mario.png")
 	title := &database.MediaTitle{DBID: 1, Name: "Test Game"}
 	props := []database.MediaProperty{
 		{TypeTag: "property:description", Text: "A great game", ContentType: "text/plain"},
-		{TypeTag: "property:image.boxart", Text: "/roms/snes/images/mario.png", ContentType: "image/png"},
+		{TypeTag: "property:image.boxart", Text: imagePath, ContentType: "image/png"},
 	}
 
 	db := helpers.NewMockMediaDBI()
@@ -102,7 +105,7 @@ func TestHandleGetMediaTitleProperties_WithProperties(t *testing.T) {
 
 	req := httptest.NewRequestWithContext(
 		context.Background(), http.MethodGet, "/api/v1/titles/1/properties", http.NoBody)
-	rr := routeRequest(http.MethodGet, "/api/v1/titles/1/properties",
+	rr := routeRequest(http.MethodGet,
 		"/api/v1/titles/{titleDBID}/properties",
 		HandleGetMediaTitleProperties(db),
 		req)
@@ -115,6 +118,7 @@ func TestHandleGetMediaTitleProperties_WithProperties(t *testing.T) {
 	assert.Equal(t, "A great game", out[0].Text)
 	assert.Equal(t, "text/plain", out[0].ContentType)
 	assert.Equal(t, "property:image.boxart", out[1].TypeTag)
+	assert.Equal(t, imagePath, out[1].Text)
 	db.AssertExpectations(t)
 }
 
@@ -129,7 +133,7 @@ func TestHandleGetMediaTitleProperties_DBError(t *testing.T) {
 
 	req := httptest.NewRequestWithContext(
 		context.Background(), http.MethodGet, "/api/v1/titles/1/properties", http.NoBody)
-	rr := routeRequest(http.MethodGet, "/api/v1/titles/1/properties",
+	rr := routeRequest(http.MethodGet,
 		"/api/v1/titles/{titleDBID}/properties",
 		HandleGetMediaTitleProperties(db),
 		req)
@@ -144,7 +148,7 @@ func TestHandleGetMediaTitleProperties_InvalidID(t *testing.T) {
 
 	req := httptest.NewRequestWithContext(
 		context.Background(), http.MethodGet, "/api/v1/titles/abc/properties", http.NoBody)
-	rr := routeRequest(http.MethodGet, "/api/v1/titles/abc/properties",
+	rr := routeRequest(http.MethodGet,
 		"/api/v1/titles/{titleDBID}/properties",
 		HandleGetMediaTitleProperties(db),
 		req)
@@ -155,13 +159,13 @@ func TestHandleGetMediaProperties_MediaNotFound(t *testing.T) {
 	t.Parallel()
 
 	db := helpers.NewMockMediaDBI()
-	// GetMediaByDBID returns zero-value result (MediaID == 0) when not found.
+	// GetMediaByDBID wraps sql.ErrNoRows when the row does not exist.
 	db.On("GetMediaByDBID", mock.Anything, int64(999)).Return(
-		database.SearchResultWithCursor{}, nil)
+		database.SearchResultWithCursor{}, sql.ErrNoRows)
 
 	req := httptest.NewRequestWithContext(
 		context.Background(), http.MethodGet, "/api/v1/media/999/properties", http.NoBody)
-	rr := routeRequest(http.MethodGet, "/api/v1/media/999/properties",
+	rr := routeRequest(http.MethodGet,
 		"/api/v1/media/{mediaDBID}/properties",
 		HandleGetMediaProperties(db),
 		req)
@@ -179,7 +183,7 @@ func TestHandleGetMediaProperties_EmptyProperties(t *testing.T) {
 
 	req := httptest.NewRequestWithContext(
 		context.Background(), http.MethodGet, "/api/v1/media/1/properties", http.NoBody)
-	rr := routeRequest(http.MethodGet, "/api/v1/media/1/properties",
+	rr := routeRequest(http.MethodGet,
 		"/api/v1/media/{mediaDBID}/properties",
 		HandleGetMediaProperties(db),
 		req)
@@ -194,8 +198,9 @@ func TestHandleGetMediaProperties_EmptyProperties(t *testing.T) {
 func TestHandleGetMediaProperties_WithProperties(t *testing.T) {
 	t.Parallel()
 
+	videoPath := "/" + path.Join("roms", "snes", "videos", "mario.mp4")
 	props := []database.MediaProperty{
-		{TypeTag: "property:video", Text: "/roms/snes/videos/mario.mp4", ContentType: "video/mp4"},
+		{TypeTag: "property:video", Text: videoPath, ContentType: "video/mp4"},
 	}
 
 	db := helpers.NewMockMediaDBI()
@@ -205,7 +210,7 @@ func TestHandleGetMediaProperties_WithProperties(t *testing.T) {
 
 	req := httptest.NewRequestWithContext(
 		context.Background(), http.MethodGet, "/api/v1/media/5/properties", http.NoBody)
-	rr := routeRequest(http.MethodGet, "/api/v1/media/5/properties",
+	rr := routeRequest(http.MethodGet,
 		"/api/v1/media/{mediaDBID}/properties",
 		HandleGetMediaProperties(db),
 		req)
@@ -215,6 +220,6 @@ func TestHandleGetMediaProperties_WithProperties(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &out))
 	require.Len(t, out, 1)
 	assert.Equal(t, "property:video", out[0].TypeTag)
-	assert.Equal(t, "/roms/snes/videos/mario.mp4", out[0].Text)
+	assert.Equal(t, videoPath, out[0].Text)
 	db.AssertExpectations(t)
 }

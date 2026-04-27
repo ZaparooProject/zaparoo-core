@@ -1,544 +1,352 @@
-# Scraper Subsystem Design
+# Scraper Subsystem
 
-## Goal
-
-Enable users to enrich their Zaparoo DB with external metadata — developer, publisher, genre, artwork, descriptions, ratings — sourced from local files (gamelist.xml), hosted REST APIs (TheGamesDB, ScreenScraper), or future sources, and surface that data via API and GUI (web, MiSTer).
+Scrapers enrich existing `Media` and `MediaTitle` records in the MediaDB with metadata from external sources — developer, publisher, genre, ratings, artwork paths, descriptions. The filesystem scanner owns record *creation*; scrapers only write to records that already exist.
 
 ---
 
-## Design Decisions
+## Package Structure
 
-### Scrapers enrich, the filesystem scanner creates
-
-The scraper only writes to records that already exist in the DB. The filesystem scanner owns creation of `Media` and `MediaTitle` rows. A gamelist.xml entry with no corresponding indexed `Media` record is skipped, not inserted. This prevents ghost records with no scanner-verified path.
-
-### Scrapers are on-demand, one at a time — no ordering
-
-Scrapers are triggered individually via API command. Only one scraper runs at a time. There is no concept of scraper priority or chained execution. Each scraper manages its own state independently between calls.
-
-The `TagTypes` table carries an `IsExclusive` boolean column. When `IsExclusive = true`, the type is single-value per entity; when `false`, multiple values are allowed. This is **intent metadata, not a schema constraint** — the DB will not enforce it. It is the scraper's responsibility to read the flag and behave accordingly:
-
-- **Exclusive type** (`IsExclusive = 1`): delete all existing tags of that type for the entity, then insert the new value. This ensures a re-run replaces the prior value rather than stacking duplicates.
-- **Additive type** (`IsExclusive = 0`): `INSERT OR IGNORE` — the composite PK deduplicates identical values; distinct values accumulate.
-
-If two different scrapers both write the same exclusive type, the one that ran most recently wins — this is a natural consequence of delete-then-insert and requires no coordination.
-
-For **properties** (`MediaTitleProperties`, `MediaProperties`): upsert on the unique constraint. Last writer wins per type per entity regardless of IsExclusive (properties are always one-per-type by schema).
-
-**Canonical IsExclusive assignments** set during `SeedCanonicalTags`:
-
-| Tag type | IsExclusive | Rationale |
-|---|---|---|
-| `developer`, `publisher` | true | One authoritative value per title |
-| `year`, `rating` | true | Single value per title |
-| `rev`, `disc`, `disctotal` | true | Describes one specific file |
-| `players`, `extension` | true | Single value per file |
-| `media`, `arcadeboard` | true | Single value per file |
-| `season`, `episode`, `track`, `volume`, `issue` | true | Single value per file |
-| `unfinished`, `copyright` | true | Single status value |
-| `lang` | false | World/multilingual releases have multiple languages |
-| `region` | false | World releases span multiple regions |
-| `dump` | false | Hack modifier tags stack (e.g. `hacked` + `hacked-ffe`) |
-| `genre`, `compatibility` | false | Games legitimately have multiple genres/hardware targets |
-
-### Sentinel tag tracks scrape completion per Media record
-
-Each scraper writes a namespaced sentinel tag (`scraper.gamelist.xml:scraped`) to the `Media` record after successfully processing it. On re-run, records with a sentinel are skipped unless `Force = true`. The sentinel is written *last* so a crashed mid-write run leaves no sentinel and the record is retried.
-
-The sentinel lives on `Media` (ROM-level) even though most data lands on `MediaTitle` (title-level), because the same title may have multiple ROMs that each need independent path-based matching and per-ROM tags.
-
-### Tags are categorical; Properties are static attributes
-
-**Tags** (`MediaTags`, `MediaTitleTags`): typed key-value pairs, indexed, filterable via the existing tag filter API. Examples: `developer:Capcom`, `lang:en`, `year:1994`. Tags drive queries and ZapScript expressions.
-
-**Properties** (`MediaTitleProperties`, `MediaProperties`): static content for retrieval or display — text descriptions, image paths, video paths, binary blobs. Properties are not queryable by value; they are fetched for a known entity and rendered. A property's *type* (via `TypeTagDBID`) is the canonical classifier; its *content type* (MIME) tells the client how to render it.
-
-The distinction: a genre tag is something you filter by. A description is something you display. One is a predicate; the other is content.
-
-### Properties: one per type per entity
-
-`MediaTitleProperties` and `MediaProperties` both carry `UNIQUE(EntityID, TypeTagDBID)`. There is exactly one property of each type per entity. Upsert replaces the previous value. Because scrapers run on-demand one at a time, the last scraper the user ran for a given type wins.
-
----
-
-## Schema
-
-### MediaTitleProperties (replaces SupportingMedia)
-
-Properties attached to a `MediaTitle` — shared across all ROMs of the same title. Used for descriptions, shared artwork, videos.
-
-```sql
-CREATE TABLE MediaTitleProperties (
-    DBID           INTEGER PRIMARY KEY,
-    MediaTitleDBID integer not null,
-    TypeTagDBID    integer not null,
-    Text           text    not null DEFAULT '',
-    ContentType    text    not null,
-    Binary         blob,
-    UNIQUE(MediaTitleDBID, TypeTagDBID),
-    FOREIGN KEY (MediaTitleDBID) REFERENCES MediaTitles(DBID) ON DELETE CASCADE,
-    FOREIGN KEY (TypeTagDBID)    REFERENCES Tags(DBID)        ON DELETE RESTRICT
-);
-
-CREATE INDEX mediatitleproperties_title_idx   ON MediaTitleProperties(MediaTitleDBID);
-CREATE INDEX mediatitleproperties_typetag_idx ON MediaTitleProperties(TypeTagDBID);
 ```
+pkg/database/scraper/
+    scraper.go          — Scraper, ScraperLoop[T] interfaces, shared types
+    run.go              — Generic RunScraper[T] loop + sentinel helpers
+    gamelistxml/
+        scraper.go      — GamelistXMLScraper implementation
 
-`Text` carries filesystem paths, plain text, URLs, or any string value. `Binary` carries binary blobs. `ContentType` is a MIME type (`text/plain`, `image/png`, `video/mp4`, `application/pdf`) and tells the client how to interpret the content.
+pkg/database/mediadb/
+    sql_scraper.go      — DB methods: UpsertMediaTags, UpsertMediaProperties, etc.
 
-### MediaProperties (new)
-
-Properties attached to a specific `Media` record (ROM-level). Used for region-specific artwork, per-ROM video clips.
-
-```sql
-CREATE TABLE MediaProperties (
-    DBID        INTEGER PRIMARY KEY,
-    MediaDBID   integer not null,
-    TypeTagDBID integer not null,
-    Text        text    not null DEFAULT '',
-    ContentType text    not null,
-    Binary      blob,
-    UNIQUE(MediaDBID, TypeTagDBID),
-    FOREIGN KEY (MediaDBID)     REFERENCES Media(DBID) ON DELETE CASCADE,
-    FOREIGN KEY (TypeTagDBID)   REFERENCES Tags(DBID)  ON DELETE RESTRICT
-);
-
-CREATE INDEX mediaproperties_media_idx   ON MediaProperties(MediaDBID);
-CREATE INDEX mediaproperties_typetag_idx ON MediaProperties(TypeTagDBID);
-```
-
-### Write pattern for properties
-
-```sql
-INSERT INTO MediaTitleProperties (MediaTitleDBID, TypeTagDBID, Text, ContentType, Binary)
-VALUES (?, ?, ?, ?, ?)
-ON CONFLICT(MediaTitleDBID, TypeTagDBID) DO UPDATE SET
-    Text        = excluded.Text,
-    ContentType = excluded.ContentType,
-    Binary      = excluded.Binary;
-```
-
-The `DBID` is preserved on conflict — only data columns are updated. This avoids FK breakage if anything ever references a property DBID directly.
-
-### TagTypes
-
-The `TagTypes` table gains an `IsExclusive` column. No schema constraint enforces it — the scraper reads the flag and decides whether to delete-then-insert (exclusive) or INSERT OR IGNORE (additive). `SeedCanonicalTags` sets `IsExclusive` for every canonical type per the table above. Dynamic tag types created at runtime (e.g. `rev:7-2502`) inherit `IsExclusive = 1` from their parent type at creation time.
-
-### Migration
-
-```sql
--- +goose Up
-ALTER TABLE TagTypes ADD COLUMN IsExclusive INTEGER NOT NULL DEFAULT 0;
-
--- Update canonical exclusive types
-UPDATE TagTypes SET IsExclusive = 1 WHERE Type IN (
-    'developer', 'publisher', 'year', 'rating',
-    'rev', 'disc', 'disctotal',
-    'players', 'extension',
-    'media', 'arcadeboard',
-    'season', 'episode', 'track', 'volume', 'issue',
-    'unfinished', 'copyright'
-);
--- lang, region, dump, genre, compatibility remain IsExclusive = 0
-
--- +goose Down (IsExclusive)
--- SQLite does not support DROP COLUMN before 3.35; use a table rebuild if targeting older SQLite.
--- For SQLite >= 3.35:
-ALTER TABLE TagTypes DROP COLUMN IsExclusive;
-
--- Rename SupportingMedia → MediaTitleProperties, add Text column (replaces Path),
--- enforce UNIQUE(MediaTitleDBID, TypeTagDBID).
-
-CREATE TABLE MediaTitleProperties (
-    DBID           INTEGER PRIMARY KEY,
-    MediaTitleDBID integer not null,
-    TypeTagDBID    integer not null,
-    Text           text    not null DEFAULT '',
-    ContentType    text    not null,
-    Binary         blob,
-    UNIQUE(MediaTitleDBID, TypeTagDBID),
-    FOREIGN KEY (MediaTitleDBID) REFERENCES MediaTitles(DBID) ON DELETE CASCADE,
-    FOREIGN KEY (TypeTagDBID)    REFERENCES Tags(DBID)        ON DELETE RESTRICT
-);
-
--- Migrate existing SupportingMedia rows; Path becomes Text.
-INSERT OR IGNORE INTO MediaTitleProperties
-    (DBID, MediaTitleDBID, TypeTagDBID, Text, ContentType, Binary)
-SELECT DBID, MediaTitleDBID, TypeTagDBID, Path, ContentType, Binary
-FROM SupportingMedia;
-
-DROP TABLE SupportingMedia;
-
-CREATE INDEX mediatitleproperties_title_idx   ON MediaTitleProperties(MediaTitleDBID);
-CREATE INDEX mediatitleproperties_typetag_idx ON MediaTitleProperties(TypeTagDBID);
-
--- New ROM-level properties table.
-CREATE TABLE MediaProperties (
-    DBID        INTEGER PRIMARY KEY,
-    MediaDBID   integer not null,
-    TypeTagDBID integer not null,
-    Text        text    not null DEFAULT '',
-    ContentType text    not null,
-    Binary      blob,
-    UNIQUE(MediaDBID, TypeTagDBID),
-    FOREIGN KEY (MediaDBID)   REFERENCES Media(DBID) ON DELETE CASCADE,
-    FOREIGN KEY (TypeTagDBID) REFERENCES Tags(DBID)  ON DELETE RESTRICT
-);
-
-CREATE INDEX mediaproperties_media_idx   ON MediaProperties(MediaDBID);
-CREATE INDEX mediaproperties_typetag_idx ON MediaProperties(TypeTagDBID);
-
--- +goose Down
-CREATE TABLE SupportingMedia (
-    DBID           INTEGER PRIMARY KEY,
-    MediaTitleDBID integer not null,
-    TypeTagDBID    integer not null,
-    Path           string  not null,
-    ContentType    text    not null,
-    Binary         blob,
-    FOREIGN KEY (MediaTitleDBID) REFERENCES MediaTitles(DBID) ON DELETE CASCADE,
-    FOREIGN KEY (TypeTagDBID)    REFERENCES Tags(DBID)        ON DELETE RESTRICT
-);
-
-INSERT INTO SupportingMedia
-    (DBID, MediaTitleDBID, TypeTagDBID, Path, ContentType, Binary)
-SELECT DBID, MediaTitleDBID, TypeTagDBID, Text, ContentType, Binary
-FROM MediaTitleProperties;
-
-DROP TABLE MediaProperties;
-DROP TABLE MediaTitleProperties;
+pkg/api/methods/
+    media_scrape.go     — HandleMediaScrape, HandleMediaScrapeCancel (JSON-RPC)
+    media_image.go      — HandleMediaImage (JSON-RPC)
+    scrapers.go         — REST handlers: GET /properties endpoints
 ```
 
 ---
 
-## Property Type Tag Constants
+## Interfaces
 
-`TypeTagDBID` references a `Tags` row. The following canonical type tag values must be seeded in the `Tags` table on DB open, alongside other system tag types. Scrapers reference these constants; they do not create property type tags at runtime.
-
-| Tag value | Table | ContentType | Text holds |
-|---|---|---|---|
-| `property:description` | MediaTitleProperties | `text/plain` | Description text |
-| `property:image.boxart` | MediaTitleProperties | `image/*` | Absolute filesystem path |
-| `property:image.screenshot` | MediaTitleProperties | `image/*` | Absolute filesystem path |
-| `property:image.marquee` | MediaTitleProperties | `image/*` | Absolute filesystem path |
-| `property:image.wheel` | MediaTitleProperties | `image/*` | Absolute filesystem path |
-| `property:image.fanart` | MediaTitleProperties | `image/*` | Absolute filesystem path |
-| `property:image.titleshot` | MediaTitleProperties | `image/*` | Absolute filesystem path |
-| `property:image.map` | MediaTitleProperties | `image/*` | Absolute filesystem path |
-| `property:video` | MediaTitleProperties | `video/*` | Absolute filesystem path |
-| `property:manual` | MediaTitleProperties | `application/pdf` | Absolute filesystem path |
-| `property:image.boxart` | MediaProperties | `image/*` | Absolute filesystem path (region-specific) |
-| `property:video` | MediaProperties | `video/*` | Absolute filesystem path (ROM-specific) |
-
-Property type tags use the `property` tag type, separate from the `supporting` namespace used in the old SupportingMedia design.
-
----
-
-## The Match Problem
-
-A scraper receives raw data from a source and must bind it to records in the Zaparoo DB. Three strategies, used depending on source type:
-
-1. **Path match** (gamelist.xml): The source provides a filesystem path. Resolve it to absolute via `resolveESPath`, then find `Media.Path = resolvedPath AND Media.SystemDBID = system.DBID`. Most reliable; no ambiguity.
-
-2. **Title slug match** (REST APIs, MAME DBs): The source provides a title string. Slugify with `GenerateSlugWithMetadata`, fuzzy-match against `MediaTitles` for the system using the existing prefilter index. Needs a confidence threshold and a skip path.
-
-3. **External ID match** (ScreenScraper, TheGamesDB): A prior run stored an opaque external ID as a sentinel-namespaced tag (e.g. `scraper.screenscraper:id` with value `"12345"`). Look up that tag, find the `MediaTitle`, update. Fastest on re-runs.
-
----
-
-## Scraper Interface
+### `Scraper` (public)
 
 ```go
-// pkg/database/scraper/scraper.go
-
-// Scraper is the interface all metadata scrapers implement.
-// Each scraper owns one source: a local file format, a REST API, etc.
 type Scraper interface {
-    // ID returns the stable scraper identifier used in sentinel tag names.
-    // Must be globally unique. Examples: "gamelist.xml", "screenscraper".
     ID() string
-
-    // Scrape starts the goroutine and returns a channel of progress updates.
-    // The channel is closed when the goroutine exits (done or cancelled).
     Scrape(ctx context.Context, opts ScrapeOptions) (<-chan ScrapeUpdate, error)
 }
+```
 
-// ScrapeOptions configures a scrape run.
+Registered in `RequestEnv.Scrapers` (immutable map, populated at server startup). The `media.scrape` handler looks up the scraper by `ScraperID` from params.
+
+### `ScraperLoop[T]` (internal)
+
+Concrete scrapers implement this and pass `self` to `RunScraper`:
+
+```go
+type ScraperLoop[T any] interface {
+    ID() string
+    LoadRecords(ctx context.Context, system ScrapeSystem) ([]T, error)
+    Match(ctx context.Context, record T, system ScrapeSystem, db database.MediaDBI) (*MatchResult, error)
+    MapToDB(record T) MapResult
+}
+```
+
+### Supporting types
+
+```go
 type ScrapeOptions struct {
-    // Systems limits scraping to these system IDs. Nil means all systems.
-    Systems []string
-
-    // Force re-processes records that already have a sentinel tag.
-    Force bool
+    Systems []string  // nil/empty = all systems
+    Force   bool      // ignore sentinel tags; re-process everything
 }
 
-// ScrapeUpdate is one progress event from a running scraper.
 type ScrapeUpdate struct {
     SystemID  string
-    Processed int    // records handled so far in this system
-    Total     int    // total records in this system (0 if unknown at start)
-    Matched   int    // records that found a DB entry
-    Skipped   int    // records with no match or already sentinel-tagged
-    Err       error  // non-fatal per-record error; scraper continues
-    FatalErr  error  // fatal error; scraper has stopped
-    Done      bool   // true on the final update
+    Processed int
+    Total     int
+    Matched   int
+    Skipped   int
+    Err       error  // non-fatal; loop continues
+    FatalErr  error  // fatal; loop stops
+    Done      bool   // true on final update (including cancelled)
+}
+
+type ScrapeSystem struct {
+    ID       string
+    DBID     int64
+    ROMPaths []string
+}
+
+type MatchResult struct {
+    MediaDBID      int64
+    MediaTitleDBID int64
+}
+
+type MapResult struct {
+    MediaTags  []database.TagInfo
+    TitleTags  []database.TagInfo
+    TitleProps []database.MediaProperty
+    MediaProps []database.MediaProperty
 }
 ```
 
 ---
 
-## Scrape Loop
+## Run Loop (`RunScraper[T]`)
 
-All scrapers run through the same outer loop. Source-specific steps are marked `[SOURCE]`.
+`pkg/database/scraper/run.go`. Generic over the record type T. Systems must be pre-resolved by the caller (DBID, ID, ROMPaths all set).
 
 ```
-RunScraper(ctx, opts, db, scraper):
-  systems = resolveSystemsFromOpts(opts.Systems, db)
+RunScraper(ctx, opts, systems, db, scraper):
+  sentinel = "scraper." + scraper.ID() + ":scraped"
 
   for each system:
-    emit ScrapeUpdate{SystemID: system.ID, Total: 0}
+    emit ScrapeUpdate{SystemID, Total: 0}
 
-    // Step 1 [SOURCE]: load records from the source for this system
     records, err = scraper.LoadRecords(ctx, system)
     if err: emit FatalErr, return
-    emit ScrapeUpdate{Total: len(records)}
 
-    for each record in records:
-      if ctx.Done(): return
+    emit ScrapeUpdate{SystemID, Total: len(records)}
 
-      // Step 2: skip if already scraped and not forcing
-      if !opts.Force:
-        if db.MediaHasTag(record.MediaDBID, sentinelTag(scraper.ID())):
-          emit Skipped++; continue
+    for each record:
+      if ctx.Done(): emit Done with totals, return
 
-      // Step 3 [SOURCE]: match source record to a Zaparoo Media/MediaTitle
-      match, confidence = scraper.Match(ctx, record, system, db)
-      if match == nil or confidence < MinConfidence:
-        emit Skipped++; continue
+      // Match first — sentinel check needs MediaDBID
+      match = scraper.Match(ctx, record, system, db)
+      if match == nil: skipped++; continue
 
-      // Step 4 [SOURCE]: map source record to tag/property writes
-      mediaTags, titleTags, titleProps, mediaProps = scraper.MapToDB(record)
+      // Skip already-scraped unless Force
+      if !opts.Force && db.MediaHasTag(match.MediaDBID, sentinel):
+        skipped++; continue
 
-      // Step 5: write tags
-      //   TagTypes.IsExclusive = 1: delete existing tags of that type for
-      //     this entity, then insert (enforced by the caller, not the DB)
-      //   TagTypes.IsExclusive = 0: INSERT OR IGNORE (composite PK deduplicates)
-      db.UpsertMediaTags(match.MediaDBID, mediaTags)
-      db.UpsertMediaTitleTags(match.MediaTitleDBID, titleTags)
+      mapped = scraper.MapToDB(record)
 
-      // Step 6: write properties (upsert — UNIQUE constraint, last writer wins)
-      db.UpsertMediaTitleProperties(match.MediaTitleDBID, titleProps)
-      db.UpsertMediaProperties(match.MediaDBID, mediaProps)
+      db.UpsertMediaTags(match.MediaDBID, mapped.MediaTags)
+      db.UpsertMediaTitleTags(match.MediaTitleDBID, mapped.TitleTags)
+      db.UpsertMediaTitleProperties(match.MediaTitleDBID, mapped.TitleProps)
+      db.UpsertMediaProperties(match.MediaDBID, mapped.MediaProps)
 
-      // Step 7: write sentinel last (absent sentinel = safe to retry)
-      db.InsertMediaTag(match.MediaDBID, sentinelTag(scraper.ID()))
+      // Sentinel written last: absent sentinel = safe to retry after crash
+      db.UpsertMediaTags(match.MediaDBID, []TagInfo{sentinelTagInfo(scraper.ID())})
 
-      emit Processed++, Matched++
+      processed++; matched++
+      emit ScrapeUpdate{processed, matched, skipped}
 
-  emit Done
+  emit ScrapeUpdate{Done: true, Processed: total, Matched: total, Skipped: total}
 ```
+
+Per-record non-fatal errors (match errors, write errors) increment `skipped` and carry `Err` in the update; the loop continues. Fatal errors from `LoadRecords` close the channel immediately.
 
 ---
 
-## Concrete Implementation 1: gamelist.xml Scraper
+## Tag Semantics
 
-**Source type:** Local filesystem file per system ROM path.
-**Match strategy:** Path match.
-**Loop strategy:** Source-first (file drives iteration, DB confirms match).
-**Package:** `pkg/database/scraper/gamelistxml/`
+### `TagTypes.IsExclusive`
 
-### Record Loading
+`TagTypes` has an `IsExclusive INTEGER NOT NULL DEFAULT 0` column. This is intent metadata — the DB does not enforce it. `upsertTags` reads it and applies the correct write strategy:
 
-```
-GamelistXMLScraper.LoadRecords(ctx, system):
-  for each rootPath in system.ROMPaths:
-    gamelistPath = filepath.Join(rootPath, "gamelist.xml")
-    if not exists: continue
-    gamelist, err = esapi.ReadGameListXML(gamelistPath)
-    if err: warn, continue
-    for each game in gamelist.Games:
-      yield GamelistRecord{SystemRootPath: rootPath, Game: game}
-```
+- **Exclusive (`IsExclusive = 1`)**: delete all existing tags of that type for the entity, then insert. Ensures a re-run replaces the previous value instead of stacking.
+- **Additive (`IsExclusive = 0`)**: `INSERT OR IGNORE` — the composite PK deduplicates identical rows; distinct values accumulate.
 
-### Matching
+Runtime scraper sentinel types (e.g. `scraper.gamelist.xml`) are auto-created as additive when first encountered.
 
-```
-GamelistXMLScraper.Match(ctx, record, system, db):
-  absPath = resolveESPath(record.Game.Path, record.SystemRootPath)
-  // resolveESPath handles: ./relative, ~/home-relative, absolute.
-  // Returns "" if the path cannot be resolved to an absolute form.
-  if absPath == "": log.Warn, return nil, 0
+Canonical assignments (set by `SeedCanonicalTags`):
 
-  media = db.FindMediaBySystemAndPath(system.DBID, absPath)
-  if media == nil:
-    // Not indexed. IsMissing or never scanned. Do not create phantom records.
-    log.Debug, return nil, 0
+| Type | IsExclusive |
+|---|---|
+| `developer`, `publisher`, `year`, `rating` | true |
+| `rev`, `disc`, `disctotal` | true |
+| `players`, `extension` | true |
+| `media`, `arcadeboard` | true |
+| `season`, `episode`, `track`, `volume`, `issue` | true |
+| `unfinished`, `copyright` | true |
+| `lang`, `region`, `dump` | false |
+| `genre`, `compatibility`, `gamefamily` | false |
 
-  title = db.FindMediaTitleByDBID(media.MediaTitleDBID)
-  return MatchResult{MediaDBID: media.DBID, MediaTitleDBID: title.DBID}, 1.0
-```
+### `upsertTags` implementation (`sql_scraper.go`)
 
-### Tag and Property Mapping
-
-```
-GamelistXMLScraper.MapToDB(record) → mediaTags, titleTags, titleProps, mediaProps:
-  game = record.Game
-
-  // --- MediaTags: ROM-level, variant-specific ---
-  if game.Lang    != "": mediaTags += tag("lang",    normalizeLanguage(game.Lang))
-  if game.Region  != "": mediaTags += tag("region",  normalizeRegion(game.Region))
-  // normalizePlayers extracts the upper bound of any range or set:
-  //   "1" → "1",  "1-4" → "4",  "1, 2, 4" → "4"
-  // players is IsExclusive=true; emits a single players:max tag.
-  if game.Players != "": mediaTags += tag("players", normalizePlayers(game.Players))
-  // favorite/hidden/kidgame: user-state, not scraped.
-  // disc/track: owned by filename parser, not overwritten here.
-
-  // --- MediaTitleTags: title-level, shared across all ROMs ---
-  // Caller reads TagTypes.IsExclusive to determine write behaviour.
-  // developer, publisher, year, rating → IsExclusive=true (delete-then-insert)
-  // genre, arcadesystem, gamefamily   → IsExclusive=false (INSERT OR IGNORE)
-  if game.Developer   != "": titleTags += tag("developer", game.Developer)
-  if game.Publisher   != "": titleTags += tag("publisher", game.Publisher)
-  if game.ReleaseDate != "":
-    year = extractYear(game.ReleaseDate)  // "19950311T000000" → "1995"
-    if year != "": titleTags += tag("year", year)
-  if game.Rating != "":
-    titleTags += tag("rating", normalizeRating(game.Rating))  // "0.75" → "75"
-  if game.Genre            != "": titleTags += tag("genre", game.Genre)
-  if game.ArcadeSystemName != "": titleTags += tag("arcadesystem", game.ArcadeSystemName)
-  if game.Family           != "": titleTags += tag("gamefamily", game.Family)
-
-  // --- MediaTitleProperties: title-level static content ---
-  if game.Desc != "":
-    titleProps += prop("property:description", game.Desc, "text/plain", nil)
-  // For each media field: resolve path, emit property if resolvable.
-  // Image semantic varies by ES fork (see esapi/gamelist.go); treat as boxart.
-  if game.Image    != "": titleProps += pathProp("property:image.boxart",    game.Image,    record.SystemRootPath)
-  if game.Thumbnail!= "": titleProps += pathProp("property:image.screenshot",game.Thumbnail,record.SystemRootPath)
-  if game.Video    != "": titleProps += pathProp("property:video",            game.Video,    record.SystemRootPath)
-  if game.Marquee  != "": titleProps += pathProp("property:image.marquee",   game.Marquee,  record.SystemRootPath)
-  if game.Wheel    != "": titleProps += pathProp("property:image.wheel",     game.Wheel,    record.SystemRootPath)
-  if game.FanArt   != "": titleProps += pathProp("property:image.fanart",    game.FanArt,   record.SystemRootPath)
-  if game.TitleShot!= "": titleProps += pathProp("property:image.titleshot", game.TitleShot,record.SystemRootPath)
-  if game.Map      != "": titleProps += pathProp("property:image.map",       game.Map,      record.SystemRootPath)
-  if game.Manual   != "": titleProps += pathProp("property:manual",          game.Manual,   record.SystemRootPath)
-  // mediaProps: none written by gamelist.xml scraper (all artwork is title-level here)
-
-// pathProp resolves the ES path to absolute; returns nil if unresolvable.
-pathProp(typeTag, esPath, systemRootPath):
-  abs = resolveESPath(esPath, systemRootPath)
-  if abs == "": return nil
-  return prop(typeTag, abs, mimeFromExt(abs), nil)
-```
-
-**Normalization requirements before implementation:**
-- Language codes: gamelist.xml may give `"en"`, `"en,fr"`, or `"English"`. Must map to the same canonical values the filename parser emits (`lang:en`, `lang:fr`). Multi-value strings need splitting and each value emitted separately.
-- Ratings: stored as `"0.75"` in gamelist.xml. Internal representation is an open question — see §Open Questions.
-- Player counts: `"1-4"` is a range. `normalizePlayers` returns the upper bound as a string (`"4"`), matching the canonical `players:4` tag already seeded by `SeedCanonicalTags`.
+All operations run in a single transaction. Tags are grouped by type before processing so `deleteFn` is called at most once per exclusive type (prevents multiple tags of the same exclusive type clobbering each other within one call). Tag rows that don't exist yet are created with `INSERT OR IGNORE` followed by a re-query.
 
 ---
 
-## Concrete Implementation 2: REST API Scraper (sketch)
+## Property Storage
 
-**Source type:** External HTTPS API (TheGamesDB, ScreenScraper).
-**Match strategy:** Title slug match on first run; external ID tag on subsequent runs.
-**Loop strategy:** DB-first (Zaparoo MediaTitles drive the work queue).
-**Additional requirements:** rate limiting, HTTP response caching, auth keys in config, resumability via DBConfig checkpoint.
+**`MediaTitleProperties`** — title-level content, shared across all ROMs of the same title (descriptions, shared artwork).
 
-```
-RESTAPIScraper.LoadRecords(ctx, system):
-  // DB-first: our records drive the queue.
-  titles = db.FindMediaTitlesWithoutSentinel(system.DBID, sentinelTag(self.ID()))
-  for each title: yield RESTRecord{MediaTitle: title, System: system}
+**`MediaProperties`** — ROM-level content (region-specific artwork, per-ROM clips).
 
-RESTAPIScraper.Match(ctx, record, system, db):
-  // Re-run fast path: use stored external ID if available.
-  idTag = db.FindMediaTitleTagByType(record.MediaTitle.DBID, "scraper."+self.ID()+":id")
-  if idTag != nil:
-    data = api.FetchByID(ctx, idTag.Value)
-    return MatchResult{MediaTitleDBID: record.MediaTitle.DBID}, 1.0, data
+Both tables have `UNIQUE(EntityID, TypeTagDBID)`. Upsert preserves `DBID`; only data columns (`Text`, `ContentType`, `Binary`) are updated on conflict. Last writer wins per type per entity.
 
-  // First run: search by title, rank results by slug similarity.
-  results = api.Search(ctx, record.MediaTitle.Name, system.ExternalSystemID)
-  if len(results) == 0: return nil, 0
-  best = fuzzyRankAPIResults(results, record.MediaTitle.Slug)
-  if best.Score < MinConfidence: return nil, best.Score
+`TypeTagDBID` references the `Tags` table (which references `TagTypes`). Property type tags are seeded by `SeedCanonicalTags` under the `property` tag type.
 
-  // Store external ID so future runs use the fast path.
-  db.InsertMediaTitleTag(record.MediaTitle.DBID, "scraper."+self.ID()+":id", best.ExternalID)
+### Property type tag constants (`pkg/database/tags/tag_values.go`)
 
-  return MatchResult{MediaTitleDBID: record.MediaTitle.DBID}, best.Score, best.Data
-```
+| Constant | Tag value | ContentType | Text holds |
+|---|---|---|---|
+| `TagPropertyDescription` | `description` | `text/plain` | Plain text |
+| `TagPropertyImageBoxart` | `image-boxart` | `image/*` | Absolute filesystem path |
+| `TagPropertyImageScreenshot` | `image-screenshot` | `image/*` | Absolute filesystem path |
+| `TagPropertyImageThumbnail` | `image-thumbnail` | `image/*` | Absolute filesystem path (ES `<thumbnail>`) |
+| `TagPropertyImageMarquee` | `image-marquee` | `image/*` | Absolute filesystem path |
+| `TagPropertyImageWheel` | `image-wheel` | `image/*` | Absolute filesystem path |
+| `TagPropertyImageFanart` | `image-fanart` | `image/*` | Absolute filesystem path |
+| `TagPropertyImageTitleshot` | `image-titleshot` | `image/*` | Absolute filesystem path |
+| `TagPropertyImageMap` | `image-map` | `image/*` | Absolute filesystem path |
+| `TagPropertyVideo` | `video` | `video/*` | Absolute filesystem path |
+| `TagPropertyManual` | `manual` | `application/pdf` | Absolute filesystem path |
+
+Full tag value: `property:<value>` (e.g. `property:image-boxart`).
 
 ---
 
-## Looping Strategies
+## gamelist.xml Scraper
 
-### Source-first (gamelist.xml)
-Source file drives iteration. For each source record, find the matching Zaparoo `Media` by path. Only processes records that have a match. Correct for local-file sources structured around game files.
+**Package:** `pkg/database/scraper/gamelistxml/`  
+**ID:** `"gamelist.xml"`  
+**Match strategy:** Path match — ES path resolved to absolute, then looked up via `FindMediaBySystemAndPathFold`.  
+**Loop strategy:** Source-first — gamelist.xml entries drive iteration, DB confirms each match.
 
-### DB-first (REST APIs)
-Zaparoo `MediaTitles` drive iteration. For each unscraped title, query the external source. Correct when the external source covers all titles as searchable entries.
+### `resolveESPath(esPath, systemRootPath string) string`
 
-### Hybrid (ScreenScraper)
-First run: DB-first — query our Media, search API by title, store external ID.
-Subsequent runs: external-ID-first — query stored IDs, bulk-fetch from API, update.
+- `./relative` or `relative` → `filepath.Join(systemRootPath, rel)`; containment-checked against `systemRootPath` to prevent `../` traversal outside the root.
+- `~/...` → `filepath.Join(os.UserHomeDir(), rest)`
+- Already absolute → returned as-is.
+- Returns `""` if result is not absolute or (for relative inputs) escapes the root.
+
+Note: absolute and `~/` inputs are user-authored paths and are intentionally left unrestricted. Only the relative branch is containment-checked.
+
+### `MapToDB` field mapping
+
+All string fields are cleaned first: HTML entities unescaped, control whitespace collapsed to spaces, trimmed.
+
+**MediaTags (ROM-level):**
+| ES field | Tag type | Notes |
+|---|---|---|
+| `Lang` | `lang` | Split on `,`; each value lowercased; additive |
+| `Region` | `region` | Split on `,`; each value lowercased; additive |
+
+**MediaTitleTags (title-level):**
+| ES field | Tag type | Notes |
+|---|---|---|
+| `Developer` | `developer` | Exclusive |
+| `Publisher` | `publisher` | Exclusive |
+| `ReleaseDate` | `year` | `extractYear` → first 4 chars; exclusive |
+| `Rating` | `rating` | `normalizeRating` → `"0.75"` → `"75"`; exclusive |
+| `Genre` | `genre` | Additive |
+| `Players` | `players` | `normalizePlayers` → upper bound of range/set; title-level exclusive |
+| `ArcadeSystemName` | `arcadeboard` | Exclusive |
+| `Family` | `gamefamily` | Additive |
+
+**MediaTitleProperties:**
+| ES field | Property type tag | Notes |
+|---|---|---|
+| `Desc` | `property:description` | `text/plain` |
+| `Image` | `property:image-boxart` | Path via `pathProp` |
+| `Thumbnail` | `property:image-thumbnail` | Cover art in most ES forks |
+| `Video` | `property:video` | Path via `pathProp` |
+| `Marquee` | `property:image-marquee` | Path via `pathProp` |
+| `Wheel` | `property:image-wheel` | Path via `pathProp` |
+| `FanArt` | `property:image-fanart` | Path via `pathProp` |
+| `TitleShot` | `property:image-titleshot` | Path via `pathProp` |
+| `Map` | `property:image-map` | Path via `pathProp` |
+| `Manual` | `property:manual` | Path via `pathProp` |
+
+**Not written:** `Favorite`, `Hidden`, `KidGame` (user-state), `Disc`, `Track` (filename-parser-owned).
+
+No ROM-level properties (`MediaProps`) are written by the gamelist.xml scraper.
 
 ---
 
 ## API Surface
 
+### JSON-RPC (WebSocket)
+
+**`media.scrape`** — Start a scraper run as a background operation. Returns immediately. Progress broadcast as `media.scraping` notifications.
+
+Params (`MediaScrapeParams`):
+```json
+{
+  "scraperId": "gamelist.xml",
+  "systems": ["snes", "nes"],
+  "force": false
+}
 ```
-// List registered scrapers and their current status
-GET /api/v1/scrapers
-→ [{id: "gamelist.xml", name: "EmulationStation Gamelist", status: "idle"}, ...]
 
-// Trigger a scrape run (runs in background)
-POST /api/v1/scrapers/{id}/run
-body: {systems: ["snes", "nes"], force: false}
-→ 202 Accepted
+**`media.scrape.cancel`** — Cancel the running scrape. Returns `{"message": "..."}`.
 
-// Stream progress events (SSE)
-GET /api/v1/scrapers/{id}/status
-→ SSE stream of ScrapeUpdate events
+**`media.scraping` notification** — Broadcast on each `ScrapeUpdate` and on completion.
 
-// Cancel a running scrape
-POST /api/v1/scrapers/{id}/cancel
-
-// Fetch properties for a title (for GUI display)
-GET /api/v1/titles/{titleDBID}/properties
-→ [{typeTag: "property:description", contentType: "text/plain", text: "..."},
-   {typeTag: "property:image.boxart", contentType: "image/png",  text: "/abs/path/to/boxart.png"},
-   ...]
-
-// Fetch properties for a specific ROM
-GET /api/v1/media/{mediaDBID}/properties
-→ [{typeTag: "property:image.boxart", contentType: "image/png", text: "/abs/path/to/jp-boxart.png"}, ...]
+Payload (`ScrapingStatusResponse`):
+```json
+{
+  "scraperId": "gamelist.xml",
+  "systemId": "snes",
+  "processed": 42,
+  "total": 100,
+  "matched": 38,
+  "skipped": 4,
+  "scraping": true,
+  "done": false
+}
 ```
+
+Only one scraper runs at a time. Indexing and scraping are mutually exclusive. `media.scrape` returns a client error if either is already running.
+
+**`media.image`** — Fetch a single best-match image for a media record as a base64-encoded blob.
+
+Params (`MediaImageParams`):
+```json
+{
+  "mediaId": 123,
+  "imageTypes": ["image", "boxart", "screenshot"]
+}
+```
+
+`"image"` is an alias for `"boxart"`. If `imageTypes` is omitted, the default preference order is used: `image, boxart, screenshot, wheel, titleshot, map, marquee, fanart`. Media-level properties take priority over title-level for the same type. Stale file paths (file deleted from disk) are cleaned from the DB automatically and the next preference is tried.
+
+Response (`MediaImageResponse`):
+```json
+{
+  "contentType": "image/png",
+  "data": "<base64>",
+  "typeTag": "property:image-boxart"
+}
+```
+
+### REST
+
+**`GET /api/v1/titles/{titleDBID}/properties`** — Returns all `MediaTitleProperties` for a title as `[]PropertyResponse`. Empty array when no properties. 404 when title not found.
+
+**`GET /api/v1/media/{mediaDBID}/properties`** — Returns all `MediaProperties` for a ROM as `[]PropertyResponse`. Empty array when no properties. 404 when media not found.
+
+`PropertyResponse`:
+```json
+{
+  "typeTag": "property:image-boxart",
+  "contentType": "image/png",
+  "text": "/absolute/path/to/boxart.png"
+}
+```
+
+Binary blobs are not included in these responses. Use `media.image` (JSON-RPC) to retrieve binary image data.
 
 ---
 
-## Data Visibility
+## DB Methods (`database.MediaDBI`)
 
-- Tags (`developer`, `publisher`, `genre`, `year`, `lang`, `region`) surface in the existing tag filter API and are usable in ZapScript: `media:filter[developer:Capcom]`
-- Properties surface via the `/properties` endpoints above, grouped by type for GUI rendering
-- No new query indexes are required — tag filtering already works; property fetches are FK lookups on indexed columns
+Methods added for scraper support in `pkg/database/mediadb/sql_scraper.go`:
 
----
-
-## Agent Task Breakdown
-
-1. **Schema migration** — Drop `SupportingMedia`, create `MediaTitleProperties` (with `Text`, `UNIQUE` constraint, migrated rows) and `MediaProperties`. Seed `property:*` type tags on DB open.
-
-2. **TagTypes.IsExclusive** — Add `IsExclusive INTEGER NOT NULL DEFAULT 0` to `TagTypes`. Update `SeedCanonicalTags` to set the flag for all canonical types per the table in §Design Decisions. Dynamic tag types (e.g. `rev:7-2502`) inherit the `IsExclusive` value of their parent type at creation time.
-
-3. **Scraper interface package** — Create `pkg/database/scraper/` with `Scraper` interface, `ScrapeOptions`, `ScrapeUpdate`, `sentinelTag()` helper, and the generic `RunScraper` loop.
-
-4. **MediaDB additions** — Add: `FindMediaBySystemAndPath`, `UpsertMediaTags` (exclusive/additive split), `UpsertMediaTitleTags`, `UpsertMediaTitleProperties`, `UpsertMediaProperties`, `FindMediaTitlesWithoutSentinel`, `MediaHasTag`.
-
-5. **gamelist.xml scraper** — Implement `GamelistXMLScraper` in `pkg/database/scraper/gamelistxml/`. Includes: `resolveESPath`, `LoadRecords`, `Match`, `MapToDB` with full field mapping and normalization. Round-trip tests against fixture XML files.
-
-6. **Scraper registration and API wiring** — Register scrapers with the API server. Wire the gamelist.xml scraper as the first concrete implementation. Connect `RunScraper` to the run/cancel endpoints and SSE status stream.
-
-7. **API endpoints** — Add scraper list, run, status (SSE), cancel, and properties endpoints. Connect to `RunScraper`.
+| Method | Notes |
+|---|---|
+| `FindMediaBySystemAndPath(ctx, systemDBID, path)` | Exact path match. `nil, nil` when not found. |
+| `FindMediaBySystemAndPathFold(ctx, systemDBID, path)` | Case-insensitive path match via `LOWER()`. Used by gamelist.xml scraper. |
+| `MediaHasTag(ctx, mediaDBID, tagValue)` | Checks `"type:value"` string against MediaTags. Used for sentinel check. |
+| `UpsertMediaTags(ctx, mediaDBID, tags)` | Wraps `upsertTags` for `MediaTags`. |
+| `UpsertMediaTitleTags(ctx, mediaTitleDBID, tags)` | Wraps `upsertTags` for `MediaTitleTags`. |
+| `UpsertMediaTitleProperties(ctx, mediaTitleDBID, props)` | Upsert on `UNIQUE(MediaTitleDBID, TypeTagDBID)`. |
+| `UpsertMediaProperties(ctx, mediaDBID, props)` | Upsert on `UNIQUE(MediaDBID, TypeTagDBID)`. |
+| `DeleteMediaTitleProperty(ctx, mediaTitleDBID, typeTagDBID)` | Used by `media.image` to remove stale file refs. |
+| `DeleteMediaProperty(ctx, mediaDBID, typeTagDBID)` | Used by `media.image` to remove stale file refs. |
+| `GetMediaTitleProperties(ctx, mediaTitleDBID)` | Returns `[]MediaProperty` with `TypeTag` populated via JOIN. |
+| `GetMediaProperties(ctx, mediaDBID)` | Returns `[]MediaProperty` with `TypeTag` populated via JOIN. |
+| `GetMediaWithTitleAndSystem(ctx, mediaDBID)` | Single JOIN returning `*MediaFullRow`. Used by `media.image`. |
+| `FindMediaTitlesWithoutSentinel(ctx, systemDBID, sentinelTag)` | For DB-first scrapers. |
+| `FindMediaTitleByDBID(ctx, dbid)` | Convenience lookup. `nil, nil` if not found. |

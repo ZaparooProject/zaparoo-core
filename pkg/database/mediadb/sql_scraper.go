@@ -238,9 +238,13 @@ func (db *MediaDB) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int6
 }
 
 // upsertTags is the shared implementation for UpsertMediaTags and UpsertMediaTitleTags.
-// deleteFn deletes existing tags of a type for the entity (called for exclusive types).
+// deleteFn deletes existing tags of a type for the entity (called once per exclusive type).
 // insertFn inserts the tag link for the entity.
 // All operations run inside a single transaction for atomicity.
+//
+// Tags are grouped by type before processing. For each exclusive type the existing
+// tags are deleted once (before any inserts for that type), preventing multiple tags
+// of the same exclusive type from clobbering each other during the loop.
 func upsertTags(
 	ctx context.Context,
 	db *sql.DB,
@@ -259,71 +263,96 @@ func upsertTags(
 		}
 	}()
 
+	// Group tags by type so that deleteFn is called at most once per exclusive type.
+	type typeEntry struct {
+		dbid        int64
+		isExclusive bool
+		tags        []database.TagInfo
+	}
+	typeOrder := make([]string, 0, len(tagInfos)) // preserve insertion order
+	byType := make(map[string]*typeEntry, len(tagInfos))
+
 	for _, ti := range tagInfos {
-		// Resolve tag type to get IsExclusive and DBID.
-		// If the type is not yet registered (e.g. a runtime scraper sentinel type),
-		// auto-create it as additive (IsExclusive=false).
-		var typeDBID int64
-		var isExclusive bool
-		err := tx.QueryRowContext(ctx,
-			`SELECT DBID, IsExclusive FROM TagTypes WHERE Type = ? LIMIT 1`,
-			ti.Type,
-		).Scan(&typeDBID, &isExclusive)
-		if errors.Is(err, sql.ErrNoRows) {
-			// Auto-create the tag type with IsExclusive=false.
-			_, insertErr := tx.ExecContext(ctx,
-				`INSERT OR IGNORE INTO TagTypes (Type, IsExclusive) VALUES (?, 0)`,
-				ti.Type,
-			)
-			if insertErr != nil {
-				return fmt.Errorf("failed to auto-create tag type %q: %w", ti.Type, insertErr)
-			}
-			err = tx.QueryRowContext(ctx,
+		e, exists := byType[ti.Type]
+		if !exists {
+			// Resolve tag type to get IsExclusive and DBID.
+			// If the type is not yet registered (e.g. a runtime scraper sentinel type),
+			// auto-create it as additive (IsExclusive=false).
+			var typeDBID int64
+			var isExclusive bool
+			err := tx.QueryRowContext(ctx,
 				`SELECT DBID, IsExclusive FROM TagTypes WHERE Type = ? LIMIT 1`,
 				ti.Type,
 			).Scan(&typeDBID, &isExclusive)
+			if errors.Is(err, sql.ErrNoRows) {
+				// Auto-create the tag type with IsExclusive=false.
+				_, insertErr := tx.ExecContext(ctx,
+					`INSERT OR IGNORE INTO TagTypes (Type, IsExclusive) VALUES (?, 0)`,
+					ti.Type,
+				)
+				if insertErr != nil {
+					return fmt.Errorf("failed to auto-create tag type %q: %w", ti.Type, insertErr)
+				}
+				err = tx.QueryRowContext(ctx,
+					`SELECT DBID, IsExclusive FROM TagTypes WHERE Type = ? LIMIT 1`,
+					ti.Type,
+				).Scan(&typeDBID, &isExclusive)
+			}
+			if err != nil {
+				return fmt.Errorf("failed to look up tag type %q: %w", ti.Type, err)
+			}
+			e = &typeEntry{dbid: typeDBID, isExclusive: isExclusive}
+			byType[ti.Type] = e
+			typeOrder = append(typeOrder, ti.Type)
 		}
-		if err != nil {
-			return fmt.Errorf("failed to look up tag type %q: %w", ti.Type, err)
+		e.tags = append(e.tags, ti)
+	}
+
+	// Process each type: delete once for exclusive types, then insert all tags.
+	for _, typeName := range typeOrder {
+		e := byType[typeName]
+
+		// For exclusive types: delete all existing tags of this type for the entity once,
+		// before inserting any new tags. This prevents subsequent tags of the same type
+		// from clobbering each other within this call.
+		if e.isExclusive {
+			if err := deleteFn(tx, e.dbid); err != nil {
+				return fmt.Errorf("failed to delete exclusive tags for type %q: %w", typeName, err)
+			}
 		}
 
-		// Resolve tag DBID; insert if missing using INSERT OR IGNORE to handle
-		// concurrent writers outside this transaction (e.g. two goroutines
-		// bootstrapping the same tag type simultaneously).
-		tagValue := tags.PadTagValue(ti.Tag)
-		var tagDBID int64
-		err = tx.QueryRowContext(ctx,
-			`SELECT DBID FROM Tags WHERE TypeDBID = ? AND Tag = ? LIMIT 1`,
-			typeDBID, tagValue,
-		).Scan(&tagDBID)
-		if errors.Is(err, sql.ErrNoRows) {
-			if _, insertErr := tx.ExecContext(ctx,
-				`INSERT OR IGNORE INTO Tags (TypeDBID, Tag) VALUES (?, ?)`,
-				typeDBID, tagValue,
-			); insertErr != nil {
-				return fmt.Errorf("failed to insert tag %q:%q: %w", ti.Type, ti.Tag, insertErr)
-			}
-			// Re-query after insert (handles both "we inserted" and "someone else did").
-			if err = tx.QueryRowContext(ctx,
+		for _, ti := range e.tags {
+			// Resolve tag DBID; insert if missing using INSERT OR IGNORE to handle
+			// concurrent writers outside this transaction (e.g. two goroutines
+			// bootstrapping the same tag type simultaneously).
+			tagValue := tags.PadTagValue(ti.Tag)
+			var tagDBID int64
+			err := tx.QueryRowContext(ctx,
 				`SELECT DBID FROM Tags WHERE TypeDBID = ? AND Tag = ? LIMIT 1`,
-				typeDBID, tagValue,
-			).Scan(&tagDBID); err != nil {
-				return fmt.Errorf("failed to re-query tag DBID for %q:%q: %w", ti.Type, ti.Tag, err)
+				e.dbid, tagValue,
+			).Scan(&tagDBID)
+			if errors.Is(err, sql.ErrNoRows) {
+				if _, insertErr := tx.ExecContext(ctx,
+					`INSERT OR IGNORE INTO Tags (TypeDBID, Tag) VALUES (?, ?)`,
+					e.dbid, tagValue,
+				); insertErr != nil {
+					return fmt.Errorf("failed to insert tag %q:%q: %w", typeName, ti.Tag, insertErr)
+				}
+				// Re-query after insert (handles both "we inserted" and "someone else did").
+				if err = tx.QueryRowContext(ctx,
+					`SELECT DBID FROM Tags WHERE TypeDBID = ? AND Tag = ? LIMIT 1`,
+					e.dbid, tagValue,
+				).Scan(&tagDBID); err != nil {
+					return fmt.Errorf("failed to re-query tag DBID for %q:%q: %w", typeName, ti.Tag, err)
+				}
+			} else if err != nil {
+				return fmt.Errorf("failed to look up tag DBID for %q:%q: %w", typeName, ti.Tag, err)
 			}
-		} else if err != nil {
-			return fmt.Errorf("failed to look up tag DBID for %q:%q: %w", ti.Type, ti.Tag, err)
-		}
 
-		// For exclusive types: delete all existing tags of this type for the entity.
-		if isExclusive {
-			if err := deleteFn(tx, typeDBID); err != nil {
-				return fmt.Errorf("failed to delete exclusive tags for type %q: %w", ti.Type, err)
+			// Insert the tag link.
+			if err := insertFn(tx, tagDBID); err != nil {
+				return fmt.Errorf("failed to insert tag link for %q:%q: %w", typeName, ti.Tag, err)
 			}
-		}
-
-		// Insert the tag link.
-		if err := insertFn(tx, tagDBID); err != nil {
-			return fmt.Errorf("failed to insert tag link for %q:%q: %w", ti.Type, ti.Tag, err)
 		}
 	}
 

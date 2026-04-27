@@ -203,7 +203,10 @@ func ReadGameListXML(path string) (GameList, error) {
 }
 
 // ParseESDate parses an EmulationStation datetime string into a time.Time.
-// ES stores dates as "YYYYMMDDTHHMMSS" (e.g. "19950311T000000").
+// ES stores dates as "YYYYMMDDTHHMMSS" (e.g. "19950311T000000") using ESDateFormat.
+// Zone-less ES timestamps are treated as UTC (time.Parse with a layout that has no
+// timezone produces a time with UTC location). Callers that need local-time semantics
+// must convert the result with time.In or time.ParseInLocation.
 // Returns the zero time and an error if the string is empty or malformed.
 func ParseESDate(s string) (time.Time, error) {
 	if s == "" {
@@ -223,7 +226,7 @@ func FormatESDate(t time.Time) string {
 }
 
 // ParseRating parses an ES rating string (a float between "0" and "1") into
-// a float64. Returns 0 and an error if the string is empty or malformed.
+// a float64. Returns 0 and an error if the string is empty, malformed, or outside [0, 1].
 func ParseRating(s string) (float64, error) {
 	if s == "" {
 		return 0, errors.New("empty rating string")
@@ -231,6 +234,9 @@ func ParseRating(s string) (float64, error) {
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return 0, fmt.Errorf("parsing rating %q: %w", s, err)
+	}
+	if f < 0 || f > 1 {
+		return 0, fmt.Errorf("rating out of range: %q is not in [0, 1]", s)
 	}
 	return f, nil
 }

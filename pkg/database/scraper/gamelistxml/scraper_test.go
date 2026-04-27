@@ -346,9 +346,9 @@ func TestMapToDB_EmptyGame_NoTags(t *testing.T) {
 
 func TestMapToDB_PathProp_SkipsUnresolvablePath(t *testing.T) {
 	t.Parallel()
-	// An empty image path should not produce a property.
+	// An empty image path should not produce a property regardless of the root.
 	rec := GamelistRecord{
-		SystemRootPath: "/media/nes",
+		SystemRootPath: t.TempDir(),
 		Game: esapi.Game{
 			Image: "", // empty → skip
 		},

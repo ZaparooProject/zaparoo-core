@@ -245,6 +245,40 @@ func TestMediaIndexing_Payload(t *testing.T) {
 	assert.Contains(t, string(notification.Params), `"indexing":true`)
 }
 
+// TestMediaScraping_Payload verifies MediaScraping marshals payload correctly,
+// mirroring the TestMediaIndexing_Payload pattern for the scraping notification.
+func TestMediaScraping_Payload(t *testing.T) {
+	t.Parallel()
+
+	ns := make(chan models.Notification, 1)
+
+	payload := models.ScrapingStatusResponse{
+		ScraperID: "gamelist.xml",
+		SystemID:  "nes",
+		Processed: 42,
+		Total:     100,
+		Matched:   38,
+		Skipped:   4,
+		Scraping:  true,
+	}
+	MediaScraping(ns, payload)
+
+	notification := <-ns
+	assert.Equal(t, models.NotificationMediaScraping, notification.Method)
+	require.NotNil(t, notification.Params)
+
+	var received models.ScrapingStatusResponse
+	err := json.Unmarshal(notification.Params, &received)
+	require.NoError(t, err)
+	assert.Equal(t, payload.ScraperID, received.ScraperID)
+	assert.Equal(t, payload.SystemID, received.SystemID)
+	assert.Equal(t, payload.Processed, received.Processed)
+	assert.Equal(t, payload.Total, received.Total)
+	assert.Equal(t, payload.Matched, received.Matched)
+	assert.Equal(t, payload.Skipped, received.Skipped)
+	assert.True(t, received.Scraping)
+}
+
 // TestPlaytimeLimitReached_Payload verifies PlaytimeLimitReached marshals correctly.
 func TestPlaytimeLimitReached_Payload(t *testing.T) {
 	t.Parallel()
