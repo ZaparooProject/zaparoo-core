@@ -78,6 +78,36 @@ func TestHandleRunRestReturnsWhenServiceContextCancelled(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 }
 
+func TestHandleRunReturnsWhenRequestContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	st, _ := state.NewState(platform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Context:    ctx,
+		State:      st,
+		TokenQueue: make(chan tokens.Token),
+		Params:     []byte(`"SNES/Super Metroid.sfc"`),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := HandleRun(env)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("run handler blocked on token queue after request cancellation")
+	}
+}
+
 func TestValidateAddMappingParams(t *testing.T) {
 	t.Parallel()
 

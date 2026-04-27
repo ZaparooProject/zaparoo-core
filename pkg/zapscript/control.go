@@ -68,12 +68,17 @@ func isControlAllowed(cmdName string) bool {
 // All commands are validated before any are executed to prevent partial execution.
 // The exprEnv is passed directly to each command instead of building from state.
 func RunControlScript(
+	ctx context.Context,
 	pl platforms.Platform,
 	cfg *config.Instance,
 	db *database.Database,
 	script string,
 	exprEnv *gozapscript.ArgExprEnv,
 ) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	parser := gozapscript.NewParser(script)
 	parsed, err := parser.ParseScript()
 	if err != nil {
@@ -102,8 +107,12 @@ func RunControlScript(
 	}
 
 	for i, cmd := range parsed.Cmds {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("control script canceled: %w", err)
+		}
+
 		_, err := RunCommand(
-			context.Background(),
+			ctx,
 			pl, cfg,
 			playlists.PlaylistController{},
 			token,

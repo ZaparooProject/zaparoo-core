@@ -101,12 +101,16 @@ func Start(
 			default:
 				buf := make([]byte, 1024)
 				_, addr, readErr := proxyConn.ReadFrom(buf)
-				if addr == nil || readErr != nil {
+				if errors.Is(readErr, net.ErrClosed) {
+					return
+				}
+				if readErr != nil {
 					log.Warn().Err(readErr).Msg("error reading GMC proxy beacon")
 					continue
 				}
-				if errors.Is(readErr, net.ErrClosed) {
-					return
+				if addr == nil {
+					log.Warn().Msg("GMC proxy beacon missing source address")
+					continue
 				}
 				select {
 				case proxyAddrChan <- addr:

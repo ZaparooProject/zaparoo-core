@@ -213,7 +213,9 @@ func TestCloseLoggingReleasesLogFile(t *testing.T) {
 	// Note: Cannot use t.Parallel() because InitLogging modifies global log.Logger
 	originalLogger := log.Logger
 	t.Cleanup(func() {
-		_ = CloseLogging()
+		if err := CloseLogging(); err != nil {
+			t.Errorf("CloseLogging failed: %v", err)
+		}
 		log.Logger = originalLogger
 	})
 

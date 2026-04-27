@@ -208,7 +208,11 @@ func run() error {
 	}
 
 	// try to auto-start service if it's not running already
-	if !svc.Running() {
+	running, runningErr := svc.Running()
+	if runningErr != nil {
+		return runningErr
+	}
+	if !running {
 		log.Info().Msg("service not running, attempting to auto-start")
 
 		if startErr := svc.Start(); startErr != nil {

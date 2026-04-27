@@ -179,31 +179,38 @@ func validatePIDFileInfo(info os.FileInfo) error {
 	return nil
 }
 
+func servicePIDConflictError(pid int) error {
+	return fmt.Errorf(
+		"service PID file points to live process %d that does not match the Zaparoo service binary",
+		pid,
+	)
+}
+
 // Running returns true if the service is running.
-func (s *Service) Running() bool {
+func (s *Service) Running() (bool, error) {
 	pid, err := s.Pid()
 	if err != nil {
-		return false
+		return false, nil
 	}
 
 	if pid == 0 {
-		return false
+		return false, nil
 	}
 
 	if pidRunning(pid) {
 		if s.pidMatchesService(pid) {
-			return true
+			return true, nil
 		}
 		log.Warn().
 			Int("pid", pid).
 			Msg("service PID file points to live process that does not match service binary")
-		return false
+		return false, servicePIDConflictError(pid)
 	}
 
 	if rmErr := s.removePidFile(); rmErr != nil {
 		log.Debug().Err(rmErr).Int("pid", pid).Msg("failed to remove stale service PID file")
 	}
-	return false
+	return false, nil
 }
 
 func (s *Service) stopService() error {
@@ -363,14 +370,19 @@ func (s *Service) setupStopService() {
 
 // Starts the service and blocks until the service is stopped.
 func (s *Service) startService() {
-	if s.Running() {
+	running, err := s.Running()
+	if err != nil {
+		log.Error().Err(err).Msg("service PID file conflict")
+		os.Exit(1)
+	}
+	if running {
 		log.Error().Msg("service already running")
 		os.Exit(1)
 	}
 
 	log.Info().Msg("starting service")
 
-	err := s.createPidFile()
+	err = s.createPidFile()
 	if err != nil {
 		log.Error().Err(err).Msg("error creating pid file")
 		os.Exit(1)
@@ -428,7 +440,11 @@ func (s *Service) startService() {
 
 // Start a new service daemon in the background.
 func (s *Service) Start() error {
-	if s.Running() {
+	running, err := s.Running()
+	if err != nil {
+		return err
+	}
+	if running {
 		return errors.New("service already running")
 	}
 
@@ -490,7 +506,11 @@ func (s *Service) Start() error {
 
 	log.Info().Msgf("service process started with PID %d", pid)
 
-	if !s.Running() {
+	running, err = s.Running()
+	if err != nil {
+		return err
+	}
+	if !running {
 		return fmt.Errorf("service process %d started but is no longer running", pid)
 	}
 
@@ -728,8 +748,11 @@ func apiDialAddresses(cfg *config.Instance) []string {
 // pidRunning has confirmed the old process is gone before the replacement starts.
 func (s *Service) Restart() error {
 	oldPID := 0
-	if s.Running() {
-		var err error
+	running, err := s.Running()
+	if err != nil {
+		return err
+	}
+	if running {
 		oldPID, err = s.Pid()
 		if err != nil {
 			return err
@@ -748,7 +771,7 @@ func (s *Service) Restart() error {
 		return err
 	}
 
-	err := s.Start()
+	err = s.Start()
 	if err != nil {
 		return err
 	}
@@ -764,7 +787,12 @@ func (s *Service) WaitForAPI(cfg *config.Instance, maxWait, checkInterval time.D
 		return nil
 	}
 
-	if !s.Running() {
+	running, err := s.Running()
+	if err != nil {
+		log.Error().Err(err).Msg("service PID file conflict")
+		return err
+	}
+	if !running {
 		log.Error().Msg("service process is no longer running")
 		return errors.New("service process crashed during startup")
 	}
@@ -804,6 +832,7 @@ func SpawnDaemon(cfg *config.Instance) (cleanup func(), err error) {
 		return nil, fmt.Errorf("failed to start daemon: %w", err)
 	}
 	waiter := newCommandWaiter(cmd)
+	var cleanupOnce sync.Once
 	log.Info().Int("pid", cmd.Process.Pid).Msg("daemon subprocess started")
 
 	// Wait for service to be ready
@@ -812,17 +841,23 @@ func SpawnDaemon(cfg *config.Instance) (cleanup func(), err error) {
 		if client.IsServiceRunning(cfg) {
 			log.Info().Int("pid", cmd.Process.Pid).Msg("daemon API is ready")
 			return func() {
-				if cmd.Process == nil {
-					return
-				}
+				cleanupOnce.Do(func() {
+					if cmd.Process == nil {
+						return
+					}
 
-				log.Info().Int("pid", cmd.Process.Pid).Msg("stopping daemon subprocess")
-				if err := stopProcess(cmd.Process, cmd.Process.Pid, waiter.wait); err != nil {
-					log.Error().Err(err).Int("pid", cmd.Process.Pid).Msg("error stopping daemon subprocess")
-				}
-				if err := waitForAPIPortRelease(cfg, servicePortReleaseTimeout, serviceStopPollInterval); err != nil {
-					log.Warn().Err(err).Msg("daemon subprocess stopped but API port is still in use")
-				}
+					process := cmd.Process
+					pid := process.Pid
+					defer func() { cmd.Process = nil }()
+
+					log.Info().Int("pid", pid).Msg("stopping daemon subprocess")
+					if err := stopProcess(process, pid, waiter.wait); err != nil {
+						log.Error().Err(err).Int("pid", pid).Msg("error stopping daemon subprocess")
+					}
+					if err := waitForAPIPortRelease(cfg, servicePortReleaseTimeout, serviceStopPollInterval); err != nil {
+						log.Warn().Err(err).Msg("daemon subprocess stopped but API port is still in use")
+					}
+				})
 			}, nil
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -864,7 +899,12 @@ func (s *Service) ServiceHandler(cmd *string) error {
 		}
 		os.Exit(0)
 	case "status":
-		if s.Running() {
+		running, err := s.Running()
+		if err != nil {
+			log.Error().Err(err).Msg("service PID file conflict")
+			os.Exit(1)
+		}
+		if running {
 			_, _ = fmt.Println("started")
 			os.Exit(0)
 		}

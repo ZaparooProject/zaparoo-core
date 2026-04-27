@@ -242,6 +242,27 @@ func TestPreWarmZapLinkHosts_NoInternet(t *testing.T) {
 	mockUserDB.AssertNotCalled(t, "GetSupportedZapLinkHosts")
 }
 
+func TestPreWarmZapLinkHostsContext_CancelledAfterConnectivityCheckSkipsDatabase(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	checkInternet := func(_ context.Context, _ int) bool {
+		cancel()
+		return true
+	}
+
+	PreWarmZapLinkHostsContext(ctx, db, checkInternet)
+
+	mockUserDB.AssertNotCalled(t, "GetSupportedZapLinkHosts")
+}
+
 func TestPreWarmZapLinkHosts_EmptyHosts(t *testing.T) {
 	t.Parallel()
 

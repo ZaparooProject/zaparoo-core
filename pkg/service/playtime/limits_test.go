@@ -72,6 +72,28 @@ func TestLimitsManagerStopWaitsForNotificationHandler(t *testing.T) {
 	}
 }
 
+func TestLimitsManagerIgnoresMediaStartedAfterStop(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	cfg.SetPlaytimeLimitsEnabled(true)
+	tm := NewLimitsManager(
+		&database.Database{}, nil, cfg, clockwork.NewFakeClockAt(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)),
+		newNoOpMockPlayer(),
+	)
+
+	tm.Stop()
+	tm.OnMediaStarted()
+
+	tm.mu.Lock()
+	state := tm.state
+	sessionStart := tm.sessionStart
+	tm.mu.Unlock()
+	assert.Equal(t, StateReset, state)
+	assert.True(t, sessionStart.IsZero())
+}
+
 func TestIsClockReliable(t *testing.T) {
 	t.Parallel()
 

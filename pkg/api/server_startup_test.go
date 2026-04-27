@@ -76,7 +76,12 @@ func TestStartWithReadyReportsBindFailure(t *testing.T) {
 
 	err = StartWithReady(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, ready)
 	require.Error(t, err)
-	require.Error(t, <-ready)
+	select {
+	case readyErr := <-ready:
+		require.Error(t, readyErr)
+	case <-time.After(time.Second):
+		t.Fatal("StartWithReady returned an error without signaling ready")
+	}
 	assert.Contains(t, err.Error(), "bind")
 	assert.ErrorIs(t, st.GetContext().Err(), context.Canceled)
 }

@@ -234,6 +234,26 @@ func TestProcessObjectMount_DoesNotDuplicateTrackedMount(t *testing.T) {
 	requireNoMountEvent(t, detector)
 }
 
+func TestRegisterMountEventReplacesStaleObjectPathForDevice(t *testing.T) {
+	detector := newLinuxMountDetectorForTest()
+	oldPath := dbus.ObjectPath("/org/freedesktop/UDisks2/block_devices/sdb1")
+	newPath := dbus.ObjectPath("/org/freedesktop/UDisks2/block_devices/sdc1")
+	oldMountPath := absTestPath("run", "media", "user", "OLD")
+	newMountPath := absTestPath("run", "media", "user", "NEW")
+
+	detector.processObjectMount(oldPath, testBlockProps("uuid-1"), testFSProps(oldMountPath), "test")
+	_ = requireMountEvent(t, detector)
+	detector.processObjectMount(newPath, testBlockProps("uuid-1"), testFSProps(newMountPath), "test")
+	_ = requireMountEvent(t, detector)
+
+	detector.mu.RLock()
+	defer detector.mu.RUnlock()
+	assert.Equal(t, "uuid-1", detector.pathMappings[newPath])
+	assert.NotContains(t, detector.pathMappings, oldPath)
+	assert.NotContains(t, detector.blockProps, oldPath)
+	assert.Equal(t, newMountPath, detector.mountedDevs["uuid-1"].MountPath)
+}
+
 func TestPropertiesChanged_EmitsMountAfterEmptyInterfacesAdded(t *testing.T) {
 	detector := newLinuxMountDetectorForTest()
 	objectPath := dbus.ObjectPath("/org/freedesktop/UDisks2/block_devices/sdb1")

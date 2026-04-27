@@ -122,7 +122,10 @@ type Control struct {
 // CmdEnv is the local state of a scanned token, as it processes each ZapScript
 // command. Every command run has access to and can modify it.
 type CmdEnv struct {
-	LauncherCtx   context.Context
+	// LauncherCtx is canceled when a new launcher starts and replaces the current one.
+	LauncherCtx context.Context
+	// ServiceCtx is canceled during full service shutdown or process stop. Use it
+	// for work tied to service lifetime rather than the current launcher lifetime.
 	ServiceCtx    context.Context
 	Playlist      playlists.PlaylistController
 	Cfg           *config.Instance
