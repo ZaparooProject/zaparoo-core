@@ -539,7 +539,7 @@ func (s *Service) Stop() error {
 	}
 
 	if err := stopProcess(process, pid, func(timeout time.Duration) error {
-		return waitForPIDExit(pid, timeout, serviceStopPollInterval, pidRunning)
+		return s.waitForServiceExit(pid, timeout)
 	}); err != nil {
 		return err
 	}
@@ -548,6 +548,16 @@ func (s *Service) Stop() error {
 		return err
 	}
 	return waitForAPIPortRelease(s.cfg, servicePortReleaseTimeout, serviceStopPollInterval)
+}
+
+func (s *Service) waitForServiceExit(pid int, timeout time.Duration) error {
+	pidPath := filepath.Join(s.pl.Settings().TempDir, config.PidFile)
+	return waitForPIDExit(pid, timeout, serviceStopPollInterval, func(pid int) bool {
+		if _, err := os.Stat(pidPath); errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+		return pidRunning(pid)
+	})
 }
 
 func stopProcess(process *os.Process, pid int, wait processWaitFunc) error {
@@ -766,7 +776,7 @@ func (s *Service) Restart() error {
 		}
 	}
 
-	if waitErr := waitForPIDExit(oldPID, serviceStopTimeout, serviceStopPollInterval, pidRunning); waitErr != nil {
+	if waitErr := s.waitForServiceExit(oldPID, serviceStopTimeout); waitErr != nil {
 		return waitErr
 	}
 	if waitErr := waitForAPIPortRelease(s.cfg, servicePortReleaseTimeout, serviceStopPollInterval); waitErr != nil {

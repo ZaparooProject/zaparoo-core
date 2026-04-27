@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -234,7 +235,9 @@ func TestCloseLoggingReleasesLogFile(t *testing.T) {
 	require.FileExists(t, filepath.Join(logDir, config.LogFile))
 	require.NoError(t, CloseLogging())
 
-	require.NoError(t, os.RemoveAll(logDir))
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.NoError(c, os.RemoveAll(logDir))
+	}, time.Second, 10*time.Millisecond)
 	_, err := os.Stat(logDir)
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
