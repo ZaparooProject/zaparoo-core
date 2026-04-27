@@ -56,7 +56,10 @@ func TestRunControlScript_MultiCommand(t *testing.T) {
 	cfg := &config.Instance{}
 	exprEnv := gozapscript.ArgExprEnv{Platform: "test"}
 
-	err := RunControlScript(context.Background(), mockPlatform, cfg, nil, "**input.keyboard:{f2}||**input.keyboard:{f5}", &exprEnv)
+	err := RunControlScript(
+		context.Background(), mockPlatform, cfg, nil,
+		"**input.keyboard:{f2}||**input.keyboard:{f5}", &exprEnv,
+	)
 	require.NoError(t, err)
 	mockPlatform.AssertCalled(t, "KeyboardPress", "{f2}")
 	mockPlatform.AssertCalled(t, "KeyboardPress", "{f5}")
@@ -106,7 +109,10 @@ func TestRunControlScript_RejectsBeforeExecuting(t *testing.T) {
 
 	// Valid command first, then a forbidden launch command.
 	// The valid command must NOT execute.
-	err := RunControlScript(context.Background(), mockPlatform, &config.Instance{}, nil, "**input.keyboard:{f2}||**launch:/path/to/game", nil)
+	err := RunControlScript(
+		context.Background(), mockPlatform, &config.Instance{}, nil,
+		"**input.keyboard:{f2}||**launch:/path/to/game", nil,
+	)
 	require.ErrorIs(t, err, ErrControlCommandNotAllowed)
 	mockPlatform.AssertNotCalled(t, "KeyboardPress", "{f2}")
 }
@@ -117,7 +123,10 @@ func TestRunControlScript_RejectsPlaylistInMultiCommand(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test")
 
-	err := RunControlScript(context.Background(), mockPlatform, &config.Instance{}, nil, "**input.keyboard:{f2}||**playlist.play", nil)
+	err := RunControlScript(
+		context.Background(), mockPlatform, &config.Instance{}, nil,
+		"**input.keyboard:{f2}||**playlist.play", nil,
+	)
 	require.ErrorIs(t, err, ErrControlCommandNotAllowed)
 	mockPlatform.AssertNotCalled(t, "KeyboardPress", "{f2}")
 }

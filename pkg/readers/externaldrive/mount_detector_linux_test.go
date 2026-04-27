@@ -31,6 +31,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testNoMountEventTimeout = 100 * time.Millisecond
+
 func newLinuxMountDetectorForTest() *linuxMountDetector {
 	return &linuxMountDetector{
 		events:       make(chan MountEvent, 10),
@@ -80,7 +82,7 @@ func requireNoMountEvent(t *testing.T, detector *linuxMountDetector) {
 	select {
 	case event := <-detector.events:
 		require.Failf(t, "unexpected mount event", "%+v", event)
-	default:
+	case <-time.After(testNoMountEventTimeout):
 	}
 }
 

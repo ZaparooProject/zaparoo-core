@@ -42,6 +42,8 @@ const (
 	testEventTimeout = 2 * time.Second
 	// testNoEventTimeout is the time to wait to verify no event occurs
 	testNoEventTimeout = 200 * time.Millisecond
+	// testStopTimeout is the maximum time to wait for detector shutdown
+	testStopTimeout = time.Second
 )
 
 // testContext returns a context with the specified timeout for test synchronization.
@@ -249,7 +251,7 @@ func TestDetect_DetectorInstantiation(t *testing.T) {
 func requireChannelClosedAfterDrain[T any](t *testing.T, ch <-chan T, name string) {
 	t.Helper()
 
-	timeout := time.After(time.Second)
+	timeout := time.After(testStopTimeout)
 	for {
 		select {
 		case _, ok := <-ch:

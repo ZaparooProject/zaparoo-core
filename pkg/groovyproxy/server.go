@@ -134,12 +134,15 @@ func Start(
 			default:
 				buf := make([]byte, 1024)
 				rlen, _, readErr := coreConn.ReadFrom(buf)
-				if rlen > 0 && readErr != nil {
+				if errors.Is(readErr, net.ErrClosed) {
+					return
+				}
+				if readErr != nil {
 					log.Warn().Err(readErr).Msg("error reading GMC command packet from Groovy core")
 					continue
 				}
-				if errors.Is(readErr, net.ErrClosed) {
-					return
+				if rlen == 0 {
+					continue
 				}
 				select {
 				case gmcChan <- buf[:rlen]:
@@ -150,7 +153,21 @@ func Start(
 		}
 	}()
 
-	freq, _ := time.ParseDuration(beaconInterval)
+	freq, parseErr := time.ParseDuration(beaconInterval)
+	if parseErr != nil || freq <= 0 {
+		log.Warn().
+			Err(parseErr).
+			Str("interval", beaconInterval).
+			Msg("invalid GMC proxy beacon interval, using default")
+		freq, parseErr = time.ParseDuration(config.DefaultGmcProxyBeaconInterval)
+		if parseErr != nil || freq <= 0 {
+			log.Error().
+				Err(parseErr).
+				Str("interval", config.DefaultGmcProxyBeaconInterval).
+				Msg("invalid default GMC proxy beacon interval, aborting GMC Proxy")
+			return
+		}
+	}
 	beaconTicker = time.NewTicker(freq)
 	for {
 		select {
@@ -171,7 +188,7 @@ func Start(
 			log.Debug().Msg("Receieved GMC Load Event")
 			// **local: can prefix any valid Zapscript to run locally without proxy
 			switch {
-			case bytes.Equal(gmcBytes[:10], []byte("zapscript:")):
+			case bytes.HasPrefix(gmcBytes, []byte("zapscript:")):
 				log.Debug().Msg("GMC Execute is Zapscript Format, running as Token")
 				text := string(gmcBytes[10:])
 				t := tokens.Token{
@@ -191,7 +208,7 @@ func Start(
 					log.Warn().Err(writeErr).Msg("error forwarding GMC from Groovy core to proxy")
 				}
 			default:
-				log.Warn().Err(err).Msg("error forwarding GMC from Groovy core to proxy")
+				log.Warn().Int("packet_length", len(gmcBytes)).Msg("no GMC proxy address available, skipping forward")
 			}
 		case <-ctx.Done():
 			log.Debug().Msg("Closing GMC Proxy via context cancellation")

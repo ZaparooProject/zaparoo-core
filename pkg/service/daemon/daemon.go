@@ -190,7 +190,7 @@ func servicePIDConflictError(pid int) error {
 func (s *Service) Running() (bool, error) {
 	pid, err := s.Pid()
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("error reading service PID: %w", err)
 	}
 
 	if pid == 0 {
@@ -453,9 +453,9 @@ func (s *Service) Start() error {
 	if appPath != "" {
 		binPath = appPath
 	} else {
-		exePath, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("error getting absolute binary path: %w", err)
+		exePath, exeErr := os.Executable()
+		if exeErr != nil {
+			return fmt.Errorf("error getting absolute binary path: %w", exeErr)
 		}
 		binPath = exePath
 	}
@@ -764,11 +764,11 @@ func (s *Service) Restart() error {
 		}
 	}
 
-	if err := waitForPIDExit(oldPID, serviceStopTimeout, serviceStopPollInterval, pidRunning); err != nil {
-		return err
+	if waitErr := waitForPIDExit(oldPID, serviceStopTimeout, serviceStopPollInterval, pidRunning); waitErr != nil {
+		return waitErr
 	}
-	if err := waitForAPIPortRelease(s.cfg, servicePortReleaseTimeout, serviceStopPollInterval); err != nil {
-		return err
+	if waitErr := waitForAPIPortRelease(s.cfg, servicePortReleaseTimeout, serviceStopPollInterval); waitErr != nil {
+		return waitErr
 	}
 
 	err = s.Start()
@@ -854,7 +854,9 @@ func SpawnDaemon(cfg *config.Instance) (cleanup func(), err error) {
 					if err := stopProcess(process, pid, waiter.wait); err != nil {
 						log.Error().Err(err).Int("pid", pid).Msg("error stopping daemon subprocess")
 					}
-					if err := waitForAPIPortRelease(cfg, servicePortReleaseTimeout, serviceStopPollInterval); err != nil {
+					if err := waitForAPIPortRelease(
+						cfg, servicePortReleaseTimeout, serviceStopPollInterval,
+					); err != nil {
 						log.Warn().Err(err).Msg("daemon subprocess stopped but API port is still in use")
 					}
 				})

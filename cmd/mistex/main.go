@@ -174,7 +174,7 @@ func run() error {
 
 	running, runningErr := svc.Running()
 	if runningErr != nil {
-		return runningErr
+		return fmt.Errorf("error checking service status: %w", runningErr)
 	}
 	if !running {
 		err := svc.Start()

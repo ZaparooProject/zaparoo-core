@@ -20,6 +20,7 @@
 package groovyproxy
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
@@ -33,7 +34,8 @@ import (
 )
 
 func TestStartAcceptsZapscriptFromGroovyCore(t *testing.T) {
-	coreConn, err := net.ListenPacket("udp4", "127.0.0.1:32105")
+	lc := net.ListenConfig{}
+	coreConn, err := lc.ListenPacket(context.Background(), "udp4", "127.0.0.1:32105")
 	if err != nil {
 		t.Skipf("Groovy Core GMC port unavailable: %v", err)
 	}
