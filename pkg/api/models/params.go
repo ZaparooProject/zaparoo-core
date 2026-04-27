@@ -180,6 +180,11 @@ type MediaMetaParams struct {
 	MediaID int64 `json:"mediaId" validate:"required,gt=0"`
 }
 
+type MediaImageParams struct {
+	MediaID    int64    `json:"mediaId"    validate:"required,gt=0"`
+	ImageTypes []string `json:"imageTypes" validate:"omitempty,dive,min=1"`
+}
+
 type MediaLookupParams struct {
 	FuzzySystem *bool  `json:"fuzzySystem,omitempty"`
 	Name        string `json:"name" validate:"required,min=1"`

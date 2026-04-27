@@ -262,6 +262,14 @@ type MediaMetaResponse struct {
 	Media MediaMetaMediaResponse `json:"media"`
 }
 
+// MediaImageResponse is the response for the media.image method.
+// It contains the best-match image for a media record, base64-encoded.
+type MediaImageResponse struct {
+	ContentType string `json:"contentType"`
+	Data        string `json:"data"`    // base64-encoded blob
+	TypeTag     string `json:"typeTag"` // e.g. "property:image-boxart"
+}
+
 type MediaLookupMatch struct {
 	System     System             `json:"system"`
 	Name       string             `json:"name"`

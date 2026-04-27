@@ -2159,6 +2159,16 @@ func (m *MockMediaDBI) GetMediaProperties(ctx context.Context, mediaDBID int64) 
 	return nil, args.Error(1)
 }
 
+func (m *MockMediaDBI) DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID int64, typeTagDBID int64) error {
+	args := m.Called(ctx, mediaTitleDBID, typeTagDBID)
+	return args.Error(0)
+}
+
+func (m *MockMediaDBI) DeleteMediaProperty(ctx context.Context, mediaDBID int64, typeTagDBID int64) error {
+	args := m.Called(ctx, mediaDBID, typeTagDBID)
+	return args.Error(0)
+}
+
 func (m *MockMediaDBI) GetMediaWithTitleAndSystem(
 	ctx context.Context, mediaDBID int64,
 ) (*database.MediaFullRow, error) {

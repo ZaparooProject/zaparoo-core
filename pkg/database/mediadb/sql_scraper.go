@@ -387,6 +387,38 @@ func (db *MediaDB) UpsertMediaProperties(ctx context.Context, mediaDBID int64, p
 	return nil
 }
 
+// DeleteMediaTitleProperty removes the property row for (mediaTitleDBID, typeTagDBID)
+// from MediaTitleProperties. It is a no-op when no matching row exists.
+func (db *MediaDB) DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID int64, typeTagDBID int64) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	_, err := db.sql.ExecContext(ctx,
+		`DELETE FROM MediaTitleProperties WHERE MediaTitleDBID = ? AND TypeTagDBID = ?`,
+		mediaTitleDBID, typeTagDBID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete MediaTitleProperty (mediaTitleDBID=%d, typeTagDBID=%d): %w", mediaTitleDBID, typeTagDBID, err)
+	}
+	return nil
+}
+
+// DeleteMediaProperty removes the property row for (mediaDBID, typeTagDBID)
+// from MediaProperties. It is a no-op when no matching row exists.
+func (db *MediaDB) DeleteMediaProperty(ctx context.Context, mediaDBID int64, typeTagDBID int64) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	_, err := db.sql.ExecContext(ctx,
+		`DELETE FROM MediaProperties WHERE MediaDBID = ? AND TypeTagDBID = ?`,
+		mediaDBID, typeTagDBID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete MediaProperty (mediaDBID=%d, typeTagDBID=%d): %w", mediaDBID, typeTagDBID, err)
+	}
+	return nil
+}
+
 // resolvePropertyTypeTag looks up the DBID of the Tags row for the given full
 // tag string (e.g. "property:description"). The tag must already exist in the DB
 // (seeded by SeedCanonicalTags). Returns an error if not found.

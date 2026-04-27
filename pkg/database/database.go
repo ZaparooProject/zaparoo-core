@@ -611,6 +611,14 @@ type MediaDBI interface {
 	// with TypeTagDBID resolved to the tag value string.
 	GetMediaProperties(ctx context.Context, mediaDBID int64) ([]MediaProperty, error)
 
+	// DeleteMediaTitleProperty removes a single property row from MediaTitleProperties
+	// identified by (mediaTitleDBID, typeTagDBID). A no-op if the row does not exist.
+	DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID int64, typeTagDBID int64) error
+
+	// DeleteMediaProperty removes a single property row from MediaProperties
+	// identified by (mediaDBID, typeTagDBID). A no-op if the row does not exist.
+	DeleteMediaProperty(ctx context.Context, mediaDBID int64, typeTagDBID int64) error
+
 	// GetMediaWithTitleAndSystem fetches a Media record together with its parent
 	// MediaTitle and System via a single JOIN query. Returns nil, nil when no
 	// Media row with the given DBID exists. IsMissing is NOT filtered — metadata
