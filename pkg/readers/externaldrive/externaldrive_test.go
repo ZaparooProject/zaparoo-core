@@ -42,6 +42,8 @@ const (
 	testEventTimeout = 2 * time.Second
 	// testNoEventTimeout is the time to wait to verify no event occurs
 	testNoEventTimeout = 200 * time.Millisecond
+	// testStopTimeout is the maximum time to wait for detector shutdown
+	testStopTimeout = time.Second
 )
 
 // testContext returns a context with the specified timeout for test synchronization.
@@ -246,6 +248,22 @@ func TestDetect_DetectorInstantiation(t *testing.T) {
 	assert.NotNil(t, unmounts, "Unmounts channel should not be nil")
 }
 
+func requireChannelClosedAfterDrain[T any](t *testing.T, ch <-chan T, name string) {
+	t.Helper()
+
+	timeout := time.After(testStopTimeout)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		case <-timeout:
+			t.Fatalf("%s channel should be closed after Stop()", name)
+		}
+	}
+}
+
 func TestMountDetector_StartStop(t *testing.T) {
 	// Create a new detector
 	detector, err := NewMountDetector()
@@ -260,10 +278,8 @@ func TestMountDetector_StartStop(t *testing.T) {
 	detector.Stop()
 
 	// Verify channels are closed after Stop()
-	_, eventsOpen := <-detector.Events()
-	_, unmountsOpen := <-detector.Unmounts()
-	assert.False(t, eventsOpen, "Events channel should be closed after Stop()")
-	assert.False(t, unmountsOpen, "Unmounts channel should be closed after Stop()")
+	requireChannelClosedAfterDrain(t, detector.Events(), "Events")
+	requireChannelClosedAfterDrain(t, detector.Unmounts(), "Unmounts")
 }
 
 func TestMountDetector_MultipleStopCalls(t *testing.T) {

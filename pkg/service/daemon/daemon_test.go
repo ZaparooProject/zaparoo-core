@@ -24,16 +24,20 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,6 +55,14 @@ func newTestService(t *testing.T) *Service {
 	})
 
 	return &Service{pl: pl}
+}
+
+func requireServiceRunning(t *testing.T, svc *Service) bool {
+	t.Helper()
+
+	running, err := svc.Running()
+	require.NoError(t, err)
+	return running
 }
 
 func writeFakeServiceScript(t *testing.T, pidFile, eventLog string) string {
@@ -285,19 +297,19 @@ func TestRestart_StartsWhenServiceNotRunning(t *testing.T) {
 	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
 	t.Cleanup(func() {
 		pid, err := svc.Pid()
-		if err == nil && pid > 0 && svc.Running() {
+		if err == nil && pid > 0 && requireServiceRunning(t, svc) {
 			require.NoError(t, svc.Stop())
 		}
 		_ = os.Remove(pidFile)
 	})
 
-	require.False(t, svc.Running())
+	require.False(t, requireServiceRunning(t, svc))
 	require.NoError(t, svc.Restart())
 
 	pid, err := svc.Pid()
 	require.NoError(t, err)
 	assert.Positive(t, pid)
-	assert.True(t, svc.Running())
+	assert.True(t, requireServiceRunning(t, svc))
 
 	require.FileExists(t, pidFile)
 }
@@ -309,17 +321,7 @@ func TestRestart_ReplacesRunningService(t *testing.T) {
 	eventLog := filepath.Join(t.TempDir(), "events.log")
 	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
 
-	oldProcess := exec.CommandContext(context.Background(), "sleep", "1000")
-	require.NoError(t, oldProcess.Start())
-	defer func() {
-		_ = oldProcess.Process.Kill()
-	}()
-	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(oldProcess.Process.Pid)), 0o600))
-
-	oldProcessExited := make(chan error, 1)
-	go func() {
-		oldProcessExited <- oldProcess.Wait()
-	}()
+	require.NoError(t, svc.Start())
 
 	oldPID, err := svc.Pid()
 	require.NoError(t, err)
@@ -327,27 +329,265 @@ func TestRestart_ReplacesRunningService(t *testing.T) {
 
 	t.Cleanup(func() {
 		pid, pidErr := svc.Pid()
-		if pidErr == nil && pid > 0 && svc.Running() {
+		if pidErr == nil && pid > 0 && requireServiceRunning(t, svc) {
 			require.NoError(t, svc.Stop())
 		}
 		_ = os.Remove(pidFile)
 	})
 
 	require.NoError(t, svc.Restart())
-	oldExitErr := <-oldProcessExited
-	if oldExitErr != nil {
-		require.Contains(t, oldExitErr.Error(), "terminated", oldExitErr.Error())
-	}
 
 	newPID, err := svc.Pid()
 	require.NoError(t, err)
 	assert.Positive(t, newPID)
 	assert.NotEqual(t, oldPID, newPID)
-	assert.True(t, svc.Running())
+	assert.True(t, requireServiceRunning(t, svc))
 
 	content, err := os.ReadFile(eventLog) //nolint:gosec // test-controlled file
 	require.NoError(t, err)
 	assert.Contains(t, string(content), fmt.Sprintf("started:%d", newPID))
+}
+
+func TestStop_WaitsForProcessExitAndRemovesPIDFile(t *testing.T) {
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
+
+	require.NoError(t, svc.Start())
+
+	require.NoError(t, svc.Stop())
+	assert.NoFileExists(t, pidFile)
+	assert.False(t, requireServiceRunning(t, svc))
+}
+
+func TestStopRemovesStalePIDFileWithoutKillingUnrelatedProcess(t *testing.T) {
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+
+	process := exec.CommandContext(context.Background(), "sleep", "1000")
+	require.NoError(t, process.Start())
+	t.Cleanup(func() { _ = process.Process.Kill() })
+	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(process.Process.Pid)), 0o600))
+
+	err := svc.Stop()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match the Zaparoo service binary")
+	assert.True(t, pidRunning(process.Process.Pid))
+	assert.FileExists(t, pidFile)
+}
+
+func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+
+	process := exec.CommandContext(context.Background(), "sleep", "1000")
+	require.NoError(t, process.Start())
+	t.Cleanup(func() { _ = process.Process.Kill() })
+	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(process.Process.Pid)), 0o600))
+
+	running, runningErr := svc.Running()
+	assert.False(t, running)
+	require.Error(t, runningErr)
+	assert.Contains(t, runningErr.Error(), "does not match the Zaparoo service binary")
+	assert.True(t, pidRunning(process.Process.Pid))
+	assert.FileExists(t, pidFile)
+}
+
+func TestStartFailsForLiveUnrelatedPID(t *testing.T) {
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+
+	process := exec.CommandContext(context.Background(), "sleep", "1000")
+	require.NoError(t, process.Start())
+	t.Cleanup(func() { _ = process.Process.Kill() })
+	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(process.Process.Pid)), 0o600))
+
+	err := svc.Start()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match the Zaparoo service binary")
+	assert.True(t, pidRunning(process.Process.Pid))
+	assert.FileExists(t, pidFile)
+}
+
+func TestRestartFailsForLiveUnrelatedPID(t *testing.T) {
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+
+	process := exec.CommandContext(context.Background(), "sleep", "1000")
+	require.NoError(t, process.Start())
+	t.Cleanup(func() { _ = process.Process.Kill() })
+	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(process.Process.Pid)), 0o600))
+
+	err := svc.Restart()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match the Zaparoo service binary")
+	assert.True(t, pidRunning(process.Process.Pid))
+	assert.FileExists(t, pidFile)
+}
+
+func TestWaitForAPIReturnsPIDConflict(t *testing.T) {
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+
+	process := exec.CommandContext(context.Background(), "sleep", "1000")
+	require.NoError(t, process.Start())
+	t.Cleanup(func() { _ = process.Process.Kill() })
+	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(process.Process.Pid)), 0o600))
+
+	cfg, err := testhelpers.NewTestConfig(testhelpers.NewOSFS(), t.TempDir())
+	require.NoError(t, err)
+	err = svc.WaitForAPI(cfg, time.Nanosecond, time.Nanosecond)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match the Zaparoo service binary")
+	assert.True(t, pidRunning(process.Process.Pid))
+	assert.FileExists(t, pidFile)
+}
+
+func TestPathLooksLikeServiceBinaryRequiresDirectDataDirChild(t *testing.T) {
+	t.Parallel()
+
+	dataDir := filepath.Join(t.TempDir(), "data")
+	assert.True(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.service"), dataDir))
+	assert.True(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.service.sh"), dataDir))
+	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "nested", "zaparoo.service"), dataDir))
+	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo"), dataDir))
+	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(t.TempDir(), "zaparoo.service"), dataDir))
+}
+
+func TestRunningRemovesStalePIDFile(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	require.NoError(t, os.WriteFile(pidFile, []byte("99999999"), 0o600))
+
+	assert.False(t, requireServiceRunning(t, svc))
+	assert.NoFileExists(t, pidFile)
+}
+
+func TestPIDRunningTreatsZombieAsStopped(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("zombie detection uses Linux /proc status")
+	}
+
+	process := exec.CommandContext(context.Background(), "sh", "-c", "exit 0")
+	require.NoError(t, process.Start())
+	t.Cleanup(func() { _ = process.Wait() })
+
+	require.Eventually(t, func() bool {
+		return pidIsZombie(process.Process.Pid)
+	}, time.Second, 10*time.Millisecond)
+	assert.False(t, pidRunning(process.Process.Pid))
+}
+
+func TestWaitForAPIPortRelease(t *testing.T) {
+	t.Parallel()
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+	cfg, err := testhelpers.NewTestConfig(testhelpers.NewOSFS(), t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetAPIPort(addr.Port))
+
+	err = waitForAPIPortRelease(cfg, 20*time.Millisecond, 5*time.Millisecond)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout waiting for API port")
+
+	require.NoError(t, listener.Close())
+	require.NoError(t, waitForAPIPortRelease(cfg, time.Second, 5*time.Millisecond))
+}
+
+func TestStopProcessTerminatesCommand(t *testing.T) {
+	process := exec.CommandContext(context.Background(), "sleep", "1000")
+	require.NoError(t, process.Start())
+	t.Cleanup(func() { _ = process.Process.Kill() })
+
+	waiter := newCommandWaiter(process)
+	require.NoError(t, stopProcess(process.Process, process.Process.Pid, waiter.wait))
+	assert.False(t, pidRunning(process.Process.Pid))
+}
+
+func TestStopProcessTerminatesProcessGroup(t *testing.T) {
+	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
+	process := exec.CommandContext( //nolint:gosec // test starts a controlled shell script.
+		context.Background(),
+		"sh",
+		"-c",
+		fmt.Sprintf("sleep 1000 & printf '%%s' \"$!\" > %q; wait", childPIDPath),
+	)
+	process.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	require.NoError(t, process.Start())
+	t.Cleanup(func() { _ = syscall.Kill(-process.Process.Pid, syscall.SIGKILL) })
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(childPIDPath)
+		return err == nil
+	}, time.Second, 10*time.Millisecond)
+	childPIDBytes, err := os.ReadFile(childPIDPath) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	childPID, err := strconv.Atoi(string(childPIDBytes))
+	require.NoError(t, err)
+	require.True(t, pidRunning(childPID))
+
+	waiter := newCommandWaiter(process)
+	require.NoError(t, stopProcess(process.Process, process.Process.Pid, waiter.wait))
+	assert.False(t, pidRunning(process.Process.Pid))
+	require.Eventually(t, func() bool {
+		return !pidRunning(childPID)
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestPidRejectsSymlink(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	require.NoError(t, os.Symlink(filepath.Join(t.TempDir(), "target.pid"), pidFile))
+
+	_, err := svc.Pid()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pid file is a symlink")
+}
+
+func TestPidRejectsGroupWritableFile(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	require.NoError(t, os.WriteFile(pidFile, []byte("123"), 0o600))
+	//nolint:gosec // Intentionally invalid permissions for validation test.
+	require.NoError(t, os.Chmod(pidFile, 0o620))
+
+	_, err := svc.Pid()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pid file is group or world writable")
+}
+
+func TestCreatePidFileRejectsExistingSymlink(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	require.NoError(t, os.Symlink(filepath.Join(t.TempDir(), "target.pid"), pidFile))
+
+	err := svc.createPidFile()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create PID file")
 }
 
 func TestWaitForPIDExit_ReturnsImmediatelyForInvalidPID(t *testing.T) {

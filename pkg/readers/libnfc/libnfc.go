@@ -363,7 +363,12 @@ func (r *Reader) IDs() []string {
 
 func (r *Reader) Detect(connected []string) string {
 	metadata := r.Metadata()
-	if !r.cfg.IsDriverAutoDetectEnabled(metadata.ID, metadata.DefaultAutoDetect) {
+	driver := config.DriverInfo{
+		ID:                metadata.ID,
+		DefaultEnabled:    metadata.DefaultEnabled,
+		DefaultAutoDetect: metadata.DefaultAutoDetect,
+	}
+	if !r.cfg.IsReaderEnabled(driver, config.ReaderEnableContextAutoDetect) {
 		return ""
 	}
 

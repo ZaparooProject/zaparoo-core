@@ -29,6 +29,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -82,6 +83,7 @@ type LimitsManager struct {
 	clock                 clockwork.Clock
 	ctx                   context.Context
 	cooldownTimer         clockwork.Timer
+	done                  chan struct{}
 	warningsGiven         map[time.Duration]bool
 	db                    *database.Database
 	notificationsSend     chan<- models.Notification
@@ -92,10 +94,12 @@ type LimitsManager struct {
 	sessionResetTimeout   time.Duration
 	sessionCumulativeTime time.Duration
 	subscriptionID        int
+	wg                    sync.WaitGroup
 	mu                    syncutil.Mutex
 	enabledMu             syncutil.Mutex
 	sessionStartReliable  bool
 	enabled               bool
+	stopping              bool
 }
 
 // NewLimitsManager creates a new LimitsManager instance.
@@ -111,6 +115,8 @@ func NewLimitsManager(
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	close(done)
 
 	// Get session reset timeout from config
 	// 0 means disabled (session never resets)
@@ -126,6 +132,7 @@ func NewLimitsManager(
 		player:              player,
 		ctx:                 ctx,
 		cancel:              cancel,
+		done:                done,
 		warningsGiven:       make(map[time.Duration]bool),
 		sessionResetTimeout: sessionResetTimeout,
 		enabled:             false, // Start disabled, caller must enable
@@ -141,20 +148,38 @@ type Broker interface {
 // Start begins monitoring for time limit enforcement.
 // It subscribes to the broker to listen for media.started and media.stopped events.
 func (tm *LimitsManager) Start(broker Broker, notificationsSend chan<- models.Notification) {
+	done := make(chan struct{})
+
 	tm.mu.Lock()
 	tm.notificationsSend = notificationsSend
+	tm.done = done
+	tm.stopping = false
 	tm.mu.Unlock()
 
 	// Subscribe to broker for media.started and media.stopped events
 	notifChan, subID := broker.Subscribe(10)
 	tm.subscriptionID = subID
 
-	go tm.handleNotifications(notifChan, broker)
+	go func() {
+		defer close(done)
+		tm.handleNotifications(notifChan, broker)
+	}()
 }
 
 // Stop shuts down the LimitsManager.
 func (tm *LimitsManager) Stop() {
+	tm.mu.Lock()
+	tm.stopping = true
+	done := tm.done
+	tm.mu.Unlock()
+
 	tm.cancel()
+
+	if done != nil {
+		<-done
+	}
+
+	tm.wg.Wait()
 }
 
 // SetEnabled enables or disables limit enforcement at runtime.
@@ -254,6 +279,11 @@ func (tm *LimitsManager) OnMediaStarted() {
 	}
 
 	tm.mu.Lock()
+	if tm.stopping {
+		tm.mu.Unlock()
+		return
+	}
+
 	now := tm.clock.Now()
 
 	// Cancel cooldown timer if it exists
@@ -288,6 +318,7 @@ func (tm *LimitsManager) OnMediaStarted() {
 	tm.sessionStartMono = time.Now() // Monotonic clock for accurate duration
 	tm.sessionStartReliable = helpers.IsClockReliable(now)
 	tm.warningsGiven = make(map[time.Duration]bool)
+	tm.wg.Add(1)
 	tm.mu.Unlock()
 
 	if !tm.sessionStartReliable {
@@ -297,16 +328,19 @@ func (tm *LimitsManager) OnMediaStarted() {
 	}
 
 	// Start the check loop
-	go tm.checkLoop()
+	go func() {
+		defer tm.wg.Done()
+		tm.checkLoop()
+	}()
 }
 
 // OnMediaStopped handles media.stopped events and stops time tracking.
 func (tm *LimitsManager) OnMediaStopped() {
 	tm.mu.Lock()
-	defer tm.mu.Unlock()
 
-	if tm.state != StateActive {
+	if tm.stopping || tm.state != StateActive {
 		// Only stop if we're actually active
+		tm.mu.Unlock()
 		return
 	}
 
@@ -333,8 +367,17 @@ func (tm *LimitsManager) OnMediaStopped() {
 	// Start cooldown timer if timeout is configured
 	if tm.sessionResetTimeout > 0 {
 		tm.cooldownTimer = tm.clock.NewTimer(tm.sessionResetTimeout)
-		go tm.cooldownTimerLoop()
+		tm.wg.Add(1)
+		tm.mu.Unlock()
+
+		go func() {
+			defer tm.wg.Done()
+			tm.cooldownTimerLoop()
+		}()
+		return
 	}
+
+	tm.mu.Unlock()
 }
 
 // cooldownTimerLoop waits for the cooldown timer to expire and transitions to reset.
@@ -375,6 +418,9 @@ func (tm *LimitsManager) checkLoop() {
 	defer ticker.Stop()
 
 	// Immediate check
+	if tm.ctx.Err() != nil {
+		return
+	}
 	tm.checkLimits()
 
 	for {

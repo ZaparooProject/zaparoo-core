@@ -69,6 +69,7 @@ func run() error {
 	cfg := cli.Setup(pl, config.BaseDefaults, nil)
 
 	svc, err := daemon.NewService(daemon.ServiceArgs{
+		Config: cfg,
 		Entry: func() (*service.StartResult, error) {
 			return service.Start(pl, cfg)
 		},
@@ -86,7 +87,11 @@ func run() error {
 	flags.Post(cfg, pl)
 
 	// try to auto-start service if it's not running already
-	if !svc.Running() {
+	running, runningErr := svc.Running()
+	if runningErr != nil {
+		return fmt.Errorf("error checking service status: %w", runningErr)
+	}
+	if !running {
 		startErr := svc.Start()
 		if startErr != nil {
 			log.Error().Err(startErr).Msg("could not start service")
@@ -96,8 +101,16 @@ func run() error {
 	// display main info gui
 	err = tui.BuildAndRetry(cfg, func() (*tview.Application, error) {
 		logDestinationPath := path.Join("/storage", config.LogFile)
+		isRunning := func() bool {
+			running, runningErr := svc.Running()
+			if runningErr != nil {
+				log.Error().Err(runningErr).Msg("service PID file conflict")
+				return false
+			}
+			return running
+		}
 		return tui.BuildMain(
-			cfg, pl, svc.Running,
+			cfg, pl, isRunning,
 			logDestinationPath, "storage",
 		)
 	})

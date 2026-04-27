@@ -101,6 +101,7 @@ func runTokenZapScript(
 		}
 
 		result, err := zapscript.RunCommand(
+			svc.State.GetContext(),
 			svc.Platform, svc.Config,
 			playlists.PlaylistController{
 				Active: pls,
@@ -229,7 +230,15 @@ func handlePlaylist(
 		svc.State.SetActivePlaylist(pls)
 		if pls.Playing {
 			log.Info().Any("pls", pls).Msg("setting new playlist, launching token")
-			go launchPlaylistMedia(svc, pls, activePlaylist, player)
+			if svc.BackgroundWG != nil {
+				svc.BackgroundWG.Add(1)
+			}
+			go func() {
+				if svc.BackgroundWG != nil {
+					defer svc.BackgroundWG.Done()
+				}
+				launchPlaylistMedia(svc, pls, activePlaylist, player)
+			}()
 		} else {
 			log.Info().Any("pls", pls).Msg("setting new playlist")
 		}
@@ -244,7 +253,15 @@ func handlePlaylist(
 		svc.State.SetActivePlaylist(pls)
 		if pls.Playing {
 			log.Info().Any("pls", pls).Msg("updating playlist, launching token")
-			go launchPlaylistMedia(svc, pls, activePlaylist, player)
+			if svc.BackgroundWG != nil {
+				svc.BackgroundWG.Add(1)
+			}
+			go func() {
+				if svc.BackgroundWG != nil {
+					defer svc.BackgroundWG.Done()
+				}
+				launchPlaylistMedia(svc, pls, activePlaylist, player)
+			}()
 		} else {
 			log.Info().Any("pls", pls).Msg("updating playlist")
 		}
@@ -345,7 +362,13 @@ func processTokenQueue(
 			}
 
 			// launch tokens in a separate thread
+			if svc.BackgroundWG != nil {
+				svc.BackgroundWG.Add(1)
+			}
 			go func() {
+				if svc.BackgroundWG != nil {
+					defer svc.BackgroundWG.Done()
+				}
 				defer func() {
 					if r := recover(); r != nil {
 						log.Error().Any("panic", r).Msg("recovered panic in token launch")

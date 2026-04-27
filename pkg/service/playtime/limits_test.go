@@ -23,9 +23,11 @@ import (
 	"testing"
 	"time"
 
+	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
@@ -37,6 +39,44 @@ func newNoOpMockPlayer() *mocks.MockPlayer {
 	p := mocks.NewMockPlayer()
 	p.SetupNoOpMock()
 	return p
+}
+
+func TestLimitsManagerStopWaitsForNotificationHandler(t *testing.T) {
+	t.Parallel()
+
+	broker := fixtures.NewStopNotificationBroker()
+	tm := NewLimitsManager(&database.Database{}, nil, &config.Instance{}, clockwork.NewFakeClock(), newNoOpMockPlayer())
+
+	tm.Start(broker, make(chan apimodels.Notification, 1))
+	tm.Stop()
+
+	select {
+	case <-broker.Unsubscribed:
+	default:
+		t.Fatal("expected Stop to wait for notification handler unsubscribe")
+	}
+}
+
+func TestLimitsManagerIgnoresMediaStartedAfterStop(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewConfig(t.TempDir(), config.BaseDefaults)
+	require.NoError(t, err)
+	cfg.SetPlaytimeLimitsEnabled(true)
+	tm := NewLimitsManager(
+		&database.Database{}, nil, cfg, clockwork.NewFakeClockAt(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)),
+		newNoOpMockPlayer(),
+	)
+
+	tm.Stop()
+	tm.OnMediaStarted()
+
+	tm.mu.Lock()
+	state := tm.state
+	sessionStart := tm.sessionStart
+	tm.mu.Unlock()
+	assert.Equal(t, StateReset, state)
+	assert.True(t, sessionStart.IsZero())
 }
 
 func TestIsClockReliable(t *testing.T) {

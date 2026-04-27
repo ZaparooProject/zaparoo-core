@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,6 +41,42 @@ func newPlaylistTestPlatform() *mocks.MockPlatform {
 	mp := mocks.NewMockPlatform()
 	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
 	return mp
+}
+
+func TestQueuePlaylistUpdateReturnsWhenContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	env := platforms.CmdEnv{
+		LauncherCtx: ctx,
+		Playlist: playlists.PlaylistController{
+			Queue: make(chan *playlists.Playlist),
+		},
+	}
+
+	err := queuePlaylistUpdate(&env, &playlists.Playlist{})
+
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestQueuePlaylistUpdateReturnsWhenServiceContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	env := platforms.CmdEnv{
+		ServiceCtx: ctx,
+		Playlist: playlists.PlaylistController{
+			Queue: make(chan *playlists.Playlist),
+		},
+	}
+
+	err := queuePlaylistUpdate(&env, &playlists.Playlist{})
+
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestReadPlsFile(t *testing.T) {

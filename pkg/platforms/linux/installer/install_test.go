@@ -204,6 +204,17 @@ func TestInstallService(t *testing.T) {
 				servicePath := filepath.Join(xdg.ConfigHome, "systemd", "user", "zaparoo.service")
 				_, err := os.Stat(servicePath)
 				require.NoError(t, err, "service file should be installed")
+
+				content, readErr := os.ReadFile(servicePath) //nolint:gosec // reads installed test fixture
+				require.NoError(t, readErr, "should be able to read service file")
+				execPath, execErr := os.Executable()
+				require.NoError(t, execErr)
+				execPath, execErr = filepath.EvalSymlinks(execPath)
+				require.NoError(t, execErr)
+				assert.Contains(t, string(content), "Type=simple")
+				assert.Contains(t, string(content), "ExecStart="+execPath+" -daemon")
+				assert.Contains(t, string(content), "TimeoutStopSec=15s")
+				assert.Contains(t, string(content), "KillMode=control-group")
 			}
 
 			cmd.AssertExpectations(t)

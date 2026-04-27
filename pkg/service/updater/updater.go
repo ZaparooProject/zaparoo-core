@@ -138,7 +138,7 @@ func CheckAndNotify(
 	cfg *config.Instance,
 	platformID string,
 	inboxSvc *inbox.Service,
-	waitFn func(int) bool,
+	waitFn func(context.Context, int) bool,
 	checkFn CheckFn,
 	managedInstall bool,
 ) {
@@ -147,8 +147,11 @@ func CheckAndNotify(
 		return
 	}
 
-	if !waitFn(30) {
+	if !waitFn(ctx, 30) {
 		log.Warn().Msg("no internet connectivity, skipping update check")
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 
@@ -168,6 +171,9 @@ func CheckAndNotify(
 			Str("current", result.CurrentVersion).
 			Str("latest", result.LatestVersion).
 			Msg("no update available")
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 

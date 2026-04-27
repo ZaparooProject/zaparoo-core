@@ -20,6 +20,7 @@
 package helpers
 
 import (
+	"context"
 	"os"
 	"runtime"
 	"sort"
@@ -33,6 +34,25 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWaitForInternetContextReturnsWhenCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- WaitForInternetContext(ctx, 1)
+	}()
+
+	select {
+	case got := <-done:
+		assert.False(t, got)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("WaitForInternetContext blocked after context cancellation")
+	}
+}
 
 func TestTokensEqual(t *testing.T) {
 	t.Parallel()

@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -44,6 +45,45 @@ func newTestBroker(ctx context.Context, source <-chan models.Notification) *brok
 	b := broker.NewBroker(ctx, source)
 	b.Start()
 	return b
+}
+
+func TestStartWithReadyReportsBindFailure(t *testing.T) {
+	t.Parallel()
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, listener.Close()) }()
+
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+
+	fs := helpers.NewMemoryFS()
+	configDir := t.TempDir()
+	cfg, err := helpers.NewTestConfigWithPort(fs, configDir, tcpAddr.Port)
+	require.NoError(t, err)
+
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
+	notifBroker := newTestBroker(st.GetContext(), notifCh)
+	db := &database.Database{
+		UserDB:  helpers.NewMockUserDBI(),
+		MediaDB: helpers.NewMockMediaDBI(),
+	}
+	tokenQueue := make(chan tokens.Token, 1)
+	ready := make(chan error, 1)
+
+	err = StartWithReady(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, ready)
+	require.Error(t, err)
+	select {
+	case readyErr := <-ready:
+		require.Error(t, readyErr)
+		assert.Contains(t, readyErr.Error(), "bind")
+	case <-time.After(time.Second):
+		t.Fatal("StartWithReady returned an error without signaling ready")
+	}
+	assert.ErrorIs(t, st.GetContext().Err(), context.Canceled)
 }
 
 // TestServerStartupConcurrency validates that the API server properly synchronizes
@@ -83,15 +123,17 @@ func TestServerStartupConcurrency(t *testing.T) {
 
 			// Start server in a separate goroutine
 			serverDone := make(chan struct{})
+			serverErr := make(chan error, 1)
 			go func() {
 				defer close(serverDone)
-				Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
+				serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 			}()
 			// Cleanup: stop service first, then wait for server goroutine to fully exit
 			defer func() {
 				st.StopService()
 				close(tokenQueue)
 				<-serverDone
+				require.NoError(t, <-serverErr)
 			}()
 
 			// Test that server becomes available and responds correctly
@@ -152,15 +194,17 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 
 	// Start server in a separate goroutine
 	serverDone := make(chan struct{})
+	serverErr := make(chan error, 1)
 	go func() {
 		defer close(serverDone)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
+		serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 	}()
 	// Cleanup: stop service first, then wait for server goroutine to fully exit
 	defer func() {
 		st.StopService()
 		close(tokenQueue)
 		<-serverDone
+		require.NoError(t, <-serverErr)
 	}()
 
 	// Create connection attempt channel
@@ -230,20 +274,21 @@ func TestServerListenContextCancellation(t *testing.T) {
 	tokenQueue := make(chan tokens.Token, 1)
 	defer close(tokenQueue) // Safe here since context is already cancelled
 
-	// This should fail quickly because the context is already cancelled
-	// If net.Listen is used (not context-aware), it will succeed in binding
-	// If net.ListenConfig.Listen is used with context, it will fail fast
+	// This should return quickly because the context is already cancelled.
+	// If startup ignores the context, it would take longer or hang.
 	done := make(chan struct{})
+	serverErr := make(chan error, 1)
 	start := time.Now()
 
 	go func() {
 		defer close(done)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
+		serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 	}()
 
 	// Wait for completion or timeout
 	select {
 	case <-done:
+		require.NoError(t, <-serverErr)
 		elapsed := time.Since(start)
 		// With context cancellation, this should complete very quickly (< 100ms)
 		// Without context awareness, it would take longer or hang
@@ -527,9 +572,10 @@ func TestServerBindFailureStopsService(t *testing.T) {
 
 	// Start first server
 	server1Done := make(chan struct{})
+	server1Err := make(chan error, 1)
 	go func() {
 		defer close(server1Done)
-		Start(platform1, cfg1, st1, tokenQueue1, nil, db1, nil, notifBroker1, "", nil, nil)
+		server1Err <- Start(platform1, cfg1, st1, tokenQueue1, nil, db1, nil, notifBroker1, "", nil, nil)
 	}()
 
 	// Wait for first server to be ready
@@ -570,9 +616,10 @@ func TestServerBindFailureStopsService(t *testing.T) {
 
 	// Start second server - it should fail to bind and call StopService
 	server2Done := make(chan struct{})
+	server2Err := make(chan error, 1)
 	go func() {
 		defer close(server2Done)
-		Start(platform2, cfg2, st2, tokenQueue2, nil, db2, nil, notifBroker2, "", nil, nil)
+		server2Err <- Start(platform2, cfg2, st2, tokenQueue2, nil, db2, nil, notifBroker2, "", nil, nil)
 	}()
 
 	// Wait for the second server's context to be cancelled (StopService called)
@@ -590,7 +637,11 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	close(tokenQueue1)
 	close(tokenQueue2)
 	<-server1Done
+	require.NoError(t, <-server1Err)
 	<-server2Done
+	bindErr := <-server2Err
+	require.Error(t, bindErr)
+	assert.Contains(t, bindErr.Error(), "bind")
 }
 
 // TestBuildDynamicAllowedOrigins_HTTPURLWithoutPortAddsPortVariant is a regression
@@ -729,14 +780,16 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 	tokenQueue := make(chan tokens.Token, 1)
 
 	serverDone := make(chan struct{})
+	serverErr := make(chan error, 1)
 	go func() {
 		defer close(serverDone)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
+		serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 	}()
 	defer func() {
 		st.StopService()
 		close(tokenQueue)
 		<-serverDone
+		require.NoError(t, <-serverErr)
 	}()
 
 	// Wait for server to bind and update config with actual port

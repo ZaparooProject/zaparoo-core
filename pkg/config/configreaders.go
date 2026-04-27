@@ -63,6 +63,26 @@ type ReadersConnect struct {
 	IDSource string `toml:"id_source,omitempty"`
 }
 
+// DriverInfo contains driver metadata needed for enabled/auto-detect checks.
+// This is a subset of reader metadata to avoid circular imports.
+type DriverInfo struct {
+	ID                string
+	DefaultEnabled    bool
+	DefaultAutoDetect bool
+}
+
+// ReaderEnableContext selects the reader usage path being evaluated.
+type ReaderEnableContext string
+
+const (
+	// ReaderEnableContextCandidate filters platform-supported reader instances.
+	ReaderEnableContextCandidate ReaderEnableContext = "candidate"
+	// ReaderEnableContextManualConnect evaluates a configured [[readers.connect]] entry.
+	ReaderEnableContextManualConnect ReaderEnableContext = "manual_connect"
+	// ReaderEnableContextAutoDetect evaluates whether a reader may probe for devices.
+	ReaderEnableContextAutoDetect ReaderEnableContext = "auto_detect"
+)
+
 // IsEnabled returns whether this connection is enabled.
 // nil (omitted) and true both mean enabled; only explicit false disables.
 func (r ReadersConnect) IsEnabled() bool {
@@ -241,11 +261,17 @@ func (c *Instance) SetReaderConnections(rcs []ReadersConnect) {
 	c.vals.Readers.Connect = rcs
 }
 
-func (c *Instance) IsDriverEnabled(driverID string, defaultEnabled bool) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (c *Instance) hasEnabledReaderConnectionLocked(driverID string) bool {
+	normalizedID := normalizeDriverID(driverID)
+	for _, conn := range c.vals.Readers.Connect {
+		if conn.IsEnabled() && normalizeDriverID(conn.Driver) == normalizedID {
+			return true
+		}
+	}
+	return false
+}
 
-	// Try normalized ID first, then fall back to original
+func (c *Instance) isDriverEnabledLocked(driverID string, defaultEnabled bool) bool {
 	normalizedID := normalizeDriverID(driverID)
 	for key, cfg := range c.vals.Readers.Drivers {
 		if normalizeDriverID(key) == normalizedID && cfg.Enabled != nil {
@@ -255,32 +281,7 @@ func (c *Instance) IsDriverEnabled(driverID string, defaultEnabled bool) bool {
 	return defaultEnabled
 }
 
-// DriverInfo contains driver metadata needed for enabled/auto-detect checks.
-// This is a subset of reader metadata to avoid circular imports.
-type DriverInfo struct {
-	ID                string
-	DefaultEnabled    bool
-	DefaultAutoDetect bool
-}
-
-// IsDriverEnabledForConnect checks if a driver should be enabled for a
-// user-defined [[readers.connect]] entry. Returns true unless explicitly disabled.
-// Having a connect entry implicitly enables the driver.
-func (c *Instance) IsDriverEnabledForConnect(driver DriverInfo) bool {
-	return c.IsDriverEnabled(driver.ID, true)
-}
-
-// IsDriverEnabledForAutoDetect checks if a driver should be enabled for
-// auto-detection. Uses the driver's DefaultEnabled if not explicitly configured.
-func (c *Instance) IsDriverEnabledForAutoDetect(driver DriverInfo) bool {
-	return c.IsDriverEnabled(driver.ID, driver.DefaultEnabled)
-}
-
-func (c *Instance) IsDriverAutoDetectEnabled(driverID string, defaultAutoDetect bool) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	// Try normalized ID first, then fall back to original
+func (c *Instance) isDriverAutoDetectEnabledLocked(driverID string, defaultAutoDetect bool) bool {
 	normalizedID := normalizeDriverID(driverID)
 	for key, cfg := range c.vals.Readers.Drivers {
 		if normalizeDriverID(key) == normalizedID && cfg.AutoDetect != nil {
@@ -289,6 +290,28 @@ func (c *Instance) IsDriverAutoDetectEnabled(driverID string, defaultAutoDetect 
 	}
 
 	return c.vals.Readers.AutoDetect && defaultAutoDetect
+}
+
+// IsReaderEnabled centralizes reader enablement rules across platform lists,
+// manual connections, and auto-detection.
+func (c *Instance) IsReaderEnabled(driver DriverInfo, context ReaderEnableContext) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	switch context {
+	case ReaderEnableContextCandidate:
+		if c.isDriverEnabledLocked(driver.ID, driver.DefaultEnabled) {
+			return true
+		}
+		return c.hasEnabledReaderConnectionLocked(driver.ID) && c.isDriverEnabledLocked(driver.ID, true)
+	case ReaderEnableContextManualConnect:
+		return c.isDriverEnabledLocked(driver.ID, true)
+	case ReaderEnableContextAutoDetect:
+		return c.isDriverEnabledLocked(driver.ID, driver.DefaultEnabled) &&
+			c.isDriverAutoDetectEnabledLocked(driver.ID, driver.DefaultAutoDetect)
+	default:
+		return false
+	}
 }
 
 func (c *Instance) ScanHistory() int {

@@ -1297,7 +1297,36 @@ func Start(
 	mdnsHostname string,
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
-) {
+) error {
+	return StartWithReady(
+		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager,
+		notifBroker, mdnsHostname, player, indexPauser, nil,
+	)
+}
+
+// StartWithReady starts the API web server and reports bind success or failure
+// before blocking for shutdown. This lets service startup fail synchronously
+// when the configured API port is unavailable.
+func StartWithReady(
+	platform platforms.Platform,
+	cfg *config.Instance,
+	st *state.State,
+	inTokenQueue chan<- tokens.Token,
+	confirmQueue chan<- chan error,
+	db *database.Database,
+	limitsManager *playtime.LimitsManager,
+	notifBroker *broker.Broker,
+	mdnsHostname string,
+	player audio.Player,
+	indexPauser *syncutil.Pauser,
+	ready chan<- error,
+) error {
+	notifyReady := func(err error) {
+		if ready != nil {
+			ready <- err
+		}
+	}
+
 	// Extract port from listen address or use default
 	port := cfg.APIPort()
 	listenAddr := cfg.APIListen()
@@ -1411,7 +1440,10 @@ func Start(
 	// flushes to Clients.LastSeenAt every 30 seconds. A final flush runs
 	// on graceful shutdown via StartFlushLoop's ctx.Done() branch.
 	lastSeenTracker := apimiddleware.NewLastSeenTracker(db.UserDB)
-	lastSeenTracker.StartFlushLoop(st.GetContext(), apimiddleware.DefaultLastSeenFlushInterval)
+	lastSeenDone := lastSeenTracker.StartFlushLoop(st.GetContext(), apimiddleware.DefaultLastSeenFlushInterval)
+	defer func() {
+		<-lastSeenDone
+	}()
 
 	session := melody.New()
 	defer func() {
@@ -1611,33 +1643,34 @@ func Start(
 	}
 
 	serverDone := make(chan error, 1)
-	serverReady := make(chan struct{})
+
+	log.Info().Str("listen", cfg.APIListen()).Msg("starting HTTP server")
+	log.Debug().Msg("HTTP server attempting to bind")
+
+	// Create the listener before reporting startup success so callers can fail
+	// fast when the configured API port is already in use.
+	lc := &net.ListenConfig{}
+	listener, err := lc.Listen(st.GetContext(), "tcp", server.Addr)
+	if err != nil {
+		bindErr := fmt.Errorf("failed to bind API listener: %w", err)
+		log.Error().Err(bindErr).Msg("failed to bind to port")
+		notifyReady(bindErr)
+		st.StopService()
+		return bindErr
+	}
+
+	// If port 0 was requested, update config with the actual bound port
+	// so callers can discover which port the server is listening on.
+	if port == 0 {
+		if addr, ok := listener.Addr().(*net.TCPAddr); ok {
+			_ = cfg.SetAPIPort(addr.Port)
+		}
+	}
+
+	log.Debug().Msg("HTTP server bound to port, ready to accept connections")
+	notifyReady(nil)
 
 	go func() {
-		log.Info().Str("listen", cfg.APIListen()).Msg("starting HTTP server")
-		log.Debug().Msg("HTTP server goroutine started, attempting to bind")
-
-		// Create a listener to ensure we can bind to the port before continuing
-		lc := &net.ListenConfig{}
-		listener, err := lc.Listen(st.GetContext(), "tcp", server.Addr)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to bind to port")
-			serverDone <- err
-			return
-		}
-
-		// If port 0 was requested, update config with the actual bound port
-		// so callers can discover which port the server is listening on.
-		if port == 0 {
-			if addr, ok := listener.Addr().(*net.TCPAddr); ok {
-				_ = cfg.SetAPIPort(addr.Port)
-			}
-		}
-
-		// Signal that server is ready to accept connections
-		log.Debug().Msg("HTTP server bound to port, ready to accept connections")
-		close(serverReady)
-
 		// Start serving
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error().Err(err).Msg("HTTP server error")
@@ -1648,19 +1681,7 @@ func Start(
 		}
 	}()
 
-	log.Debug().Msg("HTTP server goroutine launched, waiting for server to be ready")
-
-	// Wait for server to be ready or fail to start
-	select {
-	case <-serverReady:
-		log.Debug().Msg("HTTP server is ready to accept connections")
-	case err := <-serverDone:
-		if err != nil {
-			log.Error().Err(err).Msg("API server failed to start, stopping service")
-			st.StopService()
-			return
-		}
-	}
+	log.Debug().Msg("HTTP server goroutine launched")
 
 	select {
 	case <-st.GetContext().Done():
@@ -1669,9 +1690,9 @@ func Start(
 		if err != nil {
 			log.Error().Err(err).Msg("API server failed during operation, stopping service")
 			st.StopService()
-			return
+			return err
 		}
-		return
+		return nil
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1679,7 +1700,9 @@ func Start(
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("HTTP server shutdown error")
-	} else {
-		log.Info().Msg("HTTP server shutdown complete")
+		return fmt.Errorf("HTTP server shutdown error: %w", err)
 	}
+
+	log.Info().Msg("HTTP server shutdown complete")
+	return nil
 }

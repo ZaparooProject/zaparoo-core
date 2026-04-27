@@ -184,6 +184,7 @@ func run() error {
 	}
 
 	svc, err := daemon.NewService(daemon.ServiceArgs{
+		Config: cfg,
 		Entry: func() (*service.StartResult, error) {
 			return service.Start(pl, cfg)
 		},
@@ -207,7 +208,11 @@ func run() error {
 	}
 
 	// try to auto-start service if it's not running already
-	if !svc.Running() {
+	running, runningErr := svc.Running()
+	if runningErr != nil {
+		return fmt.Errorf("error checking service status: %w", runningErr)
+	}
+	if !running {
 		log.Info().Msg("service not running, attempting to auto-start")
 
 		if startErr := svc.Start(); startErr != nil {

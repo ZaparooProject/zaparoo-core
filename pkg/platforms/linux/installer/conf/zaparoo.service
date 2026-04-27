@@ -8,6 +8,8 @@ Type=simple
 ExecStart={{.ExecPath}} -daemon
 Restart=on-failure
 RestartSec=5s
+TimeoutStopSec=15s
+KillMode=control-group
 
 # Logging
 StandardOutput=journal

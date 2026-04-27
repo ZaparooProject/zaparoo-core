@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -51,14 +52,26 @@ func EnsureDirectories(pl platforms.Platform) error {
 	return nil
 }
 
-var logWriter io.Writer
+var (
+	logMu         syncutil.RWMutex
+	logFileWriter *lumberjack.Logger
+	logWriter     io.Writer
+)
 
 func InitLogging(pl platforms.Platform, writers []io.Writer) error {
-	logWriters := []io.Writer{&lumberjack.Logger{
+	if err := CloseLogging(); err != nil {
+		return fmt.Errorf("failed to close previous log file: %w", err)
+	}
+
+	logMu.Lock()
+	defer logMu.Unlock()
+
+	logFileWriter = &lumberjack.Logger{
 		Filename:   filepath.Join(pl.Settings().LogDir, config.LogFile),
 		MaxSize:    1,
 		MaxBackups: 2,
-	}}
+	}
+	logWriters := []io.Writer{logFileWriter}
 
 	if len(writers) > 0 {
 		logWriters = append(logWriters, writers...)
@@ -75,5 +88,27 @@ func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 // LogWriter returns the underlying io.Writer used by the logger.
 // This is useful for adding additional writers (e.g., telemetry) after initialization.
 func LogWriter() io.Writer {
+	logMu.RLock()
+	defer logMu.RUnlock()
+
 	return logWriter
+}
+
+// CloseLogging closes the active file logger so tests and shutdown paths can
+// safely remove the log directory on Windows.
+func CloseLogging() error {
+	logMu.Lock()
+	defer logMu.Unlock()
+
+	if logFileWriter == nil {
+		return nil
+	}
+
+	err := logFileWriter.Close()
+	logFileWriter = nil
+	logWriter = nil
+	if err != nil {
+		return fmt.Errorf("failed to close log file writer: %w", err)
+	}
+	return nil
 }

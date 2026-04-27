@@ -115,7 +115,11 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 
 	// TODO: how do we report back errors? put channel in queue
 	env.State.SetActiveCard(t)
-	env.TokenQueue <- t
+	select {
+	case env.TokenQueue <- t:
+	case <-env.Context.Done():
+		return nil, env.Context.Err()
+	}
 
 	return NoContent{}, nil
 }
@@ -159,7 +163,14 @@ func HandleRunRest(
 		}
 
 		st.SetActiveCard(t)
-		itq <- t
+		select {
+		case itq <- t:
+		case <-r.Context().Done():
+			return
+		case <-st.GetContext().Done():
+			http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+			return
+		}
 	}
 }
 

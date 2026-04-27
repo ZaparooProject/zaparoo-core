@@ -22,6 +22,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package zapscript
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -291,7 +292,9 @@ func GetExprEnv(
 // RunCommand parses and runs a single ZapScript command.
 // The lm parameter is only needed for media-launching commands (launch guard);
 // pass nil for contexts where media launches are not allowed (e.g. control scripts).
+
 func RunCommand(
+	serviceCtx context.Context,
 	pl platforms.Platform,
 	cfg *config.Instance,
 	plsc playlists.PlaylistController,
@@ -364,6 +367,7 @@ func RunCommand(
 	env := platforms.CmdEnv{
 		Cmd:           cmd,
 		Cfg:           cfg,
+		ServiceCtx:    serviceCtx,
 		Playlist:      plsc,
 		Source:        token.Source,
 		TotalCommands: totalCmds,

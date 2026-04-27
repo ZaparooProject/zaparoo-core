@@ -128,9 +128,7 @@ func connectReaders(
 					DefaultAutoDetect: metadata.DefaultAutoDetect,
 				}
 
-				// For user-defined connect entries, driver is implicitly enabled
-				// unless explicitly disabled in config.
-				if !cfg.IsDriverEnabledForConnect(driver) {
+				if !cfg.IsReaderEnabled(driver, config.ReaderEnableContextManualConnect) {
 					if closeErr := r.Close(); closeErr != nil {
 						log.Debug().Err(closeErr).Msg("error closing unused reader")
 					}
@@ -285,7 +283,11 @@ func timedExit(
 			log.Warn().Msgf("error killing launcher: %s", err)
 		}
 
-		svc.LaunchSoftwareQueue <- nil
+		select {
+		case svc.LaunchSoftwareQueue <- nil:
+		case <-svc.State.GetContext().Done():
+			return
+		}
 	}()
 
 	return exitTimer
@@ -338,7 +340,13 @@ func readerManager(
 	}
 
 	// manage reader connections
+	if svc.BackgroundWG != nil {
+		svc.BackgroundWG.Add(1)
+	}
 	go func() {
+		if svc.BackgroundWG != nil {
+			defer svc.BackgroundWG.Done()
+		}
 		log.Info().Msgf("reader manager started, auto-detect=%v", svc.Config.AutoDetect())
 		sleepMonitor := helpers.NewSleepWakeMonitor(5 * time.Second)
 		readerConnectAttempts := 0

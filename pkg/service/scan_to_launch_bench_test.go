@@ -20,6 +20,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
@@ -184,6 +185,7 @@ func BenchmarkScanToLaunch_ExactMatch(b *testing.B) {
 		// 3. Command execution (real RunCommand -> cmdTitle -> ResolveTitle -> mock launch)
 		for i, cmd := range script.Cmds {
 			_, err = zapscript.RunCommand(
+				context.Background(),
 				env.pl, env.cfg, playlists.PlaylistController{}, token, cmd,
 				len(script.Cmds), i, env.db, env.lm, &env.exprEnv,
 			)
@@ -225,6 +227,7 @@ func BenchmarkScanToLaunch_DirectPath(b *testing.B) {
 		// 3. Command execution (cmdLaunch with direct path)
 		for i, cmd := range script.Cmds {
 			_, err = zapscript.RunCommand(
+				context.Background(),
 				env.pl, env.cfg, playlists.PlaylistController{}, token, cmd,
 				len(script.Cmds), i, env.db, env.lm, &env.exprEnv,
 			)
@@ -278,6 +281,7 @@ func BenchmarkScanToLaunch_WithMapping(b *testing.B) {
 		// 3. Command execution
 		for i, cmd := range script.Cmds {
 			_, err = zapscript.RunCommand(
+				context.Background(),
 				env.pl, env.cfg, playlists.PlaylistController{}, token, cmd,
 				len(script.Cmds), i, env.db, env.lm, &env.exprEnv,
 			)

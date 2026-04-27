@@ -23,6 +23,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -34,12 +36,77 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHandleRunRestReturnsWhenServiceContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	st, _ := state.NewState(platform, "test-boot-uuid")
+	st.StopService()
+
+	tokenQueue := make(chan tokens.Token)
+	router := chi.NewRouter()
+	router.Get("/run/*", HandleRunRest(cfg, st, tokenQueue))
+
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet, "/run/SNES/Super%20Metroid.sfc", http.NoBody,
+	)
+	req.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		router.ServeHTTP(recorder, req)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("REST run handler blocked on token queue after service cancellation")
+	}
+	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+}
+
+func TestHandleRunReturnsWhenRequestContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+	st, _ := state.NewState(platform, "test-boot-uuid")
+
+	env := requests.RequestEnv{
+		Context:    ctx,
+		State:      st,
+		TokenQueue: make(chan tokens.Token),
+		Params:     []byte(`"SNES/Super Metroid.sfc"`),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := HandleRun(env)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("run handler blocked on token queue after request cancellation")
+	}
+}
 
 func TestValidateAddMappingParams(t *testing.T) {
 	t.Parallel()
