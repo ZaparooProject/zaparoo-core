@@ -58,6 +58,15 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "GOMODCACHE=D:\go-mod-cache"
           Add-Content -Path $env:GITHUB_ENV -Value "GOTMPDIR=D:\go-tmp"
 
+      - name: Set up MSYS2 (Windows)
+        if: matrix.os == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: pkgconf
+          path-type: inherit
+
       - name: Restore Go cache (Unix)
         if: matrix.os != 'windows'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
@@ -82,7 +91,13 @@ jobs:
             ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
             ${{ runner.os }}-go-
 
-      - name: Download Go modules
+      - name: Download Go modules (Windows)
+        if: matrix.os == 'windows'
+        shell: msys2 {0}
+        run: go mod download
+
+      - name: Download Go modules (non-Windows)
+        if: matrix.os != 'windows'
         run: go mod download
 
       - name: Cache APT packages (Ubuntu)
@@ -96,22 +111,6 @@ jobs:
         if: matrix.os == 'macos'
         run: |
           brew install libusb pkg-config
-
-      - name: Cache scoop packages (Windows)
-        if: matrix.os == 'windows'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: ~\scoop
-          key: ${{ runner.os }}-scoop-pkg-config
-
-      - name: Install dependencies (Windows)
-        if: matrix.os == 'windows'
-        shell: pwsh
-        run: |
-          if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
-            irm get.scoop.sh | iex
-          }
-          scoop install pkg-config
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
@@ -141,7 +140,7 @@ jobs:
 
       - name: Run full tests (Windows)
         if: matrix.os == 'windows'
-        shell: bash
+        shell: msys2 {0}
         env:
           GOMAXPROCS: 2
         run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
@@ -295,6 +294,15 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "GOMODCACHE=D:\go-mod-cache"
           Add-Content -Path $env:GITHUB_ENV -Value "GOTMPDIR=D:\go-tmp"
 
+      - name: Set up MSYS2 (Windows)
+        if: matrix.os == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: pkgconf
+          path-type: inherit
+
       - name: Restore Go cache (macOS)
         if: matrix.os == 'macos'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
@@ -319,7 +327,13 @@ jobs:
             ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
             ${{ runner.os }}-go-
 
-      - name: Download Go modules
+      - name: Download Go modules (Windows)
+        if: matrix.os == 'windows'
+        shell: msys2 {0}
+        run: go mod download
+
+      - name: Download Go modules (non-Windows)
+        if: matrix.os != 'windows'
         run: go mod download
 
       - name: Install dependencies (macOS)
@@ -327,25 +341,9 @@ jobs:
         run: |
           brew install libusb pkg-config
 
-      - name: Cache scoop packages (Windows)
-        if: matrix.os == 'windows'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: ~\scoop
-          key: ${{ runner.os }}-scoop-pkg-config
-
-      - name: Install dependencies (Windows)
-        if: matrix.os == 'windows'
-        shell: pwsh
-        run: |
-          if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
-            irm get.scoop.sh | iex
-          }
-          scoop install pkg-config
-
       - name: Run native tests (Windows)
         if: matrix.os == 'windows'
-        shell: bash
+        shell: msys2 {0}
         env:
           GOMAXPROCS: 2
         run: |

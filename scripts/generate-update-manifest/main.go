@@ -33,6 +33,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 	"gopkg.in/yaml.v3"
 )
 
@@ -202,7 +203,11 @@ func buildManifestFromAssets(
 
 	assets := make([]*asset, 0, len(releaseAssets))
 	assetID := startAssetID
+	hasInstallableAsset := false
 	for _, releaseAsset := range releaseAssets {
+		if isUpdateArchive(releaseAsset.Name) {
+			hasInstallableAsset = true
+		}
 		assetID++
 		assets = append(assets, &asset{
 			ID:   assetID,
@@ -212,7 +217,7 @@ func buildManifestFromAssets(
 		})
 	}
 
-	if len(assets) == 0 {
+	if !hasInstallableAsset {
 		return nil, errNoAssets
 	}
 	if publishedAt.IsZero() {
@@ -244,8 +249,8 @@ func buildManifestFromAssets(
 	}, nil
 }
 
-func loadGithubRelease(path string) (*githubRelease, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // Path from CLI flag, not user input
+func loadGithubRelease(fs afero.Fs, path string) (*githubRelease, error) {
+	data, err := afero.ReadFile(fs, path)
 	if err != nil {
 		return nil, fmt.Errorf("reading GitHub release metadata: %w", err)
 	}
@@ -263,7 +268,7 @@ func isUpdateArchive(name string) bool {
 		(strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".zip"))
 }
 
-func assetsFromGithubRelease(release *githubRelease, metadataDir string) ([]releaseAsset, error) {
+func assetsFromGithubRelease(fs afero.Fs, release *githubRelease, metadataDir string) ([]releaseAsset, error) {
 	assets := make([]releaseAsset, 0, len(release.Assets)+2)
 	for _, githubAsset := range release.Assets {
 		if !isUpdateArchive(githubAsset.Name) {
@@ -277,7 +282,7 @@ func assetsFromGithubRelease(release *githubRelease, metadataDir string) ([]rele
 
 	metadataFiles := []string{"checksums.txt", "checksums.txt.sig"}
 	for _, name := range metadataFiles {
-		info, err := os.Stat(filepath.Join(metadataDir, name))
+		info, err := fs.Stat(filepath.Join(metadataDir, name))
 		if err != nil {
 			return nil, fmt.Errorf("reading metadata asset %s: %w", name, err)
 		}
@@ -324,9 +329,14 @@ func main() {
 	merge := flag.String("merge", "", "path to existing manifest to merge into")
 	flag.Parse()
 
+	fs := afero.NewOsFs()
+
 	if *version == "" || (*assetsDir == "" && *githubReleasePath == "") {
 		log.Fatal().Msg("usage: generate-update-manifest --version <tag> --assets-dir <dir> " +
 			"[--github-release <path> --metadata-dir <dir>] [--output <path>] [--prerelease] [--merge <path>]")
+	}
+	if *assetsDir != "" && *githubReleasePath != "" {
+		log.Fatal().Msg("--assets-dir and --github-release are mutually exclusive")
 	}
 	if *githubReleasePath != "" && *metadataDir == "" {
 		log.Fatal().Msg("--metadata-dir is required with --github-release")
@@ -345,7 +355,7 @@ func main() {
 	var m *manifest
 	var err error
 	if *githubReleasePath != "" {
-		release, loadErr := loadGithubRelease(*githubReleasePath)
+		release, loadErr := loadGithubRelease(fs, *githubReleasePath)
 		if loadErr != nil {
 			log.Fatal().Err(loadErr).Msg("error loading GitHub release metadata")
 		}
@@ -355,7 +365,7 @@ func main() {
 				Str("version", *version).
 				Msg("GitHub release metadata tag mismatch")
 		}
-		assets, assetsErr := assetsFromGithubRelease(release, *metadataDir)
+		assets, assetsErr := assetsFromGithubRelease(fs, release, *metadataDir)
 		if assetsErr != nil {
 			log.Fatal().Err(assetsErr).Msg("error loading GitHub release assets")
 		}

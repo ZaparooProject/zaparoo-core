@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -118,7 +119,7 @@ func TestBuildManifestFromGithubRelease(t *testing.T) {
 		},
 	}
 
-	assets, err := assetsFromGithubRelease(release, dir)
+	assets, err := assetsFromGithubRelease(afero.NewOsFs(), release, dir)
 	require.NoError(t, err)
 	m, err := buildManifestFromAssets("v2.11.0", release.URL, release.PublishedAt, "notes", false, assets, nil)
 	require.NoError(t, err)
@@ -145,20 +146,45 @@ func TestBuildManifestFromGithubRelease(t *testing.T) {
 func TestLoadGithubRelease(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	releasePath := filepath.Join(dir, "release.json")
+	fs := afero.NewMemMapFs()
+	releasePath := "release.json"
 	release := githubRelease{
 		TagName: "v1.0.0",
 		Assets:  []githubAsset{{Name: "zaparoo-linux_amd64-1.0.0.tar.gz", URL: "https://example.com/asset", Size: 100}},
 	}
 	data, err := json.Marshal(release)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(releasePath, data, 0o600))
+	require.NoError(t, afero.WriteFile(fs, releasePath, data, 0o600))
 
-	loaded, err := loadGithubRelease(releasePath)
+	loaded, err := loadGithubRelease(fs, releasePath)
 	require.NoError(t, err)
 	assert.Equal(t, "v1.0.0", loaded.TagName)
 	require.Len(t, loaded.Assets, 1)
+}
+
+func TestBuildManifest_OnlyMetadataFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	createAssetFile(t, dir, "checksums.txt", 256)
+	createAssetFile(t, dir, "checksums.txt.sig", 64)
+
+	m, err := buildManifest("v1.0.0", dir, "", false, nil)
+	require.ErrorIs(t, err, errNoAssets)
+	assert.Nil(t, m)
+}
+
+func TestBuildManifestFromAssets_OnlyMetadataFiles(t *testing.T) {
+	t.Parallel()
+
+	assets := []releaseAsset{
+		{Name: "checksums.txt", URL: "checksums.txt", Size: 256},
+		{Name: "checksums.txt.sig", URL: "checksums.txt.sig", Size: 64},
+	}
+
+	m, err := buildManifestFromAssets("v1.0.0", "", time.Time{}, "", false, assets, nil)
+	require.ErrorIs(t, err, errNoAssets)
+	assert.Nil(t, m)
 }
 
 func TestBuildManifest_SkipsNonAssetFiles(t *testing.T) {

@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	selfupdate "github.com/creativeprojects/go-selfupdate"
 )
@@ -32,6 +33,8 @@ type validationChainHTTPSource struct {
 	source    selfupdate.Source
 	transport *http.Transport
 }
+
+const validationAssetDownloadTimeout = 30 * time.Second
 
 func (s *validationChainHTTPSource) ListReleases(
 	ctx context.Context,
@@ -76,7 +79,10 @@ func (s *validationChainHTTPSource) downloadURL(ctx context.Context, url string)
 		return nil, selfupdate.ErrAssetNotFound
 	}
 
-	client := &http.Client{Transport: s.transport}
+	client := &http.Client{Timeout: validationAssetDownloadTimeout}
+	if s.transport != nil {
+		client.Transport = s.transport
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("creating validation asset request: %w", err)

@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -38,14 +39,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type stubSource struct{}
+type stubSource struct {
+	data string
+}
 
 func (stubSource) ListReleases(context.Context, selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
 	return nil, nil
 }
 
-func (stubSource) DownloadReleaseAsset(context.Context, *selfupdate.Release, int64) (io.ReadCloser, error) {
-	return nil, selfupdate.ErrAssetNotFound
+func (s stubSource) DownloadReleaseAsset(context.Context, *selfupdate.Release, int64) (io.ReadCloser, error) {
+	if s.data == "" {
+		return nil, selfupdate.ErrAssetNotFound
+	}
+
+	return io.NopCloser(strings.NewReader(s.data)), nil
 }
 
 func TestCheck_DevelopmentVersion(t *testing.T) {
@@ -255,26 +262,7 @@ func TestValidationChainHTTPSource_DownloadsNestedValidationAsset(t *testing.T) 
 		source:    stubSource{},
 		transport: http.DefaultTransport.(*http.Transport).Clone(),
 	}
-	release := &selfupdate.Release{
-		AssetID:           1,
-		ValidationAssetID: 2,
-		//nolint:govet // Field order is fixed by go-selfupdate's exported Release type.
-		ValidationChain: []struct {
-			ValidationAssetID                       int64
-			ValidationAssetName, ValidationAssetURL string
-		}{
-			{
-				ValidationAssetID:   2,
-				ValidationAssetName: "checksums.txt",
-				ValidationAssetURL:  server.URL + "/checksums.txt",
-			},
-			{
-				ValidationAssetID:   3,
-				ValidationAssetName: "checksums.txt.sig",
-				ValidationAssetURL:  server.URL + "/checksums.txt.sig",
-			},
-		},
-	}
+	release := testValidationChainRelease(server.URL)
 
 	reader, err := source.DownloadReleaseAsset(t.Context(), release, 3)
 	require.NoError(t, err)
@@ -285,4 +273,106 @@ func TestValidationChainHTTPSource_DownloadsNestedValidationAsset(t *testing.T) 
 	data, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("signature"), data)
+}
+
+func TestValidationChainHTTPSource_DownloadReleaseAssetBranches(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil release returns error", func(t *testing.T) {
+		t.Parallel()
+
+		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
+		reader, err := source.DownloadReleaseAsset(t.Context(), nil, 1)
+		require.ErrorIs(t, err, selfupdate.ErrInvalidRelease)
+		assert.Nil(t, reader)
+	})
+
+	t.Run("delegates primary asset", func(t *testing.T) {
+		t.Parallel()
+
+		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
+		reader, err := source.DownloadReleaseAsset(t.Context(), testValidationChainRelease(""), 1)
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, reader.Close())
+		}()
+
+		data, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		assert.Equal(t, "primary", string(data))
+	})
+
+	t.Run("delegates first validation asset", func(t *testing.T) {
+		t.Parallel()
+
+		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
+		reader, err := source.DownloadReleaseAsset(t.Context(), testValidationChainRelease(""), 2)
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, reader.Close())
+		}()
+
+		data, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		assert.Equal(t, "primary", string(data))
+	})
+
+	t.Run("unknown asset returns error", func(t *testing.T) {
+		t.Parallel()
+
+		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
+		reader, err := source.DownloadReleaseAsset(t.Context(), testValidationChainRelease(""), 99)
+		require.ErrorIs(t, err, selfupdate.ErrAssetNotFound)
+		assert.Nil(t, reader)
+	})
+
+	t.Run("empty nested validation URL returns error", func(t *testing.T) {
+		t.Parallel()
+
+		source := &validationChainHTTPSource{source: stubSource{data: "primary"}}
+		release := testValidationChainRelease("")
+		release.ValidationChain[1].ValidationAssetURL = ""
+		reader, err := source.DownloadReleaseAsset(t.Context(), release, 3)
+		require.ErrorIs(t, err, selfupdate.ErrAssetNotFound)
+		assert.Nil(t, reader)
+	})
+
+	t.Run("non-OK nested validation response returns error", func(t *testing.T) {
+		t.Parallel()
+
+		server := httptest.NewServer(http.NotFoundHandler())
+		t.Cleanup(server.Close)
+
+		source := &validationChainHTTPSource{
+			source:    stubSource{data: "primary"},
+			transport: http.DefaultTransport.(*http.Transport).Clone(),
+		}
+		reader, err := source.DownloadReleaseAsset(t.Context(), testValidationChainRelease(server.URL), 3)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "status code 404")
+		assert.Nil(t, reader)
+	})
+}
+
+func testValidationChainRelease(serverURL string) *selfupdate.Release {
+	return &selfupdate.Release{
+		AssetID:           1,
+		ValidationAssetID: 2,
+		//nolint:govet // Field order is fixed by go-selfupdate's exported Release type.
+		ValidationChain: []struct {
+			ValidationAssetID                       int64
+			ValidationAssetName, ValidationAssetURL string
+		}{
+			{
+				ValidationAssetID:   2,
+				ValidationAssetName: "checksums.txt",
+				ValidationAssetURL:  serverURL + "/checksums.txt",
+			},
+			{
+				ValidationAssetID:   3,
+				ValidationAssetName: "checksums.txt.sig",
+				ValidationAssetURL:  serverURL + "/checksums.txt.sig",
+			},
+		},
+	}
 }
