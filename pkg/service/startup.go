@@ -24,7 +24,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -36,11 +35,16 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const zapLinkHostExpiration = 30 * 24 * time.Hour
 
 func setupEnvironment(pl platforms.Platform) error {
+	return setupEnvironmentFS(afero.NewOsFs(), pl)
+}
+
+func setupEnvironmentFS(fs afero.Fs, pl platforms.Platform) error {
 	if _, ok := helpers.HasUserDir(); ok {
 		log.Info().Msg("using 'user' directory for storage")
 	}
@@ -56,7 +60,7 @@ func setupEnvironment(pl platforms.Platform) error {
 		filepath.Join(helpers.DataDir(pl), config.MediaDir),
 	}
 	for _, dir := range dirs {
-		err := os.MkdirAll(dir, 0o750)
+		err := fs.MkdirAll(dir, 0o750)
 		if err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
@@ -70,12 +74,19 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		MediaDB: nil,
 		UserDB:  nil,
 	}
+	success := false
+	defer func() {
+		if !success {
+			closeDatabase(db)
+		}
+	}()
 
 	log.Debug().Msg("opening media database")
 	mediaDB, err := mediadb.OpenMediaDB(ctx, pl)
 	if err != nil {
 		return db, fmt.Errorf("failed to open media database: %w", err)
 	}
+	db.MediaDB = mediaDB
 
 	log.Debug().Msg("running media database migrations")
 	err = mediaDB.MigrateUp()
@@ -83,21 +94,18 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		return db, fmt.Errorf("error migrating mediadb: %w", err)
 	}
 
-	db.MediaDB = mediaDB
-
 	log.Debug().Msg("opening user database")
 	userDB, err := userdb.OpenUserDB(ctx, pl)
 	if err != nil {
 		return db, fmt.Errorf("failed to open user database: %w", err)
 	}
+	db.UserDB = userDB
 
 	log.Debug().Msg("running user database migrations")
 	err = userDB.MigrateUp()
 	if err != nil {
 		return db, fmt.Errorf("error migrating userdb: %w", err)
 	}
-
-	db.UserDB = userDB
 
 	// migrate old boltdb mappings if required
 	log.Debug().Msg("checking for boltdb migration")
@@ -106,6 +114,7 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		log.Error().Err(err).Msg("error migrating old boltdb mappings")
 	}
 
+	success = true
 	return db, nil
 }
 

@@ -237,7 +237,7 @@ func Start(
 
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)
-	activePublishers, cancelPublisherFanOut := startPublishers(st, cfg, publisherNotifications)
+	activePublishers, cancelPublisherFanOut, publisherFanOutDone := startPublishers(st, cfg, publisherNotifications)
 
 	// Start media history tracking
 	log.Info().Msg("starting media history listener")
@@ -298,6 +298,7 @@ func Start(
 
 		discoveryService.Stop()
 		cancelPublisherFanOut()
+		<-publisherFanOutDone
 		for _, publisher := range activePublishers {
 			publisher.Stop()
 		}

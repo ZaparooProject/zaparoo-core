@@ -45,41 +45,52 @@ func monitorClockAndHealTimestamps(ctx context.Context, db *database.Database, b
 		select {
 		case <-ticker.C:
 			now := time.Now()
-			isReliable := helpers.IsClockReliable(now)
-
-			// Detect transition from unreliable → reliable (NTP sync event)
-			if !wasReliable && isReliable && !healed {
-				log.Info().Msg("clock became reliable (NTP sync detected), healing timestamps")
-
-				// Calculate true boot time: Current Time - System Uptime
-				systemUptime, err := uptime.Get()
-				if err != nil {
-					log.Error().Err(err).Msg("failed to get system uptime for timestamp healing")
-					wasReliable = isReliable
-					continue
-				}
-
-				trueBootTime := now.Add(-systemUptime)
-				log.Info().
-					Time("true_boot_time", trueBootTime).
-					Dur("uptime", systemUptime).
-					Msg("calculated true boot time")
-
-				// Heal all timestamps for this boot session
-				rowsHealed, healErr := db.UserDB.HealTimestamps(bootUUID, trueBootTime)
-				if healErr != nil {
-					log.Error().Err(healErr).Msg("failed to heal timestamps")
-				} else if rowsHealed > 0 {
-					log.Info().Int64("rows", rowsHealed).Msg("successfully healed timestamps")
-				}
-
-				healed = true
-			}
-
-			wasReliable = isReliable
+			healed = healTimestampsIfClockReliable(db, bootUUID, now, wasReliable, healed)
+			wasReliable = helpers.IsClockReliable(now)
 
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+func healTimestampsIfClockReliable(
+	db *database.Database,
+	bootUUID string,
+	now time.Time,
+	wasReliable bool,
+	healed bool,
+) bool {
+	isReliable := helpers.IsClockReliable(now)
+	if !isReliable || healed {
+		return healed
+	}
+
+	log.Info().
+		Bool("was_reliable", wasReliable).
+		Msg("clock is reliable, healing timestamps")
+
+	// Calculate true boot time: Current Time - System Uptime
+	systemUptime, err := uptime.Get()
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get system uptime for timestamp healing")
+		return healed
+	}
+
+	trueBootTime := now.Add(-systemUptime)
+	log.Info().
+		Time("true_boot_time", trueBootTime).
+		Dur("uptime", systemUptime).
+		Msg("calculated true boot time")
+
+	// Heal all timestamps for this boot session
+	rowsHealed, healErr := db.UserDB.HealTimestamps(bootUUID, trueBootTime)
+	if healErr != nil {
+		log.Error().Err(healErr).Msg("failed to heal timestamps")
+	} else if rowsHealed > 0 {
+		log.Info().Int64("rows", rowsHealed).Msg("successfully healed timestamps")
+		return true
+	}
+
+	return healed
 }

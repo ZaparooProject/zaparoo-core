@@ -23,6 +23,8 @@ package service
 
 import (
 	"context"
+	"net/url"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -37,7 +39,7 @@ func startPublishers(
 	st *state.State,
 	cfg *config.Instance,
 	notifChan <-chan models.Notification,
-) ([]publishers.Publisher, context.CancelFunc) {
+) ([]publishers.Publisher, context.CancelFunc, <-chan struct{}) {
 	activePublishers := make([]publishers.Publisher, 0)
 
 	mqttConfigs := cfg.GetMQTTPublishers()
@@ -48,11 +50,12 @@ func startPublishers(
 				continue
 			}
 
-			log.Info().Msgf("starting MQTT publisher: %s (topic: %s)", mqttCfg.Broker, mqttCfg.Topic)
+			redactedBroker := redactBroker(mqttCfg.Broker)
+			log.Info().Msgf("starting MQTT publisher: %s (topic: %s)", redactedBroker, mqttCfg.Topic)
 
 			publisher := publishers.NewMQTTPublisher(mqttCfg.Broker, mqttCfg.Topic, mqttCfg.Filter)
 			if err := publisher.Start(st.GetContext()); err != nil {
-				log.Error().Err(err).Msgf("failed to start MQTT publisher for %s", mqttCfg.Broker)
+				log.Error().Err(err).Msgf("failed to start MQTT publisher for %s", redactedBroker)
 				continue
 			}
 
@@ -86,7 +89,9 @@ func startPublishers(
 	// The notifChan MUST be consumed or it will fill up and block the notification system.
 	// If there are no publishers, notifications are simply discarded after being consumed.
 	ctx, cancel := context.WithCancel(st.GetContext()) //nolint:gosec // G118: cancel returned to caller
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for {
 			select {
 			case <-ctx.Done():
@@ -109,5 +114,27 @@ func startPublishers(
 		}
 	}()
 
-	return activePublishers, cancel
+	return activePublishers, cancel, done
+}
+
+func redactBroker(broker string) string {
+	if broker == "" {
+		return broker
+	}
+
+	if strings.Contains(broker, "://") {
+		parsed, err := url.Parse(broker)
+		if err == nil && parsed.Host != "" {
+			if parsed.Scheme != "" {
+				return parsed.Scheme + "://" + parsed.Host
+			}
+			return parsed.Host
+		}
+	}
+
+	if at := strings.LastIndex(broker, "@"); at >= 0 && at+1 < len(broker) {
+		return broker[at+1:]
+	}
+
+	return broker
 }

@@ -22,19 +22,23 @@ package service
 import (
 	"context"
 	"net"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -79,6 +83,81 @@ func TestStartReturnsErrorWhenAPIPortIsOccupied(t *testing.T) {
 		t, "StartPost", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	)
 	mockPlatform.AssertCalled(t, "Stop")
+}
+
+func TestSetupEnvironmentFS_CreatesPlatformDirectories(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	mockPlatform := mocks.NewMockPlatform()
+	settings := platforms.Settings{
+		ConfigDir: "/config",
+		DataDir:   "/data",
+		TempDir:   "/tmp",
+	}
+	mockPlatform.On("Settings").Return(settings)
+
+	err := setupEnvironmentFS(fs, mockPlatform)
+	require.NoError(t, err)
+
+	for _, dir := range []string{
+		settings.ConfigDir,
+		settings.TempDir,
+		settings.DataDir,
+		filepath.Join(settings.DataDir, config.MappingsDir),
+		filepath.Join(settings.DataDir, config.AssetsDir),
+		filepath.Join(settings.DataDir, config.LaunchersDir),
+		filepath.Join(settings.DataDir, config.MediaDir),
+	} {
+		exists, statErr := afero.DirExists(fs, dir)
+		require.NoError(t, statErr)
+		assert.True(t, exists, "expected %s to exist", dir)
+	}
+}
+
+func TestCleanupHistoryRetention_CleansConfiguredHistory(t *testing.T) {
+	t.Parallel()
+
+	fs := testhelpers.NewMemoryFS()
+	configDir := t.TempDir()
+	configContent := `
+config_schema = 1
+
+[readers]
+scan_history = 7
+`
+	err := fs.WriteFile(configDir+"/config.toml", []byte(configContent), 0o644)
+	require.NoError(t, err)
+	cfg, err := testhelpers.NewTestConfigWithPort(fs, configDir, 7497)
+	require.NoError(t, err)
+	cfg.SetPlaytimeRetention(14)
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+	mockUserDB.On("CleanupHistory", 7).Return(int64(2), nil).Once()
+	mockUserDB.On("CleanupMediaHistory", 14).Return(int64(3), nil).Once()
+
+	cleanupHistoryRetention(context.Background(), cfg, db)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestCleanupHistoryRetention_CancelledBeforeMediaHistory(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	cfg.SetPlaytimeRetention(14)
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+	ctx, cancel := context.WithCancel(context.Background())
+	mockUserDB.On("CleanupHistory", 30).Run(func(_ mock.Arguments) {
+		cancel()
+	}).Return(int64(1), nil).Once()
+
+	cleanupHistoryRetention(ctx, cfg, db)
+
+	mockUserDB.AssertExpectations(t)
+	mockUserDB.AssertNotCalled(t, "CleanupMediaHistory", mock.Anything)
 }
 
 func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
@@ -327,6 +406,44 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 	mockMediaDB.AssertNotCalled(t, "GetOptimizationStatus")
 }
 
+func TestCheckAndResumeOptimization_RunningStatus(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	db := &database.Database{MediaDB: mockMediaDB}
+	pauser := syncutil.NewPauser()
+	notifChan := make(chan models.Notification, 1)
+	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, pauser).Run(func(args mock.Arguments) {
+		callback, ok := args.Get(0).(func(bool))
+		require.True(t, ok)
+		callback(true)
+	}).Once()
+
+	checkAndResumeOptimization(db, notifChan, pauser)
+
+	mockMediaDB.AssertExpectations(t)
+	select {
+	case notif := <-notifChan:
+		assert.Equal(t, models.NotificationMediaIndexing, notif.Method)
+	case <-time.After(time.Second):
+		t.Fatal("expected optimization status notification")
+	}
+}
+
+func TestCheckAndResumeOptimization_CompletedStatus(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	db := &database.Database{MediaDB: mockMediaDB}
+	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+
+	checkAndResumeOptimization(db, make(chan models.Notification, 1), nil)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "RunBackgroundOptimization", mock.Anything, mock.Anything)
+}
+
 func TestStartPublishers_NoPublishers(t *testing.T) {
 	t.Parallel()
 
@@ -338,10 +455,57 @@ func TestStartPublishers_NoPublishers(t *testing.T) {
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	notifChan := make(chan models.Notification)
 
-	publishers, cancel := startPublishers(st, cfg, notifChan)
-	defer cancel()
+	publishers, cancel, done := startPublishers(st, cfg, notifChan)
+	defer func() {
+		cancel()
+		<-done
+	}()
 
 	assert.Empty(t, publishers, "should return empty slice when no publishers configured")
+}
+
+func TestStartPublishers_DrainsNotificationsWithoutPublishers(t *testing.T) {
+	t.Parallel()
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	notifChan := make(chan models.Notification)
+
+	publishers, cancel, done := startPublishers(st, cfg, notifChan)
+	require.Empty(t, publishers)
+
+	select {
+	case notifChan <- models.Notification{Method: models.NotificationStarted}:
+	case <-time.After(time.Second):
+		t.Fatal("notification channel was not drained")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("publisher fan-out did not stop after cancellation")
+	}
+}
+
+func TestRunMediaDBStartupMaintenance_CancelledSkipsTagCacheWarmup(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	mockMediaDB.On("TrackBackgroundOperation").Once()
+	mockMediaDB.On("UnsafeGetSQLDb").Return(nil).Once()
+	mockMediaDB.On("BackgroundOperationDone").Once()
+
+	runMediaDBStartupMaintenance(ctx, mockMediaDB)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "RebuildTagCache")
 }
 
 func TestStartPublishers_DisabledPublisher(t *testing.T) {
@@ -372,8 +536,11 @@ topic = "zaparoo/events"
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	notifChan := make(chan models.Notification)
 
-	publishers, cancel := startPublishers(st, cfg, notifChan)
-	defer cancel()
+	publishers, cancel, done := startPublishers(st, cfg, notifChan)
+	defer func() {
+		cancel()
+		<-done
+	}()
 
 	assert.Empty(t, publishers, "should skip disabled publishers")
 }
@@ -405,8 +572,11 @@ topic = "zaparoo/events"
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	notifChan := make(chan models.Notification)
 
-	publishers, cancel := startPublishers(st, cfg, notifChan)
-	defer cancel()
+	publishers, cancel, done := startPublishers(st, cfg, notifChan)
+	defer func() {
+		cancel()
+		<-done
+	}()
 	defer st.StopService() // cancel state context to stop publisher retry goroutines
 
 	// Connection failures now retry in background instead of being skipped,
@@ -441,12 +611,23 @@ topic = "zaparoo/events"
 	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	notifChan := make(chan models.Notification)
 
-	publishers, cancel := startPublishers(st, cfg, notifChan)
-	defer cancel()
+	publishers, cancel, done := startPublishers(st, cfg, notifChan)
+	defer func() {
+		cancel()
+		<-done
+	}()
 	defer st.StopService()
 
 	// Config validation errors (empty broker) should still cause the publisher to be skipped
 	assert.Empty(t, publishers, "empty broker should be skipped (config validation error)")
+}
+
+func TestRedactBroker(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "mqtt://broker.example:1883", redactBroker("mqtt://user:pass@broker.example:1883"))
+	assert.Equal(t, "broker.example:1883", redactBroker("user:pass@broker.example:1883"))
+	assert.Equal(t, "broker.example:1883", redactBroker("broker.example:1883"))
 }
 
 func TestPruneExpiredZapLinkHosts_Success(t *testing.T) {

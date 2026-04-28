@@ -45,6 +45,7 @@ type mediaHistoryTracker struct {
 	st                        *state.State
 	db                        *database.Database
 	currentHistoryDBID        int64
+	closingHistoryDBID        int64
 	mu                        syncutil.RWMutex
 }
 
@@ -114,9 +115,9 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 			dbid := t.currentHistoryDBID
 			startTime := t.currentMediaStartTime
 			startTimeMono := t.currentMediaStartTimeMono
-			t.currentHistoryDBID = 0
-			t.currentMediaStartTime = time.Time{}
-			t.currentMediaStartTimeMono = time.Time{}
+			if dbid != 0 {
+				t.closingHistoryDBID = dbid
+			}
 			t.mu.Unlock()
 
 			if dbid != 0 {
@@ -136,7 +137,22 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 				closeErr := t.db.UserDB.CloseMediaHistory(dbid, endTime, playTime)
 				if closeErr != nil {
 					log.Error().Err(closeErr).Int64("dbid", dbid).Msg("failed to close media history entry")
+					t.mu.Lock()
+					if t.closingHistoryDBID == dbid {
+						t.closingHistoryDBID = 0
+					}
+					t.mu.Unlock()
 				} else {
+					t.mu.Lock()
+					if t.currentHistoryDBID == dbid {
+						t.currentHistoryDBID = 0
+						t.currentMediaStartTime = time.Time{}
+						t.currentMediaStartTimeMono = time.Time{}
+					}
+					if t.closingHistoryDBID == dbid {
+						t.closingHistoryDBID = 0
+					}
+					t.mu.Unlock()
 					log.Debug().Int64("dbid", dbid).Int("playTime", playTime).Msg("closed media history entry")
 				}
 			}
@@ -155,11 +171,12 @@ func (t *mediaHistoryTracker) updatePlayTime(ctx context.Context) {
 		case <-ticker.Chan():
 			t.mu.RLock()
 			dbid := t.currentHistoryDBID
+			closingDBID := t.closingHistoryDBID
 			startTime := t.currentMediaStartTime
 			startTimeMono := t.currentMediaStartTimeMono
 			t.mu.RUnlock()
 
-			if dbid != 0 {
+			if dbid != 0 && dbid != closingDBID {
 				// Calculate duration - prefer monotonic if available, fall back to wall-clock
 				var playTime int
 				switch {
