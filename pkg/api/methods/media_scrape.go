@@ -194,3 +194,18 @@ func HandleMediaScrapeCancel(_ requests.RequestEnv) (any, error) {
 	}
 	return map[string]any{"message": "no scraping operation is currently running"}, nil
 }
+
+// HandleScrapers returns the list of registered scrapers with their IDs and
+// human-readable names.
+//
+//nolint:gocritic // API handler signature; large env param cannot be passed by pointer
+func HandleScrapers(env requests.RequestEnv) (any, error) {
+	infos := make([]models.ScraperInfo, 0, len(env.Scrapers))
+	for _, s := range env.Scrapers {
+		infos = append(infos, models.ScraperInfo{
+			ID:   s.ID(),
+			Name: s.Name(),
+		})
+	}
+	return models.ScrapersResponse{Scrapers: infos}, nil
+}

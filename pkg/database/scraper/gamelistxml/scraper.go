@@ -71,6 +71,11 @@ func (*GamelistXMLScraper) ID() string {
 	return "gamelist.xml"
 }
 
+// Name returns the human-readable display name for this scraper.
+func (*GamelistXMLScraper) Name() string {
+	return "ES gamelist.xml"
+}
+
 // Scrape implements [scraper.Scraper]. It resolves active systems via the
 // injected resolver and delegates to [scraper.RunScraper].
 func (g *GamelistXMLScraper) Scrape(

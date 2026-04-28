@@ -39,6 +39,10 @@ type Scraper interface {
 	// Must be globally unique. Examples: "gamelist.xml", "screenscraper".
 	ID() string
 
+	// Name returns a human-readable display name for the scraper.
+	// Examples: "ES gamelist.xml", "ScreenScraper".
+	Name() string
+
 	// Scrape starts the goroutine and returns a channel of progress updates.
 	// The channel is closed when the goroutine exits (done or cancelled).
 	Scrape(ctx context.Context, opts ScrapeOptions) (<-chan ScrapeUpdate, error)

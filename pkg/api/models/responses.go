@@ -416,6 +416,17 @@ type ReadersResponse struct {
 	Readers []ReaderInfo `json:"readers"`
 }
 
+// ScraperInfo is one entry in the ScrapersResponse list.
+type ScraperInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// ScrapersResponse is the result returned by the "scrapers" RPC method.
+type ScrapersResponse struct {
+	Scrapers []ScraperInfo `json:"scrapers"`
+}
+
 type InboxMessage struct {
 	CreatedAt time.Time `json:"createdAt"`
 	Title     string    `json:"title"`

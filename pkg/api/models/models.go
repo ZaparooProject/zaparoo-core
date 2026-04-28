@@ -66,6 +66,7 @@ const (
 	MethodMediaLookup          = "media.lookup"
 	MethodMediaMeta            = "media.meta"
 	MethodMediaImage           = "media.image"
+	MethodScrapers             = "scrapers"
 	MethodMediaScrape          = "media.scrape"
 	MethodMediaScrapeCancel    = "media.scrape.cancel"
 	MethodMediaBrowse          = "media.browse"

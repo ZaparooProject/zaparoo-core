@@ -350,3 +350,14 @@ Methods added for scraper support in `pkg/database/mediadb/sql_scraper.go`:
 | `GetMediaWithTitleAndSystem(ctx, mediaDBID)` | Single JOIN returning `*MediaFullRow`. Used by `media.image`. |
 | `FindMediaTitlesWithoutSentinel(ctx, systemDBID, sentinelTag)` | For DB-first scrapers. |
 | `FindMediaTitleByDBID(ctx, dbid)` | Convenience lookup. `nil, nil` if not found. |
+
+
+## TODOs
+- Add supported SystemIDs to Scraper interface
+- Fix skipped record feedback in notification
+- Add media.clean.orphans method
+- Add media.clean.truncate method
+
+## App TODOs
+- Fix skipped record feedback in notification
+- Update systems dropdown to filter supported systems
