@@ -556,9 +556,6 @@ func TestSqlCleanupMediaHistory_Success(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
 
-	mock.ExpectExec(`vacuum`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
 	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays)
 	require.NoError(t, err)
 	assert.Equal(t, rowsDeleted, rowsAffected)
@@ -577,8 +574,6 @@ func TestSqlCleanupMediaHistory_NoRowsToDelete(t *testing.T) {
 		ExpectExec().
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	// No VACUUM expected when no rows deleted
 
 	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays)
 	require.NoError(t, err)
@@ -603,30 +598,6 @@ func TestSqlCleanupMediaHistory_DeleteError(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, int64(0), rowsAffected)
 	assert.Contains(t, err.Error(), "failed to execute media history cleanup")
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlCleanupMediaHistory_VacuumError(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	retentionDays := 365
-	rowsDeleted := int64(5)
-
-	mock.ExpectPrepare(`DELETE FROM MediaHistory WHERE StartTime`).
-		ExpectExec().
-		WithArgs(sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
-
-	mock.ExpectExec(`vacuum`).
-		WillReturnError(sqlmock.ErrCancelled)
-
-	rowsAffected, err := sqlCleanupMediaHistory(context.Background(), db, retentionDays)
-	require.Error(t, err)
-	assert.Equal(t, rowsDeleted, rowsAffected)
-	assert.Contains(t, err.Error(), "cleanup succeeded but vacuum failed")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

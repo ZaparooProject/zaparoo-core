@@ -2572,10 +2572,11 @@ func TestMediaDB_UpdateLastGenerated_ClearsSystemTagsCache_Integration(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, 0, cacheRowCount, "UpdateLastGenerated must wipe SystemTagsCache rows")
 
-	// Simulate what OpenMediaDB does on a service restart: RebuildTagCache reads
-	// from SystemTagsCache, which is now empty after UpdateLastGenerated.
+	// Simulate startup tag-cache warmup: RebuildTagCache reads from
+	// SystemTagsCache, which is now empty after UpdateLastGenerated.
 	err = mediaDB.RebuildTagCache()
 	require.NoError(t, err)
+	require.Nil(t, mediaDB.inMemoryTagCache.Load())
 
 	// After the fix: RebuildTagCache stores nil when SQL is empty; GetAllUsedTags
 	// also guards len(allTags)>0, so both empty and nil caches fall through to
