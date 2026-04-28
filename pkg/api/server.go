@@ -217,6 +217,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaTags:           methods.HandleMediaTags,
 		models.MethodMediaActive:         methods.HandleActiveMedia,
 		models.MethodMediaActiveUpdate:   methods.HandleUpdateActiveMedia,
+		models.MethodMediaCleanOrphans:   methods.HandleMediaCleanOrphans,
 		models.MethodMediaHistory:        methods.HandleMediaHistory,
 		models.MethodMediaHistoryTop:     methods.HandleMediaHistoryTop,
 		models.MethodMediaLookup:         methods.HandleMediaLookup,

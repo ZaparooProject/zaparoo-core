@@ -1304,6 +1304,20 @@ func (m *MockMediaDBI) ResetMissingFlags(systemDBIDs []int) error {
 	return nil
 }
 
+func (m *MockMediaDBI) CleanMediaOrphans(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	if id, ok := args.Get(0).(int64); ok {
+		if err := args.Error(1); err != nil {
+			return id, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return id, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
 // Batch insert control methods
 func (m *MockMediaDBI) EnableBatchInserts(enable bool) {
 	m.Called(enable)

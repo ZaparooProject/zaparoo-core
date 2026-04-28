@@ -51,6 +51,19 @@ import (
 
 var ErrNullSQL = errors.New("MediaDB is not connected")
 
+// ErrIndexingInProgress is returned by CleanMediaOrphans when media indexing is
+// currently running or pending; deletions during that window could corrupt
+// in-flight scanner state.
+var ErrIndexingInProgress = errors.New("indexing is in progress")
+
+// ErrOptimizationInProgress is returned by CleanMediaOrphans when background
+// database optimisation is active.
+var ErrOptimizationInProgress = errors.New("background optimisation is in progress")
+
+// ErrTransactionActive is returned by CleanMediaOrphans when a batch
+// transaction is currently open.
+var ErrTransactionActive = errors.New("a transaction is currently active")
+
 // Indexing status constants
 const (
 	IndexingStatusRunning   = "running"
@@ -591,6 +604,67 @@ func (db *MediaDB) Vacuum() error {
 		return ErrNullSQL
 	}
 	return sqlVacuum(db.ctx, db.sql)
+}
+
+// CleanMediaOrphans deletes every Media row where IsMissing=1, together with
+// the associated MediaTags and MediaProperties.  MediaTitles that have no
+// remaining Media rows are also removed, along with their MediaTitleTags and
+// MediaTitleProperties.  Tags that are no longer referenced by any join table
+// are pruned.  A VACUUM is issued afterwards to reclaim disk space.
+//
+// The method returns the count of Media rows deleted.  If no missing rows
+// exist, it returns (0, nil) without touching the database.
+//
+// CleanMediaOrphans refuses to run while media indexing is in progress
+// (status running or pending), while a batch transaction is open, or while
+// background optimisation is active, returning a sentinel error in each case.
+func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
+	if db.sql == nil {
+		return 0, ErrNullSQL
+	}
+
+	// Guard: refuse to run while a batch transaction is open.  An open
+	// transaction means batch inserters may be staging rows that reference the
+	// data we would delete, which would cause FK violations on commit.
+	db.sqlMu.RLock()
+	inTx := db.inTransaction
+	db.sqlMu.RUnlock()
+	if inTx {
+		return 0, ErrTransactionActive
+	}
+
+	// Guard: refuse to run while indexing is in progress.  The scanner marks
+	// rows as IsMissing=1 at the start of a scan and clears the flag as files
+	// are confirmed present; deleting those rows mid-scan would corrupt the
+	// scanner's in-flight state.
+	status, statusErr := db.GetIndexingStatus()
+	if statusErr != nil && !errors.Is(statusErr, sql.ErrNoRows) {
+		return 0, fmt.Errorf("failed to check indexing status: %w", statusErr)
+	}
+	if status == IndexingStatusRunning || status == IndexingStatusPending {
+		return 0, fmt.Errorf("%w (status: %s)", ErrIndexingInProgress, status)
+	}
+
+	// Guard: refuse to run while background optimisation is active, since it
+	// may be building indexes over the same tables.
+	if db.isOptimizing.Load() {
+		return 0, ErrOptimizationInProgress
+	}
+
+	deleted, err := sqlCleanMediaOrphans(ctx, db.sql)
+	if err != nil {
+		return 0, err
+	}
+
+	if deleted > 0 {
+		db.invalidateCaches(invalidationScope{AllSystems: true})
+
+		if vacErr := sqlVacuum(ctx, db.sql); vacErr != nil {
+			log.Warn().Err(vacErr).Msg("failed to vacuum database after orphan cleanup")
+		}
+	}
+
+	return deleted, nil
 }
 
 func (db *MediaDB) Close() error {

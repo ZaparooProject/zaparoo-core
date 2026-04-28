@@ -532,6 +532,17 @@ type MediaDBI interface {
 	BulkSetMediaMissing(dbids map[int]struct{}) error
 	ResetMissingFlags(systemDBIDs []int) error
 
+	// CleanMediaOrphans removes Media rows where IsMissing=1 together with
+	// their associated MediaTags and MediaProperties.  MediaTitles that are
+	// no longer referenced by any Media row are also removed (including their
+	// MediaTitleTags and MediaTitleProperties).  Tags unreferenced by any join
+	// table are pruned.  A VACUUM is issued on success.
+	//
+	// Returns the count of Media rows deleted, or one of ErrIndexingInProgress,
+	// ErrOptimizationInProgress, or ErrTransactionActive when the operation
+	// cannot safely run.
+	CleanMediaOrphans(ctx context.Context) (int64, error)
+
 	// GetMax*ID methods for resume functionality
 	GetMaxSystemID() (int64, error)
 	GetMaxTitleID() (int64, error)

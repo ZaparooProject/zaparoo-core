@@ -380,6 +380,10 @@ type HealthCheckResponse struct {
 	Status string `json:"status"`
 }
 
+type MediaCleanOrphansResponse struct {
+	Deleted int64 `json:"deleted"`
+}
+
 type MediaResponse struct {
 	Database IndexingStatusResponse `json:"database"`
 	Active   []ActiveMediaResponse  `json:"active"`
