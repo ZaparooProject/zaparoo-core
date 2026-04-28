@@ -22,8 +22,11 @@ package api
 import (
 	"bytes"
 	"crypto/hkdf"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -930,4 +933,134 @@ func TestCleanupExpired_RemovesExpiredPIN(t *testing.T) {
 
 	pin, _ := h.mgr.PendingPIN()
 	assert.Empty(t, pin)
+}
+
+// TestKAT_PairingHMAC_TranscriptStructure pins the LP-encoded transcript
+// from docs/api/encryption.md:
+//
+//	LP("zaparoo-v1") || LP("p256") || LP(role) || LP(name) || LP(MsgA) || LP(MsgB)
+//
+// where LP(x) = 4-byte BE uint32 length || x. If a future edit reorders
+// fields, drops one, or changes the LP encoding, this test fails.
+func TestKAT_PairingHMAC_TranscriptStructure(t *testing.T) {
+	t.Parallel()
+
+	key := bytes.Repeat([]byte{0xAB}, sha256.Size)
+	const role = "client"
+	const name = "Test App"
+	msgA := []byte(`{"role":0,"ux":"1","uy":"2","vx":"3","vy":"4","xx":"5","xy":"6","yx":"0","yy":"0"}`)
+	msgB := []byte(`{"role":1,"ux":"1","uy":"2","vx":"3","vy":"4","xx":"7","xy":"8","yx":"9","yy":"10"}`)
+
+	got := computePairingHMAC(key, role, name, msgA, msgB)
+
+	// Independent reconstruction directly from the spec text.
+	h := hmac.New(sha256.New, key)
+	for _, b := range [][]byte{
+		[]byte("zaparoo-v1"),
+		[]byte("p256"),
+		[]byte(role),
+		[]byte(name),
+		msgA,
+		msgB,
+	} {
+		var lp [4]byte
+		//nolint:gosec // bounded test inputs
+		binary.BigEndian.PutUint32(lp[:], uint32(len(b)))
+		_, _ = h.Write(lp[:])
+		_, _ = h.Write(b)
+	}
+	want := h.Sum(nil)
+
+	assert.Equal(t, want, got,
+		"HMAC must equal hmac(key, LP('zaparoo-v1') || LP('p256') || LP(role) || LP(name) || LP(MsgA) || LP(MsgB))")
+}
+
+// TestKAT_PairingHMAC_FrozenVector locks the HMAC output to a fixed hex
+// string. Acts as a cross-language test vector that JS/Swift/Kotlin
+// clients can copy verbatim to verify their own HMAC implementation.
+//
+// Bootstrap: on first run the placeholder constants are kept; the test
+// logs the actual hex via t.Logf without asserting. Replace the
+// placeholders with the logged hex to lock the vector. After that, any
+// change to the transcript format makes the test fail.
+func TestKAT_PairingHMAC_FrozenVector(t *testing.T) {
+	t.Parallel()
+
+	key := []byte("0123456789abcdef0123456789abcdef") // 32 ASCII bytes
+	const name = "vectors"
+	msgA := []byte("AAAA")
+	msgB := []byte("BBBBBBBB")
+
+	clientHMAC := computePairingHMAC(key, "client", name, msgA, msgB)
+	serverHMAC := computePairingHMAC(key, "server", name, msgA, msgB)
+
+	// Frozen vectors — copy verbatim into JS/Swift/Kotlin client tests to
+	// verify their HMAC implementation matches the server.
+	const expectedClientHex = "8115121a13e707846e9957bfbb556dead52fd0952911a9c437a19a98e9b4a24d"
+	const expectedServerHex = "20a62cf030b6de31ccbd094dc9bb03fbeb1e7f028a37e0206c2885bd594252c3"
+
+	assert.Equal(t, expectedClientHex, hex.EncodeToString(clientHMAC),
+		"frozen client HMAC vector — protocol break if this changes")
+	assert.Equal(t, expectedServerHex, hex.EncodeToString(serverHMAC),
+		"frozen server HMAC vector — protocol break if this changes")
+	assert.NotEqual(t, expectedClientHex, expectedServerHex,
+		"client and server HMACs must differ (different role labels)")
+}
+
+// TestPairFinish_PINExhaustionInvalidatesOtherInFlightSessions checks the
+// multi-session case: if one client exhausts the PIN's attempts, another
+// client's in-flight session under the same PIN becomes unusable too.
+// TestMaxAttempts_PINInvalidatedAfterExhaustion only covers single-session
+// exhaustion — this pins the cross-session blast radius.
+func TestPairFinish_PINExhaustionInvalidatesOtherInFlightSessions(t *testing.T) {
+	t.Parallel()
+	// maxAttempts=1: a single wrong HMAC exhausts the PIN. Each finishSession
+	// call deletes its own session before incrementing pinAttempts, so a
+	// loop on one session would just hit ErrPairingSessionUnknown — we need
+	// exhaustion to land on a *different* session's lookup to demonstrate
+	// the cross-session blast radius.
+	h := newPairingHarness(t, WithPairingMaxAttempts(1))
+
+	pin, _, err := h.mgr.StartPairing()
+	require.NoError(t, err)
+
+	// Client A starts a session.
+	clientAPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
+	require.NoError(t, err)
+	msgABytesA, err := crypto.EncodePakeMessage(clientAPake.Bytes())
+	require.NoError(t, err)
+	sessionA, _, err := h.mgr.startSession("Client A", msgABytesA)
+	require.NoError(t, err)
+
+	// Client B starts a second session under the same PIN.
+	clientBPake, err := pake.InitCurve([]byte(pin), 0, pairingCurve)
+	require.NoError(t, err)
+	msgABytesB, err := crypto.EncodePakeMessage(clientBPake.Bytes())
+	require.NoError(t, err)
+	sessionB, msgBBytesB, err := h.mgr.startSession("Client B", msgABytesB)
+	require.NoError(t, err)
+
+	// Drive client B to a CORRECT HMAC so we know its session would have
+	// otherwise succeeded.
+	msgBInternal, err := crypto.DecodePakeMessage(msgBBytesB)
+	require.NoError(t, err)
+	require.NoError(t, clientBPake.Update(msgBInternal))
+	clientBSessionKey, err := clientBPake.SessionKey()
+	require.NoError(t, err)
+	salt := slices.Concat(msgABytesB, msgBBytesB)
+	prk, err := hkdf.Extract(sha256.New, clientBSessionKey, salt)
+	require.NoError(t, err)
+	confirmKeyA, err := hkdf.Expand(sha256.New, prk, pairingInfoConfirmA, sha256.Size)
+	require.NoError(t, err)
+	correctHMACForB := computePairingHMAC(confirmKeyA, "client", "Client B", msgABytesB, msgBBytesB)
+
+	// One wrong attempt exhausts the PIN and wipes all sessions.
+	_, err = h.mgr.finishSession(sessionA, []byte("wrong hmac"))
+	require.ErrorIs(t, err, errPairingExhausted)
+
+	// Client B's CORRECT HMAC must now fail — the manager wiped sessions
+	// when the PIN was invalidated, so the lookup misses.
+	_, err = h.mgr.finishSession(sessionB, correctHMACForB)
+	require.ErrorIs(t, err, errPairingSessionUnknown,
+		"B's session must be wiped when A exhausts the PIN")
 }
