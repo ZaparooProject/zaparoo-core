@@ -2060,6 +2060,145 @@ func (m *MockMediaDBI) PopulateBrowseCache(
 	return nil
 }
 
+// --- Scraper support methods ---
+
+func (m *MockMediaDBI) FindMediaBySystemAndPath(
+	ctx context.Context, systemDBID int64, path string,
+) (*database.Media, error) {
+	args := m.Called(ctx, systemDBID, path)
+	if result, ok := args.Get(0).(*database.Media); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) FindMediaBySystemAndPathFold(
+	ctx context.Context, systemDBID int64, path string,
+) (*database.Media, error) {
+	args := m.Called(ctx, systemDBID, path)
+	if result, ok := args.Get(0).(*database.Media); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) MediaHasTag(ctx context.Context, mediaDBID int64, tagValue string) (bool, error) {
+	args := m.Called(ctx, mediaDBID, tagValue)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) UpsertMediaTags(ctx context.Context, mediaDBID int64, tags []database.TagInfo) error {
+	args := m.Called(ctx, mediaDBID, tags)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int64, tags []database.TagInfo) error {
+	args := m.Called(ctx, mediaTitleDBID, tags)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) UpsertMediaTitleProperties(
+	ctx context.Context, mediaTitleDBID int64, props []database.MediaProperty,
+) error {
+	args := m.Called(ctx, mediaTitleDBID, props)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) UpsertMediaProperties(
+	ctx context.Context, mediaDBID int64, props []database.MediaProperty,
+) error {
+	args := m.Called(ctx, mediaDBID, props)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) FindMediaTitlesWithoutSentinel(
+	ctx context.Context, systemDBID int64, sentinelTag string,
+) ([]database.MediaTitle, error) {
+	args := m.Called(ctx, systemDBID, sentinelTag)
+	if result, ok := args.Get(0).([]database.MediaTitle); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*database.MediaTitle, error) {
+	args := m.Called(ctx, dbid)
+	if result, ok := args.Get(0).(*database.MediaTitle); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaTitleProperties(
+	ctx context.Context, mediaTitleDBID int64,
+) ([]database.MediaProperty, error) {
+	args := m.Called(ctx, mediaTitleDBID)
+	if result, ok := args.Get(0).([]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaProperties(ctx context.Context, mediaDBID int64) ([]database.MediaProperty, error) {
+	args := m.Called(ctx, mediaDBID)
+	if result, ok := args.Get(0).([]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID, typeTagDBID int64) error {
+	args := m.Called(ctx, mediaTitleDBID, typeTagDBID)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) DeleteMediaProperty(ctx context.Context, mediaDBID, typeTagDBID int64) error {
+	args := m.Called(ctx, mediaDBID, typeTagDBID)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaWithTitleAndSystem(
+	ctx context.Context, mediaDBID int64,
+) (*database.MediaFullRow, error) {
+	args := m.Called(ctx, mediaDBID)
+	if result, ok := args.Get(0).(*database.MediaFullRow); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaTagsByMediaDBID(
+	ctx context.Context, mediaDBID int64,
+) ([]database.TagInfo, error) {
+	args := m.Called(ctx, mediaDBID)
+	if result, ok := args.Get(0).([]database.TagInfo); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaTitleTagsByMediaTitleDBID(
+	ctx context.Context, mediaTitleDBID int64,
+) ([]database.TagInfo, error) {
+	args := m.Called(ctx, mediaTitleDBID)
+	if result, ok := args.Get(0).([]database.TagInfo); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func TextMatcher() any {
 	return mock.MatchedBy(func(text string) bool {
 		// Accept any non-empty string

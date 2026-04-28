@@ -110,6 +110,10 @@ const (
 	TagTypePublisher     TagType = "publisher"     // Game publisher (company that released the game)
 	TagTypeCredit        TagType = "credit"        // Company credit with unspecified developer/publisher role
 	TagTypeRelease       TagType = "release"       // Distribution/release status (homebrew, unreleased, reissue, etc.)
+	TagTypeProperty      TagType = "property"      // Static content property (description, artwork paths, video paths)
+	TagTypeRating        TagType = "rating"        // Numeric rating (scraped, stored as integer 0-100)
+	TagTypeGenre         TagType = "genre"         // Game genre (scraped from external sources; additive)
+	TagTypeGameFamily    TagType = "gamefamily"    // Game family/series (scraped from EmulationStation family field)
 )
 
 // Tag Format:
@@ -875,4 +879,27 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// Input accessibility
 		TagAccessibilityInputRemappableControls, TagAccessibilityInputOneButtonMode,
 	},
+
+	// Property type tags are referenced by scrapers for static content (descriptions,
+	// artwork paths, video paths). They use the "property" tag type. Properties are
+	// one-per-type per entity (UNIQUE constraint); scrapers upsert on conflict.
+	TagTypeProperty: {
+		TagPropertyDescription,
+		TagPropertyImageBoxart,
+		TagPropertyImageScreenshot,
+		TagPropertyImageThumbnail,
+		TagPropertyImageMarquee,
+		TagPropertyImageWheel,
+		TagPropertyImageFanart,
+		TagPropertyImageTitleshot,
+		TagPropertyImageMap,
+		TagPropertyVideo,
+		TagPropertyManual,
+	},
+
+	// Rating, genre, and game-family are scraped from external sources; seeded here
+	// so the types exist after SeedCanonicalTags even before any scraper runs.
+	TagTypeRating:     {},
+	TagTypeGenre:      {},
+	TagTypeGameFamily: {}, // Dynamic values — populated from EmulationStation "family" field
 }

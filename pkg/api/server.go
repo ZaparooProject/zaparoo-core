@@ -22,6 +22,8 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +48,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -216,6 +220,10 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaHistory:        methods.HandleMediaHistory,
 		models.MethodMediaHistoryTop:     methods.HandleMediaHistoryTop,
 		models.MethodMediaLookup:         methods.HandleMediaLookup,
+		models.MethodMediaMeta:           methods.HandleMediaMeta,
+		models.MethodMediaImage:          methods.HandleMediaImage,
+		models.MethodMediaScrape:         methods.HandleMediaScrape,
+		models.MethodMediaScrapeCancel:   methods.HandleMediaScrapeCancel,
 		models.MethodMediaControl:        methods.HandleMediaControl,
 		// settings
 		models.MethodSettings:             methods.HandleSettings,
@@ -891,6 +899,7 @@ func handleWSMessage(
 	indexPauser *syncutil.Pauser,
 	encGateway *apimiddleware.EncryptionGateway,
 	lastSeenTracker *apimiddleware.LastSeenTracker,
+	scrapers map[string]scraper.Scraper,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
 		defer func() {
@@ -975,6 +984,7 @@ func handleWSMessage(
 			Player:        player,
 			TokenQueue:    inTokenQueue,
 			ConfirmQueue:  confirmQueue,
+			Scrapers:      scrapers,
 			IndexPauser:   indexPauser,
 			IsLocal:       isLocal,
 			ClientID:      session.Request.RemoteAddr,
@@ -1185,6 +1195,7 @@ func handlePostRequest(
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
+	scrapers map[string]scraper.Scraper,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -1230,6 +1241,7 @@ func handlePostRequest(
 			Player:        player,
 			TokenQueue:    inTokenQueue,
 			ConfirmQueue:  confirmQueue,
+			Scrapers:      scrapers,
 			IndexPauser:   indexPauser,
 			IsLocal:       apimiddleware.IsLoopbackAddr(r.RemoteAddr),
 			ClientID:      r.RemoteAddr,
@@ -1281,6 +1293,66 @@ func handlePostRequest(
 		if result.AfterWrite != nil {
 			result.AfterWrite()
 		}
+	}
+}
+
+// makeSystemResolver builds a SystemResolver for the gamelist.xml scraper.
+// It resolves indexed system IDs to ScrapeSystem values (DBID + ROM paths).
+// ROM paths are constructed as <rootDir>/<systemID> for each platform root dir.
+func makeSystemResolver(
+	mdb database.MediaDBI,
+	platform platforms.Platform,
+	cfg *config.Instance,
+) gamelistxml.SystemResolver {
+	return func(_ context.Context, systemIDs []string) ([]scraper.ScrapeSystem, error) {
+		indexed, err := mdb.IndexedSystems()
+		if err != nil {
+			return nil, fmt.Errorf("makeSystemResolver: list indexed systems: %w", err)
+		}
+
+		// Build a set of IDs to resolve: caller's filter or all indexed.
+		want := make(map[string]struct{}, len(indexed))
+		if len(systemIDs) == 0 {
+			for _, id := range indexed {
+				want[id] = struct{}{}
+			}
+		} else {
+			indexedSet := make(map[string]struct{}, len(indexed))
+			for _, id := range indexed {
+				indexedSet[id] = struct{}{}
+			}
+			for _, id := range systemIDs {
+				if _, ok := indexedSet[id]; ok {
+					want[id] = struct{}{}
+				}
+			}
+		}
+
+		rootDirs := platform.RootDirs(cfg)
+
+		var result []scraper.ScrapeSystem
+		for sysID := range want {
+			sys, err := mdb.FindSystemBySystemID(sysID)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					log.Debug().Str("system", sysID).Msg("makeSystemResolver: system not indexed in DB, skipping")
+					continue
+				}
+				return nil, fmt.Errorf("makeSystemResolver: look up system %q: %w", sysID, err)
+			}
+			// Build per-system ROM paths: <rootDir>/<systemID>.
+			// The gamelist.xml scraper looks for gamelist.xml directly inside each path.
+			romPaths := make([]string, 0, len(rootDirs))
+			for _, rootDir := range rootDirs {
+				romPaths = append(romPaths, filepath.Join(rootDir, sysID))
+			}
+			result = append(result, scraper.ScrapeSystem{
+				DBID:     sys.DBID,
+				ID:       sysID,
+				ROMPaths: romPaths,
+			})
+		}
+		return result, nil
 	}
 }
 
@@ -1554,6 +1626,15 @@ func StartWithReady(
 		})
 	})
 
+	// Build the scrapers map once; passed into RequestEnv for media.scrape.
+	gamelistScraper := gamelistxml.NewGamelistXMLScraper(
+		db.MediaDB,
+		makeSystemResolver(db.MediaDB, platform, cfg),
+	)
+	scrapers := map[string]scraper.Scraper{
+		gamelistScraper.ID(): gamelistScraper,
+	}
+
 	// Non-WebSocket API routes (HTTP POST + REST GET) — restricted to
 	// localhost by default; remote access requires explicit AllowedIPs.
 	// These transports do not support encryption; the IP allowlist plus
@@ -1569,7 +1650,7 @@ func StartWithReady(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
 			db, limitsManager, player,
-			indexPauser,
+			indexPauser, scrapers,
 		)
 		r.Post("/api", postHandler)
 		r.Post("/api/v0", postHandler)
@@ -1606,12 +1687,24 @@ func StartWithReady(
 		r.Get("/api/v0.1/events", sseHandler)
 	})
 
+	// v1 REST API: media properties. Scrapers are now JSONRPC methods (media.scrape).
+	r.Group(func(r chi.Router) {
+		r.Use(nonWSIPFilter)
+		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
+		r.Use(apiRateLimitMiddleware)
+		r.Use(middleware.NoCache)
+		r.Use(middleware.Timeout(config.APIRequestTimeout))
+
+		r.Get("/api/v1/titles/{titleDBID}/properties", methods.HandleGetMediaTitleProperties(db.MediaDB))
+		r.Get("/api/v1/media/{mediaDBID}/properties", methods.HandleGetMediaProperties(db.MediaDB))
+	})
+
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,
 		handleWSMessage(
 			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
 			db, limitsManager, player, indexPauser, encGateway,
-			lastSeenTracker,
+			lastSeenTracker, scrapers,
 		),
 	))
 

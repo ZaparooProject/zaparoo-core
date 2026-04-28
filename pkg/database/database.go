@@ -152,9 +152,32 @@ type Media struct {
 	IsMissing      bool
 }
 
+// MediaFullRow is the result of a joined query fetching a Media record together
+// with its parent MediaTitle and System in a single round-trip.
+type MediaFullRow struct {
+	System System
+	Media
+	Title MediaTitle
+}
+
 type TagType struct {
-	Type string
-	DBID int64
+	Type        string
+	DBID        int64
+	IsExclusive bool
+}
+
+// MediaProperty is a static content property attached to a MediaTitle or Media
+// record. Properties are fetched for display, not filtered by value.
+//
+// For writes: set TypeTag to the full "type:value" string (e.g. "property:description").
+// The database layer resolves the TypeTagDBID from TypeTag automatically.
+// For reads: TypeTag is populated from the joined Tags row; TypeTagDBID is also set.
+type MediaProperty struct {
+	TypeTag     string
+	Text        string
+	ContentType string
+	Binary      []byte
+	TypeTagDBID int64
 }
 
 type Tag struct {
@@ -537,4 +560,76 @@ type MediaDBI interface {
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
 	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
 	GetMediaTagsBySystemID(systemID string) ([]MediaTagLink, error)
+
+	// Scraper support methods
+
+	// FindMediaBySystemAndPath returns the Media row matching systemDBID and path,
+	// or nil, nil when no row is found.
+	FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*Media, error)
+
+	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and
+	// path using a case-insensitive path comparison, or nil, nil when no row is
+	// found. Intended for scrapers where the incoming path casing may differ from
+	// what the indexer recorded (e.g. Windows filesystem with mixed-case system
+	// directory names).
+	FindMediaBySystemAndPathFold(ctx context.Context, systemDBID int64, path string) (*Media, error)
+
+	// MediaHasTag returns true when the Media row has a tag whose full string
+	// (type:value) equals tagValue.
+	MediaHasTag(ctx context.Context, mediaDBID int64, tagValue string) (bool, error)
+
+	// UpsertMediaTags writes tags to MediaTags for a specific Media row.
+	// Exclusive types (TagTypes.IsExclusive=1) delete existing tags of that type
+	// for the entity before inserting; additive types use INSERT OR IGNORE.
+	UpsertMediaTags(ctx context.Context, mediaDBID int64, tags []TagInfo) error
+
+	// UpsertMediaTitleTags writes tags to MediaTitleTags for a specific MediaTitle row.
+	// Exclusive/additive behaviour is identical to UpsertMediaTags.
+	UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int64, tags []TagInfo) error
+
+	// UpsertMediaTitleProperties upserts properties into MediaTitleProperties.
+	// Conflicts on (MediaTitleDBID, TypeTagDBID) update data columns; DBID is preserved.
+	UpsertMediaTitleProperties(ctx context.Context, mediaTitleDBID int64, props []MediaProperty) error
+
+	// UpsertMediaProperties upserts properties into MediaProperties.
+	// Conflicts on (MediaDBID, TypeTagDBID) update data columns; DBID is preserved.
+	UpsertMediaProperties(ctx context.Context, mediaDBID int64, props []MediaProperty) error
+
+	// FindMediaTitlesWithoutSentinel returns MediaTitle rows for the given system
+	// that have no Media row with the given sentinel tag value.
+	FindMediaTitlesWithoutSentinel(ctx context.Context, systemDBID int64, sentinelTag string) ([]MediaTitle, error)
+
+	// FindMediaTitleByDBID returns the MediaTitle with the given DBID,
+	// or nil, nil when no row is found.
+	FindMediaTitleByDBID(ctx context.Context, dbid int64) (*MediaTitle, error)
+
+	// GetMediaTitleProperties returns all properties for a MediaTitle row,
+	// with TypeTagDBID resolved to the tag value string.
+	GetMediaTitleProperties(ctx context.Context, mediaTitleDBID int64) ([]MediaProperty, error)
+
+	// GetMediaProperties returns all properties for a Media row,
+	// with TypeTagDBID resolved to the tag value string.
+	GetMediaProperties(ctx context.Context, mediaDBID int64) ([]MediaProperty, error)
+
+	// DeleteMediaTitleProperty removes a single property row from MediaTitleProperties
+	// identified by (mediaTitleDBID, typeTagDBID). A no-op if the row does not exist.
+	DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID int64, typeTagDBID int64) error
+
+	// DeleteMediaProperty removes a single property row from MediaProperties
+	// identified by (mediaDBID, typeTagDBID). A no-op if the row does not exist.
+	DeleteMediaProperty(ctx context.Context, mediaDBID int64, typeTagDBID int64) error
+
+	// GetMediaWithTitleAndSystem fetches a Media record together with its parent
+	// MediaTitle and System via a single JOIN query. Returns nil, nil when no
+	// Media row with the given DBID exists. IsMissing is NOT filtered — metadata
+	// remains accessible for missing files.
+	GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int64) (*MediaFullRow, error)
+
+	// GetMediaTagsByMediaDBID returns the file-level tags (MediaTags) for a
+	// single Media row. Does not include title-level tags.
+	GetMediaTagsByMediaDBID(ctx context.Context, mediaDBID int64) ([]TagInfo, error)
+
+	// GetMediaTitleTagsByMediaTitleDBID returns the title-level tags
+	// (MediaTitleTags) for a single MediaTitle row.
+	GetMediaTitleTagsByMediaTitleDBID(ctx context.Context, mediaTitleDBID int64) ([]TagInfo, error)
 }

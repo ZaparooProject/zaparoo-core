@@ -60,3 +60,5 @@ worktrees/
 /scripts/batocera/template/userdata/roms/ports/Zaparoo.sh
 .mcp.json
 .mcp.json
+
+CLAUDE.md

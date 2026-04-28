@@ -725,7 +725,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 						}
 
 						// Update names from gamelist.xml metadata
-						for _, game := range gameList.Games {
+						for i := range gameList.Games {
+							game := &gameList.Games[i]
 							// Clean the game path (remove leading ./)
 							gamePath := filepath.Clean(game.Path)
 							fullPath := filepath.Join(systemDir, gamePath)

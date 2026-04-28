@@ -173,10 +173,10 @@ func createRetroBatLauncher(systemFolder string, info esde.SystemInfo) platforms
 				return results, nil // Return empty results, don't error
 			}
 
-			for _, game := range gameList.Games {
+			for i := range gameList.Games {
 				results = append(results, platforms.ScanResult{
-					Name: game.Name,
-					Path: filepath.Join(retroBatDir, "roms", systemFolder, game.Path),
+					Name: gameList.Games[i].Name,
+					Path: filepath.Join(retroBatDir, "roms", systemFolder, gameList.Games[i].Path),
 				})
 			}
 

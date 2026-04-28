@@ -50,7 +50,8 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	// Delete in reverse dependency order (children first, parents last)
 	// to avoid any cascading overhead and minimize index updates
 	sqlStmt := `
-	delete from SupportingMedia;
+	delete from MediaProperties;
+	delete from MediaTitleProperties;
 	delete from MediaTitleTags;
 	delete from MediaTags;
 	delete from Media;
@@ -121,7 +122,7 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 
 	// Step 1: collect Tag DBIDs referenced by the target systems BEFORE any deletes.
 	// Only these tags can become orphans — bounding the later cleanup to this set
-	// avoids a full-table scan of MediaTags/MediaTitleTags/SupportingMedia.
+	// avoids a full-table scan of MediaTags/MediaTitleTags/MediaTitleProperties/MediaProperties.
 	if _, err = conn.ExecContext(ctx,
 		"CREATE TEMP TABLE IF NOT EXISTS _tts_candidate_tags (DBID INTEGER PRIMARY KEY)"); err != nil {
 		return fmt.Errorf("failed to create candidate tags temp table: %w", err)
@@ -130,8 +131,11 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 		_, _ = conn.ExecContext(context.Background(), "DROP TABLE IF EXISTS _tts_candidate_tags")
 	}()
 
-	// Each UNION branch needs its own copy of the system DBID args.
-	candidateArgs := append(append(append([]any{}, systemDBIDs...), systemDBIDs...), systemDBIDs...)
+	// Each UNION branch needs its own copy of the system DBID args (4 branches).
+	candidateArgs := make([]any, 0, len(systemDBIDs)*4)
+	for range 4 {
+		candidateArgs = append(candidateArgs, systemDBIDs...)
+	}
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
 	if _, err = conn.ExecContext(ctx, fmt.Sprintf(`
 		INSERT OR IGNORE INTO _tts_candidate_tags (DBID)
@@ -141,8 +145,11 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 		    SELECT TagDBID FROM MediaTitleTags
 		        WHERE MediaTitleDBID IN (SELECT DBID FROM MediaTitles WHERE SystemDBID IN (%[1]s))
 		UNION
-		    SELECT TypeTagDBID FROM SupportingMedia
-		        WHERE MediaTitleDBID IN (SELECT DBID FROM MediaTitles WHERE SystemDBID IN (%[1]s))`,
+		    SELECT TypeTagDBID FROM MediaTitleProperties
+		        WHERE MediaTitleDBID IN (SELECT DBID FROM MediaTitles WHERE SystemDBID IN (%[1]s))
+		UNION
+		    SELECT TypeTagDBID FROM MediaProperties
+		        WHERE MediaDBID IN (SELECT DBID FROM Media WHERE SystemDBID IN (%[1]s))`,
 		dbidPlaceholders), candidateArgs...); err != nil {
 		return fmt.Errorf("failed to collect candidate tags: %w", err)
 	}
@@ -173,9 +180,16 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 	}
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
 	if _, err = conn.ExecContext(ctx, fmt.Sprintf(
-		"DELETE FROM SupportingMedia WHERE MediaTitleDBID IN (SELECT DBID FROM MediaTitles WHERE SystemDBID IN (%s))",
+		"DELETE FROM MediaTitleProperties"+
+			" WHERE MediaTitleDBID IN (SELECT DBID FROM MediaTitles WHERE SystemDBID IN (%s))",
 		dbidPlaceholders), systemDBIDs...); err != nil {
-		return fmt.Errorf("failed to delete SupportingMedia: %w", err)
+		return fmt.Errorf("failed to delete MediaTitleProperties: %w", err)
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
+	if _, err = conn.ExecContext(ctx, fmt.Sprintf(
+		"DELETE FROM MediaProperties WHERE MediaDBID IN (SELECT DBID FROM Media WHERE SystemDBID IN (%s))",
+		dbidPlaceholders), systemDBIDs...); err != nil {
+		return fmt.Errorf("failed to delete MediaProperties: %w", err)
 	}
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders
 	if _, err = conn.ExecContext(ctx,
@@ -194,16 +208,17 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 	}
 
 	// Orphan tag cleanup: delete Tags that were only referenced by the truncated systems.
-	// NOT EXISTS uses the mediatags_tag_media_idx / MediaTitleTags PK / SupportingMedia index
+	// NOT EXISTS uses the mediatags_tag_media_idx / MediaTitleTags PK / MediaTitleProperties/MediaProperties indexes
 	// for O(log n) lookups rather than a full-table scan.
 	// IMPORTANT: TagTypes are deliberately NOT deleted — they are global infrastructure shared
 	// across all systems; deleting them would break remaining systems' tag references.
 	if _, err = conn.ExecContext(ctx, `
 		DELETE FROM Tags
 		    WHERE DBID IN (SELECT DBID FROM _tts_candidate_tags)
-		      AND NOT EXISTS (SELECT 1 FROM MediaTags       WHERE TagDBID     = Tags.DBID)
-		      AND NOT EXISTS (SELECT 1 FROM MediaTitleTags  WHERE TagDBID     = Tags.DBID)
-		      AND NOT EXISTS (SELECT 1 FROM SupportingMedia WHERE TypeTagDBID = Tags.DBID)`); err != nil {
+		      AND NOT EXISTS (SELECT 1 FROM MediaTags            WHERE TagDBID     = Tags.DBID)
+		      AND NOT EXISTS (SELECT 1 FROM MediaTitleTags       WHERE TagDBID     = Tags.DBID)
+		      AND NOT EXISTS (SELECT 1 FROM MediaTitleProperties WHERE TypeTagDBID = Tags.DBID)
+		      AND NOT EXISTS (SELECT 1 FROM MediaProperties      WHERE TypeTagDBID = Tags.DBID)`); err != nil {
 		return fmt.Errorf("failed to clean up orphaned tags: %w", err)
 	}
 

@@ -24,6 +24,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 )
 
 // Database fixture collections for testing
@@ -301,29 +302,32 @@ var Media = struct {
 	},
 }
 
-// TagTypes provides sample tag type data
+// TagTypes provides sample tag type data with IsExclusive set via the canonical mapping.
 var TagTypes = struct {
+	Collection []database.TagType
 	Genre      database.TagType
 	Developer  database.TagType
 	Year       database.TagType
-	Collection []database.TagType
 }{
 	Genre: database.TagType{
-		Type: "genre",
-		DBID: 1,
+		Type:        "genre",
+		DBID:        1,
+		IsExclusive: tags.IsExclusiveType(tags.TagTypeGenre),
 	},
 	Developer: database.TagType{
-		Type: "developer",
-		DBID: 2,
+		Type:        "developer",
+		DBID:        2,
+		IsExclusive: tags.IsExclusiveType(tags.TagTypeDeveloper),
 	},
 	Year: database.TagType{
-		Type: "year",
-		DBID: 3,
+		Type:        "year",
+		DBID:        3,
+		IsExclusive: tags.IsExclusiveType(tags.TagTypeYear),
 	},
 	Collection: []database.TagType{
-		{Type: "genre", DBID: 1},
-		{Type: "developer", DBID: 2},
-		{Type: "year", DBID: 3},
+		{Type: "genre", DBID: 1, IsExclusive: tags.IsExclusiveType(tags.TagTypeGenre)},
+		{Type: "developer", DBID: 2, IsExclusive: tags.IsExclusiveType(tags.TagTypeDeveloper)},
+		{Type: "year", DBID: 3, IsExclusive: tags.IsExclusiveType(tags.TagTypeYear)},
 	},
 }
 
