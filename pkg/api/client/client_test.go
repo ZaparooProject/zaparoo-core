@@ -72,6 +72,17 @@ func unusedPort(t *testing.T) int {
 	return port
 }
 
+func waitForWebSocketSession(server *helpers.WebSocketTestServer) bool {
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if server.Melody.Len() > 0 {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return false
+}
+
 func TestLocalClient_ValidRequest(t *testing.T) {
 	t.Parallel()
 
@@ -479,7 +490,9 @@ func TestWaitNotifications_ReceivesAnyOfMultiple(t *testing.T) {
 	cfg := testConfigWithPort(t, port)
 
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		if !waitForWebSocketSession(server) {
+			return
+		}
 
 		notification := map[string]any{
 			"jsonrpc": "2.0",
@@ -517,7 +530,9 @@ func TestWaitNotifications_IgnoresUnregisteredMethods(t *testing.T) {
 	cfg := testConfigWithPort(t, port)
 
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		if !waitForWebSocketSession(server) {
+			return
+		}
 
 		// Send unregistered method first
 		unregistered := map[string]any{
