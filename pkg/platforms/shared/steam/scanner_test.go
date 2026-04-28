@@ -20,11 +20,15 @@
 package steam
 
 import (
+	"bytes"
+	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,6 +37,80 @@ import (
 // VDF format requires backslashes to be escaped as double backslashes.
 func vdfEscapePath(path string) string {
 	return strings.ReplaceAll(path, `\`, `\\`)
+}
+
+type testShortcut struct {
+	AppName       string
+	Exe           string
+	StartDir      string
+	LaunchOptions string
+	AppID         uint32
+	Optional      bool
+}
+
+func writeVDFString(buf *bytes.Buffer, key, value string) {
+	_ = buf.WriteByte(0x01)
+	_, _ = buf.WriteString(key)
+	_ = buf.WriteByte(0x00)
+	_, _ = buf.WriteString(value)
+	_ = buf.WriteByte(0x00)
+}
+
+func writeVDFUint32(buf *bytes.Buffer, key string, value uint32) {
+	_ = buf.WriteByte(0x02)
+	_, _ = buf.WriteString(key)
+	_ = buf.WriteByte(0x00)
+	var raw [4]byte
+	binary.LittleEndian.PutUint32(raw[:], value)
+	_, _ = buf.Write(raw[:])
+}
+
+func writeEmptyVDFMap(buf *bytes.Buffer, key string) {
+	_ = buf.WriteByte(0x00)
+	_, _ = buf.WriteString(key)
+	_ = buf.WriteByte(0x00)
+	_ = buf.WriteByte(0x08)
+}
+
+func buildShortcutsVDF(shortcuts []testShortcut) []byte {
+	var buf bytes.Buffer
+
+	_ = buf.WriteByte(0x00)
+	_, _ = buf.WriteString("shortcuts")
+	_ = buf.WriteByte(0x00)
+
+	for i, shortcut := range shortcuts {
+		_ = buf.WriteByte(0x00)
+		_, _ = buf.WriteString(strconv.Itoa(i))
+		_ = buf.WriteByte(0x00)
+
+		writeVDFUint32(&buf, "appid", shortcut.AppID)
+		writeVDFString(&buf, "AppName", shortcut.AppName)
+		writeVDFString(&buf, "Exe", shortcut.Exe)
+		writeVDFString(&buf, "StartDir", shortcut.StartDir)
+		writeVDFString(&buf, "LaunchOptions", shortcut.LaunchOptions)
+
+		if shortcut.Optional {
+			writeVDFString(&buf, "icon", "")
+			writeVDFString(&buf, "ShortcutPath", "")
+			writeVDFUint32(&buf, "IsHidden", 0)
+			writeVDFUint32(&buf, "AllowDesktopConfig", 1)
+			writeVDFUint32(&buf, "AllowOverlay", 1)
+			writeEmptyVDFMap(&buf, "tags")
+		}
+
+		_ = buf.WriteByte(0x08)
+	}
+
+	_ = buf.WriteByte(0x08)
+	_ = buf.WriteByte(0x08)
+
+	return buf.Bytes()
+}
+
+func shortcutVirtualPath(appID uint32, appName string) string {
+	bpid := (uint64(appID) << 32) | 0x02000000
+	return virtualpath.CreateVirtualPath("steam", strconv.FormatUint(bpid, 10), appName)
 }
 
 func TestScanSteamApps(t *testing.T) {
@@ -199,6 +277,47 @@ func TestScanSteamShortcuts(t *testing.T) {
 
 		require.NoError(t, scanErr)
 		assert.Empty(t, results)
+	})
+
+	t.Run("scans_non_steam_shortcuts_from_user_config", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		userdataDir := filepath.Join(tempDir, "userdata", "12345678", "config")
+		require.NoError(t, os.MkdirAll(userdataDir, 0o750))
+
+		shortcuts := []testShortcut{
+			{
+				AppID:   624353111,
+				AppName: "Capcom vs. SNK 2 Mark of the Millennium 2001",
+				Exe: `"C:\Games\RetroArch\retroarch.exe" ` +
+					`-L "cores\flycast_libretro.dll" "roms\Capcom vs SNK 2.chd"`,
+				StartDir:      `"C:\Games\RetroArch"`,
+				LaunchOptions: "",
+				Optional:      true,
+			},
+			{
+				AppID:         3545518019,
+				AppName:       "Hyper Duel",
+				Exe:           `"C:\Games\RetroArch\retroarch.exe"`,
+				StartDir:      `"C:\Games\RetroArch"`,
+				LaunchOptions: `-L "cores\mednafen_saturn_libretro.dll" "roms\Hyper Duel.chd"`,
+				Optional:      false,
+			},
+		}
+		err := os.WriteFile(filepath.Join(userdataDir, "shortcuts.vdf"), buildShortcutsVDF(shortcuts), 0o600)
+		require.NoError(t, err)
+
+		results, scanErr := ScanSteamShortcuts(tempDir)
+
+		require.NoError(t, scanErr)
+		require.Len(t, results, 2)
+		assert.Equal(t, shortcuts[0].AppName, results[0].Name)
+		assert.Equal(t, shortcutVirtualPath(shortcuts[0].AppID, shortcuts[0].AppName), results[0].Path)
+		assert.True(t, results[0].NoExt)
+		assert.Equal(t, shortcuts[1].AppName, results[1].Name)
+		assert.Equal(t, shortcutVirtualPath(shortcuts[1].AppID, shortcuts[1].AppName), results[1].Path)
+		assert.True(t, results[1].NoExt)
 	})
 
 	t.Run("skips_non_directory_entries", func(t *testing.T) {
