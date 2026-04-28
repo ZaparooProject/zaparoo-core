@@ -48,8 +48,9 @@ type stubScraper struct {
 	name string
 }
 
-func (s *stubScraper) ID() string   { return s.id }
-func (s *stubScraper) Name() string { return s.name }
+func (s *stubScraper) ID() string                 { return s.id }
+func (s *stubScraper) Name() string               { return s.name }
+func (s *stubScraper) SupportedSystems() []string { return []string{} }
 func (s *stubScraper) Scrape(_ context.Context, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
 	ch := make(chan scraper.ScrapeUpdate)
 	close(ch)

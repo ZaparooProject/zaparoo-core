@@ -76,6 +76,11 @@ func (*GamelistXMLScraper) Name() string {
 	return "ES gamelist.xml"
 }
 
+// SupportedSystems returns an empty slice, meaning this scraper supports all systems.
+func (*GamelistXMLScraper) SupportedSystems() []string {
+	return []string{}
+}
+
 // Scrape implements [scraper.Scraper]. It resolves active systems via the
 // injected resolver and delegates to [scraper.RunScraper].
 func (g *GamelistXMLScraper) Scrape(

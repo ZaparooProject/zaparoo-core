@@ -203,8 +203,9 @@ func HandleScrapers(env requests.RequestEnv) (any, error) {
 	infos := make([]models.ScraperInfo, 0, len(env.Scrapers))
 	for _, s := range env.Scrapers {
 		infos = append(infos, models.ScraperInfo{
-			ID:   s.ID(),
-			Name: s.Name(),
+			ID:               s.ID(),
+			Name:             s.Name(),
+			SupportedSystems: s.SupportedSystems(),
 		})
 	}
 	return models.ScrapersResponse{Scrapers: infos}, nil

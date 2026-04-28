@@ -43,6 +43,10 @@ type Scraper interface {
 	// Examples: "ES gamelist.xml", "ScreenScraper".
 	Name() string
 
+	// SupportedSystems returns the system IDs this scraper can handle.
+	// An empty slice means all systems are supported.
+	SupportedSystems() []string
+
 	// Scrape starts the goroutine and returns a channel of progress updates.
 	// The channel is closed when the goroutine exits (done or cancelled).
 	Scrape(ctx context.Context, opts ScrapeOptions) (<-chan ScrapeUpdate, error)
