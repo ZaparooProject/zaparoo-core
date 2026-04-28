@@ -46,7 +46,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TAG_NAME: ${{ steps.zaparooreleaseinfo.outputs.tag_name }}
-          BRANCH_NAME: mister-repo/${{ steps.zaparooreleaseinfo.outputs.tag_name }}-${{ github.run_id }}
+          BRANCH_NAME: mister-repo/${{ steps.zaparooreleaseinfo.outputs.tag_name }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
