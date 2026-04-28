@@ -222,26 +222,6 @@ func (db *MediaDB) Open() error {
 		}
 	}
 
-	log.Debug().Msg("running media database PRAGMA optimize")
-	// Run PRAGMA optimize after database is opened and potentially allocated
-	_, err = db.sql.ExecContext(db.ctx, "PRAGMA optimize;")
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to run PRAGMA optimize")
-	}
-
-	log.Debug().Msg("running media database WAL checkpoint")
-	// Run WAL checkpoint on startup to clean up any orphaned WAL from crashes
-	_, err = db.sql.ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to run WAL checkpoint on startup")
-	}
-
-	// Pre-warm in-memory tag cache from the SystemTagsCache table so the
-	// first media.tags request is served from memory instead of hitting SQL.
-	if warmErr := db.RebuildTagCache(); warmErr != nil {
-		log.Warn().Err(warmErr).Msg("failed to warm tag cache on startup")
-	}
-
 	return nil
 }
 

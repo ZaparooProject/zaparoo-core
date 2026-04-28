@@ -148,9 +148,27 @@ func closeDatabase(db *database.Database) {
 	}
 }
 
-// cleanupHistoryOnStartup performs all history cleanup operations at service startup
-func cleanupHistoryOnStartup(cfg *config.Instance, db *database.Database) {
-	// Cleanup old scan history entries if retention is configured
+func startupMaintenanceCancelled(ctx context.Context, message string) bool {
+	if err := ctx.Err(); err != nil {
+		log.Debug().Err(err).Msg(message)
+		return true
+	}
+	return false
+}
+
+func cleanupHistoryRetention(ctx context.Context, cfg *config.Instance, db *database.Database) {
+	if startupMaintenanceCancelled(ctx, "skipping history retention cleanup: startup maintenance cancelled") {
+		return
+	}
+	if db == nil {
+		log.Warn().Msg("skipping history retention cleanup: database is nil")
+		return
+	}
+	if db.UserDB == nil {
+		log.Warn().Msg("skipping history retention cleanup: user database is nil")
+		return
+	}
+
 	scanHistoryDays := cfg.ScanHistory()
 	if scanHistoryDays > 0 {
 		log.Info().Msgf("cleaning up scan history older than %d days", scanHistoryDays)
@@ -167,10 +185,8 @@ func cleanupHistoryOnStartup(cfg *config.Instance, db *database.Database) {
 		log.Debug().Msg("scan history cleanup disabled (retention set to 0)")
 	}
 
-	// Close any hanging media history entries from unclean shutdown
-	log.Info().Msg("closing hanging media history entries")
-	if hangingErr := db.UserDB.CloseHangingMediaHistory(); hangingErr != nil {
-		log.Error().Err(hangingErr).Msg("error closing hanging media history entries")
+	if startupMaintenanceCancelled(ctx, "skipping media history retention cleanup: startup maintenance cancelled") {
+		return
 	}
 
 	// Cleanup old media history entries if retention is configured
@@ -191,6 +207,13 @@ func cleanupHistoryOnStartup(cfg *config.Instance, db *database.Database) {
 	}
 }
 
+func closeHangingMediaHistoryOnStartup(db *database.Database) {
+	log.Info().Msg("closing hanging media history entries")
+	if hangingErr := db.UserDB.CloseHangingMediaHistory(); hangingErr != nil {
+		log.Error().Err(hangingErr).Msg("error closing hanging media history entries")
+	}
+}
+
 // pruneExpiredZapLinkHosts removes non-supporting zaplink hosts older than 30 days.
 // This allows hosts that may have added zaplink support to be re-checked.
 func pruneExpiredZapLinkHosts(db *database.Database) {
@@ -204,6 +227,52 @@ func pruneExpiredZapLinkHosts(db *database.Database) {
 	default:
 		log.Debug().Msg("no expired zaplink hosts to prune")
 	}
+}
+
+func runMediaDBStartupMaintenance(ctx context.Context, db database.MediaDBI) {
+	if db == nil {
+		log.Warn().Msg("skipping media database startup maintenance: media database is nil")
+		return
+	}
+
+	db.TrackBackgroundOperation()
+	defer db.BackgroundOperationDone()
+
+	if sqlDB := db.UnsafeGetSQLDb(); sqlDB != nil {
+		log.Debug().Msg("running media database PRAGMA optimize")
+		if _, err := sqlDB.ExecContext(ctx, "PRAGMA optimize;"); err != nil {
+			log.Warn().Err(err).Msg("failed to run PRAGMA optimize")
+		}
+
+		log.Debug().Msg("running media database WAL checkpoint")
+		if _, err := sqlDB.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);"); err != nil {
+			log.Warn().Err(err).Msg("failed to run WAL checkpoint on startup")
+		}
+	} else {
+		log.Warn().Msg("skipping media database PRAGMA maintenance: SQL database is nil")
+	}
+
+	if startupMaintenanceCancelled(ctx, "skipping tag cache warmup: startup maintenance cancelled") {
+		return
+	}
+
+	if err := db.RebuildTagCache(); err != nil {
+		log.Warn().Err(err).Msg("failed to warm tag cache on startup")
+	}
+}
+
+func runStartupMaintenance(ctx context.Context, cfg *config.Instance, db *database.Database) {
+	if db == nil {
+		log.Warn().Msg("skipping startup maintenance: database is nil")
+		return
+	}
+
+	runMediaDBStartupMaintenance(ctx, db.MediaDB)
+	cleanupHistoryRetention(ctx, cfg, db)
+	if startupMaintenanceCancelled(ctx, "skipping zaplink host pruning: startup maintenance cancelled") {
+		return
+	}
+	pruneExpiredZapLinkHosts(db)
 }
 
 // StartResult holds the return values from Start.
@@ -261,11 +330,7 @@ func Start(
 		log.Error().Err(err).Msgf("error opening databases")
 		return nil, err
 	}
-
-	// Perform all history cleanup operations
-	cleanupHistoryOnStartup(cfg, db)
-
-	pruneExpiredZapLinkHosts(db)
+	closeHangingMediaHistoryOnStartup(db)
 
 	// Initialize inbox service for system notifications
 	log.Info().Msg("initializing inbox service")
@@ -348,6 +413,12 @@ func Start(
 	if discoveryErr := discoveryService.Start(); discoveryErr != nil {
 		log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
 	}
+
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		runStartupMaintenance(st.GetContext(), cfg, db)
+	}()
 
 	backgroundWG.Add(1)
 	go func() {
