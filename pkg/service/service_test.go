@@ -90,10 +90,11 @@ func TestSetupEnvironmentFS_CreatesPlatformDirectories(t *testing.T) {
 
 	fs := afero.NewMemMapFs()
 	mockPlatform := mocks.NewMockPlatform()
+	baseDir := "testroot"
 	settings := platforms.Settings{
-		ConfigDir: "/config",
-		DataDir:   "/data",
-		TempDir:   "/tmp",
+		ConfigDir: filepath.Join(baseDir, "config"),
+		DataDir:   filepath.Join(baseDir, "data"),
+		TempDir:   filepath.Join(baseDir, "tmp"),
 	}
 	mockPlatform.On("Settings").Return(settings)
 
@@ -126,7 +127,7 @@ config_schema = 1
 [readers]
 scan_history = 7
 `
-	err := fs.WriteFile(configDir+"/config.toml", []byte(configContent), 0o644)
+	err := fs.WriteFile(filepath.Join(configDir, "config.toml"), []byte(configContent), 0o644)
 	require.NoError(t, err)
 	cfg, err := testhelpers.NewTestConfigWithPort(fs, configDir, 7497)
 	require.NoError(t, err)
@@ -526,7 +527,7 @@ enabled = false
 broker = "localhost:1883"
 topic = "zaparoo/events"
 `
-	err := fs.WriteFile(configDir+"/config.toml", []byte(configContent), 0o644)
+	err := fs.WriteFile(filepath.Join(configDir, "config.toml"), []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	cfg, err := testhelpers.NewTestConfigWithPort(fs, configDir, 7497)
@@ -562,7 +563,7 @@ api_port = 7497
 broker = "invalid-broker-does-not-exist:1883"
 topic = "zaparoo/events"
 `
-	err := fs.WriteFile(configDir+"/config.toml", []byte(configContent), 0o644)
+	err := fs.WriteFile(filepath.Join(configDir, "config.toml"), []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	cfg, err := testhelpers.NewTestConfigWithPort(fs, configDir, 7497)
@@ -601,7 +602,7 @@ api_port = 7497
 broker = ""
 topic = "zaparoo/events"
 `
-	err := fs.WriteFile(configDir+"/config.toml", []byte(configContent), 0o644)
+	err := fs.WriteFile(filepath.Join(configDir, "config.toml"), []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	cfg, err := testhelpers.NewTestConfigWithPort(fs, configDir, 7497)

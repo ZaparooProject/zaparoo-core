@@ -31,6 +31,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type uptimeProvider func() (time.Duration, error)
+
 // monitorClockAndHealTimestamps monitors the system clock and heals timestamps when NTP syncs.
 // This is critical for MiSTer devices that boot without RTC and initially show 1970 epoch time.
 // Once NTP syncs, we can mathematically reconstruct correct timestamps using monotonic uptime.
@@ -45,7 +47,7 @@ func monitorClockAndHealTimestamps(ctx context.Context, db *database.Database, b
 		select {
 		case <-ticker.C:
 			now := time.Now()
-			healed = healTimestampsIfClockReliable(db, bootUUID, now, wasReliable, healed)
+			healed = healTimestampsIfClockReliable(db, bootUUID, now, wasReliable, healed, uptime.Get)
 			wasReliable = helpers.IsClockReliable(now)
 
 		case <-ctx.Done():
@@ -60,6 +62,7 @@ func healTimestampsIfClockReliable(
 	now time.Time,
 	wasReliable bool,
 	healed bool,
+	getUptime uptimeProvider,
 ) bool {
 	isReliable := helpers.IsClockReliable(now)
 	if !isReliable || healed {
@@ -71,7 +74,7 @@ func healTimestampsIfClockReliable(
 		Msg("clock is reliable, healing timestamps")
 
 	// Calculate true boot time: Current Time - System Uptime
-	systemUptime, err := uptime.Get()
+	systemUptime, err := getUptime()
 	if err != nil {
 		log.Error().Err(err).Msg("failed to get system uptime for timestamp healing")
 		return healed
