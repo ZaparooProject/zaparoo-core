@@ -26,7 +26,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
@@ -180,7 +179,7 @@ func TestWSEncryption_UnsupportedVersionPlaintextError(t *testing.T) {
 		Version:     2,
 		Ciphertext:  "AA==",
 		AuthToken:   "00000000-0000-0000-0000-000000000000",
-		SessionSalt: strings.Repeat("A", 24), // base64 of 16 bytes
+		SessionSalt: "3zMzoum7Y3eh+peN25WzDg==", // base64 of 16 bytes
 	}
 	//nolint:gosec // G117 false positive: hardcoded all-zero UUID, not a credential
 	body, err := json.Marshal(frame)
