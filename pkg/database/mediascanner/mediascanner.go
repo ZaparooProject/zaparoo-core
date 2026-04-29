@@ -996,14 +996,27 @@ func NewNamesIndex(
 			dir := filepath.Dir(file.Path)
 			filesByDir[dir] = append(filesByDir[dir], file)
 		}
+		if len(files) >= 1000 {
+			log.Debug().
+				Str("system", systemID).
+				Int("files", len(files)).
+				Int("directories", len(filesByDir)).
+				Msg("grouped scanned files by directory")
+		}
 
 		stripPolicyByDir := make(map[string]bool)
 		for dir, dirFiles := range filesByDir {
 			// Use 50% threshold and require at least 5 files to apply heuristic
 			stripPolicyByDir[dir] = detectNumberingPattern(dirFiles, 0.5, 5)
 		}
+		if len(files) >= 1000 {
+			log.Debug().
+				Str("system", systemID).
+				Int("directories", len(stripPolicyByDir)).
+				Msg("calculated directory strip policies")
+		}
 
-		for _, file := range files {
+		for fileIdx, file := range files {
 			// Check for cancellation or pause between file processing
 			select {
 			case <-ctx.Done():
@@ -1017,6 +1030,13 @@ func NewNamesIndex(
 
 			// Start transaction if needed (at start of system OR after mid-system commit)
 			if !batchStarted {
+				if len(files) >= 1000 {
+					log.Debug().
+						Str("system", systemID).
+						Int("processed", fileIdx).
+						Int("remaining", len(files)-fileIdx).
+						Msg("beginning media indexing transaction")
+				}
 				if beginErr := db.BeginTransaction(true); beginErr != nil {
 					return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
 				}
@@ -1039,9 +1059,20 @@ func NewNamesIndex(
 				return 0, fmt.Errorf("unrecoverable error adding media path %q: %w", file.Path, addErr)
 			}
 			filesInBatch++
+			if len(files) >= 1000 && (fileIdx+1)%1000 == 0 {
+				log.Debug().
+					Str("system", systemID).
+					Int("processed", fileIdx+1).
+					Int("total", len(files)).
+					Msg("processed media paths")
+			}
 
 			// Commit if we hit file limit (memory safety - even mid-system)
 			if filesInBatch >= maxFilesPerTransaction {
+				log.Debug().
+					Str("system", systemID).
+					Int("files", filesInBatch).
+					Msg("committing media indexing batch")
 				commitStart := time.Now()
 				if commitErr := db.CommitTransaction(); commitErr != nil {
 					return 0, fmt.Errorf("failed to commit batch transaction (file limit): %w", commitErr)
@@ -1073,6 +1104,10 @@ func NewNamesIndex(
 		}
 
 		if batchStarted {
+			log.Debug().
+				Str("system", systemID).
+				Int("files", filesInBatch).
+				Msg("committing media indexing system transaction")
 			commitStart := time.Now()
 			if commitErr := db.CommitTransaction(); commitErr != nil {
 				return 0, fmt.Errorf("failed to commit system transaction: %w", commitErr)

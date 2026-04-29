@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
@@ -112,8 +113,21 @@ func HandleMediaBrowse(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		sort = *params.Sort
 	}
 
+	var systems []systemdefs.System
+	if params.Systems != nil && len(*params.Systems) > 0 {
+		fuzzy := params.FuzzySystem != nil && *params.FuzzySystem
+		var resolveErr error
+		systems, resolveErr = resolveSystems(*params.Systems, fuzzy)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+	}
+
 	// No path → return root entries
 	if params.Path == nil || *params.Path == "" {
+		if len(systems) > 0 {
+			return browseSystemRoots(&env, systems)
+		}
 		return browseRoots(&env)
 	}
 
@@ -121,11 +135,11 @@ func HandleMediaBrowse(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	// Virtual path (contains ://)
 	if strings.Contains(path, "://") {
-		return browseVirtual(&env, path, cursor, maxResults, params.Letter, sort)
+		return browseVirtual(&env, path, cursor, maxResults, params.Letter, sort, systems)
 	}
 
 	// Filesystem path
-	return browseFilesystem(&env, path, cursor, maxResults, params.Letter, sort)
+	return browseFilesystem(&env, path, cursor, maxResults, params.Letter, sort, systems)
 }
 
 // browseRoots returns the top-level root entries: filesystem roots with indexed
@@ -145,7 +159,7 @@ func browseRoots(env *requests.RequestEnv) (any, error) {
 	}
 
 	// Get virtual scheme roots
-	virtualSchemes, err := env.Database.MediaDB.BrowseVirtualSchemes(ctx)
+	virtualSchemes, err := env.Database.MediaDB.BrowseVirtualSchemes(ctx, database.BrowseVirtualSchemesOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("error getting virtual schemes: %w", err)
 	}
@@ -189,6 +203,161 @@ func browseRoots(env *requests.RequestEnv) (any, error) {
 	}, nil
 }
 
+func browseSystemRoots(env *requests.RequestEnv, systems []systemdefs.System) (any, error) {
+	routes, err := buildSystemBrowseRouteCandidates(env, systems)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := env.Database.MediaDB.BrowseRouteCounts(env.Context, database.BrowseRouteCountsOptions{
+		Routes:  routes,
+		Systems: systems,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error getting system route counts: %w", err)
+	}
+
+	entries := make([]models.BrowseEntry, 0, len(routes))
+	schemeGroups := buildSchemeGroupMap(env)
+	for _, route := range routes {
+		count, ok := counts[route]
+		if !ok || count.FileCount == 0 {
+			continue
+		}
+
+		fileCount := count.FileCount
+		entry := models.BrowseEntry{
+			Name:      browseRouteDisplayName(route),
+			Path:      route,
+			Type:      "root",
+			FileCount: &fileCount,
+			SystemIDs: count.SystemIDs,
+		}
+		if len(count.SystemIDs) == 1 {
+			entry.SystemID = &count.SystemIDs[0]
+		}
+		if group, ok := schemeGroups[route]; ok {
+			entry.Group = &group
+		}
+		entries = append(entries, entry)
+	}
+
+	return models.BrowseResults{Entries: entries}, nil
+}
+
+func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []systemdefs.System) ([]string, error) {
+	var rootDirs []string
+	if env.Platform != nil {
+		rootDirs = env.Platform.RootDirs(env.Config)
+	}
+
+	routes := make([]string, 0)
+	seen := make(map[string]bool)
+	addRoute := func(route string) {
+		if route == "" || seen[route] {
+			return
+		}
+		seen[route] = true
+		routes = append(routes, route)
+	}
+	addFilesystemRoute := func(route string) {
+		cleaned := filepath.Clean(route)
+		if !isPathUnderRootDirs(cleaned, rootDirs) {
+			return
+		}
+		addRoute(filepath.ToSlash(cleaned))
+	}
+
+	if env.LauncherCache != nil {
+		for i := range systems {
+			launchers := env.LauncherCache.GetLaunchersBySystem(systems[i].ID)
+			for j := range launchers {
+				launcher := &launchers[j]
+				for _, scheme := range launcher.Schemes {
+					addRoute(scheme + "://")
+				}
+
+				if launcher.SkipFilesystemScan {
+					continue
+				}
+				for _, folder := range launcher.Folders {
+					if filepath.IsAbs(folder) {
+						addFilesystemRoute(folder)
+						continue
+					}
+					for _, root := range rootDirs {
+						addFilesystemRoute(filepath.Join(root, folder))
+					}
+				}
+			}
+		}
+	}
+
+	if env.Database.MediaDB != nil {
+		for _, root := range rootDirs {
+			prefix := filepath.ToSlash(filepath.Clean(root))
+			if !strings.HasSuffix(prefix, "/") {
+				prefix += "/"
+			}
+			fileCount, err := env.Database.MediaDB.BrowseFileCount(env.Context, database.BrowseFileCountOptions{
+				PathPrefix: prefix,
+				Systems:    systems,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("error getting system root file count: %w", err)
+			}
+			if fileCount > 0 {
+				addFilesystemRoute(root)
+			}
+
+			dirs, err := env.Database.MediaDB.BrowseDirectories(env.Context, database.BrowseDirectoriesOptions{
+				PathPrefix: prefix,
+				Systems:    systems,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("error getting system route directories: %w", err)
+			}
+			for _, dir := range dirs {
+				addFilesystemRoute(filepath.Join(root, dir.Name))
+			}
+		}
+
+		virtualSchemes, err := env.Database.MediaDB.BrowseVirtualSchemes(
+			env.Context,
+			database.BrowseVirtualSchemesOptions{Systems: systems},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error getting system virtual routes: %w", err)
+		}
+		for _, scheme := range virtualSchemes {
+			addRoute(scheme.Scheme)
+		}
+	}
+
+	return routes, nil
+}
+
+func isPathUnderRootDirs(path string, rootDirs []string) bool {
+	for _, root := range rootDirs {
+		cleanedRoot := filepath.Clean(root)
+		rel, err := filepath.Rel(cleanedRoot, path)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func browseRouteDisplayName(route string) string {
+	if strings.Contains(route, "://") {
+		return schemeDisplayName(route)
+	}
+	trimmed := strings.TrimSuffix(route, "/")
+	if trimmed == "" {
+		return route
+	}
+	return filepath.Base(trimmed)
+}
+
 // browseFilesystem lists the immediate children of a filesystem directory path
 // by querying the indexed media database.
 func browseFilesystem(
@@ -198,6 +367,7 @@ func browseFilesystem(
 	maxResults int,
 	letter *string,
 	sort string,
+	systems []systemdefs.System,
 ) (any, error) {
 	// Normalize the path
 	cleaned := filepath.ToSlash(filepath.Clean(path))
@@ -228,7 +398,10 @@ func browseFilesystem(
 	var dirs []database.BrowseDirectoryResult
 	if cursor == nil {
 		var err error
-		dirs, err = env.Database.MediaDB.BrowseDirectories(ctx, prefix)
+		dirs, err = env.Database.MediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+			PathPrefix: prefix,
+			Systems:    systems,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("error browsing directories: %w", err)
 		}
@@ -241,6 +414,7 @@ func browseFilesystem(
 		Limit:      maxResults + 1,
 		Letter:     letter,
 		Sort:       sort,
+		Systems:    systems,
 	}
 	files, err := env.Database.MediaDB.BrowseFiles(ctx, opts)
 	if err != nil {
@@ -250,7 +424,11 @@ func browseFilesystem(
 	// Get total file count (skip when no files and no cursor — count is obviously 0)
 	var totalFiles int
 	if len(files) > 0 || cursor != nil {
-		totalFiles, err = env.Database.MediaDB.BrowseFileCount(ctx, prefix, letter)
+		totalFiles, err = env.Database.MediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
+			PathPrefix: prefix,
+			Letter:     letter,
+			Systems:    systems,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("error getting file count: %w", err)
 		}
@@ -267,6 +445,7 @@ func browseVirtual(
 	maxResults int,
 	letter *string,
 	sort string,
+	systems []systemdefs.System,
 ) (any, error) {
 	// Validate scheme is known
 	if !isKnownVirtualScheme(env, schemePath) {
@@ -281,13 +460,18 @@ func browseVirtual(
 		Limit:      maxResults + 1,
 		Letter:     letter,
 		Sort:       sort,
+		Systems:    systems,
 	}
 	files, err := env.Database.MediaDB.BrowseFiles(ctx, opts)
 	if err != nil {
 		return nil, fmt.Errorf("error browsing virtual media: %w", err)
 	}
 
-	totalFiles, err := env.Database.MediaDB.BrowseFileCount(ctx, schemePath, letter)
+	totalFiles, err := env.Database.MediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
+		PathPrefix: schemePath,
+		Letter:     letter,
+		Systems:    systems,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("error getting virtual file count: %w", err)
 	}
@@ -319,6 +503,7 @@ func buildBrowseResponse(
 			Path:      path + "/" + dir.Name,
 			Type:      "directory",
 			FileCount: &dir.FileCount,
+			SystemIDs: dir.SystemIDs,
 		})
 	}
 

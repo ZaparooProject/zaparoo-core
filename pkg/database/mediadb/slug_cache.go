@@ -193,7 +193,7 @@ func (db *MediaDB) InvalidateSlugCacheForSystems(ctx context.Context, systemIDs 
 		return fmt.Errorf("failed to invalidate slug cache for systems: %w", err)
 	}
 
-	log.Debug().Strs("system_ids", systemIDs).Msg("invalidated slug resolution cache for systems")
+	log.Debug().Int("system_count", len(systemIDs)).Msg("invalidated slug resolution cache for systems")
 	return nil
 }
 

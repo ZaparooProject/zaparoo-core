@@ -1971,9 +1971,9 @@ func SystemMatcher() any {
 // Browse methods
 
 func (m *MockMediaDBI) BrowseDirectories(
-	ctx context.Context, pathPrefix string,
+	ctx context.Context, opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
-	args := m.Called(ctx, pathPrefix)
+	args := m.Called(ctx, opts)
 	if results, ok := args.Get(0).([]database.BrowseDirectoryResult); ok {
 		if err := args.Error(1); err != nil {
 			return results, fmt.Errorf("mock operation failed: %w", err)
@@ -2003,9 +2003,9 @@ func (m *MockMediaDBI) BrowseFiles(
 }
 
 func (m *MockMediaDBI) BrowseFileCount(
-	ctx context.Context, pathPrefix string, letter *string,
+	ctx context.Context, opts database.BrowseFileCountOptions,
 ) (int, error) {
-	args := m.Called(ctx, pathPrefix, letter)
+	args := m.Called(ctx, opts)
 	if count, ok := args.Get(0).(int); ok {
 		if err := args.Error(1); err != nil {
 			return count, fmt.Errorf("mock operation failed: %w", err)
@@ -2019,9 +2019,9 @@ func (m *MockMediaDBI) BrowseFileCount(
 }
 
 func (m *MockMediaDBI) BrowseVirtualSchemes(
-	ctx context.Context,
+	ctx context.Context, opts database.BrowseVirtualSchemesOptions,
 ) ([]database.BrowseVirtualScheme, error) {
-	args := m.Called(ctx)
+	args := m.Called(ctx, opts)
 	if results, ok := args.Get(0).([]database.BrowseVirtualScheme); ok {
 		if err := args.Error(1); err != nil {
 			return results, fmt.Errorf("mock operation failed: %w", err)
@@ -2032,6 +2032,22 @@ func (m *MockMediaDBI) BrowseVirtualSchemes(
 		return nil, fmt.Errorf("mock operation failed: %w", err)
 	}
 	return []database.BrowseVirtualScheme{}, nil
+}
+
+func (m *MockMediaDBI) BrowseRouteCounts(
+	ctx context.Context, opts database.BrowseRouteCountsOptions,
+) (map[string]database.BrowseRouteCount, error) {
+	args := m.Called(ctx, opts)
+	if results, ok := args.Get(0).(map[string]database.BrowseRouteCount); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return map[string]database.BrowseRouteCount{}, nil
 }
 
 func (m *MockMediaDBI) BrowseRootCounts(
