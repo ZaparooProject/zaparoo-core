@@ -21,6 +21,8 @@ package middleware
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -205,8 +207,9 @@ func TestWebSocketRateLimitHandler_WaitsForToken(t *testing.T) {
 
 	// First message should go through.
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("hello")))
-	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, int32(1), handlerCalls.Load(), "first message should be handled")
+	require.Eventually(t, func() bool {
+		return handlerCalls.Load() == 1
+	}, 500*time.Millisecond, 10*time.Millisecond, "first message should be handled")
 
 	// Second message should wait for a token and then reach the handler.
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("again")))
@@ -258,5 +261,18 @@ func TestWebSocketRateLimitHandler_ClosesAfterWaitTimeout(t *testing.T) {
 	// The server should have closed the connection.
 	_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	_, _, err = conn.ReadMessage()
-	assert.Error(t, err, "connection should be closed after rate limit exceeded")
+	require.Error(t, err, "connection should be closed after rate limit exceeded")
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		assert.False(t, netErr.Timeout(), "connection read should fail from server close, not read timeout")
+	}
+	assert.True(t,
+		websocket.IsCloseError(err,
+			websocket.CloseNormalClosure,
+			websocket.CloseGoingAway,
+			websocket.CloseAbnormalClosure,
+			websocket.CloseNoStatusReceived,
+		) || websocket.IsUnexpectedCloseError(err),
+		"connection read should return a websocket close error, got %v", err,
+	)
 }

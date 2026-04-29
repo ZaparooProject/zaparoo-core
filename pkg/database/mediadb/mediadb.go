@@ -202,6 +202,11 @@ func (db *MediaDB) markBrowseCacheDirty(systemDBIDs ...int64) {
 	}
 	for _, systemDBID := range systemDBIDs {
 		db.browseCacheDirtyDBIDs[systemDBID] = struct{}{}
+		if len(db.browseCacheDirtyDBIDs) > maxSelectiveInvalidationSystems {
+			db.browseCacheDirtyAll = true
+			db.browseCacheDirtyDBIDs = nil
+			return
+		}
 	}
 }
 
@@ -224,7 +229,8 @@ func (db *MediaDB) flushBrowseCacheInvalidation() error {
 	for systemDBID := range db.browseCacheDirtyDBIDs {
 		systemDBIDs = append(systemDBIDs, systemDBID)
 	}
-	err := sqlInvalidateBrowseCache(db.ctx, db.sql, systemDBIDs, db.browseCacheDirtyAll)
+	allSystems := db.browseCacheDirtyAll || len(systemDBIDs) > maxSelectiveInvalidationSystems
+	err := sqlInvalidateBrowseCache(db.ctx, db.sql, systemDBIDs, allSystems)
 	if err != nil {
 		return err
 	}

@@ -144,7 +144,7 @@ func sqlInvalidateBrowseCache(ctx context.Context, db sqlQueryable, systemDBIDs 
 		return fmt.Errorf("failed to invalidate browse cache: %w", err)
 	}
 
-	if allSystems || len(systemDBIDs) == 0 {
+	if allSystems || len(systemDBIDs) == 0 || len(systemDBIDs) > maxSelectiveInvalidationSystems {
 		if _, err := db.ExecContext(ctx, "DELETE FROM BrowseSystemCache"); err != nil {
 			return fmt.Errorf("failed to invalidate system browse cache: %w", err)
 		}

@@ -169,10 +169,17 @@ func WebSocketRateLimitHandlerWithWait(
 		ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 		defer cancel()
 		if err := rl.Wait(ctx); err != nil {
+			waitTimeoutValue := time.Duration(0)
+			if deadline, ok := ctx.Deadline(); ok {
+				waitTimeoutValue = time.Until(deadline)
+			}
+
 			log.Warn().
+				Err(err).
 				Str("ip", host).
 				Int("msg_size", len(msg)).
-				Msg("WebSocket rate limit exceeded, closing connection")
+				Str("wait_timeout", waitTimeoutValue.String()).
+				Msg("WebSocket rate limit wait failed, closing connection")
 
 			if err := session.Close(); err != nil {
 				log.Debug().Err(err).Msg("failed to close rate-limited session")
