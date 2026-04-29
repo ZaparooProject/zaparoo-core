@@ -501,23 +501,28 @@ func isPrivateIP(ipStr string) bool {
 	return false
 }
 
-// checkWebSocketOrigin validates WebSocket origin requests based on security policy.
-// It checks static origins and dynamically fetches custom origins from the provider.
-func checkWebSocketOrigin(
+// isAllowedOrigin validates HTTP/WebSocket origins against shared allowlist policy.
+func isAllowedOrigin(
 	origin string,
 	staticOrigins []string,
 	customOriginsProvider OriginsProvider,
 	apiPort int,
+	allowEmptyOrigin bool,
+	logPrefix string,
 ) bool {
 	if origin == "" {
-		log.Debug().Msg("websocket origin: empty origin allowed (same-origin)")
-		return true
+		if allowEmptyOrigin {
+			log.Debug().Msgf("%s origin: empty origin allowed (same-origin)", logPrefix)
+			return true
+		}
+		log.Debug().Msgf("%s origin: empty origin rejected", logPrefix)
+		return false
 	}
 
 	// Check static origins (case-insensitive)
 	for _, allowed := range staticOrigins {
 		if strings.EqualFold(origin, allowed) {
-			log.Debug().Msgf("websocket origin: %s allowed (static match)", origin)
+			log.Debug().Msgf("%s origin: %s allowed (static match)", logPrefix, origin)
 			return true
 		}
 	}
@@ -526,7 +531,7 @@ func checkWebSocketOrigin(
 	customOrigins := expandCustomOrigins(customOriginsProvider(), apiPort)
 	for _, allowed := range customOrigins {
 		if strings.EqualFold(origin, allowed) {
-			log.Debug().Msgf("websocket origin: %s allowed (custom match)", origin)
+			log.Debug().Msgf("%s origin: %s allowed (custom match)", logPrefix, origin)
 			return true
 		}
 	}
@@ -534,14 +539,14 @@ func checkWebSocketOrigin(
 	// Parse origin URL
 	u, err := url.Parse(origin)
 	if err != nil {
-		log.Debug().Msgf("websocket origin: %s rejected (invalid URL: %v)", origin, err)
+		log.Debug().Msgf("%s origin: %s rejected (invalid URL: %v)", logPrefix, origin, err)
 		return false
 	}
 
 	// Allow localhost and 127.0.0.1 on any port
 	hostname := u.Hostname()
 	if hostname == "localhost" || hostname == "127.0.0.1" {
-		log.Debug().Msgf("websocket origin: %s allowed (localhost any port)", origin)
+		log.Debug().Msgf("%s origin: %s allowed (localhost any port)", logPrefix, origin)
 		return true
 	}
 
@@ -549,19 +554,19 @@ func checkWebSocketOrigin(
 	if isPrivateIP(hostname) {
 		port := u.Port()
 		if port == "" && (u.Scheme == "http" || u.Scheme == "https") {
-			log.Debug().Msgf("websocket origin: %s rejected (private IP needs explicit port)", origin)
+			log.Debug().Msgf("%s origin: %s rejected (private IP needs explicit port)", logPrefix, origin)
 			return false
 		}
 		if port == strconv.Itoa(apiPort) {
-			log.Debug().Msgf("websocket origin: %s allowed (private IP correct port)", origin)
+			log.Debug().Msgf("%s origin: %s allowed (private IP correct port)", logPrefix, origin)
 			return true
 		}
-		log.Debug().Msgf("websocket origin: %s rejected (private IP wrong port: %s, expected: %d)",
-			origin, port, apiPort)
+		log.Debug().Msgf("%s origin: %s rejected (private IP wrong port: %s, expected: %d)",
+			logPrefix, origin, port, apiPort)
 		return false
 	}
 
-	log.Debug().Msgf("websocket origin: %s rejected (not allowed)", origin)
+	log.Debug().Msgf("%s origin: %s rejected (not allowed)", logPrefix, origin)
 	return false
 }
 
@@ -630,28 +635,8 @@ func makeOriginValidator(
 	customOriginsProvider OriginsProvider,
 	port int,
 ) func(*http.Request, string) bool {
-	staticSet := make(map[string]struct{}, len(staticOrigins))
-	for _, o := range staticOrigins {
-		staticSet[strings.ToLower(o)] = struct{}{}
-	}
-
 	return func(_ *http.Request, origin string) bool {
-		lowerOrigin := strings.ToLower(origin)
-
-		// Check static origins first
-		if _, ok := staticSet[lowerOrigin]; ok {
-			return true
-		}
-
-		// Check custom origins (fetched dynamically)
-		customOrigins := expandCustomOrigins(customOriginsProvider(), port)
-		for _, allowed := range customOrigins {
-			if strings.EqualFold(origin, allowed) {
-				return true
-			}
-		}
-
-		return false
+		return isAllowedOrigin(origin, staticOrigins, customOriginsProvider, port, false, "cors")
 	}
 }
 
@@ -1454,7 +1439,7 @@ func StartWithReady(
 	session.Upgrader.CheckOrigin = func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		log.Debug().Msgf("websocket origin: %s", origin)
-		return checkWebSocketOrigin(origin, staticOrigins, cfg.AllowedOrigins, port)
+		return isAllowedOrigin(origin, staticOrigins, cfg.AllowedOrigins, port, true, "websocket")
 	}
 	// melody's Session.Write is a non-blocking enqueue onto a per-session
 	// output channel (default size 256). When that channel fills, the
