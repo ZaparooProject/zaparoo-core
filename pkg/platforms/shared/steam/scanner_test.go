@@ -20,8 +20,6 @@
 package steam
 
 import (
-	"bytes"
-	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,75 +36,6 @@ import (
 // VDF format requires backslashes to be escaped as double backslashes.
 func vdfEscapePath(path string) string {
 	return strings.ReplaceAll(path, `\`, `\\`)
-}
-
-type testShortcut struct {
-	AppName       string
-	Exe           string
-	StartDir      string
-	LaunchOptions string
-	AppID         uint32
-	Optional      bool
-}
-
-func writeVDFString(buf *bytes.Buffer, key, value string) {
-	_ = buf.WriteByte(0x01)
-	_, _ = buf.WriteString(key)
-	_ = buf.WriteByte(0x00)
-	_, _ = buf.WriteString(value)
-	_ = buf.WriteByte(0x00)
-}
-
-func writeVDFUint32(buf *bytes.Buffer, key string, value uint32) {
-	_ = buf.WriteByte(0x02)
-	_, _ = buf.WriteString(key)
-	_ = buf.WriteByte(0x00)
-	var raw [4]byte
-	binary.LittleEndian.PutUint32(raw[:], value)
-	_, _ = buf.Write(raw[:])
-}
-
-func writeEmptyVDFMap(buf *bytes.Buffer, key string) {
-	_ = buf.WriteByte(0x00)
-	_, _ = buf.WriteString(key)
-	_ = buf.WriteByte(0x00)
-	_ = buf.WriteByte(0x08)
-}
-
-func buildShortcutsVDF(shortcuts []testShortcut) []byte {
-	var buf bytes.Buffer
-
-	_ = buf.WriteByte(0x00)
-	_, _ = buf.WriteString("shortcuts")
-	_ = buf.WriteByte(0x00)
-
-	for i, shortcut := range shortcuts {
-		_ = buf.WriteByte(0x00)
-		_, _ = buf.WriteString(strconv.Itoa(i))
-		_ = buf.WriteByte(0x00)
-
-		writeVDFUint32(&buf, "appid", shortcut.AppID)
-		writeVDFString(&buf, "AppName", shortcut.AppName)
-		writeVDFString(&buf, "Exe", shortcut.Exe)
-		writeVDFString(&buf, "StartDir", shortcut.StartDir)
-		writeVDFString(&buf, "LaunchOptions", shortcut.LaunchOptions)
-
-		if shortcut.Optional {
-			writeVDFString(&buf, "icon", "")
-			writeVDFString(&buf, "ShortcutPath", "")
-			writeVDFUint32(&buf, "IsHidden", 0)
-			writeVDFUint32(&buf, "AllowDesktopConfig", 1)
-			writeVDFUint32(&buf, "AllowOverlay", 1)
-			writeEmptyVDFMap(&buf, "tags")
-		}
-
-		_ = buf.WriteByte(0x08)
-	}
-
-	_ = buf.WriteByte(0x08)
-	_ = buf.WriteByte(0x08)
-
-	return buf.Bytes()
 }
 
 func shortcutVirtualPath(appID uint32, appName string) string {
@@ -286,7 +216,7 @@ func TestScanSteamShortcuts(t *testing.T) {
 		userdataDir := filepath.Join(tempDir, "userdata", "12345678", "config")
 		require.NoError(t, os.MkdirAll(userdataDir, 0o750))
 
-		shortcuts := []testShortcut{
+		shortcuts := []fixtures.TestShortcut{
 			{
 				AppID:   624353111,
 				AppName: "Capcom vs. SNK 2 Mark of the Millennium 2001",
@@ -305,7 +235,7 @@ func TestScanSteamShortcuts(t *testing.T) {
 				Optional:      false,
 			},
 		}
-		err := os.WriteFile(filepath.Join(userdataDir, "shortcuts.vdf"), buildShortcutsVDF(shortcuts), 0o600)
+		err := os.WriteFile(filepath.Join(userdataDir, "shortcuts.vdf"), fixtures.BuildShortcutsVDF(shortcuts), 0o600)
 		require.NoError(t, err)
 
 		results, scanErr := ScanSteamShortcuts(tempDir)

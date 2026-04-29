@@ -178,6 +178,14 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 		log.Debug().
 			Str("steamDir", steamDir).
 			Str("userdataDir", userdataDir).
+			Int("userdataEntries", 0).
+			Int("userDirsScanned", userDirsScanned).
+			Int("shortcutFilesFound", shortcutsFilesFound).
+			Int("shortcutFileAccessFailures", shortcutFileAccessFailures).
+			Int("shortcutFileReadFailures", shortcutFileReadFailures).
+			Int("shortcutFileParseFailures", shortcutFileParseFailures).
+			Int("parsedShortcuts", parsedShortcuts).
+			Int("skippedBlankNames", skippedBlankNames).
 			Int("results", len(results)).
 			Msg("Steam shortcuts scan complete")
 		return results, nil
