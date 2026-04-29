@@ -58,11 +58,11 @@ jobs:
           fi
 
           git checkout -b "$BRANCH_NAME"
-          git commit -m "Update MiSTer repo for $TAG_NAME"
+          git commit -m "chore(mister): update MiSTer repo for $TAG_NAME"
           git push --set-upstream origin "$BRANCH_NAME"
 
           gh pr create \
             --base main \
             --head "$BRANCH_NAME" \
-            --title "Update MiSTer repo for $TAG_NAME" \
+            --title "chore(mister): update MiSTer repo for $TAG_NAME" \
             --body "Updates the MiSTer Downloader repo database for $TAG_NAME."
