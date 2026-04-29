@@ -255,8 +255,9 @@ func TestWebSocketRateLimitHandler_ClosesAfterWaitTimeout(t *testing.T) {
 	}, 500*time.Millisecond, 10*time.Millisecond, "first message should be handled")
 
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("again")))
-	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, int32(1), handlerCalls.Load(), "second message should not reach handler")
+	assert.Never(t, func() bool {
+		return handlerCalls.Load() != 1
+	}, 150*time.Millisecond, 10*time.Millisecond, "second message should not reach handler")
 
 	// The server should have closed the connection.
 	_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))

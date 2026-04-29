@@ -49,7 +49,7 @@ func splitBrowseSystemIDs(ids string) []string {
 	if ids == "" {
 		return nil
 	}
-	return strings.Split(ids, ",")
+	return uniqueBrowseSystemIDs(strings.Split(ids, ","))
 }
 
 // sqlBrowseDirectories returns distinct immediate subdirectory names under the
@@ -63,9 +63,24 @@ func sqlBrowseDirectories(
 		return sqlBrowseDirectoriesForSystems(ctx, db, opts)
 	}
 
+	results, err := sqlBrowseDirectoriesFromCache(ctx, db, opts.PathPrefix)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) > 0 {
+		return results, nil
+	}
+	return sqlBrowseDirectoriesFromMedia(ctx, db, opts.PathPrefix)
+}
+
+func sqlBrowseDirectoriesFromCache(
+	ctx context.Context,
+	db sqlQueryable,
+	pathPrefix string,
+) ([]database.BrowseDirectoryResult, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT Name, FileCount FROM BrowseCache WHERE ParentPath = ? ORDER BY Name ASC`,
-		opts.PathPrefix,
+		pathPrefix,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("browse directories query: %w", err)
@@ -82,6 +97,45 @@ func sqlBrowseDirectories(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("browse directories rows: %w", err)
+	}
+
+	return results, nil
+}
+
+func sqlBrowseDirectoriesFromMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	pathPrefix string,
+) ([]database.BrowseDirectoryResult, error) {
+	rows, err := db.QueryContext(ctx,
+		`WITH matched AS (
+			 SELECT substr(Path, length(?) + 1) AS Rest
+			 FROM Media
+			 WHERE IsMissing = 0 AND Path LIKE ? || '%'
+		 )
+		 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name,
+			COUNT(*) AS FileCount
+		 FROM matched
+		 WHERE instr(Rest, '/') > 0
+		 GROUP BY Name
+		 ORDER BY Name ASC`,
+		pathPrefix, pathPrefix,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("browse directories media query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []database.BrowseDirectoryResult
+	for rows.Next() {
+		var r database.BrowseDirectoryResult
+		if err := rows.Scan(&r.Name, &r.FileCount); err != nil {
+			return nil, fmt.Errorf("browse directories media scan: %w", err)
+		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("browse directories media rows: %w", err)
 	}
 
 	return results, nil
@@ -396,6 +450,20 @@ func sqlBrowseVirtualSchemes(
 		return sqlBrowseVirtualSchemesForSystems(ctx, db, opts)
 	}
 
+	results, err := sqlBrowseVirtualSchemesFromCache(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) > 0 {
+		return results, nil
+	}
+	return sqlBrowseVirtualSchemesFromMedia(ctx, db)
+}
+
+func sqlBrowseVirtualSchemesFromCache(
+	ctx context.Context,
+	db sqlQueryable,
+) ([]database.BrowseVirtualScheme, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT DirPath, FileCount FROM BrowseCache
 		 WHERE IsVirtual = 1 ORDER BY DirPath ASC`)
@@ -414,6 +482,37 @@ func sqlBrowseVirtualSchemes(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("browse virtual schemes rows: %w", err)
+	}
+
+	return results, nil
+}
+
+func sqlBrowseVirtualSchemesFromMedia(
+	ctx context.Context,
+	db sqlQueryable,
+) ([]database.BrowseVirtualScheme, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT substr(Path, 1, instr(Path, '://') + 2) AS Scheme,
+			COUNT(*) AS FileCount
+		 FROM Media
+		 WHERE IsMissing = 0 AND instr(Path, '://') > 0
+		 GROUP BY Scheme
+		 ORDER BY Scheme ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("browse virtual schemes media query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []database.BrowseVirtualScheme
+	for rows.Next() {
+		var r database.BrowseVirtualScheme
+		if err := rows.Scan(&r.Scheme, &r.FileCount); err != nil {
+			return nil, fmt.Errorf("browse virtual schemes media scan: %w", err)
+		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("browse virtual schemes media rows: %w", err)
 	}
 
 	return results, nil
@@ -632,6 +731,7 @@ func uniqueBrowseSystemIDs(systemIDs []string) []string {
 		seen[systemID] = struct{}{}
 		unique = append(unique, systemID)
 	}
+	sort.Strings(unique)
 	return unique
 }
 

@@ -168,12 +168,8 @@ func WebSocketRateLimitHandlerWithWait(
 
 		ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 		defer cancel()
+		waitTimeoutValue := waitTimeout
 		if err := rl.Wait(ctx); err != nil {
-			waitTimeoutValue := time.Duration(0)
-			if deadline, ok := ctx.Deadline(); ok {
-				waitTimeoutValue = time.Until(deadline)
-			}
-
 			log.Warn().
 				Err(err).
 				Str("ip", host).

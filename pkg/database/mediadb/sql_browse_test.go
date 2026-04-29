@@ -158,7 +158,7 @@ func TestSqlBrowseVirtualSchemes_WithSystemsMergesPartialCache(t *testing.T) {
 	assert.Equal(t, []string{"DOS"}, schemes[0].SystemIDs)
 	assert.Equal(t, "steam://", schemes[1].Scheme)
 	assert.Equal(t, 5, schemes[1].FileCount)
-	assert.Equal(t, []string{"Steam", "DOS"}, schemes[1].SystemIDs)
+	assert.Equal(t, []string{"DOS", "Steam"}, schemes[1].SystemIDs)
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -222,7 +222,7 @@ func TestSqlBrowseDirectories_WithSystemsUsesSystemCache(t *testing.T) {
 	require.Len(t, dirs, 1)
 	assert.Equal(t, "RPG", dirs[0].Name)
 	assert.Equal(t, 8, dirs[0].FileCount)
-	assert.Equal(t, []string{"SNES", "Genesis"}, dirs[0].SystemIDs)
+	assert.Equal(t, []string{"Genesis", "SNES"}, dirs[0].SystemIDs)
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -293,7 +293,7 @@ func TestSqlBrowseDirectories_WithSystemsMergesPartialCache(t *testing.T) {
 	require.Len(t, dirs, 2)
 	assert.Equal(t, "RPG", dirs[0].Name)
 	assert.Equal(t, 5, dirs[0].FileCount)
-	assert.Equal(t, []string{"SNES", "Genesis"}, dirs[0].SystemIDs)
+	assert.Equal(t, []string{"Genesis", "SNES"}, dirs[0].SystemIDs)
 	assert.Equal(t, "Shooter", dirs[1].Name)
 	assert.Equal(t, 1, dirs[1].FileCount)
 	assert.Equal(t, []string{"Genesis"}, dirs[1].SystemIDs)
@@ -371,7 +371,7 @@ func TestSqlBrowseRouteCounts_MergesPartialCache(t *testing.T) {
 
 	require.Contains(t, counts, sharedRoute)
 	assert.Equal(t, 5, counts[sharedRoute].FileCount)
-	assert.Equal(t, []string{"SNES", "Genesis"}, counts[sharedRoute].SystemIDs)
+	assert.Equal(t, []string{"Genesis", "SNES"}, counts[sharedRoute].SystemIDs)
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }

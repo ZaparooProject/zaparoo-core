@@ -106,6 +106,13 @@ func browseFileCountSystemOpts(pathPrefix, systemID string) any {
 	})
 }
 
+func browseVirtualSchemesSystemOpts(t *testing.T, systemID string) any {
+	t.Helper()
+	return mock.MatchedBy(func(opts database.BrowseVirtualSchemesOptions) bool {
+		return len(opts.Systems) == 1 && opts.Systems[0].ID == systemID
+	})
+}
+
 func browseTestAbsPath(parts ...string) string {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -182,6 +189,13 @@ func TestHandleMediaBrowse_SystemRootRoutes(t *testing.T) {
 		})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
+	romsPrefix := filepath.ToSlash(romsRoot) + "/"
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "SNES")).
+		Return(0, nil)
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts(romsPrefix, "SNES")).
+		Return([]database.BrowseDirectoryResult{}, nil)
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "SNES")).
+		Return([]database.BrowseVirtualScheme{}, nil)
 	mockMediaDB.On("BrowseRouteCounts", mock.Anything,
 		mock.MatchedBy(func(opts database.BrowseRouteCountsOptions) bool {
 			return len(opts.Systems) == 1 && opts.Systems[0].ID == "SNES" &&
@@ -208,6 +222,98 @@ func TestHandleMediaBrowse_SystemRootRoutes(t *testing.T) {
 	assert.Equal(t, "SNES", *entry.SystemID)
 	require.NotNil(t, entry.FileCount)
 	assert.Equal(t, 12, *entry.FileCount)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaBrowse_SystemRootRoutesIncludesIndexedDirectories(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	customPath := filepath.Join(romsRoot, "custom")
+	customAPIPath := filepath.ToSlash(customPath)
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{romsRoot})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	romsPrefix := filepath.ToSlash(romsRoot) + "/"
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "SNES")).
+		Return(0, nil)
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts(romsPrefix, "SNES")).
+		Return([]database.BrowseDirectoryResult{{Name: "custom", FileCount: 3, SystemIDs: []string{"SNES"}}}, nil)
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "SNES")).
+		Return([]database.BrowseVirtualScheme{{Scheme: "steam://", FileCount: 2, SystemIDs: []string{"SNES"}}}, nil)
+	mockMediaDB.On("BrowseRouteCounts", mock.Anything,
+		mock.MatchedBy(func(opts database.BrowseRouteCountsOptions) bool {
+			return len(opts.Systems) == 1 && opts.Systems[0].ID == "SNES" &&
+				assert.ElementsMatch(t, []string{customAPIPath, "steam://"}, opts.Routes)
+		}),
+	).Return(map[string]database.BrowseRouteCount{
+		customAPIPath: {Path: customAPIPath, FileCount: 3, SystemIDs: []string{"SNES"}},
+		"steam://":    {Path: "steam://", FileCount: 2, SystemIDs: []string{"SNES"}},
+	}, nil)
+
+	systems := []string{"SNES"}
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Systems: &systems})
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 2)
+	assert.Equal(t, customAPIPath, browseResults.Entries[0].Path)
+	assert.Equal(t, "steam://", browseResults.Entries[1].Path)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaBrowse_SystemRootRoutesIncludesRootMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	romsAPIPath := filepath.ToSlash(romsRoot)
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{romsRoot})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	romsPrefix := filepath.ToSlash(romsRoot) + "/"
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "SNES")).
+		Return(1, nil)
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts(romsPrefix, "SNES")).
+		Return([]database.BrowseDirectoryResult{}, nil)
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "SNES")).
+		Return([]database.BrowseVirtualScheme{}, nil)
+	mockMediaDB.On("BrowseRouteCounts", mock.Anything,
+		mock.MatchedBy(func(opts database.BrowseRouteCountsOptions) bool {
+			return len(opts.Systems) == 1 && opts.Systems[0].ID == "SNES" &&
+				assert.ElementsMatch(t, []string{romsAPIPath}, opts.Routes)
+		}),
+	).Return(map[string]database.BrowseRouteCount{
+		romsAPIPath: {Path: romsAPIPath, FileCount: 1, SystemIDs: []string{"SNES"}},
+	}, nil)
+
+	systems := []string{"SNES"}
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Systems: &systems})
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	entry := browseResults.Entries[0]
+	assert.Equal(t, "root", entry.Type)
+	assert.Equal(t, "roms", entry.Name)
+	assert.Equal(t, romsAPIPath, entry.Path)
+	require.NotNil(t, entry.FileCount)
+	assert.Equal(t, 1, *entry.FileCount)
 
 	mockMediaDB.AssertExpectations(t)
 }

@@ -204,7 +204,10 @@ func browseRoots(env *requests.RequestEnv) (any, error) {
 }
 
 func browseSystemRoots(env *requests.RequestEnv, systems []systemdefs.System) (any, error) {
-	routes := buildSystemBrowseRouteCandidates(env, systems)
+	routes, err := buildSystemBrowseRouteCandidates(env, systems)
+	if err != nil {
+		return nil, err
+	}
 	counts, err := env.Database.MediaDB.BrowseRouteCounts(env.Context, database.BrowseRouteCountsOptions{
 		Routes:  routes,
 		Systems: systems,
@@ -241,11 +244,7 @@ func browseSystemRoots(env *requests.RequestEnv, systems []systemdefs.System) (a
 	return models.BrowseResults{Entries: entries}, nil
 }
 
-func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []systemdefs.System) []string {
-	if env.LauncherCache == nil {
-		return nil
-	}
-
+func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []systemdefs.System) ([]string, error) {
 	var rootDirs []string
 	if env.Platform != nil {
 		rootDirs = env.Platform.RootDirs(env.Config)
@@ -268,30 +267,73 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 		addRoute(filepath.ToSlash(cleaned))
 	}
 
-	for i := range systems {
-		launchers := env.LauncherCache.GetLaunchersBySystem(systems[i].ID)
-		for j := range launchers {
-			launcher := &launchers[j]
-			for _, scheme := range launcher.Schemes {
-				addRoute(scheme + "://")
-			}
+	if env.LauncherCache != nil {
+		for i := range systems {
+			launchers := env.LauncherCache.GetLaunchersBySystem(systems[i].ID)
+			for j := range launchers {
+				launcher := &launchers[j]
+				for _, scheme := range launcher.Schemes {
+					addRoute(scheme + "://")
+				}
 
-			if launcher.SkipFilesystemScan {
-				continue
-			}
-			for _, folder := range launcher.Folders {
-				if filepath.IsAbs(folder) {
-					addFilesystemRoute(folder)
+				if launcher.SkipFilesystemScan {
 					continue
 				}
-				for _, root := range rootDirs {
-					addFilesystemRoute(filepath.Join(root, folder))
+				for _, folder := range launcher.Folders {
+					if filepath.IsAbs(folder) {
+						addFilesystemRoute(folder)
+						continue
+					}
+					for _, root := range rootDirs {
+						addFilesystemRoute(filepath.Join(root, folder))
+					}
 				}
 			}
 		}
 	}
 
-	return routes
+	if env.Database.MediaDB != nil {
+		for _, root := range rootDirs {
+			prefix := filepath.ToSlash(filepath.Clean(root))
+			if !strings.HasSuffix(prefix, "/") {
+				prefix += "/"
+			}
+			fileCount, err := env.Database.MediaDB.BrowseFileCount(env.Context, database.BrowseFileCountOptions{
+				PathPrefix: prefix,
+				Systems:    systems,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("error getting system root file count: %w", err)
+			}
+			if fileCount > 0 {
+				addFilesystemRoute(root)
+			}
+
+			dirs, err := env.Database.MediaDB.BrowseDirectories(env.Context, database.BrowseDirectoriesOptions{
+				PathPrefix: prefix,
+				Systems:    systems,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("error getting system route directories: %w", err)
+			}
+			for _, dir := range dirs {
+				addFilesystemRoute(filepath.Join(root, dir.Name))
+			}
+		}
+
+		virtualSchemes, err := env.Database.MediaDB.BrowseVirtualSchemes(
+			env.Context,
+			database.BrowseVirtualSchemesOptions{Systems: systems},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error getting system virtual routes: %w", err)
+		}
+		for _, scheme := range virtualSchemes {
+			addRoute(scheme.Scheme)
+		}
+	}
+
+	return routes, nil
 }
 
 func isPathUnderRootDirs(path string, rootDirs []string) bool {

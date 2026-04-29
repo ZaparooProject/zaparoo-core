@@ -172,6 +172,10 @@ func sqlInvalidateBrowseCache(ctx context.Context, db sqlQueryable, systemDBIDs 
 //	"/media/fat/"            → ("/media/", "fat")
 //	"steam://"               → ("", "steam://")
 func browseCacheParentAndName(dirPath string) (parentPath, name string) {
+	if dirPath == "/" {
+		return "", "/"
+	}
+
 	// Virtual schemes have no parent
 	if strings.Contains(dirPath, "://") {
 		return "", dirPath
