@@ -424,6 +424,72 @@ func sqlBrowseVirtualSchemesForSystems(
 	db sqlQueryable,
 	opts database.BrowseVirtualSchemesOptions,
 ) ([]database.BrowseVirtualScheme, error) {
+	results, err := sqlBrowseVirtualSchemesForSystemsFromCache(ctx, db, opts)
+	if err != nil {
+		return nil, err
+	}
+	missingSystems := browseMissingSystems(opts.Systems, browseCoveredSystemIDsFromVirtualSchemes(results))
+	if len(missingSystems) == 0 {
+		return results, nil
+	}
+
+	mediaResults, err := sqlBrowseVirtualSchemesForSystemsFromMedia(ctx, db, database.BrowseVirtualSchemesOptions{
+		Systems: missingSystems,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return mergeBrowseVirtualSchemes(results, mediaResults), nil
+}
+
+func browseCoveredSystemIDsFromVirtualSchemes(results []database.BrowseVirtualScheme) map[string]struct{} {
+	covered := make(map[string]struct{})
+	for _, result := range results {
+		for _, systemID := range result.SystemIDs {
+			covered[systemID] = struct{}{}
+		}
+	}
+	return covered
+}
+
+func mergeBrowseVirtualSchemes(
+	base []database.BrowseVirtualScheme,
+	extra []database.BrowseVirtualScheme,
+) []database.BrowseVirtualScheme {
+	if len(extra) == 0 {
+		return base
+	}
+
+	byScheme := make(map[string]*database.BrowseVirtualScheme, len(base)+len(extra))
+	for i := range base {
+		result := base[i]
+		result.SystemIDs = uniqueBrowseSystemIDs(result.SystemIDs)
+		byScheme[result.Scheme] = &result
+	}
+	for _, result := range extra {
+		if existing, ok := byScheme[result.Scheme]; ok {
+			existing.FileCount += result.FileCount
+			existing.SystemIDs = uniqueBrowseSystemIDs(append(existing.SystemIDs, result.SystemIDs...))
+			continue
+		}
+		result.SystemIDs = uniqueBrowseSystemIDs(result.SystemIDs)
+		byScheme[result.Scheme] = &result
+	}
+
+	merged := make([]database.BrowseVirtualScheme, 0, len(byScheme))
+	for _, result := range byScheme {
+		merged = append(merged, *result)
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Scheme < merged[j].Scheme })
+	return merged
+}
+
+func sqlBrowseVirtualSchemesForSystemsFromCache(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseVirtualSchemesOptions,
+) ([]database.BrowseVirtualScheme, error) {
 	systemClause, args := browseSystemFilterClause("s.SystemID", opts.Systems)
 	rows, err := db.QueryContext(ctx,
 		`SELECT b.DirPath, SUM(b.FileCount), GROUP_CONCAT(DISTINCT s.SystemID)
@@ -449,6 +515,43 @@ func sqlBrowseVirtualSchemesForSystems(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("browse virtual schemes by system rows: %w", err)
+	}
+
+	return results, nil
+}
+
+func sqlBrowseVirtualSchemesForSystemsFromMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseVirtualSchemesOptions,
+) ([]database.BrowseVirtualScheme, error) {
+	systemClause, args := browseSystemFilterClause("s.SystemID", opts.Systems)
+	rows, err := db.QueryContext(ctx,
+		`SELECT substr(m.Path, 1, instr(m.Path, '://') + 2) AS Scheme,
+			COUNT(*) AS FileCount,
+			GROUP_CONCAT(DISTINCT s.SystemID)
+		 FROM Media m
+		 INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		 WHERE m.IsMissing = 0 AND instr(m.Path, '://') > 0 AND `+systemClause+`
+		 GROUP BY Scheme
+		 ORDER BY Scheme ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("browse virtual schemes by system media query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []database.BrowseVirtualScheme
+	for rows.Next() {
+		var r database.BrowseVirtualScheme
+		var systemIDs string
+		if err := rows.Scan(&r.Scheme, &r.FileCount, &systemIDs); err != nil {
+			return nil, fmt.Errorf("browse virtual schemes by system media scan: %w", err)
+		}
+		r.SystemIDs = splitBrowseSystemIDs(systemIDs)
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("browse virtual schemes by system media rows: %w", err)
 	}
 
 	return results, nil

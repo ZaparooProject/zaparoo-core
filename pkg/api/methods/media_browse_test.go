@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -106,7 +107,12 @@ func browseFileCountSystemOpts(pathPrefix, systemID string) any {
 }
 
 func browseTestAbsPath(parts ...string) string {
-	return filepath.Join(append([]string{string(filepath.Separator)}, parts...)...)
+	wd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	root := filepath.VolumeName(wd) + string(filepath.Separator)
+	return filepath.Join(append([]string{root}, parts...)...)
 }
 
 func TestHandleMediaBrowse_RootLevel(t *testing.T) {
@@ -604,6 +610,51 @@ func TestHandleMediaBrowse_VirtualScheme(t *testing.T) {
 	assert.Equal(t, 1, browseResults.TotalFiles)
 	assert.Equal(t, "media", browseResults.Entries[0].Type)
 	assert.Equal(t, "Team Fortress 2", browseResults.Entries[0].Name)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaBrowse_VirtualFiltersBySystem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{browseTestAbsPath("roms")})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{
+			{ID: "Steam", SystemID: "Windows", Schemes: []string{"steam"}},
+		})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseFiles", mock.Anything, browseFilesSystemOpts("steam://", "Windows")).
+		Return([]database.SearchResultWithCursor{
+			{
+				SystemID: "Windows", Name: "Team Fortress 2",
+				Path: "steam://440/Team%20Fortress%202", MediaID: 10,
+			},
+		}, nil)
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts("steam://", "Windows")).
+		Return(1, nil)
+
+	path := "steam://"
+	systems := []string{"Windows"}
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
+		Path:    &path,
+		Systems: &systems,
+	})
+
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	assert.Equal(t, "steam://", browseResults.Path)
+	assert.Equal(t, 1, browseResults.TotalFiles)
+	require.Len(t, browseResults.Entries, 1)
+	assert.Equal(t, "media", browseResults.Entries[0].Type)
+	require.NotNil(t, browseResults.Entries[0].SystemID)
+	assert.Equal(t, "Windows", *browseResults.Entries[0].SystemID)
 
 	mockMediaDB.AssertExpectations(t)
 }

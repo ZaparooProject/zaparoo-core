@@ -31,8 +31,9 @@ import (
 )
 
 const (
-	RequestsPerMinute = 100 // Simple limit - 100 requests per minute per IP
-	BurstSize         = 20  // Allow burst of 20 requests
+	RequestsPerMinute      = 100 // Simple limit - 100 requests per minute per IP
+	BurstSize              = 20  // Allow burst of 20 requests
+	WebSocketRateLimitWait = 2 * time.Second
 )
 
 // IPRateLimiter manages rate limiters per IP address for both HTTP and WebSocket
@@ -152,12 +153,22 @@ func WebSocketRateLimitHandler(
 	limiter *IPRateLimiter,
 	handler func(*melody.Session, []byte),
 ) func(*melody.Session, []byte) {
+	return WebSocketRateLimitHandlerWithWait(limiter, WebSocketRateLimitWait, handler)
+}
+
+func WebSocketRateLimitHandlerWithWait(
+	limiter *IPRateLimiter,
+	waitTimeout time.Duration,
+	handler func(*melody.Session, []byte),
+) func(*melody.Session, []byte) {
 	return func(session *melody.Session, msg []byte) {
 		ip := ParseRemoteIP(session.Request.RemoteAddr)
 		host := ip.String()
 		rl := limiter.GetLimiter(host)
 
-		if !rl.Allow() {
+		ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+		defer cancel()
+		if err := rl.Wait(ctx); err != nil {
 			log.Warn().
 				Str("ip", host).
 				Int("msg_size", len(msg)).

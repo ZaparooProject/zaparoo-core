@@ -210,7 +210,10 @@ func (db *MediaDB) invalidateBrowseCacheForMediaChange(systemDBIDs ...int64) err
 		db.markBrowseCacheDirty(systemDBIDs...)
 		return nil
 	}
-	return sqlInvalidateBrowseCache(db.ctx, db.conn(), systemDBIDs, len(systemDBIDs) == 0)
+	if err := sqlInvalidateBrowseCache(db.ctx, db.conn(), systemDBIDs, len(systemDBIDs) == 0); err != nil {
+		log.Debug().Err(err).Msg("failed to invalidate browse cache after media change")
+	}
+	return nil
 }
 
 func (db *MediaDB) flushBrowseCacheInvalidation() error {
@@ -222,8 +225,11 @@ func (db *MediaDB) flushBrowseCacheInvalidation() error {
 		systemDBIDs = append(systemDBIDs, systemDBID)
 	}
 	err := sqlInvalidateBrowseCache(db.ctx, db.sql, systemDBIDs, db.browseCacheDirtyAll)
+	if err != nil {
+		return err
+	}
 	db.clearBrowseCacheInvalidation()
-	return err
+	return nil
 }
 
 func (db *MediaDB) clearBrowseCacheInvalidation() {

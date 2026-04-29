@@ -124,6 +124,77 @@ func TestSqlBrowseVirtualSchemes_UsesIsVirtual(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlBrowseVirtualSchemes_WithSystemsMergesPartialCache(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(
+		`(?s)SELECT b.DirPath, SUM\(b.FileCount\), GROUP_CONCAT\(DISTINCT s.SystemID\).*BrowseSystemCache`,
+	).
+		WithArgs("Steam", "DOS").
+		WillReturnRows(
+			sqlmock.NewRows([]string{"DirPath", "FileCount", "SystemIDs"}).
+				AddRow("steam://", 2, "Steam"),
+		)
+	mock.ExpectQuery(`(?s)SELECT substr\(m.Path, 1, instr\(m.Path, '://'\) \+ 2\).*FROM Media m`).
+		WithArgs("DOS").
+		WillReturnRows(
+			sqlmock.NewRows([]string{"Scheme", "FileCount", "SystemIDs"}).
+				AddRow("gog://", 4, "DOS").
+				AddRow("steam://", 3, "DOS"),
+		)
+
+	schemes, err := sqlBrowseVirtualSchemes(context.Background(), db, database.BrowseVirtualSchemesOptions{
+		Systems: []systemdefs.System{{ID: "Steam"}, {ID: "DOS"}},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, schemes, 2)
+	assert.Equal(t, "gog://", schemes[0].Scheme)
+	assert.Equal(t, 4, schemes[0].FileCount)
+	assert.Equal(t, []string{"DOS"}, schemes[0].SystemIDs)
+	assert.Equal(t, "steam://", schemes[1].Scheme)
+	assert.Equal(t, 5, schemes[1].FileCount)
+	assert.Equal(t, []string{"Steam", "DOS"}, schemes[1].SystemIDs)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseVirtualSchemes_WithSystemsReadsFromMediaWhenCacheEmpty(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(
+		`(?s)SELECT b.DirPath, SUM\(b.FileCount\), GROUP_CONCAT\(DISTINCT s.SystemID\).*BrowseSystemCache`,
+	).
+		WithArgs("Steam").
+		WillReturnRows(sqlmock.NewRows([]string{"DirPath", "FileCount", "SystemIDs"}))
+	mock.ExpectQuery(`(?s)SELECT substr\(m.Path, 1, instr\(m.Path, '://'\) \+ 2\).*FROM Media m`).
+		WithArgs("Steam").
+		WillReturnRows(
+			sqlmock.NewRows([]string{"Scheme", "FileCount", "SystemIDs"}).
+				AddRow("steam://", 7, "Steam"),
+		)
+
+	schemes, err := sqlBrowseVirtualSchemes(context.Background(), db, database.BrowseVirtualSchemesOptions{
+		Systems: []systemdefs.System{{ID: "Steam"}},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, schemes, 1)
+	assert.Equal(t, "steam://", schemes[0].Scheme)
+	assert.Equal(t, 7, schemes[0].FileCount)
+	assert.Equal(t, []string{"Steam"}, schemes[0].SystemIDs)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlBrowseDirectories_WithSystemsUsesSystemCache(t *testing.T) {
 	t.Parallel()
 
