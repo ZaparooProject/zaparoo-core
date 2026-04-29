@@ -15,37 +15,9 @@ KillMode=control-group
 StandardOutput=journal
 StandardError=journal
 
-# Security - File System
-PrivateTmp=true
-ReadWritePaths=%h/.config/zaparoo %h/.local/share/zaparoo
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-ProtectKernelLogs=true
-
-# Security - Devices (USB/serial readers, optical drives)
-PrivateDevices=false
-DevicePolicy=closed
-DeviceAllow=/dev/ttyUSB* rw
-DeviceAllow=/dev/ttyACM* rw
-DeviceAllow=/dev/bus/usb rw
-DeviceAllow=/dev/sr* r
-DeviceAllow=char-usb_device rw
-
-# Security - Privileges
-NoNewPrivileges=true
-ProtectClock=true
-ProtectHostname=true
-RestrictSUIDSGID=true
-RestrictRealtime=true
-LockPersonality=true
-
-# Security - Network
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-
-# Security - System Calls
-SystemCallFilter=@system-service @process
-SystemCallArchitectures=native
+# Zaparoo launches desktop and game processes that need normal user-session
+# access to display, audio, GPU, input, Flatpak, Steam, Wine/Proton, and custom
+# launchers. Avoid systemd sandboxing here because child processes inherit it.
 
 [Install]
 WantedBy=default.target
