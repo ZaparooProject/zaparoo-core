@@ -38,6 +38,7 @@ type TestShortcut struct {
 	StartDir      string
 	LaunchOptions string
 	AppID         uint32
+	IsHidden      bool
 	Optional      bool
 }
 
@@ -56,6 +57,15 @@ func writeVDFUint32(buf *bytes.Buffer, key string, value uint32) {
 	var raw [4]byte
 	binary.LittleEndian.PutUint32(raw[:], value)
 	_, _ = buf.Write(raw[:])
+}
+
+func writeVDFBool(buf *bytes.Buffer, key string, value bool) {
+	if value {
+		writeVDFUint32(buf, key, 1)
+		return
+	}
+
+	writeVDFUint32(buf, key, 0)
 }
 
 func writeEmptyVDFMap(buf *bytes.Buffer, key string) {
@@ -78,17 +88,17 @@ func BuildShortcutsVDF(shortcuts []TestShortcut) []byte {
 		_ = buf.WriteByte(VDFMapStartMarker)
 
 		writeVDFUint32(&buf, "appid", shortcut.AppID)
-		writeVDFString(&buf, "AppName", shortcut.AppName)
-		writeVDFString(&buf, "Exe", shortcut.Exe)
-		writeVDFString(&buf, "StartDir", shortcut.StartDir)
-		writeVDFString(&buf, "LaunchOptions", shortcut.LaunchOptions)
+		writeVDFString(&buf, "appname", shortcut.AppName)
+		writeVDFString(&buf, "exe", shortcut.Exe)
+		writeVDFString(&buf, "startdir", shortcut.StartDir)
+		writeVDFString(&buf, "launchoptions", shortcut.LaunchOptions)
 
 		if shortcut.Optional {
 			writeVDFString(&buf, "icon", "")
-			writeVDFString(&buf, "ShortcutPath", "")
-			writeVDFUint32(&buf, "IsHidden", 0)
-			writeVDFUint32(&buf, "AllowDesktopConfig", 1)
-			writeVDFUint32(&buf, "AllowOverlay", 1)
+			writeVDFString(&buf, "shortcutpath", "")
+			writeVDFBool(&buf, "ishidden", shortcut.IsHidden)
+			writeVDFUint32(&buf, "allowdesktopconfig", 1)
+			writeVDFUint32(&buf, "allowoverlay", 1)
 			writeEmptyVDFMap(&buf, "tags")
 		}
 
