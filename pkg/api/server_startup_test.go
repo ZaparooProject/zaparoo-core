@@ -743,17 +743,25 @@ func TestIsAllowedOrigin_WebSocketHotReload(t *testing.T) {
 
 	// Initial state: custom origin allowed
 	assert.True(t, isAllowedOrigin("http://myapp.example.com", staticOrigins, provider, apiPort, true, "websocket"))
-	assert.True(t, isAllowedOrigin("http://myapp.example.com:7497", staticOrigins, provider, apiPort, true, "websocket"))
-	assert.False(t, isAllowedOrigin("http://other.example.com:7497", staticOrigins, provider, apiPort, true, "websocket"))
+	assert.True(t, isAllowedOrigin(
+		"http://myapp.example.com:7497", staticOrigins, provider, apiPort, true, "websocket",
+	))
+	assert.False(t, isAllowedOrigin(
+		"http://other.example.com:7497", staticOrigins, provider, apiPort, true, "websocket",
+	))
 
 	// Simulate config reload: change custom origins
 	customOrigins = []string{"http://other.example.com"}
 
 	// Old custom origin should now be rejected (not private IP, not localhost)
-	assert.False(t, isAllowedOrigin("http://myapp.example.com:7497", staticOrigins, provider, apiPort, true, "websocket"))
+	assert.False(t, isAllowedOrigin(
+		"http://myapp.example.com:7497", staticOrigins, provider, apiPort, true, "websocket",
+	))
 	// New custom origin should be allowed
 	assert.True(t, isAllowedOrigin("http://other.example.com", staticOrigins, provider, apiPort, true, "websocket"))
-	assert.True(t, isAllowedOrigin("http://other.example.com:7497", staticOrigins, provider, apiPort, true, "websocket"))
+	assert.True(t, isAllowedOrigin(
+		"http://other.example.com:7497", staticOrigins, provider, apiPort, true, "websocket",
+	))
 
 	// Static origins should always work regardless of custom origins
 	assert.True(t, isAllowedOrigin("http://localhost:7497", staticOrigins, provider, apiPort, true, "websocket"))
