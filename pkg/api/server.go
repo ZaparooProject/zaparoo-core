@@ -66,6 +66,7 @@ import (
 var allowedOrigins = []string{
 	"capacitor://localhost", // iOS Capacitor v3+
 	"ionic://localhost",     // iOS Capacitor v2
+	"https://zaparoo.app",   // Hosted web app
 	"https://localhost",     // Android
 	"http://localhost",      // Fallback/development
 }
@@ -501,7 +502,7 @@ func isPrivateIP(ipStr string) bool {
 	return false
 }
 
-// isAllowedOrigin validates HTTP/WebSocket origins against shared allowlist policy.
+// isAllowedOrigin validates HTTP/WebSocket origins against the explicit allowlist.
 func isAllowedOrigin(
 	origin string,
 	staticOrigins []string,
@@ -534,36 +535,6 @@ func isAllowedOrigin(
 			log.Debug().Msgf("%s origin: %s allowed (custom match)", logPrefix, origin)
 			return true
 		}
-	}
-
-	// Parse origin URL
-	u, err := url.Parse(origin)
-	if err != nil {
-		log.Debug().Msgf("%s origin: %s rejected (invalid URL: %v)", logPrefix, origin, err)
-		return false
-	}
-
-	// Allow localhost and 127.0.0.1 on any port
-	hostname := u.Hostname()
-	if hostname == "localhost" || hostname == "127.0.0.1" {
-		log.Debug().Msgf("%s origin: %s allowed (localhost any port)", logPrefix, origin)
-		return true
-	}
-
-	// Allow private IP addresses only on the correct API port
-	if isPrivateIP(hostname) {
-		port := u.Port()
-		if port == "" && (u.Scheme == "http" || u.Scheme == "https") {
-			log.Debug().Msgf("%s origin: %s rejected (private IP needs explicit port)", logPrefix, origin)
-			return false
-		}
-		if port == strconv.Itoa(apiPort) {
-			log.Debug().Msgf("%s origin: %s allowed (private IP correct port)", logPrefix, origin)
-			return true
-		}
-		log.Debug().Msgf("%s origin: %s rejected (private IP wrong port: %s, expected: %d)",
-			logPrefix, origin, port, apiPort)
-		return false
 	}
 
 	log.Debug().Msgf("%s origin: %s rejected (not allowed)", logPrefix, origin)
