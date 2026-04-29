@@ -369,7 +369,7 @@ func TestIsPrivateIP(t *testing.T) {
 	}
 }
 
-func TestCheckWebSocketOrigin(t *testing.T) {
+func TestIsAllowedOrigin_WebSocketPolicy(t *testing.T) {
 	t.Parallel()
 
 	staticOrigins := []string{
@@ -395,23 +395,28 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "localhost_any_port_allowed",
+			name:     "localhost_other_port_rejected",
 			origin:   "http://localhost:8100",
-			expected: true,
+			expected: false,
 		},
 		{
-			name:     "localhost_https_any_port_allowed",
+			name:     "localhost_https_other_port_rejected",
 			origin:   "https://localhost:3000",
-			expected: true,
+			expected: false,
 		},
 		{
-			name:     "127_0_0_1_any_port_allowed",
+			name:     "127_0_0_1_other_port_rejected",
 			origin:   "http://127.0.0.1:8100",
-			expected: true,
+			expected: false,
 		},
 		{
-			name:     "private_ip_correct_port_allowed",
+			name:     "implicit_private_ip_correct_port_rejected",
 			origin:   "http://192.168.1.50:7497",
+			expected: false,
+		},
+		{
+			name:     "explicit_private_ip_allowed",
+			origin:   "http://192.168.1.100:7497",
 			expected: true,
 		},
 		{
@@ -444,8 +449,8 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := checkWebSocketOrigin(tt.origin, staticOrigins, customOriginsProvider, apiPort)
-			require.Equal(t, tt.expected, result, "checkWebSocketOrigin result mismatch for %s", tt.origin)
+			result := isAllowedOrigin(tt.origin, staticOrigins, customOriginsProvider, apiPort, true, "websocket")
+			require.Equal(t, tt.expected, result, "isAllowedOrigin result mismatch for %s", tt.origin)
 		})
 	}
 }
@@ -554,6 +559,31 @@ func TestBuildDynamicAllowedOrigins(t *testing.T) {
 	// Trailing slashes should be trimmed
 	require.Contains(t, result, "http://trailing.local")
 	require.NotContains(t, result, "http://trailing.local/")
+}
+
+func TestDefaultAllowedOriginsIncludesHostedApp(t *testing.T) {
+	t.Parallel()
+
+	require.Contains(t, allowedOrigins, "https://zaparoo.app")
+}
+
+func TestOriginPolicy_HappyPaths(t *testing.T) {
+	t.Parallel()
+
+	port := 7497
+	staticOrigins := buildStaticAllowedOrigins(allowedOrigins, []string{"10.0.0.50"}, port)
+	provider := func() []string { return nil }
+
+	// Browser loading the bundled web UI from the device uses the device URL as Origin.
+	assert.True(t, isAllowedOrigin("http://10.0.0.50:7497", staticOrigins, provider, port, true, "websocket"))
+	assert.True(t, isAllowedOrigin("http://10.0.0.50:7497", staticOrigins, provider, port, false, "cors"))
+
+	// Native clients may omit Origin on WebSocket connections.
+	assert.True(t, isAllowedOrigin("", staticOrigins, provider, port, true, "websocket"))
+
+	// The hosted app is trusted by default.
+	assert.True(t, isAllowedOrigin("https://zaparoo.app", staticOrigins, provider, port, true, "websocket"))
+	assert.True(t, isAllowedOrigin("https://zaparoo.app", staticOrigins, provider, port, false, "cors"))
 }
 
 // TestServerBindFailureStopsService verifies that when the API server fails to bind
@@ -699,7 +729,7 @@ func TestBuildDynamicAllowedOrigins_HTTPURLWithoutPortAddsPortVariant(t *testing
 		"Bug fix: should not have https:// prepended to http:// URL")
 }
 
-func TestCheckWebSocketOrigin_HotReload(t *testing.T) {
+func TestIsAllowedOrigin_WebSocketHotReload(t *testing.T) {
 	t.Parallel()
 
 	staticOrigins := []string{
@@ -712,21 +742,29 @@ func TestCheckWebSocketOrigin_HotReload(t *testing.T) {
 	provider := func() []string { return customOrigins }
 
 	// Initial state: custom origin allowed
-	assert.True(t, checkWebSocketOrigin("http://myapp.example.com", staticOrigins, provider, apiPort))
-	assert.True(t, checkWebSocketOrigin("http://myapp.example.com:7497", staticOrigins, provider, apiPort))
-	assert.False(t, checkWebSocketOrigin("http://other.example.com:7497", staticOrigins, provider, apiPort))
+	assert.True(t, isAllowedOrigin("http://myapp.example.com", staticOrigins, provider, apiPort, true, "websocket"))
+	assert.True(t, isAllowedOrigin(
+		"http://myapp.example.com:7497", staticOrigins, provider, apiPort, true, "websocket",
+	))
+	assert.False(t, isAllowedOrigin(
+		"http://other.example.com:7497", staticOrigins, provider, apiPort, true, "websocket",
+	))
 
 	// Simulate config reload: change custom origins
 	customOrigins = []string{"http://other.example.com"}
 
 	// Old custom origin should now be rejected (not private IP, not localhost)
-	assert.False(t, checkWebSocketOrigin("http://myapp.example.com:7497", staticOrigins, provider, apiPort))
+	assert.False(t, isAllowedOrigin(
+		"http://myapp.example.com:7497", staticOrigins, provider, apiPort, true, "websocket",
+	))
 	// New custom origin should be allowed
-	assert.True(t, checkWebSocketOrigin("http://other.example.com", staticOrigins, provider, apiPort))
-	assert.True(t, checkWebSocketOrigin("http://other.example.com:7497", staticOrigins, provider, apiPort))
+	assert.True(t, isAllowedOrigin("http://other.example.com", staticOrigins, provider, apiPort, true, "websocket"))
+	assert.True(t, isAllowedOrigin(
+		"http://other.example.com:7497", staticOrigins, provider, apiPort, true, "websocket",
+	))
 
 	// Static origins should always work regardless of custom origins
-	assert.True(t, checkWebSocketOrigin("http://localhost:7497", staticOrigins, provider, apiPort))
+	assert.True(t, isAllowedOrigin("http://localhost:7497", staticOrigins, provider, apiPort, true, "websocket"))
 }
 
 func TestMakeOriginValidator_HotReload(t *testing.T) {
@@ -766,6 +804,97 @@ func TestMakeOriginValidator_HotReload(t *testing.T) {
 
 	// Static origins still work
 	assert.True(t, validator(nil, "http://localhost:7497"))
+}
+
+func TestMakeOriginValidator_RejectsImplicitLocalhostPorts(t *testing.T) {
+	t.Parallel()
+
+	staticOrigins := []string{
+		"http://localhost:7497",
+		"http://127.0.0.1:7497",
+		"http://192.168.1.100:7497",
+	}
+	port := 7497
+	provider := func() []string { return nil }
+	validator := makeOriginValidator(staticOrigins, provider, port)
+
+	tests := []struct {
+		name     string
+		origin   string
+		expected bool
+	}{
+		{
+			name:     "localhost_other_port_rejected",
+			origin:   "http://localhost:8100",
+			expected: false,
+		},
+		{
+			name:     "localhost_https_other_port_rejected",
+			origin:   "https://localhost:3000",
+			expected: false,
+		},
+		{
+			name:     "127_0_0_1_other_port_rejected",
+			origin:   "http://127.0.0.1:8100",
+			expected: false,
+		},
+		{
+			name:     "explicit_localhost_port_allowed",
+			origin:   "http://localhost:7497",
+			expected: true,
+		},
+		{
+			name:     "explicit_127_0_0_1_port_allowed",
+			origin:   "http://127.0.0.1:7497",
+			expected: true,
+		},
+		{
+			name:     "implicit_private_ip_correct_port_rejected",
+			origin:   "http://192.168.1.50:7497",
+			expected: false,
+		},
+		{
+			name:     "explicit_private_ip_allowed",
+			origin:   "http://192.168.1.100:7497",
+			expected: true,
+		},
+		{
+			name:     "private_ip_wrong_port_rejected",
+			origin:   "http://192.168.1.50:8100",
+			expected: false,
+		},
+		{
+			name:     "public_ip_rejected",
+			origin:   "http://8.8.8.8:7497",
+			expected: false,
+		},
+		{
+			name:     "empty_origin_rejected",
+			origin:   "",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := validator(nil, tt.origin)
+			require.Equal(t, tt.expected, result, "makeOriginValidator result mismatch for %s", tt.origin)
+		})
+	}
+}
+
+func TestMakeOriginValidator_ExplicitCustomLocalhostPort(t *testing.T) {
+	t.Parallel()
+
+	staticOrigins := []string{"http://localhost:7497"}
+	customOrigins := []string{"http://localhost:8100", "127.0.0.1:8100"}
+	provider := func() []string { return customOrigins }
+	validator := makeOriginValidator(staticOrigins, provider, 7497)
+
+	assert.True(t, validator(nil, "http://localhost:8100"))
+	assert.True(t, validator(nil, "http://127.0.0.1:8100"))
+	assert.False(t, validator(nil, "http://localhost:3000"))
 }
 
 func TestSSE_ReceivesNotifications(t *testing.T) {
