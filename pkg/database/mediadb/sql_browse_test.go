@@ -25,6 +25,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -102,7 +103,7 @@ func TestSqlBrowseVirtualSchemes_UsesIsVirtual(t *testing.T) {
 				AddRow("igdb://", 30),
 		)
 
-	schemes, err := sqlBrowseVirtualSchemes(context.Background(), db)
+	schemes, err := sqlBrowseVirtualSchemes(context.Background(), db, database.BrowseVirtualSchemesOptions{})
 	require.NoError(t, err)
 
 	require.Len(t, schemes, 2)
@@ -110,6 +111,131 @@ func TestSqlBrowseVirtualSchemes_UsesIsVirtual(t *testing.T) {
 	assert.Equal(t, 150, schemes[0].FileCount)
 	assert.Equal(t, "igdb://", schemes[1].Scheme)
 	assert.Equal(t, 30, schemes[1].FileCount)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectories_WithSystemsUsesSystemCache(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(`(?s)SELECT b.Name, SUM\(b.FileCount\), GROUP_CONCAT\(DISTINCT s.SystemID\).*BrowseSystemCache`).
+		WithArgs("/roms/shared/", "SNES", "Genesis").
+		WillReturnRows(
+			sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).
+				AddRow("RPG", 8, "SNES,Genesis"),
+		)
+
+	dirs, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: "/roms/shared/",
+		Systems: []systemdefs.System{
+			{ID: "SNES"},
+			{ID: "Genesis"},
+		},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, dirs, 1)
+	assert.Equal(t, "RPG", dirs[0].Name)
+	assert.Equal(t, 8, dirs[0].FileCount)
+	assert.Equal(t, []string{"SNES", "Genesis"}, dirs[0].SystemIDs)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectories_WithSystemsReadsFromMediaWhenCacheEmpty(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(`(?s)SELECT b.Name, SUM\(b.FileCount\), GROUP_CONCAT\(DISTINCT s.SystemID\).*BrowseSystemCache`).
+		WithArgs("/roms/shared/", "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}))
+	mock.ExpectQuery(`(?s)WITH matched AS .*FROM Media m.*m.Path LIKE \? \|\| '%'`).
+		WithArgs("/roms/shared/", "/roms/shared/", "SNES").
+		WillReturnRows(
+			sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).
+				AddRow("RPG", 2, "SNES"),
+		)
+
+	dirs, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: "/roms/shared/",
+		Systems:    []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, dirs, 1)
+	assert.Equal(t, "RPG", dirs[0].Name)
+	assert.Equal(t, 2, dirs[0].FileCount)
+	assert.Equal(t, []string{"SNES"}, dirs[0].SystemIDs)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseRouteCounts_ReturnsOnlyPopulatedRoutes(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(
+		`(?s)SELECT b.DirPath, SUM\(b.FileCount\), GROUP_CONCAT\(DISTINCT s.SystemID\).*BrowseSystemCache`,
+	).
+		WithArgs("/roms/SNES/", "/roms/shared/", "SNES").
+		WillReturnRows(
+			sqlmock.NewRows([]string{"DirPath", "FileCount", "SystemIDs"}).
+				AddRow("/roms/SNES/", 12, "SNES"),
+		)
+	mock.ExpectQuery(`(?s)SELECT COUNT\(\*\), GROUP_CONCAT\(DISTINCT s.SystemID\).*FROM Media m`).
+		WithArgs("/roms/shared/", "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"FileCount", "SystemIDs"}).AddRow(0, nil))
+
+	counts, err := sqlBrowseRouteCounts(context.Background(), db, database.BrowseRouteCountsOptions{
+		Routes:  []string{"/roms/SNES", "/roms/shared"},
+		Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+
+	require.Contains(t, counts, "/roms/SNES")
+	assert.Equal(t, "/roms/SNES", counts["/roms/SNES"].Path)
+	assert.Equal(t, 12, counts["/roms/SNES"].FileCount)
+	assert.Equal(t, []string{"SNES"}, counts["/roms/SNES"].SystemIDs)
+	assert.NotContains(t, counts, "/roms/shared")
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseRouteCounts_ReadsFromMediaWhenSystemCacheEmpty(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(
+		`(?s)SELECT b.DirPath, SUM\(b.FileCount\), GROUP_CONCAT\(DISTINCT s.SystemID\).*BrowseSystemCache`,
+	).
+		WithArgs("/roms/SNES/", "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"DirPath", "FileCount", "SystemIDs"}))
+	mock.ExpectQuery(`(?s)SELECT COUNT\(\*\), GROUP_CONCAT\(DISTINCT s.SystemID\).*FROM Media m`).
+		WithArgs("/roms/SNES/", "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"FileCount", "SystemIDs"}).AddRow(3, "SNES"))
+
+	counts, err := sqlBrowseRouteCounts(context.Background(), db, database.BrowseRouteCountsOptions{
+		Routes:  []string{"/roms/SNES"},
+		Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+
+	require.Contains(t, counts, "/roms/SNES")
+	assert.Equal(t, 3, counts["/roms/SNES"].FileCount)
+	assert.Equal(t, []string{"SNES"}, counts["/roms/SNES"].SystemIDs)
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }

@@ -63,6 +63,10 @@ const (
 // defaultSlugSearchLimit is the max results returned by slug-based search methods.
 const defaultSlugSearchLimit = 50
 
+// maxSelectiveInvalidationSystems avoids huge per-commit IN clauses and debug
+// logs during full-library indexing while preserving selective reindexing wins.
+const maxSelectiveInvalidationSystems = 32
+
 // getSqliteConnParams constructs the SQLite connection string.
 func getSqliteConnParams() string {
 	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
@@ -310,6 +314,22 @@ var secondaryIndexes = []secondaryIndex{
 		ddl:  "CREATE INDEX IF NOT EXISTS idx_browsecache_parent ON BrowseCache(ParentPath)",
 	},
 	{name: "idx_media_parentdir", ddl: "CREATE INDEX IF NOT EXISTS idx_media_parentdir ON Media(ParentDir)"},
+	{
+		name: "idx_browsesystemcache_parent",
+		ddl:  "CREATE INDEX IF NOT EXISTS idx_browsesystemcache_parent ON BrowseSystemCache(SystemDBID, ParentPath)",
+	},
+	{
+		name: "idx_browsesystemcache_dir",
+		ddl:  "CREATE INDEX IF NOT EXISTS idx_browsesystemcache_dir ON BrowseSystemCache(DirPath)",
+	},
+	{
+		name: "idx_browsesystemcache_virtual",
+		ddl:  "CREATE INDEX IF NOT EXISTS idx_browsesystemcache_virtual ON BrowseSystemCache(SystemDBID, IsVirtual)",
+	},
+	{
+		name: "idx_media_parentdir_system",
+		ddl:  "CREATE INDEX IF NOT EXISTS idx_media_parentdir_system ON Media(ParentDir, SystemDBID)",
+	},
 }
 
 // DropSecondaryIndexes drops all secondary indexes to speed up bulk inserts.
@@ -603,6 +623,9 @@ func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationS
 	if len(systemIDs) == 0 {
 		return invalidationScope{AllSystems: true}
 	}
+	if len(systemIDs) > maxSelectiveInvalidationSystems {
+		return invalidationScope{AllSystems: true}
+	}
 
 	return invalidationScope{SystemIDs: systemIDs}
 }
@@ -675,44 +698,53 @@ func (db *MediaDB) closeAllPreparedStatements() {
 	}
 }
 
-// closeAllBatchInserters closes all batch inserters and sets them to nil
-func (db *MediaDB) closeAllBatchInserters() {
+// closeAllBatchInserters closes all batch inserters and sets them to nil.
+func (db *MediaDB) closeAllBatchInserters() error {
+	var closeErrs []error
 	if db.batchInsertSystem != nil {
 		if closeErr := db.batchInsertSystem.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertSystem")
+			closeErrs = append(closeErrs, fmt.Errorf("batchInsertSystem: %w", closeErr))
 		}
 		db.batchInsertSystem = nil
 	}
 	if db.batchInsertMediaTitle != nil {
 		if closeErr := db.batchInsertMediaTitle.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertMediaTitle")
+			closeErrs = append(closeErrs, fmt.Errorf("batchInsertMediaTitle: %w", closeErr))
 		}
 		db.batchInsertMediaTitle = nil
 	}
 	if db.batchInsertMedia != nil {
 		if closeErr := db.batchInsertMedia.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertMedia")
+			closeErrs = append(closeErrs, fmt.Errorf("batchInsertMedia: %w", closeErr))
 		}
 		db.batchInsertMedia = nil
 	}
 	if db.batchInsertTag != nil {
 		if closeErr := db.batchInsertTag.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertTag")
+			closeErrs = append(closeErrs, fmt.Errorf("batchInsertTag: %w", closeErr))
 		}
 		db.batchInsertTag = nil
 	}
 	if db.batchInsertTagType != nil {
 		if closeErr := db.batchInsertTagType.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertTagType")
+			closeErrs = append(closeErrs, fmt.Errorf("batchInsertTagType: %w", closeErr))
 		}
 		db.batchInsertTagType = nil
 	}
 	if db.batchInsertMediaTag != nil {
 		if closeErr := db.batchInsertMediaTag.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertMediaTag")
+			closeErrs = append(closeErrs, fmt.Errorf("batchInsertMediaTag: %w", closeErr))
 		}
 		db.batchInsertMediaTag = nil
 	}
+
+	return errors.Join(closeErrs...)
 }
 
 // RollbackTransaction rolls back the current transaction and cleans up resources
@@ -726,7 +758,7 @@ func (db *MediaDB) RollbackTransaction() error {
 
 	// Clean up prepared statements and batch inserters first
 	db.closeAllPreparedStatements()
-	db.closeAllBatchInserters()
+	_ = db.closeAllBatchInserters()
 
 	// Rollback the transaction
 	err := db.tx.Rollback()
@@ -749,7 +781,7 @@ func (db *MediaDB) rollbackAndLogError() {
 
 	// Clean up prepared statements and batch inserters first
 	db.closeAllPreparedStatements()
-	db.closeAllBatchInserters()
+	_ = db.closeAllBatchInserters()
 
 	// Rollback the transaction
 	if rbErr := db.tx.Rollback(); rbErr != nil {
@@ -962,7 +994,16 @@ func (db *MediaDB) CommitTransaction() error {
 	// Flush all batch inserters before committing (if any were created)
 	// Check if batch inserters exist rather than relying on a mode flag
 	if db.batchInsertSystem != nil {
-		db.closeAllBatchInserters()
+		if closeErr := db.closeAllBatchInserters(); closeErr != nil {
+			if rbErr := db.tx.Rollback(); rbErr != nil {
+				db.tx = nil
+				db.inTransaction = false
+				return fmt.Errorf("failed to flush batch inserts: %w; rollback also failed: %w", closeErr, rbErr)
+			}
+			db.tx = nil
+			db.inTransaction = false
+			return fmt.Errorf("failed to flush batch inserts: %w", closeErr)
+		}
 	} else {
 		// Clean up prepared statements
 		db.closeAllPreparedStatements()
@@ -1052,12 +1093,12 @@ func (db *MediaDB) WALCheckpoint() error {
 
 // BrowseDirectories returns distinct immediate subdirectory names under the given path prefix.
 func (db *MediaDB) BrowseDirectories(
-	ctx context.Context, pathPrefix string,
+	ctx context.Context, opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlBrowseDirectories(ctx, db.conn(), pathPrefix)
+	return sqlBrowseDirectories(ctx, db.conn(), opts)
 }
 
 // BrowseFiles returns indexed media files that are immediate children of the given path prefix.
@@ -1072,22 +1113,22 @@ func (db *MediaDB) BrowseFiles(
 
 // BrowseFileCount returns the total number of immediate child files under a path prefix.
 func (db *MediaDB) BrowseFileCount(
-	ctx context.Context, pathPrefix string, letter *string,
+	ctx context.Context, opts database.BrowseFileCountOptions,
 ) (int, error) {
 	if db.sql == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlBrowseFileCount(ctx, db.conn(), pathPrefix, letter)
+	return sqlBrowseFileCount(ctx, db.conn(), opts)
 }
 
 // BrowseVirtualSchemes returns distinct URI schemes present in indexed media.
 func (db *MediaDB) BrowseVirtualSchemes(
-	ctx context.Context,
+	ctx context.Context, opts database.BrowseVirtualSchemesOptions,
 ) ([]database.BrowseVirtualScheme, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlBrowseVirtualSchemes(ctx, db.conn())
+	return sqlBrowseVirtualSchemes(ctx, db.conn(), opts)
 }
 
 // BrowseRootCounts returns a map of root directory to count of indexed media
@@ -1100,6 +1141,16 @@ func (db *MediaDB) BrowseRootCounts(
 		return nil, ErrNullSQL
 	}
 	return sqlBrowseRootCounts(ctx, db.conn(), rootDirs)
+}
+
+// BrowseRouteCounts returns populated route counts for system-scoped browse roots.
+func (db *MediaDB) BrowseRouteCounts(
+	ctx context.Context, opts database.BrowseRouteCountsOptions,
+) (map[string]database.BrowseRouteCount, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	return sqlBrowseRouteCounts(ctx, db.conn(), opts)
 }
 
 // PopulateBrowseCache rebuilds the BrowseCache table from the current Media data.

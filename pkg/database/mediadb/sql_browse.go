@@ -21,22 +21,50 @@ package mediadb
 
 import (
 	"context"
+	stdsql "database/sql"
 	"fmt"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
+
+func browseSystemFilterClause(column string, systems []systemdefs.System) (clause string, args []any) {
+	if len(systems) == 0 {
+		return "", nil
+	}
+
+	placeholders := make([]string, len(systems))
+	args = make([]any, len(systems))
+	for i := range systems {
+		placeholders[i] = "?"
+		args[i] = systems[i].ID
+	}
+
+	return column + " IN (" + strings.Join(placeholders, ",") + ")", args
+}
+
+func splitBrowseSystemIDs(ids string) []string {
+	if ids == "" {
+		return nil
+	}
+	return strings.Split(ids, ",")
+}
 
 // sqlBrowseDirectories returns distinct immediate subdirectory names under the
 // given path prefix from BrowseCache, along with the precomputed file count.
 func sqlBrowseDirectories(
 	ctx context.Context,
 	db sqlQueryable,
-	pathPrefix string,
+	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
+	if len(opts.Systems) > 0 {
+		return sqlBrowseDirectoriesForSystems(ctx, db, opts)
+	}
+
 	rows, err := db.QueryContext(ctx,
 		`SELECT Name, FileCount FROM BrowseCache WHERE ParentPath = ? ORDER BY Name ASC`,
-		pathPrefix,
+		opts.PathPrefix,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("browse directories query: %w", err)
@@ -58,6 +86,111 @@ func sqlBrowseDirectories(
 	return results, nil
 }
 
+func sqlBrowseDirectoriesForSystems(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+) ([]database.BrowseDirectoryResult, error) {
+	results, err := sqlBrowseDirectoriesForSystemsFromCache(ctx, db, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) > 0 {
+		return results, nil
+	}
+
+	return sqlBrowseDirectoriesForSystemsFromMedia(ctx, db, opts)
+}
+
+func sqlBrowseDirectoriesForSystemsFromCache(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+) ([]database.BrowseDirectoryResult, error) {
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	args := make([]any, 0, 1+len(systemArgs))
+	args = append(args, opts.PathPrefix)
+	args = append(args, systemArgs...)
+
+	rows, err := db.QueryContext(ctx,
+		`SELECT b.Name, SUM(b.FileCount), GROUP_CONCAT(DISTINCT s.SystemID)
+		 FROM BrowseSystemCache b
+		 INNER JOIN Systems s ON b.SystemDBID = s.DBID
+		 WHERE b.ParentPath = ? AND `+systemClause+`
+		 GROUP BY b.DirPath, b.Name
+		 ORDER BY b.Name ASC`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("browse directories by system query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []database.BrowseDirectoryResult
+	for rows.Next() {
+		var r database.BrowseDirectoryResult
+		var systemIDs string
+		if err := rows.Scan(&r.Name, &r.FileCount, &systemIDs); err != nil {
+			return nil, fmt.Errorf("browse directories by system scan: %w", err)
+		}
+		r.SystemIDs = splitBrowseSystemIDs(systemIDs)
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("browse directories by system rows: %w", err)
+	}
+
+	return results, nil
+}
+
+func sqlBrowseDirectoriesForSystemsFromMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+) ([]database.BrowseDirectoryResult, error) {
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	args := make([]any, 0, 2+len(systemArgs))
+	args = append(args, opts.PathPrefix, opts.PathPrefix)
+	args = append(args, systemArgs...)
+
+	rows, err := db.QueryContext(ctx,
+		`WITH matched AS (
+			 SELECT s.SystemID, substr(m.Path, length(?) + 1) AS Rest
+			 FROM Media m
+			 INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			 WHERE m.IsMissing = 0 AND m.Path LIKE ? || '%' AND `+systemClause+`
+		 )
+		 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name,
+			COUNT(*) AS FileCount,
+			GROUP_CONCAT(DISTINCT SystemID)
+		 FROM matched
+		 WHERE instr(Rest, '/') > 0
+		 GROUP BY Name
+		 ORDER BY Name ASC`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("browse directories by system media query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []database.BrowseDirectoryResult
+	for rows.Next() {
+		var r database.BrowseDirectoryResult
+		var systemIDs string
+		if err := rows.Scan(&r.Name, &r.FileCount, &systemIDs); err != nil {
+			return nil, fmt.Errorf("browse directories by system media scan: %w", err)
+		}
+		r.SystemIDs = splitBrowseSystemIDs(systemIDs)
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("browse directories by system media rows: %w", err)
+	}
+
+	return results, nil
+}
+
 // browseFilesBaseCondition returns the WHERE clause and args for filtering
 // immediate children of a path prefix, with optional letter filter.
 // Uses the ParentDir column for direct index lookup instead of range scan.
@@ -66,13 +199,17 @@ func browseFilesBaseCondition(
 ) (where string, args []any) {
 	letterClauses, letterArgs := BuildLetterFilterSQL(opts.Letter, "mt.Name")
 
-	conditions := make([]string, 0, 2+len(letterClauses))
+	conditions := make([]string, 0, 3+len(letterClauses))
 	conditions = append(conditions, `m.ParentDir = ?`, `m.IsMissing = 0`)
 	conditions = append(conditions, letterClauses...)
 
 	args = make([]any, 0, 1+len(letterArgs))
 	args = append(args, opts.PathPrefix)
 	args = append(args, letterArgs...)
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
+		conditions = append(conditions, systemClause)
+		args = append(args, systemArgs...)
+	}
 
 	where = strings.Join(conditions, " AND ")
 	return where, args
@@ -121,7 +258,7 @@ func sqlBrowseFiles(
 		SELECT s.SystemID, mt.Name, m.Path, m.DBID
 		FROM Media m
 		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
-		INNER JOIN Systems s ON mt.SystemDBID = s.DBID
+		INNER JOIN Systems s ON m.SystemDBID = s.DBID
 		WHERE ` + where
 
 	if opts.Cursor != nil {
@@ -163,18 +300,19 @@ func sqlBrowseFiles(
 func sqlBrowseFileCount(
 	ctx context.Context,
 	db sqlQueryable,
-	pathPrefix string,
-	letter *string,
+	opts database.BrowseFileCountOptions,
 ) (int, error) {
 	where, args := browseFilesBaseCondition(&database.BrowseFilesOptions{
-		PathPrefix: pathPrefix,
-		Letter:     letter,
+		PathPrefix: opts.PathPrefix,
+		Letter:     opts.Letter,
+		Systems:    opts.Systems,
 	})
 
 	query := `
 		SELECT COUNT(*)
 		FROM Media m
 		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
+		INNER JOIN Systems s ON m.SystemDBID = s.DBID
 		WHERE ` + where
 
 	var count int
@@ -190,7 +328,12 @@ func sqlBrowseFileCount(
 func sqlBrowseVirtualSchemes(
 	ctx context.Context,
 	db sqlQueryable,
+	opts database.BrowseVirtualSchemesOptions,
 ) ([]database.BrowseVirtualScheme, error) {
+	if len(opts.Systems) > 0 {
+		return sqlBrowseVirtualSchemesForSystems(ctx, db, opts)
+	}
+
 	rows, err := db.QueryContext(ctx,
 		`SELECT DirPath, FileCount FROM BrowseCache
 		 WHERE IsVirtual = 1 ORDER BY DirPath ASC`)
@@ -212,6 +355,188 @@ func sqlBrowseVirtualSchemes(
 	}
 
 	return results, nil
+}
+
+func sqlBrowseVirtualSchemesForSystems(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseVirtualSchemesOptions,
+) ([]database.BrowseVirtualScheme, error) {
+	systemClause, args := browseSystemFilterClause("s.SystemID", opts.Systems)
+	rows, err := db.QueryContext(ctx,
+		`SELECT b.DirPath, SUM(b.FileCount), GROUP_CONCAT(DISTINCT s.SystemID)
+		 FROM BrowseSystemCache b
+		 INNER JOIN Systems s ON b.SystemDBID = s.DBID
+		 WHERE b.IsVirtual = 1 AND `+systemClause+`
+		 GROUP BY b.DirPath
+		 ORDER BY b.DirPath ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("browse virtual schemes by system query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []database.BrowseVirtualScheme
+	for rows.Next() {
+		var r database.BrowseVirtualScheme
+		var systemIDs string
+		if err := rows.Scan(&r.Scheme, &r.FileCount, &systemIDs); err != nil {
+			return nil, fmt.Errorf("browse virtual schemes by system scan: %w", err)
+		}
+		r.SystemIDs = splitBrowseSystemIDs(systemIDs)
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("browse virtual schemes by system rows: %w", err)
+	}
+
+	return results, nil
+}
+
+func browseRouteCacheKey(route string) string {
+	if strings.Contains(route, "://") || route == "" || strings.HasSuffix(route, "/") {
+		return route
+	}
+	return route + "/"
+}
+
+func sqlBrowseRouteCounts(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseRouteCountsOptions,
+) (map[string]database.BrowseRouteCount, error) {
+	if len(opts.Routes) == 0 || len(opts.Systems) == 0 {
+		return make(map[string]database.BrowseRouteCount), nil
+	}
+
+	counts, err := sqlBrowseRouteCountsFromCache(ctx, db, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	missingRoutes := make([]string, 0, len(opts.Routes))
+	for _, route := range opts.Routes {
+		if _, ok := counts[route]; !ok {
+			missingRoutes = append(missingRoutes, route)
+		}
+	}
+	if len(missingRoutes) == 0 {
+		return counts, nil
+	}
+
+	mediaCounts, err := sqlBrowseRouteCountsFromMedia(ctx, db, database.BrowseRouteCountsOptions{
+		Systems: opts.Systems,
+		Routes:  missingRoutes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for route, count := range mediaCounts {
+		counts[route] = count
+	}
+
+	return counts, nil
+}
+
+func sqlBrowseRouteCountsFromCache(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseRouteCountsOptions,
+) (map[string]database.BrowseRouteCount, error) {
+	counts := make(map[string]database.BrowseRouteCount, len(opts.Routes))
+
+	routeKeys := make([]string, len(opts.Routes))
+	keyToRoute := make(map[string]string, len(opts.Routes))
+	args := make([]any, 0, len(opts.Routes)+len(opts.Systems))
+	for i, route := range opts.Routes {
+		key := browseRouteCacheKey(route)
+		routeKeys[i] = key
+		keyToRoute[key] = route
+		args = append(args, key)
+	}
+
+	routePlaceholders := make([]string, len(routeKeys))
+	for i := range routePlaceholders {
+		routePlaceholders[i] = "?"
+	}
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	args = append(args, systemArgs...)
+
+	rows, err := db.QueryContext(ctx,
+		`SELECT b.DirPath, SUM(b.FileCount), GROUP_CONCAT(DISTINCT s.SystemID)
+		 FROM BrowseSystemCache b
+		 INNER JOIN Systems s ON b.SystemDBID = s.DBID
+		 WHERE b.DirPath IN (`+strings.Join(routePlaceholders, ",")+
+			`) AND `+systemClause+`
+		 GROUP BY b.DirPath`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("browse route counts query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var dirPath string
+		var count int
+		var systemIDs string
+		if err := rows.Scan(&dirPath, &count, &systemIDs); err != nil {
+			return nil, fmt.Errorf("browse route counts scan: %w", err)
+		}
+		route, ok := keyToRoute[dirPath]
+		if !ok {
+			continue
+		}
+		counts[route] = database.BrowseRouteCount{
+			Path:      route,
+			FileCount: count,
+			SystemIDs: splitBrowseSystemIDs(systemIDs),
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("browse route counts rows: %w", err)
+	}
+
+	return counts, nil
+}
+
+func sqlBrowseRouteCountsFromMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseRouteCountsOptions,
+) (map[string]database.BrowseRouteCount, error) {
+	counts := make(map[string]database.BrowseRouteCount, len(opts.Routes))
+	if len(opts.Routes) == 0 || len(opts.Systems) == 0 {
+		return counts, nil
+	}
+
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	for _, route := range opts.Routes {
+		prefix := browseRouteCacheKey(route)
+		args := make([]any, 0, 1+len(systemArgs))
+		args = append(args, prefix)
+		args = append(args, systemArgs...)
+
+		var count int
+		var systemIDs stdsql.NullString
+		if err := db.QueryRowContext(ctx,
+			`SELECT COUNT(*), GROUP_CONCAT(DISTINCT s.SystemID)
+			 FROM Media m
+			 INNER JOIN Systems s ON m.SystemDBID = s.DBID
+			 WHERE m.IsMissing = 0 AND m.Path LIKE ? || '%' AND `+systemClause,
+			args...,
+		).Scan(&count, &systemIDs); err != nil {
+			return nil, fmt.Errorf("browse route counts media scan: %w", err)
+		}
+		if count == 0 {
+			continue
+		}
+
+		counts[route] = database.BrowseRouteCount{
+			Path:      route,
+			FileCount: count,
+			SystemIDs: splitBrowseSystemIDs(systemIDs.String),
+		}
+	}
+
+	return counts, nil
 }
 
 // sqlBrowseRootCounts looks up precomputed file counts for root directories

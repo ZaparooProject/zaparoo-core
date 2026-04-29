@@ -206,7 +206,14 @@ func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []za
 // BrowseDirectoryResult represents a subdirectory found during browse navigation.
 type BrowseDirectoryResult struct {
 	Name      string
+	SystemIDs []string
 	FileCount int
+}
+
+// BrowseDirectoriesOptions contains parameters for the BrowseDirectories query.
+type BrowseDirectoriesOptions struct {
+	PathPrefix string
+	Systems    []systemdefs.System
 }
 
 // BrowseCursor holds the keyset pagination state for browse queries.
@@ -223,12 +230,40 @@ type BrowseFilesOptions struct {
 	Letter     *string
 	PathPrefix string
 	Sort       string
+	Systems    []systemdefs.System
 	Limit      int
+}
+
+// BrowseFileCountOptions contains parameters for the BrowseFileCount query.
+type BrowseFileCountOptions struct {
+	Letter     *string
+	PathPrefix string
+	Systems    []systemdefs.System
 }
 
 // BrowseVirtualScheme represents a virtual URI scheme with indexed content.
 type BrowseVirtualScheme struct {
-	Scheme    string // e.g., "steam://"
+	Scheme    string
+	SystemIDs []string
+	FileCount int
+}
+
+// BrowseVirtualSchemesOptions contains parameters for BrowseVirtualSchemes.
+type BrowseVirtualSchemesOptions struct {
+	Systems []systemdefs.System
+}
+
+// BrowseRouteCountsOptions contains candidate route paths to resolve against
+// indexed media for system-scoped browse root discovery.
+type BrowseRouteCountsOptions struct {
+	Systems []systemdefs.System
+	Routes  []string
+}
+
+// BrowseRouteCount represents a populated browse route and its media count.
+type BrowseRouteCount struct {
+	Path      string
+	SystemIDs []string
 	FileCount int
 }
 
@@ -464,11 +499,12 @@ type MediaDBI interface {
 	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
 
 	// Browse methods for directory-style navigation of indexed content
-	BrowseDirectories(ctx context.Context, pathPrefix string) ([]BrowseDirectoryResult, error)
+	BrowseDirectories(ctx context.Context, opts BrowseDirectoriesOptions) ([]BrowseDirectoryResult, error)
 	BrowseFiles(ctx context.Context, opts *BrowseFilesOptions) ([]SearchResultWithCursor, error)
-	BrowseFileCount(ctx context.Context, pathPrefix string, letter *string) (int, error)
-	BrowseVirtualSchemes(ctx context.Context) ([]BrowseVirtualScheme, error)
+	BrowseFileCount(ctx context.Context, opts BrowseFileCountOptions) (int, error)
+	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
 	BrowseRootCounts(ctx context.Context, rootDirs []string) (map[string]*int, error)
+	BrowseRouteCounts(ctx context.Context, opts BrowseRouteCountsOptions) (map[string]BrowseRouteCount, error)
 	PopulateBrowseCache(ctx context.Context) error
 
 	IndexedSystems() ([]string, error)

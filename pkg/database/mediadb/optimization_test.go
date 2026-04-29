@@ -56,13 +56,16 @@ func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "browse_cache").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	// PopulateBrowseCache: SELECT (empty), BEGIN, DELETE, Prepare, COMMIT
-	mock.ExpectQuery("SELECT Path FROM Media").
-		WillReturnRows(sqlmock.NewRows([]string{"Path"}))
+	// PopulateBrowseCache: SELECT (empty), BEGIN, DELETEs, Prepares, COMMIT
+	mock.ExpectQuery("SELECT SystemDBID, Path FROM Media").
+		WillReturnRows(sqlmock.NewRows([]string{"SystemDBID", "Path"}))
 	mock.ExpectBegin()
 	mock.ExpectExec("DELETE FROM BrowseCache").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DELETE FROM BrowseSystemCache").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectPrepare("INSERT INTO BrowseCache")
+	mock.ExpectPrepare("INSERT INTO BrowseSystemCache")
 	mock.ExpectCommit()
 }
 

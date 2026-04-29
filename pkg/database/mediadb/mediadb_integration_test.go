@@ -2262,6 +2262,100 @@ func TestMediaDB_CommitTransaction_SelectiveIndexingPreservesUnchangedSlugCache_
 	assert.True(t, cache.CanServeSystems([]string{snesSystem.ID}))
 }
 
+func TestMediaDB_CommitTransaction_ReturnsBatchFlushError_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	require.NoError(t, mediaDB.batchInsertSystem.Add(int64(1), "NES", "NES"))
+	require.NoError(t, mediaDB.batchInsertSystem.Add(int64(1), "SNES", "SNES"))
+
+	err := mediaDB.CommitTransaction()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "failed to flush batch inserts")
+}
+
+func TestMediaDB_CacheInvalidationScope_UsesAllSystemsForBroadIndexing_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	systemIDs := make([]string, maxSelectiveInvalidationSystems+1)
+	for i := range systemIDs {
+		systemIDs[i] = fmt.Sprintf("system-%d", i)
+	}
+	require.NoError(t, mediaDB.SetIndexingSystems(systemIDs))
+	require.NoError(t, mediaDB.SetIndexingStatus(IndexingStatusRunning))
+
+	scope := mediaDB.cacheInvalidationScopeForCommittedTransaction()
+	assert.True(t, scope.AllSystems)
+	assert.Empty(t, scope.SystemIDs)
+}
+
+func TestMediaDB_SystemBrowseFallsBackWhenSystemCacheEmpty_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	snesSystem, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	sharedRoot := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "shared"))
+	rpgDir := filepath.ToSlash(filepath.Join(sharedRoot, "RPG"))
+	gamePath := filepath.ToSlash(filepath.Join(rpgDir, "game.sfc"))
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insertedSystem, err := mediaDB.FindOrInsertSystem(database.System{SystemID: snesSystem.ID, Name: snesSystem.ID})
+	require.NoError(t, err)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.Slugify(snesSystem.GetMediaType(), "Direct Browse Game"),
+		Name:       "Direct Browse Game",
+	})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMedia(database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           gamePath,
+		ParentDir:      rpgDir + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	_, err = mediaDB.sql.ExecContext(ctx, "DELETE FROM BrowseSystemCache")
+	require.NoError(t, err)
+
+	routeCounts, err := mediaDB.BrowseRouteCounts(ctx, database.BrowseRouteCountsOptions{
+		Routes:  []string{sharedRoot},
+		Systems: []systemdefs.System{*snesSystem},
+	})
+	require.NoError(t, err)
+	require.Contains(t, routeCounts, sharedRoot)
+	assert.Equal(t, 1, routeCounts[sharedRoot].FileCount)
+	assert.Equal(t, []string{snesSystem.ID}, routeCounts[sharedRoot].SystemIDs)
+
+	dirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
+		PathPrefix: sharedRoot + "/",
+		Systems:    []systemdefs.System{*snesSystem},
+	})
+	require.NoError(t, err)
+	require.Len(t, dirs, 1)
+	assert.Equal(t, "RPG", dirs[0].Name)
+	assert.Equal(t, 1, dirs[0].FileCount)
+	assert.Equal(t, []string{snesSystem.ID}, dirs[0].SystemIDs)
+}
+
 func TestMediaDB_SearchMediaWithFilters_SelectiveIndexingKeepsUnchangedSystemsCacheEligible_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
