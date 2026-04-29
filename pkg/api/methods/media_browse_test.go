@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -104,13 +105,18 @@ func browseFileCountSystemOpts(pathPrefix, systemID string) any {
 	})
 }
 
+func browseTestAbsPath(parts ...string) string {
+	return filepath.Join(append([]string{string(filepath.Separator)}, parts...)...)
+}
+
 func TestHandleMediaBrowse_RootLevel(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
 	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
-		Return([]string{"/roms"})
+		Return([]string{romsRoot})
 	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
 		Return([]platforms.Launcher{
 			{ID: "Steam", SystemID: "pc", Schemes: []string{"steam"}},
@@ -153,13 +159,19 @@ func TestHandleMediaBrowse_SystemRootRoutes(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	snesPath := filepath.Join(romsRoot, "SNES")
+	sharedPath := filepath.Join(romsRoot, "shared")
+	snesAPIPath := filepath.ToSlash(snesPath)
+	sharedAPIPath := filepath.ToSlash(sharedPath)
 	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
-		Return([]string{"/roms"})
+		Return([]string{romsRoot})
 	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
 		Return([]platforms.Launcher{
 			{ID: "SNES", SystemID: "SNES", Folders: []string{"SNES"}},
 			{ID: "SharedSNES", SystemID: "SNES", Folders: []string{"shared"}},
+			{ID: "OutsideSNES", SystemID: "SNES", Folders: []string{browseTestAbsPath("tmp", "outside")}},
 			{ID: "Steam", SystemID: "pc", Schemes: []string{"steam"}},
 		})
 
@@ -167,10 +179,10 @@ func TestHandleMediaBrowse_SystemRootRoutes(t *testing.T) {
 	mockMediaDB.On("BrowseRouteCounts", mock.Anything,
 		mock.MatchedBy(func(opts database.BrowseRouteCountsOptions) bool {
 			return len(opts.Systems) == 1 && opts.Systems[0].ID == "SNES" &&
-				assert.ElementsMatch(t, []string{"/roms/SNES", "/roms/shared"}, opts.Routes)
+				assert.ElementsMatch(t, []string{snesAPIPath, sharedAPIPath}, opts.Routes)
 		}),
 	).Return(map[string]database.BrowseRouteCount{
-		"/roms/SNES": {Path: "/roms/SNES", FileCount: 12, SystemIDs: []string{"SNES"}},
+		snesAPIPath: {Path: snesAPIPath, FileCount: 12, SystemIDs: []string{"SNES"}},
 	}, nil)
 
 	systems := []string{"SNES"}
@@ -184,7 +196,7 @@ func TestHandleMediaBrowse_SystemRootRoutes(t *testing.T) {
 	entry := browseResults.Entries[0]
 	assert.Equal(t, "root", entry.Type)
 	assert.Equal(t, "SNES", entry.Name)
-	assert.Equal(t, "/roms/SNES", entry.Path)
+	assert.Equal(t, snesAPIPath, entry.Path)
 	assert.Equal(t, []string{"SNES"}, entry.SystemIDs)
 	require.NotNil(t, entry.SystemID)
 	assert.Equal(t, "SNES", *entry.SystemID)
@@ -198,9 +210,10 @@ func TestHandleMediaBrowse_FilesystemDirectory(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
 	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
-		Return([]string{"/roms"})
+		Return([]string{romsRoot})
 	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
 		Return([]platforms.Launcher{})
 
@@ -291,28 +304,32 @@ func TestHandleMediaBrowse_FilesystemFiltersBySystem(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	sharedPath := filepath.Join(romsRoot, "shared")
+	sharedPrefix := filepath.ToSlash(sharedPath) + "/"
+	chronoPath := filepath.ToSlash(filepath.Join(sharedPath, "Chrono Trigger.sfc"))
 	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
 	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
-		Return([]string{"/roms"})
+		Return([]string{romsRoot})
 	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
 		Return([]platforms.Launcher{})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts("/roms/shared/", "SNES")).
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts(sharedPrefix, "SNES")).
 		Return([]database.BrowseDirectoryResult{
 			{Name: "RPG", FileCount: 3, SystemIDs: []string{"SNES"}},
 		}, nil)
-	mockMediaDB.On("BrowseFiles", mock.Anything, browseFilesSystemOpts("/roms/shared/", "SNES")).
+	mockMediaDB.On("BrowseFiles", mock.Anything, browseFilesSystemOpts(sharedPrefix, "SNES")).
 		Return([]database.SearchResultWithCursor{
 			{
 				SystemID: "snes", Name: "Chrono Trigger",
-				Path: "/roms/shared/Chrono Trigger.sfc", MediaID: 7,
+				Path: chronoPath, MediaID: 7,
 			},
 		}, nil)
-	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts("/roms/shared/", "SNES")).
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(sharedPrefix, "SNES")).
 		Return(1, nil)
 
-	path := "/roms/shared"
+	path := filepath.ToSlash(sharedPath)
 	systems := []string{"SNES"}
 	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
 		Path:    &path,

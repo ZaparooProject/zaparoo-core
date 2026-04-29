@@ -23,6 +23,7 @@ import (
 	"context"
 	stdsql "database/sql"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -95,11 +96,72 @@ func sqlBrowseDirectoriesForSystems(
 	if err != nil {
 		return nil, err
 	}
-	if len(results) > 0 {
+	missingSystems := browseMissingSystems(opts.Systems, browseCoveredSystemIDsFromDirectories(results))
+	if len(missingSystems) == 0 {
 		return results, nil
 	}
 
-	return sqlBrowseDirectoriesForSystemsFromMedia(ctx, db, opts)
+	mediaResults, err := sqlBrowseDirectoriesForSystemsFromMedia(ctx, db, database.BrowseDirectoriesOptions{
+		PathPrefix: opts.PathPrefix,
+		Systems:    missingSystems,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return mergeBrowseDirectoryResults(results, mediaResults), nil
+}
+
+func browseCoveredSystemIDsFromDirectories(results []database.BrowseDirectoryResult) map[string]struct{} {
+	covered := make(map[string]struct{})
+	for _, result := range results {
+		for _, systemID := range result.SystemIDs {
+			covered[systemID] = struct{}{}
+		}
+	}
+	return covered
+}
+
+func browseMissingSystems(systems []systemdefs.System, covered map[string]struct{}) []systemdefs.System {
+	missing := make([]systemdefs.System, 0, len(systems))
+	for _, system := range systems {
+		if _, ok := covered[system.ID]; !ok {
+			missing = append(missing, system)
+		}
+	}
+	return missing
+}
+
+func mergeBrowseDirectoryResults(
+	base []database.BrowseDirectoryResult,
+	extra []database.BrowseDirectoryResult,
+) []database.BrowseDirectoryResult {
+	if len(extra) == 0 {
+		return base
+	}
+
+	byName := make(map[string]*database.BrowseDirectoryResult, len(base)+len(extra))
+	for i := range base {
+		result := base[i]
+		result.SystemIDs = uniqueBrowseSystemIDs(result.SystemIDs)
+		byName[result.Name] = &result
+	}
+	for _, result := range extra {
+		if existing, ok := byName[result.Name]; ok {
+			existing.FileCount += result.FileCount
+			existing.SystemIDs = uniqueBrowseSystemIDs(append(existing.SystemIDs, result.SystemIDs...))
+			continue
+		}
+		result.SystemIDs = uniqueBrowseSystemIDs(result.SystemIDs)
+		byName[result.Name] = &result
+	}
+
+	merged := make([]database.BrowseDirectoryResult, 0, len(byName))
+	for _, result := range byName {
+		merged = append(merged, *result)
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Name < merged[j].Name })
+	return merged
 }
 
 func sqlBrowseDirectoriesForSystemsFromCache(
@@ -216,8 +278,8 @@ func browseFilesBaseCondition(
 }
 
 // browseSortClause returns the ORDER BY clause for the given sort option.
-func browseSortClause(sort string) string {
-	switch sort {
+func browseSortClause(sortOrder string) string {
+	switch sortOrder {
 	case "name-desc":
 		return "mt.Name DESC, m.DBID DESC"
 	case "filename-asc":
@@ -231,8 +293,8 @@ func browseSortClause(sort string) string {
 
 // browseCursorCondition returns the keyset pagination WHERE clause fragment for
 // the given sort order. The caller must append (sortValue, lastID) as args.
-func browseCursorCondition(sort string) string {
-	switch sort {
+func browseCursorCondition(sortOrder string) string {
+	switch sortOrder {
 	case "name-desc":
 		return ` AND (mt.Name, m.DBID) < (?, ?)`
 	case "filename-asc":
@@ -413,28 +475,61 @@ func sqlBrowseRouteCounts(
 		return nil, err
 	}
 
-	missingRoutes := make([]string, 0, len(opts.Routes))
+	missingByRoute := make(map[string][]systemdefs.System, len(opts.Routes))
 	for _, route := range opts.Routes {
-		if _, ok := counts[route]; !ok {
-			missingRoutes = append(missingRoutes, route)
+		covered := make(map[string]struct{})
+		if count, ok := counts[route]; ok {
+			for _, systemID := range count.SystemIDs {
+				covered[systemID] = struct{}{}
+			}
+		}
+		if missingSystems := browseMissingSystems(opts.Systems, covered); len(missingSystems) > 0 {
+			missingByRoute[route] = missingSystems
 		}
 	}
-	if len(missingRoutes) == 0 {
+	if len(missingByRoute) == 0 {
 		return counts, nil
 	}
 
-	mediaCounts, err := sqlBrowseRouteCountsFromMedia(ctx, db, database.BrowseRouteCountsOptions{
-		Systems: opts.Systems,
-		Routes:  missingRoutes,
-	})
-	if err != nil {
-		return nil, err
-	}
-	for route, count := range mediaCounts {
-		counts[route] = count
+	for route, missingSystems := range missingByRoute {
+		mediaCounts, err := sqlBrowseRouteCountsFromMedia(ctx, db, database.BrowseRouteCountsOptions{
+			Systems: missingSystems,
+			Routes:  []string{route},
+		})
+		if err != nil {
+			return nil, err
+		}
+		mediaCount, ok := mediaCounts[route]
+		if !ok {
+			continue
+		}
+		if cachedCount, ok := counts[route]; ok {
+			cachedCount.FileCount += mediaCount.FileCount
+			cachedCount.SystemIDs = uniqueBrowseSystemIDs(append(cachedCount.SystemIDs, mediaCount.SystemIDs...))
+			counts[route] = cachedCount
+			continue
+		}
+		mediaCount.SystemIDs = uniqueBrowseSystemIDs(mediaCount.SystemIDs)
+		counts[route] = mediaCount
 	}
 
 	return counts, nil
+}
+
+func uniqueBrowseSystemIDs(systemIDs []string) []string {
+	if len(systemIDs) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(systemIDs))
+	unique := make([]string, 0, len(systemIDs))
+	for _, systemID := range systemIDs {
+		if _, ok := seen[systemID]; ok {
+			continue
+		}
+		seen[systemID] = struct{}{}
+		unique = append(unique, systemID)
+	}
+	return unique
 }
 
 func sqlBrowseRouteCountsFromCache(

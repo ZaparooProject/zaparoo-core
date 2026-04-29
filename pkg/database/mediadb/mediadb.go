@@ -78,8 +78,8 @@ type MediaDB struct {
 	clock                 clockwork.Clock
 	ctx                   context.Context
 	pl                    platforms.Platform
-	batchInsertTagType    *BatchInserter
-	batchInsertMedia      *BatchInserter
+	batchInsertMediaTitle *BatchInserter
+	stmtInsertMediaTitle  *sql.Stmt
 	stmtInsertMedia       *sql.Stmt
 	tx                    *sql.Tx
 	stmtInsertSystem      *sql.Stmt
@@ -89,11 +89,12 @@ type MediaDB struct {
 	batchInsertMediaTag   *BatchInserter
 	batchInsertSystem     *BatchInserter
 	batchInsertTag        *BatchInserter
-	batchInsertMediaTitle *BatchInserter
+	batchInsertTagType    *BatchInserter
 	stmtInsertMediaTag    *sql.Stmt
-	stmtInsertMediaTitle  *sql.Stmt
+	batchInsertMedia      *BatchInserter
 	slugSearchCache       atomic.Pointer[SlugSearchCache]
 	inMemoryTagCache      atomic.Pointer[tagCache]
+	browseCacheDirtyDBIDs map[int64]struct{}
 	dbPath                string
 	backgroundOps         sync.WaitGroup
 	vacuumRetryDelay      time.Duration
@@ -103,6 +104,7 @@ type MediaDB struct {
 	isOptimizing          atomic.Bool
 	needsIndexRebuild     atomic.Bool
 	inTransaction         bool
+	browseCacheDirtyAll   bool
 }
 
 // sqlQueryable is the subset of *sql.DB and *sql.Tx needed by SQL helpers.
@@ -177,6 +179,56 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 			log.Warn().Err(err).Msg("failed to invalidate slug resolution cache for specific systems")
 		}
 	}
+}
+
+func invalidationScopeForSystemIDs(systemIDs []string) invalidationScope {
+	if len(systemIDs) == 0 || len(systemIDs) > maxSelectiveInvalidationSystems {
+		return invalidationScope{AllSystems: true}
+	}
+	return invalidationScope{SystemIDs: systemIDs}
+}
+
+func (db *MediaDB) markBrowseCacheDirty(systemDBIDs ...int64) {
+	if len(systemDBIDs) == 0 {
+		db.browseCacheDirtyAll = true
+		db.browseCacheDirtyDBIDs = nil
+		return
+	}
+	if db.browseCacheDirtyAll {
+		return
+	}
+	if db.browseCacheDirtyDBIDs == nil {
+		db.browseCacheDirtyDBIDs = make(map[int64]struct{}, len(systemDBIDs))
+	}
+	for _, systemDBID := range systemDBIDs {
+		db.browseCacheDirtyDBIDs[systemDBID] = struct{}{}
+	}
+}
+
+func (db *MediaDB) invalidateBrowseCacheForMediaChange(systemDBIDs ...int64) error {
+	if db.inTransaction {
+		db.markBrowseCacheDirty(systemDBIDs...)
+		return nil
+	}
+	return sqlInvalidateBrowseCache(db.ctx, db.conn(), systemDBIDs, len(systemDBIDs) == 0)
+}
+
+func (db *MediaDB) flushBrowseCacheInvalidation() error {
+	if !db.browseCacheDirtyAll && len(db.browseCacheDirtyDBIDs) == 0 {
+		return nil
+	}
+	systemDBIDs := make([]int64, 0, len(db.browseCacheDirtyDBIDs))
+	for systemDBID := range db.browseCacheDirtyDBIDs {
+		systemDBIDs = append(systemDBIDs, systemDBID)
+	}
+	err := sqlInvalidateBrowseCache(db.ctx, db.sql, systemDBIDs, db.browseCacheDirtyAll)
+	db.clearBrowseCacheInvalidation()
+	return err
+}
+
+func (db *MediaDB) clearBrowseCacheInvalidation() {
+	db.browseCacheDirtyAll = false
+	db.browseCacheDirtyDBIDs = nil
 }
 
 func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
@@ -440,10 +492,8 @@ func (db *MediaDB) UpdateLastGenerated() error {
 			log.Warn().Err(getSystemsErr).
 				Msg("failed to load indexing systems for cache invalidation; clearing all caches")
 			db.invalidateCaches(invalidationScope{AllSystems: true})
-		case len(systemIDs) > 0:
-			db.invalidateCaches(invalidationScope{SystemIDs: systemIDs})
 		default:
-			db.invalidateCaches(invalidationScope{AllSystems: true})
+			db.invalidateCaches(invalidationScopeForSystemIDs(systemIDs))
 		}
 	}
 
@@ -541,6 +591,9 @@ func (db *MediaDB) Truncate() error {
 	if err != nil {
 		return err
 	}
+	if err := sqlInvalidateBrowseCache(db.ctx, db.sql, nil, true); err != nil {
+		return err
+	}
 
 	// Invalidate all caches after full truncation
 	db.invalidateCaches(invalidationScope{AllSystems: true})
@@ -555,9 +608,12 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 	if err != nil {
 		return err
 	}
+	if err := sqlInvalidateBrowseCache(db.ctx, db.sql, nil, true); err != nil {
+		return err
+	}
 
 	// Invalidate caches for the affected systems
-	db.invalidateCaches(invalidationScope{SystemIDs: systemIDs})
+	db.invalidateCaches(invalidationScopeForSystemIDs(systemIDs))
 	return nil
 }
 
@@ -620,14 +676,7 @@ func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationS
 		return invalidationScope{AllSystems: true}
 	}
 
-	if len(systemIDs) == 0 {
-		return invalidationScope{AllSystems: true}
-	}
-	if len(systemIDs) > maxSelectiveInvalidationSystems {
-		return invalidationScope{AllSystems: true}
-	}
-
-	return invalidationScope{SystemIDs: systemIDs}
+	return invalidationScopeForSystemIDs(systemIDs)
 }
 
 // SetSQLForTesting allows injection of a sql.DB instance for testing purposes.
@@ -764,6 +813,7 @@ func (db *MediaDB) RollbackTransaction() error {
 	err := db.tx.Rollback()
 	db.tx = nil
 	db.inTransaction = false // Clear transaction flag (no cache invalidation needed on rollback)
+	db.clearBrowseCacheInvalidation()
 	if err != nil {
 		return fmt.Errorf("failed to rollback transaction: %w", err)
 	}
@@ -789,6 +839,7 @@ func (db *MediaDB) rollbackAndLogError() {
 	}
 	db.tx = nil
 	db.inTransaction = false
+	db.clearBrowseCacheInvalidation()
 }
 
 func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
@@ -998,10 +1049,12 @@ func (db *MediaDB) CommitTransaction() error {
 			if rbErr := db.tx.Rollback(); rbErr != nil {
 				db.tx = nil
 				db.inTransaction = false
+				db.clearBrowseCacheInvalidation()
 				return fmt.Errorf("failed to flush batch inserts: %w; rollback also failed: %w", closeErr, rbErr)
 			}
 			db.tx = nil
 			db.inTransaction = false
+			db.clearBrowseCacheInvalidation()
 			return fmt.Errorf("failed to flush batch inserts: %w", closeErr)
 		}
 	} else {
@@ -1016,10 +1069,12 @@ func (db *MediaDB) CommitTransaction() error {
 		if rbErr := db.tx.Rollback(); rbErr != nil {
 			db.tx = nil
 			db.inTransaction = false
+			db.clearBrowseCacheInvalidation()
 			return fmt.Errorf("commit failed: %w; rollback also failed: %w", err, rbErr)
 		}
 		db.tx = nil
 		db.inTransaction = false
+		db.clearBrowseCacheInvalidation()
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -1030,6 +1085,9 @@ func (db *MediaDB) CommitTransaction() error {
 	// During selective indexing, preserve unaffected in-memory slug cache coverage
 	// so post-index searches for untouched systems stay warm.
 	db.invalidateCaches(db.cacheInvalidationScopeForCommittedTransaction())
+	if err := db.flushBrowseCacheInvalidation(); err != nil {
+		return err
+	}
 
 	// Run manual WAL checkpoint after commit to keep WAL size bounded during indexing
 	// Use TRUNCATE to reset the WAL file after commit, keeping reads fast
@@ -1994,6 +2052,7 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 		if err != nil {
 			return row, fmt.Errorf("failed to add media to batch: %w", err)
 		}
+		db.markBrowseCacheDirty(row.SystemDBID)
 		// Return row as-is (DBID is already set by caller)
 		return row, nil
 	}
@@ -2008,6 +2067,11 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
 	if err == nil && !db.inTransaction {
 		db.invalidateCaches(invalidationScope{AllSystems: true})
+		if invalidateErr := db.invalidateBrowseCacheForMediaChange(result.SystemDBID); invalidateErr != nil {
+			return result, invalidateErr
+		}
+	} else if err == nil {
+		db.markBrowseCacheDirty(result.SystemDBID)
 	}
 
 	return result, err
@@ -2021,6 +2085,11 @@ func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
 	err := sqlUpdateMediaTitle(db.ctx, db.conn(), mediaDBID, mediaTitleDBID)
 	if err == nil && !db.inTransaction {
 		db.invalidateCaches(invalidationScope{AllSystems: true})
+		if invalidateErr := db.invalidateBrowseCacheForMediaChange(); invalidateErr != nil {
+			return invalidateErr
+		}
+	} else if err == nil {
+		db.markBrowseCacheDirty()
 	}
 
 	return err
@@ -2059,6 +2128,11 @@ func (db *MediaDB) BulkSetMediaMissing(dbids map[int]struct{}) error {
 	err := sqlBulkSetMediaMissing(db.ctx, db.conn(), dbids)
 	if err == nil && !db.inTransaction {
 		db.invalidateCaches(invalidationScope{AllSystems: true})
+		if invalidateErr := db.invalidateBrowseCacheForMediaChange(); invalidateErr != nil {
+			return invalidateErr
+		}
+	} else if err == nil {
+		db.markBrowseCacheDirty()
 	}
 	return err
 }
@@ -2070,6 +2144,19 @@ func (db *MediaDB) ResetMissingFlags(systemDBIDs []int) error {
 	err := sqlResetMissingFlags(db.ctx, db.conn(), systemDBIDs)
 	if err == nil && !db.inTransaction {
 		db.invalidateCaches(invalidationScope{AllSystems: true})
+		dirtySystemDBIDs := make([]int64, len(systemDBIDs))
+		for i, systemDBID := range systemDBIDs {
+			dirtySystemDBIDs[i] = int64(systemDBID)
+		}
+		if invalidateErr := db.invalidateBrowseCacheForMediaChange(dirtySystemDBIDs...); invalidateErr != nil {
+			return invalidateErr
+		}
+	} else if err == nil {
+		dirtySystemDBIDs := make([]int64, len(systemDBIDs))
+		for i, systemDBID := range systemDBIDs {
+			dirtySystemDBIDs[i] = int64(systemDBID)
+		}
+		db.markBrowseCacheDirty(dirtySystemDBIDs...)
 	}
 	return err
 }

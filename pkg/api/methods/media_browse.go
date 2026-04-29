@@ -260,6 +260,13 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 		seen[route] = true
 		routes = append(routes, route)
 	}
+	addFilesystemRoute := func(route string) {
+		cleaned := filepath.Clean(route)
+		if !isPathUnderRootDirs(cleaned, rootDirs) {
+			return
+		}
+		addRoute(filepath.ToSlash(cleaned))
+	}
 
 	for i := range systems {
 		launchers := env.LauncherCache.GetLaunchersBySystem(systems[i].ID)
@@ -274,17 +281,28 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 			}
 			for _, folder := range launcher.Folders {
 				if filepath.IsAbs(folder) {
-					addRoute(filepath.ToSlash(filepath.Clean(folder)))
+					addFilesystemRoute(folder)
 					continue
 				}
 				for _, root := range rootDirs {
-					addRoute(filepath.ToSlash(filepath.Clean(filepath.Join(root, folder))))
+					addFilesystemRoute(filepath.Join(root, folder))
 				}
 			}
 		}
 	}
 
 	return routes
+}
+
+func isPathUnderRootDirs(path string, rootDirs []string) bool {
+	for _, root := range rootDirs {
+		cleanedRoot := filepath.Clean(root)
+		rel, err := filepath.Rel(cleanedRoot, path)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func browseRouteDisplayName(route string) string {

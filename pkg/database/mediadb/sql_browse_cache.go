@@ -139,6 +139,32 @@ func sqlPopulateBrowseCache(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func sqlInvalidateBrowseCache(ctx context.Context, db sqlQueryable, systemDBIDs []int64, allSystems bool) error {
+	if _, err := db.ExecContext(ctx, "DELETE FROM BrowseCache"); err != nil {
+		return fmt.Errorf("failed to invalidate browse cache: %w", err)
+	}
+
+	if allSystems || len(systemDBIDs) == 0 {
+		if _, err := db.ExecContext(ctx, "DELETE FROM BrowseSystemCache"); err != nil {
+			return fmt.Errorf("failed to invalidate system browse cache: %w", err)
+		}
+		return nil
+	}
+
+	placeholders := prepareVariadic("?", ",", len(systemDBIDs))
+	args := make([]any, len(systemDBIDs))
+	for i, systemDBID := range systemDBIDs {
+		args[i] = systemDBID
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
+	stmt := fmt.Sprintf("DELETE FROM BrowseSystemCache WHERE SystemDBID IN (%s)", placeholders)
+	if _, err := db.ExecContext(ctx, stmt, args...); err != nil {
+		return fmt.Errorf("failed to invalidate scoped system browse cache: %w", err)
+	}
+	return nil
+}
+
 // browseCacheParentAndName extracts the parent path and display name from a
 // directory path or virtual scheme.
 //
