@@ -116,3 +116,27 @@ func TestBuildLetterFilterSQL(t *testing.T) {
 		})
 	}
 }
+
+func TestBrowseNameFirstChar(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "uppercase letter", in: "Metroid", want: "M"},
+		{name: "lowercase letter", in: "zelda", want: "Z"},
+		{name: "number", in: "1942", want: "0-9"},
+		{name: "symbol", in: "_hidden", want: "#"},
+		{name: "empty", in: "", want: "#"},
+		{name: "non ascii", in: "Étoile", want: "#"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, BrowseNameFirstChar(tt.in))
+		})
+	}
+}

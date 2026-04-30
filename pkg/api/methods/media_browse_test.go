@@ -271,6 +271,55 @@ func TestHandleMediaBrowse_SystemRootRoutesIncludesIndexedDirectories(t *testing
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestHandleMediaBrowse_SystemRootRoutesDedupesCoveredParent(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	nesPath := filepath.Join(romsRoot, "NES")
+	romsAPIPath := filepath.ToSlash(romsRoot)
+	nesAPIPath := filepath.ToSlash(nesPath)
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{romsRoot})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{
+			{ID: "NES", SystemID: "NES", Folders: []string{"NES"}},
+		})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	romsPrefix := filepath.ToSlash(romsRoot) + "/"
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "NES")).
+		Return(10, nil)
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts(romsPrefix, "NES")).
+		Return([]database.BrowseDirectoryResult{{Name: "NES", FileCount: 10, SystemIDs: []string{"NES"}}}, nil)
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "NES")).
+		Return([]database.BrowseVirtualScheme{}, nil)
+	mockMediaDB.On("BrowseRouteCounts", mock.Anything,
+		mock.MatchedBy(func(opts database.BrowseRouteCountsOptions) bool {
+			return len(opts.Systems) == 1 && opts.Systems[0].ID == "NES" &&
+				assert.ElementsMatch(t, []string{nesAPIPath, romsAPIPath}, opts.Routes)
+		}),
+	).Return(map[string]database.BrowseRouteCount{
+		romsAPIPath: {Path: romsAPIPath, FileCount: 10, SystemIDs: []string{"NES"}},
+		nesAPIPath:  {Path: nesAPIPath, FileCount: 10, SystemIDs: []string{"NES"}},
+	}, nil)
+
+	systems := []string{"NES"}
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Systems: &systems})
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	assert.Equal(t, nesAPIPath, browseResults.Entries[0].Path)
+	require.NotNil(t, browseResults.Entries[0].FileCount)
+	assert.Equal(t, 10, *browseResults.Entries[0].FileCount)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestHandleMediaBrowse_SystemRootRoutesIncludesRootMedia(t *testing.T) {
 	t.Parallel()
 
@@ -316,6 +365,83 @@ func TestHandleMediaBrowse_SystemRootRoutesIncludesRootMedia(t *testing.T) {
 	assert.Equal(t, 1, *entry.FileCount)
 
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestDedupeSystemRootEntries(t *testing.T) {
+	t.Parallel()
+
+	count := func(v int) *int { return &v }
+
+	tests := []struct {
+		name    string
+		entries []models.BrowseEntry
+		want    []string
+	}{
+		{
+			name: "single child absorbs parent",
+			entries: []models.BrowseEntry{
+				{Path: "/media/fat/games", FileCount: count(10)},
+				{Path: "/media/fat/games/NES", FileCount: count(10)},
+			},
+			want: []string{"/media/fat/games/NES"},
+		},
+		{
+			name: "parent keeps union across children",
+			entries: []models.BrowseEntry{
+				{Path: "/media/fat/games", FileCount: count(15)},
+				{Path: "/media/fat/games/NES", FileCount: count(10)},
+				{Path: "/media/fat/games/NES Hacks", FileCount: count(5)},
+			},
+			want: []string{"/media/fat/games", "/media/fat/games/NES", "/media/fat/games/NES Hacks"},
+		},
+		{
+			name: "sibling equal counts are unrelated",
+			entries: []models.BrowseEntry{
+				{Path: "/media/fat/games/NES", FileCount: count(10)},
+				{Path: "/media/fat/alt/NES", FileCount: count(10)},
+			},
+			want: []string{"/media/fat/games/NES", "/media/fat/alt/NES"},
+		},
+		{
+			name: "nil counts are not deduped",
+			entries: []models.BrowseEntry{
+				{Path: "/media/fat/games", FileCount: nil},
+				{Path: "/media/fat/games/NES", FileCount: count(10)},
+				{Path: "/media/fat/games/SNES", FileCount: nil},
+			},
+			want: []string{"/media/fat/games", "/media/fat/games/NES", "/media/fat/games/SNES"},
+		},
+		{
+			name: "string prefix is not ancestry",
+			entries: []models.BrowseEntry{
+				{Path: "/media/fat/games", FileCount: count(10)},
+				{Path: "/media/fat/games-extra", FileCount: count(10)},
+			},
+			want: []string{"/media/fat/games", "/media/fat/games-extra"},
+		},
+		{
+			name: "virtual schemes are ignored",
+			entries: []models.BrowseEntry{
+				{Path: "box://", FileCount: count(10)},
+				{Path: "box://NES", FileCount: count(10)},
+			},
+			want: []string{"box://", "box://NES"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := dedupeSystemRootEntries(tt.entries)
+			gotPaths := make([]string, 0, len(got))
+			for _, entry := range got {
+				gotPaths = append(gotPaths, entry.Path)
+			}
+
+			assert.Equal(t, tt.want, gotPaths)
+		})
+	}
 }
 
 func TestHandleMediaBrowse_FilesystemDirectory(t *testing.T) {

@@ -192,70 +192,46 @@ func insertSystemMedia(t *testing.T, mediaDB *MediaDB, system database.System, t
 	require.NoError(t, mediaDB.CommitTransaction())
 }
 
-func assertBrowseCacheRow(
+func assertBrowseV2Dir(
 	t *testing.T,
 	mediaDB *MediaDB,
-	table string,
-	systemDBID int64,
 	dirPath string,
-	wantParentPath string,
 	wantName string,
-	wantFileCount int,
 	wantVirtual bool,
 ) {
 	t.Helper()
 
-	var query string
-	var args []any
-	switch table {
-	case "BrowseCache":
-		query = "SELECT ParentPath, Name, FileCount, IsVirtual FROM BrowseCache WHERE DirPath = ?"
-		args = []any{dirPath}
-	case "BrowseSystemCache":
-		query = `SELECT ParentPath, Name, FileCount, IsVirtual
-			FROM BrowseSystemCache WHERE SystemDBID = ? AND DirPath = ?`
-		args = []any{systemDBID, dirPath}
-	default:
-		t.Fatalf("unexpected browse cache table %q", table)
-	}
-
-	var parentPath, name string
-	var fileCount int
+	var name string
 	var isVirtual bool
-	err := mediaDB.sql.QueryRowContext(context.Background(), query, args...).Scan(
-		&parentPath, &name, &fileCount, &isVirtual,
+	err := mediaDB.sql.QueryRowContext(
+		context.Background(),
+		"SELECT Name, IsVirtual FROM BrowseDirs WHERE Path = ?",
+		dirPath,
+	).Scan(
+		&name, &isVirtual,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, wantParentPath, parentPath)
 	assert.Equal(t, wantName, name)
-	assert.Equal(t, wantFileCount, fileCount)
 	assert.Equal(t, wantVirtual, isVirtual)
 }
 
-func seedBrowseCacheRows(t *testing.T, mediaDB *MediaDB, systemDBIDs ...int64) {
+func browseV2DirID(t *testing.T, mediaDB *MediaDB, dirPath string) int64 {
 	t.Helper()
 
-	ctx := context.Background()
-	romsPath := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms")) + "/"
-	_, err := mediaDB.sql.ExecContext(ctx,
-		"INSERT INTO BrowseCache (DirPath, ParentPath, Name, FileCount, IsVirtual) VALUES (?, ?, ?, ?, ?)",
-		romsPath, "", "roms", 2, false,
-	)
+	var id int64
+	err := mediaDB.sql.QueryRowContext(
+		context.Background(),
+		"SELECT DBID FROM BrowseDirs WHERE Path = ?",
+		dirPath,
+	).Scan(&id)
 	require.NoError(t, err)
-	for _, systemDBID := range systemDBIDs {
-		_, err = mediaDB.sql.ExecContext(ctx,
-			`INSERT INTO BrowseSystemCache (SystemDBID, DirPath, ParentPath, Name, FileCount, IsVirtual)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			systemDBID, romsPath, "", "roms", 1, false,
-		)
-		require.NoError(t, err)
-	}
+	return id
 }
 
 func countTableRows(t *testing.T, mediaDB *MediaDB, table, where string, args ...any) int {
 	t.Helper()
 
-	if table != "BrowseCache" && table != "BrowseSystemCache" {
+	if table != "BrowseDirs" && table != "BrowseEntries" && table != "BrowseDirCounts" {
 		t.Fatalf("unexpected table %q", table)
 	}
 	query := "SELECT COUNT(*) FROM " + table
@@ -279,6 +255,19 @@ func assertIndexExists(t *testing.T, mediaDB *MediaDB, indexName string) {
 	).Scan(&found)
 	require.NoError(t, err)
 	assert.Equal(t, indexName, found)
+}
+
+func getDBConfigValue(t *testing.T, mediaDB *MediaDB, name string) string {
+	t.Helper()
+
+	var value string
+	err := mediaDB.sql.QueryRowContext(
+		context.Background(),
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		name,
+	).Scan(&value)
+	require.NoError(t, err)
+	return value
 }
 
 func TestMediaDB_OpenClose_Integration(t *testing.T) {
@@ -2414,7 +2403,7 @@ func TestMediaDB_CacheInvalidationScope_UsesAllSystemsForBroadIndexing_Integrati
 	assert.Empty(t, scope.SystemIDs)
 }
 
-func TestMediaDB_SystemBrowseFallsBackWhenSystemCacheEmpty_Integration(t *testing.T) {
+func TestMediaDB_SystemBrowseFallsBackWhenBrowseV2NotReady_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -2448,7 +2437,10 @@ func TestMediaDB_SystemBrowseFallsBackWhenSystemCacheEmpty_Integration(t *testin
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
 
-	_, err = mediaDB.sql.ExecContext(ctx, "DELETE FROM BrowseSystemCache")
+	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql, nil, true))
+	assert.Equal(t, "0", getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
+
+	_, err = mediaDB.sql.ExecContext(ctx, "DELETE FROM BrowseDirs")
 	require.NoError(t, err)
 
 	routeCounts, err := mediaDB.BrowseRouteCounts(ctx, database.BrowseRouteCountsOptions{
@@ -2487,18 +2479,39 @@ func TestSqlPopulateBrowseCache_PopulatesSystemAndGlobalCounts_Integration(t *te
 	insertSystemMedia(t, mediaDB, snesSystem, "Steam Game", "steam://440/Team%20Fortress%202")
 
 	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql))
+	assert.Equal(t, browseIndexVersion, getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
 
-	assertBrowseCacheRow(t, mediaDB, "BrowseCache", 0, "/", "", "/", 2, false)
-	assertBrowseCacheRow(t, mediaDB, "BrowseCache", 0,
-		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms"))+"/", "", "roms", 2, false)
-	assertBrowseCacheRow(t, mediaDB, "BrowseCache", 0, "steam://", "", "steam://", 1, true)
+	romsDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms")) + "/"
+	assertBrowseV2Dir(t, mediaDB, "/", "/", false)
+	assertBrowseV2Dir(t, mediaDB, romsDir, "roms", false)
+	assertBrowseV2Dir(t, mediaDB, "steam://", "steam://", true)
 
-	assertBrowseCacheRow(t, mediaDB, "BrowseSystemCache", snesSystem.DBID, "/", "", "/", 1, false)
-	assertBrowseCacheRow(t, mediaDB, "BrowseSystemCache", nesSystem.DBID, "/", "", "/", 1, false)
-	assertBrowseCacheRow(t, mediaDB, "BrowseSystemCache", snesSystem.DBID, "steam://", "", "steam://", 1, true)
+	rootID := browseV2DirID(t, mediaDB, "/")
+	romsID := browseV2DirID(t, mediaDB, romsDir)
+	steamID := browseV2DirID(t, mediaDB, "steam://")
+
+	assert.Equal(t, 2, countTableRows(t, mediaDB, "BrowseDirCounts",
+		"ParentDirDBID = ? AND ChildDirDBID = ?", rootID, rootID))
+	assert.Equal(t, 2, countTableRows(t, mediaDB, "BrowseDirCounts",
+		"ParentDirDBID = ? AND ChildDirDBID = ?", rootID, romsID))
+	assert.Equal(t, 1, countTableRows(t, mediaDB, "BrowseDirCounts",
+		"ChildDirDBID = ? AND SystemDBID = ?", steamID, snesSystem.DBID))
+	assert.Equal(t, 1, countTableRows(t, mediaDB, "BrowseDirCounts",
+		"ChildDirDBID = ? AND SystemDBID = ?", romsID, nesSystem.DBID))
+
+	rootCounts, err := mediaDB.BrowseRootCounts(ctx, []string{"/"})
+	require.NoError(t, err)
+	require.NotNil(t, rootCounts["/"])
+	assert.Equal(t, 2, *rootCounts["/"])
+
+	rootDirs, err := mediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{PathPrefix: "/"})
+	require.NoError(t, err)
+	require.Len(t, rootDirs, 1)
+	assert.Equal(t, "roms", rootDirs[0].Name)
+	assert.Equal(t, 2, rootDirs[0].FileCount)
 }
 
-func TestSqlInvalidateBrowseCache_DeletesScopedSystemRows_Integration(t *testing.T) {
+func TestSqlInvalidateBrowseCache_MarksBrowseV2Stale_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -2507,38 +2520,16 @@ func TestSqlInvalidateBrowseCache_DeletesScopedSystemRows_Integration(t *testing
 	defer cleanup()
 
 	ctx := context.Background()
-	nesSystem, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	_, err := mediaDB.sql.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigBrowseIndexVersion,
+		browseIndexVersion,
+	)
 	require.NoError(t, err)
-	snesSystem, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "SNES", Name: "SNES"})
-	require.NoError(t, err)
-	seedBrowseCacheRows(t, mediaDB, nesSystem.DBID, snesSystem.DBID)
 
-	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql, []int64{nesSystem.DBID}, false))
+	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql, []int64{1}, false))
 
-	assert.Equal(t, 0, countTableRows(t, mediaDB, "BrowseCache", ""))
-	assert.Equal(t, 0, countTableRows(t, mediaDB, "BrowseSystemCache", "SystemDBID = ?", nesSystem.DBID))
-	assert.Equal(t, 1, countTableRows(t, mediaDB, "BrowseSystemCache", "SystemDBID = ?", snesSystem.DBID))
-}
-
-func TestSqlInvalidateBrowseCache_DeletesAllRows_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	t.Parallel()
-	mediaDB, cleanup := setupTempMediaDB(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	nesSystem, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
-	require.NoError(t, err)
-	snesSystem, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "SNES", Name: "SNES"})
-	require.NoError(t, err)
-	seedBrowseCacheRows(t, mediaDB, nesSystem.DBID, snesSystem.DBID)
-
-	require.NoError(t, sqlInvalidateBrowseCache(ctx, mediaDB.sql, nil, true))
-
-	assert.Equal(t, 0, countTableRows(t, mediaDB, "BrowseCache", ""))
-	assert.Equal(t, 0, countTableRows(t, mediaDB, "BrowseSystemCache", ""))
+	assert.Equal(t, "0", getDBConfigValue(t, mediaDB, DBConfigBrowseIndexVersion))
 }
 
 func TestMediaDB_UnfilteredBrowseReadsFromMediaWhenBrowseCacheEmpty_Integration(t *testing.T) {

@@ -24,6 +24,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -39,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,7 +89,7 @@ func writeFakeServiceScript(t *testing.T, pidFile, eventLog string) string {
 	return scriptPath
 }
 
-func TestPrepareBinary_CopiesWithServiceSuffix(t *testing.T) {
+func TestPrepareBinary_CopiesWithHashName(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
 
@@ -99,10 +101,11 @@ func TestPrepareBinary_CopiesWithServiceSuffix(t *testing.T) {
 	result, err := svc.prepareBinary(srcPath)
 	require.NoError(t, err)
 
-	assert.Equal(t, "zaparoo.service.sh", filepath.Base(result))
+	assert.Regexp(t, `^zaparoo\.[0-9a-f]{16}\.sh$`, filepath.Base(result))
 	content, err := os.ReadFile(result) //nolint:gosec // G304: test file
 	require.NoError(t, err)
 	assert.Equal(t, "binary-content", string(content))
+	assert.FileExists(t, filepath.Join(svc.pl.Settings().DataDir, serviceManifestName))
 }
 
 func TestPrepareBinary_CreatesDataDir(t *testing.T) {
@@ -137,7 +140,67 @@ func TestPrepareBinary_NoExtension(t *testing.T) {
 
 	result, err := svc.prepareBinary(srcPath)
 	require.NoError(t, err)
-	assert.Equal(t, "zaparoo.service", filepath.Base(result))
+	assert.Regexp(t, `^zaparoo\.[0-9a-f]{16}$`, filepath.Base(result))
+}
+
+func TestPrepareBinary_StripsNonShellExtension(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.bin")
+	require.NoError(t, os.WriteFile(srcPath, []byte("data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Regexp(t, `^zaparoo\.[0-9a-f]{16}$`, filepath.Base(result))
+	assert.True(t, isServiceCacheFilename(filepath.Base(result)))
+}
+
+func TestPrepareBinary_NormalizesReusedCachedBinaryPermissions(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo")
+	require.NoError(t, os.WriteFile(srcPath, []byte("data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(result, 0o600))
+	require.NoError(t, os.Remove(filepath.Join(svc.pl.Settings().DataDir, serviceManifestName)))
+
+	result, err = svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	info, err := os.Stat(result)
+	require.NoError(t, err)
+	assert.Equal(t, fs.FileMode(0o700), info.Mode().Perm())
+	assert.True(t, isServiceCacheFilename(filepath.Base(result)))
+}
+
+func TestPrepareBinary_UsesConfiguredFilesystem(t *testing.T) {
+	t.Parallel()
+
+	memFS := afero.NewMemMapFs()
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{
+		DataDir: string(filepath.Separator) + "data",
+		TempDir: string(filepath.Separator) + "temp",
+	})
+	svc := &Service{pl: pl, fs: memFS}
+	srcPath := filepath.Join(string(filepath.Separator), "src", "zaparoo.bin")
+	require.NoError(t, memFS.MkdirAll(filepath.Dir(srcPath), 0o750))
+	require.NoError(t, afero.WriteFile(memFS, srcPath, []byte("data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Regexp(t, `^zaparoo\.[0-9a-f]{16}$`, filepath.Base(result))
+	assert.True(t, isServiceCacheFilename(filepath.Base(result)))
+
+	content, err := afero.ReadFile(memFS, result)
+	require.NoError(t, err)
+	assert.Equal(t, "data", string(content))
 }
 
 func TestPrepareBinary_MissingSource(t *testing.T) {
@@ -147,7 +210,7 @@ func TestPrepareBinary_MissingSource(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist", "binary")
 	_, err := svc.prepareBinary(missing)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "error opening binary")
+	assert.Contains(t, err.Error(), "error statting binary")
 }
 
 func TestCleanupServiceBinary_RemovesFromDataDir(t *testing.T) {
@@ -267,6 +330,73 @@ func TestPrepareBinary_SkipsCopyWhenIdentical(t *testing.T) {
 	assert.Equal(t, pastTime.Unix(), info.ModTime().Unix(), "file should not have been rewritten")
 }
 
+func TestPrepareBinary_RepairsCorruptCachedCopy(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(result, []byte("cached-copy"), 0o600))
+
+	result2, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, result, result2)
+
+	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
+	require.NoError(t, err)
+	assert.Equal(t, "binary-data", string(content))
+}
+
+func TestPrepareBinary_RepairsCachedCopyWhenSizeDiffers(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(result, []byte("short"), 0o600))
+
+	result2, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, result, result2)
+
+	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
+	require.NoError(t, err)
+	assert.Equal(t, "binary-data", string(content))
+}
+
+func TestPrepareBinary_DetectsSameSizeSameModTimeSourceChange(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	modTime := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.WriteFile(srcPath, []byte("version-1"), 0o600))
+	require.NoError(t, os.Chtimes(srcPath, modTime, modTime))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(srcPath, []byte("version-2"), 0o600))
+	require.NoError(t, os.Chtimes(srcPath, modTime, modTime))
+
+	result2, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.NotEqual(t, result, result2)
+
+	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
+	require.NoError(t, err)
+	assert.Equal(t, "version-2", string(content))
+}
+
 func TestPrepareBinary_CopiesWhenContentDiffers(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
@@ -280,14 +410,84 @@ func TestPrepareBinary_CopiesWhenContentDiffers(t *testing.T) {
 
 	// Update the source binary.
 	require.NoError(t, os.WriteFile(srcPath, []byte("version-2"), 0o600))
+	futureTime := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(srcPath, futureTime, futureTime))
 
 	result2, err := svc.prepareBinary(srcPath)
 	require.NoError(t, err)
-	assert.Equal(t, result, result2)
+	assert.NotEqual(t, result, result2)
 
 	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
 	require.NoError(t, err)
 	assert.Equal(t, "version-2", string(content))
+}
+
+func TestPrepareBinary_ReplacesViaTemporaryFile(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("version-1"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(srcPath, []byte("version-2"), 0o600))
+	futureTime := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(srcPath, futureTime, futureTime))
+	result2, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, result, result2)
+	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
+	require.NoError(t, err)
+	assert.Equal(t, "version-2", string(content))
+
+	info, err := os.Stat(result2)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+
+	entries, err := os.ReadDir(filepath.Dir(result2))
+	require.NoError(t, err)
+	for _, entry := range entries {
+		assert.NotContains(t, entry.Name(), ".tmp")
+	}
+}
+
+func TestPrepareBinary_CleansLegacyAndStaleServiceCopies(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+	dataDir := svc.pl.Settings().DataDir
+
+	legacyPath := filepath.Join(dataDir, "zaparoo.service.sh")
+	stalePath := filepath.Join(dataDir, "zaparoo.0000000000000000.sh")
+	previousPath := filepath.Join(dataDir, "zaparoo.1111111111111111.sh")
+	unrelatedPath := filepath.Join(dataDir, "backup.2222222222222222.sh")
+	wrongHashPath := filepath.Join(dataDir, "zaparoo.33333333333333333.sh")
+	require.NoError(t, os.WriteFile(legacyPath, []byte("legacy"), 0o600))
+	require.NoError(t, os.WriteFile(stalePath, []byte("stale"), 0o600))
+	require.NoError(t, os.WriteFile(previousPath, []byte("previous"), 0o600))
+	require.NoError(t, os.WriteFile(unrelatedPath, []byte("unrelated"), 0o600))
+	require.NoError(t, os.WriteFile(wrongHashPath, []byte("wrong hash"), 0o600))
+	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(stalePath, oldTime, oldTime))
+	require.NoError(t, os.Chtimes(legacyPath, oldTime.Add(time.Hour), oldTime.Add(time.Hour)))
+	require.NoError(t, os.Chtimes(previousPath, oldTime.Add(2*time.Hour), oldTime.Add(2*time.Hour)))
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("current"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	assert.FileExists(t, result)
+	assert.FileExists(t, previousPath)
+	assert.FileExists(t, unrelatedPath)
+	assert.FileExists(t, wrongHashPath)
+	assert.NoFileExists(t, legacyPath)
+	assert.NoFileExists(t, stalePath)
 }
 
 func TestRestart_StartsWhenServiceNotRunning(t *testing.T) {
@@ -477,9 +677,46 @@ func TestPathLooksLikeServiceBinaryRequiresDirectDataDirChild(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "data")
 	assert.True(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.service"), dataDir))
 	assert.True(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.service.sh"), dataDir))
+	assert.True(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.0123456789abcdef.sh"), dataDir))
+	assert.True(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.0123456789abcdef"), dataDir))
 	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "nested", "zaparoo.service"), dataDir))
 	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo"), dataDir))
+	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.not-a-hash.sh"), dataDir))
+	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.0123456789abcdef.bin"), dataDir))
+	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "fake-service.0123456789abcdef.sh"), dataDir))
 	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(t.TempDir(), "zaparoo.service"), dataDir))
+}
+
+func TestServiceExecEnvPreservesOriginalAppPath(t *testing.T) {
+	t.Parallel()
+
+	env := serviceExecEnv([]string{"A=B", config.AppEnv + "=/old/path"}, "/new/path")
+	assert.Equal(t, []string{"A=B", config.AppEnv + "=/new/path"}, env)
+
+	env = serviceExecEnv([]string{"A=B"}, "/new/path")
+	assert.Equal(t, []string{"A=B", config.AppEnv + "=/new/path"}, env)
+}
+
+func TestRestartExecConfigUsesCachedServiceBinary(t *testing.T) {
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-data"), 0o600))
+	t.Setenv(config.AppEnv, srcPath)
+
+	cfg, err := svc.restartExecConfig(
+		[]string{"old-cache", "-service", "exec"},
+		[]string{"A=B", config.AppEnv + "=/old/path"},
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, srcPath, cfg.binPath)
+	assert.NotEqual(t, srcPath, cfg.serviceBin)
+	assert.Regexp(t, `^zaparoo\.[0-9a-f]{16}\.sh$`, filepath.Base(cfg.serviceBin))
+	assert.FileExists(t, cfg.serviceBin)
+	assert.Equal(t, []string{cfg.serviceBin, "-service", "exec"}, cfg.args)
+	assert.Contains(t, cfg.env, config.AppEnv+"="+srcPath)
 }
 
 func TestRunningRemovesStalePIDFile(t *testing.T) {
