@@ -242,6 +242,27 @@ func TestPreWarmZapLinkHosts_NoInternet(t *testing.T) {
 	mockUserDB.AssertNotCalled(t, "GetSupportedZapLinkHosts")
 }
 
+func TestPreWarmZapLinkHostsContext_CancelledAfterConnectivityCheckSkipsDatabase(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	checkInternet := func(_ context.Context, _ int) bool {
+		cancel()
+		return true
+	}
+
+	PreWarmZapLinkHostsContext(ctx, db, checkInternet)
+
+	mockUserDB.AssertNotCalled(t, "GetSupportedZapLinkHosts")
+}
+
 func TestPreWarmZapLinkHosts_EmptyHosts(t *testing.T) {
 	t.Parallel()
 
@@ -292,7 +313,7 @@ func TestPreWarmHost_HTTPError(t *testing.T) {
 	mockClient.On("Do", mock.Anything).Return(nil, errors.New("connection refused"))
 
 	// Should handle error gracefully without panicking
-	preWarmHost("https://example.com", db, mockClient)
+	preWarmHost(t.Context(), "https://example.com", db, mockClient)
 
 	mockClient.AssertExpectations(t)
 	mockUserDB.AssertNotCalled(t, "UpdateZapLinkHost")
@@ -315,7 +336,7 @@ func TestPreWarmHost_NonOKStatus(t *testing.T) {
 	}
 	mockClient.On("Do", mock.Anything).Return(resp, nil)
 
-	preWarmHost("https://example.com", db, mockClient)
+	preWarmHost(t.Context(), "https://example.com", db, mockClient)
 
 	mockClient.AssertExpectations(t)
 	// UpdateZapLinkHost should not be called for non-OK status
@@ -362,7 +383,7 @@ func TestPreWarmHost_Success(t *testing.T) {
 	// Expect UpdateZapLinkHost to be called on success
 	mockUserDB.On("UpdateZapLinkHost", server.URL, 1).Return(nil)
 
-	preWarmHost(server.URL, db, server.Client())
+	preWarmHost(t.Context(), server.URL, db, server.Client())
 
 	assert.True(t, headRequestReceived, "HEAD request should have been made")
 	mockUserDB.AssertExpectations(t)
@@ -387,7 +408,7 @@ func TestPreWarmHost_DoesNotSendHeaders(t *testing.T) {
 		MediaDB: mockMediaDB,
 	}
 
-	preWarmHost("https://example.com", db, mockClient)
+	preWarmHost(t.Context(), "https://example.com", db, mockClient)
 
 	require.NotNil(t, capturedReq)
 	assert.Equal(t, http.MethodHead, capturedReq.Method)

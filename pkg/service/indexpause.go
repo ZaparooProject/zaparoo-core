@@ -66,6 +66,8 @@ func handleIndexPauseNotifications(
 	gameAlreadyActive bool,
 	isActive func() bool,
 ) {
+	defer pauser.Resume()
+
 	if gameAlreadyActive {
 		pauser.Pause()
 		log.Info().Msg("media indexing paused: game already active")
@@ -95,9 +97,6 @@ func handleIndexPauseNotifications(
 				}
 			}
 		case <-ctx.Done():
-			// Resume on shutdown so a paused indexer can see the context
-			// cancellation and exit cleanly.
-			pauser.Resume()
 			return
 		}
 	}

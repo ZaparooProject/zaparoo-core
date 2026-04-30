@@ -297,9 +297,10 @@ func TestMediaHistoryTracker_Listen_Stopped_DatabaseError(t *testing.T) {
 
 	// Verify
 	mockUserDB.AssertExpectations(t)
-	// State should still be reset even on error
-	assert.Equal(t, int64(0), tracker.currentHistoryDBID)
-	assert.True(t, tracker.currentMediaStartTime.IsZero())
+	// State remains active on close failure so a later stop can retry.
+	assert.Equal(t, int64(42), tracker.currentHistoryDBID)
+	assert.Equal(t, startTime, tracker.currentMediaStartTime)
+	assert.Equal(t, int64(0), tracker.closingHistoryDBID)
 }
 
 func TestMediaHistoryTracker_Listen_MultipleNotifications(t *testing.T) {
@@ -473,6 +474,41 @@ func TestMediaHistoryTracker_UpdatePlayTime_NoActiveMedia(t *testing.T) {
 	<-done
 
 	// Verify - UpdateMediaHistoryTime should not be called
+	mockUserDB.AssertNotCalled(t, "UpdateMediaHistoryTime", mock.Anything, mock.Anything)
+}
+
+func TestMediaHistoryTracker_UpdatePlayTime_SkipsHistoryBeingClosed(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockUserDB := &testhelpers.MockUserDBI{}
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	fakeClock := clockwork.NewFakeClock()
+	db := &database.Database{UserDB: mockUserDB}
+	tracker := &mediaHistoryTracker{
+		st:                    st,
+		db:                    db,
+		clock:                 fakeClock,
+		currentHistoryDBID:    42,
+		closingHistoryDBID:    42,
+		currentMediaStartTime: fakeClock.Now(),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan bool)
+
+	go func() {
+		tracker.updatePlayTime(ctx)
+		done <- true
+	}()
+
+	err := fakeClock.BlockUntilContext(ctx, 1)
+	require.NoError(t, err)
+	fakeClock.Advance(time.Minute)
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	<-done
+
 	mockUserDB.AssertNotCalled(t, "UpdateMediaHistoryTime", mock.Anything, mock.Anything)
 }
 

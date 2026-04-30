@@ -22,6 +22,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 	"gopkg.in/yaml.v3"
 )
 
@@ -62,7 +64,28 @@ type asset struct {
 	Size int64  `yaml:"size"`
 }
 
+type releaseAsset struct {
+	Name string
+	URL  string
+	Size int64
+}
+
+type githubRelease struct {
+	TagName     string        `json:"tagName"`
+	URL         string        `json:"url"`
+	PublishedAt time.Time     `json:"publishedAt"`
+	Assets      []githubAsset `json:"assets"`
+}
+
+type githubAsset struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+	Size int64  `json:"size"`
+}
+
 var errNoAssets = errors.New("no release assets found in directory")
+
+const githubReleaseDownloadBase = "https://github.com/ZaparooProject/zaparoo-core/releases/download"
 
 // loadManifest reads an existing manifest YAML file for merging.
 func loadManifest(path string) (*manifest, error) {
@@ -75,8 +98,45 @@ func loadManifest(path string) (*manifest, error) {
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("parsing existing manifest: %w", err)
 	}
+	normalizeManifestForMerge(&m)
 
 	return &m, nil
+}
+
+func normalizeManifestForMerge(m *manifest) {
+	lastAssetID := m.LastAssetID
+	for _, release := range m.Releases {
+		for _, asset := range release.Assets {
+			if asset.ID > lastAssetID {
+				lastAssetID = asset.ID
+			}
+		}
+	}
+
+	for _, release := range m.Releases {
+		hasChecksums := false
+		hasSignature := false
+		for _, asset := range release.Assets {
+			if isUpdateArchive(asset.Name) && !strings.HasPrefix(asset.URL, githubReleaseDownloadBase+"/") {
+				asset.URL = githubReleaseDownloadBase + "/" + release.TagName + "/" + asset.Name
+			}
+			if asset.Name == "checksums.txt" {
+				hasChecksums = true
+			}
+			if asset.Name == "checksums.txt.sig" {
+				hasSignature = true
+			}
+		}
+		if hasChecksums && !hasSignature {
+			lastAssetID++
+			release.Assets = append(release.Assets, &asset{
+				ID:   lastAssetID,
+				Name: "checksums.txt.sig",
+				URL:  "checksums.txt.sig",
+			})
+		}
+	}
+	m.LastAssetID = lastAssetID
 }
 
 // buildManifest reads assetsDir for release files and returns a manifest.
@@ -87,15 +147,7 @@ func buildManifest(version, assetsDir, releaseNotes string, prerelease bool, exi
 		return nil, fmt.Errorf("reading assets directory: %w", err)
 	}
 
-	var startReleaseID int64
-	var startAssetID int64
-	if existing != nil {
-		startReleaseID = existing.LastReleaseID
-		startAssetID = existing.LastAssetID
-	}
-
-	var assets []*asset
-	assetID := startAssetID
+	var releaseAssets []releaseAsset
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -107,7 +159,7 @@ func buildManifest(version, assetsDir, releaseNotes string, prerelease bool, exi
 			continue
 		}
 
-		if !strings.HasPrefix(name, "zaparoo-") && name != "checksums.txt" {
+		if !isUpdateArchive(name) && name != "checksums.txt" && name != "checksums.txt.sig" {
 			continue
 		}
 
@@ -117,21 +169,59 @@ func buildManifest(version, assetsDir, releaseNotes string, prerelease bool, exi
 		}
 
 		assetURL := version + "/" + name
-		if name == "checksums.txt" {
+		if name == "checksums.txt" || name == "checksums.txt.sig" {
 			assetURL = name
 		}
 
-		assetID++
-		assets = append(assets, &asset{
-			ID:   assetID,
+		releaseAssets = append(releaseAssets, releaseAsset{
 			Name: name,
 			Size: info.Size(),
 			URL:  assetURL,
 		})
 	}
 
-	if len(assets) == 0 {
+	return buildManifestFromAssets(version, "", time.Now().UTC(), releaseNotes, prerelease, releaseAssets, existing)
+}
+
+// buildManifestFromAssets returns a manifest from already-resolved asset metadata.
+// When merging with an existing manifest, IDs continue from the existing values.
+func buildManifestFromAssets(
+	version string,
+	releaseURL string,
+	publishedAt time.Time,
+	releaseNotes string,
+	prerelease bool,
+	releaseAssets []releaseAsset,
+	existing *manifest,
+) (*manifest, error) {
+	var startReleaseID int64
+	var startAssetID int64
+	if existing != nil {
+		startReleaseID = existing.LastReleaseID
+		startAssetID = existing.LastAssetID
+	}
+
+	assets := make([]*asset, 0, len(releaseAssets))
+	assetID := startAssetID
+	hasInstallableAsset := false
+	for _, releaseAsset := range releaseAssets {
+		if isUpdateArchive(releaseAsset.Name) {
+			hasInstallableAsset = true
+		}
+		assetID++
+		assets = append(assets, &asset{
+			ID:   assetID,
+			Name: releaseAsset.Name,
+			Size: releaseAsset.Size,
+			URL:  releaseAsset.URL,
+		})
+	}
+
+	if !hasInstallableAsset {
 		return nil, errNoAssets
+	}
+	if publishedAt.IsZero() {
+		publishedAt = time.Now().UTC()
 	}
 
 	releaseID := startReleaseID + 1
@@ -139,9 +229,9 @@ func buildManifest(version, assetsDir, releaseNotes string, prerelease bool, exi
 		ID:           releaseID,
 		Name:         version,
 		TagName:      version,
-		URL:          "",
+		URL:          releaseURL,
 		ReleaseNotes: releaseNotes,
-		PublishedAt:  time.Now().UTC(),
+		PublishedAt:  publishedAt.UTC(),
 		Assets:       assets,
 		Prerelease:   prerelease,
 	}
@@ -157,6 +247,70 @@ func buildManifest(version, assetsDir, releaseNotes string, prerelease bool, exi
 		LastAssetID:   assetID,
 		Releases:      releases,
 	}, nil
+}
+
+func loadGithubRelease(fs afero.Fs, path string) (*githubRelease, error) {
+	data, err := afero.ReadFile(fs, path)
+	if err != nil {
+		return nil, fmt.Errorf("reading GitHub release metadata: %w", err)
+	}
+
+	var release githubRelease
+	if err := json.Unmarshal(data, &release); err != nil {
+		return nil, fmt.Errorf("parsing GitHub release metadata: %w", err)
+	}
+
+	return &release, nil
+}
+
+func validateGithubReleaseMetadata(release *githubRelease, version string) error {
+	if release.TagName == "" {
+		return errors.New("GitHub release metadata is missing tagName")
+	}
+	if release.TagName != version {
+		return fmt.Errorf("GitHub release metadata tag %q does not match version %q", release.TagName, version)
+	}
+	if release.URL == "" {
+		return fmt.Errorf("GitHub release metadata for %s is missing url", release.TagName)
+	}
+	if release.PublishedAt.IsZero() {
+		return fmt.Errorf("GitHub release metadata for %s is missing publishedAt", release.TagName)
+	}
+
+	return nil
+}
+
+func isUpdateArchive(name string) bool {
+	return strings.HasPrefix(name, "zaparoo-") &&
+		(strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".zip"))
+}
+
+func assetsFromGithubRelease(fs afero.Fs, release *githubRelease, metadataDir string) ([]releaseAsset, error) {
+	assets := make([]releaseAsset, 0, len(release.Assets)+2)
+	for _, githubAsset := range release.Assets {
+		if !isUpdateArchive(githubAsset.Name) {
+			continue
+		}
+		if githubAsset.URL == "" {
+			return nil, fmt.Errorf("GitHub asset %s has no download URL", githubAsset.Name)
+		}
+		assets = append(assets, releaseAsset(githubAsset))
+	}
+
+	metadataFiles := []string{"checksums.txt", "checksums.txt.sig"}
+	for _, name := range metadataFiles {
+		info, err := fs.Stat(filepath.Join(metadataDir, name))
+		if err != nil {
+			return nil, fmt.Errorf("reading metadata asset %s: %w", name, err)
+		}
+		assets = append(assets, releaseAsset{
+			Name: name,
+			URL:  name,
+			Size: info.Size(),
+		})
+	}
+
+	return assets, nil
 }
 
 // writeManifest marshals the manifest to YAML and writes it to outputPath.
@@ -184,15 +338,25 @@ func main() {
 
 	version := flag.String("version", "", "release version tag (e.g. v2.10.0)")
 	assetsDir := flag.String("assets-dir", "", "directory containing release asset files")
+	githubReleasePath := flag.String("github-release", "", "GitHub release metadata JSON from gh release view")
+	metadataDir := flag.String("metadata-dir", "", "directory containing checksums.txt and checksums.txt.sig")
 	releaseNotes := flag.String("release-notes", "", "release notes text to include in manifest")
 	output := flag.String("output", "manifest.yaml", "output manifest file path")
 	prerelease := flag.Bool("prerelease", false, "mark release as pre-release in manifest")
 	merge := flag.String("merge", "", "path to existing manifest to merge into")
 	flag.Parse()
 
-	if *version == "" || *assetsDir == "" {
+	fs := afero.NewOsFs()
+
+	if *version == "" || (*assetsDir == "" && *githubReleasePath == "") {
 		log.Fatal().Msg("usage: generate-update-manifest --version <tag> --assets-dir <dir> " +
-			"[--output <path>] [--prerelease] [--merge <path>]")
+			"[--github-release <path> --metadata-dir <dir>] [--output <path>] [--prerelease] [--merge <path>]")
+	}
+	if *assetsDir != "" && *githubReleasePath != "" {
+		log.Fatal().Msg("--assets-dir and --github-release are mutually exclusive")
+	}
+	if *githubReleasePath != "" && *metadataDir == "" {
+		log.Fatal().Msg("--metadata-dir is required with --github-release")
 	}
 
 	var existing *manifest
@@ -205,7 +369,32 @@ func main() {
 		log.Info().Int("releases", len(existing.Releases)).Msg("loaded existing manifest for merge")
 	}
 
-	m, err := buildManifest(*version, *assetsDir, *releaseNotes, *prerelease, existing)
+	var m *manifest
+	var err error
+	if *githubReleasePath != "" {
+		release, loadErr := loadGithubRelease(fs, *githubReleasePath)
+		if loadErr != nil {
+			log.Fatal().Err(loadErr).Msg("error loading GitHub release metadata")
+		}
+		if validateErr := validateGithubReleaseMetadata(release, *version); validateErr != nil {
+			log.Fatal().Err(validateErr).Msg("invalid GitHub release metadata")
+		}
+		assets, assetsErr := assetsFromGithubRelease(fs, release, *metadataDir)
+		if assetsErr != nil {
+			log.Fatal().Err(assetsErr).Msg("error loading GitHub release assets")
+		}
+		m, err = buildManifestFromAssets(
+			*version,
+			release.URL,
+			release.PublishedAt,
+			*releaseNotes,
+			*prerelease,
+			assets,
+			existing,
+		)
+	} else {
+		m, err = buildManifest(*version, *assetsDir, *releaseNotes, *prerelease, existing)
+	}
 	if err != nil {
 		log.Fatal().Err(err).Msg("error building manifest")
 	}

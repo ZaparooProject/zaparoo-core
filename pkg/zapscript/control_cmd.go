@@ -102,7 +102,14 @@ func cmdControl(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		}
 		err = control.Func(ctx, env.Cfg, platforms.ControlParams{Args: args})
 	case control.Script != "":
-		err = RunControlScript(pl, env.Cfg, env.Database, control.Script, env.ExprEnv)
+		ctx := env.ServiceCtx
+		if ctx == nil {
+			ctx = env.LauncherCtx
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		err = RunControlScript(ctx, pl, env.Cfg, env.Database, control.Script, env.ExprEnv)
 	default:
 		err = fmt.Errorf("control %q has no implementation", action)
 	}

@@ -45,9 +45,10 @@ type Result struct {
 }
 
 func makeUpdater(_ context.Context, platformID, channel string) (*selfupdate.Updater, selfupdate.Repository, error) {
+	transport := tlsroots.Transport(nil)
 	source, err := selfupdate.NewHttpSource(selfupdate.HttpConfig{
 		BaseURL:   updateURL,
-		Transport: tlsroots.Transport(nil),
+		Transport: transport,
 	})
 	if err != nil {
 		return nil, selfupdate.RepositorySlug{}, fmt.Errorf("creating update source: %w", err)
@@ -61,7 +62,7 @@ func makeUpdater(_ context.Context, platformID, channel string) (*selfupdate.Upd
 	}
 
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source:     source,
+		Source:     &validationChainHTTPSource{source: source, transport: transport},
 		Validator:  validator,
 		Filters:    []string{filter},
 		Prerelease: channel == config.UpdateChannelBeta,
@@ -138,7 +139,7 @@ func CheckAndNotify(
 	cfg *config.Instance,
 	platformID string,
 	inboxSvc *inbox.Service,
-	waitFn func(int) bool,
+	waitFn func(context.Context, int) bool,
 	checkFn CheckFn,
 	managedInstall bool,
 ) {
@@ -147,8 +148,11 @@ func CheckAndNotify(
 		return
 	}
 
-	if !waitFn(30) {
+	if !waitFn(ctx, 30) {
 		log.Warn().Msg("no internet connectivity, skipping update check")
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 
@@ -168,6 +172,9 @@ func CheckAndNotify(
 			Str("current", result.CurrentVersion).
 			Str("latest", result.LatestVersion).
 			Msg("no update available")
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 

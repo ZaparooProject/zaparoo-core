@@ -23,13 +23,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -593,6 +596,77 @@ func TestTimedExitConditions_ReaderIDRequired(t *testing.T) {
 				tt.expectedReason, sourceIsReader, readerExists, hasRemovableCap)
 		})
 	}
+}
+
+func TestTimedExitReturnsWhenLaunchQueueBlockedAndContextCancelled(t *testing.T) {
+	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+	cfg.SetScanMode(config.ScanModeHold)
+	cfg.SetScanExitDelay(0.001)
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{}).Maybe()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	readerID := "pn532-1234567890abcdef"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("ReaderID").Return(readerID)
+	mockReader.On("Connected").Return(true)
+	mockReader.On("Path").Return("/dev/test")
+	mockReader.On("Info").Return("Test Reader")
+	mockReader.On("Metadata").Return(readers.DriverMetadata{
+		ID:          "mock-reader",
+		Description: "Mock Reader for Testing",
+	})
+	mockReader.On("Capabilities").Return([]readers.Capability{readers.CapabilityRemovable})
+	st.SetReader(mockReader)
+
+	st.SetActiveCard(tokens.Token{
+		UID:      "abc123",
+		Text:     "**launch.system:nes",
+		Source:   tokens.SourceReader,
+		ReaderID: readerID,
+		ScanTime: time.Now(),
+	})
+	st.SetSoftwareToken(&tokens.Token{Text: "NES/Super Mario Bros.nes"})
+	st.SetActiveMedia(models.NewActiveMedia("nes", "NES", "game.nes", "Game", "launcher"))
+
+	stopCalled := make(chan struct{})
+	mockPlatform.On("StopActiveLauncher", platforms.StopForMenu).
+		Run(func(_ mock.Arguments) {
+			st.StopService()
+			close(stopCalled)
+		}).
+		Return(nil).Once()
+
+	launchQueue := make(chan *tokens.Token)
+	svc := &ServiceContext{
+		Platform:            mockPlatform,
+		Config:              cfg,
+		State:               st,
+		LaunchSoftwareQueue: launchQueue,
+	}
+	clock := clockwork.NewFakeClock()
+
+	exitTimer := timedExit(svc, clock, nil)
+	require.NotNil(t, exitTimer)
+	clock.Advance(time.Millisecond)
+
+	select {
+	case <-stopCalled:
+	case <-time.After(time.Second):
+		t.Fatal("timed exit did not reach launcher stop")
+	}
+
+	assert.Never(t, func() bool {
+		select {
+		case <-launchQueue:
+			return true
+		default:
+			return false
+		}
+	}, 50*time.Millisecond, 5*time.Millisecond)
+	mockPlatform.AssertExpectations(t)
 }
 
 // TestReaderErrorRecovery_PrevTokenPreservation tests that prevToken is

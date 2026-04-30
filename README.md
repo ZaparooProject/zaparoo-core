@@ -76,17 +76,17 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/mrchrisster">
-                    <img src="https://avatars.githubusercontent.com/u/60834906?v=4" width="100;" alt="mrchrisster"/>
-                    <br />
-                    <sub><b>Christoph Helms</b></sub>
-                </a>
-            </td>
-            <td align="center">
                 <a href="https://github.com/spark2k06">
                     <img src="https://avatars.githubusercontent.com/u/3509674?v=4" width="100;" alt="spark2k06"/>
                     <br />
                     <sub><b>Aitor Gómez García</b></sub>
+                </a>
+            </td>
+            <td align="center">
+                <a href="https://github.com/mrchrisster">
+                    <img src="https://avatars.githubusercontent.com/u/60834906?v=4" width="100;" alt="mrchrisster"/>
+                    <br />
+                    <sub><b>Christoph Helms</b></sub>
                 </a>
             </td>
             <td align="center">

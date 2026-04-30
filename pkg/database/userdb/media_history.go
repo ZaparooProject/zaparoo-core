@@ -392,13 +392,6 @@ func sqlCleanupMediaHistory(ctx context.Context, db *sql.DB, retentionDays int) 
 		return 0, fmt.Errorf("failed to get rows affected: %w", err)
 	}
 
-	// Vacuum to reclaim disk space after cleanup
-	if rowsAffected > 0 {
-		if err := sqlVacuum(ctx, db); err != nil {
-			return rowsAffected, fmt.Errorf("cleanup succeeded but vacuum failed: %w", err)
-		}
-	}
-
 	return rowsAffected, nil
 }
 

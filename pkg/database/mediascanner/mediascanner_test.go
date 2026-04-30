@@ -620,6 +620,65 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestNewNamesIndex_FullFreshRunDoesNotDropSecondaryIndexes(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	allSystems := systemdefs.AllSystems()
+	requestedSystemIDs := make([]string, 0, len(allSystems))
+	for _, system := range allSystems {
+		requestedSystemIDs = append(requestedSystemIDs, system.ID)
+	}
+
+	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
+	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Twice()
+	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Twice()
+	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Once()
+	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Once()
+	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+	mockMediaDB.On("SetIndexingSystems", requestedSystemIDs).Return(nil).Once()
+	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Twice()
+	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Once()
+	mockMediaDB.On("UpdateLastGenerated").Return(nil).Once()
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Once()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Once()
+	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()
+	mockMediaDB.On("InvalidateCountCache").Return(nil).Once()
+	mockMediaDB.On("SetOptimizationStatus", "pending").Return(nil).Once()
+
+	_, err := NewNamesIndex(
+		context.Background(),
+		mockPlatform,
+		cfg,
+		allSystems,
+		&database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		func(IndexStatus) {},
+		nil,
+	)
+	require.NoError(t, err)
+	mockMediaDB.AssertNotCalled(t, "DropSecondaryIndexes")
+	mockMediaDB.AssertExpectations(t)
+}
+
 // TestNewNamesIndex_FailedIndexingRecovery tests handling previous failed indexing
 func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	t.Parallel()

@@ -103,6 +103,39 @@ func TestCmdControl_SuccessWithScript(t *testing.T) {
 	mockPlatform.AssertCalled(t, "KeyboardPress", "{f2}")
 }
 
+func TestCmdControl_ScriptUsesServiceContext(t *testing.T) {
+	t.Parallel()
+
+	serviceCtx, cancelService := context.WithCancel(context.Background())
+	cancelService()
+	launcherCtx := context.Background()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+		{
+			ID: "test-launcher",
+			Controls: map[string]platforms.Control{
+				"save_state": {Script: "**input.keyboard:{f2}"},
+			},
+		},
+	})
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "control",
+			Args: []string{"save_state"},
+		},
+		ExprEnv:     newControlExprEnv("test-launcher"),
+		ServiceCtx:  serviceCtx,
+		LauncherCtx: launcherCtx,
+	}
+
+	_, err := cmdControl(mockPlatform, env)
+	require.ErrorIs(t, err, context.Canceled)
+	mockPlatform.AssertNotCalled(t, "KeyboardPress", "{f2}")
+}
+
 func TestCmdControl_ScriptExprEnvPropagation(t *testing.T) {
 	// Skipped: input macro commands (input.keyboard, input.gamepad) don't support
 	// expression evaluation in go-zapscript's parseInputMacroArg.

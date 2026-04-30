@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -44,6 +45,55 @@ func newTestBroker(ctx context.Context, source <-chan models.Notification) *brok
 	b := broker.NewBroker(ctx, source)
 	b.Start()
 	return b
+}
+
+func TestStartWithReadyReportsBindFailure(t *testing.T) {
+	t.Parallel()
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, listener.Close()) }()
+
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+
+	platform := mocks.NewMockPlatform()
+	platform.SetupBasicMock()
+
+	fs := helpers.NewMemoryFS()
+	configDir := t.TempDir()
+	cfg, err := helpers.NewTestConfigWithListenAndPort(fs, configDir, "127.0.0.1", tcpAddr.Port)
+	require.NoError(t, err)
+
+	st, notifCh := state.NewState(platform, "test-boot-uuid")
+	notifBroker := newTestBroker(st.GetContext(), notifCh)
+	db := &database.Database{
+		UserDB:  helpers.NewMockUserDBI(),
+		MediaDB: helpers.NewMockMediaDBI(),
+	}
+	tokenQueue := make(chan tokens.Token, 1)
+	ready := make(chan error, 1)
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- StartWithReady(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, ready)
+	}()
+
+	select {
+	case err = <-serverErr:
+	case <-time.After(2 * time.Second):
+		st.StopService()
+		t.Fatal("StartWithReady did not return after bind failure")
+	}
+	require.Error(t, err)
+	select {
+	case readyErr := <-ready:
+		require.Error(t, readyErr)
+		assert.Contains(t, readyErr.Error(), "bind")
+	case <-time.After(time.Second):
+		t.Fatal("StartWithReady returned an error without signaling ready")
+	}
+	assert.ErrorIs(t, st.GetContext().Err(), context.Canceled)
 }
 
 // TestServerStartupConcurrency validates that the API server properly synchronizes
@@ -83,15 +133,17 @@ func TestServerStartupConcurrency(t *testing.T) {
 
 			// Start server in a separate goroutine
 			serverDone := make(chan struct{})
+			serverErr := make(chan error, 1)
 			go func() {
 				defer close(serverDone)
-				Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
+				serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 			}()
 			// Cleanup: stop service first, then wait for server goroutine to fully exit
 			defer func() {
 				st.StopService()
 				close(tokenQueue)
 				<-serverDone
+				require.NoError(t, <-serverErr)
 			}()
 
 			// Test that server becomes available and responds correctly
@@ -152,15 +204,17 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 
 	// Start server in a separate goroutine
 	serverDone := make(chan struct{})
+	serverErr := make(chan error, 1)
 	go func() {
 		defer close(serverDone)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
+		serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 	}()
 	// Cleanup: stop service first, then wait for server goroutine to fully exit
 	defer func() {
 		st.StopService()
 		close(tokenQueue)
 		<-serverDone
+		require.NoError(t, <-serverErr)
 	}()
 
 	// Create connection attempt channel
@@ -230,20 +284,21 @@ func TestServerListenContextCancellation(t *testing.T) {
 	tokenQueue := make(chan tokens.Token, 1)
 	defer close(tokenQueue) // Safe here since context is already cancelled
 
-	// This should fail quickly because the context is already cancelled
-	// If net.Listen is used (not context-aware), it will succeed in binding
-	// If net.ListenConfig.Listen is used with context, it will fail fast
+	// This should return quickly because the context is already cancelled.
+	// If startup ignores the context, it would take longer or hang.
 	done := make(chan struct{})
+	serverErr := make(chan error, 1)
 	start := time.Now()
 
 	go func() {
 		defer close(done)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
+		serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 	}()
 
 	// Wait for completion or timeout
 	select {
 	case <-done:
+		require.NoError(t, <-serverErr)
 		elapsed := time.Since(start)
 		// With context cancellation, this should complete very quickly (< 100ms)
 		// Without context awareness, it would take longer or hang
@@ -314,7 +369,7 @@ func TestIsPrivateIP(t *testing.T) {
 	}
 }
 
-func TestCheckWebSocketOrigin(t *testing.T) {
+func TestIsAllowedOrigin_WebSocketPolicy(t *testing.T) {
 	t.Parallel()
 
 	staticOrigins := []string{
@@ -340,23 +395,28 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "localhost_any_port_allowed",
+			name:     "localhost_other_port_rejected",
 			origin:   "http://localhost:8100",
-			expected: true,
+			expected: false,
 		},
 		{
-			name:     "localhost_https_any_port_allowed",
+			name:     "localhost_https_other_port_rejected",
 			origin:   "https://localhost:3000",
-			expected: true,
+			expected: false,
 		},
 		{
-			name:     "127_0_0_1_any_port_allowed",
+			name:     "127_0_0_1_other_port_rejected",
 			origin:   "http://127.0.0.1:8100",
-			expected: true,
+			expected: false,
 		},
 		{
-			name:     "private_ip_correct_port_allowed",
+			name:     "implicit_private_ip_correct_port_rejected",
 			origin:   "http://192.168.1.50:7497",
+			expected: false,
+		},
+		{
+			name:     "explicit_private_ip_allowed",
+			origin:   "http://192.168.1.100:7497",
 			expected: true,
 		},
 		{
@@ -389,8 +449,8 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := checkWebSocketOrigin(tt.origin, staticOrigins, customOriginsProvider, apiPort)
-			require.Equal(t, tt.expected, result, "checkWebSocketOrigin result mismatch for %s", tt.origin)
+			result := isAllowedOrigin(tt.origin, staticOrigins, customOriginsProvider, apiPort, true, "websocket")
+			require.Equal(t, tt.expected, result, "isAllowedOrigin result mismatch for %s", tt.origin)
 		})
 	}
 }
@@ -501,6 +561,31 @@ func TestBuildDynamicAllowedOrigins(t *testing.T) {
 	require.NotContains(t, result, "http://trailing.local/")
 }
 
+func TestDefaultAllowedOriginsIncludesHostedApp(t *testing.T) {
+	t.Parallel()
+
+	require.Contains(t, allowedOrigins, "https://zaparoo.app")
+}
+
+func TestOriginPolicy_HappyPaths(t *testing.T) {
+	t.Parallel()
+
+	port := 7497
+	staticOrigins := buildStaticAllowedOrigins(allowedOrigins, []string{"10.0.0.50"}, port)
+	provider := func() []string { return nil }
+
+	// Browser loading the bundled web UI from the device uses the device URL as Origin.
+	assert.True(t, isAllowedOrigin("http://10.0.0.50:7497", staticOrigins, provider, port, true, "websocket"))
+	assert.True(t, isAllowedOrigin("http://10.0.0.50:7497", staticOrigins, provider, port, false, "cors"))
+
+	// Native clients may omit Origin on WebSocket connections.
+	assert.True(t, isAllowedOrigin("", staticOrigins, provider, port, true, "websocket"))
+
+	// The hosted app is trusted by default.
+	assert.True(t, isAllowedOrigin("https://zaparoo.app", staticOrigins, provider, port, true, "websocket"))
+	assert.True(t, isAllowedOrigin("https://zaparoo.app", staticOrigins, provider, port, false, "cors"))
+}
+
 // TestServerBindFailureStopsService verifies that when the API server fails to bind
 // to its port (e.g., port already in use), it calls StopService() to trigger a
 // graceful shutdown of the entire service. This is a regression test for issue #448.
@@ -514,7 +599,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	testPort := 9100 // Use a fixed port for this test
 	fs1 := helpers.NewMemoryFS()
 	configDir1 := t.TempDir()
-	cfg1, err := helpers.NewTestConfigWithPort(fs1, configDir1, testPort)
+	cfg1, err := helpers.NewTestConfigWithListenAndPort(fs1, configDir1, "127.0.0.1", testPort)
 	require.NoError(t, err)
 
 	st1, notifCh1 := state.NewState(platform1, "test-boot-uuid-1")
@@ -527,9 +612,10 @@ func TestServerBindFailureStopsService(t *testing.T) {
 
 	// Start first server
 	server1Done := make(chan struct{})
+	server1Err := make(chan error, 1)
 	go func() {
 		defer close(server1Done)
-		Start(platform1, cfg1, st1, tokenQueue1, nil, db1, nil, notifBroker1, "", nil, nil)
+		server1Err <- Start(platform1, cfg1, st1, tokenQueue1, nil, db1, nil, notifBroker1, "", nil, nil)
 	}()
 
 	// Wait for first server to be ready
@@ -557,7 +643,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 
 	fs2 := helpers.NewMemoryFS()
 	configDir2 := t.TempDir()
-	cfg2, err := helpers.NewTestConfigWithPort(fs2, configDir2, testPort) // Same port!
+	cfg2, err := helpers.NewTestConfigWithListenAndPort(fs2, configDir2, "127.0.0.1", testPort) // Same port!
 	require.NoError(t, err)
 
 	st2, notifCh2 := state.NewState(platform2, "test-boot-uuid-2")
@@ -570,9 +656,10 @@ func TestServerBindFailureStopsService(t *testing.T) {
 
 	// Start second server - it should fail to bind and call StopService
 	server2Done := make(chan struct{})
+	server2Err := make(chan error, 1)
 	go func() {
 		defer close(server2Done)
-		Start(platform2, cfg2, st2, tokenQueue2, nil, db2, nil, notifBroker2, "", nil, nil)
+		server2Err <- Start(platform2, cfg2, st2, tokenQueue2, nil, db2, nil, notifBroker2, "", nil, nil)
 	}()
 
 	// Wait for the second server's context to be cancelled (StopService called)
@@ -590,7 +677,11 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	close(tokenQueue1)
 	close(tokenQueue2)
 	<-server1Done
+	require.NoError(t, <-server1Err)
 	<-server2Done
+	bindErr := <-server2Err
+	require.Error(t, bindErr)
+	assert.Contains(t, bindErr.Error(), "bind")
 }
 
 // TestBuildDynamicAllowedOrigins_HTTPURLWithoutPortAddsPortVariant is a regression
@@ -638,7 +729,7 @@ func TestBuildDynamicAllowedOrigins_HTTPURLWithoutPortAddsPortVariant(t *testing
 		"Bug fix: should not have https:// prepended to http:// URL")
 }
 
-func TestCheckWebSocketOrigin_HotReload(t *testing.T) {
+func TestIsAllowedOrigin_WebSocketHotReload(t *testing.T) {
 	t.Parallel()
 
 	staticOrigins := []string{
@@ -651,21 +742,29 @@ func TestCheckWebSocketOrigin_HotReload(t *testing.T) {
 	provider := func() []string { return customOrigins }
 
 	// Initial state: custom origin allowed
-	assert.True(t, checkWebSocketOrigin("http://myapp.example.com", staticOrigins, provider, apiPort))
-	assert.True(t, checkWebSocketOrigin("http://myapp.example.com:7497", staticOrigins, provider, apiPort))
-	assert.False(t, checkWebSocketOrigin("http://other.example.com:7497", staticOrigins, provider, apiPort))
+	assert.True(t, isAllowedOrigin("http://myapp.example.com", staticOrigins, provider, apiPort, true, "websocket"))
+	assert.True(t, isAllowedOrigin(
+		"http://myapp.example.com:7497", staticOrigins, provider, apiPort, true, "websocket",
+	))
+	assert.False(t, isAllowedOrigin(
+		"http://other.example.com:7497", staticOrigins, provider, apiPort, true, "websocket",
+	))
 
 	// Simulate config reload: change custom origins
 	customOrigins = []string{"http://other.example.com"}
 
 	// Old custom origin should now be rejected (not private IP, not localhost)
-	assert.False(t, checkWebSocketOrigin("http://myapp.example.com:7497", staticOrigins, provider, apiPort))
+	assert.False(t, isAllowedOrigin(
+		"http://myapp.example.com:7497", staticOrigins, provider, apiPort, true, "websocket",
+	))
 	// New custom origin should be allowed
-	assert.True(t, checkWebSocketOrigin("http://other.example.com", staticOrigins, provider, apiPort))
-	assert.True(t, checkWebSocketOrigin("http://other.example.com:7497", staticOrigins, provider, apiPort))
+	assert.True(t, isAllowedOrigin("http://other.example.com", staticOrigins, provider, apiPort, true, "websocket"))
+	assert.True(t, isAllowedOrigin(
+		"http://other.example.com:7497", staticOrigins, provider, apiPort, true, "websocket",
+	))
 
 	// Static origins should always work regardless of custom origins
-	assert.True(t, checkWebSocketOrigin("http://localhost:7497", staticOrigins, provider, apiPort))
+	assert.True(t, isAllowedOrigin("http://localhost:7497", staticOrigins, provider, apiPort, true, "websocket"))
 }
 
 func TestMakeOriginValidator_HotReload(t *testing.T) {
@@ -707,6 +806,97 @@ func TestMakeOriginValidator_HotReload(t *testing.T) {
 	assert.True(t, validator(nil, "http://localhost:7497"))
 }
 
+func TestMakeOriginValidator_RejectsImplicitLocalhostPorts(t *testing.T) {
+	t.Parallel()
+
+	staticOrigins := []string{
+		"http://localhost:7497",
+		"http://127.0.0.1:7497",
+		"http://192.168.1.100:7497",
+	}
+	port := 7497
+	provider := func() []string { return nil }
+	validator := makeOriginValidator(staticOrigins, provider, port)
+
+	tests := []struct {
+		name     string
+		origin   string
+		expected bool
+	}{
+		{
+			name:     "localhost_other_port_rejected",
+			origin:   "http://localhost:8100",
+			expected: false,
+		},
+		{
+			name:     "localhost_https_other_port_rejected",
+			origin:   "https://localhost:3000",
+			expected: false,
+		},
+		{
+			name:     "127_0_0_1_other_port_rejected",
+			origin:   "http://127.0.0.1:8100",
+			expected: false,
+		},
+		{
+			name:     "explicit_localhost_port_allowed",
+			origin:   "http://localhost:7497",
+			expected: true,
+		},
+		{
+			name:     "explicit_127_0_0_1_port_allowed",
+			origin:   "http://127.0.0.1:7497",
+			expected: true,
+		},
+		{
+			name:     "implicit_private_ip_correct_port_rejected",
+			origin:   "http://192.168.1.50:7497",
+			expected: false,
+		},
+		{
+			name:     "explicit_private_ip_allowed",
+			origin:   "http://192.168.1.100:7497",
+			expected: true,
+		},
+		{
+			name:     "private_ip_wrong_port_rejected",
+			origin:   "http://192.168.1.50:8100",
+			expected: false,
+		},
+		{
+			name:     "public_ip_rejected",
+			origin:   "http://8.8.8.8:7497",
+			expected: false,
+		},
+		{
+			name:     "empty_origin_rejected",
+			origin:   "",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := validator(nil, tt.origin)
+			require.Equal(t, tt.expected, result, "makeOriginValidator result mismatch for %s", tt.origin)
+		})
+	}
+}
+
+func TestMakeOriginValidator_ExplicitCustomLocalhostPort(t *testing.T) {
+	t.Parallel()
+
+	staticOrigins := []string{"http://localhost:7497"}
+	customOrigins := []string{"http://localhost:8100", "127.0.0.1:8100"}
+	provider := func() []string { return customOrigins }
+	validator := makeOriginValidator(staticOrigins, provider, 7497)
+
+	assert.True(t, validator(nil, "http://localhost:8100"))
+	assert.True(t, validator(nil, "http://127.0.0.1:8100"))
+	assert.False(t, validator(nil, "http://localhost:3000"))
+}
+
 func TestSSE_ReceivesNotifications(t *testing.T) {
 	t.Parallel()
 
@@ -729,14 +919,16 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 	tokenQueue := make(chan tokens.Token, 1)
 
 	serverDone := make(chan struct{})
+	serverErr := make(chan error, 1)
 	go func() {
 		defer close(serverDone)
-		Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
+		serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil)
 	}()
 	defer func() {
 		st.StopService()
 		close(tokenQueue)
 		<-serverDone
+		require.NoError(t, <-serverErr)
 	}()
 
 	// Wait for server to bind and update config with actual port

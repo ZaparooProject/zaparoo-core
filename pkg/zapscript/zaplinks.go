@@ -384,8 +384,21 @@ func checkZapLink(
 // This is called during startup to reduce latency on first zaplink access.
 // It makes HEAD requests to /.well-known/zaparoo for each supported base URL.
 func PreWarmZapLinkHosts(db *database.Database, checkInternet func(int) bool) {
-	if !checkInternet(3) {
+	PreWarmZapLinkHostsContext(context.Background(), db, func(_ context.Context, maxTries int) bool {
+		return checkInternet(maxTries)
+	})
+}
+
+func PreWarmZapLinkHostsContext(
+	ctx context.Context,
+	db *database.Database,
+	checkInternet func(context.Context, int) bool,
+) {
+	if !checkInternet(ctx, 3) {
 		log.Debug().Msg("no internet connectivity, skipping zaplink pre-warming")
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 
@@ -409,10 +422,14 @@ func PreWarmZapLinkHosts(db *database.Database, checkInternet func(int) bool) {
 		wg.Add(1)
 		go func(u string) {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			defer func() { <-sem }()
 
-			preWarmHost(u, db, currentZapFetchClient())
+			preWarmHost(ctx, u, db, currentZapFetchClient())
 		}(baseURL)
 	}
 
@@ -421,10 +438,10 @@ func PreWarmZapLinkHosts(db *database.Database, checkInternet func(int) bool) {
 }
 
 // preWarmHost makes a HEAD request to a base URL's well-known endpoint to warm caches.
-func preWarmHost(baseURL string, db *database.Database, client httpDoer) {
+func preWarmHost(ctx context.Context, baseURL string, db *database.Database, client httpDoer) {
 	wellKnownURL := baseURL + WellKnownPath
 
-	ctx, cancel := context.WithTimeout(context.Background(), preWarmTimeout)
+	ctx, cancel := context.WithTimeout(ctx, preWarmTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, wellKnownURL, http.NoBody)
@@ -445,6 +462,9 @@ func preWarmHost(baseURL string, db *database.Database, client httpDoer) {
 	}()
 
 	if resp.StatusCode == http.StatusOK {
+		if ctx.Err() != nil {
+			return
+		}
 		u, parseErr := url.Parse(wellKnownURL)
 		if parseErr != nil {
 			return

@@ -82,230 +82,29 @@ func TestConnectionStringNormalization(t *testing.T) {
 	}
 }
 
-func TestIsDriverEnabledNormalization(t *testing.T) {
+func TestIsReaderEnabled(t *testing.T) {
 	t.Parallel()
 
-	// Create instance with old underscore format in config
-	cfg := &Instance{
-		vals: Values{
-			Readers: Readers{
-				Drivers: map[string]DriverConfig{
-					"simple_serial": {
-						Enabled: boolPtr(true),
-					},
-					"acr122_pcsc": {
-						Enabled: boolPtr(false),
-					},
-				},
-			},
-		},
-	}
-
-	tests := []struct {
-		name           string
-		driverID       string
-		defaultEnabled bool
-		expected       bool
-	}{
-		{
-			name:           "lookup with new format finds old config",
-			driverID:       "simpleserial",
-			defaultEnabled: false,
-			expected:       true,
-		},
-		{
-			name:           "lookup with old format finds old config",
-			driverID:       "simple_serial",
-			defaultEnabled: false,
-			expected:       true,
-		},
-		{
-			name:           "disabled driver returns false",
-			driverID:       "acr122pcsc",
-			defaultEnabled: true,
-			expected:       false,
-		},
-		{
-			name:           "missing driver returns default",
-			driverID:       "pn532uart",
-			defaultEnabled: true,
-			expected:       true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			result := cfg.IsDriverEnabled(tt.driverID, tt.defaultEnabled)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-// TestIsDriverEnabledForConnect tests the behavior when a driver has a
-// [[readers.connect]] entry. The driver is implicitly enabled unless
-// explicitly disabled in config.
-func TestIsDriverEnabledForConnect(t *testing.T) {
-	t.Parallel()
-
-	cfg := &Instance{
-		vals: Values{
-			Readers: Readers{
-				Drivers: map[string]DriverConfig{
-					"externaldrive": {
-						Enabled: boolPtr(false), // explicitly disabled
-					},
-					"simpleserial": {
-						Enabled: boolPtr(true), // explicitly enabled
-					},
-					// pn532 has no config - not explicitly set (nil)
-				},
-			},
-		},
-	}
-
-	tests := []struct {
-		name     string
-		driver   DriverInfo
-		expected bool
-	}{
-		{
-			name: "explicitly disabled driver is blocked",
-			driver: DriverInfo{
-				ID:             "externaldrive",
-				DefaultEnabled: false, // matches real externaldrive
-			},
-			expected: false,
-		},
-		{
-			name: "explicitly enabled driver is allowed",
-			driver: DriverInfo{
-				ID:             "simpleserial",
-				DefaultEnabled: true,
-			},
-			expected: true,
-		},
-		{
-			name: "driver with no config is implicitly enabled",
-			driver: DriverInfo{
-				ID:             "pn532",
-				DefaultEnabled: true,
-			},
-			expected: true,
-		},
-		{
-			name: "driver with DefaultEnabled=false but no config is still enabled for connect",
-			driver: DriverInfo{
-				ID:             "newdriver",
-				DefaultEnabled: false, // would be disabled for auto-detect
-			},
-			expected: true, // but enabled for connect entries
-		},
-		{
-			name: "normalized ID matches explicit disable",
-			driver: DriverInfo{
-				ID:             "external_drive",
-				DefaultEnabled: false,
-			},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			result := cfg.IsDriverEnabledForConnect(tt.driver)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-// TestIsDriverEnabledForAutoDetect tests the behavior for auto-detection.
-// The driver's DefaultEnabled is used when not explicitly configured.
-func TestIsDriverEnabledForAutoDetect(t *testing.T) {
-	t.Parallel()
-
-	cfg := &Instance{
-		vals: Values{
-			Readers: Readers{
-				Drivers: map[string]DriverConfig{
-					"externaldrive": {
-						Enabled: boolPtr(true), // explicitly enabled (overrides default)
-					},
-					"simpleserial": {
-						Enabled: boolPtr(false), // explicitly disabled
-					},
-					// pn532 has no config - uses DefaultEnabled
-				},
-			},
-		},
-	}
-
-	tests := []struct {
-		name     string
-		driver   DriverInfo
-		expected bool
-	}{
-		{
-			name: "explicitly enabled overrides DefaultEnabled=false",
-			driver: DriverInfo{
-				ID:             "externaldrive",
-				DefaultEnabled: false,
-			},
-			expected: true,
-		},
-		{
-			name: "explicitly disabled overrides DefaultEnabled=true",
-			driver: DriverInfo{
-				ID:             "simpleserial",
-				DefaultEnabled: true,
-			},
-			expected: false,
-		},
-		{
-			name: "no config with DefaultEnabled=true is enabled",
-			driver: DriverInfo{
-				ID:             "pn532",
-				DefaultEnabled: true,
-			},
-			expected: true,
-		},
-		{
-			name: "no config with DefaultEnabled=false is disabled",
-			driver: DriverInfo{
-				ID:             "newdriver",
-				DefaultEnabled: false,
-			},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			result := cfg.IsDriverEnabledForAutoDetect(tt.driver)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestIsDriverAutoDetectEnabledNormalization(t *testing.T) {
-	t.Parallel()
-
-	// Create instance with old underscore format in config
+	falseValue := false
 	cfg := &Instance{
 		vals: Values{
 			Readers: Readers{
 				AutoDetect: true,
+				Connect: []ReadersConnect{
+					{Driver: "newdriver"},
+					{Driver: "externaldrive"},
+					{Driver: "disabledconn", Enabled: &falseValue},
+				},
 				Drivers: map[string]DriverConfig{
-					"simple_serial": {
-						AutoDetect: boolPtr(false),
+					"externaldrive": {
+						Enabled: boolPtr(false),
 					},
-					"acr122_pcsc": {
-						AutoDetect: boolPtr(true),
+					"simple_serial": {
+						Enabled: boolPtr(true),
+					},
+					"auto_off": {
+						Enabled:    boolPtr(true),
+						AutoDetect: boolPtr(false),
 					},
 				},
 			},
@@ -313,34 +112,122 @@ func TestIsDriverAutoDetectEnabledNormalization(t *testing.T) {
 	}
 
 	tests := []struct {
-		name              string
-		driverID          string
-		defaultAutoDetect bool
-		expected          bool
+		name    string
+		context ReaderEnableContext
+		driver  DriverInfo
+		want    bool
 	}{
 		{
-			name:              "lookup with new format finds old config",
-			driverID:          "simpleserial",
-			defaultAutoDetect: true,
-			expected:          false,
+			name: "candidate includes default enabled driver",
+			driver: DriverInfo{
+				ID:             "pn532",
+				DefaultEnabled: true,
+			},
+			context: ReaderEnableContextCandidate,
+			want:    true,
 		},
 		{
-			name:              "lookup with old format finds old config",
-			driverID:          "simple_serial",
-			defaultAutoDetect: true,
-			expected:          false,
+			name: "candidate normalizes driver config keys",
+			driver: DriverInfo{
+				ID:             "simpleserial",
+				DefaultEnabled: false,
+			},
+			context: ReaderEnableContextCandidate,
+			want:    true,
 		},
 		{
-			name:              "enabled driver returns true",
-			driverID:          "acr122pcsc",
-			defaultAutoDetect: false,
-			expected:          true,
+			name: "candidate skips default disabled driver without connect entry",
+			driver: DriverInfo{
+				ID:             "unuseddriver",
+				DefaultEnabled: false,
+			},
+			context: ReaderEnableContextCandidate,
+			want:    false,
 		},
 		{
-			name:              "missing driver returns global auto detect",
-			driverID:          "pn532uart",
-			defaultAutoDetect: true,
-			expected:          true,
+			name: "candidate includes default disabled driver with connect entry",
+			driver: DriverInfo{
+				ID:             "newdriver",
+				DefaultEnabled: false,
+			},
+			context: ReaderEnableContextCandidate,
+			want:    true,
+		},
+		{
+			name: "candidate skips disabled connect entry",
+			driver: DriverInfo{
+				ID:             "disabledconn",
+				DefaultEnabled: false,
+			},
+			context: ReaderEnableContextCandidate,
+			want:    false,
+		},
+		{
+			name: "candidate respects explicit disable even with connect entry",
+			driver: DriverInfo{
+				ID:             "external_drive",
+				DefaultEnabled: false,
+			},
+			context: ReaderEnableContextCandidate,
+			want:    false,
+		},
+		{
+			name: "manual connect allows default disabled driver",
+			driver: DriverInfo{
+				ID:             "newdriver",
+				DefaultEnabled: false,
+			},
+			context: ReaderEnableContextManualConnect,
+			want:    true,
+		},
+		{
+			name: "manual connect respects explicit disable",
+			driver: DriverInfo{
+				ID:             "externaldrive",
+				DefaultEnabled: false,
+			},
+			context: ReaderEnableContextManualConnect,
+			want:    false,
+		},
+		{
+			name: "auto-detect includes default enabled driver",
+			driver: DriverInfo{
+				ID:                "pn532",
+				DefaultEnabled:    true,
+				DefaultAutoDetect: true,
+			},
+			context: ReaderEnableContextAutoDetect,
+			want:    true,
+		},
+		{
+			name: "auto-detect ignores manual connect enablement",
+			driver: DriverInfo{
+				ID:                "newdriver",
+				DefaultEnabled:    false,
+				DefaultAutoDetect: true,
+			},
+			context: ReaderEnableContextAutoDetect,
+			want:    false,
+		},
+		{
+			name: "auto-detect respects explicit driver enable",
+			driver: DriverInfo{
+				ID:                "simpleserial",
+				DefaultEnabled:    false,
+				DefaultAutoDetect: true,
+			},
+			context: ReaderEnableContextAutoDetect,
+			want:    true,
+		},
+		{
+			name: "auto-detect respects explicit auto-detect disable",
+			driver: DriverInfo{
+				ID:                "autooff",
+				DefaultEnabled:    true,
+				DefaultAutoDetect: true,
+			},
+			context: ReaderEnableContextAutoDetect,
+			want:    false,
 		},
 	}
 
@@ -348,8 +235,8 @@ func TestIsDriverAutoDetectEnabledNormalization(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := cfg.IsDriverAutoDetectEnabled(tt.driverID, tt.defaultAutoDetect)
-			assert.Equal(t, tt.expected, result)
+			result := cfg.IsReaderEnabled(tt.driver, tt.context)
+			assert.Equal(t, tt.want, result)
 		})
 	}
 }

@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -109,4 +110,30 @@ func TestSupportedReadersReturnsUniqueReaders(t *testing.T) {
 			"reader ID %q should not appear more than once", id)
 		seenIDs[id] = true
 	}
+}
+
+func TestSupportedReadersIncludesConfiguredDefaultDisabledReader(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
+
+	fsHelper := helpers.NewOSFS()
+	cfg, err := helpers.NewTestConfig(fsHelper, configDir)
+	require.NoError(t, err)
+	cfg.SetReaderConnections([]config.ReadersConnect{{Driver: "externaldrive"}})
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+
+	supportedReaders := SupportedReaders(cfg, mockPlatform)
+
+	var found bool
+	for _, reader := range supportedReaders {
+		if reader.Metadata().ID == "externaldrive" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "configured readers should be available even when disabled by default")
 }

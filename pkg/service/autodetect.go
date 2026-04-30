@@ -78,13 +78,7 @@ func (ad *AutoDetector) DetectReaders(
 			}
 		}
 
-		// Check if driver is enabled (explicit config or default)
-		if !cfg.IsDriverEnabledForAutoDetect(driver) {
-			closeUnused()
-			continue
-		}
-
-		if !cfg.IsDriverAutoDetectEnabled(metadata.ID, metadata.DefaultAutoDetect) {
+		if !cfg.IsReaderEnabled(driver, config.ReaderEnableContextAutoDetect) {
 			closeUnused()
 			continue
 		}

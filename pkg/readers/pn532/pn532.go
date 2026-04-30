@@ -587,17 +587,13 @@ func (*Reader) Detect(connected []string) string {
 	log.Trace().Msgf("PN532: ignoring paths: %v", ignorePaths)
 
 	// Try to detect PN532 devices
-	opts := detection.DefaultOptions()
-	opts.Timeout = quickDetectionTimeout
-	opts.Mode = detection.Safe
-	opts.Blocklist = createVIDPIDBlocklist()
-	opts.IgnorePaths = ignorePaths
+	opts := newDetectionOptions(ignorePaths)
 
 	ctx, cancel := context.WithTimeout(context.Background(), quickDetectionTimeout)
 	defer cancel()
 	devices, err := detection.DetectAll(ctx, &opts)
 	if err != nil {
-		if errors.Is(err, detection.ErrNoDevicesFound) {
+		if isExpectedDetectionMiss(err) {
 			log.Trace().Msg("no PN532 devices found during detection")
 		} else {
 			log.Warn().Err(err).Msg("PN532 detection returned unexpected error")
@@ -678,6 +674,27 @@ func (*Reader) Detect(connected []string) string {
 	// All detected devices are already in use
 	log.Trace().Msg("pn532: all detected devices are already connected")
 	return ""
+}
+
+func isExpectedDetectionMiss(err error) bool {
+	return errors.Is(err, detection.ErrNoDevicesFound) || errors.Is(err, detection.ErrDetectionTimeout)
+}
+
+// defaultDetectionTransports limits PN532 auto-detect to transports safe for
+// broad desktop scans. I2C is still available through explicit reader config,
+// but active auto-probing every /dev/i2c-* bus can wedge in kernel ioctls.
+func defaultDetectionTransports() []string {
+	return []string{detection.TransportUART}
+}
+
+func newDetectionOptions(ignorePaths []string) detection.Options {
+	opts := detection.DefaultOptions()
+	opts.Timeout = quickDetectionTimeout
+	opts.Mode = detection.Safe
+	opts.Blocklist = createVIDPIDBlocklist()
+	opts.IgnorePaths = ignorePaths
+	opts.Transports = defaultDetectionTransports()
+	return opts
 }
 
 func (r *Reader) Path() string {

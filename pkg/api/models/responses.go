@@ -53,6 +53,7 @@ type TagsResponse struct {
 }
 
 type BrowseEntry struct {
+	SystemIDs []string           `json:"systemIds,omitempty"`
 	SystemID  *string            `json:"systemId,omitempty"`
 	RelPath   *string            `json:"relativePath,omitempty"`
 	ZapScript *string            `json:"zapScript,omitempty"`

@@ -159,6 +159,33 @@ func TestHandleIndexPauseNotifications_ExitsOnChannelClose(t *testing.T) {
 	}
 }
 
+func TestHandleIndexPauseNotifications_ResumesWhenPausedAndChannelCloses(t *testing.T) {
+	ch := make(chan models.Notification)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleIndexPauseNotifications(
+			context.Background(), ch, ns, pauser, true, alwaysActive,
+		)
+	}()
+
+	require.Eventually(t, pauser.IsPaused,
+		500*time.Millisecond, 10*time.Millisecond)
+	drainNotification(t, ns)
+
+	close(ch)
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("handleIndexPauseNotifications did not exit on channel close")
+	}
+	assert.False(t, pauser.IsPaused())
+}
+
 func TestHandleIndexPauseNotifications_NoNotificationWhenNotIndexing(t *testing.T) {
 	ch := make(chan models.Notification, 1)
 	ns := make(chan models.Notification, 10)

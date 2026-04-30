@@ -95,6 +95,57 @@ func TestRunTokenZapScript_ClearsPlaylistOnMediaChange(t *testing.T) {
 	}
 }
 
+func TestRunTokenZapScript_ReturnsWhenPlaylistClearBlockedByShutdown(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	mockPlatform.On("LookupMapping", mock.Anything).Return("", false).Maybe()
+
+	cfg := &config.Instance{}
+	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+	mockPlatform.On("ReturnToMenu").Run(func(mock.Arguments) {
+		st.StopService()
+	}).Return(nil)
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Maybe()
+	mockUserDB.On("GetSupportedZapLinkHosts").Return([]string{}, nil).Maybe()
+	svc := &ServiceContext{
+		Platform:            mockPlatform,
+		Config:              cfg,
+		State:               st,
+		DB:                  &database.Database{UserDB: mockUserDB},
+		LaunchSoftwareQueue: make(chan *tokens.Token, 10),
+	}
+
+	plq := make(chan *playlists.Playlist)
+	plsc := playlists.PlaylistController{Queue: plq}
+	token := tokens.Token{
+		Text:     "**launch.system:menu",
+		ScanTime: time.Now(),
+	}
+
+	err := runTokenZapScript(svc, token, plsc, nil, false)
+
+	require.ErrorContains(t, err, "service shutting down")
+	select {
+	case pls := <-plq:
+		t.Fatalf("playlist queue should remain blocked during shutdown, got: %v", pls)
+	default:
+	}
+}
+
 func TestRunTokenZapScript_SkipsPlaylistClearForPlaylistSource(t *testing.T) {
 	t.Parallel()
 

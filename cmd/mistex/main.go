@@ -144,6 +144,7 @@ func run() error {
 	)
 
 	svc, err := daemon.NewService(daemon.ServiceArgs{
+		Config: cfg,
 		Entry: func() (*service.StartResult, error) {
 			return service.Start(pl, cfg)
 		},
@@ -171,7 +172,11 @@ func run() error {
 		_, _ = fmt.Println("Added Zaparoo to MiSTeX startup.")
 	}
 
-	if !svc.Running() {
+	running, runningErr := svc.Running()
+	if runningErr != nil {
+		return fmt.Errorf("error checking service status: %w", runningErr)
+	}
+	if !running {
 		err := svc.Start()
 		_, _ = fmt.Println("Zaparoo service not running, starting...")
 		if err != nil {

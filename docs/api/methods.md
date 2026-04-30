@@ -522,7 +522,7 @@ An object:
 
 Browse indexed media content by directory, similar to navigating a file manager. Supports filesystem paths, virtual URI schemes (e.g. `mame-arcade://`), and paginated results.
 
-When called without a `path` parameter (or with an empty path), returns top-level root entries including filesystem roots and virtual scheme roots.
+When called without a `path` parameter (or with an empty path), returns top-level root entries including filesystem roots and virtual scheme roots. When `systems` is provided without `path`, returns populated launcher routes for those systems only. Pass the same `systems` filter when browsing a returned route to keep shared paths scoped to the selected systems.
 
 #### Parameters
 
@@ -531,8 +531,10 @@ All parameters are optional. When called with no parameters, returns root entrie
 | Key        | Type   | Required | Description                                                                                                |
 | :--------- | :----- | :------- | :--------------------------------------------------------------------------------------------------------- |
 | path       | string | No       | Directory path to browse. Omit or set empty to list root entries. Supports filesystem paths and virtual URI schemes (e.g. `mame-arcade://`). |
+| systems    | string[] | No     | Case-sensitive list of system IDs to restrict route discovery and browse results to. A missing key or empty list preserves unfiltered behavior. |
+| fuzzySystem | boolean | No     | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 | maxResults | number | No       | Maximum results per page. Default is 100, maximum is 1000.                                                 |
-| cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page.                     |
+| cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page. Cursors are valid only with the same path, systems, letter, and sort parameters. |
 | letter     | string | No       | Filter results to entries starting with this letter.                                                       |
 | sort       | string | No       | Sort order. One of: `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. The `filename` variants sort by full file path. |
 
@@ -554,7 +556,8 @@ All parameters are optional. When called with no parameters, returns root entrie
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
 | fileCount    | number   | No       | Number of files in this directory. Present on `root` and `directory` entries.                     |
 | group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
-| systemId     | string   | No       | System ID for the media (e.g. `SNES`). Present on `media` entries.                               |
+| systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
+| systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |
 | zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries.                              |
 | relativePath | string   | No       | Relative path from root directory. Present on `media` entries.                                   |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries. |
@@ -567,7 +570,45 @@ All parameters are optional. When called with no parameters, returns root entrie
 | pageSize    | number | Yes      | The requested page size.                                 |
 | nextCursor  | string | No       | Opaque cursor for the next page. Absent on the last page. |
 
-#### Example
+#### System route example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "media.browse",
+  "params": {
+    "systems": ["SNES"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "path": "",
+    "entries": [
+      {
+        "name": "SNES",
+        "path": "/roms/SNES",
+        "type": "root",
+        "fileCount": 150,
+        "systemId": "SNES",
+        "systemIds": ["SNES"]
+      }
+    ],
+    "totalFiles": 0
+  }
+}
+```
+
+#### Browse path example
 
 ##### Request
 

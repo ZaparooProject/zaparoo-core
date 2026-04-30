@@ -21,7 +21,7 @@ permissions:
 jobs:
   fuzz:
     name: Fuzz
-    runs-on: ubicloud-standard-4
+    runs-on: ubuntu-latest
     timeout-minutes: 120
 
     steps:

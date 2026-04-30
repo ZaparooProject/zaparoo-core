@@ -113,7 +113,15 @@ func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *da
 	// Asturur > Wizzo
 	err := tui.BuildAndRetry(cfg, func() (*tview.Application, error) {
 		logDestinationPath := path.Join(misterconfig.DataDir, config.LogFile)
-		return tui.BuildMain(cfg, pl, service.Running, logDestinationPath, "SD card")
+		isRunning := func() bool {
+			running, err := service.Running()
+			if err != nil {
+				log.Error().Err(err).Msg("service PID file conflict")
+				return false
+			}
+			return running
+		}
+		return tui.BuildMain(cfg, pl, isRunning, logDestinationPath, "SD card")
 	})
 	if err != nil {
 		return fmt.Errorf("failed to build and display service info: %w", err)

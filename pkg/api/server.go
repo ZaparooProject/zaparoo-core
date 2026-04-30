@@ -70,6 +70,7 @@ import (
 var allowedOrigins = []string{
 	"capacitor://localhost", // iOS Capacitor v3+
 	"ionic://localhost",     // iOS Capacitor v2
+	"https://zaparoo.app",   // Hosted web app
 	"https://localhost",     // Android
 	"http://localhost",      // Fallback/development
 }
@@ -512,23 +513,28 @@ func isPrivateIP(ipStr string) bool {
 	return false
 }
 
-// checkWebSocketOrigin validates WebSocket origin requests based on security policy.
-// It checks static origins and dynamically fetches custom origins from the provider.
-func checkWebSocketOrigin(
+// isAllowedOrigin validates HTTP/WebSocket origins against the explicit allowlist.
+func isAllowedOrigin(
 	origin string,
 	staticOrigins []string,
 	customOriginsProvider OriginsProvider,
 	apiPort int,
+	allowEmptyOrigin bool,
+	logPrefix string,
 ) bool {
 	if origin == "" {
-		log.Debug().Msg("websocket origin: empty origin allowed (same-origin)")
-		return true
+		if allowEmptyOrigin {
+			log.Debug().Msgf("%s origin: empty origin allowed (same-origin)", logPrefix)
+			return true
+		}
+		log.Debug().Msgf("%s origin: empty origin rejected", logPrefix)
+		return false
 	}
 
 	// Check static origins (case-insensitive)
 	for _, allowed := range staticOrigins {
 		if strings.EqualFold(origin, allowed) {
-			log.Debug().Msgf("websocket origin: %s allowed (static match)", origin)
+			log.Debug().Msgf("%s origin: %s allowed (static match)", logPrefix, origin)
 			return true
 		}
 	}
@@ -537,42 +543,12 @@ func checkWebSocketOrigin(
 	customOrigins := expandCustomOrigins(customOriginsProvider(), apiPort)
 	for _, allowed := range customOrigins {
 		if strings.EqualFold(origin, allowed) {
-			log.Debug().Msgf("websocket origin: %s allowed (custom match)", origin)
+			log.Debug().Msgf("%s origin: %s allowed (custom match)", logPrefix, origin)
 			return true
 		}
 	}
 
-	// Parse origin URL
-	u, err := url.Parse(origin)
-	if err != nil {
-		log.Debug().Msgf("websocket origin: %s rejected (invalid URL: %v)", origin, err)
-		return false
-	}
-
-	// Allow localhost and 127.0.0.1 on any port
-	hostname := u.Hostname()
-	if hostname == "localhost" || hostname == "127.0.0.1" {
-		log.Debug().Msgf("websocket origin: %s allowed (localhost any port)", origin)
-		return true
-	}
-
-	// Allow private IP addresses only on the correct API port
-	if isPrivateIP(hostname) {
-		port := u.Port()
-		if port == "" && (u.Scheme == "http" || u.Scheme == "https") {
-			log.Debug().Msgf("websocket origin: %s rejected (private IP needs explicit port)", origin)
-			return false
-		}
-		if port == strconv.Itoa(apiPort) {
-			log.Debug().Msgf("websocket origin: %s allowed (private IP correct port)", origin)
-			return true
-		}
-		log.Debug().Msgf("websocket origin: %s rejected (private IP wrong port: %s, expected: %d)",
-			origin, port, apiPort)
-		return false
-	}
-
-	log.Debug().Msgf("websocket origin: %s rejected (not allowed)", origin)
+	log.Debug().Msgf("%s origin: %s rejected (not allowed)", logPrefix, origin)
 	return false
 }
 
@@ -641,28 +617,8 @@ func makeOriginValidator(
 	customOriginsProvider OriginsProvider,
 	port int,
 ) func(*http.Request, string) bool {
-	staticSet := make(map[string]struct{}, len(staticOrigins))
-	for _, o := range staticOrigins {
-		staticSet[strings.ToLower(o)] = struct{}{}
-	}
-
 	return func(_ *http.Request, origin string) bool {
-		lowerOrigin := strings.ToLower(origin)
-
-		// Check static origins first
-		if _, ok := staticSet[lowerOrigin]; ok {
-			return true
-		}
-
-		// Check custom origins (fetched dynamically)
-		customOrigins := expandCustomOrigins(customOriginsProvider(), port)
-		for _, allowed := range customOrigins {
-			if strings.EqualFold(origin, allowed) {
-				return true
-			}
-		}
-
-		return false
+		return isAllowedOrigin(origin, staticOrigins, customOriginsProvider, port, false, "cors")
 	}
 }
 
@@ -1372,7 +1328,36 @@ func Start(
 	mdnsHostname string,
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
-) {
+) error {
+	return StartWithReady(
+		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager,
+		notifBroker, mdnsHostname, player, indexPauser, nil,
+	)
+}
+
+// StartWithReady starts the API web server and reports bind success or failure
+// before blocking for shutdown. This lets service startup fail synchronously
+// when the configured API port is unavailable.
+func StartWithReady(
+	platform platforms.Platform,
+	cfg *config.Instance,
+	st *state.State,
+	inTokenQueue chan<- tokens.Token,
+	confirmQueue chan<- chan error,
+	db *database.Database,
+	limitsManager *playtime.LimitsManager,
+	notifBroker *broker.Broker,
+	mdnsHostname string,
+	player audio.Player,
+	indexPauser *syncutil.Pauser,
+	ready chan<- error,
+) error {
+	notifyReady := func(err error) {
+		if ready != nil {
+			ready <- err
+		}
+	}
+
 	// Extract port from listen address or use default
 	port := cfg.APIPort()
 	listenAddr := cfg.APIListen()
@@ -1486,7 +1471,10 @@ func Start(
 	// flushes to Clients.LastSeenAt every 30 seconds. A final flush runs
 	// on graceful shutdown via StartFlushLoop's ctx.Done() branch.
 	lastSeenTracker := apimiddleware.NewLastSeenTracker(db.UserDB)
-	lastSeenTracker.StartFlushLoop(st.GetContext(), apimiddleware.DefaultLastSeenFlushInterval)
+	lastSeenDone := lastSeenTracker.StartFlushLoop(st.GetContext(), apimiddleware.DefaultLastSeenFlushInterval)
+	defer func() {
+		<-lastSeenDone
+	}()
 
 	session := melody.New()
 	defer func() {
@@ -1497,7 +1485,7 @@ func Start(
 	session.Upgrader.CheckOrigin = func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		log.Debug().Msgf("websocket origin: %s", origin)
-		return checkWebSocketOrigin(origin, staticOrigins, cfg.AllowedOrigins, port)
+		return isAllowedOrigin(origin, staticOrigins, cfg.AllowedOrigins, port, true, "websocket")
 	}
 	// melody's Session.Write is a non-blocking enqueue onto a per-session
 	// output channel (default size 256). When that channel fills, the
@@ -1707,33 +1695,34 @@ func Start(
 	}
 
 	serverDone := make(chan error, 1)
-	serverReady := make(chan struct{})
+
+	log.Info().Str("listen", cfg.APIListen()).Msg("starting HTTP server")
+	log.Debug().Msg("HTTP server attempting to bind")
+
+	// Create the listener before reporting startup success so callers can fail
+	// fast when the configured API port is already in use.
+	lc := &net.ListenConfig{}
+	listener, err := lc.Listen(st.GetContext(), "tcp", server.Addr)
+	if err != nil {
+		bindErr := fmt.Errorf("failed to bind API listener: %w", err)
+		log.Error().Err(bindErr).Msg("failed to bind to port")
+		notifyReady(bindErr)
+		st.StopService()
+		return bindErr
+	}
+
+	// If port 0 was requested, update config with the actual bound port
+	// so callers can discover which port the server is listening on.
+	if port == 0 {
+		if addr, ok := listener.Addr().(*net.TCPAddr); ok {
+			_ = cfg.SetAPIPort(addr.Port)
+		}
+	}
+
+	log.Debug().Msg("HTTP server bound to port, ready to accept connections")
+	notifyReady(nil)
 
 	go func() {
-		log.Info().Str("listen", cfg.APIListen()).Msg("starting HTTP server")
-		log.Debug().Msg("HTTP server goroutine started, attempting to bind")
-
-		// Create a listener to ensure we can bind to the port before continuing
-		lc := &net.ListenConfig{}
-		listener, err := lc.Listen(st.GetContext(), "tcp", server.Addr)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to bind to port")
-			serverDone <- err
-			return
-		}
-
-		// If port 0 was requested, update config with the actual bound port
-		// so callers can discover which port the server is listening on.
-		if port == 0 {
-			if addr, ok := listener.Addr().(*net.TCPAddr); ok {
-				_ = cfg.SetAPIPort(addr.Port)
-			}
-		}
-
-		// Signal that server is ready to accept connections
-		log.Debug().Msg("HTTP server bound to port, ready to accept connections")
-		close(serverReady)
-
 		// Start serving
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error().Err(err).Msg("HTTP server error")
@@ -1744,19 +1733,7 @@ func Start(
 		}
 	}()
 
-	log.Debug().Msg("HTTP server goroutine launched, waiting for server to be ready")
-
-	// Wait for server to be ready or fail to start
-	select {
-	case <-serverReady:
-		log.Debug().Msg("HTTP server is ready to accept connections")
-	case err := <-serverDone:
-		if err != nil {
-			log.Error().Err(err).Msg("API server failed to start, stopping service")
-			st.StopService()
-			return
-		}
-	}
+	log.Debug().Msg("HTTP server goroutine launched")
 
 	select {
 	case <-st.GetContext().Done():
@@ -1765,9 +1742,9 @@ func Start(
 		if err != nil {
 			log.Error().Err(err).Msg("API server failed during operation, stopping service")
 			st.StopService()
-			return
+			return err
 		}
-		return
+		return nil
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1775,7 +1752,9 @@ func Start(
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("HTTP server shutdown error")
-	} else {
-		log.Info().Msg("HTTP server shutdown complete")
+		return fmt.Errorf("HTTP server shutdown error: %w", err)
 	}
+
+	log.Info().Msg("HTTP server shutdown complete")
+	return nil
 }

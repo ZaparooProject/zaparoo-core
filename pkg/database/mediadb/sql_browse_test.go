@@ -21,131 +21,214 @@ package mediadb
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestSqlBrowseRootCounts_PassesArgs(t *testing.T) {
-	t.Parallel()
+func expectBrowseV2Ready(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigBrowseIndexVersion).
+		WillReturnRows(sqlmock.NewRows([]string{"Value"}).AddRow(browseIndexVersion))
+	mock.ExpectQuery("SELECT 1 FROM BrowseDirs LIMIT 1").
+		WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
+}
 
+func TestSqlBrowseDirectoriesV2_ReturnsSystemCounts(t *testing.T) {
+	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectQuery(`SELECT DirPath, FileCount FROM BrowseCache WHERE DirPath IN`).
-		WithArgs("/roms/SNES/", "/roms/NES/").
-		WillReturnRows(
-			sqlmock.NewRows([]string{"DirPath", "FileCount"}).
-				AddRow("/roms/SNES/", 42).
-				AddRow("/roms/NES/", 17),
-		)
+	expectBrowseV2Ready(mock)
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs("/media/fat/games/").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	mock.ExpectQuery("SELECT d.Name, c.FileCount").
+		WithArgs(int64(10), "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).
+			AddRow("SNES", 42))
 
-	counts, err := sqlBrowseRootCounts(context.Background(), db, []string{"/roms/SNES", "/roms/NES"})
-	require.NoError(t, err)
-
-	require.NotNil(t, counts["/roms/SNES"])
-	assert.Equal(t, 42, *counts["/roms/SNES"])
-	require.NotNil(t, counts["/roms/NES"])
-	assert.Equal(t, 17, *counts["/roms/NES"])
-
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlBrowseRootCounts_CacheMiss(t *testing.T) {
-	t.Parallel()
-
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	// Only one of two roots is in the cache.
-	mock.ExpectQuery(`SELECT DirPath, FileCount FROM BrowseCache WHERE DirPath IN`).
-		WithArgs("/roms/SNES/", "/roms/NES/").
-		WillReturnRows(
-			sqlmock.NewRows([]string{"DirPath", "FileCount"}).
-				AddRow("/roms/SNES/", 42),
-		)
-
-	counts, err := sqlBrowseRootCounts(context.Background(), db, []string{"/roms/SNES", "/roms/NES"})
-	require.NoError(t, err)
-
-	require.NotNil(t, counts["/roms/SNES"])
-	assert.Equal(t, 42, *counts["/roms/SNES"])
-	assert.Nil(t, counts["/roms/NES"])
-
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlBrowseRootCounts_Empty(t *testing.T) {
-	t.Parallel()
-
-	counts, err := sqlBrowseRootCounts(context.Background(), nil, []string{})
-	require.NoError(t, err)
-	assert.Empty(t, counts)
-}
-
-func TestSqlBrowseVirtualSchemes_UsesIsVirtual(t *testing.T) {
-	t.Parallel()
-
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	mock.ExpectQuery(`SELECT DirPath, FileCount FROM BrowseCache WHERE IsVirtual = 1`).
-		WillReturnRows(
-			sqlmock.NewRows([]string{"DirPath", "FileCount"}).
-				AddRow("steam://", 150).
-				AddRow("igdb://", 30),
-		)
-
-	schemes, err := sqlBrowseVirtualSchemes(context.Background(), db)
-	require.NoError(t, err)
-
-	require.Len(t, schemes, 2)
-	assert.Equal(t, "steam://", schemes[0].Scheme)
-	assert.Equal(t, 150, schemes[0].FileCount)
-	assert.Equal(t, "igdb://", schemes[1].Scheme)
-	assert.Equal(t, 30, schemes[1].FileCount)
-
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlBrowseFiles_BasicQuery(t *testing.T) {
-	t.Parallel()
-
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	// SELECT s.SystemID, mt.Name, m.Path, m.DBID
-	mock.ExpectQuery(`SELECT .+ FROM Media m`).
-		WillReturnRows(
-			sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
-				AddRow("snes", "Super Mario World", "/roms/SNES/smw.sfc", 1).
-				AddRow("snes", "Zelda", "/roms/SNES/zelda.sfc", 2),
-		)
-
-	// fetchAndAttachTags uses Prepare + Query
-	mock.ExpectPrepare(`SELECT MediaDBID.*Tag.*Type FROM`).
-		ExpectQuery().
-		WithArgs(int64(1), int64(2), int64(1), int64(2)).
-		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
-
-	results, err := sqlBrowseFiles(context.Background(), db, &database.BrowseFilesOptions{
-		PathPrefix: "/roms/SNES/",
-		Limit:      10,
+	snes := systemdefs.System{ID: "SNES"}
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: "/media/fat/games/",
+		Systems:    []systemdefs.System{snes},
 	})
 	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "SNES", results[0].Name)
+	assert.Equal(t, 42, results[0].FileCount)
+	assert.Equal(t, []string{"SNES"}, results[0].SystemIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
-	require.Len(t, results, 2)
-	assert.Equal(t, "Super Mario World", results[0].Name)
-	assert.Equal(t, "Zelda", results[1].Name)
-	assert.Equal(t, int64(1), results[0].MediaID)
-	assert.Equal(t, int64(2), results[1].MediaID)
+func TestSqlBrowseDirectories_FallsBackWhenV2NotReady(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
 
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigBrowseIndexVersion).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("WITH matched AS").
+		WithArgs("/roms/", "/roms/").
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).AddRow("SNES", 2))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: "/roms/",
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "SNES", results[0].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseVirtualSchemesV2_ReturnsEmptyWithoutMediaFallback(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseV2Ready(mock)
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs("").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
+	mock.ExpectQuery("SELECT d.Path, SUM").
+		WithArgs(int64(1), "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"Path", "FileCount", "SystemIDs"}))
+
+	results, err := sqlBrowseVirtualSchemes(context.Background(), db, database.BrowseVirtualSchemesOptions{
+		Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseVirtualSchemesV2_ReturnsEmptyWhenRootMissing(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseV2Ready(mock)
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs("").
+		WillReturnError(sql.ErrNoRows)
+
+	results, err := sqlBrowseVirtualSchemes(context.Background(), db, database.BrowseVirtualSchemesOptions{
+		Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseRouteCountsV2_UsesChildDirCounts(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseV2Ready(mock)
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs("/media/fat/games/SNES/").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(99))
+	mock.ExpectQuery("SELECT COALESCE\\(SUM").
+		WithArgs(int64(99), "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"FileCount", "SystemIDs"}).AddRow(123, "SNES"))
+
+	counts, err := sqlBrowseRouteCounts(context.Background(), db, database.BrowseRouteCountsOptions{
+		Routes:  []string{"/media/fat/games/SNES"},
+		Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 123, counts["/media/fat/games/SNES"].FileCount)
+	assert.Equal(t, []string{"SNES"}, counts["/media/fat/games/SNES"].SystemIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBrowseV2CursorSortValue_UsesFileNameForFilenameSort(t *testing.T) {
+	t.Parallel()
+
+	value := browseV2CursorSortValue(&database.BrowseFilesOptions{
+		Sort: "filename-asc",
+		Cursor: &database.BrowseCursor{
+			SortValue: "/media/fat/games/SNES/Super Metroid.sfc",
+			LastID:    42,
+		},
+	})
+
+	assert.Equal(t, "Super Metroid.sfc", value)
+}
+
+func TestBrowseV2Builder_NormalizesRelativeFilesystemDirs(t *testing.T) {
+	t.Parallel()
+
+	builder := newBrowseV2Builder()
+	builder.ensureDir("/")
+	builder.addMedia(1, 2, "roms/nes/game.nes", "Game")
+
+	assert.Contains(t, builder.dirs, "/")
+	assert.Contains(t, builder.dirs, "/roms/")
+	assert.Contains(t, builder.dirs, "/roms/nes/")
+	assert.NotContains(t, builder.dirs, "./")
+}
+
+func TestBrowseV2Builder_NormalizesFilesystemPathSeparators(t *testing.T) {
+	t.Parallel()
+
+	builder := newBrowseV2Builder()
+	builder.ensureDir("/")
+	builder.addMedia(1, 2, `roms\\snes//RPG/../Action/game.sfc`, "Game")
+
+	assert.Contains(t, builder.dirs, "/roms/")
+	assert.Contains(t, builder.dirs, "/roms/snes/")
+	assert.Contains(t, builder.dirs, "/roms/snes/Action/")
+	assert.NotContains(t, builder.dirs, `/roms\\snes/`)
+	assert.Equal(t, "game.sfc", builder.entries[0].fileName)
+}
+
+func TestBrowseV2Builder_NormalizesURIPathPortion(t *testing.T) {
+	t.Parallel()
+
+	builder := newBrowseV2Builder()
+	builder.ensureDir("/")
+	builder.addMedia(1, 2, `steam://440\\Team Fortress 2/../Team Fortress 2`, "Game")
+
+	assert.Contains(t, builder.dirs, "steam://")
+	assert.NotContains(t, builder.dirs, `steam://440\\Team Fortress 2/../`)
+	assert.Equal(t, "440/Team Fortress 2", builder.entries[0].fileName)
+}
+
+func TestSqlBrowseRootCountsV2_ReturnsZeroForMissingRoot(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseV2Ready(mock)
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs("/roms/SNES/").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(7))
+	mock.ExpectQuery("SELECT COALESCE\\(SUM\\(FileCount\\)").
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"FileCount"}).AddRow(10))
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs("/roms/NES/").
+		WillReturnError(sql.ErrNoRows)
+
+	counts, err := sqlBrowseRootCounts(context.Background(), db, []string{"/roms/SNES", "/roms/NES"})
+	require.NoError(t, err)
+	require.NotNil(t, counts["/roms/SNES"])
+	assert.Equal(t, 10, *counts["/roms/SNES"])
+	require.NotNil(t, counts["/roms/NES"])
+	assert.Equal(t, 0, *counts["/roms/NES"])
 	require.NoError(t, mock.ExpectationsWereMet())
 }

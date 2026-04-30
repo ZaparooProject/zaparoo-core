@@ -30,7 +30,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const insertMediaSQL = `INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (?, ?, ?, ?, ?)`
+const insertMediaSQL = `INSERT INTO Media
+	(DBID, MediaTitleDBID, SystemDBID, Path, ParentDir)
+	VALUES (?, ?, ?, ?, ?)`
 
 func sqlFindMedia(ctx context.Context, db sqlQueryable, media database.Media) (database.Media, error) {
 	var row database.Media
@@ -84,7 +86,14 @@ func sqlInsertMediaWithPreparedStmt(ctx context.Context, stmt *sql.Stmt, row dat
 		dbID = row.DBID
 	}
 
-	res, err := stmt.ExecContext(ctx, dbID, row.MediaTitleDBID, row.SystemDBID, row.Path, row.ParentDir)
+	res, err := stmt.ExecContext(
+		ctx,
+		dbID,
+		row.MediaTitleDBID,
+		row.SystemDBID,
+		row.Path,
+		row.ParentDir,
+	)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute prepared insert media statement: %w", err)
 	}
@@ -114,7 +123,14 @@ func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (databa
 		}
 	}()
 
-	res, err := stmt.ExecContext(ctx, dbID, row.MediaTitleDBID, row.SystemDBID, row.Path, row.ParentDir)
+	res, err := stmt.ExecContext(
+		ctx,
+		dbID,
+		row.MediaTitleDBID,
+		row.SystemDBID,
+		row.Path,
+		row.ParentDir,
+	)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert media statement: %w", err)
 	}

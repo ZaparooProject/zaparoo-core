@@ -126,6 +126,49 @@ func TestLastSeenTracker_StartFlushLoopFlushesOnShutdown(t *testing.T) {
 	db.AssertExpectations(t)
 }
 
+func TestLastSeenTracker_StartFlushLoopDoneWaitsForFinalFlush(t *testing.T) {
+	t.Parallel()
+
+	db := helpers.NewMockUserDBI()
+	tr := middleware.NewLastSeenTracker(db)
+
+	tr.Touch("token-a", 1700000100)
+
+	flushStarted := make(chan struct{})
+	releaseFlush := make(chan struct{})
+	db.On("UpdateClientLastSeen", "token-a", int64(1700000100)).
+		Run(func(_ mock.Arguments) {
+			close(flushStarted)
+			<-releaseFlush
+		}).
+		Return(nil).Once()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := tr.StartFlushLoop(ctx, time.Hour)
+	cancel()
+
+	select {
+	case <-flushStarted:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown flush did not start within 1s")
+	}
+
+	select {
+	case <-done:
+		t.Fatal("flush loop reported done before final flush completed")
+	default:
+	}
+
+	close(releaseFlush)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("flush loop did not finish after final flush completed")
+	}
+	db.AssertExpectations(t)
+}
+
 func TestLastSeenTracker_StartFlushLoopPeriodicFlush(t *testing.T) {
 	t.Parallel()
 

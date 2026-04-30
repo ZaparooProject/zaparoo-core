@@ -24,6 +24,7 @@ package externaldrive
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -44,11 +45,14 @@ const (
 	udisks2BlockInterface = "org.freedesktop.UDisks2.Block"
 	udisks2FSInterface    = "org.freedesktop.UDisks2.Filesystem"
 	dbusObjectManager     = "org.freedesktop.DBus.ObjectManager"
+	dbusProperties        = "org.freedesktop.DBus.Properties"
 
 	// fallbackRescanInterval is the maximum time between mount rescans.
 	// This ensures mounts are detected even when poll() doesn't fire events
 	// on some minimal Linux systems (like Batocera).
 	fallbackRescanInterval = 1 * time.Second
+
+	dbusCallTimeout = 3 * time.Second
 )
 
 // linuxMountDetector implements MountDetector for Linux using D-Bus/UDisks2.
@@ -59,6 +63,9 @@ type linuxMountDetector struct {
 	stopChan     chan struct{}
 	mountedDevs  map[string]MountEvent
 	pathMappings map[dbus.ObjectPath]string // objectPath -> deviceID mapping for reliable unmount detection
+	blockProps   map[dbus.ObjectPath]map[string]dbus.Variant
+	blockReader  func(dbus.ObjectPath) (map[string]dbus.Variant, error)
+	mountReader  func(dbus.ObjectPath) []string
 	wg           sync.WaitGroup
 	mu           syncutil.RWMutex
 	stopOnce     sync.Once
@@ -137,6 +144,9 @@ func NewMountDetector() (MountDetector, error) {
 			stopChan:     make(chan struct{}),
 			mountedDevs:  make(map[string]MountEvent),
 			pathMappings: make(map[dbus.ObjectPath]string),
+			blockProps:   make(map[dbus.ObjectPath]map[string]dbus.Variant),
+			blockReader:  nil,
+			mountReader:  nil,
 		}, nil
 	}
 
@@ -180,6 +190,15 @@ func (d *linuxMountDetector) Start() error {
 		return fmt.Errorf("failed to add match for InterfacesRemoved: %w", err)
 	}
 
+	if err := d.conn.AddMatchSignal(
+		dbus.WithMatchPathNamespace(dbus.ObjectPath(udisks2Path)),
+		dbus.WithMatchInterface(dbusProperties),
+		dbus.WithMatchMember("PropertiesChanged"),
+	); err != nil {
+		_ = d.conn.Close()
+		return fmt.Errorf("failed to add match for PropertiesChanged: %w", err)
+	}
+
 	// Create signal channel
 	signalChan := make(chan *dbus.Signal, 10)
 	d.conn.Signal(signalChan)
@@ -187,6 +206,11 @@ func (d *linuxMountDetector) Start() error {
 	// Start listening goroutine
 	d.wg.Add(1)
 	go d.listenForSignals(signalChan)
+
+	// Existing mounted drives may not emit InterfacesAdded after the reader starts.
+	// Seed the detector from UDisks2's current object state before relying on signals.
+	d.wg.Add(1)
+	go d.scanExistingObjects()
 
 	return nil
 }
@@ -214,6 +238,7 @@ func (d *linuxMountDetector) Forget(deviceID string) {
 	for path, id := range d.pathMappings {
 		if id == deviceID {
 			delete(d.pathMappings, path)
+			delete(d.blockProps, path)
 			break
 		}
 	}
@@ -238,8 +263,38 @@ func (d *linuxMountDetector) listenForSignals(signalChan chan *dbus.Signal) {
 				d.handleInterfacesAdded(signal)
 			case dbusObjectManager + ".InterfacesRemoved":
 				d.handleInterfacesRemoved(signal)
+			case dbusProperties + ".PropertiesChanged":
+				d.handlePropertiesChanged(signal)
 			}
 		}
+	}
+}
+
+func (d *linuxMountDetector) scanExistingObjects() {
+	defer d.wg.Done()
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbusCallTimeout)
+	defer cancel()
+
+	obj := d.conn.Object(udisks2Service, dbus.ObjectPath(udisks2Path))
+	var objects map[dbus.ObjectPath]map[string]map[string]dbus.Variant
+	if err := obj.CallWithContext(ctx, dbusObjectManager+".GetManagedObjects", 0).Store(&objects); err != nil {
+		log.Debug().Err(err).Msg("failed to enumerate UDisks2 objects")
+		return
+	}
+
+	d.processManagedObjects(objects)
+}
+
+func (d *linuxMountDetector) processManagedObjects(objects map[dbus.ObjectPath]map[string]map[string]dbus.Variant) {
+	for objectPath, interfaces := range objects {
+		blockProps, hasBlock := interfaces[udisks2BlockInterface]
+		fsProps, hasFS := interfaces[udisks2FSInterface]
+		if !hasBlock || !hasFS {
+			continue
+		}
+
+		d.processObjectMount(objectPath, blockProps, fsProps, "initial scan")
 	}
 }
 
@@ -258,65 +313,112 @@ func (d *linuxMountDetector) handleInterfacesAdded(signal *dbus.Signal) {
 		return
 	}
 
-	// Check if this is a filesystem device
 	blockProps, hasBlock := interfaces[udisks2BlockInterface]
-	_, hasFS := interfaces[udisks2FSInterface]
+	fsProps, hasFS := interfaces[udisks2FSInterface]
 
 	if !hasBlock || !hasFS {
 		return
 	}
 
+	d.processObjectMount(objectPath, blockProps, fsProps, "interface added")
+}
+
+func (d *linuxMountDetector) processObjectMount(
+	objectPath dbus.ObjectPath,
+	blockProps map[string]dbus.Variant,
+	fsProps map[string]dbus.Variant,
+	source string,
+) {
+	d.mu.Lock()
+	d.blockProps[objectPath] = blockProps
+	d.mu.Unlock()
+
+	mountPoints := mountPointsFromProps(fsProps)
+	if len(mountPoints) == 0 {
+		log.Debug().Str("path", string(objectPath)).Str("source", source).Msg("filesystem has no mount points")
+		return
+	}
+
+	event, ok := d.buildMountEvent(objectPath, blockProps, mountPoints[0])
+	if !ok {
+		return
+	}
+
+	d.registerMountEvent(objectPath, &event, source)
+}
+
+func (d *linuxMountDetector) buildMountEvent(
+	objectPath dbus.ObjectPath,
+	blockProps map[string]dbus.Variant,
+	mountPath string,
+) (MountEvent, bool) {
+	if mountPath == "" {
+		return MountEvent{}, false
+	}
+
 	// Check if device is removable (not a system device)
 	if hintSystem, ok := blockProps["HintSystem"]; ok {
 		if isSystem, ok := hintSystem.Value().(bool); ok && isSystem {
-			return
+			return MountEvent{}, false
 		}
 	}
 
 	if hintIgnore, ok := blockProps["HintIgnore"]; ok {
 		if shouldIgnore, ok := hintIgnore.Value().(bool); ok && shouldIgnore {
-			return
+			return MountEvent{}, false
 		}
-	}
-
-	// Extract mount points
-	mountPoints := d.getMountPoints(string(objectPath))
-	if len(mountPoints) == 0 {
-		return
 	}
 
 	// Extract device information
 	deviceID := d.getDeviceID(blockProps)
 	if deviceID == "" {
 		log.Debug().Str("path", string(objectPath)).Msg("device has no ID, skipping")
-		return
+		return MountEvent{}, false
 	}
 
 	deviceNode := d.getDeviceNode(blockProps)
 	volumeLabel := d.getVolumeLabel(blockProps)
 	deviceType := d.getDeviceType(blockProps)
 
-	// Create mount event
-	event := MountEvent{
+	return MountEvent{
 		DeviceID:    deviceID,
 		DeviceNode:  deviceNode,
-		MountPath:   mountPoints[0], // Use first mount point
+		MountPath:   mountPath,
 		VolumeLabel: volumeLabel,
 		DeviceType:  deviceType,
+	}, true
+}
+
+func (d *linuxMountDetector) registerMountEvent(objectPath dbus.ObjectPath, event *MountEvent, source string) {
+	d.mu.Lock()
+	existing, exists := d.mountedDevs[event.DeviceID]
+	if exists && existing.MountPath == event.MountPath {
+		d.mu.Unlock()
+		log.Debug().
+			Str("device_id", event.DeviceID).
+			Str("mount_path", event.MountPath).
+			Str("source", source).
+			Msg("mount event already tracked")
+		return
 	}
 
-	// Store and emit event
-	d.mu.Lock()
-	d.mountedDevs[deviceID] = event
-	d.pathMappings[objectPath] = deviceID
+	d.mountedDevs[event.DeviceID] = *event
+	for path, deviceID := range d.pathMappings {
+		if deviceID == event.DeviceID && path != objectPath {
+			delete(d.pathMappings, path)
+			delete(d.blockProps, path)
+		}
+	}
+	d.pathMappings[objectPath] = event.DeviceID
 	d.mu.Unlock()
 
 	select {
-	case d.events <- event:
+	case d.events <- *event:
 		log.Debug().
-			Str("device_id", deviceID).
+			Str("device_id", event.DeviceID).
 			Str("mount_path", event.MountPath).
-			Str("label", volumeLabel).
+			Str("label", event.VolumeLabel).
+			Str("source", source).
 			Msg("mount event detected")
 	case <-d.stopChan:
 		return
@@ -351,12 +453,79 @@ func (d *linuxMountDetector) handleInterfacesRemoved(signal *dbus.Signal) {
 		return
 	}
 
-	// Use deterministic mapping to find device by object path
+	d.removeMountByObjectPath(objectPath)
+}
+
+func (d *linuxMountDetector) handlePropertiesChanged(signal *dbus.Signal) {
+	if len(signal.Body) < 2 {
+		return
+	}
+
+	if signal.Path == "" {
+		return
+	}
+
+	interfaceName, ok := signal.Body[0].(string)
+	if !ok || interfaceName != udisks2FSInterface {
+		return
+	}
+
+	changedProps, propsOK := signal.Body[1].(map[string]dbus.Variant)
+	if !propsOK {
+		return
+	}
+
+	mountPointsChanged := false
+	fsProps := map[string]dbus.Variant{}
+	if mountPoints, hasMountPoints := changedProps["MountPoints"]; hasMountPoints {
+		mountPointsChanged = true
+		fsProps["MountPoints"] = mountPoints
+	}
+
+	if !mountPointsChanged && len(signal.Body) >= 3 {
+		if invalidatedProps, invalidatedOK := signal.Body[2].([]string); invalidatedOK {
+			for _, prop := range invalidatedProps {
+				if prop == "MountPoints" {
+					mountPointsChanged = true
+					fsProps["MountPoints"] = dbus.MakeVariant(d.currentMountPoints(signal.Path))
+					break
+				}
+			}
+		}
+	}
+
+	if !mountPointsChanged {
+		return
+	}
+
+	mountPoints := mountPointsFromProps(fsProps)
+	if len(mountPoints) == 0 {
+		d.removeMountByObjectPath(signal.Path)
+		return
+	}
+
+	d.mu.RLock()
+	blockProps, ok := d.blockProps[signal.Path]
+	d.mu.RUnlock()
+	if !ok {
+		var err error
+		blockProps, err = d.currentBlockProperties(signal.Path)
+		if err != nil {
+			log.Debug().Err(err).Str("path", string(signal.Path)).Msg("failed to read block properties")
+			return
+		}
+	}
+
+	d.processObjectMount(signal.Path, blockProps, fsProps, "properties changed")
+}
+
+func (d *linuxMountDetector) removeMountByObjectPath(objectPath dbus.ObjectPath) {
 	d.mu.Lock()
 	deviceID, exists := d.pathMappings[objectPath]
 	if exists {
 		delete(d.mountedDevs, deviceID)
 		delete(d.pathMappings, objectPath)
+		delete(d.blockProps, objectPath)
 	}
 	d.mu.Unlock()
 
@@ -372,20 +541,104 @@ func (d *linuxMountDetector) handleInterfacesRemoved(signal *dbus.Signal) {
 	}
 }
 
-func (d *linuxMountDetector) getMountPoints(objectPath string) []string {
-	obj := d.conn.Object(udisks2Service, dbus.ObjectPath(objectPath))
-	var mountPoints [][]byte
+func (d *linuxMountDetector) currentMountPoints(objectPath dbus.ObjectPath) []string {
+	if d.mountReader != nil {
+		return d.mountReader(objectPath)
+	}
+	return d.readMountPoints(objectPath)
+}
 
-	if err := obj.Call(udisks2FSInterface+".GetMountPoints", 0).Store(&mountPoints); err != nil {
+func (d *linuxMountDetector) readMountPoints(objectPath dbus.ObjectPath) []string {
+	if d.conn == nil {
 		return nil
 	}
 
-	result := make([]string, 0, len(mountPoints))
-	for _, mp := range mountPoints {
+	ctx, cancel := context.WithTimeout(context.Background(), dbusCallTimeout)
+	defer cancel()
+
+	obj := d.conn.Object(udisks2Service, objectPath)
+	var mountPoints dbus.Variant
+	if err := obj.CallWithContext(
+		ctx,
+		dbusProperties+".Get",
+		0,
+		udisks2FSInterface,
+		"MountPoints",
+	).Store(&mountPoints); err != nil {
+		return nil
+	}
+
+	return mountPointsFromVariant(mountPoints)
+}
+
+func (d *linuxMountDetector) currentBlockProperties(objectPath dbus.ObjectPath) (map[string]dbus.Variant, error) {
+	if d.blockReader != nil {
+		return d.blockReader(objectPath)
+	}
+	return d.readBlockProperties(objectPath)
+}
+
+func (d *linuxMountDetector) readBlockProperties(objectPath dbus.ObjectPath) (map[string]dbus.Variant, error) {
+	if d.conn == nil {
+		return nil, errors.New("D-Bus connection is not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbusCallTimeout)
+	defer cancel()
+
+	obj := d.conn.Object(udisks2Service, objectPath)
+	var blockProps map[string]dbus.Variant
+	if err := obj.CallWithContext(
+		ctx,
+		dbusProperties+".GetAll",
+		0,
+		udisks2BlockInterface,
+	).Store(&blockProps); err != nil {
+		return nil, fmt.Errorf("get block properties: %w", err)
+	}
+	return blockProps, nil
+}
+
+func mountPointsFromProps(props map[string]dbus.Variant) []string {
+	mountPoints, ok := props["MountPoints"]
+	if !ok {
+		return nil
+	}
+	return mountPointsFromVariant(mountPoints)
+}
+
+func mountPointsFromVariant(mountPoints dbus.Variant) []string {
+	switch value := mountPoints.Value().(type) {
+	case [][]byte:
+		return mountPointsFromBytes(value)
+	case []string:
+		return mountPointsFromStrings(value)
+	default:
+		return nil
+	}
+}
+
+func mountPointsFromBytes(value [][]byte) []string {
+	result := make([]string, 0, len(value))
+	for _, mp := range value {
 		if len(mp) > 0 {
 			// Remove trailing null byte if present
 			path := string(mp)
 			path = strings.TrimRight(path, "\x00")
+			if path != "" {
+				result = append(result, path)
+			}
+		}
+	}
+
+	return result
+}
+
+func mountPointsFromStrings(value []string) []string {
+	result := make([]string, 0, len(value))
+	for _, mp := range value {
+		path := strings.TrimRight(mp, "\x00")
+		if path != "" {
 			result = append(result, path)
 		}
 	}
@@ -411,7 +664,7 @@ func (*linuxMountDetector) getDeviceID(props map[string]dbus.Variant) string {
 	// Last resort: device name
 	if device, ok := props["Device"]; ok {
 		if devicePath, ok := device.Value().([]byte); ok && len(devicePath) > 0 {
-			return string(devicePath)
+			return strings.TrimRight(string(devicePath), "\x00")
 		}
 	}
 

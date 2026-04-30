@@ -25,9 +25,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -205,6 +208,38 @@ type testWriter struct{}
 
 func (*testWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
+}
+
+func TestCloseLoggingReleasesLogFile(t *testing.T) {
+	// Note: Cannot use t.Parallel() because InitLogging modifies global log.Logger
+	originalLogger := log.Logger
+	t.Cleanup(func() {
+		if err := CloseLogging(); err != nil {
+			t.Errorf("CloseLogging failed: %v", err)
+		}
+		log.Logger = originalLogger
+	})
+
+	testRoot := t.TempDir()
+	logDir := filepath.Join(testRoot, "logs")
+	platform := mocks.NewMockPlatform()
+	platform.On("Settings").Return(platforms.Settings{
+		TempDir: filepath.Join(testRoot, "temp"),
+		LogDir:  logDir,
+	})
+
+	require.NoError(t, EnsureDirectories(platform))
+	require.NoError(t, InitLogging(platform, nil))
+
+	log.Info().Msg("open log file for close test")
+	require.FileExists(t, filepath.Join(logDir, config.LogFile))
+	require.NoError(t, CloseLogging())
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.NoError(c, os.RemoveAll(logDir))
+	}, time.Second, 10*time.Millisecond)
+	_, err := os.Stat(logDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestInitLoggingIntegration(t *testing.T) {

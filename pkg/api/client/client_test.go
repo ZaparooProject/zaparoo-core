@@ -72,6 +72,17 @@ func unusedPort(t *testing.T) int {
 	return port
 }
 
+func waitForWebSocketSession(server *helpers.WebSocketTestServer, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if server.Melody.Len() > 0 {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return false
+}
+
 func TestLocalClient_ValidRequest(t *testing.T) {
 	t.Parallel()
 
@@ -477,32 +488,49 @@ func TestWaitNotifications_ReceivesAnyOfMultiple(t *testing.T) {
 
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
+	timeout := time.Second
+	type waitResult struct {
+		err    error
+		method string
+		params string
+	}
+	resultCh := make(chan waitResult, 1)
 
 	go func() {
-		time.Sleep(50 * time.Millisecond)
-
-		notification := map[string]any{
-			"jsonrpc": "2.0",
-			"method":  "tokens.removed",
-			"params":  map[string]any{"token": "removed123"},
-		}
-		data, _ := json.Marshal(notification)
-		_ = server.Melody.Broadcast(data)
+		method, params, err := WaitNotifications(
+			context.Background(),
+			timeout,
+			cfg,
+			"tokens.added",
+			"tokens.removed",
+			"tokens.scanned",
+		)
+		resultCh <- waitResult{method: method, params: params, err: err}
 	}()
 
-	method, params, err := WaitNotifications(
-		context.Background(),
-		time.Second,
-		cfg,
-		"tokens.added",
-		"tokens.removed",
-		"tokens.scanned",
-	)
-	require.NoError(t, err)
-	assert.Equal(t, "tokens.removed", method)
+	if !waitForWebSocketSession(server, timeout) {
+		t.Fatalf("websocket session not ready within %s", timeout)
+	}
+
+	notification := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tokens.removed",
+		"params":  map[string]any{"token": "removed123"},
+	}
+	data, _ := json.Marshal(notification)
+	_ = server.Melody.Broadcast(data)
+
+	var result waitResult
+	select {
+	case result = <-resultCh:
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for WaitNotifications result")
+	}
+	require.NoError(t, result.err)
+	assert.Equal(t, "tokens.removed", result.method)
 
 	var parsedParams map[string]any
-	err = json.Unmarshal([]byte(params), &parsedParams)
+	err := json.Unmarshal([]byte(result.params), &parsedParams)
 	require.NoError(t, err)
 	assert.Equal(t, "removed123", parsedParams["token"])
 }
@@ -515,41 +543,58 @@ func TestWaitNotifications_IgnoresUnregisteredMethods(t *testing.T) {
 
 	port := parseServerPort(t, server.Server)
 	cfg := testConfigWithPort(t, port)
+	timeout := time.Second
+	type waitResult struct {
+		err    error
+		method string
+		params string
+	}
+	resultCh := make(chan waitResult, 1)
 
 	go func() {
-		time.Sleep(50 * time.Millisecond)
-
-		// Send unregistered method first
-		unregistered := map[string]any{
-			"jsonrpc": "2.0",
-			"method":  "some.other.method",
-			"params":  map[string]any{"wrong": true},
-		}
-		unregisteredData, _ := json.Marshal(unregistered)
-		_ = server.Melody.Broadcast(unregisteredData)
-
-		// Then send registered method
-		registered := map[string]any{
-			"jsonrpc": "2.0",
-			"method":  "tokens.added",
-			"params":  map[string]any{"correct": true},
-		}
-		registeredData, _ := json.Marshal(registered)
-		_ = server.Melody.Broadcast(registeredData)
+		method, params, err := WaitNotifications(
+			context.Background(),
+			timeout,
+			cfg,
+			"tokens.added",
+			"tokens.removed",
+		)
+		resultCh <- waitResult{method: method, params: params, err: err}
 	}()
 
-	method, params, err := WaitNotifications(
-		context.Background(),
-		time.Second,
-		cfg,
-		"tokens.added",
-		"tokens.removed",
-	)
-	require.NoError(t, err)
-	assert.Equal(t, "tokens.added", method)
+	if !waitForWebSocketSession(server, timeout) {
+		t.Fatalf("websocket session not ready within %s", timeout)
+	}
+
+	// Send unregistered method first
+	unregistered := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "some.other.method",
+		"params":  map[string]any{"wrong": true},
+	}
+	unregisteredData, _ := json.Marshal(unregistered)
+	_ = server.Melody.Broadcast(unregisteredData)
+
+	// Then send registered method
+	registered := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tokens.added",
+		"params":  map[string]any{"correct": true},
+	}
+	registeredData, _ := json.Marshal(registered)
+	_ = server.Melody.Broadcast(registeredData)
+
+	var result waitResult
+	select {
+	case result = <-resultCh:
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for WaitNotifications result")
+	}
+	require.NoError(t, result.err)
+	assert.Equal(t, "tokens.added", result.method)
 
 	var parsedParams map[string]any
-	err = json.Unmarshal([]byte(params), &parsedParams)
+	err := json.Unmarshal([]byte(result.params), &parsedParams)
 	require.NoError(t, err)
 	assert.True(t, parsedParams["correct"].(bool))
 }

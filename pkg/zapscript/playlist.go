@@ -66,6 +66,32 @@ type ArgPlaylist struct {
 	Items []ArgPlaylistItem `json:"items"`
 }
 
+func queuePlaylistUpdate(env *platforms.CmdEnv, pls *playlists.Playlist) error {
+	if env.LauncherCtx == nil && env.ServiceCtx == nil {
+		env.Playlist.Queue <- pls
+		return nil
+	}
+
+	var launcherDone <-chan struct{}
+	if env.LauncherCtx != nil {
+		launcherDone = env.LauncherCtx.Done()
+	}
+
+	var serviceDone <-chan struct{}
+	if env.ServiceCtx != nil {
+		serviceDone = env.ServiceCtx.Done()
+	}
+
+	select {
+	case env.Playlist.Queue <- pls:
+		return nil
+	case <-launcherDone:
+		return env.LauncherCtx.Err()
+	case <-serviceDone:
+		return env.ServiceCtx.Err()
+	}
+}
+
 func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
 	//nolint:gosec // Safe: reads playlist files for media management
 	content, err := os.ReadFile(path)
@@ -312,7 +338,9 @@ func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		(len(env.Cmd.Args) == 0 || env.Cmd.Args[0] == "") {
 		log.Info().Msg("starting paused playlist")
 		pls := playlists.Play(*env.Playlist.Active)
-		env.Playlist.Queue <- pls
+		if err := queuePlaylistUpdate(&env, pls); err != nil {
+			return platforms.CmdResult{}, err
+		}
 		return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        pls,
@@ -326,7 +354,9 @@ func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 	log.Info().Any("items", pls.Items).Msgf("play playlist: %v", env.Cmd.Args)
 	pls = playlists.Play(*pls)
-	env.Playlist.Queue <- pls
+	if err := queuePlaylistUpdate(&env, pls); err != nil {
+		return platforms.CmdResult{}, err
+	}
 
 	return platforms.CmdResult{
 		PlaylistChanged: true,
@@ -342,7 +372,9 @@ func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	}
 
 	log.Info().Any("items", pls.Items).Msgf("load playlist: %s", env.Cmd.Args)
-	env.Playlist.Queue <- pls
+	if err := queuePlaylistUpdate(&env, pls); err != nil {
+		return platforms.CmdResult{}, err
+	}
 
 	return platforms.CmdResult{
 		PlaylistChanged: true,
@@ -413,7 +445,9 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	}
 
 	log.Info().Any("items", pls.Items).Msgf("open playlist: %s", env.Cmd.Args)
-	env.Playlist.Queue <- pls
+	if err := queuePlaylistUpdate(&env, pls); err != nil {
+		return platforms.CmdResult{}, err
+	}
 
 	if err := pl.ShowPicker(env.Cfg, widgetmodels.PickerArgs{
 		Title:    pls.Name,
@@ -438,7 +472,9 @@ func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 	}
 
 	pls := playlists.Next(*env.Playlist.Active)
-	env.Playlist.Queue <- pls
+	if err := queuePlaylistUpdate(&env, pls); err != nil {
+		return platforms.CmdResult{}, err
+	}
 
 	return platforms.CmdResult{
 		PlaylistChanged: true,
@@ -453,7 +489,9 @@ func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.
 	}
 
 	pls := playlists.Previous(*env.Playlist.Active)
-	env.Playlist.Queue <- pls
+	if err := queuePlaylistUpdate(&env, pls); err != nil {
+		return platforms.CmdResult{}, err
+	}
 
 	return platforms.CmdResult{
 		PlaylistChanged: true,
@@ -484,7 +522,9 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 	}
 
 	pls := playlists.Goto(*env.Playlist.Active, newIndex)
-	env.Playlist.Queue <- pls
+	if err := queuePlaylistUpdate(&env, pls); err != nil {
+		return platforms.CmdResult{}, err
+	}
 
 	return platforms.CmdResult{
 		PlaylistChanged: true,
@@ -498,7 +538,9 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
-	env.Playlist.Queue <- nil
+	if err := queuePlaylistUpdate(&env, nil); err != nil {
+		return platforms.CmdResult{}, err
+	}
 
 	if err := pl.StopActiveLauncher(platforms.StopForMenu); err != nil {
 		return platforms.CmdResult{
@@ -519,7 +561,9 @@ func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cm
 	}
 
 	pls := playlists.Pause(*env.Playlist.Active)
-	env.Playlist.Queue <- pls
+	if err := queuePlaylistUpdate(&env, pls); err != nil {
+		return platforms.CmdResult{}, err
+	}
 
 	if err := pl.StopActiveLauncher(platforms.StopForMenu); err != nil {
 		return platforms.CmdResult{

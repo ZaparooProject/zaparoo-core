@@ -118,17 +118,20 @@ func TestEnabled(t *testing.T) {
 
 func TestInitConfiguresSentryPrivacyOptions(t *testing.T) {
 	originalLogger := log.Logger
+	logDir := t.TempDir()
 	t.Cleanup(func() {
 		Close()
+		closeErr := corehelpers.CloseLogging()
 		log.Logger = originalLogger
 		enabled = false
 		sentryWriter = nil
 		closeOnce = sync.Once{}
 		sentry.CurrentHub().BindClient(nil)
+		require.NoError(t, closeErr)
 	})
 
 	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Settings").Return(platforms.Settings{LogDir: t.TempDir()})
+	mockPlatform.On("Settings").Return(platforms.Settings{LogDir: logDir})
 	require.NoError(t, corehelpers.InitLogging(mockPlatform, []io.Writer{io.Discard}))
 
 	require.NoError(t, Init(true, "device-id", "1.2.3", "linux"))

@@ -402,8 +402,16 @@ func NewTestConfig(fs *FSHelper, configDir string) (*config.Instance, error) {
 // If fs is provided, its in-memory filesystem is used for config file operations.
 // If fs is nil, the real OS filesystem is used.
 func NewTestConfigWithPort(fs *FSHelper, configDir string, port int) (*config.Instance, error) {
+	return NewTestConfigWithListenAndPort(fs, configDir, "", port)
+}
+
+// NewTestConfigWithListenAndPort creates a config instance for testing with a
+// specific API listen host and port. If fs is provided, its in-memory filesystem
+// is used for config file operations. If fs is nil, the real OS filesystem is used.
+func NewTestConfigWithListenAndPort(fs *FSHelper, configDir, listenHost string, port int) (*config.Instance, error) {
 	defaults := config.BaseDefaults
 	defaults.Service.APIPort = &port
+	defaults.Service.APIListen = listenHost
 
 	if fs != nil {
 		cfg, err := config.NewConfigWithFs(configDir, defaults, fs.Fs)

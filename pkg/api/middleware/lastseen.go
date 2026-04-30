@@ -99,17 +99,20 @@ func (t *LastSeenTracker) Flush(ctx context.Context) {
 }
 
 // StartFlushLoop runs Flush periodically with a final flush on shutdown.
-// Pass zero interval for DefaultLastSeenFlushInterval.
-func (t *LastSeenTracker) StartFlushLoop(ctx context.Context, interval time.Duration) {
+// Pass zero interval for DefaultLastSeenFlushInterval. The returned channel is
+// closed after the final flush has completed.
+func (t *LastSeenTracker) StartFlushLoop(ctx context.Context, interval time.Duration) <-chan struct{} {
 	if interval <= 0 {
 		interval = DefaultLastSeenFlushInterval
 	}
+	done := make(chan struct{})
 	// G118: this goroutine intentionally falls back to a fresh background
 	// context for the shutdown flush. The flush is reacting to ctx being
 	// canceled, so reusing ctx would abort every UpdateClientLastSeen call
 	// before it touched the DB and silently drop the pending updates.
 	//nolint:gosec // G118: see comment above
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -122,4 +125,5 @@ func (t *LastSeenTracker) StartFlushLoop(ctx context.Context, interval time.Dura
 			}
 		}
 	}()
+	return done
 }
