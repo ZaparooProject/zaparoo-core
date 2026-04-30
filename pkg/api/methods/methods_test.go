@@ -115,10 +115,10 @@ type stubScraper struct {
 	name string
 }
 
-func (s *stubScraper) ID() string                 { return s.id }
-func (s *stubScraper) Name() string               { return s.name }
-func (s *stubScraper) SupportedSystems() []string { return []string{} }
-func (s *stubScraper) Scrape(_ context.Context, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
+func (s *stubScraper) ID() string               { return s.id }
+func (s *stubScraper) Name() string             { return s.name }
+func (*stubScraper) SupportedSystems() []string { return []string{} }
+func (*stubScraper) Scrape(_ context.Context, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
 	ch := make(chan scraper.ScrapeUpdate)
 	close(ch)
 	return ch, nil

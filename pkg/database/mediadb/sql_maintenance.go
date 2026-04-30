@@ -60,7 +60,9 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	delete from TagTypes;
 	delete from Systems;
 	delete from SlugResolutionCache;
-	delete from BrowseCache;
+	delete from BrowseDirCounts;
+	delete from BrowseEntries;
+	delete from BrowseDirs;
 	`
 	_, err = db.ExecContext(ctx, sqlStmt)
 	if err != nil {

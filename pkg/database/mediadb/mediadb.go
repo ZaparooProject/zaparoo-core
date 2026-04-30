@@ -604,8 +604,7 @@ func (db *MediaDB) Truncate() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	err := sqlTruncate(db.ctx, db.sql)
-	if err != nil {
+	if err := sqlTruncate(db.ctx, db.sql); err != nil {
 		return err
 	}
 	if err := sqlInvalidateBrowseCache(db.ctx, db.sql, nil, true); err != nil {
@@ -616,7 +615,7 @@ func (db *MediaDB) Truncate() error {
 	db.invalidateCaches(invalidationScope{AllSystems: true})
 
 	// Reclaim disk space freed by the truncation
-	if err = sqlVacuum(db.ctx, db.sql); err != nil {
+	if err := sqlVacuum(db.ctx, db.sql); err != nil {
 		return fmt.Errorf("failed to vacuum after truncate: %w", err)
 	}
 

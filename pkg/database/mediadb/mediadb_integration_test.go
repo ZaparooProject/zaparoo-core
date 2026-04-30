@@ -1544,10 +1544,10 @@ func TestMediaDB_Truncate_AllCachesCleared_Integration(t *testing.T) {
 	_, _, slugFound := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
 	assert.True(t, slugFound, "slug cache should be populated")
 
-	var browseCount int
-	err = mediaDB.UnsafeGetSQLDb().QueryRowContext(ctx, "SELECT COUNT(*) FROM BrowseCache").Scan(&browseCount)
+	var browseDirCount int
+	err = mediaDB.UnsafeGetSQLDb().QueryRowContext(ctx, "SELECT COUNT(*) FROM BrowseDirs").Scan(&browseDirCount)
 	require.NoError(t, err)
-	assert.Greater(t, browseCount, 0, "BrowseCache should be populated")
+	assert.Positive(t, browseDirCount, "BrowseDirs should be populated")
 
 	// Truncate all data
 	err = mediaDB.Truncate()
@@ -1562,10 +1562,10 @@ func TestMediaDB_Truncate_AllCachesCleared_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, tags, "system tags cache should be cleared after truncate")
 
-	// Verify BrowseCache is cleared
-	err = mediaDB.UnsafeGetSQLDb().QueryRowContext(ctx, "SELECT COUNT(*) FROM BrowseCache").Scan(&browseCount)
+	// Verify browse v2 tables are cleared
+	err = mediaDB.UnsafeGetSQLDb().QueryRowContext(ctx, "SELECT COUNT(*) FROM BrowseDirs").Scan(&browseDirCount)
 	require.NoError(t, err)
-	assert.Equal(t, 0, browseCount, "BrowseCache should be cleared after truncate")
+	assert.Equal(t, 0, browseDirCount, "BrowseDirs should be cleared after truncate")
 }
 
 // TestCheckForDuplicateMediaTitles_Integration tests duplicate detection with real database.
