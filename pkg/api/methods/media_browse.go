@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -73,6 +74,15 @@ func decodeBrowseCursor(cursor string) (*database.BrowseCursor, error) {
 
 // browseSem limits concurrent media.browse requests to avoid saturating SQLite.
 var browseSem = make(chan struct{}, 3)
+
+func logBrowseTiming(operation, path string, started time.Time, rows int) {
+	log.Debug().
+		Str("operation", operation).
+		Str("path", path).
+		Int("rows", rows).
+		Dur("duration", time.Since(started)).
+		Msg("media browse query completed")
+}
 
 // HandleMediaBrowse handles the media.browse API method for directory-style
 // navigation of indexed media content.
@@ -204,10 +214,22 @@ func browseRoots(env *requests.RequestEnv) (any, error) {
 }
 
 func browseSystemRoots(env *requests.RequestEnv, systems []systemdefs.System) (any, error) {
+	started := time.Now()
 	routes, err := buildSystemBrowseRouteCandidates(env, systems)
 	if err != nil {
 		return nil, err
 	}
+	systemIDs := make([]string, 0, len(systems))
+	for _, system := range systems {
+		systemIDs = append(systemIDs, system.ID)
+	}
+	log.Debug().
+		Strs("systems", systemIDs).
+		Int("routes", len(routes)).
+		Dur("elapsed", time.Since(started)).
+		Msg("media browse system root candidates built")
+
+	started = time.Now()
 	counts, err := env.Database.MediaDB.BrowseRouteCounts(env.Context, database.BrowseRouteCountsOptions{
 		Routes:  routes,
 		Systems: systems,
@@ -215,6 +237,12 @@ func browseSystemRoots(env *requests.RequestEnv, systems []systemdefs.System) (a
 	if err != nil {
 		return nil, fmt.Errorf("error getting system route counts: %w", err)
 	}
+	log.Debug().
+		Strs("systems", systemIDs).
+		Int("routes", len(routes)).
+		Int("counts", len(counts)).
+		Dur("elapsed", time.Since(started)).
+		Msg("media browse system root counts loaded")
 
 	entries := make([]models.BrowseEntry, 0, len(routes))
 	schemeGroups := buildSchemeGroupMap(env)
@@ -241,7 +269,67 @@ func browseSystemRoots(env *requests.RequestEnv, systems []systemdefs.System) (a
 		entries = append(entries, entry)
 	}
 
+	entries = dedupeSystemRootEntries(entries)
+
 	return models.BrowseResults{Entries: entries}, nil
+}
+
+func dedupeSystemRootEntries(entries []models.BrowseEntry) []models.BrowseEntry {
+	if len(entries) < 2 {
+		return entries
+	}
+
+	filtered := make([]models.BrowseEntry, 0, len(entries))
+	for i := range entries {
+		if systemRootEntryCoveredByDescendant(entries, i) {
+			continue
+		}
+		filtered = append(filtered, entries[i])
+	}
+
+	return filtered
+}
+
+func systemRootEntryCoveredByDescendant(entries []models.BrowseEntry, parentIdx int) bool {
+	parent := entries[parentIdx]
+	if parent.FileCount == nil {
+		return false
+	}
+
+	for childIdx := range entries {
+		if childIdx == parentIdx {
+			continue
+		}
+
+		child := entries[childIdx]
+		if child.FileCount == nil || *child.FileCount != *parent.FileCount {
+			continue
+		}
+		if isStrictFilesystemDescendant(child.Path, parent.Path) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isStrictFilesystemDescendant(childPath, parentPath string) bool {
+	if strings.Contains(childPath, "://") || strings.Contains(parentPath, "://") {
+		return false
+	}
+
+	child := filepath.Clean(childPath)
+	parent := filepath.Clean(parentPath)
+	if child == parent {
+		return false
+	}
+
+	parentWithSeparator := parent
+	if !strings.HasSuffix(parentWithSeparator, string(filepath.Separator)) {
+		parentWithSeparator += string(filepath.Separator)
+	}
+
+	return strings.HasPrefix(child, parentWithSeparator)
 }
 
 func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []systemdefs.System) ([]string, error) {
@@ -298,10 +386,12 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 			if !strings.HasSuffix(prefix, "/") {
 				prefix += "/"
 			}
+			started := time.Now()
 			fileCount, err := env.Database.MediaDB.BrowseFileCount(env.Context, database.BrowseFileCountOptions{
 				PathPrefix: prefix,
 				Systems:    systems,
 			})
+			logBrowseTiming("system_root_file_count", prefix, started, fileCount)
 			if err != nil {
 				return nil, fmt.Errorf("error getting system root file count: %w", err)
 			}
@@ -309,10 +399,12 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 				addFilesystemRoute(root)
 			}
 
+			started = time.Now()
 			dirs, err := env.Database.MediaDB.BrowseDirectories(env.Context, database.BrowseDirectoriesOptions{
 				PathPrefix: prefix,
 				Systems:    systems,
 			})
+			logBrowseTiming("system_root_directories", prefix, started, len(dirs))
 			if err != nil {
 				return nil, fmt.Errorf("error getting system route directories: %w", err)
 			}
@@ -321,10 +413,12 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 			}
 		}
 
+		started := time.Now()
 		virtualSchemes, err := env.Database.MediaDB.BrowseVirtualSchemes(
 			env.Context,
 			database.BrowseVirtualSchemesOptions{Systems: systems},
 		)
+		logBrowseTiming("system_virtual_schemes", "", started, len(virtualSchemes))
 		if err != nil {
 			return nil, fmt.Errorf("error getting system virtual routes: %w", err)
 		}
@@ -398,10 +492,12 @@ func browseFilesystem(
 	var dirs []database.BrowseDirectoryResult
 	if cursor == nil {
 		var err error
+		started := time.Now()
 		dirs, err = env.Database.MediaDB.BrowseDirectories(ctx, database.BrowseDirectoriesOptions{
 			PathPrefix: prefix,
 			Systems:    systems,
 		})
+		logBrowseTiming("directories", prefix, started, len(dirs))
 		if err != nil {
 			return nil, fmt.Errorf("error browsing directories: %w", err)
 		}
@@ -416,7 +512,9 @@ func browseFilesystem(
 		Sort:       sort,
 		Systems:    systems,
 	}
+	started := time.Now()
 	files, err := env.Database.MediaDB.BrowseFiles(ctx, opts)
+	logBrowseTiming("files", prefix, started, len(files))
 	if err != nil {
 		return nil, fmt.Errorf("error browsing files: %w", err)
 	}
@@ -424,11 +522,13 @@ func browseFilesystem(
 	// Get total file count (skip when no files and no cursor — count is obviously 0)
 	var totalFiles int
 	if len(files) > 0 || cursor != nil {
+		started = time.Now()
 		totalFiles, err = env.Database.MediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
 			PathPrefix: prefix,
 			Letter:     letter,
 			Systems:    systems,
 		})
+		logBrowseTiming("file_count", prefix, started, totalFiles)
 		if err != nil {
 			return nil, fmt.Errorf("error getting file count: %w", err)
 		}
@@ -462,16 +562,20 @@ func browseVirtual(
 		Sort:       sort,
 		Systems:    systems,
 	}
+	started := time.Now()
 	files, err := env.Database.MediaDB.BrowseFiles(ctx, opts)
+	logBrowseTiming("virtual_files", schemePath, started, len(files))
 	if err != nil {
 		return nil, fmt.Errorf("error browsing virtual media: %w", err)
 	}
 
+	started = time.Now()
 	totalFiles, err := env.Database.MediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
 		PathPrefix: schemePath,
 		Letter:     letter,
 		Systems:    systems,
 	})
+	logBrowseTiming("virtual_file_count", schemePath, started, totalFiles)
 	if err != nil {
 		return nil, fmt.Errorf("error getting virtual file count: %w", err)
 	}

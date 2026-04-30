@@ -56,16 +56,33 @@ func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "browse_cache").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	// PopulateBrowseCache: SELECT (empty), BEGIN, DELETEs, Prepares, COMMIT
-	mock.ExpectQuery("SELECT SystemDBID, Path FROM Media").
-		WillReturnRows(sqlmock.NewRows([]string{"SystemDBID", "Path"}))
+	// PopulateBrowseCache: BEGIN, SELECT (empty), index drops, DELETEs, root dir insert,
+	// index creates, count prepare, COMMIT.
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM BrowseCache").
+	mock.ExpectQuery("SELECT m.DBID, m.SystemDBID, m.Path, mt.Name").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID", "SystemDBID", "Path", "Name"}))
+	mock.ExpectExec("DROP INDEX IF EXISTS idx_browseentries_parent_system_name").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("DELETE FROM BrowseSystemCache").
+	mock.ExpectExec("DROP INDEX IF EXISTS idx_browseentries_parent_system_file").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectPrepare("INSERT INTO BrowseCache")
-	mock.ExpectPrepare("INSERT INTO BrowseSystemCache")
+	mock.ExpectExec("DELETE FROM BrowseDirCounts").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DELETE FROM BrowseEntries").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DELETE FROM BrowseDirs").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectPrepare("INSERT INTO BrowseDirs").
+		ExpectExec().
+		WithArgs(int64(1), nil, "/", "/", false).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_browseentries_parent_system_name").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_browseentries_parent_system_file").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectPrepare("INSERT INTO BrowseDirCounts")
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigBrowseIndexVersion, browseIndexVersion).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 }
 

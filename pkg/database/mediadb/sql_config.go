@@ -36,6 +36,7 @@ const (
 	DBConfigIndexingStatus     = "IndexingStatus"
 	DBConfigLastIndexedSystem  = "LastIndexedSystem"
 	DBConfigIndexingSystems    = "IndexingSystems"
+	DBConfigBrowseIndexVersion = "BrowseIndexVersion"
 )
 
 func sqlUpdateLastGenerated(ctx context.Context, db sqlQueryable) error {

@@ -373,23 +373,7 @@ var secondaryIndexes = []secondaryIndex{
 		name: "idx_slug_cache_media",
 		ddl:  "CREATE INDEX IF NOT EXISTS idx_slug_cache_media ON SlugResolutionCache(MediaDBID)",
 	},
-	{
-		name: "idx_browsecache_parent",
-		ddl:  "CREATE INDEX IF NOT EXISTS idx_browsecache_parent ON BrowseCache(ParentPath)",
-	},
 	{name: "idx_media_parentdir", ddl: "CREATE INDEX IF NOT EXISTS idx_media_parentdir ON Media(ParentDir)"},
-	{
-		name: "idx_browsesystemcache_parent",
-		ddl:  "CREATE INDEX IF NOT EXISTS idx_browsesystemcache_parent ON BrowseSystemCache(SystemDBID, ParentPath)",
-	},
-	{
-		name: "idx_browsesystemcache_dir",
-		ddl:  "CREATE INDEX IF NOT EXISTS idx_browsesystemcache_dir ON BrowseSystemCache(DirPath)",
-	},
-	{
-		name: "idx_browsesystemcache_virtual",
-		ddl:  "CREATE INDEX IF NOT EXISTS idx_browsesystemcache_virtual ON BrowseSystemCache(SystemDBID, IsVirtual)",
-	},
 	{
 		name: "idx_media_parentdir_system",
 		ddl:  "CREATE INDEX IF NOT EXISTS idx_media_parentdir_system ON Media(ParentDir, SystemDBID)",
@@ -2060,7 +2044,13 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 
 	// Use batch inserter if available
 	if db.batchInsertMedia != nil {
-		err = db.batchInsertMedia.Add(row.DBID, row.MediaTitleDBID, row.SystemDBID, row.Path, row.ParentDir)
+		err = db.batchInsertMedia.Add(
+			row.DBID,
+			row.MediaTitleDBID,
+			row.SystemDBID,
+			row.Path,
+			row.ParentDir,
+		)
 		if err != nil {
 			return row, fmt.Errorf("failed to add media to batch: %w", err)
 		}

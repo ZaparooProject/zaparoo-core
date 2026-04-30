@@ -25,6 +25,9 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -33,6 +36,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -45,7 +49,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/restart"
 	"github.com/rs/zerolog/log"
 )
 
@@ -75,12 +78,34 @@ type commandWaiter struct {
 	once sync.Once
 }
 
+type serviceBinaryManifest struct {
+	SourcePath          string `json:"sourcePath"`
+	SourceHash          string `json:"sourceHash"`
+	ServicePath         string `json:"servicePath"`
+	SourceSize          int64  `json:"sourceSize"`
+	SourceModTimeNS     int64  `json:"sourceModTimeNs"`
+	SourceChangeTimeNS  int64  `json:"sourceChangeTimeNs"`
+	ServiceSize         int64  `json:"serviceSize"`
+	ServiceModTimeNS    int64  `json:"serviceModTimeNs"`
+	ServiceChangeTimeNS int64  `json:"serviceChangeTimeNs"`
+}
+
+type restartExecConfig struct {
+	serviceBin string
+	binPath    string
+	args       []string
+	env        []string
+}
+
 const (
 	serviceStopTimeout        = 10 * time.Second
 	serviceKillTimeout        = 3 * time.Second
 	serviceStopPollInterval   = 100 * time.Millisecond
 	servicePortReleaseTimeout = 3 * time.Second
 	daemonReadyTimeout        = 3 * time.Second
+	serviceManifestName       = "service_manifest.json"
+	serviceHashLength         = 16
+	serviceCopiesToKeep       = 2
 )
 
 func NewService(args ServiceArgs) (*Service, error) {
@@ -228,69 +253,415 @@ func (s *Service) stopService() error {
 		return err
 	}
 
-	s.cleanupServiceBinary()
-
 	return nil
 }
 
-// prepareBinary copies the binary into DataDir so the original can be
-// replaced by external updaters while the service is running.
+// prepareBinary keeps a persistent service binary cache in DataDir so the
+// package-manager target can be replaced while the daemon is running.
 func (s *Service) prepareBinary(binPath string) (string, error) {
-	ext := filepath.Ext(binPath)
-	name := strings.TrimSuffix(filepath.Base(binPath), ext)
-	copyName := name + ".service" + ext
+	started := time.Now()
 	dataDir := helpers.DataDir(s.pl)
-	copyPath := filepath.Join(dataDir, copyName)
-
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return "", fmt.Errorf("error creating data directory: %w", err)
 	}
 
-	equal, eqErr := filesEqual(binPath, copyPath)
-	if eqErr != nil {
-		log.Warn().Err(eqErr).Msg("error comparing binaries, proceeding with copy")
-	} else if equal {
-		log.Debug().Msg("skipping binary copy, service binary already up to date")
-		return copyPath, nil
+	sourceInfo, err := os.Stat(binPath) //nolint:gosec // G703: binPath from os.Executable()/ZAPAROO_APP.
+	if err != nil {
+		return "", fmt.Errorf("error statting binary: %w", err)
 	}
+	sourceChangeTimeNS := fileChangeTimeNS(sourceInfo)
+
+	manifest, manifestErr := readServiceBinaryManifest(dataDir)
+	if manifestErr != nil && !errors.Is(manifestErr, os.ErrNotExist) {
+		log.Debug().Err(manifestErr).Msg("error reading service binary manifest")
+	}
+	if manifest != nil && manifest.matchesSourceMetadata(binPath, sourceInfo, sourceChangeTimeNS) {
+		servicePath := serviceCachePath(dataDir, binPath, manifest.SourceHash)
+		if filepath.Clean(manifest.ServicePath) == filepath.Clean(servicePath) &&
+			serviceCachePathValid(manifest.ServicePath, dataDir) {
+			cachedInfo, statErr := os.Stat(manifest.ServicePath)
+			switch {
+			case statErr == nil && manifest.matchesServiceMetadata(cachedInfo):
+				log.Debug().
+					Str("path", manifest.ServicePath).
+					Dur("duration", time.Since(started)).
+					Msg("using cached service binary from manifest")
+				s.cleanupServiceBinaries(manifest.ServicePath, "")
+				return manifest.ServicePath, nil
+			case statErr != nil && !errors.Is(statErr, os.ErrNotExist):
+				log.Debug().Err(statErr).Str("path", manifest.ServicePath).Msg("error checking cached service binary")
+			case statErr == nil:
+				log.Debug().
+					Str("path", manifest.ServicePath).
+					Int64("cachedSize", cachedInfo.Size()).
+					Int64("cachedModTimeNs", cachedInfo.ModTime().UnixNano()).
+					Msg("cached service binary metadata mismatch")
+			}
+		}
+	}
+
+	hashStarted := time.Now()
+	sourceHash, err := hashFileSHA256(binPath)
+	if err != nil {
+		return "", err
+	}
+	log.Debug().
+		Dur("duration", time.Since(hashStarted)).
+		Str("hash", shortServiceHash(sourceHash)).
+		Msg("hashed service source binary")
+	servicePath := serviceCachePath(dataDir, binPath, sourceHash)
+
+	if _, statErr := os.Stat(servicePath); statErr != nil {
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return "", fmt.Errorf("error checking service binary: %w", statErr)
+		}
+		copyErr := copyServiceBinary(binPath, servicePath)
+		if copyErr != nil {
+			return "", copyErr
+		}
+	} else {
+		cachedHash, hashErr := hashFileSHA256(servicePath)
+		if hashErr != nil {
+			return "", hashErr
+		}
+		if cachedHash != sourceHash {
+			copyErr := copyServiceBinary(binPath, servicePath)
+			if copyErr != nil {
+				return "", copyErr
+			}
+		} else {
+			log.Debug().Str("path", servicePath).Msg("using existing hashed service binary")
+		}
+	}
+
+	serviceInfo, err := os.Stat(servicePath)
+	if err != nil {
+		return "", fmt.Errorf("error statting service binary: %w", err)
+	}
+
+	newManifest := serviceBinaryManifest{
+		SourcePath:          binPath,
+		SourceSize:          sourceInfo.Size(),
+		SourceModTimeNS:     sourceInfo.ModTime().UnixNano(),
+		SourceChangeTimeNS:  sourceChangeTimeNS,
+		SourceHash:          sourceHash,
+		ServicePath:         servicePath,
+		ServiceSize:         serviceInfo.Size(),
+		ServiceModTimeNS:    serviceInfo.ModTime().UnixNano(),
+		ServiceChangeTimeNS: fileChangeTimeNS(serviceInfo),
+	}
+	manifestWriteErr := writeServiceBinaryManifest(dataDir, &newManifest)
+	if manifestWriteErr != nil {
+		return "", manifestWriteErr
+	}
+
+	previousPath := ""
+	if manifest != nil {
+		previousPath = manifest.ServicePath
+	}
+	s.cleanupServiceBinaries(servicePath, previousPath)
+
+	log.Debug().Str("path", servicePath).Dur("duration", time.Since(started)).Msg("prepared service binary")
+	return servicePath, nil
+}
+
+func copyServiceBinary(binPath, servicePath string) error {
+	ext := filepath.Ext(binPath)
+	name := strings.TrimSuffix(filepath.Base(binPath), ext)
 
 	//nolint:gosec // G304: binPath from os.Executable()
 	binFile, err := os.Open(binPath)
 	if err != nil {
-		return "", fmt.Errorf("error opening binary: %w", err)
+		return fmt.Errorf("error opening binary: %w", err)
 	}
 	defer func() { _ = binFile.Close() }()
 
-	//nolint:gosec // creates service binary copy in data dir
-	copyFile, err := os.OpenFile(
-		copyPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o700,
-	)
+	tmpFile, err := os.CreateTemp(filepath.Dir(servicePath), name+".*.tmp")
 	if err != nil {
-		return "", fmt.Errorf("error creating service binary: %w", err)
+		return fmt.Errorf("error creating temporary service binary: %w", err)
 	}
-	defer func() { _ = copyFile.Close() }()
+	tmpPath := tmpFile.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	defer func() { _ = tmpFile.Close() }()
 
-	_, err = io.Copy(copyFile, binFile)
+	chmodErr := tmpFile.Chmod(0o700)
+	if chmodErr != nil {
+		return fmt.Errorf("error setting service binary permissions: %w", chmodErr)
+	}
+
+	_, err = io.Copy(tmpFile, binFile)
 	if err != nil {
-		return "", fmt.Errorf("error copying binary: %w", err)
+		return fmt.Errorf("error copying binary: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("error closing service binary: %w", err)
+	}
+	if err := os.Rename(tmpPath, servicePath); err != nil {
+		return fmt.Errorf("error replacing service binary: %w", err)
 	}
 
-	return copyPath, nil
+	return nil
 }
 
-// cleanupServiceBinary removes the service binary copy from DataDir.
-func (s *Service) cleanupServiceBinary() {
-	exePath, err := os.Executable()
+// cleanupServiceBinary is retained for older call paths. Cached service
+// binaries are pruned by prepareBinary so normal restarts can reuse them.
+func (*Service) cleanupServiceBinary() {
+}
+
+func readServiceBinaryManifest(dataDir string) (*serviceBinaryManifest, error) {
+	path := filepath.Join(dataDir, serviceManifestName)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is internal DataDir manifest.
 	if err != nil {
-		log.Error().Err(err).Msg("error getting executable path")
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, os.ErrNotExist
+		}
+		return nil, fmt.Errorf("error reading service binary manifest: %w", err)
+	}
+
+	var manifest serviceBinaryManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("error parsing service binary manifest: %w", err)
+	}
+	return &manifest, nil
+}
+
+func writeServiceBinaryManifest(dataDir string, manifest *serviceBinaryManifest) error {
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("error encoding service binary manifest: %w", err)
+	}
+	data = append(data, '\n')
+
+	manifestPath := filepath.Join(dataDir, serviceManifestName)
+	tmpFile, err := os.CreateTemp(dataDir, serviceManifestName+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("error creating temporary service binary manifest: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	defer func() { _ = tmpFile.Close() }()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		return fmt.Errorf("error writing service binary manifest: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("error closing service binary manifest: %w", err)
+	}
+	if err := os.Rename(tmpPath, manifestPath); err != nil {
+		return fmt.Errorf("error replacing service binary manifest: %w", err)
+	}
+	return nil
+}
+
+func (m *serviceBinaryManifest) matchesSourceMetadata(binPath string, info os.FileInfo, changeTimeNS int64) bool {
+	return m.SourcePath == binPath &&
+		m.SourceSize == info.Size() &&
+		m.SourceModTimeNS == info.ModTime().UnixNano() &&
+		m.SourceChangeTimeNS != 0 &&
+		m.SourceChangeTimeNS == changeTimeNS &&
+		m.SourceHash != "" &&
+		m.ServicePath != ""
+}
+
+func (m *serviceBinaryManifest) matchesServiceMetadata(info os.FileInfo) bool {
+	return m.ServiceSize == info.Size() &&
+		m.ServiceModTimeNS == info.ModTime().UnixNano() &&
+		m.ServiceChangeTimeNS != 0 &&
+		m.ServiceChangeTimeNS == fileChangeTimeNS(info)
+}
+
+func fileChangeTimeNS(info os.FileInfo) int64 {
+	if info == nil || info.Sys() == nil {
+		return 0
+	}
+
+	sys := reflect.ValueOf(info.Sys())
+	if sys.Kind() == reflect.Pointer {
+		sys = sys.Elem()
+	}
+	if !sys.IsValid() || sys.Kind() != reflect.Struct {
+		return 0
+	}
+
+	for _, name := range []string{"Ctim", "Ctimespec"} {
+		if ns := timespecFieldNS(sys.FieldByName(name)); ns != 0 {
+			return ns
+		}
+	}
+	return 0
+}
+
+func timespecFieldNS(field reflect.Value) int64 {
+	if !field.IsValid() || field.Kind() != reflect.Struct {
+		return 0
+	}
+	sec := field.FieldByName("Sec")
+	nsec := field.FieldByName("Nsec")
+	if !sec.IsValid() || !nsec.IsValid() || !sec.CanInt() || !nsec.CanInt() {
+		return 0
+	}
+	return sec.Int()*int64(time.Second) + nsec.Int()
+}
+
+func serviceCachePath(dataDir, binPath, sourceHash string) string {
+	ext := filepath.Ext(binPath)
+	return filepath.Join(dataDir, "zaparoo."+shortServiceHash(sourceHash)+ext)
+}
+
+func shortServiceHash(sourceHash string) string {
+	if len(sourceHash) <= serviceHashLength {
+		return sourceHash
+	}
+	return sourceHash[:serviceHashLength]
+}
+
+func hashFileSHA256(path string) (string, error) {
+	//nolint:gosec // G304: path from os.Executable()/ZAPAROO_APP.
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("error opening binary for hash: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, file); err != nil {
+		return "", fmt.Errorf("error hashing binary: %w", err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func serviceCachePathValid(path, dataDir string) bool {
+	if path == "" {
+		return false
+	}
+	cleanDataDir := filepath.Clean(dataDir)
+	cleanPath := filepath.Clean(path)
+	rel, err := filepath.Rel(cleanDataDir, cleanPath)
+	if err != nil || rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	return filepath.Dir(rel) == "." && isServiceCacheFilename(filepath.Base(rel))
+}
+
+func isServiceCacheFilename(name string) bool {
+	if name == "" || strings.Contains(name, string(filepath.Separator)) {
+		return false
+	}
+	if name == "zaparoo.service" || name == "zaparoo.service.sh" {
+		return true
+	}
+
+	const prefix = "zaparoo."
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	hash := strings.TrimPrefix(name, prefix)
+	if strings.HasSuffix(hash, ".sh") {
+		hash = strings.TrimSuffix(hash, ".sh")
+	} else if strings.Contains(hash, ".") {
+		return false
+	}
+	if len(hash) != serviceHashLength {
+		return false
+	}
+	for _, c := range hash {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) cleanupServiceBinaries(currentPath, previousPath string) {
+	dataDir := helpers.DataDir(s.pl)
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		log.Debug().Err(err).Msg("error reading service binary cache directory")
 		return
 	}
-	if !strings.HasPrefix(exePath, helpers.DataDir(s.pl)) {
-		return
+
+	keep := map[string]struct{}{}
+	for _, path := range []string{currentPath, previousPath} {
+		if serviceCachePathValid(path, dataDir) {
+			keep[filepath.Clean(path)] = struct{}{}
+		}
 	}
-	if rmErr := os.Remove(exePath); rmErr != nil {
-		log.Error().Err(rmErr).Msg("error removing service binary")
+
+	candidates := make([]os.FileInfo, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || !isServiceCacheFilename(entry.Name()) {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			log.Debug().Err(infoErr).Str("name", entry.Name()).Msg("error checking service binary cache file")
+			continue
+		}
+		candidates = append(candidates, info)
 	}
+
+	for len(keep) < serviceCopiesToKeep {
+		newestPath := newestUnkeptServiceBinary(dataDir, candidates, keep)
+		if newestPath == "" {
+			break
+		}
+		keep[newestPath] = struct{}{}
+	}
+
+	for _, info := range candidates {
+		path := filepath.Join(dataDir, info.Name())
+		cleanPath := filepath.Clean(path)
+		if _, ok := keep[cleanPath]; ok {
+			continue
+		}
+		if s.isRunningServiceBinary(cleanPath) {
+			log.Debug().Str("path", cleanPath).Msg("skipping cleanup of running service binary")
+			continue
+		}
+		if err := os.Remove(cleanPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Debug().Err(err).Str("path", cleanPath).Msg("error removing stale service binary")
+		}
+	}
+}
+
+func newestUnkeptServiceBinary(dataDir string, candidates []os.FileInfo, keep map[string]struct{}) string {
+	newestPath := ""
+	var newestModTime time.Time
+	for _, info := range candidates {
+		path := filepath.Clean(filepath.Join(dataDir, info.Name()))
+		if _, ok := keep[path]; ok {
+			continue
+		}
+		if newestPath == "" || info.ModTime().After(newestModTime) {
+			newestPath = path
+			newestModTime = info.ModTime()
+		}
+	}
+	return newestPath
+}
+
+func (s *Service) isRunningServiceBinary(path string) bool {
+	pid, err := s.Pid()
+	if err != nil || pid <= 0 || runtime.GOOS != "linux" {
+		return false
+	}
+	cleanPath := filepath.Clean(path)
+	exePath, err := os.Readlink(filepath.Join(procDir(), strconv.Itoa(pid), "exe"))
+	if err == nil && filepath.Clean(exePath) == cleanPath {
+		return true
+	}
+
+	cmdlinePath := filepath.Join(procDir(), strconv.Itoa(pid), "cmdline")
+	cmdline, err := os.ReadFile(cmdlinePath) //nolint:gosec // reads process status for service management
+	if err != nil {
+		return false
+	}
+	for _, arg := range strings.Split(string(cmdline), "\x00") {
+		if filepath.Clean(arg) == cleanPath {
+			return true
+		}
+	}
+	return false
 }
 
 // filesEqual reports whether the files at pathA and pathB have identical
@@ -425,11 +796,7 @@ func (s *Service) startService() {
 	}
 
 	if result.RestartRequested != nil && result.RestartRequested() {
-		log.Info().Msg("restart requested, re-executing binary")
-
-		s.cleanupServiceBinary()
-
-		if execErr := restart.Exec(); execErr != nil {
+		if execErr := s.restartServiceBinary(); execErr != nil {
 			log.Error().Err(execErr).Msg("failed to re-exec for restart")
 			os.Exit(1)
 		}
@@ -438,8 +805,77 @@ func (s *Service) startService() {
 	os.Exit(0)
 }
 
+func (s *Service) restartServiceBinary() error {
+	cfg, err := s.restartExecConfig(os.Args, os.Environ())
+	if err != nil {
+		return err
+	}
+
+	log.Info().
+		Str("binary", cfg.serviceBin).
+		Str("source", cfg.binPath).
+		Strs("args", os.Args).
+		Msg("restart requested, re-executing service binary")
+
+	//nolint:gosec // Safe: serviceBin is prepared from os.Executable() or ZAPAROO_APP.
+	err = syscall.Exec(cfg.serviceBin, cfg.args, cfg.env)
+	return fmt.Errorf("exec failed: %w", err)
+}
+
+func (s *Service) restartExecConfig(
+	args []string,
+	env []string,
+) (restartExecConfig, error) {
+	binPath, err := serviceSourceBinaryPath()
+	if err != nil {
+		return restartExecConfig{}, err
+	}
+	serviceBin, err := s.prepareBinary(binPath)
+	if err != nil {
+		return restartExecConfig{}, err
+	}
+	return restartExecConfig{
+		serviceBin: serviceBin,
+		binPath:    binPath,
+		args:       serviceExecArgs(serviceBin, args),
+		env:        serviceExecEnv(env, binPath),
+	}, nil
+}
+
+func serviceSourceBinaryPath() (string, error) {
+	if appPath := os.Getenv(config.AppEnv); appPath != "" {
+		return appPath, nil
+	}
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("error getting absolute binary path: %w", err)
+	}
+	return exePath, nil
+}
+
+func serviceExecEnv(env []string, appPath string) []string {
+	appEnv := fmt.Sprintf("%s=%s", config.AppEnv, appPath)
+	for i, value := range env {
+		if strings.HasPrefix(value, config.AppEnv+"=") {
+			env[i] = appEnv
+			return env
+		}
+	}
+	return append(env, appEnv)
+}
+
+func serviceExecArgs(serviceBin string, args []string) []string {
+	if len(args) == 0 {
+		return []string{serviceBin}
+	}
+	execArgs := append([]string(nil), args...)
+	execArgs[0] = serviceBin
+	return execArgs
+}
+
 // Start a new service daemon in the background.
 func (s *Service) Start() error {
+	started := time.Now()
 	running, err := s.Running()
 	if err != nil {
 		return err
@@ -448,29 +884,23 @@ func (s *Service) Start() error {
 		return errors.New("service already running")
 	}
 
-	binPath := ""
-	appPath := os.Getenv(config.AppEnv)
-	if appPath != "" {
-		binPath = appPath
-	} else {
-		exePath, exeErr := os.Executable()
-		if exeErr != nil {
-			return fmt.Errorf("error getting absolute binary path: %w", exeErr)
-		}
-		binPath = exePath
+	binPath, err := serviceSourceBinaryPath()
+	if err != nil {
+		return err
 	}
 
+	prepareStarted := time.Now()
 	serviceBin, err := s.prepareBinary(binPath)
 	if err != nil {
 		return err
 	}
+	log.Debug().Dur("duration", time.Since(prepareStarted)).Msg("service binary prepared")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	//nolint:gosec // Safe: executes copy of current binary for service restart
 	cmd := exec.CommandContext(ctx, serviceBin, "-service", "exec")
-	env := os.Environ()
-	cmd.Env = env
+	cmd.Env = serviceExecEnv(os.Environ(), binPath)
 
 	// Detach from parent: create new session
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -483,12 +913,13 @@ func (s *Service) Start() error {
 	if _, statErr := os.Stat(configPath); statErr == nil {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", config.CfgEnv, configPath))
 	}
-	cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", config.AppEnv, binPath))
 
+	cmdStarted := time.Now()
 	err = cmd.Start()
 	if err != nil {
 		return fmt.Errorf("error starting service: %w", err)
 	}
+	log.Debug().Dur("duration", time.Since(cmdStarted)).Msg("service process start command completed")
 
 	err = cmd.Process.Release()
 	if err != nil {
@@ -504,7 +935,7 @@ func (s *Service) Start() error {
 		return fmt.Errorf("service started but PID file not found: %w", pidErr)
 	}
 
-	log.Info().Msgf("service process started with PID %d", pid)
+	log.Info().Int("pid", pid).Dur("duration", time.Since(started)).Msg("service process started")
 
 	running, err = s.Running()
 	if err != nil {
@@ -655,14 +1086,7 @@ func procDir() string {
 }
 
 func pathLooksLikeServiceBinary(path, dataDir string) bool {
-	if path == "" || dataDir == "" {
-		return false
-	}
-	rel, err := filepath.Rel(filepath.Clean(dataDir), filepath.Clean(path))
-	if err != nil || rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, "..") {
-		return false
-	}
-	return filepath.Dir(rel) == "." && strings.Contains(filepath.Base(rel), ".service")
+	return serviceCachePathValid(path, dataDir)
 }
 
 func waitForPIDExit(
