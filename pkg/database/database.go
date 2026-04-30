@@ -171,13 +171,27 @@ type TagType struct {
 //
 // For writes: set TypeTag to the full "type:value" string (e.g. "property:description").
 // The database layer resolves the TypeTagDBID from TypeTag automatically.
-// For reads: TypeTag is populated from the joined Tags row; TypeTagDBID is also set.
+// To associate binary data with a property, call UpsertMediaBlob first to obtain
+// a BlobDBID, then set that field before upserting the property.
+// For reads: TypeTag is populated from the joined Tags row; TypeTagDBID is also
+// set. ContentType and Binary are hydrated from the MediaBlobs JOIN and are
+// read-only — do not set them for writes.
 type MediaProperty struct {
+	BlobDBID    *int64
 	TypeTag     string
 	Text        string
 	ContentType string
 	Binary      []byte
 	TypeTagDBID int64
+}
+
+// MediaBlob is a row from the MediaBlobs content-addressed store.
+// Data is identified by the hex-encoded SHA-256 of its content.
+type MediaBlob struct {
+	Hash        string
+	ContentType string
+	Data        []byte
+	DBID        int64
 }
 
 type Tag struct {
@@ -643,4 +657,18 @@ type MediaDBI interface {
 	// GetMediaTitleTagsByMediaTitleDBID returns the title-level tags
 	// (MediaTitleTags) for a single MediaTitle row.
 	GetMediaTitleTagsByMediaTitleDBID(ctx context.Context, mediaTitleDBID int64) ([]TagInfo, error)
+
+	// UpsertMediaBlob inserts a blob into MediaBlobs when no row with the same
+	// SHA-256 hash already exists, then returns its DBID. Hash computation is
+	// performed internally; callers supply only contentType and raw data.
+	UpsertMediaBlob(ctx context.Context, contentType string, data []byte) (int64, error)
+
+	// GetMediaBlob returns the MediaBlob row for the given DBID,
+	// or nil, nil when not found.
+	GetMediaBlob(ctx context.Context, blobDBID int64) (*MediaBlob, error)
+
+	// PruneOrphanedBlobs deletes MediaBlobs rows that are not referenced by
+	// any MediaTitleProperties or MediaProperties row. Returns the count of
+	// rows deleted. Safe to call from CleanMediaOrphans.
+	PruneOrphanedBlobs(ctx context.Context) (int64, error)
 }

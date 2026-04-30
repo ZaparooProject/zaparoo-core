@@ -93,6 +93,19 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	mediaMap := buildPropsMap(mediaProps)
 	titleMap := buildPropsMap(titleProps)
 
+	// sources defines the priority order within each typeTag: media-level is
+	// tried first, then title-level. A stale entry at one level falls back to
+	// the other level for the same typeTag before moving on to the next
+	// preference (rather than skipping the typeTag entirely).
+	type propSource struct {
+		propMap map[string]database.MediaProperty
+		isMedia bool
+	}
+	sources := []propSource{
+		{mediaMap, true},
+		{titleMap, false},
+	}
+
 	// Deduplicate resolved TypeTags while preserving order so we don't
 	// attempt the same DB row twice (e.g. "image" and "boxart" both resolve
 	// to "property:image-boxart").
@@ -104,48 +117,46 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		}
 		seen[typeTag] = true
 
-		// Media-level takes priority over title-level.
-		prop, ok := mediaMap[typeTag]
-		if !ok {
-			prop, ok = titleMap[typeTag]
-		}
-		if !ok {
-			continue
-		}
-
-		binary := prop.Binary
-		if len(binary) == 0 && prop.Text != "" {
-			binary, err = os.ReadFile(prop.Text)
-			if err != nil {
-				// File is gone — remove the stale property and continue to the next
-				// preference in the list without restarting the whole handler (avoids
-				// O(N²) DB round-trips and stack growth from recursive calls).
-				if _, fromMedia := mediaMap[typeTag]; fromMedia {
-					if delErr := db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID); delErr != nil {
-						log.Warn().Err(delErr).Int64("mediaDBID", row.DBID).Str("typeTag", typeTag).
-							Msg("media.image: failed to delete stale media property")
-					}
-					delete(mediaMap, typeTag)
-				} else {
-					if delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID); delErr != nil {
-						log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
-							Msg("media.image: failed to delete stale title property")
-					}
-					delete(titleMap, typeTag)
-				}
+		for _, src := range sources {
+			prop, ok := src.propMap[typeTag]
+			if !ok {
 				continue
 			}
-		}
 
-		if len(binary) == 0 {
-			continue
-		}
+			binary := prop.Binary
+			if len(binary) == 0 && prop.Text != "" {
+				binary, err = os.ReadFile(prop.Text)
+				if err != nil {
+					// File is gone — remove the stale property and try the next
+					// source for the same typeTag (avoids O(N²) DB round-trips
+					// and stack growth from recursive calls).
+					if src.isMedia {
+						if delErr := db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID); delErr != nil {
+							log.Warn().Err(delErr).Int64("mediaDBID", row.DBID).Str("typeTag", typeTag).
+								Msg("media.image: failed to delete stale media property")
+						}
+						delete(mediaMap, typeTag)
+					} else {
+						if delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID); delErr != nil {
+							log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
+								Msg("media.image: failed to delete stale title property")
+						}
+						delete(titleMap, typeTag)
+					}
+					continue
+				}
+			}
 
-		return models.MediaImageResponse{
-			ContentType: prop.ContentType,
-			Data:        base64.StdEncoding.EncodeToString(binary),
-			TypeTag:     typeTag,
-		}, nil
+			if len(binary) == 0 {
+				continue
+			}
+
+			return models.MediaImageResponse{
+				ContentType: prop.ContentType,
+				Data:        base64.StdEncoding.EncodeToString(binary),
+				TypeTag:     typeTag,
+			}, nil
+		}
 	}
 
 	return nil, models.ClientErrf("no image found for media: %d", params.MediaID)

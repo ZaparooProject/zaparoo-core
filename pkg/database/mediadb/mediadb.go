@@ -656,6 +656,10 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 
+	if _, pruneErr := db.PruneOrphanedBlobs(ctx); pruneErr != nil {
+		log.Warn().Err(pruneErr).Msg("failed to prune orphaned blobs during clean")
+	}
+
 	if deleted > 0 {
 		db.invalidateCaches(invalidationScope{AllSystems: true})
 

@@ -309,16 +309,16 @@ func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 	coverPath := filepath.Join("roms", "nes", "mario.png")
 	_, err = db.ExecContext(ctx,
 		"INSERT INTO MediaTitleProperties"+
-			" (DBID, MediaTitleDBID, TypeTagDBID, Text, ContentType) VALUES (1, 1, 4, ?, ?)",
-		coverPath, "image/png")
+			" (DBID, MediaTitleDBID, TypeTagDBID, Text) VALUES (1, 1, 4, ?)",
+		coverPath)
 	require.NoError(t, err)
 
 	// ROM-level property on the NES media row — exercises MediaProperties cleanup.
 	videoPath := filepath.Join("roms", "nes", "mario.mp4")
 	_, err = db.ExecContext(ctx,
 		"INSERT INTO MediaProperties"+
-			" (DBID, MediaDBID, TypeTagDBID, Text, ContentType) VALUES (1, 1, 4, ?, ?)",
-		videoPath, "video/mp4")
+			" (DBID, MediaDBID, TypeTagDBID, Text) VALUES (1, 1, 4, ?)",
+		videoPath)
 	require.NoError(t, err)
 
 	return mediaDB, db

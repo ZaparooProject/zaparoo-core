@@ -379,13 +379,12 @@ func (db *MediaDB) UpsertMediaTitleProperties(
 			return fmt.Errorf("failed to resolve property type tag %q: %w", p.TypeTag, err)
 		}
 		_, err = db.sql.ExecContext(ctx, `
-			INSERT INTO MediaTitleProperties (MediaTitleDBID, TypeTagDBID, Text, ContentType, Binary)
-			VALUES (?, ?, ?, ?, ?)
+			INSERT INTO MediaTitleProperties (MediaTitleDBID, TypeTagDBID, Text, BlobDBID)
+			VALUES (?, ?, ?, ?)
 			ON CONFLICT(MediaTitleDBID, TypeTagDBID) DO UPDATE SET
-				Text        = excluded.Text,
-				ContentType = excluded.ContentType,
-				Binary      = excluded.Binary
-		`, mediaTitleDBID, typeTagDBID, p.Text, p.ContentType, p.Binary)
+				Text    = excluded.Text,
+				BlobDBID = excluded.BlobDBID
+		`, mediaTitleDBID, typeTagDBID, p.Text, p.BlobDBID)
 		if err != nil {
 			return fmt.Errorf("failed to upsert MediaTitleProperty (typeTag=%q): %w", p.TypeTag, err)
 		}
@@ -407,13 +406,12 @@ func (db *MediaDB) UpsertMediaProperties(ctx context.Context, mediaDBID int64, p
 			return fmt.Errorf("failed to resolve property type tag %q: %w", p.TypeTag, err)
 		}
 		_, err = db.sql.ExecContext(ctx, `
-			INSERT INTO MediaProperties (MediaDBID, TypeTagDBID, Text, ContentType, Binary)
-			VALUES (?, ?, ?, ?, ?)
+			INSERT INTO MediaProperties (MediaDBID, TypeTagDBID, Text, BlobDBID)
+			VALUES (?, ?, ?, ?)
 			ON CONFLICT(MediaDBID, TypeTagDBID) DO UPDATE SET
-				Text        = excluded.Text,
-				ContentType = excluded.ContentType,
-				Binary      = excluded.Binary
-		`, mediaDBID, typeTagDBID, p.Text, p.ContentType, p.Binary)
+				Text    = excluded.Text,
+				BlobDBID = excluded.BlobDBID
+		`, mediaDBID, typeTagDBID, p.Text, p.BlobDBID)
 		if err != nil {
 			return fmt.Errorf("failed to upsert MediaProperty (typeTag=%q): %w", p.TypeTag, err)
 		}
@@ -592,10 +590,12 @@ func (db *MediaDB) GetMediaTitleProperties(
 		return nil, ErrNullSQL
 	}
 	stmt, err := db.sql.PrepareContext(ctx, `
-		SELECT tt.Type || ':' || t.Tag, mtp.TypeTagDBID, mtp.Text, mtp.ContentType, mtp.Binary
+		SELECT tt.Type || ':' || t.Tag, mtp.TypeTagDBID, mtp.Text,
+		       mtp.BlobDBID, mb.ContentType, mb.Data
 		FROM MediaTitleProperties mtp
-		JOIN Tags t    ON mtp.TypeTagDBID = t.DBID
+		JOIN Tags t      ON mtp.TypeTagDBID = t.DBID
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		LEFT JOIN MediaBlobs mb ON mtp.BlobDBID = mb.DBID
 		WHERE mtp.MediaTitleDBID = ?
 	`)
 	if err != nil {
@@ -627,10 +627,12 @@ func (db *MediaDB) GetMediaProperties(ctx context.Context, mediaDBID int64) ([]d
 		return nil, ErrNullSQL
 	}
 	stmt, err := db.sql.PrepareContext(ctx, `
-		SELECT tt.Type || ':' || t.Tag, mp.TypeTagDBID, mp.Text, mp.ContentType, mp.Binary
+		SELECT tt.Type || ':' || t.Tag, mp.TypeTagDBID, mp.Text,
+		       mp.BlobDBID, mb.ContentType, mb.Data
 		FROM MediaProperties mp
-		JOIN Tags t    ON mp.TypeTagDBID = t.DBID
+		JOIN Tags t      ON mp.TypeTagDBID = t.DBID
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		LEFT JOIN MediaBlobs mb ON mp.BlobDBID = mb.DBID
 		WHERE mp.MediaDBID = ?
 	`)
 	if err != nil {
@@ -793,9 +795,20 @@ func scanProperties(rows *sql.Rows) ([]database.MediaProperty, error) {
 	var props []database.MediaProperty
 	for rows.Next() {
 		var p database.MediaProperty
-		if err := rows.Scan(&p.TypeTag, &p.TypeTagDBID, &p.Text, &p.ContentType, &p.Binary); err != nil {
+		var blobDBID sql.NullInt64
+		var contentType sql.NullString
+		var binary []byte
+		if err := rows.Scan(
+			&p.TypeTag, &p.TypeTagDBID, &p.Text,
+			&blobDBID, &contentType, &binary,
+		); err != nil {
 			return nil, fmt.Errorf("failed to scan MediaProperty: %w", err)
 		}
+		if blobDBID.Valid {
+			p.BlobDBID = &blobDBID.Int64
+		}
+		p.ContentType = contentType.String
+		p.Binary = binary
 		props = append(props, p)
 	}
 	if props == nil {

@@ -80,8 +80,8 @@ func setupCleanOrphansDB(t *testing.T) (db *MediaDB, cleanup func()) {
 
 	nesCoverPath := filepath.Join("covers", "mario.png")
 	_, err = conn.ExecContext(ctx,
-		"INSERT INTO MediaTitleProperties (DBID, MediaTitleDBID, TypeTagDBID, Text, ContentType)"+
-			" VALUES (1, 1, 3, ?, 'image/png')",
+		"INSERT INTO MediaTitleProperties (DBID, MediaTitleDBID, TypeTagDBID, Text)"+
+			" VALUES (1, 1, 3, ?)",
 		nesCoverPath)
 	require.NoError(t, err)
 
@@ -106,8 +106,8 @@ func setupCleanOrphansDB(t *testing.T) (db *MediaDB, cleanup func()) {
 
 	nesPropPath := filepath.Join("roms", "nes", "mario.mp4")
 	_, err = conn.ExecContext(ctx,
-		"INSERT INTO MediaProperties (DBID, MediaDBID, TypeTagDBID, Text, ContentType)"+
-			" VALUES (1, 1, 3, ?, 'video/mp4')",
+		"INSERT INTO MediaProperties (DBID, MediaDBID, TypeTagDBID, Text)"+
+			" VALUES (1, 1, 3, ?)",
 		nesPropPath)
 	require.NoError(t, err)
 

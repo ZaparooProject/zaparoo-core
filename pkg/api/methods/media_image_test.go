@@ -275,6 +275,56 @@ func TestHandleMediaImage_FileReadError_DeletesAndContinues(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+// TestHandleMediaImage_StaleMedia_FallsBackToTitle verifies that when a
+// media-level property has a stale file path, the handler deletes the stale
+// entry and falls back to the title-level property for the same TypeTag before
+// moving on to the next preference in the list.
+func TestHandleMediaImage_StaleMedia_FallsBackToTitle(t *testing.T) {
+	t.Parallel()
+
+	stalePath := filepath.Join(t.TempDir(), "missing_boxart.png")
+	// File is intentionally not created — it must be missing.
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(8, 80)
+
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(8)).
+		Return(row, nil)
+
+	staleMediaProp := database.MediaProperty{
+		TypeTag:     "property:image-boxart",
+		ContentType: "image/png",
+		Text:        stalePath,
+		Binary:      nil,
+		TypeTagDBID: 77,
+	}
+	titleBlob := []byte("title-boxart-bytes")
+	titleProp := database.MediaProperty{
+		TypeTag:     "property:image-boxart",
+		ContentType: "image/png",
+		Binary:      titleBlob,
+	}
+
+	mockDB.On("GetMediaProperties", mock.Anything, int64(8)).
+		Return([]database.MediaProperty{staleMediaProp}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(80)).
+		Return([]database.MediaProperty{titleProp}, nil)
+
+	// Expect only the stale media-level property to be deleted.
+	mockDB.On("DeleteMediaProperty", mock.Anything, int64(8), int64(77)).
+		Return(nil)
+
+	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId": 8, "imageTypes": ["boxart"]}`))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "property:image-boxart", resp.TypeTag)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(titleBlob), resp.Data)
+	mockDB.AssertExpectations(t)
+}
+
 // TestHandleMediaImage_FileReadError_FallsBackToNextPref verifies that when a
 // title-level property's file is unreadable, the stale entry is deleted from the
 // DB and the in-memory map, and the handler continues to find the next-preference

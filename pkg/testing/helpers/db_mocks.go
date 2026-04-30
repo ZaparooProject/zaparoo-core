@@ -2183,6 +2183,30 @@ func (m *MockMediaDBI) DeleteMediaProperty(ctx context.Context, mediaDBID, typeT
 	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) UpsertMediaBlob(ctx context.Context, contentType string, data []byte) (int64, error) {
+	args := m.Called(ctx, contentType, data)
+	if id, ok := args.Get(0).(int64); ok {
+		return id, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return 0, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaBlob(ctx context.Context, blobDBID int64) (*database.MediaBlob, error) {
+	args := m.Called(ctx, blobDBID)
+	if result, ok := args.Get(0).(*database.MediaBlob); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) PruneOrphanedBlobs(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	if n, ok := args.Get(0).(int64); ok {
+		return n, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return 0, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) GetMediaWithTitleAndSystem(
 	ctx context.Context, mediaDBID int64,
 ) (*database.MediaFullRow, error) {

@@ -286,15 +286,16 @@ func TestUpsertMediaTitleProperties_Insert(t *testing.T) {
 	ctx := context.Background()
 
 	props := []database.MediaProperty{
-		{TypeTag: "property:description", Text: "A plumber's adventure.", ContentType: "text/plain"},
+		{TypeTag: "property:description", Text: "A plumber's adventure."},
 	}
 	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, 1, props))
 
-	var text, ct string
+	var text string
+	var blobDBID *int64
 	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
-		"SELECT Text, ContentType FROM MediaTitleProperties WHERE MediaTitleDBID = 1").Scan(&text, &ct))
+		"SELECT Text, BlobDBID FROM MediaTitleProperties WHERE MediaTitleDBID = 1").Scan(&text, &blobDBID))
 	assert.Equal(t, "A plumber's adventure.", text)
-	assert.Equal(t, "text/plain", ct)
+	assert.Nil(t, blobDBID, "text-only property should have nil BlobDBID")
 }
 
 func TestUpsertMediaTitleProperties_Update(t *testing.T) {
@@ -345,15 +346,16 @@ func TestUpsertMediaProperties_Insert(t *testing.T) {
 	ctx := context.Background()
 
 	props := []database.MediaProperty{
-		{TypeTag: "property:image-boxart", Text: "/roms/nes/mario-box.png", ContentType: "image/png"},
+		{TypeTag: "property:image-boxart", Text: "/roms/nes/mario-box.png"},
 	}
 	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 1, props))
 
-	var text, ct string
+	var text string
+	var blobDBID *int64
 	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
-		"SELECT Text, ContentType FROM MediaProperties WHERE MediaDBID = 1").Scan(&text, &ct))
+		"SELECT Text, BlobDBID FROM MediaProperties WHERE MediaDBID = 1").Scan(&text, &blobDBID))
 	assert.Equal(t, "/roms/nes/mario-box.png", text)
-	assert.Equal(t, "image/png", ct)
+	assert.Nil(t, blobDBID, "path-only property should have nil BlobDBID")
 }
 
 // --- GetMediaTitleProperties / GetMediaProperties ---
@@ -375,8 +377,8 @@ func TestGetMediaTitleProperties_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	in := []database.MediaProperty{
-		{TypeTag: "property:description", Text: "Hello world.", ContentType: "text/plain"},
-		{TypeTag: "property:image-boxart", Text: "/art/mario.png", ContentType: "image/png"},
+		{TypeTag: "property:description", Text: "Hello world."},
+		{TypeTag: "property:image-boxart", Text: "/art/mario.png"},
 	}
 	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, 1, in))
 
@@ -396,7 +398,7 @@ func TestGetMediaProperties_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	in := []database.MediaProperty{
-		{TypeTag: "property:image-boxart", Text: "/art/mario.png", ContentType: "image/png"},
+		{TypeTag: "property:image-boxart", Text: "/art/mario.png"},
 	}
 	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 1, in))
 
@@ -404,7 +406,9 @@ func TestGetMediaProperties_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "/art/mario.png", got[0].Text)
-	assert.Equal(t, "image/png", got[0].ContentType)
+	assert.Nil(t, got[0].BlobDBID, "path-only property has no blob")
+	assert.Empty(t, got[0].ContentType)
+	assert.Nil(t, got[0].Binary)
 }
 
 // --- FindMediaTitlesWithoutSentinel ---
@@ -523,4 +527,75 @@ func TestUpsertMediaTags_Concurrent(t *testing.T) {
 		 JOIN TagTypes tt ON t.TypeDBID = tt.DBID
 		 WHERE tt.Type = 'scraper.test' AND t.Tag LIKE '%concurrent%'`).Scan(&tagCount))
 	assert.Equal(t, 1, tagCount, "concurrent writes must produce exactly one Tags row")
+}
+
+// --- Blob round-trip via property upserts ---
+
+func TestUpsertMediaTitleProperties_WithBlob(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := []byte{0x89, 0x50, 0x4E, 0x47} // PNG magic bytes
+	blobDBID, err := mediaDB.UpsertMediaBlob(ctx, "image/png", data)
+	require.NoError(t, err)
+	require.Positive(t, blobDBID)
+
+	props := []database.MediaProperty{
+		{TypeTag: "property:image-boxart", Text: "", BlobDBID: &blobDBID},
+	}
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, 1, props))
+
+	got, err := mediaDB.GetMediaTitleProperties(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.NotNil(t, got[0].BlobDBID, "BlobDBID must be set after upsert with blob")
+	assert.Equal(t, blobDBID, *got[0].BlobDBID)
+	assert.Equal(t, "image/png", got[0].ContentType)
+	assert.Equal(t, data, got[0].Binary)
+}
+
+func TestUpsertMediaProperties_WithBlob(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := []byte("fake jpeg bytes")
+	blobDBID, err := mediaDB.UpsertMediaBlob(ctx, "image/jpeg", data)
+	require.NoError(t, err)
+	require.Positive(t, blobDBID)
+
+	props := []database.MediaProperty{
+		{TypeTag: "property:image-boxart", Text: "", BlobDBID: &blobDBID},
+	}
+	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 1, props))
+
+	got, err := mediaDB.GetMediaProperties(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.NotNil(t, got[0].BlobDBID, "BlobDBID must be set after upsert with blob")
+	assert.Equal(t, blobDBID, *got[0].BlobDBID)
+	assert.Equal(t, "image/jpeg", got[0].ContentType)
+	assert.Equal(t, data, got[0].Binary)
+}
+
+func TestGetMediaTitleProperties_NoBlobIsNilBlobDBID(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	props := []database.MediaProperty{
+		{TypeTag: "property:description", Text: "No binary here."},
+	}
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, 1, props))
+
+	got, err := mediaDB.GetMediaTitleProperties(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Nil(t, got[0].BlobDBID)
+	assert.Empty(t, got[0].ContentType)
+	assert.Nil(t, got[0].Binary)
 }
