@@ -221,7 +221,7 @@ type MediaHistoryTopResponse struct {
 // MediaMetaPropertyItem represents a single property value in a media.meta response.
 // Data is nil when the property is text-only; otherwise it contains the base64-encoded binary.
 type MediaMetaPropertyItem struct {
-	Data        *string `json:"data"`
+	Data        *string `json:"data,omitempty"`
 	Text        string  `json:"text"`
 	ContentType string  `json:"contentType"`
 }

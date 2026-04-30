@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -49,8 +50,10 @@ func TestHandleMediaMeta_FullResult(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 
+	mediaPath := filepath.Join("roms", "nes", "mario.nes")
+	parentDir := filepath.Join("roms", "nes")
 	row := &database.MediaFullRow{
-		Media:  database.Media{DBID: 1, Path: "roms/nes/mario.nes", ParentDir: "roms/nes"},
+		Media:  database.Media{DBID: 1, Path: mediaPath, ParentDir: parentDir},
 		Title:  database.MediaTitle{DBID: 10, Slug: "super-mario-bros", Name: "Super Mario Bros"},
 		System: database.System{SystemID: "NES", Name: "NES"},
 	}
@@ -73,8 +76,8 @@ func TestHandleMediaMeta_FullResult(t *testing.T) {
 	resp, ok := result.(models.MediaMetaResponse)
 	require.True(t, ok)
 	assert.Equal(t, int64(1), resp.Media.ID)
-	assert.Equal(t, "roms/nes/mario.nes", resp.Media.Path)
-	assert.Equal(t, "roms/nes", resp.Media.ParentDir)
+	assert.Equal(t, mediaPath, resp.Media.Path)
+	assert.Equal(t, parentDir, resp.Media.ParentDir)
 	assert.Equal(t, "NES", resp.Media.Title.System.ID)
 	assert.Equal(t, "NES", resp.Media.Title.System.Name)
 	assert.Equal(t, "super-mario-bros", resp.Media.Title.Slug)

@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -345,8 +346,9 @@ func TestUpsertMediaProperties_Insert(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
+	boxartPath := filepath.Join("roms", "nes", "mario-box.png")
 	props := []database.MediaProperty{
-		{TypeTag: "property:image-boxart", Text: "/roms/nes/mario-box.png"},
+		{TypeTag: "property:image-boxart", Text: boxartPath},
 	}
 	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 1, props))
 
@@ -354,7 +356,7 @@ func TestUpsertMediaProperties_Insert(t *testing.T) {
 	var blobDBID *int64
 	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
 		"SELECT Text, BlobDBID FROM MediaProperties WHERE MediaDBID = 1").Scan(&text, &blobDBID))
-	assert.Equal(t, "/roms/nes/mario-box.png", text)
+	assert.Equal(t, boxartPath, text)
 	assert.Nil(t, blobDBID, "path-only property should have nil BlobDBID")
 }
 
@@ -376,9 +378,10 @@ func TestGetMediaTitleProperties_RoundTrip(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
+	artPath := filepath.Join("art", "mario.png")
 	in := []database.MediaProperty{
 		{TypeTag: "property:description", Text: "Hello world."},
-		{TypeTag: "property:image-boxart", Text: "/art/mario.png"},
+		{TypeTag: "property:image-boxart", Text: artPath},
 	}
 	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, 1, in))
 
@@ -397,15 +400,16 @@ func TestGetMediaProperties_RoundTrip(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
+	artPath := filepath.Join("art", "mario.png")
 	in := []database.MediaProperty{
-		{TypeTag: "property:image-boxart", Text: "/art/mario.png"},
+		{TypeTag: "property:image-boxart", Text: artPath},
 	}
 	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 1, in))
 
 	got, err := mediaDB.GetMediaProperties(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Equal(t, "/art/mario.png", got[0].Text)
+	assert.Equal(t, artPath, got[0].Text)
 	assert.Nil(t, got[0].BlobDBID, "path-only property has no blob")
 	assert.Empty(t, got[0].ContentType)
 	assert.Nil(t, got[0].Binary)

@@ -61,4 +61,5 @@ func TestHandleMediaCleanTruncate_Error(t *testing.T) {
 
 	_, err := HandleMediaCleanTruncate(env)
 	require.Error(t, err)
+	mockMediaDB.AssertExpectations(t)
 }

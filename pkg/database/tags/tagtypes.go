@@ -54,6 +54,9 @@ var CanonicalIsExclusive = map[TagType]bool{
 	TagTypeUnfinished: true,
 	TagTypeCopyright:  true,
 
+	// Game family/series — one authoritative value per title
+	TagTypeGameFamily: true,
+
 	// Additive types — explicit false for documentation; these are the default
 	TagTypeLang:          false,
 	TagTypeRegion:        false,

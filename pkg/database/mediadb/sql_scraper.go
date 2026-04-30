@@ -125,29 +125,7 @@ func (db *MediaDB) MediaHasTag(ctx context.Context, mediaDBID int64, tagValue st
 
 	idx := strings.Index(tagValue, ":")
 	if idx < 0 {
-		// No colon: treat the whole string as a raw tag value match.
-		padded := tags.PadTagValue(tagValue)
-		stmt, err := db.sql.PrepareContext(ctx, `
-			SELECT 1
-			FROM MediaTags mt
-			JOIN Tags t ON mt.TagDBID = t.DBID
-			WHERE mt.MediaDBID = ?
-			  AND (t.Tag = ? OR t.Tag = ?)
-			LIMIT 1
-		`)
-		if err != nil {
-			return false, fmt.Errorf("failed to prepare MediaHasTag (no-colon): %w", err)
-		}
-		defer func() { _ = stmt.Close() }()
-		var found int
-		err = stmt.QueryRowContext(ctx, mediaDBID, tagValue, padded).Scan(&found)
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-		if err != nil {
-			return false, fmt.Errorf("failed to scan MediaHasTag (no-colon): %w", err)
-		}
-		return found == 1, nil
+		return false, fmt.Errorf("MediaHasTag: tagValue %q is malformed — expected \"type:value\" format", tagValue)
 	}
 
 	tagType := tagValue[:idx]
@@ -311,6 +289,13 @@ func upsertTags(
 	// Process each type: delete once for exclusive types, then insert all tags.
 	for _, typeName := range typeOrder {
 		e := byType[typeName]
+
+		// For exclusive types: enforce single-value semantics. If the caller
+		// supplies more than one distinct tag for an exclusive type, reject the
+		// entire operation so conflicting values never reach the DB.
+		if e.isExclusive && len(e.tags) > 1 {
+			return fmt.Errorf("exclusive tag type %q received %d values — only one is allowed", typeName, len(e.tags))
+		}
 
 		// For exclusive types: delete all existing tags of this type for the entity once,
 		// before inserting any new tags. This prevents subsequent tags of the same type

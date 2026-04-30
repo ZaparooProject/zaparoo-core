@@ -109,21 +109,6 @@ func TestHandleRunReturnsWhenRequestContextCancelled(t *testing.T) {
 	}
 }
 
-// stubScraper is a minimal scraper.Scraper for handler tests.
-type stubScraper struct {
-	id   string
-	name string
-}
-
-func (s *stubScraper) ID() string               { return s.id }
-func (s *stubScraper) Name() string             { return s.name }
-func (*stubScraper) SupportedSystems() []string { return []string{} }
-func (*stubScraper) Scrape(_ context.Context, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
-	ch := make(chan scraper.ScrapeUpdate)
-	close(ch)
-	return ch, nil
-}
-
 func TestValidateAddMappingParams(t *testing.T) {
 	t.Parallel()
 
@@ -796,15 +781,15 @@ func TestHandleScrapers(t *testing.T) {
 		{
 			name: "single scraper returned",
 			scrapers: map[string]scraper.Scraper{
-				"gamelist.xml": &stubScraper{id: "gamelist.xml", name: "ES gamelist.xml"},
+				"gamelist.xml": &closedChannelScraper{id: "gamelist.xml", name: "ES gamelist.xml"},
 			},
 			wantIDs: []string{"gamelist.xml"},
 		},
 		{
 			name: "multiple scrapers all returned",
 			scrapers: map[string]scraper.Scraper{
-				"gamelist.xml":  &stubScraper{id: "gamelist.xml", name: "ES gamelist.xml"},
-				"screenscraper": &stubScraper{id: "screenscraper", name: "ScreenScraper"},
+				"gamelist.xml":  &closedChannelScraper{id: "gamelist.xml", name: "ES gamelist.xml"},
+				"screenscraper": &closedChannelScraper{id: "screenscraper", name: "ScreenScraper"},
 			},
 			wantIDs: []string{"gamelist.xml", "screenscraper"},
 		},
@@ -842,7 +827,7 @@ func TestHandleScrapers_IDAndNameMatch(t *testing.T) {
 	env := requests.RequestEnv{
 		Context: context.Background(),
 		Scrapers: map[string]scraper.Scraper{
-			"gamelist.xml": &stubScraper{id: "gamelist.xml", name: "ES gamelist.xml"},
+			"gamelist.xml": &closedChannelScraper{id: "gamelist.xml", name: "ES gamelist.xml"},
 		},
 	}
 

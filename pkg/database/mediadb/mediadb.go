@@ -367,8 +367,8 @@ var secondaryIndexes = []secondaryIndex{
 		ddl:  "CREATE INDEX IF NOT EXISTS mediatitletags_tag_idx ON MediaTitleTags(TagDBID)",
 	},
 	{
-		name: "mediatitleproperties_mediatitle_idx",
-		ddl:  "CREATE INDEX IF NOT EXISTS mediatitleproperties_mediatitle_idx ON MediaTitleProperties(MediaTitleDBID)",
+		name: "mediatitleproperties_title_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediatitleproperties_title_idx ON MediaTitleProperties(MediaTitleDBID)",
 	},
 	{
 		name: "mediatitleproperties_typetag_idx",

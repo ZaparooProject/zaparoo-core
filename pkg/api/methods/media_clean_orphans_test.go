@@ -71,6 +71,7 @@ func TestHandleMediaCleanOrphans_NoneDeleted(t *testing.T) {
 	resp, ok := result.(models.MediaCleanOrphansResponse)
 	require.True(t, ok)
 	assert.Equal(t, int64(0), resp.Deleted)
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestHandleMediaCleanOrphans_IndexingInProgress(t *testing.T) {
@@ -89,6 +90,7 @@ func TestHandleMediaCleanOrphans_IndexingInProgress(t *testing.T) {
 
 	var clientErr *models.ClientError
 	assert.ErrorAs(t, err, &clientErr, "expected ClientError for indexing-in-progress guard")
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestHandleMediaCleanOrphans_OptimizationInProgress(t *testing.T) {
@@ -107,6 +109,7 @@ func TestHandleMediaCleanOrphans_OptimizationInProgress(t *testing.T) {
 
 	var clientErr *models.ClientError
 	assert.ErrorAs(t, err, &clientErr, "expected ClientError for optimization-in-progress guard")
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestHandleMediaCleanOrphans_TransactionActive(t *testing.T) {
@@ -125,6 +128,7 @@ func TestHandleMediaCleanOrphans_TransactionActive(t *testing.T) {
 
 	var clientErr *models.ClientError
 	assert.ErrorAs(t, err, &clientErr, "expected ClientError for transaction-active guard")
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestHandleMediaCleanOrphans_UnexpectedError(t *testing.T) {
@@ -143,4 +147,5 @@ func TestHandleMediaCleanOrphans_UnexpectedError(t *testing.T) {
 
 	var clientErr *models.ClientError
 	assert.NotErrorAs(t, err, &clientErr, "unexpected errors should not be ClientError")
+	mockMediaDB.AssertExpectations(t)
 }

@@ -26,7 +26,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"path"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -92,7 +92,7 @@ func TestHandleGetMediaTitleProperties_EmptyProperties(t *testing.T) {
 func TestHandleGetMediaTitleProperties_WithProperties(t *testing.T) {
 	t.Parallel()
 
-	imagePath := "/" + path.Join("roms", "snes", "images", "mario.png")
+	imagePath := filepath.Join("roms", "snes", "images", "mario.png")
 	title := &database.MediaTitle{DBID: 1, Name: "Test Game"}
 	props := []database.MediaProperty{
 		{TypeTag: "property:description", Text: "A great game", ContentType: "text/plain"},
@@ -198,7 +198,7 @@ func TestHandleGetMediaProperties_EmptyProperties(t *testing.T) {
 func TestHandleGetMediaProperties_WithProperties(t *testing.T) {
 	t.Parallel()
 
-	videoPath := "/" + path.Join("roms", "snes", "videos", "mario.mp4")
+	videoPath := filepath.Join("roms", "snes", "videos", "mario.mp4")
 	props := []database.MediaProperty{
 		{TypeTag: "property:video", Text: videoPath, ContentType: "video/mp4"},
 	}

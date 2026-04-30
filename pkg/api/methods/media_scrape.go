@@ -161,7 +161,11 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		defer cancelFunc()
 		defer scrapingStatusInstance.clearIfOwner(scraperID)
 
+		var receivedDone bool
 		for update := range ch {
+			if update.Done {
+				receivedDone = true
+			}
 			notifications.MediaScraping(ns, models.ScrapingStatusResponse{
 				ScraperID: scraperID,
 				SystemID:  update.SystemID,
@@ -174,11 +178,17 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			})
 		}
 
-		notifications.MediaScraping(ns, models.ScrapingStatusResponse{
-			ScraperID: scraperID,
-			Scraping:  false,
-			Done:      true,
-		})
+		// Only send a terminal notification if the channel closed without a
+		// Done=true update (e.g. scraper returned a pre-closed empty channel).
+		// Otherwise the channel already delivered the final counters and sending
+		// another zeroed-out Done would overwrite them for consumers.
+		if !receivedDone {
+			notifications.MediaScraping(ns, models.ScrapingStatusResponse{
+				ScraperID: scraperID,
+				Scraping:  false,
+				Done:      true,
+			})
+		}
 		log.Info().Str("scraper", scraperID).Msg("scraper run complete")
 	}()
 

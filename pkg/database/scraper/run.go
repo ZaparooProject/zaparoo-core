@@ -21,6 +21,7 @@ package scraper
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
@@ -76,6 +77,17 @@ func RunScraper[T any](
 			// Step 1: load records for this system from the source.
 			records, err := s.LoadRecords(ctx, system)
 			if err != nil {
+				// If LoadRecords failed because the context was cancelled, treat it
+				// as a clean cancellation (no FatalErr) rather than a fatal error.
+				if errors.Is(err, ctx.Err()) {
+					ch <- ScrapeUpdate{
+						Done:      true,
+						Processed: totalProcessed,
+						Matched:   totalMatched,
+						Skipped:   totalSkipped,
+					}
+					return
+				}
 				ch <- ScrapeUpdate{
 					SystemID:  system.ID,
 					FatalErr:  err,

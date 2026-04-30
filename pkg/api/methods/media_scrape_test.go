@@ -88,7 +88,7 @@ func makeScrapeEnv(
 // TestHandleMediaScrape_UnknownScraper verifies that supplying an unregistered
 // scraperID returns a client error immediately without touching the DB.
 func TestHandleMediaScrape_UnknownScraper(t *testing.T) {
-	t.Parallel()
+	// Not parallel — calls ClearScrapingStatus which resets shared global state.
 	ClearScrapingStatus()
 
 	mockDB := testhelpers.NewMockMediaDBI()
@@ -146,7 +146,7 @@ func TestHandleMediaScrape_AlreadyRunning(t *testing.T) {
 // TestHandleMediaScrape_InvalidParams verifies that missing required params
 // return a client error.
 func TestHandleMediaScrape_InvalidParams(t *testing.T) {
-	t.Parallel()
+	// Not parallel — calls ClearScrapingStatus which resets shared global state.
 	ClearScrapingStatus()
 
 	mockDB := testhelpers.NewMockMediaDBI()
