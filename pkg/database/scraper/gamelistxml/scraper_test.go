@@ -280,7 +280,7 @@ func TestMapToDB_FullGame(t *testing.T) {
 
 	// Title-level properties
 	descPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyDescription)
-	imgPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart)
+	imgPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	videoPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyVideo)
 	var foundDesc, foundImg, foundVideo bool
 	for _, p := range result.TitleProps {
@@ -297,7 +297,7 @@ func TestMapToDB_FullGame(t *testing.T) {
 		}
 	}
 	assert.True(t, foundDesc, "description property missing")
-	assert.True(t, foundImg, "boxart property missing")
+	assert.True(t, foundImg, "image property missing")
 	assert.True(t, foundVideo, "video property missing")
 
 	assert.Empty(t, result.MediaProps, "gamelistxml scraper writes no media-level properties")
@@ -355,8 +355,8 @@ func TestMapToDB_PathProp_SkipsUnresolvablePath(t *testing.T) {
 	}
 	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
 	for _, p := range titleProps {
-		assert.NotEqual(t, string(tags.TagTypeProperty)+":"+string(tags.TagPropertyImageBoxart), p.TypeTag,
-			"empty image path should not produce a boxart property")
+		assert.NotEqual(t, string(tags.TagTypeProperty)+":"+string(tags.TagPropertyImageImage), p.TypeTag,
+			"empty image path should not produce an image property")
 	}
 }
 
@@ -391,12 +391,12 @@ func TestMapToDB_ContentType_Image(t *testing.T) {
 		Game:           esapi.Game{Image: "./images/mario.png"},
 	}
 	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
-	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart)
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	for _, p := range titleProps {
 		if p.TypeTag == propKey {
 			assert.Equal(t, "image/png", p.ContentType)
 			return
 		}
 	}
-	t.Error("boxart property not found")
+	t.Error("image property not found")
 }

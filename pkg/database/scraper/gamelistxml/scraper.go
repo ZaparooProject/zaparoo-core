@@ -283,7 +283,7 @@ func (*GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		titleProps = append(titleProps,
 			textProp(propType+":"+string(tags.TagPropertyDescription), game.Desc))
 	}
-	if p := pathProp(propType+":"+string(tags.TagPropertyImageBoxart), game.Image, root); p != nil {
+	if p := pathProp(propType+":"+string(tags.TagPropertyImageImage), game.Image, root); p != nil {
 		titleProps = append(titleProps, *p)
 	}
 	// game.Thumbnail in most ES forks (RPI, Sky, Batocera, ES-DE) holds cover art.

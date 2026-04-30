@@ -1503,6 +1503,7 @@ const (
 // TypeTagDBID for each property is the DBID of the Tags row with Tag = "property:<value>".
 const (
 	TagPropertyDescription     TagValue = "description"      // Plain text description
+	TagPropertyImageImage      TagValue = "image-image"      // Generic image with no assumed context (filesystem path)
 	TagPropertyImageBoxart     TagValue = "image-boxart"     // Box art image (filesystem path)
 	TagPropertyImageScreenshot TagValue = "image-screenshot" // Screenshot image (filesystem path)
 	// TagPropertyImageThumbnail maps to ES <thumbnail>, which in most ES forks

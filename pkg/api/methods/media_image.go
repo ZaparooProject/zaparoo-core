@@ -32,15 +32,10 @@ import (
 )
 
 // defaultImageTypes is the preference order used when no imageTypes param is provided.
-// "image" is an alias for "boxart" (maps to the EmulationStation <image> field).
 var defaultImageTypes = []string{"image", "boxart", "screenshot", "wheel", "titleshot", "map", "marquee", "fanart"}
 
 // resolveImageTypeTag converts a short image type name to the full property TypeTag.
-// "image" is treated as an alias for "boxart".
 func resolveImageTypeTag(t string) string {
-	if t == "image" {
-		t = "boxart"
-	}
 	return "property:image-" + t
 }
 

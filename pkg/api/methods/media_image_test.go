@@ -203,13 +203,13 @@ func TestHandleMediaImage_MediaNotFound(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-// TestHandleMediaImage_ImageAliasResolvesToBoxart verifies that "image" in the
-// imageTypes list is treated as an alias for "boxart".
-func TestHandleMediaImage_ImageAliasResolvesToBoxart(t *testing.T) {
+// TestHandleMediaImage_ImageTypeResolvesToImageImage verifies that "image" in the
+// imageTypes list resolves to "property:image-image" (no assumed context).
+func TestHandleMediaImage_ImageTypeResolvesToImageImage(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	blobData := []byte("boxart-via-image-alias")
+	blobData := []byte("generic-image-bytes")
 
 	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(5)).
 		Return(makeMediaFullRow(5, 50), nil)
@@ -217,7 +217,7 @@ func TestHandleMediaImage_ImageAliasResolvesToBoxart(t *testing.T) {
 		Return([]database.MediaProperty{}, nil)
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(50)).
 		Return([]database.MediaProperty{
-			{TypeTag: "property:image-boxart", ContentType: "image/png", Binary: blobData},
+			{TypeTag: "property:image-image", ContentType: "image/png", Binary: blobData},
 		}, nil)
 
 	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId": 5, "imageTypes": ["image"]}`))
@@ -226,7 +226,7 @@ func TestHandleMediaImage_ImageAliasResolvesToBoxart(t *testing.T) {
 
 	resp, ok := result.(models.MediaImageResponse)
 	require.True(t, ok)
-	assert.Equal(t, "property:image-boxart", resp.TypeTag)
+	assert.Equal(t, "property:image-image", resp.TypeTag)
 	assert.Equal(t, base64.StdEncoding.EncodeToString(blobData), resp.Data)
 	mockDB.AssertExpectations(t)
 }
