@@ -197,3 +197,31 @@ func TestPruneOrphanedBlobs_Mixed(t *testing.T) {
 		"SELECT COUNT(*) FROM MediaBlobs").Scan(&count))
 	assert.Equal(t, 1, count, "the referenced blob must remain")
 }
+
+// TestPruneOrphanedBlobs_WithMediaPropsRef verifies that a blob referenced by
+// a MediaProperties row (ROM-level) is not deleted by PruneOrphanedBlobs.
+func TestPruneOrphanedBlobs_WithMediaPropsRef(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := []byte("rom-level blob")
+	blobDBID, err := mediaDB.UpsertMediaBlob(ctx, "image/png", data)
+	require.NoError(t, err)
+
+	// Link the blob via a ROM-level MediaProperties row (Media DBID=1 from setup).
+	props := []database.MediaProperty{
+		{TypeTag: "property:image-boxart", BlobDBID: &blobDBID},
+	}
+	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 1, props))
+
+	deleted, err := mediaDB.PruneOrphanedBlobs(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), deleted, "ROM-level referenced blob must not be deleted")
+
+	var count int
+	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM MediaBlobs").Scan(&count))
+	assert.Equal(t, 1, count, "the ROM-level referenced blob must remain")
+}

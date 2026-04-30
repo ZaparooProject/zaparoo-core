@@ -395,9 +395,15 @@ func TestSqlTruncateSystems_SingleSystem(t *testing.T) {
 	// Tag 4 is referenced by both MediaTitleProperties and MediaProperties for NES → deleted as orphan.
 	assert.Equal(t, 0, tag4, "NES-only tag (Cover) should be deleted")
 
-	// ROM-level property on NES media should be removed; no SNES MediaProperties exist so count is 0.
+	// ROM-level property on NES media should be removed; use a JOIN to count only
+	// NES-scoped rows so the assertion remains valid if SNES properties are added later.
 	var nesMediaPropCount int
-	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaProperties").Scan(&nesMediaPropCount))
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM MediaProperties
+		JOIN Media ON Media.DBID = MediaProperties.MediaDBID
+		JOIN Systems ON Systems.DBID = Media.SystemDBID
+		WHERE Systems.SystemID = 'NES'
+	`).Scan(&nesMediaPropCount))
 	assert.Equal(t, 0, nesMediaPropCount, "NES ROM-level properties should be deleted")
 }
 

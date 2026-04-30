@@ -205,3 +205,57 @@ func TestHandleMediaMeta_TagsDBError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to get media tags")
 	mockDB.AssertExpectations(t)
 }
+
+func TestHandleMediaMeta_TitleTagsDBError(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(1, 10)
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(1)).Return(row, nil)
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
+		Return([]database.TagInfo{}, errors.New("title tags query failed"))
+
+	env := makeMediaMetaEnv(t, mockDB, `{"mediaId": 1}`)
+	_, err := HandleMediaMeta(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get title tags")
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaMeta_MediaPropertiesDBError(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(1, 10)
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(1)).Return(row, nil)
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(1)).
+		Return([]database.MediaProperty{}, errors.New("media properties query failed"))
+
+	env := makeMediaMetaEnv(t, mockDB, `{"mediaId": 1}`)
+	_, err := HandleMediaMeta(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get media properties")
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaMeta_TitlePropertiesDBError(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(1, 10)
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(1)).Return(row, nil)
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(1)).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(10)).
+		Return([]database.MediaProperty{}, errors.New("title properties query failed"))
+
+	env := makeMediaMetaEnv(t, mockDB, `{"mediaId": 1}`)
+	_, err := HandleMediaMeta(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get title properties")
+	mockDB.AssertExpectations(t)
+}

@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -220,6 +221,47 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 		return !IsScrapingRunning()
 	}, 2*time.Second, 10*time.Millisecond, "scraping status should clear after goroutine completes")
 	mockDB.AssertExpectations(t)
+}
+
+// TestHandleMediaScrape_ScraperInitError verifies that when the scraper's
+// Scrape method returns an error, HandleMediaScrape propagates the error and
+// the global scraping status is cleared.
+func TestHandleMediaScrape_ScraperInitError(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+
+	scrapeErr := errors.New("connection refused")
+	failingScraper := &errorScraper{id: "fail-scraper", err: scrapeErr}
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	// TrackBackgroundOperation/BackgroundOperationDone must NOT be called because
+	// the goroutine never starts when Scrape() returns an error.
+	env := makeScrapeEnv(t,
+		map[string]scraper.Scraper{"fail-scraper": failingScraper},
+		mockDB,
+		models.MediaScrapeParams{ScraperID: "fail-scraper"},
+	)
+
+	_, err := HandleMediaScrape(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to start scraper")
+
+	assert.False(t, IsScrapingRunning(), "scraping status must be cleared after error")
+	mockDB.AssertExpectations(t)
+}
+
+// errorScraper is a test double whose Scrape always returns a non-nil error.
+type errorScraper struct {
+	err error
+	id  string
+}
+
+func (s *errorScraper) ID() string               { return s.id }
+func (*errorScraper) Name() string               { return "error scraper" }
+func (*errorScraper) SupportedSystems() []string { return nil }
+func (s *errorScraper) Scrape(_ context.Context, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
+	return nil, s.err
 }
 
 // TestHandleMediaScrapeCancel_NoneRunning verifies the response when no

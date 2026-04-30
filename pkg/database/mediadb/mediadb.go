@@ -719,6 +719,9 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 
 	if deleted > 0 {
 		db.invalidateCaches(invalidationScope{AllSystems: true})
+		if err := sqlInvalidateBrowseCache(ctx, db.sql, nil, true); err != nil {
+			log.Warn().Err(err).Msg("failed to invalidate browse cache after orphan cleanup")
+		}
 
 		if vacErr := sqlVacuum(ctx, db.sql); vacErr != nil {
 			log.Warn().Err(vacErr).Msg("failed to vacuum database after orphan cleanup")

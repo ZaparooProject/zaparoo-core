@@ -54,7 +54,7 @@ export interface TagInfo {
 /** A single metadata property value. data is present only for binary properties. */
 export interface MediaMetaPropertyItem {
   /** Base64-encoded binary blob; absent for text-only properties. */
-  data: string | null;
+  data?: string | null;
   /** Plain-text value or file path (when data is absent). */
   text: string;
   /** MIME type of the property value, e.g. "image/png". */

@@ -22,6 +22,7 @@ package methods
 import (
 	"fmt"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/rs/zerolog/log"
 )
@@ -29,6 +30,16 @@ import (
 // HandleMediaCleanTruncate removes all indexed media from the database.
 func HandleMediaCleanTruncate(env requests.RequestEnv) (any, error) { //nolint:gocritic // API handler pattern
 	log.Info().Msg("received media.clean.truncate request")
+
+	// Refuse to truncate while indexing or optimization is active to avoid
+	// corrupting in-flight state ("running" or "pending" are active statuses).
+	status, statusErr := env.Database.MediaDB.GetIndexingStatus()
+	if statusErr != nil {
+		return nil, fmt.Errorf("failed to check indexing status: %w", statusErr)
+	}
+	if status == "running" || status == "pending" {
+		return nil, models.ClientErrf("cannot truncate while media indexing is in progress")
+	}
 
 	if err := env.Database.MediaDB.Truncate(); err != nil {
 		return nil, fmt.Errorf("failed to truncate media database: %w", err)

@@ -129,6 +129,12 @@ func logSafeResponse(result any) {
 				strconv.Itoa(len(resp.Data)-100) + " more chars]"
 		}
 		log.Debug().Interface("result", truncated).Msg("sending response")
+	case models.MediaImageResponse:
+		truncated := resp
+		if len(truncated.Data) > 100 {
+			truncated.Data = "<trimmed " + strconv.Itoa(len(resp.Data)) + " chars>"
+		}
+		log.Debug().Interface("result", truncated).Msg("sending response")
 	default:
 		log.Debug().Interface("result", result).Msg("sending response")
 	}

@@ -142,6 +142,15 @@ func RunScraper[T any](
 					skipped++
 					continue
 				}
+				if match.MediaDBID <= 0 || match.MediaTitleDBID <= 0 {
+					log.Warn().
+						Int64("mediaDBID", match.MediaDBID).
+						Int64("mediaTitleDBID", match.MediaTitleDBID).
+						Str("system", system.ID).
+						Msg("scraper: Match returned non-positive IDs, skipping record")
+					skipped++
+					continue
+				}
 
 				// Step 2: skip if already scraped (checked after match so we have the MediaDBID).
 				if !opts.Force {

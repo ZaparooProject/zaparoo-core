@@ -130,7 +130,7 @@ RunScraper(ctx, opts, systems, db, scraper):
       processed++; matched++
       emit ScrapeUpdate{processed, matched, skipped}
 
-  emit ScrapeUpdate{Done: true, Processed: total, Matched: total, Skipped: total}
+  emit ScrapeUpdate{Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped}
 ```
 
 Per-record non-fatal errors (match errors, write errors) increment `skipped` and carry `Err` in the update; the loop continues. Fatal errors from `LoadRecords` close the channel immediately.
@@ -300,7 +300,7 @@ Params (`MediaImageParams`):
 }
 ```
 
-`"image"` is an alias for `"boxart"`. If `imageTypes` is omitted, the default preference order is used: `image, boxart, screenshot, wheel, titleshot, map, marquee, fanart`. Media-level properties take priority over title-level for the same type. Stale file paths (file deleted from disk) are cleaned from the DB automatically and the next preference is tried.
+`"image"` resolves to `property:image-image` while `"boxart"` resolves to `property:image-boxart` — they are distinct property types, not aliases. If `imageTypes` is omitted, the default preference order is used: `image, boxart, screenshot, wheel, titleshot, map, marquee, fanart`. Media-level properties take priority over title-level for the same type. Stale file paths (file deleted from disk) are cleaned from the DB automatically and the next preference is tried.
 
 Response (`MediaImageResponse`):
 ```json

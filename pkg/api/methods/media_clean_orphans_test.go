@@ -89,7 +89,7 @@ func TestHandleMediaCleanOrphans_IndexingInProgress(t *testing.T) {
 	require.Error(t, err)
 
 	var clientErr *models.ClientError
-	assert.ErrorAs(t, err, &clientErr, "expected ClientError for indexing-in-progress guard")
+	require.ErrorAs(t, err, &clientErr, "expected ClientError for indexing-in-progress guard")
 	mockMediaDB.AssertExpectations(t)
 }
 
@@ -108,7 +108,7 @@ func TestHandleMediaCleanOrphans_OptimizationInProgress(t *testing.T) {
 	require.Error(t, err)
 
 	var clientErr *models.ClientError
-	assert.ErrorAs(t, err, &clientErr, "expected ClientError for optimization-in-progress guard")
+	require.ErrorAs(t, err, &clientErr, "expected ClientError for optimization-in-progress guard")
 	mockMediaDB.AssertExpectations(t)
 }
 
@@ -127,7 +127,7 @@ func TestHandleMediaCleanOrphans_TransactionActive(t *testing.T) {
 	require.Error(t, err)
 
 	var clientErr *models.ClientError
-	assert.ErrorAs(t, err, &clientErr, "expected ClientError for transaction-active guard")
+	require.ErrorAs(t, err, &clientErr, "expected ClientError for transaction-active guard")
 	mockMediaDB.AssertExpectations(t)
 }
 

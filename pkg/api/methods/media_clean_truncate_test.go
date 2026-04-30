@@ -24,6 +24,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -35,6 +36,7 @@ func TestHandleMediaCleanTruncate_Success(t *testing.T) {
 	t.Parallel()
 
 	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetIndexingStatus").Return("", nil)
 	mockMediaDB.On("Truncate").Return(nil)
 
 	env := requests.RequestEnv{
@@ -52,6 +54,7 @@ func TestHandleMediaCleanTruncate_Error(t *testing.T) {
 	t.Parallel()
 
 	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetIndexingStatus").Return("", nil)
 	mockMediaDB.On("Truncate").Return(errors.New("disk full"))
 
 	env := requests.RequestEnv{
@@ -62,4 +65,29 @@ func TestHandleMediaCleanTruncate_Error(t *testing.T) {
 	_, err := HandleMediaCleanTruncate(env)
 	require.Error(t, err)
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaCleanTruncate_IndexingInProgress(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []string{"running", "pending"} {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+
+			mockMediaDB := testhelpers.NewMockMediaDBI()
+			mockMediaDB.On("GetIndexingStatus").Return(status, nil)
+
+			env := requests.RequestEnv{
+				Context:  context.Background(),
+				Database: &database.Database{MediaDB: mockMediaDB},
+			}
+
+			_, err := HandleMediaCleanTruncate(env)
+			require.Error(t, err)
+			var clientErr *models.ClientError
+			require.ErrorAs(t, err, &clientErr, "expected ClientError when indexing is active")
+			assert.Contains(t, err.Error(), "cannot truncate while media indexing is in progress")
+			mockMediaDB.AssertExpectations(t)
+		})
+	}
 }
