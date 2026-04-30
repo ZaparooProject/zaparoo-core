@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -174,6 +175,7 @@ func scanBrowseV2Media(ctx context.Context, tx *sql.Tx, builder *browseV2Builder
 }
 
 func (b *browseV2Builder) addMedia(mediaDBID, systemDBID int64, mediaPath, title string) {
+	mediaPath = browseV2NormalizePath(mediaPath)
 	parentPath, fileName := browseV2ParentAndFileName(mediaPath)
 	parent := b.ensureDir(parentPath)
 	b.entries = append(b.entries, browseV2Entry{
@@ -223,6 +225,7 @@ type browseV2CountPair struct {
 }
 
 func (b *browseV2Builder) countPairsForPath(mediaPath string) []browseV2CountPair {
+	mediaPath = browseV2NormalizePath(mediaPath)
 	if idx := strings.Index(mediaPath, "://"); idx >= 0 {
 		return []browseV2CountPair{{parent: b.ensureDir(""), child: b.ensureDir(mediaPath[:idx+3])}}
 	}
@@ -241,6 +244,7 @@ func (b *browseV2Builder) countPairsForPath(mediaPath string) []browseV2CountPai
 }
 
 func browseV2AncestorDirs(mediaPath string) []string {
+	mediaPath = browseV2NormalizePath(mediaPath)
 	dirs := []string{"/"}
 	if !strings.HasPrefix(mediaPath, "/") {
 		mediaPath = "/" + mediaPath
@@ -263,6 +267,7 @@ func browseV2AncestorDirs(mediaPath string) []string {
 }
 
 func browseV2ParentAndFileName(mediaPath string) (parentPath, fileName string) {
+	mediaPath = browseV2NormalizePath(mediaPath)
 	if idx := strings.Index(mediaPath, "://"); idx >= 0 {
 		return mediaPath[:idx+3], strings.TrimPrefix(mediaPath[idx+3:], "/")
 	}
@@ -273,6 +278,31 @@ func browseV2ParentAndFileName(mediaPath string) (parentPath, fileName string) {
 		return mediaPath[:lastSlash+1], mediaPath[lastSlash+1:]
 	}
 	return "", mediaPath
+}
+
+func browseV2NormalizePath(mediaPath string) string {
+	if mediaPath == "" {
+		return "/"
+	}
+	if idx := strings.Index(mediaPath, "://"); idx >= 0 {
+		prefix := mediaPath[:idx+3]
+		pathPart := browseV2CleanPathPart(mediaPath[idx+3:])
+		if pathPart == "/" {
+			return prefix
+		}
+		return prefix + strings.TrimPrefix(pathPart, "/")
+	}
+
+	return browseV2CleanPathPart(mediaPath)
+}
+
+func browseV2CleanPathPart(pathPart string) string {
+	pathPart = strings.ReplaceAll(pathPart, "\\", string(filepath.Separator))
+	cleaned := filepath.ToSlash(filepath.Clean(pathPart))
+	if cleaned == "." {
+		return "/"
+	}
+	return cleaned
 }
 
 func browseV2DirParentAndName(dirPath string) (parentPath, name string, isVirtual bool) {

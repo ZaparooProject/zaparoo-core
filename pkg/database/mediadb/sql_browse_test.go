@@ -162,6 +162,32 @@ func TestBrowseV2Builder_NormalizesRelativeFilesystemDirs(t *testing.T) {
 	assert.NotContains(t, builder.dirs, "./")
 }
 
+func TestBrowseV2Builder_NormalizesFilesystemPathSeparators(t *testing.T) {
+	t.Parallel()
+
+	builder := newBrowseV2Builder()
+	builder.ensureDir("/")
+	builder.addMedia(1, 2, `roms\\snes//RPG/../Action/game.sfc`, "Game")
+
+	assert.Contains(t, builder.dirs, "/roms/")
+	assert.Contains(t, builder.dirs, "/roms/snes/")
+	assert.Contains(t, builder.dirs, "/roms/snes/Action/")
+	assert.NotContains(t, builder.dirs, `/roms\\snes/`)
+	assert.Equal(t, "game.sfc", builder.entries[0].fileName)
+}
+
+func TestBrowseV2Builder_NormalizesURIPathPortion(t *testing.T) {
+	t.Parallel()
+
+	builder := newBrowseV2Builder()
+	builder.ensureDir("/")
+	builder.addMedia(1, 2, `steam://440\\Team Fortress 2/../Team Fortress 2`, "Game")
+
+	assert.Contains(t, builder.dirs, "steam://")
+	assert.NotContains(t, builder.dirs, `steam://440\\Team Fortress 2/../`)
+	assert.Equal(t, "440/Team Fortress 2", builder.entries[0].fileName)
+}
+
 func TestSqlBrowseRootCountsV2_ReturnsZeroForMissingRoot(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
