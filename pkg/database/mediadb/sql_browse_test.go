@@ -111,6 +111,25 @@ func TestSqlBrowseVirtualSchemesV2_ReturnsEmptyWithoutMediaFallback(t *testing.T
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlBrowseVirtualSchemesV2_ReturnsEmptyWhenRootMissing(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseV2Ready(mock)
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs("").
+		WillReturnError(sql.ErrNoRows)
+
+	results, err := sqlBrowseVirtualSchemes(context.Background(), db, database.BrowseVirtualSchemesOptions{
+		Systems: []systemdefs.System{{ID: "SNES"}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlBrowseRouteCountsV2_UsesChildDirCounts(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()

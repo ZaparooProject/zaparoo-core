@@ -293,6 +293,9 @@ func (s *Service) prepareBinary(binPath string) (string, error) {
 			cachedInfo, statErr := fs.Stat(manifest.ServicePath)
 			switch {
 			case statErr == nil && manifest.matchesServiceMetadata(cachedInfo):
+				if chmodErr := ensureServiceBinaryExecutable(fs, manifest.ServicePath); chmodErr != nil {
+					return "", chmodErr
+				}
 				log.Debug().
 					Str("path", manifest.ServicePath).
 					Dur("duration", time.Since(started)).
@@ -341,6 +344,9 @@ func (s *Service) prepareBinary(binPath string) (string, error) {
 				return "", copyErr
 			}
 		} else {
+			if chmodErr := ensureServiceBinaryExecutable(fs, servicePath); chmodErr != nil {
+				return "", chmodErr
+			}
 			log.Debug().Str("path", servicePath).Msg("using existing hashed service binary")
 		}
 	}
@@ -374,6 +380,13 @@ func (s *Service) prepareBinary(binPath string) (string, error) {
 
 	log.Debug().Str("path", servicePath).Dur("duration", time.Since(started)).Msg("prepared service binary")
 	return servicePath, nil
+}
+
+func ensureServiceBinaryExecutable(fs afero.Fs, servicePath string) error {
+	if err := fs.Chmod(servicePath, 0o700); err != nil {
+		return fmt.Errorf("error setting service binary permissions: %w", err)
+	}
+	return nil
 }
 
 func copyServiceBinary(fs afero.Fs, binPath, servicePath string) error {

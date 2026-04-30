@@ -24,6 +24,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -156,26 +157,48 @@ func TestPrepareBinary_StripsNonShellExtension(t *testing.T) {
 	assert.True(t, isServiceCacheFilename(filepath.Base(result)))
 }
 
+func TestPrepareBinary_NormalizesReusedCachedBinaryPermissions(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo")
+	require.NoError(t, os.WriteFile(srcPath, []byte("data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(result, 0o600))
+	require.NoError(t, os.Remove(filepath.Join(svc.pl.Settings().DataDir, serviceManifestName)))
+
+	result, err = svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	info, err := os.Stat(result)
+	require.NoError(t, err)
+	assert.Equal(t, fs.FileMode(0o700), info.Mode().Perm())
+	assert.True(t, isServiceCacheFilename(filepath.Base(result)))
+}
+
 func TestPrepareBinary_UsesConfiguredFilesystem(t *testing.T) {
 	t.Parallel()
 
-	fs := afero.NewMemMapFs()
+	memFS := afero.NewMemMapFs()
 	pl := mocks.NewMockPlatform()
 	pl.On("Settings").Return(platforms.Settings{
 		DataDir: string(filepath.Separator) + "data",
 		TempDir: string(filepath.Separator) + "temp",
 	})
-	svc := &Service{pl: pl, fs: fs}
+	svc := &Service{pl: pl, fs: memFS}
 	srcPath := filepath.Join(string(filepath.Separator), "src", "zaparoo.bin")
-	require.NoError(t, fs.MkdirAll(filepath.Dir(srcPath), 0o750))
-	require.NoError(t, afero.WriteFile(fs, srcPath, []byte("data"), 0o600))
+	require.NoError(t, memFS.MkdirAll(filepath.Dir(srcPath), 0o750))
+	require.NoError(t, afero.WriteFile(memFS, srcPath, []byte("data"), 0o600))
 
 	result, err := svc.prepareBinary(srcPath)
 	require.NoError(t, err)
 	assert.Regexp(t, `^zaparoo\.[0-9a-f]{16}$`, filepath.Base(result))
 	assert.True(t, isServiceCacheFilename(filepath.Base(result)))
 
-	content, err := afero.ReadFile(fs, result)
+	content, err := afero.ReadFile(memFS, result)
 	require.NoError(t, err)
 	assert.Equal(t, "data", string(content))
 }
