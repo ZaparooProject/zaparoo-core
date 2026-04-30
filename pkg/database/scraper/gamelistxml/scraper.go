@@ -43,8 +43,25 @@ import (
 // GamelistRecord is one entry from a gamelist.xml, bundled with the filesystem
 // root path that the relative ES paths should be resolved against.
 type GamelistRecord struct {
-	SystemRootPath string
-	Game           esapi.Game
+	AvailableMediaDirs map[string]string
+	SystemRootPath     string
+	Game               esapi.Game
+}
+
+// mediaDirCandidates maps each TagPropertyImage value to the ordered list of
+// media sub-directory names (under <systemRootPath>/media/) that may hold
+// artwork for that property. The first matching directory that contains the
+// expected filename wins.
+var mediaDirCandidates = map[string][]string{
+	string(tags.TagPropertyImageImage):      {"image", "images"},
+	string(tags.TagPropertyImageBoxart):     {"boxart", "boxart2d", "boxart3d", "boxart2dfront"},
+	string(tags.TagPropertyImageScreenshot): {"screenshot", "screenshots"},
+	string(tags.TagPropertyImageThumbnail):  {"thumbnail", "thumbnails", "supporttexture"},
+	string(tags.TagPropertyImageMarquee):    {"marquee", "marquees"},
+	string(tags.TagPropertyImageWheel):      {"wheel", "wheels"},
+	string(tags.TagPropertyImageFanart):     {"fanart", "fanarts"},
+	string(tags.TagPropertyImageTitleshot):  {"titleshot", "titleshots", "screenshottitle"},
+	string(tags.TagPropertyImageMap):        {"map", "maps"},
 }
 
 // SystemResolver resolves ScrapeSystem values for the active system IDs.
@@ -123,10 +140,15 @@ func (*GamelistXMLScraper) LoadRecords(
 			Int("entries", len(gl.Games)).
 			Msg("gamelistxml: loaded gamelist.xml")
 
+		// Stat media sub-directories once per root to avoid repeated lookups
+		// in MapToDB when falling back to filesystem-based image discovery.
+		availableMediaDirs := statMediaDirs(rootPath)
+
 		for i := range gl.Games {
 			records = append(records, &GamelistRecord{
-				SystemRootPath: rootPath,
-				Game:           gl.Games[i],
+				SystemRootPath:     rootPath,
+				AvailableMediaDirs: availableMediaDirs,
+				Game:               gl.Games[i],
 			})
 		}
 	}
@@ -279,34 +301,42 @@ func (*GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	propType := string(tags.TagTypeProperty)
 	root := record.SystemRootPath
 
+	// stem is the ROM filename without extension, used to locate matching
+	// artwork files under media/ sub-directories.
+	stem := strings.TrimSuffix(filepath.Base(game.Path), filepath.Ext(game.Path))
+
 	if game.Desc != "" {
 		titleProps = append(titleProps,
 			textProp(propType+":"+string(tags.TagPropertyDescription), game.Desc))
 	}
-	if p := pathProp(propType+":"+string(tags.TagPropertyImageImage), game.Image, root); p != nil {
-		titleProps = append(titleProps, *p)
+
+	// For each image property: use the XML path when present, otherwise scan
+	// the pre-stated media sub-directories for a matching <stem>.png file.
+	appendImageProp := func(propValue tags.TagValue, xmlPath string) {
+		key := propType + ":" + string(propValue)
+		p := pathProp(key, xmlPath, root)
+		if p == nil {
+			p = findMediaFileProp(key, stem, mediaDirCandidates[string(propValue)], record.AvailableMediaDirs)
+		}
+		if p != nil {
+			titleProps = append(titleProps, *p)
+		}
 	}
+
+	appendImageProp(tags.TagPropertyImageImage, game.Image)
+	// image-boxart and image-screenshot have no ES XML fields; filesystem-only.
+	appendImageProp(tags.TagPropertyImageBoxart, "")
+	appendImageProp(tags.TagPropertyImageScreenshot, "")
 	// game.Thumbnail in most ES forks (RPI, Sky, Batocera, ES-DE) holds cover art.
 	// See esapi/gamelist.go for field-level fork documentation.
-	if p := pathProp(propType+":"+string(tags.TagPropertyImageThumbnail), game.Thumbnail, root); p != nil {
-		titleProps = append(titleProps, *p)
-	}
+	appendImageProp(tags.TagPropertyImageThumbnail, game.Thumbnail)
+	appendImageProp(tags.TagPropertyImageMarquee, game.Marquee)
+	appendImageProp(tags.TagPropertyImageWheel, game.Wheel)
+	appendImageProp(tags.TagPropertyImageFanart, game.FanArt)
+	appendImageProp(tags.TagPropertyImageTitleshot, game.TitleShot)
+	appendImageProp(tags.TagPropertyImageMap, game.Map)
+
 	if p := pathProp(propType+":"+string(tags.TagPropertyVideo), game.Video, root); p != nil {
-		titleProps = append(titleProps, *p)
-	}
-	if p := pathProp(propType+":"+string(tags.TagPropertyImageMarquee), game.Marquee, root); p != nil {
-		titleProps = append(titleProps, *p)
-	}
-	if p := pathProp(propType+":"+string(tags.TagPropertyImageWheel), game.Wheel, root); p != nil {
-		titleProps = append(titleProps, *p)
-	}
-	if p := pathProp(propType+":"+string(tags.TagPropertyImageFanart), game.FanArt, root); p != nil {
-		titleProps = append(titleProps, *p)
-	}
-	if p := pathProp(propType+":"+string(tags.TagPropertyImageTitleshot), game.TitleShot, root); p != nil {
-		titleProps = append(titleProps, *p)
-	}
-	if p := pathProp(propType+":"+string(tags.TagPropertyImageMap), game.Map, root); p != nil {
 		titleProps = append(titleProps, *p)
 	}
 	if p := pathProp(propType+":"+string(tags.TagPropertyManual), game.Manual, root); p != nil {
@@ -476,6 +506,52 @@ func textProp(typeTag, text string) database.MediaProperty {
 		Text:        text,
 		ContentType: "text/plain",
 	}
+}
+
+// statMediaDirs reads the media/ directory under rootPath and returns a map of
+// directory name → absolute path for every sub-directory found. Returns nil
+// when media/ does not exist or cannot be read — callers treat nil as empty.
+func statMediaDirs(rootPath string) map[string]string {
+	mediaRoot := filepath.Join(rootPath, "media")
+	entries, err := os.ReadDir(mediaRoot)
+	if err != nil {
+		return nil
+	}
+	dirs := make(map[string]string, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs[e.Name()] = filepath.Join(mediaRoot, e.Name())
+		}
+	}
+	return dirs
+}
+
+// findMediaFileProp searches for <stem>.png inside the first candidate
+// directory (from candidates) that appears in availableDirs. Returns a
+// MediaProperty for the file when found, nil otherwise.
+func findMediaFileProp(
+	typeTag, stem string,
+	candidates []string,
+	availableDirs map[string]string,
+) *database.MediaProperty {
+	if stem == "" || stem == "." {
+		return nil
+	}
+	for _, dir := range candidates {
+		dirPath, ok := availableDirs[dir]
+		if !ok {
+			continue
+		}
+		candidate := filepath.Join(dirPath, stem+".png")
+		if _, err := os.Stat(candidate); err == nil {
+			return &database.MediaProperty{
+				TypeTag:     typeTag,
+				Text:        filepath.ToSlash(candidate),
+				ContentType: "image/png",
+			}
+		}
+	}
+	return nil
 }
 
 // mimeFromExt returns a MIME type based on file extension.

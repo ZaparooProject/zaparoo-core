@@ -20,6 +20,7 @@
 package gamelistxml
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -399,4 +400,198 @@ func TestMapToDB_ContentType_Image(t *testing.T) {
 		}
 	}
 	t.Error("image property not found")
+}
+
+// --- statMediaDirs ---
+
+func TestStatMediaDirs_ReturnsAvailableDirs(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "media", "image"), 0o750))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "media", "boxart"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "media", "notadir.txt"), []byte{}, 0o600))
+
+	got := statMediaDirs(root)
+
+	assert.Contains(t, got, "image")
+	assert.Contains(t, got, "boxart")
+	assert.NotContains(t, got, "notadir.txt")
+	assert.Equal(t, filepath.Join(root, "media", "image"), got["image"])
+}
+
+func TestStatMediaDirs_NoMediaDir(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	got := statMediaDirs(root)
+	assert.Empty(t, got)
+}
+
+// --- findMediaFileProp ---
+
+func TestFindMediaFileProp_FoundInFirstCandidate(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	imgDir := filepath.Join(root, "media", "image")
+	require.NoError(t, os.MkdirAll(imgDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(imgDir, "mario.png"), []byte{}, 0o600))
+
+	availableDirs := map[string]string{"image": imgDir}
+	p := findMediaFileProp("prop:image-image", "mario", []string{"image", "images"}, availableDirs)
+
+	require.NotNil(t, p)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(imgDir, "mario.png")), p.Text)
+	assert.Equal(t, "image/png", p.ContentType)
+}
+
+func TestFindMediaFileProp_FoundInSecondCandidate(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	imagesDir := filepath.Join(root, "media", "images")
+	require.NoError(t, os.MkdirAll(imagesDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(imagesDir, "mario.png"), []byte{}, 0o600))
+
+	// "image" is not present; "images" contains the file.
+	availableDirs := map[string]string{"images": imagesDir}
+	p := findMediaFileProp("prop:image-image", "mario", []string{"image", "images"}, availableDirs)
+
+	require.NotNil(t, p)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(imagesDir, "mario.png")), p.Text)
+}
+
+func TestFindMediaFileProp_NotFound(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	imgDir := filepath.Join(root, "media", "image")
+	require.NoError(t, os.MkdirAll(imgDir, 0o750))
+	// No mario.png created.
+
+	availableDirs := map[string]string{"image": imgDir}
+	p := findMediaFileProp("prop:image-image", "mario", []string{"image", "images"}, availableDirs)
+	assert.Nil(t, p)
+}
+
+func TestFindMediaFileProp_NilAvailableDirs(t *testing.T) {
+	t.Parallel()
+	p := findMediaFileProp("prop:image-image", "mario", []string{"image", "images"}, nil)
+	assert.Nil(t, p)
+}
+
+func TestFindMediaFileProp_EmptyStem(t *testing.T) {
+	t.Parallel()
+	p := findMediaFileProp("prop:image-image", "", []string{"image"}, map[string]string{"image": t.TempDir()})
+	assert.Nil(t, p)
+}
+
+// --- MapToDB filesystem fallback ---
+
+func TestMapToDB_FilesystemFallback_Image(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	imgDir := filepath.Join(root, "media", "image")
+	require.NoError(t, os.MkdirAll(imgDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(imgDir, "mario.png"), []byte{}, 0o600))
+
+	rec := GamelistRecord{
+		SystemRootPath:     root,
+		AvailableMediaDirs: map[string]string{"image": imgDir},
+		Game: esapi.Game{
+			Path:  "./roms/mario.nes",
+			Image: "", // no XML path → filesystem fallback
+		},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	var found bool
+	for _, p := range result.TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, filepath.ToSlash(filepath.Join(imgDir, "mario.png")), p.Text)
+			assert.Equal(t, "image/png", p.ContentType)
+		}
+	}
+	assert.True(t, found, "filesystem fallback image property missing")
+}
+
+func TestMapToDB_FilesystemFallback_Boxart(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	boxartDir := filepath.Join(root, "media", "boxart")
+	require.NoError(t, os.MkdirAll(boxartDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(boxartDir, "sonic.png"), []byte{}, 0o600))
+
+	rec := GamelistRecord{
+		SystemRootPath:     root,
+		AvailableMediaDirs: map[string]string{"boxart": boxartDir},
+		Game:               esapi.Game{Path: "./roms/sonic.md"},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart)
+	var found bool
+	for _, p := range result.TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, filepath.ToSlash(filepath.Join(boxartDir, "sonic.png")), p.Text)
+		}
+	}
+	assert.True(t, found, "filesystem fallback boxart property missing")
+}
+
+func TestMapToDB_FilesystemFallback_XMLWins(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	// XML-referenced file.
+	xmlImg := filepath.Join(root, "media", "images", "mario.png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(xmlImg), 0o750))
+	require.NoError(t, os.WriteFile(xmlImg, []byte{}, 0o600))
+
+	// Filesystem fallback file in a different dir.
+	fsImg := filepath.Join(root, "media", "image", "mario.png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(fsImg), 0o750))
+	require.NoError(t, os.WriteFile(fsImg, []byte{}, 0o600))
+
+	rec := GamelistRecord{
+		SystemRootPath:     root,
+		AvailableMediaDirs: map[string]string{"image": filepath.Join(root, "media", "image")},
+		Game: esapi.Game{
+			Path:  "./roms/mario.nes",
+			Image: "./media/images/mario.png", // XML path present → must win
+		},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	var count int
+	for _, p := range result.TitleProps {
+		if p.TypeTag == propKey {
+			count++
+			assert.Equal(t, filepath.ToSlash(xmlImg), p.Text, "XML path should take priority over filesystem fallback")
+		}
+	}
+	assert.Equal(t, 1, count, "exactly one image property should be present")
+}
+
+func TestMapToDB_FilesystemFallback_NoMediaDir(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// No media/ directory, no AvailableMediaDirs — should produce no image props.
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		Game:           esapi.Game{Path: "./roms/mario.nes"},
+	}
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	for _, p := range result.TitleProps {
+		assert.NotContains(t, p.TypeTag, "image-", "no image props expected when no media dir and no XML paths")
+	}
 }
