@@ -885,6 +885,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 	// one-per-type per entity (UNIQUE constraint); scrapers upsert on conflict.
 	TagTypeProperty: {
 		TagPropertyDescription,
+		TagPropertyImageImage,
 		TagPropertyImageBoxart,
 		TagPropertyImageScreenshot,
 		TagPropertyImageThumbnail,

@@ -565,6 +565,12 @@ func (db *MediaDB) Truncate() error {
 
 	// Invalidate all caches after full truncation
 	db.invalidateCaches(invalidationScope{AllSystems: true})
+
+	// Reclaim disk space freed by the truncation
+	if err = sqlVacuum(db.ctx, db.sql); err != nil {
+		return fmt.Errorf("failed to vacuum after truncate: %w", err)
+	}
+
 	return nil
 }
 

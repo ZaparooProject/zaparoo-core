@@ -170,14 +170,15 @@ func (*GamelistXMLScraper) Match(
 	system scraper.ScrapeSystem,
 	db database.MediaDBI,
 ) (*scraper.MatchResult, error) {
-	absPath := filepath.ToSlash(resolveESPath(record.Game.Path, record.SystemRootPath))
-	if absPath == "" {
+	resolved := resolveESPath(record.Game.Path, record.SystemRootPath)
+	if resolved == "" {
 		log.Info().
 			Str("path", record.Game.Path).
 			Str("root", record.SystemRootPath).
 			Msg("gamelistxml: unresolvable path, skipping")
 		return nil, nil //nolint:nilnil // unresolvable path means no match; nil result is the "skip" sentinel
 	}
+	absPath := filepath.ToSlash(filepath.Clean(resolved))
 
 	media, err := db.FindMediaBySystemAndPathFold(ctx, system.DBID, absPath)
 	if err != nil {
