@@ -15,6 +15,18 @@ UPDATE TagTypes SET IsExclusive = 1 WHERE Type IN (
     'unfinished', 'copyright'
 );
 
+-- Content-addressed blob store for binary media properties. Hash is the
+-- hex-encoded SHA-256 of ContentType plus Data; UNIQUE enforces deduplication
+-- so identical binary content with the same type is stored once.
+CREATE TABLE MediaBlobs (
+    DBID        INTEGER PRIMARY KEY,
+    Hash        text    NOT NULL UNIQUE,
+    ContentType text    NOT NULL,
+    Data        blob    NOT NULL
+);
+
+CREATE INDEX mediablobs_hash_idx ON MediaBlobs(Hash);
+
 -- Replace SupportingMedia with MediaTitleProperties.
 -- Text replaces Path; UNIQUE(MediaTitleDBID, TypeTagDBID) enforces one property
 -- of each type per title.
@@ -23,18 +35,19 @@ CREATE TABLE MediaTitleProperties (
     MediaTitleDBID integer not null,
     TypeTagDBID    integer not null,
     Text           text    not null DEFAULT '',
-    ContentType    text    not null,
-    Binary         blob,
+    BlobDBID       integer,
     UNIQUE(MediaTitleDBID, TypeTagDBID),
     FOREIGN KEY (MediaTitleDBID) REFERENCES MediaTitles(DBID) ON DELETE CASCADE,
-    FOREIGN KEY (TypeTagDBID)    REFERENCES Tags(DBID)        ON DELETE RESTRICT
+    FOREIGN KEY (TypeTagDBID)    REFERENCES Tags(DBID)        ON DELETE RESTRICT,
+    FOREIGN KEY (BlobDBID)       REFERENCES MediaBlobs(DBID)  ON DELETE SET NULL
 );
 
--- Migrate existing rows; Path becomes Text.
+-- Migrate existing rows; Path becomes Text. Inline binary was never populated
+-- by any scraper, so existing ContentType/Binary columns are intentionally not migrated.
 -- INSERT OR IGNORE respects the new unique constraint.
 INSERT OR IGNORE INTO MediaTitleProperties
-    (DBID, MediaTitleDBID, TypeTagDBID, Text, ContentType, Binary)
-SELECT DBID, MediaTitleDBID, TypeTagDBID, Path, ContentType, Binary
+    (DBID, MediaTitleDBID, TypeTagDBID, Text)
+SELECT DBID, MediaTitleDBID, TypeTagDBID, Path
 FROM SupportingMedia;
 
 DROP TABLE SupportingMedia;
@@ -48,11 +61,11 @@ CREATE TABLE MediaProperties (
     MediaDBID   integer not null,
     TypeTagDBID integer not null,
     Text        text    not null DEFAULT '',
-    ContentType text    not null,
-    Binary      blob,
+    BlobDBID    integer,
     UNIQUE(MediaDBID, TypeTagDBID),
     FOREIGN KEY (MediaDBID)   REFERENCES Media(DBID) ON DELETE CASCADE,
-    FOREIGN KEY (TypeTagDBID) REFERENCES Tags(DBID)  ON DELETE RESTRICT
+    FOREIGN KEY (TypeTagDBID) REFERENCES Tags(DBID)  ON DELETE RESTRICT,
+    FOREIGN KEY (BlobDBID)    REFERENCES MediaBlobs(DBID) ON DELETE SET NULL
 );
 
 CREATE INDEX mediaproperties_media_idx   ON MediaProperties(MediaDBID);
@@ -74,10 +87,12 @@ CREATE TABLE SupportingMedia (
 
 INSERT INTO SupportingMedia
     (DBID, MediaTitleDBID, TypeTagDBID, Path, ContentType, Binary)
-SELECT DBID, MediaTitleDBID, TypeTagDBID, Text, ContentType, Binary
+SELECT DBID, MediaTitleDBID, TypeTagDBID, Text, '', NULL
 FROM MediaTitleProperties;
 
 DROP TABLE MediaProperties;
 DROP TABLE MediaTitleProperties;
+DROP INDEX mediablobs_hash_idx;
+DROP TABLE MediaBlobs;
 
 ALTER TABLE TagTypes DROP COLUMN IsExclusive;

@@ -25,13 +25,14 @@ import (
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
 // sentinelTag returns the sentinel tag value for the given scraper ID in
 // "type:value" string format, used for read-side checks (e.g. db.MediaHasTag).
 func sentinelTag(scraperID string) string {
-	return "scraper." + scraperID + ":scraped"
+	return tags.ScraperTypeTag(scraperID)
 }
 
 // sentinelTagInfo returns the canonical TagInfo representation of the sentinel
@@ -39,8 +40,8 @@ func sentinelTag(scraperID string) string {
 // It is the TagInfo equivalent of sentinelTag.
 func sentinelTagInfo(scraperID string) database.TagInfo {
 	return database.TagInfo{
-		Type: "scraper." + scraperID,
-		Tag:  "scraped",
+		Type: string(tags.ScraperType(scraperID)),
+		Tag:  string(tags.TagScraperScraped),
 	}
 }
 

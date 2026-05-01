@@ -22,7 +22,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -48,8 +47,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -231,7 +232,6 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaActive:         methods.HandleActiveMedia,
 		models.MethodMediaActiveUpdate:   methods.HandleUpdateActiveMedia,
 		models.MethodMediaCleanOrphans:   methods.HandleMediaCleanOrphans,
-		models.MethodMediaCleanTruncate:  methods.HandleMediaCleanTruncate,
 		models.MethodMediaHistory:        methods.HandleMediaHistory,
 		models.MethodMediaHistoryTop:     methods.HandleMediaHistoryTop,
 		models.MethodMediaLookup:         methods.HandleMediaLookup,
@@ -1268,14 +1268,14 @@ func handlePostRequest(
 }
 
 // makeSystemResolver builds a SystemResolver for the gamelist.xml scraper.
-// It resolves indexed system IDs to ScrapeSystem values (DBID + ROM paths).
-// ROM paths are constructed as <rootDir>/<systemID> for each platform root dir.
+// It resolves indexed system IDs to ScrapeSystem values using the same launcher
+// path discovery as media indexing, so scraper paths match scanned media paths.
 func makeSystemResolver(
 	mdb database.MediaDBI,
 	platform platforms.Platform,
 	cfg *config.Instance,
 ) gamelistxml.SystemResolver {
-	return func(_ context.Context, systemIDs []string) ([]scraper.ScrapeSystem, error) {
+	return func(ctx context.Context, systemIDs []string) ([]scraper.ScrapeSystem, error) {
 		indexed, err := mdb.IndexedSystems()
 		if err != nil {
 			return nil, fmt.Errorf("makeSystemResolver: list indexed systems: %w", err)
@@ -1299,27 +1299,40 @@ func makeSystemResolver(
 			}
 		}
 
-		rootDirs := platform.RootDirs(cfg)
-
-		var result []scraper.ScrapeSystem
+		dbSystems := make(map[string]database.System, len(want))
+		systems := make([]systemdefs.System, 0, len(want))
 		for sysID := range want {
 			sys, err := mdb.FindSystemBySystemID(sysID)
 			if err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					log.Debug().Str("system", sysID).Msg("makeSystemResolver: system not indexed in DB, skipping")
-					continue
-				}
 				return nil, fmt.Errorf("makeSystemResolver: look up system %q: %w", sysID, err)
 			}
-			// Build per-system ROM paths: <rootDir>/<systemID>.
-			// The gamelist.xml scraper looks for gamelist.xml directly inside each path.
-			romPaths := make([]string, 0, len(rootDirs))
-			for _, rootDir := range rootDirs {
-				romPaths = append(romPaths, filepath.Join(rootDir, sysID))
+
+			systemDef, err := systemdefs.GetSystem(sysID)
+			if err != nil {
+				log.Debug().Err(err).Str("system", sysID).Msg("makeSystemResolver: unknown system definition, skipping")
+				continue
 			}
+
+			dbSystems[sysID] = sys
+			systems = append(systems, *systemDef)
+		}
+
+		pathsBySystem := make(map[string][]string, len(systems))
+		for _, pathResult := range mediascanner.GetSystemPaths(ctx, cfg, platform, platform.RootDirs(cfg), systems) {
+			pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
+		}
+
+		result := make([]scraper.ScrapeSystem, 0, len(systems))
+		for _, system := range systems {
+			romPaths := pathsBySystem[system.ID]
+			if len(romPaths) == 0 {
+				log.Debug().Str("system", system.ID).Msg("makeSystemResolver: no launcher paths found, skipping")
+				continue
+			}
+
 			result = append(result, scraper.ScrapeSystem{
-				DBID:     sys.DBID,
-				ID:       sysID,
+				DBID:     dbSystems[system.ID].DBID,
+				ID:       system.ID,
 				ROMPaths: romPaths,
 			})
 		}
@@ -1656,18 +1669,6 @@ func StartWithReady(
 		r.Get("/api/events", sseHandler)
 		r.Get("/api/v0/events", sseHandler)
 		r.Get("/api/v0.1/events", sseHandler)
-	})
-
-	// v1 REST API: media properties. Scrapers are now JSONRPC methods (media.scrape).
-	r.Group(func(r chi.Router) {
-		r.Use(nonWSIPFilter)
-		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
-		r.Use(apiRateLimitMiddleware)
-		r.Use(middleware.NoCache)
-		r.Use(middleware.Timeout(config.APIRequestTimeout))
-
-		r.Get("/api/v1/titles/{titleDBID}/properties", methods.HandleGetMediaTitleProperties(db.MediaDB))
-		r.Get("/api/v1/media/{mediaDBID}/properties", methods.HandleGetMediaProperties(db.MediaDB))
 	})
 
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(

@@ -28,15 +28,28 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
 // defaultImageTypes is the preference order used when no imageTypes param is provided.
 var defaultImageTypes = []string{"image", "boxart", "screenshot", "wheel", "titleshot", "map", "marquee", "fanart"}
 
+var imageTypeTags = map[string]string{
+	"image":      tags.PropertyTypeTag(tags.TagPropertyImageImage),
+	"boxart":     tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
+	"screenshot": tags.PropertyTypeTag(tags.TagPropertyImageScreenshot),
+	"wheel":      tags.PropertyTypeTag(tags.TagPropertyImageWheel),
+	"titleshot":  tags.PropertyTypeTag(tags.TagPropertyImageTitleshot),
+	"map":        tags.PropertyTypeTag(tags.TagPropertyImageMap),
+	"marquee":    tags.PropertyTypeTag(tags.TagPropertyImageMarquee),
+	"fanart":     tags.PropertyTypeTag(tags.TagPropertyImageFanart),
+}
+
 // resolveImageTypeTag converts a short image type name to the full property TypeTag.
-func resolveImageTypeTag(t string) string {
-	return "property:image-" + t
+func resolveImageTypeTag(t string) (string, bool) {
+	typeTag, ok := imageTypeTags[t]
+	return typeTag, ok
 }
 
 // buildPropsMap converts a []database.MediaProperty slice into a map keyed by TypeTag.
@@ -101,12 +114,14 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		{titleMap, false},
 	}
 
-	// Deduplicate resolved TypeTags while preserving order so we don't
-	// attempt the same DB row twice (e.g. "image" and "boxart" both resolve
-	// to "property:image-boxart").
+	// Deduplicate resolved TypeTags while preserving order so duplicate request
+	// preferences do not retry the same DB row.
 	seen := make(map[string]bool, len(prefs))
 	for _, t := range prefs {
-		typeTag := resolveImageTypeTag(t)
+		typeTag, ok := resolveImageTypeTag(t)
+		if !ok {
+			continue
+		}
 		if seen[typeTag] {
 			continue
 		}

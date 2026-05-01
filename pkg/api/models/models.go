@@ -73,7 +73,6 @@ const (
 	MethodMediaControl         = "media.control"
 	MethodMediaActiveUpdate    = "media.active.update"
 	MethodMediaCleanOrphans    = "media.clean.orphans"
-	MethodMediaCleanTruncate   = "media.clean.truncate"
 	MethodSettings             = "settings"
 	MethodSettingsUpdate       = "settings.update"
 	MethodSettingsReload       = "settings.reload"

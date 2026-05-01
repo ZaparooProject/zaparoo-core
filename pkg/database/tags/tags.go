@@ -61,6 +61,21 @@ func (t CanonicalTag) String() string {
 	return string(t.Type) + ":" + string(t.Value)
 }
 
+// PropertyTypeTag returns the canonical TypeTag string for a property tag value.
+func PropertyTypeTag(value TagValue) string {
+	return string(TagTypeProperty) + ":" + string(value)
+}
+
+// ScraperType returns the dynamic tag type used by a scraper's sentinel tag.
+func ScraperType(scraperID string) TagType {
+	return TagType("scraper." + scraperID)
+}
+
+// ScraperTypeTag returns the full sentinel TypeTag string for a scraper.
+func ScraperTypeTag(scraperID string) string {
+	return CanonicalTag{Type: ScraperType(scraperID), Value: TagScraperScraped}.String()
+}
+
 // Tag type constants - these define the top-level categories for our hierarchical tag system
 // Format: Type defines the category, tags within each type use colon-separated hierarchies
 const (

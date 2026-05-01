@@ -186,7 +186,7 @@ type MediaProperty struct {
 }
 
 // MediaBlob is a row from the MediaBlobs content-addressed store.
-// Data is identified by the hex-encoded SHA-256 of its content.
+// Data is identified by the hex-encoded SHA-256 of its content type and bytes.
 type MediaBlob struct {
 	Hash        string
 	ContentType string
@@ -695,8 +695,8 @@ type MediaDBI interface {
 	GetMediaTitleTagsByMediaTitleDBID(ctx context.Context, mediaTitleDBID int64) ([]TagInfo, error)
 
 	// UpsertMediaBlob inserts a blob into MediaBlobs when no row with the same
-	// SHA-256 hash already exists, then returns its DBID. Hash computation is
-	// performed internally; callers supply only contentType and raw data.
+	// SHA-256 hash of content type and bytes already exists, then returns its DBID.
+	// Hash computation is performed internally; callers supply only contentType and raw data.
 	UpsertMediaBlob(ctx context.Context, contentType string, data []byte) (int64, error)
 
 	// GetMediaBlob returns the MediaBlob row for the given DBID,

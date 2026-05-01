@@ -22,6 +22,11 @@ package tags
 // This file contains constants for all canonical tag values.
 // Use these constants when referring to specific tags in code for type safety.
 
+// Scraper tag values
+const (
+	TagScraperScraped TagValue = "scraped"
+)
+
 // Input tag values
 const (
 	TagInputJoystick2H            TagValue = "joystick:2h"

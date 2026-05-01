@@ -667,7 +667,8 @@ func (db *MediaDB) Vacuum() error {
 // the associated MediaTags and MediaProperties.  MediaTitles that have no
 // remaining Media rows are also removed, along with their MediaTitleTags and
 // MediaTitleProperties.  Tags that are no longer referenced by any join table
-// are pruned.  A VACUUM is issued afterwards to reclaim disk space.
+// are pruned. Free pages are left for SQLite to reuse instead of running
+// VACUUM here, which would take an exclusive database lock.
 //
 // The method returns the count of Media rows deleted.  If no missing rows
 // exist, it returns (0, nil) without touching the database.
@@ -721,10 +722,6 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 		db.invalidateCaches(invalidationScope{AllSystems: true})
 		if err := sqlInvalidateBrowseCache(ctx, db.sql, nil, true); err != nil {
 			log.Warn().Err(err).Msg("failed to invalidate browse cache after orphan cleanup")
-		}
-
-		if vacErr := sqlVacuum(ctx, db.sql); vacErr != nil {
-			log.Warn().Err(vacErr).Msg("failed to vacuum database after orphan cleanup")
 		}
 	}
 

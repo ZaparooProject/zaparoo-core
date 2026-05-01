@@ -31,13 +31,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// UpsertMediaBlob computes the SHA-256 hash of data, inserts a new MediaBlobs
-// row when no matching hash exists (INSERT OR IGNORE), then returns the DBID of
-// the canonical row. Identical data always resolves to the same DBID.
+// UpsertMediaBlob computes a SHA-256 hash from content type and data, inserts a
+// new MediaBlobs row when no matching hash exists (INSERT OR IGNORE), then
+// returns the DBID of the canonical row. Identical content always resolves to
+// the same DBID.
 func (db *MediaDB) UpsertMediaBlob(ctx context.Context, contentType string, data []byte) (int64, error) {
 	if db.sql == nil {
 		return 0, ErrNullSQL
 	}
+	// TODO: If blob hashing shows up in scraper benchmarks, evaluate faster
+	// hashes with collision handling instead of relying on UNIQUE(Hash) alone.
 	h := sha256.New()
 	h.Write([]byte(contentType))
 	h.Write(data)
