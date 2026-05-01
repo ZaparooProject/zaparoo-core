@@ -94,9 +94,9 @@ func TestHandleMediaMeta_SecondarySlug(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-
+	mediaPath := filepath.Join("roms", "snes", "zelda.sfc")
 	row := &database.MediaFullRow{
-		Media: database.Media{DBID: 2, Path: "roms/snes/zelda.sfc"},
+		Media: database.Media{DBID: 2, Path: mediaPath},
 		Title: database.MediaTitle{
 			DBID:          20,
 			Slug:          "the-legend-of-zelda",

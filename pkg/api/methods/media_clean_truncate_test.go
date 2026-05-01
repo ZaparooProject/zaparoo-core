@@ -67,6 +67,23 @@ func TestHandleMediaCleanTruncate_Error(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestHandleMediaCleanTruncate_GetIndexingStatusError(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetIndexingStatus").Return("", errors.New("db unavailable"))
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	_, err := HandleMediaCleanTruncate(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to check indexing status")
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestHandleMediaCleanTruncate_IndexingInProgress(t *testing.T) {
 	t.Parallel()
 

@@ -290,6 +290,16 @@ func upsertTags(
 	for _, typeName := range typeOrder {
 		e := byType[typeName]
 
+		if e.isExclusive {
+			seen := make(map[string]struct{}, len(e.tags))
+			for _, ti := range e.tags {
+				seen[tags.PadTagValue(ti.Tag)] = struct{}{}
+			}
+			if len(seen) > 1 {
+				return fmt.Errorf("exclusive tag type %q received multiple values", typeName)
+			}
+		}
+
 		// For exclusive types: enforce single-value semantics. If the caller
 		// supplies more than one distinct tag for an exclusive type, reject the
 		// entire operation so conflicting values never reach the DB.

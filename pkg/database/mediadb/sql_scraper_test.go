@@ -42,6 +42,7 @@ func setupScraperTestDB(t *testing.T) (mediaDB *MediaDB, cleanup func()) {
 	ctx := context.Background()
 	db := mediaDB.sql
 
+	mediaPath := filepath.Join("roms", "snes", "zelda.sfc")
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO TagTypes (DBID, Type, IsExclusive) VALUES
 		    (1, 'scraper.test', 0),
@@ -52,8 +53,8 @@ func setupScraperTestDB(t *testing.T) (mediaDB *MediaDB, cleanup func()) {
 		    (2, 3, 'image-boxart');
 		INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'NES', 'Nintendo');
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 1, 'mario', 'Mario');
-		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (1, 1, 1, 'roms/mario.nes');
-	`)
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (1, 1, 1, ?);
+	`, mediaPath)
 	require.NoError(t, err)
 
 	return mediaDB, cleanup
@@ -65,8 +66,8 @@ func TestFindMediaBySystemAndPath_Found(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
-
-	m, err := mediaDB.FindMediaBySystemAndPath(context.Background(), 1, "roms/mario.nes")
+	mediaPath := filepath.Join("roms", "mario.nes")
+	m, err := mediaDB.FindMediaBySystemAndPath(context.Background(), 1, mediaPath)
 	require.NoError(t, err)
 	require.NotNil(t, m)
 	assert.Equal(t, int64(1), m.DBID)
@@ -78,8 +79,8 @@ func TestFindMediaBySystemAndPath_NotFound(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
-
-	m, err := mediaDB.FindMediaBySystemAndPath(context.Background(), 1, "roms/nonexistent.nes")
+	mediaPath := filepath.Join("roms", "nonexistent.nes")
+	m, err := mediaDB.FindMediaBySystemAndPath(context.Background(), 1, mediaPath)
 	require.NoError(t, err)
 	assert.Nil(t, m)
 }
@@ -88,8 +89,8 @@ func TestFindMediaBySystemAndPath_WrongSystem(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
-
-	m, err := mediaDB.FindMediaBySystemAndPath(context.Background(), 99, "roms/mario.nes")
+	mediaPath := filepath.Join("roms", "mario.nes")
+	m, err := mediaDB.FindMediaBySystemAndPath(context.Background(), 99, mediaPath)
 	require.NoError(t, err)
 	assert.Nil(t, m, "path exists but systemDBID doesn't match")
 }
@@ -101,7 +102,8 @@ func TestFindMediaBySystemAndPathFold_ExactMatch(t *testing.T) {
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
 
-	m, err := mediaDB.FindMediaBySystemAndPathFold(context.Background(), 1, "roms/mario.nes")
+	mediaPath := filepath.Join("roms", "mario.nes")
+	m, err := mediaDB.FindMediaBySystemAndPathFold(context.Background(), 1, mediaPath)
 	require.NoError(t, err)
 	require.NotNil(t, m)
 	assert.Equal(t, int64(1), m.DBID)
@@ -115,7 +117,8 @@ func TestFindMediaBySystemAndPathFold_CaseInsensitive(t *testing.T) {
 	// DB has "roms/mario.nes"; query with mixed-case path components as a
 	// Windows scraper would produce when the system directory casing in the
 	// resolver differs from the on-disk casing the indexer recorded.
-	m, err := mediaDB.FindMediaBySystemAndPathFold(context.Background(), 1, "ROMS/Mario.NES")
+	mediaPath := filepath.Join("ROMS", "Mario.nes")
+	m, err := mediaDB.FindMediaBySystemAndPathFold(context.Background(), 1, mediaPath)
 	require.NoError(t, err)
 	require.NotNil(t, m, "case-insensitive query must find the row")
 	assert.Equal(t, int64(1), m.DBID)
@@ -126,7 +129,8 @@ func TestFindMediaBySystemAndPathFold_NotFound(t *testing.T) {
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
 
-	m, err := mediaDB.FindMediaBySystemAndPathFold(context.Background(), 1, "roms/nonexistent.nes")
+	mediaPath := filepath.Join("roms", "nonexistent.nes")
+	m, err := mediaDB.FindMediaBySystemAndPathFold(context.Background(), 1, mediaPath)
 	require.NoError(t, err)
 	assert.Nil(t, m)
 }
@@ -136,7 +140,8 @@ func TestFindMediaBySystemAndPathFold_WrongSystem(t *testing.T) {
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
 
-	m, err := mediaDB.FindMediaBySystemAndPathFold(context.Background(), 99, "roms/mario.nes")
+	mediaPath := filepath.Join("roms", "nonexistent.nes")
+	m, err := mediaDB.FindMediaBySystemAndPathFold(context.Background(), 99, mediaPath)
 	require.NoError(t, err)
 	assert.Nil(t, m, "path exists but systemDBID doesn't match")
 }
@@ -477,6 +482,54 @@ func TestFindMediaTitleByDBID_NotFound(t *testing.T) {
 	assert.Nil(t, title)
 }
 
+// --- upsertTags exclusive-type single-call rejection ---
+
+// TestUpsertMediaTags_ExclusiveType_MultipleDistinctInOneCall exercises the
+// len(seen) > 1 guard on line 293: when a single UpsertMediaTags call
+// supplies two *different* values for the same exclusive type the function
+// must return an error before touching the DB.
+func TestUpsertMediaTags_ExclusiveType_MultipleDistinctInOneCall(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	err := mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{
+		{Type: "developer", Tag: "nintendo"},
+		{Type: "developer", Tag: "sega"},
+	})
+	assert.Error(t, err, "two distinct values for an exclusive type must be rejected")
+
+	// No MediaTags rows should have been written (transaction must be rolled back).
+	var count int
+	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM MediaTags WHERE MediaDBID = 1`).Scan(&count))
+	assert.Equal(t, 0, count, "no tags should be persisted when the call is rejected")
+}
+
+// TestUpsertMediaTags_ExclusiveType_DuplicateValueInOneCall exercises the
+// len(e.tags) > 1 guard on line 306: when a single UpsertMediaTags call
+// supplies two entries with the *same* value for an exclusive type the
+// function must return an error (same-value deduplication is not allowed
+// because callers should send exactly one entry).
+func TestUpsertMediaTags_ExclusiveType_DuplicateValueInOneCall(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	err := mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{
+		{Type: "developer", Tag: "nintendo"},
+		{Type: "developer", Tag: "nintendo"},
+	})
+	assert.Error(t, err, "two identical entries for an exclusive type must be rejected")
+
+	var count int
+	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM MediaTags WHERE MediaDBID = 1`).Scan(&count))
+	assert.Equal(t, 0, count, "no tags should be persisted when the call is rejected")
+}
+
 // --- Fix 2: upsertTags auto-creates missing tag types ---
 
 func TestUpsertMediaTags_AutoCreatesTagType(t *testing.T) {
@@ -531,6 +584,14 @@ func TestUpsertMediaTags_Concurrent(t *testing.T) {
 		 JOIN TagTypes tt ON t.TypeDBID = tt.DBID
 		 WHERE tt.Type = 'scraper.test' AND t.Tag LIKE '%concurrent%'`).Scan(&tagCount))
 	assert.Equal(t, 1, tagCount, "concurrent writes must produce exactly one Tags row")
+
+	var mediaTagCount int
+	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM MediaTags mt
+		 JOIN Tags t ON mt.TagDBID = t.DBID
+		 JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		 WHERE tt.Type = 'scraper.test' AND t.Tag LIKE '%concurrent%'`).Scan(&mediaTagCount))
+	assert.Equal(t, 1, mediaTagCount, "concurrent writes must produce exactly one MediaTags link")
 }
 
 // --- Blob round-trip via property upserts ---

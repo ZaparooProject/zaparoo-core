@@ -38,8 +38,10 @@ func (db *MediaDB) UpsertMediaBlob(ctx context.Context, contentType string, data
 	if db.sql == nil {
 		return 0, ErrNullSQL
 	}
-	sum := sha256.Sum256(data)
-	hash := hex.EncodeToString(sum[:])
+	h := sha256.New()
+	h.Write([]byte(contentType))
+	h.Write(data)
+	hash := hex.EncodeToString(h.Sum(nil))
 
 	_, err := db.sql.ExecContext(ctx, `
 		INSERT OR IGNORE INTO MediaBlobs (Hash, ContentType, Data)

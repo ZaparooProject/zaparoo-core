@@ -130,11 +130,17 @@ func logSafeResponse(result any) {
 		}
 		log.Debug().Interface("result", truncated).Msg("sending response")
 	case models.MediaImageResponse:
-		truncated := resp
-		if len(truncated.Data) > 100 {
-			truncated.Data = "<trimmed " + strconv.Itoa(len(resp.Data)) + " chars>"
-		}
-		log.Debug().Interface("result", truncated).Msg("sending response")
+		log.Debug().
+			Str("typeTag", resp.TypeTag).
+			Str("contentType", resp.ContentType).
+			Int("data_len", len(resp.Data)).
+			Msg("sending response")
+	case models.MediaMetaResponse:
+		log.Debug().
+			Int64("media_id", resp.Media.ID).
+			Int("media_properties", len(resp.Media.Properties)).
+			Int("title_properties", len(resp.Media.Title.Properties)).
+			Msg("sending response")
 	default:
 		log.Debug().Interface("result", result).Msg("sending response")
 	}

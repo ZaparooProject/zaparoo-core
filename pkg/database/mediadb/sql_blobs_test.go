@@ -87,6 +87,30 @@ func TestUpsertMediaBlob_DifferentData(t *testing.T) {
 	assert.NotEqual(t, dbid1, dbid2, "different data must produce different DBIDs")
 }
 
+// TestUpsertMediaBlob_DifferentContentType verifies that identical data stored
+// under different content types produces distinct DBIDs (content type is part
+// of the hash input).
+func TestUpsertMediaBlob_DifferentContentType(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := []byte("same bytes")
+	dbid1, err := mediaDB.UpsertMediaBlob(ctx, "image/png", data)
+	require.NoError(t, err)
+
+	dbid2, err := mediaDB.UpsertMediaBlob(ctx, "image/jpeg", data)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, dbid1, dbid2, "same data with different content types must produce different DBIDs")
+
+	var count int
+	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM MediaBlobs").Scan(&count))
+	assert.Equal(t, 2, count, "two rows should exist for same data under different content types")
+}
+
 // TestGetMediaBlob_Found verifies that GetMediaBlob returns the correct row.
 func TestGetMediaBlob_Found(t *testing.T) {
 	t.Parallel()

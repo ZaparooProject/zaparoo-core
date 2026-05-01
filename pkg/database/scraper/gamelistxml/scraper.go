@@ -184,7 +184,7 @@ func (*GamelistXMLScraper) Match(
 	if err != nil {
 		return nil, fmt.Errorf("gamelistxml: FindMediaBySystemAndPathFold: %w", err)
 	}
-	if media == nil {
+	if media == nil || media.DBID == 0 {
 		log.Info().Str("path", absPath).Int64("systemDBID", system.DBID).Msg("gamelistxml: media not indexed, skipping")
 		return nil, nil //nolint:nilnil // media not indexed; nil result is the "skip" sentinel
 	}
@@ -489,7 +489,7 @@ func pathProp(typeTag, esPath, systemRootPath string) *database.MediaProperty {
 	if esPath == "" {
 		return nil
 	}
-	abs := filepath.ToSlash(resolveESPath(esPath, systemRootPath))
+	abs := filepath.ToSlash(resolveESAssetPath(esPath, systemRootPath))
 	if abs == "" {
 		return nil
 	}
@@ -498,6 +498,21 @@ func pathProp(typeTag, esPath, systemRootPath string) *database.MediaProperty {
 		Text:        abs,
 		ContentType: mimeFromExt(abs),
 	}
+}
+
+// bound retrieved paths to child dirs of media
+func resolveESAssetPath(esPath, systemRootPath string) string {
+	abs := resolveESPath(esPath, systemRootPath)
+	if abs == "" {
+		return ""
+	}
+
+	root := filepath.Clean(systemRootPath) + string(filepath.Separator)
+	cleanAbs := filepath.Clean(abs) + string(filepath.Separator)
+	if !strings.HasPrefix(cleanAbs, root) {
+		return ""
+	}
+	return abs
 }
 
 // textProp creates a plain-text MediaProperty.
