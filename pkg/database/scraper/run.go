@@ -22,6 +22,7 @@ package scraper
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
@@ -178,81 +179,62 @@ func RunScraper[T any](
 				// Step 4: map source record to tag/property writes.
 				mapped := s.MapToDB(record)
 
-				// Step 5: write tags.
-				if len(mapped.MediaTags) > 0 {
-					if err := db.UpsertMediaTags(ctx, match.MediaDBID, mapped.MediaTags); err != nil {
-						log.Warn().Err(err).Int64("mediaDBID", match.MediaDBID).
-							Msg("scraper: failed to upsert media tags")
-						skipped++
-						ch <- ScrapeUpdate{
-							SystemID:  system.ID,
-							Processed: processed,
-							Matched:   matched,
-							Skipped:   skipped,
-							Err:       err,
-						}
-						continue
+				// Steps 5–7: write all tags, properties, and the sentinel in a single
+				// transaction so the writes are atomic and the sentinel is only present
+				// when every write for this record has succeeded.
+				writeErr := func() error {
+					if err := db.BeginTransaction(false); err != nil {
+						return fmt.Errorf("begin transaction: %w", err)
 					}
-				}
-				if len(mapped.TitleTags) > 0 {
-					if err := db.UpsertMediaTitleTags(ctx, match.MediaTitleDBID, mapped.TitleTags); err != nil {
-						log.Warn().Err(err).Int64("mediaTitleDBID", match.MediaTitleDBID).
-							Msg("scraper: failed to upsert title tags")
-						skipped++
-						ch <- ScrapeUpdate{
-							SystemID:  system.ID,
-							Processed: processed,
-							Matched:   matched,
-							Skipped:   skipped,
-							Err:       err,
+					if len(mapped.MediaTags) > 0 {
+						if err := db.UpsertMediaTags(ctx, match.MediaDBID, mapped.MediaTags); err != nil {
+							_ = db.RollbackTransaction()
+							return fmt.Errorf("upsert media tags: %w", err)
 						}
-						continue
 					}
-				}
-
-				// Step 6: write properties.
-				if len(mapped.TitleProps) > 0 {
-					if err := db.UpsertMediaTitleProperties(ctx, match.MediaTitleDBID, mapped.TitleProps); err != nil {
-						log.Warn().Err(err).Int64("mediaTitleDBID", match.MediaTitleDBID).
-							Msg("scraper: failed to upsert title properties")
-						skipped++
-						ch <- ScrapeUpdate{
-							SystemID:  system.ID,
-							Processed: processed,
-							Matched:   matched,
-							Skipped:   skipped,
-							Err:       err,
+					if len(mapped.TitleTags) > 0 {
+						err := db.UpsertMediaTitleTags(ctx, match.MediaTitleDBID, mapped.TitleTags)
+						if err != nil {
+							_ = db.RollbackTransaction()
+							return fmt.Errorf("upsert title tags: %w", err)
 						}
-						continue
 					}
-				}
-				if len(mapped.MediaProps) > 0 {
-					if err := db.UpsertMediaProperties(ctx, match.MediaDBID, mapped.MediaProps); err != nil {
-						log.Warn().Err(err).Int64("mediaDBID", match.MediaDBID).
-							Msg("scraper: failed to upsert media properties")
-						skipped++
-						ch <- ScrapeUpdate{
-							SystemID:  system.ID,
-							Processed: processed,
-							Matched:   matched,
-							Skipped:   skipped,
-							Err:       err,
+					if len(mapped.TitleProps) > 0 {
+						err := db.UpsertMediaTitleProperties(ctx, match.MediaTitleDBID, mapped.TitleProps)
+						if err != nil {
+							_ = db.RollbackTransaction()
+							return fmt.Errorf("upsert title properties: %w", err)
 						}
-						continue
 					}
-				}
-
-				// Step 7: write sentinel last — absent sentinel means safe to retry.
-				sentinelTag := []database.TagInfo{sentinelTagInfo(s.ID())}
-				if err := db.UpsertMediaTags(ctx, match.MediaDBID, sentinelTag); err != nil {
-					log.Warn().Err(err).Int64("mediaDBID", match.MediaDBID).Msg("scraper: failed to write sentinel tag")
+					if len(mapped.MediaProps) > 0 {
+						if err := db.UpsertMediaProperties(ctx, match.MediaDBID, mapped.MediaProps); err != nil {
+							_ = db.RollbackTransaction()
+							return fmt.Errorf("upsert media properties: %w", err)
+						}
+					}
+					sentinel := []database.TagInfo{sentinelTagInfo(s.ID())}
+					if err := db.UpsertMediaTags(ctx, match.MediaDBID, sentinel); err != nil {
+						_ = db.RollbackTransaction()
+						return fmt.Errorf("upsert sentinel tag: %w", err)
+					}
+					if err := db.CommitTransaction(); err != nil {
+						return fmt.Errorf("commit transaction: %w", err)
+					}
+					return nil
+				}()
+				if writeErr != nil {
+					log.Warn().Err(writeErr).
+						Int64("mediaDBID", match.MediaDBID).
+						Int64("mediaTitleDBID", match.MediaTitleDBID).
+						Str("system", system.ID).
+						Msg("scraper: transaction failed, rolling back record writes")
 					skipped++
 					ch <- ScrapeUpdate{
 						SystemID:  system.ID,
 						Processed: processed,
 						Matched:   matched,
 						Skipped:   skipped,
-						Err:       err,
+						Err:       writeErr,
 					}
 					continue
 				}

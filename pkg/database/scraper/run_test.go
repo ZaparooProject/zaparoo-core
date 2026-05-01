@@ -150,8 +150,10 @@ func TestRunScraper_Force_IgnoresSentinel(t *testing.T) {
 	t.Parallel()
 	db := helpers.NewMockMediaDBI()
 	// MediaHasTag should NOT be called when Force=true.
+	db.On("BeginTransaction", false).Return(nil).Once()
 	db.On("UpsertMediaTags", mock.Anything, int64(5), mock.Anything).Return(nil).Times(2) // tags + sentinel
 	db.On("UpsertMediaTitleTags", mock.Anything, int64(10), mock.Anything).Return(nil).Once()
+	db.On("CommitTransaction").Return(nil).Once()
 
 	system := scraper.ScrapeSystem{DBID: 1, ID: "test"}
 	loop := &stubLoop{
@@ -248,10 +250,12 @@ func TestRunScraper_FullWrite_HappyPath(t *testing.T) {
 	t.Parallel()
 	db := helpers.NewMockMediaDBI()
 	db.On("MediaHasTag", mock.Anything, int64(1), "scraper.gl:scraped").Return(false, nil)
+	db.On("BeginTransaction", false).Return(nil).Once()
 	db.On("UpsertMediaTags", mock.Anything, int64(1), mock.Anything).Return(nil).Times(2)
 	db.On("UpsertMediaTitleTags", mock.Anything, int64(2), mock.Anything).Return(nil).Once()
 	db.On("UpsertMediaTitleProperties", mock.Anything, int64(2), mock.Anything).Return(nil).Once()
 	db.On("UpsertMediaProperties", mock.Anything, int64(1), mock.Anything).Return(nil).Once()
+	db.On("CommitTransaction").Return(nil).Once()
 
 	system := scraper.ScrapeSystem{DBID: 10, ID: "NES"}
 	loop := &stubLoop{
@@ -296,7 +300,9 @@ func TestSentinelTag(t *testing.T) {
 	db.On("MediaHasTag", mock.Anything, int64(1), mock.AnythingOfType("string")).
 		Run(func(args mock.Arguments) { capturedTag = args.String(2) }).
 		Return(false, nil)
+	db.On("BeginTransaction", false).Return(nil).Once()
 	db.On("UpsertMediaTags", mock.Anything, int64(1), mock.Anything).Return(nil).Times(2)
+	db.On("CommitTransaction").Return(nil).Once()
 
 	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
 	loop := &stubLoop{
