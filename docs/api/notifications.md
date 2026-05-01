@@ -213,6 +213,65 @@ Sent during media database generation to indicate indexing progress and completi
 }
 ```
 
+### media.scraping
+
+Sent while a metadata scraper run is active and when it completes.
+
+The first notification for a scraper run identifies the scraper and sets `scraping` to true. Progress notifications include the current system, counters, and completion state. A final notification has `scraping` set to false and `done` set to true.
+
+#### Parameters
+
+| Key       | Type    | Required | Description                                                       |
+| :-------- | :------ | :------- | :---------------------------------------------------------------- |
+| scraperId | string  | No       | Scraper ID, for example `gamelist.xml`.                           |
+| systemId  | string  | No       | System currently being scraped.                                   |
+| processed | number  | Yes      | Number of source records processed so far.                        |
+| total     | number  | Yes      | Total source records for the current system, or 0 before known.   |
+| matched   | number  | Yes      | Number of records matched to existing media rows.                 |
+| skipped   | number  | Yes      | Number of records skipped because they were unmatched, already scraped, or failed per-record processing. |
+| scraping  | boolean | Yes      | True while scraping is active.                                    |
+| done      | boolean | Yes      | True on the terminal update for the scraper run.                  |
+
+#### Examples
+
+##### Scraping in progress
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "media.scraping",
+  "params": {
+    "scraperId": "gamelist.xml",
+    "systemId": "SNES",
+    "processed": 42,
+    "total": 100,
+    "matched": 38,
+    "skipped": 4,
+    "scraping": true,
+    "done": false
+  }
+}
+```
+
+##### Scraping complete
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "media.scraping",
+  "params": {
+    "scraperId": "gamelist.xml",
+    "systemId": "SNES",
+    "processed": 100,
+    "total": 100,
+    "matched": 92,
+    "skipped": 8,
+    "scraping": false,
+    "done": true
+  }
+}
+```
+
 ## Playtime
 
 ### playtime.limit.reached

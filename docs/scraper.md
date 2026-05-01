@@ -13,7 +13,7 @@ The first scraper implementation is `gamelist.xml`, which imports EmulationStati
 | `pkg/database/mediadb/sql_scraper.go` | MediaDB tag/property reads and writes used by scrapers |
 | `pkg/api/methods/media_scrape.go` | JSON-RPC scrape start/cancel handlers and scraper listing |
 | `pkg/api/methods/media_image.go` | JSON-RPC image lookup from scraped properties |
-| `pkg/api/methods/scrapers.go` | REST property listing handlers |
+| `pkg/api/methods/media_meta.go` | JSON-RPC metadata graph lookup for media rows |
 
 ## Interfaces
 
@@ -130,6 +130,7 @@ JSON-RPC methods:
 | `scrapers` | Lists registered scrapers with ID, name, and supported systems |
 | `media.scrape` | Starts a scraper run as a background operation |
 | `media.scrape.cancel` | Cancels the active scraper run |
+| `media.meta` | Returns tags and properties for one media row and its title |
 | `media.image` | Returns the best matching image property as base64 data |
 | `media.clean.orphans` | Removes missing media rows and orphaned related data |
 
@@ -160,13 +161,6 @@ Progress is broadcast as `media.scraping` notifications:
 
 Only one scraper can run at a time, and scraping is mutually exclusive with media indexing.
 
-`media.image` accepts image type preferences such as `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. These resolve to property tags by prefixing `property:image-`; for example `boxart` becomes `property:image-boxart` and `image` becomes `property:image-image`. Media-level properties are preferred over title-level properties for the same type. Stale file paths are removed automatically and lookup falls through to the next available source.
+`media.meta` returns the full metadata graph for a single media row: media-level tags and properties, title-level tags and properties, and the stored system identity.
 
-REST property endpoints:
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/v1/titles/{titleDBID}/properties` | Lists title-level properties |
-| `GET /api/v1/media/{mediaDBID}/properties` | Lists ROM-level properties |
-
-Binary blobs are not included in REST property list responses. Use `media.image` to fetch image bytes.
+`media.image` accepts image type preferences such as `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. These resolve to canonical image property tags; for example `boxart` becomes `property:image-boxart` and `image` becomes `property:image-image`. Media-level properties are preferred over title-level properties for the same type. Stale file paths are removed automatically and lookup falls through to the next available source.

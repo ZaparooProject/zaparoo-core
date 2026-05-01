@@ -696,7 +696,7 @@ This method returns all available tags (with their types) for the specified syst
 **Tag Capping:** To prevent large responses, long-tail tag types are capped at 100 entries
 per type. Tags within each type are sorted by usage count (most popular first), then
 alphabetically. The following types are capped: `credit`, `developer`, `mameparent`,
-`publisher`, `search`. Taxonomy types (e.g., `region`, `year`, `lang`, `genre`, `series`)
+`publisher`, `search`. Taxonomy types (e.g., `region`, `year`, `lang`, `gamegenre`, `gamefamily`)
 have finite vocabularies per system and are always returned in full without truncation.
 
 ##### TagInfo object
@@ -738,11 +738,11 @@ have finite vocabularies per system and are always returned in full without trun
         "tag": "platformer"
       },
       {
-        "type": "series",
+        "type": "gamefamily",
         "tag": "Mario Bros"
       },
       {
-        "type": "series",
+        "type": "gamefamily",
         "tag": "Super Mario"
       }
     ]
@@ -1210,6 +1210,353 @@ An object:
   "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
   "result": {
     "match": null
+  }
+}
+```
+
+### media.meta
+
+Return the full metadata graph for one indexed media row, including its title, system, tags, and scraped properties.
+
+Use this when a client already has a `mediaId` and needs all metadata attached to that row. Properties are separated by scope: `media.properties` applies to the specific ROM/file row, and `media.title.properties` applies to the shared title.
+
+#### Parameters
+
+An object:
+
+| Key     | Type   | Required | Description                         |
+| :------ | :----- | :------- | :---------------------------------- |
+| mediaId | number | Yes      | Media database ID of the media row. |
+
+#### Result
+
+| Key   | Type                                  | Required | Description                  |
+| :---- | :------------------------------------ | :------- | :--------------------------- |
+| media | [MediaMeta](#media-meta-object)       | Yes      | Metadata for the media row.  |
+
+##### Media meta object
+
+| Key        | Type                                    | Required | Description                                           |
+| :--------- | :-------------------------------------- | :------- | :---------------------------------------------------- |
+| id         | number                                  | Yes      | Media database ID.                                    |
+| path       | string                                  | Yes      | Media file path.                                      |
+| parentDir  | string                                  | Yes      | Parent directory stored for the media row.            |
+| isMissing  | boolean                                 | Yes      | Whether the indexed file is currently missing.        |
+| tags       | [TagInfo](#taginfo-object)[]            | Yes      | ROM-level tags for this media row.                    |
+| properties | object                                  | Yes      | ROM-level properties keyed by canonical type tag.     |
+| title      | [MediaMetaTitle](#media-meta-title-object) | Yes   | Shared title metadata for this media row.             |
+
+##### Media meta title object
+
+| Key           | Type                         | Required | Description                                      |
+| :------------ | :--------------------------- | :------- | :----------------------------------------------- |
+| id            | number                       | Yes      | Media title database ID.                         |
+| slug          | string                       | Yes      | Primary normalized title slug.                   |
+| secondarySlug | string                       | No       | Secondary title slug, when available.            |
+| name          | string                       | Yes      | Display title.                                   |
+| slugLength    | number                       | Yes      | Character length of the primary slug.            |
+| slugWordCount | number                       | Yes      | Word count of the primary slug.                  |
+| system        | object                       | Yes      | Stored system object with `id` and `name`.       |
+| tags          | [TagInfo](#taginfo-object)[] | Yes      | Title-level tags shared by matching media rows.  |
+| properties    | object                       | Yes      | Title-level properties keyed by canonical type tag. |
+
+##### Media meta property object
+
+| Key         | Type   | Required | Description                                                            |
+| :---------- | :----- | :------- | :--------------------------------------------------------------------- |
+| text        | string | Yes      | Text value or source path for the property.                            |
+| contentType | string | Yes      | MIME type for binary-backed properties, empty for text-only values.    |
+| data        | string | No       | Base64-encoded binary property data. Omitted for text-only properties. |
+
+Property keys are canonical type tags such as `property:description`, `property:image-image`, or `property:manual`.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050607",
+  "method": "media.meta",
+  "params": {
+    "mediaId": 42
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "media": {
+      "id": 42,
+      "path": "/roms/snes/Super Mario World.sfc",
+      "parentDir": "/roms/snes",
+      "isMissing": false,
+      "tags": [
+        {"type": "region", "tag": "usa"}
+      ],
+      "properties": {},
+      "title": {
+        "id": 7,
+        "slug": "super mario world",
+        "name": "Super Mario World",
+        "slugLength": 17,
+        "slugWordCount": 3,
+        "system": {
+          "id": "SNES",
+          "name": "Super Nintendo Entertainment System"
+        },
+        "tags": [
+          {"type": "developer", "tag": "Nintendo"},
+          {"type": "gamegenre", "tag": "platformer"}
+        ],
+        "properties": {
+          "property:description": {
+            "text": "Mario's dinosaur friend Yoshi makes his debut.",
+            "contentType": ""
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### media.image
+
+Return the best matching image for one indexed media row as base64-encoded data.
+
+`media.image` checks the requested image types in order. For each type it tries media-level properties first, then title-level properties. If a stored file path no longer exists, the stale property is removed and lookup continues.
+
+#### Parameters
+
+An object:
+
+| Key        | Type     | Required | Description                                                                 |
+| :--------- | :------- | :------- | :-------------------------------------------------------------------------- |
+| mediaId    | number   | Yes      | Media database ID of the media row.                                         |
+| imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
+
+Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
+
+#### Result
+
+| Key         | Type   | Required | Description                                  |
+| :---------- | :----- | :------- | :------------------------------------------- |
+| contentType | string | Yes      | MIME type of the returned image data.        |
+| data        | string | Yes      | Base64-encoded image bytes.                  |
+| typeTag     | string | Yes      | Canonical property tag that matched.         |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "method": "media.image",
+  "params": {
+    "mediaId": 42,
+    "imageTypes": ["boxart", "image"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "contentType": "image/png",
+    "data": "iVBORw0KGgoAAAANSUhEUgAA...",
+    "typeTag": "property:image-boxart"
+  }
+}
+```
+
+### scrapers
+
+List all registered metadata scrapers.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key      | Type                                 | Required | Description                         |
+| :------- | :----------------------------------- | :------- | :---------------------------------- |
+| scrapers | [ScraperInfo](#scraper-info-object)[] | Yes      | Registered scraper implementations. |
+
+##### Scraper info object
+
+| Key              | Type     | Required | Description                                                              |
+| :--------------- | :------- | :------- | :----------------------------------------------------------------------- |
+| id               | string   | Yes      | Stable scraper ID used by `media.scrape`.                                |
+| name             | string   | Yes      | Human-readable scraper name.                                             |
+| supportedSystems | string[] | Yes      | Supported system IDs. Empty means the scraper can run against all systems. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "f6a7b8c9-7a5d-11ef-9c7b-020304050607",
+  "method": "scrapers"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "f6a7b8c9-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "scrapers": [
+      {
+        "id": "gamelist.xml",
+        "name": "gamelist.xml",
+        "supportedSystems": []
+      }
+    ]
+  }
+}
+```
+
+### media.scrape
+
+Start a metadata scraper run in the background.
+
+Scraping enriches existing MediaDB records only. It does not create media rows; run `media.generate` first so the filesystem scanner has indexed the library. Scraping and media indexing are mutually exclusive, and only one scraper can run at a time.
+
+Progress is reported with [media.scraping](./notifications.md#mediascraping) notifications.
+
+#### Parameters
+
+An object:
+
+| Key       | Type     | Required | Description                                                                 |
+| :-------- | :------- | :------- | :-------------------------------------------------------------------------- |
+| scraperId | string   | Yes      | Scraper ID from the `scrapers` method, for example `gamelist.xml`.          |
+| systems   | string[] | No       | System IDs to scrape. Omit or pass an empty array to scrape all eligible systems. |
+| force     | boolean  | No       | Re-scrape records that already have this scraper's sentinel tag. Default is false. |
+
+#### Result
+
+Returns `null` on success. The scraper continues after the response is sent.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a7b8c9d0-7a5d-11ef-9c7b-020304050607",
+  "method": "media.scrape",
+  "params": {
+    "scraperId": "gamelist.xml",
+    "systems": ["SNES", "NES"],
+    "force": false
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a7b8c9d0-7a5d-11ef-9c7b-020304050607",
+  "result": null
+}
+```
+
+### media.scrape.cancel
+
+Cancel the currently running metadata scraper operation.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type   | Required | Description                           |
+| :------ | :----- | :------- | :------------------------------------ |
+| message | string | Yes      | Status message about the cancellation. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b8c9d0e1-7a5d-11ef-9c7b-020304050607",
+  "method": "media.scrape.cancel"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b8c9d0e1-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "message": "scraping cancelled"
+  }
+}
+```
+
+### media.clean.orphans
+
+Delete media rows marked missing and remove orphaned related data.
+
+This is intended for cleanup after files have been removed from disk and the media database has been refreshed. It removes missing `Media` rows, their tags and properties, and any titles that no longer have media rows. It does not run `VACUUM`; SQLite will reuse freed pages.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type   | Required | Description                       |
+| :------ | :----- | :------- | :-------------------------------- |
+| deleted | number | Yes      | Number of missing media rows removed. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c9d0e1f2-7a5d-11ef-9c7b-020304050607",
+  "method": "media.clean.orphans"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c9d0e1f2-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "deleted": 12
   }
 }
 ```
