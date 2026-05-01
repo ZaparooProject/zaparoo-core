@@ -123,37 +123,38 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 				binary, err = os.ReadFile(prop.Text)
 				if err != nil {
 					// File is gone — remove the stale property.
-					if src.isMedia {
-						if delErr := db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID); delErr != nil {
-							log.Warn().Err(delErr).Int64("mediaDBID", row.DBID).Str("typeTag", typeTag).
-								Msg("media.image: failed to delete stale media property")
-						}
-						delete(mediaMap, typeTag)
-						// Fall back to the title-level property for the same typeTag.
-						if titleProp, hasTitleProp := titleMap[typeTag]; hasTitleProp {
-							prop = titleProp
-							binary = prop.Binary
-							if len(binary) == 0 && prop.Text != "" {
-								binary, err = os.ReadFile(prop.Text)
-								if err != nil {
-									if delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID); delErr != nil {
-										log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
-											Msg("media.image: failed to delete stale title property")
-									}
-									delete(titleMap, typeTag)
-									continue
-								}
-							}
-						} else {
-							continue
-						}
-					} else {
-						if delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID); delErr != nil {
+					if !src.isMedia {
+						delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID)
+						if delErr != nil {
 							log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
 								Msg("media.image: failed to delete stale title property")
 						}
 						delete(titleMap, typeTag)
 						continue
+					}
+					if delErr := db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID); delErr != nil {
+						log.Warn().Err(delErr).Int64("mediaDBID", row.DBID).Str("typeTag", typeTag).
+							Msg("media.image: failed to delete stale media property")
+					}
+					delete(mediaMap, typeTag)
+					// Fall back to the title-level property for the same typeTag.
+					titleProp, hasTitleProp := titleMap[typeTag]
+					if !hasTitleProp {
+						continue
+					}
+					prop = titleProp
+					binary = prop.Binary
+					if len(binary) == 0 && prop.Text != "" {
+						binary, err = os.ReadFile(prop.Text)
+						if err != nil {
+							delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID)
+							if delErr != nil {
+								log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
+									Msg("media.image: failed to delete stale title property")
+							}
+							delete(titleMap, typeTag)
+							continue
+						}
 					}
 				}
 			}

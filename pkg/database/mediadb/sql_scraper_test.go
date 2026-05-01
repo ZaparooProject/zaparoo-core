@@ -42,7 +42,7 @@ func setupScraperTestDB(t *testing.T) (mediaDB *MediaDB, cleanup func()) {
 	ctx := context.Background()
 	db := mediaDB.sql
 
-	mediaPath := filepath.Join("roms", "snes", "zelda.sfc")
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO TagTypes (DBID, Type, IsExclusive) VALUES
 		    (1, 'scraper.test', 0),
@@ -66,13 +66,13 @@ func TestFindMediaBySystemAndPath_Found(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
-	mediaPath := filepath.Join("roms", "mario.nes")
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
 	m, err := mediaDB.FindMediaBySystemAndPath(context.Background(), 1, mediaPath)
 	require.NoError(t, err)
 	require.NotNil(t, m)
 	assert.Equal(t, int64(1), m.DBID)
 	assert.Equal(t, int64(1), m.MediaTitleDBID)
-	assert.Equal(t, "roms/mario.nes", m.Path)
+	assert.Equal(t, filepath.ToSlash(filepath.Join("roms", "mario.nes")), m.Path)
 }
 
 func TestFindMediaBySystemAndPath_NotFound(t *testing.T) {
@@ -102,7 +102,7 @@ func TestFindMediaBySystemAndPathFold_ExactMatch(t *testing.T) {
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
 
-	mediaPath := filepath.Join("roms", "mario.nes")
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
 	m, err := mediaDB.FindMediaBySystemAndPathFold(context.Background(), 1, mediaPath)
 	require.NoError(t, err)
 	require.NotNil(t, m)
@@ -117,7 +117,7 @@ func TestFindMediaBySystemAndPathFold_CaseInsensitive(t *testing.T) {
 	// DB has "roms/mario.nes"; query with mixed-case path components as a
 	// Windows scraper would produce when the system directory casing in the
 	// resolver differs from the on-disk casing the indexer recorded.
-	mediaPath := filepath.Join("ROMS", "Mario.nes")
+	mediaPath := filepath.ToSlash(filepath.Join("ROMS", "Mario.nes"))
 	m, err := mediaDB.FindMediaBySystemAndPathFold(context.Background(), 1, mediaPath)
 	require.NoError(t, err)
 	require.NotNil(t, m, "case-insensitive query must find the row")
@@ -498,7 +498,7 @@ func TestUpsertMediaTags_ExclusiveType_MultipleDistinctInOneCall(t *testing.T) {
 		{Type: "developer", Tag: "nintendo"},
 		{Type: "developer", Tag: "sega"},
 	})
-	assert.Error(t, err, "two distinct values for an exclusive type must be rejected")
+	require.Error(t, err, "two distinct values for an exclusive type must be rejected")
 
 	// No MediaTags rows should have been written (transaction must be rolled back).
 	var count int
@@ -522,7 +522,7 @@ func TestUpsertMediaTags_ExclusiveType_DuplicateValueInOneCall(t *testing.T) {
 		{Type: "developer", Tag: "nintendo"},
 		{Type: "developer", Tag: "nintendo"},
 	})
-	assert.Error(t, err, "two identical entries for an exclusive type must be rejected")
+	require.Error(t, err, "two identical entries for an exclusive type must be rejected")
 
 	var count int
 	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
