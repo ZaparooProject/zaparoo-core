@@ -16,8 +16,8 @@ UPDATE TagTypes SET IsExclusive = 1 WHERE Type IN (
 );
 
 -- Content-addressed blob store for binary media properties. Hash is the
--- hex-encoded SHA-256 of ContentType plus Data; UNIQUE enforces deduplication
--- so identical binary content with the same type is stored once.
+-- hex-encoded SHA-256 of framed ContentType plus Data; UNIQUE enforces
+-- deduplication so identical binary content with the same type is stored once.
 CREATE TABLE MediaBlobs (
     DBID        INTEGER PRIMARY KEY,
     Hash        text    NOT NULL UNIQUE,

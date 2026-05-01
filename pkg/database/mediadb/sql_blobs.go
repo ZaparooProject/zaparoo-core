@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -31,20 +32,29 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// UpsertMediaBlob computes a SHA-256 hash from content type and data, inserts a
-// new MediaBlobs row when no matching hash exists (INSERT OR IGNORE), then
-// returns the DBID of the canonical row. Identical content always resolves to
-// the same DBID.
+// mediaBlobHash computes a SHA-256 hash from length-prefixed content type and
+// data. Framing the fields prevents ambiguous boundaries between them.
+func mediaBlobHash(contentType string, data []byte) string {
+	h := sha256.New()
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(len(contentType)))
+	_, _ = h.Write(size[:])
+	_, _ = h.Write([]byte(contentType))
+	_, _ = h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// UpsertMediaBlob computes a SHA-256 hash from framed content type and data,
+// inserts a new MediaBlobs row when no matching hash exists (INSERT OR IGNORE),
+// then returns the DBID of the canonical row. Identical content always resolves
+// to the same DBID.
 func (db *MediaDB) UpsertMediaBlob(ctx context.Context, contentType string, data []byte) (int64, error) {
 	if db.sql == nil {
 		return 0, ErrNullSQL
 	}
 	// TODO: If blob hashing shows up in scraper benchmarks, evaluate faster
 	// hashes with collision handling instead of relying on UNIQUE(Hash) alone.
-	h := sha256.New()
-	h.Write([]byte(contentType))
-	h.Write(data)
-	hash := hex.EncodeToString(h.Sum(nil))
+	hash := mediaBlobHash(contentType, data)
 
 	_, err := db.sql.ExecContext(ctx, `
 		INSERT OR IGNORE INTO MediaBlobs (Hash, ContentType, Data)

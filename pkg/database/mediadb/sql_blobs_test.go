@@ -111,6 +111,26 @@ func TestUpsertMediaBlob_DifferentContentType(t *testing.T) {
 	assert.Equal(t, 2, count, "two rows should exist for same data under different content types")
 }
 
+func TestUpsertMediaBlob_FramesContentTypeBeforeData(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dbid1, err := mediaDB.UpsertMediaBlob(ctx, "ab", []byte("c"))
+	require.NoError(t, err)
+
+	dbid2, err := mediaDB.UpsertMediaBlob(ctx, "a", []byte("bc"))
+	require.NoError(t, err)
+
+	assert.NotEqual(t, dbid1, dbid2, "field boundaries must be part of the hash input")
+
+	var count int
+	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM MediaBlobs").Scan(&count))
+	assert.Equal(t, 2, count, "ambiguous concatenations must not dedupe together")
+}
+
 // TestGetMediaBlob_Found verifies that GetMediaBlob returns the correct row.
 func TestGetMediaBlob_Found(t *testing.T) {
 	t.Parallel()

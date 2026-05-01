@@ -103,7 +103,9 @@ type ScrapeUpdate struct {
 	Done      bool
 }
 
-// MatchResult is the output of a successful Match call.
+// MatchResult is the output of a successful Match call. Both IDs must be
+// positive database IDs; invalid IDs are treated as an implementation error and
+// skipped by the generic run loop before any writes are attempted.
 type MatchResult struct {
 	MediaDBID      int64
 	MediaTitleDBID int64

@@ -119,6 +119,36 @@ func TestRunScraper_NoMatch_IsSkipped(t *testing.T) {
 	db.AssertExpectations(t)
 }
 
+func TestRunScraper_InvalidMatchIDs_AreSkipped(t *testing.T) {
+	t.Parallel()
+	db := helpers.NewMockMediaDBI()
+	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	loop := &stubLoop{
+		id:      "test",
+		records: []stubRecord{{id: "mario"}},
+		matchFn: func(_ stubRecord) (*scraper.MatchResult, error) {
+			return &scraper.MatchResult{MediaDBID: 0, MediaTitleDBID: 10}, nil
+		},
+	}
+
+	ch := scraper.RunScraper(
+		context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{system}, db, loop)
+	updates := drainUpdates(ch)
+
+	last := updates[len(updates)-1]
+	assert.True(t, last.Done)
+	require.NoError(t, last.FatalErr)
+	assert.Equal(t, 0, last.Processed)
+	assert.Equal(t, 0, last.Matched)
+	assert.Equal(t, 1, last.Skipped)
+	db.AssertNotCalled(t, "MediaHasTag")
+	db.AssertNotCalled(t, "UpsertMediaTags")
+	db.AssertNotCalled(t, "UpsertMediaTitleTags")
+	db.AssertNotCalled(t, "UpsertMediaTitleProperties")
+	db.AssertNotCalled(t, "UpsertMediaProperties")
+	db.AssertExpectations(t)
+}
+
 func TestRunScraper_SentinelSkip(t *testing.T) {
 	t.Parallel()
 	db := helpers.NewMockMediaDBI()

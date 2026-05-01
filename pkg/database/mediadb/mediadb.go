@@ -677,6 +677,9 @@ func (db *MediaDB) Vacuum() error {
 // (status running or pending), while a batch transaction is open, or while
 // background optimisation is active, returning a sentinel error in each case.
 func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
 	if db.sql == nil {
 		return 0, ErrNullSQL
 	}
@@ -684,10 +687,7 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 	// Guard: refuse to run while a batch transaction is open.  An open
 	// transaction means batch inserters may be staging rows that reference the
 	// data we would delete, which would cause FK violations on commit.
-	db.sqlMu.RLock()
-	inTx := db.inTransaction
-	db.sqlMu.RUnlock()
-	if inTx {
+	if db.inTransaction {
 		return 0, ErrTransactionActive
 	}
 
@@ -695,7 +695,7 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 	// rows as IsMissing=1 at the start of a scan and clears the flag as files
 	// are confirmed present; deleting those rows mid-scan would corrupt the
 	// scanner's in-flight state.
-	status, statusErr := db.GetIndexingStatus()
+	status, statusErr := sqlGetIndexingStatus(db.ctx, db.sql)
 	if statusErr != nil && !errors.Is(statusErr, sql.ErrNoRows) {
 		return 0, fmt.Errorf("failed to check indexing status: %w", statusErr)
 	}
