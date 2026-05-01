@@ -896,6 +896,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPropertyImageMap,
 		TagPropertyVideo,
 		TagPropertyManual,
+		TagPropertyXMLGameID,
 	},
 
 	// Rating, genre, and game-family are scraped from external sources; seeded here

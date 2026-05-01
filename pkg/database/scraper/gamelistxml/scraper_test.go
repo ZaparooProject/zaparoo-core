@@ -371,6 +371,75 @@ func TestMapToDB_ArcadeBoard(t *testing.T) {
 	assert.Contains(t, titleTags, database.TagInfo{Type: string(tags.TagTypeArcadeBoard), Tag: "CPS2"})
 }
 
+// --- MapToDB ScreenScraper ID ---
+
+func TestMapToDB_ScreenScraperIDAttr(t *testing.T) {
+	t.Parallel()
+	rec := GamelistRecord{
+		Game: esapi.Game{ScreenScraperIDAttr: "12345"},
+	}
+	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyXMLGameID)
+	var found bool
+	for _, p := range titleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, "12345", p.Text)
+			assert.Equal(t, "text/plain", p.ContentType)
+		}
+	}
+	assert.True(t, found, "xml-game-id property missing when ScreenScraperIDAttr is set")
+}
+
+func TestMapToDB_ScreenScraperIDAttr_ZeroSkipsToElement(t *testing.T) {
+	t.Parallel()
+	// Attr "0" is treated as absent; element form should be used instead.
+	rec := GamelistRecord{
+		Game: esapi.Game{ScreenScraperIDAttr: "0", ScreenScraperID: 99},
+	}
+	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyXMLGameID)
+	var found bool
+	for _, p := range titleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, "99", p.Text)
+		}
+	}
+	assert.True(t, found, "xml-game-id property missing when ScreenScraperIDAttr is \"0\" and element form is set")
+}
+
+func TestMapToDB_ScreenScraperIDElement(t *testing.T) {
+	t.Parallel()
+	// No attr form; element form should be used.
+	rec := GamelistRecord{
+		Game: esapi.Game{ScreenScraperID: 42},
+	}
+	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyXMLGameID)
+	var found bool
+	for _, p := range titleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, "42", p.Text)
+		}
+	}
+	assert.True(t, found, "xml-game-id property missing when only element form is set")
+}
+
+func TestMapToDB_ScreenScraperID_NeitherSet(t *testing.T) {
+	t.Parallel()
+	// Both attr and element are zero/empty — no prop should be emitted.
+	rec := GamelistRecord{
+		Game: esapi.Game{ScreenScraperIDAttr: "", ScreenScraperID: 0},
+	}
+	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyXMLGameID)
+	for _, p := range titleProps {
+		assert.NotEqual(t, propKey, p.TypeTag, "xml-game-id should not be emitted when both ID fields are absent")
+	}
+}
+
 // TestPathProp_NormalizesSlashes verifies that pathProp returns forward-slash
 // paths regardless of the OS separator. The MediaDB stores paths with
 // filepath.ToSlash (see indexing_pipeline.go), so artwork paths must match.

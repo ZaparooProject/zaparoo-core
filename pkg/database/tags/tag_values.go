@@ -1517,4 +1517,5 @@ const (
 	TagPropertyImageMap       TagValue = "image-map"       // In-game world/level map image (filesystem path)
 	TagPropertyVideo          TagValue = "video"           // Video clip (filesystem path)
 	TagPropertyManual         TagValue = "manual"          // Game manual PDF (filesystem path)
+	TagPropertyXMLGameID      TagValue = "xml-game-id"     // game node ID (ScreenScraper Game ID for instance)
 )

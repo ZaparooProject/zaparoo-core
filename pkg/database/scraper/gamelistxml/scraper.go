@@ -311,6 +311,14 @@ func (*GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 			textProp(propType+":"+string(tags.TagPropertyDescription), game.Desc))
 	}
 
+	if game.ScreenScraperIDAttr != "" && game.ScreenScraperIDAttr != "0" {
+		titleProps = append(titleProps,
+			textProp(propType+":"+string(tags.TagPropertyXMLGameID), game.ScreenScraperIDAttr))
+	} else if game.ScreenScraperID != 0 {
+		titleProps = append(titleProps,
+			textProp(propType+":"+string(tags.TagPropertyXMLGameID), strconv.Itoa(game.ScreenScraperID)))
+	}
+
 	// For each image property: use the XML path when present, otherwise scan
 	// the pre-stated media sub-directories for a matching <stem>.png file.
 	appendImageProp := func(propValue tags.TagValue, xmlPath string) {
