@@ -179,46 +179,35 @@ func RunScraper[T any](
 				// Step 4: map source record to tag/property writes.
 				mapped := s.MapToDB(record)
 
-				// Steps 5–7: write all tags, properties, and the sentinel in a single
-				// transaction so the writes are atomic and the sentinel is only present
-				// when every write for this record has succeeded.
+				// Steps 5–7: write tags, properties, and the sentinel sequentially.
+				// The sentinel is written last so a partial failure leaves the record
+				// eligible for retry on the next run.
 				writeErr := func() error {
-					if err := db.BeginTransaction(false); err != nil {
-						return fmt.Errorf("begin transaction: %w", err)
-					}
 					if len(mapped.MediaTags) > 0 {
 						if err := db.UpsertMediaTags(ctx, match.MediaDBID, mapped.MediaTags); err != nil {
-							_ = db.RollbackTransaction()
 							return fmt.Errorf("upsert media tags: %w", err)
 						}
 					}
 					if len(mapped.TitleTags) > 0 {
 						err := db.UpsertMediaTitleTags(ctx, match.MediaTitleDBID, mapped.TitleTags)
 						if err != nil {
-							_ = db.RollbackTransaction()
 							return fmt.Errorf("upsert title tags: %w", err)
 						}
 					}
 					if len(mapped.TitleProps) > 0 {
 						err := db.UpsertMediaTitleProperties(ctx, match.MediaTitleDBID, mapped.TitleProps)
 						if err != nil {
-							_ = db.RollbackTransaction()
 							return fmt.Errorf("upsert title properties: %w", err)
 						}
 					}
 					if len(mapped.MediaProps) > 0 {
 						if err := db.UpsertMediaProperties(ctx, match.MediaDBID, mapped.MediaProps); err != nil {
-							_ = db.RollbackTransaction()
 							return fmt.Errorf("upsert media properties: %w", err)
 						}
 					}
 					sentinel := []database.TagInfo{sentinelTagInfo(s.ID())}
 					if err := db.UpsertMediaTags(ctx, match.MediaDBID, sentinel); err != nil {
-						_ = db.RollbackTransaction()
 						return fmt.Errorf("upsert sentinel tag: %w", err)
-					}
-					if err := db.CommitTransaction(); err != nil {
-						return fmt.Errorf("commit transaction: %w", err)
 					}
 					return nil
 				}()
@@ -227,7 +216,7 @@ func RunScraper[T any](
 						Int64("mediaDBID", match.MediaDBID).
 						Int64("mediaTitleDBID", match.MediaTitleDBID).
 						Str("system", system.ID).
-						Msg("scraper: transaction failed, rolling back record writes")
+						Msg("scraper: write failed")
 					skipped++
 					ch <- ScrapeUpdate{
 						SystemID:  system.ID,
