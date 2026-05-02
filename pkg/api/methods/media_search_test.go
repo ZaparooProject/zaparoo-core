@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -1027,7 +1028,11 @@ func TestHandleMediaSearch_RelativePaths(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.SetupBasicMock()
 
-	// LauncherCache with NES launcher folder matching the mock rootDir "/mock/roms"
+	rootDir := filepath.Join(string(filepath.Separator), "mock", "roms")
+	mediaPath := filepath.Join(rootDir, "NES", "mario.nes")
+	relPath := filepath.Join("NES", "mario.nes")
+
+	// LauncherCache with NES launcher folder matching the mock rootDir.
 	launcherCache := &phelpers.LauncherCache{}
 	launcherCache.InitializeFromSlice([]platforms.Launcher{
 		{ID: "nes-launcher", SystemID: "NES", Folders: []string{"NES"}},
@@ -1038,7 +1043,7 @@ func TestHandleMediaSearch_RelativePaths(t *testing.T) {
 		mock.Anything,
 		mock.Anything,
 	).Return([]database.SearchResultWithCursor{
-		{SystemID: "NES", Name: "Mario Bros", Path: "/mock/roms/NES/mario.nes", MediaID: 1},
+		{SystemID: "NES", Name: "Mario Bros", Path: mediaPath, MediaID: 1},
 	}, nil)
 
 	query := "mario"
@@ -1069,5 +1074,7 @@ func TestHandleMediaSearch_RelativePaths(t *testing.T) {
 	searchResults, ok := result.(models.SearchResults)
 	require.True(t, ok)
 	require.Len(t, searchResults.Results, 1)
-	assert.Equal(t, "NES/mario.nes", searchResults.Results[0].Path)
+	assert.Equal(t, mediaPath, searchResults.Results[0].Path)
+	require.NotNil(t, searchResults.Results[0].RelPath)
+	assert.Equal(t, relPath, *searchResults.Results[0].RelPath)
 }

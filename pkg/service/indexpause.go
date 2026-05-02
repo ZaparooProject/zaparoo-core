@@ -51,6 +51,22 @@ func watchGameForIndexPause(
 	handleIndexPauseNotifications(ctx, notifChan, ns, pauser, gameActive, methods.IsIndexing)
 }
 
+// watchGameForScrapePause mirrors media indexing pause behavior for metadata
+// scraping so SQLite and filesystem-heavy scrape work does not compete with gameplay.
+func watchGameForScrapePause(
+	ctx context.Context,
+	b *broker.Broker,
+	st *state.State,
+	ns chan<- models.Notification,
+	pauser *syncutil.Pauser,
+) {
+	notifChan, subID := b.Subscribe(10)
+	defer b.Unsubscribe(subID)
+
+	gameActive := st.ActiveMedia() != nil
+	handleScrapePauseNotifications(ctx, notifChan, ns, pauser, gameActive, methods.IsScrapingRunning)
+}
+
 // handleIndexPauseNotifications is the core loop that pauses/resumes the
 // pauser based on game lifecycle notifications. Separated from
 // watchGameForIndexPause so it can be tested without a broker.
@@ -66,13 +82,46 @@ func handleIndexPauseNotifications(
 	gameAlreadyActive bool,
 	isActive func() bool,
 ) {
+	handleMediaPauseNotifications(
+		ctx, notifChan, pauser, gameAlreadyActive, isActive, "media indexing",
+		func(paused bool) {
+			sendIndexPauseNotification(ns, paused)
+		},
+	)
+}
+
+func handleScrapePauseNotifications(
+	ctx context.Context,
+	notifChan <-chan models.Notification,
+	ns chan<- models.Notification,
+	pauser *syncutil.Pauser,
+	gameAlreadyActive bool,
+	isActive func() bool,
+) {
+	handleMediaPauseNotifications(
+		ctx, notifChan, pauser, gameAlreadyActive, isActive, "media scraping",
+		func(paused bool) {
+			sendScrapePauseNotification(ns, paused)
+		},
+	)
+}
+
+func handleMediaPauseNotifications(
+	ctx context.Context,
+	notifChan <-chan models.Notification,
+	pauser *syncutil.Pauser,
+	gameAlreadyActive bool,
+	isActive func() bool,
+	label string,
+	sendPauseNotification func(bool),
+) {
 	defer pauser.Resume()
 
 	if gameAlreadyActive {
 		pauser.Pause()
-		log.Info().Msg("media indexing paused: game already active")
+		log.Info().Msg(label + " paused: game already active")
 		if isActive() {
-			sendPauseNotification(ns, true)
+			sendPauseNotification(true)
 		}
 	}
 
@@ -85,15 +134,15 @@ func handleIndexPauseNotifications(
 			switch notif.Method {
 			case models.NotificationStarted:
 				pauser.Pause()
-				log.Info().Msg("media indexing paused: game started")
+				log.Info().Msg(label + " paused: game started")
 				if isActive() {
-					sendPauseNotification(ns, true)
+					sendPauseNotification(true)
 				}
 			case models.NotificationStopped:
 				pauser.Resume()
-				log.Info().Msg("media indexing resumed: game stopped")
+				log.Info().Msg(label + " resumed: game stopped")
 				if isActive() {
-					sendPauseNotification(ns, false)
+					sendPauseNotification(false)
 				}
 			}
 		case <-ctx.Done():
@@ -102,7 +151,7 @@ func handleIndexPauseNotifications(
 	}
 }
 
-func sendPauseNotification(
+func sendIndexPauseNotification(
 	ns chan<- models.Notification,
 	paused bool,
 ) {
@@ -110,4 +159,11 @@ func sendPauseNotification(
 		Indexing: true,
 		Paused:   paused,
 	})
+}
+
+func sendScrapePauseNotification(
+	ns chan<- models.Notification,
+	paused bool,
+) {
+	methods.PublishScrapePauseStatus(ns, paused)
 }

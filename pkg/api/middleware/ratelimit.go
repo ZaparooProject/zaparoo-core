@@ -21,6 +21,7 @@ package middleware
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"time"
 
@@ -47,6 +48,33 @@ type IPRateLimiter struct {
 type rateLimiterEntry struct {
 	limiter  *rate.Limiter
 	lastSeen time.Time
+}
+
+func isRateLimitExemptHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func remoteRateLimitHost(remoteAddr string) (string, bool) {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+
+	if isRateLimitExemptHost(host) {
+		return host, true
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return host, false
+	}
+
+	return ip.String(), false
 }
 
 // NewIPRateLimiter creates a new IP-based rate limiter with the default
@@ -123,8 +151,12 @@ func (rl *IPRateLimiter) StartCleanup(ctx context.Context) {
 func HTTPRateLimitMiddleware(limiter *IPRateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := ParseRemoteIP(r.RemoteAddr)
-			host := ip.String()
+			host, exempt := remoteRateLimitHost(r.RemoteAddr)
+			if exempt {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			rl := limiter.GetLimiter(host)
 
 			if !rl.Allow() {
@@ -162,8 +194,12 @@ func WebSocketRateLimitHandlerWithWait(
 	handler func(*melody.Session, []byte),
 ) func(*melody.Session, []byte) {
 	return func(session *melody.Session, msg []byte) {
-		ip := ParseRemoteIP(session.Request.RemoteAddr)
-		host := ip.String()
+		host, exempt := remoteRateLimitHost(session.Request.RemoteAddr)
+		if exempt {
+			handler(session, msg)
+			return
+		}
+
 		rl := limiter.GetLimiter(host)
 
 		ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)

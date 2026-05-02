@@ -22,7 +22,7 @@ require (
 	github.com/gen2brain/malgo v0.11.24
 	github.com/getsentry/sentry-go v0.46.0
 	github.com/getsentry/sentry-go/zerolog v0.46.0
-	github.com/go-chi/chi/v5 v5.2.4
+	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-chi/cors v1.2.2
 	github.com/go-ole/go-ole v1.3.0
 	github.com/go-playground/validator/v10 v10.30.2
@@ -37,10 +37,10 @@ require (
 	github.com/hsanjuan/go-ndef v0.0.1
 	github.com/jonboulle/clockwork v0.5.0
 	github.com/mackerelio/go-osstat v0.2.7
-	github.com/mattn/go-sqlite3 v1.14.42
+	github.com/mattn/go-sqlite3 v1.14.44
 	github.com/nixinwang/dialog v0.0.0-20240524023314-b4bad92eff4d
 	github.com/olahol/melody v1.4.0
-	github.com/pelletier/go-toml/v2 v2.3.0
+	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/rivo/tview v0.42.0
 	github.com/rs/zerolog v1.34.0
@@ -57,7 +57,7 @@ require (
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.43.0
 	golang.org/x/text v0.36.0
-	golang.org/x/time v0.14.0
+	golang.org/x/time v0.15.0
 	gopkg.in/ini.v1 v1.67.1
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
