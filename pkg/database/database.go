@@ -364,6 +364,17 @@ type MediaWithFullPath struct {
 	MediaTitleDBID int64
 }
 
+// ScrapeWrite is the database-level write payload produced by a scraper for a
+// matched Media row. Sentinel is written after all metadata so interrupted runs
+// can safely retry the record.
+type ScrapeWrite struct {
+	Sentinel   TagInfo
+	MediaTags  []TagInfo
+	TitleTags  []TagInfo
+	TitleProps []MediaProperty
+	MediaProps []MediaProperty
+}
+
 type FileInfo struct {
 	SystemID string
 	Path     string
@@ -641,6 +652,10 @@ type MediaDBI interface {
 	// (type:value) equals tagValue.
 	MediaHasTag(ctx context.Context, mediaDBID int64, tagValue string) (bool, error)
 
+	// GetScrapedMediaIDs returns media DBIDs in a system already marked as scraped
+	// by scraperID.
+	GetScrapedMediaIDs(ctx context.Context, scraperID string, systemDBID int64) (map[int64]struct{}, error)
+
 	// UpsertMediaTags writes tags to MediaTags for a specific Media row.
 	// Exclusive types (TagTypes.IsExclusive=1) delete existing tags of that type
 	// for the entity before inserting; additive types use INSERT OR IGNORE.
@@ -657,6 +672,10 @@ type MediaDBI interface {
 	// UpsertMediaProperties upserts properties into MediaProperties.
 	// Conflicts on (MediaDBID, TypeTagDBID) update data columns; DBID is preserved.
 	UpsertMediaProperties(ctx context.Context, mediaDBID int64, props []MediaProperty) error
+
+	// ApplyScrapeResult atomically writes all scraper metadata for a Media row and
+	// writes the sentinel tag last.
+	ApplyScrapeResult(ctx context.Context, mediaDBID, mediaTitleDBID int64, write *ScrapeWrite) error
 
 	// FindMediaTitlesWithoutSentinel returns MediaTitle rows for the given system
 	// that have no Media row with the given sentinel tag value.

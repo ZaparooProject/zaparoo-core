@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -84,6 +85,17 @@ func makeScrapeEnv(
 		Database: &database.Database{MediaDB: mockMediaDB},
 		Scrapers: scrapers,
 		Params:   rawParams,
+	}
+}
+
+func waitScrapeNotification(t *testing.T, ns <-chan models.Notification) models.Notification {
+	t.Helper()
+	select {
+	case n := <-ns:
+		return n
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for media.scraping notification")
+		return models.Notification{}
 	}
 }
 
@@ -170,6 +182,7 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
 
 	pl := mocks.NewMockPlatform()
 	pl.SetupBasicMock()
@@ -203,6 +216,7 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 			var payload models.ScrapingStatusResponse
 			require.NoError(t, json.Unmarshal(n.Params, &payload))
 			assert.Equal(t, "test-scraper", payload.ScraperID)
+			assert.Equal(t, 5, payload.TotalScraped)
 			if payload.Scraping && !payload.Done {
 				gotStart = true
 			}
@@ -287,7 +301,34 @@ func TestHandleMediaScrapeStatus_TracksLatestProgress(t *testing.T) {
 		Skipped:      4,
 		TotalScraped: 11,
 		Scraping:     true,
+		Paused:       false,
 	}, status)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaScrapeStatus_UsesScrapePauser(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	publishScrapingStatus(make(chan models.Notification, 1), &models.ScrapingStatusResponse{
+		ScraperID: "test-scraper",
+		Scraping:  true,
+	})
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, nil)
+
+	result, err := HandleMediaScrapeStatus(requests.RequestEnv{
+		Context:      context.Background(),
+		Database:     &database.Database{MediaDB: mockDB},
+		ScrapePauser: pauser,
+	})
+	require.NoError(t, err)
+	status, ok := result.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.True(t, status.Paused)
 	mockDB.AssertExpectations(t)
 }
 
@@ -374,4 +415,38 @@ func TestHandleMediaScrapeCancel_CancelsActive(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, status.Scraping)
 	assert.True(t, status.Done)
+}
+
+func TestHandleMediaScrapeResume_ResumesPausedScrape(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+	drainNotifications(t, ns)
+
+	scrapingStatusInstance.startIfNotRunning("test-scraper")
+	defer scrapingStatusInstance.clear()
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+
+	result, err := HandleMediaScrapeResume(requests.RequestEnv{
+		Context:      context.Background(),
+		State:        st,
+		ScrapePauser: pauser,
+	})
+	require.NoError(t, err)
+	resp, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "Media scraping resumed", resp["message"])
+	assert.False(t, pauser.IsPaused())
+
+	notif := waitScrapeNotification(t, ns)
+	assert.Equal(t, models.NotificationMediaScraping, notif.Method)
+	var payload models.ScrapingStatusResponse
+	require.NoError(t, json.Unmarshal(notif.Params, &payload))
+	assert.True(t, payload.Scraping)
+	assert.False(t, payload.Paused)
 }

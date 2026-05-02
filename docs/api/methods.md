@@ -1446,7 +1446,7 @@ Start a metadata scraper run in the background.
 
 Scraping enriches existing MediaDB records only. It does not create media rows; run `media.generate` first so the filesystem scanner has indexed the library. Scraping and media indexing are mutually exclusive, and only one scraper can run at a time.
 
-Progress is reported with [media.scraping](./notifications.md#mediascraping) notifications and can be queried with `media.scrape.status`.
+Progress is reported with [media.scraping](./notifications.md#mediascraping) notifications and can be queried with `media.scrape.status`. Scraping pauses while media is running and resumes automatically when playback stops.
 
 #### Parameters
 
@@ -1509,8 +1509,10 @@ None.
 | total     | integer | Yes      | Total records expected for the current scrape, when known. |
 | matched   | integer | Yes      | Number of records matched and enriched.                    |
 | skipped   | integer | Yes      | Number of records skipped.                                 |
+| totalScraped | integer | Yes  | Number of media records already marked scraped.             |
 | scraping  | boolean | Yes      | Whether a scrape is currently running.                     |
 | done      | boolean | Yes      | Whether the latest scrape reached a terminal state.        |
+| paused    | boolean | Yes      | Whether the active scrape is paused because media is running or until resumed. |
 
 #### Example
 
@@ -1537,8 +1539,10 @@ None.
     "total": 100,
     "matched": 38,
     "skipped": 4,
+    "totalScraped": 1200,
     "scraping": true,
-    "done": false
+    "done": false,
+    "paused": false
   }
 }
 ```
@@ -1577,6 +1581,46 @@ None.
   "id": "b8c9d0e1-7a5d-11ef-9c7b-020304050607",
   "result": {
     "message": "scraping cancelled"
+  }
+}
+```
+
+### media.scrape.resume
+
+Resume a paused metadata scraper operation.
+
+Scraping normally resumes automatically when playback stops. This method mirrors `media.generate.resume` and lets a local client force the active scrape to continue while the pauser is currently paused.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type   | Required | Description                    |
+| :------ | :----- | :------- | :----------------------------- |
+| message | string | Yes      | Status message about resuming. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c9d0e1f2-7a5d-11ef-9c7b-020304050607",
+  "method": "media.scrape.resume"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c9d0e1f2-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "message": "Media scraping resumed"
   }
 }
 ```

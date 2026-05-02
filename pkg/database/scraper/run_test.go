@@ -24,9 +24,11 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -77,10 +79,19 @@ func drainUpdates(ch <-chan scraper.ScrapeUpdate) []scraper.ScrapeUpdate {
 	return updates
 }
 
+func expectScrapedMediaIDs(db *helpers.MockMediaDBI, scraperID string, systemDBID int64, ids ...int64) {
+	scraped := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		scraped[id] = struct{}{}
+	}
+	db.On("GetScrapedMediaIDs", mock.Anything, scraperID, systemDBID).Return(scraped, nil).Once()
+}
+
 func TestRunScraper_NoRecords(t *testing.T) {
 	t.Parallel()
 	db := helpers.NewMockMediaDBI()
 	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	expectScrapedMediaIDs(db, "test", system.DBID)
 	loop := &stubLoop{id: "test", records: nil}
 
 	ch := scraper.RunScraper(
@@ -94,10 +105,36 @@ func TestRunScraper_NoRecords(t *testing.T) {
 	db.AssertExpectations(t)
 }
 
+func TestRunScraper_WaitsForPausedPauser(t *testing.T) {
+	t.Parallel()
+	db := helpers.NewMockMediaDBI()
+	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	expectScrapedMediaIDs(db, "test", system.DBID)
+	loop := &stubLoop{id: "test", records: nil}
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+
+	ch := scraper.RunScraper(
+		context.Background(), scraper.ScrapeOptions{Pauser: pauser}, []scraper.ScrapeSystem{system}, db, loop)
+
+	select {
+	case update := <-ch:
+		t.Fatalf("unexpected update while scraper is paused: %+v", update)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	pauser.Resume()
+	updates := drainUpdates(ch)
+	require.NotEmpty(t, updates)
+	assert.True(t, updates[len(updates)-1].Done)
+	db.AssertExpectations(t)
+}
+
 func TestRunScraper_NoMatch_IsSkipped(t *testing.T) {
 	t.Parallel()
 	db := helpers.NewMockMediaDBI()
 	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	expectScrapedMediaIDs(db, "test", system.DBID)
 	loop := &stubLoop{
 		id:      "test",
 		records: []stubRecord{{id: "mario"}},
@@ -123,6 +160,7 @@ func TestRunScraper_InvalidMatchIDs_AreSkipped(t *testing.T) {
 	t.Parallel()
 	db := helpers.NewMockMediaDBI()
 	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	expectScrapedMediaIDs(db, "test", system.DBID)
 	loop := &stubLoop{
 		id:      "test",
 		records: []stubRecord{{id: "mario"}},
@@ -149,10 +187,11 @@ func TestRunScraper_InvalidMatchIDs_AreSkipped(t *testing.T) {
 	db.AssertExpectations(t)
 }
 
-func TestRunScraper_ProgressUpdatesIncludeTotalsForSkippedRecords(t *testing.T) {
+func TestRunScraper_ProgressUpdatesReachTotalsForSkippedRecords(t *testing.T) {
 	t.Parallel()
 	db := helpers.NewMockMediaDBI()
 	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	expectScrapedMediaIDs(db, "test", system.DBID)
 	loop := &stubLoop{
 		id:      "test",
 		records: []stubRecord{{id: "mario"}, {id: "zelda"}},
@@ -164,30 +203,23 @@ func TestRunScraper_ProgressUpdatesIncludeTotalsForSkippedRecords(t *testing.T) 
 	ch := scraper.RunScraper(context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{system}, db, loop)
 	updates := drainUpdates(ch)
 
-	var firstSkip, secondSkip bool
+	var finalSkip bool
 	for _, u := range updates {
-		if u.SystemID != "NES" || u.Total != 2 {
+		if u.SystemID != "NES" || u.Total != 2 || u.Processed != 2 {
 			continue
 		}
-		switch u.Processed {
-		case 1:
-			firstSkip = u.Skipped == 1
-		case 2:
-			secondSkip = u.Skipped == 2
-		}
+		finalSkip = u.Skipped == 2
 	}
-	assert.True(t, firstSkip, "first skipped record should advance progress")
-	assert.True(t, secondSkip, "second skipped record should advance progress")
+	assert.True(t, finalSkip, "skipped records should still emit final per-system progress")
 	db.AssertExpectations(t)
 }
 
 func TestRunScraper_SentinelSkip(t *testing.T) {
 	t.Parallel()
 	db := helpers.NewMockMediaDBI()
-	// Record matches media DBID=5; it already has the sentinel tag.
-	db.On("MediaHasTag", mock.Anything, int64(5), "scraper.test:scraped").Return(true, nil)
-
 	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	// Record matches media DBID=5; it already has the sentinel tag.
+	expectScrapedMediaIDs(db, "test", system.DBID, 5)
 	loop := &stubLoop{
 		id:      "test",
 		records: []stubRecord{{id: "mario"}},
@@ -208,12 +240,38 @@ func TestRunScraper_SentinelSkip(t *testing.T) {
 	db.AssertExpectations(t)
 }
 
+func TestRunScraper_SkipsDuplicateMatchAfterSuccessfulWrite(t *testing.T) {
+	t.Parallel()
+	db := helpers.NewMockMediaDBI()
+	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	expectScrapedMediaIDs(db, "test", system.DBID)
+	db.On("ApplyScrapeResult", mock.Anything, int64(5), int64(10), mock.Anything).Return(nil).Once()
+
+	loop := &stubLoop{
+		id:      "test",
+		records: []stubRecord{{id: "mario-a"}, {id: "mario-b"}},
+		matchFn: func(_ stubRecord) (*scraper.MatchResult, error) {
+			return &scraper.MatchResult{MediaDBID: 5, MediaTitleDBID: 10}, nil
+		},
+	}
+
+	ch := scraper.RunScraper(
+		context.Background(), scraper.ScrapeOptions{Force: false}, []scraper.ScrapeSystem{system}, db, loop)
+	updates := drainUpdates(ch)
+
+	last := updates[len(updates)-1]
+	assert.True(t, last.Done)
+	assert.Equal(t, 2, last.Processed)
+	assert.Equal(t, 1, last.Matched)
+	assert.Equal(t, 1, last.Skipped)
+	db.AssertExpectations(t)
+}
+
 func TestRunScraper_Force_IgnoresSentinel(t *testing.T) {
 	t.Parallel()
 	db := helpers.NewMockMediaDBI()
-	// MediaHasTag should NOT be called when Force=true.
-	db.On("UpsertMediaTags", mock.Anything, int64(5), mock.Anything).Return(nil).Times(2) // tags + sentinel
-	db.On("UpsertMediaTitleTags", mock.Anything, int64(10), mock.Anything).Return(nil).Once()
+	// Sentinel preload should NOT be called when Force=true.
+	db.On("ApplyScrapeResult", mock.Anything, int64(5), int64(10), mock.Anything).Return(nil).Once()
 
 	system := scraper.ScrapeSystem{DBID: 1, ID: "test"}
 	loop := &stubLoop{
@@ -253,6 +311,7 @@ func TestRunScraper_NonFatalMatchError_ContinuesLoop(t *testing.T) {
 	matchErr := errors.New("lookup failed")
 
 	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	expectScrapedMediaIDs(db, "test", system.DBID)
 	callCount := 0
 	loop := &stubLoop{
 		id:      "test",
@@ -290,6 +349,7 @@ func TestRunScraper_CtxCancel_EmitsDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	expectScrapedMediaIDs(db, "test", system.DBID)
 	loop := &stubLoop{
 		id:      "test",
 		records: []stubRecord{{id: "mario"}, {id: "zelda"}, {id: "metroid"}},
@@ -309,13 +369,16 @@ func TestRunScraper_CtxCancel_EmitsDone(t *testing.T) {
 func TestRunScraper_FullWrite_HappyPath(t *testing.T) {
 	t.Parallel()
 	db := helpers.NewMockMediaDBI()
-	db.On("MediaHasTag", mock.Anything, int64(1), "scraper.gl:scraped").Return(false, nil)
-	db.On("UpsertMediaTags", mock.Anything, int64(1), mock.Anything).Return(nil).Times(2)
-	db.On("UpsertMediaTitleTags", mock.Anything, int64(2), mock.Anything).Return(nil).Once()
-	db.On("UpsertMediaTitleProperties", mock.Anything, int64(2), mock.Anything).Return(nil).Once()
-	db.On("UpsertMediaProperties", mock.Anything, int64(1), mock.Anything).Return(nil).Once()
 
 	system := scraper.ScrapeSystem{DBID: 10, ID: "NES"}
+	expectScrapedMediaIDs(db, "gl", system.DBID)
+	writeMatcher := mock.MatchedBy(func(write *database.ScrapeWrite) bool {
+		require.NotNil(t, write)
+		return assert.Contains(t, write.MediaTags, database.TagInfo{Type: "region", Tag: "usa"}) &&
+			assert.Contains(t, write.TitleTags, database.TagInfo{Type: "developer", Tag: "nintendo"}) &&
+			assert.Equal(t, database.TagInfo{Type: "scraper.gl", Tag: "scraped"}, write.Sentinel)
+	})
+	db.On("ApplyScrapeResult", mock.Anything, int64(1), int64(2), writeMatcher).Return(nil).Once()
 	loop := &stubLoop{
 		id:      "gl",
 		records: []stubRecord{{id: "mario"}},
@@ -350,17 +413,17 @@ func TestRunScraper_FullWrite_HappyPath(t *testing.T) {
 }
 
 func TestSentinelTag(t *testing.T) {
-	// sentinelTag is unexported — test its effect through RunScraper by checking
-	// what tag string is passed to MediaHasTag.
+	// sentinelTagInfo is unexported — test its effect through RunScraper by
+	// checking the sentinel written with the scrape result.
 	t.Parallel()
-	var capturedTag string
+	var capturedTag database.TagInfo
 	db := helpers.NewMockMediaDBI()
-	db.On("MediaHasTag", mock.Anything, int64(1), mock.AnythingOfType("string")).
-		Run(func(args mock.Arguments) { capturedTag = args.String(2) }).
-		Return(false, nil)
-	db.On("UpsertMediaTags", mock.Anything, int64(1), mock.Anything).Return(nil).Times(2)
 
 	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	expectScrapedMediaIDs(db, "myscr", system.DBID)
+	db.On("ApplyScrapeResult", mock.Anything, int64(1), int64(1), mock.Anything).
+		Run(func(args mock.Arguments) { capturedTag = args.Get(3).(*database.ScrapeWrite).Sentinel }).
+		Return(nil)
 	loop := &stubLoop{
 		id:      "myscr",
 		records: []stubRecord{{id: "mario"}},
@@ -372,5 +435,5 @@ func TestSentinelTag(t *testing.T) {
 	ch := scraper.RunScraper(context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{system}, db, loop)
 	drainUpdates(ch)
 
-	assert.Equal(t, "scraper.myscr:scraped", capturedTag)
+	assert.Equal(t, database.TagInfo{Type: "scraper.myscr", Tag: "scraped"}, capturedTag)
 }

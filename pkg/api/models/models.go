@@ -70,6 +70,7 @@ const (
 	MethodMediaScrape          = "media.scrape"
 	MethodMediaScrapeStatus    = "media.scrape.status"
 	MethodMediaScrapeCancel    = "media.scrape.cancel"
+	MethodMediaScrapeResume    = "media.scrape.resume"
 	MethodMediaBrowse          = "media.browse"
 	MethodMediaControl         = "media.control"
 	MethodMediaActiveUpdate    = "media.active.update"

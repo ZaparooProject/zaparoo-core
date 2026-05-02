@@ -30,6 +30,7 @@ import (
 	"context"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
 // Scraper is the public interface all metadata scrapers implement.
@@ -84,6 +85,9 @@ type MapResult struct {
 
 // ScrapeOptions configures a scrape run.
 type ScrapeOptions struct {
+	// Pauser pauses scrape work while another foreground activity needs the system.
+	Pauser *syncutil.Pauser
+
 	// Systems limits scraping to these system IDs. Nil or empty means all systems.
 	Systems []string
 

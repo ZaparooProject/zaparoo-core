@@ -22,22 +22,17 @@ package scraper
 import (
 	"context"
 	"errors"
-	"fmt"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
-// sentinelTag returns the sentinel tag value for the given scraper ID in
-// "type:value" string format, used for read-side checks (e.g. db.MediaHasTag).
-func sentinelTag(scraperID string) string {
-	return tags.ScraperTypeTag(scraperID)
-}
+const scrapeProgressMinInterval = 250 * time.Millisecond
 
 // sentinelTagInfo returns the canonical TagInfo representation of the sentinel
 // for the given scraper ID, used for write-side operations (e.g. db.UpsertMediaTags).
-// It is the TagInfo equivalent of sentinelTag.
 func sentinelTagInfo(scraperID string) database.TagInfo {
 	return database.TagInfo{
 		Type: string(tags.ScraperType(scraperID)),
@@ -63,11 +58,26 @@ func RunScraper[T any](
 	go func() {
 		defer close(ch)
 
-		sentinel := sentinelTag(s.ID())
-
 		var totalProcessed, totalMatched, totalSkipped int
+		waitForResume := func(systemID string, processed, matched, skipped int) bool {
+			if waitErr := opts.Pauser.Wait(ctx); waitErr != nil {
+				ch <- ScrapeUpdate{
+					SystemID:  systemID,
+					Processed: totalProcessed + processed,
+					Matched:   totalMatched + matched,
+					Skipped:   totalSkipped + skipped,
+					Done:      true,
+				}
+				return false
+			}
+			return true
+		}
 
 		for _, system := range systems {
+			if !waitForResume(system.ID, 0, 0, 0) {
+				return
+			}
+
 			// Emit start-of-system update with unknown total.
 			select {
 			case <-ctx.Done():
@@ -111,8 +121,55 @@ func RunScraper[T any](
 
 			var processed, matched, skipped int
 			totalRecords := len(records)
+			if !waitForResume(system.ID, processed, matched, skipped) {
+				return
+			}
+			lastProgress := time.Now()
+			emitProgress := func(update ScrapeUpdate, force bool) bool {
+				if !force && time.Since(lastProgress) < scrapeProgressMinInterval {
+					return true
+				}
+				update.SystemID = system.ID
+				update.Total = totalRecords
+				select {
+				case <-ctx.Done():
+					ch <- ScrapeUpdate{
+						SystemID:  system.ID,
+						Processed: totalProcessed + processed,
+						Matched:   totalMatched + matched,
+						Skipped:   totalSkipped + skipped,
+						Done:      true,
+					}
+					return false
+				case ch <- update:
+					lastProgress = time.Now()
+					return true
+				}
+			}
+
+			scrapedMediaIDs := map[int64]struct{}{}
+			if !opts.Force {
+				var err error
+				scrapedMediaIDs, err = db.GetScrapedMediaIDs(ctx, s.ID(), system.DBID)
+				if err != nil {
+					ch <- ScrapeUpdate{
+						SystemID:  system.ID,
+						Total:     totalRecords,
+						FatalErr:  err,
+						Done:      true,
+						Processed: totalProcessed,
+						Matched:   totalMatched,
+						Skipped:   totalSkipped,
+					}
+					return
+				}
+			}
 
 			for _, record := range records {
+				if !waitForResume(system.ID, processed, matched, skipped) {
+					return
+				}
+
 				// Respect cancellation on every record.
 				select {
 				case <-ctx.Done():
@@ -133,24 +190,24 @@ func RunScraper[T any](
 				if matchErr != nil {
 					log.Warn().Err(matchErr).Str("system", system.ID).Msg("scraper: non-fatal match error")
 					skipped++
-					ch <- ScrapeUpdate{
-						SystemID:  system.ID,
+					if !emitProgress(ScrapeUpdate{
 						Processed: processed,
-						Total:     totalRecords,
 						Matched:   matched,
 						Skipped:   skipped,
 						Err:       matchErr,
+					}, true) {
+						return
 					}
 					continue
 				}
 				if match == nil {
 					skipped++
-					ch <- ScrapeUpdate{
-						SystemID:  system.ID,
+					if !emitProgress(ScrapeUpdate{
 						Processed: processed,
-						Total:     totalRecords,
 						Matched:   matched,
 						Skipped:   skipped,
+					}, false) {
+						return
 					}
 					continue
 				}
@@ -161,42 +218,25 @@ func RunScraper[T any](
 						Str("system", system.ID).
 						Msg("scraper: Match returned non-positive IDs, skipping record")
 					skipped++
-					ch <- ScrapeUpdate{
-						SystemID:  system.ID,
+					if !emitProgress(ScrapeUpdate{
 						Processed: processed,
-						Total:     totalRecords,
 						Matched:   matched,
 						Skipped:   skipped,
+					}, true) {
+						return
 					}
 					continue
 				}
 
-				// Step 2: skip if already scraped (checked after match so we have the MediaDBID).
 				if !opts.Force {
-					has, sentinelErr := db.MediaHasTag(ctx, match.MediaDBID, sentinel)
-					if sentinelErr != nil {
-						log.Warn().Err(sentinelErr).
-							Int64("mediaDBID", match.MediaDBID).
-							Msg("scraper: sentinel check error")
+					if _, exists := scrapedMediaIDs[match.MediaDBID]; exists {
 						skipped++
-						ch <- ScrapeUpdate{
-							SystemID:  system.ID,
+						if !emitProgress(ScrapeUpdate{
 							Processed: processed,
-							Total:     totalRecords,
 							Matched:   matched,
 							Skipped:   skipped,
-							Err:       sentinelErr,
-						}
-						continue
-					}
-					if has {
-						skipped++
-						ch <- ScrapeUpdate{
-							SystemID:  system.ID,
-							Processed: processed,
-							Total:     totalRecords,
-							Matched:   matched,
-							Skipped:   skipped,
+						}, false) {
+							return
 						}
 						continue
 					}
@@ -204,39 +244,17 @@ func RunScraper[T any](
 
 				// Step 4: map source record to tag/property writes.
 				mapped := s.MapToDB(record)
+				if !waitForResume(system.ID, processed, matched, skipped) {
+					return
+				}
 
-				// Steps 5–7: write tags, properties, and the sentinel sequentially.
-				// The sentinel is written last so a partial failure leaves the record
-				// eligible for retry on the next run.
-				writeErr := func() error {
-					if len(mapped.MediaTags) > 0 {
-						if err := db.UpsertMediaTags(ctx, match.MediaDBID, mapped.MediaTags); err != nil {
-							return fmt.Errorf("upsert media tags: %w", err)
-						}
-					}
-					if len(mapped.TitleTags) > 0 {
-						err := db.UpsertMediaTitleTags(ctx, match.MediaTitleDBID, mapped.TitleTags)
-						if err != nil {
-							return fmt.Errorf("upsert title tags: %w", err)
-						}
-					}
-					if len(mapped.TitleProps) > 0 {
-						err := db.UpsertMediaTitleProperties(ctx, match.MediaTitleDBID, mapped.TitleProps)
-						if err != nil {
-							return fmt.Errorf("upsert title properties: %w", err)
-						}
-					}
-					if len(mapped.MediaProps) > 0 {
-						if err := db.UpsertMediaProperties(ctx, match.MediaDBID, mapped.MediaProps); err != nil {
-							return fmt.Errorf("upsert media properties: %w", err)
-						}
-					}
-					sentinel := []database.TagInfo{sentinelTagInfo(s.ID())}
-					if err := db.UpsertMediaTags(ctx, match.MediaDBID, sentinel); err != nil {
-						return fmt.Errorf("upsert sentinel tag: %w", err)
-					}
-					return nil
-				}()
+				writeErr := db.ApplyScrapeResult(ctx, match.MediaDBID, match.MediaTitleDBID, &database.ScrapeWrite{
+					Sentinel:   sentinelTagInfo(s.ID()),
+					MediaTags:  mapped.MediaTags,
+					TitleTags:  mapped.TitleTags,
+					TitleProps: mapped.TitleProps,
+					MediaProps: mapped.MediaProps,
+				})
 				if writeErr != nil {
 					log.Warn().Err(writeErr).
 						Int64("mediaDBID", match.MediaDBID).
@@ -244,26 +262,30 @@ func RunScraper[T any](
 						Str("system", system.ID).
 						Msg("scraper: write failed")
 					skipped++
-					ch <- ScrapeUpdate{
-						SystemID:  system.ID,
+					if !emitProgress(ScrapeUpdate{
 						Processed: processed,
-						Total:     totalRecords,
 						Matched:   matched,
 						Skipped:   skipped,
 						Err:       writeErr,
+					}, true) {
+						return
 					}
 					continue
 				}
 
 				matched++
-				ch <- ScrapeUpdate{
-					SystemID:  system.ID,
+				if !opts.Force {
+					scrapedMediaIDs[match.MediaDBID] = struct{}{}
+				}
+				if !emitProgress(ScrapeUpdate{
 					Processed: processed,
-					Total:     totalRecords,
 					Matched:   matched,
 					Skipped:   skipped,
+				}, false) {
+					return
 				}
 			}
+			emitProgress(ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}, true)
 
 			totalProcessed += processed
 			totalMatched += matched

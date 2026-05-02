@@ -217,7 +217,7 @@ Sent during media database generation to indicate indexing progress and completi
 
 Sent while a metadata scraper run is active and when it completes.
 
-The first notification for a scraper run identifies the scraper and sets `scraping` to true. Progress notifications include the current system, counters, and completion state. A final notification has `scraping` set to false and `done` set to true.
+The first notification for a scraper run identifies the scraper and sets `scraping` to true. Progress notifications include the current system, counters, pause state, and completion state. A final notification has `scraping` set to false and `done` set to true.
 
 #### Parameters
 
@@ -229,8 +229,10 @@ The first notification for a scraper run identifies the scraper and sets `scrapi
 | total     | number  | Yes      | Total source records for the current system, or 0 before known.   |
 | matched   | number  | Yes      | Number of records matched to existing media rows.                 |
 | skipped   | number  | Yes      | Number of records skipped because they were unmatched, already scraped, or failed per-record processing. |
+| totalScraped | number | Yes   | Number of media records already marked scraped.                   |
 | scraping  | boolean | Yes      | True while scraping is active.                                    |
 | done      | boolean | Yes      | True on the terminal update for the scraper run.                  |
+| paused    | boolean | Yes      | True when the active scrape is paused.                            |
 
 #### Examples
 
@@ -247,8 +249,10 @@ The first notification for a scraper run identifies the scraper and sets `scrapi
     "total": 100,
     "matched": 38,
     "skipped": 4,
+    "totalScraped": 1200,
     "scraping": true,
-    "done": false
+    "done": false,
+    "paused": false
   }
 }
 ```
@@ -266,8 +270,10 @@ The first notification for a scraper run identifies the scraper and sets `scrapi
     "total": 100,
     "matched": 92,
     "skipped": 8,
+    "totalScraped": 1250,
     "scraping": false,
-    "done": true
+    "done": true,
+    "paused": false
   }
 }
 ```

@@ -242,6 +242,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaScrape:         methods.HandleMediaScrape,
 		models.MethodMediaScrapeStatus:   methods.HandleMediaScrapeStatus,
 		models.MethodMediaScrapeCancel:   methods.HandleMediaScrapeCancel,
+		models.MethodMediaScrapeResume:   methods.HandleMediaScrapeResume,
 		models.MethodMediaControl:        methods.HandleMediaControl,
 		// settings
 		models.MethodSettings:             methods.HandleSettings,
@@ -870,6 +871,7 @@ func handleWSMessage(
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
+	scrapePauser *syncutil.Pauser,
 	encGateway *apimiddleware.EncryptionGateway,
 	lastSeenTracker *apimiddleware.LastSeenTracker,
 	scrapers map[string]scraper.Scraper,
@@ -959,6 +961,7 @@ func handleWSMessage(
 			ConfirmQueue:  confirmQueue,
 			Scrapers:      scrapers,
 			IndexPauser:   indexPauser,
+			ScrapePauser:  scrapePauser,
 			IsLocal:       isLocal,
 			ClientID:      session.Request.RemoteAddr,
 		}
@@ -1168,6 +1171,7 @@ func handlePostRequest(
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
+	scrapePauser *syncutil.Pauser,
 	scrapers map[string]scraper.Scraper,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1216,6 +1220,7 @@ func handlePostRequest(
 			ConfirmQueue:  confirmQueue,
 			Scrapers:      scrapers,
 			IndexPauser:   indexPauser,
+			ScrapePauser:  scrapePauser,
 			IsLocal:       apimiddleware.IsLoopbackAddr(r.RemoteAddr),
 			ClientID:      r.RemoteAddr,
 		}
@@ -1355,10 +1360,11 @@ func Start(
 	mdnsHostname string,
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
+	scrapePauser *syncutil.Pauser,
 ) error {
 	return StartWithReady(
 		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager,
-		notifBroker, mdnsHostname, player, indexPauser, nil,
+		notifBroker, mdnsHostname, player, indexPauser, scrapePauser, nil,
 	)
 }
 
@@ -1377,6 +1383,7 @@ func StartWithReady(
 	mdnsHostname string,
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
+	scrapePauser *syncutil.Pauser,
 	ready chan<- error,
 ) error {
 	notifyReady := func(err error) {
@@ -1636,7 +1643,7 @@ func StartWithReady(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
 			db, limitsManager, player,
-			indexPauser, scrapers,
+			indexPauser, scrapePauser, scrapers,
 		)
 		r.Post("/api", postHandler)
 		r.Post("/api/v0", postHandler)
@@ -1677,7 +1684,7 @@ func StartWithReady(
 		rateLimiter,
 		handleWSMessage(
 			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
-			db, limitsManager, player, indexPauser, encGateway,
+			db, limitsManager, player, indexPauser, scrapePauser, encGateway,
 			lastSeenTracker, scrapers,
 		),
 	))

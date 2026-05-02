@@ -139,6 +139,15 @@ func TestFormatDBMenuLabel(t *testing.T) {
 			expected: "Update index: in progress",
 		},
 		{
+			name: "database is paused",
+			db: models.IndexingStatusResponse{
+				Exists:   true,
+				Indexing: true,
+				Paused:   true,
+			},
+			expected: "Update index: paused",
+		},
+		{
 			name: "database exists with media",
 			db: models.IndexingStatusResponse{
 				Exists:     true,
@@ -194,6 +203,11 @@ func TestFormatScrapeMenuLabel(t *testing.T) {
 		Processed:    12,
 		TotalScraped: 42,
 	}))
+	assert.Equal(t, "Scrape metadata: paused", formatScrapeMenuLabel(&models.ScrapingStatusResponse{
+		ScraperID: "screenscraper",
+		Scraping:  true,
+		Paused:    true,
+	}))
 	assert.Equal(t, "Scrape metadata: 42 scraped", formatScrapeMenuLabel(&models.ScrapingStatusResponse{
 		ScraperID:    "screenscraper",
 		Done:         true,
@@ -228,6 +242,17 @@ func TestFormatScrapeProgress(t *testing.T) {
 			Processed: 3,
 			Matched:   2,
 			Skipped:   1,
+		}, ""),
+	)
+	assert.Equal(t,
+		"screenscraper\nPaused: 3 / 10\nMatched: 2  Skipped: 1",
+		formatScrapeProgress(&models.ScrapingStatusResponse{
+			ScraperID: "screenscraper",
+			Processed: 3,
+			Total:     10,
+			Matched:   2,
+			Skipped:   1,
+			Paused:    true,
 		}, ""),
 	)
 }

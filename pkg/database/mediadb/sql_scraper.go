@@ -204,6 +204,46 @@ func (db *MediaDB) GetTotalScrapedMediaCount(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+// GetScrapedMediaIDs returns media DBIDs in systemDBID already marked as scraped
+// by scraperID.
+func (db *MediaDB) GetScrapedMediaIDs(
+	ctx context.Context, scraperID string, systemDBID int64,
+) (map[int64]struct{}, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	rows, err := db.sql.QueryContext(ctx, `
+		SELECT DISTINCT mt.MediaDBID
+		FROM MediaTags mt
+		JOIN Media m ON mt.MediaDBID = m.DBID
+		JOIN Tags t ON mt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE m.SystemDBID = ? AND tt.Type = ? AND t.Tag = ?
+	`, systemDBID, string(tags.ScraperType(scraperID)), string(tags.TagScraperScraped))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query scraped media IDs for scraper %q: %w", scraperID, err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	mediaIDs := make(map[int64]struct{})
+	for rows.Next() {
+		var mediaDBID int64
+		if err := rows.Scan(&mediaDBID); err != nil {
+			return nil, fmt.Errorf("failed to scan scraped media ID: %w", err)
+		}
+		mediaIDs[mediaDBID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate scraped media IDs: %w", err)
+	}
+	return mediaIDs, nil
+}
+
 // UpsertMediaTags writes tags to MediaTags for a specific Media row, respecting
 // TagTypes.IsExclusive: exclusive types delete existing tags of that type first;
 // additive types use INSERT OR IGNORE.
@@ -283,6 +323,24 @@ func upsertTags(
 		}
 	}()
 
+	if err := upsertTagsInTx(ctx, tx, tagInfos, deleteFn, insertFn); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("upsertTags: commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func upsertTagsInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	tagInfos []database.TagInfo,
+	deleteFn func(tx *sql.Tx, typeDBID int64) error,
+	insertFn func(tx *sql.Tx, tagDBID int64) error,
+) error {
 	// Group tags by type so that deleteFn is called at most once per exclusive type.
 	type typeEntry struct {
 		tags        []database.TagInfo
@@ -393,10 +451,6 @@ func upsertTags(
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("upsertTags: commit: %w", err)
-	}
-	committed = true
 	return nil
 }
 
@@ -410,12 +464,18 @@ func (db *MediaDB) UpsertMediaTitleProperties(
 	if db.sql == nil {
 		return ErrNullSQL
 	}
+	return upsertMediaTitleProperties(ctx, db.sql, mediaTitleDBID, props)
+}
+
+func upsertMediaTitleProperties(
+	ctx context.Context, q sqlQueryable, mediaTitleDBID int64, props []database.MediaProperty,
+) error {
 	for _, p := range props {
-		typeTagDBID, err := resolvePropertyTypeTag(ctx, db.sql, p.TypeTag)
+		typeTagDBID, err := resolvePropertyTypeTag(ctx, q, p.TypeTag)
 		if err != nil {
 			return fmt.Errorf("failed to resolve property type tag %q: %w", p.TypeTag, err)
 		}
-		_, err = db.sql.ExecContext(ctx, `
+		_, err = q.ExecContext(ctx, `
 			INSERT INTO MediaTitleProperties (MediaTitleDBID, TypeTagDBID, Text, BlobDBID)
 			VALUES (?, ?, ?, ?)
 			ON CONFLICT(MediaTitleDBID, TypeTagDBID) DO UPDATE SET
@@ -437,12 +497,115 @@ func (db *MediaDB) UpsertMediaProperties(ctx context.Context, mediaDBID int64, p
 	if db.sql == nil {
 		return ErrNullSQL
 	}
+	return upsertMediaProperties(ctx, db.sql, mediaDBID, props)
+}
+
+// ApplyScrapeResult writes all scraper metadata for a match in one transaction.
+// The sentinel tag is inserted last so interrupted writes remain retryable.
+func (db *MediaDB) ApplyScrapeResult(
+	ctx context.Context, mediaDBID, mediaTitleDBID int64, write *database.ScrapeWrite,
+) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	if write == nil {
+		return errors.New("ApplyScrapeResult: write is nil")
+	}
+
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("ApplyScrapeResult: begin transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if len(write.MediaTags) > 0 {
+		if err := upsertMediaTagsInTx(ctx, tx, mediaDBID, write.MediaTags); err != nil {
+			return fmt.Errorf("upsert media tags: %w", err)
+		}
+	}
+	if len(write.TitleTags) > 0 {
+		if err := upsertMediaTitleTagsInTx(ctx, tx, mediaTitleDBID, write.TitleTags); err != nil {
+			return fmt.Errorf("upsert title tags: %w", err)
+		}
+	}
+	if len(write.TitleProps) > 0 {
+		if err := upsertMediaTitleProperties(ctx, tx, mediaTitleDBID, write.TitleProps); err != nil {
+			return fmt.Errorf("upsert title properties: %w", err)
+		}
+	}
+	if len(write.MediaProps) > 0 {
+		if err := upsertMediaProperties(ctx, tx, mediaDBID, write.MediaProps); err != nil {
+			return fmt.Errorf("upsert media properties: %w", err)
+		}
+	}
+	if err := upsertMediaTagsInTx(ctx, tx, mediaDBID, []database.TagInfo{write.Sentinel}); err != nil {
+		return fmt.Errorf("upsert sentinel tag: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("ApplyScrapeResult: commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func upsertMediaTagsInTx(ctx context.Context, tx *sql.Tx, mediaDBID int64, tagInfos []database.TagInfo) error {
+	return upsertTagsInTx(ctx, tx, tagInfos, func(tx *sql.Tx, typeDBID int64) error {
+		_, err := tx.ExecContext(ctx,
+			`DELETE FROM MediaTags WHERE MediaDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`,
+			mediaDBID, typeDBID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to delete media tags for type: %w", err)
+		}
+		return nil
+	}, func(tx *sql.Tx, tagDBID int64) error {
+		_, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`,
+			mediaDBID, tagDBID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert media tag link: %w", err)
+		}
+		return nil
+	})
+}
+
+func upsertMediaTitleTagsInTx(
+	ctx context.Context, tx *sql.Tx, mediaTitleDBID int64, tagInfos []database.TagInfo,
+) error {
+	return upsertTagsInTx(ctx, tx, tagInfos, func(tx *sql.Tx, typeDBID int64) error {
+		const q = `DELETE FROM MediaTitleTags` +
+			` WHERE MediaTitleDBID = ? AND TagDBID IN (SELECT DBID FROM Tags WHERE TypeDBID = ?)`
+		_, err := tx.ExecContext(ctx, q, mediaTitleDBID, typeDBID)
+		if err != nil {
+			return fmt.Errorf("failed to delete media title tags for type: %w", err)
+		}
+		return nil
+	}, func(tx *sql.Tx, tagDBID int64) error {
+		_, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO MediaTitleTags (MediaTitleDBID, TagDBID) VALUES (?, ?)`,
+			mediaTitleDBID, tagDBID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert media title tag link: %w", err)
+		}
+		return nil
+	})
+}
+
+func upsertMediaProperties(ctx context.Context, q sqlQueryable, mediaDBID int64, props []database.MediaProperty) error {
 	for _, p := range props {
-		typeTagDBID, err := resolvePropertyTypeTag(ctx, db.sql, p.TypeTag)
+		typeTagDBID, err := resolvePropertyTypeTag(ctx, q, p.TypeTag)
 		if err != nil {
 			return fmt.Errorf("failed to resolve property type tag %q: %w", p.TypeTag, err)
 		}
-		_, err = db.sql.ExecContext(ctx, `
+		_, err = q.ExecContext(ctx, `
 			INSERT INTO MediaProperties (MediaDBID, TypeTagDBID, Text, BlobDBID)
 			VALUES (?, ?, ?, ?)
 			ON CONFLICT(MediaDBID, TypeTagDBID) DO UPDATE SET
@@ -495,7 +658,7 @@ func (db *MediaDB) DeleteMediaProperty(ctx context.Context, mediaDBID, typeTagDB
 // resolvePropertyTypeTag looks up the DBID of the Tags row for the given full
 // tag string (e.g. "property:description"). The tag must already exist in the DB
 // (seeded by SeedCanonicalTags). Returns an error if not found.
-func resolvePropertyTypeTag(ctx context.Context, db *sql.DB, typeTag string) (int64, error) {
+func resolvePropertyTypeTag(ctx context.Context, db sqlQueryable, typeTag string) (int64, error) {
 	// typeTag format: "type:value" — split on first colon.
 	idx := strings.Index(typeTag, ":")
 	if idx < 0 {

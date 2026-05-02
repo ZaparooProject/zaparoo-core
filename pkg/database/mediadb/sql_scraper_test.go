@@ -241,6 +241,84 @@ func TestGetTotalScrapedMediaCount_DistinctMedia(t *testing.T) {
 	assert.Equal(t, 2, count)
 }
 
+func TestGetScrapedMediaIDs(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	mediaPathOtherSystem := filepath.ToSlash(filepath.Join("roms", "sonic.md"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'Genesis', 'Genesis');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+		    (2, 1, 'zelda', 'Zelda'),
+		    (3, 2, 'sonic', 'Sonic');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES
+		    (2, 2, 1, ?),
+		    (3, 3, 2, ?);
+	`, mediaPath2, mediaPathOtherSystem)
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 3, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "scraper.other", Tag: "scraped"}}))
+
+	ids, err := mediaDB.GetScrapedMediaIDs(ctx, "test", 1)
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]struct{}{1: {}, 2: {}}, ids)
+}
+
+func TestApplyScrapeResult_WritesSentinelLastPayload(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	err := mediaDB.ApplyScrapeResult(ctx, 1, 1, &database.ScrapeWrite{
+		Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+		MediaTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+		TitleTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+		TitleProps: []database.MediaProperty{{
+			TypeTag: "property:description",
+			Text:    "A classic",
+		}},
+		MediaProps: []database.MediaProperty{{
+			TypeTag: "property:image-boxart",
+			Text:    filepath.ToSlash(filepath.Join("media", "boxart", "mario.png")),
+		}},
+	})
+	require.NoError(t, err)
+
+	hasSentinel, err := mediaDB.MediaHasTag(ctx, 1, "scraper.test:scraped")
+	require.NoError(t, err)
+	assert.True(t, hasSentinel)
+
+	titleProps, err := mediaDB.GetMediaTitleProperties(ctx, 1)
+	require.NoError(t, err)
+	assert.Condition(t, func() bool {
+		for _, prop := range titleProps {
+			if prop.TypeTag == "property:description" && prop.Text == "A classic" {
+				return true
+			}
+		}
+		return false
+	})
+
+	mediaProps, err := mediaDB.GetMediaProperties(ctx, 1)
+	require.NoError(t, err)
+	boxartPath := filepath.ToSlash(filepath.Join("media", "boxart", "mario.png"))
+	assert.Condition(t, func() bool {
+		for _, prop := range mediaProps {
+			if prop.TypeTag == "property:image-boxart" && prop.Text == boxartPath {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 // --- UpsertMediaTags ---
 
 func TestUpsertMediaTags_AdditiveType_AccumulatesTags(t *testing.T) {

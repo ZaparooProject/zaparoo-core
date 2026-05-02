@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -259,7 +260,17 @@ func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
   <game><path>./zelda.nes</path><name>Zelda</name></game>
 </gameList>`), 0o600))
 
-	records, err := (&GamelistXMLScraper{}).LoadRecords(context.Background(), scraper.ScrapeSystem{
+	db := helpers.NewMockMediaDBI()
+	db.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{
+		{
+			Path:           filepath.ToSlash(filepath.Join(validRoot, "MARIO.nes")),
+			SystemID:       "nes",
+			DBID:           11,
+			MediaTitleDBID: 22,
+		},
+	}, nil).Once()
+
+	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
 		ID:       "nes",
 		ROMPaths: []string{missingRoot, malformedRoot, validRoot},
 	})
@@ -268,9 +279,14 @@ func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
 	assert.Equal(t, validRoot, records[0].SystemRootPath)
 	assert.Equal(t, "./mario.nes", records[0].Game.Path)
 	assert.Equal(t, "Mario", records[0].Game.Name)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(validRoot, "mario.nes")), records[0].MatchedPath)
+	assert.Equal(t, int64(11), records[0].MatchedMediaDBID)
+	assert.Equal(t, int64(22), records[0].MatchedTitleDBID)
 	assert.Equal(t, filepath.Join(validRoot, "media", "image"), records[0].AvailableMediaDirs["image"])
 	assert.Equal(t, validRoot, records[1].SystemRootPath)
 	assert.Equal(t, "./zelda.nes", records[1].Game.Path)
+	assert.Zero(t, records[1].MatchedMediaDBID)
+	db.AssertExpectations(t)
 }
 
 func TestScrape_ResolverError(t *testing.T) {

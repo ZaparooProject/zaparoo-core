@@ -112,6 +112,14 @@ func cancelMediaIndex(ctx context.Context, cfg *config.Instance) error {
 	return nil
 }
 
+func resumeMediaIndex(ctx context.Context, cfg *config.Instance) error {
+	_, err := client.LocalClient(ctx, cfg, models.MethodMediaGenerateResume, "")
+	if err != nil {
+		return fmt.Errorf("failed to resume media index update: %w", err)
+	}
+	return nil
+}
+
 func startMediaScrape(ctx context.Context, cfg *config.Instance, params models.MediaScrapeParams) error {
 	b, err := json.Marshal(params)
 	if err != nil {
@@ -128,6 +136,14 @@ func cancelMediaScrape(ctx context.Context, cfg *config.Instance) error {
 	_, err := client.LocalClient(ctx, cfg, models.MethodMediaScrapeCancel, "")
 	if err != nil {
 		return fmt.Errorf("failed to cancel media scrape: %w", err)
+	}
+	return nil
+}
+
+func resumeMediaScrape(ctx context.Context, cfg *config.Instance) error {
+	_, err := client.LocalClient(ctx, cfg, models.MethodMediaScrapeResume, "")
+	if err != nil {
+		return fmt.Errorf("failed to resume media scrape: %w", err)
 	}
 	return nil
 }
@@ -223,6 +239,9 @@ func (p *ProgressBar) Draw(screen tcell.Screen) {
 
 func formatDBMenuLabel(db models.IndexingStatusResponse) string {
 	if db.Indexing {
+		if db.Paused {
+			return "Update index: paused"
+		}
 		return "Update index: in progress"
 	}
 	if !db.Exists {
@@ -246,6 +265,9 @@ func mediaScrapeBlockedByIndexLabel() string {
 
 func formatScrapeMenuLabel(status *models.ScrapingStatusResponse) string {
 	if status.Scraping {
+		if status.Paused {
+			return "Scrape metadata: paused"
+		}
 		return "Scrape metadata: in progress"
 	}
 	if status.ScraperID == "" && !status.Scraping && !status.Done {
@@ -276,8 +298,15 @@ func formatScrapeProgress(status *models.ScrapingStatusResponse, scraperName str
 		prefix += "\n"
 	}
 	if status.Total > 0 {
-		return fmt.Sprintf("%sRecords: %d / %d\nMatched: %d  Skipped: %d",
-			prefix, status.Processed, status.Total, status.Matched, status.Skipped)
+		progress := "Records"
+		if status.Paused {
+			progress = "Paused"
+		}
+		return fmt.Sprintf("%s%s: %d / %d\nMatched: %d  Skipped: %d",
+			prefix, progress, status.Processed, status.Total, status.Matched, status.Skipped)
+	}
+	if status.Paused {
+		return fmt.Sprintf("%sPaused\nMatched: %d  Skipped: %d", prefix, status.Matched, status.Skipped)
 	}
 	return fmt.Sprintf("%sRecords: %d processed\nMatched: %d  Skipped: %d",
 		prefix, status.Processed, status.Matched, status.Skipped)
@@ -472,8 +501,43 @@ func BuildGenerateDBPage(
 				frame.FocusButtonBar()
 			})
 		})
+		bar.AddButtonWithHelp("Resume", "Continue paused operation", func() {
+			operation := getOperation()
+			if operation == "" {
+				frame.FocusButtonBar()
+				return
+			}
+
+			go func(operation string) {
+				resumeCtx, cancelReq := tuiContext()
+				defer cancelReq()
+
+				var err error
+				switch operation {
+				case mediaManageIndex:
+					err = resumeMediaIndex(resumeCtx, cfg)
+				case mediaManageScrape:
+					err = resumeMediaScrape(resumeCtx, cfg)
+				}
+				if err != nil {
+					log.Warn().Err(err).Msg("error resuming media operation")
+					app.QueueUpdateDraw(func() {
+						ShowErrorModal(pages, app, err.Error(), func() {
+							frame.FocusButtonBar()
+						})
+					})
+					return
+				}
+
+				app.QueueUpdateDraw(func() {
+					progressStatusText.SetText("Resuming...")
+					frame.SetHelpText("Stop current operation")
+					frame.FocusButtonBar()
+				})
+			}(operation)
+		})
 		bar.AddButtonWithHelp("Back", "Continue in background", showInitial)
-		bar.focusedIndex = 1
+		bar.focusedIndex = 2
 		bar.SetupNavigation(showInitial)
 		bar.SetHelpCallback(func(help string) {
 			frame.SetHelpText(help)

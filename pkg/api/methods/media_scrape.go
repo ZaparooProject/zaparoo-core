@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
@@ -106,6 +107,7 @@ func (s *scrapingStatus) cancel() bool {
 		s.cancelFunc()
 		s.latest.Scraping = false
 		s.latest.Done = true
+		s.latest.Paused = false
 		// Do NOT clear running/scraperID here. The goroutine's deferred
 		// clearIfOwner call is the single writer for those fields, preventing
 		// a new scrape from starting only to have its state cleared by the
@@ -124,6 +126,38 @@ func (s *scrapingStatus) isRunning() bool {
 func publishScrapingStatus(ns chan<- models.Notification, status *models.ScrapingStatusResponse) {
 	scrapingStatusInstance.setLatest(status)
 	notifications.MediaScraping(ns, status)
+}
+
+func populateScrapedMediaCount(
+	ctx context.Context,
+	db *database.Database,
+	status *models.ScrapingStatusResponse,
+) {
+	if db == nil || db.MediaDB == nil {
+		return
+	}
+
+	var (
+		count int
+		err   error
+	)
+	if status.ScraperID != "" {
+		count, err = db.MediaDB.GetScrapedMediaCount(ctx, status.ScraperID)
+	} else {
+		count, err = db.MediaDB.GetTotalScrapedMediaCount(ctx)
+	}
+	if err != nil {
+		log.Warn().Err(err).Str("scraper", status.ScraperID).Msg("failed to get scraped media count")
+		return
+	}
+	status.TotalScraped = count
+}
+
+func PublishScrapePauseStatus(ns chan<- models.Notification, paused bool) {
+	status := scrapingStatusInstance.getLatest()
+	status.Scraping = true
+	status.Paused = paused
+	publishScrapingStatus(ns, &status)
 }
 
 var scrapingStatusInstance = &scrapingStatus{}
@@ -163,7 +197,8 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	scrapeCtx, cancelFunc := context.WithCancel(env.State.GetContext())
 	scrapingStatusInstance.setCancelFunc(cancelFunc)
 
-	opts := scraper.ScrapeOptions{Systems: params.Systems, Force: params.Force}
+	paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
+	opts := scraper.ScrapeOptions{Systems: params.Systems, Force: params.Force, Pauser: env.ScrapePauser}
 	ch, err := s.Scrape(scrapeCtx, opts)
 	if err != nil {
 		cancelFunc()
@@ -174,10 +209,13 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	ns := env.State.Notifications
 	db := env.Database
 
-	publishScrapingStatus(ns, &models.ScrapingStatusResponse{
+	initialStatus := models.ScrapingStatusResponse{
 		ScraperID: params.ScraperID,
 		Scraping:  true,
-	})
+		Paused:    paused,
+	}
+	populateScrapedMediaCount(env.State.GetContext(), db, &initialStatus)
+	publishScrapingStatus(ns, &initialStatus)
 
 	scraperID := params.ScraperID
 	db.MediaDB.TrackBackgroundOperation()
@@ -191,7 +229,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			if update.Done {
 				receivedDone = true
 			}
-			publishScrapingStatus(ns, &models.ScrapingStatusResponse{
+			status := models.ScrapingStatusResponse{
 				ScraperID: scraperID,
 				SystemID:  update.SystemID,
 				Processed: update.Processed,
@@ -200,7 +238,10 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 				Skipped:   update.Skipped,
 				Scraping:  !update.Done,
 				Done:      update.Done,
-			})
+				Paused:    env.ScrapePauser != nil && env.ScrapePauser.IsPaused() && !update.Done,
+			}
+			populateScrapedMediaCount(env.State.GetContext(), db, &status)
+			publishScrapingStatus(ns, &status)
 		}
 
 		// Only send a terminal notification if the channel closed without a
@@ -212,7 +253,8 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			status.ScraperID = scraperID
 			status.Scraping = false
 			status.Done = true
-			publishScrapingStatus(ns, &models.ScrapingStatusResponse{
+			status.Paused = false
+			terminalStatus := models.ScrapingStatusResponse{
 				ScraperID: status.ScraperID,
 				SystemID:  status.SystemID,
 				Processed: status.Processed,
@@ -221,7 +263,10 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 				Skipped:   status.Skipped,
 				Scraping:  status.Scraping,
 				Done:      status.Done,
-			})
+				Paused:    status.Paused,
+			}
+			populateScrapedMediaCount(env.State.GetContext(), db, &terminalStatus)
+			publishScrapingStatus(ns, &terminalStatus)
 		}
 		log.Info().Str("scraper", scraperID).Msg("scraper run complete")
 	}()
@@ -234,24 +279,14 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 //nolint:gocritic // API handler signature; large env param cannot be passed by pointer
 func HandleMediaScrapeStatus(env requests.RequestEnv) (any, error) {
 	status := scrapingStatusInstance.getLatest()
+	if status.Scraping && env.ScrapePauser != nil {
+		status.Paused = env.ScrapePauser.IsPaused()
+	}
 	if env.Database == nil || env.Database.MediaDB == nil {
 		return status, nil
 	}
 
-	var (
-		count int
-		err   error
-	)
-	if status.ScraperID != "" {
-		count, err = env.Database.MediaDB.GetScrapedMediaCount(env.Context, status.ScraperID)
-	} else {
-		count, err = env.Database.MediaDB.GetTotalScrapedMediaCount(env.Context)
-	}
-	if err != nil {
-		log.Warn().Err(err).Str("scraper", status.ScraperID).Msg("failed to get scraped media count")
-		return status, nil
-	}
-	status.TotalScraped = count
+	populateScrapedMediaCount(env.Context, env.Database, &status)
 
 	return status, nil
 }
@@ -264,6 +299,25 @@ func HandleMediaScrapeCancel(_ requests.RequestEnv) (any, error) {
 		return map[string]any{"message": "scraping cancelled"}, nil
 	}
 	return map[string]any{"message": "no scraping operation is currently running"}, nil
+}
+
+// HandleMediaScrapeResume manually resumes a paused media.scrape operation.
+//
+//nolint:gocritic // API handler signature; large env param cannot be passed by pointer
+func HandleMediaScrapeResume(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received media scrape resume request")
+
+	if env.ScrapePauser == nil || !env.ScrapePauser.IsPaused() {
+		return map[string]any{"message": "Media scraping is not paused"}, nil
+	}
+
+	env.ScrapePauser.Resume()
+	if scrapingStatusInstance.isRunning() {
+		PublishScrapePauseStatus(env.State.Notifications, false)
+	}
+	log.Info().Msg("media scraping manually resumed")
+
+	return map[string]any{"message": "Media scraping resumed"}, nil
 }
 
 // HandleScrapers returns the list of registered scrapers with their IDs and

@@ -284,6 +284,7 @@ type ScrapingStatusResponse struct {
 	TotalScraped int    `json:"totalScraped"`
 	Scraping     bool   `json:"scraping"`
 	Done         bool   `json:"done"`
+	Paused       bool   `json:"paused"`
 }
 
 type MediaLookupMatch struct {

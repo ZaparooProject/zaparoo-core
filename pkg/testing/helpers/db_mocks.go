@@ -2145,6 +2145,16 @@ func (m *MockMediaDBI) MediaHasTag(ctx context.Context, mediaDBID int64, tagValu
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockMediaDBI) GetScrapedMediaIDs(
+	ctx context.Context, scraperID string, systemDBID int64,
+) (map[int64]struct{}, error) {
+	args := m.Called(ctx, scraperID, systemDBID)
+	if result, ok := args.Get(0).(map[int64]struct{}); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) UpsertMediaTags(ctx context.Context, mediaDBID int64, tags []database.TagInfo) error {
 	args := m.Called(ctx, mediaDBID, tags)
 	if err := args.Error(0); err != nil {
@@ -2175,6 +2185,16 @@ func (m *MockMediaDBI) UpsertMediaProperties(
 	ctx context.Context, mediaDBID int64, props []database.MediaProperty,
 ) error {
 	args := m.Called(ctx, mediaDBID, props)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) ApplyScrapeResult(
+	ctx context.Context, mediaDBID, mediaTitleDBID int64, write *database.ScrapeWrite,
+) error {
+	args := m.Called(ctx, mediaDBID, mediaTitleDBID, write)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
