@@ -162,6 +162,48 @@ func (db *MediaDB) MediaHasTag(ctx context.Context, mediaDBID int64, tagValue st
 	return found == 1, nil
 }
 
+// GetScrapedMediaCount returns the number of distinct media rows marked as
+// successfully scraped by the given scraper.
+func (db *MediaDB) GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error) {
+	if db.sql == nil {
+		return 0, ErrNullSQL
+	}
+
+	var count int
+	err := db.sql.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT mt.MediaDBID)
+		FROM MediaTags mt
+		JOIN Tags t ON mt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE tt.Type = ? AND t.Tag = ?
+	`, string(tags.ScraperType(scraperID)), string(tags.TagScraperScraped)).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count scraped media for scraper %q: %w", scraperID, err)
+	}
+	return count, nil
+}
+
+// GetTotalScrapedMediaCount returns the number of distinct media rows marked as
+// successfully scraped by any scraper.
+func (db *MediaDB) GetTotalScrapedMediaCount(ctx context.Context) (int, error) {
+	if db.sql == nil {
+		return 0, ErrNullSQL
+	}
+
+	var count int
+	err := db.sql.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT mt.MediaDBID)
+		FROM MediaTags mt
+		JOIN Tags t ON mt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE tt.Type LIKE 'scraper.%' AND t.Tag = ?
+	`, string(tags.TagScraperScraped)).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count scraped media: %w", err)
+	}
+	return count, nil
+}
+
 // UpsertMediaTags writes tags to MediaTags for a specific Media row, respecting
 // TagTypes.IsExclusive: exclusive types delete existing tags of that type first;
 // additive types use INSERT OR IGNORE.

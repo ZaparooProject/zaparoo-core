@@ -34,6 +34,7 @@ import (
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	assertmock "github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -236,20 +237,28 @@ func TestHandleMediaScrapeStatus_NoRun(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()
 
-	result, err := HandleMediaScrapeStatus(requests.RequestEnv{Context: context.Background()})
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetTotalScrapedMediaCount", assertmock.Anything).Return(7, nil)
+
+	result, err := HandleMediaScrapeStatus(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+	})
 	require.NoError(t, err)
 	status, ok := result.(models.ScrapingStatusResponse)
 	require.True(t, ok)
 	assert.Empty(t, status.ScraperID)
 	assert.False(t, status.Scraping)
 	assert.False(t, status.Done)
+	assert.Equal(t, 7, status.TotalScraped)
+	mockDB.AssertExpectations(t)
 }
 
 func TestHandleMediaScrapeStatus_TracksLatestProgress(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()
 
-	publishScrapingStatus(make(chan models.Notification, 1), models.ScrapingStatusResponse{
+	publishScrapingStatus(make(chan models.Notification, 1), &models.ScrapingStatusResponse{
 		ScraperID: "test-scraper",
 		SystemID:  "SNES",
 		Processed: 42,
@@ -259,19 +268,27 @@ func TestHandleMediaScrapeStatus_TracksLatestProgress(t *testing.T) {
 		Scraping:  true,
 	})
 
-	result, err := HandleMediaScrapeStatus(requests.RequestEnv{Context: context.Background()})
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(11, nil)
+
+	result, err := HandleMediaScrapeStatus(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+	})
 	require.NoError(t, err)
 	status, ok := result.(models.ScrapingStatusResponse)
 	require.True(t, ok)
 	assert.Equal(t, models.ScrapingStatusResponse{
-		ScraperID: "test-scraper",
-		SystemID:  "SNES",
-		Processed: 42,
-		Total:     100,
-		Matched:   38,
-		Skipped:   4,
-		Scraping:  true,
+		ScraperID:    "test-scraper",
+		SystemID:     "SNES",
+		Processed:    42,
+		Total:        100,
+		Matched:      38,
+		Skipped:      4,
+		TotalScraped: 11,
+		Scraping:     true,
 	}, status)
+	mockDB.AssertExpectations(t)
 }
 
 // TestHandleMediaScrape_ScraperInitError verifies that when the scraper's

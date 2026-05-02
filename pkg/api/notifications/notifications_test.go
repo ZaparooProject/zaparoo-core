@@ -261,7 +261,7 @@ func TestMediaScraping_Payload(t *testing.T) {
 		Skipped:   4,
 		Scraping:  true,
 	}
-	MediaScraping(ns, payload)
+	MediaScraping(ns, &payload)
 
 	notification := <-ns
 	assert.Equal(t, models.NotificationMediaScraping, notification.Method)

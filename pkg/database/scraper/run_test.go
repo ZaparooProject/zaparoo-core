@@ -138,7 +138,7 @@ func TestRunScraper_InvalidMatchIDs_AreSkipped(t *testing.T) {
 	last := updates[len(updates)-1]
 	assert.True(t, last.Done)
 	require.NoError(t, last.FatalErr)
-	assert.Equal(t, 0, last.Processed)
+	assert.Equal(t, 1, last.Processed)
 	assert.Equal(t, 0, last.Matched)
 	assert.Equal(t, 1, last.Skipped)
 	db.AssertNotCalled(t, "MediaHasTag")
@@ -146,6 +146,38 @@ func TestRunScraper_InvalidMatchIDs_AreSkipped(t *testing.T) {
 	db.AssertNotCalled(t, "UpsertMediaTitleTags")
 	db.AssertNotCalled(t, "UpsertMediaTitleProperties")
 	db.AssertNotCalled(t, "UpsertMediaProperties")
+	db.AssertExpectations(t)
+}
+
+func TestRunScraper_ProgressUpdatesIncludeTotalsForSkippedRecords(t *testing.T) {
+	t.Parallel()
+	db := helpers.NewMockMediaDBI()
+	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	loop := &stubLoop{
+		id:      "test",
+		records: []stubRecord{{id: "mario"}, {id: "zelda"}},
+		matchFn: func(_ stubRecord) (*scraper.MatchResult, error) {
+			return nil, nil //nolint:nilnil // no match; nil result is the "skip" sentinel
+		},
+	}
+
+	ch := scraper.RunScraper(context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{system}, db, loop)
+	updates := drainUpdates(ch)
+
+	var firstSkip, secondSkip bool
+	for _, u := range updates {
+		if u.SystemID != "NES" || u.Total != 2 {
+			continue
+		}
+		switch u.Processed {
+		case 1:
+			firstSkip = u.Skipped == 1
+		case 2:
+			secondSkip = u.Skipped == 2
+		}
+	}
+	assert.True(t, firstSkip, "first skipped record should advance progress")
+	assert.True(t, secondSkip, "second skipped record should advance progress")
 	db.AssertExpectations(t)
 }
 

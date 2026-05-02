@@ -21,7 +21,10 @@ package esapi
 
 import (
 	"encoding/xml"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,4 +71,107 @@ func TestUnmarshalGameIDVariants(t *testing.T) {
 		assert.Empty(t, g.ScreenScraperIDAttr)
 		assert.Equal(t, 0, g.ScreenScraperID)
 	})
+}
+
+func TestReadGameListXML(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "gamelist.xml")
+	xmlData := []byte(`<?xml version="1.0"?>
+<gameList>
+  <game>
+    <path>./Sonic.nes</path>
+    <name>Sonic</name>
+    <image>./media/sonic.png</image>
+    <unknown>ignored</unknown>
+  </game>
+  <folder>
+    <path>./Hacks</path>
+    <name>Hacks</name>
+  </folder>
+</gameList>`)
+	require.NoError(t, os.WriteFile(path, xmlData, 0o600))
+
+	gameList, err := ReadGameListXML(path)
+	require.NoError(t, err)
+	require.Len(t, gameList.Games, 1)
+	require.Len(t, gameList.Folders, 1)
+	assert.Equal(t, "./Sonic.nes", gameList.Games[0].Path)
+	assert.Equal(t, "Sonic", gameList.Games[0].Name)
+	assert.Equal(t, "./media/sonic.png", gameList.Games[0].Image)
+	assert.Equal(t, "./Hacks", gameList.Folders[0].Path)
+	assert.Equal(t, "Hacks", gameList.Folders[0].Name)
+}
+
+func TestReadGameListXMLErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing file", func(t *testing.T) {
+		t.Parallel()
+		_, err := ReadGameListXML(filepath.Join(t.TempDir(), "missing.xml"))
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "failed to open gamelist XML file")
+	})
+
+	t.Run("malformed xml", func(t *testing.T) {
+		t.Parallel()
+		path := filepath.Join(t.TempDir(), "gamelist.xml")
+		require.NoError(t, os.WriteFile(path, []byte(`<gameList><game>`), 0o600))
+		_, err := ReadGameListXML(path)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "failed to unmarshal gamelist XML")
+	})
+}
+
+func TestESDateHelpers(t *testing.T) {
+	t.Parallel()
+
+	date := time.Date(1995, time.March, 11, 1, 2, 3, 0, time.UTC)
+	formatted := FormatESDate(date)
+	assert.Equal(t, "19950311T010203", formatted)
+
+	parsed, err := ParseESDate(formatted)
+	require.NoError(t, err)
+	assert.Equal(t, date, parsed)
+
+	_, err = ParseESDate("")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "empty datetime string")
+
+	_, err = ParseESDate("1995-03-11")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "parsing ES datetime")
+}
+
+func TestParseRating(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+		want    float64
+	}{
+		{name: "zero", input: "0", want: 0},
+		{name: "fraction", input: "0.75", want: 0.75},
+		{name: "one", input: "1", want: 1},
+		{name: "empty", input: "", wantErr: "empty rating string"},
+		{name: "malformed", input: "good", wantErr: "parsing rating"},
+		{name: "negative", input: "-0.1", wantErr: "rating out of range"},
+		{name: "too high", input: "1.1", wantErr: "rating out of range"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseRating(tt.input)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.InDelta(t, tt.want, got, 0.0001)
+		})
+	}
 }

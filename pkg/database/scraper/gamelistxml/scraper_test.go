@@ -20,12 +20,15 @@
 package gamelistxml
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/stretchr/testify/assert"
@@ -234,6 +237,55 @@ func TestMimeFromExt_MP4(t *testing.T) { assert.Equal(t, "video/mp4", mimeFromEx
 func TestMimeFromExt_PDF(t *testing.T) { assert.Equal(t, "application/pdf", mimeFromExt("manual.pdf")) }
 func TestMimeFromExt_Unknown(t *testing.T) {
 	assert.Equal(t, "application/octet-stream", mimeFromExt("file.xyz"))
+}
+
+// --- LoadRecords ---
+
+func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
+	t.Parallel()
+
+	missingRoot := filepath.Join(t.TempDir(), "missing")
+	require.NoError(t, os.MkdirAll(missingRoot, 0o750))
+
+	malformedRoot := filepath.Join(t.TempDir(), "malformed")
+	require.NoError(t, os.MkdirAll(malformedRoot, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(malformedRoot, "gamelist.xml"), []byte(`<gameList><game>`), 0o600))
+
+	validRoot := filepath.Join(t.TempDir(), "valid")
+	require.NoError(t, os.MkdirAll(filepath.Join(validRoot, "media", "image"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(validRoot, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./mario.nes</path><name>Mario</name></game>
+  <game><path>./zelda.nes</path><name>Zelda</name></game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(context.Background(), scraper.ScrapeSystem{
+		ID:       "nes",
+		ROMPaths: []string{missingRoot, malformedRoot, validRoot},
+	})
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+	assert.Equal(t, validRoot, records[0].SystemRootPath)
+	assert.Equal(t, "./mario.nes", records[0].Game.Path)
+	assert.Equal(t, "Mario", records[0].Game.Name)
+	assert.Equal(t, filepath.Join(validRoot, "media", "image"), records[0].AvailableMediaDirs["image"])
+	assert.Equal(t, validRoot, records[1].SystemRootPath)
+	assert.Equal(t, "./zelda.nes", records[1].Game.Path)
+}
+
+func TestScrape_ResolverError(t *testing.T) {
+	t.Parallel()
+
+	scraperErr := errors.New("resolver failed")
+	g := NewGamelistXMLScraper(nil, func(context.Context, []string) ([]scraper.ScrapeSystem, error) {
+		return nil, scraperErr
+	})
+
+	updates, err := g.Scrape(context.Background(), scraper.ScrapeOptions{Systems: []string{"nes"}})
+	require.Error(t, err)
+	assert.Nil(t, updates)
+	require.ErrorContains(t, err, "gamelistxml: failed to resolve systems")
+	assert.ErrorIs(t, err, scraperErr)
 }
 
 // --- MapToDB ---

@@ -77,7 +77,7 @@ func MediaIndexing(ns chan<- models.Notification, payload models.IndexingStatusR
 	sendNotification(ns, models.NotificationMediaIndexing, payload)
 }
 
-func MediaScraping(ns chan<- models.Notification, payload models.ScrapingStatusResponse) {
+func MediaScraping(ns chan<- models.Notification, payload *models.ScrapingStatusResponse) {
 	sendNotification(ns, models.NotificationMediaScraping, payload)
 }
 

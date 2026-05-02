@@ -110,6 +110,7 @@ func RunScraper[T any](
 			}
 
 			var processed, matched, skipped int
+			totalRecords := len(records)
 
 			for _, record := range records {
 				// Respect cancellation on every record.
@@ -128,12 +129,14 @@ func RunScraper[T any](
 
 				// Step 3: match source record to a Zaparoo Media/MediaTitle.
 				match, matchErr := s.Match(ctx, record, system, db)
+				processed++
 				if matchErr != nil {
 					log.Warn().Err(matchErr).Str("system", system.ID).Msg("scraper: non-fatal match error")
 					skipped++
 					ch <- ScrapeUpdate{
 						SystemID:  system.ID,
 						Processed: processed,
+						Total:     totalRecords,
 						Matched:   matched,
 						Skipped:   skipped,
 						Err:       matchErr,
@@ -142,6 +145,13 @@ func RunScraper[T any](
 				}
 				if match == nil {
 					skipped++
+					ch <- ScrapeUpdate{
+						SystemID:  system.ID,
+						Processed: processed,
+						Total:     totalRecords,
+						Matched:   matched,
+						Skipped:   skipped,
+					}
 					continue
 				}
 				if match.MediaDBID <= 0 || match.MediaTitleDBID <= 0 {
@@ -151,6 +161,13 @@ func RunScraper[T any](
 						Str("system", system.ID).
 						Msg("scraper: Match returned non-positive IDs, skipping record")
 					skipped++
+					ch <- ScrapeUpdate{
+						SystemID:  system.ID,
+						Processed: processed,
+						Total:     totalRecords,
+						Matched:   matched,
+						Skipped:   skipped,
+					}
 					continue
 				}
 
@@ -165,6 +182,7 @@ func RunScraper[T any](
 						ch <- ScrapeUpdate{
 							SystemID:  system.ID,
 							Processed: processed,
+							Total:     totalRecords,
 							Matched:   matched,
 							Skipped:   skipped,
 							Err:       sentinelErr,
@@ -173,6 +191,13 @@ func RunScraper[T any](
 					}
 					if has {
 						skipped++
+						ch <- ScrapeUpdate{
+							SystemID:  system.ID,
+							Processed: processed,
+							Total:     totalRecords,
+							Matched:   matched,
+							Skipped:   skipped,
+						}
 						continue
 					}
 				}
@@ -222,6 +247,7 @@ func RunScraper[T any](
 					ch <- ScrapeUpdate{
 						SystemID:  system.ID,
 						Processed: processed,
+						Total:     totalRecords,
 						Matched:   matched,
 						Skipped:   skipped,
 						Err:       writeErr,
@@ -229,11 +255,11 @@ func RunScraper[T any](
 					continue
 				}
 
-				processed++
 				matched++
 				ch <- ScrapeUpdate{
 					SystemID:  system.ID,
 					Processed: processed,
+					Total:     totalRecords,
 					Matched:   matched,
 					Skipped:   skipped,
 				}

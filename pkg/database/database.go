@@ -549,6 +549,8 @@ type MediaDBI interface {
 	RandomGame(systems []systemdefs.System) (SearchResult, error)
 	RandomGameWithQuery(query *MediaQuery) (SearchResult, error)
 	GetTotalMediaCount() (int, error)
+	GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error)
+	GetTotalScrapedMediaCount(ctx context.Context) (int, error)
 
 	FindSystem(row System) (System, error)
 	FindSystemBySystemID(systemID string) (System, error)

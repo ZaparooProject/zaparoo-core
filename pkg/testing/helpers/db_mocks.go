@@ -1662,6 +1662,34 @@ func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
 	return 0, nil
 }
 
+func (m *MockMediaDBI) GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error) {
+	args := m.Called(ctx, scraperID)
+	if count, ok := args.Get(0).(int); ok {
+		if err := args.Error(1); err != nil {
+			return count, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return count, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
+func (m *MockMediaDBI) GetTotalScrapedMediaCount(ctx context.Context) (int, error) {
+	args := m.Called(ctx)
+	if count, ok := args.Get(0).(int); ok {
+		if err := args.Error(1); err != nil {
+			return count, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return count, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
 func (m *MockMediaDBI) InvalidateCountCache() error {
 	args := m.Called()
 	if err := args.Error(0); err != nil {

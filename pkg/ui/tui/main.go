@@ -717,8 +717,8 @@ func BuildMainPage(
 
 	buttonGrid.AddRow(
 		&ButtonGridItem{searchButton, "Search for media and write to a token", disableRow1},
-		&ButtonGridItem{writeButton, "Write custom ZapScript to a token", disableRow1},
 		&ButtonGridItem{updateDBButton, "Update media index and scrape metadata", disableRow1},
+		&ButtonGridItem{writeButton, "Write custom ZapScript to a token", disableRow1},
 	)
 	buttonGrid.AddRow(
 		&ButtonGridItem{settingsButton, "Manage settings for Core service", disableRow1},

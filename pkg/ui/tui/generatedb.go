@@ -221,35 +221,46 @@ func (p *ProgressBar) Draw(screen tcell.Screen) {
 	}
 }
 
-// formatDBStats returns a formatted string showing database statistics.
-func formatDBStats(db models.IndexingStatusResponse) string {
+func formatDBMenuLabel(db models.IndexingStatusResponse) string {
+	if db.Indexing {
+		return "Update index: in progress"
+	}
 	if !db.Exists {
-		return "No database found. Run update to scan your media folders."
+		return "Update index: not indexed"
 	}
 
 	mediaCount := 0
 	if db.TotalMedia != nil {
 		mediaCount = *db.TotalMedia
 	}
-
-	return fmt.Sprintf("Database contains %d indexed media files.", mediaCount)
+	return fmt.Sprintf("Update index: %d media", mediaCount)
 }
 
-func formatScrapeStats(status models.ScrapingStatusResponse) string {
-	if status.ScraperID == "" && !status.Scraping && !status.Done {
-		return "No metadata scrape has run yet. Run a scrape after updating the media index."
-	}
+func mediaIndexBlockedByScrapeLabel() string {
+	return "Update index: scrape running"
+}
 
-	state := "Last metadata scrape"
+func mediaScrapeBlockedByIndexLabel() string {
+	return "Scrape metadata: index running"
+}
+
+func formatScrapeMenuLabel(status *models.ScrapingStatusResponse) string {
 	if status.Scraping {
-		state = "Metadata scrape running"
+		return "Scrape metadata: in progress"
 	}
-
-	return fmt.Sprintf("%s: %d processed, %d matched, %d skipped.",
-		state, status.Processed, status.Matched, status.Skipped)
+	if status.ScraperID == "" && !status.Scraping && !status.Done {
+		if status.TotalScraped > 0 {
+			return fmt.Sprintf("Scrape metadata: %d scraped", status.TotalScraped)
+		}
+		return "Scrape metadata"
+	}
+	if status.TotalScraped > 0 {
+		return fmt.Sprintf("Scrape metadata: %d scraped", status.TotalScraped)
+	}
+	return fmt.Sprintf("Scrape metadata: %d matched", status.Matched)
 }
 
-func formatScrapeProgress(status models.ScrapingStatusResponse, scraperName string) string {
+func formatScrapeProgress(status *models.ScrapingStatusResponse, scraperName string) string {
 	parts := []string{}
 	if scraperName != "" {
 		parts = append(parts, scraperName)
@@ -265,11 +276,18 @@ func formatScrapeProgress(status models.ScrapingStatusResponse, scraperName stri
 		prefix += "\n"
 	}
 	if status.Total > 0 {
-		return fmt.Sprintf("%s%d / %d processed | %d matched | %d skipped",
+		return fmt.Sprintf("%sRecords: %d / %d\nMatched: %d  Skipped: %d",
 			prefix, status.Processed, status.Total, status.Matched, status.Skipped)
 	}
-	return fmt.Sprintf("%s%d processed | %d matched | %d skipped",
+	return fmt.Sprintf("%sRecords: %d processed\nMatched: %d  Skipped: %d",
 		prefix, status.Processed, status.Matched, status.Skipped)
+}
+
+func mediaIndexProgress(current, total int) float64 {
+	if total <= 0 || current <= 0 {
+		return 0
+	}
+	return float64(current) / float64(total)
 }
 
 // BuildGenerateDBPage creates the media management page with PageFrame.
@@ -299,6 +317,8 @@ func BuildGenerateDBPage(
 		SetTextAlign(tview.AlignCenter)
 
 	var refreshInitial, showInitial, refreshScrapeSetup, showScrapeSetup, startScrapeFromSetup func()
+	var showIndexProgress func(models.IndexingStatusResponse)
+	var showScrapeProgress func(models.ScrapingStatusResponse)
 	var createCompleteButtonBar, getProgressButtonBar func() *ButtonBar
 
 	statePages := tview.NewPages()
@@ -333,6 +353,10 @@ func BuildGenerateDBPage(
 		operation string
 		mu        syncutil.Mutex
 	}{}
+	progressVisibleState := struct {
+		visible bool
+		mu      syncutil.Mutex
+	}{}
 	setOperation := func(operation string) {
 		operationState.mu.Lock()
 		defer operationState.mu.Unlock()
@@ -356,6 +380,16 @@ func BuildGenerateDBPage(
 		}
 		cancelledState.operation = ""
 		return true
+	}
+	setProgressVisible := func(visible bool) {
+		progressVisibleState.mu.Lock()
+		defer progressVisibleState.mu.Unlock()
+		progressVisibleState.visible = visible
+	}
+	isProgressVisible := func() bool {
+		progressVisibleState.mu.Lock()
+		defer progressVisibleState.mu.Unlock()
+		return progressVisibleState.visible
 	}
 
 	showError := func(err error) {
@@ -390,37 +424,60 @@ func BuildGenerateDBPage(
 			return progressButtonBar
 		}
 		bar := NewButtonBar(app)
-		bar.AddButton("Cancel", func() {
+		bar.AddButtonWithHelp("Cancel", "Stop current operation", func() {
 			ShowConfirmModal(pages, app, "Cancel the current media operation?", func() {
-				cancelCtx, cancelReq := tuiContext()
-				defer cancelReq()
-
-				var err error
 				operation := getOperation()
-				switch operation {
-				case mediaManageIndex:
-					err = cancelMediaIndex(cancelCtx, cfg)
-				case mediaManageScrape:
-					err = cancelMediaScrape(cancelCtx, cfg)
-				}
-				if err != nil {
-					log.Warn().Err(err).Msg("error cancelling media operation")
-					showError(err)
+				if operation == "" {
+					frame.FocusButtonBar()
 					return
 				}
-				setCancelled(operation)
-				setOperation("")
-				completeText.SetText("Media operation cancelled.")
-				statePages.SwitchToPage(mediaManageCompletePage)
-				frame.SetHelpText("Operation cancelled")
-				frame.SetButtonBar(createCompleteButtonBar())
+
+				progressStatusText.SetText("Cancelling...")
+				frame.SetHelpText("Cancelling...")
 				frame.FocusButtonBar()
+
+				go func(operation string) {
+					cancelCtx, cancelReq := tuiContext()
+					defer cancelReq()
+
+					var err error
+					switch operation {
+					case mediaManageIndex:
+						err = cancelMediaIndex(cancelCtx, cfg)
+					case mediaManageScrape:
+						err = cancelMediaScrape(cancelCtx, cfg)
+					}
+					if err != nil {
+						log.Warn().Err(err).Msg("error cancelling media operation")
+						app.QueueUpdateDraw(func() {
+							ShowErrorModal(pages, app, err.Error(), func() {
+								frame.FocusButtonBar()
+							})
+						})
+						return
+					}
+
+					app.QueueUpdateDraw(func() {
+						setCancelled(operation)
+						setOperation("")
+						setProgressVisible(false)
+						completeText.SetText("Media operation cancelled.")
+						statePages.SwitchToPage(mediaManageCompletePage)
+						frame.SetHelpText("Operation cancelled")
+						frame.SetButtonBar(createCompleteButtonBar())
+						frame.FocusButtonBar()
+					})
+				}(operation)
 			}, func() {
 				frame.FocusButtonBar()
 			})
 		})
-		bar.AddButton("Hide", goBack)
-		bar.SetupNavigation(goBack)
+		bar.AddButtonWithHelp("Back", "Continue in background", showInitial)
+		bar.focusedIndex = 1
+		bar.SetupNavigation(showInitial)
+		bar.SetHelpCallback(func(help string) {
+			frame.SetHelpText(help)
+		})
 		progressButtonBar = bar
 		return progressButtonBar
 	}
@@ -435,6 +492,7 @@ func BuildGenerateDBPage(
 	}
 
 	refreshInitial = func() {
+		setProgressVisible(false)
 		initialList.ClearItems()
 
 		mediaCtx, mediaCancel := tuiContext()
@@ -445,43 +503,66 @@ func BuildGenerateDBPage(
 		scrapeStatus, scrapeErr := getScrapeStatus(scrapeCtx, cfg)
 		scrapeCancel()
 
-		dbStats := "Unable to retrieve database status."
+		dbLabel := "Update index: unavailable"
 		if mediaErr == nil {
-			dbStats = formatDBStats(media.Database)
+			dbLabel = formatDBMenuLabel(media.Database)
 		}
-		scrapeStats := "Unable to retrieve metadata scrape status."
+		scrapeLabel := "Scrape metadata: unavailable"
 		if scrapeErr == nil {
-			scrapeStats = formatScrapeStats(scrapeStatus)
+			scrapeLabel = formatScrapeMenuLabel(&scrapeStatus)
+		}
+		if (mediaErr != nil || !media.Database.Indexing) && (scrapeErr != nil || !scrapeStatus.Scraping) {
+			setOperation("")
 		}
 
-		initialList.AddAction("Update index", dbStats, func() {
-			startCtx, startCancel := tuiContext()
-			err := startMediaIndex(startCtx, cfg)
-			startCancel()
-			if err != nil {
-				log.Warn().Err(err).Msg("error generating media db")
-				showError(err)
-				return
-			}
+		switch {
+		case mediaErr == nil && media.Database.Indexing:
 			setOperation(mediaManageIndex)
-			setCancelled("")
-			progressTitle.SetText("Updating media index...")
-			progressBar.SetProgress(0)
-			progressStatusText.SetText("Starting scan...")
-			statePages.SwitchToPage(mediaManageProgressPage)
-			frame.SetHelpText("Scanning media files. Cancel stops the active index update.")
-			frame.SetButtonBar(getProgressButtonBar())
-			frame.FocusButtonBar()
-		})
+			initialList.AddAction(dbLabel, "View index progress", func() {
+				showIndexProgress(media.Database)
+			})
+		case scrapeErr == nil && scrapeStatus.Scraping:
+			initialList.AddAction(mediaIndexBlockedByScrapeLabel(), "Wait for scrape to finish", func() {})
+		default:
+			initialList.AddAction(dbLabel, "Scan media folders", func() {
+				startCtx, startCancel := tuiContext()
+				err := startMediaIndex(startCtx, cfg)
+				startCancel()
+				if err != nil {
+					log.Warn().Err(err).Msg("error generating media db")
+					showError(err)
+					return
+				}
+				setOperation(mediaManageIndex)
+				setCancelled("")
+				progressTitle.SetText("Updating media index...")
+				progressBar.SetProgress(0)
+				progressStatusText.SetText("Starting scan...")
+				statePages.SwitchToPage(mediaManageProgressPage)
+				setProgressVisible(true)
+				frame.SetHelpText("Stop current operation")
+				frame.SetButtonBar(getProgressButtonBar())
+				frame.FocusButtonBar()
+			})
+		}
 
-		initialList.AddNavAction("Scrape metadata", scrapeStats, showScrapeSetup)
-		initialList.AddAction("Back", "Return to the main menu", goBack)
+		switch {
+		case scrapeErr == nil && scrapeStatus.Scraping:
+			setOperation(mediaManageScrape)
+			initialList.AddAction(scrapeLabel, "View scrape progress", func() {
+				showScrapeProgress(scrapeStatus)
+			})
+		case mediaErr == nil && media.Database.Indexing:
+			initialList.AddAction(mediaScrapeBlockedByIndexLabel(), "Wait for index to finish", func() {})
+		default:
+			initialList.AddNavAction(scrapeLabel, "Scrape indexed media", showScrapeSetup)
+		}
+		initialList.AddAction("Back", "Return to main menu", goBack)
 		initialList.TriggerInitialHelp()
 	}
 
 	showInitial = func() {
-		setOperation("")
-		frame.SetHelpText("Update the media index or scrape metadata for indexed games")
+		frame.SetHelpText("Update index or scrape metadata")
 		refreshInitial()
 		statePages.SwitchToPage(mediaManageInitialPage)
 		frame.SetButtonBar(nil)
@@ -507,13 +588,13 @@ func BuildGenerateDBPage(
 
 		scrapeSetupList.AddCycle(
 			"Scraper",
-			"Choose the metadata scraper to run",
+			"Choose metadata scraper",
 			scraperNames,
 			&scrapeState.scraperIndex,
 			func(_ string, _ int) {})
 		scrapeSetupList.AddNavAction(
 			"Systems: "+systemsLabel,
-			"Select target systems. Leave empty to scrape all supported systems",
+			"Choose systems to scrape",
 			func() {
 				selector := NewSystemSelector(&SystemSelectorConfig{
 					Systems:  scrapeState.systems,
@@ -535,17 +616,17 @@ func BuildGenerateDBPage(
 				})
 				statePages.RemovePage(mediaManageSystemsPage)
 				statePages.AddPage(mediaManageSystemsPage, selector, true, true)
-				frame.SetHelpText("Select systems to scrape. Leave all unchecked to scrape all supported systems.")
+				frame.SetHelpText("Space selects systems, Esc returns")
 				app.SetFocus(selector)
 			})
 		scrapeSetupList.AddToggle(
 			"Re-scrape already scraped games",
-			"Scrape games even if metadata already exists",
+			"Include already scraped games",
 			&scrapeState.force,
 			func(_ bool) {})
 		scrapeSetupList.AddAction(
 			"Start scrape",
-			"Start scraping metadata with the selected options",
+			"Start metadata scrape",
 			startScrapeFromSetup,
 		)
 		scrapeSetupList.AddBackWithDesc("Return to Manage Media")
@@ -589,7 +670,7 @@ func BuildGenerateDBPage(
 			scrapeState.systems = append(scrapeState.systems, SystemItem{ID: system.ID, Name: name})
 		}
 
-		frame.SetHelpText("Configure and start a metadata scrape")
+		frame.SetHelpText("Configure metadata scrape")
 		refreshScrapeSetup()
 		statePages.SwitchToPage(mediaManageSetupPage)
 		frame.SetButtonBar(nil)
@@ -621,12 +702,13 @@ func BuildGenerateDBPage(
 		setCancelled("")
 		progressTitle.SetText("Scraping metadata...")
 		progressBar.SetProgress(0)
-		progressStatusText.SetText(formatScrapeProgress(models.ScrapingStatusResponse{
+		progressStatusText.SetText(formatScrapeProgress(&models.ScrapingStatusResponse{
 			ScraperID: scraper.ID,
 			Scraping:  true,
 		}, scraper.Name))
 		statePages.SwitchToPage(mediaManageProgressPage)
-		frame.SetHelpText("Scraping metadata. Cancel stops the active scrape.")
+		setProgressVisible(true)
+		frame.SetHelpText("Stop current operation")
 		frame.SetButtonBar(getProgressButtonBar())
 		frame.FocusButtonBar()
 	}
@@ -634,11 +716,7 @@ func BuildGenerateDBPage(
 	updateIndexProgress := func(current, total int, status string) {
 		app.QueueUpdateDraw(func() {
 			progressTitle.SetText("Updating media index...")
-			if total > 0 {
-				progressBar.SetProgress(float64(current) / float64(total))
-			} else {
-				progressBar.SetProgress(0)
-			}
+			progressBar.SetProgress(mediaIndexProgress(current, total))
 			progressStatusText.SetText(status)
 		})
 	}
@@ -658,13 +736,52 @@ func BuildGenerateDBPage(
 					break
 				}
 			}
-			progressStatusText.SetText(formatScrapeProgress(status, scraperName))
+			progressStatusText.SetText(formatScrapeProgress(&status, scraperName))
 		})
+	}
+
+	showIndexProgress = func(status models.IndexingStatusResponse) {
+		setOperation(mediaManageIndex)
+		setCancelled("")
+		progressTitle.SetText("Updating media index...")
+		if status.CurrentStep != nil && status.TotalSteps != nil {
+			progressBar.SetProgress(mediaIndexProgress(*status.CurrentStep, *status.TotalSteps))
+		} else {
+			progressBar.SetProgress(0)
+		}
+		if status.CurrentStepDisplay != nil {
+			progressStatusText.SetText(*status.CurrentStepDisplay)
+		} else {
+			progressStatusText.SetText("Updating media index...")
+		}
+		statePages.SwitchToPage(mediaManageProgressPage)
+		setProgressVisible(true)
+		frame.SetHelpText("Stop current operation")
+		frame.SetButtonBar(getProgressButtonBar())
+		frame.FocusButtonBar()
+	}
+
+	showScrapeProgress = func(status models.ScrapingStatusResponse) {
+		setOperation(mediaManageScrape)
+		setCancelled("")
+		progressTitle.SetText("Scraping metadata...")
+		if status.Total > 0 {
+			progressBar.SetProgress(float64(status.Processed) / float64(status.Total))
+		} else {
+			progressBar.SetProgress(0)
+		}
+		progressStatusText.SetText(formatScrapeProgress(&status, ""))
+		statePages.SwitchToPage(mediaManageProgressPage)
+		setProgressVisible(true)
+		frame.SetHelpText("Stop current operation")
+		frame.SetButtonBar(getProgressButtonBar())
+		frame.FocusButtonBar()
 	}
 
 	showIndexComplete := func(filesFound int) {
 		setOperation("")
 		app.QueueUpdateDraw(func() {
+			setProgressVisible(false)
 			completeText.SetText(fmt.Sprintf("Database update complete!\n\n%d files processed.", filesFound))
 			statePages.SwitchToPage(mediaManageCompletePage)
 			frame.SetHelpText("Update finished successfully")
@@ -676,6 +793,7 @@ func BuildGenerateDBPage(
 	showScrapeComplete := func(status models.ScrapingStatusResponse) {
 		setOperation("")
 		app.QueueUpdateDraw(func() {
+			setProgressVisible(false)
 			completeText.SetText(fmt.Sprintf(
 				"Metadata scrape complete!\n\n%d processed, %d matched, %d skipped.",
 				status.Processed,
@@ -702,7 +820,11 @@ func BuildGenerateDBPage(
 				return
 			}
 			if media.Database.TotalFiles != nil {
-				showIndexComplete(*media.Database.TotalFiles)
+				if isProgressVisible() {
+					showIndexComplete(*media.Database.TotalFiles)
+				} else {
+					setOperation("")
+				}
 			}
 		case mediaManageScrape:
 			scrapeCtx, scrapeCancel := tuiContext()
@@ -714,7 +836,11 @@ func BuildGenerateDBPage(
 			if consumeCancelled(mediaManageScrape) {
 				return
 			}
-			showScrapeComplete(status)
+			if isProgressVisible() {
+				showScrapeComplete(status)
+			} else {
+				setOperation("")
+			}
 		}
 	}
 
@@ -729,33 +855,9 @@ func BuildGenerateDBPage(
 	case err != nil:
 		showInitial()
 	case media.Database.Indexing:
-		if media.Database.CurrentStep == nil ||
-			media.Database.TotalSteps == nil ||
-			media.Database.CurrentStepDisplay == nil {
-			showInitial()
-		} else {
-			setOperation(mediaManageIndex)
-			setCancelled("")
-			progressTitle.SetText("Updating media index...")
-			progressBar.SetProgress(float64(*media.Database.CurrentStep) / float64(*media.Database.TotalSteps))
-			progressStatusText.SetText(*media.Database.CurrentStepDisplay)
-			statePages.SwitchToPage(mediaManageProgressPage)
-			frame.SetHelpText("Scanning media files. Cancel stops the active index update.")
-			frame.SetButtonBar(getProgressButtonBar())
-			frame.FocusButtonBar()
-		}
+		showInitial()
 	case scrapeErr == nil && scrapeStatus.Scraping:
-		setOperation(mediaManageScrape)
-		setCancelled("")
-		progressTitle.SetText("Scraping metadata...")
-		if scrapeStatus.Total > 0 {
-			progressBar.SetProgress(float64(scrapeStatus.Processed) / float64(scrapeStatus.Total))
-		}
-		progressStatusText.SetText(formatScrapeProgress(scrapeStatus, ""))
-		statePages.SwitchToPage(mediaManageProgressPage)
-		frame.SetHelpText("Scraping metadata. Cancel stops the active scrape.")
-		frame.SetButtonBar(getProgressButtonBar())
-		frame.FocusButtonBar()
+		showInitial()
 	default:
 		showInitial()
 	}
@@ -791,23 +893,24 @@ func BuildGenerateDBPage(
 							lastUpdate = &indexing
 							continue
 						}
-						showIndexComplete(*indexing.TotalFiles)
-						updateIndexProgress(0, 1, "")
+						if isProgressVisible() {
+							showIndexComplete(*indexing.TotalFiles)
+							updateIndexProgress(0, 1, "")
+						} else {
+							setOperation("")
+						}
 					} else if indexing.Indexing &&
 						indexing.CurrentStep != nil &&
 						indexing.TotalSteps != nil &&
 						indexing.CurrentStepDisplay != nil {
 						setOperation(mediaManageIndex)
-						updateIndexProgress(
-							*indexing.CurrentStep,
-							*indexing.TotalSteps,
-							*indexing.CurrentStepDisplay,
-						)
-						app.QueueUpdateDraw(func() {
-							statePages.SwitchToPage(mediaManageProgressPage)
-							frame.SetHelpText("Scanning media files. Cancel stops the active index update.")
-							frame.SetButtonBar(getProgressButtonBar())
-						})
+						if isProgressVisible() {
+							updateIndexProgress(
+								*indexing.CurrentStep,
+								*indexing.TotalSteps,
+								*indexing.CurrentStepDisplay,
+							)
+						}
 					}
 					lastUpdate = &indexing
 				case models.NotificationMediaScraping:
@@ -818,15 +921,16 @@ func BuildGenerateDBPage(
 							lastScrape = &scraping
 							continue
 						}
-						showScrapeComplete(scraping)
+						if isProgressVisible() {
+							showScrapeComplete(scraping)
+						} else {
+							setOperation("")
+						}
 					} else if scraping.Scraping {
 						setOperation(mediaManageScrape)
-						updateScrapeProgress(scraping)
-						app.QueueUpdateDraw(func() {
-							statePages.SwitchToPage(mediaManageProgressPage)
-							frame.SetHelpText("Scraping metadata. Cancel stops the active scrape.")
-							frame.SetButtonBar(getProgressButtonBar())
-						})
+						if isProgressVisible() {
+							updateScrapeProgress(scraping)
+						}
 					}
 					lastScrape = &scraping
 				}
@@ -836,7 +940,7 @@ func BuildGenerateDBPage(
 
 	frame.SetContent(statePages)
 	pages.AddAndSwitchToPage(PageGenerateDB, frame, true)
-	if getOperation() != "" {
+	if isProgressVisible() {
 		frame.FocusButtonBar()
 	} else {
 		app.SetFocus(initialList.List)

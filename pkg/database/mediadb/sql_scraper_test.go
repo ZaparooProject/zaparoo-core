@@ -192,6 +192,55 @@ func TestMediaHasTag_False(t *testing.T) {
 	assert.False(t, has)
 }
 
+func TestGetScrapedMediaCount(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, mediaPath2)
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "scraper.other", Tag: "scraped"}}))
+
+	count, err := mediaDB.GetScrapedMediaCount(ctx, "test")
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	otherCount, err := mediaDB.GetScrapedMediaCount(ctx, "other")
+	require.NoError(t, err)
+	assert.Equal(t, 1, otherCount)
+}
+
+func TestGetTotalScrapedMediaCount_DistinctMedia(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, mediaPath2)
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "scraper.other", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "scraper.test", Tag: "scraped"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "genre", Tag: "platform"}}))
+
+	count, err := mediaDB.GetTotalScrapedMediaCount(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+}
+
 // --- UpsertMediaTags ---
 
 func TestUpsertMediaTags_AdditiveType_AccumulatesTags(t *testing.T) {

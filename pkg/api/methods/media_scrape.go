@@ -81,10 +81,10 @@ func (s *scrapingStatus) clearIfOwner(scraperID string) {
 	s.cancelFunc = nil
 }
 
-func (s *scrapingStatus) setLatest(status models.ScrapingStatusResponse) {
+func (s *scrapingStatus) setLatest(status *models.ScrapingStatusResponse) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.latest = status
+	s.latest = *status
 }
 
 func (s *scrapingStatus) getLatest() models.ScrapingStatusResponse {
@@ -121,7 +121,7 @@ func (s *scrapingStatus) isRunning() bool {
 	return s.running
 }
 
-func publishScrapingStatus(ns chan<- models.Notification, status models.ScrapingStatusResponse) {
+func publishScrapingStatus(ns chan<- models.Notification, status *models.ScrapingStatusResponse) {
 	scrapingStatusInstance.setLatest(status)
 	notifications.MediaScraping(ns, status)
 }
@@ -174,7 +174,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	ns := env.State.Notifications
 	db := env.Database
 
-	publishScrapingStatus(ns, models.ScrapingStatusResponse{
+	publishScrapingStatus(ns, &models.ScrapingStatusResponse{
 		ScraperID: params.ScraperID,
 		Scraping:  true,
 	})
@@ -191,7 +191,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			if update.Done {
 				receivedDone = true
 			}
-			publishScrapingStatus(ns, models.ScrapingStatusResponse{
+			publishScrapingStatus(ns, &models.ScrapingStatusResponse{
 				ScraperID: scraperID,
 				SystemID:  update.SystemID,
 				Processed: update.Processed,
@@ -212,7 +212,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			status.ScraperID = scraperID
 			status.Scraping = false
 			status.Done = true
-			publishScrapingStatus(ns, models.ScrapingStatusResponse{
+			publishScrapingStatus(ns, &models.ScrapingStatusResponse{
 				ScraperID: status.ScraperID,
 				SystemID:  status.SystemID,
 				Processed: status.Processed,
@@ -232,8 +232,28 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 // HandleMediaScrapeStatus returns the latest known media.scrape status snapshot.
 //
 //nolint:gocritic // API handler signature; large env param cannot be passed by pointer
-func HandleMediaScrapeStatus(_ requests.RequestEnv) (any, error) {
-	return scrapingStatusInstance.getLatest(), nil
+func HandleMediaScrapeStatus(env requests.RequestEnv) (any, error) {
+	status := scrapingStatusInstance.getLatest()
+	if env.Database == nil || env.Database.MediaDB == nil {
+		return status, nil
+	}
+
+	var (
+		count int
+		err   error
+	)
+	if status.ScraperID != "" {
+		count, err = env.Database.MediaDB.GetScrapedMediaCount(env.Context, status.ScraperID)
+	} else {
+		count, err = env.Database.MediaDB.GetTotalScrapedMediaCount(env.Context)
+	}
+	if err != nil {
+		log.Warn().Err(err).Str("scraper", status.ScraperID).Msg("failed to get scraped media count")
+		return status, nil
+	}
+	status.TotalScraped = count
+
+	return status, nil
 }
 
 // HandleMediaScrapeCancel cancels the currently running media.scrape operation.
