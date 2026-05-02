@@ -45,7 +45,7 @@ func browseSystemFilterClause(column string, systems []systemdefs.System) (claus
 	return column + " IN (" + strings.Join(placeholders, ",") + ")", args
 }
 
-func sqlBrowseV2Ready(ctx context.Context, db sqlQueryable) (bool, error) {
+func sqlBrowseCacheReady(ctx context.Context, db sqlQueryable) (bool, error) {
 	var version string
 	err := db.QueryRowContext(ctx,
 		"SELECT Value FROM DBConfig WHERE Name = ?",
@@ -55,9 +55,9 @@ func sqlBrowseV2Ready(ctx context.Context, db sqlQueryable) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("browse v2 readiness query: %w", err)
+		return false, fmt.Errorf("browse cache readiness query: %w", err)
 	}
-	if version != browseIndexVersion {
+	if version != browseCacheSchemaVersion {
 		return false, nil
 	}
 
@@ -67,7 +67,7 @@ func sqlBrowseV2Ready(ctx context.Context, db sqlQueryable) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("browse v2 table readiness query: %w", err)
+		return false, fmt.Errorf("browse cache table readiness query: %w", err)
 	}
 	return true, nil
 }
@@ -78,7 +78,7 @@ func sqlBrowseDirID(ctx context.Context, db sqlQueryable, dirPath string) (id in
 		return 0, false, nil
 	}
 	if err != nil {
-		return 0, false, fmt.Errorf("browse v2 dir lookup: %w", err)
+		return 0, false, fmt.Errorf("browse cache dir lookup: %w", err)
 	}
 	return id, true, nil
 }
@@ -95,12 +95,12 @@ func sqlBrowseDirectories(
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
-	ready, err := sqlBrowseV2Ready(ctx, db)
+	ready, err := sqlBrowseCacheReady(ctx, db)
 	if err != nil {
 		return nil, err
 	}
 	if ready {
-		return sqlBrowseDirectoriesV2(ctx, db, opts)
+		return sqlBrowseDirectoriesFromCache(ctx, db, opts)
 	}
 	if len(opts.Systems) > 0 {
 		return sqlBrowseDirectoriesForSystemsFromMedia(ctx, db, opts)
@@ -108,7 +108,7 @@ func sqlBrowseDirectories(
 	return sqlBrowseDirectoriesFromMedia(ctx, db, opts.PathPrefix)
 }
 
-func sqlBrowseDirectoriesV2(
+func sqlBrowseDirectoriesFromCache(
 	ctx context.Context,
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
@@ -118,7 +118,7 @@ func sqlBrowseDirectoriesV2(
 		return nil, err
 	}
 	if len(opts.Systems) == 1 {
-		return sqlBrowseDirectoriesV2ForSingleSystem(ctx, db, parentID, opts.Systems[0].ID)
+		return sqlBrowseDirectoriesFromCacheForSingleSystem(ctx, db, parentID, opts.Systems[0].ID)
 	}
 
 	args := []any{parentID}
@@ -136,7 +136,7 @@ func sqlBrowseDirectoriesV2(
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("browse v2 directories query: %w", err)
+		return nil, fmt.Errorf("browse cache directories query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -145,18 +145,18 @@ func sqlBrowseDirectoriesV2(
 		var r database.BrowseDirectoryResult
 		var systemIDs string
 		if scanErr := rows.Scan(&r.Name, &r.FileCount, &systemIDs); scanErr != nil {
-			return nil, fmt.Errorf("browse v2 directories scan: %w", scanErr)
+			return nil, fmt.Errorf("browse cache directories scan: %w", scanErr)
 		}
 		r.SystemIDs = splitBrowseSystemIDs(systemIDs)
 		results = append(results, r)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("browse v2 directories rows: %w", rowsErr)
+		return nil, fmt.Errorf("browse cache directories rows: %w", rowsErr)
 	}
 	return results, nil
 }
 
-func sqlBrowseDirectoriesV2ForSingleSystem(
+func sqlBrowseDirectoriesFromCacheForSingleSystem(
 	ctx context.Context,
 	db sqlQueryable,
 	parentID int64,
@@ -172,7 +172,7 @@ func sqlBrowseDirectoriesV2ForSingleSystem(
 			AND s.SystemID = ?
 		ORDER BY d.Name ASC`, parentID, systemID)
 	if err != nil {
-		return nil, fmt.Errorf("browse v2 single-system directories query: %w", err)
+		return nil, fmt.Errorf("browse cache single-system directories query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -180,13 +180,13 @@ func sqlBrowseDirectoriesV2ForSingleSystem(
 	for rows.Next() {
 		var r database.BrowseDirectoryResult
 		if scanErr := rows.Scan(&r.Name, &r.FileCount); scanErr != nil {
-			return nil, fmt.Errorf("browse v2 single-system directories scan: %w", scanErr)
+			return nil, fmt.Errorf("browse cache single-system directories scan: %w", scanErr)
 		}
 		r.SystemIDs = []string{systemID}
 		results = append(results, r)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("browse v2 single-system directories rows: %w", rowsErr)
+		return nil, fmt.Errorf("browse cache single-system directories rows: %w", rowsErr)
 	}
 	return results, nil
 }
@@ -292,20 +292,6 @@ func browseFilesBaseCondition(opts *database.BrowseFilesOptions) (where string, 
 	return strings.Join(conditions, " AND "), args
 }
 
-func browseV2FilesBaseCondition(opts *database.BrowseFilesOptions, parentID int64) (where string, args []any) {
-	conditions := []string{`b.ParentDirDBID = ?`}
-	args = []any{parentID}
-	if letterClause, letterArgs := buildBrowseNameCharFilter("b.NameFirstChar", opts.Letter); letterClause != "" {
-		conditions = append(conditions, letterClause)
-		args = append(args, letterArgs...)
-	}
-	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
-		conditions = append(conditions, systemClause)
-		args = append(args, systemArgs...)
-	}
-	return strings.Join(conditions, " AND "), args
-}
-
 func browseSortClause(sortOrder string) string {
 	switch sortOrder {
 	case "name-desc":
@@ -316,19 +302,6 @@ func browseSortClause(sortOrder string) string {
 		return "m.Path DESC, m.DBID DESC"
 	default:
 		return "mt.Name ASC, m.DBID ASC"
-	}
-}
-
-func browseV2SortClause(sortOrder string) string {
-	switch sortOrder {
-	case "name-desc":
-		return "b.Name DESC, b.MediaDBID DESC"
-	case "filename-asc":
-		return "b.FileName ASC, b.MediaDBID ASC"
-	case "filename-desc":
-		return "b.FileName DESC, b.MediaDBID DESC"
-	default:
-		return "b.Name ASC, b.MediaDBID ASC"
 	}
 }
 
@@ -345,88 +318,12 @@ func browseCursorCondition(sortOrder string) string {
 	}
 }
 
-func browseV2CursorCondition(sortOrder string) string {
-	switch sortOrder {
-	case "name-desc":
-		return ` AND (b.Name, b.MediaDBID) < (?, ?)`
-	case "filename-asc":
-		return ` AND (b.FileName, b.MediaDBID) > (?, ?)`
-	case "filename-desc":
-		return ` AND (b.FileName, b.MediaDBID) < (?, ?)`
-	default:
-		return ` AND (b.Name, b.MediaDBID) > (?, ?)`
-	}
-}
-
-func browseV2CursorSortValue(opts *database.BrowseFilesOptions) string {
-	if opts.Cursor == nil {
-		return ""
-	}
-	if opts.Sort != "filename-asc" && opts.Sort != "filename-desc" {
-		return opts.Cursor.SortValue
-	}
-	_, fileName := browseV2ParentAndFileName(opts.Cursor.SortValue)
-	return fileName
-}
-
 func sqlBrowseFiles(
 	ctx context.Context,
 	db sqlQueryable,
 	opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
-	ready, err := sqlBrowseV2Ready(ctx, db)
-	if err != nil {
-		return nil, err
-	}
-	if ready {
-		return sqlBrowseFilesV2(ctx, db, opts)
-	}
 	return sqlBrowseFilesFromMedia(ctx, db, opts)
-}
-
-func sqlBrowseFilesV2(
-	ctx context.Context,
-	db sqlQueryable,
-	opts *database.BrowseFilesOptions,
-) ([]database.SearchResultWithCursor, error) {
-	parentID, ok, err := sqlBrowseDirID(ctx, db, opts.PathPrefix)
-	if err != nil || !ok {
-		return nil, err
-	}
-	where, args := browseV2FilesBaseCondition(opts, parentID)
-	query := `SELECT s.SystemID, b.Name, m.Path, b.MediaDBID
-		FROM BrowseEntries b
-		INNER JOIN Media m ON b.MediaDBID = m.DBID
-		INNER JOIN Systems s ON b.SystemDBID = s.DBID
-		WHERE ` + where
-	if opts.Cursor != nil {
-		query += browseV2CursorCondition(opts.Sort)
-		args = append(args, browseV2CursorSortValue(opts), opts.Cursor.LastID)
-	}
-	query += ` ORDER BY ` + browseV2SortClause(opts.Sort) + ` LIMIT ?`
-	args = append(args, opts.Limit)
-
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("browse v2 files query: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var results []database.SearchResultWithCursor
-	for rows.Next() {
-		var r database.SearchResultWithCursor
-		if scanErr := rows.Scan(&r.SystemID, &r.Name, &r.Path, &r.MediaID); scanErr != nil {
-			return nil, fmt.Errorf("browse v2 files scan: %w", scanErr)
-		}
-		results = append(results, r)
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("browse v2 files rows: %w", rowsErr)
-	}
-	if err := fetchAndAttachTags(ctx, db, results); err != nil {
-		return nil, fmt.Errorf("browse v2 files tags: %w", err)
-	}
-	return results, nil
 }
 
 func sqlBrowseFilesFromMedia(
@@ -475,32 +372,7 @@ func sqlBrowseFileCount(
 	db sqlQueryable,
 	opts database.BrowseFileCountOptions,
 ) (int, error) {
-	ready, err := sqlBrowseV2Ready(ctx, db)
-	if err != nil {
-		return 0, err
-	}
-	if ready {
-		return sqlBrowseFileCountV2(ctx, db, opts)
-	}
 	return sqlBrowseFileCountFromMedia(ctx, db, opts)
-}
-
-func sqlBrowseFileCountV2(ctx context.Context, db sqlQueryable, opts database.BrowseFileCountOptions) (int, error) {
-	parentID, ok, err := sqlBrowseDirID(ctx, db, opts.PathPrefix)
-	if err != nil || !ok {
-		return 0, err
-	}
-	where, args := browseV2FilesBaseCondition(&database.BrowseFilesOptions{
-		PathPrefix: opts.PathPrefix,
-		Letter:     opts.Letter,
-		Systems:    opts.Systems,
-	}, parentID)
-	query := `SELECT COUNT(*) FROM BrowseEntries b INNER JOIN Systems s ON b.SystemDBID = s.DBID WHERE ` + where
-	var count int
-	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
-		return 0, fmt.Errorf("browse v2 file count: %w", err)
-	}
-	return count, nil
 }
 
 func sqlBrowseFileCountFromMedia(
@@ -530,12 +402,12 @@ func sqlBrowseVirtualSchemes(
 	db sqlQueryable,
 	opts database.BrowseVirtualSchemesOptions,
 ) ([]database.BrowseVirtualScheme, error) {
-	ready, err := sqlBrowseV2Ready(ctx, db)
+	ready, err := sqlBrowseCacheReady(ctx, db)
 	if err != nil {
 		return nil, err
 	}
 	if ready {
-		return sqlBrowseVirtualSchemesV2(ctx, db, opts)
+		return sqlBrowseVirtualSchemesFromCache(ctx, db, opts)
 	}
 	if len(opts.Systems) > 0 {
 		return sqlBrowseVirtualSchemesForSystemsFromMedia(ctx, db, opts)
@@ -543,7 +415,7 @@ func sqlBrowseVirtualSchemes(
 	return sqlBrowseVirtualSchemesFromMedia(ctx, db)
 }
 
-func sqlBrowseVirtualSchemesV2(
+func sqlBrowseVirtualSchemesFromCache(
 	ctx context.Context,
 	db sqlQueryable,
 	opts database.BrowseVirtualSchemesOptions,
@@ -567,7 +439,7 @@ func sqlBrowseVirtualSchemesV2(
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("browse v2 virtual schemes query: %w", err)
+		return nil, fmt.Errorf("browse cache virtual schemes query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -576,13 +448,13 @@ func sqlBrowseVirtualSchemesV2(
 		var r database.BrowseVirtualScheme
 		var systemIDs string
 		if scanErr := rows.Scan(&r.Scheme, &r.FileCount, &systemIDs); scanErr != nil {
-			return nil, fmt.Errorf("browse v2 virtual schemes scan: %w", scanErr)
+			return nil, fmt.Errorf("browse cache virtual schemes scan: %w", scanErr)
 		}
 		r.SystemIDs = splitBrowseSystemIDs(systemIDs)
 		results = append(results, r)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("browse v2 virtual schemes rows: %w", rowsErr)
+		return nil, fmt.Errorf("browse cache virtual schemes rows: %w", rowsErr)
 	}
 	return results, nil
 }
@@ -665,17 +537,17 @@ func sqlBrowseRouteCounts(
 	if len(opts.Routes) == 0 || len(opts.Systems) == 0 {
 		return make(map[string]database.BrowseRouteCount), nil
 	}
-	ready, err := sqlBrowseV2Ready(ctx, db)
+	ready, err := sqlBrowseCacheReady(ctx, db)
 	if err != nil {
 		return nil, err
 	}
 	if ready {
-		return sqlBrowseRouteCountsV2(ctx, db, opts)
+		return sqlBrowseRouteCountsFromCache(ctx, db, opts)
 	}
 	return sqlBrowseRouteCountsFromMedia(ctx, db, opts)
 }
 
-func sqlBrowseRouteCountsV2(
+func sqlBrowseRouteCountsFromCache(
 	ctx context.Context,
 	db sqlQueryable,
 	opts database.BrowseRouteCountsOptions,
@@ -701,7 +573,7 @@ func sqlBrowseRouteCountsV2(
 			args...,
 		).Scan(&count, &systemIDs)
 		if err != nil {
-			return nil, fmt.Errorf("browse v2 route counts query: %w", err)
+			return nil, fmt.Errorf("browse cache route counts query: %w", err)
 		}
 		if count == 0 {
 			continue
@@ -759,7 +631,7 @@ func sqlBrowseRootCounts(ctx context.Context, db sqlQueryable, rootDirs []string
 	if len(rootDirs) == 0 {
 		return counts, nil
 	}
-	ready, err := sqlBrowseV2Ready(ctx, db)
+	ready, err := sqlBrowseCacheReady(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -781,7 +653,7 @@ func sqlBrowseRootCounts(ctx context.Context, db sqlQueryable, rootDirs []string
 			`SELECT COALESCE(SUM(FileCount), 0) FROM BrowseDirCounts WHERE ChildDirDBID = ?`,
 			dirID,
 		).Scan(&dbCount); scanErr != nil {
-			return nil, fmt.Errorf("browse v2 root counts query: %w", scanErr)
+			return nil, fmt.Errorf("browse cache root counts query: %w", scanErr)
 		}
 		c := dbCount
 		counts[root] = &c

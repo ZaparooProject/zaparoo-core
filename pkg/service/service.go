@@ -153,8 +153,9 @@ func Start(
 	log.Info().Msg("initializing launcher cache")
 	helpers.GlobalLauncherCache.Initialize(pl, cfg)
 
-	// Create index pauser to pause media indexing while a game is running.
+	// Create pausers to pause heavy background media work while a game is running.
 	indexPauser := syncutil.NewPauser()
+	scrapePauser := syncutil.NewPauser()
 
 	discoveryService := discovery.New(cfg)
 
@@ -164,7 +165,7 @@ func Start(
 	go func() {
 		apiDone <- api.StartWithReady(
 			pl, cfg, st, itq, cfq, db, limitsManager,
-			notifBroker, discoveryService.InstanceName(), player, indexPauser,
+			notifBroker, discoveryService.InstanceName(), player, indexPauser, scrapePauser,
 			apiReady,
 		)
 	}()
@@ -209,6 +210,7 @@ func Start(
 		)
 	}()
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, st.Notifications, indexPauser)
+	go watchGameForScrapePause(st.GetContext(), notifBroker, st, st.Notifications, scrapePauser)
 
 	log.Info().Msg("checking for interrupted media indexing")
 	backgroundWG.Add(1)
@@ -295,6 +297,7 @@ func Start(
 		<-st.GetContext().Done()
 		log.Info().Msg("service context cancelled, running cleanup")
 		indexPauser.Resume()
+		scrapePauser.Resume()
 
 		discoveryService.Stop()
 		cancelPublisherFanOut()
