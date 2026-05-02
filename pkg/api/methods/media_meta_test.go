@@ -170,7 +170,7 @@ func TestHandleMediaMeta_MediaNotFound(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	system := database.System{DBID: 100, SystemID: "NES", Name: "NES"}
-	mediaPath := filepath.Join("games", "missing.rom")
+	mediaPath := filepath.ToSlash(filepath.Join("games", "missing.rom"))
 	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, mediaPath).
 		Return((*database.Media)(nil), nil)
