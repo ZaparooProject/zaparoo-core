@@ -202,6 +202,46 @@ func TestHandleMediaMeta_BatchByMediaIDPartialSuccess(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaMeta_MediaIDSuccess(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(3, 30)
+	row.System = database.System{DBID: 100, SystemID: "NES", Name: "NES"}
+	row.Title.Name = "Media ID Game"
+
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, mock.Anything).
+		Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil)
+	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, mock.Anything).
+		Return(map[int64][]database.TagInfo{row.DBID: {{Tag: "genre:platformer", Type: "genre"}}}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBIDs", mock.Anything, mock.Anything).
+		Return(map[int64][]database.TagInfo{row.Title.DBID: {{Tag: "publisher:nintendo", Type: "publisher"}}}, nil)
+	mockDB.On("GetMediaPropertiesByMediaDBIDs", mock.Anything, mock.Anything).
+		Return(map[int64][]database.MediaProperty{
+			row.DBID: {{TypeTag: "property:description", Text: "media desc"}},
+		}, nil)
+	mockDB.On("GetMediaTitlePropertiesByMediaTitleDBIDs", mock.Anything, mock.Anything).
+		Return(map[int64][]database.MediaProperty{
+			row.Title.DBID: {{TypeTag: "property:description", Text: "title desc"}},
+		}, nil)
+
+	env := makeMediaMetaEnv(t, mockDB, `{"mediaId":3}`)
+	result, err := HandleMediaMeta(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaMetaResponse)
+	require.True(t, ok)
+	assert.Equal(t, row.Path, resp.Media.Path)
+	assert.Equal(t, "Media ID Game", resp.Media.Title.Name)
+	require.Len(t, resp.Media.Tags, 1)
+	assert.Equal(t, "genre:platformer", resp.Media.Tags[0].Tag)
+	require.Len(t, resp.Media.Title.Tags, 1)
+	assert.Equal(t, "publisher:nintendo", resp.Media.Title.Tags[0].Tag)
+	assert.Equal(t, "media desc", resp.Media.Properties["property:description"].Text)
+	assert.Equal(t, "title desc", resp.Media.Title.Properties["property:description"].Text)
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaMeta_MediaNotFound(t *testing.T) {
 	t.Parallel()
 

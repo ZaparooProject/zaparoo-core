@@ -228,13 +228,12 @@ func TestHandleMediaImage_BatchPathMissesSkipPropertyFetch(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
+	missingPath := filepath.Join("games", "missing.rom")
 	mockDB.On("FindSystemBySystemID", "NES").Return(database.System{}, sql.ErrNoRows)
 
-	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{
-		"items": [
-			{"system":"NES","path":"games/missing.rom"}
-		]
-	}`))
+	env := makeMediaImageEnv(t, mockDB, json.RawMessage(
+		fmt.Sprintf(`{"items":[{"system":"NES","path":%q}]}`, missingPath),
+	))
 	result, err := HandleMediaImage(env)
 	require.NoError(t, err)
 
