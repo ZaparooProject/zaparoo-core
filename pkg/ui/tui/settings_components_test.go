@@ -317,6 +317,29 @@ func TestSettingsList_AddBackWithDesc(t *testing.T) {
 	assert.Equal(t, "Custom description", sl.items[0].description)
 }
 
+func TestSettingsList_ClearItems(t *testing.T) {
+	t.Parallel()
+
+	pages := tview.NewPages()
+	sl := NewSettingsList(pages, "main")
+
+	sl.AddAction("Action", "desc", func() {})
+	sl.AddToggle("Toggle", "desc", new(bool), func(bool) {})
+	require.Equal(t, 2, sl.GetItemCount())
+	require.Len(t, sl.items, 2)
+
+	result := sl.ClearItems()
+
+	assert.Same(t, sl, result)
+	assert.Equal(t, 0, sl.GetItemCount())
+	assert.Empty(t, sl.items)
+
+	result = sl.ClearItems()
+	assert.Same(t, sl, result)
+	assert.Equal(t, 0, sl.GetItemCount())
+	assert.Empty(t, sl.items)
+}
+
 func TestSettingsList_ChainedMethods(t *testing.T) {
 	t.Parallel()
 

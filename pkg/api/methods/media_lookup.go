@@ -100,17 +100,21 @@ func HandleMediaLookup(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	zapScript := result.Result.ZapScript()
 
-	resultPath := result.Result.Path
+	var relPath *string
 	if env.LauncherCache != nil && env.Platform != nil {
 		rootDirs := env.Platform.RootDirs(env.Config)
-		resultPath = env.LauncherCache.ToRelativePath(rootDirs, result.Result.SystemID, resultPath)
+		rel := env.LauncherCache.ToRelativePath(rootDirs, result.Result.SystemID, result.Result.Path)
+		if rel != result.Result.Path {
+			relPath = &rel
+		}
 	}
 
 	return models.MediaLookupResponse{
 		Match: &models.MediaLookupMatch{
+			RelPath:    relPath,
 			System:     resultSystem,
 			Name:       result.Result.Name,
-			Path:       resultPath,
+			Path:       result.Result.Path,
 			ZapScript:  zapScript,
 			Tags:       result.Result.Tags,
 			Confidence: result.Confidence,
