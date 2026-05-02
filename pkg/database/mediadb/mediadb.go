@@ -211,6 +211,7 @@ func (db *MediaDB) invalidateBrowseCacheForMediaChange() error {
 	}
 	if err := sqlInvalidateBrowseCache(db.ctx, db.conn()); err != nil {
 		log.Debug().Err(err).Msg("failed to invalidate browse cache after media change")
+		return err
 	}
 	return nil
 }

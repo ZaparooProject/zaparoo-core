@@ -400,13 +400,6 @@ func upsertTagsInTx(
 			}
 		}
 
-		// For exclusive types: enforce single-value semantics. If the caller
-		// supplies more than one distinct tag for an exclusive type, reject the
-		// entire operation so conflicting values never reach the DB.
-		if e.isExclusive && len(e.tags) > 1 {
-			return fmt.Errorf("exclusive tag type %q received %d values — only one is allowed", typeName, len(e.tags))
-		}
-
 		// For exclusive types: delete all existing tags of this type for the entity once,
 		// before inserting any new tags. This prevents subsequent tags of the same type
 		// from clobbering each other within this call.

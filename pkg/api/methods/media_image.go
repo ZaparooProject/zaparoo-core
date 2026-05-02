@@ -136,6 +136,10 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 			if len(binary) == 0 && prop.Text != "" {
 				binary, err = os.ReadFile(prop.Text)
 				if err != nil {
+					if !os.IsNotExist(err) {
+						return nil, fmt.Errorf("media.image: read image file %q: %w", prop.Text, err)
+					}
+
 					// File is gone — remove the stale property.
 					if !src.isMedia {
 						delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID)
@@ -161,6 +165,10 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 					if len(binary) == 0 && prop.Text != "" {
 						binary, err = os.ReadFile(prop.Text)
 						if err != nil {
+							if !os.IsNotExist(err) {
+								return nil, fmt.Errorf("media.image: read image file %q: %w", prop.Text, err)
+							}
+
 							delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID)
 							if delErr != nil {
 								log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).

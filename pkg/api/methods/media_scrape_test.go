@@ -411,7 +411,6 @@ func (s *errorScraper) Scrape(_ context.Context, _ scraper.ScrapeOptions) (<-cha
 // TestHandleMediaScrapeCancel_NoneRunning verifies the response when no
 // scraping is active.
 func TestHandleMediaScrapeCancel_NoneRunning(t *testing.T) {
-	t.Parallel()
 	ClearScrapingStatus()
 
 	env := requests.RequestEnv{Context: context.Background()}

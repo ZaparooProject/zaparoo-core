@@ -131,9 +131,8 @@ func sqlPopulateBrowseCache(ctx context.Context, db *sql.DB) error {
 
 func scanBrowseCacheMedia(ctx context.Context, tx *sql.Tx, builder *browseCacheBuilder) error {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT m.DBID, m.SystemDBID, m.Path, mt.Name
+		SELECT m.SystemDBID, m.Path
 		FROM Media m
-		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
 		WHERE m.IsMissing = 0
 		ORDER BY m.DBID`)
 	if err != nil {
@@ -142,12 +141,12 @@ func scanBrowseCacheMedia(ctx context.Context, tx *sql.Tx, builder *browseCacheB
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
-		var mediaDBID, systemDBID int64
-		var mediaPath, title string
-		if scanErr := rows.Scan(&mediaDBID, &systemDBID, &mediaPath, &title); scanErr != nil {
+		var systemDBID int64
+		var mediaPath string
+		if scanErr := rows.Scan(&systemDBID, &mediaPath); scanErr != nil {
 			return fmt.Errorf("browse cache: failed to scan media: %w", scanErr)
 		}
-		builder.addMedia(mediaDBID, systemDBID, mediaPath, title)
+		builder.addMedia(systemDBID, mediaPath)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return fmt.Errorf("browse cache: rows iteration error: %w", rowsErr)
@@ -155,7 +154,7 @@ func scanBrowseCacheMedia(ctx context.Context, tx *sql.Tx, builder *browseCacheB
 	return nil
 }
 
-func (b *browseCacheBuilder) addMedia(_, systemDBID int64, mediaPath, _ string) {
+func (b *browseCacheBuilder) addMedia(systemDBID int64, mediaPath string) {
 	b.mediaRows++
 	mediaPath = browseCacheNormalizePath(mediaPath)
 

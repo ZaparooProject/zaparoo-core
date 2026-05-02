@@ -659,11 +659,8 @@ func TestUpsertMediaTags_ExclusiveType_MultipleDistinctInOneCall(t *testing.T) {
 	assert.Equal(t, 0, count, "no tags should be persisted when the call is rejected")
 }
 
-// TestUpsertMediaTags_ExclusiveType_DuplicateValueInOneCall exercises the
-// len(e.tags) > 1 guard on line 306: when a single UpsertMediaTags call
-// supplies two entries with the *same* value for an exclusive type the
-// function must return an error (same-value deduplication is not allowed
-// because callers should send exactly one entry).
+// TestUpsertMediaTags_ExclusiveType_DuplicateValueInOneCall verifies that
+// duplicate entries with the same value are harmless for an exclusive type.
 func TestUpsertMediaTags_ExclusiveType_DuplicateValueInOneCall(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
@@ -674,12 +671,12 @@ func TestUpsertMediaTags_ExclusiveType_DuplicateValueInOneCall(t *testing.T) {
 		{Type: "developer", Tag: "nintendo"},
 		{Type: "developer", Tag: "nintendo"},
 	})
-	require.Error(t, err, "two identical entries for an exclusive type must be rejected")
+	require.NoError(t, err)
 
 	var count int
 	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM MediaTags WHERE MediaDBID = 1`).Scan(&count))
-	assert.Equal(t, 0, count, "no tags should be persisted when the call is rejected")
+	assert.Equal(t, 1, count, "duplicate identical tags should persist once")
 }
 
 // --- Fix 2: upsertTags auto-creates missing tag types ---

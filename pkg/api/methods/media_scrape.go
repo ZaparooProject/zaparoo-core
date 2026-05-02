@@ -186,11 +186,8 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, models.ClientErrf("unknown scraper: %s", params.ScraperID)
 	}
 
-	if statusInstance.isRunning() {
-		return nil, models.ClientErrf("media indexing is in progress")
-	}
-	if !scrapingStatusInstance.startIfNotRunning(params.ScraperID) {
-		return nil, models.ClientErrf("scraping already in progress")
+	if err := startScrapingIfNoIndex(params.ScraperID); err != nil {
+		return nil, err
 	}
 
 	// Use app-scoped context — scraping outlives the API request.

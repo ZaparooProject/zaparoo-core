@@ -263,6 +263,45 @@ func mediaScrapeBlockedByIndexLabel() string {
 	return "Scrape metadata: index running"
 }
 
+func scraperSupportsSystem(scraper models.ScraperInfo, systemID string) bool {
+	if len(scraper.SupportedSystems) == 0 {
+		return true
+	}
+	for _, supported := range scraper.SupportedSystems {
+		if strings.EqualFold(supported, systemID) {
+			return true
+		}
+	}
+	return false
+}
+
+func filterScrapeSystems(allSystems []SystemItem, scraper models.ScraperInfo) []SystemItem {
+	filtered := make([]SystemItem, 0, len(allSystems))
+	for _, system := range allSystems {
+		if scraperSupportsSystem(scraper, system.ID) {
+			filtered = append(filtered, system)
+		}
+	}
+	return filtered
+}
+
+func pruneSelectedScrapeSystems(selected []string, systems []SystemItem) []string {
+	if len(selected) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(systems))
+	for _, system := range systems {
+		allowed[system.ID] = struct{}{}
+	}
+	pruned := make([]string, 0, len(selected))
+	for _, systemID := range selected {
+		if _, ok := allowed[systemID]; ok {
+			pruned = append(pruned, systemID)
+		}
+	}
+	return pruned
+}
+
 func formatScrapeMenuLabel(status *models.ScrapingStatusResponse) string {
 	if status.Scraping {
 		if status.Paused {
@@ -368,6 +407,7 @@ func BuildGenerateDBPage(
 
 	scrapeState := struct {
 		scrapers     []models.ScraperInfo
+		allSystems   []SystemItem
 		systems      []SystemItem
 		selected     []string
 		scraperIndex int
@@ -640,6 +680,9 @@ func BuildGenerateDBPage(
 			scrapeSetupList.TriggerInitialHelp()
 			return
 		}
+		scraper := scrapeState.scrapers[scrapeState.scraperIndex]
+		scrapeState.systems = filterScrapeSystems(scrapeState.allSystems, scraper)
+		scrapeState.selected = pruneSelectedScrapeSystems(scrapeState.selected, scrapeState.systems)
 
 		scraperNames := make([]string, len(scrapeState.scrapers))
 		for i, scraper := range scrapeState.scrapers {
@@ -655,7 +698,9 @@ func BuildGenerateDBPage(
 			"Choose metadata scraper",
 			scraperNames,
 			&scrapeState.scraperIndex,
-			func(_ string, _ int) {})
+			func(_ string, _ int) {
+				refreshScrapeSetup()
+			})
 		scrapeSetupList.AddNavAction(
 			"Systems: "+systemsLabel,
 			"Choose systems to scrape",
@@ -722,7 +767,7 @@ func BuildGenerateDBPage(
 		scrapeState.scraperIndex = 0
 		scrapeState.force = false
 		scrapeState.selected = nil
-		scrapeState.systems = make([]SystemItem, 0, len(systems.Systems))
+		scrapeState.allSystems = make([]SystemItem, 0, len(systems.Systems))
 		for _, system := range systems.Systems {
 			if system.ID == "" {
 				continue
@@ -731,7 +776,7 @@ func BuildGenerateDBPage(
 			if name == "" {
 				name = system.ID
 			}
-			scrapeState.systems = append(scrapeState.systems, SystemItem{ID: system.ID, Name: name})
+			scrapeState.allSystems = append(scrapeState.allSystems, SystemItem{ID: system.ID, Name: name})
 		}
 
 		frame.SetHelpText("Configure metadata scrape")

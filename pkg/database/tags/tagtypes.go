@@ -38,7 +38,6 @@ var CanonicalIsExclusive = map[TagType]bool{
 	TagTypeRev:         true,
 	TagTypeDisc:        true,
 	TagTypeDiscTotal:   true,
-	TagTypePlayers:     true,
 	TagTypeExtension:   true,
 	TagTypeMedia:       true,
 	TagTypeArcadeBoard: true,

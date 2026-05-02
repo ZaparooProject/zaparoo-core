@@ -24,6 +24,7 @@ package gamelistxml
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"html"
 	"math"
@@ -38,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // GamelistRecord is one entry from a gamelist.xml, bundled with the filesystem
@@ -76,6 +78,7 @@ type SystemResolver func(ctx context.Context, systemIDs []string) ([]scraper.Scr
 // gamelist.xml files found in each system's ROM root paths.
 type GamelistXMLScraper struct {
 	db               database.MediaDBI
+	fs               afero.Fs
 	resolveSystemsFn SystemResolver
 }
 
@@ -83,7 +86,14 @@ type GamelistXMLScraper struct {
 // db is used for all database operations; resolveSystemsFn provides system info
 // (DBID, ROMPaths) when Scrape is called.
 func NewGamelistXMLScraper(db database.MediaDBI, resolveSystemsFn SystemResolver) *GamelistXMLScraper {
-	return &GamelistXMLScraper{db: db, resolveSystemsFn: resolveSystemsFn}
+	return &GamelistXMLScraper{db: db, fs: afero.NewOsFs(), resolveSystemsFn: resolveSystemsFn}
+}
+
+func (g *GamelistXMLScraper) filesystem() afero.Fs {
+	if g == nil || g.fs == nil {
+		return afero.NewOsFs()
+	}
+	return g.fs
 }
 
 // ID returns the stable scraper identifier.
@@ -132,11 +142,12 @@ func (g *GamelistXMLScraper) LoadRecords(
 		}
 
 		gamelistPath := filepath.Join(rootPath, "gamelist.xml")
-		if _, statErr := os.Stat(gamelistPath); os.IsNotExist(statErr) {
+		exists, statErr := afero.Exists(g.filesystem(), gamelistPath)
+		if statErr != nil || !exists {
 			continue
 		}
 
-		gl, err := esapi.ReadGameListXML(gamelistPath)
+		gl, err := readGameListXMLFS(g.filesystem(), gamelistPath)
 		if err != nil {
 			log.Warn().Err(err).Str("path", gamelistPath).Msg("gamelistxml: failed to read gamelist.xml, skipping")
 			continue
@@ -149,7 +160,7 @@ func (g *GamelistXMLScraper) LoadRecords(
 
 		// Stat media sub-directories once per root to avoid repeated lookups
 		// in MapToDB when falling back to filesystem-based image discovery.
-		availableMediaDirs := statMediaDirs(rootPath)
+		availableMediaDirs := statMediaDirsFS(g.filesystem(), rootPath)
 
 		for i := range gl.Games {
 			matchedPath, mediaDBID, titleDBID := matchGamelistPath(rootPath, gl.Games[i].Path, mediaByPath)
@@ -266,7 +277,7 @@ func (*GamelistXMLScraper) Match(
 
 // MapToDB converts a GamelistRecord into the tag and property writes to apply
 // to the matched Media and MediaTitle rows.
-func (*GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
+func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	var mediaTags []database.TagInfo
 	var titleTags []database.TagInfo
 	var titleProps []database.MediaProperty
@@ -389,7 +400,10 @@ func (*GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		key := propType + ":" + string(propValue)
 		p := pathProp(key, xmlPath, root)
 		if p == nil {
-			p = findMediaFileProp(key, stem, mediaDirCandidates[string(propValue)], record.AvailableMediaDirs)
+			p = findMediaFilePropFS(
+				g.filesystem(), key, stem,
+				mediaDirCandidates[string(propValue)], record.AvailableMediaDirs,
+			)
 		}
 		if p != nil {
 			titleProps = append(titleProps, *p)
@@ -427,22 +441,27 @@ func (*GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 
 // resolveESPath converts an EmulationStation path to an absolute filesystem path.
 //
-//   - "./relative" or "relative" → filepath.Join(systemRootPath, rest), confined to systemRootPath
+//   - "./relative" or "relative" → filepath.Join(systemRootPath, rest)
 //   - "~/..." → filepath.Join(os.UserHomeDir(), rest)
-//   - Already absolute → returned as-is
+//   - Already absolute → cleaned as-is
 //
-// Returns "" if the result is not an absolute path, input is empty, or a relative
-// path escapes systemRootPath via ".." components.
+// Returns "" if the result is not absolute, input is empty, or the resolved path
+// escapes systemRootPath.
 func resolveESPath(esPath, systemRootPath string) string {
 	if esPath == "" {
 		return ""
 	}
+	rootAbs, err := filepath.Abs(systemRootPath)
+	if err != nil {
+		return ""
+	}
+	rootAbs = filepath.Clean(rootAbs)
 
 	var abs string
 	switch {
 	case strings.HasPrefix(esPath, "~/"):
-		home, err := os.UserHomeDir()
-		if err != nil {
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
 			return ""
 		}
 		abs = filepath.Join(home, esPath[2:])
@@ -451,15 +470,16 @@ func resolveESPath(esPath, systemRootPath string) string {
 	default:
 		// Handles both "./relative" and "relative".
 		rel := strings.TrimPrefix(esPath, "./")
-		abs = filepath.Join(systemRootPath, rel)
-		// Containment check: relative inputs must stay within systemRootPath.
-		root := filepath.Clean(systemRootPath) + string(filepath.Separator)
-		if !strings.HasPrefix(abs+string(filepath.Separator), root) {
-			return ""
-		}
+		abs = filepath.Join(rootAbs, rel)
 	}
 
-	if !filepath.IsAbs(abs) {
+	abs, err = filepath.Abs(abs)
+	if err != nil || !filepath.IsAbs(abs) {
+		return ""
+	}
+	abs = filepath.Clean(abs)
+	rel, err := filepath.Rel(rootAbs, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return ""
 	}
 	return abs
@@ -600,8 +620,12 @@ func textProp(typeTag, text string) database.MediaProperty {
 // directory name → absolute path for every sub-directory found. Returns nil
 // when media/ does not exist or cannot be read — callers treat nil as empty.
 func statMediaDirs(rootPath string) map[string]string {
+	return statMediaDirsFS(afero.NewOsFs(), rootPath)
+}
+
+func statMediaDirsFS(fs afero.Fs, rootPath string) map[string]string {
 	mediaRoot := filepath.Join(rootPath, "media")
-	entries, err := os.ReadDir(mediaRoot)
+	entries, err := afero.ReadDir(fs, mediaRoot)
 	if err != nil {
 		return nil
 	}
@@ -622,6 +646,15 @@ func findMediaFileProp(
 	candidates []string,
 	availableDirs map[string]string,
 ) *database.MediaProperty {
+	return findMediaFilePropFS(afero.NewOsFs(), typeTag, stem, candidates, availableDirs)
+}
+
+func findMediaFilePropFS(
+	fs afero.Fs,
+	typeTag, stem string,
+	candidates []string,
+	availableDirs map[string]string,
+) *database.MediaProperty {
 	if stem == "" || stem == "." {
 		return nil
 	}
@@ -631,7 +664,7 @@ func findMediaFileProp(
 			continue
 		}
 		candidate := filepath.Join(dirPath, stem+".png")
-		if _, err := os.Stat(candidate); err == nil {
+		if exists, err := afero.Exists(fs, candidate); err == nil && exists {
 			return &database.MediaProperty{
 				TypeTag:     typeTag,
 				Text:        filepath.ToSlash(candidate),
@@ -640,6 +673,18 @@ func findMediaFileProp(
 		}
 	}
 	return nil
+}
+
+func readGameListXMLFS(fs afero.Fs, path string) (*esapi.GameList, error) {
+	data, err := afero.ReadFile(fs, path)
+	if err != nil {
+		return nil, fmt.Errorf("read gamelist XML %q: %w", path, err)
+	}
+	var gameList esapi.GameList
+	if err := xml.Unmarshal(data, &gameList); err != nil {
+		return nil, fmt.Errorf("parse gamelist XML %q: %w", path, err)
+	}
+	return &gameList, nil
 }
 
 // mimeFromExt returns a MIME type based on file extension.

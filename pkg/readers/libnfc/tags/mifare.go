@@ -101,12 +101,7 @@ func ReadMifare(pnd nfc.Device, cardUID string) (TagData, error) {
 }
 
 func isMifarePermissionBlock(block int) bool {
-	switch block + 1 {
-	case 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60:
-		return true
-	default:
-		return false
-	}
+	return (block+1)%4 == 0
 }
 
 // getMifareCapacityInBytes returns the Mifare card capacity

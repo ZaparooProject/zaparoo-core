@@ -307,12 +307,8 @@ func GenerateMediaDB(
 	db *database.Database,
 	pauser *syncutil.Pauser,
 ) error {
-	if scrapingStatusInstance.isRunning() {
-		return models.ClientErrf("scraping is in progress")
-	}
-
-	if !statusInstance.startIfNotRunning() {
-		return models.ClientErrf("indexing already in progress")
+	if err := startIndexingIfNoScrape(); err != nil {
+		return err
 	}
 
 	// Also prevent indexing if optimization is running

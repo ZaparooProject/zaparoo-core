@@ -285,7 +285,9 @@ func RunScraper[T any](
 					return
 				}
 			}
-			emitProgress(ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}, true)
+			if !emitProgress(ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}, true) {
+				return
+			}
 
 			totalProcessed += processed
 			totalMatched += matched

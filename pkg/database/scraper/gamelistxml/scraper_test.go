@@ -85,12 +85,20 @@ func TestResolveESPath_RelativeNoDot(t *testing.T) {
 	assert.Equal(t, filepath.Join(root, "roms", "mario.nes"), got)
 }
 
-func TestResolveESPath_Absolute(t *testing.T) {
+func TestResolveESPath_AbsoluteInsideRoot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	absPath := filepath.Join(root, "roms", "mario.nes")
+	got := resolveESPath(absPath, root)
+	assert.Equal(t, absPath, got)
+}
+
+func TestResolveESPath_AbsoluteOutsideRoot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	absPath := filepath.Join(root, "mario.nes")
 	got := resolveESPath(absPath, filepath.Join(root, "other"))
-	assert.Equal(t, absPath, got)
+	assert.Empty(t, got)
 }
 
 func TestResolveESPath_Empty(t *testing.T) {

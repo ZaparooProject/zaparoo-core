@@ -232,10 +232,11 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods are used to execute actions and request data back from the API. The current API provides **46 methods** across core functionality areas. See the [API Methods](./methods) page for detailed definitions and examples of each method.
+Methods are used to execute actions and request data back from the API. The current API provides **58 registered methods** across core functionality areas, including deprecated aliases. See the [API Methods](./methods) page for detailed definitions and examples of each method.
 
 | ID                              | Description                                                                           |
 | :------------------------------ | :------------------------------------------------------------------------------------ |
+| launch                          | **Deprecated.** Alias for `run`.                                                      |
 | run                             | Run supplied ZapScript.                                                               |
 | stop                            | Kill any active launcher, if possible.                                                |
 | confirm                         | Confirm and launch the currently staged token.                                        |
@@ -248,11 +249,20 @@ Methods are used to execute actions and request data back from the API. The curr
 | media.tags                      | Query available tags for filtering media search results.                              |
 | media.generate                  | Start a new media database index.                                                     |
 | media.generate.cancel           | Cancel any currently running media database indexing operation.                       |
-| media.scrape.status             | Return the latest metadata scraping status.                                           |
-| media.history                   | Return paginated media play history.                                                  |
-| media.lookup                    | Resolve a game name and system to a media database match.                             |
-| media.control                   | Send a control action to the active media's launcher.                                 |
+| media.generate.resume           | Resume paused media database indexing.                                                |
+| media.index                     | **Deprecated.** Alias for `media.generate`.                                           |
 | media.browse                    | Browse indexed media in a directory-style hierarchy.                                  |
+| media.lookup                    | Resolve a game name and system to a media database match.                             |
+| media.meta                      | Return metadata for a specific indexed media row.                                     |
+| media.image                     | Return the best matching image for a specific indexed media row.                      |
+| media.clean.orphans             | Remove orphaned media database rows.                                                  |
+| scrapers                        | List available metadata scrapers.                                                     |
+| media.scrape                    | Start metadata scraping for indexed media.                                            |
+| media.scrape.status             | Return the latest metadata scraping status.                                           |
+| media.scrape.cancel             | Cancel any currently running metadata scrape.                                         |
+| media.scrape.resume             | Resume paused metadata scraping.                                                      |
+| media.history                   | Return paginated media play history.                                                  |
+| media.control                   | Send a control action to the active media's launcher.                                 |
 | media.history.top               | Return most-played media ranked by total play time.                                   |
 | playtime                        | Query current playtime session status and usage statistics.                           |
 | systems                         | List all currently indexed systems.                                                   |
@@ -277,6 +287,8 @@ Methods are used to execute actions and request data back from the API. The curr
 | inbox                           | List all inbox messages.                                                              |
 | inbox.delete                    | Delete a specific inbox message by ID.                                                |
 | inbox.clear                     | Delete all inbox messages.                                                            |
+| clients                         | List paired API clients.                                                              |
+| clients.delete                  | Delete a paired API client.                                                           |
 | input.keyboard                  | Send a keyboard input sequence.                                                       |
 | input.gamepad                   | Send a gamepad input sequence.                                                        |
 | screenshot                      | Capture a screenshot of the current platform display.                                 |

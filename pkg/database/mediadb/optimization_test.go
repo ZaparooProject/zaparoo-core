@@ -59,8 +59,8 @@ func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
 	// PopulateBrowseCache: BEGIN, SELECT (empty), DELETEs, root dir insert,
 	// count prepare, COMMIT.
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT m.DBID, m.SystemDBID, m.Path, mt.Name").
-		WillReturnRows(sqlmock.NewRows([]string{"DBID", "SystemDBID", "Path", "Name"}))
+	mock.ExpectQuery("SELECT m.SystemDBID, m.Path").
+		WillReturnRows(sqlmock.NewRows([]string{"SystemDBID", "Path"}))
 	mock.ExpectExec("DELETE FROM BrowseDirCounts").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DELETE FROM BrowseDirs").

@@ -432,7 +432,8 @@ An object:
     "results": [
       {
         "name": "240p Test Suite (PD) v0.03 tepples",
-        "path": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
+        "path": "/media/fat/games/Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
+        "relativePath": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
         "zapScript": "@Gameboy/240p Test Suite (PD) v0.03 tepples",
         "system": {
           "category": "Handheld",
@@ -487,7 +488,8 @@ An object:
     "results": [
       {
         "name": "Super Mario Bros.",
-        "path": "NES/Super Mario Bros.nes",
+        "path": "/media/fat/games/NES/Super Mario Bros.nes",
+        "relativePath": "NES/Super Mario Bros.nes",
         "zapScript": "@NES/Super Mario Bros. (year:1985)",
         "system": {
           "category": "Console",
@@ -1493,7 +1495,7 @@ Returns `null` on success. The scraper continues after the response is sent.
 
 Return the latest known metadata scraper status.
 
-This method behaves like `media.database` does for indexing status: clients can query the current scrape snapshot after opening a UI, then continue listening for `media.scraping` notifications. If no scrape has run since startup, the result is idle with `scraping: false` and `done: false`.
+This method behaves like `media` does for indexing status: clients can query the current scrape snapshot after opening a UI, then continue listening for `media.scraping` notifications. If no scrape has run since startup, the result is idle with `scraping: false` and `done: false`.
 
 #### Parameters
 

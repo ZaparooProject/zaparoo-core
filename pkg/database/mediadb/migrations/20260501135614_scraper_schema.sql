@@ -9,7 +9,7 @@ ALTER TABLE TagTypes ADD COLUMN IsExclusive INTEGER NOT NULL DEFAULT 0;
 UPDATE TagTypes SET IsExclusive = 1 WHERE Type IN (
     'developer', 'publisher', 'year', 'rating',
     'rev', 'disc', 'disctotal',
-    'players', 'extension',
+    'extension',
     'media', 'arcadeboard',
     'season', 'episode', 'track', 'volume', 'issue',
     'unfinished', 'copyright'
@@ -87,8 +87,15 @@ CREATE TABLE SupportingMedia (
 
 INSERT INTO SupportingMedia
     (DBID, MediaTitleDBID, TypeTagDBID, Path, ContentType, Binary)
-SELECT DBID, MediaTitleDBID, TypeTagDBID, Text, '', NULL
-FROM MediaTitleProperties;
+SELECT
+    mtp.DBID,
+    mtp.MediaTitleDBID,
+    mtp.TypeTagDBID,
+    mtp.Text,
+    COALESCE(mb.ContentType, ''),
+    mb.Data
+FROM MediaTitleProperties mtp
+LEFT JOIN MediaBlobs mb ON mtp.BlobDBID = mb.DBID;
 
 DROP TABLE MediaProperties;
 DROP TABLE MediaTitleProperties;

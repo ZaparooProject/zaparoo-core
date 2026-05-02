@@ -52,6 +52,7 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	sqlStmt := `
 	delete from MediaProperties;
 	delete from MediaTitleProperties;
+	delete from MediaBlobs;
 	delete from MediaTitleTags;
 	delete from MediaTags;
 	delete from Media;

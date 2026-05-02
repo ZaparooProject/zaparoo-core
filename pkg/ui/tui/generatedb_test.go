@@ -264,6 +264,43 @@ func TestBlockedMediaOperationMenuLabels(t *testing.T) {
 	assert.Equal(t, "Scrape metadata: index running", mediaScrapeBlockedByIndexLabel())
 }
 
+func TestScraperSupportsSystem(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, scraperSupportsSystem(models.ScraperInfo{}, "nes"))
+	assert.True(t, scraperSupportsSystem(models.ScraperInfo{SupportedSystems: []string{"NES"}}, "nes"))
+	assert.False(t, scraperSupportsSystem(models.ScraperInfo{SupportedSystems: []string{"snes"}}, "nes"))
+}
+
+func TestFilterScrapeSystems(t *testing.T) {
+	t.Parallel()
+
+	systems := []SystemItem{
+		{ID: "nes", Name: "Nintendo Entertainment System"},
+		{ID: "snes", Name: "Super Nintendo"},
+		{ID: "gb", Name: "Game Boy"},
+	}
+	scraper := models.ScraperInfo{SupportedSystems: []string{"SNES", "gb"}}
+
+	assert.Equal(t, []SystemItem{
+		{ID: "snes", Name: "Super Nintendo"},
+		{ID: "gb", Name: "Game Boy"},
+	}, filterScrapeSystems(systems, scraper))
+	assert.Equal(t, systems, filterScrapeSystems(systems, models.ScraperInfo{}))
+}
+
+func TestPruneSelectedScrapeSystems(t *testing.T) {
+	t.Parallel()
+
+	systems := []SystemItem{
+		{ID: "nes", Name: "Nintendo Entertainment System"},
+		{ID: "gb", Name: "Game Boy"},
+	}
+	selected := []string{"snes", "gb", "nes"}
+
+	assert.Equal(t, []string{"gb", "nes"}, pruneSelectedScrapeSystems(selected, systems))
+}
+
 func TestMediaIndexProgress(t *testing.T) {
 	t.Parallel()
 
