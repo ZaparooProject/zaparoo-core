@@ -263,6 +263,13 @@ func (sl *SettingsList) GetCurrentDescription() string {
 	return ""
 }
 
+// ClearItems removes all list entries and their SettingsList metadata.
+func (sl *SettingsList) ClearItems() *SettingsList {
+	sl.Clear()
+	sl.items = sl.items[:0]
+	return sl
+}
+
 // goBack navigates to the previous page, rebuilding it if a rebuild callback is set.
 func (sl *SettingsList) goBack() {
 	if sl.rebuildPrevious != nil {

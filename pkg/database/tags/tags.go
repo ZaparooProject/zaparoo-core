@@ -61,6 +61,21 @@ func (t CanonicalTag) String() string {
 	return string(t.Type) + ":" + string(t.Value)
 }
 
+// PropertyTypeTag returns the canonical TypeTag string for a property tag value.
+func PropertyTypeTag(value TagValue) string {
+	return string(TagTypeProperty) + ":" + string(value)
+}
+
+// ScraperType returns the dynamic tag type used by a scraper's sentinel tag.
+func ScraperType(scraperID string) TagType {
+	return TagType("scraper." + scraperID)
+}
+
+// ScraperTypeTag returns the full sentinel TypeTag string for a scraper.
+func ScraperTypeTag(scraperID string) string {
+	return CanonicalTag{Type: ScraperType(scraperID), Value: TagScraperScraped}.String()
+}
+
 // Tag type constants - these define the top-level categories for our hierarchical tag system
 // Format: Type defines the category, tags within each type use colon-separated hierarchies
 const (
@@ -110,6 +125,10 @@ const (
 	TagTypePublisher     TagType = "publisher"     // Game publisher (company that released the game)
 	TagTypeCredit        TagType = "credit"        // Company credit with unspecified developer/publisher role
 	TagTypeRelease       TagType = "release"       // Distribution/release status (homebrew, unreleased, reissue, etc.)
+	TagTypeProperty      TagType = "property"      // Static content property (description, artwork paths, video paths)
+	TagTypeRating        TagType = "rating"        // Numeric rating (scraped, stored as integer 0-100)
+	TagTypeGenre         TagType = "genre"         // Game genre (scraped from external sources; additive)
+	TagTypeGameFamily    TagType = "gamefamily"    // Game family/series (scraped from EmulationStation family field)
 )
 
 // Tag Format:
@@ -875,4 +894,29 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// Input accessibility
 		TagAccessibilityInputRemappableControls, TagAccessibilityInputOneButtonMode,
 	},
+
+	// Property type tags are referenced by scrapers for static content (descriptions,
+	// artwork paths, video paths). They use the "property" tag type. Properties are
+	// one-per-type per entity (UNIQUE constraint); scrapers upsert on conflict.
+	TagTypeProperty: {
+		TagPropertyDescription,
+		TagPropertyImageImage,
+		TagPropertyImageBoxart,
+		TagPropertyImageScreenshot,
+		TagPropertyImageThumbnail,
+		TagPropertyImageMarquee,
+		TagPropertyImageWheel,
+		TagPropertyImageFanart,
+		TagPropertyImageTitleshot,
+		TagPropertyImageMap,
+		TagPropertyVideo,
+		TagPropertyManual,
+		TagPropertyXMLGameID,
+	},
+
+	// Rating, genre, and game-family are scraped from external sources; seeded here
+	// so the types exist after SeedCanonicalTags even before any scraper runs.
+	TagTypeRating:     {},
+	TagTypeGenre:      {},
+	TagTypeGameFamily: {}, // Dynamic values — populated from EmulationStation "family" field
 }

@@ -68,28 +68,24 @@ jobs:
           path-type: inherit
 
       - name: Restore Go cache (Unix)
+        id: restore-go-cache-unix
         if: matrix.os != 'windows'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: no-match-${{ runner.os }}
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-gomod-
 
       - name: Restore Go cache (Windows)
+        id: restore-go-cache-windows
         if: matrix.os == 'windows'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
-          path: |
-            D:\go-mod-cache
-            D:\go-cache
-          key: no-match-${{ runner.os }}
+          path: D:\go-mod-cache
+          key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-gomod-
 
       - name: Download Go modules (Windows)
         if: matrix.os == 'windows'
@@ -128,7 +124,7 @@ jobs:
 
       - name: Upload govulncheck SARIF
         if: matrix.os == 'ubuntu' && !cancelled() && github.event_name != 'workflow_call' && hashFiles('govulncheck.sarif') != ''
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
         with:
           sarif_file: govulncheck.sarif
           category: govulncheck
@@ -167,22 +163,18 @@ jobs:
           fail_ci_if_error: true
 
       - name: Save Go cache (Unix)
-        if: matrix.os != 'windows'
+        if: matrix.os != 'windows' && steps.restore-go-cache-unix.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-${{ github.run_id }}
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
 
       - name: Save Go cache (Windows)
-        if: matrix.os == 'windows'
+        if: matrix.os == 'windows' && steps.restore-go-cache-windows.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
-          path: |
-            D:\go-mod-cache
-            D:\go-cache
-          key: ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-${{ github.run_id }}
+          path: D:\go-mod-cache
+          key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
 
   cross-lint:
     name: Cross Lint
@@ -302,25 +294,19 @@ jobs:
         if: matrix.os == 'macos'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: no-match-${{ runner.os }}-native-pr
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-gomod-
 
       - name: Restore Go cache (Windows)
         if: matrix.os == 'windows'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
-          path: |
-            D:\go-mod-cache
-            D:\go-cache
-          key: no-match-${{ runner.os }}-native-pr
+          path: D:\go-mod-cache
+          key: ${{ runner.os }}-gomod-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-gomod-
 
       - name: Download Go modules (Windows)
         if: matrix.os == 'windows'

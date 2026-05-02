@@ -178,6 +178,23 @@ type MediaHistoryTopParams struct {
 	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
 }
 
+type MediaMetaParams struct {
+	System string `json:"system" validate:"required,min=1"`
+	Path   string `json:"path"   validate:"required,min=1"`
+}
+
+type MediaImageParams struct {
+	System     string   `json:"system"            validate:"required,min=1"`
+	Path       string   `json:"path"              validate:"required,min=1"`
+	ImageTypes []string `json:"imageTypes"        validate:"omitempty,dive,min=1"`
+}
+
+type MediaScrapeParams struct {
+	ScraperID string   `json:"scraperId" validate:"required,min=1"`
+	Systems   []string `json:"systems"   validate:"omitempty,dive,min=1"`
+	Force     bool     `json:"force"`
+}
+
 type MediaLookupParams struct {
 	FuzzySystem *bool  `json:"fuzzySystem,omitempty"`
 	Name        string `json:"name" validate:"required,min=1"`

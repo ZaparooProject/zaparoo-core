@@ -29,7 +29,7 @@ package mediascanner
 //
 //  2. Orphan tag cleanup full-table scan: the old implementation used
 //     NOT IN (SELECT ... UNION SELECT ... UNION SELECT ...)
-//     against the full MediaTags/MediaTitleTags/SupportingMedia tables (hundreds of
+//     against the full MediaTags/MediaTitleTags/Properties tables (hundreds of
 //     thousands of rows after other systems are indexed). The fix bounds the cleanup to
 //     a pre-collected candidate set and uses NOT EXISTS for index-friendly lookups.
 //

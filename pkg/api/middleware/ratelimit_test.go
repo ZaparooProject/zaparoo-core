@@ -179,6 +179,73 @@ func TestHTTPRateLimitMiddleware_IsolatesIPs(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code, "different IP should not be rate-limited")
 }
 
+func TestHTTPRateLimitMiddleware_ExemptsLoopbackAndLocalhost(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+	}{
+		{name: "ipv4 loopback", remoteAddr: "127.0.0.1:12345"},
+		{name: "ipv6 loopback", remoteAddr: "[::1]:12345"},
+		{name: "localhost", remoteAddr: "localhost:12345"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rl := NewIPRateLimiterWithLimits(0, 1)
+			mw := HTTPRateLimitMiddleware(rl)
+			callCount := 0
+			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				callCount++
+				w.WriteHeader(http.StatusOK)
+			})
+			wrapped := mw(next)
+
+			for range 3 {
+				//nolint:noctx // test helper
+				req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+				req.RemoteAddr = tt.remoteAddr
+				rec := httptest.NewRecorder()
+				wrapped.ServeHTTP(rec, req)
+
+				assert.Equal(t, http.StatusOK, rec.Code)
+			}
+			assert.Equal(t, 3, callCount)
+		})
+	}
+}
+
+func TestHTTPRateLimitMiddleware_DoesNotExemptNonLoopbackHostnames(t *testing.T) {
+	t.Parallel()
+
+	rl := NewIPRateLimiterWithLimits(0, 1)
+	mw := HTTPRateLimitMiddleware(rl)
+	callCount := 0
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := mw(next)
+
+	for i := range 3 {
+		//nolint:noctx // test helper
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+		req.RemoteAddr = "example.test:12345"
+		rec := httptest.NewRecorder()
+		wrapped.ServeHTTP(rec, req)
+
+		if i == 0 {
+			assert.Equal(t, http.StatusOK, rec.Code)
+		} else {
+			assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+		}
+	}
+	assert.Equal(t, 1, callCount)
+}
+
 func TestWebSocketRateLimitHandler_WaitsForToken(t *testing.T) {
 	t.Parallel()
 
@@ -195,6 +262,7 @@ func TestWebSocketRateLimitHandler_WaitsForToken(t *testing.T) {
 	m.HandleMessage(wrapped)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = "192.168.1.1:12345"
 		_ = m.HandleRequest(w, r)
 	}))
 	defer srv.Close()
@@ -239,6 +307,7 @@ func TestWebSocketRateLimitHandler_ClosesAfterWaitTimeout(t *testing.T) {
 	m.HandleMessage(wrapped)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = "192.168.1.1:12345"
 		_ = m.HandleRequest(w, r)
 	}))
 	defer srv.Close()
@@ -276,4 +345,37 @@ func TestWebSocketRateLimitHandler_ClosesAfterWaitTimeout(t *testing.T) {
 		) || websocket.IsUnexpectedCloseError(err),
 		"connection read should return a websocket close error, got %v", err,
 	)
+}
+
+func TestWebSocketRateLimitHandler_ExemptsLoopback(t *testing.T) {
+	t.Parallel()
+
+	rl := NewIPRateLimiterWithLimits(0, 1)
+	var handlerCalls atomic.Int32
+	inner := func(_ *melody.Session, _ []byte) {
+		handlerCalls.Add(1)
+	}
+	wrapped := WebSocketRateLimitHandlerWithWait(rl, 20*time.Millisecond, inner)
+
+	m := melody.New()
+	m.HandleMessage(wrapped)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = m.HandleRequest(w, r)
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	//nolint:bodyclose // websocket conn manages the body
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	for range 3 {
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("hello")))
+	}
+
+	require.Eventually(t, func() bool {
+		return handlerCalls.Load() == 3
+	}, 500*time.Millisecond, 10*time.Millisecond, "loopback websocket messages should bypass rate limiting")
 }

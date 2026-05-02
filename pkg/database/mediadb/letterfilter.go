@@ -40,22 +40,6 @@ func BrowseNameFirstChar(name string) string {
 	return browseNameSymbolBucket
 }
 
-func buildBrowseNameCharFilter(column string, letter *string) (clause string, args []any) {
-	if letter == nil || *letter == "" {
-		return "", nil
-	}
-
-	letterValue := strings.ToUpper(*letter)
-	switch {
-	case letterValue == "0-9", letterValue == browseNameSymbolBucket:
-		return column + " = ?", []any{letterValue}
-	case len(letterValue) == 1 && letterValue >= "A" && letterValue <= "Z":
-		return column + " = ?", []any{letterValue}
-	default:
-		return "", nil
-	}
-}
-
 // BuildLetterFilterSQL constructs SQL WHERE clauses for filtering by the first
 // character of a column. Supports single letters (A-Z), "0-9" for numeric
 // starts, and "#" for symbols (non-alphanumeric).

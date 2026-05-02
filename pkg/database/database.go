@@ -152,9 +152,46 @@ type Media struct {
 	IsMissing      bool
 }
 
+// MediaFullRow is the result of a joined query fetching a Media record together
+// with its parent MediaTitle and System in a single round-trip.
+type MediaFullRow struct {
+	System System
+	Media
+	Title MediaTitle
+}
+
 type TagType struct {
-	Type string
-	DBID int64
+	Type        string
+	DBID        int64
+	IsExclusive bool
+}
+
+// MediaProperty is a static content property attached to a MediaTitle or Media
+// record. Properties are fetched for display, not filtered by value.
+//
+// For writes: set TypeTag to the full "type:value" string (e.g. "property:description").
+// The database layer resolves the TypeTagDBID from TypeTag automatically.
+// To associate binary data with a property, call UpsertMediaBlob first to obtain
+// a BlobDBID, then set that field before upserting the property.
+// For reads: TypeTag is populated from the joined Tags row; TypeTagDBID is also
+// set. ContentType and Binary are hydrated from the MediaBlobs JOIN and are
+// read-only — do not set them for writes.
+type MediaProperty struct {
+	BlobDBID    *int64
+	TypeTag     string
+	Text        string
+	ContentType string
+	Binary      []byte
+	TypeTagDBID int64
+}
+
+// MediaBlob is a row from the MediaBlobs content-addressed store.
+// Data is identified by the hex-encoded SHA-256 of its framed content type and bytes.
+type MediaBlob struct {
+	Hash        string
+	ContentType string
+	Data        []byte
+	DBID        int64
 }
 
 type Tag struct {
@@ -325,6 +362,17 @@ type MediaWithFullPath struct {
 	SystemID       string
 	DBID           int64
 	MediaTitleDBID int64
+}
+
+// ScrapeWrite is the database-level write payload produced by a scraper for a
+// matched Media row. Sentinel is written after all metadata so interrupted runs
+// can safely retry the record.
+type ScrapeWrite struct {
+	Sentinel   TagInfo
+	MediaTags  []TagInfo
+	TitleTags  []TagInfo
+	TitleProps []MediaProperty
+	MediaProps []MediaProperty
 }
 
 type FileInfo struct {
@@ -512,6 +560,8 @@ type MediaDBI interface {
 	RandomGame(systems []systemdefs.System) (SearchResult, error)
 	RandomGameWithQuery(query *MediaQuery) (SearchResult, error)
 	GetTotalMediaCount() (int, error)
+	GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error)
+	GetTotalScrapedMediaCount(ctx context.Context) (int, error)
 
 	FindSystem(row System) (System, error)
 	FindSystemBySystemID(systemID string) (System, error)
@@ -545,6 +595,17 @@ type MediaDBI interface {
 	BulkSetMediaMissing(dbids map[int]struct{}) error
 	ResetMissingFlags(systemDBIDs []int) error
 
+	// CleanMediaOrphans removes Media rows where IsMissing=1 together with
+	// their associated MediaTags and MediaProperties.  MediaTitles that are
+	// no longer referenced by any Media row are also removed (including their
+	// MediaTitleTags and MediaTitleProperties).  Tags unreferenced by any join
+	// table are pruned.  A VACUUM is issued on success.
+	//
+	// Returns the count of Media rows deleted, or one of ErrIndexingInProgress,
+	// ErrOptimizationInProgress, or ErrTransactionActive when the operation
+	// cannot safely run.
+	CleanMediaOrphans(ctx context.Context) (int64, error)
+
 	// GetMax*ID methods for resume functionality
 	GetMaxSystemID() (int64, error)
 	GetMaxTitleID() (int64, error)
@@ -573,4 +634,98 @@ type MediaDBI interface {
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
 	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
 	GetMediaTagsBySystemID(systemID string) ([]MediaTagLink, error)
+
+	// Scraper support methods
+
+	// FindMediaBySystemAndPath returns the Media row matching systemDBID and path,
+	// or nil, nil when no row is found.
+	FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*Media, error)
+
+	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and
+	// path using a case-insensitive path comparison, or nil, nil when no row is
+	// found. Intended for scrapers where the incoming path casing may differ from
+	// what the indexer recorded (e.g. Windows filesystem with mixed-case system
+	// directory names).
+	FindMediaBySystemAndPathFold(ctx context.Context, systemDBID int64, path string) (*Media, error)
+
+	// MediaHasTag returns true when the Media row has a tag whose full string
+	// (type:value) equals tagValue.
+	MediaHasTag(ctx context.Context, mediaDBID int64, tagValue string) (bool, error)
+
+	// GetScrapedMediaIDs returns media DBIDs in a system already marked as scraped
+	// by scraperID.
+	GetScrapedMediaIDs(ctx context.Context, scraperID string, systemDBID int64) (map[int64]struct{}, error)
+
+	// UpsertMediaTags writes tags to MediaTags for a specific Media row.
+	// Exclusive types (TagTypes.IsExclusive=1) delete existing tags of that type
+	// for the entity before inserting; additive types use INSERT OR IGNORE.
+	UpsertMediaTags(ctx context.Context, mediaDBID int64, tags []TagInfo) error
+
+	// UpsertMediaTitleTags writes tags to MediaTitleTags for a specific MediaTitle row.
+	// Exclusive/additive behaviour is identical to UpsertMediaTags.
+	UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int64, tags []TagInfo) error
+
+	// UpsertMediaTitleProperties upserts properties into MediaTitleProperties.
+	// Conflicts on (MediaTitleDBID, TypeTagDBID) update data columns; DBID is preserved.
+	UpsertMediaTitleProperties(ctx context.Context, mediaTitleDBID int64, props []MediaProperty) error
+
+	// UpsertMediaProperties upserts properties into MediaProperties.
+	// Conflicts on (MediaDBID, TypeTagDBID) update data columns; DBID is preserved.
+	UpsertMediaProperties(ctx context.Context, mediaDBID int64, props []MediaProperty) error
+
+	// ApplyScrapeResult atomically writes all scraper metadata for a Media row and
+	// writes the sentinel tag last.
+	ApplyScrapeResult(ctx context.Context, mediaDBID, mediaTitleDBID int64, write *ScrapeWrite) error
+
+	// FindMediaTitlesWithoutSentinel returns MediaTitle rows for the given system
+	// that have no Media row with the given sentinel tag value.
+	FindMediaTitlesWithoutSentinel(ctx context.Context, systemDBID int64, sentinelTag string) ([]MediaTitle, error)
+
+	// FindMediaTitleByDBID returns the MediaTitle with the given DBID,
+	// or nil, nil when no row is found.
+	FindMediaTitleByDBID(ctx context.Context, dbid int64) (*MediaTitle, error)
+
+	// GetMediaTitleProperties returns all properties for a MediaTitle row,
+	// with TypeTagDBID resolved to the tag value string.
+	GetMediaTitleProperties(ctx context.Context, mediaTitleDBID int64) ([]MediaProperty, error)
+
+	// GetMediaProperties returns all properties for a Media row,
+	// with TypeTagDBID resolved to the tag value string.
+	GetMediaProperties(ctx context.Context, mediaDBID int64) ([]MediaProperty, error)
+
+	// DeleteMediaTitleProperty removes a single property row from MediaTitleProperties
+	// identified by (mediaTitleDBID, typeTagDBID). A no-op if the row does not exist.
+	DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID int64, typeTagDBID int64) error
+
+	// DeleteMediaProperty removes a single property row from MediaProperties
+	// identified by (mediaDBID, typeTagDBID). A no-op if the row does not exist.
+	DeleteMediaProperty(ctx context.Context, mediaDBID int64, typeTagDBID int64) error
+
+	// GetMediaWithTitleAndSystem fetches a Media record together with its parent
+	// MediaTitle and System via a single JOIN query. Returns nil, nil when no
+	// Media row with the given DBID exists. IsMissing is NOT filtered — metadata
+	// remains accessible for missing files.
+	GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int64) (*MediaFullRow, error)
+
+	// GetMediaTagsByMediaDBID returns the file-level tags (MediaTags) for a
+	// single Media row. Does not include title-level tags.
+	GetMediaTagsByMediaDBID(ctx context.Context, mediaDBID int64) ([]TagInfo, error)
+
+	// GetMediaTitleTagsByMediaTitleDBID returns the title-level tags
+	// (MediaTitleTags) for a single MediaTitle row.
+	GetMediaTitleTagsByMediaTitleDBID(ctx context.Context, mediaTitleDBID int64) ([]TagInfo, error)
+
+	// UpsertMediaBlob inserts a blob into MediaBlobs when no row with the same
+	// SHA-256 hash of framed content type and bytes already exists, then returns its DBID.
+	// Hash computation is performed internally; callers supply only contentType and raw data.
+	UpsertMediaBlob(ctx context.Context, contentType string, data []byte) (int64, error)
+
+	// GetMediaBlob returns the MediaBlob row for the given DBID,
+	// or nil, nil when not found.
+	GetMediaBlob(ctx context.Context, blobDBID int64) (*MediaBlob, error)
+
+	// PruneOrphanedBlobs deletes MediaBlobs rows that are not referenced by
+	// any MediaTitleProperties or MediaProperties row. Returns the count of
+	// rows deleted. Safe to call from CleanMediaOrphans.
+	PruneOrphanedBlobs(ctx context.Context) (int64, error)
 }

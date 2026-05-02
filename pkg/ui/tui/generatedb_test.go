@@ -115,7 +115,7 @@ func TestProgressBar_Chaining(t *testing.T) {
 	assert.InDelta(t, 0.3, pb.GetProgress(), 0.001)
 }
 
-func TestFormatDBStats(t *testing.T) {
+func TestFormatDBMenuLabel(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -128,7 +128,24 @@ func TestFormatDBStats(t *testing.T) {
 			db: models.IndexingStatusResponse{
 				Exists: false,
 			},
-			expected: "No database found. Run update to scan your media folders.",
+			expected: "Update index: not indexed",
+		},
+		{
+			name: "database is indexing",
+			db: models.IndexingStatusResponse{
+				Exists:   true,
+				Indexing: true,
+			},
+			expected: "Update index: in progress",
+		},
+		{
+			name: "database is paused",
+			db: models.IndexingStatusResponse{
+				Exists:   true,
+				Indexing: true,
+				Paused:   true,
+			},
+			expected: "Update index: paused",
 		},
 		{
 			name: "database exists with media",
@@ -136,7 +153,7 @@ func TestFormatDBStats(t *testing.T) {
 				Exists:     true,
 				TotalMedia: intPtr(100),
 			},
-			expected: "Database contains 100 indexed media files.",
+			expected: "Update index: 100 media",
 		},
 		{
 			name: "database exists with zero media",
@@ -144,7 +161,7 @@ func TestFormatDBStats(t *testing.T) {
 				Exists:     true,
 				TotalMedia: intPtr(0),
 			},
-			expected: "Database contains 0 indexed media files.",
+			expected: "Update index: 0 media",
 		},
 		{
 			name: "database exists with nil TotalMedia",
@@ -152,7 +169,7 @@ func TestFormatDBStats(t *testing.T) {
 				Exists:     true,
 				TotalMedia: nil,
 			},
-			expected: "Database contains 0 indexed media files.",
+			expected: "Update index: 0 media",
 		},
 		{
 			name: "database exists with large count",
@@ -160,15 +177,174 @@ func TestFormatDBStats(t *testing.T) {
 				Exists:     true,
 				TotalMedia: intPtr(12345),
 			},
-			expected: "Database contains 12345 indexed media files.",
+			expected: "Update index: 12345 media",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := formatDBStats(tt.db)
+			result := formatDBMenuLabel(tt.db)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestFormatScrapeMenuLabel(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "Scrape metadata", formatScrapeMenuLabel(&models.ScrapingStatusResponse{}))
+	assert.Equal(t, "Scrape metadata: 42 scraped", formatScrapeMenuLabel(&models.ScrapingStatusResponse{
+		TotalScraped: 42,
+	}))
+	assert.Equal(t, "Scrape metadata: in progress", formatScrapeMenuLabel(&models.ScrapingStatusResponse{
+		ScraperID:    "screenscraper",
+		Scraping:     true,
+		Processed:    12,
+		TotalScraped: 42,
+	}))
+	assert.Equal(t, "Scrape metadata: paused", formatScrapeMenuLabel(&models.ScrapingStatusResponse{
+		ScraperID: "screenscraper",
+		Scraping:  true,
+		Paused:    true,
+	}))
+	assert.Equal(t, "Scrape metadata: 42 scraped", formatScrapeMenuLabel(&models.ScrapingStatusResponse{
+		ScraperID:    "screenscraper",
+		Done:         true,
+		Matched:      8,
+		TotalScraped: 42,
+	}))
+	assert.Equal(t, "Scrape metadata: 8 matched", formatScrapeMenuLabel(&models.ScrapingStatusResponse{
+		ScraperID: "screenscraper",
+		Done:      true,
+		Matched:   8,
+	}))
+}
+
+func TestFormatScrapeProgress(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t,
+		"ScreenScraper - NES\nRecords: 3 / 10\nMatched: 2  Skipped: 1",
+		formatScrapeProgress(&models.ScrapingStatusResponse{
+			ScraperID: "screenscraper",
+			SystemID:  "NES",
+			Processed: 3,
+			Total:     10,
+			Matched:   2,
+			Skipped:   1,
+		}, "ScreenScraper"),
+	)
+	assert.Equal(t,
+		"screenscraper\nRecords: 3 processed\nMatched: 2  Skipped: 1",
+		formatScrapeProgress(&models.ScrapingStatusResponse{
+			ScraperID: "screenscraper",
+			Processed: 3,
+			Matched:   2,
+			Skipped:   1,
+		}, ""),
+	)
+	assert.Equal(t,
+		"screenscraper\nPaused: 3 / 10\nMatched: 2  Skipped: 1",
+		formatScrapeProgress(&models.ScrapingStatusResponse{
+			ScraperID: "screenscraper",
+			Processed: 3,
+			Total:     10,
+			Matched:   2,
+			Skipped:   1,
+			Paused:    true,
+		}, ""),
+	)
+}
+
+func TestBlockedMediaOperationMenuLabels(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "Update index: scrape running", mediaIndexBlockedByScrapeLabel())
+	assert.Equal(t, "Scrape metadata: index running", mediaScrapeBlockedByIndexLabel())
+}
+
+func TestScraperSupportsSystem(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, scraperSupportsSystem(models.ScraperInfo{}, "nes"))
+	assert.True(t, scraperSupportsSystem(models.ScraperInfo{SupportedSystems: []string{"NES"}}, "nes"))
+	assert.False(t, scraperSupportsSystem(models.ScraperInfo{SupportedSystems: []string{"snes"}}, "nes"))
+}
+
+func TestFilterScrapeSystems(t *testing.T) {
+	t.Parallel()
+
+	systems := []SystemItem{
+		{ID: "nes", Name: "Nintendo Entertainment System"},
+		{ID: "snes", Name: "Super Nintendo"},
+		{ID: "gb", Name: "Game Boy"},
+	}
+	scraper := models.ScraperInfo{SupportedSystems: []string{"SNES", "gb"}}
+
+	assert.Equal(t, []SystemItem{
+		{ID: "snes", Name: "Super Nintendo"},
+		{ID: "gb", Name: "Game Boy"},
+	}, filterScrapeSystems(systems, scraper))
+	assert.Equal(t, systems, filterScrapeSystems(systems, models.ScraperInfo{}))
+}
+
+func TestPruneSelectedScrapeSystems(t *testing.T) {
+	t.Parallel()
+
+	systems := []SystemItem{
+		{ID: "nes", Name: "Nintendo Entertainment System"},
+		{ID: "gb", Name: "Game Boy"},
+	}
+	selected := []string{"snes", "gb", "nes"}
+
+	assert.Equal(t, []string{"gb", "nes"}, pruneSelectedScrapeSystems(selected, systems))
+}
+
+func TestFormatScrapeSystemsLabel(t *testing.T) {
+	t.Parallel()
+
+	systems := []SystemItem{{ID: "nes", Name: "Nintendo Entertainment System"}}
+
+	assert.Equal(t, "No supported systems", formatScrapeSystemsLabel(nil, nil))
+	assert.Equal(t, "All systems", formatScrapeSystemsLabel(nil, systems))
+	assert.Equal(t, "nes", formatScrapeSystemsLabel([]string{"nes"}, systems))
+}
+
+func TestMediaIndexProgress(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		current  int
+		total    int
+		expected float64
+	}{
+		{
+			name:     "invalid current",
+			current:  0,
+			total:    10,
+			expected: 0,
+		},
+		{
+			name:     "uses current step like web UI",
+			current:  3,
+			total:    10,
+			expected: 0.3,
+		},
+		{
+			name:     "writing database uses current step",
+			current:  10,
+			total:    10,
+			expected: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := mediaIndexProgress(tt.current, tt.total)
+			assert.InDelta(t, tt.expected, result, 0.001)
 		})
 	}
 }

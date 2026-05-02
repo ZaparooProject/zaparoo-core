@@ -63,10 +63,6 @@ func TestRateLimiter_AppRoutesNotLimited(t *testing.T) {
 		fsCustom404(http.FS(mockFS)).ServeHTTP(w, req)
 	})
 
-	server := httptest.NewServer(r)
-	defer server.Close()
-
-	client := server.Client()
 	ctx := context.Background()
 
 	// Make more requests than the burst limit allows
@@ -74,14 +70,14 @@ func TestRateLimiter_AppRoutesNotLimited(t *testing.T) {
 	successCount := 0
 
 	for i := range requestCount {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/app/index.html", http.NoBody)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/app/index.html", http.NoBody)
 		require.NoError(t, err, "creating request %d", i)
+		req.RemoteAddr = "203.0.113.10:12345"
 
-		resp, err := client.Do(req) //nolint:gosec // G704: test hitting local test server
-		require.NoError(t, err, "request %d failed", i)
-		_ = resp.Body.Close()
+		resp := httptest.NewRecorder()
+		r.ServeHTTP(resp, req)
 
-		if resp.StatusCode == http.StatusOK {
+		if resp.Code == http.StatusOK {
 			successCount++
 		}
 	}
@@ -110,10 +106,6 @@ func TestRateLimiter_APIRoutesLimited(t *testing.T) {
 		})
 	})
 
-	server := httptest.NewServer(r)
-	defer server.Close()
-
-	client := server.Client()
 	ctx := context.Background()
 
 	// Make more requests than the burst limit allows
@@ -121,14 +113,14 @@ func TestRateLimiter_APIRoutesLimited(t *testing.T) {
 	rateLimitedCount := 0
 
 	for i := range requestCount {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/api/v0.1", http.NoBody)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/api/v0.1", http.NoBody)
 		require.NoError(t, err, "creating request %d", i)
+		req.RemoteAddr = "203.0.113.20:12345"
 
-		resp, err := client.Do(req) //nolint:gosec // G704: test hitting local test server
-		require.NoError(t, err, "request %d failed", i)
-		_ = resp.Body.Close()
+		resp := httptest.NewRecorder()
+		r.ServeHTTP(resp, req)
 
-		if resp.StatusCode == http.StatusTooManyRequests {
+		if resp.Code == http.StatusTooManyRequests {
 			rateLimitedCount++
 		}
 	}
@@ -156,10 +148,6 @@ func TestRateLimiter_RunRoutesLimited(t *testing.T) {
 		})
 	})
 
-	server := httptest.NewServer(r)
-	defer server.Close()
-
-	client := server.Client()
 	ctx := context.Background()
 
 	// Make more requests than the burst limit allows
@@ -167,14 +155,14 @@ func TestRateLimiter_RunRoutesLimited(t *testing.T) {
 	rateLimitedCount := 0
 
 	for i := range requestCount {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/run/test", http.NoBody)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/run/test", http.NoBody)
 		require.NoError(t, err, "creating request %d", i)
+		req.RemoteAddr = "203.0.113.30:12345"
 
-		resp, err := client.Do(req) //nolint:gosec // G704: test hitting local test server
-		require.NoError(t, err, "request %d failed", i)
-		_ = resp.Body.Close()
+		resp := httptest.NewRecorder()
+		r.ServeHTTP(resp, req)
 
-		if resp.StatusCode == http.StatusTooManyRequests {
+		if resp.Code == http.StatusTooManyRequests {
 			rateLimitedCount++
 		}
 	}
