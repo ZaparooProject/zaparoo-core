@@ -32,9 +32,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const browseIndexVersion = "2"
+const browseCacheSchemaVersion = "2"
 
-type browseV2Dir struct {
+type browseCacheDir struct {
 	parentID  *int64
 	path      string
 	name      string
@@ -42,43 +42,43 @@ type browseV2Dir struct {
 	isVirtual bool
 }
 
-type browseV2CountKey struct {
+type browseCacheCountKey struct {
 	parentDirID int64
 	childDirID  int64
 	systemDBID  int64
 }
 
-type browseV2Builder struct {
-	dirs      map[string]*browseV2Dir
-	counts    map[browseV2CountKey]int
+type browseCacheBuilder struct {
+	dirs      map[string]*browseCacheDir
+	counts    map[browseCacheCountKey]int
 	nextDirID int64
 	mediaRows int
 }
 
-func newBrowseV2Builder() *browseV2Builder {
-	return &browseV2Builder{
-		dirs:      make(map[string]*browseV2Dir),
-		counts:    make(map[browseV2CountKey]int),
+func newBrowseCacheBuilder() *browseCacheBuilder {
+	return &browseCacheBuilder{
+		dirs:      make(map[string]*browseCacheDir),
+		counts:    make(map[browseCacheCountKey]int),
 		nextDirID: 1,
 	}
 }
 
-// sqlPopulateBrowseCache rebuilds the compact browse v2 tables from current,
+// sqlPopulateBrowseCache rebuilds the compact browse cache tables from current,
 // non-missing media rows. The historical method name is kept because the
 // background optimization step still calls this "browse_cache".
 func sqlPopulateBrowseCache(ctx context.Context, db *sql.DB) error {
 	started := time.Now()
 	readStarted := time.Now()
-	builder := newBrowseV2Builder()
+	builder := newBrowseCacheBuilder()
 	builder.ensureDir("/")
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("browse v2: failed to begin transaction: %w", err)
+		return fmt.Errorf("browse cache: failed to begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := scanBrowseV2Media(ctx, tx, builder); err != nil {
+	if err := scanBrowseCacheMedia(ctx, tx, builder); err != nil {
 		return err
 	}
 	log.Debug().
@@ -86,55 +86,50 @@ func sqlPopulateBrowseCache(ctx context.Context, db *sql.DB) error {
 		Int("dirs", len(builder.dirs)).
 		Int("media", builder.mediaRows).
 		Int("counts", len(builder.counts)).
-		Msg("browse v2 media scan complete")
+		Msg("browse cache media scan complete")
 
 	deleteStarted := time.Now()
 	for _, stmt := range []string{
 		"DELETE FROM BrowseDirCounts",
-		"DELETE FROM BrowseEntries",
 		"DELETE FROM BrowseDirs",
 	} {
 		if _, execErr := tx.ExecContext(ctx, stmt); execErr != nil {
-			return fmt.Errorf("browse v2: failed to clear tables: %w", execErr)
+			return fmt.Errorf("browse cache: failed to clear tables: %w", execErr)
 		}
 	}
-	log.Debug().Dur("duration", time.Since(deleteStarted)).Msg("browse v2 cleared old entries")
+	log.Debug().Dur("duration", time.Since(deleteStarted)).Msg("browse cache cleared old entries")
 
-	if err := insertBrowseV2Dirs(ctx, tx, builder.dirs); err != nil {
+	if err := insertBrowseCacheDirs(ctx, tx, builder.dirs); err != nil {
 		return err
 	}
-	// TODO: Revisit whether BrowseEntries should be populated again. It speeds up
-	// file-page browsing, but duplicating every media row made background
-	// optimization take minutes on large MiSTer libraries. File browsing currently
-	// uses the indexed Media fallback while this cache keeps directory/count data.
-	if err := insertBrowseV2Counts(ctx, tx, builder.counts); err != nil {
+	if err := insertBrowseCacheCounts(ctx, tx, builder.counts); err != nil {
 		return err
 	}
 
 	if _, cfgErr := tx.ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
 		DBConfigBrowseIndexVersion,
-		browseIndexVersion,
+		browseCacheSchemaVersion,
 	); cfgErr != nil {
-		return fmt.Errorf("browse v2: failed to mark index ready: %w", cfgErr)
+		return fmt.Errorf("browse cache: failed to mark index ready: %w", cfgErr)
 	}
 
 	commitStarted := time.Now()
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("browse v2: failed to commit: %w", err)
+		return fmt.Errorf("browse cache: failed to commit: %w", err)
 	}
-	log.Debug().Dur("duration", time.Since(commitStarted)).Msg("browse v2 transaction committed")
+	log.Debug().Dur("duration", time.Since(commitStarted)).Msg("browse cache transaction committed")
 
 	log.Info().
 		Int("dirs", len(builder.dirs)).
 		Int("media", builder.mediaRows).
 		Int("counts", len(builder.counts)).
 		Dur("duration", time.Since(started)).
-		Msg("browse v2 populated")
+		Msg("browse cache populated")
 	return nil
 }
 
-func scanBrowseV2Media(ctx context.Context, tx *sql.Tx, builder *browseV2Builder) error {
+func scanBrowseCacheMedia(ctx context.Context, tx *sql.Tx, builder *browseCacheBuilder) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT m.DBID, m.SystemDBID, m.Path, mt.Name
 		FROM Media m
@@ -142,7 +137,7 @@ func scanBrowseV2Media(ctx context.Context, tx *sql.Tx, builder *browseV2Builder
 		WHERE m.IsMissing = 0
 		ORDER BY m.DBID`)
 	if err != nil {
-		return fmt.Errorf("browse v2: failed to query media: %w", err)
+		return fmt.Errorf("browse cache: failed to query media: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -150,22 +145,22 @@ func scanBrowseV2Media(ctx context.Context, tx *sql.Tx, builder *browseV2Builder
 		var mediaDBID, systemDBID int64
 		var mediaPath, title string
 		if scanErr := rows.Scan(&mediaDBID, &systemDBID, &mediaPath, &title); scanErr != nil {
-			return fmt.Errorf("browse v2: failed to scan media: %w", scanErr)
+			return fmt.Errorf("browse cache: failed to scan media: %w", scanErr)
 		}
 		builder.addMedia(mediaDBID, systemDBID, mediaPath, title)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
-		return fmt.Errorf("browse v2: rows iteration error: %w", rowsErr)
+		return fmt.Errorf("browse cache: rows iteration error: %w", rowsErr)
 	}
 	return nil
 }
 
-func (b *browseV2Builder) addMedia(_, systemDBID int64, mediaPath, _ string) {
+func (b *browseCacheBuilder) addMedia(_, systemDBID int64, mediaPath, _ string) {
 	b.mediaRows++
-	mediaPath = browseV2NormalizePath(mediaPath)
+	mediaPath = browseCacheNormalizePath(mediaPath)
 
 	for _, pair := range b.countPairsForPath(mediaPath) {
-		key := browseV2CountKey{
+		key := browseCacheCountKey{
 			parentDirID: pair.parent.id,
 			childDirID:  pair.child.id,
 			systemDBID:  systemDBID,
@@ -174,17 +169,17 @@ func (b *browseV2Builder) addMedia(_, systemDBID int64, mediaPath, _ string) {
 	}
 }
 
-func (b *browseV2Builder) ensureDir(dirPath string) *browseV2Dir {
+func (b *browseCacheBuilder) ensureDir(dirPath string) *browseCacheDir {
 	if dir, ok := b.dirs[dirPath]; ok {
 		return dir
 	}
-	parentPath, name, isVirtual := browseV2DirParentAndName(dirPath)
+	parentPath, name, isVirtual := browseCacheDirParentAndName(dirPath)
 	var parentID *int64
 	if parentPath != "" {
 		parent := b.ensureDir(parentPath)
 		parentID = &parent.id
 	}
-	dir := &browseV2Dir{
+	dir := &browseCacheDir{
 		id:        b.nextDirID,
 		path:      dirPath,
 		name:      name,
@@ -196,23 +191,23 @@ func (b *browseV2Builder) ensureDir(dirPath string) *browseV2Dir {
 	return dir
 }
 
-type browseV2CountPair struct {
-	parent *browseV2Dir
-	child  *browseV2Dir
+type browseCacheCountPair struct {
+	parent *browseCacheDir
+	child  *browseCacheDir
 }
 
-func (b *browseV2Builder) countPairsForPath(mediaPath string) []browseV2CountPair {
-	mediaPath = browseV2NormalizePath(mediaPath)
+func (b *browseCacheBuilder) countPairsForPath(mediaPath string) []browseCacheCountPair {
+	mediaPath = browseCacheNormalizePath(mediaPath)
 	if idx := strings.Index(mediaPath, "://"); idx >= 0 {
-		return []browseV2CountPair{{parent: b.ensureDir(""), child: b.ensureDir(mediaPath[:idx+3])}}
+		return []browseCacheCountPair{{parent: b.ensureDir(""), child: b.ensureDir(mediaPath[:idx+3])}}
 	}
 
-	dirs := browseV2AncestorDirs(mediaPath)
-	pairs := make([]browseV2CountPair, 0, len(dirs)+1)
+	dirs := browseCacheAncestorDirs(mediaPath)
+	pairs := make([]browseCacheCountPair, 0, len(dirs)+1)
 	root := b.ensureDir("/")
-	pairs = append(pairs, browseV2CountPair{parent: root, child: root})
+	pairs = append(pairs, browseCacheCountPair{parent: root, child: root})
 	for i := 0; i+1 < len(dirs); i++ {
-		pairs = append(pairs, browseV2CountPair{
+		pairs = append(pairs, browseCacheCountPair{
 			parent: b.ensureDir(dirs[i]),
 			child:  b.ensureDir(dirs[i+1]),
 		})
@@ -220,8 +215,8 @@ func (b *browseV2Builder) countPairsForPath(mediaPath string) []browseV2CountPai
 	return pairs
 }
 
-func browseV2AncestorDirs(mediaPath string) []string {
-	mediaPath = browseV2NormalizePath(mediaPath)
+func browseCacheAncestorDirs(mediaPath string) []string {
+	mediaPath = browseCacheNormalizePath(mediaPath)
 	dirs := []string{"/"}
 	if !strings.HasPrefix(mediaPath, "/") {
 		mediaPath = "/" + mediaPath
@@ -243,37 +238,23 @@ func browseV2AncestorDirs(mediaPath string) []string {
 	return dirs
 }
 
-func browseV2ParentAndFileName(mediaPath string) (parentPath, fileName string) {
-	mediaPath = browseV2NormalizePath(mediaPath)
-	if idx := strings.Index(mediaPath, "://"); idx >= 0 {
-		return mediaPath[:idx+3], strings.TrimPrefix(mediaPath[idx+3:], "/")
-	}
-	if !strings.HasPrefix(mediaPath, "/") {
-		mediaPath = "/" + mediaPath
-	}
-	if lastSlash := strings.LastIndex(mediaPath, "/"); lastSlash >= 0 {
-		return mediaPath[:lastSlash+1], mediaPath[lastSlash+1:]
-	}
-	return "", mediaPath
-}
-
-func browseV2NormalizePath(mediaPath string) string {
+func browseCacheNormalizePath(mediaPath string) string {
 	if mediaPath == "" {
 		return "/"
 	}
 	if idx := strings.Index(mediaPath, "://"); idx >= 0 {
 		prefix := mediaPath[:idx+3]
-		pathPart := browseV2CleanPathPart(mediaPath[idx+3:])
+		pathPart := browseCacheCleanPathPart(mediaPath[idx+3:])
 		if pathPart == "/" {
 			return prefix
 		}
 		return prefix + strings.TrimPrefix(pathPart, "/")
 	}
 
-	return browseV2CleanPathPart(mediaPath)
+	return browseCacheCleanPathPart(mediaPath)
 }
 
-func browseV2CleanPathPart(pathPart string) string {
+func browseCacheCleanPathPart(pathPart string) string {
 	pathPart = strings.ReplaceAll(pathPart, "\\", string(filepath.Separator))
 	cleaned := filepath.ToSlash(filepath.Clean(pathPart))
 	if cleaned == "." {
@@ -282,7 +263,7 @@ func browseV2CleanPathPart(pathPart string) string {
 	return cleaned
 }
 
-func browseV2DirParentAndName(dirPath string) (parentPath, name string, isVirtual bool) {
+func browseCacheDirParentAndName(dirPath string) (parentPath, name string, isVirtual bool) {
 	if dirPath == "" {
 		return "", "", false
 	}
@@ -303,16 +284,16 @@ func browseV2DirParentAndName(dirPath string) (parentPath, name string, isVirtua
 	return parent + "/", path.Base(trimmed), false
 }
 
-func insertBrowseV2Dirs(ctx context.Context, tx *sql.Tx, dirs map[string]*browseV2Dir) error {
+func insertBrowseCacheDirs(ctx context.Context, tx *sql.Tx, dirs map[string]*browseCacheDir) error {
 	started := time.Now()
 	stmt, err := tx.PrepareContext(ctx,
 		"INSERT INTO BrowseDirs (DBID, ParentDirDBID, Path, Name, IsVirtual) VALUES (?, ?, ?, ?, ?)")
 	if err != nil {
-		return fmt.Errorf("browse v2: failed to prepare dir insert: %w", err)
+		return fmt.Errorf("browse cache: failed to prepare dir insert: %w", err)
 	}
 	defer func() { _ = stmt.Close() }()
 
-	ordered := make([]*browseV2Dir, 0, len(dirs))
+	ordered := make([]*browseCacheDir, 0, len(dirs))
 	for _, dir := range dirs {
 		ordered = append(ordered, dir)
 	}
@@ -321,20 +302,20 @@ func insertBrowseV2Dirs(ctx context.Context, tx *sql.Tx, dirs map[string]*browse
 	for _, dir := range ordered {
 		_, insertErr := stmt.ExecContext(ctx, dir.id, dir.parentID, dir.path, dir.name, dir.isVirtual)
 		if insertErr != nil {
-			return fmt.Errorf("browse v2: failed to insert dir %s: %w", dir.path, insertErr)
+			return fmt.Errorf("browse cache: failed to insert dir %s: %w", dir.path, insertErr)
 		}
 	}
-	log.Debug().Dur("duration", time.Since(started)).Int("entries", len(dirs)).Msg("browse v2 dirs inserted")
+	log.Debug().Dur("duration", time.Since(started)).Int("entries", len(dirs)).Msg("browse cache dirs inserted")
 	return nil
 }
 
-func insertBrowseV2Counts(ctx context.Context, tx *sql.Tx, counts map[browseV2CountKey]int) error {
+func insertBrowseCacheCounts(ctx context.Context, tx *sql.Tx, counts map[browseCacheCountKey]int) error {
 	started := time.Now()
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO BrowseDirCounts (ParentDirDBID, ChildDirDBID, SystemDBID, FileCount)
 		VALUES (?, ?, ?, ?)`)
 	if err != nil {
-		return fmt.Errorf("browse v2: failed to prepare count insert: %w", err)
+		return fmt.Errorf("browse cache: failed to prepare count insert: %w", err)
 	}
 	defer func() { _ = stmt.Close() }()
 
@@ -342,21 +323,21 @@ func insertBrowseV2Counts(ctx context.Context, tx *sql.Tx, counts map[browseV2Co
 		if _, insertErr := stmt.ExecContext(
 			ctx, key.parentDirID, key.childDirID, key.systemDBID, count,
 		); insertErr != nil {
-			return fmt.Errorf("browse v2: failed to insert count: %w", insertErr)
+			return fmt.Errorf("browse cache: failed to insert count: %w", insertErr)
 		}
 	}
-	log.Debug().Dur("duration", time.Since(started)).Int("entries", len(counts)).Msg("browse v2 counts inserted")
+	log.Debug().Dur("duration", time.Since(started)).Int("entries", len(counts)).Msg("browse cache counts inserted")
 	return nil
 }
 
-func sqlInvalidateBrowseCache(ctx context.Context, db sqlQueryable, _ []int64, _ bool) error {
+func sqlInvalidateBrowseCache(ctx context.Context, db sqlQueryable) error {
 	_, err := db.ExecContext(ctx,
 		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
 		DBConfigBrowseIndexVersion,
 		"0",
 	)
 	if err != nil {
-		return fmt.Errorf("failed to mark browse v2 stale: %w", err)
+		return fmt.Errorf("failed to mark browse cache stale: %w", err)
 	}
 	return nil
 }

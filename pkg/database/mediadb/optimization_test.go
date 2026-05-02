@@ -57,13 +57,11 @@ func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
 		WithArgs(DBConfigOptimizationStep, "browse_cache").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	// PopulateBrowseCache: BEGIN, SELECT (empty), DELETEs, root dir insert,
-	// count prepare, COMMIT. BrowseEntries are no longer rebuilt during optimization.
+	// count prepare, COMMIT.
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT m.DBID, m.SystemDBID, m.Path, mt.Name").
 		WillReturnRows(sqlmock.NewRows([]string{"DBID", "SystemDBID", "Path", "Name"}))
 	mock.ExpectExec("DELETE FROM BrowseDirCounts").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("DELETE FROM BrowseEntries").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DELETE FROM BrowseDirs").
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -73,7 +71,7 @@ func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectPrepare("INSERT INTO BrowseDirCounts")
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigBrowseIndexVersion, browseIndexVersion).
+		WithArgs(DBConfigBrowseIndexVersion, browseCacheSchemaVersion).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 }
