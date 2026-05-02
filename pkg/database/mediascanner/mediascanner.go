@@ -781,16 +781,6 @@ func NewNamesIndex(
 			log.Error().Err(setErr).Msg("failed to clear last indexed system")
 		}
 	}
-	// Seed canonical tags based on tag existence, independent of resume state
-	if scanState.TagTypesIndex == 0 {
-		log.Info().Msg("seeding known tags")
-		// SeedCanonicalTags runs in its own non-batch transaction for safety.
-		err = SeedCanonicalTags(db, &scanState)
-		if err != nil {
-			return 0, fmt.Errorf("failed to seed known tags: %w", err)
-		}
-		log.Info().Msg("successfully seeded known tags")
-	}
 
 	// Ensure transaction cleanup and status update on completion or error
 	defer func() {

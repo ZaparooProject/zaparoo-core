@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -49,8 +50,15 @@ type RequestEnv struct {
 	Player        audio.Player
 	TokenQueue    chan<- tokens.Token
 	ConfirmQueue  chan<- chan error
-	IndexPauser   *syncutil.Pauser
-	ClientID      string
-	Params        json.RawMessage
-	IsLocal       bool
+	// TODO: Replace this raw map with a scraper registry/snapshot type so the
+	// read-only contract is enforced by the API instead of comments.
+	// Scrapers is a read-only snapshot of all registered scrapers, shared across
+	// all in-flight requests. It is fully populated before any handlers run and
+	// must not be mutated after that point — no locking is used.
+	Scrapers     map[string]scraper.Scraper
+	IndexPauser  *syncutil.Pauser
+	ScrapePauser *syncutil.Pauser
+	ClientID     string
+	Params       json.RawMessage
+	IsLocal      bool
 }

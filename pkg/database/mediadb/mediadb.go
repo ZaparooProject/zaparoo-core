@@ -51,6 +51,19 @@ import (
 
 var ErrNullSQL = errors.New("MediaDB is not connected")
 
+// ErrIndexingInProgress is returned by CleanMediaOrphans when media indexing is
+// currently running or pending; deletions during that window could corrupt
+// in-flight scanner state.
+var ErrIndexingInProgress = errors.New("indexing is in progress")
+
+// ErrOptimizationInProgress is returned by CleanMediaOrphans when background
+// database optimisation is active.
+var ErrOptimizationInProgress = errors.New("background optimisation is in progress")
+
+// ErrTransactionActive is returned by CleanMediaOrphans when a batch
+// transaction is currently open.
+var ErrTransactionActive = errors.New("a transaction is currently active")
+
 // Indexing status constants
 const (
 	IndexingStatusRunning   = "running"
@@ -94,7 +107,6 @@ type MediaDB struct {
 	batchInsertMedia      *BatchInserter
 	slugSearchCache       atomic.Pointer[SlugSearchCache]
 	inMemoryTagCache      atomic.Pointer[tagCache]
-	browseCacheDirtyDBIDs map[int64]struct{}
 	dbPath                string
 	backgroundOps         sync.WaitGroup
 	vacuumRetryDelay      time.Duration
@@ -104,7 +116,7 @@ type MediaDB struct {
 	isOptimizing          atomic.Bool
 	needsIndexRebuild     atomic.Bool
 	inTransaction         bool
-	browseCacheDirtyAll   bool
+	browseCacheDirty      bool
 }
 
 // sqlQueryable is the subset of *sql.DB and *sql.Tx needed by SQL helpers.
@@ -188,49 +200,27 @@ func invalidationScopeForSystemIDs(systemIDs []string) invalidationScope {
 	return invalidationScope{SystemIDs: systemIDs}
 }
 
-func (db *MediaDB) markBrowseCacheDirty(systemDBIDs ...int64) {
-	if len(systemDBIDs) == 0 {
-		db.browseCacheDirtyAll = true
-		db.browseCacheDirtyDBIDs = nil
-		return
-	}
-	if db.browseCacheDirtyAll {
-		return
-	}
-	if db.browseCacheDirtyDBIDs == nil {
-		db.browseCacheDirtyDBIDs = make(map[int64]struct{}, len(systemDBIDs))
-	}
-	for _, systemDBID := range systemDBIDs {
-		db.browseCacheDirtyDBIDs[systemDBID] = struct{}{}
-		if len(db.browseCacheDirtyDBIDs) > maxSelectiveInvalidationSystems {
-			db.browseCacheDirtyAll = true
-			db.browseCacheDirtyDBIDs = nil
-			return
-		}
-	}
+func (db *MediaDB) markBrowseCacheDirty() {
+	db.browseCacheDirty = true
 }
 
-func (db *MediaDB) invalidateBrowseCacheForMediaChange(systemDBIDs ...int64) error {
+func (db *MediaDB) invalidateBrowseCacheForMediaChange() error {
 	if db.inTransaction {
-		db.markBrowseCacheDirty(systemDBIDs...)
+		db.markBrowseCacheDirty()
 		return nil
 	}
-	if err := sqlInvalidateBrowseCache(db.ctx, db.conn(), systemDBIDs, len(systemDBIDs) == 0); err != nil {
+	if err := sqlInvalidateBrowseCache(db.ctx, db.conn()); err != nil {
 		log.Debug().Err(err).Msg("failed to invalidate browse cache after media change")
+		return err
 	}
 	return nil
 }
 
 func (db *MediaDB) flushBrowseCacheInvalidation() error {
-	if !db.browseCacheDirtyAll && len(db.browseCacheDirtyDBIDs) == 0 {
+	if !db.browseCacheDirty {
 		return nil
 	}
-	systemDBIDs := make([]int64, 0, len(db.browseCacheDirtyDBIDs))
-	for systemDBID := range db.browseCacheDirtyDBIDs {
-		systemDBIDs = append(systemDBIDs, systemDBID)
-	}
-	allSystems := db.browseCacheDirtyAll || len(systemDBIDs) > maxSelectiveInvalidationSystems
-	err := sqlInvalidateBrowseCache(db.ctx, db.sql, systemDBIDs, allSystems)
+	err := sqlInvalidateBrowseCache(db.ctx, db.sql)
 	if err != nil {
 		return err
 	}
@@ -239,8 +229,7 @@ func (db *MediaDB) flushBrowseCacheInvalidation() error {
 }
 
 func (db *MediaDB) clearBrowseCacheInvalidation() {
-	db.browseCacheDirtyAll = false
-	db.browseCacheDirtyDBIDs = nil
+	db.browseCacheDirty = false
 }
 
 func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
@@ -354,12 +343,20 @@ var secondaryIndexes = []secondaryIndex{
 		ddl:  "CREATE INDEX IF NOT EXISTS mediatitletags_tag_idx ON MediaTitleTags(TagDBID)",
 	},
 	{
-		name: "supportingmedia_mediatitle_idx",
-		ddl:  "CREATE INDEX IF NOT EXISTS supportingmedia_mediatitle_idx ON SupportingMedia(MediaTitleDBID)",
+		name: "mediatitleproperties_title_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediatitleproperties_title_idx ON MediaTitleProperties(MediaTitleDBID)",
 	},
 	{
-		name: "supportingmedia_typetag_idx",
-		ddl:  "CREATE INDEX IF NOT EXISTS supportingmedia_typetag_idx ON SupportingMedia(TypeTagDBID)",
+		name: "mediatitleproperties_typetag_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediatitleproperties_typetag_idx ON MediaTitleProperties(TypeTagDBID)",
+	},
+	{
+		name: "mediaproperties_media_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediaproperties_media_idx ON MediaProperties(MediaDBID)",
+	},
+	{
+		name: "mediaproperties_typetag_idx",
+		ddl:  "CREATE INDEX IF NOT EXISTS mediaproperties_typetag_idx ON MediaProperties(TypeTagDBID)",
 	},
 	{
 		name: "idx_systemtagscache_type_tag",
@@ -583,16 +580,21 @@ func (db *MediaDB) Truncate() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	err := sqlTruncate(db.ctx, db.sql)
-	if err != nil {
+	if err := sqlTruncate(db.ctx, db.sql); err != nil {
 		return err
 	}
-	if err := sqlInvalidateBrowseCache(db.ctx, db.sql, nil, true); err != nil {
+	if err := sqlInvalidateBrowseCache(db.ctx, db.sql); err != nil {
 		return err
 	}
 
 	// Invalidate all caches after full truncation
 	db.invalidateCaches(invalidationScope{AllSystems: true})
+
+	// Reclaim disk space freed by the truncation
+	if err := sqlVacuum(db.ctx, db.sql); err != nil {
+		return fmt.Errorf("failed to vacuum after truncate: %w", err)
+	}
+
 	return nil
 }
 
@@ -604,7 +606,7 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 	if err != nil {
 		return err
 	}
-	if err := sqlInvalidateBrowseCache(db.ctx, db.sql, nil, true); err != nil {
+	if err := sqlInvalidateBrowseCache(db.ctx, db.sql); err != nil {
 		return err
 	}
 
@@ -635,6 +637,71 @@ func (db *MediaDB) Vacuum() error {
 		return ErrNullSQL
 	}
 	return sqlVacuum(db.ctx, db.sql)
+}
+
+// CleanMediaOrphans deletes every Media row where IsMissing=1, together with
+// the associated MediaTags and MediaProperties.  MediaTitles that have no
+// remaining Media rows are also removed, along with their MediaTitleTags and
+// MediaTitleProperties.  Tags that are no longer referenced by any join table
+// are pruned. Free pages are left for SQLite to reuse instead of running
+// VACUUM here, which would take an exclusive database lock.
+//
+// The method returns the count of Media rows deleted.  If no missing rows
+// exist, it returns (0, nil) without touching the database.
+//
+// CleanMediaOrphans refuses to run while media indexing is in progress
+// (status running or pending), while a batch transaction is open, or while
+// background optimisation is active, returning a sentinel error in each case.
+func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
+	if db.sql == nil {
+		return 0, ErrNullSQL
+	}
+
+	// Guard: refuse to run while a batch transaction is open.  An open
+	// transaction means batch inserters may be staging rows that reference the
+	// data we would delete, which would cause FK violations on commit.
+	if db.inTransaction {
+		return 0, ErrTransactionActive
+	}
+
+	// Guard: refuse to run while indexing is in progress.  The scanner marks
+	// rows as IsMissing=1 at the start of a scan and clears the flag as files
+	// are confirmed present; deleting those rows mid-scan would corrupt the
+	// scanner's in-flight state.
+	status, statusErr := sqlGetIndexingStatus(db.ctx, db.sql)
+	if statusErr != nil && !errors.Is(statusErr, sql.ErrNoRows) {
+		return 0, fmt.Errorf("failed to check indexing status: %w", statusErr)
+	}
+	if status == IndexingStatusRunning || status == IndexingStatusPending {
+		return 0, fmt.Errorf("%w (status: %s)", ErrIndexingInProgress, status)
+	}
+
+	// Guard: refuse to run while background optimisation is active, since it
+	// may be building indexes over the same tables.
+	if db.isOptimizing.Load() {
+		return 0, ErrOptimizationInProgress
+	}
+
+	deleted, err := sqlCleanMediaOrphans(ctx, db.sql)
+	if err != nil {
+		return 0, err
+	}
+
+	if _, pruneErr := db.PruneOrphanedBlobs(ctx); pruneErr != nil {
+		log.Warn().Err(pruneErr).Msg("failed to prune orphaned blobs during clean")
+	}
+
+	if deleted > 0 {
+		db.invalidateCaches(invalidationScope{AllSystems: true})
+		if err := sqlInvalidateBrowseCache(ctx, db.sql); err != nil {
+			log.Warn().Err(err).Msg("failed to invalidate browse cache after orphan cleanup")
+		}
+	}
+
+	return deleted, nil
 }
 
 func (db *MediaDB) Close() error {
@@ -900,7 +967,7 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 		}
 
 		if db.batchInsertTagType, err = NewBatchInserterWithOptions(db.ctx, tx, "TagTypes",
-			[]string{"DBID", "Type"}, db.batchSize, false); err != nil {
+			[]string{"DBID", "Type", "IsExclusive"}, db.batchSize, false); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for tag types: %w", err)
 		}
@@ -2054,7 +2121,7 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 		if err != nil {
 			return row, fmt.Errorf("failed to add media to batch: %w", err)
 		}
-		db.markBrowseCacheDirty(row.SystemDBID)
+		db.markBrowseCacheDirty()
 		// Return row as-is (DBID is already set by caller)
 		return row, nil
 	}
@@ -2069,11 +2136,11 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
 	if err == nil && !db.inTransaction {
 		db.invalidateCaches(invalidationScope{AllSystems: true})
-		if invalidateErr := db.invalidateBrowseCacheForMediaChange(result.SystemDBID); invalidateErr != nil {
+		if invalidateErr := db.invalidateBrowseCacheForMediaChange(); invalidateErr != nil {
 			return result, invalidateErr
 		}
 	} else if err == nil {
-		db.markBrowseCacheDirty(result.SystemDBID)
+		db.markBrowseCacheDirty()
 	}
 
 	return result, err
@@ -2146,19 +2213,11 @@ func (db *MediaDB) ResetMissingFlags(systemDBIDs []int) error {
 	err := sqlResetMissingFlags(db.ctx, db.conn(), systemDBIDs)
 	if err == nil && !db.inTransaction {
 		db.invalidateCaches(invalidationScope{AllSystems: true})
-		dirtySystemDBIDs := make([]int64, len(systemDBIDs))
-		for i, systemDBID := range systemDBIDs {
-			dirtySystemDBIDs[i] = int64(systemDBID)
-		}
-		if invalidateErr := db.invalidateBrowseCacheForMediaChange(dirtySystemDBIDs...); invalidateErr != nil {
+		if invalidateErr := db.invalidateBrowseCacheForMediaChange(); invalidateErr != nil {
 			return invalidateErr
 		}
 	} else if err == nil {
-		dirtySystemDBIDs := make([]int64, len(systemDBIDs))
-		for i, systemDBID := range systemDBIDs {
-			dirtySystemDBIDs[i] = int64(systemDBID)
-		}
-		db.markBrowseCacheDirty(dirtySystemDBIDs...)
+		db.markBrowseCacheDirty()
 	}
 	return err
 }
@@ -2182,7 +2241,11 @@ func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error)
 
 	// Use batch inserter if available
 	if db.batchInsertTagType != nil {
-		err = db.batchInsertTagType.Add(row.DBID, row.Type)
+		isExclusive := 0
+		if row.IsExclusive {
+			isExclusive = 1
+		}
+		err = db.batchInsertTagType.Add(row.DBID, row.Type, isExclusive)
 		if err != nil {
 			return row, fmt.Errorf("failed to add tag type to batch: %w", err)
 		}
