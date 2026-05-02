@@ -319,6 +319,31 @@ func TestApplyScrapeResult_WritesSentinelLastPayload(t *testing.T) {
 	})
 }
 
+func TestApplyScrapeResult_RollsBackBeforeSentinel(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	err := mediaDB.ApplyScrapeResult(ctx, 1, 1, &database.ScrapeWrite{
+		Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+		MediaTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+		TitleProps: []database.MediaProperty{{
+			TypeTag: "property:missing-type-tag",
+			Text:    "should roll back",
+		}},
+	})
+	require.Error(t, err)
+
+	hasDeveloper, err := mediaDB.MediaHasTag(ctx, 1, "developer:nintendo")
+	require.NoError(t, err)
+	assert.False(t, hasDeveloper, "metadata written before the failure should be rolled back")
+
+	hasSentinel, err := mediaDB.MediaHasTag(ctx, 1, "scraper.test:scraped")
+	require.NoError(t, err)
+	assert.False(t, hasSentinel, "failed scrape writes must not mark the record as scraped")
+}
+
 // --- UpsertMediaTags ---
 
 func TestUpsertMediaTags_AdditiveType_AccumulatesTags(t *testing.T) {

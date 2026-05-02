@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -289,6 +290,31 @@ func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
 	db.AssertExpectations(t)
 }
 
+func TestLoadRecords_ReturnsMediaPreloadError(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./mario.nes</path><name>Mario</name></game>
+</gameList>`), 0o600))
+
+	db := helpers.NewMockMediaDBI()
+	preloadErr := errors.New("media preload failed")
+	db.On("GetMediaBySystemID", "nes").Return(nil, preloadErr).Once()
+
+	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
+		ID:       "nes",
+		ROMPaths: []string{root},
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, records)
+	require.ErrorContains(t, err, `load indexed media for system "nes"`)
+	require.ErrorIs(t, err, preloadErr)
+	db.AssertExpectations(t)
+}
+
 func TestScrape_ResolverError(t *testing.T) {
 	t.Parallel()
 
@@ -302,6 +328,28 @@ func TestScrape_ResolverError(t *testing.T) {
 	assert.Nil(t, updates)
 	require.ErrorContains(t, err, "gamelistxml: failed to resolve systems")
 	assert.ErrorIs(t, err, scraperErr)
+}
+
+func TestMatch_FallsBackToDatabaseLookup(t *testing.T) {
+	t.Parallel()
+
+	db := helpers.NewMockMediaDBI()
+	matchedPath := filepath.ToSlash(filepath.Join(t.TempDir(), "roms", "mario.nes"))
+	db.On("FindMediaBySystemAndPathFold", mock.Anything, int64(7), matchedPath).Return(&database.Media{
+		DBID:           11,
+		MediaTitleDBID: 22,
+	}, nil).Once()
+
+	match, err := (&GamelistXMLScraper{}).Match(context.Background(), &GamelistRecord{
+		MatchedPath: matchedPath,
+		Game:        esapi.Game{Path: "./mario.nes"},
+	}, scraper.ScrapeSystem{DBID: 7, ID: "nes"}, db)
+
+	require.NoError(t, err)
+	require.NotNil(t, match)
+	assert.Equal(t, int64(11), match.MediaDBID)
+	assert.Equal(t, int64(22), match.MediaTitleDBID)
+	db.AssertExpectations(t)
 }
 
 // --- MapToDB ---

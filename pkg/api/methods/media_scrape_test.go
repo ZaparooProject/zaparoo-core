@@ -306,6 +306,41 @@ func TestHandleMediaScrapeStatus_TracksLatestProgress(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaScrapeStatus_IgnoresScrapedCountError(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	publishScrapingStatus(make(chan models.Notification, 1), &models.ScrapingStatusResponse{
+		ScraperID: "test-scraper",
+		SystemID:  "SNES",
+		Processed: 12,
+		Total:     20,
+		Matched:   10,
+		Skipped:   2,
+		Scraping:  true,
+	})
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(0, errors.New("count failed"))
+
+	result, err := HandleMediaScrapeStatus(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+	})
+	require.NoError(t, err)
+	status, ok := result.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.Equal(t, "test-scraper", status.ScraperID)
+	assert.Equal(t, "SNES", status.SystemID)
+	assert.Equal(t, 12, status.Processed)
+	assert.Equal(t, 20, status.Total)
+	assert.Equal(t, 10, status.Matched)
+	assert.Equal(t, 2, status.Skipped)
+	assert.Zero(t, status.TotalScraped)
+	assert.True(t, status.Scraping)
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaScrapeStatus_UsesScrapePauser(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()

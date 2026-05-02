@@ -130,6 +130,48 @@ func TestRunScraper_WaitsForPausedPauser(t *testing.T) {
 	db.AssertExpectations(t)
 }
 
+func TestRunScraper_ScrapedMediaIDsErrorIsFatal(t *testing.T) {
+	t.Parallel()
+	db := helpers.NewMockMediaDBI()
+	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	preloadErr := errors.New("sentinel preload failed")
+	db.On("GetScrapedMediaIDs", mock.Anything, "test", system.DBID).Return(nil, preloadErr).Once()
+	loop := &stubLoop{id: "test", records: []stubRecord{{id: "mario"}}}
+
+	ch := scraper.RunScraper(
+		context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{system}, db, loop)
+	updates := drainUpdates(ch)
+
+	require.NotEmpty(t, updates)
+	last := updates[len(updates)-1]
+	assert.True(t, last.Done)
+	assert.Equal(t, "NES", last.SystemID)
+	assert.Equal(t, 1, last.Total)
+	require.ErrorIs(t, last.FatalErr, preloadErr)
+	db.AssertNotCalled(t, "ApplyScrapeResult")
+	db.AssertExpectations(t)
+}
+
+func TestRunScraper_CancelWhilePausedEmitsDone(t *testing.T) {
+	t.Parallel()
+	db := helpers.NewMockMediaDBI()
+	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	loop := &stubLoop{id: "test", records: []stubRecord{{id: "mario"}}}
+	pauser := syncutil.NewPauser()
+	pauser.Pause()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ch := scraper.RunScraper(ctx, scraper.ScrapeOptions{Pauser: pauser}, []scraper.ScrapeSystem{system}, db, loop)
+	cancel()
+	updates := drainUpdates(ch)
+
+	require.NotEmpty(t, updates)
+	last := updates[len(updates)-1]
+	assert.True(t, last.Done)
+	assert.Equal(t, "NES", last.SystemID)
+	db.AssertNotCalled(t, "GetScrapedMediaIDs")
+}
+
 func TestRunScraper_NoMatch_IsSkipped(t *testing.T) {
 	t.Parallel()
 	db := helpers.NewMockMediaDBI()
