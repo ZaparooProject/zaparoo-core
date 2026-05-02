@@ -84,11 +84,20 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	if hasNextPage {
 		entries = entries[:limit]
 	}
+	mediaRefs := make([]mediaPathRef, 0, len(entries))
+	for i := range entries {
+		mediaRefs = append(mediaRefs, mediaPathRef{
+			SystemID: entries[i].SystemID,
+			Path:     entries[i].MediaPath,
+		})
+	}
+	mediaIDs := mediaResponseMediaIDs(&env, mediaRefs)
 
 	responseEntries := make([]models.MediaHistoryResponseEntry, 0, len(entries))
 	for i := range entries {
 		entry := &entries[i]
 		startedAt := entry.StartTime.Format(time.RFC3339)
+		ref := mediaPathRef{SystemID: entry.SystemID, Path: entry.MediaPath}
 
 		var endedAt *string
 		if entry.EndTime != nil {
@@ -97,6 +106,8 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		}
 
 		responseEntries = append(responseEntries, models.MediaHistoryResponseEntry{
+			MediaID:    mediaIDs[ref],
+			RelPath:    mediaResponseRelativePath(&env, entry.SystemID, entry.MediaPath),
 			SystemID:   entry.SystemID,
 			SystemName: entry.SystemName,
 			MediaName:  entry.MediaName,

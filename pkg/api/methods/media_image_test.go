@@ -251,6 +251,54 @@ func TestHandleMediaImage_ImageTypeResolvesToImageImage(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaImage_BatchByMediaIDUsesItemImageTypes(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(5, 50)
+	mediaBlob := []byte("media-boxart")
+	titleBlob := []byte("title-screenshot")
+
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, mock.Anything).
+		Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil)
+	mockDB.On("GetMediaPropertiesByMediaDBIDs", mock.Anything, mock.Anything).
+		Return(map[int64][]database.MediaProperty{
+			row.DBID: {
+				{TypeTag: "property:image-boxart", ContentType: "image/png", Binary: mediaBlob},
+			},
+		}, nil)
+	mockDB.On("GetMediaTitlePropertiesByMediaTitleDBIDs", mock.Anything, mock.Anything).
+		Return(map[int64][]database.MediaProperty{
+			row.Title.DBID: {
+				{TypeTag: "property:image-screenshot", ContentType: "image/jpeg", Binary: titleBlob},
+			},
+		}, nil)
+
+	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{
+		"imageTypes": ["boxart"],
+		"items": [
+			{"mediaId": 5},
+			{"mediaId": 5, "imageTypes": ["screenshot"]},
+			{"mediaId": 999}
+		]
+	}`))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaImageBatchResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Items, 3)
+	require.NotNil(t, resp.Items[0].Image)
+	assert.Equal(t, "property:image-boxart", resp.Items[0].Image.TypeTag)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(mediaBlob), resp.Items[0].Image.Data)
+	require.NotNil(t, resp.Items[1].Image)
+	assert.Equal(t, "property:image-screenshot", resp.Items[1].Image.TypeTag)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(titleBlob), resp.Items[1].Image.Data)
+	require.NotNil(t, resp.Items[2].Error)
+	assert.Contains(t, *resp.Items[2].Error, "mediaId 999")
+	mockDB.AssertExpectations(t)
+}
+
 // TestHandleMediaImage_FileReadError_DeletesAndContinues verifies that when a
 // property's Text path is unreadable, the stale property is deleted (DB + in-memory)
 // and the handler continues to the next preference. With no remaining image the

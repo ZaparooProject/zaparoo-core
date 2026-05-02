@@ -662,6 +662,7 @@ func buildMediaEntry(
 	rootDirs []string,
 ) models.BrowseEntry {
 	entry := models.BrowseEntry{
+		MediaID:  result.MediaID,
 		Name:     result.Name,
 		Path:     result.Path,
 		Type:     "media",

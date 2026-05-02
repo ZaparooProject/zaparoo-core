@@ -165,6 +165,43 @@ func TestHandleMediaMeta_BinaryPropertyBase64Encoded(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaMeta_BatchByMediaIDPartialSuccess(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(3, 30)
+	row.System = database.System{DBID: 100, SystemID: "NES", Name: "NES"}
+	row.Title.Name = "Batch Game"
+
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, mock.Anything).
+		Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil)
+	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, mock.Anything).
+		Return(map[int64][]database.TagInfo{row.DBID: {{Tag: "genre:platformer", Type: "genre"}}}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBIDs", mock.Anything, mock.Anything).
+		Return(map[int64][]database.TagInfo{row.Title.DBID: {{Tag: "publisher:nintendo", Type: "publisher"}}}, nil)
+	mockDB.On("GetMediaPropertiesByMediaDBIDs", mock.Anything, mock.Anything).
+		Return(map[int64][]database.MediaProperty{
+			row.DBID: {{TypeTag: "property:description", Text: "media desc"}},
+		}, nil)
+	mockDB.On("GetMediaTitlePropertiesByMediaTitleDBIDs", mock.Anything, mock.Anything).
+		Return(map[int64][]database.MediaProperty{}, nil)
+
+	env := makeMediaMetaEnv(t, mockDB, `{"items":[{"mediaId":3},{"mediaId":999}]}`)
+	result, err := HandleMediaMeta(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaMetaBatchResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Items, 2)
+	require.NotNil(t, resp.Items[0].Media)
+	assert.Equal(t, row.Path, resp.Items[0].Media.Path)
+	assert.Equal(t, "Batch Game", resp.Items[0].Media.Title.Name)
+	assert.Contains(t, resp.Items[0].Media.Properties, "property:description")
+	require.NotNil(t, resp.Items[1].Error)
+	assert.Contains(t, *resp.Items[1].Error, "mediaId 999")
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaMeta_MediaNotFound(t *testing.T) {
 	t.Parallel()
 

@@ -72,6 +72,55 @@ func (db *MediaDB) FindMediaBySystemAndPath(
 	return &row, nil
 }
 
+func (db *MediaDB) FindMediaBySystemAndPaths(
+	ctx context.Context, systemDBID int64, paths []string,
+) (map[string]database.Media, error) {
+	results := make(map[string]database.Media, len(paths))
+	if len(paths) == 0 {
+		return results, nil
+	}
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	args := make([]any, 0, len(paths)+1)
+	args = append(args, systemDBID)
+	for _, path := range paths {
+		args = append(args, path)
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+	rows, err := db.sql.QueryContext(ctx, `
+		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
+		FROM Media
+		WHERE SystemDBID = ? AND Path IN (`+prepareVariadic("?", ",", len(paths))+`)
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query FindMediaBySystemAndPaths: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	for rows.Next() {
+		var row database.Media
+		if err := rows.Scan(
+			&row.DBID,
+			&row.MediaTitleDBID,
+			&row.SystemDBID,
+			&row.Path,
+			&row.ParentDir,
+			&row.IsMissing,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan FindMediaBySystemAndPaths: %w", err)
+		}
+		results[row.Path] = row
+	}
+	return results, rows.Err()
+}
+
 // FindMediaBySystemAndPathFold returns the Media row for the given system and
 // path using a case-insensitive path comparison, or nil, nil when not found.
 // LOWER() in SQLite covers ASCII only, which is sufficient for filesystem paths.
@@ -849,6 +898,40 @@ func (db *MediaDB) GetMediaTitleProperties(
 	return scanProperties(rows)
 }
 
+func (db *MediaDB) GetMediaTitlePropertiesByMediaTitleDBIDs(
+	ctx context.Context, mediaTitleDBIDs []int64,
+) (map[int64][]database.MediaProperty, error) {
+	results := make(map[int64][]database.MediaProperty, len(mediaTitleDBIDs))
+	if len(mediaTitleDBIDs) == 0 {
+		return results, nil
+	}
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	args := int64Args(mediaTitleDBIDs)
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+	rows, err := db.sql.QueryContext(ctx, `
+		SELECT mtp.MediaTitleDBID, tt.Type || ':' || t.Tag, mtp.TypeTagDBID, mtp.Text,
+		       mtp.BlobDBID, mb.ContentType, mb.Data
+		FROM MediaTitleProperties mtp
+		JOIN Tags t      ON mtp.TypeTagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		LEFT JOIN MediaBlobs mb ON mtp.BlobDBID = mb.DBID
+		WHERE mtp.MediaTitleDBID IN (`+prepareVariadic("?", ",", len(mediaTitleDBIDs))+`)
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query GetMediaTitlePropertiesByMediaTitleDBIDs: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	return scanGroupedProperties(rows)
+}
+
 // GetMediaProperties returns all MediaProperties rows for the given Media record.
 // TypeTag is populated as "type:value" from the joined Tags/TagTypes rows.
 func (db *MediaDB) GetMediaProperties(ctx context.Context, mediaDBID int64) ([]database.MediaProperty, error) {
@@ -884,6 +967,40 @@ func (db *MediaDB) GetMediaProperties(ctx context.Context, mediaDBID int64) ([]d
 	}()
 
 	return scanProperties(rows)
+}
+
+func (db *MediaDB) GetMediaPropertiesByMediaDBIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64][]database.MediaProperty, error) {
+	results := make(map[int64][]database.MediaProperty, len(mediaDBIDs))
+	if len(mediaDBIDs) == 0 {
+		return results, nil
+	}
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	args := int64Args(mediaDBIDs)
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+	rows, err := db.sql.QueryContext(ctx, `
+		SELECT mp.MediaDBID, tt.Type || ':' || t.Tag, mp.TypeTagDBID, mp.Text,
+		       mp.BlobDBID, mb.ContentType, mb.Data
+		FROM MediaProperties mp
+		JOIN Tags t      ON mp.TypeTagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		LEFT JOIN MediaBlobs mb ON mp.BlobDBID = mb.DBID
+		WHERE mp.MediaDBID IN (`+prepareVariadic("?", ",", len(mediaDBIDs))+`)
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query GetMediaPropertiesByMediaDBIDs: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	return scanGroupedProperties(rows)
 }
 
 // GetMediaWithTitleAndSystem fetches a Media record together with its parent
@@ -931,6 +1048,54 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 	return &row, nil
 }
 
+func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64]database.MediaFullRow, error) {
+	results := make(map[int64]database.MediaFullRow, len(mediaDBIDs))
+	if len(mediaDBIDs) == 0 {
+		return results, nil
+	}
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	args := int64Args(mediaDBIDs)
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+	rows, err := db.sql.QueryContext(ctx, `
+		SELECT
+			m.DBID, m.Path, m.ParentDir, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
+			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
+			s.DBID, s.SystemID, s.Name
+		FROM Media m
+		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
+		INNER JOIN Systems s ON mt.SystemDBID = s.DBID
+		WHERE m.DBID IN (`+prepareVariadic("?", ",", len(mediaDBIDs))+`)
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query GetMediaWithTitleAndSystemByIDs: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	for rows.Next() {
+		var row database.MediaFullRow
+		if err := rows.Scan(
+			&row.DBID, &row.Path, &row.ParentDir, &row.IsMissing,
+			&row.MediaTitleDBID, &row.SystemDBID,
+			&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
+			&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,
+			&row.System.DBID, &row.System.SystemID, &row.System.Name,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan GetMediaWithTitleAndSystemByIDs: %w", err)
+		}
+		results[row.DBID] = row
+	}
+	return results, rows.Err()
+}
+
 // GetMediaTagsByMediaDBID returns the file-level tags (MediaTags) for a single
 // Media row, ordered by type then tag value.
 func (db *MediaDB) GetMediaTagsByMediaDBID(ctx context.Context, mediaDBID int64) ([]database.TagInfo, error) {
@@ -966,6 +1131,39 @@ func (db *MediaDB) GetMediaTagsByMediaDBID(ctx context.Context, mediaDBID int64)
 	}()
 
 	return scanTagInfos(rows)
+}
+
+func (db *MediaDB) GetMediaTagsByMediaDBIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64][]database.TagInfo, error) {
+	results := make(map[int64][]database.TagInfo, len(mediaDBIDs))
+	if len(mediaDBIDs) == 0 {
+		return results, nil
+	}
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	args := int64Args(mediaDBIDs)
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+	rows, err := db.sql.QueryContext(ctx, `
+		SELECT MediaTags.MediaDBID, Tags.Tag, TagTypes.Type
+		FROM MediaTags
+		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE MediaTags.MediaDBID IN (`+prepareVariadic("?", ",", len(mediaDBIDs))+`)
+		ORDER BY MediaTags.MediaDBID, TagTypes.Type, Tags.Tag
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query GetMediaTagsByMediaDBIDs: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	return scanGroupedTagInfos(rows)
 }
 
 // GetMediaTitleTagsByMediaTitleDBID returns the title-level tags (MediaTitleTags)
@@ -1007,6 +1205,39 @@ func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBID(
 	return scanTagInfos(rows)
 }
 
+func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBIDs(
+	ctx context.Context, mediaTitleDBIDs []int64,
+) (map[int64][]database.TagInfo, error) {
+	results := make(map[int64][]database.TagInfo, len(mediaTitleDBIDs))
+	if len(mediaTitleDBIDs) == 0 {
+		return results, nil
+	}
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	args := int64Args(mediaTitleDBIDs)
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+	rows, err := db.sql.QueryContext(ctx, `
+		SELECT MediaTitleTags.MediaTitleDBID, Tags.Tag, TagTypes.Type
+		FROM MediaTitleTags
+		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE MediaTitleTags.MediaTitleDBID IN (`+prepareVariadic("?", ",", len(mediaTitleDBIDs))+`)
+		ORDER BY MediaTitleTags.MediaTitleDBID, TagTypes.Type, Tags.Tag
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query GetMediaTitleTagsByMediaTitleDBIDs: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	return scanGroupedTagInfos(rows)
+}
+
 func scanTagInfos(rows *sql.Rows) ([]database.TagInfo, error) {
 	result := make([]database.TagInfo, 0)
 	for rows.Next() {
@@ -1016,6 +1247,20 @@ func scanTagInfos(rows *sql.Rows) ([]database.TagInfo, error) {
 		}
 		t.Tag = tags.UnpadTagValue(t.Tag)
 		result = append(result, t)
+	}
+	return result, rows.Err()
+}
+
+func scanGroupedTagInfos(rows *sql.Rows) (map[int64][]database.TagInfo, error) {
+	result := make(map[int64][]database.TagInfo)
+	for rows.Next() {
+		var dbid int64
+		var t database.TagInfo
+		if err := rows.Scan(&dbid, &t.Tag, &t.Type); err != nil {
+			return nil, fmt.Errorf("failed to scan grouped TagInfo: %w", err)
+		}
+		t.Tag = tags.UnpadTagValue(t.Tag)
+		result[dbid] = append(result[dbid], t)
 	}
 	return result, rows.Err()
 }
@@ -1044,4 +1289,44 @@ func scanProperties(rows *sql.Rows) ([]database.MediaProperty, error) {
 		props = []database.MediaProperty{}
 	}
 	return props, rows.Err()
+}
+
+func scanGroupedProperties(rows *sql.Rows) (map[int64][]database.MediaProperty, error) {
+	result := make(map[int64][]database.MediaProperty)
+	for rows.Next() {
+		var dbid int64
+		prop, err := scanPropertyWithDBID(rows, &dbid)
+		if err != nil {
+			return nil, err
+		}
+		result[dbid] = append(result[dbid], prop)
+	}
+	return result, rows.Err()
+}
+
+func scanPropertyWithDBID(rows *sql.Rows, dbid *int64) (database.MediaProperty, error) {
+	var p database.MediaProperty
+	var blobDBID sql.NullInt64
+	var contentType sql.NullString
+	var binary []byte
+	if err := rows.Scan(
+		dbid, &p.TypeTag, &p.TypeTagDBID, &p.Text,
+		&blobDBID, &contentType, &binary,
+	); err != nil {
+		return database.MediaProperty{}, fmt.Errorf("failed to scan grouped MediaProperty: %w", err)
+	}
+	if blobDBID.Valid {
+		p.BlobDBID = &blobDBID.Int64
+	}
+	p.ContentType = contentType.String
+	p.Binary = binary
+	return p, nil
+}
+
+func int64Args(values []int64) []any {
+	args := make([]any, len(values))
+	for i, value := range values {
+		args[i] = value
+	}
+	return args
 }

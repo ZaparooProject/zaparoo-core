@@ -285,10 +285,12 @@ None.
 
 | Key              | Type     | Required | Description                                |
 | :--------------- | :------- | :------- | :----------------------------------------- |
+| mediaId          | number   | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests. Omitted when the active path cannot be resolved in the current media database. |
 | launcherId       | string   | Yes      | ID of the launcher.                        |
 | systemId         | string   | Yes      | ID of the system.                          |
 | systemName       | string   | Yes      | Display name of the system.                |
 | mediaPath        | string   | Yes      | Path to the media file.                    |
+| relativePath     | string   | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
 | mediaName        | string   | Yes      | Display name of the media.                 |
 | started          | string   | Yes      | Timestamp when media started in RFC3339 format. |
 | zapScript        | string   | Yes      | ZapScript command to launch this media item. |
@@ -375,6 +377,7 @@ An object:
 
 | Key       | Type                     | Required | Description                                                                                                 |
 | :-------- | :----------------------- | :------- | :---------------------------------------------------------------------------------------------------------- |
+| mediaId   | number                   | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests.                |
 | system    | [System](#system-object) | Yes      | System which the media has been indexed under.                                                              |
 | name      | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
 | path      | string                   | Yes      | Canonical indexed media path. Use with `system.id` for `media.meta` and `media.image`. |
@@ -431,6 +434,7 @@ An object:
   "result": {
     "results": [
       {
+        "mediaId": 123,
         "name": "240p Test Suite (PD) v0.03 tepples",
         "path": "/media/fat/games/Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
         "relativePath": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
@@ -487,6 +491,7 @@ An object:
   "result": {
     "results": [
       {
+        "mediaId": 456,
         "name": "Super Mario Bros.",
         "path": "/media/fat/games/NES/Super Mario Bros.nes",
         "relativePath": "NES/Super Mario Bros.nes",
@@ -554,6 +559,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 
 | Key          | Type     | Required | Description                                                                                      |
 | :----------- | :------- | :------- | :----------------------------------------------------------------------------------------------- |
+| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries for efficient follow-up `media.meta` and `media.image` requests. |
 | name         | string   | Yes      | Display name of the entry.                                                                       |
 | path         | string   | Yes      | Full path to the entry.                                                                          |
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
@@ -643,6 +649,7 @@ All parameters are optional. When called with no parameters, returns root entrie
         "fileCount": 42
       },
       {
+        "mediaId": 42,
         "name": "Super Mario World",
         "path": "/roms/SNES/Super Mario World.sfc",
         "type": "media",
@@ -655,6 +662,7 @@ All parameters are optional. When called with no parameters, returns root entrie
         ]
       },
       {
+        "mediaId": 43,
         "name": "The Legend of Zelda - A Link to the Past",
         "path": "/roms/SNES/The Legend of Zelda - A Link to the Past.sfc",
         "type": "media",
@@ -917,11 +925,13 @@ Returns an [ActiveMedia](#active-media-object) object if media is currently acti
   "jsonrpc": "2.0",
   "id": "47f80537-7a5d-11ef-9c7b-020304050607",
   "result": {
+    "mediaId": 42,
     "started": "2024-09-24T17:49:42.938167429+08:00",
     "launcherId": "SNES",
     "systemId": "SNES",
     "systemName": "Super Nintendo Entertainment System",
     "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+    "relativePath": "snes/Super Mario World (USA).sfc",
     "mediaName": "Super Mario World",
     "zapScript": "@SNES/Super Mario World",
     "launcherControls": ["load_state", "save_state", "toggle_menu"]
@@ -1000,10 +1010,12 @@ Optionally, an object:
 
 | Key        | Type   | Required | Description                                            |
 | :--------- | :----- | :------- | :----------------------------------------------------- |
+| mediaId    | number | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests. Omitted when the history path cannot be resolved in the current media database. |
 | systemId   | string | Yes      | ID of the system.                                      |
 | systemName | string | Yes      | Display name of the system.                            |
 | mediaName  | string | Yes      | Display name of the media.                             |
 | mediaPath  | string | Yes      | Path to the media file.                                |
+| relativePath | string | No     | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
 | launcherId | string | Yes      | ID of the launcher used.                               |
 | startedAt  | string | Yes      | Timestamp when media started in RFC3339 format.        |
 | endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Omitted if media is still active. |
@@ -1033,10 +1045,12 @@ Optionally, an object:
   "result": {
     "entries": [
       {
+        "mediaId": 42,
         "systemId": "SNES",
         "systemName": "Super Nintendo Entertainment System",
         "mediaName": "Super Mario World",
         "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+        "relativePath": "snes/Super Mario World (USA).sfc",
         "launcherId": "SNES",
         "startedAt": "2025-01-22T14:30:00Z",
         "endedAt": "2025-01-22T15:15:30Z",
@@ -1076,10 +1090,12 @@ Optionally, an object:
 
 | Key           | Type   | Required | Description                                            |
 | :------------ | :----- | :------- | :----------------------------------------------------- |
+| mediaId       | number | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests. Omitted when the history path cannot be resolved in the current media database. |
 | systemId      | string | Yes      | ID of the system.                                      |
 | systemName    | string | Yes      | Display name of the system.                            |
 | mediaName     | string | Yes      | Display name of the media.                             |
 | mediaPath     | string | Yes      | Path to the media file (from most recent session).     |
+| relativePath  | string | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
 | totalPlayTime | number | Yes      | Total play time across all sessions in seconds.        |
 | sessionCount  | number | Yes      | Number of play sessions.                               |
 | lastPlayedAt  | string | Yes      | Timestamp of the most recent session in RFC3339 format. |
@@ -1109,10 +1125,12 @@ Optionally, an object:
   "result": {
     "entries": [
       {
+        "mediaId": 42,
         "systemId": "SNES",
         "systemName": "Super Nintendo Entertainment System",
         "mediaName": "Super Mario World",
         "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+        "relativePath": "snes/Super Mario World (USA).sfc",
         "totalPlayTime": 7200,
         "sessionCount": 12,
         "lastPlayedAt": "2026-02-14T20:30:00Z"
@@ -1148,6 +1166,7 @@ An object:
 
 | Key        | Type                         | Required | Description                                                                                 |
 | :--------- | :--------------------------- | :------- | :------------------------------------------------------------------------------------------ |
+| mediaId    | number                       | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests. |
 | system     | [System](#system-object)     | Yes      | System the media was found in.                                                              |
 | name       | string                       | Yes      | Display name of the matched media.                                                          |
 | path       | string                       | Yes      | Path to the media file.                                                                     |
@@ -1180,6 +1199,7 @@ An object:
   "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
   "result": {
     "match": {
+      "mediaId": 42,
       "system": {
         "id": "SNES",
         "name": "Super Nintendo Entertainment System",
@@ -1223,7 +1243,7 @@ An object:
 
 Return the full metadata graph for one indexed media row, including its title, system, tags, and scraped properties.
 
-Use this when a client has a search, browse, or lookup result and needs all metadata attached to that row. Identify media by the result's `system.id` and canonical `path`. Launcher-relative paths in the `systemId/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row. Properties are separated by scope: `media.properties` applies to the specific ROM/file row, and `media.title.properties` applies to the shared title.
+Use this when a client has a search, browse, or lookup result and needs all metadata attached to that row. Identify media by the result's `mediaId` when available, or by `system.id` and canonical `path`. Launcher-relative paths in the `system/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row. Properties are separated by scope: `media.properties` applies to the specific ROM/file row, and `media.title.properties` applies to the shared title.
 
 #### Parameters
 
@@ -1231,8 +1251,12 @@ An object:
 
 | Key    | Type   | Required | Description                         |
 | :----- | :----- | :------- | :---------------------------------- |
-| system | string | Yes      | System ID for the media row.        |
-| path   | string | Yes      | Canonical indexed media path.       |
+| mediaId | number | No      | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
+| system | string | No       | System ID for the media row. Required when `mediaId` is omitted. |
+| path   | string | No       | Canonical indexed media path. Required when `mediaId` is omitted. |
+| items  | object[] | No     | Batch request items. Each item uses either `mediaId` or `system`/`path`. Maximum 100 items. Cannot be mixed with top-level media ref fields. |
+
+Single requests return the existing single `media` response shape. Batch requests return `{ "items": [...] }` in input order. Each batch item contains either `media` or `error`, so one missing media row does not fail the whole batch.
 
 #### Result
 
@@ -1331,6 +1355,22 @@ Property keys are canonical type tags such as `property:description`, `property:
 }
 ```
 
+##### Batch Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050608",
+  "method": "media.meta",
+  "params": {
+    "items": [
+      {"mediaId": 42},
+      {"system": "SNES", "path": "/roms/snes/Super Metroid.sfc"}
+    ]
+  }
+}
+```
+
 ### media.image
 
 Return the best matching image for one indexed media row as base64-encoded data.
@@ -1339,15 +1379,19 @@ Return the best matching image for one indexed media row as base64-encoded data.
 
 #### Parameters
 
-An object identifying the media row by `(system, path)`. Canonical indexed paths are preferred. Launcher-relative paths in the `systemId/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row.
+An object identifying the media row by `mediaId` or `(system, path)`. Canonical indexed paths are preferred. Launcher-relative paths in the `system/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row.
 
 | Key        | Type     | Required | Description                                                                 |
 | :--------- | :------- | :------- | :-------------------------------------------------------------------------- |
-| system     | string   | Yes      | System ID.                                                                  |
-| path       | string   | Yes      | Canonical indexed media path.                                               |
+| mediaId    | number   | No       | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
+| system     | string   | No       | System ID. Required when `mediaId` is omitted.                              |
+| path       | string   | No       | Canonical indexed media path. Required when `mediaId` is omitted.            |
 | imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
+| items      | object[] | No       | Batch request items. Each item uses either `mediaId` or `system`/`path`, and may include item-level `imageTypes`. Maximum 50 items. Cannot be mixed with top-level media ref fields. |
 
 Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
+
+Single requests return the existing single image response shape. Batch requests return `{ "items": [...] }` in input order. Each batch item contains either `image` or `error`. Top-level `imageTypes` applies to all batch items unless an item has its own `imageTypes` override.
 
 #### Result
 
@@ -1371,6 +1415,23 @@ Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `title
     "system": "SNES",
     "path": "/roms/snes/Super Mario World.sfc",
     "imageTypes": ["boxart", "image"]
+  }
+}
+```
+
+##### Batch Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050608",
+  "method": "media.image",
+  "params": {
+    "imageTypes": ["boxart", "image"],
+    "items": [
+      {"mediaId": 42},
+      {"mediaId": 43, "imageTypes": ["screenshot"]}
+    ]
   }
 }
 ```

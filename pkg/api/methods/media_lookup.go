@@ -111,6 +111,7 @@ func HandleMediaLookup(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	return models.MediaLookupResponse{
 		Match: &models.MediaLookupMatch{
+			MediaID:    result.Result.MediaID,
 			RelPath:    relPath,
 			System:     resultSystem,
 			Name:       result.Result.Name,

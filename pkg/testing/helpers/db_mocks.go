@@ -2130,6 +2130,16 @@ func (m *MockMediaDBI) FindMediaBySystemAndPath(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) FindMediaBySystemAndPaths(
+	ctx context.Context, systemDBID int64, paths []string,
+) (map[string]database.Media, error) {
+	args := m.Called(ctx, systemDBID, paths)
+	if result, ok := args.Get(0).(map[string]database.Media); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) FindMediaBySystemAndPathFold(
 	ctx context.Context, systemDBID int64, path string,
 ) (*database.Media, error) {
@@ -2229,9 +2239,29 @@ func (m *MockMediaDBI) GetMediaTitleProperties(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) GetMediaTitlePropertiesByMediaTitleDBIDs(
+	ctx context.Context, mediaTitleDBIDs []int64,
+) (map[int64][]database.MediaProperty, error) {
+	args := m.Called(ctx, mediaTitleDBIDs)
+	if result, ok := args.Get(0).(map[int64][]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) GetMediaProperties(ctx context.Context, mediaDBID int64) ([]database.MediaProperty, error) {
 	args := m.Called(ctx, mediaDBID)
 	if result, ok := args.Get(0).([]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaPropertiesByMediaDBIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64][]database.MediaProperty, error) {
+	args := m.Called(ctx, mediaDBIDs)
+	if result, ok := args.Get(0).(map[int64][]database.MediaProperty); ok {
 		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 	}
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
@@ -2281,6 +2311,16 @@ func (m *MockMediaDBI) GetMediaWithTitleAndSystem(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) GetMediaWithTitleAndSystemByIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64]database.MediaFullRow, error) {
+	args := m.Called(ctx, mediaDBIDs)
+	if result, ok := args.Get(0).(map[int64]database.MediaFullRow); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) GetMediaTagsByMediaDBID(
 	ctx context.Context, mediaDBID int64,
 ) ([]database.TagInfo, error) {
@@ -2291,11 +2331,31 @@ func (m *MockMediaDBI) GetMediaTagsByMediaDBID(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) GetMediaTagsByMediaDBIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64][]database.TagInfo, error) {
+	args := m.Called(ctx, mediaDBIDs)
+	if result, ok := args.Get(0).(map[int64][]database.TagInfo); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) GetMediaTitleTagsByMediaTitleDBID(
 	ctx context.Context, mediaTitleDBID int64,
 ) ([]database.TagInfo, error) {
 	args := m.Called(ctx, mediaTitleDBID)
 	if result, ok := args.Get(0).([]database.TagInfo); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaTitleTagsByMediaTitleDBIDs(
+	ctx context.Context, mediaTitleDBIDs []int64,
+) (map[int64][]database.TagInfo, error) {
+	args := m.Called(ctx, mediaTitleDBIDs)
+	if result, ok := args.Get(0).(map[int64][]database.TagInfo); ok {
 		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 	}
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design

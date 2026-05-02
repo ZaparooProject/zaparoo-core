@@ -35,6 +35,7 @@ type SearchResultMedia struct {
 	Path      string             `json:"path"`
 	ZapScript string             `json:"zapScript"`
 	Tags      []database.TagInfo `json:"tags"`
+	MediaID   int64              `json:"mediaId,omitempty"`
 }
 
 type PaginationInfo struct {
@@ -54,7 +55,6 @@ type TagsResponse struct {
 }
 
 type BrowseEntry struct {
-	SystemIDs []string           `json:"systemIds,omitempty"`
 	SystemID  *string            `json:"systemId,omitempty"`
 	RelPath   *string            `json:"relativePath,omitempty"`
 	ZapScript *string            `json:"zapScript,omitempty"`
@@ -63,7 +63,9 @@ type BrowseEntry struct {
 	Name      string             `json:"name"`
 	Path      string             `json:"path"`
 	Type      string             `json:"type"`
+	SystemIDs []string           `json:"systemIds,omitempty"`
 	Tags      []database.TagInfo `json:"tags,omitempty"`
+	MediaID   int64              `json:"mediaId,omitempty"`
 }
 
 type BrowseResults struct {
@@ -190,6 +192,7 @@ type ReaderResponse struct {
 }
 
 type MediaHistoryResponseEntry struct {
+	RelPath    *string `json:"relativePath,omitempty"`
 	EndedAt    *string `json:"endedAt,omitempty"`
 	SystemID   string  `json:"systemId"`
 	SystemName string  `json:"systemName"`
@@ -198,6 +201,7 @@ type MediaHistoryResponseEntry struct {
 	LauncherID string  `json:"launcherId"`
 	StartedAt  string  `json:"startedAt"`
 	PlayTime   int     `json:"playTime"`
+	MediaID    int64   `json:"mediaId,omitempty"`
 }
 
 type MediaHistoryResponse struct {
@@ -206,13 +210,15 @@ type MediaHistoryResponse struct {
 }
 
 type MediaHistoryTopEntry struct {
-	SystemID      string `json:"systemId"`
-	SystemName    string `json:"systemName"`
-	MediaName     string `json:"mediaName"`
-	MediaPath     string `json:"mediaPath"`
-	LastPlayedAt  string `json:"lastPlayedAt"`
-	TotalPlayTime int    `json:"totalPlayTime"`
-	SessionCount  int    `json:"sessionCount"`
+	RelPath       *string `json:"relativePath,omitempty"`
+	SystemID      string  `json:"systemId"`
+	SystemName    string  `json:"systemName"`
+	MediaName     string  `json:"mediaName"`
+	MediaPath     string  `json:"mediaPath"`
+	LastPlayedAt  string  `json:"lastPlayedAt"`
+	TotalPlayTime int     `json:"totalPlayTime"`
+	SessionCount  int     `json:"sessionCount"`
+	MediaID       int64   `json:"mediaId,omitempty"`
 }
 
 type MediaHistoryTopResponse struct {
@@ -263,6 +269,15 @@ type MediaMetaResponse struct {
 	Media MediaMetaMediaResponse `json:"media"`
 }
 
+type MediaMetaBatchItemResponse struct {
+	Media *MediaMetaMediaResponse `json:"media,omitempty"`
+	Error *string                 `json:"error,omitempty"`
+}
+
+type MediaMetaBatchResponse struct {
+	Items []MediaMetaBatchItemResponse `json:"items"`
+}
+
 // MediaImageResponse is the response for the media.image method.
 // It contains the best-match image for a media record, base64-encoded.
 type MediaImageResponse struct {
@@ -270,6 +285,15 @@ type MediaImageResponse struct {
 	ContentType string  `json:"contentType"`
 	Data        string  `json:"data"`    // base64-encoded blob
 	TypeTag     string  `json:"typeTag"` // e.g. "property:image-boxart"
+}
+
+type MediaImageBatchItemResponse struct {
+	Image *MediaImageResponse `json:"image,omitempty"`
+	Error *string             `json:"error,omitempty"`
+}
+
+type MediaImageBatchResponse struct {
+	Items []MediaImageBatchItemResponse `json:"items"`
 }
 
 // ScrapingStatusResponse is broadcast as a "media.scraping" notification for
@@ -294,6 +318,7 @@ type MediaLookupMatch struct {
 	Path       string             `json:"path"`
 	ZapScript  string             `json:"zapScript"`
 	Tags       []database.TagInfo `json:"tags"`
+	MediaID    int64              `json:"mediaId,omitempty"`
 	Confidence float64            `json:"confidence"`
 }
 
@@ -318,6 +343,7 @@ type ScrapersResponse struct {
 }
 
 type ActiveMedia struct {
+	RelPath          *string   `json:"relativePath,omitempty"`
 	Started          time.Time `json:"started"`
 	LauncherID       string    `json:"launcherId"`
 	SystemID         string    `json:"systemId"`
@@ -325,6 +351,7 @@ type ActiveMedia struct {
 	Path             string    `json:"mediaPath"`
 	Name             string    `json:"mediaName"`
 	LauncherControls []string  `json:"launcherControls,omitempty"`
+	MediaID          int64     `json:"mediaId,omitempty"`
 }
 
 // NewActiveMedia creates a new ActiveMedia with the current timestamp.

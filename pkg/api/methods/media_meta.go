@@ -25,7 +25,6 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
@@ -33,66 +32,125 @@ import (
 // the Media itself, its parent MediaTitle, System, level-separated Tags, and
 // level-separated Properties (with binary data base64-encoded inline).
 func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
-	var params models.MediaMetaParams
-	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		return nil, models.ClientErrf("invalid params: %w", err)
+	params, err := parseMediaRequest(env.Params, maxMediaMetaBatchItems)
+	if err != nil {
+		return nil, err
+	}
+	if !params.Batch && params.Items[0].MediaID == nil {
+		return handleMediaMetaSinglePath(&env, params.Items[0])
 	}
 
-	ctx := env.Context
-	db := env.Database.MediaDB
-
-	row, err := resolveMediaBySystemAndPath(&env, params.System, params.Path)
+	resolved, err := resolveMediaRefs(&env, params.Items)
 	if err != nil {
 		return nil, err
 	}
 
-	mediaTags, err := db.GetMediaTagsByMediaDBID(ctx, row.DBID)
+	mediaIDs, titleIDs := uniqueMediaAndTitleIDs(resolved)
+	db := env.Database.MediaDB
+	mediaTags, err := db.GetMediaTagsByMediaDBIDs(env.Context, mediaIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media tags: %w", err)
 	}
-
-	titleTags, err := db.GetMediaTitleTagsByMediaTitleDBID(ctx, row.Title.DBID)
+	titleTags, err := db.GetMediaTitleTagsByMediaTitleDBIDs(env.Context, titleIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get title tags: %w", err)
 	}
-
-	mediaProps, err := db.GetMediaProperties(ctx, row.DBID)
+	mediaProps, err := db.GetMediaPropertiesByMediaDBIDs(env.Context, mediaIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media properties: %w", err)
 	}
-
-	titleProps, err := db.GetMediaTitleProperties(ctx, row.Title.DBID)
+	titleProps, err := db.GetMediaTitlePropertiesByMediaTitleDBIDs(env.Context, titleIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 
+	if !params.Batch {
+		if resolved[0].Err != nil {
+			return nil, resolved[0].Err
+		}
+		return buildMediaMetaResponse(
+			resolved[0].Row,
+			mediaTags[resolved[0].Row.DBID], titleTags[resolved[0].Row.Title.DBID],
+			mediaProps[resolved[0].Row.DBID], titleProps[resolved[0].Row.Title.DBID],
+		), nil
+	}
+
+	items := make([]models.MediaMetaBatchItemResponse, len(resolved))
+	for i, item := range resolved {
+		if item.Err != nil {
+			errText := item.Err.Error()
+			items[i].Error = &errText
+			continue
+		}
+		response := buildMediaMetaResponse(
+			item.Row,
+			mediaTags[item.Row.DBID], titleTags[item.Row.Title.DBID],
+			mediaProps[item.Row.DBID], titleProps[item.Row.Title.DBID],
+		)
+		items[i].Media = &response.Media
+	}
+	return models.MediaMetaBatchResponse{Items: items}, nil
+}
+
+func handleMediaMetaSinglePath(env *requests.RequestEnv, ref mediaRefParam) (any, error) {
+	db := env.Database.MediaDB
+	row, err := resolveMediaBySystemAndPath(env, ref.System, ref.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	mediaTags, err := db.GetMediaTagsByMediaDBID(env.Context, row.DBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media tags: %w", err)
+	}
+	titleTags, err := db.GetMediaTitleTagsByMediaTitleDBID(env.Context, row.Title.DBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get title tags: %w", err)
+	}
+	mediaProps, err := db.GetMediaProperties(env.Context, row.DBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media properties: %w", err)
+	}
+	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get title properties: %w", err)
+	}
+
+	return buildMediaMetaResponse(row, mediaTags, titleTags, mediaProps, titleProps), nil
+}
+
+func buildMediaMetaResponse(
+	row *database.MediaFullRow,
+	mediaTags []database.TagInfo,
+	titleTags []database.TagInfo,
+	mediaProps []database.MediaProperty,
+	titleProps []database.MediaProperty,
+) models.MediaMetaResponse {
 	var secondarySlug *string
 	if row.Title.SecondarySlug.Valid {
 		secondarySlug = &row.Title.SecondarySlug.String
 	}
 
-	return models.MediaMetaResponse{
-		Media: models.MediaMetaMediaResponse{
-			Path:       row.Path,
-			ParentDir:  row.ParentDir,
-			IsMissing:  row.IsMissing,
-			Tags:       mediaTags,
-			Properties: mapMediaProperties(mediaProps),
-			Title: models.MediaMetaTitleResponse{
-				Slug:          row.Title.Slug,
-				SecondarySlug: secondarySlug,
-				Name:          row.Title.Name,
-				SlugLength:    row.Title.SlugLength,
-				SlugWordCount: row.Title.SlugWordCount,
-				System: models.MediaMetaSystemResponse{
-					ID:   row.System.SystemID,
-					Name: row.System.Name,
-				},
-				Tags:       titleTags,
-				Properties: mapMediaProperties(titleProps),
+	return models.MediaMetaResponse{Media: models.MediaMetaMediaResponse{
+		Path:       row.Path,
+		ParentDir:  row.ParentDir,
+		IsMissing:  row.IsMissing,
+		Tags:       mediaTags,
+		Properties: mapMediaProperties(mediaProps),
+		Title: models.MediaMetaTitleResponse{
+			Slug:          row.Title.Slug,
+			SecondarySlug: secondarySlug,
+			Name:          row.Title.Name,
+			SlugLength:    row.Title.SlugLength,
+			SlugWordCount: row.Title.SlugWordCount,
+			System: models.MediaMetaSystemResponse{
+				ID:   row.System.SystemID,
+				Name: row.System.Name,
 			},
+			Tags:       titleTags,
+			Properties: mapMediaProperties(titleProps),
 		},
-	}, nil
+	}}
 }
 
 // mapMediaProperties converts a []database.MediaProperty slice into a map keyed

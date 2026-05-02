@@ -23,14 +23,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,6 +83,75 @@ func TestHandleMediaHistory_NoParams(t *testing.T) {
 	assert.Equal(t, 25, resp.Pagination.PageSize)
 
 	mockUserDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistory_WithMediaIDAndRelativePath(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	now := time.Now()
+	rootDir := filepath.Join(string(filepath.Separator), "mock", "roms")
+	mediaPath := filepath.Join(rootDir, "NES", "smb.nes")
+	missingPath := filepath.Join(rootDir, "NES", "missing.nes")
+	relPath := filepath.ToSlash(filepath.Join("NES", "smb.nes"))
+
+	launcherCache := &phelpers.LauncherCache{}
+	launcherCache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "nes-launcher", SystemID: "NES", Folders: []string{"NES"}},
+	})
+
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 26).Return([]database.MediaHistoryEntry{
+		{
+			DBID:       1,
+			SystemID:   "NES",
+			SystemName: "Nintendo Entertainment System",
+			MediaName:  "Super Mario Bros",
+			MediaPath:  mediaPath,
+			LauncherID: "retroarch-nes",
+			StartTime:  now,
+			PlayTime:   1800,
+		},
+		{
+			DBID:       2,
+			SystemID:   "NES",
+			SystemName: "Nintendo Entertainment System",
+			MediaName:  "Missing Game",
+			MediaPath:  missingPath,
+			LauncherID: "retroarch-nes",
+			StartTime:  now,
+			PlayTime:   60,
+		},
+	}, nil)
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 10}, nil)
+	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(10), []string{mediaPath, missingPath}).
+		Return(map[string]database.Media{mediaPath: {DBID: 42}}, nil)
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		Database:      &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		Platform:      mockPlatform,
+		Config:        &config.Instance{},
+		LauncherCache: launcherCache,
+	}
+
+	result, err := HandleMediaHistory(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaHistoryResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Entries, 2)
+	assert.Equal(t, int64(42), resp.Entries[0].MediaID)
+	require.NotNil(t, resp.Entries[0].RelPath)
+	assert.Equal(t, relPath, *resp.Entries[0].RelPath)
+	assert.Zero(t, resp.Entries[1].MediaID)
+	require.NotNil(t, resp.Entries[1].RelPath)
+	assert.Equal(t, filepath.ToSlash(filepath.Join("NES", "missing.nes")), *resp.Entries[1].RelPath)
+
+	mockUserDB.AssertExpectations(t)
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestHandleMediaHistory_WithLimit(t *testing.T) {

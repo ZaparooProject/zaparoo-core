@@ -692,6 +692,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 
 		results = append(results, models.SearchResultMedia{
+			MediaID:   result.MediaID,
 			RelPath:   relPath,
 			System:    resultSystem,
 			Name:      result.Name,
@@ -801,9 +802,16 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			}
 		}
 		zapScript := database.BuildTitleZapScript(system.ID, activeMedia.Name, zapScriptTags)
+		mediaIDs := mediaResponseMediaIDs(&env, []mediaPathRef{{
+			SystemID: system.ID,
+			Path:     activeMedia.Path,
+		}})
+		ref := mediaPathRef{SystemID: system.ID, Path: activeMedia.Path}
 
 		activeResp := models.ActiveMediaResponse{
 			ActiveMedia: models.ActiveMedia{
+				MediaID:          mediaIDs[ref],
+				RelPath:          mediaResponseRelativePath(&env, system.ID, activeMedia.Path),
 				Started:          activeMedia.Started,
 				LauncherID:       activeMedia.LauncherID,
 				SystemID:         system.ID,
@@ -939,9 +947,16 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 	zapScript := database.BuildTitleZapScript(media.SystemID, media.Name, zapScriptTags)
+	mediaIDs := mediaResponseMediaIDs(&env, []mediaPathRef{{
+		SystemID: media.SystemID,
+		Path:     media.Path,
+	}})
+	ref := mediaPathRef{SystemID: media.SystemID, Path: media.Path}
 
 	resp := models.ActiveMediaResponse{
 		ActiveMedia: models.ActiveMedia{
+			MediaID:          mediaIDs[ref],
+			RelPath:          mediaResponseRelativePath(&env, media.SystemID, media.Path),
 			Started:          media.Started,
 			LauncherID:       media.LauncherID,
 			SystemID:         media.SystemID,
