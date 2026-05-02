@@ -179,12 +179,14 @@ type MediaHistoryTopParams struct {
 }
 
 type MediaMetaParams struct {
-	MediaID int64 `json:"mediaId" validate:"required,gt=0"`
+	System string `json:"system" validate:"required,min=1"`
+	Path   string `json:"path"   validate:"required,min=1"`
 }
 
 type MediaImageParams struct {
-	ImageTypes []string `json:"imageTypes" validate:"omitempty,dive,min=1"`
-	MediaID    int64    `json:"mediaId"    validate:"required,gt=0"`
+	ImageTypes []string `json:"imageTypes"        validate:"omitempty,dive,min=1"`
+	System     string   `json:"system"            validate:"required,min=1"`
+	Path       string   `json:"path"              validate:"required,min=1"`
 }
 
 type MediaScrapeParams struct {

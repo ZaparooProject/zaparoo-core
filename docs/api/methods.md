@@ -377,7 +377,8 @@ An object:
 | :-------- | :----------------------- | :------- | :---------------------------------------------------------------------------------------------------------- |
 | system    | [System](#system-object) | Yes      | System which the media has been indexed under.                                                              |
 | name      | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
-| path      | string                   | Yes      | Path to the media file. If possible, this path will be compressed into the `<system>/<path>` launch format. |
+| path      | string                   | Yes      | Canonical indexed media path. Use with `system.id` for `media.meta` and `media.image`. |
+| relativePath | string               | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
 | zapScript | string                   | Yes      | ZapScript command to launch this media item.                                                                |
 | tags      | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
 
@@ -1148,6 +1149,7 @@ An object:
 | system     | [System](#system-object)     | Yes      | System the media was found in.                                                              |
 | name       | string                       | Yes      | Display name of the matched media.                                                          |
 | path       | string                       | Yes      | Path to the media file.                                                                     |
+| relativePath | string                    | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity.   |
 | zapScript  | string                       | Yes      | ZapScript command to launch this media item.                                                |
 | tags       | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                              |
 | confidence | number                       | Yes      | Match confidence score from 0.0 to 1.0.                                                    |
@@ -1184,7 +1186,8 @@ An object:
         "manufacturer": "Nintendo"
       },
       "name": "Super Mario World",
-      "path": "SNES/Super Mario World (USA).sfc",
+      "path": "/roms/snes/Super Mario World (USA).sfc",
+      "relativePath": "SNES/Super Mario World (USA).sfc",
       "zapScript": "@SNES/Super Mario World",
       "tags": [
         {
@@ -1218,15 +1221,16 @@ An object:
 
 Return the full metadata graph for one indexed media row, including its title, system, tags, and scraped properties.
 
-Use this when a client already has a `mediaId` and needs all metadata attached to that row. Properties are separated by scope: `media.properties` applies to the specific ROM/file row, and `media.title.properties` applies to the shared title.
+Use this when a client has a search, browse, or lookup result and needs all metadata attached to that row. Identify media by the result's `system.id` and canonical `path`. Launcher-relative paths in the `systemId/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row. Properties are separated by scope: `media.properties` applies to the specific ROM/file row, and `media.title.properties` applies to the shared title.
 
 #### Parameters
 
 An object:
 
-| Key     | Type   | Required | Description                         |
-| :------ | :----- | :------- | :---------------------------------- |
-| mediaId | number | Yes      | Media database ID of the media row. |
+| Key    | Type   | Required | Description                         |
+| :----- | :----- | :------- | :---------------------------------- |
+| system | string | Yes      | System ID for the media row.        |
+| path   | string | Yes      | Canonical indexed media path.       |
 
 #### Result
 
@@ -1238,7 +1242,6 @@ An object:
 
 | Key        | Type                                    | Required | Description                                           |
 | :--------- | :-------------------------------------- | :------- | :---------------------------------------------------- |
-| id         | number                                  | Yes      | Media database ID.                                    |
 | path       | string                                  | Yes      | Media file path.                                      |
 | parentDir  | string                                  | Yes      | Parent directory stored for the media row.            |
 | isMissing  | boolean                                 | Yes      | Whether the indexed file is currently missing.        |
@@ -1250,7 +1253,6 @@ An object:
 
 | Key           | Type                         | Required | Description                                      |
 | :------------ | :--------------------------- | :------- | :----------------------------------------------- |
-| id            | number                       | Yes      | Media title database ID.                         |
 | slug          | string                       | Yes      | Primary normalized title slug.                   |
 | secondarySlug | string                       | No       | Secondary title slug, when available.            |
 | name          | string                       | Yes      | Display title.                                   |
@@ -1266,6 +1268,7 @@ An object:
 | :---------- | :----- | :------- | :--------------------------------------------------------------------- |
 | text        | string | Yes      | Text value or source path for the property.                            |
 | contentType | string | Yes      | MIME type for binary-backed properties, empty for text-only values.    |
+| extension   | string | No       | File extension without a dot, derived from MIME type or source path.   |
 | data        | string | No       | Base64-encoded binary property data. Omitted for text-only properties. |
 
 Property keys are canonical type tags such as `property:description`, `property:image-image`, or `property:manual`.
@@ -1280,7 +1283,8 @@ Property keys are canonical type tags such as `property:description`, `property:
   "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050607",
   "method": "media.meta",
   "params": {
-    "mediaId": 42
+    "system": "SNES",
+    "path": "/roms/snes/Super Mario World.sfc"
   }
 }
 ```
@@ -1293,7 +1297,6 @@ Property keys are canonical type tags such as `property:description`, `property:
   "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050607",
   "result": {
     "media": {
-      "id": 42,
       "path": "/roms/snes/Super Mario World.sfc",
       "parentDir": "/roms/snes",
       "isMissing": false,
@@ -1302,7 +1305,6 @@ Property keys are canonical type tags such as `property:description`, `property:
       ],
       "properties": {},
       "title": {
-        "id": 7,
         "slug": "super mario world",
         "name": "Super Mario World",
         "slugLength": 17,
@@ -1335,11 +1337,12 @@ Return the best matching image for one indexed media row as base64-encoded data.
 
 #### Parameters
 
-An object:
+An object identifying the media row by `(system, path)`. Canonical indexed paths are preferred. Launcher-relative paths in the `systemId/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row.
 
 | Key        | Type     | Required | Description                                                                 |
 | :--------- | :------- | :------- | :-------------------------------------------------------------------------- |
-| mediaId    | number   | Yes      | Media database ID of the media row.                                         |
+| system     | string   | Yes      | System ID.                                                                  |
+| path       | string   | Yes      | Canonical indexed media path.                                               |
 | imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
 
 Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
@@ -1349,6 +1352,7 @@ Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `title
 | Key         | Type   | Required | Description                                  |
 | :---------- | :----- | :------- | :------------------------------------------- |
 | contentType | string | Yes      | MIME type of the returned image data.        |
+| extension   | string | No       | File extension without a dot, derived from MIME type or source path. |
 | data        | string | Yes      | Base64-encoded image bytes.                  |
 | typeTag     | string | Yes      | Canonical property tag that matched.         |
 
@@ -1362,7 +1366,8 @@ Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `title
   "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
   "method": "media.image",
   "params": {
-    "mediaId": 42,
+    "system": "SNES",
+    "path": "/roms/snes/Super Mario World.sfc",
     "imageTypes": ["boxart", "image"]
   }
 }
@@ -1376,6 +1381,7 @@ Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `title
   "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
   "result": {
     "contentType": "image/png",
+    "extension": "png",
     "data": "iVBORw0KGgoAAAANSUhEUgAA...",
     "typeTag": "property:image-boxart"
   }
@@ -1440,7 +1446,7 @@ Start a metadata scraper run in the background.
 
 Scraping enriches existing MediaDB records only. It does not create media rows; run `media.generate` first so the filesystem scanner has indexed the library. Scraping and media indexing are mutually exclusive, and only one scraper can run at a time.
 
-Progress is reported with [media.scraping](./notifications.md#mediascraping) notifications.
+Progress is reported with [media.scraping](./notifications.md#mediascraping) notifications and can be queried with `media.scrape.status`.
 
 #### Parameters
 
@@ -1480,6 +1486,60 @@ Returns `null` on success. The scraper continues after the response is sent.
   "jsonrpc": "2.0",
   "id": "a7b8c9d0-7a5d-11ef-9c7b-020304050607",
   "result": null
+}
+```
+
+### media.scrape.status
+
+Return the latest known metadata scraper status.
+
+This method behaves like `media.database` does for indexing status: clients can query the current scrape snapshot after opening a UI, then continue listening for `media.scraping` notifications. If no scrape has run since startup, the result is idle with `scraping: false` and `done: false`.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key       | Type    | Required | Description                                                |
+| :-------- | :------ | :------- | :--------------------------------------------------------- |
+| scraperId | string  | No       | Scraper ID for the latest or active run.                   |
+| systemId  | string  | No       | System currently being processed, when known.              |
+| processed | integer | Yes      | Number of records processed.                               |
+| total     | integer | Yes      | Total records expected for the current scrape, when known. |
+| matched   | integer | Yes      | Number of records matched and enriched.                    |
+| skipped   | integer | Yes      | Number of records skipped.                                 |
+| scraping  | boolean | Yes      | Whether a scrape is currently running.                     |
+| done      | boolean | Yes      | Whether the latest scrape reached a terminal state.        |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b8c9d0e1-7a5d-11ef-9c7b-020304050607",
+  "method": "media.scrape.status"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b8c9d0e1-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "scraperId": "gamelist.xml",
+    "systemId": "snes",
+    "processed": 42,
+    "total": 100,
+    "matched": 38,
+    "skipped": 4,
+    "scraping": true,
+    "done": false
+  }
 }
 ```
 

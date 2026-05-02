@@ -292,20 +292,6 @@ func browseFilesBaseCondition(opts *database.BrowseFilesOptions) (where string, 
 	return strings.Join(conditions, " AND "), args
 }
 
-func browseV2FilesBaseCondition(opts *database.BrowseFilesOptions, parentID int64) (where string, args []any) {
-	conditions := []string{`b.ParentDirDBID = ?`}
-	args = []any{parentID}
-	if letterClause, letterArgs := buildBrowseNameCharFilter("b.NameFirstChar", opts.Letter); letterClause != "" {
-		conditions = append(conditions, letterClause)
-		args = append(args, letterArgs...)
-	}
-	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems); systemClause != "" {
-		conditions = append(conditions, systemClause)
-		args = append(args, systemArgs...)
-	}
-	return strings.Join(conditions, " AND "), args
-}
-
 func browseSortClause(sortOrder string) string {
 	switch sortOrder {
 	case "name-desc":
@@ -316,19 +302,6 @@ func browseSortClause(sortOrder string) string {
 		return "m.Path DESC, m.DBID DESC"
 	default:
 		return "mt.Name ASC, m.DBID ASC"
-	}
-}
-
-func browseV2SortClause(sortOrder string) string {
-	switch sortOrder {
-	case "name-desc":
-		return "b.Name DESC, b.MediaDBID DESC"
-	case "filename-asc":
-		return "b.FileName ASC, b.MediaDBID ASC"
-	case "filename-desc":
-		return "b.FileName DESC, b.MediaDBID DESC"
-	default:
-		return "b.Name ASC, b.MediaDBID ASC"
 	}
 }
 
@@ -345,88 +318,12 @@ func browseCursorCondition(sortOrder string) string {
 	}
 }
 
-func browseV2CursorCondition(sortOrder string) string {
-	switch sortOrder {
-	case "name-desc":
-		return ` AND (b.Name, b.MediaDBID) < (?, ?)`
-	case "filename-asc":
-		return ` AND (b.FileName, b.MediaDBID) > (?, ?)`
-	case "filename-desc":
-		return ` AND (b.FileName, b.MediaDBID) < (?, ?)`
-	default:
-		return ` AND (b.Name, b.MediaDBID) > (?, ?)`
-	}
-}
-
-func browseV2CursorSortValue(opts *database.BrowseFilesOptions) string {
-	if opts.Cursor == nil {
-		return ""
-	}
-	if opts.Sort != "filename-asc" && opts.Sort != "filename-desc" {
-		return opts.Cursor.SortValue
-	}
-	_, fileName := browseV2ParentAndFileName(opts.Cursor.SortValue)
-	return fileName
-}
-
 func sqlBrowseFiles(
 	ctx context.Context,
 	db sqlQueryable,
 	opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
-	ready, err := sqlBrowseV2Ready(ctx, db)
-	if err != nil {
-		return nil, err
-	}
-	if ready {
-		return sqlBrowseFilesV2(ctx, db, opts)
-	}
 	return sqlBrowseFilesFromMedia(ctx, db, opts)
-}
-
-func sqlBrowseFilesV2(
-	ctx context.Context,
-	db sqlQueryable,
-	opts *database.BrowseFilesOptions,
-) ([]database.SearchResultWithCursor, error) {
-	parentID, ok, err := sqlBrowseDirID(ctx, db, opts.PathPrefix)
-	if err != nil || !ok {
-		return nil, err
-	}
-	where, args := browseV2FilesBaseCondition(opts, parentID)
-	query := `SELECT s.SystemID, b.Name, m.Path, b.MediaDBID
-		FROM BrowseEntries b
-		INNER JOIN Media m ON b.MediaDBID = m.DBID
-		INNER JOIN Systems s ON b.SystemDBID = s.DBID
-		WHERE ` + where
-	if opts.Cursor != nil {
-		query += browseV2CursorCondition(opts.Sort)
-		args = append(args, browseV2CursorSortValue(opts), opts.Cursor.LastID)
-	}
-	query += ` ORDER BY ` + browseV2SortClause(opts.Sort) + ` LIMIT ?`
-	args = append(args, opts.Limit)
-
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("browse v2 files query: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var results []database.SearchResultWithCursor
-	for rows.Next() {
-		var r database.SearchResultWithCursor
-		if scanErr := rows.Scan(&r.SystemID, &r.Name, &r.Path, &r.MediaID); scanErr != nil {
-			return nil, fmt.Errorf("browse v2 files scan: %w", scanErr)
-		}
-		results = append(results, r)
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("browse v2 files rows: %w", rowsErr)
-	}
-	if err := fetchAndAttachTags(ctx, db, results); err != nil {
-		return nil, fmt.Errorf("browse v2 files tags: %w", err)
-	}
-	return results, nil
 }
 
 func sqlBrowseFilesFromMedia(
@@ -475,32 +372,7 @@ func sqlBrowseFileCount(
 	db sqlQueryable,
 	opts database.BrowseFileCountOptions,
 ) (int, error) {
-	ready, err := sqlBrowseV2Ready(ctx, db)
-	if err != nil {
-		return 0, err
-	}
-	if ready {
-		return sqlBrowseFileCountV2(ctx, db, opts)
-	}
 	return sqlBrowseFileCountFromMedia(ctx, db, opts)
-}
-
-func sqlBrowseFileCountV2(ctx context.Context, db sqlQueryable, opts database.BrowseFileCountOptions) (int, error) {
-	parentID, ok, err := sqlBrowseDirID(ctx, db, opts.PathPrefix)
-	if err != nil || !ok {
-		return 0, err
-	}
-	where, args := browseV2FilesBaseCondition(&database.BrowseFilesOptions{
-		PathPrefix: opts.PathPrefix,
-		Letter:     opts.Letter,
-		Systems:    opts.Systems,
-	}, parentID)
-	query := `SELECT COUNT(*) FROM BrowseEntries b INNER JOIN Systems s ON b.SystemDBID = s.DBID WHERE ` + where
-	var count int
-	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
-		return 0, fmt.Errorf("browse v2 file count: %w", err)
-	}
-	return count, nil
 }
 
 func sqlBrowseFileCountFromMedia(

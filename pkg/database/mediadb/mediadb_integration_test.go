@@ -2522,6 +2522,16 @@ func TestSqlPopulateBrowseCache_PopulatesSystemAndGlobalCounts_Integration(t *te
 	require.Len(t, rootDirs, 1)
 	assert.Equal(t, "roms", rootDirs[0].Name)
 	assert.Equal(t, 2, rootDirs[0].FileCount)
+
+	assert.Equal(t, 0, countTableRows(t, mediaDB, "BrowseEntries", ""))
+	rpgDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "RPG")) + "/"
+	files, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{PathPrefix: rpgDir, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Equal(t, "Super RPG", files[0].Name)
+	fileCount, err := mediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{PathPrefix: rpgDir})
+	require.NoError(t, err)
+	assert.Equal(t, 1, fileCount)
 }
 
 func TestSqlInvalidateBrowseCache_MarksBrowseV2Stale_Integration(t *testing.T) {

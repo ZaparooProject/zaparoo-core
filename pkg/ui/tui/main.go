@@ -689,7 +689,7 @@ func BuildMainPage(
 		saveFocus()
 		BuildTagsWriteMenu(svc, pages, app, session)
 	})
-	updateDBButton := tview.NewButton("Update media").SetSelectedFunc(func() {
+	updateDBButton := tview.NewButton("Manage media").SetSelectedFunc(func() {
 		saveFocus()
 		BuildGenerateDBPage(cfg, pages, app)
 	})
@@ -718,7 +718,7 @@ func BuildMainPage(
 	buttonGrid.AddRow(
 		&ButtonGridItem{searchButton, "Search for media and write to a token", disableRow1},
 		&ButtonGridItem{writeButton, "Write custom ZapScript to a token", disableRow1},
-		&ButtonGridItem{updateDBButton, "Scan disk to create index of games", disableRow1},
+		&ButtonGridItem{updateDBButton, "Update media index and scrape metadata", disableRow1},
 	)
 	buttonGrid.AddRow(
 		&ButtonGridItem{settingsButton, "Manage settings for Core service", disableRow1},

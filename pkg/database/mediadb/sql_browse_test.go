@@ -154,20 +154,6 @@ func TestSqlBrowseRouteCountsV2_UsesChildDirCounts(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestBrowseV2CursorSortValue_UsesFileNameForFilenameSort(t *testing.T) {
-	t.Parallel()
-
-	value := browseV2CursorSortValue(&database.BrowseFilesOptions{
-		Sort: "filename-asc",
-		Cursor: &database.BrowseCursor{
-			SortValue: "/media/fat/games/SNES/Super Metroid.sfc",
-			LastID:    42,
-		},
-	})
-
-	assert.Equal(t, "Super Metroid.sfc", value)
-}
-
 func TestBrowseV2Builder_NormalizesRelativeFilesystemDirs(t *testing.T) {
 	t.Parallel()
 
@@ -192,7 +178,8 @@ func TestBrowseV2Builder_NormalizesFilesystemPathSeparators(t *testing.T) {
 	assert.Contains(t, builder.dirs, "/roms/snes/")
 	assert.Contains(t, builder.dirs, "/roms/snes/Action/")
 	assert.NotContains(t, builder.dirs, `/roms\\snes/`)
-	assert.Equal(t, "game.sfc", builder.entries[0].fileName)
+	_, fileName := browseV2ParentAndFileName(`roms\snes//RPG/../Action/game.sfc`)
+	assert.Equal(t, "game.sfc", fileName)
 }
 
 func TestBrowseV2Builder_NormalizesURIPathPortion(t *testing.T) {
@@ -204,7 +191,8 @@ func TestBrowseV2Builder_NormalizesURIPathPortion(t *testing.T) {
 
 	assert.Contains(t, builder.dirs, "steam://")
 	assert.NotContains(t, builder.dirs, `steam://440\\Team Fortress 2/../`)
-	assert.Equal(t, "440/Team Fortress 2", builder.entries[0].fileName)
+	_, fileName := browseV2ParentAndFileName(`steam://440\Team Fortress 2/../Team Fortress 2`)
+	assert.Equal(t, "440/Team Fortress 2", fileName)
 }
 
 func TestSqlBrowseRootCountsV2_ReturnsZeroForMissingRoot(t *testing.T) {

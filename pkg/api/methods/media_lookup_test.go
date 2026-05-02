@@ -360,5 +360,7 @@ func TestHandleMediaLookup_RelativePath(t *testing.T) {
 	resp, ok := result.(models.MediaLookupResponse)
 	require.True(t, ok)
 	require.NotNil(t, resp.Match)
-	assert.Equal(t, "NES/smb.nes", resp.Match.Path)
+	assert.Equal(t, "/mock/roms/NES/smb.nes", resp.Match.Path)
+	require.NotNil(t, resp.Match.RelPath)
+	assert.Equal(t, "NES/smb.nes", *resp.Match.RelPath)
 }

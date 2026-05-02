@@ -56,15 +56,11 @@ func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "browse_cache").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	// PopulateBrowseCache: BEGIN, SELECT (empty), index drops, DELETEs, root dir insert,
-	// index creates, count prepare, COMMIT.
+	// PopulateBrowseCache: BEGIN, SELECT (empty), DELETEs, root dir insert,
+	// count prepare, COMMIT. BrowseEntries are no longer rebuilt during optimization.
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT m.DBID, m.SystemDBID, m.Path, mt.Name").
 		WillReturnRows(sqlmock.NewRows([]string{"DBID", "SystemDBID", "Path", "Name"}))
-	mock.ExpectExec("DROP INDEX IF EXISTS idx_browseentries_parent_system_name").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("DROP INDEX IF EXISTS idx_browseentries_parent_system_file").
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DELETE FROM BrowseDirCounts").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DELETE FROM BrowseEntries").
@@ -75,10 +71,6 @@ func expectBrowseCacheStep(mock sqlmock.Sqlmock) {
 		ExpectExec().
 		WithArgs(int64(1), nil, "/", "/", false).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_browseentries_parent_system_name").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_browseentries_parent_system_file").
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectPrepare("INSERT INTO BrowseDirCounts")
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigBrowseIndexVersion, browseIndexVersion).

@@ -62,7 +62,9 @@ func buildPropsMap(props []database.MediaProperty) map[string]database.MediaProp
 }
 
 // HandleMediaImage returns a single best-match image for a media record as a
-// base64-encoded blob. Image type preferences are supplied by the caller; if
+// base64-encoded blob. The caller identifies the media row by `(system, path)`;
+// canonical paths are preferred, with launcher-relative paths accepted as a
+// compatibility fallback. Image type preferences are supplied by the caller; if
 // omitted the defaultImageTypes order is used. Media-level properties take
 // priority over title-level properties for the same TypeTag. If a matching
 // property has no inline binary data the file at the Text path is read from disk.
@@ -75,12 +77,9 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	ctx := env.Context
 	db := env.Database.MediaDB
 
-	row, err := db.GetMediaWithTitleAndSystem(ctx, params.MediaID)
+	row, err := resolveMediaBySystemAndPath(&env, params.System, params.Path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get media: %w", err)
-	}
-	if row == nil {
-		return nil, models.ClientErrf("media not found: %d", params.MediaID)
+		return nil, err
 	}
 
 	mediaProps, err := db.GetMediaProperties(ctx, row.DBID)
@@ -179,6 +178,7 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 			}
 
 			return models.MediaImageResponse{
+				Extension:   mediaContentExtension(prop.ContentType, prop.Text),
 				ContentType: prop.ContentType,
 				Data:        base64.StdEncoding.EncodeToString(binary),
 				TypeTag:     typeTag,
@@ -186,5 +186,5 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		}
 	}
 
-	return nil, models.ClientErrf("no image found for media: %d", params.MediaID)
+	return nil, models.ClientErrf("no image found for media: %s/%s", params.System, params.Path)
 }

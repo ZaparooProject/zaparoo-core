@@ -1069,5 +1069,7 @@ func TestHandleMediaSearch_RelativePaths(t *testing.T) {
 	searchResults, ok := result.(models.SearchResults)
 	require.True(t, ok)
 	require.Len(t, searchResults.Results, 1)
-	assert.Equal(t, "NES/mario.nes", searchResults.Results[0].Path)
+	assert.Equal(t, "/mock/roms/NES/mario.nes", searchResults.Results[0].Path)
+	require.NotNil(t, searchResults.Results[0].RelPath)
+	assert.Equal(t, "NES/mario.nes", *searchResults.Results[0].RelPath)
 }

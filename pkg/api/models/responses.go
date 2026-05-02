@@ -29,6 +29,7 @@ import (
 )
 
 type SearchResultMedia struct {
+	RelPath   *string            `json:"relativePath,omitempty"`
 	System    System             `json:"system"`
 	Name      string             `json:"name"`
 	Path      string             `json:"path"`
@@ -222,6 +223,7 @@ type MediaHistoryTopResponse struct {
 // Data is nil when the property is text-only; otherwise it contains the base64-encoded binary.
 type MediaMetaPropertyItem struct {
 	Data        *string `json:"data,omitempty"`
+	Extension   *string `json:"extension,omitempty"`
 	Text        string  `json:"text"`
 	ContentType string  `json:"contentType"`
 }
@@ -242,7 +244,6 @@ type MediaMetaTitleResponse struct {
 	Slug          string                           `json:"slug"`
 	Name          string                           `json:"name"`
 	Tags          []database.TagInfo               `json:"tags"`
-	ID            int64                            `json:"id"`
 	SlugLength    int                              `json:"slugLength"`
 	SlugWordCount int                              `json:"slugWordCount"`
 }
@@ -254,7 +255,6 @@ type MediaMetaMediaResponse struct {
 	ParentDir  string                           `json:"parentDir"`
 	Tags       []database.TagInfo               `json:"tags"`
 	Title      MediaMetaTitleResponse           `json:"title"`
-	ID         int64                            `json:"id"`
 	IsMissing  bool                             `json:"isMissing"`
 }
 
@@ -266,9 +266,10 @@ type MediaMetaResponse struct {
 // MediaImageResponse is the response for the media.image method.
 // It contains the best-match image for a media record, base64-encoded.
 type MediaImageResponse struct {
-	ContentType string `json:"contentType"`
-	Data        string `json:"data"`    // base64-encoded blob
-	TypeTag     string `json:"typeTag"` // e.g. "property:image-boxart"
+	Extension   *string `json:"extension,omitempty"`
+	ContentType string  `json:"contentType"`
+	Data        string  `json:"data"`    // base64-encoded blob
+	TypeTag     string  `json:"typeTag"` // e.g. "property:image-boxart"
 }
 
 // ScrapingStatusResponse is broadcast as a "media.scraping" notification for
@@ -285,6 +286,7 @@ type ScrapingStatusResponse struct {
 }
 
 type MediaLookupMatch struct {
+	RelPath    *string            `json:"relativePath,omitempty"`
 	System     System             `json:"system"`
 	Name       string             `json:"name"`
 	Path       string             `json:"path"`

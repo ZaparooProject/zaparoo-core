@@ -129,6 +129,7 @@ JSON-RPC methods:
 |---|---|
 | `scrapers` | Lists registered scrapers with ID, name, and supported systems |
 | `media.scrape` | Starts a scraper run as a background operation |
+| `media.scrape.status` | Returns the latest scraper status snapshot |
 | `media.scrape.cancel` | Cancels the active scraper run |
 | `media.meta` | Returns tags and properties for one media row and its title |
 | `media.image` | Returns the best matching image property as base64 data |
@@ -144,7 +145,7 @@ JSON-RPC methods:
 }
 ```
 
-Progress is broadcast as `media.scraping` notifications:
+Progress is queryable with `media.scrape.status` and broadcast as `media.scraping` notifications:
 
 ```json
 {

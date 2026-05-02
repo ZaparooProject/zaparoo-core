@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,10 +63,24 @@ func makeMediaImageEnv(
 
 func makeMediaFullRow(mediaDBID, titleDBID int64) *database.MediaFullRow {
 	return &database.MediaFullRow{
-		Media:  database.Media{DBID: mediaDBID, Path: filepath.Join("games", "test.rom")},
+		Media:  database.Media{DBID: mediaDBID, Path: filepath.Join("games", fmt.Sprintf("test-%d.rom", mediaDBID))},
 		Title:  database.MediaTitle{DBID: titleDBID, Slug: "test-game", Name: "Test Game"},
-		System: database.System{SystemID: "NES", Name: "NES"},
+		System: database.System{DBID: 100, SystemID: "NES", Name: "NES"},
 	}
+}
+
+func expectMediaImageResolve(mockDB *testhelpers.MockMediaDBI, row *database.MediaFullRow) {
+	mockDB.On("FindSystemBySystemID", row.System.SystemID).Return(row.System, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, row.Path).
+		Return(&row.Media, nil)
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, row.DBID).Return(row, nil)
+}
+
+func mediaImageParams(row *database.MediaFullRow, extra string) json.RawMessage {
+	if extra != "" {
+		extra = ", " + extra
+	}
+	return json.RawMessage(fmt.Sprintf(`{"system": %q, "path": %q%s}`, row.System.SystemID, row.Path, extra))
 }
 
 // TestHandleMediaImage_DefaultPrefs_TitleBlobFound verifies that when no imageTypes
@@ -77,8 +92,8 @@ func TestHandleMediaImage_DefaultPrefs_TitleBlobFound(t *testing.T) {
 	mockDB := testhelpers.NewMockMediaDBI()
 	blobData := []byte("fake-png-bytes")
 
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(1)).
-		Return(makeMediaFullRow(1, 10), nil)
+	row := makeMediaFullRow(1, 10)
+	expectMediaImageResolve(mockDB, row)
 	mockDB.On("GetMediaProperties", mock.Anything, int64(1)).
 		Return([]database.MediaProperty{}, nil)
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(10)).
@@ -86,13 +101,15 @@ func TestHandleMediaImage_DefaultPrefs_TitleBlobFound(t *testing.T) {
 			{TypeTag: "property:image-boxart", ContentType: "image/png", Binary: blobData},
 		}, nil)
 
-	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId": 1}`))
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, ""))
 	result, err := HandleMediaImage(env)
 	require.NoError(t, err)
 
 	resp, ok := result.(models.MediaImageResponse)
 	require.True(t, ok)
 	assert.Equal(t, "image/png", resp.ContentType)
+	assert.NotNil(t, resp.Extension)
+	assert.Equal(t, "png", *resp.Extension)
 	assert.Equal(t, "property:image-boxart", resp.TypeTag)
 	assert.Equal(t, base64.StdEncoding.EncodeToString(blobData), resp.Data)
 	mockDB.AssertExpectations(t)
@@ -107,8 +124,8 @@ func TestHandleMediaImage_ExplicitPrefs_MediaLevelPriority(t *testing.T) {
 	mediaBlob := []byte("media-level-screenshot")
 	titleBlob := []byte("title-level-screenshot")
 
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(2)).
-		Return(makeMediaFullRow(2, 20), nil)
+	row := makeMediaFullRow(2, 20)
+	expectMediaImageResolve(mockDB, row)
 	mockDB.On("GetMediaProperties", mock.Anything, int64(2)).
 		Return([]database.MediaProperty{
 			{TypeTag: "property:image-screenshot", ContentType: "image/jpeg", Binary: mediaBlob},
@@ -118,7 +135,7 @@ func TestHandleMediaImage_ExplicitPrefs_MediaLevelPriority(t *testing.T) {
 			{TypeTag: "property:image-screenshot", ContentType: "image/jpeg", Binary: titleBlob},
 		}, nil)
 
-	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId": 2, "imageTypes": ["screenshot"]}`))
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["screenshot"]`))
 	result, err := HandleMediaImage(env)
 	require.NoError(t, err)
 
@@ -140,8 +157,8 @@ func TestHandleMediaImage_BinaryNil_LoadsFromFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(imgPath, fileContents, 0o600))
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(3)).
-		Return(makeMediaFullRow(3, 30), nil)
+	row := makeMediaFullRow(3, 30)
+	expectMediaImageResolve(mockDB, row)
 	mockDB.On("GetMediaProperties", mock.Anything, int64(3)).
 		Return([]database.MediaProperty{}, nil)
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(30)).
@@ -149,7 +166,7 @@ func TestHandleMediaImage_BinaryNil_LoadsFromFile(t *testing.T) {
 			{TypeTag: "property:image-boxart", ContentType: "image/png", Text: imgPath, Binary: nil},
 		}, nil)
 
-	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId": 3, "imageTypes": ["boxart"]}`))
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["boxart"]`))
 	result, err := HandleMediaImage(env)
 	require.NoError(t, err)
 
@@ -169,14 +186,14 @@ func TestHandleMediaImage_NoMatchFound(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(4)).
-		Return(makeMediaFullRow(4, 40), nil)
+	row := makeMediaFullRow(4, 40)
+	expectMediaImageResolve(mockDB, row)
 	mockDB.On("GetMediaProperties", mock.Anything, int64(4)).
 		Return([]database.MediaProperty{}, nil)
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(40)).
 		Return([]database.MediaProperty{}, nil)
 
-	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId": 4}`))
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, ""))
 	_, err := HandleMediaImage(env)
 	require.Error(t, err)
 
@@ -186,15 +203,18 @@ func TestHandleMediaImage_NoMatchFound(t *testing.T) {
 }
 
 // TestHandleMediaImage_MediaNotFound verifies that an error is returned when no
-// media record exists for the given mediaId.
+// media record exists for the given system and path.
 func TestHandleMediaImage_MediaNotFound(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(99)).
-		Return((*database.MediaFullRow)(nil), nil)
+	system := database.System{DBID: 100, SystemID: "NES", Name: "NES"}
+	mediaPath := filepath.Join("games", "missing.rom")
+	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, mediaPath).
+		Return((*database.Media)(nil), nil)
 
-	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId": 99}`))
+	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"system":"NES","path":"games/missing.rom"}`))
 	_, err := HandleMediaImage(env)
 	require.Error(t, err)
 
@@ -211,8 +231,8 @@ func TestHandleMediaImage_ImageTypeResolvesToImageImage(t *testing.T) {
 	mockDB := testhelpers.NewMockMediaDBI()
 	blobData := []byte("generic-image-bytes")
 
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(5)).
-		Return(makeMediaFullRow(5, 50), nil)
+	row := makeMediaFullRow(5, 50)
+	expectMediaImageResolve(mockDB, row)
 	mockDB.On("GetMediaProperties", mock.Anything, int64(5)).
 		Return([]database.MediaProperty{}, nil)
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(50)).
@@ -220,7 +240,7 @@ func TestHandleMediaImage_ImageTypeResolvesToImageImage(t *testing.T) {
 			{TypeTag: "property:image-image", ContentType: "image/png", Binary: blobData},
 		}, nil)
 
-	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId": 5, "imageTypes": ["image"]}`))
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["image"]`))
 	result, err := HandleMediaImage(env)
 	require.NoError(t, err)
 
@@ -243,9 +263,7 @@ func TestHandleMediaImage_FileReadError_DeletesAndContinues(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	row := makeMediaFullRow(6, 60)
-
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(6)).
-		Return(row, nil)
+	expectMediaImageResolve(mockDB, row)
 
 	// Stale title-level property with missing file.
 	staleProp := database.MediaProperty{
@@ -266,7 +284,7 @@ func TestHandleMediaImage_FileReadError_DeletesAndContinues(t *testing.T) {
 	mockDB.On("DeleteMediaTitleProperty", mock.Anything, int64(60), int64(42)).
 		Return(nil)
 
-	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId": 6, "imageTypes": ["boxart"]}`))
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["boxart"]`))
 	_, err := HandleMediaImage(env)
 	require.Error(t, err)
 
@@ -288,8 +306,7 @@ func TestHandleMediaImage_StaleMedia_FallsBackToTitle(t *testing.T) {
 	mockDB := testhelpers.NewMockMediaDBI()
 	row := makeMediaFullRow(8, 80)
 
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(8)).
-		Return(row, nil)
+	expectMediaImageResolve(mockDB, row)
 
 	staleMediaProp := database.MediaProperty{
 		TypeTag:     "property:image-boxart",
@@ -314,7 +331,7 @@ func TestHandleMediaImage_StaleMedia_FallsBackToTitle(t *testing.T) {
 	mockDB.On("DeleteMediaProperty", mock.Anything, int64(8), int64(77)).
 		Return(nil)
 
-	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId": 8, "imageTypes": ["boxart"]}`))
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["boxart"]`))
 	result, err := HandleMediaImage(env)
 	require.NoError(t, err)
 
@@ -341,8 +358,7 @@ func TestHandleMediaImage_FileReadError_FallsBackToNextPref(t *testing.T) {
 	mockDB := testhelpers.NewMockMediaDBI()
 	row := makeMediaFullRow(7, 70)
 
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(7)).
-		Return(row, nil)
+	expectMediaImageResolve(mockDB, row)
 
 	staleProp := database.MediaProperty{
 		TypeTag:     "property:image-boxart",
@@ -369,7 +385,7 @@ func TestHandleMediaImage_FileReadError_FallsBackToNextPref(t *testing.T) {
 	mockDB.On("DeleteMediaTitleProperty", mock.Anything, int64(70), int64(55)).
 		Return(nil)
 
-	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId": 7, "imageTypes": ["boxart", "screenshot"]}`))
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["boxart", "screenshot"]`))
 	result, err := HandleMediaImage(env)
 	require.NoError(t, err)
 

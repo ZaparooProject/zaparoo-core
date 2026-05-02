@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -45,6 +46,17 @@ func makeMediaMetaEnv(t *testing.T, mockMediaDB *testhelpers.MockMediaDBI, param
 	}
 }
 
+func expectMediaMetaResolve(mockDB *testhelpers.MockMediaDBI, row *database.MediaFullRow) {
+	mockDB.On("FindSystemBySystemID", row.System.SystemID).Return(row.System, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, row.Path).
+		Return(&row.Media, nil)
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, row.DBID).Return(row, nil)
+}
+
+func mediaMetaParams(row *database.MediaFullRow) string {
+	return fmt.Sprintf(`{"system": %q, "path": %q}`, row.System.SystemID, row.Path)
+}
+
 func TestHandleMediaMeta_FullResult(t *testing.T) {
 	t.Parallel()
 
@@ -55,9 +67,9 @@ func TestHandleMediaMeta_FullResult(t *testing.T) {
 	row := &database.MediaFullRow{
 		Media:  database.Media{DBID: 1, Path: mediaPath, ParentDir: parentDir},
 		Title:  database.MediaTitle{DBID: 10, Slug: "super-mario-bros", Name: "Super Mario Bros"},
-		System: database.System{SystemID: "NES", Name: "NES"},
+		System: database.System{DBID: 100, SystemID: "NES", Name: "NES"},
 	}
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(1)).Return(row, nil)
+	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).
 		Return([]database.TagInfo{{Tag: "genre:platformer", Type: "genre"}}, nil)
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
@@ -69,13 +81,12 @@ func TestHandleMediaMeta_FullResult(t *testing.T) {
 			{TypeTag: "property:description", Text: "A classic platformer"},
 		}, nil)
 
-	env := makeMediaMetaEnv(t, mockDB, `{"mediaId": 1}`)
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	result, err := HandleMediaMeta(env)
 	require.NoError(t, err)
 
 	resp, ok := result.(models.MediaMetaResponse)
 	require.True(t, ok)
-	assert.Equal(t, int64(1), resp.Media.ID)
 	assert.Equal(t, mediaPath, resp.Media.Path)
 	assert.Equal(t, parentDir, resp.Media.ParentDir)
 	assert.Equal(t, "NES", resp.Media.Title.System.ID)
@@ -103,15 +114,15 @@ func TestHandleMediaMeta_SecondarySlug(t *testing.T) {
 			SecondarySlug: sql.NullString{String: "zelda", Valid: true},
 			Name:          "The Legend of Zelda",
 		},
-		System: database.System{SystemID: "SNES", Name: "SNES"},
+		System: database.System{DBID: 200, SystemID: "SNES", Name: "SNES"},
 	}
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(2)).Return(row, nil)
+	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(2)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(20)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaProperties", mock.Anything, int64(2)).Return([]database.MediaProperty{}, nil)
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(20)).Return([]database.MediaProperty{}, nil)
 
-	env := makeMediaMetaEnv(t, mockDB, `{"mediaId": 2}`)
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	result, err := HandleMediaMeta(env)
 	require.NoError(t, err)
 
@@ -129,7 +140,7 @@ func TestHandleMediaMeta_BinaryPropertyBase64Encoded(t *testing.T) {
 	blobData := []byte{0x89, 0x50, 0x4E, 0x47} // PNG magic bytes
 
 	row := makeMediaFullRow(3, 30)
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(3)).Return(row, nil)
+	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(3)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(30)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaProperties", mock.Anything, int64(3)).
@@ -138,7 +149,7 @@ func TestHandleMediaMeta_BinaryPropertyBase64Encoded(t *testing.T) {
 		}, nil)
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(30)).Return([]database.MediaProperty{}, nil)
 
-	env := makeMediaMetaEnv(t, mockDB, `{"mediaId": 3}`)
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	result, err := HandleMediaMeta(env)
 	require.NoError(t, err)
 
@@ -149,6 +160,8 @@ func TestHandleMediaMeta_BinaryPropertyBase64Encoded(t *testing.T) {
 	require.NotNil(t, prop.Data)
 	assert.Equal(t, base64.StdEncoding.EncodeToString(blobData), *prop.Data)
 	assert.Equal(t, "image/png", prop.ContentType)
+	assert.NotNil(t, prop.Extension)
+	assert.Equal(t, "png", *prop.Extension)
 	mockDB.AssertExpectations(t)
 }
 
@@ -156,10 +169,13 @@ func TestHandleMediaMeta_MediaNotFound(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(99)).
-		Return((*database.MediaFullRow)(nil), nil)
+	system := database.System{DBID: 100, SystemID: "NES", Name: "NES"}
+	mediaPath := filepath.Join("games", "missing.rom")
+	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, mediaPath).
+		Return((*database.Media)(nil), nil)
 
-	env := makeMediaMetaEnv(t, mockDB, `{"mediaId": 99}`)
+	env := makeMediaMetaEnv(t, mockDB, `{"system":"NES","path":"games/missing.rom"}`)
 	_, err := HandleMediaMeta(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "media not found")
@@ -170,7 +186,7 @@ func TestHandleMediaMeta_InvalidParams(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	// mediaId is required and must be > 0
+	// system and path are required.
 	env := makeMediaMetaEnv(t, mockDB, `{}`)
 	_, err := HandleMediaMeta(env)
 	require.Error(t, err)
@@ -180,10 +196,14 @@ func TestHandleMediaMeta_DBError(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(1)).
+	row := makeMediaFullRow(1, 10)
+	mockDB.On("FindSystemBySystemID", row.System.SystemID).Return(row.System, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, row.Path).
+		Return(&row.Media, nil)
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, row.DBID).
 		Return((*database.MediaFullRow)(nil), errors.New("connection reset"))
 
-	env := makeMediaMetaEnv(t, mockDB, `{"mediaId": 1}`)
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	_, err := HandleMediaMeta(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get media")
@@ -195,11 +215,11 @@ func TestHandleMediaMeta_TagsDBError(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	row := makeMediaFullRow(1, 10)
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(1)).Return(row, nil)
+	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).
 		Return([]database.TagInfo{}, errors.New("tags query failed"))
 
-	env := makeMediaMetaEnv(t, mockDB, `{"mediaId": 1}`)
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	_, err := HandleMediaMeta(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get media tags")
@@ -211,12 +231,12 @@ func TestHandleMediaMeta_TitleTagsDBError(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	row := makeMediaFullRow(1, 10)
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(1)).Return(row, nil)
+	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
 		Return([]database.TagInfo{}, errors.New("title tags query failed"))
 
-	env := makeMediaMetaEnv(t, mockDB, `{"mediaId": 1}`)
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	_, err := HandleMediaMeta(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get title tags")
@@ -228,13 +248,13 @@ func TestHandleMediaMeta_MediaPropertiesDBError(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	row := makeMediaFullRow(1, 10)
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(1)).Return(row, nil)
+	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaProperties", mock.Anything, int64(1)).
 		Return([]database.MediaProperty{}, errors.New("media properties query failed"))
 
-	env := makeMediaMetaEnv(t, mockDB, `{"mediaId": 1}`)
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	_, err := HandleMediaMeta(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get media properties")
@@ -246,14 +266,14 @@ func TestHandleMediaMeta_TitlePropertiesDBError(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	row := makeMediaFullRow(1, 10)
-	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, int64(1)).Return(row, nil)
+	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaProperties", mock.Anything, int64(1)).Return([]database.MediaProperty{}, nil)
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(10)).
 		Return([]database.MediaProperty{}, errors.New("title properties query failed"))
 
-	env := makeMediaMetaEnv(t, mockDB, `{"mediaId": 1}`)
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	_, err := HandleMediaMeta(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get title properties")

@@ -687,15 +687,19 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 		zapScript := result.ZapScript()
 
-		resultPath := result.Path
+		var relPath *string
 		if env.LauncherCache != nil {
-			resultPath = env.LauncherCache.ToRelativePath(rootDirs, result.SystemID, resultPath)
+			rel := env.LauncherCache.ToRelativePath(rootDirs, result.SystemID, result.Path)
+			if rel != result.Path {
+				relPath = &rel
+			}
 		}
 
 		results = append(results, models.SearchResultMedia{
+			RelPath:   relPath,
 			System:    resultSystem,
 			Name:      result.Name,
-			Path:      resultPath,
+			Path:      result.Path,
 			ZapScript: zapScript,
 			Tags:      result.Tags,
 		})

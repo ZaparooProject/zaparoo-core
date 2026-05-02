@@ -239,6 +239,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaImage:          methods.HandleMediaImage,
 		models.MethodScrapers:            methods.HandleScrapers,
 		models.MethodMediaScrape:         methods.HandleMediaScrape,
+		models.MethodMediaScrapeStatus:   methods.HandleMediaScrapeStatus,
 		models.MethodMediaScrapeCancel:   methods.HandleMediaScrapeCancel,
 		models.MethodMediaControl:        methods.HandleMediaControl,
 		// settings

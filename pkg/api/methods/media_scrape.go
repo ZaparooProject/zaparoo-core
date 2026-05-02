@@ -38,6 +38,7 @@ import (
 type scrapingStatus struct {
 	cancelFunc context.CancelFunc
 	scraperID  string
+	latest     models.ScrapingStatusResponse
 	mu         syncutil.RWMutex
 	running    bool
 }
@@ -50,6 +51,10 @@ func (s *scrapingStatus) startIfNotRunning(scraperID string) bool {
 	}
 	s.running = true
 	s.scraperID = scraperID
+	s.latest = models.ScrapingStatusResponse{
+		ScraperID: scraperID,
+		Scraping:  true,
+	}
 	return true
 }
 
@@ -59,6 +64,7 @@ func (s *scrapingStatus) clear() {
 	s.running = false
 	s.scraperID = ""
 	s.cancelFunc = nil
+	s.latest = models.ScrapingStatusResponse{}
 }
 
 // clearIfOwner clears state only when the caller's scraperID matches the stored one.
@@ -75,6 +81,18 @@ func (s *scrapingStatus) clearIfOwner(scraperID string) {
 	s.cancelFunc = nil
 }
 
+func (s *scrapingStatus) setLatest(status models.ScrapingStatusResponse) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.latest = status
+}
+
+func (s *scrapingStatus) getLatest() models.ScrapingStatusResponse {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.latest
+}
+
 func (s *scrapingStatus) setCancelFunc(cancelFunc context.CancelFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -86,6 +104,8 @@ func (s *scrapingStatus) cancel() bool {
 	defer s.mu.Unlock()
 	if s.cancelFunc != nil && s.running {
 		s.cancelFunc()
+		s.latest.Scraping = false
+		s.latest.Done = true
 		// Do NOT clear running/scraperID here. The goroutine's deferred
 		// clearIfOwner call is the single writer for those fields, preventing
 		// a new scrape from starting only to have its state cleared by the
@@ -99,6 +119,11 @@ func (s *scrapingStatus) isRunning() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.running
+}
+
+func publishScrapingStatus(ns chan<- models.Notification, status models.ScrapingStatusResponse) {
+	scrapingStatusInstance.setLatest(status)
+	notifications.MediaScraping(ns, status)
 }
 
 var scrapingStatusInstance = &scrapingStatus{}
@@ -149,7 +174,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	ns := env.State.Notifications
 	db := env.Database
 
-	notifications.MediaScraping(ns, models.ScrapingStatusResponse{
+	publishScrapingStatus(ns, models.ScrapingStatusResponse{
 		ScraperID: params.ScraperID,
 		Scraping:  true,
 	})
@@ -166,7 +191,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			if update.Done {
 				receivedDone = true
 			}
-			notifications.MediaScraping(ns, models.ScrapingStatusResponse{
+			publishScrapingStatus(ns, models.ScrapingStatusResponse{
 				ScraperID: scraperID,
 				SystemID:  update.SystemID,
 				Processed: update.Processed,
@@ -183,16 +208,32 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		// Otherwise the channel already delivered the final counters and sending
 		// another zeroed-out Done would overwrite them for consumers.
 		if !receivedDone {
-			notifications.MediaScraping(ns, models.ScrapingStatusResponse{
-				ScraperID: scraperID,
-				Scraping:  false,
-				Done:      true,
+			status := scrapingStatusInstance.getLatest()
+			status.ScraperID = scraperID
+			status.Scraping = false
+			status.Done = true
+			publishScrapingStatus(ns, models.ScrapingStatusResponse{
+				ScraperID: status.ScraperID,
+				SystemID:  status.SystemID,
+				Processed: status.Processed,
+				Total:     status.Total,
+				Matched:   status.Matched,
+				Skipped:   status.Skipped,
+				Scraping:  status.Scraping,
+				Done:      status.Done,
 			})
 		}
 		log.Info().Str("scraper", scraperID).Msg("scraper run complete")
 	}()
 
 	return nil, nil //nolint:nilnil // API handler returns nil result and nil error for async start
+}
+
+// HandleMediaScrapeStatus returns the latest known media.scrape status snapshot.
+//
+//nolint:gocritic // API handler signature; large env param cannot be passed by pointer
+func HandleMediaScrapeStatus(_ requests.RequestEnv) (any, error) {
+	return scrapingStatusInstance.getLatest(), nil
 }
 
 // HandleMediaScrapeCancel cancels the currently running media.scrape operation.

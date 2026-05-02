@@ -41,12 +41,9 @@ func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	ctx := env.Context
 	db := env.Database.MediaDB
 
-	row, err := db.GetMediaWithTitleAndSystem(ctx, params.MediaID)
+	row, err := resolveMediaBySystemAndPath(&env, params.System, params.Path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get media: %w", err)
-	}
-	if row == nil {
-		return nil, models.ClientErrf("media not found: %d", params.MediaID)
+		return nil, err
 	}
 
 	mediaTags, err := db.GetMediaTagsByMediaDBID(ctx, row.DBID)
@@ -76,14 +73,12 @@ func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 
 	return models.MediaMetaResponse{
 		Media: models.MediaMetaMediaResponse{
-			ID:         row.DBID,
 			Path:       row.Path,
 			ParentDir:  row.ParentDir,
 			IsMissing:  row.IsMissing,
 			Tags:       mediaTags,
 			Properties: mapMediaProperties(mediaProps),
 			Title: models.MediaMetaTitleResponse{
-				ID:            row.Title.DBID,
 				Slug:          row.Title.Slug,
 				SecondarySlug: secondarySlug,
 				Name:          row.Title.Name,
@@ -109,6 +104,7 @@ func mapMediaProperties(props []database.MediaProperty) map[string]models.MediaM
 		item := models.MediaMetaPropertyItem{
 			Text:        p.Text,
 			ContentType: p.ContentType,
+			Extension:   mediaContentExtension(p.ContentType, p.Text),
 		}
 		if len(p.Binary) > 0 {
 			encoded := base64.StdEncoding.EncodeToString(p.Binary)

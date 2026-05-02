@@ -220,7 +220,58 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()
 	}, 2*time.Second, 10*time.Millisecond, "scraping status should clear after goroutine completes")
+
+	statusResult, err := HandleMediaScrapeStatus(requests.RequestEnv{Context: context.Background()})
+	require.NoError(t, err)
+	status, ok := statusResult.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.Equal(t, "test-scraper", status.ScraperID)
+	assert.False(t, status.Scraping)
+	assert.True(t, status.Done)
+
 	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaScrapeStatus_NoRun(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	result, err := HandleMediaScrapeStatus(requests.RequestEnv{Context: context.Background()})
+	require.NoError(t, err)
+	status, ok := result.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.Empty(t, status.ScraperID)
+	assert.False(t, status.Scraping)
+	assert.False(t, status.Done)
+}
+
+func TestHandleMediaScrapeStatus_TracksLatestProgress(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	publishScrapingStatus(make(chan models.Notification, 1), models.ScrapingStatusResponse{
+		ScraperID: "test-scraper",
+		SystemID:  "SNES",
+		Processed: 42,
+		Total:     100,
+		Matched:   38,
+		Skipped:   4,
+		Scraping:  true,
+	})
+
+	result, err := HandleMediaScrapeStatus(requests.RequestEnv{Context: context.Background()})
+	require.NoError(t, err)
+	status, ok := result.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.Equal(t, models.ScrapingStatusResponse{
+		ScraperID: "test-scraper",
+		SystemID:  "SNES",
+		Processed: 42,
+		Total:     100,
+		Matched:   38,
+		Skipped:   4,
+		Scraping:  true,
+	}, status)
 }
 
 // TestHandleMediaScrape_ScraperInitError verifies that when the scraper's
@@ -299,4 +350,11 @@ func TestHandleMediaScrapeCancel_CancelsActive(t *testing.T) {
 	resp, ok := result.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "scraping cancelled", resp["message"])
+
+	statusResult, err := HandleMediaScrapeStatus(requests.RequestEnv{Context: context.Background()})
+	require.NoError(t, err)
+	status, ok := statusResult.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.False(t, status.Scraping)
+	assert.True(t, status.Done)
 }

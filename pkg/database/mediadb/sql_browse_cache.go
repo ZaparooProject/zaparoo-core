@@ -42,15 +42,6 @@ type browseV2Dir struct {
 	isVirtual bool
 }
 
-type browseV2Entry struct {
-	name        string
-	nameChar    string
-	fileName    string
-	mediaDBID   int64
-	systemDBID  int64
-	parentDirID int64
-}
-
 type browseV2CountKey struct {
 	parentDirID int64
 	childDirID  int64
@@ -60,8 +51,8 @@ type browseV2CountKey struct {
 type browseV2Builder struct {
 	dirs      map[string]*browseV2Dir
 	counts    map[browseV2CountKey]int
-	entries   []browseV2Entry
 	nextDirID int64
+	mediaRows int
 }
 
 func newBrowseV2Builder() *browseV2Builder {
@@ -93,14 +84,11 @@ func sqlPopulateBrowseCache(ctx context.Context, db *sql.DB) error {
 	log.Debug().
 		Dur("duration", time.Since(readStarted)).
 		Int("dirs", len(builder.dirs)).
-		Int("entries", len(builder.entries)).
+		Int("media", builder.mediaRows).
 		Int("counts", len(builder.counts)).
 		Msg("browse v2 media scan complete")
 
 	deleteStarted := time.Now()
-	if err := dropBrowseV2EntryIndexes(ctx, tx); err != nil {
-		return err
-	}
 	for _, stmt := range []string{
 		"DELETE FROM BrowseDirCounts",
 		"DELETE FROM BrowseEntries",
@@ -115,12 +103,10 @@ func sqlPopulateBrowseCache(ctx context.Context, db *sql.DB) error {
 	if err := insertBrowseV2Dirs(ctx, tx, builder.dirs); err != nil {
 		return err
 	}
-	if err := insertBrowseV2Entries(ctx, tx, builder.entries); err != nil {
-		return err
-	}
-	if err := createBrowseV2EntryIndexes(ctx, tx); err != nil {
-		return err
-	}
+	// TODO: Revisit whether BrowseEntries should be populated again. It speeds up
+	// file-page browsing, but duplicating every media row made background
+	// optimization take minutes on large MiSTer libraries. File browsing currently
+	// uses the indexed Media fallback while this cache keeps directory/count data.
 	if err := insertBrowseV2Counts(ctx, tx, builder.counts); err != nil {
 		return err
 	}
@@ -141,7 +127,7 @@ func sqlPopulateBrowseCache(ctx context.Context, db *sql.DB) error {
 
 	log.Info().
 		Int("dirs", len(builder.dirs)).
-		Int("entries", len(builder.entries)).
+		Int("media", builder.mediaRows).
 		Int("counts", len(builder.counts)).
 		Dur("duration", time.Since(started)).
 		Msg("browse v2 populated")
@@ -174,18 +160,9 @@ func scanBrowseV2Media(ctx context.Context, tx *sql.Tx, builder *browseV2Builder
 	return nil
 }
 
-func (b *browseV2Builder) addMedia(mediaDBID, systemDBID int64, mediaPath, title string) {
+func (b *browseV2Builder) addMedia(_, systemDBID int64, mediaPath, _ string) {
+	b.mediaRows++
 	mediaPath = browseV2NormalizePath(mediaPath)
-	parentPath, fileName := browseV2ParentAndFileName(mediaPath)
-	parent := b.ensureDir(parentPath)
-	b.entries = append(b.entries, browseV2Entry{
-		mediaDBID:   mediaDBID,
-		systemDBID:  systemDBID,
-		parentDirID: parent.id,
-		name:        title,
-		nameChar:    BrowseNameFirstChar(title),
-		fileName:    fileName,
-	})
 
 	for _, pair := range b.countPairsForPath(mediaPath) {
 		key := browseV2CountKey{
@@ -348,79 +325,6 @@ func insertBrowseV2Dirs(ctx context.Context, tx *sql.Tx, dirs map[string]*browse
 		}
 	}
 	log.Debug().Dur("duration", time.Since(started)).Int("entries", len(dirs)).Msg("browse v2 dirs inserted")
-	return nil
-}
-
-func insertBrowseV2Entries(ctx context.Context, tx *sql.Tx, entries []browseV2Entry) error {
-	started := time.Now()
-	const chunkSize = 100
-	for start := 0; start < len(entries); start += chunkSize {
-		end := start + chunkSize
-		if end > len(entries) {
-			end = len(entries)
-		}
-		if err := insertBrowseV2EntryChunk(ctx, tx, entries[start:end]); err != nil {
-			return err
-		}
-	}
-	log.Debug().Dur("duration", time.Since(started)).Int("entries", len(entries)).Msg("browse v2 entries inserted")
-	return nil
-}
-
-func dropBrowseV2EntryIndexes(ctx context.Context, tx *sql.Tx) error {
-	started := time.Now()
-	for _, stmt := range []string{
-		"DROP INDEX IF EXISTS idx_browseentries_parent_system_name",
-		"DROP INDEX IF EXISTS idx_browseentries_parent_system_file",
-	} {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("browse v2: failed to drop entry index: %w", err)
-		}
-	}
-	log.Debug().Dur("duration", time.Since(started)).Msg("browse v2 entry indexes dropped")
-	return nil
-}
-
-func createBrowseV2EntryIndexes(ctx context.Context, tx *sql.Tx) error {
-	started := time.Now()
-	for _, stmt := range []string{
-		`CREATE INDEX IF NOT EXISTS idx_browseentries_parent_system_name
-			ON BrowseEntries(ParentDirDBID, SystemDBID, Name, MediaDBID)`,
-		`CREATE INDEX IF NOT EXISTS idx_browseentries_parent_system_file
-			ON BrowseEntries(ParentDirDBID, SystemDBID, FileName, MediaDBID)`,
-	} {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("browse v2: failed to create entry index: %w", err)
-		}
-	}
-	log.Debug().Dur("duration", time.Since(started)).Msg("browse v2 entry indexes created")
-	return nil
-}
-
-func insertBrowseV2EntryChunk(ctx context.Context, tx *sql.Tx, entries []browseV2Entry) error {
-	if len(entries) == 0 {
-		return nil
-	}
-	placeholders := make([]string, len(entries))
-	args := make([]any, 0, len(entries)*6)
-	for i, entry := range entries {
-		placeholders[i] = "(?, ?, ?, ?, ?, ?)"
-		args = append(args,
-			entry.parentDirID,
-			entry.mediaDBID,
-			entry.systemDBID,
-			entry.name,
-			entry.nameChar,
-			entry.fileName,
-		)
-	}
-	//nolint:gosec // The dynamic SQL only expands internally generated value placeholders.
-	query := `INSERT INTO BrowseEntries
-		(ParentDirDBID, MediaDBID, SystemDBID, Name, NameFirstChar, FileName)
-		VALUES ` + strings.Join(placeholders, ",")
-	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-		return fmt.Errorf("browse v2: failed to insert entry chunk: %w", err)
-	}
 	return nil
 }
 
