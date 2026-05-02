@@ -1030,7 +1030,7 @@ func TestHandleMediaSearch_RelativePaths(t *testing.T) {
 
 	rootDir := filepath.Join(string(filepath.Separator), "mock", "roms")
 	mediaPath := filepath.Join(rootDir, "NES", "mario.nes")
-	relPath := filepath.Join("NES", "mario.nes")
+	relPath := filepath.ToSlash(filepath.Join("NES", "mario.nes"))
 
 	// LauncherCache with NES launcher folder matching the mock rootDir.
 	launcherCache := &phelpers.LauncherCache{}
