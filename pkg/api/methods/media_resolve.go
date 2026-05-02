@@ -119,7 +119,7 @@ func resolveRelativeMediaPath(
 	}
 }
 
-func relativeMediaPathRemainder(systemID string, mediaPath string) (string, bool) {
+func relativeMediaPathRemainder(systemID, mediaPath string) (string, bool) {
 	cleaned := filepath.ToSlash(filepath.Clean(mediaPath))
 	parts := strings.SplitN(cleaned, "/", 2)
 	if len(parts) != 2 || !strings.EqualFold(parts[0], systemID) {
@@ -128,7 +128,7 @@ func relativeMediaPathRemainder(systemID string, mediaPath string) (string, bool
 	return parts[1], true
 }
 
-func relativeMediaPathCandidates(env *requests.RequestEnv, systemID string, remainder string) []string {
+func relativeMediaPathCandidates(env *requests.RequestEnv, systemID, remainder string) []string {
 	launchers := env.LauncherCache.GetLaunchersBySystem(systemID)
 	if len(launchers) == 0 {
 		return nil

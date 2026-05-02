@@ -138,7 +138,8 @@ func logSafeResponse(result any) {
 			Msg("sending response")
 	case models.MediaMetaResponse:
 		log.Debug().
-			Int64("media_id", resp.Media.ID).
+			Str("system", resp.Media.Title.System.ID).
+			Str("path", resp.Media.Path).
 			Int("media_properties", len(resp.Media.Properties)).
 			Int("title_properties", len(resp.Media.Title.Properties)).
 			Msg("sending response")

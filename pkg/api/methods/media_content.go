@@ -36,7 +36,7 @@ var contentTypeExtensions = map[string]string{
 	"image/webp":    "webp",
 }
 
-func mediaContentExtension(contentType string, text string) *string {
+func mediaContentExtension(contentType, text string) *string {
 	if ext := extensionFromContentType(contentType); ext != "" {
 		return &ext
 	}

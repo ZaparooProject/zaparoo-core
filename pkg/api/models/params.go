@@ -184,9 +184,9 @@ type MediaMetaParams struct {
 }
 
 type MediaImageParams struct {
-	ImageTypes []string `json:"imageTypes"        validate:"omitempty,dive,min=1"`
 	System     string   `json:"system"            validate:"required,min=1"`
 	Path       string   `json:"path"              validate:"required,min=1"`
+	ImageTypes []string `json:"imageTypes"        validate:"omitempty,dive,min=1"`
 }
 
 type MediaScrapeParams struct {
