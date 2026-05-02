@@ -22,6 +22,7 @@ package api
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +47,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -125,6 +130,19 @@ func logSafeResponse(result any) {
 				strconv.Itoa(len(resp.Data)-100) + " more chars]"
 		}
 		log.Debug().Interface("result", truncated).Msg("sending response")
+	case models.MediaImageResponse:
+		log.Debug().
+			Str("typeTag", resp.TypeTag).
+			Str("contentType", resp.ContentType).
+			Int("data_len", len(resp.Data)).
+			Msg("sending response")
+	case models.MediaMetaResponse:
+		log.Debug().
+			Str("system", resp.Media.Title.System.ID).
+			Str("path", resp.Media.Path).
+			Int("media_properties", len(resp.Media.Properties)).
+			Int("title_properties", len(resp.Media.Title.Properties)).
+			Msg("sending response")
 	default:
 		log.Debug().Interface("result", result).Msg("sending response")
 	}
@@ -214,9 +232,17 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaTags:           methods.HandleMediaTags,
 		models.MethodMediaActive:         methods.HandleActiveMedia,
 		models.MethodMediaActiveUpdate:   methods.HandleUpdateActiveMedia,
+		models.MethodMediaCleanOrphans:   methods.HandleMediaCleanOrphans,
 		models.MethodMediaHistory:        methods.HandleMediaHistory,
 		models.MethodMediaHistoryTop:     methods.HandleMediaHistoryTop,
 		models.MethodMediaLookup:         methods.HandleMediaLookup,
+		models.MethodMediaMeta:           methods.HandleMediaMeta,
+		models.MethodMediaImage:          methods.HandleMediaImage,
+		models.MethodScrapers:            methods.HandleScrapers,
+		models.MethodMediaScrape:         methods.HandleMediaScrape,
+		models.MethodMediaScrapeStatus:   methods.HandleMediaScrapeStatus,
+		models.MethodMediaScrapeCancel:   methods.HandleMediaScrapeCancel,
+		models.MethodMediaScrapeResume:   methods.HandleMediaScrapeResume,
 		models.MethodMediaControl:        methods.HandleMediaControl,
 		// settings
 		models.MethodSettings:             methods.HandleSettings,
@@ -845,8 +871,10 @@ func handleWSMessage(
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
+	scrapePauser *syncutil.Pauser,
 	encGateway *apimiddleware.EncryptionGateway,
 	lastSeenTracker *apimiddleware.LastSeenTracker,
+	scrapers map[string]scraper.Scraper,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
 		defer func() {
@@ -931,7 +959,9 @@ func handleWSMessage(
 			Player:        player,
 			TokenQueue:    inTokenQueue,
 			ConfirmQueue:  confirmQueue,
+			Scrapers:      scrapers,
 			IndexPauser:   indexPauser,
+			ScrapePauser:  scrapePauser,
 			IsLocal:       isLocal,
 			ClientID:      session.Request.RemoteAddr,
 		}
@@ -1141,6 +1171,8 @@ func handlePostRequest(
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
+	scrapePauser *syncutil.Pauser,
+	scrapers map[string]scraper.Scraper,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -1186,7 +1218,9 @@ func handlePostRequest(
 			Player:        player,
 			TokenQueue:    inTokenQueue,
 			ConfirmQueue:  confirmQueue,
+			Scrapers:      scrapers,
 			IndexPauser:   indexPauser,
+			ScrapePauser:  scrapePauser,
 			IsLocal:       apimiddleware.IsLoopbackAddr(r.RemoteAddr),
 			ClientID:      r.RemoteAddr,
 		}
@@ -1240,6 +1274,79 @@ func handlePostRequest(
 	}
 }
 
+// makeSystemResolver builds a SystemResolver for the gamelist.xml scraper.
+// It resolves indexed system IDs to ScrapeSystem values using the same launcher
+// path discovery as media indexing, so scraper paths match scanned media paths.
+func makeSystemResolver(
+	mdb database.MediaDBI,
+	platform platforms.Platform,
+	cfg *config.Instance,
+) gamelistxml.SystemResolver {
+	return func(ctx context.Context, systemIDs []string) ([]scraper.ScrapeSystem, error) {
+		indexed, err := mdb.IndexedSystems()
+		if err != nil {
+			return nil, fmt.Errorf("makeSystemResolver: list indexed systems: %w", err)
+		}
+
+		// Build a set of IDs to resolve: caller's filter or all indexed.
+		want := make(map[string]struct{}, len(indexed))
+		if len(systemIDs) == 0 {
+			for _, id := range indexed {
+				want[id] = struct{}{}
+			}
+		} else {
+			indexedSet := make(map[string]struct{}, len(indexed))
+			for _, id := range indexed {
+				indexedSet[id] = struct{}{}
+			}
+			for _, id := range systemIDs {
+				if _, ok := indexedSet[id]; ok {
+					want[id] = struct{}{}
+				}
+			}
+		}
+
+		dbSystems := make(map[string]database.System, len(want))
+		systems := make([]systemdefs.System, 0, len(want))
+		for sysID := range want {
+			sys, err := mdb.FindSystemBySystemID(sysID)
+			if err != nil {
+				return nil, fmt.Errorf("makeSystemResolver: look up system %q: %w", sysID, err)
+			}
+
+			systemDef, err := systemdefs.GetSystem(sysID)
+			if err != nil {
+				log.Debug().Err(err).Str("system", sysID).Msg("makeSystemResolver: unknown system definition, skipping")
+				continue
+			}
+
+			dbSystems[sysID] = sys
+			systems = append(systems, *systemDef)
+		}
+
+		pathsBySystem := make(map[string][]string, len(systems))
+		for _, pathResult := range mediascanner.GetSystemPaths(ctx, cfg, platform, platform.RootDirs(cfg), systems) {
+			pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
+		}
+
+		result := make([]scraper.ScrapeSystem, 0, len(systems))
+		for _, system := range systems {
+			romPaths := pathsBySystem[system.ID]
+			if len(romPaths) == 0 {
+				log.Debug().Str("system", system.ID).Msg("makeSystemResolver: no launcher paths found, skipping")
+				continue
+			}
+
+			result = append(result, scraper.ScrapeSystem{
+				DBID:     dbSystems[system.ID].DBID,
+				ID:       system.ID,
+				ROMPaths: romPaths,
+			})
+		}
+		return result, nil
+	}
+}
+
 // Start starts the API web server and blocks until it shuts down.
 func Start(
 	platform platforms.Platform,
@@ -1253,10 +1360,11 @@ func Start(
 	mdnsHostname string,
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
+	scrapePauser *syncutil.Pauser,
 ) error {
 	return StartWithReady(
 		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager,
-		notifBroker, mdnsHostname, player, indexPauser, nil,
+		notifBroker, mdnsHostname, player, indexPauser, scrapePauser, nil,
 	)
 }
 
@@ -1275,6 +1383,7 @@ func StartWithReady(
 	mdnsHostname string,
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
+	scrapePauser *syncutil.Pauser,
 	ready chan<- error,
 ) error {
 	notifyReady := func(err error) {
@@ -1510,6 +1619,15 @@ func StartWithReady(
 		})
 	})
 
+	// Build the scrapers map once; passed into RequestEnv for media.scrape.
+	gamelistScraper := gamelistxml.NewGamelistXMLScraper(
+		db.MediaDB,
+		makeSystemResolver(db.MediaDB, platform, cfg),
+	)
+	scrapers := map[string]scraper.Scraper{
+		gamelistScraper.ID(): gamelistScraper,
+	}
+
 	// Non-WebSocket API routes (HTTP POST + REST GET) — restricted to
 	// localhost by default; remote access requires explicit AllowedIPs.
 	// These transports do not support encryption; the IP allowlist plus
@@ -1525,7 +1643,7 @@ func StartWithReady(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
 			db, limitsManager, player,
-			indexPauser,
+			indexPauser, scrapePauser, scrapers,
 		)
 		r.Post("/api", postHandler)
 		r.Post("/api/v0", postHandler)
@@ -1566,8 +1684,8 @@ func StartWithReady(
 		rateLimiter,
 		handleWSMessage(
 			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
-			db, limitsManager, player, indexPauser, encGateway,
-			lastSeenTracker,
+			db, limitsManager, player, indexPauser, scrapePauser, encGateway,
+			lastSeenTracker, scrapers,
 		),
 	))
 
