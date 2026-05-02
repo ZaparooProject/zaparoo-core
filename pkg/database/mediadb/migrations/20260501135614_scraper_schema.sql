@@ -12,7 +12,7 @@ UPDATE TagTypes SET IsExclusive = 1 WHERE Type IN (
     'extension',
     'media', 'arcadeboard',
     'season', 'episode', 'track', 'volume', 'issue',
-    'unfinished', 'copyright'
+    'unfinished', 'copyright', 'gamefamily'
 );
 
 -- Content-addressed blob store for binary media properties. Hash is the

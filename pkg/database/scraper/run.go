@@ -152,6 +152,17 @@ func RunScraper[T any](
 				var err error
 				scrapedMediaIDs, err = db.GetScrapedMediaIDs(ctx, s.ID(), system.DBID)
 				if err != nil {
+					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+						ch <- ScrapeUpdate{
+							SystemID:  system.ID,
+							Total:     totalRecords,
+							Done:      true,
+							Processed: totalProcessed,
+							Matched:   totalMatched,
+							Skipped:   totalSkipped,
+						}
+						return
+					}
 					ch <- ScrapeUpdate{
 						SystemID:  system.ID,
 						Total:     totalRecords,

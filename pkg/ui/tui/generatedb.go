@@ -302,6 +302,16 @@ func pruneSelectedScrapeSystems(selected []string, systems []SystemItem) []strin
 	return pruned
 }
 
+func formatScrapeSystemsLabel(selected []string, systems []SystemItem) string {
+	if len(systems) == 0 {
+		return "No supported systems"
+	}
+	if len(selected) > 0 {
+		return strings.Join(selected, ", ")
+	}
+	return "All systems"
+}
+
 func formatScrapeMenuLabel(status *models.ScrapingStatusResponse) string {
 	if status.Scraping {
 		if status.Paused {
@@ -688,10 +698,7 @@ func BuildGenerateDBPage(
 		for i, scraper := range scrapeState.scrapers {
 			scraperNames[i] = scraper.Name
 		}
-		systemsLabel := "All systems"
-		if len(scrapeState.selected) > 0 {
-			systemsLabel = strings.Join(scrapeState.selected, ", ")
-		}
+		systemsLabel := formatScrapeSystemsLabel(scrapeState.selected, scrapeState.systems)
 
 		scrapeSetupList.AddCycle(
 			"Scraper",
@@ -701,43 +708,51 @@ func BuildGenerateDBPage(
 			func(_ string, _ int) {
 				refreshScrapeSetup()
 			})
-		scrapeSetupList.AddNavAction(
-			"Systems: "+systemsLabel,
-			"Choose systems to scrape",
-			func() {
-				selector := NewSystemSelector(&SystemSelectorConfig{
-					Systems:  scrapeState.systems,
-					Selected: scrapeState.selected,
-					Mode:     SystemSelectorMulti,
-					OnMulti: func(selected []string) {
-						scrapeState.selected = selected
-					},
+		if len(scrapeState.systems) == 0 {
+			scrapeSetupList.AddAction("Systems: "+systemsLabel, "No supported systems", func() {})
+		} else {
+			scrapeSetupList.AddNavAction(
+				"Systems: "+systemsLabel,
+				"Choose systems to scrape",
+				func() {
+					selector := NewSystemSelector(&SystemSelectorConfig{
+						Systems:  scrapeState.systems,
+						Selected: scrapeState.selected,
+						Mode:     SystemSelectorMulti,
+						OnMulti: func(selected []string) {
+							scrapeState.selected = selected
+						},
+					})
+					selector.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+						if event.Key() == tcell.KeyEscape {
+							refreshScrapeSetup()
+							statePages.RemovePage(mediaManageSystemsPage)
+							statePages.SwitchToPage(mediaManageSetupPage)
+							app.SetFocus(scrapeSetupList.List)
+							return nil
+						}
+						return event
+					})
+					statePages.RemovePage(mediaManageSystemsPage)
+					statePages.AddPage(mediaManageSystemsPage, selector, true, true)
+					frame.SetHelpText("Space selects systems, Esc returns")
+					app.SetFocus(selector)
 				})
-				selector.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-					if event.Key() == tcell.KeyEscape {
-						refreshScrapeSetup()
-						statePages.RemovePage(mediaManageSystemsPage)
-						statePages.SwitchToPage(mediaManageSetupPage)
-						app.SetFocus(scrapeSetupList.List)
-						return nil
-					}
-					return event
-				})
-				statePages.RemovePage(mediaManageSystemsPage)
-				statePages.AddPage(mediaManageSystemsPage, selector, true, true)
-				frame.SetHelpText("Space selects systems, Esc returns")
-				app.SetFocus(selector)
-			})
+		}
 		scrapeSetupList.AddToggle(
 			"Re-scrape already scraped games",
 			"Include already scraped games",
 			&scrapeState.force,
 			func(_ bool) {})
-		scrapeSetupList.AddAction(
-			"Start scrape",
-			"Start metadata scrape",
-			startScrapeFromSetup,
-		)
+		if len(scrapeState.systems) == 0 {
+			scrapeSetupList.AddAction("Start scrape", "No supported systems", func() {})
+		} else {
+			scrapeSetupList.AddAction(
+				"Start scrape",
+				"Start metadata scrape",
+				startScrapeFromSetup,
+			)
+		}
 		scrapeSetupList.AddBackWithDesc("Return to Manage Media")
 		scrapeSetupList.TriggerInitialHelp()
 	}
@@ -791,10 +806,18 @@ func BuildGenerateDBPage(
 			showError(errors.New("no metadata scrapers are available"))
 			return
 		}
+		if len(scrapeState.systems) == 0 {
+			showError(errors.New("selected scraper supports no indexed systems"))
+			return
+		}
 		scraper := scrapeState.scrapers[scrapeState.scraperIndex]
+		systems := scrapeState.selected
+		if systems == nil {
+			systems = []string{}
+		}
 		params := models.MediaScrapeParams{
 			ScraperID: scraper.ID,
-			Systems:   scrapeState.selected,
+			Systems:   systems,
 			Force:     scrapeState.force,
 		}
 

@@ -204,6 +204,25 @@ func TestBrowseCacheBuilder_NormalizesURIPathPortion(t *testing.T) {
 	assert.NotContains(t, builder.dirs, `steam://440\\Team Fortress 2/../`)
 }
 
+func TestBrowseCacheBuilder_AttachesVirtualSchemeToRoot(t *testing.T) {
+	t.Parallel()
+
+	builder := newBrowseCacheBuilder()
+	builder.ensureDir("/")
+	builder.addMedia(2, "smb://server/share/game.rom")
+
+	root := builder.dirs["/"]
+	scheme := builder.dirs["smb://"]
+	require.NotNil(t, root)
+	require.NotNil(t, scheme)
+	assert.Equal(t, root.id, *scheme.parentID)
+	assert.Equal(t, 1, builder.counts[browseCacheCountKey{
+		parentDirID: root.id,
+		childDirID:  scheme.id,
+		systemDBID:  2,
+	}])
+}
+
 func TestSqlBrowseRootCountsFromCache_ReturnsZeroForMissingRoot(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()

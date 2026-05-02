@@ -333,6 +333,11 @@ func TestSettingsList_ClearItems(t *testing.T) {
 	assert.Same(t, sl, result)
 	assert.Equal(t, 0, sl.GetItemCount())
 	assert.Empty(t, sl.items)
+
+	result = sl.ClearItems()
+	assert.Same(t, sl, result)
+	assert.Equal(t, 0, sl.GetItemCount())
+	assert.Empty(t, sl.items)
 }
 
 func TestSettingsList_ChainedMethods(t *testing.T) {

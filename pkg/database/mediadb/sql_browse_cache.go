@@ -198,7 +198,7 @@ type browseCacheCountPair struct {
 func (b *browseCacheBuilder) countPairsForPath(mediaPath string) []browseCacheCountPair {
 	mediaPath = browseCacheNormalizePath(mediaPath)
 	if idx := strings.Index(mediaPath, "://"); idx >= 0 {
-		return []browseCacheCountPair{{parent: b.ensureDir(""), child: b.ensureDir(mediaPath[:idx+3])}}
+		return []browseCacheCountPair{{parent: b.ensureDir("/"), child: b.ensureDir(mediaPath[:idx+3])}}
 	}
 
 	dirs := browseCacheAncestorDirs(mediaPath)
@@ -267,7 +267,7 @@ func browseCacheDirParentAndName(dirPath string) (parentPath, name string, isVir
 		return "", "", false
 	}
 	if strings.Contains(dirPath, "://") {
-		return "", dirPath, true
+		return "/", dirPath, true
 	}
 	if dirPath == "/" {
 		return "", "/", false

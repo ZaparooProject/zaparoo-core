@@ -301,6 +301,16 @@ func TestPruneSelectedScrapeSystems(t *testing.T) {
 	assert.Equal(t, []string{"gb", "nes"}, pruneSelectedScrapeSystems(selected, systems))
 }
 
+func TestFormatScrapeSystemsLabel(t *testing.T) {
+	t.Parallel()
+
+	systems := []SystemItem{{ID: "nes", Name: "Nintendo Entertainment System"}}
+
+	assert.Equal(t, "No supported systems", formatScrapeSystemsLabel(nil, nil))
+	assert.Equal(t, "All systems", formatScrapeSystemsLabel(nil, systems))
+	assert.Equal(t, "nes", formatScrapeSystemsLabel([]string{"nes"}, systems))
+}
+
 func TestMediaIndexProgress(t *testing.T) {
 	t.Parallel()
 

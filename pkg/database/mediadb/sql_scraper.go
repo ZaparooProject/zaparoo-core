@@ -457,7 +457,25 @@ func (db *MediaDB) UpsertMediaTitleProperties(
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return upsertMediaTitleProperties(ctx, db.sql, mediaTitleDBID, props)
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("UpsertMediaTitleProperties: begin transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if err := upsertMediaTitleProperties(ctx, tx, mediaTitleDBID, props); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("UpsertMediaTitleProperties: commit: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func upsertMediaTitleProperties(
@@ -490,7 +508,25 @@ func (db *MediaDB) UpsertMediaProperties(ctx context.Context, mediaDBID int64, p
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return upsertMediaProperties(ctx, db.sql, mediaDBID, props)
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("UpsertMediaProperties: begin transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if err := upsertMediaProperties(ctx, tx, mediaDBID, props); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("UpsertMediaProperties: commit: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 // ApplyScrapeResult writes all scraper metadata for a match in one transaction.

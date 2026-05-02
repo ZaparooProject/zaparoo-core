@@ -140,7 +140,7 @@ func TestFindMediaBySystemAndPathFold_WrongSystem(t *testing.T) {
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
 
-	mediaPath := filepath.Join("roms", "nonexistent.nes")
+	mediaPath := filepath.Join("roms", "mario.nes")
 	m, err := mediaDB.FindMediaBySystemAndPathFold(context.Background(), 99, mediaPath)
 	require.NoError(t, err)
 	assert.Nil(t, m, "path exists but systemDBID doesn't match")
@@ -495,6 +495,24 @@ func TestUpsertMediaTitleProperties_UnknownTypeTag_ReturnsError(t *testing.T) {
 	assert.Error(t, err, "unknown type tag should return an error")
 }
 
+func TestUpsertMediaTitleProperties_RollsBackOnError(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	err := mediaDB.UpsertMediaTitleProperties(ctx, 1, []database.MediaProperty{
+		{TypeTag: "property:description", Text: "should roll back"},
+		{TypeTag: "property:missing", Text: "invalid"},
+	})
+	require.Error(t, err)
+
+	var count int
+	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM MediaTitleProperties WHERE MediaTitleDBID = 1").Scan(&count))
+	assert.Equal(t, 0, count)
+}
+
 // --- UpsertMediaProperties ---
 
 func TestUpsertMediaProperties_Insert(t *testing.T) {
@@ -515,6 +533,24 @@ func TestUpsertMediaProperties_Insert(t *testing.T) {
 		"SELECT Text, BlobDBID FROM MediaProperties WHERE MediaDBID = 1").Scan(&text, &blobDBID))
 	assert.Equal(t, boxartPath, text)
 	assert.Nil(t, blobDBID, "path-only property should have nil BlobDBID")
+}
+
+func TestUpsertMediaProperties_RollsBackOnError(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	err := mediaDB.UpsertMediaProperties(ctx, 1, []database.MediaProperty{
+		{TypeTag: "property:image-boxart", Text: filepath.Join("roms", "nes", "mario-box.png")},
+		{TypeTag: "property:missing", Text: "invalid"},
+	})
+	require.Error(t, err)
+
+	var count int
+	require.NoError(t, mediaDB.sql.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM MediaProperties WHERE MediaDBID = 1").Scan(&count))
+	assert.Equal(t, 0, count)
 }
 
 // --- GetMediaTitleProperties / GetMediaProperties ---

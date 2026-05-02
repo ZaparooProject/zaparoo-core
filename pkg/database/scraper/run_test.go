@@ -152,6 +152,27 @@ func TestRunScraper_ScrapedMediaIDsErrorIsFatal(t *testing.T) {
 	db.AssertExpectations(t)
 }
 
+func TestRunScraper_ScrapedMediaIDsCancelIsNotFatal(t *testing.T) {
+	t.Parallel()
+	db := helpers.NewMockMediaDBI()
+	system := scraper.ScrapeSystem{DBID: 1, ID: "NES"}
+	db.On("GetScrapedMediaIDs", mock.Anything, "test", system.DBID).Return(nil, context.Canceled).Once()
+	loop := &stubLoop{id: "test", records: []stubRecord{{id: "mario"}}}
+
+	ch := scraper.RunScraper(
+		context.Background(), scraper.ScrapeOptions{}, []scraper.ScrapeSystem{system}, db, loop)
+	updates := drainUpdates(ch)
+
+	require.NotEmpty(t, updates)
+	last := updates[len(updates)-1]
+	assert.True(t, last.Done)
+	assert.Equal(t, "NES", last.SystemID)
+	assert.Equal(t, 1, last.Total)
+	require.NoError(t, last.FatalErr)
+	db.AssertNotCalled(t, "ApplyScrapeResult")
+	db.AssertExpectations(t)
+}
+
 func TestRunScraper_CancelWhilePausedEmitsDone(t *testing.T) {
 	t.Parallel()
 	db := helpers.NewMockMediaDBI()
