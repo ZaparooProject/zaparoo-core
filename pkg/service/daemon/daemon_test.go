@@ -763,7 +763,7 @@ func TestWaitForAPIPortRelease(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = waitForAPIPortRelease(cfg, 20*time.Millisecond, 5*time.Millisecond)
+	err = waitForAPIPortRelease(cfg, 250*time.Millisecond, 50*time.Millisecond)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timeout waiting for API port")
 

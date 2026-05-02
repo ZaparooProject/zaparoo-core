@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -86,6 +87,9 @@ func sqlFindSystemBySystemID(ctx context.Context, db sqlQueryable, systemID stri
 		&row.SystemID,
 		&row.Name,
 	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return row, sql.ErrNoRows
+	}
 	if err != nil {
 		return row, fmt.Errorf("failed to scan system row: %w", err)
 	}

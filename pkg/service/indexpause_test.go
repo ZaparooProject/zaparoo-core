@@ -208,3 +208,52 @@ func TestHandleIndexPauseNotifications_NoNotificationWhenNotIndexing(t *testing.
 		// expected — no notification
 	}
 }
+
+func TestHandleScrapePauseNotifications_PausesOnStarted(t *testing.T) {
+	ch := make(chan models.Notification, 1)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleScrapePauseNotifications(ctx, ch, ns, pauser, false, alwaysActive)
+
+	ch <- models.Notification{Method: models.NotificationStarted}
+	require.Eventually(t, pauser.IsPaused,
+		500*time.Millisecond, 10*time.Millisecond)
+
+	notif := drainNotification(t, ns)
+	assert.Equal(t, models.NotificationMediaScraping, notif.Method)
+	var resp models.ScrapingStatusResponse
+	require.NoError(t, json.Unmarshal(notif.Params, &resp))
+	assert.True(t, resp.Scraping)
+	assert.True(t, resp.Paused)
+}
+
+func TestHandleScrapePauseNotifications_ResumesOnStopped(t *testing.T) {
+	ch := make(chan models.Notification, 2)
+	ns := make(chan models.Notification, 10)
+	pauser := syncutil.NewPauser()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go handleScrapePauseNotifications(ctx, ch, ns, pauser, false, alwaysActive)
+
+	ch <- models.Notification{Method: models.NotificationStarted}
+	require.Eventually(t, pauser.IsPaused,
+		500*time.Millisecond, 10*time.Millisecond)
+	drainNotification(t, ns)
+
+	ch <- models.Notification{Method: models.NotificationStopped}
+	require.Eventually(t, func() bool { return !pauser.IsPaused() },
+		500*time.Millisecond, 10*time.Millisecond)
+
+	notif := drainNotification(t, ns)
+	assert.Equal(t, models.NotificationMediaScraping, notif.Method)
+	var resp models.ScrapingStatusResponse
+	require.NoError(t, json.Unmarshal(notif.Params, &resp))
+	assert.True(t, resp.Scraping)
+	assert.False(t, resp.Paused)
+}

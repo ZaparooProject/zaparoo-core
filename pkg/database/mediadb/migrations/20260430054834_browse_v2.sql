@@ -25,18 +25,6 @@ CREATE TABLE IF NOT EXISTS BrowseDirs (
     foreign key (ParentDirDBID) references BrowseDirs (DBID) on delete cascade
 );
 
-CREATE TABLE IF NOT EXISTS BrowseEntries (
-    ParentDirDBID integer not null,
-    MediaDBID integer primary key,
-    SystemDBID integer not null,
-    Name text not null,
-    NameFirstChar text not null,
-    FileName text not null,
-    foreign key (ParentDirDBID) references BrowseDirs (DBID) on delete cascade,
-    foreign key (MediaDBID) references Media (DBID) on delete cascade,
-    foreign key (SystemDBID) references Systems (DBID) on delete cascade
-);
-
 CREATE TABLE IF NOT EXISTS BrowseDirCounts (
     ParentDirDBID integer not null,
     ChildDirDBID integer not null,
@@ -49,8 +37,6 @@ CREATE TABLE IF NOT EXISTS BrowseDirCounts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_browsedirs_parent_name ON BrowseDirs(ParentDirDBID, Name);
-CREATE INDEX IF NOT EXISTS idx_browseentries_parent_system_name ON BrowseEntries(ParentDirDBID, SystemDBID, Name, MediaDBID);
-CREATE INDEX IF NOT EXISTS idx_browseentries_parent_system_file ON BrowseEntries(ParentDirDBID, SystemDBID, FileName, MediaDBID);
 CREATE INDEX IF NOT EXISTS idx_browsedircounts_parent_system ON BrowseDirCounts(ParentDirDBID, SystemDBID);
 CREATE INDEX IF NOT EXISTS idx_browsedircounts_child_system ON BrowseDirCounts(ChildDirDBID, SystemDBID);
 
@@ -62,12 +48,9 @@ DELETE FROM DBConfig WHERE Name = 'BrowseSortReady';
 -- +goose Down
 DROP INDEX IF EXISTS idx_browsedircounts_child_system;
 DROP INDEX IF EXISTS idx_browsedircounts_parent_system;
-DROP INDEX IF EXISTS idx_browseentries_parent_system_file;
-DROP INDEX IF EXISTS idx_browseentries_parent_system_name;
 DROP INDEX IF EXISTS idx_browsedirs_parent_name;
 
 DROP TABLE IF EXISTS BrowseDirCounts;
-DROP TABLE IF EXISTS BrowseEntries;
 DROP TABLE IF EXISTS BrowseDirs;
 
 CREATE TABLE IF NOT EXISTS BrowseCache (
