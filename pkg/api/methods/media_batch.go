@@ -209,6 +209,9 @@ func resolveMediaRefs(env *requests.RequestEnv, refs []mediaRefParam) ([]resolve
 	for id := range uniqueIDs {
 		ids = append(ids, id)
 	}
+	if len(ids) == 0 {
+		return resolved, nil
+	}
 	rows, err := env.Database.MediaDB.GetMediaWithTitleAndSystemByIDs(env.Context, ids)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media: %w", err)

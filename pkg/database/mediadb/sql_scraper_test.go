@@ -608,6 +608,101 @@ func TestGetMediaProperties_RoundTrip(t *testing.T) {
 	assert.Nil(t, got[0].Binary)
 }
 
+func TestGetMediaBatchMetadata_RoundTrip(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	zeldaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, zeldaPath)
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "developer", Tag: "nintendo"}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "developer", Tag: "capcom"}}))
+	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 1, []database.TagInfo{{Type: "developer", Tag: "title-one"}}))
+	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 2, []database.TagInfo{{Type: "developer", Tag: "title-two"}}))
+	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 1, []database.MediaProperty{{
+		TypeTag: "property:image-boxart",
+		Text:    filepath.Join("art", "mario.png"),
+	}}))
+	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 2, []database.MediaProperty{{
+		TypeTag: "property:image-boxart",
+		Text:    filepath.Join("art", "zelda.png"),
+	}}))
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, 1, []database.MediaProperty{{
+		TypeTag: "property:description",
+		Text:    "Mario description",
+	}}))
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, 2, []database.MediaProperty{{
+		TypeTag: "property:description",
+		Text:    "Zelda description",
+	}}))
+
+	rows, err := mediaDB.GetMediaWithTitleAndSystemByIDs(ctx, []int64{1, 2, 999})
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, filepath.ToSlash(filepath.Join("roms", "mario.nes")), rows[1].Path)
+	assert.Equal(t, "Mario", rows[1].Title.Name)
+	assert.Equal(t, "NES", rows[1].System.SystemID)
+	assert.Equal(t, zeldaPath, rows[2].Path)
+	assert.Equal(t, "Zelda", rows[2].Title.Name)
+
+	mediaTags, err := mediaDB.GetMediaTagsByMediaDBIDs(ctx, []int64{1, 2})
+	require.NoError(t, err)
+	assert.Equal(t, []database.TagInfo{{Tag: "nintendo", Type: "developer"}}, mediaTags[1])
+	assert.Equal(t, []database.TagInfo{{Tag: "capcom", Type: "developer"}}, mediaTags[2])
+
+	titleTags, err := mediaDB.GetMediaTitleTagsByMediaTitleDBIDs(ctx, []int64{1, 2})
+	require.NoError(t, err)
+	assert.Equal(t, []database.TagInfo{{Tag: "title-one", Type: "developer"}}, titleTags[1])
+	assert.Equal(t, []database.TagInfo{{Tag: "title-two", Type: "developer"}}, titleTags[2])
+
+	mediaProps, err := mediaDB.GetMediaPropertiesByMediaDBIDs(ctx, []int64{1, 2})
+	require.NoError(t, err)
+	require.Len(t, mediaProps[1], 1)
+	require.Len(t, mediaProps[2], 1)
+	assert.Equal(t, filepath.Join("art", "mario.png"), mediaProps[1][0].Text)
+	assert.Equal(t, filepath.Join("art", "zelda.png"), mediaProps[2][0].Text)
+
+	titleProps, err := mediaDB.GetMediaTitlePropertiesByMediaTitleDBIDs(ctx, []int64{1, 2})
+	require.NoError(t, err)
+	require.Len(t, titleProps[1], 1)
+	require.Len(t, titleProps[2], 1)
+	assert.Equal(t, "Mario description", titleProps[1][0].Text)
+	assert.Equal(t, "Zelda description", titleProps[2][0].Text)
+}
+
+func TestGetMediaBatchMetadata_EmptyIDsReturnEmptyMaps(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaRows, err := mediaDB.GetMediaWithTitleAndSystemByIDs(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, mediaRows)
+
+	mediaTags, err := mediaDB.GetMediaTagsByMediaDBIDs(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, mediaTags)
+
+	titleTags, err := mediaDB.GetMediaTitleTagsByMediaTitleDBIDs(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, titleTags)
+
+	mediaProps, err := mediaDB.GetMediaPropertiesByMediaDBIDs(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, mediaProps)
+
+	titleProps, err := mediaDB.GetMediaTitlePropertiesByMediaTitleDBIDs(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, titleProps)
+}
+
 // --- FindMediaTitlesWithoutSentinel ---
 
 func TestFindMediaTitlesWithoutSentinel_AllUnseen(t *testing.T) {

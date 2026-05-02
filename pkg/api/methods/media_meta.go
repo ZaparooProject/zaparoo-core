@@ -44,8 +44,15 @@ func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	if err != nil {
 		return nil, err
 	}
+	if !params.Batch && resolved[0].Err != nil {
+		return nil, resolved[0].Err
+	}
 
 	mediaIDs, titleIDs := uniqueMediaAndTitleIDs(resolved)
+	if params.Batch && len(mediaIDs) == 0 {
+		return buildMediaMetaBatchErrorResponse(resolved), nil
+	}
+
 	db := env.Database.MediaDB
 	mediaTags, err := db.GetMediaTagsByMediaDBIDs(env.Context, mediaIDs)
 	if err != nil {
@@ -65,9 +72,6 @@ func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	}
 
 	if !params.Batch {
-		if resolved[0].Err != nil {
-			return nil, resolved[0].Err
-		}
 		return buildMediaMetaResponse(
 			resolved[0].Row,
 			mediaTags[resolved[0].Row.DBID], titleTags[resolved[0].Row.Title.DBID],
@@ -90,6 +94,18 @@ func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 		items[i].Media = &response.Media
 	}
 	return models.MediaMetaBatchResponse{Items: items}, nil
+}
+
+func buildMediaMetaBatchErrorResponse(resolved []resolvedMediaItem) models.MediaMetaBatchResponse {
+	items := make([]models.MediaMetaBatchItemResponse, len(resolved))
+	for i, item := range resolved {
+		if item.Err == nil {
+			continue
+		}
+		errText := item.Err.Error()
+		items[i].Error = &errText
+	}
+	return models.MediaMetaBatchResponse{Items: items}
 }
 
 func handleMediaMetaSinglePath(env *requests.RequestEnv, ref mediaRefParam) (any, error) {

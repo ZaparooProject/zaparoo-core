@@ -21,6 +21,7 @@ package methods
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -220,6 +221,28 @@ func TestHandleMediaImage_MediaNotFound(t *testing.T) {
 
 	var clientErr *models.ClientError
 	require.ErrorAs(t, err, &clientErr)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaImage_BatchPathMissesSkipPropertyFetch(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("FindSystemBySystemID", "NES").Return(database.System{}, sql.ErrNoRows)
+
+	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{
+		"items": [
+			{"system":"NES","path":"games/missing.rom"}
+		]
+	}`))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaImageBatchResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Items, 1)
+	require.NotNil(t, resp.Items[0].Error)
+	assert.Contains(t, *resp.Items[0].Error, "system not found: NES")
 	mockDB.AssertExpectations(t)
 }
 

@@ -219,6 +219,60 @@ func TestHandleMediaMeta_MediaNotFound(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaMeta_MediaIDNotFoundSkipsMetadataFetch(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, mock.Anything).
+		Return(map[int64]database.MediaFullRow{}, nil)
+
+	env := makeMediaMetaEnv(t, mockDB, `{"mediaId":999}`)
+	_, err := HandleMediaMeta(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mediaId 999")
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaMeta_BatchPathMissesSkipMediaIDFetch(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	missingPath := filepath.Join("games", "missing.rom")
+	mockDB.On("FindSystemBySystemID", "NES").Return(database.System{}, sql.ErrNoRows)
+
+	env := makeMediaMetaEnv(t, mockDB, fmt.Sprintf(`{"items":[{"system":"NES","path":%q}]}`, missingPath))
+	result, err := HandleMediaMeta(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaMetaBatchResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Items, 1)
+	require.NotNil(t, resp.Items[0].Error)
+	assert.Contains(t, *resp.Items[0].Error, "system not found: NES")
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaMeta_BatchAllMediaIDMissesSkipMetadataFetch(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, mock.Anything).
+		Return(map[int64]database.MediaFullRow{}, nil)
+
+	env := makeMediaMetaEnv(t, mockDB, `{"items":[{"mediaId":999},{"mediaId":1000}]}`)
+	result, err := HandleMediaMeta(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaMetaBatchResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Items, 2)
+	require.NotNil(t, resp.Items[0].Error)
+	require.NotNil(t, resp.Items[1].Error)
+	assert.Contains(t, *resp.Items[0].Error, "mediaId 999")
+	assert.Contains(t, *resp.Items[1].Error, "mediaId 1000")
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaMeta_InvalidParams(t *testing.T) {
 	t.Parallel()
 

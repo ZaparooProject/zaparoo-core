@@ -83,6 +83,10 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	}
 
 	mediaIDs, titleIDs := uniqueMediaAndTitleIDs(resolved)
+	if params.Batch && len(mediaIDs) == 0 {
+		return buildMediaImageBatchErrorResponse(resolved), nil
+	}
+
 	db := env.Database.MediaDB
 	mediaProps, err := db.GetMediaPropertiesByMediaDBIDs(env.Context, mediaIDs)
 	if err != nil {
@@ -123,6 +127,18 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		items[i].Image = &image
 	}
 	return models.MediaImageBatchResponse{Items: items}, nil
+}
+
+func buildMediaImageBatchErrorResponse(resolved []resolvedMediaItem) models.MediaImageBatchResponse {
+	items := make([]models.MediaImageBatchItemResponse, len(resolved))
+	for i, item := range resolved {
+		if item.Err == nil {
+			continue
+		}
+		errText := item.Err.Error()
+		items[i].Error = &errText
+	}
+	return models.MediaImageBatchResponse{Items: items}
 }
 
 func handleMediaImageSinglePath(env *requests.RequestEnv, ref mediaRefParam) (any, error) {
