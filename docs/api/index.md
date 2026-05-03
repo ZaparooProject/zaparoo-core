@@ -247,6 +247,7 @@ Methods are used to execute actions and request data back from the API. The curr
 | media.active.update             | Update the currently active media information.                                        |
 | media.search                    | Query the media database and return all matching indexed media.                       |
 | media.tags                      | Query available tags for filtering media search results.                              |
+| media.tags.update               | Add or remove user tags for indexed media.                                            |
 | media.generate                  | Start a new media database index.                                                     |
 | media.generate.cancel           | Cancel any currently running media database indexing operation.                       |
 | media.generate.resume           | Resume paused media database indexing.                                                |

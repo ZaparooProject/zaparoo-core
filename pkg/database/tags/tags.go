@@ -129,6 +129,11 @@ const (
 	TagTypeRating        TagType = "rating"        // Numeric rating (scraped, stored as integer 0-100)
 	TagTypeGenre         TagType = "genre"         // Game genre (scraped from external sources; additive)
 	TagTypeGameFamily    TagType = "gamefamily"    // Game family/series (scraped from EmulationStation family field)
+	TagTypeUser          TagType = "user"
+)
+
+const (
+	TagUserFavorite TagValue = "favorite"
 )
 
 // Tag Format:

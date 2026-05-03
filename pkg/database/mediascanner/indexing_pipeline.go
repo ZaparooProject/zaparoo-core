@@ -356,6 +356,10 @@ func reconcileExistingMediaTags(
 		if _, ok := desiredTagIDs[tagIndex]; ok {
 			continue
 		}
+		if isUserOwnedTagID(ss, tagIndex) {
+			desiredTagIDs[tagIndex] = struct{}{}
+			continue
+		}
 		if err := db.DeleteMediaTag(int64(mediaIndex), int64(tagIndex)); err != nil {
 			return fmt.Errorf("failed to delete media tag %d: %w", tagIndex, err)
 		}
@@ -373,6 +377,19 @@ func reconcileExistingMediaTags(
 	ss.MediaTagIDs[mediaIndex] = cloneMediaTagSet(desiredTagIDs)
 
 	return nil
+}
+
+func isUserOwnedTagID(ss *database.ScanState, tagIndex int) bool {
+	for tagKey, id := range ss.TagIDs {
+		if id != tagIndex {
+			continue
+		}
+
+		tagType, _, found := strings.Cut(tagKey, ":")
+		return found && tags.IsUserOwnedType(tags.TagType(tagType))
+	}
+
+	return false
 }
 
 func insertDesiredMediaTags(
