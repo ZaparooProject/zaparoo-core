@@ -640,6 +640,7 @@ type MediaDBI interface {
 	// FindMediaBySystemAndPath returns the Media row matching systemDBID and path,
 	// or nil, nil when no row is found.
 	FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*Media, error)
+	FindMediaBySystemAndPaths(ctx context.Context, systemDBID int64, paths []string) (map[string]Media, error)
 
 	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and
 	// path using a case-insensitive path comparison, or nil, nil when no row is
@@ -688,10 +689,14 @@ type MediaDBI interface {
 	// GetMediaTitleProperties returns all properties for a MediaTitle row,
 	// with TypeTagDBID resolved to the tag value string.
 	GetMediaTitleProperties(ctx context.Context, mediaTitleDBID int64) ([]MediaProperty, error)
+	GetMediaTitlePropertiesByMediaTitleDBIDs(
+		ctx context.Context, mediaTitleDBIDs []int64,
+	) (map[int64][]MediaProperty, error)
 
 	// GetMediaProperties returns all properties for a Media row,
 	// with TypeTagDBID resolved to the tag value string.
 	GetMediaProperties(ctx context.Context, mediaDBID int64) ([]MediaProperty, error)
+	GetMediaPropertiesByMediaDBIDs(ctx context.Context, mediaDBIDs []int64) (map[int64][]MediaProperty, error)
 
 	// DeleteMediaTitleProperty removes a single property row from MediaTitleProperties
 	// identified by (mediaTitleDBID, typeTagDBID). A no-op if the row does not exist.
@@ -706,14 +711,17 @@ type MediaDBI interface {
 	// Media row with the given DBID exists. IsMissing is NOT filtered — metadata
 	// remains accessible for missing files.
 	GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int64) (*MediaFullRow, error)
+	GetMediaWithTitleAndSystemByIDs(ctx context.Context, mediaDBIDs []int64) (map[int64]MediaFullRow, error)
 
 	// GetMediaTagsByMediaDBID returns the file-level tags (MediaTags) for a
 	// single Media row. Does not include title-level tags.
 	GetMediaTagsByMediaDBID(ctx context.Context, mediaDBID int64) ([]TagInfo, error)
+	GetMediaTagsByMediaDBIDs(ctx context.Context, mediaDBIDs []int64) (map[int64][]TagInfo, error)
 
 	// GetMediaTitleTagsByMediaTitleDBID returns the title-level tags
 	// (MediaTitleTags) for a single MediaTitle row.
 	GetMediaTitleTagsByMediaTitleDBID(ctx context.Context, mediaTitleDBID int64) ([]TagInfo, error)
+	GetMediaTitleTagsByMediaTitleDBIDs(ctx context.Context, mediaTitleDBIDs []int64) (map[int64][]TagInfo, error)
 
 	// UpsertMediaBlob inserts a blob into MediaBlobs when no row with the same
 	// SHA-256 hash of framed content type and bytes already exists, then returns its DBID.

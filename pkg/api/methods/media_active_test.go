@@ -22,12 +22,16 @@ package methods
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -113,6 +117,10 @@ func TestHandleActiveMedia_WithZapScript(t *testing.T) {
 			if tt.setupMock != nil {
 				tt.setupMock(mockMediaDB)
 			}
+			mockMediaDB.On("FindSystemBySystemID", mock.Anything).
+				Return(database.System{}, errors.New("not found")).Maybe()
+			mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, mock.Anything, mock.Anything).
+				Return(map[string]database.Media{}, nil).Maybe()
 
 			// Create state and set active media
 			appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
@@ -234,6 +242,10 @@ func TestHandleMedia_WithActiveMediaZapScript(t *testing.T) {
 			if tt.setupMock != nil {
 				tt.setupMock(mockMediaDB)
 			}
+			mockMediaDB.On("FindSystemBySystemID", mock.Anything).
+				Return(database.System{}, errors.New("not found")).Maybe()
+			mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, mock.Anything, mock.Anything).
+				Return(map[string]database.Media{}, nil).Maybe()
 
 			// Standard mocks needed for HandleMedia to work
 			// GetOptimizationStatus is always called
@@ -282,6 +294,107 @@ func TestHandleMedia_WithActiveMediaZapScript(t *testing.T) {
 	}
 }
 
+func TestHandleActiveMedia_WithMediaIDAndRelativePath(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	rootDir := filepath.Join(string(filepath.Separator), "mock", "roms")
+	mediaPath := filepath.Join(rootDir, "NES", "game.nes")
+	relPath := filepath.ToSlash(filepath.Join("NES", "game.nes"))
+
+	launcherCache := &phelpers.LauncherCache{}
+	launcherCache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "nes-launcher", SystemID: "NES", Folders: []string{"NES"}},
+	})
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	defer appState.StopService()
+	drainNotifications(t, ns)
+	appState.SetActiveMedia(models.NewActiveMedia("NES", "NES", mediaPath, "Game", "test-launcher"))
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "NES", mediaPath).
+		Return([]database.TagInfo{}, nil)
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 10}, nil)
+	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(10), []string{mediaPath}).
+		Return(map[string]database.Media{mediaPath: {DBID: 42}}, nil)
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		Platform:      mockPlatform,
+		State:         appState,
+		Config:        &config.Instance{},
+		LauncherCache: launcherCache,
+	}
+
+	result, err := HandleActiveMedia(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.ActiveMediaResponse)
+	require.True(t, ok)
+	assert.Equal(t, int64(42), resp.MediaID)
+	require.NotNil(t, resp.RelPath)
+	assert.Equal(t, relPath, *resp.RelPath)
+	assert.Equal(t, "@NES/Game", resp.ZapScript)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMedia_WithActiveMediaIDAndRelativePath(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	rootDir := filepath.Join(string(filepath.Separator), "mock", "roms")
+	mediaPath := filepath.Join(rootDir, "NES", "game.nes")
+	relPath := filepath.ToSlash(filepath.Join("NES", "game.nes"))
+
+	launcherCache := &phelpers.LauncherCache{}
+	launcherCache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "nes-launcher", SystemID: "NES", Folders: []string{"NES"}},
+	})
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	defer appState.StopService()
+	drainNotifications(t, ns)
+	appState.SetActiveMedia(models.NewActiveMedia("NES", "NES", mediaPath, "Game", "test-launcher"))
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "NES", mediaPath).
+		Return([]database.TagInfo{}, nil)
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 10}, nil)
+	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(10), []string{mediaPath}).
+		Return(map[string]database.Media{mediaPath: {DBID: 42}}, nil)
+	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
+	mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
+	ClearIndexingStatus()
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		Database:      &database.Database{MediaDB: mockMediaDB},
+		Platform:      mockPlatform,
+		State:         appState,
+		Config:        &config.Instance{},
+		LauncherCache: launcherCache,
+	}
+
+	result, err := HandleMedia(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Active, 1)
+	assert.Equal(t, int64(42), resp.Active[0].MediaID)
+	require.NotNil(t, resp.Active[0].RelPath)
+	assert.Equal(t, relPath, *resp.Active[0].RelPath)
+	assert.Equal(t, "@NES/Game", resp.Active[0].ZapScript)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestHandleActiveMedia_WithLauncherControls(t *testing.T) {
 	t.Parallel()
 
@@ -298,6 +411,10 @@ func TestHandleActiveMedia_WithLauncherControls(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
 		Return([]database.TagInfo{}, nil)
+	mockMediaDB.On("FindSystemBySystemID", mock.Anything).
+		Return(database.System{}, errors.New("not found")).Maybe()
+	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, mock.Anything, mock.Anything).
+		Return(map[string]database.Media{}, nil).Maybe()
 
 	env := requests.RequestEnv{
 		Context:  context.Background(),
@@ -328,6 +445,10 @@ func TestHandleActiveMedia_WithoutLauncherControls(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, mock.Anything, mock.Anything).
 		Return([]database.TagInfo{}, nil)
+	mockMediaDB.On("FindSystemBySystemID", mock.Anything).
+		Return(database.System{}, errors.New("not found")).Maybe()
+	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, mock.Anything, mock.Anything).
+		Return(map[string]database.Media{}, nil).Maybe()
 
 	env := requests.RequestEnv{
 		Context:  context.Background(),

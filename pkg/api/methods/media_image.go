@@ -20,13 +20,13 @@
 package methods
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
@@ -69,34 +69,115 @@ func buildPropsMap(props []database.MediaProperty) map[string]database.MediaProp
 // priority over title-level properties for the same TypeTag. If a matching
 // property has no inline binary data the file at the Text path is read from disk.
 func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
-	var params models.MediaImageParams
-	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		return nil, models.ClientErrf("invalid params: %w", err)
+	params, err := parseMediaRequest(env.Params, maxMediaImageBatchItems)
+	if err != nil {
+		return nil, err
+	}
+	if !params.Batch && params.Items[0].MediaID == nil {
+		return handleMediaImageSinglePath(&env, params.Items[0])
 	}
 
-	ctx := env.Context
-	db := env.Database.MediaDB
-
-	row, err := resolveMediaBySystemAndPath(&env, params.System, params.Path)
+	resolved, err := resolveMediaRefs(&env, params.Items)
 	if err != nil {
 		return nil, err
 	}
 
-	mediaProps, err := db.GetMediaProperties(ctx, row.DBID)
+	mediaIDs, titleIDs := uniqueMediaAndTitleIDs(resolved)
+	if params.Batch && len(mediaIDs) == 0 {
+		return buildMediaImageBatchErrorResponse(resolved), nil
+	}
+
+	db := env.Database.MediaDB
+	mediaProps, err := db.GetMediaPropertiesByMediaDBIDs(env.Context, mediaIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media properties: %w", err)
 	}
-
-	titleProps, err := db.GetMediaTitleProperties(ctx, row.Title.DBID)
+	titleProps, err := db.GetMediaTitlePropertiesByMediaTitleDBIDs(env.Context, titleIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 
-	prefs := params.ImageTypes
-	if len(prefs) == 0 {
-		prefs = defaultImageTypes
+	if !params.Batch {
+		if resolved[0].Err != nil {
+			return nil, resolved[0].Err
+		}
+		prefs := imagePrefs(params.ImageTypes, params.Items[0].ImageTypes)
+		return selectMediaImage(
+			env.Context, db, resolved[0].Row,
+			mediaProps[resolved[0].Row.DBID], titleProps[resolved[0].Row.Title.DBID], prefs,
+		)
 	}
 
+	items := make([]models.MediaImageBatchItemResponse, len(resolved))
+	for i, item := range resolved {
+		if item.Err != nil {
+			errText := item.Err.Error()
+			items[i].Error = &errText
+			continue
+		}
+		prefs := imagePrefs(params.ImageTypes, params.Items[i].ImageTypes)
+		image, imageErr := selectMediaImage(
+			env.Context, db, item.Row, mediaProps[item.Row.DBID], titleProps[item.Row.Title.DBID], prefs,
+		)
+		if imageErr != nil {
+			errText := imageErr.Error()
+			items[i].Error = &errText
+			continue
+		}
+		items[i].Image = &image
+	}
+	return models.MediaImageBatchResponse{Items: items}, nil
+}
+
+func buildMediaImageBatchErrorResponse(resolved []resolvedMediaItem) models.MediaImageBatchResponse {
+	items := make([]models.MediaImageBatchItemResponse, len(resolved))
+	for i, item := range resolved {
+		if item.Err == nil {
+			continue
+		}
+		errText := item.Err.Error()
+		items[i].Error = &errText
+	}
+	return models.MediaImageBatchResponse{Items: items}
+}
+
+func handleMediaImageSinglePath(env *requests.RequestEnv, ref mediaRefParam) (any, error) {
+	db := env.Database.MediaDB
+	row, err := resolveMediaBySystemAndPath(env, ref.System, ref.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	mediaProps, err := db.GetMediaProperties(env.Context, row.DBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media properties: %w", err)
+	}
+	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get title properties: %w", err)
+	}
+
+	return selectMediaImage(env.Context, db, row, mediaProps, titleProps, imagePrefs(nil, ref.ImageTypes))
+}
+
+func imagePrefs(topLevel, itemLevel []string) []string {
+	if len(itemLevel) > 0 {
+		return itemLevel
+	}
+	if len(topLevel) > 0 {
+		return topLevel
+	}
+	return defaultImageTypes
+}
+
+func selectMediaImage(
+	ctx context.Context,
+	db database.MediaDBI,
+	row *database.MediaFullRow,
+	mediaProps []database.MediaProperty,
+	titleProps []database.MediaProperty,
+	prefs []string,
+) (models.MediaImageResponse, error) {
 	mediaMap := buildPropsMap(mediaProps)
 	titleMap := buildPropsMap(titleProps)
 
@@ -134,10 +215,13 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 
 			binary := prop.Binary
 			if len(binary) == 0 && prop.Text != "" {
-				binary, err = os.ReadFile(prop.Text)
-				if err != nil {
-					if !os.IsNotExist(err) {
-						return nil, fmt.Errorf("media.image: read image file %q: %w", prop.Text, err)
+				var readErr error
+				binary, readErr = os.ReadFile(prop.Text)
+				if readErr != nil {
+					if !os.IsNotExist(readErr) {
+						return models.MediaImageResponse{}, fmt.Errorf(
+							"media.image: read image file %q: %w", prop.Text, readErr,
+						)
 					}
 
 					// File is gone — remove the stale property.
@@ -163,10 +247,12 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 					prop = titleProp
 					binary = prop.Binary
 					if len(binary) == 0 && prop.Text != "" {
-						binary, err = os.ReadFile(prop.Text)
-						if err != nil {
-							if !os.IsNotExist(err) {
-								return nil, fmt.Errorf("media.image: read image file %q: %w", prop.Text, err)
+						binary, readErr = os.ReadFile(prop.Text)
+						if readErr != nil {
+							if !os.IsNotExist(readErr) {
+								return models.MediaImageResponse{}, fmt.Errorf(
+									"media.image: read image file %q: %w", prop.Text, readErr,
+								)
 							}
 
 							delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID)
@@ -194,5 +280,7 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		}
 	}
 
-	return nil, models.ClientErrf("no image found for media: %s/%s", params.System, params.Path)
+	return models.MediaImageResponse{}, models.ClientErrf(
+		"no image found for media: %s/%s", row.System.SystemID, row.Path,
+	)
 }

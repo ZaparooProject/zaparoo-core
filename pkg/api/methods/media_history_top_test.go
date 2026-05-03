@@ -23,14 +23,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,6 +76,60 @@ func TestHandleMediaHistoryTop_NoParams(t *testing.T) {
 	assert.Equal(t, now.Format(time.RFC3339), resp.Entries[0].LastPlayedAt)
 
 	mockUserDB.AssertExpectations(t)
+}
+
+func TestHandleMediaHistoryTop_WithMediaIDAndRelativePath(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := helpers.NewMockUserDBI()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.SetupBasicMock()
+	now := time.Now()
+	rootDir := filepath.Join(string(filepath.Separator), "mock", "roms")
+	mediaPath := filepath.Join(rootDir, "SNES", "smw.sfc")
+	relPath := filepath.ToSlash(filepath.Join("SNES", "smw.sfc"))
+
+	launcherCache := &phelpers.LauncherCache{}
+	launcherCache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "snes-launcher", SystemID: "SNES", Folders: []string{"SNES"}},
+	})
+
+	mockUserDB.On("GetMediaHistoryTop", []string(nil), (*time.Time)(nil), 25).Return([]database.MediaHistoryTopEntry{
+		{
+			SystemID:      "SNES",
+			SystemName:    "Super Nintendo Entertainment System",
+			MediaName:     "Super Mario World",
+			MediaPath:     mediaPath,
+			TotalPlayTime: 7200,
+			SessionCount:  12,
+			LastPlayedAt:  now,
+		},
+	}, nil)
+	mockMediaDB.On("FindSystemBySystemID", "SNES").Return(database.System{DBID: 10}, nil)
+	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(10), []string{mediaPath}).
+		Return(map[string]database.Media{mediaPath: {DBID: 42}}, nil)
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		Database:      &database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB},
+		Platform:      mockPlatform,
+		Config:        &config.Instance{},
+		LauncherCache: launcherCache,
+	}
+
+	result, err := HandleMediaHistoryTop(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaHistoryTopResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Entries, 1)
+	assert.Equal(t, int64(42), resp.Entries[0].MediaID)
+	require.NotNil(t, resp.Entries[0].RelPath)
+	assert.Equal(t, relPath, *resp.Entries[0].RelPath)
+
+	mockUserDB.AssertExpectations(t)
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestHandleMediaHistoryTop_CustomLimit(t *testing.T) {

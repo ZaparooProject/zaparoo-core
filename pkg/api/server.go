@@ -76,6 +76,8 @@ var allowedOrigins = []string{
 	"http://localhost",      // Fallback/development
 }
 
+const websocketMaxMessageSize = 4 * 1024 * 1024
+
 var JSONRPCErrorParseError = models.ErrorObject{
 	Code:    -32700,
 	Message: "Parse error",
@@ -106,6 +108,12 @@ func makeJSONRPCError(code int, message string) models.ErrorObject {
 		Code:    code,
 		Message: message,
 	}
+}
+
+func newWebSocketSession() *melody.Melody {
+	session := melody.New()
+	session.Config.MaxMessageSize = websocketMaxMessageSize
+	return session
 }
 
 // logSafeRequest logs a request but avoids logging sensitive or large content
@@ -1510,7 +1518,7 @@ func StartWithReady(
 		<-lastSeenDone
 	}()
 
-	session := melody.New()
+	session := newWebSocketSession()
 	defer func() {
 		if err := session.Close(); err != nil {
 			log.Error().Err(err).Msg("WebSocket session close error")
