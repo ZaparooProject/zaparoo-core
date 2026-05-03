@@ -184,6 +184,14 @@ type MediaMetaParams struct {
 	Path    string `json:"path"   validate:"omitempty,min=1"`
 }
 
+type MediaTagsUpdateParams struct {
+	MediaID *int64   `json:"mediaId,omitempty"`
+	System  string   `json:"system" validate:"omitempty,min=1"`
+	Path    string   `json:"path"   validate:"omitempty,min=1"`
+	Add     []string `json:"add,omitempty" validate:"omitempty,dive,min=1"`
+	Remove  []string `json:"remove,omitempty" validate:"omitempty,dive,min=1"`
+}
+
 type MediaImageParams struct {
 	MediaID    *int64   `json:"mediaId,omitempty"`
 	System     string   `json:"system"            validate:"omitempty,min=1"`

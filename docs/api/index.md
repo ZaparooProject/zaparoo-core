@@ -232,7 +232,7 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods are used to execute actions and request data back from the API. The current API provides **58 registered methods** across core functionality areas, including deprecated aliases. See the [API Methods](./methods) page for detailed definitions and examples of each method.
+Methods are used to execute actions and request data back from the API. The current API provides **59 registered methods** across core functionality areas, including deprecated aliases. See the [API Methods](./methods) page for detailed definitions and examples of each method.
 
 | ID                              | Description                                                                           |
 | :------------------------------ | :------------------------------------------------------------------------------------ |
@@ -247,6 +247,7 @@ Methods are used to execute actions and request data back from the API. The curr
 | media.active.update             | Update the currently active media information.                                        |
 | media.search                    | Query the media database and return all matching indexed media.                       |
 | media.tags                      | Query available tags for filtering media search results.                              |
+| media.tags.update               | Add or remove user tags for indexed media.                                            |
 | media.generate                  | Start a new media database index.                                                     |
 | media.generate.cancel           | Cancel any currently running media database indexing operation.                       |
 | media.generate.resume           | Resume paused media database indexing.                                                |

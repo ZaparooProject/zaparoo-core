@@ -356,6 +356,10 @@ func reconcileExistingMediaTags(
 		if _, ok := desiredTagIDs[tagIndex]; ok {
 			continue
 		}
+		if isUserOwnedTagID(ss, tagIndex) {
+			desiredTagIDs[tagIndex] = struct{}{}
+			continue
+		}
 		if err := db.DeleteMediaTag(int64(mediaIndex), int64(tagIndex)); err != nil {
 			return fmt.Errorf("failed to delete media tag %d: %w", tagIndex, err)
 		}
@@ -373,6 +377,27 @@ func reconcileExistingMediaTags(
 	ss.MediaTagIDs[mediaIndex] = cloneMediaTagSet(desiredTagIDs)
 
 	return nil
+}
+
+func isUserOwnedTagID(ss *database.ScanState, tagIndex int) bool {
+	ensureUserOwnedTagIDs(ss)
+	return ss.UserOwnedTagIDs[tagIndex]
+}
+
+func ensureUserOwnedTagIDs(ss *database.ScanState) {
+	if ss.UserOwnedTagIDs != nil {
+		return
+	}
+
+	ss.UserOwnedTagIDs = make(map[int]bool)
+	for tagKey, id := range ss.TagIDs {
+		tagType, _, found := strings.Cut(tagKey, ":")
+		if !found || !tags.IsUserOwnedType(tags.TagType(tagType)) {
+			continue
+		}
+
+		ss.UserOwnedTagIDs[id] = true
+	}
 }
 
 func insertDesiredMediaTags(
@@ -715,10 +740,14 @@ func PopulateScanStateFromDB(ctx context.Context, db database.MediaDBI, ss *data
 	if err != nil {
 		return fmt.Errorf("failed to get existing tags: %w", err)
 	}
+	ss.UserOwnedTagIDs = make(map[int]bool)
 	for _, tag := range allTags {
 		tagType := tagTypeByDBID[tag.TypeDBID]
 		compositeKey := database.TagKey(tagType, tag.Tag)
 		ss.TagIDs[compositeKey] = int(tag.DBID)
+		if tags.IsUserOwnedType(tags.TagType(tagType)) {
+			ss.UserOwnedTagIDs[int(tag.DBID)] = true
+		}
 	}
 
 	log.Debug().

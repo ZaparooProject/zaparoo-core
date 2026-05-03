@@ -70,3 +70,9 @@ var CanonicalIsExclusive = map[TagType]bool{
 func IsExclusiveType(t TagType) bool {
 	return CanonicalIsExclusive[t]
 }
+
+// IsUserOwnedType returns true for tag types that users can mutate directly.
+// Scanner reconciliation must preserve these even when generated metadata changes.
+func IsUserOwnedType(t TagType) bool {
+	return t == TagTypeUser
+}

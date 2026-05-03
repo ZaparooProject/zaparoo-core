@@ -67,6 +67,7 @@ func TestTagTypeConstants(t *testing.T) {
 		{"Media", TagTypeMedia, "media"},
 		{"Extension", TagTypeExtension, "extension"},
 		{"Unknown", TagTypeUnknown, "unknown"},
+		{"User", TagTypeUser, "user"},
 	}
 
 	for _, tt := range tests {
@@ -85,7 +86,7 @@ func TestTagTypeNaming(t *testing.T) {
 		TagTypeLang, TagTypeUnfinished, TagTypeRerelease, TagTypeRev, TagTypeSet,
 		TagTypeAlt, TagTypeUnlicensed, TagTypeMameParent, TagTypeRegion, TagTypeYear,
 		TagTypeVideo, TagTypeCopyright, TagTypeDump, TagTypeMedia, TagTypeExtension,
-		TagTypeUnknown,
+		TagTypeUnknown, TagTypeUser,
 	}
 
 	for _, tagType := range allTypes {
@@ -112,6 +113,14 @@ func TestTagTypeNaming(t *testing.T) {
 				"TagType must only contain lowercase letters and numbers, starting with a letter")
 		})
 	}
+}
+
+func TestIsUserOwnedType(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, IsUserOwnedType(TagTypeUser))
+	assert.False(t, IsUserOwnedType(TagTypeGenre))
+	assert.False(t, IsUserOwnedType(TagType("custom")))
 }
 
 // TestCanonicalTagDefinitionsCompleteness verifies all TagTypes have entries

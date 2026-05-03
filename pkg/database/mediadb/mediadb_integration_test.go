@@ -128,6 +128,62 @@ func insertTaggedGame(
 	require.NoError(t, err)
 }
 
+func TestMediaTagCompositeLookupAndDelete(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	t.Cleanup(cleanup)
+
+	insertedTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "user"})
+	require.NoError(t, err)
+	insertedTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: insertedTagType.DBID, Tag: "favorite"})
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: "nes", Name: "NES"})
+	require.NoError(t, err)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       "favoritegame",
+		Name:       "Favorite Game",
+	})
+	require.NoError(t, err)
+	insertedMedia, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           filepath.Join("roms", "nes", "favorite.nes"),
+	})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{
+		MediaDBID: insertedMedia.DBID,
+		TagDBID:   insertedTag.DBID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	found, err := mediaDB.FindMediaTag(database.MediaTag{
+		MediaDBID: insertedMedia.DBID,
+		TagDBID:   insertedTag.DBID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, insertedMedia.DBID, found.MediaDBID)
+	assert.Equal(t, insertedTag.DBID, found.TagDBID)
+
+	_, err = mediaDB.FindOrInsertMediaTag(database.MediaTag{
+		MediaDBID: insertedMedia.DBID,
+		TagDBID:   insertedTag.DBID,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.DeleteMediaTag(insertedMedia.DBID, insertedTag.DBID))
+	_, err = mediaDB.FindMediaTag(database.MediaTag{
+		MediaDBID: insertedMedia.DBID,
+		TagDBID:   insertedTag.DBID,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sql.ErrNoRows)
+}
+
 func setupTempMediaDB(t *testing.T) (db *MediaDB, cleanup func()) {
 	// Create temp directory that the mock platform will use
 	tempDir, err := os.MkdirTemp("", "zaparoo-test-mediadb-*")

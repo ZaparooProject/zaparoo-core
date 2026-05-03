@@ -352,6 +352,98 @@ func TestAddMediaPath_SkipsTitleAndTagWritesWhenExistingMetadataMatches(t *testi
 	mockDB.AssertExpectations(t)
 }
 
+func TestAddMediaPath_ReconcileExistingMediaTagsPreservesUserTags(t *testing.T) {
+	t.Parallel()
+
+	mockDB := helpers.NewMockMediaDBI()
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	pathKey := filepath.ToSlash(path)
+	scanState := &database.ScanState{
+		SystemIDs:     map[string]int{"NES": 1},
+		TitleIDs:      map[string]int{"NES:supermariobrothers": 10},
+		MediaIDs:      map[string]int{database.MediaKey("NES", pathKey): 20},
+		MediaTitleIDs: map[int]int{20: 10},
+		MediaTagIDs:   map[int]map[int]struct{}{20: {8: {}, 9: {}}},
+		TagTypeIDs:    map[string]int{string(tags.TagTypeExtension): 7, string(tags.TagTypeUser): 11},
+		TagIDs: map[string]int{
+			database.TagKey(string(tags.TagTypeExtension), "nes"):                   8,
+			database.TagKey(string(tags.TagTypeUser), string(tags.TagUserFavorite)): 9,
+		},
+		MissingMedia: map[int]struct{}{20: {}},
+	}
+
+	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	require.NoError(t, err)
+	assert.Equal(t, 10, titleIndex)
+	assert.Equal(t, 20, mediaIndex)
+	assert.Contains(t, scanState.MediaTagIDs[20], 8)
+	assert.Contains(t, scanState.MediaTagIDs[20], 9)
+	mockDB.AssertNotCalled(t, "DeleteMediaTag", mock.Anything, mock.Anything)
+	mockDB.AssertExpectations(t)
+}
+
+func TestAddMediaPath_LoadedScanStatePreservesUserTags(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	initialState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
+	}
+	require.NoError(t, SeedCanonicalTags(mediaDB, initialState))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, mediaID, err := AddMediaPath(mediaDB, initialState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	userType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: string(tags.TagTypeUser), IsExclusive: false})
+	require.NoError(t, err)
+	userTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: userType.DBID, Tag: string(tags.TagUserFavorite)})
+	require.NoError(t, err)
+	_, err = mediaDB.FindOrInsertMediaTag(database.MediaTag{MediaDBID: int64(mediaID), TagDBID: userTag.DBID})
+	require.NoError(t, err)
+
+	refreshState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
+	}
+	require.NoError(t, PopulateScanStateFromDB(ctx, mediaDB, refreshState))
+	require.NoError(t, PopulatePersistentScanStateForSystem(ctx, mediaDB, refreshState, "NES"))
+
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, _, err = AddMediaPath(mediaDB, refreshState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	var favoriteCount int
+	err = mediaDB.UnsafeGetSQLDb().QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM MediaTags mt
+		JOIN Tags t ON t.DBID = mt.TagDBID
+		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE mt.MediaDBID = ? AND tt.Type = ? AND t.Tag = ?`,
+		mediaID, string(tags.TagTypeUser), string(tags.TagUserFavorite),
+	).Scan(&favoriteCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, favoriteCount)
+}
+
 func TestAddMediaPath_ExistingMediaWithoutTagStateDoesNotDeleteAllTags(t *testing.T) {
 	t.Parallel()
 

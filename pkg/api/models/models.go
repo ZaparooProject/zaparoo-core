@@ -60,6 +60,7 @@ const (
 	MethodMediaIndex           = "media.index" // DEPRECATED
 	MethodMediaSearch          = "media.search"
 	MethodMediaTags            = "media.tags"
+	MethodMediaTagsUpdate      = "media.tags.update"
 	MethodMediaActive          = "media.active"
 	MethodMediaHistory         = "media.history"
 	MethodMediaHistoryTop      = "media.history.top"

@@ -400,19 +400,20 @@ type SearchFilters struct {
 }
 
 type ScanState struct {
-	SystemIDs     map[string]int
-	TitleIDs      map[string]int
-	MediaIDs      map[string]int
-	MediaTitleIDs map[int]int // Existing media DBID -> MediaTitleDBID for persistent reconciliation
-	MediaTagIDs   map[int]map[int]struct{}
-	TagTypeIDs    map[string]int
-	TagIDs        map[string]int
-	MissingMedia  map[int]struct{} // DBIDs of media not yet re-found during scan
-	SystemsIndex  int
-	TitlesIndex   int
-	MediaIndex    int
-	TagTypesIndex int
-	TagsIndex     int
+	SystemIDs       map[string]int
+	TitleIDs        map[string]int
+	MediaIDs        map[string]int
+	MediaTitleIDs   map[int]int // Existing media DBID -> MediaTitleDBID for persistent reconciliation
+	MediaTagIDs     map[int]map[int]struct{}
+	TagTypeIDs      map[string]int
+	TagIDs          map[string]int
+	UserOwnedTagIDs map[int]bool
+	MissingMedia    map[int]struct{} // DBIDs of media not yet re-found during scan
+	SystemsIndex    int
+	TitlesIndex     int
+	MediaIndex      int
+	TagTypesIndex   int
+	TagsIndex       int
 }
 
 // JournalMode represents SQLite journal mode

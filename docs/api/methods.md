@@ -761,6 +761,63 @@ have finite vocabularies per system and are always returned in full without trun
 }
 ```
 
+### media.tags.update
+
+Add or remove user tags for an indexed media item.
+
+The initial mutable tag is `user:favorite`. It appears in normal media tag results and can be queried with `media.search` tag filters such as `user:favorite`, `-user:favorite`, and `~user:favorite`.
+
+#### Parameters
+
+| Key     | Type     | Required | Description                                               |
+| :------ | :------- | :------- | :-------------------------------------------------------- |
+| mediaId | number   | No       | Media DBID to update. Cannot be mixed with system/path.   |
+| system  | string   | No       | System ID for path-based lookup. Required when using path. |
+| path    | string   | No       | Media path for path-based lookup. Required with system.    |
+| add     | string[] | No       | Tags to add. Currently only `user:favorite` is mutable.    |
+| remove  | string[] | No       | Tags to remove. Currently only `user:favorite` is mutable. |
+
+Either `mediaId` or `system` plus `path` is required. At least one of `add` or `remove` is required. Search operators (`+`, `-`, `~`) are not valid in mutation requests.
+
+#### Result
+
+| Key  | Type                         | Required | Description                          |
+| :--- | :--------------------------- | :------- | :----------------------------------- |
+| tags | [TagInfo](#taginfo-object)[] | Yes      | Effective tags for the media item.   |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "method": "media.tags.update",
+  "params": {
+    "mediaId": 42,
+    "add": ["user:favorite"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "tags": [
+      {
+        "type": "user",
+        "tag": "favorite"
+      }
+    ]
+  }
+}
+```
+
 ### media.generate
 
 Create a new media database index.
