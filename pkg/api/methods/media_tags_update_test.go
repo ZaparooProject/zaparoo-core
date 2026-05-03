@@ -61,12 +61,14 @@ func TestHandleMediaTagsUpdate_AddsFavoriteTag(t *testing.T) {
 	}
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
 		Return(map[int64]database.MediaFullRow{1: row}, nil).Once()
+	mockDB.On("BeginTransaction", false).Return(nil).Once()
 	mockDB.On("FindOrInsertTagType", database.TagType{Type: string(tags.TagTypeUser), IsExclusive: false}).
 		Return(database.TagType{DBID: 11, Type: string(tags.TagTypeUser)}, nil).Once()
 	mockDB.On("FindOrInsertTag", database.Tag{TypeDBID: 11, Tag: string(tags.TagUserFavorite)}).
 		Return(database.Tag{DBID: 12, TypeDBID: 11, Tag: string(tags.TagUserFavorite)}, nil).Once()
 	mockDB.On("FindOrInsertMediaTag", database.MediaTag{MediaDBID: 1, TagDBID: 12}).
 		Return(database.MediaTag{DBID: 13, MediaDBID: 1, TagDBID: 12}, nil).Once()
+	mockDB.On("CommitTransaction").Return(nil).Once()
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).
 		Return([]database.TagInfo{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserFavorite)}}, nil).Once()
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
@@ -119,16 +121,20 @@ func TestHandleMediaTagsUpdate_RealMediaDBFavoriteFlow(t *testing.T) {
 		Database: &database.Database{MediaDB: mediaDB},
 	}
 
-	result, err := HandleMediaTagsUpdate(withParams(baseEnv, fmt.Sprintf(`{"mediaId":%d,"add":["user:favorite"]}`, favoriteID)))
+	addParams := fmt.Sprintf(`{"mediaId":%d,"add":["user:favorite"]}`, favoriteID)
+	result, err := HandleMediaTagsUpdate(withParams(&baseEnv, addParams))
 	require.NoError(t, err)
 	assertTagsContainFavorite(t, result)
 
-	searchResult := searchByTags(t, baseEnv, []string{"user:favorite"})
+	searchResult := searchByTags(t, &baseEnv, []string{"user:favorite"})
 	require.Len(t, searchResult.Results, 1)
 	assert.Equal(t, favoriteID, searchResult.Results[0].MediaID)
-	assert.Contains(t, searchResult.Results[0].Tags, database.TagInfo{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserFavorite)})
+	assert.Contains(t, searchResult.Results[0].Tags, database.TagInfo{
+		Type: string(tags.TagTypeUser),
+		Tag:  string(tags.TagUserFavorite),
+	})
 
-	searchResult = searchByTags(t, baseEnv, []string{"-user:favorite"})
+	searchResult = searchByTags(t, &baseEnv, []string{"-user:favorite"})
 	require.Len(t, searchResult.Results, 1)
 	assert.Equal(t, otherID, searchResult.Results[0].MediaID)
 
@@ -136,15 +142,16 @@ func TestHandleMediaTagsUpdate_RealMediaDBFavoriteFlow(t *testing.T) {
 	require.NoError(t, err)
 	assertTagsContainFavorite(t, tagsResult)
 
-	result, err = HandleMediaTagsUpdate(withParams(baseEnv, fmt.Sprintf(`{"mediaId":%d,"remove":["user:favorite"]}`, favoriteID)))
+	removeParams := fmt.Sprintf(`{"mediaId":%d,"remove":["user:favorite"]}`, favoriteID)
+	result, err = HandleMediaTagsUpdate(withParams(&baseEnv, removeParams))
 	require.NoError(t, err)
 	assertTagsDoNotContainFavorite(t, result)
 
-	searchResult = searchByTags(t, baseEnv, []string{"user:favorite"})
+	searchResult = searchByTags(t, &baseEnv, []string{"user:favorite"})
 	assert.Empty(t, searchResult.Results)
 
 	result, err = HandleMediaTagsUpdate(withParams(
-		baseEnv,
+		&baseEnv,
 		fmt.Sprintf(`{"system":"NES","path":%q,"add":["user:favorite"]}`, filepath.ToSlash(favoritePath)),
 	))
 	require.NoError(t, err)
@@ -159,7 +166,16 @@ func addTestMediaPaths(t *testing.T, mediaDB database.MediaDBI, paths ...string)
 	require.NoError(t, mediaDB.BeginTransaction(true))
 	mediaIDs := make([]int64, 0, len(paths))
 	for _, path := range paths {
-		_, mediaID, err := mediascanner.AddMediaPath(mediaDB, state, "NES", path, false, false, nil, slugs.MediaTypeGame)
+		_, mediaID, err := mediascanner.AddMediaPath(
+			mediaDB,
+			state,
+			"NES",
+			path,
+			false,
+			false,
+			nil,
+			slugs.MediaTypeGame,
+		)
 		require.NoError(t, err)
 		mediaIDs = append(mediaIDs, int64(mediaID))
 	}
@@ -181,12 +197,13 @@ func newTestScanState() *database.ScanState {
 	}
 }
 
-func withParams(env requests.RequestEnv, params string) requests.RequestEnv {
-	env.Params = []byte(params)
-	return env
+func withParams(env *requests.RequestEnv, params string) requests.RequestEnv {
+	next := *env
+	next.Params = []byte(params)
+	return next
 }
 
-func searchByTags(t *testing.T, env requests.RequestEnv, rawTags []string) models.SearchResults {
+func searchByTags(t *testing.T, env *requests.RequestEnv, rawTags []string) models.SearchResults {
 	t.Helper()
 
 	params := models.SearchParams{Tags: &rawTags}

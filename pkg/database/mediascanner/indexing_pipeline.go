@@ -380,16 +380,24 @@ func reconcileExistingMediaTags(
 }
 
 func isUserOwnedTagID(ss *database.ScanState, tagIndex int) bool {
+	ensureUserOwnedTagIDs(ss)
+	return ss.UserOwnedTagIDs[tagIndex]
+}
+
+func ensureUserOwnedTagIDs(ss *database.ScanState) {
+	if ss.UserOwnedTagIDs != nil {
+		return
+	}
+
+	ss.UserOwnedTagIDs = make(map[int]bool)
 	for tagKey, id := range ss.TagIDs {
-		if id != tagIndex {
+		tagType, _, found := strings.Cut(tagKey, ":")
+		if !found || !tags.IsUserOwnedType(tags.TagType(tagType)) {
 			continue
 		}
 
-		tagType, _, found := strings.Cut(tagKey, ":")
-		return found && tags.IsUserOwnedType(tags.TagType(tagType))
+		ss.UserOwnedTagIDs[id] = true
 	}
-
-	return false
 }
 
 func insertDesiredMediaTags(
@@ -732,10 +740,14 @@ func PopulateScanStateFromDB(ctx context.Context, db database.MediaDBI, ss *data
 	if err != nil {
 		return fmt.Errorf("failed to get existing tags: %w", err)
 	}
+	ss.UserOwnedTagIDs = make(map[int]bool)
 	for _, tag := range allTags {
 		tagType := tagTypeByDBID[tag.TypeDBID]
 		compositeKey := database.TagKey(tagType, tag.Tag)
 		ss.TagIDs[compositeKey] = int(tag.DBID)
+		if tags.IsUserOwnedType(tags.TagType(tagType)) {
+			ss.UserOwnedTagIDs[int(tag.DBID)] = true
+		}
 	}
 
 	log.Debug().

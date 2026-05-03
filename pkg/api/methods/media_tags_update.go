@@ -46,7 +46,12 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	if len(params.Add) == 0 && len(params.Remove) == 0 {
 		return nil, models.ClientErrf("invalid params: add or remove is required")
 	}
-	if err := validateMediaRef(mediaRefParam{MediaID: params.MediaID, System: params.System, Path: params.Path}); err != nil {
+	mediaRef := mediaRefParam{
+		MediaID: params.MediaID,
+		System:  params.System,
+		Path:    params.Path,
+	}
+	if err := validateMediaRef(mediaRef); err != nil {
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
@@ -59,11 +64,7 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 		return nil, models.ClientErrf("invalid remove tags: %w", err)
 	}
 
-	resolved, err := resolveMediaRefs(&env, []mediaRefParam{{
-		MediaID: params.MediaID,
-		System:  params.System,
-		Path:    params.Path,
-	}})
+	resolved, err := resolveMediaRefs(&env, []mediaRefParam{mediaRef})
 	if err != nil {
 		return nil, err
 	}
@@ -75,15 +76,8 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	}
 
 	row := resolved[0].Row
-	for _, tag := range remove {
-		if err := removeMediaUserTag(env.Database.MediaDB, row.DBID, tag); err != nil {
-			return nil, err
-		}
-	}
-	for _, tag := range add {
-		if err := addMediaUserTag(env.Database.MediaDB, row.DBID, tag); err != nil {
-			return nil, err
-		}
+	if updateErr := updateMediaUserTags(env.Database.MediaDB, row.DBID, remove, add); updateErr != nil {
+		return nil, updateErr
 	}
 
 	fileTags, err := env.Database.MediaDB.GetMediaTagsByMediaDBID(env.Context, row.DBID)
@@ -105,7 +99,7 @@ func parseMutableUserTags(rawTags []string) ([]zapscript.TagFilter, error) {
 	for _, raw := range rawTags {
 		trimmed := strings.TrimSpace(raw)
 		if trimmed == "" {
-			return nil, fmt.Errorf("tag cannot be empty")
+			return nil, errors.New("tag cannot be empty")
 		}
 		if strings.HasPrefix(trimmed, "+") || strings.HasPrefix(trimmed, "-") || strings.HasPrefix(trimmed, "~") {
 			return nil, fmt.Errorf("tag operators are not allowed for mutation: %q", raw)
@@ -114,7 +108,7 @@ func parseMutableUserTags(rawTags []string) ([]zapscript.TagFilter, error) {
 
 	parsed, err := filters.ParseTagFilters(rawTags)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse tag filters: %w", err)
 	}
 	for _, tag := range parsed {
 		if tag.Type != string(tags.TagTypeUser) || tag.Value != string(tags.TagUserFavorite) {
@@ -123,6 +117,43 @@ func parseMutableUserTags(rawTags []string) ([]zapscript.TagFilter, error) {
 	}
 
 	return parsed, nil
+}
+
+func updateMediaUserTags(
+	mediaDB database.MediaDBI,
+	mediaDBID int64,
+	remove []zapscript.TagFilter,
+	add []zapscript.TagFilter,
+) error {
+	if err := mediaDB.BeginTransaction(false); err != nil {
+		return fmt.Errorf("failed to begin media tag update transaction: %w", err)
+	}
+
+	for _, tag := range remove {
+		if err := removeMediaUserTag(mediaDB, mediaDBID, tag); err != nil {
+			rollbackMediaTagUpdate(mediaDB)
+			return err
+		}
+	}
+	for _, tag := range add {
+		if err := addMediaUserTag(mediaDB, mediaDBID, tag); err != nil {
+			rollbackMediaTagUpdate(mediaDB)
+			return err
+		}
+	}
+
+	if err := mediaDB.CommitTransaction(); err != nil {
+		rollbackMediaTagUpdate(mediaDB)
+		return fmt.Errorf("failed to commit media tag update transaction: %w", err)
+	}
+
+	return nil
+}
+
+func rollbackMediaTagUpdate(mediaDB database.MediaDBI) {
+	if rbErr := mediaDB.RollbackTransaction(); rbErr != nil {
+		log.Error().Err(rbErr).Msg("failed to rollback media tag update transaction")
+	}
 }
 
 func addMediaUserTag(mediaDB database.MediaDBI, mediaDBID int64, tag zapscript.TagFilter) error {
@@ -139,7 +170,11 @@ func addMediaUserTag(mediaDB database.MediaDBI, mediaDBID int64, tag zapscript.T
 		return fmt.Errorf("failed to find or insert tag: %w", err)
 	}
 
-	if _, err = mediaDB.FindOrInsertMediaTag(database.MediaTag{MediaDBID: mediaDBID, TagDBID: tagRow.DBID}); err != nil {
+	mediaTag := database.MediaTag{
+		MediaDBID: mediaDBID,
+		TagDBID:   tagRow.DBID,
+	}
+	if _, err = mediaDB.FindOrInsertMediaTag(mediaTag); err != nil {
 		return fmt.Errorf("failed to find or insert media tag: %w", err)
 	}
 
