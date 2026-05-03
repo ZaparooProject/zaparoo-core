@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -103,6 +104,55 @@ func TestHandleMediaTagsUpdate_RejectsEmptyTags(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaTagsUpdate_RejectsUnsupportedTags(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["genre:platform"]}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only user:favorite can be mutated")
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaTagsUpdate_RollsBackWhenAddFails(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
+		Return(map[int64]database.MediaFullRow{1: mediaTagsUpdateRow()}, nil).Once()
+	mockDB.On("BeginTransaction", false).Return(nil).Once()
+	mockDB.On("FindOrInsertTagType", database.TagType{Type: string(tags.TagTypeUser), IsExclusive: false}).
+		Return(database.TagType{}, errors.New("tag type insert failed")).Once()
+	mockDB.On("RollbackTransaction").Return(nil).Once()
+
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to find or insert tag type")
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaTagsUpdate_RollsBackWhenCommitFails(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{1}).
+		Return(map[int64]database.MediaFullRow{1: mediaTagsUpdateRow()}, nil).Once()
+	mockDB.On("BeginTransaction", false).Return(nil).Once()
+	mockDB.On("FindOrInsertTagType", database.TagType{Type: string(tags.TagTypeUser), IsExclusive: false}).
+		Return(database.TagType{DBID: 11, Type: string(tags.TagTypeUser)}, nil).Once()
+	mockDB.On("FindOrInsertTag", database.Tag{TypeDBID: 11, Tag: string(tags.TagUserFavorite)}).
+		Return(database.Tag{DBID: 12, TypeDBID: 11, Tag: string(tags.TagUserFavorite)}, nil).Once()
+	mockDB.On("FindOrInsertMediaTag", database.MediaTag{MediaDBID: 1, TagDBID: 12}).
+		Return(database.MediaTag{MediaDBID: 1, TagDBID: 12}, nil).Once()
+	mockDB.On("CommitTransaction").Return(errors.New("commit failed")).Once()
+	mockDB.On("RollbackTransaction").Return(nil).Once()
+
+	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["user:favorite"]}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to commit media tag update transaction")
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaTagsUpdate_RealMediaDBFavoriteFlow(t *testing.T) {
 	t.Parallel()
 
@@ -156,6 +206,18 @@ func TestHandleMediaTagsUpdate_RealMediaDBFavoriteFlow(t *testing.T) {
 	))
 	require.NoError(t, err)
 	assertTagsContainFavorite(t, result)
+}
+
+func mediaTagsUpdateRow() database.MediaFullRow {
+	return database.MediaFullRow{
+		Media: database.Media{DBID: 1},
+		Title: database.MediaTitle{DBID: 10},
+		System: database.System{
+			DBID:     100,
+			SystemID: "NES",
+			Name:     "NES",
+		},
+	}
 }
 
 func addTestMediaPaths(t *testing.T, mediaDB database.MediaDBI, paths ...string) []int64 {
