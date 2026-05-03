@@ -205,6 +205,52 @@ func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 	return result, nil
 }
 
+func findPathCaseInsensitive(path string) (string, error) {
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+
+	cleanPath := filepath.Clean(path)
+	volume := filepath.VolumeName(cleanPath)
+	pathWithoutVolume := strings.TrimPrefix(cleanPath, volume)
+	isAbs := filepath.IsAbs(cleanPath)
+	parts := strings.Split(pathWithoutVolume, string(filepath.Separator))
+
+	current := volume
+	if isAbs {
+		current += string(filepath.Separator)
+	} else if current == "" {
+		current = "."
+	}
+
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		entries, err := os.ReadDir(current)
+		if err != nil {
+			return "", fmt.Errorf("failed to read directory %s: %w", current, err)
+		}
+
+		matched := ""
+		for _, entry := range entries {
+			if entry.Name() == part {
+				matched = entry.Name()
+				break
+			}
+			if matched == "" && strings.EqualFold(entry.Name(), part) {
+				matched = entry.Name()
+			}
+		}
+		if matched == "" {
+			return "", os.ErrNotExist
+		}
+		current = filepath.Join(current, matched)
+	}
+
+	return current, nil
+}
+
 // Check all games folders for a relative path to a file
 func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string, error) {
 	if filepath.IsAbs(path) {
@@ -213,6 +259,7 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 
 	ps := strings.Split(path, string(filepath.Separator))
 	statPath := path
+	var virtualParts []string
 
 	// if the file is inside a zip or virtual list, we just check that file exists
 	// TODO: both of these things are very specific to mister, it would be good to
@@ -222,6 +269,7 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 		ext := filepath.Ext(strings.ToLower(p))
 		if ext == ".zip" || ext == ".txt" {
 			statPath = filepath.Join(ps[:i+1]...)
+			virtualParts = ps[i+1:]
 			log.Debug().Msgf("found zip/txt, setting stat path: %s", statPath)
 			break
 		}
@@ -229,9 +277,13 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 
 	for _, gf := range pl.RootDirs(cfg) {
 		fullPath := filepath.Join(gf, statPath)
-		if _, err := os.Stat(fullPath); err == nil {
-			log.Debug().Msgf("found file: %s", fullPath)
-			return filepath.Join(gf, path), nil
+		resolvedPath, err := findPathCaseInsensitive(fullPath)
+		if err == nil {
+			log.Debug().Msgf("found file: %s", resolvedPath)
+			if len(virtualParts) > 0 {
+				return filepath.Join(append([]string{resolvedPath}, virtualParts...)...), nil
+			}
+			return resolvedPath, nil
 		}
 	}
 

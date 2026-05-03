@@ -290,7 +290,7 @@ func TestHandleMediaBrowse_SystemRootRoutesDedupesCoveredParent(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	romsPrefix := filepath.ToSlash(romsRoot) + "/"
 	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "NES")).
-		Return(10, nil)
+		Return(15, nil)
 	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts(romsPrefix, "NES")).
 		Return([]database.BrowseDirectoryResult{{Name: "NES", FileCount: 10, SystemIDs: []string{"NES"}}}, nil)
 	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "NES")).
@@ -301,7 +301,7 @@ func TestHandleMediaBrowse_SystemRootRoutesDedupesCoveredParent(t *testing.T) {
 				assert.ElementsMatch(t, []string{nesAPIPath, romsAPIPath}, opts.Routes)
 		}),
 	).Return(map[string]database.BrowseRouteCount{
-		romsAPIPath: {Path: romsAPIPath, FileCount: 10, SystemIDs: []string{"NES"}},
+		romsAPIPath: {Path: romsAPIPath, FileCount: 15, SystemIDs: []string{"NES"}},
 		nesAPIPath:  {Path: nesAPIPath, FileCount: 10, SystemIDs: []string{"NES"}},
 	}, nil)
 
@@ -386,13 +386,13 @@ func TestDedupeSystemRootEntries(t *testing.T) {
 			want: []string{"/media/fat/games/NES"},
 		},
 		{
-			name: "parent keeps union across children",
+			name: "children absorb parent with aggregate count",
 			entries: []models.BrowseEntry{
 				{Path: "/media/fat/games", FileCount: count(15)},
 				{Path: "/media/fat/games/NES", FileCount: count(10)},
 				{Path: "/media/fat/games/NES Hacks", FileCount: count(5)},
 			},
-			want: []string{"/media/fat/games", "/media/fat/games/NES", "/media/fat/games/NES Hacks"},
+			want: []string{"/media/fat/games/NES", "/media/fat/games/NES Hacks"},
 		},
 		{
 			name: "sibling equal counts are unrelated",

@@ -2150,6 +2150,11 @@ func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
+	if db.batchInsertMediaTitle != nil {
+		if err := db.batchInsertMediaTitle.Flush(); err != nil {
+			return fmt.Errorf("failed to flush media title batch before update: %w", err)
+		}
+	}
 
 	err := sqlUpdateMediaTitle(db.ctx, db.conn(), mediaDBID, mediaTitleDBID)
 	if err == nil && !db.inTransaction {

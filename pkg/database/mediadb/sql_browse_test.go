@@ -100,6 +100,36 @@ func TestSqlBrowseDirectories_FallsBackWhenCacheNotReady(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlBrowseDirectories_FallsBackWhenReadyCacheIsEmpty(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	psxDir := browseTestDir("media", "fat", "games", "PSX")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(psxDir).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(10))
+	mock.ExpectQuery("SELECT d.Name, c.FileCount").
+		WithArgs(int64(10), "PSX").
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}))
+	mock.ExpectQuery("WITH matched AS").
+		WithArgs(psxDir, psxDir, "PSX").
+		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).AddRow("USA", 273, "PSX"))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: psxDir,
+		Systems:    []systemdefs.System{{ID: "PSX"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "USA", results[0].Name)
+	assert.Equal(t, 273, results[0].FileCount)
+	assert.Equal(t, []string{"PSX"}, results[0].SystemIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlBrowseVirtualSchemesFromCache_ReturnsEmptyWithoutMediaFallback(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()

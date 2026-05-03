@@ -310,6 +310,28 @@ launcher = "snes-retroarch"
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestFindFile_ResolvesCaseInsensitiveVirtualZipPath(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	rootDir := t.TempDir()
+	virtualGame := "Neo Turf Masters (turfmast).neo"
+	zipPath := filepath.Join(rootDir, "NEOGEO", "NEOGEO.zip")
+	relativePath := filepath.Join("NeoGeo", "NEOGEO.zip", virtualGame)
+	expectedPath := filepath.Join(rootDir, "NEOGEO", "NEOGEO.zip", virtualGame)
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(zipPath), 0o700))
+	require.NoError(t, os.WriteFile(zipPath, []byte("test"), 0o600))
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
+
+	result, err := findFile(mockPlatform, cfg, relativePath)
+
+	require.NoError(t, err)
+	assert.Equal(t, expectedPath, result)
+	mockPlatform.AssertExpectations(t)
+}
+
 // TestCmdLaunch_FileNotFound verifies that ErrFileNotFound is returned when file doesn't exist
 func TestCmdLaunch_FileNotFound(t *testing.T) {
 	t.Parallel()

@@ -2452,6 +2452,48 @@ func TestMediaDB_CommitTransaction_ReturnsBatchFlushError_Integration(t *testing
 	assert.ErrorContains(t, err, "failed to flush batch inserts")
 }
 
+func TestMediaDB_UpdateMediaTitle_FlushesPendingTitleBatch_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: "Amiga", Name: "Amiga"})
+	require.NoError(t, err)
+	oldTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       "oldtitle",
+		Name:       "Old Title",
+	})
+	require.NoError(t, err)
+	insertedMedia, err := mediaDB.InsertMedia(database.Media{
+		MediaTitleDBID: oldTitle.DBID,
+		SystemDBID:     insertedSystem.DBID,
+		Path:           filepath.Join("games", "Amiga", "listings", "games.txt", "Old Title"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	newTitleDBID := oldTitle.DBID + 1
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, err = mediaDB.InsertMediaTitle(&database.MediaTitle{
+		DBID:       newTitleDBID,
+		SystemDBID: insertedSystem.DBID,
+		Slug:       "newtitle",
+		Name:       "New Title",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.UpdateMediaTitle(insertedMedia.DBID, newTitleDBID))
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	updatedMedia, err := mediaDB.FindMedia(database.Media{DBID: insertedMedia.DBID})
+	require.NoError(t, err)
+	assert.Equal(t, newTitleDBID, updatedMedia.MediaTitleDBID)
+}
+
 func TestMediaDB_CacheInvalidationScope_UsesAllSystemsForBroadIndexing_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

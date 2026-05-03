@@ -301,11 +301,7 @@ func systemRootEntryCoveredByDescendant(entries []models.BrowseEntry, parentIdx 
 			continue
 		}
 
-		child := entries[childIdx]
-		if child.FileCount == nil || *child.FileCount != *parent.FileCount {
-			continue
-		}
-		if isStrictFilesystemDescendant(child.Path, parent.Path) {
+		if isStrictFilesystemDescendant(entries[childIdx].Path, parent.Path) {
 			return true
 		}
 	}
