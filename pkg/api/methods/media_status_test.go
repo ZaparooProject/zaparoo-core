@@ -98,6 +98,54 @@ func TestIndexingNotificationState_SendsVisibleChangesInsideThrottle(t *testing.
 		),
 		"step changes are visible progress and must bypass the throttle",
 	)
+	assert.True(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{Phase: mediascanner.PhaseDiscovering},
+			baseTime.Add(40*time.Millisecond),
+			throttleInterval,
+		),
+		"phase changes are visible progress and must bypass the throttle",
+	)
+	assert.False(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{Phase: mediascanner.PhaseDiscovering},
+			baseTime.Add(50*time.Millisecond),
+			throttleInterval,
+		),
+		"duplicate phase updates should still be throttled",
+	)
+	assert.True(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing},
+			baseTime.Add(60*time.Millisecond),
+			throttleInterval,
+		),
+		"phase changes must bypass the throttle even when they happen quickly",
+	)
+	assert.False(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing},
+			baseTime.Add(70*time.Millisecond),
+			throttleInterval,
+		),
+		"duplicate phase updates should still be throttled after a phase change",
+	)
+	assert.True(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing, Total: 9, Step: 8},
+			baseTime.Add(80*time.Millisecond),
+			throttleInterval,
+		),
+		"step changes are visible progress before final-step completion",
+	)
+	assert.True(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing, Total: 8, Step: 8},
+			baseTime.Add(90*time.Millisecond),
+			throttleInterval,
+		),
+		"final-step updates must bypass the throttle",
+	)
 }
 
 func TestMediaIndexStatus_ThreadSafety(t *testing.T) {

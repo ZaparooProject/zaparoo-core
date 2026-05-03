@@ -71,6 +71,14 @@ var cappedTagTypes = map[string]bool{
 	"search":     true,
 }
 
+type indexingNotificationState struct {
+	lastTime     time.Time
+	lastPhase    string
+	lastSystemID string
+	lastStep     int
+	hasLast      bool
+}
+
 // capTagsByCategory returns at most limit tags per type, sorted by count desc
 // then tag asc within each group. Long-tail types (credit, publisher, etc.)
 // are capped at limit; taxonomy types (region, year, lang, etc.) are returned
@@ -195,26 +203,6 @@ type indexingStatus struct {
 	indexing    bool
 }
 
-type indexingNotificationState struct {
-	lastTime     time.Time
-	lastPhase    string
-	lastSystemID string
-	lastStep     int
-	hasLast      bool
-}
-
-func isIndexingPhaseStatus(status mediascanner.IndexStatus) bool {
-	switch status.Phase {
-	case mediascanner.PhaseDiscovering,
-		mediascanner.PhaseInitializing,
-		mediascanner.PhaseCreatingIndexes,
-		mediascanner.PhaseBuildingCaches:
-		return true
-	default:
-		return false
-	}
-}
-
 func (s *indexingNotificationState) shouldSend(
 	status mediascanner.IndexStatus,
 	now time.Time,
@@ -224,9 +212,9 @@ func (s *indexingNotificationState) shouldSend(
 		status.Phase != s.lastPhase ||
 		status.SystemID != s.lastSystemID ||
 		status.Step != s.lastStep
-	isFinalStep := status.Step == status.Total
+	isFinalStep := status.Total > 0 && status.Step == status.Total
 
-	if !isIndexingPhaseStatus(status) && !isFinalStep && !visibleStepChanged && now.Sub(s.lastTime) < interval {
+	if !isFinalStep && !visibleStepChanged && now.Sub(s.lastTime) < interval {
 		return false
 	}
 
