@@ -788,3 +788,175 @@ func TestMapToDB_FilesystemFallback_NoMediaDir(t *testing.T) {
 		assert.NotContains(t, p.TypeTag, "image-", "no image props expected when no media dir and no XML paths")
 	}
 }
+
+// --- buildFilenameIndex ---
+
+func TestBuildFilenameIndex_IndexesByBasename(t *testing.T) {
+	t.Parallel()
+	m := map[string]database.MediaWithFullPath{
+		"/roms/nes/mario.nes": {Path: "/roms/nes/mario.nes", DBID: 1, MediaTitleDBID: 10},
+		"/roms/nes/zelda.nes": {Path: "/roms/nes/zelda.nes", DBID: 2, MediaTitleDBID: 20},
+	}
+	idx := buildFilenameIndex(m)
+	assert.Equal(t, int64(1), idx["mario.nes"].DBID)
+	assert.Equal(t, int64(2), idx["zelda.nes"].DBID)
+}
+
+func TestBuildFilenameIndex_LowercasesKey(t *testing.T) {
+	t.Parallel()
+	m := map[string]database.MediaWithFullPath{
+		"/roms/nes/MARIO.NES": {Path: "/roms/nes/MARIO.NES", DBID: 5, MediaTitleDBID: 50},
+	}
+	idx := buildFilenameIndex(m)
+	assert.Equal(t, int64(5), idx["mario.nes"].DBID)
+	assert.Empty(t, idx["MARIO.NES"].DBID)
+}
+
+func TestBuildFilenameIndex_FirstWinsOnConflict(t *testing.T) {
+	t.Parallel()
+	// Two different paths that share the same basename.
+	m := map[string]database.MediaWithFullPath{
+		"/roms/us/mario.nes": {Path: "/roms/us/mario.nes", DBID: 1, MediaTitleDBID: 10},
+		"/roms/jp/mario.nes": {Path: "/roms/jp/mario.nes", DBID: 2, MediaTitleDBID: 20},
+	}
+	idx := buildFilenameIndex(m)
+	require.Contains(t, idx, "mario.nes")
+	// One of the two entries wins; the important thing is we don't panic or drop both.
+	dbid := idx["mario.nes"].DBID
+	assert.True(t, dbid == 1 || dbid == 2, "expected one of the two DBID values")
+}
+
+func TestBuildFilenameIndex_Empty(t *testing.T) {
+	t.Parallel()
+	idx := buildFilenameIndex(nil)
+	assert.Empty(t, idx)
+}
+
+// --- matchGamelistPath filename fallback ---
+
+func TestMatchGamelistPath_FilenameOnlyFallback_MatchesNestedMedia(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	nestedPath := filepath.ToSlash(filepath.Join(root, "sub", "mario.nes"))
+	byPath := map[string]database.MediaWithFullPath{
+		normalizeMediaPath(nestedPath): {Path: nestedPath, DBID: 7, MediaTitleDBID: 70},
+	}
+	byFilename := buildFilenameIndex(byPath)
+
+	// Gamelist entry is root-relative; no direct path match exists.
+	matchedPath, mediaDBID, titleDBID := matchGamelistPath(root, "./mario.nes", byPath, byFilename)
+
+	assert.Equal(t, filepath.ToSlash(filepath.Join(root, "mario.nes")), matchedPath)
+	assert.Equal(t, int64(7), mediaDBID)
+	assert.Equal(t, int64(70), titleDBID)
+}
+
+func TestMatchGamelistPath_DirectMatchWins_NoFallbackNeeded(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	directPath := filepath.ToSlash(filepath.Join(root, "mario.nes"))
+	nestedPath := filepath.ToSlash(filepath.Join(root, "sub", "mario.nes"))
+	byPath := map[string]database.MediaWithFullPath{
+		normalizeMediaPath(directPath): {Path: directPath, DBID: 1, MediaTitleDBID: 10},
+		normalizeMediaPath(nestedPath): {Path: nestedPath, DBID: 2, MediaTitleDBID: 20},
+	}
+	byFilename := buildFilenameIndex(byPath)
+
+	matchedPath, mediaDBID, _ := matchGamelistPath(root, "./mario.nes", byPath, byFilename)
+
+	assert.Equal(t, directPath, matchedPath)
+	assert.Equal(t, int64(1), mediaDBID, "direct path match must take precedence over filename fallback")
+}
+
+func TestMatchGamelistPath_NoFallback_WhenGamelistHasSubdir(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	// Media only exists at the root level, but the gamelist path has a subdir.
+	rootPath := filepath.ToSlash(filepath.Join(root, "mario.nes"))
+	byPath := map[string]database.MediaWithFullPath{
+		normalizeMediaPath(rootPath): {Path: rootPath, DBID: 3, MediaTitleDBID: 30},
+	}
+	byFilename := buildFilenameIndex(byPath)
+
+	_, mediaDBID, titleDBID := matchGamelistPath(root, "./subdir/mario.nes", byPath, byFilename)
+
+	assert.Zero(t, mediaDBID, "filename fallback must not fire for gamelist paths with a subdirectory")
+	assert.Zero(t, titleDBID)
+}
+
+func TestMatchGamelistPath_FilenameNotFound_ReturnsZeroIDs(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	byPath := map[string]database.MediaWithFullPath{}
+	byFilename := buildFilenameIndex(byPath)
+
+	matchedPath, mediaDBID, titleDBID := matchGamelistPath(root, "./mario.nes", byPath, byFilename)
+
+	assert.Equal(t, filepath.ToSlash(filepath.Join(root, "mario.nes")), matchedPath)
+	assert.Zero(t, mediaDBID)
+	assert.Zero(t, titleDBID)
+}
+
+// --- LoadRecords filename fallback integration ---
+
+func TestLoadRecords_FilenameFallback_MatchesNestedMedia(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./mario.nes</path><name>Mario</name></game>
+</gameList>`), 0o600))
+
+	// Media is indexed at a nested path, not at the root.
+	nestedPath := filepath.ToSlash(filepath.Join(root, "sub", "mario.nes"))
+	db := helpers.NewMockMediaDBI()
+	db.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{
+		{Path: nestedPath, SystemID: "nes", DBID: 9, MediaTitleDBID: 99},
+	}, nil).Once()
+
+	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
+		ID:       "nes",
+		ROMPaths: []string{root},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, int64(9), records[0].MatchedMediaDBID,
+		"filename fallback should match nested media when gamelist entry is root-relative")
+	assert.Equal(t, int64(99), records[0].MatchedTitleDBID)
+	db.AssertExpectations(t)
+}
+
+func TestLoadRecords_FilenameFallback_SubdirGamelistNoMatch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	// Gamelist has a subdir path — fallback must NOT fire.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./sub/mario.nes</path><name>Mario</name></game>
+</gameList>`), 0o600))
+
+	// Media is only indexed at root, so direct match also fails.
+	rootPath := filepath.ToSlash(filepath.Join(root, "mario.nes"))
+	db := helpers.NewMockMediaDBI()
+	db.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{
+		{Path: rootPath, SystemID: "nes", DBID: 5, MediaTitleDBID: 55},
+	}, nil).Once()
+
+	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
+		ID:       "nes",
+		ROMPaths: []string{root},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Zero(t, records[0].MatchedMediaDBID,
+		"filename fallback must not fire when gamelist path has a subdirectory")
+	db.AssertExpectations(t)
+}

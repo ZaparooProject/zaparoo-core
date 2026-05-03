@@ -134,6 +134,7 @@ func (g *GamelistXMLScraper) LoadRecords(
 	if err != nil {
 		return nil, err
 	}
+	mediaByFilename := buildFilenameIndex(mediaByPath)
 	for _, rootPath := range system.ROMPaths {
 		select {
 		case <-ctx.Done():
@@ -163,7 +164,9 @@ func (g *GamelistXMLScraper) LoadRecords(
 		availableMediaDirs := statMediaDirsFS(g.filesystem(), rootPath)
 
 		for i := range gl.Games {
-			matchedPath, mediaDBID, titleDBID := matchGamelistPath(rootPath, gl.Games[i].Path, mediaByPath)
+			matchedPath, mediaDBID, titleDBID := matchGamelistPath(
+				rootPath, gl.Games[i].Path, mediaByPath, mediaByFilename,
+			)
 			records = append(records, &GamelistRecord{
 				SystemRootPath:     rootPath,
 				AvailableMediaDirs: availableMediaDirs,
@@ -202,18 +205,53 @@ func (g *GamelistXMLScraper) mediaByNormalizedPath(systemID string) (map[string]
 }
 
 func matchGamelistPath(
-	systemRootPath string, gamePath string, mediaByPath map[string]database.MediaWithFullPath,
+	systemRootPath string, gamePath string,
+	mediaByPath map[string]database.MediaWithFullPath,
+	mediaByFilename map[string]database.MediaWithFullPath,
 ) (matchedPath string, mediaDBID, mediaTitleDBID int64) {
 	resolved := resolveESPath(gamePath, systemRootPath)
 	if resolved == "" {
 		return "", 0, 0
 	}
 	absPath := filepath.ToSlash(filepath.Clean(resolved))
-	media, ok := mediaByPath[normalizeMediaPath(absPath)]
-	if !ok {
-		return absPath, 0, 0
+	if media, ok := mediaByPath[normalizeMediaPath(absPath)]; ok {
+		return absPath, media.DBID, media.MediaTitleDBID
 	}
-	return absPath, media.DBID, media.MediaTitleDBID
+
+	// Filename-only fallback: applies only when the gamelist entry is directly
+	// under systemRootPath (depth 1). On MiSTer the same ROM may be indexed
+	// under a nested path while the gamelist refers to it as ./game.ext at the
+	// root. We match by basename alone so the scraper can still enrich those
+	// records.
+	if len(mediaByFilename) > 0 {
+		rel, relErr := filepath.Rel(filepath.Clean(systemRootPath), filepath.Clean(resolved))
+		if relErr == nil && !strings.Contains(filepath.ToSlash(rel), "/") {
+			filename := strings.ToLower(filepath.Base(resolved))
+			if m, ok := mediaByFilename[filename]; ok {
+				log.Debug().
+					Str("gamePath", gamePath).
+					Str("matchedMediaPath", m.Path).
+					Msg("gamelistxml: filename fallback matched nested media")
+				return absPath, m.DBID, m.MediaTitleDBID
+			}
+		}
+	}
+
+	return absPath, 0, 0
+}
+
+// buildFilenameIndex builds a secondary index keyed by lower-case basename from
+// the primary path index. The first entry wins when multiple media records share
+// the same filename. Used as a fallback when the full path does not match.
+func buildFilenameIndex(mediaByPath map[string]database.MediaWithFullPath) map[string]database.MediaWithFullPath {
+	byFilename := make(map[string]database.MediaWithFullPath, len(mediaByPath))
+	for _, m := range mediaByPath {
+		key := strings.ToLower(filepath.Base(m.Path))
+		if _, exists := byFilename[key]; !exists {
+			byFilename[key] = m
+		}
+	}
+	return byFilename
 }
 
 func normalizeMediaPath(path string) string {
