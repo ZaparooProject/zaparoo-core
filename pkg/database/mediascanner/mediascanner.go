@@ -859,6 +859,9 @@ func NewNamesIndex(
 		}
 
 		systemID := sys.ID
+		status.SystemID = systemID
+		status.Step++
+		update(status)
 
 		// Resolve media type once per system to avoid repeated map lookups
 		mediaType := slugs.MediaTypeGame
@@ -868,9 +871,6 @@ func NewNamesIndex(
 
 		if completedSystems[systemID] {
 			log.Debug().Msgf("skipping already indexed system: %s", systemID)
-			status.SystemID = systemID
-			status.Step++
-			update(status)
 			continue
 		}
 
@@ -886,10 +886,6 @@ func NewNamesIndex(
 
 		files := make([]platforms.ScanResult, 0)
 		systemStartTime := time.Now()
-
-		status.SystemID = systemID
-		status.Step++
-		update(status)
 
 		log.Info().
 			Str("system", systemID).
