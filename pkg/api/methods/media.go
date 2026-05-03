@@ -71,6 +71,14 @@ var cappedTagTypes = map[string]bool{
 	"search":     true,
 }
 
+type indexingNotificationState struct {
+	lastTime     time.Time
+	lastPhase    string
+	lastSystemID string
+	lastStep     int
+	hasLast      bool
+}
+
 // capTagsByCategory returns at most limit tags per type, sorted by count desc
 // then tag asc within each group. Long-tail types (credit, publisher, etc.)
 // are capped at limit; taxonomy types (region, year, lang, etc.) are returned
@@ -193,6 +201,29 @@ type indexingStatus struct {
 	totalFiles  int
 	mu          syncutil.RWMutex
 	indexing    bool
+}
+
+func (s *indexingNotificationState) shouldSend(
+	status mediascanner.IndexStatus,
+	now time.Time,
+	interval time.Duration,
+) bool {
+	visibleStepChanged := !s.hasLast ||
+		status.Phase != s.lastPhase ||
+		status.SystemID != s.lastSystemID ||
+		status.Step != s.lastStep
+	isFinalStep := status.Total > 0 && status.Step == status.Total
+
+	if !isFinalStep && !visibleStepChanged && now.Sub(s.lastTime) < interval {
+		return false
+	}
+
+	s.lastTime = now
+	s.lastPhase = status.Phase
+	s.lastSystemID = status.SystemID
+	s.lastStep = status.Step
+	s.hasLast = true
+	return true
 }
 
 func (s *indexingStatus) get() indexingStatusVals {
@@ -353,7 +384,7 @@ func GenerateMediaDB(
 		defer db.MediaDB.BackgroundOperationDone()
 		defer debug.FreeOSMemory()
 
-		var lastNotifTime time.Time
+		notifState := indexingNotificationState{}
 		const notifThrottleInterval = 250 * time.Millisecond
 
 		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
@@ -392,20 +423,13 @@ func GenerateMediaDB(
 				totalFiles:  status.Files,
 			})
 
-			// Throttle WebSocket push notifications to prevent
-			// channel overflow during bursts (e.g. resume skipping
-			// many completed systems). Phase changes and the final
-			// step are always sent so clients see start/end.
-			now := time.Now()
-			isPhaseChange := status.Phase == mediascanner.PhaseDiscovering ||
-				status.Phase == mediascanner.PhaseInitializing ||
-				status.Phase == mediascanner.PhaseCreatingIndexes ||
-				status.Phase == mediascanner.PhaseBuildingCaches
-			isFinalStep := status.Step == status.Total
-			if !isPhaseChange && !isFinalStep && now.Sub(lastNotifTime) < notifThrottleInterval {
+			// Throttle duplicate WebSocket push notifications to prevent
+			// channel overflow, but always send visible progress changes so
+			// notification-only clients don't show the previous system while
+			// the next system is doing long-running work.
+			if !notifState.shouldSend(status, time.Now(), notifThrottleInterval) {
 				return
 			}
-			lastNotifTime = now
 
 			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 				Exists:             false,
