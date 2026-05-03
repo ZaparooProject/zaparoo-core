@@ -39,6 +39,8 @@ type Launchers struct {
 	MediaDir         string             `toml:"media_dir,omitempty"`
 	BeforeMediaStart string             `toml:"before_media_start,omitempty"`
 	OnMediaStart     string             `toml:"on_media_start,omitempty"`
+	OnServiceStart   string             `toml:"on_service_start,omitempty"`
+	OnBootStart      string             `toml:"on_boot_start,omitempty"`
 	Default          []LaunchersDefault `toml:"default,omitempty"`
 	Custom           []LaunchersCustom  `toml:"custom,omitempty"`
 }
@@ -87,6 +89,18 @@ func (c *Instance) LaunchersOnMediaStart() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Launchers.OnMediaStart
+}
+
+func (c *Instance) LaunchersOnServiceStart() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Launchers.OnServiceStart
+}
+
+func (c *Instance) LaunchersOnBootStart() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Launchers.OnBootStart
 }
 
 func (c *Instance) IsLauncherFileAllowed(s string) bool {

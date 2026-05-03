@@ -339,6 +339,14 @@ func Start(
 	}
 	log.Info().Msg("platform post start completed, service fully initialized")
 
+	if cfg.LaunchersOnServiceStart() != "" || cfg.LaunchersOnBootStart() != "" {
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			runConfiguredStartupHooks(svc)
+		}()
+	}
+
 	return &StartResult{
 		Stop: func() error {
 			st.StopService()
