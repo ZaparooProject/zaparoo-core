@@ -290,7 +290,7 @@ func TestHandleMediaBrowse_SystemRootRoutesDedupesCoveredParent(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	romsPrefix := filepath.ToSlash(romsRoot) + "/"
 	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "NES")).
-		Return(15, nil)
+		Return(10, nil)
 	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts(romsPrefix, "NES")).
 		Return([]database.BrowseDirectoryResult{{Name: "NES", FileCount: 10, SystemIDs: []string{"NES"}}}, nil)
 	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "NES")).
@@ -301,7 +301,7 @@ func TestHandleMediaBrowse_SystemRootRoutesDedupesCoveredParent(t *testing.T) {
 				assert.ElementsMatch(t, []string{nesAPIPath, romsAPIPath}, opts.Routes)
 		}),
 	).Return(map[string]database.BrowseRouteCount{
-		romsAPIPath: {Path: romsAPIPath, FileCount: 15, SystemIDs: []string{"NES"}},
+		romsAPIPath: {Path: romsAPIPath, FileCount: 10, SystemIDs: []string{"NES"}},
 		nesAPIPath:  {Path: nesAPIPath, FileCount: 10, SystemIDs: []string{"NES"}},
 	}, nil)
 
@@ -371,6 +371,9 @@ func TestDedupeSystemRootEntries(t *testing.T) {
 	t.Parallel()
 
 	count := func(v int) *int { return &v }
+	path := func(parts ...string) string {
+		return filepath.Join(append([]string{string(filepath.Separator)}, parts...)...)
+	}
 
 	tests := []struct {
 		name    string
@@ -380,44 +383,61 @@ func TestDedupeSystemRootEntries(t *testing.T) {
 		{
 			name: "single child absorbs parent",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games", FileCount: count(10)},
-				{Path: "/media/fat/games/NES", FileCount: count(10)},
+				{Path: path("media", "fat", "games"), FileCount: count(10)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
 			},
-			want: []string{"/media/fat/games/NES"},
+			want: []string{path("media", "fat", "games", "NES")},
 		},
 		{
 			name: "children absorb parent with aggregate count",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games", FileCount: count(15)},
-				{Path: "/media/fat/games/NES", FileCount: count(10)},
-				{Path: "/media/fat/games/NES Hacks", FileCount: count(5)},
+				{Path: path("media", "fat", "games"), FileCount: count(15)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
+				{Path: path("media", "fat", "games", "NES Hacks"), FileCount: count(5)},
 			},
-			want: []string{"/media/fat/games/NES", "/media/fat/games/NES Hacks"},
+			want: []string{path("media", "fat", "games", "NES"), path("media", "fat", "games", "NES Hacks")},
+		},
+		{
+			name: "parent retained when descendants do not cover count",
+			entries: []models.BrowseEntry{
+				{Path: path("media", "fat", "games"), FileCount: count(20)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
+				{Path: path("media", "fat", "games", "NES Hacks"), FileCount: count(5)},
+			},
+			want: []string{
+				path("media", "fat", "games"),
+				path("media", "fat", "games", "NES"),
+				path("media", "fat", "games", "NES Hacks"),
+			},
 		},
 		{
 			name: "sibling equal counts are unrelated",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games/NES", FileCount: count(10)},
-				{Path: "/media/fat/alt/NES", FileCount: count(10)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
+				{Path: path("media", "fat", "alt", "NES"), FileCount: count(10)},
 			},
-			want: []string{"/media/fat/games/NES", "/media/fat/alt/NES"},
+			want: []string{path("media", "fat", "games", "NES"), path("media", "fat", "alt", "NES")},
 		},
 		{
 			name: "nil counts are not deduped",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games", FileCount: nil},
-				{Path: "/media/fat/games/NES", FileCount: count(10)},
-				{Path: "/media/fat/games/SNES", FileCount: nil},
+				{Path: path("media", "fat", "games"), FileCount: nil},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
+				{Path: path("media", "fat", "games", "SNES"), FileCount: nil},
 			},
-			want: []string{"/media/fat/games", "/media/fat/games/NES", "/media/fat/games/SNES"},
+			want: []string{
+				path("media", "fat", "games"),
+				path("media", "fat", "games", "NES"),
+				path("media", "fat", "games", "SNES"),
+			},
 		},
 		{
 			name: "string prefix is not ancestry",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games", FileCount: count(10)},
-				{Path: "/media/fat/games-extra", FileCount: count(10)},
+				{Path: path("media", "fat", "games"), FileCount: count(10)},
+				{Path: path("media", "fat", "games-extra"), FileCount: count(10)},
 			},
-			want: []string{"/media/fat/games", "/media/fat/games-extra"},
+			want: []string{path("media", "fat", "games"), path("media", "fat", "games-extra")},
 		},
 		{
 			name: "virtual schemes are ignored",

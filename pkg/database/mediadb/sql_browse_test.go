@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -46,6 +47,132 @@ func expectBrowseCacheReady(mock sqlmock.Sqlmock) {
 		WillReturnRows(sqlmock.NewRows([]string{"Value"}).AddRow(browseCacheSchemaVersion))
 	mock.ExpectQuery("SELECT 1 FROM BrowseDirs LIMIT 1").
 		WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
+}
+
+func TestLogBrowseMediaCountsBySystem_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT s.SystemID").WillReturnRows(sqlmock.NewRows(
+		[]string{"SystemID", "TotalMedia", "CurrentMedia", "MissingMedia"},
+	).AddRow("NES", 10, 8, 2))
+	mock.ExpectRollback()
+
+	logBrowseMediaCountsBySystem(context.Background(), tx)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestLogBrowseMediaCountsBySystem_QueryError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT s.SystemID").WillReturnError(errors.New("query failed"))
+	mock.ExpectRollback()
+
+	logBrowseMediaCountsBySystem(context.Background(), tx)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestLogBrowseMediaCountsBySystem_ScanError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT s.SystemID").WillReturnRows(sqlmock.NewRows(
+		[]string{"SystemID", "TotalMedia", "CurrentMedia", "MissingMedia"},
+	).AddRow("NES", "not-an-int", 8, 2))
+	mock.ExpectRollback()
+
+	logBrowseMediaCountsBySystem(context.Background(), tx)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestLogBrowseMediaCountsBySystem_RowsError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	mock.ExpectQuery("SELECT s.SystemID").WillReturnRows(sqlmock.NewRows(
+		[]string{"SystemID", "TotalMedia", "CurrentMedia", "MissingMedia"},
+	).AddRow("NES", 10, 8, 2).RowError(0, errors.New("rows failed")))
+	mock.ExpectRollback()
+
+	logBrowseMediaCountsBySystem(context.Background(), tx)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDescendantCount_Unfiltered(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	romsDir := browseTestDir("roms", "psx")
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\).*FROM Media m.*INNER JOIN Systems s.*WHERE").
+		WithArgs(romsDir).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(273))
+
+	count, err := sqlBrowseDescendantCount(context.Background(), db, romsDir, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 273, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDescendantCount_SystemFiltered(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	romsDir := browseTestDir("roms", "psx")
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\).*FROM Media m.*INNER JOIN Systems s.*WHERE.*s\\.SystemID IN").
+		WithArgs(romsDir, "PSX").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(273))
+
+	count, err := sqlBrowseDescendantCount(context.Background(), db, romsDir, []systemdefs.System{{ID: "PSX"}})
+	require.NoError(t, err)
+	assert.Equal(t, 273, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDescendantCount_QueryError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	romsDir := browseTestDir("roms", "psx")
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\).*FROM Media m.*INNER JOIN Systems s.*WHERE").
+		WithArgs(romsDir).
+		WillReturnError(sql.ErrConnDone)
+
+	count, err := sqlBrowseDescendantCount(context.Background(), db, romsDir, nil)
+	require.Error(t, err)
+	assert.Equal(t, 0, count)
+	assert.Contains(t, err.Error(), "browse descendant count")
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestSqlBrowseDirectoriesFromCache_ReturnsSystemCounts(t *testing.T) {

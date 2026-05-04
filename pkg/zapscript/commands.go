@@ -42,14 +42,16 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 var (
-	ErrArgCount     = errors.New("invalid number of arguments")
-	ErrRequiredArgs = errors.New("arguments are required")
-	ErrRemoteSource = errors.New("cannot run from remote source")
-	ErrFileNotFound = errors.New("file not found")
-	ErrNoHistory    = errors.New("no play history available")
+	ErrArgCount      = errors.New("invalid number of arguments")
+	ErrRequiredArgs  = errors.New("arguments are required")
+	ErrRemoteSource  = errors.New("cannot run from remote source")
+	ErrFileNotFound  = errors.New("file not found")
+	ErrNoHistory     = errors.New("no play history available")
+	errAmbiguousPath = errors.New("ambiguous case-insensitive path")
 )
 
 // getLauncherIDs extracts launcher IDs from the platform for validation context.
@@ -205,8 +207,8 @@ func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 	return result, nil
 }
 
-func findPathCaseInsensitive(path string) (string, error) {
-	if _, err := os.Stat(path); err == nil {
+func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
+	if _, err := fs.Stat(path); err == nil {
 		return path, nil
 	}
 
@@ -227,38 +229,52 @@ func findPathCaseInsensitive(path string) (string, error) {
 		if part == "" {
 			continue
 		}
-		entries, err := os.ReadDir(current)
+		entries, err := afero.ReadDir(fs, current)
 		if err != nil {
 			return "", fmt.Errorf("failed to read directory %s: %w", current, err)
 		}
 
-		matched := ""
+		exactMatched := false
+		var foldMatches []string
 		for _, entry := range entries {
 			if entry.Name() == part {
-				matched = entry.Name()
+				current = filepath.Join(current, entry.Name())
+				exactMatched = true
 				break
 			}
-			if matched == "" && strings.EqualFold(entry.Name(), part) {
-				matched = entry.Name()
+			if strings.EqualFold(entry.Name(), part) {
+				foldMatches = append(foldMatches, entry.Name())
 			}
 		}
-		if matched == "" {
+		if exactMatched {
+			continue
+		}
+		if len(foldMatches) == 0 {
 			return "", os.ErrNotExist
 		}
-		current = filepath.Join(current, matched)
+		if len(foldMatches) > 1 {
+			return "", fmt.Errorf("%w: component %q in %s matches %s", errAmbiguousPath, part, current,
+				strings.Join(foldMatches, ", "))
+		}
+		current = filepath.Join(current, foldMatches[0])
 	}
 
 	return current, nil
 }
 
+func normalizeVirtualLookupPath(path string) string {
+	return filepath.FromSlash(strings.ReplaceAll(path, `\`, "/"))
+}
+
 // Check all games folders for a relative path to a file
-func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string, error) {
-	if filepath.IsAbs(path) {
+func findFile(fs afero.Fs, pl platforms.Platform, cfg *config.Instance, path string) (string, error) {
+	lookupPath := normalizeVirtualLookupPath(path)
+	if filepath.IsAbs(lookupPath) {
 		return path, nil
 	}
 
-	ps := strings.Split(path, string(filepath.Separator))
-	statPath := path
+	ps := strings.Split(lookupPath, string(filepath.Separator))
+	statPath := lookupPath
 	var virtualParts []string
 
 	// if the file is inside a zip or virtual list, we just check that file exists
@@ -277,13 +293,16 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 
 	for _, gf := range pl.RootDirs(cfg) {
 		fullPath := filepath.Join(gf, statPath)
-		resolvedPath, err := findPathCaseInsensitive(fullPath)
+		resolvedPath, err := findPathCaseInsensitive(fs, fullPath)
 		if err == nil {
 			log.Debug().Msgf("found file: %s", resolvedPath)
 			if len(virtualParts) > 0 {
 				return filepath.Join(append([]string{resolvedPath}, virtualParts...)...), nil
 			}
 			return resolvedPath, nil
+		}
+		if errors.Is(err, errAmbiguousPath) {
+			return "", err
 		}
 	}
 
