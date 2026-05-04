@@ -269,12 +269,19 @@ func normalizeVirtualLookupPath(path string) string {
 }
 
 func virtualStatPath(lookupPath string, parts []string, end int) string {
+	volume := filepath.VolumeName(lookupPath)
+	if filepath.IsAbs(lookupPath) && strings.HasPrefix(volume, `\\`) && len(parts) >= 4 && parts[0] == "" {
+		if end <= 4 {
+			return volume
+		}
+		return filepath.Join(append([]string{volume}, parts[4:end]...)...)
+	}
+
 	statPath := filepath.Join(parts[:end]...)
 	if !filepath.IsAbs(lookupPath) || filepath.IsAbs(statPath) {
 		return statPath
 	}
 
-	volume := filepath.VolumeName(lookupPath)
 	if volume == "" {
 		return filepath.Join(string(filepath.Separator), statPath)
 	}
