@@ -269,10 +269,6 @@ func normalizeVirtualLookupPath(path string) string {
 // Check all games folders for a relative path to a file
 func findFile(fs afero.Fs, pl platforms.Platform, cfg *config.Instance, path string) (string, error) {
 	lookupPath := normalizeVirtualLookupPath(path)
-	if filepath.IsAbs(lookupPath) {
-		return path, nil
-	}
-
 	ps := strings.Split(lookupPath, string(filepath.Separator))
 	statPath := lookupPath
 	var virtualParts []string
@@ -285,15 +281,26 @@ func findFile(fs afero.Fs, pl platforms.Platform, cfg *config.Instance, path str
 		ext := filepath.Ext(strings.ToLower(p))
 		if ext == ".zip" || ext == ".txt" {
 			statPath = filepath.Join(ps[:i+1]...)
+			if filepath.IsAbs(lookupPath) && !filepath.IsAbs(statPath) {
+				statPath = filepath.Join(string(filepath.Separator), statPath)
+			}
 			virtualParts = ps[i+1:]
 			log.Debug().Msgf("found zip/txt, setting stat path: %s", statPath)
 			break
 		}
 	}
 
-	for _, gf := range pl.RootDirs(cfg) {
-		fullPath := filepath.Join(gf, statPath)
-		resolvedPath, err := findPathCaseInsensitive(fs, fullPath)
+	candidates := []string{statPath}
+	if !filepath.IsAbs(statPath) {
+		rootDirs := pl.RootDirs(cfg)
+		candidates = make([]string, 0, len(rootDirs))
+		for _, gf := range rootDirs {
+			candidates = append(candidates, filepath.Join(gf, statPath))
+		}
+	}
+
+	for _, candidate := range candidates {
+		resolvedPath, err := findPathCaseInsensitive(fs, candidate)
 		if err == nil {
 			log.Debug().Msgf("found file: %s", resolvedPath)
 			if len(virtualParts) > 0 {

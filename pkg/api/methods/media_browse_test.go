@@ -411,6 +411,17 @@ func TestDedupeSystemRootEntries(t *testing.T) {
 			},
 		},
 		{
+			name: "unknown descendant count retains parent",
+			entries: []models.BrowseEntry{
+				{Path: path("media", "fat", "games"), FileCount: count(20)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: nil},
+			},
+			want: []string{
+				path("media", "fat", "games"),
+				path("media", "fat", "games", "NES"),
+			},
+		},
+		{
 			name: "sibling equal counts are unrelated",
 			entries: []models.BrowseEntry{
 				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},

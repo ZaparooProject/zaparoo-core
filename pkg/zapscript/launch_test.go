@@ -334,6 +334,28 @@ func TestFindFile_ResolvesCaseInsensitiveVirtualZipPath(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestFindFile_ResolvesCaseInsensitiveAbsoluteVirtualZipPath(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	fs := afero.NewMemMapFs()
+	rootDir := filepath.Join(string(filepath.Separator), "games")
+	virtualGame := "Neo Turf Masters (turfmast).neo"
+	zipPath := filepath.Join(rootDir, "NEOGEO", "NEOGEO.zip")
+	absolutePath := filepath.Join(rootDir, "neogeo", "NEOGEO.zip", virtualGame)
+	expectedPath := filepath.Join(rootDir, "NEOGEO", "NEOGEO.zip", virtualGame)
+
+	require.NoError(t, fs.MkdirAll(filepath.Dir(zipPath), 0o700))
+	require.NoError(t, afero.WriteFile(fs, zipPath, []byte("test"), 0o600))
+
+	result, err := findFile(fs, mockPlatform, cfg, absolutePath)
+
+	require.NoError(t, err)
+	assert.Equal(t, expectedPath, result)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestFindFile_ResolvesCaseInsensitiveVirtualTxtPath(t *testing.T) {
 	t.Parallel()
 
