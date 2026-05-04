@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -307,6 +308,95 @@ launcher = "snes-retroarch"
 
 	require.NoError(t, err, "cmdLaunch should not error for valid system/path format")
 	assert.True(t, result.MediaChanged, "MediaChanged should be true")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestFindFile_ResolvesCaseInsensitiveVirtualZipPath(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	fs := afero.NewMemMapFs()
+	rootDir := filepath.Join(t.TempDir(), "games")
+	virtualGame := "Neo Turf Masters (turfmast).neo"
+	zipPath := filepath.Join(rootDir, "NEOGEO", "NEOGEO.zip")
+	relativePath := filepath.Join("NeoGeo", "NEOGEO.zip", virtualGame)
+	expectedPath := filepath.Join(rootDir, "NEOGEO", "NEOGEO.zip", virtualGame)
+
+	require.NoError(t, fs.MkdirAll(filepath.Dir(zipPath), 0o700))
+	require.NoError(t, afero.WriteFile(fs, zipPath, []byte("test"), 0o600))
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
+
+	result, err := findFile(fs, mockPlatform, cfg, relativePath)
+
+	require.NoError(t, err)
+	assert.Equal(t, expectedPath, result)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestFindFile_ResolvesCaseInsensitiveAbsoluteVirtualZipPath(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	fs := afero.NewMemMapFs()
+	rootDir := filepath.Join(string(filepath.Separator), "games")
+	virtualGame := "Neo Turf Masters (turfmast).neo"
+	zipPath := filepath.Join(rootDir, "NEOGEO", "NEOGEO.zip")
+	absolutePath := filepath.Join(rootDir, "neogeo", "NEOGEO.zip", virtualGame)
+	expectedPath := filepath.Join(rootDir, "NEOGEO", "NEOGEO.zip", virtualGame)
+
+	require.NoError(t, fs.MkdirAll(filepath.Dir(zipPath), 0o700))
+	require.NoError(t, afero.WriteFile(fs, zipPath, []byte("test"), 0o600))
+
+	result, err := findFile(fs, mockPlatform, cfg, absolutePath)
+
+	require.NoError(t, err)
+	assert.Equal(t, expectedPath, result)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestFindFile_ResolvesCaseInsensitiveVirtualTxtPath(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	fs := afero.NewMemMapFs()
+	rootDir := filepath.Join(string(filepath.Separator), "games")
+	virtualGame := "Favorite Game.sfc"
+	txtPath := filepath.Join(rootDir, "SNES", "Favorites.txt")
+	relativePath := filepath.Join("snes", "Favorites.txt", virtualGame)
+	expectedPath := filepath.Join(rootDir, "SNES", "Favorites.txt", virtualGame)
+
+	require.NoError(t, fs.MkdirAll(filepath.Dir(txtPath), 0o700))
+	require.NoError(t, afero.WriteFile(fs, txtPath, []byte("test"), 0o600))
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
+
+	result, err := findFile(fs, mockPlatform, cfg, relativePath)
+
+	require.NoError(t, err)
+	assert.Equal(t, expectedPath, result)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestFindFile_ReturnsAmbiguousCaseInsensitivePathError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	fs := afero.NewMemMapFs()
+	rootDir := filepath.Join(string(filepath.Separator), "games")
+	relativePath := filepath.Join("neogeo", "game.zip")
+
+	require.NoError(t, fs.MkdirAll(filepath.Join(rootDir, "NEOGEO"), 0o700))
+	require.NoError(t, fs.MkdirAll(filepath.Join(rootDir, "NeoGeo"), 0o700))
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
+
+	result, err := findFile(fs, mockPlatform, cfg, relativePath)
+
+	require.Error(t, err)
+	assert.Empty(t, result)
+	assert.Contains(t, err.Error(), "ambiguous case-insensitive path")
 	mockPlatform.AssertExpectations(t)
 }
 

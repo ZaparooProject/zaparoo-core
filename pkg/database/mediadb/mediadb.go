@@ -2150,6 +2150,11 @@ func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
+	if db.batchInsertMediaTitle != nil {
+		if err := db.batchInsertMediaTitle.Flush(); err != nil {
+			return fmt.Errorf("failed to flush media title batch before update: %w", err)
+		}
+	}
 
 	err := sqlUpdateMediaTitle(db.ctx, db.conn(), mediaDBID, mediaTitleDBID)
 	if err == nil && !db.inTransaction {
@@ -2162,6 +2167,46 @@ func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
 	}
 
 	return err
+}
+
+func (db *MediaDB) UpdateMediaParentDir(mediaDBID int64, parentDir string) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	err := sqlUpdateMediaParentDir(db.ctx, db.conn(), mediaDBID, parentDir)
+	if err == nil && !db.inTransaction {
+		if invalidateErr := db.invalidateBrowseCacheForMediaChange(); invalidateErr != nil {
+			return invalidateErr
+		}
+	} else if err == nil {
+		db.markBrowseCacheDirty()
+	}
+
+	return err
+}
+
+func (db *MediaDB) TemporaryRepairJobsPending(ctx context.Context) (bool, error) {
+	if db.sql == nil {
+		return false, ErrNullSQL
+	}
+	current, err := sqlTemporaryParentDirRepairVersionCurrent(ctx, db.sql)
+	if err != nil {
+		return false, err
+	}
+	if current {
+		return false, nil
+	}
+
+	pending, err := sqlEmptyMediaParentDirsExist(ctx, db.sql)
+	if err != nil || pending {
+		return pending, err
+	}
+
+	if err := sqlMarkTemporaryParentDirRepairComplete(ctx, db.sql); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func (db *MediaDB) DeleteMediaTags(mediaDBID int64) error {
@@ -2524,13 +2569,20 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 	// indexing completes. Background optimization improves query performance
 	// after the database is already open for searches.
 	//
-	// Step order matters: ANALYZE runs first to update query-planner statistics,
-	// improving plan quality for early searches. The page-prefetch warms the OS
-	// buffer cache for the tables the search path joins. BrowseCache and WAL
-	// checkpoint follow as non-critical housekeeping.
+	// Step order matters: temporary repair jobs run before cache rebuilds so
+	// upgraded databases are corrected without blocking startup. ANALYZE then
+	// updates query-planner statistics, the page-prefetch warms the OS buffer
+	// cache for the tables the search path joins, and BrowseCache/WAL checkpoint
+	// follow as non-critical housekeeping.
 	db.needsIndexRebuild.Store(false)
 
 	steps = append(steps,
+		optimizationStep{
+			name: "temporary_repair_parent_dirs", fn: func() error {
+				return db.runTemporaryParentDirRepair(db.ctx, pauser)
+			},
+			maxRetries: 0, retryDelay: rd,
+		},
 		optimizationStep{
 			name: "analyze", fn: db.Analyze,
 			maxRetries: 2, retryDelay: rd,

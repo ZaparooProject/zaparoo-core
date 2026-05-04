@@ -98,6 +98,9 @@ func FlushScanStateMaps(ss *database.ScanState) {
 	for mediaID := range ss.MediaTagIDs {
 		delete(ss.MediaTagIDs, mediaID)
 	}
+	for mediaID := range ss.MediaParentDirs {
+		delete(ss.MediaParentDirs, mediaID)
+	}
 }
 
 func AddMediaPath(
@@ -169,13 +172,7 @@ func AddMediaPath(
 		ss.MediaIndex++
 		mediaIndex = ss.MediaIndex
 
-		// Compute immediate parent directory for indexed browse lookups.
-		var parentDir string
-		if idx := strings.Index(pf.Path, "://"); idx >= 0 {
-			parentDir = pf.Path[:idx+3]
-		} else if lastSlash := strings.LastIndex(pf.Path, "/"); lastSlash >= 0 {
-			parentDir = pf.Path[:lastSlash+1]
-		}
+		parentDir := mediadb.ParentDirForMediaPath(pf.Path)
 
 		_, err := db.InsertMedia(database.Media{
 			DBID:           int64(mediaIndex),
@@ -192,12 +189,25 @@ func AddMediaPath(
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[mediaIndex] = titleIndex
 		}
+		if ss.MediaParentDirs != nil {
+			ss.MediaParentDirs[mediaIndex] = parentDir
+		}
 	} else {
 		existingMedia = true
 		mediaIndex = foundMediaIndex
+		parentDir := mediadb.ParentDirForMediaPath(pf.Path)
 		// Mark as found during persistent indexing (not missing)
 		if ss.MissingMedia != nil {
 			delete(ss.MissingMedia, foundMediaIndex)
+		}
+		if ss.MediaParentDirs != nil {
+			existingParentDir, ok := ss.MediaParentDirs[mediaIndex]
+			if !ok || existingParentDir != parentDir {
+				if err := db.UpdateMediaParentDir(int64(mediaIndex), parentDir); err != nil {
+					return 0, 0, fmt.Errorf("error updating media parent dir %s: %w", pf.Path, err)
+				}
+				ss.MediaParentDirs[mediaIndex] = parentDir
+			}
 		}
 		if existingTitleIndex, ok := ss.MediaTitleIDs[mediaIndex]; !ok || existingTitleIndex != titleIndex {
 			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex)); err != nil {
@@ -788,6 +798,9 @@ func PopulateScanStateForSystem(
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
 		}
+		if ss.MediaParentDirs != nil {
+			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
+		}
 	}
 
 	if ss.MediaTagIDs != nil {
@@ -880,6 +893,9 @@ func PopulatePersistentScanStateForSystem(
 		ss.MediaIDs[mediaKey] = int(m.DBID)
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
+		}
+		if ss.MediaParentDirs != nil {
+			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
 		}
 		ss.MissingMedia[int(m.DBID)] = struct{}{}
 	}

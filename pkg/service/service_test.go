@@ -503,10 +503,30 @@ func TestRunMediaDBStartupMaintenance_CancelledSkipsTagCacheWarmup(t *testing.T)
 	mockMediaDB.On("UnsafeGetSQLDb").Return(nil).Once()
 	mockMediaDB.On("BackgroundOperationDone").Once()
 
-	runMediaDBStartupMaintenance(ctx, mockMediaDB)
+	runMediaDBStartupMaintenance(ctx, mockMediaDB, nil)
 
 	mockMediaDB.AssertExpectations(t)
 	mockMediaDB.AssertNotCalled(t, "RebuildTagCache")
+}
+
+func TestRunMediaDBStartupMaintenance_PassesPauserToTemporaryRepairOptimization(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	pauser := syncutil.NewPauser()
+	ctx := context.Background()
+	mockMediaDB.On("TrackBackgroundOperation").Once()
+	mockMediaDB.On("UnsafeGetSQLDb").Return(nil).Once()
+	mockMediaDB.On("RebuildTagCache").Return(nil).Once()
+	mockMediaDB.On("TemporaryRepairJobsPending", ctx).Return(true, nil).Once()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything, pauser).Once()
+	mockMediaDB.On("BackgroundOperationDone").Once()
+
+	runMediaDBStartupMaintenance(ctx, mockMediaDB, pauser)
+
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestStartPublishers_DisabledPublisher(t *testing.T) {

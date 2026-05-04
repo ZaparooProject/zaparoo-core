@@ -2452,6 +2452,140 @@ func TestMediaDB_CommitTransaction_ReturnsBatchFlushError_Integration(t *testing
 	assert.ErrorContains(t, err, "failed to flush batch inserts")
 }
 
+func TestMediaDB_UpdateMediaTitle_FlushesPendingTitleBatch_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insertedSystem, err := mediaDB.InsertSystem(database.System{SystemID: "Amiga", Name: "Amiga"})
+	require.NoError(t, err)
+	oldTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       "oldtitle",
+		Name:       "Old Title",
+	})
+	require.NoError(t, err)
+	insertedMedia, err := mediaDB.InsertMedia(database.Media{
+		MediaTitleDBID: oldTitle.DBID,
+		SystemDBID:     insertedSystem.DBID,
+		Path:           filepath.Join("games", "Amiga", "listings", "games.txt", "Old Title"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	newTitleDBID := oldTitle.DBID + 1
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, err = mediaDB.InsertMediaTitle(&database.MediaTitle{
+		DBID:       newTitleDBID,
+		SystemDBID: insertedSystem.DBID,
+		Slug:       "newtitle",
+		Name:       "New Title",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.UpdateMediaTitle(insertedMedia.DBID, newTitleDBID))
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	updatedMedia, err := mediaDB.FindMedia(database.Media{DBID: insertedMedia.DBID})
+	require.NoError(t, err)
+	assert.Equal(t, newTitleDBID, updatedMedia.MediaTitleDBID)
+}
+
+func TestMediaDB_TemporaryParentDirRepair_RestoresDirectBrowse_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	gameDir := filepath.ToSlash(filepath.Join("roms", "PSX", "USA")) + "/"
+	gamePath := gameDir + "Example Game.chd"
+
+	repairedSystem, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "PSX", Name: "PSX"})
+	require.NoError(t, err)
+	repairedTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: repairedSystem.DBID,
+		Slug:       "examplegame",
+		Name:       "Example Game",
+	})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMedia(database.Media{
+		SystemDBID:     repairedSystem.DBID,
+		MediaTitleDBID: repairedTitle.DBID,
+		Path:           gamePath,
+		ParentDir:      "",
+	})
+	require.NoError(t, err)
+
+	files, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{PathPrefix: gameDir, Limit: 10})
+	require.NoError(t, err)
+	assert.Empty(t, files)
+
+	repairPending, err := mediaDB.TemporaryRepairJobsPending(ctx)
+	require.NoError(t, err)
+	assert.True(t, repairPending)
+	require.NoError(t, mediaDB.runTemporaryParentDirRepair(ctx, nil))
+
+	files, err = mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{PathPrefix: gameDir, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Equal(t, gamePath, files[0].Path)
+
+	repairedMedia, err := mediaDB.FindMedia(database.Media{SystemDBID: repairedSystem.DBID, Path: gamePath})
+	require.NoError(t, err)
+	assert.Equal(t, gameDir, repairedMedia.ParentDir)
+
+	repairPending, err = mediaDB.TemporaryRepairJobsPending(ctx)
+	require.NoError(t, err)
+	assert.False(t, repairPending)
+}
+
+func TestMediaDB_TemporaryParentDirRepair_MarksCurrentWhenNoEmptyRows_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	gameDir := filepath.ToSlash(filepath.Join("roms", "NES")) + "/"
+	gamePath := gameDir + "Example Game.nes"
+
+	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: system.DBID,
+		Slug:       "examplegame",
+		Name:       "Example Game",
+	})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMedia(database.Media{
+		SystemDBID:     system.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           gamePath,
+		ParentDir:      gameDir,
+	})
+	require.NoError(t, err)
+
+	repairPending, err := mediaDB.TemporaryRepairJobsPending(ctx)
+	require.NoError(t, err)
+	assert.False(t, repairPending)
+
+	var version string
+	err = mediaDB.sql.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigTemporaryRepairParentDirVersion,
+	).Scan(&version)
+	require.NoError(t, err)
+	assert.Equal(t, temporaryRepairParentDirVersion, version)
+}
+
 func TestMediaDB_CacheInvalidationScope_UsesAllSystemsForBroadIndexing_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

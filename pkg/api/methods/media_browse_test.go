@@ -371,6 +371,9 @@ func TestDedupeSystemRootEntries(t *testing.T) {
 	t.Parallel()
 
 	count := func(v int) *int { return &v }
+	path := func(parts ...string) string {
+		return filepath.Join(append([]string{string(filepath.Separator)}, parts...)...)
+	}
 
 	tests := []struct {
 		name    string
@@ -380,44 +383,72 @@ func TestDedupeSystemRootEntries(t *testing.T) {
 		{
 			name: "single child absorbs parent",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games", FileCount: count(10)},
-				{Path: "/media/fat/games/NES", FileCount: count(10)},
+				{Path: path("media", "fat", "games"), FileCount: count(10)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
 			},
-			want: []string{"/media/fat/games/NES"},
+			want: []string{path("media", "fat", "games", "NES")},
 		},
 		{
-			name: "parent keeps union across children",
+			name: "children absorb parent with aggregate count",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games", FileCount: count(15)},
-				{Path: "/media/fat/games/NES", FileCount: count(10)},
-				{Path: "/media/fat/games/NES Hacks", FileCount: count(5)},
+				{Path: path("media", "fat", "games"), FileCount: count(15)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
+				{Path: path("media", "fat", "games", "NES Hacks"), FileCount: count(5)},
 			},
-			want: []string{"/media/fat/games", "/media/fat/games/NES", "/media/fat/games/NES Hacks"},
+			want: []string{path("media", "fat", "games", "NES"), path("media", "fat", "games", "NES Hacks")},
+		},
+		{
+			name: "parent retained when descendants do not cover count",
+			entries: []models.BrowseEntry{
+				{Path: path("media", "fat", "games"), FileCount: count(20)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
+				{Path: path("media", "fat", "games", "NES Hacks"), FileCount: count(5)},
+			},
+			want: []string{
+				path("media", "fat", "games"),
+				path("media", "fat", "games", "NES"),
+				path("media", "fat", "games", "NES Hacks"),
+			},
+		},
+		{
+			name: "unknown descendant count retains parent",
+			entries: []models.BrowseEntry{
+				{Path: path("media", "fat", "games"), FileCount: count(20)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: nil},
+			},
+			want: []string{
+				path("media", "fat", "games"),
+				path("media", "fat", "games", "NES"),
+			},
 		},
 		{
 			name: "sibling equal counts are unrelated",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games/NES", FileCount: count(10)},
-				{Path: "/media/fat/alt/NES", FileCount: count(10)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
+				{Path: path("media", "fat", "alt", "NES"), FileCount: count(10)},
 			},
-			want: []string{"/media/fat/games/NES", "/media/fat/alt/NES"},
+			want: []string{path("media", "fat", "games", "NES"), path("media", "fat", "alt", "NES")},
 		},
 		{
 			name: "nil counts are not deduped",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games", FileCount: nil},
-				{Path: "/media/fat/games/NES", FileCount: count(10)},
-				{Path: "/media/fat/games/SNES", FileCount: nil},
+				{Path: path("media", "fat", "games"), FileCount: nil},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
+				{Path: path("media", "fat", "games", "SNES"), FileCount: nil},
 			},
-			want: []string{"/media/fat/games", "/media/fat/games/NES", "/media/fat/games/SNES"},
+			want: []string{
+				path("media", "fat", "games"),
+				path("media", "fat", "games", "NES"),
+				path("media", "fat", "games", "SNES"),
+			},
 		},
 		{
 			name: "string prefix is not ancestry",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games", FileCount: count(10)},
-				{Path: "/media/fat/games-extra", FileCount: count(10)},
+				{Path: path("media", "fat", "games"), FileCount: count(10)},
+				{Path: path("media", "fat", "games-extra"), FileCount: count(10)},
 			},
-			want: []string{"/media/fat/games", "/media/fat/games-extra"},
+			want: []string{path("media", "fat", "games"), path("media", "fat", "games-extra")},
 		},
 		{
 			name: "virtual schemes are ignored",

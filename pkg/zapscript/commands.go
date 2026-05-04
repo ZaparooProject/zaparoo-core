@@ -42,14 +42,16 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 var (
-	ErrArgCount     = errors.New("invalid number of arguments")
-	ErrRequiredArgs = errors.New("arguments are required")
-	ErrRemoteSource = errors.New("cannot run from remote source")
-	ErrFileNotFound = errors.New("file not found")
-	ErrNoHistory    = errors.New("no play history available")
+	ErrArgCount      = errors.New("invalid number of arguments")
+	ErrRequiredArgs  = errors.New("arguments are required")
+	ErrRemoteSource  = errors.New("cannot run from remote source")
+	ErrFileNotFound  = errors.New("file not found")
+	ErrNoHistory     = errors.New("no play history available")
+	errAmbiguousPath = errors.New("ambiguous case-insensitive path")
 )
 
 // getLauncherIDs extracts launcher IDs from the platform for validation context.
@@ -205,14 +207,73 @@ func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 	return result, nil
 }
 
-// Check all games folders for a relative path to a file
-func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string, error) {
-	if filepath.IsAbs(path) {
+func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
+	if _, err := fs.Stat(path); err == nil {
 		return path, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("failed to stat path %s: %w", path, err)
 	}
 
-	ps := strings.Split(path, string(filepath.Separator))
-	statPath := path
+	cleanPath := filepath.Clean(path)
+	volume := filepath.VolumeName(cleanPath)
+	pathWithoutVolume := strings.TrimPrefix(cleanPath, volume)
+	isAbs := filepath.IsAbs(cleanPath)
+	parts := strings.Split(pathWithoutVolume, string(filepath.Separator))
+
+	current := volume
+	if isAbs {
+		current += string(filepath.Separator)
+	} else if current == "" {
+		current = "."
+	}
+
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		entries, err := afero.ReadDir(fs, current)
+		if err != nil {
+			return "", fmt.Errorf("failed to read directory %s: %w", current, err)
+		}
+
+		exactMatched := false
+		var foldMatches []string
+		for _, entry := range entries {
+			if entry.Name() == part {
+				current = filepath.Join(current, entry.Name())
+				exactMatched = true
+				break
+			}
+			if strings.EqualFold(entry.Name(), part) {
+				foldMatches = append(foldMatches, entry.Name())
+			}
+		}
+		if exactMatched {
+			continue
+		}
+		if len(foldMatches) == 0 {
+			return "", os.ErrNotExist
+		}
+		if len(foldMatches) > 1 {
+			return "", fmt.Errorf("%w: component %q in %s matches %s", errAmbiguousPath, part, current,
+				strings.Join(foldMatches, ", "))
+		}
+		current = filepath.Join(current, foldMatches[0])
+	}
+
+	return current, nil
+}
+
+func normalizeVirtualLookupPath(path string) string {
+	return filepath.FromSlash(strings.ReplaceAll(path, `\`, "/"))
+}
+
+// Check all games folders for a relative path to a file
+func findFile(fs afero.Fs, pl platforms.Platform, cfg *config.Instance, path string) (string, error) {
+	lookupPath := normalizeVirtualLookupPath(path)
+	ps := strings.Split(lookupPath, string(filepath.Separator))
+	statPath := lookupPath
+	var virtualParts []string
 
 	// if the file is inside a zip or virtual list, we just check that file exists
 	// TODO: both of these things are very specific to mister, it would be good to
@@ -222,17 +283,43 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 		ext := filepath.Ext(strings.ToLower(p))
 		if ext == ".zip" || ext == ".txt" {
 			statPath = filepath.Join(ps[:i+1]...)
+			if filepath.IsAbs(lookupPath) && !filepath.IsAbs(statPath) {
+				statPath = filepath.Join(string(filepath.Separator), statPath)
+			}
+			virtualParts = ps[i+1:]
 			log.Debug().Msgf("found zip/txt, setting stat path: %s", statPath)
 			break
 		}
 	}
 
-	for _, gf := range pl.RootDirs(cfg) {
-		fullPath := filepath.Join(gf, statPath)
-		if _, err := os.Stat(fullPath); err == nil {
-			log.Debug().Msgf("found file: %s", fullPath)
-			return filepath.Join(gf, path), nil
+	candidates := []string{statPath}
+	if !filepath.IsAbs(statPath) {
+		rootDirs := pl.RootDirs(cfg)
+		candidates = make([]string, 0, len(rootDirs))
+		for _, gf := range rootDirs {
+			candidates = append(candidates, filepath.Join(gf, statPath))
 		}
+	}
+
+	var firstNonNotExistErr error
+	for _, candidate := range candidates {
+		resolvedPath, err := findPathCaseInsensitive(fs, candidate)
+		if err == nil {
+			log.Debug().Msgf("found file: %s", resolvedPath)
+			if len(virtualParts) > 0 {
+				return filepath.Join(append([]string{resolvedPath}, virtualParts...)...), nil
+			}
+			return resolvedPath, nil
+		}
+		if errors.Is(err, errAmbiguousPath) {
+			return "", err
+		}
+		if !errors.Is(err, os.ErrNotExist) && firstNonNotExistErr == nil {
+			firstNonNotExistErr = err
+		}
+	}
+	if firstNonNotExistErr != nil {
+		return "", firstNonNotExistErr
 	}
 
 	return path, fmt.Errorf("%w: %s", ErrFileNotFound, path)
