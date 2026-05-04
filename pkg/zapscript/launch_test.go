@@ -317,7 +317,7 @@ func TestFindFile_ResolvesCaseInsensitiveVirtualZipPath(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 	fs := afero.NewMemMapFs()
-	rootDir := filepath.Join(string(filepath.Separator), "games")
+	rootDir := filepath.Join(t.TempDir(), "games")
 	virtualGame := "Neo Turf Masters (turfmast).neo"
 	zipPath := filepath.Join(rootDir, "NEOGEO", "NEOGEO.zip")
 	relativePath := filepath.Join("NeoGeo", "NEOGEO.zip", virtualGame)

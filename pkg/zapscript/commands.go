@@ -299,6 +299,7 @@ func findFile(fs afero.Fs, pl platforms.Platform, cfg *config.Instance, path str
 		}
 	}
 
+	var firstNonNotExistErr error
 	for _, candidate := range candidates {
 		resolvedPath, err := findPathCaseInsensitive(fs, candidate)
 		if err == nil {
@@ -311,6 +312,12 @@ func findFile(fs afero.Fs, pl platforms.Platform, cfg *config.Instance, path str
 		if errors.Is(err, errAmbiguousPath) {
 			return "", err
 		}
+		if !errors.Is(err, os.ErrNotExist) && firstNonNotExistErr == nil {
+			firstNonNotExistErr = err
+		}
+	}
+	if firstNonNotExistErr != nil {
+		return "", firstNonNotExistErr
 	}
 
 	return path, fmt.Errorf("%w: %s", ErrFileNotFound, path)
