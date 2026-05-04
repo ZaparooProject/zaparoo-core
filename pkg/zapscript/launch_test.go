@@ -24,6 +24,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -45,6 +46,18 @@ func launchTestAbsPath(parts ...string) string {
 	}
 	root := filepath.VolumeName(wd) + string(filepath.Separator)
 	return filepath.Join(append([]string{root}, parts...)...)
+}
+
+func TestVirtualStatPath_PreservesAbsoluteRoot(t *testing.T) {
+	t.Parallel()
+
+	lookupPath := filepath.Join(launchTestAbsPath("games"), "neogeo", "NEOGEO.zip", "game.neo")
+	parts := strings.Split(lookupPath, string(filepath.Separator))
+
+	statPath := virtualStatPath(lookupPath, parts, len(parts)-1)
+
+	assert.True(t, filepath.IsAbs(statPath))
+	assert.Equal(t, filepath.Join(launchTestAbsPath("games"), "neogeo", "NEOGEO.zip"), statPath)
 }
 
 // TestCmdLaunch_SystemArgAppliesDefaults verifies that system arg applies system defaults when no explicit launcher

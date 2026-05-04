@@ -268,6 +268,14 @@ func normalizeVirtualLookupPath(path string) string {
 	return filepath.FromSlash(strings.ReplaceAll(path, `\`, "/"))
 }
 
+func virtualStatPath(lookupPath string, parts []string, end int) string {
+	if filepath.IsAbs(lookupPath) {
+		return filepath.Clean(strings.Join(parts[:end], string(filepath.Separator)))
+	}
+
+	return filepath.Join(parts[:end]...)
+}
+
 // Check all games folders for a relative path to a file
 func findFile(fs afero.Fs, pl platforms.Platform, cfg *config.Instance, path string) (string, error) {
 	lookupPath := normalizeVirtualLookupPath(path)
@@ -282,10 +290,7 @@ func findFile(fs afero.Fs, pl platforms.Platform, cfg *config.Instance, path str
 	for i, p := range ps {
 		ext := filepath.Ext(strings.ToLower(p))
 		if ext == ".zip" || ext == ".txt" {
-			statPath = filepath.Join(ps[:i+1]...)
-			if filepath.IsAbs(lookupPath) && !filepath.IsAbs(statPath) {
-				statPath = filepath.Join(string(filepath.Separator), statPath)
-			}
+			statPath = virtualStatPath(lookupPath, ps, i+1)
 			virtualParts = ps[i+1:]
 			log.Debug().Msgf("found zip/txt, setting stat path: %s", statPath)
 			break
