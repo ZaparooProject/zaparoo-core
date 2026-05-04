@@ -269,26 +269,11 @@ func normalizeVirtualLookupPath(path string) string {
 }
 
 func virtualStatPath(lookupPath string, parts []string, end int) string {
-	volume := filepath.VolumeName(lookupPath)
-	if filepath.IsAbs(lookupPath) && strings.HasPrefix(volume, `\\`) && len(parts) >= 4 && parts[0] == "" {
-		if end <= 4 {
-			return volume
-		}
-		return filepath.Join(append([]string{volume}, parts[4:end]...)...)
+	if filepath.IsAbs(lookupPath) {
+		return filepath.Clean(strings.Join(parts[:end], string(filepath.Separator)))
 	}
 
-	statPath := filepath.Join(parts[:end]...)
-	if !filepath.IsAbs(lookupPath) || filepath.IsAbs(statPath) {
-		return statPath
-	}
-
-	if volume == "" {
-		return filepath.Join(string(filepath.Separator), statPath)
-	}
-
-	statPath = strings.TrimPrefix(statPath, volume)
-	statPath = strings.TrimLeft(statPath, string(filepath.Separator))
-	return filepath.Join(volume+string(filepath.Separator), statPath)
+	return filepath.Join(parts[:end]...)
 }
 
 // Check all games folders for a relative path to a file
