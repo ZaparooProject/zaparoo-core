@@ -33,7 +33,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -284,7 +283,8 @@ func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
 		ROMPaths: []string{missingRoot, malformedRoot, validRoot},
 	})
 	require.NoError(t, err)
-	require.Len(t, records, 2)
+	// Only mario has an indexed media record; zelda is silently skipped.
+	require.Len(t, records, 1)
 	assert.Equal(t, validRoot, records[0].SystemRootPath)
 	assert.Equal(t, "./mario.nes", records[0].Game.Path)
 	assert.Equal(t, "Mario", records[0].Game.Name)
@@ -292,9 +292,6 @@ func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
 	assert.Equal(t, int64(11), records[0].MatchedMediaDBID)
 	assert.Equal(t, int64(22), records[0].MatchedTitleDBID)
 	assert.Equal(t, filepath.Join(validRoot, "media", "image"), records[0].AvailableMediaDirs["image"])
-	assert.Equal(t, validRoot, records[1].SystemRootPath)
-	assert.Equal(t, "./zelda.nes", records[1].Game.Path)
-	assert.Zero(t, records[1].MatchedMediaDBID)
 	db.AssertExpectations(t)
 }
 
@@ -336,28 +333,6 @@ func TestScrape_ResolverError(t *testing.T) {
 	assert.Nil(t, updates)
 	require.ErrorContains(t, err, "gamelistxml: failed to resolve systems")
 	assert.ErrorIs(t, err, scraperErr)
-}
-
-func TestMatch_FallsBackToDatabaseLookup(t *testing.T) {
-	t.Parallel()
-
-	db := helpers.NewMockMediaDBI()
-	matchedPath := filepath.ToSlash(filepath.Join(t.TempDir(), "roms", "mario.nes"))
-	db.On("FindMediaBySystemAndPathFold", mock.Anything, int64(7), matchedPath).Return(&database.Media{
-		DBID:           11,
-		MediaTitleDBID: 22,
-	}, nil).Once()
-
-	match, err := (&GamelistXMLScraper{}).Match(context.Background(), &GamelistRecord{
-		MatchedPath: matchedPath,
-		Game:        esapi.Game{Path: "./mario.nes"},
-	}, scraper.ScrapeSystem{DBID: 7, ID: "nes"}, db)
-
-	require.NoError(t, err)
-	require.NotNil(t, match)
-	assert.Equal(t, int64(11), match.MediaDBID)
-	assert.Equal(t, int64(22), match.MediaTitleDBID)
-	db.AssertExpectations(t)
 }
 
 // --- MapToDB ---
@@ -789,116 +764,67 @@ func TestMapToDB_FilesystemFallback_NoMediaDir(t *testing.T) {
 	}
 }
 
-// --- buildFilenameIndex ---
+// --- buildGameIndexes ---
 
-func TestBuildFilenameIndex_IndexesByBasename(t *testing.T) {
-	t.Parallel()
-	m := map[string]database.MediaWithFullPath{
-		"/roms/nes/mario.nes": {Path: "/roms/nes/mario.nes", DBID: 1, MediaTitleDBID: 10},
-		"/roms/nes/zelda.nes": {Path: "/roms/nes/zelda.nes", DBID: 2, MediaTitleDBID: 20},
-	}
-	idx := buildFilenameIndex(m)
-	assert.Equal(t, int64(1), idx["mario.nes"].DBID)
-	assert.Equal(t, int64(2), idx["zelda.nes"].DBID)
-}
-
-func TestBuildFilenameIndex_LowercasesKey(t *testing.T) {
-	t.Parallel()
-	m := map[string]database.MediaWithFullPath{
-		"/roms/nes/MARIO.NES": {Path: "/roms/nes/MARIO.NES", DBID: 5, MediaTitleDBID: 50},
-	}
-	idx := buildFilenameIndex(m)
-	assert.Equal(t, int64(5), idx["mario.nes"].DBID)
-	assert.Empty(t, idx["MARIO.NES"].DBID)
-}
-
-func TestBuildFilenameIndex_FirstWinsOnConflict(t *testing.T) {
-	t.Parallel()
-	// Two different paths that share the same basename.
-	m := map[string]database.MediaWithFullPath{
-		"/roms/us/mario.nes": {Path: "/roms/us/mario.nes", DBID: 1, MediaTitleDBID: 10},
-		"/roms/jp/mario.nes": {Path: "/roms/jp/mario.nes", DBID: 2, MediaTitleDBID: 20},
-	}
-	idx := buildFilenameIndex(m)
-	require.Contains(t, idx, "mario.nes")
-	// One of the two entries wins; the important thing is we don't panic or drop both.
-	dbid := idx["mario.nes"].DBID
-	assert.True(t, dbid == 1 || dbid == 2, "expected one of the two DBID values")
-}
-
-func TestBuildFilenameIndex_Empty(t *testing.T) {
-	t.Parallel()
-	idx := buildFilenameIndex(nil)
-	assert.Empty(t, idx)
-}
-
-// --- matchGamelistPath filename fallback ---
-
-func TestMatchGamelistPath_FilenameOnlyFallback_MatchesNestedMedia(t *testing.T) {
+func TestBuildGameIndexes_ByPath(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-
-	nestedPath := filepath.ToSlash(filepath.Join(root, "sub", "mario.nes"))
-	byPath := map[string]database.MediaWithFullPath{
-		normalizeMediaPath(nestedPath): {Path: nestedPath, DBID: 7, MediaTitleDBID: 70},
+	games := []esapi.Game{
+		{Path: "./mario.nes", Name: "Mario"},
+		{Path: "./zelda.nes", Name: "Zelda"},
 	}
-	byFilename := buildFilenameIndex(byPath)
-
-	// Gamelist entry is root-relative; no direct path match exists.
-	matchedPath, mediaDBID, titleDBID := matchGamelistPath(root, "./mario.nes", byPath, byFilename)
-
-	assert.Equal(t, filepath.ToSlash(filepath.Join(root, "mario.nes")), matchedPath)
-	assert.Equal(t, int64(7), mediaDBID)
-	assert.Equal(t, int64(70), titleDBID)
+	byPath, _ := buildGameIndexes(games, root)
+	marioKey := normalizeMediaPath(filepath.ToSlash(filepath.Join(root, "mario.nes")))
+	zeldaKey := normalizeMediaPath(filepath.ToSlash(filepath.Join(root, "zelda.nes")))
+	assert.Equal(t, "Mario", byPath[marioKey].game.Name)
+	assert.Equal(t, "Zelda", byPath[zeldaKey].game.Name)
 }
 
-func TestMatchGamelistPath_DirectMatchWins_NoFallbackNeeded(t *testing.T) {
+func TestBuildGameIndexes_AbsPathStored(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-
-	directPath := filepath.ToSlash(filepath.Join(root, "mario.nes"))
-	nestedPath := filepath.ToSlash(filepath.Join(root, "sub", "mario.nes"))
-	byPath := map[string]database.MediaWithFullPath{
-		normalizeMediaPath(directPath): {Path: directPath, DBID: 1, MediaTitleDBID: 10},
-		normalizeMediaPath(nestedPath): {Path: nestedPath, DBID: 2, MediaTitleDBID: 20},
-	}
-	byFilename := buildFilenameIndex(byPath)
-
-	matchedPath, mediaDBID, _ := matchGamelistPath(root, "./mario.nes", byPath, byFilename)
-
-	assert.Equal(t, directPath, matchedPath)
-	assert.Equal(t, int64(1), mediaDBID, "direct path match must take precedence over filename fallback")
+	games := []esapi.Game{{Path: "./mario.nes"}}
+	byPath, _ := buildGameIndexes(games, root)
+	key := normalizeMediaPath(filepath.ToSlash(filepath.Join(root, "mario.nes")))
+	require.Contains(t, byPath, key)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(root, "mario.nes")), byPath[key].absPath)
 }
 
-func TestMatchGamelistPath_NoFallback_WhenGamelistHasSubdir(t *testing.T) {
+func TestBuildGameIndexes_ByFilename_DepthOneOnly(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-
-	// Media only exists at the root level, but the gamelist path has a subdir.
-	rootPath := filepath.ToSlash(filepath.Join(root, "mario.nes"))
-	byPath := map[string]database.MediaWithFullPath{
-		normalizeMediaPath(rootPath): {Path: rootPath, DBID: 3, MediaTitleDBID: 30},
+	games := []esapi.Game{
+		{Path: "./mario.nes"},     // depth 1 — must be in byFilename
+		{Path: "./sub/zelda.nes"}, // depth 2 — must NOT be in byFilename
 	}
-	byFilename := buildFilenameIndex(byPath)
-
-	_, mediaDBID, titleDBID := matchGamelistPath(root, "./subdir/mario.nes", byPath, byFilename)
-
-	assert.Zero(t, mediaDBID, "filename fallback must not fire for gamelist paths with a subdirectory")
-	assert.Zero(t, titleDBID)
+	_, byFilename := buildGameIndexes(games, root)
+	assert.Contains(t, byFilename, "mario.nes", "depth-1 entry must be in byFilename")
+	assert.NotContains(t, byFilename, "zelda.nes", "depth-2 entry must not be in byFilename")
 }
 
-func TestMatchGamelistPath_FilenameNotFound_ReturnsZeroIDs(t *testing.T) {
+func TestBuildGameIndexes_FirstWinsOnPathConflict(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	games := []esapi.Game{
+		{Path: "./mario.nes", Name: "Mario A"},
+		{Path: "./mario.nes", Name: "Mario B"},
+	}
+	byPath, _ := buildGameIndexes(games, root)
+	key := normalizeMediaPath(filepath.ToSlash(filepath.Join(root, "mario.nes")))
+	require.Contains(t, byPath, key)
+	assert.Equal(t, "Mario A", byPath[key].game.Name, "first entry wins on conflict")
+}
 
-	byPath := map[string]database.MediaWithFullPath{}
-	byFilename := buildFilenameIndex(byPath)
-
-	matchedPath, mediaDBID, titleDBID := matchGamelistPath(root, "./mario.nes", byPath, byFilename)
-
-	assert.Equal(t, filepath.ToSlash(filepath.Join(root, "mario.nes")), matchedPath)
-	assert.Zero(t, mediaDBID)
-	assert.Zero(t, titleDBID)
+func TestBuildGameIndexes_SkipsUnresolvablePaths(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	games := []esapi.Game{
+		{Path: "../../etc/passwd"},
+		{Path: "./mario.nes", Name: "Mario"},
+	}
+	byPath, byFilename := buildGameIndexes(games, root)
+	assert.Len(t, byPath, 1, "unresolvable path must be skipped")
+	assert.Len(t, byFilename, 1)
 }
 
 // --- LoadRecords filename fallback integration ---
@@ -955,8 +881,7 @@ func TestLoadRecords_FilenameFallback_SubdirGamelistNoMatch(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Len(t, records, 1)
-	assert.Zero(t, records[0].MatchedMediaDBID,
+	require.Empty(t, records,
 		"filename fallback must not fire when gamelist path has a subdirectory")
 	db.AssertExpectations(t)
 }

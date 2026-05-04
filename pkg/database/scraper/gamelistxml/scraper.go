@@ -123,18 +123,21 @@ func (g *GamelistXMLScraper) Scrape(
 	return scraper.RunScraper[*GamelistRecord](ctx, opts, systems, g.db, g), nil
 }
 
-// LoadRecords searches each of system.ROMPaths for a gamelist.xml and yields
-// one GamelistRecord per <game> entry found.
+// LoadRecords loads all indexed media for the system then, for each ROM root,
+// matches each media record against the gamelist.xml found there. A record is
+// emitted only when a gamelist entry can be found for the media; unmatched
+// gamelist entries and unindexed ROMs are silently skipped.
 func (g *GamelistXMLScraper) LoadRecords(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
 ) ([]*GamelistRecord, error) {
-	var records []*GamelistRecord
-	mediaByPath, err := g.mediaByNormalizedPath(system.ID)
+	media, err := g.db.GetMediaBySystemID(system.ID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("gamelistxml: load indexed media for system %q: %w", system.ID, err)
 	}
-	mediaByFilename := buildFilenameIndex(mediaByPath)
+
+	var records []*GamelistRecord
+
 	for _, rootPath := range system.ROMPaths {
 		select {
 		case <-ctx.Done():
@@ -159,21 +162,37 @@ func (g *GamelistXMLScraper) LoadRecords(
 			Int("entries", len(gl.Games)).
 			Msg("gamelistxml: loaded gamelist.xml")
 
-		// Stat media sub-directories once per root to avoid repeated lookups
-		// in MapToDB when falling back to filesystem-based image discovery.
+		gamesByPath, gamesByFilename := buildGameIndexes(gl.Games, rootPath)
 		availableMediaDirs := statMediaDirsFS(g.filesystem(), rootPath)
 
-		for i := range gl.Games {
-			matchedPath, mediaDBID, titleDBID := matchGamelistPath(
-				rootPath, gl.Games[i].Path, mediaByPath, mediaByFilename,
-			)
+		for _, m := range media {
+			normalizedPath := normalizeMediaPath(m.Path)
+
+			var matched *gamelistEntry
+			if entry, ok := gamesByPath[normalizedPath]; ok {
+				matched = entry
+			} else if len(gamesByFilename) > 0 {
+				filename := strings.ToLower(filepath.Base(m.Path))
+				if entry, ok := gamesByFilename[filename]; ok {
+					log.Debug().
+						Str("mediaPath", m.Path).
+						Str("gamelistPath", entry.game.Path).
+						Msg("gamelistxml: filename fallback matched nested media")
+					matched = entry
+				}
+			}
+
+			if matched == nil {
+				continue
+			}
+
 			records = append(records, &GamelistRecord{
 				SystemRootPath:     rootPath,
 				AvailableMediaDirs: availableMediaDirs,
-				MatchedPath:        matchedPath,
-				Game:               gl.Games[i],
-				MatchedMediaDBID:   mediaDBID,
-				MatchedTitleDBID:   titleDBID,
+				MatchedPath:        matched.absPath,
+				Game:               matched.game,
+				MatchedMediaDBID:   m.DBID,
+				MatchedTitleDBID:   m.MediaTitleDBID,
 			})
 		}
 	}
@@ -186,130 +205,65 @@ func (g *GamelistXMLScraper) LoadRecords(
 	return records, nil
 }
 
-func (g *GamelistXMLScraper) mediaByNormalizedPath(systemID string) (map[string]database.MediaWithFullPath, error) {
-	if g == nil || g.db == nil {
-		return map[string]database.MediaWithFullPath{}, nil
-	}
-	media, err := g.db.GetMediaBySystemID(systemID)
-	if err != nil {
-		return nil, fmt.Errorf("gamelistxml: load indexed media for system %q: %w", systemID, err)
-	}
-	byPath := make(map[string]database.MediaWithFullPath, len(media))
-	for _, m := range media {
-		key := normalizeMediaPath(m.Path)
-		if _, exists := byPath[key]; !exists {
-			byPath[key] = m
-		}
-	}
-	return byPath, nil
+// gamelistEntry pairs a gamelist game with its resolved absolute path.
+type gamelistEntry struct {
+	absPath string
+	game    esapi.Game
 }
 
-func matchGamelistPath(
-	systemRootPath string, gamePath string,
-	mediaByPath map[string]database.MediaWithFullPath,
-	mediaByFilename map[string]database.MediaWithFullPath,
-) (matchedPath string, mediaDBID, mediaTitleDBID int64) {
-	resolved := resolveESPath(gamePath, systemRootPath)
-	if resolved == "" {
-		return "", 0, 0
-	}
-	absPath := filepath.ToSlash(filepath.Clean(resolved))
-	if media, ok := mediaByPath[normalizeMediaPath(absPath)]; ok {
-		return absPath, media.DBID, media.MediaTitleDBID
-	}
-
-	// Filename-only fallback: applies only when the gamelist entry is directly
-	// under systemRootPath (depth 1). On MiSTer the same ROM may be indexed
-	// under a nested path while the gamelist refers to it as ./game.ext at the
-	// root. We match by basename alone so the scraper can still enrich those
-	// records.
-	if len(mediaByFilename) > 0 {
-		rel, relErr := filepath.Rel(filepath.Clean(systemRootPath), filepath.Clean(resolved))
+// buildGameIndexes creates two lookup tables from a slice of gamelist games.
+// byPath is keyed by normalised absolute path. byFilename is keyed by
+// lower-case basename and only includes entries whose gamelist path sits
+// directly under rootPath (depth 1) — the MiSTer case where a root-level
+// gamelist entry corresponds to a ROM indexed at a nested path.
+// The first entry wins when multiple games resolve to the same key.
+func buildGameIndexes(games []esapi.Game, rootPath string) (byPath, byFilename map[string]*gamelistEntry) {
+	byPath = make(map[string]*gamelistEntry, len(games))
+	byFilename = make(map[string]*gamelistEntry, len(games))
+	for i := range games {
+		resolved := resolveESPath(games[i].Path, rootPath)
+		if resolved == "" {
+			continue
+		}
+		abs := filepath.ToSlash(filepath.Clean(resolved))
+		entry := &gamelistEntry{game: games[i], absPath: abs}
+		key := normalizeMediaPath(abs)
+		if _, exists := byPath[key]; !exists {
+			byPath[key] = entry
+		}
+		rel, relErr := filepath.Rel(filepath.Clean(rootPath), filepath.Clean(resolved))
 		if relErr == nil && !strings.Contains(filepath.ToSlash(rel), "/") {
 			filename := strings.ToLower(filepath.Base(resolved))
-			if m, ok := mediaByFilename[filename]; ok {
-				log.Debug().
-					Str("gamePath", gamePath).
-					Str("matchedMediaPath", m.Path).
-					Msg("gamelistxml: filename fallback matched nested media")
-				return absPath, m.DBID, m.MediaTitleDBID
+			if _, exists := byFilename[filename]; !exists {
+				byFilename[filename] = entry
 			}
 		}
 	}
-
-	return absPath, 0, 0
-}
-
-// buildFilenameIndex builds a secondary index keyed by lower-case basename from
-// the primary path index. The first entry wins when multiple media records share
-// the same filename. Used as a fallback when the full path does not match.
-func buildFilenameIndex(mediaByPath map[string]database.MediaWithFullPath) map[string]database.MediaWithFullPath {
-	byFilename := make(map[string]database.MediaWithFullPath, len(mediaByPath))
-	for _, m := range mediaByPath {
-		key := strings.ToLower(filepath.Base(m.Path))
-		if _, exists := byFilename[key]; !exists {
-			byFilename[key] = m
-		}
-	}
-	return byFilename
+	return
 }
 
 func normalizeMediaPath(path string) string {
 	return strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
 }
 
-// Match resolves the game path from the record to an absolute filesystem path,
-// then looks up the corresponding Media row in the DB. Returns nil when the path
-// cannot be resolved or the Media row does not exist.
+// Match returns the pre-resolved IDs stored in the record by LoadRecords.
 func (*GamelistXMLScraper) Match(
-	ctx context.Context,
+	_ context.Context,
 	record *GamelistRecord,
-	system scraper.ScrapeSystem,
-	db database.MediaDBI,
+	_ scraper.ScrapeSystem,
+	_ database.MediaDBI,
 ) (*scraper.MatchResult, error) {
-	if record.MatchedMediaDBID > 0 && record.MatchedTitleDBID > 0 {
-		log.Debug().
-			Str("path", record.MatchedPath).
-			Int64("mediaDBID", record.MatchedMediaDBID).
-			Msg("gamelistxml: matched media record")
-		return &scraper.MatchResult{
-			MediaDBID:      record.MatchedMediaDBID,
-			MediaTitleDBID: record.MatchedTitleDBID,
-		}, nil
+	if record.MatchedMediaDBID == 0 {
+		log.Info().Str("path", record.MatchedPath).Msg("gamelistxml: no matched media ID, skipping")
+		return nil, nil //nolint:nilnil // unmatched record; nil result is the "skip" sentinel
 	}
-
-	if record.MatchedPath == "" {
-		log.Info().
-			Str("path", record.Game.Path).
-			Str("root", record.SystemRootPath).
-			Msg("gamelistxml: unresolvable path, skipping")
-		return nil, nil //nolint:nilnil // unresolvable path means no match; nil result is the "skip" sentinel
-	}
-	if db == nil {
-		log.Info().Str("path", record.MatchedPath).Msg("gamelistxml: media not indexed, skipping")
-		return nil, nil //nolint:nilnil // media not indexed; nil result is the "skip" sentinel
-	}
-
-	media, err := db.FindMediaBySystemAndPathFold(ctx, system.DBID, record.MatchedPath)
-	if err != nil {
-		return nil, fmt.Errorf("gamelistxml: FindMediaBySystemAndPathFold: %w", err)
-	}
-	if media == nil || media.DBID == 0 {
-		log.Info().
-			Str("path", record.MatchedPath).
-			Int64("systemDBID", system.DBID).
-			Msg("gamelistxml: media not indexed, skipping")
-		return nil, nil //nolint:nilnil // media not indexed; nil result is the "skip" sentinel
-	}
-
 	log.Debug().
 		Str("path", record.MatchedPath).
-		Int64("mediaDBID", media.DBID).
+		Int64("mediaDBID", record.MatchedMediaDBID).
 		Msg("gamelistxml: matched media record")
-
 	return &scraper.MatchResult{
-		MediaDBID:      media.DBID,
-		MediaTitleDBID: media.MediaTitleDBID,
+		MediaDBID:      record.MatchedMediaDBID,
+		MediaTitleDBID: record.MatchedTitleDBID,
 	}, nil
 }
 
