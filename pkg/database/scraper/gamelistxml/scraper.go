@@ -53,6 +53,12 @@ type GamelistRecord struct {
 	MatchedTitleDBID   int64
 }
 
+// gamelistEntry pairs a gamelist game with its resolved absolute path.
+type gamelistEntry struct {
+	absPath string
+	game    esapi.Game
+}
+
 // mediaDirCandidates maps each TagPropertyImage value to the ordered list of
 // media sub-directory names (under <systemRootPath>/media/) that may hold
 // artwork for that property. The first matching directory that contains the
@@ -172,13 +178,16 @@ func (g *GamelistXMLScraper) LoadRecords(
 			if entry, ok := gamesByPath[normalizedPath]; ok {
 				matched = entry
 			} else if len(gamesByFilename) > 0 {
-				filename := strings.ToLower(filepath.Base(m.Path))
-				if entry, ok := gamesByFilename[filename]; ok {
-					log.Debug().
-						Str("mediaPath", m.Path).
-						Str("gamelistPath", entry.game.Path).
-						Msg("gamelistxml: filename fallback matched nested media")
-					matched = entry
+				rel, relErr := filepath.Rel(filepath.Clean(rootPath), filepath.Clean(m.Path))
+				if relErr == nil && !strings.HasPrefix(rel, "..") {
+					filename := strings.ToLower(filepath.Base(m.Path))
+					if entry, ok := gamesByFilename[filename]; ok {
+						log.Debug().
+							Str("mediaPath", m.Path).
+							Str("gamelistPath", entry.game.Path).
+							Msg("gamelistxml: filename fallback matched nested media")
+						matched = entry
+					}
 				}
 			}
 
@@ -203,12 +212,6 @@ func (g *GamelistXMLScraper) LoadRecords(
 		Msg("gamelistxml: finished loading records for system")
 
 	return records, nil
-}
-
-// gamelistEntry pairs a gamelist game with its resolved absolute path.
-type gamelistEntry struct {
-	absPath string
-	game    esapi.Game
 }
 
 // buildGameIndexes creates two lookup tables from a slice of gamelist games.

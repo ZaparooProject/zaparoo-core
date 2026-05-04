@@ -858,6 +858,51 @@ func TestLoadRecords_FilenameFallback_MatchesNestedMedia(t *testing.T) {
 	db.AssertExpectations(t)
 }
 
+func TestLoadRecords_FilenameFallback_NoMatchAcrossRoots(t *testing.T) {
+	t.Parallel()
+
+	root1 := t.TempDir()
+	root2 := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(root1, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./game.nes</path><name>Root1 Game</name></game>
+</gameList>`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root2, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./game.nes</path><name>Root2 Game</name></game>
+</gameList>`), 0o600))
+
+	// Both media entries share the same basename but live under different roots.
+	media1 := filepath.ToSlash(filepath.Join(root1, "sub", "game.nes"))
+	media2 := filepath.ToSlash(filepath.Join(root2, "sub", "game.nes"))
+	db := helpers.NewMockMediaDBI()
+	db.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{
+		{Path: media1, SystemID: "nes", DBID: 1, MediaTitleDBID: 10},
+		{Path: media2, SystemID: "nes", DBID: 2, MediaTitleDBID: 20},
+	}, nil).Once()
+
+	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
+		ID:       "nes",
+		ROMPaths: []string{root1, root2},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, records, 2, "filename fallback must not cross-match between ROM roots")
+
+	byDBID := make(map[int64]*GamelistRecord, len(records))
+	for _, r := range records {
+		byDBID[r.MatchedMediaDBID] = r
+	}
+	require.Contains(t, byDBID, int64(1))
+	require.Contains(t, byDBID, int64(2))
+	assert.Equal(t, "Root1 Game", byDBID[1].Game.Name,
+		"media under root1 must match root1's gamelist entry")
+	assert.Equal(t, "Root2 Game", byDBID[2].Game.Name,
+		"media under root2 must match root2's gamelist entry")
+	db.AssertExpectations(t)
+}
+
 func TestLoadRecords_FilenameFallback_SubdirGamelistNoMatch(t *testing.T) {
 	t.Parallel()
 
