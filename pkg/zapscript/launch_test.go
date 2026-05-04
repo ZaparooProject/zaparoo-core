@@ -38,6 +38,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func launchTestAbsPath(parts ...string) string {
+	wd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	root := filepath.VolumeName(wd) + string(filepath.Separator)
+	return filepath.Join(append([]string{root}, parts...)...)
+}
+
 // TestCmdLaunch_SystemArgAppliesDefaults verifies that system arg applies system defaults when no explicit launcher
 func TestCmdLaunch_SystemArgAppliesDefaults(t *testing.T) {
 	t.Parallel()
@@ -340,7 +349,7 @@ func TestFindFile_ResolvesCaseInsensitiveAbsoluteVirtualZipPath(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 	fs := afero.NewMemMapFs()
-	rootDir := filepath.Join(string(filepath.Separator), "games")
+	rootDir := launchTestAbsPath("games")
 	virtualGame := "Neo Turf Masters (turfmast).neo"
 	zipPath := filepath.Join(rootDir, "NEOGEO", "NEOGEO.zip")
 	absolutePath := filepath.Join(rootDir, "neogeo", "NEOGEO.zip", virtualGame)
@@ -362,7 +371,7 @@ func TestFindFile_ResolvesCaseInsensitiveVirtualTxtPath(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 	fs := afero.NewMemMapFs()
-	rootDir := filepath.Join(string(filepath.Separator), "games")
+	rootDir := launchTestAbsPath("games")
 	virtualGame := "Favorite Game.sfc"
 	txtPath := filepath.Join(rootDir, "SNES", "Favorites.txt")
 	relativePath := filepath.Join("snes", "Favorites.txt", virtualGame)
@@ -385,7 +394,7 @@ func TestFindFile_ReturnsAmbiguousCaseInsensitivePathError(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 	fs := afero.NewMemMapFs()
-	rootDir := filepath.Join(string(filepath.Separator), "games")
+	rootDir := launchTestAbsPath("games")
 	relativePath := filepath.Join("neogeo", "game.zip")
 
 	require.NoError(t, fs.MkdirAll(filepath.Join(rootDir, "NEOGEO"), 0o700))
