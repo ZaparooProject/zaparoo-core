@@ -137,7 +137,7 @@ func TestHandleMediaBrowse_RootLevel(t *testing.T) {
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("BrowseRootCounts", mock.Anything, mock.Anything).
-		Return(map[string]*int{"/roms": intPtr(500)}, nil)
+		Return(map[string]*int{romsRoot: intPtr(500)}, nil)
 	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, database.BrowseVirtualSchemesOptions{}).
 		Return([]database.BrowseVirtualScheme{
 			{Scheme: "steam://", FileCount: 42},
@@ -154,7 +154,7 @@ func TestHandleMediaBrowse_RootLevel(t *testing.T) {
 	// Filesystem root
 	assert.Equal(t, "root", browseResults.Entries[0].Type)
 	assert.Equal(t, "roms", browseResults.Entries[0].Name)
-	assert.Equal(t, "/roms", browseResults.Entries[0].Path)
+	assert.Equal(t, romsRoot, browseResults.Entries[0].Path)
 	require.NotNil(t, browseResults.Entries[0].FileCount)
 	assert.Equal(t, 500, *browseResults.Entries[0].FileCount)
 
@@ -487,7 +487,8 @@ func TestHandleMediaBrowse_FilesystemDirectory(t *testing.T) {
 		Return([]platforms.Launcher{})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts("/roms/")).
+	romsAPIPath := filepath.ToSlash(romsRoot)
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts(romsAPIPath+"/")).
 		Return([]database.BrowseDirectoryResult{
 			{Name: "NES", FileCount: 100},
 			{Name: "SNES", FileCount: 200},
@@ -495,10 +496,10 @@ func TestHandleMediaBrowse_FilesystemDirectory(t *testing.T) {
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{}, nil)
 	// BrowseFileCount is skipped when BrowseFiles returns empty and no cursor
-	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts("/roms/", nil)).
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts(romsAPIPath+"/", nil)).
 		Return(0, nil).Maybe()
 
-	path := "/roms"
+	path := romsAPIPath
 	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
 		Path: &path,
 	})
@@ -508,12 +509,12 @@ func TestHandleMediaBrowse_FilesystemDirectory(t *testing.T) {
 
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)
-	assert.Equal(t, "/roms", browseResults.Path)
+	assert.Equal(t, romsAPIPath, browseResults.Path)
 	require.Len(t, browseResults.Entries, 2)
 
 	assert.Equal(t, "directory", browseResults.Entries[0].Type)
 	assert.Equal(t, "NES", browseResults.Entries[0].Name)
-	assert.Equal(t, "/roms/NES", browseResults.Entries[0].Path)
+	assert.Equal(t, romsAPIPath+"/NES", browseResults.Entries[0].Path)
 	require.NotNil(t, browseResults.Entries[0].FileCount)
 	assert.Equal(t, 100, *browseResults.Entries[0].FileCount)
 
