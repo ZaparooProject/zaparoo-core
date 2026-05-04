@@ -210,6 +210,8 @@ func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 func findPathCaseInsensitive(fs afero.Fs, path string) (string, error) {
 	if _, err := fs.Stat(path); err == nil {
 		return path, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("failed to stat path %s: %w", path, err)
 	}
 
 	cleanPath := filepath.Clean(path)
