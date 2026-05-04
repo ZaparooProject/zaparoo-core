@@ -42,6 +42,15 @@ func expectAnalyzeStep(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 }
 
+func expectTemporaryParentDirRepairStepNoop(mock sqlmock.Sqlmock) {
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStep, "temporary_repair_parent_dirs").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ").
+		WithArgs(DBConfigTemporaryRepairParentDirVersion).
+		WillReturnRows(sqlmock.NewRows([]string{"Value"}).AddRow(temporaryRepairParentDirVersion))
+}
+
 func expectPagePrefetchStep(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "page_prefetch").
@@ -292,10 +301,11 @@ func TestRunBackgroundOptimization_Success(t *testing.T) {
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
-	// Steps run in order: analyze → page_prefetch → browse_cache → wal_checkpoint
+	// Steps run in order: temporary_repair_parent_dirs → analyze → page_prefetch → browse_cache → wal_checkpoint
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectTemporaryParentDirRepairStepNoop(mock)
 	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -325,10 +335,11 @@ func TestRunBackgroundOptimization_FailureHandling(t *testing.T) {
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
-	// analyze is now the first step; failure aborts before page_prefetch/browse_cache
+	// temporary repair runs first; analyze failure aborts before page_prefetch/browse_cache
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectTemporaryParentDirRepairStepNoop(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "analyze").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -367,6 +378,7 @@ func TestRunBackgroundOptimization_PagePrefetchCancellationAborts(t *testing.T) 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectTemporaryParentDirRepairStepNoop(mock)
 	expectAnalyzeStep(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "page_prefetch").
@@ -404,6 +416,7 @@ func TestConcurrentOptimization(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectTemporaryParentDirRepairStepNoop(mock)
 	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -501,6 +514,7 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "running").
 			WillReturnResult(sqlmock.NewResult(1, 1))
+		expectTemporaryParentDirRepairStepNoop(mock)
 		expectAnalyzeStep(mock)
 		expectPostAnalyzeSteps(mock)
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -549,10 +563,11 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 			vacuumRetryDelay:  1 * time.Millisecond,
 		}
 
-		// analyze is first; failure aborts before page_prefetch/browse_cache
+		// temporary repair runs first; analyze failure aborts before page_prefetch/browse_cache
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "running").
 			WillReturnResult(sqlmock.NewResult(1, 1))
+		expectTemporaryParentDirRepairStepNoop(mock)
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStep, "analyze").
 			WillReturnResult(sqlmock.NewResult(1, 1))
@@ -608,6 +623,7 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "running").
 			WillReturnResult(sqlmock.NewResult(1, 1))
+		expectTemporaryParentDirRepairStepNoop(mock)
 		expectAnalyzeStep(mock)
 		expectPostAnalyzeSteps(mock)
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -689,6 +705,7 @@ func TestRunBackgroundOptimization_PausesAndResumes(t *testing.T) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectTemporaryParentDirRepairStepNoop(mock)
 	expectAnalyzeStep(mock)
 	expectPostAnalyzeSteps(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").

@@ -1021,6 +1021,15 @@ func (m *MockMediaDBI) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
 	return nil
 }
 
+func (m *MockMediaDBI) UpdateMediaParentDir(mediaDBID int64, parentDir string) error {
+	m.trackDatabaseOperation() // Track if called outside transaction
+	args := m.Called(mediaDBID, parentDir)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) DeleteMediaTags(mediaDBID int64) error {
 	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(mediaDBID)
@@ -1198,6 +1207,14 @@ func (m *MockMediaDBI) GetOptimizationStep() (string, error) {
 
 func (m *MockMediaDBI) RunBackgroundOptimization(statusCallback func(optimizing bool), pauser *syncutil.Pauser) {
 	m.Called(statusCallback, pauser)
+}
+
+func (m *MockMediaDBI) TemporaryRepairJobsPending(ctx context.Context) (bool, error) {
+	args := m.Called(ctx)
+	if err := args.Error(1); err != nil {
+		return args.Bool(0), fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Bool(0), nil
 }
 
 func (m *MockMediaDBI) WaitForBackgroundOperations() {

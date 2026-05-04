@@ -30,13 +30,16 @@ import (
 )
 
 const (
-	DBConfigLastGeneratedAt    = "LastGeneratedAt"
-	DBConfigOptimizationStatus = "OptimizationStatus"
-	DBConfigOptimizationStep   = "OptimizationStep"
-	DBConfigIndexingStatus     = "IndexingStatus"
-	DBConfigLastIndexedSystem  = "LastIndexedSystem"
-	DBConfigIndexingSystems    = "IndexingSystems"
-	DBConfigBrowseIndexVersion = "BrowseIndexVersion"
+	DBConfigLastGeneratedAt                 = "LastGeneratedAt"
+	DBConfigOptimizationStatus              = "OptimizationStatus"
+	DBConfigOptimizationStep                = "OptimizationStep"
+	DBConfigIndexingStatus                  = "IndexingStatus"
+	DBConfigLastIndexedSystem               = "LastIndexedSystem"
+	DBConfigIndexingSystems                 = "IndexingSystems"
+	DBConfigBrowseIndexVersion              = "BrowseIndexVersion"
+	DBConfigTemporaryRepairParentDirVersion = "TemporaryRepairParentDirVersion"
+
+	temporaryRepairParentDirVersion = "1"
 )
 
 func sqlUpdateLastGenerated(ctx context.Context, db sqlQueryable) error {

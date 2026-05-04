@@ -358,6 +358,7 @@ type TitleWithSystem struct {
 // MediaWithFullPath represents a Media item with its associated title and system information
 type MediaWithFullPath struct {
 	Path           string
+	ParentDir      string
 	TitleSlug      string
 	SystemID       string
 	DBID           int64
@@ -404,6 +405,7 @@ type ScanState struct {
 	TitleIDs        map[string]int
 	MediaIDs        map[string]int
 	MediaTitleIDs   map[int]int // Existing media DBID -> MediaTitleDBID for persistent reconciliation
+	MediaParentDirs map[int]string
 	MediaTagIDs     map[int]map[int]struct{}
 	TagTypeIDs      map[string]int
 	TagIDs          map[string]int
@@ -577,8 +579,10 @@ type MediaDBI interface {
 	InsertMedia(row Media) (Media, error)
 	FindOrInsertMedia(row Media) (Media, error)
 	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error
+	UpdateMediaParentDir(mediaDBID int64, parentDir string) error
 	DeleteMediaTags(mediaDBID int64) error
 	DeleteMediaTag(mediaDBID, tagDBID int64) error
+	TemporaryRepairJobsPending(ctx context.Context) (bool, error)
 
 	FindTagType(row TagType) (TagType, error)
 	InsertTagType(row TagType) (TagType, error)

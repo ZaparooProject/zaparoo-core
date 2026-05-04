@@ -192,7 +192,7 @@ func Start(
 	backgroundWG.Add(1)
 	go func() {
 		defer backgroundWG.Done()
-		runStartupMaintenance(st.GetContext(), cfg, db)
+		runStartupMaintenance(st.GetContext(), cfg, db, indexPauser)
 	}()
 
 	backgroundWG.Add(1)

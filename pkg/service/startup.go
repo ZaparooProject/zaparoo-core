@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb/boltmigration"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -215,7 +216,7 @@ func pruneExpiredZapLinkHosts(db *database.Database) {
 	}
 }
 
-func runMediaDBStartupMaintenance(ctx context.Context, db database.MediaDBI) {
+func runMediaDBStartupMaintenance(ctx context.Context, db database.MediaDBI, pauser *syncutil.Pauser) {
 	if db == nil {
 		log.Warn().Msg("skipping media database startup maintenance: media database is nil")
 		return
@@ -245,15 +246,52 @@ func runMediaDBStartupMaintenance(ctx context.Context, db database.MediaDBI) {
 	if err := db.RebuildTagCache(); err != nil {
 		log.Warn().Err(err).Msg("failed to warm tag cache on startup")
 	}
+
+	if startupMaintenanceCancelled(ctx, "skipping temporary media repair jobs: startup maintenance cancelled") {
+		return
+	}
+
+	pending, err := db.TemporaryRepairJobsPending(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check temporary media repair jobs")
+		return
+	}
+	if !pending {
+		return
+	}
+
+	indexingStatus, err := db.GetIndexingStatus()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check indexing status before temporary media repair jobs")
+		return
+	}
+	if indexingStatus == mediadb.IndexingStatusRunning || indexingStatus == mediadb.IndexingStatusPending {
+		log.Info().Str("indexingStatus", indexingStatus).
+			Msg("temporary media repair jobs pending; deferring until indexing completes")
+		return
+	}
+
+	optimizationStatus, err := db.GetOptimizationStatus()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check optimization status before temporary media repair jobs")
+		return
+	}
+	if optimizationStatus == mediadb.IndexingStatusRunning {
+		log.Info().Msg("temporary media repair jobs pending; optimization already running")
+		return
+	}
+
+	log.Info().Msg("temporary media repair jobs pending; starting background optimization")
+	db.RunBackgroundOptimization(nil, pauser)
 }
 
-func runStartupMaintenance(ctx context.Context, cfg *config.Instance, db *database.Database) {
+func runStartupMaintenance(ctx context.Context, cfg *config.Instance, db *database.Database, pauser *syncutil.Pauser) {
 	if db == nil {
 		log.Warn().Msg("skipping startup maintenance: database is nil")
 		return
 	}
 
-	runMediaDBStartupMaintenance(ctx, db.MediaDB)
+	runMediaDBStartupMaintenance(ctx, db.MediaDB, pauser)
 	cleanupHistoryRetention(ctx, cfg, db)
 	if startupMaintenanceCancelled(ctx, "skipping zaplink host pruning: startup maintenance cancelled") {
 		return

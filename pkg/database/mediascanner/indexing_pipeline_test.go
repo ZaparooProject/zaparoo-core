@@ -352,6 +352,37 @@ func TestAddMediaPath_SkipsTitleAndTagWritesWhenExistingMetadataMatches(t *testi
 	mockDB.AssertExpectations(t)
 }
 
+func TestAddMediaPath_RepairsExistingMediaParentDir(t *testing.T) {
+	t.Parallel()
+
+	mockDB := helpers.NewMockMediaDBI()
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	pathKey := filepath.ToSlash(path)
+	scanState := &database.ScanState{
+		SystemIDs:       map[string]int{"NES": 1},
+		TitleIDs:        map[string]int{"NES:supermariobrothers": 10},
+		MediaIDs:        map[string]int{database.MediaKey("NES", pathKey): 20},
+		MediaTitleIDs:   map[int]int{20: 10},
+		MediaParentDirs: map[int]string{20: ""},
+		MediaTagIDs:     map[int]map[int]struct{}{20: {8: {}}},
+		TagTypeIDs:      map[string]int{string(tags.TagTypeExtension): 7},
+		TagIDs:          map[string]int{database.TagKey(string(tags.TagTypeExtension), "nes"): 8},
+		MissingMedia:    map[int]struct{}{20: {}},
+	}
+
+	wantParentDir := filepath.ToSlash(filepath.Join("roms", "NES")) + "/"
+	mockDB.On("UpdateMediaParentDir", int64(20), wantParentDir).Return(nil).Once()
+
+	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	require.NoError(t, err)
+	assert.Equal(t, 10, titleIndex)
+	assert.Equal(t, 20, mediaIndex)
+	assert.Equal(t, wantParentDir, scanState.MediaParentDirs[20])
+	assert.NotContains(t, scanState.MissingMedia, 20)
+	mockDB.AssertNotCalled(t, "UpdateMediaTitle", mock.Anything, mock.Anything)
+	mockDB.AssertExpectations(t)
+}
+
 func TestAddMediaPath_ReconcileExistingMediaTagsPreservesUserTags(t *testing.T) {
 	t.Parallel()
 
