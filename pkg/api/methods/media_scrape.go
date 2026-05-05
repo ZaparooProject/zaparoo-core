@@ -196,7 +196,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
 	opts := scraper.ScrapeOptions{Systems: params.Systems, Force: params.Force, Pauser: env.ScrapePauser}
-	ch, err := s.Scrape(scrapeCtx, opts)
+	ch, err := s.Scrape(scrapeCtx, env.ScrapeEnv, opts)
 	if err != nil {
 		cancelFunc()
 		scrapingStatusInstance.clear()

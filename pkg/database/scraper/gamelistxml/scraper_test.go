@@ -278,10 +278,10 @@ func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
 		},
 	}, nil).Once()
 
-	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
+	records, err := (&GamelistXMLScraper{}).LoadRecords(context.Background(), scraper.ScrapeSystem{
 		ID:       "nes",
 		ROMPaths: []string{missingRoot, malformedRoot, validRoot},
-	})
+	}, db)
 	require.NoError(t, err)
 	// Only mario has an indexed media record; zelda is silently skipped.
 	require.Len(t, records, 1)
@@ -308,10 +308,10 @@ func TestLoadRecords_ReturnsMediaPreloadError(t *testing.T) {
 	preloadErr := errors.New("media preload failed")
 	db.On("GetMediaBySystemID", "nes").Return(nil, preloadErr).Once()
 
-	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
+	records, err := (&GamelistXMLScraper{}).LoadRecords(context.Background(), scraper.ScrapeSystem{
 		ID:       "nes",
 		ROMPaths: []string{root},
-	})
+	}, db)
 
 	require.Error(t, err)
 	assert.Nil(t, records)
@@ -324,11 +324,14 @@ func TestScrape_ResolverError(t *testing.T) {
 	t.Parallel()
 
 	scraperErr := errors.New("resolver failed")
-	g := NewGamelistXMLScraper(nil, func(context.Context, []string) ([]scraper.ScrapeSystem, error) {
-		return nil, scraperErr
-	})
+	g := NewGamelistXMLScraper()
+	env := scraper.ScrapeEnv{
+		ResolveSystemsFn: func(context.Context, []string) ([]scraper.ScrapeSystem, error) {
+			return nil, scraperErr
+		},
+	}
 
-	updates, err := g.Scrape(context.Background(), scraper.ScrapeOptions{Systems: []string{"nes"}})
+	updates, err := g.Scrape(context.Background(), env, scraper.ScrapeOptions{Systems: []string{"nes"}})
 	require.Error(t, err)
 	assert.Nil(t, updates)
 	require.ErrorContains(t, err, "gamelistxml: failed to resolve systems")
@@ -845,10 +848,10 @@ func TestLoadRecords_FilenameFallback_MatchesNestedMedia(t *testing.T) {
 		{Path: nestedPath, SystemID: "nes", DBID: 9, MediaTitleDBID: 99},
 	}, nil).Once()
 
-	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
+	records, err := (&GamelistXMLScraper{}).LoadRecords(context.Background(), scraper.ScrapeSystem{
 		ID:       "nes",
 		ROMPaths: []string{root},
-	})
+	}, db)
 
 	require.NoError(t, err)
 	require.Len(t, records, 1)
@@ -882,10 +885,10 @@ func TestLoadRecords_FilenameFallback_NoMatchAcrossRoots(t *testing.T) {
 		{Path: media2, SystemID: "nes", DBID: 2, MediaTitleDBID: 20},
 	}, nil).Once()
 
-	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
+	records, err := (&GamelistXMLScraper{}).LoadRecords(context.Background(), scraper.ScrapeSystem{
 		ID:       "nes",
 		ROMPaths: []string{root1, root2},
-	})
+	}, db)
 
 	require.NoError(t, err)
 	require.Len(t, records, 2, "filename fallback must not cross-match between ROM roots")
@@ -920,10 +923,10 @@ func TestLoadRecords_FilenameFallback_SubdirGamelistNoMatch(t *testing.T) {
 		{Path: rootPath, SystemID: "nes", DBID: 5, MediaTitleDBID: 55},
 	}, nil).Once()
 
-	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
+	records, err := (&GamelistXMLScraper{}).LoadRecords(context.Background(), scraper.ScrapeSystem{
 		ID:       "nes",
 		ROMPaths: []string{root},
-	})
+	}, db)
 
 	require.NoError(t, err)
 	require.Empty(t, records,

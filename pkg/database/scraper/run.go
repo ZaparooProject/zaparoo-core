@@ -87,7 +87,7 @@ func RunScraper[T any](
 			}
 
 			// Step 1: load records for this system from the source.
-			records, err := s.LoadRecords(ctx, system)
+			records, err := s.LoadRecords(ctx, system, db)
 			if err != nil {
 				// If LoadRecords failed because the context was cancelled, treat it
 				// as a clean cancellation (no FatalErr) rather than a fatal error.

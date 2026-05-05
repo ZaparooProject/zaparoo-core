@@ -49,7 +49,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -884,6 +883,7 @@ func handleWSMessage(
 	encGateway *apimiddleware.EncryptionGateway,
 	lastSeenTracker *apimiddleware.LastSeenTracker,
 	scrapers map[string]scraper.Scraper,
+	scrapeEnv scraper.ScrapeEnv,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
 		defer func() {
@@ -969,6 +969,7 @@ func handleWSMessage(
 			TokenQueue:    inTokenQueue,
 			ConfirmQueue:  confirmQueue,
 			Scrapers:      scrapers,
+			ScrapeEnv:     scrapeEnv,
 			IndexPauser:   indexPauser,
 			ScrapePauser:  scrapePauser,
 			IsLocal:       isLocal,
@@ -1182,6 +1183,7 @@ func handlePostRequest(
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
 	scrapers map[string]scraper.Scraper,
+	scrapeEnv scraper.ScrapeEnv,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -1228,6 +1230,7 @@ func handlePostRequest(
 			TokenQueue:    inTokenQueue,
 			ConfirmQueue:  confirmQueue,
 			Scrapers:      scrapers,
+			ScrapeEnv:     scrapeEnv,
 			IndexPauser:   indexPauser,
 			ScrapePauser:  scrapePauser,
 			IsLocal:       apimiddleware.IsLoopbackAddr(r.RemoteAddr),
@@ -1283,14 +1286,14 @@ func handlePostRequest(
 	}
 }
 
-// makeSystemResolver builds a SystemResolver for the gamelist.xml scraper.
+// makeSystemResolver builds a SystemResolver for scrapers.
 // It resolves indexed system IDs to ScrapeSystem values using the same launcher
 // path discovery as media indexing, so scraper paths match scanned media paths.
 func makeSystemResolver(
 	mdb database.MediaDBI,
 	platform platforms.Platform,
 	cfg *config.Instance,
-) gamelistxml.SystemResolver {
+) scraper.SystemResolver {
 	return func(ctx context.Context, systemIDs []string) ([]scraper.ScrapeSystem, error) {
 		indexed, err := mdb.IndexedSystems()
 		if err != nil {
@@ -1628,13 +1631,17 @@ func StartWithReady(
 		})
 	})
 
-	// Build the scrapers map once; passed into RequestEnv for media.scrape.
-	gamelistScraper := gamelistxml.NewGamelistXMLScraper(
-		db.MediaDB,
-		makeSystemResolver(db.MediaDB, platform, cfg),
-	)
-	scrapers := map[string]scraper.Scraper{
-		gamelistScraper.ID(): gamelistScraper,
+	// Build scrapers from the platform and construct ScrapeEnv once.
+	// Both are passed into RequestEnv; ScrapeEnv carries runtime deps (DB,
+	// resolver) that are injected into each Scrape call rather than baked
+	// into the scraper at construction time.
+	scrapeEnv := scraper.ScrapeEnv{
+		DB:               db.MediaDB,
+		ResolveSystemsFn: makeSystemResolver(db.MediaDB, platform, cfg),
+	}
+	scrapers := make(map[string]scraper.Scraper)
+	for _, s := range platform.Scrapers(cfg) {
+		scrapers[s.ID()] = s
 	}
 
 	// Non-WebSocket API routes (HTTP POST + REST GET) — restricted to
@@ -1652,7 +1659,7 @@ func StartWithReady(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
 			db, limitsManager, player,
-			indexPauser, scrapePauser, scrapers,
+			indexPauser, scrapePauser, scrapers, scrapeEnv,
 		)
 		r.Post("/api", postHandler)
 		r.Post("/api/v0", postHandler)
@@ -1694,7 +1701,7 @@ func StartWithReady(
 		handleWSMessage(
 			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
 			db, limitsManager, player, indexPauser, scrapePauser, encGateway,
-			lastSeenTracker, scrapers,
+			lastSeenTracker, scrapers, scrapeEnv,
 		),
 	))
 

@@ -52,7 +52,7 @@ type closedChannelScraper struct {
 func (s *closedChannelScraper) ID() string               { return s.id }
 func (s *closedChannelScraper) Name() string             { return s.name }
 func (*closedChannelScraper) SupportedSystems() []string { return nil }
-func (*closedChannelScraper) Scrape(_ context.Context, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
+func (*closedChannelScraper) Scrape(_ context.Context, _ scraper.ScrapeEnv, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
 	ch := make(chan scraper.ScrapeUpdate)
 	close(ch)
 	return ch, nil
@@ -404,7 +404,7 @@ type errorScraper struct {
 func (s *errorScraper) ID() string               { return s.id }
 func (*errorScraper) Name() string               { return "error scraper" }
 func (*errorScraper) SupportedSystems() []string { return nil }
-func (s *errorScraper) Scrape(_ context.Context, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
+func (s *errorScraper) Scrape(_ context.Context, _ scraper.ScrapeEnv, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
 	return nil, s.err
 }
 

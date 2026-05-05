@@ -50,7 +50,7 @@ type stubLoop struct {
 
 func (s *stubLoop) ID() string { return s.id }
 
-func (s *stubLoop) LoadRecords(_ context.Context, _ scraper.ScrapeSystem) ([]stubRecord, error) {
+func (s *stubLoop) LoadRecords(_ context.Context, _ scraper.ScrapeSystem, _ database.MediaDBI) ([]stubRecord, error) {
 	return s.records, nil
 }
 

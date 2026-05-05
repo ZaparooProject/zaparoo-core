@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -334,6 +335,10 @@ type Platform interface {
 	// Launchers is the complete list of all launchers available on this
 	// platform.
 	Launchers(*config.Instance) []Launcher
+	// Scrapers is the list of metadata scrapers available on this platform.
+	// Each scraper receives its runtime dependencies (DB, system resolver) via
+	// ScrapeEnv when Scrape is called, not at construction time.
+	Scrapers(*config.Instance) []scraper.Scraper
 	// ShowNotice displays a string on-screen of the platform device. Returns
 	// a function that may be used to manually hide the notice and a minimum
 	// amount of time that should be waited until trying to close the notice,

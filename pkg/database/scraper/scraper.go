@@ -33,6 +33,21 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
+// SystemResolver resolves system IDs to their DB identity and ROM paths.
+// Implementations query the media DB and platform to replicate the same path
+// discovery used during media indexing so scraper paths match scanned paths.
+type SystemResolver func(ctx context.Context, systemIDs []string) ([]ScrapeSystem, error)
+
+// ScrapeEnv carries runtime dependencies injected by the API layer when Scrape
+// is called. These are not stored on the scraper struct; scrapers are stateless
+// with respect to them and are safe to reuse across calls.
+type ScrapeEnv struct {
+	// DB is the media database used to load and write scrape data.
+	DB database.MediaDBI
+	// ResolveSystemsFn resolves active system IDs to ScrapeSystem values.
+	ResolveSystemsFn SystemResolver
+}
+
 // Scraper is the public interface all metadata scrapers implement.
 // Each scraper owns one source: a local file format, a REST API, etc.
 type Scraper interface {
@@ -50,14 +65,15 @@ type Scraper interface {
 
 	// Scrape starts the goroutine and returns a channel of progress updates.
 	// The channel is closed when the goroutine exits (done or cancelled).
-	Scrape(ctx context.Context, opts ScrapeOptions) (<-chan ScrapeUpdate, error)
+	// env carries runtime dependencies (DB, resolver) injected by the API layer.
+	Scrape(ctx context.Context, env ScrapeEnv, opts ScrapeOptions) (<-chan ScrapeUpdate, error)
 }
 
 // ScraperLoop is the internal interface that concrete scrapers implement to plug
 // into [RunScraper]. T is the source-specific record type (e.g. GamelistRecord).
 //
-// Concrete scrapers also implement [Scraper]; their Scrape method stores the db
-// and system list, then delegates to RunScraper with self as the ScraperLoop.
+// Concrete scrapers also implement [Scraper]; their Scrape method delegates to
+// RunScraper with self as the ScraperLoop, passing the injected db.
 type ScraperLoop[T any] interface {
 	// ID returns the same stable identifier as Scraper.ID.
 	ID() string
@@ -65,7 +81,7 @@ type ScraperLoop[T any] interface {
 	// LoadRecords returns all source records for the given system.
 	// For file-based scrapers this reads local files; for REST scrapers this
 	// queries the DB for titles that need enrichment.
-	LoadRecords(ctx context.Context, system ScrapeSystem) ([]T, error)
+	LoadRecords(ctx context.Context, system ScrapeSystem, db database.MediaDBI) ([]T, error)
 
 	// Match attempts to bind a source record to a Zaparoo Media/MediaTitle row.
 	// Returns nil when the record cannot be matched (not an error; loop skips it).

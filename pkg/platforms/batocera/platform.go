@@ -16,6 +16,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -803,6 +805,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	}
 
 	return append(customLaunchers, launchers...)
+}
+
+func (*Platform) Scrapers(_ *config.Instance) []scraper.Scraper {
+	return []scraper.Scraper{gamelistxml.NewGamelistXMLScraper()}
 }
 
 func (*Platform) ShowNotice(

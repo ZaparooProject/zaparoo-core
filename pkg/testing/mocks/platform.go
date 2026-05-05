@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -229,6 +230,15 @@ func (m *MockPlatform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	return []platforms.Launcher{}
 }
 
+// Scrapers is the list of metadata scrapers available on this platform
+func (m *MockPlatform) Scrapers(cfg *config.Instance) []scraper.Scraper {
+	args := m.Called(cfg)
+	if scrapers, ok := args.Get(0).([]scraper.Scraper); ok {
+		return scrapers
+	}
+	return []scraper.Scraper{}
+}
+
 // ShowNotice displays a string on-screen of the platform device
 func (m *MockPlatform) ShowNotice(cfg *config.Instance, args widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
@@ -348,6 +358,7 @@ func (m *MockPlatform) SetupBasicMock() {
 	m.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/mock/roms"})
 	m.On("SupportedReaders", mock.AnythingOfType("*config.Instance")).Return([]readers.Reader{})
 	m.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
+	m.On("Scrapers", mock.AnythingOfType("*config.Instance")).Return([]scraper.Scraper{})
 	m.On("ManagedByPackageManager").Return(false)
 
 	// Setup common stub functions for UI methods

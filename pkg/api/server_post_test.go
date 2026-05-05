@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -87,7 +88,10 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap) {
 	})
 
 	confirmQueue := make(chan chan error, 10)
-	handler := handlePostRequest(methodMap, platform, cfg, st, tokenQueue, confirmQueue, db, nil, nil, nil, nil, nil)
+	handler := handlePostRequest(
+		methodMap, platform, cfg, st, tokenQueue, confirmQueue,
+		db, nil, nil, nil, nil, nil, scraper.ScrapeEnv{},
+	)
 	return handler, methodMap
 }
 

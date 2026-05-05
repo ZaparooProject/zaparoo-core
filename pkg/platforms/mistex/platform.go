@@ -12,6 +12,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -353,6 +355,10 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	ls := mister.CreateLaunchers(p)
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+}
+
+func (*Platform) Scrapers(_ *config.Instance) []scraper.Scraper {
+	return []scraper.Scraper{gamelistxml.NewGamelistXMLScraper()}
 }
 
 func (*Platform) ConsoleManager() platforms.ConsoleManager {

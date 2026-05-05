@@ -56,6 +56,9 @@ type RequestEnv struct {
 	// all in-flight requests. It is fully populated before any handlers run and
 	// must not be mutated after that point — no locking is used.
 	Scrapers     map[string]scraper.Scraper
+	// ScrapeEnv carries runtime dependencies (DB, system resolver) injected into
+	// each Scrape call. Built once per server startup alongside the Scrapers map.
+	ScrapeEnv    scraper.ScrapeEnv
 	IndexPauser  *syncutil.Pauser
 	ScrapePauser *syncutil.Pauser
 	ClientID     string

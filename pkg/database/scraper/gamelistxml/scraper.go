@@ -75,24 +75,17 @@ var mediaDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageMap):        {"map", "maps"},
 }
 
-// SystemResolver resolves ScrapeSystem values for the active system IDs.
-// The API layer injects this so the scraper can retrieve ROMPaths without
-// importing the config package.
-type SystemResolver func(ctx context.Context, systemIDs []string) ([]scraper.ScrapeSystem, error)
-
 // GamelistXMLScraper enriches Zaparoo MediaDB records from EmulationStation
 // gamelist.xml files found in each system's ROM root paths.
+// It is stateless: DB and system resolver are injected at Scrape call time via ScrapeEnv.
 type GamelistXMLScraper struct {
-	db               database.MediaDBI
-	fs               afero.Fs
-	resolveSystemsFn SystemResolver
+	fs afero.Fs
 }
 
 // NewGamelistXMLScraper creates a new GamelistXMLScraper.
-// db is used for all database operations; resolveSystemsFn provides system info
-// (DBID, ROMPaths) when Scrape is called.
-func NewGamelistXMLScraper(db database.MediaDBI, resolveSystemsFn SystemResolver) *GamelistXMLScraper {
-	return &GamelistXMLScraper{db: db, fs: afero.NewOsFs(), resolveSystemsFn: resolveSystemsFn}
+// Runtime dependencies (DB, system resolver) are supplied via ScrapeEnv when Scrape is called.
+func NewGamelistXMLScraper() *GamelistXMLScraper {
+	return &GamelistXMLScraper{fs: afero.NewOsFs()}
 }
 
 func (g *GamelistXMLScraper) filesystem() afero.Fs {
@@ -117,16 +110,16 @@ func (*GamelistXMLScraper) SupportedSystems() []string {
 	return []string{}
 }
 
-// Scrape implements [scraper.Scraper]. It resolves active systems via the
-// injected resolver and delegates to [scraper.RunScraper].
+// Scrape implements [scraper.Scraper]. It resolves active systems via env and
+// delegates to [scraper.RunScraper].
 func (g *GamelistXMLScraper) Scrape(
-	ctx context.Context, opts scraper.ScrapeOptions,
+	ctx context.Context, env scraper.ScrapeEnv, opts scraper.ScrapeOptions,
 ) (<-chan scraper.ScrapeUpdate, error) {
-	systems, err := g.resolveSystemsFn(ctx, opts.Systems)
+	systems, err := env.ResolveSystemsFn(ctx, opts.Systems)
 	if err != nil {
 		return nil, fmt.Errorf("gamelistxml: failed to resolve systems: %w", err)
 	}
-	return scraper.RunScraper[*GamelistRecord](ctx, opts, systems, g.db, g), nil
+	return scraper.RunScraper[*GamelistRecord](ctx, opts, systems, env.DB, g), nil
 }
 
 // LoadRecords loads all indexed media for the system then, for each ROM root,
@@ -136,8 +129,9 @@ func (g *GamelistXMLScraper) Scrape(
 func (g *GamelistXMLScraper) LoadRecords(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
+	db database.MediaDBI,
 ) ([]*GamelistRecord, error) {
-	media, err := g.db.GetMediaBySystemID(system.ID)
+	media, err := db.GetMediaBySystemID(system.ID)
 	if err != nil {
 		return nil, fmt.Errorf("gamelistxml: load indexed media for system %q: %w", system.ID, err)
 	}
