@@ -246,24 +246,30 @@ var ErrSchemaAhead = errors.New("database schema is newer than this binary suppo
 func CheckSchemaVersion(db *sql.DB, migrationFiles embed.FS, migrationDir string) error {
 	getVersionStart := time.Now()
 	dbVersion, err := goose.GetDBVersion(db)
+	if err != nil {
+		log.Warn().Err(err).
+			Int64("duration_ms", time.Since(getVersionStart).Milliseconds()).
+			Msg("goose.GetDBVersion failed")
+		return fmt.Errorf("checking database schema version: %w", err)
+	}
 	log.Debug().Int64("duration_ms", time.Since(getVersionStart).Milliseconds()).
 		Int64("db_version", dbVersion).
 		Msg("goose.GetDBVersion finished")
-	if err != nil {
-		return fmt.Errorf("checking database schema version: %w", err)
-	}
 	if dbVersion == 0 {
 		return nil
 	}
 
 	latestStart := time.Now()
 	latest, err := latestEmbeddedVersion(migrationFiles, migrationDir)
+	if err != nil {
+		log.Warn().Err(err).
+			Int64("duration_ms", time.Since(latestStart).Milliseconds()).
+			Msg("latestEmbeddedVersion failed")
+		return fmt.Errorf("reading embedded migrations: %w", err)
+	}
 	log.Debug().Int64("duration_ms", time.Since(latestStart).Milliseconds()).
 		Int64("latest", latest).
 		Msg("latestEmbeddedVersion finished")
-	if err != nil {
-		return fmt.Errorf("reading embedded migrations: %w", err)
-	}
 
 	if dbVersion > latest {
 		return fmt.Errorf(

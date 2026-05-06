@@ -156,6 +156,15 @@ func logSafeResponse(result any) {
 	}
 }
 
+// RequestTracker is implemented by anything that wants to know when an API
+// request starts and ends. The idle scheduler in pkg/service/idle satisfies
+// it; tests can pass nil or a fake. Defined here (not in pkg/service/idle)
+// so the api package doesn't need to import idle.
+type RequestTracker interface {
+	RequestStarted()
+	RequestEnded()
+}
+
 type MethodMap struct {
 	sync.Map
 }
@@ -328,22 +337,13 @@ func NewMethodMap() *MethodMap {
 	return &m
 }
 
-// RequestTracker is implemented by anything that wants to know when an API
-// request starts and ends. The idle scheduler in pkg/service/idle satisfies
-// it; tests can pass nil or a fake. Defined here (not in pkg/service/idle)
-// so the api package doesn't need to import idle.
-type RequestTracker interface {
-	RequestStarted()
-	RequestEnded()
-}
-
 // newIdleTrackMiddleware returns chi middleware that bumps tracker's
 // in-flight counter for the duration of an HTTP request. Apply this to
-// short-lived HTTP entry points (pairing, REST run) that don't reach
-// handleRequest, so background work scheduled via the idle scheduler
-// waits for them to finish. NOT applied to long-lived connections (SSE)
-// or WebSocket upgrades — SSE would pin the counter forever and WS
-// messages are tracked individually inside handleRequest.
+// short-lived HTTP entry points (pairing, REST run) so background work
+// scheduled via the idle scheduler waits for them to finish. NOT applied
+// to long-lived connections (SSE) or WebSocket upgrades — SSE would pin
+// the counter forever, and WS / POST /api track per-message inside their
+// own handlers (handleWSMessage / handlePostRequest).
 //
 // A nil tracker yields a pass-through middleware so callers don't need to
 // nil-check at every Use site.
@@ -367,12 +367,7 @@ func handleRequest(
 	methodMap *MethodMap,
 	env requests.RequestEnv,
 	req models.RequestObject,
-	tracker RequestTracker,
 ) (any, *models.ErrorObject) {
-	if tracker != nil {
-		tracker.RequestStarted()
-		defer tracker.RequestEnded()
-	}
 	logSafeRequest(&req)
 
 	fn, ok := methodMap.GetMethod(req.Method)
@@ -842,7 +837,6 @@ func processRequestObject(
 	methodMap *MethodMap,
 	env requests.RequestEnv, //nolint:gocritic // single-use parameter in API handler
 	msg []byte,
-	tracker RequestTracker,
 ) requestResult {
 	if !json.Valid(msg) {
 		log.Warn().Msg("request payload is not valid JSON")
@@ -867,7 +861,7 @@ func processRequestObject(
 		}
 
 		// ID is present (could be null or valid value) - this is a request that needs a response
-		resp, rpcError := handleRequest(methodMap, env, req, tracker)
+		resp, rpcError := handleRequest(methodMap, env, req)
 		if rpcError != nil {
 			return requestResult{ID: req.ID, Error: rpcError, ShouldReply: true}
 		}
@@ -933,6 +927,16 @@ func handleWSMessage(
 				}
 			}
 		}()
+
+		// Bracket the entire per-message lifecycle (decrypt → dispatch →
+		// marshal → write → AfterWrite) so the idle scheduler doesn't
+		// see inFlight == 0 while a response is still being serialized.
+		// Pong fast-paths are intentionally counted: they're still wire
+		// activity and their cost is negligible.
+		if tracker != nil {
+			tracker.RequestStarted()
+			defer tracker.RequestEnded()
+		}
 
 		clientIP := apimiddleware.ParseRemoteIP(session.Request.RemoteAddr)
 		isLocal := apimiddleware.IsLoopbackAddr(session.Request.RemoteAddr)
@@ -1013,7 +1017,7 @@ func handleWSMessage(
 			ClientID:      session.Request.RemoteAddr,
 		}
 
-		result := processRequestObject(methodMap, env, plaintext, tracker)
+		result := processRequestObject(methodMap, env, plaintext)
 		if !result.ShouldReply {
 			// Notifications and incoming responses don't get replies
 			return
@@ -1223,6 +1227,15 @@ func handlePostRequest(
 	tracker RequestTracker,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Bracket the entire request lifecycle (read body → dispatch →
+		// marshal → Write → Flush → AfterWrite) so the idle scheduler
+		// doesn't see inFlight == 0 while a response is still being
+		// serialized.
+		if tracker != nil {
+			tracker.RequestStarted()
+			defer tracker.RequestEnded()
+		}
+
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if mediaType != "application/json" {
 			http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
@@ -1273,7 +1286,7 @@ func handlePostRequest(
 			ClientID:      r.RemoteAddr,
 		}
 
-		result := processRequestObject(methodMap, env, body, tracker)
+		result := processRequestObject(methodMap, env, body)
 		if !result.ShouldReply {
 			// Notifications and incoming responses don't get replies
 			w.WriteHeader(http.StatusNoContent)
@@ -1685,10 +1698,10 @@ func StartWithReady(
 	// These transports do not support encryption; the IP allowlist plus
 	// API key auth are the security boundary.
 	//
-	// idleMiddleware is intentionally absent here: POST /api dispatches to
-	// handleRequest per RPC method, which calls tracker.RequestStarted /
-	// RequestEnded itself. Adding the chi-layer middleware would double-count
-	// every batched request body.
+	// idleMiddleware is intentionally absent here: handlePostRequest calls
+	// tracker.RequestStarted / RequestEnded itself at the closure entry so
+	// the bracket covers the full lifecycle (body read → dispatch → write →
+	// AfterWrite). Adding the chi-layer middleware would double-count.
 	r.Group(func(r chi.Router) {
 		r.Use(nonWSIPFilter)
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))

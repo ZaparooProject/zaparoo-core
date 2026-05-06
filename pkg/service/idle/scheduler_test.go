@@ -46,6 +46,41 @@ func TestScheduler_RequestCounter(t *testing.T) {
 	assert.Equal(t, int64(0), s.InFlight())
 }
 
+// TestScheduler_RequestEnded_UnmatchedClampsToZero asserts that an unmatched
+// RequestEnded — double release, or release without a matching start — does
+// not drive inFlight negative. A negative counter would prevent
+// WaitForIdle's `inFlight == 0` predicate from ever holding, wedging waiters
+// until the maxWait hard cap.
+func TestScheduler_RequestEnded_UnmatchedClampsToZero(t *testing.T) {
+	t.Parallel()
+	fc := clockwork.NewFakeClock()
+	s := NewWithClock(fc)
+	ctx := context.Background()
+
+	// Unmatched RequestEnded with no prior RequestStarted.
+	s.RequestEnded()
+	assert.Equal(t, int64(0), s.InFlight(), "inFlight must clamp at zero, not go negative")
+
+	// Double release: one start, two ends.
+	s.RequestStarted()
+	s.RequestEnded()
+	s.RequestEnded()
+	assert.Equal(t, int64(0), s.InFlight())
+
+	// WaitForIdle must still fire after the quiet window despite the
+	// underflow attempts above.
+	errCh := runWaitForIdle(ctx, s, 80*time.Millisecond, 5*time.Second)
+	require.NoError(t, fc.BlockUntilContext(ctx, 1))
+	fc.Advance(81 * time.Millisecond)
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err, "WaitForIdle should return nil, not ErrMaxWaitElapsed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForIdle wedged after unmatched RequestEnded")
+	}
+}
+
 // runWaitForIdle starts WaitForIdle in a goroutine and returns a channel that
 // receives the call's error. The test drives the FakeClock to make the call
 // return.

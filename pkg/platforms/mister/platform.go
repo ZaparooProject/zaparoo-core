@@ -307,7 +307,10 @@ func (p *Platform) StartPost(
 			arcadeDBTask,
 		)
 	} else {
-		go arcadeDBTask(ctx)
+		// No scheduler — only happens in tests where the network task is
+		// unwanted. Skip rather than spawning a goroutine that could
+		// outlive Stop() and race shutdown.
+		log.Debug().Msg("no idle scheduler; skipping arcade DB update")
 	}
 
 	// If the RBF cache loaded from disk but its directory mtimes drifted,
@@ -315,7 +318,10 @@ func (p *Platform) StartPost(
 	// needed to pick up any added/removed cores. Defer the rescan to the
 	// idle scheduler so it doesn't compete with the launcher's first
 	// requests for the single ARM core or the SQLite file lock.
-	if scheduler != nil && cores.GlobalRBFCache.NeedsRescan() {
+	switch {
+	case scheduler == nil && cores.GlobalRBFCache.NeedsRescan():
+		log.Debug().Msg("no idle scheduler; skipping RBF rescan")
+	case scheduler != nil && cores.GlobalRBFCache.NeedsRescan():
 		scheduler.Schedule(
 			ctx, "rbf-rescan",
 			5*time.Second, 60*time.Second,

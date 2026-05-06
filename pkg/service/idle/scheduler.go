@@ -90,8 +90,26 @@ func (s *Scheduler) RequestStarted() {
 // on request completion. The wake is done by closing the current wakeCh
 // and replacing it with a fresh one under mu, which fans out to every
 // goroutine currently in WaitForIdle's select.
+//
+// Unmatched calls (double RequestEnded, or RequestEnded without a prior
+// RequestStarted) clamp the counter at zero rather than letting it go
+// negative — a negative inFlight would prevent WaitForIdle's
+// `inFlight == 0` predicate from ever holding, wedging waiters until the
+// maxWait cap.
 func (s *Scheduler) RequestEnded() {
-	s.inFlight.Add(-1)
+	for {
+		cur := s.inFlight.Load()
+		if cur <= 0 {
+			log.Warn().
+				Int64("in_flight", cur).
+				Msg("idle scheduler: RequestEnded without matching RequestStarted, clamping to zero")
+			s.inFlight.Store(0)
+			break
+		}
+		if s.inFlight.CompareAndSwap(cur, cur-1) {
+			break
+		}
+	}
 	s.lastRequestEndedAt.Store(s.clock.Now().UnixNano())
 	s.mu.Lock()
 	close(s.wakeCh)
