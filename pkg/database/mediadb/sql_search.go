@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -39,7 +40,8 @@ import (
 
 // fetchAndAttachTags fetches tags for a slice of search results and attaches them to the results.
 // This helper consolidates duplicated tag-fetching logic across multiple search functions.
-// Uses UNION of file-level (MediaTags) and title-level (MediaTitleTags) queries for indexable joins.
+// Combines file-level (MediaTags) and title-level (MediaTitleTags) tags via UNION ALL
+// (cheaper than UNION because it skips SQLite's sort/dedup pass) and dedupes in Go.
 // Modifies results in-place.
 func fetchAndAttachTags(
 	ctx context.Context,
@@ -50,44 +52,39 @@ func fetchAndAttachTags(
 		return nil
 	}
 
-	// Extract media IDs from results
 	mediaIDs := make([]int64, len(results))
 	for i, result := range results {
 		mediaIDs[i] = result.MediaID
 	}
 
-	// Query tags for all media IDs from both MediaTags (file-level) and
-	// MediaTitleTags (title-level). Uses UNION of two indexed queries
-	// instead of an OR JOIN which SQLite can't optimize.
+	// Two indexed queries combined with UNION ALL beat a single OR JOIN
+	// (which SQLite can't optimise). Dedup happens in Go below.
 	placeholders := prepareVariadic("?", ",", len(mediaIDs))
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
 	tagsQuery := `
-		SELECT MediaDBID, Tag, Type FROM (
-			SELECT
-				Media.DBID as MediaDBID,
-				Tags.Tag,
-				TagTypes.Type
-			FROM Media
-			JOIN MediaTags ON MediaTags.MediaDBID = Media.DBID
-			JOIN Tags ON Tags.DBID = MediaTags.TagDBID
-			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE Media.DBID IN (` + placeholders + `)
+		SELECT
+			Media.DBID as MediaDBID,
+			Tags.Tag,
+			TagTypes.Type
+		FROM Media
+		JOIN MediaTags ON MediaTags.MediaDBID = Media.DBID
+		JOIN Tags ON Tags.DBID = MediaTags.TagDBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE Media.DBID IN (` + placeholders + `)
 
-			UNION
+		UNION ALL
 
-			SELECT
-				Media.DBID as MediaDBID,
-				Tags.Tag,
-				TagTypes.Type
-			FROM Media
-			JOIN MediaTitleTags ON MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
-			JOIN Tags ON Tags.DBID = MediaTitleTags.TagDBID
-			JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-			WHERE Media.DBID IN (` + placeholders + `)
-		)
-		ORDER BY MediaDBID, Type, Tag`
+		SELECT
+			Media.DBID as MediaDBID,
+			Tags.Tag,
+			TagTypes.Type
+		FROM Media
+		JOIN MediaTitleTags ON MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
+		JOIN Tags ON Tags.DBID = MediaTitleTags.TagDBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE Media.DBID IN (` + placeholders + `)`
 
-	// UNION needs the media ID list twice (once per leg)
+	// Each UNION ALL leg needs its own copy of the media ID list.
 	tagsArgs := make([]any, 0, len(mediaIDs)*2)
 	for _, id := range mediaIDs {
 		tagsArgs = append(tagsArgs, id)
@@ -117,8 +114,10 @@ func fetchAndAttachTags(
 		}
 	}()
 
-	// Create a map of MediaID -> Tags for fast lookup
+	// Build per-mediaID tag lists. The same (Tag, Type) tuple can appear in
+	// both UNION ALL legs (file-level and title-level), so dedupe with a set.
 	tagsMap := make(map[int64][]database.TagInfo)
+	seen := make(map[int64]map[database.TagInfo]struct{})
 	for tagsRows.Next() {
 		var mediaID int64
 		var tag, tagType string
@@ -126,23 +125,40 @@ func fetchAndAttachTags(
 			return fmt.Errorf("failed to scan tags result: %w", scanErr)
 		}
 
-		// Append tag to the slice for this media ID
 		tagInfo := database.TagInfo{
 			Tag:  dbtags.UnpadTagValue(tag),
 			Type: tagType,
 		}
+		mediaSeen, ok := seen[mediaID]
+		if !ok {
+			mediaSeen = make(map[database.TagInfo]struct{})
+			seen[mediaID] = mediaSeen
+		}
+		if _, dup := mediaSeen[tagInfo]; dup {
+			continue
+		}
+		mediaSeen[tagInfo] = struct{}{}
 		tagsMap[mediaID] = append(tagsMap[mediaID], tagInfo)
 	}
 	if err = tagsRows.Err(); err != nil {
 		return fmt.Errorf("tags rows iteration error: %w", err)
 	}
 
-	// Merge tags into results
+	// Stable order for clients (the SQL no longer ORDERs the rows).
+	for mediaID := range tagsMap {
+		tags := tagsMap[mediaID]
+		sort.Slice(tags, func(i, j int) bool {
+			if tags[i].Type != tags[j].Type {
+				return tags[i].Type < tags[j].Type
+			}
+			return tags[i].Tag < tags[j].Tag
+		})
+	}
+
 	for i := range results {
 		if tagList, exists := tagsMap[results[i].MediaID]; exists {
 			results[i].Tags = tagList
 		} else {
-			// Initialize empty tags slice for media with no tags
 			results[i].Tags = []database.TagInfo{}
 		}
 	}
