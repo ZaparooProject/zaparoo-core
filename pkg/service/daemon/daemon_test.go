@@ -1104,13 +1104,14 @@ func TestWaitForServicePidFile_FailsWhenProcessExits(t *testing.T) {
 	svc := newTestService(t)
 	process := exec.CommandContext(context.Background(), "sh", "-c", "exit 0")
 	require.NoError(t, process.Start())
-	t.Cleanup(func() { _ = process.Wait() })
+	pid := process.Process.Pid
+	// Reap the child so the PID is fully released. pidRunning relies on
+	// /proc/<pid>/stat to detect zombies, which doesn't exist on macOS;
+	// without an explicit Wait() the child stays as a zombie there and
+	// kill(pid, 0) keeps reporting "running".
+	require.NoError(t, process.Wait())
 
-	require.Eventually(t, func() bool {
-		return !pidRunning(process.Process.Pid)
-	}, time.Second, 10*time.Millisecond)
-
-	err := svc.waitForServicePidFile(process.Process.Pid, time.Second)
+	err := svc.waitForServicePidFile(pid, time.Second)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exited before writing pidfile")
 }
