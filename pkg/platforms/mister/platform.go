@@ -174,6 +174,18 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 		"ini": CmdIni, // DEPRECATED
 	}
 
+	// Load CSV mappings synchronously: the API begins accepting scans before
+	// deferredStartPre runs, and a token scanned in that window would miss
+	// any user-configured nfc.csv override. The load is cheap (no-op fast
+	// path when nfc.csv is absent; <10ms parse otherwise).
+	uids, texts, err := LoadCsvMappings()
+	if err != nil {
+		log.Error().Msgf("error loading mappings: %s", err)
+	} else {
+		p.SetDB(uids, texts)
+		log.Info().Int("uid_count", len(uids)).Int("text_count", len(texts)).Msg("CSV mappings loaded")
+	}
+
 	go p.deferredStartPre()
 
 	log.Info().Int64("duration_ms", time.Since(startPreStart).Milliseconds()).
@@ -182,9 +194,11 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 }
 
 // deferredStartPre runs the StartPre work that does not need to complete
-// before the JSON-RPC API binds: picker directory bootstrap, CSV mappings
-// load, and the mappings watcher. Runs once per process; failures are
-// logged and tolerated, mirroring the pre-deferral behaviour.
+// before the JSON-RPC API binds: picker directory bootstrap and the
+// mappings watcher. Runs once per process; failures are logged and
+// tolerated, mirroring the pre-deferral behaviour. The initial CSV
+// mappings load runs synchronously in StartPre (see comment there) so
+// LookupMapping never sees nil maps once StartPre has returned.
 func (p *Platform) deferredStartPre() {
 	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
 		if err := os.MkdirAll(misterconfig.MainPickerDir, 0o750); err != nil {
@@ -192,14 +206,6 @@ func (p *Platform) deferredStartPre() {
 		} else if err := os.WriteFile(misterconfig.MainPickerSelected, []byte(""), 0o600); err != nil {
 			log.Error().Err(err).Msg("failed to write picker selected file")
 		}
-	}
-
-	uids, texts, err := LoadCsvMappings()
-	if err != nil {
-		log.Error().Msgf("error loading mappings: %s", err)
-	} else {
-		p.SetDB(uids, texts)
-		log.Info().Int("uid_count", len(uids)).Int("text_count", len(texts)).Msg("CSV mappings loaded")
 	}
 
 	closeMappingsWatcher, err := StartCsvMappingsWatcher(
