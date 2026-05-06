@@ -82,9 +82,13 @@ func MigrateUp(
 	migrationFiles embed.FS,
 	migrationDir, dbPath, sidecarPath string,
 ) error {
+	var (
+		latest    int64
+		latestErr error
+	)
 	if dbPath != "" && sidecarPath != "" {
 		latestStart := time.Now()
-		latest, latestErr := latestEmbeddedVersion(migrationFiles, migrationDir)
+		latest, latestErr = latestEmbeddedVersion(migrationFiles, migrationDir)
 		log.Debug().Int64("duration_ms", time.Since(latestStart).Milliseconds()).
 			Int64("latest", latest).
 			Msg("latestEmbeddedVersion finished (fast path)")
@@ -142,13 +146,10 @@ func MigrateUp(
 	log.Debug().Int64("duration_ms", time.Since(upStart).Milliseconds()).
 		Msg("goose up migrations finished")
 
-	if dbPath != "" && sidecarPath != "" {
-		latest, latestErr := latestEmbeddedVersion(migrationFiles, migrationDir)
-		if latestErr == nil && latest > 0 {
-			if writeErr := writeSchemaVersionSidecar(sidecarPath, dbPath, latest); writeErr != nil {
-				log.Warn().Err(writeErr).Str("path", sidecarPath).
-					Msg("failed to write schema version sidecar")
-			}
+	if dbPath != "" && sidecarPath != "" && latestErr == nil && latest > 0 {
+		if writeErr := writeSchemaVersionSidecar(sidecarPath, dbPath, latest); writeErr != nil {
+			log.Warn().Err(writeErr).Str("path", sidecarPath).
+				Msg("failed to write schema version sidecar")
 		}
 	}
 

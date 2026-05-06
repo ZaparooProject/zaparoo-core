@@ -186,28 +186,10 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 		log.Info().Int("uid_count", len(uids)).Int("text_count", len(texts)).Msg("CSV mappings loaded")
 	}
 
-	go p.deferredStartPre()
-
-	log.Info().Int64("duration_ms", time.Since(startPreStart).Milliseconds()).
-		Msg("StartPre finished")
-	return nil
-}
-
-// deferredStartPre runs the StartPre work that does not need to complete
-// before the JSON-RPC API binds: picker directory bootstrap and the
-// mappings watcher. Runs once per process; failures are logged and
-// tolerated, mirroring the pre-deferral behaviour. The initial CSV
-// mappings load runs synchronously in StartPre (see comment there) so
-// LookupMapping never sees nil maps once StartPre has returned.
-func (p *Platform) deferredStartPre() {
-	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
-		if err := os.MkdirAll(misterconfig.MainPickerDir, 0o750); err != nil {
-			log.Error().Err(err).Msg("failed to create picker directory")
-		} else if err := os.WriteFile(misterconfig.MainPickerSelected, []byte(""), 0o600); err != nil {
-			log.Error().Err(err).Msg("failed to write picker selected file")
-		}
-	}
-
+	// Start the watcher synchronously so its stopper is committed to the
+	// platform before StartPre returns. If we deferred this into a goroutine,
+	// a fast Stop() could read p.stopMappingsWatcher == nil and miss the
+	// close, leaking the watcher's listener goroutine.
 	closeMappingsWatcher, err := StartCsvMappingsWatcher(
 		p.GetDBLoadTime,
 		p.SetDB,
@@ -218,6 +200,28 @@ func (p *Platform) deferredStartPre() {
 	p.platformMu.Lock()
 	p.stopMappingsWatcher = closeMappingsWatcher
 	p.platformMu.Unlock()
+
+	go p.deferredStartPre()
+
+	log.Info().Int64("duration_ms", time.Since(startPreStart).Milliseconds()).
+		Msg("StartPre finished")
+	return nil
+}
+
+// deferredStartPre runs the StartPre work that does not need to complete
+// before the JSON-RPC API binds: only the picker directory bootstrap.
+// Runs once per process; failures are logged and tolerated. The initial
+// CSV mappings load and the mappings watcher both start synchronously
+// in StartPre so LookupMapping never sees nil maps and Stop() can never
+// race the watcher's stopper assignment.
+func (*Platform) deferredStartPre() {
+	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
+		if err := os.MkdirAll(misterconfig.MainPickerDir, 0o750); err != nil {
+			log.Error().Err(err).Msg("failed to create picker directory")
+		} else if err := os.WriteFile(misterconfig.MainPickerSelected, []byte(""), 0o600); err != nil {
+			log.Error().Err(err).Msg("failed to write picker selected file")
+		}
+	}
 }
 
 var configureTLSDefaults = tlsroots.ConfigureDefaults
@@ -278,8 +282,9 @@ func (p *Platform) StartPost(
 
 	// Defer the arcade DB update to the idle scheduler so it doesn't
 	// compete with the launcher's first request for the network or the
-	// single ARM core. Falls back to running it inline if no scheduler
-	// is supplied (e.g. tests).
+	// single ARM core. Production always supplies a scheduler; the nil
+	// branch is reached only in tests where the network task is unwanted,
+	// and we skip rather than spawn a goroutine that could outlive Stop().
 	arcadeDBTask := func(ctx context.Context) {
 		haveInternet := helpers.WaitForInternetContext(ctx, 30)
 		if !haveInternet {
