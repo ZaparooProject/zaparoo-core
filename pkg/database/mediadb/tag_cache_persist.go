@@ -21,14 +21,16 @@ package mediadb
 
 import (
 	"fmt"
+	"path/filepath"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
 
-// TagCacheFileSuffix is appended to the media DB path to derive the on-disk
-// tag cache filename.
-const TagCacheFileSuffix = ".tag_cache.gob"
+// TagCacheFileName is the on-disk filename used by the persisted tag cache,
+// resolved against the cache subdirectory of the data dir.
+const TagCacheFileName = "tag_cache.gob"
 
 // tagCacheFileVersion bumps when the on-disk format changes in a
 // backwards-incompatible way. Mismatched versions fall back to a SQL rebuild.
@@ -72,7 +74,7 @@ func (db *MediaDB) tagCachePath() string {
 	if db.dbPath == "" {
 		return ""
 	}
-	return db.dbPath + TagCacheFileSuffix
+	return filepath.Join(filepath.Dir(db.dbPath), config.CacheDir, TagCacheFileName)
 }
 
 // LoadCachedTagCache reads the persisted tag cache from disk and installs it

@@ -294,6 +294,21 @@ func (p *Platform) StartPost(
 		go arcadeDBTask(ctx)
 	}
 
+	// If the RBF cache loaded from disk but its directory mtimes drifted,
+	// the persisted entries are still serving requests but a rescan is
+	// needed to pick up any added/removed cores. Defer the rescan to the
+	// idle scheduler so it doesn't compete with the launcher's first
+	// requests for the single ARM core or the SQLite file lock.
+	if scheduler != nil && cores.GlobalRBFCache.NeedsRescan() {
+		scheduler.Schedule(
+			ctx, "rbf-rescan",
+			5*time.Second, 60*time.Second,
+			func(_ context.Context) {
+				cores.GlobalRBFCache.Refresh()
+			},
+		)
+	}
+
 	return nil
 }
 
@@ -840,6 +855,7 @@ func filterNeoGeoZipToNeoOnly(results []platforms.ScanResult) []platforms.ScanRe
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
+	cores.GlobalRBFCache.SetPersistPath(filepath.Join(helpers.DataDir(p), config.CacheDir, cores.RBFCacheFileName))
 	cores.GlobalRBFCache.Refresh()
 
 	aGamesPath := "listings/games.txt"

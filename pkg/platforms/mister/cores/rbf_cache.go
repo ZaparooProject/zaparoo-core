@@ -32,11 +32,24 @@ import (
 )
 
 // RBFCache provides lookups of RBF paths by system ID, short name, or launcher ID.
+//
+// On-disk persistence: when SetPersistPath has been called, the first
+// Refresh of the process tries to load `<path>` instead of scanning the
+// SD. If the loaded file's directory-mtime snapshot still matches the
+// live filesystem, no scan runs at all. If mtimes have drifted, the
+// loaded data is still installed for serving and NeedsRescan() returns
+// true so the caller can schedule a background rescan via the idle
+// scheduler. Subsequent Refresh calls noop when mtimes still match
+// (cheap stat-only check) and rescan when they don't.
 type RBFCache struct {
-	bySystemID   map[string]RBFInfo
-	byShortName  map[string][]RBFInfo // short name (lower) → all scanned RBFs with that short name
-	byLauncherID map[string]string    // launcherID → rbfPath (unresolved)
-	mu           syncutil.RWMutex
+	bySystemID    map[string]RBFInfo
+	byShortName   map[string][]RBFInfo // short name (lower) → all scanned RBFs with that short name
+	byLauncherID  map[string]string    // launcherID → rbfPath (unresolved)
+	lastDirMtimes map[string]int64     // snapshot used by Refresh to decide if a rescan is needed
+	persistPath   string               // empty disables on-disk persistence
+	mu            syncutil.RWMutex
+	initialized   bool // first Refresh has run (load-or-scan completed)
+	needsRescan   bool // disk-loaded data has stale mtimes; caller should schedule a rescan
 }
 
 // GlobalRBFCache is the singleton instance for the MiSTer platform.
@@ -67,25 +80,123 @@ func selectByCanonicalDir(candidates []RBFInfo, canonicalDir string) (RBFInfo, b
 	return candidates[0], true
 }
 
-// Refresh scans for RBF files and rebuilds the cache.
+// SetPersistPath configures the on-disk cache file. Pass an empty string
+// to disable persistence (e.g. tests). Must be called before the first
+// Refresh to take effect for the load step.
+func (c *RBFCache) SetPersistPath(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.persistPath = path
+}
+
+// NeedsRescan reports whether the most recent first-call Refresh loaded a
+// persisted cache whose directory-mtime snapshot didn't match the live
+// filesystem. The caller (typically a platform's StartPost) is expected
+// to schedule a background Refresh when this is true. The flag is reset
+// once a fresh scan completes.
+func (c *RBFCache) NeedsRescan() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.needsRescan
+}
+
+// Refresh ensures the cache reflects the current filesystem. Behaviour:
+//
+//   - First call after process start, with a configured persist path: try
+//     to load the persisted cache. If loaded and the directory-mtime
+//     snapshot matches the live filesystem, install the data and return
+//     without scanning. If loaded but mtimes drifted, install the data,
+//     set NeedsRescan, and return without scanning. If the file is
+//     missing, corrupt, or version-mismatched, fall through to a scan.
+//   - Subsequent calls: stat the snapshot directories; if all mtimes
+//     still match, noop. Otherwise, scan and persist.
+//
+// The cheap-stat fast path means callers like Platform.Launchers (which
+// is invoked from many hot paths) pay only a handful of stats per call
+// instead of a full SD walk.
 func (c *RBFCache) Refresh() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.populateCache()
+
+	if !c.initialized {
+		c.initialized = true
+		if c.tryLoadFromDiskLocked() {
+			return
+		}
+	} else if dirMtimesMatch(c.lastDirMtimes) {
+		return
+	}
+
+	c.scanLocked()
 }
 
-func (c *RBFCache) populateCache() {
+// tryLoadFromDiskLocked attempts to populate the cache from the persisted
+// file. Returns true if a usable file was loaded (the cache is now
+// populated even if mtimes drifted; needsRescan tracks that case).
+func (c *RBFCache) tryLoadFromDiskLocked() bool {
+	if c.persistPath == "" {
+		return false
+	}
+	stored, loaded, err := loadPersistedRBFCache(c.persistPath)
+	if err != nil {
+		log.Warn().Err(err).Str("path", c.persistPath).Msg("RBF cache: load failed, falling back to scan")
+		return false
+	}
+	if !loaded {
+		return false
+	}
+
+	c.BuildFromRBFs(stored.Files)
+	c.lastDirMtimes = stored.DirMtimes
+	if dirMtimesMatch(stored.DirMtimes) {
+		log.Info().
+			Int("rbf_files", len(stored.Files)).
+			Int("systems_mapped", len(c.bySystemID)).
+			Str("path", c.persistPath).
+			Msg("RBF cache loaded from disk")
+		c.needsRescan = false
+	} else {
+		log.Info().Str("path", c.persistPath).Msg("RBF cache loaded but directory mtimes drifted; rescan needed")
+		c.needsRescan = true
+	}
+	return true
+}
+
+// scanLocked runs the synchronous SD scan, rebuilds the in-memory maps,
+// and (when persistence is configured) writes the result to disk. Caller
+// must hold c.mu.
+func (c *RBFCache) scanLocked() {
 	rbfFiles, err := shallowScanRBF()
 	if err != nil {
 		log.Warn().Err(err).Msg("RBF cache: scan failed, using empty cache")
 		c.BuildFromRBFs(nil)
+		c.needsRescan = false
 		return
 	}
 	c.BuildFromRBFs(rbfFiles)
+	c.needsRescan = false
 	log.Info().
 		Int("rbf_files", len(rbfFiles)).
 		Int("systems_mapped", len(c.bySystemID)).
 		Msg("RBF cache initialized")
+
+	if c.persistPath == "" {
+		return
+	}
+	snapshot, snapErr := snapshotDirMtimes()
+	if snapErr != nil {
+		log.Warn().Err(snapErr).Msg("RBF cache: failed to snapshot directory mtimes, skipping persist")
+		return
+	}
+	c.lastDirMtimes = snapshot
+	if writeErr := writePersistedRBFCache(c.persistPath, rbfFiles, snapshot); writeErr != nil {
+		log.Warn().Err(writeErr).Str("path", c.persistPath).Msg("RBF cache: failed to persist")
+		return
+	}
+	log.Debug().
+		Int("rbf_files", len(rbfFiles)).
+		Str("path", c.persistPath).
+		Msg("RBF cache persisted to disk")
 }
 
 // BuildFromRBFs deterministically rebuilds bySystemID and byShortName from a

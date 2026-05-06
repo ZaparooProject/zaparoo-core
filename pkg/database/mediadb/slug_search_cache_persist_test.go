@@ -22,12 +22,21 @@ package mediadb
 import (
 	"encoding/gob"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func slugSearchCacheTestPath(t *testing.T, dbPath string) string {
+	t.Helper()
+	cacheDir := filepath.Join(filepath.Dir(dbPath), config.CacheDir)
+	require.NoError(t, os.MkdirAll(cacheDir, 0o750))
+	return filepath.Join(cacheDir, SlugSearchCacheFileName)
+}
 
 // fakeSlugCache returns a small but fully populated SlugSearchCache for
 // round-trip serialization tests.
@@ -127,7 +136,7 @@ func TestLoadCachedSlugSearchCache_BadMagic(t *testing.T) {
 	t.Parallel()
 	mediaDB, mock, dbPath := newPersistTestDB(t)
 
-	cachePath := dbPath + SlugSearchCacheFileSuffix
+	cachePath := slugSearchCacheTestPath(t, dbPath)
 	f, err := os.Create(cachePath) //nolint:gosec // test-controlled path
 	require.NoError(t, err)
 	require.NoError(t, gob.NewEncoder(f).Encode(&persistedSlugSearchCache{
@@ -149,7 +158,7 @@ func TestLoadCachedSlugSearchCache_VersionMismatch(t *testing.T) {
 	t.Parallel()
 	mediaDB, mock, dbPath := newPersistTestDB(t)
 
-	cachePath := dbPath + SlugSearchCacheFileSuffix
+	cachePath := slugSearchCacheTestPath(t, dbPath)
 	f, err := os.Create(cachePath) //nolint:gosec // test-controlled path
 	require.NoError(t, err)
 	require.NoError(t, gob.NewEncoder(f).Encode(&persistedSlugSearchCache{
@@ -179,7 +188,7 @@ func TestLoadCachedSlugSearchCache_TruncatedFile(t *testing.T) {
 	expectIndexGenerationReadOnce(t, mock, 1)
 	require.NoError(t, mediaDB.PersistSlugSearchCache())
 
-	cachePath := dbPath + SlugSearchCacheFileSuffix
+	cachePath := slugSearchCacheTestPath(t, dbPath)
 	info, err := os.Stat(cachePath)
 	require.NoError(t, err)
 	require.Greater(t, info.Size(), int64(8), "need a non-trivial file to truncate")
@@ -225,7 +234,7 @@ func TestLoadCachedSlugSearchCache_OversizedFile(t *testing.T) {
 func TestPersistSlugSearchCache_RemovesStaleFileWhenEmpty(t *testing.T) {
 	t.Parallel()
 	mediaDB, mock, dbPath := newPersistTestDB(t)
-	cachePath := dbPath + SlugSearchCacheFileSuffix
+	cachePath := slugSearchCacheTestPath(t, dbPath)
 
 	mediaDB.slugSearchCache.Store(fakeSlugCache())
 	expectIndexGenerationReadOnce(t, mock, 1)

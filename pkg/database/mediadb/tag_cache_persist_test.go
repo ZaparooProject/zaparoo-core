@@ -29,11 +29,19 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func tagCacheTestPath(t *testing.T, dbPath string) string {
+	t.Helper()
+	cacheDir := filepath.Join(filepath.Dir(dbPath), config.CacheDir)
+	require.NoError(t, os.MkdirAll(cacheDir, 0o750))
+	return filepath.Join(cacheDir, TagCacheFileName)
+}
 
 // expectIndexGenerationReadOnce queues a single sqlmock expectation for
 // IndexGeneration to return the given value (or a no-rows error when value < 0).
@@ -140,7 +148,7 @@ func TestLoadCachedTagCache_BadMagic(t *testing.T) {
 	t.Parallel()
 	mediaDB, mock, dbPath := newPersistTestDB(t)
 
-	cachePath := dbPath + TagCacheFileSuffix
+	cachePath := tagCacheTestPath(t, dbPath)
 	f, err := os.Create(cachePath) //nolint:gosec // test-controlled path
 	require.NoError(t, err)
 	require.NoError(t, gob.NewEncoder(f).Encode(&persistedTagCache{
@@ -162,7 +170,7 @@ func TestLoadCachedTagCache_VersionMismatch(t *testing.T) {
 	t.Parallel()
 	mediaDB, mock, dbPath := newPersistTestDB(t)
 
-	cachePath := dbPath + TagCacheFileSuffix
+	cachePath := tagCacheTestPath(t, dbPath)
 	f, err := os.Create(cachePath) //nolint:gosec // test-controlled path
 	require.NoError(t, err)
 	require.NoError(t, gob.NewEncoder(f).Encode(&persistedTagCache{
@@ -197,7 +205,7 @@ func TestLoadCachedTagCache_TruncatedFile(t *testing.T) {
 	expectIndexGenerationReadOnce(t, mock, 1)
 	require.NoError(t, mediaDB.PersistTagCache())
 
-	cachePath := dbPath + TagCacheFileSuffix
+	cachePath := tagCacheTestPath(t, dbPath)
 	info, err := os.Stat(cachePath)
 	require.NoError(t, err)
 	require.Greater(t, info.Size(), int64(8), "need a non-trivial file to truncate")
@@ -250,7 +258,7 @@ func TestLoadCachedTagCache_OversizedFile(t *testing.T) {
 func TestPersistTagCache_RemovesStaleFileWhenEmpty(t *testing.T) {
 	t.Parallel()
 	mediaDB, mock, dbPath := newPersistTestDB(t)
-	cachePath := dbPath + TagCacheFileSuffix
+	cachePath := tagCacheTestPath(t, dbPath)
 
 	mediaDB.inMemoryTagCache.Store(&tagCache{
 		bySystem: map[string][]database.TagInfo{

@@ -21,13 +21,15 @@ package mediadb
 
 import (
 	"fmt"
+	"path/filepath"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/rs/zerolog/log"
 )
 
-// SlugSearchCacheFileSuffix is appended to the media DB path to derive the
-// on-disk slug search cache filename.
-const SlugSearchCacheFileSuffix = ".slug_search_cache.gob"
+// SlugSearchCacheFileName is the on-disk filename used by the persisted slug
+// search cache, resolved against the cache subdirectory of the data dir.
+const SlugSearchCacheFileName = "slug_search_cache.gob"
 
 // slugSearchCacheFileVersion bumps when the on-disk format changes in a
 // backwards-incompatible way. Mismatched versions fall back to a SQL rebuild.
@@ -86,7 +88,7 @@ func (db *MediaDB) slugSearchCachePath() string {
 	if db.dbPath == "" {
 		return ""
 	}
-	return db.dbPath + SlugSearchCacheFileSuffix
+	return filepath.Join(filepath.Dir(db.dbPath), config.CacheDir, SlugSearchCacheFileName)
 }
 
 // LoadCachedSlugSearchCache reads the persisted slug search cache from disk

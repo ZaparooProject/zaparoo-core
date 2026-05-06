@@ -120,6 +120,9 @@ func loadPersistedCacheFile(
 // triggers a rebuild on the next boot.
 func writePersistedCacheFile(path string, src any) error {
 	dir := filepath.Dir(path)
+	if mkErr := os.MkdirAll(dir, 0o750); mkErr != nil {
+		return fmt.Errorf("failed to create cache dir: %w", mkErr)
+	}
 	base := filepath.Base(path)
 	tmp, err := os.CreateTemp(dir, "."+base+".*.tmp")
 	if err != nil {
