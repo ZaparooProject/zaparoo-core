@@ -205,35 +205,21 @@ func sqlGetIndexGeneration(ctx context.Context, db *sql.DB) (int64, error) {
 	return gen, nil
 }
 
-// sqlBumpIndexGeneration reads the current generation, increments it by
-// one, and writes it back. The read+write pair is a single statement under
-// SQLite's serialized writer, but is not transactional with the cache file
-// writes or status flip that follow it; see BumpIndexGeneration for the
-// crash-recovery contract.
+// sqlBumpIndexGeneration atomically increments the generation counter and
+// returns the new value via a single INSERT ... ON CONFLICT DO UPDATE ...
+// RETURNING statement. Not transactional with the cache file writes or
+// status flip that follow it; see BumpIndexGeneration for the crash-recovery
+// contract.
 func sqlBumpIndexGeneration(ctx context.Context, db sqlQueryable) (int64, error) {
-	var raw string
+	var next int64
 	err := db.QueryRowContext(ctx,
-		"SELECT Value FROM DBConfig WHERE Name = ?",
+		`INSERT INTO DBConfig (Name, Value) VALUES (?, '1')
+		 ON CONFLICT(Name) DO UPDATE SET Value = CAST(CAST(Value AS INTEGER) + 1 AS TEXT)
+		 RETURNING CAST(Value AS INTEGER)`,
 		DBConfigIndexGeneration,
-	).Scan(&raw)
-	current := int64(0)
-	if err == nil {
-		parsed, parseErr := strconv.ParseInt(raw, 10, 64)
-		if parseErr != nil {
-			return 0, fmt.Errorf("failed to parse index generation: %w", parseErr)
-		}
-		current = parsed
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf("failed to read index generation: %w", err)
-	}
-	next := current + 1
-	_, err = db.ExecContext(ctx,
-		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
-		DBConfigIndexGeneration,
-		strconv.FormatInt(next, 10),
-	)
+	).Scan(&next)
 	if err != nil {
-		return 0, fmt.Errorf("failed to write index generation: %w", err)
+		return 0, fmt.Errorf("failed to bump index generation: %w", err)
 	}
 	return next, nil
 }

@@ -20,6 +20,7 @@
 package mediadb
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -209,4 +210,48 @@ func TestMediaDB_BumpIndexGeneration_StressMonotonic(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(goroutines*bumpsPerRoutine), finalGen,
 		"final generation should equal total bumps; lost updates indicate the read+write is not serialized")
+}
+
+// TestSQLBumpIndexGeneration_DirectNoLock calls sqlBumpIndexGeneration
+// directly against the underlying *sql.DB, bypassing sqlMu and the public
+// BumpIndexGeneration wrapper. It locks in the helper's atomic-by-design
+// contract (single INSERT ... ON CONFLICT ... RETURNING statement): if a
+// future refactor reverts to a two-statement read+write pattern, this test
+// will surface lost updates even though the public-method tests would still
+// pass because their outer lock masks the race.
+func TestSQLBumpIndexGeneration_DirectNoLock(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	rawDB := mediaDB.UnsafeGetSQLDb()
+	require.NotNil(t, rawDB)
+
+	const (
+		goroutines      = 8
+		bumpsPerRoutine = 25
+	)
+	var wg sync.WaitGroup
+	var failures atomic.Int32
+
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range bumpsPerRoutine {
+				if _, err := sqlBumpIndexGeneration(context.Background(), rawDB); err != nil {
+					failures.Add(1)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	require.Zero(t, failures.Load(), "sqlBumpIndexGeneration returned errors under contention")
+
+	finalGen, err := mediaDB.IndexGeneration()
+	require.NoError(t, err)
+	assert.Equal(t, int64(goroutines*bumpsPerRoutine), finalGen,
+		"final generation should equal total bumps; lost updates here indicate the helper itself is not atomic")
 }
