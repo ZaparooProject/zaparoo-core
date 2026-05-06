@@ -3208,3 +3208,192 @@ func TestMediaDB_PopulateSystemTagsCache_CountAggregation_Integration(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), count, "Count must sum file-level and title-level contributions")
 }
+
+func TestMediaDB_BrowseSystemRootCandidates_CacheNotReadyReturnsFalse_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	insertSystemWithMedia(t, mediaDB, "SNES", "Super RPG",
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "super-rpg.sfc")))
+
+	// No sqlPopulateBrowseCache call, so the BrowseDirCounts cache is empty.
+	snesSys, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	rootDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms"))
+	result, cacheReady, err := mediaDB.BrowseSystemRootCandidates(ctx, database.BrowseSystemRootCandidatesOptions{
+		Roots:   []string{rootDir},
+		Systems: []systemdefs.System{*snesSys},
+	})
+	require.NoError(t, err)
+	assert.False(t, cacheReady, "cacheReady should be false when browse cache is not yet populated")
+	assert.Empty(t, result.HasMedia)
+	assert.Empty(t, result.Children)
+}
+
+func TestMediaDB_BrowseSystemRootCandidates_RootWithSubdirsReturnsChildren_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	snesSystem := insertSystemWithMedia(t, mediaDB, "SNES", "Super RPG",
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "RPG", "super-rpg.sfc")))
+	insertSystemMedia(t, mediaDB, snesSystem, "Action Game",
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "Action", "action.sfc")))
+
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql))
+
+	snesSys, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	romsDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms"))
+	result, cacheReady, err := mediaDB.BrowseSystemRootCandidates(ctx, database.BrowseSystemRootCandidatesOptions{
+		Roots:   []string{romsDir},
+		Systems: []systemdefs.System{*snesSys},
+	})
+	require.NoError(t, err)
+	assert.True(t, cacheReady)
+	assert.True(t, result.HasMedia[romsDir])
+	assert.Equal(t, []string{"snes"}, result.Children[romsDir])
+}
+
+func TestMediaDB_BrowseSystemRootCandidates_RootWithOnlyDirectFilesHasMediaButNoChildren_Integration(
+	t *testing.T,
+) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	// Insert a media file directly at the root with no subdir.
+	insertSystemWithMedia(t, mediaDB, "SNES", "Direct File",
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "direct.sfc")))
+
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql))
+
+	snesSys, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	romsDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms"))
+	result, cacheReady, err := mediaDB.BrowseSystemRootCandidates(ctx, database.BrowseSystemRootCandidatesOptions{
+		Roots:   []string{romsDir},
+		Systems: []systemdefs.System{*snesSys},
+	})
+	require.NoError(t, err)
+	assert.True(t, cacheReady)
+	assert.True(t, result.HasMedia[romsDir],
+		"HasMedia should be true even when root has only direct files (no subdirs)")
+	assert.Empty(t, result.Children[romsDir],
+		"Children should be empty when root has no subdirs")
+}
+
+func TestMediaDB_BrowseSystemRootCandidates_RootWithoutMediaIsAbsent_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	insertSystemWithMedia(t, mediaDB, "SNES", "Super RPG",
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "super-rpg.sfc")))
+
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql))
+
+	snesSys, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	// /opt is never indexed, so it should not appear in HasMedia.
+	unrelatedDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "opt"))
+	result, cacheReady, err := mediaDB.BrowseSystemRootCandidates(ctx, database.BrowseSystemRootCandidatesOptions{
+		Roots:   []string{unrelatedDir},
+		Systems: []systemdefs.System{*snesSys},
+	})
+	require.NoError(t, err)
+	assert.True(t, cacheReady)
+	assert.False(t, result.HasMedia[unrelatedDir])
+	assert.Empty(t, result.Children[unrelatedDir])
+}
+
+func TestMediaDB_BrowseSystemRootCandidates_FiltersBySystem_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	insertSystemWithMedia(t, mediaDB, "SNES", "Super RPG",
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "super-rpg.sfc")))
+	insertSystemWithMedia(t, mediaDB, "NES", "Mario",
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "nes", "mario.nes")))
+
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql))
+
+	snesSys, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	romsDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms"))
+	result, cacheReady, err := mediaDB.BrowseSystemRootCandidates(ctx, database.BrowseSystemRootCandidatesOptions{
+		Roots:   []string{romsDir},
+		Systems: []systemdefs.System{*snesSys},
+	})
+	require.NoError(t, err)
+	assert.True(t, cacheReady)
+	assert.True(t, result.HasMedia[romsDir])
+	assert.Equal(t, []string{"snes"}, result.Children[romsDir],
+		"only SNES subdir should appear, NES must be filtered out")
+}
+
+func TestMediaDB_BrowseSystemRootCandidates_MultipleRootsBatched_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	// Two roots with media, one without.
+	insertSystemWithMedia(t, mediaDB, "SNES", "Super RPG",
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "snes", "super-rpg.sfc")))
+	insertSystemWithMedia(t, mediaDB, "NES", "Mario",
+		filepath.ToSlash(filepath.Join(string(filepath.Separator), "media", "usb0", "nes", "mario.nes")))
+
+	require.NoError(t, sqlPopulateBrowseCache(ctx, mediaDB.sql))
+
+	snesSys, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+	nesSys, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	romsDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms"))
+	usbDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "media", "usb0"))
+	cifsDir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "media", "cifs"))
+
+	result, cacheReady, err := mediaDB.BrowseSystemRootCandidates(ctx, database.BrowseSystemRootCandidatesOptions{
+		Roots:   []string{romsDir, usbDir, cifsDir},
+		Systems: []systemdefs.System{*snesSys, *nesSys},
+	})
+	require.NoError(t, err)
+	assert.True(t, cacheReady)
+	assert.True(t, result.HasMedia[romsDir])
+	assert.True(t, result.HasMedia[usbDir])
+	assert.False(t, result.HasMedia[cifsDir], "cifs root has no indexed media")
+	assert.Equal(t, []string{"snes"}, result.Children[romsDir])
+	assert.Equal(t, []string{"nes"}, result.Children[usbDir])
+}

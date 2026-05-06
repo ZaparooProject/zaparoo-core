@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -99,6 +100,8 @@ type oldDb struct {
 }
 
 func (p *Platform) getDB() oldDb {
+	p.platformMu.Lock()
+	defer p.platformMu.Unlock()
 	return oldDb{
 		Uids:  p.uidMap,
 		Texts: p.textMap,
@@ -106,10 +109,14 @@ func (p *Platform) getDB() oldDb {
 }
 
 func (p *Platform) GetDBLoadTime() time.Time {
+	p.platformMu.Lock()
+	defer p.platformMu.Unlock()
 	return p.dbLoadTime
 }
 
 func (p *Platform) SetDB(uidMap, textMap map[string]string) {
+	p.platformMu.Lock()
+	defer p.platformMu.Unlock()
 	p.dbLoadTime = time.Now()
 	p.uidMap = uidMap
 	p.textMap = textMap
@@ -150,39 +157,12 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(cfg *config.Instance) error {
+	startPreStart := time.Now()
 	configureTLSRootFallback()
-
-	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
-		err := os.MkdirAll(misterconfig.MainPickerDir, 0o750)
-		if err != nil {
-			return fmt.Errorf("failed to create picker directory: %w", err)
-		}
-		err = os.WriteFile(misterconfig.MainPickerSelected, []byte(""), 0o600)
-		if err != nil {
-			return fmt.Errorf("failed to write picker selected file: %w", err)
-		}
-	}
 
 	if err := p.InitDevices(cfg, true); err != nil {
 		return fmt.Errorf("failed to initialize input devices: %w", err)
 	}
-
-	uids, texts, err := LoadCsvMappings()
-	if err != nil {
-		log.Error().Msgf("error loading mappings: %s", err)
-	} else {
-		p.SetDB(uids, texts)
-		log.Info().Int("uid_count", len(uids)).Int("text_count", len(texts)).Msg("CSV mappings loaded")
-	}
-
-	closeMappingsWatcher, err := StartCsvMappingsWatcher(
-		p.GetDBLoadTime,
-		p.SetDB,
-	)
-	if err != nil {
-		log.Error().Msgf("error starting mappings watcher: %s", err)
-	}
-	p.stopMappingsWatcher = closeMappingsWatcher
 
 	p.cmdMappings = map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error){
 		"mister.ini":       CmdIni,
@@ -194,7 +174,54 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 		"ini": CmdIni, // DEPRECATED
 	}
 
+	// Load CSV mappings synchronously: the API begins accepting scans before
+	// deferredStartPre runs, and a token scanned in that window would miss
+	// any user-configured nfc.csv override. The load is cheap (no-op fast
+	// path when nfc.csv is absent; <10ms parse otherwise).
+	uids, texts, err := LoadCsvMappings()
+	if err != nil {
+		log.Error().Msgf("error loading mappings: %s", err)
+	} else {
+		p.SetDB(uids, texts)
+		log.Info().Int("uid_count", len(uids)).Int("text_count", len(texts)).Msg("CSV mappings loaded")
+	}
+
+	// Start the watcher synchronously so its stopper is committed to the
+	// platform before StartPre returns. If we deferred this into a goroutine,
+	// a fast Stop() could read p.stopMappingsWatcher == nil and miss the
+	// close, leaking the watcher's listener goroutine.
+	closeMappingsWatcher, err := StartCsvMappingsWatcher(
+		p.GetDBLoadTime,
+		p.SetDB,
+	)
+	if err != nil {
+		log.Error().Msgf("error starting mappings watcher: %s", err)
+	}
+	p.platformMu.Lock()
+	p.stopMappingsWatcher = closeMappingsWatcher
+	p.platformMu.Unlock()
+
+	go p.deferredStartPre()
+
+	log.Info().Int64("duration_ms", time.Since(startPreStart).Milliseconds()).
+		Msg("StartPre finished")
 	return nil
+}
+
+// deferredStartPre runs the StartPre work that does not need to complete
+// before the JSON-RPC API binds: only the picker directory bootstrap.
+// Runs once per process; failures are logged and tolerated. The initial
+// CSV mappings load and the mappings watcher both start synchronously
+// in StartPre so LookupMapping never sees nil maps and Stop() can never
+// race the watcher's stopper assignment.
+func (*Platform) deferredStartPre() {
+	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
+		if err := os.MkdirAll(misterconfig.MainPickerDir, 0o750); err != nil {
+			log.Error().Err(err).Msg("failed to create picker directory")
+		} else if err := os.WriteFile(misterconfig.MainPickerSelected, []byte(""), 0o600); err != nil {
+			log.Error().Err(err).Msg("failed to write picker selected file")
+		}
+	}
 }
 
 var configureTLSDefaults = tlsroots.ConfigureDefaults
@@ -227,11 +254,13 @@ func configureTLSRootFallback() {
 }
 
 func (p *Platform) StartPost(
+	ctx context.Context,
 	cfg *config.Instance,
 	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	db *database.Database,
+	scheduler *idle.Scheduler,
 ) error {
 	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia
@@ -251,9 +280,13 @@ func (p *Platform) StartPost(
 	p.tracker = tr
 	p.stopTracker = stopTr
 
-	// attempt arcadedb update
-	go func() {
-		haveInternet := helpers.WaitForInternet(30)
+	// Defer the arcade DB update to the idle scheduler so it doesn't
+	// compete with the launcher's first request for the network or the
+	// single ARM core. Production always supplies a scheduler; the nil
+	// branch is reached only in tests where the network task is unwanted,
+	// and we skip rather than spawn a goroutine that could outlive Stop().
+	arcadeDBTask := func(ctx context.Context) {
+		haveInternet := helpers.WaitForInternetContext(ctx, 30)
 		if !haveInternet {
 			log.Warn().Msg("no internet connection, skipping network tasks")
 			return
@@ -277,7 +310,37 @@ func (p *Platform) StartPost(
 		} else {
 			log.Info().Msgf("arcade database has %d entries", len(m))
 		}
-	}()
+	}
+	if scheduler != nil {
+		scheduler.Schedule(
+			ctx, "arcade-db-update",
+			5*time.Second, 300*time.Second,
+			arcadeDBTask,
+		)
+	} else {
+		// No scheduler — only happens in tests where the network task is
+		// unwanted. Skip rather than spawning a goroutine that could
+		// outlive Stop() and race shutdown.
+		log.Debug().Msg("no idle scheduler; skipping arcade DB update")
+	}
+
+	// If the RBF cache loaded from disk but its directory mtimes drifted,
+	// the persisted entries are still serving requests but a rescan is
+	// needed to pick up any added/removed cores. Defer the rescan to the
+	// idle scheduler so it doesn't compete with the launcher's first
+	// requests for the single ARM core or the SQLite file lock.
+	switch {
+	case scheduler == nil && cores.GlobalRBFCache.NeedsRescan():
+		log.Debug().Msg("no idle scheduler; skipping RBF rescan")
+	case scheduler != nil && cores.GlobalRBFCache.NeedsRescan():
+		scheduler.Schedule(
+			ctx, "rbf-rescan",
+			5*time.Second, 60*time.Second,
+			func(_ context.Context) {
+				cores.GlobalRBFCache.Refresh()
+			},
+		)
+	}
 
 	return nil
 }
@@ -292,9 +355,11 @@ func (p *Platform) Stop() error {
 
 	p.CloseDevices()
 
-	if p.stopMappingsWatcher != nil {
-		err := p.stopMappingsWatcher()
-		if err != nil {
+	p.platformMu.Lock()
+	stopWatcher := p.stopMappingsWatcher
+	p.platformMu.Unlock()
+	if stopWatcher != nil {
+		if err := stopWatcher(); err != nil {
 			return err
 		}
 	}
@@ -825,6 +890,11 @@ func filterNeoGeoZipToNeoOnly(results []platforms.ScanResult) []platforms.ScanRe
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
+	// Launchers is invoked from many hot paths (token scans, RPC handlers,
+	// indexing). The Refresh fast path stats only the snapshot directories
+	// and returns early when nothing has changed, so the syscall cost per
+	// call is bounded to ~one readdir plus one stat per top-level _* dir.
+	cores.GlobalRBFCache.SetPersistPath(filepath.Join(helpers.DataDir(p), config.CacheDir, cores.RBFCacheFileName))
 	cores.GlobalRBFCache.Refresh()
 
 	aGamesPath := "listings/games.txt"

@@ -304,6 +304,24 @@ type BrowseRouteCount struct {
 	FileCount int
 }
 
+// BrowseSystemRootCandidatesOptions parameterises the batched lookup used
+// to build `media.browse({systems:[...], path:""})` candidates in two
+// queries against the BrowseDirCounts cache.
+type BrowseSystemRootCandidatesOptions struct {
+	Roots   []string
+	Systems []systemdefs.System
+}
+
+// BrowseSystemRootCandidates is the cache-backed result of resolving a list of
+// filesystem roots against system-scoped browse data. Children holds the
+// immediate subdirectory names of each root that contain media for the
+// requested systems; HasMedia is true when a root has any media in its
+// subtree (even purely via descendants).
+type BrowseSystemRootCandidates struct {
+	Children map[string][]string
+	HasMedia map[string]bool
+}
+
 type SearchResultWithCursor struct {
 	SystemID      string
 	Name          string
@@ -499,6 +517,21 @@ type MediaDBI interface {
 	RebuildSlugSearchCache() error
 	RebuildTagCache() error
 
+	// On-disk persistence for the rebuilt caches. Persist* writes the
+	// current in-memory cache atomically; LoadCached* reads it back at
+	// startup and returns (false, nil) on missing/stale/version-mismatch
+	// so the caller can fall through to a SQL rebuild.
+	PersistTagCache() error
+	LoadCachedTagCache() (bool, error)
+	PersistSlugSearchCache() error
+	LoadCachedSlugSearchCache() (bool, error)
+
+	// IndexGeneration is bumped at the end of every successful indexing
+	// run. Persisted cache files embed the value they were built against
+	// so a stale cache from a previous run is rejected on next load.
+	IndexGeneration() (int64, error)
+	BumpIndexGeneration() (int64, error)
+
 	// Slug resolution cache methods
 	GetCachedSlugResolution(
 		ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
@@ -556,6 +589,9 @@ type MediaDBI interface {
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
 	BrowseRootCounts(ctx context.Context, rootDirs []string) (map[string]*int, error)
 	BrowseRouteCounts(ctx context.Context, opts BrowseRouteCountsOptions) (map[string]BrowseRouteCount, error)
+	BrowseSystemRootCandidates(
+		ctx context.Context, opts BrowseSystemRootCandidatesOptions,
+	) (result BrowseSystemRootCandidates, cacheReady bool, err error)
 	PopulateBrowseCache(ctx context.Context) error
 
 	IndexedSystems() ([]string, error)

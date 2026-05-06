@@ -47,7 +47,7 @@ func TestBackgroundTracker_StartsCorrectly(t *testing.T) {
 	}
 
 	// StartPost should start the background tracker
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 	require.NoError(t, err)
 
 	// Verify tracker was started
@@ -91,7 +91,7 @@ func TestBackgroundTracker_DetectsExternalGameLaunch(t *testing.T) {
 	}
 
 	// Start platform with no game running
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 	require.NoError(t, err)
 	defer func() {
 		if platform.stopTracker != nil {
@@ -162,7 +162,7 @@ func TestBackgroundTracker_DetectsExternalGameClose(t *testing.T) {
 	}
 
 	// Start platform with game running
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 	require.NoError(t, err)
 	defer func() {
 		if platform.stopTracker != nil {
@@ -223,7 +223,7 @@ func TestBackgroundTracker_ClearsKodiWhenNotReachable(t *testing.T) {
 	}
 
 	// Start platform
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 	require.NoError(t, err)
 	defer func() {
 		if platform.stopTracker != nil {
@@ -301,7 +301,7 @@ func TestBackgroundTracker_ClearsKodiWhenNotActive(t *testing.T) {
 	}
 
 	// Start platform
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 	require.NoError(t, err)
 	defer func() {
 		if platform.stopTracker != nil {
@@ -372,7 +372,7 @@ func TestBackgroundTracker_DetectsGameChange(t *testing.T) {
 	}
 
 	// Start with game 1 running
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 	require.NoError(t, err)
 	defer func() {
 		if platform.stopTracker != nil {
@@ -428,7 +428,7 @@ func TestBackgroundTracker_StopsCleanly(t *testing.T) {
 	}
 
 	// Start platform
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 	require.NoError(t, err)
 
 	// Verify tracker started
@@ -473,7 +473,7 @@ func TestLaunchMedia_SetsKodiActiveFlag(t *testing.T) {
 	platform.setActiveMedia = setActiveMedia
 
 	// Start platform
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 	require.NoError(t, err)
 	defer func() {
 		if platform.stopTracker != nil {
@@ -638,7 +638,7 @@ func TestBackgroundTracker_DetectsExternalKodi(t *testing.T) {
 	}
 
 	// Start platform
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 	require.NoError(t, err)
 	defer func() {
 		if platform.stopTracker != nil {
@@ -697,7 +697,7 @@ func TestBackgroundTracker_PollingInterval(t *testing.T) {
 	}
 
 	// Start platform
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 	require.NoError(t, err)
 	defer func() {
 		if platform.stopTracker != nil {

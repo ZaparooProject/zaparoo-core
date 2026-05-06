@@ -20,6 +20,7 @@
 package mocks
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/stretchr/testify/mock"
@@ -61,12 +63,12 @@ func (m *MockPlatform) StartPre(cfg *config.Instance) error {
 }
 
 // StartPost runs any necessary platform setup AFTER the main service has started running
-func (m *MockPlatform) StartPost(cfg *config.Instance,
+func (m *MockPlatform) StartPost(ctx context.Context, cfg *config.Instance,
 	launcherManager platforms.LauncherContextManager,
 	getActiveMedia func() *models.ActiveMedia, setActiveMedia func(*models.ActiveMedia),
-	db *database.Database,
+	db *database.Database, scheduler *idle.Scheduler,
 ) error {
-	args := m.Called(cfg, launcherManager, getActiveMedia, setActiveMedia, db)
+	args := m.Called(ctx, cfg, launcherManager, getActiveMedia, setActiveMedia, db, scheduler)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock platform start post failed: %w", err)
 	}
