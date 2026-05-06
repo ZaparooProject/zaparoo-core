@@ -304,6 +304,24 @@ type BrowseRouteCount struct {
 	FileCount int
 }
 
+// BrowseSystemRootCandidatesOptions parameterises the batched lookup that
+// replaces the per-root BrowseFileCount + BrowseDirectories fan-out used to
+// build `media.browse({systems:[...], path:""})` candidates.
+type BrowseSystemRootCandidatesOptions struct {
+	Roots   []string
+	Systems []systemdefs.System
+}
+
+// BrowseSystemRootCandidates is the cache-backed result of resolving a list of
+// filesystem roots against system-scoped browse data. Children holds the
+// immediate subdirectory names of each root that contain media for the
+// requested systems; HasMedia is true when a root has any media in its
+// subtree (even purely via descendants).
+type BrowseSystemRootCandidates struct {
+	Children map[string][]string
+	HasMedia map[string]bool
+}
+
 type SearchResultWithCursor struct {
 	SystemID      string
 	Name          string
@@ -571,6 +589,9 @@ type MediaDBI interface {
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
 	BrowseRootCounts(ctx context.Context, rootDirs []string) (map[string]*int, error)
 	BrowseRouteCounts(ctx context.Context, opts BrowseRouteCountsOptions) (map[string]BrowseRouteCount, error)
+	BrowseSystemRootCandidates(
+		ctx context.Context, opts BrowseSystemRootCandidatesOptions,
+	) (result BrowseSystemRootCandidates, cacheReady bool, err error)
 	PopulateBrowseCache(ctx context.Context) error
 
 	IndexedSystems() ([]string, error)

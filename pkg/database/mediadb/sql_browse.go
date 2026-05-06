@@ -706,6 +706,168 @@ func sqlBrowseRouteCountsFromMedia(
 	return counts, nil
 }
 
+// sqlBrowseSystemRootCandidates batches the per-root BrowseFileCount +
+// BrowseDirectories fan-out used by the API system-roots handler into two
+// queries against the BrowseDirCounts cache, regardless of how many roots
+// the platform has.
+//
+// HasMedia[root] is true when the root has any media in its subtree (direct
+// files or any descendant subdir) for the requested systems; Children[root]
+// holds the immediate subdir names that themselves contain media. Roots
+// absent from the cache (not indexed at all) are absent from both maps;
+// callers should treat them as "no media" rather than "cache miss". The
+// cacheReady return reflects only whether the BrowseDirs/BrowseDirCounts
+// tables are populated.
+func sqlBrowseSystemRootCandidates(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseSystemRootCandidatesOptions,
+) (database.BrowseSystemRootCandidates, bool, error) {
+	result := database.BrowseSystemRootCandidates{
+		Children: make(map[string][]string),
+		HasMedia: make(map[string]bool),
+	}
+	if len(opts.Roots) == 0 || len(opts.Systems) == 0 {
+		return result, true, nil
+	}
+	ready, err := sqlBrowseCacheReady(ctx, db)
+	if err != nil {
+		return result, false, err
+	}
+	if !ready {
+		return result, false, nil
+	}
+
+	// Map cache-key path → original input root: BrowseDirs stores paths in
+	// trailing-slash form, so we look up by that key but return results keyed
+	// by the caller's input form.
+	rootByKey := make(map[string]string, len(opts.Roots))
+	rootKeyPlaceholders := make([]string, 0, len(opts.Roots))
+	rootKeyArgs := make([]any, 0, len(opts.Roots))
+	for _, root := range opts.Roots {
+		key := browseRouteCacheKey(root)
+		if _, dup := rootByKey[key]; dup {
+			continue
+		}
+		rootByKey[key] = root
+		rootKeyPlaceholders = append(rootKeyPlaceholders, "?")
+		rootKeyArgs = append(rootKeyArgs, key)
+	}
+	rootIN := strings.Join(rootKeyPlaceholders, ",")
+
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	systemWhere := ""
+	if systemClause != "" {
+		systemWhere = ` AND ` + systemClause
+	}
+
+	if err := loadBrowseSystemRootHasMedia(
+		ctx, db, rootIN, rootKeyArgs, systemWhere, systemArgs, rootByKey, &result,
+	); err != nil {
+		return result, true, err
+	}
+	if err := loadBrowseSystemRootChildren(
+		ctx, db, rootIN, rootKeyArgs, systemWhere, systemArgs, rootByKey, &result,
+	); err != nil {
+		return result, true, err
+	}
+	for root := range result.Children {
+		sort.Strings(result.Children[root])
+	}
+	return result, true, nil
+}
+
+// loadBrowseSystemRootHasMedia populates HasMedia[root] for any roots whose
+// subtree contains media for the requested systems. For any indexed media
+// file, every ancestor dir (including the root itself when it's an ancestor)
+// is recorded as a CHILD in some (ancestor_parent, ancestor) pair, so a row
+// with cd.Path = root means the root's subtree has media. The "/" root
+// self-loop also matches.
+func loadBrowseSystemRootHasMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	rootIN string,
+	rootKeyArgs []any,
+	systemWhere string,
+	systemArgs []any,
+	rootByKey map[string]string,
+	result *database.BrowseSystemRootCandidates,
+) error {
+	args := make([]any, 0, len(rootKeyArgs)+len(systemArgs))
+	args = append(args, rootKeyArgs...)
+	args = append(args, systemArgs...)
+	query := `SELECT DISTINCT cd.Path
+		FROM BrowseDirs cd
+		INNER JOIN BrowseDirCounts c ON c.ChildDirDBID = cd.DBID
+		INNER JOIN Systems s ON c.SystemDBID = s.DBID
+		WHERE cd.Path IN (` + rootIN + `)` + systemWhere
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("browse cache root has-media query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var key string
+		if scanErr := rows.Scan(&key); scanErr != nil {
+			return fmt.Errorf("browse cache root has-media scan: %w", scanErr)
+		}
+		if root, ok := rootByKey[key]; ok {
+			result.HasMedia[root] = true
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("browse cache root has-media rows: %w", rowsErr)
+	}
+	return nil
+}
+
+// loadBrowseSystemRootChildren populates Children[root] with immediate
+// non-virtual subdir names that themselves contain media for the requested
+// systems. Excludes the "/" self-loop.
+func loadBrowseSystemRootChildren(
+	ctx context.Context,
+	db sqlQueryable,
+	rootIN string,
+	rootKeyArgs []any,
+	systemWhere string,
+	systemArgs []any,
+	rootByKey map[string]string,
+	result *database.BrowseSystemRootCandidates,
+) error {
+	args := make([]any, 0, len(rootKeyArgs)+len(systemArgs))
+	args = append(args, rootKeyArgs...)
+	args = append(args, systemArgs...)
+	query := `SELECT DISTINCT pd.Path, cd.Name
+		FROM BrowseDirs pd
+		INNER JOIN BrowseDirCounts c ON c.ParentDirDBID = pd.DBID
+		INNER JOIN BrowseDirs cd ON c.ChildDirDBID = cd.DBID
+		INNER JOIN Systems s ON c.SystemDBID = s.DBID
+		WHERE pd.Path IN (` + rootIN + `)
+			AND cd.IsVirtual = 0
+			AND c.ChildDirDBID != c.ParentDirDBID` + systemWhere
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("browse cache root children query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var parentKey, name string
+		if scanErr := rows.Scan(&parentKey, &name); scanErr != nil {
+			return fmt.Errorf("browse cache root children scan: %w", scanErr)
+		}
+		root, ok := rootByKey[parentKey]
+		if !ok || name == "" {
+			continue
+		}
+		result.HasMedia[root] = true
+		result.Children[root] = append(result.Children[root], name)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("browse cache root children rows: %w", rowsErr)
+	}
+	return nil
+}
+
 func sqlBrowseRootCounts(ctx context.Context, db sqlQueryable, rootDirs []string) (map[string]*int, error) {
 	counts := make(map[string]*int, len(rootDirs))
 	for _, root := range rootDirs {

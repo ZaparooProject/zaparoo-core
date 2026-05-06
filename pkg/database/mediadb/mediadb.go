@@ -1310,6 +1310,20 @@ func (db *MediaDB) BrowseRouteCounts(
 	return sqlBrowseRouteCounts(ctx, db.conn(), opts)
 }
 
+// BrowseSystemRootCandidates returns, in two batched queries, the immediate
+// child subdirs of each root that hold media for the requested systems plus
+// a per-root has-any-subtree-media flag. Replaces the per-root
+// BrowseFileCount + BrowseDirectories fan-out used by the system-roots
+// browse handler.
+func (db *MediaDB) BrowseSystemRootCandidates(
+	ctx context.Context, opts database.BrowseSystemRootCandidatesOptions,
+) (database.BrowseSystemRootCandidates, bool, error) {
+	if db.sql == nil {
+		return database.BrowseSystemRootCandidates{}, false, ErrNullSQL
+	}
+	return sqlBrowseSystemRootCandidates(ctx, db.conn(), opts)
+}
+
 // PopulateBrowseCache rebuilds the BrowseCache table from the current Media data.
 func (db *MediaDB) PopulateBrowseCache(ctx context.Context) error {
 	if db.sql == nil {

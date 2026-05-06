@@ -2179,6 +2179,24 @@ func (m *MockMediaDBI) BrowseRouteCounts(
 	return map[string]database.BrowseRouteCount{}, nil
 }
 
+func (m *MockMediaDBI) BrowseSystemRootCandidates(
+	ctx context.Context, opts database.BrowseSystemRootCandidatesOptions,
+) (database.BrowseSystemRootCandidates, bool, error) {
+	args := m.Called(ctx, opts)
+	result, ok := args.Get(0).(database.BrowseSystemRootCandidates)
+	if !ok {
+		result = database.BrowseSystemRootCandidates{}
+	}
+	cacheReady, ok := args.Get(1).(bool)
+	if !ok {
+		cacheReady = false
+	}
+	if err := args.Error(2); err != nil {
+		return result, cacheReady, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return result, cacheReady, nil
+}
+
 func (m *MockMediaDBI) BrowseRootCounts(
 	ctx context.Context, rootDirs []string,
 ) (map[string]*int, error) {
