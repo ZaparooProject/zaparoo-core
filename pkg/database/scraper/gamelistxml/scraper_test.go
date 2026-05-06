@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -320,19 +321,28 @@ func TestLoadRecords_ReturnsMediaPreloadError(t *testing.T) {
 	db.AssertExpectations(t)
 }
 
-func TestScrape_ResolverError(t *testing.T) {
+func TestScrape_DBError(t *testing.T) {
 	t.Parallel()
 
-	scraperErr := errors.New("resolver failed")
-	g := NewGamelistXMLScraper(nil, func(context.Context, []string) ([]scraper.ScrapeSystem, error) {
-		return nil, scraperErr
-	})
+	dbErr := errors.New("db failed")
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("IndexedSystems").Return([]string(nil), dbErr)
 
-	updates, err := g.Scrape(context.Background(), scraper.ScrapeOptions{Systems: []string{"nes"}})
+	ps := NewPlatformScraper()
+	ch := make(chan scraper.ScrapeUpdate, 32)
+	err := ps.Scrape(
+		context.Background(),
+		nil, // cfg — not reached before early return
+		nil, // platform — not reached before early return
+		afero.NewMemMapFs(),
+		&database.Database{MediaDB: mockDB},
+		scraper.ScrapeOptions{Systems: []string{"nes"}},
+		nil,
+		ch,
+	)
 	require.Error(t, err)
-	assert.Nil(t, updates)
-	require.ErrorContains(t, err, "gamelistxml: failed to resolve systems")
-	assert.ErrorIs(t, err, scraperErr)
+	require.ErrorIs(t, err, dbErr)
+	mockDB.AssertExpectations(t)
 }
 
 // --- MapToDB ---

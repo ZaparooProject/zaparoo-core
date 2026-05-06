@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // scrapingStatus tracks the lifecycle of an active media.scrape operation.
@@ -181,9 +182,13 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
-	s, ok := env.Scrapers[params.ScraperID]
+	platformScrapers := env.Platform.Scrapers(env.Config)
+	s, ok := platformScrapers[params.ScraperID]
 	if !ok {
 		return nil, models.ClientErrf("unknown scraper: %s", params.ScraperID)
+	}
+	if s.Scrape == nil {
+		return nil, fmt.Errorf("scraper %q has no Scrape function", s.ID)
 	}
 
 	if err := startScrapingIfNoIndex(params.ScraperID); err != nil {
@@ -196,8 +201,8 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
 	opts := scraper.ScrapeOptions{Systems: params.Systems, Force: params.Force, Pauser: env.ScrapePauser}
-	ch, err := s.Scrape(scrapeCtx, opts)
-	if err != nil {
+	ch := make(chan scraper.ScrapeUpdate, 32)
+	if err := s.Scrape(scrapeCtx, env.Config, env.Platform, afero.NewOsFs(), env.Database, opts, nil, ch); err != nil {
 		cancelFunc()
 		scrapingStatusInstance.clear()
 		return nil, fmt.Errorf("failed to start scraper: %w", err)
@@ -322,12 +327,13 @@ func HandleMediaScrapeResume(env requests.RequestEnv) (any, error) {
 //
 //nolint:gocritic // API handler signature; large env param cannot be passed by pointer
 func HandleScrapers(env requests.RequestEnv) (any, error) {
-	infos := make([]models.ScraperInfo, 0, len(env.Scrapers))
-	for _, s := range env.Scrapers {
+	platformScrapers := env.Platform.Scrapers(env.Config)
+	infos := make([]models.ScraperInfo, 0, len(platformScrapers))
+	for _, s := range platformScrapers {
 		infos = append(infos, models.ScraperInfo{
-			ID:               s.ID(),
-			Name:             s.Name(),
-			SupportedSystems: s.SupportedSystems(),
+			ID:               s.ID,
+			Name:             s.Name,
+			SupportedSystems: s.SupportedSystemIDs,
 		})
 	}
 	return models.ScrapersResponse{Scrapers: infos}, nil

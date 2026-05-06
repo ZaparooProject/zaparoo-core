@@ -104,7 +104,7 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap, *fakeReq
 	handler := handlePostRequest(
 		methodMap, platform, cfg, st,
 		tokenQueue, confirmQueue, db,
-		nil, nil, nil, nil, nil, tracker,
+		nil, nil, nil, nil, tracker,
 	)
 	return handler, methodMap, tracker
 }

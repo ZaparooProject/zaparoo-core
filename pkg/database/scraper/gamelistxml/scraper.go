@@ -25,6 +25,7 @@ package gamelistxml
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"html"
 	"math"
@@ -32,11 +33,16 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -75,24 +81,11 @@ var mediaDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageMap):        {"map", "maps"},
 }
 
-// SystemResolver resolves ScrapeSystem values for the active system IDs.
-// The API layer injects this so the scraper can retrieve ROMPaths without
-// importing the config package.
-type SystemResolver func(ctx context.Context, systemIDs []string) ([]scraper.ScrapeSystem, error)
-
-// GamelistXMLScraper enriches Zaparoo MediaDB records from EmulationStation
-// gamelist.xml files found in each system's ROM root paths.
+// GamelistXMLScraper loads and maps EmulationStation gamelist.xml records.
+// Use [NewPlatformScraper] to obtain a configured [platforms.Scraper].
 type GamelistXMLScraper struct {
-	db               database.MediaDBI
-	fs               afero.Fs
-	resolveSystemsFn SystemResolver
-}
-
-// NewGamelistXMLScraper creates a new GamelistXMLScraper.
-// db is used for all database operations; resolveSystemsFn provides system info
-// (DBID, ROMPaths) when Scrape is called.
-func NewGamelistXMLScraper(db database.MediaDBI, resolveSystemsFn SystemResolver) *GamelistXMLScraper {
-	return &GamelistXMLScraper{db: db, fs: afero.NewOsFs(), resolveSystemsFn: resolveSystemsFn}
+	db database.MediaDBI
+	fs afero.Fs
 }
 
 func (g *GamelistXMLScraper) filesystem() afero.Fs {
@@ -102,31 +95,103 @@ func (g *GamelistXMLScraper) filesystem() afero.Fs {
 	return g.fs
 }
 
-// ID returns the stable scraper identifier.
-func (*GamelistXMLScraper) ID() string {
-	return "gamelist.xml"
-}
-
-// Name returns the human-readable display name for this scraper.
-func (*GamelistXMLScraper) Name() string {
-	return "ES gamelist.xml"
-}
-
-// SupportedSystems returns an empty slice, meaning this scraper supports all systems.
-func (*GamelistXMLScraper) SupportedSystems() []string {
-	return []string{}
-}
-
-// Scrape implements [scraper.Scraper]. It resolves active systems via the
-// injected resolver and delegates to [scraper.RunScraper].
-func (g *GamelistXMLScraper) Scrape(
-	ctx context.Context, opts scraper.ScrapeOptions,
-) (<-chan scraper.ScrapeUpdate, error) {
-	systems, err := g.resolveSystemsFn(ctx, opts.Systems)
-	if err != nil {
-		return nil, fmt.Errorf("gamelistxml: failed to resolve systems: %w", err)
+// NewPlatformScraper returns a [platforms.Scraper] backed by EmulationStation
+// gamelist.xml files. Systems are resolved at scrape time from the platform
+// and media database; no state is captured at construction.
+func NewPlatformScraper() platforms.Scraper {
+	return platforms.Scraper{
+		ID:                 "gamelist.xml",
+		Name:               "ES gamelist.xml",
+		SupportedSystemIDs: []string{},
+		Scrape: func(
+			ctx context.Context,
+			cfg *config.Instance,
+			pl platforms.Platform,
+			fs afero.Fs,
+			db *database.Database,
+			opts scraper.ScrapeOptions,
+			_ platforms.ScraperCustomOptions,
+			ch chan<- scraper.ScrapeUpdate,
+		) error {
+			systems, err := resolveSystemsFromPlatform(ctx, cfg, pl, db.MediaDB, opts.Systems)
+			if err != nil {
+				return fmt.Errorf("gamelistxml: resolve systems: %w", err)
+			}
+			s := &GamelistXMLScraper{db: db.MediaDB, fs: fs}
+			go s.scrapeLoop(ctx, opts, systems, db.MediaDB, ch)
+			return nil
+		},
 	}
-	return scraper.RunScraper[*GamelistRecord](ctx, opts, systems, g.db, g), nil
+}
+
+// resolveSystemsFromPlatform builds the list of ScrapeSystem values by
+// querying the indexed systems from mdb, looking up their definitions, and
+// resolving ROM root paths via the platform launcher configuration.
+func resolveSystemsFromPlatform(
+	ctx context.Context,
+	cfg *config.Instance,
+	pl platforms.Platform,
+	mdb database.MediaDBI,
+	systemIDs []string,
+) ([]scraper.ScrapeSystem, error) {
+	indexed, err := mdb.IndexedSystems()
+	if err != nil {
+		return nil, fmt.Errorf("resolveSystemsFromPlatform: list indexed systems: %w", err)
+	}
+
+	want := make(map[string]struct{}, len(indexed))
+	if len(systemIDs) == 0 {
+		for _, id := range indexed {
+			want[id] = struct{}{}
+		}
+	} else {
+		indexedSet := make(map[string]struct{}, len(indexed))
+		for _, id := range indexed {
+			indexedSet[id] = struct{}{}
+		}
+		for _, id := range systemIDs {
+			if _, ok := indexedSet[id]; ok {
+				want[id] = struct{}{}
+			}
+		}
+	}
+
+	dbSystems := make(map[string]database.System, len(want))
+	sysDefs := make([]systemdefs.System, 0, len(want))
+	for sysID := range want {
+		sys, err := mdb.FindSystemBySystemID(sysID)
+		if err != nil {
+			return nil, fmt.Errorf("resolveSystemsFromPlatform: look up system %q: %w", sysID, err)
+		}
+		systemDef, err := systemdefs.GetSystem(sysID)
+		if err != nil {
+			log.Debug().Err(err).Str("system", sysID).
+				Msg("resolveSystemsFromPlatform: unknown system definition, skipping")
+			continue
+		}
+		dbSystems[sysID] = sys
+		sysDefs = append(sysDefs, *systemDef)
+	}
+
+	pathsBySystem := make(map[string][]string, len(sysDefs))
+	for _, pathResult := range mediascanner.GetSystemPaths(ctx, cfg, pl, pl.RootDirs(cfg), sysDefs) {
+		pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
+	}
+
+	result := make([]scraper.ScrapeSystem, 0, len(sysDefs))
+	for _, sys := range sysDefs {
+		romPaths := pathsBySystem[sys.ID]
+		if len(romPaths) == 0 {
+			log.Debug().Str("system", sys.ID).Msg("resolveSystemsFromPlatform: no launcher paths found, skipping")
+			continue
+		}
+		result = append(result, scraper.ScrapeSystem{
+			DBID:     dbSystems[sys.ID].DBID,
+			ID:       sys.ID,
+			ROMPaths: romPaths,
+		})
+	}
+	return result, nil
 }
 
 // LoadRecords loads all indexed media for the system then, for each ROM root,
@@ -249,25 +314,211 @@ func normalizeMediaPath(path string) string {
 	return strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
 }
 
-// Match returns the pre-resolved IDs stored in the record by LoadRecords.
-func (*GamelistXMLScraper) Match(
-	_ context.Context,
-	record *GamelistRecord,
-	_ scraper.ScrapeSystem,
-	_ database.MediaDBI,
-) (*scraper.MatchResult, error) {
-	if record.MatchedMediaDBID == 0 {
-		log.Info().Str("path", record.MatchedPath).Msg("gamelistxml: no matched media ID, skipping")
-		return nil, nil //nolint:nilnil // unmatched record; nil result is the "skip" sentinel
+const scrapeProgressInterval = 250 * time.Millisecond
+
+// scrapeLoop runs the full load→match→write cycle for all systems, emitting
+// progress updates on ch. It closes ch when done.
+func (g *GamelistXMLScraper) scrapeLoop(
+	ctx context.Context,
+	opts scraper.ScrapeOptions,
+	systems []scraper.ScrapeSystem,
+	mdb database.MediaDBI,
+	ch chan<- scraper.ScrapeUpdate,
+) {
+	defer close(ch)
+
+	const id = "gamelist.xml"
+	var totalProcessed, totalMatched, totalSkipped int
+
+	waitForResume := func(systemID string, processed, matched, skipped int) bool {
+		if waitErr := opts.Pauser.Wait(ctx); waitErr != nil {
+			ch <- scraper.ScrapeUpdate{
+				SystemID:  systemID,
+				Processed: totalProcessed + processed,
+				Matched:   totalMatched + matched,
+				Skipped:   totalSkipped + skipped,
+				Done:      true,
+			}
+			return false
+		}
+		return true
 	}
-	log.Debug().
-		Str("path", record.MatchedPath).
-		Int64("mediaDBID", record.MatchedMediaDBID).
-		Msg("gamelistxml: matched media record")
-	return &scraper.MatchResult{
-		MediaDBID:      record.MatchedMediaDBID,
-		MediaTitleDBID: record.MatchedTitleDBID,
-	}, nil
+
+	for _, system := range systems {
+		if !waitForResume(system.ID, 0, 0, 0) {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			ch <- scraper.ScrapeUpdate{
+				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+			}
+			return
+		case ch <- scraper.ScrapeUpdate{SystemID: system.ID, Total: 0}:
+		}
+
+		records, loadErr := g.LoadRecords(ctx, system)
+		if loadErr != nil {
+			if errors.Is(loadErr, context.Canceled) || errors.Is(loadErr, context.DeadlineExceeded) {
+				ch <- scraper.ScrapeUpdate{
+					SystemID: system.ID, Done: true, Processed: totalProcessed, Matched: totalMatched,
+					Skipped: totalSkipped,
+				}
+				return
+			}
+			ch <- scraper.ScrapeUpdate{
+				SystemID: system.ID, FatalErr: loadErr,
+				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+			}
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			ch <- scraper.ScrapeUpdate{
+				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+			}
+			return
+		case ch <- scraper.ScrapeUpdate{SystemID: system.ID, Total: len(records)}:
+		}
+
+		var processed, matched, skipped int
+		totalRecords := len(records)
+		if !waitForResume(system.ID, processed, matched, skipped) {
+			return
+		}
+
+		lastProgress := time.Now()
+		emitProgress := func(update scraper.ScrapeUpdate, force bool) bool {
+			if !force && time.Since(lastProgress) < scrapeProgressInterval {
+				return true
+			}
+			update.SystemID = system.ID
+			update.Total = totalRecords
+			select {
+			case <-ctx.Done():
+				ch <- scraper.ScrapeUpdate{
+					SystemID:  system.ID,
+					Processed: totalProcessed + processed,
+					Matched:   totalMatched + matched,
+					Skipped:   totalSkipped + skipped,
+					Done:      true,
+				}
+				return false
+			case ch <- update:
+				lastProgress = time.Now()
+				return true
+			}
+		}
+
+		scrapedMediaIDs := map[int64]struct{}{}
+		if !opts.Force {
+			var sentinelErr error
+			scrapedMediaIDs, sentinelErr = mdb.GetScrapedMediaIDs(ctx, id, system.DBID)
+			if sentinelErr != nil {
+				if errors.Is(sentinelErr, context.Canceled) || errors.Is(sentinelErr, context.DeadlineExceeded) {
+					ch <- scraper.ScrapeUpdate{
+						SystemID: system.ID, Total: totalRecords,
+						Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+					}
+					return
+				}
+				ch <- scraper.ScrapeUpdate{
+					SystemID: system.ID, Total: totalRecords, FatalErr: sentinelErr,
+					Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				}
+				return
+			}
+		}
+
+		for _, record := range records {
+			if !waitForResume(system.ID, processed, matched, skipped) {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				ch <- scraper.ScrapeUpdate{
+					SystemID:  system.ID,
+					Processed: totalProcessed + processed,
+					Matched:   totalMatched + matched,
+					Skipped:   totalSkipped + skipped,
+					Done:      true,
+				}
+				return
+			default:
+			}
+
+			processed++
+			if record.MatchedMediaDBID == 0 || record.MatchedTitleDBID == 0 {
+				log.Debug().Str("path", record.MatchedPath).Msg("gamelistxml: no matched DB IDs, skipping")
+				skipped++
+				update := scraper.ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}
+				if !emitProgress(update, false) {
+					return
+				}
+				continue
+			}
+
+			if !opts.Force {
+				if _, exists := scrapedMediaIDs[record.MatchedMediaDBID]; exists {
+					skipped++
+					update := scraper.ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}
+					if !emitProgress(update, false) {
+						return
+					}
+					continue
+				}
+			}
+
+			mapped := g.MapToDB(record)
+			if !waitForResume(system.ID, processed, matched, skipped) {
+				return
+			}
+
+			writeErr := mdb.ApplyScrapeResult(
+				ctx, record.MatchedMediaDBID, record.MatchedTitleDBID,
+				&database.ScrapeWrite{
+					Sentinel:   scraper.SentinelTagInfo(id),
+					MediaTags:  mapped.MediaTags,
+					TitleTags:  mapped.TitleTags,
+					TitleProps: mapped.TitleProps,
+					MediaProps: mapped.MediaProps,
+				})
+			if writeErr != nil {
+				log.Warn().Err(writeErr).
+					Int64("mediaDBID", record.MatchedMediaDBID).
+					Int64("mediaTitleDBID", record.MatchedTitleDBID).
+					Str("system", system.ID).
+					Msg("gamelistxml: write failed")
+				skipped++
+				update := scraper.ScrapeUpdate{
+					Processed: processed, Matched: matched, Skipped: skipped, Err: writeErr,
+				}
+				if !emitProgress(update, true) {
+					return
+				}
+				continue
+			}
+
+			matched++
+			if !opts.Force {
+				scrapedMediaIDs[record.MatchedMediaDBID] = struct{}{}
+			}
+			if !emitProgress(scraper.ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}, false) {
+				return
+			}
+		}
+
+		if !emitProgress(scraper.ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}, true) {
+			return
+		}
+		totalProcessed += processed
+		totalMatched += matched
+		totalSkipped += skipped
+	}
+
+	ch <- scraper.ScrapeUpdate{Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped}
 }
 
 // MapToDB converts a GamelistRecord into the tag and property writes to apply

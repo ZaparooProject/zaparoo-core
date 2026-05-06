@@ -18,6 +18,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -1198,6 +1199,11 @@ func (*Platform) ManagedByPackageManager() bool {
 	_, hasTapto := cfg.Dbs["mrext/tapto"]
 	_, hasAll := cfg.Dbs["mrext/all"]
 	return hasTapto || hasAll
+}
+
+func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+	s := gamelistxml.NewPlatformScraper()
+	return map[string]platforms.Scraper{s.ID: s}
 }
 
 // SetArcadeCardLaunch caches the arcade setname when launching via card.

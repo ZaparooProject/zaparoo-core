@@ -13,6 +13,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -365,6 +366,11 @@ func (*Platform) ConsoleManager() platforms.ConsoleManager {
 
 func (*Platform) ManagedByPackageManager() bool {
 	return false
+}
+
+func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+	s := gamelistxml.NewPlatformScraper()
+	return map[string]platforms.Scraper{s.ID: s}
 }
 
 func (*Platform) ShowNotice(
