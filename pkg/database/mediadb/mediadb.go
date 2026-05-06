@@ -1311,10 +1311,9 @@ func (db *MediaDB) BrowseRouteCounts(
 }
 
 // BrowseSystemRootCandidates returns, in two batched queries, the immediate
-// child subdirs of each root that hold media for the requested systems plus
-// a per-root has-any-subtree-media flag. Replaces the per-root
-// BrowseFileCount + BrowseDirectories fan-out used by the system-roots
-// browse handler.
+// child subdirs of each root that hold media for the requested systems
+// plus a per-root has-any-subtree-media flag. Used by the system-roots
+// browse handler to avoid a per-root query fan-out.
 func (db *MediaDB) BrowseSystemRootCandidates(
 	ctx context.Context, opts database.BrowseSystemRootCandidatesOptions,
 ) (database.BrowseSystemRootCandidates, bool, error) {

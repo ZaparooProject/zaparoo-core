@@ -720,10 +720,9 @@ func sqlBrowseRouteCountsFromMedia(
 	return counts, nil
 }
 
-// sqlBrowseSystemRootCandidates batches the per-root BrowseFileCount +
-// BrowseDirectories fan-out used by the API system-roots handler into two
-// queries against the BrowseDirCounts cache, regardless of how many roots
-// the platform has.
+// sqlBrowseSystemRootCandidates resolves a list of filesystem roots
+// against the BrowseDirCounts cache in two queries, regardless of how many
+// roots the platform has.
 //
 // HasMedia[root] is true when the root has any media in its subtree (direct
 // files or any descendant subdir) for the requested systems; Children[root]

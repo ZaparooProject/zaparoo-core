@@ -304,9 +304,9 @@ type BrowseRouteCount struct {
 	FileCount int
 }
 
-// BrowseSystemRootCandidatesOptions parameterises the batched lookup that
-// replaces the per-root BrowseFileCount + BrowseDirectories fan-out used to
-// build `media.browse({systems:[...], path:""})` candidates.
+// BrowseSystemRootCandidatesOptions parameterises the batched lookup used
+// to build `media.browse({systems:[...], path:""})` candidates in two
+// queries against the BrowseDirCounts cache.
 type BrowseSystemRootCandidatesOptions struct {
 	Roots   []string
 	Systems []systemdefs.System

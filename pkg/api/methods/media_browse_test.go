@@ -113,9 +113,9 @@ func browseVirtualSchemesSystemOpts(t *testing.T, systemID string) any {
 	})
 }
 
-// mockSystemRootCandidatesNotReady wires the new batched candidates lookup to
+// mockSystemRootCandidatesNotReady wires BrowseSystemRootCandidates to
 // report cacheReady=false so callers fall back to the per-root
-// BrowseFileCount / BrowseDirectories fan-out the existing tests assert on.
+// BrowseFileCount / BrowseDirectories fan-out that these tests assert on.
 func mockSystemRootCandidatesNotReady(mockMediaDB *helpers.MockMediaDBI) {
 	mockMediaDB.On("BrowseSystemRootCandidates", mock.Anything, mock.Anything).
 		Return(database.BrowseSystemRootCandidates{}, false, nil)

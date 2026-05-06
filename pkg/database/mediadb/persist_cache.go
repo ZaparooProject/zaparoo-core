@@ -35,9 +35,7 @@ import (
 // files; IndexGeneration is checked against the live DB to reject stale
 // caches from a previous indexing run. Each persisted struct declares the
 // three header fields directly (rather than embedding this type) so the
-// on-disk gob shape is independent of struct layout decisions; this type
-// exists to give the shared helpers and the field-count regression tests a
-// single source of truth for "how many header fields exist."
+// on-disk gob shape is independent of struct layout decisions.
 type persistedHeader struct {
 	Magic           string
 	Version         int
