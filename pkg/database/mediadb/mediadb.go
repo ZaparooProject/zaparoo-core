@@ -494,6 +494,8 @@ func (db *MediaDB) UpdateLastGenerated() error {
 }
 
 func (db *MediaDB) GetLastGenerated() (time.Time, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return time.Time{}, ErrNullSQL
 	}
@@ -510,6 +512,8 @@ func (db *MediaDB) SetOptimizationStatus(status string) error {
 }
 
 func (db *MediaDB) GetOptimizationStatus() (string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return "", ErrNullSQL
 	}
@@ -526,6 +530,8 @@ func (db *MediaDB) SetOptimizationStep(step string) error {
 }
 
 func (db *MediaDB) GetOptimizationStep() (string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return "", ErrNullSQL
 	}
@@ -560,6 +566,8 @@ func (db *MediaDB) SetLastIndexedSystem(systemID string) error {
 }
 
 func (db *MediaDB) GetLastIndexedSystem() (string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return "", ErrNullSQL
 	}
@@ -602,6 +610,8 @@ func (db *MediaDB) SetIndexingSystems(systemIDs []string) error {
 }
 
 func (db *MediaDB) GetIndexingSystems() ([]string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
