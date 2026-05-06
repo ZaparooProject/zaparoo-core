@@ -40,6 +40,22 @@ import (
 
 var migrationMutex syncutil.Mutex
 
+// schemaVersionSidecar is the on-disk record of the last successfully
+// applied migration version. The DB file mtime+size act as a tamper check:
+// any change to the live DB file (manual goose run, restored backup,
+// swapped file) invalidates the sidecar and forces a full goose check.
+type schemaVersionSidecar struct {
+	SchemaVersion int64 `json:"schemaVersion"`
+	DBMtimeUnixNs int64 `json:"dbMtimeUnixNs"`
+	DBSizeBytes   int64 `json:"dbSizeBytes"`
+}
+
+// schemaVersionSidecarMaxBytes caps the sidecar read so a malformed or
+// malicious file in the data directory cannot OOM the daemon at boot. The
+// real payload is ~80 bytes; 64 KiB leaves ample headroom while staying far
+// below any plausible memory pressure.
+const schemaVersionSidecarMaxBytes = 64 << 10
+
 // gooseZerologAdapter implements goose.Logger interface to redirect
 // goose output to zerolog instead of stdout
 type gooseZerologAdapter struct{}
@@ -139,26 +155,10 @@ func MigrateUp(
 	return nil
 }
 
-// schemaVersionSidecar is the on-disk record of the last successfully
-// applied migration version. The DB file mtime+size act as a tamper check:
-// any change to the live DB file (manual goose run, restored backup,
-// swapped file) invalidates the sidecar and forces a full goose check.
-type schemaVersionSidecar struct {
-	SchemaVersion int64 `json:"schemaVersion"`
-	DBMtimeUnixNs int64 `json:"dbMtimeUnixNs"`
-	DBSizeBytes   int64 `json:"dbSizeBytes"`
-}
-
 // loadSchemaVersionSidecar returns the recorded schema version when the
 // sidecar exists and the live DB file's mtime and size match the values
 // captured at write time. Any deviation is treated as "no sidecar" so the
 // caller falls back to the full goose path.
-// schemaVersionSidecarMaxBytes caps the sidecar read so a malformed or
-// malicious file in the data directory cannot OOM the daemon at boot. The
-// real payload is ~80 bytes; 64 KiB leaves ample headroom while staying far
-// below any plausible memory pressure.
-const schemaVersionSidecarMaxBytes = 64 << 10
-
 func loadSchemaVersionSidecar(sidecarPath, dbPath string) (int64, bool) {
 	f, err := os.Open(sidecarPath) //nolint:gosec // path is derived from the DB path
 	if err != nil {
