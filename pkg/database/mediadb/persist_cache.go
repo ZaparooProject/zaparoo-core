@@ -79,9 +79,23 @@ func loadPersistedCacheFile(
 	}
 	defer func() { _ = f.Close() }()
 
+	var fileSize int64 = -1
+	if st, statErr := f.Stat(); statErr == nil {
+		fileSize = st.Size()
+	}
+
 	if decodeErr := gob.NewDecoder(io.LimitReader(f, maxBytes)).Decode(dst); decodeErr != nil {
 		if errors.Is(decodeErr, io.EOF) || errors.Is(decodeErr, io.ErrUnexpectedEOF) {
-			log.Warn().Str("path", path).Msgf("%s cache file truncated, falling back to SQL", cacheKind)
+			if fileSize > maxBytes {
+				log.Warn().Str("path", path).
+					Int64("size_bytes", fileSize).
+					Int64("limit_bytes", maxBytes).
+					Msgf("%s cache file exceeds size limit, falling back to SQL", cacheKind)
+			} else {
+				log.Warn().Str("path", path).
+					Int64("size_bytes", fileSize).
+					Msgf("%s cache file truncated, falling back to SQL", cacheKind)
+			}
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to decode %s cache: %w", cacheKind, decodeErr)
