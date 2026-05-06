@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -95,6 +96,7 @@ func fetchAndAttachTags(
 		tagsArgs = append(tagsArgs, id)
 	}
 
+	unionStarted := time.Now()
 	tagsStmt, err := db.PrepareContext(ctx, tagsQuery)
 	if err != nil {
 		return fmt.Errorf("failed to prepare tags query: %w", err)
@@ -145,10 +147,21 @@ func fetchAndAttachTags(
 		}
 	}
 
+	unionElapsed := time.Since(unionStarted)
+
 	// Compute disambiguating ZapScript tags in-memory.
 	// A tag type is disambiguating when results sharing the same title name
 	// have different values for that tag type (e.g., "2" vs "4" for players).
+	zsStarted := time.Now()
 	computeZapScriptTags(results)
+	zsElapsed := time.Since(zsStarted)
+
+	log.Debug().
+		Int("rows", len(results)).
+		Int("tagPairs", len(tagsMap)).
+		Dur("unionDuration", unionElapsed).
+		Dur("zapscriptDuration", zsElapsed).
+		Msg("fetch and attach tags timing")
 
 	return nil
 }

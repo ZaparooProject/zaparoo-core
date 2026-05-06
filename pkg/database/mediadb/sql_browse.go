@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -380,6 +381,7 @@ func sqlBrowseFilesFromMedia(
 	query += ` ORDER BY ` + browseSortClause(opts.Sort) + ` LIMIT ?`
 	args = append(args, opts.Limit)
 
+	queryStarted := time.Now()
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("browse files query: %w", err)
@@ -397,9 +399,21 @@ func sqlBrowseFilesFromMedia(
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return nil, fmt.Errorf("browse files rows: %w", rowsErr)
 	}
+	queryElapsed := time.Since(queryStarted)
+
+	tagsStarted := time.Now()
 	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return nil, fmt.Errorf("browse files tags: %w", err)
 	}
+	tagsElapsed := time.Since(tagsStarted)
+
+	log.Debug().
+		Str("pathPrefix", opts.PathPrefix).
+		Strs("systems", browseSystemIDsForLog(opts.Systems)).
+		Int("rows", len(results)).
+		Dur("queryDuration", queryElapsed).
+		Dur("tagsDuration", tagsElapsed).
+		Msg("browse files step timing")
 	if len(results) == 0 && opts.Cursor == nil {
 		descendants, countErr := sqlBrowseDescendantCount(ctx, db, opts.PathPrefix, opts.Systems)
 		if countErr != nil {
