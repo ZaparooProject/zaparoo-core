@@ -351,7 +351,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 
 		select {
 		case <-ctx.Done():
-			ch <- scraper.ScrapeUpdate{Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped}
+			ch <- scraper.ScrapeUpdate{
+				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+			}
 			return
 		case ch <- scraper.ScrapeUpdate{SystemID: system.ID, Total: 0}:
 		}
@@ -359,16 +361,23 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		records, loadErr := g.LoadRecords(ctx, system)
 		if loadErr != nil {
 			if errors.Is(loadErr, ctx.Err()) {
-				ch <- scraper.ScrapeUpdate{Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped}
+				ch <- scraper.ScrapeUpdate{
+					Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				}
 				return
 			}
-			ch <- scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: loadErr, Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped}
+			ch <- scraper.ScrapeUpdate{
+				SystemID: system.ID, FatalErr: loadErr,
+				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+			}
 			return
 		}
 
 		select {
 		case <-ctx.Done():
-			ch <- scraper.ScrapeUpdate{Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped}
+			ch <- scraper.ScrapeUpdate{
+				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+			}
 			return
 		case ch <- scraper.ScrapeUpdate{SystemID: system.ID, Total: len(records)}:
 		}
@@ -408,10 +417,16 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			scrapedMediaIDs, sentinelErr = mdb.GetScrapedMediaIDs(ctx, id, system.DBID)
 			if sentinelErr != nil {
 				if errors.Is(sentinelErr, context.Canceled) || errors.Is(sentinelErr, context.DeadlineExceeded) {
-					ch <- scraper.ScrapeUpdate{SystemID: system.ID, Total: totalRecords, Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped}
+					ch <- scraper.ScrapeUpdate{
+						SystemID: system.ID, Total: totalRecords,
+						Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+					}
 					return
 				}
-				ch <- scraper.ScrapeUpdate{SystemID: system.ID, Total: totalRecords, FatalErr: sentinelErr, Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped}
+				ch <- scraper.ScrapeUpdate{
+					SystemID: system.ID, Total: totalRecords, FatalErr: sentinelErr,
+					Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				}
 				return
 			}
 		}
@@ -422,7 +437,13 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 			select {
 			case <-ctx.Done():
-				ch <- scraper.ScrapeUpdate{SystemID: system.ID, Processed: totalProcessed + processed, Matched: totalMatched + matched, Skipped: totalSkipped + skipped, Done: true}
+				ch <- scraper.ScrapeUpdate{
+					SystemID:  system.ID,
+					Processed: totalProcessed + processed,
+					Matched:   totalMatched + matched,
+					Skipped:   totalSkipped + skipped,
+					Done:      true,
+				}
 				return
 			default:
 			}
@@ -431,7 +452,8 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			if record.MatchedMediaDBID == 0 || record.MatchedTitleDBID == 0 {
 				log.Debug().Str("path", record.MatchedPath).Msg("gamelistxml: no matched DB IDs, skipping")
 				skipped++
-				if !emitProgress(scraper.ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}, false) {
+				update := scraper.ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}
+				if !emitProgress(update, false) {
 					return
 				}
 				continue
@@ -440,7 +462,8 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			if !opts.Force {
 				if _, exists := scrapedMediaIDs[record.MatchedMediaDBID]; exists {
 					skipped++
-					if !emitProgress(scraper.ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}, false) {
+					update := scraper.ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}
+					if !emitProgress(update, false) {
 						return
 					}
 					continue
@@ -452,13 +475,15 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				return
 			}
 
-			writeErr := mdb.ApplyScrapeResult(ctx, record.MatchedMediaDBID, record.MatchedTitleDBID, &database.ScrapeWrite{
-				Sentinel:   scraper.SentinelTagInfo(id),
-				MediaTags:  mapped.MediaTags,
-				TitleTags:  mapped.TitleTags,
-				TitleProps: mapped.TitleProps,
-				MediaProps: mapped.MediaProps,
-			})
+			writeErr := mdb.ApplyScrapeResult(
+				ctx, record.MatchedMediaDBID, record.MatchedTitleDBID,
+				&database.ScrapeWrite{
+					Sentinel:   scraper.SentinelTagInfo(id),
+					MediaTags:  mapped.MediaTags,
+					TitleTags:  mapped.TitleTags,
+					TitleProps: mapped.TitleProps,
+					MediaProps: mapped.MediaProps,
+				})
 			if writeErr != nil {
 				log.Warn().Err(writeErr).
 					Int64("mediaDBID", record.MatchedMediaDBID).
@@ -466,7 +491,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 					Str("system", system.ID).
 					Msg("gamelistxml: write failed")
 				skipped++
-				if !emitProgress(scraper.ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped, Err: writeErr}, true) {
+				update := scraper.ScrapeUpdate{
+					Processed: processed, Matched: matched, Skipped: skipped, Err: writeErr,
+				}
+				if !emitProgress(update, true) {
 					return
 				}
 				continue
