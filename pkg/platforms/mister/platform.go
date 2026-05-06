@@ -100,6 +100,8 @@ type oldDb struct {
 }
 
 func (p *Platform) getDB() oldDb {
+	p.platformMu.Lock()
+	defer p.platformMu.Unlock()
 	return oldDb{
 		Uids:  p.uidMap,
 		Texts: p.textMap,
@@ -107,10 +109,14 @@ func (p *Platform) getDB() oldDb {
 }
 
 func (p *Platform) GetDBLoadTime() time.Time {
+	p.platformMu.Lock()
+	defer p.platformMu.Unlock()
 	return p.dbLoadTime
 }
 
 func (p *Platform) SetDB(uidMap, textMap map[string]string) {
+	p.platformMu.Lock()
+	defer p.platformMu.Unlock()
 	p.dbLoadTime = time.Now()
 	p.uidMap = uidMap
 	p.textMap = textMap
@@ -151,21 +157,41 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(cfg *config.Instance) error {
+	startPreStart := time.Now()
 	configureTLSRootFallback()
-
-	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
-		err := os.MkdirAll(misterconfig.MainPickerDir, 0o750)
-		if err != nil {
-			return fmt.Errorf("failed to create picker directory: %w", err)
-		}
-		err = os.WriteFile(misterconfig.MainPickerSelected, []byte(""), 0o600)
-		if err != nil {
-			return fmt.Errorf("failed to write picker selected file: %w", err)
-		}
-	}
 
 	if err := p.InitDevices(cfg, true); err != nil {
 		return fmt.Errorf("failed to initialize input devices: %w", err)
+	}
+
+	p.cmdMappings = map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error){
+		"mister.ini":       CmdIni,
+		"mister.core":      CmdLaunchCore,
+		"mister.script":    cmdMisterScript(p),
+		"mister.mgl":       CmdMisterMgl,
+		"mister.wallpaper": CmdWallpaper,
+
+		"ini": CmdIni, // DEPRECATED
+	}
+
+	go p.deferredStartPre()
+
+	log.Info().Int64("duration_ms", time.Since(startPreStart).Milliseconds()).
+		Msg("StartPre finished")
+	return nil
+}
+
+// deferredStartPre runs the StartPre work that does not need to complete
+// before the JSON-RPC API binds: picker directory bootstrap, CSV mappings
+// load, and the mappings watcher. Runs once per process; failures are
+// logged and tolerated, mirroring the pre-deferral behaviour.
+func (p *Platform) deferredStartPre() {
+	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
+		if err := os.MkdirAll(misterconfig.MainPickerDir, 0o750); err != nil {
+			log.Error().Err(err).Msg("failed to create picker directory")
+		} else if err := os.WriteFile(misterconfig.MainPickerSelected, []byte(""), 0o600); err != nil {
+			log.Error().Err(err).Msg("failed to write picker selected file")
+		}
 	}
 
 	uids, texts, err := LoadCsvMappings()
@@ -183,19 +209,9 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 	if err != nil {
 		log.Error().Msgf("error starting mappings watcher: %s", err)
 	}
+	p.platformMu.Lock()
 	p.stopMappingsWatcher = closeMappingsWatcher
-
-	p.cmdMappings = map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error){
-		"mister.ini":       CmdIni,
-		"mister.core":      CmdLaunchCore,
-		"mister.script":    cmdMisterScript(p),
-		"mister.mgl":       CmdMisterMgl,
-		"mister.wallpaper": CmdWallpaper,
-
-		"ini": CmdIni, // DEPRECATED
-	}
-
-	return nil
+	p.platformMu.Unlock()
 }
 
 var configureTLSDefaults = tlsroots.ConfigureDefaults
@@ -322,9 +338,11 @@ func (p *Platform) Stop() error {
 
 	p.CloseDevices()
 
-	if p.stopMappingsWatcher != nil {
-		err := p.stopMappingsWatcher()
-		if err != nil {
+	p.platformMu.Lock()
+	stopWatcher := p.stopMappingsWatcher
+	p.platformMu.Unlock()
+	if stopWatcher != nil {
+		if err := stopWatcher(); err != nil {
 			return err
 		}
 	}
