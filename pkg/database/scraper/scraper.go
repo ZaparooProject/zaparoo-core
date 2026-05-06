@@ -17,63 +17,20 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-// Package scraper defines the metadata scraper interface and generic run loop.
+// Package scraper defines the metadata scraper types and generic run loop.
 //
-// Each concrete scraper (gamelist.xml, ScreenScraper, TheGamesDB, etc.) implements
-// [ScraperLoop] for its record type and delegates its Scrape method to [RunScraper].
+// Concrete scrapers (gamelist.xml, ScreenScraper, TheGamesDB, etc.) call
+// [RunScraper] from their [platforms.Scraper].Scrape callback, passing their
+// record-specific load/match/map functions directly.
 //
 // The sentinel tag pattern (scraper.<id>:scraped on the Media record) ensures that
 // a crashed mid-write run is safely retried on the next invocation.
 package scraper
 
 import (
-	"context"
-
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
-
-// Scraper is the public interface all metadata scrapers implement.
-// Each scraper owns one source: a local file format, a REST API, etc.
-type Scraper interface {
-	// ID returns the stable scraper identifier used in sentinel tag names.
-	// Must be globally unique. Examples: "gamelist.xml", "screenscraper".
-	ID() string
-
-	// Name returns a human-readable display name for the scraper.
-	// Examples: "ES gamelist.xml", "ScreenScraper".
-	Name() string
-
-	// SupportedSystems returns the system IDs this scraper can handle.
-	// An empty slice means all systems are supported.
-	SupportedSystems() []string
-
-	// Scrape starts the goroutine and returns a channel of progress updates.
-	// The channel is closed when the goroutine exits (done or cancelled).
-	Scrape(ctx context.Context, opts ScrapeOptions) (<-chan ScrapeUpdate, error)
-}
-
-// ScraperLoop is the internal interface that concrete scrapers implement to plug
-// into [RunScraper]. T is the source-specific record type (e.g. GamelistRecord).
-//
-// Concrete scrapers also implement [Scraper]; their Scrape method stores the db
-// and system list, then delegates to RunScraper with self as the ScraperLoop.
-type ScraperLoop[T any] interface {
-	// ID returns the same stable identifier as Scraper.ID.
-	ID() string
-
-	// LoadRecords returns all source records for the given system.
-	// For file-based scrapers this reads local files; for REST scrapers this
-	// queries the DB for titles that need enrichment.
-	LoadRecords(ctx context.Context, system ScrapeSystem) ([]T, error)
-
-	// Match attempts to bind a source record to a Zaparoo Media/MediaTitle row.
-	// Returns nil when the record cannot be matched (not an error; loop skips it).
-	Match(ctx context.Context, record T, system ScrapeSystem, db database.MediaDBI) (*MatchResult, error)
-
-	// MapToDB converts a source record into the tag and property writes to apply.
-	MapToDB(record T) MapResult
-}
 
 // MapResult holds the tag and property writes produced by a MapToDB call.
 type MapResult struct {

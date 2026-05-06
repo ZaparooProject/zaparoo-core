@@ -29,10 +29,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	"github.com/spf13/afero"
 )
 
 var ErrNotSupported = errors.New("operation not supported on this platform")
@@ -264,6 +266,35 @@ type Settings struct {
 	ZipsAsDirs bool
 }
 
+// ScraperCustomOption is a single user-configurable option for a scraper.
+type ScraperCustomOption struct {
+	Name  string
+	Value string
+}
+
+// ScraperCustomOptions maps option names to their available values per scraper.
+type ScraperCustomOptions map[string][]ScraperCustomOption
+
+// Scraper defines a metadata scraper available on a platform.
+// Scrapers are returned lazily by Platform.Scrapers and carry their full
+// implementation in the Scrape function field.
+type Scraper struct {
+	CustomOpts ScraperCustomOptions
+	Scrape     func(
+		ctx context.Context,
+		cfg *config.Instance,
+		pl Platform,
+		fs afero.Fs,
+		db *database.Database,
+		opts scraper.ScrapeOptions,
+		custom ScraperCustomOptions,
+		ch chan<- scraper.ScrapeUpdate,
+	) error
+	ID                 string
+	Name               string
+	SupportedSystemIDs []string
+}
+
 // Platform is the central interface that defines how Core interacts with a
 // supported platform.
 type Platform interface {
@@ -362,6 +393,9 @@ type Platform interface {
 	// external package manager (e.g. MiSTer Downloader, Batocera pacman).
 	// Used to default auto-update off for package-managed installs.
 	ManagedByPackageManager() bool
+	// Scrapers returns the metadata scrapers available on this platform,
+	// keyed by scraper ID. The map may be empty if no scrapers are supported.
+	Scrapers(*config.Instance) map[string]Scraper
 }
 
 // KeyboardControls builds a Controls map from action→key mappings using the

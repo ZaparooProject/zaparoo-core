@@ -28,39 +28,55 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	assertmock "github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-// emptyClosedScraper returns a channel that is immediately closed (no updates).
-func emptyClosedScraper() *closedChannelScraper {
-	return &closedChannelScraper{id: "test-scraper", name: "Test Scraper"}
+// emptyPlatformScraper returns a platforms.Scraper that immediately closes the
+// update channel without emitting any updates.
+func emptyPlatformScraper(id, name string) platforms.Scraper {
+	return platforms.Scraper{
+		ID:   id,
+		Name: name,
+		Scrape: func(
+			_ context.Context, _ *config.Instance, _ platforms.Platform,
+			_ afero.Fs, _ *database.Database, _ scraper.ScrapeOptions,
+			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
+		) error {
+			go func() { close(ch) }()
+			return nil
+		},
+	}
 }
 
-type closedChannelScraper struct {
-	id   string
-	name string
-}
-
-func (s *closedChannelScraper) ID() string               { return s.id }
-func (s *closedChannelScraper) Name() string             { return s.name }
-func (*closedChannelScraper) SupportedSystems() []string { return nil }
-func (*closedChannelScraper) Scrape(_ context.Context, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
-	ch := make(chan scraper.ScrapeUpdate)
-	close(ch)
-	return ch, nil
+// errorPlatformScraper returns a platforms.Scraper whose Scrape always returns err.
+func errorPlatformScraper(id string, err error) platforms.Scraper {
+	return platforms.Scraper{
+		ID:   id,
+		Name: "error scraper",
+		Scrape: func(
+			_ context.Context, _ *config.Instance, _ platforms.Platform,
+			_ afero.Fs, _ *database.Database, _ scraper.ScrapeOptions,
+			_ platforms.ScraperCustomOptions, _ chan<- scraper.ScrapeUpdate,
+		) error {
+			return err
+		},
+	}
 }
 
 func makeScrapeEnv(
 	t *testing.T,
-	scrapers map[string]scraper.Scraper,
+	scrapers map[string]platforms.Scraper,
 	mockMediaDB *testhelpers.MockMediaDBI,
 	params any,
 ) requests.RequestEnv {
@@ -68,6 +84,7 @@ func makeScrapeEnv(
 
 	pl := mocks.NewMockPlatform()
 	pl.SetupBasicMock()
+	pl.On("Scrapers", assertmock.Anything).Return(scrapers)
 	st, ns := state.NewState(pl, "test")
 	t.Cleanup(st.StopService)
 	drainNotifications(t, ns)
@@ -81,9 +98,9 @@ func makeScrapeEnv(
 
 	return requests.RequestEnv{
 		Context:  context.Background(),
+		Platform: pl,
 		State:    st,
 		Database: &database.Database{MediaDB: mockMediaDB},
-		Scrapers: scrapers,
 		Params:   rawParams,
 	}
 }
@@ -107,7 +124,7 @@ func TestHandleMediaScrape_UnknownScraper(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	env := makeScrapeEnv(t,
-		map[string]scraper.Scraper{},
+		map[string]platforms.Scraper{},
 		mockDB,
 		models.MediaScrapeParams{ScraperID: "unknown"},
 	)
@@ -127,7 +144,7 @@ func TestHandleMediaScrape_IndexingInProgress(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	env := makeScrapeEnv(t,
-		map[string]scraper.Scraper{"test-scraper": emptyClosedScraper()},
+		map[string]platforms.Scraper{"test-scraper": emptyPlatformScraper("test-scraper", "Test Scraper")},
 		mockDB,
 		models.MediaScrapeParams{ScraperID: "test-scraper"},
 	)
@@ -147,7 +164,7 @@ func TestHandleMediaScrape_AlreadyRunning(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	env := makeScrapeEnv(t,
-		map[string]scraper.Scraper{"test-scraper": emptyClosedScraper()},
+		map[string]platforms.Scraper{"test-scraper": emptyPlatformScraper("test-scraper", "Test Scraper")},
 		mockDB,
 		models.MediaScrapeParams{ScraperID: "test-scraper"},
 	)
@@ -165,7 +182,7 @@ func TestHandleMediaScrape_InvalidParams(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	// scraperId is required — omitting it should fail validation.
-	env := makeScrapeEnv(t, map[string]scraper.Scraper{}, mockDB, map[string]any{})
+	env := makeScrapeEnv(t, map[string]platforms.Scraper{}, mockDB, map[string]any{})
 
 	_, err := HandleMediaScrape(env)
 	require.Error(t, err)
@@ -186,17 +203,18 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 
 	pl := mocks.NewMockPlatform()
 	pl.SetupBasicMock()
+	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
+		"test-scraper": emptyPlatformScraper("test-scraper", "Test Scraper"),
+	})
 	st, ns := state.NewState(pl, "test")
 	t.Cleanup(st.StopService)
 
 	env := requests.RequestEnv{
 		Context:  context.Background(),
+		Platform: pl,
 		State:    st,
 		Database: &database.Database{MediaDB: mockDB},
-		Scrapers: map[string]scraper.Scraper{
-			"test-scraper": emptyClosedScraper(),
-		},
-		Params: json.RawMessage(`{"scraperId":"test-scraper"}`),
+		Params:   json.RawMessage(`{"scraperId":"test-scraper"}`),
 	}
 
 	result, err := HandleMediaScrape(env)
@@ -376,13 +394,13 @@ func TestHandleMediaScrape_ScraperInitError(t *testing.T) {
 	statusInstance.clear()
 
 	scrapeErr := errors.New("connection refused")
-	failingScraper := &errorScraper{id: "fail-scraper", err: scrapeErr}
+	failingScraper := errorPlatformScraper("fail-scraper", scrapeErr)
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	// TrackBackgroundOperation/BackgroundOperationDone must NOT be called because
 	// the goroutine never starts when Scrape() returns an error.
 	env := makeScrapeEnv(t,
-		map[string]scraper.Scraper{"fail-scraper": failingScraper},
+		map[string]platforms.Scraper{"fail-scraper": failingScraper},
 		mockDB,
 		models.MediaScrapeParams{ScraperID: "fail-scraper"},
 	)
@@ -393,19 +411,6 @@ func TestHandleMediaScrape_ScraperInitError(t *testing.T) {
 
 	assert.False(t, IsScrapingRunning(), "scraping status must be cleared after error")
 	mockDB.AssertExpectations(t)
-}
-
-// errorScraper is a test double whose Scrape always returns a non-nil error.
-type errorScraper struct {
-	err error
-	id  string
-}
-
-func (s *errorScraper) ID() string               { return s.id }
-func (*errorScraper) Name() string               { return "error scraper" }
-func (*errorScraper) SupportedSystems() []string { return nil }
-func (s *errorScraper) Scrape(_ context.Context, _ scraper.ScrapeOptions) (<-chan scraper.ScrapeUpdate, error) {
-	return nil, s.err
 }
 
 // TestHandleMediaScrapeCancel_NoneRunning verifies the response when no

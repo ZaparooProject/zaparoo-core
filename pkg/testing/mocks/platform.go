@@ -284,6 +284,15 @@ func (m *MockPlatform) ManagedByPackageManager() bool {
 	return args.Bool(0)
 }
 
+// Scrapers returns the scrapers registered on this platform
+func (m *MockPlatform) Scrapers(cfg *config.Instance) map[string]platforms.Scraper {
+	args := m.Called(cfg)
+	if scrapers, ok := args.Get(0).(map[string]platforms.Scraper); ok {
+		return scrapers
+	}
+	return map[string]platforms.Scraper{}
+}
+
 // Helper methods for testing
 
 // GetLaunchedMedia returns a slice of all media paths that were launched
