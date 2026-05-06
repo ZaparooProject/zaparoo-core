@@ -246,6 +246,11 @@ func runMediaDBStartupMaintenance(
 	if !tagCacheLoaded {
 		if err := db.RebuildTagCache(); err != nil {
 			log.Warn().Err(err).Msg("failed to warm tag cache on startup")
+		} else if persistErr := db.PersistTagCache(); persistErr != nil {
+			// Best-effort: the rebuild succeeded so the running process is
+			// fine, but skipping persistence means the next cold boot will
+			// pay the rebuild cost again.
+			log.Warn().Err(persistErr).Msg("failed to persist tag cache after startup rebuild")
 		}
 	}
 

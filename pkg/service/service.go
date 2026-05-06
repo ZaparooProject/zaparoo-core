@@ -286,6 +286,13 @@ func Start(
 			defer db.MediaDB.BackgroundOperationDone()
 			if cacheErr := db.MediaDB.RebuildSlugSearchCache(); cacheErr != nil {
 				log.Warn().Err(cacheErr).Msg("failed to build slug search cache")
+				return
+			}
+			// Best-effort persist so the next cold boot can skip the
+			// rebuild. A write failure leaves the running cache intact.
+			if persistErr := db.MediaDB.PersistSlugSearchCache(); persistErr != nil {
+				log.Warn().Err(persistErr).
+					Msg("failed to persist slug search cache after startup rebuild")
 			}
 		}()
 	}

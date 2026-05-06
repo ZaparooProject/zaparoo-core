@@ -516,6 +516,7 @@ func TestRunMediaDBStartupMaintenance_PassesPauserToTemporaryRepairOptimization(
 	ctx := context.Background()
 	mockMediaDB.On("TrackBackgroundOperation").Once()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Once()
+	mockMediaDB.On("PersistTagCache").Return(nil).Once()
 	mockMediaDB.On("TemporaryRepairJobsPending", ctx).Return(true, nil).Once()
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
 	mockMediaDB.On("GetOptimizationStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
