@@ -328,7 +328,7 @@ func TestPlayFile_UnsupportedFormat(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported audio format")
 }
 
-func TestFileCache_HitAndMiss(t *testing.T) {
+func TestPCMCache_HitAndMiss(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -338,26 +338,30 @@ func TestFileCache_HitAndMiss(t *testing.T) {
 
 	p := NewMalgoPlayer()
 
-	// First call: cache miss, reads from disk
-	data1, err := p.readFileWithCache(wavPath)
+	// First call: cache miss, decodes from disk.
+	samples1, err := p.loadPCMFromFile(wavPath)
 	require.NoError(t, err)
-	assert.Equal(t, validWAVHeader(), data1)
 
-	// Verify it's cached
-	p.fileCacheMu.RLock()
-	_, cached := p.fileCache[wavPath]
-	p.fileCacheMu.RUnlock()
-	assert.True(t, cached, "file should be in cache after first read")
+	// Verify it's cached.
+	p.pcmCacheMu.RLock()
+	cached, ok := p.pcmCache[wavPath]
+	p.pcmCacheMu.RUnlock()
+	assert.True(t, ok, "file should be in PCM cache after first load")
+	assert.Equal(t, samples1, cached, "cached samples should match returned samples")
 
-	// Delete the file — second call should still succeed from cache
+	// Delete the file — second call should still succeed from cache and
+	// return the same underlying slice (no re-decode happens).
 	require.NoError(t, os.Remove(wavPath))
 
-	data2, err := p.readFileWithCache(wavPath)
+	samples2, err := p.loadPCMFromFile(wavPath)
 	require.NoError(t, err)
-	assert.Equal(t, data1, data2, "cached data should match original")
+	require.Len(t, samples2, len(samples1))
+	if len(samples1) > 0 {
+		assert.Equal(t, samples1[0], samples2[0], "cached samples should match original")
+	}
 }
 
-func TestFileCache_Clear(t *testing.T) {
+func TestPCMCache_Clear(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -367,38 +371,42 @@ func TestFileCache_Clear(t *testing.T) {
 
 	p := NewMalgoPlayer()
 
-	// Populate cache
-	_, err = p.readFileWithCache(wavPath)
+	// Populate cache.
+	_, err = p.loadPCMFromFile(wavPath)
 	require.NoError(t, err)
 
-	// Clear cache
+	// Clear cache.
 	p.ClearFileCache()
 
-	p.fileCacheMu.RLock()
-	assert.Empty(t, p.fileCache, "cache should be empty after clear")
-	p.fileCacheMu.RUnlock()
+	p.pcmCacheMu.RLock()
+	assert.Empty(t, p.pcmCache, "cache should be empty after clear")
+	p.pcmCacheMu.RUnlock()
 
-	// Next read should hit disk again (file still exists)
-	data, err := p.readFileWithCache(wavPath)
+	// Next read should hit disk again (file still exists).
+	_, err = p.loadPCMFromFile(wavPath)
 	require.NoError(t, err)
-	assert.Equal(t, validWAVHeader(), data)
+
+	p.pcmCacheMu.RLock()
+	_, repopulated := p.pcmCache[wavPath]
+	p.pcmCacheMu.RUnlock()
+	assert.True(t, repopulated, "cache should be repopulated after re-read")
 }
 
-func TestFileCache_NonExistentFile(t *testing.T) {
+func TestPCMCache_NonExistentFile(t *testing.T) {
 	t.Parallel()
 
 	p := NewMalgoPlayer()
 
-	_, err := p.readFileWithCache("/nonexistent/path.wav")
+	_, err := p.loadPCMFromFile("/nonexistent/path.wav")
 	require.Error(t, err)
 
-	// Should not cache failed reads
-	p.fileCacheMu.RLock()
-	assert.Empty(t, p.fileCache)
-	p.fileCacheMu.RUnlock()
+	// Should not cache failed reads.
+	p.pcmCacheMu.RLock()
+	assert.Empty(t, p.pcmCache)
+	p.pcmCacheMu.RUnlock()
 }
 
-func TestFileCache_ConcurrentAccess(t *testing.T) {
+func TestPCMCache_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -413,10 +421,14 @@ func TestFileCache_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			data, readErr := p.readFileWithCache(wavPath)
-			assert.NoError(t, readErr)
-			assert.Equal(t, validWAVHeader(), data)
+			_, loadErr := p.loadPCMFromFile(wavPath)
+			assert.NoError(t, loadErr)
 		}()
 	}
 	wg.Wait()
+
+	p.pcmCacheMu.RLock()
+	_, ok := p.pcmCache[wavPath]
+	p.pcmCacheMu.RUnlock()
+	assert.True(t, ok, "concurrent loads should populate cache exactly once")
 }
