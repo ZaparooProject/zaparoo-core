@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
@@ -304,13 +305,18 @@ type Platform interface {
 	// started running.
 	StartPre(*config.Instance) error
 	// StartPost runs any necessary platform setup AFTER the main service has
-	// started running.
+	// started running. The ctx is the service-scoped context: any background
+	// work the platform spawns (idle-scheduled tasks, network polls, etc.)
+	// should honour it so it exits promptly on shutdown. The scheduler may be
+	// nil; platforms that defer work to idle should nil-check before using it.
 	StartPost(
+		context.Context,
 		*config.Instance,
 		LauncherContextManager,
 		func() *models.ActiveMedia,
 		func(*models.ActiveMedia),
 		*database.Database,
+		*idle.Scheduler,
 	) error
 	// Stop runs any necessary cleanup tasks before the rest of the service
 	// starts shutting down.

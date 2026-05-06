@@ -11,6 +11,7 @@ require (
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/charlievieth/fastwalk v1.0.14
 	github.com/clausecker/nfc/v2 v2.2.0
 	github.com/cloudsoda/go-smb2 v0.0.0-20250228001242-d4c70e6251cc
@@ -53,7 +54,6 @@ require (
 	go.etcd.io/bbolt v1.4.3
 	go.uber.org/goleak v1.3.0
 	golang.design/x/clipboard v0.7.1
-	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.43.0
 	golang.org/x/text v0.36.0

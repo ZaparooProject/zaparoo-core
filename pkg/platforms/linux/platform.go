@@ -23,6 +23,8 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package linux
 
 import (
+	"context"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -36,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/rs/zerolog/log"
 )
 
@@ -68,15 +71,17 @@ func (*Platform) Settings() platforms.Settings {
 // StartPost initializes the platform after service startup.
 // Starts the Steam tracker if Steam is installed.
 func (p *Platform) StartPost(
+	ctx context.Context,
 	cfg *config.Instance,
 	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	db *database.Database,
+	scheduler *idle.Scheduler,
 ) error {
 	// Initialize base platform
 	//nolint:wrapcheck // Pass-through to base implementation
-	if err := p.Base.StartPost(cfg, launcherManager, activeMedia, setActiveMedia, db); err != nil {
+	if err := p.Base.StartPost(ctx, cfg, launcherManager, activeMedia, setActiveMedia, db, scheduler); err != nil {
 		return err
 	}
 

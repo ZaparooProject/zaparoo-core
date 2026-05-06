@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -41,8 +42,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// fakeRequestTracker counts RequestStarted/RequestEnded calls so tests can
+// assert the post handler brackets every transport path.
+type fakeRequestTracker struct {
+	started atomic.Int64
+	ended   atomic.Int64
+}
+
+func (f *fakeRequestTracker) RequestStarted() { f.started.Add(1) }
+func (f *fakeRequestTracker) RequestEnded()   { f.ended.Add(1) }
+
 // createTestPostHandler creates a POST handler with mocked dependencies for testing.
-func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap) {
+// The returned tracker counts RequestStarted/RequestEnded calls so tests can
+// assert balance.
+func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap, *fakeRequestTracker) {
 	t.Helper()
 
 	methodMap := NewMethodMap()
@@ -87,15 +100,20 @@ func createTestPostHandler(t *testing.T) (http.HandlerFunc, *MethodMap) {
 	})
 
 	confirmQueue := make(chan chan error, 10)
-	handler := handlePostRequest(methodMap, platform, cfg, st, tokenQueue, confirmQueue, db, nil, nil, nil, nil)
-	return handler, methodMap
+	tracker := &fakeRequestTracker{}
+	handler := handlePostRequest(
+		methodMap, platform, cfg, st,
+		tokenQueue, confirmQueue, db,
+		nil, nil, nil, nil, tracker,
+	)
+	return handler, methodMap, tracker
 }
 
 // TestHandlePostRequest_ValidRequest tests that a valid JSON-RPC request returns HTTP 200.
 func TestHandlePostRequest_ValidRequest(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, tracker := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.echo"}`
 	//nolint:noctx // test helper, no context needed
@@ -113,13 +131,17 @@ func TestHandlePostRequest_ValidRequest(t *testing.T) {
 	require.NoError(t, err, "response should be valid JSON")
 	require.Equal(t, "2.0", resp.JSONRPC)
 	require.NotNil(t, resp.Result, "successful response should have a result")
+
+	assert.Equal(t, int64(1), tracker.started.Load(), "RequestStarted should fire once")
+	assert.Equal(t, tracker.started.Load(), tracker.ended.Load(),
+		"RequestStarted and RequestEnded must balance")
 }
 
 // TestHandlePostRequest_InvalidJSON tests that malformed JSON returns HTTP 200 with JSON-RPC parse error.
 func TestHandlePostRequest_InvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, tracker := createTestPostHandler(t)
 
 	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(`{invalid json`))
@@ -137,13 +159,17 @@ func TestHandlePostRequest_InvalidJSON(t *testing.T) {
 	require.NoError(t, err, "response should be valid JSON")
 	require.NotNil(t, resp.Error, "should contain error object")
 	require.Equal(t, -32700, resp.Error.Code, "should be parse error code")
+
+	assert.Equal(t, int64(1), tracker.started.Load(), "RequestStarted should fire once")
+	assert.Equal(t, tracker.started.Load(), tracker.ended.Load(),
+		"RequestStarted and RequestEnded must balance even on parse error")
 }
 
 // TestHandlePostRequest_UnknownMethod tests that an unknown method returns HTTP 200 with method not found error.
 func TestHandlePostRequest_UnknownMethod(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"nonexistent.method"}`
 	//nolint:noctx // test helper, no context needed
@@ -166,7 +192,7 @@ func TestHandlePostRequest_UnknownMethod(t *testing.T) {
 func TestHandlePostRequest_WrongContentType(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(`{"test":"data"}`))
@@ -182,7 +208,7 @@ func TestHandlePostRequest_WrongContentType(t *testing.T) {
 func TestHandlePostRequest_ContentTypeWithCharset(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.echo"}`
 	//nolint:noctx // test helper, no context needed
@@ -200,7 +226,7 @@ func TestHandlePostRequest_ContentTypeWithCharset(t *testing.T) {
 func TestHandlePostRequest_Notification(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, tracker := createTestPostHandler(t)
 
 	// JSON-RPC notification (no ID field)
 	reqBody := `{"jsonrpc":"2.0","method":"test.echo"}`
@@ -214,13 +240,17 @@ func TestHandlePostRequest_Notification(t *testing.T) {
 	// Server MUST NOT reply to notifications - expect 204 No Content
 	require.Equal(t, http.StatusNoContent, rr.Code, "notification should return HTTP 204 No Content")
 	require.Empty(t, rr.Body.Bytes(), "notification should have empty response body")
+
+	assert.Equal(t, int64(1), tracker.started.Load(), "RequestStarted should fire for notifications too")
+	assert.Equal(t, tracker.started.Load(), tracker.ended.Load(),
+		"RequestStarted and RequestEnded must balance on the notification path")
 }
 
 // TestHandlePostRequest_MethodError tests that a method returning an error produces correct JSON-RPC error.
 func TestHandlePostRequest_MethodError(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.error"}`
 	//nolint:noctx // test helper, no context needed
@@ -244,7 +274,7 @@ func TestHandlePostRequest_MethodError(t *testing.T) {
 func TestHandlePostRequest_ExpectedError(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":"` + uuid.New().String() + `","method":"test.expectederror"}`
 	//nolint:noctx // test helper, no context needed
@@ -267,7 +297,7 @@ func TestHandlePostRequest_ExpectedError(t *testing.T) {
 func TestHandlePostRequest_OversizedBody(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	// Create a body larger than 1MB
 	largeBody := strings.Repeat("x", 2<<20) // 2MB
@@ -287,7 +317,7 @@ func TestHandlePostRequest_OversizedBody(t *testing.T) {
 func TestHandlePostRequest_EmptyBody(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(""))
@@ -319,7 +349,7 @@ func (r *errReader) Read([]byte) (int, error) {
 func TestHandlePostRequest_ClientDisconnect(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	//nolint:noctx // test helper, no context needed
 	req := httptest.NewRequest(http.MethodPost, "/api", &errReader{err: io.ErrUnexpectedEOF})
@@ -335,7 +365,7 @@ func TestHandlePostRequest_ClientDisconnect(t *testing.T) {
 func TestHandlePostRequest_InvalidJSONRPCVersion(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"1.0","id":"` + uuid.New().String() + `","method":"test.echo"}`
 	//nolint:noctx // test helper, no context needed
@@ -358,7 +388,7 @@ func TestHandlePostRequest_InvalidJSONRPCVersion(t *testing.T) {
 func TestHandlePostRequest_StringID(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":"my-custom-string-id","method":"test.echo"}`
 	//nolint:noctx // test helper, no context needed
@@ -380,7 +410,7 @@ func TestHandlePostRequest_StringID(t *testing.T) {
 func TestHandlePostRequest_NumberID(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	reqBody := `{"jsonrpc":"2.0","id":12345,"method":"test.echo"}`
 	//nolint:noctx // test helper, no context needed
@@ -403,7 +433,7 @@ func TestHandlePostRequest_NumberID(t *testing.T) {
 func TestHandlePostRequest_MissingID(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	// Request without ID field = notification
 	reqBody := `{"jsonrpc":"2.0","method":"test.echo"}`
@@ -423,7 +453,7 @@ func TestHandlePostRequest_MissingID(t *testing.T) {
 func TestHandlePostRequest_NullID(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	// Request with explicit null ID
 	reqBody := `{"jsonrpc":"2.0","id":null,"method":"test.echo"}`
@@ -449,7 +479,7 @@ func TestHandlePostRequest_NullID(t *testing.T) {
 func TestHandlePostRequest_UUIDStringID(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	testUUID := uuid.New().String()
 	reqBody := `{"jsonrpc":"2.0","id":"` + testUUID + `","method":"test.echo"}`
@@ -472,7 +502,7 @@ func TestHandlePostRequest_UUIDStringID(t *testing.T) {
 func TestHandlePostRequest_InvalidObjectID(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	// Object ID is invalid per JSON-RPC spec
 	reqBody := `{"jsonrpc":"2.0","id":{"nested":"object"},"method":"test.echo"}`
@@ -497,7 +527,7 @@ func TestHandlePostRequest_InvalidObjectID(t *testing.T) {
 func TestHandlePostRequest_InvalidArrayID(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := createTestPostHandler(t)
+	handler, _, _ := createTestPostHandler(t)
 
 	// Array ID is invalid per JSON-RPC spec
 	reqBody := `{"jsonrpc":"2.0","id":[1,2,3],"method":"test.echo"}`
@@ -523,7 +553,7 @@ func TestHandlePostRequest_InvalidArrayID(t *testing.T) {
 func TestHandlePostRequest_ResponseWithCallback(t *testing.T) {
 	t.Parallel()
 
-	handler, methodMap := createTestPostHandler(t)
+	handler, methodMap, _ := createTestPostHandler(t)
 
 	afterWriteCalled := false
 	err := methodMap.AddMethod("test.callback", func(_ requests.RequestEnv) (any, error) {

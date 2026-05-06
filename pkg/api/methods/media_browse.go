@@ -386,53 +386,89 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 	}
 
 	if env.Database.MediaDB != nil {
+		if err := addBrowseDBSystemRoots(env, systems, rootDirs, addRoute, addFilesystemRoute); err != nil {
+			return nil, err
+		}
+	}
+
+	return routes, nil
+}
+
+func addBrowseDBSystemRoots(
+	env *requests.RequestEnv,
+	systems []systemdefs.System,
+	rootDirs []string,
+	addRoute func(string),
+	addFilesystemRoute func(string),
+) error {
+	started := time.Now()
+	candidates, cacheReady, err := env.Database.MediaDB.BrowseSystemRootCandidates(
+		env.Context,
+		database.BrowseSystemRootCandidatesOptions{Roots: rootDirs, Systems: systems},
+	)
+	if err != nil {
+		return fmt.Errorf("error getting system root candidates: %w", err)
+	}
+	if cacheReady {
+		logBrowseTiming("system_root_candidates", "", started, len(candidates.HasMedia))
+		for _, root := range rootDirs {
+			if !candidates.HasMedia[root] {
+				continue
+			}
+			addFilesystemRoute(root)
+			for _, name := range candidates.Children[root] {
+				addFilesystemRoute(filepath.Join(root, name))
+			}
+		}
+	} else {
+		// Cache not ready yet (first boot, mid-rebuild). Fall back to the
+		// per-root fan-out so the response is still complete.
 		for _, root := range rootDirs {
 			prefix := filepath.ToSlash(filepath.Clean(root))
 			if !strings.HasSuffix(prefix, "/") {
 				prefix += "/"
 			}
-			started := time.Now()
-			fileCount, err := env.Database.MediaDB.BrowseFileCount(env.Context, database.BrowseFileCountOptions{
+			fileCountStarted := time.Now()
+			fileCount, fcErr := env.Database.MediaDB.BrowseFileCount(env.Context, database.BrowseFileCountOptions{
 				PathPrefix: prefix,
 				Systems:    systems,
 			})
-			logBrowseTiming("system_root_file_count", prefix, started, fileCount)
-			if err != nil {
-				return nil, fmt.Errorf("error getting system root file count: %w", err)
+			logBrowseTiming("system_root_file_count", prefix, fileCountStarted, fileCount)
+			if fcErr != nil {
+				return fmt.Errorf("error getting system root file count: %w", fcErr)
 			}
 			if fileCount > 0 {
 				addFilesystemRoute(root)
 			}
 
-			started = time.Now()
-			dirs, err := env.Database.MediaDB.BrowseDirectories(env.Context, database.BrowseDirectoriesOptions{
+			dirsStarted := time.Now()
+			dirs, dirsErr := env.Database.MediaDB.BrowseDirectories(env.Context, database.BrowseDirectoriesOptions{
 				PathPrefix: prefix,
 				Systems:    systems,
 			})
-			logBrowseTiming("system_root_directories", prefix, started, len(dirs))
-			if err != nil {
-				return nil, fmt.Errorf("error getting system route directories: %w", err)
+			logBrowseTiming("system_root_directories", prefix, dirsStarted, len(dirs))
+			if dirsErr != nil {
+				return fmt.Errorf("error getting system route directories: %w", dirsErr)
 			}
 			for _, dir := range dirs {
 				addFilesystemRoute(filepath.Join(root, dir.Name))
 			}
 		}
-
-		started := time.Now()
-		virtualSchemes, err := env.Database.MediaDB.BrowseVirtualSchemes(
-			env.Context,
-			database.BrowseVirtualSchemesOptions{Systems: systems},
-		)
-		logBrowseTiming("system_virtual_schemes", "", started, len(virtualSchemes))
-		if err != nil {
-			return nil, fmt.Errorf("error getting system virtual routes: %w", err)
-		}
-		for _, scheme := range virtualSchemes {
-			addRoute(scheme.Scheme)
-		}
 	}
 
-	return routes, nil
+	virtualStarted := time.Now()
+	virtualSchemes, err := env.Database.MediaDB.BrowseVirtualSchemes(
+		env.Context,
+		database.BrowseVirtualSchemesOptions{Systems: systems},
+	)
+	logBrowseTiming("system_virtual_schemes", "", virtualStarted, len(virtualSchemes))
+	if err != nil {
+		return fmt.Errorf("error getting system virtual routes: %w", err)
+	}
+	for _, scheme := range virtualSchemes {
+		addRoute(scheme.Scheme)
+	}
+	return nil
 }
 
 func isPathUnderRootDirs(path string, rootDirs []string) bool {

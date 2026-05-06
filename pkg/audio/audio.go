@@ -45,6 +45,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	targetSampleRate         = 48000
+	resampleQuality          = 4
+	periodSizeInMilliseconds = 50
+	periodCount              = 4
+)
+
 // Player is the interface for audio playback, allowing tests to mock sound output.
 type Player interface {
 	PlayBytes(data []byte) error
@@ -53,22 +60,25 @@ type Player interface {
 	SetVolume(volume float64)
 }
 
-// MalgoPlayer implements Player using malgo for real audio hardware output.
+// MalgoPlayer plays audio via malgo. Decoded and resampled PCM samples are
+// cached per file path so repeated playback (e.g. scan feedback sounds) does
+// not re-decode or re-resample, and the realtime audio callback only needs
+// to copy already-prepared samples to the output buffer.
 type MalgoPlayer struct {
 	currentCancel context.CancelFunc
 	currentDone   <-chan struct{} // closed when current playback goroutine finishes
-	fileCache     map[string][]byte
+	pcmCache      map[string][][2]float64
 	volume        float64 // 0.0-2.0, protected by playbackMu
 	playbackGen   uint64
-	fileCacheMu   syncutil.RWMutex
+	pcmCacheMu    syncutil.RWMutex
 	playbackMu    syncutil.Mutex
 }
 
 // NewMalgoPlayer creates a new MalgoPlayer instance.
 func NewMalgoPlayer() *MalgoPlayer {
 	return &MalgoPlayer{
-		fileCache: make(map[string][]byte),
-		volume:    1.0,
+		pcmCache: make(map[string][][2]float64),
+		volume:   1.0,
 	}
 }
 
@@ -79,19 +89,208 @@ func (p *MalgoPlayer) SetVolume(volume float64) {
 	p.volume = volume
 }
 
+// playWAV decodes a WAV stream to PCM and plays it asynchronously. The reader
+// is closed before this function returns.
 func (p *MalgoPlayer) playWAV(r io.ReadCloser) error {
+	samples, err := decodeWAV(r)
+	if err != nil {
+		return err
+	}
+	return p.playPCM(samples)
+}
+
+// PlayBytes plays audio from a byte slice asynchronously, detecting format
+// from magic bytes. Supports WAV, OGG (Vorbis), MP3, and FLAC.
+func (p *MalgoPlayer) PlayBytes(data []byte) error {
+	samples, err := decodeBytesByMagic(data)
+	if err != nil {
+		return err
+	}
+	return p.playPCM(samples)
+}
+
+// PlayFile plays an audio file asynchronously, detecting format by extension.
+// Supports WAV, MP3, OGG (Vorbis), and FLAC. Cancels any currently playing sound.
+// Decoded+resampled PCM is cached per path so repeat plays skip the decode work.
+func (p *MalgoPlayer) PlayFile(path string) error {
+	samples, err := p.loadPCMFromFile(path)
+	if err != nil {
+		return err
+	}
+	return p.playPCM(samples)
+}
+
+// ClearFileCache clears the in-memory PCM cache, forcing subsequent PlayFile
+// calls to re-read and re-decode from disk. Called after settings reload to
+// pick up new files.
+func (p *MalgoPlayer) ClearFileCache() {
+	p.pcmCacheMu.Lock()
+	defer p.pcmCacheMu.Unlock()
+	p.pcmCache = make(map[string][][2]float64)
+}
+
+// loadPCMFromFile returns decoded+resampled stereo samples for the given file
+// path, using the PCM cache to avoid repeated decode work.
+func (p *MalgoPlayer) loadPCMFromFile(path string) ([][2]float64, error) {
+	p.pcmCacheMu.RLock()
+	if cached, ok := p.pcmCache[path]; ok {
+		p.pcmCacheMu.RUnlock()
+		return cached, nil
+	}
+	p.pcmCacheMu.RUnlock()
+
+	//nolint:gosec // G304: callers are responsible for path sanitization
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	samples, err := decodeBytesByExt(data, strings.ToLower(filepath.Ext(path)))
+	if err != nil {
+		return nil, err
+	}
+
+	p.pcmCacheMu.Lock()
+	p.pcmCache[path] = samples
+	p.pcmCacheMu.Unlock()
+
+	return samples, nil
+}
+
+// decodeWAV decodes a WAV reader fully into PCM samples and closes the reader.
+func decodeWAV(r io.ReadCloser) ([][2]float64, error) {
 	streamer, format, err := wav.Decode(r)
 	if err != nil {
 		if closeErr := r.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close audio reader on decode error")
 		}
-		return fmt.Errorf("failed to decode WAV stream: %w", err)
+		return nil, fmt.Errorf("failed to decode WAV stream: %w", err)
 	}
+	defer func() {
+		if closeErr := streamer.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close audio streamer")
+		}
+		if closeErr := r.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close audio reader")
+		}
+	}()
+	return drainStream(streamer, format), nil
+}
 
-	// Resample to 48000 Hz for HDMI audio compatibility (MiSTer, etc.)
-	resampled := beep.Resample(4, format.SampleRate, beep.SampleRate(48000), streamer)
+// decodeBytesByMagic decodes a buffer whose format is detected from leading bytes.
+func decodeBytesByMagic(data []byte) ([][2]float64, error) {
+	switch detectAudioFormat(data) {
+	case "wav":
+		streamer, format, err := wav.Decode(io.NopCloser(bytes.NewReader(data)))
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode WAV stream: %w", err)
+		}
+		defer closeStreamer(streamer)
+		return drainStream(streamer, format), nil
+	case "ogg":
+		streamer, format, err := vorbis.Decode(io.NopCloser(bytes.NewReader(data)))
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode OGG stream: %w", err)
+		}
+		defer closeStreamer(streamer)
+		return drainStream(streamer, format), nil
+	case "mp3":
+		streamer, format, err := mp3.Decode(io.NopCloser(bytes.NewReader(data)))
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode MP3 stream: %w", err)
+		}
+		defer closeStreamer(streamer)
+		return drainStream(streamer, format), nil
+	case "flac":
+		streamer, format, err := flac.Decode(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode FLAC stream: %w", err)
+		}
+		defer closeStreamer(streamer)
+		return drainStream(streamer, format), nil
+	default:
+		return nil, errors.New("unsupported audio format (expected WAV, OGG, MP3, or FLAC)")
+	}
+}
 
-	// Cancel any currently playing sound and capture previous done channel.
+// decodeBytesByExt decodes a buffer using the decoder selected by file extension.
+func decodeBytesByExt(data []byte, ext string) ([][2]float64, error) {
+	var (
+		streamer beep.StreamSeekCloser
+		format   beep.Format
+		err      error
+	)
+	switch ext {
+	case ".wav":
+		streamer, format, err = wav.Decode(io.NopCloser(bytes.NewReader(data)))
+	case ".mp3":
+		streamer, format, err = mp3.Decode(io.NopCloser(bytes.NewReader(data)))
+	case ".ogg":
+		streamer, format, err = vorbis.Decode(io.NopCloser(bytes.NewReader(data)))
+	case ".flac":
+		streamer, format, err = flac.Decode(bytes.NewReader(data))
+	default:
+		return nil, fmt.Errorf("unsupported audio format: %s (supported: .wav, .mp3, .ogg, .flac)", ext)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode audio file: %w", err)
+	}
+	defer closeStreamer(streamer)
+	return drainStream(streamer, format), nil
+}
+
+func closeStreamer(s beep.StreamSeekCloser) {
+	if err := s.Close(); err != nil {
+		log.Warn().Err(err).Msg("failed to close audio streamer")
+	}
+}
+
+// drainStream resamples a streamer to targetSampleRate and reads all samples
+// into a slice. Runs once at decode time, never on the realtime audio thread,
+// so the per-period cost of sinc resampling never causes ALSA underruns.
+func drainStream(streamer beep.Streamer, format beep.Format) [][2]float64 {
+	resampled := beep.Resample(resampleQuality, format.SampleRate, beep.SampleRate(targetSampleRate), streamer)
+
+	const chunk = 4096
+	var (
+		buf [chunk][2]float64
+		out [][2]float64
+	)
+	for {
+		n, ok := resampled.Stream(buf[:])
+		if n > 0 {
+			out = append(out, buf[:n]...)
+		}
+		if !ok || n == 0 {
+			break
+		}
+	}
+	return out
+}
+
+// detectAudioFormat returns a format name based on file magic bytes.
+func detectAudioFormat(data []byte) string {
+	if len(data) >= 4 && string(data[:4]) == "RIFF" {
+		return "wav"
+	}
+	if len(data) >= 4 && string(data[:4]) == "OggS" {
+		return "ogg"
+	}
+	if len(data) >= 4 && string(data[:4]) == "fLaC" {
+		return "flac"
+	}
+	if len(data) >= 3 && string(data[:3]) == "ID3" {
+		return "mp3"
+	}
+	if len(data) >= 2 && data[0] == 0xFF && (data[1]&0xE0) == 0xE0 {
+		return "mp3"
+	}
+	return ""
+}
+
+// playPCM plays an already-decoded buffer of stereo samples (at
+// targetSampleRate) asynchronously, cancelling any in-flight playback first.
+func (p *MalgoPlayer) playPCM(samples [][2]float64) error {
 	p.playbackMu.Lock()
 	if p.currentCancel != nil {
 		p.currentCancel()
@@ -129,12 +328,6 @@ func (p *MalgoPlayer) playWAV(r io.ReadCloser) error {
 		defer close(done)
 
 		defer func() {
-			if err := streamer.Close(); err != nil {
-				log.Warn().Err(err).Msg("failed to close audio streamer")
-			}
-			if err := r.Close(); err != nil {
-				log.Warn().Err(err).Msg("failed to close audio reader")
-			}
 			p.playbackMu.Lock()
 			if p.playbackGen == thisGen {
 				p.currentCancel = nil
@@ -142,8 +335,8 @@ func (p *MalgoPlayer) playWAV(r io.ReadCloser) error {
 			p.playbackMu.Unlock()
 		}()
 
-		if err := playWAVWithMalgo(ctx, resampled, vol); err != nil {
-			if ctx.Err() != context.Canceled {
+		if err := playPCMWithMalgo(ctx, samples, vol); err != nil {
+			if !errors.Is(err, context.Canceled) {
 				log.Warn().Err(err).Msg("failed to play audio")
 			}
 			return
@@ -155,240 +348,15 @@ func (p *MalgoPlayer) playWAV(r io.ReadCloser) error {
 	return nil
 }
 
-// PlayBytes plays audio from a byte slice asynchronously, detecting format
-// from magic bytes. Supports WAV, OGG (Vorbis), MP3, and FLAC.
-func (p *MalgoPlayer) PlayBytes(data []byte) error {
-	r := io.NopCloser(bytes.NewReader(data))
-
-	switch detectAudioFormat(data) {
-	case "wav":
-		return p.playWAV(r)
-	case "ogg":
-		streamer, format, err := vorbis.Decode(r)
-		if err != nil {
-			return fmt.Errorf("failed to decode OGG stream: %w", err)
-		}
-		return p.playStream(streamer, format)
-	case "mp3":
-		streamer, format, err := mp3.Decode(r)
-		if err != nil {
-			return fmt.Errorf("failed to decode MP3 stream: %w", err)
-		}
-		return p.playStream(streamer, format)
-	case "flac":
-		streamer, format, err := flac.Decode(bytes.NewReader(data))
-		if err != nil {
-			return fmt.Errorf("failed to decode FLAC stream: %w", err)
-		}
-		return p.playStream(streamer, format)
-	default:
-		return errors.New("unsupported audio format (expected WAV, OGG, MP3, or FLAC)")
-	}
-}
-
-// detectAudioFormat returns a format name based on file magic bytes.
-func detectAudioFormat(data []byte) string {
-	if len(data) >= 4 && string(data[:4]) == "RIFF" {
-		return "wav"
-	}
-	if len(data) >= 4 && string(data[:4]) == "OggS" {
-		return "ogg"
-	}
-	if len(data) >= 4 && string(data[:4]) == "fLaC" {
-		return "flac"
-	}
-	if len(data) >= 3 && string(data[:3]) == "ID3" {
-		return "mp3"
-	}
-	if len(data) >= 2 && data[0] == 0xFF && (data[1]&0xE0) == 0xE0 {
-		return "mp3"
-	}
-	return ""
-}
-
-// playStream plays a decoded audio stream asynchronously, resampling to 48000 Hz.
-func (p *MalgoPlayer) playStream(streamer beep.StreamSeekCloser, format beep.Format) error {
-	resampled := beep.Resample(4, format.SampleRate, beep.SampleRate(48000), streamer)
-
-	p.playbackMu.Lock()
-	if p.currentCancel != nil {
-		p.currentCancel()
-	}
-	prevDone := p.currentDone
-	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: stored in p.currentCancel
-	p.currentCancel = cancel
-	done := make(chan struct{})
-	p.currentDone = done
-	p.playbackGen++
-	thisGen := p.playbackGen
-	vol := p.volume
-	p.playbackMu.Unlock()
-
-	if prevDone != nil {
-		select {
-		case <-prevDone:
-		case <-time.After(3 * time.Second):
-			log.Warn().Msg("timeout waiting for previous audio playback cleanup")
-		}
-	}
-
-	go func() {
-		defer func() {
-			if rec := recover(); rec != nil {
-				log.Error().Any("panic", rec).Msg("recovered panic in audio playback")
-			}
-		}()
-		defer close(done)
-		defer func() {
-			if err := streamer.Close(); err != nil {
-				log.Warn().Err(err).Msg("failed to close audio streamer")
-			}
-			p.playbackMu.Lock()
-			if p.playbackGen == thisGen {
-				p.currentCancel = nil
-			}
-			p.playbackMu.Unlock()
-		}()
-
-		if err := playWAVWithMalgo(ctx, resampled, vol); err != nil {
-			if ctx.Err() != context.Canceled {
-				log.Warn().Err(err).Msg("failed to play audio")
-			}
-			return
-		}
-		log.Debug().Msg("completed audio playback")
-	}()
-
-	return nil
-}
-
-// PlayFile plays an audio file asynchronously, detecting format by extension.
-// Supports WAV, MP3, OGG (Vorbis), and FLAC. Cancels any currently playing sound.
-// File bytes are cached per-instance to avoid repeated disk reads for the same path.
-func (p *MalgoPlayer) PlayFile(path string) error {
-	data, err := p.readFileWithCache(path)
-	if err != nil {
-		return fmt.Errorf("failed to read audio file: %w", err)
-	}
-
-	ext := strings.ToLower(filepath.Ext(path))
-
-	var streamer beep.StreamSeekCloser
-	var format beep.Format
-
-	switch ext {
-	case ".wav":
-		streamer, format, err = wav.Decode(bytes.NewReader(data))
-	case ".mp3":
-		streamer, format, err = mp3.Decode(io.NopCloser(bytes.NewReader(data)))
-	case ".ogg":
-		streamer, format, err = vorbis.Decode(io.NopCloser(bytes.NewReader(data)))
-	case ".flac":
-		streamer, format, err = flac.Decode(bytes.NewReader(data))
-	default:
-		return fmt.Errorf("unsupported audio format: %s (supported: .wav, .mp3, .ogg, .flac)", ext)
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to decode audio file: %w", err)
-	}
-
-	// Resample to 48000 Hz for HDMI audio compatibility (MiSTer, etc.)
-	resampled := beep.Resample(4, format.SampleRate, beep.SampleRate(48000), streamer)
-
-	// Cancel any currently playing sound and capture previous done channel.
-	p.playbackMu.Lock()
-	if p.currentCancel != nil {
-		p.currentCancel()
-	}
-	prevDone := p.currentDone
-	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: stored in p.currentCancel
-	p.currentCancel = cancel
-	done := make(chan struct{})
-	p.currentDone = done
-	p.playbackGen++
-	thisGen := p.playbackGen
-	vol := p.volume
-	p.playbackMu.Unlock()
-
-	// Wait for the previous playback goroutine to fully release the audio
-	// device before initializing a new one. Concurrent ALSA device access
-	// from overlapping init/uninit calls crashes miniaudio on MiSTer.
-	if prevDone != nil {
-		select {
-		case <-prevDone:
-		case <-time.After(3 * time.Second):
-			log.Warn().Msg("timeout waiting for previous audio playback cleanup")
-		}
-	}
-
-	go func() {
-		defer func() {
-			if rec := recover(); rec != nil {
-				log.Error().Any("panic", rec).Msg("recovered panic in audio playback")
-			}
-		}()
-
-		defer close(done)
-
-		defer func() {
-			if err := streamer.Close(); err != nil {
-				log.Warn().Err(err).Msg("failed to close audio streamer")
-			}
-			p.playbackMu.Lock()
-			if p.playbackGen == thisGen {
-				p.currentCancel = nil
-			}
-			p.playbackMu.Unlock()
-		}()
-
-		if err := playWAVWithMalgo(ctx, resampled, vol); err != nil {
-			if ctx.Err() != context.Canceled {
-				log.Warn().Err(err).Msg("failed to play audio")
-			}
-			return
-		}
-
-		log.Debug().Str("path", path).Msg("completed audio playback")
-	}()
-
-	return nil
-}
-
-// readFileWithCache returns file bytes, using an in-memory cache to avoid
-// repeated disk reads for files that are played frequently (e.g. scan feedback).
-func (p *MalgoPlayer) readFileWithCache(path string) ([]byte, error) {
-	p.fileCacheMu.RLock()
-	if cached, ok := p.fileCache[path]; ok {
-		p.fileCacheMu.RUnlock()
-		return cached, nil
-	}
-	p.fileCacheMu.RUnlock()
-
-	//nolint:gosec // G304: callers are responsible for path sanitization
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
-	}
-
-	p.fileCacheMu.Lock()
-	p.fileCache[path] = data
-	p.fileCacheMu.Unlock()
-
-	return data, nil
-}
-
-// ClearFileCache clears the in-memory file cache, forcing subsequent PlayFile
-// calls to re-read from disk. Called after settings reload to pick up new files.
-func (p *MalgoPlayer) ClearFileCache() {
-	p.fileCacheMu.Lock()
-	defer p.fileCacheMu.Unlock()
-	p.fileCache = make(map[string][]byte)
-}
-
-// playWAVWithMalgo plays audio samples through malgo, blocking until complete or ctx is cancelled.
-// The volume parameter (0.0-2.0) scales sample amplitude before output.
-func playWAVWithMalgo(ctx context.Context, streamer beep.Streamer, volume float64) error {
+// playPCMWithMalgo plays a pre-decoded sample buffer through malgo, blocking
+// until complete or ctx is cancelled. The realtime callback only copies
+// already-resampled samples to the output buffer with volume scaling — no
+// decoding, no resampling, no allocation on the audio thread.
+//
+// The device is opened, played, and closed for each sound. Holding it open
+// would block other audio sources on the system (FPGA cores on MiSTer, system
+// audio elsewhere), which is unacceptable.
+func playPCMWithMalgo(ctx context.Context, samples [][2]float64, volume float64) error {
 	malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return fmt.Errorf("failed to initialize malgo context: %w", err)
@@ -401,19 +369,23 @@ func playWAVWithMalgo(ctx context.Context, streamer beep.Streamer, volume float6
 		malgoCtx.Free()
 	}()
 
-	// F32 format avoids buggy S16->S32 conversion in miniaudio on PulseAudio
+	// F32 format avoids buggy S16->S32 conversion in miniaudio on PulseAudio.
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Playback)
 	deviceConfig.Playback.Format = malgo.FormatF32
 	deviceConfig.Playback.Channels = 2
-	deviceConfig.SampleRate = 48000
-	deviceConfig.Alsa.NoMMap = 1
+	deviceConfig.SampleRate = targetSampleRate
+	// Larger period gives the audio thread headroom on CPU-constrained devices
+	// (e.g. MiSTer Cortex-A9 sharing CPU with a running core), where
+	// miniaudio's small default period underruns and produces audible crackle.
+	deviceConfig.PeriodSizeInMilliseconds = periodSizeInMilliseconds
+	deviceConfig.Periods = periodCount
 
 	done := make(chan struct{})
 
 	var (
 		mu       syncutil.Mutex
 		finished bool
-		samples  [][2]float64
+		pos      int
 	)
 
 	onSamples := func(pOutputSample, _ []byte, frameCount uint32) {
@@ -432,31 +404,30 @@ func playWAVWithMalgo(ctx context.Context, streamer beep.Streamer, volume float6
 		default:
 		}
 
-		if len(samples) < int(frameCount) {
-			samples = make([][2]float64, frameCount)
-		}
-
-		n, ok := streamer.Stream(samples[:frameCount])
-		if !ok || n == 0 {
-			finished = true
-			close(done)
-			return
-		}
-
-		// Convert beep's [][2]float64 samples to interleaved F32 PCM
 		offset := 0
-		for i := range n {
-			sample := float32(samples[i][0] * volume)
-			binary.LittleEndian.PutUint32(pOutputSample[offset:], math.Float32bits(sample))
+		written := 0
+		for written < int(frameCount) && pos < len(samples) {
+			l := float32(samples[pos][0] * volume)
+			r := float32(samples[pos][1] * volume)
+			binary.LittleEndian.PutUint32(pOutputSample[offset:], math.Float32bits(l))
 			offset += 4
-
-			sample = float32(samples[i][1] * volume)
-			binary.LittleEndian.PutUint32(pOutputSample[offset:], math.Float32bits(sample))
+			binary.LittleEndian.PutUint32(pOutputSample[offset:], math.Float32bits(r))
 			offset += 4
+			pos++
+			written++
 		}
 
+		// Zero any frames in the output buffer we didn't fill.
 		for i := offset; i < len(pOutputSample); i++ {
 			pOutputSample[i] = 0
+		}
+
+		// If this period drained the buffer (and so has zeros at the tail),
+		// finish playback. The hardware ring buffer still drains the real
+		// samples we just wrote before device.Stop() takes effect.
+		if pos >= len(samples) && written < int(frameCount) {
+			finished = true
+			close(done)
 		}
 	}
 
@@ -486,7 +457,7 @@ func playWAVWithMalgo(ctx context.Context, streamer beep.Streamer, volume float6
 		log.Warn().Err(err).Msg("failed to stop audio device")
 	}
 
-	if ctx.Err() == context.Canceled {
+	if errors.Is(ctx.Err(), context.Canceled) {
 		return context.Canceled
 	}
 

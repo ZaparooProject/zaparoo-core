@@ -266,10 +266,12 @@ func TestStartPost(t *testing.T) {
 	var setMedia *models.ActiveMedia
 
 	err := base.StartPost(
+		t.Context(),
 		nil,
 		mgr,
 		func() *models.ActiveMedia { return activeMedia },
 		func(m *models.ActiveMedia) { setMedia = m },
+		nil,
 		nil,
 	)
 

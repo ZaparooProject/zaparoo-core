@@ -1731,6 +1731,70 @@ func (m *MockMediaDBI) RebuildTagCache() error {
 	return nil
 }
 
+func (m *MockMediaDBI) PersistTagCache() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock PersistTagCache: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) LoadCachedTagCache() (bool, error) {
+	args := m.Called()
+	loaded, ok := args.Get(0).(bool)
+	if !ok {
+		loaded = false
+	}
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock LoadCachedTagCache: %w", err)
+	}
+	return loaded, nil
+}
+
+func (m *MockMediaDBI) PersistSlugSearchCache() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock PersistSlugSearchCache: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) LoadCachedSlugSearchCache() (bool, error) {
+	args := m.Called()
+	loaded, ok := args.Get(0).(bool)
+	if !ok {
+		loaded = false
+	}
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock LoadCachedSlugSearchCache: %w", err)
+	}
+	return loaded, nil
+}
+
+func (m *MockMediaDBI) IndexGeneration() (int64, error) {
+	args := m.Called()
+	v, ok := args.Get(0).(int64)
+	if !ok {
+		v = 0
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock IndexGeneration: %w", err)
+	}
+	return v, nil
+}
+
+func (m *MockMediaDBI) BumpIndexGeneration() (int64, error) {
+	args := m.Called()
+	v, ok := args.Get(0).(int64)
+	if !ok {
+		v = 0
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock BumpIndexGeneration: %w", err)
+	}
+	return v, nil
+}
+
 func (m *MockMediaDBI) PopulateSystemTagsCacheForSystems(ctx context.Context, systems []systemdefs.System) error {
 	args := m.Called(ctx, systems)
 	if err := args.Error(0); err != nil {
@@ -1932,6 +1996,12 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("GetLaunchCommandForMedia", mock.Anything, mock.Anything, mock.Anything).Return("", nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
+	mockMediaDB.On("PersistTagCache").Return(nil).Maybe()
+	mockMediaDB.On("LoadCachedTagCache").Return(false, nil).Maybe()
+	mockMediaDB.On("PersistSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("LoadCachedSlugSearchCache").Return(false, nil).Maybe()
+	mockMediaDB.On("IndexGeneration").Return(int64(0), nil).Maybe()
+	mockMediaDB.On("BumpIndexGeneration").Return(int64(1), nil).Maybe()
 	mockMediaDB.On("GetDBPath").Return("/tmp/mock-media.db").Maybe()
 	mockMediaDB.On("DropSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("BulkSetMediaMissing", mock.Anything).Return(nil).Maybe()
@@ -2107,6 +2177,24 @@ func (m *MockMediaDBI) BrowseRouteCounts(
 		return nil, fmt.Errorf("mock operation failed: %w", err)
 	}
 	return map[string]database.BrowseRouteCount{}, nil
+}
+
+func (m *MockMediaDBI) BrowseSystemRootCandidates(
+	ctx context.Context, opts database.BrowseSystemRootCandidatesOptions,
+) (database.BrowseSystemRootCandidates, bool, error) {
+	args := m.Called(ctx, opts)
+	result, ok := args.Get(0).(database.BrowseSystemRootCandidates)
+	if !ok {
+		result = database.BrowseSystemRootCandidates{}
+	}
+	cacheReady, ok := args.Get(1).(bool)
+	if !ok {
+		cacheReady = false
+	}
+	if err := args.Error(2); err != nil {
+		return result, cacheReady, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return result, cacheReady, nil
 }
 
 func (m *MockMediaDBI) BrowseRootCounts(

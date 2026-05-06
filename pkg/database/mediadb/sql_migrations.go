@@ -23,20 +23,37 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"path/filepath"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-func sqlMigrateUp(db *sql.DB) error {
-	if err := database.MigrateUp(db, migrationFiles, "migrations"); err != nil {
+func sqlMigrateUp(db *sql.DB, dbPath string) error {
+	sidecarPath := schemaVersionSidecarPath(dbPath)
+	if err := database.MigrateUp(db, migrationFiles, "migrations", dbPath, sidecarPath); err != nil {
 		return fmt.Errorf("failed to run media database migrations: %w", err)
 	}
 	return nil
 }
 
-func sqlAllocate(db *sql.DB) error {
-	return sqlMigrateUp(db)
+func sqlAllocate(db *sql.DB, dbPath string) error {
+	return sqlMigrateUp(db, dbPath)
+}
+
+// schemaVersionSidecarPath returns the JSON sidecar path used by MigrateUp
+// to record the last applied migration version. Returns "" when dbPath is
+// empty so the fast path is disabled (e.g. in-memory test databases).
+func schemaVersionSidecarPath(dbPath string) string {
+	if dbPath == "" {
+		return ""
+	}
+	return filepath.Join(
+		filepath.Dir(dbPath),
+		config.CacheDir,
+		filepath.Base(dbPath)+".schema_version.json",
+	)
 }
