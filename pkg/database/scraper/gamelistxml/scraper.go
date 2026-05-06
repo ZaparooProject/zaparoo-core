@@ -207,6 +207,7 @@ func (g *GamelistXMLScraper) LoadRecords(
 ) ([]*GamelistRecord, error) {
 	var records []*GamelistRecord
 
+outer:
 	for _, rootPath := range system.ROMPaths {
 		select {
 		case <-ctx.Done():
@@ -259,6 +260,9 @@ func (g *GamelistXMLScraper) LoadRecords(
 				MatchedMediaDBID:   mediaByTitleDBID[title.DBID],
 			})
 			delete(titlesBySlug, pf.Slug)
+			if len(titlesBySlug) == 0 {
+				break outer
+			}
 		}
 	}
 
@@ -356,6 +360,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			for _, t := range unscraped {
 				titlesBySlug[t.Slug] = t
 			}
+		}
+
+		if len(titlesBySlug) == 0 {
+			continue
 		}
 
 		// Build MediaTitle DBID → first Media DBID map for sentinel writes.
