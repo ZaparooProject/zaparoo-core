@@ -43,13 +43,14 @@ import (
 // (cheap stat-only check) and rescan when they don't.
 type RBFCache struct {
 	bySystemID    map[string]RBFInfo
-	byShortName   map[string][]RBFInfo // short name (lower) → all scanned RBFs with that short name
-	byLauncherID  map[string]string    // launcherID → rbfPath (unresolved)
-	lastDirMtimes map[string]int64     // snapshot used by Refresh to decide if a rescan is needed
-	persistPath   string               // empty disables on-disk persistence
+	byShortName   map[string][]RBFInfo
+	byLauncherID  map[string]string
+	lastDirMtimes map[string]int64
+	persistPath   string
+	lastRootRBFs  []string
 	mu            syncutil.RWMutex
-	initialized   bool // first Refresh has run (load-or-scan completed)
-	needsRescan   bool // disk-loaded data has stale mtimes; caller should schedule a rescan
+	initialized   bool
+	needsRescan   bool
 }
 
 // GlobalRBFCache is the singleton instance for the MiSTer platform.
@@ -123,7 +124,7 @@ func (c *RBFCache) Refresh() {
 		if c.tryLoadFromDiskLocked() {
 			return
 		}
-	} else if dirMtimesMatch(c.lastDirMtimes) {
+	} else if dirMtimesMatch(c.lastDirMtimes) && rootRBFsMatch(c.lastRootRBFs) {
 		return
 	}
 
@@ -148,7 +149,10 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 
 	c.BuildFromRBFs(stored.Files)
 	c.lastDirMtimes = stored.DirMtimes
-	if dirMtimesMatch(stored.DirMtimes) {
+	c.lastRootRBFs = stored.RootRBFs
+	mtimesOK := dirMtimesMatch(stored.DirMtimes)
+	rootOK := rootRBFsMatch(stored.RootRBFs)
+	if mtimesOK && rootOK {
 		log.Info().
 			Int("rbf_files", len(stored.Files)).
 			Int("systems_mapped", len(c.bySystemID)).
@@ -156,7 +160,15 @@ func (c *RBFCache) tryLoadFromDiskLocked() bool {
 			Msg("RBF cache loaded from disk")
 		c.needsRescan = false
 	} else {
-		log.Info().Str("path", c.persistPath).Msg("RBF cache loaded but directory mtimes drifted; rescan needed")
+		drifted := diffDirMtimes(stored.DirMtimes)
+		rootDiff := diffRootRBFs(stored.RootRBFs)
+		log.Info().
+			Str("path", c.persistPath).
+			Int("drifted_count", len(drifted)).
+			Interface("drifted", drifted).
+			Strs("added_root_rbfs", rootDiff.Added).
+			Strs("removed_root_rbfs", rootDiff.Removed).
+			Msg("RBF cache loaded but state drifted; rescan needed")
 		c.needsRescan = true
 	}
 	return true
@@ -188,8 +200,14 @@ func (c *RBFCache) scanLocked() {
 		log.Warn().Err(snapErr).Msg("RBF cache: failed to snapshot directory mtimes, skipping persist")
 		return
 	}
+	rootRBFs, rootErr := snapshotRootRBFs()
+	if rootErr != nil {
+		log.Warn().Err(rootErr).Msg("RBF cache: failed to snapshot root RBFs, skipping persist")
+		return
+	}
 	c.lastDirMtimes = snapshot
-	if writeErr := writePersistedRBFCache(c.persistPath, rbfFiles, snapshot); writeErr != nil {
+	c.lastRootRBFs = rootRBFs
+	if writeErr := writePersistedRBFCache(c.persistPath, rbfFiles, snapshot, rootRBFs); writeErr != nil {
 		log.Warn().Err(writeErr).Str("path", c.persistPath).Msg("RBF cache: failed to persist")
 		return
 	}

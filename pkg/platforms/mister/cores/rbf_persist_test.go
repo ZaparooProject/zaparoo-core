@@ -55,11 +55,12 @@ func TestPersistedRBFCache_RoundTrip(t *testing.T) {
 
 	rbfs := sampleRBFs()
 	mtimes := map[string]int64{
-		"/media/fat":          1234567890,
-		"/media/fat/_Console": 1234567891,
+		"/media/fat/_Console":  1234567891,
+		"/media/fat/_Computer": 1234567892,
 	}
+	rootRBFs := []string{"MyCustomCore.rbf", "Userport.rbf"}
 
-	require.NoError(t, writePersistedRBFCache(path, rbfs, mtimes))
+	require.NoError(t, writePersistedRBFCache(path, rbfs, mtimes, rootRBFs))
 
 	loaded, ok, err := loadPersistedRBFCache(path)
 	require.NoError(t, err)
@@ -69,6 +70,7 @@ func TestPersistedRBFCache_RoundTrip(t *testing.T) {
 	assert.Equal(t, rbfCacheFileVersion, loaded.Version)
 	assert.Equal(t, rbfs, loaded.Files)
 	assert.Equal(t, mtimes, loaded.DirMtimes)
+	assert.Equal(t, rootRBFs, loaded.RootRBFs)
 }
 
 func TestPersistedRBFCache_MissingFile(t *testing.T) {
@@ -128,8 +130,8 @@ func TestPersistedRBFCache_TruncatedFile(t *testing.T) {
 	path := filepath.Join(dir, RBFCacheFileName)
 
 	require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), map[string]int64{
-		"/media/fat": 1,
-	}))
+		"/media/fat/_Console": 1,
+	}, nil))
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
@@ -148,8 +150,8 @@ func TestPersistedRBFCache_OversizedFile(t *testing.T) {
 	path := filepath.Join(dir, RBFCacheFileName)
 
 	require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), map[string]int64{
-		"/media/fat": 1,
-	}))
+		"/media/fat/_Console": 1,
+	}, nil))
 
 	originalCap := rbfCacheMaxBytes
 	rbfCacheMaxBytes = 16
@@ -167,21 +169,22 @@ func TestPersistedRBFCache_AtomicRenameOverwrites(t *testing.T) {
 	path := filepath.Join(dir, RBFCacheFileName)
 
 	require.NoError(t, writePersistedRBFCache(path, sampleRBFs()[:1], map[string]int64{
-		"/media/fat": 1,
-	}))
+		"/media/fat/_Console": 1,
+	}, []string{"first.rbf"}))
 	loaded, ok, err := loadPersistedRBFCache(path)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Len(t, loaded.Files, 1)
 
 	require.NoError(t, writePersistedRBFCache(path, sampleRBFs(), map[string]int64{
-		"/media/fat": 2,
-	}))
+		"/media/fat/_Console": 2,
+	}, []string{"second.rbf"}))
 	loaded, ok, err = loadPersistedRBFCache(path)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Len(t, loaded.Files, 2, "second write should overwrite first")
-	assert.Equal(t, int64(2), loaded.DirMtimes["/media/fat"])
+	assert.Equal(t, int64(2), loaded.DirMtimes["/media/fat/_Console"])
+	assert.Equal(t, []string{"second.rbf"}, loaded.RootRBFs)
 }
 
 func TestDirMtimesMatch_EmptySnapshot(t *testing.T) {
@@ -198,6 +201,89 @@ func TestDirMtimesMatch_MissingPath(t *testing.T) {
 	assert.False(t, dirMtimesMatch(map[string]int64{
 		"/this/path/should/not/exist/zaparoo-rbf-test": 1,
 	}))
+}
+
+func TestDiffDirMtimes_AllMatching(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	info, err := os.Stat(dir)
+	require.NoError(t, err)
+
+	diffs := diffDirMtimes(map[string]int64{dir: info.ModTime().UnixNano()})
+	assert.Empty(t, diffs)
+}
+
+func TestDiffDirMtimes_DriftedPath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	info, err := os.Stat(dir)
+	require.NoError(t, err)
+	now := info.ModTime().UnixNano()
+
+	// Pretend the snapshot was taken 5 seconds before the live mtime.
+	snapshotMtime := now - 5_000_000_000
+	diffs := diffDirMtimes(map[string]int64{dir: snapshotMtime})
+
+	require.Len(t, diffs, 1)
+	assert.Equal(t, dir, diffs[0].Path)
+	assert.Equal(t, "drifted", diffs[0].Status)
+	assert.Equal(t, snapshotMtime, diffs[0].SnapshotMtimeNs)
+	assert.Equal(t, now, diffs[0].CurrentMtimeNs)
+	// Allow a tiny rounding window — the value is integer ns / 1e6.
+	assert.InDelta(t, 5000, diffs[0].DeltaMs, 1)
+}
+
+func TestDiffDirMtimes_MissingPath(t *testing.T) {
+	t.Parallel()
+	missing := "/this/path/should/not/exist/zaparoo-rbf-diff-test"
+	diffs := diffDirMtimes(map[string]int64{missing: 12345})
+
+	require.Len(t, diffs, 1)
+	assert.Equal(t, missing, diffs[0].Path)
+	assert.Equal(t, "missing", diffs[0].Status)
+	assert.Equal(t, int64(12345), diffs[0].SnapshotMtimeNs)
+	assert.Zero(t, diffs[0].CurrentMtimeNs)
+}
+
+func TestRootRBFsMatch_NoFilesEqualsEmptySnapshot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	assert.True(t, rootRBFsMatchAt(root, nil), "empty live + empty snapshot should match")
+	assert.True(t, rootRBFsMatchAt(root, []string{}), "empty live + empty snapshot should match")
+}
+
+func TestRootRBFsMatch_AddedAtRoot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "NewCore.rbf"), []byte{}, 0o600))
+	assert.False(t, rootRBFsMatchAt(root, nil), "a new RBF at root should be detected")
+}
+
+func TestRootRBFsMatch_RemovedFromRoot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	assert.False(t, rootRBFsMatchAt(root, []string{"GoneCore.rbf"}),
+		"a removed RBF should be detected")
+}
+
+func TestRootRBFsMatch_IgnoresNonRBFRootFiles(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "MiSTer.ini"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "boot.log"), []byte{}, 0o600))
+	assert.True(t, rootRBFsMatchAt(root, nil),
+		"unrelated files at SD root must not invalidate the cache")
+}
+
+func TestDiffRootRBFs_AddedAndRemoved(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "Kept.rbf"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "Added.rbf"), []byte{}, 0o600))
+
+	diff := diffRootRBFsAt(root, []string{"Kept.rbf", "Removed.rbf"})
+	assert.Equal(t, []string{"Added.rbf"}, diff.Added)
+	assert.Equal(t, []string{"Removed.rbf"}, diff.Removed)
 }
 
 // TestRBFCache_NoPersistPath_ScanFlowsThrough verifies that with no persist
@@ -237,7 +323,7 @@ func TestRBFCache_LoadFromDisk_PopulatesMaps(t *testing.T) {
 	rbfs := sampleRBFs()
 	require.NoError(t, writePersistedRBFCache(path, rbfs, map[string]int64{
 		"/this/path/does/not/exist": 1, // forces dirMtimesMatch=false → needsRescan=true
-	}))
+	}, nil))
 
 	cache := &RBFCache{}
 	cache.SetPersistPath(path)

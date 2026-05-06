@@ -28,6 +28,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
@@ -40,7 +41,7 @@ const RBFCacheFileName = "rbf_cache.gob"
 
 const (
 	rbfCacheFileMagic   = "zrbf"
-	rbfCacheFileVersion = 1
+	rbfCacheFileVersion = 2
 )
 
 // rbfCacheMaxBytes caps gob input at load time. ~200 RBFs × ~256 B per
@@ -49,31 +50,34 @@ const (
 // lower it to exercise the oversize-fallback path.
 var rbfCacheMaxBytes int64 = 2 << 20
 
-// persistedRBFCache is the on-disk shape. DirMtimes maps the SD root and
-// each scanned `_*` subdirectory to its ModTime().UnixNano() at scan time;
-// drift in any of these signals a core was added or removed since the
-// last scan and the cache should be rebuilt.
+// persistedRBFCache is the on-disk shape. DirMtimes maps each scanned
+// `_*` subdirectory to its ModTime().UnixNano() at scan time; drift
+// signals a core was added or removed under that subdir. RootRBFs is the
+// sorted list of `.rbf` filenames placed directly at SD root — used in
+// place of an `/media/fat` mtime check, which proved too noisy because
+// boot scripts and other writes touch the SD root unrelated to RBFs.
 type persistedRBFCache struct {
 	DirMtimes map[string]int64
 	Magic     string
 	Files     []RBFInfo
+	RootRBFs  []string
 	Version   int
 }
 
-// snapshotDirMtimes captures the current mtime for the SD root and each of
-// its `_*` subdirectories. These are the directories `shallowScanRBF`
-// actually visits, so any add/remove/rename of a core (or a `_*` dir
-// itself) mutates one of these mtimes.
+// snapshotDirMtimes captures the current mtime for each `_*` subdirectory
+// of the SD root. Those are the only directories whose mtime tracks core
+// presence: any add/remove/rename of an RBF inside `_Console` (etc.)
+// mutates the dir mtime. The SD root itself is intentionally excluded —
+// its mtime drifts from boot scripts and other unrelated writes — and
+// root-level RBFs are tracked separately via snapshotRootRBFs.
 func snapshotDirMtimes() (map[string]int64, error) {
+	return snapshotDirMtimesAt(config.SDRootDir)
+}
+
+func snapshotDirMtimesAt(root string) (map[string]int64, error) {
 	snapshot := make(map[string]int64)
 
-	rootInfo, err := os.Stat(config.SDRootDir)
-	if err != nil {
-		return nil, fmt.Errorf("stat SD root: %w", err)
-	}
-	snapshot[config.SDRootDir] = rootInfo.ModTime().UnixNano()
-
-	files, err := os.ReadDir(config.SDRootDir)
+	files, err := os.ReadDir(root)
 	if err != nil {
 		return nil, fmt.Errorf("readdir SD root: %w", err)
 	}
@@ -81,7 +85,7 @@ func snapshotDirMtimes() (map[string]int64, error) {
 		if !f.IsDir() || !strings.HasPrefix(f.Name(), "_") {
 			continue
 		}
-		sub := filepath.Join(config.SDRootDir, f.Name())
+		sub := filepath.Join(root, f.Name())
 		info, statErr := os.Stat(sub)
 		if statErr != nil {
 			continue
@@ -89,6 +93,163 @@ func snapshotDirMtimes() (map[string]int64, error) {
 		snapshot[sub] = info.ModTime().UnixNano()
 	}
 	return snapshot, nil
+}
+
+// snapshotRootRBFs returns the sorted list of `.rbf` filenames placed
+// directly at SD root. Replaces an mtime check on the SD root itself,
+// which was too noisy to be useful.
+func snapshotRootRBFs() ([]string, error) {
+	return snapshotRootRBFsAt(config.SDRootDir)
+}
+
+func snapshotRootRBFsAt(root string) ([]string, error) {
+	files, err := os.ReadDir(root)
+	if err != nil {
+		return nil, fmt.Errorf("readdir SD root: %w", err)
+	}
+	rbfs := make([]string, 0)
+	for _, f := range files {
+		if f.IsDir() {
+			continue
+		}
+		if filepath.Ext(strings.ToLower(f.Name())) != ".rbf" {
+			continue
+		}
+		rbfs = append(rbfs, f.Name())
+	}
+	sort.Strings(rbfs)
+	return rbfs, nil
+}
+
+// dirMtimeDiff describes a single divergence between a stored mtime
+// snapshot and the live filesystem state. Status is one of "drifted"
+// (path still exists with a different mtime), "missing" (path no longer
+// exists), or "added" (a new `_*` dir present that wasn't in the
+// snapshot). Mtimes are reported as Unix nanoseconds; SnapshotMtimeNs is
+// zero for "added" entries and CurrentMtimeNs is zero for "missing".
+type dirMtimeDiff struct {
+	Path            string
+	Status          string
+	SnapshotMtimeNs int64
+	CurrentMtimeNs  int64
+	DeltaMs         int64
+}
+
+// rootRBFsDiff describes the divergence between a stored sorted list of
+// root-level RBF filenames and the live state. Either or both slices may
+// be empty when there is no divergence in that direction.
+type rootRBFsDiff struct {
+	Added   []string
+	Removed []string
+}
+
+// rootRBFsMatch reports whether the stored sorted list of root-level RBF
+// filenames is identical to the live filesystem state. A read failure on
+// the SD root is treated as a mismatch.
+func rootRBFsMatch(stored []string) bool {
+	return rootRBFsMatchAt(config.SDRootDir, stored)
+}
+
+func rootRBFsMatchAt(root string, stored []string) bool {
+	current, err := snapshotRootRBFsAt(root)
+	if err != nil {
+		return false
+	}
+	if len(current) != len(stored) {
+		return false
+	}
+	for i, name := range stored {
+		if current[i] != name {
+			return false
+		}
+	}
+	return true
+}
+
+// diffRootRBFs returns the names added to and removed from the live
+// filesystem relative to the stored snapshot. Returns an empty diff when
+// the live filesystem can't be read, so the caller can still log the
+// stale state without crashing on the diagnostic path.
+func diffRootRBFs(stored []string) rootRBFsDiff {
+	return diffRootRBFsAt(config.SDRootDir, stored)
+}
+
+func diffRootRBFsAt(root string, stored []string) rootRBFsDiff {
+	current, err := snapshotRootRBFsAt(root)
+	if err != nil {
+		return rootRBFsDiff{}
+	}
+	storedSet := make(map[string]struct{}, len(stored))
+	for _, n := range stored {
+		storedSet[n] = struct{}{}
+	}
+	currentSet := make(map[string]struct{}, len(current))
+	for _, n := range current {
+		currentSet[n] = struct{}{}
+	}
+	var diff rootRBFsDiff
+	for _, n := range current {
+		if _, ok := storedSet[n]; !ok {
+			diff.Added = append(diff.Added, n)
+		}
+	}
+	for _, n := range stored {
+		if _, ok := currentSet[n]; !ok {
+			diff.Removed = append(diff.Removed, n)
+		}
+	}
+	return diff
+}
+
+// diffDirMtimes returns the per-path differences between snapshot and the
+// live filesystem state. Returns nil when everything matches. Used as a
+// diagnostic when dirMtimesMatch reports false so we can see *which*
+// paths drifted and by how much.
+func diffDirMtimes(snapshot map[string]int64) []dirMtimeDiff {
+	var diffs []dirMtimeDiff
+	for p, want := range snapshot {
+		info, err := os.Stat(p)
+		if err != nil {
+			diffs = append(diffs, dirMtimeDiff{
+				Path:            p,
+				Status:          "missing",
+				SnapshotMtimeNs: want,
+			})
+			continue
+		}
+		got := info.ModTime().UnixNano()
+		if got != want {
+			diffs = append(diffs, dirMtimeDiff{
+				Path:            p,
+				Status:          "drifted",
+				SnapshotMtimeNs: want,
+				CurrentMtimeNs:  got,
+				DeltaMs:         (got - want) / 1_000_000,
+			})
+		}
+	}
+	files, err := os.ReadDir(config.SDRootDir)
+	if err == nil {
+		for _, f := range files {
+			if !f.IsDir() || !strings.HasPrefix(f.Name(), "_") {
+				continue
+			}
+			sub := filepath.Join(config.SDRootDir, f.Name())
+			if _, ok := snapshot[sub]; ok {
+				continue
+			}
+			info, statErr := os.Stat(sub)
+			if statErr != nil {
+				continue
+			}
+			diffs = append(diffs, dirMtimeDiff{
+				Path:           sub,
+				Status:         "added",
+				CurrentMtimeNs: info.ModTime().UnixNano(),
+			})
+		}
+	}
+	return diffs
 }
 
 // dirMtimesMatch reports whether the live filesystem state matches the
@@ -167,7 +328,9 @@ func loadPersistedRBFCache(path string) (*persistedRBFCache, bool, error) {
 // fsynced, so a hard power-off between rename and the next sync can lose
 // the file. Recovery is automatic: a missing or truncated file falls back
 // to a scan on the next boot.
-func writePersistedRBFCache(path string, files []RBFInfo, dirMtimes map[string]int64) error {
+func writePersistedRBFCache(
+	path string, files []RBFInfo, dirMtimes map[string]int64, rootRBFs []string,
+) error {
 	if path == "" {
 		return nil
 	}
@@ -187,6 +350,7 @@ func writePersistedRBFCache(path string, files []RBFInfo, dirMtimes map[string]i
 		Version:   rbfCacheFileVersion,
 		Files:     files,
 		DirMtimes: dirMtimes,
+		RootRBFs:  rootRBFs,
 	}
 	if encErr := gob.NewEncoder(tmp).Encode(&payload); encErr != nil {
 		_ = tmp.Close()
