@@ -26,6 +26,7 @@ package idle
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,13 @@ import (
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
+
+// ErrMaxWaitElapsed is returned by WaitForIdle when the maxWait hard cap
+// expired before the quiet window was satisfied. Callers that want to run
+// the task anyway (the typical case for Schedule) should treat this as a
+// success-equivalent signal and proceed; callers that want to bail can
+// check errors.Is(err, ErrMaxWaitElapsed).
+var ErrMaxWaitElapsed = errors.New("idle scheduler: max wait elapsed before idle")
 
 // Scheduler tracks in-flight API requests and lets background work wait
 // until the system has been idle for a configurable quiet window. Safe
@@ -99,8 +107,9 @@ func (s *Scheduler) InFlight() int64 {
 
 // WaitForIdle blocks until the in-flight counter is zero AND the time
 // since the last request ended exceeds quietWindow, OR maxWait elapses,
-// OR ctx is cancelled. Returns ctx.Err() on context cancellation, nil
-// otherwise (including the maxWait timeout — that's a normal exit).
+// OR ctx is cancelled. Returns ctx.Err() on context cancellation,
+// ErrMaxWaitElapsed when the hard cap expires before the quiet window is
+// satisfied, and nil when the idle window is achieved.
 func (s *Scheduler) WaitForIdle(ctx context.Context, quietWindow, maxWait time.Duration) error {
 	deadline := s.clock.Now().Add(maxWait)
 	for {
@@ -109,7 +118,7 @@ func (s *Scheduler) WaitForIdle(ctx context.Context, quietWindow, maxWait time.D
 		}
 		now := s.clock.Now()
 		if !now.Before(deadline) {
-			return nil
+			return ErrMaxWaitElapsed
 		}
 
 		// Snapshot wakeCh BEFORE reading the predicate. If RequestEnded
@@ -174,18 +183,26 @@ func (s *Scheduler) Schedule(
 	go func() {
 		defer s.tasks.Done()
 		start := s.clock.Now()
-		if err := s.WaitForIdle(ctx, quietWindow, maxWait); err != nil {
+		err := s.WaitForIdle(ctx, quietWindow, maxWait)
+		switch {
+		case errors.Is(err, ErrMaxWaitElapsed):
+			log.Debug().
+				Str("task", name).
+				Dur("waited", s.clock.Since(start)).
+				Msg("idle scheduler: max wait elapsed, running task anyway")
+		case err != nil:
 			log.Debug().
 				Err(err).
 				Str("task", name).
 				Dur("waited", s.clock.Since(start)).
 				Msg("idle scheduler: context cancelled before task ran")
 			return
+		default:
+			log.Debug().
+				Str("task", name).
+				Dur("waited", s.clock.Since(start)).
+				Msg("idle scheduler: running task")
 		}
-		log.Debug().
-			Str("task", name).
-			Dur("waited", s.clock.Since(start)).
-			Msg("idle scheduler: running task")
 		task(ctx)
 	}()
 }

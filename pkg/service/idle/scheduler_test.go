@@ -84,6 +84,42 @@ func TestScheduler_WaitForIdle_FiresAfterQuietWindow(t *testing.T) {
 	}
 }
 
+func TestScheduler_WaitForIdle_DoesNotFireBeforeQuietWindow(t *testing.T) {
+	t.Parallel()
+	fc := clockwork.NewFakeClock()
+	s := NewWithClock(fc)
+	ctx := context.Background()
+
+	s.RequestStarted()
+	s.RequestEnded()
+
+	errCh := runWaitForIdle(ctx, s, 80*time.Millisecond, 5*time.Second)
+
+	// Advance just under the quiet window. The predicate must not trip and
+	// WaitForIdle must keep waiting.
+	require.NoError(t, fc.BlockUntilContext(ctx, 1))
+	fc.Advance(79 * time.Millisecond)
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("WaitForIdle returned early after %dms (under %dms quiet window): err=%v",
+			79, 80, err)
+	case <-time.After(50 * time.Millisecond):
+		// Expected: still waiting.
+	}
+
+	// Now push past the quiet window — it should fire.
+	require.NoError(t, fc.BlockUntilContext(ctx, 1))
+	fc.Advance(5 * time.Millisecond)
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForIdle did not return after fully advancing past quiet window")
+	}
+}
+
 func TestScheduler_WaitForIdle_MaxWaitCap(t *testing.T) {
 	t.Parallel()
 	fc := clockwork.NewFakeClock()
@@ -103,7 +139,8 @@ func TestScheduler_WaitForIdle_MaxWaitCap(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		require.NoError(t, err, "maxWait timeout is a normal exit, not an error")
+		require.ErrorIs(t, err, ErrMaxWaitElapsed,
+			"maxWait timeout should return ErrMaxWaitElapsed sentinel")
 	case <-time.After(2 * time.Second):
 		t.Fatal("WaitForIdle did not return after advancing past maxWait")
 	}
