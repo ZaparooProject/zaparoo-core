@@ -22,9 +22,12 @@ package database
 import (
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -51,7 +54,32 @@ func (*gooseZerologAdapter) Fatalf(format string, v ...any) {
 // MigrateUp provides thread-safe database migration using goose.
 // It locks access to goose's global state to prevent race conditions
 // between multiple databases setting their migration filesystems.
-func MigrateUp(db *sql.DB, migrationFiles embed.FS, migrationDir string) error {
+//
+// dbPath and sidecarPath enable a fast path that skips goose's metadata
+// queries (which on a cold SQLite file can cost hundreds of milliseconds)
+// when a previously-written sidecar reports the live DB file is already at
+// the latest embedded migration version. Pass both as empty strings to
+// disable the sidecar fast path (e.g. in tests against in-memory DBs).
+func MigrateUp(
+	db *sql.DB,
+	migrationFiles embed.FS,
+	migrationDir, dbPath, sidecarPath string,
+) error {
+	if dbPath != "" && sidecarPath != "" {
+		latestStart := time.Now()
+		latest, latestErr := latestEmbeddedVersion(migrationFiles, migrationDir)
+		log.Debug().Int64("duration_ms", time.Since(latestStart).Milliseconds()).
+			Int64("latest", latest).
+			Msg("latestEmbeddedVersion finished (fast path)")
+		if latestErr == nil && latest > 0 {
+			if v, ok := loadSchemaVersionSidecar(sidecarPath, dbPath); ok && v == latest {
+				log.Debug().Int64("version", v).Str("path", sidecarPath).
+					Msg("schema version sidecar match, skipping goose")
+				return nil
+			}
+		}
+	}
+
 	log.Debug().Msg("waiting for migration mutex")
 	migrationMutex.Lock()
 	log.Debug().Msg("migration mutex acquired")
@@ -92,6 +120,100 @@ func MigrateUp(db *sql.DB, migrationFiles embed.FS, migrationDir string) error {
 	log.Debug().Int64("duration_ms", time.Since(upStart).Milliseconds()).
 		Msg("goose up migrations finished")
 
+	if dbPath != "" && sidecarPath != "" {
+		latest, latestErr := latestEmbeddedVersion(migrationFiles, migrationDir)
+		if latestErr == nil && latest > 0 {
+			if writeErr := writeSchemaVersionSidecar(sidecarPath, dbPath, latest); writeErr != nil {
+				log.Warn().Err(writeErr).Str("path", sidecarPath).
+					Msg("failed to write schema version sidecar")
+			}
+		}
+	}
+
+	return nil
+}
+
+// schemaVersionSidecar is the on-disk record of the last successfully
+// applied migration version. The DB file mtime+size act as a tamper check:
+// any change to the live DB file (manual goose run, restored backup,
+// swapped file) invalidates the sidecar and forces a full goose check.
+type schemaVersionSidecar struct {
+	SchemaVersion int64 `json:"schemaVersion"`
+	DBMtimeUnixNs int64 `json:"dbMtimeUnixNs"`
+	DBSizeBytes   int64 `json:"dbSizeBytes"`
+}
+
+// loadSchemaVersionSidecar returns the recorded schema version when the
+// sidecar exists and the live DB file's mtime and size match the values
+// captured at write time. Any deviation is treated as "no sidecar" so the
+// caller falls back to the full goose path.
+func loadSchemaVersionSidecar(sidecarPath, dbPath string) (int64, bool) {
+	data, err := os.ReadFile(sidecarPath) //nolint:gosec // path is derived from the DB path
+	if err != nil {
+		return 0, false
+	}
+	var s schemaVersionSidecar
+	if jsonErr := json.Unmarshal(data, &s); jsonErr != nil {
+		log.Warn().Err(jsonErr).Str("path", sidecarPath).
+			Msg("schema version sidecar malformed, ignoring")
+		return 0, false
+	}
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		return 0, false
+	}
+	if info.ModTime().UnixNano() != s.DBMtimeUnixNs || info.Size() != s.DBSizeBytes {
+		return 0, false
+	}
+	return s.SchemaVersion, true
+}
+
+// writeSchemaVersionSidecar persists the sidecar atomically (temp file +
+// rename) after a successful goose.Up. The DB file's mtime and size are
+// captured *after* goose.Up runs, so a no-op migration still produces a
+// matching sidecar on the next boot.
+func writeSchemaVersionSidecar(sidecarPath, dbPath string, version int64) error {
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		return fmt.Errorf("stat db file: %w", err)
+	}
+	payload := schemaVersionSidecar{
+		SchemaVersion: version,
+		DBMtimeUnixNs: info.ModTime().UnixNano(),
+		DBSizeBytes:   info.Size(),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal sidecar: %w", err)
+	}
+	dir := filepath.Dir(sidecarPath)
+	if mkErr := os.MkdirAll(dir, 0o750); mkErr != nil {
+		return fmt.Errorf("create sidecar dir: %w", mkErr)
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(sidecarPath)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create sidecar temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	if _, writeErr := tmp.Write(data); writeErr != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("write sidecar temp file: %w", writeErr)
+	}
+	if syncErr := tmp.Sync(); syncErr != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("sync sidecar temp file: %w", syncErr)
+	}
+	if closeErr := tmp.Close(); closeErr != nil {
+		cleanup()
+		return fmt.Errorf("close sidecar temp file: %w", closeErr)
+	}
+	if renameErr := os.Rename(tmpPath, sidecarPath); renameErr != nil {
+		cleanup()
+		return fmt.Errorf("rename sidecar: %w", renameErr)
+	}
 	return nil
 }
 

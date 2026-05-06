@@ -655,14 +655,14 @@ func (db *MediaDB) Allocate() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlAllocate(db.sql)
+	return sqlAllocate(db.sql, db.dbPath)
 }
 
 func (db *MediaDB) MigrateUp() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlMigrateUp(db.sql)
+	return sqlMigrateUp(db.sql, db.dbPath)
 }
 
 func (db *MediaDB) Vacuum() error {
