@@ -3,6 +3,7 @@
 package mistex
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
@@ -108,11 +110,13 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 }
 
 func (p *Platform) StartPost(
+	_ context.Context,
 	cfg *config.Instance,
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	db *database.Database,
+	_ *idle.Scheduler,
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia

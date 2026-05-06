@@ -499,6 +499,21 @@ type MediaDBI interface {
 	RebuildSlugSearchCache() error
 	RebuildTagCache() error
 
+	// On-disk persistence for the rebuilt caches. Persist* writes the
+	// current in-memory cache atomically; LoadCached* reads it back at
+	// startup and returns (false, nil) on missing/stale/version-mismatch
+	// so the caller can fall through to a SQL rebuild.
+	PersistTagCache() error
+	LoadCachedTagCache() (bool, error)
+	PersistSlugSearchCache() error
+	LoadCachedSlugSearchCache() (bool, error)
+
+	// IndexGeneration is bumped at the end of every successful indexing
+	// run. Persisted cache files embed the value they were built against
+	// so a stale cache from a previous run is rejected on next load.
+	IndexGeneration() (int64, error)
+	BumpIndexGeneration() (int64, error)
+
 	// Slug resolution cache methods
 	GetCachedSlugResolution(
 		ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,

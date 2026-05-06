@@ -80,7 +80,7 @@ func FuzzProcessRequestObject(f *testing.F) {
 			Context: context.Background(),
 		}
 
-		result := processRequestObject(methodMap, env, msg)
+		result := processRequestObject(methodMap, env, msg, nil)
 
 		// Invalid JSON must always return ParseError with ShouldReply=true
 		if !json.Valid(msg) {
@@ -93,7 +93,7 @@ func FuzzProcessRequestObject(f *testing.F) {
 		}
 
 		// Determinism check
-		result2 := processRequestObject(methodMap, env, msg)
+		result2 := processRequestObject(methodMap, env, msg, nil)
 		if result.ShouldReply != result2.ShouldReply {
 			t.Errorf("non-deterministic ShouldReply for input %q", msg)
 		}

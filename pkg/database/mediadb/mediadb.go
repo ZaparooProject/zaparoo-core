@@ -501,6 +501,8 @@ func (db *MediaDB) GetLastGenerated() (time.Time, error) {
 }
 
 func (db *MediaDB) SetOptimizationStatus(status string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -515,6 +517,8 @@ func (db *MediaDB) GetOptimizationStatus() (string, error) {
 }
 
 func (db *MediaDB) SetOptimizationStep(step string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -529,6 +533,8 @@ func (db *MediaDB) GetOptimizationStep() (string, error) {
 }
 
 func (db *MediaDB) SetIndexingStatus(status string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -545,6 +551,8 @@ func (db *MediaDB) GetIndexingStatus() (string, error) {
 }
 
 func (db *MediaDB) SetLastIndexedSystem(systemID string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -558,7 +566,35 @@ func (db *MediaDB) GetLastIndexedSystem() (string, error) {
 	return sqlGetLastIndexedSystem(db.ctx, db.sql)
 }
 
+// IndexGeneration returns the monotonic counter that's bumped on every
+// successful indexing run. Returns 0 if no indexing has completed yet.
+func (db *MediaDB) IndexGeneration() (int64, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+	if db.sql == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlGetIndexGeneration(db.ctx, db.sql)
+}
+
+// BumpIndexGeneration increments the index generation counter and returns
+// the new value. Not transactional with cache file writes or status flips:
+// crash recovery relies on (a) a generation mismatch causing persisted
+// cache files from a previous run to be rejected at load time, and (b)
+// IndexingStatus remaining "in_progress" until SetIndexingStatus is called,
+// so an interrupted run is resumed (and re-bumped) on the next boot.
+func (db *MediaDB) BumpIndexGeneration() (int64, error) {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlBumpIndexGeneration(db.ctx, db.conn())
+}
+
 func (db *MediaDB) SetIndexingSystems(systemIDs []string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
 	if db.sql == nil {
 		return ErrNullSQL
 	}

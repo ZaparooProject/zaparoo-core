@@ -38,6 +38,7 @@ const (
 	DBConfigIndexingSystems                 = "IndexingSystems"
 	DBConfigBrowseIndexVersion              = "BrowseIndexVersion"
 	DBConfigTemporaryRepairParentDirVersion = "TemporaryRepairParentDirVersion"
+	DBConfigIndexGeneration                 = "IndexGeneration"
 
 	temporaryRepairParentDirVersion = "1"
 )
@@ -180,6 +181,61 @@ func sqlGetLastIndexedSystem(ctx context.Context, db *sql.DB) (string, error) {
 		return "", fmt.Errorf("failed to get last indexed system: %w", err)
 	}
 	return systemID, nil
+}
+
+// sqlGetIndexGeneration reads the monotonic counter that's bumped at the end
+// of every successful indexing run. Persisted on-disk caches (tag cache, slug
+// search cache) embed this value in their header so a stale cache file from
+// a previous run can be detected and rebuilt.
+func sqlGetIndexGeneration(ctx context.Context, db *sql.DB) (int64, error) {
+	var raw string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigIndexGeneration,
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	} else if err != nil {
+		return 0, fmt.Errorf("failed to get index generation: %w", err)
+	}
+	gen, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse index generation: %w", err)
+	}
+	return gen, nil
+}
+
+// sqlBumpIndexGeneration reads the current generation, increments it by
+// one, and writes it back. The read+write pair is a single statement under
+// SQLite's serialized writer, but is not transactional with the cache file
+// writes or status flip that follow it; see BumpIndexGeneration for the
+// crash-recovery contract.
+func sqlBumpIndexGeneration(ctx context.Context, db sqlQueryable) (int64, error) {
+	var raw string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigIndexGeneration,
+	).Scan(&raw)
+	current := int64(0)
+	if err == nil {
+		parsed, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil {
+			return 0, fmt.Errorf("failed to parse index generation: %w", parseErr)
+		}
+		current = parsed
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("failed to read index generation: %w", err)
+	}
+	next := current + 1
+	_, err = db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigIndexGeneration,
+		strconv.FormatInt(next, 10),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to write index generation: %w", err)
+	}
+	return next, nil
 }
 
 func sqlSetIndexingSystems(ctx context.Context, db sqlQueryable, systemIDs []string) error {

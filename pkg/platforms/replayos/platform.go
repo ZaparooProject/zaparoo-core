@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/jonboulle/clockwork"
@@ -141,11 +142,13 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 }
 
 func (p *Platform) StartPost(
+	_ context.Context,
 	_ *config.Instance,
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	_ *database.Database,
+	_ *idle.Scheduler,
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia

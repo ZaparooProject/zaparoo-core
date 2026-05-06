@@ -328,6 +328,37 @@ func NewMethodMap() *MethodMap {
 	return &m
 }
 
+// RequestTracker is implemented by anything that wants to know when an API
+// request starts and ends. The idle scheduler in pkg/service/idle satisfies
+// it; tests can pass nil or a fake. Defined here (not in pkg/service/idle)
+// so the api package doesn't need to import idle.
+type RequestTracker interface {
+	RequestStarted()
+	RequestEnded()
+}
+
+// newIdleTrackMiddleware returns chi middleware that bumps tracker's
+// in-flight counter for the duration of an HTTP request. Apply this to
+// short-lived HTTP entry points (pairing, REST run) that don't reach
+// handleRequest, so background work scheduled via the idle scheduler
+// waits for them to finish. NOT applied to long-lived connections (SSE)
+// or WebSocket upgrades — SSE would pin the counter forever and WS
+// messages are tracked individually inside handleRequest.
+//
+// A nil tracker yields a pass-through middleware so callers don't need to
+// nil-check at every Use site.
+func newIdleTrackMiddleware(tracker RequestTracker) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if tracker != nil {
+				tracker.RequestStarted()
+				defer tracker.RequestEnded()
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // handleRequest validates a client request and forwards it to the
 // appropriate method handler. Returns the method's result object.
 //
@@ -336,7 +367,12 @@ func handleRequest(
 	methodMap *MethodMap,
 	env requests.RequestEnv,
 	req models.RequestObject,
+	tracker RequestTracker,
 ) (any, *models.ErrorObject) {
+	if tracker != nil {
+		tracker.RequestStarted()
+		defer tracker.RequestEnded()
+	}
 	logSafeRequest(&req)
 
 	fn, ok := methodMap.GetMethod(req.Method)
@@ -806,6 +842,7 @@ func processRequestObject(
 	methodMap *MethodMap,
 	env requests.RequestEnv, //nolint:gocritic // single-use parameter in API handler
 	msg []byte,
+	tracker RequestTracker,
 ) requestResult {
 	if !json.Valid(msg) {
 		log.Warn().Msg("request payload is not valid JSON")
@@ -830,7 +867,7 @@ func processRequestObject(
 		}
 
 		// ID is present (could be null or valid value) - this is a request that needs a response
-		resp, rpcError := handleRequest(methodMap, env, req)
+		resp, rpcError := handleRequest(methodMap, env, req, tracker)
 		if rpcError != nil {
 			return requestResult{ID: req.ID, Error: rpcError, ShouldReply: true}
 		}
@@ -884,6 +921,7 @@ func handleWSMessage(
 	encGateway *apimiddleware.EncryptionGateway,
 	lastSeenTracker *apimiddleware.LastSeenTracker,
 	scrapers map[string]scraper.Scraper,
+	tracker RequestTracker,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
 		defer func() {
@@ -975,7 +1013,7 @@ func handleWSMessage(
 			ClientID:      session.Request.RemoteAddr,
 		}
 
-		result := processRequestObject(methodMap, env, plaintext)
+		result := processRequestObject(methodMap, env, plaintext, tracker)
 		if !result.ShouldReply {
 			// Notifications and incoming responses don't get replies
 			return
@@ -1182,6 +1220,7 @@ func handlePostRequest(
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
 	scrapers map[string]scraper.Scraper,
+	tracker RequestTracker,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -1234,7 +1273,7 @@ func handlePostRequest(
 			ClientID:      r.RemoteAddr,
 		}
 
-		result := processRequestObject(methodMap, env, body)
+		result := processRequestObject(methodMap, env, body, tracker)
 		if !result.ShouldReply {
 			// Notifications and incoming responses don't get replies
 			w.WriteHeader(http.StatusNoContent)
@@ -1370,10 +1409,11 @@ func Start(
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	tracker RequestTracker,
 ) error {
 	return StartWithReady(
 		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager,
-		notifBroker, mdnsHostname, player, indexPauser, scrapePauser, nil,
+		notifBroker, mdnsHostname, player, indexPauser, scrapePauser, tracker, nil,
 	)
 }
 
@@ -1393,6 +1433,7 @@ func StartWithReady(
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	tracker RequestTracker,
 	ready chan<- error,
 ) error {
 	notifyReady := func(err error) {
@@ -1582,11 +1623,13 @@ func StartWithReady(
 	// IP, and provides defense in depth if pairingRateLimiter is ever
 	// misconfigured.
 	pairingRateMiddleware := apimiddleware.HTTPRateLimitMiddleware(pairingRateLimiter)
+	idleMiddleware := newIdleTrackMiddleware(tracker)
 	r.Group(func(r chi.Router) {
 		r.Use(apiRateLimitMiddleware)
 		r.Use(pairingRateMiddleware)
 		r.Use(middleware.NoCache)
 		r.Use(middleware.Timeout(config.APIRequestTimeout))
+		r.Use(idleMiddleware)
 		r.Post("/api/pair/start", pairingMgr.HandlePairStart())
 		r.Post("/api/pair/finish", pairingMgr.HandlePairFinish())
 	})
@@ -1652,7 +1695,7 @@ func StartWithReady(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
 			db, limitsManager, player,
-			indexPauser, scrapePauser, scrapers,
+			indexPauser, scrapePauser, scrapers, tracker,
 		)
 		r.Post("/api", postHandler)
 		r.Post("/api/v0", postHandler)
@@ -1668,6 +1711,7 @@ func StartWithReady(
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
 		r.Use(middleware.Timeout(config.APIRequestTimeout))
+		r.Use(idleMiddleware)
 
 		runHandler := methods.HandleRunRest(cfg, st, inTokenQueue)
 		r.Get("/l/*", runHandler) // DEPRECATED
@@ -1694,7 +1738,7 @@ func StartWithReady(
 		handleWSMessage(
 			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
 			db, limitsManager, player, indexPauser, scrapePauser, encGateway,
-			lastSeenTracker, scrapers,
+			lastSeenTracker, scrapers, tracker,
 		),
 	))
 

@@ -1273,6 +1273,23 @@ func NewNamesIndex(
 		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
 	}
 
+	// Bump the index generation counter so persisted cache files written
+	// below carry the new value. Boot-time loads compare this against the
+	// DB to detect stale cache files from a previous run.
+	if _, bumpErr := db.BumpIndexGeneration(); bumpErr != nil {
+		log.Error().Err(bumpErr).Msg("failed to bump index generation")
+	}
+
+	// Persist the rebuilt in-memory caches to disk so a subsequent cold
+	// boot can skip the SQL rebuild path. Best-effort: a write failure
+	// just means next boot pays the rebuild cost, no correctness impact.
+	if persistErr := db.PersistTagCache(); persistErr != nil {
+		log.Error().Err(persistErr).Msg("failed to persist tag cache to disk")
+	}
+	if persistErr := db.PersistSlugSearchCache(); persistErr != nil {
+		log.Error().Err(persistErr).Msg("failed to persist slug search cache to disk")
+	}
+
 	// Mark indexing as completed and clear indexing metadata
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {
 		log.Error().Err(setErr).Msg("failed to set indexing status to completed")

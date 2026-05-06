@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -227,11 +228,13 @@ func configureTLSRootFallback() {
 }
 
 func (p *Platform) StartPost(
+	ctx context.Context,
 	cfg *config.Instance,
 	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	db *database.Database,
+	scheduler *idle.Scheduler,
 ) error {
 	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia
@@ -251,9 +254,12 @@ func (p *Platform) StartPost(
 	p.tracker = tr
 	p.stopTracker = stopTr
 
-	// attempt arcadedb update
-	go func() {
-		haveInternet := helpers.WaitForInternet(30)
+	// Defer the arcade DB update to the idle scheduler so it doesn't
+	// compete with the launcher's first request for the network or the
+	// single ARM core. Falls back to running it inline if no scheduler
+	// is supplied (e.g. tests).
+	arcadeDBTask := func(ctx context.Context) {
+		haveInternet := helpers.WaitForInternetContext(ctx, 30)
 		if !haveInternet {
 			log.Warn().Msg("no internet connection, skipping network tasks")
 			return
@@ -277,7 +283,16 @@ func (p *Platform) StartPost(
 		} else {
 			log.Info().Msgf("arcade database has %d entries", len(m))
 		}
-	}()
+	}
+	if scheduler != nil {
+		scheduler.Schedule(
+			ctx, "arcade-db-update",
+			5*time.Second, 300*time.Second,
+			arcadeDBTask,
+		)
+	} else {
+		go arcadeDBTask(ctx)
+	}
 
 	return nil
 }

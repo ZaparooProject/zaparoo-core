@@ -27,6 +27,7 @@ import (
 	"io/fs"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/pressly/goose/v3"
@@ -67,20 +68,29 @@ func MigrateUp(db *sql.DB, migrationFiles embed.FS, migrationDir string) error {
 	goose.SetBaseFS(migrationFiles)
 
 	log.Debug().Msg("setting goose dialect to sqlite")
+	dialectStart := time.Now()
 	if err := goose.SetDialect("sqlite"); err != nil {
 		return fmt.Errorf("error setting goose dialect: %w", err)
 	}
+	log.Debug().Int64("duration_ms", time.Since(dialectStart).Milliseconds()).
+		Msg("goose dialect set")
 
 	// Check if the database schema is ahead of this binary. This happens
 	// when switching from a newer binary (e.g. beta) to an older one.
+	checkStart := time.Now()
 	if err := CheckSchemaVersion(db, migrationFiles, migrationDir); err != nil {
 		return err
 	}
+	log.Debug().Int64("duration_ms", time.Since(checkStart).Milliseconds()).
+		Msg("schema version checked")
 
 	log.Debug().Str("migration_dir", migrationDir).Msg("running goose up migrations")
+	upStart := time.Now()
 	if err := goose.Up(db, migrationDir); err != nil {
 		return fmt.Errorf("error running migrations up: %w", err)
 	}
+	log.Debug().Int64("duration_ms", time.Since(upStart).Milliseconds()).
+		Msg("goose up migrations finished")
 
 	return nil
 }
@@ -95,7 +105,11 @@ var ErrSchemaAhead = errors.New("database schema is newer than this binary suppo
 // if the database is ahead, preventing the older binary from running against
 // an incompatible schema.
 func CheckSchemaVersion(db *sql.DB, migrationFiles embed.FS, migrationDir string) error {
+	getVersionStart := time.Now()
 	dbVersion, err := goose.GetDBVersion(db)
+	log.Debug().Int64("duration_ms", time.Since(getVersionStart).Milliseconds()).
+		Int64("db_version", dbVersion).
+		Msg("goose.GetDBVersion finished")
 	if err != nil {
 		return fmt.Errorf("checking database schema version: %w", err)
 	}
@@ -103,7 +117,11 @@ func CheckSchemaVersion(db *sql.DB, migrationFiles embed.FS, migrationDir string
 		return nil
 	}
 
+	latestStart := time.Now()
 	latest, err := latestEmbeddedVersion(migrationFiles, migrationDir)
+	log.Debug().Int64("duration_ms", time.Since(latestStart).Milliseconds()).
+		Int64("latest", latest).
+		Msg("latestEmbeddedVersion finished")
 	if err != nil {
 		return fmt.Errorf("reading embedded migrations: %w", err)
 	}
