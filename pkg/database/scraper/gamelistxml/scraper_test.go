@@ -21,13 +21,13 @@ package gamelistxml
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
@@ -36,6 +36,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// slugFor computes the MediaTitle slug that would be stored for a ROM path
+// using the same parameters as the scraper's LoadRecords call.
+func slugFor(systemID, path string) string {
+	return mediascanner.GetPathFragments(mediascanner.PathFragmentParams{
+		SystemID: systemID,
+		Path:     path,
+		NoExt:    true,
+	}).Slug
+}
 
 // --- cleanField ---
 
@@ -251,6 +261,45 @@ func TestMimeFromExt_Unknown(t *testing.T) {
 
 // --- LoadRecords ---
 
+// TestLoadRecords_SlugMatch verifies that a gamelist entry whose slug matches a
+// key in titlesBySlug produces a GamelistRecord with the correct DB IDs.
+func TestLoadRecords_SlugMatch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "media", "image"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./mario.nes</path><name>Mario</name></game>
+  <game><path>./zelda.nes</path><name>Zelda</name></game>
+</gameList>`), 0o600))
+
+	marioSlug := slugFor("nes", filepath.Join(root, "mario.nes"))
+
+	titlesBySlug := map[string]database.MediaTitle{
+		marioSlug: {DBID: 22, Slug: marioSlug},
+	}
+	mediaByTitleDBID := map[int64]int64{22: 11}
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+		titlesBySlug,
+		mediaByTitleDBID,
+	)
+	require.NoError(t, err)
+	// Only mario has a matching MediaTitle slug; zelda is silently skipped.
+	require.Len(t, records, 1)
+	assert.Equal(t, root, records[0].SystemRootPath)
+	assert.Equal(t, "./mario.nes", records[0].Game.Path)
+	assert.Equal(t, "Mario", records[0].Game.Name)
+	assert.Equal(t, int64(11), records[0].MatchedMediaDBID)
+	assert.Equal(t, int64(22), records[0].MatchedTitleDBID)
+	assert.Equal(t, filepath.Join(root, "media", "image"), records[0].AvailableMediaDirs["image"])
+}
+
+// TestLoadRecords_SkipsMissingAndMalformedGameLists verifies that ROM roots
+// without a gamelist.xml and roots with a malformed file are silently skipped.
 func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
 	t.Parallel()
 
@@ -262,41 +311,71 @@ func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(malformedRoot, "gamelist.xml"), []byte(`<gameList><game>`), 0o600))
 
 	validRoot := filepath.Join(t.TempDir(), "valid")
-	require.NoError(t, os.MkdirAll(filepath.Join(validRoot, "media", "image"), 0o750))
+	require.NoError(t, os.MkdirAll(validRoot, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(validRoot, "gamelist.xml"), []byte(`
 <gameList>
   <game><path>./mario.nes</path><name>Mario</name></game>
-  <game><path>./zelda.nes</path><name>Zelda</name></game>
 </gameList>`), 0o600))
 
-	db := helpers.NewMockMediaDBI()
-	db.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{
-		{
-			Path:           filepath.ToSlash(filepath.Join(validRoot, "MARIO.nes")),
-			SystemID:       "nes",
-			DBID:           11,
-			MediaTitleDBID: 22,
-		},
-	}, nil).Once()
+	marioSlug := slugFor("nes", filepath.Join(validRoot, "mario.nes"))
+	titlesBySlug := map[string]database.MediaTitle{
+		marioSlug: {DBID: 5, Slug: marioSlug},
+	}
+	mediaByTitleDBID := map[int64]int64{5: 3}
 
-	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
-		ID:       "nes",
-		ROMPaths: []string{missingRoot, malformedRoot, validRoot},
-	})
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{
+			ID:       "nes",
+			ROMPaths: []string{missingRoot, malformedRoot, validRoot},
+		},
+		titlesBySlug,
+		mediaByTitleDBID,
+	)
 	require.NoError(t, err)
-	// Only mario has an indexed media record; zelda is silently skipped.
 	require.Len(t, records, 1)
-	assert.Equal(t, validRoot, records[0].SystemRootPath)
-	assert.Equal(t, "./mario.nes", records[0].Game.Path)
-	assert.Equal(t, "Mario", records[0].Game.Name)
-	assert.Equal(t, filepath.ToSlash(filepath.Join(validRoot, "mario.nes")), records[0].MatchedPath)
-	assert.Equal(t, int64(11), records[0].MatchedMediaDBID)
-	assert.Equal(t, int64(22), records[0].MatchedTitleDBID)
-	assert.Equal(t, filepath.Join(validRoot, "media", "image"), records[0].AvailableMediaDirs["image"])
-	db.AssertExpectations(t)
+	assert.Equal(t, int64(3), records[0].MatchedMediaDBID)
+	assert.Equal(t, int64(5), records[0].MatchedTitleDBID)
 }
 
-func TestLoadRecords_ReturnsMediaPreloadError(t *testing.T) {
+// TestLoadRecords_FirstWins verifies that when two gamelist roots contain an
+// entry with the same slug, only the first is recorded.
+func TestLoadRecords_FirstWins(t *testing.T) {
+	t.Parallel()
+
+	root1 := t.TempDir()
+	root2 := t.TempDir()
+
+	writeGamelist := func(dir, name string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./game.nes</path><name>`+name+`</name></game>
+</gameList>`), 0o600))
+	}
+	writeGamelist(root1, "Game A")
+	writeGamelist(root2, "Game B")
+
+	slug := slugFor("nes", filepath.Join(root1, "game.nes"))
+	titlesBySlug := map[string]database.MediaTitle{
+		slug: {DBID: 1, Slug: slug},
+	}
+	mediaByTitleDBID := map[int64]int64{1: 10}
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root1, root2}},
+		titlesBySlug,
+		mediaByTitleDBID,
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1, "second root's duplicate slug must be skipped")
+	assert.Equal(t, "Game A", records[0].Game.Name, "first root wins")
+}
+
+// TestLoadRecords_NoMediaForTitle verifies that a slug match with no
+// corresponding Media row yields MatchedMediaDBID = 0. The scrape loop will
+// skip such records via its zero-ID guard.
+func TestLoadRecords_NoMediaForTitle(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -305,26 +384,80 @@ func TestLoadRecords_ReturnsMediaPreloadError(t *testing.T) {
   <game><path>./mario.nes</path><name>Mario</name></game>
 </gameList>`), 0o600))
 
-	db := helpers.NewMockMediaDBI()
-	preloadErr := errors.New("media preload failed")
-	db.On("GetMediaBySystemID", "nes").Return(nil, preloadErr).Once()
+	slug := slugFor("nes", filepath.Join(root, "mario.nes"))
+	titlesBySlug := map[string]database.MediaTitle{
+		slug: {DBID: 7, Slug: slug},
+	}
+	// Intentionally omit title DBID 7 from mediaByTitleDBID.
+	mediaByTitleDBID := map[int64]int64{}
 
-	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
-		ID:       "nes",
-		ROMPaths: []string{root},
-	})
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+		titlesBySlug,
+		mediaByTitleDBID,
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, int64(7), records[0].MatchedTitleDBID)
+	assert.Equal(t, int64(0), records[0].MatchedMediaDBID)
+}
 
-	require.Error(t, err)
-	assert.Nil(t, records)
-	require.ErrorContains(t, err, `load indexed media for system "nes"`)
-	require.ErrorIs(t, err, preloadErr)
-	db.AssertExpectations(t)
+// TestLoadRecords_ContextCancellation verifies that a cancelled context causes
+// LoadRecords to return context.Canceled immediately.
+func TestLoadRecords_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./mario.nes</path><name>Mario</name></game>
+</gameList>`), 0o600))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := (&GamelistXMLScraper{}).LoadRecords(
+		ctx,
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+		map[string]database.MediaTitle{},
+		map[int64]int64{},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// TestLoadRecords_PathTraversalSkipped verifies that gamelist entries whose
+// paths escape the system root are silently skipped.
+func TestLoadRecords_PathTraversalSkipped(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>../../etc/passwd</path><name>Traversal</name></game>
+  <game><path>./mario.nes</path><name>Mario</name></game>
+</gameList>`), 0o600))
+
+	slug := slugFor("nes", filepath.Join(root, "mario.nes"))
+	titlesBySlug := map[string]database.MediaTitle{
+		slug: {DBID: 1, Slug: slug},
+	}
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+		titlesBySlug,
+		map[int64]int64{1: 9},
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1, "traversal entry must be dropped; mario must still match")
+	assert.Equal(t, "Mario", records[0].Game.Name)
 }
 
 func TestScrape_DBError(t *testing.T) {
 	t.Parallel()
 
-	dbErr := errors.New("db failed")
+	dbErr := assert.AnError
 	mockDB := helpers.NewMockMediaDBI()
 	mockDB.On("IndexedSystems").Return([]string(nil), dbErr)
 
@@ -371,13 +504,8 @@ func TestMapToDB_FullGame(t *testing.T) {
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
 
-	// Media-level tags
-	assert.Contains(t, result.MediaTags, database.TagInfo{Type: string(tags.TagTypeLang), Tag: "en"})
-	assert.Contains(t, result.MediaTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: "usa"})
-	// players is title-level (Fix 7): assert it is NOT in MediaTags.
-	for _, tag := range result.MediaTags {
-		assert.NotEqual(t, string(tags.TagTypePlayers), tag.Type, "players must not appear in mediaTags")
-	}
+	// Media-level tags: not written by this scraper.
+	assert.Empty(t, result.MediaTags, "gamelistxml scraper writes no media-level tags")
 
 	// Title-level tags
 	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeDeveloper), Tag: "Nintendo"})
@@ -385,7 +513,6 @@ func TestMapToDB_FullGame(t *testing.T) {
 	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeYear), Tag: "1985"})
 	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeRating), Tag: "75"})
 	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeGenre), Tag: "Platform"})
-	// players must be title-level (Fix 7).
 	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypePlayers), Tag: "4"})
 
 	// Title-level properties
@@ -411,38 +538,6 @@ func TestMapToDB_FullGame(t *testing.T) {
 	assert.True(t, foundVideo, "video property missing")
 
 	assert.Empty(t, result.MediaProps, "gamelistxml scraper writes no media-level properties")
-}
-
-func TestMapToDB_MultiLang(t *testing.T) {
-	t.Parallel()
-	rec := GamelistRecord{
-		Game: esapi.Game{Lang: "en, fr, de"},
-	}
-	mediaTags := (&GamelistXMLScraper{}).MapToDB(&rec).MediaTags
-
-	var langs []string
-	for _, tag := range mediaTags {
-		if tag.Type == string(tags.TagTypeLang) {
-			langs = append(langs, tag.Tag)
-		}
-	}
-	assert.ElementsMatch(t, []string{"en", "fr", "de"}, langs)
-}
-
-func TestMapToDB_MultiRegion(t *testing.T) {
-	t.Parallel()
-	rec := GamelistRecord{
-		Game: esapi.Game{Region: "usa,eur"},
-	}
-	mediaTags := (&GamelistXMLScraper{}).MapToDB(&rec).MediaTags
-
-	var regions []string
-	for _, tag := range mediaTags {
-		if tag.Type == string(tags.TagTypeRegion) {
-			regions = append(regions, tag.Tag)
-		}
-	}
-	assert.ElementsMatch(t, []string{"usa", "eur"}, regions)
 }
 
 func TestMapToDB_EmptyGame_NoTags(t *testing.T) {
@@ -772,171 +867,4 @@ func TestMapToDB_FilesystemFallback_NoMediaDir(t *testing.T) {
 	for _, p := range result.TitleProps {
 		assert.NotContains(t, p.TypeTag, "image-", "no image props expected when no media dir and no XML paths")
 	}
-}
-
-// --- buildGameIndexes ---
-
-func TestBuildGameIndexes_ByPath(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	games := []esapi.Game{
-		{Path: "./mario.nes", Name: "Mario"},
-		{Path: "./zelda.nes", Name: "Zelda"},
-	}
-	byPath, _ := buildGameIndexes(games, root)
-	marioKey := normalizeMediaPath(filepath.ToSlash(filepath.Join(root, "mario.nes")))
-	zeldaKey := normalizeMediaPath(filepath.ToSlash(filepath.Join(root, "zelda.nes")))
-	assert.Equal(t, "Mario", byPath[marioKey].game.Name)
-	assert.Equal(t, "Zelda", byPath[zeldaKey].game.Name)
-}
-
-func TestBuildGameIndexes_AbsPathStored(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	games := []esapi.Game{{Path: "./mario.nes"}}
-	byPath, _ := buildGameIndexes(games, root)
-	key := normalizeMediaPath(filepath.ToSlash(filepath.Join(root, "mario.nes")))
-	require.Contains(t, byPath, key)
-	assert.Equal(t, filepath.ToSlash(filepath.Join(root, "mario.nes")), byPath[key].absPath)
-}
-
-func TestBuildGameIndexes_ByFilename_DepthOneOnly(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	games := []esapi.Game{
-		{Path: "./mario.nes"},     // depth 1 — must be in byFilename
-		{Path: "./sub/zelda.nes"}, // depth 2 — must NOT be in byFilename
-	}
-	_, byFilename := buildGameIndexes(games, root)
-	assert.Contains(t, byFilename, "mario.nes", "depth-1 entry must be in byFilename")
-	assert.NotContains(t, byFilename, "zelda.nes", "depth-2 entry must not be in byFilename")
-}
-
-func TestBuildGameIndexes_FirstWinsOnPathConflict(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	games := []esapi.Game{
-		{Path: "./mario.nes", Name: "Mario A"},
-		{Path: "./mario.nes", Name: "Mario B"},
-	}
-	byPath, _ := buildGameIndexes(games, root)
-	key := normalizeMediaPath(filepath.ToSlash(filepath.Join(root, "mario.nes")))
-	require.Contains(t, byPath, key)
-	assert.Equal(t, "Mario A", byPath[key].game.Name, "first entry wins on conflict")
-}
-
-func TestBuildGameIndexes_SkipsUnresolvablePaths(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	games := []esapi.Game{
-		{Path: "../../etc/passwd"},
-		{Path: "./mario.nes", Name: "Mario"},
-	}
-	byPath, byFilename := buildGameIndexes(games, root)
-	assert.Len(t, byPath, 1, "unresolvable path must be skipped")
-	assert.Len(t, byFilename, 1)
-}
-
-// --- LoadRecords filename fallback integration ---
-
-func TestLoadRecords_FilenameFallback_MatchesNestedMedia(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
-<gameList>
-  <game><path>./mario.nes</path><name>Mario</name></game>
-</gameList>`), 0o600))
-
-	// Media is indexed at a nested path, not at the root.
-	nestedPath := filepath.ToSlash(filepath.Join(root, "sub", "mario.nes"))
-	db := helpers.NewMockMediaDBI()
-	db.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{
-		{Path: nestedPath, SystemID: "nes", DBID: 9, MediaTitleDBID: 99},
-	}, nil).Once()
-
-	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
-		ID:       "nes",
-		ROMPaths: []string{root},
-	})
-
-	require.NoError(t, err)
-	require.Len(t, records, 1)
-	assert.Equal(t, int64(9), records[0].MatchedMediaDBID,
-		"filename fallback should match nested media when gamelist entry is root-relative")
-	assert.Equal(t, int64(99), records[0].MatchedTitleDBID)
-	db.AssertExpectations(t)
-}
-
-func TestLoadRecords_FilenameFallback_NoMatchAcrossRoots(t *testing.T) {
-	t.Parallel()
-
-	root1 := t.TempDir()
-	root2 := t.TempDir()
-
-	require.NoError(t, os.WriteFile(filepath.Join(root1, "gamelist.xml"), []byte(`
-<gameList>
-  <game><path>./game.nes</path><name>Root1 Game</name></game>
-</gameList>`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(root2, "gamelist.xml"), []byte(`
-<gameList>
-  <game><path>./game.nes</path><name>Root2 Game</name></game>
-</gameList>`), 0o600))
-
-	// Both media entries share the same basename but live under different roots.
-	media1 := filepath.ToSlash(filepath.Join(root1, "sub", "game.nes"))
-	media2 := filepath.ToSlash(filepath.Join(root2, "sub", "game.nes"))
-	db := helpers.NewMockMediaDBI()
-	db.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{
-		{Path: media1, SystemID: "nes", DBID: 1, MediaTitleDBID: 10},
-		{Path: media2, SystemID: "nes", DBID: 2, MediaTitleDBID: 20},
-	}, nil).Once()
-
-	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
-		ID:       "nes",
-		ROMPaths: []string{root1, root2},
-	})
-
-	require.NoError(t, err)
-	require.Len(t, records, 2, "filename fallback must not cross-match between ROM roots")
-
-	byDBID := make(map[int64]*GamelistRecord, len(records))
-	for _, r := range records {
-		byDBID[r.MatchedMediaDBID] = r
-	}
-	require.Contains(t, byDBID, int64(1))
-	require.Contains(t, byDBID, int64(2))
-	assert.Equal(t, "Root1 Game", byDBID[1].Game.Name,
-		"media under root1 must match root1's gamelist entry")
-	assert.Equal(t, "Root2 Game", byDBID[2].Game.Name,
-		"media under root2 must match root2's gamelist entry")
-	db.AssertExpectations(t)
-}
-
-func TestLoadRecords_FilenameFallback_SubdirGamelistNoMatch(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	// Gamelist has a subdir path — fallback must NOT fire.
-	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
-<gameList>
-  <game><path>./sub/mario.nes</path><name>Mario</name></game>
-</gameList>`), 0o600))
-
-	// Media is only indexed at root, so direct match also fails.
-	rootPath := filepath.ToSlash(filepath.Join(root, "mario.nes"))
-	db := helpers.NewMockMediaDBI()
-	db.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{
-		{Path: rootPath, SystemID: "nes", DBID: 5, MediaTitleDBID: 55},
-	}, nil).Once()
-
-	records, err := (&GamelistXMLScraper{db: db}).LoadRecords(context.Background(), scraper.ScrapeSystem{
-		ID:       "nes",
-		ROMPaths: []string{root},
-	})
-
-	require.NoError(t, err)
-	require.Empty(t, records,
-		"filename fallback must not fire when gamelist path has a subdirectory")
-	db.AssertExpectations(t)
 }

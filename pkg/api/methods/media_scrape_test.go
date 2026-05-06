@@ -489,3 +489,124 @@ func TestHandleMediaScrapeResume_ResumesPausedScrape(t *testing.T) {
 	assert.True(t, payload.Scraping)
 	assert.False(t, payload.Paused)
 }
+
+func TestHandleMediaScrapeResume_NilPauser(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	result, err := HandleMediaScrapeResume(requests.RequestEnv{Context: context.Background()})
+	require.NoError(t, err)
+	resp, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "Media scraping is not paused", resp["message"])
+}
+
+func TestHandleMediaScrapeResume_NotPaused(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	pauser := syncutil.NewPauser()
+	result, err := HandleMediaScrapeResume(requests.RequestEnv{
+		Context:      context.Background(),
+		ScrapePauser: pauser,
+	})
+	require.NoError(t, err)
+	resp, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "Media scraping is not paused", resp["message"])
+}
+
+func TestScrapingStatus_ClearIfOwner_MatchingID_Clears(t *testing.T) {
+	t.Parallel()
+	s := &scrapingStatus{}
+	s.startIfNotRunning("my-scraper")
+	s.clearIfOwner("my-scraper")
+	assert.False(t, s.isRunning())
+}
+
+func TestScrapingStatus_ClearIfOwner_MismatchedID_Preserves(t *testing.T) {
+	t.Parallel()
+	s := &scrapingStatus{}
+	s.startIfNotRunning("owner-a")
+	s.clearIfOwner("owner-b")
+	assert.True(t, s.isRunning(), "non-owner clearIfOwner must not clear state")
+	s.clear()
+}
+
+func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "progress-scraper").Return(3, nil)
+
+	progressScraper := platforms.Scraper{
+		ID:   "progress-scraper",
+		Name: "Progress Scraper",
+		Scrape: func(
+			_ context.Context, _ *config.Instance, _ platforms.Platform,
+			_ afero.Fs, _ *database.Database, _ scraper.ScrapeOptions,
+			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
+		) error {
+			go func() {
+				defer close(ch)
+				ch <- scraper.ScrapeUpdate{SystemID: "SNES", Total: 10, Processed: 5, Matched: 4, Skipped: 1}
+				ch <- scraper.ScrapeUpdate{
+					SystemID: "SNES", Total: 10, Processed: 10, Matched: 8, Skipped: 2, Done: true,
+				}
+			}()
+			return nil
+		},
+	}
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
+		"progress-scraper": progressScraper,
+	})
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: pl,
+		State:    st,
+		Database: &database.Database{MediaDB: mockDB},
+		Params:   json.RawMessage(`{"scraperId":"progress-scraper"}`),
+	}
+
+	result, err := HandleMediaScrape(env)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+
+	var gotDone bool
+	var maxProcessed int
+	timeout := time.After(2 * time.Second)
+	for !gotDone {
+		select {
+		case n := <-ns:
+			if n.Method != models.NotificationMediaScraping {
+				continue
+			}
+			var p models.ScrapingStatusResponse
+			require.NoError(t, json.Unmarshal(n.Params, &p))
+			if p.Processed > maxProcessed {
+				maxProcessed = p.Processed
+			}
+			if p.Done {
+				gotDone = true
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for media.scraping done notification")
+		}
+	}
+
+	assert.Equal(t, 10, maxProcessed, "progress updates should reflect actual processed count")
+	require.Eventually(t, func() bool {
+		return !IsScrapingRunning()
+	}, 2*time.Second, 10*time.Millisecond)
+	mockDB.AssertExpectations(t)
+}
