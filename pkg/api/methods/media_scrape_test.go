@@ -83,8 +83,8 @@ func makeScrapeEnv(
 	t.Helper()
 
 	pl := mocks.NewMockPlatform()
-	pl.SetupBasicMock()
 	pl.On("Scrapers", assertmock.Anything).Return(scrapers)
+	pl.SetupBasicMock()
 	st, ns := state.NewState(pl, "test")
 	t.Cleanup(st.StopService)
 	drainNotifications(t, ns)
@@ -202,10 +202,10 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
 
 	pl := mocks.NewMockPlatform()
-	pl.SetupBasicMock()
 	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
 		"test-scraper": emptyPlatformScraper("test-scraper", "Test Scraper"),
 	})
+	pl.SetupBasicMock()
 	st, ns := state.NewState(pl, "test")
 	t.Cleanup(st.StopService)
 

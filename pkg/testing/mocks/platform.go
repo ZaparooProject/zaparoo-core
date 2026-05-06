@@ -358,6 +358,7 @@ func (m *MockPlatform) SetupBasicMock() {
 	m.On("SupportedReaders", mock.AnythingOfType("*config.Instance")).Return([]readers.Reader{})
 	m.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{})
 	m.On("ManagedByPackageManager").Return(false)
+	m.On("Scrapers", mock.AnythingOfType("*config.Instance")).Return(map[string]platforms.Scraper{})
 
 	// Setup common stub functions for UI methods
 	noopFunc := func() error { return nil }

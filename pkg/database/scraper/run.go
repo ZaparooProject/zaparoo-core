@@ -40,10 +40,8 @@ func SentinelTagInfo(scraperID string) database.TagInfo {
 func RunScraper(fn func(chan<- ScrapeUpdate) error) <-chan ScrapeUpdate {
 	ch := make(chan ScrapeUpdate, 32)
 	if err := fn(ch); err != nil {
-		go func() {
-			defer close(ch)
-			ch <- ScrapeUpdate{FatalErr: err, Done: true}
-		}()
+		ch <- ScrapeUpdate{FatalErr: err, Done: true}
+		close(ch)
 	}
 	return ch
 }

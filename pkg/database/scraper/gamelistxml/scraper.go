@@ -360,9 +360,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 
 		records, loadErr := g.LoadRecords(ctx, system)
 		if loadErr != nil {
-			if errors.Is(loadErr, ctx.Err()) {
+			if errors.Is(loadErr, context.Canceled) || errors.Is(loadErr, context.DeadlineExceeded) {
 				ch <- scraper.ScrapeUpdate{
-					Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+					SystemID: system.ID, Done: true, Processed: totalProcessed, Matched: totalMatched,
+					Skipped: totalSkipped,
 				}
 				return
 			}
