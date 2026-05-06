@@ -98,6 +98,12 @@ func snapshotDirMtimesAt(root string) (map[string]int64, error) {
 // snapshotRootRBFs returns the sorted list of `.rbf` filenames placed
 // directly at SD root. Replaces an mtime check on the SD root itself,
 // which was too noisy to be useful.
+//
+// Only direct SD-root files are captured here; RBFs nested under `_*`
+// directories are tracked transitively via snapshotDirMtimes. This matches
+// MiSTer's convention that cores live at SD root or under top-level `_*`
+// folders — a `.rbf` placed inside a brand-new non-`_*` top-level
+// directory would not be detected.
 func snapshotRootRBFs() ([]string, error) {
 	return snapshotRootRBFsAt(config.SDRootDir)
 }

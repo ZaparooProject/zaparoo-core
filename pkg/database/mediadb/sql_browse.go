@@ -753,7 +753,10 @@ func sqlBrowseSystemRootCandidates(
 
 	// Map cache-key path → original input root: BrowseDirs stores paths in
 	// trailing-slash form, so we look up by that key but return results keyed
-	// by the caller's input form.
+	// by the caller's input form. Callers should pre-normalize their roots
+	// (e.g. via filepath.Clean): when two distinct input strings collide on
+	// browseRouteCacheKey (such as "/media/fat" and "/media/fat/"), only the
+	// first form is retained in the result map and the second is dropped.
 	rootByKey := make(map[string]string, len(opts.Roots))
 	rootKeyPlaceholders := make([]string, 0, len(opts.Roots))
 	rootKeyArgs := make([]any, 0, len(opts.Roots))

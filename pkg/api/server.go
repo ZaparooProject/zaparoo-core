@@ -1684,6 +1684,11 @@ func StartWithReady(
 	// localhost by default; remote access requires explicit AllowedIPs.
 	// These transports do not support encryption; the IP allowlist plus
 	// API key auth are the security boundary.
+	//
+	// idleMiddleware is intentionally absent here: POST /api dispatches to
+	// handleRequest per RPC method, which calls tracker.RequestStarted /
+	// RequestEnded itself. Adding the chi-layer middleware would double-count
+	// every batched request body.
 	r.Group(func(r chi.Router) {
 		r.Use(nonWSIPFilter)
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
