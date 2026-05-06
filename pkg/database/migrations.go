@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -72,6 +73,11 @@ func MigrateUp(
 			Int64("latest", latest).
 			Msg("latestEmbeddedVersion finished (fast path)")
 		if latestErr == nil && latest > 0 {
+			// Strict equality is load-bearing: an older binary running against
+			// a DB last migrated by a newer binary sees v > latest, fails this
+			// check, and falls through to CheckSchemaVersion which raises
+			// ErrSchemaAhead. Do not relax to v >= latest without preserving
+			// downgrade detection elsewhere.
 			if v, ok := loadSchemaVersionSidecar(sidecarPath, dbPath); ok && v == latest {
 				log.Debug().Int64("version", v).Str("path", sidecarPath).
 					Msg("schema version sidecar match, skipping goose")
@@ -147,8 +153,19 @@ type schemaVersionSidecar struct {
 // sidecar exists and the live DB file's mtime and size match the values
 // captured at write time. Any deviation is treated as "no sidecar" so the
 // caller falls back to the full goose path.
+// schemaVersionSidecarMaxBytes caps the sidecar read so a malformed or
+// malicious file in the data directory cannot OOM the daemon at boot. The
+// real payload is ~80 bytes; 64 KiB leaves ample headroom while staying far
+// below any plausible memory pressure.
+const schemaVersionSidecarMaxBytes = 64 << 10
+
 func loadSchemaVersionSidecar(sidecarPath, dbPath string) (int64, bool) {
-	data, err := os.ReadFile(sidecarPath) //nolint:gosec // path is derived from the DB path
+	f, err := os.Open(sidecarPath) //nolint:gosec // path is derived from the DB path
+	if err != nil {
+		return 0, false
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, schemaVersionSidecarMaxBytes))
 	if err != nil {
 		return 0, false
 	}
