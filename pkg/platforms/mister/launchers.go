@@ -607,7 +607,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:         systemdefs.System3DO,
 			SystemID:   systemdefs.System3DO,
 			Folders:    []string{"3DO"},
-			Extensions: []string{".iso", ".cue"},
+			Extensions: []string{".iso", ".cue", ".chd"},
 			Launch:     launch(pl, systemdefs.System3DO),
 		},
 		{
