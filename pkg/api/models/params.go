@@ -101,16 +101,16 @@ type ReaderConnection struct {
 	IDSource string `json:"idSource,omitempty"`
 }
 
-// IsEnabled returns whether this connection is enabled.
-// nil (omitted) and true both mean enabled; only explicit false disables.
-func (r ReaderConnection) IsEnabled() bool {
-	return r.Enabled == nil || *r.Enabled
-}
-
 type SystemDefault struct {
 	System     string `json:"system" validate:"required,system"`
 	Launcher   string `json:"launcher,omitempty"`
 	BeforeExit string `json:"beforeExit,omitempty"`
+}
+
+// IsEnabled returns whether this connection is enabled.
+// nil (omitted) and true both mean enabled; only explicit false disables.
+func (r ReaderConnection) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
 }
 
 type UpdateSettingsParams struct {

@@ -44,7 +44,9 @@ func (c *Instance) SystemDefaults() []SystemsDefault {
 func (c *Instance) SetSystemDefaults(defaults []SystemsDefault) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.Systems.Default = defaults
+	owned := make([]SystemsDefault, len(defaults))
+	copy(owned, defaults)
+	c.vals.Systems.Default = owned
 }
 
 func (c *Instance) LookupSystemDefaults(systemID string) (SystemsDefault, bool) {
