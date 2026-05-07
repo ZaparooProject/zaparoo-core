@@ -117,7 +117,11 @@ func logSafeRequest(req *models.RequestObject) {
 	log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received request")
 }
 
-// logSafeResponse logs a response but truncates large content to prevent recursive logging issues
+// logSafeResponse logs a response but redacts large or binary fields. Any
+// response shape that can carry base64-encoded media (image blobs, meta
+// property data, screenshots, log dumps) MUST be matched explicitly here —
+// the default case omits the result body entirely so a forgotten type
+// cannot accidentally dump megabytes of base64 into the debug log.
 func logSafeResponse(result any) {
 	switch resp := result.(type) {
 	case models.LogDownloadResponse:
@@ -140,6 +144,10 @@ func logSafeResponse(result any) {
 			Str("contentType", resp.ContentType).
 			Int("data_len", len(resp.Data)).
 			Msg("sending response")
+	case models.MediaImageBatchResponse:
+		log.Debug().
+			Int("items", len(resp.Items)).
+			Msg("sending response: media.image batch")
 	case models.MediaMetaResponse:
 		log.Debug().
 			Str("system", resp.Media.Title.System.ID).
@@ -147,8 +155,12 @@ func logSafeResponse(result any) {
 			Int("media_properties", len(resp.Media.Properties)).
 			Int("title_properties", len(resp.Media.Title.Properties)).
 			Msg("sending response")
+	case models.MediaMetaBatchResponse:
+		log.Debug().
+			Int("items", len(resp.Items)).
+			Msg("sending response: media.meta batch")
 	default:
-		log.Debug().Interface("result", result).Msg("sending response")
+		log.Debug().Str("type", fmt.Sprintf("%T", result)).Msg("sending response")
 	}
 }
 
@@ -444,7 +456,14 @@ func logWSWriteError(err error, msg string) {
 }
 
 func handleResponse(resp models.ResponseObject) error {
-	log.Debug().Interface("response", resp).Msg("received response")
+	// Avoid logging resp.Result — inbound responses can carry base64 media
+	// blobs (e.g. media.image, media.meta property data) and dumping the
+	// whole map would flood the debug log.
+	ev := log.Debug().Interface("id", resp.ID)
+	if resp.Error != nil {
+		ev = ev.Int("errorCode", resp.Error.Code).Str("errorMessage", resp.Error.Message)
+	}
+	ev.Msg("received response")
 	return nil
 }
 
