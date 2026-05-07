@@ -458,10 +458,20 @@ func logWSWriteError(err error, msg string) {
 func handleResponse(resp models.ResponseObject) error {
 	// Avoid logging resp.Result — inbound responses can carry base64 media
 	// blobs (e.g. media.image, media.meta property data) and dumping the
-	// whole map would flood the debug log.
+	// whole map would flood the debug log. Error messages cross the same
+	// 4 MB WS boundary, so cap them too.
+	const maxErrorMessageLen = 200
 	ev := log.Debug().Interface("id", resp.ID)
 	if resp.Error != nil {
-		ev = ev.Int("errorCode", resp.Error.Code).Str("errorMessage", resp.Error.Message)
+		ev = ev.Int("errorCode", resp.Error.Code)
+		msg := resp.Error.Message
+		if len(msg) > maxErrorMessageLen {
+			ev = ev.Str("errorMessage", msg[:maxErrorMessageLen]).
+				Bool("errorMessageTruncated", true).
+				Int("errorMessageLen", len(msg))
+		} else {
+			ev = ev.Str("errorMessage", msg)
+		}
 	}
 	ev.Msg("received response")
 	return nil
