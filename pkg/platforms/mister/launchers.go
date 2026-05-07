@@ -1170,6 +1170,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemVectrex),
 		},
 		{
+			ID:         systemdefs.SystemVirtualBoy,
+			SystemID:   systemdefs.SystemVirtualBoy,
+			Folders:    []string{"VirtualBoy"},
+			Extensions: []string{".vb"},
+			Launch:     launch(pl, systemdefs.SystemVirtualBoy),
+		},
+		{
 			ID:         systemdefs.SystemWonderSwan,
 			SystemID:   systemdefs.SystemWonderSwan,
 			Folders:    []string{"WonderSwan"},
