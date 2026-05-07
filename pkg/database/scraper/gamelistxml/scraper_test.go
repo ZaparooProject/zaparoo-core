@@ -40,7 +40,7 @@ import (
 // slugFor computes the MediaTitle slug that would be stored for a ROM path
 // using the same parameters as the scraper's LoadRecords call.
 func slugFor(systemID, path string) string {
-	return mediascanner.GetPathFragments(mediascanner.PathFragmentParams{
+	return mediascanner.GetPathFragments(&mediascanner.PathFragmentParams{
 		SystemID: systemID,
 		Path:     path,
 		NoExt:    true,
@@ -298,6 +298,54 @@ func TestLoadRecords_SlugMatch(t *testing.T) {
 	assert.Equal(t, filepath.Join(root, "media", "image"), records[0].AvailableMediaDirs["image"])
 }
 
+// TestLoadRecords_NameDerivedSlugMatch verifies the scraper matches titles
+// whose stored slug derives from a scanner-provided display name rather than
+// the filename. This is a regression test for the fix where the indexer uses
+// ScanResult.Name (e.g. NeoGeo AltName, gamelist.xml <name>) to build the
+// MediaTitle slug, requiring the scraper to also derive its lookup slug from
+// gamelist.xml's <name> rather than the filename.
+func TestLoadRecords_NameDerivedSlugMatch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./mslug.zip</path><name>Metal Slug</name></game>
+</gameList>`), 0o600))
+
+	// Indexer would have stored the slug derived from ProvidedName="Metal Slug",
+	// not from the filename "mslug". Build titlesBySlug accordingly.
+	nameSlug := mediascanner.GetPathFragments(&mediascanner.PathFragmentParams{
+		SystemID:     "NeoGeo",
+		Path:         filepath.Join(root, "mslug.zip"),
+		NoExt:        true,
+		ProvidedName: "Metal Slug",
+	}).Slug
+
+	// Confirm the test setup actually exercises the regression: the
+	// name-derived slug must differ from a filename-derived one.
+	filenameSlug := slugFor("NeoGeo", filepath.Join(root, "mslug.zip"))
+	require.NotEqual(t, filenameSlug, nameSlug,
+		"test precondition: name-derived slug must differ from filename-derived")
+
+	titlesBySlug := map[string]database.MediaTitle{
+		nameSlug: {DBID: 42, Slug: nameSlug, Name: "Metal Slug"},
+	}
+	mediaByTitleDBID := map[int64]int64{42: 7}
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "NeoGeo", ROMPaths: []string{root}},
+		titlesBySlug,
+		mediaByTitleDBID,
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1, "scraper must match the title via name-derived slug")
+	assert.Equal(t, "Metal Slug", records[0].Game.Name)
+	assert.Equal(t, int64(42), records[0].MatchedTitleDBID)
+	assert.Equal(t, int64(7), records[0].MatchedMediaDBID)
+}
+
 // TestLoadRecords_SkipsMissingAndMalformedGameLists verifies that ROM roots
 // without a gamelist.xml and roots with a malformed file are silently skipped.
 func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
@@ -346,14 +394,14 @@ func TestLoadRecords_FirstWins(t *testing.T) {
 	root1 := t.TempDir()
 	root2 := t.TempDir()
 
-	writeGamelist := func(dir, name string) {
+	writeGamelist := func(dir string) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "gamelist.xml"), []byte(`
 <gameList>
-  <game><path>./game.nes</path><name>`+name+`</name></game>
+  <game><path>./game.nes</path><name>Game</name></game>
 </gameList>`), 0o600))
 	}
-	writeGamelist(root1, "Game A")
-	writeGamelist(root2, "Game B")
+	writeGamelist(root1)
+	writeGamelist(root2)
 
 	slug := slugFor("nes", filepath.Join(root1, "game.nes"))
 	titlesBySlug := map[string]database.MediaTitle{
@@ -369,7 +417,7 @@ func TestLoadRecords_FirstWins(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, records, 1, "second root's duplicate slug must be skipped")
-	assert.Equal(t, "Game A", records[0].Game.Name, "first root wins")
+	assert.Equal(t, root1, records[0].SystemRootPath, "first root wins")
 }
 
 // TestLoadRecords_NoMediaForTitle verifies that a slug match with no

@@ -240,11 +240,12 @@ outer:
 				continue
 			}
 
-			pf := mediascanner.GetPathFragments(mediascanner.PathFragmentParams{
-				Config:   g.cfg,
-				Path:     resolved,
-				SystemID: system.ID,
-				NoExt:    true,
+			pf := mediascanner.GetPathFragments(&mediascanner.PathFragmentParams{
+				Config:       g.cfg,
+				Path:         resolved,
+				SystemID:     system.ID,
+				NoExt:        true,
+				ProvidedName: gl.Games[i].Name,
 			})
 
 			title, ok := titlesBySlug[pf.Slug]
