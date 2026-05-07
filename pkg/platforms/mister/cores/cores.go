@@ -933,6 +933,20 @@ var Systems = map[string]Core{
 			// },
 		},
 	},
+	"VirtualBoy": {
+		ID:  "VirtualBoy",
+		RBF: "_Console/VirtualBoy",
+		Slots: []Slot{
+			{
+				Exts: []string{".vb"},
+				Mgl: &MGLParams{
+					Delay:  1,
+					Method: "f",
+					Index:  1,
+				},
+			},
+		},
+	},
 	"WonderSwan": {
 		ID:  "WonderSwan",
 		RBF: "_Console/WonderSwan",
