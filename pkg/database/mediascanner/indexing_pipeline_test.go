@@ -1158,10 +1158,13 @@ func TestGetPathFragments_PreResolvedMediaType(t *testing.T) {
 func TestGetPathFragments_ProvidedName(t *testing.T) {
 	t.Parallel()
 
+	neoGeoPath := string(filepath.Separator) + filepath.Join("media", "fat", "games", "NEOGEO", "mslug.zip")
+	snesPath := string(filepath.Separator) + filepath.Join("games", "snes", "sm64 (USA) (Rev 1).sfc")
+
 	// NeoGeo case: filename "mslug.zip" should be displayed as "Metal Slug"
 	// when the scanner provides the AltName from romsets.xml.
 	withName := GetPathFragments(&PathFragmentParams{
-		Path:         "/media/fat/games/NEOGEO/mslug.zip",
+		Path:         neoGeoPath,
 		SystemID:     "NeoGeo",
 		ProvidedName: "Metal Slug",
 	})
@@ -1170,7 +1173,7 @@ func TestGetPathFragments_ProvidedName(t *testing.T) {
 
 	// Without ProvidedName, the title falls back to filename parsing.
 	withoutName := GetPathFragments(&PathFragmentParams{
-		Path:     "/media/fat/games/NEOGEO/mslug.zip",
+		Path:     neoGeoPath,
 		SystemID: "NeoGeo",
 	})
 	assert.Equal(t, "mslug", withoutName.Title, "filename-derived title without ProvidedName")
@@ -1178,7 +1181,7 @@ func TestGetPathFragments_ProvidedName(t *testing.T) {
 	// ProvidedName overrides title even when the filename has tag-like
 	// content; tags themselves are still extracted from the filename.
 	tagged := GetPathFragments(&PathFragmentParams{
-		Path:         "/games/snes/sm64 (USA) (Rev 1).sfc",
+		Path:         snesPath,
 		SystemID:     "snes",
 		ProvidedName: "Super Mario 64",
 	})

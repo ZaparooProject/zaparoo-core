@@ -1131,8 +1131,9 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 		f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 	}
 
-	if params.ProvidedName != "" {
-		f.Title = params.ProvidedName
+	trimmedName := strings.TrimSpace(params.ProvidedName)
+	if trimmedName != "" {
+		f.Title = trimmedName
 	} else {
 		f.Title = tags.ParseTitleFromFilename(f.FileName, params.StripLeadingNumbers)
 	}
@@ -1158,8 +1159,8 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 	// original title. This ensures Slug is never empty while the search
 	// logic (mediadb.go) falls back to the Name field for these cases.
 	if f.Slug == "" {
-		if params.ProvidedName != "" {
-			f.Slug = strings.ToLower(params.ProvidedName)
+		if trimmedName != "" {
+			f.Slug = strings.ToLower(trimmedName)
 		} else {
 			f.Slug = strings.ToLower(f.FileName)
 		}
