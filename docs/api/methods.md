@@ -1911,6 +1911,7 @@ None.
 | readersScanIgnoreSystems  | string[]                                  | Yes      | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | Yes      | Whether error reporting is enabled.                             |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | Yes      | List of manually configured reader connections.                 |
+| systemDefaults            | [SystemDefault](#system-default-object)[] | Yes      | Per-system overrides for default launcher and exit ZapScript.   |
 
 ##### Reader connection object
 
@@ -1920,6 +1921,14 @@ None.
 | path     | string | Yes      | Path or address for the reader connection.       |
 | idSource | string | No       | Source for the reader ID.                        |
 | enabled  | bool   | No       | Whether the connection is enabled. Defaults to true if omitted. |
+
+##### System default object
+
+| Key        | Type   | Required | Description                                                                                       |
+| :--------- | :----- | :------- | :------------------------------------------------------------------------------------------------ |
+| system     | string | Yes      | System ID this default applies to. Accepts canonical IDs and aliases.                             |
+| launcher   | string | No       | Launcher ID or group name to use for this system. Empty means no override.                        |
+| beforeExit | string | No       | ZapScript to run when a media instance for this system is exiting (before the new launch starts). |
 
 #### Example
 
@@ -1948,7 +1957,13 @@ None.
     "readersScanExitDelay": 0.0,
     "readersScanIgnoreSystems": ["DOS"],
     "errorReporting": true,
-    "readersConnect": []
+    "readersConnect": [],
+    "systemDefaults": [
+      {
+        "system": "Genesis",
+        "launcher": "retroarch"
+      }
+    ]
   }
 }
 ```
@@ -1974,6 +1989,7 @@ An object containing any of the following optional keys:
 | readersScanIgnoreSystems  | string[]                                  | No       | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | No       | Whether error reporting is enabled.                             |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | No       | List of manually configured reader connections.                 |
+| systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). |
 
 #### Result
 
@@ -2721,6 +2737,66 @@ Returns `null` on success.
 ```
 
 ## Launchers
+
+### launchers
+
+List all launchers known to the running service. Suitable for populating a UI launcher picker (for example, when assigning a per-system default via [settings.update](#settingsupdate)).
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key       | Type                                  | Required | Description                  |
+| :-------- | :------------------------------------ | :------- | :--------------------------- |
+| launchers | [Launcher](#launcher-object)[] | Yes      | All cached launchers, sorted by `systemId` then `id`. |
+
+##### Launcher object
+
+| Key        | Type     | Required | Description                                                                                            |
+| :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------- |
+| id         | string   | Yes      | Unique launcher identifier.                                                                            |
+| systemId   | string   | No       | The system this launcher targets. Omitted for generic launchers without a fixed system.                |
+| systemName | string   | No       | Human-readable system name resolved from system metadata. Omitted when no metadata is available.       |
+| groups     | string[] | No       | Group names this launcher belongs to. Group names are valid values for `systemDefaults.launcher`.      |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5b8c3a40-7a5e-11ef-88ff-020304050607",
+  "method": "launchers"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5b8c3a40-7a5e-11ef-88ff-020304050607",
+  "result": {
+    "launchers": [
+      {
+        "id": "retroarch",
+        "systemId": "Genesis",
+        "systemName": "Genesis",
+        "groups": ["libretro"]
+      },
+      {
+        "id": "snes9x",
+        "systemId": "SNES",
+        "systemName": "Super Nintendo",
+        "groups": ["libretro"]
+      }
+    ]
+  }
+}
+```
 
 ### launchers.refresh
 

@@ -80,6 +80,7 @@ type SettingsResponse struct {
 	ReadersScanMode           string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
 	ReadersConnect            []ReaderConnection `json:"readersConnect"`
+	SystemDefaults            []SystemDefault    `json:"systemDefaults"`
 	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
 	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
 	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
@@ -449,6 +450,17 @@ type LogDownloadResponse struct {
 	Filename string `json:"filename"`
 	Content  string `json:"content"`
 	Size     int    `json:"size"`
+}
+
+type Launcher struct {
+	ID         string   `json:"id"`
+	SystemID   string   `json:"systemId,omitempty"`
+	SystemName string   `json:"systemName,omitempty"`
+	Groups     []string `json:"groups,omitempty"`
+}
+
+type LaunchersResponse struct {
+	Launchers []Launcher `json:"launchers"`
 }
 
 type ReaderInfo struct {

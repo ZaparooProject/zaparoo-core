@@ -107,6 +107,12 @@ func (r ReaderConnection) IsEnabled() bool {
 	return r.Enabled == nil || *r.Enabled
 }
 
+type SystemDefault struct {
+	System     string `json:"system" validate:"required,system"`
+	Launcher   string `json:"launcher,omitempty"`
+	BeforeExit string `json:"beforeExit,omitempty"`
+}
+
 type UpdateSettingsParams struct {
 	RunZapScript              *bool               `json:"runZapScript"`
 	DebugLogging              *bool               `json:"debugLogging"`
@@ -118,6 +124,7 @@ type UpdateSettingsParams struct {
 	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
 	ReadersScanIgnoreSystem   *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
 	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty"`
+	SystemDefaults            *[]SystemDefault    `json:"systemDefaults,omitempty" validate:"omitempty,dive"`
 	AudioVolume               *int                `json:"audioVolume" validate:"omitempty,gte=0,lte=200"`
 	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`

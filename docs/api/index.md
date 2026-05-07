@@ -232,7 +232,7 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods are used to execute actions and request data back from the API. The current API provides **59 registered methods** across core functionality areas, including deprecated aliases. See the [API Methods](./methods) page for detailed definitions and examples of each method.
+Methods are used to execute actions and request data back from the API. The current API provides **60 registered methods** across core functionality areas, including deprecated aliases. See the [API Methods](./methods) page for detailed definitions and examples of each method.
 
 | ID                              | Description                                                                           |
 | :------------------------------ | :------------------------------------------------------------------------------------ |
@@ -282,6 +282,7 @@ Methods are used to execute actions and request data back from the API. The curr
 | readers                         | List all currently connected readers and their capabilities.                          |
 | readers.write                   | Attempt to write given text to the first available write-capable reader, if possible. |
 | readers.write.cancel            | Cancel any active write operation.                                                    |
+| launchers                       | List all launchers known to the running service.                                       |
 | launchers.refresh               | Refresh the internal launcher cache, forcing a reload of launcher configurations.     |
 | version                         | Return server's current version and platform.                                         |
 | health                          | Simple health check to verify the server is running and responding.                   |

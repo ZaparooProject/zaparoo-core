@@ -88,6 +88,7 @@ const (
 	MethodClientsPairStart     = "clients.pair.start"
 	MethodClientsPairCancel    = "clients.pair.cancel"
 	MethodSystems              = "systems"
+	MethodLaunchers            = "launchers"
 	MethodLaunchersRefresh     = "launchers.refresh"
 	MethodHistory              = "tokens.history"
 	MethodMappings             = "mappings"
