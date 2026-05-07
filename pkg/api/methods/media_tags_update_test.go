@@ -233,6 +233,7 @@ func addTestMediaPaths(t *testing.T, mediaDB database.MediaDBI, paths ...string)
 			state,
 			"NES",
 			path,
+			"",
 			false,
 			false,
 			nil,

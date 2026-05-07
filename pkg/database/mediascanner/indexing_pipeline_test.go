@@ -86,7 +86,7 @@ func TestFlushScanStateMaps_MidSystemFileLimitBoundary(t *testing.T) {
 
 		require.NoError(t, mediaDB.BeginTransaction(true))
 		_, _, err := AddMediaPath(
-			mediaDB, scanState, systemID, disc1Path, false, false, nil, slugs.MediaTypeGame,
+			mediaDB, scanState, systemID, disc1Path, "", false, false, nil, slugs.MediaTypeGame,
 		)
 		require.NoError(t, err, "disc 1 insert should succeed")
 		require.NoError(t, mediaDB.CommitTransaction())
@@ -97,7 +97,7 @@ func TestFlushScanStateMaps_MidSystemFileLimitBoundary(t *testing.T) {
 
 		require.NoError(t, mediaDB.BeginTransaction(true))
 		_, _, err = AddMediaPath(
-			mediaDB, scanState, systemID, disc2Path, false, false, nil, slugs.MediaTypeGame,
+			mediaDB, scanState, systemID, disc2Path, "", false, false, nil, slugs.MediaTypeGame,
 		)
 		require.NoError(t, err, "disc 2 insert should succeed")
 		require.NoError(t, mediaDB.CommitTransaction())
@@ -203,7 +203,9 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
 	// Call AddMediaPath with a TV show path
-	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", false, false, nil, "")
+	titleIndex, mediaIndex, err := AddMediaPath(
+		mockDB, scanState, "TV", "kodi-show://1/Loki", "", false, false, nil, "",
+	)
 
 	// Function should return error and (0, 0) for non-recoverable errors
 	require.Error(t, err, "should return error for non-recoverable database errors")
@@ -216,6 +218,48 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 
 	// Verify all mocks were called as expected (FindSystem should NOT have been called)
 	mockDB.AssertExpectations(t)
+}
+
+// TestAddMediaPath_ProvidedNameUsedAsTitle verifies that scanners which
+// know the human-readable display name (NeoGeo romsets.xml, ScummVM
+// game.Description, ES-DE/Batocera gamelist, Kodi labels, etc.) flow
+// that name through to the persisted MediaTitle row instead of having
+// it overwritten by filename-derived parsing.
+func TestAddMediaPath_ProvidedNameUsedAsTitle(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	state := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
+	}
+	require.NoError(t, SeedCanonicalTags(mediaDB, state))
+
+	path := string(filepath.Separator) + filepath.Join("media", "fat", "games", "NEOGEO", "mslug.zip")
+
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	titleIndex, _, err := AddMediaPath(
+		mediaDB, state, "NeoGeo", path, "Metal Slug", true, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+	require.Positive(t, titleIndex)
+
+	titles, err := mediaDB.GetTitlesBySystemID("NeoGeo")
+	require.NoError(t, err)
+	require.Len(t, titles, 1)
+	assert.Equal(t, "Metal Slug", titles[0].Name,
+		"MediaTitle.Name must come from ProvidedName, not filename")
+	assert.Equal(t, "metalslug", titles[0].Slug,
+		"slug must derive from the provided name")
 }
 
 func TestAddMediaPath_ReindexesExistingMediaRefreshesDerivedMetadata(t *testing.T) {
@@ -245,7 +289,7 @@ func TestAddMediaPath_ReindexesExistingMediaRefreshesDerivedMetadata(t *testing.
 	require.NoError(t, SeedCanonicalTags(mediaDB, initialState))
 	require.NoError(t, mediaDB.BeginTransaction(true))
 	correctTitleID, mediaID, err := AddMediaPath(
-		mediaDB, initialState, "NES", path, false, false, nil, slugs.MediaTypeGame,
+		mediaDB, initialState, "NES", path, "", false, false, nil, slugs.MediaTypeGame,
 	)
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
@@ -293,7 +337,7 @@ func TestAddMediaPath_ReindexesExistingMediaRefreshesDerivedMetadata(t *testing.
 	require.NoError(t, PopulatePersistentScanStateForSystem(ctx, mediaDB, refreshState, "NES"))
 
 	require.NoError(t, mediaDB.BeginTransaction(true))
-	_, _, err = AddMediaPath(mediaDB, refreshState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	_, _, err = AddMediaPath(mediaDB, refreshState, "NES", path, "", false, false, nil, slugs.MediaTypeGame)
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
 
@@ -340,7 +384,9 @@ func TestAddMediaPath_SkipsTitleAndTagWritesWhenExistingMetadataMatches(t *testi
 		MissingMedia:  map[int]struct{}{20: {}},
 	}
 
-	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	titleIndex, mediaIndex, err := AddMediaPath(
+		mockDB, scanState, "NES", path, "", false, false, nil, slugs.MediaTypeGame,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 10, titleIndex)
 	assert.Equal(t, 20, mediaIndex)
@@ -373,7 +419,9 @@ func TestAddMediaPath_RepairsExistingMediaParentDir(t *testing.T) {
 	wantParentDir := filepath.ToSlash(filepath.Join("roms", "NES")) + "/"
 	mockDB.On("UpdateMediaParentDir", int64(20), wantParentDir).Return(nil).Once()
 
-	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	titleIndex, mediaIndex, err := AddMediaPath(
+		mockDB, scanState, "NES", path, "", false, false, nil, slugs.MediaTypeGame,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 10, titleIndex)
 	assert.Equal(t, 20, mediaIndex)
@@ -403,7 +451,9 @@ func TestAddMediaPath_ReconcileExistingMediaTagsPreservesUserTags(t *testing.T) 
 		MissingMedia: map[int]struct{}{20: {}},
 	}
 
-	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	titleIndex, mediaIndex, err := AddMediaPath(
+		mockDB, scanState, "NES", path, "", false, false, nil, slugs.MediaTypeGame,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 10, titleIndex)
 	assert.Equal(t, 20, mediaIndex)
@@ -433,7 +483,7 @@ func TestAddMediaPath_LoadedScanStatePreservesUserTags(t *testing.T) {
 	}
 	require.NoError(t, SeedCanonicalTags(mediaDB, initialState))
 	require.NoError(t, mediaDB.BeginTransaction(true))
-	_, mediaID, err := AddMediaPath(mediaDB, initialState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	_, mediaID, err := AddMediaPath(mediaDB, initialState, "NES", path, "", false, false, nil, slugs.MediaTypeGame)
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
 
@@ -458,7 +508,7 @@ func TestAddMediaPath_LoadedScanStatePreservesUserTags(t *testing.T) {
 	require.NoError(t, PopulatePersistentScanStateForSystem(ctx, mediaDB, refreshState, "NES"))
 
 	require.NoError(t, mediaDB.BeginTransaction(true))
-	_, _, err = AddMediaPath(mediaDB, refreshState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	_, _, err = AddMediaPath(mediaDB, refreshState, "NES", path, "", false, false, nil, slugs.MediaTypeGame)
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
 
@@ -495,7 +545,9 @@ func TestAddMediaPath_ExistingMediaWithoutTagStateDoesNotDeleteAllTags(t *testin
 	mockDB.On("InsertMediaTag", database.MediaTag{TagDBID: 8, MediaDBID: 20}).
 		Return(database.MediaTag{}, nil).Once()
 
-	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	titleIndex, mediaIndex, err := AddMediaPath(
+		mockDB, scanState, "NES", path, "", false, false, nil, slugs.MediaTypeGame,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 10, titleIndex)
 	assert.Equal(t, 20, mediaIndex)
@@ -528,7 +580,7 @@ func TestAddMediaPath_ReconcileExistingMediaTagsDoesNotMutateStateOnInsertFailur
 	mockDB.On("InsertMediaTag", database.MediaTag{TagDBID: 8, MediaDBID: 20}).
 		Return(database.MediaTag{}, depFlushErr).Once()
 
-	_, _, err := AddMediaPath(mockDB, scanState, "NES", path, false, false, nil, slugs.MediaTypeGame)
+	_, _, err := AddMediaPath(mockDB, scanState, "NES", path, "", false, false, nil, slugs.MediaTypeGame)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error reconciling media tags")
 	assert.Empty(t, scanState.MediaTagIDs[20])
@@ -852,9 +904,10 @@ func TestAddMediaPath_PopulatesSlugMetadata(t *testing.T) {
 				scanState,
 				"SNES",
 				tt.path,
-				false, // skipExisting
+				"",    // name
 				false, // noExt
-				nil,   // extra tags
+				false, // stripLeadingNumbers
+				nil,   // cfg
 				"",    // mediaType
 			)
 
@@ -1034,7 +1087,7 @@ func TestGetPathFragments_VirtualPathsWithEncoding(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := GetPathFragments(PathFragmentParams{
+			result := GetPathFragments(&PathFragmentParams{
 				Config:              nil,
 				Path:                tc.path,
 				NoExt:               tc.noExt,
@@ -1076,7 +1129,7 @@ func TestGetPathFragments_PreResolvedMediaType(t *testing.T) {
 	// Use a Movie media type with a game-like path. The slug pipeline
 	// varies by media type, so different types produce different slugs
 	// when the title contains scene-style artifacts.
-	result := GetPathFragments(PathFragmentParams{
+	result := GetPathFragments(&PathFragmentParams{
 		Path:      "/games/snes/Super Mario World.sfc",
 		SystemID:  "snes",
 		MediaType: slugs.MediaTypeMovie,
@@ -1086,7 +1139,7 @@ func TestGetPathFragments_PreResolvedMediaType(t *testing.T) {
 	// the Movie pipeline (which strips different artifacts). If the
 	// pre-resolved type were ignored and the system looked up, we'd get
 	// MediaTypeGame instead.
-	resultDefault := GetPathFragments(PathFragmentParams{
+	resultDefault := GetPathFragments(&PathFragmentParams{
 		Path:     "/games/snes/Super Mario World.sfc",
 		SystemID: "snes",
 		// MediaType left empty — falls back to systemdefs lookup (Game)
@@ -1097,6 +1150,40 @@ func TestGetPathFragments_PreResolvedMediaType(t *testing.T) {
 	assert.NotEmpty(t, result.Slug, "pre-resolved MediaType path should produce a slug")
 	assert.NotEmpty(t, resultDefault.Slug, "fallback path should produce a slug")
 	assert.Equal(t, result.Title, resultDefault.Title, "title extraction should be identical regardless of media type")
+}
+
+// TestGetPathFragments_ProvidedName verifies that a non-empty ProvidedName
+// overrides the title parsed from the filename. The slug derives from the
+// override, and tags are still extracted from the filename.
+func TestGetPathFragments_ProvidedName(t *testing.T) {
+	t.Parallel()
+
+	// NeoGeo case: filename "mslug.zip" should be displayed as "Metal Slug"
+	// when the scanner provides the AltName from romsets.xml.
+	withName := GetPathFragments(&PathFragmentParams{
+		Path:         "/media/fat/games/NEOGEO/mslug.zip",
+		SystemID:     "NeoGeo",
+		ProvidedName: "Metal Slug",
+	})
+	assert.Equal(t, "Metal Slug", withName.Title, "ProvidedName must be used as title")
+	assert.Equal(t, "metalslug", withName.Slug, "slug must derive from provided name")
+
+	// Without ProvidedName, the title falls back to filename parsing.
+	withoutName := GetPathFragments(&PathFragmentParams{
+		Path:     "/media/fat/games/NEOGEO/mslug.zip",
+		SystemID: "NeoGeo",
+	})
+	assert.Equal(t, "mslug", withoutName.Title, "filename-derived title without ProvidedName")
+
+	// ProvidedName overrides title even when the filename has tag-like
+	// content; tags themselves are still extracted from the filename.
+	tagged := GetPathFragments(&PathFragmentParams{
+		Path:         "/games/snes/sm64 (USA) (Rev 1).sfc",
+		SystemID:     "snes",
+		ProvidedName: "Super Mario 64",
+	})
+	assert.Equal(t, "Super Mario 64", tagged.Title, "ProvidedName wins over tagged filename")
+	assert.Contains(t, tagged.Tags, "region:us", "USA region tag must still be extracted from filename")
 }
 
 // TestGetPathFragments_MalformedVirtualPaths tests graceful handling of malformed virtual paths
@@ -1160,7 +1247,7 @@ func TestGetPathFragments_MalformedVirtualPaths(t *testing.T) {
 
 			if tc.shouldPanic {
 				assert.Panics(t, func() {
-					GetPathFragments(PathFragmentParams{
+					GetPathFragments(&PathFragmentParams{
 						Config:              nil,
 						Path:                tc.path,
 						NoExt:               tc.noExt,
@@ -1170,7 +1257,7 @@ func TestGetPathFragments_MalformedVirtualPaths(t *testing.T) {
 				}, tc.description)
 			} else {
 				assert.NotPanics(t, func() {
-					result := GetPathFragments(PathFragmentParams{
+					result := GetPathFragments(&PathFragmentParams{
 						Config:              nil,
 						Path:                tc.path,
 						NoExt:               tc.noExt,
@@ -1224,14 +1311,14 @@ func TestGetPathFragments_VirtualPathsVsRegularPaths(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			virtualResult := GetPathFragments(PathFragmentParams{
+			virtualResult := GetPathFragments(&PathFragmentParams{
 				Config:              nil,
 				Path:                tc.virtualPath,
 				NoExt:               true,
 				StripLeadingNumbers: false,
 				SystemID:            "",
 			})
-			regularResult := GetPathFragments(PathFragmentParams{
+			regularResult := GetPathFragments(&PathFragmentParams{
 				Config:              nil,
 				Path:                tc.regularPath,
 				NoExt:               false,
@@ -1321,7 +1408,7 @@ func TestAddMediaPath_ExtensionTag_UniqueConstraintClassification(t *testing.T) 
 		mockDB.On("InsertMediaTag", expectedTag).
 			Return(database.MediaTag{}, uniqueErr).Once()
 
-		_, _, err := AddMediaPath(mockDB, newScanState(), systemID, path, false, false, nil, "")
+		_, _, err := AddMediaPath(mockDB, newScanState(), systemID, path, "", false, false, nil, "")
 
 		require.NoError(t, err, "UNIQUE-non-dep-flush must not propagate from AddMediaPath")
 		output := buf.String()
@@ -1347,7 +1434,7 @@ func TestAddMediaPath_ExtensionTag_UniqueConstraintClassification(t *testing.T) 
 		mockDB.On("InsertMediaTag", expectedTag).
 			Return(database.MediaTag{}, depFlushErr).Once()
 
-		_, _, err := AddMediaPath(mockDB, newScanState(), systemID, path, false, false, nil, "")
+		_, _, err := AddMediaPath(mockDB, newScanState(), systemID, path, "", false, false, nil, "")
 
 		require.Error(t, err, "dep-flush error must propagate from AddMediaPath")
 		output := buf.String()

@@ -1033,7 +1033,9 @@ func NewNamesIndex(
 			dir := filepath.Dir(file.Path)
 			shouldStrip := stripPolicyByDir[dir]
 
-			_, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, shouldStrip, cfg, mediaType)
+			_, _, addErr := AddMediaPath(
+				db, &scanState, systemID, file.Path, file.Name, file.NoExt, shouldStrip, cfg, mediaType,
+			)
 			if addErr != nil {
 				var sqliteErr sqlite3.Error
 				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&

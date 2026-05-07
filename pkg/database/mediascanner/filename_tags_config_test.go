@@ -43,7 +43,7 @@ func TestGetPathFragments_FilenameTagsConfig(t *testing.T) {
 	testPath := "/games/nes/Super Mario Bros (USA, Europe) (Rev 1).nes"
 
 	// Test with filename tags enabled
-	fragmentsEnabled := GetPathFragments(PathFragmentParams{
+	fragmentsEnabled := GetPathFragments(&PathFragmentParams{
 		Config:              cfgEnabled,
 		Path:                testPath,
 		NoExt:               false,
@@ -58,7 +58,7 @@ func TestGetPathFragments_FilenameTagsConfig(t *testing.T) {
 	require.Contains(t, fragmentsEnabled.Tags, "lang:en", "English language tag should be extracted")
 
 	// Test with filename tags disabled
-	fragmentsDisabled := GetPathFragments(PathFragmentParams{
+	fragmentsDisabled := GetPathFragments(&PathFragmentParams{
 		Config:              cfgDisabled,
 		Path:                testPath,
 		NoExt:               false,
@@ -68,7 +68,7 @@ func TestGetPathFragments_FilenameTagsConfig(t *testing.T) {
 	require.Empty(t, fragmentsDisabled.Tags, "filename tags should not be extracted when disabled")
 
 	// Test with nil config (should behave as enabled for backward compatibility)
-	fragmentsNil := GetPathFragments(PathFragmentParams{
+	fragmentsNil := GetPathFragments(&PathFragmentParams{
 		Config:              nil,
 		Path:                testPath,
 		NoExt:               false,
@@ -94,7 +94,7 @@ func TestGetPathFragments_CacheKeyWithConfig(t *testing.T) {
 	testPath := "/games/nes/Super Mario Bros (USA).nes"
 
 	// Get fragments with enabled config
-	fragments1 := GetPathFragments(PathFragmentParams{
+	fragments1 := GetPathFragments(&PathFragmentParams{
 		Config:              cfgEnabled,
 		Path:                testPath,
 		NoExt:               false,
@@ -104,7 +104,7 @@ func TestGetPathFragments_CacheKeyWithConfig(t *testing.T) {
 	require.NotEmpty(t, fragments1.Tags, "should have tags when enabled")
 
 	// Get fragments with disabled config - should return different result
-	fragments2 := GetPathFragments(PathFragmentParams{
+	fragments2 := GetPathFragments(&PathFragmentParams{
 		Config:              cfgDisabled,
 		Path:                testPath,
 		NoExt:               false,
@@ -114,14 +114,14 @@ func TestGetPathFragments_CacheKeyWithConfig(t *testing.T) {
 	require.Empty(t, fragments2.Tags, "should have no tags when disabled")
 
 	// Verify cache works correctly by calling again with same configs
-	fragments1Again := GetPathFragments(PathFragmentParams{
+	fragments1Again := GetPathFragments(&PathFragmentParams{
 		Config:              cfgEnabled,
 		Path:                testPath,
 		NoExt:               false,
 		StripLeadingNumbers: false,
 		SystemID:            "",
 	})
-	fragments2Again := GetPathFragments(PathFragmentParams{
+	fragments2Again := GetPathFragments(&PathFragmentParams{
 		Config:              cfgDisabled,
 		Path:                testPath,
 		NoExt:               false,

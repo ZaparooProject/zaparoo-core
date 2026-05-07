@@ -40,18 +40,18 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type PathFragmentKey struct {
-	Path                string
-	FilenameTags        bool
-	StripLeadingNumbers bool
-}
-
 // PathFragmentParams contains parameters for GetPathFragments.
 type PathFragmentParams struct {
-	Config              *config.Instance
-	Path                string
-	SystemID            string
-	MediaType           slugs.MediaType // Pre-resolved media type; skips systemdefs lookup if set
+	Config    *config.Instance
+	Path      string
+	SystemID  string
+	MediaType slugs.MediaType // Pre-resolved media type; skips systemdefs lookup if set
+	// ProvidedName, when non-empty, overrides the title that would otherwise be
+	// parsed from the filename. Tags are still extracted from the filename.
+	// Slug derives from ProvidedName when set, so any downstream consumer that
+	// looks titles up by slug must supply the same ProvidedName to compute a
+	// matching slug (see gamelistxml.LoadRecords for an example).
+	ProvidedName        string
 	NoExt               bool
 	StripLeadingNumbers bool
 }
@@ -108,19 +108,21 @@ func AddMediaPath(
 	ss *database.ScanState,
 	systemID string,
 	path string,
+	providedName string,
 	noExt bool,
 	stripLeadingNumbers bool,
 	cfg *config.Instance,
 	mediaType slugs.MediaType,
 ) (titleIndex, mediaIndex int, err error) {
 	existingMedia := false
-	pf := GetPathFragments(PathFragmentParams{
+	pf := GetPathFragments(&PathFragmentParams{
 		Config:              cfg,
 		Path:                path,
 		NoExt:               noExt,
 		StripLeadingNumbers: stripLeadingNumbers,
 		SystemID:            systemID,
 		MediaType:           mediaType,
+		ProvidedName:        providedName,
 	})
 
 	systemIndex := 0
@@ -1078,7 +1080,7 @@ func PopulateScanStateForSelectiveIndexing(
 	return nil
 }
 
-func GetPathFragments(params PathFragmentParams) MediaPathFragments {
+func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 	f := MediaPathFragments{}
 
 	// don't clean the :// in custom scheme paths
@@ -1129,7 +1131,11 @@ func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 		f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 	}
 
-	f.Title = tags.ParseTitleFromFilename(f.FileName, params.StripLeadingNumbers)
+	if params.ProvidedName != "" {
+		f.Title = params.ProvidedName
+	} else {
+		f.Title = tags.ParseTitleFromFilename(f.FileName, params.StripLeadingNumbers)
+	}
 
 	// Use pre-resolved media type if provided, otherwise look up from system ID
 	mediaType := params.MediaType
@@ -1152,7 +1158,11 @@ func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 	// original title. This ensures Slug is never empty while the search
 	// logic (mediadb.go) falls back to the Name field for these cases.
 	if f.Slug == "" {
-		f.Slug = strings.ToLower(f.FileName)
+		if params.ProvidedName != "" {
+			f.Slug = strings.ToLower(params.ProvidedName)
+		} else {
+			f.Slug = strings.ToLower(f.FileName)
+		}
 	}
 
 	// Extract tags from filename only if enabled in config (default to enabled for nil config)
