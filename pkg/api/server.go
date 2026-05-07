@@ -269,6 +269,7 @@ func NewMethodMap() *MethodMap {
 		// systems
 		models.MethodSystems: methods.HandleSystems,
 		// launchers
+		models.MethodLaunchers:        methods.HandleLaunchers,
 		models.MethodLaunchersRefresh: methods.HandleLaunchersRefresh,
 		// mappings
 		models.MethodMappings:       methods.HandleMappings,

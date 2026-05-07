@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -46,6 +47,16 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		})
 	}
 
+	defaultsCfg := env.Config.SystemDefaults()
+	systemDefaults := make([]models.SystemDefault, 0, len(defaultsCfg))
+	for _, sd := range defaultsCfg {
+		systemDefaults = append(systemDefaults, models.SystemDefault{
+			System:     sd.System,
+			Launcher:   sd.Launcher,
+			BeforeExit: sd.BeforeExit,
+		})
+	}
+
 	resp := models.SettingsResponse{
 		UpdateChannel:             env.Config.UpdateChannel(),
 		RunZapScript:              env.State.RunZapScriptEnabled(),
@@ -57,6 +68,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 		ReadersScanExitDelay:      env.Config.ReadersScan().ExitDelay,
 		ReadersScanIgnoreSystem:   make([]string, 0),
 		ReadersConnect:            readersConnect,
+		SystemDefaults:            systemDefaults,
 		ErrorReporting:            env.Config.ErrorReporting(),
 		LaunchGuardEnabled:        env.Config.LaunchGuardEnabled(),
 		LaunchGuardTimeout:        env.Config.LaunchGuardTimeout(),
@@ -111,6 +123,18 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		log.Warn().Err(err).Msg("invalid params")
 		return nil, models.ClientErrf("invalid params: %w", err)
+	}
+
+	// Pre-flight validation of inputs that depend on runtime state. Run before
+	// any mutations are applied so a validation failure here does not leave
+	// the in-memory config partially updated.
+	var systemDefaults []config.SystemsDefault
+	if params.SystemDefaults != nil {
+		var err error
+		systemDefaults, err = buildSystemDefaults(env.LauncherCache, *params.SystemDefaults)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Reload config from disk before applying mutations so that external
@@ -213,6 +237,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		env.Config.SetReaderConnections(connections)
 	}
 
+	if params.SystemDefaults != nil {
+		log.Debug().Int("count", len(*params.SystemDefaults)).Msg("updating systems.default")
+		env.Config.SetSystemDefaults(systemDefaults)
+	}
+
 	err := env.Config.Save()
 	if err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
@@ -258,6 +287,49 @@ func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
 	}
 
 	return resp, nil
+}
+
+// buildSystemDefaults validates the API system-defaults payload and converts
+// it to config types. The system field is already validated by struct tag;
+// here we additionally check that any non-empty launcher reference matches a
+// known launcher ID or group from the LauncherCache (case-insensitive).
+func buildSystemDefaults(cache *helpers.LauncherCache, in []models.SystemDefault) ([]config.SystemsDefault, error) {
+	out := make([]config.SystemsDefault, 0, len(in))
+	for _, sd := range in {
+		if sd.Launcher != "" {
+			if cache == nil {
+				return nil, errors.New("launcher cache unavailable, cannot validate launcher reference")
+			}
+			if !launcherRefExists(cache, sd.Launcher) {
+				return nil, models.ClientErrf("unknown launcher %q for system %q", sd.Launcher, sd.System)
+			}
+		}
+		out = append(out, config.SystemsDefault{
+			System:     sd.System,
+			Launcher:   sd.Launcher,
+			BeforeExit: sd.BeforeExit,
+		})
+	}
+	return out, nil
+}
+
+// launcherRefExists reports whether ref matches a launcher ID or any of a
+// launcher's Groups (case-insensitive). Mirrors the matching semantics used
+// by config.LookupLauncherDefaults so API validation accepts the same values
+// the launcher resolution code does.
+func launcherRefExists(cache *helpers.LauncherCache, ref string) bool {
+	all := cache.GetAllLaunchers()
+	for i := range all {
+		if strings.EqualFold(all[i].ID, ref) {
+			return true
+		}
+		for _, g := range all[i].Groups {
+			if strings.EqualFold(g, ref) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 //nolint:gocritic // single-use parameter in API handler

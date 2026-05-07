@@ -22,12 +22,54 @@ package methods
 import (
 	"errors"
 	"path/filepath"
+	"sort"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
+
+func HandleLaunchers(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use
+	log.Debug().Msg("received launchers request")
+
+	if env.LauncherCache == nil {
+		return models.LaunchersResponse{Launchers: []models.Launcher{}}, nil
+	}
+
+	all := env.LauncherCache.GetAllLaunchers()
+	resp := make([]models.Launcher, 0, len(all))
+	for i := range all {
+		l := all[i]
+		var groups []string
+		if len(l.Groups) > 0 {
+			groups = make([]string, len(l.Groups))
+			copy(groups, l.Groups)
+		}
+		entry := models.Launcher{
+			ID:       l.ID,
+			SystemID: l.SystemID,
+			Groups:   groups,
+		}
+		if l.SystemID != "" {
+			if sm, mErr := assets.GetSystemMetadata(l.SystemID); mErr == nil && sm.Name != "" {
+				entry.SystemName = sm.Name
+			}
+		}
+		resp = append(resp, entry)
+	}
+
+	sort.SliceStable(resp, func(i, j int) bool {
+		if resp[i].SystemID != resp[j].SystemID {
+			return resp[i].SystemID < resp[j].SystemID
+		}
+		return resp[i].ID < resp[j].ID
+	})
+
+	return models.LaunchersResponse{Launchers: resp}, nil
+}
 
 func HandleLaunchersRefresh(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use
 	log.Info().Msg("received launchers refresh request")
