@@ -1,0 +1,23 @@
+{
+  "id": "zaparoo-hyperhq",
+  "name": "Zaparoo",
+  "version": "0.1.0",
+  "description": "Bridges HyperHQ with Zaparoo Core so physical NFC tokens can launch HyperHQ games and active media is reflected in Zaparoo's state.",
+  "author": "The Zaparoo Project",
+  "homepage": "https://zaparoo.org",
+  "license": "GPL-3.0-or-later",
+  "executable": "zaparoo-hyperhq.exe",
+  "capabilities": [
+    "games",
+    "launch",
+    "events"
+  ],
+  "events": [
+    "gameLaunched",
+    "gameClosed"
+  ],
+  "socketio": {
+    "enabled": true,
+    "namespace": "/plugin"
+  }
+}

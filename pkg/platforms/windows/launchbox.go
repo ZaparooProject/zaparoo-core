@@ -512,6 +512,10 @@ func (s *LaunchBoxPipeServer) RequestGamesForPlatformSync(
 	}
 
 	s.connMu.Lock()
+	if s.writer == nil {
+		s.connMu.Unlock()
+		return nil, errors.New("LaunchBox plugin not connected")
+	}
 	if _, err := s.writer.WriteString(string(data) + "\n"); err != nil {
 		s.connMu.Unlock()
 		return nil, fmt.Errorf("failed to write GetGamesForPlatform command: %w", err)
