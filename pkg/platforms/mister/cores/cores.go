@@ -1094,6 +1094,15 @@ var Systems = map[string]Core{
 					Index:  4,
 				},
 			},
+			{
+				Label: "Snapshot",
+				Exts: []string{".sna"},
+				Mgl: &MGLParams{
+					Delay:  1,
+					Method: "f",
+					Index:  6,
+				},
+			},
 		},
 	},
 	"AmstradPCW": {
