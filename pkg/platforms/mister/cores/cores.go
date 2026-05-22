@@ -1096,7 +1096,7 @@ var Systems = map[string]Core{
 			},
 			{
 				Label: "Snapshot",
-				Exts: []string{".sna"},
+				Exts:  []string{".sna"},
 				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
