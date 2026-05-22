@@ -42,7 +42,7 @@ require (
 	github.com/nixinwang/dialog v0.0.0-20240524023314-b4bad92eff4d
 	github.com/olahol/melody v1.4.0
 	github.com/pelletier/go-toml/v2 v2.3.1
-	github.com/pressly/goose/v3 v3.27.0
+	github.com/pressly/goose/v3 v3.27.1
 	github.com/rivo/tview v0.42.0
 	github.com/rs/zerolog v1.34.0
 	github.com/sasha-s/go-deadlock v0.3.9
@@ -106,7 +106,7 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/mewkiz/flac v1.0.12 // indirect
 	github.com/mewkiz/pkg v0.0.0-20230226050401-4010bf0fec14 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
