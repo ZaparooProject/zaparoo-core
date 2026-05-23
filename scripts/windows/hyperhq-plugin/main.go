@@ -49,7 +49,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Microsoft/go-winio"
 	socketio "github.com/zishang520/socket.io/clients/socket/v3"
 	siotypes "github.com/zishang520/socket.io/v3/pkg/types"
 )
@@ -207,10 +206,26 @@ type hqRawGame struct {
 // pipeMu so the framing stays line-delimited. dataResponse routing keeps a
 // per-requestId channel in pendingData; the dataResponse listener looks up the
 // channel by requestId and hands the payload over.
+type hqSocket interface {
+	Emit(string, ...any) error
+	On(siotypes.EventName, ...siotypes.EventListener) error
+	Id() string
+}
+
+type pipeEventWriter interface {
+	writePipeEvent(*pipeEvent)
+}
+
+type pipeSession struct {
+	ctx    context.Context
+	bridge *bridge
+	writer *bufio.Writer
+}
+
 type bridge struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
-	socket        *socketio.Socket
+	socket        hqSocket
 	pipeWriter    *bufio.Writer
 	pendingData   map[string]chan hqDataResponse
 	pluginID      string
@@ -281,10 +296,16 @@ func run() error {
 
 // onSocket registers a typed listener on the underlying event emitter without
 // repeating the EventName/EventListener cast at every call site.
-func onSocket(sock *socketio.Socket, event string, listener func(...any)) {
+func onSocket(sock hqSocket, event string, listener func(...any)) {
 	if err := sock.On(siotypes.EventName(event), siotypes.EventListener(listener)); err != nil {
 		log.Printf("warning: register listener for %q failed: %v", event, err)
 	}
+}
+
+func (b *bridge) clearSessionToken() {
+	b.sessionMu.Lock()
+	b.sessionToken = ""
+	b.sessionMu.Unlock()
 }
 
 // connectSocket establishes the Socket.IO connection to HyperHQ and registers
@@ -383,6 +404,7 @@ func (b *bridge) connectSocket(port string) error {
 
 	onSocket(sock, "disconnect", func(args ...any) {
 		log.Printf("HyperHQ socket disconnected: %v", args)
+		b.clearSessionToken()
 	})
 
 	onSocket(sock, "request", b.handleLifecycleRequest)
@@ -558,7 +580,7 @@ func (b *bridge) servePipeOnce() error {
 	dialCtx, cancel := context.WithTimeout(b.ctx, requestTimeout)
 	defer cancel()
 
-	conn, err := winio.DialPipeContext(dialCtx, pipeName)
+	conn, err := dialPipeContext(dialCtx, pipeName)
 	if err != nil {
 		return fmt.Errorf("dial pipe: %w", err)
 	}
@@ -571,11 +593,19 @@ func (b *bridge) servePipeOnce() error {
 	log.Printf("connected to Zaparoo Core pipe %s", pipeName)
 
 	writer := bufio.NewWriter(conn)
+	sessionCtx, sessionCancel := context.WithCancel(b.ctx)
+	session := &pipeSession{
+		ctx:    sessionCtx,
+		bridge: b,
+		writer: writer,
+	}
+
 	b.pipeMu.Lock()
 	b.pipeWriter = writer
 	b.pipeMu.Unlock()
 
 	defer func() {
+		sessionCancel()
 		b.pipeMu.Lock()
 		b.pipeWriter = nil
 		b.pipeMu.Unlock()
@@ -583,7 +613,7 @@ func (b *bridge) servePipeOnce() error {
 
 	// On every (re)connect, push the current systems list so Zaparoo Core can
 	// refresh its mapping. Best-effort: if HyperHQ isn't ready we log and move on.
-	go b.pushSystems()
+	go b.pushSystems(session)
 
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 4096), pipeBufferMax)
@@ -594,7 +624,7 @@ func (b *bridge) servePipeOnce() error {
 			return b.ctx.Err()
 		default:
 		}
-		b.handlePipeCommand(scanner.Text())
+		b.handlePipeCommand(session, scanner.Text())
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -603,7 +633,7 @@ func (b *bridge) servePipeOnce() error {
 	return errors.New("pipe closed by peer")
 }
 
-func (b *bridge) handlePipeCommand(line string) {
+func (b *bridge) handlePipeCommand(writer pipeEventWriter, line string) {
 	if line == "" {
 		return
 	}
@@ -618,9 +648,9 @@ func (b *bridge) handlePipeCommand(line string) {
 	case "Ping":
 		// Heartbeat — no response required, the connection liveness is enough.
 	case "GetSystems":
-		go b.pushSystems()
+		go b.pushSystems(writer)
 	case "GetGamesForSystem":
-		go b.pushGames(cmd.SystemReferenceID)
+		go b.pushGames(writer, cmd.SystemReferenceID)
 	case "Launch":
 		go b.launchGame(cmd.ID)
 	default:
@@ -628,11 +658,11 @@ func (b *bridge) handlePipeCommand(line string) {
 	}
 }
 
-func (b *bridge) pushSystems() {
+func (b *bridge) pushSystems(writer pipeEventWriter) {
 	systems, err := b.requestSystems()
 	if err != nil {
 		log.Printf("getSystems failed: %v", err)
-		b.writePipeEvent(&pipeEvent{Event: "Systems", Error: err.Error()})
+		writer.writePipeEvent(&pipeEvent{Event: "Systems", Error: err.Error()})
 		return
 	}
 
@@ -640,12 +670,12 @@ func (b *bridge) pushSystems() {
 	for _, sys := range systems {
 		out = append(out, hqSystemInfo(sys))
 	}
-	b.writePipeEvent(&pipeEvent{Event: "Systems", Systems: out})
+	writer.writePipeEvent(&pipeEvent{Event: "Systems", Systems: out})
 }
 
-func (b *bridge) pushGames(systemReferenceID string) {
+func (b *bridge) pushGames(writer pipeEventWriter, systemReferenceID string) {
 	if systemReferenceID == "" {
-		b.writePipeEvent(&pipeEvent{
+		writer.writePipeEvent(&pipeEvent{
 			Event: "Games",
 			Error: "missing SystemReferenceId",
 		})
@@ -655,7 +685,7 @@ func (b *bridge) pushGames(systemReferenceID string) {
 	games, err := b.requestGames(systemReferenceID)
 	if err != nil {
 		log.Printf("getGamesForSystem(%s) failed: %v", systemReferenceID, err)
-		b.writePipeEvent(&pipeEvent{
+		writer.writePipeEvent(&pipeEvent{
 			Event:             "Games",
 			SystemReferenceID: systemReferenceID,
 			Error:             err.Error(),
@@ -667,7 +697,7 @@ func (b *bridge) pushGames(systemReferenceID string) {
 	for _, g := range games {
 		out = append(out, hqGameInfo(g))
 	}
-	b.writePipeEvent(&pipeEvent{
+	writer.writePipeEvent(&pipeEvent{
 		Event:             "Games",
 		SystemReferenceID: systemReferenceID,
 		Games:             out,
@@ -787,6 +817,39 @@ func (b *bridge) requestDataCtx(
 	case <-b.ctx.Done():
 		cleanup()
 		return nil, b.ctx.Err()
+	}
+}
+
+func (s *pipeSession) writePipeEvent(evt *pipeEvent) {
+	data, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("marshal pipe event %s: %v", evt.Event, err)
+		return
+	}
+
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+	}
+
+	s.bridge.pipeMu.Lock()
+	defer s.bridge.pipeMu.Unlock()
+
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+	}
+	if s.writer == nil {
+		return
+	}
+	if _, err := s.writer.Write(append(data, '\n')); err != nil {
+		log.Printf("write pipe event: %v", err)
+		return
+	}
+	if err := s.writer.Flush(); err != nil {
+		log.Printf("flush pipe event: %v", err)
 	}
 }
 
