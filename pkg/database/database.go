@@ -139,9 +139,13 @@ type MediaTitle struct {
 	SecondarySlug sql.NullString
 	DBID          int64
 	SystemDBID    int64
+	ParentDBID    int64
 	SlugLength    int
 	SlugWordCount int
 }
+
+func IsMediaTitleCanonical(t *MediaTitle) bool { return t.ParentDBID == 0 }
+func IsMediaTitleAlias(t *MediaTitle) bool     { return t.ParentDBID != 0 }
 
 type Media struct {
 	Path           string
@@ -690,6 +694,11 @@ type MediaDBI interface {
 	// directory names).
 	FindMediaBySystemAndPathFold(ctx context.Context, systemDBID int64, path string) (*Media, error)
 
+	// FindMediaBySystemAndPathSuffix returns all Media rows for the given system
+	// whose Path ends with "/" + filename. Used when companion XML child paths are
+	// root-relative (./file.rom) and the indexed path may be in any subdirectory.
+	FindMediaBySystemAndPathSuffix(ctx context.Context, systemDBID int64, filename string) ([]Media, error)
+
 	// MediaHasTag returns true when the Media row has a tag whose full string
 	// (type:value) equals tagValue.
 	MediaHasTag(ctx context.Context, mediaDBID int64, tagValue string) (bool, error)
@@ -726,6 +735,31 @@ type MediaDBI interface {
 	// FindMediaTitleByDBID returns the MediaTitle with the given DBID,
 	// or nil, nil when no row is found.
 	FindMediaTitleByDBID(ctx context.Context, dbid int64) (*MediaTitle, error)
+
+	// GetMediaTitlesByDBIDs returns a map of DBID → MediaTitle for all given DBIDs.
+	// Missing rows are silently omitted from the result.
+	GetMediaTitlesByDBIDs(ctx context.Context, dbids []int64) (map[int64]*MediaTitle, error)
+
+	// ResolveCanonical returns the canonical MediaTitle for the given DBID.
+	// If the title is already canonical (ParentDBID == 0), it is returned as-is.
+	// If it is an alias, the parent is returned.
+	ResolveCanonical(ctx context.Context, dbid int64) (MediaTitle, error)
+
+	// GetAliasesOf returns all MediaTitle rows whose ParentDBID equals canonicalDBID.
+	GetAliasesOf(ctx context.Context, canonicalDBID int64) ([]MediaTitle, error)
+
+	// GetMediaUnderCanonical returns all Media rows belonging to the canonical title
+	// and any of its aliases. If dbid is an alias, it is resolved to its canonical first.
+	GetMediaUnderCanonical(ctx context.Context, dbid int64) ([]Media, error)
+
+	// SetParentTitle makes aliasDBID an alias of canonicalDBID. Returns ErrSelfReference,
+	// ErrAlreadyAlias (alias already has a parent), ErrNotCanonical (target is not canonical),
+	// or ErrHasAliases when validation fails.
+	SetParentTitle(ctx context.Context, aliasDBID, canonicalDBID int64) error
+
+	// UnsetParentTitle removes the parent relationship from aliasDBID, making it
+	// canonical again. Returns ErrNotCanonical if the title is already canonical.
+	UnsetParentTitle(ctx context.Context, aliasDBID int64) error
 
 	// GetMediaTitleProperties returns all properties for a MediaTitle row,
 	// with TypeTagDBID resolved to the tag value string.

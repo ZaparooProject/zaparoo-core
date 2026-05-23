@@ -163,6 +163,49 @@ func (db *MediaDB) FindMediaBySystemAndPathFold(
 	return &row, nil
 }
 
+// FindMediaBySystemAndPathSuffix returns all Media rows for the given system
+// whose Path ends with "/" + filename. LIKE wildcards in the filename are
+// escaped so a literal '%' or '_' in the name does not expand.
+func (db *MediaDB) FindMediaBySystemAndPathSuffix(
+	ctx context.Context, systemDBID int64, filename string,
+) ([]database.Media, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(filename)
+	pattern := "%/" + escaped
+	rows, err := db.sql.QueryContext(ctx, `
+		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
+		FROM Media
+		WHERE SystemDBID = ? AND Path LIKE ? ESCAPE '\'
+	`, systemDBID, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query FindMediaBySystemAndPathSuffix: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	var result []database.Media
+	for rows.Next() {
+		var row database.Media
+		if err := rows.Scan(
+			&row.DBID,
+			&row.MediaTitleDBID,
+			&row.SystemDBID,
+			&row.Path,
+			&row.ParentDir,
+			&row.IsMissing,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan FindMediaBySystemAndPathSuffix: %w", err)
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
 // MediaHasTag returns true when the given Media record has a tag matching the
 // "type:value" string tagValue. The string is split on the first colon: everything
 // before the colon is matched against TagTypes.Type, everything after is matched
@@ -1014,7 +1057,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 	stmt, err := db.sql.PrepareContext(ctx, `
 		SELECT
 			m.DBID, m.Path, m.ParentDir, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
-			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
+			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID, mt.ParentDBID,
 			s.DBID, s.SystemID, s.Name
 		FROM Media m
 		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
@@ -1036,7 +1079,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 		&row.DBID, &row.Path, &row.ParentDir, &row.IsMissing,
 		&row.MediaTitleDBID, &row.SystemDBID,
 		&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
-		&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,
+		&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID, &row.Title.ParentDBID,
 		&row.System.DBID, &row.System.SystemID, &row.System.Name,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1064,7 +1107,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 	rows, err := db.sql.QueryContext(ctx, `
 		SELECT
 			m.DBID, m.Path, m.ParentDir, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
-			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
+			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID, mt.ParentDBID,
 			s.DBID, s.SystemID, s.Name
 		FROM Media m
 		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
@@ -1086,7 +1129,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 			&row.DBID, &row.Path, &row.ParentDir, &row.IsMissing,
 			&row.MediaTitleDBID, &row.SystemDBID,
 			&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
-			&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,
+			&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID, &row.Title.ParentDBID,
 			&row.System.DBID, &row.System.SystemID, &row.System.Name,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan GetMediaWithTitleAndSystemByIDs: %w", err)

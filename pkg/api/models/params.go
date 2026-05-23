@@ -239,3 +239,8 @@ type InputKeyboardParams struct {
 type InputGamepadParams struct {
 	Buttons string `json:"buttons" validate:"required,min=1"`
 }
+
+type MediaTitleFromPathParams struct {
+	SystemID string `json:"systemId" validate:"required,min=1"`
+	Path     string `json:"path" validate:"required,min=1"`
+}

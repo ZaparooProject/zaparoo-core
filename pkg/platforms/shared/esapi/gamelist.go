@@ -144,6 +144,14 @@ type Game struct {
 	Favorite            bool     `xml:"favorite,omitempty"`
 	Hidden              bool     `xml:"hidden,omitempty"`
 	KidGame             bool     `xml:"kidgame,omitempty"`
+	// Zaparoo Customs for context and dedupe because why not
+	SourceAttr   string `xml:"source,attr,omitempty"`
+	ParentIDAttr string `xml:"parentid,attr,omitempty"`
+	Screenshot   string `xml:"screenshot,omitempty"`
+	TitleScreen  string `xml:"titlescreen,omitempty"`
+	Boxart2D     string `xml:"boxart2d,omitempty"`
+	Boxart3D     string `xml:"boxart3d,omitempty"`
+	Logo         string `xml:"logo,omitempty"`
 }
 
 // Folder represents a <folder> entry in the gamelist. Folders support a
