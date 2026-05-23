@@ -601,6 +601,10 @@ preprocessing:
 			}
 			svc.State.SetWroteToken(nil)
 
+			if handlePendingWrite(svc, scan) {
+				continue preprocessing
+			}
+
 			// Launch guard: when enabled and media is playing, stage tokens that
 			// would disrupt the current media (launches, playlist changes, stop).
 			// Utility commands (coin, keyboard, execute, etc.) pass through.

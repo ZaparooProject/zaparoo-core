@@ -119,10 +119,11 @@ type WriteRequestResult struct {
 }
 
 type WriteRequest struct {
-	Ctx    context.Context
-	Result chan WriteRequestResult
-	Cancel chan bool
-	Text   string
+	Ctx     context.Context
+	Result  chan WriteRequestResult
+	Cancel  chan bool
+	Text    string
+	Options readers.WriteOptions
 }
 
 type readerMode int
@@ -225,7 +226,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan, _ re
 			}
 			select {
 			case req := <-r.write:
-				r.writeTag(req)
+				r.writeTag(&req)
 			case <-time.After(periodBetweenLoop):
 				// continue with reading
 			}
@@ -426,10 +427,14 @@ func (r *Reader) Info() string {
 }
 
 func (r *Reader) Write(text string) (*tokens.Token, error) {
-	return r.WriteWithContext(context.Background(), text)
+	return r.WriteTarget(context.Background(), text, readers.WriteOptions{})
 }
 
 func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Token, error) {
+	return r.WriteTarget(ctx, text, readers.WriteOptions{})
+}
+
+func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.WriteOptions) (*tokens.Token, error) {
 	if err := validateWriteParameters(r, text); err != nil {
 		return nil, fmt.Errorf("invalid write parameters: %w", err)
 	}
@@ -442,10 +447,11 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 	r.activeWriteMu.RUnlock()
 
 	req := WriteRequest{
-		Text:   text,
-		Result: make(chan WriteRequestResult),
-		Cancel: make(chan bool),
-		Ctx:    ctx,
+		Text:    text,
+		Result:  make(chan WriteRequestResult),
+		Cancel:  make(chan bool),
+		Ctx:     ctx,
+		Options: opts,
 	}
 
 	r.write <- req
@@ -789,7 +795,7 @@ func (r *Reader) pollDevice(
 	return card, removed, nil
 }
 
-func (r *Reader) writeTag(req WriteRequest) {
+func (r *Reader) writeTag(req *WriteRequest) {
 	log.Info().Msg("libnfc write request received")
 	log.Debug().Msgf("libnfc write text: %s", req.Text)
 
@@ -812,7 +818,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 		r.activeWriteMu.Unlock()
 		return
 	}
-	r.activeWrite = &req
+	r.activeWrite = req
 	r.activeWriteMu.Unlock()
 	defer func() {
 		r.activeWriteMu.Lock()
@@ -870,6 +876,18 @@ func (r *Reader) writeTag(req WriteRequest) {
 
 	cardUID := tags.GetTagUID(target)
 	log.Info().Msgf("found tag with ID: %s", cardUID)
+	if req.Options.ExcludeUID != "" && cardUID == req.Options.ExcludeUID {
+		req.Result <- WriteRequestResult{
+			Err: fmt.Errorf("refusing to write excluded tag: %s", cardUID),
+		}
+		return
+	}
+	if req.Options.TargetUID != "" && cardUID != req.Options.TargetUID {
+		req.Result <- WriteRequestResult{
+			Err: fmt.Errorf("refusing to write wrong tag: got %s want %s", cardUID, req.Options.TargetUID),
+		}
+		return
+	}
 
 	cardType := tags.GetTagType(target)
 	var bytesWritten []byte

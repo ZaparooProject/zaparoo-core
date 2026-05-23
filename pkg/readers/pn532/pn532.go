@@ -728,10 +728,14 @@ func (r *Reader) Info() string {
 }
 
 func (r *Reader) Write(text string) (*tokens.Token, error) {
-	return r.WriteWithContext(context.Background(), text)
+	return r.WriteTarget(context.Background(), text, readers.WriteOptions{})
 }
 
 func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Token, error) {
+	return r.WriteTarget(ctx, text, readers.WriteOptions{})
+}
+
+func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.WriteOptions) (*tokens.Token, error) {
 	if text == "" {
 		return nil, errors.New("text cannot be empty")
 	}
@@ -770,6 +774,16 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 	err := r.session.WriteToNextTagWithRetry(
 		ctx, writeCtx, writeTimeout, writeRetryCount,
 		func(writeCtx context.Context, tag pn532.Tag) error {
+			uid := tag.UID()
+			if opts.ExcludeUID != "" && uid == opts.ExcludeUID {
+				writeErr = fmt.Errorf("refusing to write excluded tag: %s", uid)
+				return writeErr
+			}
+			if opts.TargetUID != "" && uid != opts.TargetUID {
+				writeErr = fmt.Errorf("refusing to write wrong tag: got %s want %s", uid, opts.TargetUID)
+				return writeErr
+			}
+
 			// Create NDEF message with text record
 			ndefMessage := &pn532.NDEFMessage{
 				Records: []pn532.NDEFRecord{{
@@ -791,7 +805,7 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 			// Create result token with UID from the tag
 			tagType := tag.Type()
 			resultToken = &tokens.Token{
-				UID:      tag.UID(),
+				UID:      uid,
 				Text:     text,
 				Type:     r.convertTagType(tagType),
 				ScanTime: time.Now(),
