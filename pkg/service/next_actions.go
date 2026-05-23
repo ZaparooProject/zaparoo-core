@@ -20,12 +20,14 @@
 package service
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
 
@@ -55,19 +57,29 @@ func handleNextActionPreflight(svc *ServiceContext, token *tokens.Token, script 
 		if launcherID == "" || len(cmd.Args) != 0 || hasNonLauncherAdvArg(cmd.AdvArgs) {
 			return nextActionNone
 		}
+		resolvedLauncherID, err := evalNextActionArg(svc, launcherID)
+		if err != nil || strings.TrimSpace(resolvedLauncherID) == "" {
+			log.Warn().Err(err).Msg("failed to evaluate launch override")
+			return nextActionInvalid
+		}
 		svc.State.SetPendingLaunchOverride(&state.PendingLaunchOverride{
-			LauncherID: launcherID,
+			LauncherID: strings.TrimSpace(resolvedLauncherID),
 			Source:     *token,
 			CreatedAt:  time.Now(),
 		})
-		log.Info().Str("launcher", launcherID).Msg("armed one-shot launch override")
+		log.Info().Str("launcher", strings.TrimSpace(resolvedLauncherID)).Msg("armed one-shot launch override")
 		return nextActionArmed
 	case gozapscript.ZapScriptCmdWrite:
 		if len(cmd.Args) != 1 || strings.TrimSpace(cmd.Args[0]) == "" || !cmd.AdvArgs.IsEmpty() {
 			return nextActionInvalid
 		}
+		payload, err := evalNextActionArg(svc, cmd.Args[0])
+		if err != nil || strings.TrimSpace(payload) == "" {
+			log.Warn().Err(err).Msg("failed to evaluate write payload")
+			return nextActionInvalid
+		}
 		svc.State.SetPendingWrite(&state.PendingWrite{
-			Payload:   cmd.Args[0],
+			Payload:   payload,
 			Source:    *token,
 			CreatedAt: time.Now(),
 		})
@@ -76,6 +88,16 @@ func handleNextActionPreflight(svc *ServiceContext, token *tokens.Token, script 
 	default:
 		return nextActionNone
 	}
+}
+
+func evalNextActionArg(svc *ServiceContext, value string) (string, error) {
+	env := zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, nil, nil)
+	reader := gozapscript.NewParser(value)
+	output, err := reader.EvalExpressions(env)
+	if err != nil {
+		return "", fmt.Errorf("failed to evaluate next-action argument: %w", err)
+	}
+	return output, nil
 }
 
 func hasNonLauncherAdvArg(args gozapscript.AdvArgs) bool {

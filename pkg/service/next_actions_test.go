@@ -25,6 +25,8 @@ import (
 	"time"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -45,6 +47,7 @@ func setupNextActionTestEnv(t *testing.T) (*ServiceContext, *mocks.MockPlatform,
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("mock-platform").Maybe()
 	mockPlatform.On("LookupMapping", mock.Anything).Return("", false).Maybe()
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: t.TempDir()}).Maybe()
 
 	cfg := &config.Instance{}
 	st, ns := state.NewState(mockPlatform, "test-boot-uuid")
@@ -71,6 +74,25 @@ func setupNextActionTestEnv(t *testing.T) (*ServiceContext, *mocks.MockPlatform,
 		PlaylistQueue:       make(chan *playlists.Playlist, 10),
 	}
 	return svc, mockPlatform, cfg
+}
+
+func TestHandleNextActionPreflight_EvaluatesWritePayload(t *testing.T) {
+	t.Parallel()
+
+	svc, _, _ := setupNextActionTestEnv(t)
+	mediaPath := filepath.Join("games", "snes", "zelda.sfc")
+	svc.State.SetActiveMedia(models.NewActiveMedia("snes", "SNES", mediaPath, "Zelda", "snes-launcher"))
+	parser := gozapscript.NewParser("**write:[[active_media.path]]")
+	script, err := parser.ParseScript()
+	require.NoError(t, err)
+	token := tokens.Token{UID: "source", Text: "**write:[[active_media.path]]", ScanTime: time.Now()}
+
+	result := handleNextActionPreflight(svc, &token, &script)
+
+	require.Equal(t, nextActionArmed, result)
+	pending := svc.State.GetPendingWrite()
+	require.NotNil(t, pending)
+	assert.Equal(t, mediaPath, pending.Payload)
 }
 
 func TestHandleNextActionPreflight_ArmsLaunchOverride(t *testing.T) {
@@ -169,6 +191,10 @@ func TestHandlePendingWrite_WritesTargetAndConsumesScan(t *testing.T) {
 	t.Parallel()
 
 	svc, _, _ := setupNextActionTestEnv(t)
+	require.NoError(t, svc.Config.LoadTOML(`
+[audio]
+scan_feedback = true
+`))
 	reader := mocks.NewMockReader()
 	reader.SetupBasicMock()
 	svc.State.SetReader(reader)
@@ -181,8 +207,10 @@ func TestHandlePendingWrite_WritesTargetAndConsumesScan(t *testing.T) {
 		TargetUID:  "target",
 		ExcludeUID: "source",
 	}).Return(written, nil).Once()
+	player := mocks.NewMockPlayer()
+	player.On("PlayBytes", assets.SuccessSound).Return(nil).Once()
 
-	consumed := handlePendingWrite(svc, target)
+	consumed := handlePendingWrite(svc, target, player)
 
 	require.True(t, consumed)
 	assert.Nil(t, svc.State.GetPendingWrite())
@@ -191,6 +219,36 @@ func TestHandlePendingWrite_WritesTargetAndConsumesScan(t *testing.T) {
 		TargetUID:  "target",
 		ExcludeUID: "source",
 	})
+	player.AssertExpectations(t)
+}
+
+func TestHandlePendingWrite_PlaysFailSoundOnError(t *testing.T) {
+	t.Parallel()
+
+	svc, _, _ := setupNextActionTestEnv(t)
+	require.NoError(t, svc.Config.LoadTOML(`
+[audio]
+scan_feedback = true
+`))
+	reader := mocks.NewMockReader()
+	reader.SetupBasicMock()
+	svc.State.SetReader(reader)
+	readerID := "mock-reader-0123456789abcdef"
+	source := tokens.Token{UID: "source", Text: "**write:payload", ScanTime: time.Now(), ReaderID: readerID}
+	target := &tokens.Token{UID: "target", Text: "old", ScanTime: time.Now(), ReaderID: readerID}
+	svc.State.SetPendingWrite(&state.PendingWrite{Payload: "payload", Source: source, CreatedAt: time.Now()})
+	reader.On("WriteTarget", mock.Anything, "payload", readers.WriteOptions{
+		TargetUID:  "target",
+		ExcludeUID: "source",
+	}).Return((*tokens.Token)(nil), assert.AnError).Once()
+	player := mocks.NewMockPlayer()
+	player.On("PlayBytes", assets.FailSound).Return(nil).Once()
+
+	consumed := handlePendingWrite(svc, target, player)
+
+	require.True(t, consumed)
+	assert.Nil(t, svc.State.GetPendingWrite())
+	player.AssertExpectations(t)
 }
 
 func TestHandlePendingWrite_ExpiresStaleWrite(t *testing.T) {
@@ -205,7 +263,8 @@ func TestHandlePendingWrite_ExpiresStaleWrite(t *testing.T) {
 		CreatedAt: time.Now().Add(-pendingWriteTTL - time.Second),
 	})
 
-	consumed := handlePendingWrite(svc, target)
+	player := mocks.NewMockPlayer()
+	consumed := handlePendingWrite(svc, target, player)
 
 	require.False(t, consumed)
 	assert.Nil(t, svc.State.GetPendingWrite())
@@ -218,7 +277,8 @@ func TestHandlePendingWrite_IgnoresSourceToken(t *testing.T) {
 	source := tokens.Token{UID: "source", Text: "**write:payload", ScanTime: time.Now(), ReaderID: "reader"}
 	svc.State.SetPendingWrite(&state.PendingWrite{Payload: "payload", Source: source, CreatedAt: time.Now()})
 
-	consumed := handlePendingWrite(svc, &source)
+	player := mocks.NewMockPlayer()
+	consumed := handlePendingWrite(svc, &source, player)
 
 	require.True(t, consumed)
 	assert.NotNil(t, svc.State.GetPendingWrite())

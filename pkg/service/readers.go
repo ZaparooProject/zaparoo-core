@@ -601,7 +601,7 @@ preprocessing:
 			}
 			svc.State.SetWroteToken(nil)
 
-			if handlePendingWrite(svc, scan) {
+			if handlePendingWrite(svc, scan, player) {
 				continue preprocessing
 			}
 

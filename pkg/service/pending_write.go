@@ -22,6 +22,8 @@ package service
 import (
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -30,7 +32,7 @@ import (
 
 const pendingWriteTTL = time.Minute
 
-func handlePendingWrite(svc *ServiceContext, scan *tokens.Token) bool {
+func handlePendingWrite(svc *ServiceContext, scan *tokens.Token, player audio.Player) bool {
 	pending := svc.State.GetPendingWrite()
 	if pending == nil {
 		return false
@@ -56,6 +58,7 @@ func handlePendingWrite(svc *ServiceContext, scan *tokens.Token) bool {
 	}
 	if err != nil {
 		log.Error().Err(err).Msg("pending write failed to select writer")
+		playPendingWriteFailSound(svc, player)
 		svc.State.ClearPendingWrite()
 		return true
 	}
@@ -63,6 +66,7 @@ func handlePendingWrite(svc *ServiceContext, scan *tokens.Token) bool {
 	targetWriter, ok := writer.(readers.TargetWriter)
 	if !ok {
 		log.Error().Str("readerID", writer.ReaderID()).Msg("pending write reader does not support targeted writes")
+		playPendingWriteFailSound(svc, player)
 		svc.State.ClearPendingWrite()
 		return true
 	}
@@ -73,6 +77,7 @@ func handlePendingWrite(svc *ServiceContext, scan *tokens.Token) bool {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("pending write failed")
+		playPendingWriteFailSound(svc, player)
 		svc.State.ClearPendingWrite()
 		return true
 	}
@@ -80,8 +85,19 @@ func handlePendingWrite(svc *ServiceContext, scan *tokens.Token) bool {
 		svc.State.SetWroteToken(written)
 	}
 	svc.State.ClearPendingWrite()
+	playPendingWriteSuccessSound(svc, player)
 	log.Info().Msg("pending write completed")
 	return true
+}
+
+func playPendingWriteSuccessSound(svc *ServiceContext, player audio.Player) {
+	path, enabled := svc.Config.SuccessSoundPath(helpers.DataDir(svc.Platform))
+	helpers.PlayConfiguredSound(player, path, enabled, assets.SuccessSound, "success")
+}
+
+func playPendingWriteFailSound(svc *ServiceContext, player audio.Player) {
+	path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
+	helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 }
 
 func pendingWriteExpired(createdAt time.Time) bool {
