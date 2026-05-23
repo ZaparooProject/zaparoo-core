@@ -76,17 +76,17 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/spark2k06">
-                    <img src="https://avatars.githubusercontent.com/u/3509674?v=4" width="100;" alt="spark2k06"/>
-                    <br />
-                    <sub><b>Aitor Gómez García</b></sub>
-                </a>
-            </td>
-            <td align="center">
                 <a href="https://github.com/mrchrisster">
                     <img src="https://avatars.githubusercontent.com/u/60834906?v=4" width="100;" alt="mrchrisster"/>
                     <br />
                     <sub><b>Christoph Helms</b></sub>
+                </a>
+            </td>
+            <td align="center">
+                <a href="https://github.com/spark2k06">
+                    <img src="https://avatars.githubusercontent.com/u/3509674?v=4" width="100;" alt="spark2k06"/>
+                    <br />
+                    <sub><b>Aitor Gómez García</b></sub>
                 </a>
             </td>
             <td align="center">
@@ -103,6 +103,13 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <img src="https://avatars.githubusercontent.com/u/33544?v=4" width="100;" alt="philips"/>
                     <br />
                     <sub><b>Brandon Philips</b></sub>
+                </a>
+            </td>
+            <td align="center">
+                <a href="https://github.com/Emashzed">
+                    <img src="https://avatars.githubusercontent.com/u/994075?v=4" width="100;" alt="Emashzed"/>
+                    <br />
+                    <sub><b>Emashzed</b></sub>
                 </a>
             </td>
             <td align="center">
@@ -133,6 +140,8 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>jmf866</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/protogem2">
                     <img src="https://avatars.githubusercontent.com/u/62781710?v=4" width="100;" alt="protogem2"/>
@@ -140,8 +149,6 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>protogem</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/staydata">
                     <img src="https://avatars.githubusercontent.com/u/130571429?v=4" width="100;" alt="staydata"/>
