@@ -1216,7 +1216,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:         systemdefs.SystemAmstrad,
 			SystemID:   systemdefs.SystemAmstrad,
 			Folders:    []string{"Amstrad"},
-			Extensions: []string{".dsk", ".cdt"}, // TODO: globbing support? for .e??
+			Extensions: []string{".dsk", ".cdt", ".sna"}, // TODO: globbing support? for .e??
 			Launch:     launch(pl, systemdefs.SystemAmstrad),
 		},
 		{
