@@ -3,7 +3,7 @@ module github.com/ZaparooProject/zaparoo-core/v2
 go 1.26.3
 
 require (
-	fyne.io/systray v1.12.0
+	fyne.io/systray v1.12.1
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/ZaparooProject/go-pn532 v0.22.1
@@ -23,7 +23,7 @@ require (
 	github.com/gen2brain/malgo v0.11.24
 	github.com/getsentry/sentry-go v0.46.2
 	github.com/getsentry/sentry-go/zerolog v0.46.2
-	github.com/go-chi/chi/v5 v5.2.5
+	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-chi/cors v1.2.2
 	github.com/go-ole/go-ole v1.3.0
 	github.com/go-playground/validator/v10 v10.30.2
@@ -61,7 +61,7 @@ require (
 	gopkg.in/ini.v1 v1.67.1
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
-	pgregory.net/rapid v1.2.0
+	pgregory.net/rapid v1.3.0
 )
 
 require (
