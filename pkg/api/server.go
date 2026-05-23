@@ -598,6 +598,7 @@ func isPrivateIP(ipStr string) bool {
 func isAllowedOrigin(
 	origin string,
 	staticOrigins []string,
+	localIPsProvider LocalIPsProvider,
 	customOriginsProvider OriginsProvider,
 	apiPort int,
 	allowEmptyOrigin bool,
@@ -616,6 +617,16 @@ func isAllowedOrigin(
 	for _, allowed := range staticOrigins {
 		if strings.EqualFold(origin, allowed) {
 			log.Debug().Msgf("%s origin: %s allowed (static match)", logPrefix, origin)
+			return true
+		}
+	}
+
+	// Check current local IP origins dynamically. Network interfaces may not
+	// have addresses when the API server starts, especially during first boot.
+	localOrigins := expandLocalIPOrigins(localIPsProvider(), apiPort)
+	for _, allowed := range localOrigins {
+		if strings.EqualFold(origin, allowed) {
+			log.Debug().Msgf("%s origin: %s allowed (current local IP match)", logPrefix, origin)
 			return true
 		}
 	}
@@ -666,10 +677,9 @@ func expandCustomOrigins(customOrigins []string, port int) []string {
 	return result
 }
 
-// buildStaticAllowedOrigins creates the static part of allowed origins (base + local IPs).
-func buildStaticAllowedOrigins(baseOrigins, localIPs []string, port int) []string {
-	result := make([]string, 0, len(baseOrigins)+len(localIPs)*2)
-	result = append(result, baseOrigins...)
+// expandLocalIPOrigins creates allowed origins for current local interface IPs.
+func expandLocalIPOrigins(localIPs []string, port int) []string {
+	result := make([]string, 0, len(localIPs)*2)
 
 	for _, localIP := range localIPs {
 		result = append(result,
@@ -677,6 +687,15 @@ func buildStaticAllowedOrigins(baseOrigins, localIPs []string, port int) []strin
 			fmt.Sprintf("https://%s:%d", localIP, port),
 		)
 	}
+
+	return result
+}
+
+// buildStaticAllowedOrigins creates the static part of allowed origins (base + local IPs).
+func buildStaticAllowedOrigins(baseOrigins, localIPs []string, port int) []string {
+	result := make([]string, 0, len(baseOrigins)+len(localIPs)*2)
+	result = append(result, baseOrigins...)
+	result = append(result, expandLocalIPOrigins(localIPs, port)...)
 
 	return result
 }
@@ -691,15 +710,19 @@ func buildDynamicAllowedOrigins(baseOrigins, localIPs []string, port int, custom
 // OriginsProvider is a function that returns custom origins from config.
 type OriginsProvider func() []string
 
+// LocalIPsProvider is a function that returns current local interface IPs.
+type LocalIPsProvider func() []string
+
 // makeOriginValidator creates an origin validation function for CORS middleware.
 // It checks against static origins and dynamically fetches custom origins on each request.
 func makeOriginValidator(
 	staticOrigins []string,
+	localIPsProvider LocalIPsProvider,
 	customOriginsProvider OriginsProvider,
 	port int,
 ) func(*http.Request, string) bool {
 	return func(_ *http.Request, origin string) bool {
-		return isAllowedOrigin(origin, staticOrigins, customOriginsProvider, port, false, "cors")
+		return isAllowedOrigin(origin, staticOrigins, localIPsProvider, customOriginsProvider, port, false, "cors")
 	}
 }
 
@@ -1422,13 +1445,15 @@ func StartWithReady(
 		fmt.Sprintf("https://127.0.0.1:%d", port),
 	)
 
-	localIPs := helpers.GetAllLocalIPs()
+	localIPsProvider := LocalIPsProvider(helpers.GetAllLocalIPs)
+	localIPs := localIPsProvider()
 	for _, localIP := range localIPs {
 		log.Debug().Msgf("adding local IP to allowed origins: %s", localIP)
 	}
 
-	// Build static origins (base + local IPs + mDNS + OS hostname)
-	staticOrigins := buildStaticAllowedOrigins(baseOrigins, localIPs, port)
+	// Build static origins (base + mDNS + OS hostname). Local IP origins are
+	// checked dynamically because network interfaces may appear after startup.
+	staticOrigins := buildStaticAllowedOrigins(baseOrigins, nil, port)
 
 	if mdnsHostname != "" {
 		mdnsLocal := mdnsHostname + ".local"
@@ -1453,8 +1478,8 @@ func StartWithReady(
 
 	log.Debug().Msgf("staticOrigins: %v", staticOrigins)
 
-	// Create origin validator that checks static origins + dynamic custom origins
-	originValidator := makeOriginValidator(staticOrigins, cfg.AllowedOrigins, port)
+	// Create origin validator that checks static origins + dynamic local IP/custom origins.
+	originValidator := makeOriginValidator(staticOrigins, localIPsProvider, cfg.AllowedOrigins, port)
 
 	r := chi.NewRouter()
 
@@ -1531,7 +1556,7 @@ func StartWithReady(
 	session.Upgrader.CheckOrigin = func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		log.Debug().Msgf("websocket origin: %s", origin)
-		return isAllowedOrigin(origin, staticOrigins, cfg.AllowedOrigins, port, true, "websocket")
+		return isAllowedOrigin(origin, staticOrigins, localIPsProvider, cfg.AllowedOrigins, port, true, "websocket")
 	}
 	// melody's Session.Write is a non-blocking enqueue onto a per-session
 	// output channel (default size 256). When that channel fills, the
