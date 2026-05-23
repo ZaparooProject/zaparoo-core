@@ -1040,13 +1040,13 @@ func (g *GamelistXMLScraper) mapCompanionParentToResult(p *companionParent) scra
 
 // processCompanionEntries handles ZaparooCompanion-sourced entries in gamelist.xml.
 //
-// Phase 1 — parent upsert: entries with an id attribute and no path are upserted as
-// canonical MediaTitle rows with slug "gameid<id>". Full metadata tags and properties
-// are written via UpsertMediaTitleTags / UpsertMediaTitleProperties (idempotent).
+// Phase 1 — parent metadata map: entries with an id attribute and no path are mapped
+// to their tags and properties using MapToDB. No new MediaTitle rows are created.
 //
-// Phase 2 — child linking: entries with a parentid attribute and a path are resolved
-// to their indexed Media row. The child's MediaTitle is linked to the canonical parent
-// via SetParentTitle. Optional region and lang tags are also written to the child title.
+// Phase 2 — child enrichment: entries with a parentid attribute and a path are resolved
+// to their indexed Media row. The parent's metadata (tags + properties) is upserted
+// onto the child's existing MediaTitle. Optional region and lang tags are also written
+// to the child Media row.
 func (g *GamelistXMLScraper) processCompanionEntries(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
@@ -1064,59 +1064,23 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 		Int("children", len(children)).
 		Msg("gamelistxml: companion: processing entries")
 
-	// Phase 1: upsert parent meta titles and collect gameID → DBID mapping.
-	parentTitleDBIDs := make(map[string]int64, len(parents))
+	// Phase 1: map each parent record to its tag+property writes.
+	parentMeta := make(map[string]scraper.MapResult, len(parents))
 	for _, p := range parents {
-		slug := "gameid" + p.GameID
-		row := &database.MediaTitle{
-			SystemDBID:    system.DBID,
-			Slug:          slug,
-			Name:          cleanField(p.Game.Name),
-			SlugLength:    len(slug),
-			SlugWordCount: 1,
-		}
-
-		title, err := mdb.FindOrInsertMediaTitle(row)
-		if err != nil {
-			log.Warn().Err(err).Str("gameID", p.GameID).
-				Msg("gamelistxml: companion: upsert parent title failed")
-			continue
-		}
+		parentMeta[p.GameID] = g.mapCompanionParentToResult(&p)
 		log.Debug().
 			Str("gameID", p.GameID).
-			Int64("titleDBID", title.DBID).
-			Str("slug", slug).
-			Str("name", row.Name).
-			Msg("gamelistxml: companion: parent title upserted")
-		parentTitleDBIDs[p.GameID] = title.DBID
-
-		mapped := g.mapCompanionParentToResult(&p)
-
-		log.Debug().
-			Int64("titleDBID", title.DBID).
-			Int("tags", len(mapped.TitleTags)).
-			Int("props", len(mapped.TitleProps)).
-			Msg("gamelistxml: companion: parent mapped result")
-
-		if len(mapped.TitleTags) > 0 {
-			if tagsErr := mdb.UpsertMediaTitleTags(ctx, title.DBID, mapped.TitleTags); tagsErr != nil {
-				log.Warn().Err(tagsErr).Int64("titleDBID", title.DBID).
-					Msg("gamelistxml: companion: upsert parent tags failed")
-			}
-		}
-		if len(mapped.TitleProps) > 0 {
-			if propsErr := mdb.UpsertMediaTitleProperties(ctx, title.DBID, mapped.TitleProps); propsErr != nil {
-				log.Warn().Err(propsErr).Int64("titleDBID", title.DBID).
-					Msg("gamelistxml: companion: upsert parent props failed")
-			}
-		}
+			Str("name", p.Game.Name).
+			Int("tags", len(parentMeta[p.GameID].TitleTags)).
+			Int("props", len(parentMeta[p.GameID].TitleProps)).
+			Msg("gamelistxml: companion: parent mapped")
 	}
 
-	// Phase 2: link each child ROM title to its canonical parent.
-	// Child paths in companion XML are root-relative (./file.rom) so we match by
-	// filename suffix across all subdirectories rather than an exact path lookup.
+	// Phase 2: enrich each child's existing MediaTitle with parent metadata.
+	// Child paths are root-relative (./file.rom) so match by filename suffix.
+	seenTitles := make(map[int64]bool)
 	for _, c := range children {
-		parentTitleDBID, ok := parentTitleDBIDs[c.ParentGameID]
+		meta, ok := parentMeta[c.ParentGameID]
 		if !ok {
 			log.Debug().Str("parentGameID", c.ParentGameID).
 				Msg("gamelistxml: companion: parent not found for child, skipping")
@@ -1153,47 +1117,25 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 				Str("path", media.Path).
 				Int64("mediaDBID", media.DBID).
 				Int64("mediaTitleDBID", media.MediaTitleDBID).
-				Msg("gamelistxml: companion: processing matched child media")
+				Msg("gamelistxml: companion: enriching child media title with parent metadata")
 
-			// Skip if already linked to the correct parent (idempotent re-run).
-			childTitle, titleErr := mdb.FindMediaTitleByDBID(ctx, media.MediaTitleDBID)
-			if titleErr != nil || childTitle == nil {
-				log.Debug().Err(titleErr).Int64("titleDBID", media.MediaTitleDBID).
-					Msg("gamelistxml: companion: failed to fetch child title")
-				continue
-			}
-			log.Debug().
-				Int64("childTitleDBID", childTitle.DBID).
-				Int64("currentParentDBID", childTitle.ParentDBID).
-				Int64("wantParentDBID", parentTitleDBID).
-				Msg("gamelistxml: companion: child title parent state")
-			if childTitle.ParentDBID != parentTitleDBID {
-				if childTitle.ParentDBID != 0 {
-					// Title was previously linked to a different parent; unset first so
-					// SetParentTitle's ErrAlreadyAlias guard does not reject the re-link.
-					if unsetErr := mdb.UnsetParentTitle(ctx, media.MediaTitleDBID); unsetErr != nil {
-						log.Warn().Err(unsetErr).
-							Int64("childTitleDBID", media.MediaTitleDBID).
-							Msg("gamelistxml: companion: unset old parent failed")
-						continue
+			if !seenTitles[media.MediaTitleDBID] {
+				if len(meta.TitleTags) > 0 {
+					if tagsErr := mdb.UpsertMediaTitleTags(ctx, media.MediaTitleDBID, meta.TitleTags); tagsErr != nil {
+						log.Warn().Err(tagsErr).Int64("mediaTitleDBID", media.MediaTitleDBID).
+							Msg("gamelistxml: companion: upsert parent tags on child title failed")
 					}
 				}
-				if setErr := mdb.SetParentTitle(ctx, media.MediaTitleDBID, parentTitleDBID); setErr != nil {
-					log.Warn().Err(setErr).
-						Int64("childTitleDBID", media.MediaTitleDBID).
-						Int64("parentTitleDBID", parentTitleDBID).
-						Msg("gamelistxml: companion: set parent failed")
-					continue
+				if len(meta.TitleProps) > 0 {
+					if propsErr := mdb.UpsertMediaTitleProperties(ctx, media.MediaTitleDBID, meta.TitleProps); propsErr != nil {
+						log.Warn().Err(propsErr).Int64("mediaTitleDBID", media.MediaTitleDBID).
+							Msg("gamelistxml: companion: upsert parent props on child title failed")
+					}
 				}
-				log.Debug().
-					Int64("childTitleDBID", media.MediaTitleDBID).
-					Int64("parentTitleDBID", parentTitleDBID).
-					Msg("gamelistxml: companion: parent link set")
+				seenTitles[media.MediaTitleDBID] = true
 			} else {
-				log.Debug().
-					Int64("childTitleDBID", childTitle.DBID).
-					Int64("parentTitleDBID", parentTitleDBID).
-					Msg("gamelistxml: companion: parent link already correct, skipping")
+				log.Debug().Int64("mediaTitleDBID", media.MediaTitleDBID).
+					Msg("gamelistxml: companion: title already enriched, skipping")
 			}
 
 			if len(childTags) > 0 {

@@ -60,13 +60,6 @@ var ErrIndexingInProgress = errors.New("indexing is in progress")
 // database optimisation is active.
 var ErrOptimizationInProgress = errors.New("background optimisation is in progress")
 
-var (
-	ErrSelfReference = errors.New("title cannot be its own parent")
-	ErrAlreadyAlias  = errors.New("title is already an alias")
-	ErrNotCanonical  = errors.New("target title is not canonical")
-	ErrHasAliases    = errors.New("title has aliases and cannot become an alias")
-)
-
 // ErrTransactionActive is returned by CleanMediaOrphans when a batch
 // transaction is currently open.
 var ErrTransactionActive = errors.New("a transaction is currently active")
@@ -330,10 +323,6 @@ var secondaryIndexes = []secondaryIndex{
 	{
 		name: "mediatitles_secondary_slug_idx",
 		ddl:  "CREATE INDEX IF NOT EXISTS mediatitles_secondary_slug_idx ON MediaTitles(SecondarySlug)",
-	},
-	{
-		name: "mediatitles_parent_idx",
-		ddl:  "CREATE INDEX IF NOT EXISTS mediatitles_parent_idx ON MediaTitles(ParentDBID)",
 	},
 	{
 		name: "mediatitles_prefilter_idx",
@@ -1005,9 +994,7 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 		}
 
 		if db.batchInsertMediaTitle, err = NewBatchInserterWithOptions(db.ctx, tx, "MediaTitles",
-			[]string{
-				"DBID", "SystemDBID", "Slug", "Name", "SlugLength", "SlugWordCount", "SecondarySlug", "ParentDBID",
-			},
+			[]string{"DBID", "SystemDBID", "Slug", "Name", "SlugLength", "SlugWordCount", "SecondarySlug"},
 			db.batchSize, false); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for media titles: %w", err)
@@ -2143,7 +2130,7 @@ func (db *MediaDB) InsertMediaTitle(row *database.MediaTitle) (database.MediaTit
 	if db.batchInsertMediaTitle != nil {
 		err = db.batchInsertMediaTitle.Add(
 			row.DBID, row.SystemDBID, row.Slug, row.Name, row.SlugLength,
-			row.SlugWordCount, row.SecondarySlug, row.ParentDBID,
+			row.SlugWordCount, row.SecondarySlug,
 		)
 		if err != nil {
 			return *row, fmt.Errorf("failed to add media title to batch: %w", err)
@@ -2508,127 +2495,6 @@ func (db *MediaDB) GetAllSystems() ([]database.System, error) {
 
 func (db *MediaDB) GetAllMediaTitles() ([]database.MediaTitle, error) {
 	return sqlGetAllMediaTitles(db.ctx, db.sql)
-}
-
-func (db *MediaDB) GetMediaTitlesByDBIDs(
-	ctx context.Context, dbids []int64,
-) (map[int64]*database.MediaTitle, error) {
-	if db.sql == nil {
-		return nil, ErrNullSQL
-	}
-	return sqlGetMediaTitlesByDBIDs(ctx, db.conn(), dbids)
-}
-
-func (db *MediaDB) ResolveCanonical(ctx context.Context, dbid int64) (database.MediaTitle, error) {
-	if db.sql == nil {
-		return database.MediaTitle{}, ErrNullSQL
-	}
-	return sqlResolveCanonical(ctx, db.conn(), dbid)
-}
-
-func (db *MediaDB) GetAliasesOf(ctx context.Context, canonicalDBID int64) ([]database.MediaTitle, error) {
-	if db.sql == nil {
-		return nil, ErrNullSQL
-	}
-	return sqlGetAliasesOf(ctx, db.conn(), canonicalDBID)
-}
-
-func (db *MediaDB) GetMediaUnderCanonical(ctx context.Context, dbid int64) ([]database.Media, error) {
-	if db.sql == nil {
-		return nil, ErrNullSQL
-	}
-	canonical, err := sqlResolveCanonical(ctx, db.conn(), dbid)
-	if err != nil {
-		return nil, fmt.Errorf("GetMediaUnderCanonical: resolve canonical: %w", err)
-	}
-	return sqlGetMediaUnderCanonical(ctx, db.conn(), canonical.DBID)
-}
-
-func (db *MediaDB) SetParentTitle(ctx context.Context, aliasDBID, canonicalDBID int64) error {
-	if db.sql == nil {
-		return ErrNullSQL
-	}
-	if aliasDBID == canonicalDBID {
-		return ErrSelfReference
-	}
-
-	tx, err := db.sql.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("SetParentTitle: begin transaction: %w", err)
-	}
-
-	alias, err := sqlFindMediaTitle(ctx, tx, &database.MediaTitle{DBID: aliasDBID})
-	if err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("SetParentTitle: fetch alias: %w", err)
-	}
-	if database.IsMediaTitleAlias(&alias) {
-		_ = tx.Rollback()
-		return fmt.Errorf("SetParentTitle: alias title already has a parent: %w", ErrAlreadyAlias)
-	}
-
-	canonical, err := sqlFindMediaTitle(ctx, tx, &database.MediaTitle{DBID: canonicalDBID})
-	if err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("SetParentTitle: fetch canonical: %w", err)
-	}
-	if database.IsMediaTitleAlias(&canonical) {
-		_ = tx.Rollback()
-		return fmt.Errorf("SetParentTitle: target is not canonical: %w", ErrNotCanonical)
-	}
-
-	children, err := sqlGetAliasesOf(ctx, tx, aliasDBID)
-	if err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("SetParentTitle: check children: %w", err)
-	}
-	if len(children) > 0 {
-		_ = tx.Rollback()
-		return fmt.Errorf("SetParentTitle: title has %d aliases: %w", len(children), ErrHasAliases)
-	}
-
-	if err := sqlSetParentDBID(ctx, tx, aliasDBID, canonicalDBID); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("SetParentTitle: update: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("SetParentTitle: commit: %w", err)
-	}
-	db.invalidateCaches(invalidationScope{AllSystems: true})
-	return nil
-}
-
-func (db *MediaDB) UnsetParentTitle(ctx context.Context, aliasDBID int64) error {
-	if db.sql == nil {
-		return ErrNullSQL
-	}
-
-	tx, err := db.sql.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("UnsetParentTitle: begin transaction: %w", err)
-	}
-
-	alias, err := sqlFindMediaTitle(ctx, tx, &database.MediaTitle{DBID: aliasDBID})
-	if err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("UnsetParentTitle: fetch title: %w", err)
-	}
-	if database.IsMediaTitleCanonical(&alias) {
-		_ = tx.Rollback()
-		return fmt.Errorf("UnsetParentTitle: title is already canonical: %w", ErrNotCanonical)
-	}
-
-	if err := sqlSetParentDBID(ctx, tx, aliasDBID, 0); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("UnsetParentTitle: update: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("UnsetParentTitle: commit: %w", err)
-	}
-	db.invalidateCaches(invalidationScope{AllSystems: true})
-	return nil
 }
 
 func (db *MediaDB) GetAllMedia() ([]database.Media, error) {

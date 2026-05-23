@@ -2344,51 +2344,6 @@ func (m *MockMediaDBI) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*d
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
-func (m *MockMediaDBI) GetMediaTitlesByDBIDs(
-	ctx context.Context, dbids []int64,
-) (map[int64]*database.MediaTitle, error) {
-	args := m.Called(ctx, dbids)
-	if result, ok := args.Get(0).(map[int64]*database.MediaTitle); ok {
-		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
-	}
-	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
-}
-
-func (m *MockMediaDBI) ResolveCanonical(ctx context.Context, dbid int64) (database.MediaTitle, error) {
-	args := m.Called(ctx, dbid)
-	if result, ok := args.Get(0).(database.MediaTitle); ok {
-		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
-	}
-	//nolint:wrapcheck // mock passes testify errors through unwrapped by design
-	return database.MediaTitle{}, args.Error(1)
-}
-
-func (m *MockMediaDBI) GetAliasesOf(ctx context.Context, canonicalDBID int64) ([]database.MediaTitle, error) {
-	args := m.Called(ctx, canonicalDBID)
-	if result, ok := args.Get(0).([]database.MediaTitle); ok {
-		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
-	}
-	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
-}
-
-func (m *MockMediaDBI) GetMediaUnderCanonical(ctx context.Context, dbid int64) ([]database.Media, error) {
-	args := m.Called(ctx, dbid)
-	if result, ok := args.Get(0).([]database.Media); ok {
-		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
-	}
-	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
-}
-
-func (m *MockMediaDBI) SetParentTitle(ctx context.Context, aliasDBID, canonicalDBID int64) error {
-	args := m.Called(ctx, aliasDBID, canonicalDBID)
-	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
-}
-
-func (m *MockMediaDBI) UnsetParentTitle(ctx context.Context, aliasDBID int64) error {
-	args := m.Called(ctx, aliasDBID)
-	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
-}
-
 func (m *MockMediaDBI) GetMediaTitleProperties(
 	ctx context.Context, mediaTitleDBID int64,
 ) ([]database.MediaProperty, error) {

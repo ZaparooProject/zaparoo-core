@@ -256,12 +256,8 @@ type MediaMetaTitleResponse struct {
 }
 
 // MediaMetaMediaResponse is the top-level Media object in a media.meta response.
-// When the linked MediaTitle is an alias (ParentDBID != 0), Title holds the canonical
-// parent and AliasTitle holds the immediately-linked alias. When the linked title is
-// already canonical, AliasTitle is omitted.
 type MediaMetaMediaResponse struct {
 	Properties map[string]MediaMetaPropertyItem `json:"properties"`
-	AliasTitle *MediaMetaTitleResponse          `json:"aliasTitle,omitempty"`
 	Path       string                           `json:"path"`
 	ParentDir  string                           `json:"parentDir"`
 	Tags       []database.TagInfo               `json:"tags"`

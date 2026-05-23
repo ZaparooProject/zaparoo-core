@@ -1057,7 +1057,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 	stmt, err := db.sql.PrepareContext(ctx, `
 		SELECT
 			m.DBID, m.Path, m.ParentDir, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
-			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID, mt.ParentDBID,
+			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
 			s.DBID, s.SystemID, s.Name
 		FROM Media m
 		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
@@ -1079,7 +1079,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 		&row.DBID, &row.Path, &row.ParentDir, &row.IsMissing,
 		&row.MediaTitleDBID, &row.SystemDBID,
 		&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
-		&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID, &row.Title.ParentDBID,
+		&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,
 		&row.System.DBID, &row.System.SystemID, &row.System.Name,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1107,7 +1107,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 	rows, err := db.sql.QueryContext(ctx, `
 		SELECT
 			m.DBID, m.Path, m.ParentDir, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
-			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID, mt.ParentDBID,
+			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
 			s.DBID, s.SystemID, s.Name
 		FROM Media m
 		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
@@ -1129,7 +1129,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 			&row.DBID, &row.Path, &row.ParentDir, &row.IsMissing,
 			&row.MediaTitleDBID, &row.SystemDBID,
 			&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
-			&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID, &row.Title.ParentDBID,
+			&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,
 			&row.System.DBID, &row.System.SystemID, &row.System.Name,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan GetMediaWithTitleAndSystemByIDs: %w", err)

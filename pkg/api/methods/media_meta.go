@@ -20,7 +20,6 @@
 package methods
 
 import (
-	"context"
 	"encoding/base64"
 	"fmt"
 
@@ -55,15 +54,11 @@ func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	}
 
 	db := env.Database.MediaDB
-
-	parentIDs := collectParentTitleIDs(resolved)
-	allTitleIDs := appendUniqueIDs(titleIDs, parentIDs)
-
 	mediaTags, err := db.GetMediaTagsByMediaDBIDs(env.Context, mediaIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media tags: %w", err)
 	}
-	titleTags, err := db.GetMediaTitleTagsByMediaTitleDBIDs(env.Context, allTitleIDs)
+	titleTags, err := db.GetMediaTitleTagsByMediaTitleDBIDs(env.Context, titleIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get title tags: %w", err)
 	}
@@ -71,24 +66,16 @@ func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media properties: %w", err)
 	}
-	titleProps, err := db.GetMediaTitlePropertiesByMediaTitleDBIDs(env.Context, allTitleIDs)
+	titleProps, err := db.GetMediaTitlePropertiesByMediaTitleDBIDs(env.Context, titleIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 
-	parentTitles, err := fetchParentTitles(env.Context, db, parentIDs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get parent titles: %w", err)
-	}
-
 	if !params.Batch {
-		row := resolved[0].Row
-		parentTitle := parentTitles[row.Title.ParentDBID]
 		return buildMediaMetaResponse(
-			row,
-			mediaTags[row.DBID], titleTags[row.Title.DBID],
-			mediaProps[row.DBID], titleProps[row.Title.DBID],
-			parentTitle, titleTags[row.Title.ParentDBID], titleProps[row.Title.ParentDBID],
+			resolved[0].Row,
+			mediaTags[resolved[0].Row.DBID], titleTags[resolved[0].Row.Title.DBID],
+			mediaProps[resolved[0].Row.DBID], titleProps[resolved[0].Row.Title.DBID],
 		), nil
 	}
 
@@ -99,12 +86,10 @@ func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 			items[i].Error = &errText
 			continue
 		}
-		parentTitle := parentTitles[item.Row.Title.ParentDBID]
 		response := buildMediaMetaResponse(
 			item.Row,
 			mediaTags[item.Row.DBID], titleTags[item.Row.Title.DBID],
 			mediaProps[item.Row.DBID], titleProps[item.Row.Title.DBID],
-			parentTitle, titleTags[item.Row.Title.ParentDBID], titleProps[item.Row.Title.ParentDBID],
 		)
 		items[i].Media = &response.Media
 	}
@@ -147,28 +132,7 @@ func handleMediaMetaSinglePath(env *requests.RequestEnv, ref mediaRefParam) (any
 		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 
-	var parentTitle *database.MediaTitle
-	var parentTitleTags []database.TagInfo
-	var parentTitleProps []database.MediaProperty
-	if row.Title.ParentDBID != 0 {
-		parentTitle, err = db.FindMediaTitleByDBID(env.Context, row.Title.ParentDBID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get parent title: %w", err)
-		}
-		if parentTitle != nil {
-			parentTitleTags, err = db.GetMediaTitleTagsByMediaTitleDBID(env.Context, parentTitle.DBID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get parent title tags: %w", err)
-			}
-			parentTitleProps, err = db.GetMediaTitleProperties(env.Context, parentTitle.DBID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get parent title properties: %w", err)
-			}
-		}
-	}
-
-	return buildMediaMetaResponse(row, mediaTags, titleTags, mediaProps, titleProps,
-		parentTitle, parentTitleTags, parentTitleProps), nil
+	return buildMediaMetaResponse(row, mediaTags, titleTags, mediaProps, titleProps), nil
 }
 
 func buildMediaMetaResponse(
@@ -177,102 +141,32 @@ func buildMediaMetaResponse(
 	titleTags []database.TagInfo,
 	mediaProps []database.MediaProperty,
 	titleProps []database.MediaProperty,
-	parentTitle *database.MediaTitle,
-	parentTitleTags []database.TagInfo,
-	parentTitleProps []database.MediaProperty,
 ) models.MediaMetaResponse {
 	var secondarySlug *string
 	if row.Title.SecondarySlug.Valid {
 		secondarySlug = &row.Title.SecondarySlug.String
 	}
 
-	system := models.MediaMetaSystemResponse{
-		ID:   row.System.SystemID,
-		Name: row.System.Name,
-	}
-
-	immediateTitleResp := models.MediaMetaTitleResponse{
-		Slug:          row.Title.Slug,
-		SecondarySlug: secondarySlug,
-		Name:          row.Title.Name,
-		SlugLength:    row.Title.SlugLength,
-		SlugWordCount: row.Title.SlugWordCount,
-		System:        system,
-		Tags:          titleTags,
-		Properties:    mapMediaProperties(titleProps),
-	}
-
-	media := models.MediaMetaMediaResponse{
+	return models.MediaMetaResponse{Media: models.MediaMetaMediaResponse{
 		Path:       row.Path,
 		ParentDir:  row.ParentDir,
 		IsMissing:  row.IsMissing,
 		Tags:       mediaTags,
 		Properties: mapMediaProperties(mediaProps),
-	}
-
-	if parentTitle != nil {
-		var parentSecondarySlug *string
-		if parentTitle.SecondarySlug.Valid {
-			parentSecondarySlug = &parentTitle.SecondarySlug.String
-		}
-		media.Title = models.MediaMetaTitleResponse{
-			Slug:          parentTitle.Slug,
-			SecondarySlug: parentSecondarySlug,
-			Name:          parentTitle.Name,
-			SlugLength:    parentTitle.SlugLength,
-			SlugWordCount: parentTitle.SlugWordCount,
-			System:        system,
-			Tags:          parentTitleTags,
-			Properties:    mapMediaProperties(parentTitleProps),
-		}
-		media.AliasTitle = &immediateTitleResp
-	} else {
-		media.Title = immediateTitleResp
-	}
-
-	return models.MediaMetaResponse{Media: media}
-}
-
-func collectParentTitleIDs(resolved []resolvedMediaItem) []int64 {
-	seen := make(map[int64]bool)
-	var ids []int64
-	for _, item := range resolved {
-		if item.Row == nil || item.Row.Title.ParentDBID == 0 {
-			continue
-		}
-		if !seen[item.Row.Title.ParentDBID] {
-			seen[item.Row.Title.ParentDBID] = true
-			ids = append(ids, item.Row.Title.ParentDBID)
-		}
-	}
-	return ids
-}
-
-func appendUniqueIDs(a, b []int64) []int64 {
-	if len(b) == 0 {
-		return a
-	}
-	seen := make(map[int64]bool, len(a))
-	for _, id := range a {
-		seen[id] = true
-	}
-	result := a
-	for _, id := range b {
-		if !seen[id] {
-			seen[id] = true
-			result = append(result, id)
-		}
-	}
-	return result
-}
-
-func fetchParentTitles(
-	ctx context.Context, db database.MediaDBI, ids []int64,
-) (map[int64]*database.MediaTitle, error) {
-	if len(ids) == 0 {
-		return map[int64]*database.MediaTitle{}, nil
-	}
-	return db.GetMediaTitlesByDBIDs(ctx, ids)
+		Title: models.MediaMetaTitleResponse{
+			Slug:          row.Title.Slug,
+			SecondarySlug: secondarySlug,
+			Name:          row.Title.Name,
+			SlugLength:    row.Title.SlugLength,
+			SlugWordCount: row.Title.SlugWordCount,
+			System: models.MediaMetaSystemResponse{
+				ID:   row.System.SystemID,
+				Name: row.System.Name,
+			},
+			Tags:       titleTags,
+			Properties: mapMediaProperties(titleProps),
+		},
+	}}
 }
 
 // mapMediaProperties converts a []database.MediaProperty slice into a map keyed
