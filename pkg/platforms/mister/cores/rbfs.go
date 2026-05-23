@@ -38,6 +38,10 @@ type RBFInfo struct {
 }
 
 func ParseRBFPath(path string) RBFInfo {
+	return parseRBFPathAt(config.SDRootDir, path)
+}
+
+func parseRBFPathAt(root, path string) RBFInfo {
 	info := RBFInfo{
 		Path:     path,
 		Filename: filepath.Base(path),
@@ -49,8 +53,8 @@ func ParseRBFPath(path string) RBFInfo {
 		info.ShortName = strings.TrimSuffix(info.Filename, filepath.Ext(info.Filename))
 	}
 
-	if strings.HasPrefix(path, config.SDRootDir) {
-		relDir := strings.TrimPrefix(filepath.Dir(path), config.SDRootDir+"/")
+	if strings.HasPrefix(path, root) {
+		relDir := strings.TrimPrefix(filepath.Dir(path), root+"/")
 		info.MglName = filepath.Join(relDir, info.ShortName)
 	} else {
 		info.MglName = path
@@ -59,8 +63,13 @@ func ParseRBFPath(path string) RBFInfo {
 	return info
 }
 
-// Find all rbf files in the top 2 menu levels of the SD card.
+// Find all rbf files in the top 2 menu levels of the SD card, plus
+// RetroAchievements cores under _RA_Cores/Cores.
 func shallowScanRBF() ([]RBFInfo, error) {
+	return shallowScanRBFAt(config.SDRootDir)
+}
+
+func shallowScanRBFAt(root string) ([]RBFInfo, error) {
 	results := make([]RBFInfo, 0)
 
 	isRbf := func(file os.DirEntry) bool {
@@ -79,40 +88,48 @@ func shallowScanRBF() ([]RBFInfo, error) {
 				return RBFInfo{}, fmt.Errorf("failed to readlink %s: %w", path, err)
 			}
 
-			return ParseRBFPath(newPath), nil
+			return parseRBFPathAt(root, newPath), nil
 		}
-		return ParseRBFPath(path), nil
+		return parseRBFPathAt(root, path), nil
 	}
 
-	files, err := os.ReadDir(config.SDRootDir)
+	addRBF := func(path string) {
+		info, err := infoSymlink(path)
+		if err != nil {
+			return
+		}
+		results = append(results, info)
+	}
+
+	files, err := os.ReadDir(root)
 	if err != nil {
-		return results, fmt.Errorf("failed to read SD root directory %s: %w", config.SDRootDir, err)
+		return results, fmt.Errorf("failed to read SD root directory %s: %w", root, err)
 	}
 
 	for _, file := range files {
 		if file.IsDir() && strings.HasPrefix(file.Name(), "_") {
-			subFiles, err := os.ReadDir(filepath.Join(config.SDRootDir, file.Name()))
+			subFiles, err := os.ReadDir(filepath.Join(root, file.Name()))
 			if err != nil {
 				continue
 			}
 
 			for _, subFile := range subFiles {
 				if isRbf(subFile) {
-					path := filepath.Join(config.SDRootDir, file.Name(), subFile.Name())
-					info, err := infoSymlink(path)
-					if err != nil {
-						continue
-					}
-					results = append(results, info)
+					addRBF(filepath.Join(root, file.Name(), subFile.Name()))
 				}
 			}
 		} else if isRbf(file) {
-			path := filepath.Join(config.SDRootDir, file.Name())
-			info, err := infoSymlink(path)
-			if err != nil {
-				continue
+			addRBF(filepath.Join(root, file.Name()))
+		}
+	}
+
+	raCoreDir := filepath.Join(root, "_RA_Cores", "Cores")
+	raCoreFiles, err := os.ReadDir(raCoreDir)
+	if err == nil {
+		for _, file := range raCoreFiles {
+			if isRbf(file) {
+				addRBF(filepath.Join(raCoreDir, file.Name()))
 			}
-			results = append(results, info)
 		}
 	}
 

@@ -513,3 +513,46 @@ func TestDualRAMLaunchersExist(t *testing.T) {
 		})
 	}
 }
+
+func TestRetroAchievementsLaunchersExist(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	cases := []struct {
+		id       string
+		systemID string
+	}{
+		{"RANES", "NES"},
+		{"RASNES", "SNES"},
+		{"RAGameboy", "Gameboy"},
+		{"RAGBA", "GBA"},
+		{"RANintendo64", "Nintendo64"},
+		{"RAPSX", "PSX"},
+		{"RAMegaDrive", "Genesis"},
+		{"RAMegaCD", "MegaCD"},
+		{"RASMS", "MasterSystem"},
+		{"RANeoGeo", "NeoGeo"},
+		{"RATurboGrafx16", "TurboGrafx16"},
+		{"RAAtari7800", "Atari7800"},
+		{"RAS32X", "Sega32X"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			t.Parallel()
+
+			var found *platforms.Launcher
+			for i := range launchers {
+				if launchers[i].ID == tc.id {
+					found = &launchers[i]
+					break
+				}
+			}
+			require.NotNil(t, found, "%s launcher should exist", tc.id)
+			assert.Equal(t, tc.systemID, found.SystemID,
+				"%s must inherit slots from %s", tc.id, tc.systemID)
+		})
+	}
+}
