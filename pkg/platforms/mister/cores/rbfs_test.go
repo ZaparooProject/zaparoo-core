@@ -41,9 +41,10 @@ func TestShallowScanRBF_IncludesRetroAchievementsCores(t *testing.T) {
 	rbfs, err := shallowScanRBFAt(root)
 	require.NoError(t, err)
 
+	expectedMglName := filepath.Join("_RA_Cores", "Cores", "NES")
 	var found *RBFInfo
 	for i := range rbfs {
-		if rbfs[i].MglName == "_RA_Cores/Cores/NES" {
+		if rbfs[i].MglName == expectedMglName {
 			found = &rbfs[i]
 			break
 		}

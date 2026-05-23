@@ -54,8 +54,15 @@ func parseRBFPathAt(root, path string) RBFInfo {
 	}
 
 	if strings.HasPrefix(path, root) {
-		relDir := strings.TrimPrefix(filepath.Dir(path), root+"/")
-		info.MglName = filepath.Join(relDir, info.ShortName)
+		relDir, err := filepath.Rel(root, filepath.Dir(path))
+		switch {
+		case err != nil || relDir == ".." || strings.HasPrefix(relDir, ".."+string(os.PathSeparator)):
+			info.MglName = path
+		case relDir == "." || relDir == "":
+			info.MglName = info.ShortName
+		default:
+			info.MglName = filepath.Join(relDir, info.ShortName)
+		}
 	} else {
 		info.MglName = path
 	}
@@ -83,9 +90,9 @@ func shallowScanRBFAt(root string) ([]RBFInfo, error) {
 		}
 
 		if info.Mode()&os.ModeSymlink != 0 {
-			newPath, err := os.Readlink(path)
-			if err != nil {
-				return RBFInfo{}, fmt.Errorf("failed to readlink %s: %w", path, err)
+			newPath, readlinkErr := os.Readlink(path)
+			if readlinkErr != nil {
+				return RBFInfo{}, fmt.Errorf("failed to readlink %s: %w", path, readlinkErr)
 			}
 
 			return parseRBFPathAt(root, newPath), nil
@@ -108,8 +115,8 @@ func shallowScanRBFAt(root string) ([]RBFInfo, error) {
 
 	for _, file := range files {
 		if file.IsDir() && strings.HasPrefix(file.Name(), "_") {
-			subFiles, err := os.ReadDir(filepath.Join(root, file.Name()))
-			if err != nil {
+			subFiles, subErr := os.ReadDir(filepath.Join(root, file.Name()))
+			if subErr != nil {
 				continue
 			}
 
@@ -124,8 +131,8 @@ func shallowScanRBFAt(root string) ([]RBFInfo, error) {
 	}
 
 	raCoreDir := filepath.Join(root, "_RA_Cores", "Cores")
-	raCoreFiles, err := os.ReadDir(raCoreDir)
-	if err == nil {
+	raCoreFiles, raErr := os.ReadDir(raCoreDir)
+	if raErr == nil {
 		for _, file := range raCoreFiles {
 			if isRbf(file) {
 				addRBF(filepath.Join(raCoreDir, file.Name()))
