@@ -43,26 +43,40 @@ import (
 //   - Pattern: lock → modify state → copy needed data → unlock → send notifications
 //
 // See SetActiveCard, SetActiveMedia, SetReader, RemoveReader for examples.
+type PendingLaunchOverride struct {
+	CreatedAt  time.Time
+	LauncherID string
+	Source     tokens.Token
+}
+
+type PendingWrite struct {
+	CreatedAt time.Time
+	Payload   string
+	Source    tokens.Token
+}
+
 type State struct {
-	platform         platforms.Platform
-	ctx              context.Context
-	activePlaylist   *playlists.Playlist
-	softwareToken    *tokens.Token
-	wroteToken       *tokens.Token
-	readers          map[string]readers.Reader
-	ctxCancelFunc    context.CancelFunc
-	activeMedia      *models.ActiveMedia
-	onMediaStartHook func(*models.ActiveMedia)
-	launcherManager  *LauncherManager
-	Notifications    chan<- models.Notification
-	inbox            *inbox.Service
-	bootUUID         string
-	lastScanned      tokens.Token
-	activeToken      tokens.Token
-	mu               syncutil.RWMutex
-	stopService      bool
-	restartRequested bool
-	runZapScript     bool
+	platform              platforms.Platform
+	ctx                   context.Context
+	activePlaylist        *playlists.Playlist
+	softwareToken         *tokens.Token
+	wroteToken            *tokens.Token
+	pendingLaunchOverride *PendingLaunchOverride
+	pendingWrite          *PendingWrite
+	readers               map[string]readers.Reader
+	ctxCancelFunc         context.CancelFunc
+	activeMedia           *models.ActiveMedia
+	onMediaStartHook      func(*models.ActiveMedia)
+	launcherManager       *LauncherManager
+	Notifications         chan<- models.Notification
+	inbox                 *inbox.Service
+	bootUUID              string
+	lastScanned           tokens.Token
+	activeToken           tokens.Token
+	mu                    syncutil.RWMutex
+	stopService           bool
+	restartRequested      bool
+	runZapScript          bool
 }
 
 func NewState(platform platforms.Platform, bootUUID string) (state *State, notificationCh <-chan models.Notification) {
@@ -274,6 +288,52 @@ func (s *State) GetWroteToken() *tokens.Token {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.wroteToken
+}
+
+func (s *State) SetPendingLaunchOverride(pending *PendingLaunchOverride) {
+	s.mu.Lock()
+	s.pendingLaunchOverride = pending
+	s.mu.Unlock()
+}
+
+func (s *State) GetPendingLaunchOverride() *PendingLaunchOverride {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pendingLaunchOverride
+}
+
+func (s *State) ConsumePendingLaunchOverride() *PendingLaunchOverride {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.pendingLaunchOverride
+	s.pendingLaunchOverride = nil
+	return pending
+}
+
+func (s *State) SetPendingWrite(pending *PendingWrite) {
+	s.mu.Lock()
+	s.pendingWrite = pending
+	s.mu.Unlock()
+}
+
+func (s *State) GetPendingWrite() *PendingWrite {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pendingWrite
+}
+
+func (s *State) ConsumePendingWrite() *PendingWrite {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.pendingWrite
+	s.pendingWrite = nil
+	return pending
+}
+
+func (s *State) ClearPendingWrite() {
+	s.mu.Lock()
+	s.pendingWrite = nil
+	s.mu.Unlock()
 }
 
 func (s *State) GetActivePlaylist() *playlists.Playlist {

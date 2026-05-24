@@ -20,6 +20,8 @@
 package mocks
 
 import (
+	"context"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -93,6 +95,13 @@ func (m *MockReader) Info() string {
 // Write sends a string to the device to be written to a token
 func (m *MockReader) Write(data string) (*tokens.Token, error) {
 	args := m.Called(data)
+	token, _ := args.Get(0).(*tokens.Token) //nolint:revive // nil is valid when assertion fails
+	return token, args.Error(1)             //nolint:wrapcheck // mock returns configured error directly
+}
+
+// WriteTarget sends a string to a specific target token.
+func (m *MockReader) WriteTarget(ctx context.Context, data string, opts readers.WriteOptions) (*tokens.Token, error) {
+	args := m.Called(ctx, data, opts)
 	token, _ := args.Get(0).(*tokens.Token) //nolint:revive // nil is valid when assertion fails
 	return token, args.Error(1)             //nolint:wrapcheck // mock returns configured error directly
 }

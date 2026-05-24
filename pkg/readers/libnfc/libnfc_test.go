@@ -22,11 +22,13 @@
 package libnfc
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -381,6 +383,22 @@ func TestReaderID(t *testing.T) {
 		id := r.ReaderID()
 		assert.NotEmpty(t, id)
 	})
+}
+
+func TestWriteWithContext_NilContext(t *testing.T) {
+	t.Parallel()
+
+	r := NewReader(&config.Instance{})
+	var nilCtx context.Context
+	var token *tokens.Token
+	var err error
+
+	assert.NotPanics(t, func() {
+		token, err = r.WriteWithContext(nilCtx, "test")
+	})
+
+	assert.Nil(t, token)
+	assert.EqualError(t, err, "invalid write parameters: reader not connected")
 }
 
 func TestValidateWriteParameters(t *testing.T) {
