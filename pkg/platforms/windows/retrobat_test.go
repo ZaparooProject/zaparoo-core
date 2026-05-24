@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -95,6 +96,44 @@ func TestCreateRetroBatLauncher(t *testing.T) {
 	assert.NotNil(t, launcher.Launch)
 	assert.NotNil(t, launcher.Kill)
 	assert.NotNil(t, launcher.Scanner)
+}
+
+func TestIsRetroBatLauncher(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		launcher *platforms.Launcher
+		name     string
+		want     bool
+	}{
+		{
+			name:     "nil launcher",
+			launcher: nil,
+			want:     false,
+		},
+		{
+			name:     "RetroBat launcher",
+			launcher: &platforms.Launcher{ID: "RetroBatSNES"},
+			want:     true,
+		},
+		{
+			name:     "non-RetroBat launcher",
+			launcher: &platforms.Launcher{ID: "LaunchBox"},
+			want:     false,
+		},
+		{
+			name:     "short launcher ID",
+			launcher: &platforms.Launcher{ID: "Retro"},
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isRetroBatLauncher(tt.launcher))
+		})
+	}
 }
 
 func TestRetroBatLauncherHasRequiredFunctions(t *testing.T) {

@@ -43,6 +43,7 @@ import (
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/deverr"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
@@ -75,6 +76,8 @@ type Platform struct {
 	platformMappingsMu      syncutil.RWMutex
 	launchBoxPipeLock       syncutil.Mutex
 }
+
+var retroBatLaunchSettleDelay = 2 * time.Second
 
 func (*Platform) ID() string {
 	return platformids.Windows
@@ -246,6 +249,20 @@ func (p *Platform) LaunchMedia(
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
+
+	if isRetroBatLauncher(launcher) {
+		_, running, runningErr := esapi.APIRunningGame()
+		if runningErr != nil {
+			log.Warn().Err(runningErr).Msg("RetroBat ES API unavailable, assuming no game is running")
+		} else if running {
+			log.Info().Msg("exiting current RetroBat media")
+			if stopErr := p.StopActiveLauncher(platforms.StopForPreemption); stopErr != nil {
+				return fmt.Errorf("failed to stop active RetroBat launcher: %w", stopErr)
+			}
+			time.Sleep(retroBatLaunchSettleDelay)
+		}
+	}
+
 	err := platforms.DoLaunch(&platforms.LaunchParams{
 		Config:         cfg,
 		Platform:       p,

@@ -26,12 +26,12 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"slices"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/ndef"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/clausecker/nfc/v2"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/exp/slices"
 )
 
 const (

@@ -323,6 +323,12 @@ func runTaskKillPIDTree(ctx context.Context, pid uint32) error {
 	return nil
 }
 
+const retroBatLauncherPrefix = "RetroBat"
+
+func isRetroBatLauncher(launcher *platforms.Launcher) bool {
+	return launcher != nil && strings.HasPrefix(launcher.ID, retroBatLauncherPrefix)
+}
+
 // createRetroBatLauncher creates a launcher for a specific RetroBat system.
 func createRetroBatLauncher(systemFolder string, info esde.SystemInfo) platforms.Launcher {
 	launcherID := info.GetLauncherID()
