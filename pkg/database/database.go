@@ -732,6 +732,10 @@ type MediaDBI interface {
 	// or nil, nil when no row is found.
 	FindMediaTitleByDBID(ctx context.Context, dbid int64) (*MediaTitle, error)
 
+	// FindMediaTitleBySystemAndSlug returns the MediaTitle matching systemDBID and
+	// slug, or nil, nil when no row is found.
+	FindMediaTitleBySystemAndSlug(ctx context.Context, systemDBID int64, slug string) (*MediaTitle, error)
+
 	// GetMediaTitleProperties returns all properties for a MediaTitle row,
 	// with TypeTagDBID resolved to the tag value string.
 	GetMediaTitleProperties(ctx context.Context, mediaTitleDBID int64) ([]MediaProperty, error)

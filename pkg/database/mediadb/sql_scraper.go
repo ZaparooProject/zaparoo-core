@@ -902,6 +902,40 @@ func (db *MediaDB) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*datab
 	return &t, nil
 }
 
+// FindMediaTitleBySystemAndSlug returns the MediaTitle matching systemDBID and
+// slug, or nil, nil when not found.
+func (db *MediaDB) FindMediaTitleBySystemAndSlug(
+	ctx context.Context, systemDBID int64, slug string,
+) (*database.MediaTitle, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	stmt, err := db.sql.PrepareContext(ctx, `
+		SELECT DBID, SystemDBID, Slug, Name
+		FROM MediaTitles
+		WHERE SystemDBID = ? AND Slug = ?
+		LIMIT 1
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare FindMediaTitleBySystemAndSlug: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	var t database.MediaTitle
+	err = stmt.QueryRowContext(ctx, systemDBID, slug).Scan(&t.DBID, &t.SystemDBID, &t.Slug, &t.Name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil //nolint:nilnil // sql.ErrNoRows means not found; nil result is the "not found" sentinel
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan FindMediaTitleBySystemAndSlug: %w", err)
+	}
+	return &t, nil
+}
+
 // GetMediaTitleProperties returns all MediaTitleProperties rows for the given
 // title. TypeTag is populated as "type:value" from the joined Tags/TagTypes rows.
 func (db *MediaDB) GetMediaTitleProperties(

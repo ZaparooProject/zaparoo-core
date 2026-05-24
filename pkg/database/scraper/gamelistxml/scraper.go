@@ -1091,6 +1091,41 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 		}
 
 		filename := filepath.Base(c.ResolvedPath)
+
+		if filepath.Ext(filename) == ".slug" {
+			slug := strings.TrimSuffix(filename, ".slug")
+			title, titleErr := mdb.FindMediaTitleBySystemAndSlug(ctx, system.DBID, slug)
+			if titleErr != nil {
+				log.Debug().Err(titleErr).Str("slug", slug).
+					Msg("gamelistxml: companion: error looking up child title by slug")
+				continue
+			}
+			if title == nil {
+				log.Debug().Str("slug", slug).
+					Msg("gamelistxml: companion: no indexed title found for child slug, skipping")
+				continue
+			}
+			if !seenTitles[title.DBID] {
+				if len(meta.TitleTags) > 0 {
+					if tagsErr := mdb.UpsertMediaTitleTags(ctx, title.DBID, meta.TitleTags); tagsErr != nil {
+						log.Warn().Err(tagsErr).Int64("mediaTitleDBID", title.DBID).
+							Msg("gamelistxml: companion: upsert parent tags on slug-matched title failed")
+					}
+				}
+				if len(meta.TitleProps) > 0 {
+					if propsErr := mdb.UpsertMediaTitleProperties(ctx, title.DBID, meta.TitleProps); propsErr != nil {
+						log.Warn().Err(propsErr).Int64("mediaTitleDBID", title.DBID).
+							Msg("gamelistxml: companion: upsert parent props on slug-matched title failed")
+					}
+				}
+				seenTitles[title.DBID] = true
+			} else {
+				log.Debug().Int64("mediaTitleDBID", title.DBID).
+					Msg("gamelistxml: companion: slug-matched title already enriched, skipping")
+			}
+			continue
+		}
+
 		matched, mediaErr := mdb.FindMediaBySystemAndPathSuffix(ctx, system.DBID, filename)
 		if mediaErr != nil {
 			log.Debug().Err(mediaErr).Str("filename", filename).

@@ -2344,6 +2344,16 @@ func (m *MockMediaDBI) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*d
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) FindMediaTitleBySystemAndSlug(
+	ctx context.Context, systemDBID int64, slug string,
+) (*database.MediaTitle, error) {
+	args := m.Called(ctx, systemDBID, slug)
+	if result, ok := args.Get(0).(*database.MediaTitle); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) GetMediaTitleProperties(
 	ctx context.Context, mediaTitleDBID int64,
 ) ([]database.MediaProperty, error) {

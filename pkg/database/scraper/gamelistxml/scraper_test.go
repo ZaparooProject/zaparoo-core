@@ -30,10 +30,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1064,4 +1066,782 @@ func TestMapToDB_FilesystemFallback_BoxartBack(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "filesystem fallback boxartback property missing")
+}
+
+// --- resolveESPath additional ---
+
+func TestResolveESPath_HomeRelativeEscapesRoot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// ~/... resolves to home dir, which is outside t.TempDir().
+	got := resolveESPath("~/games/mario.nes", root)
+	assert.Empty(t, got, "home-relative path escaping system root must be rejected")
+}
+
+func TestResolveESPath_HomeRelativeInsideRoot(t *testing.T) {
+	t.Parallel()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home dir")
+	}
+	// Use home dir itself as the system root so ~/relative stays inside.
+	got := resolveESPath("~/games/mario.nes", home)
+	assert.Equal(t, filepath.Join(home, "games", "mario.nes"), got)
+}
+
+// --- resolveESAssetPath ---
+
+func TestResolveESAssetPath_InsideRoot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	got := resolveESAssetPath("./images/art.png", root)
+	assert.Equal(t, filepath.Join(root, "images", "art.png"), got)
+}
+
+func TestResolveESAssetPath_OutsideRoot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	got := resolveESAssetPath("../../etc/passwd", root)
+	assert.Empty(t, got)
+}
+
+func TestResolveESAssetPath_EmptyPath(t *testing.T) {
+	t.Parallel()
+	got := resolveESAssetPath("", t.TempDir())
+	assert.Empty(t, got)
+}
+
+// --- mimeFromExt additional ---
+
+func TestMimeFromExt_JPEG(t *testing.T) { assert.Equal(t, "image/jpeg", mimeFromExt("photo.jpeg")) }
+func TestMimeFromExt_GIF(t *testing.T)  { assert.Equal(t, "image/gif", mimeFromExt("anim.gif")) }
+func TestMimeFromExt_WEBP(t *testing.T) { assert.Equal(t, "image/webp", mimeFromExt("img.webp")) }
+func TestMimeFromExt_MKV(t *testing.T)  { assert.Equal(t, "video/x-matroska", mimeFromExt("vid.mkv")) }
+func TestMimeFromExt_AVI(t *testing.T)  { assert.Equal(t, "video/avi", mimeFromExt("vid.avi")) }
+func TestMimeFromExt_MP3(t *testing.T)  { assert.Equal(t, "audio/mpeg", mimeFromExt("track.mp3")) }
+func TestMimeFromExt_M4A(t *testing.T)  { assert.Equal(t, "audio/mp4", mimeFromExt("track.m4a")) }
+func TestMimeFromExt_M4B(t *testing.T)  { assert.Equal(t, "audio/mp4", mimeFromExt("book.m4b")) }
+func TestMimeFromExt_MPG(t *testing.T)  { assert.Equal(t, "video/mpeg", mimeFromExt("vid.mpg")) }
+func TestMimeFromExt_MPEG(t *testing.T) { assert.Equal(t, "video/mpeg", mimeFromExt("vid.mpeg")) }
+func TestMimeFromExt_M4V(t *testing.T)  { assert.Equal(t, "video/mp4", mimeFromExt("vid.m4v")) }
+
+// --- MapToDB additional ---
+
+func TestMapToDB_GameFamily(t *testing.T) {
+	t.Parallel()
+	rec := GamelistRecord{Game: esapi.Game{Family: "Mario"}}
+	titleTags := (&GamelistXMLScraper{}).MapToDB(&rec).TitleTags
+	assert.Contains(t, titleTags, database.TagInfo{Type: string(tags.TagTypeGameFamily), Tag: "Mario"})
+}
+
+func TestMapToDB_Manual(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		Game:           esapi.Game{Manual: "./manuals/game.pdf"},
+	}
+	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyManual)
+	var found bool
+	for _, p := range titleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, "application/pdf", p.ContentType)
+		}
+	}
+	assert.True(t, found, "manual property missing")
+}
+
+func TestMapToDB_WheelXMLLogoTakesPriority(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		Game: esapi.Game{
+			Path:  "./roms/game.rom",
+			Logo:  "./media/logo_source/game.png",
+			Wheel: "./media/wheel_source/game.png",
+		},
+	}
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageWheel)
+	var found bool
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Contains(t, p.Text, "logo_source", "Logo field should take priority over Wheel")
+			assert.NotContains(t, p.Text, "wheel_source")
+		}
+	}
+	assert.True(t, found, "wheel property missing")
+}
+
+func TestMapToDB_WheelXMLFromWheelWhenNoLogo(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		Game: esapi.Game{
+			Path:  "./roms/game.rom",
+			Wheel: "./media/wheel_source/game.png",
+		},
+	}
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageWheel)
+	var found bool
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Contains(t, p.Text, "wheel_source")
+		}
+	}
+	assert.True(t, found, "wheel property from Wheel field missing when Logo is empty")
+}
+
+func TestMapToDB_TitleShotXMLFromTitleScreen(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		Game: esapi.Game{
+			Path:        "./roms/game.rom",
+			TitleScreen: "./media/titlescreen_source/game.png",
+			TitleShot:   "./media/titleshot_source/game.png",
+		},
+	}
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageTitleshot)
+	var found bool
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Contains(t, p.Text, "titlescreen_source", "TitleScreen should take priority over TitleShot")
+			assert.NotContains(t, p.Text, "titleshot_source")
+		}
+	}
+	assert.True(t, found, "titleshot property missing")
+}
+
+func TestMapToDB_TitleShotXMLFromTitleShotWhenNoTitleScreen(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		Game: esapi.Game{
+			Path:      "./roms/game.rom",
+			TitleShot: "./media/titleshot_source/game.png",
+		},
+	}
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageTitleshot)
+	var found bool
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Contains(t, p.Text, "titleshot_source")
+		}
+	}
+	assert.True(t, found, "titleshot from TitleShot missing when TitleScreen is empty")
+}
+
+func TestMapToDB_MarqueeXMLPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		Game:           esapi.Game{Path: "./roms/game.rom", Marquee: "./media/marquee/game.png"},
+	}
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageMarquee)
+	var found bool
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, "image/png", p.ContentType)
+		}
+	}
+	assert.True(t, found, "marquee property missing")
+}
+
+func TestMapToDB_FanArtXMLPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		Game:           esapi.Game{Path: "./roms/game.rom", FanArt: "./media/fanart/game.png"},
+	}
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageFanart)
+	var found bool
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, "image/png", p.ContentType)
+		}
+	}
+	assert.True(t, found, "fanart property missing")
+}
+
+func TestMapToDB_MapXMLPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		Game:           esapi.Game{Path: "./roms/game.rom", Map: "./media/map/game.png"},
+	}
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageMap)
+	var found bool
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+		}
+	}
+	assert.True(t, found, "map image property missing")
+}
+
+func TestMapToDB_ScreenshotXMLPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		Game:           esapi.Game{Path: "./roms/game.rom", Screenshot: "./media/screenshot/game.png"},
+	}
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageScreenshot)
+	var found bool
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, "image/png", p.ContentType)
+		}
+	}
+	assert.True(t, found, "screenshot property missing")
+}
+
+// --- loadCompanionEntries ---
+
+// companionXML is a gamelist.xml with one parent and one child companion entry.
+const companionXML = `<gameList>
+  <game id="42" source="ZaparooCompanion">
+    <name>Test Game</name>
+    <developer>Dev Corp</developer>
+  </game>
+  <game parentid="42" source="ZaparooCompanion">
+    <path>./child.rom</path>
+    <region>usa</region>
+    <lang>en</lang>
+  </game>
+</gameList>`
+
+func TestLoadCompanionEntries_NoEntries(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./mario.nes</path><name>Mario</name></game>
+</gameList>`), 0o600))
+
+	s := &GamelistXMLScraper{}
+	parents, children := s.loadCompanionEntries(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+	)
+	assert.Empty(t, parents)
+	assert.Empty(t, children)
+}
+
+func TestLoadCompanionEntries_ParentAndChild(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
+
+	s := &GamelistXMLScraper{}
+	parents, children := s.loadCompanionEntries(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+	)
+
+	require.Len(t, parents, 1)
+	assert.Equal(t, "42", parents[0].GameID)
+	assert.Equal(t, "Dev Corp", parents[0].Game.Developer)
+	assert.Equal(t, root, parents[0].SystemRootPath)
+
+	require.Len(t, children, 1)
+	assert.Equal(t, "42", children[0].ParentGameID)
+	assert.Equal(t, "usa", children[0].Region)
+	assert.Equal(t, "en", children[0].Lang)
+	assert.Equal(t, filepath.Join(root, "child.rom"), children[0].ResolvedPath)
+}
+
+func TestLoadCompanionEntries_SourceAsElement(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// source as an XML child element, not as an attribute.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game id="7">
+    <source>ZaparooCompanion</source>
+    <name>ElementSource</name>
+    <developer>Test</developer>
+  </game>
+</gameList>`), 0o600))
+
+	s := &GamelistXMLScraper{}
+	parents, children := s.loadCompanionEntries(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+	)
+	require.Len(t, parents, 1, "source element should be recognized as companion")
+	assert.Equal(t, "7", parents[0].GameID)
+	assert.Empty(t, children)
+}
+
+func TestLoadCompanionEntries_ContextCancelled(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	s := &GamelistXMLScraper{}
+	parents, children := s.loadCompanionEntries(
+		ctx,
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+	)
+	// Pre-cancelled context: outer loop select fires ctx.Done before reading the file.
+	assert.Empty(t, parents)
+	assert.Empty(t, children)
+}
+
+func TestLoadCompanionEntries_MissingGamelist(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir() // no gamelist.xml created
+
+	s := &GamelistXMLScraper{}
+	parents, children := s.loadCompanionEntries(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+	)
+	assert.Empty(t, parents)
+	assert.Empty(t, children)
+}
+
+func TestLoadCompanionEntries_MalformedGamelist(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"),
+		[]byte(`<gameList><game id="1"`), 0o600))
+
+	s := &GamelistXMLScraper{}
+	parents, children := s.loadCompanionEntries(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+	)
+	assert.Empty(t, parents)
+	assert.Empty(t, children)
+}
+
+func TestLoadCompanionEntries_EntrySkippedNoIdNoPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// parentid set but no path → can't be a child; falls through to default (skipped).
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game parentid="2" source="ZaparooCompanion">
+    <name>No Path</name>
+  </game>
+</gameList>`), 0o600))
+
+	s := &GamelistXMLScraper{}
+	parents, children := s.loadCompanionEntries(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+	)
+	assert.Empty(t, parents)
+	assert.Empty(t, children)
+}
+
+func TestLoadCompanionEntries_ChildPathTraversalRejected(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// Child path escapes root → resolveESPath returns "" → child skipped.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game id="1" source="ZaparooCompanion">
+    <name>Parent</name>
+    <developer>Dev</developer>
+  </game>
+  <game parentid="1" source="ZaparooCompanion">
+    <path>../../etc/passwd</path>
+  </game>
+</gameList>`), 0o600))
+
+	s := &GamelistXMLScraper{}
+	parents, children := s.loadCompanionEntries(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+	)
+	require.Len(t, parents, 1)
+	assert.Empty(t, children, "child with traversal path must be rejected")
+}
+
+// --- processCompanionEntries ---
+
+func TestProcessCompanionEntries_NoEntries(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./mario.nes</path><name>Mario</name></game>
+</gameList>`), 0o600))
+
+	mockDB := helpers.NewMockMediaDBI()
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	s.processCompanionEntries(context.Background(), system, mockDB)
+	// No companion entries → no DB calls.
+	mockDB.AssertExpectations(t)
+}
+
+func TestProcessCompanionEntries_ChildByFilename(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaBySystemAndPathSuffix", mock.Anything, int64(1), "child.rom").
+		Return([]database.Media{{DBID: 10, MediaTitleDBID: 20}}, nil)
+	mockDB.On("UpsertMediaTitleTags", mock.Anything, int64(20), mock.Anything).Return(nil)
+	mockDB.On("UpsertMediaTitleProperties", mock.Anything, int64(20), mock.Anything).Return(nil)
+	mockDB.On("UpsertMediaTags", mock.Anything, int64(10), mock.Anything).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	s.processCompanionEntries(context.Background(), system, mockDB)
+	mockDB.AssertExpectations(t)
+}
+
+func TestProcessCompanionEntries_ChildBySlugFile(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game id="99" source="ZaparooCompanion">
+    <name>Slug Game</name>
+    <developer>Dev</developer>
+  </game>
+  <game parentid="99" source="ZaparooCompanion">
+    <path>./myslug.slug</path>
+  </game>
+</gameList>`), 0o600))
+
+	title := &database.MediaTitle{DBID: 30}
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaTitleBySystemAndSlug", mock.Anything, int64(5), "myslug").Return(title, nil)
+	mockDB.On("UpsertMediaTitleTags", mock.Anything, int64(30), mock.Anything).Return(nil)
+	mockDB.On("UpsertMediaTitleProperties", mock.Anything, int64(30), mock.Anything).Return(nil)
+	// No region/lang on child → UpsertMediaTags not called.
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 5}
+	s.processCompanionEntries(context.Background(), system, mockDB)
+	mockDB.AssertExpectations(t)
+}
+
+func TestProcessCompanionEntries_SlugNotIndexed(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game id="99" source="ZaparooCompanion">
+    <name>Slug Game</name>
+    <developer>Dev</developer>
+  </game>
+  <game parentid="99" source="ZaparooCompanion">
+    <path>./missing.slug</path>
+  </game>
+</gameList>`), 0o600))
+
+	mockDB := helpers.NewMockMediaDBI()
+	// FindMediaTitleBySystemAndSlug returns nil → child skipped.
+	mockDB.On("FindMediaTitleBySystemAndSlug", mock.Anything, int64(5), "missing").
+		Return((*database.MediaTitle)(nil), nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 5}
+	s.processCompanionEntries(context.Background(), system, mockDB)
+	mockDB.AssertExpectations(t)
+}
+
+func TestProcessCompanionEntries_ParentNotFoundForChild(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// Child references parentid "99" but no parent entry exists.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game parentid="99" source="ZaparooCompanion">
+    <path>./child.rom</path>
+  </game>
+</gameList>`), 0o600))
+
+	mockDB := helpers.NewMockMediaDBI()
+	// Parent not found → child skipped → no DB calls.
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	s.processCompanionEntries(context.Background(), system, mockDB)
+	mockDB.AssertExpectations(t)
+}
+
+func TestProcessCompanionEntries_SeenTitleDedup(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// Two children from same parent; both map to MediaTitleDBID=20.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game id="42" source="ZaparooCompanion">
+    <name>Test Game</name>
+    <developer>Dev Corp</developer>
+  </game>
+  <game parentid="42" source="ZaparooCompanion">
+    <path>./child1.rom</path>
+    <region>usa</region>
+    <lang>en</lang>
+  </game>
+  <game parentid="42" source="ZaparooCompanion">
+    <path>./child2.rom</path>
+    <region>jpn</region>
+    <lang>ja</lang>
+  </game>
+</gameList>`), 0o600))
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaBySystemAndPathSuffix", mock.Anything, int64(1), "child1.rom").
+		Return([]database.Media{{DBID: 10, MediaTitleDBID: 20}}, nil)
+	mockDB.On("FindMediaBySystemAndPathSuffix", mock.Anything, int64(1), "child2.rom").
+		Return([]database.Media{{DBID: 11, MediaTitleDBID: 20}}, nil)
+	// Title-level tags and props written only once (seenTitles dedup).
+	mockDB.On("UpsertMediaTitleTags", mock.Anything, int64(20), mock.Anything).Return(nil).Once()
+	mockDB.On("UpsertMediaTitleProperties", mock.Anything, int64(20), mock.Anything).Return(nil).Once()
+	// Media-level (region/lang) tags written for each child Media row.
+	mockDB.On("UpsertMediaTags", mock.Anything, int64(10), mock.Anything).Return(nil)
+	mockDB.On("UpsertMediaTags", mock.Anything, int64(11), mock.Anything).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	s.processCompanionEntries(context.Background(), system, mockDB)
+	mockDB.AssertExpectations(t)
+}
+
+func TestProcessCompanionEntries_NoRegionLangNoChildTags(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// Child has no region or lang → childTags empty → UpsertMediaTags NOT called.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game id="1" source="ZaparooCompanion">
+    <name>Game</name>
+    <developer>Dev</developer>
+  </game>
+  <game parentid="1" source="ZaparooCompanion">
+    <path>./game.rom</path>
+  </game>
+</gameList>`), 0o600))
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaBySystemAndPathSuffix", mock.Anything, int64(1), "game.rom").
+		Return([]database.Media{{DBID: 5, MediaTitleDBID: 6}}, nil)
+	mockDB.On("UpsertMediaTitleTags", mock.Anything, int64(6), mock.Anything).Return(nil)
+	mockDB.On("UpsertMediaTitleProperties", mock.Anything, int64(6), mock.Anything).Return(nil)
+	// UpsertMediaTags must NOT be called (no region or lang).
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	s.processCompanionEntries(context.Background(), system, mockDB)
+	mockDB.AssertExpectations(t)
+}
+
+func TestProcessCompanionEntries_FilenameNotIndexed(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
+
+	mockDB := helpers.NewMockMediaDBI()
+	// FindMediaBySystemAndPathSuffix returns empty → child silently skipped.
+	mockDB.On("FindMediaBySystemAndPathSuffix", mock.Anything, int64(1), "child.rom").
+		Return([]database.Media{}, nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	s.processCompanionEntries(context.Background(), system, mockDB)
+	mockDB.AssertExpectations(t)
+}
+
+// --- scrapeLoop ---
+
+// drainChannel collects all ScrapeUpdates from ch until the channel closes.
+func drainChannel(ch chan scraper.ScrapeUpdate) []scraper.ScrapeUpdate {
+	var updates []scraper.ScrapeUpdate
+	for u := range ch {
+		updates = append(updates, u)
+	}
+	return updates
+}
+
+func TestScrapeLoop_NormalMode_Success(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./mario.nes</path><name>Mario</name></game>
+</gameList>`), 0o600))
+
+	slug := slugFor("nes", filepath.Join(root, "mario.nes"))
+	const (
+		titleDBID  = int64(1)
+		mediaDBID  = int64(10)
+		systemDBID = int64(100)
+	)
+	sentinel := scraper.SentinelTagInfo("gamelist.xml")
+	sentinelTag := sentinel.Type + ":" + sentinel.Tag
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, sentinelTag).
+		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: slug}}, nil)
+	mockDB.On("GetMediaBySystemID", "nes").
+		Return([]database.MediaWithFullPath{{DBID: mediaDBID, MediaTitleDBID: titleDBID}}, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, mock.Anything).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: systemDBID}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{
+		Pauser: syncutil.NewPauser(),
+	}, []scraper.ScrapeSystem{system}, mockDB, ch)
+
+	updates := drainChannel(ch)
+	var done scraper.ScrapeUpdate
+	for _, u := range updates {
+		if u.Done {
+			done = u
+		}
+	}
+	require.True(t, done.Done)
+	assert.Equal(t, 1, done.Processed)
+	assert.Equal(t, 1, done.Matched)
+	assert.Equal(t, 0, done.Skipped)
+	mockDB.AssertExpectations(t)
+}
+
+func TestScrapeLoop_ForceMode_Success(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./sonic.md</path><name>Sonic</name></game>
+</gameList>`), 0o600))
+
+	slug := slugFor("genesis", filepath.Join(root, "sonic.md"))
+	const (
+		titleDBID  = int64(2)
+		mediaDBID  = int64(20)
+		systemDBID = int64(200)
+	)
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetTitlesBySystemID", "genesis").
+		Return([]database.TitleWithSystem{{DBID: titleDBID, SystemDBID: systemDBID, Slug: slug}}, nil)
+	mockDB.On("GetMediaBySystemID", "genesis").
+		Return([]database.MediaWithFullPath{{DBID: mediaDBID, MediaTitleDBID: titleDBID}}, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, mock.Anything).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "genesis", ROMPaths: []string{root}, DBID: systemDBID}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{
+		Pauser: syncutil.NewPauser(),
+		Force:  true,
+	}, []scraper.ScrapeSystem{system}, mockDB, ch)
+
+	updates := drainChannel(ch)
+	var done scraper.ScrapeUpdate
+	for _, u := range updates {
+		if u.Done {
+			done = u
+		}
+	}
+	assert.Equal(t, 1, done.Processed)
+	assert.Equal(t, 1, done.Matched)
+	mockDB.AssertExpectations(t)
+}
+
+func TestScrapeLoop_WriteError_RecordSkipped(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./mario.nes</path><name>Mario</name></game>
+</gameList>`), 0o600))
+
+	slug := slugFor("nes", filepath.Join(root, "mario.nes"))
+	const (
+		titleDBID  = int64(3)
+		mediaDBID  = int64(30)
+		systemDBID = int64(300)
+	)
+	sentinel := scraper.SentinelTagInfo("gamelist.xml")
+	sentinelTag := sentinel.Type + ":" + sentinel.Tag
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, sentinelTag).
+		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: slug}}, nil)
+	mockDB.On("GetMediaBySystemID", "nes").
+		Return([]database.MediaWithFullPath{{DBID: mediaDBID, MediaTitleDBID: titleDBID}}, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, mock.Anything).
+		Return(assert.AnError)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: systemDBID}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{
+		Pauser: syncutil.NewPauser(),
+	}, []scraper.ScrapeSystem{system}, mockDB, ch)
+
+	updates := drainChannel(ch)
+	var done scraper.ScrapeUpdate
+	for _, u := range updates {
+		if u.Done {
+			done = u
+		}
+	}
+	assert.Equal(t, 1, done.Processed)
+	assert.Equal(t, 0, done.Matched)
+	assert.Equal(t, 1, done.Skipped)
+	mockDB.AssertExpectations(t)
+}
+
+func TestScrapeLoop_EmptyTitles_SkipsSystem(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./mario.nes</path><name>Mario</name></game>
+</gameList>`), 0o600))
+
+	const systemDBID = int64(400)
+	sentinel := scraper.SentinelTagInfo("gamelist.xml")
+	sentinelTag := sentinel.Type + ":" + sentinel.Tag
+
+	mockDB := helpers.NewMockMediaDBI()
+	// All titles already scraped → empty result → GetMediaBySystemID and ApplyScrapeResult never called.
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, sentinelTag).
+		Return([]database.MediaTitle{}, nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: systemDBID}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{
+		Pauser: syncutil.NewPauser(),
+	}, []scraper.ScrapeSystem{system}, mockDB, ch)
+
+	updates := drainChannel(ch)
+	var done scraper.ScrapeUpdate
+	for _, u := range updates {
+		if u.Done {
+			done = u
+		}
+	}
+	require.True(t, done.Done)
+	assert.Equal(t, 0, done.Processed)
+	mockDB.AssertExpectations(t)
 }

@@ -168,11 +168,12 @@ func (*Platform) RootDirs(cfg *config.Instance) []string {
 
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
-		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
-		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
-		TempDir:    filepath.Join(os.TempDir(), config.AppName),
-		LogDir:     filepath.Join(xdg.DataHome, config.AppName, config.LogsDir),
-		ZipsAsDirs: false,
+		DataDir:   filepath.Join(xdg.DataHome, config.AppName),
+		ConfigDir: filepath.Join(xdg.ConfigHome, config.AppName),
+		TempDir:   filepath.Join(os.TempDir(), config.AppName),
+		LogDir:    filepath.Join(xdg.DataHome, config.AppName, config.LogsDir),
+		// DON'T MERGE ME
+		ZipsAsDirs: true,
 	}
 }
 
