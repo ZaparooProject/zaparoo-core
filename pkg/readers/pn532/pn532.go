@@ -736,6 +736,10 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 }
 
 func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.WriteOptions) (*tokens.Token, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	if text == "" {
 		return nil, errors.New("text cannot be empty")
 	}

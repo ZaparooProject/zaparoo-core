@@ -44,15 +44,15 @@ import (
 //
 // See SetActiveCard, SetActiveMedia, SetReader, RemoveReader for examples.
 type PendingLaunchOverride struct {
+	CreatedAt  time.Time
 	LauncherID string
 	Source     tokens.Token
-	CreatedAt  time.Time
 }
 
 type PendingWrite struct {
+	CreatedAt time.Time
 	Payload   string
 	Source    tokens.Token
-	CreatedAt time.Time
 }
 
 type State struct {
@@ -320,6 +320,14 @@ func (s *State) GetPendingWrite() *PendingWrite {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.pendingWrite
+}
+
+func (s *State) ConsumePendingWrite() *PendingWrite {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.pendingWrite
+	s.pendingWrite = nil
+	return pending
 }
 
 func (s *State) ClearPendingWrite() {

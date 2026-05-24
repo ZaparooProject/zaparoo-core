@@ -33,18 +33,18 @@ import (
 const pendingWriteTTL = time.Minute
 
 func handlePendingWrite(svc *ServiceContext, scan *tokens.Token, player audio.Player) bool {
-	pending := svc.State.GetPendingWrite()
+	pending := svc.State.ConsumePendingWrite()
 	if pending == nil {
 		return false
 	}
 	if pendingWriteExpired(pending.CreatedAt) {
 		log.Warn().Msg("pending write expired")
-		svc.State.ClearPendingWrite()
 		return false
 	}
 
 	if samePhysicalToken(scan, &pending.Source) || helpers.TokensEqual(scan, &pending.Source) {
 		log.Info().Msg("pending write ignored source token")
+		svc.State.SetPendingWrite(pending)
 		return true
 	}
 
@@ -59,7 +59,6 @@ func handlePendingWrite(svc *ServiceContext, scan *tokens.Token, player audio.Pl
 	if err != nil {
 		log.Error().Err(err).Msg("pending write failed to select writer")
 		playPendingWriteFailSound(svc, player)
-		svc.State.ClearPendingWrite()
 		return true
 	}
 
@@ -67,7 +66,6 @@ func handlePendingWrite(svc *ServiceContext, scan *tokens.Token, player audio.Pl
 	if !ok {
 		log.Error().Str("readerID", writer.ReaderID()).Msg("pending write reader does not support targeted writes")
 		playPendingWriteFailSound(svc, player)
-		svc.State.ClearPendingWrite()
 		return true
 	}
 
@@ -78,13 +76,11 @@ func handlePendingWrite(svc *ServiceContext, scan *tokens.Token, player audio.Pl
 	if err != nil {
 		log.Error().Err(err).Msg("pending write failed")
 		playPendingWriteFailSound(svc, player)
-		svc.State.ClearPendingWrite()
 		return true
 	}
 	if written != nil {
 		svc.State.SetWroteToken(written)
 	}
-	svc.State.ClearPendingWrite()
 	playPendingWriteSuccessSound(svc, player)
 	log.Info().Msg("pending write completed")
 	return true

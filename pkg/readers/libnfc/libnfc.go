@@ -435,6 +435,10 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 }
 
 func (r *Reader) WriteTarget(ctx context.Context, text string, opts readers.WriteOptions) (*tokens.Token, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	if err := validateWriteParameters(r, text); err != nil {
 		return nil, fmt.Errorf("invalid write parameters: %w", err)
 	}
