@@ -20,6 +20,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -29,21 +30,90 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-func TestHealTimestampsIfClockReliable_RetriesUntilRowsHealed(t *testing.T) {
+func TestHealTimestampsIfClockReliable_SkipsReliableStartup(t *testing.T) {
 	t.Parallel()
 
 	mockUserDB := &testhelpers.MockUserDBI{}
 	db := &database.Database{UserDB: mockUserDB}
-	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	reliableNow := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	fixedUptime := func() (time.Duration, error) { return 2 * time.Hour, nil }
+
+	assert.False(t, healTimestampsIfClockReliable(db, "boot-uuid", reliableNow, true, false, fixedUptime))
+	mockUserDB.AssertNotCalled(t, "HealTimestamps", mock.Anything, mock.Anything)
+}
+
+func TestHealTimestampsIfClockReliable_HealsOnTransition(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+	reliableNow := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	fixedUptime := func() (time.Duration, error) { return 2 * time.Hour, nil }
+
+	mockUserDB.On("HealTimestamps", "boot-uuid", mock.AnythingOfType("time.Time")).Return(int64(3), nil).Once()
+
+	healed := healTimestampsIfClockReliable(db, "boot-uuid", reliableNow, false, false, fixedUptime)
+	assert.True(t, healed)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestHealTimestampsIfClockReliable_ZeroRowsMarksHealed(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+	reliableNow := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
 	fixedUptime := func() (time.Duration, error) { return 2 * time.Hour, nil }
 
 	mockUserDB.On("HealTimestamps", "boot-uuid", mock.AnythingOfType("time.Time")).Return(int64(0), nil).Once()
-	mockUserDB.On("HealTimestamps", "boot-uuid", mock.AnythingOfType("time.Time")).Return(int64(3), nil).Once()
 
-	healed := healTimestampsIfClockReliable(db, "boot-uuid", now, false, false, fixedUptime)
+	healed := healTimestampsIfClockReliable(db, "boot-uuid", reliableNow, false, false, fixedUptime)
+	assert.True(t, healed)
+
+	healed = healTimestampsIfClockReliable(db, "boot-uuid", reliableNow.Add(time.Minute), false, healed, fixedUptime)
+	assert.True(t, healed)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestHealTimestampsIfClockReliable_RetriesAfterDBError(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+	reliableNow := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	boom := errors.New("boom")
+	fixedUptime := func() (time.Duration, error) { return 2 * time.Hour, nil }
+
+	mockUserDB.On("HealTimestamps", "boot-uuid", mock.AnythingOfType("time.Time")).Return(int64(0), boom).Once()
+	mockUserDB.On("HealTimestamps", "boot-uuid", mock.AnythingOfType("time.Time")).Return(int64(1), nil).Once()
+
+	healed := healTimestampsIfClockReliable(db, "boot-uuid", reliableNow, false, false, fixedUptime)
 	assert.False(t, healed)
 
-	healed = healTimestampsIfClockReliable(db, "boot-uuid", now.Add(time.Minute), true, healed, fixedUptime)
+	healed = healTimestampsIfClockReliable(db, "boot-uuid", reliableNow.Add(time.Minute), false, healed, fixedUptime)
+	assert.True(t, healed)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestHealTimestampsIfClockReliable_RetriesAfterUptimeError(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	db := &database.Database{UserDB: mockUserDB}
+	reliableNow := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	boom := errors.New("boom")
+	failedUptime := func() (time.Duration, error) { return 0, boom }
+	fixedUptime := func() (time.Duration, error) { return 2 * time.Hour, nil }
+
+	mockUserDB.On("HealTimestamps", "boot-uuid", mock.AnythingOfType("time.Time")).Return(int64(1), nil).Once()
+
+	healed := healTimestampsIfClockReliable(db, "boot-uuid", reliableNow, false, false, failedUptime)
+	assert.False(t, healed)
+
+	healed = healTimestampsIfClockReliable(db, "boot-uuid", reliableNow.Add(time.Minute), false, healed, fixedUptime)
 	assert.True(t, healed)
 
 	mockUserDB.AssertExpectations(t)
@@ -59,6 +129,6 @@ func TestHealTimestampsIfClockReliable_SkipsUnreliableOrAlreadyHealed(t *testing
 	fixedUptime := func() (time.Duration, error) { return 2 * time.Hour, nil }
 
 	assert.False(t, healTimestampsIfClockReliable(db, "boot-uuid", unreliableNow, false, false, fixedUptime))
-	assert.True(t, healTimestampsIfClockReliable(db, "boot-uuid", reliableNow, true, true, fixedUptime))
+	assert.True(t, healTimestampsIfClockReliable(db, "boot-uuid", reliableNow, false, true, fixedUptime))
 	mockUserDB.AssertNotCalled(t, "HealTimestamps", mock.Anything, mock.Anything)
 }
