@@ -925,10 +925,10 @@ const companionSource = "ZaparooCompanion"
 // Parent records carry full metadata but no ROM path; they represent the canonical game
 // title shared by multiple regional ROM releases.
 type companionParent struct {
-	Game               esapi.Game
-	SystemRootPath     string
 	AvailableMediaDirs map[string]string
-	GameID             string // value of the XML id attribute
+	SystemRootPath     string
+	GameID             string
+	Game               esapi.Game
 }
 
 // companionChild holds a ZaparooCompanion ROM child record parsed from a gamelist.xml.
@@ -951,7 +951,7 @@ func (g *GamelistXMLScraper) loadCompanionEntries(
 	for _, rootPath := range system.ROMPaths {
 		select {
 		case <-ctx.Done():
-			return
+			return parents, children
 		default:
 		}
 
@@ -973,7 +973,7 @@ func (g *GamelistXMLScraper) loadCompanionEntries(
 		for i := range gl.Games {
 			select {
 			case <-ctx.Done():
-				return
+				return parents, children
 			default:
 			}
 			game := gl.Games[i]
@@ -1026,7 +1026,7 @@ func (g *GamelistXMLScraper) loadCompanionEntries(
 			}
 		}
 	}
-	return
+	return parents, children
 }
 
 // mapCompanionParentToResult builds the tag and property writes for a companion parent
@@ -1068,8 +1068,9 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 
 	// Phase 1: map each parent record to its tag+property writes.
 	parentMeta := make(map[string]scraper.MapResult, len(parents))
-	for _, p := range parents {
-		parentMeta[p.GameID] = g.mapCompanionParentToResult(&p)
+	for i := range parents {
+		p := &parents[i]
+		parentMeta[p.GameID] = g.mapCompanionParentToResult(p)
 		log.Debug().
 			Str("gameID", p.GameID).
 			Str("name", p.Game.Name).
@@ -1129,7 +1130,8 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 					}
 				}
 				if len(meta.TitleProps) > 0 {
-					if propsErr := mdb.UpsertMediaTitleProperties(ctx, media.MediaTitleDBID, meta.TitleProps); propsErr != nil {
+					propsErr := mdb.UpsertMediaTitleProperties(ctx, media.MediaTitleDBID, meta.TitleProps)
+					if propsErr != nil {
 						log.Warn().Err(propsErr).Int64("mediaTitleDBID", media.MediaTitleDBID).
 							Msg("gamelistxml: companion: upsert parent props on child title failed")
 					}

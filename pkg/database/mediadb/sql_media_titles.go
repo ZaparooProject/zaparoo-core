@@ -405,4 +405,3 @@ func sqlGetCandidatesWithPreFilter(
 
 	return titles, nil
 }
-
