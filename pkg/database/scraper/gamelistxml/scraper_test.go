@@ -916,3 +916,152 @@ func TestMapToDB_FilesystemFallback_NoMediaDir(t *testing.T) {
 		assert.NotContains(t, p.TypeTag, "image-", "no image props expected when no media dir and no XML paths")
 	}
 }
+
+func TestMapToDB_Boxart3D_XMLPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	img := filepath.Join(root, "media", "boxart3d", "sonic.png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(img), 0o750))
+	require.NoError(t, os.WriteFile(img, []byte{}, 0o600))
+
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		Game: esapi.Game{
+			Path:     "./roms/sonic.md",
+			Boxart3D: "./media/boxart3d/sonic.png",
+		},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart3D)
+	var found bool
+	for _, p := range result.TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, filepath.ToSlash(img), p.Text)
+		}
+	}
+	assert.True(t, found, "boxart3d XML path property missing")
+}
+
+func TestMapToDB_Boxart2D_And_Boxart3D_AreIndependent(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	img2d := filepath.Join(root, "media", "boxart2d", "sonic.png")
+	img3d := filepath.Join(root, "media", "boxart3d", "sonic.png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(img2d), 0o750))
+	require.NoError(t, os.MkdirAll(filepath.Dir(img3d), 0o750))
+	require.NoError(t, os.WriteFile(img2d, []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(img3d, []byte{}, 0o600))
+
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		Game: esapi.Game{
+			Path:     "./roms/sonic.md",
+			Boxart2D: "./media/boxart2d/sonic.png",
+			Boxart3D: "./media/boxart3d/sonic.png",
+		},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	key2d := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart)
+	key3d := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart3D)
+	found2d, found3d := false, false
+	for _, p := range result.TitleProps {
+		switch p.TypeTag {
+		case key2d:
+			found2d = true
+			assert.Equal(t, filepath.ToSlash(img2d), p.Text)
+		case key3d:
+			found3d = true
+			assert.Equal(t, filepath.ToSlash(img3d), p.Text)
+		}
+	}
+	assert.True(t, found2d, "boxart (2D) property missing")
+	assert.True(t, found3d, "boxart3d property missing")
+}
+
+func TestMapToDB_FilesystemFallback_Boxart3D(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	dir := filepath.Join(root, "media", "boxart3d")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "sonic.png"), []byte{}, 0o600))
+
+	rec := GamelistRecord{
+		SystemRootPath:     root,
+		AvailableMediaDirs: map[string]string{"boxart3d": dir},
+		Game:               esapi.Game{Path: "./roms/sonic.md"},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart3D)
+	var found bool
+	for _, p := range result.TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, filepath.ToSlash(filepath.Join(dir, "sonic.png")), p.Text)
+		}
+	}
+	assert.True(t, found, "filesystem fallback boxart3d property missing")
+}
+
+func TestMapToDB_FilesystemFallback_BoxartSide(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	dir := filepath.Join(root, "media", "boxart2dside")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "sonic.png"), []byte{}, 0o600))
+
+	rec := GamelistRecord{
+		SystemRootPath:     root,
+		AvailableMediaDirs: map[string]string{"boxart2dside": dir},
+		Game:               esapi.Game{Path: "./roms/sonic.md"},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxartSide)
+	var found bool
+	for _, p := range result.TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, filepath.ToSlash(filepath.Join(dir, "sonic.png")), p.Text)
+		}
+	}
+	assert.True(t, found, "filesystem fallback boxartside property missing")
+}
+
+func TestMapToDB_FilesystemFallback_BoxartBack(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	dir := filepath.Join(root, "media", "boxart2dback")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "sonic.png"), []byte{}, 0o600))
+
+	rec := GamelistRecord{
+		SystemRootPath:     root,
+		AvailableMediaDirs: map[string]string{"boxart2dback": dir},
+		Game:               esapi.Game{Path: "./roms/sonic.md"},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxartBack)
+	var found bool
+	for _, p := range result.TitleProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, filepath.ToSlash(filepath.Join(dir, "sonic.png")), p.Text)
+		}
+	}
+	assert.True(t, found, "filesystem fallback boxartback property missing")
+}
