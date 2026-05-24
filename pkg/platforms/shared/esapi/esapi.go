@@ -34,6 +34,8 @@ import (
 
 const apiURL = "http://localhost:1234"
 
+var ErrInvalidRunningGameResponse = errors.New("invalid running game response")
+
 func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
 	if timeout == 0 {
 		timeout = 30 * time.Second
@@ -175,10 +177,18 @@ func parseRunningGameResponse(resp []byte) (RunningGameResponse, bool, error) {
 	var game RunningGameResponse
 	err := json.Unmarshal(resp, &game)
 	if err != nil {
-		return RunningGameResponse{}, false, fmt.Errorf("failed to unmarshal running game response: %w", err)
+		return RunningGameResponse{}, false, fmt.Errorf(
+			"%w: failed to unmarshal running game response: %w",
+			ErrInvalidRunningGameResponse,
+			err,
+		)
 	}
 	if !game.hasIdentity() {
-		return RunningGameResponse{}, false, fmt.Errorf("running game response did not include game identity: %s", resp)
+		return RunningGameResponse{}, false, fmt.Errorf(
+			"%w: running game response did not include game identity: %s",
+			ErrInvalidRunningGameResponse,
+			resp,
+		)
 	}
 
 	return game, true, nil
