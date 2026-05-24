@@ -385,7 +385,8 @@ func TestKillRetroBatGame_ESAPINoopPropagatesFallbackError(t *testing.T) {
 func TestKillRetroBatGame_ESAPINoopPropagatesFallbackVerificationError(t *testing.T) {
 	resetRetroBatKillHooks(t)
 
-	const retroBatDir = `C:\RetroBat`
+	rootDir := "C:" + string(os.PathSeparator)
+	retroBatDir := filepath.Join(rootDir, "RetroBat")
 	verificationErr := fmt.Errorf(
 		"%w: running game response did not include game identity",
 		esapi.ErrInvalidRunningGameResponse,
@@ -401,7 +402,9 @@ func TestKillRetroBatGame_ESAPINoopPropagatesFallbackVerificationError(t *testin
 	retroBatAPIEmuKill = func() error { return nil }
 	retroBatFindDir = func(_ *config.Instance) (string, error) { return retroBatDir, nil }
 	retroBatListProcesses = func() ([]windowsProcessInfo, error) {
-		return []windowsProcessInfo{{PID: 100, ExePath: `C:\RetroBat\emulators\retroarch\retroarch.exe`}}, nil
+		return []windowsProcessInfo{
+			{PID: 100, ExePath: filepath.Join(retroBatDir, "emulators", "retroarch", "retroarch.exe")},
+		}, nil
 	}
 	retroBatKillPIDTree = func(_ context.Context, _ uint32, _ string) error {
 		return nil
