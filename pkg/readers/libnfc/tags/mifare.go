@@ -26,7 +26,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-	"slices"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/ndef"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
