@@ -92,6 +92,11 @@ func snapshotDirMtimesAt(root string) (map[string]int64, error) {
 		}
 		snapshot[sub] = info.ModTime().UnixNano()
 	}
+
+	raCoreDir := filepath.Join(root, "_RA_Cores", "Cores")
+	if info, statErr := os.Stat(raCoreDir); statErr == nil && info.IsDir() {
+		snapshot[raCoreDir] = info.ModTime().UnixNano()
+	}
 	return snapshot, nil
 }
 

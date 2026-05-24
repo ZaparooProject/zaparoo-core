@@ -688,6 +688,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchAltCore("LLAPIAtari7800", systemdefs.SystemAtari7800, "_LLAPI/Atari7800_LLAPI"),
 		},
 		{
+			ID:       "RAAtari7800",
+			SystemID: systemdefs.SystemAtari7800,
+			Launch:   launchAltCore("RAAtari7800", systemdefs.SystemAtari7800, "_RA_Cores/Cores/Atari7800"),
+		},
+		{
 			ID:         systemdefs.SystemAtariLynx,
 			SystemID:   systemdefs.SystemAtariLynx,
 			Folders:    []string{"AtariLynx"},
@@ -756,6 +761,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchAltCore("LLAPIGameboy", systemdefs.SystemGameboy, "_LLAPI/Gameboy_LLAPI"),
 		},
 		{
+			ID:       "RAGameboy",
+			SystemID: systemdefs.SystemGameboy,
+			Launch:   launchAltCore("RAGameboy", systemdefs.SystemGameboy, "_RA_Cores/Cores/Gameboy"),
+		},
+		{
 			ID:         systemdefs.SystemGameboyColor,
 			SystemID:   systemdefs.SystemGameboyColor,
 			Folders:    []string{"GAMEBOY", "GBC"},
@@ -803,6 +813,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchAltCore("LLAPIGBA", systemdefs.SystemGBA, "_LLAPI/GBA_LLAPI"),
 		},
 		{
+			ID:       "RAGBA",
+			SystemID: systemdefs.SystemGBA,
+			Launch:   launchAltCore("RAGBA", systemdefs.SystemGBA, "_RA_Cores/Cores/GBA"),
+		},
+		{
 			ID:         systemdefs.SystemGBA2P,
 			SystemID:   systemdefs.SystemGBA2P,
 			Folders:    []string{"GBA2P"},
@@ -830,6 +845,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:       "LLAPIMegaDrive",
 			SystemID: systemdefs.SystemGenesis,
 			Launch:   launchAltCore("LLAPIMegaDrive", systemdefs.SystemGenesis, "_LLAPI/MegaDrive_LLAPI"),
+		},
+		{
+			ID:       "RAMegaDrive",
+			SystemID: systemdefs.SystemGenesis,
+			Launch:   launchAltCore("RAMegaDrive", systemdefs.SystemGenesis, "_RA_Cores/Cores/MegaDrive"),
 		},
 		{
 			ID:         systemdefs.SystemIntellivision,
@@ -875,6 +895,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchAltCore("LLAPISMS", systemdefs.SystemMasterSystem, "_LLAPI/SMS_LLAPI"),
 		},
 		{
+			ID:       "RASMS",
+			SystemID: systemdefs.SystemMasterSystem,
+			Launch:   launchAltCore("RASMS", systemdefs.SystemMasterSystem, "_RA_Cores/Cores/SMS"),
+		},
+		{
 			ID:         systemdefs.SystemMegaCD,
 			SystemID:   systemdefs.SystemMegaCD,
 			Folders:    []string{"MegaCD"},
@@ -892,6 +917,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchAltCore("LLAPIMegaCD", systemdefs.SystemMegaCD, "_LLAPI/MegaCD_LLAPI"),
 		},
 		{
+			ID:       "RAMegaCD",
+			SystemID: systemdefs.SystemMegaCD,
+			Launch:   launchAltCore("RAMegaCD", systemdefs.SystemMegaCD, "_RA_Cores/Cores/MegaCD"),
+		},
+		{
 			ID:         systemdefs.SystemMegaDuck,
 			SystemID:   systemdefs.SystemMegaDuck,
 			Folders:    []string{"GAMEBOY", "MegaDuck"},
@@ -902,6 +932,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:       "LLAPINeoGeo",
 			SystemID: systemdefs.SystemNeoGeo,
 			Launch:   launchAltCore("LLAPINeoGeo", systemdefs.SystemNeoGeo, "_LLAPI/NeoGeo_LLAPI"),
+		},
+		{
+			ID:       "RANeoGeo",
+			SystemID: systemdefs.SystemNeoGeo,
+			Launch:   launchAltCore("RANeoGeo", systemdefs.SystemNeoGeo, "_RA_Cores/Cores/NeoGeo"),
 		},
 		{
 			ID:         systemdefs.SystemNeoGeoCD,
@@ -949,6 +984,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchAltCore("LLAPINES", systemdefs.SystemNES, "_LLAPI/NES_LLAPI"),
 		},
 		{
+			ID:       "RANES",
+			SystemID: systemdefs.SystemNES,
+			Launch:   launchAltCore("RANES", systemdefs.SystemNES, "_RA_Cores/Cores/NES"),
+		},
+		{
 			ID:         systemdefs.SystemNintendo64,
 			SystemID:   systemdefs.SystemNintendo64,
 			Folders:    []string{"N64"},
@@ -981,6 +1021,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch: launchAltCore(
 				"PWM80MHzNintendo64", systemdefs.SystemNintendo64, "_ConsolePWM/_Turbo/N64_80MHz_PWM",
 			),
+		},
+		{
+			ID:       "RANintendo64",
+			SystemID: systemdefs.SystemNintendo64,
+			Launch:   launchAltCore("RANintendo64", systemdefs.SystemNintendo64, "_RA_Cores/Cores/N64"),
 		},
 		{
 			ID:         systemdefs.SystemOdyssey2,
@@ -1041,6 +1086,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchAltCore("DualRAMPSX", systemdefs.SystemPSX, "_Console (Dual SDRAM)/PSX"),
 		},
 		{
+			ID:       "RAPSX",
+			SystemID: systemdefs.SystemPSX,
+			Launch:   launchAltCore("RAPSX", systemdefs.SystemPSX, "_RA_Cores/Cores/PSX"),
+		},
+		{
 			ID:         systemdefs.SystemSega32X,
 			SystemID:   systemdefs.SystemSega32X,
 			Folders:    []string{"S32X"},
@@ -1051,6 +1101,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:       "LLAPIS32X",
 			SystemID: systemdefs.SystemSega32X,
 			Launch:   launchAltCore("LLAPIS32X", systemdefs.SystemSega32X, "_LLAPI/S32X_LLAPI"),
+		},
+		{
+			ID:       "RAS32X",
+			SystemID: systemdefs.SystemSega32X,
+			Launch:   launchAltCore("RAS32X", systemdefs.SystemSega32X, "_RA_Cores/Cores/S32X"),
 		},
 		{
 			ID:         systemdefs.SystemSG1000,
@@ -1113,6 +1168,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchAltCore("LLAPISNES", systemdefs.SystemSNES, "_LLAPI/SNES_LLAPI"),
 		},
 		{
+			ID:       "RASNES",
+			SystemID: systemdefs.SystemSNES,
+			Launch:   launchAltCore("RASNES", systemdefs.SystemSNES, "_RA_Cores/Cores/SNES"),
+		},
+		{
 			ID:       "SindenSNES",
 			SystemID: systemdefs.SystemSNES,
 			Launch:   launchSinden(systemdefs.SystemSNES, "SNES"),
@@ -1147,6 +1207,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:       "LLAPITurboGrafx16",
 			SystemID: systemdefs.SystemTurboGrafx16,
 			Launch:   launchAltCore("LLAPITurboGrafx16", systemdefs.SystemTurboGrafx16, "_LLAPI/TurboGrafx16_LLAPI"),
+		},
+		{
+			ID:       "RATurboGrafx16",
+			SystemID: systemdefs.SystemTurboGrafx16,
+			Launch:   launchAltCore("RATurboGrafx16", systemdefs.SystemTurboGrafx16, "_RA_Cores/Cores/TurboGrafx16"),
 		},
 		{
 			ID:         systemdefs.SystemTurboGrafx16CD,
@@ -1216,7 +1281,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:         systemdefs.SystemAmstrad,
 			SystemID:   systemdefs.SystemAmstrad,
 			Folders:    []string{"Amstrad"},
-			Extensions: []string{".dsk", ".cdt"}, // TODO: globbing support? for .e??
+			Extensions: []string{".dsk", ".cdt", ".sna"}, // TODO: globbing support? for .e??
 			Launch:     launch(pl, systemdefs.SystemAmstrad),
 		},
 		{

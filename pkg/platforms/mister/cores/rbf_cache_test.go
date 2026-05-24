@@ -353,6 +353,21 @@ func TestRBFCache_Resolve_AltCoreUsesLauncherID(t *testing.T) {
 	assert.Equal(t, "/media/fat/_Other/PSX2XCPU_20240101.rbf", got.Path)
 }
 
+func TestRBFCache_Resolve_RetroAchievementsAltCore(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{Path: "/media/fat/_Console/NES_20240101.rbf", ShortName: "NES", MglName: "_Console/NES"},
+		{Path: "/media/fat/_RA_Cores/Cores/NES.rbf", ShortName: "NES", MglName: "_RA_Cores/Cores/NES"},
+	})
+	cache.RegisterAltCore("RANES", "_RA_Cores/Cores/NES")
+
+	got, err := cache.Resolve(nil, &Core{ID: "NES", LauncherID: "RANES", RBF: "_Console/NES"})
+	require.NoError(t, err)
+	assert.Equal(t, "_RA_Cores/Cores/NES", got.MglName)
+}
+
 func TestRBFCache_Resolve_AltCoreFallsBackToSystemID(t *testing.T) {
 	t.Parallel()
 

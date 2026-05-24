@@ -817,14 +817,15 @@ func TestStopProcessTerminatesProcessGroup(t *testing.T) {
 	require.NoError(t, process.Start())
 	t.Cleanup(func() { _ = syscall.Kill(-process.Process.Pid, syscall.SIGKILL) })
 
+	var childPID int
 	require.Eventually(t, func() bool {
-		_, err := os.Stat(childPIDPath)
-		return err == nil
+		childPIDBytes, err := os.ReadFile(childPIDPath) //nolint:gosec // test-controlled file
+		if err != nil {
+			return false
+		}
+		childPID, err = strconv.Atoi(string(childPIDBytes))
+		return err == nil && childPID > 0
 	}, time.Second, 10*time.Millisecond)
-	childPIDBytes, err := os.ReadFile(childPIDPath) //nolint:gosec // test-controlled file
-	require.NoError(t, err)
-	childPID, err := strconv.Atoi(string(childPIDBytes))
-	require.NoError(t, err)
 	require.True(t, pidRunning(childPID))
 
 	waiter := newCommandWaiter(process)
