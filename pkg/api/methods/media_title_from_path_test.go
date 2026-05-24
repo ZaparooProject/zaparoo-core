@@ -50,17 +50,25 @@ func makeTitleFromPathEnv(t *testing.T, systemID, path string) requests.RequestE
 func TestHandleMediaTitleFromPath_InvalidParams(t *testing.T) {
 	t.Parallel()
 
+	nesPath := filepath.Join("roms", "nes", "game.nes")
+
+	missingSystemParams, err := json.Marshal(map[string]string{"path": nesPath})
+	require.NoError(t, err)
+
+	emptySystemParams, err := json.Marshal(map[string]string{"systemId": "", "path": nesPath})
+	require.NoError(t, err)
+
 	tests := []struct {
 		name   string
 		params []byte
 	}{
 		{
 			name:   "missing systemId",
-			params: []byte(`{"path": "/roms/nes/game.nes"}`),
+			params: missingSystemParams,
 		},
 		{
 			name:   "empty systemId",
-			params: []byte(`{"systemId": "", "path": "/roms/nes/game.nes"}`),
+			params: emptySystemParams,
 		},
 		{
 			name:   "missing path",

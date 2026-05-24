@@ -1106,19 +1106,24 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 				continue
 			}
 			if !seenTitles[title.DBID] {
+				titleSuccess := true
 				if len(meta.TitleTags) > 0 {
 					if tagsErr := mdb.UpsertMediaTitleTags(ctx, title.DBID, meta.TitleTags); tagsErr != nil {
 						log.Warn().Err(tagsErr).Int64("mediaTitleDBID", title.DBID).
 							Msg("gamelistxml: companion: upsert parent tags on slug-matched title failed")
+						titleSuccess = false
 					}
 				}
 				if len(meta.TitleProps) > 0 {
 					if propsErr := mdb.UpsertMediaTitleProperties(ctx, title.DBID, meta.TitleProps); propsErr != nil {
 						log.Warn().Err(propsErr).Int64("mediaTitleDBID", title.DBID).
 							Msg("gamelistxml: companion: upsert parent props on slug-matched title failed")
+						titleSuccess = false
 					}
 				}
-				seenTitles[title.DBID] = true
+				if titleSuccess {
+					seenTitles[title.DBID] = true
+				}
 			} else {
 				log.Debug().Int64("mediaTitleDBID", title.DBID).
 					Msg("gamelistxml: companion: slug-matched title already enriched, skipping")
@@ -1158,10 +1163,12 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 				Msg("gamelistxml: companion: enriching child media title with parent metadata")
 
 			if !seenTitles[media.MediaTitleDBID] {
+				titleSuccess := true
 				if len(meta.TitleTags) > 0 {
 					if tagsErr := mdb.UpsertMediaTitleTags(ctx, media.MediaTitleDBID, meta.TitleTags); tagsErr != nil {
 						log.Warn().Err(tagsErr).Int64("mediaTitleDBID", media.MediaTitleDBID).
 							Msg("gamelistxml: companion: upsert parent tags on child title failed")
+						titleSuccess = false
 					}
 				}
 				if len(meta.TitleProps) > 0 {
@@ -1169,9 +1176,12 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 					if propsErr != nil {
 						log.Warn().Err(propsErr).Int64("mediaTitleDBID", media.MediaTitleDBID).
 							Msg("gamelistxml: companion: upsert parent props on child title failed")
+						titleSuccess = false
 					}
 				}
-				seenTitles[media.MediaTitleDBID] = true
+				if titleSuccess {
+					seenTitles[media.MediaTitleDBID] = true
+				}
 			} else {
 				log.Debug().Int64("mediaTitleDBID", media.MediaTitleDBID).
 					Msg("gamelistxml: companion: title already enriched, skipping")
