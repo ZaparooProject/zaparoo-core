@@ -467,3 +467,63 @@ func TestHandleMediaImage_FileReadError_FallsBackToNextPref(t *testing.T) {
 	assert.Equal(t, screenshotData, decoded)
 	mockDB.AssertExpectations(t)
 }
+
+func TestHandleMediaImage_OversizedFileReturnsClientError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	largePath := filepath.Join(dir, "large_boxart.png")
+	file, err := os.Create(largePath) // #nosec G304 -- test path is created under t.TempDir().
+	require.NoError(t, err)
+	require.NoError(t, file.Truncate(database.MaxMediaPropertyBinaryBytes+1))
+	require.NoError(t, file.Close())
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(9, 90)
+	expectMediaImageResolve(mockDB, row)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(9)).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(90)).
+		Return([]database.MediaProperty{{
+			TypeTag:     "property:image-boxart",
+			ContentType: "image/png",
+			Text:        largePath,
+			TypeTagDBID: 88,
+		}}, nil)
+
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["boxart"]`))
+	_, err = HandleMediaImage(env)
+	require.Error(t, err)
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	assert.Contains(t, err.Error(), "image file too large")
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaImage_OversizedBlobReturnsClientError(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(10, 100)
+	blobID := int64(123)
+	expectMediaImageResolve(mockDB, row)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(10)).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(100)).
+		Return([]database.MediaProperty{{
+			BlobDBID:    &blobID,
+			TypeTag:     "property:image-boxart",
+			ContentType: "image/png",
+			BlobSize:    database.MaxMediaPropertyBinaryBytes + 1,
+		}}, nil)
+
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["boxart"]`))
+	_, err := HandleMediaImage(env)
+	require.Error(t, err)
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	assert.Contains(t, err.Error(), "image blob too large")
+	mockDB.AssertExpectations(t)
+}

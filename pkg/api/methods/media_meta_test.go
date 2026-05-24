@@ -145,7 +145,7 @@ func TestHandleMediaMeta_BinaryPropertyBase64Encoded(t *testing.T) {
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(30)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaProperties", mock.Anything, int64(3)).
 		Return([]database.MediaProperty{
-			{TypeTag: "property:image", ContentType: "image/png", Binary: blobData},
+			{TypeTag: "property:image", ContentType: "image/png", Binary: blobData, BlobSize: int64(len(blobData))},
 		}, nil)
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(30)).Return([]database.MediaProperty{}, nil)
 
@@ -159,6 +159,42 @@ func TestHandleMediaMeta_BinaryPropertyBase64Encoded(t *testing.T) {
 	prop := resp.Media.Properties["property:image"]
 	require.NotNil(t, prop.Data)
 	assert.Equal(t, base64.StdEncoding.EncodeToString(blobData), *prop.Data)
+	assert.Equal(t, "image/png", prop.ContentType)
+	assert.NotNil(t, prop.Extension)
+	assert.Equal(t, "png", *prop.Extension)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaMeta_OversizedBinaryPropertyDataOmitted(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	blobID := int64(99)
+
+	row := makeMediaFullRow(4, 40)
+	expectMediaMetaResolve(mockDB, row)
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(4)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(40)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(4)).
+		Return([]database.MediaProperty{
+			{
+				TypeTag:     "property:image",
+				ContentType: "image/png",
+				BlobDBID:    &blobID,
+				BlobSize:    database.MaxMediaPropertyBinaryBytes + 1,
+			},
+		}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(40)).Return([]database.MediaProperty{}, nil)
+
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
+	result, err := HandleMediaMeta(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaMetaResponse)
+	require.True(t, ok)
+	require.Contains(t, resp.Media.Properties, "property:image")
+	prop := resp.Media.Properties["property:image"]
+	assert.Nil(t, prop.Data)
 	assert.Equal(t, "image/png", prop.ContentType)
 	assert.NotNil(t, prop.Extension)
 	assert.Equal(t, "png", *prop.Extension)

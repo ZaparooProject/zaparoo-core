@@ -864,18 +864,17 @@ func (db *MediaDB) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*datab
 func (db *MediaDB) GetMediaTitleProperties(
 	ctx context.Context, mediaTitleDBID int64,
 ) ([]database.MediaProperty, error) {
+	return db.loadMediaTitleProperties(ctx, mediaTitleDBID)
+}
+
+func (db *MediaDB) loadMediaTitleProperties(
+	ctx context.Context, mediaTitleDBID int64,
+) ([]database.MediaProperty, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	stmt, err := db.sql.PrepareContext(ctx, `
-		SELECT tt.Type || ':' || t.Tag, mtp.TypeTagDBID, mtp.Text,
-		       mtp.BlobDBID, mb.ContentType, mb.Data
-		FROM MediaTitleProperties mtp
-		JOIN Tags t      ON mtp.TypeTagDBID = t.DBID
-		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		LEFT JOIN MediaBlobs mb ON mtp.BlobDBID = mb.DBID
-		WHERE mtp.MediaTitleDBID = ?
-	`)
+	stmt, err := db.sql.PrepareContext(ctx, mediaTitlePropertyQuery(
+		"WHERE mtp.MediaTitleDBID = ?", propertyGroupOmit))
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare GetMediaTitleProperties: %w", err)
 	}
@@ -898,7 +897,15 @@ func (db *MediaDB) GetMediaTitleProperties(
 	return scanProperties(rows)
 }
 
+// GetMediaTitlePropertiesByMediaTitleDBIDs returns properties grouped by
+// MediaTitle DBID. Binary blobs are capped at MaxMediaPropertyBinaryBytes.
 func (db *MediaDB) GetMediaTitlePropertiesByMediaTitleDBIDs(
+	ctx context.Context, mediaTitleDBIDs []int64,
+) (map[int64][]database.MediaProperty, error) {
+	return db.loadMediaTitlePropertiesByMediaTitleDBIDs(ctx, mediaTitleDBIDs)
+}
+
+func (db *MediaDB) loadMediaTitlePropertiesByMediaTitleDBIDs(
 	ctx context.Context, mediaTitleDBIDs []int64,
 ) (map[int64][]database.MediaProperty, error) {
 	results := make(map[int64][]database.MediaProperty, len(mediaTitleDBIDs))
@@ -910,16 +917,9 @@ func (db *MediaDB) GetMediaTitlePropertiesByMediaTitleDBIDs(
 	}
 
 	args := int64Args(mediaTitleDBIDs)
+	where := `WHERE mtp.MediaTitleDBID IN (` + prepareVariadic("?", ",", len(mediaTitleDBIDs)) + `)`
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.QueryContext(ctx, `
-		SELECT mtp.MediaTitleDBID, tt.Type || ':' || t.Tag, mtp.TypeTagDBID, mtp.Text,
-		       mtp.BlobDBID, mb.ContentType, mb.Data
-		FROM MediaTitleProperties mtp
-		JOIN Tags t      ON mtp.TypeTagDBID = t.DBID
-		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		LEFT JOIN MediaBlobs mb ON mtp.BlobDBID = mb.DBID
-		WHERE mtp.MediaTitleDBID IN (`+prepareVariadic("?", ",", len(mediaTitleDBIDs))+`)
-	`, args...)
+	rows, err := db.sql.QueryContext(ctx, mediaTitlePropertyQuery(where, propertyGroupInclude), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query GetMediaTitlePropertiesByMediaTitleDBIDs: %w", err)
 	}
@@ -935,18 +935,16 @@ func (db *MediaDB) GetMediaTitlePropertiesByMediaTitleDBIDs(
 // GetMediaProperties returns all MediaProperties rows for the given Media record.
 // TypeTag is populated as "type:value" from the joined Tags/TagTypes rows.
 func (db *MediaDB) GetMediaProperties(ctx context.Context, mediaDBID int64) ([]database.MediaProperty, error) {
+	return db.loadMediaProperties(ctx, mediaDBID)
+}
+
+func (db *MediaDB) loadMediaProperties(
+	ctx context.Context, mediaDBID int64,
+) ([]database.MediaProperty, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	stmt, err := db.sql.PrepareContext(ctx, `
-		SELECT tt.Type || ':' || t.Tag, mp.TypeTagDBID, mp.Text,
-		       mp.BlobDBID, mb.ContentType, mb.Data
-		FROM MediaProperties mp
-		JOIN Tags t      ON mp.TypeTagDBID = t.DBID
-		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		LEFT JOIN MediaBlobs mb ON mp.BlobDBID = mb.DBID
-		WHERE mp.MediaDBID = ?
-	`)
+	stmt, err := db.sql.PrepareContext(ctx, mediaPropertyQuery("WHERE mp.MediaDBID = ?", propertyGroupOmit))
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare GetMediaProperties: %w", err)
 	}
@@ -969,7 +967,15 @@ func (db *MediaDB) GetMediaProperties(ctx context.Context, mediaDBID int64) ([]d
 	return scanProperties(rows)
 }
 
+// GetMediaPropertiesByMediaDBIDs returns properties grouped by Media DBID.
+// Binary blobs are capped at MaxMediaPropertyBinaryBytes.
 func (db *MediaDB) GetMediaPropertiesByMediaDBIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64][]database.MediaProperty, error) {
+	return db.loadMediaPropertiesByMediaDBIDs(ctx, mediaDBIDs)
+}
+
+func (db *MediaDB) loadMediaPropertiesByMediaDBIDs(
 	ctx context.Context, mediaDBIDs []int64,
 ) (map[int64][]database.MediaProperty, error) {
 	results := make(map[int64][]database.MediaProperty, len(mediaDBIDs))
@@ -981,16 +987,9 @@ func (db *MediaDB) GetMediaPropertiesByMediaDBIDs(
 	}
 
 	args := int64Args(mediaDBIDs)
+	where := `WHERE mp.MediaDBID IN (` + prepareVariadic("?", ",", len(mediaDBIDs)) + `)`
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.QueryContext(ctx, `
-		SELECT mp.MediaDBID, tt.Type || ':' || t.Tag, mp.TypeTagDBID, mp.Text,
-		       mp.BlobDBID, mb.ContentType, mb.Data
-		FROM MediaProperties mp
-		JOIN Tags t      ON mp.TypeTagDBID = t.DBID
-		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		LEFT JOIN MediaBlobs mb ON mp.BlobDBID = mb.DBID
-		WHERE mp.MediaDBID IN (`+prepareVariadic("?", ",", len(mediaDBIDs))+`)
-	`, args...)
+	rows, err := db.sql.QueryContext(ctx, mediaPropertyQuery(where, propertyGroupInclude), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query GetMediaPropertiesByMediaDBIDs: %w", err)
 	}
@@ -1238,6 +1237,54 @@ func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBIDs(
 	return scanGroupedTagInfos(rows)
 }
 
+type propertyGroupMode int
+
+const (
+	propertyGroupOmit propertyGroupMode = iota
+	propertyGroupInclude
+)
+
+func propertySelectColumns(entityIDColumn string, groupMode propertyGroupMode) string {
+	parts := []string{}
+	if groupMode == propertyGroupInclude {
+		parts = append(parts, entityIDColumn)
+	}
+	dataColumn := fmt.Sprintf(
+		"CASE WHEN mb.Data IS NOT NULL AND length(mb.Data) <= %d THEN mb.Data ELSE NULL END",
+		database.MaxMediaPropertyBinaryBytes,
+	)
+	parts = append(parts,
+		"tt.Type || ':' || t.Tag",
+		"TypeTagDBID",
+		"Text",
+		"BlobDBID",
+		"ContentType",
+		"CASE WHEN mb.Data IS NOT NULL THEN length(mb.Data) ELSE NULL END",
+		dataColumn,
+	)
+	return strings.Join(parts, ", ")
+}
+
+func mediaTitlePropertyQuery(where string, groupMode propertyGroupMode) string {
+	return `
+		SELECT ` + propertySelectColumns("mtp.MediaTitleDBID", groupMode) + `
+		FROM MediaTitleProperties mtp
+		JOIN Tags t      ON mtp.TypeTagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		LEFT JOIN MediaBlobs mb ON mtp.BlobDBID = mb.DBID
+		` + where
+}
+
+func mediaPropertyQuery(where string, groupMode propertyGroupMode) string {
+	return `
+		SELECT ` + propertySelectColumns("mp.MediaDBID", groupMode) + `
+		FROM MediaProperties mp
+		JOIN Tags t      ON mp.TypeTagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		LEFT JOIN MediaBlobs mb ON mp.BlobDBID = mb.DBID
+		` + where
+}
+
 func scanTagInfos(rows *sql.Rows) ([]database.TagInfo, error) {
 	result := make([]database.TagInfo, 0)
 	for rows.Next() {
@@ -1271,18 +1318,15 @@ func scanProperties(rows *sql.Rows) ([]database.MediaProperty, error) {
 		var p database.MediaProperty
 		var blobDBID sql.NullInt64
 		var contentType sql.NullString
+		var blobSize sql.NullInt64
 		var binary []byte
 		if err := rows.Scan(
 			&p.TypeTag, &p.TypeTagDBID, &p.Text,
-			&blobDBID, &contentType, &binary,
+			&blobDBID, &contentType, &blobSize, &binary,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan MediaProperty: %w", err)
 		}
-		if blobDBID.Valid {
-			p.BlobDBID = &blobDBID.Int64
-		}
-		p.ContentType = contentType.String
-		p.Binary = binary
+		setPropertyBlobFields(&p, blobDBID, contentType, blobSize, binary)
 		props = append(props, p)
 	}
 	if props == nil {
@@ -1308,19 +1352,33 @@ func scanPropertyWithDBID(rows *sql.Rows, dbid *int64) (database.MediaProperty, 
 	var p database.MediaProperty
 	var blobDBID sql.NullInt64
 	var contentType sql.NullString
+	var blobSize sql.NullInt64
 	var binary []byte
 	if err := rows.Scan(
 		dbid, &p.TypeTag, &p.TypeTagDBID, &p.Text,
-		&blobDBID, &contentType, &binary,
+		&blobDBID, &contentType, &blobSize, &binary,
 	); err != nil {
 		return database.MediaProperty{}, fmt.Errorf("failed to scan grouped MediaProperty: %w", err)
 	}
+	setPropertyBlobFields(&p, blobDBID, contentType, blobSize, binary)
+	return p, nil
+}
+
+func setPropertyBlobFields(
+	p *database.MediaProperty,
+	blobDBID sql.NullInt64,
+	contentType sql.NullString,
+	blobSize sql.NullInt64,
+	binary []byte,
+) {
 	if blobDBID.Valid {
 		p.BlobDBID = &blobDBID.Int64
 	}
 	p.ContentType = contentType.String
+	if blobSize.Valid {
+		p.BlobSize = blobSize.Int64
+	}
 	p.Binary = binary
-	return p, nil
 }
 
 func int64Args(values []int64) []any {
