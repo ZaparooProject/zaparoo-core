@@ -493,6 +493,20 @@ preprocessing:
 			continue preprocessing
 		}
 
+		// If a scan arrives while the timeout is also ready, process the timeout
+		// first. Otherwise Go's random select order can confirm an expired token.
+		if stagedToken != nil && guardTimeout != nil {
+			select {
+			case <-guardTimeout:
+				log.Info().Msg("launch guard: staged token expired")
+				stagedToken = nil
+				guardTimeout = nil
+				guardDelay = nil
+				delayExpired = false
+			default:
+			}
+		}
+
 		// Clear stale staged token if media has stopped since staging
 		if stagedToken != nil && svc.State.ActiveMedia() == nil {
 			log.Info().Msg("launch guard: media stopped, clearing stale staged token")
