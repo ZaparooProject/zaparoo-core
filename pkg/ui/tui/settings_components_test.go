@@ -22,6 +22,7 @@ package tui
 import (
 	"testing"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -399,6 +400,24 @@ func TestButtonBar_GetFirstButton(t *testing.T) {
 	firstBtn := bb.GetFirstButton()
 	require.NotNil(t, firstBtn)
 	assert.Equal(t, "First", firstBtn.GetLabel())
+}
+
+func TestButtonBar_InputHandlerUsesBarFocus(t *testing.T) {
+	t.Parallel()
+
+	app := tview.NewApplication()
+	bb := NewButtonBar(app)
+	bb.AddButton("Save", func() {})
+	upCalled := false
+	bb.SetOnUp(func() {
+		upCalled = true
+	})
+
+	handler := bb.InputHandler()
+	require.NotNil(t, handler)
+	handler(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone), func(tview.Primitive) {})
+
+	assert.True(t, upCalled)
 }
 
 func TestButtonBar_ChainedMethods(t *testing.T) {
