@@ -70,6 +70,12 @@ tasks:
     cmds:
       - '{{if eq OS "windows"}}powershell rm -Recurse -Force{{else}}rm -rf{{end}} {{.TARGET_DIR}}'
 
+  hooks:install:
+    desc: Install repository git hooks
+    cmds:
+      - git config core.hooksPath .githooks
+      - echo "Installed git hooks from .githooks"
+
   test:
     desc: Run all tests
     vars:

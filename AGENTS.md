@@ -62,6 +62,8 @@ golangci-lint run --fix pkg/service/      # Package-level lint
 # Project-wide
 task test              # Full test suite with race detection
 task lint-fix          # Full lint with auto-fixes
+task cross-lint:all    # Cross-OS lint via repository zigcc Docker task
+task hooks:install     # Install repository git hooks
 task build             # Build binary
 task fuzz              # Run fuzz tests
 task vulncheck         # Security vulnerability scan
@@ -153,6 +155,7 @@ git commit -m "add reader support"  # Missing type prefix
 ```
 
 Before committing: run `task lint-fix` then `task test`.
+Before pushing: run `task lint-fix`, `task test`, and `task cross-lint:all`, or install hooks with `task hooks:install`.
 
 Pull requests should NOT include a test plan section.
 
