@@ -741,7 +741,7 @@ func buildReaderEditPage(
 	formContent.AddItem(idSourceInput, 1, 0, false)
 	formContent.AddItem(enabledDisplay, 1, 0, false)
 
-	focusOrder := []tview.Primitive{driverDisplay, pathInput, idSourceInput, enabledDisplay, buttonBar.GetFirstButton()}
+	focusOrder := []tview.Primitive{driverDisplay, pathInput, idSourceInput, enabledDisplay, buttonBar}
 
 	setFocus := func(idx int) {
 		if idx < 0 {

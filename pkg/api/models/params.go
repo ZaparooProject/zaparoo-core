@@ -33,11 +33,13 @@ type SearchParams struct {
 }
 
 type BrowseParams struct {
-	Path       *string `json:"path,omitempty"`
-	MaxResults *int    `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
-	Cursor     *string `json:"cursor,omitempty"`
-	Letter     *string `json:"letter,omitempty" validate:"omitempty,letter"`
-	Sort       *string `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
+	Systems     *[]string `json:"systems" validate:"omitempty,dive,min=1"`
+	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
+	Path        *string   `json:"path,omitempty"`
+	MaxResults  *int      `json:"maxResults,omitempty" validate:"omitempty,gt=0,max=1000"`
+	Cursor      *string   `json:"cursor,omitempty"`
+	Letter      *string   `json:"letter,omitempty" validate:"omitempty,letter"`
+	Sort        *string   `json:"sort,omitempty" validate:"omitempty,oneof=name-asc name-desc filename-asc filename-desc"`
 }
 
 type MediaIndexParams struct {
@@ -99,6 +101,12 @@ type ReaderConnection struct {
 	IDSource string `json:"idSource,omitempty"`
 }
 
+type SystemDefault struct {
+	System     string `json:"system" validate:"required,system"`
+	Launcher   string `json:"launcher,omitempty"`
+	BeforeExit string `json:"beforeExit,omitempty"`
+}
+
 // IsEnabled returns whether this connection is enabled.
 // nil (omitted) and true both mean enabled; only explicit false disables.
 func (r ReaderConnection) IsEnabled() bool {
@@ -116,6 +124,7 @@ type UpdateSettingsParams struct {
 	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
 	ReadersScanIgnoreSystem   *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
 	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty"`
+	SystemDefaults            *[]SystemDefault    `json:"systemDefaults,omitempty" validate:"omitempty,dive"`
 	AudioVolume               *int                `json:"audioVolume" validate:"omitempty,gte=0,lte=200"`
 	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`
@@ -174,6 +183,33 @@ type MediaHistoryTopParams struct {
 	FuzzySystem *bool     `json:"fuzzySystem,omitempty"`
 	Since       *string   `json:"since,omitempty"`
 	Limit       *int      `json:"limit,omitempty" validate:"omitempty,gt=0,max=100"`
+}
+
+type MediaMetaParams struct {
+	MediaID *int64 `json:"mediaId,omitempty"`
+	System  string `json:"system" validate:"omitempty,min=1"`
+	Path    string `json:"path"   validate:"omitempty,min=1"`
+}
+
+type MediaTagsUpdateParams struct {
+	MediaID *int64   `json:"mediaId,omitempty"`
+	System  string   `json:"system" validate:"omitempty,min=1"`
+	Path    string   `json:"path"   validate:"omitempty,min=1"`
+	Add     []string `json:"add,omitempty" validate:"omitempty,dive,min=1"`
+	Remove  []string `json:"remove,omitempty" validate:"omitempty,dive,min=1"`
+}
+
+type MediaImageParams struct {
+	MediaID    *int64   `json:"mediaId,omitempty"`
+	System     string   `json:"system"            validate:"omitempty,min=1"`
+	Path       string   `json:"path"              validate:"omitempty,min=1"`
+	ImageTypes []string `json:"imageTypes"        validate:"omitempty,dive,min=1"`
+}
+
+type MediaScrapeParams struct {
+	ScraperID string   `json:"scraperId" validate:"required,min=1"`
+	Systems   []string `json:"systems"   validate:"omitempty,dive,min=1"`
+	Force     bool     `json:"force"`
 }
 
 type MediaLookupParams struct {

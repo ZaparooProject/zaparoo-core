@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -70,6 +71,81 @@ func TestMediaIndexStatus_StateManagement(t *testing.T) {
 		assert.False(t, statusInstance.isRunning(), "Should not be running after clear")
 		assert.Nil(t, statusInstance.getCancelFunc(), "Should have no cancel function after clear")
 	})
+}
+
+func TestIndexingNotificationState_SendsVisibleChangesInsideThrottle(t *testing.T) {
+	baseTime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	const throttleInterval = 250 * time.Millisecond
+
+	notifState := indexingNotificationState{}
+	amstradStatus := mediascanner.IndexStatus{SystemID: "amstradcpc", Total: 20, Step: 5}
+	arcadeStatus := mediascanner.IndexStatus{SystemID: "arcade", Total: 20, Step: 6}
+
+	assert.True(t, notifState.shouldSend(amstradStatus, baseTime, throttleInterval))
+	assert.True(t,
+		notifState.shouldSend(arcadeStatus, baseTime.Add(10*time.Millisecond), throttleInterval),
+		"system changes must bypass the throttle so clients don't stay on the previous system",
+	)
+	assert.False(t,
+		notifState.shouldSend(arcadeStatus, baseTime.Add(20*time.Millisecond), throttleInterval),
+		"duplicate status updates should still be throttled",
+	)
+	assert.True(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{SystemID: "arcade", Total: 20, Step: 7},
+			baseTime.Add(30*time.Millisecond),
+			throttleInterval,
+		),
+		"step changes are visible progress and must bypass the throttle",
+	)
+	assert.True(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{Phase: mediascanner.PhaseDiscovering},
+			baseTime.Add(40*time.Millisecond),
+			throttleInterval,
+		),
+		"phase changes are visible progress and must bypass the throttle",
+	)
+	assert.False(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{Phase: mediascanner.PhaseDiscovering},
+			baseTime.Add(50*time.Millisecond),
+			throttleInterval,
+		),
+		"duplicate phase updates should still be throttled",
+	)
+	assert.True(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing},
+			baseTime.Add(60*time.Millisecond),
+			throttleInterval,
+		),
+		"phase changes must bypass the throttle even when they happen quickly",
+	)
+	assert.False(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing},
+			baseTime.Add(70*time.Millisecond),
+			throttleInterval,
+		),
+		"duplicate phase updates should still be throttled after a phase change",
+	)
+	assert.True(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing, Total: 9, Step: 8},
+			baseTime.Add(80*time.Millisecond),
+			throttleInterval,
+		),
+		"step changes are visible progress before final-step completion",
+	)
+	assert.True(t,
+		notifState.shouldSend(
+			mediascanner.IndexStatus{Phase: mediascanner.PhaseInitializing, Total: 8, Step: 8},
+			baseTime.Add(90*time.Millisecond),
+			throttleInterval,
+		),
+		"final-step updates must bypass the throttle",
+	)
 }
 
 func TestMediaIndexStatus_ThreadSafety(t *testing.T) {

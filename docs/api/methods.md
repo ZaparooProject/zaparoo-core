@@ -285,10 +285,12 @@ None.
 
 | Key              | Type     | Required | Description                                |
 | :--------------- | :------- | :------- | :----------------------------------------- |
+| mediaId          | number   | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests. Omitted when the active path cannot be resolved in the current media database. |
 | launcherId       | string   | Yes      | ID of the launcher.                        |
 | systemId         | string   | Yes      | ID of the system.                          |
 | systemName       | string   | Yes      | Display name of the system.                |
 | mediaPath        | string   | Yes      | Path to the media file.                    |
+| relativePath     | string   | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
 | mediaName        | string   | Yes      | Display name of the media.                 |
 | started          | string   | Yes      | Timestamp when media started in RFC3339 format. |
 | zapScript        | string   | Yes      | ZapScript command to launch this media item. |
@@ -375,9 +377,11 @@ An object:
 
 | Key       | Type                     | Required | Description                                                                                                 |
 | :-------- | :----------------------- | :------- | :---------------------------------------------------------------------------------------------------------- |
+| mediaId   | number                   | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests.                |
 | system    | [System](#system-object) | Yes      | System which the media has been indexed under.                                                              |
 | name      | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
-| path      | string                   | Yes      | Path to the media file. If possible, this path will be compressed into the `<system>/<path>` launch format. |
+| path      | string                   | Yes      | Canonical indexed media path. Use with `system.id` for `media.meta` and `media.image`. |
+| relativePath | string               | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
 | zapScript | string                   | Yes      | ZapScript command to launch this media item.                                                                |
 | tags      | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
 
@@ -430,8 +434,10 @@ An object:
   "result": {
     "results": [
       {
+        "mediaId": 123,
         "name": "240p Test Suite (PD) v0.03 tepples",
-        "path": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
+        "path": "/media/fat/games/Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
+        "relativePath": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb",
         "zapScript": "@Gameboy/240p Test Suite (PD) v0.03 tepples",
         "system": {
           "category": "Handheld",
@@ -485,8 +491,10 @@ An object:
   "result": {
     "results": [
       {
+        "mediaId": 456,
         "name": "Super Mario Bros.",
-        "path": "NES/Super Mario Bros.nes",
+        "path": "/media/fat/games/NES/Super Mario Bros.nes",
+        "relativePath": "NES/Super Mario Bros.nes",
         "zapScript": "@NES/Super Mario Bros. (year:1985)",
         "system": {
           "category": "Console",
@@ -522,7 +530,7 @@ An object:
 
 Browse indexed media content by directory, similar to navigating a file manager. Supports filesystem paths, virtual URI schemes (e.g. `mame-arcade://`), and paginated results.
 
-When called without a `path` parameter (or with an empty path), returns top-level root entries including filesystem roots and virtual scheme roots.
+When called without a `path` parameter (or with an empty path), returns top-level root entries including filesystem roots and virtual scheme roots. When `systems` is provided without `path`, returns populated launcher routes for those systems only. Pass the same `systems` filter when browsing a returned route to keep shared paths scoped to the selected systems.
 
 #### Parameters
 
@@ -531,8 +539,10 @@ All parameters are optional. When called with no parameters, returns root entrie
 | Key        | Type   | Required | Description                                                                                                |
 | :--------- | :----- | :------- | :--------------------------------------------------------------------------------------------------------- |
 | path       | string | No       | Directory path to browse. Omit or set empty to list root entries. Supports filesystem paths and virtual URI schemes (e.g. `mame-arcade://`). |
+| systems    | string[] | No     | Case-sensitive list of system IDs to restrict route discovery and browse results to. A missing key or empty list preserves unfiltered behavior. |
+| fuzzySystem | boolean | No     | Enable fuzzy matching for system IDs in the `systems` array (e.g., `"snes"` matches `"SNES"`). |
 | maxResults | number | No       | Maximum results per page. Default is 100, maximum is 1000.                                                 |
-| cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page.                     |
+| cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page. Cursors are valid only with the same path, systems, letter, and sort parameters. |
 | letter     | string | No       | Filter results to entries starting with this letter.                                                       |
 | sort       | string | No       | Sort order. One of: `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. The `filename` variants sort by full file path. |
 
@@ -549,12 +559,14 @@ All parameters are optional. When called with no parameters, returns root entrie
 
 | Key          | Type     | Required | Description                                                                                      |
 | :----------- | :------- | :------- | :----------------------------------------------------------------------------------------------- |
+| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries for efficient follow-up `media.meta` and `media.image` requests. |
 | name         | string   | Yes      | Display name of the entry.                                                                       |
 | path         | string   | Yes      | Full path to the entry.                                                                          |
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
 | fileCount    | number   | No       | Number of files in this directory. Present on `root` and `directory` entries.                     |
 | group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
-| systemId     | string   | No       | System ID for the media (e.g. `SNES`). Present on `media` entries.                               |
+| systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
+| systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |
 | zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries.                              |
 | relativePath | string   | No       | Relative path from root directory. Present on `media` entries.                                   |
 | tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries. |
@@ -567,7 +579,45 @@ All parameters are optional. When called with no parameters, returns root entrie
 | pageSize    | number | Yes      | The requested page size.                                 |
 | nextCursor  | string | No       | Opaque cursor for the next page. Absent on the last page. |
 
-#### Example
+#### System route example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "media.browse",
+  "params": {
+    "systems": ["SNES"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "path": "",
+    "entries": [
+      {
+        "name": "SNES",
+        "path": "/roms/SNES",
+        "type": "root",
+        "fileCount": 150,
+        "systemId": "SNES",
+        "systemIds": ["SNES"]
+      }
+    ],
+    "totalFiles": 0
+  }
+}
+```
+
+#### Browse path example
 
 ##### Request
 
@@ -599,6 +649,7 @@ All parameters are optional. When called with no parameters, returns root entrie
         "fileCount": 42
       },
       {
+        "mediaId": 42,
         "name": "Super Mario World",
         "path": "/roms/SNES/Super Mario World.sfc",
         "type": "media",
@@ -611,6 +662,7 @@ All parameters are optional. When called with no parameters, returns root entrie
         ]
       },
       {
+        "mediaId": 43,
         "name": "The Legend of Zelda - A Link to the Past",
         "path": "/roms/SNES/The Legend of Zelda - A Link to the Past.sfc",
         "type": "media",
@@ -655,7 +707,7 @@ This method returns all available tags (with their types) for the specified syst
 **Tag Capping:** To prevent large responses, long-tail tag types are capped at 100 entries
 per type. Tags within each type are sorted by usage count (most popular first), then
 alphabetically. The following types are capped: `credit`, `developer`, `mameparent`,
-`publisher`, `search`. Taxonomy types (e.g., `region`, `year`, `lang`, `genre`, `series`)
+`publisher`, `search`. Taxonomy types (e.g., `region`, `year`, `lang`, `gamegenre`, `gamefamily`)
 have finite vocabularies per system and are always returned in full without truncation.
 
 ##### TagInfo object
@@ -697,12 +749,69 @@ have finite vocabularies per system and are always returned in full without trun
         "tag": "platformer"
       },
       {
-        "type": "series",
+        "type": "gamefamily",
         "tag": "Mario Bros"
       },
       {
-        "type": "series",
+        "type": "gamefamily",
         "tag": "Super Mario"
+      }
+    ]
+  }
+}
+```
+
+### media.tags.update
+
+Add or remove user tags for an indexed media item.
+
+The initial mutable tag is `user:favorite`. It appears in normal media tag results and can be queried with `media.search` tag filters such as `user:favorite`, `-user:favorite`, and `~user:favorite`.
+
+#### Parameters
+
+| Key     | Type     | Required | Description                                               |
+| :------ | :------- | :------- | :-------------------------------------------------------- |
+| mediaId | number   | No       | Media DBID to update. Cannot be mixed with system/path.   |
+| system  | string   | No       | System ID for path-based lookup. Required when using path. |
+| path    | string   | No       | Media path for path-based lookup. Required with system.    |
+| add     | string[] | No       | Tags to add. Currently only `user:favorite` is mutable.    |
+| remove  | string[] | No       | Tags to remove. Currently only `user:favorite` is mutable. |
+
+Either `mediaId` or `system` plus `path` is required. At least one of `add` or `remove` is required. Search operators (`+`, `-`, `~`) are not valid in mutation requests.
+
+#### Result
+
+| Key  | Type                         | Required | Description                          |
+| :--- | :--------------------------- | :------- | :----------------------------------- |
+| tags | [TagInfo](#taginfo-object)[] | Yes      | Effective tags for the media item.   |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "method": "media.tags.update",
+  "params": {
+    "mediaId": 42,
+    "add": ["user:favorite"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "tags": [
+      {
+        "type": "user",
+        "tag": "favorite"
       }
     ]
   }
@@ -873,11 +982,13 @@ Returns an [ActiveMedia](#active-media-object) object if media is currently acti
   "jsonrpc": "2.0",
   "id": "47f80537-7a5d-11ef-9c7b-020304050607",
   "result": {
+    "mediaId": 42,
     "started": "2024-09-24T17:49:42.938167429+08:00",
     "launcherId": "SNES",
     "systemId": "SNES",
     "systemName": "Super Nintendo Entertainment System",
     "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+    "relativePath": "snes/Super Mario World (USA).sfc",
     "mediaName": "Super Mario World",
     "zapScript": "@SNES/Super Mario World",
     "launcherControls": ["load_state", "save_state", "toggle_menu"]
@@ -956,10 +1067,12 @@ Optionally, an object:
 
 | Key        | Type   | Required | Description                                            |
 | :--------- | :----- | :------- | :----------------------------------------------------- |
+| mediaId    | number | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests. Omitted when the history path cannot be resolved in the current media database. |
 | systemId   | string | Yes      | ID of the system.                                      |
 | systemName | string | Yes      | Display name of the system.                            |
 | mediaName  | string | Yes      | Display name of the media.                             |
 | mediaPath  | string | Yes      | Path to the media file.                                |
+| relativePath | string | No     | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
 | launcherId | string | Yes      | ID of the launcher used.                               |
 | startedAt  | string | Yes      | Timestamp when media started in RFC3339 format.        |
 | endedAt    | string | No       | Timestamp when media stopped in RFC3339 format. Omitted if media is still active. |
@@ -989,10 +1102,12 @@ Optionally, an object:
   "result": {
     "entries": [
       {
+        "mediaId": 42,
         "systemId": "SNES",
         "systemName": "Super Nintendo Entertainment System",
         "mediaName": "Super Mario World",
         "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+        "relativePath": "snes/Super Mario World (USA).sfc",
         "launcherId": "SNES",
         "startedAt": "2025-01-22T14:30:00Z",
         "endedAt": "2025-01-22T15:15:30Z",
@@ -1032,10 +1147,12 @@ Optionally, an object:
 
 | Key           | Type   | Required | Description                                            |
 | :------------ | :----- | :------- | :----------------------------------------------------- |
+| mediaId       | number | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests. Omitted when the history path cannot be resolved in the current media database. |
 | systemId      | string | Yes      | ID of the system.                                      |
 | systemName    | string | Yes      | Display name of the system.                            |
 | mediaName     | string | Yes      | Display name of the media.                             |
 | mediaPath     | string | Yes      | Path to the media file (from most recent session).     |
+| relativePath  | string | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
 | totalPlayTime | number | Yes      | Total play time across all sessions in seconds.        |
 | sessionCount  | number | Yes      | Number of play sessions.                               |
 | lastPlayedAt  | string | Yes      | Timestamp of the most recent session in RFC3339 format. |
@@ -1065,10 +1182,12 @@ Optionally, an object:
   "result": {
     "entries": [
       {
+        "mediaId": 42,
         "systemId": "SNES",
         "systemName": "Super Nintendo Entertainment System",
         "mediaName": "Super Mario World",
         "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+        "relativePath": "snes/Super Mario World (USA).sfc",
         "totalPlayTime": 7200,
         "sessionCount": 12,
         "lastPlayedAt": "2026-02-14T20:30:00Z"
@@ -1104,9 +1223,11 @@ An object:
 
 | Key        | Type                         | Required | Description                                                                                 |
 | :--------- | :--------------------------- | :------- | :------------------------------------------------------------------------------------------ |
+| mediaId    | number                       | No       | Opaque media database row ID for efficient follow-up `media.meta` and `media.image` requests. |
 | system     | [System](#system-object)     | Yes      | System the media was found in.                                                              |
 | name       | string                       | Yes      | Display name of the matched media.                                                          |
 | path       | string                       | Yes      | Path to the media file.                                                                     |
+| relativePath | string                    | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity.   |
 | zapScript  | string                       | Yes      | ZapScript command to launch this media item.                                                |
 | tags       | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                              |
 | confidence | number                       | Yes      | Match confidence score from 0.0 to 1.0.                                                    |
@@ -1135,6 +1256,7 @@ An object:
   "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
   "result": {
     "match": {
+      "mediaId": 42,
       "system": {
         "id": "SNES",
         "name": "Super Nintendo Entertainment System",
@@ -1143,7 +1265,8 @@ An object:
         "manufacturer": "Nintendo"
       },
       "name": "Super Mario World",
-      "path": "SNES/Super Mario World (USA).sfc",
+      "path": "/roms/snes/Super Mario World (USA).sfc",
+      "relativePath": "SNES/Super Mario World (USA).sfc",
       "zapScript": "@SNES/Super Mario World",
       "tags": [
         {
@@ -1169,6 +1292,495 @@ An object:
   "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
   "result": {
     "match": null
+  }
+}
+```
+
+### media.meta
+
+Return the full metadata graph for one indexed media row, including its title, system, tags, and scraped properties.
+
+Use this when a client has a search, browse, or lookup result and needs all metadata attached to that row. Identify media by the result's `mediaId` when available, or by `system.id` and canonical `path`. Launcher-relative paths in the `system/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row. Properties are separated by scope: `media.properties` applies to the specific ROM/file row, and `media.title.properties` applies to the shared title.
+
+#### Parameters
+
+An object:
+
+| Key    | Type   | Required | Description                         |
+| :----- | :----- | :------- | :---------------------------------- |
+| mediaId | number | No      | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
+| system | string | No       | System ID for the media row. Required when `mediaId` is omitted. |
+| path   | string | No       | Canonical indexed media path. Required when `mediaId` is omitted. |
+| items  | object[] | No     | Batch request items. Each item uses either `mediaId` or `system`/`path`. Maximum 100 items. Cannot be mixed with top-level media ref fields. |
+
+Single requests return the existing single `media` response shape. Batch requests return `{ "items": [...] }` in input order. Each batch item contains either `media` or `error`, so one missing media row does not fail the whole batch.
+
+#### Result
+
+| Key   | Type                                  | Required | Description                  |
+| :---- | :------------------------------------ | :------- | :--------------------------- |
+| media | [MediaMeta](#media-meta-object)       | Yes      | Metadata for the media row.  |
+
+##### Media meta object
+
+| Key        | Type                                    | Required | Description                                           |
+| :--------- | :-------------------------------------- | :------- | :---------------------------------------------------- |
+| path       | string                                  | Yes      | Media file path.                                      |
+| parentDir  | string                                  | Yes      | Parent directory stored for the media row.            |
+| isMissing  | boolean                                 | Yes      | Whether the indexed file is currently missing.        |
+| tags       | [TagInfo](#taginfo-object)[]            | Yes      | ROM-level tags for this media row.                    |
+| properties | object                                  | Yes      | ROM-level properties keyed by canonical type tag.     |
+| title      | [MediaMetaTitle](#media-meta-title-object) | Yes   | Shared title metadata for this media row.             |
+
+##### Media meta title object
+
+| Key           | Type                         | Required | Description                                      |
+| :------------ | :--------------------------- | :------- | :----------------------------------------------- |
+| slug          | string                       | Yes      | Primary normalized title slug.                   |
+| secondarySlug | string                       | No       | Secondary title slug, when available.            |
+| name          | string                       | Yes      | Display title.                                   |
+| slugLength    | number                       | Yes      | Character length of the primary slug.            |
+| slugWordCount | number                       | Yes      | Word count of the primary slug.                  |
+| system        | object                       | Yes      | Stored system object with `id` and `name`.       |
+| tags          | [TagInfo](#taginfo-object)[] | Yes      | Title-level tags shared by matching media rows.  |
+| properties    | object                       | Yes      | Title-level properties keyed by canonical type tag. |
+
+##### Media meta property object
+
+| Key         | Type   | Required | Description                                                            |
+| :---------- | :----- | :------- | :--------------------------------------------------------------------- |
+| text        | string | Yes      | Text value or source path for the property.                            |
+| contentType | string | Yes      | MIME type for binary-backed properties, empty for text-only values.    |
+| extension   | string | No       | File extension without a dot, derived from MIME type or source path.   |
+| data        | string | No       | Base64-encoded binary property data. Omitted for text-only properties. |
+
+Property keys are canonical type tags such as `property:description`, `property:image-image`, or `property:manual`.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050607",
+  "method": "media.meta",
+  "params": {
+    "system": "SNES",
+    "path": "/roms/snes/Super Mario World.sfc"
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "media": {
+      "path": "/roms/snes/Super Mario World.sfc",
+      "parentDir": "/roms/snes",
+      "isMissing": false,
+      "tags": [
+        {"type": "region", "tag": "usa"}
+      ],
+      "properties": {},
+      "title": {
+        "slug": "super mario world",
+        "name": "Super Mario World",
+        "slugLength": 17,
+        "slugWordCount": 3,
+        "system": {
+          "id": "SNES",
+          "name": "Super Nintendo Entertainment System"
+        },
+        "tags": [
+          {"type": "developer", "tag": "Nintendo"},
+          {"type": "gamegenre", "tag": "platformer"}
+        ],
+        "properties": {
+          "property:description": {
+            "text": "Mario's dinosaur friend Yoshi makes his debut.",
+            "contentType": ""
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+##### Batch Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050608",
+  "method": "media.meta",
+  "params": {
+    "items": [
+      {"mediaId": 42},
+      {"system": "SNES", "path": "/roms/snes/Super Metroid.sfc"}
+    ]
+  }
+}
+```
+
+### media.image
+
+Return the best matching image for one indexed media row as base64-encoded data.
+
+`media.image` checks the requested image types in order. For each type it tries media-level properties first, then title-level properties. If a stored file path no longer exists, the stale property is removed and lookup continues.
+
+#### Parameters
+
+An object identifying the media row by `mediaId` or `(system, path)`. Canonical indexed paths are preferred. Launcher-relative paths in the `system/path` shape are accepted as a compatibility fallback when they resolve to exactly one indexed media row.
+
+| Key        | Type     | Required | Description                                                                 |
+| :--------- | :------- | :------- | :-------------------------------------------------------------------------- |
+| mediaId    | number   | No       | Opaque media database row ID from search, browse, or lookup. Cannot be mixed with `system`/`path`. |
+| system     | string   | No       | System ID. Required when `mediaId` is omitted.                              |
+| path       | string   | No       | Canonical indexed media path. Required when `mediaId` is omitted.            |
+| imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
+| items      | object[] | No       | Batch request items. Each item uses either `mediaId` or `system`/`path`, and may include item-level `imageTypes`. Maximum 50 items. Cannot be mixed with top-level media ref fields. |
+
+Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
+
+Single requests return the existing single image response shape. Batch requests return `{ "items": [...] }` in input order. Each batch item contains either `image` or `error`. Top-level `imageTypes` applies to all batch items unless an item has its own `imageTypes` override.
+
+#### Result
+
+| Key         | Type   | Required | Description                                  |
+| :---------- | :----- | :------- | :------------------------------------------- |
+| contentType | string | Yes      | MIME type of the returned image data.        |
+| extension   | string | No       | File extension without a dot, derived from MIME type or source path. |
+| data        | string | Yes      | Base64-encoded image bytes.                  |
+| typeTag     | string | Yes      | Canonical property tag that matched.         |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "method": "media.image",
+  "params": {
+    "system": "SNES",
+    "path": "/roms/snes/Super Mario World.sfc",
+    "imageTypes": ["boxart", "image"]
+  }
+}
+```
+
+##### Batch Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050608",
+  "method": "media.image",
+  "params": {
+    "imageTypes": ["boxart", "image"],
+    "items": [
+      {"mediaId": 42},
+      {"mediaId": 43, "imageTypes": ["screenshot"]}
+    ]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "contentType": "image/png",
+    "extension": "png",
+    "data": "iVBORw0KGgoAAAANSUhEUgAA...",
+    "typeTag": "property:image-boxart"
+  }
+}
+```
+
+### scrapers
+
+List all registered metadata scrapers.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key      | Type                                 | Required | Description                         |
+| :------- | :----------------------------------- | :------- | :---------------------------------- |
+| scrapers | [ScraperInfo](#scraper-info-object)[] | Yes      | Registered scraper implementations. |
+
+##### Scraper info object
+
+| Key              | Type     | Required | Description                                                              |
+| :--------------- | :------- | :------- | :----------------------------------------------------------------------- |
+| id               | string   | Yes      | Stable scraper ID used by `media.scrape`.                                |
+| name             | string   | Yes      | Human-readable scraper name.                                             |
+| supportedSystems | string[] | Yes      | Supported system IDs. Empty means the scraper can run against all systems. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "f6a7b8c9-7a5d-11ef-9c7b-020304050607",
+  "method": "scrapers"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "f6a7b8c9-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "scrapers": [
+      {
+        "id": "gamelist.xml",
+        "name": "gamelist.xml",
+        "supportedSystems": []
+      }
+    ]
+  }
+}
+```
+
+### media.scrape
+
+Start a metadata scraper run in the background.
+
+Scraping enriches existing MediaDB records only. It does not create media rows; run `media.generate` first so the filesystem scanner has indexed the library. Scraping and media indexing are mutually exclusive, and only one scraper can run at a time.
+
+Progress is reported with [media.scraping](./notifications.md#mediascraping) notifications and can be queried with `media.scrape.status`. Scraping pauses while media is running and resumes automatically when playback stops.
+
+#### Parameters
+
+An object:
+
+| Key       | Type     | Required | Description                                                                 |
+| :-------- | :------- | :------- | :-------------------------------------------------------------------------- |
+| scraperId | string   | Yes      | Scraper ID from the `scrapers` method, for example `gamelist.xml`.          |
+| systems   | string[] | No       | System IDs to scrape. Omit or pass an empty array to scrape all eligible systems. |
+| force     | boolean  | No       | Re-scrape records that already have this scraper's sentinel tag. Default is false. |
+
+#### Result
+
+Returns `null` on success. The scraper continues after the response is sent.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a7b8c9d0-7a5d-11ef-9c7b-020304050607",
+  "method": "media.scrape",
+  "params": {
+    "scraperId": "gamelist.xml",
+    "systems": ["SNES", "NES"],
+    "force": false
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a7b8c9d0-7a5d-11ef-9c7b-020304050607",
+  "result": null
+}
+```
+
+### media.scrape.status
+
+Return the latest known metadata scraper status.
+
+This method behaves like `media` does for indexing status: clients can query the current scrape snapshot after opening a UI, then continue listening for `media.scraping` notifications. If no scrape has run since startup, the result is idle with `scraping: false` and `done: false`.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key       | Type    | Required | Description                                                |
+| :-------- | :------ | :------- | :--------------------------------------------------------- |
+| scraperId | string  | No       | Scraper ID for the latest or active run.                   |
+| systemId  | string  | No       | System currently being processed, when known.              |
+| processed | integer | Yes      | Number of records processed.                               |
+| total     | integer | Yes      | Total records expected for the current scrape, when known. |
+| matched   | integer | Yes      | Number of records matched and enriched.                    |
+| skipped   | integer | Yes      | Number of records skipped.                                 |
+| totalScraped | integer | Yes  | Number of media records already marked scraped.             |
+| scraping  | boolean | Yes      | Whether a scrape is currently running.                     |
+| done      | boolean | Yes      | Whether the latest scrape reached a terminal state.        |
+| paused    | boolean | Yes      | Whether the active scrape is paused because media is running or until resumed. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b8c9d0e1-7a5d-11ef-9c7b-020304050607",
+  "method": "media.scrape.status"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b8c9d0e1-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "scraperId": "gamelist.xml",
+    "systemId": "snes",
+    "processed": 42,
+    "total": 100,
+    "matched": 38,
+    "skipped": 4,
+    "totalScraped": 1200,
+    "scraping": true,
+    "done": false,
+    "paused": false
+  }
+}
+```
+
+### media.scrape.cancel
+
+Cancel the currently running metadata scraper operation.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type   | Required | Description                           |
+| :------ | :----- | :------- | :------------------------------------ |
+| message | string | Yes      | Status message about the cancellation. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b8c9d0e1-7a5d-11ef-9c7b-020304050607",
+  "method": "media.scrape.cancel"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b8c9d0e1-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "message": "scraping cancelled"
+  }
+}
+```
+
+### media.scrape.resume
+
+Resume a paused metadata scraper operation.
+
+Scraping normally resumes automatically when playback stops. This method mirrors `media.generate.resume` and lets a local client force the active scrape to continue while the pauser is currently paused.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type   | Required | Description                    |
+| :------ | :----- | :------- | :----------------------------- |
+| message | string | Yes      | Status message about resuming. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c9d0e1f2-7a5d-11ef-9c7b-020304050607",
+  "method": "media.scrape.resume"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c9d0e1f2-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "message": "Media scraping resumed"
+  }
+}
+```
+
+### media.clean.orphans
+
+Delete media rows marked missing and remove orphaned related data.
+
+This is intended for cleanup after files have been removed from disk and the media database has been refreshed. It removes missing `Media` rows, their tags and properties, and any titles that no longer have media rows. It does not run `VACUUM`; SQLite will reuse freed pages.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type   | Required | Description                       |
+| :------ | :----- | :------- | :-------------------------------- |
+| deleted | number | Yes      | Number of missing media rows removed. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c9d0e1f2-7a5d-11ef-9c7b-020304050607",
+  "method": "media.clean.orphans"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c9d0e1f2-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "deleted": 12
   }
 }
 ```
@@ -1299,6 +1911,7 @@ None.
 | readersScanIgnoreSystems  | string[]                                  | Yes      | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | Yes      | Whether error reporting is enabled.                             |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | Yes      | List of manually configured reader connections.                 |
+| systemDefaults            | [SystemDefault](#system-default-object)[] | Yes      | Per-system overrides for default launcher and exit ZapScript.   |
 
 ##### Reader connection object
 
@@ -1308,6 +1921,14 @@ None.
 | path     | string | Yes      | Path or address for the reader connection.       |
 | idSource | string | No       | Source for the reader ID.                        |
 | enabled  | bool   | No       | Whether the connection is enabled. Defaults to true if omitted. |
+
+##### System default object
+
+| Key        | Type   | Required | Description                                                                                       |
+| :--------- | :----- | :------- | :------------------------------------------------------------------------------------------------ |
+| system     | string | Yes      | System ID this default applies to. Accepts canonical IDs and aliases.                             |
+| launcher   | string | No       | Launcher ID or group name to use for this system. Empty means no override.                        |
+| beforeExit | string | No       | ZapScript to run when a media instance for this system is exiting (before the new launch starts). |
 
 #### Example
 
@@ -1336,7 +1957,13 @@ None.
     "readersScanExitDelay": 0.0,
     "readersScanIgnoreSystems": ["DOS"],
     "errorReporting": true,
-    "readersConnect": []
+    "readersConnect": [],
+    "systemDefaults": [
+      {
+        "system": "Genesis",
+        "launcher": "retroarch"
+      }
+    ]
   }
 }
 ```
@@ -1362,6 +1989,7 @@ An object containing any of the following optional keys:
 | readersScanIgnoreSystems  | string[]                                  | No       | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | No       | Whether error reporting is enabled.                             |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | No       | List of manually configured reader connections.                 |
+| systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). |
 
 #### Result
 
@@ -2109,6 +2737,66 @@ Returns `null` on success.
 ```
 
 ## Launchers
+
+### launchers
+
+List all launchers known to the running service. Suitable for populating a UI launcher picker (for example, when assigning a per-system default via [settings.update](#settingsupdate)).
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key       | Type                                  | Required | Description                  |
+| :-------- | :------------------------------------ | :------- | :--------------------------- |
+| launchers | [Launcher](#launcher-object)[] | Yes      | All cached launchers, sorted by `systemId` then `id`. |
+
+##### Launcher object
+
+| Key        | Type     | Required | Description                                                                                            |
+| :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------- |
+| id         | string   | Yes      | Unique launcher identifier.                                                                            |
+| systemId   | string   | No       | The system this launcher targets. Omitted for generic launchers without a fixed system.                |
+| systemName | string   | No       | Human-readable system name resolved from system metadata. Omitted when no metadata is available.       |
+| groups     | string[] | No       | Group names this launcher belongs to. Group names are valid values for `systemDefaults.launcher`.      |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5b8c3a40-7a5e-11ef-88ff-020304050607",
+  "method": "launchers"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5b8c3a40-7a5e-11ef-88ff-020304050607",
+  "result": {
+    "launchers": [
+      {
+        "id": "retroarch",
+        "systemId": "Genesis",
+        "systemName": "Genesis",
+        "groups": ["libretro"]
+      },
+      {
+        "id": "snes9x",
+        "systemId": "SNES",
+        "systemName": "Super Nintendo",
+        "groups": ["libretro"]
+      }
+    ]
+  }
+}
+```
 
 ### launchers.refresh
 

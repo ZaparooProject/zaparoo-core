@@ -1021,6 +1021,15 @@ func (m *MockMediaDBI) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
 	return nil
 }
 
+func (m *MockMediaDBI) UpdateMediaParentDir(mediaDBID int64, parentDir string) error {
+	m.trackDatabaseOperation() // Track if called outside transaction
+	args := m.Called(mediaDBID, parentDir)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) DeleteMediaTags(mediaDBID int64) error {
 	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(mediaDBID)
@@ -1200,6 +1209,14 @@ func (m *MockMediaDBI) RunBackgroundOptimization(statusCallback func(optimizing 
 	m.Called(statusCallback, pauser)
 }
 
+func (m *MockMediaDBI) TemporaryRepairJobsPending(ctx context.Context) (bool, error) {
+	args := m.Called(ctx)
+	if err := args.Error(1); err != nil {
+		return args.Bool(0), fmt.Errorf("mock operation failed: %w", err)
+	}
+	return args.Bool(0), nil
+}
+
 func (m *MockMediaDBI) WaitForBackgroundOperations() {
 	m.Called()
 }
@@ -1302,6 +1319,20 @@ func (m *MockMediaDBI) ResetMissingFlags(systemDBIDs []int) error {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
 	return nil
+}
+
+func (m *MockMediaDBI) CleanMediaOrphans(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	if id, ok := args.Get(0).(int64); ok {
+		if err := args.Error(1); err != nil {
+			return id, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return id, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
 }
 
 // Batch insert control methods
@@ -1648,6 +1679,34 @@ func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
 	return 0, nil
 }
 
+func (m *MockMediaDBI) GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error) {
+	args := m.Called(ctx, scraperID)
+	if count, ok := args.Get(0).(int); ok {
+		if err := args.Error(1); err != nil {
+			return count, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return count, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
+func (m *MockMediaDBI) GetTotalScrapedMediaCount(ctx context.Context) (int, error) {
+	args := m.Called(ctx)
+	if count, ok := args.Get(0).(int); ok {
+		if err := args.Error(1); err != nil {
+			return count, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return count, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
 func (m *MockMediaDBI) InvalidateCountCache() error {
 	args := m.Called()
 	if err := args.Error(0); err != nil {
@@ -1670,6 +1729,70 @@ func (m *MockMediaDBI) RebuildTagCache() error {
 		return fmt.Errorf("mock RebuildTagCache: %w", err)
 	}
 	return nil
+}
+
+func (m *MockMediaDBI) PersistTagCache() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock PersistTagCache: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) LoadCachedTagCache() (bool, error) {
+	args := m.Called()
+	loaded, ok := args.Get(0).(bool)
+	if !ok {
+		loaded = false
+	}
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock LoadCachedTagCache: %w", err)
+	}
+	return loaded, nil
+}
+
+func (m *MockMediaDBI) PersistSlugSearchCache() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock PersistSlugSearchCache: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) LoadCachedSlugSearchCache() (bool, error) {
+	args := m.Called()
+	loaded, ok := args.Get(0).(bool)
+	if !ok {
+		loaded = false
+	}
+	if err := args.Error(1); err != nil {
+		return false, fmt.Errorf("mock LoadCachedSlugSearchCache: %w", err)
+	}
+	return loaded, nil
+}
+
+func (m *MockMediaDBI) IndexGeneration() (int64, error) {
+	args := m.Called()
+	v, ok := args.Get(0).(int64)
+	if !ok {
+		v = 0
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock IndexGeneration: %w", err)
+	}
+	return v, nil
+}
+
+func (m *MockMediaDBI) BumpIndexGeneration() (int64, error) {
+	args := m.Called()
+	v, ok := args.Get(0).(int64)
+	if !ok {
+		v = 0
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock BumpIndexGeneration: %w", err)
+	}
+	return v, nil
 }
 
 func (m *MockMediaDBI) PopulateSystemTagsCacheForSystems(ctx context.Context, systems []systemdefs.System) error {
@@ -1873,6 +1996,12 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("GetLaunchCommandForMedia", mock.Anything, mock.Anything, mock.Anything).Return("", nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Maybe()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Maybe()
+	mockMediaDB.On("PersistTagCache").Return(nil).Maybe()
+	mockMediaDB.On("LoadCachedTagCache").Return(false, nil).Maybe()
+	mockMediaDB.On("PersistSlugSearchCache").Return(nil).Maybe()
+	mockMediaDB.On("LoadCachedSlugSearchCache").Return(false, nil).Maybe()
+	mockMediaDB.On("IndexGeneration").Return(int64(0), nil).Maybe()
+	mockMediaDB.On("BumpIndexGeneration").Return(int64(1), nil).Maybe()
 	mockMediaDB.On("GetDBPath").Return("/tmp/mock-media.db").Maybe()
 	mockMediaDB.On("DropSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("BulkSetMediaMissing", mock.Anything).Return(nil).Maybe()
@@ -1971,9 +2100,9 @@ func SystemMatcher() any {
 // Browse methods
 
 func (m *MockMediaDBI) BrowseDirectories(
-	ctx context.Context, pathPrefix string,
+	ctx context.Context, opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
-	args := m.Called(ctx, pathPrefix)
+	args := m.Called(ctx, opts)
 	if results, ok := args.Get(0).([]database.BrowseDirectoryResult); ok {
 		if err := args.Error(1); err != nil {
 			return results, fmt.Errorf("mock operation failed: %w", err)
@@ -2003,9 +2132,9 @@ func (m *MockMediaDBI) BrowseFiles(
 }
 
 func (m *MockMediaDBI) BrowseFileCount(
-	ctx context.Context, pathPrefix string, letter *string,
+	ctx context.Context, opts database.BrowseFileCountOptions,
 ) (int, error) {
-	args := m.Called(ctx, pathPrefix, letter)
+	args := m.Called(ctx, opts)
 	if count, ok := args.Get(0).(int); ok {
 		if err := args.Error(1); err != nil {
 			return count, fmt.Errorf("mock operation failed: %w", err)
@@ -2019,9 +2148,9 @@ func (m *MockMediaDBI) BrowseFileCount(
 }
 
 func (m *MockMediaDBI) BrowseVirtualSchemes(
-	ctx context.Context,
+	ctx context.Context, opts database.BrowseVirtualSchemesOptions,
 ) ([]database.BrowseVirtualScheme, error) {
-	args := m.Called(ctx)
+	args := m.Called(ctx, opts)
 	if results, ok := args.Get(0).([]database.BrowseVirtualScheme); ok {
 		if err := args.Error(1); err != nil {
 			return results, fmt.Errorf("mock operation failed: %w", err)
@@ -2032,6 +2161,40 @@ func (m *MockMediaDBI) BrowseVirtualSchemes(
 		return nil, fmt.Errorf("mock operation failed: %w", err)
 	}
 	return []database.BrowseVirtualScheme{}, nil
+}
+
+func (m *MockMediaDBI) BrowseRouteCounts(
+	ctx context.Context, opts database.BrowseRouteCountsOptions,
+) (map[string]database.BrowseRouteCount, error) {
+	args := m.Called(ctx, opts)
+	if results, ok := args.Get(0).(map[string]database.BrowseRouteCount); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return map[string]database.BrowseRouteCount{}, nil
+}
+
+func (m *MockMediaDBI) BrowseSystemRootCandidates(
+	ctx context.Context, opts database.BrowseSystemRootCandidatesOptions,
+) (database.BrowseSystemRootCandidates, bool, error) {
+	args := m.Called(ctx, opts)
+	result, ok := args.Get(0).(database.BrowseSystemRootCandidates)
+	if !ok {
+		result = database.BrowseSystemRootCandidates{}
+	}
+	cacheReady, ok := args.Get(1).(bool)
+	if !ok {
+		cacheReady = false
+	}
+	if err := args.Error(2); err != nil {
+		return result, cacheReady, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return result, cacheReady, nil
 }
 
 func (m *MockMediaDBI) BrowseRootCounts(
@@ -2058,6 +2221,249 @@ func (m *MockMediaDBI) PopulateBrowseCache(
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
 	return nil
+}
+
+// --- Scraper support methods ---
+
+func (m *MockMediaDBI) FindMediaBySystemAndPath(
+	ctx context.Context, systemDBID int64, path string,
+) (*database.Media, error) {
+	args := m.Called(ctx, systemDBID, path)
+	if result, ok := args.Get(0).(*database.Media); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) FindMediaBySystemAndPaths(
+	ctx context.Context, systemDBID int64, paths []string,
+) (map[string]database.Media, error) {
+	args := m.Called(ctx, systemDBID, paths)
+	if result, ok := args.Get(0).(map[string]database.Media); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) FindMediaBySystemAndPathFold(
+	ctx context.Context, systemDBID int64, path string,
+) (*database.Media, error) {
+	args := m.Called(ctx, systemDBID, path)
+	if result, ok := args.Get(0).(*database.Media); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) MediaHasTag(ctx context.Context, mediaDBID int64, tagValue string) (bool, error) {
+	args := m.Called(ctx, mediaDBID, tagValue)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) GetScrapedMediaIDs(
+	ctx context.Context, scraperID string, systemDBID int64,
+) (map[int64]struct{}, error) {
+	args := m.Called(ctx, scraperID, systemDBID)
+	if result, ok := args.Get(0).(map[int64]struct{}); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) UpsertMediaTags(ctx context.Context, mediaDBID int64, tags []database.TagInfo) error {
+	args := m.Called(ctx, mediaDBID, tags)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) UpsertMediaTitleTags(ctx context.Context, mediaTitleDBID int64, tags []database.TagInfo) error {
+	args := m.Called(ctx, mediaTitleDBID, tags)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) UpsertMediaTitleProperties(
+	ctx context.Context, mediaTitleDBID int64, props []database.MediaProperty,
+) error {
+	args := m.Called(ctx, mediaTitleDBID, props)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) UpsertMediaProperties(
+	ctx context.Context, mediaDBID int64, props []database.MediaProperty,
+) error {
+	args := m.Called(ctx, mediaDBID, props)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) ApplyScrapeResult(
+	ctx context.Context, mediaDBID, mediaTitleDBID int64, write *database.ScrapeWrite,
+) error {
+	args := m.Called(ctx, mediaDBID, mediaTitleDBID, write)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) FindMediaTitlesWithoutSentinel(
+	ctx context.Context, systemDBID int64, sentinelTag string,
+) ([]database.MediaTitle, error) {
+	args := m.Called(ctx, systemDBID, sentinelTag)
+	if result, ok := args.Get(0).([]database.MediaTitle); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*database.MediaTitle, error) {
+	args := m.Called(ctx, dbid)
+	if result, ok := args.Get(0).(*database.MediaTitle); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaTitleProperties(
+	ctx context.Context, mediaTitleDBID int64,
+) ([]database.MediaProperty, error) {
+	args := m.Called(ctx, mediaTitleDBID)
+	if result, ok := args.Get(0).([]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaTitlePropertiesByMediaTitleDBIDs(
+	ctx context.Context, mediaTitleDBIDs []int64,
+) (map[int64][]database.MediaProperty, error) {
+	args := m.Called(ctx, mediaTitleDBIDs)
+	if result, ok := args.Get(0).(map[int64][]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaProperties(ctx context.Context, mediaDBID int64) ([]database.MediaProperty, error) {
+	args := m.Called(ctx, mediaDBID)
+	if result, ok := args.Get(0).([]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaPropertiesByMediaDBIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64][]database.MediaProperty, error) {
+	args := m.Called(ctx, mediaDBIDs)
+	if result, ok := args.Get(0).(map[int64][]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) DeleteMediaTitleProperty(ctx context.Context, mediaTitleDBID, typeTagDBID int64) error {
+	args := m.Called(ctx, mediaTitleDBID, typeTagDBID)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) DeleteMediaProperty(ctx context.Context, mediaDBID, typeTagDBID int64) error {
+	args := m.Called(ctx, mediaDBID, typeTagDBID)
+	return args.Error(0) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) UpsertMediaBlob(ctx context.Context, contentType string, data []byte) (int64, error) {
+	args := m.Called(ctx, contentType, data)
+	if id, ok := args.Get(0).(int64); ok {
+		return id, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return 0, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaBlob(ctx context.Context, blobDBID int64) (*database.MediaBlob, error) {
+	args := m.Called(ctx, blobDBID)
+	if result, ok := args.Get(0).(*database.MediaBlob); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) PruneOrphanedBlobs(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	if n, ok := args.Get(0).(int64); ok {
+		return n, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return 0, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaWithTitleAndSystem(
+	ctx context.Context, mediaDBID int64,
+) (*database.MediaFullRow, error) {
+	args := m.Called(ctx, mediaDBID)
+	if result, ok := args.Get(0).(*database.MediaFullRow); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaWithTitleAndSystemByIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64]database.MediaFullRow, error) {
+	args := m.Called(ctx, mediaDBIDs)
+	if result, ok := args.Get(0).(map[int64]database.MediaFullRow); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaTagsByMediaDBID(
+	ctx context.Context, mediaDBID int64,
+) ([]database.TagInfo, error) {
+	args := m.Called(ctx, mediaDBID)
+	if result, ok := args.Get(0).([]database.TagInfo); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaTagsByMediaDBIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64][]database.TagInfo, error) {
+	args := m.Called(ctx, mediaDBIDs)
+	if result, ok := args.Get(0).(map[int64][]database.TagInfo); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaTitleTagsByMediaTitleDBID(
+	ctx context.Context, mediaTitleDBID int64,
+) ([]database.TagInfo, error) {
+	args := m.Called(ctx, mediaTitleDBID)
+	if result, ok := args.Get(0).([]database.TagInfo); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaTitleTagsByMediaTitleDBIDs(
+	ctx context.Context, mediaTitleDBIDs []int64,
+) (map[int64][]database.TagInfo, error) {
+	args := m.Called(ctx, mediaTitleDBIDs)
+	if result, ok := args.Get(0).(map[int64][]database.TagInfo); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
 func TextMatcher() any {

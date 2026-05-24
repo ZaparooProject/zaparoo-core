@@ -22,9 +22,12 @@ package steam
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,6 +36,11 @@ import (
 // VDF format requires backslashes to be escaped as double backslashes.
 func vdfEscapePath(path string) string {
 	return strings.ReplaceAll(path, `\`, `\\`)
+}
+
+func shortcutVirtualPath(appID uint32, appName string) string {
+	bpid := (uint64(appID) << 32) | 0x02000000
+	return virtualpath.CreateVirtualPath("steam", strconv.FormatUint(bpid, 10), appName)
 }
 
 func TestScanSteamApps(t *testing.T) {
@@ -199,6 +207,47 @@ func TestScanSteamShortcuts(t *testing.T) {
 
 		require.NoError(t, scanErr)
 		assert.Empty(t, results)
+	})
+
+	t.Run("scans_non_steam_shortcuts_from_user_config", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		userdataDir := filepath.Join(tempDir, "userdata", "12345678", "config")
+		require.NoError(t, os.MkdirAll(userdataDir, 0o750))
+
+		shortcuts := []fixtures.TestShortcut{
+			{
+				AppID:   624353111,
+				AppName: "Capcom vs. SNK 2 Mark of the Millennium 2001",
+				Exe: `"C:\Games\RetroArch\retroarch.exe" ` +
+					`-L "cores\flycast_libretro.dll" "roms\Capcom vs SNK 2.chd"`,
+				StartDir:      `"C:\Games\RetroArch"`,
+				LaunchOptions: "",
+				Optional:      true,
+			},
+			{
+				AppID:         3545518019,
+				AppName:       "Hyper Duel",
+				Exe:           `"C:\Games\RetroArch\retroarch.exe"`,
+				StartDir:      `"C:\Games\RetroArch"`,
+				LaunchOptions: `-L "cores\mednafen_saturn_libretro.dll" "roms\Hyper Duel.chd"`,
+				Optional:      false,
+			},
+		}
+		err := os.WriteFile(filepath.Join(userdataDir, "shortcuts.vdf"), fixtures.BuildShortcutsVDF(shortcuts), 0o600)
+		require.NoError(t, err)
+
+		results, scanErr := ScanSteamShortcuts(tempDir)
+
+		require.NoError(t, scanErr)
+		require.Len(t, results, 2)
+		assert.Equal(t, shortcuts[0].AppName, results[0].Name)
+		assert.Equal(t, shortcutVirtualPath(shortcuts[0].AppID, shortcuts[0].AppName), results[0].Path)
+		assert.True(t, results[0].NoExt)
+		assert.Equal(t, shortcuts[1].AppName, results[1].Name)
+		assert.Equal(t, shortcutVirtualPath(shortcuts[1].AppID, shortcuts[1].AppName), results[1].Path)
+		assert.True(t, results[1].NoExt)
 	})
 
 	t.Run("skips_non_directory_entries", func(t *testing.T) {

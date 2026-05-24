@@ -1,0 +1,286 @@
+// Zaparoo Core
+// Copyright (c) 2026 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package methods
+
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"os"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/rs/zerolog/log"
+)
+
+// defaultImageTypes is the preference order used when no imageTypes param is provided.
+var defaultImageTypes = []string{"image", "boxart", "screenshot", "wheel", "titleshot", "map", "marquee", "fanart"}
+
+var imageTypeTags = map[string]string{
+	"image":      tags.PropertyTypeTag(tags.TagPropertyImageImage),
+	"boxart":     tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
+	"screenshot": tags.PropertyTypeTag(tags.TagPropertyImageScreenshot),
+	"wheel":      tags.PropertyTypeTag(tags.TagPropertyImageWheel),
+	"titleshot":  tags.PropertyTypeTag(tags.TagPropertyImageTitleshot),
+	"map":        tags.PropertyTypeTag(tags.TagPropertyImageMap),
+	"marquee":    tags.PropertyTypeTag(tags.TagPropertyImageMarquee),
+	"fanart":     tags.PropertyTypeTag(tags.TagPropertyImageFanart),
+}
+
+// resolveImageTypeTag converts a short image type name to the full property TypeTag.
+func resolveImageTypeTag(t string) (string, bool) {
+	typeTag, ok := imageTypeTags[t]
+	return typeTag, ok
+}
+
+// buildPropsMap converts a []database.MediaProperty slice into a map keyed by TypeTag.
+func buildPropsMap(props []database.MediaProperty) map[string]database.MediaProperty {
+	m := make(map[string]database.MediaProperty, len(props))
+	for _, p := range props {
+		m[p.TypeTag] = p
+	}
+	return m
+}
+
+// HandleMediaImage returns a single best-match image for a media record as a
+// base64-encoded blob. The caller identifies the media row by `(system, path)`;
+// canonical paths are preferred, with launcher-relative paths accepted as a
+// compatibility fallback. Image type preferences are supplied by the caller; if
+// omitted the defaultImageTypes order is used. Media-level properties take
+// priority over title-level properties for the same TypeTag. If a matching
+// property has no inline binary data the file at the Text path is read from disk.
+func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+	params, err := parseMediaRequest(env.Params, maxMediaImageBatchItems)
+	if err != nil {
+		return nil, err
+	}
+	if !params.Batch && params.Items[0].MediaID == nil {
+		return handleMediaImageSinglePath(&env, params.Items[0])
+	}
+
+	resolved, err := resolveMediaRefs(&env, params.Items)
+	if err != nil {
+		return nil, err
+	}
+
+	mediaIDs, titleIDs := uniqueMediaAndTitleIDs(resolved)
+	if params.Batch && len(mediaIDs) == 0 {
+		return buildMediaImageBatchErrorResponse(resolved), nil
+	}
+
+	db := env.Database.MediaDB
+	mediaProps, err := db.GetMediaPropertiesByMediaDBIDs(env.Context, mediaIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media properties: %w", err)
+	}
+	titleProps, err := db.GetMediaTitlePropertiesByMediaTitleDBIDs(env.Context, titleIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get title properties: %w", err)
+	}
+
+	if !params.Batch {
+		if resolved[0].Err != nil {
+			return nil, resolved[0].Err
+		}
+		prefs := imagePrefs(params.ImageTypes, params.Items[0].ImageTypes)
+		return selectMediaImage(
+			env.Context, db, resolved[0].Row,
+			mediaProps[resolved[0].Row.DBID], titleProps[resolved[0].Row.Title.DBID], prefs,
+		)
+	}
+
+	items := make([]models.MediaImageBatchItemResponse, len(resolved))
+	for i, item := range resolved {
+		if item.Err != nil {
+			errText := item.Err.Error()
+			items[i].Error = &errText
+			continue
+		}
+		prefs := imagePrefs(params.ImageTypes, params.Items[i].ImageTypes)
+		image, imageErr := selectMediaImage(
+			env.Context, db, item.Row, mediaProps[item.Row.DBID], titleProps[item.Row.Title.DBID], prefs,
+		)
+		if imageErr != nil {
+			errText := imageErr.Error()
+			items[i].Error = &errText
+			continue
+		}
+		items[i].Image = &image
+	}
+	return models.MediaImageBatchResponse{Items: items}, nil
+}
+
+func buildMediaImageBatchErrorResponse(resolved []resolvedMediaItem) models.MediaImageBatchResponse {
+	items := make([]models.MediaImageBatchItemResponse, len(resolved))
+	for i, item := range resolved {
+		if item.Err == nil {
+			continue
+		}
+		errText := item.Err.Error()
+		items[i].Error = &errText
+	}
+	return models.MediaImageBatchResponse{Items: items}
+}
+
+func handleMediaImageSinglePath(env *requests.RequestEnv, ref mediaRefParam) (any, error) {
+	db := env.Database.MediaDB
+	row, err := resolveMediaBySystemAndPath(env, ref.System, ref.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	mediaProps, err := db.GetMediaProperties(env.Context, row.DBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media properties: %w", err)
+	}
+	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get title properties: %w", err)
+	}
+
+	return selectMediaImage(env.Context, db, row, mediaProps, titleProps, imagePrefs(nil, ref.ImageTypes))
+}
+
+func imagePrefs(topLevel, itemLevel []string) []string {
+	if len(itemLevel) > 0 {
+		return itemLevel
+	}
+	if len(topLevel) > 0 {
+		return topLevel
+	}
+	return defaultImageTypes
+}
+
+func selectMediaImage(
+	ctx context.Context,
+	db database.MediaDBI,
+	row *database.MediaFullRow,
+	mediaProps []database.MediaProperty,
+	titleProps []database.MediaProperty,
+	prefs []string,
+) (models.MediaImageResponse, error) {
+	mediaMap := buildPropsMap(mediaProps)
+	titleMap := buildPropsMap(titleProps)
+
+	// sources defines the priority order within each typeTag: media-level is
+	// tried first, then title-level. A stale entry at one level falls back to
+	// the other level for the same typeTag before moving on to the next
+	// preference (rather than skipping the typeTag entirely).
+	type propSource struct {
+		propMap map[string]database.MediaProperty
+		isMedia bool
+	}
+	sources := []propSource{
+		{mediaMap, true},
+		{titleMap, false},
+	}
+
+	// Deduplicate resolved TypeTags while preserving order so duplicate request
+	// preferences do not retry the same DB row.
+	seen := make(map[string]bool, len(prefs))
+	for _, t := range prefs {
+		typeTag, ok := resolveImageTypeTag(t)
+		if !ok {
+			continue
+		}
+		if seen[typeTag] {
+			continue
+		}
+		seen[typeTag] = true
+
+		for _, src := range sources {
+			prop, ok := src.propMap[typeTag]
+			if !ok {
+				continue
+			}
+
+			binary := prop.Binary
+			if len(binary) == 0 && prop.Text != "" {
+				var readErr error
+				binary, readErr = os.ReadFile(prop.Text)
+				if readErr != nil {
+					if !os.IsNotExist(readErr) {
+						return models.MediaImageResponse{}, fmt.Errorf(
+							"media.image: read image file %q: %w", prop.Text, readErr,
+						)
+					}
+
+					// File is gone — remove the stale property.
+					if !src.isMedia {
+						delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID)
+						if delErr != nil {
+							log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
+								Msg("media.image: failed to delete stale title property")
+						}
+						delete(titleMap, typeTag)
+						continue
+					}
+					if delErr := db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID); delErr != nil {
+						log.Warn().Err(delErr).Int64("mediaDBID", row.DBID).Str("typeTag", typeTag).
+							Msg("media.image: failed to delete stale media property")
+					}
+					delete(mediaMap, typeTag)
+					// Fall back to the title-level property for the same typeTag.
+					titleProp, hasTitleProp := titleMap[typeTag]
+					if !hasTitleProp {
+						continue
+					}
+					prop = titleProp
+					binary = prop.Binary
+					if len(binary) == 0 && prop.Text != "" {
+						binary, readErr = os.ReadFile(prop.Text)
+						if readErr != nil {
+							if !os.IsNotExist(readErr) {
+								return models.MediaImageResponse{}, fmt.Errorf(
+									"media.image: read image file %q: %w", prop.Text, readErr,
+								)
+							}
+
+							delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID)
+							if delErr != nil {
+								log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
+									Msg("media.image: failed to delete stale title property")
+							}
+							delete(titleMap, typeTag)
+							continue
+						}
+					}
+				}
+			}
+
+			if len(binary) == 0 {
+				continue
+			}
+
+			return models.MediaImageResponse{
+				Extension:   mediaContentExtension(prop.ContentType, prop.Text),
+				ContentType: prop.ContentType,
+				Data:        base64.StdEncoding.EncodeToString(binary),
+				TypeTag:     typeTag,
+			}, nil
+		}
+	}
+
+	return models.MediaImageResponse{}, models.ClientErrf(
+		"no image found for media: %s/%s", row.System.SystemID, row.Path,
+	)
+}

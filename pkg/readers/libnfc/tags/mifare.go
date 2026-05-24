@@ -56,7 +56,6 @@ func buildMifareAuthCommand(block byte, cardUID string) []byte {
 
 // ReadMifare reads data from all blocks in sectors 1-15
 func ReadMifare(pnd nfc.Device, cardUID string) (TagData, error) {
-	permissionSectors := []int{4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60}
 	var allBlocks []byte
 	for block := range 64 {
 		if block <= 3 {
@@ -67,7 +66,7 @@ func ReadMifare(pnd nfc.Device, cardUID string) (TagData, error) {
 
 		// The last block of a sector contains KeyA + Permissions + KeyB
 		// We don't care about that info so skip if present.
-		if slices.Contains(permissionSectors, block+1) {
+		if isMifarePermissionBlock(block) {
 			continue
 		}
 
@@ -100,6 +99,10 @@ func ReadMifare(pnd nfc.Device, cardUID string) (TagData, error) {
 		Type:  tokens.TypeMifare,
 		Bytes: allBlocks,
 	}, nil
+}
+
+func isMifarePermissionBlock(block int) bool {
+	return (block+1)%4 == 0
 }
 
 // getMifareCapacityInBytes returns the Mifare card capacity

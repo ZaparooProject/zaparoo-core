@@ -75,11 +75,22 @@ func HandleMediaHistoryTop(env requests.RequestEnv) (any, error) {
 		log.Error().Err(err).Msg("error getting media history top")
 		return nil, fmt.Errorf("error getting media history top: %w", err)
 	}
+	mediaRefs := make([]mediaPathRef, 0, len(entries))
+	for i := range entries {
+		mediaRefs = append(mediaRefs, mediaPathRef{
+			SystemID: entries[i].SystemID,
+			Path:     entries[i].MediaPath,
+		})
+	}
+	mediaIDs := mediaResponseMediaIDs(&env, mediaRefs)
 
 	responseEntries := make([]models.MediaHistoryTopEntry, 0, len(entries))
 	for i := range entries {
 		entry := &entries[i]
+		ref := mediaPathRef{SystemID: entry.SystemID, Path: entry.MediaPath}
 		responseEntries = append(responseEntries, models.MediaHistoryTopEntry{
+			MediaID:       mediaIDs[ref],
+			RelPath:       mediaResponseRelativePath(&env, entry.SystemID, entry.MediaPath),
 			SystemID:      entry.SystemID,
 			SystemName:    entry.SystemName,
 			MediaName:     entry.MediaName,

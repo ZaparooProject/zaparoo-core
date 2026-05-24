@@ -1,5 +1,12 @@
 //go:build linux || darwin
 
+// daemon_test.go is restricted to linux+darwin because the service
+// management logic in daemon.go relies on POSIX-only constructs (signal
+// handling, process inspection, exec semantics) that have no Windows
+// equivalent. A subset of tests goes further and inspects /proc/<pid>/exe
+// and /proc/<pid>/status for binary identity and zombie detection — those
+// are Linux-only and use the requireLinuxProc helper to skip on darwin.
+
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -24,6 +31,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -39,9 +47,21 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// requireLinuxProc skips the test on non-Linux platforms. The daemon's PID
+// identity and zombie-state checks parse /proc/<pid>/exe and
+// /proc/<pid>/status, which only exist on Linux. detail describes what
+// specifically depends on /proc and shows up in the skip message.
+func requireLinuxProc(t *testing.T, detail string) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skipf("%s requires Linux /proc", detail)
+	}
+}
 
 func newTestService(t *testing.T) *Service {
 	t.Helper()
@@ -87,7 +107,25 @@ func writeFakeServiceScript(t *testing.T, pidFile, eventLog string) string {
 	return scriptPath
 }
 
-func TestPrepareBinary_CopiesWithServiceSuffix(t *testing.T) {
+func writeServiceCacheScript(t *testing.T, svc *Service, script string) string {
+	t.Helper()
+
+	scriptPath := filepath.Join(svc.pl.Settings().DataDir, "zaparoo.0000000000000000.sh")
+	//nolint:gosec // test writes an executable shell script into a temp dir
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700))
+	return scriptPath
+}
+
+func writeFakeServiceScriptWithBody(t *testing.T, script string) string {
+	t.Helper()
+
+	scriptPath := filepath.Join(t.TempDir(), "fake-service.sh")
+	//nolint:gosec // test writes an executable shell script into a temp dir
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700))
+	return scriptPath
+}
+
+func TestPrepareBinary_CopiesWithHashName(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
 
@@ -99,10 +137,11 @@ func TestPrepareBinary_CopiesWithServiceSuffix(t *testing.T) {
 	result, err := svc.prepareBinary(srcPath)
 	require.NoError(t, err)
 
-	assert.Equal(t, "zaparoo.service.sh", filepath.Base(result))
+	assert.Regexp(t, `^zaparoo\.[0-9a-f]{16}\.sh$`, filepath.Base(result))
 	content, err := os.ReadFile(result) //nolint:gosec // G304: test file
 	require.NoError(t, err)
 	assert.Equal(t, "binary-content", string(content))
+	assert.FileExists(t, filepath.Join(svc.pl.Settings().DataDir, serviceManifestName))
 }
 
 func TestPrepareBinary_CreatesDataDir(t *testing.T) {
@@ -137,7 +176,67 @@ func TestPrepareBinary_NoExtension(t *testing.T) {
 
 	result, err := svc.prepareBinary(srcPath)
 	require.NoError(t, err)
-	assert.Equal(t, "zaparoo.service", filepath.Base(result))
+	assert.Regexp(t, `^zaparoo\.[0-9a-f]{16}$`, filepath.Base(result))
+}
+
+func TestPrepareBinary_StripsNonShellExtension(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.bin")
+	require.NoError(t, os.WriteFile(srcPath, []byte("data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Regexp(t, `^zaparoo\.[0-9a-f]{16}$`, filepath.Base(result))
+	assert.True(t, isServiceCacheFilename(filepath.Base(result)))
+}
+
+func TestPrepareBinary_NormalizesReusedCachedBinaryPermissions(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo")
+	require.NoError(t, os.WriteFile(srcPath, []byte("data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(result, 0o600))
+	require.NoError(t, os.Remove(filepath.Join(svc.pl.Settings().DataDir, serviceManifestName)))
+
+	result, err = svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	info, err := os.Stat(result)
+	require.NoError(t, err)
+	assert.Equal(t, fs.FileMode(0o700), info.Mode().Perm())
+	assert.True(t, isServiceCacheFilename(filepath.Base(result)))
+}
+
+func TestPrepareBinary_UsesConfiguredFilesystem(t *testing.T) {
+	t.Parallel()
+
+	memFS := afero.NewMemMapFs()
+	pl := mocks.NewMockPlatform()
+	pl.On("Settings").Return(platforms.Settings{
+		DataDir: string(filepath.Separator) + "data",
+		TempDir: string(filepath.Separator) + "temp",
+	})
+	svc := &Service{pl: pl, fs: memFS}
+	srcPath := filepath.Join(string(filepath.Separator), "src", "zaparoo.bin")
+	require.NoError(t, memFS.MkdirAll(filepath.Dir(srcPath), 0o750))
+	require.NoError(t, afero.WriteFile(memFS, srcPath, []byte("data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Regexp(t, `^zaparoo\.[0-9a-f]{16}$`, filepath.Base(result))
+	assert.True(t, isServiceCacheFilename(filepath.Base(result)))
+
+	content, err := afero.ReadFile(memFS, result)
+	require.NoError(t, err)
+	assert.Equal(t, "data", string(content))
 }
 
 func TestPrepareBinary_MissingSource(t *testing.T) {
@@ -147,7 +246,7 @@ func TestPrepareBinary_MissingSource(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist", "binary")
 	_, err := svc.prepareBinary(missing)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "error opening binary")
+	assert.Contains(t, err.Error(), "error statting binary")
 }
 
 func TestCleanupServiceBinary_RemovesFromDataDir(t *testing.T) {
@@ -267,6 +366,73 @@ func TestPrepareBinary_SkipsCopyWhenIdentical(t *testing.T) {
 	assert.Equal(t, pastTime.Unix(), info.ModTime().Unix(), "file should not have been rewritten")
 }
 
+func TestPrepareBinary_RepairsCorruptCachedCopy(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(result, []byte("cached-copy"), 0o600))
+
+	result2, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, result, result2)
+
+	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
+	require.NoError(t, err)
+	assert.Equal(t, "binary-data", string(content))
+}
+
+func TestPrepareBinary_RepairsCachedCopyWhenSizeDiffers(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-data"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(result, []byte("short"), 0o600))
+
+	result2, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, result, result2)
+
+	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
+	require.NoError(t, err)
+	assert.Equal(t, "binary-data", string(content))
+}
+
+func TestPrepareBinary_DetectsSameSizeSameModTimeSourceChange(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	modTime := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.WriteFile(srcPath, []byte("version-1"), 0o600))
+	require.NoError(t, os.Chtimes(srcPath, modTime, modTime))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(srcPath, []byte("version-2"), 0o600))
+	require.NoError(t, os.Chtimes(srcPath, modTime, modTime))
+
+	result2, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.NotEqual(t, result, result2)
+
+	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
+	require.NoError(t, err)
+	assert.Equal(t, "version-2", string(content))
+}
+
 func TestPrepareBinary_CopiesWhenContentDiffers(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
@@ -280,14 +446,84 @@ func TestPrepareBinary_CopiesWhenContentDiffers(t *testing.T) {
 
 	// Update the source binary.
 	require.NoError(t, os.WriteFile(srcPath, []byte("version-2"), 0o600))
+	futureTime := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(srcPath, futureTime, futureTime))
 
 	result2, err := svc.prepareBinary(srcPath)
 	require.NoError(t, err)
-	assert.Equal(t, result, result2)
+	assert.NotEqual(t, result, result2)
 
 	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
 	require.NoError(t, err)
 	assert.Equal(t, "version-2", string(content))
+}
+
+func TestPrepareBinary_ReplacesViaTemporaryFile(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("version-1"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(srcPath, []byte("version-2"), 0o600))
+	futureTime := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(srcPath, futureTime, futureTime))
+	result2, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, result, result2)
+	content, err := os.ReadFile(result2) //nolint:gosec // G304: test file
+	require.NoError(t, err)
+	assert.Equal(t, "version-2", string(content))
+
+	info, err := os.Stat(result2)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+
+	entries, err := os.ReadDir(filepath.Dir(result2))
+	require.NoError(t, err)
+	for _, entry := range entries {
+		assert.NotContains(t, entry.Name(), ".tmp")
+	}
+}
+
+func TestPrepareBinary_CleansLegacyAndStaleServiceCopies(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+	dataDir := svc.pl.Settings().DataDir
+
+	legacyPath := filepath.Join(dataDir, "zaparoo.service.sh")
+	stalePath := filepath.Join(dataDir, "zaparoo.0000000000000000.sh")
+	previousPath := filepath.Join(dataDir, "zaparoo.1111111111111111.sh")
+	unrelatedPath := filepath.Join(dataDir, "backup.2222222222222222.sh")
+	wrongHashPath := filepath.Join(dataDir, "zaparoo.33333333333333333.sh")
+	require.NoError(t, os.WriteFile(legacyPath, []byte("legacy"), 0o600))
+	require.NoError(t, os.WriteFile(stalePath, []byte("stale"), 0o600))
+	require.NoError(t, os.WriteFile(previousPath, []byte("previous"), 0o600))
+	require.NoError(t, os.WriteFile(unrelatedPath, []byte("unrelated"), 0o600))
+	require.NoError(t, os.WriteFile(wrongHashPath, []byte("wrong hash"), 0o600))
+	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(stalePath, oldTime, oldTime))
+	require.NoError(t, os.Chtimes(legacyPath, oldTime.Add(time.Hour), oldTime.Add(time.Hour)))
+	require.NoError(t, os.Chtimes(previousPath, oldTime.Add(2*time.Hour), oldTime.Add(2*time.Hour)))
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("current"), 0o600))
+
+	result, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	assert.FileExists(t, result)
+	assert.FileExists(t, previousPath)
+	assert.FileExists(t, unrelatedPath)
+	assert.FileExists(t, wrongHashPath)
+	assert.NoFileExists(t, legacyPath)
+	assert.NoFileExists(t, stalePath)
 }
 
 func TestRestart_StartsWhenServiceNotRunning(t *testing.T) {
@@ -364,9 +600,7 @@ func TestStop_WaitsForProcessExitAndRemovesPIDFile(t *testing.T) {
 }
 
 func TestStopRemovesStalePIDFileWithoutKillingUnrelatedProcess(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("service PID identity checks use Linux /proc")
-	}
+	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
@@ -385,9 +619,7 @@ func TestStopRemovesStalePIDFileWithoutKillingUnrelatedProcess(t *testing.T) {
 }
 
 func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("service PID identity checks use Linux /proc")
-	}
+	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
@@ -407,9 +639,7 @@ func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
 }
 
 func TestStartFailsForLiveUnrelatedPID(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("service PID identity checks use Linux /proc")
-	}
+	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
@@ -428,9 +658,7 @@ func TestStartFailsForLiveUnrelatedPID(t *testing.T) {
 }
 
 func TestRestartFailsForLiveUnrelatedPID(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("service PID identity checks use Linux /proc")
-	}
+	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
@@ -449,9 +677,7 @@ func TestRestartFailsForLiveUnrelatedPID(t *testing.T) {
 }
 
 func TestWaitForAPIReturnsPIDConflict(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("service PID identity checks use Linux /proc")
-	}
+	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
@@ -477,9 +703,46 @@ func TestPathLooksLikeServiceBinaryRequiresDirectDataDirChild(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "data")
 	assert.True(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.service"), dataDir))
 	assert.True(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.service.sh"), dataDir))
+	assert.True(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.0123456789abcdef.sh"), dataDir))
+	assert.True(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.0123456789abcdef"), dataDir))
 	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "nested", "zaparoo.service"), dataDir))
 	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo"), dataDir))
+	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.not-a-hash.sh"), dataDir))
+	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "zaparoo.0123456789abcdef.bin"), dataDir))
+	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(dataDir, "fake-service.0123456789abcdef.sh"), dataDir))
 	assert.False(t, pathLooksLikeServiceBinary(filepath.Join(t.TempDir(), "zaparoo.service"), dataDir))
+}
+
+func TestServiceExecEnvPreservesOriginalAppPath(t *testing.T) {
+	t.Parallel()
+
+	env := serviceExecEnv([]string{"A=B", config.AppEnv + "=/old/path"}, "/new/path")
+	assert.Equal(t, []string{"A=B", config.AppEnv + "=/new/path"}, env)
+
+	env = serviceExecEnv([]string{"A=B"}, "/new/path")
+	assert.Equal(t, []string{"A=B", config.AppEnv + "=/new/path"}, env)
+}
+
+func TestRestartExecConfigUsesCachedServiceBinary(t *testing.T) {
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-data"), 0o600))
+	t.Setenv(config.AppEnv, srcPath)
+
+	cfg, err := svc.restartExecConfig(
+		[]string{"old-cache", "-service", "exec"},
+		[]string{"A=B", config.AppEnv + "=/old/path"},
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, srcPath, cfg.binPath)
+	assert.NotEqual(t, srcPath, cfg.serviceBin)
+	assert.Regexp(t, `^zaparoo\.[0-9a-f]{16}\.sh$`, filepath.Base(cfg.serviceBin))
+	assert.FileExists(t, cfg.serviceBin)
+	assert.Equal(t, []string{cfg.serviceBin, "-service", "exec"}, cfg.args)
+	assert.Contains(t, cfg.env, config.AppEnv+"="+srcPath)
 }
 
 func TestRunningRemovesStalePIDFile(t *testing.T) {
@@ -495,9 +758,7 @@ func TestRunningRemovesStalePIDFile(t *testing.T) {
 }
 
 func TestPIDRunningTreatsZombieAsStopped(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("zombie detection uses Linux /proc status")
-	}
+	requireLinuxProc(t, "zombie detection")
 
 	process := exec.CommandContext(context.Background(), "sh", "-c", "exit 0")
 	require.NoError(t, process.Start())
@@ -526,7 +787,7 @@ func TestWaitForAPIPortRelease(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = waitForAPIPortRelease(cfg, 20*time.Millisecond, 5*time.Millisecond)
+	err = waitForAPIPortRelease(cfg, 250*time.Millisecond, 50*time.Millisecond)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timeout waiting for API port")
 
@@ -556,14 +817,15 @@ func TestStopProcessTerminatesProcessGroup(t *testing.T) {
 	require.NoError(t, process.Start())
 	t.Cleanup(func() { _ = syscall.Kill(-process.Process.Pid, syscall.SIGKILL) })
 
+	var childPID int
 	require.Eventually(t, func() bool {
-		_, err := os.Stat(childPIDPath)
-		return err == nil
+		childPIDBytes, err := os.ReadFile(childPIDPath) //nolint:gosec // test-controlled file
+		if err != nil {
+			return false
+		}
+		childPID, err = strconv.Atoi(string(childPIDBytes))
+		return err == nil && childPID > 0
 	}, time.Second, 10*time.Millisecond)
-	childPIDBytes, err := os.ReadFile(childPIDPath) //nolint:gosec // test-controlled file
-	require.NoError(t, err)
-	childPID, err := strconv.Atoi(string(childPIDBytes))
-	require.NoError(t, err)
 	require.True(t, pidRunning(childPID))
 
 	waiter := newCommandWaiter(process)
@@ -649,4 +911,221 @@ func TestWaitForPIDExit_TimesOutWhileProcessStillRunning(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timeout waiting for process 123 to stop")
+}
+
+func TestStart_ExitsCleanWhenServiceAlreadyRunning(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
+	t.Cleanup(func() {
+		pid, pidErr := svc.Pid()
+		if pidErr == nil && pid > 0 && pidRunning(pid) {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	require.NoError(t, svc.Start())
+	firstPID, err := svc.Pid()
+	require.NoError(t, err)
+	require.Positive(t, firstPID)
+
+	require.NoError(t, svc.Start())
+	secondPID, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Equal(t, firstPID, secondPID, "second Start must not spawn a replacement service")
+
+	content, err := os.ReadFile(eventLog) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	startedLines := 0
+	for _, line := range content {
+		if line == '\n' {
+			startedLines++
+		}
+	}
+	assert.Equal(t, 1, startedLines, "fake service should have been started exactly once")
+}
+
+func TestStart_ConcurrentInvocationsSerializedByGate(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
+	t.Cleanup(func() {
+		pid, pidErr := svc.Pid()
+		if pidErr == nil && pid > 0 && pidRunning(pid) {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	const racers = 4
+	results := make(chan error, racers)
+	for range racers {
+		go func() { results <- svc.Start() }()
+	}
+	for range racers {
+		require.NoError(t, <-results)
+	}
+
+	content, err := os.ReadFile(eventLog) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	startedLines := 0
+	for _, line := range content {
+		if line == '\n' {
+			startedLines++
+		}
+	}
+	assert.Equal(t, 1, startedLines, "exactly one wrapper should have started the service")
+}
+
+func TestStart_StaleNonexistentPIDFileDoesNotBlockStart(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
+	require.NoError(t, os.WriteFile(pidFile, []byte("99999999"), 0o600))
+	t.Cleanup(func() {
+		pid, pidErr := svc.Pid()
+		if pidErr == nil && pid > 0 && pidRunning(pid) {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	require.NoError(t, svc.Start())
+
+	pid, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Positive(t, pid)
+	assert.NotEqual(t, 99999999, pid)
+}
+
+func TestWaitForServicePidFile_ReturnsWhenFileAppears(t *testing.T) {
+	svc := newTestService(t)
+	pidPath := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+	scriptBody := fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$$\" > %q\nwhile :; do sleep 1; done\n", pidPath)
+	scriptPath := writeServiceCacheScript(t, svc, scriptBody)
+
+	//nolint:gosec // test starts a controlled shell script
+	process := exec.CommandContext(context.Background(), scriptPath)
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+
+	require.NoError(t, svc.waitForServicePidFile(process.Process.Pid, time.Second))
+}
+
+func TestWaitForServicePidFile_FailsWhenExpectedProcessNeverWritesPidfile(t *testing.T) {
+	svc := newTestService(t)
+	scriptPath := writeServiceCacheScript(t, svc, "#!/bin/sh\nwhile :; do sleep 1; done\n")
+
+	//nolint:gosec // test starts a controlled shell script
+	process := exec.CommandContext(context.Background(), scriptPath)
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+
+	err := svc.waitForServicePidFile(process.Process.Pid, 40*time.Millisecond)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "service did not write pidfile")
+}
+
+// TestWaitForServicePidFile_TreatsEmptyPidfileAsTransient verifies that an
+// empty pidfile (the window between createPidFile's O_EXCL open and its
+// WriteString) is treated as a transient race: the loop keeps polling
+// rather than failing fast on the resulting strconv parse error.
+func TestWaitForServicePidFile_TreatsEmptyPidfileAsTransient(t *testing.T) {
+	svc := newTestService(t)
+	pidPath := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+	scriptPath := writeServiceCacheScript(t, svc, "#!/bin/sh\nwhile :; do sleep 1; done\n")
+
+	//nolint:gosec // test starts a controlled shell script
+	process := exec.CommandContext(context.Background(), scriptPath)
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+
+	// Simulate a mid-write pidfile (created but not yet populated).
+	require.NoError(t, os.WriteFile(pidPath, []byte{}, 0o600))
+
+	// Schedule the actual write after a brief delay so the loop hits
+	// at least one parse-error iteration before the expected PID lands.
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		_ = os.WriteFile(pidPath, []byte(strconv.Itoa(process.Process.Pid)), 0o600)
+	}()
+
+	require.NoError(t, svc.waitForServicePidFile(process.Process.Pid, time.Second))
+}
+
+func TestWaitForServicePidFile_FailsWhenPidfileDoesNotMatchExpectedProcess(t *testing.T) {
+	svc := newTestService(t)
+	pidPath := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+	scriptPath := writeServiceCacheScript(t, svc, "#!/bin/sh\nwhile :; do sleep 1; done\n")
+
+	//nolint:gosec // test starts a controlled shell script
+	process := exec.CommandContext(context.Background(), scriptPath)
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+	require.NoError(t, os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600))
+
+	err := svc.waitForServicePidFile(process.Process.Pid, time.Second)
+	require.Error(t, err)
+	// A wrong-PID is treated as a transient race (could be a stale pidfile
+	// or a mid-write read) and surfaces as a deadline timeout once the
+	// expected process never writes the pidfile. The transient details
+	// are wrapped into the deadline error for diagnostics.
+	assert.Contains(t, err.Error(), "did not write pidfile")
+	assert.Contains(t, err.Error(), "pidfile contains PID")
+}
+
+func TestWaitForServicePidFile_FailsWhenProcessExits(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	process := exec.CommandContext(context.Background(), "sh", "-c", "exit 0")
+	require.NoError(t, process.Start())
+	pid := process.Process.Pid
+	// Reap the child so the PID is fully released. pidRunning relies on
+	// /proc/<pid>/stat to detect zombies, which doesn't exist on macOS;
+	// without an explicit Wait() the child stays as a zombie there and
+	// kill(pid, 0) keeps reporting "running".
+	require.NoError(t, process.Wait())
+
+	err := svc.waitForServicePidFile(pid, time.Second)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exited before writing pidfile")
+}
+
+func TestStart_FailsWhenServiceWritesPidfileThenExits(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	pidFile := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$$\" > %q\nexit 0\n", pidFile)
+	t.Setenv(config.AppEnv, writeFakeServiceScriptWithBody(t, script))
+
+	err := svc.Start()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not become ready")
 }

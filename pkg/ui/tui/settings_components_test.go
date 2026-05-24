@@ -22,6 +22,7 @@ package tui
 import (
 	"testing"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -317,6 +318,29 @@ func TestSettingsList_AddBackWithDesc(t *testing.T) {
 	assert.Equal(t, "Custom description", sl.items[0].description)
 }
 
+func TestSettingsList_ClearItems(t *testing.T) {
+	t.Parallel()
+
+	pages := tview.NewPages()
+	sl := NewSettingsList(pages, "main")
+
+	sl.AddAction("Action", "desc", func() {})
+	sl.AddToggle("Toggle", "desc", new(bool), func(bool) {})
+	require.Equal(t, 2, sl.GetItemCount())
+	require.Len(t, sl.items, 2)
+
+	result := sl.ClearItems()
+
+	assert.Same(t, sl, result)
+	assert.Equal(t, 0, sl.GetItemCount())
+	assert.Empty(t, sl.items)
+
+	result = sl.ClearItems()
+	assert.Same(t, sl, result)
+	assert.Equal(t, 0, sl.GetItemCount())
+	assert.Empty(t, sl.items)
+}
+
 func TestSettingsList_ChainedMethods(t *testing.T) {
 	t.Parallel()
 
@@ -376,6 +400,24 @@ func TestButtonBar_GetFirstButton(t *testing.T) {
 	firstBtn := bb.GetFirstButton()
 	require.NotNil(t, firstBtn)
 	assert.Equal(t, "First", firstBtn.GetLabel())
+}
+
+func TestButtonBar_InputHandlerUsesBarFocus(t *testing.T) {
+	t.Parallel()
+
+	app := tview.NewApplication()
+	bb := NewButtonBar(app)
+	bb.AddButton("Save", func() {})
+	upCalled := false
+	bb.SetOnUp(func() {
+		upCalled = true
+	})
+
+	handler := bb.InputHandler()
+	require.NotNil(t, handler)
+	handler(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone), func(tview.Primitive) {})
+
+	assert.True(t, upCalled)
 }
 
 func TestButtonBar_ChainedMethods(t *testing.T) {

@@ -71,6 +71,14 @@ var cappedTagTypes = map[string]bool{
 	"search":     true,
 }
 
+type indexingNotificationState struct {
+	lastTime     time.Time
+	lastPhase    string
+	lastSystemID string
+	lastStep     int
+	hasLast      bool
+}
+
 // capTagsByCategory returns at most limit tags per type, sorted by count desc
 // then tag asc within each group. Long-tail types (credit, publisher, etc.)
 // are capped at limit; taxonomy types (region, year, lang, etc.) are returned
@@ -195,6 +203,29 @@ type indexingStatus struct {
 	indexing    bool
 }
 
+func (s *indexingNotificationState) shouldSend(
+	status mediascanner.IndexStatus,
+	now time.Time,
+	interval time.Duration,
+) bool {
+	visibleStepChanged := !s.hasLast ||
+		status.Phase != s.lastPhase ||
+		status.SystemID != s.lastSystemID ||
+		status.Step != s.lastStep
+	isFinalStep := status.Total > 0 && status.Step == status.Total
+
+	if !isFinalStep && !visibleStepChanged && now.Sub(s.lastTime) < interval {
+		return false
+	}
+
+	s.lastTime = now
+	s.lastPhase = status.Phase
+	s.lastSystemID = status.SystemID
+	s.lastStep = status.Step
+	s.hasLast = true
+	return true
+}
+
 func (s *indexingStatus) get() indexingStatusVals {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -307,8 +338,8 @@ func GenerateMediaDB(
 	db *database.Database,
 	pauser *syncutil.Pauser,
 ) error {
-	if !statusInstance.startIfNotRunning() {
-		return models.ClientErrf("indexing already in progress")
+	if err := startIndexingIfNoScrape(); err != nil {
+		return err
 	}
 
 	// Also prevent indexing if optimization is running
@@ -353,7 +384,7 @@ func GenerateMediaDB(
 		defer db.MediaDB.BackgroundOperationDone()
 		defer debug.FreeOSMemory()
 
-		var lastNotifTime time.Time
+		notifState := indexingNotificationState{}
 		const notifThrottleInterval = 250 * time.Millisecond
 
 		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
@@ -392,20 +423,13 @@ func GenerateMediaDB(
 				totalFiles:  status.Files,
 			})
 
-			// Throttle WebSocket push notifications to prevent
-			// channel overflow during bursts (e.g. resume skipping
-			// many completed systems). Phase changes and the final
-			// step are always sent so clients see start/end.
-			now := time.Now()
-			isPhaseChange := status.Phase == mediascanner.PhaseDiscovering ||
-				status.Phase == mediascanner.PhaseInitializing ||
-				status.Phase == mediascanner.PhaseCreatingIndexes ||
-				status.Phase == mediascanner.PhaseBuildingCaches
-			isFinalStep := status.Step == status.Total
-			if !isPhaseChange && !isFinalStep && now.Sub(lastNotifTime) < notifThrottleInterval {
+			// Throttle duplicate WebSocket push notifications to prevent
+			// channel overflow, but always send visible progress changes so
+			// notification-only clients don't show the previous system while
+			// the next system is doing long-running work.
+			if !notifState.shouldSend(status, time.Now(), notifThrottleInterval) {
 				return
 			}
-			lastNotifTime = now
 
 			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 				Exists:             false,
@@ -683,15 +707,20 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 		zapScript := result.ZapScript()
 
-		resultPath := result.Path
+		var relPath *string
 		if env.LauncherCache != nil {
-			resultPath = env.LauncherCache.ToRelativePath(rootDirs, result.SystemID, resultPath)
+			rel := env.LauncherCache.ToRelativePath(rootDirs, result.SystemID, result.Path)
+			if rel != result.Path {
+				relPath = &rel
+			}
 		}
 
 		results = append(results, models.SearchResultMedia{
+			MediaID:   result.MediaID,
+			RelPath:   relPath,
 			System:    resultSystem,
 			Name:      result.Name,
-			Path:      resultPath,
+			Path:      result.Path,
 			ZapScript: zapScript,
 			Tags:      result.Tags,
 		})
@@ -797,9 +826,16 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			}
 		}
 		zapScript := database.BuildTitleZapScript(system.ID, activeMedia.Name, zapScriptTags)
+		mediaIDs := mediaResponseMediaIDs(&env, []mediaPathRef{{
+			SystemID: system.ID,
+			Path:     activeMedia.Path,
+		}})
+		ref := mediaPathRef{SystemID: system.ID, Path: activeMedia.Path}
 
 		activeResp := models.ActiveMediaResponse{
 			ActiveMedia: models.ActiveMedia{
+				MediaID:          mediaIDs[ref],
+				RelPath:          mediaResponseRelativePath(&env, system.ID, activeMedia.Path),
 				Started:          activeMedia.Started,
 				LauncherID:       activeMedia.LauncherID,
 				SystemID:         system.ID,
@@ -935,9 +971,16 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 	zapScript := database.BuildTitleZapScript(media.SystemID, media.Name, zapScriptTags)
+	mediaIDs := mediaResponseMediaIDs(&env, []mediaPathRef{{
+		SystemID: media.SystemID,
+		Path:     media.Path,
+	}})
+	ref := mediaPathRef{SystemID: media.SystemID, Path: media.Path}
 
 	resp := models.ActiveMediaResponse{
 		ActiveMedia: models.ActiveMedia{
+			MediaID:          mediaIDs[ref],
+			RelPath:          mediaResponseRelativePath(&env, media.SystemID, media.Path),
 			Started:          media.Started,
 			LauncherID:       media.LauncherID,
 			SystemID:         media.SystemID,

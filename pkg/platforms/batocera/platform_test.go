@@ -350,7 +350,7 @@ func TestStartPost_NoRunningGame(t *testing.T) {
 	}
 
 	// StartPost should detect no running game and set active media to nil
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 
 	// Should not error
 	require.NoError(t, err)
@@ -392,7 +392,7 @@ func TestStartPost_WithRunningGame(t *testing.T) {
 	}
 
 	// StartPost should detect running game and set active media
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 
 	// Should not error
 	require.NoError(t, err)
@@ -483,7 +483,7 @@ func TestLaunchMedia_SetsActiveMediaWithTimestamp(t *testing.T) {
 	}
 
 	// Initialize platform (need setActiveMedia function)
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 	require.NoError(t, err)
 
 	// Cleanup background tracker
@@ -839,7 +839,7 @@ func TestStartPost_ESAPIUnavailable(t *testing.T) {
 	}
 
 	// StartPost should handle ES API unavailability gracefully with warning
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+	err = platform.StartPost(t.Context(), cfg, nil, activeMedia, setActiveMedia, nil, nil)
 
 	// Should not error - should handle gracefully with warning
 	require.NoError(t, err)

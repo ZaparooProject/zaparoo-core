@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const plsHeader = "[playlist]"
@@ -297,7 +298,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		return playlists.NewPlaylist(plsArg.ID, plsArg.Name, items), nil
 	}
 
-	path, err := findFile(pl, env.Cfg, env.Cmd.Args[0])
+	path, err := findFile(afero.NewOsFs(), pl, env.Cfg, env.Cmd.Args[0])
 	if err != nil {
 		return nil, err
 	}

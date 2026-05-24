@@ -207,14 +207,40 @@ func TestInstallService(t *testing.T) {
 
 				content, readErr := os.ReadFile(servicePath) //nolint:gosec // reads installed test fixture
 				require.NoError(t, readErr, "should be able to read service file")
+				serviceContent := string(content)
 				execPath, execErr := os.Executable()
 				require.NoError(t, execErr)
 				execPath, execErr = filepath.EvalSymlinks(execPath)
 				require.NoError(t, execErr)
-				assert.Contains(t, string(content), "Type=simple")
-				assert.Contains(t, string(content), "ExecStart="+execPath+" -daemon")
-				assert.Contains(t, string(content), "TimeoutStopSec=15s")
-				assert.Contains(t, string(content), "KillMode=control-group")
+				assert.Contains(t, serviceContent, "Type=simple")
+				assert.Contains(t, serviceContent, "ExecStart="+execPath+" -daemon")
+				assert.Contains(t, serviceContent, "TimeoutStopSec=15s")
+				assert.Contains(t, serviceContent, "KillMode=control-group")
+				assert.Contains(t, serviceContent, "Avoid systemd sandboxing here")
+
+				restrictedDirectives := []string{
+					"PrivateTmp=",
+					"ReadWritePaths=",
+					"ProtectKernelTunables=",
+					"ProtectKernelModules=",
+					"ProtectControlGroups=",
+					"ProtectKernelLogs=",
+					"PrivateDevices=",
+					"DevicePolicy=",
+					"DeviceAllow=",
+					"NoNewPrivileges=",
+					"ProtectClock=",
+					"ProtectHostname=",
+					"RestrictSUIDSGID=",
+					"RestrictRealtime=",
+					"LockPersonality=",
+					"RestrictAddressFamilies=",
+					"SystemCallFilter=",
+					"SystemCallArchitectures=",
+				}
+				for _, directive := range restrictedDirectives {
+					assert.NotContains(t, serviceContent, directive)
+				}
 			}
 
 			cmd.AssertExpectations(t)

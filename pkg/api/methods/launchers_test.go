@@ -23,6 +23,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	corehelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -210,4 +211,88 @@ func TestHandleLaunchersRefresh_CustomLaunchersLoadError(t *testing.T) {
 
 	// Cache should not have been refreshed
 	assert.Empty(t, testCache.GetAllLaunchers())
+}
+
+// TestHandleLaunchers_ReturnsCachedLaunchers verifies HandleLaunchers serialises
+// the cached launcher list, sorted by SystemID then ID, with identity-only fields.
+func TestHandleLaunchers_ReturnsCachedLaunchers(t *testing.T) {
+	t.Parallel()
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "snes9x", SystemID: "SNES", Groups: []string{"libretro"}},
+		{ID: "retroarch", SystemID: "Genesis"},
+		{ID: "kodi-tv", SystemID: "TV", Groups: []string{"Kodi", "KodiTV"}},
+	})
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		LauncherCache: cache,
+	}
+
+	result, err := HandleLaunchers(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.LaunchersResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Launchers, 3)
+
+	// Sorted by SystemID asc, then ID asc.
+	assert.Equal(t, "Genesis", resp.Launchers[0].SystemID)
+	assert.Equal(t, "retroarch", resp.Launchers[0].ID)
+	assert.Equal(t, "SNES", resp.Launchers[1].SystemID)
+	assert.Equal(t, "snes9x", resp.Launchers[1].ID)
+	assert.Equal(t, []string{"libretro"}, resp.Launchers[1].Groups)
+	assert.Equal(t, "TV", resp.Launchers[2].SystemID)
+	assert.Equal(t, "kodi-tv", resp.Launchers[2].ID)
+	assert.Equal(t, []string{"Kodi", "KodiTV"}, resp.Launchers[2].Groups)
+}
+
+// TestHandleLaunchers_PopulatesSystemName verifies the handler enriches each
+// launcher with the corresponding system display name from system metadata.
+func TestHandleLaunchers_PopulatesSystemName(t *testing.T) {
+	t.Parallel()
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "retroarch", SystemID: "Genesis"},
+		{ID: "noname", SystemID: ""},
+	})
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		LauncherCache: cache,
+	}
+
+	result, err := HandleLaunchers(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.LaunchersResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Launchers, 2)
+
+	// Empty SystemID launcher: no SystemName resolved.
+	assert.Empty(t, resp.Launchers[0].SystemID)
+	assert.Empty(t, resp.Launchers[0].SystemName)
+
+	// Genesis: name resolved from system metadata.
+	assert.Equal(t, "Genesis", resp.Launchers[1].SystemID)
+	assert.Equal(t, "Genesis", resp.Launchers[1].SystemName)
+}
+
+// TestHandleLaunchers_NilCacheReturnsEmpty verifies a missing launcher cache
+// is handled gracefully rather than panicking.
+func TestHandleLaunchers_NilCacheReturnsEmpty(t *testing.T) {
+	t.Parallel()
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+	}
+
+	result, err := HandleLaunchers(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.LaunchersResponse)
+	require.True(t, ok)
+	assert.Empty(t, resp.Launchers)
 }

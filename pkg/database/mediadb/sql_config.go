@@ -30,12 +30,17 @@ import (
 )
 
 const (
-	DBConfigLastGeneratedAt    = "LastGeneratedAt"
-	DBConfigOptimizationStatus = "OptimizationStatus"
-	DBConfigOptimizationStep   = "OptimizationStep"
-	DBConfigIndexingStatus     = "IndexingStatus"
-	DBConfigLastIndexedSystem  = "LastIndexedSystem"
-	DBConfigIndexingSystems    = "IndexingSystems"
+	DBConfigLastGeneratedAt                 = "LastGeneratedAt"
+	DBConfigOptimizationStatus              = "OptimizationStatus"
+	DBConfigOptimizationStep                = "OptimizationStep"
+	DBConfigIndexingStatus                  = "IndexingStatus"
+	DBConfigLastIndexedSystem               = "LastIndexedSystem"
+	DBConfigIndexingSystems                 = "IndexingSystems"
+	DBConfigBrowseIndexVersion              = "BrowseIndexVersion"
+	DBConfigTemporaryRepairParentDirVersion = "TemporaryRepairParentDirVersion"
+	DBConfigIndexGeneration                 = "IndexGeneration"
+
+	temporaryRepairParentDirVersion = "1"
 )
 
 func sqlUpdateLastGenerated(ctx context.Context, db sqlQueryable) error {
@@ -176,6 +181,47 @@ func sqlGetLastIndexedSystem(ctx context.Context, db *sql.DB) (string, error) {
 		return "", fmt.Errorf("failed to get last indexed system: %w", err)
 	}
 	return systemID, nil
+}
+
+// sqlGetIndexGeneration reads the monotonic counter that's bumped at the end
+// of every successful indexing run. Persisted on-disk caches (tag cache, slug
+// search cache) embed this value in their header so a stale cache file from
+// a previous run can be detected and rebuilt.
+func sqlGetIndexGeneration(ctx context.Context, db *sql.DB) (int64, error) {
+	var raw string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigIndexGeneration,
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	} else if err != nil {
+		return 0, fmt.Errorf("failed to get index generation: %w", err)
+	}
+	gen, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse index generation: %w", err)
+	}
+	return gen, nil
+}
+
+// sqlBumpIndexGeneration atomically increments the generation counter and
+// returns the new value via a single INSERT ... ON CONFLICT DO UPDATE ...
+// RETURNING statement. Not transactional with the cache file writes or
+// status flip that follow it; see BumpIndexGeneration for the crash-recovery
+// contract.
+func sqlBumpIndexGeneration(ctx context.Context, db sqlQueryable) (int64, error) {
+	var next int64
+	err := db.QueryRowContext(ctx,
+		`INSERT INTO DBConfig (Name, Value) VALUES (?, '1')
+		 ON CONFLICT(Name) DO UPDATE SET Value = CAST(CAST(Value AS INTEGER) + 1 AS TEXT)
+		 RETURNING CAST(Value AS INTEGER)`,
+		DBConfigIndexGeneration,
+	).Scan(&next)
+	if err != nil {
+		return 0, fmt.Errorf("failed to bump index generation: %w", err)
+	}
+	return next, nil
 }
 
 func sqlSetIndexingSystems(ctx context.Context, db sqlQueryable, systemIDs []string) error {

@@ -50,6 +50,7 @@ type RequestEnv struct {
 	TokenQueue    chan<- tokens.Token
 	ConfirmQueue  chan<- chan error
 	IndexPauser   *syncutil.Pauser
+	ScrapePauser  *syncutil.Pauser
 	ClientID      string
 	Params        json.RawMessage
 	IsLocal       bool

@@ -20,12 +20,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,7 +74,7 @@ func startWSServer(
 ) (wsURL string, cleanup func()) {
 	t.Helper()
 
-	m := melody.New()
+	m := newWebSocketSession()
 	m.HandleMessage(func(s *melody.Session, msg []byte) {
 		clientIP := apimiddleware.ParseRemoteIP(s.Request.RemoteAddr)
 		isLocal := apimiddleware.IsLoopbackAddr(s.Request.RemoteAddr)
@@ -228,4 +230,53 @@ func TestWSEncryption_LoopbackPlaintextAllowedWhenEnabled(t *testing.T) {
 	_, got, err := conn.ReadMessage()
 	require.NoError(t, err, "loopback plaintext must be accepted on encryption=true")
 	assert.Equal(t, plaintext, got, "test echo handler returns the plaintext unchanged")
+}
+
+func TestWSAcceptsBatchSizedRequests(t *testing.T) {
+	t.Parallel()
+
+	gateway := apimiddleware.NewEncryptionGateway(helpers.NewMockUserDBI())
+
+	wsURL, cleanup := startWSServer(t, true, gateway, nil)
+	defer cleanup()
+
+	conn := dialWS(t, wsURL)
+	defer func() { _ = conn.Close() }()
+
+	payload := bytes.Repeat([]byte("a"), 2048)
+	message := append([]byte(`{"jsonrpc":"2.0","method":"test.echo","params":{"path":"`), payload...)
+	message = append(message, []byte(`"},"id":1}`)...)
+	require.Greater(t, len(message), 512, "payload must exceed melody's default message limit")
+	require.Less(t, len(message), websocketMaxMessageSize)
+
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, message))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, got, err := conn.ReadMessage()
+	require.NoError(t, err, "batch-sized request should not be rejected with close code 1009")
+	assert.Equal(t, message, got)
+}
+
+func TestWSRejectsOverLimitRequests(t *testing.T) {
+	t.Parallel()
+
+	gateway := apimiddleware.NewEncryptionGateway(helpers.NewMockUserDBI())
+
+	wsURL, cleanup := startWSServer(t, true, gateway, nil)
+	defer cleanup()
+
+	conn := dialWS(t, wsURL)
+	defer func() { _ = conn.Close() }()
+
+	payload := bytes.Repeat([]byte("a"), websocketMaxMessageSize)
+	message := append([]byte(`{"jsonrpc":"2.0","method":"test.echo","params":{"path":"`), payload...)
+	message = append(message, []byte(`"},"id":1}`)...)
+	require.Greater(t, len(message), websocketMaxMessageSize)
+
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, message))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, _, err := conn.ReadMessage()
+	require.Error(t, err, "over-limit request should be rejected")
+	if !websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
+		assert.Contains(t, strings.ToLower(err.Error()), "message too big")
+	}
 }

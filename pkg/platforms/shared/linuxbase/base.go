@@ -23,6 +23,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package linuxbase
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -31,9 +32,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/jonboulle/clockwork"
@@ -86,11 +89,13 @@ func (*Base) StartPre(_ *config.Instance) error {
 
 // StartPost initializes the platform after service startup.
 func (b *Base) StartPost(
+	_ context.Context,
 	_ *config.Instance,
 	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	_ *database.Database,
+	_ *idle.Scheduler,
 ) error {
 	b.launcherManager = launcherManager
 	b.activeMedia = activeMedia
@@ -351,4 +356,10 @@ func (*Base) ConsoleManager() platforms.ConsoleManager {
 // package manager detection should override this method.
 func (*Base) ManagedByPackageManager() bool {
 	return false
+}
+
+// Scrapers returns the default set of metadata scrapers for Linux-based platforms.
+func (*Base) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+	s := gamelistxml.NewPlatformScraper()
+	return map[string]platforms.Scraper{s.ID: s}
 }

@@ -20,6 +20,8 @@
 package platforms_test
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -603,4 +605,59 @@ func TestDoLaunch_NativeLaunchPath(t *testing.T) {
 			mockPlatform.AssertExpectations(t)
 		})
 	}
+}
+
+func TestKeyboardControls_EmptyActions(t *testing.T) {
+	t.Parallel()
+	pl := mocks.NewMockPlatform()
+	controls := platforms.KeyboardControls(pl, map[string]string{})
+	assert.Empty(t, controls)
+}
+
+func TestKeyboardControls_BuildsMapWithCorrectKeys(t *testing.T) {
+	t.Parallel()
+	pl := mocks.NewMockPlatform()
+	controls := platforms.KeyboardControls(pl, map[string]string{
+		platforms.ControlSaveState: "{f2}",
+		platforms.ControlLoadState: "{f4}",
+	})
+	require.Len(t, controls, 2)
+	assert.Contains(t, controls, platforms.ControlSaveState)
+	assert.Contains(t, controls, platforms.ControlLoadState)
+	assert.NotNil(t, controls[platforms.ControlSaveState].Func)
+	assert.NotNil(t, controls[platforms.ControlLoadState].Func)
+}
+
+func TestKeyboardControls_InvokesPlatformKeyboardPress(t *testing.T) {
+	t.Parallel()
+	pl := mocks.NewMockPlatform()
+	pl.On("KeyboardPress", "{f2}").Return(nil)
+
+	controls := platforms.KeyboardControls(pl, map[string]string{
+		platforms.ControlSaveState: "{f2}",
+	})
+	ctrl, ok := controls[platforms.ControlSaveState]
+	require.True(t, ok)
+	require.NotNil(t, ctrl.Func)
+
+	err := ctrl.Func(context.Background(), &config.Instance{}, platforms.ControlParams{})
+	require.NoError(t, err)
+	pl.AssertExpectations(t)
+}
+
+func TestKeyboardControls_PropagatesKeyboardPressError(t *testing.T) {
+	t.Parallel()
+	pl := mocks.NewMockPlatform()
+	keyErr := errors.New("keyboard not supported")
+	pl.On("KeyboardPress", "{ctrl+q}").Return(keyErr)
+
+	controls := platforms.KeyboardControls(pl, map[string]string{
+		platforms.ControlStop: "{ctrl+q}",
+	})
+	ctrl, ok := controls[platforms.ControlStop]
+	require.True(t, ok)
+
+	err := ctrl.Func(context.Background(), &config.Instance{}, platforms.ControlParams{})
+	require.ErrorIs(t, err, keyErr)
+	pl.AssertExpectations(t)
 }

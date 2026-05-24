@@ -21,6 +21,8 @@ package middleware
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -177,16 +179,183 @@ func TestHTTPRateLimitMiddleware_IsolatesIPs(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code, "different IP should not be rate-limited")
 }
 
-func TestWebSocketRateLimitHandler_ClosesOnExceed(t *testing.T) {
+func TestHTTPRateLimitMiddleware_ExemptsLoopbackAndLocalhost(t *testing.T) {
 	t.Parallel()
 
-	// burst=1 so only the first message is allowed.
+	tests := []struct {
+		name       string
+		remoteAddr string
+	}{
+		{name: "ipv4 loopback", remoteAddr: "127.0.0.1:12345"},
+		{name: "ipv6 loopback", remoteAddr: "[::1]:12345"},
+		{name: "localhost", remoteAddr: "localhost:12345"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rl := NewIPRateLimiterWithLimits(0, 1)
+			mw := HTTPRateLimitMiddleware(rl)
+			callCount := 0
+			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				callCount++
+				w.WriteHeader(http.StatusOK)
+			})
+			wrapped := mw(next)
+
+			for range 3 {
+				//nolint:noctx // test helper
+				req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+				req.RemoteAddr = tt.remoteAddr
+				rec := httptest.NewRecorder()
+				wrapped.ServeHTTP(rec, req)
+
+				assert.Equal(t, http.StatusOK, rec.Code)
+			}
+			assert.Equal(t, 3, callCount)
+		})
+	}
+}
+
+func TestHTTPRateLimitMiddleware_DoesNotExemptNonLoopbackHostnames(t *testing.T) {
+	t.Parallel()
+
+	rl := NewIPRateLimiterWithLimits(0, 1)
+	mw := HTTPRateLimitMiddleware(rl)
+	callCount := 0
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := mw(next)
+
+	for i := range 3 {
+		//nolint:noctx // test helper
+		req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+		req.RemoteAddr = "example.test:12345"
+		rec := httptest.NewRecorder()
+		wrapped.ServeHTTP(rec, req)
+
+		if i == 0 {
+			assert.Equal(t, http.StatusOK, rec.Code)
+		} else {
+			assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+		}
+	}
+	assert.Equal(t, 1, callCount)
+}
+
+func TestWebSocketRateLimitHandler_WaitsForToken(t *testing.T) {
+	t.Parallel()
+
+	// burst=1 allows the first message immediately; the second waits for
+	// the next token instead of closing the session.
+	rl := NewIPRateLimiterWithLimits(rate.Every(50*time.Millisecond), 1)
+	var handlerCalls atomic.Int32
+	inner := func(_ *melody.Session, _ []byte) {
+		handlerCalls.Add(1)
+	}
+	wrapped := WebSocketRateLimitHandlerWithWait(rl, 250*time.Millisecond, inner)
+
+	m := melody.New()
+	m.HandleMessage(wrapped)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = "192.168.1.1:12345"
+		_ = m.HandleRequest(w, r)
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	//nolint:bodyclose // websocket conn manages the body
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	// First message should go through.
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("hello")))
+	require.Eventually(t, func() bool {
+		return handlerCalls.Load() == 1
+	}, 500*time.Millisecond, 10*time.Millisecond, "first message should be handled")
+
+	// Second message should wait for a token and then reach the handler.
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("again")))
+	require.Eventually(t, func() bool {
+		return handlerCalls.Load() == 2
+	}, 500*time.Millisecond, 10*time.Millisecond, "second message should be handled after backpressure wait")
+
+	// The server should keep the connection open.
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("third")))
+	require.Eventually(t, func() bool {
+		return handlerCalls.Load() == 3
+	}, 500*time.Millisecond, 10*time.Millisecond, "connection should remain usable after waiting")
+}
+
+func TestWebSocketRateLimitHandler_ClosesAfterWaitTimeout(t *testing.T) {
+	t.Parallel()
+
+	// burst=1 and no refill forces the second message to exceed the bounded wait.
 	rl := NewIPRateLimiterWithLimits(0, 1)
 	var handlerCalls atomic.Int32
 	inner := func(_ *melody.Session, _ []byte) {
 		handlerCalls.Add(1)
 	}
-	wrapped := WebSocketRateLimitHandler(rl, inner)
+	wrapped := WebSocketRateLimitHandlerWithWait(rl, 20*time.Millisecond, inner)
+
+	m := melody.New()
+	m.HandleMessage(wrapped)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = "192.168.1.1:12345"
+		_ = m.HandleRequest(w, r)
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	//nolint:bodyclose // websocket conn manages the body
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("hello")))
+	require.Eventually(t, func() bool {
+		return handlerCalls.Load() == 1
+	}, 500*time.Millisecond, 10*time.Millisecond, "first message should be handled")
+
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("again")))
+	assert.Never(t, func() bool {
+		return handlerCalls.Load() != 1
+	}, 150*time.Millisecond, 10*time.Millisecond, "second message should not reach handler")
+
+	// The server should have closed the connection.
+	_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_, _, err = conn.ReadMessage()
+	require.Error(t, err, "connection should be closed after rate limit exceeded")
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		assert.False(t, netErr.Timeout(), "connection read should fail from server close, not read timeout")
+	}
+	assert.True(t,
+		websocket.IsCloseError(err,
+			websocket.CloseNormalClosure,
+			websocket.CloseGoingAway,
+			websocket.CloseAbnormalClosure,
+			websocket.CloseNoStatusReceived,
+		) || websocket.IsUnexpectedCloseError(err),
+		"connection read should return a websocket close error, got %v", err,
+	)
+}
+
+func TestWebSocketRateLimitHandler_ExemptsLoopback(t *testing.T) {
+	t.Parallel()
+
+	rl := NewIPRateLimiterWithLimits(0, 1)
+	var handlerCalls atomic.Int32
+	inner := func(_ *melody.Session, _ []byte) {
+		handlerCalls.Add(1)
+	}
+	wrapped := WebSocketRateLimitHandlerWithWait(rl, 20*time.Millisecond, inner)
 
 	m := melody.New()
 	m.HandleMessage(wrapped)
@@ -202,18 +371,11 @@ func TestWebSocketRateLimitHandler_ClosesOnExceed(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
-	// First message should go through.
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("hello")))
-	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, int32(1), handlerCalls.Load(), "first message should be handled")
+	for range 3 {
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("hello")))
+	}
 
-	// Second message should trigger rate limit and close the connection.
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("again")))
-	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, int32(1), handlerCalls.Load(), "second message should not reach handler")
-
-	// The server should have closed the connection.
-	_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	_, _, err = conn.ReadMessage()
-	assert.Error(t, err, "connection should be closed after rate limit exceeded")
+	require.Eventually(t, func() bool {
+		return handlerCalls.Load() == 3
+	}, 500*time.Millisecond, 10*time.Millisecond, "loopback websocket messages should bypass rate limiting")
 }

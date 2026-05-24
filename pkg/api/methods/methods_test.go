@@ -764,6 +764,86 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 	}
 }
 
+func makeScrapeEnvWithPlatform(t *testing.T, scrapers map[string]platforms.Scraper) requests.RequestEnv {
+	t.Helper()
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", mock.Anything).Return(scrapers)
+	return requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: pl,
+	}
+}
+
+func TestHandleScrapers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		scrapers map[string]platforms.Scraper
+		wantIDs  []string
+	}{
+		{
+			name:     "empty scraper map returns empty list",
+			scrapers: map[string]platforms.Scraper{},
+			wantIDs:  []string{},
+		},
+		{
+			name: "single scraper returned",
+			scrapers: map[string]platforms.Scraper{
+				"gamelist.xml": emptyPlatformScraper("gamelist.xml", "ES gamelist.xml"),
+			},
+			wantIDs: []string{"gamelist.xml"},
+		},
+		{
+			name: "multiple scrapers all returned",
+			scrapers: map[string]platforms.Scraper{
+				"gamelist.xml":  emptyPlatformScraper("gamelist.xml", "ES gamelist.xml"),
+				"screenscraper": emptyPlatformScraper("screenscraper", "ScreenScraper"),
+			},
+			wantIDs: []string{"gamelist.xml", "screenscraper"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := makeScrapeEnvWithPlatform(t, tt.scrapers)
+
+			result, err := HandleScrapers(env)
+			require.NoError(t, err)
+
+			resp, ok := result.(models.ScrapersResponse)
+			require.True(t, ok, "result should be ScrapersResponse")
+
+			gotIDs := make([]string, 0, len(resp.Scrapers))
+			for _, s := range resp.Scrapers {
+				gotIDs = append(gotIDs, s.ID)
+				// Name must not be empty for any registered scraper.
+				assert.NotEmpty(t, s.Name)
+			}
+			assert.ElementsMatch(t, tt.wantIDs, gotIDs)
+		})
+	}
+}
+
+func TestHandleScrapers_IDAndNameMatch(t *testing.T) {
+	t.Parallel()
+
+	env := makeScrapeEnvWithPlatform(t, map[string]platforms.Scraper{
+		"gamelist.xml": emptyPlatformScraper("gamelist.xml", "ES gamelist.xml"),
+	})
+
+	result, err := HandleScrapers(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.ScrapersResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Scrapers, 1)
+	assert.Equal(t, "gamelist.xml", resp.Scrapers[0].ID)
+	assert.Equal(t, "ES gamelist.xml", resp.Scrapers[0].Name)
+}
+
 func TestHandleHealthCheck(t *testing.T) {
 	t.Parallel()
 

@@ -22,6 +22,11 @@ package tags
 // This file contains constants for all canonical tag values.
 // Use these constants when referring to specific tags in code for type safety.
 
+// Scraper tag values
+const (
+	TagScraperScraped TagValue = "scraped"
+)
+
 // Input tag values
 const (
 	TagInputJoystick2H            TagValue = "joystick:2h"
@@ -1497,4 +1502,25 @@ const (
 	TagCompatibilityMemory16K     TagValue = "memory:16k"
 	TagCompatibilityMemory128K    TagValue = "memory:128k"
 	TagCompatibilityMemory48K128K TagValue = "memory:48k-128k"
+)
+
+// Property tag values — referenced by scrapers for static content properties.
+// TypeTagDBID for each property is the DBID of the Tags row with Tag = "property:<value>".
+const (
+	TagPropertyDescription     TagValue = "description"      // Plain text description
+	TagPropertyImageImage      TagValue = "image-image"      // Generic image with no assumed context (filesystem path)
+	TagPropertyImageBoxart     TagValue = "image-boxart"     // Box art image (filesystem path)
+	TagPropertyImageScreenshot TagValue = "image-screenshot" // Screenshot image (filesystem path)
+	// TagPropertyImageThumbnail maps to ES <thumbnail>, which in most ES forks
+	// (RPI, Sky, Batocera, ES-DE) stores cover art, not a screenshot.
+	// See esapi/gamelist.go for field-level fork documentation.
+	TagPropertyImageThumbnail TagValue = "image-thumbnail" // Thumbnail / cover image (filesystem path)
+	TagPropertyImageMarquee   TagValue = "image-marquee"   // Cabinet marquee / logo image (filesystem path)
+	TagPropertyImageWheel     TagValue = "image-wheel"     // Wheel / die-cut logo image (filesystem path)
+	TagPropertyImageFanart    TagValue = "image-fanart"    // Fan art / background image (filesystem path)
+	TagPropertyImageTitleshot TagValue = "image-titleshot" // Title screen image (filesystem path)
+	TagPropertyImageMap       TagValue = "image-map"       // In-game world/level map image (filesystem path)
+	TagPropertyVideo          TagValue = "video"           // Video clip (filesystem path)
+	TagPropertyManual         TagValue = "manual"          // Game manual PDF (filesystem path)
+	TagPropertyXMLGameID      TagValue = "xml-game-id"     // game node ID (ScreenScraper Game ID for instance)
 )

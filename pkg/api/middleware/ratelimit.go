@@ -21,6 +21,7 @@ package middleware
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"time"
 
@@ -31,8 +32,9 @@ import (
 )
 
 const (
-	RequestsPerMinute = 100 // Simple limit - 100 requests per minute per IP
-	BurstSize         = 20  // Allow burst of 20 requests
+	RequestsPerMinute      = 100 // Simple limit - 100 requests per minute per IP
+	BurstSize              = 20  // Allow burst of 20 requests
+	WebSocketRateLimitWait = 2 * time.Second
 )
 
 // IPRateLimiter manages rate limiters per IP address for both HTTP and WebSocket
@@ -46,6 +48,33 @@ type IPRateLimiter struct {
 type rateLimiterEntry struct {
 	limiter  *rate.Limiter
 	lastSeen time.Time
+}
+
+func isRateLimitExemptHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func remoteRateLimitHost(remoteAddr string) (string, bool) {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+
+	if isRateLimitExemptHost(host) {
+		return host, true
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return host, false
+	}
+
+	return ip.String(), false
 }
 
 // NewIPRateLimiter creates a new IP-based rate limiter with the default
@@ -122,8 +151,12 @@ func (rl *IPRateLimiter) StartCleanup(ctx context.Context) {
 func HTTPRateLimitMiddleware(limiter *IPRateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := ParseRemoteIP(r.RemoteAddr)
-			host := ip.String()
+			host, exempt := remoteRateLimitHost(r.RemoteAddr)
+			if exempt {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			rl := limiter.GetLimiter(host)
 
 			if !rl.Allow() {
@@ -152,16 +185,33 @@ func WebSocketRateLimitHandler(
 	limiter *IPRateLimiter,
 	handler func(*melody.Session, []byte),
 ) func(*melody.Session, []byte) {
+	return WebSocketRateLimitHandlerWithWait(limiter, WebSocketRateLimitWait, handler)
+}
+
+func WebSocketRateLimitHandlerWithWait(
+	limiter *IPRateLimiter,
+	waitTimeout time.Duration,
+	handler func(*melody.Session, []byte),
+) func(*melody.Session, []byte) {
 	return func(session *melody.Session, msg []byte) {
-		ip := ParseRemoteIP(session.Request.RemoteAddr)
-		host := ip.String()
+		host, exempt := remoteRateLimitHost(session.Request.RemoteAddr)
+		if exempt {
+			handler(session, msg)
+			return
+		}
+
 		rl := limiter.GetLimiter(host)
 
-		if !rl.Allow() {
+		ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+		defer cancel()
+		waitTimeoutValue := waitTimeout
+		if err := rl.Wait(ctx); err != nil {
 			log.Warn().
+				Err(err).
 				Str("ip", host).
 				Int("msg_size", len(msg)).
-				Msg("WebSocket rate limit exceeded, closing connection")
+				Str("wait_timeout", waitTimeoutValue.String()).
+				Msg("WebSocket rate limit wait failed, closing connection")
 
 			if err := session.Close(); err != nil {
 				log.Debug().Err(err).Msg("failed to close rate-limited session")

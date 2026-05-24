@@ -592,7 +592,9 @@ func StartTracker(
 
 	log.Debug().Msg("loading initial core state")
 	tr.LoadCore()
-	if !activegame.ActiveGameEnabled() {
+	if activegame.ActiveGameEnabled() {
+		tr.loadGame()
+	} else {
 		setErr := activegame.SetActiveGame("")
 		if setErr != nil {
 			log.Error().Msgf("error setting active game: %s", setErr)

@@ -21,6 +21,25 @@ package mediadb
 
 import "strings"
 
+const browseNameSymbolBucket = "#"
+
+// BrowseNameFirstChar returns the indexed first-character bucket used by
+// media.browse letter filters.
+func BrowseNameFirstChar(name string) string {
+	if name == "" {
+		return browseNameSymbolBucket
+	}
+
+	first := strings.ToUpper(name[:1])
+	if first >= "A" && first <= "Z" {
+		return first
+	}
+	if first >= "0" && first <= "9" {
+		return "0-9"
+	}
+	return browseNameSymbolBucket
+}
+
 // BuildLetterFilterSQL constructs SQL WHERE clauses for filtering by the first
 // character of a column. Supports single letters (A-Z), "0-9" for numeric
 // starts, and "#" for symbols (non-alphanumeric).

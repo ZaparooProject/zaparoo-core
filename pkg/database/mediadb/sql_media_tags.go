@@ -34,13 +34,10 @@ func sqlFindMediaTag(ctx context.Context, db sqlQueryable, mediaTag database.Med
 	var row database.MediaTag
 	stmt, err := db.PrepareContext(ctx, `
 		select
-		DBID, MediaDBID, TagDBID
+		MediaDBID, TagDBID
 		from MediaTags
-		where DBID = ?
-		or (
-			MediaDBID = ?
-			and TagDBID = ?
-		)
+		where MediaDBID = ?
+		and TagDBID = ?
 		LIMIT 1;
 	`)
 	if err != nil {
@@ -52,11 +49,9 @@ func sqlFindMediaTag(ctx context.Context, db sqlQueryable, mediaTag database.Med
 		}
 	}()
 	err = stmt.QueryRowContext(ctx,
-		mediaTag.DBID,
 		mediaTag.MediaDBID,
 		mediaTag.TagDBID,
 	).Scan(
-		&row.DBID,
 		&row.MediaDBID,
 		&row.TagDBID,
 	)

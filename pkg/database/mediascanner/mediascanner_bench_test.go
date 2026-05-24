@@ -58,7 +58,7 @@ func BenchmarkGetPathFragments(b *testing.B) {
 				NoExt:    tc.name == "NoExt",
 			}
 			for b.Loop() {
-				GetPathFragments(params)
+				GetPathFragments(&params)
 			}
 		})
 	}
@@ -114,7 +114,7 @@ func BenchmarkGetPathFragments_Batch(b *testing.B) {
 			b.ResetTimer()
 			for b.Loop() {
 				for _, fn := range filenames {
-					GetPathFragments(PathFragmentParams{
+					GetPathFragments(&PathFragmentParams{
 						Config:   nil,
 						Path:     fn,
 						SystemID: "NES",
@@ -279,7 +279,7 @@ func BenchmarkAddMediaPath_MockDB(b *testing.B) {
 				ss := newScanState()
 				seedMockScanState(ss)
 				for i, fn := range filenames {
-					_, _, err := AddMediaPath(mockDB, ss, "nes", fn, false, false, nil, "")
+					_, _, err := AddMediaPath(mockDB, ss, "nes", fn, "", false, false, nil, "")
 					if i == 0 && err != nil {
 						b.Fatal(err)
 					}
@@ -315,7 +315,7 @@ func BenchmarkAddMediaPath_RealDB(b *testing.B) {
 				// Mid-system file-limit commits do not flush dedup maps;
 				// flushes only happen between systems (single-system bench).
 				for i, fn := range filenames {
-					_, _, err := AddMediaPath(db, ss, "nes", fn, false, false, nil, "")
+					_, _, err := AddMediaPath(db, ss, "nes", fn, "", false, false, nil, "")
 					if i == 0 && err != nil {
 						b.Fatal(err)
 					}
@@ -364,7 +364,7 @@ func BenchmarkIndexingPipeline_EndToEnd(b *testing.B) {
 							batchStarted = true
 						}
 
-						_, _, err := AddMediaPath(db, ss, sys, fn, false, false, nil, "")
+						_, _, err := AddMediaPath(db, ss, sys, fn, "", false, false, nil, "")
 						if filesInBatch == 0 && err != nil {
 							b.Fatal(err)
 						}
@@ -403,7 +403,7 @@ func BenchmarkGetPathFragments_PeakMemory(b *testing.B) {
 
 	results := make([]MediaPathFragments, len(filenames))
 	for i, fn := range filenames {
-		results[i] = GetPathFragments(PathFragmentParams{
+		results[i] = GetPathFragments(&PathFragmentParams{
 			Config:   nil,
 			Path:     fn,
 			SystemID: "NES",

@@ -271,10 +271,11 @@ func TestSqlInsertSystemWithPreparedStmt_Success(t *testing.T) {
 //   - One MediaTitle + one Media per system
 //   - MediaTags: NES media → Tag 1 ("Action") + Tag 2 ("RPG"); SNES media → Tag 1 ("Action") only
 //   - MediaTitleTags: NES mario title → Tag 2 ("RPG")
-//   - SupportingMedia: NES mario title → Tag 4 ("Cover")
+//   - MediaTitleProperties: NES mario title → Tag 4 ("Cover") as TypeTagDBID
+//   - MediaProperties: NES media (ROM-level) → Tag 4 ("Cover") as TypeTagDBID
 //
 // Tag 1 is shared by both systems; Tag 2 is NES-only (via MediaTags and MediaTitleTags);
-// Tag 3 is never referenced; Tag 4 is NES-only (via SupportingMedia).
+// Tag 3 is never referenced; Tag 4 is NES-only (via MediaTitleProperties and MediaProperties).
 // Returns the *sql.DB handle from the opened MediaDB so callers can run assertions.
 func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 	t.Helper()
@@ -307,8 +308,17 @@ func setupTruncateTestDB(t *testing.T) (*MediaDB, *sql.DB) {
 
 	coverPath := filepath.Join("roms", "nes", "mario.png")
 	_, err = db.ExecContext(ctx,
-		"INSERT INTO SupportingMedia (DBID, MediaTitleDBID, TypeTagDBID, Path, ContentType) VALUES (1, 1, 4, ?, ?)",
-		coverPath, "image/png")
+		"INSERT INTO MediaTitleProperties"+
+			" (DBID, MediaTitleDBID, TypeTagDBID, Text) VALUES (1, 1, 4, ?)",
+		coverPath)
+	require.NoError(t, err)
+
+	// ROM-level property on the NES media row — exercises MediaProperties cleanup.
+	videoPath := filepath.Join("roms", "nes", "mario.mp4")
+	_, err = db.ExecContext(ctx,
+		"INSERT INTO MediaProperties"+
+			" (DBID, MediaDBID, TypeTagDBID, Text) VALUES (1, 1, 4, ?)",
+		videoPath)
 	require.NoError(t, err)
 
 	return mediaDB, db
@@ -331,16 +341,20 @@ func TestSqlTruncateSystems_Success(t *testing.T) {
 	err := sqlTruncateSystems(ctx, db, []string{"NES", "SNES"})
 	require.NoError(t, err)
 
-	var systemCount, mediaCount, titleCount, tagCount int
+	var systemCount, mediaCount, titleCount, tagCount, propTitleCount, propMediaCount int
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Systems").Scan(&systemCount))
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Media").Scan(&mediaCount))
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaTitles").Scan(&titleCount))
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Tags").Scan(&tagCount))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaTitleProperties").Scan(&propTitleCount))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaProperties").Scan(&propMediaCount))
 	assert.Equal(t, 0, systemCount, "all systems should be deleted")
 	assert.Equal(t, 0, mediaCount, "all media should be deleted")
 	assert.Equal(t, 0, titleCount, "all media titles should be deleted")
 	// Tags 1, 2, 4 were referenced by deleted systems → now orphans → deleted. Tag 3 never referenced → kept.
 	assert.Equal(t, 1, tagCount, "only the unreferenced tag should remain")
+	assert.Equal(t, 0, propTitleCount, "all title-level properties should be deleted")
+	assert.Equal(t, 0, propMediaCount, "all ROM-level properties should be deleted")
 
 	// TagTypes must never be deleted
 	var typeCount int
@@ -367,7 +381,7 @@ func TestSqlTruncateSystems_SingleSystem(t *testing.T) {
 	assert.Equal(t, 1, snesCount, "SNES media should remain")
 
 	// Tag 2 ("RPG") was only referenced by NES (MediaTags + MediaTitleTags) → deleted as orphan.
-	// Tag 4 ("Cover") was only in SupportingMedia for NES → deleted as orphan.
+	// Tag 4 ("Cover") is seeded in both MediaTitleProperties and MediaProperties for NES → deleted as orphan.
 	// Tag 1 ("Action") is still referenced by SNES media → must survive.
 	// Tag 3 ("Extension") was never referenced → must survive.
 	var tag1, tag2, tag3, tag4 int
@@ -378,7 +392,19 @@ func TestSqlTruncateSystems_SingleSystem(t *testing.T) {
 	assert.Equal(t, 1, tag1, "shared tag (Action) must survive")
 	assert.Equal(t, 0, tag2, "NES-only tag (RPG) should be deleted")
 	assert.Equal(t, 1, tag3, "unreferenced tag (Extension) must survive")
-	assert.Equal(t, 0, tag4, "NES-only SupportingMedia tag (Cover) should be deleted")
+	// Tag 4 is referenced by both MediaTitleProperties and MediaProperties for NES → deleted as orphan.
+	assert.Equal(t, 0, tag4, "NES-only tag (Cover) should be deleted")
+
+	// ROM-level property on NES media should be removed; use a JOIN to count only
+	// NES-scoped rows so the assertion remains valid if SNES properties are added later.
+	var nesMediaPropCount int
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM MediaProperties
+		JOIN Media ON Media.DBID = MediaProperties.MediaDBID
+		JOIN Systems ON Systems.DBID = Media.SystemDBID
+		WHERE Systems.SystemID = 'NES'
+	`).Scan(&nesMediaPropCount))
+	assert.Equal(t, 0, nesMediaPropCount, "NES ROM-level properties should be deleted")
 }
 
 func TestSqlTruncateSystems_NonExistent(t *testing.T) {
@@ -557,7 +583,7 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 			AddRow("NES", "Mario", "/games/mario.nes", 1))
 
 	// Mock second query: get tags for the media items
-	mock.ExpectPrepare("SELECT MediaDBID.*Tag.*Type FROM").
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
 		WithArgs(1, 1).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
@@ -982,7 +1008,7 @@ func TestSqlSearchMediaBySlug_Success(t *testing.T) {
 			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1))
 
 	// Mock tags query (now always called even when no tag filters)
-	mock.ExpectPrepare("SELECT MediaDBID.*Tag.*Type FROM").
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
 		WithArgs(1, 1).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
@@ -1016,7 +1042,7 @@ func TestSqlSearchMediaBySlug_WithTags(t *testing.T) {
 			AddRow("snes", "Super Mario World", "/games/super-mario-world-usa.smc", 1))
 
 	// Mock tags query
-	mock.ExpectPrepare("SELECT MediaDBID.*Tag.*Type FROM").
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
 		WithArgs(1, 1).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
@@ -1059,7 +1085,7 @@ func TestSqlSearchMediaBySlug_MultipleResults(t *testing.T) {
 			AddRow("genesis", "Sonic the Hedgehog 2", "/games/sonic2.bin", 2))
 
 	// Mock tags query (now always called even when no tag filters)
-	mock.ExpectPrepare("SELECT MediaDBID.*Tag.*Type FROM").
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
 		WithArgs(1, 2, 1, 2).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
@@ -1103,7 +1129,7 @@ func TestSqlSearchMediaBySlug_LoadsTagsWithoutFilters(t *testing.T) {
 			AddRow("snes", "Super Mario World (Europe)", "/games/smw-eu.smc", 2))
 
 	// Mock tags query - returns tags for both ROMs
-	mock.ExpectPrepare("SELECT MediaDBID.*Tag.*Type FROM").
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
 		WithArgs(1, 2, 1, 2).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
@@ -1218,7 +1244,7 @@ func TestSqlSearchMediaBySlug_TagsQueryError(t *testing.T) {
 			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1))
 
 	// Mock tags query error
-	mock.ExpectPrepare("SELECT MediaDBID.*Tag.*Type FROM").
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
 		WithArgs(1, 1).
 		WillReturnError(sql.ErrTxDone)
@@ -1281,7 +1307,7 @@ func TestSqlSearchMediaBySlug_TagsScanError(t *testing.T) {
 			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1))
 
 	// Mock tags query with wrong column count (scan error)
-	mock.ExpectPrepare("SELECT MediaDBID.*Tag.*Type FROM").
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
 		WithArgs(1, 1).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}). // Missing Tag and Type
@@ -1339,12 +1365,12 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 
 	systemID := "nes"
 
-	rows := sqlmock.NewRows([]string{"DBID", "Path", "MediaTitleDBID", "SystemDBID", "Slug", "SystemID"}).
-		AddRow(int64(1), "/games/mario.nes", int64(10), int64(100), "supermariobros", "nes").
-		AddRow(int64(2), "/games/zelda.nes", int64(11), int64(100), "legendofzelda", "nes").
-		AddRow(int64(3), "/games/metroid.nes", int64(12), int64(100), "metroid", "nes")
+	rows := sqlmock.NewRows([]string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SystemDBID", "Slug", "SystemID"}).
+		AddRow(int64(1), "/games/mario.nes", "/games/", int64(10), int64(100), "supermariobros", "nes").
+		AddRow(int64(2), "/games/zelda.nes", "/games/", int64(11), int64(100), "legendofzelda", "nes").
+		AddRow(int64(3), "/games/metroid.nes", "/games/", int64(12), int64(100), "metroid", "nes")
 
-	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.MediaTitleDBID, m\.SystemDBID, ` +
+	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SystemDBID, ` +
 		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
 	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
@@ -1356,6 +1382,7 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 	// Check first result
 	assert.Equal(t, int64(1), results[0].DBID)
 	assert.Equal(t, "/games/mario.nes", results[0].Path)
+	assert.Equal(t, "/games/", results[0].ParentDir)
 	assert.Equal(t, int64(10), results[0].MediaTitleDBID)
 	assert.Equal(t, "supermariobros", results[0].TitleSlug)
 	assert.Equal(t, "nes", results[0].SystemID)
@@ -1381,9 +1408,9 @@ func TestSqlGetMediaBySystemID_EmptyResult(t *testing.T) {
 
 	systemID := "nonexistent"
 
-	rows := sqlmock.NewRows([]string{"DBID", "Path", "MediaTitleDBID", "SystemDBID", "Slug", "SystemID"})
+	rows := sqlmock.NewRows([]string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SystemDBID", "Slug", "SystemID"})
 
-	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.MediaTitleDBID, m\.SystemDBID, ` +
+	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SystemDBID, ` +
 		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
 	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
@@ -1402,7 +1429,7 @@ func TestSqlGetMediaBySystemID_QueryError(t *testing.T) {
 
 	systemID := "nes"
 
-	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.MediaTitleDBID, m\.SystemDBID, ` +
+	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SystemDBID, ` +
 		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
 	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnError(sql.ErrConnDone)
 
@@ -1426,7 +1453,7 @@ func TestSqlGetMediaBySystemID_ScanError(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"DBID", "Path"}).
 		AddRow(int64(1), "/games/mario.nes")
 
-	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.MediaTitleDBID, m\.SystemDBID, ` +
+	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SystemDBID, ` +
 		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
 	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
@@ -1579,7 +1606,7 @@ func TestSqlSearchMediaByTitleDBIDs_BasicLookup(t *testing.T) {
 			AddRow("NES", "Zelda", "/games/nes/zelda.nes", 200))
 
 	// Tag query (fetchAndAttachTags uses PrepareContext)
-	mock.ExpectPrepare("SELECT MediaDBID.*Tag.*Type FROM").
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
 		WithArgs(100, 200, 100, 200).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
@@ -1612,7 +1639,7 @@ func TestSqlSearchMediaByTitleDBIDs_WithCursor(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
 			AddRow("NES", "Zelda", "/games/nes/zelda.nes", 200))
 
-	mock.ExpectPrepare("SELECT MediaDBID.*Tag.*Type FROM").
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
 		WithArgs(200, 200).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
@@ -1636,7 +1663,7 @@ func TestSqlSearchMediaByTitleDBIDs_WithLetter(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
 			AddRow("NES", "Super Mario Bros", "/games/nes/smb.nes", 100))
 
-	mock.ExpectPrepare("SELECT MediaDBID.*Tag.*Type FROM").
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tag.*Type FROM").
 		ExpectQuery().
 		WithArgs(100, 100).
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
