@@ -375,10 +375,7 @@ func (r *Reader) Detect(connected []string) string {
 
 	switch r.mode {
 	case modeACR122Only:
-		// Auto-detect for ACR122 and other USB/PCSC devices
-		if !helpers.Contains(connected, autoConnStr) {
-			return autoConnStr
-		}
+		return detectACR122Readers(connected)
 	case modeLegacyUART:
 		// Only detect UART devices, return with legacy prefix
 		device := detectSerialReaders(connected)
@@ -398,10 +395,7 @@ func (r *Reader) Detect(connected []string) string {
 			return device
 		}
 
-		// Auto-detect for ACR122 and other USB/PCSC devices
-		if !helpers.Contains(connected, autoConnStr) {
-			return autoConnStr
-		}
+		return detectACR122Readers(connected)
 	}
 
 	return ""
@@ -652,6 +646,63 @@ func detectI2CReaders(connected []string) string {
 	return ""
 }
 
+func detectACR122Readers(connected []string) string {
+	devices, err := nfc.ListDevices()
+	if err != nil {
+		log.Trace().Err(err).Msg("error listing libnfc devices")
+		return fallbackAutoACR122(connected)
+	}
+
+	return detectACR122Device(connected, devices)
+}
+
+func detectACR122Device(connected, devices []string) string {
+	for _, device := range devices {
+		connStr := strings.TrimRight(device, "\x00")
+		if !isACR122ConnStr(connStr) {
+			continue
+		}
+
+		path := connectionPath(connStr)
+		if path == "" || isConnectedPath(connected, path) {
+			continue
+		}
+
+		log.Trace().Msgf("acr122 libnfc reader found: %s", connStr)
+		return connStr
+	}
+
+	return fallbackAutoACR122(connected)
+}
+
+func fallbackAutoACR122(connected []string) string {
+	if !helpers.Contains(connected, autoConnStr) {
+		return autoConnStr
+	}
+	return ""
+}
+
+func isACR122ConnStr(connStr string) bool {
+	return strings.HasPrefix(connStr, "acr122_usb:") || strings.HasPrefix(connStr, "acr122_pcsc:")
+}
+
+func connectionPath(connStr string) string {
+	parts := strings.SplitN(connStr, ":", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	return parts[1]
+}
+
+func isConnectedPath(connected []string, path string) bool {
+	for _, connStr := range connected {
+		if connectionPath(connStr) == path {
+			return true
+		}
+	}
+	return false
+}
+
 // toLibnfcConnStr translates internal normalized connection strings to the
 // format expected by libnfc. libnfc driver names use underscores
 // (e.g. "pn532_i2c", "pn532_uart") but ConnectionString() strips them for
@@ -665,6 +716,8 @@ func toLibnfcConnStr(mode readerMode, connStr string) string {
 	default:
 		connStr = strings.Replace(connStr, "pn532uart:", "pn532_uart:", 1)
 		connStr = strings.Replace(connStr, "pn532i2c:", "pn532_i2c:", 1)
+		connStr = strings.Replace(connStr, "acr122usb:", "acr122_usb:", 1)
+		connStr = strings.Replace(connStr, "acr122pcsc:", "acr122_pcsc:", 1)
 		return connStr
 	}
 }

@@ -479,6 +479,61 @@ func TestOpenConnectionStringTranslation(t *testing.T) {
 	}
 }
 
+func TestDetectACR122Device(t *testing.T) {
+	tests := []struct {
+		name      string
+		expected  string
+		devices   []string
+		connected []string
+	}{
+		{
+			name:     "returns first concrete acr122 usb device",
+			devices:  []string{"acr122_usb:003:004", "acr122_usb:003:005"},
+			expected: "acr122_usb:003:004",
+		},
+		{
+			name:      "skips connected path from libnfcacr122 driver",
+			devices:   []string{"acr122_usb:003:004", "acr122_usb:003:005"},
+			connected: []string{"libnfcacr122:003:004"},
+			expected:  "acr122_usb:003:005",
+		},
+		{
+			name:      "skips connected path from concrete driver",
+			devices:   []string{"acr122_usb:003:004", "acr122_usb:003:005"},
+			connected: []string{"acr122_usb:003:004"},
+			expected:  "acr122_usb:003:005",
+		},
+		{
+			name:     "ignores non acr122 devices",
+			devices:  []string{"pn532_uart:/dev/ttyUSB0", "acr122_pcsc:ACS ACR122U PICC Interface"},
+			expected: "acr122_pcsc:ACS ACR122U PICC Interface",
+		},
+		{
+			name:     "trims nul from libnfc connection strings",
+			devices:  []string{"acr122_usb:003:004\x00"},
+			expected: "acr122_usb:003:004",
+		},
+		{
+			name:     "falls back to libnfc auto when no acr122 devices found",
+			devices:  []string{"pn532_uart:/dev/ttyUSB0"},
+			expected: autoConnStr,
+		},
+		{
+			name:      "does not return auto fallback when auto already connected",
+			devices:   []string{"pn532_uart:/dev/ttyUSB0"},
+			connected: []string{autoConnStr},
+			expected:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := detectACR122Device(tt.connected, tt.devices)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 // TestToLibnfcConnStr verifies that internal connection strings are translated
 // to the libnfc format with underscored driver names (e.g. "pn532_i2c").
 // Regression test: libnfc requires underscores in driver names but the internal
@@ -533,6 +588,20 @@ func TestToLibnfcConnStr(t *testing.T) {
 			mode:     modeAll,
 			input:    "pn532uart:/dev/ttyUSB0",
 			expected: "pn532_uart:/dev/ttyUSB0",
+		},
+
+		// ACR122 device names
+		{
+			name:     "acr122 usb normalized driver",
+			mode:     modeACR122Only,
+			input:    "acr122usb:003:004",
+			expected: "acr122_usb:003:004",
+		},
+		{
+			name:     "acr122 pcsc normalized driver",
+			mode:     modeACR122Only,
+			input:    "acr122pcsc:ACS ACR122U PICC Interface",
+			expected: "acr122_pcsc:ACS ACR122U PICC Interface",
 		},
 
 		// Passthrough cases — strings that shouldn't be changed
@@ -624,6 +693,24 @@ func TestToLibnfcConnStrEndToEnd(t *testing.T) {
 				Path:   "/dev/ttyUSB0",
 			},
 			expected: "pn532_uart:/dev/ttyUSB0",
+		},
+		{
+			name: "acr122_usb config to libnfc",
+			mode: modeACR122Only,
+			device: config.ReadersConnect{
+				Driver: "acr122_usb",
+				Path:   "003:004",
+			},
+			expected: "acr122_usb:003:004",
+		},
+		{
+			name: "acr122_pcsc config to libnfc",
+			mode: modeACR122Only,
+			device: config.ReadersConnect{
+				Driver: "acr122_pcsc",
+				Path:   "ACS ACR122U PICC Interface",
+			},
+			expected: "acr122_pcsc:ACS ACR122U PICC Interface",
 		},
 	}
 
