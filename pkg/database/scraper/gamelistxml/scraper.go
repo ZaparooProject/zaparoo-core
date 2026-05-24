@@ -65,7 +65,10 @@ type GamelistRecord struct {
 // expected filename wins.
 var mediaDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageImage):      {"image", "images"},
-	string(tags.TagPropertyImageBoxart):     {"boxart", "boxart2d", "boxart3d", "boxart2dfront"},
+	string(tags.TagPropertyImageBoxart):     {"boxart", "boxart2d", "boxart2dfront"},
+	string(tags.TagPropertyImageBoxart3D):   {"boxart3d"},
+	string(tags.TagPropertyImageBoxartSide): {"boxart2dside"},
+	string(tags.TagPropertyImageBoxartBack): {"boxart2dback"},
 	string(tags.TagPropertyImageScreenshot): {"screenshot", "screenshots"},
 	string(tags.TagPropertyImageThumbnail):  {"thumbnail", "thumbnails", "supporttexture"},
 	string(tags.TagPropertyImageMarquee):    {"marquee", "marquees"},
@@ -632,11 +635,10 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	}
 
 	appendImageProp(tags.TagPropertyImageImage, game.Image)
-	boxartXML := game.Boxart2D
-	if boxartXML == "" {
-		boxartXML = game.Boxart3D
-	}
-	appendImageProp(tags.TagPropertyImageBoxart, boxartXML)
+	appendImageProp(tags.TagPropertyImageBoxart, game.Boxart2D)
+	appendImageProp(tags.TagPropertyImageBoxart3D, game.Boxart3D)
+	appendImageProp(tags.TagPropertyImageBoxartSide, "")
+	appendImageProp(tags.TagPropertyImageBoxartBack, "")
 	appendImageProp(tags.TagPropertyImageScreenshot, game.Screenshot)
 	// game.Thumbnail in most ES forks (RPI, Sky, Batocera, ES-DE) holds cover art.
 	// See esapi/gamelist.go for field-level fork documentation.

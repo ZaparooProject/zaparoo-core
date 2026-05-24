@@ -1509,7 +1509,10 @@ const (
 const (
 	TagPropertyDescription     TagValue = "description"      // Plain text description
 	TagPropertyImageImage      TagValue = "image-image"      // Generic image with no assumed context (filesystem path)
-	TagPropertyImageBoxart     TagValue = "image-boxart"     // Box art image (filesystem path)
+	TagPropertyImageBoxart     TagValue = "image-boxart"      // 2D front box art image (filesystem path)
+	TagPropertyImageBoxart3D   TagValue = "image-boxart3d"   // 3D box art render (filesystem path)
+	TagPropertyImageBoxartSide TagValue = "image-boxartside" // 2D side box art image (filesystem path)
+	TagPropertyImageBoxartBack TagValue = "image-boxartback" // 2D back box art image (filesystem path)
 	TagPropertyImageScreenshot TagValue = "image-screenshot" // Screenshot image (filesystem path)
 	// TagPropertyImageThumbnail maps to ES <thumbnail>, which in most ES forks
 	// (RPI, Sky, Batocera, ES-DE) stores cover art, not a screenshot.
