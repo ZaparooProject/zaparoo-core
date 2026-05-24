@@ -504,6 +504,12 @@ func TestDetectACR122Device(t *testing.T) {
 			expected:  "acr122_usb:003:005",
 		},
 		{
+			name:      "does not fall back when all concrete acr122 paths are connected",
+			devices:   []string{"acr122_usb:003:004", "acr122_usb:003:005"},
+			connected: []string{"acr122_usb:003:004", "acr122_usb:003:005"},
+			expected:  "",
+		},
+		{
 			name:     "ignores non acr122 devices",
 			devices:  []string{"pn532_uart:/dev/ttyUSB0", "acr122_pcsc:ACS ACR122U PICC Interface"},
 			expected: "acr122_pcsc:ACS ACR122U PICC Interface",
@@ -519,9 +525,9 @@ func TestDetectACR122Device(t *testing.T) {
 			expected: autoConnStr,
 		},
 		{
-			name:      "does not return auto fallback when auto already connected",
+			name:      "does not return auto fallback when auto reader path is connected",
 			devices:   []string{"pn532_uart:/dev/ttyUSB0"},
-			connected: []string{autoConnStr},
+			connected: []string{"libnfcacr122:"},
 			expected:  "",
 		},
 	}

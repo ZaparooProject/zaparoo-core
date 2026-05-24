@@ -657,11 +657,13 @@ func detectACR122Readers(connected []string) string {
 }
 
 func detectACR122Device(connected, devices []string) string {
+	foundACR122 := false
 	for _, device := range devices {
 		connStr := strings.TrimRight(device, "\x00")
 		if !isACR122ConnStr(connStr) {
 			continue
 		}
+		foundACR122 = true
 
 		path := connectionPath(connStr)
 		if path == "" || isConnectedPath(connected, path) {
@@ -672,14 +674,18 @@ func detectACR122Device(connected, devices []string) string {
 		return connStr
 	}
 
+	if foundACR122 {
+		return ""
+	}
+
 	return fallbackAutoACR122(connected)
 }
 
 func fallbackAutoACR122(connected []string) string {
-	if !helpers.Contains(connected, autoConnStr) {
-		return autoConnStr
+	if helpers.Contains(connected, autoConnStr) || isConnectedPath(connected, "") {
+		return ""
 	}
-	return ""
+	return autoConnStr
 }
 
 func isACR122ConnStr(connStr string) bool {
