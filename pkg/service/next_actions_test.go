@@ -95,6 +95,40 @@ func TestHandleNextActionPreflight_EvaluatesWritePayload(t *testing.T) {
 	assert.Equal(t, mediaPath, pending.Payload)
 }
 
+func TestHandleNextActionPreflight_RejectsEmptyWritePayload(t *testing.T) {
+	t.Parallel()
+
+	svc, _, _ := setupNextActionTestEnv(t)
+	parser := gozapscript.NewParser("**write:[[active_media.path]]")
+	script, err := parser.ParseScript()
+	require.NoError(t, err)
+	token := tokens.Token{UID: "source", Text: "**write:[[active_media.path]]", ScanTime: time.Now()}
+
+	result := handleNextActionPreflight(svc, &token, &script)
+
+	require.Equal(t, nextActionInvalid, result)
+	assert.Nil(t, svc.State.GetPendingWrite())
+}
+
+func TestHandleNextActionPreflight_RejectsBlockedWrite(t *testing.T) {
+	t.Parallel()
+
+	svc, _, cfg := setupNextActionTestEnv(t)
+	require.NoError(t, cfg.LoadTOML(`
+[zapscript]
+block_commands = ["write"]
+`))
+	parser := gozapscript.NewParser("**write:payload")
+	script, err := parser.ParseScript()
+	require.NoError(t, err)
+	token := tokens.Token{UID: "source", Text: "**write:payload", ScanTime: time.Now()}
+
+	result := handleNextActionPreflight(svc, &token, &script)
+
+	require.Equal(t, nextActionInvalid, result)
+	assert.Nil(t, svc.State.GetPendingWrite())
+}
+
 func TestHandleNextActionPreflight_ArmsLaunchOverride(t *testing.T) {
 	t.Parallel()
 
@@ -241,6 +275,27 @@ scan_feedback = true
 		TargetUID:  "target",
 		ExcludeUID: "source",
 	}).Return((*tokens.Token)(nil), assert.AnError).Once()
+	player := mocks.NewMockPlayer()
+	player.On("PlayBytes", assets.FailSound).Return(nil).Once()
+
+	consumed := handlePendingWrite(svc, target, player)
+
+	require.True(t, consumed)
+	assert.Nil(t, svc.State.GetPendingWrite())
+	player.AssertExpectations(t)
+}
+
+func TestHandlePendingWrite_NoWriterPlaysFailSoundAndClearsPending(t *testing.T) {
+	t.Parallel()
+
+	svc, _, _ := setupNextActionTestEnv(t)
+	require.NoError(t, svc.Config.LoadTOML(`
+[audio]
+scan_feedback = true
+`))
+	source := tokens.Token{UID: "source", Text: "**write:payload", ScanTime: time.Now(), ReaderID: "reader"}
+	target := &tokens.Token{UID: "target", Text: "old", ScanTime: time.Now(), ReaderID: "missing-reader"}
+	svc.State.SetPendingWrite(&state.PendingWrite{Payload: "payload", Source: source, CreatedAt: time.Now()})
 	player := mocks.NewMockPlayer()
 	player.On("PlayBytes", assets.FailSound).Return(nil).Once()
 
