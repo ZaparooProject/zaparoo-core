@@ -452,7 +452,7 @@ type LogDownloadResponse struct {
 	Size     int    `json:"size"`
 }
 
-type MediaTitleFromPathResponse struct {
+type MediaTitleParseResponse struct {
 	SecondarySlug *string `json:"secondarySlug,omitempty"`
 	Slug          string  `json:"slug"`
 	Name          string  `json:"name"`

@@ -33,7 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func makeTitleFromPathEnv(t *testing.T, systemID, path string) requests.RequestEnv {
+func makeTitleParseEnv(t *testing.T, systemID, path string) requests.RequestEnv {
 	t.Helper()
 	params, err := json.Marshal(map[string]string{
 		"systemId": systemID,
@@ -47,7 +47,7 @@ func makeTitleFromPathEnv(t *testing.T, systemID, path string) requests.RequestE
 	}
 }
 
-func TestHandleMediaTitleFromPath_InvalidParams(t *testing.T) {
+func TestHandleMediaTitleParse_InvalidParams(t *testing.T) {
 	t.Parallel()
 
 	nesPath := filepath.Join("roms", "nes", "game.nes")
@@ -97,23 +97,23 @@ func TestHandleMediaTitleFromPath_InvalidParams(t *testing.T) {
 				Config:  &config.Instance{},
 				Params:  tt.params,
 			}
-			_, err := HandleMediaTitleFromPath(env)
+			_, err := HandleMediaTitleParse(env)
 			require.Error(t, err)
 		})
 	}
 }
 
-func TestHandleMediaTitleFromPath_SimpleGame(t *testing.T) {
+func TestHandleMediaTitleParse_SimpleGame(t *testing.T) {
 	t.Parallel()
 
-	env := makeTitleFromPathEnv(t, "NES",
+	env := makeTitleParseEnv(t, "NES",
 		filepath.Join("roms", "nes", "Super Mario Bros.nes"),
 	)
 
-	result, err := HandleMediaTitleFromPath(env)
+	result, err := HandleMediaTitleParse(env)
 	require.NoError(t, err)
 
-	resp, ok := result.(models.MediaTitleFromPathResponse)
+	resp, ok := result.(models.MediaTitleParseResponse)
 	require.True(t, ok)
 	assert.Equal(t, "Super Mario Bros", resp.Name)
 	assert.NotEmpty(t, resp.Slug)
@@ -122,17 +122,17 @@ func TestHandleMediaTitleFromPath_SimpleGame(t *testing.T) {
 	assert.Positive(t, resp.SlugWordCount)
 }
 
-func TestHandleMediaTitleFromPath_TitleWithColonProducesSecondarySlug(t *testing.T) {
+func TestHandleMediaTitleParse_TitleWithColonProducesSecondarySlug(t *testing.T) {
 	t.Parallel()
 
-	env := makeTitleFromPathEnv(t, "NES",
+	env := makeTitleParseEnv(t, "NES",
 		filepath.Join("roms", "nes", "The Legend of Zelda: Links Awakening.nes"),
 	)
 
-	result, err := HandleMediaTitleFromPath(env)
+	result, err := HandleMediaTitleParse(env)
 	require.NoError(t, err)
 
-	resp, ok := result.(models.MediaTitleFromPathResponse)
+	resp, ok := result.(models.MediaTitleParseResponse)
 	require.True(t, ok)
 	assert.NotEmpty(t, resp.Name)
 	assert.NotEmpty(t, resp.Slug)
@@ -141,34 +141,34 @@ func TestHandleMediaTitleFromPath_TitleWithColonProducesSecondarySlug(t *testing
 	assert.Equal(t, utf8.RuneCountInString(resp.Slug), resp.SlugLength)
 }
 
-func TestHandleMediaTitleFromPath_TitleWithDashProducesSecondarySlug(t *testing.T) {
+func TestHandleMediaTitleParse_TitleWithDashProducesSecondarySlug(t *testing.T) {
 	t.Parallel()
 
-	env := makeTitleFromPathEnv(t, "SNES",
+	env := makeTitleParseEnv(t, "SNES",
 		filepath.Join("roms", "snes", "Donkey Kong Country - Tropical Freeze.sfc"),
 	)
 
-	result, err := HandleMediaTitleFromPath(env)
+	result, err := HandleMediaTitleParse(env)
 	require.NoError(t, err)
 
-	resp, ok := result.(models.MediaTitleFromPathResponse)
+	resp, ok := result.(models.MediaTitleParseResponse)
 	require.True(t, ok)
 	assert.NotEmpty(t, resp.Name)
 	require.NotNil(t, resp.SecondarySlug)
 	assert.NotEmpty(t, *resp.SecondarySlug)
 }
 
-func TestHandleMediaTitleFromPath_NoSubtitleHasNilSecondarySlug(t *testing.T) {
+func TestHandleMediaTitleParse_NoSubtitleHasNilSecondarySlug(t *testing.T) {
 	t.Parallel()
 
-	env := makeTitleFromPathEnv(t, "NES",
+	env := makeTitleParseEnv(t, "NES",
 		filepath.Join("roms", "nes", "Tetris.nes"),
 	)
 
-	result, err := HandleMediaTitleFromPath(env)
+	result, err := HandleMediaTitleParse(env)
 	require.NoError(t, err)
 
-	resp, ok := result.(models.MediaTitleFromPathResponse)
+	resp, ok := result.(models.MediaTitleParseResponse)
 	require.True(t, ok)
 	assert.Equal(t, "Tetris", resp.Name)
 	assert.Nil(t, resp.SecondarySlug)
@@ -176,23 +176,23 @@ func TestHandleMediaTitleFromPath_NoSubtitleHasNilSecondarySlug(t *testing.T) {
 	assert.Positive(t, resp.SlugWordCount)
 }
 
-func TestHandleMediaTitleFromPath_UnknownSystemFallsBack(t *testing.T) {
+func TestHandleMediaTitleParse_UnknownSystemFallsBack(t *testing.T) {
 	t.Parallel()
 
-	env := makeTitleFromPathEnv(t, "UNKNOWN_SYSTEM_XYZ",
+	env := makeTitleParseEnv(t, "UNKNOWN_SYSTEM_XYZ",
 		filepath.Join("roms", "misc", "Some Game.rom"),
 	)
 
-	result, err := HandleMediaTitleFromPath(env)
+	result, err := HandleMediaTitleParse(env)
 	require.NoError(t, err)
 
-	resp, ok := result.(models.MediaTitleFromPathResponse)
+	resp, ok := result.(models.MediaTitleParseResponse)
 	require.True(t, ok)
 	assert.Equal(t, "Some Game", resp.Name)
 	assert.NotEmpty(t, resp.Slug)
 }
 
-func TestHandleMediaTitleFromPath_SlugLengthMatchesRuneCount(t *testing.T) {
+func TestHandleMediaTitleParse_SlugLengthMatchesRuneCount(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -221,14 +221,14 @@ func TestHandleMediaTitleFromPath_SlugLengthMatchesRuneCount(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			env := makeTitleFromPathEnv(t, tt.systemID,
+			env := makeTitleParseEnv(t, tt.systemID,
 				filepath.Join("roms", tt.filename),
 			)
 
-			result, err := HandleMediaTitleFromPath(env)
+			result, err := HandleMediaTitleParse(env)
 			require.NoError(t, err)
 
-			resp, ok := result.(models.MediaTitleFromPathResponse)
+			resp, ok := result.(models.MediaTitleParseResponse)
 			require.True(t, ok)
 			assert.Equal(t, utf8.RuneCountInString(resp.Slug), resp.SlugLength,
 				"SlugLength must equal rune count of Slug")
@@ -237,17 +237,17 @@ func TestHandleMediaTitleFromPath_SlugLengthMatchesRuneCount(t *testing.T) {
 	}
 }
 
-func TestHandleMediaTitleFromPath_ResponseType(t *testing.T) {
+func TestHandleMediaTitleParse_ResponseType(t *testing.T) {
 	t.Parallel()
 
-	env := makeTitleFromPathEnv(t, "NES",
+	env := makeTitleParseEnv(t, "NES",
 		filepath.Join("roms", "nes", "Castlevania.nes"),
 	)
 
-	result, err := HandleMediaTitleFromPath(env)
+	result, err := HandleMediaTitleParse(env)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	_, ok := result.(models.MediaTitleFromPathResponse)
-	require.True(t, ok, "result must be MediaTitleFromPathResponse")
+	_, ok := result.(models.MediaTitleParseResponse)
+	require.True(t, ok, "result must be MediaTitleParseResponse")
 }

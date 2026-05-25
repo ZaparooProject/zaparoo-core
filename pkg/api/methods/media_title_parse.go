@@ -29,13 +29,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
-// HandleMediaTitleFromPath computes a MediaTitle from a system ID and path
+// HandleMediaTitleParse computes a MediaTitle from a system ID and path
 // without touching the filesystem or database. Used to preview the title
 // parsing and slug generation that the media scanner would produce.
-func HandleMediaTitleFromPath(
+func HandleMediaTitleParse(
 	env requests.RequestEnv, //nolint:gocritic // single-use parameter in API handler
 ) (any, error) {
-	var params models.MediaTitleFromPathParams
+	var params models.MediaTitleParseParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
@@ -62,7 +62,7 @@ func HandleMediaTitleFromPath(
 		secondarySlug = &s
 	}
 
-	return models.MediaTitleFromPathResponse{
+	return models.MediaTitleParseResponse{
 		Slug:          pf.Slug,
 		Name:          pf.Title,
 		SecondarySlug: secondarySlug,
