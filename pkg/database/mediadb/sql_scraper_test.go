@@ -1072,7 +1072,36 @@ func TestUpsertMediaProperties_WithBlob(t *testing.T) {
 	require.NotNil(t, got[0].BlobDBID, "BlobDBID must be set after upsert with blob")
 	assert.Equal(t, blobDBID, *got[0].BlobDBID)
 	assert.Equal(t, "image/jpeg", got[0].ContentType)
+	assert.Equal(t, int64(len(data)), got[0].BlobSize)
 	assert.Equal(t, data, got[0].Binary)
+}
+
+func TestGetMediaProperties_OversizedBlobOmitsBinary(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	blobDBID, err := mediaDB.UpsertMediaBlob(ctx, "image/png", []byte("small"))
+	require.NoError(t, err)
+	var largeSize int64 = database.MaxMediaPropertyBinaryBytes + 1
+	res, err := mediaDB.sql.ExecContext(ctx,
+		`UPDATE MediaBlobs SET Data = zeroblob(?) WHERE DBID = ?`, largeSize, blobDBID)
+	require.NoError(t, err)
+	rowsAffected, err := res.RowsAffected()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), rowsAffected)
+	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 1, []database.MediaProperty{
+		{TypeTag: "property:image-boxart", BlobDBID: &blobDBID},
+	}))
+
+	got, err := mediaDB.GetMediaProperties(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.NotNil(t, got[0].BlobDBID)
+	assert.Equal(t, blobDBID, *got[0].BlobDBID)
+	assert.Equal(t, largeSize, got[0].BlobSize)
+	assert.Nil(t, got[0].Binary)
 }
 
 func TestGetMediaTitleProperties_NoBlobIsNilBlobDBID(t *testing.T) {

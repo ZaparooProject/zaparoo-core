@@ -22,7 +22,9 @@ package methods
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -50,6 +52,16 @@ var imageTypeTags = map[string]string{
 	"map":        tags.PropertyTypeTag(tags.TagPropertyImageMap),
 	"marquee":    tags.PropertyTypeTag(tags.TagPropertyImageMarquee),
 	"fanart":     tags.PropertyTypeTag(tags.TagPropertyImageFanart),
+}
+
+type mediaBinaryTooLargeError struct {
+	path string
+	size int64
+	max  int64
+}
+
+func (e *mediaBinaryTooLargeError) Error() string {
+	return fmt.Sprintf("media binary %q is too large: %d bytes exceeds %d byte limit", e.path, e.size, e.max)
 }
 
 // resolveImageTypeTag converts a short image type name to the full property TypeTag.
@@ -176,6 +188,57 @@ func imagePrefs(topLevel, itemLevel []string) []string {
 	return defaultImageTypes
 }
 
+func readMediaBinaryFile(path string, maxBytes int64) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat media binary file %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("media binary file %q is not a regular file", path)
+	}
+	if info.Size() > maxBytes {
+		return nil, &mediaBinaryTooLargeError{path: path, size: info.Size(), max: maxBytes}
+	}
+
+	f, err := os.Open(path) // #nosec G304 -- path comes from indexed media metadata and is size-checked before read.
+	if err != nil {
+		return nil, fmt.Errorf("open media binary file %q: %w", path, err)
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Str("path", path).Msg("media.image: failed to close image file")
+		}
+	}()
+
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read media binary file %q: %w", path, err)
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, &mediaBinaryTooLargeError{path: path, size: int64(len(data)), max: maxBytes}
+	}
+	return data, nil
+}
+
+func mediaImageReadError(path string, err error) error {
+	var tooLarge *mediaBinaryTooLargeError
+	if errors.As(err, &tooLarge) {
+		return models.ClientErrf("media.image: image file too large: %s", tooLarge.Error())
+	}
+	return fmt.Errorf("media.image: read image file %q: %w", path, err)
+}
+
+func propertyBlobTooLarge(prop *database.MediaProperty) bool {
+	return prop.BlobDBID != nil && len(prop.Binary) == 0 && prop.BlobSize > database.MaxMediaPropertyBinaryBytes
+}
+
+func mediaImageBlobTooLargeError(prop *database.MediaProperty) error {
+	return models.ClientErrf(
+		"media.image: image blob too large for %s: %d bytes exceeds %d byte limit",
+		prop.TypeTag, prop.BlobSize, database.MaxMediaPropertyBinaryBytes,
+	)
+}
+
 func selectMediaImage(
 	ctx context.Context,
 	db database.MediaDBI,
@@ -220,14 +283,15 @@ func selectMediaImage(
 			}
 
 			binary := prop.Binary
+			if len(binary) == 0 && propertyBlobTooLarge(&prop) {
+				return models.MediaImageResponse{}, mediaImageBlobTooLargeError(&prop)
+			}
 			if len(binary) == 0 && prop.Text != "" {
 				var readErr error
-				binary, readErr = os.ReadFile(prop.Text)
+				binary, readErr = readMediaBinaryFile(prop.Text, database.MaxMediaPropertyBinaryBytes)
 				if readErr != nil {
-					if !os.IsNotExist(readErr) {
-						return models.MediaImageResponse{}, fmt.Errorf(
-							"media.image: read image file %q: %w", prop.Text, readErr,
-						)
+					if !errors.Is(readErr, os.ErrNotExist) {
+						return models.MediaImageResponse{}, mediaImageReadError(prop.Text, readErr)
 					}
 
 					// File is gone — remove the stale property.
@@ -252,13 +316,14 @@ func selectMediaImage(
 					}
 					prop = titleProp
 					binary = prop.Binary
+					if len(binary) == 0 && propertyBlobTooLarge(&prop) {
+						return models.MediaImageResponse{}, mediaImageBlobTooLargeError(&prop)
+					}
 					if len(binary) == 0 && prop.Text != "" {
-						binary, readErr = os.ReadFile(prop.Text)
+						binary, readErr = readMediaBinaryFile(prop.Text, database.MaxMediaPropertyBinaryBytes)
 						if readErr != nil {
-							if !os.IsNotExist(readErr) {
-								return models.MediaImageResponse{}, fmt.Errorf(
-									"media.image: read image file %q: %w", prop.Text, readErr,
-								)
+							if !errors.Is(readErr, os.ErrNotExist) {
+								return models.MediaImageResponse{}, mediaImageReadError(prop.Text, readErr)
 							}
 
 							delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID)

@@ -166,6 +166,11 @@ type TagType struct {
 	IsExclusive bool
 }
 
+// MaxMediaPropertyBinaryBytes caps decoded binary property payloads hydrated
+// into memory. Larger blobs remain addressable via BlobDBID/BlobSize but Binary
+// is left nil so API handlers can return a controlled error instead of OOMing.
+const MaxMediaPropertyBinaryBytes = 16 * 1024 * 1024
+
 // MediaProperty is a static content property attached to a MediaTitle or Media
 // record. Properties are fetched for display, not filtered by value.
 //
@@ -174,8 +179,8 @@ type TagType struct {
 // To associate binary data with a property, call UpsertMediaBlob first to obtain
 // a BlobDBID, then set that field before upserting the property.
 // For reads: TypeTag is populated from the joined Tags row; TypeTagDBID is also
-// set. ContentType and Binary are hydrated from the MediaBlobs JOIN and are
-// read-only — do not set them for writes.
+// set. ContentType, BlobSize, and Binary are hydrated from the MediaBlobs JOIN
+// and are read-only — do not set them for writes.
 type MediaProperty struct {
 	BlobDBID    *int64
 	TypeTag     string
@@ -183,6 +188,7 @@ type MediaProperty struct {
 	ContentType string
 	Binary      []byte
 	TypeTagDBID int64
+	BlobSize    int64
 }
 
 // MediaBlob is a row from the MediaBlobs content-addressed store.
@@ -737,14 +743,16 @@ type MediaDBI interface {
 	FindMediaTitleBySystemAndSlug(ctx context.Context, systemDBID int64, slug string) (*MediaTitle, error)
 
 	// GetMediaTitleProperties returns all properties for a MediaTitle row,
-	// with TypeTagDBID resolved to the tag value string.
+	// with TypeTagDBID resolved to the tag value string. Binary blobs are capped
+	// at MaxMediaPropertyBinaryBytes; larger blobs populate BlobSize but not Binary.
 	GetMediaTitleProperties(ctx context.Context, mediaTitleDBID int64) ([]MediaProperty, error)
 	GetMediaTitlePropertiesByMediaTitleDBIDs(
 		ctx context.Context, mediaTitleDBIDs []int64,
 	) (map[int64][]MediaProperty, error)
 
 	// GetMediaProperties returns all properties for a Media row,
-	// with TypeTagDBID resolved to the tag value string.
+	// with TypeTagDBID resolved to the tag value string. Binary blobs are capped
+	// at MaxMediaPropertyBinaryBytes; larger blobs populate BlobSize but not Binary.
 	GetMediaProperties(ctx context.Context, mediaDBID int64) ([]MediaProperty, error)
 	GetMediaPropertiesByMediaDBIDs(ctx context.Context, mediaDBIDs []int64) (map[int64][]MediaProperty, error)
 
