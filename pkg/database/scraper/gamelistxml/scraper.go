@@ -65,7 +65,10 @@ type GamelistRecord struct {
 // expected filename wins.
 var mediaDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageImage):      {"image", "images"},
-	string(tags.TagPropertyImageBoxart):     {"boxart", "boxart2d", "boxart3d", "boxart2dfront"},
+	string(tags.TagPropertyImageBoxart):     {"boxart", "boxart2d", "boxart2dfront"},
+	string(tags.TagPropertyImageBoxart3D):   {"boxart3d"},
+	string(tags.TagPropertyImageBoxartSide): {"boxart2dside"},
+	string(tags.TagPropertyImageBoxartBack): {"boxart2dback"},
 	string(tags.TagPropertyImageScreenshot): {"screenshot", "screenshots"},
 	string(tags.TagPropertyImageThumbnail):  {"thumbnail", "thumbnails", "supporttexture"},
 	string(tags.TagPropertyImageMarquee):    {"marquee", "marquees"},
@@ -319,6 +322,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		case ch <- scraper.ScrapeUpdate{SystemID: system.ID, Total: 0}:
 		}
 
+		// Process ZaparooCompanion parent/child entries before regular slug scrape.
+		g.processCompanionEntries(ctx, system, mdb)
+
 		// Build slug → MediaTitle map: only unscraped titles unless Force.
 		titlesBySlug := make(map[string]database.MediaTitle)
 		if opts.Force {
@@ -546,6 +552,11 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	game.TitleShot = cleanField(game.TitleShot)
 	game.Map = cleanField(game.Map)
 	game.Manual = cleanField(game.Manual)
+	game.Screenshot = cleanField(game.Screenshot)
+	game.TitleScreen = cleanField(game.TitleScreen)
+	game.Boxart2D = cleanField(game.Boxart2D)
+	game.Boxart3D = cleanField(game.Boxart3D)
+	game.Logo = cleanField(game.Logo)
 
 	// --- MediaTitleTags: title-level, shared across all ROMs ---
 
@@ -624,16 +635,26 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	}
 
 	appendImageProp(tags.TagPropertyImageImage, game.Image)
-	// image-boxart and image-screenshot have no ES XML fields; filesystem-only.
-	appendImageProp(tags.TagPropertyImageBoxart, "")
-	appendImageProp(tags.TagPropertyImageScreenshot, "")
+	appendImageProp(tags.TagPropertyImageBoxart, game.Boxart2D)
+	appendImageProp(tags.TagPropertyImageBoxart3D, game.Boxart3D)
+	appendImageProp(tags.TagPropertyImageBoxartSide, "")
+	appendImageProp(tags.TagPropertyImageBoxartBack, "")
+	appendImageProp(tags.TagPropertyImageScreenshot, game.Screenshot)
 	// game.Thumbnail in most ES forks (RPI, Sky, Batocera, ES-DE) holds cover art.
 	// See esapi/gamelist.go for field-level fork documentation.
 	appendImageProp(tags.TagPropertyImageThumbnail, game.Thumbnail)
 	appendImageProp(tags.TagPropertyImageMarquee, game.Marquee)
-	appendImageProp(tags.TagPropertyImageWheel, game.Wheel)
+	wheelXML := game.Logo
+	if wheelXML == "" {
+		wheelXML = game.Wheel
+	}
+	appendImageProp(tags.TagPropertyImageWheel, wheelXML)
 	appendImageProp(tags.TagPropertyImageFanart, game.FanArt)
-	appendImageProp(tags.TagPropertyImageTitleshot, game.TitleShot)
+	titleshotXML := game.TitleScreen
+	if titleshotXML == "" {
+		titleshotXML = game.TitleShot
+	}
+	appendImageProp(tags.TagPropertyImageTitleshot, titleshotXML)
 	appendImageProp(tags.TagPropertyImageMap, game.Map)
 
 	if p := pathProp(propType+":"+string(tags.TagPropertyVideo), game.Video, root); p != nil {
@@ -895,6 +916,290 @@ func readGameListXMLFS(fs afero.Fs, path string) (*esapi.GameList, error) {
 		return nil, fmt.Errorf("parse gamelist XML %q: %w", path, err)
 	}
 	return &gameList, nil
+}
+
+// companionSource is the XML source attribute value that marks ZaparooCompanion entries.
+const companionSource = "ZaparooCompanion"
+
+// companionParent holds a ZaparooCompanion parent meta record parsed from a gamelist.xml.
+// Parent records carry full metadata but no ROM path; they represent the canonical game
+// title shared by multiple regional ROM releases.
+type companionParent struct {
+	AvailableMediaDirs map[string]string
+	SystemRootPath     string
+	GameID             string
+	Game               esapi.Game
+}
+
+// companionChild holds a ZaparooCompanion ROM child record parsed from a gamelist.xml.
+// Child records carry only a path and optional region/lang; their metadata is inherited
+// from the parent via the parentid → id link.
+type companionChild struct {
+	ResolvedPath string
+	ParentGameID string // value of the XML parentid attribute
+	Region       string
+	Lang         string
+}
+
+// loadCompanionEntries scans all gamelist.xml files for the system and separates
+// entries with source="ZaparooCompanion" into parent records (id attr, no path) and
+// child records (parentid attr, has path).
+func (g *GamelistXMLScraper) loadCompanionEntries(
+	ctx context.Context,
+	system scraper.ScrapeSystem,
+) (parents []companionParent, children []companionChild) {
+	for _, rootPath := range system.ROMPaths {
+		select {
+		case <-ctx.Done():
+			return parents, children
+		default:
+		}
+
+		gamelistPath := filepath.Join(rootPath, "gamelist.xml")
+		exists, statErr := afero.Exists(g.filesystem(), gamelistPath)
+		if statErr != nil || !exists {
+			continue
+		}
+
+		gl, err := readGameListXMLFS(g.filesystem(), gamelistPath)
+		if err != nil {
+			log.Warn().Err(err).Str("path", gamelistPath).
+				Msg("gamelistxml: companion: failed to read gamelist.xml")
+			continue
+		}
+
+		availableMediaDirs := statMediaDirsFS(g.filesystem(), rootPath)
+
+		for i := range gl.Games {
+			select {
+			case <-ctx.Done():
+				return parents, children
+			default:
+			}
+			game := gl.Games[i]
+			if game.Source != companionSource && game.SourceAttr != companionSource {
+				log.Debug().Str("source", game.Source).Msg("source not companion")
+				continue
+			}
+			switch {
+			case game.ScreenScraperIDAttr != "" && game.Path == "":
+				log.Debug().
+					Str("gameID", game.ScreenScraperIDAttr).
+					Str("name", game.Name).
+					Str("gamelist", gamelistPath).
+					Msg("gamelistxml: companion: found parent entry")
+				parents = append(parents, companionParent{
+					Game:               game,
+					SystemRootPath:     rootPath,
+					AvailableMediaDirs: availableMediaDirs,
+					GameID:             game.ScreenScraperIDAttr,
+				})
+			case game.ParentIDAttr != "" && game.Path != "":
+				resolved := resolveESPath(game.Path, rootPath)
+				if resolved == "" {
+					log.Debug().
+						Str("path", game.Path).
+						Str("parentID", game.ParentIDAttr).
+						Str("gamelist", gamelistPath).
+						Msg("gamelistxml: companion: child path failed to resolve, skipping")
+					continue
+				}
+				log.Debug().
+					Str("parentID", game.ParentIDAttr).
+					Str("resolvedPath", resolved).
+					Str("region", game.Region).
+					Str("lang", game.Lang).
+					Msg("gamelistxml: companion: found child entry")
+				children = append(children, companionChild{
+					ResolvedPath: resolved,
+					ParentGameID: game.ParentIDAttr,
+					Region:       cleanField(game.Region),
+					Lang:         cleanField(game.Lang),
+				})
+			default:
+				log.Debug().
+					Str("gameID", game.ScreenScraperIDAttr).
+					Str("parentID", game.ParentIDAttr).
+					Str("path", game.Path).
+					Str("name", game.Name).
+					Msg("gamelistxml: companion: entry skipped (no id+empty-path or parentid+path)")
+			}
+		}
+	}
+	return parents, children
+}
+
+// mapCompanionParentToResult builds the tag and property writes for a companion parent
+// record. MapToDB is safe with an empty Game.Path; the stem becomes "." which is
+// rejected by findMediaFilePropFS, so filesystem fallbacks are skipped cleanly.
+func (g *GamelistXMLScraper) mapCompanionParentToResult(p *companionParent) scraper.MapResult {
+	return g.MapToDB(&GamelistRecord{
+		SystemRootPath:     p.SystemRootPath,
+		AvailableMediaDirs: p.AvailableMediaDirs,
+		Game:               p.Game,
+	})
+}
+
+// processCompanionEntries handles ZaparooCompanion-sourced entries in gamelist.xml.
+//
+// Phase 1 — parent metadata map: entries with an id attribute and no path are mapped
+// to their tags and properties using MapToDB. No new MediaTitle rows are created.
+//
+// Phase 2 — child enrichment: entries with a parentid attribute and a path are resolved
+// to their indexed Media row. The parent's metadata (tags + properties) is upserted
+// onto the child's existing MediaTitle. Optional region and lang tags are also written
+// to the child Media row.
+func (g *GamelistXMLScraper) processCompanionEntries(
+	ctx context.Context,
+	system scraper.ScrapeSystem,
+	mdb database.MediaDBI,
+) {
+	parents, children := g.loadCompanionEntries(ctx, system)
+	if len(parents) == 0 && len(children) == 0 {
+		log.Debug().Msg("gamelistxml: companion entries not found")
+		return
+	}
+
+	log.Info().
+		Str("system", system.ID).
+		Int("parents", len(parents)).
+		Int("children", len(children)).
+		Msg("gamelistxml: companion: processing entries")
+
+	// Phase 1: map each parent record to its tag+property writes.
+	parentMeta := make(map[string]scraper.MapResult, len(parents))
+	for i := range parents {
+		p := &parents[i]
+		parentMeta[p.GameID] = g.mapCompanionParentToResult(p)
+		log.Debug().
+			Str("gameID", p.GameID).
+			Str("name", p.Game.Name).
+			Int("tags", len(parentMeta[p.GameID].TitleTags)).
+			Int("props", len(parentMeta[p.GameID].TitleProps)).
+			Msg("gamelistxml: companion: parent mapped")
+	}
+
+	// Phase 2: enrich each child's existing MediaTitle with parent metadata.
+	// Child paths are root-relative (./file.rom) so match by filename suffix.
+	seenTitles := make(map[int64]bool)
+	for _, c := range children {
+		meta, ok := parentMeta[c.ParentGameID]
+		if !ok {
+			log.Debug().Str("parentGameID", c.ParentGameID).
+				Msg("gamelistxml: companion: parent not found for child, skipping")
+			continue
+		}
+
+		filename := filepath.Base(c.ResolvedPath)
+
+		if filepath.Ext(filename) == ".slug" {
+			slug := strings.TrimSuffix(filename, ".slug")
+			title, titleErr := mdb.FindMediaTitleBySystemAndSlug(ctx, system.DBID, slug)
+			if titleErr != nil {
+				log.Debug().Err(titleErr).Str("slug", slug).
+					Msg("gamelistxml: companion: error looking up child title by slug")
+				continue
+			}
+			if title == nil {
+				log.Debug().Str("slug", slug).
+					Msg("gamelistxml: companion: no indexed title found for child slug, skipping")
+				continue
+			}
+			if !seenTitles[title.DBID] {
+				titleSuccess := true
+				if len(meta.TitleTags) > 0 {
+					if tagsErr := mdb.UpsertMediaTitleTags(ctx, title.DBID, meta.TitleTags); tagsErr != nil {
+						log.Warn().Err(tagsErr).Int64("mediaTitleDBID", title.DBID).
+							Msg("gamelistxml: companion: upsert parent tags on slug-matched title failed")
+						titleSuccess = false
+					}
+				}
+				if len(meta.TitleProps) > 0 {
+					if propsErr := mdb.UpsertMediaTitleProperties(ctx, title.DBID, meta.TitleProps); propsErr != nil {
+						log.Warn().Err(propsErr).Int64("mediaTitleDBID", title.DBID).
+							Msg("gamelistxml: companion: upsert parent props on slug-matched title failed")
+						titleSuccess = false
+					}
+				}
+				if titleSuccess {
+					seenTitles[title.DBID] = true
+				}
+			} else {
+				log.Debug().Int64("mediaTitleDBID", title.DBID).
+					Msg("gamelistxml: companion: slug-matched title already enriched, skipping")
+			}
+			continue
+		}
+
+		matched, mediaErr := mdb.FindMediaBySystemAndPathSuffix(ctx, system.DBID, filename)
+		if mediaErr != nil {
+			log.Debug().Err(mediaErr).Str("filename", filename).
+				Msg("gamelistxml: companion: error looking up child by filename")
+			continue
+		}
+		if len(matched) == 0 {
+			log.Debug().Str("filename", filename).
+				Msg("gamelistxml: companion: no indexed media found for child filename, skipping")
+			continue
+		}
+		log.Debug().
+			Str("filename", filename).
+			Int("matches", len(matched)).
+			Msg("gamelistxml: companion: child filename matches")
+
+		var childTags []database.TagInfo
+		if c.Region != "" {
+			childTags = append(childTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: c.Region})
+		}
+		if c.Lang != "" {
+			childTags = append(childTags, database.TagInfo{Type: string(tags.TagTypeLang), Tag: c.Lang})
+		}
+
+		for _, media := range matched {
+			log.Debug().
+				Str("path", media.Path).
+				Int64("mediaDBID", media.DBID).
+				Int64("mediaTitleDBID", media.MediaTitleDBID).
+				Msg("gamelistxml: companion: enriching child media title with parent metadata")
+
+			if !seenTitles[media.MediaTitleDBID] {
+				titleSuccess := true
+				if len(meta.TitleTags) > 0 {
+					if tagsErr := mdb.UpsertMediaTitleTags(ctx, media.MediaTitleDBID, meta.TitleTags); tagsErr != nil {
+						log.Warn().Err(tagsErr).Int64("mediaTitleDBID", media.MediaTitleDBID).
+							Msg("gamelistxml: companion: upsert parent tags on child title failed")
+						titleSuccess = false
+					}
+				}
+				if len(meta.TitleProps) > 0 {
+					propsErr := mdb.UpsertMediaTitleProperties(ctx, media.MediaTitleDBID, meta.TitleProps)
+					if propsErr != nil {
+						log.Warn().Err(propsErr).Int64("mediaTitleDBID", media.MediaTitleDBID).
+							Msg("gamelistxml: companion: upsert parent props on child title failed")
+						titleSuccess = false
+					}
+				}
+				if titleSuccess {
+					seenTitles[media.MediaTitleDBID] = true
+				}
+			} else {
+				log.Debug().Int64("mediaTitleDBID", media.MediaTitleDBID).
+					Msg("gamelistxml: companion: title already enriched, skipping")
+			}
+
+			if len(childTags) > 0 {
+				log.Debug().
+					Int64("mediaDBID", media.DBID).
+					Str("region", c.Region).
+					Str("lang", c.Lang).
+					Msg("gamelistxml: companion: writing child region/lang tags")
+				if tagsErr := mdb.UpsertMediaTags(ctx, media.DBID, childTags); tagsErr != nil {
+					log.Warn().Err(tagsErr).Int64("mediaDBID", media.DBID).
+						Msg("gamelistxml: companion: upsert child tags failed")
+				}
+			}
+		}
+	}
 }
 
 // mimeFromExt returns a MIME type based on file extension.

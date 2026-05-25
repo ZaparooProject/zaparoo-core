@@ -690,6 +690,11 @@ type MediaDBI interface {
 	// directory names).
 	FindMediaBySystemAndPathFold(ctx context.Context, systemDBID int64, path string) (*Media, error)
 
+	// FindMediaBySystemAndPathSuffix returns all Media rows for the given system
+	// whose Path ends with "/" + filename. Used when companion XML child paths are
+	// root-relative (./file.rom) and the indexed path may be in any subdirectory.
+	FindMediaBySystemAndPathSuffix(ctx context.Context, systemDBID int64, filename string) ([]Media, error)
+
 	// MediaHasTag returns true when the Media row has a tag whose full string
 	// (type:value) equals tagValue.
 	MediaHasTag(ctx context.Context, mediaDBID int64, tagValue string) (bool, error)
@@ -726,6 +731,10 @@ type MediaDBI interface {
 	// FindMediaTitleByDBID returns the MediaTitle with the given DBID,
 	// or nil, nil when no row is found.
 	FindMediaTitleByDBID(ctx context.Context, dbid int64) (*MediaTitle, error)
+
+	// FindMediaTitleBySystemAndSlug returns the MediaTitle matching systemDBID and
+	// slug, or nil, nil when no row is found.
+	FindMediaTitleBySystemAndSlug(ctx context.Context, systemDBID int64, slug string) (*MediaTitle, error)
 
 	// GetMediaTitleProperties returns all properties for a MediaTitle row,
 	// with TypeTagDBID resolved to the tag value string.

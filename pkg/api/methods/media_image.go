@@ -33,11 +33,17 @@ import (
 )
 
 // defaultImageTypes is the preference order used when no imageTypes param is provided.
-var defaultImageTypes = []string{"image", "boxart", "screenshot", "wheel", "titleshot", "map", "marquee", "fanart"}
+var defaultImageTypes = []string{
+	"image", "boxart", "boxart3d", "screenshot", "wheel", "titleshot", "map",
+	"marquee", "fanart",
+}
 
 var imageTypeTags = map[string]string{
 	"image":      tags.PropertyTypeTag(tags.TagPropertyImageImage),
 	"boxart":     tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
+	"boxart3d":   tags.PropertyTypeTag(tags.TagPropertyImageBoxart3D),
+	"boxartside": tags.PropertyTypeTag(tags.TagPropertyImageBoxartSide),
+	"boxartback": tags.PropertyTypeTag(tags.TagPropertyImageBoxartBack),
 	"screenshot": tags.PropertyTypeTag(tags.TagPropertyImageScreenshot),
 	"wheel":      tags.PropertyTypeTag(tags.TagPropertyImageWheel),
 	"titleshot":  tags.PropertyTypeTag(tags.TagPropertyImageTitleshot),

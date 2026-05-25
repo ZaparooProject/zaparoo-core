@@ -163,6 +163,49 @@ func (db *MediaDB) FindMediaBySystemAndPathFold(
 	return &row, nil
 }
 
+// FindMediaBySystemAndPathSuffix returns all Media rows for the given system
+// whose Path ends with "/" + filename. LIKE wildcards in the filename are
+// escaped so a literal '%' or '_' in the name does not expand.
+func (db *MediaDB) FindMediaBySystemAndPathSuffix(
+	ctx context.Context, systemDBID int64, filename string,
+) ([]database.Media, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(filename)
+	pattern := "%/" + escaped
+	rows, err := db.sql.QueryContext(ctx, `
+		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
+		FROM Media
+		WHERE SystemDBID = ? AND Path LIKE ? ESCAPE '\'
+	`, systemDBID, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query FindMediaBySystemAndPathSuffix: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	var result []database.Media
+	for rows.Next() {
+		var row database.Media
+		if err := rows.Scan(
+			&row.DBID,
+			&row.MediaTitleDBID,
+			&row.SystemDBID,
+			&row.Path,
+			&row.ParentDir,
+			&row.IsMissing,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan FindMediaBySystemAndPathSuffix: %w", err)
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
 // MediaHasTag returns true when the given Media record has a tag matching the
 // "type:value" string tagValue. The string is split on the first colon: everything
 // before the colon is matched against TagTypes.Type, everything after is matched
@@ -855,6 +898,40 @@ func (db *MediaDB) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*datab
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan FindMediaTitleByDBID: %w", err)
+	}
+	return &t, nil
+}
+
+// FindMediaTitleBySystemAndSlug returns the MediaTitle matching systemDBID and
+// slug, or nil, nil when not found.
+func (db *MediaDB) FindMediaTitleBySystemAndSlug(
+	ctx context.Context, systemDBID int64, slug string,
+) (*database.MediaTitle, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	stmt, err := db.sql.PrepareContext(ctx, `
+		SELECT DBID, SystemDBID, Slug, Name
+		FROM MediaTitles
+		WHERE SystemDBID = ? AND Slug = ?
+		LIMIT 1
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare FindMediaTitleBySystemAndSlug: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	var t database.MediaTitle
+	err = stmt.QueryRowContext(ctx, systemDBID, slug).Scan(&t.DBID, &t.SystemDBID, &t.Slug, &t.Name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil //nolint:nilnil // sql.ErrNoRows means not found; nil result is the "not found" sentinel
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan FindMediaTitleBySystemAndSlug: %w", err)
 	}
 	return &t, nil
 }

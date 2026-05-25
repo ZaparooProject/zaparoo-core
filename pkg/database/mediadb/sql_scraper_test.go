@@ -146,6 +146,120 @@ func TestFindMediaBySystemAndPathFold_WrongSystem(t *testing.T) {
 	assert.Nil(t, m, "path exists but systemDBID doesn't match")
 }
 
+// --- FindMediaBySystemAndPathSuffix ---
+
+func TestFindMediaBySystemAndPathSuffix_Found(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	results, err := mediaDB.FindMediaBySystemAndPathSuffix(context.Background(), 1, "mario.nes")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, int64(1), results[0].DBID)
+	assert.Equal(t, filepath.ToSlash(filepath.Join("roms", "mario.nes")), results[0].Path)
+}
+
+func TestFindMediaBySystemAndPathSuffix_NotFound(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	results, err := mediaDB.FindMediaBySystemAndPathSuffix(context.Background(), 1, "nonexistent.nes")
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
+
+func TestFindMediaBySystemAndPathSuffix_WrongSystem(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	results, err := mediaDB.FindMediaBySystemAndPathSuffix(context.Background(), 99, "mario.nes")
+	require.NoError(t, err)
+	assert.Empty(t, results, "path exists but systemDBID doesn't match")
+}
+
+func TestFindMediaBySystemAndPathSuffix_MultipleMatches(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	deepPath := filepath.ToSlash(filepath.Join("roms", "sub", "mario.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'mario2', 'Mario 2');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, deepPath)
+	require.NoError(t, err)
+
+	results, err := mediaDB.FindMediaBySystemAndPathSuffix(ctx, 1, "mario.nes")
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+}
+
+func TestFindMediaBySystemAndPathSuffix_PartialFilenamNoMatch(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	// "ario.nes" is a suffix of "mario.nes" but not a full filename component.
+	// Pattern "%/ario.nes" must not match "roms/mario.nes".
+	results, err := mediaDB.FindMediaBySystemAndPathSuffix(context.Background(), 1, "ario.nes")
+	require.NoError(t, err)
+	assert.Empty(t, results, "partial filename must not match")
+}
+
+func TestFindMediaBySystemAndPathSuffix_PercentEscaped(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	specialPath := filepath.ToSlash(filepath.Join("roms", "100% game.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, '100pct', '100% Game');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, specialPath)
+	require.NoError(t, err)
+
+	// Querying the literal filename must match exactly — "%" must not act as LIKE wildcard.
+	results, err := mediaDB.FindMediaBySystemAndPathSuffix(ctx, 1, "100% game.nes")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, int64(2), results[0].DBID)
+
+	// A pattern that would only match if "%" were a wildcard must not return the row.
+	results, err = mediaDB.FindMediaBySystemAndPathSuffix(ctx, 1, "100.nes")
+	require.NoError(t, err)
+	assert.Empty(t, results, "unescaped %% would make this match; escaped it must not")
+}
+
+func TestFindMediaBySystemAndPathSuffix_UnderscoreEscaped(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	specialPath := filepath.ToSlash(filepath.Join("roms", "game_one.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'game-one', 'Game One');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, specialPath)
+	require.NoError(t, err)
+
+	// "gameXone.nes" would match if "_" were a LIKE wildcard; it must not.
+	results, err := mediaDB.FindMediaBySystemAndPathSuffix(ctx, 1, "gameXone.nes")
+	require.NoError(t, err)
+	assert.Empty(t, results, "unescaped _ would make this match; escaped it must not")
+
+	// The exact filename must match.
+	results, err = mediaDB.FindMediaBySystemAndPathSuffix(ctx, 1, "game_one.nes")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, int64(2), results[0].DBID)
+}
+
 // --- MediaHasTag ---
 
 func TestMediaHasTag_True(t *testing.T) {
@@ -761,6 +875,41 @@ func TestFindMediaTitleByDBID_NotFound(t *testing.T) {
 	defer cleanup()
 
 	title, err := mediaDB.FindMediaTitleByDBID(context.Background(), 999)
+	require.NoError(t, err)
+	assert.Nil(t, title)
+}
+
+// --- FindMediaTitleBySystemAndSlug ---
+
+func TestFindMediaTitleBySystemAndSlug_Found(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	title, err := mediaDB.FindMediaTitleBySystemAndSlug(context.Background(), 1, "mario")
+	require.NoError(t, err)
+	require.NotNil(t, title)
+	assert.Equal(t, "Mario", title.Name)
+	assert.Equal(t, "mario", title.Slug)
+	assert.Equal(t, int64(1), title.SystemDBID)
+}
+
+func TestFindMediaTitleBySystemAndSlug_NotFound(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	title, err := mediaDB.FindMediaTitleBySystemAndSlug(context.Background(), 1, "missing-game")
+	require.NoError(t, err)
+	assert.Nil(t, title)
+}
+
+func TestFindMediaTitleBySystemAndSlug_WrongSystem(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	title, err := mediaDB.FindMediaTitleBySystemAndSlug(context.Background(), 999, "mario")
 	require.NoError(t, err)
 	assert.Nil(t, title)
 }

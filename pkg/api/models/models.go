@@ -110,6 +110,7 @@ const (
 	MethodInputKeyboard        = "input.keyboard"
 	MethodInputGamepad         = "input.gamepad"
 	MethodScreenshot           = "screenshot"
+	MethodMediaTitleParse      = "media.title.parse"
 )
 
 // ResponseWithCallback wraps a method result with a function that should be
