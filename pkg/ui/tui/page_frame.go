@@ -263,7 +263,7 @@ func (pf *PageFrame) Focus(delegate func(p tview.Primitive)) {
 	if pf.content != nil {
 		delegate(pf.content)
 	} else if pf.buttonBar != nil {
-		delegate(pf.buttonBar.GetFirstButton())
+		delegate(pf.buttonBar)
 	}
 }
 

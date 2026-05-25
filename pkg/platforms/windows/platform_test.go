@@ -23,13 +23,17 @@ package windows
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -133,6 +137,55 @@ func TestStopActiveLauncher_CustomKill(t *testing.T) {
 			assert.Equal(t, tt.customKillCalled, killCalled, "custom Kill called mismatch")
 		})
 	}
+}
+
+func TestLaunchMedia_RetroBatStopsRunningGameBeforeLaunch(t *testing.T) {
+	mockES := helpers.NewMockESAPIServer(t)
+	rootDir := "C:" + string(os.PathSeparator)
+	mockES.WithRunningGame(&esapi.RunningGameResponse{
+		Path:       filepath.Join(rootDir, "RetroBat", "roms", "snes", "old-game.sfc"),
+		Name:       "Old Game",
+		SystemName: "snes",
+	})
+
+	oldDelay := retroBatLaunchSettleDelay
+	retroBatLaunchSettleDelay = time.Millisecond
+	t.Cleanup(func() {
+		retroBatLaunchSettleDelay = oldDelay
+	})
+
+	p := &Platform{}
+	var activeMedia *models.ActiveMedia
+	p.setActiveMedia = func(media *models.ActiveMedia) {
+		activeMedia = media
+	}
+
+	killCalled := false
+	p.setLastLauncher(&platforms.Launcher{
+		ID: "RetroBatSNES",
+		Kill: func(_ *config.Instance) error {
+			killCalled = true
+			return nil
+		},
+	})
+
+	launchCalled := false
+	launcher := &platforms.Launcher{
+		ID:       "RetroBatSNES",
+		SystemID: systemdefs.SystemSNES,
+		Launch: func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
+			launchCalled = true
+			return nil, nil //nolint:nilnil // test launcher does not return process handle
+		},
+	}
+
+	path := filepath.Join(rootDir, "RetroBat", "roms", "snes", "new-game.sfc")
+	err := p.LaunchMedia(&config.Instance{}, path, launcher, nil, nil)
+	require.NoError(t, err)
+
+	assert.True(t, killCalled, "running RetroBat game should be stopped before launching next game")
+	assert.True(t, launchCalled, "new RetroBat game should launch after preemption")
+	assert.NotNil(t, activeMedia, "active media should be set after launch")
 }
 
 func TestWindowsHasAllKodiLaunchers(t *testing.T) {

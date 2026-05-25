@@ -34,6 +34,8 @@ import (
 
 const apiURL = "http://localhost:1234"
 
+var ErrInvalidRunningGameResponse = errors.New("invalid running game response")
+
 func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
 	if timeout == 0 {
 		timeout = 30 * time.Second
@@ -122,7 +124,11 @@ func APINotify(msg string) error {
 	return nil
 }
 
-const noGameRunning = "{\"msg\":\"NO GAME RUNNING\"}"
+const noGameRunningMsg = "NO GAME RUNNING"
+
+type apiMessageResponse struct {
+	Msg string `json:"msg"`
+}
 
 type RunningGameResponse struct {
 	ID          string `json:"id"`
@@ -159,17 +165,37 @@ func APIRunningGame() (RunningGameResponse, bool, error) {
 		return RunningGameResponse{}, false, fmt.Errorf("failed to check running game: %w", err)
 	}
 
-	if string(resp) == noGameRunning {
+	return parseRunningGameResponse(resp)
+}
+
+func parseRunningGameResponse(resp []byte) (RunningGameResponse, bool, error) {
+	var msg apiMessageResponse
+	if err := json.Unmarshal(resp, &msg); err == nil && msg.Msg == noGameRunningMsg {
 		return RunningGameResponse{}, false, nil
 	}
 
 	var game RunningGameResponse
-	err = json.Unmarshal(resp, &game)
+	err := json.Unmarshal(resp, &game)
 	if err != nil {
-		return RunningGameResponse{}, false, fmt.Errorf("failed to unmarshal running game response: %w", err)
+		return RunningGameResponse{}, false, fmt.Errorf(
+			"%w: failed to unmarshal running game response: %w",
+			ErrInvalidRunningGameResponse,
+			err,
+		)
+	}
+	if !game.hasIdentity() {
+		return RunningGameResponse{}, false, fmt.Errorf(
+			"%w: running game response did not include game identity: %s",
+			ErrInvalidRunningGameResponse,
+			resp,
+		)
 	}
 
 	return game, true, nil
+}
+
+func (r *RunningGameResponse) hasIdentity() bool {
+	return r.ID != "" || r.Path != "" || r.Name != "" || r.SystemName != ""
 }
 
 // IsAvailable checks if the EmulationStation API server is running

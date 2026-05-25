@@ -374,6 +374,9 @@ func playPCMWithMalgo(ctx context.Context, samples [][2]float64, volume float64)
 	deviceConfig.Playback.Format = malgo.FormatF32
 	deviceConfig.Playback.Channels = 2
 	deviceConfig.SampleRate = targetSampleRate
+	// MiSTer has shown high CPU and core stutter when miniaudio uses ALSA mmap
+	// while other audio clients (for example mpg123 BGM) are active.
+	deviceConfig.Alsa.NoMMap = 1
 	// Larger period gives the audio thread headroom on CPU-constrained devices
 	// (e.g. MiSTer Cortex-A9 sharing CPU with a running core), where
 	// miniaudio's small default period underruns and produces audible crackle.
