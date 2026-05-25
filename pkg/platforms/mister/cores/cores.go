@@ -103,11 +103,11 @@ var Systems = map[string]Core{
 		RBF: "_Console/3DO",
 		Slots: []Slot{
 			{
-				Exts: []string{".iso", ".cue"},
+				Exts: []string{".iso", ".cue", ".chd"},
 				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
-					Index:  1,
+					Index:  0,
 				},
 			},
 		},

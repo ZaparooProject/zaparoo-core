@@ -263,11 +263,39 @@ func TestGenerateMgl(t *testing.T) {
 					},
 				},
 			},
-			path: "/media/fat/games/Saturn/America/NiGHTS into Dreams... (USA, Brazil).chd",
+			path: filepath.Join(
+				string(filepath.Separator),
+				"media", "fat", "games", "Saturn", "America", "NiGHTS into Dreams... (USA, Brazil).chd",
+			),
 			want: "<mistergamedescription>\n\t<rbf>_Console/Saturn</rbf>\n" +
 				"\t<file delay=\"2\" type=\"s\" index=\"0\" " +
 				"path=\"../../../../../media/fat/games/Saturn/America/" +
 				"NiGHTS into Dreams... (USA, Brazil).chd\"/>\n" +
+				"</mistergamedescription>",
+		},
+		{
+			name: "3DO CHD uses disk slot zero",
+			core: &cores.Core{
+				ID:  "3DO",
+				RBF: "_Console/3DO",
+				Slots: []cores.Slot{
+					{
+						Exts: []string{".iso", ".cue", ".chd"},
+						Mgl: &cores.MGLParams{
+							Delay:  1,
+							Method: "s",
+							Index:  0,
+						},
+					},
+				},
+			},
+			path: filepath.Join(
+				string(filepath.Separator),
+				"media", "fat", "games", "3DO", "The Need for Speed.chd",
+			),
+			want: "<mistergamedescription>\n\t<rbf>_Console/3DO</rbf>\n" +
+				"\t<file delay=\"1\" type=\"s\" index=\"0\" " +
+				"path=\"../../../../../media/fat/games/3DO/The Need for Speed.chd\"/>\n" +
 				"</mistergamedescription>",
 		},
 		{
