@@ -142,11 +142,11 @@ func TestHandleMediaMeta_BinaryPropertyMetadataOnly(t *testing.T) {
 	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(3)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(30)).Return([]database.TagInfo{}, nil)
-	mockDB.On("GetMediaProperties", mock.Anything, int64(3)).
+	mockDB.On("GetMediaPropertyMetadata", mock.Anything, int64(3)).
 		Return([]database.MediaProperty{
-			{TypeTag: "property:image", ContentType: "image/png", Binary: blobData, BlobSize: int64(len(blobData))},
+			{TypeTag: "property:image", ContentType: "image/png", BlobSize: int64(len(blobData))},
 		}, nil)
-	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(30)).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitlePropertyMetadata", mock.Anything, int64(30)).Return([]database.MediaProperty{}, nil)
 
 	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	result, err := HandleMediaMeta(env)
@@ -173,7 +173,7 @@ func TestHandleMediaMeta_OversizedBinaryPropertyMetadataOnly(t *testing.T) {
 	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(4)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(40)).Return([]database.TagInfo{}, nil)
-	mockDB.On("GetMediaProperties", mock.Anything, int64(4)).
+	mockDB.On("GetMediaPropertyMetadata", mock.Anything, int64(4)).
 		Return([]database.MediaProperty{
 			{
 				TypeTag:     "property:image",
@@ -182,7 +182,7 @@ func TestHandleMediaMeta_OversizedBinaryPropertyMetadataOnly(t *testing.T) {
 				BlobSize:    database.MaxMediaPropertyBinaryBytes + 1,
 			},
 		}, nil)
-	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(40)).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitlePropertyMetadata", mock.Anything, int64(40)).Return([]database.MediaProperty{}, nil)
 
 	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	result, err := HandleMediaMeta(env)

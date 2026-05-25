@@ -223,7 +223,7 @@ func TestHandleMediaImage_MediaNotFound(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestHandleMediaImage_BatchPathReturnsClientError(t *testing.T) {
+func TestHandleMediaImage_ItemsParamReturnsClientError(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
@@ -234,7 +234,7 @@ func TestHandleMediaImage_BatchPathReturnsClientError(t *testing.T) {
 	require.Error(t, err)
 	var clientErr *models.ClientError
 	require.ErrorAs(t, err, &clientErr)
-	assert.Contains(t, err.Error(), "batch requests are no longer supported")
+	assert.Contains(t, err.Error(), `unknown field "items"`)
 	mockDB.AssertExpectations(t)
 }
 
@@ -266,7 +266,7 @@ func TestHandleMediaImage_ImageTypeResolvesToImageImage(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestHandleMediaImage_BatchByMediaIDReturnsClientError(t *testing.T) {
+func TestHandleMediaImage_ItemsWithMediaIDReturnsClientError(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
@@ -278,7 +278,7 @@ func TestHandleMediaImage_BatchByMediaIDReturnsClientError(t *testing.T) {
 	require.Error(t, err)
 	var clientErr *models.ClientError
 	require.ErrorAs(t, err, &clientErr)
-	assert.Contains(t, err.Error(), "batch requests are no longer supported")
+	assert.Contains(t, err.Error(), `unknown field "items"`)
 	mockDB.AssertExpectations(t)
 }
 

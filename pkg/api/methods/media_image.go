@@ -20,12 +20,12 @@
 package methods
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 const (
@@ -93,27 +94,19 @@ func buildPropsMap(props []database.MediaProperty) map[string]database.MediaProp
 }
 
 // HandleMediaImage returns a single best-match image for a media record as a
-// base64-encoded blob. Batch image requests are intentionally unsupported; image
-// clients must request one bounded image per JSON-RPC call.
+// base64-encoded blob.
 func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
-	if mediaImageHasItems(env.Params) {
-		return nil, models.ClientErrf("media.image batch requests are no longer supported")
-	}
-
-	params, err := parseMediaRequest(env.Params, 1)
+	ref, err := parseMediaImageRequest(env.Params)
 	if err != nil {
 		return nil, err
 	}
-	if params.Batch {
-		return nil, models.ClientErrf("media.image batch requests are no longer supported")
-	}
 
 	maxBytes := mediaImageMaxBytes(env.Platform)
-	if params.Items[0].MediaID == nil {
-		return handleMediaImageSinglePath(&env, params.Items[0], maxBytes)
+	if ref.MediaID == nil {
+		return handleMediaImageSinglePath(&env, ref, maxBytes)
 	}
 
-	resolved, err := resolveMediaRefs(&env, params.Items)
+	resolved, err := resolveMediaRefs(&env, []mediaRefParam{ref})
 	if err != nil {
 		return nil, err
 	}
@@ -132,17 +125,24 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		return nil, fmt.Errorf("failed to get title property metadata: %w", err)
 	}
 
-	prefs := imagePrefs(params.ImageTypes, params.Items[0].ImageTypes)
-	return selectMediaImage(env.Context, db, row, mediaProps, titleProps, prefs, maxBytes)
+	prefs := imagePrefs(nil, ref.ImageTypes)
+	return selectMediaImage(env.Context, afero.NewOsFs(), db, row, mediaProps, titleProps, prefs, maxBytes)
 }
 
-func mediaImageHasItems(raw json.RawMessage) bool {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return false
+func parseMediaImageRequest(raw json.RawMessage) (mediaRefParam, error) {
+	var ref mediaRefParam
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&ref); err != nil {
+		return mediaRefParam{}, models.ClientErrf("invalid params: %w", err)
 	}
-	_, ok := fields["items"]
-	return ok
+	if err := validateMediaRef(ref); err != nil {
+		return mediaRefParam{}, models.ClientErrf("invalid params: %w", err)
+	}
+	if err := validateImageTypes(ref.ImageTypes); err != nil {
+		return mediaRefParam{}, models.ClientErrf("invalid params: %w", err)
+	}
+	return ref, nil
 }
 
 func handleMediaImageSinglePath(env *requests.RequestEnv, ref mediaRefParam, maxBytes int64) (any, error) {
@@ -161,7 +161,9 @@ func handleMediaImageSinglePath(env *requests.RequestEnv, ref mediaRefParam, max
 		return nil, fmt.Errorf("failed to get title property metadata: %w", err)
 	}
 
-	return selectMediaImage(env.Context, db, row, mediaProps, titleProps, imagePrefs(nil, ref.ImageTypes), maxBytes)
+	return selectMediaImage(
+		env.Context, afero.NewOsFs(), db, row, mediaProps, titleProps, imagePrefs(nil, ref.ImageTypes), maxBytes,
+	)
 }
 
 func imagePrefs(topLevel, itemLevel []string) []string {
@@ -174,8 +176,8 @@ func imagePrefs(topLevel, itemLevel []string) []string {
 	return defaultImageTypes
 }
 
-func readMediaBinaryFile(path string, maxBytes int64) ([]byte, error) {
-	info, err := os.Stat(path)
+func readMediaBinaryFile(fs afero.Fs, path string, maxBytes int64) ([]byte, error) {
+	info, err := fs.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("stat media binary file %q: %w", path, err)
 	}
@@ -186,17 +188,7 @@ func readMediaBinaryFile(path string, maxBytes int64) ([]byte, error) {
 		return nil, &mediaBinaryTooLargeError{path: path, size: info.Size(), max: maxBytes}
 	}
 
-	f, err := os.Open(path) // #nosec G304 -- path comes from indexed media metadata and is size-checked before read.
-	if err != nil {
-		return nil, fmt.Errorf("open media binary file %q: %w", path, err)
-	}
-	defer func() {
-		if closeErr := f.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Str("path", path).Msg("media.image: failed to close image file")
-		}
-	}()
-
-	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	data, err := afero.ReadFile(fs, path)
 	if err != nil {
 		return nil, fmt.Errorf("read media binary file %q: %w", path, err)
 	}
@@ -223,6 +215,7 @@ func mediaImageBlobTooLargeError(prop *database.MediaProperty, maxBytes int64) e
 
 func selectMediaImage(
 	ctx context.Context,
+	fs afero.Fs,
 	db database.MediaDBI,
 	row *database.MediaFullRow,
 	mediaProps []database.MediaProperty,
@@ -251,7 +244,7 @@ func selectMediaImage(
 				continue
 			}
 
-			image, stale, err := loadMediaImageProperty(ctx, db, row, &prop, src, typeTag, maxBytes)
+			image, stale, err := loadMediaImageProperty(ctx, fs, db, row, &prop, src, typeTag, maxBytes)
 			if stale {
 				delete(src.propMap, typeTag)
 				continue
@@ -272,6 +265,7 @@ func selectMediaImage(
 
 func loadMediaImageProperty(
 	ctx context.Context,
+	fs afero.Fs,
 	db database.MediaDBI,
 	row *database.MediaFullRow,
 	prop *database.MediaProperty,
@@ -297,14 +291,18 @@ func loadMediaImageProperty(
 		}
 		var err error
 		binary, contentType, err = db.GetMediaBlobDataCapped(ctx, *prop.BlobDBID, maxBytes)
+		if errors.Is(err, database.ErrMediaBlobTooLarge) {
+			return nil, false, mediaImageBlobTooLargeError(prop, maxBytes)
+		}
 		if err != nil {
 			return nil, false, fmt.Errorf("media.image: read image blob %d: %w", *prop.BlobDBID, err)
 		}
 		if len(binary) == 0 {
-			return nil, false, mediaImageBlobTooLargeError(prop, maxBytes)
+			deleteStaleMediaImageProperty(ctx, db, row, prop, src.isMedia, typeTag)
+			return nil, true, nil
 		}
 	case prop.Text != "":
-		data, stale, err := loadMediaImageFile(ctx, db, row, prop, src.isMedia, typeTag, maxBytes)
+		data, stale, err := loadMediaImageFile(ctx, fs, db, row, prop, src.isMedia, typeTag, maxBytes)
 		if stale || err != nil {
 			return nil, stale, err
 		}
@@ -323,6 +321,7 @@ func loadMediaImageProperty(
 
 func loadMediaImageFile(
 	ctx context.Context,
+	fs afero.Fs,
 	db database.MediaDBI,
 	row *database.MediaFullRow,
 	prop *database.MediaProperty,
@@ -330,7 +329,7 @@ func loadMediaImageFile(
 	typeTag string,
 	maxBytes int64,
 ) (data []byte, stale bool, err error) {
-	info, err := os.Stat(prop.Text)
+	info, err := fs.Stat(prop.Text)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			deleteStaleMediaImageProperty(ctx, db, row, prop, isMedia, typeTag)
@@ -349,7 +348,7 @@ func loadMediaImageFile(
 			max:  maxBytes,
 		})
 	}
-	data, readErr := readMediaBinaryFile(prop.Text, maxBytes)
+	data, readErr := readMediaBinaryFile(fs, prop.Text, maxBytes)
 	if readErr != nil {
 		if errors.Is(readErr, os.ErrNotExist) {
 			deleteStaleMediaImageProperty(ctx, db, row, prop, isMedia, typeTag)

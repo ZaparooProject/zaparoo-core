@@ -103,7 +103,7 @@ func TestLogSafeResponse(t *testing.T) {
 // an item count and never include per-item details.
 func TestLogSafeResponse_BatchRedaction(t *testing.T) {
 	const secretBlob = "AAAABASE64SECRETPAYLOAD=="
-	textValue := "ignored"
+	textValue := secretBlob
 	metaProp := models.MediaMetaPropertyItem{
 		Text:        textValue,
 		ContentType: "image/png",

@@ -1447,8 +1447,6 @@ An object identifying the media row by `mediaId` or `(system, path)`. Canonical 
 | imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
 Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
 
-Batch image requests are not supported. Request exactly one image per `media.image` call.
-
 #### Result
 
 | Key         | Type   | Required | Description                                  |

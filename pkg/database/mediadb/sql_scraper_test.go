@@ -1073,6 +1073,75 @@ func TestGetMediaTitlePropertyMetadata_WithBlobOmitsBinary(t *testing.T) {
 	assert.Nil(t, got[0].Binary)
 }
 
+func TestGetMediaPropertyMetadata_WithBlobOmitsBinary(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := []byte{0x89, 0x50, 0x4E, 0x47}
+	blobDBID, err := mediaDB.UpsertMediaBlob(ctx, "image/png", data)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 1, []database.MediaProperty{
+		{TypeTag: "property:image-boxart", BlobDBID: &blobDBID},
+	}))
+
+	got, err := mediaDB.GetMediaPropertyMetadata(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.NotNil(t, got[0].BlobDBID)
+	assert.Equal(t, blobDBID, *got[0].BlobDBID)
+	assert.Equal(t, int64(len(data)), got[0].BlobSize)
+	assert.Equal(t, "image/png", got[0].ContentType)
+	assert.Nil(t, got[0].Binary)
+}
+
+func TestGetMediaPropertyMetadataGrouped_WithBlobOmitsBinary(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := []byte{0x89, 0x50, 0x4E, 0x47}
+	blobDBID, err := mediaDB.UpsertMediaBlob(ctx, "image/png", data)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 1, []database.MediaProperty{
+		{TypeTag: "property:image-boxart", BlobDBID: &blobDBID},
+	}))
+
+	got, err := mediaDB.GetMediaPropertyMetadataByMediaDBIDs(ctx, []int64{1})
+	require.NoError(t, err)
+	require.Len(t, got[1], 1)
+	require.NotNil(t, got[1][0].BlobDBID)
+	assert.Equal(t, blobDBID, *got[1][0].BlobDBID)
+	assert.Equal(t, int64(len(data)), got[1][0].BlobSize)
+	assert.Equal(t, "image/png", got[1][0].ContentType)
+	assert.Nil(t, got[1][0].Binary)
+}
+
+func TestGetMediaTitlePropertyMetadataGrouped_WithBlobOmitsBinary(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	data := []byte{0x89, 0x50, 0x4E, 0x47}
+	blobDBID, err := mediaDB.UpsertMediaBlob(ctx, "image/png", data)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, 1, []database.MediaProperty{
+		{TypeTag: "property:image-boxart", BlobDBID: &blobDBID},
+	}))
+
+	got, err := mediaDB.GetMediaTitlePropertyMetadataByMediaTitleDBIDs(ctx, []int64{1})
+	require.NoError(t, err)
+	require.Len(t, got[1], 1)
+	require.NotNil(t, got[1][0].BlobDBID)
+	assert.Equal(t, blobDBID, *got[1][0].BlobDBID)
+	assert.Equal(t, int64(len(data)), got[1][0].BlobSize)
+	assert.Equal(t, "image/png", got[1][0].ContentType)
+	assert.Nil(t, got[1][0].Binary)
+}
+
 func TestUpsertMediaProperties_WithBlob(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)

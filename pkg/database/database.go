@@ -22,6 +22,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -170,6 +171,9 @@ type TagType struct {
 // into memory. Larger blobs remain addressable via BlobDBID/BlobSize but Binary
 // is left nil so API handlers can return a controlled error instead of OOMing.
 const MaxMediaPropertyBinaryBytes = 16 * 1024 * 1024
+
+// ErrMediaBlobTooLarge indicates a blob exists but exceeds a caller-provided read cap.
+var ErrMediaBlobTooLarge = errors.New("media blob too large")
 
 // MediaProperty is a static content property attached to a MediaTitle or Media
 // record. Properties are fetched for display, not filtered by value.

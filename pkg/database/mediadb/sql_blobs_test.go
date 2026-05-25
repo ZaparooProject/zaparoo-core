@@ -179,7 +179,7 @@ func TestGetMediaBlobDataCapped_FoundWithinCap(t *testing.T) {
 	assert.Equal(t, "image/png", contentType)
 }
 
-func TestGetMediaBlobDataCapped_OverCapReturnsNil(t *testing.T) {
+func TestGetMediaBlobDataCapped_OverCapReturnsError(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
@@ -189,6 +189,17 @@ func TestGetMediaBlobDataCapped_OverCapReturnsNil(t *testing.T) {
 	require.NoError(t, err)
 
 	got, contentType, err := mediaDB.GetMediaBlobDataCapped(ctx, dbid, 1)
+	require.ErrorIs(t, err, database.ErrMediaBlobTooLarge)
+	assert.Nil(t, got)
+	assert.Empty(t, contentType)
+}
+
+func TestGetMediaBlobDataCapped_NotFound(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	got, contentType, err := mediaDB.GetMediaBlobDataCapped(context.Background(), 9999, 1)
 	require.NoError(t, err)
 	assert.Nil(t, got)
 	assert.Empty(t, contentType)

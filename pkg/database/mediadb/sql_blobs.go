@@ -101,16 +101,20 @@ func (db *MediaDB) GetMediaBlobDataCapped(
 	if db.sql == nil {
 		return nil, "", ErrNullSQL
 	}
+	var blobSize int64
 	err = db.sql.QueryRowContext(ctx, `
-		SELECT Data, ContentType
+		SELECT CASE WHEN length(Data) <= ? THEN Data ELSE NULL END, ContentType, length(Data)
 		FROM MediaBlobs
-		WHERE DBID = ? AND length(Data) <= ?
-	`, blobDBID, maxBytes).Scan(&data, &contentType)
+		WHERE DBID = ?
+	`, maxBytes, blobDBID).Scan(&data, &contentType, &blobSize)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", nil
 	}
 	if err != nil {
 		return nil, "", fmt.Errorf("GetMediaBlobDataCapped: %w", err)
+	}
+	if blobSize > maxBytes {
+		return nil, "", database.ErrMediaBlobTooLarge
 	}
 	return data, contentType, nil
 }
