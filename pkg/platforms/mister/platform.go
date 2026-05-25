@@ -890,6 +890,41 @@ func filterNeoGeoZipToNeoOnly(results []platforms.ScanResult) []platforms.ScanRe
 	return filtered
 }
 
+func splitAmigaVisionInstallPaths(paths []mediascanner.PathResult) (
+	preferred []mediascanner.PathResult,
+	other []mediascanner.PathResult,
+) {
+	preferred = make([]mediascanner.PathResult, 0, len(paths))
+	other = make([]mediascanner.PathResult, 0, len(paths))
+
+	for _, path := range paths {
+		if !hasAmigaVisionImage(path.Path) {
+			log.Debug().Str("path", path.Path).Msg("skipping AmigaVision path without boot image")
+			continue
+		}
+		if isPreferredAmigaVisionPath(path.Path) {
+			preferred = append(preferred, path)
+			continue
+		}
+		other = append(other, path)
+	}
+
+	return preferred, other
+}
+
+func hasAmigaVisionImage(path string) bool {
+	for _, image := range []string{"AmigaVision.hdf", "MegaAGS.hdf"} {
+		if _, err := os.Stat(filepath.Join(path, image)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func isPreferredAmigaVisionPath(path string) bool {
+	return strings.HasSuffix(strings.ToLower(filepath.Clean(path)), filepath.Join("games", "amiga"))
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	// Launchers is invoked from many hot paths (token scans, RPC handlers,
 	// indexing). The Refresh fast path stats only the snapshot directories
@@ -936,7 +971,12 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			sfs := mediascanner.GetSystemPaths(ctx, cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
 			log.Debug().Int("paths", len(sfs)).Msg("amigavision scan paths found")
 
-			for _, sf := range sfs {
+			preferredPaths, otherPaths := splitAmigaVisionInstallPaths(sfs)
+			validPaths := make([]mediascanner.PathResult, 0, len(preferredPaths)+len(otherPaths))
+			validPaths = append(validPaths, preferredPaths...)
+			validPaths = append(validPaths, otherPaths...)
+
+			for _, sf := range validPaths {
 				select {
 				case <-ctx.Done():
 					return results, ctx.Err()

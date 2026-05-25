@@ -23,6 +23,8 @@ package mister
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -194,6 +196,86 @@ func TestAmigaScanner_HandlesNoPaths(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, results)
 	})
+}
+
+func TestAmigaScanner_IgnoresStaleListingRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	stalePath := filepath.Join(root, "Amiga")
+	validPath := filepath.Join(root, "games", "Amiga")
+	writeAmigaListings(t, stalePath, "Stale Game")
+	writeAmigaVisionInstall(t, validPath, "Valid Game")
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root, filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+
+	results, err := amigaLauncher.Scanner(context.Background(), cfg, "Amiga", nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, filepath.Join(validPath, "listings", "games.txt", "Valid Game"), results[0].Path)
+	assert.Equal(t, "Valid Game", results[0].Name)
+}
+
+func TestAmigaScanner_RequiresBootImage(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	stalePath := filepath.Join(root, "Amiga")
+	writeAmigaListings(t, stalePath, "Stale Game")
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+
+	results, err := amigaLauncher.Scanner(context.Background(), cfg, "Amiga", nil)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
+
+func findAmigaLauncher(t *testing.T, launchers []platforms.Launcher) *platforms.Launcher {
+	t.Helper()
+
+	for i := range launchers {
+		if launchers[i].ID == "Amiga" {
+			return &launchers[i]
+		}
+	}
+	require.FailNow(t, "Amiga launcher should exist")
+	return nil
+}
+
+func writeAmigaVisionInstall(t *testing.T, path, game string) {
+	t.Helper()
+
+	writeAmigaListings(t, path, game)
+	err := os.WriteFile(filepath.Join(path, "AmigaVision.hdf"), []byte("test"), 0o600)
+	require.NoError(t, err)
+}
+
+func writeAmigaListings(t *testing.T, path, game string) {
+	t.Helper()
+
+	listingPath := filepath.Join(path, "listings")
+	err := os.MkdirAll(listingPath, 0o700)
+	require.NoError(t, err)
+	err = os.MkdirAll(filepath.Join(path, "shared"), 0o700)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(listingPath, "games.txt"), []byte(game+"\n"), 0o600)
+	require.NoError(t, err)
 }
 
 func TestFilterNeoGeoGameContents(t *testing.T) {
