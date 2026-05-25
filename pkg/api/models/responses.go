@@ -452,6 +452,14 @@ type LogDownloadResponse struct {
 	Size     int    `json:"size"`
 }
 
+type MediaTitleParseResponse struct {
+	SecondarySlug *string `json:"secondarySlug,omitempty"`
+	Slug          string  `json:"slug"`
+	Name          string  `json:"name"`
+	SlugLength    int     `json:"slugLength"`
+	SlugWordCount int     `json:"slugWordCount"`
+}
+
 type Launcher struct {
 	ID         string   `json:"id"`
 	SystemID   string   `json:"systemId,omitempty"`

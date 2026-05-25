@@ -2129,7 +2129,9 @@ func (db *MediaDB) InsertMediaTitle(row *database.MediaTitle) (database.MediaTit
 	// Use batch inserter if available
 	if db.batchInsertMediaTitle != nil {
 		err = db.batchInsertMediaTitle.Add(
-			row.DBID, row.SystemDBID, row.Slug, row.Name, row.SlugLength, row.SlugWordCount, row.SecondarySlug)
+			row.DBID, row.SystemDBID, row.Slug, row.Name, row.SlugLength,
+			row.SlugWordCount, row.SecondarySlug,
+		)
 		if err != nil {
 			return *row, fmt.Errorf("failed to add media title to batch: %w", err)
 		}

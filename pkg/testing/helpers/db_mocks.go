@@ -2255,6 +2255,16 @@ func (m *MockMediaDBI) FindMediaBySystemAndPathFold(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) FindMediaBySystemAndPathSuffix(
+	ctx context.Context, systemDBID int64, filename string,
+) ([]database.Media, error) {
+	args := m.Called(ctx, systemDBID, filename)
+	if result, ok := args.Get(0).([]database.Media); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) MediaHasTag(ctx context.Context, mediaDBID int64, tagValue string) (bool, error) {
 	args := m.Called(ctx, mediaDBID, tagValue)
 	return args.Bool(0), args.Error(1)
@@ -2328,6 +2338,16 @@ func (m *MockMediaDBI) FindMediaTitlesWithoutSentinel(
 
 func (m *MockMediaDBI) FindMediaTitleByDBID(ctx context.Context, dbid int64) (*database.MediaTitle, error) {
 	args := m.Called(ctx, dbid)
+	if result, ok := args.Get(0).(*database.MediaTitle); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) FindMediaTitleBySystemAndSlug(
+	ctx context.Context, systemDBID int64, slug string,
+) (*database.MediaTitle, error) {
+	args := m.Called(ctx, systemDBID, slug)
 	if result, ok := args.Get(0).(*database.MediaTitle); ok {
 		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 	}
