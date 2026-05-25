@@ -21,7 +21,6 @@ package methods
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -224,24 +223,18 @@ func TestHandleMediaImage_MediaNotFound(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestHandleMediaImage_BatchPathMissesSkipPropertyFetch(t *testing.T) {
+func TestHandleMediaImage_ItemsParamReturnsClientError(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	missingPath := filepath.Join("games", "missing.rom")
-	mockDB.On("FindSystemBySystemID", "NES").Return(database.System{}, sql.ErrNoRows)
-
 	env := makeMediaImageEnv(t, mockDB, json.RawMessage(
-		fmt.Sprintf(`{"items":[{"system":"NES","path":%q}]}`, missingPath),
+		`{"items":[{"system":"NES","path":"games/missing.rom"}]}`,
 	))
-	result, err := HandleMediaImage(env)
-	require.NoError(t, err)
-
-	resp, ok := result.(models.MediaImageBatchResponse)
-	require.True(t, ok)
-	require.Len(t, resp.Items, 1)
-	require.NotNil(t, resp.Items[0].Error)
-	assert.Contains(t, *resp.Items[0].Error, "system not found: NES")
+	_, err := HandleMediaImage(env)
+	require.Error(t, err)
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	assert.Contains(t, err.Error(), `unknown field "items"`)
 	mockDB.AssertExpectations(t)
 }
 
@@ -273,51 +266,19 @@ func TestHandleMediaImage_ImageTypeResolvesToImageImage(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestHandleMediaImage_BatchByMediaIDUsesItemImageTypes(t *testing.T) {
+func TestHandleMediaImage_ItemsWithMediaIDReturnsClientError(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	row := makeMediaFullRow(5, 50)
-	mediaBlob := []byte("media-boxart")
-	titleBlob := []byte("title-screenshot")
-
-	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, mock.Anything).
-		Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil)
-	mockDB.On("GetMediaPropertiesByMediaDBIDs", mock.Anything, mock.Anything).
-		Return(map[int64][]database.MediaProperty{
-			row.DBID: {
-				{TypeTag: "property:image-boxart", ContentType: "image/png", Binary: mediaBlob},
-			},
-		}, nil)
-	mockDB.On("GetMediaTitlePropertiesByMediaTitleDBIDs", mock.Anything, mock.Anything).
-		Return(map[int64][]database.MediaProperty{
-			row.Title.DBID: {
-				{TypeTag: "property:image-screenshot", ContentType: "image/jpeg", Binary: titleBlob},
-			},
-		}, nil)
-
 	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{
 		"imageTypes": ["boxart"],
-		"items": [
-			{"mediaId": 5},
-			{"mediaId": 5, "imageTypes": ["screenshot"]},
-			{"mediaId": 999}
-		]
+		"items": [{"mediaId": 5}]
 	}`))
-	result, err := HandleMediaImage(env)
-	require.NoError(t, err)
-
-	resp, ok := result.(models.MediaImageBatchResponse)
-	require.True(t, ok)
-	require.Len(t, resp.Items, 3)
-	require.NotNil(t, resp.Items[0].Image)
-	assert.Equal(t, "property:image-boxart", resp.Items[0].Image.TypeTag)
-	assert.Equal(t, base64.StdEncoding.EncodeToString(mediaBlob), resp.Items[0].Image.Data)
-	require.NotNil(t, resp.Items[1].Image)
-	assert.Equal(t, "property:image-screenshot", resp.Items[1].Image.TypeTag)
-	assert.Equal(t, base64.StdEncoding.EncodeToString(titleBlob), resp.Items[1].Image.Data)
-	require.NotNil(t, resp.Items[2].Error)
-	assert.Contains(t, *resp.Items[2].Error, "mediaId 999")
+	_, err := HandleMediaImage(env)
+	require.Error(t, err)
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+	assert.Contains(t, err.Error(), `unknown field "items"`)
 	mockDB.AssertExpectations(t)
 }
 

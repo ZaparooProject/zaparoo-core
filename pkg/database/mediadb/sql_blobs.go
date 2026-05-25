@@ -94,6 +94,31 @@ func (db *MediaDB) GetMediaBlob(ctx context.Context, blobDBID int64) (*database.
 	return &b, nil
 }
 
+// GetMediaBlobDataCapped returns blob data only when it is not larger than maxBytes.
+func (db *MediaDB) GetMediaBlobDataCapped(
+	ctx context.Context, blobDBID int64, maxBytes int64,
+) (data []byte, contentType string, err error) {
+	if db.sql == nil {
+		return nil, "", ErrNullSQL
+	}
+	var blobSize int64
+	err = db.sql.QueryRowContext(ctx, `
+		SELECT CASE WHEN length(Data) <= ? THEN Data ELSE NULL END, ContentType, length(Data)
+		FROM MediaBlobs
+		WHERE DBID = ?
+	`, maxBytes, blobDBID).Scan(&data, &contentType, &blobSize)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("GetMediaBlobDataCapped: %w", err)
+	}
+	if blobSize > maxBytes {
+		return nil, "", database.ErrMediaBlobTooLarge
+	}
+	return data, contentType, nil
+}
+
 // PruneOrphanedBlobs deletes MediaBlobs rows not referenced by either
 // MediaTitleProperties or MediaProperties. Returns the count of rows deleted.
 func (db *MediaDB) PruneOrphanedBlobs(ctx context.Context) (int64, error) {

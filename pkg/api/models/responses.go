@@ -227,12 +227,12 @@ type MediaHistoryTopResponse struct {
 }
 
 // MediaMetaPropertyItem represents a single property value in a media.meta response.
-// Data is nil when the property is text-only; otherwise it contains the base64-encoded binary.
+// Binary payloads are intentionally not included; use media.image to fetch image bytes.
 type MediaMetaPropertyItem struct {
-	Data        *string `json:"data,omitempty"`
 	Extension   *string `json:"extension,omitempty"`
 	Text        string  `json:"text"`
 	ContentType string  `json:"contentType"`
+	BlobSize    int64   `json:"blobSize,omitempty"`
 }
 
 // MediaMetaSystemResponse is the System sub-object within a media.meta response.
@@ -286,15 +286,6 @@ type MediaImageResponse struct {
 	ContentType string  `json:"contentType"`
 	Data        string  `json:"data"`    // base64-encoded blob
 	TypeTag     string  `json:"typeTag"` // e.g. "property:image-boxart"
-}
-
-type MediaImageBatchItemResponse struct {
-	Image *MediaImageResponse `json:"image,omitempty"`
-	Error *string             `json:"error,omitempty"`
-}
-
-type MediaImageBatchResponse struct {
-	Items []MediaImageBatchItemResponse `json:"items"`
 }
 
 // ScrapingStatusResponse is broadcast as a "media.scraping" notification for

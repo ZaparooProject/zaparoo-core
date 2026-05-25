@@ -131,8 +131,8 @@ JSON-RPC methods:
 | `media.scrape` | Starts a scraper run as a background operation |
 | `media.scrape.status` | Returns the latest scraper status snapshot |
 | `media.scrape.cancel` | Cancels the active scraper run |
-| `media.meta` | Returns tags and properties for one or more media rows and their titles |
-| `media.image` | Returns the best matching image property as base64 data for one or more media rows |
+| `media.meta` | Returns tags and metadata-only properties for one or more media rows and their titles |
+| `media.image` | Returns the best matching image property as base64 data for one media row |
 | `media.clean.orphans` | Removes missing media rows and orphaned related data |
 
 `media.scrape` params:
@@ -162,6 +162,6 @@ Progress is queryable with `media.scrape.status` and broadcast as `media.scrapin
 
 Only one scraper can run at a time, and scraping is mutually exclusive with media indexing.
 
-`media.meta` returns the full metadata graph for media rows: media-level tags and properties, title-level tags and properties, and the stored system identity. Single requests accept `mediaId` or `system`/`path` and keep the single-response shape; batch requests use `items` and return per-item results.
+`media.meta` returns the full metadata graph for media rows: media-level tags and properties, title-level tags and properties, and the stored system identity. Single requests accept `mediaId` or `system`/`path` and keep the single-response shape; batch requests use `items` and return per-item results. Binary property bytes are not included; clients should use `media.image` for image data.
 
-`media.image` accepts image type preferences such as `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. These resolve to canonical image property tags; for example `boxart` becomes `property:image-boxart` and `image` becomes `property:image-image`. Media-level properties are preferred over title-level properties for the same type. Stale file paths are removed automatically and lookup falls through to the next available source. Batch requests use `items`, with optional per-item `imageTypes` overriding the top-level preference order.
+`media.image` accepts one media ref plus image type preferences such as `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. These resolve to canonical image property tags; for example `boxart` becomes `property:image-boxart` and `image` becomes `property:image-image`. Media-level properties are preferred over title-level properties for the same type. Stale file paths are removed automatically and lookup falls through to the next available source.

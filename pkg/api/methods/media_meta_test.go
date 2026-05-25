@@ -22,7 +22,6 @@ package methods
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -133,7 +132,7 @@ func TestHandleMediaMeta_SecondarySlug(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestHandleMediaMeta_BinaryPropertyBase64Encoded(t *testing.T) {
+func TestHandleMediaMeta_BinaryPropertyMetadataOnly(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
@@ -143,11 +142,11 @@ func TestHandleMediaMeta_BinaryPropertyBase64Encoded(t *testing.T) {
 	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(3)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(30)).Return([]database.TagInfo{}, nil)
-	mockDB.On("GetMediaProperties", mock.Anything, int64(3)).
+	mockDB.On("GetMediaPropertyMetadata", mock.Anything, int64(3)).
 		Return([]database.MediaProperty{
-			{TypeTag: "property:image", ContentType: "image/png", Binary: blobData, BlobSize: int64(len(blobData))},
+			{TypeTag: "property:image", ContentType: "image/png", BlobSize: int64(len(blobData))},
 		}, nil)
-	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(30)).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitlePropertyMetadata", mock.Anything, int64(30)).Return([]database.MediaProperty{}, nil)
 
 	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	result, err := HandleMediaMeta(env)
@@ -157,15 +156,14 @@ func TestHandleMediaMeta_BinaryPropertyBase64Encoded(t *testing.T) {
 	require.True(t, ok)
 	require.Contains(t, resp.Media.Properties, "property:image")
 	prop := resp.Media.Properties["property:image"]
-	require.NotNil(t, prop.Data)
-	assert.Equal(t, base64.StdEncoding.EncodeToString(blobData), *prop.Data)
+	assert.Equal(t, int64(len(blobData)), prop.BlobSize)
 	assert.Equal(t, "image/png", prop.ContentType)
 	assert.NotNil(t, prop.Extension)
 	assert.Equal(t, "png", *prop.Extension)
 	mockDB.AssertExpectations(t)
 }
 
-func TestHandleMediaMeta_OversizedBinaryPropertyDataOmitted(t *testing.T) {
+func TestHandleMediaMeta_OversizedBinaryPropertyMetadataOnly(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
@@ -175,7 +173,7 @@ func TestHandleMediaMeta_OversizedBinaryPropertyDataOmitted(t *testing.T) {
 	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(4)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(40)).Return([]database.TagInfo{}, nil)
-	mockDB.On("GetMediaProperties", mock.Anything, int64(4)).
+	mockDB.On("GetMediaPropertyMetadata", mock.Anything, int64(4)).
 		Return([]database.MediaProperty{
 			{
 				TypeTag:     "property:image",
@@ -184,7 +182,7 @@ func TestHandleMediaMeta_OversizedBinaryPropertyDataOmitted(t *testing.T) {
 				BlobSize:    database.MaxMediaPropertyBinaryBytes + 1,
 			},
 		}, nil)
-	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(40)).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitlePropertyMetadata", mock.Anything, int64(40)).Return([]database.MediaProperty{}, nil)
 
 	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	result, err := HandleMediaMeta(env)
@@ -194,7 +192,7 @@ func TestHandleMediaMeta_OversizedBinaryPropertyDataOmitted(t *testing.T) {
 	require.True(t, ok)
 	require.Contains(t, resp.Media.Properties, "property:image")
 	prop := resp.Media.Properties["property:image"]
-	assert.Nil(t, prop.Data)
+	assert.Equal(t, int64(database.MaxMediaPropertyBinaryBytes+1), prop.BlobSize)
 	assert.Equal(t, "image/png", prop.ContentType)
 	assert.NotNil(t, prop.Extension)
 	assert.Equal(t, "png", *prop.Extension)
@@ -424,7 +422,7 @@ func TestHandleMediaMeta_MediaPropertiesDBError(t *testing.T) {
 	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	_, err := HandleMediaMeta(env)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to get media properties")
+	assert.Contains(t, err.Error(), "failed to get media property metadata")
 	mockDB.AssertExpectations(t)
 }
 
@@ -443,6 +441,6 @@ func TestHandleMediaMeta_TitlePropertiesDBError(t *testing.T) {
 	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	_, err := HandleMediaMeta(env)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to get title properties")
+	assert.Contains(t, err.Error(), "failed to get title property metadata")
 	mockDB.AssertExpectations(t)
 }

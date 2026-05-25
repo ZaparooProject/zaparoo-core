@@ -22,6 +22,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -170,6 +171,9 @@ type TagType struct {
 // into memory. Larger blobs remain addressable via BlobDBID/BlobSize but Binary
 // is left nil so API handlers can return a controlled error instead of OOMing.
 const MaxMediaPropertyBinaryBytes = 16 * 1024 * 1024
+
+// ErrMediaBlobTooLarge indicates a blob exists but exceeds a caller-provided read cap.
+var ErrMediaBlobTooLarge = errors.New("media blob too large")
 
 // MediaProperty is a static content property attached to a MediaTitle or Media
 // record. Properties are fetched for display, not filtered by value.
@@ -749,12 +753,18 @@ type MediaDBI interface {
 	GetMediaTitlePropertiesByMediaTitleDBIDs(
 		ctx context.Context, mediaTitleDBIDs []int64,
 	) (map[int64][]MediaProperty, error)
+	GetMediaTitlePropertyMetadata(ctx context.Context, mediaTitleDBID int64) ([]MediaProperty, error)
+	GetMediaTitlePropertyMetadataByMediaTitleDBIDs(
+		ctx context.Context, mediaTitleDBIDs []int64,
+	) (map[int64][]MediaProperty, error)
 
 	// GetMediaProperties returns all properties for a Media row,
 	// with TypeTagDBID resolved to the tag value string. Binary blobs are capped
 	// at MaxMediaPropertyBinaryBytes; larger blobs populate BlobSize but not Binary.
 	GetMediaProperties(ctx context.Context, mediaDBID int64) ([]MediaProperty, error)
 	GetMediaPropertiesByMediaDBIDs(ctx context.Context, mediaDBIDs []int64) (map[int64][]MediaProperty, error)
+	GetMediaPropertyMetadata(ctx context.Context, mediaDBID int64) ([]MediaProperty, error)
+	GetMediaPropertyMetadataByMediaDBIDs(ctx context.Context, mediaDBIDs []int64) (map[int64][]MediaProperty, error)
 
 	// DeleteMediaTitleProperty removes a single property row from MediaTitleProperties
 	// identified by (mediaTitleDBID, typeTagDBID). A no-op if the row does not exist.
@@ -789,6 +799,7 @@ type MediaDBI interface {
 	// GetMediaBlob returns the MediaBlob row for the given DBID,
 	// or nil, nil when not found.
 	GetMediaBlob(ctx context.Context, blobDBID int64) (*MediaBlob, error)
+	GetMediaBlobDataCapped(ctx context.Context, blobDBID int64, maxBytes int64) ([]byte, string, error)
 
 	// PruneOrphanedBlobs deletes MediaBlobs rows that are not referenced by
 	// any MediaTitleProperties or MediaProperties row. Returns the count of

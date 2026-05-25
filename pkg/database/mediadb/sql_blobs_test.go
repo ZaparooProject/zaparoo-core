@@ -163,6 +163,48 @@ func TestGetMediaBlob_NotFound(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+func TestGetMediaBlobDataCapped_FoundWithinCap(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	want := []byte("blob content")
+	dbid, err := mediaDB.UpsertMediaBlob(ctx, "image/png", want)
+	require.NoError(t, err)
+
+	got, contentType, err := mediaDB.GetMediaBlobDataCapped(ctx, dbid, int64(len(want)))
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	assert.Equal(t, "image/png", contentType)
+}
+
+func TestGetMediaBlobDataCapped_OverCapReturnsError(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dbid, err := mediaDB.UpsertMediaBlob(ctx, "image/png", []byte("too big"))
+	require.NoError(t, err)
+
+	got, contentType, err := mediaDB.GetMediaBlobDataCapped(ctx, dbid, 1)
+	require.ErrorIs(t, err, database.ErrMediaBlobTooLarge)
+	assert.Nil(t, got)
+	assert.Empty(t, contentType)
+}
+
+func TestGetMediaBlobDataCapped_NotFound(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	got, contentType, err := mediaDB.GetMediaBlobDataCapped(context.Background(), 9999, 1)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	assert.Empty(t, contentType)
+}
+
 // TestPruneOrphanedBlobs_NoRefs verifies that a blob with no referencing
 // property rows is deleted.
 func TestPruneOrphanedBlobs_NoRefs(t *testing.T) {

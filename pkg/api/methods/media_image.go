@@ -20,18 +20,27 @@
 package methods
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
+)
+
+const (
+	misterMediaImageMaxBytes  = int64(2 * 1024 * 1024)
+	defaultMediaImageMaxBytes = int64(8 * 1024 * 1024)
 )
 
 // defaultImageTypes is the preference order used when no imageTypes param is provided.
@@ -60,6 +69,11 @@ type mediaBinaryTooLargeError struct {
 	max  int64
 }
 
+type mediaImageSource struct {
+	propMap map[string]database.MediaProperty
+	isMedia bool
+}
+
 func (e *mediaBinaryTooLargeError) Error() string {
 	return fmt.Sprintf("media binary %q is too large: %d bytes exceeds %d byte limit", e.path, e.size, e.max)
 }
@@ -80,102 +94,76 @@ func buildPropsMap(props []database.MediaProperty) map[string]database.MediaProp
 }
 
 // HandleMediaImage returns a single best-match image for a media record as a
-// base64-encoded blob. The caller identifies the media row by `(system, path)`;
-// canonical paths are preferred, with launcher-relative paths accepted as a
-// compatibility fallback. Image type preferences are supplied by the caller; if
-// omitted the defaultImageTypes order is used. Media-level properties take
-// priority over title-level properties for the same TypeTag. If a matching
-// property has no inline binary data the file at the Text path is read from disk.
+// base64-encoded blob.
 func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
-	params, err := parseMediaRequest(env.Params, maxMediaImageBatchItems)
-	if err != nil {
-		return nil, err
-	}
-	if !params.Batch && params.Items[0].MediaID == nil {
-		return handleMediaImageSinglePath(&env, params.Items[0])
-	}
-
-	resolved, err := resolveMediaRefs(&env, params.Items)
+	ref, err := parseMediaImageRequest(env.Params)
 	if err != nil {
 		return nil, err
 	}
 
-	mediaIDs, titleIDs := uniqueMediaAndTitleIDs(resolved)
-	if params.Batch && len(mediaIDs) == 0 {
-		return buildMediaImageBatchErrorResponse(resolved), nil
+	maxBytes := mediaImageMaxBytes(env.Platform)
+	if ref.MediaID == nil {
+		return handleMediaImageSinglePath(&env, ref, maxBytes)
+	}
+
+	resolved, err := resolveMediaRefs(&env, []mediaRefParam{ref})
+	if err != nil {
+		return nil, err
+	}
+	if resolved[0].Err != nil {
+		return nil, resolved[0].Err
 	}
 
 	db := env.Database.MediaDB
-	mediaProps, err := db.GetMediaPropertiesByMediaDBIDs(env.Context, mediaIDs)
+	row := resolved[0].Row
+	mediaProps, err := db.GetMediaPropertyMetadata(env.Context, row.DBID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get media properties: %w", err)
+		return nil, fmt.Errorf("failed to get media property metadata: %w", err)
 	}
-	titleProps, err := db.GetMediaTitlePropertiesByMediaTitleDBIDs(env.Context, titleIDs)
+	titleProps, err := db.GetMediaTitlePropertyMetadata(env.Context, row.Title.DBID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get title properties: %w", err)
+		return nil, fmt.Errorf("failed to get title property metadata: %w", err)
 	}
 
-	if !params.Batch {
-		if resolved[0].Err != nil {
-			return nil, resolved[0].Err
-		}
-		prefs := imagePrefs(params.ImageTypes, params.Items[0].ImageTypes)
-		return selectMediaImage(
-			env.Context, db, resolved[0].Row,
-			mediaProps[resolved[0].Row.DBID], titleProps[resolved[0].Row.Title.DBID], prefs,
-		)
-	}
-
-	items := make([]models.MediaImageBatchItemResponse, len(resolved))
-	for i, item := range resolved {
-		if item.Err != nil {
-			errText := item.Err.Error()
-			items[i].Error = &errText
-			continue
-		}
-		prefs := imagePrefs(params.ImageTypes, params.Items[i].ImageTypes)
-		image, imageErr := selectMediaImage(
-			env.Context, db, item.Row, mediaProps[item.Row.DBID], titleProps[item.Row.Title.DBID], prefs,
-		)
-		if imageErr != nil {
-			errText := imageErr.Error()
-			items[i].Error = &errText
-			continue
-		}
-		items[i].Image = &image
-	}
-	return models.MediaImageBatchResponse{Items: items}, nil
+	prefs := imagePrefs(nil, ref.ImageTypes)
+	return selectMediaImage(env.Context, afero.NewOsFs(), db, row, mediaProps, titleProps, prefs, maxBytes)
 }
 
-func buildMediaImageBatchErrorResponse(resolved []resolvedMediaItem) models.MediaImageBatchResponse {
-	items := make([]models.MediaImageBatchItemResponse, len(resolved))
-	for i, item := range resolved {
-		if item.Err == nil {
-			continue
-		}
-		errText := item.Err.Error()
-		items[i].Error = &errText
+func parseMediaImageRequest(raw json.RawMessage) (mediaRefParam, error) {
+	var ref mediaRefParam
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&ref); err != nil {
+		return mediaRefParam{}, models.ClientErrf("invalid params: %w", err)
 	}
-	return models.MediaImageBatchResponse{Items: items}
+	if err := validateMediaRef(ref); err != nil {
+		return mediaRefParam{}, models.ClientErrf("invalid params: %w", err)
+	}
+	if err := validateImageTypes(ref.ImageTypes); err != nil {
+		return mediaRefParam{}, models.ClientErrf("invalid params: %w", err)
+	}
+	return ref, nil
 }
 
-func handleMediaImageSinglePath(env *requests.RequestEnv, ref mediaRefParam) (any, error) {
+func handleMediaImageSinglePath(env *requests.RequestEnv, ref mediaRefParam, maxBytes int64) (any, error) {
 	db := env.Database.MediaDB
 	row, err := resolveMediaBySystemAndPath(env, ref.System, ref.Path)
 	if err != nil {
 		return nil, err
 	}
 
-	mediaProps, err := db.GetMediaProperties(env.Context, row.DBID)
+	mediaProps, err := db.GetMediaPropertyMetadata(env.Context, row.DBID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get media properties: %w", err)
+		return nil, fmt.Errorf("failed to get media property metadata: %w", err)
 	}
-	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
+	titleProps, err := db.GetMediaTitlePropertyMetadata(env.Context, row.Title.DBID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get title properties: %w", err)
+		return nil, fmt.Errorf("failed to get title property metadata: %w", err)
 	}
 
-	return selectMediaImage(env.Context, db, row, mediaProps, titleProps, imagePrefs(nil, ref.ImageTypes))
+	return selectMediaImage(
+		env.Context, afero.NewOsFs(), db, row, mediaProps, titleProps, imagePrefs(nil, ref.ImageTypes), maxBytes,
+	)
 }
 
 func imagePrefs(topLevel, itemLevel []string) []string {
@@ -188,8 +176,8 @@ func imagePrefs(topLevel, itemLevel []string) []string {
 	return defaultImageTypes
 }
 
-func readMediaBinaryFile(path string, maxBytes int64) ([]byte, error) {
-	info, err := os.Stat(path)
+func readMediaBinaryFile(fs afero.Fs, path string, maxBytes int64) ([]byte, error) {
+	info, err := fs.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("stat media binary file %q: %w", path, err)
 	}
@@ -200,17 +188,7 @@ func readMediaBinaryFile(path string, maxBytes int64) ([]byte, error) {
 		return nil, &mediaBinaryTooLargeError{path: path, size: info.Size(), max: maxBytes}
 	}
 
-	f, err := os.Open(path) // #nosec G304 -- path comes from indexed media metadata and is size-checked before read.
-	if err != nil {
-		return nil, fmt.Errorf("open media binary file %q: %w", path, err)
-	}
-	defer func() {
-		if closeErr := f.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Str("path", path).Msg("media.image: failed to close image file")
-		}
-	}()
-
-	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	data, err := afero.ReadFile(fs, path)
 	if err != nil {
 		return nil, fmt.Errorf("read media binary file %q: %w", path, err)
 	}
@@ -228,50 +206,34 @@ func mediaImageReadError(path string, err error) error {
 	return fmt.Errorf("media.image: read image file %q: %w", path, err)
 }
 
-func propertyBlobTooLarge(prop *database.MediaProperty) bool {
-	return prop.BlobDBID != nil && len(prop.Binary) == 0 && prop.BlobSize > database.MaxMediaPropertyBinaryBytes
-}
-
-func mediaImageBlobTooLargeError(prop *database.MediaProperty) error {
+func mediaImageBlobTooLargeError(prop *database.MediaProperty, maxBytes int64) error {
 	return models.ClientErrf(
 		"media.image: image blob too large for %s: %d bytes exceeds %d byte limit",
-		prop.TypeTag, prop.BlobSize, database.MaxMediaPropertyBinaryBytes,
+		prop.TypeTag, prop.BlobSize, maxBytes,
 	)
 }
 
 func selectMediaImage(
 	ctx context.Context,
+	fs afero.Fs,
 	db database.MediaDBI,
 	row *database.MediaFullRow,
 	mediaProps []database.MediaProperty,
 	titleProps []database.MediaProperty,
 	prefs []string,
+	maxBytes int64,
 ) (models.MediaImageResponse, error) {
 	mediaMap := buildPropsMap(mediaProps)
 	titleMap := buildPropsMap(titleProps)
-
-	// sources defines the priority order within each typeTag: media-level is
-	// tried first, then title-level. A stale entry at one level falls back to
-	// the other level for the same typeTag before moving on to the next
-	// preference (rather than skipping the typeTag entirely).
-	type propSource struct {
-		propMap map[string]database.MediaProperty
-		isMedia bool
-	}
-	sources := []propSource{
+	sources := []mediaImageSource{
 		{mediaMap, true},
 		{titleMap, false},
 	}
 
-	// Deduplicate resolved TypeTags while preserving order so duplicate request
-	// preferences do not retry the same DB row.
 	seen := make(map[string]bool, len(prefs))
 	for _, t := range prefs {
 		typeTag, ok := resolveImageTypeTag(t)
-		if !ok {
-			continue
-		}
-		if seen[typeTag] {
+		if !ok || seen[typeTag] {
 			continue
 		}
 		seen[typeTag] = true
@@ -282,76 +244,145 @@ func selectMediaImage(
 				continue
 			}
 
-			binary := prop.Binary
-			if len(binary) == 0 && propertyBlobTooLarge(&prop) {
-				return models.MediaImageResponse{}, mediaImageBlobTooLargeError(&prop)
-			}
-			if len(binary) == 0 && prop.Text != "" {
-				var readErr error
-				binary, readErr = readMediaBinaryFile(prop.Text, database.MaxMediaPropertyBinaryBytes)
-				if readErr != nil {
-					if !errors.Is(readErr, os.ErrNotExist) {
-						return models.MediaImageResponse{}, mediaImageReadError(prop.Text, readErr)
-					}
-
-					// File is gone — remove the stale property.
-					if !src.isMedia {
-						delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID)
-						if delErr != nil {
-							log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
-								Msg("media.image: failed to delete stale title property")
-						}
-						delete(titleMap, typeTag)
-						continue
-					}
-					if delErr := db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID); delErr != nil {
-						log.Warn().Err(delErr).Int64("mediaDBID", row.DBID).Str("typeTag", typeTag).
-							Msg("media.image: failed to delete stale media property")
-					}
-					delete(mediaMap, typeTag)
-					// Fall back to the title-level property for the same typeTag.
-					titleProp, hasTitleProp := titleMap[typeTag]
-					if !hasTitleProp {
-						continue
-					}
-					prop = titleProp
-					binary = prop.Binary
-					if len(binary) == 0 && propertyBlobTooLarge(&prop) {
-						return models.MediaImageResponse{}, mediaImageBlobTooLargeError(&prop)
-					}
-					if len(binary) == 0 && prop.Text != "" {
-						binary, readErr = readMediaBinaryFile(prop.Text, database.MaxMediaPropertyBinaryBytes)
-						if readErr != nil {
-							if !errors.Is(readErr, os.ErrNotExist) {
-								return models.MediaImageResponse{}, mediaImageReadError(prop.Text, readErr)
-							}
-
-							delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID)
-							if delErr != nil {
-								log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
-									Msg("media.image: failed to delete stale title property")
-							}
-							delete(titleMap, typeTag)
-							continue
-						}
-					}
-				}
-			}
-
-			if len(binary) == 0 {
+			image, stale, err := loadMediaImageProperty(ctx, fs, db, row, &prop, src, typeTag, maxBytes)
+			if stale {
+				delete(src.propMap, typeTag)
 				continue
 			}
-
-			return models.MediaImageResponse{
-				Extension:   mediaContentExtension(prop.ContentType, prop.Text),
-				ContentType: prop.ContentType,
-				Data:        base64.StdEncoding.EncodeToString(binary),
-				TypeTag:     typeTag,
-			}, nil
+			if err != nil {
+				return models.MediaImageResponse{}, err
+			}
+			if image != nil {
+				return *image, nil
+			}
 		}
 	}
 
 	return models.MediaImageResponse{}, models.ClientErrf(
 		"no image found for media: %s/%s", row.System.SystemID, row.Path,
 	)
+}
+
+func loadMediaImageProperty(
+	ctx context.Context,
+	fs afero.Fs,
+	db database.MediaDBI,
+	row *database.MediaFullRow,
+	prop *database.MediaProperty,
+	src mediaImageSource,
+	typeTag string,
+	maxBytes int64,
+) (*models.MediaImageResponse, bool, error) {
+	var binary []byte
+	contentType := prop.ContentType
+
+	switch {
+	case len(prop.Binary) > 0:
+		if int64(len(prop.Binary)) > maxBytes {
+			return nil, false, mediaImageBlobTooLargeError(prop, maxBytes)
+		}
+		binary = prop.Binary
+	case prop.BlobDBID != nil:
+		if prop.BlobSize <= 0 {
+			return nil, false, models.ClientErrf("media.image: image blob has unknown size for %s", prop.TypeTag)
+		}
+		if prop.BlobSize > maxBytes {
+			return nil, false, mediaImageBlobTooLargeError(prop, maxBytes)
+		}
+		var err error
+		binary, contentType, err = db.GetMediaBlobDataCapped(ctx, *prop.BlobDBID, maxBytes)
+		if errors.Is(err, database.ErrMediaBlobTooLarge) {
+			return nil, false, mediaImageBlobTooLargeError(prop, maxBytes)
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("media.image: read image blob %d: %w", *prop.BlobDBID, err)
+		}
+		if len(binary) == 0 {
+			deleteStaleMediaImageProperty(ctx, db, row, prop, src.isMedia, typeTag)
+			return nil, true, nil
+		}
+	case prop.Text != "":
+		data, stale, err := loadMediaImageFile(ctx, fs, db, row, prop, src.isMedia, typeTag, maxBytes)
+		if stale || err != nil {
+			return nil, stale, err
+		}
+		binary = data
+	default:
+		return nil, false, nil
+	}
+
+	return &models.MediaImageResponse{
+		Extension:   mediaContentExtension(contentType, prop.Text),
+		ContentType: contentType,
+		Data:        base64.StdEncoding.EncodeToString(binary),
+		TypeTag:     typeTag,
+	}, false, nil
+}
+
+func loadMediaImageFile(
+	ctx context.Context,
+	fs afero.Fs,
+	db database.MediaDBI,
+	row *database.MediaFullRow,
+	prop *database.MediaProperty,
+	isMedia bool,
+	typeTag string,
+	maxBytes int64,
+) (data []byte, stale bool, err error) {
+	info, err := fs.Stat(prop.Text)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			deleteStaleMediaImageProperty(ctx, db, row, prop, isMedia, typeTag)
+			return nil, true, nil
+		}
+		return nil, false, mediaImageReadError(prop.Text, err)
+	}
+	if !info.Mode().IsRegular() {
+		err := fmt.Errorf("media binary file %q is not a regular file", prop.Text)
+		return nil, false, mediaImageReadError(prop.Text, err)
+	}
+	if info.Size() > maxBytes {
+		return nil, false, mediaImageReadError(prop.Text, &mediaBinaryTooLargeError{
+			path: prop.Text,
+			size: info.Size(),
+			max:  maxBytes,
+		})
+	}
+	data, readErr := readMediaBinaryFile(fs, prop.Text, maxBytes)
+	if readErr != nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			deleteStaleMediaImageProperty(ctx, db, row, prop, isMedia, typeTag)
+			return nil, true, nil
+		}
+		return nil, false, mediaImageReadError(prop.Text, readErr)
+	}
+	return data, false, nil
+}
+
+func deleteStaleMediaImageProperty(
+	ctx context.Context,
+	db database.MediaDBI,
+	row *database.MediaFullRow,
+	prop *database.MediaProperty,
+	isMedia bool,
+	typeTag string,
+) {
+	if !isMedia {
+		if delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID); delErr != nil {
+			log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
+				Msg("media.image: failed to delete stale title property")
+		}
+		return
+	}
+	if delErr := db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID); delErr != nil {
+		log.Warn().Err(delErr).Int64("mediaDBID", row.DBID).Str("typeTag", typeTag).
+			Msg("media.image: failed to delete stale media property")
+	}
+}
+
+func mediaImageMaxBytes(pl platforms.Platform) int64 {
+	if pl != nil && pl.ID() == ids.Mister {
+		return misterMediaImageMaxBytes
+	}
+	return defaultMediaImageMaxBytes
 }
