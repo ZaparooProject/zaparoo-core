@@ -144,10 +144,6 @@ func logSafeResponse(result any) {
 			Str("contentType", resp.ContentType).
 			Int("data_len", len(resp.Data)).
 			Msg("sending response")
-	case models.MediaImageBatchResponse:
-		log.Debug().
-			Int("items", len(resp.Items)).
-			Msg("sending response: media.image batch")
 	case models.MediaMetaResponse:
 		log.Debug().
 			Str("system", resp.Media.Title.System.ID).

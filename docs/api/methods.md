@@ -1352,8 +1352,9 @@ Single requests return the existing single `media` response shape. Batch request
 | text        | string | Yes      | Text value or source path for the property.                            |
 | contentType | string | Yes      | MIME type for binary-backed properties, empty for text-only values.    |
 | extension   | string | No       | File extension without a dot, derived from MIME type or source path.   |
-| data        | string | No       | Base64-encoded binary property data. Omitted for text-only properties. |
+| blobSize    | number | No       | Size in bytes for binary-backed properties. |
 
+Binary property data is not returned by `media.meta`. Use `media.image` to fetch image bytes.
 Property keys are canonical type tags such as `property:description`, `property:image-image`, or `property:manual`.
 
 #### Example
@@ -1444,11 +1445,9 @@ An object identifying the media row by `mediaId` or `(system, path)`. Canonical 
 | system     | string   | No       | System ID. Required when `mediaId` is omitted.                              |
 | path       | string   | No       | Canonical indexed media path. Required when `mediaId` is omitted.            |
 | imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
-| items      | object[] | No       | Batch request items. Each item uses either `mediaId` or `system`/`path`, and may include item-level `imageTypes`. Maximum 50 items. Cannot be mixed with top-level media ref fields. |
-
 Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
 
-Single requests return the existing single image response shape. Batch requests return `{ "items": [...] }` in input order. Each batch item contains either `image` or `error`. Top-level `imageTypes` applies to all batch items unless an item has its own `imageTypes` override.
+Batch image requests are not supported. Request exactly one image per `media.image` call.
 
 #### Result
 
@@ -1472,23 +1471,6 @@ Single requests return the existing single image response shape. Batch requests 
     "system": "SNES",
     "path": "/roms/snes/Super Mario World.sfc",
     "imageTypes": ["boxart", "image"]
-  }
-}
-```
-
-##### Batch Request
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050608",
-  "method": "media.image",
-  "params": {
-    "imageTypes": ["boxart", "image"],
-    "items": [
-      {"mediaId": 42},
-      {"mediaId": 43, "imageTypes": ["screenshot"]}
-    ]
   }
 }
 ```

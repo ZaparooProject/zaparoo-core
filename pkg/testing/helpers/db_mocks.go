@@ -497,6 +497,15 @@ func (m *MockMediaDBI) trackDatabaseOperation() {
 	}
 }
 
+func (m *MockMediaDBI) hasExpectedCall(method string) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == method {
+			return true
+		}
+	}
+	return false
+}
+
 // GenericDBI methods
 func (m *MockMediaDBI) Open() error {
 	args := m.Called()
@@ -2374,6 +2383,33 @@ func (m *MockMediaDBI) GetMediaTitlePropertiesByMediaTitleDBIDs(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) GetMediaTitlePropertyMetadata(
+	ctx context.Context, mediaTitleDBID int64,
+) ([]database.MediaProperty, error) {
+	if !m.hasExpectedCall("GetMediaTitlePropertyMetadata") && m.hasExpectedCall("GetMediaTitleProperties") {
+		return m.GetMediaTitleProperties(ctx, mediaTitleDBID)
+	}
+	args := m.Called(ctx, mediaTitleDBID)
+	if result, ok := args.Get(0).([]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaTitlePropertyMetadataByMediaTitleDBIDs(
+	ctx context.Context, mediaTitleDBIDs []int64,
+) (map[int64][]database.MediaProperty, error) {
+	if !m.hasExpectedCall("GetMediaTitlePropertyMetadataByMediaTitleDBIDs") &&
+		m.hasExpectedCall("GetMediaTitlePropertiesByMediaTitleDBIDs") {
+		return m.GetMediaTitlePropertiesByMediaTitleDBIDs(ctx, mediaTitleDBIDs)
+	}
+	args := m.Called(ctx, mediaTitleDBIDs)
+	if result, ok := args.Get(0).(map[int64][]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) GetMediaProperties(ctx context.Context, mediaDBID int64) ([]database.MediaProperty, error) {
 	args := m.Called(ctx, mediaDBID)
 	if result, ok := args.Get(0).([]database.MediaProperty); ok {
@@ -2385,6 +2421,33 @@ func (m *MockMediaDBI) GetMediaProperties(ctx context.Context, mediaDBID int64) 
 func (m *MockMediaDBI) GetMediaPropertiesByMediaDBIDs(
 	ctx context.Context, mediaDBIDs []int64,
 ) (map[int64][]database.MediaProperty, error) {
+	args := m.Called(ctx, mediaDBIDs)
+	if result, ok := args.Get(0).(map[int64][]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaPropertyMetadata(
+	ctx context.Context, mediaDBID int64,
+) ([]database.MediaProperty, error) {
+	if !m.hasExpectedCall("GetMediaPropertyMetadata") && m.hasExpectedCall("GetMediaProperties") {
+		return m.GetMediaProperties(ctx, mediaDBID)
+	}
+	args := m.Called(ctx, mediaDBID)
+	if result, ok := args.Get(0).([]database.MediaProperty); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaPropertyMetadataByMediaDBIDs(
+	ctx context.Context, mediaDBIDs []int64,
+) (map[int64][]database.MediaProperty, error) {
+	if !m.hasExpectedCall("GetMediaPropertyMetadataByMediaDBIDs") &&
+		m.hasExpectedCall("GetMediaPropertiesByMediaDBIDs") {
+		return m.GetMediaPropertiesByMediaDBIDs(ctx, mediaDBIDs)
+	}
 	args := m.Called(ctx, mediaDBIDs)
 	if result, ok := args.Get(0).(map[int64][]database.MediaProperty); ok {
 		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
@@ -2416,6 +2479,19 @@ func (m *MockMediaDBI) GetMediaBlob(ctx context.Context, blobDBID int64) (*datab
 		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 	}
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) GetMediaBlobDataCapped(
+	ctx context.Context, blobDBID int64, maxBytes int64,
+) (data []byte, contentType string, err error) {
+	args := m.Called(ctx, blobDBID, maxBytes)
+	if result, ok := args.Get(0).([]byte); ok {
+		data = result
+	}
+	if result, ok := args.Get(1).(string); ok {
+		contentType = result
+	}
+	return data, contentType, args.Error(2) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
 func (m *MockMediaDBI) PruneOrphanedBlobs(ctx context.Context) (int64, error) {

@@ -20,7 +20,6 @@
 package methods
 
 import (
-	"encoding/base64"
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -30,7 +29,8 @@ import (
 
 // HandleMediaMeta returns the full metadata graph for a single Media record:
 // the Media itself, its parent MediaTitle, System, level-separated Tags, and
-// level-separated Properties (with binary data base64-encoded inline).
+// level-separated Properties. Binary payloads are not included; use media.image
+// to fetch image bytes.
 func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	params, err := parseMediaRequest(env.Params, maxMediaMetaBatchItems)
 	if err != nil {
@@ -62,13 +62,13 @@ func HandleMediaMeta(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	if err != nil {
 		return nil, fmt.Errorf("failed to get title tags: %w", err)
 	}
-	mediaProps, err := db.GetMediaPropertiesByMediaDBIDs(env.Context, mediaIDs)
+	mediaProps, err := db.GetMediaPropertyMetadataByMediaDBIDs(env.Context, mediaIDs)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get media properties: %w", err)
+		return nil, fmt.Errorf("failed to get media property metadata: %w", err)
 	}
-	titleProps, err := db.GetMediaTitlePropertiesByMediaTitleDBIDs(env.Context, titleIDs)
+	titleProps, err := db.GetMediaTitlePropertyMetadataByMediaTitleDBIDs(env.Context, titleIDs)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get title properties: %w", err)
+		return nil, fmt.Errorf("failed to get title property metadata: %w", err)
 	}
 
 	if !params.Batch {
@@ -123,13 +123,13 @@ func handleMediaMetaSinglePath(env *requests.RequestEnv, ref mediaRefParam) (any
 	if err != nil {
 		return nil, fmt.Errorf("failed to get title tags: %w", err)
 	}
-	mediaProps, err := db.GetMediaProperties(env.Context, row.DBID)
+	mediaProps, err := db.GetMediaPropertyMetadata(env.Context, row.DBID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get media properties: %w", err)
+		return nil, fmt.Errorf("failed to get media property metadata: %w", err)
 	}
-	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
+	titleProps, err := db.GetMediaTitlePropertyMetadata(env.Context, row.Title.DBID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get title properties: %w", err)
+		return nil, fmt.Errorf("failed to get title property metadata: %w", err)
 	}
 
 	return buildMediaMetaResponse(row, mediaTags, titleTags, mediaProps, titleProps), nil
@@ -170,8 +170,7 @@ func buildMediaMetaResponse(
 }
 
 // mapMediaProperties converts a []database.MediaProperty slice into a map keyed
-// by TypeTag (e.g. "property:description"). Binary data is base64-encoded and
-// placed in Data; text-only properties have Data = nil.
+// by TypeTag (e.g. "property:description"). Binary payloads are not included.
 func mapMediaProperties(props []database.MediaProperty) map[string]models.MediaMetaPropertyItem {
 	m := make(map[string]models.MediaMetaPropertyItem, len(props))
 	for _, p := range props {
@@ -179,10 +178,7 @@ func mapMediaProperties(props []database.MediaProperty) map[string]models.MediaM
 			Text:        p.Text,
 			ContentType: p.ContentType,
 			Extension:   mediaContentExtension(p.ContentType, p.Text),
-		}
-		if len(p.Binary) > 0 {
-			encoded := base64.StdEncoding.EncodeToString(p.Binary)
-			item.Data = &encoded
+			BlobSize:    p.BlobSize,
 		}
 		m[p.TypeTag] = item
 	}
