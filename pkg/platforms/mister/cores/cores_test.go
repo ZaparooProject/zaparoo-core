@@ -67,6 +67,16 @@ func TestPathToMGLDef(t *testing.T) {
 			wantMgl:  Systems["Nintendo64"].Slots[0].Mgl,
 		},
 		{
+			name:     "3DO CHD disk slot",
+			systemID: "3DO",
+			path:     "Need for Speed.chd",
+			wantMgl: &MGLParams{
+				Delay:  1,
+				Method: "s",
+				Index:  0,
+			},
+		},
+		{
 			name:     "Nil MGL allowed (Arcade .mra)",
 			systemID: "Arcade",
 			path:     "maze_game.mra",
