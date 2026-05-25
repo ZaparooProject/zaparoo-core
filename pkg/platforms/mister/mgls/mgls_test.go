@@ -263,7 +263,10 @@ func TestGenerateMgl(t *testing.T) {
 					},
 				},
 			},
-			path: filepath.Join("/", "media", "fat", "games", "Saturn", "America", "NiGHTS into Dreams... (USA, Brazil).chd"),
+			path: filepath.Join(
+				string(filepath.Separator),
+				"media", "fat", "games", "Saturn", "America", "NiGHTS into Dreams... (USA, Brazil).chd",
+			),
 			want: "<mistergamedescription>\n\t<rbf>_Console/Saturn</rbf>\n" +
 				"\t<file delay=\"2\" type=\"s\" index=\"0\" " +
 				"path=\"../../../../../media/fat/games/Saturn/America/" +
@@ -286,7 +289,10 @@ func TestGenerateMgl(t *testing.T) {
 					},
 				},
 			},
-			path: filepath.Join("/", "media", "fat", "games", "3DO", "The Need for Speed.chd"),
+			path: filepath.Join(
+				string(filepath.Separator),
+				"media", "fat", "games", "3DO", "The Need for Speed.chd",
+			),
 			want: "<mistergamedescription>\n\t<rbf>_Console/3DO</rbf>\n" +
 				"\t<file delay=\"1\" type=\"s\" index=\"0\" " +
 				"path=\"../../../../../media/fat/games/3DO/The Need for Speed.chd\"/>\n" +
