@@ -311,10 +311,16 @@ func getLaunchClosure(
 	return func(path string) error {
 		launcherID := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
 		action := env.Cmd.AdvArgs.Get(zapscript.KeyAction)
+		setName := env.Cmd.AdvArgs.Get(zapscript.KeySetName)
+		setNameSameDir := env.Cmd.AdvArgs.Get(zapscript.KeySetNameSameDir)
 
 		var opts *platforms.LaunchOptions
-		if action != "" {
-			opts = &platforms.LaunchOptions{Action: action}
+		if action != "" || setName != "" || setNameSameDir != "" {
+			opts = &platforms.LaunchOptions{
+				Action:         action,
+				SetName:        setName,
+				SetNameSameDir: setNameSameDir,
+			}
 		}
 
 		if launcherID != "" {

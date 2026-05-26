@@ -98,7 +98,7 @@ func checkInZip(path string) string {
 func launch(
 	pl platforms.Platform, coreID string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		// Close console if needed - FPGA cores take over display
 		if err := pl.ConsoleManager().Close(); err != nil {
 			log.Warn().Err(err).Msg("failed to close console before FPGA launch")
@@ -123,6 +123,14 @@ func launch(
 		}
 
 		path = checkInZip(path)
+
+		if opts != nil && opts.SetName != "" {
+			sn := *s
+			if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
+				return nil, setNameErr
+			}
+			s = &sn
+		}
 
 		err = mgls.LaunchGame(cfg, s, path)
 		if err != nil {
@@ -170,7 +178,7 @@ func launchSinden(
 	systemID string,
 	rbfName string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		s, err := cores.GetCore(systemID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
@@ -195,6 +203,9 @@ func launchSinden(
 
 		sn.SetName = rbfName + "_Sinden"
 		sn.SetNameSameDir = true
+		if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
+			return nil, setNameErr
+		}
 
 		log.Debug().Str("rbf", sn.RBF).Msgf("launching Sinden: %v", sn)
 
@@ -243,15 +254,125 @@ func launchAggGnw(cfg *config.Instance, path string, _ *platforms.LaunchOptions)
 	return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
 }
 
+func validSetName(name string) bool {
+	if name == "" || len(name) > 31 {
+		return false
+	}
+	for i, r := range name {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		if i > 0 && (r == '_' || r == '-' || r == ' ') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func parseSetNameSameDir(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "t", "true", "y", "yes", "on":
+		return true, nil
+	case "0", "f", "false", "n", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid set_name_same_dir value %q", value)
+	}
+}
+
+func applySetNameOptions(core *cores.Core, opts *platforms.LaunchOptions) error {
+	if opts == nil || opts.SetName == "" {
+		return nil
+	}
+	if !validSetName(opts.SetName) {
+		return fmt.Errorf("invalid set_name %q", opts.SetName)
+	}
+
+	core.SetName = opts.SetName
+	core.SetNameSameDir = false
+	if opts.SetNameSameDir != "" {
+		sameDir, err := parseSetNameSameDir(opts.SetNameSameDir)
+		if err != nil {
+			return err
+		}
+		core.SetNameSameDir = sameDir
+	}
+	return nil
+}
+
 func launchAltCore(
 	launcherID string,
 	systemID string,
 	rbfPath string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, "")
+}
+
+func launchAltCoreWithSetName(
+	launcherID string,
+	systemID string,
+	rbfPath string,
+	setName string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, setName)
+}
+
+func retroAchievementsSetName(launcherID string) (string, bool) {
+	switch launcherID {
+	case "RAAtari7800":
+		return "RA_Atari7800", true
+	case "RAGameboy":
+		return "RA_Gameboy", true
+	case "RAGBA":
+		return "RA_GBA", true
+	case "RAMegaCD":
+		return "RA_MegaCD", true
+	case "RAMegaDrive":
+		return "RA_MegaDrive", true
+	case "RANeoGeo":
+		return "RA_NeoGeo", true
+	case "RANES":
+		return "RA_NES", true
+	case "RANintendo64":
+		return "RA_N64", true
+	case "RAPSX":
+		return "RA_PSX", true
+	case "RAS32X":
+		return "RA_S32X", true
+	case "RASMS":
+		return "RA_SMS", true
+	case "RASNES":
+		return "RA_SNES", true
+	case "RATurboGrafx16":
+		return "RA_TurboGrafx16", true
+	default:
+		return "", false
+	}
+}
+
+func launchRetroAchievementsCore(
+	launcherID string,
+	systemID string,
+	rbfPath string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	setName, ok := retroAchievementsSetName(launcherID)
+	if !ok {
+		log.Warn().Str("launcher", launcherID).Msg("missing RetroAchievements set name")
+	}
+	return launchAltCoreWithSetName(launcherID, systemID, rbfPath, setName)
+}
+
+func launchAltCoreWithDefaultSetName(
+	launcherID string,
+	systemID string,
+	rbfPath string,
+	setName string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	// Register alt core during launcher creation
 	cores.GlobalRBFCache.RegisterAltCore(launcherID, rbfPath)
 
-	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		s, err := cores.GetCore(systemID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
@@ -261,6 +382,13 @@ func launchAltCore(
 		sn := *s
 		sn.LauncherID = launcherID
 		sn.RBF = rbfPath
+		if setName != "" {
+			sn.SetName = setName
+			sn.SetNameSameDir = true
+		}
+		if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
+			return nil, setNameErr
+		}
 
 		log.Debug().Str("rbf", sn.RBF).Str("launcher", launcherID).Msgf("launching alt core: %v", sn)
 
@@ -349,7 +477,7 @@ func launchDOS() func(*config.Instance, string, *platforms.LaunchOptions) (*os.P
 }
 
 func launchAtari2600() func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
+	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		s, err := cores.GetCore("Atari2600")
 		if err != nil {
 			return nil, fmt.Errorf("failed to get Atari2600 system: %w", err)
@@ -357,6 +485,9 @@ func launchAtari2600() func(*config.Instance, string, *platforms.LaunchOptions) 
 		path = checkInZip(path)
 
 		sn := *s
+		if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
+			return nil, setNameErr
+		}
 		sn.Slots = []cores.Slot{
 			{
 				Exts: []string{".a26", ".bin"},
@@ -690,7 +821,9 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAAtari7800",
 			SystemID: systemdefs.SystemAtari7800,
-			Launch:   launchAltCore("RAAtari7800", systemdefs.SystemAtari7800, "_RA_Cores/Cores/Atari7800"),
+			Launch: launchRetroAchievementsCore(
+				"RAAtari7800", systemdefs.SystemAtari7800, "_RA_Cores/Cores/Atari7800",
+			),
 		},
 		{
 			ID:         systemdefs.SystemAtariLynx,
@@ -763,7 +896,9 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAGameboy",
 			SystemID: systemdefs.SystemGameboy,
-			Launch:   launchAltCore("RAGameboy", systemdefs.SystemGameboy, "_RA_Cores/Cores/Gameboy"),
+			Launch: launchRetroAchievementsCore(
+				"RAGameboy", systemdefs.SystemGameboy, "_RA_Cores/Cores/Gameboy",
+			),
 		},
 		{
 			ID:         systemdefs.SystemGameboyColor,
@@ -815,7 +950,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAGBA",
 			SystemID: systemdefs.SystemGBA,
-			Launch:   launchAltCore("RAGBA", systemdefs.SystemGBA, "_RA_Cores/Cores/GBA"),
+			Launch:   launchRetroAchievementsCore("RAGBA", systemdefs.SystemGBA, "_RA_Cores/Cores/GBA"),
 		},
 		{
 			ID:         systemdefs.SystemGBA2P,
@@ -849,7 +984,9 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAMegaDrive",
 			SystemID: systemdefs.SystemGenesis,
-			Launch:   launchAltCore("RAMegaDrive", systemdefs.SystemGenesis, "_RA_Cores/Cores/MegaDrive"),
+			Launch: launchRetroAchievementsCore(
+				"RAMegaDrive", systemdefs.SystemGenesis, "_RA_Cores/Cores/MegaDrive",
+			),
 		},
 		{
 			ID:         systemdefs.SystemIntellivision,
@@ -897,7 +1034,9 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RASMS",
 			SystemID: systemdefs.SystemMasterSystem,
-			Launch:   launchAltCore("RASMS", systemdefs.SystemMasterSystem, "_RA_Cores/Cores/SMS"),
+			Launch: launchRetroAchievementsCore(
+				"RASMS", systemdefs.SystemMasterSystem, "_RA_Cores/Cores/SMS",
+			),
 		},
 		{
 			ID:         systemdefs.SystemMegaCD,
@@ -919,7 +1058,9 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAMegaCD",
 			SystemID: systemdefs.SystemMegaCD,
-			Launch:   launchAltCore("RAMegaCD", systemdefs.SystemMegaCD, "_RA_Cores/Cores/MegaCD"),
+			Launch: launchRetroAchievementsCore(
+				"RAMegaCD", systemdefs.SystemMegaCD, "_RA_Cores/Cores/MegaCD",
+			),
 		},
 		{
 			ID:         systemdefs.SystemMegaDuck,
@@ -936,7 +1077,9 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RANeoGeo",
 			SystemID: systemdefs.SystemNeoGeo,
-			Launch:   launchAltCore("RANeoGeo", systemdefs.SystemNeoGeo, "_RA_Cores/Cores/NeoGeo"),
+			Launch: launchRetroAchievementsCore(
+				"RANeoGeo", systemdefs.SystemNeoGeo, "_RA_Cores/Cores/NeoGeo",
+			),
 		},
 		{
 			ID:         systemdefs.SystemNeoGeoCD,
@@ -986,7 +1129,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RANES",
 			SystemID: systemdefs.SystemNES,
-			Launch:   launchAltCore("RANES", systemdefs.SystemNES, "_RA_Cores/Cores/NES"),
+			Launch:   launchRetroAchievementsCore("RANES", systemdefs.SystemNES, "_RA_Cores/Cores/NES"),
 		},
 		{
 			ID:         systemdefs.SystemNintendo64,
@@ -1025,7 +1168,9 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RANintendo64",
 			SystemID: systemdefs.SystemNintendo64,
-			Launch:   launchAltCore("RANintendo64", systemdefs.SystemNintendo64, "_RA_Cores/Cores/N64"),
+			Launch: launchRetroAchievementsCore(
+				"RANintendo64", systemdefs.SystemNintendo64, "_RA_Cores/Cores/N64",
+			),
 		},
 		{
 			ID:         systemdefs.SystemOdyssey2,
@@ -1088,7 +1233,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAPSX",
 			SystemID: systemdefs.SystemPSX,
-			Launch:   launchAltCore("RAPSX", systemdefs.SystemPSX, "_RA_Cores/Cores/PSX"),
+			Launch:   launchRetroAchievementsCore("RAPSX", systemdefs.SystemPSX, "_RA_Cores/Cores/PSX"),
 		},
 		{
 			ID:         systemdefs.SystemSega32X,
@@ -1105,7 +1250,9 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RAS32X",
 			SystemID: systemdefs.SystemSega32X,
-			Launch:   launchAltCore("RAS32X", systemdefs.SystemSega32X, "_RA_Cores/Cores/S32X"),
+			Launch: launchRetroAchievementsCore(
+				"RAS32X", systemdefs.SystemSega32X, "_RA_Cores/Cores/S32X",
+			),
 		},
 		{
 			ID:         systemdefs.SystemSG1000,
@@ -1170,7 +1317,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RASNES",
 			SystemID: systemdefs.SystemSNES,
-			Launch:   launchAltCore("RASNES", systemdefs.SystemSNES, "_RA_Cores/Cores/SNES"),
+			Launch:   launchRetroAchievementsCore("RASNES", systemdefs.SystemSNES, "_RA_Cores/Cores/SNES"),
 		},
 		{
 			ID:       "SindenSNES",
@@ -1211,7 +1358,9 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "RATurboGrafx16",
 			SystemID: systemdefs.SystemTurboGrafx16,
-			Launch:   launchAltCore("RATurboGrafx16", systemdefs.SystemTurboGrafx16, "_RA_Cores/Cores/TurboGrafx16"),
+			Launch: launchRetroAchievementsCore(
+				"RATurboGrafx16", systemdefs.SystemTurboGrafx16, "_RA_Cores/Cores/TurboGrafx16",
+			),
 		},
 		{
 			ID:         systemdefs.SystemTurboGrafx16CD,
