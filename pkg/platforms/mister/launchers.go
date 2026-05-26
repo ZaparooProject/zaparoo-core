@@ -124,7 +124,7 @@ func launch(
 
 		path = checkInZip(path)
 
-		if opts != nil && opts.SetName != "" {
+		if opts != nil && (opts.SetName != "" || opts.SetNameSameDir != "") {
 			sn := *s
 			if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
 				return nil, setNameErr
@@ -282,20 +282,27 @@ func parseSetNameSameDir(value string) (bool, error) {
 }
 
 func applySetNameOptions(core *cores.Core, opts *platforms.LaunchOptions) error {
-	if opts == nil || opts.SetName == "" {
+	if opts == nil {
 		return nil
 	}
-	if !validSetName(opts.SetName) {
-		return fmt.Errorf("invalid set_name %q", opts.SetName)
-	}
 
-	core.SetName = opts.SetName
-	core.SetNameSameDir = false
+	var sameDir bool
 	if opts.SetNameSameDir != "" {
-		sameDir, err := parseSetNameSameDir(opts.SetNameSameDir)
+		var err error
+		sameDir, err = parseSetNameSameDir(opts.SetNameSameDir)
 		if err != nil {
 			return err
 		}
+	}
+
+	if opts.SetName != "" {
+		if !validSetName(opts.SetName) {
+			return fmt.Errorf("invalid set_name %q", opts.SetName)
+		}
+		core.SetName = opts.SetName
+		core.SetNameSameDir = false
+	}
+	if opts.SetNameSameDir != "" {
 		core.SetNameSameDir = sameDir
 	}
 	return nil

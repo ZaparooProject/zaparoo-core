@@ -573,6 +573,28 @@ func TestSetNameOptions(t *testing.T) {
 		assert.False(t, core.SetNameSameDir)
 	})
 
+	t.Run("same dir only updates existing set name", func(t *testing.T) {
+		t.Parallel()
+
+		core := cores.Core{SetName: "ExistingName"}
+		err := applySetNameOptions(&core, &platforms.LaunchOptions{SetNameSameDir: "yes"})
+
+		require.NoError(t, err)
+		assert.Equal(t, "ExistingName", core.SetName)
+		assert.True(t, core.SetNameSameDir)
+	})
+
+	t.Run("same dir only can disable existing same dir", func(t *testing.T) {
+		t.Parallel()
+
+		core := cores.Core{SetName: "ExistingName", SetNameSameDir: true}
+		err := applySetNameOptions(&core, &platforms.LaunchOptions{SetNameSameDir: "no"})
+
+		require.NoError(t, err)
+		assert.Equal(t, "ExistingName", core.SetName)
+		assert.False(t, core.SetNameSameDir)
+	})
+
 	t.Run("invalid same dir", func(t *testing.T) {
 		t.Parallel()
 
@@ -581,6 +603,15 @@ func TestSetNameOptions(t *testing.T) {
 			SetName:        "CustomNES",
 			SetNameSameDir: "maybe",
 		})
+
+		require.Error(t, err)
+	})
+
+	t.Run("invalid same dir without set name", func(t *testing.T) {
+		t.Parallel()
+
+		core := cores.Core{SetName: "ExistingName"}
+		err := applySetNameOptions(&core, &platforms.LaunchOptions{SetNameSameDir: "maybe"})
 
 		require.Error(t, err)
 	})
