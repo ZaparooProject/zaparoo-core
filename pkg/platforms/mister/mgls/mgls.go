@@ -95,7 +95,7 @@ func GenerateMgl(core *cores.Core, rbfPath, path, override string) (string, erro
 			sameDir = " same_dir=\"1\""
 		}
 
-		mgl += fmt.Sprintf("\t<setname%s>%s</setname>\n", sameDir, core.SetName)
+		mgl += fmt.Sprintf("\t<setname%s>%s</setname>\n", sameDir, xmlEscapeAttr(core.SetName))
 	}
 
 	if path == "" {

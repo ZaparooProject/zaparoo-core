@@ -188,6 +188,17 @@ func TestGenerateMgl(t *testing.T) {
 				"\t<setname>FDS</setname>\n</mistergamedescription>",
 		},
 		{
+			name: "core with escaped setname",
+			core: &cores.Core{
+				ID:      "Custom",
+				SetName: "A&B",
+				RBF:     "_Console/NES",
+			},
+			path: "",
+			want: "<mistergamedescription>\n\t<rbf>_Console/NES</rbf>\n" +
+				"\t<setname>A&amp;B</setname>\n</mistergamedescription>",
+		},
+		{
 			name: "core with setname and same_dir",
 			core: &cores.Core{
 				ID:             "Atari2600",

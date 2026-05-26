@@ -187,6 +187,13 @@ type LaunchOptions struct {
 	// - "" or "run": Default behavior (launch/play the media)
 	// - "details": Show media details/info page instead of launching
 	Action string
+	// SetName specifies a platform-defined launch profile/core name override.
+	// On MiSTer this maps to the MGL <setname> tag.
+	SetName string
+	// SetNameSameDir is a raw optional platform-defined flag controlling whether
+	// SetName should keep the original game directory. On MiSTer this maps to the
+	// MGL setname same_dir attribute. Unsupported platforms may ignore it.
+	SetNameSameDir string
 }
 
 // Launcher defines how a platform launcher can launch media and what media it
