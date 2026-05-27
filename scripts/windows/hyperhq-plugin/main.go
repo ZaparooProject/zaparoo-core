@@ -339,7 +339,8 @@ func setupLogging() *os.File {
 	log.SetPrefix("[zaparoo-hyperhq] ")
 
 	path := pluginLogPath()
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // path comes from HyperHQ plugin env or OS temp dir
+	//nolint:gosec // path comes from HyperHQ plugin env or OS temp dir
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		log.Printf("warning: open log file %s: %v", path, err)
 		return nil
@@ -352,7 +353,8 @@ func setupLogging() *os.File {
 
 func pluginLogPath() string {
 	if dataDir := os.Getenv("PLUGIN_DATA_DIR"); dataDir != "" {
-		if err := os.MkdirAll(dataDir, 0o700); err == nil { //nolint:gosec // PLUGIN_DATA_DIR is provided by HyperHQ
+		//nolint:gosec // PLUGIN_DATA_DIR is provided by HyperHQ
+		if err := os.MkdirAll(dataDir, 0o700); err == nil {
 			return filepath.Join(dataDir, "zaparoo-hyperhq.log")
 		}
 	}
@@ -363,6 +365,7 @@ func run() error {
 	pluginID := os.Getenv("HYPERHQ_PLUGIN_ID")
 	authChallenge := os.Getenv("HYPERHQ_AUTH_CHALLENGE")
 	socketPort := os.Getenv("HYPERHQ_SOCKET_PORT")
+	//nolint:gosec // logs only HyperHQ-provided non-secret env metadata; challenge value is not logged
 	log.Printf(
 		"startup env: pluginId=%q challengePresent=%t challengeLength=%d socketPort=%q",
 		pluginID, authChallenge != "", len(authChallenge), socketPort,

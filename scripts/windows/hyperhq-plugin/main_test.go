@@ -157,7 +157,7 @@ func TestPluginRegisterIncludesAuthFields(t *testing.T) {
 		Capabilities: []string{"games"},
 	}
 
-	data, err := json.Marshal(payload)
+	data, err := json.Marshal(payload) //nolint:gosec // verifies sessionToken field is serialized without real secret data
 	if err != nil {
 		t.Fatalf("marshal register payload: %v", err)
 	}
