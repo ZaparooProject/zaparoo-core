@@ -86,16 +86,16 @@ type manifestCommunicationSocketIO struct {
 }
 
 type manifestCommunication struct {
-	SocketIO  manifestCommunicationSocketIO `json:"socketio"`
 	Preferred string                        `json:"preferred"`
 	Fallback  string                        `json:"fallback"`
+	SocketIO  manifestCommunicationSocketIO `json:"socketio"`
 }
 
 type pluginManifest struct {
-	SocketIO      manifestSocketIO      `json:"socketio"`
 	Communication manifestCommunication `json:"communication"`
 	Type          string                `json:"type"`
 	Executable    string                `json:"executable"`
+	SocketIO      manifestSocketIO      `json:"socketio"`
 }
 
 func TestPluginManifestMatchesHyperHQExecutableSocketIODocs(t *testing.T) {
