@@ -41,27 +41,32 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	socketio "github.com/zishang520/socket.io/clients/socket/v3"
-	siotypes "github.com/zishang520/socket.io/v3/pkg/types"
+	sio "github.com/karagenc/socket.io-go"
+	eio "github.com/karagenc/socket.io-go/engine.io"
 )
 
 const (
 	pipeName        = `\\.\pipe\zaparoo-hyperhq-ipc`
-	pluginNamespace = "/plugin"
+	pluginNamespace = "/"
 	pluginVersion   = "0.1.0"
 
 	pipeReconnectDelay = 2 * time.Second
 	pipeBufferMax      = 16 * 1024 * 1024 // 16MB to match Zaparoo Core scanner buffer
 	requestTimeout     = 30 * time.Second
 	launchAckTimeout   = 5 * time.Second
+	gameListMethod     = "getGamesForSystem"
+	gameListParamKey   = "systemId"
 )
 
 // HyperHQ event types carried on the hyperHqEvent envelope.
@@ -87,6 +92,8 @@ type pipeEvent struct {
 	ID                string         `json:"Id,omitempty"`
 	Title             string         `json:"Title,omitempty"`
 	Platform          string         `json:"Platform,omitempty"`
+	SystemID          string         `json:"SystemId,omitempty"`
+	SystemName        string         `json:"SystemName,omitempty"`
 	SystemReferenceID string         `json:"SystemReferenceId,omitempty"`
 	Error             string         `json:"Error,omitempty"`
 	Systems           []hqSystemInfo `json:"Systems,omitempty"`
@@ -97,11 +104,20 @@ type pipeEvent struct {
 type pipeCommand struct {
 	Command           string `json:"Command"`
 	ID                string `json:"Id,omitempty"`
+	SystemID          string `json:"SystemId,omitempty"`
+	SystemName        string `json:"SystemName,omitempty"`
 	SystemReferenceID string `json:"SystemReferenceId,omitempty"`
+}
+
+type systemQueryTarget struct {
+	ID          string
+	Name        string
+	ReferenceID string
 }
 
 //nolint:tagliatelle // PascalCase tags must match the Zaparoo Core pipe peer.
 type hqSystemInfo struct {
+	ID          string `json:"Id"`
 	Name        string `json:"Name"`
 	ReferenceID string `json:"ReferenceId"`
 	Platform    string `json:"Platform"`
@@ -130,6 +146,8 @@ type hqAuthResponse struct {
 type hqPluginRegister struct {
 	ID           string   `json:"id"`
 	Version      string   `json:"version"`
+	Type         string   `json:"type,omitempty"`
+	SessionToken string   `json:"sessionToken,omitempty"`
 	Capabilities []string `json:"capabilities"`
 }
 
@@ -147,6 +165,7 @@ type hqPluginResponse struct {
 	ID           string `json:"id"`
 	Type         string `json:"type"`
 	SessionToken string `json:"sessionToken,omitempty"`
+	Timestamp    int64  `json:"timestamp,omitempty"`
 }
 
 // hqRequestData is the envelope plugins send to call HyperHQ data methods.
@@ -190,15 +209,37 @@ type hqGameClosedPayload struct {
 }
 
 type hqRawSystem struct {
+	ID          string `json:"id"`
 	Name        string `json:"name"`
 	ReferenceID string `json:"referenceId"`
 	Platform    string `json:"platform"`
 }
 
 type hqRawGame struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Platform string `json:"platform"`
+	ID          string `json:"id"`
+	GameID      string `json:"gameId"`
+	Name        string `json:"name"`
+	Title       string `json:"title"`
+	ReferenceID string `json:"referenceId"`
+	FileName    string `json:"fileName"`
+	ROMPath     string `json:"romPath"`
+	Platform    string `json:"platform"`
+	SystemName  string `json:"systemName"`
+}
+
+type hqSystemsData struct {
+	Systems []hqRawSystem `json:"systems"`
+}
+
+type hqGamesData struct {
+	Games []hqRawGame `json:"games"`
+}
+
+type gameRequestVariant struct {
+	Method     string
+	ParamKey   string
+	ParamValue string
+	Label      string
 }
 
 // bridge owns the HyperHQ Socket.IO connection and forwards activity to the
@@ -208,8 +249,47 @@ type hqRawGame struct {
 // channel by requestId and hands the payload over.
 type hqSocket interface {
 	Emit(string, ...any) error
-	On(siotypes.EventName, ...siotypes.EventListener) error
-	Id() string
+	OnEvent(string, func(any))
+	OnConnect(func())
+	OnConnectError(func(any))
+	OnDisconnect(func(any))
+	Connect()
+	ID() string
+}
+
+type karagencSocket struct {
+	socket sio.ClientSocket
+}
+
+func (s *karagencSocket) Emit(event string, args ...any) error {
+	s.socket.Emit(event, args...)
+	return nil
+}
+
+func (s *karagencSocket) OnEvent(event string, listener func(any)) {
+	s.socket.OnEvent(event, listener)
+}
+
+func (s *karagencSocket) OnConnect(listener func()) {
+	s.socket.OnConnect(listener)
+}
+
+func (s *karagencSocket) OnConnectError(listener func(any)) {
+	s.socket.OnConnectError(listener)
+}
+
+func (s *karagencSocket) OnDisconnect(listener func(any)) {
+	s.socket.OnDisconnect(func(reason sio.Reason) {
+		listener(reason)
+	})
+}
+
+func (s *karagencSocket) Connect() {
+	s.socket.Connect()
+}
+
+func (s *karagencSocket) ID() string {
+	return string(s.socket.ID())
 }
 
 type pipeEventWriter interface {
@@ -237,8 +317,14 @@ type bridge struct {
 }
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	log.SetPrefix("[zaparoo-hyperhq] ")
+	logFile := setupLogging()
+	if logFile != nil {
+		defer func() {
+			if err := logFile.Close(); err != nil {
+				log.Printf("log file close error: %v", err)
+			}
+		}()
+	}
 
 	if err := run(); err != nil {
 		log.Printf("fatal: %v", err)
@@ -246,10 +332,39 @@ func main() {
 	}
 }
 
+func setupLogging() *os.File {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.SetPrefix("[zaparoo-hyperhq] ")
+
+	path := pluginLogPath()
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		log.Printf("warning: open log file %s: %v", path, err)
+		return nil
+	}
+
+	log.SetOutput(io.MultiWriter(os.Stderr, file))
+	log.Printf("logging to %s", path)
+	return file
+}
+
+func pluginLogPath() string {
+	if dataDir := os.Getenv("PLUGIN_DATA_DIR"); dataDir != "" {
+		if err := os.MkdirAll(dataDir, 0o700); err == nil {
+			return filepath.Join(dataDir, "zaparoo-hyperhq.log")
+		}
+	}
+	return filepath.Join(os.TempDir(), "zaparoo-hyperhq.log")
+}
+
 func run() error {
 	pluginID := os.Getenv("HYPERHQ_PLUGIN_ID")
 	authChallenge := os.Getenv("HYPERHQ_AUTH_CHALLENGE")
 	socketPort := os.Getenv("HYPERHQ_SOCKET_PORT")
+	log.Printf(
+		"startup env: pluginId=%q challengePresent=%t challengeLength=%d socketPort=%q",
+		pluginID, authChallenge != "", len(authChallenge), socketPort,
+	)
 
 	if pluginID == "" || authChallenge == "" || socketPort == "" {
 		return fmt.Errorf(
@@ -294,12 +409,14 @@ func run() error {
 	return nil
 }
 
-// onSocket registers a typed listener on the underlying event emitter without
-// repeating the EventName/EventListener cast at every call site.
+func socketIOManagerURL(port string) string {
+	return fmt.Sprintf("http://localhost:%s/socket.io/", port)
+}
+
 func onSocket(sock hqSocket, event string, listener func(...any)) {
-	if err := sock.On(siotypes.EventName(event), siotypes.EventListener(listener)); err != nil {
-		log.Printf("warning: register listener for %q failed: %v", event, err)
-	}
+	sock.OnEvent(event, func(data any) {
+		listener(data)
+	})
 }
 
 func (b *bridge) clearSessionToken() {
@@ -313,19 +430,20 @@ func (b *bridge) clearSessionToken() {
 // completes (or fails). After that the socket runs in the background and
 // reconnects on its own.
 func (b *bridge) connectSocket(port string) error {
-	url := fmt.Sprintf("http://localhost:%s%s", port, pluginNamespace)
+	url := socketIOManagerURL(port)
 	// #nosec G706 -- port is validated as numeric in run() before reaching here.
-	log.Printf("connecting to HyperHQ at %s", url)
+	log.Printf("connecting to HyperHQ Socket.IO at %s namespace %s", url, pluginNamespace)
 
-	opts := socketio.DefaultOptions()
-	opts.SetReconnection(true)
-	opts.SetReconnectionDelay(1000)
-	opts.SetReconnectionDelayMax(5000)
-
-	sock, err := socketio.Connect(url, opts)
-	if err != nil {
-		return fmt.Errorf("socket.io connect: %w", err)
-	}
+	reconnectDelay := time.Second
+	reconnectDelayMax := 5 * time.Second
+	manager := sio.NewManager(url, &sio.ManagerConfig{
+		EIO: eio.ClientConfig{
+			Transports: []string{"polling", "websocket"},
+		},
+		ReconnectionDelay:    &reconnectDelay,
+		ReconnectionDelayMax: &reconnectDelayMax,
+	})
+	sock := &karagencSocket{socket: manager.Socket(pluginNamespace, nil)}
 	b.socket = sock
 
 	authDone := make(chan error, 1)
@@ -345,9 +463,9 @@ func (b *bridge) connectSocket(port string) error {
 		}
 	}
 
-	onSocket(sock, "connect", func(_ ...any) {
-		// #nosec G706 -- sock.Id() is a Socket.IO-generated session token, not user input.
-		log.Printf("HyperHQ socket connected (id=%s)", sock.Id())
+	sock.OnConnect(func() {
+		// #nosec G706 -- sock.ID() is a Socket.IO-generated session token, not user input.
+		log.Printf("HyperHQ socket connected (id=%s); emitting authenticate", sock.ID())
 		req := hqAuthRequest{PluginID: b.pluginID, Challenge: b.authChallenge}
 		if emitErr := sock.Emit("authenticate", req); emitErr != nil {
 			signalAuth(fmt.Errorf("emit authenticate: %w", emitErr))
@@ -376,6 +494,8 @@ func (b *bridge) connectSocket(port string) error {
 		registerPayload := hqPluginRegister{
 			ID:           b.pluginID,
 			Version:      pluginVersion,
+			Type:         "executable",
+			SessionToken: resp.SessionToken,
 			Capabilities: []string{"games", "launch", "events"},
 		}
 		if err := sock.Emit("plugin:register", registerPayload); err != nil {
@@ -397,19 +517,21 @@ func (b *bridge) connectSocket(port string) error {
 		log.Printf("HyperHQ confirmed event subscription: %v", args)
 	})
 
-	onSocket(sock, "connect_error", func(args ...any) {
-		log.Printf("HyperHQ connect_error: %v", args)
-		signalAuth(fmt.Errorf("connect error: %v", args))
+	sock.OnConnectError(func(err any) {
+		log.Printf("HyperHQ connect_error: %v", err)
+		signalAuth(fmt.Errorf("connect error: %v", err))
 	})
 
-	onSocket(sock, "disconnect", func(args ...any) {
-		log.Printf("HyperHQ socket disconnected: %v", args)
+	sock.OnDisconnect(func(reason any) {
+		log.Printf("HyperHQ socket disconnected: %v", reason)
 		b.clearSessionToken()
 	})
 
 	onSocket(sock, "request", b.handleLifecycleRequest)
 	onSocket(sock, "dataResponse", b.handleDataResponse)
 	onSocket(sock, "hyperHqEvent", b.handleHyperHqEvent)
+
+	sock.Connect()
 
 	select {
 	case err := <-authDone:
@@ -433,19 +555,27 @@ func (b *bridge) handleLifecycleRequest(args ...any) {
 	}
 	log.Printf("HyperHQ request: id=%s method=%s", req.ID, req.Method)
 
-	respData := map[string]any{"success": true}
+	respType := "response"
+	var respData any
 
 	switch req.Method {
 	case hqMethodInitialize:
-		respData["pluginId"] = b.pluginID
-		respData["version"] = pluginVersion
-	case hqMethodExecute, hqMethodTest:
-		// Nothing extra — Zaparoo's bridge doesn't implement test commands.
+		respData = "initialized"
+	case hqMethodExecute:
+		// Zaparoo's bridge doesn't implement UI actions.
+		respData = map[string]any{"success": true}
+	case hqMethodTest:
+		b.sessionMu.RLock()
+		respData = b.sessionToken != ""
+		b.sessionMu.RUnlock()
 	case hqMethodShutdown:
 		log.Print("HyperHQ requested shutdown")
+		respData = "ok"
 		defer b.cancel()
 	default:
 		log.Printf("unknown request method: %s", req.Method)
+		respType = "error"
+		respData = map[string]string{"error": "unknown method: " + req.Method}
 	}
 
 	if req.ID == "" {
@@ -458,13 +588,18 @@ func (b *bridge) handleLifecycleRequest(args ...any) {
 
 	resp := hqPluginResponse{
 		ID:           req.ID,
-		Type:         "response",
+		Type:         respType,
 		Data:         respData,
 		SessionToken: token,
+		Timestamp:    time.Now().UnixMilli(),
 	}
 	if err := b.socket.Emit("plugin:response", resp); err != nil {
 		log.Printf("plugin:response emit (id=%s): %v", req.ID, err)
 	}
+	if err := b.socket.Emit("response", resp); err != nil {
+		log.Printf("response emit (id=%s): %v", req.ID, err)
+	}
+	log.Printf("HyperHQ response emitted: id=%s method=%s type=%s", req.ID, req.Method, respType)
 }
 
 // handleDataResponse routes a dataResponse to whichever requestData call is
@@ -650,7 +785,8 @@ func (b *bridge) handlePipeCommand(writer pipeEventWriter, line string) {
 	case "GetSystems":
 		go b.pushSystems(writer)
 	case "GetGamesForSystem":
-		go b.pushGames(writer, cmd.SystemReferenceID)
+		target := systemQueryTarget{ID: cmd.SystemID, Name: cmd.SystemName, ReferenceID: cmd.SystemReferenceID}
+		go b.pushGames(writer, target)
 	case "Launch":
 		go b.launchGame(cmd.ID)
 	default:
@@ -666,28 +802,38 @@ func (b *bridge) pushSystems(writer pipeEventWriter) {
 		return
 	}
 
+	log.Printf("received %d HyperHQ systems from requestData", len(systems))
 	out := make([]hqSystemInfo, 0, len(systems))
 	for _, sys := range systems {
+		log.Printf(
+			"HyperHQ system: id=%q referenceId=%q name=%q platform=%q",
+			sys.ID, sys.ReferenceID, sys.Name, sys.Platform,
+		)
 		out = append(out, hqSystemInfo(sys))
 	}
 	writer.writePipeEvent(&pipeEvent{Event: "Systems", Systems: out})
 }
 
-func (b *bridge) pushGames(writer pipeEventWriter, systemReferenceID string) {
-	if systemReferenceID == "" {
+func (b *bridge) pushGames(writer pipeEventWriter, target systemQueryTarget) {
+	if target.ID == "" && target.ReferenceID == "" {
 		writer.writePipeEvent(&pipeEvent{
 			Event: "Games",
-			Error: "missing SystemReferenceId",
+			Error: "missing SystemId and SystemReferenceId",
 		})
 		return
 	}
 
-	games, err := b.requestGames(systemReferenceID)
+	games, err := b.requestGames(target)
 	if err != nil {
-		log.Printf("getGamesForSystem(%s) failed: %v", systemReferenceID, err)
+		log.Printf(
+			"%s(id=%q name=%q referenceId=%q) failed: %v",
+			gameListMethod, target.ID, target.Name, target.ReferenceID, err,
+		)
 		writer.writePipeEvent(&pipeEvent{
 			Event:             "Games",
-			SystemReferenceID: systemReferenceID,
+			SystemID:          target.ID,
+			SystemName:        target.Name,
+			SystemReferenceID: target.ReferenceID,
 			Error:             err.Error(),
 		})
 		return
@@ -695,11 +841,17 @@ func (b *bridge) pushGames(writer pipeEventWriter, systemReferenceID string) {
 
 	out := make([]hqGameInfo, 0, len(games))
 	for _, g := range games {
-		out = append(out, hqGameInfo(g))
+		out = append(out, hqGameInfo{
+			ID:       g.ID,
+			Title:    g.Title,
+			Platform: g.Platform,
+		})
 	}
 	writer.writePipeEvent(&pipeEvent{
 		Event:             "Games",
-		SystemReferenceID: systemReferenceID,
+		SystemID:          target.ID,
+		SystemName:        target.Name,
+		SystemReferenceID: target.ReferenceID,
 		Games:             out,
 	})
 }
@@ -733,25 +885,118 @@ func (b *bridge) requestSystems() ([]hqRawSystem, error) {
 	if err != nil {
 		return nil, err
 	}
-	var systems []hqRawSystem
-	if err := unmarshalIfPresent(resp, &systems); err != nil {
+	systems, err := decodeSystemsData(resp)
+	if err != nil {
 		return nil, fmt.Errorf("decode systems: %w", err)
 	}
 	return systems, nil
 }
 
-func (b *bridge) requestGames(systemID string) ([]hqRawGame, error) {
-	resp, err := b.requestData("getGamesForSystem", map[string]any{
-		"systemId": systemID,
-	})
-	if err != nil {
+func (b *bridge) requestGames(target systemQueryTarget) ([]hqRawGame, error) {
+	variants := gameRequestVariants(target)
+	if len(variants) == 0 {
+		return nil, errors.New("missing HyperHQ system identifiers")
+	}
+
+	failures := make([]string, 0, len(variants))
+	for _, variant := range variants {
+		log.Printf(
+			"requesting HyperHQ games: method=%s param=%s source=%s value=%q",
+			variant.Method, variant.ParamKey, variant.Label, variant.ParamValue,
+		)
+		resp, err := b.requestData(variant.Method, map[string]any{
+			variant.ParamKey: variant.ParamValue,
+		})
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", variant.Label, err))
+			log.Printf("HyperHQ games request failed (%s): %v", variant.Label, err)
+			continue
+		}
+		games, err := decodeGamesData(resp)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: decode games: %v", variant.Label, err))
+			log.Printf("HyperHQ games decode failed (%s): %v", variant.Label, err)
+			continue
+		}
+		log.Printf("HyperHQ games request succeeded (%s): %d games", variant.Label, len(games))
+		return games, nil
+	}
+
+	return nil, fmt.Errorf("all HyperHQ game request variants failed: %s", strings.Join(failures, "; "))
+}
+
+func gameRequestVariants(target systemQueryTarget) []gameRequestVariant {
+	value := target.Name
+	label := "name"
+	if value == "" {
+		value = target.ID
+		label = "id"
+	}
+	if value == "" {
+		value = target.ReferenceID
+		label = "referenceId"
+	}
+	if value == "" {
+		return nil
+	}
+	return []gameRequestVariant{
+		{
+			Method:     gameListMethod,
+			ParamKey:   gameListParamKey,
+			ParamValue: value,
+			Label:      label,
+		},
+	}
+}
+
+func decodeSystemsData(raw json.RawMessage) ([]hqRawSystem, error) {
+	var systems []hqRawSystem
+	if err := unmarshalIfPresent(raw, &systems); err == nil {
+		return systems, nil
+	}
+
+	var wrapped hqSystemsData
+	if err := unmarshalIfPresent(raw, &wrapped); err != nil {
 		return nil, err
 	}
+	return wrapped.Systems, nil
+}
+
+func decodeGamesData(raw json.RawMessage) ([]hqRawGame, error) {
 	var games []hqRawGame
-	if err := unmarshalIfPresent(resp, &games); err != nil {
-		return nil, fmt.Errorf("decode games: %w", err)
+	if err := unmarshalIfPresent(raw, &games); err == nil {
+		return normalizeGameTitles(games), nil
 	}
-	return games, nil
+
+	var wrapped hqGamesData
+	if err := unmarshalIfPresent(raw, &wrapped); err != nil {
+		return nil, err
+	}
+	return normalizeGameTitles(wrapped.Games), nil
+}
+
+func normalizeGameTitles(games []hqRawGame) []hqRawGame {
+	for i := range games {
+		if games[i].ID == "" {
+			games[i].ID = games[i].GameID
+		}
+		if games[i].ID == "" {
+			games[i].ID = games[i].ReferenceID
+		}
+		if games[i].Title == "" {
+			games[i].Title = games[i].Name
+		}
+		if games[i].Title == "" {
+			games[i].Title = games[i].FileName
+		}
+		if games[i].Title == "" {
+			games[i].Title = games[i].ROMPath
+		}
+		if games[i].Platform == "" {
+			games[i].Platform = games[i].SystemName
+		}
+	}
+	return games
 }
 
 // requestData wraps HyperHQ's documented requestData(method, params) RPC. It

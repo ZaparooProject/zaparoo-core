@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -68,13 +69,22 @@ type hqEvent struct {
 type hqCommand struct {
 	Command           string `json:"Command"`
 	ID                string `json:"Id,omitempty"`
+	SystemID          string `json:"SystemId,omitempty"`
+	SystemName        string `json:"SystemName,omitempty"`
 	SystemReferenceID string `json:"SystemReferenceId,omitempty"`
+}
+
+type hqSystemQueryTarget struct {
+	ID          string
+	Name        string
+	ReferenceID string
 }
 
 // HqSystemInfo represents a HyperHQ system as reported by the plugin.
 //
 //nolint:tagliatelle // JSON tags must match HyperHQ plugin structure (PascalCase)
 type HqSystemInfo struct {
+	ID          string `json:"Id"`
 	Name        string `json:"Name"`
 	ReferenceID string `json:"ReferenceId"`
 	Platform    string `json:"Platform"`
@@ -98,6 +108,8 @@ type HqGameInfo struct {
 //nolint:tagliatelle // JSON tags must match HyperHQ plugin structure (PascalCase)
 type hqGamesEvent struct {
 	Event             string       `json:"Event"`
+	SystemID          string       `json:"SystemId,omitempty"`
+	SystemName        string       `json:"SystemName,omitempty"`
 	SystemReferenceID string       `json:"SystemReferenceId"`
 	Error             string       `json:"Error,omitempty"`
 	Games             []HqGameInfo `json:"Games"`
@@ -109,12 +121,148 @@ type hqGamesResponse struct {
 	Games []HqGameInfo
 }
 
-// hqSysMap maps Zaparoo system IDs to HyperHQ canonical platform names.
-// Seeded from lbSysMap because HyperHQ ships with conventions inherited from the
-// HyperSpin / LaunchBox ecosystem; this is expected to diverge once a live
-// `getSystems` response is observed during validation. Both maps are read-only
-// at runtime so sharing the reference is safe.
-var hqSysMap = lbSysMap
+// hqSystemAliases maps HyperHQ system names to Zaparoo system IDs. HyperHQ
+// also supports custom systems, so unmapped names are logged for future aliases.
+var hqSystemAliases = map[string]string{
+	"3DO Interactive Multiplayer":         systemdefs.System3DO,
+	"Acorn Archimedes":                    systemdefs.SystemArchimedes,
+	"Acorn Atom":                          systemdefs.SystemAcornAtom,
+	"Acorn BBC Micro":                     systemdefs.SystemBBCMicro,
+	"Acorn Electron":                      systemdefs.SystemAcornElectron,
+	"Android":                             systemdefs.SystemAndroid,
+	"Apogee BK-01":                        systemdefs.SystemApogee,
+	"Apple II":                            systemdefs.SystemAppleII,
+	"Apple iOS":                           systemdefs.SystemIOS,
+	"Apple Mac OS":                        systemdefs.SystemMacOS,
+	"Arcade (MAME)":                       systemdefs.SystemArcade,
+	"Arcade (TeknoParrot)":                systemdefs.SystemArcade,
+	"Atari 2600":                          systemdefs.SystemAtari2600,
+	"Atari 5200":                          systemdefs.SystemAtari5200,
+	"Atari 7800":                          systemdefs.SystemAtari7800,
+	"Atari 800":                           systemdefs.SystemAtari800,
+	"Atari Jaguar":                        systemdefs.SystemJaguar,
+	"Atari Jaguar CD":                     systemdefs.SystemJaguarCD,
+	"Atari Lynx":                          systemdefs.SystemAtariLynx,
+	"Atari ST":                            systemdefs.SystemAtariST,
+	"Atari XEGS":                          systemdefs.SystemAtariXEGS,
+	"Bally Astrocade":                     systemdefs.SystemAstrocade,
+	"Bandai Sufami Turbo":                 systemdefs.SystemSufami,
+	"Bandai WonderSwan":                   systemdefs.SystemWonderSwan,
+	"Bandai WonderSwan Color":             systemdefs.SystemWonderSwanColor,
+	"BBC Microcomputer System":            systemdefs.SystemBBCMicro,
+	"Casio PV-1000":                       systemdefs.SystemCasioPV1000,
+	"Casio PV-2000":                       systemdefs.SystemCasioPV2000,
+	"Coleco ADAM":                         systemdefs.SystemColecoAdam,
+	"ColecoVision":                        systemdefs.SystemColecoVision,
+	"Commodore 16":                        systemdefs.SystemC16,
+	"Commodore 64":                        systemdefs.SystemC64,
+	"Commodore Amiga":                     systemdefs.SystemAmiga,
+	"Commodore Amiga CD32":                systemdefs.SystemAmigaCD32,
+	"Commodore PET":                       systemdefs.SystemPET2001,
+	"Commodore Plus 4":                    systemdefs.SystemC16,
+	"Commodore VIC-20":                    systemdefs.SystemVIC20,
+	"Creatronic Mega Duck":                systemdefs.SystemMegaDuck,
+	"Daphne":                              systemdefs.SystemDAPHNE,
+	"DICE":                                systemdefs.SystemDICE,
+	"Elektronika BK 0011":                 systemdefs.SystemBK0011M,
+	"Emerson Arcadia 2001":                systemdefs.SystemArcadia,
+	"Entex Adventure Vision":              systemdefs.SystemAdventureVision,
+	"Epoch Game Pocket Computer":          systemdefs.SystemGamePocket,
+	"Fairchild Channel F":                 systemdefs.SystemChannelF,
+	"Fujitsu FM Towns":                    systemdefs.SystemFMTowns,
+	"Fujitsu FM Towns Marty":              systemdefs.SystemFMTowns,
+	"Fujitsu FM-7":                        systemdefs.SystemFM7,
+	"Funtech Super Acan":                  systemdefs.SystemSuperACan,
+	"GamePark GP32":                       systemdefs.SystemGP32,
+	"GCE Vectrex":                         systemdefs.SystemVectrex,
+	"Hartung Game Master":                 systemdefs.SystemGameMaster,
+	"Hypseus Singe":                       systemdefs.SystemSinge,
+	"Interton VC 4000":                    systemdefs.SystemVC4000,
+	"Jupiter Ace":                         systemdefs.SystemJupiter,
+	"Matra and Hachette Alice":            systemdefs.SystemAliceMC10,
+	"Mattel Aquarius":                     systemdefs.SystemAquarius,
+	"Mattel Intellivision":                systemdefs.SystemIntellivision,
+	"Microsoft MS-DOS":                    systemdefs.SystemDOS,
+	"Microsoft MSX":                       systemdefs.SystemMSX,
+	"Microsoft MSX2":                      systemdefs.SystemMSX2,
+	"Microsoft MSX2+":                     systemdefs.SystemMSX2Plus,
+	"Microsoft Windows":                   systemdefs.SystemWindows,
+	"Microsoft Windows 3.x":               systemdefs.SystemWindows,
+	"Microsoft Xbox":                      systemdefs.SystemXbox,
+	"Microsoft Xbox 360":                  systemdefs.SystemXbox360,
+	"Microsoft Xbox One":                  systemdefs.SystemXboxOne,
+	"NEC PC Engine SuperGrafx":            systemdefs.SystemSuperGrafx,
+	"NEC PC-8801":                         systemdefs.SystemPC88,
+	"NEC PC-9801":                         systemdefs.SystemPC98,
+	"NEC PC-FX":                           systemdefs.SystemPCFX,
+	"NEC TurboGrafx-16":                   systemdefs.SystemTurboGrafx16,
+	"NEC TurboGrafx-CD":                   systemdefs.SystemTurboGrafx16CD,
+	"Nintendo 3DS":                        systemdefs.System3DS,
+	"Nintendo 64":                         systemdefs.SystemNintendo64,
+	"Nintendo DS":                         systemdefs.SystemNDS,
+	"Nintendo Entertainment System":       systemdefs.SystemNES,
+	"Nintendo Famicom Disk System":        systemdefs.SystemFDS,
+	"Nintendo Game Boy":                   systemdefs.SystemGameboy,
+	"Nintendo Game Boy Advance":           systemdefs.SystemGBA,
+	"Nintendo Game Boy Color":             systemdefs.SystemGameboyColor,
+	"Nintendo GameCube":                   systemdefs.SystemGameCube,
+	"Nintendo Pokémon Mini":               systemdefs.SystemPokemonMini,
+	"Nintendo Satellaview":                systemdefs.SystemSufami,
+	"Nintendo Super Gameboy":              systemdefs.SystemSuperGameboy,
+	"Nintendo Switch":                     systemdefs.SystemSwitch,
+	"Nintendo Virtual Boy":                systemdefs.SystemVirtualBoy,
+	"Nintendo Wii":                        systemdefs.SystemWii,
+	"Nintendo Wii U":                      systemdefs.SystemWiiU,
+	"Philips CD-i":                        systemdefs.SystemCDI,
+	"Sammy Atomiswave":                    systemdefs.SystemAtomiswave,
+	"ScummVM":                             systemdefs.SystemScummVM,
+	"Sega 32X":                            systemdefs.SystemSega32X,
+	"Sega CD":                             systemdefs.SystemMegaCD,
+	"Sega Dreamcast":                      systemdefs.SystemDreamcast,
+	"Sega Game Gear":                      systemdefs.SystemGameGear,
+	"Sega Genesis":                        systemdefs.SystemGenesis,
+	"Sega Hikaru":                         systemdefs.SystemHikaru,
+	"Sega Master System":                  systemdefs.SystemMasterSystem,
+	"Sega Model 2":                        systemdefs.SystemModel2,
+	"Sega Model 3":                        systemdefs.SystemModel3,
+	"Sega Naomi":                          systemdefs.SystemNAOMI,
+	"Sega Naomi 2":                        systemdefs.SystemNAOMI2,
+	"Sega Saturn":                         systemdefs.SystemSaturn,
+	"Sega SG-1000":                        systemdefs.SystemSG1000,
+	"Sega ST-V":                           systemdefs.SystemArcade,
+	"Sega Triforce":                       systemdefs.SystemTriforce,
+	"Sharp X1":                            systemdefs.SystemX1,
+	"Sharp X68000":                        systemdefs.SystemX68000,
+	"Sinclair ZX Spectrum":                systemdefs.SystemZXSpectrum,
+	"Sinclair ZX81":                       systemdefs.SystemZX81,
+	"SNK Neo Geo AES":                     systemdefs.SystemNeoGeoAES,
+	"SNK Neo Geo CD":                      systemdefs.SystemNeoGeoCD,
+	"SNK Neo Geo MVS":                     systemdefs.SystemNeoGeoMVS,
+	"SNK Neo Geo Pocket":                  systemdefs.SystemNeoGeoPocket,
+	"SNK Neo Geo Pocket Color":            systemdefs.SystemNeoGeoPocketColor,
+	"Sony Playstation":                    systemdefs.SystemPSX,
+	"Sony Playstation 2":                  systemdefs.SystemPS2,
+	"Sony Playstation 3":                  systemdefs.SystemPS3,
+	"Sony Playstation 4":                  systemdefs.SystemPS4,
+	"Sony Playstation 5":                  systemdefs.SystemPS5,
+	"Sony Playstation Portable":           systemdefs.SystemPSP,
+	"Sony Playstation Vita":               systemdefs.SystemVita,
+	"Sony PSP Minis":                      systemdefs.SystemPSP,
+	"Sord M5":                             systemdefs.SystemSordM5,
+	"Spectravideo":                        systemdefs.SystemSpectravideo,
+	"Super Nintendo Entertainment System": systemdefs.SystemSNES,
+	"Tandy TRS-80":                        systemdefs.SystemTRS80,
+	"Tandy TRS-80 Color Computer":         systemdefs.SystemCoCo2,
+	"Tangerine Oric Atmos":                systemdefs.SystemOric,
+	"Texas Instruments TI 99/4A":          systemdefs.SystemTI994A,
+	"Tiger Game.com":                      systemdefs.SystemGameCom,
+	"Tomy Tutor":                          systemdefs.SystemTomyTutor,
+	"Vector-06C":                          systemdefs.SystemVector06C,
+	"VTech CreatiVision":                  systemdefs.SystemCreatiVision,
+	"VTech Socrates":                      systemdefs.SystemSocrates,
+	"VTech V.Smile":                       systemdefs.SystemVSmile,
+	"Watara Supervision":                  systemdefs.SystemSuperVision,
+}
 
 // hqInstallSubdirs is the set of well-known relative paths a HyperHQ install can occupy
 // under a parent directory. We probe each candidate parent (LOCALAPPDATA, PROGRAMDATA,
@@ -172,15 +320,10 @@ func findHyperHqDir(cfg *config.Instance) (string, error) {
 // pendingHqGamesRequest tracks a pending synchronous game request during scanning.
 //
 // Single-in-flight is enforced at the call site so concurrent requests can't
-// race. The slot is matched on systemReferenceID — adequate so long as no
-// caller times out and immediately retries the same system, since a late
-// Games event from the cancelled request is indistinguishable from a fresh
-// response on the wire. A robust fix would carry a per-request token in the
-// pipe protocol; revisit once the HyperHQ integration is validated against a
-// real install.
+// race. The slot is matched on the pair of HyperHQ system id and reference id.
 type pendingHqGamesRequest struct {
-	response          chan hqGamesResponse
-	systemReferenceID string
+	response chan hqGamesResponse
+	queryKey string
 }
 
 // HyperHqPipeServer manages named pipe communication with the HyperHQ bridge plugin.
@@ -293,7 +436,7 @@ func (s *HyperHqPipeServer) RequestSystems() error {
 // Used by the scanner to query games on-demand per-system.
 func (s *HyperHqPipeServer) RequestGamesForSystemSync(
 	ctx context.Context,
-	systemReferenceID string,
+	target hqSystemQueryTarget,
 ) ([]HqGameInfo, error) {
 	s.connMu.Lock()
 	if s.writer == nil {
@@ -309,18 +452,24 @@ func (s *HyperHqPipeServer) RequestGamesForSystemSync(
 		s.pendingGamesReqMu.Unlock()
 		return nil, errors.New("games request already in flight")
 	}
-	s.pendingGamesReq.systemReferenceID = systemReferenceID
+	queryKey := hqSystemQueryKey(target)
+	s.pendingGamesReq.queryKey = queryKey
 	s.pendingGamesReq.response = respChan
 	s.pendingGamesReqMu.Unlock()
 
 	defer func() {
 		s.pendingGamesReqMu.Lock()
-		s.pendingGamesReq.systemReferenceID = ""
+		s.pendingGamesReq.queryKey = ""
 		s.pendingGamesReq.response = nil
 		s.pendingGamesReqMu.Unlock()
 	}()
 
-	cmd := hqCommand{Command: "GetGamesForSystem", SystemReferenceID: systemReferenceID}
+	cmd := hqCommand{
+		Command:           "GetGamesForSystem",
+		SystemID:          target.ID,
+		SystemName:        target.Name,
+		SystemReferenceID: target.ReferenceID,
+	}
 	data, err := json.Marshal(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal GetGamesForSystem command: %w", err)
@@ -341,7 +490,10 @@ func (s *HyperHqPipeServer) RequestGamesForSystemSync(
 	}
 	s.connMu.Unlock()
 
-	log.Debug().Msgf("sent GetGamesForSystem command for: %s", systemReferenceID)
+	log.Debug().Msgf(
+		"sent GetGamesForSystem command for HyperHQ system: id=%q referenceId=%q",
+		target.ID, target.ReferenceID,
+	)
 
 	select {
 	case resp := <-respChan:
@@ -564,7 +716,11 @@ func (s *HyperHqPipeServer) handleEvent(data string) {
 
 		s.pendingGamesReqMu.Lock()
 		if s.pendingGamesReq.response != nil &&
-			s.pendingGamesReq.systemReferenceID == gamesEvent.SystemReferenceID {
+			s.pendingGamesReq.queryKey == hqSystemQueryKey(hqSystemQueryTarget{
+				ID:          gamesEvent.SystemID,
+				Name:        gamesEvent.SystemName,
+				ReferenceID: gamesEvent.SystemReferenceID,
+			}) {
 			s.pendingGamesReq.response <- hqGamesResponse{
 				Games: gamesEvent.Games,
 				Error: gamesEvent.Error,
@@ -579,28 +735,65 @@ func (s *HyperHqPipeServer) handleEvent(data string) {
 
 // buildHqMappings derives the runtime maps from a HyperHQ Systems event.
 // Pure function so it can be unit-tested without touching Platform state.
+func shouldIgnoreEmptyHqSystemsRefresh(
+	systems []HqSystemInfo,
+	hqSystemKeyToSystem map[string]string,
+	systemToHqSystems map[string][]hqSystemQueryTarget,
+) bool {
+	return len(systems) == 0 && (len(hqSystemKeyToSystem) > 0 || len(systemToHqSystems) > 0)
+}
+
 func buildHqMappings(
 	systems []HqSystemInfo,
-) (refIDToSystem map[string]string, systemToRefIDs map[string][]string) {
-	refIDToSystem = make(map[string]string)
-	systemToRefIDs = make(map[string][]string)
+) (hqSystemKeyToSystem map[string]string, systemToHqSystems map[string][]hqSystemQueryTarget) {
+	hqSystemKeyToSystem = make(map[string]string)
+	systemToHqSystems = make(map[string][]hqSystemQueryTarget)
+	lookup := buildHqSystemLookup()
 
 	for _, sys := range systems {
-		canonical := sys.Platform
-		if canonical == "" {
-			canonical = sys.Name
-		}
-
-		for sysID, hqName := range hqSysMap {
-			if strings.EqualFold(hqName, canonical) {
-				refIDToSystem[sys.ReferenceID] = sysID
-				systemToRefIDs[sysID] = append(systemToRefIDs[sysID], sys.ReferenceID)
+		sysID := systemdefs.SystemCustom
+		for _, candidate := range []string{sys.Platform, sys.Name, sys.ReferenceID, sys.ID} {
+			if mappedID, ok := lookup[hqSystemLookupKey(candidate)]; ok {
+				sysID = mappedID
 				break
 			}
 		}
+
+		if sys.ID != "" || sys.Name != "" || sys.ReferenceID != "" {
+			systemToHqSystems[sysID] = append(systemToHqSystems[sysID], hqSystemQueryTarget{
+				ID:          sys.ID,
+				Name:        sys.Name,
+				ReferenceID: sys.ReferenceID,
+			})
+		}
+		if sys.ID != "" {
+			hqSystemKeyToSystem[sys.ID] = sysID
+		}
+		if sys.ReferenceID != "" {
+			hqSystemKeyToSystem[sys.ReferenceID] = sysID
+		}
 	}
 
-	return refIDToSystem, systemToRefIDs
+	return hqSystemKeyToSystem, systemToHqSystems
+}
+
+func hqSystemQueryKey(target hqSystemQueryTarget) string {
+	return target.ID + "\x00" + target.Name + "\x00" + target.ReferenceID
+}
+
+func buildHqSystemLookup() map[string]string {
+	lookup := make(map[string]string, len(hqSystemAliases)+len(systemdefs.Systems))
+	for alias, sysID := range hqSystemAliases {
+		lookup[hqSystemLookupKey(alias)] = sysID
+	}
+	for sysID := range systemdefs.Systems {
+		lookup[hqSystemLookupKey(sysID)] = sysID
+	}
+	return lookup
+}
+
+func hqSystemLookupKey(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func (p *Platform) initHyperHqPipe(cfg *config.Instance) {
@@ -614,35 +807,34 @@ func (p *Platform) initHyperHqPipe(cfg *config.Instance) {
 	pipe := NewHyperHqPipeServer()
 
 	pipe.SetGameStartedHandler(func(id, title, platform, systemReferenceID string) {
-		// Resolve the Zaparoo system ID, preferring the live mapping by ReferenceId,
-		// falling back to the canonical Platform name.
+		// Resolve the Zaparoo system ID, accepting either HyperHQ's system id or
+		// reference id because event payloads have varied across app versions.
 		p.hqMappingsMu.RLock()
-		systemID, ok := p.hqRefIDToSystem[systemReferenceID]
+		systemID, ok := p.hqSystemKeyToSystem[systemReferenceID]
 		p.hqMappingsMu.RUnlock()
 
 		if !ok {
-			for sysID, hqName := range hqSysMap {
-				if strings.EqualFold(hqName, platform) {
-					systemID = sysID
-					ok = true
-					break
-				}
+			if sysID, found := buildHqSystemLookup()[hqSystemLookupKey(platform)]; found {
+				systemID = sysID
+			} else {
+				systemID = systemdefs.SystemCustom
+				log.Warn().Msgf(
+					"using Custom system for unmapped HyperHQ system: refId=%q platform=%q",
+					systemReferenceID, platform,
+				)
 			}
 		}
 
-		if !ok {
-			log.Debug().Msgf(
-				"unknown HyperHQ system: refId=%q platform=%q, skipping ActiveMedia",
-				systemReferenceID, platform,
-			)
-			return
-		}
-
 		systemName := platform
-		if systemMeta, err := assets.GetSystemMetadata(systemID); err == nil {
-			systemName = systemMeta.Name
-		} else {
-			log.Debug().Err(err).Msgf("no system metadata for: %s", systemID)
+		if systemID != systemdefs.SystemCustom {
+			if systemMeta, err := assets.GetSystemMetadata(systemID); err == nil {
+				systemName = systemMeta.Name
+			} else {
+				log.Debug().Err(err).Msgf("no system metadata for: %s", systemID)
+			}
+		}
+		if systemName == "" {
+			systemName = systemID
 		}
 
 		virtualPath := virtualpath.CreateVirtualPath(shared.SchemeHyperHq, id, title)
@@ -670,15 +862,35 @@ func (p *Platform) initHyperHqPipe(cfg *config.Instance) {
 	})
 
 	pipe.SetSystemsReceivedHandler(func(systems []HqSystemInfo) {
-		refToSys, sysToRefs := buildHqMappings(systems)
+		p.hqMappingsMu.RLock()
+		ignoreEmpty := shouldIgnoreEmptyHqSystemsRefresh(systems, p.hqSystemKeyToSystem, p.systemToHqSystems)
+		p.hqMappingsMu.RUnlock()
+		if ignoreEmpty {
+			log.Warn().Msg("ignoring empty HyperHQ systems response; keeping existing mappings")
+			return
+		}
+
+		systemKeyToSys, sysToHqSystems := buildHqMappings(systems)
 
 		p.hqMappingsMu.Lock()
-		p.hqRefIDToSystem = refToSys
-		p.systemToHqRefIDs = sysToRefs
+		p.hqSystemKeyToSystem = systemKeyToSys
+		p.systemToHqSystems = sysToHqSystems
 		p.hqMappingsMu.Unlock()
 
 		log.Info().Msgf("built %d HyperHQ system mappings (%d Zaparoo systems covered)",
-			len(refToSys), len(sysToRefs))
+			len(systemKeyToSys), len(sysToHqSystems))
+		for _, sys := range systems {
+			queryID := sys.ID
+			if queryID == "" {
+				queryID = sys.ReferenceID
+			}
+			if systemKeyToSys[queryID] == systemdefs.SystemCustom {
+				log.Warn().Msgf(
+					"using Custom system for unmapped HyperHQ system: name=%q referenceId=%q platform=%q",
+					sys.Name, sys.ReferenceID, sys.Platform,
+				)
+			}
+		}
 	})
 
 	if err := pipe.Start(); err != nil {
@@ -707,10 +919,10 @@ func (p *Platform) NewHyperHqLauncher() platforms.Launcher {
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			p.hqMappingsMu.RLock()
-			refIDs := append([]string(nil), p.systemToHqRefIDs[systemID]...)
+			hqSystems := append([]hqSystemQueryTarget(nil), p.systemToHqSystems[systemID]...)
 			p.hqMappingsMu.RUnlock()
 
-			if len(refIDs) == 0 {
+			if len(hqSystems) == 0 {
 				return results, nil
 			}
 
@@ -725,10 +937,13 @@ func (p *Platform) NewHyperHqLauncher() platforms.Launcher {
 				return results, nil
 			}
 
-			for _, refID := range refIDs {
-				games, err := pipe.RequestGamesForSystemSync(ctx, refID)
+			for _, hqSystem := range hqSystems {
+				games, err := pipe.RequestGamesForSystemSync(ctx, hqSystem)
 				if err != nil {
-					log.Debug().Err(err).Msgf("HyperHQ query failed for system %s", refID)
+					log.Debug().Err(err).Msgf(
+						"HyperHQ query failed for system id=%q referenceId=%q",
+						hqSystem.ID, hqSystem.ReferenceID,
+					)
 					continue
 				}
 				for _, game := range games {
@@ -738,7 +953,10 @@ func (p *Platform) NewHyperHqLauncher() platforms.Launcher {
 						NoExt: true,
 					})
 				}
-				log.Debug().Msgf("scanned %d games from HyperHQ for system %s", len(games), refID)
+				log.Debug().Msgf(
+					"scanned %d games from HyperHQ for system id=%q referenceId=%q",
+					len(games), hqSystem.ID, hqSystem.ReferenceID,
+				)
 			}
 
 			return results, nil

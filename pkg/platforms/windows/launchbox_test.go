@@ -283,6 +283,21 @@ func TestLaunchBoxPipeServerRequestPlatformsNotConnected(t *testing.T) {
 	assert.Contains(t, err.Error(), "not connected")
 }
 
+func TestShouldIgnoreEmptyLaunchBoxPlatformsRefresh(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, shouldIgnoreEmptyLaunchBoxPlatformsRefresh(nil, nil, nil))
+	assert.False(t, shouldIgnoreEmptyLaunchBoxPlatformsRefresh(
+		[]launchBoxPlatformInfo{{Name: "Arcade"}}, map[string]string{"Arcade": systemdefs.SystemArcade}, nil,
+	))
+	assert.True(t, shouldIgnoreEmptyLaunchBoxPlatformsRefresh(
+		nil, map[string]string{"Arcade": systemdefs.SystemArcade}, nil,
+	))
+	assert.True(t, shouldIgnoreEmptyLaunchBoxPlatformsRefresh(
+		nil, nil, map[string][]string{systemdefs.SystemArcade: {"Arcade"}},
+	))
+}
+
 func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 	t.Parallel()
 
@@ -360,14 +375,18 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 			expectedSystemToCustomsLen: 1,
 		},
 		{
-			name: "unknown ScrapeAs value",
+			name: "unknown ScrapeAs value maps to Custom",
 			platforms: []launchBoxPlatformInfo{
 				{Name: "My Custom Platform", ScrapeAs: "Unknown Platform That Does Not Exist"},
 			},
-			expectedCustomToSystem:     map[string]string{},
-			expectedSystemToCustoms:    map[string][]string{},
-			expectedCustomToSystemLen:  0,
-			expectedSystemToCustomsLen: 0,
+			expectedCustomToSystem: map[string]string{
+				"My Custom Platform": systemdefs.SystemCustom,
+			},
+			expectedSystemToCustoms: map[string][]string{
+				systemdefs.SystemCustom: {"My Custom Platform"},
+			},
+			expectedCustomToSystemLen:  1,
+			expectedSystemToCustomsLen: 1,
 		},
 		{
 			name: "empty ScrapeAs falls back to Name",
@@ -401,26 +420,7 @@ func TestBuildPlatformMappingsFromPluginData(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			// Simulate the mapping building logic from initLaunchBoxPipe
-			customPlatformToSystem := make(map[string]string)
-			systemToCustomPlatforms := make(map[string][]string)
-
-			for _, plat := range tt.platforms {
-				canonicalName := plat.ScrapeAs
-				if canonicalName == "" {
-					canonicalName = plat.Name
-				}
-
-				for sysID, lbName := range lbSysMap {
-					if strings.EqualFold(lbName, canonicalName) {
-						customPlatformToSystem[plat.Name] = sysID
-						if !strings.EqualFold(plat.Name, lbName) {
-							systemToCustomPlatforms[sysID] = append(systemToCustomPlatforms[sysID], plat.Name)
-						}
-						break
-					}
-				}
-			}
+			customPlatformToSystem, systemToCustomPlatforms := buildLaunchBoxPlatformMappings(tt.platforms)
 
 			assert.Len(t, customPlatformToSystem, tt.expectedCustomToSystemLen)
 			assert.Len(t, systemToCustomPlatforms, tt.expectedSystemToCustomsLen)

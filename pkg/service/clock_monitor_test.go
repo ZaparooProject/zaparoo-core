@@ -29,7 +29,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-func TestHealTimestampsIfClockReliable_RetriesUntilRowsHealed(t *testing.T) {
+func TestHealTimestampsIfClockReliable_StopsAfterSuccessfulNoop(t *testing.T) {
 	t.Parallel()
 
 	mockUserDB := &testhelpers.MockUserDBI{}
@@ -38,10 +38,9 @@ func TestHealTimestampsIfClockReliable_RetriesUntilRowsHealed(t *testing.T) {
 	fixedUptime := func() (time.Duration, error) { return 2 * time.Hour, nil }
 
 	mockUserDB.On("HealTimestamps", "boot-uuid", mock.AnythingOfType("time.Time")).Return(int64(0), nil).Once()
-	mockUserDB.On("HealTimestamps", "boot-uuid", mock.AnythingOfType("time.Time")).Return(int64(3), nil).Once()
 
 	healed := healTimestampsIfClockReliable(db, "boot-uuid", now, false, false, fixedUptime)
-	assert.False(t, healed)
+	assert.True(t, healed)
 
 	healed = healTimestampsIfClockReliable(db, "boot-uuid", now.Add(time.Minute), true, healed, fixedUptime)
 	assert.True(t, healed)

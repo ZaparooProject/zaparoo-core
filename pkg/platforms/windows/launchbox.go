@@ -789,6 +789,48 @@ func (s *LaunchBoxPipeServer) handleEvent(data string) {
 	}
 }
 
+func shouldIgnoreEmptyLaunchBoxPlatformsRefresh(
+	platforms []launchBoxPlatformInfo,
+	customPlatformToSystem map[string]string,
+	systemToCustomPlatforms map[string][]string,
+) bool {
+	return len(platforms) == 0 && (len(customPlatformToSystem) > 0 || len(systemToCustomPlatforms) > 0)
+}
+
+func buildLaunchBoxPlatformMappings(
+	platforms []launchBoxPlatformInfo,
+) (customPlatformToSystem map[string]string, systemToCustomPlatforms map[string][]string) {
+	customPlatformToSystem = make(map[string]string)
+	systemToCustomPlatforms = make(map[string][]string)
+
+	for _, plat := range platforms {
+		sysID := systemdefs.SystemCustom
+		matchedName := ""
+		for _, candidate := range []string{plat.ScrapeAs, plat.Name} {
+			if candidate == "" {
+				continue
+			}
+			for mappedID, lbName := range lbSysMap {
+				if strings.EqualFold(lbName, candidate) {
+					sysID = mappedID
+					matchedName = lbName
+					break
+				}
+			}
+			if matchedName != "" {
+				break
+			}
+		}
+
+		customPlatformToSystem[plat.Name] = sysID
+		if sysID == systemdefs.SystemCustom || !strings.EqualFold(plat.Name, matchedName) {
+			systemToCustomPlatforms[sysID] = append(systemToCustomPlatforms[sysID], plat.Name)
+		}
+	}
+
+	return customPlatformToSystem, systemToCustomPlatforms
+}
+
 func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 	// Check if LaunchBox is installed
 	lbDir, err := findLaunchBoxDir(cfg)
@@ -816,21 +858,27 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 		p.platformMappingsMu.RUnlock()
 
 		if !ok {
-			// Fall back to hardcoded reverse map
-			systemID, ok = lbSysMapReverse[platform]
-			if !ok {
-				log.Debug().Msgf("unknown LaunchBox platform: %s, skipping ActiveMedia", platform)
-				return
+			// Fall back to hardcoded reverse map, then Custom for user-created platforms.
+			if mappedID, found := lbSysMapReverse[platform]; found {
+				systemID = mappedID
+			} else {
+				systemID = systemdefs.SystemCustom
+				log.Warn().Msgf("using Custom system for unmapped LaunchBox platform: %q", platform)
 			}
 		}
 
 		// Get system name from metadata
 		systemName := platform // Fallback to LaunchBox platform name
-		systemMeta, err := assets.GetSystemMetadata(systemID)
-		if err != nil {
-			log.Debug().Err(err).Msgf("no system metadata for: %s", systemID)
-		} else {
-			systemName = systemMeta.Name
+		if systemID != systemdefs.SystemCustom {
+			systemMeta, err := assets.GetSystemMetadata(systemID)
+			if err != nil {
+				log.Debug().Err(err).Msgf("no system metadata for: %s", systemID)
+			} else {
+				systemName = systemMeta.Name
+			}
+		}
+		if systemName == "" {
+			systemName = systemID
 		}
 
 		// Build virtual path for the game
@@ -879,35 +927,34 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 	})
 
 	pipe.SetPlatformsReceivedHandler(func(platforms []launchBoxPlatformInfo) {
-		p.platformMappingsMu.Lock()
-		defer p.platformMappingsMu.Unlock()
+		p.platformMappingsMu.RLock()
+		ignoreEmpty := shouldIgnoreEmptyLaunchBoxPlatformsRefresh(
+			platforms, p.customPlatformToSystem, p.systemToCustomPlatforms,
+		)
+		p.platformMappingsMu.RUnlock()
+		if ignoreEmpty {
+			log.Warn().Msg("ignoring empty LaunchBox platforms response; keeping existing mappings")
+			return
+		}
 
-		p.customPlatformToSystem = make(map[string]string)
-		p.systemToCustomPlatforms = make(map[string][]string)
+		customPlatformToSystem, systemToCustomPlatforms := buildLaunchBoxPlatformMappings(platforms)
+
+		p.platformMappingsMu.Lock()
+		p.customPlatformToSystem = customPlatformToSystem
+		p.systemToCustomPlatforms = systemToCustomPlatforms
+		p.platformMappingsMu.Unlock()
 
 		for _, plat := range platforms {
-			// Use ScrapeAs to find the Zaparoo system ID via lbSysMap
-			canonicalName := plat.ScrapeAs
-			if canonicalName == "" {
-				canonicalName = plat.Name
-			}
-
-			// Look up in lbSysMap (which maps Zaparoo system ID -> LaunchBox canonical name)
-			for sysID, lbName := range lbSysMap {
-				if strings.EqualFold(lbName, canonicalName) {
-					p.customPlatformToSystem[plat.Name] = sysID
-					// Only set reverse mapping if it's a custom name
-					if !strings.EqualFold(plat.Name, lbName) {
-						p.systemToCustomPlatforms[sysID] = append(p.systemToCustomPlatforms[sysID], plat.Name)
-					}
-					log.Debug().Msgf("mapped LaunchBox platform %q (ScrapeAs: %q) -> %s",
-						plat.Name, plat.ScrapeAs, sysID)
-					break
-				}
+			sysID := customPlatformToSystem[plat.Name]
+			if sysID == systemdefs.SystemCustom {
+				log.Warn().Msgf("using Custom system for unmapped LaunchBox platform: %q", plat.Name)
+			} else {
+				log.Debug().Msgf("mapped LaunchBox platform %q (ScrapeAs: %q) -> %s",
+					plat.Name, plat.ScrapeAs, sysID)
 			}
 		}
 
-		log.Info().Msgf("built %d custom platform mappings from LaunchBox", len(p.customPlatformToSystem))
+		log.Info().Msgf("built %d custom platform mappings from LaunchBox", len(customPlatformToSystem))
 	})
 
 	if err := pipe.Start(); err != nil {

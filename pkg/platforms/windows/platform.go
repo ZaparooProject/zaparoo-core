@@ -69,8 +69,8 @@ type Platform struct {
 	setActiveMedia          func(*models.ActiveMedia)
 	customPlatformToSystem  map[string]string
 	systemToCustomPlatforms map[string][]string
-	hqRefIDToSystem         map[string]string
-	systemToHqRefIDs        map[string][]string
+	hqSystemKeyToSystem     map[string]string
+	systemToHqSystems       map[string][]hqSystemQueryTarget
 	trackedProcess          *os.Process
 	launchBoxPipe           *LaunchBoxPipeServer
 	hyperHqPipe             *HyperHqPipeServer

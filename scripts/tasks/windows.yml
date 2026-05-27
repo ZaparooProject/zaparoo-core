@@ -69,8 +69,6 @@ tasks:
     vars:
       OUTPUT_DIR: "{{.ROOT_DIR}}/_build/windows_amd64"
       PLUGIN_FOLDER: "Zaparoo LaunchBox Integration"
-    status:
-      - test -f "{{.OUTPUT_DIR}}/{{.PLUGIN_FOLDER}}.zip"
     cmds:
       - |
         if [ ! -f "lib/Unbroken.LaunchBox.Plugins.dll" ]; then
@@ -91,8 +89,6 @@ tasks:
     vars:
       OUTPUT_DIR: "{{.ROOT_DIR}}/_build/windows_amd64"
       PLUGIN_FOLDER: "zaparoo-hyperhq"
-    status:
-      - test -f "{{.OUTPUT_DIR}}/{{.PLUGIN_FOLDER}}.zip"
     cmds:
       - task: :zigcc:setup
       - docker build --target build -t zaparoo-hyperhq-plugin "{{.ROOT_DIR}}/scripts/windows/hyperhq-plugin"

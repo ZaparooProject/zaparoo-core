@@ -265,30 +265,58 @@ func TestHyperHqPipeServerRequestSystemsNotConnected(t *testing.T) {
 	assert.Contains(t, err.Error(), "not connected")
 }
 
+func TestShouldIgnoreEmptyHqSystemsRefresh(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, shouldIgnoreEmptyHqSystemsRefresh(nil, nil, nil))
+	assert.False(t, shouldIgnoreEmptyHqSystemsRefresh([]HqSystemInfo{{Name: "Arcade"}}, map[string]string{"arcade": systemdefs.SystemArcade}, nil))
+	assert.True(t, shouldIgnoreEmptyHqSystemsRefresh(nil, map[string]string{"arcade": systemdefs.SystemArcade}, nil))
+	assert.True(t, shouldIgnoreEmptyHqSystemsRefresh(nil, nil, map[string][]hqSystemQueryTarget{
+		systemdefs.SystemArcade: {{ReferenceID: "arcade"}},
+	}))
+}
+
 func TestBuildHqMappings(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		expectedRefToSys  map[string]string
-		expectedSysToRefs map[string][]string
-		name              string
-		systems           []HqSystemInfo
+		expectedKeyToSys    map[string]string
+		expectedSystemToHqs map[string][]hqSystemQueryTarget
+		name                string
+		systems             []HqSystemInfo
 	}{
 		{
 			name: "canonical platform name",
 			systems: []HqSystemInfo{
 				{Name: "Arcade", ReferenceID: "arc-1", Platform: "Arcade"},
 			},
-			expectedRefToSys:  map[string]string{"arc-1": systemdefs.SystemArcade},
-			expectedSysToRefs: map[string][]string{systemdefs.SystemArcade: {"arc-1"}},
+			expectedKeyToSys: map[string]string{"arc-1": systemdefs.SystemArcade},
+			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
+				systemdefs.SystemArcade: {{ReferenceID: "arc-1"}},
+			},
+		},
+		{
+			name: "system id is used for game query and both ids map to system",
+			systems: []HqSystemInfo{
+				{ID: "sys-nes", Name: "My NES Collection", ReferenceID: "nes-99", Platform: "Nintendo Entertainment System"},
+			},
+			expectedKeyToSys: map[string]string{
+				"sys-nes": systemdefs.SystemNES,
+				"nes-99":  systemdefs.SystemNES,
+			},
+			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
+				systemdefs.SystemNES: {{ID: "sys-nes", ReferenceID: "nes-99"}},
+			},
 		},
 		{
 			name: "custom system name with canonical Platform",
 			systems: []HqSystemInfo{
 				{Name: "My NES Collection", ReferenceID: "nes-99", Platform: "Nintendo Entertainment System"},
 			},
-			expectedRefToSys:  map[string]string{"nes-99": systemdefs.SystemNES},
-			expectedSysToRefs: map[string][]string{systemdefs.SystemNES: {"nes-99"}},
+			expectedKeyToSys: map[string]string{"nes-99": systemdefs.SystemNES},
+			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
+				systemdefs.SystemNES: {{ReferenceID: "nes-99"}},
+			},
 		},
 		{
 			name: "multiple systems mapping to same Zaparoo system",
@@ -296,12 +324,12 @@ func TestBuildHqMappings(t *testing.T) {
 				{Name: "SNES Hacks", ReferenceID: "snes-h", Platform: "Super Nintendo Entertainment System"},
 				{Name: "SNES Romhacks", ReferenceID: "snes-r", Platform: "Super Nintendo Entertainment System"},
 			},
-			expectedRefToSys: map[string]string{
+			expectedKeyToSys: map[string]string{
 				"snes-h": systemdefs.SystemSNES,
 				"snes-r": systemdefs.SystemSNES,
 			},
-			expectedSysToRefs: map[string][]string{
-				systemdefs.SystemSNES: {"snes-h", "snes-r"},
+			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
+				systemdefs.SystemSNES: {{ReferenceID: "snes-h"}, {ReferenceID: "snes-r"}},
 			},
 		},
 		{
@@ -309,24 +337,60 @@ func TestBuildHqMappings(t *testing.T) {
 			systems: []HqSystemInfo{
 				{Name: "Arcade", ReferenceID: "arc-2", Platform: ""},
 			},
-			expectedRefToSys:  map[string]string{"arc-2": systemdefs.SystemArcade},
-			expectedSysToRefs: map[string][]string{systemdefs.SystemArcade: {"arc-2"}},
+			expectedKeyToSys: map[string]string{"arc-2": systemdefs.SystemArcade},
+			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
+				systemdefs.SystemArcade: {{ReferenceID: "arc-2"}},
+			},
 		},
 		{
 			name: "case insensitive platform matching",
 			systems: []HqSystemInfo{
 				{Name: "My Arcade", ReferenceID: "arc-3", Platform: "arcade"},
 			},
-			expectedRefToSys:  map[string]string{"arc-3": systemdefs.SystemArcade},
-			expectedSysToRefs: map[string][]string{systemdefs.SystemArcade: {"arc-3"}},
+			expectedKeyToSys: map[string]string{"arc-3": systemdefs.SystemArcade},
+			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
+				systemdefs.SystemArcade: {{ReferenceID: "arc-3"}},
+			},
 		},
 		{
-			name: "unknown platform is dropped",
+			name: "zaparoo system id platform matches",
+			systems: []HqSystemInfo{
+				{Name: "NES", ReferenceID: "nes-short", Platform: systemdefs.SystemNES},
+			},
+			expectedKeyToSys: map[string]string{"nes-short": systemdefs.SystemNES},
+			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
+				systemdefs.SystemNES: {{ReferenceID: "nes-short"}},
+			},
+		},
+		{
+			name: "reference id system id matches",
+			systems: []HqSystemInfo{
+				{Name: "Nintendo", ReferenceID: systemdefs.SystemNES, Platform: ""},
+			},
+			expectedKeyToSys: map[string]string{systemdefs.SystemNES: systemdefs.SystemNES},
+			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
+				systemdefs.SystemNES: {{ReferenceID: systemdefs.SystemNES}},
+			},
+		},
+		{
+			name: "HyperSpin alias platform matching",
+			systems: []HqSystemInfo{
+				{Name: "PC Engine CD", ReferenceID: "pcecd", Platform: "NEC TurboGrafx-CD"},
+			},
+			expectedKeyToSys: map[string]string{"pcecd": systemdefs.SystemTurboGrafx16CD},
+			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
+				systemdefs.SystemTurboGrafx16CD: {{ReferenceID: "pcecd"}},
+			},
+		},
+		{
+			name: "unknown platform maps to Custom",
 			systems: []HqSystemInfo{
 				{Name: "Made Up", ReferenceID: "x-1", Platform: "Definitely Not A Real Platform"},
 			},
-			expectedRefToSys:  map[string]string{},
-			expectedSysToRefs: map[string][]string{},
+			expectedKeyToSys: map[string]string{"x-1": systemdefs.SystemCustom},
+			expectedSystemToHqs: map[string][]hqSystemQueryTarget{
+				systemdefs.SystemCustom: {{ReferenceID: "x-1"}},
+			},
 		},
 	}
 
@@ -334,14 +398,14 @@ func TestBuildHqMappings(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			refToSys, sysToRefs := buildHqMappings(tt.systems)
+			keyToSys, systemToHqs := buildHqMappings(tt.systems)
 
-			assert.Equal(t, tt.expectedRefToSys, refToSys)
+			assert.Equal(t, tt.expectedKeyToSys, keyToSys)
 
-			require.Len(t, sysToRefs, len(tt.expectedSysToRefs))
-			for sysID, expectedRefs := range tt.expectedSysToRefs {
-				assert.ElementsMatch(t, expectedRefs, sysToRefs[sysID],
-					"sysToRefs[%q] mismatch", sysID)
+			require.Len(t, systemToHqs, len(tt.expectedSystemToHqs))
+			for sysID, expectedTargets := range tt.expectedSystemToHqs {
+				assert.ElementsMatch(t, expectedTargets, systemToHqs[sysID],
+					"systemToHqs[%q] mismatch", sysID)
 			}
 		})
 	}
