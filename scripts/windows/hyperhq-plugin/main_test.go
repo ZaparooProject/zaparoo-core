@@ -281,7 +281,8 @@ func TestHandleLifecycleRequestEmitsResponseAndCancelsShutdown(t *testing.T) {
 	if !ok {
 		t.Fatalf("test response type = %T, want hqPluginResponse", fake.emits[2].args[0])
 	}
-	if resp.ID != "test-1" || resp.Data != true {
+	data, ok := resp.Data.(bool)
+	if resp.ID != "test-1" || !ok || !data {
 		t.Fatalf("test response = %+v, want id test-1 and true data", resp)
 	}
 
@@ -356,7 +357,9 @@ func TestDecodeFirst(t *testing.T) {
 }
 
 func TestDecodeSystemsDataAcceptsArrayAndWrappedObject(t *testing.T) {
-	systems, err := decodeSystemsData(json.RawMessage(`[{"id":"sys-1","name":"NES","referenceId":"nes","platform":"nes"}]`))
+	systems, err := decodeSystemsData(json.RawMessage(
+		`[{"id":"sys-1","name":"NES","referenceId":"nes","platform":"nes"}]`,
+	))
 	if err != nil {
 		t.Fatalf("decodeSystemsData(array) error = %v", err)
 	}
@@ -364,7 +367,9 @@ func TestDecodeSystemsDataAcceptsArrayAndWrappedObject(t *testing.T) {
 		t.Fatalf("decodeSystemsData(array) = %+v, want NES system with id", systems)
 	}
 
-	systems, err = decodeSystemsData(json.RawMessage(`{"systems":[{"id":"sys-2","name":"SNES","referenceId":"snes","platform":"snes"}]}`))
+	systems, err = decodeSystemsData(json.RawMessage(
+		`{"systems":[{"id":"sys-2","name":"SNES","referenceId":"snes","platform":"snes"}]}`,
+	))
 	if err != nil {
 		t.Fatalf("decodeSystemsData(wrapped) error = %v", err)
 	}
