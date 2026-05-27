@@ -318,17 +318,19 @@ type bridge struct {
 
 func main() {
 	logFile := setupLogging()
-	if logFile != nil {
-		defer func() {
-			if err := logFile.Close(); err != nil {
-				log.Printf("log file close error: %v", err)
-			}
-		}()
-	}
+	exitCode := 0
 
 	if err := run(); err != nil {
 		log.Printf("fatal: %v", err)
-		os.Exit(1)
+		exitCode = 1
+	}
+	if logFile != nil {
+		if err := logFile.Close(); err != nil {
+			log.Printf("log file close error: %v", err)
+		}
+	}
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 }
 
@@ -337,7 +339,7 @@ func setupLogging() *os.File {
 	log.SetPrefix("[zaparoo-hyperhq] ")
 
 	path := pluginLogPath()
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // path comes from HyperHQ plugin env or OS temp dir
 	if err != nil {
 		log.Printf("warning: open log file %s: %v", path, err)
 		return nil
@@ -350,7 +352,7 @@ func setupLogging() *os.File {
 
 func pluginLogPath() string {
 	if dataDir := os.Getenv("PLUGIN_DATA_DIR"); dataDir != "" {
-		if err := os.MkdirAll(dataDir, 0o700); err == nil {
+		if err := os.MkdirAll(dataDir, 0o700); err == nil { //nolint:gosec // PLUGIN_DATA_DIR is provided by HyperHQ
 			return filepath.Join(dataDir, "zaparoo-hyperhq.log")
 		}
 	}
@@ -840,11 +842,11 @@ func (b *bridge) pushGames(writer pipeEventWriter, target systemQueryTarget) {
 	}
 
 	out := make([]hqGameInfo, 0, len(games))
-	for _, g := range games {
+	for i := range games {
 		out = append(out, hqGameInfo{
-			ID:       g.ID,
-			Title:    g.Title,
-			Platform: g.Platform,
+			ID:       games[i].ID,
+			Title:    games[i].Title,
+			Platform: games[i].Platform,
 		})
 	}
 	writer.writePipeEvent(&pipeEvent{
