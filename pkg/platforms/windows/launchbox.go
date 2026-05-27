@@ -790,20 +790,20 @@ func (s *LaunchBoxPipeServer) handleEvent(data string) {
 }
 
 func shouldIgnoreEmptyLaunchBoxPlatformsRefresh(
-	platforms []launchBoxPlatformInfo,
+	platformInfos []launchBoxPlatformInfo,
 	customPlatformToSystem map[string]string,
 	systemToCustomPlatforms map[string][]string,
 ) bool {
-	return len(platforms) == 0 && (len(customPlatformToSystem) > 0 || len(systemToCustomPlatforms) > 0)
+	return len(platformInfos) == 0 && (len(customPlatformToSystem) > 0 || len(systemToCustomPlatforms) > 0)
 }
 
 func buildLaunchBoxPlatformMappings(
-	platforms []launchBoxPlatformInfo,
+	platformInfos []launchBoxPlatformInfo,
 ) (customPlatformToSystem map[string]string, systemToCustomPlatforms map[string][]string) {
 	customPlatformToSystem = make(map[string]string)
 	systemToCustomPlatforms = make(map[string][]string)
 
-	for _, plat := range platforms {
+	for _, plat := range platformInfos {
 		sysID := systemdefs.SystemCustom
 		matchedName := ""
 		for _, candidate := range []string{plat.ScrapeAs, plat.Name} {

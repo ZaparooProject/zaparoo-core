@@ -273,7 +273,11 @@ func TestShouldIgnoreEmptyHqSystemsRefresh(t *testing.T) {
 	t.Parallel()
 
 	assert.False(t, shouldIgnoreEmptyHqSystemsRefresh(nil, nil, nil))
-	assert.False(t, shouldIgnoreEmptyHqSystemsRefresh([]HqSystemInfo{{Name: "Arcade"}}, map[string]string{"arcade": systemdefs.SystemArcade}, nil))
+	assert.False(t, shouldIgnoreEmptyHqSystemsRefresh(
+		[]HqSystemInfo{{Name: "Arcade"}},
+		map[string]string{"arcade": systemdefs.SystemArcade},
+		nil,
+	))
 	assert.True(t, shouldIgnoreEmptyHqSystemsRefresh(nil, map[string]string{"arcade": systemdefs.SystemArcade}, nil))
 	assert.True(t, shouldIgnoreEmptyHqSystemsRefresh(nil, nil, map[string][]hqSystemQueryTarget{
 		systemdefs.SystemArcade: {{ReferenceID: "arcade"}},
@@ -302,7 +306,12 @@ func TestBuildHqMappings(t *testing.T) {
 		{
 			name: "system id is used for game query and both ids map to system",
 			systems: []HqSystemInfo{
-				{ID: "sys-nes", Name: "My NES Collection", ReferenceID: "nes-99", Platform: "Nintendo Entertainment System"},
+				{
+					ID:          "sys-nes",
+					Name:        "My NES Collection",
+					ReferenceID: "nes-99",
+					Platform:    "Nintendo Entertainment System",
+				},
 			},
 			expectedKeyToSys: map[string]string{
 				"sys-nes": systemdefs.SystemNES,
