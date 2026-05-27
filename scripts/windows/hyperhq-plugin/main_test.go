@@ -70,9 +70,9 @@ func (f *fakeSocket) OnDisconnect(listener func(any)) {
 	f.disconnectListen = listener
 }
 
-func (f *fakeSocket) Connect() {}
+func (*fakeSocket) Connect() {}
 
-func (f *fakeSocket) ID() string {
+func (*fakeSocket) ID() string {
 	return "fake-socket"
 }
 
@@ -157,7 +157,8 @@ func TestPluginRegisterIncludesAuthFields(t *testing.T) {
 		Capabilities: []string{"games"},
 	}
 
-	data, err := json.Marshal(payload) //nolint:gosec // verifies sessionToken field is serialized without real secret data
+	//nolint:gosec // verifies sessionToken field is serialized without real secret data
+	data, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatalf("marshal register payload: %v", err)
 	}
