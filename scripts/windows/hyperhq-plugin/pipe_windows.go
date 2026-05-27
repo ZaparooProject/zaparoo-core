@@ -23,11 +23,16 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 
 	"github.com/Microsoft/go-winio"
 )
 
 func dialPipeContext(ctx context.Context, path string) (net.Conn, error) {
-	return winio.DialPipeContext(ctx, path)
+	conn, err := winio.DialPipeContext(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("dial named pipe: %w", err)
+	}
+	return conn, nil
 }

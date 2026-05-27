@@ -421,7 +421,9 @@ func TestDecodeGamesDataAcceptsArrayAndWrappedObject(t *testing.T) {
 		t.Fatalf("decodeGamesData(wrapped) = %+v, want game 2 title", games)
 	}
 
-	games, err = decodeGamesData(json.RawMessage(`{"games":[{"id":"name-2","name":"Wrapped Named Game","platform":"snes"}]}`))
+	games, err = decodeGamesData(json.RawMessage(
+		`{"games":[{"id":"name-2","name":"Wrapped Named Game","platform":"snes"}]}`,
+	))
 	if err != nil {
 		t.Fatalf("decodeGamesData(name wrapped) error = %v", err)
 	}
@@ -429,7 +431,9 @@ func TestDecodeGamesDataAcceptsArrayAndWrappedObject(t *testing.T) {
 		t.Fatalf("decodeGamesData(name wrapped) = %+v, want title from name", games)
 	}
 
-	games, err = decodeGamesData(json.RawMessage(`[{"gameId":"game-1","referenceId":"ref-1","fileName":"rom.sfc","systemName":"SNES"}]`))
+	games, err = decodeGamesData(json.RawMessage(
+		`[{"gameId":"game-1","referenceId":"ref-1","fileName":"rom.sfc","systemName":"SNES"}]`,
+	))
 	if err != nil {
 		t.Fatalf("decodeGamesData(rom fields) error = %v", err)
 	}
