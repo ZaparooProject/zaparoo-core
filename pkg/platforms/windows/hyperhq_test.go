@@ -145,11 +145,15 @@ func TestHyperHqPlatformMapping(t *testing.T) {
 		t.Run(tt.systemID, func(t *testing.T) {
 			t.Parallel()
 
-			platform, exists := hqSysMap[tt.systemID]
-			assert.Equal(t, tt.exists, exists)
-			if exists {
-				assert.Equal(t, tt.expectedPlatform, platform)
+			lookup := buildHqSystemLookup()
+			if !tt.exists {
+				_, exists := lookup[hqSystemLookupKey(tt.systemID)]
+				assert.False(t, exists)
+				return
 			}
+
+			assert.Equal(t, tt.systemID, lookup[hqSystemLookupKey(tt.systemID)])
+			assert.Equal(t, tt.systemID, lookup[hqSystemLookupKey(tt.expectedPlatform)])
 		})
 	}
 }
