@@ -76,6 +76,28 @@ func (f *fakeSocket) ID() string {
 	return "fake-socket"
 }
 
+type manifestSocketIO struct {
+	Namespace string `json:"namespace"`
+	Enabled   bool   `json:"enabled"`
+}
+
+type manifestCommunicationSocketIO struct {
+	Enabled bool `json:"enabled"`
+}
+
+type manifestCommunication struct {
+	SocketIO  manifestCommunicationSocketIO `json:"socketio"`
+	Preferred string                        `json:"preferred"`
+	Fallback  string                        `json:"fallback"`
+}
+
+type pluginManifest struct {
+	SocketIO      manifestSocketIO      `json:"socketio"`
+	Communication manifestCommunication `json:"communication"`
+	Type          string                `json:"type"`
+	Executable    string                `json:"executable"`
+}
+
 func TestPluginManifestMatchesHyperHQExecutableSocketIODocs(t *testing.T) {
 	t.Parallel()
 
@@ -84,21 +106,7 @@ func TestPluginManifestMatchesHyperHQExecutableSocketIODocs(t *testing.T) {
 		t.Fatalf("read plugin.json: %v", err)
 	}
 
-	var manifest struct {
-		SocketIO struct {
-			Namespace string `json:"namespace"`
-			Enabled   bool   `json:"enabled"`
-		} `json:"socketio"`
-		Communication struct {
-			SocketIO struct {
-				Enabled bool `json:"enabled"`
-			} `json:"socketio"`
-			Preferred string `json:"preferred"`
-			Fallback  string `json:"fallback"`
-		} `json:"communication"`
-		Type       string `json:"type"`
-		Executable string `json:"executable"`
-	}
+	var manifest pluginManifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatalf("unmarshal plugin.json: %v", err)
 	}
