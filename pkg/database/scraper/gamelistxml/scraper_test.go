@@ -263,9 +263,15 @@ func TestMimeFromExt_Unknown(t *testing.T) {
 
 // --- LoadRecords ---
 
-// TestLoadRecords_SlugMatch verifies that a gamelist entry whose slug matches a
-// key in titlesBySlug produces a GamelistRecord with the correct DB IDs.
-func TestLoadRecords_SlugMatch(t *testing.T) {
+func mediaByPath(rows ...database.Media) map[string]database.Media {
+	result := make(map[string]database.Media, len(rows))
+	for _, row := range rows {
+		result[pathFoldKey(row.Path)] = row
+	}
+	return result
+}
+
+func TestLoadRecords_PathMatch(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -276,21 +282,12 @@ func TestLoadRecords_SlugMatch(t *testing.T) {
   <game><path>./zelda.nes</path><name>Zelda</name></game>
 </gameList>`), 0o600))
 
-	marioSlug := slugFor("nes", filepath.Join(root, "mario.nes"))
-
-	titlesBySlug := map[string]database.MediaTitle{
-		marioSlug: {DBID: 22, Slug: marioSlug},
-	}
-	mediaByTitleDBID := map[int64]int64{22: 11}
-
 	records, err := (&GamelistXMLScraper{}).LoadRecords(
 		context.Background(),
 		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
-		titlesBySlug,
-		mediaByTitleDBID,
+		mediaByPath(database.Media{DBID: 11, MediaTitleDBID: 22, Path: filepath.Join(root, "mario.nes")}),
 	)
 	require.NoError(t, err)
-	// Only mario has a matching MediaTitle slug; zelda is silently skipped.
 	require.Len(t, records, 1)
 	assert.Equal(t, root, records[0].SystemRootPath)
 	assert.Equal(t, "./mario.nes", records[0].Game.Path)
@@ -300,13 +297,7 @@ func TestLoadRecords_SlugMatch(t *testing.T) {
 	assert.Equal(t, filepath.Join(root, "media", "image"), records[0].AvailableMediaDirs["image"])
 }
 
-// TestLoadRecords_NameDerivedSlugMatch verifies the scraper matches titles
-// whose stored slug derives from a scanner-provided display name rather than
-// the filename. This is a regression test for the fix where the indexer uses
-// ScanResult.Name (e.g. NeoGeo AltName, gamelist.xml <name>) to build the
-// MediaTitle slug, requiring the scraper to also derive its lookup slug from
-// gamelist.xml's <name> rather than the filename.
-func TestLoadRecords_NameDerivedSlugMatch(t *testing.T) {
+func TestLoadRecords_TitleNameDoesNotNeedSlugMatch(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -315,41 +306,18 @@ func TestLoadRecords_NameDerivedSlugMatch(t *testing.T) {
   <game><path>./mslug.zip</path><name>Metal Slug</name></game>
 </gameList>`), 0o600))
 
-	// Indexer would have stored the slug derived from ProvidedName="Metal Slug",
-	// not from the filename "mslug". Build titlesBySlug accordingly.
-	nameSlug := mediascanner.GetPathFragments(&mediascanner.PathFragmentParams{
-		SystemID:     "NeoGeo",
-		Path:         filepath.Join(root, "mslug.zip"),
-		NoExt:        true,
-		ProvidedName: "Metal Slug",
-	}).Slug
-
-	// Confirm the test setup actually exercises the regression: the
-	// name-derived slug must differ from a filename-derived one.
-	filenameSlug := slugFor("NeoGeo", filepath.Join(root, "mslug.zip"))
-	require.NotEqual(t, filenameSlug, nameSlug,
-		"test precondition: name-derived slug must differ from filename-derived")
-
-	titlesBySlug := map[string]database.MediaTitle{
-		nameSlug: {DBID: 42, Slug: nameSlug, Name: "Metal Slug"},
-	}
-	mediaByTitleDBID := map[int64]int64{42: 7}
-
 	records, err := (&GamelistXMLScraper{}).LoadRecords(
 		context.Background(),
 		scraper.ScrapeSystem{ID: "NeoGeo", ROMPaths: []string{root}},
-		titlesBySlug,
-		mediaByTitleDBID,
+		mediaByPath(database.Media{DBID: 7, MediaTitleDBID: 42, Path: filepath.Join(root, "mslug.zip")}),
 	)
 	require.NoError(t, err)
-	require.Len(t, records, 1, "scraper must match the title via name-derived slug")
+	require.Len(t, records, 1, "path match should work even when title slug derives from display name")
 	assert.Equal(t, "Metal Slug", records[0].Game.Name)
 	assert.Equal(t, int64(42), records[0].MatchedTitleDBID)
 	assert.Equal(t, int64(7), records[0].MatchedMediaDBID)
 }
 
-// TestLoadRecords_SkipsMissingAndMalformedGameLists verifies that ROM roots
-// without a gamelist.xml and roots with a malformed file are silently skipped.
 func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
 	t.Parallel()
 
@@ -367,20 +335,13 @@ func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
   <game><path>./mario.nes</path><name>Mario</name></game>
 </gameList>`), 0o600))
 
-	marioSlug := slugFor("nes", filepath.Join(validRoot, "mario.nes"))
-	titlesBySlug := map[string]database.MediaTitle{
-		marioSlug: {DBID: 5, Slug: marioSlug},
-	}
-	mediaByTitleDBID := map[int64]int64{5: 3}
-
 	records, err := (&GamelistXMLScraper{}).LoadRecords(
 		context.Background(),
 		scraper.ScrapeSystem{
 			ID:       "nes",
 			ROMPaths: []string{missingRoot, malformedRoot, validRoot},
 		},
-		titlesBySlug,
-		mediaByTitleDBID,
+		mediaByPath(database.Media{DBID: 3, MediaTitleDBID: 5, Path: filepath.Join(validRoot, "mario.nes")}),
 	)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
@@ -388,9 +349,7 @@ func TestLoadRecords_SkipsMissingAndMalformedGameLists(t *testing.T) {
 	assert.Equal(t, int64(5), records[0].MatchedTitleDBID)
 }
 
-// TestLoadRecords_FirstWins verifies that when two gamelist roots contain an
-// entry with the same slug, only the first is recorded.
-func TestLoadRecords_FirstWins(t *testing.T) {
+func TestLoadRecords_FirstPathWins(t *testing.T) {
 	t.Parallel()
 
 	root1 := t.TempDir()
@@ -405,56 +364,16 @@ func TestLoadRecords_FirstWins(t *testing.T) {
 	writeGamelist(root1)
 	writeGamelist(root2)
 
-	slug := slugFor("nes", filepath.Join(root1, "game.nes"))
-	titlesBySlug := map[string]database.MediaTitle{
-		slug: {DBID: 1, Slug: slug},
-	}
-	mediaByTitleDBID := map[int64]int64{1: 10}
-
 	records, err := (&GamelistXMLScraper{}).LoadRecords(
 		context.Background(),
 		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root1, root2}},
-		titlesBySlug,
-		mediaByTitleDBID,
+		mediaByPath(database.Media{DBID: 10, MediaTitleDBID: 1, Path: filepath.Join(root1, "game.nes")}),
 	)
 	require.NoError(t, err)
-	require.Len(t, records, 1, "second root's duplicate slug must be skipped")
+	require.Len(t, records, 1, "second root's duplicate path must be skipped after first match")
 	assert.Equal(t, root1, records[0].SystemRootPath, "first root wins")
 }
 
-// TestLoadRecords_NoMediaForTitle verifies that a slug match with no
-// corresponding Media row yields MatchedMediaDBID = 0. The scrape loop will
-// skip such records via its zero-ID guard.
-func TestLoadRecords_NoMediaForTitle(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
-<gameList>
-  <game><path>./mario.nes</path><name>Mario</name></game>
-</gameList>`), 0o600))
-
-	slug := slugFor("nes", filepath.Join(root, "mario.nes"))
-	titlesBySlug := map[string]database.MediaTitle{
-		slug: {DBID: 7, Slug: slug},
-	}
-	// Intentionally omit title DBID 7 from mediaByTitleDBID.
-	mediaByTitleDBID := map[int64]int64{}
-
-	records, err := (&GamelistXMLScraper{}).LoadRecords(
-		context.Background(),
-		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
-		titlesBySlug,
-		mediaByTitleDBID,
-	)
-	require.NoError(t, err)
-	require.Len(t, records, 1)
-	assert.Equal(t, int64(7), records[0].MatchedTitleDBID)
-	assert.Equal(t, int64(0), records[0].MatchedMediaDBID)
-}
-
-// TestLoadRecords_ContextCancellation verifies that a cancelled context causes
-// LoadRecords to return context.Canceled immediately.
 func TestLoadRecords_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -470,14 +389,11 @@ func TestLoadRecords_ContextCancellation(t *testing.T) {
 	_, err := (&GamelistXMLScraper{}).LoadRecords(
 		ctx,
 		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
-		map[string]database.MediaTitle{},
-		map[int64]int64{},
+		map[string]database.Media{},
 	)
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-// TestLoadRecords_PathTraversalSkipped verifies that gamelist entries whose
-// paths escape the system root are silently skipped.
 func TestLoadRecords_PathTraversalSkipped(t *testing.T) {
 	t.Parallel()
 
@@ -488,16 +404,10 @@ func TestLoadRecords_PathTraversalSkipped(t *testing.T) {
   <game><path>./mario.nes</path><name>Mario</name></game>
 </gameList>`), 0o600))
 
-	slug := slugFor("nes", filepath.Join(root, "mario.nes"))
-	titlesBySlug := map[string]database.MediaTitle{
-		slug: {DBID: 1, Slug: slug},
-	}
-
 	records, err := (&GamelistXMLScraper{}).LoadRecords(
 		context.Background(),
 		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
-		titlesBySlug,
-		map[int64]int64{1: 9},
+		mediaByPath(database.Media{DBID: 9, MediaTitleDBID: 1, Path: filepath.Join(root, "mario.nes")}),
 	)
 	require.NoError(t, err)
 	require.Len(t, records, 1, "traversal entry must be dropped; mario must still match")
@@ -554,8 +464,8 @@ func TestMapToDB_FullGame(t *testing.T) {
 
 	result := (&GamelistXMLScraper{}).MapToDB(&rec)
 
-	// Media-level tags: not written by this scraper.
-	assert.Empty(t, result.MediaTags, "gamelistxml scraper writes no media-level tags")
+	assert.Contains(t, result.MediaTags, database.TagInfo{Type: string(tags.TagTypeLang), Tag: "en"})
+	assert.Contains(t, result.MediaTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: "usa"})
 
 	// Title-level tags
 	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeDeveloper), Tag: "Nintendo"})
@@ -1762,20 +1672,19 @@ func TestScrapeLoop_NormalMode_Success(t *testing.T) {
   <game><path>./mario.nes</path><name>Mario</name></game>
 </gameList>`), 0o600))
 
-	slug := slugFor("nes", filepath.Join(root, "mario.nes"))
 	const (
 		titleDBID  = int64(1)
 		mediaDBID  = int64(10)
 		systemDBID = int64(100)
 	)
-	sentinel := scraper.SentinelTagInfo("gamelist.xml")
-	sentinelTag := sentinel.Type + ":" + sentinel.Tag
 
 	mockDB := helpers.NewMockMediaDBI()
-	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, sentinelTag).
-		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: slug}}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
-		Return([]database.MediaWithFullPath{{DBID: mediaDBID, MediaTitleDBID: titleDBID}}, nil)
+		Return([]database.MediaWithFullPath{{
+			DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "mario.nes"),
+		}}, nil)
+	mockDB.On("GetScrapedMediaIDs", mock.Anything, "gamelist.xml", systemDBID).
+		Return(map[int64]struct{}{}, nil)
 	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, mock.Anything).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
@@ -1808,7 +1717,6 @@ func TestScrapeLoop_ForceMode_Success(t *testing.T) {
   <game><path>./sonic.md</path><name>Sonic</name></game>
 </gameList>`), 0o600))
 
-	slug := slugFor("genesis", filepath.Join(root, "sonic.md"))
 	const (
 		titleDBID  = int64(2)
 		mediaDBID  = int64(20)
@@ -1816,10 +1724,10 @@ func TestScrapeLoop_ForceMode_Success(t *testing.T) {
 	)
 
 	mockDB := helpers.NewMockMediaDBI()
-	mockDB.On("GetTitlesBySystemID", "genesis").
-		Return([]database.TitleWithSystem{{DBID: titleDBID, SystemDBID: systemDBID, Slug: slug}}, nil)
 	mockDB.On("GetMediaBySystemID", "genesis").
-		Return([]database.MediaWithFullPath{{DBID: mediaDBID, MediaTitleDBID: titleDBID}}, nil)
+		Return([]database.MediaWithFullPath{{
+			DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "sonic.md"),
+		}}, nil)
 	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, mock.Anything).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
@@ -1851,20 +1759,19 @@ func TestScrapeLoop_WriteError_RecordSkipped(t *testing.T) {
   <game><path>./mario.nes</path><name>Mario</name></game>
 </gameList>`), 0o600))
 
-	slug := slugFor("nes", filepath.Join(root, "mario.nes"))
 	const (
 		titleDBID  = int64(3)
 		mediaDBID  = int64(30)
 		systemDBID = int64(300)
 	)
-	sentinel := scraper.SentinelTagInfo("gamelist.xml")
-	sentinelTag := sentinel.Type + ":" + sentinel.Tag
 
 	mockDB := helpers.NewMockMediaDBI()
-	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, sentinelTag).
-		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: slug}}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
-		Return([]database.MediaWithFullPath{{DBID: mediaDBID, MediaTitleDBID: titleDBID}}, nil)
+		Return([]database.MediaWithFullPath{{
+			DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "mario.nes"),
+		}}, nil)
+	mockDB.On("GetScrapedMediaIDs", mock.Anything, "gamelist.xml", systemDBID).
+		Return(map[int64]struct{}{}, nil)
 	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, mock.Anything).
 		Return(assert.AnError)
 
@@ -1889,7 +1796,7 @@ func TestScrapeLoop_WriteError_RecordSkipped(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestScrapeLoop_EmptyTitles_SkipsSystem(t *testing.T) {
+func TestScrapeLoop_AllMediaScraped_SkipsSystem(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
@@ -1897,14 +1804,19 @@ func TestScrapeLoop_EmptyTitles_SkipsSystem(t *testing.T) {
   <game><path>./mario.nes</path><name>Mario</name></game>
 </gameList>`), 0o600))
 
-	const systemDBID = int64(400)
-	sentinel := scraper.SentinelTagInfo("gamelist.xml")
-	sentinelTag := sentinel.Type + ":" + sentinel.Tag
+	const (
+		mediaDBID  = int64(40)
+		titleDBID  = int64(4)
+		systemDBID = int64(400)
+	)
 
 	mockDB := helpers.NewMockMediaDBI()
-	// All titles already scraped → empty result → GetMediaBySystemID and ApplyScrapeResult never called.
-	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, sentinelTag).
-		Return([]database.MediaTitle{}, nil)
+	mockDB.On("GetMediaBySystemID", "nes").
+		Return([]database.MediaWithFullPath{{
+			DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "mario.nes"),
+		}}, nil)
+	mockDB.On("GetScrapedMediaIDs", mock.Anything, "gamelist.xml", systemDBID).
+		Return(map[int64]struct{}{mediaDBID: {}}, nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: systemDBID}

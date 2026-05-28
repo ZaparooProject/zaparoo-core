@@ -38,29 +38,27 @@ For each system, the normal loop:
 
 1. Resolves target systems from indexed MediaDB systems and platform launcher paths.
 2. Runs ZaparooCompanion processing first. This is a special path; see [ZaparooCompanion Entries](#zaparoocompanion-entries).
-3. Builds candidate titles:
-   - `force=true`: all titles for the system.
-   - `force=false`: titles without sentinel tag `scraper.gamelist.xml:scraped`.
-4. Loads `gamelist.xml` from each ROM root.
-5. Resolves each `<game>` path under its ROM root and derives a scanner-compatible title slug, using `<name>` as provided name when present.
-6. Matches the slug to an existing `MediaTitle` row.
-7. Chooses the first Media DBID for the matched title as the sentinel write target.
-8. Maps XML fields to title-level tags and properties.
+3. Loads indexed media rows for the system.
+4. With `force=false`, removes media rows that already have sentinel tag `scraper.gamelist.xml:scraped`.
+5. Loads `gamelist.xml` from each ROM root.
+6. Resolves each `<game>` path under its ROM root.
+7. Matches the resolved path to an existing Media row with case-insensitive path matching.
+8. Maps XML fields to media-level tags plus title-level tags/properties.
 9. Writes metadata through `MediaDB.ApplyScrapeResult`.
-10. Writes the scraper sentinel tag last inside the same transaction.
+10. Writes the scraper sentinel tag to the matched Media row last inside the same transaction.
 11. Emits progress updates and a final done update.
 
-The sentinel tag format is `scraper.<id>:scraped`, for example `scraper.gamelist.xml:scraped`. Writing it last is intentional: if a normal record write fails, the transaction rolls back and the missing sentinel leaves that title eligible for retry.
+The sentinel tag format is `scraper.<id>:scraped`, for example `scraper.gamelist.xml:scraped`. Writing it last is intentional: if a normal record write fails, the transaction rolls back and the missing sentinel leaves that media row eligible for retry.
 
 Per-record write failures are non-fatal: they increment `Skipped`, emit `Err`, and continue. Fatal setup/load/database errors end the run with a terminal update unless caused by context cancellation.
 
 ## Tags And Properties
 
-The DB supports tags/properties at both media and title scope, but the normal `gamelist.xml` scraper currently writes title metadata only.
+The DB supports tags/properties at both media and title scope. Normal `gamelist.xml` scraping writes per-ROM `region`/`lang` tags and shared title metadata.
 
 | Storage | Scope | Current normal `gamelist.xml` use |
 |---|---|---|
-| `MediaTags` | ROM-level variant metadata | Sentinel tag only for normal entries; companion child `region`/`lang` only |
+| `MediaTags` | ROM-level variant metadata | region, lang, scraper sentinel |
 | `MediaTitleTags` | Title-level shared metadata | developer, publisher, year, rating, genre, players, arcadeboard, gamefamily |
 | `MediaTitleProperties` | Title-level static content | description, artwork paths, video path, manual path, XML game ID |
 | `MediaProperties` | ROM-level static content | Supported by DB helpers, not currently written by normal `gamelist.xml` entries |
@@ -69,17 +67,17 @@ Tag exclusivity is controlled by `TagTypes.IsExclusive`. Exclusive types replace
 
 Property rows are keyed by entity and property type tag. Re-scraping the same property type updates the row in place and preserves row DBID.
 
-Path-backed properties persist their text path and optional `BlobDBID`; the property tables do not persist the `ContentType` computed by the mapper for path values. Blob-backed properties expose content type from `MediaBlobs`. API responses can infer extensions from content type or text path, but path-backed `contentType` may be empty.
+Path-backed properties persist their text path and optional `BlobDBID`; the property tables do not persist the `ContentType` computed by the mapper for path values. Blob-backed properties expose content type from `MediaBlobs`. API responses infer path-backed content type and extension from the stored path when DB content type is empty.
 
-## Title-level Metadata Invariant
+## Media-level Sentinel Invariant
 
-Normal `gamelist.xml` metadata is shared by title. The sentinel is written to one Media row associated with the matched title, and `FindMediaTitlesWithoutSentinel` skips a title if any associated Media row has that sentinel.
+Normal `gamelist.xml` entries are matched to concrete Media rows by path. The sentinel is written to the same Media row that receives ROM-level tags such as `region` and `lang`.
 
-This is safe while the normal scraper writes only `MediaTitleTags` and `MediaTitleProperties`. Future per-ROM metadata imports need a different sentinel strategy, such as tagging every media row or splitting title-level and media-level sentinel tags.
+Title metadata remains shared by `MediaTitleDBID`, so multiple ROM variants can write the same title-level tags/properties. Rewrites are idempotent: exclusive title tags replace same-type values, additive tags are inserted-or-ignored, and properties upsert by type.
 
 ## gamelist.xml Behavior
 
-`GamelistXMLScraper` scans each system ROM root for `gamelist.xml`. Regular `<game>` entries are resolved to absolute paths under the system ROM root, converted to scanner-compatible slugs, and matched to existing `MediaTitle` rows. Scrapers do not create `Media` or `MediaTitle` rows.
+`GamelistXMLScraper` scans each system ROM root for `gamelist.xml`. Regular `<game>` entries are resolved to absolute paths under the system ROM root and matched to existing Media rows by case-insensitive path. Scrapers do not create `Media` or `MediaTitle` rows.
 
 Path handling:
 
@@ -93,10 +91,10 @@ Source fields are cleaned before mapping: HTML entities are unescaped, tab/newli
 
 ### Field Mapping
 
-Regular ES `lang` and `region` fields are not currently imported for normal game entries.
-
 | ES field | Destination | Notes |
 |---|---|---|
+| `lang` | `MediaTags: lang` | CSV split, trimmed, lowercased, additive |
+| `region` | `MediaTags: region` | CSV split, trimmed, lowercased, additive |
 | `developer` | `MediaTitleTags: developer` | Exclusive |
 | `publisher` | `MediaTitleTags: publisher` | Exclusive |
 | `releasedate` | `MediaTitleTags: year` | First four characters when present |
