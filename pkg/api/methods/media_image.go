@@ -274,7 +274,7 @@ func loadMediaImageProperty(
 	maxBytes int64,
 ) (*models.MediaImageResponse, bool, error) {
 	var binary []byte
-	contentType := prop.ContentType
+	contentType := mediaContentType(prop.ContentType, prop.Text)
 
 	switch {
 	case len(prop.Binary) > 0:

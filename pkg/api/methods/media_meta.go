@@ -174,10 +174,11 @@ func buildMediaMetaResponse(
 func mapMediaProperties(props []database.MediaProperty) map[string]models.MediaMetaPropertyItem {
 	m := make(map[string]models.MediaMetaPropertyItem, len(props))
 	for _, p := range props {
+		contentType := mediaContentType(p.ContentType, p.Text)
 		item := models.MediaMetaPropertyItem{
 			Text:        p.Text,
-			ContentType: p.ContentType,
-			Extension:   mediaContentExtension(p.ContentType, p.Text),
+			ContentType: contentType,
+			Extension:   mediaContentExtension(contentType, p.Text),
 			BlobSize:    p.BlobSize,
 		}
 		m[p.TypeTag] = item

@@ -182,6 +182,39 @@ func TestHandleMediaImage_BinaryNil_LoadsFromFile(t *testing.T) {
 
 // TestHandleMediaImage_NoMatchFound verifies that an error is returned when no
 // image property matches the preference list.
+func TestHandleMediaImage_FilePathInfersContentType(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	imgPath := filepath.Join(dir, "boxart.png")
+	fileContents := []byte("real-png-data")
+	require.NoError(t, os.WriteFile(imgPath, fileContents, 0o600))
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(33, 330)
+	expectMediaImageResolve(mockDB, row)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(33)).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(330)).
+		Return([]database.MediaProperty{
+			{TypeTag: "property:image-boxart", Text: imgPath, Binary: nil},
+		}, nil)
+
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["boxart"]`))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "image/png", resp.ContentType)
+	assert.NotNil(t, resp.Extension)
+	assert.Equal(t, "png", *resp.Extension)
+	decoded, decErr := base64.StdEncoding.DecodeString(resp.Data)
+	require.NoError(t, decErr)
+	assert.Equal(t, fileContents, decoded)
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaImage_NoMatchFound(t *testing.T) {
 	t.Parallel()
 

@@ -100,6 +100,20 @@ func TestHandleMediaMeta_FullResult(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestMapMediaProperties_InfersPathContentType(t *testing.T) {
+	t.Parallel()
+
+	props := mapMediaProperties([]database.MediaProperty{{
+		TypeTag: "property:image-boxart",
+		Text:    filepath.Join("media", "boxart", "mario.png"),
+	}})
+
+	prop := props["property:image-boxart"]
+	assert.Equal(t, "image/png", prop.ContentType)
+	require.NotNil(t, prop.Extension)
+	assert.Equal(t, "png", *prop.Extension)
+}
+
 func TestHandleMediaMeta_SecondarySlug(t *testing.T) {
 	t.Parallel()
 
