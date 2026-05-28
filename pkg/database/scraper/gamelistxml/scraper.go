@@ -65,12 +65,12 @@ type GamelistRecord struct {
 // expected filename wins.
 var mediaDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageImage):      {"image", "images"},
-	string(tags.TagPropertyImageBoxart):     {"boxart", "boxart2d", "boxart2dfront"},
+	string(tags.TagPropertyImageBoxart):     {"boxart", "boxart2d", "boxart2dfront", "box2dfront"},
 	string(tags.TagPropertyImageBoxart3D):   {"boxart3d"},
 	string(tags.TagPropertyImageBoxartSide): {"boxart2dside"},
 	string(tags.TagPropertyImageBoxartBack): {"boxart2dback"},
 	string(tags.TagPropertyImageScreenshot): {"screenshot", "screenshots"},
-	string(tags.TagPropertyImageThumbnail):  {"thumbnail", "thumbnails", "supporttexture"},
+	string(tags.TagPropertyImageThumbnail):  {"thumbnail", "thumbnails", "box2dfront", "boxart2dfront", "supporttexture"},
 	string(tags.TagPropertyImageMarquee):    {"marquee", "marquees"},
 	string(tags.TagPropertyImageWheel):      {"wheel", "wheels"},
 	string(tags.TagPropertyImageFanart):     {"fanart", "fanarts"},
@@ -579,9 +579,9 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	propType := string(tags.TagTypeProperty)
 	root := record.SystemRootPath
 
-	// stem is the ROM filename without extension, used to locate matching
+	// fallbackNames are ROM-relative PNG filenames used to locate matching
 	// artwork files under media/ sub-directories.
-	stem := strings.TrimSuffix(filepath.Base(game.Path), filepath.Ext(game.Path))
+	fallbackNames := artworkFallbackNames(game.Path, record.SystemRootPath)
 
 	if game.Desc != "" {
 		titleProps = append(titleProps,
@@ -603,7 +603,7 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		p := pathProp(key, xmlPath, root)
 		if p == nil {
 			p = findMediaFilePropFS(
-				g.filesystem(), key, stem,
+				g.filesystem(), key, fallbackNames,
 				mediaDirCandidates[string(propValue)], record.AvailableMediaDirs,
 			)
 		}
@@ -863,16 +863,53 @@ func findMediaFileProp(
 	candidates []string,
 	availableDirs map[string]string,
 ) *database.MediaProperty {
-	return findMediaFilePropFS(afero.NewOsFs(), typeTag, stem, candidates, availableDirs)
+	if stem == "" || stem == "." {
+		return nil
+	}
+	return findMediaFilePropFS(afero.NewOsFs(), typeTag, []string{stem + ".png"}, candidates, availableDirs)
+}
+
+func artworkFallbackNames(gamePath, systemRootPath string) []string {
+	resolved := resolveESPath(gamePath, systemRootPath)
+	if resolved == "" {
+		return nil
+	}
+
+	rootAbs, err := filepath.Abs(systemRootPath)
+	if err != nil {
+		return nil
+	}
+	rel, err := filepath.Rel(filepath.Clean(rootAbs), filepath.Clean(resolved))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+
+	stem := strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel))
+	if stem == "" || stem == "." {
+		return nil
+	}
+
+	flat := stem + ".png"
+	dir := filepath.Dir(rel)
+	if dir == "." || dir == "" {
+		return []string{flat}
+	}
+
+	nested := filepath.Join(dir, flat)
+	if nested == flat {
+		return []string{flat}
+	}
+	return []string{nested, flat}
 }
 
 func findMediaFilePropFS(
 	fs afero.Fs,
-	typeTag, stem string,
+	typeTag string,
+	fallbackNames []string,
 	candidates []string,
 	availableDirs map[string]string,
 ) *database.MediaProperty {
-	if stem == "" || stem == "." {
+	if len(fallbackNames) == 0 {
 		return nil
 	}
 	for _, dir := range candidates {
@@ -880,12 +917,18 @@ func findMediaFilePropFS(
 		if !ok {
 			continue
 		}
-		candidate := filepath.Join(dirPath, stem+".png")
-		if exists, err := afero.Exists(fs, candidate); err == nil && exists {
-			return &database.MediaProperty{
-				TypeTag:     typeTag,
-				Text:        filepath.ToSlash(candidate),
-				ContentType: "image/png",
+		for _, name := range fallbackNames {
+			cleanName := filepath.Clean(name)
+			if name == "" || cleanName == "." || cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
+				continue
+			}
+			candidate := filepath.Join(dirPath, name)
+			if exists, err := afero.Exists(fs, candidate); err == nil && exists {
+				return &database.MediaProperty{
+					TypeTag:     typeTag,
+					Text:        filepath.ToSlash(candidate),
+					ContentType: "image/png",
+				}
 			}
 		}
 	}

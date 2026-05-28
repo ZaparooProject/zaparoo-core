@@ -158,6 +158,59 @@ func TestHandleMediaImage_DefaultPrefs_PathBackedCompanionArtwork(t *testing.T) 
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaImage_DefaultPrefs_TitleThumbnailFound(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	thumbnailData := []byte("thumbnail-png-bytes")
+
+	row := makeMediaFullRow(13, 130)
+	expectMediaImageResolve(mockDB, row)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(13)).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(130)).
+		Return([]database.MediaProperty{
+			{TypeTag: "property:image-thumbnail", ContentType: "image/png", Binary: thumbnailData},
+		}, nil)
+
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, ""))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "property:image-thumbnail", resp.TypeTag)
+	assert.Equal(t, "image/png", resp.ContentType)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(thumbnailData), resp.Data)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaImage_ExplicitThumbnailType(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	thumbnailData := []byte("thumbnail-png-bytes")
+
+	row := makeMediaFullRow(14, 140)
+	expectMediaImageResolve(mockDB, row)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(14)).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(140)).
+		Return([]database.MediaProperty{
+			{TypeTag: "property:image-thumbnail", ContentType: "image/png", Binary: thumbnailData},
+		}, nil)
+
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["thumbnail"]`))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "property:image-thumbnail", resp.TypeTag)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(thumbnailData), resp.Data)
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaImage_DefaultPrefs_FallsBackToNextCompanionArtwork(t *testing.T) {
 	t.Parallel()
 

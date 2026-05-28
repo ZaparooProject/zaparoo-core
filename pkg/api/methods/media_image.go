@@ -45,12 +45,13 @@ const (
 
 // defaultImageTypes is the preference order used when no imageTypes param is provided.
 var defaultImageTypes = []string{
-	"image", "boxart", "boxart3d", "screenshot", "wheel", "titleshot", "map",
+	"image", "thumbnail", "boxart", "boxart3d", "screenshot", "wheel", "titleshot", "map",
 	"marquee", "fanart",
 }
 
 var imageTypeTags = map[string]string{
 	"image":      tags.PropertyTypeTag(tags.TagPropertyImageImage),
+	"thumbnail":  tags.PropertyTypeTag(tags.TagPropertyImageThumbnail),
 	"boxart":     tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
 	"boxart3d":   tags.PropertyTypeTag(tags.TagPropertyImageBoxart3D),
 	"boxartside": tags.PropertyTypeTag(tags.TagPropertyImageBoxartSide),

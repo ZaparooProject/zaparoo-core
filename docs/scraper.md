@@ -118,7 +118,9 @@ Source fields are cleaned before mapping: HTML entities are unescaped, tab/newli
 | `map` | `MediaTitleProperties: property:image-map` | XML path or filesystem fallback |
 | `manual` | `MediaTitleProperties: property:manual` | PDF path |
 
-Filesystem fallback searches known subdirectories under `<systemRootPath>/media/` for a `<rom filename stem>.png` file when an XML path is absent. Side/back box art are filesystem-fallback only.
+Filesystem fallback searches known subdirectories under `<systemRootPath>/media/` when an XML path is absent. For games in subfolders, it searches the mirrored ROM-relative path before the flat filename; for example `./Japan/Game.nes` checks `media/images/Japan/Game.png` before `media/images/Game.png`. Side/back box art are filesystem-fallback only.
+
+Only `<ROM root>/gamelist.xml` files are loaded. Nested files such as `<ROM root>/Japan/gamelist.xml` are not read by the current scraper.
 
 `gamelist.xml` deliberately does not scrape user-state fields such as favorite, hidden, or kidgame. It also does not overwrite filename-parser-owned fields such as disc and track.
 
@@ -160,7 +162,7 @@ JSON-RPC methods:
 | `media.scrape.cancel` | Cancels the active scraper run |
 | `media.scrape.resume` | Resumes a paused scraper run |
 | `media.meta` | Returns tags and metadata-only properties for one or more media rows and their titles |
-| `media.image` | Returns the best matching image property as base64 data for one media row |
+| `media.image` | Returns the best matching image property as base64 data for one media row, including thumbnail art |
 | `media.clean.orphans` | Removes missing media rows and orphaned related data |
 
 `media.scrape` params:
