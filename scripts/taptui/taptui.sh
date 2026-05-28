@@ -53,7 +53,9 @@ cmdPalette=(
   "input.key"      "Press a key on the keyboard"
   "input.coinp1"   "Insert a coin/credit for player 1"
   "input.coinp2"   "Insert a coin/credit for player 2"
-  "delay"          "Delay next command by specified milliseconds"
+  "input.coinp3"   "Insert a coin/credit for player 3"
+  "input.coinp4"   "Insert a coin/credit for player 4"
+   "delay"          "Delay next command by specified milliseconds"
   "shell"          "Run Linux command"
 )
 

@@ -206,6 +206,16 @@ func TestIsMediaLaunchingCommand(t *testing.T) {
 			cmdName: zapscript.ZapScriptCmdInputCoinP2,
 			want:    false,
 		},
+		{
+			name:    "input.coinp3 command",
+			cmdName: zapscript.ZapScriptCmdInputCoinP3,
+			want:    false,
+		},
+		{
+			name:    "input.coinp4 command",
+			cmdName: zapscript.ZapScriptCmdInputCoinP4,
+			want:    false,
+		},
 
 		// Deprecated aliases
 		{
