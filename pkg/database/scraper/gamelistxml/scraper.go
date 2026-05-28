@@ -236,7 +236,7 @@ outer:
 				continue
 			}
 
-			media, ok := mediaByPathFold[pathFoldKey(resolved)]
+			media, matchedKey, ok := matchMediaByResolvedPath(mediaByPathFold, resolved)
 			if !ok {
 				continue
 			}
@@ -248,7 +248,7 @@ outer:
 				MatchedTitleDBID:   media.MediaTitleDBID,
 				MatchedMediaDBID:   media.DBID,
 			})
-			delete(mediaByPathFold, pathFoldKey(resolved))
+			delete(mediaByPathFold, matchedKey)
 			if len(mediaByPathFold) == 0 {
 				break outer
 			}
@@ -890,6 +890,44 @@ func findMediaFilePropFS(
 		}
 	}
 	return nil
+}
+
+func matchMediaByResolvedPath(
+	mediaByPathFold map[string]database.Media,
+	resolved string,
+) (database.Media, string, bool) {
+	key := pathFoldKey(resolved)
+	if media, ok := mediaByPathFold[key]; ok {
+		return media, key, true
+	}
+
+	if !strings.EqualFold(filepath.Ext(resolved), ".zip") {
+		return database.Media{}, "", false
+	}
+
+	prefix := key + "/"
+	var matchedMedia database.Media
+	var matchedKey string
+	matches := 0
+	for mediaKey, media := range mediaByPathFold {
+		if !strings.HasPrefix(mediaKey, prefix) {
+			continue
+		}
+		matches++
+		if matches == 1 {
+			matchedMedia = media
+			matchedKey = mediaKey
+		}
+	}
+
+	if matches == 1 {
+		return matchedMedia, matchedKey, true
+	}
+	if matches > 1 {
+		log.Warn().Str("path", resolved).Int("matches", matches).
+			Msg("gamelistxml: zip-as-dir path matched multiple indexed media rows, skipping")
+	}
+	return database.Media{}, "", false
 }
 
 func pathFoldKey(path string) string {
