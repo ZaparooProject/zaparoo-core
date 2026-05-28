@@ -88,6 +88,12 @@ type GamelistXMLScraper struct {
 	cfg *config.Instance
 }
 
+type companionStats struct {
+	Processed int
+	Matched   int
+	Skipped   int
+}
+
 func (g *GamelistXMLScraper) filesystem() afero.Fs {
 	if g == nil || g.fs == nil {
 		return afero.NewOsFs()
@@ -1015,12 +1021,6 @@ type companionChild struct {
 	Lang         string
 }
 
-type companionStats struct {
-	Processed int
-	Matched   int
-	Skipped   int
-}
-
 // loadCompanionEntries scans all gamelist.xml files for the system and separates
 // entries with source="ZaparooCompanion" into parent records (id attr, no path) and
 // child records (parentid attr, has path).
@@ -1306,12 +1306,8 @@ func (*GamelistXMLScraper) matchCompanionChildMedia(
 
 func companionChildTags(c companionChild) []database.TagInfo {
 	var childTags []database.TagInfo
-	if c.Region != "" {
-		childTags = append(childTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: c.Region})
-	}
-	if c.Lang != "" {
-		childTags = append(childTags, database.TagInfo{Type: string(tags.TagTypeLang), Tag: c.Lang})
-	}
+	childTags = appendCSVTags(childTags, string(tags.TagTypeRegion), c.Region)
+	childTags = appendCSVTags(childTags, string(tags.TagTypeLang), c.Lang)
 	return childTags
 }
 

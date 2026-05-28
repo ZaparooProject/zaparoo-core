@@ -240,6 +240,19 @@ func TestSplitCSV_Empty(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+func TestCompanionChildTags_NormalizesCSV(t *testing.T) {
+	t.Parallel()
+
+	got := companionChildTags(companionChild{Region: "USA, EUR", Lang: "EN, JA"})
+
+	assert.Equal(t, []database.TagInfo{
+		{Type: string(tags.TagTypeRegion), Tag: "usa"},
+		{Type: string(tags.TagTypeRegion), Tag: "eur"},
+		{Type: string(tags.TagTypeLang), Tag: "en"},
+		{Type: string(tags.TagTypeLang), Tag: "ja"},
+	}, got)
+}
+
 // --- mimeFromExt ---
 
 func TestMimeFromExt_PNG(t *testing.T) { assert.Equal(t, "image/png", mimeFromExt("art.PNG")) }
@@ -1601,13 +1614,27 @@ func TestLoadCompanionEntries_ChildPathTraversalRejected(t *testing.T) {
 
 // --- processCompanionEntries ---
 
+func companionXMLGameIDProps(id string) []database.MediaProperty {
+	return []database.MediaProperty{
+		{
+			TypeTag:     string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyXMLGameID),
+			Text:        id,
+			ContentType: "text/plain",
+		},
+	}
+}
+
 func companionWriteMatcher(
 	mediaTags []database.TagInfo,
+	titleTags []database.TagInfo,
+	titleProps []database.MediaProperty,
 ) any {
 	return mock.MatchedBy(func(w *database.ScrapeWrite) bool {
 		return w != nil &&
 			w.Sentinel == scraper.SentinelTagInfo("gamelist.xml") &&
-			assert.ObjectsAreEqual(mediaTags, w.MediaTags)
+			assert.ObjectsAreEqual(mediaTags, w.MediaTags) &&
+			assert.ObjectsAreEqual(titleTags, w.TitleTags) &&
+			assert.ObjectsAreEqual(titleProps, w.TitleProps)
 	})
 }
 
@@ -1656,12 +1683,14 @@ func TestProcessCompanionEntries_ChildByExactPath(t *testing.T) {
 		{Type: string(tags.TagTypeRegion), Tag: "usa"},
 		{Type: string(tags.TagTypeLang), Tag: "en"},
 	}
+	titleTags := []database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "Dev Corp"}}
 	mockDB := helpers.NewMockMediaDBI()
 	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil)
 	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(1), resolvedPath).
 		Return(&database.Media{DBID: 10, MediaTitleDBID: 20}, nil)
 	mockDB.On("MediaHasTag", mock.Anything, int64(10), "scraper.gamelist.xml:scraped").Return(false, nil)
-	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20), companionWriteMatcher(childTags)).Return(nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20),
+		companionWriteMatcher(childTags, titleTags, companionXMLGameIDProps("42"))).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
@@ -1688,7 +1717,12 @@ func TestProcessCompanionEntries_ChildBySlugFile(t *testing.T) {
 	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{{DBID: 40, MediaTitleDBID: 30}}, nil)
 	mockDB.On("FindMediaTitleBySystemAndSlug", mock.Anything, int64(5), "myslug").Return(title, nil)
 	mockDB.On("MediaHasTag", mock.Anything, int64(40), "scraper.gamelist.xml:scraped").Return(false, nil)
-	mockDB.On("ApplyScrapeResult", mock.Anything, int64(40), int64(30), companionWriteMatcher(nil)).Return(nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(40), int64(30),
+		companionWriteMatcher(
+			nil,
+			[]database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "Dev"}},
+			companionXMLGameIDProps("99"),
+		)).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 5}
@@ -1941,7 +1975,12 @@ func TestProcessCompanionEntries_NoRegionLangStillWritesSentinel(t *testing.T) {
 	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(1), gamePath).
 		Return(&database.Media{DBID: 5, MediaTitleDBID: 6}, nil)
 	mockDB.On("MediaHasTag", mock.Anything, int64(5), "scraper.gamelist.xml:scraped").Return(false, nil)
-	mockDB.On("ApplyScrapeResult", mock.Anything, int64(5), int64(6), companionWriteMatcher(nil)).Return(nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(5), int64(6),
+		companionWriteMatcher(
+			nil,
+			[]database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "Dev"}},
+			companionXMLGameIDProps("1"),
+		)).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}

@@ -47,8 +47,9 @@ func mediaContentExtension(contentType, text string) *string {
 }
 
 func mediaContentType(contentType, text string) string {
-	if strings.TrimSpace(contentType) != "" {
-		return contentType
+	trimmedContentType := strings.TrimSpace(contentType)
+	if trimmedContentType != "" {
+		return trimmedContentType
 	}
 	ext := extensionFromTextPath(text)
 	if ext == "" {
