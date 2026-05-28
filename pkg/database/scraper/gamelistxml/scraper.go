@@ -210,6 +210,8 @@ func (g *GamelistXMLScraper) LoadRecords(
 	mediaByPathFold map[string]database.Media,
 ) ([]*GamelistRecord, error) {
 	var records []*GamelistRecord
+	candidateMedia := len(mediaByPathFold)
+	var gamelistFiles, gamelistEntries, companionEntriesSkipped, invalidPaths, unmatchedPaths int
 
 outer:
 	for _, rootPath := range system.ROMPaths {
@@ -231,6 +233,8 @@ outer:
 			continue
 		}
 
+		gamelistFiles++
+		gamelistEntries += len(gl.Games)
 		log.Info().
 			Str("path", gamelistPath).
 			Int("entries", len(gl.Games)).
@@ -239,13 +243,20 @@ outer:
 		availableMediaDirs := statMediaDirsFS(g.filesystem(), rootPath)
 
 		for i := range gl.Games {
+			if isCompanionGame(&gl.Games[i]) {
+				companionEntriesSkipped++
+				continue
+			}
+
 			resolved := resolveESPath(gl.Games[i].Path, rootPath)
 			if resolved == "" {
+				invalidPaths++
 				continue
 			}
 
 			media, matchedKey, ok := matchMediaByResolvedPath(mediaByPathFold, resolved)
 			if !ok {
+				unmatchedPaths++
 				continue
 			}
 
@@ -265,6 +276,14 @@ outer:
 
 	log.Info().
 		Str("system", system.ID).
+		Int("candidate_media", candidateMedia).
+		Int("gamelist_files", gamelistFiles).
+		Int("gamelist_entries", gamelistEntries).
+		Int("companion_entries_skipped", companionEntriesSkipped).
+		Int("invalid_paths", invalidPaths).
+		Int("unmatched_paths", unmatchedPaths).
+		Int("matched_records", len(records)).
+		Int("remaining_unmatched_media", len(mediaByPathFold)).
 		Int("total_records", len(records)).
 		Msg("gamelistxml: finished loading records for system")
 
@@ -1001,6 +1020,10 @@ func readGameListXMLFS(fs afero.Fs, path string) (*esapi.GameList, error) {
 // companionSource is the XML source attribute value that marks ZaparooCompanion entries.
 const companionSource = "ZaparooCompanion"
 
+func isCompanionGame(game *esapi.Game) bool {
+	return game != nil && (game.Source == companionSource || game.SourceAttr == companionSource)
+}
+
 // companionParent holds a ZaparooCompanion parent meta record parsed from a gamelist.xml.
 // Parent records carry full metadata but no ROM path; they represent the canonical game
 // title shared by multiple regional ROM releases.
@@ -1057,7 +1080,7 @@ func (g *GamelistXMLScraper) loadCompanionEntries(
 			default:
 			}
 			game := gl.Games[i]
-			if game.Source != companionSource && game.SourceAttr != companionSource {
+			if !isCompanionGame(&game) {
 				log.Debug().Str("source", game.Source).Msg("source not companion")
 				continue
 			}
@@ -1171,8 +1194,19 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 	}
 
 	sentinel := scraper.SentinelTagInfo("gamelist.xml")
-	sentinelTag := sentinel.Type + ":" + sentinel.Tag
 	var stats companionStats
+
+	defer func() {
+		log.Info().
+			Str("system", system.ID).
+			Int("parents", len(parents)).
+			Int("children", len(children)).
+			Int("processed", stats.Processed).
+			Int("matched", stats.Matched).
+			Int("skipped", stats.Skipped).
+			Bool("force", opts.Force).
+			Msg("gamelistxml: companion: finished entries")
+	}()
 
 	for _, c := range children {
 		stats.Processed++
@@ -1191,22 +1225,6 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 		}
 
 		for _, media := range matched {
-			if !opts.Force {
-				scraped, tagErr := mdb.MediaHasTag(ctx, media.DBID, sentinelTag)
-				if tagErr != nil {
-					log.Warn().Err(tagErr).Int64("mediaDBID", media.DBID).
-						Msg("gamelistxml: companion: sentinel check failed, skipping child media")
-					stats.Skipped++
-					continue
-				}
-				if scraped {
-					log.Debug().Int64("mediaDBID", media.DBID).
-						Msg("gamelistxml: companion: child media already scraped, skipping")
-					stats.Skipped++
-					continue
-				}
-			}
-
 			writeErr := mdb.ApplyScrapeResult(ctx, media.DBID, media.MediaTitleDBID, &database.ScrapeWrite{
 				Sentinel:   sentinel,
 				MediaTags:  companionChildTags(c),

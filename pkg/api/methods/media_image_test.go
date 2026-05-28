@@ -350,6 +350,7 @@ func TestHandleMediaImage_NoMatchFound(t *testing.T) {
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	row := makeMediaFullRow(4, 40)
+	row.Path = string(filepath.Separator) + filepath.Join("games", "missing.rom")
 	expectMediaImageResolve(mockDB, row)
 	mockDB.On("GetMediaProperties", mock.Anything, int64(4)).
 		Return([]database.MediaProperty{}, nil)
@@ -362,6 +363,9 @@ func TestHandleMediaImage_NoMatchFound(t *testing.T) {
 
 	var clientErr *models.ClientError
 	require.ErrorAs(t, err, &clientErr)
+	assert.Contains(t, err.Error(), `system="NES"`)
+	assert.Contains(t, err.Error(), `path="/games/missing.rom"`)
+	assert.NotContains(t, err.Error(), "NES//games")
 	mockDB.AssertExpectations(t)
 }
 

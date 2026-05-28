@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -92,6 +93,27 @@ func buildPropsMap(props []database.MediaProperty) map[string]database.MediaProp
 		m[p.TypeTag] = p
 	}
 	return m
+}
+
+func imagePropertyTypeTags(props []database.MediaProperty) []string {
+	known := make(map[string]struct{}, len(imageTypeTags))
+	for _, typeTag := range imageTypeTags {
+		known[typeTag] = struct{}{}
+	}
+
+	seen := make(map[string]struct{})
+	for _, p := range props {
+		if _, ok := known[p.TypeTag]; ok {
+			seen[p.TypeTag] = struct{}{}
+		}
+	}
+
+	result := make([]string, 0, len(seen))
+	for typeTag := range seen {
+		result = append(result, typeTag)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // HandleMediaImage returns a single best-match image for a media record as a
@@ -259,8 +281,18 @@ func selectMediaImage(
 		}
 	}
 
+	log.Debug().
+		Str("system", row.System.SystemID).
+		Str("path", row.Path).
+		Int64("mediaDBID", row.DBID).
+		Int64("titleDBID", row.Title.DBID).
+		Strs("prefs", prefs).
+		Strs("mediaImageProps", imagePropertyTypeTags(mediaProps)).
+		Strs("titleImageProps", imagePropertyTypeTags(titleProps)).
+		Msg("media.image: no image found")
+
 	return models.MediaImageResponse{}, models.ClientErrf(
-		"no image found for media: %s/%s", row.System.SystemID, row.Path,
+		"no image found for media: system=%q path=%q", row.System.SystemID, row.Path,
 	)
 }
 
@@ -372,13 +404,25 @@ func deleteStaleMediaImageProperty(
 		if delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID); delErr != nil {
 			log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
 				Msg("media.image: failed to delete stale title property")
+			return
 		}
+		log.Debug().
+			Int64("titleDBID", row.Title.DBID).
+			Str("typeTag", typeTag).
+			Str("text", prop.Text).
+			Msg("media.image: deleted stale image property")
 		return
 	}
 	if delErr := db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID); delErr != nil {
 		log.Warn().Err(delErr).Int64("mediaDBID", row.DBID).Str("typeTag", typeTag).
 			Msg("media.image: failed to delete stale media property")
+		return
 	}
+	log.Debug().
+		Int64("mediaDBID", row.DBID).
+		Str("typeTag", typeTag).
+		Str("text", prop.Text).
+		Msg("media.image: deleted stale image property")
 }
 
 func mediaImageMaxBytes(pl platforms.Platform) int64 {
