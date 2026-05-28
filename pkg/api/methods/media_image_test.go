@@ -115,6 +115,83 @@ func TestHandleMediaImage_DefaultPrefs_TitleBlobFound(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaImage_DefaultPrefs_PathBackedCompanionArtwork(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	files := map[string][]byte{
+		"boxart.png":     []byte("boxart-2d"),
+		"boxart3d.png":   []byte("boxart-3d"),
+		"screenshot.png": []byte("screenshot"),
+		"wheel.png":      []byte("wheel"),
+		"titleshot.png":  []byte("titleshot"),
+	}
+	for name, data := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
+	}
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(11, 110)
+	expectMediaImageResolve(mockDB, row)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(11)).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(110)).
+		Return([]database.MediaProperty{
+			{TypeTag: "property:image-screenshot", Text: filepath.Join(dir, "screenshot.png")},
+			{TypeTag: "property:image-titleshot", Text: filepath.Join(dir, "titleshot.png")},
+			{TypeTag: "property:image-boxart", Text: filepath.Join(dir, "boxart.png")},
+			{TypeTag: "property:image-boxart3d", Text: filepath.Join(dir, "boxart3d.png")},
+			{TypeTag: "property:image-wheel", Text: filepath.Join(dir, "wheel.png")},
+		}, nil)
+
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, ""))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "property:image-boxart", resp.TypeTag)
+	assert.Equal(t, "image/png", resp.ContentType)
+	assert.NotNil(t, resp.Extension)
+	assert.Equal(t, "png", *resp.Extension)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(files["boxart.png"]), resp.Data)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaImage_DefaultPrefs_FallsBackToNextCompanionArtwork(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	boxart3D := []byte("boxart-3d")
+	screenshot := []byte("screenshot")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "boxart3d.png"), boxart3D, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "screenshot.png"), screenshot, 0o600))
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(12, 120)
+	expectMediaImageResolve(mockDB, row)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(12)).
+		Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(120)).
+		Return([]database.MediaProperty{
+			{TypeTag: "property:image-screenshot", Text: filepath.Join(dir, "screenshot.png")},
+			{TypeTag: "property:image-boxart3d", Text: filepath.Join(dir, "boxart3d.png")},
+		}, nil)
+
+	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, ""))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "property:image-boxart3d", resp.TypeTag)
+	assert.Equal(t, "image/png", resp.ContentType)
+	assert.NotNil(t, resp.Extension)
+	assert.Equal(t, "png", *resp.Extension)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(boxart3D), resp.Data)
+	mockDB.AssertExpectations(t)
+}
+
 // TestHandleMediaImage_ExplicitPrefs_MediaLevelPriority verifies that media-level
 // properties take priority over title-level properties for the same TypeTag.
 func TestHandleMediaImage_ExplicitPrefs_MediaLevelPriority(t *testing.T) {

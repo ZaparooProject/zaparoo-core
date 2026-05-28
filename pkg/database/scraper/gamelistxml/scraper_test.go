@@ -1388,6 +1388,25 @@ func companionWriteMatcher(
 	})
 }
 
+func companionArtworkWriteMatcher(t *testing.T, expected map[string]string) any {
+	t.Helper()
+	return mock.MatchedBy(func(w *database.ScrapeWrite) bool {
+		if w == nil || w.Sentinel != scraper.SentinelTagInfo("gamelist.xml") {
+			return false
+		}
+		got := make(map[string]string, len(w.TitleProps))
+		for _, p := range w.TitleProps {
+			got[p.TypeTag] = p.Text
+		}
+		for key, path := range expected {
+			if !assert.Equal(t, filepath.ToSlash(path), got[key], "companion artwork %s", key) {
+				return false
+			}
+		}
+		return true
+	})
+}
+
 func TestProcessCompanionEntries_NoEntries(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -1533,6 +1552,48 @@ func TestProcessCompanionEntries_ParentNotFoundForChild(t *testing.T) {
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
 	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
 	assert.Equal(t, companionStats{Processed: 1, Skipped: 1}, stats)
+	mockDB.AssertExpectations(t)
+}
+
+func TestProcessCompanionEntries_MapsIssue161CompanionArtwork(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game id="161" source="ZaparooCompanion">
+    <name>Doom</name>
+    <screenshot>./media/screenshot/Doom.png</screenshot>
+    <titlescreen>./media/titlescreen/Doom.png</titlescreen>
+    <boxart2d>./media/box2d/Doom.png</boxart2d>
+    <boxart3d>./media/box3d/Doom.png</boxart3d>
+    <logo>./media/logo/Doom.png</logo>
+  </game>
+  <game parentid="161" source="ZaparooCompanion">
+    <path>./Doom.rom</path>
+  </game>
+</gameList>`), 0o600))
+
+	childPath := filepath.ToSlash(filepath.Join(root, "Doom.rom"))
+	propPrefix := string(tags.TagTypeProperty) + ":"
+	expectedArtwork := map[string]string{
+		propPrefix + string(tags.TagPropertyImageScreenshot): filepath.Join(root, "media", "screenshot", "Doom.png"),
+		propPrefix + string(tags.TagPropertyImageTitleshot):  filepath.Join(root, "media", "titlescreen", "Doom.png"),
+		propPrefix + string(tags.TagPropertyImageBoxart):     filepath.Join(root, "media", "box2d", "Doom.png"),
+		propPrefix + string(tags.TagPropertyImageBoxart3D):   filepath.Join(root, "media", "box3d", "Doom.png"),
+		propPrefix + string(tags.TagPropertyImageWheel):      filepath.Join(root, "media", "logo", "Doom.png"),
+	}
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil)
+	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(1), childPath).
+		Return(&database.Media{DBID: 10, MediaTitleDBID: 20}, nil)
+	mockDB.On("MediaHasTag", mock.Anything, int64(10), "scraper.gamelist.xml:scraped").Return(false, nil)
+	mockDB.On(
+		"ApplyScrapeResult", mock.Anything, int64(10), int64(20), companionArtworkWriteMatcher(t, expectedArtwork),
+	).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
+	assert.Equal(t, companionStats{Processed: 1, Matched: 1}, stats)
 	mockDB.AssertExpectations(t)
 }
 
