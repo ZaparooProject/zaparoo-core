@@ -70,12 +70,14 @@ var mediaDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageBoxartSide): {"boxart2dside"},
 	string(tags.TagPropertyImageBoxartBack): {"boxart2dback"},
 	string(tags.TagPropertyImageScreenshot): {"screenshot", "screenshots"},
-	string(tags.TagPropertyImageThumbnail):  {"thumbnail", "thumbnails", "box2dfront", "boxart2dfront", "supporttexture"},
-	string(tags.TagPropertyImageMarquee):    {"marquee", "marquees"},
-	string(tags.TagPropertyImageWheel):      {"wheel", "wheels"},
-	string(tags.TagPropertyImageFanart):     {"fanart", "fanarts"},
-	string(tags.TagPropertyImageTitleshot):  {"titleshot", "titleshots", "screenshottitle"},
-	string(tags.TagPropertyImageMap):        {"map", "maps"},
+	string(tags.TagPropertyImageThumbnail): {
+		"thumbnail", "thumbnails", "box2dfront", "boxart2dfront", "supporttexture",
+	},
+	string(tags.TagPropertyImageMarquee):   {"marquee", "marquees"},
+	string(tags.TagPropertyImageWheel):     {"wheel", "wheels"},
+	string(tags.TagPropertyImageFanart):    {"fanart", "fanarts"},
+	string(tags.TagPropertyImageTitleshot): {"titleshot", "titleshots", "screenshottitle"},
+	string(tags.TagPropertyImageMap):       {"map", "maps"},
 }
 
 // GamelistXMLScraper loads and maps EmulationStation gamelist.xml records.
@@ -919,7 +921,8 @@ func findMediaFilePropFS(
 		}
 		for _, name := range fallbackNames {
 			cleanName := filepath.Clean(name)
-			if name == "" || cleanName == "." || cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
+			if name == "" || cleanName == "." || cleanName == ".." ||
+				strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
 				continue
 			}
 			candidate := filepath.Join(dirPath, name)
