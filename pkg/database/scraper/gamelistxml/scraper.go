@@ -323,7 +323,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		}
 
 		// Process ZaparooCompanion parent/child entries before regular slug scrape.
-		g.processCompanionEntries(ctx, system, mdb)
+		companion := g.processCompanionEntries(ctx, opts, system, mdb)
+		totalProcessed += companion.Processed
+		totalMatched += companion.Matched
+		totalSkipped += companion.Skipped
 
 		// Build slug → MediaTitle map: only unscraped titles unless Force.
 		titlesBySlug := make(map[string]database.MediaTitle)
@@ -941,6 +944,12 @@ type companionChild struct {
 	Lang         string
 }
 
+type companionStats struct {
+	Processed int
+	Matched   int
+	Skipped   int
+}
+
 // loadCompanionEntries scans all gamelist.xml files for the system and separates
 // entries with source="ZaparooCompanion" into parent records (id attr, no path) and
 // child records (parentid attr, has path).
@@ -1051,13 +1060,14 @@ func (g *GamelistXMLScraper) mapCompanionParentToResult(p *companionParent) scra
 // to the child Media row.
 func (g *GamelistXMLScraper) processCompanionEntries(
 	ctx context.Context,
+	opts scraper.ScrapeOptions,
 	system scraper.ScrapeSystem,
 	mdb database.MediaDBI,
-) {
+) companionStats {
 	parents, children := g.loadCompanionEntries(ctx, system)
 	if len(parents) == 0 && len(children) == 0 {
 		log.Debug().Msg("gamelistxml: companion entries not found")
-		return
+		return companionStats{}
 	}
 
 	log.Info().
@@ -1078,128 +1088,160 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 			Int("props", len(parentMeta[p.GameID].TitleProps)).
 			Msg("gamelistxml: companion: parent mapped")
 	}
+	if len(children) == 0 {
+		return companionStats{}
+	}
 
-	// Phase 2: enrich each child's existing MediaTitle with parent metadata.
-	// Child paths are root-relative (./file.rom) so match by filename suffix.
-	seenTitles := make(map[int64]bool)
+	mediaByTitleDBID, mediaErr := companionMediaByTitle(system.ID, mdb)
+	if mediaErr != nil {
+		log.Warn().Err(mediaErr).Str("system", system.ID).
+			Msg("gamelistxml: companion: failed to load media map, skipping companion entries")
+		return companionStats{Processed: len(children), Skipped: len(children)}
+	}
+
+	sentinel := scraper.SentinelTagInfo("gamelist.xml")
+	sentinelTag := sentinel.Type + ":" + sentinel.Tag
+	var stats companionStats
+
 	for _, c := range children {
+		stats.Processed++
 		meta, ok := parentMeta[c.ParentGameID]
 		if !ok {
 			log.Debug().Str("parentGameID", c.ParentGameID).
 				Msg("gamelistxml: companion: parent not found for child, skipping")
+			stats.Skipped++
 			continue
 		}
 
-		filename := filepath.Base(c.ResolvedPath)
-
-		if filepath.Ext(filename) == ".slug" {
-			slug := strings.TrimSuffix(filename, ".slug")
-			title, titleErr := mdb.FindMediaTitleBySystemAndSlug(ctx, system.DBID, slug)
-			if titleErr != nil {
-				log.Debug().Err(titleErr).Str("slug", slug).
-					Msg("gamelistxml: companion: error looking up child title by slug")
-				continue
-			}
-			if title == nil {
-				log.Debug().Str("slug", slug).
-					Msg("gamelistxml: companion: no indexed title found for child slug, skipping")
-				continue
-			}
-			if !seenTitles[title.DBID] {
-				titleSuccess := true
-				if len(meta.TitleTags) > 0 {
-					if tagsErr := mdb.UpsertMediaTitleTags(ctx, title.DBID, meta.TitleTags); tagsErr != nil {
-						log.Warn().Err(tagsErr).Int64("mediaTitleDBID", title.DBID).
-							Msg("gamelistxml: companion: upsert parent tags on slug-matched title failed")
-						titleSuccess = false
-					}
-				}
-				if len(meta.TitleProps) > 0 {
-					if propsErr := mdb.UpsertMediaTitleProperties(ctx, title.DBID, meta.TitleProps); propsErr != nil {
-						log.Warn().Err(propsErr).Int64("mediaTitleDBID", title.DBID).
-							Msg("gamelistxml: companion: upsert parent props on slug-matched title failed")
-						titleSuccess = false
-					}
-				}
-				if titleSuccess {
-					seenTitles[title.DBID] = true
-				}
-			} else {
-				log.Debug().Int64("mediaTitleDBID", title.DBID).
-					Msg("gamelistxml: companion: slug-matched title already enriched, skipping")
-			}
-			continue
-		}
-
-		matched, mediaErr := mdb.FindMediaBySystemAndPathSuffix(ctx, system.DBID, filename)
-		if mediaErr != nil {
-			log.Debug().Err(mediaErr).Str("filename", filename).
-				Msg("gamelistxml: companion: error looking up child by filename")
-			continue
-		}
+		matched := g.matchCompanionChildMedia(ctx, system, c, mediaByTitleDBID, mdb)
 		if len(matched) == 0 {
-			log.Debug().Str("filename", filename).
-				Msg("gamelistxml: companion: no indexed media found for child filename, skipping")
+			stats.Skipped++
 			continue
-		}
-		log.Debug().
-			Str("filename", filename).
-			Int("matches", len(matched)).
-			Msg("gamelistxml: companion: child filename matches")
-
-		var childTags []database.TagInfo
-		if c.Region != "" {
-			childTags = append(childTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: c.Region})
-		}
-		if c.Lang != "" {
-			childTags = append(childTags, database.TagInfo{Type: string(tags.TagTypeLang), Tag: c.Lang})
 		}
 
 		for _, media := range matched {
-			log.Debug().
-				Str("path", media.Path).
-				Int64("mediaDBID", media.DBID).
-				Int64("mediaTitleDBID", media.MediaTitleDBID).
-				Msg("gamelistxml: companion: enriching child media title with parent metadata")
-
-			if !seenTitles[media.MediaTitleDBID] {
-				titleSuccess := true
-				if len(meta.TitleTags) > 0 {
-					if tagsErr := mdb.UpsertMediaTitleTags(ctx, media.MediaTitleDBID, meta.TitleTags); tagsErr != nil {
-						log.Warn().Err(tagsErr).Int64("mediaTitleDBID", media.MediaTitleDBID).
-							Msg("gamelistxml: companion: upsert parent tags on child title failed")
-						titleSuccess = false
-					}
+			if !opts.Force {
+				scraped, tagErr := mdb.MediaHasTag(ctx, media.DBID, sentinelTag)
+				if tagErr != nil {
+					log.Warn().Err(tagErr).Int64("mediaDBID", media.DBID).
+						Msg("gamelistxml: companion: sentinel check failed, skipping child media")
+					stats.Skipped++
+					continue
 				}
-				if len(meta.TitleProps) > 0 {
-					propsErr := mdb.UpsertMediaTitleProperties(ctx, media.MediaTitleDBID, meta.TitleProps)
-					if propsErr != nil {
-						log.Warn().Err(propsErr).Int64("mediaTitleDBID", media.MediaTitleDBID).
-							Msg("gamelistxml: companion: upsert parent props on child title failed")
-						titleSuccess = false
-					}
+				if scraped {
+					log.Debug().Int64("mediaDBID", media.DBID).
+						Msg("gamelistxml: companion: child media already scraped, skipping")
+					stats.Skipped++
+					continue
 				}
-				if titleSuccess {
-					seenTitles[media.MediaTitleDBID] = true
-				}
-			} else {
-				log.Debug().Int64("mediaTitleDBID", media.MediaTitleDBID).
-					Msg("gamelistxml: companion: title already enriched, skipping")
 			}
 
-			if len(childTags) > 0 {
-				log.Debug().
+			writeErr := mdb.ApplyScrapeResult(ctx, media.DBID, media.MediaTitleDBID, &database.ScrapeWrite{
+				Sentinel:   sentinel,
+				MediaTags:  companionChildTags(c),
+				TitleTags:  meta.TitleTags,
+				TitleProps: meta.TitleProps,
+			})
+			if writeErr != nil {
+				log.Warn().Err(writeErr).
 					Int64("mediaDBID", media.DBID).
-					Str("region", c.Region).
-					Str("lang", c.Lang).
-					Msg("gamelistxml: companion: writing child region/lang tags")
-				if tagsErr := mdb.UpsertMediaTags(ctx, media.DBID, childTags); tagsErr != nil {
-					log.Warn().Err(tagsErr).Int64("mediaDBID", media.DBID).
-						Msg("gamelistxml: companion: upsert child tags failed")
-				}
+					Int64("mediaTitleDBID", media.MediaTitleDBID).
+					Msg("gamelistxml: companion: write failed")
+				stats.Skipped++
+				continue
+			}
+			stats.Matched++
+		}
+	}
+	return stats
+}
+
+func companionMediaByTitle(systemID string, mdb database.MediaDBI) (map[int64]database.Media, error) {
+	allMedia, err := mdb.GetMediaBySystemID(systemID)
+	if err != nil {
+		return nil, err
+	}
+	mediaByTitleDBID := make(map[int64]database.Media, len(allMedia))
+	for _, m := range allMedia {
+		if _, exists := mediaByTitleDBID[m.MediaTitleDBID]; !exists {
+			mediaByTitleDBID[m.MediaTitleDBID] = database.Media{
+				DBID:           m.DBID,
+				MediaTitleDBID: m.MediaTitleDBID,
+				Path:           m.Path,
 			}
 		}
 	}
+	return mediaByTitleDBID, nil
+}
+
+func (g *GamelistXMLScraper) matchCompanionChildMedia(
+	ctx context.Context,
+	system scraper.ScrapeSystem,
+	child companionChild,
+	mediaByTitleDBID map[int64]database.Media,
+	mdb database.MediaDBI,
+) []database.Media {
+	filename := filepath.Base(child.ResolvedPath)
+	if filepath.Ext(filename) == ".slug" {
+		slug := strings.TrimSuffix(filename, ".slug")
+		title, titleErr := mdb.FindMediaTitleBySystemAndSlug(ctx, system.DBID, slug)
+		if titleErr != nil {
+			log.Debug().Err(titleErr).Str("slug", slug).
+				Msg("gamelistxml: companion: error looking up child title by slug")
+			return nil
+		}
+		if title == nil {
+			log.Debug().Str("slug", slug).
+				Msg("gamelistxml: companion: no indexed title found for child slug, skipping")
+			return nil
+		}
+		media, ok := mediaByTitleDBID[title.DBID]
+		if !ok || media.DBID == 0 {
+			log.Debug().Int64("mediaTitleDBID", title.DBID).
+				Msg("gamelistxml: companion: no media row for slug-matched title, skipping")
+			return nil
+		}
+		return []database.Media{media}
+	}
+
+	resolvedPath := filepath.ToSlash(child.ResolvedPath)
+	exact, exactErr := mdb.FindMediaBySystemAndPathFold(ctx, system.DBID, resolvedPath)
+	if exactErr != nil {
+		log.Debug().Err(exactErr).Str("path", resolvedPath).
+			Msg("gamelistxml: companion: exact child path lookup failed")
+	}
+	if exact != nil {
+		return []database.Media{*exact}
+	}
+
+	matched, mediaErr := mdb.FindMediaBySystemAndPathSuffix(ctx, system.DBID, filename)
+	if mediaErr != nil {
+		log.Debug().Err(mediaErr).Str("filename", filename).
+			Msg("gamelistxml: companion: error looking up child by filename")
+		return nil
+	}
+	if len(matched) == 0 {
+		log.Debug().Str("filename", filename).
+			Msg("gamelistxml: companion: no indexed media found for child filename, skipping")
+		return nil
+	}
+	if len(matched) > 1 {
+		log.Warn().Str("filename", filename).Int("matches", len(matched)).
+			Msg("gamelistxml: companion: ambiguous child filename matches, skipping")
+		return nil
+	}
+	return matched
+}
+
+func companionChildTags(c companionChild) []database.TagInfo {
+	var childTags []database.TagInfo
+	if c.Region != "" {
+		childTags = append(childTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: c.Region})
+	}
+	if c.Lang != "" {
+		childTags = append(childTags, database.TagInfo{Type: string(tags.TagTypeLang), Tag: c.Lang})
+	}
+	return childTags
 }
 
 // mimeFromExt returns a MIME type based on file extension.

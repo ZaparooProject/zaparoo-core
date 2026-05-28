@@ -135,18 +135,18 @@ Companion records are split into:
 
 Child matching:
 
-- Paths ending in `.slug` match an existing title by slug.
-- Other child paths match media rows by filename suffix with `FindMediaBySystemAndPathSuffix`.
+- Paths ending in `.slug` match an existing title by slug, then use the first Media row for that title as the write target.
+- Other child paths first try an exact case-insensitive media path lookup.
+- If exact lookup fails, the scraper falls back to filename suffix matching with `FindMediaBySystemAndPathSuffix`.
+- Ambiguous suffix matches are skipped instead of updating multiple same-basename media rows.
 
-For matched children, parent metadata is upserted onto the child title. Child `region` and `lang` are upserted to the child Media row as media-level tags.
+For matched children, parent metadata is written onto the child title, child `region` and `lang` are written to the child Media row as media-level tags, and the scraper sentinel is written to that child Media row. These writes use `ApplyScrapeResult`, so title metadata, child tags, and the sentinel are committed together.
 
 Current caveats:
 
-- Companion processing runs before normal sentinel filtering.
-- Companion-only writes do not write scraper sentinel tags.
-- Companion writes are not included in scrape progress totals.
-- Companion title metadata and child media tags are separate DB writes, not one `ApplyScrapeResult` transaction.
-- Filename-suffix matching can update multiple same-basename media rows.
+- Companion processing still runs before normal title filtering.
+- With `force=false`, child media rows that already have the `scraper.gamelist.xml:scraped` sentinel are skipped.
+- Companion processed/matched/skipped counts contribute to run counters, but companion entries do not have a separate total in status updates.
 
 These caveats document current behavior, not necessarily desired long-term behavior.
 

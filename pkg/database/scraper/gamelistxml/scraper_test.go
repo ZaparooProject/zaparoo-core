@@ -1479,6 +1479,14 @@ func TestLoadCompanionEntries_ChildPathTraversalRejected(t *testing.T) {
 
 // --- processCompanionEntries ---
 
+func companionWriteMatcher(
+	mediaTags []database.TagInfo,
+) any {
+	return mock.MatchedBy(func(w *database.ScrapeWrite) bool {
+		return w != nil && w.Sentinel == scraper.SentinelTagInfo("gamelist.xml") && assert.ObjectsAreEqual(mediaTags, w.MediaTags)
+	})
+}
+
 func TestProcessCompanionEntries_NoEntries(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -1490,26 +1498,32 @@ func TestProcessCompanionEntries_NoEntries(t *testing.T) {
 	mockDB := helpers.NewMockMediaDBI()
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
-	s.processCompanionEntries(context.Background(), system, mockDB)
-	// No companion entries → no DB calls.
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
+	assert.Equal(t, companionStats{}, stats)
 	mockDB.AssertExpectations(t)
 }
 
-func TestProcessCompanionEntries_ChildByFilename(t *testing.T) {
+func TestProcessCompanionEntries_ChildByExactPath(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
 
+	resolvedPath := filepath.ToSlash(filepath.Join(root, "child.rom"))
+	childTags := []database.TagInfo{
+		{Type: string(tags.TagTypeRegion), Tag: "usa"},
+		{Type: string(tags.TagTypeLang), Tag: "en"},
+	}
 	mockDB := helpers.NewMockMediaDBI()
-	mockDB.On("FindMediaBySystemAndPathSuffix", mock.Anything, int64(1), "child.rom").
-		Return([]database.Media{{DBID: 10, MediaTitleDBID: 20}}, nil)
-	mockDB.On("UpsertMediaTitleTags", mock.Anything, int64(20), mock.Anything).Return(nil)
-	mockDB.On("UpsertMediaTitleProperties", mock.Anything, int64(20), mock.Anything).Return(nil)
-	mockDB.On("UpsertMediaTags", mock.Anything, int64(10), mock.Anything).Return(nil)
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil)
+	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(1), resolvedPath).
+		Return(&database.Media{DBID: 10, MediaTitleDBID: 20}, nil)
+	mockDB.On("MediaHasTag", mock.Anything, int64(10), "scraper.gamelist.xml:scraped").Return(false, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20), companionWriteMatcher(childTags)).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
-	s.processCompanionEntries(context.Background(), system, mockDB)
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
+	assert.Equal(t, companionStats{Processed: 1, Matched: 1}, stats)
 	mockDB.AssertExpectations(t)
 }
 
@@ -1528,14 +1542,53 @@ func TestProcessCompanionEntries_ChildBySlugFile(t *testing.T) {
 
 	title := &database.MediaTitle{DBID: 30}
 	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{{DBID: 40, MediaTitleDBID: 30}}, nil)
 	mockDB.On("FindMediaTitleBySystemAndSlug", mock.Anything, int64(5), "myslug").Return(title, nil)
-	mockDB.On("UpsertMediaTitleTags", mock.Anything, int64(30), mock.Anything).Return(nil)
-	mockDB.On("UpsertMediaTitleProperties", mock.Anything, int64(30), mock.Anything).Return(nil)
-	// No region/lang on child → UpsertMediaTags not called.
+	mockDB.On("MediaHasTag", mock.Anything, int64(40), "scraper.gamelist.xml:scraped").Return(false, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(40), int64(30), companionWriteMatcher(nil)).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 5}
-	s.processCompanionEntries(context.Background(), system, mockDB)
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
+	assert.Equal(t, companionStats{Processed: 1, Matched: 1}, stats)
+	mockDB.AssertExpectations(t)
+}
+
+func TestProcessCompanionEntries_SkipsAlreadyScrapedUnlessForce(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
+
+	resolvedPath := filepath.ToSlash(filepath.Join(root, "child.rom"))
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil)
+	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(1), resolvedPath).
+		Return(&database.Media{DBID: 10, MediaTitleDBID: 20}, nil)
+	mockDB.On("MediaHasTag", mock.Anything, int64(10), "scraper.gamelist.xml:scraped").Return(true, nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
+	assert.Equal(t, companionStats{Processed: 1, Skipped: 1}, stats)
+	mockDB.AssertExpectations(t)
+}
+
+func TestProcessCompanionEntries_ForceRewritesAlreadyScraped(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
+
+	resolvedPath := filepath.ToSlash(filepath.Join(root, "child.rom"))
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil)
+	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(1), resolvedPath).
+		Return(&database.Media{DBID: 10, MediaTitleDBID: 20}, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20), mock.Anything).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{Force: true}, system, mockDB)
+	assert.Equal(t, companionStats{Processed: 1, Matched: 1}, stats)
 	mockDB.AssertExpectations(t)
 }
 
@@ -1553,20 +1606,20 @@ func TestProcessCompanionEntries_SlugNotIndexed(t *testing.T) {
 </gameList>`), 0o600))
 
 	mockDB := helpers.NewMockMediaDBI()
-	// FindMediaTitleBySystemAndSlug returns nil → child skipped.
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil)
 	mockDB.On("FindMediaTitleBySystemAndSlug", mock.Anything, int64(5), "missing").
 		Return((*database.MediaTitle)(nil), nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 5}
-	s.processCompanionEntries(context.Background(), system, mockDB)
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
+	assert.Equal(t, companionStats{Processed: 1, Skipped: 1}, stats)
 	mockDB.AssertExpectations(t)
 }
 
 func TestProcessCompanionEntries_ParentNotFoundForChild(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	// Child references parentid "99" but no parent entry exists.
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
   <game parentid="99" source="ZaparooCompanion">
     <path>./child.rom</path>
@@ -1574,17 +1627,17 @@ func TestProcessCompanionEntries_ParentNotFoundForChild(t *testing.T) {
 </gameList>`), 0o600))
 
 	mockDB := helpers.NewMockMediaDBI()
-	// Parent not found → child skipped → no DB calls.
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil)
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
-	s.processCompanionEntries(context.Background(), system, mockDB)
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
+	assert.Equal(t, companionStats{Processed: 1, Skipped: 1}, stats)
 	mockDB.AssertExpectations(t)
 }
 
-func TestProcessCompanionEntries_SeenTitleDedup(t *testing.T) {
+func TestProcessCompanionEntries_EachChildUsesAtomicScrapeWrite(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	// Two children from same parent; both map to MediaTitleDBID=20.
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
   <game id="42" source="ZaparooCompanion">
     <name>Test Game</name>
@@ -1602,28 +1655,29 @@ func TestProcessCompanionEntries_SeenTitleDedup(t *testing.T) {
   </game>
 </gameList>`), 0o600))
 
+	child1Path := filepath.ToSlash(filepath.Join(root, "child1.rom"))
+	child2Path := filepath.ToSlash(filepath.Join(root, "child2.rom"))
 	mockDB := helpers.NewMockMediaDBI()
-	mockDB.On("FindMediaBySystemAndPathSuffix", mock.Anything, int64(1), "child1.rom").
-		Return([]database.Media{{DBID: 10, MediaTitleDBID: 20}}, nil)
-	mockDB.On("FindMediaBySystemAndPathSuffix", mock.Anything, int64(1), "child2.rom").
-		Return([]database.Media{{DBID: 11, MediaTitleDBID: 20}}, nil)
-	// Title-level tags and props written only once (seenTitles dedup).
-	mockDB.On("UpsertMediaTitleTags", mock.Anything, int64(20), mock.Anything).Return(nil).Once()
-	mockDB.On("UpsertMediaTitleProperties", mock.Anything, int64(20), mock.Anything).Return(nil).Once()
-	// Media-level (region/lang) tags written for each child Media row.
-	mockDB.On("UpsertMediaTags", mock.Anything, int64(10), mock.Anything).Return(nil)
-	mockDB.On("UpsertMediaTags", mock.Anything, int64(11), mock.Anything).Return(nil)
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil)
+	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(1), child1Path).
+		Return(&database.Media{DBID: 10, MediaTitleDBID: 20}, nil)
+	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(1), child2Path).
+		Return(&database.Media{DBID: 11, MediaTitleDBID: 20}, nil)
+	mockDB.On("MediaHasTag", mock.Anything, int64(10), "scraper.gamelist.xml:scraped").Return(false, nil)
+	mockDB.On("MediaHasTag", mock.Anything, int64(11), "scraper.gamelist.xml:scraped").Return(false, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20), mock.Anything).Return(nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(11), int64(20), mock.Anything).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
-	s.processCompanionEntries(context.Background(), system, mockDB)
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
+	assert.Equal(t, companionStats{Processed: 2, Matched: 2}, stats)
 	mockDB.AssertExpectations(t)
 }
 
-func TestProcessCompanionEntries_NoRegionLangNoChildTags(t *testing.T) {
+func TestProcessCompanionEntries_NoRegionLangStillWritesSentinel(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	// Child has no region or lang → childTags empty → UpsertMediaTags NOT called.
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
   <game id="1" source="ZaparooCompanion">
     <name>Game</name>
@@ -1634,16 +1688,38 @@ func TestProcessCompanionEntries_NoRegionLangNoChildTags(t *testing.T) {
   </game>
 </gameList>`), 0o600))
 
+	gamePath := filepath.ToSlash(filepath.Join(root, "game.rom"))
 	mockDB := helpers.NewMockMediaDBI()
-	mockDB.On("FindMediaBySystemAndPathSuffix", mock.Anything, int64(1), "game.rom").
-		Return([]database.Media{{DBID: 5, MediaTitleDBID: 6}}, nil)
-	mockDB.On("UpsertMediaTitleTags", mock.Anything, int64(6), mock.Anything).Return(nil)
-	mockDB.On("UpsertMediaTitleProperties", mock.Anything, int64(6), mock.Anything).Return(nil)
-	// UpsertMediaTags must NOT be called (no region or lang).
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil)
+	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(1), gamePath).
+		Return(&database.Media{DBID: 5, MediaTitleDBID: 6}, nil)
+	mockDB.On("MediaHasTag", mock.Anything, int64(5), "scraper.gamelist.xml:scraped").Return(false, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(5), int64(6), companionWriteMatcher(nil)).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
-	s.processCompanionEntries(context.Background(), system, mockDB)
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
+	assert.Equal(t, companionStats{Processed: 1, Matched: 1}, stats)
+	mockDB.AssertExpectations(t)
+}
+
+func TestProcessCompanionEntries_AmbiguousSuffixMatchSkipped(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
+
+	resolvedPath := filepath.ToSlash(filepath.Join(root, "child.rom"))
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil)
+	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(1), resolvedPath).
+		Return((*database.Media)(nil), nil)
+	mockDB.On("FindMediaBySystemAndPathSuffix", mock.Anything, int64(1), "child.rom").
+		Return([]database.Media{{DBID: 10, MediaTitleDBID: 20}, {DBID: 11, MediaTitleDBID: 21}}, nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
+	assert.Equal(t, companionStats{Processed: 1, Skipped: 1}, stats)
 	mockDB.AssertExpectations(t)
 }
 
@@ -1652,14 +1728,18 @@ func TestProcessCompanionEntries_FilenameNotIndexed(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
 
+	resolvedPath := filepath.ToSlash(filepath.Join(root, "child.rom"))
 	mockDB := helpers.NewMockMediaDBI()
-	// FindMediaBySystemAndPathSuffix returns empty → child silently skipped.
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil)
+	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(1), resolvedPath).
+		Return((*database.Media)(nil), nil)
 	mockDB.On("FindMediaBySystemAndPathSuffix", mock.Anything, int64(1), "child.rom").
 		Return([]database.Media{}, nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
-	s.processCompanionEntries(context.Background(), system, mockDB)
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
+	assert.Equal(t, companionStats{Processed: 1, Skipped: 1}, stats)
 	mockDB.AssertExpectations(t)
 }
 
