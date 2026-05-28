@@ -449,11 +449,10 @@ func TestHandleMediaImage_ItemsWithMediaIDReturnsClientError(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-// TestHandleMediaImage_FileReadError_DeletesAndContinues verifies that when a
-// property's Text path is unreadable, the stale property is deleted (DB + in-memory)
-// and the handler continues to the next preference. With no remaining image the
-// final result is a ClientError.
-func TestHandleMediaImage_FileReadError_DeletesAndContinues(t *testing.T) {
+// TestHandleMediaImage_FileReadError_IgnoresStaleProperty verifies that when a
+// property's Text path is unreadable, the stale property is ignored in-memory
+// without mutating the DB. With no remaining image the final result is a ClientError.
+func TestHandleMediaImage_FileReadError_IgnoresStaleProperty(t *testing.T) {
 	t.Parallel()
 
 	// Use a path inside a real temp dir so the dir exists, but the file does not.
@@ -471,16 +470,12 @@ func TestHandleMediaImage_FileReadError_DeletesAndContinues(t *testing.T) {
 		Binary:      nil,
 		TypeTagDBID: 42,
 	}
-	// Properties are fetched once; the iterative loop deletes from the in-memory map.
+	// Properties are fetched once; the iterative loop removes stale entries from the in-memory map only.
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(60)).
 		Return([]database.MediaProperty{staleProp}, nil)
 
 	mockDB.On("GetMediaProperties", mock.Anything, int64(6)).
 		Return([]database.MediaProperty{}, nil)
-
-	// Expect the stale title-level property to be deleted from the DB.
-	mockDB.On("DeleteMediaTitleProperty", mock.Anything, int64(60), int64(42)).
-		Return(nil)
 
 	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["boxart"]`))
 	_, err := HandleMediaImage(env)
@@ -492,9 +487,9 @@ func TestHandleMediaImage_FileReadError_DeletesAndContinues(t *testing.T) {
 }
 
 // TestHandleMediaImage_StaleMedia_FallsBackToTitle verifies that when a
-// media-level property has a stale file path, the handler deletes the stale
-// entry and falls back to the title-level property for the same TypeTag before
-// moving on to the next preference in the list.
+// media-level property has a stale file path, the handler ignores the stale
+// entry in-memory and falls back to the title-level property for the same TypeTag
+// before moving on to the next preference in the list.
 func TestHandleMediaImage_StaleMedia_FallsBackToTitle(t *testing.T) {
 	t.Parallel()
 
@@ -525,10 +520,6 @@ func TestHandleMediaImage_StaleMedia_FallsBackToTitle(t *testing.T) {
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(80)).
 		Return([]database.MediaProperty{titleProp}, nil)
 
-	// Expect only the stale media-level property to be deleted.
-	mockDB.On("DeleteMediaProperty", mock.Anything, int64(8), int64(77)).
-		Return(nil)
-
 	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["boxart"]`))
 	result, err := HandleMediaImage(env)
 	require.NoError(t, err)
@@ -541,9 +532,9 @@ func TestHandleMediaImage_StaleMedia_FallsBackToTitle(t *testing.T) {
 }
 
 // TestHandleMediaImage_FileReadError_FallsBackToNextPref verifies that when a
-// title-level property's file is unreadable, the stale entry is deleted from the
-// DB and the in-memory map, and the handler continues to find the next-preference
-// image successfully without a second round-trip.
+// title-level property's file is unreadable, the stale entry is ignored in-memory,
+// and the handler continues to find the next-preference image successfully without
+// a second round-trip or DB mutation.
 func TestHandleMediaImage_FileReadError_FallsBackToNextPref(t *testing.T) {
 	t.Parallel()
 
@@ -579,9 +570,6 @@ func TestHandleMediaImage_FileReadError_FallsBackToNextPref(t *testing.T) {
 
 	mockDB.On("GetMediaProperties", mock.Anything, int64(7)).
 		Return([]database.MediaProperty{}, nil)
-
-	mockDB.On("DeleteMediaTitleProperty", mock.Anything, int64(70), int64(55)).
-		Return(nil)
 
 	env := makeMediaImageEnv(t, mockDB, mediaImageParams(row, `"imageTypes": ["boxart", "screenshot"]`))
 	result, err := HandleMediaImage(env)
