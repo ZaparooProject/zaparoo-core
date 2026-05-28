@@ -266,11 +266,11 @@ func cmdCoinP2(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 //nolint:gocritic // single-use parameter in command handler
 func cmdCoinP3(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msgf("inserting coin for player 3: %v", env.Cmd.Args)
-	return insertCoin(pl, env, "6")
+	return insertCoin(pl, env, "7")
 }
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdCoinP4(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msgf("inserting coin for player 4: %v", env.Cmd.Args)
-	return insertCoin(pl, env, "6")
+	return insertCoin(pl, env, "8")
 }
