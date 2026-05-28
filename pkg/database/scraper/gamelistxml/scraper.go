@@ -400,7 +400,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				return true
 			}
 			update.SystemID = system.ID
-			update.Total = totalRecords
+			update.Total = totalProcessed + totalRecords
+			update.Processed += totalProcessed
+			update.Matched += totalMatched
+			update.Skipped += totalSkipped
 			select {
 			case <-ctx.Done():
 				ch <- scraper.ScrapeUpdate{
@@ -1143,7 +1146,7 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 func companionMediaByTitle(systemID string, mdb database.MediaDBI) (map[int64]database.Media, error) {
 	allMedia, err := mdb.GetMediaBySystemID(systemID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load media by system %q: %w", systemID, err)
 	}
 	mediaByTitleDBID := make(map[int64]database.Media, len(allMedia))
 	for _, m := range allMedia {
@@ -1158,7 +1161,7 @@ func companionMediaByTitle(systemID string, mdb database.MediaDBI) (map[int64]da
 	return mediaByTitleDBID, nil
 }
 
-func (g *GamelistXMLScraper) matchCompanionChildMedia(
+func (*GamelistXMLScraper) matchCompanionChildMedia(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
 	child companionChild,
