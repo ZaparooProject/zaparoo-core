@@ -431,6 +431,80 @@ func TestHandleMediaBrowse_SystemRootRoutesUsesCachedCandidates(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestAnnotateSingletonDirectoryEntry_WhenZipsAsDirsEnabled(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+	entry := models.BrowseEntry{
+		Name:      "Game.zip",
+		Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip")),
+		Type:      "directory",
+		FileCount: intPtr(1),
+		SystemIDs: []string{"NES"},
+	}
+	row := &database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip", "Game.nes")),
+			ParentDir: filepath.ToSlash(filepath.Join("roms", "Game.zip")) + "/",
+		},
+		Title:  database.MediaTitle{DBID: 30, Name: "Game"},
+		System: database.System{DBID: 1, SystemID: "NES"},
+	}
+
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(row.System, nil).Once()
+	mockMediaDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, entry.Path).
+		Return(&row.Media, nil).Once()
+	mockMediaDB.On("GetMediaWithTitleAndSystem", mock.Anything, row.DBID).Return(row, nil).Once()
+	mockMediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, row.DBID).
+		Return([]database.TagInfo{{Type: "favorite", Tag: "true"}}, nil).Once()
+	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "NES", row.Path).
+		Return([]database.TagInfo{}, nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	annotateSingletonDirectoryEntry(env, &entry, entry.Path, entry.SystemIDs, nil)
+
+	assert.Equal(t, row.DBID, entry.MediaID)
+	require.NotNil(t, entry.SystemID)
+	assert.Equal(t, "NES", *entry.SystemID)
+	require.NotNil(t, entry.ZapScript)
+	assert.NotEmpty(t, *entry.ZapScript)
+	assert.Equal(t, []database.TagInfo{{Type: "favorite", Tag: "true"}}, entry.Tags)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestAnnotateSingletonDirectoryEntry_WhenZipsAsDirsDisabledSkipsLookup(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: false}).Once()
+	entry := models.BrowseEntry{
+		Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip")),
+		Type:      "directory",
+		FileCount: intPtr(1),
+		SystemIDs: []string{"NES"},
+	}
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	annotateSingletonDirectoryEntry(env, &entry, entry.Path, entry.SystemIDs, nil)
+
+	assert.Zero(t, entry.MediaID)
+	assert.Nil(t, entry.ZapScript)
+	mockMediaDB.AssertNotCalled(t, "FindSystemBySystemID", mock.Anything)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestDedupeSystemRootEntries(t *testing.T) {
 	t.Parallel()
 

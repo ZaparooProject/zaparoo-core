@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -345,6 +346,52 @@ func TestHandleMediaImage_FilePathInfersContentType(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestMediaImagePropSources_IncludesSingletonAliasSources(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	platform := mocks.NewMockPlatform()
+	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+
+	row := &database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip", "Game.nes")),
+			ParentDir: filepath.ToSlash(filepath.Join("roms", "Game.zip")) + "/",
+		},
+		Title:  database.MediaTitle{DBID: 200},
+		System: database.System{DBID: 1, SystemID: "NES"},
+	}
+	parentPath := filepath.ToSlash(filepath.Join("roms", "Game.zip"))
+	parent := &database.Media{DBID: 10, Path: parentPath}
+
+	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, row.Path).
+		Return((*database.Media)(nil), nil).Once()
+	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, parentPath).
+		Return(&row.Media, nil).Once()
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, parentPath).
+		Return(parent, nil).Once()
+	mockDB.On("GetMediaPropertiesByMediaDBIDs", mock.Anything, []int64{20, 10}).
+		Return(map[int64][]database.MediaProperty{
+			20: {{TypeTag: "property:image-boxart", Text: "child.png"}},
+			10: {{TypeTag: "property:image-boxart", Text: "parent.png"}},
+		}, nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+		Platform: platform,
+	}
+	sources, err := mediaImagePropSources(env, row)
+	require.NoError(t, err)
+
+	require.Len(t, sources, 2)
+	assert.Equal(t, "child.png", sources[0][0].Text)
+	assert.Equal(t, "parent.png", sources[1][0].Text)
+	mockDB.AssertExpectations(t)
+	platform.AssertExpectations(t)
+}
+
 func TestHandleMediaImage_NoMatchFound(t *testing.T) {
 	t.Parallel()
 
@@ -387,6 +434,33 @@ func TestHandleMediaImage_MediaNotFound(t *testing.T) {
 
 	var clientErr *models.ClientError
 	require.ErrorAs(t, err, &clientErr)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaImage_MediaIDSuccess(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	blobData := []byte("media-id-image")
+	row := makeMediaFullRow(44, 440)
+
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{row.DBID}).
+		Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil).Once()
+	mockDB.On("GetMediaProperties", mock.Anything, row.DBID).
+		Return([]database.MediaProperty{
+			{TypeTag: "property:image-boxart", ContentType: "image/png", Binary: blobData},
+		}, nil).Once()
+	mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).
+		Return([]database.MediaProperty{}, nil).Once()
+
+	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId":44,"imageTypes":["boxart"]}`))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "property:image-boxart", resp.TypeTag)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(blobData), resp.Data)
 	mockDB.AssertExpectations(t)
 }
 

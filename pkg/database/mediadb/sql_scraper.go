@@ -121,6 +121,54 @@ func (db *MediaDB) FindMediaBySystemAndPaths(
 	return results, rows.Err()
 }
 
+func (db *MediaDB) FindSingleDescendantMedia(
+	ctx context.Context, systemDBID int64, dirPath string,
+) (*database.Media, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	prefix := strings.TrimRight(dirPath, "/") + "/"
+	rows, err := db.sql.QueryContext(ctx, `
+		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
+		FROM Media
+		WHERE SystemDBID = ? AND IsMissing = 0 AND substr(Path, 1, length(?)) = ?
+		ORDER BY Path ASC, DBID ASC
+		LIMIT 2
+	`, systemDBID, prefix, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query FindSingleDescendantMedia: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	var matches []database.Media
+	for rows.Next() {
+		var row database.Media
+		if scanErr := rows.Scan(
+			&row.DBID,
+			&row.MediaTitleDBID,
+			&row.SystemDBID,
+			&row.Path,
+			&row.ParentDir,
+			&row.IsMissing,
+		); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan FindSingleDescendantMedia: %w", scanErr)
+		}
+		matches = append(matches, row)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("failed to iterate FindSingleDescendantMedia: %w", rowsErr)
+	}
+	if len(matches) != 1 {
+		return nil, nil //nolint:nilnil // zero or ambiguous descendants are not singleton aliases
+	}
+	return &matches[0], nil
+}
+
 // FindMediaBySystemAndPathFold returns the Media row for the given system and
 // path using a case-insensitive path comparison, or nil, nil when not found.
 // LOWER() in SQLite covers ASCII only, which is sufficient for filesystem paths.

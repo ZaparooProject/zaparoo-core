@@ -95,6 +95,154 @@ func TestFindMediaBySystemAndPath_WrongSystem(t *testing.T) {
 	assert.Nil(t, m, "path exists but systemDBID doesn't match")
 }
 
+func TestFindMediaBySystemAndPaths_ReturnsMatchesByPath(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	marioPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
+	zeldaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	missingPath := filepath.ToSlash(filepath.Join("roms", "missing.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, zeldaPath)
+	require.NoError(t, err)
+
+	results, err := mediaDB.FindMediaBySystemAndPaths(ctx, 1, []string{marioPath, zeldaPath, missingPath})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, int64(1), results[marioPath].DBID)
+	assert.Equal(t, int64(2), results[zeldaPath].DBID)
+	assert.NotContains(t, results, missingPath)
+}
+
+func TestFindMediaBySystemAndPaths_EmptyInput(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	results, err := mediaDB.FindMediaBySystemAndPaths(context.Background(), 1, nil)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
+
+func TestFindSingleDescendantMedia_ReturnsOnlyChild(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	childPath := filepath.ToSlash(filepath.Join("roms", "Zelda", "zelda.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (2, 2, 1, ?, ?);
+	`, childPath, filepath.ToSlash(filepath.Join("roms", "Zelda"))+"/")
+	require.NoError(t, err)
+
+	media, err := mediaDB.FindSingleDescendantMedia(ctx, 1, filepath.ToSlash(filepath.Join("roms", "Zelda")))
+	require.NoError(t, err)
+	require.NotNil(t, media)
+	assert.Equal(t, int64(2), media.DBID)
+	assert.Equal(t, childPath, media.Path)
+}
+
+func TestFindSingleDescendantMedia_RejectsMultipleChildren(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "Collection"))
+	parentDir := filepath.ToSlash(filepath.Join(parent, "")) + "/"
+	onePath := filepath.ToSlash(filepath.Join(parent, "one.nes"))
+	twoPath := filepath.ToSlash(filepath.Join(parent, "two.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(2, 1, 'one', 'One'),
+			(3, 1, 'two', 'Two');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(2, 2, 1, ?, ?),
+			(3, 3, 1, ?, ?);
+	`, onePath, parentDir, twoPath, parentDir)
+	require.NoError(t, err)
+
+	media, err := mediaDB.FindSingleDescendantMedia(ctx, 1, parent)
+	require.NoError(t, err)
+	assert.Nil(t, media)
+}
+
+func TestFindSingleDescendantMedia_IgnoresMissingAndOtherSystems(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "Shared"))
+	parentDir := filepath.ToSlash(filepath.Join(parent, "")) + "/"
+	nesPath := filepath.ToSlash(filepath.Join(parent, "nes.nes"))
+	snesPath := filepath.ToSlash(filepath.Join(parent, "snes.sfc"))
+	missingPath := filepath.ToSlash(filepath.Join(parent, "missing.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'SNES', 'Super Nintendo');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(2, 1, 'nes-game', 'NES Game'),
+			(3, 2, 'snes-game', 'SNES Game'),
+			(4, 1, 'missing-game', 'Missing Game');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing) VALUES
+			(2, 2, 1, ?, ?, 0),
+			(3, 3, 2, ?, ?, 0),
+			(4, 4, 1, ?, ?, 1);
+	`, nesPath, parentDir, snesPath, parentDir, missingPath, parentDir)
+	require.NoError(t, err)
+
+	media, err := mediaDB.FindSingleDescendantMedia(ctx, 1, parentDir)
+	require.NoError(t, err)
+	require.NotNil(t, media)
+	assert.Equal(t, int64(2), media.DBID)
+}
+
+func TestFindSingleDescendantMedia_UsesByteExactPrefix(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(2, 1, 'underscore', 'Underscore'),
+			(3, 1, 'wildcard', 'Wildcard'),
+			(4, 1, 'percent', 'Percent'),
+			(5, 1, 'percent-wildcard', 'Percent Wildcard'),
+			(6, 1, 'case-upper', 'Case Upper'),
+			(7, 1, 'case-lower', 'Case Lower');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing) VALUES
+			(2, 2, 1, 'roms/Game_1/game.nes', 'roms/Game_1/', 0),
+			(3, 3, 1, 'roms/GameA1/game.nes', 'roms/GameA1/', 0),
+			(4, 4, 1, 'roms/Game%1/game.nes', 'roms/Game%1/', 0),
+			(5, 5, 1, 'roms/GameXYZ1/game.nes', 'roms/GameXYZ1/', 0),
+			(6, 6, 1, 'roms/CaseGame/game.nes', 'roms/CaseGame/', 0),
+			(7, 7, 1, 'roms/casegame/game.nes', 'roms/casegame/', 0);
+	`)
+	require.NoError(t, err)
+
+	underscore, err := mediaDB.FindSingleDescendantMedia(ctx, 1, "roms/Game_1")
+	require.NoError(t, err)
+	require.NotNil(t, underscore)
+	assert.Equal(t, int64(2), underscore.DBID)
+
+	percent, err := mediaDB.FindSingleDescendantMedia(ctx, 1, "roms/Game%1")
+	require.NoError(t, err)
+	require.NotNil(t, percent)
+	assert.Equal(t, int64(4), percent.DBID)
+
+	caseExact, err := mediaDB.FindSingleDescendantMedia(ctx, 1, "roms/CaseGame")
+	require.NoError(t, err)
+	require.NotNil(t, caseExact)
+	assert.Equal(t, int64(6), caseExact.DBID)
+}
+
 // --- FindMediaBySystemAndPathFold ---
 
 func TestFindMediaBySystemAndPathFold_ExactMatch(t *testing.T) {
