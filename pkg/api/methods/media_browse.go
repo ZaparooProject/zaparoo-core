@@ -641,22 +641,28 @@ func buildBrowseResponse(
 
 	entries := make([]models.BrowseEntry, 0, len(dirs)+len(files))
 
-	// Add directory entries
-	for _, dir := range dirs {
-		entries = append(entries, models.BrowseEntry{
-			Name:      dir.Name,
-			Path:      path + "/" + dir.Name,
-			Type:      "directory",
-			FileCount: &dir.FileCount,
-			SystemIDs: dir.SystemIDs,
-		})
-	}
-
-	// Build file entries
 	var rootDirs []string
 	if env.LauncherCache != nil && env.Platform != nil {
 		rootDirs = env.Platform.RootDirs(env.Config)
 	}
+
+	// Add directory entries
+	for _, dir := range dirs {
+		dirPath := path + "/" + dir.Name
+		entry := models.BrowseEntry{
+			Name:      dir.Name,
+			Path:      dirPath,
+			Type:      "directory",
+			FileCount: &dir.FileCount,
+			SystemIDs: dir.SystemIDs,
+		}
+		if dir.FileCount == 1 {
+			annotateSingletonDirectoryEntry(env, &entry, dirPath, dir.SystemIDs, rootDirs)
+		}
+		entries = append(entries, entry)
+	}
+
+	// Build file entries
 	for i := range files {
 		entry := buildMediaEntry(&files[i], env, rootDirs)
 		entries = append(entries, entry)
@@ -720,6 +726,64 @@ func buildMediaEntry(
 	}
 
 	return entry
+}
+
+func annotateSingletonDirectoryEntry(
+	env *requests.RequestEnv,
+	entry *models.BrowseEntry,
+	dirPath string,
+	systemIDs []string,
+	rootDirs []string,
+) {
+	if env == nil || entry == nil || env.Database == nil || len(systemIDs) != 1 {
+		return
+	}
+
+	db := env.Database.MediaDB
+	system, err := db.FindSystemBySystemID(systemIDs[0])
+	if err != nil {
+		log.Debug().Err(err).Str("system", systemIDs[0]).Msg("browse singleton directory system lookup failed")
+		return
+	}
+	media, err := db.FindSingleDescendantMedia(env.Context, system.DBID, dirPath)
+	if err != nil {
+		log.Debug().Err(err).Str("path", dirPath).Msg("browse singleton directory lookup failed")
+		return
+	}
+	if media == nil {
+		return
+	}
+
+	row, err := db.GetMediaWithTitleAndSystem(env.Context, media.DBID)
+	if err != nil || row == nil {
+		log.Debug().Err(err).Int64("mediaDBID", media.DBID).Msg("browse singleton directory media lookup failed")
+		return
+	}
+	tags, err := db.GetMediaTagsByMediaDBID(env.Context, row.DBID)
+	if err != nil {
+		log.Debug().Err(err).Int64("mediaDBID", row.DBID).Msg("browse singleton directory tag lookup failed")
+		return
+	}
+	zapTags, err := db.GetZapScriptTagsBySystemAndPath(env.Context, row.System.SystemID, row.Path)
+	if err != nil {
+		log.Debug().Err(err).Int64("mediaDBID", row.DBID).Msg("browse singleton directory zapscript tag lookup failed")
+		return
+	}
+
+	result := database.SearchResultWithCursor{
+		MediaID:       row.DBID,
+		SystemID:      row.System.SystemID,
+		Name:          row.Title.Name,
+		Path:          row.Path,
+		Tags:          tags,
+		ZapScriptTags: zapTags,
+	}
+	mediaEntry := buildMediaEntry(&result, env, rootDirs)
+	entry.MediaID = mediaEntry.MediaID
+	entry.SystemID = mediaEntry.SystemID
+	entry.RelPath = mediaEntry.RelPath
+	entry.ZapScript = mediaEntry.ZapScript
+	entry.Tags = mediaEntry.Tags
 }
 
 // isPathUnderRoots checks if the given path is at or under one of the allowed root directories.

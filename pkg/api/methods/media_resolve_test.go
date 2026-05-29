@@ -128,6 +128,58 @@ func TestResolveMediaBySystemAndPath_RelativeFallbackAmbiguous(t *testing.T) {
 	pl.AssertExpectations(t)
 }
 
+func TestResolveMediaBySystemAndPath_SingletonContainerFallbackSuccess(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	pl := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	system := database.System{DBID: 10, SystemID: "NES", Name: "Nintendo Entertainment System"}
+	containerPath := filepath.ToSlash(filepath.Join("roms", "NES", "Game.zip"))
+	childPath := containerPath + "/Game.nes"
+	media := database.Media{DBID: 20, Path: childPath, ParentDir: containerPath + "/"}
+	row := &database.MediaFullRow{
+		Media:  media,
+		Title:  database.MediaTitle{DBID: 30, Name: "Game"},
+		System: system,
+	}
+
+	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, containerPath).
+		Return((*database.Media)(nil), nil)
+	mockDB.On("FindSingleDescendantMedia", mock.Anything, system.DBID, containerPath).Return(&media, nil)
+	mockDB.On("GetMediaWithTitleAndSystem", mock.Anything, media.DBID).Return(row, nil)
+
+	env := makeResolveMediaEnv(mockDB, pl, nil, cfg)
+	result, err := resolveMediaBySystemAndPath(&env, "NES", containerPath)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, childPath, result.Path)
+	mockDB.AssertExpectations(t)
+}
+
+func TestResolveMediaBySystemAndPath_SingletonContainerFallbackMiss(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	pl := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	system := database.System{DBID: 10, SystemID: "NES", Name: "Nintendo Entertainment System"}
+	containerPath := filepath.ToSlash(filepath.Join("roms", "NES", "Collection"))
+
+	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, containerPath).
+		Return((*database.Media)(nil), nil)
+	mockDB.On("FindSingleDescendantMedia", mock.Anything, system.DBID, containerPath).
+		Return((*database.Media)(nil), nil)
+
+	env := makeResolveMediaEnv(mockDB, pl, nil, cfg)
+	_, err := resolveMediaBySystemAndPath(&env, "NES", containerPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "media not found")
+	mockDB.AssertExpectations(t)
+}
+
 func TestResolveMediaBySystemAndPath_URIDoesNotUseRelativeFallback(t *testing.T) {
 	t.Parallel()
 
