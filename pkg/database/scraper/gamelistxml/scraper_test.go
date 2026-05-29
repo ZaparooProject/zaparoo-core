@@ -416,6 +416,8 @@ func TestLoadRecords_PokemonAccentMatchesNonAccentedSlug(t *testing.T) {
 	assert.Equal(t, "Pokémon Ruby Version", records[0].Game.Name)
 	assert.Equal(t, int64(856), records[0].MatchedTitleDBID)
 	assert.Equal(t, int64(857), records[0].MatchedMediaDBID)
+	assert.Equal(t, gamelistMatchSlugOnly, records[0].MatchKind)
+	assert.False(t, records[0].MediaLevelWriteSafe)
 }
 
 func TestLoadRecords_SlugMatchSelectsExactMediaPath(t *testing.T) {
@@ -442,6 +444,32 @@ func TestLoadRecords_SlugMatchSelectsExactMediaPath(t *testing.T) {
 	require.Len(t, records, 1)
 	assert.Equal(t, int64(50), records[0].MatchedTitleDBID)
 	assert.Equal(t, int64(61), records[0].MatchedMediaDBID)
+	assert.Equal(t, gamelistMatchSlugPath, records[0].MatchKind)
+	assert.True(t, records[0].MediaLevelWriteSafe)
+}
+
+func TestLoadRecords_SkipsPathOnlyFallbackWhenSlugKnown(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	gamePath := filepath.Join(root, "conflict.nes")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./conflict.nes</path><name>Known Title</name></game>
+</gameList>`), 0o600))
+
+	indexes := mediaByPath(database.Media{DBID: 70, MediaTitleDBID: 80, Path: gamePath})
+	indexes.AllTitlesBySlug = map[string]database.MediaTitle{
+		"knowntitle": {DBID: 90, Slug: "knowntitle", Name: "Known Title"},
+	}
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+		indexes,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, records)
 }
 
 func TestLoadRecords_PathOnlyFallbackWhenSlugMissing(t *testing.T) {
@@ -463,6 +491,8 @@ func TestLoadRecords_PathOnlyFallbackWhenSlugMissing(t *testing.T) {
 	require.Len(t, records, 1)
 	assert.Equal(t, int64(80), records[0].MatchedTitleDBID)
 	assert.Equal(t, int64(70), records[0].MatchedMediaDBID)
+	assert.Equal(t, gamelistMatchPathOnly, records[0].MatchKind)
+	assert.True(t, records[0].MediaLevelWriteSafe)
 }
 
 func TestLoadRecords_ZipAsDirChildMatch(t *testing.T) {
@@ -2234,6 +2264,129 @@ func drainChannel(ch chan scraper.ScrapeUpdate) []scraper.ScrapeUpdate {
 	return updates
 }
 
+func TestScrapeLoop_ProgressIsPerSystem(t *testing.T) {
+	t.Parallel()
+
+	root1 := t.TempDir()
+	root2 := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root1, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./first.nes</path><name>First</name></game>
+</gameList>`), 0o600))
+	games := []string{"one", "two", "three"}
+	var builder strings.Builder
+	builder.WriteString("<gameList>\n")
+	for _, name := range games {
+		builder.WriteString("  <game><path>./" + name + ".sfc</path><name>" + name + "</name></game>\n")
+	}
+	builder.WriteString("</gameList>")
+	require.NoError(t, os.WriteFile(filepath.Join(root2, "gamelist.xml"), []byte(builder.String()), 0o600))
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetTitlesBySystemID", "nes").Return([]database.TitleWithSystem{{
+		DBID: 1, SystemDBID: 10, Slug: "first", Name: "First",
+	}}, nil)
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{{
+		DBID: 11, MediaTitleDBID: 1, Path: filepath.Join(root1, "first.nes"),
+	}}, nil)
+	mockDB.On("GetTitlesBySystemID", "snes").Return([]database.TitleWithSystem{
+		{DBID: 2, SystemDBID: 20, Slug: "one", Name: "one"},
+		{DBID: 3, SystemDBID: 20, Slug: "two", Name: "two"},
+		{DBID: 4, SystemDBID: 20, Slug: "three", Name: "three"},
+	}, nil)
+	mockDB.On("GetMediaBySystemID", "snes").Return([]database.MediaWithFullPath{
+		{DBID: 12, MediaTitleDBID: 2, Path: filepath.Join(root2, "one.sfc")},
+		{DBID: 13, MediaTitleDBID: 3, Path: filepath.Join(root2, "two.sfc")},
+		{DBID: 14, MediaTitleDBID: 4, Path: filepath.Join(root2, "three.sfc")},
+	}, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, mock.AnythingOfType("int64"), mock.AnythingOfType("int64"), mock.Anything).
+		Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{
+		Pauser: syncutil.NewPauser(),
+		Force:  true,
+	}, []scraper.ScrapeSystem{
+		{ID: "nes", ROMPaths: []string{root1}, DBID: 10},
+		{ID: "snes", ROMPaths: []string{root2}, DBID: 20},
+	}, mockDB, ch)
+
+	updates := drainChannel(ch)
+	var lastSNES scraper.ScrapeUpdate
+	var done scraper.ScrapeUpdate
+	for _, update := range updates {
+		if update.SystemID == "snes" {
+			lastSNES = update
+		}
+		if update.Done {
+			done = update
+		}
+	}
+
+	assert.Equal(t, 3, lastSNES.Total)
+	assert.Equal(t, 3, lastSNES.Processed)
+	assert.Equal(t, 3, lastSNES.Matched)
+	assert.Equal(t, 0, lastSNES.Skipped)
+	require.True(t, done.Done)
+	assert.Equal(t, 4, done.Processed)
+	assert.Equal(t, 4, done.Matched)
+	mockDB.AssertExpectations(t)
+}
+
+func TestScrapeLoop_ProgressIncludesCompanionBaseline(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	companionPath := filepath.Join(root, "companion.nes")
+	normalPath := filepath.Join(root, "normal.nes")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game id="100" source="ZaparooCompanion">
+    <name>Companion Parent</name>
+    <desc>Parent metadata</desc>
+  </game>
+  <game parentid="100" source="ZaparooCompanion">
+    <path>./companion.nes</path>
+  </game>
+  <game><path>./normal.nes</path><name>Normal</name></game>
+</gameList>`), 0o600))
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{
+		{DBID: 10, MediaTitleDBID: 1000, Path: companionPath},
+		{DBID: 11, MediaTitleDBID: 1001, Path: normalPath},
+	}, nil)
+	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(100), filepath.ToSlash(companionPath)).
+		Return(&database.Media{DBID: 10, MediaTitleDBID: 1000, Path: companionPath}, nil)
+	mockDB.On("GetTitlesBySystemID", "nes").Return([]database.TitleWithSystem{{
+		DBID: 1001, SystemDBID: 100, Slug: "normal", Name: "Normal",
+	}}, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, mock.AnythingOfType("int64"), mock.AnythingOfType("int64"), mock.Anything).
+		Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{
+		Pauser: syncutil.NewPauser(),
+		Force:  true,
+	}, []scraper.ScrapeSystem{{ID: "nes", ROMPaths: []string{root}, DBID: 100}}, mockDB, ch)
+
+	updates := drainChannel(ch)
+	var lastNES scraper.ScrapeUpdate
+	for _, update := range updates {
+		if update.SystemID == "nes" {
+			lastNES = update
+		}
+	}
+
+	assert.Equal(t, 2, lastNES.Total)
+	assert.Equal(t, 2, lastNES.Processed)
+	assert.Equal(t, 2, lastNES.Matched)
+	assert.Equal(t, 0, lastNES.Skipped)
+	mockDB.AssertExpectations(t)
+}
+
 func TestScrapeLoop_NormalMode_Success(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -2361,6 +2514,68 @@ func TestScrapeLoop_Issue794ZipAsDirMedia(t *testing.T) {
 	assert.Equal(t, 1, done.Processed)
 	assert.Equal(t, 1, done.Matched)
 	assert.Equal(t, 0, done.Skipped)
+	mockDB.AssertExpectations(t)
+}
+
+func TestScrapeLoop_SlugOnlyMatchWritesTitleMetadataOnly(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game>
+    <path>./xml-path.nes</path>
+    <name>Mario</name>
+    <desc>Title metadata</desc>
+    <region>usa</region>
+    <image>./media/images/mario.png</image>
+  </game>
+</gameList>`), 0o600))
+
+	const (
+		titleDBID  = int64(2)
+		mediaDBID  = int64(20)
+		systemDBID = int64(200)
+	)
+
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
+		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: "mario", Name: "Mario"}}, nil)
+	mockDB.On("GetMediaBySystemID", "nes").
+		Return([]database.MediaWithFullPath{{
+			DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "indexed-path.nes"),
+		}}, nil)
+	mockDB.On("GetScrapedMediaIDs", mock.Anything, "gamelist.xml", systemDBID).
+		Return(map[int64]struct{}{}, nil)
+	writeMatcher := mock.MatchedBy(func(w *database.ScrapeWrite) bool {
+		if w == nil {
+			return false
+		}
+		descTypeTag := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyDescription)
+		return assert.Empty(t, w.MediaTags) &&
+			assert.Empty(t, w.MediaProps) &&
+			assert.Contains(t, w.TitleProps, database.MediaProperty{
+				TypeTag:     descTypeTag,
+				Text:        "Title metadata",
+				ContentType: "text/plain",
+			})
+	})
+	mockDB.On("ApplyScrapeResult", mock.Anything, mediaDBID, titleDBID, writeMatcher).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{
+		Pauser: syncutil.NewPauser(),
+	}, []scraper.ScrapeSystem{{ID: "nes", ROMPaths: []string{root}, DBID: systemDBID}}, mockDB, ch)
+
+	updates := drainChannel(ch)
+	var done scraper.ScrapeUpdate
+	for _, u := range updates {
+		if u.Done {
+			done = u
+		}
+	}
+	assert.Equal(t, 1, done.Processed)
+	assert.Equal(t, 1, done.Matched)
 	mockDB.AssertExpectations(t)
 }
 

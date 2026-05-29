@@ -53,11 +53,28 @@ import (
 // root path and the DB identifiers of the matched MediaTitle and one of its
 // Media rows (used as the sentinel write target).
 type GamelistRecord struct {
-	AvailableMediaDirs map[string]string
-	SystemRootPath     string
-	Game               esapi.Game
-	MatchedMediaDBID   int64
-	MatchedTitleDBID   int64
+	AvailableMediaDirs  map[string]string
+	SystemRootPath      string
+	Game                esapi.Game
+	MatchKind           gamelistMatchKind
+	MatchedMediaDBID    int64
+	MatchedTitleDBID    int64
+	MediaLevelWriteSafe bool
+}
+
+type gamelistMatchKind string
+
+const (
+	gamelistMatchSlugPath     gamelistMatchKind = "slug_path"
+	gamelistMatchSlugOnly     gamelistMatchKind = "slug_only"
+	gamelistMatchSlugConflict gamelistMatchKind = "slug_conflict"
+	gamelistMatchPathOnly     gamelistMatchKind = "path_only"
+)
+
+type slugMediaSelection struct {
+	media     database.Media
+	matchKind gamelistMatchKind
+	key       string
 }
 
 // mediaDirCandidates maps each TagPropertyImage value to the ordered list of
@@ -98,6 +115,7 @@ type companionStats struct {
 
 type loadRecordIndexes struct {
 	TitlesBySlug     map[string]database.MediaTitle
+	AllTitlesBySlug  map[string]database.MediaTitle
 	MediaByPathFold  map[string]database.Media
 	MediaByTitleDBID map[int64][]database.Media
 }
@@ -291,8 +309,8 @@ outer:
 			})
 
 			if title, ok := indexes.TitlesBySlug[pf.Slug]; ok {
-				media, matchedKey := selectMediaForSlugMatch(indexes, title.DBID, resolved)
-				if media.DBID == 0 {
+				selection := selectMediaForSlugMatch(indexes, title.DBID, resolved)
+				if selection.media.DBID == 0 {
 					log.Debug().
 						Str("system", system.ID).
 						Str("slug", pf.Slug).
@@ -304,20 +322,33 @@ outer:
 				}
 
 				slugMatches++
-				if matchedKey != "" {
+				mediaLevelWriteSafe := false
+				if selection.key != "" && selection.matchKind == gamelistMatchSlugPath {
 					slugPathSelections++
-					delete(indexes.MediaByPathFold, matchedKey)
+					mediaLevelWriteSafe = true
+					delete(indexes.MediaByPathFold, selection.key)
 				} else {
 					slugFirstMediaFallbacks++
 				}
 				records = append(records, &GamelistRecord{
-					SystemRootPath:     rootPath,
-					AvailableMediaDirs: availableMediaDirs,
-					Game:               *game,
-					MatchedTitleDBID:   title.DBID,
-					MatchedMediaDBID:   media.DBID,
+					SystemRootPath:      rootPath,
+					AvailableMediaDirs:  availableMediaDirs,
+					Game:                *game,
+					MatchKind:           selection.matchKind,
+					MatchedTitleDBID:    title.DBID,
+					MatchedMediaDBID:    selection.media.DBID,
+					MediaLevelWriteSafe: mediaLevelWriteSafe,
 				})
 				delete(indexes.TitlesBySlug, pf.Slug)
+			} else if titleSlugKnown(indexes, pf.Slug) {
+				unmatchedRecords++
+				log.Debug().
+					Str("system", system.ID).
+					Str("path", game.Path).
+					Str("resolved", resolved).
+					Str("name", game.Name).
+					Str("slug", pf.Slug).
+					Msg("gamelistxml: slug exists for another or already-scraped title, skipping path-only fallback")
 			} else if media, matchedKey, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved); ok {
 				pathOnlyFallbacks++
 				log.Debug().
@@ -330,11 +361,13 @@ outer:
 					Int64("mediaTitleDBID", media.MediaTitleDBID).
 					Msg("gamelistxml: path-only fallback matched record")
 				records = append(records, &GamelistRecord{
-					SystemRootPath:     rootPath,
-					AvailableMediaDirs: availableMediaDirs,
-					Game:               *game,
-					MatchedTitleDBID:   media.MediaTitleDBID,
-					MatchedMediaDBID:   media.DBID,
+					SystemRootPath:      rootPath,
+					AvailableMediaDirs:  availableMediaDirs,
+					Game:                *game,
+					MatchKind:           gamelistMatchPathOnly,
+					MatchedTitleDBID:    media.MediaTitleDBID,
+					MatchedMediaDBID:    media.DBID,
+					MediaLevelWriteSafe: true,
 				})
 				delete(indexes.MediaByPathFold, matchedKey)
 			} else {
@@ -389,9 +422,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		if waitErr := opts.Pauser.Wait(ctx); waitErr != nil {
 			ch <- scraper.ScrapeUpdate{
 				SystemID:  systemID,
-				Processed: totalProcessed + processed,
-				Matched:   totalMatched + matched,
-				Skipped:   totalSkipped + skipped,
+				Processed: processed,
+				Matched:   matched,
+				Skipped:   skipped,
 				Done:      true,
 			}
 			return false
@@ -415,31 +448,31 @@ func (g *GamelistXMLScraper) scrapeLoop(
 
 		// Process ZaparooCompanion parent/child entries before regular slug scrape.
 		companion := g.processCompanionEntries(ctx, opts, system, mdb)
-		totalProcessed += companion.Processed
-		totalMatched += companion.Matched
-		totalSkipped += companion.Skipped
 
 		titlesBySlug := make(map[string]database.MediaTitle)
+		allTitlesBySlug := make(map[string]database.MediaTitle)
 		if opts.Force {
 			allTitles, titlesErr := mdb.GetTitlesBySystemID(system.ID)
 			if titlesErr != nil {
 				if errors.Is(titlesErr, context.Canceled) || errors.Is(titlesErr, context.DeadlineExceeded) {
 					ch <- scraper.ScrapeUpdate{
-						SystemID: system.ID, Done: true, Processed: totalProcessed,
-						Matched: totalMatched, Skipped: totalSkipped,
+						SystemID: system.ID, Done: true, Processed: companion.Processed,
+						Matched: companion.Matched, Skipped: companion.Skipped,
 					}
 					return
 				}
 				ch <- scraper.ScrapeUpdate{
 					SystemID: system.ID, FatalErr: titlesErr,
-					Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+					Done: true, Processed: companion.Processed, Matched: companion.Matched, Skipped: companion.Skipped,
 				}
 				return
 			}
 			for _, t := range allTitles {
-				titlesBySlug[t.Slug] = database.MediaTitle{
+				title := database.MediaTitle{
 					DBID: t.DBID, SystemDBID: t.SystemDBID, Slug: t.Slug, Name: t.Name,
 				}
+				titlesBySlug[t.Slug] = title
+				allTitlesBySlug[t.Slug] = title
 			}
 		} else {
 			sentinel := scraper.SentinelTagInfo(id)
@@ -448,19 +481,39 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			if titlesErr != nil {
 				if errors.Is(titlesErr, context.Canceled) || errors.Is(titlesErr, context.DeadlineExceeded) {
 					ch <- scraper.ScrapeUpdate{
-						SystemID: system.ID, Done: true, Processed: totalProcessed,
-						Matched: totalMatched, Skipped: totalSkipped,
+						SystemID: system.ID, Done: true, Processed: companion.Processed,
+						Matched: companion.Matched, Skipped: companion.Skipped,
 					}
 					return
 				}
 				ch <- scraper.ScrapeUpdate{
 					SystemID: system.ID, FatalErr: titlesErr,
-					Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+					Done: true, Processed: companion.Processed, Matched: companion.Matched, Skipped: companion.Skipped,
 				}
 				return
 			}
 			for _, t := range unscraped {
 				titlesBySlug[t.Slug] = t
+			}
+			allTitles, allTitlesErr := mdb.GetTitlesBySystemID(system.ID)
+			if allTitlesErr != nil {
+				if errors.Is(allTitlesErr, context.Canceled) || errors.Is(allTitlesErr, context.DeadlineExceeded) {
+					ch <- scraper.ScrapeUpdate{
+						SystemID: system.ID, Done: true, Processed: companion.Processed,
+						Matched: companion.Matched, Skipped: companion.Skipped,
+					}
+					return
+				}
+				ch <- scraper.ScrapeUpdate{
+					SystemID: system.ID, FatalErr: allTitlesErr,
+					Done: true, Processed: companion.Processed, Matched: companion.Matched, Skipped: companion.Skipped,
+				}
+				return
+			}
+			for _, t := range allTitles {
+				allTitlesBySlug[t.Slug] = database.MediaTitle{
+					DBID: t.DBID, SystemDBID: t.SystemDBID, Slug: t.Slug, Name: t.Name,
+				}
 			}
 		}
 
@@ -468,14 +521,14 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		if mediaErr != nil {
 			if errors.Is(mediaErr, context.Canceled) || errors.Is(mediaErr, context.DeadlineExceeded) {
 				ch <- scraper.ScrapeUpdate{
-					SystemID: system.ID, Done: true, Processed: totalProcessed,
-					Matched: totalMatched, Skipped: totalSkipped,
+					SystemID: system.ID, Done: true, Processed: companion.Processed,
+					Matched: companion.Matched, Skipped: companion.Skipped,
 				}
 				return
 			}
 			ch <- scraper.ScrapeUpdate{
 				SystemID: system.ID, FatalErr: mediaErr,
-				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				Done: true, Processed: companion.Processed, Matched: companion.Matched, Skipped: companion.Skipped,
 			}
 			return
 		}
@@ -486,14 +539,14 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			if scrapedErr != nil {
 				if errors.Is(scrapedErr, context.Canceled) || errors.Is(scrapedErr, context.DeadlineExceeded) {
 					ch <- scraper.ScrapeUpdate{
-						SystemID: system.ID, Done: true, Processed: totalProcessed,
-						Matched: totalMatched, Skipped: totalSkipped,
+						SystemID: system.ID, Done: true, Processed: companion.Processed,
+						Matched: companion.Matched, Skipped: companion.Skipped,
 					}
 					return
 				}
 				ch <- scraper.ScrapeUpdate{
 					SystemID: system.ID, FatalErr: scrapedErr,
-					Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+					Done: true, Processed: companion.Processed, Matched: companion.Matched, Skipped: companion.Skipped,
 				}
 				return
 			}
@@ -501,6 +554,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 
 		indexes := loadRecordIndexes{
 			TitlesBySlug:     titlesBySlug,
+			AllTitlesBySlug:  allTitlesBySlug,
 			MediaByPathFold:  make(map[string]database.Media, len(allMedia)),
 			MediaByTitleDBID: make(map[int64][]database.Media, len(allMedia)),
 		}
@@ -512,10 +566,22 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 			if _, scraped := scrapedIDs[m.DBID]; !scraped {
 				indexes.MediaByPathFold[pathFoldKey(m.Path)] = media
+				indexes.MediaByTitleDBID[m.MediaTitleDBID] = append(indexes.MediaByTitleDBID[m.MediaTitleDBID], media)
 			}
-			indexes.MediaByTitleDBID[m.MediaTitleDBID] = append(indexes.MediaByTitleDBID[m.MediaTitleDBID], media)
 		}
 		if len(indexes.TitlesBySlug) == 0 && len(indexes.MediaByPathFold) == 0 {
+			if companion.Processed > 0 {
+				ch <- scraper.ScrapeUpdate{
+					SystemID:  system.ID,
+					Total:     companion.Processed,
+					Processed: companion.Processed,
+					Matched:   companion.Matched,
+					Skipped:   companion.Skipped,
+				}
+			}
+			totalProcessed += companion.Processed
+			totalMatched += companion.Matched
+			totalSkipped += companion.Skipped
 			continue
 		}
 
@@ -523,17 +589,21 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		if loadErr != nil {
 			if errors.Is(loadErr, context.Canceled) || errors.Is(loadErr, context.DeadlineExceeded) {
 				ch <- scraper.ScrapeUpdate{
-					SystemID: system.ID, Done: true, Processed: totalProcessed, Matched: totalMatched,
-					Skipped: totalSkipped,
+					SystemID: system.ID, Done: true, Processed: companion.Processed, Matched: companion.Matched,
+					Skipped: companion.Skipped,
 				}
 				return
 			}
 			ch <- scraper.ScrapeUpdate{
 				SystemID: system.ID, FatalErr: loadErr,
-				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				Done: true, Processed: companion.Processed, Matched: companion.Matched, Skipped: companion.Skipped,
 			}
 			return
 		}
+
+		var processed, matched, skipped int
+		totalRecords := len(records)
+		systemTotal := companion.Processed + totalRecords
 
 		select {
 		case <-ctx.Done():
@@ -541,12 +611,15 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
 			}
 			return
-		case ch <- scraper.ScrapeUpdate{SystemID: system.ID, Total: len(records)}:
+		case ch <- scraper.ScrapeUpdate{
+			SystemID:  system.ID,
+			Total:     systemTotal,
+			Processed: companion.Processed,
+			Matched:   companion.Matched,
+			Skipped:   companion.Skipped,
+		}:
 		}
-
-		var processed, matched, skipped int
-		totalRecords := len(records)
-		if !waitForResume(system.ID, processed, matched, skipped) {
+		if !waitForResume(system.ID, companion.Processed+processed, companion.Matched+matched, companion.Skipped+skipped) {
 			return
 		}
 
@@ -556,17 +629,17 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				return true
 			}
 			update.SystemID = system.ID
-			update.Total = totalProcessed + totalRecords
-			update.Processed += totalProcessed
-			update.Matched += totalMatched
-			update.Skipped += totalSkipped
+			update.Total = systemTotal
+			update.Processed += companion.Processed
+			update.Matched += companion.Matched
+			update.Skipped += companion.Skipped
 			select {
 			case <-ctx.Done():
 				ch <- scraper.ScrapeUpdate{
 					SystemID:  system.ID,
-					Processed: totalProcessed + processed,
-					Matched:   totalMatched + matched,
-					Skipped:   totalSkipped + skipped,
+					Processed: companion.Processed + processed,
+					Matched:   companion.Matched + matched,
+					Skipped:   companion.Skipped + skipped,
 					Done:      true,
 				}
 				return false
@@ -577,16 +650,16 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		}
 
 		for _, record := range records {
-			if !waitForResume(system.ID, processed, matched, skipped) {
+			if !waitForResume(system.ID, companion.Processed+processed, companion.Matched+matched, companion.Skipped+skipped) {
 				return
 			}
 			select {
 			case <-ctx.Done():
 				ch <- scraper.ScrapeUpdate{
 					SystemID:  system.ID,
-					Processed: totalProcessed + processed,
-					Matched:   totalMatched + matched,
-					Skipped:   totalSkipped + skipped,
+					Processed: companion.Processed + processed,
+					Matched:   companion.Matched + matched,
+					Skipped:   companion.Skipped + skipped,
 					Done:      true,
 				}
 				return
@@ -607,7 +680,20 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 
 			mapped := g.MapToDB(record)
-			if !waitForResume(system.ID, processed, matched, skipped) {
+			if !record.MediaLevelWriteSafe {
+				if len(mapped.MediaTags) > 0 || len(mapped.MediaProps) > 0 {
+					log.Debug().
+						Str("system", system.ID).
+						Str("path", record.Game.Path).
+						Str("matchKind", string(record.MatchKind)).
+						Int64("mediaDBID", record.MatchedMediaDBID).
+						Int64("mediaTitleDBID", record.MatchedTitleDBID).
+						Msg("gamelistxml: omitting media-level metadata for slug-only match")
+				}
+				mapped.MediaTags = nil
+				mapped.MediaProps = nil
+			}
+			if !waitForResume(system.ID, companion.Processed+processed, companion.Matched+matched, companion.Skipped+skipped) {
 				return
 			}
 
@@ -644,9 +730,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		if !emitProgress(scraper.ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}, true) {
 			return
 		}
-		totalProcessed += processed
-		totalMatched += matched
-		totalSkipped += skipped
+		totalProcessed += companion.Processed + processed
+		totalMatched += companion.Matched + matched
+		totalSkipped += companion.Skipped + skipped
 	}
 
 	ch <- scraper.ScrapeUpdate{Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped}
@@ -1148,29 +1234,41 @@ func findMediaFilePropFS(
 	return nil
 }
 
+func titleSlugKnown(indexes loadRecordIndexes, slug string) bool {
+	if indexes.AllTitlesBySlug != nil {
+		_, ok := indexes.AllTitlesBySlug[slug]
+		return ok
+	}
+	_, ok := indexes.TitlesBySlug[slug]
+	return ok
+}
+
 func selectMediaForSlugMatch(
 	indexes loadRecordIndexes,
 	mediaTitleDBID int64,
 	resolved string,
-) (media database.Media, matchedKey string) {
+) slugMediaSelection {
 	media, matchedKey, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved)
 	if ok && media.MediaTitleDBID == mediaTitleDBID {
-		return media, matchedKey
+		return slugMediaSelection{media: media, matchKind: gamelistMatchSlugPath, key: matchedKey}
 	}
+
+	matchKind := gamelistMatchSlugOnly
 	if ok {
-		log.Debug().
+		matchKind = gamelistMatchSlugConflict
+		log.Warn().
 			Str("resolved", resolved).
 			Int64("pathMediaDBID", media.DBID).
 			Int64("pathMediaTitleDBID", media.MediaTitleDBID).
 			Int64("slugMediaTitleDBID", mediaTitleDBID).
-			Msg("gamelistxml: slug match path points at different title, using slug title media")
+			Msg("gamelistxml: slug match path points at different title, writing title metadata only")
 	}
 
 	mediaRows := indexes.MediaByTitleDBID[mediaTitleDBID]
 	if len(mediaRows) == 0 {
-		return database.Media{}, ""
+		return slugMediaSelection{matchKind: matchKind}
 	}
-	return mediaRows[0], ""
+	return slugMediaSelection{media: mediaRows[0], matchKind: matchKind}
 }
 
 func matchMediaByResolvedPath(
@@ -1528,7 +1626,12 @@ func (*GamelistXMLScraper) matchCompanionChildMedia(
 		return nil
 	}
 	if len(matched) > 1 {
-		log.Warn().Str("filename", filename).Int("matches", len(matched)).
+		log.Warn().
+			Str("system", system.ID).
+			Str("path", child.ResolvedPath).
+			Str("filename", filename).
+			Str("parentGameID", child.ParentGameID).
+			Int("matches", len(matched)).
 			Msg("gamelistxml: companion: ambiguous child filename matches, skipping")
 		return nil
 	}

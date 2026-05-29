@@ -72,7 +72,7 @@ Property rows are keyed by entity and property type tag. Re-scraping the same pr
 
 Path-backed properties persist their text path and optional `BlobDBID`; the property tables do not persist the `ContentType` computed by the mapper for path values. Blob-backed properties expose content type from `MediaBlobs`. API responses infer path-backed content type and extension from the stored path when DB content type is empty.
 
-Normal gamelist artwork is media-level so regional or language variants can carry different image paths while sharing one title. `media.image` checks media-level properties before title-level properties.
+Normal gamelist artwork is media-level so regional or language variants can carry different image paths while sharing one title. `media.image` checks media-level properties before title-level properties. If an older scrape left title-level artwork behind, run a force scrape to refresh media-level artwork; no migration removes old title properties.
 
 ## Media-level Sentinel Invariant
 
@@ -82,7 +82,7 @@ Title metadata remains shared by `MediaTitleDBID`, so multiple ROM variants can 
 
 ## gamelist.xml Behavior
 
-`GamelistXMLScraper` scans each system ROM root for `gamelist.xml`. Regular `<game>` entries are resolved to absolute paths under the system ROM root. The scraper first matches the entry to an existing title by the original display-name slug behavior, then uses the resolved path to choose the concrete Media row for that title when possible. If no slug match exists, it falls back to case-insensitive path matching. Scrapers do not create `Media` or `MediaTitle` rows.
+`GamelistXMLScraper` scans each system ROM root for `gamelist.xml`. Regular `<game>` entries are resolved to absolute paths under the system ROM root. The scraper first matches the entry to an existing title by the original display-name slug behavior, then uses the resolved path to choose the concrete Media row for that title when possible. If slug matching finds a title but the path does not identify a Media row for that title, only title-level metadata is written. If no known title slug exists, it falls back to case-insensitive path matching. Scrapers do not create `Media` or `MediaTitle` rows.
 
 Path handling for `<game><path>` stays strict:
 
