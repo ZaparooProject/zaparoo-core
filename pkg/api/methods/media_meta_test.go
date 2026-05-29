@@ -100,6 +100,61 @@ func TestHandleMediaMeta_FullResult(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestMapMediaProperties_InfersPathContentType(t *testing.T) {
+	t.Parallel()
+
+	props := mapMediaProperties([]database.MediaProperty{{
+		TypeTag: "property:image-boxart",
+		Text:    filepath.Join("media", "boxart", "mario.png"),
+	}})
+
+	prop := props["property:image-boxart"]
+	assert.Equal(t, "image/png", prop.ContentType)
+	require.NotNil(t, prop.Extension)
+	assert.Equal(t, "png", *prop.Extension)
+}
+
+func TestAvailableImageTypes_UsesDefaultOrder(t *testing.T) {
+	t.Parallel()
+
+	got := availableImageTypes([]database.MediaProperty{
+		{TypeTag: "property:image-wheel"},
+		{TypeTag: "property:image-boxart3d"},
+		{TypeTag: "property:description"},
+		{TypeTag: "property:image-boxart"},
+		{TypeTag: "property:image-boxartback"},
+	})
+
+	assert.Equal(t, []string{"boxart", "boxart3d", "wheel", "boxartback"}, got)
+}
+
+func TestHandleMediaMeta_AvailableImageTypes(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(12, 120)
+	expectMediaMetaResolve(mockDB, row)
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(12)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(120)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(12)).Return([]database.MediaProperty{
+		{TypeTag: "property:image-screenshot"},
+	}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(120)).Return([]database.MediaProperty{
+		{TypeTag: "property:image-wheel"},
+		{TypeTag: "property:image-boxart"},
+	}, nil)
+
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
+	result, err := HandleMediaMeta(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaMetaResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"screenshot"}, resp.Media.AvailableImageTypes)
+	assert.Equal(t, []string{"boxart", "wheel"}, resp.Media.Title.AvailableImageTypes)
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaMeta_SecondarySlug(t *testing.T) {
 	t.Parallel()
 

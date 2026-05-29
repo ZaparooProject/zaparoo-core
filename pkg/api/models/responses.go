@@ -245,24 +245,26 @@ type MediaMetaSystemResponse struct {
 // MediaMetaTitleResponse is the MediaTitle sub-object within a media.meta response,
 // with its own level-separated tags and properties.
 type MediaMetaTitleResponse struct {
-	SecondarySlug *string                          `json:"secondarySlug,omitempty"`
-	Properties    map[string]MediaMetaPropertyItem `json:"properties"`
-	System        MediaMetaSystemResponse          `json:"system"`
-	Slug          string                           `json:"slug"`
-	Name          string                           `json:"name"`
-	Tags          []database.TagInfo               `json:"tags"`
-	SlugLength    int                              `json:"slugLength"`
-	SlugWordCount int                              `json:"slugWordCount"`
+	SecondarySlug       *string                          `json:"secondarySlug,omitempty"`
+	Properties          map[string]MediaMetaPropertyItem `json:"properties"`
+	System              MediaMetaSystemResponse          `json:"system"`
+	Slug                string                           `json:"slug"`
+	Name                string                           `json:"name"`
+	Tags                []database.TagInfo               `json:"tags"`
+	AvailableImageTypes []string                         `json:"availableImageTypes,omitempty"`
+	SlugLength          int                              `json:"slugLength"`
+	SlugWordCount       int                              `json:"slugWordCount"`
 }
 
 // MediaMetaMediaResponse is the top-level Media object in a media.meta response.
 type MediaMetaMediaResponse struct {
-	Properties map[string]MediaMetaPropertyItem `json:"properties"`
-	Path       string                           `json:"path"`
-	ParentDir  string                           `json:"parentDir"`
-	Tags       []database.TagInfo               `json:"tags"`
-	Title      MediaMetaTitleResponse           `json:"title"`
-	IsMissing  bool                             `json:"isMissing"`
+	Properties          map[string]MediaMetaPropertyItem `json:"properties"`
+	Path                string                           `json:"path"`
+	ParentDir           string                           `json:"parentDir"`
+	Tags                []database.TagInfo               `json:"tags"`
+	AvailableImageTypes []string                         `json:"availableImageTypes,omitempty"`
+	Title               MediaMetaTitleResponse           `json:"title"`
+	IsMissing           bool                             `json:"isMissing"`
 }
 
 // MediaMetaResponse is the response envelope for the media.meta method.

@@ -21,6 +21,7 @@ package methods
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -148,17 +149,19 @@ func buildMediaMetaResponse(
 	}
 
 	return models.MediaMetaResponse{Media: models.MediaMetaMediaResponse{
-		Path:       row.Path,
-		ParentDir:  row.ParentDir,
-		IsMissing:  row.IsMissing,
-		Tags:       mediaTags,
-		Properties: mapMediaProperties(mediaProps),
+		Path:                row.Path,
+		ParentDir:           row.ParentDir,
+		IsMissing:           row.IsMissing,
+		Tags:                mediaTags,
+		Properties:          mapMediaProperties(mediaProps),
+		AvailableImageTypes: availableImageTypes(mediaProps),
 		Title: models.MediaMetaTitleResponse{
-			Slug:          row.Title.Slug,
-			SecondarySlug: secondarySlug,
-			Name:          row.Title.Name,
-			SlugLength:    row.Title.SlugLength,
-			SlugWordCount: row.Title.SlugWordCount,
+			Slug:                row.Title.Slug,
+			SecondarySlug:       secondarySlug,
+			Name:                row.Title.Name,
+			SlugLength:          row.Title.SlugLength,
+			SlugWordCount:       row.Title.SlugWordCount,
+			AvailableImageTypes: availableImageTypes(titleProps),
 			System: models.MediaMetaSystemResponse{
 				ID:   row.System.SystemID,
 				Name: row.System.Name,
@@ -169,15 +172,48 @@ func buildMediaMetaResponse(
 	}}
 }
 
+func availableImageTypes(props []database.MediaProperty) []string {
+	typesByTag := make(map[string]string, len(imageTypeTags))
+	for imageType, typeTag := range imageTypeTags {
+		typesByTag[typeTag] = imageType
+	}
+
+	seen := make(map[string]struct{})
+	for _, p := range props {
+		if imageType, ok := typesByTag[p.TypeTag]; ok {
+			seen[imageType] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+
+	result := make([]string, 0, len(seen))
+	for _, imageType := range defaultImageTypes {
+		if _, ok := seen[imageType]; ok {
+			result = append(result, imageType)
+			delete(seen, imageType)
+		}
+	}
+
+	remaining := make([]string, 0, len(seen))
+	for imageType := range seen {
+		remaining = append(remaining, imageType)
+	}
+	sort.Strings(remaining)
+	return append(result, remaining...)
+}
+
 // mapMediaProperties converts a []database.MediaProperty slice into a map keyed
 // by TypeTag (e.g. "property:description"). Binary payloads are not included.
 func mapMediaProperties(props []database.MediaProperty) map[string]models.MediaMetaPropertyItem {
 	m := make(map[string]models.MediaMetaPropertyItem, len(props))
 	for _, p := range props {
+		contentType := mediaContentType(p.ContentType, p.Text)
 		item := models.MediaMetaPropertyItem{
 			Text:        p.Text,
-			ContentType: p.ContentType,
-			Extension:   mediaContentExtension(p.ContentType, p.Text),
+			ContentType: contentType,
+			Extension:   mediaContentExtension(contentType, p.Text),
 			BlobSize:    p.BlobSize,
 		}
 		m[p.TypeTag] = item

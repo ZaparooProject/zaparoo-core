@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -45,12 +46,13 @@ const (
 
 // defaultImageTypes is the preference order used when no imageTypes param is provided.
 var defaultImageTypes = []string{
-	"image", "boxart", "boxart3d", "screenshot", "wheel", "titleshot", "map",
+	"image", "thumbnail", "boxart", "boxart3d", "screenshot", "wheel", "titleshot", "map",
 	"marquee", "fanart",
 }
 
 var imageTypeTags = map[string]string{
 	"image":      tags.PropertyTypeTag(tags.TagPropertyImageImage),
+	"thumbnail":  tags.PropertyTypeTag(tags.TagPropertyImageThumbnail),
 	"boxart":     tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
 	"boxart3d":   tags.PropertyTypeTag(tags.TagPropertyImageBoxart3D),
 	"boxartside": tags.PropertyTypeTag(tags.TagPropertyImageBoxartSide),
@@ -91,6 +93,27 @@ func buildPropsMap(props []database.MediaProperty) map[string]database.MediaProp
 		m[p.TypeTag] = p
 	}
 	return m
+}
+
+func imagePropertyTypeTags(props []database.MediaProperty) []string {
+	known := make(map[string]struct{}, len(imageTypeTags))
+	for _, typeTag := range imageTypeTags {
+		known[typeTag] = struct{}{}
+	}
+
+	seen := make(map[string]struct{})
+	for _, p := range props {
+		if _, ok := known[p.TypeTag]; ok {
+			seen[p.TypeTag] = struct{}{}
+		}
+	}
+
+	result := make([]string, 0, len(seen))
+	for typeTag := range seen {
+		result = append(result, typeTag)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // HandleMediaImage returns a single best-match image for a media record as a
@@ -258,8 +281,18 @@ func selectMediaImage(
 		}
 	}
 
+	log.Debug().
+		Str("system", row.System.SystemID).
+		Str("path", row.Path).
+		Int64("mediaDBID", row.DBID).
+		Int64("titleDBID", row.Title.DBID).
+		Strs("prefs", prefs).
+		Strs("mediaImageProps", imagePropertyTypeTags(mediaProps)).
+		Strs("titleImageProps", imagePropertyTypeTags(titleProps)).
+		Msg("media.image: no image found")
+
 	return models.MediaImageResponse{}, models.ClientErrf(
-		"no image found for media: %s/%s", row.System.SystemID, row.Path,
+		"no image found for media: system=%q path=%q", row.System.SystemID, row.Path,
 	)
 }
 
@@ -274,7 +307,7 @@ func loadMediaImageProperty(
 	maxBytes int64,
 ) (*models.MediaImageResponse, bool, error) {
 	var binary []byte
-	contentType := prop.ContentType
+	contentType := mediaContentType(prop.ContentType, prop.Text)
 
 	switch {
 	case len(prop.Binary) > 0:
@@ -298,11 +331,11 @@ func loadMediaImageProperty(
 			return nil, false, fmt.Errorf("media.image: read image blob %d: %w", *prop.BlobDBID, err)
 		}
 		if len(binary) == 0 {
-			deleteStaleMediaImageProperty(ctx, db, row, prop, src.isMedia, typeTag)
+			logStaleMediaImageProperty(row, prop, src.isMedia, typeTag, "empty blob data")
 			return nil, true, nil
 		}
 	case prop.Text != "":
-		data, stale, err := loadMediaImageFile(ctx, fs, db, row, prop, src.isMedia, typeTag, maxBytes)
+		data, stale, err := loadMediaImageFile(fs, row, prop, src.isMedia, typeTag, maxBytes)
 		if stale || err != nil {
 			return nil, stale, err
 		}
@@ -320,9 +353,7 @@ func loadMediaImageProperty(
 }
 
 func loadMediaImageFile(
-	ctx context.Context,
 	fs afero.Fs,
-	db database.MediaDBI,
 	row *database.MediaFullRow,
 	prop *database.MediaProperty,
 	isMedia bool,
@@ -332,7 +363,7 @@ func loadMediaImageFile(
 	info, err := fs.Stat(prop.Text)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			deleteStaleMediaImageProperty(ctx, db, row, prop, isMedia, typeTag)
+			logStaleMediaImageProperty(row, prop, isMedia, typeTag, err.Error())
 			return nil, true, nil
 		}
 		return nil, false, mediaImageReadError(prop.Text, err)
@@ -351,7 +382,7 @@ func loadMediaImageFile(
 	data, readErr := readMediaBinaryFile(fs, prop.Text, maxBytes)
 	if readErr != nil {
 		if errors.Is(readErr, os.ErrNotExist) {
-			deleteStaleMediaImageProperty(ctx, db, row, prop, isMedia, typeTag)
+			logStaleMediaImageProperty(row, prop, isMedia, typeTag, readErr.Error())
 			return nil, true, nil
 		}
 		return nil, false, mediaImageReadError(prop.Text, readErr)
@@ -359,25 +390,27 @@ func loadMediaImageFile(
 	return data, false, nil
 }
 
-func deleteStaleMediaImageProperty(
-	ctx context.Context,
-	db database.MediaDBI,
+func logStaleMediaImageProperty(
 	row *database.MediaFullRow,
 	prop *database.MediaProperty,
 	isMedia bool,
 	typeTag string,
+	reason string,
 ) {
-	if !isMedia {
-		if delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID); delErr != nil {
-			log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
-				Msg("media.image: failed to delete stale title property")
-		}
-		return
+	level := "title"
+	if isMedia {
+		level = "media"
 	}
-	if delErr := db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID); delErr != nil {
-		log.Warn().Err(delErr).Int64("mediaDBID", row.DBID).Str("typeTag", typeTag).
-			Msg("media.image: failed to delete stale media property")
-	}
+	log.Debug().
+		Str("system", row.System.SystemID).
+		Str("path", row.Path).
+		Int64("mediaDBID", row.DBID).
+		Int64("titleDBID", row.Title.DBID).
+		Str("typeTag", typeTag).
+		Str("text", prop.Text).
+		Str("source", level).
+		Str("reason", reason).
+		Msg("media.image: stale image property ignored")
 }
 
 func mediaImageMaxBytes(pl platforms.Platform) int64 {
