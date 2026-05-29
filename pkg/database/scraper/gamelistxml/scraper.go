@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -83,9 +84,10 @@ var mediaDirCandidates = map[string][]string{
 // GamelistXMLScraper loads and maps EmulationStation gamelist.xml records.
 // Use [NewPlatformScraper] to obtain a configured [platforms.Scraper].
 type GamelistXMLScraper struct {
-	db  database.MediaDBI
-	fs  afero.Fs
-	cfg *config.Instance
+	db                 database.MediaDBI
+	fs                 afero.Fs
+	cfg                *config.Instance
+	externalAssetRoots []string
 }
 
 type companionStats struct {
@@ -105,6 +107,18 @@ func (g *GamelistXMLScraper) filesystem() afero.Fs {
 		return afero.NewOsFs()
 	}
 	return g.fs
+}
+
+func externalAssetRootsForPlatform(cfg *config.Instance, pl platforms.Platform) []string {
+	if pl == nil {
+		return nil
+	}
+	switch pl.ID() {
+	case ids.Mister, ids.Mistex:
+		return pl.RootDirs(cfg)
+	default:
+		return nil
+	}
 }
 
 // NewPlatformScraper returns a [platforms.Scraper] backed by EmulationStation
@@ -129,7 +143,12 @@ func NewPlatformScraper() platforms.Scraper {
 			if err != nil {
 				return fmt.Errorf("gamelistxml: resolve systems: %w", err)
 			}
-			s := &GamelistXMLScraper{db: db.MediaDB, fs: fs, cfg: cfg}
+			s := &GamelistXMLScraper{
+				db:                 db.MediaDB,
+				fs:                 fs,
+				cfg:                cfg,
+				externalAssetRoots: externalAssetRootsForPlatform(cfg, pl),
+			}
 			go s.scrapeLoop(ctx, opts, systems, db.MediaDB, ch)
 			return nil
 		},
@@ -739,7 +758,7 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	// the pre-stated media sub-directories for a matching <stem>.png file.
 	appendImageProp := func(propValue tags.TagValue, xmlPath string) {
 		key := propType + ":" + string(propValue)
-		p := pathProp(key, xmlPath, root)
+		p := pathProp(key, xmlPath, root, g.externalAssetRoots)
 		if p == nil {
 			p = findMediaFilePropFS(
 				g.filesystem(), key, fallbackNames,
@@ -774,10 +793,10 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	appendImageProp(tags.TagPropertyImageTitleshot, titleshotXML)
 	appendImageProp(tags.TagPropertyImageMap, game.Map)
 
-	if p := pathProp(propType+":"+string(tags.TagPropertyVideo), game.Video, root); p != nil {
+	if p := pathProp(propType+":"+string(tags.TagPropertyVideo), game.Video, root, g.externalAssetRoots); p != nil {
 		mediaProps = append(mediaProps, *p)
 	}
-	if p := pathProp(propType+":"+string(tags.TagPropertyManual), game.Manual, root); p != nil {
+	if p := pathProp(propType+":"+string(tags.TagPropertyManual), game.Manual, root, g.externalAssetRoots); p != nil {
 		mediaProps = append(mediaProps, *p)
 	}
 
@@ -934,11 +953,11 @@ func appendCSVTags(tagInfos []database.TagInfo, tagType, raw string) []database.
 
 // pathProp resolves esPath to an absolute path and returns a MediaProperty for
 // the given typeTag. Returns nil if the path cannot be resolved (skipped cleanly).
-func pathProp(typeTag, esPath, systemRootPath string) *database.MediaProperty {
+func pathProp(typeTag, esPath, systemRootPath string, externalAssetRoots []string) *database.MediaProperty {
 	if esPath == "" {
 		return nil
 	}
-	abs := filepath.ToSlash(resolveESAssetPath(esPath, systemRootPath))
+	abs := filepath.ToSlash(resolveESAssetPath(esPath, systemRootPath, externalAssetRoots))
 	if abs == "" {
 		return nil
 	}
@@ -949,19 +968,72 @@ func pathProp(typeTag, esPath, systemRootPath string) *database.MediaProperty {
 	}
 }
 
-// bound retrieved paths to child dirs of media
-func resolveESAssetPath(esPath, systemRootPath string) string {
-	abs := resolveESPath(esPath, systemRootPath)
-	if abs == "" {
+// resolveESAssetPath resolves a gamelist asset path. Relative asset paths stay
+// bound to the system ROM root. Absolute paths can also resolve under configured
+// external asset roots for platforms whose storage routes intentionally overlap.
+func resolveESAssetPath(esPath, systemRootPath string, externalAssetRoots []string) string {
+	abs, ok := resolveESPathAbs(esPath, systemRootPath)
+	if !ok {
 		return ""
+	}
+	if pathWithinRoot(abs, systemRootPath) {
+		return abs
+	}
+	if filepath.IsAbs(esPath) || strings.HasPrefix(esPath, "~/") {
+		for _, root := range externalAssetRoots {
+			if pathWithinRoot(abs, root) {
+				return abs
+			}
+		}
+	}
+	return ""
+}
+
+func resolveESPathAbs(esPath, systemRootPath string) (string, bool) {
+	if esPath == "" {
+		return "", false
+	}
+	rootAbs, err := filepath.Abs(systemRootPath)
+	if err != nil {
+		return "", false
+	}
+	rootAbs = filepath.Clean(rootAbs)
+
+	var abs string
+	switch {
+	case strings.HasPrefix(esPath, "~/"):
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return "", false
+		}
+		abs = filepath.Join(home, esPath[2:])
+	case filepath.IsAbs(esPath):
+		abs = filepath.Clean(esPath)
+	default:
+		rel := strings.TrimPrefix(esPath, "./")
+		abs = filepath.Join(rootAbs, rel)
 	}
 
-	root := filepath.Clean(systemRootPath) + string(filepath.Separator)
-	cleanAbs := filepath.Clean(abs) + string(filepath.Separator)
-	if !strings.HasPrefix(cleanAbs, root) {
-		return ""
+	abs, err = filepath.Abs(abs)
+	if err != nil || !filepath.IsAbs(abs) {
+		return "", false
 	}
-	return abs
+	return filepath.Clean(abs), true
+}
+
+func pathWithinRoot(path, root string) bool {
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	pathAbs = filepath.Clean(pathAbs)
+	rootAbs = filepath.Clean(rootAbs)
+	rel, err := filepath.Rel(rootAbs, pathAbs)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // textProp creates a plain-text MediaProperty.

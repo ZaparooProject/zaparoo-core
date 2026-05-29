@@ -396,6 +396,28 @@ func TestLoadRecords_TitleNameDoesNotNeedSlugMatch(t *testing.T) {
 	assert.Equal(t, int64(7), records[0].MatchedMediaDBID)
 }
 
+func TestLoadRecords_PokemonAccentMatchesNonAccentedSlug(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./pkruby.gba</path><name>Pokémon Ruby Version</name></game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "gba", ROMPaths: []string{root}},
+		mediaBySlugAndPath("pokemonruby", &database.MediaTitle{DBID: 856, Slug: "pokemonruby"},
+			database.Media{DBID: 857, MediaTitleDBID: 856, Path: filepath.Join(root, "indexed", "Pokemon Ruby.gba")}),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, "Pokémon Ruby Version", records[0].Game.Name)
+	assert.Equal(t, int64(856), records[0].MatchedTitleDBID)
+	assert.Equal(t, int64(857), records[0].MatchedMediaDBID)
+}
+
 func TestLoadRecords_SlugMatchSelectsExactMediaPath(t *testing.T) {
 	t.Parallel()
 
@@ -808,7 +830,7 @@ func TestMapToDB_ScreenScraperID_NeitherSet(t *testing.T) {
 func TestPathProp_NormalizesSlashes(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	p := pathProp("prop:image", "./images/mario.png", root)
+	p := pathProp("prop:image", "./images/mario.png", root, nil)
 	require.NotNil(t, p, "expected non-nil property")
 	if strings.Contains(p.Text, "\\") {
 		t.Errorf("pathProp returned backslashes in path: %q", p.Text)
@@ -1315,21 +1337,77 @@ func TestResolveESPath_HomeRelativeInsideRoot(t *testing.T) {
 func TestResolveESAssetPath_InsideRoot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	got := resolveESAssetPath("./images/art.png", root)
+	got := resolveESAssetPath("./images/art.png", root, nil)
 	assert.Equal(t, filepath.Join(root, "images", "art.png"), got)
 }
 
 func TestResolveESAssetPath_OutsideRoot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	got := resolveESAssetPath("../../etc/passwd", root)
+	got := resolveESAssetPath("../../etc/passwd", root, nil)
 	assert.Empty(t, got)
 }
 
 func TestResolveESAssetPath_EmptyPath(t *testing.T) {
 	t.Parallel()
-	got := resolveESAssetPath("", t.TempDir())
+	got := resolveESAssetPath("", t.TempDir(), nil)
 	assert.Empty(t, got)
+}
+
+func TestResolveESAssetPath_ExternalRootAccepted(t *testing.T) {
+	t.Parallel()
+	romRoot := t.TempDir()
+	assetRoot := t.TempDir()
+	assetPath := filepath.Join(assetRoot, "art", "game.png")
+
+	got := resolveESAssetPath(assetPath, romRoot, []string{assetRoot})
+
+	assert.Equal(t, assetPath, got)
+}
+
+func TestResolveESAssetPath_ExternalRootRejectedWhenUnconfigured(t *testing.T) {
+	t.Parallel()
+	romRoot := t.TempDir()
+	assetRoot := t.TempDir()
+	assetPath := filepath.Join(assetRoot, "art", "game.png")
+
+	got := resolveESAssetPath(assetPath, romRoot, nil)
+
+	assert.Empty(t, got)
+}
+
+func TestResolveESAssetPath_ExternalRootEscapeRejected(t *testing.T) {
+	t.Parallel()
+	romRoot := t.TempDir()
+	assetRoot := t.TempDir()
+	outsideRoot := t.TempDir()
+	escaped := filepath.Join(assetRoot, "..", filepath.Base(outsideRoot), "art.png")
+
+	got := resolveESAssetPath(escaped, romRoot, []string{assetRoot})
+
+	assert.Empty(t, got)
+}
+
+func TestMapToDB_ExternalAssetRootImage(t *testing.T) {
+	t.Parallel()
+	romRoot := t.TempDir()
+	assetRoot := t.TempDir()
+	assetPath := filepath.Join(assetRoot, "art", "game.png")
+
+	rec := GamelistRecord{
+		SystemRootPath: romRoot,
+		Game:           esapi.Game{Image: assetPath},
+	}
+	mediaProps := (&GamelistXMLScraper{externalAssetRoots: []string{assetRoot}}).MapToDB(&rec).MediaProps
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	var found bool
+	for _, p := range mediaProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, filepath.ToSlash(assetPath), p.Text)
+		}
+	}
+	assert.True(t, found, "external asset root image property missing")
 }
 
 // --- mimeFromExt additional ---
@@ -1931,6 +2009,39 @@ func TestProcessCompanionEntries_MapsIssue161CompanionArtwork(t *testing.T) {
 	).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
+	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
+	assert.Equal(t, companionStats{Processed: 1, Matched: 1}, stats)
+	mockDB.AssertExpectations(t)
+}
+
+func TestProcessCompanionEntries_ExternalCompanionArtwork(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	assetRoot := t.TempDir()
+	assetPath := filepath.Join(assetRoot, "covers", "Doom.png")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`<gameList>
+  <game id="854" source="ZaparooCompanion">
+    <name>Doom</name>
+    <image>`+assetPath+`</image>
+  </game>
+  <game parentid="854" source="ZaparooCompanion">
+    <path>./Doom.rom</path>
+  </game>
+</gameList>`), 0o600))
+
+	childPath := filepath.ToSlash(filepath.Join(root, "Doom.rom"))
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{}, nil)
+	mockDB.On("FindMediaBySystemAndPathFold", mock.Anything, int64(1), childPath).
+		Return(&database.Media{DBID: 10, MediaTitleDBID: 20}, nil)
+	mockDB.On(
+		"ApplyScrapeResult", mock.Anything, int64(10), int64(20),
+		companionArtworkWriteMatcher(t, map[string]string{propKey: assetPath}),
+	).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB, externalAssetRoots: []string{assetRoot}}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
 	stats := s.processCompanionEntries(context.Background(), scraper.ScrapeOptions{}, system, mockDB)
 	assert.Equal(t, companionStats{Processed: 1, Matched: 1}, stats)

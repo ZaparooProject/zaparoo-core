@@ -84,13 +84,17 @@ Title metadata remains shared by `MediaTitleDBID`, so multiple ROM variants can 
 
 `GamelistXMLScraper` scans each system ROM root for `gamelist.xml`. Regular `<game>` entries are resolved to absolute paths under the system ROM root. The scraper first matches the entry to an existing title by the original display-name slug behavior, then uses the resolved path to choose the concrete Media row for that title when possible. If no slug match exists, it falls back to case-insensitive path matching. Scrapers do not create `Media` or `MediaTitle` rows.
 
-Path handling:
+Path handling for `<game><path>` stays strict:
 
 | Input | Behavior |
 |---|---|
 | `./relative` or `relative` | Resolved under the system ROM root and rejected if it escapes that root |
 | `~/...` | Resolved under the current user's home directory, then rejected unless still under the system ROM root |
 | Absolute path | Cleaned and rejected unless under the system ROM root |
+
+Asset path handling for artwork/video/manual uses the same root-bound behavior by default. On MiSTer and MiSTeX only, absolute or `~/...` asset paths may also resolve under platform root directories from `RootDirs(cfg)`, covering SD, USB, CIFS, network, and configured index roots. This applies only to file-backed asset fields; game paths remain bound to the ROM root. Path traversal outside the ROM root or approved platform roots is rejected.
+
+Zip-as-directory paths are supported for matching XML entries such as `./Japan/Game.zip` to indexed media stored under that zip path, while nested artwork paths such as `./media/images/Japan/Game.png` remain resolved as asset paths.
 
 Source fields are cleaned before mapping: HTML entities are unescaped, tab/newline/carriage-return characters become spaces, and surrounding whitespace is trimmed.
 
