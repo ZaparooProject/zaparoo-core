@@ -95,6 +95,39 @@ func TestFindMediaBySystemAndPath_WrongSystem(t *testing.T) {
 	assert.Nil(t, m, "path exists but systemDBID doesn't match")
 }
 
+func TestFindMediaBySystemAndPaths_ReturnsMatchesByPath(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	marioPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
+	zeldaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	missingPath := filepath.ToSlash(filepath.Join("roms", "missing.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, zeldaPath)
+	require.NoError(t, err)
+
+	results, err := mediaDB.FindMediaBySystemAndPaths(ctx, 1, []string{marioPath, zeldaPath, missingPath})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, int64(1), results[marioPath].DBID)
+	assert.Equal(t, int64(2), results[zeldaPath].DBID)
+	assert.NotContains(t, results, missingPath)
+}
+
+func TestFindMediaBySystemAndPaths_EmptyInput(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	results, err := mediaDB.FindMediaBySystemAndPaths(context.Background(), 1, nil)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
+
 func TestFindSingleDescendantMedia_ReturnsOnlyChild(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)

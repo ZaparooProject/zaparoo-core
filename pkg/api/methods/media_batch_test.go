@@ -20,10 +20,18 @@
 package methods
 
 import (
+	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,4 +66,44 @@ func TestParseMediaRequest_RejectsTopLevelImageTypesInBatch(t *testing.T) {
 	}`), maxMediaImageBatchItems)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "imageTypes entries must be non-empty")
+}
+
+func TestResolveMediaRefs_UsesSingletonFallbackForBatchPath(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	platform := mocks.NewMockPlatform()
+	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+
+	system := database.System{DBID: 1, SystemID: "NES", Name: "NES"}
+	containerPath := filepath.ToSlash(filepath.Join("roms", "Game.zip"))
+	childPath := filepath.ToSlash(filepath.Join(containerPath, "Game.nes"))
+	media := database.Media{DBID: 20, Path: childPath}
+	row := database.MediaFullRow{
+		Media:  media,
+		Title:  database.MediaTitle{DBID: 30, Name: "Game"},
+		System: system,
+	}
+
+	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil).Once()
+	mockDB.On("FindMediaBySystemAndPaths", mock.Anything, system.DBID, []string{containerPath}).
+		Return(map[string]database.Media{}, nil).Once()
+	mockDB.On("FindSingleDescendantMedia", mock.Anything, system.DBID, containerPath).
+		Return(&media, nil).Once()
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{media.DBID}).
+		Return(map[int64]database.MediaFullRow{media.DBID: row}, nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+		Platform: platform,
+	}
+	resolved, err := resolveMediaRefs(env, []mediaRefParam{{System: "NES", Path: containerPath}})
+	require.NoError(t, err)
+	require.Len(t, resolved, 1)
+	require.NoError(t, resolved[0].Err)
+	require.NotNil(t, resolved[0].Row)
+	assert.Equal(t, childPath, resolved[0].Row.Path)
+	mockDB.AssertExpectations(t)
+	platform.AssertExpectations(t)
 }

@@ -437,6 +437,33 @@ func TestHandleMediaImage_MediaNotFound(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaImage_MediaIDSuccess(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	blobData := []byte("media-id-image")
+	row := makeMediaFullRow(44, 440)
+
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{row.DBID}).
+		Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil).Once()
+	mockDB.On("GetMediaProperties", mock.Anything, row.DBID).
+		Return([]database.MediaProperty{
+			{TypeTag: "property:image-boxart", ContentType: "image/png", Binary: blobData},
+		}, nil).Once()
+	mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).
+		Return([]database.MediaProperty{}, nil).Once()
+
+	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId":44,"imageTypes":["boxart"]}`))
+	result, err := HandleMediaImage(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaImageResponse)
+	require.True(t, ok)
+	assert.Equal(t, "property:image-boxart", resp.TypeTag)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(blobData), resp.Data)
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaImage_ItemsParamReturnsClientError(t *testing.T) {
 	t.Parallel()
 

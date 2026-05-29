@@ -404,6 +404,70 @@ func TestHandleMediaMeta_BatchAllMediaIDMissesSkipMetadataFetch(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaMeta_MediaIDMergesSingletonAliasMetadata(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	platform := mocks.NewMockPlatform()
+	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Twice()
+
+	row := &database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip", "Game.nes")),
+			ParentDir: filepath.ToSlash(filepath.Join("roms", "Game.zip")) + "/",
+		},
+		Title:  database.MediaTitle{DBID: 200, Name: "Game"},
+		System: database.System{DBID: 1, SystemID: "NES", Name: "NES"},
+	}
+	parentPath := filepath.ToSlash(filepath.Join("roms", "Game.zip"))
+	parent := &database.Media{DBID: 10, Path: parentPath}
+
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{row.DBID}).
+		Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil).Once()
+	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{row.DBID}).
+		Return(map[int64][]database.TagInfo{row.DBID: {{Type: "genre", Tag: "platformer"}}}, nil).Once()
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBIDs", mock.Anything, []int64{row.Title.DBID}).
+		Return(map[int64][]database.TagInfo{}, nil).Once()
+	mockDB.On("GetMediaPropertyMetadataByMediaDBIDs", mock.Anything, []int64{row.DBID}).
+		Return(map[int64][]database.MediaProperty{row.DBID: {{TypeTag: "property:description", Text: "child"}}}, nil).
+		Once()
+	mockDB.On("GetMediaTitlePropertyMetadataByMediaTitleDBIDs", mock.Anything, []int64{row.Title.DBID}).
+		Return(map[int64][]database.MediaProperty{}, nil).Once()
+	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, row.Path).
+		Return((*database.Media)(nil), nil).Twice()
+	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, parentPath).
+		Return(&row.Media, nil).Twice()
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, parentPath).
+		Return(parent, nil).Twice()
+	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{20, 10}).Return(map[int64][]database.TagInfo{
+		20: {{Type: "genre", Tag: "platformer"}},
+		10: {{Type: "favorite", Tag: "true"}},
+	}, nil).Once()
+	mockDB.On("GetMediaPropertyMetadataByMediaDBIDs", mock.Anything, []int64{20, 10}).
+		Return(map[int64][]database.MediaProperty{
+			20: {{TypeTag: "property:description", Text: "child"}},
+			10: {{TypeTag: "property:image-boxart", Text: "box.png"}},
+		}, nil).Once()
+
+	env := makeMediaMetaEnv(t, mockDB, `{"mediaId":20}`)
+	env.Platform = platform
+	result, err := HandleMediaMeta(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaMetaResponse)
+	require.True(t, ok)
+	assert.Equal(t, row.Path, resp.Media.Path)
+	assert.Equal(t, []database.TagInfo{
+		{Type: "genre", Tag: "platformer"},
+		{Type: "favorite", Tag: "true"},
+	}, resp.Media.Tags)
+	assert.Equal(t, "child", resp.Media.Properties["property:description"].Text)
+	assert.Equal(t, "box.png", resp.Media.Properties["property:image-boxart"].Text)
+	mockDB.AssertExpectations(t)
+	platform.AssertExpectations(t)
+}
+
 func TestMergedMediaMeta_MergesSingletonAliasMetadata(t *testing.T) {
 	t.Parallel()
 
