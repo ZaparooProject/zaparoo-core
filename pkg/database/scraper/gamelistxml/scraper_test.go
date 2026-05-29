@@ -2275,11 +2275,13 @@ func TestScrapeLoop_ProgressIsPerSystem(t *testing.T) {
 </gameList>`), 0o600))
 	games := []string{"one", "two", "three"}
 	var builder strings.Builder
-	builder.WriteString("<gameList>\n")
+	_, _ = builder.WriteString("<gameList>\n")
 	for _, name := range games {
-		builder.WriteString("  <game><path>./" + name + ".sfc</path><name>" + name + "</name></game>\n")
+		_, _ = builder.WriteString(
+			"  <game><path>./" + name + ".sfc</path><name>" + name + "</name></game>\n",
+		)
 	}
-	builder.WriteString("</gameList>")
+	_, _ = builder.WriteString("</gameList>")
 	require.NoError(t, os.WriteFile(filepath.Join(root2, "gamelist.xml"), []byte(builder.String()), 0o600))
 
 	mockDB := helpers.NewMockMediaDBI()
@@ -2299,8 +2301,9 @@ func TestScrapeLoop_ProgressIsPerSystem(t *testing.T) {
 		{DBID: 13, MediaTitleDBID: 3, Path: filepath.Join(root2, "two.sfc")},
 		{DBID: 14, MediaTitleDBID: 4, Path: filepath.Join(root2, "three.sfc")},
 	}, nil)
-	mockDB.On("ApplyScrapeResult", mock.Anything, mock.AnythingOfType("int64"), mock.AnythingOfType("int64"), mock.Anything).
-		Return(nil)
+	mockDB.On(
+		"ApplyScrapeResult", mock.Anything, mock.AnythingOfType("int64"), mock.AnythingOfType("int64"), mock.Anything,
+	).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	ch := make(chan scraper.ScrapeUpdate, 128)
@@ -2362,8 +2365,9 @@ func TestScrapeLoop_ProgressIncludesCompanionBaseline(t *testing.T) {
 	mockDB.On("GetTitlesBySystemID", "nes").Return([]database.TitleWithSystem{{
 		DBID: 1001, SystemDBID: 100, Slug: "normal", Name: "Normal",
 	}}, nil)
-	mockDB.On("ApplyScrapeResult", mock.Anything, mock.AnythingOfType("int64"), mock.AnythingOfType("int64"), mock.Anything).
-		Return(nil)
+	mockDB.On(
+		"ApplyScrapeResult", mock.Anything, mock.AnythingOfType("int64"), mock.AnythingOfType("int64"), mock.Anything,
+	).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	ch := make(chan scraper.ScrapeUpdate, 128)

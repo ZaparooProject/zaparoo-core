@@ -55,8 +55,8 @@ import (
 type GamelistRecord struct {
 	AvailableMediaDirs  map[string]string
 	SystemRootPath      string
-	Game                esapi.Game
 	MatchKind           gamelistMatchKind
+	Game                esapi.Game
 	MatchedMediaDBID    int64
 	MatchedTitleDBID    int64
 	MediaLevelWriteSafe bool
@@ -72,9 +72,9 @@ const (
 )
 
 type slugMediaSelection struct {
-	media     database.Media
 	matchKind gamelistMatchKind
 	key       string
+	media     database.Media
 }
 
 // mediaDirCandidates maps each TagPropertyImage value to the ordered list of
@@ -619,7 +619,12 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			Skipped:   companion.Skipped,
 		}:
 		}
-		if !waitForResume(system.ID, companion.Processed+processed, companion.Matched+matched, companion.Skipped+skipped) {
+		if !waitForResume(
+			system.ID,
+			companion.Processed+processed,
+			companion.Matched+matched,
+			companion.Skipped+skipped,
+		) {
 			return
 		}
 
@@ -650,7 +655,12 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		}
 
 		for _, record := range records {
-			if !waitForResume(system.ID, companion.Processed+processed, companion.Matched+matched, companion.Skipped+skipped) {
+			if !waitForResume(
+				system.ID,
+				companion.Processed+processed,
+				companion.Matched+matched,
+				companion.Skipped+skipped,
+			) {
 				return
 			}
 			select {
@@ -693,7 +703,12 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				mapped.MediaTags = nil
 				mapped.MediaProps = nil
 			}
-			if !waitForResume(system.ID, companion.Processed+processed, companion.Matched+matched, companion.Skipped+skipped) {
+			if !waitForResume(
+				system.ID,
+				companion.Processed+processed,
+				companion.Matched+matched,
+				companion.Skipped+skipped,
+			) {
 				return
 			}
 
