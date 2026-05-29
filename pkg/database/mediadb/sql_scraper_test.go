@@ -122,6 +122,9 @@ func TestFindSingleDescendantMedia_RejectsMultipleChildren(t *testing.T) {
 	ctx := context.Background()
 
 	parent := filepath.ToSlash(filepath.Join("roms", "Collection"))
+	parentDir := filepath.ToSlash(filepath.Join(parent, "")) + "/"
+	onePath := filepath.ToSlash(filepath.Join(parent, "one.nes"))
+	twoPath := filepath.ToSlash(filepath.Join(parent, "two.nes"))
 	_, err := mediaDB.sql.ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(2, 1, 'one', 'One'),
@@ -129,7 +132,7 @@ func TestFindSingleDescendantMedia_RejectsMultipleChildren(t *testing.T) {
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
 			(2, 2, 1, ?, ?),
 			(3, 3, 1, ?, ?);
-	`, parent+"/one.nes", parent+"/", parent+"/two.nes", parent+"/")
+	`, onePath, parentDir, twoPath, parentDir)
 	require.NoError(t, err)
 
 	media, err := mediaDB.FindSingleDescendantMedia(ctx, 1, parent)
@@ -144,6 +147,10 @@ func TestFindSingleDescendantMedia_IgnoresMissingAndOtherSystems(t *testing.T) {
 	ctx := context.Background()
 
 	parent := filepath.ToSlash(filepath.Join("roms", "Shared"))
+	parentDir := filepath.ToSlash(filepath.Join(parent, "")) + "/"
+	nesPath := filepath.ToSlash(filepath.Join(parent, "nes.nes"))
+	snesPath := filepath.ToSlash(filepath.Join(parent, "snes.sfc"))
+	missingPath := filepath.ToSlash(filepath.Join(parent, "missing.nes"))
 	_, err := mediaDB.sql.ExecContext(ctx, `
 		INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'SNES', 'Super Nintendo');
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
@@ -154,10 +161,10 @@ func TestFindSingleDescendantMedia_IgnoresMissingAndOtherSystems(t *testing.T) {
 			(2, 2, 1, ?, ?, 0),
 			(3, 3, 2, ?, ?, 0),
 			(4, 4, 1, ?, ?, 1);
-	`, parent+"/nes.nes", parent+"/", parent+"/snes.sfc", parent+"/", parent+"/missing.nes", parent+"/")
+	`, nesPath, parentDir, snesPath, parentDir, missingPath, parentDir)
 	require.NoError(t, err)
 
-	media, err := mediaDB.FindSingleDescendantMedia(ctx, 1, parent+"/")
+	media, err := mediaDB.FindSingleDescendantMedia(ctx, 1, parentDir)
 	require.NoError(t, err)
 	require.NotNil(t, media)
 	assert.Equal(t, int64(2), media.DBID)

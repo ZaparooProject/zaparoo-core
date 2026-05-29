@@ -648,7 +648,7 @@ func buildBrowseResponse(
 
 	// Add directory entries
 	for _, dir := range dirs {
-		dirPath := path + "/" + dir.Name
+		dirPath := filepath.ToSlash(filepath.Join(path, dir.Name))
 		entry := models.BrowseEntry{
 			Name:      dir.Name,
 			Path:      dirPath,

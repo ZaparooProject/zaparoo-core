@@ -136,8 +136,9 @@ func TestResolveMediaBySystemAndPath_SingletonContainerFallbackSuccess(t *testin
 	cfg := &config.Instance{}
 	system := database.System{DBID: 10, SystemID: "NES", Name: "Nintendo Entertainment System"}
 	containerPath := filepath.ToSlash(filepath.Join("roms", "NES", "Game.zip"))
-	childPath := containerPath + "/Game.nes"
-	media := database.Media{DBID: 20, Path: childPath, ParentDir: containerPath + "/"}
+	childPath := filepath.ToSlash(filepath.Join(containerPath, "Game.nes"))
+	parentDir := filepath.ToSlash(containerPath) + "/"
+	media := database.Media{DBID: 20, Path: childPath, ParentDir: parentDir}
 	row := &database.MediaFullRow{
 		Media:  media,
 		Title:  database.MediaTitle{DBID: 30, Name: "Game"},

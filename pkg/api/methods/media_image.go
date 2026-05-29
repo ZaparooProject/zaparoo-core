@@ -144,9 +144,9 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	if err != nil {
 		return nil, err
 	}
-	titleProps, err := db.GetMediaTitlePropertyMetadata(env.Context, row.Title.DBID)
+	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get title property metadata: %w", err)
+		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 
 	prefs := imagePrefs(nil, ref.ImageTypes)
@@ -182,9 +182,9 @@ func handleMediaImageSinglePath(env *requests.RequestEnv, ref mediaRefParam, max
 	if err != nil {
 		return nil, err
 	}
-	titleProps, err := db.GetMediaTitlePropertyMetadata(env.Context, row.Title.DBID)
+	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get title property metadata: %w", err)
+		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 
 	return selectMediaImageFromSources(
@@ -245,16 +245,16 @@ func mediaImagePropSources(env *requests.RequestEnv, row *database.MediaFullRow)
 		return nil, err
 	}
 	if len(mediaIDs) == 1 {
-		props, propErr := env.Database.MediaDB.GetMediaPropertyMetadata(env.Context, row.DBID)
+		props, propErr := env.Database.MediaDB.GetMediaProperties(env.Context, row.DBID)
 		if propErr != nil {
-			return nil, fmt.Errorf("failed to get media property metadata: %w", propErr)
+			return nil, fmt.Errorf("failed to get media properties: %w", propErr)
 		}
 		return [][]database.MediaProperty{props}, nil
 	}
 
-	propsByID, err := env.Database.MediaDB.GetMediaPropertyMetadataByMediaDBIDs(env.Context, mediaIDs)
+	propsByID, err := env.Database.MediaDB.GetMediaPropertiesByMediaDBIDs(env.Context, mediaIDs)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get media property metadata: %w", err)
+		return nil, fmt.Errorf("failed to get media properties: %w", err)
 	}
 	sources := make([][]database.MediaProperty, 0, len(mediaIDs))
 	for _, id := range mediaIDs {
