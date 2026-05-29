@@ -436,7 +436,10 @@ func TestMergedMediaMeta_MergesSingletonAliasMetadata(t *testing.T) {
 	mockDB.On("GetMediaPropertyMetadataByMediaDBIDs", mock.Anything, []int64{20, 10}).
 		Return(map[int64][]database.MediaProperty{
 			20: {{TypeTag: "property:description", Text: "child"}},
-			10: {{TypeTag: "property:description", Text: "parent"}, {TypeTag: "property:image-boxart", Text: "box.png"}},
+			10: {
+				{TypeTag: "property:description", Text: "parent"},
+				{TypeTag: "property:image-boxart", Text: "box.png"},
+			},
 		}, nil).Once()
 
 	env := &requests.RequestEnv{
