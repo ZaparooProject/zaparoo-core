@@ -735,7 +735,7 @@ func annotateSingletonDirectoryEntry(
 	systemIDs []string,
 	rootDirs []string,
 ) {
-	if env == nil || entry == nil || env.Database == nil || len(systemIDs) != 1 {
+	if env == nil || entry == nil || env.Database == nil || len(systemIDs) != 1 || !singletonMediaAliasesEnabled(env) {
 		return
 	}
 

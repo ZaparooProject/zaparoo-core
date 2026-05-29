@@ -144,6 +144,7 @@ func TestResolveMediaBySystemAndPath_SingletonContainerFallbackSuccess(t *testin
 		System: system,
 	}
 
+	pl.On("Settings").Return(platforms.Settings{ZipsAsDirs: true})
 	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, containerPath).
 		Return((*database.Media)(nil), nil)
@@ -167,6 +168,7 @@ func TestResolveMediaBySystemAndPath_SingletonContainerFallbackMiss(t *testing.T
 	system := database.System{DBID: 10, SystemID: "NES", Name: "Nintendo Entertainment System"}
 	containerPath := filepath.ToSlash(filepath.Join("roms", "NES", "Collection"))
 
+	pl.On("Settings").Return(platforms.Settings{ZipsAsDirs: true})
 	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, containerPath).
 		Return((*database.Media)(nil), nil)
@@ -177,6 +179,28 @@ func TestResolveMediaBySystemAndPath_SingletonContainerFallbackMiss(t *testing.T
 	_, err := resolveMediaBySystemAndPath(&env, "NES", containerPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "media not found")
+	mockDB.AssertExpectations(t)
+}
+
+func TestResolveMediaBySystemAndPath_SingletonContainerFallbackDisabled(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	pl := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	system := database.System{DBID: 10, SystemID: "NES", Name: "Nintendo Entertainment System"}
+	containerPath := filepath.ToSlash(filepath.Join("roms", "NES", "Game.zip"))
+
+	pl.On("Settings").Return(platforms.Settings{ZipsAsDirs: false})
+	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, containerPath).
+		Return((*database.Media)(nil), nil)
+
+	env := makeResolveMediaEnv(mockDB, pl, nil, cfg)
+	_, err := resolveMediaBySystemAndPath(&env, "NES", containerPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "media not found")
+	mockDB.AssertNotCalled(t, "FindSingleDescendantMedia", mock.Anything, system.DBID, containerPath)
 	mockDB.AssertExpectations(t)
 }
 
@@ -192,6 +216,7 @@ func TestResolveMediaBySystemAndPath_URIDoesNotUseRelativeFallback(t *testing.T)
 	})
 	mediaPath := "steam://440/Team%20Fortress%202"
 
+	pl.On("Settings").Return(platforms.Settings{})
 	mockDB.On("FindSystemBySystemID", "Steam").Return(system, nil)
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, mediaPath).
 		Return((*database.Media)(nil), nil)
@@ -213,6 +238,7 @@ func TestResolveMediaBySystemAndPath_MissingLauncherCacheSkipsRelativeFallback(t
 	system := database.System{DBID: 10, SystemID: "NES", Name: "Nintendo Entertainment System"}
 	mediaPath := filepath.Join("NES", "mario.nes")
 
+	pl.On("Settings").Return(platforms.Settings{})
 	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, mediaPath).
 		Return((*database.Media)(nil), nil)
@@ -237,6 +263,7 @@ func TestResolveMediaBySystemAndPath_MalformedRelativePathSkipsFallback(t *testi
 	})
 	mediaPath := "mario.nes"
 
+	pl.On("Settings").Return(platforms.Settings{})
 	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil)
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, system.DBID, mediaPath).
 		Return((*database.Media)(nil), nil)

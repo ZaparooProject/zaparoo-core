@@ -27,11 +27,19 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
+func singletonMediaAliasesEnabled(env *requests.RequestEnv) bool {
+	return env != nil && env.Platform != nil && env.Platform.Settings().ZipsAsDirs
+}
+
 func resolveSingletonMediaPath(
 	env *requests.RequestEnv,
 	system database.System,
 	mediaPath string,
 ) (*database.Media, error) {
+	if !singletonMediaAliasesEnabled(env) {
+		return nil, nil //nolint:nilnil // disabled aliasing has no singleton fallback
+	}
+
 	media, err := env.Database.MediaDB.FindSingleDescendantMedia(env.Context, system.DBID, mediaPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve singleton media path: %w", err)
@@ -40,11 +48,14 @@ func resolveSingletonMediaPath(
 }
 
 func equivalentMediaIDs(env *requests.RequestEnv, row *database.MediaFullRow) ([]int64, error) {
-	if env == nil || row == nil || env.Database == nil || env.Database.MediaDB == nil {
+	if row == nil {
 		return nil, nil
 	}
 
 	ids := []int64{row.DBID}
+	if env == nil || env.Database == nil || env.Database.MediaDB == nil || !singletonMediaAliasesEnabled(env) {
+		return ids, nil
+	}
 	seen := map[int64]bool{row.DBID: true}
 	add := func(media *database.Media) {
 		if media == nil || seen[media.DBID] {
