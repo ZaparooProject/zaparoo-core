@@ -142,13 +142,13 @@ func mergedMediaMeta(
 		return nil, nil, err
 	}
 	if len(ids) == 1 {
-		mediaTags, err := env.Database.MediaDB.GetMediaTagsByMediaDBID(env.Context, row.DBID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get media tags: %w", err)
+		mediaTags, tagsErr := env.Database.MediaDB.GetMediaTagsByMediaDBID(env.Context, row.DBID)
+		if tagsErr != nil {
+			return nil, nil, fmt.Errorf("failed to get media tags: %w", tagsErr)
 		}
-		mediaProps, err := env.Database.MediaDB.GetMediaPropertyMetadata(env.Context, row.DBID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get media property metadata: %w", err)
+		mediaProps, propsErr := env.Database.MediaDB.GetMediaPropertyMetadata(env.Context, row.DBID)
+		if propsErr != nil {
+			return nil, nil, fmt.Errorf("failed to get media property metadata: %w", propsErr)
 		}
 		return mediaTags, mediaProps, nil
 	}

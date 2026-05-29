@@ -105,7 +105,10 @@ func mergeMediaTags(primary []database.TagInfo, aliases ...[]database.TagInfo) [
 	return merged
 }
 
-func mergeMediaProperties(primary []database.MediaProperty, aliases ...[]database.MediaProperty) []database.MediaProperty {
+func mergeMediaProperties(
+	primary []database.MediaProperty,
+	aliases ...[]database.MediaProperty,
+) []database.MediaProperty {
 	if len(aliases) == 0 {
 		return primary
 	}

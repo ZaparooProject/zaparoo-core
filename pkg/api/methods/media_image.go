@@ -150,7 +150,9 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	}
 
 	prefs := imagePrefs(nil, ref.ImageTypes)
-	return selectMediaImageFromSources(env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, prefs, maxBytes)
+	return selectMediaImageFromSources(
+		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, prefs, maxBytes,
+	)
 }
 
 func parseMediaImageRequest(raw json.RawMessage) (mediaRefParam, error) {
@@ -238,40 +240,27 @@ func mediaImageBlobTooLargeError(prop *database.MediaProperty, maxBytes int64) e
 }
 
 func mediaImagePropSources(env *requests.RequestEnv, row *database.MediaFullRow) ([][]database.MediaProperty, error) {
-	ids, err := equivalentMediaIDs(env, row)
+	mediaIDs, err := equivalentMediaIDs(env, row)
 	if err != nil {
 		return nil, err
 	}
-	if len(ids) == 1 {
-		props, err := env.Database.MediaDB.GetMediaPropertyMetadata(env.Context, row.DBID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get media property metadata: %w", err)
+	if len(mediaIDs) == 1 {
+		props, propErr := env.Database.MediaDB.GetMediaPropertyMetadata(env.Context, row.DBID)
+		if propErr != nil {
+			return nil, fmt.Errorf("failed to get media property metadata: %w", propErr)
 		}
 		return [][]database.MediaProperty{props}, nil
 	}
 
-	propsByID, err := env.Database.MediaDB.GetMediaPropertyMetadataByMediaDBIDs(env.Context, ids)
+	propsByID, err := env.Database.MediaDB.GetMediaPropertyMetadataByMediaDBIDs(env.Context, mediaIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media property metadata: %w", err)
 	}
-	sources := make([][]database.MediaProperty, 0, len(ids))
-	for _, id := range ids {
+	sources := make([][]database.MediaProperty, 0, len(mediaIDs))
+	for _, id := range mediaIDs {
 		sources = append(sources, propsByID[id])
 	}
 	return sources, nil
-}
-
-func selectMediaImage(
-	ctx context.Context,
-	fs afero.Fs,
-	db database.MediaDBI,
-	row *database.MediaFullRow,
-	mediaProps []database.MediaProperty,
-	titleProps []database.MediaProperty,
-	prefs []string,
-	maxBytes int64,
-) (models.MediaImageResponse, error) {
-	return selectMediaImageFromSources(ctx, fs, db, row, [][]database.MediaProperty{mediaProps}, titleProps, prefs, maxBytes)
 }
 
 func selectMediaImageFromSources(
