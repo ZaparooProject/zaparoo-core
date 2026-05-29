@@ -38,15 +38,18 @@ For each system, the normal loop:
 
 1. Resolves target systems from indexed MediaDB systems and platform launcher paths.
 2. Runs ZaparooCompanion processing first. This is a special path; see [ZaparooCompanion Entries](#zaparoocompanion-entries).
-3. Loads indexed media rows for the system.
-4. With `force=false`, removes media rows that already have sentinel tag `scraper.gamelist.xml:scraped`.
-5. Loads `gamelist.xml` from each ROM root.
-6. Resolves each `<game>` path under its ROM root.
-7. Matches the resolved path to an existing Media row with case-insensitive path matching.
-8. Maps XML fields to media-level tags plus title-level tags/properties.
-9. Writes metadata through `MediaDB.ApplyScrapeResult`.
-10. Writes the scraper sentinel tag to the matched Media row last inside the same transaction.
-11. Emits progress updates and a final done update.
+3. Loads eligible indexed titles for slug matching (`force=true` loads all titles; otherwise titles without the scraper sentinel are loaded).
+4. Loads indexed media rows for the system.
+5. With `force=false`, removes media rows that already have sentinel tag `scraper.gamelist.xml:scraped` from path fallback candidates.
+6. Loads `gamelist.xml` from each ROM root.
+7. Resolves each `<game>` path under its ROM root.
+8. Computes the same display-name slug used by the original scraper and prefers that title match.
+9. Uses the resolved path to select the concrete Media row for the slug-matched title when possible; otherwise falls back to the first Media row for that title.
+10. If slug matching fails, falls back to case-insensitive path matching so otherwise missed records can still scrape.
+11. Maps XML fields to media-level tags/properties plus title-level shared tags/properties.
+12. Writes metadata through `MediaDB.ApplyScrapeResult`.
+13. Writes the scraper sentinel tag to the selected Media row last inside the same transaction.
+14. Emits progress updates and a final done update.
 
 The sentinel tag format is `scraper.<id>:scraped`, for example `scraper.gamelist.xml:scraped`. Writing it last is intentional: if a normal record write fails, the transaction rolls back and the missing sentinel leaves that media row eligible for retry.
 
@@ -60,8 +63,8 @@ The DB supports tags/properties at both media and title scope. Normal `gamelist.
 |---|---|---|
 | `MediaTags` | ROM-level variant metadata | region, lang, scraper sentinel |
 | `MediaTitleTags` | Title-level shared metadata | developer, publisher, year, rating, genre, players, arcadeboard, gamefamily |
-| `MediaTitleProperties` | Title-level static content | description, artwork paths, video path, manual path, XML game ID |
-| `MediaProperties` | ROM-level static content | Supported by DB helpers, not currently written by normal `gamelist.xml` entries |
+| `MediaTitleProperties` | Title-level shared static content | description, XML game ID |
+| `MediaProperties` | ROM-level static content | artwork paths, video path, manual path for normal `gamelist.xml` entries |
 
 Tag exclusivity is controlled by `TagTypes.IsExclusive`. Exclusive types replace existing values for that type; additive types accumulate distinct values. The scraper write path groups tags by type and applies that behavior in `upsertTags`.
 
@@ -69,15 +72,17 @@ Property rows are keyed by entity and property type tag. Re-scraping the same pr
 
 Path-backed properties persist their text path and optional `BlobDBID`; the property tables do not persist the `ContentType` computed by the mapper for path values. Blob-backed properties expose content type from `MediaBlobs`. API responses infer path-backed content type and extension from the stored path when DB content type is empty.
 
+Normal gamelist artwork is media-level so regional or language variants can carry different image paths while sharing one title. `media.image` checks media-level properties before title-level properties.
+
 ## Media-level Sentinel Invariant
 
-Normal `gamelist.xml` entries are matched to concrete Media rows by path. The sentinel is written to the same Media row that receives ROM-level tags such as `region` and `lang`.
+Normal `gamelist.xml` entries prefer slug/title matching, then use path matching to select the concrete Media row when possible. If no slug match exists, path-only fallback can still select a Media row. The sentinel is written to the same Media row that receives ROM-level tags such as `region` and `lang` plus ROM-level file properties such as artwork.
 
-Title metadata remains shared by `MediaTitleDBID`, so multiple ROM variants can write the same title-level tags/properties. Rewrites are idempotent: exclusive title tags replace same-type values, additive tags are inserted-or-ignored, and properties upsert by type.
+Title metadata remains shared by `MediaTitleDBID`, so multiple ROM variants can write the same title-level tags/properties. Rewrites are idempotent: exclusive title tags replace same-type values, additive tags are inserted-or-ignored, and properties upsert by type. Media-level properties upsert per concrete Media row, preventing regional artwork variants from overwriting each other.
 
 ## gamelist.xml Behavior
 
-`GamelistXMLScraper` scans each system ROM root for `gamelist.xml`. Regular `<game>` entries are resolved to absolute paths under the system ROM root and matched to existing Media rows by case-insensitive path. Scrapers do not create `Media` or `MediaTitle` rows.
+`GamelistXMLScraper` scans each system ROM root for `gamelist.xml`. Regular `<game>` entries are resolved to absolute paths under the system ROM root. The scraper first matches the entry to an existing title by the original display-name slug behavior, then uses the resolved path to choose the concrete Media row for that title when possible. If no slug match exists, it falls back to case-insensitive path matching. Scrapers do not create `Media` or `MediaTitle` rows.
 
 Path handling:
 
@@ -105,18 +110,18 @@ Source fields are cleaned before mapping: HTML entities are unescaped, tab/newli
 | `family` | `MediaTitleTags: gamefamily` | Additive |
 | `desc` | `MediaTitleProperties: property:description` | Plain text |
 | ScreenScraper game ID | `MediaTitleProperties: property:xml-game-id` | From XML attribute or element value |
-| `image` | `MediaTitleProperties: property:image-image` | XML path or filesystem fallback |
-| `thumbnail` | `MediaTitleProperties: property:image-thumbnail` | Cover/thumbnail path in most ES forks |
-| `boxart2d` | `MediaTitleProperties: property:image-boxart` | XML path or filesystem fallback |
-| `boxart3d` | `MediaTitleProperties: property:image-boxart3d` | XML path or filesystem fallback |
-| `screenshot` | `MediaTitleProperties: property:image-screenshot` | XML path or filesystem fallback |
-| `video` | `MediaTitleProperties: property:video` | Filesystem path |
-| `marquee` | `MediaTitleProperties: property:image-marquee` | XML path or filesystem fallback |
-| `logo` / `wheel` | `MediaTitleProperties: property:image-wheel` | `logo` takes priority over `wheel`; XML path or filesystem fallback |
-| `fanart` | `MediaTitleProperties: property:image-fanart` | XML path or filesystem fallback |
-| `titlescreen` / `titleshot` | `MediaTitleProperties: property:image-titleshot` | `titlescreen` takes priority over `titleshot`; XML path or filesystem fallback |
-| `map` | `MediaTitleProperties: property:image-map` | XML path or filesystem fallback |
-| `manual` | `MediaTitleProperties: property:manual` | PDF path |
+| `image` | `MediaProperties: property:image-image` | XML path or filesystem fallback |
+| `thumbnail` | `MediaProperties: property:image-thumbnail` | Cover/thumbnail path in most ES forks |
+| `boxart2d` | `MediaProperties: property:image-boxart` | XML path or filesystem fallback |
+| `boxart3d` | `MediaProperties: property:image-boxart3d` | XML path or filesystem fallback |
+| `screenshot` | `MediaProperties: property:image-screenshot` | XML path or filesystem fallback |
+| `video` | `MediaProperties: property:video` | Filesystem path |
+| `marquee` | `MediaProperties: property:image-marquee` | XML path or filesystem fallback |
+| `logo` / `wheel` | `MediaProperties: property:image-wheel` | `logo` takes priority over `wheel`; XML path or filesystem fallback |
+| `fanart` | `MediaProperties: property:image-fanart` | XML path or filesystem fallback |
+| `titlescreen` / `titleshot` | `MediaProperties: property:image-titleshot` | `titlescreen` takes priority over `titleshot`; XML path or filesystem fallback |
+| `map` | `MediaProperties: property:image-map` | XML path or filesystem fallback |
+| `manual` | `MediaProperties: property:manual` | PDF path |
 
 Filesystem fallback searches known subdirectories under `<systemRootPath>/media/` when an XML path is absent. For games in subfolders, it searches the mirrored ROM-relative path before the flat filename; for example `./Japan/Game.nes` checks `media/images/Japan/Game.png` before `media/images/Game.png`. Side/back box art are filesystem-fallback only.
 

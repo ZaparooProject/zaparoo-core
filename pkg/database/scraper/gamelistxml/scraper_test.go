@@ -265,12 +265,23 @@ func TestMimeFromExt_Unknown(t *testing.T) {
 
 // --- LoadRecords ---
 
-func mediaByPath(rows ...database.Media) map[string]database.Media {
-	result := make(map[string]database.Media, len(rows))
-	for _, row := range rows {
-		result[pathFoldKey(row.Path)] = row
+func mediaByPath(rows ...database.Media) loadRecordIndexes {
+	indexes := loadRecordIndexes{
+		TitlesBySlug:     map[string]database.MediaTitle{},
+		MediaByPathFold:  make(map[string]database.Media, len(rows)),
+		MediaByTitleDBID: make(map[int64][]database.Media, len(rows)),
 	}
-	return result
+	for _, row := range rows {
+		indexes.MediaByPathFold[pathFoldKey(row.Path)] = row
+		indexes.MediaByTitleDBID[row.MediaTitleDBID] = append(indexes.MediaByTitleDBID[row.MediaTitleDBID], row)
+	}
+	return indexes
+}
+
+func mediaBySlugAndPath(slug string, title *database.MediaTitle, rows ...database.Media) loadRecordIndexes {
+	indexes := mediaByPath(rows...)
+	indexes.TitlesBySlug[slug] = *title
+	return indexes
 }
 
 func TestLoadRecords_PathMatch(t *testing.T) {
@@ -375,13 +386,61 @@ func TestLoadRecords_TitleNameDoesNotNeedSlugMatch(t *testing.T) {
 	records, err := (&GamelistXMLScraper{}).LoadRecords(
 		context.Background(),
 		scraper.ScrapeSystem{ID: "NeoGeo", ROMPaths: []string{root}},
-		mediaByPath(database.Media{DBID: 7, MediaTitleDBID: 42, Path: filepath.Join(root, "mslug.zip")}),
+		mediaBySlugAndPath("metal-slug", &database.MediaTitle{DBID: 42, Slug: "metal-slug"},
+			database.Media{DBID: 7, MediaTitleDBID: 42, Path: filepath.Join(root, "mslug.zip")}),
 	)
 	require.NoError(t, err)
-	require.Len(t, records, 1, "path match should work even when title slug derives from display name")
+	require.Len(t, records, 1, "slug match should work even when file basename differs from display name")
 	assert.Equal(t, "Metal Slug", records[0].Game.Name)
 	assert.Equal(t, int64(42), records[0].MatchedTitleDBID)
 	assert.Equal(t, int64(7), records[0].MatchedMediaDBID)
+}
+
+func TestLoadRecords_SlugMatchSelectsExactMediaPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	usaPath := filepath.Join(root, "USA", "Game.nes")
+	japanPath := filepath.Join(root, "Japan", "Game.nes")
+	require.NoError(t, os.MkdirAll(filepath.Dir(usaPath), 0o750))
+	require.NoError(t, os.MkdirAll(filepath.Dir(japanPath), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./Japan/Game.nes</path><name>Game</name></game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+		mediaBySlugAndPath("game", &database.MediaTitle{DBID: 50, Slug: "game"},
+			database.Media{DBID: 60, MediaTitleDBID: 50, Path: usaPath},
+			database.Media{DBID: 61, MediaTitleDBID: 50, Path: japanPath}),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, int64(50), records[0].MatchedTitleDBID)
+	assert.Equal(t, int64(61), records[0].MatchedMediaDBID)
+}
+
+func TestLoadRecords_PathOnlyFallbackWhenSlugMissing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	gamePath := filepath.Join(root, "odd-name.nes")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./odd-name.nes</path><name>Unindexed Display Name</name></game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+		mediaByPath(database.Media{DBID: 70, MediaTitleDBID: 80, Path: gamePath}),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, int64(80), records[0].MatchedTitleDBID)
+	assert.Equal(t, int64(70), records[0].MatchedMediaDBID)
 }
 
 func TestLoadRecords_ZipAsDirChildMatch(t *testing.T) {
@@ -524,7 +583,7 @@ func TestLoadRecords_ContextCancellation(t *testing.T) {
 	_, err := (&GamelistXMLScraper{}).LoadRecords(
 		ctx,
 		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
-		map[string]database.Media{},
+		mediaByPath(),
 	)
 	require.ErrorIs(t, err, context.Canceled)
 }
@@ -612,14 +671,21 @@ func TestMapToDB_FullGame(t *testing.T) {
 
 	// Title-level properties
 	descPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyDescription)
-	imgPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
-	videoPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyVideo)
-	var foundDesc, foundImg, foundVideo bool
+	var foundDesc bool
 	for _, p := range result.TitleProps {
-		switch p.TypeTag {
-		case descPropKey:
+		if p.TypeTag == descPropKey {
 			foundDesc = true
 			assert.Equal(t, "A classic platformer.", p.Text)
+		}
+	}
+	assert.True(t, foundDesc, "description property missing")
+
+	// Media-level properties
+	imgPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	videoPropKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyVideo)
+	var foundImg, foundVideo bool
+	for _, p := range result.MediaProps {
+		switch p.TypeTag {
 		case imgPropKey:
 			foundImg = true
 			assert.Equal(t, filepath.ToSlash(filepath.Join(root, "media", "images", "mario.png")), p.Text)
@@ -628,11 +694,8 @@ func TestMapToDB_FullGame(t *testing.T) {
 			assert.Equal(t, filepath.ToSlash(filepath.Join(root, "media", "videos", "mario.mp4")), p.Text)
 		}
 	}
-	assert.True(t, foundDesc, "description property missing")
 	assert.True(t, foundImg, "image property missing")
 	assert.True(t, foundVideo, "video property missing")
-
-	assert.Empty(t, result.MediaProps, "gamelistxml scraper writes no media-level properties")
 }
 
 func TestMapToDB_EmptyGame_NoTags(t *testing.T) {
@@ -759,9 +822,9 @@ func TestMapToDB_ContentType_Image(t *testing.T) {
 		SystemRootPath: root,
 		Game:           esapi.Game{Image: "./images/mario.png"},
 	}
-	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
+	mediaProps := (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
-	for _, p := range titleProps {
+	for _, p := range mediaProps {
 		if p.TypeTag == propKey {
 			assert.Equal(t, "image/png", p.ContentType)
 			return
@@ -872,7 +935,7 @@ func TestMapToDB_NestedExplicitImagePath(t *testing.T) {
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var found bool
-	for _, p := range result.TitleProps {
+	for _, p := range result.MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, filepath.ToSlash(filepath.Join(root, "media", "images", "Japan", "Game.png")), p.Text)
@@ -902,7 +965,7 @@ func TestMapToDB_FilesystemFallback_Image(t *testing.T) {
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var found bool
-	for _, p := range result.TitleProps {
+	for _, p := range result.MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, filepath.ToSlash(filepath.Join(imgDir, "mario.png")), p.Text)
@@ -933,7 +996,7 @@ func TestMapToDB_FilesystemFallback_NestedGamePath(t *testing.T) {
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var found bool
-	for _, p := range result.TitleProps {
+	for _, p := range result.MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, filepath.ToSlash(imgPath), p.Text)
@@ -963,7 +1026,7 @@ func TestMapToDB_FilesystemFallback_NestedWinsBeforeFlat(t *testing.T) {
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var found bool
-	for _, p := range result.TitleProps {
+	for _, p := range result.MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, filepath.ToSlash(nestedPath), p.Text)
@@ -991,7 +1054,7 @@ func TestMapToDB_FilesystemFallback_ThumbnailBox2DFrontAlias(t *testing.T) {
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageThumbnail)
 	var found bool
-	for _, p := range result.TitleProps {
+	for _, p := range result.MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, filepath.ToSlash(thumbPath), p.Text)
@@ -1018,7 +1081,7 @@ func TestMapToDB_FilesystemFallback_Boxart(t *testing.T) {
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart)
 	var found bool
-	for _, p := range result.TitleProps {
+	for _, p := range result.MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, filepath.ToSlash(filepath.Join(boxartDir, "sonic.png")), p.Text)
@@ -1054,7 +1117,7 @@ func TestMapToDB_FilesystemFallback_XMLWins(t *testing.T) {
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
 	var count int
-	for _, p := range result.TitleProps {
+	for _, p := range result.MediaProps {
 		if p.TypeTag == propKey {
 			count++
 			assert.Equal(t, filepath.ToSlash(xmlImg), p.Text, "XML path should take priority over filesystem fallback")
@@ -1097,7 +1160,7 @@ func TestMapToDB_Boxart3D_XMLPath(t *testing.T) {
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart3D)
 	var found bool
-	for _, p := range result.TitleProps {
+	for _, p := range result.MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, filepath.ToSlash(img), p.Text)
@@ -1131,7 +1194,7 @@ func TestMapToDB_Boxart2D_And_Boxart3D_AreIndependent(t *testing.T) {
 	key2d := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart)
 	key3d := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart3D)
 	found2d, found3d := false, false
-	for _, p := range result.TitleProps {
+	for _, p := range result.MediaProps {
 		switch p.TypeTag {
 		case key2d:
 			found2d = true
@@ -1163,7 +1226,7 @@ func TestMapToDB_FilesystemFallback_Boxart3D(t *testing.T) {
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxart3D)
 	var found bool
-	for _, p := range result.TitleProps {
+	for _, p := range result.MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, filepath.ToSlash(filepath.Join(dir, "sonic.png")), p.Text)
@@ -1190,7 +1253,7 @@ func TestMapToDB_FilesystemFallback_BoxartSide(t *testing.T) {
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxartSide)
 	var found bool
-	for _, p := range result.TitleProps {
+	for _, p := range result.MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, filepath.ToSlash(filepath.Join(dir, "sonic.png")), p.Text)
@@ -1217,7 +1280,7 @@ func TestMapToDB_FilesystemFallback_BoxartBack(t *testing.T) {
 
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageBoxartBack)
 	var found bool
-	for _, p := range result.TitleProps {
+	for _, p := range result.MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, filepath.ToSlash(filepath.Join(dir, "sonic.png")), p.Text)
@@ -1299,10 +1362,10 @@ func TestMapToDB_Manual(t *testing.T) {
 		SystemRootPath: root,
 		Game:           esapi.Game{Manual: "./manuals/game.pdf"},
 	}
-	titleProps := (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps
+	mediaProps := (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyManual)
 	var found bool
-	for _, p := range titleProps {
+	for _, p := range mediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, "application/pdf", p.ContentType)
@@ -1324,7 +1387,7 @@ func TestMapToDB_WheelXMLLogoTakesPriority(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageWheel)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Contains(t, p.Text, "logo_source", "Logo field should take priority over Wheel")
@@ -1346,7 +1409,7 @@ func TestMapToDB_WheelXMLFromWheelWhenNoLogo(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageWheel)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Contains(t, p.Text, "wheel_source")
@@ -1368,7 +1431,7 @@ func TestMapToDB_TitleShotXMLFromTitleScreen(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageTitleshot)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Contains(t, p.Text, "titlescreen_source", "TitleScreen should take priority over TitleShot")
@@ -1390,7 +1453,7 @@ func TestMapToDB_TitleShotXMLFromTitleShotWhenNoTitleScreen(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageTitleshot)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Contains(t, p.Text, "titleshot_source")
@@ -1408,7 +1471,7 @@ func TestMapToDB_MarqueeXMLPath(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageMarquee)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, "image/png", p.ContentType)
@@ -1426,7 +1489,7 @@ func TestMapToDB_FanArtXMLPath(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageFanart)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, "image/png", p.ContentType)
@@ -1444,7 +1507,7 @@ func TestMapToDB_MapXMLPath(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageMap)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 		}
@@ -1461,7 +1524,7 @@ func TestMapToDB_ScreenshotXMLPath(t *testing.T) {
 	}
 	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageScreenshot)
 	var found bool
-	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).TitleProps {
+	for _, p := range (&GamelistXMLScraper{}).MapToDB(&rec).MediaProps {
 		if p.TypeTag == propKey {
 			found = true
 			assert.Equal(t, "image/png", p.ContentType)
@@ -1899,6 +1962,10 @@ func TestProcessCompanionEntries_StatsAggregateWithNormalProgress(t *testing.T) 
 	)
 	companionPath := filepath.ToSlash(filepath.Join(root, "companion.rom"))
 	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
+		Return([]database.MediaTitle{{
+			DBID: normalTitleDBID, SystemDBID: systemDBID, Slug: "normal-game", Name: "Normal Game",
+		}}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{
 		{DBID: normalMediaDBID, MediaTitleDBID: normalTitleDBID, Path: filepath.Join(root, "normal.rom")},
 	}, nil)
@@ -2071,6 +2138,8 @@ func TestScrapeLoop_NormalMode_Success(t *testing.T) {
 	)
 
 	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
+		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: "mario", Name: "Mario"}}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
 		Return([]database.MediaWithFullPath{{
 			DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "mario.nes"),
@@ -2142,8 +2211,8 @@ func TestScrapeLoop_Issue794ZipAsDirMedia(t *testing.T) {
 		if w == nil || w.Sentinel != scraper.SentinelTagInfo("gamelist.xml") {
 			return false
 		}
-		got := make(map[string]string, len(w.TitleProps))
-		for _, p := range w.TitleProps {
+		got := make(map[string]string, len(w.MediaProps))
+		for _, p := range w.MediaProps {
 			got[p.TypeTag] = p.Text
 		}
 		return assert.Equal(t, filepath.ToSlash(filepath.Join(
@@ -2154,6 +2223,8 @@ func TestScrapeLoop_Issue794ZipAsDirMedia(t *testing.T) {
 	})
 
 	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
+		Return([]database.MediaTitle{}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
 		Return([]database.MediaWithFullPath{{DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: innerPath}}, nil)
 	mockDB.On("GetScrapedMediaIDs", mock.Anything, "gamelist.xml", systemDBID).
@@ -2239,6 +2310,8 @@ func TestScrapeLoop_WriteError_RecordSkipped(t *testing.T) {
 	)
 
 	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
+		Return([]database.MediaTitle{{DBID: titleDBID, SystemDBID: systemDBID, Slug: "mario", Name: "Mario"}}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
 		Return([]database.MediaWithFullPath{{
 			DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "mario.nes"),
@@ -2284,6 +2357,8 @@ func TestScrapeLoop_AllMediaScraped_SkipsSystem(t *testing.T) {
 	)
 
 	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("FindMediaTitlesWithoutSentinel", mock.Anything, systemDBID, "scraper.gamelist.xml:scraped").
+		Return([]database.MediaTitle{}, nil)
 	mockDB.On("GetMediaBySystemID", "nes").
 		Return([]database.MediaWithFullPath{{
 			DBID: mediaDBID, MediaTitleDBID: titleDBID, Path: filepath.Join(root, "mario.nes"),
