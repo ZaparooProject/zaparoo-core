@@ -44,7 +44,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/rivo/tview v0.42.0
-	github.com/rs/zerolog v1.34.0
+	github.com/rs/zerolog v1.35.1
 	github.com/sasha-s/go-deadlock v0.3.9
 	github.com/schollz/pake/v3 v3.1.1
 	github.com/shirou/gopsutil/v4 v4.26.3
