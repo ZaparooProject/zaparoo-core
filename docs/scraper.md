@@ -207,7 +207,7 @@ Only one scraper can run at a time, and scraping is mutually exclusive with medi
 
 `media.meta` returns the metadata graph for media rows: media-level tags and properties, title-level tags and properties, and stored system identity. Single requests accept `mediaId` or `system`/`path` and keep the single-response shape; batch requests use `items` and return per-item results. Binary property bytes are not included; clients should use `media.image` for image data.
 
-`media.image` accepts one media ref plus image type preferences such as `image`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. These resolve to canonical image property tags; for example `boxart` becomes `property:image-boxart` and `image` becomes `property:image-image`. Media-level properties are preferred over title-level properties for the same type. Stale file path properties are removed automatically and lookup falls through to the next available source.
+`media.image` accepts one media ref plus image type preferences such as `image`, `boxart`, `boxart3d`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. These resolve to canonical image property tags; for example `boxart` becomes `property:image-boxart` and `image` becomes `property:image-image`. Media-level properties are preferred over title-level properties for the same type. For stale image properties in these canonical tags, such as missing file paths for `property:image-boxart` or `property:image-image`, `media.image` logs the stale property in memory only and does not delete DB rows; lookup falls through to the next available source.
 
 ## Useful Focused Tests
 
