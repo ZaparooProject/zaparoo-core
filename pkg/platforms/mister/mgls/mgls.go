@@ -155,6 +155,11 @@ func validateLoadCorePath(path string) error {
 }
 
 func launchFile(path string) error {
+	validationErr := validateLoadCorePath(path)
+	if validationErr != nil {
+		return validationErr
+	}
+
 	_, err := os.Stat(misterconfig.CmdInterface)
 	if err != nil {
 		return fmt.Errorf("command interface not accessible: %w", err)
@@ -163,10 +168,6 @@ func launchFile(path string) error {
 	lowerPath := s.ToLower(path)
 	if !s.HasSuffix(lowerPath, ".mgl") && !s.HasSuffix(lowerPath, ".mra") && !s.HasSuffix(lowerPath, ".rbf") {
 		return fmt.Errorf("not a valid launch file: %s", path)
-	}
-	validationErr := validateLoadCorePath(path)
-	if validationErr != nil {
-		return validationErr
 	}
 
 	log.Debug().Str("file", path).Msg("sending to command interface")
@@ -315,10 +316,6 @@ func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
 
 // LaunchCore Launch a core given a possibly partial path, as per MGL files.
 func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *cores.Core) error {
-	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
-		return fmt.Errorf("command interface not accessible: %w", err)
-	}
-
 	if system.SetName != "" {
 		return LaunchGame(cfg, system, "")
 	}
@@ -331,6 +328,11 @@ func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *cores.Core) 
 	validationErr := validateLoadCorePath(path)
 	if validationErr != nil {
 		return validationErr
+	}
+
+	_, statErr := os.Stat(misterconfig.CmdInterface)
+	if statErr != nil {
+		return fmt.Errorf("command interface not accessible: %w", statErr)
 	}
 
 	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)

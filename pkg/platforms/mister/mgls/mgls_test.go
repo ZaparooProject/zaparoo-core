@@ -153,15 +153,16 @@ func TestReadMRA_EmptyFile(t *testing.T) {
 func TestValidateLoadCorePath(t *testing.T) {
 	t.Parallel()
 
+	basePath := filepath.Join("media", "fat", ".LASTLAUNCH.mgl")
 	tests := []struct {
 		name    string
 		path    string
 		wantErr bool
 	}{
-		{name: "valid path", path: "/media/fat/.LASTLAUNCH.mgl"},
-		{name: "newline rejected", path: "/media/fat/.LASTLAUNCH.mgl\nload_core /tmp/evil.rbf", wantErr: true},
-		{name: "carriage return rejected", path: "/media/fat/.LASTLAUNCH.mgl\r", wantErr: true},
-		{name: "tab rejected", path: "/media/fat/.LAST\tLAUNCH.mgl", wantErr: true},
+		{name: "valid path", path: basePath},
+		{name: "newline rejected", path: basePath + "\nload_core " + filepath.Join("tmp", "evil.rbf"), wantErr: true},
+		{name: "carriage return rejected", path: basePath + "\r", wantErr: true},
+		{name: "tab rejected", path: basePath + "\t", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -174,6 +175,43 @@ func TestValidateLoadCorePath(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestLaunchFileRejectsControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	basePath := filepath.Join("media", "fat", ".LASTLAUNCH.mgl")
+	for _, path := range []string{basePath + "\n", basePath + "\r", basePath + "\t"} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+
+			require.Error(t, launchFile(path))
+		})
+	}
+}
+
+func TestLaunchCoreRejectsControlCharacters(t *testing.T) {
+	oldCache := cores.GlobalRBFCache
+	t.Cleanup(func() {
+		cores.GlobalRBFCache = oldCache
+	})
+
+	basePath := filepath.Join("media", "fat", "_Console", "NES.rbf")
+	for _, path := range []string{basePath + "\n", basePath + "\r", basePath + "\t"} {
+		t.Run(path, func(t *testing.T) {
+			cache := &cores.RBFCache{}
+			cache.BuildFromRBFs([]cores.RBFInfo{{
+				Path:      path,
+				Filename:  "NES.rbf",
+				ShortName: "NES",
+				MglName:   filepath.Join("_Console", "NES"),
+			}})
+			cores.GlobalRBFCache = cache
+
+			err := LaunchCore(nil, nil, &cores.Core{ID: "NES"})
+			require.Error(t, err)
 		})
 	}
 }
