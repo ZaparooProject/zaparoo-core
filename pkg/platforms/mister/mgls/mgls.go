@@ -166,9 +166,11 @@ func launchFile(path string) error {
 		}
 	}()
 
-	if _, err := fmt.Fprintf(cmd, "load_core %s\n", path); err != nil {
+	command := "load_core " + path
+	if _, err := fmt.Fprintln(cmd, command); err != nil {
 		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
+	log.Info().Str("command", command).Msg("command interface launch request sent")
 
 	return nil
 }
