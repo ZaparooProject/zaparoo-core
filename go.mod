@@ -50,7 +50,7 @@ require (
 	github.com/shirou/gopsutil/v4 v4.26.4
 	github.com/spf13/afero v1.15.0
 	github.com/stretchr/testify v1.11.1
-	go.bug.st/serial v1.6.4
+	go.bug.st/serial v1.7.1
 	go.etcd.io/bbolt v1.4.3
 	go.uber.org/goleak v1.3.0
 	golang.design/x/clipboard v0.7.1
@@ -73,7 +73,6 @@ require (
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
-	github.com/creack/goselect v0.1.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
