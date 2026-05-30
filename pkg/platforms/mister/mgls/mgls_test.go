@@ -150,6 +150,34 @@ func TestReadMRA_EmptyFile(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestValidateLoadCorePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{name: "valid path", path: "/media/fat/.LASTLAUNCH.mgl"},
+		{name: "newline rejected", path: "/media/fat/.LASTLAUNCH.mgl\nload_core /tmp/evil.rbf", wantErr: true},
+		{name: "carriage return rejected", path: "/media/fat/.LASTLAUNCH.mgl\r", wantErr: true},
+		{name: "tab rejected", path: "/media/fat/.LAST\tLAUNCH.mgl", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateLoadCorePath(tt.path)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestGenerateMgl(t *testing.T) {
 	t.Parallel()
 

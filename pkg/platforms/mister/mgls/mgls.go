@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	s "strings"
+	"unicode"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -144,6 +145,15 @@ func writeTempFile(content string) (string, error) {
 	return tmpFile.Name(), nil
 }
 
+func validateLoadCorePath(path string) error {
+	for _, r := range path {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("load_core path contains control character: %q", path)
+		}
+	}
+	return nil
+}
+
 func launchFile(path string) error {
 	_, err := os.Stat(misterconfig.CmdInterface)
 	if err != nil {
@@ -153,6 +163,10 @@ func launchFile(path string) error {
 	lowerPath := s.ToLower(path)
 	if !s.HasSuffix(lowerPath, ".mgl") && !s.HasSuffix(lowerPath, ".mra") && !s.HasSuffix(lowerPath, ".rbf") {
 		return fmt.Errorf("not a valid launch file: %s", path)
+	}
+	validationErr := validateLoadCorePath(path)
+	if validationErr != nil {
+		return validationErr
 	}
 
 	log.Debug().Str("file", path).Msg("sending to command interface")
@@ -314,6 +328,10 @@ func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *cores.Core) 
 		return fmt.Errorf("resolving core RBF: %w", err)
 	}
 	path := rbfInfo.Path
+	validationErr := validateLoadCorePath(path)
+	if validationErr != nil {
+		return validationErr
+	}
 
 	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
