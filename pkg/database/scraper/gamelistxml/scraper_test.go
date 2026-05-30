@@ -2029,7 +2029,10 @@ func TestProcessCompanionEntries_ChildBySlugFileWritesAllTitleMedia(t *testing.T
 		assert.Equal(t, scraper.SentinelTagInfo("gamelist.xml"), target.Write.Sentinel)
 		assert.Empty(t, target.Write.MediaTags, "slug child should not write file-level tags for target %d", i)
 	}
-	assert.Equal(t, []database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "Dev"}}, mockDB.batches[0][0].Write.TitleTags)
+	assert.Equal(t,
+		[]database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "Dev"}},
+		mockDB.batches[0][0].Write.TitleTags,
+	)
 	assert.Equal(t, companionXMLGameIDProps("99"), mockDB.batches[0][0].Write.TitleProps)
 	assert.Empty(t, mockDB.batches[0][1].Write.TitleTags)
 	assert.Empty(t, mockDB.batches[0][1].Write.TitleProps)
