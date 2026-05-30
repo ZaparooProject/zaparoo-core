@@ -404,6 +404,20 @@ type ScrapeWrite struct {
 	MediaProps []MediaProperty
 }
 
+// ScrapeWriteTarget pairs a scraper write payload with the existing Media and
+// MediaTitle rows it should enrich.
+type ScrapeWriteTarget struct {
+	Write          *ScrapeWrite
+	MediaDBID      int64
+	MediaTitleDBID int64
+}
+
+// ScrapeResultBatchApplier optionally batches scrape writes for DB
+// implementations that can keep multiple targets in one transaction.
+type ScrapeResultBatchApplier interface {
+	ApplyScrapeResults(ctx context.Context, targets []ScrapeWriteTarget) error
+}
+
 type FileInfo struct {
 	SystemID string
 	Path     string

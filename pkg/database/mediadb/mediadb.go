@@ -264,7 +264,7 @@ func (db *MediaDB) Open() error {
 	}
 
 	log.Debug().Msg("opening media database connection")
-	sqlInstance, err := sql.Open("sqlite3", dbPath+getSqliteConnParams())
+	sqlInstance, err := sql.Open(sqliteDriverName(), dbPath+getSqliteConnParams())
 	if err != nil {
 		return fmt.Errorf("failed to open media database: %w", err)
 	}
@@ -758,6 +758,8 @@ func (db *MediaDB) Close() error {
 	// Wait for all background operations (optimization, etc.) to complete
 	// before closing the database connection
 	db.WaitForBackgroundOperations()
+
+	logSQLTraceSummary()
 
 	err := db.sql.Close()
 	if err != nil {
