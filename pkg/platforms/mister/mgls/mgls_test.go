@@ -22,6 +22,7 @@
 package mgls
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -187,7 +188,8 @@ func TestLaunchFileRejectsControlCharacters(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
 
-			require.Error(t, launchFile(path))
+			err := launchFile(path)
+			require.EqualError(t, err, fmt.Sprintf("load_core path contains control character: %q", path))
 		})
 	}
 }
@@ -211,7 +213,7 @@ func TestLaunchCoreRejectsControlCharacters(t *testing.T) {
 			cores.GlobalRBFCache = cache
 
 			err := LaunchCore(nil, nil, &cores.Core{ID: "NES"})
-			require.Error(t, err)
+			require.EqualError(t, err, fmt.Sprintf("load_core path contains control character: %q", path))
 		})
 	}
 }
