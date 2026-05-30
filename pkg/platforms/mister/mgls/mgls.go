@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	s "strings"
+	"unicode"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -144,7 +145,21 @@ func writeTempFile(content string) (string, error) {
 	return tmpFile.Name(), nil
 }
 
+func validateLoadCorePath(path string) error {
+	for _, r := range path {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("load_core path contains control character: %q", path)
+		}
+	}
+	return nil
+}
+
 func launchFile(path string) error {
+	validationErr := validateLoadCorePath(path)
+	if validationErr != nil {
+		return validationErr
+	}
+
 	_, err := os.Stat(misterconfig.CmdInterface)
 	if err != nil {
 		return fmt.Errorf("command interface not accessible: %w", err)
@@ -166,9 +181,11 @@ func launchFile(path string) error {
 		}
 	}()
 
-	if _, err := fmt.Fprintf(cmd, "load_core %s\n", path); err != nil {
+	command := "load_core " + path
+	if _, err := fmt.Fprintln(cmd, command); err != nil {
 		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
+	log.Info().Str("command", command).Msg("command interface launch request sent")
 
 	return nil
 }
@@ -299,10 +316,6 @@ func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
 
 // LaunchCore Launch a core given a possibly partial path, as per MGL files.
 func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *cores.Core) error {
-	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
-		return fmt.Errorf("command interface not accessible: %w", err)
-	}
-
 	if system.SetName != "" {
 		return LaunchGame(cfg, system, "")
 	}
@@ -312,6 +325,15 @@ func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *cores.Core) 
 		return fmt.Errorf("resolving core RBF: %w", err)
 	}
 	path := rbfInfo.Path
+	validationErr := validateLoadCorePath(path)
+	if validationErr != nil {
+		return validationErr
+	}
+
+	_, statErr := os.Stat(misterconfig.CmdInterface)
+	if statErr != nil {
+		return fmt.Errorf("command interface not accessible: %w", statErr)
+	}
 
 	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
