@@ -1856,7 +1856,7 @@ func matchCompanionChildMedia(
 ) companionMediaMatch {
 	filename := filepath.Base(child.ResolvedPath)
 	if strings.EqualFold(filepath.Ext(filename), ".slug") {
-		slug := strings.TrimSuffix(filename, filepath.Ext(filename))
+		slug := strings.ToLower(strings.TrimSuffix(filename, filepath.Ext(filename)))
 		title, ok := indexes.AllTitlesBySlug[slug]
 		if !ok {
 			title, ok = indexes.TitlesBySlug[slug]

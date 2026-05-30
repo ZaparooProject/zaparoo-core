@@ -19,6 +19,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/stretchr/testify/require"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
@@ -35,7 +36,7 @@ type sqlTraceAggregate struct {
 }
 
 type sqlTraceCollector struct {
-	mu           sync.Mutex
+	mu           syncutil.Mutex
 	byStmt       map[string]*sqlTraceAggregate
 	stmtByHandle map[uintptr]string
 }

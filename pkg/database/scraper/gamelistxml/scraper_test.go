@@ -2563,7 +2563,10 @@ func drainBufferedUpdates(ch chan scraper.ScrapeUpdate) []scraper.ScrapeUpdate {
 	var updates []scraper.ScrapeUpdate
 	for {
 		select {
-		case update := <-ch:
+		case update, ok := <-ch:
+			if !ok {
+				return updates
+			}
 			updates = append(updates, update)
 		default:
 			return updates

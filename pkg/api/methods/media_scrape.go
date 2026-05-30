@@ -311,9 +311,9 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	scraperID := params.ScraperID
 	db.MediaDB.TrackBackgroundOperation()
 	go func() {
-		defer db.MediaDB.BackgroundOperationDone()
-		defer cancelFunc()
 		defer scrapingStatusInstance.clearIfOwner(scraperID)
+		defer cancelFunc()
+		defer db.MediaDB.BackgroundOperationDone()
 
 		var receivedDone bool
 		for update := range ch {
