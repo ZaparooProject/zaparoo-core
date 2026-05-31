@@ -24,6 +24,8 @@ package cores
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -267,11 +269,22 @@ func (c *RBFCache) GetByShortName(shortName string) (RBFInfo, bool) {
 // scanned RBFInfo. When the path includes a directory, the match is strict: a
 // wrong directory returns (RBFInfo{}, false) instead of a silent fallback to
 // another core. A bare short name (no directory) returns the first candidate.
+// The short name may include a glob, used for versioned alt cores whose full
+// RBF basename changes with each release.
 func (c *RBFCache) GetByMglPath(mglPath string) (RBFInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	return c.getByMglPathLocked(mglPath)
+}
+
+func (c *RBFCache) getByMglPathLocked(mglPath string) (RBFInfo, bool) {
 	canonicalDir, shortName := splitRBFPath(mglPath)
+	if strings.ContainsAny(shortName, "*?[") || strings.Contains(shortName, "<date>") ||
+		strings.Contains(shortName, "<hash>") {
+		return c.getByMglGlobLocked(canonicalDir, shortName)
+	}
+
 	candidates := c.byShortName[strings.ToLower(shortName)]
 	if len(candidates) == 0 {
 		return RBFInfo{}, false
@@ -286,6 +299,91 @@ func (c *RBFCache) GetByMglPath(mglPath string) (RBFInfo, bool) {
 		}
 	}
 	return RBFInfo{}, false
+}
+
+func (c *RBFCache) getByMglGlobLocked(canonicalDir, shortNamePattern string) (RBFInfo, bool) {
+	matches := make([]RBFInfo, 0)
+	for _, candidates := range c.byShortName {
+		for _, candidate := range candidates {
+			dir, candidateShortName := splitRBFPath(candidate.MglName)
+			if canonicalDir != "" && !strings.EqualFold(dir, canonicalDir) {
+				continue
+			}
+			if !matchMglPattern(shortNamePattern, candidateShortName) {
+				continue
+			}
+			matches = append(matches, candidate)
+		}
+	}
+	if len(matches) == 0 {
+		return RBFInfo{}, false
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].MglName < matches[j].MglName
+	})
+	return matches[len(matches)-1], true
+}
+
+func matchMglPattern(pattern, name string) bool {
+	if strings.Contains(pattern, "<date>") || strings.Contains(pattern, "<hash>") {
+		return matchMglTokenPattern(pattern, name)
+	}
+	matched, err := filepath.Match(strings.ToLower(pattern), strings.ToLower(name))
+	return err == nil && matched
+}
+
+func matchMglTokenPattern(pattern, name string) bool {
+	patternParts := strings.Split(pattern, "_")
+	nameParts := strings.Split(name, "_")
+	if len(patternParts) != len(nameParts) {
+		return false
+	}
+	for i, patternPart := range patternParts {
+		namePart := nameParts[i]
+		switch patternPart {
+		case "<date>":
+			if !isNDigits(namePart, 8) {
+				return false
+			}
+		case "<hash>":
+			if !isHexish(namePart) {
+				return false
+			}
+		default:
+			if !strings.EqualFold(patternPart, namePart) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isNDigits(s string, n int) bool {
+	if len(s) != n {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isHexish(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // RegisterAltCore registers an alt core's expected RBF path.
@@ -312,21 +410,52 @@ func (c *RBFCache) GetByLauncherID(launcherID string) (RBFInfo, bool) {
 		return RBFInfo{}, false
 	}
 
+	return c.getByMglPathLocked(rbfPath)
+}
+
+func (c *RBFCache) relatedCandidates(rbfPath string) []string {
 	canonicalDir, shortName := splitRBFPath(rbfPath)
-	candidates := c.byShortName[strings.ToLower(shortName)]
-	if len(candidates) == 0 {
-		return RBFInfo{}, false
+	if shortName == "" {
+		return nil
 	}
-	if canonicalDir == "" {
-		return candidates[0], true
-	}
-	for _, candidate := range candidates {
-		dir, _ := splitRBFPath(candidate.MglName)
-		if strings.EqualFold(dir, canonicalDir) {
-			return candidate, true
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	prefix := strings.ToLower(shortName) + "_"
+	candidates := make([]string, 0)
+	seen := make(map[string]struct{})
+	for key, rbfs := range c.byShortName {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, rbf := range rbfs {
+			dir, _ := splitRBFPath(rbf.MglName)
+			if canonicalDir != "" && !strings.EqualFold(dir, canonicalDir) {
+				continue
+			}
+			if _, ok := seen[rbf.MglName]; ok {
+				continue
+			}
+			seen[rbf.MglName] = struct{}{}
+			candidates = append(candidates, rbf.MglName)
 		}
 	}
-	return RBFInfo{}, false
+	sort.Strings(candidates)
+	return candidates
+}
+
+func missingCoreError(core *Core, key string, candidates []string) error {
+	if len(candidates) == 0 {
+		return fmt.Errorf(
+			"no core found for system %s (launcher %s, not in cache)", core.ID, key,
+		)
+	}
+	return fmt.Errorf(
+		"no original core found for system %s (launcher %s, expected %s; not in cache); "+
+			"available fork candidates: %s; set launchers.default load_path to use one explicitly",
+		core.ID, key, core.RBF, strings.Join(candidates, ", "),
+	)
 }
 
 // Resolve returns the RBFInfo for a core, honoring config load_path override,
@@ -362,9 +491,7 @@ func (c *RBFCache) Resolve(cfg *config.Instance, core *Core) (RBFInfo, error) {
 
 	rbfInfo, ok := c.GetBySystemID(core.ID)
 	if !ok {
-		return RBFInfo{}, fmt.Errorf(
-			"no core found for system %s (launcher %s, not in cache)", core.ID, key,
-		)
+		return RBFInfo{}, missingCoreError(core, key, c.relatedCandidates(core.RBF))
 	}
 	return rbfInfo, nil
 }
