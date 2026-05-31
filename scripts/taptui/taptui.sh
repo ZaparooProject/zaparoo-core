@@ -55,7 +55,7 @@ cmdPalette=(
   "input.coinp2"   "Insert a coin/credit for player 2"
   "input.coinp3"   "Insert a coin/credit for player 3"
   "input.coinp4"   "Insert a coin/credit for player 4"
-   "delay"          "Delay next command by specified milliseconds"
+  "delay"          "Delay next command by specified milliseconds"
   "shell"          "Run Linux command"
 )
 

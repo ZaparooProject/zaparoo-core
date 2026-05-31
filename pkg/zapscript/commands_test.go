@@ -331,6 +331,8 @@ func TestIsMediaLaunchingCommand_ComprehensiveCoverage(t *testing.T) {
 		zapscript.ZapScriptCmdInputGamepad,
 		zapscript.ZapScriptCmdInputCoinP1,
 		zapscript.ZapScriptCmdInputCoinP2,
+		zapscript.ZapScriptCmdInputCoinP3,
+		zapscript.ZapScriptCmdInputCoinP4,
 		zapscript.ZapScriptCmdShell,    // deprecated
 		zapscript.ZapScriptCmdCommand,  // deprecated
 		zapscript.ZapScriptCmdINI,      // deprecated
@@ -395,6 +397,8 @@ func TestIsMediaDisruptingCommand(t *testing.T) {
 		zapscript.ZapScriptCmdInputGamepad,
 		zapscript.ZapScriptCmdInputCoinP1,
 		zapscript.ZapScriptCmdInputCoinP2,
+		zapscript.ZapScriptCmdInputCoinP3,
+		zapscript.ZapScriptCmdInputCoinP4,
 		zapscript.ZapScriptCmdMisterINI,
 		zapscript.ZapScriptCmdMisterCore,
 		zapscript.ZapScriptCmdMisterScript,
@@ -628,6 +632,8 @@ func TestIsValidCommand(t *testing.T) {
 		{name: "stop", cmdName: zapscript.ZapScriptCmdStop, want: true},
 		{name: "http.get", cmdName: zapscript.ZapScriptCmdHTTPGet, want: true},
 		{name: "input.keyboard", cmdName: zapscript.ZapScriptCmdInputKeyboard, want: true},
+		{name: "input.coinp3", cmdName: zapscript.ZapScriptCmdInputCoinP3, want: true},
+		{name: "input.coinp4", cmdName: zapscript.ZapScriptCmdInputCoinP4, want: true},
 		{name: "control", cmdName: zapscript.ZapScriptCmdControl, want: true},
 		{name: "screenshot", cmdName: zapscript.ZapScriptCmdScreenshot, want: true},
 		{name: "mister.wallpaper", cmdName: zapscript.ZapScriptCmdMisterWallpaper, want: true},
