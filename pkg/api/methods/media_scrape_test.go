@@ -343,6 +343,7 @@ func TestHandleMediaScrapeStatus_TracksLatestProgress(t *testing.T) {
 	assert.Equal(t, models.ScrapingStatusResponse{
 		ScraperID:    "test-scraper",
 		SystemID:     "SNES",
+		State:        "running",
 		Processed:    42,
 		Total:        100,
 		Matched:      38,
@@ -484,6 +485,7 @@ func TestHandleMediaScrapeCancel_CancelsActive(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, status.Scraping)
 	assert.True(t, status.Done)
+	assert.Equal(t, "cancelled", status.State)
 }
 
 func TestHandleMediaScrapeResume_ResumesPausedScrape(t *testing.T) {
@@ -518,6 +520,7 @@ func TestHandleMediaScrapeResume_ResumesPausedScrape(t *testing.T) {
 	require.NoError(t, json.Unmarshal(notif.Params, &payload))
 	assert.True(t, payload.Scraping)
 	assert.False(t, payload.Paused)
+	assert.Equal(t, "running", payload.State)
 }
 
 func TestHandleMediaScrapeResume_NilPauser(t *testing.T) {
@@ -645,6 +648,72 @@ func TestHandleMediaScrape_CachesProgressScrapedCountAndRefreshesDone(t *testing
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaScrape_EmitsFatalStatus(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "fatal-scraper").Return(0, nil)
+
+	scrapeErr := errors.New("parse failed")
+	fatalScraper := platforms.Scraper{
+		ID:   "fatal-scraper",
+		Name: "Fatal Scraper",
+		Scrape: func(
+			_ context.Context, _ *config.Instance, _ platforms.Platform,
+			_ afero.Fs, _ *database.Database, _ scraper.ScrapeOptions,
+			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
+		) error {
+			go func() {
+				defer close(ch)
+				ch <- scraper.ScrapeUpdate{
+					SystemID: "SNES", FatalErr: scrapeErr, Done: true, TotalSteps: 2, CurrentStep: 1,
+				}
+			}()
+			return nil
+		},
+	}
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{"fatal-scraper": fatalScraper})
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+
+	_, err := HandleMediaScrape(requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: pl,
+		State:    st,
+		Database: &database.Database{MediaDB: mockDB},
+		Params:   json.RawMessage(`{"scraperId":"fatal-scraper"}`),
+	})
+	require.NoError(t, err)
+
+	var gotFatal bool
+	timeout := time.After(2 * time.Second)
+	for !gotFatal {
+		select {
+		case n := <-ns:
+			if n.Method != models.NotificationMediaScraping {
+				continue
+			}
+			var p models.ScrapingStatusResponse
+			require.NoError(t, json.Unmarshal(n.Params, &p))
+			if p.Done {
+				assert.Equal(t, "failed", p.State)
+				assert.Equal(t, "parse failed", p.Error)
+				gotFatal = true
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for fatal media.scraping notification")
+		}
+	}
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()
@@ -665,9 +734,13 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 		) error {
 			go func() {
 				defer close(ch)
-				ch <- scraper.ScrapeUpdate{SystemID: "SNES", Total: 10, Processed: 5, Matched: 4, Skipped: 1}
 				ch <- scraper.ScrapeUpdate{
-					SystemID: "SNES", Total: 10, Processed: 10, Matched: 8, Skipped: 2, Done: true,
+					SystemID: "SNES", Total: 10, Processed: 5, Matched: 4, Skipped: 1,
+					TotalSteps: 2, CurrentStep: 1,
+				}
+				ch <- scraper.ScrapeUpdate{
+					SystemID: "SNES", Total: 10, Processed: 10, Matched: 8, Skipped: 2,
+					TotalSteps: 2, CurrentStep: 1, Done: true,
 				}
 			}()
 			return nil
@@ -696,6 +769,7 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 
 	var gotDone bool
 	var maxProcessed int
+	var sawCurrentSystem bool
 	timeout := time.After(2 * time.Second)
 	for !gotDone {
 		select {
@@ -708,6 +782,17 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 			if p.Processed > maxProcessed {
 				maxProcessed = p.Processed
 			}
+			if p.CurrentSystem != nil && !p.Done {
+				sawCurrentSystem = true
+				assert.Equal(t, "SNES", p.CurrentSystem.SystemID)
+				assert.Equal(t, p.Processed, p.CurrentSystem.Processed)
+				assert.Equal(t, p.Total, p.CurrentSystem.Total)
+				require.NotNil(t, p.TotalSteps)
+				require.NotNil(t, p.CurrentStep)
+				assert.Equal(t, 2, *p.TotalSteps)
+				assert.Equal(t, 1, *p.CurrentStep)
+				assert.Equal(t, "running", p.State)
+			}
 			if p.Done {
 				gotDone = true
 			}
@@ -717,6 +802,7 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 	}
 
 	assert.Equal(t, 10, maxProcessed, "progress updates should reflect actual processed count")
+	assert.True(t, sawCurrentSystem, "progress updates should expose currentSystem and step fields")
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()
 	}, 2*time.Second, 10*time.Millisecond)

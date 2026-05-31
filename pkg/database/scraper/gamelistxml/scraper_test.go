@@ -2647,6 +2647,68 @@ func TestScrapeLoop_ProgressIsPerSystem(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestScrapeLoop_PauseCancelBeforeNextSystemPreservesProgress(t *testing.T) {
+	t.Parallel()
+
+	root1 := t.TempDir()
+	root2 := t.TempDir()
+	recordPath := filepath.Join(root1, "first.nes")
+	require.NoError(t, os.WriteFile(filepath.Join(root1, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./first.nes</path><name>First</name></game>
+</gameList>`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root2, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./second.sfc</path><name>Second</name></game>
+</gameList>`), 0o600))
+
+	pauser := syncutil.NewPauser()
+	paused := make(chan struct{})
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetTitlesBySystemID", "nes").Return([]database.TitleWithSystem{{
+		DBID: 1, SystemDBID: 10, Slug: "first", Name: "First",
+	}}, nil)
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{{
+		DBID: 11, MediaTitleDBID: 1, Path: recordPath,
+	}}, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(11), int64(1), mock.Anything).
+		Run(func(_ mock.Arguments) {
+			pauser.Pause()
+			close(paused)
+		}).
+		Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.scrapeLoop(ctx, scraper.ScrapeOptions{Pauser: pauser, Force: true}, []scraper.ScrapeSystem{
+			{ID: "nes", ROMPaths: []string{root1}, DBID: 10},
+			{ID: "snes", ROMPaths: []string{root2}, DBID: 20},
+		}, mockDB, ch)
+	}()
+
+	<-paused
+	cancel()
+	<-done
+
+	updates := drainChannel(ch)
+	var doneUpdate scraper.ScrapeUpdate
+	for _, update := range updates {
+		if update.Done {
+			doneUpdate = update
+		}
+	}
+	require.True(t, doneUpdate.Done)
+	assert.Equal(t, "snes", doneUpdate.SystemID)
+	assert.Equal(t, 1, doneUpdate.Processed)
+	assert.Equal(t, 1, doneUpdate.Matched)
+	assert.Equal(t, 0, doneUpdate.Skipped)
+	mockDB.AssertExpectations(t)
+}
+
 func TestScrapeLoop_ProgressIncludesCompanionBaseline(t *testing.T) {
 	t.Parallel()
 

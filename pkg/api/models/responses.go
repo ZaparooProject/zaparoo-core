@@ -290,19 +290,34 @@ type MediaImageResponse struct {
 	TypeTag     string  `json:"typeTag"` // e.g. "property:image-boxart"
 }
 
+type ScrapeSystemProgressResponse struct {
+	SystemID   string `json:"systemId"`
+	SystemName string `json:"systemName,omitempty"`
+	Processed  int    `json:"processed"`
+	Total      int    `json:"total"`
+	Matched    int    `json:"matched"`
+	Skipped    int    `json:"skipped"`
+}
+
 // ScrapingStatusResponse is broadcast as a "media.scraping" notification for
 // each ScrapeUpdate received from the scraper and on completion/cancellation.
 type ScrapingStatusResponse struct {
-	ScraperID    string `json:"scraperId,omitempty"`
-	SystemID     string `json:"systemId,omitempty"`
-	Processed    int    `json:"processed"`
-	Total        int    `json:"total"`
-	Matched      int    `json:"matched"`
-	Skipped      int    `json:"skipped"`
-	TotalScraped int    `json:"totalScraped"`
-	Scraping     bool   `json:"scraping"`
-	Done         bool   `json:"done"`
-	Paused       bool   `json:"paused"`
+	CurrentStep        *int                          `json:"currentStep,omitempty"`
+	CurrentStepDisplay *string                       `json:"currentStepDisplay,omitempty"`
+	TotalSteps         *int                          `json:"totalSteps,omitempty"`
+	CurrentSystem      *ScrapeSystemProgressResponse `json:"currentSystem,omitempty"`
+	ScraperID          string                        `json:"scraperId,omitempty"`
+	SystemID           string                        `json:"systemId,omitempty"`
+	State              string                        `json:"state,omitempty"`
+	Error              string                        `json:"error,omitempty"`
+	Processed          int                           `json:"processed"`
+	Total              int                           `json:"total"`
+	Matched            int                           `json:"matched"`
+	Skipped            int                           `json:"skipped"`
+	TotalScraped       int                           `json:"totalScraped"`
+	Scraping           bool                          `json:"scraping"`
+	Done               bool                          `json:"done"`
+	Paused             bool                          `json:"paused"`
 }
 
 type MediaLookupMatch struct {
