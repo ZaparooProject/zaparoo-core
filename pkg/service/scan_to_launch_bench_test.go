@@ -55,8 +55,8 @@ type pipelineBenchEnv struct {
 	pl        *mocks.MockPlatform
 	lm        *state.LauncherManager
 	cleanup   func()
-	exprEnv   gozapscript.ArgExprEnv
 	gameNames []string
+	exprEnv   gozapscript.ArgExprEnv
 }
 
 // setupPipelineBench creates the full environment needed for scan-to-launch
@@ -187,7 +187,7 @@ func BenchmarkScanToLaunch_ExactMatch(b *testing.B) {
 			_, err = zapscript.RunCommand(
 				context.Background(),
 				env.pl, env.cfg, playlists.PlaylistController{}, token, cmd,
-				len(script.Cmds), i, env.db, env.lm, &env.exprEnv,
+				len(script.Cmds), i, env.db, env.lm, nil, &env.exprEnv,
 			)
 			if err != nil {
 				b.Fatal(err)
@@ -229,7 +229,7 @@ func BenchmarkScanToLaunch_DirectPath(b *testing.B) {
 			_, err = zapscript.RunCommand(
 				context.Background(),
 				env.pl, env.cfg, playlists.PlaylistController{}, token, cmd,
-				len(script.Cmds), i, env.db, env.lm, &env.exprEnv,
+				len(script.Cmds), i, env.db, env.lm, nil, &env.exprEnv,
 			)
 			if err != nil {
 				b.Fatal(err)
@@ -283,7 +283,7 @@ func BenchmarkScanToLaunch_WithMapping(b *testing.B) {
 			_, err = zapscript.RunCommand(
 				context.Background(),
 				env.pl, env.cfg, playlists.PlaylistController{}, token, cmd,
-				len(script.Cmds), i, env.db, env.lm, &env.exprEnv,
+				len(script.Cmds), i, env.db, env.lm, nil, &env.exprEnv,
 			)
 			if err != nil {
 				b.Fatal(err)

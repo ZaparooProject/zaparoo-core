@@ -21,6 +21,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -58,22 +59,25 @@ type PendingWrite struct {
 type State struct {
 	platform              platforms.Platform
 	ctx                   context.Context
-	activePlaylist        *playlists.Playlist
+	ctxCancelFunc         context.CancelFunc
 	softwareToken         *tokens.Token
 	wroteToken            *tokens.Token
 	pendingLaunchOverride *PendingLaunchOverride
 	pendingWrite          *PendingWrite
 	readers               map[string]readers.Reader
-	ctxCancelFunc         context.CancelFunc
-	activeMedia           *models.ActiveMedia
-	onMediaStartHook      func(*models.ActiveMedia)
-	launcherManager       *LauncherManager
 	Notifications         chan<- models.Notification
+	activeMedia           *models.ActiveMedia
+	activePlaylist        *playlists.Playlist
+	activeMediaReadyCh    chan struct{}
 	inbox                 *inbox.Service
+	onMediaStartHook      func(*models.ActiveMedia, uint64)
+	launcherManager       *LauncherManager
 	bootUUID              string
 	lastScanned           tokens.Token
 	activeToken           tokens.Token
+	activeMediaReadyGen   uint64
 	mu                    syncutil.RWMutex
+	activeMediaReady      bool
 	stopService           bool
 	restartRequested      bool
 	runZapScript          bool
@@ -180,7 +184,7 @@ func (s *State) RunZapScriptEnabled() bool {
 	return s.runZapScript
 }
 
-func (s *State) SetOnMediaStartHook(hook func(*models.ActiveMedia)) {
+func (s *State) SetOnMediaStartHook(hook func(*models.ActiveMedia, uint64)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onMediaStartHook = hook
@@ -348,10 +352,73 @@ func (s *State) SetActivePlaylist(playlist *playlists.Playlist) {
 	s.mu.Unlock()
 }
 
+var (
+	ErrNoActiveMedia      = errors.New("no active media")
+	ErrActiveMediaChanged = errors.New("active media changed")
+)
+
 func (s *State) ActiveMedia() *models.ActiveMedia {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.activeMedia
+}
+
+func (s *State) ActiveMediaReady() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activeMedia != nil && s.activeMediaReady
+}
+
+func (s *State) ActiveMediaReadyGeneration() (uint64, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.activeMedia == nil {
+		return 0, false
+	}
+	return s.activeMediaReadyGen, true
+}
+
+func (s *State) WaitForActiveMediaReady(ctx context.Context, expectedGen uint64) error {
+	for {
+		s.mu.RLock()
+		if s.activeMedia == nil {
+			s.mu.RUnlock()
+			return ErrNoActiveMedia
+		}
+		if s.activeMediaReadyGen != expectedGen {
+			s.mu.RUnlock()
+			return ErrActiveMediaChanged
+		}
+		if s.activeMediaReady {
+			s.mu.RUnlock()
+			return nil
+		}
+		readyCh := s.activeMediaReadyCh
+		s.mu.RUnlock()
+
+		select {
+		case <-readyCh:
+			continue
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (s *State) MarkActiveMediaReady(gen uint64) {
+	var readyCh chan struct{}
+
+	s.mu.Lock()
+	if s.activeMedia == nil || s.activeMediaReadyGen != gen || s.activeMediaReady {
+		s.mu.Unlock()
+		return
+	}
+	s.activeMediaReady = true
+	readyCh = s.activeMediaReadyCh
+	s.activeMediaReadyCh = nil
+	s.mu.Unlock()
+
+	close(readyCh)
 }
 
 func (s *State) SetActiveMedia(media *models.ActiveMedia) {
@@ -371,8 +438,16 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 
 	if media == nil {
 		// media has stopped
+		readyCh := s.activeMediaReadyCh
 		s.activeMedia = media
+		s.activeMediaReady = false
+		s.activeMediaReadyCh = nil
+		s.activeMediaReadyGen++
 		s.mu.Unlock()
+
+		if readyCh != nil {
+			close(readyCh)
+		}
 
 		// Send notifications outside lock to prevent deadlock
 		stoppedParams := buildMediaStoppedParams(oldMedia)
@@ -384,6 +459,10 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 	if oldMedia == nil {
 		// media has started
 		s.activeMedia = media
+		s.activeMediaReady = false
+		s.activeMediaReadyGen++
+		gen := s.activeMediaReadyGen
+		s.activeMediaReadyCh = make(chan struct{})
 		s.mu.Unlock()
 
 		// Send notifications outside lock to prevent deadlock
@@ -397,15 +476,24 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 
 		// Execute OnMediaStart hook if set
 		if hook != nil {
-			go hook(media)
+			go hook(media, gen)
 		}
 		return
 	}
 
 	if !oldMedia.Equal(media) {
 		// media has changed
+		readyCh := s.activeMediaReadyCh
 		s.activeMedia = media
+		s.activeMediaReady = false
+		s.activeMediaReadyGen++
+		gen := s.activeMediaReadyGen
+		s.activeMediaReadyCh = make(chan struct{})
 		s.mu.Unlock()
+
+		if readyCh != nil {
+			close(readyCh)
+		}
 
 		// Send notifications outside lock to prevent deadlock
 		changedStoppedParams := buildMediaStoppedParams(oldMedia)
@@ -420,7 +508,7 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 
 		// Execute OnMediaStart hook if set (new media started)
 		if hook != nil {
-			go hook(media)
+			go hook(media, gen)
 		}
 		return
 	}

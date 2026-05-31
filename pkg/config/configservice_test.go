@@ -26,6 +26,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestServiceHooks(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	require.NoError(t, cfg.LoadTOML(`[service]
+on_boot = "**echo:boot"
+on_ready = "**echo:ready"
+`))
+
+	assert.Equal(t, "**echo:boot", cfg.ServiceOnBoot())
+	assert.Equal(t, "**echo:ready", cfg.ServiceOnReady())
+}
+
 func TestDiscoveryEnabled(t *testing.T) {
 	t.Parallel()
 

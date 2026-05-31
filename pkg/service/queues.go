@@ -20,6 +20,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -93,6 +94,8 @@ func runTokenZapScript(
 			}
 		}
 
+		mediaReadyGen, _ := svc.State.ActiveMediaReadyGeneration()
+
 		var cmdEnv gozapscript.ArgExprEnv
 		if exprEnv != nil {
 			cmdEnv = *exprEnv
@@ -120,6 +123,7 @@ func runTokenZapScript(
 			i,
 			svc.DB,
 			svc.State.LauncherManager(),
+			func(ctx context.Context) error { return waitForMediaReady(ctx, svc, mediaReadyGen) },
 			&cmdEnv,
 		)
 		if err != nil {

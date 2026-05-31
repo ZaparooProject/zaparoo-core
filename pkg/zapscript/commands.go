@@ -362,6 +362,7 @@ func GetExprEnv(
 			Data:  lastScanned.Data,
 		},
 		MediaPlaying: activeMedia != nil,
+		MediaReady:   st.ActiveMediaReady(),
 		ActiveMedia:  zapscript.ExprEnvActiveMedia{},
 	}
 
@@ -398,6 +399,7 @@ func RunCommand(
 	currentIndex int,
 	db *database.Database,
 	lm *state.LauncherManager,
+	waitForMediaReady func(context.Context) error,
 	exprEnv *zapscript.ArgExprEnv,
 ) (platforms.CmdResult, error) {
 	unsafe := token.Unsafe
@@ -459,16 +461,17 @@ func RunCommand(
 	}
 
 	env := platforms.CmdEnv{
-		Cmd:           cmd,
-		Cfg:           cfg,
-		ServiceCtx:    serviceCtx,
-		Playlist:      plsc,
-		Source:        token.Source,
-		TotalCommands: totalCmds,
-		CurrentIndex:  currentIndex,
-		Unsafe:        unsafe,
-		Database:      db,
-		ExprEnv:       exprEnv,
+		Cmd:               cmd,
+		Cfg:               cfg,
+		ServiceCtx:        serviceCtx,
+		WaitForMediaReady: waitForMediaReady,
+		Playlist:          plsc,
+		Source:            token.Source,
+		TotalCommands:     totalCmds,
+		CurrentIndex:      currentIndex,
+		Unsafe:            unsafe,
+		Database:          db,
+		ExprEnv:           exprEnv,
 	}
 
 	if lm != nil {

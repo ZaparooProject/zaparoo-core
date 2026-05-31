@@ -95,7 +95,7 @@ func TestSetOnMediaStartHook(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	state.SetOnMediaStartHook(func(media *models.ActiveMedia) {
+	state.SetOnMediaStartHook(func(media *models.ActiveMedia, _ uint64) {
 		hookCalled = true
 		hookMedia = media
 		wg.Done()
@@ -153,7 +153,7 @@ func TestSetOnMediaStartHookMediaChange(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	state.SetOnMediaStartHook(func(_ *models.ActiveMedia) {
+	state.SetOnMediaStartHook(func(_ *models.ActiveMedia, _ uint64) {
 		hookCalled = true
 		wg.Done()
 	})
@@ -201,7 +201,7 @@ func TestSetOnMediaStartHookNotCalledOnStop(t *testing.T) {
 
 	// Set up hook
 	var hookCalled bool
-	state.SetOnMediaStartHook(func(_ *models.ActiveMedia) {
+	state.SetOnMediaStartHook(func(_ *models.ActiveMedia, _ uint64) {
 		hookCalled = true
 	})
 

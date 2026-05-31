@@ -131,7 +131,7 @@ func TestSetActiveMedia_NoDeadlockWithHook(t *testing.T) {
 	}()
 
 	// Slow hook
-	state.SetOnMediaStartHook(func(_ *models.ActiveMedia) {
+	state.SetOnMediaStartHook(func(_ *models.ActiveMedia, _ uint64) {
 		time.Sleep(5 * time.Millisecond)
 	})
 
