@@ -30,6 +30,67 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParseRBFPath_StripsOnlyOfficialDateSuffix(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tests := []struct {
+		name          string
+		relPath       string
+		wantShortName string
+		wantMglName   string
+	}{
+		{
+			name:          "official dated core",
+			relPath:       filepath.Join("_Console", "GBA_20260528.rbf"),
+			wantShortName: "GBA",
+			wantMglName:   filepath.Join("_Console", "GBA"),
+		},
+		{
+			name:          "underscore core strips date only",
+			relPath:       filepath.Join("_Console", "Saturn_DS_20230410.rbf"),
+			wantShortName: "Saturn_DS",
+			wantMglName:   filepath.Join("_Console", "Saturn_DS"),
+		},
+		{
+			name:          "llapi dated core strips date only",
+			relPath:       filepath.Join("_LLAPI", "GBA_LLAPI_20251205.rbf"),
+			wantShortName: "GBA_LLAPI",
+			wantMglName:   filepath.Join("_LLAPI", "GBA_LLAPI"),
+		},
+		{
+			name:          "undated alt core",
+			relPath:       filepath.Join("_Console", "PSX2XCPU.rbf"),
+			wantShortName: "PSX2XCPU",
+			wantMglName:   filepath.Join("_Console", "PSX2XCPU"),
+		},
+		{
+			name:          "db9 fork preserves full name",
+			relPath:       filepath.Join("_Console", "GBA_20260528_ceb4a49_DB9.rbf"),
+			wantShortName: "GBA_20260528_ceb4a49_DB9",
+			wantMglName:   filepath.Join("_Console", "GBA_20260528_ceb4a49_DB9"),
+		},
+		{
+			name:          "megadrive db9 fork preserves full name",
+			relPath:       filepath.Join("_Console", "MegaDrive_20260528_fef1285_DB9.rbf"),
+			wantShortName: "MegaDrive_20260528_fef1285_DB9",
+			wantMglName:   filepath.Join("_Console", "MegaDrive_20260528_fef1285_DB9"),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := parseRBFPathAt(root, filepath.Join(root, tc.relPath))
+
+			assert.Equal(t, filepath.Base(tc.relPath), got.Filename)
+			assert.Equal(t, tc.wantShortName, got.ShortName)
+			assert.Equal(t, tc.wantMglName, got.MglName)
+		})
+	}
+}
+
 func TestShallowScanRBF_IncludesRetroAchievementsCores(t *testing.T) {
 	t.Parallel()
 

@@ -225,6 +225,7 @@ func TestGenerateMgl(t *testing.T) {
 		name     string
 		core     *cores.Core
 		path     string
+		rbfPath  string
 		override string
 		want     string
 		wantErr  bool
@@ -277,6 +278,29 @@ func TestGenerateMgl(t *testing.T) {
 			path: "",
 			want: "<mistergamedescription>\n\t<rbf>_Console/Atari7800</rbf>\n" +
 				"\t<setname same_dir=\"1\">Atari2600</setname>\n</mistergamedescription>",
+		},
+		{
+			name: "resolved db9 core uses concrete rbf path",
+			core: &cores.Core{
+				ID:  "Genesis",
+				RBF: "_Console/MegaDrive_*_DB9",
+				Slots: []cores.Slot{
+					{
+						Exts: []string{".bin", ".gen", ".md"},
+						Mgl: &cores.MGLParams{
+							Delay:  1,
+							Method: "f",
+							Index:  1,
+						},
+					},
+				},
+			},
+			path:    "/media/fat/games/Genesis/Sonic.bin",
+			rbfPath: "_Console/MegaDrive_20260528_fef1285_DB9",
+			want: `<mistergamedescription>
+	<rbf>_Console/MegaDrive_20260528_fef1285_DB9</rbf>
+	<file delay="1" type="f" index="1" path="../../../../../media/fat/games/Genesis/Sonic.bin"/>
+</mistergamedescription>`,
 		},
 		{
 			name: "standard game launch",
@@ -430,8 +454,8 @@ func TestGenerateMgl(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			rbfPath := ""
-			if tt.core != nil {
+			rbfPath := tt.rbfPath
+			if tt.core != nil && rbfPath == "" {
 				rbfPath = tt.core.RBF
 			}
 			got, err := GenerateMgl(tt.core, rbfPath, tt.path, tt.override)

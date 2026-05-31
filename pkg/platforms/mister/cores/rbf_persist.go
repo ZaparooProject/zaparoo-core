@@ -41,7 +41,7 @@ const RBFCacheFileName = "rbf_cache.gob"
 
 const (
 	rbfCacheFileMagic   = "zrbf"
-	rbfCacheFileVersion = 2
+	rbfCacheFileVersion = 3
 )
 
 // rbfCacheMaxBytes caps gob input at load time. ~200 RBFs × ~256 B per

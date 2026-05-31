@@ -496,6 +496,272 @@ func TestSelectByCanonicalDir(t *testing.T) {
 	}
 }
 
+func TestBuildFromRBFs_IgnoresForkOnlyDefault(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{{
+		Path:      "/media/fat/_Console/GBA_20260528_ceb4a49_DB9.rbf",
+		Filename:  "GBA_20260528_ceb4a49_DB9.rbf",
+		ShortName: "GBA_20260528_ceb4a49_DB9",
+		MglName:   "_Console/GBA_20260528_ceb4a49_DB9",
+	}})
+
+	_, ok := cache.bySystemID["GBA"]
+	assert.False(t, ok, "fork-only core must not become default GBA core")
+}
+
+func TestBuildFromRBFs_PrefersOriginalWhenForkAlsoExists(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{
+			Path:      "/media/fat/_Console/GBA_20260528_ceb4a49_DB9.rbf",
+			Filename:  "GBA_20260528_ceb4a49_DB9.rbf",
+			ShortName: "GBA_20260528_ceb4a49_DB9",
+			MglName:   "_Console/GBA_20260528_ceb4a49_DB9",
+		},
+		{
+			Path:      "/media/fat/_Console/GBA_20260528.rbf",
+			Filename:  "GBA_20260528.rbf",
+			ShortName: "GBA",
+			MglName:   "_Console/GBA",
+		},
+	})
+
+	rbf, ok := cache.bySystemID["GBA"]
+	assert.True(t, ok, "original GBA core should be mapped")
+	assert.Equal(t, "_Console/GBA", rbf.MglName)
+}
+
+func TestGetByLauncherID_GlobRegisteredAltCore(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{{
+		Path:      "/media/fat/_Console/MegaDrive_20260528_fef1285_DB9.rbf",
+		Filename:  "MegaDrive_20260528_fef1285_DB9.rbf",
+		ShortName: "MegaDrive_20260528_fef1285_DB9",
+		MglName:   "_Console/MegaDrive_20260528_fef1285_DB9",
+	}})
+	cache.RegisterAltCore("DB9MegaDrive", "_Console/MegaDrive_<date>_<hash>_DB9")
+
+	got, ok := cache.GetByLauncherID("DB9MegaDrive")
+	require.True(t, ok)
+	assert.Equal(t, "_Console/MegaDrive_20260528_fef1285_DB9", got.MglName)
+}
+
+func TestRBFCache_Resolve_GlobAltCore(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{{
+		Path:      "/media/fat/_Console/MegaDrive_20260528_fef1285_DB9.rbf",
+		Filename:  "MegaDrive_20260528_fef1285_DB9.rbf",
+		ShortName: "MegaDrive_20260528_fef1285_DB9",
+		MglName:   "_Console/MegaDrive_20260528_fef1285_DB9",
+	}})
+	cache.RegisterAltCore("DB9MegaDrive", "_Console/MegaDrive_<date>_<hash>_DB9")
+
+	got, err := cache.Resolve(nil, &Core{ID: "Genesis", LauncherID: "DB9MegaDrive", RBF: "_Console/MegaDrive"})
+	require.NoError(t, err)
+	assert.Equal(t, "_Console/MegaDrive_20260528_fef1285_DB9", got.MglName)
+}
+
+func TestGetByMglPath_GlobSelectsNewestMatch(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{
+			Path:      "/media/fat/_Console/GBA_20260527_aaaaaaa_DB9.rbf",
+			Filename:  "GBA_20260527_aaaaaaa_DB9.rbf",
+			ShortName: "GBA_20260527_aaaaaaa_DB9",
+			MglName:   "_Console/GBA_20260527_aaaaaaa_DB9",
+		},
+		{
+			Path:      "/media/fat/_Console/GBA_20260528_ceb4a49_DB9.rbf",
+			Filename:  "GBA_20260528_ceb4a49_DB9.rbf",
+			ShortName: "GBA_20260528_ceb4a49_DB9",
+			MglName:   "_Console/GBA_20260528_ceb4a49_DB9",
+		},
+	})
+
+	got, ok := cache.GetByMglPath("_Console/GBA_<date>_<hash>_DB9")
+	require.True(t, ok)
+	assert.Equal(t, "/media/fat/_Console/GBA_20260528_ceb4a49_DB9.rbf", got.Path)
+}
+
+func TestGetByMglPath_GlobRespectsDirectory(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{
+			Path:      "/media/fat/_Console/GBA_20260528_ceb4a49_DB9.rbf",
+			Filename:  "GBA_20260528_ceb4a49_DB9.rbf",
+			ShortName: "GBA_20260528_ceb4a49_DB9",
+			MglName:   "_Console/GBA_20260528_ceb4a49_DB9",
+		},
+		{
+			Path:      "/media/fat/_LLAPI/GBA_LLAPI_20251205.rbf",
+			Filename:  "GBA_LLAPI_20251205.rbf",
+			ShortName: "GBA_LLAPI",
+			MglName:   "_LLAPI/GBA_LLAPI",
+		},
+	})
+
+	got, ok := cache.GetByMglPath("_Console/GBA_<date>_<hash>_DB9")
+	require.True(t, ok)
+	assert.Equal(t, "_Console/GBA_20260528_ceb4a49_DB9", got.MglName)
+}
+
+func TestGetByMglPath_DB9BasePatternExcludesVariants(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{
+		{
+			Path:      "/media/fat/_Console/GBA_20260528_ceb4a49_DB9.rbf",
+			Filename:  "GBA_20260528_ceb4a49_DB9.rbf",
+			ShortName: "GBA_20260528_ceb4a49_DB9",
+			MglName:   "_Console/GBA_20260528_ceb4a49_DB9",
+		},
+		{
+			Path:      "/media/fat/_Console/GBA_accuracy_20260528_e466e14_DB9.rbf",
+			Filename:  "GBA_accuracy_20260528_e466e14_DB9.rbf",
+			ShortName: "GBA_accuracy_20260528_e466e14_DB9",
+			MglName:   "_Console/GBA_accuracy_20260528_e466e14_DB9",
+		},
+	})
+
+	got, ok := cache.GetByMglPath("_Console/GBA_<date>_<hash>_DB9")
+	require.True(t, ok)
+	assert.Equal(t, "_Console/GBA_20260528_ceb4a49_DB9", got.MglName)
+
+	got, ok = cache.GetByMglPath("_Console/GBA_accuracy_<date>_<hash>_DB9")
+	require.True(t, ok)
+	assert.Equal(t, "_Console/GBA_accuracy_20260528_e466e14_DB9", got.MglName)
+}
+
+func TestGetByMglPath_DB9BasePatternsExcludeKnownVariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		basePattern string
+		base        RBFInfo
+		variant     RBFInfo
+	}{
+		{
+			name:        "PSX excludes DualSDRAM",
+			basePattern: "_Console/PSX_<date>_<hash>_DB9",
+			base: RBFInfo{
+				Path:      "/media/fat/_Console/PSX_20260528_38792bb_DB9.rbf",
+				Filename:  "PSX_20260528_38792bb_DB9.rbf",
+				ShortName: "PSX_20260528_38792bb_DB9",
+				MglName:   "_Console/PSX_20260528_38792bb_DB9",
+			},
+			variant: RBFInfo{
+				Path:      "/media/fat/_Console/PSX_DualSDRAM_20260528_38792bb_DB9.rbf",
+				Filename:  "PSX_DualSDRAM_20260528_38792bb_DB9.rbf",
+				ShortName: "PSX_DualSDRAM_20260528_38792bb_DB9",
+				MglName:   "_Console/PSX_DualSDRAM_20260528_38792bb_DB9",
+			},
+		},
+		{
+			name:        "Saturn excludes DualSDRAM",
+			basePattern: "_Console/Saturn_<date>_<hash>_DB9",
+			base: RBFInfo{
+				Path:      "/media/fat/_Console/Saturn_20260530_d4b8f3d_DB9.rbf",
+				Filename:  "Saturn_20260530_d4b8f3d_DB9.rbf",
+				ShortName: "Saturn_20260530_d4b8f3d_DB9",
+				MglName:   "_Console/Saturn_20260530_d4b8f3d_DB9",
+			},
+			variant: RBFInfo{
+				Path:      "/media/fat/_Console/Saturn_DualSDRAM_20260530_d4b8f3d_DB9.rbf",
+				Filename:  "Saturn_DualSDRAM_20260530_d4b8f3d_DB9.rbf",
+				ShortName: "Saturn_DualSDRAM_20260530_d4b8f3d_DB9",
+				MglName:   "_Console/Saturn_DualSDRAM_20260530_d4b8f3d_DB9",
+			},
+		},
+		{
+			name:        "NeoGeo excludes 24MHz",
+			basePattern: "_Console/NeoGeo_<date>_<hash>_DB9",
+			base: RBFInfo{
+				Path:      "/media/fat/_Console/NeoGeo_20260528_9d7ef5f_DB9.rbf",
+				Filename:  "NeoGeo_20260528_9d7ef5f_DB9.rbf",
+				ShortName: "NeoGeo_20260528_9d7ef5f_DB9",
+				MglName:   "_Console/NeoGeo_20260528_9d7ef5f_DB9",
+			},
+			variant: RBFInfo{
+				Path:      "/media/fat/_Console/NeoGeo_24MHz_cpu_only_20260528_bc199bf_DB9.rbf",
+				Filename:  "NeoGeo_24MHz_cpu_only_20260528_bc199bf_DB9.rbf",
+				ShortName: "NeoGeo_24MHz_cpu_only_20260528_bc199bf_DB9",
+				MglName:   "_Console/NeoGeo_24MHz_cpu_only_20260528_bc199bf_DB9",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cache := &RBFCache{}
+			cache.BuildFromRBFs([]RBFInfo{tc.variant, tc.base})
+
+			got, ok := cache.GetByMglPath(tc.basePattern)
+			require.True(t, ok)
+			assert.Equal(t, tc.base.MglName, got.MglName)
+		})
+	}
+}
+
+func TestGetByMglPath_InvalidGlobReturnsFalse(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{{
+		Path:      "/media/fat/_Console/GBA_20260528_ceb4a49_DB9.rbf",
+		Filename:  "GBA_20260528_ceb4a49_DB9.rbf",
+		ShortName: "GBA_20260528_ceb4a49_DB9",
+		MglName:   "_Console/GBA_20260528_ceb4a49_DB9",
+	}})
+
+	_, ok := cache.GetByMglPath("_Console/GBA_[")
+	assert.False(t, ok)
+}
+
+func TestRBFCache_Resolve_ForkRequiresExplicitLoadPath(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{}
+	cache.BuildFromRBFs([]RBFInfo{{
+		Path:      "/media/fat/_Console/GBA_20260528_ceb4a49_DB9.rbf",
+		Filename:  "GBA_20260528_ceb4a49_DB9.rbf",
+		ShortName: "GBA_20260528_ceb4a49_DB9",
+		MglName:   "_Console/GBA_20260528_ceb4a49_DB9",
+	}})
+
+	_, err := cache.Resolve(nil, &Core{ID: "GBA", RBF: "_Console/GBA"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no original core found for system GBA")
+	assert.Contains(t, err.Error(), "_Console/GBA_20260528_ceb4a49_DB9")
+	assert.Contains(t, err.Error(), "load_path")
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[launchers.default]]
+launcher = "GBA"
+load_path = "_Console/GBA_20260528_ceb4a49_DB9"
+`))
+
+	got, err := cache.Resolve(cfg, &Core{ID: "GBA", RBF: "_Console/GBA"})
+	require.NoError(t, err)
+	assert.Equal(t, "/media/fat/_Console/GBA_20260528_ceb4a49_DB9.rbf", got.Path)
+}
+
 func TestBuildFromRBFs_PrefersCanonicalDir(t *testing.T) {
 	t.Parallel()
 
