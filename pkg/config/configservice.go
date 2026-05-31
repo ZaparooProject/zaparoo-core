@@ -43,6 +43,8 @@ type Service struct {
 	Discovery Discovery `toml:"discovery,omitempty"`
 	DeviceID  string    `toml:"device_id"`
 	APIListen string    `toml:"api_listen,omitempty"`
+	OnBoot    string    `toml:"on_boot,omitempty"`
+	OnReady   string    `toml:"on_ready,omitempty"`
 	// AllowRun is the list of allowed run patterns.
 	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
 	allowRunRe     []*regexp.Regexp
@@ -85,6 +87,18 @@ func (c *Instance) APIPort() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.apiPortLocked()
+}
+
+func (c *Instance) ServiceOnBoot() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Service.OnBoot
+}
+
+func (c *Instance) ServiceOnReady() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Service.OnReady
 }
 
 // apiPortLocked returns the API port. Caller must hold mu.

@@ -73,19 +73,6 @@ func TestLaunchersBeforeMediaStart(t *testing.T) {
 	}
 }
 
-func TestLaunchersStartupHooks(t *testing.T) {
-	t.Parallel()
-
-	cfg := &Instance{}
-	require.NoError(t, cfg.LoadTOML(`[launchers]
-on_service_start = "**input.keyboard:{f2}"
-on_boot_start = "**launch.system:snes"
-`))
-
-	assert.Equal(t, "**input.keyboard:{f2}", cfg.LaunchersOnServiceStart())
-	assert.Equal(t, "**launch.system:snes", cfg.LaunchersOnBootStart())
-}
-
 func TestLoadTOML_ExecuteAllowList(t *testing.T) {
 	t.Parallel()
 

@@ -20,6 +20,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -39,13 +41,15 @@ import (
 
 const serviceStartupStateFile = "service_startup_state.json"
 
+var serviceReadyTimeout = 30 * time.Second
+
 type serviceStartupState struct {
-	BootID string `json:"boot_id"`
+	BootID string `json:"bootId"`
 }
 
 var detectSystemBootID = defaultDetectSystemBootID
 
-func runStartupHook(svc *ServiceContext, hookName string, script string) error {
+func runServiceHook(svc *ServiceContext, hookName, script string, firstBootStart bool) error {
 	log.Info().Msgf("running %s: %s", hookName, script)
 
 	plsc := playlists.PlaylistController{
@@ -58,29 +62,59 @@ func runStartupHook(svc *ServiceContext, hookName string, script string) error {
 		Source:   tokens.SourceHook,
 	}
 	env := zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, nil, nil)
+	env.Hook = gozapscript.ExprEnvHook{
+		Name:           hookName,
+		FirstBootStart: firstBootStart,
+	}
 	return runTokenZapScript(svc, t, plsc, &env, false)
 }
 
-func runConfiguredStartupHooks(svc *ServiceContext) {
-	if script := svc.Config.LaunchersOnServiceStart(); script != "" {
-		if err := runStartupHook(svc, "on_service_start", script); err != nil {
-			log.Error().Err(err).Msg("error running on_service_start script")
+func runConfiguredServiceHooks(svc *ServiceContext) {
+	firstBootStart := false
+	if script := svc.Config.ServiceOnBoot(); script != "" {
+		var err error
+		firstBootStart, err = isFirstServiceStartForBoot(svc.Platform)
+		switch {
+		case err != nil:
+			log.Warn().Err(err).Msg("skipping on_boot: failed to detect boot state")
+		case firstBootStart:
+			if err = runServiceHook(svc, "on_boot", script, firstBootStart); err != nil {
+				log.Error().Err(err).Msg("error running on_boot script")
+			}
+		default:
+			log.Debug().Msg("skipping on_boot: already ran during this boot")
+		}
+	} else {
+		var err error
+		firstBootStart, err = isFirstServiceStartForBoot(svc.Platform)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to detect boot state for on_ready hook context")
 		}
 	}
 
-	if script := svc.Config.LaunchersOnBootStart(); script != "" {
-		firstStart, err := isFirstServiceStartForBoot(svc.Platform)
-		if err != nil {
-			log.Warn().Err(err).Msg("skipping on_boot_start: failed to detect boot state")
+	if script := svc.Config.ServiceOnReady(); script != "" {
+		waitForServiceReady(svc)
+		if err := runServiceHook(svc, "on_ready", script, firstBootStart); err != nil {
+			log.Error().Err(err).Msg("error running on_ready script")
+		}
+	}
+}
+
+func waitForServiceReady(svc *ServiceContext) {
+	readyPlatform, ok := svc.Platform.(platforms.ServiceReadyPlatform)
+	if !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(svc.State.GetContext(), serviceReadyTimeout)
+	defer cancel()
+
+	if err := readyPlatform.WaitForServiceReady(ctx, svc.Config); err != nil {
+		if ctx.Err() != nil {
+			log.Warn().Err(ctx.Err()).Msg("service ready wait timed out; continuing")
 			return
 		}
-		if !firstStart {
-			log.Debug().Msg("skipping on_boot_start: already ran during this boot")
-			return
-		}
-		if err := runStartupHook(svc, "on_boot_start", script); err != nil {
-			log.Error().Err(err).Msg("error running on_boot_start script")
-		}
+		log.Warn().Err(err).Msg("service ready wait failed; continuing")
 	}
 }
 
@@ -102,13 +136,13 @@ func isFirstServiceStartForBoot(pl platforms.Platform) (bool, error) {
 		return false, fmt.Errorf("read startup state: %w", readErr)
 	}
 
-	if err = writeServiceStartupState(statePath, bootID); err != nil {
+	if err := writeServiceStartupState(statePath, bootID); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func writeServiceStartupState(path string, bootID string) error {
+func writeServiceStartupState(path, bootID string) error {
 	data, err := json.Marshal(serviceStartupState{BootID: bootID})
 	if err != nil {
 		return fmt.Errorf("marshal startup state: %w", err)
@@ -124,7 +158,9 @@ func writeServiceStartupState(path string, bootID string) error {
 
 func defaultDetectSystemBootID() (string, error) {
 	if runtime.GOOS == "linux" {
-		data, err := os.ReadFile(filepath.Join(string(filepath.Separator), "proc", "sys", "kernel", "random", "boot_id"))
+		data, err := os.ReadFile(filepath.Join(
+			string(filepath.Separator), "proc", "sys", "kernel", "random", "boot_id",
+		))
 		if err == nil {
 			bootID := strings.TrimSpace(string(data))
 			if bootID != "" {

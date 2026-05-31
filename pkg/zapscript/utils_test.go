@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -310,6 +311,30 @@ func TestCmdDelay(t *testing.T) {
 	require.NoError(t, err, "delay should succeed")
 	assert.Equal(t, platforms.CmdResult{}, result)
 	assert.GreaterOrEqual(t, elapsed, 50*time.Millisecond, "delay should wait at least 50ms")
+}
+
+func TestCmdDelay_MediaReady(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	cmd := zapscript.Command{
+		Name: "delay",
+		Args: []string{"media_ready"},
+	}
+
+	env := platforms.CmdEnv{
+		Cmd: cmd,
+		WaitForMediaReady: func(context.Context) error {
+			called = true
+			return nil
+		},
+	}
+
+	result, err := cmdDelay(nil, env)
+
+	require.NoError(t, err, "media_ready delay should succeed")
+	assert.Equal(t, platforms.CmdResult{}, result)
+	assert.True(t, called)
 }
 
 // TestCmdDelay_InvalidAmount verifies invalid delay amount returns error.

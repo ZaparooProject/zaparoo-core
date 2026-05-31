@@ -129,8 +129,9 @@ func Start(
 		BackgroundWG:        backgroundWG,
 	}
 
-	// Set up the OnMediaStart hook
-	st.SetOnMediaStartHook(func(_ *models.ActiveMedia) {
+	// Set up media readiness and the OnMediaStart hook.
+	st.SetOnMediaStartHook(func(media *models.ActiveMedia, gen uint64) {
+		startMediaReadyProbe(svc, media, gen)
 		if script := cfg.LaunchersOnMediaStart(); script != "" {
 			if hookErr := runHook(svc, "on_media_start", script, nil, nil); hookErr != nil {
 				log.Error().Err(hookErr).Msg("error running on_media_start script")
@@ -339,11 +340,11 @@ func Start(
 	}
 	log.Info().Msg("platform post start completed, service fully initialized")
 
-	if cfg.LaunchersOnServiceStart() != "" || cfg.LaunchersOnBootStart() != "" {
+	if cfg.ServiceOnBoot() != "" || cfg.ServiceOnReady() != "" {
 		backgroundWG.Add(1)
 		go func() {
 			defer backgroundWG.Done()
-			runConfiguredStartupHooks(svc)
+			runConfiguredServiceHooks(svc)
 		}()
 	}
 

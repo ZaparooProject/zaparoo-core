@@ -20,19 +20,66 @@
 package service
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+type readyHookPlatform struct {
+	*mocks.MockPlatform
+	cfg       *config.Instance
+	ready     chan struct{}
+	readySeen chan struct{}
+	pressed   chan string
+	dataDir   string
+}
+
+func newReadyHookPlatform(cfg *config.Instance, dataDir string) *readyHookPlatform {
+	return &readyHookPlatform{
+		MockPlatform: mocks.NewMockPlatform(),
+		cfg:          cfg,
+		dataDir:      dataDir,
+		ready:        make(chan struct{}),
+		readySeen:    make(chan struct{}),
+		pressed:      make(chan string, 4),
+	}
+}
+
+func (*readyHookPlatform) ID() string { return "mock-platform" }
+
+func (p *readyHookPlatform) Settings() platforms.Settings {
+	return platforms.Settings{DataDir: p.dataDir}
+}
+
+func (*readyHookPlatform) LookupMapping(*tokens.Token) (string, bool) { return "", false }
+
+func (p *readyHookPlatform) KeyboardPress(key string) error {
+	p.pressed <- key
+	return nil
+}
+
+func (p *readyHookPlatform) WaitForServiceReady(ctx context.Context, _ *config.Instance) error {
+	close(p.readySeen)
+	select {
+	case <-p.ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 func TestIsFirstServiceStartForBootPersistsBootID(t *testing.T) {
 	oldDetectSystemBootID := detectSystemBootID
@@ -61,47 +108,75 @@ func TestIsFirstServiceStartForBootPersistsBootID(t *testing.T) {
 	assert.True(t, first)
 }
 
-func TestRunConfiguredStartupHooksRunsOnServiceStart(t *testing.T) {
-	cfg, err := testhelpers.NewTestConfig(nil, t.TempDir())
+func TestRunConfiguredServiceHooksRunsOnReadyAfterServiceReady(t *testing.T) {
+	oldDetectSystemBootID := detectSystemBootID
+	defer func() { detectSystemBootID = oldDetectSystemBootID }()
+	detectSystemBootID = func() (string, error) { return "test-boot", nil }
+
+	testRoot := t.TempDir()
+	cfg, err := testhelpers.NewTestConfig(nil, filepath.Join(testRoot, "config"))
 	require.NoError(t, err)
-	require.NoError(t, cfg.LoadTOML(`[launchers]
-on_service_start = "**input.keyboard:{f2}"
+	require.NoError(t, cfg.LoadTOML(`[service]
+on_ready = "**input.keyboard:{f2}"
 `))
 
-	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("ID").Return("mock-platform")
-	mockPlatform.On("LookupMapping", mock.Anything).Return("", false)
-	mockPlatform.On("KeyboardPress", "{f2}").Return(nil).Once()
-
+	platform := newReadyHookPlatform(cfg, filepath.Join(testRoot, "data"))
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil)
-	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	st, _ := state.NewState(platform, "test-boot-uuid")
 	svc := &ServiceContext{
-		Platform:      mockPlatform,
+		Platform:      platform,
 		Config:        cfg,
 		State:         st,
 		DB:            &database.Database{UserDB: mockUserDB},
 		PlaylistQueue: make(chan *playlists.Playlist, 1),
 	}
 
-	runConfiguredStartupHooks(svc)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runConfiguredServiceHooks(svc)
+	}()
 
-	mockPlatform.AssertExpectations(t)
+	select {
+	case <-platform.readySeen:
+	case <-time.After(time.Second):
+		t.Fatal("service ready wait was not reached")
+	}
+
+	select {
+	case key := <-platform.pressed:
+		t.Fatalf("on_ready ran before service ready: %s", key)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(platform.ready)
+
+	select {
+	case key := <-platform.pressed:
+		assert.Equal(t, "{f2}", key)
+	case <-time.After(time.Second):
+		t.Fatal("on_ready did not run after service ready")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("hook runner did not finish")
+	}
 	mockUserDB.AssertExpectations(t)
 }
 
-func TestRunConfiguredStartupHooksRunsOnBootStartOnlyOncePerBoot(t *testing.T) {
+func TestRunConfiguredServiceHooksRunsOnBootOnlyOncePerBoot(t *testing.T) {
 	oldDetectSystemBootID := detectSystemBootID
 	defer func() { detectSystemBootID = oldDetectSystemBootID }()
-	detectSystemBootID = func() (string, error) {
-		return "test-boot", nil
-	}
+	detectSystemBootID = func() (string, error) { return "test-boot", nil }
 
 	testRoot := t.TempDir()
 	cfg, err := testhelpers.NewTestConfig(nil, filepath.Join(testRoot, "config"))
 	require.NoError(t, err)
-	require.NoError(t, cfg.LoadTOML(`[launchers]
-on_boot_start = "**input.keyboard:{f2}"
+	require.NoError(t, cfg.LoadTOML(`[service]
+on_boot = "**input.keyboard:{f2}"
 `))
 
 	mockPlatform := mocks.NewMockPlatform()
@@ -121,8 +196,8 @@ on_boot_start = "**input.keyboard:{f2}"
 		PlaylistQueue: make(chan *playlists.Playlist, 1),
 	}
 
-	runConfiguredStartupHooks(svc)
-	runConfiguredStartupHooks(svc)
+	runConfiguredServiceHooks(svc)
+	runConfiguredServiceHooks(svc)
 
 	mockPlatform.AssertExpectations(t)
 	mockUserDB.AssertExpectations(t)
