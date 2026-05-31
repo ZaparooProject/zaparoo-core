@@ -1,5 +1,12 @@
 //go:build linux || darwin
 
+// daemon_test.go is restricted to linux+darwin because the service
+// management logic in daemon.go relies on POSIX-only constructs (signal
+// handling, process inspection, exec semantics) that have no Windows
+// equivalent. A subset of tests goes further and inspects /proc/<pid>/exe
+// and /proc/<pid>/status for binary identity and zombie detection — those
+// are Linux-only and use the requireLinuxProc helper to skip on darwin.
+
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -45,6 +52,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// requireLinuxProc skips the test on non-Linux platforms. The daemon's PID
+// identity and zombie-state checks parse /proc/<pid>/exe and
+// /proc/<pid>/status, which only exist on Linux. detail describes what
+// specifically depends on /proc and shows up in the skip message.
+func requireLinuxProc(t *testing.T, detail string) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skipf("%s requires Linux /proc", detail)
+	}
+}
+
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	dataDir := t.TempDir()
@@ -86,6 +104,24 @@ func writeFakeServiceScript(t *testing.T, pidFile, eventLog string) string {
 	)
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o600))
 
+	return scriptPath
+}
+
+func writeServiceCacheScript(t *testing.T, svc *Service, script string) string {
+	t.Helper()
+
+	scriptPath := filepath.Join(svc.pl.Settings().DataDir, "zaparoo.0000000000000000.sh")
+	//nolint:gosec // test writes an executable shell script into a temp dir
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700))
+	return scriptPath
+}
+
+func writeFakeServiceScriptWithBody(t *testing.T, script string) string {
+	t.Helper()
+
+	scriptPath := filepath.Join(t.TempDir(), "fake-service.sh")
+	//nolint:gosec // test writes an executable shell script into a temp dir
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700))
 	return scriptPath
 }
 
@@ -564,9 +600,7 @@ func TestStop_WaitsForProcessExitAndRemovesPIDFile(t *testing.T) {
 }
 
 func TestStopRemovesStalePIDFileWithoutKillingUnrelatedProcess(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("service PID identity checks use Linux /proc")
-	}
+	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
@@ -585,9 +619,7 @@ func TestStopRemovesStalePIDFileWithoutKillingUnrelatedProcess(t *testing.T) {
 }
 
 func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("service PID identity checks use Linux /proc")
-	}
+	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
@@ -607,9 +639,7 @@ func TestRunningReturnsFalseForLiveUnrelatedPID(t *testing.T) {
 }
 
 func TestStartFailsForLiveUnrelatedPID(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("service PID identity checks use Linux /proc")
-	}
+	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
@@ -628,9 +658,7 @@ func TestStartFailsForLiveUnrelatedPID(t *testing.T) {
 }
 
 func TestRestartFailsForLiveUnrelatedPID(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("service PID identity checks use Linux /proc")
-	}
+	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
@@ -649,9 +677,7 @@ func TestRestartFailsForLiveUnrelatedPID(t *testing.T) {
 }
 
 func TestWaitForAPIReturnsPIDConflict(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("service PID identity checks use Linux /proc")
-	}
+	requireLinuxProc(t, "service PID identity checks")
 
 	svc := newTestService(t)
 	settings := svc.pl.Settings()
@@ -732,9 +758,7 @@ func TestRunningRemovesStalePIDFile(t *testing.T) {
 }
 
 func TestPIDRunningTreatsZombieAsStopped(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("zombie detection uses Linux /proc status")
-	}
+	requireLinuxProc(t, "zombie detection")
 
 	process := exec.CommandContext(context.Background(), "sh", "-c", "exit 0")
 	require.NoError(t, process.Start())
@@ -793,14 +817,15 @@ func TestStopProcessTerminatesProcessGroup(t *testing.T) {
 	require.NoError(t, process.Start())
 	t.Cleanup(func() { _ = syscall.Kill(-process.Process.Pid, syscall.SIGKILL) })
 
+	var childPID int
 	require.Eventually(t, func() bool {
-		_, err := os.Stat(childPIDPath)
-		return err == nil
+		childPIDBytes, err := os.ReadFile(childPIDPath) //nolint:gosec // test-controlled file
+		if err != nil {
+			return false
+		}
+		childPID, err = strconv.Atoi(string(childPIDBytes))
+		return err == nil && childPID > 0
 	}, time.Second, 10*time.Millisecond)
-	childPIDBytes, err := os.ReadFile(childPIDPath) //nolint:gosec // test-controlled file
-	require.NoError(t, err)
-	childPID, err := strconv.Atoi(string(childPIDBytes))
-	require.NoError(t, err)
 	require.True(t, pidRunning(childPID))
 
 	waiter := newCommandWaiter(process)
@@ -886,4 +911,221 @@ func TestWaitForPIDExit_TimesOutWhileProcessStillRunning(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timeout waiting for process 123 to stop")
+}
+
+func TestStart_ExitsCleanWhenServiceAlreadyRunning(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
+	t.Cleanup(func() {
+		pid, pidErr := svc.Pid()
+		if pidErr == nil && pid > 0 && pidRunning(pid) {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	require.NoError(t, svc.Start())
+	firstPID, err := svc.Pid()
+	require.NoError(t, err)
+	require.Positive(t, firstPID)
+
+	require.NoError(t, svc.Start())
+	secondPID, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Equal(t, firstPID, secondPID, "second Start must not spawn a replacement service")
+
+	content, err := os.ReadFile(eventLog) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	startedLines := 0
+	for _, line := range content {
+		if line == '\n' {
+			startedLines++
+		}
+	}
+	assert.Equal(t, 1, startedLines, "fake service should have been started exactly once")
+}
+
+func TestStart_ConcurrentInvocationsSerializedByGate(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
+	t.Cleanup(func() {
+		pid, pidErr := svc.Pid()
+		if pidErr == nil && pid > 0 && pidRunning(pid) {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	const racers = 4
+	results := make(chan error, racers)
+	for range racers {
+		go func() { results <- svc.Start() }()
+	}
+	for range racers {
+		require.NoError(t, <-results)
+	}
+
+	content, err := os.ReadFile(eventLog) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	startedLines := 0
+	for _, line := range content {
+		if line == '\n' {
+			startedLines++
+		}
+	}
+	assert.Equal(t, 1, startedLines, "exactly one wrapper should have started the service")
+}
+
+func TestStart_StaleNonexistentPIDFileDoesNotBlockStart(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	t.Setenv(config.AppEnv, writeFakeServiceScript(t, pidFile, eventLog))
+	require.NoError(t, os.WriteFile(pidFile, []byte("99999999"), 0o600))
+	t.Cleanup(func() {
+		pid, pidErr := svc.Pid()
+		if pidErr == nil && pid > 0 && pidRunning(pid) {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	require.NoError(t, svc.Start())
+
+	pid, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Positive(t, pid)
+	assert.NotEqual(t, 99999999, pid)
+}
+
+func TestWaitForServicePidFile_ReturnsWhenFileAppears(t *testing.T) {
+	svc := newTestService(t)
+	pidPath := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+	scriptBody := fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$$\" > %q\nwhile :; do sleep 1; done\n", pidPath)
+	scriptPath := writeServiceCacheScript(t, svc, scriptBody)
+
+	//nolint:gosec // test starts a controlled shell script
+	process := exec.CommandContext(context.Background(), scriptPath)
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+
+	require.NoError(t, svc.waitForServicePidFile(process.Process.Pid, time.Second))
+}
+
+func TestWaitForServicePidFile_FailsWhenExpectedProcessNeverWritesPidfile(t *testing.T) {
+	svc := newTestService(t)
+	scriptPath := writeServiceCacheScript(t, svc, "#!/bin/sh\nwhile :; do sleep 1; done\n")
+
+	//nolint:gosec // test starts a controlled shell script
+	process := exec.CommandContext(context.Background(), scriptPath)
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+
+	err := svc.waitForServicePidFile(process.Process.Pid, 40*time.Millisecond)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "service did not write pidfile")
+}
+
+// TestWaitForServicePidFile_TreatsEmptyPidfileAsTransient verifies that an
+// empty pidfile (the window between createPidFile's O_EXCL open and its
+// WriteString) is treated as a transient race: the loop keeps polling
+// rather than failing fast on the resulting strconv parse error.
+func TestWaitForServicePidFile_TreatsEmptyPidfileAsTransient(t *testing.T) {
+	svc := newTestService(t)
+	pidPath := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+	scriptPath := writeServiceCacheScript(t, svc, "#!/bin/sh\nwhile :; do sleep 1; done\n")
+
+	//nolint:gosec // test starts a controlled shell script
+	process := exec.CommandContext(context.Background(), scriptPath)
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+
+	// Simulate a mid-write pidfile (created but not yet populated).
+	require.NoError(t, os.WriteFile(pidPath, []byte{}, 0o600))
+
+	// Schedule the actual write after a brief delay so the loop hits
+	// at least one parse-error iteration before the expected PID lands.
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		_ = os.WriteFile(pidPath, []byte(strconv.Itoa(process.Process.Pid)), 0o600)
+	}()
+
+	require.NoError(t, svc.waitForServicePidFile(process.Process.Pid, time.Second))
+}
+
+func TestWaitForServicePidFile_FailsWhenPidfileDoesNotMatchExpectedProcess(t *testing.T) {
+	svc := newTestService(t)
+	pidPath := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+	scriptPath := writeServiceCacheScript(t, svc, "#!/bin/sh\nwhile :; do sleep 1; done\n")
+
+	//nolint:gosec // test starts a controlled shell script
+	process := exec.CommandContext(context.Background(), scriptPath)
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+	require.NoError(t, os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600))
+
+	err := svc.waitForServicePidFile(process.Process.Pid, time.Second)
+	require.Error(t, err)
+	// A wrong-PID is treated as a transient race (could be a stale pidfile
+	// or a mid-write read) and surfaces as a deadline timeout once the
+	// expected process never writes the pidfile. The transient details
+	// are wrapped into the deadline error for diagnostics.
+	assert.Contains(t, err.Error(), "did not write pidfile")
+	assert.Contains(t, err.Error(), "pidfile contains PID")
+}
+
+func TestWaitForServicePidFile_FailsWhenProcessExits(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	process := exec.CommandContext(context.Background(), "sh", "-c", "exit 0")
+	require.NoError(t, process.Start())
+	pid := process.Process.Pid
+	// Reap the child so the PID is fully released. pidRunning relies on
+	// /proc/<pid>/stat to detect zombies, which doesn't exist on macOS;
+	// without an explicit Wait() the child stays as a zombie there and
+	// kill(pid, 0) keeps reporting "running".
+	require.NoError(t, process.Wait())
+
+	err := svc.waitForServicePidFile(pid, time.Second)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exited before writing pidfile")
+}
+
+func TestStart_FailsWhenServiceWritesPidfileThenExits(t *testing.T) {
+	requireLinuxProc(t, "service PID identity checks")
+
+	svc := newTestService(t)
+	pidFile := filepath.Join(svc.pl.Settings().TempDir, config.PidFile)
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$$\" > %q\nexit 0\n", pidFile)
+	t.Setenv(config.AppEnv, writeFakeServiceScriptWithBody(t, script))
+
+	err := svc.Start()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not become ready")
 }

@@ -87,6 +87,7 @@ func sqlPopulateBrowseCache(ctx context.Context, db *sql.DB) error {
 		Int("media", builder.mediaRows).
 		Int("counts", len(builder.counts)).
 		Msg("browse cache media scan complete")
+	logBrowseMediaCountsBySystem(ctx, tx)
 
 	deleteStarted := time.Now()
 	for _, stmt := range []string{
@@ -127,6 +128,41 @@ func sqlPopulateBrowseCache(ctx context.Context, db *sql.DB) error {
 		Dur("duration", time.Since(started)).
 		Msg("browse cache populated")
 	return nil
+}
+
+func logBrowseMediaCountsBySystem(ctx context.Context, tx *sql.Tx) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT s.SystemID,
+			COUNT(*) AS TotalMedia,
+			SUM(CASE WHEN m.IsMissing = 0 THEN 1 ELSE 0 END) AS CurrentMedia,
+			SUM(CASE WHEN m.IsMissing != 0 THEN 1 ELSE 0 END) AS MissingMedia
+		FROM Media m
+		INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		GROUP BY s.SystemID
+		ORDER BY s.SystemID`)
+	if err != nil {
+		log.Debug().Err(err).Msg("browse media system counts diagnostic failed")
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var systemID string
+		var totalMedia, currentMedia, missingMedia int
+		if scanErr := rows.Scan(&systemID, &totalMedia, &currentMedia, &missingMedia); scanErr != nil {
+			log.Debug().Err(scanErr).Msg("browse media system counts diagnostic scan failed")
+			return
+		}
+		log.Debug().
+			Str("system", systemID).
+			Int("totalMedia", totalMedia).
+			Int("currentMedia", currentMedia).
+			Int("missingMedia", missingMedia).
+			Msg("browse media system count")
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		log.Debug().Err(rowsErr).Msg("browse media system counts diagnostic rows failed")
+	}
 }
 
 func scanBrowseCacheMedia(ctx context.Context, tx *sql.Tx, builder *browseCacheBuilder) error {

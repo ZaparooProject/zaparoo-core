@@ -98,8 +98,8 @@ type GameList struct {
 //	[ARRM]     — ARRM scraper output
 type Game struct {
 	XMLName             xml.Name `xml:"game"`
-	Developer           string   `xml:"developer,omitempty"`
-	Bezel               string   `xml:"bezel,omitempty"`
+	Players             string   `xml:"players,omitempty"`
+	Logo                string   `xml:"logo,omitempty"`
 	Name                string   `xml:"name,omitempty"`
 	SortName            string   `xml:"sortname,omitempty"`
 	Desc                string   `xml:"desc,omitempty"`
@@ -119,14 +119,14 @@ type Game struct {
 	Mix                 string   `xml:"mix,omitempty"`
 	Rating              string   `xml:"rating,omitempty"`
 	ReleaseDate         string   `xml:"releasedate,omitempty"`
-	ScreenScraperIDAttr string   `xml:"id,attr,omitempty"`
+	ArcadeSystemName    string   `xml:"arcadesystemname,omitempty"`
 	Path                string   `xml:"path"`
 	Publisher           string   `xml:"publisher,omitempty"`
 	LastPlayed          string   `xml:"lastplayed,omitempty"`
-	Players             string   `xml:"players,omitempty"`
+	Developer           string   `xml:"developer,omitempty"`
+	Bezel               string   `xml:"bezel,omitempty"`
 	Tags                string   `xml:"tags,omitempty"`
-	Family              string   `xml:"family,omitempty"`
-	ArcadeSystemName    string   `xml:"arcadesystemname,omitempty"`
+	ScreenScraperIDAttr string   `xml:"id,attr,omitempty"`
 	Emulator            string   `xml:"emulator,omitempty"`
 	Core                string   `xml:"core,omitempty"`
 	Lang                string   `xml:"lang,omitempty"`
@@ -137,8 +137,15 @@ type Game struct {
 	MultiDisk           string   `xml:"multidisk,omitempty"`
 	CheevosHash         string   `xml:"cheevosHash,omitempty"`
 	Genres              string   `xml:"genres,omitempty"`
-	ScreenScraperID     int      `xml:"id,omitempty"` //nolint:revive // both "id" attr and "id" element exist in real ES forks
+	SourceAttr          string   `xml:"source,attr,omitempty"` //nolint:revive // attr and el
+	ParentIDAttr        string   `xml:"parentid,attr,omitempty"`
+	Screenshot          string   `xml:"screenshot,omitempty"`
+	TitleScreen         string   `xml:"titlescreen,omitempty"`
+	Boxart2D            string   `xml:"boxart2d,omitempty"`
+	Family              string   `xml:"family,omitempty"`
+	Boxart3D            string   `xml:"boxart3d,omitempty"`
 	PlayCount           int      `xml:"playcount,omitempty"`
+	ScreenScraperID     int      `xml:"id,omitempty"` //nolint:revive // attr and el
 	CheevosID           int      `xml:"cheevosId,omitempty"`
 	GameTime            int      `xml:"gametime,omitempty"`
 	Favorite            bool     `xml:"favorite,omitempty"`

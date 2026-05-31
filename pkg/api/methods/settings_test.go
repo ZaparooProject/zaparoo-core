@@ -866,3 +866,308 @@ func TestHandleSettingsReload_RefreshesLauncherCache(t *testing.T) {
 
 	mockPlatform.AssertExpectations(t)
 }
+
+// TestHandleSettings_SystemDefaults verifies the settings response includes
+// configured system default launcher overrides.
+func TestHandleSettings_SystemDefaults(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{
+		Systems: config.Systems{
+			Default: []config.SystemsDefault{
+				{System: "Genesis", Launcher: "retroarch", BeforeExit: "echo bye"},
+				{System: "SNES", Launcher: "snes9x"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: mockPlatform,
+		Config:   cfg,
+		State:    appState,
+		Params:   []byte(`{}`),
+	}
+
+	result, err := HandleSettings(env)
+	require.NoError(t, err)
+	resp, ok := result.(models.SettingsResponse)
+	require.True(t, ok)
+
+	require.Len(t, resp.SystemDefaults, 2)
+	assert.Equal(t, "Genesis", resp.SystemDefaults[0].System)
+	assert.Equal(t, "retroarch", resp.SystemDefaults[0].Launcher)
+	assert.Equal(t, "echo bye", resp.SystemDefaults[0].BeforeExit)
+	assert.Equal(t, "SNES", resp.SystemDefaults[1].System)
+	assert.Equal(t, "snes9x", resp.SystemDefaults[1].Launcher)
+	assert.Empty(t, resp.SystemDefaults[1].BeforeExit)
+}
+
+// TestHandleSettingsUpdate_SystemDefaults verifies an update replaces the
+// configured system defaults when the launcher reference is known.
+func TestHandleSettingsUpdate_SystemDefaults(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "retroarch", SystemID: "Genesis", Groups: []string{"libretro"}},
+		{ID: "snes9x", SystemID: "SNES"},
+	})
+
+	params := models.UpdateSettingsParams{
+		SystemDefaults: &[]models.SystemDefault{
+			{System: "Genesis", Launcher: "retroarch", BeforeExit: "echo bye"},
+			{System: "SNES", Launcher: "snes9x"},
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		Platform:      mockPlatform,
+		Config:        cfg,
+		State:         appState,
+		LauncherCache: cache,
+		Params:        paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	got := cfg.SystemDefaults()
+	require.Len(t, got, 2)
+	assert.Equal(t, "Genesis", got[0].System)
+	assert.Equal(t, "retroarch", got[0].Launcher)
+	assert.Equal(t, "echo bye", got[0].BeforeExit)
+	assert.Equal(t, "SNES", got[1].System)
+	assert.Equal(t, "snes9x", got[1].Launcher)
+}
+
+// TestHandleSettingsUpdate_SystemDefaults_AcceptsGroup verifies a launcher
+// group name is accepted as a launcher reference, mirroring config lookup.
+func TestHandleSettingsUpdate_SystemDefaults_AcceptsGroup(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "kodi-snes", SystemID: "SNES", Groups: []string{"Kodi", "KodiTV"}},
+	})
+
+	params := models.UpdateSettingsParams{
+		SystemDefaults: &[]models.SystemDefault{
+			{System: "SNES", Launcher: "kodi"}, // matches group, case-insensitive
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		Platform:      mockPlatform,
+		Config:        cfg,
+		State:         appState,
+		LauncherCache: cache,
+		Params:        paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	got := cfg.SystemDefaults()
+	require.Len(t, got, 1)
+	assert.Equal(t, "kodi", got[0].Launcher)
+}
+
+// TestHandleSettingsUpdate_SystemDefaults_RejectsUnknownLauncher verifies the
+// handler rejects a payload referencing a launcher that doesn't exist.
+func TestHandleSettingsUpdate_SystemDefaults_RejectsUnknownLauncher(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{
+		Systems: config.Systems{
+			Default: []config.SystemsDefault{
+				{System: "Genesis", Launcher: "retroarch"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "retroarch", SystemID: "Genesis"},
+	})
+
+	params := models.UpdateSettingsParams{
+		SystemDefaults: &[]models.SystemDefault{
+			{System: "SNES", Launcher: "doesnotexist"},
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		Platform:      mockPlatform,
+		Config:        cfg,
+		State:         appState,
+		LauncherCache: cache,
+		Params:        paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "doesnotexist")
+
+	// Pre-existing config should not have been replaced.
+	got := cfg.SystemDefaults()
+	require.Len(t, got, 1)
+	assert.Equal(t, "Genesis", got[0].System)
+	assert.Equal(t, "retroarch", got[0].Launcher)
+	assert.Empty(t, got[0].BeforeExit)
+}
+
+// TestHandleSettingsUpdate_SystemDefaults_RejectsUnknownSystem verifies the
+// validate:"required,system" tag rejects payloads with an unknown system.
+func TestHandleSettingsUpdate_SystemDefaults_RejectsUnknownSystem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{
+		Systems: config.Systems{
+			Default: []config.SystemsDefault{
+				{System: "Genesis", Launcher: "retroarch"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "retroarch", SystemID: "Genesis"},
+	})
+
+	tests := []struct {
+		name   string
+		system string
+	}{
+		{name: "empty system rejected by required", system: ""},
+		{name: "unknown system rejected by system validator", system: "NotARealSystem"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			params := models.UpdateSettingsParams{
+				SystemDefaults: &[]models.SystemDefault{
+					{System: tt.system, Launcher: "retroarch"},
+				},
+			}
+			paramsJSON, err := json.Marshal(params)
+			require.NoError(t, err)
+
+			env := requests.RequestEnv{
+				Context:       context.Background(),
+				Platform:      mockPlatform,
+				Config:        cfg,
+				State:         appState,
+				LauncherCache: cache,
+				Params:        paramsJSON,
+			}
+
+			_, err = HandleSettingsUpdate(env)
+			require.Error(t, err)
+
+			// Pre-existing config should not have been replaced.
+			got := cfg.SystemDefaults()
+			require.Len(t, got, 1)
+			assert.Equal(t, "Genesis", got[0].System)
+		})
+	}
+}
+
+// TestHandleSettingsUpdate_SystemDefaults_AllowsEmptyLauncher verifies an
+// entry with no launcher (only before_exit) is accepted.
+func TestHandleSettingsUpdate_SystemDefaults_AllowsEmptyLauncher(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+
+	appState, ns := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(func() { drainCh(ns) })
+
+	cache := &corehelpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{})
+
+	params := models.UpdateSettingsParams{
+		SystemDefaults: &[]models.SystemDefault{
+			{System: "Genesis", BeforeExit: "echo bye"},
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		Platform:      mockPlatform,
+		Config:        cfg,
+		State:         appState,
+		LauncherCache: cache,
+		Params:        paramsJSON,
+	}
+
+	_, err = HandleSettingsUpdate(env)
+	require.NoError(t, err)
+
+	got := cfg.SystemDefaults()
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0].Launcher)
+	assert.Equal(t, "echo bye", got[0].BeforeExit)
+}

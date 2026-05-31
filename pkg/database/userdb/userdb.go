@@ -42,9 +42,10 @@ const sqliteConnParams = "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=500
 	"&_cache_size=-512&_mmap_size=0"
 
 type UserDB struct {
-	sql *sql.DB
-	pl  platforms.Platform
-	ctx context.Context
+	sql    *sql.DB
+	pl     platforms.Platform
+	ctx    context.Context
+	dbPath string
 }
 
 func OpenUserDB(ctx context.Context, pl platforms.Platform) (*UserDB, error) {
@@ -56,6 +57,7 @@ func OpenUserDB(ctx context.Context, pl platforms.Platform) (*UserDB, error) {
 func (db *UserDB) Open() error {
 	exists := true
 	dbPath := db.GetDBPath()
+	db.dbPath = dbPath
 	log.Debug().Str("path", dbPath).Msg("checking if database file exists")
 
 	_, err := os.Stat(dbPath)
@@ -105,14 +107,20 @@ func (db *UserDB) Allocate() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlAllocate(db.sql)
+	return sqlAllocate(db.sql, db.dbPathForSidecar())
 }
 
 func (db *UserDB) MigrateUp() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlMigrateUp(db.sql)
+	return sqlMigrateUp(db.sql, db.dbPathForSidecar())
+}
+
+// dbPathForSidecar returns the on-disk DB path for sidecar lookup, or ""
+// when no path is available (test instances that bypass Open).
+func (db *UserDB) dbPathForSidecar() string {
+	return db.dbPath
 }
 
 func (db *UserDB) Vacuum() error {

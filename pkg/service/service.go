@@ -22,9 +22,11 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package service
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -37,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
@@ -160,6 +163,10 @@ func Start(
 
 	discoveryService := discovery.New(cfg)
 
+	// Set up the idle scheduler before API startup so the in-flight
+	// counter is wired through the very first request.
+	idleSched := idle.New()
+
 	log.Info().Msg("starting API service")
 	apiReady := make(chan error, 1)
 	apiDone := make(chan error, 1)
@@ -167,7 +174,7 @@ func Start(
 		apiDone <- api.StartWithReady(
 			pl, cfg, st, itq, cfq, db, limitsManager,
 			notifBroker, discoveryService.InstanceName(), player, indexPauser, scrapePauser,
-			apiReady,
+			idleSched, apiReady,
 		)
 	}()
 
@@ -190,26 +197,70 @@ func Start(
 		log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
 	}
 
-	backgroundWG.Add(1)
-	go func() {
-		defer backgroundWG.Done()
-		runStartupMaintenance(st.GetContext(), cfg, db)
-	}()
+	// Load persisted slug + tag caches before launching background work so
+	// the launcher's first media.browse hits a warm cache. Both fall
+	// through to (false, nil) on a missing/stale/version-mismatched file;
+	// the rebuild path below covers that case.
+	var tagCacheLoaded, slugCacheLoaded bool
+	if db.MediaDB != nil {
+		loaded, loadErr := db.MediaDB.LoadCachedTagCache()
+		if loadErr != nil {
+			log.Warn().Err(loadErr).Msg("failed to load cached tag cache from disk")
+		}
+		tagCacheLoaded = loaded
+		loaded, loadErr = db.MediaDB.LoadCachedSlugSearchCache()
+		if loadErr != nil {
+			log.Warn().Err(loadErr).Msg("failed to load cached slug search cache from disk")
+		}
+		slugCacheLoaded = loaded
+	}
 
 	backgroundWG.Add(1)
 	go func() {
 		defer backgroundWG.Done()
-		zapscript.PreWarmZapLinkHostsContext(st.GetContext(), db, helpers.WaitForInternetContext)
+		if db == nil {
+			log.Warn().Msg("skipping startup maintenance: database is nil")
+			return
+		}
+		runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)
 	}()
-	backgroundWG.Add(1)
-	go func() {
-		defer backgroundWG.Done()
-		updater.CheckAndNotify(
-			st.GetContext(), cfg, pl.ID(), st.Inbox(),
-			helpers.WaitForInternetContext, updater.Check,
-			pl.ManagedByPackageManager(),
-		)
-	}()
+
+	// Defer non-critical "run eventually" work to the idle scheduler so it
+	// doesn't compete with the launcher's first request for the single
+	// ARM core, the SQLite file lock, or the network. Each of these has a
+	// 300 s hard cap so they still run on a saturated system.
+	idleSched.Schedule(
+		st.GetContext(), "zaplink-prewarm",
+		5*time.Second, 300*time.Second,
+		func(ctx context.Context) {
+			zapscript.PreWarmZapLinkHostsContext(ctx, db, helpers.WaitForInternetContext)
+		},
+	)
+	idleSched.Schedule(
+		st.GetContext(), "updater-check",
+		5*time.Second, 300*time.Second,
+		func(ctx context.Context) {
+			updater.CheckAndNotify(
+				ctx, cfg, pl.ID(), st.Inbox(),
+				helpers.WaitForInternetContext, updater.Check,
+				pl.ManagedByPackageManager(),
+			)
+		},
+	)
+	idleSched.Schedule(
+		st.GetContext(), "history-retention-cleanup",
+		5*time.Second, 300*time.Second,
+		func(ctx context.Context) {
+			cleanupHistoryRetention(ctx, cfg, db)
+		},
+	)
+	idleSched.Schedule(
+		st.GetContext(), "zaplink-host-prune",
+		5*time.Second, 300*time.Second,
+		func(_ context.Context) {
+			pruneExpiredZapLinkHosts(db)
+		},
+	)
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, st.Notifications, indexPauser)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, st.Notifications, scrapePauser)
 
@@ -227,13 +278,22 @@ func Start(
 		checkAndResumeOptimization(db, st.Notifications, indexPauser)
 	}()
 
-	// Build slug search cache after API is listening to avoid blocking startup
-	if db.MediaDB != nil {
+	// Build the slug search cache after the API is listening so it doesn't
+	// block startup. If LoadCachedSlugSearchCache already populated it from
+	// disk we skip the SQL rebuild — that's the whole point of persisting.
+	if db.MediaDB != nil && !slugCacheLoaded {
 		db.MediaDB.TrackBackgroundOperation()
 		go func() {
 			defer db.MediaDB.BackgroundOperationDone()
 			if cacheErr := db.MediaDB.RebuildSlugSearchCache(); cacheErr != nil {
 				log.Warn().Err(cacheErr).Msg("failed to build slug search cache")
+				return
+			}
+			// Best-effort persist so the next cold boot can skip the
+			// rebuild. A write failure leaves the running cache intact.
+			if persistErr := db.MediaDB.PersistSlugSearchCache(); persistErr != nil {
+				log.Warn().Err(persistErr).
+					Msg("failed to persist slug search cache after startup rebuild")
 			}
 		}()
 	}
@@ -320,6 +380,10 @@ func Start(
 		<-processTokenQueueDone
 		<-readerManagerDone
 		backgroundWG.Wait()
+		// Wait for idle-scheduled tasks (history retention, zaplink prune,
+		// etc.) before closing the database so an in-flight task can't
+		// race with closeDatabase.
+		idleSched.Wait()
 		close(plq)
 		close(lsq)
 		close(itq)
@@ -331,7 +395,7 @@ func Start(
 	}()
 
 	log.Info().Msg("running platform post start")
-	err = pl.StartPost(cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia, db)
+	err = pl.StartPost(st.GetContext(), cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia, db, idleSched)
 	if err != nil {
 		log.Error().Err(err).Msg("platform post start error")
 		st.StopService()

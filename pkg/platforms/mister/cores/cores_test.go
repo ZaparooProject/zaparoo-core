@@ -22,8 +22,54 @@
 package cores
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestHookAmiga_WritesBootFileToActiveInstall(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	stalePath := filepath.Join(root, "Amiga")
+	validPath := filepath.Join(root, "games", "Amiga")
+	writeAmigaVisionTestInstall(t, stalePath, "Stale Game", false)
+	writeAmigaVisionTestInstall(t, validPath, "Valid Game", true)
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root, filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = hookAmiga(cfg, nil, filepath.Join(stalePath, "listings", "games.txt", "Valid Game"))
+	require.NoError(t, err)
+
+	bootFile, err := os.ReadFile(filepath.Join(validPath, "shared", "ags_boot")) //nolint:gosec // Test temp path
+	require.NoError(t, err)
+	assert.Equal(t, "Valid Game\n", string(bootFile))
+	assert.NoFileExists(t, filepath.Join(stalePath, "shared", "ags_boot"))
+}
+
+func writeAmigaVisionTestInstall(t *testing.T, path, game string, withImage bool) {
+	t.Helper()
+
+	err := os.MkdirAll(filepath.Join(path, "listings"), 0o700)
+	require.NoError(t, err)
+	err = os.MkdirAll(filepath.Join(path, "shared"), 0o700)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(path, "listings", "games.txt"), []byte(game+"\n"), 0o600)
+	require.NoError(t, err)
+	if withImage {
+		err = os.WriteFile(filepath.Join(path, "AmigaVision.hdf"), []byte("test"), 0o600)
+		require.NoError(t, err)
+	}
+}
 
 func TestPathToMGLDef(t *testing.T) {
 	t.Parallel()
@@ -65,6 +111,16 @@ func TestPathToMGLDef(t *testing.T) {
 			systemID: "Nintendo64",
 			path:     "goldeneye.z64",
 			wantMgl:  Systems["Nintendo64"].Slots[0].Mgl,
+		},
+		{
+			name:     "3DO CHD disk slot",
+			systemID: "3DO",
+			path:     "Need for Speed.chd",
+			wantMgl: &MGLParams{
+				Delay:  1,
+				Method: "s",
+				Index:  0,
+			},
 		},
 		{
 			name:     "Nil MGL allowed (Arcade .mra)",

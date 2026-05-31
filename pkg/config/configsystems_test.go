@@ -22,7 +22,9 @@ package config
 import (
 	"testing"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLookupSystemDefaultsFuzzyMatching(t *testing.T) {
@@ -184,4 +186,83 @@ func TestLookupSystemDefaultsReturnsCorrectFields(t *testing.T) {
 	assert.Equal(t, "SMS", result.System) // Original config value preserved
 	assert.Equal(t, "retroarch", result.Launcher)
 	assert.Equal(t, "echo 'goodbye'", result.BeforeExit)
+}
+
+func TestSetSystemDefaultsReplacesAllEntries(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Systems: Systems{
+				Default: []SystemsDefault{
+					{System: "Genesis", Launcher: "retroarch"},
+				},
+			},
+		},
+	}
+
+	cfg.SetSystemDefaults([]SystemsDefault{
+		{System: "SNES", Launcher: "snes9x", BeforeExit: "echo bye"},
+		{System: "N64", Launcher: "mupen64plus"},
+	})
+
+	got := cfg.SystemDefaults()
+	assert.Len(t, got, 2)
+	assert.Equal(t, "SNES", got[0].System)
+	assert.Equal(t, "snes9x", got[0].Launcher)
+	assert.Equal(t, "echo bye", got[0].BeforeExit)
+	assert.Equal(t, "N64", got[1].System)
+	assert.Equal(t, "mupen64plus", got[1].Launcher)
+}
+
+func TestSetSystemDefaultsClearsList(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Systems: Systems{
+				Default: []SystemsDefault{
+					{System: "Genesis", Launcher: "retroarch"},
+				},
+			},
+		},
+	}
+
+	cfg.SetSystemDefaults([]SystemsDefault{})
+	assert.Empty(t, cfg.SystemDefaults())
+}
+
+func TestSystemDefaults_SaveLoadRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	memFs := afero.NewMemMapFs()
+	cfg, err := NewConfigWithFs("/config", BaseDefaults, memFs)
+	require.NoError(t, err)
+
+	cfg.SetSystemDefaults([]SystemsDefault{
+		{System: "Genesis", Launcher: "retroarch"},
+		{System: "SNES", Launcher: "snes9x", BeforeExit: "echo bye"},
+		{System: "N64"},
+	})
+
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	got := cfg.SystemDefaults()
+	require.Len(t, got, 3)
+
+	assert.Equal(t, "Genesis", got[0].System)
+	assert.Equal(t, "retroarch", got[0].Launcher)
+	assert.Empty(t, got[0].BeforeExit)
+
+	assert.Equal(t, "SNES", got[1].System)
+	assert.Equal(t, "snes9x", got[1].Launcher)
+	assert.Equal(t, "echo bye", got[1].BeforeExit)
+
+	assert.Equal(t, "N64", got[2].System)
+	assert.Empty(t, got[2].Launcher)
+	assert.Empty(t, got[2].BeforeExit)
 }

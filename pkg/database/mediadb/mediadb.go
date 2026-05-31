@@ -264,7 +264,7 @@ func (db *MediaDB) Open() error {
 	}
 
 	log.Debug().Msg("opening media database connection")
-	sqlInstance, err := sql.Open("sqlite3", dbPath+getSqliteConnParams())
+	sqlInstance, err := sql.Open(sqliteDriverName(), dbPath+getSqliteConnParams())
 	if err != nil {
 		return fmt.Errorf("failed to open media database: %w", err)
 	}
@@ -494,6 +494,8 @@ func (db *MediaDB) UpdateLastGenerated() error {
 }
 
 func (db *MediaDB) GetLastGenerated() (time.Time, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return time.Time{}, ErrNullSQL
 	}
@@ -501,6 +503,8 @@ func (db *MediaDB) GetLastGenerated() (time.Time, error) {
 }
 
 func (db *MediaDB) SetOptimizationStatus(status string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -508,6 +512,8 @@ func (db *MediaDB) SetOptimizationStatus(status string) error {
 }
 
 func (db *MediaDB) GetOptimizationStatus() (string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return "", ErrNullSQL
 	}
@@ -515,6 +521,8 @@ func (db *MediaDB) GetOptimizationStatus() (string, error) {
 }
 
 func (db *MediaDB) SetOptimizationStep(step string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -522,6 +530,8 @@ func (db *MediaDB) SetOptimizationStep(step string) error {
 }
 
 func (db *MediaDB) GetOptimizationStep() (string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return "", ErrNullSQL
 	}
@@ -529,6 +539,8 @@ func (db *MediaDB) GetOptimizationStep() (string, error) {
 }
 
 func (db *MediaDB) SetIndexingStatus(status string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -545,6 +557,8 @@ func (db *MediaDB) GetIndexingStatus() (string, error) {
 }
 
 func (db *MediaDB) SetLastIndexedSystem(systemID string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -552,13 +566,43 @@ func (db *MediaDB) SetLastIndexedSystem(systemID string) error {
 }
 
 func (db *MediaDB) GetLastIndexedSystem() (string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return "", ErrNullSQL
 	}
 	return sqlGetLastIndexedSystem(db.ctx, db.sql)
 }
 
+// IndexGeneration returns the monotonic counter that's bumped on every
+// successful indexing run. Returns 0 if no indexing has completed yet.
+func (db *MediaDB) IndexGeneration() (int64, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+	if db.sql == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlGetIndexGeneration(db.ctx, db.sql)
+}
+
+// BumpIndexGeneration increments the index generation counter and returns
+// the new value. Not transactional with cache file writes or status flips:
+// crash recovery relies on (a) a generation mismatch causing persisted
+// cache files from a previous run to be rejected at load time, and (b)
+// IndexingStatus remaining "in_progress" until SetIndexingStatus is called,
+// so an interrupted run is resumed (and re-bumped) on the next boot.
+func (db *MediaDB) BumpIndexGeneration() (int64, error) {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlBumpIndexGeneration(db.ctx, db.conn())
+}
+
 func (db *MediaDB) SetIndexingSystems(systemIDs []string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -566,6 +610,8 @@ func (db *MediaDB) SetIndexingSystems(systemIDs []string) error {
 }
 
 func (db *MediaDB) GetIndexingSystems() ([]string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
@@ -619,14 +665,14 @@ func (db *MediaDB) Allocate() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlAllocate(db.sql)
+	return sqlAllocate(db.sql, db.dbPath)
 }
 
 func (db *MediaDB) MigrateUp() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlMigrateUp(db.sql)
+	return sqlMigrateUp(db.sql, db.dbPath)
 }
 
 func (db *MediaDB) Vacuum() error {
@@ -712,6 +758,8 @@ func (db *MediaDB) Close() error {
 	// Wait for all background operations (optimization, etc.) to complete
 	// before closing the database connection
 	db.WaitForBackgroundOperations()
+
+	logSQLTraceSummary()
 
 	err := db.sql.Close()
 	if err != nil {
@@ -1272,6 +1320,19 @@ func (db *MediaDB) BrowseRouteCounts(
 		return nil, ErrNullSQL
 	}
 	return sqlBrowseRouteCounts(ctx, db.conn(), opts)
+}
+
+// BrowseSystemRootCandidates returns, in two batched queries, the immediate
+// child subdirs of each root that hold media for the requested systems
+// plus a per-root has-any-subtree-media flag. Used by the system-roots
+// browse handler to avoid a per-root query fan-out.
+func (db *MediaDB) BrowseSystemRootCandidates(
+	ctx context.Context, opts database.BrowseSystemRootCandidatesOptions,
+) (database.BrowseSystemRootCandidates, bool, error) {
+	if db.sql == nil {
+		return database.BrowseSystemRootCandidates{}, false, ErrNullSQL
+	}
+	return sqlBrowseSystemRootCandidates(ctx, db.conn(), opts)
 }
 
 // PopulateBrowseCache rebuilds the BrowseCache table from the current Media data.
@@ -2070,7 +2131,9 @@ func (db *MediaDB) InsertMediaTitle(row *database.MediaTitle) (database.MediaTit
 	// Use batch inserter if available
 	if db.batchInsertMediaTitle != nil {
 		err = db.batchInsertMediaTitle.Add(
-			row.DBID, row.SystemDBID, row.Slug, row.Name, row.SlugLength, row.SlugWordCount, row.SecondarySlug)
+			row.DBID, row.SystemDBID, row.Slug, row.Name, row.SlugLength,
+			row.SlugWordCount, row.SecondarySlug,
+		)
 		if err != nil {
 			return *row, fmt.Errorf("failed to add media title to batch: %w", err)
 		}
@@ -2150,6 +2213,11 @@ func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
+	if db.batchInsertMediaTitle != nil {
+		if err := db.batchInsertMediaTitle.Flush(); err != nil {
+			return fmt.Errorf("failed to flush media title batch before update: %w", err)
+		}
+	}
 
 	err := sqlUpdateMediaTitle(db.ctx, db.conn(), mediaDBID, mediaTitleDBID)
 	if err == nil && !db.inTransaction {
@@ -2162,6 +2230,46 @@ func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
 	}
 
 	return err
+}
+
+func (db *MediaDB) UpdateMediaParentDir(mediaDBID int64, parentDir string) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	err := sqlUpdateMediaParentDir(db.ctx, db.conn(), mediaDBID, parentDir)
+	if err == nil && !db.inTransaction {
+		if invalidateErr := db.invalidateBrowseCacheForMediaChange(); invalidateErr != nil {
+			return invalidateErr
+		}
+	} else if err == nil {
+		db.markBrowseCacheDirty()
+	}
+
+	return err
+}
+
+func (db *MediaDB) TemporaryRepairJobsPending(ctx context.Context) (bool, error) {
+	if db.sql == nil {
+		return false, ErrNullSQL
+	}
+	current, err := sqlTemporaryParentDirRepairVersionCurrent(ctx, db.sql)
+	if err != nil {
+		return false, err
+	}
+	if current {
+		return false, nil
+	}
+
+	pending, err := sqlEmptyMediaParentDirsExist(ctx, db.sql)
+	if err != nil || pending {
+		return pending, err
+	}
+
+	if err := sqlMarkTemporaryParentDirRepairComplete(ctx, db.sql); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func (db *MediaDB) DeleteMediaTags(mediaDBID int64) error {
@@ -2524,13 +2632,20 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 	// indexing completes. Background optimization improves query performance
 	// after the database is already open for searches.
 	//
-	// Step order matters: ANALYZE runs first to update query-planner statistics,
-	// improving plan quality for early searches. The page-prefetch warms the OS
-	// buffer cache for the tables the search path joins. BrowseCache and WAL
-	// checkpoint follow as non-critical housekeeping.
+	// Step order matters: temporary repair jobs run before cache rebuilds so
+	// upgraded databases are corrected without blocking startup. ANALYZE then
+	// updates query-planner statistics, the page-prefetch warms the OS buffer
+	// cache for the tables the search path joins, and BrowseCache/WAL checkpoint
+	// follow as non-critical housekeeping.
 	db.needsIndexRebuild.Store(false)
 
 	steps = append(steps,
+		optimizationStep{
+			name: "temporary_repair_parent_dirs", fn: func() error {
+				return db.runTemporaryParentDirRepair(db.ctx, pauser)
+			},
+			maxRetries: 0, retryDelay: rd,
+		},
 		optimizationStep{
 			name: "analyze", fn: db.Analyze,
 			maxRetries: 2, retryDelay: rd,

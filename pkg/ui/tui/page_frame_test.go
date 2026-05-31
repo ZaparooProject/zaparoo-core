@@ -126,6 +126,24 @@ func TestPageFrame_FocusButtonBar(t *testing.T) {
 	frame.FocusButtonBar()
 }
 
+func TestPageFrame_FocusDelegatesToButtonBar(t *testing.T) {
+	t.Parallel()
+
+	app := tview.NewApplication()
+	frame := NewPageFrame(app)
+	buttonBar := NewButtonBar(app)
+	buttonBar.AddButton("Test", func() {})
+	frame.SetButtonBar(buttonBar)
+
+	var focused tview.Primitive
+	frame.Focus(func(p tview.Primitive) {
+		focused = p
+	})
+
+	assert.Same(t, buttonBar, focused)
+	assert.NotSame(t, buttonBar.GetFirstButton(), focused)
+}
+
 func TestPageFrame_Chaining(t *testing.T) {
 	t.Parallel()
 

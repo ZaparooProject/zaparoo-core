@@ -88,6 +88,7 @@ const (
 	MethodClientsPairStart     = "clients.pair.start"
 	MethodClientsPairCancel    = "clients.pair.cancel"
 	MethodSystems              = "systems"
+	MethodLaunchers            = "launchers"
 	MethodLaunchersRefresh     = "launchers.refresh"
 	MethodHistory              = "tokens.history"
 	MethodMappings             = "mappings"
@@ -109,6 +110,7 @@ const (
 	MethodInputKeyboard        = "input.keyboard"
 	MethodInputGamepad         = "input.gamepad"
 	MethodScreenshot           = "screenshot"
+	MethodMediaTitleParse      = "media.title.parse"
 )
 
 // ResponseWithCallback wraps a method result with a function that should be

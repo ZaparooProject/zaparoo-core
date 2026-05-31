@@ -22,6 +22,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -166,6 +167,14 @@ type TagType struct {
 	IsExclusive bool
 }
 
+// MaxMediaPropertyBinaryBytes caps decoded binary property payloads hydrated
+// into memory. Larger blobs remain addressable via BlobDBID/BlobSize but Binary
+// is left nil so API handlers can return a controlled error instead of OOMing.
+const MaxMediaPropertyBinaryBytes = 16 * 1024 * 1024
+
+// ErrMediaBlobTooLarge indicates a blob exists but exceeds a caller-provided read cap.
+var ErrMediaBlobTooLarge = errors.New("media blob too large")
+
 // MediaProperty is a static content property attached to a MediaTitle or Media
 // record. Properties are fetched for display, not filtered by value.
 //
@@ -174,8 +183,8 @@ type TagType struct {
 // To associate binary data with a property, call UpsertMediaBlob first to obtain
 // a BlobDBID, then set that field before upserting the property.
 // For reads: TypeTag is populated from the joined Tags row; TypeTagDBID is also
-// set. ContentType and Binary are hydrated from the MediaBlobs JOIN and are
-// read-only — do not set them for writes.
+// set. ContentType, BlobSize, and Binary are hydrated from the MediaBlobs JOIN
+// and are read-only — do not set them for writes.
 type MediaProperty struct {
 	BlobDBID    *int64
 	TypeTag     string
@@ -183,6 +192,7 @@ type MediaProperty struct {
 	ContentType string
 	Binary      []byte
 	TypeTagDBID int64
+	BlobSize    int64
 }
 
 // MediaBlob is a row from the MediaBlobs content-addressed store.
@@ -304,6 +314,24 @@ type BrowseRouteCount struct {
 	FileCount int
 }
 
+// BrowseSystemRootCandidatesOptions parameterises the batched lookup used
+// to build `media.browse({systems:[...], path:""})` candidates in two
+// queries against the BrowseDirCounts cache.
+type BrowseSystemRootCandidatesOptions struct {
+	Roots   []string
+	Systems []systemdefs.System
+}
+
+// BrowseSystemRootCandidates is the cache-backed result of resolving a list of
+// filesystem roots against system-scoped browse data. Children holds the
+// immediate subdirectory names of each root that contain media for the
+// requested systems; HasMedia is true when a root has any media in its
+// subtree (even purely via descendants).
+type BrowseSystemRootCandidates struct {
+	Children map[string][]string
+	HasMedia map[string]bool
+}
+
 type SearchResultWithCursor struct {
 	SystemID      string
 	Name          string
@@ -358,6 +386,7 @@ type TitleWithSystem struct {
 // MediaWithFullPath represents a Media item with its associated title and system information
 type MediaWithFullPath struct {
 	Path           string
+	ParentDir      string
 	TitleSlug      string
 	SystemID       string
 	DBID           int64
@@ -373,6 +402,20 @@ type ScrapeWrite struct {
 	TitleTags  []TagInfo
 	TitleProps []MediaProperty
 	MediaProps []MediaProperty
+}
+
+// ScrapeWriteTarget pairs a scraper write payload with the existing Media and
+// MediaTitle rows it should enrich.
+type ScrapeWriteTarget struct {
+	Write          *ScrapeWrite
+	MediaDBID      int64
+	MediaTitleDBID int64
+}
+
+// ScrapeResultBatchApplier optionally batches scrape writes for DB
+// implementations that can keep multiple targets in one transaction.
+type ScrapeResultBatchApplier interface {
+	ApplyScrapeResults(ctx context.Context, targets []ScrapeWriteTarget) error
 }
 
 type FileInfo struct {
@@ -404,6 +447,7 @@ type ScanState struct {
 	TitleIDs        map[string]int
 	MediaIDs        map[string]int
 	MediaTitleIDs   map[int]int // Existing media DBID -> MediaTitleDBID for persistent reconciliation
+	MediaParentDirs map[int]string
 	MediaTagIDs     map[int]map[int]struct{}
 	TagTypeIDs      map[string]int
 	TagIDs          map[string]int
@@ -497,6 +541,21 @@ type MediaDBI interface {
 	RebuildSlugSearchCache() error
 	RebuildTagCache() error
 
+	// On-disk persistence for the rebuilt caches. Persist* writes the
+	// current in-memory cache atomically; LoadCached* reads it back at
+	// startup and returns (false, nil) on missing/stale/version-mismatch
+	// so the caller can fall through to a SQL rebuild.
+	PersistTagCache() error
+	LoadCachedTagCache() (bool, error)
+	PersistSlugSearchCache() error
+	LoadCachedSlugSearchCache() (bool, error)
+
+	// IndexGeneration is bumped at the end of every successful indexing
+	// run. Persisted cache files embed the value they were built against
+	// so a stale cache from a previous run is rejected on next load.
+	IndexGeneration() (int64, error)
+	BumpIndexGeneration() (int64, error)
+
 	// Slug resolution cache methods
 	GetCachedSlugResolution(
 		ctx context.Context, systemID, slug string, tagFilters []zapscript.TagFilter,
@@ -554,6 +613,9 @@ type MediaDBI interface {
 	BrowseVirtualSchemes(ctx context.Context, opts BrowseVirtualSchemesOptions) ([]BrowseVirtualScheme, error)
 	BrowseRootCounts(ctx context.Context, rootDirs []string) (map[string]*int, error)
 	BrowseRouteCounts(ctx context.Context, opts BrowseRouteCountsOptions) (map[string]BrowseRouteCount, error)
+	BrowseSystemRootCandidates(
+		ctx context.Context, opts BrowseSystemRootCandidatesOptions,
+	) (result BrowseSystemRootCandidates, cacheReady bool, err error)
 	PopulateBrowseCache(ctx context.Context) error
 
 	IndexedSystems() ([]string, error)
@@ -577,8 +639,10 @@ type MediaDBI interface {
 	InsertMedia(row Media) (Media, error)
 	FindOrInsertMedia(row Media) (Media, error)
 	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error
+	UpdateMediaParentDir(mediaDBID int64, parentDir string) error
 	DeleteMediaTags(mediaDBID int64) error
 	DeleteMediaTag(mediaDBID, tagDBID int64) error
+	TemporaryRepairJobsPending(ctx context.Context) (bool, error)
 
 	FindTagType(row TagType) (TagType, error)
 	InsertTagType(row TagType) (TagType, error)
@@ -642,6 +706,9 @@ type MediaDBI interface {
 	// or nil, nil when no row is found.
 	FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*Media, error)
 	FindMediaBySystemAndPaths(ctx context.Context, systemDBID int64, paths []string) (map[string]Media, error)
+	// FindSingleDescendantMedia returns the only non-missing Media row below dirPath
+	// for systemDBID, or nil, nil when dirPath has zero or multiple descendants.
+	FindSingleDescendantMedia(ctx context.Context, systemDBID int64, dirPath string) (*Media, error)
 
 	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and
 	// path using a case-insensitive path comparison, or nil, nil when no row is
@@ -649,6 +716,11 @@ type MediaDBI interface {
 	// what the indexer recorded (e.g. Windows filesystem with mixed-case system
 	// directory names).
 	FindMediaBySystemAndPathFold(ctx context.Context, systemDBID int64, path string) (*Media, error)
+
+	// FindMediaBySystemAndPathSuffix returns all Media rows for the given system
+	// whose Path ends with "/" + filename. Used when companion XML child paths are
+	// root-relative (./file.rom) and the indexed path may be in any subdirectory.
+	FindMediaBySystemAndPathSuffix(ctx context.Context, systemDBID int64, filename string) ([]Media, error)
 
 	// MediaHasTag returns true when the Media row has a tag whose full string
 	// (type:value) equals tagValue.
@@ -687,17 +759,29 @@ type MediaDBI interface {
 	// or nil, nil when no row is found.
 	FindMediaTitleByDBID(ctx context.Context, dbid int64) (*MediaTitle, error)
 
+	// FindMediaTitleBySystemAndSlug returns the MediaTitle matching systemDBID and
+	// slug, or nil, nil when no row is found.
+	FindMediaTitleBySystemAndSlug(ctx context.Context, systemDBID int64, slug string) (*MediaTitle, error)
+
 	// GetMediaTitleProperties returns all properties for a MediaTitle row,
-	// with TypeTagDBID resolved to the tag value string.
+	// with TypeTagDBID resolved to the tag value string. Binary blobs are capped
+	// at MaxMediaPropertyBinaryBytes; larger blobs populate BlobSize but not Binary.
 	GetMediaTitleProperties(ctx context.Context, mediaTitleDBID int64) ([]MediaProperty, error)
 	GetMediaTitlePropertiesByMediaTitleDBIDs(
 		ctx context.Context, mediaTitleDBIDs []int64,
 	) (map[int64][]MediaProperty, error)
+	GetMediaTitlePropertyMetadata(ctx context.Context, mediaTitleDBID int64) ([]MediaProperty, error)
+	GetMediaTitlePropertyMetadataByMediaTitleDBIDs(
+		ctx context.Context, mediaTitleDBIDs []int64,
+	) (map[int64][]MediaProperty, error)
 
 	// GetMediaProperties returns all properties for a Media row,
-	// with TypeTagDBID resolved to the tag value string.
+	// with TypeTagDBID resolved to the tag value string. Binary blobs are capped
+	// at MaxMediaPropertyBinaryBytes; larger blobs populate BlobSize but not Binary.
 	GetMediaProperties(ctx context.Context, mediaDBID int64) ([]MediaProperty, error)
 	GetMediaPropertiesByMediaDBIDs(ctx context.Context, mediaDBIDs []int64) (map[int64][]MediaProperty, error)
+	GetMediaPropertyMetadata(ctx context.Context, mediaDBID int64) ([]MediaProperty, error)
+	GetMediaPropertyMetadataByMediaDBIDs(ctx context.Context, mediaDBIDs []int64) (map[int64][]MediaProperty, error)
 
 	// DeleteMediaTitleProperty removes a single property row from MediaTitleProperties
 	// identified by (mediaTitleDBID, typeTagDBID). A no-op if the row does not exist.
@@ -732,6 +816,7 @@ type MediaDBI interface {
 	// GetMediaBlob returns the MediaBlob row for the given DBID,
 	// or nil, nil when not found.
 	GetMediaBlob(ctx context.Context, blobDBID int64) (*MediaBlob, error)
+	GetMediaBlobDataCapped(ctx context.Context, blobDBID int64, maxBytes int64) ([]byte, string, error)
 
 	// PruneOrphanedBlobs deletes MediaBlobs rows that are not referenced by
 	// any MediaTitleProperties or MediaProperties row. Returns the count of

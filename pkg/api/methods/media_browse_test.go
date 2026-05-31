@@ -113,6 +113,14 @@ func browseVirtualSchemesSystemOpts(t *testing.T, systemID string) any {
 	})
 }
 
+// mockSystemRootCandidatesNotReady wires BrowseSystemRootCandidates to
+// report cacheReady=false so callers fall back to the per-root
+// BrowseFileCount / BrowseDirectories fan-out that these tests assert on.
+func mockSystemRootCandidatesNotReady(mockMediaDB *helpers.MockMediaDBI) {
+	mockMediaDB.On("BrowseSystemRootCandidates", mock.Anything, mock.Anything).
+		Return(database.BrowseSystemRootCandidates{}, false, nil)
+}
+
 func browseTestAbsPath(parts ...string) string {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -137,7 +145,7 @@ func TestHandleMediaBrowse_RootLevel(t *testing.T) {
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("BrowseRootCounts", mock.Anything, mock.Anything).
-		Return(map[string]*int{"/roms": intPtr(500)}, nil)
+		Return(map[string]*int{romsRoot: intPtr(500)}, nil)
 	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, database.BrowseVirtualSchemesOptions{}).
 		Return([]database.BrowseVirtualScheme{
 			{Scheme: "steam://", FileCount: 42},
@@ -154,7 +162,7 @@ func TestHandleMediaBrowse_RootLevel(t *testing.T) {
 	// Filesystem root
 	assert.Equal(t, "root", browseResults.Entries[0].Type)
 	assert.Equal(t, "roms", browseResults.Entries[0].Name)
-	assert.Equal(t, "/roms", browseResults.Entries[0].Path)
+	assert.Equal(t, romsRoot, browseResults.Entries[0].Path)
 	require.NotNil(t, browseResults.Entries[0].FileCount)
 	assert.Equal(t, 500, *browseResults.Entries[0].FileCount)
 
@@ -189,6 +197,7 @@ func TestHandleMediaBrowse_SystemRootRoutes(t *testing.T) {
 		})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
+	mockSystemRootCandidatesNotReady(mockMediaDB)
 	romsPrefix := filepath.ToSlash(romsRoot) + "/"
 	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "SNES")).
 		Return(0, nil)
@@ -240,6 +249,7 @@ func TestHandleMediaBrowse_SystemRootRoutesIncludesIndexedDirectories(t *testing
 		Return([]platforms.Launcher{})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
+	mockSystemRootCandidatesNotReady(mockMediaDB)
 	romsPrefix := filepath.ToSlash(romsRoot) + "/"
 	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "SNES")).
 		Return(0, nil)
@@ -288,6 +298,7 @@ func TestHandleMediaBrowse_SystemRootRoutesDedupesCoveredParent(t *testing.T) {
 		})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
+	mockSystemRootCandidatesNotReady(mockMediaDB)
 	romsPrefix := filepath.ToSlash(romsRoot) + "/"
 	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "NES")).
 		Return(10, nil)
@@ -333,6 +344,7 @@ func TestHandleMediaBrowse_SystemRootRoutesIncludesRootMedia(t *testing.T) {
 		Return([]platforms.Launcher{})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
+	mockSystemRootCandidatesNotReady(mockMediaDB)
 	romsPrefix := filepath.ToSlash(romsRoot) + "/"
 	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountSystemOpts(romsPrefix, "SNES")).
 		Return(1, nil)
@@ -367,10 +379,139 @@ func TestHandleMediaBrowse_SystemRootRoutesIncludesRootMedia(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestHandleMediaBrowse_SystemRootRoutesUsesCachedCandidates(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	romsAPIPath := filepath.ToSlash(romsRoot)
+	snesPath := filepath.Join(romsRoot, "SNES")
+	snesAPIPath := filepath.ToSlash(snesPath)
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{romsRoot})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseSystemRootCandidates", mock.Anything,
+		mock.MatchedBy(func(opts database.BrowseSystemRootCandidatesOptions) bool {
+			return len(opts.Systems) == 1 && opts.Systems[0].ID == "SNES" &&
+				assert.ElementsMatch(t, []string{romsRoot}, opts.Roots)
+		}),
+	).Return(database.BrowseSystemRootCandidates{
+		HasMedia: map[string]bool{romsRoot: true},
+		Children: map[string][]string{romsRoot: {"SNES"}},
+	}, true, nil)
+	mockMediaDB.On("BrowseVirtualSchemes", mock.Anything, browseVirtualSchemesSystemOpts(t, "SNES")).
+		Return([]database.BrowseVirtualScheme{}, nil)
+	mockMediaDB.On("BrowseRouteCounts", mock.Anything,
+		mock.MatchedBy(func(opts database.BrowseRouteCountsOptions) bool {
+			return len(opts.Systems) == 1 && opts.Systems[0].ID == "SNES" &&
+				assert.ElementsMatch(t, []string{romsAPIPath, snesAPIPath}, opts.Routes)
+		}),
+	).Return(map[string]database.BrowseRouteCount{
+		snesAPIPath: {Path: snesAPIPath, FileCount: 12, SystemIDs: []string{"SNES"}},
+	}, nil)
+
+	systems := []string{"SNES"}
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{Systems: &systems})
+	result, err := HandleMediaBrowse(env)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	assert.Equal(t, snesAPIPath, browseResults.Entries[0].Path)
+
+	// BrowseFileCount and BrowseDirectories must NOT be called when the
+	// candidates cache is ready — that's the whole point of the shortcut.
+	mockMediaDB.AssertNotCalled(t, "BrowseFileCount", mock.Anything, mock.Anything)
+	mockMediaDB.AssertNotCalled(t, "BrowseDirectories", mock.Anything, mock.Anything)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestAnnotateSingletonDirectoryEntry_WhenZipsAsDirsEnabled(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+	entry := models.BrowseEntry{
+		Name:      "Game.zip",
+		Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip")),
+		Type:      "directory",
+		FileCount: intPtr(1),
+		SystemIDs: []string{"NES"},
+	}
+	row := &database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip", "Game.nes")),
+			ParentDir: filepath.ToSlash(filepath.Join("roms", "Game.zip")) + "/",
+		},
+		Title:  database.MediaTitle{DBID: 30, Name: "Game"},
+		System: database.System{DBID: 1, SystemID: "NES"},
+	}
+
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(row.System, nil).Once()
+	mockMediaDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, entry.Path).
+		Return(&row.Media, nil).Once()
+	mockMediaDB.On("GetMediaWithTitleAndSystem", mock.Anything, row.DBID).Return(row, nil).Once()
+	mockMediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, row.DBID).
+		Return([]database.TagInfo{{Type: "favorite", Tag: "true"}}, nil).Once()
+	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "NES", row.Path).
+		Return([]database.TagInfo{}, nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	annotateSingletonDirectoryEntry(env, &entry, entry.Path, entry.SystemIDs, nil)
+
+	assert.Equal(t, row.DBID, entry.MediaID)
+	require.NotNil(t, entry.SystemID)
+	assert.Equal(t, "NES", *entry.SystemID)
+	require.NotNil(t, entry.ZapScript)
+	assert.NotEmpty(t, *entry.ZapScript)
+	assert.Equal(t, []database.TagInfo{{Type: "favorite", Tag: "true"}}, entry.Tags)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestAnnotateSingletonDirectoryEntry_WhenZipsAsDirsDisabledSkipsLookup(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: false}).Once()
+	entry := models.BrowseEntry{
+		Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip")),
+		Type:      "directory",
+		FileCount: intPtr(1),
+		SystemIDs: []string{"NES"},
+	}
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	annotateSingletonDirectoryEntry(env, &entry, entry.Path, entry.SystemIDs, nil)
+
+	assert.Zero(t, entry.MediaID)
+	assert.Nil(t, entry.ZapScript)
+	mockMediaDB.AssertNotCalled(t, "FindSystemBySystemID", mock.Anything)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestDedupeSystemRootEntries(t *testing.T) {
 	t.Parallel()
 
 	count := func(v int) *int { return &v }
+	path := func(parts ...string) string {
+		return filepath.Join(append([]string{string(filepath.Separator)}, parts...)...)
+	}
 
 	tests := []struct {
 		name    string
@@ -380,44 +521,72 @@ func TestDedupeSystemRootEntries(t *testing.T) {
 		{
 			name: "single child absorbs parent",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games", FileCount: count(10)},
-				{Path: "/media/fat/games/NES", FileCount: count(10)},
+				{Path: path("media", "fat", "games"), FileCount: count(10)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
 			},
-			want: []string{"/media/fat/games/NES"},
+			want: []string{path("media", "fat", "games", "NES")},
 		},
 		{
-			name: "parent keeps union across children",
+			name: "children absorb parent with aggregate count",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games", FileCount: count(15)},
-				{Path: "/media/fat/games/NES", FileCount: count(10)},
-				{Path: "/media/fat/games/NES Hacks", FileCount: count(5)},
+				{Path: path("media", "fat", "games"), FileCount: count(15)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
+				{Path: path("media", "fat", "games", "NES Hacks"), FileCount: count(5)},
 			},
-			want: []string{"/media/fat/games", "/media/fat/games/NES", "/media/fat/games/NES Hacks"},
+			want: []string{path("media", "fat", "games", "NES"), path("media", "fat", "games", "NES Hacks")},
+		},
+		{
+			name: "parent retained when descendants do not cover count",
+			entries: []models.BrowseEntry{
+				{Path: path("media", "fat", "games"), FileCount: count(20)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
+				{Path: path("media", "fat", "games", "NES Hacks"), FileCount: count(5)},
+			},
+			want: []string{
+				path("media", "fat", "games"),
+				path("media", "fat", "games", "NES"),
+				path("media", "fat", "games", "NES Hacks"),
+			},
+		},
+		{
+			name: "unknown descendant count retains parent",
+			entries: []models.BrowseEntry{
+				{Path: path("media", "fat", "games"), FileCount: count(20)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: nil},
+			},
+			want: []string{
+				path("media", "fat", "games"),
+				path("media", "fat", "games", "NES"),
+			},
 		},
 		{
 			name: "sibling equal counts are unrelated",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games/NES", FileCount: count(10)},
-				{Path: "/media/fat/alt/NES", FileCount: count(10)},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
+				{Path: path("media", "fat", "alt", "NES"), FileCount: count(10)},
 			},
-			want: []string{"/media/fat/games/NES", "/media/fat/alt/NES"},
+			want: []string{path("media", "fat", "games", "NES"), path("media", "fat", "alt", "NES")},
 		},
 		{
 			name: "nil counts are not deduped",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games", FileCount: nil},
-				{Path: "/media/fat/games/NES", FileCount: count(10)},
-				{Path: "/media/fat/games/SNES", FileCount: nil},
+				{Path: path("media", "fat", "games"), FileCount: nil},
+				{Path: path("media", "fat", "games", "NES"), FileCount: count(10)},
+				{Path: path("media", "fat", "games", "SNES"), FileCount: nil},
 			},
-			want: []string{"/media/fat/games", "/media/fat/games/NES", "/media/fat/games/SNES"},
+			want: []string{
+				path("media", "fat", "games"),
+				path("media", "fat", "games", "NES"),
+				path("media", "fat", "games", "SNES"),
+			},
 		},
 		{
 			name: "string prefix is not ancestry",
 			entries: []models.BrowseEntry{
-				{Path: "/media/fat/games", FileCount: count(10)},
-				{Path: "/media/fat/games-extra", FileCount: count(10)},
+				{Path: path("media", "fat", "games"), FileCount: count(10)},
+				{Path: path("media", "fat", "games-extra"), FileCount: count(10)},
 			},
-			want: []string{"/media/fat/games", "/media/fat/games-extra"},
+			want: []string{path("media", "fat", "games"), path("media", "fat", "games-extra")},
 		},
 		{
 			name: "virtual schemes are ignored",
@@ -456,7 +625,8 @@ func TestHandleMediaBrowse_FilesystemDirectory(t *testing.T) {
 		Return([]platforms.Launcher{})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts("/roms/")).
+	romsAPIPath := filepath.ToSlash(romsRoot)
+	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesOpts(romsAPIPath+"/")).
 		Return([]database.BrowseDirectoryResult{
 			{Name: "NES", FileCount: 100},
 			{Name: "SNES", FileCount: 200},
@@ -464,10 +634,10 @@ func TestHandleMediaBrowse_FilesystemDirectory(t *testing.T) {
 	mockMediaDB.On("BrowseFiles", mock.Anything, mock.Anything).
 		Return([]database.SearchResultWithCursor{}, nil)
 	// BrowseFileCount is skipped when BrowseFiles returns empty and no cursor
-	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts("/roms/", nil)).
+	mockMediaDB.On("BrowseFileCount", mock.Anything, browseFileCountOpts(romsAPIPath+"/", nil)).
 		Return(0, nil).Maybe()
 
-	path := "/roms"
+	path := romsAPIPath
 	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
 		Path: &path,
 	})
@@ -477,12 +647,12 @@ func TestHandleMediaBrowse_FilesystemDirectory(t *testing.T) {
 
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)
-	assert.Equal(t, "/roms", browseResults.Path)
+	assert.Equal(t, romsAPIPath, browseResults.Path)
 	require.Len(t, browseResults.Entries, 2)
 
 	assert.Equal(t, "directory", browseResults.Entries[0].Type)
 	assert.Equal(t, "NES", browseResults.Entries[0].Name)
-	assert.Equal(t, "/roms/NES", browseResults.Entries[0].Path)
+	assert.Equal(t, romsAPIPath+"/NES", browseResults.Entries[0].Path)
 	require.NotNil(t, browseResults.Entries[0].FileCount)
 	assert.Equal(t, 100, *browseResults.Entries[0].FileCount)
 

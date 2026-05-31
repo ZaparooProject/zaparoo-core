@@ -20,6 +20,7 @@
 package readers
 
 import (
+	"context"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -47,6 +48,15 @@ type Scan struct {
 	Token       *tokens.Token
 	Source      string
 	ReaderError bool // True when Token is nil due to reader error/disconnect vs normal token removal
+}
+
+type WriteOptions struct {
+	TargetUID  string
+	ExcludeUID string
+}
+
+type TargetWriter interface {
+	WriteTarget(context.Context, string, WriteOptions) (*tokens.Token, error)
 }
 
 // OpenOpts provides options for opening a reader connection.

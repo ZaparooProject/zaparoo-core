@@ -80,6 +80,7 @@ type SettingsResponse struct {
 	ReadersScanMode           string             `json:"readersScanMode"`
 	ReadersScanIgnoreSystem   []string           `json:"readersScanIgnoreSystems"`
 	ReadersConnect            []ReaderConnection `json:"readersConnect"`
+	SystemDefaults            []SystemDefault    `json:"systemDefaults"`
 	ReadersScanExitDelay      float32            `json:"readersScanExitDelay"`
 	LaunchGuardTimeout        float32            `json:"launchGuardTimeout"`
 	LaunchGuardDelay          float32            `json:"launchGuardDelay"`
@@ -226,12 +227,12 @@ type MediaHistoryTopResponse struct {
 }
 
 // MediaMetaPropertyItem represents a single property value in a media.meta response.
-// Data is nil when the property is text-only; otherwise it contains the base64-encoded binary.
+// Binary payloads are intentionally not included; use media.image to fetch image bytes.
 type MediaMetaPropertyItem struct {
-	Data        *string `json:"data,omitempty"`
 	Extension   *string `json:"extension,omitempty"`
 	Text        string  `json:"text"`
 	ContentType string  `json:"contentType"`
+	BlobSize    int64   `json:"blobSize,omitempty"`
 }
 
 // MediaMetaSystemResponse is the System sub-object within a media.meta response.
@@ -244,24 +245,26 @@ type MediaMetaSystemResponse struct {
 // MediaMetaTitleResponse is the MediaTitle sub-object within a media.meta response,
 // with its own level-separated tags and properties.
 type MediaMetaTitleResponse struct {
-	SecondarySlug *string                          `json:"secondarySlug,omitempty"`
-	Properties    map[string]MediaMetaPropertyItem `json:"properties"`
-	System        MediaMetaSystemResponse          `json:"system"`
-	Slug          string                           `json:"slug"`
-	Name          string                           `json:"name"`
-	Tags          []database.TagInfo               `json:"tags"`
-	SlugLength    int                              `json:"slugLength"`
-	SlugWordCount int                              `json:"slugWordCount"`
+	SecondarySlug       *string                          `json:"secondarySlug,omitempty"`
+	Properties          map[string]MediaMetaPropertyItem `json:"properties"`
+	System              MediaMetaSystemResponse          `json:"system"`
+	Slug                string                           `json:"slug"`
+	Name                string                           `json:"name"`
+	Tags                []database.TagInfo               `json:"tags"`
+	AvailableImageTypes []string                         `json:"availableImageTypes,omitempty"`
+	SlugLength          int                              `json:"slugLength"`
+	SlugWordCount       int                              `json:"slugWordCount"`
 }
 
 // MediaMetaMediaResponse is the top-level Media object in a media.meta response.
 type MediaMetaMediaResponse struct {
-	Properties map[string]MediaMetaPropertyItem `json:"properties"`
-	Path       string                           `json:"path"`
-	ParentDir  string                           `json:"parentDir"`
-	Tags       []database.TagInfo               `json:"tags"`
-	Title      MediaMetaTitleResponse           `json:"title"`
-	IsMissing  bool                             `json:"isMissing"`
+	Properties          map[string]MediaMetaPropertyItem `json:"properties"`
+	Path                string                           `json:"path"`
+	ParentDir           string                           `json:"parentDir"`
+	Tags                []database.TagInfo               `json:"tags"`
+	AvailableImageTypes []string                         `json:"availableImageTypes,omitempty"`
+	Title               MediaMetaTitleResponse           `json:"title"`
+	IsMissing           bool                             `json:"isMissing"`
 }
 
 // MediaMetaResponse is the response envelope for the media.meta method.
@@ -287,28 +290,34 @@ type MediaImageResponse struct {
 	TypeTag     string  `json:"typeTag"` // e.g. "property:image-boxart"
 }
 
-type MediaImageBatchItemResponse struct {
-	Image *MediaImageResponse `json:"image,omitempty"`
-	Error *string             `json:"error,omitempty"`
-}
-
-type MediaImageBatchResponse struct {
-	Items []MediaImageBatchItemResponse `json:"items"`
+type ScrapeSystemProgressResponse struct {
+	SystemID   string `json:"systemId"`
+	SystemName string `json:"systemName,omitempty"`
+	Processed  int    `json:"processed"`
+	Total      int    `json:"total"`
+	Matched    int    `json:"matched"`
+	Skipped    int    `json:"skipped"`
 }
 
 // ScrapingStatusResponse is broadcast as a "media.scraping" notification for
 // each ScrapeUpdate received from the scraper and on completion/cancellation.
 type ScrapingStatusResponse struct {
-	ScraperID    string `json:"scraperId,omitempty"`
-	SystemID     string `json:"systemId,omitempty"`
-	Processed    int    `json:"processed"`
-	Total        int    `json:"total"`
-	Matched      int    `json:"matched"`
-	Skipped      int    `json:"skipped"`
-	TotalScraped int    `json:"totalScraped"`
-	Scraping     bool   `json:"scraping"`
-	Done         bool   `json:"done"`
-	Paused       bool   `json:"paused"`
+	CurrentStep        *int                          `json:"currentStep,omitempty"`
+	CurrentStepDisplay *string                       `json:"currentStepDisplay,omitempty"`
+	TotalSteps         *int                          `json:"totalSteps,omitempty"`
+	CurrentSystem      *ScrapeSystemProgressResponse `json:"currentSystem,omitempty"`
+	ScraperID          string                        `json:"scraperId,omitempty"`
+	SystemID           string                        `json:"systemId,omitempty"`
+	State              string                        `json:"state,omitempty"`
+	Error              string                        `json:"error,omitempty"`
+	Processed          int                           `json:"processed"`
+	Total              int                           `json:"total"`
+	Matched            int                           `json:"matched"`
+	Skipped            int                           `json:"skipped"`
+	TotalScraped       int                           `json:"totalScraped"`
+	Scraping           bool                          `json:"scraping"`
+	Done               bool                          `json:"done"`
+	Paused             bool                          `json:"paused"`
 }
 
 type MediaLookupMatch struct {
@@ -449,6 +458,25 @@ type LogDownloadResponse struct {
 	Filename string `json:"filename"`
 	Content  string `json:"content"`
 	Size     int    `json:"size"`
+}
+
+type MediaTitleParseResponse struct {
+	SecondarySlug *string `json:"secondarySlug,omitempty"`
+	Slug          string  `json:"slug"`
+	Name          string  `json:"name"`
+	SlugLength    int     `json:"slugLength"`
+	SlugWordCount int     `json:"slugWordCount"`
+}
+
+type Launcher struct {
+	ID         string   `json:"id"`
+	SystemID   string   `json:"systemId,omitempty"`
+	SystemName string   `json:"systemName,omitempty"`
+	Groups     []string `json:"groups,omitempty"`
+}
+
+type LaunchersResponse struct {
+	Launchers []Launcher `json:"launchers"`
 }
 
 type ReaderInfo struct {

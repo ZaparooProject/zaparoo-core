@@ -33,7 +33,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -765,31 +764,41 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 	}
 }
 
+func makeScrapeEnvWithPlatform(t *testing.T, scrapers map[string]platforms.Scraper) requests.RequestEnv {
+	t.Helper()
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", mock.Anything).Return(scrapers)
+	return requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: pl,
+	}
+}
+
 func TestHandleScrapers(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name     string
-		scrapers map[string]scraper.Scraper
+		scrapers map[string]platforms.Scraper
 		wantIDs  []string
 	}{
 		{
 			name:     "empty scraper map returns empty list",
-			scrapers: map[string]scraper.Scraper{},
+			scrapers: map[string]platforms.Scraper{},
 			wantIDs:  []string{},
 		},
 		{
 			name: "single scraper returned",
-			scrapers: map[string]scraper.Scraper{
-				"gamelist.xml": &closedChannelScraper{id: "gamelist.xml", name: "ES gamelist.xml"},
+			scrapers: map[string]platforms.Scraper{
+				"gamelist.xml": emptyPlatformScraper("gamelist.xml", "ES gamelist.xml"),
 			},
 			wantIDs: []string{"gamelist.xml"},
 		},
 		{
 			name: "multiple scrapers all returned",
-			scrapers: map[string]scraper.Scraper{
-				"gamelist.xml":  &closedChannelScraper{id: "gamelist.xml", name: "ES gamelist.xml"},
-				"screenscraper": &closedChannelScraper{id: "screenscraper", name: "ScreenScraper"},
+			scrapers: map[string]platforms.Scraper{
+				"gamelist.xml":  emptyPlatformScraper("gamelist.xml", "ES gamelist.xml"),
+				"screenscraper": emptyPlatformScraper("screenscraper", "ScreenScraper"),
 			},
 			wantIDs: []string{"gamelist.xml", "screenscraper"},
 		},
@@ -799,10 +808,7 @@ func TestHandleScrapers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			env := requests.RequestEnv{
-				Context:  context.Background(),
-				Scrapers: tt.scrapers,
-			}
+			env := makeScrapeEnvWithPlatform(t, tt.scrapers)
 
 			result, err := HandleScrapers(env)
 			require.NoError(t, err)
@@ -824,12 +830,9 @@ func TestHandleScrapers(t *testing.T) {
 func TestHandleScrapers_IDAndNameMatch(t *testing.T) {
 	t.Parallel()
 
-	env := requests.RequestEnv{
-		Context: context.Background(),
-		Scrapers: map[string]scraper.Scraper{
-			"gamelist.xml": &closedChannelScraper{id: "gamelist.xml", name: "ES gamelist.xml"},
-		},
-	}
+	env := makeScrapeEnvWithPlatform(t, map[string]platforms.Scraper{
+		"gamelist.xml": emptyPlatformScraper("gamelist.xml", "ES gamelist.xml"),
+	})
 
 	result, err := HandleScrapers(env)
 	require.NoError(t, err)

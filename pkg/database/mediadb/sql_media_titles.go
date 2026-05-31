@@ -146,7 +146,8 @@ func sqlInsertMediaTitleWithPreparedStmt(
 	}
 
 	res, err := stmt.ExecContext(
-		ctx, dbID, row.SystemDBID, row.Slug, row.Name, row.SlugLength, row.SlugWordCount, row.SecondarySlug,
+		ctx, dbID, row.SystemDBID, row.Slug, row.Name, row.SlugLength,
+		row.SlugWordCount, row.SecondarySlug,
 	)
 	if err != nil {
 		return *row, fmt.Errorf("failed to execute prepared insert media title statement: %w", err)
@@ -178,7 +179,8 @@ func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row *database.MediaTit
 	}()
 
 	res, err := stmt.ExecContext(
-		ctx, dbID, row.SystemDBID, row.Slug, row.Name, row.SlugLength, row.SlugWordCount, row.SecondarySlug,
+		ctx, dbID, row.SystemDBID, row.Slug, row.Name, row.SlugLength, row.SlugWordCount,
+		row.SecondarySlug,
 	)
 	if err != nil {
 		return *row, fmt.Errorf("failed to execute insert media title statement: %w", err)

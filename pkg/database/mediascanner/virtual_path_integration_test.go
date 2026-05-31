@@ -241,6 +241,7 @@ func TestVirtualPath_EndToEndFlow(t *testing.T) {
 				scanState,
 				tc.systemID,
 				virtualPath,
+				"",    // name
 				false, // noExt
 				false, // stripLeadingNumbers
 				nil,   // cfg
@@ -393,6 +394,7 @@ func TestVirtualPath_MalformedGracefulHandling(t *testing.T) {
 				scanState,
 				tc.systemID,
 				tc.virtualPath,
+				"",
 				false,
 				false,
 				nil,
@@ -489,6 +491,7 @@ func TestVirtualPath_HTTPURLHandling(t *testing.T) {
 				scanState,
 				tc.systemID,
 				tc.url,
+				"",
 				false,
 				false,
 				nil,

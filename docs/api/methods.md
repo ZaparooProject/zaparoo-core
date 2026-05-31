@@ -559,7 +559,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 
 | Key          | Type     | Required | Description                                                                                      |
 | :----------- | :------- | :------- | :----------------------------------------------------------------------------------------------- |
-| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries for efficient follow-up `media.meta` and `media.image` requests. |
+| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries, and on zip-as-directory platform `directory` entries that contain exactly one indexed media descendant, for efficient follow-up `media.meta` and `media.image` requests. |
 | name         | string   | Yes      | Display name of the entry.                                                                       |
 | path         | string   | Yes      | Full path to the entry.                                                                          |
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
@@ -567,9 +567,9 @@ All parameters are optional. When called with no parameters, returns root entrie
 | group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
 | systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
 | systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |
-| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries.                              |
-| relativePath | string   | No       | Relative path from root directory. Present on `media` entries.                                   |
-| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries. |
+| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and singleton media-container `directory` entries on zip-as-directory platforms. |
+| relativePath | string   | No       | Relative path from root directory. Present on `media` entries and singleton media-container `directory` entries on zip-as-directory platforms. |
+| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and singleton media-container `directory` entries on zip-as-directory platforms. |
 
 ##### Browse pagination object
 
@@ -1352,8 +1352,9 @@ Single requests return the existing single `media` response shape. Batch request
 | text        | string | Yes      | Text value or source path for the property.                            |
 | contentType | string | Yes      | MIME type for binary-backed properties, empty for text-only values.    |
 | extension   | string | No       | File extension without a dot, derived from MIME type or source path.   |
-| data        | string | No       | Base64-encoded binary property data. Omitted for text-only properties. |
+| blobSize    | number | No       | Size in bytes for binary-backed properties. |
 
+Binary property data is not returned by `media.meta`. Use `media.image` to fetch image bytes.
 Property keys are canonical type tags such as `property:description`, `property:image-image`, or `property:manual`.
 
 #### Example
@@ -1444,11 +1445,7 @@ An object identifying the media row by `mediaId` or `(system, path)`. Canonical 
 | system     | string   | No       | System ID. Required when `mediaId` is omitted.                              |
 | path       | string   | No       | Canonical indexed media path. Required when `mediaId` is omitted.            |
 | imageTypes | string[] | No       | Image type preference order. Defaults to `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, `fanart`. |
-| items      | object[] | No       | Batch request items. Each item uses either `mediaId` or `system`/`path`, and may include item-level `imageTypes`. Maximum 50 items. Cannot be mixed with top-level media ref fields. |
-
 Supported image type values are `image`, `boxart`, `screenshot`, `wheel`, `titleshot`, `map`, `marquee`, and `fanart`. They resolve to canonical property tags such as `property:image-image` and `property:image-boxart`.
-
-Single requests return the existing single image response shape. Batch requests return `{ "items": [...] }` in input order. Each batch item contains either `image` or `error`. Top-level `imageTypes` applies to all batch items unless an item has its own `imageTypes` override.
 
 #### Result
 
@@ -1472,23 +1469,6 @@ Single requests return the existing single image response shape. Batch requests 
     "system": "SNES",
     "path": "/roms/snes/Super Mario World.sfc",
     "imageTypes": ["boxart", "image"]
-  }
-}
-```
-
-##### Batch Request
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "e5f6a7b8-7a5d-11ef-9c7b-020304050608",
-  "method": "media.image",
-  "params": {
-    "imageTypes": ["boxart", "image"],
-    "items": [
-      {"mediaId": 42},
-      {"mediaId": 43, "imageTypes": ["screenshot"]}
-    ]
   }
 }
 ```
@@ -1613,7 +1593,7 @@ Returns `null` on success. The scraper continues after the response is sent.
 
 Return the latest known metadata scraper status.
 
-This method behaves like `media` does for indexing status: clients can query the current scrape snapshot after opening a UI, then continue listening for `media.scraping` notifications. If no scrape has run since startup, the result is idle with `scraping: false` and `done: false`.
+This method behaves like `media` does for indexing status: clients can query the current scrape snapshot after opening a UI, then continue listening for `media.scraping` notifications. If no scrape has run since startup, the result is idle with `scraping: false`, `done: false`, and `state: "idle"`. Existing flat counter fields remain for compatibility; new UIs should prefer `currentSystem` for per-system progress and `totalSteps`/`currentStep`/`currentStepDisplay` for whole-run progress.
 
 #### Parameters
 
@@ -1633,6 +1613,12 @@ None.
 | scraping  | boolean | Yes      | Whether a scrape is currently running.                     |
 | done      | boolean | Yes      | Whether the latest scrape reached a terminal state.        |
 | paused    | boolean | Yes      | Whether the active scrape is paused because media is running or until resumed. |
+| state     | string  | No       | Explicit lifecycle state: `idle`, `running`, `paused`, `completed`, `cancelled`, or `failed`. |
+| error     | string  | No       | Fatal scrape error on failed terminal updates.             |
+| totalSteps | integer | No      | Total systems in the scrape run, when known.               |
+| currentStep | integer | No     | 1-based current system step, when known.                   |
+| currentStepDisplay | string | No | Display name for the current system step, falling back to system ID. |
+| currentSystem | object | No    | Per-system progress object with `systemId`, `systemName`, `processed`, `total`, `matched`, and `skipped`. |
 
 #### Example
 
@@ -1662,7 +1648,19 @@ None.
     "totalScraped": 1200,
     "scraping": true,
     "done": false,
-    "paused": false
+    "paused": false,
+    "state": "running",
+    "totalSteps": 2,
+    "currentStep": 1,
+    "currentStepDisplay": "Super Nintendo Entertainment System",
+    "currentSystem": {
+      "systemId": "snes",
+      "systemName": "Super Nintendo Entertainment System",
+      "processed": 42,
+      "total": 100,
+      "matched": 38,
+      "skipped": 4
+    }
   }
 }
 ```
@@ -1911,6 +1909,7 @@ None.
 | readersScanIgnoreSystems  | string[]                                  | Yes      | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | Yes      | Whether error reporting is enabled.                             |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | Yes      | List of manually configured reader connections.                 |
+| systemDefaults            | [SystemDefault](#system-default-object)[] | Yes      | Per-system overrides for default launcher and exit ZapScript.   |
 
 ##### Reader connection object
 
@@ -1920,6 +1919,14 @@ None.
 | path     | string | Yes      | Path or address for the reader connection.       |
 | idSource | string | No       | Source for the reader ID.                        |
 | enabled  | bool   | No       | Whether the connection is enabled. Defaults to true if omitted. |
+
+##### System default object
+
+| Key        | Type   | Required | Description                                                                                       |
+| :--------- | :----- | :------- | :------------------------------------------------------------------------------------------------ |
+| system     | string | Yes      | System ID this default applies to. Accepts canonical IDs and aliases.                             |
+| launcher   | string | No       | Launcher ID or group name to use for this system. Empty means no override.                        |
+| beforeExit | string | No       | ZapScript to run when a media instance for this system is exiting (before the new launch starts). |
 
 #### Example
 
@@ -1948,7 +1955,13 @@ None.
     "readersScanExitDelay": 0.0,
     "readersScanIgnoreSystems": ["DOS"],
     "errorReporting": true,
-    "readersConnect": []
+    "readersConnect": [],
+    "systemDefaults": [
+      {
+        "system": "Genesis",
+        "launcher": "retroarch"
+      }
+    ]
   }
 }
 ```
@@ -1974,6 +1987,7 @@ An object containing any of the following optional keys:
 | readersScanIgnoreSystems  | string[]                                  | No       | List of system IDs to ignore during scanning.                   |
 | errorReporting            | boolean                                   | No       | Whether error reporting is enabled.                             |
 | readersConnect            | [ReaderConnection](#reader-connection-object)[] | No       | List of manually configured reader connections.                 |
+| systemDefaults            | [SystemDefault](#system-default-object)[] | No       | Replace the full list of per-system launcher/exit-script overrides. Each `launcher` value, if non-empty, must match a known launcher ID or group (case-insensitive). |
 
 #### Result
 
@@ -2721,6 +2735,66 @@ Returns `null` on success.
 ```
 
 ## Launchers
+
+### launchers
+
+List all launchers known to the running service. Suitable for populating a UI launcher picker (for example, when assigning a per-system default via [settings.update](#settingsupdate)).
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key       | Type                                  | Required | Description                  |
+| :-------- | :------------------------------------ | :------- | :--------------------------- |
+| launchers | [Launcher](#launcher-object)[] | Yes      | All cached launchers, sorted by `systemId` then `id`. |
+
+##### Launcher object
+
+| Key        | Type     | Required | Description                                                                                            |
+| :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------- |
+| id         | string   | Yes      | Unique launcher identifier.                                                                            |
+| systemId   | string   | No       | The system this launcher targets. Omitted for generic launchers without a fixed system.                |
+| systemName | string   | No       | Human-readable system name resolved from system metadata. Omitted when no metadata is available.       |
+| groups     | string[] | No       | Group names this launcher belongs to. Group names are valid values for `systemDefaults.launcher`.      |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5b8c3a40-7a5e-11ef-88ff-020304050607",
+  "method": "launchers"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "5b8c3a40-7a5e-11ef-88ff-020304050607",
+  "result": {
+    "launchers": [
+      {
+        "id": "retroarch",
+        "systemId": "Genesis",
+        "systemName": "Genesis",
+        "groups": ["libretro"]
+      },
+      {
+        "id": "snes9x",
+        "systemId": "SNES",
+        "systemName": "Super Nintendo",
+        "groups": ["libretro"]
+      }
+    ]
+  }
+}
+```
 
 ### launchers.refresh
 

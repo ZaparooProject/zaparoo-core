@@ -24,6 +24,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package cores
 
 import (
+	"bufio"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -167,24 +168,153 @@ func hookAo486(_ *config.Instance, system *Core, path string) (string, error) {
 	return mgl, nil
 }
 
-func hookAmiga(_ *config.Instance, _ *Core, path string) (string, error) {
+func hookAmiga(cfg *config.Instance, _ *Core, path string) (string, error) {
 	dirPath := strings.ToLower(filepath.Dir(path))
 	if !strings.HasSuffix(dirPath, "listings/games.txt") && !strings.HasSuffix(dirPath, "listings/demos.txt") {
 		return "", nil
 	}
 
 	gameName := filepath.Base(path)
-	sharedPath, err := filepath.Abs(filepath.Join(filepath.Dir(path), "..", "..", "shared"))
+	listingName := filepath.Base(filepath.Dir(path))
+	installPath := filepath.Clean(filepath.Join(filepath.Dir(path), "..", ".."))
+	bootImagePath := amigaVisionBootImagePath(installPath)
+	bootImageFound := bootImagePath != ""
+	log.Debug().
+		Str("path", path).
+		Str("game", gameName).
+		Str("listing", listingName).
+		Str("candidate_install_path", installPath).
+		Str("candidate_boot_image", bootImagePath).
+		Bool("candidate_has_boot_image", bootImageFound).
+		Msg("AmigaVision launch hook detected listing entry")
+	if !bootImageFound {
+		activeInstallPath := findAmigaVisionInstallPath(cfg, listingName, gameName)
+		if activeInstallPath != "" {
+			log.Debug().
+				Str("candidate_install_path", installPath).
+				Str("active_install_path", activeInstallPath).
+				Msg("AmigaVision launch hook using active install path")
+			installPath = activeInstallPath
+		} else {
+			log.Warn().
+				Str("candidate_install_path", installPath).
+				Str("game", gameName).
+				Str("listing", listingName).
+				Msg("AmigaVision launch hook could not find install path with boot image")
+		}
+	}
+
+	sharedPath, err := filepath.Abs(filepath.Join(installPath, "shared"))
 	if err != nil {
 		return "", fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
 	bootFile := filepath.Join(sharedPath, "ags_boot")
 	if err := os.WriteFile(bootFile, []byte(gameName+"\n"), 0o600); err != nil {
+		log.Error().Err(err).
+			Str("install_path", installPath).
+			Str("shared_path", sharedPath).
+			Str("boot_file", bootFile).
+			Str("game", gameName).
+			Msg("failed to write AmigaVision boot file")
 		return "", fmt.Errorf("failed to write boot file: %w", err)
 	}
+	log.Info().
+		Str("install_path", installPath).
+		Str("shared_path", sharedPath).
+		Str("boot_file", bootFile).
+		Str("game", gameName).
+		Msg("AmigaVision boot file written")
 
 	return "\t<setname>Amiga</setname>\n", nil
+}
+
+func amigaVisionBootImagePath(path string) string {
+	for _, image := range []string{"AmigaVision.hdf", "MegaAGS.hdf"} {
+		imagePath := filepath.Join(path, image)
+		if _, err := os.Stat(imagePath); err == nil {
+			return imagePath
+		}
+	}
+	return ""
+}
+
+func findAmigaVisionInstallPath(cfg *config.Instance, listingName, gameName string) string {
+	if cfg == nil {
+		log.Debug().Msg("AmigaVision install search skipped: config is nil")
+		return ""
+	}
+
+	var preferred []string
+	var other []string
+	roots := misterconfig.RootDirs(cfg)
+	log.Debug().
+		Strs("roots", roots).
+		Str("listing", listingName).
+		Str("game", gameName).
+		Msg("searching for AmigaVision install path")
+	for _, root := range roots {
+		candidate := filepath.Join(root, "Amiga")
+		bootImagePath := amigaVisionBootImagePath(candidate)
+		hasBootImage := bootImagePath != ""
+		listingContainsGame := false
+		if hasBootImage {
+			listingContainsGame = amigaListingContains(candidate, listingName, gameName)
+		}
+		log.Debug().
+			Str("root", root).
+			Str("candidate", candidate).
+			Str("boot_image", bootImagePath).
+			Bool("has_boot_image", hasBootImage).
+			Bool("listing_contains_game", listingContainsGame).
+			Msg("checked AmigaVision install candidate")
+		if !hasBootImage || !listingContainsGame {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(filepath.Clean(candidate)), filepath.Join("games", "amiga")) {
+			preferred = append(preferred, candidate)
+			continue
+		}
+		other = append(other, candidate)
+	}
+	if len(preferred) > 0 {
+		log.Debug().Str("install_path", preferred[0]).Msg("selected preferred AmigaVision install path")
+		return preferred[0]
+	}
+	if len(other) > 0 {
+		log.Debug().Str("install_path", other[0]).Msg("selected fallback AmigaVision install path")
+		return other[0]
+	}
+	log.Warn().
+		Str("listing", listingName).
+		Str("game", gameName).
+		Msg("no AmigaVision install path matched listing entry")
+	return ""
+}
+
+func amigaListingContains(installPath, listingName, gameName string) bool {
+	listingPath := filepath.Join(installPath, "listings", listingName)
+	f, err := os.Open(listingPath) //nolint:gosec // Internal AmigaVision listing path
+	if err != nil {
+		log.Debug().Err(err).Str("listing_path", listingPath).Msg("failed to open AmigaVision listing")
+		return false
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("failed to close AmigaVision listing")
+		}
+	}()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		if scanner.Text() == gameName {
+			return true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Warn().Err(err).Str("listing_path", listingPath).Msg("failed to scan AmigaVision listing")
+	}
+	return false
 }
 
 func hookNeoGeo(_ *config.Instance, _ *Core, path string) (string, error) {

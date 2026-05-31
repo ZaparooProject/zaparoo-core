@@ -24,6 +24,8 @@ package cores
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -32,11 +34,25 @@ import (
 )
 
 // RBFCache provides lookups of RBF paths by system ID, short name, or launcher ID.
+//
+// On-disk persistence: when SetPersistPath has been called, the first
+// Refresh of the process tries to load `<path>` instead of scanning the
+// SD. If the loaded file's directory-mtime snapshot still matches the
+// live filesystem, no scan runs at all. If mtimes have drifted, the
+// loaded data is still installed for serving and NeedsRescan() returns
+// true so the caller can schedule a background rescan via the idle
+// scheduler. Subsequent Refresh calls noop when mtimes still match
+// (cheap stat-only check) and rescan when they don't.
 type RBFCache struct {
-	bySystemID   map[string]RBFInfo
-	byShortName  map[string][]RBFInfo // short name (lower) → all scanned RBFs with that short name
-	byLauncherID map[string]string    // launcherID → rbfPath (unresolved)
-	mu           syncutil.RWMutex
+	bySystemID    map[string]RBFInfo
+	byShortName   map[string][]RBFInfo
+	byLauncherID  map[string]string
+	lastDirMtimes map[string]int64
+	persistPath   string
+	lastRootRBFs  []string
+	mu            syncutil.RWMutex
+	initialized   bool
+	needsRescan   bool
 }
 
 // GlobalRBFCache is the singleton instance for the MiSTer platform.
@@ -67,25 +83,140 @@ func selectByCanonicalDir(candidates []RBFInfo, canonicalDir string) (RBFInfo, b
 	return candidates[0], true
 }
 
-// Refresh scans for RBF files and rebuilds the cache.
+// SetPersistPath configures the on-disk cache file. Pass an empty string
+// to disable persistence (e.g. tests). Must be called before the first
+// Refresh to take effect for the load step.
+func (c *RBFCache) SetPersistPath(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.persistPath = path
+}
+
+// NeedsRescan reports whether the most recent first-call Refresh loaded a
+// persisted cache whose directory-mtime snapshot didn't match the live
+// filesystem. The caller (typically a platform's StartPost) is expected
+// to schedule a background Refresh when this is true. The flag is reset
+// once a fresh scan completes.
+func (c *RBFCache) NeedsRescan() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.needsRescan
+}
+
+// Refresh ensures the cache reflects the current filesystem. Behaviour:
+//
+//   - First call after process start, with a configured persist path: try
+//     to load the persisted cache. If loaded and the directory-mtime
+//     snapshot matches the live filesystem, install the data and return
+//     without scanning. If loaded but mtimes drifted, install the data,
+//     set NeedsRescan, and return without scanning. If the file is
+//     missing, corrupt, or version-mismatched, fall through to a scan.
+//   - Subsequent calls: stat the snapshot directories; if all mtimes
+//     still match, noop. Otherwise, scan and persist.
+//
+// The cheap-stat fast path means callers like Platform.Launchers (which
+// is invoked from many hot paths) pay only a handful of stats per call
+// instead of a full SD walk.
 func (c *RBFCache) Refresh() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.populateCache()
+
+	if !c.initialized {
+		c.initialized = true
+		if c.tryLoadFromDiskLocked() {
+			return
+		}
+	} else if dirMtimesMatch(c.lastDirMtimes) && rootRBFsMatch(c.lastRootRBFs) {
+		return
+	}
+
+	c.scanLocked()
 }
 
-func (c *RBFCache) populateCache() {
+// tryLoadFromDiskLocked attempts to populate the cache from the persisted
+// file. Returns true if a usable file was loaded (the cache is now
+// populated even if mtimes drifted; needsRescan tracks that case).
+func (c *RBFCache) tryLoadFromDiskLocked() bool {
+	if c.persistPath == "" {
+		return false
+	}
+	stored, loaded, err := loadPersistedRBFCache(c.persistPath)
+	if err != nil {
+		log.Warn().Err(err).Str("path", c.persistPath).Msg("RBF cache: load failed, falling back to scan")
+		return false
+	}
+	if !loaded {
+		return false
+	}
+
+	c.BuildFromRBFs(stored.Files)
+	c.lastDirMtimes = stored.DirMtimes
+	c.lastRootRBFs = stored.RootRBFs
+	mtimesOK := dirMtimesMatch(stored.DirMtimes)
+	rootOK := rootRBFsMatch(stored.RootRBFs)
+	if mtimesOK && rootOK {
+		log.Info().
+			Int("rbf_files", len(stored.Files)).
+			Int("systems_mapped", len(c.bySystemID)).
+			Str("path", c.persistPath).
+			Msg("RBF cache loaded from disk")
+		c.needsRescan = false
+	} else {
+		drifted := diffDirMtimes(stored.DirMtimes)
+		rootDiff := diffRootRBFs(stored.RootRBFs)
+		log.Info().
+			Str("path", c.persistPath).
+			Int("drifted_count", len(drifted)).
+			Interface("drifted", drifted).
+			Strs("added_root_rbfs", rootDiff.Added).
+			Strs("removed_root_rbfs", rootDiff.Removed).
+			Msg("RBF cache loaded but state drifted; rescan needed")
+		c.needsRescan = true
+	}
+	return true
+}
+
+// scanLocked runs the synchronous SD scan, rebuilds the in-memory maps,
+// and (when persistence is configured) writes the result to disk. Caller
+// must hold c.mu.
+func (c *RBFCache) scanLocked() {
 	rbfFiles, err := shallowScanRBF()
 	if err != nil {
 		log.Warn().Err(err).Msg("RBF cache: scan failed, using empty cache")
 		c.BuildFromRBFs(nil)
+		c.needsRescan = false
 		return
 	}
 	c.BuildFromRBFs(rbfFiles)
+	c.needsRescan = false
 	log.Info().
 		Int("rbf_files", len(rbfFiles)).
 		Int("systems_mapped", len(c.bySystemID)).
 		Msg("RBF cache initialized")
+
+	if c.persistPath == "" {
+		return
+	}
+	snapshot, snapErr := snapshotDirMtimes()
+	if snapErr != nil {
+		log.Warn().Err(snapErr).Msg("RBF cache: failed to snapshot directory mtimes, skipping persist")
+		return
+	}
+	rootRBFs, rootErr := snapshotRootRBFs()
+	if rootErr != nil {
+		log.Warn().Err(rootErr).Msg("RBF cache: failed to snapshot root RBFs, skipping persist")
+		return
+	}
+	c.lastDirMtimes = snapshot
+	c.lastRootRBFs = rootRBFs
+	if writeErr := writePersistedRBFCache(c.persistPath, rbfFiles, snapshot, rootRBFs); writeErr != nil {
+		log.Warn().Err(writeErr).Str("path", c.persistPath).Msg("RBF cache: failed to persist")
+		return
+	}
+	log.Debug().
+		Int("rbf_files", len(rbfFiles)).
+		Str("path", c.persistPath).
+		Msg("RBF cache persisted to disk")
 }
 
 // BuildFromRBFs deterministically rebuilds bySystemID and byShortName from a
@@ -138,11 +269,22 @@ func (c *RBFCache) GetByShortName(shortName string) (RBFInfo, bool) {
 // scanned RBFInfo. When the path includes a directory, the match is strict: a
 // wrong directory returns (RBFInfo{}, false) instead of a silent fallback to
 // another core. A bare short name (no directory) returns the first candidate.
+// The short name may include a glob, used for versioned alt cores whose full
+// RBF basename changes with each release.
 func (c *RBFCache) GetByMglPath(mglPath string) (RBFInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	return c.getByMglPathLocked(mglPath)
+}
+
+func (c *RBFCache) getByMglPathLocked(mglPath string) (RBFInfo, bool) {
 	canonicalDir, shortName := splitRBFPath(mglPath)
+	if strings.ContainsAny(shortName, "*?[") || strings.Contains(shortName, "<date>") ||
+		strings.Contains(shortName, "<hash>") {
+		return c.getByMglGlobLocked(canonicalDir, shortName)
+	}
+
 	candidates := c.byShortName[strings.ToLower(shortName)]
 	if len(candidates) == 0 {
 		return RBFInfo{}, false
@@ -157,6 +299,91 @@ func (c *RBFCache) GetByMglPath(mglPath string) (RBFInfo, bool) {
 		}
 	}
 	return RBFInfo{}, false
+}
+
+func (c *RBFCache) getByMglGlobLocked(canonicalDir, shortNamePattern string) (RBFInfo, bool) {
+	matches := make([]RBFInfo, 0)
+	for _, candidates := range c.byShortName {
+		for _, candidate := range candidates {
+			dir, candidateShortName := splitRBFPath(candidate.MglName)
+			if canonicalDir != "" && !strings.EqualFold(dir, canonicalDir) {
+				continue
+			}
+			if !matchMglPattern(shortNamePattern, candidateShortName) {
+				continue
+			}
+			matches = append(matches, candidate)
+		}
+	}
+	if len(matches) == 0 {
+		return RBFInfo{}, false
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].MglName < matches[j].MglName
+	})
+	return matches[len(matches)-1], true
+}
+
+func matchMglPattern(pattern, name string) bool {
+	if strings.Contains(pattern, "<date>") || strings.Contains(pattern, "<hash>") {
+		return matchMglTokenPattern(pattern, name)
+	}
+	matched, err := filepath.Match(strings.ToLower(pattern), strings.ToLower(name))
+	return err == nil && matched
+}
+
+func matchMglTokenPattern(pattern, name string) bool {
+	patternParts := strings.Split(pattern, "_")
+	nameParts := strings.Split(name, "_")
+	if len(patternParts) != len(nameParts) {
+		return false
+	}
+	for i, patternPart := range patternParts {
+		namePart := nameParts[i]
+		switch patternPart {
+		case "<date>":
+			if !isNDigits(namePart, 8) {
+				return false
+			}
+		case "<hash>":
+			if !isHexish(namePart) {
+				return false
+			}
+		default:
+			if !strings.EqualFold(patternPart, namePart) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isNDigits(s string, n int) bool {
+	if len(s) != n {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isHexish(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // RegisterAltCore registers an alt core's expected RBF path.
@@ -183,21 +410,52 @@ func (c *RBFCache) GetByLauncherID(launcherID string) (RBFInfo, bool) {
 		return RBFInfo{}, false
 	}
 
+	return c.getByMglPathLocked(rbfPath)
+}
+
+func (c *RBFCache) relatedCandidates(rbfPath string) []string {
 	canonicalDir, shortName := splitRBFPath(rbfPath)
-	candidates := c.byShortName[strings.ToLower(shortName)]
-	if len(candidates) == 0 {
-		return RBFInfo{}, false
+	if shortName == "" {
+		return nil
 	}
-	if canonicalDir == "" {
-		return candidates[0], true
-	}
-	for _, candidate := range candidates {
-		dir, _ := splitRBFPath(candidate.MglName)
-		if strings.EqualFold(dir, canonicalDir) {
-			return candidate, true
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	prefix := strings.ToLower(shortName) + "_"
+	candidates := make([]string, 0)
+	seen := make(map[string]struct{})
+	for key, rbfs := range c.byShortName {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, rbf := range rbfs {
+			dir, _ := splitRBFPath(rbf.MglName)
+			if canonicalDir != "" && !strings.EqualFold(dir, canonicalDir) {
+				continue
+			}
+			if _, ok := seen[rbf.MglName]; ok {
+				continue
+			}
+			seen[rbf.MglName] = struct{}{}
+			candidates = append(candidates, rbf.MglName)
 		}
 	}
-	return RBFInfo{}, false
+	sort.Strings(candidates)
+	return candidates
+}
+
+func missingCoreError(core *Core, key string, candidates []string) error {
+	if len(candidates) == 0 {
+		return fmt.Errorf(
+			"no core found for system %s (launcher %s, not in cache)", core.ID, key,
+		)
+	}
+	return fmt.Errorf(
+		"no original core found for system %s (launcher %s, expected %s; not in cache); "+
+			"available fork candidates: %s; set launchers.default load_path to use one explicitly",
+		core.ID, key, core.RBF, strings.Join(candidates, ", "),
+	)
 }
 
 // Resolve returns the RBFInfo for a core, honoring config load_path override,
@@ -233,9 +491,7 @@ func (c *RBFCache) Resolve(cfg *config.Instance, core *Core) (RBFInfo, error) {
 
 	rbfInfo, ok := c.GetBySystemID(core.ID)
 	if !ok {
-		return RBFInfo{}, fmt.Errorf(
-			"no core found for system %s (launcher %s, not in cache)", core.ID, key,
-		)
+		return RBFInfo{}, missingCoreError(core, key, c.relatedCandidates(core.RBF))
 	}
 	return rbfInfo, nil
 }

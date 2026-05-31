@@ -16,6 +16,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -34,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/jonboulle/clockwork"
@@ -116,11 +118,13 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 }
 
 func (p *Platform) StartPost(
+	_ context.Context,
 	cfg *config.Instance,
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	_ *database.Database,
+	_ *idle.Scheduler,
 ) error {
 	p.cfg = cfg
 	p.activeMedia = activeMedia
@@ -841,4 +845,9 @@ func (*Platform) ConsoleManager() platforms.ConsoleManager {
 func (*Platform) ManagedByPackageManager() bool {
 	_, err := os.Stat("/userdata/system/pacman/batoexec/zaparoo-core_0")
 	return err == nil
+}
+
+func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+	s := gamelistxml.NewPlatformScraper()
+	return map[string]platforms.Scraper{s.ID: s}
 }

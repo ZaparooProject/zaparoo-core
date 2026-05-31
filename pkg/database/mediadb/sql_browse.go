@@ -25,9 +25,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/rs/zerolog/log"
 )
 
 func browseSystemFilterClause(column string, systems []systemdefs.System) (clause string, args []any) {
@@ -100,12 +102,47 @@ func sqlBrowseDirectories(
 		return nil, err
 	}
 	if ready {
-		return sqlBrowseDirectoriesFromCache(ctx, db, opts)
+		results, cacheErr := sqlBrowseDirectoriesFromCache(ctx, db, opts)
+		if cacheErr != nil || len(results) > 0 {
+			return results, cacheErr
+		}
+
+		fallback, fallbackErr := sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
+		if fallbackErr != nil {
+			return nil, fallbackErr
+		}
+		if len(fallback) > 0 {
+			log.Warn().
+				Str("pathPrefix", opts.PathPrefix).
+				Strs("systems", browseSystemIDsForLog(opts.Systems)).
+				Int("directories", len(fallback)).
+				Msg("browse cache returned no directories; using media fallback")
+		}
+		return fallback, nil
 	}
+	return sqlBrowseDirectoriesFromMediaFallback(ctx, db, opts)
+}
+
+func sqlBrowseDirectoriesFromMediaFallback(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseDirectoriesOptions,
+) ([]database.BrowseDirectoryResult, error) {
 	if len(opts.Systems) > 0 {
 		return sqlBrowseDirectoriesForSystemsFromMedia(ctx, db, opts)
 	}
 	return sqlBrowseDirectoriesFromMedia(ctx, db, opts.PathPrefix)
+}
+
+func browseSystemIDsForLog(systems []systemdefs.System) []string {
+	if len(systems) == 0 {
+		return nil
+	}
+	systemIDs := make([]string, 0, len(systems))
+	for i := range systems {
+		systemIDs = append(systemIDs, systems[i].ID)
+	}
+	return systemIDs
 }
 
 func sqlBrowseDirectoriesFromCache(
@@ -344,6 +381,7 @@ func sqlBrowseFilesFromMedia(
 	query += ` ORDER BY ` + browseSortClause(opts.Sort) + ` LIMIT ?`
 	args = append(args, opts.Limit)
 
+	queryStarted := time.Now()
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("browse files query: %w", err)
@@ -361,10 +399,69 @@ func sqlBrowseFilesFromMedia(
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return nil, fmt.Errorf("browse files rows: %w", rowsErr)
 	}
+	queryElapsed := time.Since(queryStarted)
+
+	tagsStarted := time.Now()
 	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return nil, fmt.Errorf("browse files tags: %w", err)
 	}
+	tagsElapsed := time.Since(tagsStarted)
+
+	log.Debug().
+		Str("pathPrefix", opts.PathPrefix).
+		Strs("systems", browseSystemIDsForLog(opts.Systems)).
+		Int("rows", len(results)).
+		Dur("queryDuration", queryElapsed).
+		Dur("tagsDuration", tagsElapsed).
+		Msg("browse files step timing")
+	if len(results) == 0 && opts.Cursor == nil {
+		descendants, countErr := sqlBrowseDescendantCount(ctx, db, opts.PathPrefix, opts.Systems)
+		if countErr != nil {
+			log.Debug().
+				Err(countErr).
+				Str("pathPrefix", opts.PathPrefix).
+				Strs("systems", browseSystemIDsForLog(opts.Systems)).
+				Msg("browse files descendant diagnostic failed")
+		} else {
+			event := log.Debug()
+			if descendants > 0 {
+				event = log.Warn()
+			}
+			event.
+				Str("pathPrefix", opts.PathPrefix).
+				Strs("systems", browseSystemIDsForLog(opts.Systems)).
+				Int("directFiles", 0).
+				Int("descendantFiles", descendants).
+				Msg("browse files returned no direct media")
+		}
+	}
 	return results, nil
+}
+
+func sqlBrowseDescendantCount(
+	ctx context.Context,
+	db sqlQueryable,
+	pathPrefix string,
+	systems []systemdefs.System,
+) (int, error) {
+	conditions := []string{`m.IsMissing = 0`, `m.Path LIKE ? || '%'`}
+	args := []any{pathPrefix}
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", systems); systemClause != "" {
+		conditions = append(conditions, systemClause)
+		args = append(args, systemArgs...)
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*)
+		 FROM Media m
+		 INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		 WHERE `+strings.Join(conditions, " AND "),
+		args...,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("browse descendant count: %w", err)
+	}
+	return count, nil
 }
 
 func sqlBrowseFileCount(
@@ -621,6 +718,170 @@ func sqlBrowseRouteCountsFromMedia(
 		}
 	}
 	return counts, nil
+}
+
+// sqlBrowseSystemRootCandidates resolves a list of filesystem roots
+// against the BrowseDirCounts cache in two queries, regardless of how many
+// roots the platform has.
+//
+// HasMedia[root] is true when the root has any media in its subtree (direct
+// files or any descendant subdir) for the requested systems; Children[root]
+// holds the immediate subdir names that themselves contain media. Roots
+// absent from the cache (not indexed at all) are absent from both maps;
+// callers should treat them as "no media" rather than "cache miss". The
+// cacheReady return reflects only whether the BrowseDirs/BrowseDirCounts
+// tables are populated.
+func sqlBrowseSystemRootCandidates(
+	ctx context.Context,
+	db sqlQueryable,
+	opts database.BrowseSystemRootCandidatesOptions,
+) (database.BrowseSystemRootCandidates, bool, error) {
+	result := database.BrowseSystemRootCandidates{
+		Children: make(map[string][]string),
+		HasMedia: make(map[string]bool),
+	}
+	if len(opts.Roots) == 0 || len(opts.Systems) == 0 {
+		return result, true, nil
+	}
+	ready, err := sqlBrowseCacheReady(ctx, db)
+	if err != nil {
+		return result, false, err
+	}
+	if !ready {
+		return result, false, nil
+	}
+
+	// Map cache-key path → original input root: BrowseDirs stores paths in
+	// trailing-slash form, so we look up by that key but return results keyed
+	// by the caller's input form. Callers should pre-normalize their roots
+	// (e.g. via filepath.Clean): when two distinct input strings collide on
+	// browseRouteCacheKey (such as "/media/fat" and "/media/fat/"), only the
+	// first form is retained in the result map and the second is dropped.
+	rootByKey := make(map[string]string, len(opts.Roots))
+	rootKeyPlaceholders := make([]string, 0, len(opts.Roots))
+	rootKeyArgs := make([]any, 0, len(opts.Roots))
+	for _, root := range opts.Roots {
+		key := browseRouteCacheKey(root)
+		if _, dup := rootByKey[key]; dup {
+			continue
+		}
+		rootByKey[key] = root
+		rootKeyPlaceholders = append(rootKeyPlaceholders, "?")
+		rootKeyArgs = append(rootKeyArgs, key)
+	}
+	rootIN := strings.Join(rootKeyPlaceholders, ",")
+
+	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
+	systemWhere := ""
+	if systemClause != "" {
+		systemWhere = ` AND ` + systemClause
+	}
+
+	if err := loadBrowseSystemRootHasMedia(
+		ctx, db, rootIN, rootKeyArgs, systemWhere, systemArgs, rootByKey, &result,
+	); err != nil {
+		return result, true, err
+	}
+	if err := loadBrowseSystemRootChildren(
+		ctx, db, rootIN, rootKeyArgs, systemWhere, systemArgs, rootByKey, &result,
+	); err != nil {
+		return result, true, err
+	}
+	for root := range result.Children {
+		sort.Strings(result.Children[root])
+	}
+	return result, true, nil
+}
+
+// loadBrowseSystemRootHasMedia populates HasMedia[root] for any roots whose
+// subtree contains media for the requested systems. For any indexed media
+// file, every ancestor dir (including the root itself when it's an ancestor)
+// is recorded as a CHILD in some (ancestor_parent, ancestor) pair, so a row
+// with cd.Path = root means the root's subtree has media. The "/" root
+// self-loop also matches.
+func loadBrowseSystemRootHasMedia(
+	ctx context.Context,
+	db sqlQueryable,
+	rootIN string,
+	rootKeyArgs []any,
+	systemWhere string,
+	systemArgs []any,
+	rootByKey map[string]string,
+	result *database.BrowseSystemRootCandidates,
+) error {
+	args := make([]any, 0, len(rootKeyArgs)+len(systemArgs))
+	args = append(args, rootKeyArgs...)
+	args = append(args, systemArgs...)
+	query := `SELECT DISTINCT cd.Path
+		FROM BrowseDirs cd
+		INNER JOIN BrowseDirCounts c ON c.ChildDirDBID = cd.DBID
+		INNER JOIN Systems s ON c.SystemDBID = s.DBID
+		WHERE cd.Path IN (` + rootIN + `)` + systemWhere
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("browse cache root has-media query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var key string
+		if scanErr := rows.Scan(&key); scanErr != nil {
+			return fmt.Errorf("browse cache root has-media scan: %w", scanErr)
+		}
+		if root, ok := rootByKey[key]; ok {
+			result.HasMedia[root] = true
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("browse cache root has-media rows: %w", rowsErr)
+	}
+	return nil
+}
+
+// loadBrowseSystemRootChildren populates Children[root] with immediate
+// non-virtual subdir names that themselves contain media for the requested
+// systems. Excludes the "/" self-loop.
+func loadBrowseSystemRootChildren(
+	ctx context.Context,
+	db sqlQueryable,
+	rootIN string,
+	rootKeyArgs []any,
+	systemWhere string,
+	systemArgs []any,
+	rootByKey map[string]string,
+	result *database.BrowseSystemRootCandidates,
+) error {
+	args := make([]any, 0, len(rootKeyArgs)+len(systemArgs))
+	args = append(args, rootKeyArgs...)
+	args = append(args, systemArgs...)
+	query := `SELECT DISTINCT pd.Path, cd.Name
+		FROM BrowseDirs pd
+		INNER JOIN BrowseDirCounts c ON c.ParentDirDBID = pd.DBID
+		INNER JOIN BrowseDirs cd ON c.ChildDirDBID = cd.DBID
+		INNER JOIN Systems s ON c.SystemDBID = s.DBID
+		WHERE pd.Path IN (` + rootIN + `)
+			AND cd.IsVirtual = 0
+			AND c.ChildDirDBID != c.ParentDirDBID` + systemWhere
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("browse cache root children query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var parentKey, name string
+		if scanErr := rows.Scan(&parentKey, &name); scanErr != nil {
+			return fmt.Errorf("browse cache root children scan: %w", scanErr)
+		}
+		root, ok := rootByKey[parentKey]
+		if !ok || name == "" {
+			continue
+		}
+		result.HasMedia[root] = true
+		result.Children[root] = append(result.Children[root], name)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("browse cache root children rows: %w", rowsErr)
+	}
+	return nil
 }
 
 func sqlBrowseRootCounts(ctx context.Context, db sqlQueryable, rootDirs []string) (map[string]*int, error) {

@@ -27,6 +27,8 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	testingmocks "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -326,6 +328,43 @@ func TestBuildReadersSettingsMenu_ScanModeOptions(t *testing.T) {
 
 	// Verify scan mode displays Tap
 	assert.True(t, runner.ContainsText("Tap"), "Tap mode should be visible")
+}
+
+func TestBuildReaderEditPage_DownFromEnabledFocusesButtonBar(t *testing.T) {
+	t.Parallel()
+
+	runner := NewTestAppRunner(t, 80, 25)
+	defer runner.Stop()
+
+	pages := tview.NewPages()
+	cfg := &config.Instance{}
+	mockSvc := NewMockSettingsService()
+	mockReader := testingmocks.NewMockReader()
+	mockReader.SetupBasicMock()
+	mockPlatform := testingmocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", cfg).Return([]readers.Reader{mockReader})
+	configuredReaders := []models.ReaderConnection{}
+
+	runner.Start(pages)
+	runner.Draw()
+
+	runner.QueueUpdateDraw(func() {
+		buildReaderEditPage(cfg, mockSvc, pages, runner.App(), mockPlatform, &configuredReaders, 0)
+	})
+
+	require.True(t, runner.WaitForText("Settings", 100*time.Millisecond), "Reader edit page should appear")
+
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+	runner.SimulateArrowDown()
+
+	focused := runner.App().GetFocus()
+	_, focusedButtonBar := focused.(*ButtonBar)
+	_, focusedInternalButton := focused.(*tview.Button)
+	assert.True(t, focusedButtonBar, "Down from Enabled should focus the ButtonBar")
+	assert.False(t, focusedInternalButton, "Down from Enabled should not focus an internal button")
+	mockPlatform.AssertExpectations(t)
 }
 
 func TestBuildAdvancedSettingsMenu_Integration(t *testing.T) {

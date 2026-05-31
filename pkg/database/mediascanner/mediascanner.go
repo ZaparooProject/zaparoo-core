@@ -744,19 +744,20 @@ func NewNamesIndex(
 
 	// Initialize scan state
 	scanState := database.ScanState{
-		SystemsIndex:  0,
-		SystemIDs:     make(map[string]int),
-		TitlesIndex:   0,
-		TitleIDs:      make(map[string]int),
-		MediaIndex:    0,
-		MediaIDs:      make(map[string]int),
-		MediaTitleIDs: make(map[int]int),
-		MediaTagIDs:   make(map[int]map[int]struct{}),
-		TagTypesIndex: 0,
-		TagTypeIDs:    make(map[string]int),
-		TagsIndex:     0,
-		TagIDs:        make(map[string]int),
-		MissingMedia:  make(map[int]struct{}),
+		SystemsIndex:    0,
+		SystemIDs:       make(map[string]int),
+		TitlesIndex:     0,
+		TitleIDs:        make(map[string]int),
+		MediaIndex:      0,
+		MediaIDs:        make(map[string]int),
+		MediaTitleIDs:   make(map[int]int),
+		MediaParentDirs: make(map[int]string),
+		MediaTagIDs:     make(map[int]map[int]struct{}),
+		TagTypesIndex:   0,
+		TagTypeIDs:      make(map[string]int),
+		TagsIndex:       0,
+		TagIDs:          make(map[string]int),
+		MissingMedia:    make(map[int]struct{}),
 	}
 
 	// 3. Set up scan state — persistent mode is always active
@@ -1032,7 +1033,9 @@ func NewNamesIndex(
 			dir := filepath.Dir(file.Path)
 			shouldStrip := stripPolicyByDir[dir]
 
-			_, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, shouldStrip, cfg, mediaType)
+			_, _, addErr := AddMediaPath(
+				db, &scanState, systemID, file.Path, file.Name, file.NoExt, shouldStrip, cfg, mediaType,
+			)
 			if addErr != nil {
 				var sqliteErr sqlite3.Error
 				if errors.As(addErr, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique &&
@@ -1174,6 +1177,7 @@ func NewNamesIndex(
 	scanState.TitleIDs = nil
 	scanState.MediaIDs = nil
 	scanState.MediaTitleIDs = nil
+	scanState.MediaParentDirs = nil
 	scanState.MediaTagIDs = nil
 	scanState.TagTypeIDs = nil
 	scanState.TagIDs = nil
@@ -1269,6 +1273,30 @@ func NewNamesIndex(
 			log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
 		}
 		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
+	}
+
+	// Bump the index generation counter so persisted cache files written
+	// below carry the new value. Boot-time loads compare this against the
+	// DB to detect stale cache files from a previous run.
+	_, bumpErr := db.BumpIndexGeneration()
+	if bumpErr != nil {
+		log.Error().Err(bumpErr).Msg("failed to bump index generation")
+	}
+
+	// Persist the rebuilt in-memory caches to disk so a subsequent cold
+	// boot can skip the SQL rebuild path. Best-effort: a write failure
+	// just means next boot pays the rebuild cost, no correctness impact.
+	// Skip if the bump failed: the persisted file would embed a generation
+	// the DB doesn't agree with, and the next boot would load it as fresh.
+	if bumpErr != nil {
+		log.Warn().Msg("skipping cache persist because index generation bump failed")
+	} else {
+		if persistErr := db.PersistTagCache(); persistErr != nil {
+			log.Error().Err(persistErr).Msg("failed to persist tag cache to disk")
+		}
+		if persistErr := db.PersistSlugSearchCache(); persistErr != nil {
+			log.Error().Err(persistErr).Msg("failed to persist slug search cache to disk")
+		}
 	}
 
 	// Mark indexing as completed and clear indexing metadata

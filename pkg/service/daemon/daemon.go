@@ -25,7 +25,6 @@ package daemon
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -49,6 +48,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
+	"github.com/cespare/xxhash/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -100,14 +100,17 @@ type restartExecConfig struct {
 }
 
 const (
-	serviceStopTimeout        = 10 * time.Second
-	serviceKillTimeout        = 3 * time.Second
-	serviceStopPollInterval   = 100 * time.Millisecond
-	servicePortReleaseTimeout = 3 * time.Second
-	daemonReadyTimeout        = 3 * time.Second
-	serviceManifestName       = "service_manifest.json"
-	serviceHashLength         = 16
-	serviceCopiesToKeep       = 2
+	serviceStopTimeout         = 10 * time.Second
+	serviceKillTimeout         = 3 * time.Second
+	serviceStopPollInterval    = 100 * time.Millisecond
+	servicePortReleaseTimeout  = 3 * time.Second
+	daemonReadyTimeout         = 3 * time.Second
+	serviceManifestName        = "service_manifest.json"
+	serviceHashLength          = 16
+	serviceCopiesToKeep        = 2
+	startGateLockFile          = "zaparoo.start.lock"
+	servicePidFileWaitTimeout  = 5 * time.Second
+	servicePidFilePollInterval = 50 * time.Millisecond
 )
 
 func NewService(args ServiceArgs) (*Service, error) {
@@ -315,7 +318,7 @@ func (s *Service) prepareBinary(binPath string) (string, error) {
 	}
 
 	hashStarted := time.Now()
-	sourceHash, err := hashFileSHA256(fs, binPath)
+	sourceHash, err := hashFileContent(fs, binPath)
 	if err != nil {
 		return "", err
 	}
@@ -334,7 +337,7 @@ func (s *Service) prepareBinary(binPath string) (string, error) {
 			return "", copyErr
 		}
 	} else {
-		cachedHash, hashErr := hashFileSHA256(fs, servicePath)
+		cachedHash, hashErr := hashFileContent(fs, servicePath)
 		if hashErr != nil {
 			return "", hashErr
 		}
@@ -541,14 +544,22 @@ func shortServiceHash(sourceHash string) string {
 	return sourceHash[:serviceHashLength]
 }
 
-func hashFileSHA256(fs afero.Fs, path string) (string, error) {
+// hashFileContent fingerprints a file with xxHash64 for the local
+// service-binary cache. This hash is not security-relevant: the cache
+// is written and read by this daemon process against local files, so
+// strength against an adversary is moot. xxHash64 is ~50x faster than
+// SHA-256 in pure Go on Cortex-A9 (MiSTer), which dominates this code
+// path on the ~50 MB service binary. The 16-hex output is intentionally
+// the same width as the previous SHA-256 truncation, so the manifest
+// format and cache filenames are unchanged.
+func hashFileContent(fs afero.Fs, path string) (string, error) {
 	file, err := fs.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("error opening binary for hash: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 
-	h := sha256.New()
+	h := xxhash.New()
 	if _, err := io.Copy(h, file); err != nil {
 		return "", fmt.Errorf("error hashing binary: %w", err)
 	}
@@ -894,15 +905,97 @@ func serviceExecArgs(serviceBin string, args []string) []string {
 	return execArgs
 }
 
-// Start a new service daemon in the background.
+// acquireStartGate serializes Service.Start invocations across processes via
+// a file lock. Concurrent wrappers (e.g. the launcher's invocation racing the
+// MiSTer integration shell file) block here until the previous one finishes
+// its check-and-start sequence, so only one of them actually exec's the
+// service binary; the rest see Running()==true and exit fast.
+func (s *Service) acquireStartGate() (func(), error) {
+	lockPath := filepath.Join(s.pl.Settings().TempDir, startGateLockFile)
+	//nolint:gosec // lock path is derived from configured temp directory.
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("opening start gate lock: %w", err)
+	}
+	if flockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); flockErr != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("acquiring start gate lock: %w", flockErr)
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
+}
+
+// waitForServicePidFile blocks until the spawned service writes its pidfile
+// or expectedPID dies. Holding the gate until the pidfile exists guarantees
+// the next wrapper invocation can see the running service via Running().
+//
+// createPidFile opens with O_CREATE|O_EXCL then writes the PID in a separate
+// syscall, so reads here can see the file with 0 bytes (Atoi parse error) or
+// — if a previous run's pidfile survived a crash — a different PID. Both are
+// indistinguishable from a transient race at first sight, so we keep polling
+// until the deadline rather than failing fast on a misleading error. Real
+// failures (target process gone, deadline elapsed) still surface promptly.
+func (s *Service) waitForServicePidFile(expectedPID int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastTransientErr error
+	for {
+		pid, err := s.Pid()
+		switch {
+		case err != nil && errors.Is(err, strconv.ErrSyntax):
+			// Empty/partial pidfile mid-write — keep polling.
+			lastTransientErr = err
+		case err != nil:
+			return fmt.Errorf("checking service pidfile: %w", err)
+		case pid == expectedPID:
+			if !pidRunning(expectedPID) {
+				return fmt.Errorf("service process %d exited after writing pidfile", expectedPID)
+			}
+			if !s.pidMatchesService(expectedPID) {
+				return fmt.Errorf("service process %d does not match the Zaparoo service binary", expectedPID)
+			}
+			return nil
+		case pid != 0:
+			// Stale pidfile from a prior crash, or mid-write race. Keep
+			// polling: O_EXCL means the running service couldn't have
+			// created the file, so it must converge or expectedPID will
+			// die first.
+			lastTransientErr = fmt.Errorf("pidfile contains PID %d, expected %d", pid, expectedPID)
+		}
+		if !pidRunning(expectedPID) {
+			return fmt.Errorf("service process %d exited before writing pidfile", expectedPID)
+		}
+		if time.Now().After(deadline) {
+			if lastTransientErr != nil {
+				return fmt.Errorf("service did not write pidfile within %s: %w", timeout, lastTransientErr)
+			}
+			return fmt.Errorf("service did not write pidfile within %s", timeout)
+		}
+		time.Sleep(servicePidFilePollInterval)
+	}
+}
+
+// Start a new service daemon in the background. If the service is already
+// running (started by a peer wrapper invocation), Start returns nil without
+// re-doing prep work.
 func (s *Service) Start() error {
 	started := time.Now()
+
+	release, err := s.acquireStartGate()
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	running, err := s.Running()
 	if err != nil {
 		return err
 	}
 	if running {
-		return errors.New("service already running")
+		pid, _ := s.Pid()
+		log.Info().Int("pid", pid).Msg("service already running, exiting")
+		return nil
 	}
 
 	binPath, err := serviceSourceBinaryPath()
@@ -940,32 +1033,22 @@ func (s *Service) Start() error {
 	if err != nil {
 		return fmt.Errorf("error starting service: %w", err)
 	}
-	log.Debug().Dur("duration", time.Since(cmdStarted)).Msg("service process start command completed")
+	pid := cmd.Process.Pid
+	log.Debug().
+		Int("pid", pid).
+		Dur("duration", time.Since(cmdStarted)).
+		Msg("service process start command completed")
 
 	err = cmd.Process.Release()
 	if err != nil {
 		return fmt.Errorf("error releasing service process: %w", err)
 	}
 
-	// Give process a moment to write PID file
-	time.Sleep(500 * time.Millisecond)
-
-	pid, pidErr := s.Pid()
-	if pidErr != nil {
-		log.Error().Err(pidErr).Msg("PID file not found after service start - process may have failed")
-		return fmt.Errorf("service started but PID file not found: %w", pidErr)
+	if waitErr := s.waitForServicePidFile(pid, servicePidFileWaitTimeout); waitErr != nil {
+		return fmt.Errorf("service process %d did not become ready: %w", pid, waitErr)
 	}
 
 	log.Info().Int("pid", pid).Dur("duration", time.Since(started)).Msg("service process started")
-
-	running, err = s.Running()
-	if err != nil {
-		return err
-	}
-	if !running {
-		return fmt.Errorf("service process %d started but is no longer running", pid)
-	}
-
 	return nil
 }
 

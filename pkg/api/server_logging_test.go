@@ -31,6 +31,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLogSafeResponse(t *testing.T) {
@@ -94,6 +95,174 @@ func TestLogSafeResponse(t *testing.T) {
 
 			// Should always contain the debug message
 			assert.Contains(t, logOutput, "sending response")
+		})
+	}
+}
+
+// TestLogSafeResponse_BatchRedaction verifies batch-response branches log only
+// an item count and never include per-item details.
+func TestLogSafeResponse_BatchRedaction(t *testing.T) {
+	const secretBlob = "AAAABASE64SECRETPAYLOAD=="
+	textValue := secretBlob
+	metaProp := models.MediaMetaPropertyItem{
+		Text:        textValue,
+		ContentType: "image/png",
+	}
+	metaItem := models.MediaMetaMediaResponse{
+		Path: "/roms/snes/game.sfc",
+		Properties: map[string]models.MediaMetaPropertyItem{
+			"image-boxart": metaProp,
+		},
+	}
+
+	tests := []struct {
+		result         any
+		name           string
+		expectMsgFrag  string
+		expectKeyFrag  string
+		expectItemsVal string
+	}{
+		{
+			name: "MediaMetaBatchResponse logs items count only",
+			result: models.MediaMetaBatchResponse{
+				Items: []models.MediaMetaBatchItemResponse{
+					{Media: &metaItem},
+				},
+			},
+			expectMsgFrag:  "media.meta batch",
+			expectKeyFrag:  `"items":1`,
+			expectItemsVal: "1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			originalLogger := log.Logger
+			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+			defer func() { log.Logger = originalLogger }()
+
+			logSafeResponse(tt.result)
+
+			out := buf.String()
+			assert.Contains(t, out, tt.expectMsgFrag)
+			assert.Contains(t, out, tt.expectKeyFrag)
+			// The base64 payload from any per-item field must never reach the log.
+			assert.NotContains(t, out, secretBlob, "batch redaction must not leak per-item payload")
+		})
+	}
+}
+
+// TestLogSafeResponse_DefaultOmitsBody verifies the default case logs only
+// the result type and never serializes unknown response bodies, so a forgotten
+// future response shape cannot leak base64 blobs.
+func TestLogSafeResponse_DefaultOmitsBody(t *testing.T) {
+	type secretShape struct {
+		Marker string `json:"marker"`
+		Blob   string `json:"blob"`
+	}
+
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	defer func() { log.Logger = originalLogger }()
+
+	logSafeResponse(secretShape{Marker: "should-not-appear", Blob: "AAAABASE64=="})
+
+	out := buf.String()
+	assert.Contains(t, out, "sending response")
+	assert.Contains(t, out, "secretShape", "default case must include the type name")
+	assert.NotContains(t, out, "should-not-appear", "default case must omit body")
+	assert.NotContains(t, out, "AAAABASE64==", "default case must omit body")
+}
+
+// TestHandleResponse covers inbound-response logging: that resp.Result is
+// never serialized, that the error block is included only when present, and
+// that long error messages are truncated with metadata indicating it.
+func TestHandleResponse(t *testing.T) {
+	const longMsg = "x"
+	tests := []struct {
+		name              string
+		resp              models.ResponseObject
+		mustNotContain    []string
+		mustContain       []string
+		expectTruncatedOn bool
+	}{
+		{
+			name: "result is never logged",
+			resp: models.ResponseObject{
+				JSONRPC: "2.0",
+				ID:      models.NewStringID("req-1"),
+				Result:  map[string]any{"data": "AAAABASE64BLOB==", "secret": "hush"},
+			},
+			mustContain:    []string{"received response", "req-1"},
+			mustNotContain: []string{"AAAABASE64BLOB==", "hush"},
+		},
+		{
+			name: "no error means no error fields",
+			resp: models.ResponseObject{
+				JSONRPC: "2.0",
+				ID:      models.NewStringID("req-2"),
+			},
+			mustContain:    []string{"received response", "req-2"},
+			mustNotContain: []string{"errorCode", "errorMessage"},
+		},
+		{
+			name: "short error message is logged in full",
+			resp: models.ResponseObject{
+				JSONRPC: "2.0",
+				ID:      models.NewStringID("req-3"),
+				Error: &models.ErrorObject{
+					Code:    -32600,
+					Message: "invalid request",
+				},
+			},
+			mustContain: []string{
+				"errorCode", "-32600",
+				"errorMessage", "invalid request",
+			},
+			mustNotContain: []string{"errorMessageTruncated", "errorMessageLen"},
+		},
+		{
+			name: "long error message is truncated",
+			resp: models.ResponseObject{
+				JSONRPC: "2.0",
+				ID:      models.NewStringID("req-4"),
+				Error: &models.ErrorObject{
+					Code:    -32000,
+					Message: strings.Repeat(longMsg, 5000),
+				},
+			},
+			mustContain: []string{
+				"errorCode",
+				"errorMessageTruncated",
+				"errorMessageLen",
+			},
+			expectTruncatedOn: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			originalLogger := log.Logger
+			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+			defer func() { log.Logger = originalLogger }()
+
+			require.NoError(t, handleResponse(tt.resp))
+
+			out := buf.String()
+			for _, s := range tt.mustContain {
+				assert.Contains(t, out, s)
+			}
+			for _, s := range tt.mustNotContain {
+				assert.NotContains(t, out, s)
+			}
+			if tt.expectTruncatedOn {
+				// Truncated body must not contain the full repeated payload.
+				assert.NotContains(t, out, strings.Repeat(longMsg, 5000))
+				assert.Contains(t, out, `"errorMessageTruncated":true`)
+			}
 		})
 	}
 }

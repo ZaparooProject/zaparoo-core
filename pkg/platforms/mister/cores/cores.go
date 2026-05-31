@@ -103,11 +103,11 @@ var Systems = map[string]Core{
 		RBF: "_Console/3DO",
 		Slots: []Slot{
 			{
-				Exts: []string{".iso", ".cue"},
+				Exts: []string{".iso", ".cue", ".chd"},
 				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
-					Index:  1,
+					Index:  0,
 				},
 			},
 		},
@@ -933,6 +933,20 @@ var Systems = map[string]Core{
 			// },
 		},
 	},
+	"VirtualBoy": {
+		ID:  "VirtualBoy",
+		RBF: "_Console/VirtualBoy",
+		Slots: []Slot{
+			{
+				Exts: []string{".vb"},
+				Mgl: &MGLParams{
+					Delay:  1,
+					Method: "f",
+					Index:  1,
+				},
+			},
+		},
+	},
 	"WonderSwan": {
 		ID:  "WonderSwan",
 		RBF: "_Console/WonderSwan",
@@ -1078,6 +1092,15 @@ var Systems = map[string]Core{
 					Delay:  1,
 					Method: "f",
 					Index:  4,
+				},
+			},
+			{
+				Label: "Snapshot",
+				Exts:  []string{".sna"},
+				Mgl: &MGLParams{
+					Delay:  1,
+					Method: "f",
+					Index:  6,
 				},
 			},
 		},

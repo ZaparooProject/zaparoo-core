@@ -19,7 +19,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
     steps:
       - name: Generate GitHub App token
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
         with:
           app-id: ${{ vars.ZAPAROO_APP_ID }}
@@ -31,7 +31,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
       - name: Get release info
         id: zaparooreleaseinfo
-        uses: cardinalby/git-get-release-action@cf4593dd18e51a1ecfbfb1c68abac9910a8b1e0c # v1
+        uses: cardinalby/git-get-release-action@2ab178299eecb253f820dcf2cce11f62be1178f7 # v1
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         with:

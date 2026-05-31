@@ -46,6 +46,18 @@ func mediaContentExtension(contentType, text string) *string {
 	return nil
 }
 
+func mediaContentType(contentType, text string) string {
+	trimmedContentType := strings.TrimSpace(contentType)
+	if trimmedContentType != "" {
+		return trimmedContentType
+	}
+	ext := extensionFromTextPath(text)
+	if ext == "" {
+		return ""
+	}
+	return mime.TypeByExtension("." + ext)
+}
+
 func extensionFromContentType(contentType string) string {
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil {

@@ -26,9 +26,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
@@ -38,15 +40,27 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-func sqlMigrateUp(db *sql.DB) error {
-	if err := database.MigrateUp(db, migrationFiles, "migrations"); err != nil {
+func sqlMigrateUp(db *sql.DB, dbPath string) error {
+	sidecarPath := schemaVersionSidecarPath(dbPath)
+	if err := database.MigrateUp(db, migrationFiles, "migrations", dbPath, sidecarPath); err != nil {
 		return fmt.Errorf("failed to run user database migrations: %w", err)
 	}
 	return nil
 }
 
-func sqlAllocate(db *sql.DB) error {
-	return sqlMigrateUp(db)
+func sqlAllocate(db *sql.DB, dbPath string) error {
+	return sqlMigrateUp(db, dbPath)
+}
+
+func schemaVersionSidecarPath(dbPath string) string {
+	if dbPath == "" {
+		return ""
+	}
+	return filepath.Join(
+		filepath.Dir(dbPath),
+		config.CacheDir,
+		filepath.Base(dbPath)+".schema_version.json",
+	)
 }
 
 //goland:noinspection SqlWithoutWhere

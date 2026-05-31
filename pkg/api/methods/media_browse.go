@@ -296,21 +296,26 @@ func systemRootEntryCoveredByDescendant(entries []models.BrowseEntry, parentIdx 
 		return false
 	}
 
+	descendantCount := 0
+	foundDescendant := false
 	for childIdx := range entries {
 		if childIdx == parentIdx {
 			continue
 		}
 
 		child := entries[childIdx]
-		if child.FileCount == nil || *child.FileCount != *parent.FileCount {
+		if !isStrictFilesystemDescendant(child.Path, parent.Path) {
 			continue
 		}
-		if isStrictFilesystemDescendant(child.Path, parent.Path) {
-			return true
+		if child.FileCount == nil {
+			return false
 		}
+
+		foundDescendant = true
+		descendantCount += *child.FileCount
 	}
 
-	return false
+	return foundDescendant && descendantCount == *parent.FileCount
 }
 
 func isStrictFilesystemDescendant(childPath, parentPath string) bool {
@@ -381,53 +386,89 @@ func buildSystemBrowseRouteCandidates(env *requests.RequestEnv, systems []system
 	}
 
 	if env.Database.MediaDB != nil {
+		if err := addBrowseDBSystemRoots(env, systems, rootDirs, addRoute, addFilesystemRoute); err != nil {
+			return nil, err
+		}
+	}
+
+	return routes, nil
+}
+
+func addBrowseDBSystemRoots(
+	env *requests.RequestEnv,
+	systems []systemdefs.System,
+	rootDirs []string,
+	addRoute func(string),
+	addFilesystemRoute func(string),
+) error {
+	started := time.Now()
+	candidates, cacheReady, err := env.Database.MediaDB.BrowseSystemRootCandidates(
+		env.Context,
+		database.BrowseSystemRootCandidatesOptions{Roots: rootDirs, Systems: systems},
+	)
+	if err != nil {
+		return fmt.Errorf("error getting system root candidates: %w", err)
+	}
+	if cacheReady {
+		logBrowseTiming("system_root_candidates", "", started, len(candidates.HasMedia))
+		for _, root := range rootDirs {
+			if !candidates.HasMedia[root] {
+				continue
+			}
+			addFilesystemRoute(root)
+			for _, name := range candidates.Children[root] {
+				addFilesystemRoute(filepath.Join(root, name))
+			}
+		}
+	} else {
+		// Cache not ready yet (first boot, mid-rebuild). Fall back to the
+		// per-root fan-out so the response is still complete.
 		for _, root := range rootDirs {
 			prefix := filepath.ToSlash(filepath.Clean(root))
 			if !strings.HasSuffix(prefix, "/") {
 				prefix += "/"
 			}
-			started := time.Now()
-			fileCount, err := env.Database.MediaDB.BrowseFileCount(env.Context, database.BrowseFileCountOptions{
+			fileCountStarted := time.Now()
+			fileCount, fcErr := env.Database.MediaDB.BrowseFileCount(env.Context, database.BrowseFileCountOptions{
 				PathPrefix: prefix,
 				Systems:    systems,
 			})
-			logBrowseTiming("system_root_file_count", prefix, started, fileCount)
-			if err != nil {
-				return nil, fmt.Errorf("error getting system root file count: %w", err)
+			logBrowseTiming("system_root_file_count", prefix, fileCountStarted, fileCount)
+			if fcErr != nil {
+				return fmt.Errorf("error getting system root file count: %w", fcErr)
 			}
 			if fileCount > 0 {
 				addFilesystemRoute(root)
 			}
 
-			started = time.Now()
-			dirs, err := env.Database.MediaDB.BrowseDirectories(env.Context, database.BrowseDirectoriesOptions{
+			dirsStarted := time.Now()
+			dirs, dirsErr := env.Database.MediaDB.BrowseDirectories(env.Context, database.BrowseDirectoriesOptions{
 				PathPrefix: prefix,
 				Systems:    systems,
 			})
-			logBrowseTiming("system_root_directories", prefix, started, len(dirs))
-			if err != nil {
-				return nil, fmt.Errorf("error getting system route directories: %w", err)
+			logBrowseTiming("system_root_directories", prefix, dirsStarted, len(dirs))
+			if dirsErr != nil {
+				return fmt.Errorf("error getting system route directories: %w", dirsErr)
 			}
 			for _, dir := range dirs {
 				addFilesystemRoute(filepath.Join(root, dir.Name))
 			}
 		}
-
-		started := time.Now()
-		virtualSchemes, err := env.Database.MediaDB.BrowseVirtualSchemes(
-			env.Context,
-			database.BrowseVirtualSchemesOptions{Systems: systems},
-		)
-		logBrowseTiming("system_virtual_schemes", "", started, len(virtualSchemes))
-		if err != nil {
-			return nil, fmt.Errorf("error getting system virtual routes: %w", err)
-		}
-		for _, scheme := range virtualSchemes {
-			addRoute(scheme.Scheme)
-		}
 	}
 
-	return routes, nil
+	virtualStarted := time.Now()
+	virtualSchemes, err := env.Database.MediaDB.BrowseVirtualSchemes(
+		env.Context,
+		database.BrowseVirtualSchemesOptions{Systems: systems},
+	)
+	logBrowseTiming("system_virtual_schemes", "", virtualStarted, len(virtualSchemes))
+	if err != nil {
+		return fmt.Errorf("error getting system virtual routes: %w", err)
+	}
+	for _, scheme := range virtualSchemes {
+		addRoute(scheme.Scheme)
+	}
+	return nil
 }
 
 func isPathUnderRootDirs(path string, rootDirs []string) bool {
@@ -600,22 +641,28 @@ func buildBrowseResponse(
 
 	entries := make([]models.BrowseEntry, 0, len(dirs)+len(files))
 
-	// Add directory entries
-	for _, dir := range dirs {
-		entries = append(entries, models.BrowseEntry{
-			Name:      dir.Name,
-			Path:      path + "/" + dir.Name,
-			Type:      "directory",
-			FileCount: &dir.FileCount,
-			SystemIDs: dir.SystemIDs,
-		})
-	}
-
-	// Build file entries
 	var rootDirs []string
 	if env.LauncherCache != nil && env.Platform != nil {
 		rootDirs = env.Platform.RootDirs(env.Config)
 	}
+
+	// Add directory entries
+	for _, dir := range dirs {
+		dirPath := filepath.ToSlash(filepath.Join(path, dir.Name))
+		entry := models.BrowseEntry{
+			Name:      dir.Name,
+			Path:      dirPath,
+			Type:      "directory",
+			FileCount: &dir.FileCount,
+			SystemIDs: dir.SystemIDs,
+		}
+		if dir.FileCount == 1 {
+			annotateSingletonDirectoryEntry(env, &entry, dirPath, dir.SystemIDs, rootDirs)
+		}
+		entries = append(entries, entry)
+	}
+
+	// Build file entries
 	for i := range files {
 		entry := buildMediaEntry(&files[i], env, rootDirs)
 		entries = append(entries, entry)
@@ -679,6 +726,64 @@ func buildMediaEntry(
 	}
 
 	return entry
+}
+
+func annotateSingletonDirectoryEntry(
+	env *requests.RequestEnv,
+	entry *models.BrowseEntry,
+	dirPath string,
+	systemIDs []string,
+	rootDirs []string,
+) {
+	if env == nil || entry == nil || env.Database == nil || len(systemIDs) != 1 || !singletonMediaAliasesEnabled(env) {
+		return
+	}
+
+	db := env.Database.MediaDB
+	system, err := db.FindSystemBySystemID(systemIDs[0])
+	if err != nil {
+		log.Debug().Err(err).Str("system", systemIDs[0]).Msg("browse singleton directory system lookup failed")
+		return
+	}
+	media, err := db.FindSingleDescendantMedia(env.Context, system.DBID, dirPath)
+	if err != nil {
+		log.Debug().Err(err).Str("path", dirPath).Msg("browse singleton directory lookup failed")
+		return
+	}
+	if media == nil {
+		return
+	}
+
+	row, err := db.GetMediaWithTitleAndSystem(env.Context, media.DBID)
+	if err != nil || row == nil {
+		log.Debug().Err(err).Int64("mediaDBID", media.DBID).Msg("browse singleton directory media lookup failed")
+		return
+	}
+	tags, err := db.GetMediaTagsByMediaDBID(env.Context, row.DBID)
+	if err != nil {
+		log.Debug().Err(err).Int64("mediaDBID", row.DBID).Msg("browse singleton directory tag lookup failed")
+		return
+	}
+	zapTags, err := db.GetZapScriptTagsBySystemAndPath(env.Context, row.System.SystemID, row.Path)
+	if err != nil {
+		log.Debug().Err(err).Int64("mediaDBID", row.DBID).Msg("browse singleton directory zapscript tag lookup failed")
+		return
+	}
+
+	result := database.SearchResultWithCursor{
+		MediaID:       row.DBID,
+		SystemID:      row.System.SystemID,
+		Name:          row.Title.Name,
+		Path:          row.Path,
+		Tags:          tags,
+		ZapScriptTags: zapTags,
+	}
+	mediaEntry := buildMediaEntry(&result, env, rootDirs)
+	entry.MediaID = mediaEntry.MediaID
+	entry.SystemID = mediaEntry.SystemID
+	entry.RelPath = mediaEntry.RelPath
+	entry.ZapScript = mediaEntry.ZapScript
+	entry.Tags = mediaEntry.Tags
 }
 
 // isPathUnderRoots checks if the given path is at or under one of the allowed root directories.

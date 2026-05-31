@@ -40,18 +40,18 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type PathFragmentKey struct {
-	Path                string
-	FilenameTags        bool
-	StripLeadingNumbers bool
-}
-
 // PathFragmentParams contains parameters for GetPathFragments.
 type PathFragmentParams struct {
-	Config              *config.Instance
-	Path                string
-	SystemID            string
-	MediaType           slugs.MediaType // Pre-resolved media type; skips systemdefs lookup if set
+	Config    *config.Instance
+	Path      string
+	SystemID  string
+	MediaType slugs.MediaType // Pre-resolved media type; skips systemdefs lookup if set
+	// ProvidedName, when non-empty, overrides the title that would otherwise be
+	// parsed from the filename. Tags are still extracted from the filename.
+	// Slug derives from ProvidedName when set, so any downstream consumer that
+	// looks titles up by slug must supply the same ProvidedName to compute a
+	// matching slug (see gamelistxml.LoadRecords for an example).
+	ProvidedName        string
 	NoExt               bool
 	StripLeadingNumbers bool
 }
@@ -98,6 +98,9 @@ func FlushScanStateMaps(ss *database.ScanState) {
 	for mediaID := range ss.MediaTagIDs {
 		delete(ss.MediaTagIDs, mediaID)
 	}
+	for mediaID := range ss.MediaParentDirs {
+		delete(ss.MediaParentDirs, mediaID)
+	}
 }
 
 func AddMediaPath(
@@ -105,19 +108,21 @@ func AddMediaPath(
 	ss *database.ScanState,
 	systemID string,
 	path string,
+	providedName string,
 	noExt bool,
 	stripLeadingNumbers bool,
 	cfg *config.Instance,
 	mediaType slugs.MediaType,
 ) (titleIndex, mediaIndex int, err error) {
 	existingMedia := false
-	pf := GetPathFragments(PathFragmentParams{
+	pf := GetPathFragments(&PathFragmentParams{
 		Config:              cfg,
 		Path:                path,
 		NoExt:               noExt,
 		StripLeadingNumbers: stripLeadingNumbers,
 		SystemID:            systemID,
 		MediaType:           mediaType,
+		ProvidedName:        providedName,
 	})
 
 	systemIndex := 0
@@ -169,13 +174,7 @@ func AddMediaPath(
 		ss.MediaIndex++
 		mediaIndex = ss.MediaIndex
 
-		// Compute immediate parent directory for indexed browse lookups.
-		var parentDir string
-		if idx := strings.Index(pf.Path, "://"); idx >= 0 {
-			parentDir = pf.Path[:idx+3]
-		} else if lastSlash := strings.LastIndex(pf.Path, "/"); lastSlash >= 0 {
-			parentDir = pf.Path[:lastSlash+1]
-		}
+		parentDir := mediadb.ParentDirForMediaPath(pf.Path)
 
 		_, err := db.InsertMedia(database.Media{
 			DBID:           int64(mediaIndex),
@@ -192,12 +191,25 @@ func AddMediaPath(
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[mediaIndex] = titleIndex
 		}
+		if ss.MediaParentDirs != nil {
+			ss.MediaParentDirs[mediaIndex] = parentDir
+		}
 	} else {
 		existingMedia = true
 		mediaIndex = foundMediaIndex
+		parentDir := mediadb.ParentDirForMediaPath(pf.Path)
 		// Mark as found during persistent indexing (not missing)
 		if ss.MissingMedia != nil {
 			delete(ss.MissingMedia, foundMediaIndex)
+		}
+		if ss.MediaParentDirs != nil {
+			existingParentDir, ok := ss.MediaParentDirs[mediaIndex]
+			if !ok || existingParentDir != parentDir {
+				if err := db.UpdateMediaParentDir(int64(mediaIndex), parentDir); err != nil {
+					return 0, 0, fmt.Errorf("error updating media parent dir %s: %w", pf.Path, err)
+				}
+				ss.MediaParentDirs[mediaIndex] = parentDir
+			}
 		}
 		if existingTitleIndex, ok := ss.MediaTitleIDs[mediaIndex]; !ok || existingTitleIndex != titleIndex {
 			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex)); err != nil {
@@ -788,6 +800,9 @@ func PopulateScanStateForSystem(
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
 		}
+		if ss.MediaParentDirs != nil {
+			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
+		}
 	}
 
 	if ss.MediaTagIDs != nil {
@@ -880,6 +895,9 @@ func PopulatePersistentScanStateForSystem(
 		ss.MediaIDs[mediaKey] = int(m.DBID)
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
+		}
+		if ss.MediaParentDirs != nil {
+			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
 		}
 		ss.MissingMedia[int(m.DBID)] = struct{}{}
 	}
@@ -1062,7 +1080,7 @@ func PopulateScanStateForSelectiveIndexing(
 	return nil
 }
 
-func GetPathFragments(params PathFragmentParams) MediaPathFragments {
+func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 	f := MediaPathFragments{}
 
 	// don't clean the :// in custom scheme paths
@@ -1113,7 +1131,12 @@ func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 		f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 	}
 
-	f.Title = tags.ParseTitleFromFilename(f.FileName, params.StripLeadingNumbers)
+	trimmedName := strings.TrimSpace(params.ProvidedName)
+	if trimmedName != "" {
+		f.Title = trimmedName
+	} else {
+		f.Title = tags.ParseTitleFromFilename(f.FileName, params.StripLeadingNumbers)
+	}
 
 	// Use pre-resolved media type if provided, otherwise look up from system ID
 	mediaType := params.MediaType
@@ -1136,7 +1159,11 @@ func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 	// original title. This ensures Slug is never empty while the search
 	// logic (mediadb.go) falls back to the Name field for these cases.
 	if f.Slug == "" {
-		f.Slug = strings.ToLower(f.FileName)
+		if trimmedName != "" {
+			f.Slug = strings.ToLower(trimmedName)
+		} else {
+			f.Slug = strings.ToLower(f.FileName)
+		}
 	}
 
 	// Extract tags from filename only if enabled in config (default to enabled for nil config)

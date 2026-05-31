@@ -44,29 +44,43 @@ import (
 //   - Pattern: lock → modify state → copy needed data → unlock → send notifications
 //
 // See SetActiveCard, SetActiveMedia, SetReader, RemoveReader for examples.
+type PendingLaunchOverride struct {
+	CreatedAt  time.Time
+	LauncherID string
+	Source     tokens.Token
+}
+
+type PendingWrite struct {
+	CreatedAt time.Time
+	Payload   string
+	Source    tokens.Token
+}
+
 type State struct {
-	platform            platforms.Platform
-	ctx                 context.Context
-	ctxCancelFunc       context.CancelFunc
-	softwareToken       *tokens.Token
-	wroteToken          *tokens.Token
-	readers             map[string]readers.Reader
-	Notifications       chan<- models.Notification
-	activeMedia         *models.ActiveMedia
-	activePlaylist      *playlists.Playlist
-	activeMediaReadyCh  chan struct{}
-	inbox               *inbox.Service
-	onMediaStartHook    func(*models.ActiveMedia, uint64)
-	launcherManager     *LauncherManager
-	bootUUID            string
-	lastScanned         tokens.Token
-	activeToken         tokens.Token
-	activeMediaReadyGen uint64
-	mu                  syncutil.RWMutex
-	activeMediaReady    bool
-	stopService         bool
-	restartRequested    bool
-	runZapScript        bool
+	platform              platforms.Platform
+	ctx                   context.Context
+	ctxCancelFunc         context.CancelFunc
+	softwareToken         *tokens.Token
+	wroteToken            *tokens.Token
+	pendingLaunchOverride *PendingLaunchOverride
+	pendingWrite          *PendingWrite
+	readers               map[string]readers.Reader
+	Notifications         chan<- models.Notification
+	activeMedia           *models.ActiveMedia
+	activePlaylist        *playlists.Playlist
+	activeMediaReadyCh    chan struct{}
+	inbox                 *inbox.Service
+	onMediaStartHook      func(*models.ActiveMedia, uint64)
+	launcherManager       *LauncherManager
+	bootUUID              string
+	lastScanned           tokens.Token
+	activeToken           tokens.Token
+	activeMediaReadyGen   uint64
+	mu                    syncutil.RWMutex
+	activeMediaReady      bool
+	stopService           bool
+	restartRequested      bool
+	runZapScript          bool
 }
 
 func NewState(platform platforms.Platform, bootUUID string) (state *State, notificationCh <-chan models.Notification) {
@@ -278,6 +292,52 @@ func (s *State) GetWroteToken() *tokens.Token {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.wroteToken
+}
+
+func (s *State) SetPendingLaunchOverride(pending *PendingLaunchOverride) {
+	s.mu.Lock()
+	s.pendingLaunchOverride = pending
+	s.mu.Unlock()
+}
+
+func (s *State) GetPendingLaunchOverride() *PendingLaunchOverride {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pendingLaunchOverride
+}
+
+func (s *State) ConsumePendingLaunchOverride() *PendingLaunchOverride {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.pendingLaunchOverride
+	s.pendingLaunchOverride = nil
+	return pending
+}
+
+func (s *State) SetPendingWrite(pending *PendingWrite) {
+	s.mu.Lock()
+	s.pendingWrite = pending
+	s.mu.Unlock()
+}
+
+func (s *State) GetPendingWrite() *PendingWrite {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pendingWrite
+}
+
+func (s *State) ConsumePendingWrite() *PendingWrite {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.pendingWrite
+	s.pendingWrite = nil
+	return pending
+}
+
+func (s *State) ClearPendingWrite() {
+	s.mu.Lock()
+	s.pendingWrite = nil
+	s.mu.Unlock()
 }
 
 func (s *State) GetActivePlaylist() *playlists.Playlist {

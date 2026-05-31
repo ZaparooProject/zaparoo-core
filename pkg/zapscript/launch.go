@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 func applySystemDefaultLauncher(env *platforms.CmdEnv, systemID string) string {
@@ -310,10 +311,16 @@ func getLaunchClosure(
 	return func(path string) error {
 		launcherID := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
 		action := env.Cmd.AdvArgs.Get(zapscript.KeyAction)
+		setName := env.Cmd.AdvArgs.Get(zapscript.KeySetName)
+		setNameSameDir := env.Cmd.AdvArgs.Get(zapscript.KeySetNameSameDir)
 
 		var opts *platforms.LaunchOptions
-		if action != "" {
-			opts = &platforms.LaunchOptions{Action: action}
+		if action != "" || setName != "" || setNameSameDir != "" {
+			opts = &platforms.LaunchOptions{
+				Action:         action,
+				SetName:        setName,
+				SetNameSameDir: setNameSameDir,
+			}
 		}
 
 		if launcherID != "" {
@@ -412,7 +419,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// this always takes precedence over the system/path format (but is not totally cross platform)
 	var findErr error
 	var p string
-	if p, findErr = findFile(pl, env.Cfg, path); findErr == nil {
+	if p, findErr = findFile(afero.NewOsFs(), pl, env.Cfg, path); findErr == nil {
 		log.Debug().Msgf("launching found relative path: %s", p)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -475,7 +482,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		log.Debug().Msgf("checking system path: %s", systemPath)
 		var systemFindErr error
 		var fp string
-		if fp, systemFindErr = findFile(pl, env.Cfg, systemPath); systemFindErr == nil {
+		if fp, systemFindErr = findFile(afero.NewOsFs(), pl, env.Cfg, systemPath); systemFindErr == nil {
 			log.Debug().Msgf("launching found system path: %s", fp)
 			return platforms.CmdResult{
 				MediaChanged: true,
@@ -666,7 +673,7 @@ func cmdLaunchLast(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdRe
 		return platforms.CmdResult{}, err
 	}
 
-	path, err := findFile(pl, env.Cfg, entry.MediaPath)
+	path, err := findFile(afero.NewOsFs(), pl, env.Cfg, entry.MediaPath)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}

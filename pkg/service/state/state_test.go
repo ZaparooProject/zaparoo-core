@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,6 +64,24 @@ func TestStopService_DoesNotSetRestartRequested(t *testing.T) {
 	state.StopService()
 
 	assert.False(t, state.RestartRequested())
+}
+
+func TestConsumePendingWrite(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+
+	pending := &PendingWrite{
+		Payload: "payload",
+		Source:  tokens.Token{UID: "source"},
+	}
+	state.SetPendingWrite(pending)
+
+	consumed := state.ConsumePendingWrite()
+
+	assert.Same(t, pending, consumed)
+	assert.Nil(t, state.GetPendingWrite())
+	assert.Nil(t, state.ConsumePendingWrite())
 }
 
 func TestSetOnMediaStartHook(t *testing.T) {

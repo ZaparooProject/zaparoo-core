@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb/boltmigration"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -215,7 +216,9 @@ func pruneExpiredZapLinkHosts(db *database.Database) {
 	}
 }
 
-func runMediaDBStartupMaintenance(ctx context.Context, db database.MediaDBI) {
+func runMediaDBStartupMaintenance(
+	ctx context.Context, db database.MediaDBI, pauser *syncutil.Pauser, tagCacheLoaded bool,
+) {
 	if db == nil {
 		log.Warn().Msg("skipping media database startup maintenance: media database is nil")
 		return
@@ -224,39 +227,67 @@ func runMediaDBStartupMaintenance(ctx context.Context, db database.MediaDBI) {
 	db.TrackBackgroundOperation()
 	defer db.BackgroundOperationDone()
 
-	if sqlDB := db.UnsafeGetSQLDb(); sqlDB != nil {
-		log.Debug().Msg("running media database PRAGMA optimize")
-		if _, err := sqlDB.ExecContext(ctx, "PRAGMA optimize;"); err != nil {
-			log.Warn().Err(err).Msg("failed to run PRAGMA optimize")
-		}
-
-		log.Debug().Msg("running media database WAL checkpoint")
-		if _, err := sqlDB.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);"); err != nil {
-			log.Warn().Err(err).Msg("failed to run WAL checkpoint on startup")
-		}
-	} else {
-		log.Warn().Msg("skipping media database PRAGMA maintenance: SQL database is nil")
-	}
+	// Boot here intentionally does NOT issue PRAGMA optimize or
+	// wal_checkpoint(TRUNCATE). SQLite's auto-checkpoint runs PASSIVE
+	// inline with COMMITs and keeps the WAL bounded without blocking
+	// readers; TRUNCATE takes the EXCLUSIVE writer lock and contends with
+	// the launcher's first query. Optimize is documented as run-on-close
+	// or "every few hours" and is similarly expensive on cold boot. WAL
+	// mode auto-recovers on next open after a hard power-off, so neither
+	// is needed for correctness.
 
 	if startupMaintenanceCancelled(ctx, "skipping tag cache warmup: startup maintenance cancelled") {
 		return
 	}
 
-	if err := db.RebuildTagCache(); err != nil {
-		log.Warn().Err(err).Msg("failed to warm tag cache on startup")
+	// Only rebuild the tag cache if LoadCachedTagCache didn't populate it
+	// from disk. Skipping the rebuild on a warm boot is the whole point of
+	// persisting the cache.
+	if !tagCacheLoaded {
+		if err := db.RebuildTagCache(); err != nil {
+			log.Warn().Err(err).Msg("failed to warm tag cache on startup")
+		} else if persistErr := db.PersistTagCache(); persistErr != nil {
+			// Best-effort: the rebuild succeeded so the running process is
+			// fine, but skipping persistence means the next cold boot will
+			// pay the rebuild cost again.
+			log.Warn().Err(persistErr).Msg("failed to persist tag cache after startup rebuild")
+		}
 	}
-}
 
-func runStartupMaintenance(ctx context.Context, cfg *config.Instance, db *database.Database) {
-	if db == nil {
-		log.Warn().Msg("skipping startup maintenance: database is nil")
+	if startupMaintenanceCancelled(ctx, "skipping temporary media repair jobs: startup maintenance cancelled") {
 		return
 	}
 
-	runMediaDBStartupMaintenance(ctx, db.MediaDB)
-	cleanupHistoryRetention(ctx, cfg, db)
-	if startupMaintenanceCancelled(ctx, "skipping zaplink host pruning: startup maintenance cancelled") {
+	pending, err := db.TemporaryRepairJobsPending(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check temporary media repair jobs")
 		return
 	}
-	pruneExpiredZapLinkHosts(db)
+	if !pending {
+		return
+	}
+
+	indexingStatus, err := db.GetIndexingStatus()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check indexing status before temporary media repair jobs")
+		return
+	}
+	if indexingStatus == mediadb.IndexingStatusRunning || indexingStatus == mediadb.IndexingStatusPending {
+		log.Info().Str("indexingStatus", indexingStatus).
+			Msg("temporary media repair jobs pending; deferring until indexing completes")
+		return
+	}
+
+	optimizationStatus, err := db.GetOptimizationStatus()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check optimization status before temporary media repair jobs")
+		return
+	}
+	if optimizationStatus == mediadb.IndexingStatusRunning {
+		log.Info().Msg("temporary media repair jobs pending; optimization already running")
+		return
+	}
+
+	log.Info().Msg("temporary media repair jobs pending; starting background optimization")
+	db.RunBackgroundOptimization(nil, pauser)
 }

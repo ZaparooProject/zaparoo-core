@@ -111,7 +111,7 @@ func indexSystems(
 	require.NoError(t, db.BeginTransaction(false))
 	for _, sys := range systems {
 		for _, entry := range batch.Entries[sys] {
-			_, _, err := AddMediaPath(db, state, sys, entry.Path, false, false, nil, "")
+			_, _, err := AddMediaPath(db, state, sys, entry.Path, "", false, false, nil, "")
 			require.NoError(t, err, "AddMediaPath failed for system %s", sys)
 		}
 	}
@@ -153,7 +153,7 @@ func TestTruncateResume_SharedTagsPreserved(t *testing.T) {
 
 	require.NoError(t, db.BeginTransaction(false))
 	for _, entry := range batch.Entries["C64"][:5] {
-		_, _, err := AddMediaPath(db, state, "C64", entry.Path, false, false, nil, "")
+		_, _, err := AddMediaPath(db, state, "C64", entry.Path, "", false, false, nil, "")
 		require.NoError(t, err)
 	}
 	require.NoError(t, db.CommitTransaction())
@@ -249,7 +249,7 @@ func TestTruncateResume_MultipleSystemsIndexed(t *testing.T) {
 	// Step 2: partially index C64 (simulates the mid-index interrupt).
 	require.NoError(t, db.BeginTransaction(false))
 	for _, entry := range batch.Entries[partialSystem][:partialGameCount] {
-		_, _, err := AddMediaPath(db, state, partialSystem, entry.Path, false, false, nil, "")
+		_, _, err := AddMediaPath(db, state, partialSystem, entry.Path, "", false, false, nil, "")
 		require.NoError(t, err)
 	}
 	require.NoError(t, db.CommitTransaction())
@@ -310,7 +310,7 @@ func TestTruncateResume_MultipleSystemsIndexed(t *testing.T) {
 
 	require.NoError(t, db.BeginTransaction(false))
 	for _, entry := range batch.Entries[partialSystem] {
-		_, _, addErr := AddMediaPath(db, resumeState, partialSystem, entry.Path, false, false, nil, "")
+		_, _, addErr := AddMediaPath(db, resumeState, partialSystem, entry.Path, "", false, false, nil, "")
 		require.NoError(t, addErr, "re-index must not fail with UNIQUE or FK violation")
 	}
 	require.NoError(t, db.CommitTransaction())

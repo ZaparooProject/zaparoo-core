@@ -101,6 +101,12 @@ type ReaderConnection struct {
 	IDSource string `json:"idSource,omitempty"`
 }
 
+type SystemDefault struct {
+	System     string `json:"system" validate:"required,system"`
+	Launcher   string `json:"launcher,omitempty"`
+	BeforeExit string `json:"beforeExit,omitempty"`
+}
+
 // IsEnabled returns whether this connection is enabled.
 // nil (omitted) and true both mean enabled; only explicit false disables.
 func (r ReaderConnection) IsEnabled() bool {
@@ -118,6 +124,7 @@ type UpdateSettingsParams struct {
 	ReadersScanExitDelay      *float32            `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
 	ReadersScanIgnoreSystem   *[]string           `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
 	ReadersConnect            *[]ReaderConnection `json:"readersConnect,omitempty"`
+	SystemDefaults            *[]SystemDefault    `json:"systemDefaults,omitempty" validate:"omitempty,dive"`
 	AudioVolume               *int                `json:"audioVolume" validate:"omitempty,gte=0,lte=200"`
 	LaunchGuardEnabled        *bool               `json:"launchGuardEnabled"`
 	LaunchGuardTimeout        *float32            `json:"launchGuardTimeout" validate:"omitempty,gte=-1"`
@@ -231,4 +238,9 @@ type InputKeyboardParams struct {
 
 type InputGamepadParams struct {
 	Buttons string `json:"buttons" validate:"required,min=1"`
+}
+
+type MediaTitleParseParams struct {
+	SystemID string `json:"systemId" validate:"required,min=1"`
+	Path     string `json:"path" validate:"required,min=1"`
 }

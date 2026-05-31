@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -43,6 +44,7 @@ import (
 	platformids "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/deverr"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
@@ -56,6 +58,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/idle"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/adrg/xdg"
@@ -75,6 +78,8 @@ type Platform struct {
 	platformMappingsMu      syncutil.RWMutex
 	launchBoxPipeLock       syncutil.Mutex
 }
+
+var retroBatLaunchSettleDelay = 2 * time.Second
 
 func (*Platform) ID() string {
 	return platformids.Windows
@@ -112,11 +117,13 @@ func (*Platform) StartPre(_ *config.Instance) error {
 }
 
 func (p *Platform) StartPost(
+	_ context.Context,
 	cfg *config.Instance,
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	_ *database.Database,
+	_ *idle.Scheduler,
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
@@ -246,6 +253,20 @@ func (p *Platform) LaunchMedia(
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
+
+	if isRetroBatLauncher(launcher) {
+		_, running, runningErr := esapi.APIRunningGame()
+		if runningErr != nil {
+			log.Warn().Err(runningErr).Msg("RetroBat ES API unavailable, assuming no game is running")
+		} else if running {
+			log.Info().Msg("exiting current RetroBat media")
+			if stopErr := p.StopActiveLauncher(platforms.StopForPreemption); stopErr != nil {
+				return fmt.Errorf("failed to stop active RetroBat launcher: %w", stopErr)
+			}
+			time.Sleep(retroBatLaunchSettleDelay)
+		}
+	}
+
 	err := platforms.DoLaunch(&platforms.LaunchParams{
 		Config:         cfg,
 		Platform:       p,
@@ -424,4 +445,9 @@ func (*Platform) ConsoleManager() platforms.ConsoleManager {
 
 func (*Platform) ManagedByPackageManager() bool {
 	return false
+}
+
+func (*Platform) Scrapers(_ *config.Instance) map[string]platforms.Scraper {
+	s := gamelistxml.NewPlatformScraper()
+	return map[string]platforms.Scraper{s.ID: s}
 }

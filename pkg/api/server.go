@@ -47,10 +47,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper/gamelistxml"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -121,7 +117,11 @@ func logSafeRequest(req *models.RequestObject) {
 	log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received request")
 }
 
-// logSafeResponse logs a response but truncates large content to prevent recursive logging issues
+// logSafeResponse logs a response but redacts large or binary fields. Any
+// response shape that can carry base64-encoded media (image blobs, meta
+// property data, screenshots, log dumps) MUST be matched explicitly here —
+// the default case omits the result body entirely so a forgotten type
+// cannot accidentally dump megabytes of base64 into the debug log.
 func logSafeResponse(result any) {
 	switch resp := result.(type) {
 	case models.LogDownloadResponse:
@@ -151,9 +151,22 @@ func logSafeResponse(result any) {
 			Int("media_properties", len(resp.Media.Properties)).
 			Int("title_properties", len(resp.Media.Title.Properties)).
 			Msg("sending response")
+	case models.MediaMetaBatchResponse:
+		log.Debug().
+			Int("items", len(resp.Items)).
+			Msg("sending response: media.meta batch")
 	default:
-		log.Debug().Interface("result", result).Msg("sending response")
+		log.Debug().Str("type", fmt.Sprintf("%T", result)).Msg("sending response")
 	}
+}
+
+// RequestTracker is implemented by anything that wants to know when an API
+// request starts and ends. The idle scheduler in pkg/service/idle satisfies
+// it; tests can pass nil or a fake. Defined here (not in pkg/service/idle)
+// so the api package doesn't need to import idle.
+type RequestTracker interface {
+	RequestStarted()
+	RequestEnded()
 }
 
 type MethodMap struct {
@@ -253,6 +266,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaScrapeCancel:   methods.HandleMediaScrapeCancel,
 		models.MethodMediaScrapeResume:   methods.HandleMediaScrapeResume,
 		models.MethodMediaControl:        methods.HandleMediaControl,
+		models.MethodMediaTitleParse:     methods.HandleMediaTitleParse,
 		// settings
 		models.MethodSettings:             methods.HandleSettings,
 		models.MethodSettingsUpdate:       methods.HandleSettingsUpdate,
@@ -264,6 +278,7 @@ func NewMethodMap() *MethodMap {
 		// systems
 		models.MethodSystems: methods.HandleSystems,
 		// launchers
+		models.MethodLaunchers:        methods.HandleLaunchers,
 		models.MethodLaunchersRefresh: methods.HandleLaunchersRefresh,
 		// mappings
 		models.MethodMappings:       methods.HandleMappings,
@@ -326,6 +341,28 @@ func NewMethodMap() *MethodMap {
 	}
 
 	return &m
+}
+
+// newIdleTrackMiddleware returns chi middleware that bumps tracker's
+// in-flight counter for the duration of an HTTP request. Apply this to
+// short-lived HTTP entry points (pairing, REST run) so background work
+// scheduled via the idle scheduler waits for them to finish. NOT applied
+// to long-lived connections (SSE) or WebSocket upgrades — SSE would pin
+// the counter forever, and WS / POST /api track per-message inside their
+// own handlers (handleWSMessage / handlePostRequest).
+//
+// A nil tracker yields a pass-through middleware so callers don't need to
+// nil-check at every Use site.
+func newIdleTrackMiddleware(tracker RequestTracker) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if tracker != nil {
+				tracker.RequestStarted()
+				defer tracker.RequestEnded()
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // handleRequest validates a client request and forwards it to the
@@ -416,7 +453,24 @@ func logWSWriteError(err error, msg string) {
 }
 
 func handleResponse(resp models.ResponseObject) error {
-	log.Debug().Interface("response", resp).Msg("received response")
+	// Avoid logging resp.Result — inbound responses can carry base64 media
+	// blobs (e.g. media.image, media.meta property data) and dumping the
+	// whole map would flood the debug log. Error messages cross the same
+	// 4 MB WS boundary, so cap them too.
+	const maxErrorMessageLen = 200
+	ev := log.Debug().Interface("id", resp.ID)
+	if resp.Error != nil {
+		ev = ev.Int("errorCode", resp.Error.Code)
+		msg := resp.Error.Message
+		if len(msg) > maxErrorMessageLen {
+			ev = ev.Str("errorMessage", msg[:maxErrorMessageLen]).
+				Bool("errorMessageTruncated", true).
+				Int("errorMessageLen", len(msg))
+		} else {
+			ev = ev.Str("errorMessage", msg)
+		}
+	}
+	ev.Msg("received response")
 	return nil
 }
 
@@ -541,6 +595,7 @@ func isPrivateIP(ipStr string) bool {
 func isAllowedOrigin(
 	origin string,
 	staticOrigins []string,
+	localIPsProvider LocalIPsProvider,
 	customOriginsProvider OriginsProvider,
 	apiPort int,
 	allowEmptyOrigin bool,
@@ -559,6 +614,16 @@ func isAllowedOrigin(
 	for _, allowed := range staticOrigins {
 		if strings.EqualFold(origin, allowed) {
 			log.Debug().Msgf("%s origin: %s allowed (static match)", logPrefix, origin)
+			return true
+		}
+	}
+
+	// Check current local IP origins dynamically. Network interfaces may not
+	// have addresses when the API server starts, especially during first boot.
+	localOrigins := expandLocalIPOrigins(localIPsProvider(), apiPort)
+	for _, allowed := range localOrigins {
+		if strings.EqualFold(origin, allowed) {
+			log.Debug().Msgf("%s origin: %s allowed (current local IP match)", logPrefix, origin)
 			return true
 		}
 	}
@@ -609,10 +674,9 @@ func expandCustomOrigins(customOrigins []string, port int) []string {
 	return result
 }
 
-// buildStaticAllowedOrigins creates the static part of allowed origins (base + local IPs).
-func buildStaticAllowedOrigins(baseOrigins, localIPs []string, port int) []string {
-	result := make([]string, 0, len(baseOrigins)+len(localIPs)*2)
-	result = append(result, baseOrigins...)
+// expandLocalIPOrigins creates allowed origins for current local interface IPs.
+func expandLocalIPOrigins(localIPs []string, port int) []string {
+	result := make([]string, 0, len(localIPs)*2)
 
 	for _, localIP := range localIPs {
 		result = append(result,
@@ -620,6 +684,15 @@ func buildStaticAllowedOrigins(baseOrigins, localIPs []string, port int) []strin
 			fmt.Sprintf("https://%s:%d", localIP, port),
 		)
 	}
+
+	return result
+}
+
+// buildStaticAllowedOrigins creates the static part of allowed origins (base + local IPs).
+func buildStaticAllowedOrigins(baseOrigins, localIPs []string, port int) []string {
+	result := make([]string, 0, len(baseOrigins)+len(localIPs)*2)
+	result = append(result, baseOrigins...)
+	result = append(result, expandLocalIPOrigins(localIPs, port)...)
 
 	return result
 }
@@ -634,15 +707,19 @@ func buildDynamicAllowedOrigins(baseOrigins, localIPs []string, port int, custom
 // OriginsProvider is a function that returns custom origins from config.
 type OriginsProvider func() []string
 
+// LocalIPsProvider is a function that returns current local interface IPs.
+type LocalIPsProvider func() []string
+
 // makeOriginValidator creates an origin validation function for CORS middleware.
 // It checks against static origins and dynamically fetches custom origins on each request.
 func makeOriginValidator(
 	staticOrigins []string,
+	localIPsProvider LocalIPsProvider,
 	customOriginsProvider OriginsProvider,
 	port int,
 ) func(*http.Request, string) bool {
 	return func(_ *http.Request, origin string) bool {
-		return isAllowedOrigin(origin, staticOrigins, customOriginsProvider, port, false, "cors")
+		return isAllowedOrigin(origin, staticOrigins, localIPsProvider, customOriginsProvider, port, false, "cors")
 	}
 }
 
@@ -883,7 +960,7 @@ func handleWSMessage(
 	scrapePauser *syncutil.Pauser,
 	encGateway *apimiddleware.EncryptionGateway,
 	lastSeenTracker *apimiddleware.LastSeenTracker,
-	scrapers map[string]scraper.Scraper,
+	tracker RequestTracker,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
 		defer func() {
@@ -895,6 +972,16 @@ func handleWSMessage(
 				}
 			}
 		}()
+
+		// Bracket the entire per-message lifecycle (decrypt → dispatch →
+		// marshal → write → AfterWrite) so the idle scheduler doesn't
+		// see inFlight == 0 while a response is still being serialized.
+		// Pong fast-paths are intentionally counted: they're still wire
+		// activity and their cost is negligible.
+		if tracker != nil {
+			tracker.RequestStarted()
+			defer tracker.RequestEnded()
+		}
 
 		clientIP := apimiddleware.ParseRemoteIP(session.Request.RemoteAddr)
 		isLocal := apimiddleware.IsLoopbackAddr(session.Request.RemoteAddr)
@@ -968,7 +1055,6 @@ func handleWSMessage(
 			Player:        player,
 			TokenQueue:    inTokenQueue,
 			ConfirmQueue:  confirmQueue,
-			Scrapers:      scrapers,
 			IndexPauser:   indexPauser,
 			ScrapePauser:  scrapePauser,
 			IsLocal:       isLocal,
@@ -1181,9 +1267,18 @@ func handlePostRequest(
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
-	scrapers map[string]scraper.Scraper,
+	tracker RequestTracker,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Bracket the entire request lifecycle (read body → dispatch →
+		// marshal → Write → Flush → AfterWrite) so the idle scheduler
+		// doesn't see inFlight == 0 while a response is still being
+		// serialized.
+		if tracker != nil {
+			tracker.RequestStarted()
+			defer tracker.RequestEnded()
+		}
+
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if mediaType != "application/json" {
 			http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
@@ -1227,7 +1322,6 @@ func handlePostRequest(
 			Player:        player,
 			TokenQueue:    inTokenQueue,
 			ConfirmQueue:  confirmQueue,
-			Scrapers:      scrapers,
 			IndexPauser:   indexPauser,
 			ScrapePauser:  scrapePauser,
 			IsLocal:       apimiddleware.IsLoopbackAddr(r.RemoteAddr),
@@ -1283,79 +1377,6 @@ func handlePostRequest(
 	}
 }
 
-// makeSystemResolver builds a SystemResolver for the gamelist.xml scraper.
-// It resolves indexed system IDs to ScrapeSystem values using the same launcher
-// path discovery as media indexing, so scraper paths match scanned media paths.
-func makeSystemResolver(
-	mdb database.MediaDBI,
-	platform platforms.Platform,
-	cfg *config.Instance,
-) gamelistxml.SystemResolver {
-	return func(ctx context.Context, systemIDs []string) ([]scraper.ScrapeSystem, error) {
-		indexed, err := mdb.IndexedSystems()
-		if err != nil {
-			return nil, fmt.Errorf("makeSystemResolver: list indexed systems: %w", err)
-		}
-
-		// Build a set of IDs to resolve: caller's filter or all indexed.
-		want := make(map[string]struct{}, len(indexed))
-		if len(systemIDs) == 0 {
-			for _, id := range indexed {
-				want[id] = struct{}{}
-			}
-		} else {
-			indexedSet := make(map[string]struct{}, len(indexed))
-			for _, id := range indexed {
-				indexedSet[id] = struct{}{}
-			}
-			for _, id := range systemIDs {
-				if _, ok := indexedSet[id]; ok {
-					want[id] = struct{}{}
-				}
-			}
-		}
-
-		dbSystems := make(map[string]database.System, len(want))
-		systems := make([]systemdefs.System, 0, len(want))
-		for sysID := range want {
-			sys, err := mdb.FindSystemBySystemID(sysID)
-			if err != nil {
-				return nil, fmt.Errorf("makeSystemResolver: look up system %q: %w", sysID, err)
-			}
-
-			systemDef, err := systemdefs.GetSystem(sysID)
-			if err != nil {
-				log.Debug().Err(err).Str("system", sysID).Msg("makeSystemResolver: unknown system definition, skipping")
-				continue
-			}
-
-			dbSystems[sysID] = sys
-			systems = append(systems, *systemDef)
-		}
-
-		pathsBySystem := make(map[string][]string, len(systems))
-		for _, pathResult := range mediascanner.GetSystemPaths(ctx, cfg, platform, platform.RootDirs(cfg), systems) {
-			pathsBySystem[pathResult.System.ID] = append(pathsBySystem[pathResult.System.ID], pathResult.Path)
-		}
-
-		result := make([]scraper.ScrapeSystem, 0, len(systems))
-		for _, system := range systems {
-			romPaths := pathsBySystem[system.ID]
-			if len(romPaths) == 0 {
-				log.Debug().Str("system", system.ID).Msg("makeSystemResolver: no launcher paths found, skipping")
-				continue
-			}
-
-			result = append(result, scraper.ScrapeSystem{
-				DBID:     dbSystems[system.ID].DBID,
-				ID:       system.ID,
-				ROMPaths: romPaths,
-			})
-		}
-		return result, nil
-	}
-}
-
 // Start starts the API web server and blocks until it shuts down.
 func Start(
 	platform platforms.Platform,
@@ -1370,10 +1391,11 @@ func Start(
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	tracker RequestTracker,
 ) error {
 	return StartWithReady(
 		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager,
-		notifBroker, mdnsHostname, player, indexPauser, scrapePauser, nil,
+		notifBroker, mdnsHostname, player, indexPauser, scrapePauser, tracker, nil,
 	)
 }
 
@@ -1393,6 +1415,7 @@ func StartWithReady(
 	player audio.Player,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
+	tracker RequestTracker,
 	ready chan<- error,
 ) error {
 	notifyReady := func(err error) {
@@ -1419,13 +1442,15 @@ func StartWithReady(
 		fmt.Sprintf("https://127.0.0.1:%d", port),
 	)
 
-	localIPs := helpers.GetAllLocalIPs()
+	localIPsProvider := LocalIPsProvider(helpers.GetAllLocalIPs)
+	localIPs := localIPsProvider()
 	for _, localIP := range localIPs {
 		log.Debug().Msgf("adding local IP to allowed origins: %s", localIP)
 	}
 
-	// Build static origins (base + local IPs + mDNS + OS hostname)
-	staticOrigins := buildStaticAllowedOrigins(baseOrigins, localIPs, port)
+	// Build static origins (base + mDNS + OS hostname). Local IP origins are
+	// checked dynamically because network interfaces may appear after startup.
+	staticOrigins := buildStaticAllowedOrigins(baseOrigins, nil, port)
 
 	if mdnsHostname != "" {
 		mdnsLocal := mdnsHostname + ".local"
@@ -1450,8 +1475,8 @@ func StartWithReady(
 
 	log.Debug().Msgf("staticOrigins: %v", staticOrigins)
 
-	// Create origin validator that checks static origins + dynamic custom origins
-	originValidator := makeOriginValidator(staticOrigins, cfg.AllowedOrigins, port)
+	// Create origin validator that checks static origins + dynamic local IP/custom origins.
+	originValidator := makeOriginValidator(staticOrigins, localIPsProvider, cfg.AllowedOrigins, port)
 
 	r := chi.NewRouter()
 
@@ -1528,7 +1553,7 @@ func StartWithReady(
 	session.Upgrader.CheckOrigin = func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		log.Debug().Msgf("websocket origin: %s", origin)
-		return isAllowedOrigin(origin, staticOrigins, cfg.AllowedOrigins, port, true, "websocket")
+		return isAllowedOrigin(origin, staticOrigins, localIPsProvider, cfg.AllowedOrigins, port, true, "websocket")
 	}
 	// melody's Session.Write is a non-blocking enqueue onto a per-session
 	// output channel (default size 256). When that channel fills, the
@@ -1582,11 +1607,13 @@ func StartWithReady(
 	// IP, and provides defense in depth if pairingRateLimiter is ever
 	// misconfigured.
 	pairingRateMiddleware := apimiddleware.HTTPRateLimitMiddleware(pairingRateLimiter)
+	idleMiddleware := newIdleTrackMiddleware(tracker)
 	r.Group(func(r chi.Router) {
 		r.Use(apiRateLimitMiddleware)
 		r.Use(pairingRateMiddleware)
 		r.Use(middleware.NoCache)
 		r.Use(middleware.Timeout(config.APIRequestTimeout))
+		r.Use(idleMiddleware)
 		r.Post("/api/pair/start", pairingMgr.HandlePairStart())
 		r.Post("/api/pair/finish", pairingMgr.HandlePairFinish())
 	})
@@ -1628,19 +1655,15 @@ func StartWithReady(
 		})
 	})
 
-	// Build the scrapers map once; passed into RequestEnv for media.scrape.
-	gamelistScraper := gamelistxml.NewGamelistXMLScraper(
-		db.MediaDB,
-		makeSystemResolver(db.MediaDB, platform, cfg),
-	)
-	scrapers := map[string]scraper.Scraper{
-		gamelistScraper.ID(): gamelistScraper,
-	}
-
 	// Non-WebSocket API routes (HTTP POST + REST GET) — restricted to
 	// localhost by default; remote access requires explicit AllowedIPs.
 	// These transports do not support encryption; the IP allowlist plus
 	// API key auth are the security boundary.
+	//
+	// idleMiddleware is intentionally absent here: handlePostRequest calls
+	// tracker.RequestStarted / RequestEnded itself at the closure entry so
+	// the bracket covers the full lifecycle (body read → dispatch → write →
+	// AfterWrite). Adding the chi-layer middleware would double-count.
 	r.Group(func(r chi.Router) {
 		r.Use(nonWSIPFilter)
 		r.Use(apimiddleware.HTTPAuthMiddleware(authConfig))
@@ -1652,7 +1675,7 @@ func StartWithReady(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
 			db, limitsManager, player,
-			indexPauser, scrapePauser, scrapers,
+			indexPauser, scrapePauser, tracker,
 		)
 		r.Post("/api", postHandler)
 		r.Post("/api/v0", postHandler)
@@ -1668,6 +1691,7 @@ func StartWithReady(
 		r.Use(apiRateLimitMiddleware)
 		r.Use(middleware.NoCache)
 		r.Use(middleware.Timeout(config.APIRequestTimeout))
+		r.Use(idleMiddleware)
 
 		runHandler := methods.HandleRunRest(cfg, st, inTokenQueue)
 		r.Get("/l/*", runHandler) // DEPRECATED
@@ -1694,7 +1718,7 @@ func StartWithReady(
 		handleWSMessage(
 			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
 			db, limitsManager, player, indexPauser, scrapePauser, encGateway,
-			lastSeenTracker, scrapers,
+			lastSeenTracker, tracker,
 		),
 	))
 
