@@ -532,33 +532,45 @@ func (g *GamelistXMLScraper) scrapeLoop(
 
 	const id = "gamelist.xml"
 	var totalProcessed, totalMatched, totalSkipped int
+	totalSteps := len(systems)
 
-	waitForResume := func(systemID string, processed, matched, skipped int) bool {
+	waitForResume := func(systemID string, currentStep, processed, matched, skipped int) bool {
 		if waitErr := opts.Pauser.Wait(ctx); waitErr != nil {
 			ch <- scraper.ScrapeUpdate{
-				SystemID:  systemID,
-				Processed: processed,
-				Matched:   matched,
-				Skipped:   skipped,
-				Done:      true,
+				SystemID:    systemID,
+				Processed:   processed,
+				Matched:     matched,
+				Skipped:     skipped,
+				TotalSteps:  totalSteps,
+				CurrentStep: currentStep,
+				Done:        true,
 			}
 			return false
 		}
 		return true
 	}
 
-	for _, system := range systems {
-		if !waitForResume(system.ID, 0, 0, 0) {
+	for i, system := range systems {
+		currentStep := i + 1
+		sendUpdate := func(update scraper.ScrapeUpdate) {
+			update.TotalSteps = totalSteps
+			update.CurrentStep = currentStep
+			ch <- update
+		}
+		if !waitForResume(system.ID, currentStep, 0, 0, 0) {
 			return
 		}
 
 		select {
 		case <-ctx.Done():
 			ch <- scraper.ScrapeUpdate{
-				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				TotalSteps: totalSteps, CurrentStep: currentStep, Done: true,
 			}
 			return
-		case ch <- scraper.ScrapeUpdate{SystemID: system.ID, Total: 0}:
+		case ch <- scraper.ScrapeUpdate{
+			SystemID: system.ID, Total: 0, TotalSteps: totalSteps, CurrentStep: currentStep,
+		}:
 		}
 
 		titlesBySlug := make(map[string]database.MediaTitle)
@@ -567,10 +579,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			allTitles, titlesErr := mdb.GetTitlesBySystemID(system.ID)
 			if titlesErr != nil {
 				if errors.Is(titlesErr, context.Canceled) || errors.Is(titlesErr, context.DeadlineExceeded) {
-					ch <- scraper.ScrapeUpdate{SystemID: system.ID, Done: true}
+					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
 					return
 				}
-				ch <- scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: titlesErr, Done: true}
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: titlesErr, Done: true})
 				return
 			}
 			for _, t := range allTitles {
@@ -586,10 +598,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			unscraped, titlesErr := mdb.FindMediaTitlesWithoutSentinel(ctx, system.DBID, sentinelTag)
 			if titlesErr != nil {
 				if errors.Is(titlesErr, context.Canceled) || errors.Is(titlesErr, context.DeadlineExceeded) {
-					ch <- scraper.ScrapeUpdate{SystemID: system.ID, Done: true}
+					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
 					return
 				}
-				ch <- scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: titlesErr, Done: true}
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: titlesErr, Done: true})
 				return
 			}
 			for _, t := range unscraped {
@@ -598,10 +610,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			allTitles, allTitlesErr := mdb.GetTitlesBySystemID(system.ID)
 			if allTitlesErr != nil {
 				if errors.Is(allTitlesErr, context.Canceled) || errors.Is(allTitlesErr, context.DeadlineExceeded) {
-					ch <- scraper.ScrapeUpdate{SystemID: system.ID, Done: true}
+					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
 					return
 				}
-				ch <- scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: allTitlesErr, Done: true}
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: allTitlesErr, Done: true})
 				return
 			}
 			for _, t := range allTitles {
@@ -614,10 +626,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		allMedia, mediaErr := mdb.GetMediaBySystemID(system.ID)
 		if mediaErr != nil {
 			if errors.Is(mediaErr, context.Canceled) || errors.Is(mediaErr, context.DeadlineExceeded) {
-				ch <- scraper.ScrapeUpdate{SystemID: system.ID, Done: true}
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
 				return
 			}
-			ch <- scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: mediaErr, Done: true}
+			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: mediaErr, Done: true})
 			return
 		}
 		scrapedIDs := map[int64]struct{}{}
@@ -626,10 +638,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			scrapedIDs, scrapedErr = mdb.GetScrapedMediaIDs(ctx, id, system.DBID)
 			if scrapedErr != nil {
 				if errors.Is(scrapedErr, context.Canceled) || errors.Is(scrapedErr, context.DeadlineExceeded) {
-					ch <- scraper.ScrapeUpdate{SystemID: system.ID, Done: true}
+					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
 					return
 				}
-				ch <- scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: scrapedErr, Done: true}
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: scrapedErr, Done: true})
 				return
 			}
 		}
@@ -660,26 +672,30 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		parsed, parseErr := g.loadParsedGamelistSystem(ctx, system)
 		if parseErr != nil {
 			if errors.Is(parseErr, context.Canceled) || errors.Is(parseErr, context.DeadlineExceeded) {
-				ch <- scraper.ScrapeUpdate{SystemID: system.ID, Done: true}
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
 				return
 			}
-			ch <- scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: parseErr, Done: true}
+			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: parseErr, Done: true})
 			return
 		}
 
-		companion := g.processCompanionEntriesFromParsed(ctx, opts, system, mdb, indexes, parsed, ch)
-		if !waitForResume(system.ID, companion.Processed, companion.Matched, companion.Skipped) {
+		companion := g.processCompanionEntriesFromParsed(
+			ctx, opts, system, mdb, indexes, parsed, ch, totalSteps, currentStep,
+		)
+		if !waitForResume(system.ID, currentStep, companion.Processed, companion.Matched, companion.Skipped) {
 			return
 		}
 
 		if len(indexes.TitlesBySlug) == 0 && len(indexes.MediaByPathFold) == 0 {
 			if companion.Processed > 0 {
 				ch <- scraper.ScrapeUpdate{
-					SystemID:  system.ID,
-					Total:     companion.Processed,
-					Processed: companion.Processed,
-					Matched:   companion.Matched,
-					Skipped:   companion.Skipped,
+					SystemID:    system.ID,
+					Total:       companion.Processed,
+					Processed:   companion.Processed,
+					Matched:     companion.Matched,
+					Skipped:     companion.Skipped,
+					TotalSteps:  totalSteps,
+					CurrentStep: currentStep,
 				}
 			}
 			totalProcessed += companion.Processed
@@ -691,16 +707,16 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		records, loadErr := g.loadRecordsFromParsed(ctx, system, indexes, parsed)
 		if loadErr != nil {
 			if errors.Is(loadErr, context.Canceled) || errors.Is(loadErr, context.DeadlineExceeded) {
-				ch <- scraper.ScrapeUpdate{
+				sendUpdate(scraper.ScrapeUpdate{
 					SystemID: system.ID, Done: true, Processed: companion.Processed, Matched: companion.Matched,
 					Skipped: companion.Skipped,
-				}
+				})
 				return
 			}
-			ch <- scraper.ScrapeUpdate{
+			sendUpdate(scraper.ScrapeUpdate{
 				SystemID: system.ID, FatalErr: loadErr,
 				Done: true, Processed: companion.Processed, Matched: companion.Matched, Skipped: companion.Skipped,
-			}
+			})
 			return
 		}
 
@@ -712,19 +728,23 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		select {
 		case <-ctx.Done():
 			ch <- scraper.ScrapeUpdate{
-				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				TotalSteps: totalSteps, CurrentStep: currentStep, Done: true,
 			}
 			return
 		case ch <- scraper.ScrapeUpdate{
-			SystemID:  system.ID,
-			Total:     systemTotal,
-			Processed: companion.Processed,
-			Matched:   companion.Matched,
-			Skipped:   companion.Skipped,
+			SystemID:    system.ID,
+			Total:       systemTotal,
+			Processed:   companion.Processed,
+			Matched:     companion.Matched,
+			Skipped:     companion.Skipped,
+			TotalSteps:  totalSteps,
+			CurrentStep: currentStep,
 		}:
 		}
 		if !waitForResume(
 			system.ID,
+			currentStep,
 			companion.Processed+processed,
 			companion.Matched+matched,
 			companion.Skipped+skipped,
@@ -742,14 +762,18 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			update.Processed += companion.Processed
 			update.Matched += companion.Matched
 			update.Skipped += companion.Skipped
+			update.TotalSteps = totalSteps
+			update.CurrentStep = currentStep
 			select {
 			case <-ctx.Done():
 				ch <- scraper.ScrapeUpdate{
-					SystemID:  system.ID,
-					Processed: companion.Processed + processed,
-					Matched:   companion.Matched + matched,
-					Skipped:   companion.Skipped + skipped,
-					Done:      true,
+					SystemID:    system.ID,
+					Processed:   companion.Processed + processed,
+					Matched:     companion.Matched + matched,
+					Skipped:     companion.Skipped + skipped,
+					TotalSteps:  totalSteps,
+					CurrentStep: currentStep,
+					Done:        true,
 				}
 				return false
 			case ch <- update:
@@ -761,6 +785,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		for _, record := range records {
 			if !waitForResume(
 				system.ID,
+				currentStep,
 				companion.Processed+processed,
 				companion.Matched+matched,
 				companion.Skipped+skipped,
@@ -770,11 +795,13 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			select {
 			case <-ctx.Done():
 				ch <- scraper.ScrapeUpdate{
-					SystemID:  system.ID,
-					Processed: companion.Processed + processed,
-					Matched:   companion.Matched + matched,
-					Skipped:   companion.Skipped + skipped,
-					Done:      true,
+					SystemID:    system.ID,
+					Processed:   companion.Processed + processed,
+					Matched:     companion.Matched + matched,
+					Skipped:     companion.Skipped + skipped,
+					TotalSteps:  totalSteps,
+					CurrentStep: currentStep,
+					Done:        true,
 				}
 				return
 			default:
@@ -809,6 +836,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 			if !waitForResume(
 				system.ID,
+				currentStep,
 				companion.Processed+processed,
 				companion.Matched+matched,
 				companion.Skipped+skipped,
@@ -860,7 +888,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		totalSkipped += companion.Skipped + skipped
 	}
 
-	ch <- scraper.ScrapeUpdate{Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped}
+	ch <- scraper.ScrapeUpdate{
+		Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+		TotalSteps: totalSteps, CurrentStep: totalSteps,
+	}
 }
 
 // MapToDB converts a GamelistRecord into the tag and property writes to apply
@@ -1595,7 +1626,7 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 	if err != nil {
 		return companionStats{}
 	}
-	return g.processCompanionEntriesFromParsed(ctx, opts, system, mdb, indexes, parsed, ch)
+	return g.processCompanionEntriesFromParsed(ctx, opts, system, mdb, indexes, parsed, ch, 0, 0)
 }
 
 func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
@@ -1606,6 +1637,8 @@ func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
 	indexes loadRecordIndexes,
 	parsed parsedGamelistSystem,
 	ch chan<- scraper.ScrapeUpdate,
+	totalSteps int,
+	currentStep int,
 ) companionStats {
 	parents, children := companionEntriesFromParsed(ctx, system, parsed)
 	if len(parents) == 0 && len(children) == 0 {
@@ -1642,11 +1675,13 @@ func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
 		case <-ctx.Done():
 			return false
 		case ch <- scraper.ScrapeUpdate{
-			SystemID:  system.ID,
-			Total:     len(children),
-			Processed: stats.Processed,
-			Matched:   stats.Matched,
-			Skipped:   stats.Skipped,
+			SystemID:    system.ID,
+			Total:       len(children),
+			Processed:   stats.Processed,
+			Matched:     stats.Matched,
+			Skipped:     stats.Skipped,
+			TotalSteps:  totalSteps,
+			CurrentStep: currentStep,
 		}:
 			lastProgress = time.Now()
 			return true

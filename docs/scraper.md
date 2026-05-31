@@ -197,11 +197,23 @@ Progress is queryable with `media.scrape.status` and broadcast as `media.scrapin
   "totalScraped": 1000,
   "scraping": true,
   "done": false,
-  "paused": false
+  "paused": false,
+  "state": "running",
+  "totalSteps": 2,
+  "currentStep": 1,
+  "currentStepDisplay": "Super Nintendo Entertainment System",
+  "currentSystem": {
+    "systemId": "snes",
+    "systemName": "Super Nintendo Entertainment System",
+    "processed": 42,
+    "total": 100,
+    "matched": 38,
+    "skipped": 4
+  }
 }
 ```
 
-`totalScraped` is derived from scraper sentinel tags in the database, not from the current run's `matched` count.
+`totalScraped` is derived from scraper sentinel tags in the database, not from the current run's `matched` count. Existing flat fields stay for compatibility; new UIs should use `currentSystem` for current-system progress and `totalSteps`/`currentStep`/`currentStepDisplay` for whole-run system-step progress.
 
 Only one scraper can run at a time, and scraping is mutually exclusive with media indexing.
 

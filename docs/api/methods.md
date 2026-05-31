@@ -1593,7 +1593,7 @@ Returns `null` on success. The scraper continues after the response is sent.
 
 Return the latest known metadata scraper status.
 
-This method behaves like `media` does for indexing status: clients can query the current scrape snapshot after opening a UI, then continue listening for `media.scraping` notifications. If no scrape has run since startup, the result is idle with `scraping: false` and `done: false`.
+This method behaves like `media` does for indexing status: clients can query the current scrape snapshot after opening a UI, then continue listening for `media.scraping` notifications. If no scrape has run since startup, the result is idle with `scraping: false`, `done: false`, and `state: "idle"`. Existing flat counter fields remain for compatibility; new UIs should prefer `currentSystem` for per-system progress and `totalSteps`/`currentStep`/`currentStepDisplay` for whole-run progress.
 
 #### Parameters
 
@@ -1613,6 +1613,12 @@ None.
 | scraping  | boolean | Yes      | Whether a scrape is currently running.                     |
 | done      | boolean | Yes      | Whether the latest scrape reached a terminal state.        |
 | paused    | boolean | Yes      | Whether the active scrape is paused because media is running or until resumed. |
+| state     | string  | No       | Explicit lifecycle state: `idle`, `running`, `paused`, `completed`, `cancelled`, or `failed`. |
+| error     | string  | No       | Fatal scrape error on failed terminal updates.             |
+| totalSteps | integer | No      | Total systems in the scrape run, when known.               |
+| currentStep | integer | No     | 1-based current system step, when known.                   |
+| currentStepDisplay | string | No | Display name for the current system step, falling back to system ID. |
+| currentSystem | object | No    | Per-system progress object with `systemId`, `systemName`, `processed`, `total`, `matched`, and `skipped`. |
 
 #### Example
 
@@ -1642,7 +1648,19 @@ None.
     "totalScraped": 1200,
     "scraping": true,
     "done": false,
-    "paused": false
+    "paused": false,
+    "state": "running",
+    "totalSteps": 2,
+    "currentStep": 1,
+    "currentStepDisplay": "Super Nintendo Entertainment System",
+    "currentSystem": {
+      "systemId": "snes",
+      "systemName": "Super Nintendo Entertainment System",
+      "processed": 42,
+      "total": 100,
+      "matched": 38,
+      "skipped": 4
+    }
   }
 }
 ```

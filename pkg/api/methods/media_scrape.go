@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
@@ -38,7 +39,15 @@ import (
 // scrapingStatus tracks the lifecycle of an active media.scrape operation.
 // It mirrors the indexingStatus pattern in media.go for consistent state
 // management and safe concurrent access.
-const scrapeTotalScrapedRefreshInterval = 5 * time.Second
+const (
+	scrapeTotalScrapedRefreshInterval = 5 * time.Second
+	scrapeStateIdle                   = "idle"
+	scrapeStateRunning                = "running"
+	scrapeStatePaused                 = "paused"
+	scrapeStateCompleted              = "completed"
+	scrapeStateCancelled              = "cancelled"
+	scrapeStateFailed                 = "failed"
+)
 
 type scrapedCountCache struct {
 	lastRefresh time.Time
@@ -67,6 +76,7 @@ func (s *scrapingStatus) startIfNotRunning(scraperID string) bool {
 	s.countCache = scrapedCountCache{}
 	s.latest = models.ScrapingStatusResponse{
 		ScraperID: scraperID,
+		State:     scrapeStateRunning,
 		Scraping:  true,
 	}
 	return true
@@ -122,6 +132,7 @@ func (s *scrapingStatus) cancel() bool {
 		s.latest.Scraping = false
 		s.latest.Done = true
 		s.latest.Paused = false
+		s.latest.State = scrapeStateCancelled
 		// Do NOT clear running/scraperID here. The goroutine's deferred
 		// clearIfOwner call is the single writer for those fields, preventing
 		// a new scrape from starting only to have its state cleared by the
@@ -243,10 +254,92 @@ func queryScrapedMediaCount(ctx context.Context, db *database.Database, scraperI
 	return count, true
 }
 
+func systemProgressDisplay(systemID string) string {
+	if systemID == "" {
+		return ""
+	}
+	md, err := assets.GetSystemMetadata(systemID)
+	if err != nil || md.Name == "" {
+		return systemID
+	}
+	return md.Name
+}
+
+func ptrIfPositive(v int) *int {
+	if v <= 0 {
+		return nil
+	}
+	return &v
+}
+
+func ptrIfNotEmpty(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+
+func scrapeState(scrapeCtx context.Context, update *scraper.ScrapeUpdate, paused bool) string {
+	switch {
+	case update.FatalErr != nil:
+		return scrapeStateFailed
+	case update.Done && scrapeCtx != nil && scrapeCtx.Err() != nil:
+		return scrapeStateCancelled
+	case update.Done:
+		return scrapeStateCompleted
+	case paused:
+		return scrapeStatePaused
+	default:
+		return scrapeStateRunning
+	}
+}
+
+func scrapingStatusFromUpdate(
+	scrapeCtx context.Context,
+	scraperID string,
+	update *scraper.ScrapeUpdate,
+	paused bool,
+) models.ScrapingStatusResponse {
+	display := systemProgressDisplay(update.SystemID)
+	status := models.ScrapingStatusResponse{
+		ScraperID:          scraperID,
+		SystemID:           update.SystemID,
+		Processed:          update.Processed,
+		Total:              update.Total,
+		Matched:            update.Matched,
+		Skipped:            update.Skipped,
+		Scraping:           !update.Done,
+		Done:               update.Done,
+		Paused:             paused && !update.Done,
+		State:              scrapeState(scrapeCtx, update, paused && !update.Done),
+		TotalSteps:         ptrIfPositive(update.TotalSteps),
+		CurrentStep:        ptrIfPositive(update.CurrentStep),
+		CurrentStepDisplay: ptrIfNotEmpty(display),
+	}
+	if update.FatalErr != nil {
+		status.Error = update.FatalErr.Error()
+	}
+	if update.SystemID != "" {
+		status.CurrentSystem = &models.ScrapeSystemProgressResponse{
+			SystemID:   update.SystemID,
+			SystemName: display,
+			Processed:  update.Processed,
+			Total:      update.Total,
+			Matched:    update.Matched,
+			Skipped:    update.Skipped,
+		}
+	}
+	return status
+}
+
 func PublishScrapePauseStatus(ns chan<- models.Notification, paused bool) {
 	status := scrapingStatusInstance.getLatest()
 	status.Scraping = true
 	status.Paused = paused
+	status.State = scrapeStateRunning
+	if paused {
+		status.State = scrapeStatePaused
+	}
 	publishScrapingStatus(ns, &status)
 }
 
@@ -300,8 +393,13 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	ns := env.State.Notifications
 	db := env.Database
 
+	initialState := scrapeStateRunning
+	if paused {
+		initialState = scrapeStatePaused
+	}
 	initialStatus := models.ScrapingStatusResponse{
 		ScraperID: params.ScraperID,
+		State:     initialState,
 		Scraping:  true,
 		Paused:    paused,
 	}
@@ -320,17 +418,8 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			if update.Done {
 				receivedDone = true
 			}
-			status := models.ScrapingStatusResponse{
-				ScraperID: scraperID,
-				SystemID:  update.SystemID,
-				Processed: update.Processed,
-				Total:     update.Total,
-				Matched:   update.Matched,
-				Skipped:   update.Skipped,
-				Scraping:  !update.Done,
-				Done:      update.Done,
-				Paused:    env.ScrapePauser != nil && env.ScrapePauser.IsPaused() && !update.Done,
-			}
+			paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
+			status := scrapingStatusFromUpdate(scrapeCtx, scraperID, &update, paused)
 			if update.Done {
 				populateScrapedMediaCountExact(env.State.GetContext(), db, &status)
 			} else {
@@ -344,21 +433,14 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		// Otherwise the channel already delivered the final counters and sending
 		// another zeroed-out Done would overwrite them for consumers.
 		if !receivedDone {
-			status := scrapingStatusInstance.getLatest()
-			status.ScraperID = scraperID
-			status.Scraping = false
-			status.Done = true
-			status.Paused = false
-			terminalStatus := models.ScrapingStatusResponse{
-				ScraperID: status.ScraperID,
-				SystemID:  status.SystemID,
-				Processed: status.Processed,
-				Total:     status.Total,
-				Matched:   status.Matched,
-				Skipped:   status.Skipped,
-				Scraping:  status.Scraping,
-				Done:      status.Done,
-				Paused:    status.Paused,
+			terminalStatus := scrapingStatusInstance.getLatest()
+			terminalStatus.ScraperID = scraperID
+			terminalStatus.Scraping = false
+			terminalStatus.Done = true
+			terminalStatus.Paused = false
+			terminalStatus.State = scrapeStateCompleted
+			if scrapeCtx.Err() != nil {
+				terminalStatus.State = scrapeStateCancelled
 			}
 			populateScrapedMediaCountExact(env.State.GetContext(), db, &terminalStatus)
 			publishScrapingStatus(ns, &terminalStatus)
@@ -374,8 +456,18 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 //nolint:gocritic // API handler signature; large env param cannot be passed by pointer
 func HandleMediaScrapeStatus(env requests.RequestEnv) (any, error) {
 	status := scrapingStatusInstance.getLatest()
+	if status.State == "" {
+		status.State = scrapeStateIdle
+		if status.Scraping {
+			status.State = scrapeStateRunning
+		}
+	}
 	if status.Scraping && env.ScrapePauser != nil {
 		status.Paused = env.ScrapePauser.IsPaused()
+		status.State = scrapeStateRunning
+		if status.Paused {
+			status.State = scrapeStatePaused
+		}
 	}
 	if env.Database == nil || env.Database.MediaDB == nil {
 		return status, nil
