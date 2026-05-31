@@ -59,6 +59,12 @@ func resolveMediaBySystemAndPath(
 		return nil, err
 	}
 	if media == nil {
+		media, err = resolveSingletonMediaPath(env, system, mediaPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if media == nil {
 		return nil, models.ClientErrf("media not found: %s/%s", systemID, mediaPath)
 	}
 

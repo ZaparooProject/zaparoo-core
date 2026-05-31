@@ -559,7 +559,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 
 | Key          | Type     | Required | Description                                                                                      |
 | :----------- | :------- | :------- | :----------------------------------------------------------------------------------------------- |
-| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries for efficient follow-up `media.meta` and `media.image` requests. |
+| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries, and on zip-as-directory platform `directory` entries that contain exactly one indexed media descendant, for efficient follow-up `media.meta` and `media.image` requests. |
 | name         | string   | Yes      | Display name of the entry.                                                                       |
 | path         | string   | Yes      | Full path to the entry.                                                                          |
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
@@ -567,9 +567,9 @@ All parameters are optional. When called with no parameters, returns root entrie
 | group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
 | systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
 | systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |
-| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries.                              |
-| relativePath | string   | No       | Relative path from root directory. Present on `media` entries.                                   |
-| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries. |
+| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and singleton media-container `directory` entries on zip-as-directory platforms. |
+| relativePath | string   | No       | Relative path from root directory. Present on `media` entries and singleton media-container `directory` entries on zip-as-directory platforms. |
+| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and singleton media-container `directory` entries on zip-as-directory platforms. |
 
 ##### Browse pagination object
 
@@ -1593,7 +1593,7 @@ Returns `null` on success. The scraper continues after the response is sent.
 
 Return the latest known metadata scraper status.
 
-This method behaves like `media` does for indexing status: clients can query the current scrape snapshot after opening a UI, then continue listening for `media.scraping` notifications. If no scrape has run since startup, the result is idle with `scraping: false` and `done: false`.
+This method behaves like `media` does for indexing status: clients can query the current scrape snapshot after opening a UI, then continue listening for `media.scraping` notifications. If no scrape has run since startup, the result is idle with `scraping: false`, `done: false`, and `state: "idle"`. Existing flat counter fields remain for compatibility; new UIs should prefer `currentSystem` for per-system progress and `totalSteps`/`currentStep`/`currentStepDisplay` for whole-run progress.
 
 #### Parameters
 
@@ -1613,6 +1613,12 @@ None.
 | scraping  | boolean | Yes      | Whether a scrape is currently running.                     |
 | done      | boolean | Yes      | Whether the latest scrape reached a terminal state.        |
 | paused    | boolean | Yes      | Whether the active scrape is paused because media is running or until resumed. |
+| state     | string  | No       | Explicit lifecycle state: `idle`, `running`, `paused`, `completed`, `cancelled`, or `failed`. |
+| error     | string  | No       | Fatal scrape error on failed terminal updates.             |
+| totalSteps | integer | No      | Total systems in the scrape run, when known.               |
+| currentStep | integer | No     | 1-based current system step, when known.                   |
+| currentStepDisplay | string | No | Display name for the current system step, falling back to system ID. |
+| currentSystem | object | No    | Per-system progress object with `systemId`, `systemName`, `processed`, `total`, `matched`, and `skipped`. |
 
 #### Example
 
@@ -1642,7 +1648,19 @@ None.
     "totalScraped": 1200,
     "scraping": true,
     "done": false,
-    "paused": false
+    "paused": false,
+    "state": "running",
+    "totalSteps": 2,
+    "currentStep": 1,
+    "currentStepDisplay": "Super Nintendo Entertainment System",
+    "currentSystem": {
+      "systemId": "snes",
+      "systemName": "Super Nintendo Entertainment System",
+      "processed": 42,
+      "total": 100,
+      "matched": 38,
+      "skipped": 4
+    }
   }
 }
 ```

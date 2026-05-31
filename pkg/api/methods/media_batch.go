@@ -190,6 +190,15 @@ func resolveMediaRefs(env *requests.RequestEnv, refs []mediaRefParam) ([]resolve
 					continue
 				}
 				if fallback == nil {
+					fallback, fallbackErr = resolveSingletonMediaPath(env, system, path)
+					if fallbackErr != nil {
+						for _, index := range pathIndexes[systemID+"\x00"+path] {
+							resolved[index].Err = fallbackErr
+						}
+						continue
+					}
+				}
+				if fallback == nil {
 					for _, index := range pathIndexes[systemID+"\x00"+path] {
 						resolved[index].Err = models.ClientErrf("media not found: %s/%s", systemID, path)
 					}

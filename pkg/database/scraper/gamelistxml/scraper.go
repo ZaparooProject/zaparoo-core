@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -52,11 +53,28 @@ import (
 // root path and the DB identifiers of the matched MediaTitle and one of its
 // Media rows (used as the sentinel write target).
 type GamelistRecord struct {
-	AvailableMediaDirs map[string]string
-	SystemRootPath     string
-	Game               esapi.Game
-	MatchedMediaDBID   int64
-	MatchedTitleDBID   int64
+	AvailableMediaDirs  map[string]string
+	SystemRootPath      string
+	MatchKind           gamelistMatchKind
+	Game                esapi.Game
+	MatchedMediaDBID    int64
+	MatchedTitleDBID    int64
+	MediaLevelWriteSafe bool
+}
+
+type gamelistMatchKind string
+
+const (
+	gamelistMatchSlugPath     gamelistMatchKind = "slug_path"
+	gamelistMatchSlugOnly     gamelistMatchKind = "slug_only"
+	gamelistMatchSlugConflict gamelistMatchKind = "slug_conflict"
+	gamelistMatchPathOnly     gamelistMatchKind = "path_only"
+)
+
+type slugMediaSelection struct {
+	matchKind gamelistMatchKind
+	key       string
+	media     database.Media
 }
 
 // mediaDirCandidates maps each TagPropertyImage value to the ordered list of
@@ -65,25 +83,109 @@ type GamelistRecord struct {
 // expected filename wins.
 var mediaDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageImage):      {"image", "images"},
-	string(tags.TagPropertyImageBoxart):     {"boxart", "boxart2d", "boxart2dfront"},
+	string(tags.TagPropertyImageBoxart):     {"boxart", "boxart2d", "boxart2dfront", "box2dfront"},
 	string(tags.TagPropertyImageBoxart3D):   {"boxart3d"},
 	string(tags.TagPropertyImageBoxartSide): {"boxart2dside"},
 	string(tags.TagPropertyImageBoxartBack): {"boxart2dback"},
 	string(tags.TagPropertyImageScreenshot): {"screenshot", "screenshots"},
-	string(tags.TagPropertyImageThumbnail):  {"thumbnail", "thumbnails", "supporttexture"},
-	string(tags.TagPropertyImageMarquee):    {"marquee", "marquees"},
-	string(tags.TagPropertyImageWheel):      {"wheel", "wheels"},
-	string(tags.TagPropertyImageFanart):     {"fanart", "fanarts"},
-	string(tags.TagPropertyImageTitleshot):  {"titleshot", "titleshots", "screenshottitle"},
-	string(tags.TagPropertyImageMap):        {"map", "maps"},
+	string(tags.TagPropertyImageThumbnail): {
+		"thumbnail", "thumbnails", "box2dfront", "boxart2dfront", "supporttexture",
+	},
+	string(tags.TagPropertyImageMarquee):   {"marquee", "marquees"},
+	string(tags.TagPropertyImageWheel):     {"wheel", "wheels"},
+	string(tags.TagPropertyImageFanart):    {"fanart", "fanarts"},
+	string(tags.TagPropertyImageTitleshot): {"titleshot", "titleshots", "screenshottitle"},
+	string(tags.TagPropertyImageMap):       {"map", "maps"},
 }
 
 // GamelistXMLScraper loads and maps EmulationStation gamelist.xml records.
 // Use [NewPlatformScraper] to obtain a configured [platforms.Scraper].
 type GamelistXMLScraper struct {
-	db  database.MediaDBI
-	fs  afero.Fs
-	cfg *config.Instance
+	db                 database.MediaDBI
+	fs                 afero.Fs
+	cfg                *config.Instance
+	externalAssetRoots []string
+}
+
+type companionStats struct {
+	WriteStats             scrapeWriteStats
+	Processed              int
+	Matched                int
+	Skipped                int
+	MissingTitleSlugs      int
+	MissingTitleMedia      int
+	AmbiguousFilenames     int
+	UnmatchedFilenames     int
+	UniqueTitleWrites      int
+	DuplicateTitles        int
+	ConflictingTitleWrites int
+}
+
+type scrapeWriteStats struct {
+	UniqueTitleDBIDs map[int64]struct{}
+	TotalDuration    time.Duration
+	MaxDuration      time.Duration
+	TitleTags        int
+	MediaTags        int
+	TitleProps       int
+	MediaProps       int
+	Sentinels        int
+	Writes           int
+	Batches          int
+	BatchFallbacks   int
+}
+
+func (s *scrapeWriteStats) recordWrite(target database.ScrapeWriteTarget, duration time.Duration) {
+	s.recordDuration(duration)
+	s.recordTarget(target)
+}
+
+func (s *scrapeWriteStats) recordBatch(targets []database.ScrapeWriteTarget, duration time.Duration) {
+	s.Batches++
+	s.recordDuration(duration)
+	for _, target := range targets {
+		s.recordTarget(target)
+	}
+}
+
+func (s *scrapeWriteStats) recordDuration(duration time.Duration) {
+	if duration <= 0 {
+		return
+	}
+	s.TotalDuration += duration
+	if duration > s.MaxDuration {
+		s.MaxDuration = duration
+	}
+}
+
+func (s *scrapeWriteStats) recordTarget(target database.ScrapeWriteTarget) {
+	s.Writes++
+	s.Sentinels++
+	if target.Write == nil {
+		return
+	}
+	s.MediaTags += len(target.Write.MediaTags)
+	s.TitleTags += len(target.Write.TitleTags)
+	s.MediaProps += len(target.Write.MediaProps)
+	s.TitleProps += len(target.Write.TitleProps)
+	if s.UniqueTitleDBIDs != nil {
+		s.UniqueTitleDBIDs[target.MediaTitleDBID] = struct{}{}
+	}
+}
+
+func (s *scrapeWriteStats) averageDuration() time.Duration {
+	if s.Writes == 0 {
+		return 0
+	}
+	return s.TotalDuration / time.Duration(s.Writes)
+}
+
+type loadRecordIndexes struct {
+	TitlesBySlug     map[string]database.MediaTitle
+	AllTitlesBySlug  map[string]database.MediaTitle
+	MediaByPathFold  map[string]database.Media
+	MediaByTitleDBID map[int64][]database.Media
+	MediaByFilename  map[string][]database.Media
 }
 
 func (g *GamelistXMLScraper) filesystem() afero.Fs {
@@ -91,6 +193,18 @@ func (g *GamelistXMLScraper) filesystem() afero.Fs {
 		return afero.NewOsFs()
 	}
 	return g.fs
+}
+
+func externalAssetRootsForPlatform(cfg *config.Instance, pl platforms.Platform) []string {
+	if pl == nil {
+		return nil
+	}
+	switch pl.ID() {
+	case ids.Mister, ids.Mistex:
+		return pl.RootDirs(cfg)
+	default:
+		return nil
+	}
 }
 
 // NewPlatformScraper returns a [platforms.Scraper] backed by EmulationStation
@@ -115,7 +229,12 @@ func NewPlatformScraper() platforms.Scraper {
 			if err != nil {
 				return fmt.Errorf("gamelistxml: resolve systems: %w", err)
 			}
-			s := &GamelistXMLScraper{db: db.MediaDB, fs: fs, cfg: cfg}
+			s := &GamelistXMLScraper{
+				db:                 db.MediaDB,
+				fs:                 fs,
+				cfg:                cfg,
+				externalAssetRoots: externalAssetRootsForPlatform(cfg, pl),
+			}
 			go s.scrapeLoop(ctx, opts, systems, db.MediaDB, ch)
 			return nil
 		},
@@ -192,29 +311,26 @@ func resolveSystemsFromPlatform(
 	return result, nil
 }
 
-// LoadRecords iterates gamelist.xml files found under each ROM root path for
-// the given system. For each game entry whose slug matches a key in
-// titlesBySlug, a [GamelistRecord] is emitted and the slug is removed from
-// titlesBySlug (first match wins across all gamelists for the system).
-// titlesBySlug is mutated by this call — callers must not reuse it.
-//
-// mediaByTitleDBID supplies the Media DBID to use as the sentinel write target:
-// it must map each MediaTitle DBID to any one of its associated Media DBIDs.
-// A record whose title DBID has no entry in mediaByTitleDBID will have
-// MatchedMediaDBID = 0 and will be skipped by the scrape loop.
-func (g *GamelistXMLScraper) LoadRecords(
+type parsedGamelistFile struct {
+	RootPath           string
+	GamelistPath       string
+	AvailableMediaDirs map[string]string
+	Games              []esapi.Game
+}
+
+type parsedGamelistSystem struct {
+	Files []parsedGamelistFile
+}
+
+func (g *GamelistXMLScraper) loadParsedGamelistSystem(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
-	titlesBySlug map[string]database.MediaTitle,
-	mediaByTitleDBID map[int64]int64,
-) ([]*GamelistRecord, error) {
-	var records []*GamelistRecord
-
-outer:
+) (parsedGamelistSystem, error) {
+	var parsed parsedGamelistSystem
 	for _, rootPath := range system.ROMPaths {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return parsed, ctx.Err()
 		default:
 		}
 
@@ -234,12 +350,65 @@ outer:
 			Str("path", gamelistPath).
 			Int("entries", len(gl.Games)).
 			Msg("gamelistxml: loaded gamelist.xml")
+		parsed.Files = append(parsed.Files, parsedGamelistFile{
+			RootPath:           rootPath,
+			GamelistPath:       gamelistPath,
+			AvailableMediaDirs: statMediaDirsFS(g.filesystem(), rootPath),
+			Games:              gl.Games,
+		})
+	}
+	return parsed, nil
+}
 
-		availableMediaDirs := statMediaDirsFS(g.filesystem(), rootPath)
+// LoadRecords iterates gamelist.xml files found under each ROM root path for
+// the given system. It prefers the original slug/title match, uses the XML path
+// to select the concrete Media row for that title when possible, and falls back
+// to path-only matching for records whose slug is not indexed.
+func (g *GamelistXMLScraper) LoadRecords(
+	ctx context.Context,
+	system scraper.ScrapeSystem,
+	indexes loadRecordIndexes,
+) ([]*GamelistRecord, error) {
+	parsed, err := g.loadParsedGamelistSystem(ctx, system)
+	if err != nil {
+		return nil, err
+	}
+	return g.loadRecordsFromParsed(ctx, system, indexes, parsed)
+}
 
-		for i := range gl.Games {
-			resolved := resolveESPath(gl.Games[i].Path, rootPath)
+func (g *GamelistXMLScraper) loadRecordsFromParsed(
+	ctx context.Context,
+	system scraper.ScrapeSystem,
+	indexes loadRecordIndexes,
+	parsed parsedGamelistSystem,
+) ([]*GamelistRecord, error) {
+	var records []*GamelistRecord
+	candidateMedia := len(indexes.MediaByPathFold)
+	candidateTitles := len(indexes.TitlesBySlug)
+	var gamelistFiles, gamelistEntries, companionEntriesSkipped, invalidPaths int
+	var slugMatches, slugPathSelections, slugFirstMediaFallbacks, pathOnlyFallbacks, unmatchedRecords int
+
+outer:
+	for _, file := range parsed.Files {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		gamelistFiles++
+		gamelistEntries += len(file.Games)
+
+		for i := range file.Games {
+			game := &file.Games[i]
+			if isCompanionGame(game) {
+				companionEntriesSkipped++
+				continue
+			}
+
+			resolved := resolveESPath(game.Path, file.RootPath)
 			if resolved == "" {
+				invalidPaths++
 				continue
 			}
 
@@ -248,23 +417,76 @@ outer:
 				Path:         resolved,
 				SystemID:     system.ID,
 				NoExt:        true,
-				ProvidedName: gl.Games[i].Name,
+				ProvidedName: game.Name,
 			})
 
-			title, ok := titlesBySlug[pf.Slug]
-			if !ok {
-				continue
+			if title, ok := indexes.TitlesBySlug[pf.Slug]; ok {
+				selection := selectMediaForSlugMatch(indexes, title.DBID, resolved)
+				if selection.media.DBID == 0 {
+					log.Debug().
+						Str("system", system.ID).
+						Str("slug", pf.Slug).
+						Int64("mediaTitleDBID", title.DBID).
+						Msg("gamelistxml: slug matched title but no media row found, skipping")
+					unmatchedRecords++
+					delete(indexes.TitlesBySlug, pf.Slug)
+					continue
+				}
+
+				slugMatches++
+				mediaLevelWriteSafe := false
+				if selection.key != "" && selection.matchKind == gamelistMatchSlugPath {
+					slugPathSelections++
+					mediaLevelWriteSafe = true
+					delete(indexes.MediaByPathFold, selection.key)
+				} else {
+					slugFirstMediaFallbacks++
+				}
+				records = append(records, &GamelistRecord{
+					SystemRootPath:      file.RootPath,
+					AvailableMediaDirs:  file.AvailableMediaDirs,
+					Game:                *game,
+					MatchKind:           selection.matchKind,
+					MatchedTitleDBID:    title.DBID,
+					MatchedMediaDBID:    selection.media.DBID,
+					MediaLevelWriteSafe: mediaLevelWriteSafe,
+				})
+				delete(indexes.TitlesBySlug, pf.Slug)
+			} else if titleSlugKnown(indexes, pf.Slug) {
+				unmatchedRecords++
+				log.Debug().
+					Str("system", system.ID).
+					Str("path", game.Path).
+					Str("resolved", resolved).
+					Str("name", game.Name).
+					Str("slug", pf.Slug).
+					Msg("gamelistxml: slug exists for another or already-scraped title, skipping path-only fallback")
+			} else if media, matchedKey, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved); ok {
+				pathOnlyFallbacks++
+				log.Debug().
+					Str("system", system.ID).
+					Str("path", game.Path).
+					Str("resolved", resolved).
+					Str("name", game.Name).
+					Str("slug", pf.Slug).
+					Int64("mediaDBID", media.DBID).
+					Int64("mediaTitleDBID", media.MediaTitleDBID).
+					Msg("gamelistxml: path-only fallback matched record")
+				records = append(records, &GamelistRecord{
+					SystemRootPath:      file.RootPath,
+					AvailableMediaDirs:  file.AvailableMediaDirs,
+					Game:                *game,
+					MatchKind:           gamelistMatchPathOnly,
+					MatchedTitleDBID:    media.MediaTitleDBID,
+					MatchedMediaDBID:    media.DBID,
+					MediaLevelWriteSafe: true,
+				})
+				delete(indexes.MediaByPathFold, matchedKey)
+			} else {
+				unmatchedRecords++
 			}
 
-			records = append(records, &GamelistRecord{
-				SystemRootPath:     rootPath,
-				AvailableMediaDirs: availableMediaDirs,
-				Game:               gl.Games[i],
-				MatchedTitleDBID:   title.DBID,
-				MatchedMediaDBID:   mediaByTitleDBID[title.DBID],
-			})
-			delete(titlesBySlug, pf.Slug)
-			if len(titlesBySlug) == 0 {
+			if len(indexes.TitlesBySlug) == 0 && len(indexes.MediaByPathFold) == 0 {
 				break outer
 			}
 		}
@@ -272,13 +494,30 @@ outer:
 
 	log.Info().
 		Str("system", system.ID).
+		Int("candidate_titles", candidateTitles).
+		Int("candidate_media", candidateMedia).
+		Int("gamelist_files", gamelistFiles).
+		Int("gamelist_entries", gamelistEntries).
+		Int("companion_entries_skipped", companionEntriesSkipped).
+		Int("invalid_paths", invalidPaths).
+		Int("slug_matches", slugMatches).
+		Int("slug_path_selections", slugPathSelections).
+		Int("slug_first_media_fallbacks", slugFirstMediaFallbacks).
+		Int("path_only_fallbacks", pathOnlyFallbacks).
+		Int("unmatched_records", unmatchedRecords).
+		Int("matched_records", len(records)).
+		Int("remaining_unmatched_titles", len(indexes.TitlesBySlug)).
+		Int("remaining_unmatched_media", len(indexes.MediaByPathFold)).
 		Int("total_records", len(records)).
 		Msg("gamelistxml: finished loading records for system")
 
 	return records, nil
 }
 
-const scrapeProgressInterval = 250 * time.Millisecond
+const (
+	scrapeProgressInterval  = 250 * time.Millisecond
+	companionWriteBatchSize = 10
+)
 
 // scrapeLoop runs the full load→match→write cycle for all systems, emitting
 // progress updates on ch. It closes ch when done.
@@ -293,59 +532,65 @@ func (g *GamelistXMLScraper) scrapeLoop(
 
 	const id = "gamelist.xml"
 	var totalProcessed, totalMatched, totalSkipped int
+	totalSteps := len(systems)
 
-	waitForResume := func(systemID string, processed, matched, skipped int) bool {
+	waitForResume := func(systemID string, currentStep, processed, matched, skipped int) bool {
 		if waitErr := opts.Pauser.Wait(ctx); waitErr != nil {
 			ch <- scraper.ScrapeUpdate{
-				SystemID:  systemID,
-				Processed: totalProcessed + processed,
-				Matched:   totalMatched + matched,
-				Skipped:   totalSkipped + skipped,
-				Done:      true,
+				SystemID:    systemID,
+				Processed:   processed,
+				Matched:     matched,
+				Skipped:     skipped,
+				TotalSteps:  totalSteps,
+				CurrentStep: currentStep,
+				Done:        true,
 			}
 			return false
 		}
 		return true
 	}
 
-	for _, system := range systems {
-		if !waitForResume(system.ID, 0, 0, 0) {
+	for i, system := range systems {
+		currentStep := i + 1
+		sendUpdate := func(update scraper.ScrapeUpdate) {
+			update.TotalSteps = totalSteps
+			update.CurrentStep = currentStep
+			ch <- update
+		}
+		if !waitForResume(system.ID, currentStep, totalProcessed, totalMatched, totalSkipped) {
 			return
 		}
 
 		select {
 		case <-ctx.Done():
 			ch <- scraper.ScrapeUpdate{
-				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				TotalSteps: totalSteps, CurrentStep: currentStep, Done: true,
 			}
 			return
-		case ch <- scraper.ScrapeUpdate{SystemID: system.ID, Total: 0}:
+		case ch <- scraper.ScrapeUpdate{
+			SystemID: system.ID, Total: 0, TotalSteps: totalSteps, CurrentStep: currentStep,
+		}:
 		}
 
-		// Process ZaparooCompanion parent/child entries before regular slug scrape.
-		g.processCompanionEntries(ctx, system, mdb)
-
-		// Build slug → MediaTitle map: only unscraped titles unless Force.
 		titlesBySlug := make(map[string]database.MediaTitle)
+		allTitlesBySlug := make(map[string]database.MediaTitle)
 		if opts.Force {
 			allTitles, titlesErr := mdb.GetTitlesBySystemID(system.ID)
 			if titlesErr != nil {
 				if errors.Is(titlesErr, context.Canceled) || errors.Is(titlesErr, context.DeadlineExceeded) {
-					ch <- scraper.ScrapeUpdate{
-						Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
-					}
+					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
 					return
 				}
-				ch <- scraper.ScrapeUpdate{
-					SystemID: system.ID, FatalErr: titlesErr,
-					Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
-				}
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: titlesErr, Done: true})
 				return
 			}
 			for _, t := range allTitles {
-				titlesBySlug[t.Slug] = database.MediaTitle{
+				title := database.MediaTitle{
 					DBID: t.DBID, SystemDBID: t.SystemDBID, Slug: t.Slug, Name: t.Name,
 				}
+				titlesBySlug[t.Slug] = title
+				allTitlesBySlug[t.Slug] = title
 			}
 		} else {
 			sentinel := scraper.SentinelTagInfo(id)
@@ -353,77 +598,157 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			unscraped, titlesErr := mdb.FindMediaTitlesWithoutSentinel(ctx, system.DBID, sentinelTag)
 			if titlesErr != nil {
 				if errors.Is(titlesErr, context.Canceled) || errors.Is(titlesErr, context.DeadlineExceeded) {
-					ch <- scraper.ScrapeUpdate{
-						Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
-					}
+					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
 					return
 				}
-				ch <- scraper.ScrapeUpdate{
-					SystemID: system.ID, FatalErr: titlesErr,
-					Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
-				}
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: titlesErr, Done: true})
 				return
 			}
 			for _, t := range unscraped {
 				titlesBySlug[t.Slug] = t
 			}
+			allTitles, allTitlesErr := mdb.GetTitlesBySystemID(system.ID)
+			if allTitlesErr != nil {
+				if errors.Is(allTitlesErr, context.Canceled) || errors.Is(allTitlesErr, context.DeadlineExceeded) {
+					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
+					return
+				}
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: allTitlesErr, Done: true})
+				return
+			}
+			for _, t := range allTitles {
+				allTitlesBySlug[t.Slug] = database.MediaTitle{
+					DBID: t.DBID, SystemDBID: t.SystemDBID, Slug: t.Slug, Name: t.Name,
+				}
+			}
 		}
 
-		if len(titlesBySlug) == 0 {
-			continue
-		}
-
-		// Build MediaTitle DBID → first Media DBID map for sentinel writes.
 		allMedia, mediaErr := mdb.GetMediaBySystemID(system.ID)
 		if mediaErr != nil {
 			if errors.Is(mediaErr, context.Canceled) || errors.Is(mediaErr, context.DeadlineExceeded) {
-				ch <- scraper.ScrapeUpdate{
-					SystemID: system.ID, Done: true, Processed: totalProcessed,
-					Matched: totalMatched, Skipped: totalSkipped,
-				}
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
 				return
 			}
-			ch <- scraper.ScrapeUpdate{
-				SystemID: system.ID, FatalErr: mediaErr,
-				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
-			}
+			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: mediaErr, Done: true})
 			return
 		}
-		mediaByTitleDBID := make(map[int64]int64, len(allMedia))
-		for _, m := range allMedia {
-			if _, exists := mediaByTitleDBID[m.MediaTitleDBID]; !exists {
-				mediaByTitleDBID[m.MediaTitleDBID] = m.DBID
+		scrapedIDs := map[int64]struct{}{}
+		if !opts.Force {
+			var scrapedErr error
+			scrapedIDs, scrapedErr = mdb.GetScrapedMediaIDs(ctx, id, system.DBID)
+			if scrapedErr != nil {
+				if errors.Is(scrapedErr, context.Canceled) || errors.Is(scrapedErr, context.DeadlineExceeded) {
+					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
+					return
+				}
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: scrapedErr, Done: true})
+				return
 			}
 		}
 
-		records, loadErr := g.LoadRecords(ctx, system, titlesBySlug, mediaByTitleDBID)
-		if loadErr != nil {
-			if errors.Is(loadErr, context.Canceled) || errors.Is(loadErr, context.DeadlineExceeded) {
-				ch <- scraper.ScrapeUpdate{
-					SystemID: system.ID, Done: true, Processed: totalProcessed, Matched: totalMatched,
-					Skipped: totalSkipped,
+		indexes := loadRecordIndexes{
+			TitlesBySlug:     titlesBySlug,
+			AllTitlesBySlug:  allTitlesBySlug,
+			MediaByPathFold:  make(map[string]database.Media, len(allMedia)),
+			MediaByTitleDBID: make(map[int64][]database.Media, len(allMedia)),
+			MediaByFilename:  make(map[string][]database.Media, len(allMedia)),
+		}
+		for _, m := range allMedia {
+			media := database.Media{
+				DBID:           m.DBID,
+				MediaTitleDBID: m.MediaTitleDBID,
+				Path:           m.Path,
+			}
+			if _, scraped := scrapedIDs[m.DBID]; !scraped {
+				indexes.MediaByPathFold[pathFoldKey(m.Path)] = media
+				indexes.MediaByTitleDBID[m.MediaTitleDBID] = append(indexes.MediaByTitleDBID[m.MediaTitleDBID], media)
+				filenameKey := mediaFilenameKey(m.Path)
+				if filenameKey != "" {
+					indexes.MediaByFilename[filenameKey] = append(indexes.MediaByFilename[filenameKey], media)
 				}
+			}
+		}
+
+		parsed, parseErr := g.loadParsedGamelistSystem(ctx, system)
+		if parseErr != nil {
+			if errors.Is(parseErr, context.Canceled) || errors.Is(parseErr, context.DeadlineExceeded) {
+				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
 				return
 			}
-			ch <- scraper.ScrapeUpdate{
-				SystemID: system.ID, FatalErr: loadErr,
-				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
-			}
+			sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: parseErr, Done: true})
 			return
 		}
+
+		companion := g.processCompanionEntriesFromParsed(
+			ctx, opts, system, mdb, indexes, parsed, ch, totalSteps, currentStep,
+		)
+		if !waitForResume(system.ID, currentStep, companion.Processed, companion.Matched, companion.Skipped) {
+			return
+		}
+
+		if len(indexes.TitlesBySlug) == 0 && len(indexes.MediaByPathFold) == 0 {
+			if companion.Processed > 0 {
+				ch <- scraper.ScrapeUpdate{
+					SystemID:    system.ID,
+					Total:       companion.Processed,
+					Processed:   companion.Processed,
+					Matched:     companion.Matched,
+					Skipped:     companion.Skipped,
+					TotalSteps:  totalSteps,
+					CurrentStep: currentStep,
+				}
+			}
+			totalProcessed += companion.Processed
+			totalMatched += companion.Matched
+			totalSkipped += companion.Skipped
+			continue
+		}
+
+		records, loadErr := g.loadRecordsFromParsed(ctx, system, indexes, parsed)
+		if loadErr != nil {
+			if errors.Is(loadErr, context.Canceled) || errors.Is(loadErr, context.DeadlineExceeded) {
+				sendUpdate(scraper.ScrapeUpdate{
+					SystemID: system.ID, Done: true, Processed: companion.Processed, Matched: companion.Matched,
+					Skipped: companion.Skipped,
+				})
+				return
+			}
+			sendUpdate(scraper.ScrapeUpdate{
+				SystemID: system.ID, FatalErr: loadErr,
+				Done: true, Processed: companion.Processed, Matched: companion.Matched, Skipped: companion.Skipped,
+			})
+			return
+		}
+
+		var processed, matched, skipped int
+		regularWriteStats := scrapeWriteStats{UniqueTitleDBIDs: make(map[int64]struct{})}
+		totalRecords := len(records)
+		systemTotal := companion.Processed + totalRecords
 
 		select {
 		case <-ctx.Done():
 			ch <- scraper.ScrapeUpdate{
-				Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+				TotalSteps: totalSteps, CurrentStep: currentStep, Done: true,
 			}
 			return
-		case ch <- scraper.ScrapeUpdate{SystemID: system.ID, Total: len(records)}:
+		case ch <- scraper.ScrapeUpdate{
+			SystemID:    system.ID,
+			Total:       systemTotal,
+			Processed:   companion.Processed,
+			Matched:     companion.Matched,
+			Skipped:     companion.Skipped,
+			TotalSteps:  totalSteps,
+			CurrentStep: currentStep,
+		}:
 		}
-
-		var processed, matched, skipped int
-		totalRecords := len(records)
-		if !waitForResume(system.ID, processed, matched, skipped) {
+		if !waitForResume(
+			system.ID,
+			currentStep,
+			companion.Processed+processed,
+			companion.Matched+matched,
+			companion.Skipped+skipped,
+		) {
 			return
 		}
 
@@ -433,15 +758,22 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				return true
 			}
 			update.SystemID = system.ID
-			update.Total = totalRecords
+			update.Total = systemTotal
+			update.Processed += companion.Processed
+			update.Matched += companion.Matched
+			update.Skipped += companion.Skipped
+			update.TotalSteps = totalSteps
+			update.CurrentStep = currentStep
 			select {
 			case <-ctx.Done():
 				ch <- scraper.ScrapeUpdate{
-					SystemID:  system.ID,
-					Processed: totalProcessed + processed,
-					Matched:   totalMatched + matched,
-					Skipped:   totalSkipped + skipped,
-					Done:      true,
+					SystemID:    system.ID,
+					Processed:   companion.Processed + processed,
+					Matched:     companion.Matched + matched,
+					Skipped:     companion.Skipped + skipped,
+					TotalSteps:  totalSteps,
+					CurrentStep: currentStep,
+					Done:        true,
 				}
 				return false
 			case ch <- update:
@@ -451,17 +783,25 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		}
 
 		for _, record := range records {
-			if !waitForResume(system.ID, processed, matched, skipped) {
+			if !waitForResume(
+				system.ID,
+				currentStep,
+				companion.Processed+processed,
+				companion.Matched+matched,
+				companion.Skipped+skipped,
+			) {
 				return
 			}
 			select {
 			case <-ctx.Done():
 				ch <- scraper.ScrapeUpdate{
-					SystemID:  system.ID,
-					Processed: totalProcessed + processed,
-					Matched:   totalMatched + matched,
-					Skipped:   totalSkipped + skipped,
-					Done:      true,
+					SystemID:    system.ID,
+					Processed:   companion.Processed + processed,
+					Matched:     companion.Matched + matched,
+					Skipped:     companion.Skipped + skipped,
+					TotalSteps:  totalSteps,
+					CurrentStep: currentStep,
+					Done:        true,
 				}
 				return
 			default:
@@ -481,17 +821,43 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 
 			mapped := g.MapToDB(record)
-			if !waitForResume(system.ID, processed, matched, skipped) {
+			if !record.MediaLevelWriteSafe {
+				if len(mapped.MediaTags) > 0 || len(mapped.MediaProps) > 0 {
+					log.Debug().
+						Str("system", system.ID).
+						Str("path", record.Game.Path).
+						Str("matchKind", string(record.MatchKind)).
+						Int64("mediaDBID", record.MatchedMediaDBID).
+						Int64("mediaTitleDBID", record.MatchedTitleDBID).
+						Msg("gamelistxml: omitting media-level metadata for slug-only match")
+				}
+				mapped.MediaTags = nil
+				mapped.MediaProps = nil
+			}
+			if !waitForResume(
+				system.ID,
+				currentStep,
+				companion.Processed+processed,
+				companion.Matched+matched,
+				companion.Skipped+skipped,
+			) {
 				return
 			}
 
-			writeErr := mdb.ApplyScrapeResult(
-				ctx, record.MatchedMediaDBID, record.MatchedTitleDBID,
-				&database.ScrapeWrite{
+			writeTarget := database.ScrapeWriteTarget{
+				MediaDBID:      record.MatchedMediaDBID,
+				MediaTitleDBID: record.MatchedTitleDBID,
+				Write: &database.ScrapeWrite{
 					Sentinel:   scraper.SentinelTagInfo(id),
+					MediaTags:  mapped.MediaTags,
+					MediaProps: mapped.MediaProps,
 					TitleTags:  mapped.TitleTags,
 					TitleProps: mapped.TitleProps,
-				})
+				},
+			}
+			writeStart := time.Now()
+			writeErr := mdb.ApplyScrapeResult(ctx, writeTarget.MediaDBID, writeTarget.MediaTitleDBID, writeTarget.Write)
+			regularWriteStats.recordWrite(writeTarget, time.Since(writeStart))
 			if writeErr != nil {
 				log.Warn().Err(writeErr).
 					Int64("mediaTitleDBID", record.MatchedTitleDBID).
@@ -516,20 +882,25 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		if !emitProgress(scraper.ScrapeUpdate{Processed: processed, Matched: matched, Skipped: skipped}, true) {
 			return
 		}
-		totalProcessed += processed
-		totalMatched += matched
-		totalSkipped += skipped
+		logScrapeWriteStats("gamelistxml: regular write stats", system.ID, &regularWriteStats)
+		totalProcessed += companion.Processed + processed
+		totalMatched += companion.Matched + matched
+		totalSkipped += companion.Skipped + skipped
 	}
 
-	ch <- scraper.ScrapeUpdate{Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped}
+	ch <- scraper.ScrapeUpdate{
+		Done: true, Processed: totalProcessed, Matched: totalMatched, Skipped: totalSkipped,
+		TotalSteps: totalSteps, CurrentStep: totalSteps,
+	}
 }
 
 // MapToDB converts a GamelistRecord into the tag and property writes to apply
-// to the matched MediaTitle row. Media-level tags are not written by this
-// scraper; only title-level tags and properties are populated.
+// to the matched Media and MediaTitle rows.
 func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
+	var mediaTags []database.TagInfo
 	var titleTags []database.TagInfo
 	var titleProps []database.MediaProperty
+	var mediaProps []database.MediaProperty
 	game := record.Game
 
 	// Normalise all string fields before mapping: unescape HTML entities,
@@ -542,6 +913,8 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	game.Players = cleanField(game.Players)
 	game.ArcadeSystemName = cleanField(game.ArcadeSystemName)
 	game.Family = cleanField(game.Family)
+	game.Region = cleanField(game.Region)
+	game.Lang = cleanField(game.Lang)
 	game.Desc = cleanField(game.Desc)
 	game.Image = cleanField(game.Image)
 	game.Thumbnail = cleanField(game.Thumbnail)
@@ -557,6 +930,11 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	game.Boxart2D = cleanField(game.Boxart2D)
 	game.Boxart3D = cleanField(game.Boxart3D)
 	game.Logo = cleanField(game.Logo)
+
+	// --- MediaTags: ROM-level variant metadata ---
+
+	mediaTags = appendCSVTags(mediaTags, string(tags.TagTypeRegion), game.Region)
+	mediaTags = appendCSVTags(mediaTags, string(tags.TagTypeLang), game.Lang)
 
 	// --- MediaTitleTags: title-level, shared across all ROMs ---
 
@@ -596,14 +974,14 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypeGameFamily), Tag: game.Family})
 	}
 
-	// --- MediaTitleProperties: title-level static content ---
+	// --- MediaTitleProperties: title-level shared static content ---
 
 	propType := string(tags.TagTypeProperty)
 	root := record.SystemRootPath
 
-	// stem is the ROM filename without extension, used to locate matching
+	// fallbackNames are ROM-relative PNG filenames used to locate matching
 	// artwork files under media/ sub-directories.
-	stem := strings.TrimSuffix(filepath.Base(game.Path), filepath.Ext(game.Path))
+	fallbackNames := artworkFallbackNames(game.Path, record.SystemRootPath)
 
 	if game.Desc != "" {
 		titleProps = append(titleProps,
@@ -622,15 +1000,15 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	// the pre-stated media sub-directories for a matching <stem>.png file.
 	appendImageProp := func(propValue tags.TagValue, xmlPath string) {
 		key := propType + ":" + string(propValue)
-		p := pathProp(key, xmlPath, root)
+		p := pathProp(key, xmlPath, root, g.externalAssetRoots)
 		if p == nil {
 			p = findMediaFilePropFS(
-				g.filesystem(), key, stem,
+				g.filesystem(), key, fallbackNames,
 				mediaDirCandidates[string(propValue)], record.AvailableMediaDirs,
 			)
 		}
 		if p != nil {
-			titleProps = append(titleProps, *p)
+			mediaProps = append(mediaProps, *p)
 		}
 	}
 
@@ -657,14 +1035,16 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	appendImageProp(tags.TagPropertyImageTitleshot, titleshotXML)
 	appendImageProp(tags.TagPropertyImageMap, game.Map)
 
-	if p := pathProp(propType+":"+string(tags.TagPropertyVideo), game.Video, root); p != nil {
-		titleProps = append(titleProps, *p)
+	if p := pathProp(propType+":"+string(tags.TagPropertyVideo), game.Video, root, g.externalAssetRoots); p != nil {
+		mediaProps = append(mediaProps, *p)
 	}
-	if p := pathProp(propType+":"+string(tags.TagPropertyManual), game.Manual, root); p != nil {
-		titleProps = append(titleProps, *p)
+	if p := pathProp(propType+":"+string(tags.TagPropertyManual), game.Manual, root, g.externalAssetRoots); p != nil {
+		mediaProps = append(mediaProps, *p)
 	}
 
 	return scraper.MapResult{
+		MediaTags:  mediaTags,
+		MediaProps: mediaProps,
 		TitleTags:  titleTags,
 		TitleProps: titleProps,
 	}
@@ -806,13 +1186,20 @@ func splitCSV(s string) []string {
 	return result
 }
 
+func appendCSVTags(tagInfos []database.TagInfo, tagType, raw string) []database.TagInfo {
+	for _, value := range splitCSV(raw) {
+		tagInfos = append(tagInfos, database.TagInfo{Type: tagType, Tag: strings.ToLower(value)})
+	}
+	return tagInfos
+}
+
 // pathProp resolves esPath to an absolute path and returns a MediaProperty for
 // the given typeTag. Returns nil if the path cannot be resolved (skipped cleanly).
-func pathProp(typeTag, esPath, systemRootPath string) *database.MediaProperty {
+func pathProp(typeTag, esPath, systemRootPath string, externalAssetRoots []string) *database.MediaProperty {
 	if esPath == "" {
 		return nil
 	}
-	abs := filepath.ToSlash(resolveESAssetPath(esPath, systemRootPath))
+	abs := filepath.ToSlash(resolveESAssetPath(esPath, systemRootPath, externalAssetRoots))
 	if abs == "" {
 		return nil
 	}
@@ -823,19 +1210,72 @@ func pathProp(typeTag, esPath, systemRootPath string) *database.MediaProperty {
 	}
 }
 
-// bound retrieved paths to child dirs of media
-func resolveESAssetPath(esPath, systemRootPath string) string {
-	abs := resolveESPath(esPath, systemRootPath)
-	if abs == "" {
+// resolveESAssetPath resolves a gamelist asset path. Relative asset paths stay
+// bound to the system ROM root. Absolute paths can also resolve under configured
+// external asset roots for platforms whose storage routes intentionally overlap.
+func resolveESAssetPath(esPath, systemRootPath string, externalAssetRoots []string) string {
+	abs, ok := resolveESPathAbs(esPath, systemRootPath)
+	if !ok {
 		return ""
+	}
+	if pathWithinRoot(abs, systemRootPath) {
+		return abs
+	}
+	if filepath.IsAbs(esPath) || strings.HasPrefix(esPath, "~/") {
+		for _, root := range externalAssetRoots {
+			if pathWithinRoot(abs, root) {
+				return abs
+			}
+		}
+	}
+	return ""
+}
+
+func resolveESPathAbs(esPath, systemRootPath string) (string, bool) {
+	if esPath == "" {
+		return "", false
+	}
+	rootAbs, err := filepath.Abs(systemRootPath)
+	if err != nil {
+		return "", false
+	}
+	rootAbs = filepath.Clean(rootAbs)
+
+	var abs string
+	switch {
+	case strings.HasPrefix(esPath, "~/"):
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return "", false
+		}
+		abs = filepath.Join(home, esPath[2:])
+	case filepath.IsAbs(esPath):
+		abs = filepath.Clean(esPath)
+	default:
+		rel := strings.TrimPrefix(esPath, "./")
+		abs = filepath.Join(rootAbs, rel)
 	}
 
-	root := filepath.Clean(systemRootPath) + string(filepath.Separator)
-	cleanAbs := filepath.Clean(abs) + string(filepath.Separator)
-	if !strings.HasPrefix(cleanAbs, root) {
-		return ""
+	abs, err = filepath.Abs(abs)
+	if err != nil || !filepath.IsAbs(abs) {
+		return "", false
 	}
-	return abs
+	return filepath.Clean(abs), true
+}
+
+func pathWithinRoot(path, root string) bool {
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	pathAbs = filepath.Clean(pathAbs)
+	rootAbs = filepath.Clean(rootAbs)
+	rel, err := filepath.Rel(rootAbs, pathAbs)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // textProp creates a plain-text MediaProperty.
@@ -877,16 +1317,53 @@ func findMediaFileProp(
 	candidates []string,
 	availableDirs map[string]string,
 ) *database.MediaProperty {
-	return findMediaFilePropFS(afero.NewOsFs(), typeTag, stem, candidates, availableDirs)
+	if stem == "" || stem == "." {
+		return nil
+	}
+	return findMediaFilePropFS(afero.NewOsFs(), typeTag, []string{stem + ".png"}, candidates, availableDirs)
+}
+
+func artworkFallbackNames(gamePath, systemRootPath string) []string {
+	resolved := resolveESPath(gamePath, systemRootPath)
+	if resolved == "" {
+		return nil
+	}
+
+	rootAbs, err := filepath.Abs(systemRootPath)
+	if err != nil {
+		return nil
+	}
+	rel, err := filepath.Rel(filepath.Clean(rootAbs), filepath.Clean(resolved))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+
+	stem := strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel))
+	if stem == "" || stem == "." {
+		return nil
+	}
+
+	flat := stem + ".png"
+	dir := filepath.Dir(rel)
+	if dir == "." || dir == "" {
+		return []string{flat}
+	}
+
+	nested := filepath.Join(dir, flat)
+	if nested == flat {
+		return []string{flat}
+	}
+	return []string{nested, flat}
 }
 
 func findMediaFilePropFS(
 	fs afero.Fs,
-	typeTag, stem string,
+	typeTag string,
+	fallbackNames []string,
 	candidates []string,
 	availableDirs map[string]string,
 ) *database.MediaProperty {
-	if stem == "" || stem == "." {
+	if len(fallbackNames) == 0 {
 		return nil
 	}
 	for _, dir := range candidates {
@@ -894,16 +1371,110 @@ func findMediaFilePropFS(
 		if !ok {
 			continue
 		}
-		candidate := filepath.Join(dirPath, stem+".png")
-		if exists, err := afero.Exists(fs, candidate); err == nil && exists {
-			return &database.MediaProperty{
-				TypeTag:     typeTag,
-				Text:        filepath.ToSlash(candidate),
-				ContentType: "image/png",
+		for _, name := range fallbackNames {
+			cleanName := filepath.Clean(name)
+			if name == "" || cleanName == "." || cleanName == ".." ||
+				strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
+				continue
+			}
+			candidate := filepath.Join(dirPath, name)
+			if exists, err := afero.Exists(fs, candidate); err == nil && exists {
+				return &database.MediaProperty{
+					TypeTag:     typeTag,
+					Text:        filepath.ToSlash(candidate),
+					ContentType: "image/png",
+				}
 			}
 		}
 	}
 	return nil
+}
+
+func titleSlugKnown(indexes loadRecordIndexes, slug string) bool {
+	if indexes.AllTitlesBySlug != nil {
+		_, ok := indexes.AllTitlesBySlug[slug]
+		return ok
+	}
+	_, ok := indexes.TitlesBySlug[slug]
+	return ok
+}
+
+func selectMediaForSlugMatch(
+	indexes loadRecordIndexes,
+	mediaTitleDBID int64,
+	resolved string,
+) slugMediaSelection {
+	media, matchedKey, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved)
+	if ok && media.MediaTitleDBID == mediaTitleDBID {
+		return slugMediaSelection{media: media, matchKind: gamelistMatchSlugPath, key: matchedKey}
+	}
+
+	matchKind := gamelistMatchSlugOnly
+	if ok {
+		matchKind = gamelistMatchSlugConflict
+		log.Warn().
+			Str("resolved", resolved).
+			Int64("pathMediaDBID", media.DBID).
+			Int64("pathMediaTitleDBID", media.MediaTitleDBID).
+			Int64("slugMediaTitleDBID", mediaTitleDBID).
+			Msg("gamelistxml: slug match path points at different title, writing title metadata only")
+	}
+
+	mediaRows := indexes.MediaByTitleDBID[mediaTitleDBID]
+	if len(mediaRows) == 0 {
+		return slugMediaSelection{matchKind: matchKind}
+	}
+	return slugMediaSelection{media: mediaRows[0], matchKind: matchKind}
+}
+
+func matchMediaByResolvedPath(
+	mediaByPathFold map[string]database.Media,
+	resolved string,
+) (database.Media, string, bool) {
+	key := pathFoldKey(resolved)
+	if media, ok := mediaByPathFold[key]; ok {
+		return media, key, true
+	}
+
+	if !strings.EqualFold(filepath.Ext(resolved), ".zip") {
+		return database.Media{}, "", false
+	}
+
+	prefix := key + "/"
+	var matchedMedia database.Media
+	var matchedKey string
+	matches := 0
+	for mediaKey, media := range mediaByPathFold {
+		if !strings.HasPrefix(mediaKey, prefix) {
+			continue
+		}
+		matches++
+		if matches == 1 {
+			matchedMedia = media
+			matchedKey = mediaKey
+		}
+	}
+
+	if matches == 1 {
+		return matchedMedia, matchedKey, true
+	}
+	if matches > 1 {
+		log.Warn().Str("path", resolved).Int("matches", matches).
+			Msg("gamelistxml: zip-as-dir path matched multiple indexed media rows, skipping")
+	}
+	return database.Media{}, "", false
+}
+
+func pathFoldKey(path string) string {
+	return strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+}
+
+func mediaFilenameKey(path string) string {
+	filename := filepath.Base(filepath.ToSlash(path))
+	if filename == "." || filename == string(filepath.Separator) {
+		return ""
+	}
+	return strings.ToLower(filename)
 }
 
 func readGameListXMLFS(fs afero.Fs, path string) (*esapi.GameList, error) {
@@ -920,6 +1491,10 @@ func readGameListXMLFS(fs afero.Fs, path string) (*esapi.GameList, error) {
 
 // companionSource is the XML source attribute value that marks ZaparooCompanion entries.
 const companionSource = "ZaparooCompanion"
+
+func isCompanionGame(game *esapi.Game) bool {
+	return game != nil && (game.Source == companionSource || game.SourceAttr == companionSource)
+}
 
 // companionParent holds a ZaparooCompanion parent meta record parsed from a gamelist.xml.
 // Parent records carry full metadata but no ROM path; they represent the canonical game
@@ -941,6 +1516,11 @@ type companionChild struct {
 	Lang         string
 }
 
+type companionMediaMatch struct {
+	Media               []database.Media
+	MediaLevelWriteSafe bool
+}
+
 // loadCompanionEntries scans all gamelist.xml files for the system and separates
 // entries with source="ZaparooCompanion" into parent records (id attr, no path) and
 // child records (parentid attr, has path).
@@ -948,68 +1528,47 @@ func (g *GamelistXMLScraper) loadCompanionEntries(
 	ctx context.Context,
 	system scraper.ScrapeSystem,
 ) (parents []companionParent, children []companionChild) {
-	for _, rootPath := range system.ROMPaths {
-		select {
-		case <-ctx.Done():
-			return parents, children
-		default:
-		}
+	parsed, err := g.loadParsedGamelistSystem(ctx, system)
+	if err != nil {
+		return nil, nil
+	}
+	return companionEntriesFromParsed(ctx, system, parsed)
+}
 
-		gamelistPath := filepath.Join(rootPath, "gamelist.xml")
-		exists, statErr := afero.Exists(g.filesystem(), gamelistPath)
-		if statErr != nil || !exists {
-			continue
-		}
-
-		gl, err := readGameListXMLFS(g.filesystem(), gamelistPath)
-		if err != nil {
-			log.Warn().Err(err).Str("path", gamelistPath).
-				Msg("gamelistxml: companion: failed to read gamelist.xml")
-			continue
-		}
-
-		availableMediaDirs := statMediaDirsFS(g.filesystem(), rootPath)
-
-		for i := range gl.Games {
+func companionEntriesFromParsed(
+	ctx context.Context,
+	system scraper.ScrapeSystem,
+	parsed parsedGamelistSystem,
+) (parents []companionParent, children []companionChild) {
+	var skippedNonCompanion int
+	var skippedMalformed int
+	var unresolvedChildPaths int
+	for _, file := range parsed.Files {
+		for i := range file.Games {
 			select {
 			case <-ctx.Done():
 				return parents, children
 			default:
 			}
-			game := gl.Games[i]
-			if game.Source != companionSource && game.SourceAttr != companionSource {
-				log.Debug().Str("source", game.Source).Msg("source not companion")
+			game := file.Games[i]
+			if !isCompanionGame(&game) {
+				skippedNonCompanion++
 				continue
 			}
 			switch {
 			case game.ScreenScraperIDAttr != "" && game.Path == "":
-				log.Debug().
-					Str("gameID", game.ScreenScraperIDAttr).
-					Str("name", game.Name).
-					Str("gamelist", gamelistPath).
-					Msg("gamelistxml: companion: found parent entry")
 				parents = append(parents, companionParent{
 					Game:               game,
-					SystemRootPath:     rootPath,
-					AvailableMediaDirs: availableMediaDirs,
+					SystemRootPath:     file.RootPath,
+					AvailableMediaDirs: file.AvailableMediaDirs,
 					GameID:             game.ScreenScraperIDAttr,
 				})
 			case game.ParentIDAttr != "" && game.Path != "":
-				resolved := resolveESPath(game.Path, rootPath)
+				resolved := resolveESPath(game.Path, file.RootPath)
 				if resolved == "" {
-					log.Debug().
-						Str("path", game.Path).
-						Str("parentID", game.ParentIDAttr).
-						Str("gamelist", gamelistPath).
-						Msg("gamelistxml: companion: child path failed to resolve, skipping")
+					unresolvedChildPaths++
 					continue
 				}
-				log.Debug().
-					Str("parentID", game.ParentIDAttr).
-					Str("resolvedPath", resolved).
-					Str("region", game.Region).
-					Str("lang", game.Lang).
-					Msg("gamelistxml: companion: found child entry")
 				children = append(children, companionChild{
 					ResolvedPath: resolved,
 					ParentGameID: game.ParentIDAttr,
@@ -1017,15 +1576,18 @@ func (g *GamelistXMLScraper) loadCompanionEntries(
 					Lang:         cleanField(game.Lang),
 				})
 			default:
-				log.Debug().
-					Str("gameID", game.ScreenScraperIDAttr).
-					Str("parentID", game.ParentIDAttr).
-					Str("path", game.Path).
-					Str("name", game.Name).
-					Msg("gamelistxml: companion: entry skipped (no id+empty-path or parentid+path)")
+				skippedMalformed++
 			}
 		}
 	}
+	log.Debug().
+		Str("system", system.ID).
+		Int("parents", len(parents)).
+		Int("children", len(children)).
+		Int("skipped_non_companion", skippedNonCompanion).
+		Int("skipped_malformed", skippedMalformed).
+		Int("unresolved_child_paths", unresolvedChildPaths).
+		Msg("gamelistxml: companion: loaded entries")
 	return parents, children
 }
 
@@ -1033,11 +1595,14 @@ func (g *GamelistXMLScraper) loadCompanionEntries(
 // record. MapToDB is safe with an empty Game.Path; the stem becomes "." which is
 // rejected by findMediaFilePropFS, so filesystem fallbacks are skipped cleanly.
 func (g *GamelistXMLScraper) mapCompanionParentToResult(p *companionParent) scraper.MapResult {
-	return g.MapToDB(&GamelistRecord{
+	result := g.MapToDB(&GamelistRecord{
 		SystemRootPath:     p.SystemRootPath,
 		AvailableMediaDirs: p.AvailableMediaDirs,
 		Game:               p.Game,
 	})
+	result.TitleProps = append(result.TitleProps, result.MediaProps...)
+	result.MediaProps = nil
+	return result
 }
 
 // processCompanionEntries handles ZaparooCompanion-sourced entries in gamelist.xml.
@@ -1051,13 +1616,34 @@ func (g *GamelistXMLScraper) mapCompanionParentToResult(p *companionParent) scra
 // to the child Media row.
 func (g *GamelistXMLScraper) processCompanionEntries(
 	ctx context.Context,
+	opts scraper.ScrapeOptions,
 	system scraper.ScrapeSystem,
 	mdb database.MediaDBI,
-) {
-	parents, children := g.loadCompanionEntries(ctx, system)
+	indexes loadRecordIndexes,
+	ch chan<- scraper.ScrapeUpdate,
+) companionStats {
+	parsed, err := g.loadParsedGamelistSystem(ctx, system)
+	if err != nil {
+		return companionStats{}
+	}
+	return g.processCompanionEntriesFromParsed(ctx, opts, system, mdb, indexes, parsed, ch, 0, 0)
+}
+
+func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
+	ctx context.Context,
+	opts scraper.ScrapeOptions,
+	system scraper.ScrapeSystem,
+	mdb database.MediaDBI,
+	indexes loadRecordIndexes,
+	parsed parsedGamelistSystem,
+	ch chan<- scraper.ScrapeUpdate,
+	totalSteps int,
+	currentStep int,
+) companionStats {
+	parents, children := companionEntriesFromParsed(ctx, system, parsed)
 	if len(parents) == 0 && len(children) == 0 {
 		log.Debug().Msg("gamelistxml: companion entries not found")
-		return
+		return companionStats{}
 	}
 
 	log.Info().
@@ -1066,140 +1652,329 @@ func (g *GamelistXMLScraper) processCompanionEntries(
 		Int("children", len(children)).
 		Msg("gamelistxml: companion: processing entries")
 
-	// Phase 1: map each parent record to its tag+property writes.
 	parentMeta := make(map[string]scraper.MapResult, len(parents))
 	for i := range parents {
 		p := &parents[i]
 		parentMeta[p.GameID] = g.mapCompanionParentToResult(p)
-		log.Debug().
-			Str("gameID", p.GameID).
-			Str("name", p.Game.Name).
-			Int("tags", len(parentMeta[p.GameID].TitleTags)).
-			Int("props", len(parentMeta[p.GameID].TitleProps)).
-			Msg("gamelistxml: companion: parent mapped")
+	}
+	if len(children) == 0 {
+		return companionStats{}
 	}
 
-	// Phase 2: enrich each child's existing MediaTitle with parent metadata.
-	// Child paths are root-relative (./file.rom) so match by filename suffix.
-	seenTitles := make(map[int64]bool)
+	sentinel := scraper.SentinelTagInfo("gamelist.xml")
+	stats := companionStats{WriteStats: scrapeWriteStats{UniqueTitleDBIDs: make(map[int64]struct{})}}
+	lastProgress := time.Now().Add(-scrapeProgressInterval)
+	emitProgress := func(force bool) bool {
+		if ch == nil {
+			return true
+		}
+		if !force && time.Since(lastProgress) < scrapeProgressInterval {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case ch <- scraper.ScrapeUpdate{
+			SystemID:    system.ID,
+			Total:       len(children),
+			Processed:   stats.Processed,
+			Matched:     stats.Matched,
+			Skipped:     stats.Skipped,
+			TotalSteps:  totalSteps,
+			CurrentStep: currentStep,
+		}:
+			lastProgress = time.Now()
+			return true
+		}
+	}
+
+	defer func() {
+		log.Info().
+			Str("system", system.ID).
+			Int("parents", len(parents)).
+			Int("children", len(children)).
+			Int("processed", stats.Processed).
+			Int("matched", stats.Matched).
+			Int("skipped", stats.Skipped).
+			Int("missing_title_slugs", stats.MissingTitleSlugs).
+			Int("missing_title_media", stats.MissingTitleMedia).
+			Int("ambiguous_filenames", stats.AmbiguousFilenames).
+			Int("unmatched_filenames", stats.UnmatchedFilenames).
+			Int("unique_title_writes", stats.UniqueTitleWrites).
+			Int("duplicate_title_writes", stats.DuplicateTitles).
+			Int("conflicting_title_writes", stats.ConflictingTitleWrites).
+			Bool("force", opts.Force).
+			Msg("gamelistxml: companion: finished entries")
+		logScrapeWriteStats("gamelistxml: companion write stats", system.ID, &stats.WriteStats)
+	}()
+
+	if !emitProgress(true) {
+		return stats
+	}
+	titlePayloadByTitleDBID := make(map[int64]string)
+	pendingWrites := make([]database.ScrapeWriteTarget, 0, companionWriteBatchSize)
+	flushWrites := func(force bool) bool {
+		if len(pendingWrites) == 0 || (!force && len(pendingWrites) < companionWriteBatchSize) {
+			return true
+		}
+		if !emitProgress(force) {
+			return false
+		}
+		succeeded, failed := applyCompanionWriteTargets(ctx, mdb, pendingWrites, &stats.WriteStats)
+		stats.Matched += succeeded
+		stats.Skipped += failed
+		pendingWrites = pendingWrites[:0]
+		return emitProgress(force)
+	}
 	for _, c := range children {
+		select {
+		case <-ctx.Done():
+			return stats
+		default:
+		}
+		stats.Processed++
 		meta, ok := parentMeta[c.ParentGameID]
 		if !ok {
-			log.Debug().Str("parentGameID", c.ParentGameID).
-				Msg("gamelistxml: companion: parent not found for child, skipping")
+			stats.Skipped++
+			if !emitProgress(false) {
+				return stats
+			}
 			continue
 		}
 
-		filename := filepath.Base(c.ResolvedPath)
+		matched := matchCompanionChildMedia(system, c, indexes, &stats)
+		if len(matched.Media) == 0 {
+			stats.Skipped++
+			if !emitProgress(false) {
+				return stats
+			}
+			continue
+		}
+		consumeCompanionMediaMatches(indexes, matched.Media)
 
-		if filepath.Ext(filename) == ".slug" {
-			slug := strings.TrimSuffix(filename, ".slug")
-			title, titleErr := mdb.FindMediaTitleBySystemAndSlug(ctx, system.DBID, slug)
-			if titleErr != nil {
-				log.Debug().Err(titleErr).Str("slug", slug).
-					Msg("gamelistxml: companion: error looking up child title by slug")
-				continue
+		for _, media := range matched.Media {
+			write := &database.ScrapeWrite{
+				Sentinel:   sentinel,
+				TitleTags:  meta.TitleTags,
+				TitleProps: meta.TitleProps,
 			}
-			if title == nil {
-				log.Debug().Str("slug", slug).
-					Msg("gamelistxml: companion: no indexed title found for child slug, skipping")
-				continue
+			if matched.MediaLevelWriteSafe {
+				write.MediaTags = companionChildTags(c)
 			}
-			if !seenTitles[title.DBID] {
-				titleSuccess := true
-				if len(meta.TitleTags) > 0 {
-					if tagsErr := mdb.UpsertMediaTitleTags(ctx, title.DBID, meta.TitleTags); tagsErr != nil {
-						log.Warn().Err(tagsErr).Int64("mediaTitleDBID", title.DBID).
-							Msg("gamelistxml: companion: upsert parent tags on slug-matched title failed")
-						titleSuccess = false
-					}
-				}
-				if len(meta.TitleProps) > 0 {
-					if propsErr := mdb.UpsertMediaTitleProperties(ctx, title.DBID, meta.TitleProps); propsErr != nil {
-						log.Warn().Err(propsErr).Int64("mediaTitleDBID", title.DBID).
-							Msg("gamelistxml: companion: upsert parent props on slug-matched title failed")
-						titleSuccess = false
-					}
-				}
-				if titleSuccess {
-					seenTitles[title.DBID] = true
-				}
+			titlePayloadKey := companionTitlePayloadKey(write)
+			if existingKey, ok := titlePayloadByTitleDBID[media.MediaTitleDBID]; !ok {
+				titlePayloadByTitleDBID[media.MediaTitleDBID] = titlePayloadKey
+				stats.UniqueTitleWrites++
+			} else if existingKey == titlePayloadKey {
+				write.TitleTags = nil
+				write.TitleProps = nil
+				stats.DuplicateTitles++
 			} else {
-				log.Debug().Int64("mediaTitleDBID", title.DBID).
-					Msg("gamelistxml: companion: slug-matched title already enriched, skipping")
+				stats.ConflictingTitleWrites++
 			}
-			continue
-		}
-
-		matched, mediaErr := mdb.FindMediaBySystemAndPathSuffix(ctx, system.DBID, filename)
-		if mediaErr != nil {
-			log.Debug().Err(mediaErr).Str("filename", filename).
-				Msg("gamelistxml: companion: error looking up child by filename")
-			continue
-		}
-		if len(matched) == 0 {
-			log.Debug().Str("filename", filename).
-				Msg("gamelistxml: companion: no indexed media found for child filename, skipping")
-			continue
-		}
-		log.Debug().
-			Str("filename", filename).
-			Int("matches", len(matched)).
-			Msg("gamelistxml: companion: child filename matches")
-
-		var childTags []database.TagInfo
-		if c.Region != "" {
-			childTags = append(childTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: c.Region})
-		}
-		if c.Lang != "" {
-			childTags = append(childTags, database.TagInfo{Type: string(tags.TagTypeLang), Tag: c.Lang})
-		}
-
-		for _, media := range matched {
-			log.Debug().
-				Str("path", media.Path).
-				Int64("mediaDBID", media.DBID).
-				Int64("mediaTitleDBID", media.MediaTitleDBID).
-				Msg("gamelistxml: companion: enriching child media title with parent metadata")
-
-			if !seenTitles[media.MediaTitleDBID] {
-				titleSuccess := true
-				if len(meta.TitleTags) > 0 {
-					if tagsErr := mdb.UpsertMediaTitleTags(ctx, media.MediaTitleDBID, meta.TitleTags); tagsErr != nil {
-						log.Warn().Err(tagsErr).Int64("mediaTitleDBID", media.MediaTitleDBID).
-							Msg("gamelistxml: companion: upsert parent tags on child title failed")
-						titleSuccess = false
-					}
-				}
-				if len(meta.TitleProps) > 0 {
-					propsErr := mdb.UpsertMediaTitleProperties(ctx, media.MediaTitleDBID, meta.TitleProps)
-					if propsErr != nil {
-						log.Warn().Err(propsErr).Int64("mediaTitleDBID", media.MediaTitleDBID).
-							Msg("gamelistxml: companion: upsert parent props on child title failed")
-						titleSuccess = false
-					}
-				}
-				if titleSuccess {
-					seenTitles[media.MediaTitleDBID] = true
-				}
-			} else {
-				log.Debug().Int64("mediaTitleDBID", media.MediaTitleDBID).
-					Msg("gamelistxml: companion: title already enriched, skipping")
+			pendingWrites = append(pendingWrites, database.ScrapeWriteTarget{
+				MediaDBID:      media.DBID,
+				MediaTitleDBID: media.MediaTitleDBID,
+				Write:          write,
+			})
+			if !flushWrites(false) {
+				return stats
 			}
-
-			if len(childTags) > 0 {
-				log.Debug().
-					Int64("mediaDBID", media.DBID).
-					Str("region", c.Region).
-					Str("lang", c.Lang).
-					Msg("gamelistxml: companion: writing child region/lang tags")
-				if tagsErr := mdb.UpsertMediaTags(ctx, media.DBID, childTags); tagsErr != nil {
-					log.Warn().Err(tagsErr).Int64("mediaDBID", media.DBID).
-						Msg("gamelistxml: companion: upsert child tags failed")
-				}
-			}
+		}
+		if !emitProgress(false) {
+			return stats
 		}
 	}
+	if !flushWrites(true) {
+		return stats
+	}
+	_ = emitProgress(true)
+	return stats
+}
+
+func companionTitlePayloadKey(write *database.ScrapeWrite) string {
+	if write == nil {
+		return ""
+	}
+	var b strings.Builder
+	_, _ = b.WriteString("tags:")
+	_, _ = b.WriteString(strconv.Itoa(len(write.TitleTags)))
+	for _, tag := range write.TitleTags {
+		appendKeyPart(&b, tag.Type)
+		appendKeyPart(&b, tag.Tag)
+	}
+	_, _ = b.WriteString("props:")
+	_, _ = b.WriteString(strconv.Itoa(len(write.TitleProps)))
+	for _, prop := range write.TitleProps {
+		appendKeyPart(&b, prop.TypeTag)
+		appendKeyPart(&b, prop.Text)
+		appendKeyPart(&b, prop.ContentType)
+		if prop.BlobDBID == nil {
+			_, _ = b.WriteString("nil;")
+			continue
+		}
+		appendKeyPart(&b, strconv.FormatInt(*prop.BlobDBID, 10))
+	}
+	return b.String()
+}
+
+func appendKeyPart(b *strings.Builder, value string) {
+	_, _ = b.WriteString(strconv.Itoa(len(value)))
+	_ = b.WriteByte(':')
+	_, _ = b.WriteString(value)
+	_ = b.WriteByte(';')
+}
+
+func applyCompanionWriteTargets(
+	ctx context.Context,
+	mdb database.MediaDBI,
+	targets []database.ScrapeWriteTarget,
+	writeStats *scrapeWriteStats,
+) (succeeded, failed int) {
+	if len(targets) == 0 {
+		return 0, 0
+	}
+	if batcher, ok := mdb.(database.ScrapeResultBatchApplier); ok {
+		writeStart := time.Now()
+		err := batcher.ApplyScrapeResults(ctx, targets)
+		if err == nil {
+			writeStats.recordBatch(targets, time.Since(writeStart))
+			return len(targets), 0
+		}
+		writeStats.BatchFallbacks++
+		log.Warn().Err(err).
+			Int("targets", len(targets)).
+			Msg("gamelistxml: companion: batch write failed, falling back to per-target writes")
+	}
+
+	for _, target := range targets {
+		writeStart := time.Now()
+		err := mdb.ApplyScrapeResult(ctx, target.MediaDBID, target.MediaTitleDBID, target.Write)
+		writeStats.recordWrite(target, time.Since(writeStart))
+		if err != nil {
+			log.Warn().Err(err).
+				Int64("mediaDBID", target.MediaDBID).
+				Int64("mediaTitleDBID", target.MediaTitleDBID).
+				Msg("gamelistxml: companion: write failed")
+			failed++
+			continue
+		}
+		succeeded++
+	}
+	return succeeded, failed
+}
+
+func logScrapeWriteStats(message, systemID string, stats *scrapeWriteStats) {
+	log.Info().
+		Str("system", systemID).
+		Int("writes", stats.Writes).
+		Int("batches", stats.Batches).
+		Int("batch_fallbacks", stats.BatchFallbacks).
+		Dur("total_write_duration", stats.TotalDuration).
+		Dur("avg_write_duration", stats.averageDuration()).
+		Dur("max_write_duration", stats.MaxDuration).
+		Int("media_tag_writes", stats.MediaTags).
+		Int("title_tag_writes", stats.TitleTags).
+		Int("media_property_writes", stats.MediaProps).
+		Int("title_property_writes", stats.TitleProps).
+		Int("sentinel_writes", stats.Sentinels).
+		Int("unique_title_writes", len(stats.UniqueTitleDBIDs)).
+		Int("duplicate_title_writes", stats.Writes-len(stats.UniqueTitleDBIDs)).
+		Msg(message)
+}
+
+func matchCompanionChildMedia(
+	system scraper.ScrapeSystem,
+	child companionChild,
+	indexes loadRecordIndexes,
+	stats *companionStats,
+) companionMediaMatch {
+	filename := filepath.Base(child.ResolvedPath)
+	if strings.EqualFold(filepath.Ext(filename), ".slug") {
+		slug := strings.ToLower(strings.TrimSuffix(filename, filepath.Ext(filename)))
+		title, ok := indexes.AllTitlesBySlug[slug]
+		if !ok {
+			title, ok = indexes.TitlesBySlug[slug]
+		}
+		if !ok {
+			if stats != nil {
+				stats.MissingTitleSlugs++
+			}
+			return companionMediaMatch{}
+		}
+		mediaRows := indexes.MediaByTitleDBID[title.DBID]
+		if len(mediaRows) == 0 {
+			if stats != nil {
+				stats.MissingTitleMedia++
+			}
+			return companionMediaMatch{}
+		}
+		return companionMediaMatch{Media: cloneMediaRows(mediaRows)}
+	}
+
+	if media, _, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, child.ResolvedPath); ok {
+		return companionMediaMatch{Media: []database.Media{media}, MediaLevelWriteSafe: true}
+	}
+
+	filenameKey := mediaFilenameKey(child.ResolvedPath)
+	matched := indexes.MediaByFilename[filenameKey]
+	if len(matched) == 0 {
+		if stats != nil {
+			stats.UnmatchedFilenames++
+		}
+		return companionMediaMatch{}
+	}
+	if len(matched) > 1 {
+		if stats != nil {
+			stats.AmbiguousFilenames++
+		}
+		log.Warn().
+			Str("system", system.ID).
+			Str("path", child.ResolvedPath).
+			Str("filename", filename).
+			Str("parentGameID", child.ParentGameID).
+			Int("matches", len(matched)).
+			Msg("gamelistxml: companion: ambiguous child filename matches, skipping")
+		return companionMediaMatch{}
+	}
+	return companionMediaMatch{Media: cloneMediaRows(matched), MediaLevelWriteSafe: true}
+}
+
+func cloneMediaRows(rows []database.Media) []database.Media {
+	return append([]database.Media(nil), rows...)
+}
+
+func consumeCompanionMediaMatches(indexes loadRecordIndexes, mediaRows []database.Media) {
+	for _, media := range mediaRows {
+		delete(indexes.MediaByPathFold, pathFoldKey(media.Path))
+		filenameKey := mediaFilenameKey(media.Path)
+		if filenameKey != "" {
+			indexes.MediaByFilename[filenameKey] = removeMediaByDBID(indexes.MediaByFilename[filenameKey], media.DBID)
+		}
+		indexes.MediaByTitleDBID[media.MediaTitleDBID] = removeMediaByDBID(
+			indexes.MediaByTitleDBID[media.MediaTitleDBID], media.DBID,
+		)
+	}
+}
+
+func removeMediaByDBID(rows []database.Media, dbid int64) []database.Media {
+	for i, row := range rows {
+		if row.DBID != dbid {
+			continue
+		}
+		copy(rows[i:], rows[i+1:])
+		var zero database.Media
+		rows[len(rows)-1] = zero
+		return rows[:len(rows)-1]
+	}
+	return rows
+}
+
+func companionChildTags(c companionChild) []database.TagInfo {
+	var childTags []database.TagInfo
+	childTags = appendCSVTags(childTags, string(tags.TagTypeRegion), c.Region)
+	childTags = appendCSVTags(childTags, string(tags.TagTypeLang), c.Lang)
+	return childTags
 }
 
 // mimeFromExt returns a MIME type based on file extension.

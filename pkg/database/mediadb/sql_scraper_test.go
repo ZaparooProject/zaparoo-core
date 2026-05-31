@@ -95,6 +95,154 @@ func TestFindMediaBySystemAndPath_WrongSystem(t *testing.T) {
 	assert.Nil(t, m, "path exists but systemDBID doesn't match")
 }
 
+func TestFindMediaBySystemAndPaths_ReturnsMatchesByPath(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	marioPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
+	zeldaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	missingPath := filepath.ToSlash(filepath.Join("roms", "missing.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, zeldaPath)
+	require.NoError(t, err)
+
+	results, err := mediaDB.FindMediaBySystemAndPaths(ctx, 1, []string{marioPath, zeldaPath, missingPath})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, int64(1), results[marioPath].DBID)
+	assert.Equal(t, int64(2), results[zeldaPath].DBID)
+	assert.NotContains(t, results, missingPath)
+}
+
+func TestFindMediaBySystemAndPaths_EmptyInput(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	results, err := mediaDB.FindMediaBySystemAndPaths(context.Background(), 1, nil)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
+
+func TestFindSingleDescendantMedia_ReturnsOnlyChild(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	childPath := filepath.ToSlash(filepath.Join("roms", "Zelda", "zelda.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (2, 2, 1, ?, ?);
+	`, childPath, filepath.ToSlash(filepath.Join("roms", "Zelda"))+"/")
+	require.NoError(t, err)
+
+	media, err := mediaDB.FindSingleDescendantMedia(ctx, 1, filepath.ToSlash(filepath.Join("roms", "Zelda")))
+	require.NoError(t, err)
+	require.NotNil(t, media)
+	assert.Equal(t, int64(2), media.DBID)
+	assert.Equal(t, childPath, media.Path)
+}
+
+func TestFindSingleDescendantMedia_RejectsMultipleChildren(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "Collection"))
+	parentDir := filepath.ToSlash(filepath.Join(parent, "")) + "/"
+	onePath := filepath.ToSlash(filepath.Join(parent, "one.nes"))
+	twoPath := filepath.ToSlash(filepath.Join(parent, "two.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(2, 1, 'one', 'One'),
+			(3, 1, 'two', 'Two');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(2, 2, 1, ?, ?),
+			(3, 3, 1, ?, ?);
+	`, onePath, parentDir, twoPath, parentDir)
+	require.NoError(t, err)
+
+	media, err := mediaDB.FindSingleDescendantMedia(ctx, 1, parent)
+	require.NoError(t, err)
+	assert.Nil(t, media)
+}
+
+func TestFindSingleDescendantMedia_IgnoresMissingAndOtherSystems(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "Shared"))
+	parentDir := filepath.ToSlash(filepath.Join(parent, "")) + "/"
+	nesPath := filepath.ToSlash(filepath.Join(parent, "nes.nes"))
+	snesPath := filepath.ToSlash(filepath.Join(parent, "snes.sfc"))
+	missingPath := filepath.ToSlash(filepath.Join(parent, "missing.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'SNES', 'Super Nintendo');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(2, 1, 'nes-game', 'NES Game'),
+			(3, 2, 'snes-game', 'SNES Game'),
+			(4, 1, 'missing-game', 'Missing Game');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing) VALUES
+			(2, 2, 1, ?, ?, 0),
+			(3, 3, 2, ?, ?, 0),
+			(4, 4, 1, ?, ?, 1);
+	`, nesPath, parentDir, snesPath, parentDir, missingPath, parentDir)
+	require.NoError(t, err)
+
+	media, err := mediaDB.FindSingleDescendantMedia(ctx, 1, parentDir)
+	require.NoError(t, err)
+	require.NotNil(t, media)
+	assert.Equal(t, int64(2), media.DBID)
+}
+
+func TestFindSingleDescendantMedia_UsesByteExactPrefix(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(2, 1, 'underscore', 'Underscore'),
+			(3, 1, 'wildcard', 'Wildcard'),
+			(4, 1, 'percent', 'Percent'),
+			(5, 1, 'percent-wildcard', 'Percent Wildcard'),
+			(6, 1, 'case-upper', 'Case Upper'),
+			(7, 1, 'case-lower', 'Case Lower');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing) VALUES
+			(2, 2, 1, 'roms/Game_1/game.nes', 'roms/Game_1/', 0),
+			(3, 3, 1, 'roms/GameA1/game.nes', 'roms/GameA1/', 0),
+			(4, 4, 1, 'roms/Game%1/game.nes', 'roms/Game%1/', 0),
+			(5, 5, 1, 'roms/GameXYZ1/game.nes', 'roms/GameXYZ1/', 0),
+			(6, 6, 1, 'roms/CaseGame/game.nes', 'roms/CaseGame/', 0),
+			(7, 7, 1, 'roms/casegame/game.nes', 'roms/casegame/', 0);
+	`)
+	require.NoError(t, err)
+
+	underscore, err := mediaDB.FindSingleDescendantMedia(ctx, 1, "roms/Game_1")
+	require.NoError(t, err)
+	require.NotNil(t, underscore)
+	assert.Equal(t, int64(2), underscore.DBID)
+
+	percent, err := mediaDB.FindSingleDescendantMedia(ctx, 1, "roms/Game%1")
+	require.NoError(t, err)
+	require.NotNil(t, percent)
+	assert.Equal(t, int64(4), percent.DBID)
+
+	caseExact, err := mediaDB.FindSingleDescendantMedia(ctx, 1, "roms/CaseGame")
+	require.NoError(t, err)
+	require.NotNil(t, caseExact)
+	assert.Equal(t, int64(6), caseExact.DBID)
+}
+
 // --- FindMediaBySystemAndPathFold ---
 
 func TestFindMediaBySystemAndPathFold_ExactMatch(t *testing.T) {
@@ -332,6 +480,16 @@ func TestGetScrapedMediaCount(t *testing.T) {
 	assert.Equal(t, 1, otherCount)
 }
 
+func TestGetScrapedMediaCount_MissingSentinelReturnsZero(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	count, err := mediaDB.GetScrapedMediaCount(context.Background(), "missing")
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
 func TestGetTotalScrapedMediaCount_DistinctMedia(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
@@ -353,6 +511,16 @@ func TestGetTotalScrapedMediaCount_DistinctMedia(t *testing.T) {
 	count, err := mediaDB.GetTotalScrapedMediaCount(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
+}
+
+func TestGetTotalScrapedMediaCount_MissingSentinelsReturnsZero(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	count, err := mediaDB.GetTotalScrapedMediaCount(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
 }
 
 func TestGetScrapedMediaIDs(t *testing.T) {
@@ -382,6 +550,16 @@ func TestGetScrapedMediaIDs(t *testing.T) {
 	ids, err := mediaDB.GetScrapedMediaIDs(ctx, "test", 1)
 	require.NoError(t, err)
 	assert.Equal(t, map[int64]struct{}{1: {}, 2: {}}, ids)
+}
+
+func TestGetScrapedMediaIDs_MissingSentinelReturnsEmptySet(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	ids, err := mediaDB.GetScrapedMediaIDs(context.Background(), "missing", 1)
+	require.NoError(t, err)
+	assert.Empty(t, ids)
 }
 
 func TestApplyScrapeResult_WritesSentinelLastPayload(t *testing.T) {
@@ -456,6 +634,461 @@ func TestApplyScrapeResult_RollsBackBeforeSentinel(t *testing.T) {
 	hasSentinel, err := mediaDB.MediaHasTag(ctx, 1, "scraper.test:scraped")
 	require.NoError(t, err)
 	assert.False(t, hasSentinel, "failed scrape writes must not mark the record as scraped")
+}
+
+func TestApplyScrapeResults_WritesMultipleTargets(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, mediaPath)
+	require.NoError(t, err)
+
+	targets := []database.ScrapeWriteTarget{
+		{
+			MediaDBID: 1, MediaTitleDBID: 1,
+			Write: &database.ScrapeWrite{
+				Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				MediaTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+				TitleProps: []database.MediaProperty{{
+					TypeTag: "property:description",
+					Text:    "Mario description",
+				}},
+			},
+		},
+		{
+			MediaDBID: 2, MediaTitleDBID: 2,
+			Write: &database.ScrapeWrite{
+				Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				TitleTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+				MediaProps: []database.MediaProperty{{
+					TypeTag: "property:image-boxart",
+					Text:    filepath.ToSlash(filepath.Join("media", "boxart", "zelda.png")),
+				}},
+			},
+		},
+	}
+
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, targets))
+
+	for _, mediaDBID := range []int64{1, 2} {
+		hasSentinel, tagErr := mediaDB.MediaHasTag(ctx, mediaDBID, "scraper.test:scraped")
+		require.NoError(t, tagErr)
+		assert.True(t, hasSentinel)
+	}
+
+	titleProps, err := mediaDB.GetMediaTitleProperties(ctx, 1)
+	require.NoError(t, err)
+	assert.Condition(t, func() bool {
+		for _, prop := range titleProps {
+			if prop.TypeTag == "property:description" && prop.Text == "Mario description" {
+				return true
+			}
+		}
+		return false
+	})
+
+	mediaProps, err := mediaDB.GetMediaProperties(ctx, 2)
+	require.NoError(t, err)
+	boxartPath := filepath.ToSlash(filepath.Join("media", "boxart", "zelda.png"))
+	assert.Condition(t, func() bool {
+		for _, prop := range mediaProps {
+			if prop.TypeTag == "property:image-boxart" && prop.Text == boxartPath {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestApplyScrapeResults_SkipsUnchangedTitleMetadataAndStillWritesSentinel(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	write := &database.ScrapeWrite{
+		Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+		TitleTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+		TitleProps: []database.MediaProperty{{
+			TypeTag: "property:description",
+			Text:    "A classic",
+		}},
+	}
+	target := database.ScrapeWriteTarget{MediaDBID: 1, MediaTitleDBID: 1, Write: write}
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{target}))
+
+	var titleTagLinks int
+	require.NoError(t, mediaDB.sql.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM MediaTitleTags mtt
+		JOIN Tags t ON mtt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE mtt.MediaTitleDBID = 1 AND tt.Type = 'developer' AND t.Tag = 'nintendo'
+	`).Scan(&titleTagLinks))
+	assert.Equal(t, 1, titleTagLinks)
+
+	var titlePropRows int
+	require.NoError(t, mediaDB.sql.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM MediaTitleProperties mtp
+		JOIN Tags t ON mtp.TypeTagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE mtp.MediaTitleDBID = 1
+		  AND tt.Type = 'property'
+		  AND t.Tag = 'description'
+		  AND mtp.Text = 'A classic'
+	`).Scan(&titlePropRows))
+	assert.Equal(t, 1, titlePropRows)
+
+	hasSentinel, err := mediaDB.MediaHasTag(ctx, 1, "scraper.test:scraped")
+	require.NoError(t, err)
+	assert.True(t, hasSentinel)
+}
+
+func TestApplyScrapeResults_ReplacesChangedExclusiveTitleTags(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	first := database.ScrapeWriteTarget{
+		MediaDBID: 1, MediaTitleDBID: 1,
+		Write: &database.ScrapeWrite{
+			Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+			TitleTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+		},
+	}
+	second := database.ScrapeWriteTarget{
+		MediaDBID: 1, MediaTitleDBID: 1,
+		Write: &database.ScrapeWrite{
+			Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+			TitleTags: []database.TagInfo{{Type: "developer", Tag: "capcom"}},
+		},
+	}
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{first}))
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{second}))
+
+	var developerTags []string
+	rows, err := mediaDB.sql.QueryContext(ctx, `
+		SELECT t.Tag
+		FROM MediaTitleTags mtt
+		JOIN Tags t ON mtt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE mtt.MediaTitleDBID = 1 AND tt.Type = 'developer'
+		ORDER BY t.Tag
+	`)
+	require.NoError(t, err)
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Fatalf("failed to close rows: %v", closeErr)
+		}
+	}()
+	for rows.Next() {
+		var tag string
+		require.NoError(t, rows.Scan(&tag))
+		developerTags = append(developerTags, tag)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"capcom"}, developerTags)
+}
+
+func TestApplyScrapeResults_ExclusiveTitleTagReplaceKeepsOtherTypes(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	first := database.ScrapeWriteTarget{
+		MediaDBID: 1, MediaTitleDBID: 1,
+		Write: &database.ScrapeWrite{
+			Sentinel: database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+			TitleTags: []database.TagInfo{
+				{Type: "developer", Tag: "nintendo"},
+				{Type: "genre", Tag: "platformer"},
+			},
+		},
+	}
+	second := database.ScrapeWriteTarget{
+		MediaDBID: 1, MediaTitleDBID: 1,
+		Write: &database.ScrapeWrite{
+			Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+			TitleTags: []database.TagInfo{{Type: "developer", Tag: "capcom"}},
+		},
+	}
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{first}))
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{second}))
+
+	assert.Equal(t, []string{"capcom"}, getTitleTagValuesForType(ctx, t, mediaDB, "developer"))
+	assert.Equal(t, []string{"platformer"}, getTitleTagValuesForType(ctx, t, mediaDB, "genre"))
+}
+
+func getTitleTagValuesForType(ctx context.Context, t *testing.T, mediaDB *MediaDB, typeName string) []string {
+	t.Helper()
+	rows, err := mediaDB.sql.QueryContext(ctx, `
+		SELECT t.Tag
+		FROM MediaTitleTags mtt
+		JOIN Tags t ON mtt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE mtt.MediaTitleDBID = 1 AND tt.Type = ?
+		ORDER BY t.Tag
+	`, typeName)
+	require.NoError(t, err)
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Fatalf("failed to close rows: %v", closeErr)
+		}
+	}()
+
+	var values []string
+	for rows.Next() {
+		var tag string
+		require.NoError(t, rows.Scan(&tag))
+		values = append(values, tag)
+	}
+	require.NoError(t, rows.Err())
+	return values
+}
+
+func TestApplyScrapeResults_RollsBackWholeBatchBeforeSentinel(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, mediaPath)
+	require.NoError(t, err)
+
+	err = mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{
+		{
+			MediaDBID: 1, MediaTitleDBID: 1,
+			Write: &database.ScrapeWrite{
+				Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				MediaTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+			},
+		},
+		{
+			MediaDBID: 2, MediaTitleDBID: 2,
+			Write: &database.ScrapeWrite{
+				Sentinel: database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				TitleProps: []database.MediaProperty{{
+					TypeTag: "property:missing-type-tag",
+					Text:    "should fail",
+				}},
+			},
+		},
+	})
+	require.Error(t, err)
+
+	for _, mediaDBID := range []int64{1, 2} {
+		hasSentinel, tagErr := mediaDB.MediaHasTag(ctx, mediaDBID, "scraper.test:scraped")
+		require.NoError(t, tagErr)
+		assert.False(t, hasSentinel)
+	}
+	hasDeveloper, err := mediaDB.MediaHasTag(ctx, 1, "developer:nintendo")
+	require.NoError(t, err)
+	assert.False(t, hasDeveloper)
+}
+
+func TestApplyScrapeResults_DoesNotDuplicateSharedTags(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, mediaPath)
+	require.NoError(t, err)
+
+	sharedWrite := func() *database.ScrapeWrite {
+		return &database.ScrapeWrite{
+			Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+			TitleTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+		}
+	}
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{
+		{MediaDBID: 1, MediaTitleDBID: 1, Write: sharedWrite()},
+		{MediaDBID: 2, MediaTitleDBID: 2, Write: sharedWrite()},
+	}))
+
+	var tagCount int
+	require.NoError(t, mediaDB.sql.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM Tags t JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE tt.Type = 'developer' AND t.Tag = 'nintendo'
+	`).Scan(&tagCount))
+	assert.Equal(t, 1, tagCount)
+}
+
+func TestApplyScrapeResults_BulkExclusiveTitleTagLaterTargetWins(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "mario-alt.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 1, 1, ?);
+	`, mediaPath)
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{
+		{
+			MediaDBID: 1, MediaTitleDBID: 1,
+			Write: &database.ScrapeWrite{
+				Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				TitleTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+			},
+		},
+		{
+			MediaDBID: 2, MediaTitleDBID: 1,
+			Write: &database.ScrapeWrite{
+				Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				TitleTags: []database.TagInfo{{Type: "developer", Tag: "capcom"}},
+			},
+		},
+	}))
+
+	var developerTags []string
+	rows, err := mediaDB.sql.QueryContext(ctx, `
+		SELECT t.Tag
+		FROM MediaTitleTags mtt
+		JOIN Tags t ON mtt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE mtt.MediaTitleDBID = 1 AND tt.Type = 'developer'
+		ORDER BY t.Tag
+	`)
+	require.NoError(t, err)
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Fatalf("failed to close rows: %v", closeErr)
+		}
+	}()
+	for rows.Next() {
+		var tag string
+		require.NoError(t, rows.Scan(&tag))
+		developerTags = append(developerTags, tag)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"capcom"}, developerTags)
+}
+
+func TestApplyScrapeResults_BulkAdditiveTitleTagsAccumulate(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{
+		{
+			MediaDBID: 1, MediaTitleDBID: 1,
+			Write: &database.ScrapeWrite{
+				Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				TitleTags: []database.TagInfo{{Type: "genre", Tag: "action"}},
+			},
+		},
+		{
+			MediaDBID: 1, MediaTitleDBID: 1,
+			Write: &database.ScrapeWrite{
+				Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				TitleTags: []database.TagInfo{{Type: "genre", Tag: "platformer"}},
+			},
+		},
+	}))
+
+	var genreTags []string
+	rows, err := mediaDB.sql.QueryContext(ctx, `
+		SELECT t.Tag
+		FROM MediaTitleTags mtt
+		JOIN Tags t ON mtt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE mtt.MediaTitleDBID = 1 AND tt.Type = 'genre'
+		ORDER BY t.Tag
+	`)
+	require.NoError(t, err)
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Fatalf("failed to close rows: %v", closeErr)
+		}
+	}()
+	for rows.Next() {
+		var tag string
+		require.NoError(t, rows.Scan(&tag))
+		genreTags = append(genreTags, tag)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"action", "platformer"}, genreTags)
+}
+
+func TestApplyScrapeResults_BulkTitlePropertyLaterTargetWins(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "mario-alt.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 1, 1, ?);
+	`, mediaPath)
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.ApplyScrapeResults(ctx, []database.ScrapeWriteTarget{
+		{
+			MediaDBID: 1, MediaTitleDBID: 1,
+			Write: &database.ScrapeWrite{
+				Sentinel: database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				TitleProps: []database.MediaProperty{{
+					TypeTag: "property:description",
+					Text:    "first",
+				}},
+			},
+		},
+		{
+			MediaDBID: 2, MediaTitleDBID: 1,
+			Write: &database.ScrapeWrite{
+				Sentinel: database.TagInfo{Type: "scraper.test", Tag: "scraped"},
+				TitleProps: []database.MediaProperty{{
+					TypeTag: "property:description",
+					Text:    "second",
+				}},
+			},
+		},
+	}))
+
+	var text string
+	require.NoError(t, mediaDB.sql.QueryRowContext(ctx, `
+		SELECT mtp.Text
+		FROM MediaTitleProperties mtp
+		JOIN Tags t ON mtp.TypeTagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE mtp.MediaTitleDBID = 1 AND tt.Type = 'property' AND t.Tag = 'description'
+	`).Scan(&text))
+	assert.Equal(t, "second", text)
+}
+
+func TestApplyScrapeResults_RejectsNilWrite(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	err := mediaDB.ApplyScrapeResults(context.Background(), []database.ScrapeWriteTarget{
+		{MediaDBID: 1, MediaTitleDBID: 1},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write is nil")
 }
 
 // --- UpsertMediaTags ---
@@ -829,6 +1462,17 @@ func TestFindMediaTitlesWithoutSentinel_AllUnseen(t *testing.T) {
 	assert.Len(t, titles, 1, "mario title has no sentinel → should be returned")
 }
 
+func TestFindMediaTitlesWithoutSentinel_MissingSentinelReturnsAllSystemTitles(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	titles, err := mediaDB.FindMediaTitlesWithoutSentinel(context.Background(), 1, "scraper.missing:scraped")
+	require.NoError(t, err)
+	assert.Len(t, titles, 1)
+	assert.Equal(t, "mario", titles[0].Slug)
+}
+
 func TestFindMediaTitlesWithoutSentinel_AfterSentinelWritten(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
@@ -843,6 +1487,22 @@ func TestFindMediaTitlesWithoutSentinel_AfterSentinelWritten(t *testing.T) {
 	titles, err := mediaDB.FindMediaTitlesWithoutSentinel(ctx, 1, "scraper.test:scraped")
 	require.NoError(t, err)
 	assert.Empty(t, titles, "media has sentinel → title should be excluded")
+}
+
+func TestFindMediaTitlesWithoutSentinel_UsesRequestedTagValue(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{
+		{Type: "scraper.test", Tag: "scraped"},
+	}))
+
+	titles, err := mediaDB.FindMediaTitlesWithoutSentinel(ctx, 1, "scraper.test:other")
+	require.NoError(t, err)
+	require.Len(t, titles, 1)
+	assert.Equal(t, "mario", titles[0].Slug)
 }
 
 func TestFindMediaTitlesWithoutSentinel_WrongSystem(t *testing.T) {

@@ -626,6 +626,45 @@ func TestSetNameOptions(t *testing.T) {
 	})
 }
 
+func TestDB9LaunchersExist(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	cases := []struct {
+		id       string
+		systemID string
+	}{
+		{"DB9AtariLynx", "AtariLynx"},
+		{"DB9GBA", "GBA"},
+		{"DB9GBAAccuracy", "GBA"},
+		{"DB9MegaDrive", "Genesis"},
+		{"DB9Genesis", "Genesis"},
+		{"DB9NES", "NES"},
+		{"DB9SNES", "SNES"},
+		{"DB9PSX", "PSX"},
+		{"DB9Saturn", "Saturn"},
+		{"DB9DualRAMSaturn", "Saturn"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			t.Parallel()
+
+			var found *platforms.Launcher
+			for i := range launchers {
+				if launchers[i].ID == tc.id {
+					found = &launchers[i]
+					break
+				}
+			}
+			require.NotNil(t, found, "%s launcher should exist", tc.id)
+			assert.Equal(t, tc.systemID, found.SystemID)
+		})
+	}
+}
+
 func TestRetroAchievementsLaunchersExist(t *testing.T) {
 	t.Parallel()
 

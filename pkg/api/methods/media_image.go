@@ -27,6 +27,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -45,12 +47,13 @@ const (
 
 // defaultImageTypes is the preference order used when no imageTypes param is provided.
 var defaultImageTypes = []string{
-	"image", "boxart", "boxart3d", "screenshot", "wheel", "titleshot", "map",
+	"image", "thumbnail", "boxart", "boxart3d", "screenshot", "wheel", "titleshot", "map",
 	"marquee", "fanart",
 }
 
 var imageTypeTags = map[string]string{
 	"image":      tags.PropertyTypeTag(tags.TagPropertyImageImage),
+	"thumbnail":  tags.PropertyTypeTag(tags.TagPropertyImageThumbnail),
 	"boxart":     tags.PropertyTypeTag(tags.TagPropertyImageBoxart),
 	"boxart3d":   tags.PropertyTypeTag(tags.TagPropertyImageBoxart3D),
 	"boxartside": tags.PropertyTypeTag(tags.TagPropertyImageBoxartSide),
@@ -93,6 +96,27 @@ func buildPropsMap(props []database.MediaProperty) map[string]database.MediaProp
 	return m
 }
 
+func imagePropertyTypeTags(props []database.MediaProperty) []string {
+	known := make(map[string]struct{}, len(imageTypeTags))
+	for _, typeTag := range imageTypeTags {
+		known[typeTag] = struct{}{}
+	}
+
+	seen := make(map[string]struct{})
+	for _, p := range props {
+		if _, ok := known[p.TypeTag]; ok {
+			seen[p.TypeTag] = struct{}{}
+		}
+	}
+
+	result := make([]string, 0, len(seen))
+	for typeTag := range seen {
+		result = append(result, typeTag)
+	}
+	sort.Strings(result)
+	return result
+}
+
 // HandleMediaImage returns a single best-match image for a media record as a
 // base64-encoded blob.
 func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
@@ -116,17 +140,19 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 
 	db := env.Database.MediaDB
 	row := resolved[0].Row
-	mediaProps, err := db.GetMediaPropertyMetadata(env.Context, row.DBID)
+	mediaPropSources, err := mediaImagePropSources(&env, row)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get media property metadata: %w", err)
+		return nil, err
 	}
-	titleProps, err := db.GetMediaTitlePropertyMetadata(env.Context, row.Title.DBID)
+	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get title property metadata: %w", err)
+		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 
 	prefs := imagePrefs(nil, ref.ImageTypes)
-	return selectMediaImage(env.Context, afero.NewOsFs(), db, row, mediaProps, titleProps, prefs, maxBytes)
+	return selectMediaImageFromSources(
+		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, prefs, maxBytes,
+	)
 }
 
 func parseMediaImageRequest(raw json.RawMessage) (mediaRefParam, error) {
@@ -152,17 +178,17 @@ func handleMediaImageSinglePath(env *requests.RequestEnv, ref mediaRefParam, max
 		return nil, err
 	}
 
-	mediaProps, err := db.GetMediaPropertyMetadata(env.Context, row.DBID)
+	mediaPropSources, err := mediaImagePropSources(env, row)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get media property metadata: %w", err)
+		return nil, err
 	}
-	titleProps, err := db.GetMediaTitlePropertyMetadata(env.Context, row.Title.DBID)
+	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get title property metadata: %w", err)
+		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 
-	return selectMediaImage(
-		env.Context, afero.NewOsFs(), db, row, mediaProps, titleProps, imagePrefs(nil, ref.ImageTypes), maxBytes,
+	return selectMediaImageFromSources(
+		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, imagePrefs(nil, ref.ImageTypes), maxBytes,
 	)
 }
 
@@ -213,22 +239,45 @@ func mediaImageBlobTooLargeError(prop *database.MediaProperty, maxBytes int64) e
 	)
 }
 
-func selectMediaImage(
+func mediaImagePropSources(env *requests.RequestEnv, row *database.MediaFullRow) ([][]database.MediaProperty, error) {
+	mediaIDs, err := equivalentMediaIDs(env, row)
+	if err != nil {
+		return nil, err
+	}
+	if len(mediaIDs) == 1 {
+		props, propErr := env.Database.MediaDB.GetMediaProperties(env.Context, row.DBID)
+		if propErr != nil {
+			return nil, fmt.Errorf("failed to get media properties: %w", propErr)
+		}
+		return [][]database.MediaProperty{props}, nil
+	}
+
+	propsByID, err := env.Database.MediaDB.GetMediaPropertiesByMediaDBIDs(env.Context, mediaIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media properties: %w", err)
+	}
+	sources := make([][]database.MediaProperty, 0, len(mediaIDs))
+	for _, id := range mediaIDs {
+		sources = append(sources, propsByID[id])
+	}
+	return sources, nil
+}
+
+func selectMediaImageFromSources(
 	ctx context.Context,
 	fs afero.Fs,
 	db database.MediaDBI,
 	row *database.MediaFullRow,
-	mediaProps []database.MediaProperty,
+	mediaPropSources [][]database.MediaProperty,
 	titleProps []database.MediaProperty,
 	prefs []string,
 	maxBytes int64,
 ) (models.MediaImageResponse, error) {
-	mediaMap := buildPropsMap(mediaProps)
-	titleMap := buildPropsMap(titleProps)
-	sources := []mediaImageSource{
-		{mediaMap, true},
-		{titleMap, false},
+	sources := make([]mediaImageSource, 0, len(mediaPropSources)+1)
+	for _, props := range mediaPropSources {
+		sources = append(sources, mediaImageSource{buildPropsMap(props), true})
 	}
+	sources = append(sources, mediaImageSource{buildPropsMap(titleProps), false})
 
 	seen := make(map[string]bool, len(prefs))
 	for _, t := range prefs {
@@ -258,8 +307,22 @@ func selectMediaImage(
 		}
 	}
 
+	mediaImageProps := make([]string, 0)
+	for _, props := range mediaPropSources {
+		mediaImageProps = append(mediaImageProps, imagePropertyTypeTags(props)...)
+	}
+	log.Debug().
+		Str("system", row.System.SystemID).
+		Str("path", row.Path).
+		Int64("mediaDBID", row.DBID).
+		Int64("titleDBID", row.Title.DBID).
+		Strs("prefs", prefs).
+		Strs("mediaImageProps", mediaImageProps).
+		Strs("titleImageProps", imagePropertyTypeTags(titleProps)).
+		Msg("media.image: no image found")
+
 	return models.MediaImageResponse{}, models.ClientErrf(
-		"no image found for media: %s/%s", row.System.SystemID, row.Path,
+		"no image found for media: system=%q path=%q", row.System.SystemID, filepath.ToSlash(row.Path),
 	)
 }
 
@@ -274,7 +337,7 @@ func loadMediaImageProperty(
 	maxBytes int64,
 ) (*models.MediaImageResponse, bool, error) {
 	var binary []byte
-	contentType := prop.ContentType
+	contentType := mediaContentType(prop.ContentType, prop.Text)
 
 	switch {
 	case len(prop.Binary) > 0:
@@ -298,11 +361,11 @@ func loadMediaImageProperty(
 			return nil, false, fmt.Errorf("media.image: read image blob %d: %w", *prop.BlobDBID, err)
 		}
 		if len(binary) == 0 {
-			deleteStaleMediaImageProperty(ctx, db, row, prop, src.isMedia, typeTag)
+			logStaleMediaImageProperty(row, prop, src.isMedia, typeTag, "empty blob data")
 			return nil, true, nil
 		}
 	case prop.Text != "":
-		data, stale, err := loadMediaImageFile(ctx, fs, db, row, prop, src.isMedia, typeTag, maxBytes)
+		data, stale, err := loadMediaImageFile(fs, row, prop, src.isMedia, typeTag, maxBytes)
 		if stale || err != nil {
 			return nil, stale, err
 		}
@@ -320,9 +383,7 @@ func loadMediaImageProperty(
 }
 
 func loadMediaImageFile(
-	ctx context.Context,
 	fs afero.Fs,
-	db database.MediaDBI,
 	row *database.MediaFullRow,
 	prop *database.MediaProperty,
 	isMedia bool,
@@ -332,7 +393,7 @@ func loadMediaImageFile(
 	info, err := fs.Stat(prop.Text)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			deleteStaleMediaImageProperty(ctx, db, row, prop, isMedia, typeTag)
+			logStaleMediaImageProperty(row, prop, isMedia, typeTag, err.Error())
 			return nil, true, nil
 		}
 		return nil, false, mediaImageReadError(prop.Text, err)
@@ -351,7 +412,7 @@ func loadMediaImageFile(
 	data, readErr := readMediaBinaryFile(fs, prop.Text, maxBytes)
 	if readErr != nil {
 		if errors.Is(readErr, os.ErrNotExist) {
-			deleteStaleMediaImageProperty(ctx, db, row, prop, isMedia, typeTag)
+			logStaleMediaImageProperty(row, prop, isMedia, typeTag, readErr.Error())
 			return nil, true, nil
 		}
 		return nil, false, mediaImageReadError(prop.Text, readErr)
@@ -359,25 +420,27 @@ func loadMediaImageFile(
 	return data, false, nil
 }
 
-func deleteStaleMediaImageProperty(
-	ctx context.Context,
-	db database.MediaDBI,
+func logStaleMediaImageProperty(
 	row *database.MediaFullRow,
 	prop *database.MediaProperty,
 	isMedia bool,
 	typeTag string,
+	reason string,
 ) {
-	if !isMedia {
-		if delErr := db.DeleteMediaTitleProperty(ctx, row.Title.DBID, prop.TypeTagDBID); delErr != nil {
-			log.Warn().Err(delErr).Int64("titleDBID", row.Title.DBID).Str("typeTag", typeTag).
-				Msg("media.image: failed to delete stale title property")
-		}
-		return
+	level := "title"
+	if isMedia {
+		level = "media"
 	}
-	if delErr := db.DeleteMediaProperty(ctx, row.DBID, prop.TypeTagDBID); delErr != nil {
-		log.Warn().Err(delErr).Int64("mediaDBID", row.DBID).Str("typeTag", typeTag).
-			Msg("media.image: failed to delete stale media property")
-	}
+	log.Debug().
+		Str("system", row.System.SystemID).
+		Str("path", row.Path).
+		Int64("mediaDBID", row.DBID).
+		Int64("titleDBID", row.Title.DBID).
+		Str("typeTag", typeTag).
+		Str("text", prop.Text).
+		Str("source", level).
+		Str("reason", reason).
+		Msg("media.image: stale image property ignored")
 }
 
 func mediaImageMaxBytes(pl platforms.Platform) int64 {

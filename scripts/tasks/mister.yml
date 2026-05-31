@@ -29,7 +29,7 @@ tasks:
         vars:
           PLATFORM: mister
           APP_BIN: zaparoo.sh
-          EXTRA_TAGS: embed_arcadedb
+          EXTRA_TAGS: "embed_arcadedb{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}}"
 
   deploy:
     cmds:

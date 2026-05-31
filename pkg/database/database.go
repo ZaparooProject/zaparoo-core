@@ -404,6 +404,20 @@ type ScrapeWrite struct {
 	MediaProps []MediaProperty
 }
 
+// ScrapeWriteTarget pairs a scraper write payload with the existing Media and
+// MediaTitle rows it should enrich.
+type ScrapeWriteTarget struct {
+	Write          *ScrapeWrite
+	MediaDBID      int64
+	MediaTitleDBID int64
+}
+
+// ScrapeResultBatchApplier optionally batches scrape writes for DB
+// implementations that can keep multiple targets in one transaction.
+type ScrapeResultBatchApplier interface {
+	ApplyScrapeResults(ctx context.Context, targets []ScrapeWriteTarget) error
+}
+
 type FileInfo struct {
 	SystemID string
 	Path     string
@@ -692,6 +706,9 @@ type MediaDBI interface {
 	// or nil, nil when no row is found.
 	FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*Media, error)
 	FindMediaBySystemAndPaths(ctx context.Context, systemDBID int64, paths []string) (map[string]Media, error)
+	// FindSingleDescendantMedia returns the only non-missing Media row below dirPath
+	// for systemDBID, or nil, nil when dirPath has zero or multiple descendants.
+	FindSingleDescendantMedia(ctx context.Context, systemDBID int64, dirPath string) (*Media, error)
 
 	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and
 	// path using a case-insensitive path comparison, or nil, nil when no row is

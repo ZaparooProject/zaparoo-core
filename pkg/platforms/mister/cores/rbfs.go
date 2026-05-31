@@ -37,6 +37,18 @@ type RBFInfo struct {
 	MglName   string // relative path launch-able from MGL file
 }
 
+func stripOfficialDateSuffix(name string) string {
+	if len(name) < 10 || name[len(name)-9] != '_' {
+		return name
+	}
+	for _, r := range name[len(name)-8:] {
+		if r < '0' || r > '9' {
+			return name
+		}
+	}
+	return name[:len(name)-9]
+}
+
 func ParseRBFPath(path string) RBFInfo {
 	return parseRBFPathAt(config.SDRootDir, path)
 }
@@ -47,11 +59,7 @@ func parseRBFPathAt(root, path string) RBFInfo {
 		Filename: filepath.Base(path),
 	}
 
-	if strings.Contains(info.Filename, "_") {
-		info.ShortName = info.Filename[0:strings.LastIndex(info.Filename, "_")]
-	} else {
-		info.ShortName = strings.TrimSuffix(info.Filename, filepath.Ext(info.Filename))
-	}
+	info.ShortName = stripOfficialDateSuffix(strings.TrimSuffix(info.Filename, filepath.Ext(info.Filename)))
 
 	if strings.HasPrefix(path, root) {
 		relDir, err := filepath.Rel(root, filepath.Dir(path))
