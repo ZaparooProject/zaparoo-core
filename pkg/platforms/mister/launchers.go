@@ -316,6 +316,14 @@ func launchAltCore(
 	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, "")
 }
 
+func launchDB9Core(
+	launcherID string,
+	systemID string,
+	rbfName string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return launchAltCore(launcherID, systemID, "_Console/"+rbfName+"_<date>_<hash>_DB9")
+}
+
 func launchAltCoreWithSetName(
 	launcherID string,
 	systemID string,
@@ -761,6 +769,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemAdventureVision),
 		},
 		{
+			ID:       "DB9AdventureVision",
+			SystemID: systemdefs.SystemAdventureVision,
+			Launch:   launchDB9Core("DB9AdventureVision", systemdefs.SystemAdventureVision, "AdventureVision"),
+		},
+		{
 			ID:         systemdefs.SystemArcadia,
 			SystemID:   systemdefs.SystemArcadia,
 			Folders:    []string{"Arcadia"},
@@ -780,6 +793,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"Astrocade"},
 			Extensions: []string{".bin"},
 			Launch:     launch(pl, systemdefs.SystemAstrocade),
+		},
+		{
+			ID:       "DB9Astrocade",
+			SystemID: systemdefs.SystemAstrocade,
+			Launch:   launchDB9Core("DB9Astrocade", systemdefs.SystemAstrocade, "Astrocade"),
 		},
 		{
 			ID:         systemdefs.SystemAtari2600,
@@ -814,11 +832,21 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemAtari5200),
 		},
 		{
+			ID:       "DB9Atari5200",
+			SystemID: systemdefs.SystemAtari5200,
+			Launch:   launchDB9Core("DB9Atari5200", systemdefs.SystemAtari5200, "Atari5200"),
+		},
+		{
 			ID:         systemdefs.SystemAtari7800,
 			SystemID:   systemdefs.SystemAtari7800,
 			Folders:    []string{"ATARI7800"},
 			Extensions: []string{".a78", ".bin"},
 			Launch:     launch(pl, systemdefs.SystemAtari7800),
+		},
+		{
+			ID:       "DB9Atari7800",
+			SystemID: systemdefs.SystemAtari7800,
+			Launch:   launchDB9Core("DB9Atari7800", systemdefs.SystemAtari7800, "Atari7800"),
 		},
 		{
 			ID:       "LLAPIAtari7800",
@@ -840,6 +868,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemAtariLynx),
 		},
 		{
+			ID:       "DB9AtariLynx",
+			SystemID: systemdefs.SystemAtariLynx,
+			Launch:   launchDB9Core("DB9AtariLynx", systemdefs.SystemAtariLynx, "AtariLynx"),
+		},
+		{
 			ID:         systemdefs.SystemCasioPV1000,
 			SystemID:   systemdefs.SystemCasioPV1000,
 			Folders:    []string{"Casio_PV-1000"},
@@ -847,11 +880,21 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemCasioPV1000),
 		},
 		{
+			ID:       "DB9CasioPV1000",
+			SystemID: systemdefs.SystemCasioPV1000,
+			Launch:   launchDB9Core("DB9CasioPV1000", systemdefs.SystemCasioPV1000, "Casio_PV-1000"),
+		},
+		{
 			ID:         systemdefs.SystemCDI,
 			SystemID:   systemdefs.SystemCDI,
 			Folders:    []string{"CD-i"},
 			Extensions: []string{".cue", ".chd"},
 			Launch:     launch(pl, systemdefs.SystemCDI),
+		},
+		{
+			ID:       "DB9CDI",
+			SystemID: systemdefs.SystemCDI,
+			Launch:   launchDB9Core("DB9CDI", systemdefs.SystemCDI, "CDi"),
 		},
 		{
 			ID:         systemdefs.SystemChannelF,
@@ -868,11 +911,21 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemColecoVision),
 		},
 		{
+			ID:       "DB9ColecoVision",
+			SystemID: systemdefs.SystemColecoVision,
+			Launch:   launchDB9Core("DB9ColecoVision", systemdefs.SystemColecoVision, "ColecoVision"),
+		},
+		{
 			ID:         systemdefs.SystemCreatiVision,
 			SystemID:   systemdefs.SystemCreatiVision,
 			Folders:    []string{"CreatiVision"},
 			Extensions: []string{".rom", ".bin", ".bas"},
 			Launch:     launch(pl, systemdefs.SystemCreatiVision),
+		},
+		{
+			ID:       "DB9CreatiVision",
+			SystemID: systemdefs.SystemCreatiVision,
+			Launch:   launchDB9Core("DB9CreatiVision", systemdefs.SystemCreatiVision, "CreatiVision"),
 		},
 		{
 			ID:         systemdefs.SystemFDS,
@@ -908,6 +961,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			),
 		},
 		{
+			ID:       "DB9Gameboy",
+			SystemID: systemdefs.SystemGameboy,
+			Launch:   launchDB9Core("DB9Gameboy", systemdefs.SystemGameboy, "Gameboy"),
+		},
+		{
 			ID:         systemdefs.SystemGameboyColor,
 			SystemID:   systemdefs.SystemGameboyColor,
 			Folders:    []string{"GAMEBOY", "GBC"},
@@ -920,6 +978,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"GAMEBOY2P"},
 			Extensions: []string{".gb", ".gbc"},
 			Launch:     launch(pl, systemdefs.SystemGameboy2P),
+		},
+		{
+			ID:       "DB9Gameboy2P",
+			SystemID: systemdefs.SystemGameboy2P,
+			Launch:   launchDB9Core("DB9Gameboy2P", systemdefs.SystemGameboy2P, "Gameboy2P"),
 		},
 		{
 			ID:         systemdefs.SystemGameGear,
@@ -943,6 +1006,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launchAggGnw,
 		},
 		{
+			ID:       "DB9GameNWatch",
+			SystemID: systemdefs.SystemGameNWatch,
+			Launch:   launchDB9Core("DB9GameNWatch", systemdefs.SystemGameNWatch, "GnW"),
+		},
+		{
 			ID:         systemdefs.SystemGBA,
 			SystemID:   systemdefs.SystemGBA,
 			Folders:    []string{"GBA"},
@@ -960,11 +1028,26 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchRetroAchievementsCore("RAGBA", systemdefs.SystemGBA, "_RA_Cores/Cores/GBA"),
 		},
 		{
+			ID:       "DB9GBA",
+			SystemID: systemdefs.SystemGBA,
+			Launch:   launchDB9Core("DB9GBA", systemdefs.SystemGBA, "GBA"),
+		},
+		{
+			ID:       "DB9GBAAccuracy",
+			SystemID: systemdefs.SystemGBA,
+			Launch:   launchDB9Core("DB9GBAAccuracy", systemdefs.SystemGBA, "GBA_accuracy"),
+		},
+		{
 			ID:         systemdefs.SystemGBA2P,
 			SystemID:   systemdefs.SystemGBA2P,
 			Folders:    []string{"GBA2P"},
 			Extensions: []string{".gba"},
 			Launch:     launch(pl, systemdefs.SystemGBA2P),
+		},
+		{
+			ID:       "DB9GBA2P",
+			SystemID: systemdefs.SystemGBA2P,
+			Launch:   launchDB9Core("DB9GBA2P", systemdefs.SystemGBA2P, "GBA2P"),
 		},
 		{
 			ID:         systemdefs.SystemGenesis,
@@ -994,6 +1077,16 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch: launchRetroAchievementsCore(
 				"RAMegaDrive", systemdefs.SystemGenesis, "_RA_Cores/Cores/MegaDrive",
 			),
+		},
+		{
+			ID:       "DB9MegaDrive",
+			SystemID: systemdefs.SystemGenesis,
+			Launch:   launchDB9Core("DB9MegaDrive", systemdefs.SystemGenesis, "MegaDrive"),
+		},
+		{
+			ID:       "DB9Genesis",
+			SystemID: systemdefs.SystemGenesis,
+			Launch:   launchDB9Core("DB9Genesis", systemdefs.SystemGenesis, "Genesis"),
 		},
 		{
 			ID:         systemdefs.SystemIntellivision,
@@ -1046,6 +1139,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			),
 		},
 		{
+			ID:       "DB9SMS",
+			SystemID: systemdefs.SystemMasterSystem,
+			Launch:   launchDB9Core("DB9SMS", systemdefs.SystemMasterSystem, "SMS"),
+		},
+		{
 			ID:         systemdefs.SystemMegaCD,
 			SystemID:   systemdefs.SystemMegaCD,
 			Folders:    []string{"MegaCD"},
@@ -1070,6 +1168,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			),
 		},
 		{
+			ID:       "DB9MegaCD",
+			SystemID: systemdefs.SystemMegaCD,
+			Launch:   launchDB9Core("DB9MegaCD", systemdefs.SystemMegaCD, "MegaCD"),
+		},
+		{
 			ID:         systemdefs.SystemMegaDuck,
 			SystemID:   systemdefs.SystemMegaDuck,
 			Folders:    []string{"GAMEBOY", "MegaDuck"},
@@ -1087,6 +1190,16 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch: launchRetroAchievementsCore(
 				"RANeoGeo", systemdefs.SystemNeoGeo, "_RA_Cores/Cores/NeoGeo",
 			),
+		},
+		{
+			ID:       "DB9NeoGeo",
+			SystemID: systemdefs.SystemNeoGeo,
+			Launch:   launchDB9Core("DB9NeoGeo", systemdefs.SystemNeoGeo, "NeoGeo"),
+		},
+		{
+			ID:       "DB9NeoGeo24MHz",
+			SystemID: systemdefs.SystemNeoGeo,
+			Launch:   launchDB9Core("DB9NeoGeo24MHz", systemdefs.SystemNeoGeo, "NeoGeo_24MHz_cpu_only"),
 		},
 		{
 			ID:         systemdefs.SystemNeoGeoCD,
@@ -1139,6 +1252,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchRetroAchievementsCore("RANES", systemdefs.SystemNES, "_RA_Cores/Cores/NES"),
 		},
 		{
+			ID:       "DB9NES",
+			SystemID: systemdefs.SystemNES,
+			Launch:   launchDB9Core("DB9NES", systemdefs.SystemNES, "NES"),
+		},
+		{
 			ID:         systemdefs.SystemNintendo64,
 			SystemID:   systemdefs.SystemNintendo64,
 			Folders:    []string{"N64"},
@@ -1185,6 +1303,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"ODYSSEY2"},
 			Extensions: []string{".bin"},
 			Launch:     launch(pl, systemdefs.SystemOdyssey2),
+		},
+		{
+			ID:       "DB9Odyssey2",
+			SystemID: systemdefs.SystemOdyssey2,
+			Launch:   launchDB9Core("DB9Odyssey2", systemdefs.SystemOdyssey2, "Odyssey2"),
 		},
 		{
 			ID:         systemdefs.SystemPocketChallengeV2,
@@ -1243,6 +1366,16 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchRetroAchievementsCore("RAPSX", systemdefs.SystemPSX, "_RA_Cores/Cores/PSX"),
 		},
 		{
+			ID:       "DB9PSX",
+			SystemID: systemdefs.SystemPSX,
+			Launch:   launchDB9Core("DB9PSX", systemdefs.SystemPSX, "PSX"),
+		},
+		{
+			ID:       "DB9DualRAMPSX",
+			SystemID: systemdefs.SystemPSX,
+			Launch:   launchDB9Core("DB9DualRAMPSX", systemdefs.SystemPSX, "PSX_DualSDRAM"),
+		},
+		{
 			ID:         systemdefs.SystemSega32X,
 			SystemID:   systemdefs.SystemSega32X,
 			Folders:    []string{"S32X"},
@@ -1262,6 +1395,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			),
 		},
 		{
+			ID:       "DB9Sega32X",
+			SystemID: systemdefs.SystemSega32X,
+			Launch:   launchDB9Core("DB9Sega32X", systemdefs.SystemSega32X, "S32X"),
+		},
+		{
 			ID:         systemdefs.SystemSG1000,
 			SystemID:   systemdefs.SystemSG1000,
 			Folders:    []string{"SG1000", "Coleco", "SMS"},
@@ -1274,6 +1412,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"SGB"},
 			Extensions: []string{".sgb", ".gb", ".gbc"},
 			Launch:     launch(pl, systemdefs.SystemSuperGameboy),
+		},
+		{
+			ID:       "DB9SuperGameboy",
+			SystemID: systemdefs.SystemSuperGameboy,
+			Launch:   launchDB9Core("DB9SuperGameboy", systemdefs.SystemSuperGameboy, "SGB"),
 		},
 		{
 			ID:       "LLAPISuperGameboy",
@@ -1310,6 +1453,16 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:   launchAltCore("DualRAMSaturn", systemdefs.SystemSaturn, "_Console (Dual SDRAM)/Saturn"),
 		},
 		{
+			ID:       "DB9Saturn",
+			SystemID: systemdefs.SystemSaturn,
+			Launch:   launchDB9Core("DB9Saturn", systemdefs.SystemSaturn, "Saturn"),
+		},
+		{
+			ID:       "DB9DualRAMSaturn",
+			SystemID: systemdefs.SystemSaturn,
+			Launch:   launchDB9Core("DB9DualRAMSaturn", systemdefs.SystemSaturn, "Saturn_DualSDRAM"),
+		},
+		{
 			ID:         systemdefs.SystemSNES,
 			SystemID:   systemdefs.SystemSNES,
 			Folders:    []string{"SNES"},
@@ -1325,6 +1478,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:       "RASNES",
 			SystemID: systemdefs.SystemSNES,
 			Launch:   launchRetroAchievementsCore("RASNES", systemdefs.SystemSNES, "_RA_Cores/Cores/SNES"),
+		},
+		{
+			ID:       "DB9SNES",
+			SystemID: systemdefs.SystemSNES,
+			Launch:   launchDB9Core("DB9SNES", systemdefs.SystemSNES, "SNES"),
 		},
 		{
 			ID:       "SindenSNES",
@@ -1370,6 +1528,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			),
 		},
 		{
+			ID:       "DB9TurboGrafx16",
+			SystemID: systemdefs.SystemTurboGrafx16,
+			Launch:   launchDB9Core("DB9TurboGrafx16", systemdefs.SystemTurboGrafx16, "TurboGrafx16"),
+		},
+		{
 			ID:         systemdefs.SystemTurboGrafx16CD,
 			SystemID:   systemdefs.SystemTurboGrafx16CD,
 			Folders:    []string{"TGFX16-CD"},
@@ -1389,6 +1552,11 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"VECTREX"},
 			Extensions: []string{".vec", ".bin", ".rom"}, // TODO: overlays (.ovr)
 			Launch:     launch(pl, systemdefs.SystemVectrex),
+		},
+		{
+			ID:       "DB9Vectrex",
+			SystemID: systemdefs.SystemVectrex,
+			Launch:   launchDB9Core("DB9Vectrex", systemdefs.SystemVectrex, "Vectrex"),
 		},
 		{
 			ID:         systemdefs.SystemVirtualBoy,
