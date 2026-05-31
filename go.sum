@@ -18,6 +18,8 @@ github.com/ZaparooProject/go-pn532 v0.22.1 h1:Dtuc+sXYZtuNZP+8/DQv68V1MOHUxRAOMV
 github.com/ZaparooProject/go-pn532 v0.22.1/go.mod h1:NwYx5IE0zAU70ZikNpoPiOF5MUlDn3fD8xImpZixW1k=
 github.com/ZaparooProject/go-zapscript v0.9.1 h1:ItO50ZbKePoK8WBbxt/OSlt+BhpBKwi6x3hNaXTFmjk=
 github.com/ZaparooProject/go-zapscript v0.9.1/go.mod h1:Z3rFyQq/GA+ESpYUtCOA/2Xyftbygv4MfDCajOVDmag=
+github.com/ZaparooProject/go-zapscript v0.10.0 h1:yWC4sftdlQrkrH0ZF1TR4RcsshedJ8B4qWM3k4ViDsk=
+github.com/ZaparooProject/go-zapscript v0.10.0/go.mod h1:Z3rFyQq/GA+ESpYUtCOA/2Xyftbygv4MfDCajOVDmag=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/andygrunwald/vdf v1.1.0 h1:gmstp0R7DOepIZvWoSJY97ix7QOrsxpGPU6KusKXqvw=

@@ -711,6 +711,9 @@ func TestHandleMediaScrape_EmitsFatalStatus(t *testing.T) {
 			t.Fatal("timed out waiting for fatal media.scraping notification")
 		}
 	}
+	require.Eventually(t, func() bool {
+		return !IsScrapingRunning()
+	}, 2*time.Second, 10*time.Millisecond)
 	mockDB.AssertExpectations(t)
 }
 

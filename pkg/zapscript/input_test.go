@@ -264,6 +264,48 @@ block = []
 	require.ErrorIs(t, err, ErrInputNotAllowed)
 }
 
+func TestCmdCoinMultiplayerKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		cmdName string
+		cmdFunc func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error)
+		wantKey string
+	}{
+		{
+			name:    "player 3 coin",
+			cmdName: gozapscript.ZapScriptCmdInputCoinP3,
+			cmdFunc: cmdCoinP3,
+			wantKey: "7",
+		},
+		{
+			name:    "player 4 coin",
+			cmdName: gozapscript.ZapScriptCmdInputCoinP4,
+			cmdFunc: cmdCoinP4,
+			wantKey: "8",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("KeyboardPress", tt.wantKey).Return(nil).Once()
+
+			env := platforms.CmdEnv{
+				Cmd: gozapscript.Command{Name: tt.cmdName},
+			}
+
+			_, err := tt.cmdFunc(mockPlatform, env)
+			require.NoError(t, err)
+			assert.Equal(t, []string{tt.wantKey}, mockPlatform.GetKeyboardPresses())
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
 func TestCmdKeyboard_CombosBlocksSingleChar(t *testing.T) {
 	t.Parallel()
 

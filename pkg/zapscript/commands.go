@@ -121,6 +121,8 @@ func lookupCmd(name string) (cmdFunc, bool) {
 			zapscript.ZapScriptCmdInputGamepad:  cmdGamepad,
 			zapscript.ZapScriptCmdInputCoinP1:   cmdCoinP1,
 			zapscript.ZapScriptCmdInputCoinP2:   cmdCoinP2,
+			zapscript.ZapScriptCmdInputCoinP3:   cmdCoinP3,
+			zapscript.ZapScriptCmdInputCoinP4:   cmdCoinP4,
 
 			zapscript.ZapScriptCmdInputKey: cmdKey,     // DEPRECATED
 			zapscript.ZapScriptCmdKey:      cmdKey,     // DEPRECATED
