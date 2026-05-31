@@ -146,10 +146,14 @@ func TestStartMediaReadyProbeMarksReadyAfterWaitCompletes(t *testing.T) {
 		waitForReady func(context.Context, *config.Instance, *models.ActiveMedia) error
 	}{
 		"success": {
-			waitForReady: func(context.Context, *config.Instance, *models.ActiveMedia) error { return nil },
+			waitForReady: func(context.Context, *config.Instance, *models.ActiveMedia) error {
+				return nil
+			},
 		},
 		"error": {
-			waitForReady: func(context.Context, *config.Instance, *models.ActiveMedia) error { return errors.New("failed") },
+			waitForReady: func(context.Context, *config.Instance, *models.ActiveMedia) error {
+				return errors.New("failed")
+			},
 		},
 		"timeout": {
 			waitForReady: func(ctx context.Context, _ *config.Instance, _ *models.ActiveMedia) error {
