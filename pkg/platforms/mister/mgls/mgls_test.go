@@ -22,6 +22,7 @@
 package mgls
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -148,6 +149,73 @@ func TestReadMRA_EmptyFile(t *testing.T) {
 
 	_, err = ReadMRA(mraPath)
 	require.Error(t, err)
+}
+
+func TestValidateLoadCorePath(t *testing.T) {
+	t.Parallel()
+
+	basePath := filepath.Join("media", "fat", ".LASTLAUNCH.mgl")
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{name: "valid path", path: basePath},
+		{name: "newline rejected", path: basePath + "\nload_core " + filepath.Join("tmp", "evil.rbf"), wantErr: true},
+		{name: "carriage return rejected", path: basePath + "\r", wantErr: true},
+		{name: "tab rejected", path: basePath + "\t", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateLoadCorePath(tt.path)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestLaunchFileRejectsControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	basePath := filepath.Join("media", "fat", ".LASTLAUNCH.mgl")
+	for _, path := range []string{basePath + "\n", basePath + "\r", basePath + "\t"} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+
+			err := launchFile(path)
+			require.EqualError(t, err, fmt.Sprintf("load_core path contains control character: %q", path))
+		})
+	}
+}
+
+func TestLaunchCoreRejectsControlCharacters(t *testing.T) {
+	oldCache := cores.GlobalRBFCache
+	t.Cleanup(func() {
+		cores.GlobalRBFCache = oldCache
+	})
+
+	basePath := filepath.Join("media", "fat", "_Console", "NES.rbf")
+	for _, path := range []string{basePath + "\n", basePath + "\r", basePath + "\t"} {
+		t.Run(path, func(t *testing.T) {
+			cache := &cores.RBFCache{}
+			cache.BuildFromRBFs([]cores.RBFInfo{{
+				Path:      path,
+				Filename:  "NES.rbf",
+				ShortName: "NES",
+				MglName:   filepath.Join("_Console", "NES"),
+			}})
+			cores.GlobalRBFCache = cache
+
+			err := LaunchCore(nil, nil, &cores.Core{ID: "NES"})
+			require.EqualError(t, err, fmt.Sprintf("load_core path contains control character: %q", path))
+		})
+	}
 }
 
 func TestGenerateMgl(t *testing.T) {

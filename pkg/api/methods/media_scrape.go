@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -37,8 +38,18 @@ import (
 // scrapingStatus tracks the lifecycle of an active media.scrape operation.
 // It mirrors the indexingStatus pattern in media.go for consistent state
 // management and safe concurrent access.
+const scrapeTotalScrapedRefreshInterval = 5 * time.Second
+
+type scrapedCountCache struct {
+	lastRefresh time.Time
+	scraperID   string
+	count       int
+	valid       bool
+}
+
 type scrapingStatus struct {
 	cancelFunc context.CancelFunc
+	countCache scrapedCountCache
 	scraperID  string
 	latest     models.ScrapingStatusResponse
 	mu         syncutil.RWMutex
@@ -53,6 +64,7 @@ func (s *scrapingStatus) startIfNotRunning(scraperID string) bool {
 	}
 	s.running = true
 	s.scraperID = scraperID
+	s.countCache = scrapedCountCache{}
 	s.latest = models.ScrapingStatusResponse{
 		ScraperID: scraperID,
 		Scraping:  true,
@@ -67,6 +79,7 @@ func (s *scrapingStatus) clear() {
 	s.scraperID = ""
 	s.cancelFunc = nil
 	s.latest = models.ScrapingStatusResponse{}
+	s.countCache = scrapedCountCache{}
 }
 
 // clearIfOwner clears state only when the caller's scraperID matches the stored one.
@@ -124,6 +137,41 @@ func (s *scrapingStatus) isRunning() bool {
 	return s.running
 }
 
+func (s *scrapingStatus) getFreshCountCache(scraperID string, now time.Time) (int, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.countCache.valid || s.countCache.scraperID != scraperID {
+		return 0, false
+	}
+	if now.Sub(s.countCache.lastRefresh) >= scrapeTotalScrapedRefreshInterval {
+		return 0, false
+	}
+	return s.countCache.count, true
+}
+
+func (s *scrapingStatus) getAnyCountCache(scraperID string) (int, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.countCache.valid || s.countCache.scraperID != scraperID {
+		return 0, false
+	}
+	return s.countCache.count, true
+}
+
+func (s *scrapingStatus) updateCountCache(scraperID string, count int, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.countCache.valid && s.countCache.scraperID == scraperID && count < s.countCache.count {
+		count = s.countCache.count
+	}
+	s.countCache = scrapedCountCache{
+		scraperID:   scraperID,
+		count:       count,
+		lastRefresh: now,
+		valid:       true,
+	}
+}
+
 func publishScrapingStatus(ns chan<- models.Notification, status *models.ScrapingStatusResponse) {
 	scrapingStatusInstance.setLatest(status)
 	notifications.MediaScraping(ns, status)
@@ -134,24 +182,65 @@ func populateScrapedMediaCount(
 	db *database.Database,
 	status *models.ScrapingStatusResponse,
 ) {
-	if db == nil || db.MediaDB == nil {
+	populateScrapedMediaCountExact(ctx, db, status)
+}
+
+func populateScrapedMediaCountExact(
+	ctx context.Context,
+	db *database.Database,
+	status *models.ScrapingStatusResponse,
+) {
+	count, ok := queryScrapedMediaCount(ctx, db, status.ScraperID)
+	if !ok {
 		return
+	}
+	status.TotalScraped = count
+	scrapingStatusInstance.updateCountCache(status.ScraperID, count, time.Now())
+}
+
+func populateScrapedMediaCountCached(
+	ctx context.Context,
+	db *database.Database,
+	status *models.ScrapingStatusResponse,
+) {
+	if cached, ok := scrapingStatusInstance.getFreshCountCache(status.ScraperID, time.Now()); ok {
+		status.TotalScraped = cached
+		return
+	}
+
+	count, ok := queryScrapedMediaCount(ctx, db, status.ScraperID)
+	if !ok {
+		if cached, cachedOK := scrapingStatusInstance.getAnyCountCache(status.ScraperID); cachedOK {
+			status.TotalScraped = cached
+		}
+		return
+	}
+	if cached, cachedOK := scrapingStatusInstance.getAnyCountCache(status.ScraperID); cachedOK && count < cached {
+		count = cached
+	}
+	status.TotalScraped = count
+	scrapingStatusInstance.updateCountCache(status.ScraperID, count, time.Now())
+}
+
+func queryScrapedMediaCount(ctx context.Context, db *database.Database, scraperID string) (int, bool) {
+	if db == nil || db.MediaDB == nil {
+		return 0, false
 	}
 
 	var (
 		count int
 		err   error
 	)
-	if status.ScraperID != "" {
-		count, err = db.MediaDB.GetScrapedMediaCount(ctx, status.ScraperID)
+	if scraperID != "" {
+		count, err = db.MediaDB.GetScrapedMediaCount(ctx, scraperID)
 	} else {
 		count, err = db.MediaDB.GetTotalScrapedMediaCount(ctx)
 	}
 	if err != nil {
-		log.Warn().Err(err).Str("scraper", status.ScraperID).Msg("failed to get scraped media count")
-		return
+		log.Warn().Err(err).Str("scraper", scraperID).Msg("failed to get scraped media count")
+		return 0, false
 	}
-	status.TotalScraped = count
+	return count, true
 }
 
 func PublishScrapePauseStatus(ns chan<- models.Notification, paused bool) {
@@ -216,15 +305,15 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		Scraping:  true,
 		Paused:    paused,
 	}
-	populateScrapedMediaCount(env.State.GetContext(), db, &initialStatus)
+	populateScrapedMediaCountExact(env.State.GetContext(), db, &initialStatus)
 	publishScrapingStatus(ns, &initialStatus)
 
 	scraperID := params.ScraperID
 	db.MediaDB.TrackBackgroundOperation()
 	go func() {
-		defer db.MediaDB.BackgroundOperationDone()
-		defer cancelFunc()
 		defer scrapingStatusInstance.clearIfOwner(scraperID)
+		defer cancelFunc()
+		defer db.MediaDB.BackgroundOperationDone()
 
 		var receivedDone bool
 		for update := range ch {
@@ -242,7 +331,11 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 				Done:      update.Done,
 				Paused:    env.ScrapePauser != nil && env.ScrapePauser.IsPaused() && !update.Done,
 			}
-			populateScrapedMediaCount(env.State.GetContext(), db, &status)
+			if update.Done {
+				populateScrapedMediaCountExact(env.State.GetContext(), db, &status)
+			} else {
+				populateScrapedMediaCountCached(env.State.GetContext(), db, &status)
+			}
 			publishScrapingStatus(ns, &status)
 		}
 
@@ -267,7 +360,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 				Done:      status.Done,
 				Paused:    status.Paused,
 			}
-			populateScrapedMediaCount(env.State.GetContext(), db, &terminalStatus)
+			populateScrapedMediaCountExact(env.State.GetContext(), db, &terminalStatus)
 			publishScrapingStatus(ns, &terminalStatus)
 		}
 		log.Info().Str("scraper", scraperID).Msg("scraper run complete")

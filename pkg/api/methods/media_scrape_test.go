@@ -286,6 +286,36 @@ func TestHandleMediaScrapeStatus_NoRun(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaScrapeStatus_RefreshesExactCountDespiteCache(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	scrapingStatusInstance.updateCountCache("test-scraper", 5, time.Now())
+	publishScrapingStatus(make(chan models.Notification, 1), &models.ScrapingStatusResponse{
+		ScraperID:    "test-scraper",
+		SystemID:     "SNES",
+		Processed:    42,
+		Total:        100,
+		Matched:      38,
+		Skipped:      4,
+		TotalScraped: 5,
+		Scraping:     true,
+	})
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(12, nil).Once()
+
+	result, err := HandleMediaScrapeStatus(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+	})
+	require.NoError(t, err)
+	status, ok := result.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.Equal(t, 12, status.TotalScraped)
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaScrapeStatus_TracksLatestProgress(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()
@@ -531,6 +561,88 @@ func TestScrapingStatus_ClearIfOwner_MismatchedID_Preserves(t *testing.T) {
 	s.clearIfOwner("owner-b")
 	assert.True(t, s.isRunning(), "non-owner clearIfOwner must not clear state")
 	s.clear()
+}
+
+func TestHandleMediaScrape_CachesProgressScrapedCountAndRefreshesDone(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "cached-progress").Return(5, nil).Once()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "cached-progress").Return(9, nil).Once()
+
+	progressScraper := platforms.Scraper{
+		ID:   "cached-progress",
+		Name: "Cached Progress",
+		Scrape: func(
+			_ context.Context, _ *config.Instance, _ platforms.Platform,
+			_ afero.Fs, _ *database.Database, _ scraper.ScrapeOptions,
+			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
+		) error {
+			go func() {
+				defer close(ch)
+				ch <- scraper.ScrapeUpdate{SystemID: "SNES", Total: 30, Processed: 10, Matched: 8, Skipped: 2}
+				ch <- scraper.ScrapeUpdate{SystemID: "SNES", Total: 30, Processed: 20, Matched: 16, Skipped: 4}
+				ch <- scraper.ScrapeUpdate{
+					SystemID: "SNES", Total: 30, Processed: 30, Matched: 24, Skipped: 6, Done: true,
+				}
+			}()
+			return nil
+		},
+	}
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
+		"cached-progress": progressScraper,
+	})
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: pl,
+		State:    st,
+		Database: &database.Database{MediaDB: mockDB},
+		Params:   json.RawMessage(`{"scraperId":"cached-progress"}`),
+	}
+
+	result, err := HandleMediaScrape(env)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+
+	var progressCounts []int
+	var doneCount int
+	var gotDone bool
+	timeout := time.After(2 * time.Second)
+	for !gotDone {
+		select {
+		case n := <-ns:
+			if n.Method != models.NotificationMediaScraping {
+				continue
+			}
+			var p models.ScrapingStatusResponse
+			require.NoError(t, json.Unmarshal(n.Params, &p))
+			if p.Done {
+				doneCount = p.TotalScraped
+				gotDone = true
+			} else if p.Processed > 0 {
+				progressCounts = append(progressCounts, p.TotalScraped)
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for media.scraping done notification")
+		}
+	}
+
+	assert.Equal(t, []int{5, 5}, progressCounts)
+	assert.Equal(t, 9, doneCount)
+	require.Eventually(t, func() bool {
+		return !IsScrapingRunning()
+	}, 2*time.Second, 10*time.Millisecond)
+	mockDB.AssertExpectations(t)
 }
 
 func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
