@@ -200,8 +200,18 @@ on_ready = "**input.keyboard:{f3}"
 	runConfiguredServiceHooks(svc)
 
 	require.Equal(t, 1, bootChecks)
-	assert.Equal(t, "{f2}", <-platform.pressed)
-	assert.Equal(t, "{f3}", <-platform.pressed)
+	select {
+	case key := <-platform.pressed:
+		assert.Equal(t, "{f2}", key)
+	case <-time.After(time.Second):
+		t.Fatal("on_boot keypress did not run")
+	}
+	select {
+	case key := <-platform.pressed:
+		assert.Equal(t, "{f3}", key)
+	case <-time.After(time.Second):
+		t.Fatal("on_ready keypress did not run")
+	}
 	mockUserDB.AssertExpectations(t)
 }
 

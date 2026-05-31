@@ -423,6 +423,8 @@ func TestCmdControl_WhenOnlyAdvArg(t *testing.T) {
 }
 
 func TestCmdControl_WaitsForMediaReadyBeforeControl(t *testing.T) {
+	t.Parallel()
+
 	waited := false
 	controlFunc := func(_ context.Context, _ *config.Instance, _ platforms.ControlParams) error {
 		require.True(t, waited)
@@ -459,6 +461,8 @@ func TestCmdControl_WaitsForMediaReadyBeforeControl(t *testing.T) {
 }
 
 func TestCmdControl_WaitForMediaReadyErrorSkipsControl(t *testing.T) {
+	t.Parallel()
+
 	controlCalled := false
 	controlFunc := func(context.Context, *config.Instance, platforms.ControlParams) error {
 		controlCalled = true
