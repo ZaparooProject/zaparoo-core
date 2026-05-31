@@ -557,7 +557,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			update.CurrentStep = currentStep
 			ch <- update
 		}
-		if !waitForResume(system.ID, currentStep, 0, 0, 0) {
+		if !waitForResume(system.ID, currentStep, totalProcessed, totalMatched, totalSkipped) {
 			return
 		}
 
