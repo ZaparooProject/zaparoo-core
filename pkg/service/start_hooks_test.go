@@ -167,6 +167,44 @@ on_ready = "**input.keyboard:{f2}"
 	mockUserDB.AssertExpectations(t)
 }
 
+func TestRunConfiguredServiceHooksUsesSingleBootCheckForBootAndReady(t *testing.T) {
+	oldDetectSystemBootID := detectSystemBootID
+	defer func() { detectSystemBootID = oldDetectSystemBootID }()
+	bootChecks := 0
+	detectSystemBootID = func() (string, error) {
+		bootChecks++
+		return "test-boot", nil
+	}
+
+	testRoot := t.TempDir()
+	cfg, err := testhelpers.NewTestConfig(nil, filepath.Join(testRoot, "config"))
+	require.NoError(t, err)
+	require.NoError(t, cfg.LoadTOML(`[service]
+on_boot = "**input.keyboard:{f2}"
+on_ready = "**input.keyboard:{f3}"
+`))
+
+	platform := newReadyHookPlatform(cfg, filepath.Join(testRoot, "data"))
+	close(platform.ready)
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockUserDB.On("GetEnabledMappings").Return([]database.Mapping{}, nil).Twice()
+	st, _ := state.NewState(platform, "test-boot-uuid")
+	svc := &ServiceContext{
+		Platform:      platform,
+		Config:        cfg,
+		State:         st,
+		DB:            &database.Database{UserDB: mockUserDB},
+		PlaylistQueue: make(chan *playlists.Playlist, 1),
+	}
+
+	runConfiguredServiceHooks(svc)
+
+	require.Equal(t, 1, bootChecks)
+	assert.Equal(t, "{f2}", <-platform.pressed)
+	assert.Equal(t, "{f3}", <-platform.pressed)
+	mockUserDB.AssertExpectations(t)
+}
+
 func TestRunConfiguredServiceHooksRunsOnBootOnlyOncePerBoot(t *testing.T) {
 	oldDetectSystemBootID := detectSystemBootID
 	defer func() { detectSystemBootID = oldDetectSystemBootID }()

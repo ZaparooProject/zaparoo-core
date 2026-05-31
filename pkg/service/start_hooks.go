@@ -70,25 +70,23 @@ func runServiceHook(svc *ServiceContext, hookName, script string, firstBootStart
 }
 
 func runConfiguredServiceHooks(svc *ServiceContext) {
-	firstBootStart := false
-	if script := svc.Config.ServiceOnBoot(); script != "" {
-		var err error
-		firstBootStart, err = isFirstServiceStartForBoot(svc.Platform)
-		switch {
-		case err != nil:
+	firstBootStart, err := isFirstServiceStartForBoot(svc.Platform)
+	if err != nil {
+		if svc.Config.ServiceOnBoot() != "" {
 			log.Warn().Err(err).Msg("skipping on_boot: failed to detect boot state")
+		} else {
+			log.Warn().Err(err).Msg("failed to detect boot state for on_ready hook context")
+		}
+	}
+
+	if script := svc.Config.ServiceOnBoot(); script != "" && err == nil {
+		switch {
 		case firstBootStart:
 			if err = runServiceHook(svc, "on_boot", script, firstBootStart); err != nil {
 				log.Error().Err(err).Msg("error running on_boot script")
 			}
 		default:
 			log.Debug().Msg("skipping on_boot: already ran during this boot")
-		}
-	} else {
-		var err error
-		firstBootStart, err = isFirstServiceStartForBoot(svc.Platform)
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to detect boot state for on_ready hook context")
 		}
 	}
 

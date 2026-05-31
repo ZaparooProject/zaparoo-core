@@ -28,7 +28,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	statepkg "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/rs/zerolog/log"
 )
 
@@ -86,15 +85,11 @@ func waitForMediaReady(ctx context.Context, svc *ServiceContext, expectedGen uin
 	defer cancel()
 
 	if err := svc.State.WaitForActiveMediaReady(waitCtx, expectedGen); err != nil {
-		switch {
-		case errors.Is(err, context.DeadlineExceeded):
+		if errors.Is(err, context.DeadlineExceeded) {
 			log.Warn().Msg("media ready wait timed out; continuing")
 			return nil
-		case errors.Is(err, statepkg.ErrNoActiveMedia), errors.Is(err, statepkg.ErrActiveMediaChanged):
-			return fmt.Errorf("wait for active media ready: %w", err)
-		default:
-			return fmt.Errorf("wait for active media ready: %w", err)
 		}
+		return fmt.Errorf("wait for active media ready: %w", err)
 	}
 	return nil
 }

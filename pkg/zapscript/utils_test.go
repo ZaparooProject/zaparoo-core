@@ -337,6 +337,42 @@ func TestCmdDelay_MediaReady(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestCmdDelay_MediaReadyUnavailable(t *testing.T) {
+	t.Parallel()
+
+	cmd := zapscript.Command{
+		Name: "delay",
+		Args: []string{"media_ready"},
+	}
+
+	env := platforms.CmdEnv{Cmd: cmd}
+
+	_, err := cmdDelay(nil, env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "media ready wait is not available")
+}
+
+func TestCmdDelay_MediaReadyError(t *testing.T) {
+	t.Parallel()
+
+	cmd := zapscript.Command{
+		Name: "delay",
+		Args: []string{"media_ready"},
+	}
+
+	env := platforms.CmdEnv{
+		Cmd: cmd,
+		WaitForMediaReady: func(context.Context) error {
+			return context.DeadlineExceeded
+		},
+	}
+
+	_, err := cmdDelay(nil, env)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), "wait for media ready")
+}
+
 // TestCmdDelay_InvalidAmount verifies invalid delay amount returns error.
 func TestCmdDelay_InvalidAmount(t *testing.T) {
 	t.Parallel()
