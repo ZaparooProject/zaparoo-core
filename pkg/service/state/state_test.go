@@ -66,6 +66,68 @@ func TestStopService_DoesNotSetRestartRequested(t *testing.T) {
 	assert.False(t, state.RestartRequested())
 }
 
+func TestSetActiveCard_DuplicateTokenRefreshesLastScanned(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+
+	firstScan := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	secondScan := firstScan.Add(time.Minute)
+
+	state.SetActiveCard(tokens.Token{
+		UID:      "id",
+		Text:     "same-token",
+		ScanTime: firstScan,
+	})
+	state.SetActiveCard(tokens.Token{
+		UID:      "id",
+		Text:     "same-token",
+		ScanTime: secondScan,
+	})
+
+	lastScanned := state.GetLastScanned()
+	activeToken := state.GetActiveCard()
+	assert.Equal(t, secondScan, lastScanned.ScanTime)
+	assert.Equal(t, secondScan, activeToken.ScanTime)
+}
+
+func TestSetActiveCard_DuplicateEmptyRemovalDoesNotNotify(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, notifications := NewState(mockPlatform, "test-boot-uuid")
+
+	seedToken := tokens.Token{
+		UID:      "id",
+		Text:     "seed-token",
+		ScanTime: time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC),
+	}
+	state.SetActiveCard(seedToken)
+	select {
+	case notification := <-notifications:
+		assert.Equal(t, models.NotificationTokensAdded, notification.Method)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tokens added notification")
+	}
+
+	state.SetActiveCard(tokens.Token{})
+	select {
+	case notification := <-notifications:
+		assert.Equal(t, models.NotificationTokensRemoved, notification.Method)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tokens removed notification")
+	}
+	state.SetActiveCard(tokens.Token{})
+
+	assert.Equal(t, tokens.Token{}, state.GetActiveCard())
+	assert.Equal(t, seedToken, state.GetLastScanned())
+
+	select {
+	case notification := <-notifications:
+		require.Failf(t, "unexpected notification", "method: %s", notification.Method)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestConsumePendingWrite(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()

@@ -103,8 +103,8 @@ func NewState(platform platforms.Platform, bootUUID string) (state *State, notif
 func (s *State) SetActiveCard(card tokens.Token) { //nolint:gocritic // single-use parameter in state setter
 	s.mu.Lock()
 
-	if helpers.TokensEqual(&s.activeToken, &card) {
-		// ignore duplicate scans
+	if helpers.TokensEqual(&s.activeToken, &card) && card.ScanTime.IsZero() {
+		// ignore duplicate removals
 		s.mu.Unlock()
 		return
 	}
