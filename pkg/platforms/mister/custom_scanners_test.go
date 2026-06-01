@@ -30,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -351,10 +352,11 @@ func TestCollectNeoGeoRomsetEntries_DeduplicatesOverlappingRoots(t *testing.T) {
 		"mslug": "Metal Slug",
 	}
 	seen := make(map[string]struct{})
+	fs := afero.NewOsFs()
 
-	first, err := collectNeoGeoRomsetEntries(context.Background(), neoGeoPath, romsets, seen)
+	first, err := collectNeoGeoRomsetEntries(context.Background(), fs, neoGeoPath, romsets, seen)
 	require.NoError(t, err)
-	second, err := collectNeoGeoRomsetEntries(context.Background(), favoritesPath, romsets, seen)
+	second, err := collectNeoGeoRomsetEntries(context.Background(), fs, favoritesPath, romsets, seen)
 	require.NoError(t, err)
 
 	assert.Equal(t, []platforms.ScanResult{{Path: zipPath, Name: "Metal Slug", NoExt: true}}, first)

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +48,7 @@ import (
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // arcadeCardLaunchCache stores the last arcade game launched via card to prevent duplicate tracker notifications.
@@ -801,6 +801,7 @@ func isInsideGameFolder(
 
 func collectNeoGeoRomsetEntries(
 	ctx context.Context,
+	fs afero.Fs,
 	root string,
 	romsetNames map[string]string,
 	seen map[string]struct{},
@@ -808,7 +809,7 @@ func collectNeoGeoRomsetEntries(
 	results := make([]platforms.ScanResult, 0)
 	cleanRoot := filepath.Clean(root)
 
-	err := filepath.WalkDir(cleanRoot, func(path string, d fs.DirEntry, walkErr error) error {
+	err := afero.Walk(fs, cleanRoot, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			log.Warn().Err(walkErr).Str("path", path).Msg("unable to read neogeo entry")
 			return nil
@@ -824,14 +825,14 @@ func collectNeoGeoRomsetEntries(
 			return nil
 		}
 
-		base := d.Name()
-		if d.IsDir() {
+		base := info.Name()
+		if info.IsDir() {
 			if base == "__MACOSX" || strings.HasPrefix(base, ".") {
 				return filepath.SkipDir
 			}
 
 			markerPath := filepath.Join(path, ".zaparooignore")
-			if _, statErr := os.Stat(markerPath); statErr == nil {
+			if _, statErr := fs.Stat(markerPath); statErr == nil {
 				log.Info().Str("path", path).Msg("skipping directory with .zaparooignore marker")
 				return filepath.SkipDir
 			}
@@ -842,7 +843,7 @@ func collectNeoGeoRomsetEntries(
 		isZip := filepath.Ext(lowerBase) == ".zip"
 		if isZip {
 			candidateID = strings.TrimSuffix(lowerBase, filepath.Ext(lowerBase))
-		} else if !d.IsDir() {
+		} else if !info.IsDir() {
 			return nil
 		}
 
@@ -853,7 +854,7 @@ func collectNeoGeoRomsetEntries(
 
 		cleanPath := filepath.Clean(path)
 		if _, ok := seen[cleanPath]; ok {
-			if d.IsDir() {
+			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
@@ -866,7 +867,7 @@ func collectNeoGeoRomsetEntries(
 			NoExt: true,
 		})
 
-		if d.IsDir() {
+		if info.IsDir() {
 			return filepath.SkipDir
 		}
 		return nil
@@ -1184,23 +1185,28 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}
 
 			// Second pass: read directories recursively and add launchable romset entries.
-			seenNeoGeoEntries := make(map[string]struct{})
-			for _, sf := range sfs {
-				select {
-				case <-ctx.Done():
-					return results, ctx.Err()
-				default:
-				}
-
-				entries, scanErr := collectNeoGeoRomsetEntries(ctx, sf.Path, names, seenNeoGeoEntries)
-				if scanErr != nil {
-					if ctx.Err() != nil {
+			if len(names) == 0 {
+				log.Debug().Msg("skipping neogeo recursive scan without romsets")
+			} else {
+				osFs := afero.NewOsFs()
+				seenNeoGeoEntries := make(map[string]struct{})
+				for _, sf := range sfs {
+					select {
+					case <-ctx.Done():
 						return results, ctx.Err()
+					default:
 					}
-					log.Warn().Err(scanErr).Str("path", sf.Path).Msg("unable to scan neogeo directory")
-					continue
+
+					entries, scanErr := collectNeoGeoRomsetEntries(ctx, osFs, sf.Path, names, seenNeoGeoEntries)
+					if scanErr != nil {
+						if ctx.Err() != nil {
+							return results, ctx.Err()
+						}
+						log.Warn().Err(scanErr).Str("path", sf.Path).Msg("unable to scan neogeo directory")
+						continue
+					}
+					results = append(results, entries...)
 				}
-				results = append(results, entries...)
 			}
 
 			log.Debug().Int("results", len(results)).Msg("neogeo scan completed")
