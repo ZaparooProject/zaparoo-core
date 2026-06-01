@@ -123,16 +123,34 @@ func TestPluginManifestMatchesHyperHQExecutableSocketIODocs(t *testing.T) {
 	if !manifest.Communication.SocketIO.Enabled {
 		t.Fatal("manifest communication.socketio.enabled = false, want true")
 	}
-	if !manifest.SocketIO.Enabled || manifest.SocketIO.Namespace != "/plugin" {
-		t.Fatalf("manifest socketio = %+v, want enabled namespace /plugin", manifest.SocketIO)
+	if !manifest.SocketIO.Enabled || manifest.SocketIO.Namespace != "/" {
+		t.Fatalf("manifest socketio = %+v, want enabled namespace /", manifest.SocketIO)
 	}
 }
 
-func TestSocketIOManagerURLUsesDefaultEnginePath(t *testing.T) {
+func TestSocketIOManagerURLUsesServerOrigin(t *testing.T) {
 	got := socketIOManagerURL("52789")
-	want := "http://localhost:52789/socket.io/"
+	want := "http://localhost:52789"
 	if got != want {
 		t.Fatalf("socketIOManagerURL() = %q, want %q", got, want)
+	}
+}
+
+func TestAuthRequestUsesChallengeThenSessionToken(t *testing.T) {
+	b := &bridge{
+		pluginID:      "zaparoo-hyperhq",
+		authChallenge: "challenge",
+	}
+
+	first := b.authRequest()
+	if first.PluginID != "zaparoo-hyperhq" || first.Challenge != "challenge" || first.SessionToken != "" {
+		t.Fatalf("first auth request = %+v, want challenge auth", first)
+	}
+
+	b.sessionToken = "session-token"
+	reconnect := b.authRequest()
+	if reconnect.PluginID != "zaparoo-hyperhq" || reconnect.Challenge != "" || reconnect.SessionToken != "session-token" {
+		t.Fatalf("reconnect auth request = %+v, want session-token auth", reconnect)
 	}
 }
 
@@ -353,6 +371,25 @@ func TestDecodeFirst(t *testing.T) {
 	}
 	if err := decodeFirst([]any{map[string]any{"id": make(chan int)}}, &req); err == nil {
 		t.Fatal("decodeFirst(unmarshalable) error = nil, want error")
+	}
+}
+
+func TestDecodeHyperHqEventEnvelopeAcceptsNumericTimestamp(t *testing.T) {
+	var env hqEventEnvelope
+	err := decodeFirst([]any{map[string]any{
+		"type":      hqEventGameLaunched,
+		"timestamp": float64(1770000000000),
+		"data": map[string]any{
+			"gameId":   "game-1",
+			"gameName": "Game",
+			"systemId": "system-1",
+		},
+	}}, &env)
+	if err != nil {
+		t.Fatalf("decodeFirst() unexpected error: %v", err)
+	}
+	if env.Type != hqEventGameLaunched || len(env.Data) == 0 {
+		t.Fatalf("decoded envelope = %+v, want gameLaunched with data", env)
 	}
 }
 
