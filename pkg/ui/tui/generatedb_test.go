@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -255,6 +256,27 @@ func TestFormatScrapeProgress(t *testing.T) {
 			Paused:    true,
 		}, ""),
 	)
+
+	currentStep := 2
+	totalSteps := 5
+	display := "Super Nintendo"
+	assert.Equal(t,
+		"ScreenScraper - SNES\nOverall: Super Nintendo (2 / 5)\nRecords: 4 / 12\nMatched: 3  Skipped: 1",
+		formatScrapeProgress(&models.ScrapingStatusResponse{
+			ScraperID:          "screenscraper",
+			CurrentStep:        &currentStep,
+			TotalSteps:         &totalSteps,
+			CurrentStepDisplay: &display,
+			CurrentSystem: &models.ScrapeSystemProgressResponse{
+				SystemID:   "snes",
+				SystemName: "SNES",
+				Processed:  4,
+				Total:      12,
+				Matched:    3,
+				Skipped:    1,
+			},
+		}, "ScreenScraper"),
+	)
 }
 
 func TestBlockedMediaOperationMenuLabels(t *testing.T) {
@@ -311,6 +333,30 @@ func TestFormatScrapeSystemsLabel(t *testing.T) {
 	assert.Equal(t, "nes", formatScrapeSystemsLabel([]string{"nes"}, systems))
 }
 
+func TestScrapeProgressHelpers(t *testing.T) {
+	t.Parallel()
+
+	currentStep := 2
+	totalSteps := 5
+	status := models.ScrapingStatusResponse{
+		CurrentStep: &currentStep,
+		TotalSteps:  &totalSteps,
+		Processed:   7,
+		Total:       10,
+		CurrentSystem: &models.ScrapeSystemProgressResponse{
+			Processed: 3,
+			Total:     6,
+		},
+	}
+
+	assert.InDelta(t, 0.4, scrapeOverallProgress(status), 0.001)
+	assert.InDelta(t, 0.5, scrapeCurrentSystemProgress(status), 0.001)
+	assert.InDelta(t, 0.7, scrapeOverallProgress(models.ScrapingStatusResponse{
+		Processed: 7,
+		Total:     10,
+	}), 0.001)
+}
+
 func TestMediaIndexProgress(t *testing.T) {
 	t.Parallel()
 
@@ -347,6 +393,106 @@ func TestMediaIndexProgress(t *testing.T) {
 			assert.InDelta(t, tt.expected, result, 0.001)
 		})
 	}
+}
+
+func TestHandleMediaManageEscape(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		frontPage   string
+		wantBack    bool
+		wantInitial bool
+		wantSystems bool
+	}{
+		{
+			name:        "systems returns to setup",
+			frontPage:   mediaManageSystemsPage,
+			wantSystems: true,
+		},
+		{
+			name:        "setup returns to initial",
+			frontPage:   mediaManageSetupPage,
+			wantInitial: true,
+		},
+		{
+			name:        "progress returns to initial",
+			frontPage:   mediaManageProgressPage,
+			wantInitial: true,
+		},
+		{
+			name:      "complete exits manage media",
+			frontPage: mediaManageCompletePage,
+			wantBack:  true,
+		},
+		{
+			name:      "initial exits manage media",
+			frontPage: mediaManageInitialPage,
+			wantBack:  true,
+		},
+		{
+			name:      "loading exits manage media",
+			frontPage: mediaManageLoadingPage,
+			wantBack:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			statePages := tview.NewPages()
+			for _, page := range []string{
+				mediaManageLoadingPage,
+				mediaManageInitialPage,
+				mediaManageSetupPage,
+				mediaManageProgressPage,
+				mediaManageCompletePage,
+				mediaManageSystemsPage,
+			} {
+				statePages.AddPage(page, tview.NewTextView().SetText(page), true, page == mediaManageInitialPage)
+			}
+			statePages.SwitchToPage(tt.frontPage)
+
+			backCalled := false
+			initialCalled := false
+			systemsCalled := false
+
+			handleMediaManageEscape(
+				statePages,
+				func() { backCalled = true },
+				func() { initialCalled = true },
+				func() { systemsCalled = true },
+			)
+
+			assert.Equal(t, tt.wantBack, backCalled)
+			assert.Equal(t, tt.wantInitial, initialCalled)
+			assert.Equal(t, tt.wantSystems, systemsCalled)
+		})
+	}
+}
+
+func TestHandleMediaManageEscape_SystemsPagePreservesSelection(t *testing.T) {
+	t.Parallel()
+
+	statePages := tview.NewPages()
+	statePages.AddPage(mediaManageSetupPage, tview.NewTextView().SetText("setup"), true, false)
+	statePages.AddPage(mediaManageSystemsPage, tview.NewTextView().SetText("systems"), true, true)
+	selected := []string{"nes"}
+
+	handleMediaManageEscape(
+		statePages,
+		func() { selected = nil },
+		func() { selected = nil },
+		func() {
+			statePages.RemovePage(mediaManageSystemsPage)
+			statePages.SwitchToPage(mediaManageSetupPage)
+		},
+	)
+
+	frontPage, _ := statePages.GetFrontPage()
+	assert.Equal(t, mediaManageSetupPage, frontPage)
+	assert.Equal(t, []string{"nes"}, selected)
 }
 
 // intPtr is a helper to create *int.
