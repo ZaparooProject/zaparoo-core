@@ -25,6 +25,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/rivo/tview"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewProgressBar(t *testing.T) {
@@ -300,7 +301,7 @@ func TestParseMediaManageUpdate(t *testing.T) {
 		models.NotificationMediaIndexing,
 		`{"indexing":true,"paused":true,"currentStep":3,"totalSteps":10}`,
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, models.NotificationMediaIndexing, indexing.method)
 	assert.True(t, indexing.indexing.Indexing)
 	assert.True(t, indexing.indexing.Paused)
@@ -310,7 +311,7 @@ func TestParseMediaManageUpdate(t *testing.T) {
 		models.NotificationMediaScraping,
 		`{"scraping":true,"scraperId":"screenscraper","currentSystem":{"systemId":"nes","processed":4,"total":9}}`,
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, models.NotificationMediaScraping, scraping.method)
 	assert.True(t, scraping.scraping.Scraping)
 	assert.Equal(t, "screenscraper", scraping.scraping.ScraperID)
@@ -322,13 +323,13 @@ func TestParseMediaManageUpdateErrors(t *testing.T) {
 	t.Parallel()
 
 	_, err := parseMediaManageUpdate(models.NotificationMediaIndexing, `{`)
-	assert.ErrorContains(t, err, "failed to unmarshal indexing status response")
+	require.ErrorContains(t, err, "failed to unmarshal indexing status response")
 
 	_, err = parseMediaManageUpdate(models.NotificationMediaScraping, `{`)
-	assert.ErrorContains(t, err, "failed to unmarshal scraping status response")
+	require.ErrorContains(t, err, "failed to unmarshal scraping status response")
 
 	_, err = parseMediaManageUpdate("media.unknown", `{}`)
-	assert.ErrorContains(t, err, "unexpected notification method")
+	require.ErrorContains(t, err, "unexpected notification method")
 }
 
 func TestBlockedMediaOperationMenuLabels(t *testing.T) {
