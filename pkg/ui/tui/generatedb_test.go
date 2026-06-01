@@ -277,6 +277,58 @@ func TestFormatScrapeProgress(t *testing.T) {
 			},
 		}, "ScreenScraper"),
 	)
+	assert.Equal(t,
+		"screenscraper - arcade\nOverall: 2 / 5\nPaused\nMatched: 0  Skipped: 0",
+		formatScrapeProgress(&models.ScrapingStatusResponse{
+			ScraperID:   "screenscraper",
+			CurrentStep: &currentStep,
+			TotalSteps:  &totalSteps,
+			Paused:      true,
+			CurrentSystem: &models.ScrapeSystemProgressResponse{
+				SystemID:  "arcade",
+				Processed: 1,
+			},
+		}, ""),
+	)
+}
+
+func TestParseMediaManageUpdate(t *testing.T) {
+	t.Parallel()
+
+	currentStep := 3
+	indexing, err := parseMediaManageUpdate(
+		models.NotificationMediaIndexing,
+		`{"indexing":true,"paused":true,"currentStep":3,"totalSteps":10}`,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, models.NotificationMediaIndexing, indexing.method)
+	assert.True(t, indexing.indexing.Indexing)
+	assert.True(t, indexing.indexing.Paused)
+	assert.Equal(t, &currentStep, indexing.indexing.CurrentStep)
+
+	scraping, err := parseMediaManageUpdate(
+		models.NotificationMediaScraping,
+		`{"scraping":true,"scraperId":"screenscraper","currentSystem":{"systemId":"nes","processed":4,"total":9}}`,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, models.NotificationMediaScraping, scraping.method)
+	assert.True(t, scraping.scraping.Scraping)
+	assert.Equal(t, "screenscraper", scraping.scraping.ScraperID)
+	assert.Equal(t, "nes", scraping.scraping.CurrentSystem.SystemID)
+	assert.Equal(t, 4, scraping.scraping.CurrentSystem.Processed)
+}
+
+func TestParseMediaManageUpdateErrors(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseMediaManageUpdate(models.NotificationMediaIndexing, `{`)
+	assert.ErrorContains(t, err, "failed to unmarshal indexing status response")
+
+	_, err = parseMediaManageUpdate(models.NotificationMediaScraping, `{`)
+	assert.ErrorContains(t, err, "failed to unmarshal scraping status response")
+
+	_, err = parseMediaManageUpdate("media.unknown", `{}`)
+	assert.ErrorContains(t, err, "unexpected notification method")
 }
 
 func TestBlockedMediaOperationMenuLabels(t *testing.T) {

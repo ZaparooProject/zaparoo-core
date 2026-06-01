@@ -198,20 +198,7 @@ func loadMediaManageInitialState(cfg *config.Instance) mediaManageInitialState {
 	}
 }
 
-func waitMediaManageUpdate(
-	ctx context.Context,
-	cfg *config.Instance,
-) (mediaManageUpdate, error) {
-	method, resp, err := client.WaitNotifications(
-		ctx, mediaManagePollInterval,
-		cfg,
-		models.NotificationMediaIndexing,
-		models.NotificationMediaScraping,
-	)
-	if err != nil {
-		return mediaManageUpdate{}, fmt.Errorf("failed to wait for notification: %w", err)
-	}
-
+func parseMediaManageUpdate(method, resp string) (mediaManageUpdate, error) {
 	switch method {
 	case models.NotificationMediaIndexing:
 		var status models.IndexingStatusResponse
@@ -228,6 +215,23 @@ func waitMediaManageUpdate(
 	default:
 		return mediaManageUpdate{}, fmt.Errorf("unexpected notification method: %s", method)
 	}
+}
+
+func waitMediaManageUpdate(
+	ctx context.Context,
+	cfg *config.Instance,
+) (mediaManageUpdate, error) {
+	method, resp, err := client.WaitNotifications(
+		ctx, mediaManagePollInterval,
+		cfg,
+		models.NotificationMediaIndexing,
+		models.NotificationMediaScraping,
+	)
+	if err != nil {
+		return mediaManageUpdate{}, fmt.Errorf("failed to wait for notification: %w", err)
+	}
+
+	return parseMediaManageUpdate(method, resp)
 }
 
 type ProgressBar struct {
