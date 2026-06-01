@@ -205,9 +205,10 @@ type MediaBlob struct {
 }
 
 type Tag struct {
-	Tag      string
-	DBID     int64
-	TypeDBID int64
+	Tag         string
+	DisplayName string
+	DBID        int64
+	TypeDBID    int64
 }
 
 type MediaTag struct {
@@ -230,6 +231,7 @@ type SearchResult struct {
 type TagInfo struct {
 	Tag   string `json:"tag"`
 	Type  string `json:"type"`
+	Label string `json:"label,omitempty"`
 	Count int64  `json:"count,omitempty"`
 }
 

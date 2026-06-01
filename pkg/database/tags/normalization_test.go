@@ -23,6 +23,48 @@ import (
 	"testing"
 )
 
+func TestNormalizeTagValue(t *testing.T) {
+	tests := []struct {
+		name    string
+		tagType string
+		input   string
+		want    string
+	}{
+		{
+			name:    "developer company punctuation",
+			tagType: string(TagTypeDeveloper),
+			input:   "Nintendo R&D1",
+			want:    "nintendo-r-and-d1",
+		},
+		{
+			name:    "publisher ampersand",
+			tagType: string(TagTypePublisher),
+			input:   "T&E Soft",
+			want:    "t-and-e-soft",
+		},
+		{
+			name:    "credit accents",
+			tagType: string(TagTypeCredit),
+			input:   "Coktel Visión",
+			want:    "coktel-vision",
+		},
+		{
+			name:    "generic tag value",
+			tagType: string(TagTypeGenre),
+			input:   "Action RPG",
+			want:    "action-rpg",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeTagValue(tt.tagType, tt.input); got != tt.want {
+				t.Fatalf("NormalizeTagValue(%q, %q) = %q, want %q", tt.tagType, tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeTag(t *testing.T) {
 	tests := []struct {
 		name     string

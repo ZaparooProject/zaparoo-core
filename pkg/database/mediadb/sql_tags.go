@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	insertTagSQL     = `INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (?, ?, ?)`
+	insertTagSQL     = `INSERT INTO Tags (DBID, TypeDBID, Tag, DisplayName) VALUES (?, ?, ?, ?)`
 	insertTagTypeSQL = `INSERT INTO TagTypes (DBID, Type, IsExclusive) VALUES (?, ?, ?)`
 )
 
@@ -132,7 +132,7 @@ func sqlFindTag(ctx context.Context, db sqlQueryable, tagType database.Tag) (dat
 	paddedTag := tags.PadTagValue(tagType.Tag)
 	stmt, err := db.PrepareContext(ctx, `
 		select
-		DBID, TypeDBID, Tag
+		DBID, TypeDBID, Tag, DisplayName
 		from Tags
 		where (DBID = ? and TypeDBID = ?)
 		or (TypeDBID = ? and (Tag = ? or Tag = ?))
@@ -156,6 +156,7 @@ func sqlFindTag(ctx context.Context, db sqlQueryable, tagType database.Tag) (dat
 		&row.DBID,
 		&row.TypeDBID,
 		&row.Tag,
+		&row.DisplayName,
 	)
 	if err != nil {
 		return row, fmt.Errorf("failed to scan tag row: %w", err)
@@ -171,7 +172,7 @@ func sqlInsertTagWithPreparedStmt(ctx context.Context, stmt *sql.Stmt, row datab
 	}
 
 	paddedTag := tags.PadTagValue(row.Tag)
-	res, err := stmt.ExecContext(ctx, dbID, row.TypeDBID, paddedTag)
+	res, err := stmt.ExecContext(ctx, dbID, row.TypeDBID, paddedTag, row.DisplayName)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute prepared insert tag statement: %w", err)
 	}
@@ -202,7 +203,7 @@ func sqlInsertTag(ctx context.Context, db *sql.DB, row database.Tag) (database.T
 	}()
 
 	paddedTag := tags.PadTagValue(row.Tag)
-	res, err := stmt.ExecContext(ctx, dbID, row.TypeDBID, paddedTag)
+	res, err := stmt.ExecContext(ctx, dbID, row.TypeDBID, paddedTag, row.DisplayName)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert tag statement: %w", err)
 	}
@@ -217,7 +218,7 @@ func sqlInsertTag(ctx context.Context, db *sql.DB, row database.Tag) (database.T
 }
 
 func sqlGetAllTags(ctx context.Context, db *sql.DB) ([]database.Tag, error) {
-	rows, err := db.QueryContext(ctx, "SELECT DBID, Tag, TypeDBID FROM Tags ORDER BY DBID")
+	rows, err := db.QueryContext(ctx, "SELECT DBID, Tag, TypeDBID, DisplayName FROM Tags ORDER BY DBID")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tags: %w", err)
 	}
@@ -230,7 +231,7 @@ func sqlGetAllTags(ctx context.Context, db *sql.DB) ([]database.Tag, error) {
 	dbTags := make([]database.Tag, 0)
 	for rows.Next() {
 		var tag database.Tag
-		if err := rows.Scan(&tag.DBID, &tag.Tag, &tag.TypeDBID); err != nil {
+		if err := rows.Scan(&tag.DBID, &tag.Tag, &tag.TypeDBID, &tag.DisplayName); err != nil {
 			return nil, fmt.Errorf("failed to scan tag: %w", err)
 		}
 		tag.Tag = tags.UnpadTagValue(tag.Tag)
@@ -268,7 +269,7 @@ func sqlGetAllUsedTags(ctx context.Context, db *sql.DB) ([]database.TagInfo, err
 	// (MediaTitleTags) sources; the outer GROUP BY+SUM merges them per tag.
 	// mediatags_tag_media_idx and mediatitletags_tag_idx make both GROUP BYs fast.
 	sqlQuery := `
-		SELECT tt.Type, t.Tag, SUM(cnt) AS Count
+		SELECT tt.Type, t.Tag, t.DisplayName, SUM(cnt) AS Count
 		FROM (
 			SELECT TagDBID, COUNT(*) AS cnt FROM MediaTags GROUP BY TagDBID
 			UNION ALL
@@ -276,7 +277,7 @@ func sqlGetAllUsedTags(ctx context.Context, db *sql.DB) ([]database.TagInfo, err
 		) agg
 		JOIN Tags t ON agg.TagDBID = t.DBID
 		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		GROUP BY t.DBID, tt.Type, t.Tag
+		GROUP BY t.DBID, tt.Type, t.Tag, t.DisplayName
 		ORDER BY tt.Type, t.Tag`
 
 	stmt, err := db.PrepareContext(ctx, sqlQuery)
@@ -301,14 +302,15 @@ func sqlGetAllUsedTags(ctx context.Context, db *sql.DB) ([]database.TagInfo, err
 
 	result := make([]database.TagInfo, 0, 100)
 	for rows.Next() {
-		var tagType, tag string
+		var tagType, tag, label string
 		var count int64
-		if scanErr := rows.Scan(&tagType, &tag, &count); scanErr != nil {
+		if scanErr := rows.Scan(&tagType, &tag, &label, &count); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan all used tag result: %w", scanErr)
 		}
 		result = append(result, database.TagInfo{
 			Type:  tagType,
 			Tag:   tags.UnpadTagValue(tag),
+			Label: label,
 			Count: count,
 		})
 	}
@@ -342,7 +344,7 @@ func sqlGetTags(
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	sqlQuery := `
-		SELECT DISTINCT TagTypes.Type, Tags.Tag
+		SELECT DISTINCT TagTypes.Type, Tags.Tag, Tags.DisplayName
 		FROM TagTypes
 		JOIN Tags ON TagTypes.DBID = Tags.TypeDBID
 		WHERE Tags.DBID IN (
@@ -384,13 +386,14 @@ func sqlGetTags(
 
 	result := make([]database.TagInfo, 0, 100)
 	for rows.Next() {
-		var tagType, tag string
-		if scanErr := rows.Scan(&tagType, &tag); scanErr != nil {
+		var tagType, tag, label string
+		if scanErr := rows.Scan(&tagType, &tag, &label); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan optimized tag result: %w", scanErr)
 		}
 		result = append(result, database.TagInfo{
-			Type: tagType,
-			Tag:  tags.UnpadTagValue(tag),
+			Type:  tagType,
+			Tag:   tags.UnpadTagValue(tag),
+			Label: label,
 		})
 	}
 

@@ -939,10 +939,10 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 	// --- MediaTitleTags: title-level, shared across all ROMs ---
 
 	if game.Developer != "" {
-		titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypeDeveloper), Tag: game.Developer})
+		titleTags = appendNormalizedTag(titleTags, string(tags.TagTypeDeveloper), game.Developer, game.Developer)
 	}
 	if game.Publisher != "" {
-		titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypePublisher), Tag: game.Publisher})
+		titleTags = appendNormalizedTag(titleTags, string(tags.TagTypePublisher), game.Publisher, game.Publisher)
 	}
 	if game.ReleaseDate != "" {
 		if year := extractYear(game.ReleaseDate); year != "" {
@@ -955,7 +955,7 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		}
 	}
 	if game.Genre != "" {
-		titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypeGenre), Tag: game.Genre})
+		titleTags = appendNormalizedTag(titleTags, string(tags.TagTypeGenre), game.Genre, game.Genre)
 	}
 	// Players: title-level because it describes the game, not a per-ROM variant.
 	// Exclusive type: only the highest player count is kept per title.
@@ -965,13 +965,12 @@ func (g *GamelistXMLScraper) MapToDB(record *GamelistRecord) scraper.MapResult {
 		}
 	}
 	if game.ArcadeSystemName != "" {
-		titleTags = append(titleTags, database.TagInfo{
-			Type: string(tags.TagTypeArcadeBoard),
-			Tag:  game.ArcadeSystemName,
-		})
+		titleTags = appendNormalizedTag(
+			titleTags, string(tags.TagTypeArcadeBoard), game.ArcadeSystemName, game.ArcadeSystemName,
+		)
 	}
 	if game.Family != "" {
-		titleTags = append(titleTags, database.TagInfo{Type: string(tags.TagTypeGameFamily), Tag: game.Family})
+		titleTags = appendNormalizedTag(titleTags, string(tags.TagTypeGameFamily), game.Family, game.Family)
 	}
 
 	// --- MediaTitleProperties: title-level shared static content ---
@@ -1188,9 +1187,17 @@ func splitCSV(s string) []string {
 
 func appendCSVTags(tagInfos []database.TagInfo, tagType, raw string) []database.TagInfo {
 	for _, value := range splitCSV(raw) {
-		tagInfos = append(tagInfos, database.TagInfo{Type: tagType, Tag: strings.ToLower(value)})
+		tagInfos = appendNormalizedTag(tagInfos, tagType, value, "")
 	}
 	return tagInfos
+}
+
+func appendNormalizedTag(tagInfos []database.TagInfo, tagType, raw, label string) []database.TagInfo {
+	normalized := tags.NormalizeTagValue(tagType, raw)
+	if normalized == "" {
+		return tagInfos
+	}
+	return append(tagInfos, database.TagInfo{Type: tagType, Tag: normalized, Label: label})
 }
 
 // pathProp resolves esPath to an absolute path and returns a MediaProperty for
