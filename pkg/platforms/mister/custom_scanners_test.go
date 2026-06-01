@@ -581,18 +581,21 @@ func TestFilterNeoGeoGameContents(t *testing.T) {
 			"mslug": "Metal Slug",
 		}
 
+		nestedRomPath := filepath.Join(
+			string(filepath.Separator), "media", "fat", "NEOGEO", "favorites", "mslug", "crom0",
+		)
+		nestedNeoPath := filepath.Join(
+			string(filepath.Separator), "media", "fat", "NEOGEO", "favorites", "collection", "game.neo",
+		)
 		input := []platforms.ScanResult{
-			{Path: filepath.Join(string(filepath.Separator), "media", "fat", "NEOGEO", "favorites", "mslug", "crom0")},
-			{Path: filepath.Join(string(filepath.Separator), "media", "fat", "NEOGEO", "favorites", "collection", "game.neo")},
+			{Path: nestedRomPath},
+			{Path: nestedNeoPath},
 		}
 
 		result := filterNeoGeoGameContents(input, romsets, defaultNeogeoPaths)
 
 		require.Len(t, result, 1)
-		assert.Equal(t,
-			filepath.Join(string(filepath.Separator), "media", "fat", "NEOGEO", "favorites", "collection", "game.neo"),
-			result[0].Path,
-		)
+		assert.Equal(t, nestedNeoPath, result[0].Path)
 	})
 
 	t.Run("handles multiple NEOGEO paths", func(t *testing.T) {

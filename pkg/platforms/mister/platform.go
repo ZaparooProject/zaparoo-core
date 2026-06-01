@@ -872,7 +872,7 @@ func collectNeoGeoRomsetEntries(
 		return nil
 	})
 	if err != nil {
-		return results, err
+		return results, fmt.Errorf("failed to walk neogeo romsets: %w", err)
 	}
 
 	return results, nil
