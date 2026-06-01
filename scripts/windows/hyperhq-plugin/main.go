@@ -18,7 +18,7 @@
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 // hyperhq-plugin is the Zaparoo bridge for HyperHQ. HyperHQ launches this
-// executable as a plugin and exposes a Socket.IO endpoint on localhost; the
+// executable as a plugin and exposes a Socket.IO endpoint on loopback; the
 // plugin connects to that endpoint, authenticates, and forwards game events to
 // Zaparoo Core via a named pipe. Commands flow the other way: Zaparoo Core
 // requests system/game lists and game launches over the pipe, and this bridge
@@ -416,7 +416,7 @@ func run() error {
 }
 
 func socketIOManagerURL(port string) string {
-	return fmt.Sprintf("http://localhost:%s", port)
+	return fmt.Sprintf("http://127.0.0.1:%s", port)
 }
 
 func onSocket(sock hqSocket, event string, listener func(...any)) {

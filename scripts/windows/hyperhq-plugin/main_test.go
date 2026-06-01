@@ -130,7 +130,7 @@ func TestPluginManifestMatchesHyperHQExecutableSocketIODocs(t *testing.T) {
 
 func TestSocketIOManagerURLUsesServerOrigin(t *testing.T) {
 	got := socketIOManagerURL("52789")
-	want := "http://localhost:52789"
+	want := "http://127.0.0.1:52789"
 	if got != want {
 		t.Fatalf("socketIOManagerURL() = %q, want %q", got, want)
 	}
