@@ -96,11 +96,20 @@ func TestSetActiveCard_DuplicateEmptyRemovalDoesNotNotify(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	state, notifications := NewState(mockPlatform, "test-boot-uuid")
 
+	seedToken := tokens.Token{
+		UID:      "id",
+		Text:     "seed-token",
+		ScanTime: time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC),
+	}
+	state.SetActiveCard(seedToken)
+	assert.Equal(t, models.NotificationTokensAdded, (<-notifications).Method)
+
 	state.SetActiveCard(tokens.Token{})
+	assert.Equal(t, models.NotificationTokensRemoved, (<-notifications).Method)
 	state.SetActiveCard(tokens.Token{})
 
-	assert.True(t, state.GetActiveCard().ScanTime.IsZero())
-	assert.True(t, state.GetLastScanned().ScanTime.IsZero())
+	assert.Equal(t, tokens.Token{}, state.GetActiveCard())
+	assert.Equal(t, seedToken, state.GetLastScanned())
 
 	select {
 	case notification := <-notifications:
