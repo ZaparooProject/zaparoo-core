@@ -820,6 +820,73 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	assert.Empty(t, results)
 }
 
+func TestMediaDB_IndexedSystemsExcludesMissingAndEmptySystems(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	threeDOSystem, err := systemdefs.GetSystem(systemdefs.System3DO)
+	require.NoError(t, err)
+	gbSystem, err := systemdefs.GetSystem("Gameboy")
+	require.NoError(t, err)
+
+	err = mediaDB.BeginTransaction(false)
+	require.NoError(t, err)
+
+	insertedNES, err := mediaDB.InsertSystem(database.System{SystemID: nesSystem.ID, Name: "NES"})
+	require.NoError(t, err)
+	nesPath := filepath.Join("roms", "nes", "game.nes")
+	insertedNESTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: insertedNES.DBID,
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, helpers.FilenameFromPath(nesPath)),
+		Name:       "NES Game",
+	})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMedia(database.Media{
+		SystemDBID:     insertedNES.DBID,
+		MediaTitleDBID: insertedNESTitle.DBID,
+		Path:           nesPath,
+	})
+	require.NoError(t, err)
+
+	inserted3DO, err := mediaDB.InsertSystem(database.System{SystemID: threeDOSystem.ID, Name: "3DO"})
+	require.NoError(t, err)
+	threeDOPath := filepath.Join("roms", "3do", "game.chd")
+	inserted3DOTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: inserted3DO.DBID,
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, helpers.FilenameFromPath(threeDOPath)),
+		Name:       "3DO Game",
+	})
+	require.NoError(t, err)
+	inserted3DOMedia, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     inserted3DO.DBID,
+		MediaTitleDBID: inserted3DOTitle.DBID,
+		Path:           threeDOPath,
+	})
+	require.NoError(t, err)
+
+	_, err = mediaDB.InsertSystem(database.System{SystemID: gbSystem.ID, Name: "Game Boy"})
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	err = mediaDB.BulkSetMediaMissing(map[int]struct{}{int(inserted3DOMedia.DBID): {}})
+	require.NoError(t, err)
+
+	systems, err := mediaDB.IndexedSystems()
+	require.NoError(t, err)
+
+	assert.Contains(t, systems, nesSystem.ID)
+	assert.NotContains(t, systems, threeDOSystem.ID, "systems with only missing media must be hidden")
+	assert.NotContains(t, systems, gbSystem.ID, "systems with no media must be hidden")
+}
+
 func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
