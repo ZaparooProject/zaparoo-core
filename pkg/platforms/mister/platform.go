@@ -48,6 +48,7 @@ import (
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/afero"
 )
 
 // arcadeCardLaunchCache stores the last arcade game launched via card to prevent duplicate tracker notifications.
@@ -741,18 +742,24 @@ func readRomsets(filePath string) ([]Romset, error) {
 	return romsets.Romsets, nil
 }
 
-// isInsideGameFolder checks if a path is a file inside a game folder.
-// A game folder is an immediate child directory of a NEOGEO path that matches romsets.xml.
+// isInsideGameFolder checks if a path is a file inside an extracted game folder.
+// A game folder is any directory under a NEOGEO path that matches romsets.xml.
 //
 // Example: /media/fat/games/NEOGEO/ct2k3sa/crom0
 //   - NEOGEO path: /media/fat/games/NEOGEO
-//   - First child: ct2k3sa (matches romsets -> game folder)
+//   - Directory segment: ct2k3sa (matches romsets -> game folder)
+//   - File inside: crom0
+//   - Returns true
+//
+// Example: /media/fat/games/NEOGEO/favorites/ct2k3sa/crom0
+//   - NEOGEO path: /media/fat/games/NEOGEO
+//   - Directory segment: ct2k3sa (matches romsets -> game folder)
 //   - File inside: crom0
 //   - Returns true
 //
 // Example: /media/fat/games/NEOGEO/collection/game.neo
 //   - NEOGEO path: /media/fat/games/NEOGEO
-//   - First child: collection (not in romsets -> not a game folder)
+//   - Directory segment: collection (not in romsets -> not a game folder)
 //   - Returns false
 func isInsideGameFolder(
 	lowerPath string,
@@ -782,14 +789,94 @@ func isInsideGameFolder(
 			continue // Not deep enough to be inside a folder
 		}
 
-		// First component is the potential game folder name
-		firstDir := parts[0]
-
-		if _, isGame := romsetNames[firstDir]; isGame {
-			return true
+		// Any directory segment before the file can be the game folder.
+		for _, dir := range parts[:len(parts)-1] {
+			if _, isGame := romsetNames[dir]; isGame {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func collectNeoGeoRomsetEntries(
+	ctx context.Context,
+	fs afero.Fs,
+	root string,
+	romsetNames map[string]string,
+	seen map[string]struct{},
+) ([]platforms.ScanResult, error) {
+	results := make([]platforms.ScanResult, 0)
+	cleanRoot := filepath.Clean(root)
+
+	err := afero.Walk(fs, cleanRoot, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			log.Warn().Err(walkErr).Str("path", path).Msg("unable to read neogeo entry")
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		if path == cleanRoot {
+			return nil
+		}
+
+		base := info.Name()
+		if info.IsDir() {
+			if base == "__MACOSX" || strings.HasPrefix(base, ".") {
+				return filepath.SkipDir
+			}
+
+			markerPath := filepath.Join(path, ".zaparooignore")
+			if _, statErr := fs.Stat(markerPath); statErr == nil {
+				log.Info().Str("path", path).Msg("skipping directory with .zaparooignore marker")
+				return filepath.SkipDir
+			}
+		}
+
+		lowerBase := strings.ToLower(base)
+		candidateID := lowerBase
+		isZip := filepath.Ext(lowerBase) == ".zip"
+		if isZip {
+			candidateID = strings.TrimSuffix(lowerBase, filepath.Ext(lowerBase))
+		} else if !info.IsDir() {
+			return nil
+		}
+
+		altName, ok := romsetNames[candidateID]
+		if !ok {
+			return nil
+		}
+
+		cleanPath := filepath.Clean(path)
+		if _, ok := seen[cleanPath]; ok {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		seen[cleanPath] = struct{}{}
+
+		results = append(results, platforms.ScanResult{
+			Path:  cleanPath,
+			Name:  altName,
+			NoExt: true,
+		})
+
+		if info.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return results, fmt.Errorf("failed to walk neogeo romsets: %w", err)
+	}
+
+	return results, nil
 }
 
 // filterNeoGeoGameContents filters out scan results that are inside games
@@ -1097,42 +1184,28 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				results = filterNeoGeoGameContents(results, names, neogeoPaths)
 			}
 
-			// Second pass: read directories and add games
-			for _, sf := range sfs {
-				select {
-				case <-ctx.Done():
-					return results, ctx.Err()
-				default:
-				}
-
-				// read directory
-				dir, err := os.Open(sf.Path)
-				if err != nil {
-					log.Warn().Err(err).Msg("unable to open neogeo directory")
-					continue
-				}
-
-				files, err := dir.Readdirnames(-1)
-				_ = dir.Close()
-
-				if err != nil {
-					log.Warn().Err(err).Msg("unable to read neogeo directory")
-					continue
-				}
-
-				for _, f := range files {
-					id := f
-					if filepath.Ext(strings.ToLower(f)) == ".zip" {
-						id = strings.TrimSuffix(f, filepath.Ext(f))
+			// Second pass: read directories recursively and add launchable romset entries.
+			if len(names) == 0 {
+				log.Debug().Msg("skipping neogeo recursive scan without romsets")
+			} else {
+				osFs := afero.NewOsFs()
+				seenNeoGeoEntries := make(map[string]struct{})
+				for _, sf := range sfs {
+					select {
+					case <-ctx.Done():
+						return results, ctx.Err()
+					default:
 					}
 
-					if altName, ok := names[strings.ToLower(id)]; ok {
-						results = append(results, platforms.ScanResult{
-							Path:  filepath.Join(sf.Path, f),
-							Name:  altName,
-							NoExt: true,
-						})
+					entries, scanErr := collectNeoGeoRomsetEntries(ctx, osFs, sf.Path, names, seenNeoGeoEntries)
+					if scanErr != nil {
+						if ctx.Err() != nil {
+							return results, ctx.Err()
+						}
+						log.Warn().Err(scanErr).Str("path", sf.Path).Msg("unable to scan neogeo directory")
+						continue
 					}
+					results = append(results, entries...)
 				}
 			}
 
