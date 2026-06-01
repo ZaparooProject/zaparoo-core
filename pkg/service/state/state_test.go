@@ -102,10 +102,20 @@ func TestSetActiveCard_DuplicateEmptyRemovalDoesNotNotify(t *testing.T) {
 		ScanTime: time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC),
 	}
 	state.SetActiveCard(seedToken)
-	assert.Equal(t, models.NotificationTokensAdded, (<-notifications).Method)
+	select {
+	case notification := <-notifications:
+		assert.Equal(t, models.NotificationTokensAdded, notification.Method)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tokens added notification")
+	}
 
 	state.SetActiveCard(tokens.Token{})
-	assert.Equal(t, models.NotificationTokensRemoved, (<-notifications).Method)
+	select {
+	case notification := <-notifications:
+		assert.Equal(t, models.NotificationTokensRemoved, notification.Method)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tokens removed notification")
+	}
 	state.SetActiveCard(tokens.Token{})
 
 	assert.Equal(t, tokens.Token{}, state.GetActiveCard())
