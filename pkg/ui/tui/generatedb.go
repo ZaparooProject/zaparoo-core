@@ -156,20 +156,20 @@ type mediaManageUpdate struct {
 }
 
 type mediaManageInitialState struct {
-	media        models.MediaResponse
 	mediaErr     error
-	scrapeStatus models.ScrapingStatusResponse
 	scrapeErr    error
+	media        models.MediaResponse
+	scrapeStatus models.ScrapingStatusResponse
 }
 
 func loadMediaManageInitialState(cfg *config.Instance) mediaManageInitialState {
 	type mediaResult struct {
-		media models.MediaResponse
 		err   error
+		media models.MediaResponse
 	}
 	type scrapeResult struct {
-		status models.ScrapingStatusResponse
 		err    error
+		status models.ScrapingStatusResponse
 	}
 
 	mediaCh := make(chan mediaResult, 1)
@@ -382,11 +382,12 @@ func formatScrapeProgress(status *models.ScrapingStatusResponse, scraperName str
 	} else if status.ScraperID != "" {
 		parts = append(parts, status.ScraperID)
 	}
-	if status.CurrentSystem != nil && status.CurrentSystem.SystemName != "" {
+	switch {
+	case status.CurrentSystem != nil && status.CurrentSystem.SystemName != "":
 		parts = append(parts, status.CurrentSystem.SystemName)
-	} else if status.CurrentSystem != nil && status.CurrentSystem.SystemID != "" {
+	case status.CurrentSystem != nil && status.CurrentSystem.SystemID != "":
 		parts = append(parts, status.CurrentSystem.SystemID)
-	} else if status.SystemID != "" {
+	case status.SystemID != "":
 		parts = append(parts, status.SystemID)
 	}
 
@@ -417,11 +418,12 @@ func formatScrapeProgress(status *models.ScrapingStatusResponse, scraperName str
 	if status.Paused {
 		progress = "Paused"
 	}
-	if total > 0 {
+	switch {
+	case total > 0:
 		lines = append(lines, fmt.Sprintf("%s: %d / %d", progress, processed, total))
-	} else if status.Paused {
+	case status.Paused:
 		lines = append(lines, "Paused")
-	} else {
+	default:
 		lines = append(lines, fmt.Sprintf("Records: %d processed", processed))
 	}
 	lines = append(lines, fmt.Sprintf("Matched: %d  Skipped: %d", matched, skipped))
@@ -435,14 +437,14 @@ func mediaIndexProgress(current, total int) float64 {
 	return float64(current) / float64(total)
 }
 
-func scrapeOverallProgress(status models.ScrapingStatusResponse) float64 {
+func scrapeOverallProgress(status *models.ScrapingStatusResponse) float64 {
 	if status.CurrentStep != nil && status.TotalSteps != nil {
 		return mediaIndexProgress(*status.CurrentStep, *status.TotalSteps)
 	}
 	return mediaIndexProgress(status.Processed, status.Total)
 }
 
-func scrapeCurrentSystemProgress(status models.ScrapingStatusResponse) float64 {
+func scrapeCurrentSystemProgress(status *models.ScrapingStatusResponse) float64 {
 	if status.CurrentSystem != nil {
 		return mediaIndexProgress(status.CurrentSystem.Processed, status.CurrentSystem.Total)
 	}
@@ -1002,8 +1004,8 @@ func BuildGenerateDBPage(
 			}
 			app.QueueUpdateDraw(func() {
 				progressTitle.SetText("Scraping metadata...")
-				progressBar.SetProgress(scrapeOverallProgress(status))
-				systemProgressBar.SetProgress(scrapeCurrentSystemProgress(status))
+				progressBar.SetProgress(scrapeOverallProgress(&status))
+				systemProgressBar.SetProgress(scrapeCurrentSystemProgress(&status))
 				progressStatusText.SetText(formatScrapeProgress(&status, scraper.Name))
 				frame.SetHelpText("Stop current operation")
 				setProgressButtonBar(false)
@@ -1025,8 +1027,8 @@ func BuildGenerateDBPage(
 		app.QueueUpdateDraw(func() {
 			showScrapeProgressLayout()
 			progressTitle.SetText("Scraping metadata...")
-			progressBar.SetProgress(scrapeOverallProgress(status))
-			systemProgressBar.SetProgress(scrapeCurrentSystemProgress(status))
+			progressBar.SetProgress(scrapeOverallProgress(&status))
+			systemProgressBar.SetProgress(scrapeCurrentSystemProgress(&status))
 			scraperName := ""
 			for _, scraper := range scrapeState.scrapers {
 				if scraper.ID == status.ScraperID {
@@ -1065,8 +1067,8 @@ func BuildGenerateDBPage(
 		setCancelled("")
 		showScrapeProgressLayout()
 		progressTitle.SetText("Scraping metadata...")
-		progressBar.SetProgress(scrapeOverallProgress(status))
-		systemProgressBar.SetProgress(scrapeCurrentSystemProgress(status))
+		progressBar.SetProgress(scrapeOverallProgress(&status))
+		systemProgressBar.SetProgress(scrapeCurrentSystemProgress(&status))
 		progressStatusText.SetText(formatScrapeProgress(&status, ""))
 		statePages.SwitchToPage(mediaManageProgressPage)
 		setProgressVisible(true)

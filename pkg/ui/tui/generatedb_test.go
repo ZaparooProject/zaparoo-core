@@ -349,12 +349,13 @@ func TestScrapeProgressHelpers(t *testing.T) {
 		},
 	}
 
-	assert.InDelta(t, 0.4, scrapeOverallProgress(status), 0.001)
-	assert.InDelta(t, 0.5, scrapeCurrentSystemProgress(status), 0.001)
-	assert.InDelta(t, 0.7, scrapeOverallProgress(models.ScrapingStatusResponse{
+	assert.InDelta(t, 0.4, scrapeOverallProgress(&status), 0.001)
+	assert.InDelta(t, 0.5, scrapeCurrentSystemProgress(&status), 0.001)
+	fallbackStatus := models.ScrapingStatusResponse{
 		Processed: 7,
 		Total:     10,
-	}), 0.001)
+	}
+	assert.InDelta(t, 0.7, scrapeOverallProgress(&fallbackStatus), 0.001)
 }
 
 func TestMediaIndexProgress(t *testing.T) {
