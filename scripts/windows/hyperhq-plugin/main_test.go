@@ -26,10 +26,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"nhooyr.io/websocket"
 )
 
 type fakeSocket struct {
@@ -128,11 +133,163 @@ func TestPluginManifestMatchesHyperHQExecutableSocketIODocs(t *testing.T) {
 	}
 }
 
-func TestSocketIOManagerURLUsesServerOrigin(t *testing.T) {
-	got := socketIOManagerURL("52789")
-	want := "http://127.0.0.1:52789"
+func TestSocketIOWebSocketURLUsesEngineEndpoint(t *testing.T) {
+	got := socketIOWebSocketURL("52789")
+	want := "ws://127.0.0.1:52789/socket.io/?EIO=4&transport=websocket"
 	if got != want {
-		t.Fatalf("socketIOManagerURL() = %q, want %q", got, want)
+		t.Fatalf("socketIOWebSocketURL() = %q, want %q", got, want)
+	}
+}
+
+func TestEncodeSocketIOEventPacket(t *testing.T) {
+	packet, err := encodeSocketIOEventPacket("authenticate", hqAuthRequest{
+		PluginID:  "zaparoo-hyperhq",
+		Challenge: "challenge",
+	})
+	if err != nil {
+		t.Fatalf("encodeSocketIOEventPacket() error = %v", err)
+	}
+
+	want := `42["authenticate",{"pluginId":"zaparoo-hyperhq","challenge":"challenge"}]`
+	if packet != want {
+		t.Fatalf("encodeSocketIOEventPacket() = %q, want %q", packet, want)
+	}
+}
+
+func TestDecodeSocketIOEventPacket(t *testing.T) {
+	event, args, err := decodeSocketIOEventPacket(
+		`42["authenticated",{"success":true,"sessionToken":"session-token"}]`,
+	)
+	if err != nil {
+		t.Fatalf("decodeSocketIOEventPacket() error = %v", err)
+	}
+	if event != "authenticated" || len(args) != 1 {
+		t.Fatalf("decodeSocketIOEventPacket() = event %q args %+v, want authenticated with one arg", event, args)
+	}
+
+	var resp hqAuthResponse
+	if err := decodeFirst(args, &resp); err != nil {
+		t.Fatalf("decodeFirst() error = %v", err)
+	}
+	if !resp.Success || resp.SessionToken != "session-token" {
+		t.Fatalf("decoded auth response = %+v, want success session-token", resp)
+	}
+}
+
+func TestSocketIOPacketIDParsing(t *testing.T) {
+	if got := socketIOSIDFromOpenPacket(`0{"sid":"engine-id","pingInterval":30000}`); got != "engine-id" {
+		t.Fatalf("socketIOSIDFromOpenPacket() = %q, want engine-id", got)
+	}
+	if got := socketIOSIDFromConnectPacket(`40{"sid":"namespace-id"}`); got != "namespace-id" {
+		t.Fatalf("socketIOSIDFromConnectPacket() = %q, want namespace-id", got)
+	}
+	if got := socketIOSIDFromConnectPacket(socketIOPacketConnect); got != "" {
+		t.Fatalf("socketIOSIDFromConnectPacket(empty) = %q, want empty", got)
+	}
+}
+
+func TestSocketIOClientAuthenticatesOverEngineWebSocket(t *testing.T) {
+	authPacket := make(chan string, 1)
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer func() {
+			_ = conn.Close(websocket.StatusNormalClosure, "")
+		}()
+
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+
+		if err := conn.Write(ctx, websocket.MessageText, []byte(`0{"sid":"engine-id"}`)); err != nil {
+			serverErr <- err
+			return
+		}
+		if _, data, err := conn.Read(ctx); err != nil {
+			serverErr <- err
+			return
+		} else if string(data) != socketIOPacketConnect {
+			serverErr <- errors.New("client did not send default namespace connect packet")
+			return
+		}
+		if err := conn.Write(ctx, websocket.MessageText, []byte(`40{"sid":"namespace-id"}`)); err != nil {
+			serverErr <- err
+			return
+		}
+		if _, data, err := conn.Read(ctx); err != nil {
+			serverErr <- err
+			return
+		} else {
+			authPacket <- string(data)
+		}
+		if err := conn.Write(
+			ctx, websocket.MessageText,
+			[]byte(`42["authenticated",{"success":true,"sessionToken":"session-token"}]`),
+		); err != nil {
+			serverErr <- err
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := newSocketIOClient(
+		ctx,
+		"ws"+strings.TrimPrefix(server.URL, "http")+"/socket.io/?EIO=4&transport=websocket",
+	)
+	authDone := make(chan hqAuthResponse, 1)
+	clientErr := make(chan error, 1)
+	client.OnConnect(func() {
+		err := client.Emit("authenticate", hqAuthRequest{
+			PluginID:  "zaparoo-hyperhq",
+			Challenge: "challenge",
+		})
+		if err != nil {
+			clientErr <- err
+		}
+	})
+	client.OnConnectError(func(any) {
+		clientErr <- errors.New("client connect error")
+	})
+	client.OnEvent("authenticated", func(data any) {
+		var resp hqAuthResponse
+		if err := decodeFirst([]any{data}, &resp); err != nil {
+			clientErr <- err
+			return
+		}
+		authDone <- resp
+	})
+	client.Connect()
+
+	expectedPacket := `42["authenticate",{"pluginId":"zaparoo-hyperhq","challenge":"challenge"}]`
+	select {
+	case got := <-authPacket:
+		if got != expectedPacket {
+			t.Fatalf("auth packet = %q, want %q", got, expectedPacket)
+		}
+	case err := <-serverErr:
+		t.Fatalf("server error: %v", err)
+	case err := <-clientErr:
+		t.Fatalf("client error: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for auth packet")
+	}
+
+	select {
+	case resp := <-authDone:
+		if !resp.Success || resp.SessionToken != "session-token" || client.ID() != "namespace-id" {
+			t.Fatalf("auth response = %+v clientID=%q, want success token and namespace-id", resp, client.ID())
+		}
+	case err := <-serverErr:
+		t.Fatalf("server error: %v", err)
+	case err := <-clientErr:
+		t.Fatalf("client error: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for authenticated event")
 	}
 }
 

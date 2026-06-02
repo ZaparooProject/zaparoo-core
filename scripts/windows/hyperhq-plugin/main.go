@@ -35,6 +35,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -52,8 +53,7 @@ import (
 	"syscall"
 	"time"
 
-	sio "github.com/karagenc/socket.io-go"
-	eio "github.com/karagenc/socket.io-go/engine.io"
+	"nhooyr.io/websocket"
 )
 
 const (
@@ -61,12 +61,19 @@ const (
 	pluginNamespace = "/"
 	pluginVersion   = "0.1.0"
 
-	pipeReconnectDelay = 2 * time.Second
-	pipeBufferMax      = 16 * 1024 * 1024 // 16MB to match Zaparoo Core scanner buffer
-	requestTimeout     = 30 * time.Second
-	launchAckTimeout   = 5 * time.Second
-	gameListMethod     = "getGamesForSystem"
-	gameListParamKey   = "systemId"
+	pipeReconnectDelay    = 2 * time.Second
+	socketReconnectDelay  = 2 * time.Second
+	pipeBufferMax         = 16 * 1024 * 1024 // 16MB to match Zaparoo Core scanner buffer
+	requestTimeout        = 30 * time.Second
+	socketIOPacketOpen    = "0"
+	socketIOPacketPing    = "2"
+	socketIOPacketPong    = "3"
+	socketIOPacketConnect = "40"
+	socketIOPacketEvent   = "42"
+	socketIOPacketError   = "44"
+	launchAckTimeout      = 5 * time.Second
+	gameListMethod        = "getGamesForSystem"
+	gameListParamKey      = "systemId"
 )
 
 // HyperHQ event types carried on the hyperHqEvent envelope.
@@ -258,39 +265,317 @@ type hqSocket interface {
 	ID() string
 }
 
-type karagencSocket struct {
-	socket sio.ClientSocket
+type socketIOClient struct {
+	ctx                context.Context
+	url                string
+	conn               *websocket.Conn
+	id                 string
+	events             map[string]func(any)
+	connectListener    func()
+	errorListener      func(any)
+	disconnectListener func(any)
+	connMu             sync.RWMutex
+	handlerMu          sync.RWMutex
+	writeMu            sync.Mutex
 }
 
-func (s *karagencSocket) Emit(event string, args ...any) error {
-	s.socket.Emit(event, args...)
-	return nil
+func newSocketIOClient(ctx context.Context, url string) *socketIOClient {
+	return &socketIOClient{
+		ctx:    ctx,
+		url:    url,
+		events: make(map[string]func(any)),
+	}
 }
 
-func (s *karagencSocket) OnEvent(event string, listener func(any)) {
-	s.socket.OnEvent(event, listener)
+func (s *socketIOClient) Emit(event string, args ...any) error {
+	packet, err := encodeSocketIOEventPacket(event, args...)
+	if err != nil {
+		return err
+	}
+
+	s.connMu.RLock()
+	conn := s.conn
+	s.connMu.RUnlock()
+	if conn == nil {
+		return errors.New("socket not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(s.ctx, requestTimeout)
+	defer cancel()
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	return conn.Write(ctx, websocket.MessageText, []byte(packet))
 }
 
-func (s *karagencSocket) OnConnect(listener func()) {
-	s.socket.OnConnect(listener)
+func (s *socketIOClient) OnEvent(event string, listener func(any)) {
+	s.handlerMu.Lock()
+	s.events[event] = listener
+	s.handlerMu.Unlock()
 }
 
-func (s *karagencSocket) OnConnectError(listener func(any)) {
-	s.socket.OnConnectError(listener)
+func (s *socketIOClient) OnConnect(listener func()) {
+	s.handlerMu.Lock()
+	s.connectListener = listener
+	s.handlerMu.Unlock()
 }
 
-func (s *karagencSocket) OnDisconnect(listener func(any)) {
-	s.socket.OnDisconnect(func(reason sio.Reason) {
+func (s *socketIOClient) OnConnectError(listener func(any)) {
+	s.handlerMu.Lock()
+	s.errorListener = listener
+	s.handlerMu.Unlock()
+}
+
+func (s *socketIOClient) OnDisconnect(listener func(any)) {
+	s.handlerMu.Lock()
+	s.disconnectListener = listener
+	s.handlerMu.Unlock()
+}
+
+func (s *socketIOClient) Connect() {
+	go s.run()
+}
+
+func (s *socketIOClient) ID() string {
+	s.connMu.RLock()
+	defer s.connMu.RUnlock()
+	return s.id
+}
+
+func (s *socketIOClient) run() {
+	for {
+		connected, err := s.connectOnce()
+		if s.ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			if connected {
+				s.callDisconnect(err)
+			} else {
+				s.callConnectError(err)
+			}
+		} else if connected {
+			s.callDisconnect("closed")
+		}
+
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-time.After(socketReconnectDelay):
+		}
+	}
+}
+
+func (s *socketIOClient) connectOnce() (connected bool, err error) {
+	ctx, cancel := context.WithTimeout(s.ctx, requestTimeout)
+	defer cancel()
+
+	conn, resp, err := websocket.Dial(ctx, s.url, nil)
+	if resp != nil && resp.Body != nil {
+		defer func() {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				log.Printf("Socket.IO handshake response close error: %v", closeErr)
+			}
+		}()
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		s.setConn(nil)
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+	}()
+
+	s.setConn(conn)
+	opened := false
+
+	for {
+		msgType, data, readErr := conn.Read(s.ctx)
+		if readErr != nil {
+			return connected, readErr
+		}
+		if msgType != websocket.MessageText {
+			continue
+		}
+
+		packet := string(data)
+		switch {
+		case strings.HasPrefix(packet, socketIOPacketOpen):
+			if opened {
+				continue
+			}
+			opened = true
+			s.setID(socketIOSIDFromOpenPacket(packet))
+			if writeErr := s.writeText(s.ctx, conn, socketIOPacketConnect); writeErr != nil {
+				return false, writeErr
+			}
+		case packet == socketIOPacketPing:
+			if writeErr := s.writeText(s.ctx, conn, socketIOPacketPong); writeErr != nil {
+				return connected, writeErr
+			}
+		case strings.HasPrefix(packet, socketIOPacketConnect):
+			connected = true
+			if id := socketIOSIDFromConnectPacket(packet); id != "" {
+				s.setID(id)
+			}
+			s.callConnect()
+		case strings.HasPrefix(packet, socketIOPacketEvent):
+			event, args, decodeErr := decodeSocketIOEventPacket(packet)
+			if decodeErr != nil {
+				log.Printf("Socket.IO event decode failed for packet %q: %v", packet, decodeErr)
+				continue
+			}
+			s.dispatchEvent(event, args)
+		case strings.HasPrefix(packet, socketIOPacketError):
+			return connected, fmt.Errorf("Socket.IO error packet: %s", packet)
+		default:
+			log.Printf("ignoring Socket.IO packet: %s", packet)
+		}
+	}
+}
+
+func (s *socketIOClient) setConn(conn *websocket.Conn) {
+	s.connMu.Lock()
+	s.conn = conn
+	if conn == nil {
+		s.id = ""
+	}
+	s.connMu.Unlock()
+}
+
+func (s *socketIOClient) setID(id string) {
+	if id == "" {
+		return
+	}
+	s.connMu.Lock()
+	s.id = id
+	s.connMu.Unlock()
+}
+
+func (s *socketIOClient) writeText(ctx context.Context, conn *websocket.Conn, packet string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return conn.Write(ctx, websocket.MessageText, []byte(packet))
+}
+
+func (s *socketIOClient) callConnect() {
+	s.handlerMu.RLock()
+	listener := s.connectListener
+	s.handlerMu.RUnlock()
+	if listener != nil {
+		listener()
+	}
+}
+
+func (s *socketIOClient) callConnectError(err any) {
+	s.handlerMu.RLock()
+	listener := s.errorListener
+	s.handlerMu.RUnlock()
+	if listener != nil {
+		listener(err)
+	}
+}
+
+func (s *socketIOClient) callDisconnect(reason any) {
+	s.handlerMu.RLock()
+	listener := s.disconnectListener
+	s.handlerMu.RUnlock()
+	if listener != nil {
 		listener(reason)
-	})
+	}
 }
 
-func (s *karagencSocket) Connect() {
-	s.socket.Connect()
+func (s *socketIOClient) dispatchEvent(event string, args []any) {
+	s.handlerMu.RLock()
+	listener := s.events[event]
+	s.handlerMu.RUnlock()
+	if listener == nil {
+		return
+	}
+
+	if len(args) == 0 {
+		listener(nil)
+		return
+	}
+	listener(args[0])
 }
 
-func (s *karagencSocket) ID() string {
-	return string(s.socket.ID())
+func encodeSocketIOEventPacket(event string, args ...any) (string, error) {
+	if event == "" {
+		return "", errors.New("event name is required")
+	}
+
+	payload := make([]any, 0, len(args)+1)
+	payload = append(payload, event)
+	payload = append(payload, args...)
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal Socket.IO event: %w", err)
+	}
+	return socketIOPacketEvent + string(data), nil
+}
+
+func decodeSocketIOEventPacket(packet string) (string, []any, error) {
+	if !strings.HasPrefix(packet, socketIOPacketEvent) {
+		return "", nil, fmt.Errorf("not a Socket.IO event packet: %s", packet)
+	}
+
+	var payload []json.RawMessage
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(packet, socketIOPacketEvent)), &payload); err != nil {
+		return "", nil, fmt.Errorf("unmarshal Socket.IO event: %w", err)
+	}
+	if len(payload) == 0 {
+		return "", nil, errors.New("Socket.IO event packet missing event name")
+	}
+
+	var event string
+	if err := json.Unmarshal(payload[0], &event); err != nil {
+		return "", nil, fmt.Errorf("unmarshal Socket.IO event name: %w", err)
+	}
+	if event == "" {
+		return "", nil, errors.New("Socket.IO event packet has empty event name")
+	}
+
+	args := make([]any, 0, len(payload)-1)
+	for _, raw := range payload[1:] {
+		var arg any
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&arg); err != nil {
+			return "", nil, fmt.Errorf("unmarshal Socket.IO event arg: %w", err)
+		}
+		args = append(args, arg)
+	}
+
+	return event, args, nil
+}
+
+func socketIOSIDFromOpenPacket(packet string) string {
+	payload := strings.TrimPrefix(packet, socketIOPacketOpen)
+	var open struct {
+		SID string `json:"sid"`
+	}
+	if err := json.Unmarshal([]byte(payload), &open); err != nil {
+		return ""
+	}
+	return open.SID
+}
+
+func socketIOSIDFromConnectPacket(packet string) string {
+	payload := strings.TrimPrefix(packet, socketIOPacketConnect)
+	if payload == "" {
+		return ""
+	}
+
+	var open struct {
+		SID string `json:"sid"`
+	}
+	if err := json.Unmarshal([]byte(payload), &open); err != nil {
+		return ""
+	}
+	return open.SID
 }
 
 type pipeEventWriter interface {
@@ -415,8 +700,8 @@ func run() error {
 	return nil
 }
 
-func socketIOManagerURL(port string) string {
-	return fmt.Sprintf("http://127.0.0.1:%s", port)
+func socketIOWebSocketURL(port string) string {
+	return fmt.Sprintf("ws://127.0.0.1:%s/socket.io/?EIO=4&transport=websocket", port)
 }
 
 func onSocket(sock hqSocket, event string, listener func(...any)) {
@@ -436,20 +721,11 @@ func (b *bridge) clearSessionToken() {
 // completes (or fails). After that the socket runs in the background and
 // reconnects on its own.
 func (b *bridge) connectSocket(port string) error {
-	url := socketIOManagerURL(port)
+	url := socketIOWebSocketURL(port)
 	// #nosec G706 -- port is validated as numeric in run() before reaching here.
 	log.Printf("connecting to HyperHQ Socket.IO at %s namespace %s", url, pluginNamespace)
 
-	reconnectDelay := time.Second
-	reconnectDelayMax := 5 * time.Second
-	manager := sio.NewManager(url, &sio.ManagerConfig{
-		EIO: eio.ClientConfig{
-			Transports: []string{"polling", "websocket"},
-		},
-		ReconnectionDelay:    &reconnectDelay,
-		ReconnectionDelayMax: &reconnectDelayMax,
-	})
-	sock := &karagencSocket{socket: manager.Socket(pluginNamespace, nil)}
+	sock := newSocketIOClient(b.ctx, url)
 	b.socket = sock
 
 	authDone := make(chan error, 1)
