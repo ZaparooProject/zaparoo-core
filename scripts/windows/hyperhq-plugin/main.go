@@ -416,7 +416,7 @@ func run() error {
 }
 
 func socketIOManagerURL(port string) string {
-	return fmt.Sprintf("http://127.0.0.1:%s", port)
+	return fmt.Sprintf("http://127.0.0.1:%s/socket.io/", port)
 }
 
 func onSocket(sock hqSocket, event string, listener func(...any)) {
