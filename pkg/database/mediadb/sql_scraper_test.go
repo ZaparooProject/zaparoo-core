@@ -570,8 +570,8 @@ func TestApplyScrapeResult_WritesSentinelLastPayload(t *testing.T) {
 
 	err := mediaDB.ApplyScrapeResult(ctx, 1, 1, &database.ScrapeWrite{
 		Sentinel:  database.TagInfo{Type: "scraper.test", Tag: "scraped"},
-		MediaTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
-		TitleTags: []database.TagInfo{{Type: "developer", Tag: "nintendo"}},
+		MediaTags: []database.TagInfo{{Type: "developer", Tag: "nintendo", Label: "Nintendo"}},
+		TitleTags: []database.TagInfo{{Type: "publisher", Tag: "nintendo", Label: "Nintendo"}},
 		TitleProps: []database.MediaProperty{{
 			TypeTag: "property:description",
 			Text:    "A classic",
@@ -597,6 +597,11 @@ func TestApplyScrapeResult_WritesSentinelLastPayload(t *testing.T) {
 		}
 		return false
 	})
+
+	usedTags, err := mediaDB.GetAllUsedTags(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, usedTags, database.TagInfo{Type: "developer", Tag: "nintendo", Label: "Nintendo", Count: 1})
+	assert.Contains(t, usedTags, database.TagInfo{Type: "publisher", Tag: "nintendo", Label: "Nintendo", Count: 1})
 
 	mediaProps, err := mediaDB.GetMediaProperties(ctx, 1)
 	require.NoError(t, err)

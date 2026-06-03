@@ -781,11 +781,17 @@ func TestMapToDB_FullGame(t *testing.T) {
 	assert.Contains(t, result.MediaTags, database.TagInfo{Type: string(tags.TagTypeRegion), Tag: "usa"})
 
 	// Title-level tags
-	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeDeveloper), Tag: "Nintendo"})
-	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypePublisher), Tag: "Nintendo"})
+	assert.Contains(t, result.TitleTags, database.TagInfo{
+		Type: string(tags.TagTypeDeveloper), Tag: "nintendo", Label: "Nintendo",
+	})
+	assert.Contains(t, result.TitleTags, database.TagInfo{
+		Type: string(tags.TagTypePublisher), Tag: "nintendo", Label: "Nintendo",
+	})
 	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeYear), Tag: "1985"})
 	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeRating), Tag: "75"})
-	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypeGenre), Tag: "Platform"})
+	assert.Contains(t, result.TitleTags, database.TagInfo{
+		Type: string(tags.TagTypeGenre), Tag: "platform", Label: "Platform",
+	})
 	assert.Contains(t, result.TitleTags, database.TagInfo{Type: string(tags.TagTypePlayers), Tag: "4"})
 
 	// Title-level properties
@@ -849,7 +855,9 @@ func TestMapToDB_ArcadeBoard(t *testing.T) {
 	}
 	titleTags := (&GamelistXMLScraper{}).MapToDB(&rec).TitleTags
 	require.NotEmpty(t, titleTags)
-	assert.Contains(t, titleTags, database.TagInfo{Type: string(tags.TagTypeArcadeBoard), Tag: "CPS2"})
+	assert.Contains(t, titleTags, database.TagInfo{
+		Type: string(tags.TagTypeArcadeBoard), Tag: "cps2", Label: "CPS2",
+	})
 }
 
 // --- MapToDB ScreenScraper ID ---
@@ -1527,7 +1535,9 @@ func TestMapToDB_GameFamily(t *testing.T) {
 	t.Parallel()
 	rec := GamelistRecord{Game: esapi.Game{Family: "Mario"}}
 	titleTags := (&GamelistXMLScraper{}).MapToDB(&rec).TitleTags
-	assert.Contains(t, titleTags, database.TagInfo{Type: string(tags.TagTypeGameFamily), Tag: "Mario"})
+	assert.Contains(t, titleTags, database.TagInfo{
+		Type: string(tags.TagTypeGameFamily), Tag: "mario", Label: "Mario",
+	})
 }
 
 func TestMapToDB_Manual(t *testing.T) {
@@ -1946,7 +1956,7 @@ func TestProcessCompanionEntries_ChildByExactPath(t *testing.T) {
 		{Type: string(tags.TagTypeRegion), Tag: "usa"},
 		{Type: string(tags.TagTypeLang), Tag: "en"},
 	}
-	titleTags := []database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "Dev Corp"}}
+	titleTags := []database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "dev-corp", Label: "Dev Corp"}}
 	mockDB := helpers.NewMockMediaDBI()
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20),
 		companionWriteMatcher(childTags, titleTags, companionXMLGameIDProps("42"))).Return(nil)
@@ -1976,7 +1986,7 @@ func TestProcessCompanionEntries_ChildBySlugFile(t *testing.T) {
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(40), int64(30),
 		companionWriteMatcher(
 			nil,
-			[]database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "Dev"}},
+			[]database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "dev", Label: "Dev"}},
 			companionXMLGameIDProps("99"),
 		)).Return(nil)
 
@@ -2030,7 +2040,7 @@ func TestProcessCompanionEntries_ChildBySlugFileWritesAllTitleMedia(t *testing.T
 		assert.Empty(t, target.Write.MediaTags, "slug child should not write file-level tags for target %d", i)
 	}
 	assert.Equal(t,
-		[]database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "Dev"}},
+		[]database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "dev", Label: "Dev"}},
 		mockDB.batches[0][0].Write.TitleTags,
 	)
 	assert.Equal(t, companionXMLGameIDProps("99"), mockDB.batches[0][0].Write.TitleProps)
@@ -2496,7 +2506,7 @@ func TestProcessCompanionEntries_NoRegionLangStillWritesSentinel(t *testing.T) {
 	mockDB.On("ApplyScrapeResult", mock.Anything, int64(5), int64(6),
 		companionWriteMatcher(
 			nil,
-			[]database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "Dev"}},
+			[]database.TagInfo{{Type: string(tags.TagTypeDeveloper), Tag: "dev", Label: "Dev"}},
 			companionXMLGameIDProps("1"),
 		)).Return(nil)
 

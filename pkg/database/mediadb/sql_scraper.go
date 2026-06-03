@@ -647,10 +647,13 @@ func (c *scrapeWriteTxContext) resolveTagType(
 }
 
 func (c *scrapeWriteTxContext) resolveTag(
-	ctx context.Context, typeDBID int64, typeName, tagValue string,
+	ctx context.Context, typeDBID int64, typeName, tagValue, displayName string,
 ) (int64, error) {
 	key := tagCacheKey{typeDBID: typeDBID, tag: tagValue}
 	if cached, ok := c.tags[key]; ok {
+		if err := c.setTagDisplayName(ctx, cached, displayName); err != nil {
+			return 0, err
+		}
 		return cached, nil
 	}
 
@@ -661,8 +664,8 @@ func (c *scrapeWriteTxContext) resolveTag(
 	).Scan(&tagDBID)
 	if errors.Is(err, sql.ErrNoRows) {
 		if _, insertErr := c.tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO Tags (TypeDBID, Tag) VALUES (?, ?)`,
-			typeDBID, tagValue,
+			`INSERT OR IGNORE INTO Tags (TypeDBID, Tag, DisplayName) VALUES (?, ?, ?)`,
+			typeDBID, tagValue, displayName,
 		); insertErr != nil {
 			return 0, fmt.Errorf("failed to insert tag %q:%q: %w", typeName, tagValue, insertErr)
 		}
@@ -676,8 +679,23 @@ func (c *scrapeWriteTxContext) resolveTag(
 		return 0, fmt.Errorf("failed to look up tag DBID for %q:%q: %w", typeName, tagValue, err)
 	}
 
+	if err := c.setTagDisplayName(ctx, tagDBID, displayName); err != nil {
+		return 0, err
+	}
 	c.tags[key] = tagDBID
 	return tagDBID, nil
+}
+
+func (c *scrapeWriteTxContext) setTagDisplayName(ctx context.Context, tagDBID int64, displayName string) error {
+	if displayName == "" {
+		return nil
+	}
+	if _, err := c.tx.ExecContext(ctx,
+		`UPDATE Tags SET DisplayName = ? WHERE DBID = ? AND DisplayName = ''`, displayName, tagDBID,
+	); err != nil {
+		return fmt.Errorf("failed to update tag display name: %w", err)
+	}
+	return nil
 }
 
 func (c *scrapeWriteTxContext) resolvePropertyTypeTag(ctx context.Context, typeTag string) (int64, error) {
@@ -866,7 +884,7 @@ func preloadTagsByType(
 				continue
 			}
 			if _, err := writeCtx.tx.ExecContext(ctx,
-				`INSERT OR IGNORE INTO Tags (TypeDBID, Tag) VALUES (?, ?)`, typeDBID, value,
+				`INSERT OR IGNORE INTO Tags (TypeDBID, Tag, DisplayName) VALUES (?, ?, '')`, typeDBID, value,
 			); err != nil {
 				return fmt.Errorf("failed to insert tag %q: %w", value, err)
 			}
@@ -1141,7 +1159,7 @@ func upsertTagsWithContext(
 
 		for _, ti := range e.tags {
 			tagValue := tags.PadTagValue(ti.Tag)
-			tagDBID, err := writeCtx.resolveTag(ctx, e.dbid, typeName, tagValue)
+			tagDBID, err := writeCtx.resolveTag(ctx, e.dbid, typeName, tagValue, ti.Label)
 			if err != nil {
 				return err
 			}
@@ -1494,7 +1512,7 @@ func upsertMediaTitleTagsBulkWithContext(
 			resolved := make([]int64, 0, len(tagInfos))
 			for _, ti := range tagInfos {
 				tagValue := tags.PadTagValue(ti.Tag)
-				tagDBID, err := writeCtx.resolveTag(ctx, typeDBID, typeName, tagValue)
+				tagDBID, err := writeCtx.resolveTag(ctx, typeDBID, typeName, tagValue, ti.Label)
 				if err != nil {
 					return err
 				}
@@ -1662,7 +1680,9 @@ func upsertScrapeSentinelsBulkWithContext(
 			}
 			exclusiveDeletes[typeDBID][target.MediaDBID] = struct{}{}
 		}
-		tagDBID, err := writeCtx.resolveTag(ctx, typeDBID, sentinel.Type, tags.PadTagValue(sentinel.Tag))
+		tagDBID, err := writeCtx.resolveTag(
+			ctx, typeDBID, sentinel.Type, tags.PadTagValue(sentinel.Tag), sentinel.Label,
+		)
 		if err != nil {
 			return err
 		}

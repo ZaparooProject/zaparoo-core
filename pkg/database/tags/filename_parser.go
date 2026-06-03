@@ -169,18 +169,6 @@ func cachedNormalizeTag(s string) string {
 	return v
 }
 
-// slugifyCompanyName converts a raw company/person name to a dash-joined slug suitable
-// for storage as an open-valued tag (publisher, developer, credit). Uses the full slug
-// pipeline via NormalizeToWords so "&", accents, punctuation etc. are handled correctly
-// ("T&E Soft" → "t-and-e-soft", "Coktel Vision" → "coktel-vision").
-func slugifyCompanyName(raw string) TagValue {
-	words := slugs.NormalizeToWords(raw)
-	if len(words) == 0 {
-		return TagValue(cachedNormalizeTag(raw))
-	}
-	return TagValue(strings.Join(words, "-"))
-}
-
 // classifyUnmappedParen inspects a normalized paren group that allTagMappings did not match
 // and returns the appropriate CanonicalTag slice plus a classified flag.
 //   - classified=false: unrecognized — caller should try positional heuristics or emit unknown:.
@@ -1213,14 +1201,14 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 		if ctx.CurrentIndex == 0 && ctx.YearExtractedFromFile {
 			return []CanonicalTag{{
 				Type:   TagTypePublisher,
-				Value:  slugifyCompanyName(ctx.CurrentTag),
+				Value:  NormalizeCompanyName(ctx.CurrentTag),
 				Source: TagSourceBracketed,
 			}}
 		}
 		if looksLikeCompanyName(tag) {
 			return []CanonicalTag{{
 				Type:   TagTypeCredit,
-				Value:  slugifyCompanyName(ctx.CurrentTag),
+				Value:  NormalizeCompanyName(ctx.CurrentTag),
 				Source: TagSourceBracketed,
 			}}
 		}

@@ -123,12 +123,12 @@ func TestBuildTagCache_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag, stc.Count`).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "TagType", "Tag", "Count"}).
-			AddRow("nes", "genre", "Action", int64(5)).
-			AddRow("nes", "genre", "RPG", int64(3)).
-			AddRow("snes", "genre", "Action", int64(2)).
-			AddRow("snes", "year", "1992", int64(1)))
+	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag, t.DisplayName, stc.Count`).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "TagType", "Tag", "DisplayName", "Count"}).
+			AddRow("nes", "genre", "Action", "", int64(5)).
+			AddRow("nes", "genre", "RPG", "", int64(3)).
+			AddRow("snes", "genre", "Action", "", int64(2)).
+			AddRow("snes", "year", "1992", "", int64(1)))
 
 	cache, err := buildTagCache(context.Background(), db)
 
@@ -155,8 +155,8 @@ func TestBuildTagCache_EmptyTable(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag, stc.Count`).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "TagType", "Tag", "Count"}))
+	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag, t.DisplayName, stc.Count`).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "TagType", "Tag", "DisplayName", "Count"}))
 
 	cache, err := buildTagCache(context.Background(), db)
 
@@ -172,7 +172,7 @@ func TestBuildTagCache_QueryError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag, stc.Count`).
+	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag, t.DisplayName, stc.Count`).
 		WillReturnError(errors.New("connection lost"))
 
 	_, err = buildTagCache(context.Background(), db)
@@ -188,9 +188,9 @@ func TestBuildTagCache_ScanError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag, stc.Count`).
+	mock.ExpectQuery(`SELECT s.SystemID, stc.TagType, stc.Tag, t.DisplayName, stc.Count`).
 		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "TagType"}).
-			AddRow("nes", "genre")) // Missing Tag and Count columns
+			AddRow("nes", "genre")) // Missing Tag, DisplayName, and Count columns
 
 	_, err = buildTagCache(context.Background(), db)
 

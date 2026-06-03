@@ -196,6 +196,13 @@ func TestParseTagFilters_Normalization(t *testing.T) {
 				{Type: "unfinished", Value: "demo", Operator: zapscript.TagOperatorNOT},
 			},
 		},
+		{
+			name:  "Company value uses slug pipeline",
+			input: []string{"developer:Nintendo R&D1"},
+			expected: []zapscript.TagFilter{
+				{Type: "developer", Value: "nintendo-r-and-d1", Operator: zapscript.TagOperatorAND},
+			},
+		},
 	}
 
 	for _, tt := range tests {
