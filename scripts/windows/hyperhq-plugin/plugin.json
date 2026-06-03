@@ -26,6 +26,6 @@
   },
   "socketio": {
     "enabled": true,
-    "namespace": "/plugin"
+    "namespace": "/"
   }
 }

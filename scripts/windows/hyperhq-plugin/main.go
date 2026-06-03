@@ -18,7 +18,7 @@
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 // hyperhq-plugin is the Zaparoo bridge for HyperHQ. HyperHQ launches this
-// executable as a plugin and exposes a Socket.IO endpoint on localhost; the
+// executable as a plugin and exposes a Socket.IO endpoint on loopback; the
 // plugin connects to that endpoint, authenticates, and forwards game events to
 // Zaparoo Core via a named pipe. Commands flow the other way: Zaparoo Core
 // requests system/game lists and game launches over the pipe, and this bridge
@@ -133,8 +133,9 @@ type hqGameInfo struct {
 // HyperHQ Socket.IO payload shapes (camelCase per the API reference).
 
 type hqAuthRequest struct {
-	PluginID  string `json:"pluginId"`
-	Challenge string `json:"challenge"`
+	PluginID     string `json:"pluginId"`
+	Challenge    string `json:"challenge,omitempty"`
+	SessionToken string `json:"sessionToken,omitempty"`
 }
 
 type hqAuthResponse struct {
@@ -188,7 +189,7 @@ type hqDataResponse struct {
 // hyperHqEvent channel.
 type hqEventEnvelope struct {
 	Type      string          `json:"type"`
-	Timestamp string          `json:"timestamp"`
+	Timestamp any             `json:"timestamp"`
 	Data      json.RawMessage `json:"data"`
 }
 
@@ -415,7 +416,7 @@ func run() error {
 }
 
 func socketIOManagerURL(port string) string {
-	return fmt.Sprintf("http://localhost:%s/socket.io/", port)
+	return fmt.Sprintf("http://127.0.0.1:%s/socket.io/", port)
 }
 
 func onSocket(sock hqSocket, event string, listener func(...any)) {
@@ -471,7 +472,7 @@ func (b *bridge) connectSocket(port string) error {
 	sock.OnConnect(func() {
 		// #nosec G706 -- sock.ID() is a Socket.IO-generated session token, not user input.
 		log.Printf("HyperHQ socket connected (id=%s); emitting authenticate", sock.ID())
-		req := hqAuthRequest{PluginID: b.pluginID, Challenge: b.authChallenge}
+		req := b.authRequest()
 		if emitErr := sock.Emit("authenticate", req); emitErr != nil {
 			signalAuth(fmt.Errorf("emit authenticate: %w", emitErr))
 		}
@@ -529,7 +530,6 @@ func (b *bridge) connectSocket(port string) error {
 
 	sock.OnDisconnect(func(reason any) {
 		log.Printf("HyperHQ socket disconnected: %v", reason)
-		b.clearSessionToken()
 	})
 
 	onSocket(sock, "request", b.handleLifecycleRequest)
@@ -546,6 +546,18 @@ func (b *bridge) connectSocket(port string) error {
 	case <-b.ctx.Done():
 		return b.ctx.Err()
 	}
+}
+
+func (b *bridge) authRequest() hqAuthRequest {
+	b.sessionMu.RLock()
+	sessionToken := b.sessionToken
+	b.sessionMu.RUnlock()
+
+	if sessionToken != "" {
+		return hqAuthRequest{PluginID: b.pluginID, SessionToken: sessionToken}
+	}
+
+	return hqAuthRequest{PluginID: b.pluginID, Challenge: b.authChallenge}
 }
 
 // handleLifecycleRequest decodes a `request` event from HyperHQ, dispatches by
