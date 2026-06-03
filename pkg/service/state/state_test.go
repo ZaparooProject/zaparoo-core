@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -65,6 +66,86 @@ func TestStopService_DoesNotSetRestartRequested(t *testing.T) {
 	assert.False(t, state.RestartRequested())
 }
 
+func TestSetActiveCard_DuplicateTokenRefreshesLastScanned(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+
+	firstScan := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	secondScan := firstScan.Add(time.Minute)
+
+	state.SetActiveCard(tokens.Token{
+		UID:      "id",
+		Text:     "same-token",
+		ScanTime: firstScan,
+	})
+	state.SetActiveCard(tokens.Token{
+		UID:      "id",
+		Text:     "same-token",
+		ScanTime: secondScan,
+	})
+
+	lastScanned := state.GetLastScanned()
+	activeToken := state.GetActiveCard()
+	assert.Equal(t, secondScan, lastScanned.ScanTime)
+	assert.Equal(t, secondScan, activeToken.ScanTime)
+}
+
+func TestSetActiveCard_DuplicateEmptyRemovalDoesNotNotify(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, notifications := NewState(mockPlatform, "test-boot-uuid")
+
+	seedToken := tokens.Token{
+		UID:      "id",
+		Text:     "seed-token",
+		ScanTime: time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC),
+	}
+	state.SetActiveCard(seedToken)
+	select {
+	case notification := <-notifications:
+		assert.Equal(t, models.NotificationTokensAdded, notification.Method)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tokens added notification")
+	}
+
+	state.SetActiveCard(tokens.Token{})
+	select {
+	case notification := <-notifications:
+		assert.Equal(t, models.NotificationTokensRemoved, notification.Method)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tokens removed notification")
+	}
+	state.SetActiveCard(tokens.Token{})
+
+	assert.Equal(t, tokens.Token{}, state.GetActiveCard())
+	assert.Equal(t, seedToken, state.GetLastScanned())
+
+	select {
+	case notification := <-notifications:
+		require.Failf(t, "unexpected notification", "method: %s", notification.Method)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestConsumePendingWrite(t *testing.T) {
+	t.Parallel()
+	mockPlatform := mocks.NewMockPlatform()
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
+
+	pending := &PendingWrite{
+		Payload: "payload",
+		Source:  tokens.Token{UID: "source"},
+	}
+	state.SetPendingWrite(pending)
+
+	consumed := state.ConsumePendingWrite()
+
+	assert.Same(t, pending, consumed)
+	assert.Nil(t, state.GetPendingWrite())
+	assert.Nil(t, state.ConsumePendingWrite())
+}
+
 func TestSetOnMediaStartHook(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()
@@ -76,7 +157,7 @@ func TestSetOnMediaStartHook(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	state.SetOnMediaStartHook(func(media *models.ActiveMedia) {
+	state.SetOnMediaStartHook(func(media *models.ActiveMedia, _ uint64) {
 		hookCalled = true
 		hookMedia = media
 		wg.Done()
@@ -134,7 +215,7 @@ func TestSetOnMediaStartHookMediaChange(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	state.SetOnMediaStartHook(func(_ *models.ActiveMedia) {
+	state.SetOnMediaStartHook(func(_ *models.ActiveMedia, _ uint64) {
 		hookCalled = true
 		wg.Done()
 	})
@@ -182,7 +263,7 @@ func TestSetOnMediaStartHookNotCalledOnStop(t *testing.T) {
 
 	// Set up hook
 	var hookCalled bool
-	state.SetOnMediaStartHook(func(_ *models.ActiveMedia) {
+	state.SetOnMediaStartHook(func(_ *models.ActiveMedia, _ uint64) {
 		hookCalled = true
 	})
 

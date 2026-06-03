@@ -90,9 +90,9 @@ func ParseTagFilters(tagSlice []string) ([]zapscript.TagFilter, error) {
 		tagType := strings.TrimSpace(parts[0])
 		tagValue := strings.TrimSpace(parts[1])
 
-		// Apply full normalization FIRST
+		// Apply type-aware normalization FIRST.
 		normalizedType := tags.NormalizeTag(tagType)
-		normalizedValue := tags.NormalizeTag(tagValue)
+		normalizedValue := tags.NormalizeTagValue(normalizedType, tagValue)
 
 		// Validate AFTER normalization to catch cases where normalization strips everything
 		if normalizedType == "" || normalizedValue == "" {

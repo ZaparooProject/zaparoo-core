@@ -22,6 +22,7 @@
 package mgls
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -150,6 +151,73 @@ func TestReadMRA_EmptyFile(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestValidateLoadCorePath(t *testing.T) {
+	t.Parallel()
+
+	basePath := filepath.Join("media", "fat", ".LASTLAUNCH.mgl")
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{name: "valid path", path: basePath},
+		{name: "newline rejected", path: basePath + "\nload_core " + filepath.Join("tmp", "evil.rbf"), wantErr: true},
+		{name: "carriage return rejected", path: basePath + "\r", wantErr: true},
+		{name: "tab rejected", path: basePath + "\t", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateLoadCorePath(tt.path)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestLaunchFileRejectsControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	basePath := filepath.Join("media", "fat", ".LASTLAUNCH.mgl")
+	for _, path := range []string{basePath + "\n", basePath + "\r", basePath + "\t"} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+
+			err := launchFile(path)
+			require.EqualError(t, err, fmt.Sprintf("load_core path contains control character: %q", path))
+		})
+	}
+}
+
+func TestLaunchCoreRejectsControlCharacters(t *testing.T) {
+	oldCache := cores.GlobalRBFCache
+	t.Cleanup(func() {
+		cores.GlobalRBFCache = oldCache
+	})
+
+	basePath := filepath.Join("media", "fat", "_Console", "NES.rbf")
+	for _, path := range []string{basePath + "\n", basePath + "\r", basePath + "\t"} {
+		t.Run(path, func(t *testing.T) {
+			cache := &cores.RBFCache{}
+			cache.BuildFromRBFs([]cores.RBFInfo{{
+				Path:      path,
+				Filename:  "NES.rbf",
+				ShortName: "NES",
+				MglName:   filepath.Join("_Console", "NES"),
+			}})
+			cores.GlobalRBFCache = cache
+
+			err := LaunchCore(nil, nil, &cores.Core{ID: "NES"})
+			require.EqualError(t, err, fmt.Sprintf("load_core path contains control character: %q", path))
+		})
+	}
+}
+
 func TestGenerateMgl(t *testing.T) {
 	t.Parallel()
 
@@ -157,6 +225,7 @@ func TestGenerateMgl(t *testing.T) {
 		name     string
 		core     *cores.Core
 		path     string
+		rbfPath  string
 		override string
 		want     string
 		wantErr  bool
@@ -188,6 +257,17 @@ func TestGenerateMgl(t *testing.T) {
 				"\t<setname>FDS</setname>\n</mistergamedescription>",
 		},
 		{
+			name: "core with escaped setname",
+			core: &cores.Core{
+				ID:      "Custom",
+				SetName: "A&B",
+				RBF:     "_Console/NES",
+			},
+			path: "",
+			want: "<mistergamedescription>\n\t<rbf>_Console/NES</rbf>\n" +
+				"\t<setname>A&amp;B</setname>\n</mistergamedescription>",
+		},
+		{
 			name: "core with setname and same_dir",
 			core: &cores.Core{
 				ID:             "Atari2600",
@@ -198,6 +278,29 @@ func TestGenerateMgl(t *testing.T) {
 			path: "",
 			want: "<mistergamedescription>\n\t<rbf>_Console/Atari7800</rbf>\n" +
 				"\t<setname same_dir=\"1\">Atari2600</setname>\n</mistergamedescription>",
+		},
+		{
+			name: "resolved db9 core uses concrete rbf path",
+			core: &cores.Core{
+				ID:  "Genesis",
+				RBF: "_Console/MegaDrive_*_DB9",
+				Slots: []cores.Slot{
+					{
+						Exts: []string{".bin", ".gen", ".md"},
+						Mgl: &cores.MGLParams{
+							Delay:  1,
+							Method: "f",
+							Index:  1,
+						},
+					},
+				},
+			},
+			path:    "/media/fat/games/Genesis/Sonic.bin",
+			rbfPath: "_Console/MegaDrive_20260528_fef1285_DB9",
+			want: `<mistergamedescription>
+	<rbf>_Console/MegaDrive_20260528_fef1285_DB9</rbf>
+	<file delay="1" type="f" index="1" path="../../../../../media/fat/games/Genesis/Sonic.bin"/>
+</mistergamedescription>`,
 		},
 		{
 			name: "standard game launch",
@@ -263,11 +366,39 @@ func TestGenerateMgl(t *testing.T) {
 					},
 				},
 			},
-			path: "/media/fat/games/Saturn/America/NiGHTS into Dreams... (USA, Brazil).chd",
+			path: filepath.Join(
+				string(filepath.Separator),
+				"media", "fat", "games", "Saturn", "America", "NiGHTS into Dreams... (USA, Brazil).chd",
+			),
 			want: "<mistergamedescription>\n\t<rbf>_Console/Saturn</rbf>\n" +
 				"\t<file delay=\"2\" type=\"s\" index=\"0\" " +
 				"path=\"../../../../../media/fat/games/Saturn/America/" +
 				"NiGHTS into Dreams... (USA, Brazil).chd\"/>\n" +
+				"</mistergamedescription>",
+		},
+		{
+			name: "3DO CHD uses disk slot zero",
+			core: &cores.Core{
+				ID:  "3DO",
+				RBF: "_Console/3DO",
+				Slots: []cores.Slot{
+					{
+						Exts: []string{".iso", ".cue", ".chd"},
+						Mgl: &cores.MGLParams{
+							Delay:  1,
+							Method: "s",
+							Index:  0,
+						},
+					},
+				},
+			},
+			path: filepath.Join(
+				string(filepath.Separator),
+				"media", "fat", "games", "3DO", "The Need for Speed.chd",
+			),
+			want: "<mistergamedescription>\n\t<rbf>_Console/3DO</rbf>\n" +
+				"\t<file delay=\"1\" type=\"s\" index=\"0\" " +
+				"path=\"../../../../../media/fat/games/3DO/The Need for Speed.chd\"/>\n" +
 				"</mistergamedescription>",
 		},
 		{
@@ -323,8 +454,8 @@ func TestGenerateMgl(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			rbfPath := ""
-			if tt.core != nil {
+			rbfPath := tt.rbfPath
+			if tt.core != nil && rbfPath == "" {
 				rbfPath = tt.core.RBF
 			}
 			got, err := GenerateMgl(tt.core, rbfPath, tt.path, tt.override)

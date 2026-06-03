@@ -22,16 +22,46 @@
 package windows
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func resetRetroBatKillHooks(t *testing.T) {
+	t.Helper()
+
+	origRunningGame := retroBatAPIRunningGame
+	origEmuKill := retroBatAPIEmuKill
+	origFindDir := retroBatFindDir
+	origListProcesses := retroBatListProcesses
+	origKillPIDTree := retroBatKillPIDTree
+	origProcessPath := retroBatProcessPath
+	origRunTaskKill := retroBatRunTaskKill
+	origSleep := retroBatSleep
+
+	t.Cleanup(func() {
+		retroBatAPIRunningGame = origRunningGame
+		retroBatAPIEmuKill = origEmuKill
+		retroBatFindDir = origFindDir
+		retroBatListProcesses = origListProcesses
+		retroBatKillPIDTree = origKillPIDTree
+		retroBatProcessPath = origProcessPath
+		retroBatRunTaskKill = origRunTaskKill
+		retroBatSleep = origSleep
+	})
+}
 
 func TestFindRetroBatDir(t *testing.T) {
 	t.Parallel()
@@ -66,6 +96,44 @@ func TestCreateRetroBatLauncher(t *testing.T) {
 	assert.NotNil(t, launcher.Launch)
 	assert.NotNil(t, launcher.Kill)
 	assert.NotNil(t, launcher.Scanner)
+}
+
+func TestIsRetroBatLauncher(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		launcher *platforms.Launcher
+		name     string
+		want     bool
+	}{
+		{
+			name:     "nil launcher",
+			launcher: nil,
+			want:     false,
+		},
+		{
+			name:     "RetroBat launcher",
+			launcher: &platforms.Launcher{ID: "RetroBatSNES"},
+			want:     true,
+		},
+		{
+			name:     "non-RetroBat launcher",
+			launcher: &platforms.Launcher{ID: "LaunchBox"},
+			want:     false,
+		},
+		{
+			name:     "short launcher ID",
+			launcher: &platforms.Launcher{ID: "Retro"},
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isRetroBatLauncher(tt.launcher))
+		})
+	}
 }
 
 func TestRetroBatLauncherHasRequiredFunctions(t *testing.T) {
@@ -181,6 +249,231 @@ func TestRetroBatLauncherCreation(t *testing.T) {
 			assert.NotNil(t, launcher.Launch)
 			assert.NotNil(t, launcher.Kill)
 			assert.NotNil(t, launcher.Scanner)
+		})
+	}
+}
+
+func TestKillRetroBatGame_NoRunningGameSkipsKill(t *testing.T) {
+	resetRetroBatKillHooks(t)
+
+	apiKillCalls := 0
+	retroBatAPIRunningGame = func() (esapi.RunningGameResponse, bool, error) {
+		return esapi.RunningGameResponse{}, false, nil
+	}
+	retroBatAPIEmuKill = func() error {
+		apiKillCalls++
+		return nil
+	}
+	retroBatSleep = func(_ time.Duration) {}
+
+	err := killRetroBatGame(&config.Instance{})
+
+	require.NoError(t, err)
+	assert.Zero(t, apiKillCalls)
+}
+
+func TestKillRetroBatGame_ESAPISucceedsSkipsFallback(t *testing.T) {
+	resetRetroBatKillHooks(t)
+
+	stopped := false
+	apiKillCalls := 0
+	listCalls := 0
+	retroBatAPIRunningGame = func() (esapi.RunningGameResponse, bool, error) {
+		if stopped {
+			return esapi.RunningGameResponse{}, false, nil
+		}
+		return esapi.RunningGameResponse{Name: "Game", SystemName: "snes"}, true, nil
+	}
+	retroBatAPIEmuKill = func() error {
+		apiKillCalls++
+		stopped = true
+		return nil
+	}
+	retroBatListProcesses = func() ([]windowsProcessInfo, error) {
+		listCalls++
+		return nil, nil
+	}
+	retroBatSleep = func(_ time.Duration) {}
+
+	err := killRetroBatGame(&config.Instance{})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, apiKillCalls)
+	assert.Zero(t, listCalls)
+}
+
+func TestKillRetroBatGame_ESAPINoopKillsRetroBatEmulatorPID(t *testing.T) {
+	resetRetroBatKillHooks(t)
+
+	const retroBatDir = `C:\RetroBat`
+	killed := false
+	var killedPIDs []uint32
+	retroBatAPIRunningGame = func() (esapi.RunningGameResponse, bool, error) {
+		if killed {
+			return esapi.RunningGameResponse{}, false, nil
+		}
+		return esapi.RunningGameResponse{Name: "Game", SystemName: "snes"}, true, nil
+	}
+	retroBatAPIEmuKill = func() error { return nil }
+	retroBatFindDir = func(_ *config.Instance) (string, error) { return retroBatDir, nil }
+	retroBatListProcesses = func() ([]windowsProcessInfo, error) {
+		return []windowsProcessInfo{
+			{PID: 100, ExePath: `C:\RetroBat\emulators\retroarch\retroarch.exe`},
+			{PID: 200, ExePath: `D:\Tools\RetroArch\retroarch.exe`},
+		}, nil
+	}
+	retroBatKillPIDTree = func(_ context.Context, pid uint32, _ string) error {
+		killedPIDs = append(killedPIDs, pid)
+		killed = true
+		return nil
+	}
+	retroBatSleep = func(_ time.Duration) {}
+
+	err := killRetroBatGame(&config.Instance{})
+
+	require.NoError(t, err)
+	assert.Equal(t, []uint32{100}, killedPIDs)
+}
+
+func TestKillRetroBatGame_ESAPINoopWithoutSafeCandidateReturnsError(t *testing.T) {
+	resetRetroBatKillHooks(t)
+
+	const retroBatDir = `C:\RetroBat`
+	retroBatAPIRunningGame = func() (esapi.RunningGameResponse, bool, error) {
+		return esapi.RunningGameResponse{Name: "Game", SystemName: "snes"}, true, nil
+	}
+	retroBatAPIEmuKill = func() error { return nil }
+	retroBatFindDir = func(_ *config.Instance) (string, error) { return retroBatDir, nil }
+	retroBatListProcesses = func() ([]windowsProcessInfo, error) {
+		return []windowsProcessInfo{{PID: 200, ExePath: `D:\Tools\RetroArch\retroarch.exe`}}, nil
+	}
+	retroBatKillPIDTree = func(_ context.Context, pid uint32, _ string) error {
+		return fmt.Errorf("unexpected kill for pid %d", pid)
+	}
+	retroBatSleep = func(_ time.Duration) {}
+
+	err := killRetroBatGame(&config.Instance{})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no RetroBat emulator process was found")
+}
+
+func TestKillRetroBatGame_ESAPINoopPropagatesFallbackError(t *testing.T) {
+	resetRetroBatKillHooks(t)
+
+	const retroBatDir = `C:\RetroBat`
+	retroBatAPIRunningGame = func() (esapi.RunningGameResponse, bool, error) {
+		return esapi.RunningGameResponse{Name: "Game", SystemName: "snes"}, true, nil
+	}
+	retroBatAPIEmuKill = func() error { return nil }
+	retroBatFindDir = func(_ *config.Instance) (string, error) { return retroBatDir, nil }
+	retroBatListProcesses = func() ([]windowsProcessInfo, error) {
+		return []windowsProcessInfo{{PID: 100, ExePath: `C:\RetroBat\emulators\retroarch\retroarch.exe`}}, nil
+	}
+	retroBatKillPIDTree = func(_ context.Context, _ uint32, _ string) error {
+		return errors.New("access denied")
+	}
+	retroBatSleep = func(_ time.Duration) {}
+
+	err := killRetroBatGame(&config.Instance{})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "process fallback failed")
+	assert.Contains(t, err.Error(), "access denied")
+}
+
+func TestKillRetroBatGame_ESAPINoopPropagatesFallbackVerificationError(t *testing.T) {
+	resetRetroBatKillHooks(t)
+
+	rootDir := "C:" + string(os.PathSeparator)
+	retroBatDir := filepath.Join(rootDir, "RetroBat")
+	verificationErr := fmt.Errorf(
+		"%w: running game response did not include game identity",
+		esapi.ErrInvalidRunningGameResponse,
+	)
+	callCount := 0
+	retroBatAPIRunningGame = func() (esapi.RunningGameResponse, bool, error) {
+		callCount++
+		if callCount <= retroBatKillRetries+1 {
+			return esapi.RunningGameResponse{Name: "Game", SystemName: "snes"}, true, nil
+		}
+		return esapi.RunningGameResponse{}, false, verificationErr
+	}
+	retroBatAPIEmuKill = func() error { return nil }
+	retroBatFindDir = func(_ *config.Instance) (string, error) { return retroBatDir, nil }
+	retroBatListProcesses = func() ([]windowsProcessInfo, error) {
+		return []windowsProcessInfo{
+			{PID: 100, ExePath: filepath.Join(retroBatDir, "emulators", "retroarch", "retroarch.exe")},
+		}, nil
+	}
+	retroBatKillPIDTree = func(_ context.Context, _ uint32, _ string) error {
+		return nil
+	}
+	retroBatSleep = func(_ time.Duration) {}
+
+	err := killRetroBatGame(&config.Instance{})
+
+	require.ErrorIs(t, err, verificationErr)
+	assert.Contains(t, err.Error(), "failed to verify RetroBat process fallback")
+}
+
+func TestKillWindowsProcessTree_RevalidatesPath(t *testing.T) {
+	resetRetroBatKillHooks(t)
+
+	taskKillCalls := 0
+	retroBatProcessPath = func(_ uint32) (string, error) {
+		return `D:\Tools\RetroArch\retroarch.exe`, nil
+	}
+	retroBatRunTaskKill = func(_ context.Context, _ uint32) error {
+		taskKillCalls++
+		return nil
+	}
+
+	err := killWindowsProcessTree(context.Background(), 100, `C:\RetroBat\emulators`)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no longer matches RetroBat emulator path")
+	assert.Zero(t, taskKillCalls)
+}
+
+func TestIsRetroBatEmulatorProcess(t *testing.T) {
+	testCases := []struct {
+		name         string
+		process      windowsProcessInfo
+		shouldTarget bool
+	}{
+		{
+			name:         "emulator under RetroBat emulators",
+			process:      windowsProcessInfo{PID: 100, ExePath: `C:\RetroBat\emulators\retroarch\retroarch.exe`},
+			shouldTarget: true,
+		},
+		{
+			name:         "same emulator outside RetroBat",
+			process:      windowsProcessInfo{PID: 200, ExePath: `D:\Tools\RetroArch\retroarch.exe`},
+			shouldTarget: false,
+		},
+		{
+			name:         "frontend process excluded",
+			process:      windowsProcessInfo{PID: 300, ExePath: `C:\RetroBat\emulators\tools\emulationstation.exe`},
+			shouldTarget: false,
+		},
+		{
+			name:         "emulatorlauncher excluded",
+			process:      windowsProcessInfo{PID: 400, ExePath: `C:\RetroBat\emulators\tools\emulatorlauncher.exe`},
+			shouldTarget: false,
+		},
+		{
+			name:         "prefix sibling excluded",
+			process:      windowsProcessInfo{PID: 500, ExePath: `C:\RetroBat\emulators2\retroarch.exe`},
+			shouldTarget: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := isRetroBatEmulatorProcess(`C:\RetroBat\emulators`, tc.process)
+
+			assert.Equal(t, tc.shouldTarget, result)
 		})
 	}
 }

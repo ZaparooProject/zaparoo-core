@@ -217,7 +217,7 @@ Sent during media database generation to indicate indexing progress and completi
 
 Sent while a metadata scraper run is active and when it completes.
 
-The first notification for a scraper run identifies the scraper and sets `scraping` to true. Progress notifications include the current system, counters, pause state, and completion state. A final notification has `scraping` set to false and `done` set to true.
+The first notification for a scraper run identifies the scraper and sets `scraping` to true. Progress notifications include the current system, per-system counters, whole-run system-step progress, pause state, and completion state. A final notification has `scraping` set to false and `done` set to true. Existing flat counter fields remain for compatibility; new UIs should prefer `currentSystem` for per-system progress and `totalSteps`/`currentStep`/`currentStepDisplay` for whole-run progress.
 
 #### Parameters
 
@@ -233,6 +233,12 @@ The first notification for a scraper run identifies the scraper and sets `scrapi
 | scraping  | boolean | Yes      | True while scraping is active.                                    |
 | done      | boolean | Yes      | True on the terminal update for the scraper run.                  |
 | paused    | boolean | Yes      | True when the active scrape is paused.                            |
+| state     | string  | No       | Explicit lifecycle state: `idle`, `running`, `paused`, `completed`, `cancelled`, or `failed`. |
+| error     | string  | No       | Fatal scrape error on failed terminal updates.                    |
+| totalSteps | number | No       | Total systems in the scrape run, when known.                      |
+| currentStep | number | No      | 1-based current system step, when known.                          |
+| currentStepDisplay | string | No | Display name for the current system step, falling back to system ID. |
+| currentSystem | object | No    | Per-system progress object with `systemId`, `systemName`, `processed`, `total`, `matched`, and `skipped`. |
 
 #### Examples
 
@@ -252,7 +258,19 @@ The first notification for a scraper run identifies the scraper and sets `scrapi
     "totalScraped": 1200,
     "scraping": true,
     "done": false,
-    "paused": false
+    "paused": false,
+    "state": "running",
+    "totalSteps": 12,
+    "currentStep": 3,
+    "currentStepDisplay": "Super Nintendo Entertainment System",
+    "currentSystem": {
+      "systemId": "SNES",
+      "systemName": "Super Nintendo Entertainment System",
+      "processed": 42,
+      "total": 100,
+      "matched": 38,
+      "skipped": 4
+    }
   }
 }
 ```
@@ -273,7 +291,19 @@ The first notification for a scraper run identifies the scraper and sets `scrapi
     "totalScraped": 1250,
     "scraping": false,
     "done": true,
-    "paused": false
+    "paused": false,
+    "state": "completed",
+    "totalSteps": 12,
+    "currentStep": 12,
+    "currentStepDisplay": "Super Nintendo Entertainment System",
+    "currentSystem": {
+      "systemId": "SNES",
+      "systemName": "Super Nintendo Entertainment System",
+      "processed": 100,
+      "total": 100,
+      "matched": 92,
+      "skipped": 8
+    }
   }
 }
 ```

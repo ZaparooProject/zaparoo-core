@@ -121,6 +121,7 @@ func RunControlScript(
 			i,
 			db,
 			nil, // lm not needed — control commands cannot launch media
+			nil,
 			&env,
 		)
 		if err != nil {

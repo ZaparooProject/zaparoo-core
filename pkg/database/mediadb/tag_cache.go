@@ -55,6 +55,7 @@ func (c *tagCache) tagsForSystems(systems []systemdefs.System) []database.TagInf
 	}
 
 	counts := make(map[tagKey]int64)
+	labels := make(map[tagKey]string)
 	order := make([]tagKey, 0)
 	for _, sys := range systems {
 		for _, tag := range c.bySystem[sys.ID] {
@@ -62,13 +63,18 @@ func (c *tagCache) tagsForSystems(systems []systemdefs.System) []database.TagInf
 			if _, exists := counts[k]; !exists {
 				order = append(order, k)
 			}
+			if labels[k] == "" {
+				labels[k] = tag.Label
+			}
 			counts[k] += tag.Count
 		}
 	}
 
 	result := make([]database.TagInfo, 0, len(order))
 	for _, k := range order {
-		result = append(result, database.TagInfo{Type: k.typ, Tag: k.tag, Count: counts[k]})
+		result = append(result, database.TagInfo{
+			Type: k.typ, Tag: k.tag, Label: labels[k], Count: counts[k],
+		})
 	}
 	return result
 }
@@ -78,9 +84,10 @@ func (c *tagCache) tagsForSystems(systems []systemdefs.System) []database.TagInf
 // systems so the global list reflects aggregate popularity.
 func buildTagCache(ctx context.Context, db *sql.DB) (*tagCache, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT s.SystemID, stc.TagType, stc.Tag, stc.Count
+		SELECT s.SystemID, stc.TagType, stc.Tag, t.DisplayName, stc.Count
 		FROM SystemTagsCache stc
 		JOIN Systems s ON stc.SystemDBID = s.DBID
+		JOIN Tags t ON stc.TagDBID = t.DBID
 		ORDER BY stc.TagType, stc.Tag`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query system tags cache: %w", err)
@@ -92,22 +99,28 @@ func buildTagCache(ctx context.Context, db *sql.DB) (*tagCache, error) {
 	}
 
 	allCounts := make(map[tagKey]int64)
+	allLabels := make(map[tagKey]string)
 	allOrder := make([]tagKey, 0)
 
 	for rows.Next() {
-		var systemID, tagType, tag string
+		var systemID, tagType, tag, label string
 		var count int64
-		if err := rows.Scan(&systemID, &tagType, &tag, &count); err != nil {
+		if err := rows.Scan(&systemID, &tagType, &tag, &label, &count); err != nil {
 			return nil, fmt.Errorf("failed to scan tag cache row: %w", err)
 		}
 
 		unpadded := dbtags.UnpadTagValue(tag)
-		ti := database.TagInfo{Type: tagType, Tag: unpadded, Count: count}
+		ti := database.TagInfo{Type: tagType, Tag: unpadded, Label: label, Count: count}
 		cache.bySystem[systemID] = append(cache.bySystem[systemID], ti)
 
 		k := tagKey{tagType, unpadded}
 		if _, exists := allCounts[k]; !exists {
+			// Rows are ordered by type and tag, so global deduplication uses
+			// the first non-empty label seen for each tag as its display label.
 			allOrder = append(allOrder, k)
+		}
+		if allLabels[k] == "" {
+			allLabels[k] = label
 		}
 		allCounts[k] += count
 	}
@@ -118,7 +131,7 @@ func buildTagCache(ctx context.Context, db *sql.DB) (*tagCache, error) {
 	cache.allTags = make([]database.TagInfo, 0, len(allOrder))
 	for _, k := range allOrder {
 		cache.allTags = append(cache.allTags, database.TagInfo{
-			Type: k.typ, Tag: k.tag, Count: allCounts[k],
+			Type: k.typ, Tag: k.tag, Label: allLabels[k], Count: allCounts[k],
 		})
 	}
 

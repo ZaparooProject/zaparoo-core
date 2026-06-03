@@ -99,20 +99,12 @@ func TestLogSafeResponse(t *testing.T) {
 	}
 }
 
-// TestLogSafeResponse_BatchRedaction verifies the new batch-response branches
-// log only an item count and never include the per-item base64 blob.
+// TestLogSafeResponse_BatchRedaction verifies batch-response branches log only
+// an item count and never include per-item details.
 func TestLogSafeResponse_BatchRedaction(t *testing.T) {
 	const secretBlob = "AAAABASE64SECRETPAYLOAD=="
-
-	imageItem := models.MediaImageResponse{
-		TypeTag:     "property:image-boxart",
-		ContentType: "image/png",
-		Data:        secretBlob,
-	}
-	textValue := "ignored"
-	dataValue := secretBlob
+	textValue := secretBlob
 	metaProp := models.MediaMetaPropertyItem{
-		Data:        &dataValue,
 		Text:        textValue,
 		ContentType: "image/png",
 	}
@@ -130,18 +122,6 @@ func TestLogSafeResponse_BatchRedaction(t *testing.T) {
 		expectKeyFrag  string
 		expectItemsVal string
 	}{
-		{
-			name: "MediaImageBatchResponse logs items count only",
-			result: models.MediaImageBatchResponse{
-				Items: []models.MediaImageBatchItemResponse{
-					{Image: &imageItem},
-					{Image: &imageItem},
-				},
-			},
-			expectMsgFrag:  "media.image batch",
-			expectKeyFrag:  `"items":2`,
-			expectItemsVal: "2",
-		},
 		{
 			name: "MediaMetaBatchResponse logs items count only",
 			result: models.MediaMetaBatchResponse{

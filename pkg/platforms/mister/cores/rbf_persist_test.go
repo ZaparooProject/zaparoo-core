@@ -245,6 +245,18 @@ func TestDiffDirMtimes_MissingPath(t *testing.T) {
 	assert.Zero(t, diffs[0].CurrentMtimeNs)
 }
 
+func TestSnapshotDirMtimes_IncludesRetroAchievementsCoreDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	raCoreDir := filepath.Join(root, "_RA_Cores", "Cores")
+	require.NoError(t, os.MkdirAll(raCoreDir, 0o750))
+
+	snapshot, err := snapshotDirMtimesAt(root)
+	require.NoError(t, err)
+	assert.Contains(t, snapshot, raCoreDir)
+}
+
 func TestRootRBFsMatch_NoFilesEqualsEmptySnapshot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

@@ -252,14 +252,29 @@ func TestMediaScraping_Payload(t *testing.T) {
 
 	ns := make(chan models.Notification, 1)
 
+	totalSteps := 5
+	currentStep := 2
+	currentStepDisplay := "Nintendo Entertainment System"
 	payload := models.ScrapingStatusResponse{
-		ScraperID: "gamelist.xml",
-		SystemID:  "nes",
-		Processed: 42,
-		Total:     100,
-		Matched:   38,
-		Skipped:   4,
-		Scraping:  true,
+		ScraperID:          "gamelist.xml",
+		SystemID:           "nes",
+		State:              "running",
+		Processed:          42,
+		Total:              100,
+		Matched:            38,
+		Skipped:            4,
+		Scraping:           true,
+		TotalSteps:         &totalSteps,
+		CurrentStep:        &currentStep,
+		CurrentStepDisplay: &currentStepDisplay,
+		CurrentSystem: &models.ScrapeSystemProgressResponse{
+			SystemID:   "nes",
+			SystemName: currentStepDisplay,
+			Processed:  42,
+			Total:      100,
+			Matched:    38,
+			Skipped:    4,
+		},
 	}
 	MediaScraping(ns, &payload)
 
@@ -276,6 +291,15 @@ func TestMediaScraping_Payload(t *testing.T) {
 	assert.Equal(t, payload.Total, received.Total)
 	assert.Equal(t, payload.Matched, received.Matched)
 	assert.Equal(t, payload.Skipped, received.Skipped)
+	assert.Equal(t, payload.State, received.State)
+	require.NotNil(t, received.TotalSteps)
+	require.NotNil(t, received.CurrentStep)
+	require.NotNil(t, received.CurrentStepDisplay)
+	require.NotNil(t, received.CurrentSystem)
+	assert.Equal(t, totalSteps, *received.TotalSteps)
+	assert.Equal(t, currentStep, *received.CurrentStep)
+	assert.Equal(t, currentStepDisplay, *received.CurrentStepDisplay)
+	assert.Equal(t, "nes", received.CurrentSystem.SystemID)
 	assert.True(t, received.Scraping)
 }
 

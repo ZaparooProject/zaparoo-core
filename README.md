@@ -127,12 +127,21 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/mogorman">
+                    <img src="https://avatars.githubusercontent.com/u/64710?v=4" width="100;" alt="mogorman"/>
+                    <br />
+                    <sub><b>Matthew O'Gorman</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/sreuter">
                     <img src="https://avatars.githubusercontent.com/u/550246?v=4" width="100;" alt="sreuter"/>
                     <br />
                     <sub><b>Sascha Reuter</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/jmf866">
                     <img src="https://avatars.githubusercontent.com/u/11838274?v=4" width="100;" alt="jmf866"/>
@@ -140,8 +149,6 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>jmf866</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/protogem2">
                     <img src="https://avatars.githubusercontent.com/u/62781710?v=4" width="100;" alt="protogem2"/>

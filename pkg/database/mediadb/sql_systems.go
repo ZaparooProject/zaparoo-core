@@ -175,7 +175,15 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	list := make([]string, 0)
 
 	q, err := db.PrepareContext(ctx, `
-		select SystemID from Systems;
+		SELECT s.SystemID
+		FROM Systems s
+		WHERE EXISTS (
+			SELECT 1
+			FROM Media m
+			WHERE m.SystemDBID = s.DBID
+			  AND m.IsMissing = 0
+		)
+		ORDER BY s.SystemID;
 	`)
 	if err != nil {
 		return list, fmt.Errorf("failed to prepare indexed systems query: %w", err)

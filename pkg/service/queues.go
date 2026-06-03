@@ -20,6 +20,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -93,11 +94,20 @@ func runTokenZapScript(
 			}
 		}
 
+		mediaReadyGen, _ := svc.State.ActiveMediaReadyGeneration()
+
 		var cmdEnv gozapscript.ArgExprEnv
 		if exprEnv != nil {
 			cmdEnv = *exprEnv
 		} else {
 			cmdEnv = zapscript.GetExprEnv(svc.Platform, svc.Config, svc.State, nil, nil)
+		}
+
+		if shouldApplyLaunchOverride(&token, inHookContext, cmd.Name) {
+			if pending := svc.State.ConsumePendingLaunchOverride(); pending != nil {
+				log.Info().Str("launcher", pending.LauncherID).Msg("applying one-shot launch override")
+				cmd.AdvArgs = cmd.AdvArgs.With(gozapscript.KeyLauncher, pending.LauncherID)
+			}
 		}
 
 		result, err := zapscript.RunCommand(
@@ -113,6 +123,7 @@ func runTokenZapScript(
 			i,
 			svc.DB,
 			svc.State.LauncherManager(),
+			func(ctx context.Context) error { return waitForMediaReady(ctx, svc, mediaReadyGen) },
 			&cmdEnv,
 		)
 		if err != nil {
@@ -331,6 +342,26 @@ func processTokenQueue(
 			if parseErr != nil {
 				log.Debug().Err(parseErr).Msg("failed to parse script for playtime check")
 				// Continue anyway - the error will be caught in runTokenZapScript
+			}
+
+			if parseErr == nil {
+				switch handleNextActionPreflight(svc, &t, &script) {
+				case nextActionArmed:
+					he.Success = true
+					if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
+						log.Error().Err(histErr).Msgf("error adding history")
+					}
+					continue
+				case nextActionInvalid:
+					he.Success = false
+					if histErr := svc.DB.UserDB.AddHistory(&he); histErr != nil {
+						log.Error().Err(histErr).Msgf("error adding history")
+					}
+					path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
+					helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
+					continue
+				case nextActionNone:
+				}
 			}
 
 			// Check if any command in the script launches media

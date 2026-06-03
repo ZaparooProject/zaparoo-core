@@ -23,11 +23,14 @@ package mister
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -194,6 +197,170 @@ func TestAmigaScanner_HandlesNoPaths(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, results)
 	})
+}
+
+func TestAmigaScanner_IgnoresStaleListingRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	stalePath := filepath.Join(root, "Amiga")
+	validPath := filepath.Join(root, "games", "Amiga")
+	writeAmigaListings(t, stalePath, "Stale Game")
+	writeAmigaVisionInstall(t, validPath, "Valid Game")
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root, filepath.Join(root, "games")},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+
+	results, err := amigaLauncher.Scanner(context.Background(), cfg, "Amiga", nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, filepath.Join(validPath, "listings", "games.txt", "Valid Game"), results[0].Path)
+	assert.Equal(t, "Valid Game", results[0].Name)
+}
+
+func TestAmigaScanner_RequiresBootImage(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	stalePath := filepath.Join(root, "Amiga")
+	writeAmigaListings(t, stalePath, "Stale Game")
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	amigaLauncher := findAmigaLauncher(t, p.Launchers(cfg))
+
+	results, err := amigaLauncher.Scanner(context.Background(), cfg, "Amiga", nil)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
+
+func findAmigaLauncher(t *testing.T, launchers []platforms.Launcher) *platforms.Launcher {
+	t.Helper()
+
+	for i := range launchers {
+		if launchers[i].ID == "Amiga" {
+			return &launchers[i]
+		}
+	}
+	require.FailNow(t, "Amiga launcher should exist")
+	return nil
+}
+
+func findNeoGeoLauncher(t *testing.T, launchers []platforms.Launcher) *platforms.Launcher {
+	t.Helper()
+
+	for i := range launchers {
+		if launchers[i].ID == "NeoGeo" {
+			return &launchers[i]
+		}
+	}
+	require.FailNow(t, "NeoGeo launcher should exist")
+	return nil
+}
+
+func writeAmigaVisionInstall(t *testing.T, path, game string) {
+	t.Helper()
+
+	writeAmigaListings(t, path, game)
+	err := os.WriteFile(filepath.Join(path, "AmigaVision.hdf"), []byte("test"), 0o600)
+	require.NoError(t, err)
+}
+
+func writeAmigaListings(t *testing.T, path, game string) {
+	t.Helper()
+
+	listingPath := filepath.Join(path, "listings")
+	err := os.MkdirAll(listingPath, 0o700)
+	require.NoError(t, err)
+	err = os.MkdirAll(filepath.Join(path, "shared"), 0o700)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(listingPath, "games.txt"), []byte(game+"\n"), 0o600)
+	require.NoError(t, err)
+}
+
+func TestNeoGeoScanner_AddsNestedRomsetEntries(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	neoGeoPath := filepath.Join(root, "NEOGEO")
+	favoritesPath := filepath.Join(neoGeoPath, "Favorites")
+	zipPath := filepath.Join(favoritesPath, "mslug.zip")
+	folderPath := filepath.Join(favoritesPath, "kof98")
+	nestedNeoPath := filepath.Join(favoritesPath, "collection", "game.neo")
+
+	require.NoError(t, os.MkdirAll(folderPath, 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Dir(nestedNeoPath), 0o700))
+	require.NoError(t, os.WriteFile(zipPath, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(folderPath, "crom0"), []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(nestedNeoPath, []byte("test"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(neoGeoPath, "romsets.xml"), []byte(`<?xml version="1.0"?>
+<romsets>
+  <romset name="mslug" altname="Metal Slug"/>
+  <romset name="kof98" altname="King of Fighters '98"/>
+</romsets>
+`), 0o600))
+
+	cfg, err := config.NewConfig(t.TempDir(), config.Values{
+		Launchers: config.Launchers{
+			IndexRoot: []string{root},
+		},
+	})
+	require.NoError(t, err)
+
+	p := NewPlatform()
+	neoGeoLauncher := findNeoGeoLauncher(t, p.Launchers(cfg))
+	initial := []platforms.ScanResult{
+		{Path: filepath.Join(zipPath, "crom0")},
+		{Path: filepath.Join(folderPath, "crom0")},
+		{Path: nestedNeoPath},
+	}
+
+	results, err := neoGeoLauncher.Scanner(context.Background(), cfg, "NeoGeo", initial)
+	require.NoError(t, err)
+
+	assert.NotContains(t, results, platforms.ScanResult{Path: filepath.Join(zipPath, "crom0")})
+	assert.NotContains(t, results, platforms.ScanResult{Path: filepath.Join(folderPath, "crom0")})
+	assert.Contains(t, results, platforms.ScanResult{Path: nestedNeoPath})
+	assert.Contains(t, results, platforms.ScanResult{Path: zipPath, Name: "Metal Slug", NoExt: true})
+	assert.Contains(t, results, platforms.ScanResult{Path: folderPath, Name: "King of Fighters '98", NoExt: true})
+}
+
+func TestCollectNeoGeoRomsetEntries_DeduplicatesOverlappingRoots(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	neoGeoPath := filepath.Join(root, "NEOGEO")
+	favoritesPath := filepath.Join(neoGeoPath, "Favorites")
+	zipPath := filepath.Join(favoritesPath, "mslug.zip")
+	require.NoError(t, os.MkdirAll(favoritesPath, 0o700))
+	require.NoError(t, os.WriteFile(zipPath, []byte("test"), 0o600))
+
+	romsets := map[string]string{
+		"mslug": "Metal Slug",
+	}
+	seen := make(map[string]struct{})
+	fs := afero.NewOsFs()
+
+	first, err := collectNeoGeoRomsetEntries(context.Background(), fs, neoGeoPath, romsets, seen)
+	require.NoError(t, err)
+	second, err := collectNeoGeoRomsetEntries(context.Background(), fs, favoritesPath, romsets, seen)
+	require.NoError(t, err)
+
+	assert.Equal(t, []platforms.ScanResult{{Path: zipPath, Name: "Metal Slug", NoExt: true}}, first)
+	assert.Empty(t, second)
 }
 
 func TestFilterNeoGeoGameContents(t *testing.T) {
@@ -409,6 +576,30 @@ func TestFilterNeoGeoGameContents(t *testing.T) {
 		assert.Len(t, result, 2)
 	})
 
+	t.Run("filters nested extracted game folder contents", func(t *testing.T) {
+		t.Parallel()
+
+		romsets := map[string]string{
+			"mslug": "Metal Slug",
+		}
+
+		nestedRomPath := filepath.Join(
+			string(filepath.Separator), "media", "fat", "NEOGEO", "favorites", "mslug", "crom0",
+		)
+		nestedNeoPath := filepath.Join(
+			string(filepath.Separator), "media", "fat", "NEOGEO", "favorites", "collection", "game.neo",
+		)
+		input := []platforms.ScanResult{
+			{Path: nestedRomPath},
+			{Path: nestedNeoPath},
+		}
+
+		result := filterNeoGeoGameContents(input, romsets, defaultNeogeoPaths)
+
+		require.Len(t, result, 1)
+		assert.Equal(t, nestedNeoPath, result[0].Path)
+	})
+
 	t.Run("handles multiple NEOGEO paths", func(t *testing.T) {
 		t.Parallel()
 
@@ -508,6 +699,22 @@ func TestIsInsideGameFolder(t *testing.T) {
 
 		result := isInsideGameFolder("/media/fat/neogeo/collection/game.neo", romsets, neogeoPaths)
 		assert.False(t, result)
+	})
+
+	t.Run("returns true for path inside nested game folder", func(t *testing.T) {
+		t.Parallel()
+
+		romsets := map[string]string{
+			"mslug": "Metal Slug",
+		}
+		neogeoPaths := []string{filepath.Join(string(filepath.Separator), "media", "fat", "neogeo")}
+
+		result := isInsideGameFolder(
+			filepath.Join(string(filepath.Separator), "media", "fat", "neogeo", "favorites", "mslug", "crom0"),
+			romsets,
+			neogeoPaths,
+		)
+		assert.True(t, result)
 	})
 
 	t.Run("returns false for path not under NEOGEO", func(t *testing.T) {

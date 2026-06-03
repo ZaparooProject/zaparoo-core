@@ -240,13 +240,14 @@ func sqlGetSystemTagsCached(
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	sqlQuery := `
-		SELECT TagType, Tag, SUM(Count) AS Count
-		FROM SystemTagsCache
-		WHERE SystemDBID IN (` +
+		SELECT stc.TagType, stc.Tag, t.DisplayName, SUM(stc.Count) AS Count
+		FROM SystemTagsCache stc
+		JOIN Tags t ON stc.TagDBID = t.DBID
+		WHERE stc.SystemDBID IN (` +
 		prepareVariadic("?", ",", len(args)) +
 		`)
-		GROUP BY TagType, Tag
-		ORDER BY TagType, Tag`
+		GROUP BY stc.TagType, stc.Tag, t.DisplayName
+		ORDER BY stc.TagType, stc.Tag`
 
 	stmt, err := db.PrepareContext(ctx, sqlQuery)
 	if err != nil {
@@ -270,14 +271,15 @@ func sqlGetSystemTagsCached(
 
 	result := make([]database.TagInfo, 0, 100)
 	for rows.Next() {
-		var tagType, tag string
+		var tagType, tag, label string
 		var count int64
-		if scanErr := rows.Scan(&tagType, &tag, &count); scanErr != nil {
+		if scanErr := rows.Scan(&tagType, &tag, &label, &count); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan cached tag result: %w", scanErr)
 		}
 		result = append(result, database.TagInfo{
 			Type:  tagType,
 			Tag:   tags.UnpadTagValue(tag),
+			Label: label,
 			Count: count,
 		})
 	}

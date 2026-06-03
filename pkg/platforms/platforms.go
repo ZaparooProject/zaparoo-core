@@ -58,6 +58,18 @@ type LauncherContextManager interface {
 	NewContext() context.Context
 }
 
+// ServiceReadyPlatform is optionally implemented by platforms that can report
+// when startup-dependent platform features are ready for user hooks.
+type ServiceReadyPlatform interface {
+	WaitForServiceReady(context.Context, *config.Instance) error
+}
+
+// MediaReadyPlatform is optionally implemented by platforms that can report
+// when active media is ready for controls or raw input.
+type MediaReadyPlatform interface {
+	WaitForMediaReady(context.Context, *config.Instance, *models.ActiveMedia) error
+}
+
 // LauncherLifecycle determines how a launcher process is managed
 type LauncherLifecycle int
 
@@ -129,16 +141,17 @@ type CmdEnv struct {
 	LauncherCtx context.Context
 	// ServiceCtx is canceled during full service shutdown or process stop. Use it
 	// for work tied to service lifetime rather than the current launcher lifetime.
-	ServiceCtx    context.Context
-	Playlist      playlists.PlaylistController
-	Cfg           *config.Instance
-	Database      *database.Database
-	ExprEnv       *zapscript.ArgExprEnv
-	Source        string
-	Cmd           zapscript.Command
-	TotalCommands int
-	CurrentIndex  int
-	Unsafe        bool
+	ServiceCtx        context.Context
+	WaitForMediaReady func(context.Context) error
+	Playlist          playlists.PlaylistController
+	Cfg               *config.Instance
+	Database          *database.Database
+	ExprEnv           *zapscript.ArgExprEnv
+	Source            string
+	Cmd               zapscript.Command
+	TotalCommands     int
+	CurrentIndex      int
+	Unsafe            bool
 }
 
 // CmdResult returns a summary of what global side effects may or may not have
@@ -187,6 +200,13 @@ type LaunchOptions struct {
 	// - "" or "run": Default behavior (launch/play the media)
 	// - "details": Show media details/info page instead of launching
 	Action string
+	// SetName specifies a platform-defined launch profile/core name override.
+	// On MiSTer this maps to the MGL <setname> tag.
+	SetName string
+	// SetNameSameDir is a raw optional platform-defined flag controlling whether
+	// SetName should keep the original game directory. On MiSTer this maps to the
+	// MGL setname same_dir attribute. Unsupported platforms may ignore it.
+	SetNameSameDir string
 }
 
 // Launcher defines how a platform launcher can launch media and what media it
@@ -211,6 +231,9 @@ type Launcher struct {
 	// Returns process handle for tracked processes, nil for fire-and-forget.
 	// The opts parameter is optional and may be nil.
 	Launch func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
+	// WaitForReady optionally blocks until launched media is ready for controls
+	// or raw input. If nil, platform-level readiness is used, then immediate ready.
+	WaitForReady func(context.Context, *config.Instance, *models.ActiveMedia) error
 	// UsesRunningInstance identifies which running application instance this launcher
 	// communicates with (e.g., "kodi", "plex"). Empty string means the launcher starts
 	// its own process. When non-empty, platforms should not kill the running app if both

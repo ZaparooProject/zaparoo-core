@@ -229,13 +229,13 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 
 	// Fetch tags from both MediaTags (file-level) and MediaTitleTags (title-level)
 	rows, err := db.conn().QueryContext(ctx, `
-		SELECT Tags.Tag, TagTypes.Type
+		SELECT Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTags
 		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
 		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
 		WHERE MediaTags.MediaDBID = ?
 		UNION
-		SELECT Tags.Tag, TagTypes.Type
+		SELECT Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM Media
 		JOIN MediaTitleTags ON MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
 		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
@@ -255,7 +255,7 @@ func (db *MediaDB) GetMediaByDBID(ctx context.Context, mediaDBID int64) (databas
 	result.Tags = make([]database.TagInfo, 0)
 	for rows.Next() {
 		var tag database.TagInfo
-		if scanErr := rows.Scan(&tag.Tag, &tag.Type); scanErr != nil {
+		if scanErr := rows.Scan(&tag.Tag, &tag.Type, &tag.Label); scanErr != nil {
 			return result, fmt.Errorf("failed to scan tag: %w", scanErr)
 		}
 		tag.Tag = tags.UnpadTagValue(tag.Tag)

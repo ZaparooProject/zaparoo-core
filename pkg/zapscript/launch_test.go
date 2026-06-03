@@ -161,6 +161,42 @@ launcher = "genesis-default"
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdLaunch_SetNameArgsPassedThrough(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	absPath := filepath.Join(t.TempDir(), "game.nes")
+
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+	mockPlatform.On("LaunchMedia", cfg, absPath,
+		(*platforms.Launcher)(nil), (*database.Database)(nil),
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil &&
+				opts.SetName == "RA_NES" &&
+				opts.SetNameSameDir == "notabool" &&
+				opts.Action == ""
+		})).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{absPath},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"set_name":          "RA_NES",
+				"set_name_same_dir": "notabool",
+			}),
+		},
+		Cfg: cfg,
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
 // TestCmdLaunch_InvalidSystemArgReturnsError verifies invalid system returns validation error
 func TestCmdLaunch_InvalidSystemArgReturnsError(t *testing.T) {
 	t.Parallel()

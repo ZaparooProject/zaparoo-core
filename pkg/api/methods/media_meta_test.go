@@ -22,7 +22,6 @@ package methods
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -31,7 +30,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -101,6 +102,61 @@ func TestHandleMediaMeta_FullResult(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestMapMediaProperties_InfersPathContentType(t *testing.T) {
+	t.Parallel()
+
+	props := mapMediaProperties([]database.MediaProperty{{
+		TypeTag: "property:image-boxart",
+		Text:    filepath.Join("media", "boxart", "mario.png"),
+	}})
+
+	prop := props["property:image-boxart"]
+	assert.Equal(t, "image/png", prop.ContentType)
+	require.NotNil(t, prop.Extension)
+	assert.Equal(t, "png", *prop.Extension)
+}
+
+func TestAvailableImageTypes_UsesDefaultOrder(t *testing.T) {
+	t.Parallel()
+
+	got := availableImageTypes([]database.MediaProperty{
+		{TypeTag: "property:image-wheel"},
+		{TypeTag: "property:image-boxart3d"},
+		{TypeTag: "property:description"},
+		{TypeTag: "property:image-boxart"},
+		{TypeTag: "property:image-boxartback"},
+	})
+
+	assert.Equal(t, []string{"boxart", "boxart3d", "wheel", "boxartback"}, got)
+}
+
+func TestHandleMediaMeta_AvailableImageTypes(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(12, 120)
+	expectMediaMetaResolve(mockDB, row)
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(12)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(120)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaProperties", mock.Anything, int64(12)).Return([]database.MediaProperty{
+		{TypeTag: "property:image-screenshot"},
+	}, nil)
+	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(120)).Return([]database.MediaProperty{
+		{TypeTag: "property:image-wheel"},
+		{TypeTag: "property:image-boxart"},
+	}, nil)
+
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
+	result, err := HandleMediaMeta(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaMetaResponse)
+	require.True(t, ok)
+	assert.Equal(t, []string{"screenshot"}, resp.Media.AvailableImageTypes)
+	assert.Equal(t, []string{"boxart", "wheel"}, resp.Media.Title.AvailableImageTypes)
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaMeta_SecondarySlug(t *testing.T) {
 	t.Parallel()
 
@@ -133,7 +189,7 @@ func TestHandleMediaMeta_SecondarySlug(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestHandleMediaMeta_BinaryPropertyBase64Encoded(t *testing.T) {
+func TestHandleMediaMeta_BinaryPropertyMetadataOnly(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
@@ -143,11 +199,11 @@ func TestHandleMediaMeta_BinaryPropertyBase64Encoded(t *testing.T) {
 	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(3)).Return([]database.TagInfo{}, nil)
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(30)).Return([]database.TagInfo{}, nil)
-	mockDB.On("GetMediaProperties", mock.Anything, int64(3)).
+	mockDB.On("GetMediaPropertyMetadata", mock.Anything, int64(3)).
 		Return([]database.MediaProperty{
-			{TypeTag: "property:image", ContentType: "image/png", Binary: blobData},
+			{TypeTag: "property:image", ContentType: "image/png", BlobSize: int64(len(blobData))},
 		}, nil)
-	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(30)).Return([]database.MediaProperty{}, nil)
+	mockDB.On("GetMediaTitlePropertyMetadata", mock.Anything, int64(30)).Return([]database.MediaProperty{}, nil)
 
 	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	result, err := HandleMediaMeta(env)
@@ -157,8 +213,43 @@ func TestHandleMediaMeta_BinaryPropertyBase64Encoded(t *testing.T) {
 	require.True(t, ok)
 	require.Contains(t, resp.Media.Properties, "property:image")
 	prop := resp.Media.Properties["property:image"]
-	require.NotNil(t, prop.Data)
-	assert.Equal(t, base64.StdEncoding.EncodeToString(blobData), *prop.Data)
+	assert.Equal(t, int64(len(blobData)), prop.BlobSize)
+	assert.Equal(t, "image/png", prop.ContentType)
+	assert.NotNil(t, prop.Extension)
+	assert.Equal(t, "png", *prop.Extension)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaMeta_OversizedBinaryPropertyMetadataOnly(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	blobID := int64(99)
+
+	row := makeMediaFullRow(4, 40)
+	expectMediaMetaResolve(mockDB, row)
+	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(4)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(40)).Return([]database.TagInfo{}, nil)
+	mockDB.On("GetMediaPropertyMetadata", mock.Anything, int64(4)).
+		Return([]database.MediaProperty{
+			{
+				TypeTag:     "property:image",
+				ContentType: "image/png",
+				BlobDBID:    &blobID,
+				BlobSize:    database.MaxMediaPropertyBinaryBytes + 1,
+			},
+		}, nil)
+	mockDB.On("GetMediaTitlePropertyMetadata", mock.Anything, int64(40)).Return([]database.MediaProperty{}, nil)
+
+	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
+	result, err := HandleMediaMeta(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaMetaResponse)
+	require.True(t, ok)
+	require.Contains(t, resp.Media.Properties, "property:image")
+	prop := resp.Media.Properties["property:image"]
+	assert.Equal(t, int64(database.MaxMediaPropertyBinaryBytes+1), prop.BlobSize)
 	assert.Equal(t, "image/png", prop.ContentType)
 	assert.NotNil(t, prop.Extension)
 	assert.Equal(t, "png", *prop.Extension)
@@ -313,6 +404,128 @@ func TestHandleMediaMeta_BatchAllMediaIDMissesSkipMetadataFetch(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestHandleMediaMeta_MediaIDMergesSingletonAliasMetadata(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	platform := mocks.NewMockPlatform()
+	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Twice()
+
+	row := &database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip", "Game.nes")),
+			ParentDir: filepath.ToSlash(filepath.Join("roms", "Game.zip")) + "/",
+		},
+		Title:  database.MediaTitle{DBID: 200, Name: "Game"},
+		System: database.System{DBID: 1, SystemID: "NES", Name: "NES"},
+	}
+	parentPath := filepath.ToSlash(filepath.Join("roms", "Game.zip"))
+	parent := &database.Media{DBID: 10, Path: parentPath}
+
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{row.DBID}).
+		Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil).Once()
+	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{row.DBID}).
+		Return(map[int64][]database.TagInfo{row.DBID: {{Type: "genre", Tag: "platformer"}}}, nil).Once()
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBIDs", mock.Anything, []int64{row.Title.DBID}).
+		Return(map[int64][]database.TagInfo{}, nil).Once()
+	mockDB.On("GetMediaPropertyMetadataByMediaDBIDs", mock.Anything, []int64{row.DBID}).
+		Return(map[int64][]database.MediaProperty{row.DBID: {{TypeTag: "property:description", Text: "child"}}}, nil).
+		Once()
+	mockDB.On("GetMediaTitlePropertyMetadataByMediaTitleDBIDs", mock.Anything, []int64{row.Title.DBID}).
+		Return(map[int64][]database.MediaProperty{}, nil).Once()
+	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, row.Path).
+		Return((*database.Media)(nil), nil).Twice()
+	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, parentPath).
+		Return(&row.Media, nil).Twice()
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, parentPath).
+		Return(parent, nil).Twice()
+	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{20, 10}).Return(map[int64][]database.TagInfo{
+		20: {{Type: "genre", Tag: "platformer"}},
+		10: {{Type: "favorite", Tag: "true"}},
+	}, nil).Once()
+	mockDB.On("GetMediaPropertyMetadataByMediaDBIDs", mock.Anything, []int64{20, 10}).
+		Return(map[int64][]database.MediaProperty{
+			20: {{TypeTag: "property:description", Text: "child"}},
+			10: {{TypeTag: "property:image-boxart", Text: "box.png"}},
+		}, nil).Once()
+
+	env := makeMediaMetaEnv(t, mockDB, `{"mediaId":20}`)
+	env.Platform = platform
+	result, err := HandleMediaMeta(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaMetaResponse)
+	require.True(t, ok)
+	assert.Equal(t, row.Path, resp.Media.Path)
+	assert.Equal(t, []database.TagInfo{
+		{Type: "genre", Tag: "platformer"},
+		{Type: "favorite", Tag: "true"},
+	}, resp.Media.Tags)
+	assert.Equal(t, "child", resp.Media.Properties["property:description"].Text)
+	assert.Equal(t, "box.png", resp.Media.Properties["property:image-boxart"].Text)
+	mockDB.AssertExpectations(t)
+	platform.AssertExpectations(t)
+}
+
+func TestMergedMediaMeta_MergesSingletonAliasMetadata(t *testing.T) {
+	t.Parallel()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	platform := mocks.NewMockPlatform()
+	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+
+	row := &database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip", "Game.nes")),
+			ParentDir: filepath.ToSlash(filepath.Join("roms", "Game.zip")) + "/",
+		},
+		Title:  database.MediaTitle{DBID: 200},
+		System: database.System{DBID: 1, SystemID: "NES"},
+	}
+	parentPath := filepath.ToSlash(filepath.Join("roms", "Game.zip"))
+	parent := &database.Media{DBID: 10, Path: parentPath}
+
+	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, row.Path).
+		Return((*database.Media)(nil), nil).Once()
+	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, parentPath).
+		Return(&row.Media, nil).Once()
+	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, parentPath).
+		Return(parent, nil).Once()
+	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, []int64{20, 10}).Return(map[int64][]database.TagInfo{
+		20: {{Type: "genre", Tag: "platformer"}},
+		10: {{Type: "genre", Tag: "platformer"}, {Type: "favorite", Tag: "true"}},
+	}, nil).Once()
+	mockDB.On("GetMediaPropertyMetadataByMediaDBIDs", mock.Anything, []int64{20, 10}).
+		Return(map[int64][]database.MediaProperty{
+			20: {{TypeTag: "property:description", Text: "child"}},
+			10: {
+				{TypeTag: "property:description", Text: "parent"},
+				{TypeTag: "property:image-boxart", Text: "box.png"},
+			},
+		}, nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+		Platform: platform,
+	}
+	tags, props, err := mergedMediaMeta(env, row)
+	require.NoError(t, err)
+
+	assert.Equal(t, []database.TagInfo{
+		{Type: "genre", Tag: "platformer"},
+		{Type: "favorite", Tag: "true"},
+	}, tags)
+	assert.Equal(t, []database.MediaProperty{
+		{TypeTag: "property:description", Text: "child"},
+		{TypeTag: "property:image-boxart", Text: "box.png"},
+	}, props)
+	mockDB.AssertExpectations(t)
+	platform.AssertExpectations(t)
+}
+
 func TestHandleMediaMeta_InvalidParams(t *testing.T) {
 	t.Parallel()
 
@@ -388,7 +601,7 @@ func TestHandleMediaMeta_MediaPropertiesDBError(t *testing.T) {
 	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	_, err := HandleMediaMeta(env)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to get media properties")
+	assert.Contains(t, err.Error(), "failed to get media property metadata")
 	mockDB.AssertExpectations(t)
 }
 
@@ -407,6 +620,6 @@ func TestHandleMediaMeta_TitlePropertiesDBError(t *testing.T) {
 	env := makeMediaMetaEnv(t, mockDB, mediaMetaParams(row))
 	_, err := HandleMediaMeta(env)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to get title properties")
+	assert.Contains(t, err.Error(), "failed to get title property metadata")
 	mockDB.AssertExpectations(t)
 }

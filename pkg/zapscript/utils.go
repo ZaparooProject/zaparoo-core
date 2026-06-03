@@ -66,14 +66,31 @@ func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	}
 
 	amount, err := strconv.Atoi(env.Cmd.Args[0])
-	if err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("invalid delay amount '%s': %w", env.Cmd.Args[0], err)
+	if err == nil {
+		log.Info().Msgf("delaying for: %d", amount)
+		time.Sleep(time.Duration(amount) * time.Millisecond)
+		return platforms.CmdResult{}, nil
 	}
 
-	log.Info().Msgf("delaying for: %d", amount)
-	time.Sleep(time.Duration(amount) * time.Millisecond)
-
-	return platforms.CmdResult{}, nil
+	switch env.Cmd.Args[0] {
+	case "media_ready":
+		if env.WaitForMediaReady == nil {
+			return platforms.CmdResult{}, errors.New("media ready wait is not available")
+		}
+		ctx := env.LauncherCtx
+		if ctx == nil {
+			ctx = env.ServiceCtx
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if waitErr := env.WaitForMediaReady(ctx); waitErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("wait for media ready: %w", waitErr)
+		}
+		return platforms.CmdResult{}, nil
+	default:
+		return platforms.CmdResult{}, fmt.Errorf("invalid delay target %q: %w", env.Cmd.Args[0], err)
+	}
 }
 
 //nolint:gocritic // single-use parameter in command handler

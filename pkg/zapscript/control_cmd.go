@@ -91,6 +91,19 @@ func cmdControl(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 		}
 	}
 
+	if env.WaitForMediaReady != nil {
+		ctx := env.LauncherCtx
+		if ctx == nil {
+			ctx = env.ServiceCtx
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := env.WaitForMediaReady(ctx); err != nil {
+			return platforms.CmdResult{}, fmt.Errorf("wait for media ready: %w", err)
+		}
+	}
+
 	log.Info().Str("action", action).Str("launcher", launcherID).Msg("executing control command")
 
 	var err error

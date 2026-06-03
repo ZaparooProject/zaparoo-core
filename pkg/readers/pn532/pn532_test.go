@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
@@ -153,6 +154,24 @@ func TestWriteWithContext_EmptyText(t *testing.T) {
 	assert.Nil(t, token)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "text cannot be empty")
+}
+
+func TestWriteWithContext_NilContext(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New("write failed")
+	reader := NewReader(&config.Instance{})
+	reader.session = &mockPollingSession{writeToNextTagWithRetryErr: expectedErr}
+
+	var nilCtx context.Context
+	var token *tokens.Token
+	var err error
+	assert.NotPanics(t, func() {
+		token, err = reader.WriteWithContext(nilCtx, "test")
+	})
+
+	assert.Nil(t, token)
+	require.ErrorIs(t, err, expectedErr)
 }
 
 func TestCancelWrite_NoActiveWrite(t *testing.T) {

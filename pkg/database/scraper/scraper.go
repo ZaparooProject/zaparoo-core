@@ -54,14 +54,16 @@ type ScrapeOptions struct {
 
 // ScrapeUpdate is one progress event emitted on the channel returned by Scrape.
 type ScrapeUpdate struct {
-	Err       error
-	FatalErr  error
-	SystemID  string
-	Processed int
-	Total     int
-	Matched   int
-	Skipped   int
-	Done      bool
+	Err         error
+	FatalErr    error
+	SystemID    string
+	Processed   int
+	Total       int
+	Matched     int
+	Skipped     int
+	TotalSteps  int
+	CurrentStep int
+	Done        bool
 }
 
 // MatchResult is the output of a successful Match call. Both IDs must be

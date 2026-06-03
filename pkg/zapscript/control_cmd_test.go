@@ -422,6 +422,80 @@ func TestCmdControl_WhenOnlyAdvArg(t *testing.T) {
 	assert.Nil(t, calledWith.Args, "args should be nil when only 'when' is present")
 }
 
+func TestCmdControl_WaitsForMediaReadyBeforeControl(t *testing.T) {
+	t.Parallel()
+
+	waited := false
+	controlFunc := func(_ context.Context, _ *config.Instance, _ platforms.ControlParams) error {
+		require.True(t, waited)
+		return nil
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+		{
+			ID: "test-launcher",
+			Controls: map[string]platforms.Control{
+				"toggle_pause": {Func: controlFunc},
+			},
+		},
+	})
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "control",
+			Args: []string{"toggle_pause"},
+		},
+		ExprEnv:     newControlExprEnv("test-launcher"),
+		LauncherCtx: context.Background(),
+		WaitForMediaReady: func(ctx context.Context) error {
+			require.NotNil(t, ctx)
+			waited = true
+			return nil
+		},
+	}
+
+	_, err := cmdControl(mockPlatform, env)
+	require.NoError(t, err)
+	assert.True(t, waited)
+}
+
+func TestCmdControl_WaitForMediaReadyErrorSkipsControl(t *testing.T) {
+	t.Parallel()
+
+	controlCalled := false
+	controlFunc := func(context.Context, *config.Instance, platforms.ControlParams) error {
+		controlCalled = true
+		return nil
+	}
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", (*config.Instance)(nil)).Return([]platforms.Launcher{
+		{
+			ID: "test-launcher",
+			Controls: map[string]platforms.Control{
+				"toggle_pause": {Func: controlFunc},
+			},
+		},
+	})
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "control",
+			Args: []string{"toggle_pause"},
+		},
+		ExprEnv: newControlExprEnv("test-launcher"),
+		WaitForMediaReady: func(context.Context) error {
+			return errors.New("not ready")
+		},
+	}
+
+	_, err := cmdControl(mockPlatform, env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "wait for media ready")
+	assert.False(t, controlCalled)
+}
+
 func TestCmdControl_FuncError(t *testing.T) {
 	t.Parallel()
 

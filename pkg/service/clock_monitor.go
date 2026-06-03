@@ -31,7 +31,19 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type uptimeProvider func() (time.Duration, error)
+type (
+	uptimeProvider       func() (time.Duration, error)
+	clockReliabilityFunc func(time.Time) bool
+	timestampHealFunc    func(
+		db *database.Database,
+		bootUUID string,
+		now time.Time,
+		wasReliable bool,
+		healed bool,
+		getUptime uptimeProvider,
+		isClockReliable clockReliabilityFunc,
+	) bool
+)
 
 // monitorClockAndHealTimestamps monitors the system clock and heals timestamps when NTP syncs.
 // This is critical for MiSTer devices that boot without RTC and initially show 1970 epoch time.
@@ -40,15 +52,45 @@ func monitorClockAndHealTimestamps(ctx context.Context, db *database.Database, b
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
+	monitorClockAndHealTimestampsWithDeps(
+		ctx,
+		db,
+		bootUUID,
+		ticker.C,
+		time.Now,
+		helpers.IsClockReliable,
+		uptime.Get,
+		healTimestampsIfClockReliableWithDeps,
+	)
+}
+
+func monitorClockAndHealTimestampsWithDeps(
+	ctx context.Context,
+	db *database.Database,
+	bootUUID string,
+	ticks <-chan time.Time,
+	nowFunc func() time.Time,
+	isClockReliable clockReliabilityFunc,
+	getUptime uptimeProvider,
+	healFunc timestampHealFunc,
+) {
 	healed := false
-	wasReliable := helpers.IsClockReliable(time.Now())
+	wasReliable := isClockReliable(nowFunc())
 
 	for {
 		select {
-		case <-ticker.C:
-			now := time.Now()
-			healed = healTimestampsIfClockReliable(db, bootUUID, now, wasReliable, healed, uptime.Get)
-			wasReliable = helpers.IsClockReliable(now)
+		case now, ok := <-ticks:
+			if !ok {
+				return
+			}
+			wasReliableBeforeHeal := wasReliable
+			healed = healFunc(db, bootUUID, now, wasReliable, healed, getUptime, isClockReliable)
+			isReliable := isClockReliable(now)
+			// Keep the previous unreliable state when healing fails so the next tick
+			// can retry the same NTP transition. A successful zero-row heal marks done.
+			if !isReliable || healed || wasReliableBeforeHeal {
+				wasReliable = isReliable
+			}
 
 		case <-ctx.Done():
 			return
@@ -64,14 +106,32 @@ func healTimestampsIfClockReliable(
 	healed bool,
 	getUptime uptimeProvider,
 ) bool {
-	isReliable := helpers.IsClockReliable(now)
-	if !isReliable || healed {
+	return healTimestampsIfClockReliableWithDeps(
+		db,
+		bootUUID,
+		now,
+		wasReliable,
+		healed,
+		getUptime,
+		helpers.IsClockReliable,
+	)
+}
+
+func healTimestampsIfClockReliableWithDeps(
+	db *database.Database,
+	bootUUID string,
+	now time.Time,
+	wasReliable bool,
+	healed bool,
+	getUptime uptimeProvider,
+	isClockReliable clockReliabilityFunc,
+) bool {
+	isReliable := isClockReliable(now)
+	if !isReliable || wasReliable || healed {
 		return healed
 	}
 
-	log.Info().
-		Bool("was_reliable", wasReliable).
-		Msg("clock is reliable, healing timestamps")
+	log.Info().Msg("clock became reliable (NTP sync detected), healing timestamps")
 
 	// Calculate true boot time: Current Time - System Uptime
 	systemUptime, err := getUptime()

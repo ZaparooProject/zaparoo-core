@@ -144,10 +144,6 @@ func logSafeResponse(result any) {
 			Str("contentType", resp.ContentType).
 			Int("data_len", len(resp.Data)).
 			Msg("sending response")
-	case models.MediaImageBatchResponse:
-		log.Debug().
-			Int("items", len(resp.Items)).
-			Msg("sending response: media.image batch")
 	case models.MediaMetaResponse:
 		log.Debug().
 			Str("system", resp.Media.Title.System.ID).
@@ -270,6 +266,7 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaScrapeCancel:   methods.HandleMediaScrapeCancel,
 		models.MethodMediaScrapeResume:   methods.HandleMediaScrapeResume,
 		models.MethodMediaControl:        methods.HandleMediaControl,
+		models.MethodMediaTitleParse:     methods.HandleMediaTitleParse,
 		// settings
 		models.MethodSettings:             methods.HandleSettings,
 		models.MethodSettingsUpdate:       methods.HandleSettingsUpdate,
@@ -598,6 +595,7 @@ func isPrivateIP(ipStr string) bool {
 func isAllowedOrigin(
 	origin string,
 	staticOrigins []string,
+	localIPsProvider LocalIPsProvider,
 	customOriginsProvider OriginsProvider,
 	apiPort int,
 	allowEmptyOrigin bool,
@@ -616,6 +614,16 @@ func isAllowedOrigin(
 	for _, allowed := range staticOrigins {
 		if strings.EqualFold(origin, allowed) {
 			log.Debug().Msgf("%s origin: %s allowed (static match)", logPrefix, origin)
+			return true
+		}
+	}
+
+	// Check current local IP origins dynamically. Network interfaces may not
+	// have addresses when the API server starts, especially during first boot.
+	localOrigins := expandLocalIPOrigins(localIPsProvider(), apiPort)
+	for _, allowed := range localOrigins {
+		if strings.EqualFold(origin, allowed) {
+			log.Debug().Msgf("%s origin: %s allowed (current local IP match)", logPrefix, origin)
 			return true
 		}
 	}
@@ -666,10 +674,9 @@ func expandCustomOrigins(customOrigins []string, port int) []string {
 	return result
 }
 
-// buildStaticAllowedOrigins creates the static part of allowed origins (base + local IPs).
-func buildStaticAllowedOrigins(baseOrigins, localIPs []string, port int) []string {
-	result := make([]string, 0, len(baseOrigins)+len(localIPs)*2)
-	result = append(result, baseOrigins...)
+// expandLocalIPOrigins creates allowed origins for current local interface IPs.
+func expandLocalIPOrigins(localIPs []string, port int) []string {
+	result := make([]string, 0, len(localIPs)*2)
 
 	for _, localIP := range localIPs {
 		result = append(result,
@@ -677,6 +684,15 @@ func buildStaticAllowedOrigins(baseOrigins, localIPs []string, port int) []strin
 			fmt.Sprintf("https://%s:%d", localIP, port),
 		)
 	}
+
+	return result
+}
+
+// buildStaticAllowedOrigins creates the static part of allowed origins (base + local IPs).
+func buildStaticAllowedOrigins(baseOrigins, localIPs []string, port int) []string {
+	result := make([]string, 0, len(baseOrigins)+len(localIPs)*2)
+	result = append(result, baseOrigins...)
+	result = append(result, expandLocalIPOrigins(localIPs, port)...)
 
 	return result
 }
@@ -691,15 +707,19 @@ func buildDynamicAllowedOrigins(baseOrigins, localIPs []string, port int, custom
 // OriginsProvider is a function that returns custom origins from config.
 type OriginsProvider func() []string
 
+// LocalIPsProvider is a function that returns current local interface IPs.
+type LocalIPsProvider func() []string
+
 // makeOriginValidator creates an origin validation function for CORS middleware.
 // It checks against static origins and dynamically fetches custom origins on each request.
 func makeOriginValidator(
 	staticOrigins []string,
+	localIPsProvider LocalIPsProvider,
 	customOriginsProvider OriginsProvider,
 	port int,
 ) func(*http.Request, string) bool {
 	return func(_ *http.Request, origin string) bool {
-		return isAllowedOrigin(origin, staticOrigins, customOriginsProvider, port, false, "cors")
+		return isAllowedOrigin(origin, staticOrigins, localIPsProvider, customOriginsProvider, port, false, "cors")
 	}
 }
 
@@ -943,8 +963,12 @@ func handleWSMessage(
 	tracker RequestTracker,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
+		trackerActive := false
 		defer func() {
 			if r := recover(); r != nil {
+				if trackerActive && tracker != nil {
+					tracker.RequestEnded()
+				}
 				log.Error().Interface("panic", r).Msg("panic in websocket handler")
 				err := sendWSError(session, models.NullRPCID, JSONRPCErrorInternalError)
 				if err != nil {
@@ -953,14 +977,23 @@ func handleWSMessage(
 			}
 		}()
 
-		// Bracket the entire per-message lifecycle (decrypt → dispatch →
-		// marshal → write → AfterWrite) so the idle scheduler doesn't
-		// see inFlight == 0 while a response is still being serialized.
-		// Pong fast-paths are intentionally counted: they're still wire
-		// activity and their cost is negligible.
+		// Bracket the entire per-message lifecycle (decrypt → queue → dispatch →
+		// marshal → write → AfterWrite) so the idle scheduler doesn't see
+		// inFlight == 0 while queued or serialized work is still active.
+		// Once a request is queued, the dispatcher ends the tracker after the
+		// response write (or no-reply completion).
 		if tracker != nil {
 			tracker.RequestStarted()
-			defer tracker.RequestEnded()
+			trackerActive = true
+		}
+		endTrackedRequest := func() {
+			if trackerActive && tracker != nil {
+				tracker.RequestEnded()
+			}
+			trackerActive = false
+		}
+		handoffTrackedRequest := func() {
+			trackerActive = false
 		}
 
 		clientIP := apimiddleware.ParseRemoteIP(session.Request.RemoteAddr)
@@ -985,6 +1018,7 @@ func handleWSMessage(
 				Str("remote_addr", session.Request.RemoteAddr).
 				Msg("ws: rejecting encrypted connection from unparseable remote addr")
 			closeMelodySession(session)
+			endTrackedRequest()
 			return
 		}
 
@@ -994,6 +1028,7 @@ func handleWSMessage(
 		plaintext, cs, ok := decryptIncomingFrame(
 			session, msg, encGateway, encryptionEnabled, isLocal, sourceIP)
 		if !ok {
+			endTrackedRequest()
 			return
 		}
 
@@ -1009,23 +1044,21 @@ func handleWSMessage(
 		// Heartbeat ping/pong runs on the decrypted plaintext so encrypted
 		// sessions get an encrypted pong, and remote plaintext probes are
 		// rejected by decryptIncomingFrame before reaching this point.
+		dispatcher := getOrCreateWSDispatcher(st.GetContext(), session)
+
 		if bytes.Equal(plaintext, []byte("ping")) {
-			if err := writePong(session.Write, cs); err != nil {
-				// Encrypted send failed (counter exhausted, write error,
-				// etc.) — the encrypted session is desynced and cannot
-				// recover. Plaintext sessions are also closed because a
-				// write failure means the wire is gone.
-				logWSWriteError(err, "sending pong")
+			if err := dispatcher.enqueuePong(cs, tracker); err != nil {
+				logWSWriteError(err, "queueing pong")
+				endTrackedRequest()
 				closeMelodySession(session)
+				return
 			}
+			handoffTrackedRequest()
 			return
 		}
 
-		reqCtx, reqCancel := context.WithTimeout(st.GetContext(), config.APIRequestTimeout)
-		defer reqCancel()
-
 		env := requests.RequestEnv{
-			Context:       reqCtx,
+			Context:       st.GetContext(),
 			Platform:      platform,
 			Config:        cfg,
 			State:         st,
@@ -1041,32 +1074,18 @@ func handleWSMessage(
 			ClientID:      session.Request.RemoteAddr,
 		}
 
-		result := processRequestObject(methodMap, env, plaintext)
-		if !result.ShouldReply {
-			// Notifications and incoming responses don't get replies
+		if err := enqueueWSRequest(dispatcher, methodMap, &env, plaintext, cs, tracker); err != nil {
+			log.Warn().Err(err).Msg("failed to queue websocket request")
+			endTrackedRequest()
+			if sendErr := sendWSEncryptedError(
+				session, cs, models.NullRPCID, JSONRPCErrorInternalError,
+			); sendErr != nil {
+				logWSWriteError(sendErr, "error sending queue failure response")
+				closeMelodySession(session)
+			}
 			return
 		}
-		if result.Error != nil {
-			err := sendWSEncryptedError(session, cs, result.ID, *result.Error)
-			if err != nil {
-				logWSWriteError(err, "error sending error response")
-				// Encrypted send failed (counter exhausted, write
-				// error, etc.) — the encrypted session is desynced
-				// and cannot recover. Plaintext sessions are also
-				// closed because a write failure means the wire is
-				// gone.
-				closeMelodySession(session)
-			}
-		} else {
-			err := sendWSEncryptedResponse(session, cs, result.ID, result.Result)
-			if err != nil {
-				logWSWriteError(err, "error sending response")
-				closeMelodySession(session)
-			}
-		}
-		if result.AfterWrite != nil {
-			result.AfterWrite()
-		}
+		handoffTrackedRequest()
 	}
 }
 
@@ -1422,13 +1441,15 @@ func StartWithReady(
 		fmt.Sprintf("https://127.0.0.1:%d", port),
 	)
 
-	localIPs := helpers.GetAllLocalIPs()
+	localIPsProvider := LocalIPsProvider(helpers.GetAllLocalIPs)
+	localIPs := localIPsProvider()
 	for _, localIP := range localIPs {
 		log.Debug().Msgf("adding local IP to allowed origins: %s", localIP)
 	}
 
-	// Build static origins (base + local IPs + mDNS + OS hostname)
-	staticOrigins := buildStaticAllowedOrigins(baseOrigins, localIPs, port)
+	// Build static origins (base + mDNS + OS hostname). Local IP origins are
+	// checked dynamically because network interfaces may appear after startup.
+	staticOrigins := buildStaticAllowedOrigins(baseOrigins, nil, port)
 
 	if mdnsHostname != "" {
 		mdnsLocal := mdnsHostname + ".local"
@@ -1453,8 +1474,8 @@ func StartWithReady(
 
 	log.Debug().Msgf("staticOrigins: %v", staticOrigins)
 
-	// Create origin validator that checks static origins + dynamic custom origins
-	originValidator := makeOriginValidator(staticOrigins, cfg.AllowedOrigins, port)
+	// Create origin validator that checks static origins + dynamic local IP/custom origins.
+	originValidator := makeOriginValidator(staticOrigins, localIPsProvider, cfg.AllowedOrigins, port)
 
 	r := chi.NewRouter()
 
@@ -1531,7 +1552,7 @@ func StartWithReady(
 	session.Upgrader.CheckOrigin = func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		log.Debug().Msgf("websocket origin: %s", origin)
-		return isAllowedOrigin(origin, staticOrigins, cfg.AllowedOrigins, port, true, "websocket")
+		return isAllowedOrigin(origin, staticOrigins, localIPsProvider, cfg.AllowedOrigins, port, true, "websocket")
 	}
 	// melody's Session.Write is a non-blocking enqueue onto a per-session
 	// output channel (default size 256). When that channel fills, the
@@ -1547,6 +1568,9 @@ func StartWithReady(
 	// this errorHandler in an infinite recursion. Closing the underlying
 	// conn directly causes writePump to fail on its next write, exit, and
 	// run the normal session close path.
+	session.HandleDisconnect(func(s *melody.Session) {
+		closeWSDispatcher(s)
+	})
 	session.HandleError(func(s *melody.Session, herr error) {
 		if errors.Is(herr, melody.ErrMessageBufferFull) {
 			cs := getClientSession(s)

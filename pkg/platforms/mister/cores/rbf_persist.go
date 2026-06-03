@@ -41,7 +41,7 @@ const RBFCacheFileName = "rbf_cache.gob"
 
 const (
 	rbfCacheFileMagic   = "zrbf"
-	rbfCacheFileVersion = 2
+	rbfCacheFileVersion = 3
 )
 
 // rbfCacheMaxBytes caps gob input at load time. ~200 RBFs × ~256 B per
@@ -91,6 +91,11 @@ func snapshotDirMtimesAt(root string) (map[string]int64, error) {
 			continue
 		}
 		snapshot[sub] = info.ModTime().UnixNano()
+	}
+
+	raCoreDir := filepath.Join(root, "_RA_Cores", "Cores")
+	if info, statErr := os.Stat(raCoreDir); statErr == nil && info.IsDir() {
+		snapshot[raCoreDir] = info.ModTime().UnixNano()
 	}
 	return snapshot, nil
 }
