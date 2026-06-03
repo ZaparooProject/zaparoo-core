@@ -150,7 +150,9 @@ func TestAuthRequestUsesChallengeThenSessionToken(t *testing.T) {
 
 	b.sessionToken = "session-token"
 	reconnect := b.authRequest()
-	if reconnect.PluginID != "zaparoo-hyperhq" || reconnect.Challenge != "" || reconnect.SessionToken != "session-token" {
+	if reconnect.PluginID != "zaparoo-hyperhq" ||
+		reconnect.Challenge != "" ||
+		reconnect.SessionToken != "session-token" {
 		t.Fatalf("reconnect auth request = %+v, want session-token auth", reconnect)
 	}
 }
