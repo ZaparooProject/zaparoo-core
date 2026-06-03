@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeSocket struct {
@@ -375,10 +376,12 @@ func TestDecodeFirst(t *testing.T) {
 }
 
 func TestDecodeHyperHqEventEnvelopeAcceptsNumericTimestamp(t *testing.T) {
+	const wantTimestamp int64 = 1770000000000
+
 	var env hqEventEnvelope
 	err := decodeFirst([]any{map[string]any{
 		"type":      hqEventGameLaunched,
-		"timestamp": float64(1770000000000),
+		"timestamp": float64(wantTimestamp),
 		"data": map[string]any{
 			"gameId":   "game-1",
 			"gameName": "Game",
@@ -390,6 +393,19 @@ func TestDecodeHyperHqEventEnvelopeAcceptsNumericTimestamp(t *testing.T) {
 	}
 	if env.Type != hqEventGameLaunched || len(env.Data) == 0 {
 		t.Fatalf("decoded envelope = %+v, want gameLaunched with data", env)
+	}
+
+	switch timestamp := env.Timestamp.(type) {
+	case float64:
+		if timestamp != float64(wantTimestamp) {
+			t.Fatalf("env.Timestamp = %v, want %v", timestamp, float64(wantTimestamp))
+		}
+	case time.Time:
+		if timestamp.UnixMilli() != wantTimestamp {
+			t.Fatalf("env.Timestamp = %v (%d ms), want %d ms", timestamp, timestamp.UnixMilli(), wantTimestamp)
+		}
+	default:
+		t.Fatalf("env.Timestamp type = %T, want float64 or time.Time", env.Timestamp)
 	}
 }
 
