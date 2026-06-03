@@ -963,8 +963,12 @@ func handleWSMessage(
 	tracker RequestTracker,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
+		trackerActive := false
 		defer func() {
 			if r := recover(); r != nil {
+				if trackerActive && tracker != nil {
+					tracker.RequestEnded()
+				}
 				log.Error().Interface("panic", r).Msg("panic in websocket handler")
 				err := sendWSError(session, models.NullRPCID, JSONRPCErrorInternalError)
 				if err != nil {
@@ -973,14 +977,23 @@ func handleWSMessage(
 			}
 		}()
 
-		// Bracket the entire per-message lifecycle (decrypt → dispatch →
-		// marshal → write → AfterWrite) so the idle scheduler doesn't
-		// see inFlight == 0 while a response is still being serialized.
-		// Pong fast-paths are intentionally counted: they're still wire
-		// activity and their cost is negligible.
+		// Bracket the entire per-message lifecycle (decrypt → queue → dispatch →
+		// marshal → write → AfterWrite) so the idle scheduler doesn't see
+		// inFlight == 0 while queued or serialized work is still active.
+		// Once a request is queued, the dispatcher ends the tracker after the
+		// response write (or no-reply completion).
 		if tracker != nil {
 			tracker.RequestStarted()
-			defer tracker.RequestEnded()
+			trackerActive = true
+		}
+		endTrackedRequest := func() {
+			if trackerActive && tracker != nil {
+				tracker.RequestEnded()
+			}
+			trackerActive = false
+		}
+		handoffTrackedRequest := func() {
+			trackerActive = false
 		}
 
 		clientIP := apimiddleware.ParseRemoteIP(session.Request.RemoteAddr)
@@ -1005,6 +1018,7 @@ func handleWSMessage(
 				Str("remote_addr", session.Request.RemoteAddr).
 				Msg("ws: rejecting encrypted connection from unparseable remote addr")
 			closeMelodySession(session)
+			endTrackedRequest()
 			return
 		}
 
@@ -1014,6 +1028,7 @@ func handleWSMessage(
 		plaintext, cs, ok := decryptIncomingFrame(
 			session, msg, encGateway, encryptionEnabled, isLocal, sourceIP)
 		if !ok {
+			endTrackedRequest()
 			return
 		}
 
@@ -1029,23 +1044,21 @@ func handleWSMessage(
 		// Heartbeat ping/pong runs on the decrypted plaintext so encrypted
 		// sessions get an encrypted pong, and remote plaintext probes are
 		// rejected by decryptIncomingFrame before reaching this point.
+		dispatcher := getOrCreateWSDispatcher(st.GetContext(), session)
+
 		if bytes.Equal(plaintext, []byte("ping")) {
-			if err := writePong(session.Write, cs); err != nil {
-				// Encrypted send failed (counter exhausted, write error,
-				// etc.) — the encrypted session is desynced and cannot
-				// recover. Plaintext sessions are also closed because a
-				// write failure means the wire is gone.
-				logWSWriteError(err, "sending pong")
+			if err := dispatcher.enqueuePong(cs, tracker); err != nil {
+				logWSWriteError(err, "queueing pong")
+				endTrackedRequest()
 				closeMelodySession(session)
+				return
 			}
+			handoffTrackedRequest()
 			return
 		}
 
-		reqCtx, reqCancel := context.WithTimeout(st.GetContext(), config.APIRequestTimeout)
-		defer reqCancel()
-
 		env := requests.RequestEnv{
-			Context:       reqCtx,
+			Context:       st.GetContext(),
 			Platform:      platform,
 			Config:        cfg,
 			State:         st,
@@ -1061,32 +1074,18 @@ func handleWSMessage(
 			ClientID:      session.Request.RemoteAddr,
 		}
 
-		result := processRequestObject(methodMap, env, plaintext)
-		if !result.ShouldReply {
-			// Notifications and incoming responses don't get replies
+		if err := enqueueWSRequest(dispatcher, methodMap, &env, plaintext, cs, tracker); err != nil {
+			log.Warn().Err(err).Msg("failed to queue websocket request")
+			endTrackedRequest()
+			if sendErr := sendWSEncryptedError(
+				session, cs, models.NullRPCID, JSONRPCErrorInternalError,
+			); sendErr != nil {
+				logWSWriteError(sendErr, "error sending queue failure response")
+				closeMelodySession(session)
+			}
 			return
 		}
-		if result.Error != nil {
-			err := sendWSEncryptedError(session, cs, result.ID, *result.Error)
-			if err != nil {
-				logWSWriteError(err, "error sending error response")
-				// Encrypted send failed (counter exhausted, write
-				// error, etc.) — the encrypted session is desynced
-				// and cannot recover. Plaintext sessions are also
-				// closed because a write failure means the wire is
-				// gone.
-				closeMelodySession(session)
-			}
-		} else {
-			err := sendWSEncryptedResponse(session, cs, result.ID, result.Result)
-			if err != nil {
-				logWSWriteError(err, "error sending response")
-				closeMelodySession(session)
-			}
-		}
-		if result.AfterWrite != nil {
-			result.AfterWrite()
-		}
+		handoffTrackedRequest()
 	}
 }
 
@@ -1569,6 +1568,9 @@ func StartWithReady(
 	// this errorHandler in an infinite recursion. Closing the underlying
 	// conn directly causes writePump to fail on its next write, exit, and
 	// run the normal session close path.
+	session.HandleDisconnect(func(s *melody.Session) {
+		closeWSDispatcher(s)
+	})
 	session.HandleError(func(s *melody.Session, herr error) {
 		if errors.Is(herr, melody.ErrMessageBufferFull) {
 			cs := getClientSession(s)
