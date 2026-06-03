@@ -115,6 +115,8 @@ func buildTagCache(ctx context.Context, db *sql.DB) (*tagCache, error) {
 
 		k := tagKey{tagType, unpadded}
 		if _, exists := allCounts[k]; !exists {
+			// Rows are ordered by type and tag, so global deduplication uses
+			// the first non-empty label seen for each tag as its display label.
 			allOrder = append(allOrder, k)
 		}
 		if allLabels[k] == "" {
