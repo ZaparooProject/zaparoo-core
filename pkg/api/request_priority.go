@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/rs/zerolog/log"
 )
 
 type apiRequestPriority int
@@ -81,6 +82,7 @@ func classifyAPIMethod(method string) apiRequestPriority {
 func methodFromAPIRequestPayload(msg []byte) string {
 	var req models.RequestObject
 	if err := json.Unmarshal(msg, &req); err != nil {
+		log.Debug().Err(err).Msg("failed to unmarshal API request payload")
 		return ""
 	}
 	return strings.ToLower(req.Method)

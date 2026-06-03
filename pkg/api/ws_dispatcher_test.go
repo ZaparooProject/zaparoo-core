@@ -133,10 +133,14 @@ func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
 
 	firstDone := make(chan struct{})
 	var methodMap MethodMap
-	require.NoError(t, methodMap.AddMethod(models.MethodRun, func(requests.RequestEnv) (any, error) {
-		time.Sleep(150 * time.Millisecond)
-		close(firstDone)
-		return map[string]string{"kind": "run"}, nil
+	require.NoError(t, methodMap.AddMethod(models.MethodRun, func(env requests.RequestEnv) (any, error) {
+		select {
+		case <-time.After(150 * time.Millisecond):
+			close(firstDone)
+			return map[string]string{"kind": "run"}, nil
+		case <-env.Context.Done():
+			return nil, env.Context.Err()
+		}
 	}))
 	require.NoError(t, methodMap.AddMethod(models.MethodStop, func(requests.RequestEnv) (any, error) {
 		select {
