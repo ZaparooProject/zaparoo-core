@@ -52,8 +52,8 @@ import (
 	"syscall"
 	"time"
 
-	sio "github.com/karagenc/socket.io-go"
-	eio "github.com/karagenc/socket.io-go/engine.io"
+	sio "github.com/zulfirman/socket.io-go"
+	eio "github.com/zulfirman/socket.io-go/engine.io"
 )
 
 const (
