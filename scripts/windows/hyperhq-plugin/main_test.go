@@ -96,7 +96,6 @@ type manifestCommunication struct {
 }
 
 type pluginManifest struct {
-	Communication manifestCommunication `json:"communication"`
 	Type          string                `json:"type"`
 	Name          string                `json:"name"`
 	Description   string                `json:"description"`
@@ -108,6 +107,7 @@ type pluginManifest struct {
 	SocketIO      manifestSocketIO      `json:"socketio"`
 	Keywords      []string              `json:"keywords"`
 	Platforms     []string              `json:"platforms"`
+	Communication manifestCommunication `json:"communication"`
 }
 
 func TestPluginManifestMatchesHyperHQExecutableSocketIODocs(t *testing.T) {
@@ -136,7 +136,10 @@ func TestPluginManifestMatchesHyperHQExecutableSocketIODocs(t *testing.T) {
 		t.Fatal("manifest communication.socketio.enabled = false, want true")
 	}
 	if !manifest.Communication.SocketIO.AutoReconnect || !manifest.Communication.SocketIO.DataRequests {
-		t.Fatalf("manifest communication.socketio = %+v, want reconnect and data requests", manifest.Communication.SocketIO)
+		t.Fatalf(
+			"manifest communication.socketio = %+v, want reconnect and data requests",
+			manifest.Communication.SocketIO,
+		)
 	}
 	if !manifest.SocketIO.Enabled || manifest.SocketIO.Namespace != "/" {
 		t.Fatalf("manifest socketio = %+v, want enabled namespace /", manifest.SocketIO)
