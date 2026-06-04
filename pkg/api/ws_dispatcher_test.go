@@ -39,6 +39,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type countingRequestTracker struct {
+	count int
+}
+
+func (t *countingRequestTracker) RequestStarted() { t.count++ }
+
+func (t *countingRequestTracker) RequestEnded() { t.count-- }
+
+func (t *countingRequestTracker) inFlight() int { return t.count }
+
 func indexRPCID(ids []models.RPCID, target models.RPCID) int {
 	for i, id := range ids {
 		if id.Equal(target) {
@@ -122,10 +132,12 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 		}
 	}
 
+	imageID := models.NewNumberID(int64(wsLowConcurrency + 1))
+	highID := models.NewNumberID(int64(wsLowConcurrency + 2))
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
-		[]byte(`{"jsonrpc":"2.0","method":"media.image","id":3}`)))
+		[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%s}`, imageID.String()))))
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
-		[]byte(`{"jsonrpc":"2.0","method":"run","id":4}`)))
+		[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"run","id":%s}`, highID.String()))))
 	select {
 	case <-highStarted:
 	case <-time.After(2 * time.Second):
@@ -135,7 +147,7 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
 	seen := make([]models.RPCID, 0, 4)
-	for range 4 {
+	for indexRPCID(seen, highID) == -1 || indexRPCID(seen, imageID) == -1 {
 		_, msg, err := conn.ReadMessage()
 		require.NoError(t, err)
 		var resp models.ResponseObject
@@ -143,11 +155,11 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 		seen = append(seen, resp.ID)
 	}
 
-	highIndex := indexRPCID(seen, models.NewNumberID(4))
-	thirdImageIndex := indexRPCID(seen, models.NewNumberID(3))
+	highIndex := indexRPCID(seen, highID)
+	imageIndex := indexRPCID(seen, imageID)
 	require.NotEqual(t, -1, highIndex)
-	require.NotEqual(t, -1, thirdImageIndex)
-	assert.Less(t, highIndex, thirdImageIndex, "high-priority request should bypass queued image work")
+	require.NotEqual(t, -1, imageIndex)
+	assert.Less(t, highIndex, imageIndex, "high-priority request should bypass queued image work")
 }
 
 func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
@@ -297,13 +309,3 @@ func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
 	assert.Equal(t, 0, tracker.inFlight())
 	assert.Error(t, jobCtx.Err())
 }
-
-type countingRequestTracker struct {
-	count int
-}
-
-func (t *countingRequestTracker) RequestStarted() { t.count++ }
-
-func (t *countingRequestTracker) RequestEnded() { t.count-- }
-
-func (t *countingRequestTracker) inFlight() int { return t.count }
