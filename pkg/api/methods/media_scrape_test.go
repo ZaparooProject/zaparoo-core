@@ -552,17 +552,19 @@ func TestHandleMediaScrapeResume_NotPaused(t *testing.T) {
 func TestScrapingStatus_ClearIfOwner_MatchingID_Clears(t *testing.T) {
 	t.Parallel()
 	s := &scrapingStatus{}
-	s.startIfNotRunning("my-scraper", false)
+	s.startIfNotRunning("my-scraper", true)
 	s.clearIfOwner("my-scraper")
 	assert.False(t, s.isRunning())
+	assert.False(t, s.force)
 }
 
 func TestScrapingStatus_ClearIfOwner_MismatchedID_Preserves(t *testing.T) {
 	t.Parallel()
 	s := &scrapingStatus{}
-	s.startIfNotRunning("owner-a", false)
+	s.startIfNotRunning("owner-a", true)
 	s.clearIfOwner("owner-b")
 	assert.True(t, s.isRunning(), "non-owner clearIfOwner must not clear state")
+	assert.True(t, s.force, "non-owner clearIfOwner must preserve force state")
 	s.clear()
 }
 
