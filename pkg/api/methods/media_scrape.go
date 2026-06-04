@@ -60,12 +60,13 @@ type scrapingStatus struct {
 	cancelFunc context.CancelFunc
 	countCache scrapedCountCache
 	scraperID  string
+	force      bool
 	latest     models.ScrapingStatusResponse
 	mu         syncutil.RWMutex
 	running    bool
 }
 
-func (s *scrapingStatus) startIfNotRunning(scraperID string) bool {
+func (s *scrapingStatus) startIfNotRunning(scraperID string, force bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.running {
@@ -73,11 +74,13 @@ func (s *scrapingStatus) startIfNotRunning(scraperID string) bool {
 	}
 	s.running = true
 	s.scraperID = scraperID
+	s.force = force
 	s.countCache = scrapedCountCache{}
 	s.latest = models.ScrapingStatusResponse{
 		ScraperID: scraperID,
 		State:     scrapeStateRunning,
 		Scraping:  true,
+		Force:     force,
 	}
 	return true
 }
@@ -87,6 +90,7 @@ func (s *scrapingStatus) clear() {
 	defer s.mu.Unlock()
 	s.running = false
 	s.scraperID = ""
+	s.force = false
 	s.cancelFunc = nil
 	s.latest = models.ScrapingStatusResponse{}
 	s.countCache = scrapedCountCache{}
@@ -103,6 +107,7 @@ func (s *scrapingStatus) clearIfOwner(scraperID string) {
 	}
 	s.running = false
 	s.scraperID = ""
+	s.force = false
 	s.cancelFunc = nil
 }
 
@@ -115,7 +120,9 @@ func (s *scrapingStatus) setLatest(status *models.ScrapingStatusResponse) {
 func (s *scrapingStatus) getLatest() models.ScrapingStatusResponse {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.latest
+	status := s.latest
+	status.Force = s.force
+	return status
 }
 
 func (s *scrapingStatus) setCancelFunc(cancelFunc context.CancelFunc) {
@@ -297,6 +304,7 @@ func scrapeState(scrapeCtx context.Context, update *scraper.ScrapeUpdate, paused
 func scrapingStatusFromUpdate(
 	scrapeCtx context.Context,
 	scraperID string,
+	force bool,
 	update *scraper.ScrapeUpdate,
 	paused bool,
 ) models.ScrapingStatusResponse {
@@ -312,6 +320,7 @@ func scrapingStatusFromUpdate(
 		Done:               update.Done,
 		Paused:             paused && !update.Done,
 		State:              scrapeState(scrapeCtx, update, paused && !update.Done),
+		Force:              force,
 		TotalSteps:         ptrIfPositive(update.TotalSteps),
 		CurrentStep:        ptrIfPositive(update.CurrentStep),
 		CurrentStepDisplay: ptrIfNotEmpty(display),
@@ -373,7 +382,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, fmt.Errorf("scraper %q has no Scrape function", s.ID)
 	}
 
-	if err := startScrapingIfNoIndex(params.ScraperID); err != nil {
+	if err := startScrapingIfNoIndex(params.ScraperID, params.Force); err != nil {
 		return nil, err
 	}
 
@@ -402,6 +411,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		State:     initialState,
 		Scraping:  true,
 		Paused:    paused,
+		Force:     params.Force,
 	}
 	populateScrapedMediaCountExact(env.State.GetContext(), db, &initialStatus)
 	publishScrapingStatus(ns, &initialStatus)
@@ -419,7 +429,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 				receivedDone = true
 			}
 			paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
-			status := scrapingStatusFromUpdate(scrapeCtx, scraperID, &update, paused)
+			status := scrapingStatusFromUpdate(scrapeCtx, scraperID, params.Force, &update, paused)
 			if update.Done {
 				populateScrapedMediaCountExact(env.State.GetContext(), db, &status)
 			} else {
@@ -435,6 +445,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		if !receivedDone {
 			terminalStatus := scrapingStatusInstance.getLatest()
 			terminalStatus.ScraperID = scraperID
+			terminalStatus.Force = params.Force
 			terminalStatus.Scraping = false
 			terminalStatus.Done = true
 			terminalStatus.Paused = false

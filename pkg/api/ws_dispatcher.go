@@ -209,6 +209,10 @@ func (d *wsSessionDispatcher) worker(queue <-chan *wsRequestJob) {
 }
 
 func (d *wsSessionDispatcher) runJob(job *wsRequestJob) {
+	ctx, cancel := context.WithTimeout(d.ctx, config.APIRequestTimeout)
+	job.env.Context = ctx
+	job.cancel = cancel
+
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Interface("panic", r).Msg("panic in websocket request worker")
@@ -329,8 +333,7 @@ func enqueueWSRequest(
 ) error {
 	method := methodFromAPIRequestPayload(msg)
 	priority := classifyAPIMethod(method)
-	ctx, cancel := context.WithTimeout(d.ctx, config.APIRequestTimeout)
-	env.Context = ctx
+	env.Context = d.ctx
 	job := &wsRequestJob{
 		methodMap: methodMap,
 		env:       env,
@@ -338,11 +341,9 @@ func enqueueWSRequest(
 		msg:       append([]byte(nil), msg...),
 		cs:        cs,
 		tracker:   tracker,
-		cancel:    cancel,
 		image:     isImageAPIMethod(method),
 	}
 	if err := d.enqueue(job, priority); err != nil {
-		cancel()
 		return fmt.Errorf("enqueue websocket request: %w", err)
 	}
 	return nil

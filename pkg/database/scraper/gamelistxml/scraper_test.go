@@ -515,7 +515,37 @@ func TestLoadRecords_SlugMatchSelectsExactMediaPath(t *testing.T) {
 	assert.True(t, records[0].MediaLevelWriteSafe)
 }
 
-func TestLoadRecords_SkipsPathOnlyFallbackWhenSlugKnown(t *testing.T) {
+func TestLoadRecords_DuplicateNameExactPathsAllMediaSafe(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	disc1Path := filepath.Join(root, "Game (Disc 1).cue")
+	disc2Path := filepath.Join(root, "Game (Disc 2).cue")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./Game (Disc 1).cue</path><name>Game</name></game>
+  <game><path>./Game (Disc 2).cue</path><name>Game</name></game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "psx", ROMPaths: []string{root}},
+		mediaBySlugAndPath("game", &database.MediaTitle{DBID: 50, Slug: "game"},
+			database.Media{DBID: 60, MediaTitleDBID: 50, Path: disc1Path},
+			database.Media{DBID: 61, MediaTitleDBID: 50, Path: disc2Path}),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+	assert.Equal(t, int64(60), records[0].MatchedMediaDBID)
+	assert.Equal(t, int64(61), records[1].MatchedMediaDBID)
+	for _, record := range records {
+		assert.Equal(t, int64(50), record.MatchedTitleDBID)
+		assert.Equal(t, gamelistMatchSlugPath, record.MatchKind)
+		assert.True(t, record.MediaLevelWriteSafe)
+	}
+}
+
+func TestLoadRecords_KnownSlugDoesNotBlockExactPathFallback(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -526,6 +556,34 @@ func TestLoadRecords_SkipsPathOnlyFallbackWhenSlugKnown(t *testing.T) {
 </gameList>`), 0o600))
 
 	indexes := mediaByPath(database.Media{DBID: 70, MediaTitleDBID: 80, Path: gamePath})
+	indexes.AllTitlesBySlug = map[string]database.MediaTitle{
+		"knowntitle": {DBID: 90, Slug: "knowntitle", Name: "Known Title"},
+	}
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}},
+		indexes,
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, int64(80), records[0].MatchedTitleDBID)
+	assert.Equal(t, int64(70), records[0].MatchedMediaDBID)
+	assert.Equal(t, gamelistMatchPathOnly, records[0].MatchKind)
+	assert.True(t, records[0].MediaLevelWriteSafe)
+}
+
+func TestLoadRecords_SkipsPathOnlyFallbackWhenSlugKnownWithoutExactPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	indexedPath := filepath.Join(root, "indexed.nes")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./conflict.nes</path><name>Known Title</name></game>
+</gameList>`), 0o600))
+
+	indexes := mediaByPath(database.Media{DBID: 70, MediaTitleDBID: 80, Path: indexedPath})
 	indexes.AllTitlesBySlug = map[string]database.MediaTitle{
 		"knowntitle": {DBID: 90, Slug: "knowntitle", Name: "Known Title"},
 	}
@@ -1215,6 +1273,78 @@ func TestMapToDB_FilesystemFallback_Boxart(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "filesystem fallback boxart property missing")
+}
+
+func TestMapToDB_FallbackFindsBox2DLogoTitleScreenDirs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	box2DDir := filepath.Join(root, "media", "box2d")
+	logoDir := filepath.Join(root, "media", "logo")
+	titleScreenDir := filepath.Join(root, "media", "titlescreen")
+	for _, dir := range []string{box2DDir, logoDir, titleScreenDir} {
+		require.NoError(t, os.MkdirAll(dir, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "Game.png"), []byte{}, 0o600))
+	}
+
+	rec := GamelistRecord{
+		SystemRootPath: root,
+		AvailableMediaDirs: map[string]string{
+			"box2d":       box2DDir,
+			"logo":        logoDir,
+			"titlescreen": titleScreenDir,
+		},
+		Game: esapi.Game{Path: "./Game.nes"},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+	props := map[string]string{}
+	for _, p := range result.MediaProps {
+		props[p.TypeTag] = p.Text
+	}
+
+	propType := string(tags.TagTypeProperty) + ":"
+	assert.Equal(t,
+		filepath.ToSlash(filepath.Join(box2DDir, "Game.png")),
+		props[propType+string(tags.TagPropertyImageBoxart)],
+	)
+	assert.Equal(t,
+		filepath.ToSlash(filepath.Join(logoDir, "Game.png")),
+		props[propType+string(tags.TagPropertyImageWheel)],
+	)
+	assert.Equal(t,
+		filepath.ToSlash(filepath.Join(titleScreenDir, "Game.png")),
+		props[propType+string(tags.TagPropertyImageTitleshot)],
+	)
+}
+
+func TestMapToDB_FallbackFindsJPGMediaFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	imgDir := filepath.Join(root, "media", "images")
+	imgPath := filepath.Join(imgDir, "Game.jpg")
+	require.NoError(t, os.MkdirAll(imgDir, 0o750))
+	require.NoError(t, os.WriteFile(imgPath, []byte{}, 0o600))
+
+	rec := GamelistRecord{
+		SystemRootPath:     root,
+		AvailableMediaDirs: map[string]string{"images": imgDir},
+		Game:               esapi.Game{Path: "./Game.nes"},
+	}
+
+	result := (&GamelistXMLScraper{}).MapToDB(&rec)
+
+	propKey := string(tags.TagTypeProperty) + ":" + string(tags.TagPropertyImageImage)
+	var found bool
+	for _, p := range result.MediaProps {
+		if p.TypeTag == propKey {
+			found = true
+			assert.Equal(t, filepath.ToSlash(imgPath), p.Text)
+			assert.Equal(t, "image/jpeg", p.ContentType)
+		}
+	}
+	assert.True(t, found, "jpg filesystem fallback image property missing")
 }
 
 func TestMapToDB_FilesystemFallback_XMLWins(t *testing.T) {

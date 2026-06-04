@@ -267,10 +267,12 @@ type BrowseDirectoriesOptions struct {
 
 // BrowseCursor holds the keyset pagination state for browse queries.
 // SortValue is the value of the sort column (Name or Path) from the last
-// result, and LastID is the DBID tiebreaker.
+// result, LastID is the DBID tiebreaker, and TotalFiles carries the first-page
+// count so cursor pages do not need to rerun the same count query.
 type BrowseCursor struct {
-	SortValue string
-	LastID    int64
+	SortValue  string
+	LastID     int64
+	TotalFiles int
 }
 
 // BrowseFilesOptions contains parameters for the BrowseFiles query.

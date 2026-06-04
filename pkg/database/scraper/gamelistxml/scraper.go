@@ -81,9 +81,11 @@ type slugMediaSelection struct {
 // media sub-directory names (under <systemRootPath>/media/) that may hold
 // artwork for that property. The first matching directory that contains the
 // expected filename wins.
+var fallbackArtworkExtensions = []string{".png", ".jpg", ".jpeg", ".webp"}
+
 var mediaDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageImage):      {"image", "images"},
-	string(tags.TagPropertyImageBoxart):     {"boxart", "boxart2d", "boxart2dfront", "box2dfront"},
+	string(tags.TagPropertyImageBoxart):     {"boxart", "boxart2d", "box2d", "boxart2dfront", "box2dfront"},
 	string(tags.TagPropertyImageBoxart3D):   {"boxart3d"},
 	string(tags.TagPropertyImageBoxartSide): {"boxart2dside"},
 	string(tags.TagPropertyImageBoxartBack): {"boxart2dback"},
@@ -92,9 +94,9 @@ var mediaDirCandidates = map[string][]string{
 		"thumbnail", "thumbnails", "box2dfront", "boxart2dfront", "supporttexture",
 	},
 	string(tags.TagPropertyImageMarquee):   {"marquee", "marquees"},
-	string(tags.TagPropertyImageWheel):     {"wheel", "wheels"},
+	string(tags.TagPropertyImageWheel):     {"wheel", "wheels", "logo", "logos"},
 	string(tags.TagPropertyImageFanart):    {"fanart", "fanarts"},
-	string(tags.TagPropertyImageTitleshot): {"titleshot", "titleshots", "screenshottitle"},
+	string(tags.TagPropertyImageTitleshot): {"titleshot", "titleshots", "titlescreen", "titlescreens", "screenshottitle"},
 	string(tags.TagPropertyImageMap):       {"map", "maps"},
 }
 
@@ -420,7 +422,25 @@ outer:
 				ProvidedName: game.Name,
 			})
 
+			pathMedia, matchedPathKey, pathOK := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved)
+
 			if title, ok := indexes.TitlesBySlug[pf.Slug]; ok {
+				if pathOK && pathMedia.MediaTitleDBID == title.DBID {
+					slugMatches++
+					slugPathSelections++
+					records = append(records, &GamelistRecord{
+						SystemRootPath:      file.RootPath,
+						AvailableMediaDirs:  file.AvailableMediaDirs,
+						Game:                *game,
+						MatchKind:           gamelistMatchSlugPath,
+						MatchedTitleDBID:    title.DBID,
+						MatchedMediaDBID:    pathMedia.DBID,
+						MediaLevelWriteSafe: true,
+					})
+					delete(indexes.MediaByPathFold, matchedPathKey)
+					continue
+				}
+
 				selection := selectMediaForSlugMatch(indexes, title.DBID, resolved)
 				if selection.media.DBID == 0 {
 					log.Debug().
@@ -452,6 +472,27 @@ outer:
 					MediaLevelWriteSafe: mediaLevelWriteSafe,
 				})
 				delete(indexes.TitlesBySlug, pf.Slug)
+			} else if pathOK {
+				pathOnlyFallbacks++
+				log.Debug().
+					Str("system", system.ID).
+					Str("path", game.Path).
+					Str("resolved", resolved).
+					Str("name", game.Name).
+					Str("slug", pf.Slug).
+					Int64("mediaDBID", pathMedia.DBID).
+					Int64("mediaTitleDBID", pathMedia.MediaTitleDBID).
+					Msg("gamelistxml: path-only fallback matched record")
+				records = append(records, &GamelistRecord{
+					SystemRootPath:      file.RootPath,
+					AvailableMediaDirs:  file.AvailableMediaDirs,
+					Game:                *game,
+					MatchKind:           gamelistMatchPathOnly,
+					MatchedTitleDBID:    pathMedia.MediaTitleDBID,
+					MatchedMediaDBID:    pathMedia.DBID,
+					MediaLevelWriteSafe: true,
+				})
+				delete(indexes.MediaByPathFold, matchedPathKey)
 			} else if titleSlugKnown(indexes, pf.Slug) {
 				unmatchedRecords++
 				log.Debug().
@@ -461,27 +502,6 @@ outer:
 					Str("name", game.Name).
 					Str("slug", pf.Slug).
 					Msg("gamelistxml: slug exists for another or already-scraped title, skipping path-only fallback")
-			} else if media, matchedKey, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved); ok {
-				pathOnlyFallbacks++
-				log.Debug().
-					Str("system", system.ID).
-					Str("path", game.Path).
-					Str("resolved", resolved).
-					Str("name", game.Name).
-					Str("slug", pf.Slug).
-					Int64("mediaDBID", media.DBID).
-					Int64("mediaTitleDBID", media.MediaTitleDBID).
-					Msg("gamelistxml: path-only fallback matched record")
-				records = append(records, &GamelistRecord{
-					SystemRootPath:      file.RootPath,
-					AvailableMediaDirs:  file.AvailableMediaDirs,
-					Game:                *game,
-					MatchKind:           gamelistMatchPathOnly,
-					MatchedTitleDBID:    media.MediaTitleDBID,
-					MatchedMediaDBID:    media.DBID,
-					MediaLevelWriteSafe: true,
-				})
-				delete(indexes.MediaByPathFold, matchedKey)
 			} else {
 				unmatchedRecords++
 			}
@@ -1327,7 +1347,7 @@ func findMediaFileProp(
 	if stem == "" || stem == "." {
 		return nil
 	}
-	return findMediaFilePropFS(afero.NewOsFs(), typeTag, []string{stem + ".png"}, candidates, availableDirs)
+	return findMediaFilePropFS(afero.NewOsFs(), typeTag, fallbackArtworkNames(stem), candidates, availableDirs)
 }
 
 func artworkFallbackNames(gamePath, systemRootPath string) []string {
@@ -1350,17 +1370,32 @@ func artworkFallbackNames(gamePath, systemRootPath string) []string {
 		return nil
 	}
 
-	flat := stem + ".png"
+	flatNames := fallbackArtworkNames(stem)
 	dir := filepath.Dir(rel)
 	if dir == "." || dir == "" {
-		return []string{flat}
+		return flatNames
 	}
 
-	nested := filepath.Join(dir, flat)
-	if nested == flat {
-		return []string{flat}
+	fallbackNames := make([]string, 0, len(flatNames)*2)
+	for _, flat := range flatNames {
+		nested := filepath.Join(dir, flat)
+		if nested != flat {
+			fallbackNames = append(fallbackNames, nested)
+		}
 	}
-	return []string{nested, flat}
+	fallbackNames = append(fallbackNames, flatNames...)
+	return fallbackNames
+}
+
+func fallbackArtworkNames(stem string) []string {
+	if stem == "" || stem == "." {
+		return nil
+	}
+	names := make([]string, 0, len(fallbackArtworkExtensions))
+	for _, ext := range fallbackArtworkExtensions {
+		names = append(names, stem+ext)
+	}
+	return names
 }
 
 func findMediaFilePropFS(
@@ -1389,7 +1424,7 @@ func findMediaFilePropFS(
 				return &database.MediaProperty{
 					TypeTag:     typeTag,
 					Text:        filepath.ToSlash(candidate),
-					ContentType: "image/png",
+					ContentType: mimeFromExt(candidate),
 				}
 			}
 		}

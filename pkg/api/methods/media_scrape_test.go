@@ -159,7 +159,7 @@ func TestHandleMediaScrape_IndexingInProgress(t *testing.T) {
 func TestHandleMediaScrape_AlreadyRunning(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()
-	scrapingStatusInstance.startIfNotRunning("test-scraper")
+	scrapingStatusInstance.startIfNotRunning("test-scraper", false)
 	defer scrapingStatusInstance.clear()
 
 	mockDB := testhelpers.NewMockMediaDBI()
@@ -464,7 +464,7 @@ func TestHandleMediaScrapeCancel_CancelsActive(t *testing.T) {
 	ClearScrapingStatus()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	scrapingStatusInstance.startIfNotRunning("test-scraper")
+	scrapingStatusInstance.startIfNotRunning("test-scraper", false)
 	scrapingStatusInstance.setCancelFunc(cancel)
 	defer func() {
 		cancel()
@@ -498,7 +498,7 @@ func TestHandleMediaScrapeResume_ResumesPausedScrape(t *testing.T) {
 	t.Cleanup(st.StopService)
 	drainNotifications(t, ns)
 
-	scrapingStatusInstance.startIfNotRunning("test-scraper")
+	scrapingStatusInstance.startIfNotRunning("test-scraper", false)
 	defer scrapingStatusInstance.clear()
 	pauser := syncutil.NewPauser()
 	pauser.Pause()
@@ -552,7 +552,7 @@ func TestHandleMediaScrapeResume_NotPaused(t *testing.T) {
 func TestScrapingStatus_ClearIfOwner_MatchingID_Clears(t *testing.T) {
 	t.Parallel()
 	s := &scrapingStatus{}
-	s.startIfNotRunning("my-scraper")
+	s.startIfNotRunning("my-scraper", false)
 	s.clearIfOwner("my-scraper")
 	assert.False(t, s.isRunning())
 }
@@ -560,7 +560,7 @@ func TestScrapingStatus_ClearIfOwner_MatchingID_Clears(t *testing.T) {
 func TestScrapingStatus_ClearIfOwner_MismatchedID_Preserves(t *testing.T) {
 	t.Parallel()
 	s := &scrapingStatus{}
-	s.startIfNotRunning("owner-a")
+	s.startIfNotRunning("owner-a", false)
 	s.clearIfOwner("owner-b")
 	assert.True(t, s.isRunning(), "non-owner clearIfOwner must not clear state")
 	s.clear()
@@ -727,14 +727,16 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "progress-scraper").Return(3, nil)
 
+	var gotForceOption bool
 	progressScraper := platforms.Scraper{
 		ID:   "progress-scraper",
 		Name: "Progress Scraper",
 		Scrape: func(
 			_ context.Context, _ *config.Instance, _ platforms.Platform,
-			_ afero.Fs, _ *database.Database, _ scraper.ScrapeOptions,
+			_ afero.Fs, _ *database.Database, opts scraper.ScrapeOptions,
 			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
 		) error {
+			gotForceOption = opts.Force
 			go func() {
 				defer close(ch)
 				ch <- scraper.ScrapeUpdate{
@@ -763,7 +765,7 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 		Platform: pl,
 		State:    st,
 		Database: &database.Database{MediaDB: mockDB},
-		Params:   json.RawMessage(`{"scraperId":"progress-scraper"}`),
+		Params:   json.RawMessage(`{"scraperId":"progress-scraper","force":true}`),
 	}
 
 	result, err := HandleMediaScrape(env)
@@ -773,6 +775,7 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 	var gotDone bool
 	var maxProcessed int
 	var sawCurrentSystem bool
+	var sawForce bool
 	timeout := time.After(2 * time.Second)
 	for !gotDone {
 		select {
@@ -782,6 +785,9 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 			}
 			var p models.ScrapingStatusResponse
 			require.NoError(t, json.Unmarshal(n.Params, &p))
+			if p.Force {
+				sawForce = true
+			}
 			if p.Processed > maxProcessed {
 				maxProcessed = p.Processed
 			}
@@ -804,6 +810,8 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 		}
 	}
 
+	assert.True(t, gotForceOption, "force option should be passed to scraper")
+	assert.True(t, sawForce, "scrape status should expose active force scrape")
 	assert.Equal(t, 10, maxProcessed, "progress updates should reflect actual processed count")
 	assert.True(t, sawCurrentSystem, "progress updates should expose currentSystem and step fields")
 	require.Eventually(t, func() bool {

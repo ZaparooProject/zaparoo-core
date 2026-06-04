@@ -513,6 +513,26 @@ func TestGetTotalScrapedMediaCount_DistinctMedia(t *testing.T) {
 	assert.Equal(t, 2, count)
 }
 
+func TestGetTotalScrapedMediaCount_IncludesTitlePropertyCoverage(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "zelda-rev-a.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 1, 1, ?);
+	`, mediaPath2)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, 1, []database.MediaProperty{
+		{TypeTag: "property:description", Text: "scraped metadata"},
+	}))
+
+	count, err := mediaDB.GetTotalScrapedMediaCount(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+}
+
 func TestGetTotalScrapedMediaCount_MissingSentinelsReturnsZero(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
