@@ -83,7 +83,10 @@ type manifestSocketIO struct {
 }
 
 type manifestCommunicationSocketIO struct {
-	Enabled bool `json:"enabled"`
+	Events        []string `json:"events"`
+	Enabled       bool     `json:"enabled"`
+	AutoReconnect bool     `json:"autoReconnect"`
+	DataRequests  bool     `json:"dataRequests"`
 }
 
 type manifestCommunication struct {
@@ -95,8 +98,16 @@ type manifestCommunication struct {
 type pluginManifest struct {
 	Communication manifestCommunication `json:"communication"`
 	Type          string                `json:"type"`
+	Name          string                `json:"name"`
+	Description   string                `json:"description"`
+	Author        string                `json:"author"`
+	Homepage      string                `json:"homepage"`
+	Repository    string                `json:"repository"`
+	License       string                `json:"license"`
 	Executable    string                `json:"executable"`
 	SocketIO      manifestSocketIO      `json:"socketio"`
+	Keywords      []string              `json:"keywords"`
+	Platforms     []string              `json:"platforms"`
 }
 
 func TestPluginManifestMatchesHyperHQExecutableSocketIODocs(t *testing.T) {
@@ -124,8 +135,50 @@ func TestPluginManifestMatchesHyperHQExecutableSocketIODocs(t *testing.T) {
 	if !manifest.Communication.SocketIO.Enabled {
 		t.Fatal("manifest communication.socketio.enabled = false, want true")
 	}
+	if !manifest.Communication.SocketIO.AutoReconnect || !manifest.Communication.SocketIO.DataRequests {
+		t.Fatalf("manifest communication.socketio = %+v, want reconnect and data requests", manifest.Communication.SocketIO)
+	}
 	if !manifest.SocketIO.Enabled || manifest.SocketIO.Namespace != "/" {
 		t.Fatalf("manifest socketio = %+v, want enabled namespace /", manifest.SocketIO)
+	}
+}
+
+func TestPluginManifestPresentation(t *testing.T) {
+	t.Parallel()
+
+	data, err := os.ReadFile("plugin.json")
+	if err != nil {
+		t.Fatalf("read plugin.json: %v", err)
+	}
+
+	var manifest pluginManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("unmarshal plugin.json: %v", err)
+	}
+
+	if manifest.Name != "Zaparoo Core" {
+		t.Fatalf("manifest name = %q, want Zaparoo Core", manifest.Name)
+	}
+	if manifest.Description != "HyperHQ integration plugin for Zaparoo" {
+		t.Fatalf("manifest description = %q, want HyperHQ integration plugin for Zaparoo", manifest.Description)
+	}
+	if manifest.Author != "The Zaparoo Project Contributors" || manifest.Repository == "" || manifest.Homepage == "" {
+		t.Fatalf("manifest metadata missing: %+v", manifest)
+	}
+	if len(manifest.Platforms) != 1 || manifest.Platforms[0] != "windows" {
+		t.Fatalf("manifest platforms = %v, want windows", manifest.Platforms)
+	}
+}
+
+func TestPluginIconExists(t *testing.T) {
+	t.Parallel()
+
+	info, err := os.Stat("icon.png")
+	if err != nil {
+		t.Fatalf("stat icon.png: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("icon.png is empty")
 	}
 }
 
