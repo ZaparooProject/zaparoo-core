@@ -39,14 +39,14 @@ func startIndexingIfNoScrape() error {
 	return nil
 }
 
-func startScrapingIfNoIndex(scraperID string) error {
+func startScrapingIfNoIndex(scraperID string, force bool) error {
 	mediaOperationMu.Lock()
 	defer mediaOperationMu.Unlock()
 
 	if statusInstance.isRunning() {
 		return models.ClientErrf("media indexing is in progress")
 	}
-	if !scrapingStatusInstance.startIfNotRunning(scraperID) {
+	if !scrapingStatusInstance.startIfNotRunning(scraperID, force) {
 		return models.ClientErrf("scraping already in progress")
 	}
 	return nil

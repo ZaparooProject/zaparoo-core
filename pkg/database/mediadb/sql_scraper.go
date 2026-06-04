@@ -323,8 +323,10 @@ func (db *MediaDB) GetScrapedMediaCount(ctx context.Context, scraperID string) (
 	return count, nil
 }
 
-// GetTotalScrapedMediaCount returns the number of distinct media rows marked as
-// successfully scraped by any scraper.
+// GetTotalScrapedMediaCount returns the number of distinct media rows with
+// scraper metadata. Sentinel tags are included, but the count also covers rows
+// whose title/media properties were written by scrapers so metadata remains
+// reflected after reindex paths that preserve properties but rebuild media tags.
 func (db *MediaDB) GetTotalScrapedMediaCount(ctx context.Context) (int, error) {
 	if db.sql == nil {
 		return 0, ErrNullSQL
@@ -334,7 +336,7 @@ func (db *MediaDB) GetTotalScrapedMediaCount(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to find scraper sentinel tags: %w", err)
 	}
-	count, err := countMediaTagsForTagDBIDs(ctx, db.sql, tagDBIDs)
+	count, err := countScrapedMediaCoverage(ctx, db.sql, tagDBIDs)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count scraped media: %w", err)
 	}
@@ -454,6 +456,31 @@ func countMediaTagsForTagDBIDs(ctx context.Context, db *sql.DB, tagDBIDs []int64
 	query := `SELECT COUNT(DISTINCT MediaDBID) FROM MediaTags WHERE TagDBID IN (` + placeholders + `)`
 	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("failed to count media tag rows: %w", err)
+	}
+	return count, nil
+}
+
+func countScrapedMediaCoverage(ctx context.Context, db *sql.DB, tagDBIDs []int64) (int, error) {
+	queries := []string{
+		`SELECT MediaDBID FROM MediaProperties`,
+		`SELECT m.DBID
+			FROM Media m
+			JOIN MediaTitleProperties p ON p.MediaTitleDBID = m.MediaTitleDBID`,
+	}
+	args := make([]any, 0, len(tagDBIDs))
+	if len(tagDBIDs) > 0 {
+		placeholders := prepareVariadic("?", ",", len(tagDBIDs))
+		queries = append(queries, `SELECT MediaDBID FROM MediaTags WHERE TagDBID IN (`+placeholders+`)`)
+		for _, tagDBID := range tagDBIDs {
+			args = append(args, tagDBID)
+		}
+	}
+
+	var count int
+	//nolint:gosec // Safe: queries are static plus generated placeholders.
+	query := `SELECT COUNT(*) FROM (` + strings.Join(queries, ` UNION `) + `)`
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to count scraped media coverage: %w", err)
 	}
 	return count, nil
 }

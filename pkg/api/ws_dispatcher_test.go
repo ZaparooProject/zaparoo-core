@@ -249,6 +249,59 @@ func TestWebSocketPriorityDispatcherNotificationsDoNotReply(t *testing.T) {
 	require.Error(t, err, "JSON-RPC notifications must not receive responses")
 }
 
+func TestWebSocketRunJobStartsTimeoutAtExecution(t *testing.T) {
+	t.Parallel()
+
+	parentCtx, parentCancel := context.WithCancel(t.Context())
+	defer parentCancel()
+	d := &wsSessionDispatcher{
+		ctx:       parentCtx,
+		responses: make(chan *wsResponseJob, 1),
+	}
+
+	started := time.Now()
+	remainingCh := make(chan time.Duration, 1)
+	var methodMap MethodMap
+	require.NoError(t, methodMap.AddMethod("test.timeout", func(env requests.RequestEnv) (any, error) {
+		deadline, ok := env.Context.Deadline()
+		require.True(t, ok, "runJob should install per-request deadline")
+		started = time.Now()
+		remainingCh <- time.Until(deadline)
+		return map[string]string{"ok": "true"}, nil
+	}))
+
+	enqueuedCtx, enqueuedCancel := context.WithTimeout(parentCtx, time.Millisecond)
+	defer enqueuedCancel()
+	job := &wsRequestJob{
+		methodMap: &methodMap,
+		env:       &requests.RequestEnv{Context: enqueuedCtx},
+		method:    "test.timeout",
+		msg:       []byte(`{"jsonrpc":"2.0","method":"test.timeout","id":1}`),
+	}
+	time.Sleep(25 * time.Millisecond)
+	require.Error(t, enqueuedCtx.Err(), "pre-existing enqueue-time context should be expired")
+
+	d.runJob(job)
+	require.NotNil(t, job.cancel, "runJob should install cancel func")
+	defer job.cancel()
+
+	select {
+	case remaining := <-remainingCh:
+		assert.Greater(t, remaining, config.APIRequestTimeout-250*time.Millisecond)
+		assert.WithinDuration(t, time.Now(), started, 250*time.Millisecond)
+	case <-time.After(time.Second):
+		t.Fatal("handler did not run")
+	}
+
+	select {
+	case resp := <-d.responses:
+		require.NotNil(t, resp.cancel)
+		assert.True(t, resp.result.ShouldReply)
+	case <-time.After(time.Second):
+		t.Fatal("response was not queued")
+	}
+}
+
 func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
 	t.Parallel()
 

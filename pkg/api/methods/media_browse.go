@@ -38,12 +38,16 @@ import (
 
 // browseCursorData is the JSON-serializable keyset cursor for browse pagination.
 type browseCursorData struct {
-	SortValue string `json:"sortValue"`
-	LastID    int64  `json:"lastId"`
+	SortValue  string `json:"sortValue"`
+	LastID     int64  `json:"lastId"`
+	TotalFiles int    `json:"totalFiles,omitempty"`
 }
 
-func encodeBrowseCursor(lastID int64, sortValue string) (string, error) {
+func encodeBrowseCursor(lastID int64, sortValue string, totalFiles ...int) (string, error) {
 	data := browseCursorData{LastID: lastID, SortValue: sortValue}
+	if len(totalFiles) > 0 && totalFiles[0] > 0 {
+		data.TotalFiles = totalFiles[0]
+	}
 	b, err := json.Marshal(data)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal browse cursor: %w", err)
@@ -67,8 +71,9 @@ func decodeBrowseCursor(cursor string) (*database.BrowseCursor, error) {
 	}
 
 	return &database.BrowseCursor{
-		LastID:    data.LastID,
-		SortValue: data.SortValue,
+		LastID:     data.LastID,
+		SortValue:  data.SortValue,
+		TotalFiles: data.TotalFiles,
 	}, nil
 }
 
@@ -560,9 +565,12 @@ func browseFilesystem(
 		return nil, fmt.Errorf("error browsing files: %w", err)
 	}
 
-	// Get total file count (skip when no files and no cursor — count is obviously 0)
+	// Get total file count. First-page cursors carry this forward so loading
+	// additional pages in large directories does not repeat the same count query.
 	var totalFiles int
-	if len(files) > 0 || cursor != nil {
+	if cursor != nil && cursor.TotalFiles > 0 {
+		totalFiles = cursor.TotalFiles
+	} else if len(files) > 0 || cursor != nil {
 		started = time.Now()
 		totalFiles, err = env.Database.MediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
 			PathPrefix: prefix,
@@ -610,15 +618,20 @@ func browseVirtual(
 		return nil, fmt.Errorf("error browsing virtual media: %w", err)
 	}
 
-	started = time.Now()
-	totalFiles, err := env.Database.MediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
-		PathPrefix: schemePath,
-		Letter:     letter,
-		Systems:    systems,
-	})
-	logBrowseTiming("virtual_file_count", schemePath, started, totalFiles)
-	if err != nil {
-		return nil, fmt.Errorf("error getting virtual file count: %w", err)
+	var totalFiles int
+	if cursor != nil && cursor.TotalFiles > 0 {
+		totalFiles = cursor.TotalFiles
+	} else {
+		started = time.Now()
+		totalFiles, err = env.Database.MediaDB.BrowseFileCount(ctx, database.BrowseFileCountOptions{
+			PathPrefix: schemePath,
+			Letter:     letter,
+			Systems:    systems,
+		})
+		logBrowseTiming("virtual_file_count", schemePath, started, totalFiles)
+		if err != nil {
+			return nil, fmt.Errorf("error getting virtual file count: %w", err)
+		}
 	}
 
 	return buildBrowseResponse(env, schemePath, nil, files, maxResults, totalFiles, sort)
@@ -681,7 +694,7 @@ func buildBrowseResponse(
 			default:
 				sortValue = lastResult.Name
 			}
-			encoded, encErr := encodeBrowseCursor(lastResult.MediaID, sortValue)
+			encoded, encErr := encodeBrowseCursor(lastResult.MediaID, sortValue, totalFiles)
 			if encErr != nil {
 				return nil, fmt.Errorf("failed to encode cursor: %w", encErr)
 			}

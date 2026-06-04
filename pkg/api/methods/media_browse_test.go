@@ -872,6 +872,89 @@ func TestHandleMediaBrowse_CursorRoundTrip(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestHandleMediaBrowse_CursorTotalFilesSkipsCountQuery(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	romsRoot := browseTestAbsPath("roms")
+	snesPath := filepath.Join(romsRoot, "SNES")
+	snesAPIPath := filepath.ToSlash(snesPath)
+	snesPrefix := snesAPIPath + "/"
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{romsRoot})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{})
+
+	cursorStr, err := encodeBrowseCursor(5, "Mario", 10)
+	require.NoError(t, err)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseFiles", mock.Anything,
+		mock.MatchedBy(func(opts *database.BrowseFilesOptions) bool {
+			return opts.Cursor != nil && opts.Cursor.TotalFiles == 10 && opts.PathPrefix == snesPrefix
+		}),
+	).Return([]database.SearchResultWithCursor{
+		{SystemID: "snes", Name: "Zelda", Path: filepath.ToSlash(filepath.Join(snesPath, "Zelda.sfc")), MediaID: 8},
+	}, nil)
+
+	maxResults := 5
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
+		Path:       &snesAPIPath,
+		MaxResults: &maxResults,
+		Cursor:     &cursorStr,
+	})
+
+	result, browseErr := HandleMediaBrowse(env)
+	require.NoError(t, browseErr)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	assert.Equal(t, 10, browseResults.TotalFiles)
+	mockMediaDB.AssertNotCalled(t, "BrowseFileCount", mock.Anything, mock.Anything)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaBrowse_VirtualCursorTotalFilesSkipsCountQuery(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("SupportedReaders", mock.Anything).Return(nil)
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).
+		Return([]string{browseTestAbsPath("roms")})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{{ID: "Steam", SystemID: "pc", Schemes: []string{"steam"}}})
+
+	cursorStr, err := encodeBrowseCursor(5, "Mario", 10)
+	require.NoError(t, err)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("BrowseFiles", mock.Anything,
+		mock.MatchedBy(func(opts *database.BrowseFilesOptions) bool {
+			return opts.Cursor != nil && opts.Cursor.TotalFiles == 10 && opts.PathPrefix == "steam://"
+		}),
+	).Return([]database.SearchResultWithCursor{
+		{SystemID: "pc", Name: "Portal", Path: "steam://620", MediaID: 8},
+	}, nil)
+
+	path := "steam://"
+	maxResults := 5
+	env := newBrowseEnv(t, mockMediaDB, mockPlatform, models.BrowseParams{
+		Path:       &path,
+		MaxResults: &maxResults,
+		Cursor:     &cursorStr,
+	})
+
+	result, browseErr := HandleMediaBrowse(env)
+	require.NoError(t, browseErr)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	assert.Equal(t, 10, browseResults.TotalFiles)
+	mockMediaDB.AssertNotCalled(t, "BrowseFileCount", mock.Anything, mock.Anything)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestHandleMediaBrowse_FilenameSortCursor(t *testing.T) {
 	t.Parallel()
 
