@@ -93,8 +93,6 @@ func startPriorityWSServer(t *testing.T, methodMap *MethodMap) (wsURL string, cl
 }
 
 func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) {
-	t.Parallel()
-
 	imageStarted := make(chan struct{}, wsLowConcurrency)
 	highStarted := make(chan struct{})
 	releaseImages := make(chan struct{})
@@ -163,8 +161,6 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 }
 
 func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
-	t.Parallel()
-
 	firstDone := make(chan struct{})
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod(models.MethodRun, func(env requests.RequestEnv) (any, error) {
@@ -211,8 +207,6 @@ func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
 }
 
 func TestWebSocketPriorityDispatcherMediaTransactionBlocksMediaReads(t *testing.T) {
-	t.Parallel()
-
 	txStarted := make(chan struct{})
 	releaseTx := make(chan struct{})
 	metaStarted := make(chan struct{}, 1)
@@ -262,8 +256,6 @@ func TestWebSocketPriorityDispatcherMediaTransactionBlocksMediaReads(t *testing.
 }
 
 func TestWebSocketPriorityDispatcherNotificationsDoNotReply(t *testing.T) {
-	t.Parallel()
-
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod("test.notify", func(requests.RequestEnv) (any, error) {
 		return map[string]string{"ok": "true"}, nil
@@ -284,8 +276,6 @@ func TestWebSocketPriorityDispatcherNotificationsDoNotReply(t *testing.T) {
 }
 
 func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithCancel(t.Context())
 	d := &wsSessionDispatcher{
 		ctx:       ctx,
