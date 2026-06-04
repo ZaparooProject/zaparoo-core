@@ -93,11 +93,13 @@ var mediaDirCandidates = map[string][]string{
 	string(tags.TagPropertyImageThumbnail): {
 		"thumbnail", "thumbnails", "box2dfront", "boxart2dfront", "supporttexture",
 	},
-	string(tags.TagPropertyImageMarquee):   {"marquee", "marquees"},
-	string(tags.TagPropertyImageWheel):     {"wheel", "wheels", "logo", "logos"},
-	string(tags.TagPropertyImageFanart):    {"fanart", "fanarts"},
-	string(tags.TagPropertyImageTitleshot): {"titleshot", "titleshots", "titlescreen", "titlescreens", "screenshottitle"},
-	string(tags.TagPropertyImageMap):       {"map", "maps"},
+	string(tags.TagPropertyImageMarquee): {"marquee", "marquees"},
+	string(tags.TagPropertyImageWheel):   {"wheel", "wheels", "logo", "logos"},
+	string(tags.TagPropertyImageFanart):  {"fanart", "fanarts"},
+	string(tags.TagPropertyImageTitleshot): {
+		"titleshot", "titleshots", "titlescreen", "titlescreens", "screenshottitle",
+	},
+	string(tags.TagPropertyImageMap): {"map", "maps"},
 }
 
 // GamelistXMLScraper loads and maps EmulationStation gamelist.xml records.
@@ -424,7 +426,9 @@ outer:
 
 			pathMedia, matchedPathKey, pathOK := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved)
 
-			if title, ok := indexes.TitlesBySlug[pf.Slug]; ok {
+			title, titleOK := indexes.TitlesBySlug[pf.Slug]
+			switch {
+			case titleOK:
 				if pathOK && pathMedia.MediaTitleDBID == title.DBID {
 					slugMatches++
 					slugPathSelections++
@@ -472,7 +476,7 @@ outer:
 					MediaLevelWriteSafe: mediaLevelWriteSafe,
 				})
 				delete(indexes.TitlesBySlug, pf.Slug)
-			} else if pathOK {
+			case pathOK:
 				pathOnlyFallbacks++
 				log.Debug().
 					Str("system", system.ID).
@@ -493,7 +497,7 @@ outer:
 					MediaLevelWriteSafe: true,
 				})
 				delete(indexes.MediaByPathFold, matchedPathKey)
-			} else if titleSlugKnown(indexes, pf.Slug) {
+			case titleSlugKnown(indexes, pf.Slug):
 				unmatchedRecords++
 				log.Debug().
 					Str("system", system.ID).
@@ -502,7 +506,7 @@ outer:
 					Str("name", game.Name).
 					Str("slug", pf.Slug).
 					Msg("gamelistxml: slug exists for another or already-scraped title, skipping path-only fallback")
-			} else {
+			default:
 				unmatchedRecords++
 			}
 

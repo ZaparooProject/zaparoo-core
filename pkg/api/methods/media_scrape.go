@@ -58,11 +58,11 @@ type scrapedCountCache struct {
 
 type scrapingStatus struct {
 	cancelFunc context.CancelFunc
-	countCache scrapedCountCache
 	scraperID  string
-	force      bool
+	countCache scrapedCountCache
 	latest     models.ScrapingStatusResponse
 	mu         syncutil.RWMutex
+	force      bool
 	running    bool
 }
 
