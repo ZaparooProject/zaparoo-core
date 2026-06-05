@@ -1550,7 +1550,7 @@ func (g *GamelistXMLScraper) m3uReferencesPath(m3uPath, resolved string) bool {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		entryPath := resolveReferencedPath(baseDir, line)
+		entryPath := g.caseInsensitiveExistingPath(resolveReferencedPath(baseDir, line))
 		if samePath(entryPath, resolved) {
 			return true
 		}
@@ -1605,6 +1605,33 @@ func parseCueFileEntry(line string) string {
 		}
 	}
 	return strings.TrimSpace(rest)
+}
+
+func (g *GamelistXMLScraper) caseInsensitiveExistingPath(path string) string {
+	path = filepath.Clean(path)
+	if path == "." || path == "" {
+		return path
+	}
+	if exists, err := afero.Exists(g.filesystem(), path); err == nil && exists {
+		return path
+	}
+
+	parent := filepath.Dir(path)
+	if parent == path {
+		return path
+	}
+	actualParent := g.caseInsensitiveExistingPath(parent)
+	entries, err := afero.ReadDir(g.filesystem(), actualParent)
+	if err != nil {
+		return path
+	}
+	base := filepath.Base(path)
+	for _, entry := range entries {
+		if strings.EqualFold(entry.Name(), base) {
+			return filepath.Join(actualParent, entry.Name())
+		}
+	}
+	return path
 }
 
 func resolveReferencedPath(baseDir, ref string) string {

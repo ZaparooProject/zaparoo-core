@@ -615,6 +615,34 @@ func TestLoadRecords_TrackPathResolvesToM3UMedia(t *testing.T) {
 	assert.True(t, records[0].MediaLevelWriteSafe)
 }
 
+func TestLoadRecords_TrackPathResolvesToM3UCueCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	gameDir := filepath.Join(root, "Game")
+	cuePath := filepath.Join(gameDir, "Game (Disc 1).cue")
+	m3uPath := filepath.Join(root, "Game.m3u")
+	require.NoError(t, os.MkdirAll(gameDir, 0o750))
+	require.NoError(t, os.WriteFile(cuePath, []byte("FILE \"track01.bin\" BINARY\n"), 0o600))
+	require.NoError(t, os.WriteFile(m3uPath, []byte(filepath.Join("game", "game (disc 1).CUE")+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./Game/track01.bin</path><name>Game</name></game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "psx", ROMPaths: []string{root}},
+		mediaBySlugAndPath("game", &database.MediaTitle{DBID: 50, Slug: "game"},
+			database.Media{DBID: 61, MediaTitleDBID: 50, Path: m3uPath}),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, int64(61), records[0].MatchedMediaDBID)
+	assert.Equal(t, gamelistMatchSlugPath, records[0].MatchKind)
+	assert.True(t, records[0].MediaLevelWriteSafe)
+}
+
 func TestLoadRecords_TrackPathAmbiguousCueMatchesUnsafe(t *testing.T) {
 	t.Parallel()
 
