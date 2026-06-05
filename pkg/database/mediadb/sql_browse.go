@@ -102,8 +102,8 @@ func sqlBrowseDirectories(
 		return nil, err
 	}
 	if ready {
-		results, cacheErr := sqlBrowseDirectoriesFromCache(ctx, db, opts)
-		if cacheErr != nil || len(results) > 0 {
+		results, parentFound, cacheErr := sqlBrowseDirectoriesFromCache(ctx, db, opts)
+		if cacheErr != nil || parentFound {
 			return results, cacheErr
 		}
 
@@ -149,13 +149,17 @@ func sqlBrowseDirectoriesFromCache(
 	ctx context.Context,
 	db sqlQueryable,
 	opts database.BrowseDirectoriesOptions,
-) ([]database.BrowseDirectoryResult, error) {
+) ([]database.BrowseDirectoryResult, bool, error) {
 	parentID, ok, err := sqlBrowseDirID(ctx, db, opts.PathPrefix)
-	if err != nil || !ok {
-		return nil, err
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
 	}
 	if len(opts.Systems) == 1 {
-		return sqlBrowseDirectoriesFromCacheForSingleSystem(ctx, db, parentID, opts.Systems[0].ID)
+		results, cacheErr := sqlBrowseDirectoriesFromCacheForSingleSystem(ctx, db, parentID, opts.Systems[0].ID)
+		return results, true, cacheErr
 	}
 
 	args := []any{parentID}
@@ -173,7 +177,7 @@ func sqlBrowseDirectoriesFromCache(
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("browse cache directories query: %w", err)
+		return nil, true, fmt.Errorf("browse cache directories query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -182,15 +186,15 @@ func sqlBrowseDirectoriesFromCache(
 		var r database.BrowseDirectoryResult
 		var systemIDs string
 		if scanErr := rows.Scan(&r.Name, &r.FileCount, &systemIDs); scanErr != nil {
-			return nil, fmt.Errorf("browse cache directories scan: %w", scanErr)
+			return nil, true, fmt.Errorf("browse cache directories scan: %w", scanErr)
 		}
 		r.SystemIDs = splitBrowseSystemIDs(systemIDs)
 		results = append(results, r)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("browse cache directories rows: %w", rowsErr)
+		return nil, true, fmt.Errorf("browse cache directories rows: %w", rowsErr)
 	}
-	return results, nil
+	return results, true, nil
 }
 
 func sqlBrowseDirectoriesFromCacheForSingleSystem(
@@ -233,11 +237,13 @@ func sqlBrowseDirectoriesFromMedia(
 	db sqlQueryable,
 	pathPrefix string,
 ) ([]database.BrowseDirectoryResult, error) {
+	pathCondition, pathArgs := browsePathPrefixCondition("Path", pathPrefix)
+	args := append([]any{pathPrefix}, pathArgs...)
 	rows, err := db.QueryContext(ctx,
 		`WITH matched AS (
 			 SELECT substr(Path, length(?) + 1) AS Rest
 			 FROM Media
-			 WHERE IsMissing = 0 AND Path LIKE ? || '%'
+			 WHERE IsMissing = 0 AND `+pathCondition+`
 		 )
 		 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name,
 			COUNT(*) AS FileCount
@@ -245,7 +251,7 @@ func sqlBrowseDirectoriesFromMedia(
 		 WHERE instr(Rest, '/') > 0
 		 GROUP BY Name
 		 ORDER BY Name ASC`,
-		pathPrefix, pathPrefix,
+		args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("browse directories media query: %w", err)
@@ -272,15 +278,17 @@ func sqlBrowseDirectoriesForSystemsFromMedia(
 	opts database.BrowseDirectoriesOptions,
 ) ([]database.BrowseDirectoryResult, error) {
 	systemClause, systemArgs := browseSystemFilterClause("s.SystemID", opts.Systems)
-	args := make([]any, 0, 2+len(systemArgs))
-	args = append(args, opts.PathPrefix, opts.PathPrefix)
+	pathCondition, pathArgs := browsePathPrefixCondition("m.Path", opts.PathPrefix)
+	args := make([]any, 0, 1+len(pathArgs)+len(systemArgs))
+	args = append(args, opts.PathPrefix)
+	args = append(args, pathArgs...)
 	args = append(args, systemArgs...)
 	rows, err := db.QueryContext(ctx,
 		`WITH matched AS (
 			 SELECT substr(m.Path, length(?) + 1) AS Rest, s.SystemID
 			 FROM Media m
 			 INNER JOIN Systems s ON m.SystemDBID = s.DBID
-			 WHERE m.IsMissing = 0 AND m.Path LIKE ? || '%' AND `+systemClause+`
+			 WHERE m.IsMissing = 0 AND `+pathCondition+` AND `+systemClause+`
 		 )
 		 SELECT substr(Rest, 1, instr(Rest, '/') - 1) AS Name,
 			COUNT(*) AS FileCount,
@@ -310,6 +318,13 @@ func sqlBrowseDirectoriesForSystemsFromMedia(
 		return nil, fmt.Errorf("browse directories by system media rows: %w", rowsErr)
 	}
 	return results, nil
+}
+
+func browsePathPrefixCondition(column string, pathPrefix string) (string, []any) {
+	if upper := stringPrefixUpperBound(pathPrefix); upper != "" {
+		return column + ` >= ? AND ` + column + ` < ?`, []any{pathPrefix, upper}
+	}
+	return column + ` LIKE ? || '%'`, []any{pathPrefix}
 }
 
 func browseFilesBaseCondition(opts *database.BrowseFilesOptions) (where string, args []any) {
@@ -369,7 +384,7 @@ func sqlBrowseFilesFromMedia(
 	opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
 	where, args := browseFilesBaseCondition(opts)
-	query := `SELECT s.SystemID, mt.Name, m.Path, m.DBID
+	query := `SELECT s.SystemID, mt.Name, m.Path, m.DBID, mt.DBID
 		FROM Media m
 		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
 		INNER JOIN Systems s ON m.SystemDBID = s.DBID
@@ -391,7 +406,7 @@ func sqlBrowseFilesFromMedia(
 	var results []database.SearchResultWithCursor
 	for rows.Next() {
 		var r database.SearchResultWithCursor
-		if scanErr := rows.Scan(&r.SystemID, &r.Name, &r.Path, &r.MediaID); scanErr != nil {
+		if scanErr := rows.Scan(&r.SystemID, &r.Name, &r.Path, &r.MediaID, &r.MediaTitleID); scanErr != nil {
 			return nil, fmt.Errorf("browse files scan: %w", scanErr)
 		}
 		results = append(results, r)
@@ -414,54 +429,7 @@ func sqlBrowseFilesFromMedia(
 		Dur("queryDuration", queryElapsed).
 		Dur("tagsDuration", tagsElapsed).
 		Msg("browse files step timing")
-	if len(results) == 0 && opts.Cursor == nil {
-		descendants, countErr := sqlBrowseDescendantCount(ctx, db, opts.PathPrefix, opts.Systems)
-		if countErr != nil {
-			log.Debug().
-				Err(countErr).
-				Str("pathPrefix", opts.PathPrefix).
-				Strs("systems", browseSystemIDsForLog(opts.Systems)).
-				Msg("browse files descendant diagnostic failed")
-		} else {
-			event := log.Debug()
-			if descendants > 0 {
-				event = log.Warn()
-			}
-			event.
-				Str("pathPrefix", opts.PathPrefix).
-				Strs("systems", browseSystemIDsForLog(opts.Systems)).
-				Int("directFiles", 0).
-				Int("descendantFiles", descendants).
-				Msg("browse files returned no direct media")
-		}
-	}
 	return results, nil
-}
-
-func sqlBrowseDescendantCount(
-	ctx context.Context,
-	db sqlQueryable,
-	pathPrefix string,
-	systems []systemdefs.System,
-) (int, error) {
-	conditions := []string{`m.IsMissing = 0`, `m.Path LIKE ? || '%'`}
-	args := []any{pathPrefix}
-	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", systems); systemClause != "" {
-		conditions = append(conditions, systemClause)
-		args = append(args, systemArgs...)
-	}
-
-	var count int
-	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*)
-		 FROM Media m
-		 INNER JOIN Systems s ON m.SystemDBID = s.DBID
-		 WHERE `+strings.Join(conditions, " AND "),
-		args...,
-	).Scan(&count); err != nil {
-		return 0, fmt.Errorf("browse descendant count: %w", err)
-	}
-	return count, nil
 }
 
 func sqlBrowseFileCount(

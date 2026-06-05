@@ -386,8 +386,11 @@ func handleRequest(
 
 	resp, err := fn(env)
 	if err != nil {
+		var quietErr *models.QuietClientError
 		var clientErr *models.ClientError
-		if errors.As(err, &clientErr) {
+		if errors.As(err, &quietErr) {
+			log.Debug().Err(err).Str("method", req.Method).Msg("client error")
+		} else if errors.As(err, &clientErr) {
 			log.Warn().Err(err).Str("method", req.Method).Msg("client error")
 		} else {
 			log.Error().Err(err).Str("method", req.Method).Msg("error handling request")

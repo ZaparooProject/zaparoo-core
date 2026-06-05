@@ -51,6 +51,9 @@ func fetchAndAttachTags(
 	if len(results) == 0 {
 		return nil
 	}
+	if allResultsHaveTitleIDs(results) {
+		return fetchAndAttachTagsByResultIDs(ctx, db, results)
+	}
 
 	mediaIDs := make([]int64, len(results))
 	for i, result := range results {
@@ -124,27 +127,151 @@ func fetchAndAttachTags(
 		if scanErr := tagsRows.Scan(&mediaID, &tag, &tagType); scanErr != nil {
 			return fmt.Errorf("failed to scan tags result: %w", scanErr)
 		}
-
-		tagInfo := database.TagInfo{
-			Tag:  dbtags.UnpadTagValue(tag),
-			Type: tagType,
-		}
-		mediaSeen, ok := seen[mediaID]
-		if !ok {
-			mediaSeen = make(map[database.TagInfo]struct{})
-			seen[mediaID] = mediaSeen
-		}
-		if _, dup := mediaSeen[tagInfo]; dup {
-			continue
-		}
-		mediaSeen[tagInfo] = struct{}{}
-		tagsMap[mediaID] = append(tagsMap[mediaID], tagInfo)
+		appendTagInfo(tagsMap, seen, mediaID, tag, tagType)
 	}
 	if err = tagsRows.Err(); err != nil {
 		return fmt.Errorf("tags rows iteration error: %w", err)
 	}
 
-	// Stable order for clients (the SQL no longer ORDERs the rows).
+	finishAttachTags(results, tagsMap)
+	logFetchAndAttachTagsTiming(results, len(tagsMap), unionStarted)
+	return nil
+}
+
+func allResultsHaveTitleIDs(results []database.SearchResultWithCursor) bool {
+	for i := range results {
+		if results[i].MediaTitleID == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func fetchAndAttachTagsByResultIDs(
+	ctx context.Context,
+	db sqlQueryable,
+	results []database.SearchResultWithCursor,
+) error {
+	mediaIDs := make([]int64, len(results))
+	titleToMediaIDs := make(map[int64][]int64, len(results))
+	seenTitles := make(map[int64]struct{}, len(results))
+	titleIDs := make([]int64, 0, len(results))
+	for i, result := range results {
+		mediaIDs[i] = result.MediaID
+		titleToMediaIDs[result.MediaTitleID] = append(titleToMediaIDs[result.MediaTitleID], result.MediaID)
+		if _, ok := seenTitles[result.MediaTitleID]; ok {
+			continue
+		}
+		seenTitles[result.MediaTitleID] = struct{}{}
+		titleIDs = append(titleIDs, result.MediaTitleID)
+	}
+
+	mediaPlaceholders := prepareVariadic("?", ",", len(mediaIDs))
+	titlePlaceholders := prepareVariadic("?", ",", len(titleIDs))
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
+	tagsQuery := `
+		SELECT
+			0 as SourceKind,
+			MediaTags.MediaDBID as SourceDBID,
+			Tags.Tag,
+			TagTypes.Type
+		FROM MediaTags
+		JOIN Tags ON Tags.DBID = MediaTags.TagDBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE MediaTags.MediaDBID IN (` + mediaPlaceholders + `)
+
+		UNION ALL
+
+		SELECT
+			1 as SourceKind,
+			MediaTitleTags.MediaTitleDBID as SourceDBID,
+			Tags.Tag,
+			TagTypes.Type
+		FROM MediaTitleTags
+		JOIN Tags ON Tags.DBID = MediaTitleTags.TagDBID
+		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+		WHERE MediaTitleTags.MediaTitleDBID IN (` + titlePlaceholders + `)`
+
+	tagsArgs := make([]any, 0, len(mediaIDs)+len(titleIDs))
+	for _, id := range mediaIDs {
+		tagsArgs = append(tagsArgs, id)
+	}
+	for _, id := range titleIDs {
+		tagsArgs = append(tagsArgs, id)
+	}
+
+	unionStarted := time.Now()
+	tagsStmt, err := db.PrepareContext(ctx, tagsQuery)
+	if err != nil {
+		return fmt.Errorf("failed to prepare tags query: %w", err)
+	}
+	defer func() {
+		if closeErr := tagsStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close tags statement")
+		}
+	}()
+
+	tagsRows, err := tagsStmt.QueryContext(ctx, tagsArgs...)
+	if err != nil {
+		return fmt.Errorf("failed to execute tags query: %w", err)
+	}
+	defer func() {
+		if closeErr := tagsRows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close tags rows")
+		}
+	}()
+
+	tagsMap := make(map[int64][]database.TagInfo)
+	seen := make(map[int64]map[database.TagInfo]struct{})
+	for tagsRows.Next() {
+		var sourceKind int
+		var sourceID int64
+		var tag, tagType string
+		if scanErr := tagsRows.Scan(&sourceKind, &sourceID, &tag, &tagType); scanErr != nil {
+			return fmt.Errorf("failed to scan tags result: %w", scanErr)
+		}
+
+		mediaIDsForTag := []int64{sourceID}
+		if sourceKind == 1 {
+			mediaIDsForTag = titleToMediaIDs[sourceID]
+		}
+		for _, mediaID := range mediaIDsForTag {
+			appendTagInfo(tagsMap, seen, mediaID, tag, tagType)
+		}
+	}
+	if err = tagsRows.Err(); err != nil {
+		return fmt.Errorf("tags rows iteration error: %w", err)
+	}
+
+	finishAttachTags(results, tagsMap)
+	logFetchAndAttachTagsTiming(results, len(tagsMap), unionStarted)
+	return nil
+}
+
+func appendTagInfo(
+	tagsMap map[int64][]database.TagInfo,
+	seen map[int64]map[database.TagInfo]struct{},
+	mediaID int64,
+	tag string,
+	tagType string,
+) {
+	tagInfo := database.TagInfo{
+		Tag:  dbtags.UnpadTagValue(tag),
+		Type: tagType,
+	}
+	mediaSeen, ok := seen[mediaID]
+	if !ok {
+		mediaSeen = make(map[database.TagInfo]struct{})
+		seen[mediaID] = mediaSeen
+	}
+	if _, dup := mediaSeen[tagInfo]; dup {
+		return
+	}
+	mediaSeen[tagInfo] = struct{}{}
+	tagsMap[mediaID] = append(tagsMap[mediaID], tagInfo)
+}
+
+func finishAttachTags(results []database.SearchResultWithCursor, tagsMap map[int64][]database.TagInfo) {
 	for mediaID := range tagsMap {
 		tags := tagsMap[mediaID]
 		sort.Slice(tags, func(i, j int) bool {
@@ -162,24 +289,24 @@ func fetchAndAttachTags(
 			results[i].Tags = []database.TagInfo{}
 		}
 	}
+}
 
+func logFetchAndAttachTagsTiming(
+	results []database.SearchResultWithCursor,
+	tagPairs int,
+	unionStarted time.Time,
+) {
 	unionElapsed := time.Since(unionStarted)
-
-	// Compute disambiguating ZapScript tags in-memory.
-	// A tag type is disambiguating when results sharing the same title name
-	// have different values for that tag type (e.g., "2" vs "4" for players).
 	zsStarted := time.Now()
 	computeZapScriptTags(results)
 	zsElapsed := time.Since(zsStarted)
 
 	log.Debug().
 		Int("rows", len(results)).
-		Int("tagPairs", len(tagsMap)).
+		Int("tagPairs", tagPairs).
 		Dur("unionDuration", unionElapsed).
 		Dur("zapscriptDuration", zsElapsed).
 		Msg("fetch and attach tags timing")
-
-	return nil
 }
 
 // computeZapScriptTags determines which tags are disambiguating across sibling

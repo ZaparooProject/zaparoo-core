@@ -210,6 +210,9 @@ func populateScrapedMediaCountExact(
 ) {
 	count, ok := queryScrapedMediaCount(ctx, db, status.ScraperID)
 	if !ok {
+		if cached, cachedOK := scrapingStatusInstance.getAnyCountCache(status.ScraperID); cachedOK {
+			status.TotalScraped = cached
+		}
 		return
 	}
 	status.TotalScraped = count
@@ -432,6 +435,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			status := scrapingStatusFromUpdate(scrapeCtx, scraperID, params.Force, &update, paused)
 			if update.Done {
 				populateScrapedMediaCountExact(env.State.GetContext(), db, &status)
+				mediaImageNoImages.clear()
 			} else {
 				populateScrapedMediaCountCached(env.State.GetContext(), db, &status)
 			}
@@ -454,6 +458,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 				terminalStatus.State = scrapeStateCancelled
 			}
 			populateScrapedMediaCountExact(env.State.GetContext(), db, &terminalStatus)
+			mediaImageNoImages.clear()
 			publishScrapingStatus(ns, &terminalStatus)
 		}
 		log.Info().Str("scraper", scraperID).Msg("scraper run complete")
@@ -484,7 +489,9 @@ func HandleMediaScrapeStatus(env requests.RequestEnv) (any, error) {
 		return status, nil
 	}
 
-	populateScrapedMediaCount(env.Context, env.Database, &status)
+	countCtx, cancel := optionalDBEnrichmentContext(env.Context)
+	defer cancel()
+	populateScrapedMediaCount(countCtx, env.Database, &status)
 
 	return status, nil
 }

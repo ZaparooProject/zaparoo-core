@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
@@ -365,8 +366,6 @@ func TestMediaImagePropSources_IncludesSingletonAliasSources(t *testing.T) {
 	parentPath := filepath.ToSlash(filepath.Join("roms", "Game.zip"))
 	parent := &database.Media{DBID: 10, Path: parentPath}
 
-	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, row.Path).
-		Return((*database.Media)(nil), nil).Once()
 	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, parentPath).
 		Return(&row.Media, nil).Once()
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, parentPath).
@@ -414,6 +413,147 @@ func TestHandleMediaImage_NoMatchFound(t *testing.T) {
 	assert.Contains(t, err.Error(), `path="/games/missing.rom"`)
 	assert.NotContains(t, err.Error(), "NES//games")
 	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaImage_NoImageCacheSkipsPropertyFetch(t *testing.T) {
+	mediaImageNoImages.clear()
+	t.Cleanup(mediaImageNoImages.clear)
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	row := makeMediaFullRow(404, 4040)
+
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{row.DBID}).
+		Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil).Once()
+	mockDB.On("GetMediaProperties", mock.Anything, row.DBID).
+		Return([]database.MediaProperty{}, nil).Once()
+	mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).
+		Return([]database.MediaProperty{}, nil).Once()
+
+	env := makeMediaImageEnv(t, mockDB, json.RawMessage(`{"mediaId":404,"imageTypes":["boxart"]}`))
+	_, err := HandleMediaImage(env)
+	require.Error(t, err)
+	var firstNoImage *mediaImageNotFoundError
+	require.ErrorAs(t, err, &firstNoImage)
+
+	_, err = HandleMediaImage(env)
+	require.Error(t, err)
+	var secondNoImage *mediaImageNotFoundError
+	require.ErrorAs(t, err, &secondNoImage)
+
+	mediaImageNoImages.clear()
+	mockDB.On("GetMediaProperties", mock.Anything, row.DBID).
+		Return([]database.MediaProperty{}, nil).Once()
+	mockDB.On("GetMediaTitleProperties", mock.Anything, row.Title.DBID).
+		Return([]database.MediaProperty{}, nil).Once()
+	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{row.DBID}).
+		Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil).Once()
+	_, err = HandleMediaImage(env)
+	require.Error(t, err)
+	var thirdNoImage *mediaImageNotFoundError
+	require.ErrorAs(t, err, &thirdNoImage)
+
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaImage_NoImagePathCacheSkipsMediaDB(t *testing.T) {
+	mediaImageNoImages.clear()
+	t.Cleanup(mediaImageNoImages.clear)
+
+	row := makeMediaFullRow(405, 4050)
+	params := mediaImageParams(row, `"imageTypes": ["boxart"]`)
+	ref, err := parseMediaImageRequest(params)
+	require.NoError(t, err)
+	prefs := imagePrefs(nil, ref.ImageTypes)
+	mediaImageNoImages.add(
+		mediaImageNoImageRequestKey(ref, prefs),
+		&mediaImageNotFoundError{system: row.System.SystemID, path: row.Path},
+	)
+
+	env := makeMediaImageEnv(t, testhelpers.NewMockMediaDBI(), params)
+	_, err = HandleMediaImage(env)
+	require.Error(t, err)
+
+	var quietErr *models.QuietClientError
+	require.ErrorAs(t, err, &quietErr)
+	var noImage *mediaImageNotFoundError
+	require.ErrorAs(t, err, &noImage)
+}
+
+func TestHandleMediaImage_NoImageCacheBypassesSemaphore(t *testing.T) {
+	mediaImageNoImages.clear()
+	t.Cleanup(mediaImageNoImages.clear)
+
+	mediaImageSem <- struct{}{}
+	defer func() { <-mediaImageSem }()
+
+	params := json.RawMessage(`{"mediaId":406,"imageTypes":["boxart"]}`)
+	ref, err := parseMediaImageRequest(params)
+	require.NoError(t, err)
+	prefs := imagePrefs(nil, ref.ImageTypes)
+	mediaImageNoImages.add(
+		mediaImageNoImageRequestKey(ref, prefs),
+		&mediaImageNotFoundError{system: "NES", path: filepath.Join("games", "test-406.rom")},
+	)
+
+	env := makeMediaImageEnv(t, testhelpers.NewMockMediaDBI(), params)
+	_, err = HandleMediaImage(env)
+	require.Error(t, err)
+
+	var quietErr *models.QuietClientError
+	require.ErrorAs(t, err, &quietErr)
+}
+
+func TestHandleMediaImage_NoImageCacheRecheckedAfterSemaphore(t *testing.T) {
+	mediaImageNoImages.clear()
+	t.Cleanup(mediaImageNoImages.clear)
+
+	mediaImageSem <- struct{}{}
+
+	params := json.RawMessage(`{"mediaId":407,"imageTypes":["boxart"]}`)
+	ref, err := parseMediaImageRequest(params)
+	require.NoError(t, err)
+	prefs := imagePrefs(nil, ref.ImageTypes)
+	noImageKey := mediaImageNoImageRequestKey(ref, prefs)
+
+	done := make(chan error, 1)
+	go func() {
+		env := makeMediaImageEnv(t, testhelpers.NewMockMediaDBI(), params)
+		_, handleErr := HandleMediaImage(env)
+		done <- handleErr
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	mediaImageNoImages.add(
+		noImageKey,
+		&mediaImageNotFoundError{system: "NES", path: filepath.Join("games", "test-407.rom")},
+	)
+	<-mediaImageSem
+
+	select {
+	case err = <-done:
+		require.Error(t, err)
+		var quietErr *models.QuietClientError
+		require.ErrorAs(t, err, &quietErr)
+		var noImage *mediaImageNotFoundError
+		require.ErrorAs(t, err, &noImage)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for media image handler")
+	}
+}
+
+func TestHandleMediaImage_ContextCanceledWhileWaitingForSemaphore(t *testing.T) {
+	mediaImageSem <- struct{}{}
+	defer func() {
+		<-mediaImageSem
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	env := makeMediaImageEnv(t, testhelpers.NewMockMediaDBI(), json.RawMessage(`{"mediaId":1}`))
+	env.Context = ctx
+
+	_, err := HandleMediaImage(env)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 // TestHandleMediaImage_MediaNotFound verifies that an error is returned when no

@@ -123,58 +123,6 @@ func TestLogBrowseMediaCountsBySystem_RowsError(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSqlBrowseDescendantCount_Unfiltered(t *testing.T) {
-	t.Parallel()
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	romsDir := browseTestDir("roms", "psx")
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\).*FROM Media m.*INNER JOIN Systems s.*WHERE").
-		WithArgs(romsDir).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(273))
-
-	count, err := sqlBrowseDescendantCount(context.Background(), db, romsDir, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 273, count)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlBrowseDescendantCount_SystemFiltered(t *testing.T) {
-	t.Parallel()
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	romsDir := browseTestDir("roms", "psx")
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\).*FROM Media m.*INNER JOIN Systems s.*WHERE.*s\\.SystemID IN").
-		WithArgs(romsDir, "PSX").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(273))
-
-	count, err := sqlBrowseDescendantCount(context.Background(), db, romsDir, []systemdefs.System{{ID: "PSX"}})
-	require.NoError(t, err)
-	assert.Equal(t, 273, count)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlBrowseDescendantCount_QueryError(t *testing.T) {
-	t.Parallel()
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	romsDir := browseTestDir("roms", "psx")
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\).*FROM Media m.*INNER JOIN Systems s.*WHERE").
-		WithArgs(romsDir).
-		WillReturnError(sql.ErrConnDone)
-
-	count, err := sqlBrowseDescendantCount(context.Background(), db, romsDir, nil)
-	require.Error(t, err)
-	assert.Equal(t, 0, count)
-	assert.Contains(t, err.Error(), "browse descendant count")
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestSqlBrowseDirectoriesFromCache_ReturnsSystemCounts(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
@@ -215,7 +163,7 @@ func TestSqlBrowseDirectories_FallsBackWhenCacheNotReady(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 	romsDir := browseTestDir("roms")
 	mock.ExpectQuery("WITH matched AS").
-		WithArgs(romsDir, romsDir).
+		WithArgs(romsDir, romsDir, stringPrefixUpperBound(romsDir)).
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}).AddRow("SNES", 2))
 
 	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
@@ -227,7 +175,7 @@ func TestSqlBrowseDirectories_FallsBackWhenCacheNotReady(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSqlBrowseDirectories_FallsBackWhenReadyCacheIsEmpty(t *testing.T) {
+func TestSqlBrowseDirectories_ReturnsEmptyWhenReadyCacheParentHasNoChildren(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -241,8 +189,29 @@ func TestSqlBrowseDirectories_FallsBackWhenReadyCacheIsEmpty(t *testing.T) {
 	mock.ExpectQuery("SELECT d.Name, c.FileCount").
 		WithArgs(int64(10), "PSX").
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount"}))
+
+	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{
+		PathPrefix: psxDir,
+		Systems:    []systemdefs.System{{ID: "PSX"}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlBrowseDirectories_FallsBackWhenReadyCacheParentMissing(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectBrowseCacheReady(mock)
+	psxDir := browseTestDir("media", "fat", "games", "PSX")
+	mock.ExpectQuery("SELECT DBID FROM BrowseDirs WHERE Path = ").
+		WithArgs(psxDir).
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("WITH matched AS").
-		WithArgs(psxDir, psxDir, "PSX").
+		WithArgs(psxDir, psxDir, stringPrefixUpperBound(psxDir), "PSX").
 		WillReturnRows(sqlmock.NewRows([]string{"Name", "FileCount", "SystemIDs"}).AddRow("USA", 273, "PSX"))
 
 	results, err := sqlBrowseDirectories(context.Background(), db, database.BrowseDirectoriesOptions{

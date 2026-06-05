@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -282,6 +283,40 @@ func TestFetchAndAttachTags_MultipleResults(t *testing.T) {
 	assert.Equal(t, "1990", results[2].Tags[1].Tag)
 	assert.Equal(t, "year", results[2].Tags[1].Type)
 
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachTags_ResultTitleIDsAvoidMediaJoin(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, MediaTitleID: 10, SystemID: "nes", Name: "Game", Path: filepath.Join("games", "a.nes")},
+		{MediaID: 2, MediaTitleID: 10, SystemID: "nes", Name: "Game", Path: filepath.Join("games", "b.nes")},
+		{MediaID: 3, MediaTitleID: 30, SystemID: "snes", Name: "Other", Path: filepath.Join("games", "c.sfc")},
+	}
+
+	tagRows := sqlmock.NewRows([]string{"SourceKind", "SourceDBID", "Tag", "Type"}).
+		AddRow(0, int64(1), "Rev A", "rev").
+		AddRow(1, int64(10), "Action", "genre").
+		AddRow(1, int64(30), "1990", "year")
+
+	mock.ExpectPrepare(`SELECT.*SourceKind.*SourceDBID.*FROM MediaTags.*FROM MediaTitleTags`).
+		ExpectQuery().
+		WithArgs(int64(1), int64(2), int64(3), int64(10), int64(30)).
+		WillReturnRows(tagRows)
+
+	err = fetchAndAttachTags(context.Background(), db, results)
+	require.NoError(t, err)
+
+	assert.Equal(t, []database.TagInfo{
+		{Tag: "Action", Type: "genre"},
+		{Tag: "Rev A", Type: "rev"},
+	}, results[0].Tags)
+	assert.Equal(t, []database.TagInfo{{Tag: "Action", Type: "genre"}}, results[1].Tags)
+	assert.Equal(t, []database.TagInfo{{Tag: "1990", Type: "year"}}, results[2].Tags)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
