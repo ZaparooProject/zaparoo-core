@@ -215,6 +215,70 @@ func TestPrepareBinary_NormalizesReusedCachedBinaryPermissions(t *testing.T) {
 	assert.True(t, isServiceCacheFilename(filepath.Base(result)))
 }
 
+func TestPrepareBinary_UsesValidManifestCache(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-content"), 0o600))
+
+	cachedPath, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+
+	launchPath, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, cachedPath, launchPath)
+	assert.NotEqual(t, srcPath, launchPath)
+}
+
+func TestPrepareBinary_UsesCacheWhenOnlyChangeTimeDrifts(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "zaparoo.sh")
+	require.NoError(t, os.WriteFile(srcPath, []byte("binary-content"), 0o600))
+
+	cachedPath, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	manifest, err := readServiceBinaryManifest(afero.NewOsFs(), svc.pl.Settings().DataDir)
+	require.NoError(t, err)
+	manifest.ServiceChangeTimeNS++
+	require.NoError(t, writeServiceBinaryManifest(afero.NewOsFs(), svc.pl.Settings().DataDir, manifest))
+
+	launchPath, err := svc.prepareBinary(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, cachedPath, launchPath)
+	assert.NotEqual(t, srcPath, launchPath)
+}
+
+func TestStart_CacheMissLaunchesCachedCopy(t *testing.T) {
+	svc := newTestService(t)
+	settings := svc.pl.Settings()
+	pidFile := filepath.Join(settings.TempDir, config.PidFile)
+	eventLog := filepath.Join(t.TempDir(), "events.log")
+	sourcePath := writeFakeServiceScript(t, pidFile, eventLog)
+	t.Setenv(config.AppEnv, sourcePath)
+	t.Cleanup(func() {
+		pid, err := svc.Pid()
+		if err == nil && pid > 0 && requireServiceRunning(t, svc) {
+			require.NoError(t, svc.Stop())
+		}
+		_ = os.Remove(pidFile)
+	})
+
+	require.NoError(t, svc.Start())
+
+	assert.True(t, requireServiceRunning(t, svc))
+	assert.FileExists(t, filepath.Join(settings.DataDir, serviceManifestName))
+	content, err := os.ReadFile(eventLog) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "started:")
+	//nolint:gosec // test overwrites a test-controlled fake service script
+	require.NoError(t, os.WriteFile(sourcePath, []byte("#!/bin/sh\necho replaced\n"), 0o700))
+}
+
 func TestPrepareBinary_UsesConfiguredFilesystem(t *testing.T) {
 	t.Parallel()
 
