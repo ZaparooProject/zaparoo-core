@@ -424,7 +424,7 @@ outer:
 				ProvidedName: game.Name,
 			})
 
-			pathMedia, matchedPathKey, pathOK := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved)
+			pathMedia, matchedPathKey, pathOK := g.canonicalMediaForResolvedPath(indexes, resolved)
 
 			title, titleOK := indexes.TitlesBySlug[pf.Slug]
 			switch {
@@ -1471,6 +1471,182 @@ func selectMediaForSlugMatch(
 		return slugMediaSelection{matchKind: matchKind}
 	}
 	return slugMediaSelection{media: mediaRows[0], matchKind: matchKind}
+}
+
+func (g *GamelistXMLScraper) canonicalMediaForResolvedPath(
+	indexes loadRecordIndexes,
+	resolved string,
+) (database.Media, string, bool) {
+	media, matchedKey, ok := matchMediaByResolvedPath(indexes.MediaByPathFold, resolved)
+	if ok {
+		return media, matchedKey, true
+	}
+	if !isCDTrackLikePath(resolved) {
+		return database.Media{}, "", false
+	}
+	return g.matchCanonicalCDMedia(indexes, resolved)
+}
+
+func (g *GamelistXMLScraper) matchCanonicalCDMedia(
+	indexes loadRecordIndexes,
+	resolved string,
+) (database.Media, string, bool) {
+	m3uMatches := make(map[string]database.Media)
+	cueMatches := make(map[string]database.Media)
+	for key, media := range indexes.MediaByPathFold {
+		switch strings.ToLower(filepath.Ext(media.Path)) {
+		case ".m3u":
+			if g.m3uReferencesPath(media.Path, resolved) {
+				m3uMatches[key] = media
+			}
+		case ".cue":
+			if g.cueReferencesPath(media.Path, resolved) {
+				cueMatches[key] = media
+			}
+		}
+	}
+
+	if len(m3uMatches) == 1 {
+		for key, media := range m3uMatches {
+			return media, key, true
+		}
+	}
+	if len(m3uMatches) > 1 {
+		log.Debug().Str("path", resolved).Int("matches", len(m3uMatches)).
+			Msg("gamelistxml: track path matched multiple m3u media rows, skipping canonical match")
+		return database.Media{}, "", false
+	}
+
+	if len(cueMatches) == 1 {
+		for key, media := range cueMatches {
+			return media, key, true
+		}
+	}
+	if len(cueMatches) > 1 {
+		log.Debug().Str("path", resolved).Int("matches", len(cueMatches)).
+			Msg("gamelistxml: track path matched multiple cue media rows, skipping canonical match")
+	}
+	return database.Media{}, "", false
+}
+
+func isCDTrackLikePath(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".bin", ".iso", ".wav", ".flac", ".mp3", ".ogg", ".raw", ".img":
+		return true
+	default:
+		return false
+	}
+}
+
+func (g *GamelistXMLScraper) m3uReferencesPath(m3uPath, resolved string) bool {
+	data, err := afero.ReadFile(g.filesystem(), m3uPath)
+	if err != nil {
+		log.Debug().Err(err).Str("path", m3uPath).Msg("gamelistxml: failed to read m3u for canonical match")
+		return false
+	}
+	baseDir := filepath.Dir(m3uPath)
+	for _, rawLine := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		entryPath := g.caseInsensitiveExistingPath(resolveReferencedPath(baseDir, line))
+		if samePath(entryPath, resolved) {
+			return true
+		}
+		if strings.EqualFold(filepath.Ext(entryPath), ".cue") && g.cueReferencesPath(entryPath, resolved) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *GamelistXMLScraper) cueReferencesPath(cuePath, resolved string) bool {
+	data, err := afero.ReadFile(g.filesystem(), cuePath)
+	if err != nil {
+		log.Debug().Err(err).Str("path", cuePath).Msg("gamelistxml: failed to read cue for canonical match")
+		return false
+	}
+	baseDir := filepath.Dir(cuePath)
+	for _, rawLine := range strings.Split(string(data), "\n") {
+		entry := parseCueFileEntry(rawLine)
+		if entry == "" {
+			continue
+		}
+		if samePath(resolveReferencedPath(baseDir, entry), resolved) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseCueFileEntry(line string) string {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(strings.ToUpper(line), "FILE ") {
+		return ""
+	}
+	rest := strings.TrimSpace(line[len("FILE "):])
+	if rest == "" {
+		return ""
+	}
+	if strings.HasPrefix(rest, "\"") {
+		rest = rest[1:]
+		end := strings.Index(rest, "\"")
+		if end <= 0 {
+			return ""
+		}
+		return strings.TrimSpace(rest[:end])
+	}
+
+	upper := strings.ToUpper(rest)
+	for _, token := range []string{" BINARY", " WAVE", " MP3", " AIFF", " MOTOROLA"} {
+		if idx := strings.LastIndex(upper, token); idx > 0 {
+			return strings.TrimSpace(rest[:idx])
+		}
+	}
+	return strings.TrimSpace(rest)
+}
+
+func (g *GamelistXMLScraper) caseInsensitiveExistingPath(path string) string {
+	path = filepath.Clean(path)
+	if path == "." || path == "" {
+		return path
+	}
+	if exists, err := afero.Exists(g.filesystem(), path); err == nil && exists {
+		return path
+	}
+
+	parent := filepath.Dir(path)
+	if parent == path {
+		return path
+	}
+	actualParent := g.caseInsensitiveExistingPath(parent)
+	entries, err := afero.ReadDir(g.filesystem(), actualParent)
+	if err != nil {
+		return path
+	}
+	base := filepath.Base(path)
+	for _, entry := range entries {
+		if strings.EqualFold(entry.Name(), base) {
+			return filepath.Join(actualParent, entry.Name())
+		}
+	}
+	return path
+}
+
+func resolveReferencedPath(baseDir, ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	if filepath.IsAbs(ref) {
+		return filepath.Clean(ref)
+	}
+	return filepath.Clean(filepath.Join(baseDir, ref))
+}
+
+func samePath(a, b string) bool {
+	return pathFoldKey(a) == pathFoldKey(b)
 }
 
 func matchMediaByResolvedPath(
