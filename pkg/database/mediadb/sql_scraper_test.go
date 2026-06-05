@@ -243,6 +243,28 @@ func TestFindSingleDescendantMedia_UsesByteExactPrefix(t *testing.T) {
 	assert.Equal(t, int64(6), caseExact.DBID)
 }
 
+func TestStringPrefixUpperBound(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		prefix string
+		want   string
+	}{
+		{name: "empty", prefix: "", want: ""},
+		{name: "ascii", prefix: "roms/Game/", want: "roms/Game0"},
+		{name: "carry", prefix: string([]byte{'a', 0xff}), want: "b"},
+		{name: "no bound", prefix: string([]byte{0xff, 0xff}), want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, stringPrefixUpperBound(tt.prefix))
+		})
+	}
+}
+
 // --- FindMediaBySystemAndPathFold ---
 
 func TestFindMediaBySystemAndPathFold_ExactMatch(t *testing.T) {

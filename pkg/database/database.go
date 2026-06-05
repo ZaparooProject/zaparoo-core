@@ -343,6 +343,7 @@ type SearchResultWithCursor struct {
 	Tags          []TagInfo
 	ZapScriptTags []TagInfo // Disambiguating tags only (tags that differ across sibling variants)
 	MediaID       int64
+	MediaTitleID  int64 `json:"-"`
 }
 
 // ZapScriptTagTypes defines which tag types are eligible for inclusion in ZapScript

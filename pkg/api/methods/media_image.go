@@ -29,11 +29,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/rs/zerolog/log"
@@ -43,7 +45,14 @@ import (
 const (
 	misterMediaImageMaxBytes  = int64(2 * 1024 * 1024)
 	defaultMediaImageMaxBytes = int64(8 * 1024 * 1024)
+	mediaImageNoImageMax      = 4096
 )
+
+// mediaImageSem limits concurrent image lookups so high-volume image misses do
+// not saturate SQLite and starve browse/status calls.
+var mediaImageSem = make(chan struct{}, 1)
+
+var mediaImageBeforeSemAcquire func()
 
 // defaultImageTypes is the preference order used when no imageTypes param is provided.
 var defaultImageTypes = []string{
@@ -77,8 +86,91 @@ type mediaImageSource struct {
 	isMedia bool
 }
 
+type mediaImageNotFoundError struct {
+	system                      string
+	path                        string
+	fileBackedCandidatesChecked bool
+}
+
+type mediaImageNoImageCache struct {
+	entries map[string]error
+	mu      syncutil.Mutex
+}
+
+var mediaImageNoImages = &mediaImageNoImageCache{entries: make(map[string]error)}
+
 func (e *mediaBinaryTooLargeError) Error() string {
 	return fmt.Sprintf("media binary %q is too large: %d bytes exceeds %d byte limit", e.path, e.size, e.max)
+}
+
+func (e *mediaImageNotFoundError) Error() string {
+	return fmt.Sprintf("no image found for media: system=%q path=%q", e.system, filepath.ToSlash(e.path))
+}
+
+func mediaImageNoImageMediaIDKey(mediaID int64, prefs []string) string {
+	return fmt.Sprintf("id:%d\x00%s", mediaID, strings.Join(prefs, "\x00"))
+}
+
+func mediaImageNoImagePathKey(system, path string, prefs []string) string {
+	return fmt.Sprintf("path:%s\x00%s\x00%s", system, filepath.ToSlash(path), strings.Join(prefs, "\x00"))
+}
+
+func mediaImageNoImageRequestKey(ref mediaRefParam, prefs []string) string {
+	if ref.MediaID != nil {
+		return mediaImageNoImageMediaIDKey(*ref.MediaID, prefs)
+	}
+	return mediaImageNoImagePathKey(ref.System, ref.Path, prefs)
+}
+
+func (c *mediaImageNoImageCache) get(key string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	err, ok := c.entries[key]
+	return ok, err
+}
+
+func (c *mediaImageNoImageCache) add(key string, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if len(c.entries) >= mediaImageNoImageMax {
+		for existing := range c.entries {
+			delete(c.entries, existing)
+			break
+		}
+	}
+
+	var noImage *mediaImageNotFoundError
+	if errors.As(err, &noImage) {
+		c.entries[key] = noImage
+		return
+	}
+	c.entries[key] = err
+}
+
+func (c *mediaImageNoImageCache) clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = make(map[string]error)
+}
+
+func mediaImageNoImageError(row *database.MediaFullRow, fileBackedCandidatesChecked bool) error {
+	noImage := &mediaImageNotFoundError{
+		system:                      row.System.SystemID,
+		path:                        row.Path,
+		fileBackedCandidatesChecked: fileBackedCandidatesChecked,
+	}
+	return fmt.Errorf("%w", models.QuietClientErr(noImage))
+}
+
+func cachedMediaImageNoImageError(err error) error {
+	return fmt.Errorf("%w", models.QuietClientErr(err))
+}
+
+func isCacheableMediaImageNoImageError(err error) bool {
+	var noImage *mediaImageNotFoundError
+	return errors.As(err, &noImage) && !noImage.fileBackedCandidatesChecked
 }
 
 // resolveImageTypeTag converts a short image type name to the full property TypeTag.
@@ -124,10 +216,28 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	if err != nil {
 		return nil, err
 	}
+	prefs := imagePrefs(nil, ref.ImageTypes)
+	noImageKey := mediaImageNoImageRequestKey(ref, prefs)
+	if ok, cachedErr := mediaImageNoImages.get(noImageKey); ok {
+		return nil, cachedMediaImageNoImageError(cachedErr)
+	}
+	if mediaImageBeforeSemAcquire != nil {
+		mediaImageBeforeSemAcquire()
+	}
+
+	select {
+	case mediaImageSem <- struct{}{}:
+		defer func() { <-mediaImageSem }()
+	case <-env.Context.Done():
+		return nil, env.Context.Err()
+	}
+	if ok, cachedErr := mediaImageNoImages.get(noImageKey); ok {
+		return nil, cachedMediaImageNoImageError(cachedErr)
+	}
 
 	maxBytes := mediaImageMaxBytes(env.Platform)
 	if ref.MediaID == nil {
-		return handleMediaImageSinglePath(&env, ref, maxBytes)
+		return handleMediaImageSinglePath(&env, ref, prefs, noImageKey, maxBytes)
 	}
 
 	resolved, err := resolveMediaRefs(&env, []mediaRefParam{ref})
@@ -149,10 +259,13 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 
-	prefs := imagePrefs(nil, ref.ImageTypes)
-	return selectMediaImageFromSources(
+	image, err := selectMediaImageFromSources(
 		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, prefs, maxBytes,
 	)
+	if isCacheableMediaImageNoImageError(err) {
+		mediaImageNoImages.add(noImageKey, err)
+	}
+	return image, err
 }
 
 func parseMediaImageRequest(raw json.RawMessage) (mediaRefParam, error) {
@@ -171,7 +284,13 @@ func parseMediaImageRequest(raw json.RawMessage) (mediaRefParam, error) {
 	return ref, nil
 }
 
-func handleMediaImageSinglePath(env *requests.RequestEnv, ref mediaRefParam, maxBytes int64) (any, error) {
+func handleMediaImageSinglePath(
+	env *requests.RequestEnv,
+	ref mediaRefParam,
+	prefs []string,
+	noImageKey string,
+	maxBytes int64,
+) (any, error) {
 	db := env.Database.MediaDB
 	row, err := resolveMediaBySystemAndPath(env, ref.System, ref.Path)
 	if err != nil {
@@ -187,9 +306,13 @@ func handleMediaImageSinglePath(env *requests.RequestEnv, ref mediaRefParam, max
 		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
 
-	return selectMediaImageFromSources(
-		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, imagePrefs(nil, ref.ImageTypes), maxBytes,
+	image, err := selectMediaImageFromSources(
+		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, prefs, maxBytes,
 	)
+	if isCacheableMediaImageNoImageError(err) {
+		mediaImageNoImages.add(noImageKey, err)
+	}
+	return image, err
 }
 
 func imagePrefs(topLevel, itemLevel []string) []string {
@@ -279,6 +402,7 @@ func selectMediaImageFromSources(
 	}
 	sources = append(sources, mediaImageSource{buildPropsMap(titleProps), false})
 
+	fileBackedCandidatesChecked := false
 	seen := make(map[string]bool, len(prefs))
 	for _, t := range prefs {
 		typeTag, ok := resolveImageTypeTag(t)
@@ -293,6 +417,9 @@ func selectMediaImageFromSources(
 				continue
 			}
 
+			if prop.Text != "" {
+				fileBackedCandidatesChecked = true
+			}
 			image, stale, err := loadMediaImageProperty(ctx, fs, db, row, &prop, src, typeTag, maxBytes)
 			if stale {
 				delete(src.propMap, typeTag)
@@ -321,9 +448,7 @@ func selectMediaImageFromSources(
 		Strs("titleImageProps", imagePropertyTypeTags(titleProps)).
 		Msg("media.image: no image found")
 
-	return models.MediaImageResponse{}, models.ClientErrf(
-		"no image found for media: system=%q path=%q", row.System.SystemID, filepath.ToSlash(row.Path),
-	)
+	return models.MediaImageResponse{}, mediaImageNoImageError(row, fileBackedCandidatesChecked)
 }
 
 func loadMediaImageProperty(

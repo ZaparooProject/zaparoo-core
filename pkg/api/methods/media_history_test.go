@@ -154,6 +154,32 @@ func TestHandleMediaHistory_WithMediaIDAndRelativePath(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestMediaResponseMediaIDs_BoundsSlowLookup(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mediaPath := filepath.Join(string(filepath.Separator), "games", "slow.nes")
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 10}, nil).Once()
+	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(10), []string{mediaPath}).
+		Run(func(args mock.Arguments) {
+			ctx, ok := args.Get(0).(context.Context)
+			require.True(t, ok)
+			<-ctx.Done()
+		}).
+		Return(nil, context.DeadlineExceeded).
+		Once()
+
+	started := time.Now()
+	mediaIDs := mediaResponseMediaIDs(&requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}, []mediaPathRef{{SystemID: "NES", Path: mediaPath}})
+
+	assert.Less(t, time.Since(started), 2*time.Second)
+	assert.Empty(t, mediaIDs)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestHandleMediaHistory_WithLimit(t *testing.T) {
 	t.Parallel()
 

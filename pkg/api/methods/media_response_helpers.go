@@ -21,11 +21,14 @@ package methods
 
 import (
 	"context"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/rs/zerolog/log"
 )
+
+const optionalDBEnrichmentTimeout = 500 * time.Millisecond
 
 type mediaPathRef struct {
 	SystemID string
@@ -49,7 +52,16 @@ func mediaResponseMediaIDs(env *requests.RequestEnv, refs []mediaPathRef) map[me
 	if env == nil || env.Database == nil {
 		return nil
 	}
-	return mediaIDsByPath(env.Context, env.Database.MediaDB, refs)
+	ctx, cancel := optionalDBEnrichmentContext(env.Context)
+	defer cancel()
+	return mediaIDsByPath(ctx, env.Database.MediaDB, refs)
+}
+
+func optionalDBEnrichmentContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, optionalDBEnrichmentTimeout)
 }
 
 func mediaIDsByPath(ctx context.Context, db database.MediaDBI, refs []mediaPathRef) map[mediaPathRef]int64 {

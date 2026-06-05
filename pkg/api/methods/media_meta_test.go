@@ -434,8 +434,6 @@ func TestHandleMediaMeta_MediaIDMergesSingletonAliasMetadata(t *testing.T) {
 		Once()
 	mockDB.On("GetMediaTitlePropertyMetadataByMediaTitleDBIDs", mock.Anything, []int64{row.Title.DBID}).
 		Return(map[int64][]database.MediaProperty{}, nil).Once()
-	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, row.Path).
-		Return((*database.Media)(nil), nil).Twice()
 	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, parentPath).
 		Return(&row.Media, nil).Twice()
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, parentPath).
@@ -487,8 +485,6 @@ func TestMergedMediaMeta_MergesSingletonAliasMetadata(t *testing.T) {
 	parentPath := filepath.ToSlash(filepath.Join("roms", "Game.zip"))
 	parent := &database.Media{DBID: 10, Path: parentPath}
 
-	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, row.Path).
-		Return((*database.Media)(nil), nil).Once()
 	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, parentPath).
 		Return(&row.Media, nil).Once()
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, parentPath).

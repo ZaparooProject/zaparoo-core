@@ -470,6 +470,7 @@ func GenerateMediaDB(
 			return
 		}
 		log.Info().Msg("finished generating media db successfully")
+		mediaImageNoImages.clear()
 		notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,

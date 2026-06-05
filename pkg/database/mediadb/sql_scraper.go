@@ -130,13 +130,26 @@ func (db *MediaDB) FindSingleDescendantMedia(
 	}
 
 	prefix := strings.TrimRight(dirPath, "/") + "/"
-	rows, err := db.sql.QueryContext(ctx, `
+	upper := stringPrefixUpperBound(prefix)
+	query := `
 		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
 		FROM Media
-		WHERE SystemDBID = ? AND IsMissing = 0 AND substr(Path, 1, length(?)) = ?
+		WHERE SystemDBID = ? AND IsMissing = 0 AND Path >= ? AND Path < ?
 		ORDER BY Path ASC, DBID ASC
 		LIMIT 2
-	`, systemDBID, prefix, prefix)
+	`
+	args := []any{systemDBID, prefix, upper}
+	if upper == "" {
+		query = `
+			SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
+			FROM Media
+			WHERE SystemDBID = ? AND IsMissing = 0 AND Path >= ? AND substr(Path, 1, length(?)) = ?
+			ORDER BY Path ASC, DBID ASC
+			LIMIT 2
+		`
+		args = []any{systemDBID, prefix, prefix, prefix}
+	}
+	rows, err := db.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query FindSingleDescendantMedia: %w", err)
 	}
@@ -168,6 +181,20 @@ func (db *MediaDB) FindSingleDescendantMedia(
 		return nil, nil //nolint:nilnil // zero or ambiguous descendants are not singleton aliases
 	}
 	return &matches[0], nil
+}
+
+func stringPrefixUpperBound(prefix string) string {
+	if prefix == "" {
+		return ""
+	}
+	b := []byte(prefix)
+	for i := len(b) - 1; i >= 0; i-- {
+		if b[i] != 0xff {
+			b[i]++
+			return string(b[:i+1])
+		}
+	}
+	return ""
 }
 
 // FindMediaBySystemAndPathFold returns the Media row for the given system and

@@ -29,6 +29,13 @@ type ClientError struct {
 	Err error
 }
 
+// QuietClientError is an expected client-facing error that should not be logged
+// as a warning for every occurrence. Use for high-volume misses where the JSON-RPC
+// error response is still correct, but warning logs would create noise.
+type QuietClientError struct {
+	Err error
+}
+
 func (e *ClientError) Error() string {
 	return e.Err.Error()
 }
@@ -37,12 +44,40 @@ func (e *ClientError) Unwrap() error {
 	return e.Err
 }
 
+func (e *QuietClientError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *QuietClientError) Unwrap() error {
+	return e.Err
+}
+
+func (e *QuietClientError) As(target any) bool {
+	clientErr, ok := target.(**ClientError)
+	if !ok {
+		return false
+	}
+	*clientErr = &ClientError{Err: e.Err}
+	return true
+}
+
 // ClientErr wraps an error as a ClientError.
 func ClientErr(err error) error {
 	return &ClientError{Err: err}
 }
 
+// QuietClientErr wraps an error as a QuietClientError.
+func QuietClientErr(err error) error {
+	return &QuietClientError{Err: err}
+}
+
 // ClientErrf creates a new formatted ClientError.
 func ClientErrf(format string, a ...any) error {
 	return &ClientError{Err: fmt.Errorf(format, a...)}
+}
+
+// QuietClientErrf creates a formatted QuietClientError that the API server logs
+// at debug level instead of warning level.
+func QuietClientErrf(format string, a ...any) error {
+	return &QuietClientError{Err: fmt.Errorf(format, a...)}
 }
