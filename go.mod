@@ -20,7 +20,7 @@ require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gdamore/tcell/v2 v2.13.9
-	github.com/gen2brain/malgo v0.11.24
+	github.com/gen2brain/malgo v0.11.25
 	github.com/getsentry/sentry-go v0.46.2
 	github.com/getsentry/sentry-go/zerolog v0.46.2
 	github.com/go-chi/chi/v5 v5.3.0
@@ -38,7 +38,7 @@ require (
 	github.com/hsanjuan/go-ndef v0.0.1
 	github.com/jonboulle/clockwork v0.5.0
 	github.com/mackerelio/go-osstat v0.2.7
-	github.com/mattn/go-sqlite3 v1.14.44
+	github.com/mattn/go-sqlite3 v1.14.45
 	github.com/nixinwang/dialog v0.0.0-20240524023314-b4bad92eff4d
 	github.com/olahol/melody v1.4.0
 	github.com/pelletier/go-toml/v2 v2.3.1
@@ -47,7 +47,7 @@ require (
 	github.com/rs/zerolog v1.35.1
 	github.com/sasha-s/go-deadlock v0.3.9
 	github.com/schollz/pake/v3 v3.1.1
-	github.com/shirou/gopsutil/v4 v4.26.4
+	github.com/shirou/gopsutil/v4 v4.26.5
 	github.com/spf13/afero v1.15.0
 	github.com/stretchr/testify v1.11.1
 	go.bug.st/serial v1.7.1
