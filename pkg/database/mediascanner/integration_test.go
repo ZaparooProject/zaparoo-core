@@ -22,6 +22,7 @@ package mediascanner
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -717,7 +718,7 @@ func TestGetPathFragments_DatePrefixPolicy(t *testing.T) {
 	t.Parallel()
 
 	fragments := GetPathFragments(&PathFragmentParams{
-		Path:         "/roms/genesis/history/1991-06-23 - Sonic the Hedgehog (USA).gen",
+		Path:         filepath.Join("roms", "genesis", "history", "1991-06-23 - Sonic the Hedgehog (USA).gen"),
 		SystemID:     "Genesis",
 		PrefixPolicy: browseprefix.Policy{Kind: browseprefix.KindDate, Enabled: true},
 	})

@@ -57,6 +57,104 @@ func TestParseStem(t *testing.T) {
 	}
 }
 
+func TestStemFromPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+		stem string
+	}{
+		{
+			name: "filename with extension",
+			path: filepath.Join("roms", "genesis", "001 - Sonic.gen"),
+			stem: "001 - Sonic",
+		},
+		{
+			name: "nested date file",
+			path: filepath.Join("roms", "genesis", "history", "1991-06-23 - Sonic.zip"),
+			stem: "1991-06-23 - Sonic",
+		},
+		{name: "no extension", path: filepath.Join("roms", "genesis", "Sonic"), stem: "Sonic"},
+		{
+			name: "dot in title",
+			path: filepath.Join("roms", "genesis", "Sonic. The Hedgehog.gen"),
+			stem: "Sonic. The Hedgehog",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.stem, StemFromPath(tt.path))
+		})
+	}
+}
+
+func TestStripWithPolicy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		path    string
+		rest    string
+		parsed  Kind
+		policy  Policy
+		strips  bool
+		enabled bool
+	}{
+		{
+			name:    "enabled rank policy strips rank prefix",
+			path:    filepath.Join("roms", "genesis", "001 - Sonic.gen"),
+			policy:  Policy{Kind: KindRank, Enabled: true},
+			rest:    "Sonic",
+			strips:  true,
+			parsed:  KindRank,
+			enabled: true,
+		},
+		{
+			name:    "disabled policy keeps stem",
+			path:    filepath.Join("roms", "genesis", "001 - Sonic.gen"),
+			policy:  Policy{Kind: KindRank},
+			rest:    "001 - Sonic",
+			parsed:  KindRank,
+			enabled: false,
+		},
+		{
+			name:    "kind mismatch keeps stem",
+			path:    filepath.Join("roms", "genesis", "Sonic.gen"),
+			policy:  Policy{Kind: KindDate, Enabled: true},
+			rest:    "Sonic",
+			parsed:  KindNone,
+			enabled: true,
+		},
+		{
+			name:    "empty rest keeps stem",
+			path:    filepath.Join("roms", "genesis", "001.gen"),
+			policy:  Policy{Kind: KindRank, Enabled: true},
+			rest:    "001",
+			parsed:  KindNone,
+			enabled: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stem := StemFromPath(tt.path)
+			prefix := ParseStem(stem)
+			got, ok := StripWithPolicy(stem, tt.policy)
+
+			assert.Equal(t, tt.parsed, prefix.Kind)
+			assert.Equal(t, tt.rest, got)
+			assert.Equal(t, tt.strips, ok)
+			assert.Equal(t, tt.enabled, tt.policy.Enabled)
+		})
+	}
+}
+
 func TestDetectPolicyForPathsUsesStems(t *testing.T) {
 	t.Parallel()
 

@@ -3528,11 +3528,11 @@ func TestMediaDB_BrowseFiles_UsesRankPrefixSortForNumberedCollections(t *testing
 		name string
 		slug string
 	}{
-		{path: dir + "1 - Zelda.gen", name: "Zelda", slug: "zelda"},
-		{path: dir + "2 - Sonic.gen", name: "Sonic", slug: "sonic"},
-		{path: dir + "3 - Alpha.gen", name: "Alpha", slug: "alpha"},
-		{path: dir + "4 - Beta.gen", name: "Beta", slug: "beta"},
-		{path: dir + "10 - Contra.gen", name: "Contra", slug: "contra"},
+		{path: filepath.ToSlash(filepath.Join(dir, "1 - Zelda.gen")), name: "Zelda", slug: "zelda"},
+		{path: filepath.ToSlash(filepath.Join(dir, "2 - Sonic.gen")), name: "Sonic", slug: "sonic"},
+		{path: filepath.ToSlash(filepath.Join(dir, "3 - Alpha.gen")), name: "Alpha", slug: "alpha"},
+		{path: filepath.ToSlash(filepath.Join(dir, "4 - Beta.gen")), name: "Beta", slug: "beta"},
+		{path: filepath.ToSlash(filepath.Join(dir, "10 - Contra.gen")), name: "Contra", slug: "contra"},
 	}
 	for _, entry := range entries {
 		title, insertErr := mediaDB.InsertMediaTitle(&database.MediaTitle{

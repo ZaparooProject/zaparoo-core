@@ -1150,11 +1150,11 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 		f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 	}
 
+	fileNameForTitle := f.FileName
 	trimmedName := strings.TrimSpace(params.ProvidedName)
 	if trimmedName != "" {
 		f.Title = trimmedName
 	} else {
-		fileNameForTitle := f.FileName
 		prefixPolicy := params.PrefixPolicy
 		if !prefixPolicy.Enabled && params.StripLeadingNumbers {
 			prefixPolicy = browseprefix.Policy{Kind: browseprefix.KindRank, Enabled: true}
@@ -1189,7 +1189,7 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 		if trimmedName != "" {
 			f.Slug = strings.ToLower(trimmedName)
 		} else {
-			f.Slug = strings.ToLower(f.FileName)
+			f.Slug = strings.ToLower(fileNameForTitle)
 		}
 	}
 
