@@ -2298,6 +2298,19 @@ func (db *MediaDB) DeleteMediaTag(mediaDBID, tagDBID int64) error {
 	return err
 }
 
+func (db *MediaDB) DeleteMediaTagsByTagIDs(mediaDBID int64, tagDBIDs []int) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	err := sqlDeleteMediaTagsByTagIDs(db.ctx, db.conn(), mediaDBID, tagDBIDs)
+	if err == nil && !db.inTransaction {
+		db.invalidateCaches(invalidationScope{AllSystems: true})
+	}
+
+	return err
+}
+
 func (db *MediaDB) BulkSetMediaMissing(dbids map[int]struct{}) error {
 	if db.sql == nil {
 		return ErrNullSQL
@@ -2542,6 +2555,15 @@ func (db *MediaDB) GetMediaTagsBySystemID(systemID string) ([]database.MediaTagL
 	}
 
 	return sqlGetMediaTagsBySystemID(db.ctx, db.sql, systemID)
+}
+
+// GetScannerMediaTagsBySystemID retrieves scanner-managed media-tag links for a specific system.
+func (db *MediaDB) GetScannerMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	return sqlGetScannerMediaTagsBySystemID(db.ctx, db.sql, systemID)
 }
 
 // GetSystemsExcluding retrieves all systems except those in the excludeSystemIDs list.

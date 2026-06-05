@@ -463,6 +463,44 @@ func TestAddMediaPath_ReconcileExistingMediaTagsPreservesUserTags(t *testing.T) 
 	mockDB.AssertExpectations(t)
 }
 
+func TestAddMediaPath_ReconcileExistingMediaTagsBatchDeletesScannerTags(t *testing.T) {
+	t.Parallel()
+
+	mockDB := helpers.NewMockMediaDBI()
+	path := filepath.Join("roms", "NES", "Super Mario Bros.sfc")
+	pathKey := filepath.ToSlash(path)
+	scanState := &database.ScanState{
+		SystemIDs:     map[string]int{"NES": 1},
+		TitleIDs:      map[string]int{"NES:supermariobrothers": 10},
+		MediaIDs:      map[string]int{database.MediaKey("NES", pathKey): 20},
+		MediaTitleIDs: map[int]int{20: 10},
+		MediaTagIDs:   map[int]map[int]struct{}{20: {8: {}, 9: {}}},
+		TagTypeIDs:    map[string]int{string(tags.TagTypeExtension): 7, string(tags.TagTypeUser): 11},
+		TagIDs: map[string]int{
+			database.TagKey(string(tags.TagTypeExtension), "nes"):                   8,
+			database.TagKey(string(tags.TagTypeExtension), "sfc"):                   10,
+			database.TagKey(string(tags.TagTypeUser), string(tags.TagUserFavorite)): 9,
+		},
+		MissingMedia: map[int]struct{}{20: {}},
+	}
+
+	mockDB.On("DeleteMediaTagsByTagIDs", int64(20), []int{8}).Return(nil).Once()
+	mockDB.On("InsertMediaTag", database.MediaTag{TagDBID: 10, MediaDBID: 20}).
+		Return(database.MediaTag{}, nil).Once()
+
+	titleIndex, mediaIndex, err := AddMediaPath(
+		mockDB, scanState, "NES", path, "", false, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 10, titleIndex)
+	assert.Equal(t, 20, mediaIndex)
+	assert.NotContains(t, scanState.MediaTagIDs[20], 8)
+	assert.Contains(t, scanState.MediaTagIDs[20], 9)
+	assert.Contains(t, scanState.MediaTagIDs[20], 10)
+	mockDB.AssertNotCalled(t, "DeleteMediaTag", mock.Anything, mock.Anything)
+	mockDB.AssertExpectations(t)
+}
+
 func TestAddMediaPath_LoadedScanStatePreservesUserTags(t *testing.T) {
 	t.Parallel()
 
@@ -506,6 +544,9 @@ func TestAddMediaPath_LoadedScanStatePreservesUserTags(t *testing.T) {
 	}
 	require.NoError(t, PopulateScanStateFromDB(ctx, mediaDB, refreshState))
 	require.NoError(t, PopulatePersistentScanStateForSystem(ctx, mediaDB, refreshState, "NES"))
+	extensionTagID := initialState.TagIDs[database.TagKey(string(tags.TagTypeExtension), "nes")]
+	assert.Contains(t, refreshState.MediaTagIDs[mediaID], extensionTagID)
+	assert.NotContains(t, refreshState.MediaTagIDs[mediaID], int(userTag.DBID))
 
 	require.NoError(t, mediaDB.BeginTransaction(true))
 	_, _, err = AddMediaPath(mediaDB, refreshState, "NES", path, "", false, false, nil, slugs.MediaTypeGame)

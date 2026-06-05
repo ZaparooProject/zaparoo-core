@@ -71,19 +71,20 @@ func TryMainTitleOnly(
 	var exactMatches []database.SearchResultWithCursor
 	var partialMatches []database.SearchResultWithCursor
 
-	for _, result := range results {
+	for i := range results {
+		result := &results[i]
 		dbMatchInfo := GenerateMatchInfo(mediaType, result.Name)
 
 		// Exact match: Query has secondary title, DB doesn't - DB's full slug matches query's main title
 		if dbMatchInfo.CanonicalSlug == mainSlug && !dbMatchInfo.HasSecondaryTitle {
-			exactMatches = append(exactMatches, result)
+			exactMatches = append(exactMatches, *result)
 			continue
 		}
 
 		// Partial match case 1: Query simple, DB has secondary - DB's main title starts with query's main
 		if strings.HasPrefix(dbMatchInfo.MainTitleSlug, mainSlug) &&
 			!matchInfo.HasSecondaryTitle && dbMatchInfo.HasSecondaryTitle {
-			partialMatches = append(partialMatches, result)
+			partialMatches = append(partialMatches, *result)
 			continue
 		}
 
@@ -93,7 +94,7 @@ func TryMainTitleOnly(
 		// Uses prefix to handle the delimiter mismatch, but only if query's full slug aligns with DB main
 		if strings.HasPrefix(dbMatchInfo.MainTitleSlug, slug) &&
 			matchInfo.HasSecondaryTitle && dbMatchInfo.HasSecondaryTitle {
-			partialMatches = append(partialMatches, result)
+			partialMatches = append(partialMatches, *result)
 		}
 	}
 
@@ -157,10 +158,11 @@ func TrySecondaryTitleExact(
 	} else if len(exactResults) > 0 {
 		// Post-filter: only keep DB entries WITHOUT secondary title
 		var filtered []database.SearchResultWithCursor
-		for _, result := range exactResults {
+		for i := range exactResults {
+			result := &exactResults[i]
 			dbMatchInfo := GenerateMatchInfo(mediaType, result.Name)
 			if !dbMatchInfo.HasSecondaryTitle {
-				filtered = append(filtered, result)
+				filtered = append(filtered, *result)
 			}
 		}
 
@@ -194,10 +196,11 @@ func TrySecondaryTitleExact(
 		if len(partialResults) > 0 {
 			// Post-filter: only keep DB entries WITH secondary title
 			var filtered []database.SearchResultWithCursor
-			for _, result := range partialResults {
+			for i := range partialResults {
+				result := &partialResults[i]
 				dbMatchInfo := GenerateMatchInfo(mediaType, result.Name)
 				if dbMatchInfo.HasSecondaryTitle {
-					filtered = append(filtered, result)
+					filtered = append(filtered, *result)
 				}
 			}
 
@@ -270,7 +273,8 @@ func TrySharedSecondaryTitle(
 	}
 
 	var filtered []database.SearchResultWithCursor
-	for _, result := range results {
+	for i := range results {
+		result := &results[i]
 		dbMatchInfo := GenerateMatchInfo(mediaType, result.Name)
 
 		// Require DB entry also has a secondary title with the same slug.
@@ -289,7 +293,7 @@ func TrySharedSecondaryTitle(
 			continue
 		}
 
-		filtered = append(filtered, result)
+		filtered = append(filtered, *result)
 	}
 
 	if len(filtered) == 0 {

@@ -25,6 +25,7 @@ import (
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/rs/zerolog/log"
 )
 
@@ -132,6 +133,27 @@ func sqlDeleteMediaTag(ctx context.Context, db sqlQueryable, mediaDBID, tagDBID 
 	return nil
 }
 
+func sqlDeleteMediaTagsByTagIDs(ctx context.Context, db sqlQueryable, mediaDBID int64, tagDBIDs []int) error {
+	if len(tagDBIDs) == 0 {
+		return nil
+	}
+
+	args := make([]any, 0, len(tagDBIDs)+1)
+	args = append(args, mediaDBID)
+	for _, tagDBID := range tagDBIDs {
+		args = append(args, tagDBID)
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+	query := `DELETE FROM MediaTags WHERE MediaDBID = ? AND TagDBID IN (` +
+		prepareVariadic("?", ",", len(tagDBIDs)) + `)`
+	if _, err := db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("failed to delete media tags by tag IDs: %w", err)
+	}
+
+	return nil
+}
+
 func sqlGetMediaTagsBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.MediaTagLink, error) {
 	query := `
 		SELECT mt.MediaDBID, mt.TagDBID
@@ -141,9 +163,31 @@ func sqlGetMediaTagsBySystemID(ctx context.Context, db *sql.DB, systemID string)
 		WHERE s.SystemID = ?
 		ORDER BY mt.MediaDBID, mt.TagDBID
 	`
-	rows, err := db.QueryContext(ctx, query, systemID)
+	return sqlQueryMediaTagLinksBySystemID(ctx, db, query, systemID, systemID)
+}
+
+func sqlGetScannerMediaTagsBySystemID(
+	ctx context.Context, db *sql.DB, systemID string,
+) ([]database.MediaTagLink, error) {
+	query := `
+		SELECT mt.MediaDBID, mt.TagDBID
+		FROM MediaTags mt
+		JOIN Media m ON mt.MediaDBID = m.DBID
+		JOIN Systems s ON m.SystemDBID = s.DBID
+		JOIN Tags t ON mt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE s.SystemID = ? AND tt.Type != ?
+		ORDER BY mt.MediaDBID, mt.TagDBID
+	`
+	return sqlQueryMediaTagLinksBySystemID(ctx, db, query, systemID, systemID, string(tags.TagTypeUser))
+}
+
+func sqlQueryMediaTagLinksBySystemID(
+	ctx context.Context, db *sql.DB, query string, systemID string, args ...any,
+) ([]database.MediaTagLink, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query media tags for system %s: %w", systemID, err)
+		return nil, fmt.Errorf("failed to query media tags by system: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {

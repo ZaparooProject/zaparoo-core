@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -34,6 +33,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -51,33 +51,18 @@ const (
 	maxFilesPerTransaction = 10000
 )
 
-// listNumberingRegex matches file list numbering patterns like "1. ", "01 - ", "42. "
-var listNumberingRegex = regexp.MustCompile(`^\d{1,3}[.\s\-]+`)
-
-// detectNumberingPattern returns true if a significant portion of files match list numbering pattern.
-// This heuristic detects directory-wide list numbering (e.g., "1. Game.zip", "2. Game.zip")
-// to distinguish from legitimate title numbers (e.g., "1942.zip", "007.zip").
-//
-// Parameters:
-//   - files: slice of scan results to analyze
-//   - threshold: minimum ratio of matching files (0.0-1.0) to trigger stripping
-//   - minFiles: minimum number of files required to apply heuristic
-//
-// Returns true if >threshold% of files match AND file count >= minFiles.
-func detectNumberingPattern(files []platforms.ScanResult, threshold float64, minFiles int) bool {
-	if len(files) < minFiles {
-		return false // Don't apply heuristic to small file sets
-	}
-
-	matchCount := 0
+func detectBrowsePrefixPolicy(files []platforms.ScanResult, threshold float64, minFiles int) browseprefix.Policy {
+	paths := make([]string, 0, len(files))
 	for _, file := range files {
-		filename := filepath.Base(file.Path)
-		if listNumberingRegex.MatchString(filename) {
-			matchCount++
-		}
+		paths = append(paths, file.Path)
 	}
+	return browseprefix.DetectPolicyForPaths(paths, threshold, minFiles)
+}
 
-	return float64(matchCount)/float64(len(files)) > threshold
+// detectNumberingPattern returns true when a directory looks like a ranked list.
+// Kept for focused scanner tests; production code uses detectBrowsePrefixPolicy.
+func detectNumberingPattern(files []platforms.ScanResult, threshold float64, minFiles int) bool {
+	return detectBrowsePrefixPolicy(files, threshold, minFiles).Kind == browseprefix.KindRank
 }
 
 type PathResult struct {
@@ -990,16 +975,18 @@ func NewNamesIndex(
 				Msg("grouped scanned files by directory")
 		}
 
-		stripPolicyByDir := make(map[string]bool)
+		prefixPolicyByDir := make(map[string]browseprefix.Policy)
 		for dir, dirFiles := range filesByDir {
 			// Use 50% threshold and require at least 5 files to apply heuristic
-			stripPolicyByDir[dir] = detectNumberingPattern(dirFiles, 0.5, 5)
+			prefixPolicyByDir[dir] = detectBrowsePrefixPolicy(
+				dirFiles, browseprefix.DefaultThreshold, browseprefix.DefaultMinFiles,
+			)
 		}
 		if len(files) >= 1000 {
 			log.Debug().
 				Str("system", systemID).
-				Int("directories", len(stripPolicyByDir)).
-				Msg("calculated directory strip policies")
+				Int("directories", len(prefixPolicyByDir)).
+				Msg("calculated directory prefix policies")
 		}
 
 		for fileIdx, file := range files {
@@ -1031,10 +1018,10 @@ func NewNamesIndex(
 
 			// Look up stripping policy for this file's directory
 			dir := filepath.Dir(file.Path)
-			shouldStrip := stripPolicyByDir[dir]
+			prefixPolicy := prefixPolicyByDir[dir]
 
-			_, _, addErr := AddMediaPath(
-				db, &scanState, systemID, file.Path, file.Name, file.NoExt, shouldStrip, cfg, mediaType,
+			_, _, addErr := AddMediaPathWithPrefixPolicy(
+				db, &scanState, systemID, file.Path, file.Name, file.NoExt, prefixPolicy, cfg, mediaType,
 			)
 			if addErr != nil {
 				var sqliteErr sqlite3.Error

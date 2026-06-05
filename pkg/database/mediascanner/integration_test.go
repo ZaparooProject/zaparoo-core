@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner/testdata"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -681,8 +682,8 @@ func TestAutomaticNumberStrippingDetection(t *testing.T) {
 				{Path: "/roms/nes/720 Degrees.nes"},
 				{Path: "/roms/nes/8 Eyes.nes"},
 			},
-			expectedDetection: true,
-			description:       "5/5 files match because '007.nes' matches pattern (regex sees dot from extension)",
+			expectedDetection: false,
+			description:       "filename extensions are ignored before prefix detection",
 		},
 		{
 			name: "exactly at threshold boundary",
@@ -712,6 +713,19 @@ func TestAutomaticNumberStrippingDetection(t *testing.T) {
 // TestSlugGenerationPipeline tests the complete slug generation from file path to database.
 // This integration test ensures that the context-aware leading number stripping works correctly
 // throughout the entire indexing pipeline (file path → parsed title → slug → database storage).
+func TestGetPathFragments_DatePrefixPolicy(t *testing.T) {
+	t.Parallel()
+
+	fragments := GetPathFragments(&PathFragmentParams{
+		Path:         "/roms/genesis/history/1991-06-23 - Sonic the Hedgehog (USA).gen",
+		SystemID:     "Genesis",
+		PrefixPolicy: browseprefix.Policy{Kind: browseprefix.KindDate, Enabled: true},
+	})
+
+	assert.Equal(t, "Sonic the Hedgehog", fragments.Title)
+	assert.Equal(t, "sonicthehedgehog", fragments.Slug)
+}
+
 func TestSlugGenerationPipeline(t *testing.T) {
 	ctx := context.Background()
 	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)

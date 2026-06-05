@@ -544,7 +544,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 | maxResults | number | No       | Maximum results per page. Default is 100, maximum is 1000.                                                 |
 | cursor     | string | No       | Opaque pagination cursor from a previous response's `nextCursor`. Omit for first page. Cursors are valid only with the same path, systems, letter, and sort parameters. |
 | letter     | string | No       | Filter results to entries starting with this letter.                                                       |
-| sort       | string | No       | Sort order. One of: `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. The `filename` variants sort by full file path. |
+| sort       | string | No       | Sort order. One of: `name-asc` (default), `name-desc`, `filename-asc`, `filename-desc`. Name sorting is prefix-aware for detected ranked/date collection folders. The `filename` variants sort by full file path. |
 
 #### Result
 

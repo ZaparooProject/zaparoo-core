@@ -28,8 +28,16 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/rs/zerolog/log"
+)
+
+const (
+	browseSortRankPrefixAsc  = "rank-prefix-asc"
+	browseSortRankPrefixDesc = "rank-prefix-desc"
+	browseSortDatePrefixAsc  = "date-prefix-asc"
+	browseSortDatePrefixDesc = "date-prefix-desc"
 )
 
 func browseSystemFilterClause(column string, systems []systemdefs.System) (clause string, args []any) {
@@ -344,30 +352,121 @@ func browseFilesBaseCondition(opts *database.BrowseFilesOptions) (where string, 
 	return strings.Join(conditions, " AND "), args
 }
 
-func browseSortClause(sortOrder string) string {
+func browseFilenameExpr() string {
+	return `substr(m.Path, length(m.ParentDir) + 1)`
+}
+
+func browseRankPrefixSortExpr() string {
+	filename := browseFilenameExpr()
+	return `CASE WHEN substr(` + filename + `, 1, 1) BETWEEN '0' AND '9' ` +
+		`THEN printf('%010d:%s', CAST(` + filename + ` AS INTEGER), ` + filename + `) ` +
+		`ELSE 'zzzzzzzzzz:' || mt.Name END`
+}
+
+func browseSortExpr(sortOrder string) string {
 	switch sortOrder {
-	case "name-desc":
-		return "mt.Name DESC, m.DBID DESC"
-	case "filename-asc":
-		return "m.Path ASC, m.DBID ASC"
-	case "filename-desc":
-		return "m.Path DESC, m.DBID DESC"
+	case "filename-asc", "filename-desc":
+		return "m.Path"
+	case browseSortRankPrefixAsc, browseSortRankPrefixDesc:
+		return browseRankPrefixSortExpr()
+	case browseSortDatePrefixAsc, browseSortDatePrefixDesc:
+		return browseFilenameExpr()
 	default:
-		return "mt.Name ASC, m.DBID ASC"
+		return "mt.Name"
+	}
+}
+
+func browseSortClause(sortOrder string) string {
+	expr := browseSortExpr(sortOrder)
+	switch sortOrder {
+	case "name-desc", "filename-desc", browseSortRankPrefixDesc, browseSortDatePrefixDesc:
+		return expr + " DESC, m.DBID DESC"
+	default:
+		return expr + " ASC, m.DBID ASC"
 	}
 }
 
 func browseCursorCondition(sortOrder string) string {
+	expr := browseSortExpr(sortOrder)
 	switch sortOrder {
-	case "name-desc":
-		return ` AND (mt.Name, m.DBID) < (?, ?)`
-	case "filename-asc":
-		return ` AND (m.Path, m.DBID) > (?, ?)`
-	case "filename-desc":
-		return ` AND (m.Path, m.DBID) < (?, ?)`
+	case "name-desc", "filename-desc", browseSortRankPrefixDesc, browseSortDatePrefixDesc:
+		return ` AND (` + expr + `, m.DBID) < (?, ?)`
 	default:
-		return ` AND (mt.Name, m.DBID) > (?, ?)`
+		return ` AND (` + expr + `, m.DBID) > (?, ?)`
 	}
+}
+
+func resolveBrowseSortMode(ctx context.Context, db sqlQueryable, opts *database.BrowseFilesOptions) string {
+	if opts.Cursor != nil && opts.Cursor.SortMode != "" {
+		return opts.Cursor.SortMode
+	}
+	if opts.Letter != nil {
+		return opts.Sort
+	}
+	if opts.Sort != "" && opts.Sort != "name-asc" && opts.Sort != "name-desc" {
+		return opts.Sort
+	}
+
+	policy, err := detectBrowsePrefixPolicy(ctx, db, opts.PathPrefix, opts.Systems)
+	if err != nil {
+		log.Debug().Err(err).Str("path", opts.PathPrefix).Msg("browse prefix policy detection failed")
+		return opts.Sort
+	}
+	if !policy.Enabled {
+		return opts.Sort
+	}
+	desc := opts.Sort == "name-desc"
+	switch policy.Kind {
+	case browseprefix.KindRank:
+		if desc {
+			return browseSortRankPrefixDesc
+		}
+		return browseSortRankPrefixAsc
+	case browseprefix.KindDate:
+		if desc {
+			return browseSortDatePrefixDesc
+		}
+		return browseSortDatePrefixAsc
+	default:
+		return opts.Sort
+	}
+}
+
+func detectBrowsePrefixPolicy(
+	ctx context.Context,
+	db sqlQueryable,
+	pathPrefix string,
+	systems []systemdefs.System,
+) (browseprefix.Policy, error) {
+	conditions := []string{`m.ParentDir = ?`, `m.IsMissing = 0`}
+	args := []any{pathPrefix}
+	if systemClause, systemArgs := browseSystemFilterClause("s.SystemID", systems); systemClause != "" {
+		conditions = append(conditions, systemClause)
+		args = append(args, systemArgs...)
+	}
+
+	query := `SELECT m.Path
+		FROM Media m
+		INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		WHERE ` + strings.Join(conditions, " AND ")
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return browseprefix.Policy{}, fmt.Errorf("browse prefix detection query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	paths := make([]string, 0)
+	for rows.Next() {
+		var path string
+		if scanErr := rows.Scan(&path); scanErr != nil {
+			return browseprefix.Policy{}, fmt.Errorf("browse prefix detection scan: %w", scanErr)
+		}
+		paths = append(paths, path)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return browseprefix.Policy{}, fmt.Errorf("browse prefix detection rows: %w", rowsErr)
+	}
+	return browseprefix.DetectPolicyForPaths(paths, browseprefix.DefaultThreshold, browseprefix.DefaultMinFiles), nil
 }
 
 func sqlBrowseFiles(
@@ -384,16 +483,18 @@ func sqlBrowseFilesFromMedia(
 	opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
 	where, args := browseFilesBaseCondition(opts)
-	query := `SELECT s.SystemID, mt.Name, m.Path, m.DBID, mt.DBID
+	sortMode := resolveBrowseSortMode(ctx, db, opts)
+	sortExpr := browseSortExpr(sortMode)
+	query := `SELECT s.SystemID, mt.Name, m.Path, m.DBID, mt.DBID, ` + sortExpr + ` AS SortValue
 		FROM Media m
 		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
 		INNER JOIN Systems s ON m.SystemDBID = s.DBID
 		WHERE ` + where
 	if opts.Cursor != nil {
-		query += browseCursorCondition(opts.Sort)
+		query += browseCursorCondition(sortMode)
 		args = append(args, opts.Cursor.SortValue, opts.Cursor.LastID)
 	}
-	query += ` ORDER BY ` + browseSortClause(opts.Sort) + ` LIMIT ?`
+	query += ` ORDER BY ` + browseSortClause(sortMode) + ` LIMIT ?`
 	args = append(args, opts.Limit)
 
 	queryStarted := time.Now()
@@ -406,9 +507,12 @@ func sqlBrowseFilesFromMedia(
 	var results []database.SearchResultWithCursor
 	for rows.Next() {
 		var r database.SearchResultWithCursor
-		if scanErr := rows.Scan(&r.SystemID, &r.Name, &r.Path, &r.MediaID, &r.MediaTitleID); scanErr != nil {
+		if scanErr := rows.Scan(
+			&r.SystemID, &r.Name, &r.Path, &r.MediaID, &r.MediaTitleID, &r.SortValue,
+		); scanErr != nil {
 			return nil, fmt.Errorf("browse files scan: %w", scanErr)
 		}
+		r.SortMode = sortMode
 		results = append(results, r)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {

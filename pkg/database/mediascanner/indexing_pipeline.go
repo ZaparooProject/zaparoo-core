@@ -30,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -42,16 +43,12 @@ import (
 
 // PathFragmentParams contains parameters for GetPathFragments.
 type PathFragmentParams struct {
-	Config    *config.Instance
-	Path      string
-	SystemID  string
-	MediaType slugs.MediaType // Pre-resolved media type; skips systemdefs lookup if set
-	// ProvidedName, when non-empty, overrides the title that would otherwise be
-	// parsed from the filename. Tags are still extracted from the filename.
-	// Slug derives from ProvidedName when set, so any downstream consumer that
-	// looks titles up by slug must supply the same ProvidedName to compute a
-	// matching slug (see gamelistxml.LoadRecords for an example).
+	Config              *config.Instance
+	Path                string
+	SystemID            string
+	MediaType           slugs.MediaType
 	ProvidedName        string
+	PrefixPolicy        browseprefix.Policy
 	NoExt               bool
 	StripLeadingNumbers bool
 }
@@ -114,15 +111,33 @@ func AddMediaPath(
 	cfg *config.Instance,
 	mediaType slugs.MediaType,
 ) (titleIndex, mediaIndex int, err error) {
+	prefixPolicy := browseprefix.Policy{}
+	if stripLeadingNumbers {
+		prefixPolicy = browseprefix.Policy{Kind: browseprefix.KindRank, Enabled: true}
+	}
+	return AddMediaPathWithPrefixPolicy(db, ss, systemID, path, providedName, noExt, prefixPolicy, cfg, mediaType)
+}
+
+func AddMediaPathWithPrefixPolicy(
+	db database.MediaDBI,
+	ss *database.ScanState,
+	systemID string,
+	path string,
+	providedName string,
+	noExt bool,
+	prefixPolicy browseprefix.Policy,
+	cfg *config.Instance,
+	mediaType slugs.MediaType,
+) (titleIndex, mediaIndex int, err error) {
 	existingMedia := false
 	pf := GetPathFragments(&PathFragmentParams{
-		Config:              cfg,
-		Path:                path,
-		NoExt:               noExt,
-		StripLeadingNumbers: stripLeadingNumbers,
-		SystemID:            systemID,
-		MediaType:           mediaType,
-		ProvidedName:        providedName,
+		Config:       cfg,
+		Path:         path,
+		NoExt:        noExt,
+		PrefixPolicy: prefixPolicy,
+		SystemID:     systemID,
+		MediaType:    mediaType,
+		ProvidedName: providedName,
 	})
 
 	systemIndex := 0
@@ -364,6 +379,7 @@ func reconcileExistingMediaTags(
 		existingTagIDs = make(map[int]struct{})
 	}
 
+	staleTagIDs := make([]int, 0)
 	for tagIndex := range existingTagIDs {
 		if _, ok := desiredTagIDs[tagIndex]; ok {
 			continue
@@ -372,8 +388,11 @@ func reconcileExistingMediaTags(
 			desiredTagIDs[tagIndex] = struct{}{}
 			continue
 		}
-		if err := db.DeleteMediaTag(int64(mediaIndex), int64(tagIndex)); err != nil {
-			return fmt.Errorf("failed to delete media tag %d: %w", tagIndex, err)
+		staleTagIDs = append(staleTagIDs, tagIndex)
+	}
+	if len(staleTagIDs) > 0 {
+		if err := db.DeleteMediaTagsByTagIDs(int64(mediaIndex), staleTagIDs); err != nil {
+			return fmt.Errorf("failed to delete stale media tags: %w", err)
 		}
 	}
 
@@ -851,9 +870,9 @@ func loadSystemStateData(
 
 	mediaTags := []database.MediaTagLink(nil)
 	if loadMediaTags {
-		mediaTags, err = db.GetMediaTagsBySystemID(systemID)
+		mediaTags, err = db.GetScannerMediaTagsBySystemID(systemID)
 		if err != nil {
-			return systemStateData{}, fmt.Errorf("failed to get media tags for system %s: %w", systemID, err)
+			return systemStateData{}, fmt.Errorf("failed to get scanner media tags for system %s: %w", systemID, err)
 		}
 	}
 
@@ -1135,7 +1154,15 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 	if trimmedName != "" {
 		f.Title = trimmedName
 	} else {
-		f.Title = tags.ParseTitleFromFilename(f.FileName, params.StripLeadingNumbers)
+		fileNameForTitle := f.FileName
+		prefixPolicy := params.PrefixPolicy
+		if !prefixPolicy.Enabled && params.StripLeadingNumbers {
+			prefixPolicy = browseprefix.Policy{Kind: browseprefix.KindRank, Enabled: true}
+		}
+		if stripped, ok := browseprefix.StripWithPolicy(f.FileName, prefixPolicy); ok {
+			fileNameForTitle = stripped
+		}
+		f.Title = tags.ParseTitleFromFilename(fileNameForTitle, false)
 	}
 
 	// Use pre-resolved media type if provided, otherwise look up from system ID
