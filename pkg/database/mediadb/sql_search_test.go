@@ -303,6 +303,9 @@ func TestFetchAndAttachTags_ResultTitleIDsAvoidMediaJoin(t *testing.T) {
 		AddRow(1, int64(10), "Action", "genre").
 		AddRow(1, int64(30), "1990", "year")
 
+	mock.ExpectQuery(`SELECT EXISTS.*MediaTags.*MediaTitleTags`).
+		WithArgs(int64(1), int64(2), int64(3), int64(10), int64(30)).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(true))
 	mock.ExpectPrepare(`SELECT.*SourceKind.*SourceDBID.*FROM MediaTags.*FROM MediaTitleTags`).
 		ExpectQuery().
 		WithArgs(int64(1), int64(2), int64(3), int64(10), int64(30)).
@@ -317,6 +320,30 @@ func TestFetchAndAttachTags_ResultTitleIDsAvoidMediaJoin(t *testing.T) {
 	}, results[0].Tags)
 	assert.Equal(t, []database.TagInfo{{Tag: "Action", Type: "genre"}}, results[1].Tags)
 	assert.Equal(t, []database.TagInfo{{Tag: "1990", Type: "year"}}, results[2].Tags)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachTags_ResultTitleIDsNoTagsSkipsFullFetch(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, MediaTitleID: 10, SystemID: "nes", Name: "Game A", Path: filepath.Join("games", "a.nes")},
+		{MediaID: 2, MediaTitleID: 20, SystemID: "nes", Name: "Game B", Path: filepath.Join("games", "b.nes")},
+	}
+
+	mock.ExpectQuery(`SELECT EXISTS.*MediaTags.*MediaTitleTags`).
+		WithArgs(int64(1), int64(2), int64(10), int64(20)).
+		WillReturnRows(sqlmock.NewRows([]string{"hasTags"}).AddRow(false))
+
+	err = fetchAndAttachTags(context.Background(), db, results)
+	require.NoError(t, err)
+	assert.Empty(t, results[0].Tags)
+	assert.Empty(t, results[1].Tags)
+	assert.NotNil(t, results[0].ZapScriptTags)
+	assert.NotNil(t, results[1].ZapScriptTags)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -152,22 +152,20 @@ func fetchAndAttachTagsByResultIDs(
 	db sqlQueryable,
 	results []database.SearchResultWithCursor,
 ) error {
-	mediaIDs := make([]int64, len(results))
-	titleToMediaIDs := make(map[int64][]int64, len(results))
-	seenTitles := make(map[int64]struct{}, len(results))
-	titleIDs := make([]int64, 0, len(results))
-	for i, result := range results {
-		mediaIDs[i] = result.MediaID
-		titleToMediaIDs[result.MediaTitleID] = append(titleToMediaIDs[result.MediaTitleID], result.MediaID)
-		if _, ok := seenTitles[result.MediaTitleID]; ok {
-			continue
-		}
-		seenTitles[result.MediaTitleID] = struct{}{}
-		titleIDs = append(titleIDs, result.MediaTitleID)
+	tagIDs := collectResultTagIDs(results)
+	unionStarted := time.Now()
+	hasTags, err := resultIDsHaveTags(ctx, db, tagIDs.mediaIDs, tagIDs.titleIDs)
+	if err != nil {
+		return err
+	}
+	if !hasTags {
+		finishAttachTags(results, nil)
+		logFetchAndAttachTagsTiming(results, 0, unionStarted)
+		return nil
 	}
 
-	mediaPlaceholders := prepareVariadic("?", ",", len(mediaIDs))
-	titlePlaceholders := prepareVariadic("?", ",", len(titleIDs))
+	mediaPlaceholders := prepareVariadic("?", ",", len(tagIDs.mediaIDs))
+	titlePlaceholders := prepareVariadic("?", ",", len(tagIDs.titleIDs))
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
 	tagsQuery := `
 		SELECT
@@ -192,15 +190,14 @@ func fetchAndAttachTagsByResultIDs(
 		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
 		WHERE MediaTitleTags.MediaTitleDBID IN (` + titlePlaceholders + `)`
 
-	tagsArgs := make([]any, 0, len(mediaIDs)+len(titleIDs))
-	for _, id := range mediaIDs {
+	tagsArgs := make([]any, 0, len(tagIDs.mediaIDs)+len(tagIDs.titleIDs))
+	for _, id := range tagIDs.mediaIDs {
 		tagsArgs = append(tagsArgs, id)
 	}
-	for _, id := range titleIDs {
+	for _, id := range tagIDs.titleIDs {
 		tagsArgs = append(tagsArgs, id)
 	}
 
-	unionStarted := time.Now()
 	tagsStmt, err := db.PrepareContext(ctx, tagsQuery)
 	if err != nil {
 		return fmt.Errorf("failed to prepare tags query: %w", err)
@@ -233,7 +230,7 @@ func fetchAndAttachTagsByResultIDs(
 
 		mediaIDsForTag := []int64{sourceID}
 		if sourceKind == 1 {
-			mediaIDsForTag = titleToMediaIDs[sourceID]
+			mediaIDsForTag = tagIDs.titleToMediaIDs[sourceID]
 		}
 		for _, mediaID := range mediaIDsForTag {
 			appendTagInfo(tagsMap, seen, mediaID, tag, tagType)
@@ -246,6 +243,55 @@ func fetchAndAttachTagsByResultIDs(
 	finishAttachTags(results, tagsMap)
 	logFetchAndAttachTagsTiming(results, len(tagsMap), unionStarted)
 	return nil
+}
+
+type resultTagIDs struct {
+	titleToMediaIDs map[int64][]int64
+	mediaIDs        []int64
+	titleIDs        []int64
+}
+
+func collectResultTagIDs(results []database.SearchResultWithCursor) resultTagIDs {
+	tagIDs := resultTagIDs{
+		mediaIDs:        make([]int64, len(results)),
+		titleToMediaIDs: make(map[int64][]int64, len(results)),
+		titleIDs:        make([]int64, 0, len(results)),
+	}
+	seenTitles := make(map[int64]struct{}, len(results))
+	for i, result := range results {
+		tagIDs.mediaIDs[i] = result.MediaID
+		tagIDs.titleToMediaIDs[result.MediaTitleID] = append(
+			tagIDs.titleToMediaIDs[result.MediaTitleID], result.MediaID,
+		)
+		if _, ok := seenTitles[result.MediaTitleID]; ok {
+			continue
+		}
+		seenTitles[result.MediaTitleID] = struct{}{}
+		tagIDs.titleIDs = append(tagIDs.titleIDs, result.MediaTitleID)
+	}
+	return tagIDs
+}
+
+func resultIDsHaveTags(ctx context.Context, db sqlQueryable, mediaIDs, titleIDs []int64) (bool, error) {
+	mediaPlaceholders := prepareVariadic("?", ",", len(mediaIDs))
+	titlePlaceholders := prepareVariadic("?", ",", len(titleIDs))
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
+	query := `SELECT EXISTS(SELECT 1 FROM MediaTags WHERE MediaDBID IN (` + mediaPlaceholders + `) LIMIT 1)
+		OR EXISTS(SELECT 1 FROM MediaTitleTags WHERE MediaTitleDBID IN (` + titlePlaceholders + `) LIMIT 1)`
+
+	args := make([]any, 0, len(mediaIDs)+len(titleIDs))
+	for _, id := range mediaIDs {
+		args = append(args, id)
+	}
+	for _, id := range titleIDs {
+		args = append(args, id)
+	}
+
+	var hasTags bool
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&hasTags); err != nil {
+		return false, fmt.Errorf("failed to check result tags: %w", err)
+	}
+	return hasTags, nil
 }
 
 func appendTagInfo(
@@ -327,12 +373,32 @@ func computeZapScriptTags(results []database.SearchResultWithCursor) {
 
 	// Group results by SystemID+Name to find siblings (same title within a system)
 	nameGroups := make(map[string][]int) // "SystemID/Name" → indices into results
+	hasSiblings := false
 	for i := range results {
 		key := results[i].SystemID + "/" + results[i].Name
 		nameGroups[key] = append(nameGroups[key], i)
+		if len(nameGroups[key]) > 1 {
+			hasSiblings = true
+		}
+	}
+	if !hasSiblings {
+		for i := range results {
+			if results[i].ZapScriptTags == nil {
+				results[i].ZapScriptTags = []database.TagInfo{}
+			}
+		}
+		return
 	}
 
 	for _, indices := range nameGroups {
+		if len(indices) < 2 {
+			for _, idx := range indices {
+				if results[idx].ZapScriptTags == nil {
+					results[idx].ZapScriptTags = []database.TagInfo{}
+				}
+			}
+			continue
+		}
 		// For each eligible tag type, collect distinct values across siblings
 		disambiguating := make(map[string]bool) // tag types that need disambiguation
 
