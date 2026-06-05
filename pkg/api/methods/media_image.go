@@ -90,8 +90,8 @@ type mediaImageNotFoundError struct {
 }
 
 type mediaImageNoImageCache struct {
-	mu      syncutil.Mutex
 	entries map[string]error
+	mu      syncutil.Mutex
 }
 
 var mediaImageNoImages = &mediaImageNoImageCache{entries: make(map[string]error)}
@@ -119,12 +119,12 @@ func mediaImageNoImageRequestKey(ref mediaRefParam, prefs []string) string {
 	return mediaImageNoImagePathKey(ref.System, ref.Path, prefs)
 }
 
-func (c *mediaImageNoImageCache) get(key string) (error, bool) {
+func (c *mediaImageNoImageCache) get(key string) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	err, ok := c.entries[key]
-	return err, ok
+	return ok, err
 }
 
 func (c *mediaImageNoImageCache) add(key string, err error) {
@@ -153,11 +153,11 @@ func (c *mediaImageNoImageCache) clear() {
 }
 
 func mediaImageNoImageError(row *database.MediaFullRow) error {
-	return models.QuietClientErr(&mediaImageNotFoundError{system: row.System.SystemID, path: row.Path})
+	return fmt.Errorf("%w", models.QuietClientErr(&mediaImageNotFoundError{system: row.System.SystemID, path: row.Path}))
 }
 
 func cachedMediaImageNoImageError(err error) error {
-	return models.QuietClientErr(err)
+	return fmt.Errorf("%w", models.QuietClientErr(err))
 }
 
 func isMediaImageNoImageError(err error) bool {
@@ -210,8 +210,8 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	}
 	prefs := imagePrefs(nil, ref.ImageTypes)
 	noImageKey := mediaImageNoImageRequestKey(ref, prefs)
-	if err, ok := mediaImageNoImages.get(noImageKey); ok {
-		return nil, cachedMediaImageNoImageError(err)
+	if ok, cachedErr := mediaImageNoImages.get(noImageKey); ok {
+		return nil, cachedMediaImageNoImageError(cachedErr)
 	}
 
 	select {
@@ -220,8 +220,8 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	case <-env.Context.Done():
 		return nil, env.Context.Err()
 	}
-	if err, ok := mediaImageNoImages.get(noImageKey); ok {
-		return nil, cachedMediaImageNoImageError(err)
+	if ok, cachedErr := mediaImageNoImages.get(noImageKey); ok {
+		return nil, cachedMediaImageNoImageError(cachedErr)
 	}
 
 	maxBytes := mediaImageMaxBytes(env.Platform)

@@ -516,8 +516,8 @@ func TestHandleMediaImage_NoImageCacheRecheckedAfterSemaphore(t *testing.T) {
 	noImageKey := mediaImageNoImageRequestKey(ref, prefs)
 
 	done := make(chan error, 1)
+	env := makeMediaImageEnv(t, testhelpers.NewMockMediaDBI(), params)
 	go func() {
-		env := makeMediaImageEnv(t, testhelpers.NewMockMediaDBI(), params)
 		_, handleErr := HandleMediaImage(env)
 		done <- handleErr
 	}()
