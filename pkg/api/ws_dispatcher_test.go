@@ -39,6 +39,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type countingRequestTracker struct {
+	count int
+}
+
+func (t *countingRequestTracker) RequestStarted() { t.count++ }
+
+func (t *countingRequestTracker) RequestEnded() { t.count-- }
+
+func (t *countingRequestTracker) inFlight() int { return t.count }
+
 func indexRPCID(ids []models.RPCID, target models.RPCID) int {
 	for i, id := range ids {
 		if id.Equal(target) {
@@ -83,19 +93,23 @@ func startPriorityWSServer(t *testing.T, methodMap *MethodMap) (wsURL string, cl
 }
 
 func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) {
-	t.Parallel()
+	imageStarted := make(chan struct{}, wsLowConcurrency)
+	highStarted := make(chan struct{})
+	releaseImages := make(chan struct{})
 
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod(models.MethodMediaImage, func(env requests.RequestEnv) (any, error) {
+		imageStarted <- struct{}{}
 		select {
-		case <-time.After(250 * time.Millisecond):
+		case <-releaseImages:
 			return map[string]string{"kind": "image"}, nil
 		case <-env.Context.Done():
 			return nil, env.Context.Err()
 		}
 	}))
-	require.NoError(t, methodMap.AddMethod(models.MethodMediaTagsUpdate, func(requests.RequestEnv) (any, error) {
-		return map[string]string{"kind": "favorite"}, nil
+	require.NoError(t, methodMap.AddMethod(models.MethodRun, func(requests.RequestEnv) (any, error) {
+		close(highStarted)
+		return map[string]string{"kind": "run"}, nil
 	}))
 
 	wsURL, cleanup := startPriorityWSServer(t, &methodMap)
@@ -104,16 +118,34 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 	conn := dialWS(t, wsURL)
 	defer func() { _ = conn.Close() }()
 
-	for id := 1; id <= 3; id++ {
+	for id := 1; id <= wsLowConcurrency; id++ {
 		require.NoError(t, conn.WriteMessage(websocket.TextMessage,
 			[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%d}`, id))))
 	}
+	for range wsLowConcurrency {
+		select {
+		case <-imageStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("initial image request did not start")
+		}
+	}
+
+	imageID := models.NewNumberID(int64(wsLowConcurrency + 1))
+	highID := models.NewNumberID(int64(wsLowConcurrency + 2))
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
-		[]byte(`{"jsonrpc":"2.0","method":"media.tags.update","params":{"mediaId":1,"add":["user:favorite"]},"id":4}`)))
+		[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"media.image","id":%s}`, imageID.String()))))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
+		[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"run","id":%s}`, highID.String()))))
+	select {
+	case <-highStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("high-priority request did not start")
+	}
+	close(releaseImages)
 
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
 	seen := make([]models.RPCID, 0, 4)
-	for range 4 {
+	for indexRPCID(seen, highID) == -1 || indexRPCID(seen, imageID) == -1 {
 		_, msg, err := conn.ReadMessage()
 		require.NoError(t, err)
 		var resp models.ResponseObject
@@ -121,16 +153,14 @@ func TestWebSocketPriorityDispatcherHighPriorityBypassesSlowImage(t *testing.T) 
 		seen = append(seen, resp.ID)
 	}
 
-	favoriteIndex := indexRPCID(seen, models.NewNumberID(4))
-	thirdImageIndex := indexRPCID(seen, models.NewNumberID(3))
-	require.NotEqual(t, -1, favoriteIndex)
-	require.NotEqual(t, -1, thirdImageIndex)
-	assert.Less(t, favoriteIndex, thirdImageIndex, "mutation should bypass queued image work")
+	highIndex := indexRPCID(seen, highID)
+	imageIndex := indexRPCID(seen, imageID)
+	require.NotEqual(t, -1, highIndex)
+	require.NotEqual(t, -1, imageIndex)
+	assert.Less(t, highIndex, imageIndex, "high-priority request should bypass queued image work")
 }
 
 func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
-	t.Parallel()
-
 	firstDone := make(chan struct{})
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod(models.MethodRun, func(env requests.RequestEnv) (any, error) {
@@ -177,8 +207,6 @@ func TestWebSocketPriorityDispatcherPreservesHighPriorityOrder(t *testing.T) {
 }
 
 func TestWebSocketPriorityDispatcherMediaTransactionBlocksMediaReads(t *testing.T) {
-	t.Parallel()
-
 	txStarted := make(chan struct{})
 	releaseTx := make(chan struct{})
 	metaStarted := make(chan struct{}, 1)
@@ -228,8 +256,6 @@ func TestWebSocketPriorityDispatcherMediaTransactionBlocksMediaReads(t *testing.
 }
 
 func TestWebSocketPriorityDispatcherNotificationsDoNotReply(t *testing.T) {
-	t.Parallel()
-
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod("test.notify", func(requests.RequestEnv) (any, error) {
 		return map[string]string{"ok": "true"}, nil
@@ -303,8 +329,6 @@ func TestWebSocketRunJobStartsTimeoutAtExecution(t *testing.T) {
 }
 
 func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithCancel(t.Context())
 	d := &wsSessionDispatcher{
 		ctx:       ctx,
@@ -328,13 +352,3 @@ func TestCloseWSDispatcherCancelsQueuedRequests(t *testing.T) {
 	assert.Equal(t, 0, tracker.inFlight())
 	assert.Error(t, jobCtx.Err())
 }
-
-type countingRequestTracker struct {
-	count int
-}
-
-func (t *countingRequestTracker) RequestStarted() { t.count++ }
-
-func (t *countingRequestTracker) RequestEnded() { t.count-- }
-
-func (t *countingRequestTracker) inFlight() int { return t.count }

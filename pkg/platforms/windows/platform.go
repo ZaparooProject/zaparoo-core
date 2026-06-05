@@ -70,13 +70,18 @@ type Platform struct {
 	setActiveMedia          func(*models.ActiveMedia)
 	customPlatformToSystem  map[string]string
 	systemToCustomPlatforms map[string][]string
+	hqSystemKeyToSystem     map[string]string
+	systemToHqSystems       map[string][]hqSystemQueryTarget
 	trackedProcess          *os.Process
 	launchBoxPipe           *LaunchBoxPipeServer
+	hyperHqPipe             *HyperHqPipeServer
 	steamTracker            *steamtracker.WindowsPlatformIntegration
 	lastLauncher            platforms.Launcher
 	processMu               syncutil.RWMutex
 	platformMappingsMu      syncutil.RWMutex
+	hqMappingsMu            syncutil.RWMutex
 	launchBoxPipeLock       syncutil.Mutex
+	hyperHqPipeLock         syncutil.Mutex
 }
 
 var retroBatLaunchSettleDelay = 2 * time.Second
@@ -131,6 +136,9 @@ func (p *Platform) StartPost(
 	// Initialize LaunchBox pipe server if LaunchBox is installed
 	p.initLaunchBoxPipe(cfg)
 
+	// Initialize HyperHQ pipe server if HyperHQ is installed
+	p.initHyperHqPipe(cfg)
+
 	// Start Steam tracker for external Steam game detection
 	p.steamTracker = steamtracker.NewWindowsPlatformIntegration(
 		p.SetTrackedProcess,
@@ -157,6 +165,14 @@ func (p *Platform) Stop() error {
 		p.launchBoxPipe = nil
 	}
 	p.launchBoxPipeLock.Unlock()
+
+	// Stop HyperHQ named pipe server
+	p.hyperHqPipeLock.Lock()
+	if p.hyperHqPipe != nil {
+		p.hyperHqPipe.Stop()
+		p.hyperHqPipe = nil
+	}
+	p.hyperHqPipeLock.Unlock()
 
 	return nil
 }
@@ -306,7 +322,7 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	const staticLauncherCount = 14
+	const staticLauncherCount = 15
 	launchers := make([]platforms.Launcher, 0, staticLauncherCount+len(esde.SystemMap))
 
 	launchers = append(launchers,
@@ -409,6 +425,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			},
 		},
 		p.NewLaunchBoxLauncher(),
+		p.NewHyperHqLauncher(),
 	)
 
 	launchers = append(launchers, getRetroBatLaunchers()...)

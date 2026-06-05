@@ -32,6 +32,7 @@ const (
 	SchemeLutris     = "lutris"
 	SchemeHeroic     = "heroic"
 	SchemeGOG        = "gog"
+	SchemeHyperHq    = "hyperhq"
 )
 
 // Kodi URI scheme constants for Kodi media library items.
@@ -59,6 +60,7 @@ var customSchemes = []string{
 	SchemeLutris,
 	SchemeHeroic,
 	SchemeGOG,
+	SchemeHyperHq,
 	SchemeKodiMovie,
 	SchemeKodiEpisode,
 	SchemeKodiSong,

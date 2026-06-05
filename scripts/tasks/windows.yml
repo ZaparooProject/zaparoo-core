@@ -69,8 +69,6 @@ tasks:
     vars:
       OUTPUT_DIR: "{{.ROOT_DIR}}/_build/windows_amd64"
       PLUGIN_FOLDER: "Zaparoo LaunchBox Integration"
-    status:
-      - test -f "{{.OUTPUT_DIR}}/{{.PLUGIN_FOLDER}}.zip"
     cmds:
       - |
         if [ ! -f "lib/Unbroken.LaunchBox.Plugins.dll" ]; then
@@ -83,4 +81,20 @@ tasks:
       - mkdir -p "{{.OUTPUT_DIR}}/{{.PLUGIN_FOLDER}}"
       - docker cp zaparoo-launchbox-plugin-temp:/build/ZaparooLaunchBoxPlugin.dll "{{.OUTPUT_DIR}}/{{.PLUGIN_FOLDER}}/"
       - docker rm zaparoo-launchbox-plugin-temp
+      - cd "{{.OUTPUT_DIR}}" && zip -r "{{.PLUGIN_FOLDER}}.zip" "{{.PLUGIN_FOLDER}}"
+
+  build-hyperhq-plugin:
+    desc: Build HyperHQ plugin executable using Docker
+    dir: scripts/windows/hyperhq-plugin
+    vars:
+      OUTPUT_DIR: "{{.ROOT_DIR}}/_build/windows_amd64"
+      PLUGIN_FOLDER: "zaparoo-hyperhq"
+    cmds:
+      - task: :zigcc:setup
+      - docker build --target build -t zaparoo-hyperhq-plugin "{{.ROOT_DIR}}/scripts/windows/hyperhq-plugin"
+      - docker create --name zaparoo-hyperhq-plugin-temp zaparoo-hyperhq-plugin /bin/true
+      - mkdir -p "{{.OUTPUT_DIR}}/{{.PLUGIN_FOLDER}}"
+      - docker cp zaparoo-hyperhq-plugin-temp:/build/zaparoo-hyperhq.exe "{{.OUTPUT_DIR}}/{{.PLUGIN_FOLDER}}/"
+      - docker rm zaparoo-hyperhq-plugin-temp
+      - cp plugin.json "{{.OUTPUT_DIR}}/{{.PLUGIN_FOLDER}}/"
       - cd "{{.OUTPUT_DIR}}" && zip -r "{{.PLUGIN_FOLDER}}.zip" "{{.PLUGIN_FOLDER}}"

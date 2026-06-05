@@ -179,11 +179,15 @@ tasks:
     desc: Run golangci-lint
     cmds:
       - golangci-lint run ./...
+      # The HyperHQ plugin module under scripts/windows/hyperhq-plugin/ is
+      # Windows-only. Local typechecking cannot resolve winio symbols on Linux,
+      # so it is linted via `task cross-lint:windows` instead.
 
   lint-fix:
     desc: Run golangci-lint with auto-fixes
     cmds:
       - golangci-lint run --fix ./...
+      # See note on lint above — Windows-only plugin lints via cross-lint:windows.
 
   vulncheck:
     desc: Run govulncheck for security vulnerabilities

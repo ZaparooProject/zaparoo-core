@@ -1,7 +1,7 @@
 version: "2"
 
 run:
-  go: "1.25"
+  go: "1.26.3"
 
 linters:
   exclusions:
@@ -17,6 +17,12 @@ linters:
       - linters:
           - gocritic
         path: pkg/helpers/usb_darwin\.go
+      # Standalone plugin module: separate go.mod with its own dependency surface.
+      # zerolog/syncutil are Zaparoo Core internals and not imported by the bridge.
+      - linters:
+          - depguard
+          - forbidigo
+        path: scripts/windows/hyperhq-plugin/
   enable:
     - staticcheck
     - errcheck
