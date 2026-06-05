@@ -76,8 +76,8 @@ func ClientErrf(format string, a ...any) error {
 	return &ClientError{Err: fmt.Errorf(format, a...)}
 }
 
-// QuietClientErrf creates a formatted ClientError that the API server logs at
-// debug level instead of warning level.
+// QuietClientErrf creates a formatted QuietClientError that the API server logs
+// at debug level instead of warning level.
 func QuietClientErrf(format string, a ...any) error {
 	return &QuietClientError{Err: fmt.Errorf(format, a...)}
 }

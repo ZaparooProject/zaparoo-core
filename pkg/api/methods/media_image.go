@@ -52,6 +52,8 @@ const (
 // not saturate SQLite and starve browse/status calls.
 var mediaImageSem = make(chan struct{}, 1)
 
+var mediaImageBeforeSemAcquire func()
+
 // defaultImageTypes is the preference order used when no imageTypes param is provided.
 var defaultImageTypes = []string{
 	"image", "thumbnail", "boxart", "boxart3d", "screenshot", "wheel", "titleshot", "map",
@@ -85,8 +87,9 @@ type mediaImageSource struct {
 }
 
 type mediaImageNotFoundError struct {
-	system string
-	path   string
+	system                      string
+	path                        string
+	fileBackedCandidatesChecked bool
 }
 
 type mediaImageNoImageCache struct {
@@ -152,8 +155,12 @@ func (c *mediaImageNoImageCache) clear() {
 	c.entries = make(map[string]error)
 }
 
-func mediaImageNoImageError(row *database.MediaFullRow) error {
-	noImage := &mediaImageNotFoundError{system: row.System.SystemID, path: row.Path}
+func mediaImageNoImageError(row *database.MediaFullRow, fileBackedCandidatesChecked bool) error {
+	noImage := &mediaImageNotFoundError{
+		system:                      row.System.SystemID,
+		path:                        row.Path,
+		fileBackedCandidatesChecked: fileBackedCandidatesChecked,
+	}
 	return fmt.Errorf("%w", models.QuietClientErr(noImage))
 }
 
@@ -161,9 +168,9 @@ func cachedMediaImageNoImageError(err error) error {
 	return fmt.Errorf("%w", models.QuietClientErr(err))
 }
 
-func isMediaImageNoImageError(err error) bool {
+func isCacheableMediaImageNoImageError(err error) bool {
 	var noImage *mediaImageNotFoundError
-	return errors.As(err, &noImage)
+	return errors.As(err, &noImage) && !noImage.fileBackedCandidatesChecked
 }
 
 // resolveImageTypeTag converts a short image type name to the full property TypeTag.
@@ -214,6 +221,9 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	if ok, cachedErr := mediaImageNoImages.get(noImageKey); ok {
 		return nil, cachedMediaImageNoImageError(cachedErr)
 	}
+	if mediaImageBeforeSemAcquire != nil {
+		mediaImageBeforeSemAcquire()
+	}
 
 	select {
 	case mediaImageSem <- struct{}{}:
@@ -252,7 +262,7 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	image, err := selectMediaImageFromSources(
 		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, prefs, maxBytes,
 	)
-	if isMediaImageNoImageError(err) {
+	if isCacheableMediaImageNoImageError(err) {
 		mediaImageNoImages.add(noImageKey, err)
 	}
 	return image, err
@@ -299,7 +309,7 @@ func handleMediaImageSinglePath(
 	image, err := selectMediaImageFromSources(
 		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, prefs, maxBytes,
 	)
-	if isMediaImageNoImageError(err) {
+	if isCacheableMediaImageNoImageError(err) {
 		mediaImageNoImages.add(noImageKey, err)
 	}
 	return image, err
@@ -392,6 +402,7 @@ func selectMediaImageFromSources(
 	}
 	sources = append(sources, mediaImageSource{buildPropsMap(titleProps), false})
 
+	fileBackedCandidatesChecked := false
 	seen := make(map[string]bool, len(prefs))
 	for _, t := range prefs {
 		typeTag, ok := resolveImageTypeTag(t)
@@ -406,6 +417,9 @@ func selectMediaImageFromSources(
 				continue
 			}
 
+			if prop.Text != "" {
+				fileBackedCandidatesChecked = true
+			}
 			image, stale, err := loadMediaImageProperty(ctx, fs, db, row, &prop, src, typeTag, maxBytes)
 			if stale {
 				delete(src.propMap, typeTag)
@@ -434,7 +448,7 @@ func selectMediaImageFromSources(
 		Strs("titleImageProps", imagePropertyTypeTags(titleProps)).
 		Msg("media.image: no image found")
 
-	return models.MediaImageResponse{}, mediaImageNoImageError(row)
+	return models.MediaImageResponse{}, mediaImageNoImageError(row, fileBackedCandidatesChecked)
 }
 
 func loadMediaImageProperty(
