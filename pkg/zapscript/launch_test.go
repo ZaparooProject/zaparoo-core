@@ -161,6 +161,162 @@ launcher = "genesis-default"
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdLaunch_AbsolutePathAppliesInferredSystemDefault(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	rootDir := t.TempDir()
+	romPath := filepath.Join(rootDir, "GENESIS", "game.bin")
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-alt"
+`))
+
+	baseLauncher := platforms.Launcher{
+		ID:         "genesis-base",
+		SystemID:   "genesis",
+		Folders:    []string{"GENESIS"},
+		Extensions: []string{".bin"},
+	}
+	altLauncher := platforms.Launcher{
+		ID:         "genesis-alt",
+		SystemID:   "genesis",
+		Folders:    []string{"GENESIS"},
+		Extensions: []string{".bin"},
+	}
+	launchers := []platforms.Launcher{baseLauncher, altLauncher}
+
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: rootDir}).Maybe()
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "genesis-alt"
+		}),
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{romPath},
+		},
+		Cfg: cfg,
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_AbsolutePathExplicitLauncherOverridesInferredDefault(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	rootDir := t.TempDir()
+	romPath := filepath.Join(rootDir, "GENESIS", "game.bin")
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-alt"
+`))
+
+	explicitLauncher := platforms.Launcher{
+		ID:         "genesis-explicit",
+		SystemID:   "genesis",
+		Folders:    []string{"GENESIS"},
+		Extensions: []string{".bin"},
+	}
+	altLauncher := platforms.Launcher{
+		ID:         "genesis-alt",
+		SystemID:   "genesis",
+		Folders:    []string{"GENESIS"},
+		Extensions: []string{".bin"},
+	}
+	launchers := []platforms.Launcher{explicitLauncher, altLauncher}
+
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "genesis-explicit"
+		}),
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{romPath},
+			AdvArgs: zapscript.NewAdvArgs(map[string]string{
+				"launcher": "genesis-explicit",
+			}),
+		},
+		Cfg: cfg,
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdLaunch_SystemDefaultGroupResolvesWithinTargetSystem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	rootDir := t.TempDir()
+	romPath := filepath.Join(rootDir, "GENESIS", "game.bin")
+
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "RA"
+`))
+
+	baseLauncher := platforms.Launcher{
+		ID:         "genesis-base",
+		SystemID:   "genesis",
+		Folders:    []string{"GENESIS"},
+		Extensions: []string{".bin"},
+	}
+	nesRALauncher := platforms.Launcher{ID: "RANES", SystemID: "nes", Groups: []string{"RA"}}
+	genesisRALauncher := platforms.Launcher{ID: "RAGenesis", SystemID: "genesis", Groups: []string{"RA"}}
+	launchers := []platforms.Launcher{baseLauncher, nesRALauncher, genesisRALauncher}
+
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("RootDirs", cfg).Return([]string{rootDir})
+	mockPlatform.On("Settings").Return(platforms.Settings{DataDir: rootDir}).Maybe()
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "RAGenesis"
+		}),
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{romPath},
+		},
+		Cfg: cfg,
+	}
+
+	result, err := cmdLaunch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCmdLaunch_SetNameArgsPassedThrough(t *testing.T) {
 	t.Parallel()
 
@@ -494,6 +650,99 @@ func TestCmdLaunch_FileNotFound(t *testing.T) {
 
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrFileNotFound, "should return ErrFileNotFound for missing file")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdSearch_AppliesDefaultFromResultSystem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-alt"
+`))
+
+	altLauncher := platforms.Launcher{ID: "genesis-alt", SystemID: "genesis"}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{altLauncher})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything,
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Query == "sonic" && filters.Limit == 1
+		}),
+	).Return([]database.SearchResultWithCursor{
+		{SystemID: "genesis", Path: filepath.Join(launchTestAbsPath("games"), "GENESIS", "Sonic.bin")},
+	}, nil)
+
+	romPath := filepath.Join(launchTestAbsPath("games"), "GENESIS", "Sonic.bin")
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "genesis-alt"
+		}),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.search",
+			Args: []string{"sonic"},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdSearch(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCmdRandom_AppliesDefaultFromResultSystem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "genesis"
+launcher = "genesis-alt"
+`))
+
+	altLauncher := platforms.Launcher{ID: "genesis-alt", SystemID: "genesis"}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{altLauncher})
+
+	romPath := filepath.Join(launchTestAbsPath("games"), "GENESIS", "Sonic.bin")
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything).
+		Return(database.SearchResult{SystemID: "genesis", Path: romPath}, nil)
+
+	mockPlatform.On("LaunchMedia", cfg, romPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "genesis-alt"
+		}),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{"all"},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
 }
 
