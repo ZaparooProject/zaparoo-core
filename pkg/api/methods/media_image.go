@@ -153,7 +153,8 @@ func (c *mediaImageNoImageCache) clear() {
 }
 
 func mediaImageNoImageError(row *database.MediaFullRow) error {
-	return fmt.Errorf("%w", models.QuietClientErr(&mediaImageNotFoundError{system: row.System.SystemID, path: row.Path}))
+	noImage := &mediaImageNotFoundError{system: row.System.SystemID, path: row.Path}
+	return fmt.Errorf("%w", models.QuietClientErr(noImage))
 }
 
 func cachedMediaImageNoImageError(err error) error {

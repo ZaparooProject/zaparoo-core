@@ -320,7 +320,7 @@ func sqlBrowseDirectoriesForSystemsFromMedia(
 	return results, nil
 }
 
-func browsePathPrefixCondition(column, pathPrefix string) (string, []any) {
+func browsePathPrefixCondition(column, pathPrefix string) (condition string, args []any) {
 	if upper := stringPrefixUpperBound(pathPrefix); upper != "" {
 		return column + ` >= ? AND ` + column + ` < ?`, []any{pathPrefix, upper}
 	}
