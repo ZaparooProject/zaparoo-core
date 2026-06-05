@@ -164,9 +164,9 @@ func FilterByTags(
 ) []database.SearchResultWithCursor {
 	var filtered []database.SearchResultWithCursor
 
-	for _, result := range results {
-		if HasAllTags(&result, tagFilters) {
-			filtered = append(filtered, result)
+	for i := range results {
+		if HasAllTags(&results[i], tagFilters) {
+			filtered = append(filtered, results[i])
 		}
 	}
 
@@ -231,9 +231,9 @@ func HasAllTags(result *database.SearchResultWithCursor, tagFilters []zapscript.
 func FilterOutVariants(results []database.SearchResultWithCursor) []database.SearchResultWithCursor {
 	var filtered []database.SearchResultWithCursor
 
-	for _, result := range results {
-		if !IsVariant(&result) {
-			filtered = append(filtered, result)
+	for i := range results {
+		if !IsVariant(&results[i]) {
+			filtered = append(filtered, results[i])
 		}
 	}
 
@@ -291,9 +291,9 @@ func hasVariantTagFilter(tagFilters []zapscript.TagFilter) bool {
 func FilterOutRereleases(results []database.SearchResultWithCursor) []database.SearchResultWithCursor {
 	var filtered []database.SearchResultWithCursor
 
-	for _, result := range results {
-		if !IsRerelease(&result) {
-			filtered = append(filtered, result)
+	for i := range results {
+		if !IsRerelease(&results[i]) {
+			filtered = append(filtered, results[i])
 		}
 	}
 
@@ -319,15 +319,15 @@ func FilterByPreferredRegions(
 	var untagged []database.SearchResultWithCursor
 	var others []database.SearchResultWithCursor
 
-	for _, result := range results {
-		regionMatch := getRegionMatch(&result, preferredRegions)
+	for i := range results {
+		regionMatch := getRegionMatch(&results[i], preferredRegions)
 		switch regionMatch {
 		case tagMatchPreferred:
-			preferred = append(preferred, result)
+			preferred = append(preferred, results[i])
 		case tagMatchUntagged:
-			untagged = append(untagged, result)
+			untagged = append(untagged, results[i])
 		case tagMatchOther:
-			others = append(others, result)
+			others = append(others, results[i])
 		}
 	}
 
@@ -375,15 +375,15 @@ func FilterByPreferredLanguages(
 	var untagged []database.SearchResultWithCursor
 	var others []database.SearchResultWithCursor
 
-	for _, result := range results {
-		langMatch := getLanguageMatch(&result, preferredLangs)
+	for i := range results {
+		langMatch := getLanguageMatch(&results[i], preferredLangs)
 		switch langMatch {
 		case tagMatchPreferred:
-			preferred = append(preferred, result)
+			preferred = append(preferred, results[i])
 		case tagMatchUntagged:
-			untagged = append(untagged, result)
+			untagged = append(untagged, results[i])
 		case tagMatchOther:
-			others = append(others, result)
+			others = append(others, results[i])
 		}
 	}
 
@@ -685,7 +685,8 @@ func FilterByFileTypePriority(
 	}
 
 	scored := make([]scoredResult, 0, len(results))
-	for _, result := range results {
+	for i := range results {
+		result := &results[i]
 		ext := strings.ToLower(filepath.Ext(result.Path))
 		bestScore := 999999 // Default: no launcher match
 
@@ -701,22 +702,22 @@ func FilterByFileTypePriority(
 			}
 		}
 
-		scored = append(scored, scoredResult{result: result, score: bestScore})
+		scored = append(scored, scoredResult{result: *result, score: bestScore})
 	}
 
 	// Find minimum score
 	minScore := 999999
-	for _, s := range scored {
-		if s.score < minScore {
-			minScore = s.score
+	for i := range scored {
+		if scored[i].score < minScore {
+			minScore = scored[i].score
 		}
 	}
 
 	// Return all results with minimum score
 	var best []database.SearchResultWithCursor
-	for _, s := range scored {
-		if s.score == minScore {
-			best = append(best, s.result)
+	for i := range scored {
+		if scored[i].score == minScore {
+			best = append(best, scored[i].result)
 		}
 	}
 

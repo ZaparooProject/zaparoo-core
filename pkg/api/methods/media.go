@@ -681,7 +681,8 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		rootDirs = env.Platform.RootDirs(env.Config)
 	}
 	results := make([]models.SearchResultMedia, 0, len(searchResults))
-	for _, result := range searchResults {
+	for i := range searchResults {
+		result := &searchResults[i]
 		system, err := systemdefs.GetSystem(result.SystemID)
 		if err != nil {
 			continue

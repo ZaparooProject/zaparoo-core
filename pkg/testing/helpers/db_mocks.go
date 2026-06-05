@@ -1057,6 +1057,15 @@ func (m *MockMediaDBI) DeleteMediaTag(mediaDBID, tagDBID int64) error {
 	return nil
 }
 
+func (m *MockMediaDBI) DeleteMediaTagsByTagIDs(mediaDBID int64, tagDBIDs []int) error {
+	m.trackDatabaseOperation() // Track if called outside transaction
+	args := m.Called(mediaDBID, tagDBIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 // TagType CRUD methods
 func (m *MockMediaDBI) FindTagType(row database.TagType) (database.TagType, error) {
 	args := m.Called(row)
@@ -1661,6 +1670,21 @@ func (m *MockMediaDBI) GetMediaBySystemID(systemID string) ([]database.MediaWith
 
 // GetMediaTagsBySystemID mock method for per-system lazy loading during resume.
 func (m *MockMediaDBI) GetMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
+	args := m.Called(systemID)
+	if links, ok := args.Get(0).([]database.MediaTagLink); ok {
+		if err := args.Error(1); err != nil {
+			return links, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return links, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.MediaTagLink{}, nil
+}
+
+// GetScannerMediaTagsBySystemID mock method for per-system scanner-managed tag loading.
+func (m *MockMediaDBI) GetScannerMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
 	args := m.Called(systemID)
 	if links, ok := args.Get(0).([]database.MediaTagLink); ok {
 		if err := args.Error(1); err != nil {

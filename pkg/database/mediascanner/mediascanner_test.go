@@ -461,7 +461,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 		Return([]database.TitleWithSystem{}, nil).Maybe()
 	mockMediaDB.On("GetMediaBySystemID", mock.AnythingOfType("string")).
 		Return([]database.MediaWithFullPath{}, nil).Maybe()
-	mockMediaDB.On("GetMediaTagsBySystemID", mock.AnythingOfType("string")).
+	mockMediaDB.On("GetScannerMediaTagsBySystemID", mock.AnythingOfType("string")).
 		Return([]database.MediaTagLink{}, nil).Maybe()
 	// Subsequent calls: normal operation (no truncate because resuming successfully)
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
@@ -577,7 +577,7 @@ func TestNewNamesIndex_ReportsSystemBeforeLoadingExistingData(t *testing.T) {
 		Return([]database.TitleWithSystem{}, nil).Twice()
 	mockMediaDB.On("GetMediaBySystemID", mock.AnythingOfType("string")).
 		Return([]database.MediaWithFullPath{}, nil).Twice()
-	mockMediaDB.On("GetMediaTagsBySystemID", mock.AnythingOfType("string")).
+	mockMediaDB.On("GetScannerMediaTagsBySystemID", mock.AnythingOfType("string")).
 		Return([]database.MediaTagLink{}, nil).Twice()
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()
@@ -703,7 +703,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 		Return([]database.TitleWithSystem{}, nil).Maybe()
 	mockMediaDB.On("GetMediaBySystemID", mock.AnythingOfType("string")).
 		Return([]database.MediaWithFullPath{}, nil).Maybe()
-	mockMediaDB.On("GetMediaTagsBySystemID", mock.AnythingOfType("string")).
+	mockMediaDB.On("GetScannerMediaTagsBySystemID", mock.AnythingOfType("string")).
 		Return([]database.MediaTagLink{}, nil).Maybe()
 	mockMediaDB.On("GetAllTags").Return([]database.Tag{}, nil).Maybe()
 	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Maybe()

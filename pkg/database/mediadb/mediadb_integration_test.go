@@ -184,6 +184,51 @@ func TestMediaTagCompositeLookupAndDelete(t *testing.T) {
 	assert.ErrorIs(t, err, sql.ErrNoRows)
 }
 
+func TestMediaTagBatchDeleteByTagIDs(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	t.Cleanup(cleanup)
+
+	tagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "extension"})
+	require.NoError(t, err)
+	tagOne, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: tagType.DBID, Tag: "nes"})
+	require.NoError(t, err)
+	tagTwo, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: tagType.DBID, Tag: "sfc"})
+	require.NoError(t, err)
+	tagThree, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: tagType.DBID, Tag: "gen"})
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	system, err := mediaDB.InsertSystem(database.System{SystemID: "nes", Name: "NES"})
+	require.NoError(t, err)
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: system.DBID,
+		Slug:       "batchdeletegame",
+		Name:       "Batch Delete Game",
+	})
+	require.NoError(t, err)
+	media, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     system.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "batch.nes"),
+	})
+	require.NoError(t, err)
+	for _, tag := range []database.Tag{tagOne, tagTwo, tagThree} {
+		_, insertErr := mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: media.DBID, TagDBID: tag.DBID})
+		require.NoError(t, insertErr)
+	}
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	require.NoError(t, mediaDB.DeleteMediaTagsByTagIDs(media.DBID, nil))
+	require.NoError(t, mediaDB.DeleteMediaTagsByTagIDs(media.DBID, []int{int(tagOne.DBID), int(tagThree.DBID)}))
+
+	remaining, err := mediaDB.GetMediaTagsBySystemID("nes")
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, tagTwo.DBID, remaining[0].TagDBID)
+}
+
 func setupTempMediaDB(t *testing.T) (db *MediaDB, cleanup func()) {
 	// Create temp directory that the mock platform will use
 	tempDir, err := os.MkdirTemp("", "zaparoo-test-mediadb-*")
@@ -3463,4 +3508,66 @@ func TestMediaDB_BrowseSystemRootCandidates_MultipleRootsBatched_Integration(t *
 	assert.False(t, result.HasMedia[cifsDir], "cifs root has no indexed media")
 	assert.Equal(t, []string{"snes"}, result.Children[romsDir])
 	assert.Equal(t, []string{"nes"}, result.Children[usbDir])
+}
+
+func TestMediaDB_BrowseFiles_UsesRankPrefixSortForNumberedCollections(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	system, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "Genesis", Name: "Genesis"})
+	require.NoError(t, err)
+
+	dir := filepath.ToSlash(filepath.Join(string(filepath.Separator), "roms", "genesis", "best")) + "/"
+	entries := []struct {
+		path string
+		name string
+		slug string
+	}{
+		{path: filepath.ToSlash(filepath.Join(dir, "1 - Zelda.gen")), name: "Zelda", slug: "zelda"},
+		{path: filepath.ToSlash(filepath.Join(dir, "2 - Sonic.gen")), name: "Sonic", slug: "sonic"},
+		{path: filepath.ToSlash(filepath.Join(dir, "3 - Alpha.gen")), name: "Alpha", slug: "alpha"},
+		{path: filepath.ToSlash(filepath.Join(dir, "4 - Beta.gen")), name: "Beta", slug: "beta"},
+		{path: filepath.ToSlash(filepath.Join(dir, "10 - Contra.gen")), name: "Contra", slug: "contra"},
+	}
+	for _, entry := range entries {
+		title, insertErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: system.DBID,
+			Slug:       entry.slug,
+			Name:       entry.name,
+		})
+		require.NoError(t, insertErr)
+		_, insertErr = mediaDB.InsertMedia(database.Media{
+			SystemDBID:     system.DBID,
+			MediaTitleDBID: title.DBID,
+			Path:           entry.path,
+			ParentDir:      dir,
+		})
+		require.NoError(t, insertErr)
+	}
+
+	files, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{PathPrefix: dir, Limit: 4})
+	require.NoError(t, err)
+	require.Len(t, files, 4)
+	assert.Equal(t, []string{"Zelda", "Sonic", "Alpha", "Beta"}, []string{
+		files[0].Name, files[1].Name, files[2].Name, files[3].Name,
+	})
+	assert.Equal(t, browseSortRankPrefixAsc, files[0].SortMode)
+
+	nextPage, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+		PathPrefix: dir,
+		Limit:      2,
+		Cursor: &database.BrowseCursor{
+			SortValue: files[3].SortValue,
+			SortMode:  files[3].SortMode,
+			LastID:    files[3].MediaID,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, nextPage, 1)
+	assert.Equal(t, "Contra", nextPage[0].Name)
 }

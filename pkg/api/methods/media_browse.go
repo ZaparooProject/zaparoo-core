@@ -39,6 +39,7 @@ import (
 // browseCursorData is the JSON-serializable keyset cursor for browse pagination.
 type browseCursorData struct {
 	SortValue  string `json:"sortValue"`
+	SortMode   string `json:"sortMode,omitempty"`
 	LastID     int64  `json:"lastId"`
 	TotalFiles int    `json:"totalFiles,omitempty"`
 }
@@ -47,6 +48,18 @@ func encodeBrowseCursor(lastID int64, sortValue string, totalFiles ...int) (stri
 	data := browseCursorData{LastID: lastID, SortValue: sortValue}
 	if len(totalFiles) > 0 && totalFiles[0] > 0 {
 		data.TotalFiles = totalFiles[0]
+	}
+	b, err := json.Marshal(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal browse cursor: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(b), nil
+}
+
+func encodeBrowseCursorWithMode(lastID int64, sortValue, sortMode string, totalFiles int) (string, error) {
+	data := browseCursorData{LastID: lastID, SortValue: sortValue, SortMode: sortMode}
+	if totalFiles > 0 {
+		data.TotalFiles = totalFiles
 	}
 	b, err := json.Marshal(data)
 	if err != nil {
@@ -73,6 +86,7 @@ func decodeBrowseCursor(cursor string) (*database.BrowseCursor, error) {
 	return &database.BrowseCursor{
 		LastID:     data.LastID,
 		SortValue:  data.SortValue,
+		SortMode:   data.SortMode,
 		TotalFiles: data.TotalFiles,
 	}, nil
 }
@@ -687,14 +701,18 @@ func buildBrowseResponse(
 		var nextCursor *string
 		if hasNextPage {
 			lastResult := files[len(files)-1]
-			var sortValue string
-			switch sort {
-			case "filename-asc", "filename-desc":
-				sortValue = lastResult.Path
-			default:
-				sortValue = lastResult.Name
+			sortValue := lastResult.SortValue
+			if sortValue == "" {
+				switch sort {
+				case "filename-asc", "filename-desc":
+					sortValue = lastResult.Path
+				default:
+					sortValue = lastResult.Name
+				}
 			}
-			encoded, encErr := encodeBrowseCursor(lastResult.MediaID, sortValue, totalFiles)
+			encoded, encErr := encodeBrowseCursorWithMode(
+				lastResult.MediaID, sortValue, lastResult.SortMode, totalFiles,
+			)
 			if encErr != nil {
 				return nil, fmt.Errorf("failed to encode cursor: %w", encErr)
 			}

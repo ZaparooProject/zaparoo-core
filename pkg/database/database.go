@@ -271,6 +271,7 @@ type BrowseDirectoriesOptions struct {
 // count so cursor pages do not need to rerun the same count query.
 type BrowseCursor struct {
 	SortValue  string
+	SortMode   string
 	LastID     int64
 	TotalFiles int
 }
@@ -340,6 +341,8 @@ type SearchResultWithCursor struct {
 	SystemID      string
 	Name          string
 	Path          string
+	SortValue     string
+	SortMode      string
 	Tags          []TagInfo
 	ZapScriptTags []TagInfo // Disambiguating tags only (tags that differ across sibling variants)
 	MediaID       int64
@@ -647,6 +650,7 @@ type MediaDBI interface {
 	UpdateMediaParentDir(mediaDBID int64, parentDir string) error
 	DeleteMediaTags(mediaDBID int64) error
 	DeleteMediaTag(mediaDBID, tagDBID int64) error
+	DeleteMediaTagsByTagIDs(mediaDBID int64, tagDBIDs []int) error
 	TemporaryRepairJobsPending(ctx context.Context) (bool, error)
 
 	FindTagType(row TagType) (TagType, error)
@@ -704,6 +708,7 @@ type MediaDBI interface {
 	GetTitlesBySystemID(systemID string) ([]TitleWithSystem, error)
 	GetMediaBySystemID(systemID string) ([]MediaWithFullPath, error)
 	GetMediaTagsBySystemID(systemID string) ([]MediaTagLink, error)
+	GetScannerMediaTagsBySystemID(systemID string) ([]MediaTagLink, error)
 
 	// Scraper support methods
 

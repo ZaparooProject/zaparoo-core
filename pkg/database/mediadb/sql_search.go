@@ -56,8 +56,8 @@ func fetchAndAttachTags(
 	}
 
 	mediaIDs := make([]int64, len(results))
-	for i, result := range results {
-		mediaIDs[i] = result.MediaID
+	for i := range results {
+		mediaIDs[i] = results[i].MediaID
 	}
 
 	// Two indexed queries combined with UNION ALL beat a single OR JOIN
@@ -258,7 +258,8 @@ func collectResultTagIDs(results []database.SearchResultWithCursor) resultTagIDs
 		titleIDs:        make([]int64, 0, len(results)),
 	}
 	seenTitles := make(map[int64]struct{}, len(results))
-	for i, result := range results {
+	for i := range results {
+		result := &results[i]
 		tagIDs.mediaIDs[i] = result.MediaID
 		tagIDs.titleToMediaIDs[result.MediaTitleID] = append(
 			tagIDs.titleToMediaIDs[result.MediaTitleID], result.MediaID,
