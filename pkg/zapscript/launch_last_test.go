@@ -338,6 +338,56 @@ func TestCmdLaunchLast_LauncherAdvarg(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdLaunchLast_AbsolutePathAppliesGroupDefaultWithinHistorySystem(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockUserDB := helpers.NewMockUserDBI()
+	cfg := &config.Instance{}
+	require.NoError(t, cfg.LoadTOML(`
+[[systems.default]]
+system = "snes"
+launcher = "RA"
+`))
+	rootDir := t.TempDir()
+	absPath := createTestFile(t, rootDir, "SNES/Mario.sfc")
+
+	launchers := []platforms.Launcher{
+		{ID: "RA-Genesis", SystemID: "genesis", Groups: []string{"RA"}},
+		{ID: "snes-explicit", SystemID: "snes"},
+		{ID: "RA-SNES", SystemID: "snes", Groups: []string{"RA"}},
+	}
+
+	mockUserDB.On("GetMediaHistory", []string(nil), int64(0), 10).
+		Return([]database.MediaHistoryEntry{
+			makeHistoryEntry(absPath, "Mario", "snes"),
+		}, nil)
+
+	mockPlatform.On("Launchers", cfg).Return(launchers)
+	mockPlatform.On("LaunchMedia", cfg, absPath,
+		mock.MatchedBy(func(l *platforms.Launcher) bool {
+			return l != nil && l.ID == "RA-SNES"
+		}),
+		mock.AnythingOfType("*database.Database"),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name:    "launch.last",
+			AdvArgs: zapscript.NewAdvArgs(nil),
+		},
+		Cfg:      cfg,
+		Database: &database.Database{UserDB: mockUserDB},
+	}
+
+	result, err := cmdLaunchLast(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockUserDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCmdLaunchLast_LaunchErrorReturnsMediaChanged(t *testing.T) {
 	t.Parallel()
 

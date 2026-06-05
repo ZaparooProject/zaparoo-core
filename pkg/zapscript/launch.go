@@ -95,7 +95,10 @@ func resolveLauncherRefForSystem(
 	}
 
 	for i := range launchers {
-		if strings.EqualFold(launchers[i].ID, ref) {
+		if !strings.EqualFold(launchers[i].ID, ref) {
+			continue
+		}
+		if launchers[i].SystemID == "" || strings.EqualFold(launchers[i].SystemID, systemID) {
 			return launchers[i].ID, true
 		}
 	}
