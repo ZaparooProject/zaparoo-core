@@ -730,6 +730,43 @@ func TestRetroAchievementsAtari2600LauncherMetadata(t *testing.T) {
 	assert.False(t, found.Test(nil, filepath.Join("roms", "ATARI7800", "game.bin")))
 }
 
+func TestConfigureAtari2600AltCore(t *testing.T) {
+	t.Parallel()
+
+	t.Run("defaults to RA Atari7800 setname", func(t *testing.T) {
+		t.Parallel()
+
+		core := cores.Core{ID: "Atari2600"}
+		err := configureAtari2600AltCore(&core, "RAAtari2600", "_RA_Cores/Cores/Atari7800", nil)
+
+		require.NoError(t, err)
+		assert.Equal(t, "RAAtari2600", core.LauncherID)
+		assert.Equal(t, "_RA_Cores/Cores/Atari7800", core.RBF)
+		assert.Equal(t, "RA_Atari7800", core.SetName)
+		assert.True(t, core.SetNameSameDir)
+		require.Len(t, core.Slots, 1)
+		assert.ElementsMatch(t, []string{".a26", ".bin"}, core.Slots[0].Exts)
+		require.NotNil(t, core.Slots[0].Mgl)
+		assert.Equal(t, 1, core.Slots[0].Mgl.Delay)
+		assert.Equal(t, "f", core.Slots[0].Mgl.Method)
+		assert.Equal(t, 1, core.Slots[0].Mgl.Index)
+	})
+
+	t.Run("launch options override setname", func(t *testing.T) {
+		t.Parallel()
+
+		core := cores.Core{ID: "Atari2600"}
+		err := configureAtari2600AltCore(&core, "RAAtari2600", "_RA_Cores/Cores/Atari7800", &platforms.LaunchOptions{
+			SetName:        "Custom_Atari",
+			SetNameSameDir: "no",
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, "Custom_Atari", core.SetName)
+		assert.False(t, core.SetNameSameDir)
+	})
+}
+
 func TestRetroAchievementsAtari7800LauncherRemoved(t *testing.T) {
 	t.Parallel()
 

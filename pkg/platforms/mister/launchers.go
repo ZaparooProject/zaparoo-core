@@ -518,6 +518,25 @@ func applyAtari2600Slots(core *cores.Core) {
 	}
 }
 
+func configureAtari2600AltCore(
+	core *cores.Core,
+	launcherID string,
+	rbfPath string,
+	opts *platforms.LaunchOptions,
+) error {
+	core.LauncherID = launcherID
+	core.RBF = rbfPath
+	if setName, ok := retroAchievementsSetName(launcherID); ok {
+		core.SetName = setName
+		core.SetNameSameDir = true
+	}
+	if setNameErr := applySetNameOptions(core, opts); setNameErr != nil {
+		return setNameErr
+	}
+	applyAtari2600Slots(core)
+	return nil
+}
+
 func launchAtari2600() func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		s, err := cores.GetCore(systemdefs.SystemAtari2600)
@@ -559,16 +578,9 @@ func launchAtari2600AltCore(
 		path = checkInZip(path)
 
 		sn := *s
-		sn.LauncherID = launcherID
-		sn.RBF = rbfPath
-		if setName, ok := retroAchievementsSetName(launcherID); ok {
-			sn.SetName = setName
-			sn.SetNameSameDir = true
+		if configureErr := configureAtari2600AltCore(&sn, launcherID, rbfPath, opts); configureErr != nil {
+			return nil, configureErr
 		}
-		if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
-			return nil, setNameErr
-		}
-		applyAtari2600Slots(&sn)
 
 		err = mgls.LaunchGame(cfg, &sn, path)
 		if err != nil {
