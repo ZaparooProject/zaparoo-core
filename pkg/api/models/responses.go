@@ -360,6 +360,7 @@ type ActiveMedia struct {
 	SystemName       string    `json:"systemName"`
 	Path             string    `json:"mediaPath"`
 	Name             string    `json:"mediaName"`
+	Slot             string    `json:"slot,omitempty"`
 	LauncherControls []string  `json:"launcherControls,omitempty"`
 	MediaID          int64     `json:"mediaId,omitempty"`
 }
@@ -373,6 +374,7 @@ func NewActiveMedia(systemID, systemName, path, name, launcherID string) *Active
 		SystemName: systemName,
 		Path:       path,
 		Name:       name,
+		Slot:       "primary",
 	}
 }
 

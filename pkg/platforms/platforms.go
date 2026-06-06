@@ -22,7 +22,9 @@ package platforms
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -101,6 +103,24 @@ const (
 	InstanceKodi = "kodi"
 )
 
+// Media slot identifiers for launch and control routing.
+const (
+	MediaSlotPrimary    = "primary"
+	MediaSlotBackground = "background"
+)
+
+// NormalizeMediaSlot returns the effective media slot for a user/API value.
+func NormalizeMediaSlot(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", MediaSlotPrimary:
+		return MediaSlotPrimary, nil
+	case MediaSlotBackground:
+		return MediaSlotBackground, nil
+	default:
+		return "", fmt.Errorf("unsupported media slot: %s", raw)
+	}
+}
+
 // Control action identifiers for active media control.
 const (
 	ControlSaveState   = "save_state"
@@ -111,6 +131,8 @@ const (
 	ControlLoad        = "load"
 	ControlReset       = "reset"
 	ControlTogglePause = "toggle_pause"
+	ControlPause       = "pause"
+	ControlResume      = "resume"
 	ControlStop        = "stop"
 	ControlFastForward = "fast_forward"
 	ControlRewind      = "rewind"
@@ -207,6 +229,8 @@ type LaunchOptions struct {
 	// SetName should keep the original game directory. On MiSTer this maps to the
 	// MGL setname same_dir attribute. Unsupported platforms may ignore it.
 	SetNameSameDir string
+	// Slot selects the media slot for launch routing. Empty means primary.
+	Slot string
 }
 
 // Launcher defines how a platform launcher can launch media and what media it

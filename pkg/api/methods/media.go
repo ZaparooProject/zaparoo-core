@@ -844,12 +844,30 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 				SystemName:       system.Name,
 				Name:             activeMedia.Name,
 				Path:             activeMedia.Path,
+				Slot:             platforms.MediaSlotPrimary,
 				LauncherControls: activeMedia.LauncherControls,
 			},
 			ZapScript: zapScript,
 		}
 
 		resp.Active = append(resp.Active, activeResp)
+	}
+
+	backgroundMedia := env.State.BackgroundMedia()
+	if backgroundMedia != nil && backgroundMedia.Path != "" {
+		resp.Active = append(resp.Active, models.ActiveMediaResponse{
+			ActiveMedia: models.ActiveMedia{
+				Started:          backgroundMedia.Started,
+				LauncherID:       backgroundMedia.LauncherID,
+				SystemID:         backgroundMedia.SystemID,
+				SystemName:       backgroundMedia.SystemName,
+				Name:             backgroundMedia.Name,
+				Path:             backgroundMedia.Path,
+				Slot:             platforms.MediaSlotBackground,
+				LauncherControls: backgroundMedia.LauncherControls,
+			},
+			ZapScript: backgroundMedia.Path,
+		})
 	}
 
 	status := statusInstance.get()

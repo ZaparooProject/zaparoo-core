@@ -71,9 +71,12 @@ func Start(
 
 	player := audio.NewMalgoPlayer()
 	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
+	playbackManager := audio.NewLongformPlaybackManager()
 
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
+
+	platforms.SetNativeAudioHooks(playbackManager, st.SetBackgroundMedia)
 
 	// Create and start notification broker to broadcast to all consumers.
 	// media.indexing is coalesceable: bursts during index/resume collapse to

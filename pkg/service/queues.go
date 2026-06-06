@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
@@ -79,8 +80,9 @@ func runTokenZapScript(
 		if shouldRunBeforeMediaStartHook(inHookContext, beforeMediaStartScript, cmd.Name) {
 			log.Info().Msgf("running before_media_start hook: %s", beforeMediaStartScript)
 			hookPlsc := playlists.PlaylistController{
-				Active: pls,
-				Queue:  plsc.Queue,
+				Active:     pls,
+				Background: plsc.Background,
+				Queue:      plsc.Queue,
 			}
 			hookToken := tokens.Token{
 				ScanTime: time.Now(),
@@ -114,8 +116,9 @@ func runTokenZapScript(
 			svc.State.GetContext(),
 			svc.Platform, svc.Config,
 			playlists.PlaylistController{
-				Active: pls,
-				Queue:  plsc.Queue,
+				Active:     pls,
+				Background: plsc.Background,
+				Queue:      plsc.Queue,
 			},
 			token,
 			cmd,
@@ -183,8 +186,13 @@ func launchPlaylistMedia(
 		Source:   tokens.SourcePlaylist,
 	}
 	plsc := playlists.PlaylistController{
-		Active: activePlaylist,
-		Queue:  svc.PlaylistQueue,
+		Active:     activePlaylist,
+		Background: svc.State.GetBackgroundPlaylist(),
+		Queue:      svc.PlaylistQueue,
+	}
+	if pls.Slot == platforms.MediaSlotBackground {
+		plsc.Active = pls
+		plsc.Background = pls
 	}
 
 	err := runTokenZapScript(svc, t, plsc, nil, false)
@@ -192,6 +200,10 @@ func launchPlaylistMedia(
 		log.Error().Err(err).Msgf("error launching token")
 		path, enabled := svc.Config.FailSoundPath(helpers.DataDir(svc.Platform))
 		helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
+	}
+
+	if pls.Slot == platforms.MediaSlotBackground {
+		return
 	}
 
 	now := time.Now()
@@ -226,19 +238,43 @@ func handlePlaylist(
 	pls *playlists.Playlist,
 	player audio.Player,
 ) {
+	slot := platforms.MediaSlotPrimary
+	if pls != nil && pls.Slot != "" {
+		var err error
+		slot, err = platforms.NormalizeMediaSlot(pls.Slot)
+		if err != nil {
+			log.Warn().Err(err).Str("slot", pls.Slot).Msg("ignoring playlist update with invalid slot")
+			return
+		}
+	}
 	activePlaylist := svc.State.GetActivePlaylist()
+	if slot == platforms.MediaSlotBackground {
+		activePlaylist = svc.State.GetBackgroundPlaylist()
+	}
 
 	switch {
-	case pls == nil:
+	case pls == nil || (pls.ID == "" && len(pls.Items) == 0 && !pls.Playing):
 		// request to clear playlist
 		if activePlaylist != nil {
-			log.Info().Msg("clearing playlist")
+			log.Info().Str("slot", slot).Msg("clearing playlist")
 		}
-		svc.State.SetActivePlaylist(nil)
+		if slot == platforms.MediaSlotBackground {
+			svc.State.SetBackgroundPlaylist(nil)
+			svc.State.SetBackgroundMedia(nil)
+		} else {
+			svc.State.SetActivePlaylist(nil)
+		}
 		return
 	case activePlaylist == nil:
 		// new playlist loaded
-		svc.State.SetActivePlaylist(pls)
+		if pls.Slot == "" {
+			pls.Slot = slot
+		}
+		if slot == platforms.MediaSlotBackground {
+			svc.State.SetBackgroundPlaylist(pls)
+		} else {
+			svc.State.SetActivePlaylist(pls)
+		}
 		if pls.Playing {
 			log.Info().Any("pls", pls).Msg("setting new playlist, launching token")
 			if svc.BackgroundWG != nil {
@@ -261,7 +297,14 @@ func handlePlaylist(
 			return
 		}
 
-		svc.State.SetActivePlaylist(pls)
+		if pls.Slot == "" {
+			pls.Slot = slot
+		}
+		if slot == platforms.MediaSlotBackground {
+			svc.State.SetBackgroundPlaylist(pls)
+		} else {
+			svc.State.SetActivePlaylist(pls)
+		}
 		if pls.Playing {
 			log.Info().Any("pls", pls).Msg("updating playlist, launching token")
 			if svc.BackgroundWG != nil {
@@ -407,8 +450,9 @@ func processTokenQueue(
 				}()
 
 				plsc := playlists.PlaylistController{
-					Active: svc.State.GetActivePlaylist(),
-					Queue:  svc.PlaylistQueue,
+					Active:     svc.State.GetActivePlaylist(),
+					Background: svc.State.GetBackgroundPlaylist(),
+					Queue:      svc.PlaylistQueue,
 				}
 
 				err = runTokenZapScript(svc, t, plsc, nil, false)

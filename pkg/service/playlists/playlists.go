@@ -27,6 +27,7 @@ type PlaylistItem struct {
 type Playlist struct {
 	ID      string
 	Name    string
+	Slot    string
 	Items   []PlaylistItem
 	Index   int
 	Playing bool
@@ -36,39 +37,44 @@ func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
 	return &Playlist{
 		ID:      id,
 		Name:    name,
+		Slot:    "primary",
 		Items:   item,
 		Index:   0,
 		Playing: false,
 	}
 }
 
-func Next(p Playlist) *Playlist {
+func Next(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	idx := p.Index + 1
 	if idx >= len(p.Items) {
 		idx = 0
 	}
 	return &Playlist{
 		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
 		Items:   p.Items,
 		Index:   idx,
 		Playing: p.Playing,
 	}
 }
 
-func Previous(p Playlist) *Playlist {
+func Previous(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	idx := p.Index - 1
 	if idx < 0 {
 		idx = len(p.Items) - 1
 	}
 	return &Playlist{
 		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
 		Items:   p.Items,
 		Index:   idx,
 		Playing: p.Playing,
 	}
 }
 
-func Goto(p Playlist, idx int) *Playlist {
+func Goto(p Playlist, idx int) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	// Handle empty playlist case
 	switch {
 	case len(p.Items) == 0:
@@ -81,24 +87,30 @@ func Goto(p Playlist, idx int) *Playlist {
 	p.Index = idx
 	return &Playlist{
 		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
 		Items:   p.Items,
 		Index:   idx,
 		Playing: p.Playing,
 	}
 }
 
-func Play(p Playlist) *Playlist {
+func Play(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	return &Playlist{
 		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
 		Items:   p.Items,
 		Index:   p.Index,
 		Playing: true,
 	}
 }
 
-func Pause(p Playlist) *Playlist {
+func Pause(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	return &Playlist{
 		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
 		Items:   p.Items,
 		Index:   p.Index,
 		Playing: false,
@@ -122,6 +134,7 @@ func (p *Playlist) Current() PlaylistItem {
 }
 
 type PlaylistController struct {
-	Active *Playlist
-	Queue  chan<- *Playlist
+	Active     *Playlist
+	Background *Playlist
+	Queue      chan<- *Playlist
 }

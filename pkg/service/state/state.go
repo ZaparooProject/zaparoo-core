@@ -67,7 +67,9 @@ type State struct {
 	readers               map[string]readers.Reader
 	Notifications         chan<- models.Notification
 	activeMedia           *models.ActiveMedia
+	backgroundMedia       *models.ActiveMedia
 	activePlaylist        *playlists.Playlist
+	backgroundPlaylist    *playlists.Playlist
 	activeMediaReadyCh    chan struct{}
 	inbox                 *inbox.Service
 	onMediaStartHook      func(*models.ActiveMedia, uint64)
@@ -352,6 +354,18 @@ func (s *State) SetActivePlaylist(playlist *playlists.Playlist) {
 	s.mu.Unlock()
 }
 
+func (s *State) GetBackgroundPlaylist() *playlists.Playlist {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backgroundPlaylist
+}
+
+func (s *State) SetBackgroundPlaylist(playlist *playlists.Playlist) {
+	s.mu.Lock()
+	s.backgroundPlaylist = playlist
+	s.mu.Unlock()
+}
+
 var (
 	ErrNoActiveMedia      = errors.New("no active media")
 	ErrActiveMediaChanged = errors.New("active media changed")
@@ -361,6 +375,12 @@ func (s *State) ActiveMedia() *models.ActiveMedia {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.activeMedia
+}
+
+func (s *State) BackgroundMedia() *models.ActiveMedia {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backgroundMedia
 }
 
 func (s *State) ActiveMediaReady() bool {
@@ -450,12 +470,13 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		}
 
 		// Send notifications outside lock to prevent deadlock
-		stoppedParams := buildMediaStoppedParams(oldMedia)
+		stoppedParams := buildMediaStoppedParams(oldMedia, platforms.MediaSlotPrimary)
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		s.notifyDisplayReaders(media)
 		return
 	}
 
+	media.Slot = platforms.MediaSlotPrimary
 	if oldMedia == nil {
 		// media has started
 		s.activeMedia = media
@@ -471,6 +492,7 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 			SystemName: media.SystemName,
 			MediaName:  media.Name,
 			MediaPath:  media.Path,
+			Slot:       platforms.MediaSlotPrimary,
 		})
 		s.notifyDisplayReaders(media)
 
@@ -496,13 +518,14 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		}
 
 		// Send notifications outside lock to prevent deadlock
-		changedStoppedParams := buildMediaStoppedParams(oldMedia)
+		changedStoppedParams := buildMediaStoppedParams(oldMedia, platforms.MediaSlotPrimary)
 		notifications.MediaStopped(s.Notifications, &changedStoppedParams)
 		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
 			SystemID:   media.SystemID,
 			SystemName: media.SystemName,
 			MediaName:  media.Name,
 			MediaPath:  media.Path,
+			Slot:       platforms.MediaSlotPrimary,
 		})
 		s.notifyDisplayReaders(media)
 
@@ -517,7 +540,55 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 	s.mu.Unlock()
 }
 
-func buildMediaStoppedParams(media *models.ActiveMedia) models.MediaStoppedParams {
+func (s *State) SetBackgroundMedia(media *models.ActiveMedia) {
+	s.mu.Lock()
+	oldMedia := s.backgroundMedia
+	if oldMedia == nil && media == nil {
+		s.mu.Unlock()
+		return
+	}
+
+	if media == nil {
+		s.backgroundMedia = nil
+		s.mu.Unlock()
+		stoppedParams := buildMediaStoppedParams(oldMedia, platforms.MediaSlotBackground)
+		notifications.MediaStopped(s.Notifications, &stoppedParams)
+		return
+	}
+
+	media.Slot = platforms.MediaSlotBackground
+	if oldMedia == nil {
+		s.backgroundMedia = media
+		s.mu.Unlock()
+		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
+			SystemID:   media.SystemID,
+			SystemName: media.SystemName,
+			MediaName:  media.Name,
+			MediaPath:  media.Path,
+			Slot:       platforms.MediaSlotBackground,
+		})
+		return
+	}
+
+	if !oldMedia.Equal(media) {
+		s.backgroundMedia = media
+		s.mu.Unlock()
+		stoppedParams := buildMediaStoppedParams(oldMedia, platforms.MediaSlotBackground)
+		notifications.MediaStopped(s.Notifications, &stoppedParams)
+		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
+			SystemID:   media.SystemID,
+			SystemName: media.SystemName,
+			MediaName:  media.Name,
+			MediaPath:  media.Path,
+			Slot:       platforms.MediaSlotBackground,
+		})
+		return
+	}
+
+	s.mu.Unlock()
+}
+
+func buildMediaStoppedParams(media *models.ActiveMedia, slot string) models.MediaStoppedParams {
 	elapsed := max(0, int(time.Since(media.Started).Seconds()))
 	return models.MediaStoppedParams{
 		SystemID:   media.SystemID,
@@ -525,6 +596,7 @@ func buildMediaStoppedParams(media *models.ActiveMedia) models.MediaStoppedParam
 		MediaName:  media.Name,
 		MediaPath:  media.Path,
 		LauncherID: media.LauncherID,
+		Slot:       slot,
 		Elapsed:    elapsed,
 	}
 }

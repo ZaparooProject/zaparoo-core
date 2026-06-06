@@ -43,7 +43,7 @@ var GlobalLauncherCache = &LauncherCache{}
 // Initialize builds the launcher cache from platform launchers.
 // This should be called once at startup after custom launchers are loaded.
 func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance) {
-	lc.InitializeFromSlice(pl.Launchers(cfg))
+	lc.rebuildFromSlice(appendCoreLaunchers(pl.Launchers(cfg)))
 
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
@@ -79,9 +79,12 @@ func (lc *LauncherCache) GetAllLaunchers() []platforms.Launcher {
 // InitializeFromSlice builds the launcher cache from a pre-built slice of launchers.
 // This is useful for testing or when launchers are already available.
 func (lc *LauncherCache) InitializeFromSlice(launchers []platforms.Launcher) {
+	lc.rebuildFromSlice(launchers)
+}
+
+func (lc *LauncherCache) rebuildFromSlice(launchers []platforms.Launcher) {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
-
 	lc.allLaunchers = make([]platforms.Launcher, len(launchers))
 	copy(lc.allLaunchers, launchers)
 
@@ -92,6 +95,18 @@ func (lc *LauncherCache) InitializeFromSlice(launchers []platforms.Launcher) {
 			lc.bySystemID[launcher.SystemID] = append(lc.bySystemID[launcher.SystemID], launcher)
 		}
 	}
+}
+
+func appendCoreLaunchers(launchers []platforms.Launcher) []platforms.Launcher {
+	if !platforms.NativeAudioEnabled() {
+		return launchers
+	}
+	for i := range launchers {
+		if launchers[i].ID == platforms.NativeAudioLauncherID {
+			return launchers
+		}
+	}
+	return append(launchers, platforms.NativeAudioLauncher())
 }
 
 // GetLauncherByID finds a launcher by its unique ID.

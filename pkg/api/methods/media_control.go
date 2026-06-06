@@ -36,7 +36,15 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
+	slot, err := platforms.NormalizeMediaSlot(params.Slot)
+	if err != nil {
+		return nil, models.ClientErrf("invalid slot: %w", err)
+	}
+
 	media := env.State.ActiveMedia()
+	if slot == platforms.MediaSlotBackground {
+		media = env.State.BackgroundMedia()
+	}
 	if media == nil {
 		return nil, models.ClientErrf("no active media")
 	}
@@ -61,10 +69,18 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 
 	log.Info().Str("action", params.Action).Str("launcher", media.LauncherID).Msg("executing media control action")
 
-	var err error
+	controlArgs := params.Args
+	if media.LauncherID == platforms.NativeAudioLauncherID {
+		controlArgs = make(map[string]string, len(params.Args)+1)
+		for k, v := range params.Args {
+			controlArgs[k] = v
+		}
+		controlArgs["slot"] = slot
+	}
+
 	switch {
 	case control.Func != nil:
-		err = control.Func(env.Context, env.Config, platforms.ControlParams{Args: params.Args})
+		err = control.Func(env.Context, env.Config, platforms.ControlParams{Args: controlArgs})
 	case control.Script != "":
 		exprEnv := zapscript.GetExprEnv(env.Platform, env.Config, env.State, nil, nil)
 		err = zapscript.RunControlScript(env.Context, env.Platform, env.Config, env.Database, control.Script, &exprEnv)
@@ -73,6 +89,9 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	}
 	if err != nil {
 		return nil, fmt.Errorf("control action %q failed: %w", params.Action, err)
+	}
+	if slot == platforms.MediaSlotBackground && params.Action == platforms.ControlStop {
+		env.State.SetBackgroundMedia(nil)
 	}
 
 	return NoContent{}, nil

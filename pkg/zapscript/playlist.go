@@ -67,7 +67,31 @@ type ArgPlaylist struct {
 	Items []ArgPlaylistItem `json:"items"`
 }
 
+func activePlaylistForSlot(env *platforms.CmdEnv, slot string) *playlists.Playlist {
+	if slot == platforms.MediaSlotBackground {
+		return env.Playlist.Background
+	}
+	return env.Playlist.Active
+}
+
+func commandSlot(env *platforms.CmdEnv) (string, error) {
+	slot, err := platforms.NormalizeMediaSlot(env.Cmd.AdvArgs.Get("slot"))
+	if err != nil {
+		return "", fmt.Errorf("normalize media slot: %w", err)
+	}
+	return slot, nil
+}
+
 func queuePlaylistUpdate(env *platforms.CmdEnv, pls *playlists.Playlist) error {
+	slot := platforms.MediaSlotPrimary
+	if pls != nil && pls.Slot != "" {
+		slot = pls.Slot
+	} else if cmdSlot, err := commandSlot(env); err == nil {
+		slot = cmdSlot
+	}
+	if pls != nil {
+		pls.Slot = slot
+	}
 	if env.LauncherCtx == nil && env.ServiceCtx == nil {
 		env.Playlist.Queue <- pls
 		return nil
@@ -295,7 +319,13 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 			})
 		}
 
-		return playlists.NewPlaylist(plsArg.ID, plsArg.Name, items), nil
+		pls := playlists.NewPlaylist(plsArg.ID, plsArg.Name, items)
+		slot, slotErr := platforms.NormalizeMediaSlot(env.Cmd.AdvArgs.Get("slot"))
+		if slotErr != nil {
+			return nil, fmt.Errorf("normalize media slot: %w", slotErr)
+		}
+		pls.Slot = slot
+		return pls, nil
 	}
 
 	path, err := findFile(afero.NewOsFs(), pl, env.Cfg, env.Cmd.Args[0])
@@ -330,17 +360,28 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		}
 	}
 
-	return playlists.NewPlaylist(env.Cmd.Args[0], name, items), nil
+	pls := playlists.NewPlaylist(env.Cmd.Args[0], name, items)
+	slot, slotErr := platforms.NormalizeMediaSlot(env.Cmd.AdvArgs.Get("slot"))
+	if slotErr != nil {
+		return nil, fmt.Errorf("normalize media slot: %w", slotErr)
+	}
+	pls.Slot = slot
+	return pls, nil
 }
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	if env.Playlist.Active != nil &&
+	slot, err := commandSlot(&env)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+	active := activePlaylistForSlot(&env, slot)
+	if active != nil &&
 		(len(env.Cmd.Args) == 0 || env.Cmd.Args[0] == "") {
 		log.Info().Msg("starting paused playlist")
-		pls := playlists.Play(*env.Playlist.Active)
-		if err := queuePlaylistUpdate(&env, pls); err != nil {
-			return platforms.CmdResult{}, err
+		pls := playlists.Play(*active)
+		if queueErr := queuePlaylistUpdate(&env, pls); queueErr != nil {
+			return platforms.CmdResult{}, queueErr
 		}
 		return platforms.CmdResult{
 			PlaylistChanged: true,
@@ -386,15 +427,20 @@ func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	var pls *playlists.Playlist
+	slot, err := commandSlot(&env)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+	active := activePlaylistForSlot(&env, slot)
 
 	// If no args provided, use the currently active playlist
 	if len(env.Cmd.Args) == 0 {
-		if env.Playlist.Active == nil {
+		if active == nil {
 			return platforms.CmdResult{}, errors.New("no active playlist to open")
 		}
 		log.Debug().Msg("opening active playlist (no args)")
 		// Use active playlist as-is (preserves current Index and state)
-		pls = env.Playlist.Active
+		pls = active
 	} else {
 		// Load playlist from argument
 		var err error
@@ -404,9 +450,9 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		}
 
 		// If loaded playlist matches active, preserve current position
-		if env.Playlist.Active != nil && env.Playlist.Active.ID == pls.ID {
+		if active != nil && active.ID == pls.ID {
 			log.Debug().Msg("opening active playlist")
-			pls.Index = env.Playlist.Active.Index
+			pls.Index = active.Index
 			// Validate index bounds
 			if pls.Index >= len(pls.Items) {
 				pls.Index = len(pls.Items) - 1
@@ -468,11 +514,16 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	if env.Playlist.Active == nil {
+	slot, err := commandSlot(&env)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+	active := activePlaylistForSlot(&env, slot)
+	if active == nil {
 		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
-	pls := playlists.Next(*env.Playlist.Active)
+	pls := playlists.Next(*active)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -485,11 +536,16 @@ func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	if env.Playlist.Active == nil {
+	slot, err := commandSlot(&env)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+	active := activePlaylistForSlot(&env, slot)
+	if active == nil {
 		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
-	pls := playlists.Previous(*env.Playlist.Active)
+	pls := playlists.Previous(*active)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -502,7 +558,12 @@ func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	if env.Playlist.Active == nil {
+	slot, err := commandSlot(&env)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+	active := activePlaylistForSlot(&env, slot)
+	if active == nil {
 		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
@@ -517,12 +578,12 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 
 	newIndex := indexArg - 1
 
-	if env.Playlist.Active.Index == newIndex {
+	if active.Index == newIndex {
 		log.Warn().Msgf("playlist is already at index %d, not changing", indexArg)
 		return platforms.CmdResult{}, nil
 	}
 
-	pls := playlists.Goto(*env.Playlist.Active, newIndex)
+	pls := playlists.Goto(*active, newIndex)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -535,14 +596,25 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	if env.Playlist.Active == nil {
+	slot, err := commandSlot(&env)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+	active := activePlaylistForSlot(&env, slot)
+	if active == nil {
 		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
-	if err := queuePlaylistUpdate(&env, nil); err != nil {
+	if err := queuePlaylistUpdate(&env, &playlists.Playlist{Slot: slot}); err != nil {
 		return platforms.CmdResult{}, err
 	}
 
+	if slot == platforms.MediaSlotBackground {
+		return platforms.CmdResult{
+			PlaylistChanged: true,
+			Playlist:        nil,
+		}, nil
+	}
 	if err := pl.StopActiveLauncher(platforms.StopForMenu); err != nil {
 		return platforms.CmdResult{
 			PlaylistChanged: true,
@@ -557,15 +629,26 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	if env.Playlist.Active == nil {
+	slot, err := commandSlot(&env)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+	active := activePlaylistForSlot(&env, slot)
+	if active == nil {
 		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
-	pls := playlists.Pause(*env.Playlist.Active)
+	pls := playlists.Pause(*active)
 	if err := queuePlaylistUpdate(&env, pls); err != nil {
 		return platforms.CmdResult{}, err
 	}
 
+	if slot == platforms.MediaSlotBackground {
+		return platforms.CmdResult{
+			PlaylistChanged: true,
+			Playlist:        pls,
+		}, nil
+	}
 	if err := pl.StopActiveLauncher(platforms.StopForMenu); err != nil {
 		return platforms.CmdResult{
 			PlaylistChanged: true,

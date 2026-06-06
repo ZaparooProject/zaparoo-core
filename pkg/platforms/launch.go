@@ -123,12 +123,20 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		params.Options.Action = action
 	}
 
+	slot, slotErr := NormalizeMediaSlot(params.Options.Slot)
+	if slotErr != nil {
+		return slotErr
+	}
+	if slot == MediaSlotBackground && params.Launcher.ID != NativeAudioLauncherID {
+		return fmt.Errorf("background slot only supports %s launcher", NativeAudioLauncherID)
+	}
+
 	// Stop any currently running launcher before starting new one
 	// This ensures tracked processes (like videos) are stopped even when
 	// FireAndForget launches (like MGL files) start. UNLESS the new launcher
 	// uses a running instance (e.g., Kodi), in which case the platform's
 	// shouldKeepRunningInstance logic will handle stopping if needed.
-	if params.Launcher.UsesRunningInstance == "" {
+	if slot == MediaSlotPrimary && params.Launcher.UsesRunningInstance == "" {
 		if stopErr := params.Platform.StopActiveLauncher(StopForPreemption); stopErr != nil {
 			log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
 		}
@@ -181,6 +189,10 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		if err != nil {
 			return fmt.Errorf("failed to launch: %w", err)
 		}
+	}
+
+	if slot == MediaSlotBackground {
+		return nil
 	}
 
 	// "details" action just shows info page, doesn't launch a game
