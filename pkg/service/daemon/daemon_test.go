@@ -275,8 +275,19 @@ func TestStart_CacheMissLaunchesCachedCopy(t *testing.T) {
 	content, err := os.ReadFile(eventLog) //nolint:gosec // test-controlled file
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "started:")
+	pid, err := svc.Pid()
+	require.NoError(t, err)
+	replacement := fmt.Sprintf("#!/bin/sh\nprintf 'replaced\\n' >> %q\nprintf '%%s' \"$$\" > %q\n", eventLog, pidFile)
 	//nolint:gosec // test overwrites a test-controlled fake service script
-	require.NoError(t, os.WriteFile(sourcePath, []byte("#!/bin/sh\necho replaced\n"), 0o700))
+	require.NoError(t, os.WriteFile(sourcePath, []byte(replacement), 0o700))
+	require.NoError(t, svc.Start())
+
+	content, err = os.ReadFile(eventLog) //nolint:gosec // test-controlled file
+	require.NoError(t, err)
+	assert.NotContains(t, string(content), "replaced")
+	currentPID, err := svc.Pid()
+	require.NoError(t, err)
+	assert.Equal(t, pid, currentPID)
 }
 
 func TestPrepareBinary_UsesConfiguredFilesystem(t *testing.T) {
