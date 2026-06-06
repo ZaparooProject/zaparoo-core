@@ -88,25 +88,31 @@ func Start(
 	cfq := make(chan chan error)          // launch guard confirm queue
 	backgroundWG := &sync.WaitGroup{}
 
+	setupStarted := time.Now()
 	err := setupEnvironment(pl)
 	if err != nil {
 		log.Error().Err(err).Msg("error setting up environment")
 		return nil, err
 	}
+	log.Debug().Dur("duration", time.Since(setupStarted)).Msg("setup environment completed")
 
 	log.Info().Msg("running platform pre start")
+	preStartStarted := time.Now()
 	err = pl.StartPre(cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
 		return nil, fmt.Errorf("platform start pre failed: %w", err)
 	}
+	log.Debug().Dur("duration", time.Since(preStartStarted)).Msg("platform pre start completed")
 
 	log.Info().Msg("opening databases")
+	databaseStarted := time.Now()
 	db, err := makeDatabase(st.GetContext(), pl)
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening databases")
 		return nil, err
 	}
+	log.Debug().Dur("duration", time.Since(databaseStarted)).Msg("databases opened")
 	closeHangingMediaHistoryOnStartup(db)
 
 	// Initialize inbox service for system notifications
@@ -143,19 +149,25 @@ func Start(
 	})
 
 	log.Info().Msg("loading mapping files")
+	mappingsStarted := time.Now()
 	err = cfg.LoadMappings(filepath.Join(helpers.DataDir(pl), config.MappingsDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading mapping files")
 	}
+	log.Debug().Dur("duration", time.Since(mappingsStarted)).Msg("mapping files loaded")
 
 	log.Info().Msg("loading custom launchers")
+	launchersStarted := time.Now()
 	err = cfg.LoadCustomLaunchers(filepath.Join(helpers.DataDir(pl), config.LaunchersDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading custom launchers")
 	}
+	log.Debug().Dur("duration", time.Since(launchersStarted)).Msg("custom launchers loaded")
 
 	log.Info().Msg("initializing launcher cache")
+	launcherCacheStarted := time.Now()
 	helpers.GlobalLauncherCache.Initialize(pl, cfg)
+	log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")
 
 	// Create pausers to pause heavy background media work while a game is running.
 	indexPauser := syncutil.NewPauser()
@@ -178,6 +190,7 @@ func Start(
 		)
 	}()
 
+	apiReadyStarted := time.Now()
 	if apiErr := <-apiReady; apiErr != nil {
 		discoveryService.Stop()
 		if stopErr := pl.Stop(); stopErr != nil {
@@ -191,6 +204,7 @@ func Start(
 		closeDatabase(db)
 		return nil, fmt.Errorf("api startup failed: %w", apiErr)
 	}
+	log.Debug().Dur("duration", time.Since(apiReadyStarted)).Msg("API service reported ready")
 
 	log.Info().Msg("starting mDNS discovery service")
 	if discoveryErr := discoveryService.Start(); discoveryErr != nil {
@@ -203,15 +217,25 @@ func Start(
 	// the rebuild path below covers that case.
 	var tagCacheLoaded, slugCacheLoaded bool
 	if db.MediaDB != nil {
+		tagCacheStarted := time.Now()
 		loaded, loadErr := db.MediaDB.LoadCachedTagCache()
 		if loadErr != nil {
 			log.Warn().Err(loadErr).Msg("failed to load cached tag cache from disk")
 		}
+		log.Debug().
+			Bool("loaded", loaded).
+			Dur("duration", time.Since(tagCacheStarted)).
+			Msg("cached tag cache load completed")
 		tagCacheLoaded = loaded
+		slugCacheStarted := time.Now()
 		loaded, loadErr = db.MediaDB.LoadCachedSlugSearchCache()
 		if loadErr != nil {
 			log.Warn().Err(loadErr).Msg("failed to load cached slug search cache from disk")
 		}
+		log.Debug().
+			Bool("loaded", loaded).
+			Dur("duration", time.Since(slugCacheStarted)).
+			Msg("cached slug search cache load completed")
 		slugCacheLoaded = loaded
 	}
 
