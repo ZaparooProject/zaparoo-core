@@ -30,7 +30,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func HandleMediaHistoryLatest(env requests.RequestEnv) (any, error) { //nolint:gocritic
+func HandleMediaHistoryLatest(env requests.RequestEnv) (any, error) { //nolint:gocritic // API handler signature
 	trimmed := bytes.TrimSpace(env.Params)
 	if len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("{}")) {
 		return nil, models.ClientErr(validation.ErrInvalidParams)
