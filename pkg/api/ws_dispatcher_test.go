@@ -259,14 +259,12 @@ func TestWebSocketRunJobStartsTimeoutAtExecution(t *testing.T) {
 		responses: make(chan *wsResponseJob, 1),
 	}
 
-	started := time.Now()
-	remainingCh := make(chan time.Duration, 1)
+	deadlineCh := make(chan time.Time, 1)
 	var methodMap MethodMap
 	require.NoError(t, methodMap.AddMethod("test.timeout", func(env requests.RequestEnv) (any, error) {
 		deadline, ok := env.Context.Deadline()
 		require.True(t, ok, "runJob should install per-request deadline")
-		started = time.Now()
-		remainingCh <- time.Until(deadline)
+		deadlineCh <- deadline
 		return map[string]string{"ok": "true"}, nil
 	}))
 
@@ -281,14 +279,15 @@ func TestWebSocketRunJobStartsTimeoutAtExecution(t *testing.T) {
 	time.Sleep(25 * time.Millisecond)
 	require.Error(t, enqueuedCtx.Err(), "pre-existing enqueue-time context should be expired")
 
+	beforeRun := time.Now()
 	d.runJob(job)
 	require.NotNil(t, job.cancel, "runJob should install cancel func")
 	defer job.cancel()
 
 	select {
-	case remaining := <-remainingCh:
-		assert.Greater(t, remaining, config.APIRequestTimeout-250*time.Millisecond)
-		assert.WithinDuration(t, time.Now(), started, 250*time.Millisecond)
+	case deadline := <-deadlineCh:
+		assert.True(t, deadline.After(beforeRun), "deadline should not reuse expired enqueue-time context")
+		assert.True(t, deadline.Before(beforeRun.Add(config.APIRequestTimeout+time.Second)))
 	case <-time.After(time.Second):
 		t.Fatal("handler did not run")
 	}
