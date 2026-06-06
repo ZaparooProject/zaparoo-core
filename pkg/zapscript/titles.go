@@ -67,7 +67,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", parseErr)
 	}
 
-	args.Launcher = applySystemDefaultLauncher(&env, system.ID)
+	args.Launcher = applySystemDefaultLauncher(pl, &env, system.ID)
 	launch := getLaunchClosure(pl, &env)
 
 	// Collect all launchers for this system to enable file type prioritization
