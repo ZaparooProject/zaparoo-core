@@ -530,7 +530,7 @@ func TestRetroAchievementsSetNameMapping(t *testing.T) {
 		"RASMS":          "RA_SMS",
 		"RANeoGeo":       "RA_NeoGeo",
 		"RATurboGrafx16": "RA_TurboGrafx16",
-		"RAAtari7800":    "RA_Atari7800",
+		"RAAtari2600":    "RA_Atari7800",
 		"RAS32X":         "RA_S32X",
 	}
 
@@ -686,7 +686,7 @@ func TestRetroAchievementsLaunchersExist(t *testing.T) {
 		{"RASMS", "MasterSystem"},
 		{"RANeoGeo", "NeoGeo"},
 		{"RATurboGrafx16", "TurboGrafx16"},
-		{"RAAtari7800", "Atari7800"},
+		{"RAAtari2600", "Atari2600"},
 		{"RAS32X", "Sega32X"},
 	}
 
@@ -705,5 +705,97 @@ func TestRetroAchievementsLaunchersExist(t *testing.T) {
 			assert.Equal(t, tc.systemID, found.SystemID,
 				"%s must inherit slots from %s", tc.id, tc.systemID)
 		})
+	}
+}
+
+func TestRetroAchievementsAtari2600LauncherMetadata(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	var found *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "RAAtari2600" {
+			found = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "RAAtari2600 launcher should exist")
+	assert.Equal(t, "Atari2600", found.SystemID)
+	assert.ElementsMatch(t, []string{"ATARI7800", "Atari2600"}, found.Folders)
+	assert.Contains(t, found.Extensions, ".a26")
+	require.NotNil(t, found.Test)
+	assert.True(t, found.Test(nil, filepath.Join("roms", "Atari2600", "game.bin")))
+	assert.False(t, found.Test(nil, filepath.Join("roms", "ATARI7800", "game.bin")))
+}
+
+func TestConfigureAtari2600AltCore(t *testing.T) {
+	t.Parallel()
+
+	t.Run("defaults to RA Atari7800 setname", func(t *testing.T) {
+		t.Parallel()
+
+		core := cores.Core{ID: "Atari2600"}
+		err := configureAtari2600AltCore(&core, "RAAtari2600", "_RA_Cores/Cores/Atari7800", nil)
+
+		require.NoError(t, err)
+		assert.Equal(t, "RAAtari2600", core.LauncherID)
+		assert.Equal(t, "_RA_Cores/Cores/Atari7800", core.RBF)
+		assert.Equal(t, "RA_Atari7800", core.SetName)
+		assert.True(t, core.SetNameSameDir)
+		require.Len(t, core.Slots, 1)
+		assert.ElementsMatch(t, []string{".a26", ".bin"}, core.Slots[0].Exts)
+		require.NotNil(t, core.Slots[0].Mgl)
+		assert.Equal(t, 1, core.Slots[0].Mgl.Delay)
+		assert.Equal(t, "f", core.Slots[0].Mgl.Method)
+		assert.Equal(t, 1, core.Slots[0].Mgl.Index)
+	})
+
+	t.Run("launch options override setname", func(t *testing.T) {
+		t.Parallel()
+
+		core := cores.Core{ID: "Atari2600"}
+		err := configureAtari2600AltCore(&core, "RAAtari2600", "_RA_Cores/Cores/Atari7800", &platforms.LaunchOptions{
+			SetName:        "Custom_Atari",
+			SetNameSameDir: "no",
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, "Custom_Atari", core.SetName)
+		assert.False(t, core.SetNameSameDir)
+	})
+}
+
+func TestRetroAchievementsAtari2600RejectsInvalidSetName(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	var found *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "RAAtari2600" {
+			found = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "RAAtari2600 launcher should exist")
+
+	_, err := found.Launch(nil, filepath.Join("roms", "Atari2600", "game.a26"), &platforms.LaunchOptions{
+		SetName: "!invalid",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid set_name")
+}
+
+func TestRetroAchievementsAtari7800LauncherRemoved(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	for i := range launchers {
+		assert.NotEqual(t, "RAAtari7800", launchers[i].ID)
 	}
 }
