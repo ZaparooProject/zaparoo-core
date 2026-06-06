@@ -322,6 +322,19 @@ func (m *MockUserDBI) GetMediaHistory(
 	return history, nil
 }
 
+func (m *MockUserDBI) GetLatestMediaHistory() (database.MediaHistoryEntry, bool, error) {
+	args := m.Called()
+	entry, ok := args.Get(0).(database.MediaHistoryEntry)
+	if !ok {
+		entry = database.MediaHistoryEntry{}
+	}
+	found := args.Bool(1)
+	if err := args.Error(2); err != nil {
+		return entry, found, fmt.Errorf("mock UserDBI get latest media history failed: %w", err)
+	}
+	return entry, found, nil
+}
+
 func (m *MockUserDBI) GetMediaHistoryTop(
 	systemIDs []string, since *time.Time, limit int,
 ) ([]database.MediaHistoryTopEntry, error) {

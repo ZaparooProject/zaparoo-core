@@ -499,6 +499,7 @@ type UserDBI interface {
 	UpdateMediaHistoryTime(dbid int64, playTime int) error
 	CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error
 	GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]MediaHistoryEntry, error)
+	GetLatestMediaHistory() (MediaHistoryEntry, bool, error)
 	GetMediaHistoryTop(systemIDs []string, since *time.Time, limit int) ([]MediaHistoryTopEntry, error)
 	CloseHangingMediaHistory() error
 	CleanupMediaHistory(retentionDays int) (int64, error)

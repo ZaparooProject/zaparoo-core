@@ -210,6 +210,19 @@ type MediaHistoryResponse struct {
 	Entries    []MediaHistoryResponseEntry `json:"entries"`
 }
 
+type MediaHistoryLatestEntry struct {
+	SystemID   string `json:"systemId"`
+	SystemName string `json:"systemName"`
+	MediaName  string `json:"mediaName"`
+	MediaPath  string `json:"mediaPath"`
+	LauncherID string `json:"launcherId"`
+	StartedAt  string `json:"startedAt"`
+}
+
+type MediaHistoryLatestResponse struct {
+	Entry *MediaHistoryLatestEntry `json:"entry"`
+}
+
 type MediaHistoryTopEntry struct {
 	RelPath       *string `json:"relativePath,omitempty"`
 	SystemID      string  `json:"systemId"`
