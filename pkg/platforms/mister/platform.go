@@ -269,6 +269,7 @@ func (p *Platform) StartPost(
 	p.setActiveMedia = setActiveMedia
 
 	tr, stopTr, err := tracker.StartTracker(
+		ctx,
 		cfg,
 		p,
 		activeMedia,

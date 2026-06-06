@@ -56,6 +56,7 @@ const (
 // Platforms embed this struct and override methods as needed.
 type Base struct {
 	launcherManager platforms.LauncherContextManager
+	serviceCtx      context.Context
 	clock           clockwork.Clock
 	activeMedia     func() *models.ActiveMedia
 	setActiveMedia  func(*models.ActiveMedia)
@@ -89,7 +90,7 @@ func (*Base) StartPre(_ *config.Instance) error {
 
 // StartPost initializes the platform after service startup.
 func (b *Base) StartPost(
-	_ context.Context,
+	ctx context.Context,
 	_ *config.Instance,
 	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
@@ -98,6 +99,7 @@ func (b *Base) StartPost(
 	_ *idle.Scheduler,
 ) error {
 	b.launcherManager = launcherManager
+	b.serviceCtx = ctx
 	b.activeMedia = activeMedia
 	b.setActiveMedia = setActiveMedia
 	return nil
@@ -283,6 +285,7 @@ func (b *Base) LaunchMedia(
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
 	err = platforms.DoLaunch(&platforms.LaunchParams{
+		Context:        b.serviceCtx,
 		Config:         cfg,
 		Platform:       p,
 		SetActiveMedia: b.setActiveMedia,

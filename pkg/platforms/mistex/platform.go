@@ -111,7 +111,7 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 }
 
 func (p *Platform) StartPost(
-	_ context.Context,
+	ctx context.Context,
 	cfg *config.Instance,
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
@@ -123,6 +123,7 @@ func (p *Platform) StartPost(
 	p.setActiveMedia = setActiveMedia
 
 	tr, stopTr, err := tracker.StartTracker(
+		ctx,
 		cfg,
 		p,
 		activeMedia,

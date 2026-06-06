@@ -20,12 +20,14 @@
 package zapscript
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -651,7 +653,7 @@ func TestCmdLaunch_FileNotFound(t *testing.T) {
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	// Return empty results for the media search
-	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything).
+	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, mock.Anything).
 		Return([]database.SearchResult{}, nil)
 
 	env := platforms.CmdEnv{
@@ -669,6 +671,119 @@ func TestCmdLaunch_FileNotFound(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrFileNotFound, "should return ErrFileNotFound for missing file")
 	mockPlatform.AssertExpectations(t)
+}
+
+func TestMediaDBLookupContext_UsesTimeoutWithoutServiceContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := mediaDBLookupContext(platforms.CmdEnv{})
+	defer cancel()
+
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, time.Now().Add(mediaDBLookupTimeout), deadline, 200*time.Millisecond)
+}
+
+func TestMediaDBLookupContext_IgnoresCanceledLauncherContext(t *testing.T) {
+	t.Parallel()
+
+	launcherCtx, launcherCancel := context.WithCancel(context.Background())
+	launcherCancel()
+	serviceCtx, serviceCancel := context.WithCancel(context.Background())
+	defer serviceCancel()
+
+	ctx, cancel := mediaDBLookupContext(platforms.CmdEnv{
+		LauncherCtx: launcherCtx,
+		ServiceCtx:  serviceCtx,
+	})
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("MediaDB lookup context should not use canceled launcher context")
+	default:
+	}
+
+	serviceCancel()
+	select {
+	case <-ctx.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("MediaDB lookup context should follow service context")
+	}
+}
+
+func TestCmdLaunch_ExactFallbackMediaDBLookupUsesServiceContext(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{ID: "snes-launcher", SystemID: "snes", Folders: []string{}},
+	})
+	mockPlatform.On("RootDirs", cfg).Return([]string{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, "Sonic\\Game").
+		Run(func(args mock.Arguments) {
+			ctx := args.Get(0).(context.Context)
+			<-ctx.Done()
+		}).
+		Return([]database.SearchResult{}, context.DeadlineExceeded)
+
+	serviceCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch",
+			Args: []string{"snes/Sonic\\Game"},
+		},
+		Cfg:        cfg,
+		ServiceCtx: serviceCtx,
+		Database:   &database.Database{MediaDB: mockMediaDB},
+	}
+
+	started := time.Now()
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.Error(t, err)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
+	mockPlatform.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestCmdSearch_MediaDBLookupUsesServiceContext(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			ctx := args.Get(0).(context.Context)
+			<-ctx.Done()
+		}).
+		Return([]database.SearchResultWithCursor{}, context.DeadlineExceeded)
+
+	serviceCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.search",
+			Args: []string{"sonic"},
+		},
+		Cfg:        cfg,
+		ServiceCtx: serviceCtx,
+		Database:   &database.Database{MediaDB: mockMediaDB},
+	}
+
+	started := time.Now()
+	_, err := cmdSearch(mockPlatform, env)
+
+	require.Error(t, err)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
+	mockPlatform.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestCmdSearch_AppliesDefaultFromResultSystem(t *testing.T) {
@@ -720,6 +835,41 @@ launcher = "genesis-alt"
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestCmdRandom_MediaDBLookupUsesServiceContext(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			ctx := args.Get(0).(context.Context)
+			<-ctx.Done()
+		}).
+		Return(database.SearchResult{}, context.DeadlineExceeded)
+
+	serviceCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{"all"},
+		},
+		Cfg:        cfg,
+		ServiceCtx: serviceCtx,
+		Database:   &database.Database{MediaDB: mockMediaDB},
+	}
+
+	started := time.Now()
+	_, err := cmdRandom(mockPlatform, env)
+
+	require.Error(t, err)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
+	mockPlatform.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestCmdRandom_AppliesDefaultFromResultSystem(t *testing.T) {
 	t.Parallel()
 
@@ -736,7 +886,7 @@ launcher = "genesis-alt"
 
 	romPath := filepath.Join(launchTestAbsPath("games"), "GENESIS", "Sonic.bin")
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("RandomGameWithQuery", mock.Anything).
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
 		Return(database.SearchResult{SystemID: "genesis", Path: romPath}, nil)
 
 	mockPlatform.On("LaunchMedia", cfg, romPath,
@@ -786,6 +936,7 @@ launcher = "RA"
 	romPath := filepath.Join(queryPath, "Sonic.bin")
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("RandomGameWithQuery",
+		mock.Anything,
 		mock.MatchedBy(func(q *database.MediaQuery) bool {
 			return q.PathPrefix == filepath.ToSlash(queryPath)
 		}),
@@ -845,6 +996,7 @@ launcher = "RA"
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("RandomGameWithQuery",
+		mock.Anything,
 		mock.MatchedBy(func(q *database.MediaQuery) bool {
 			return q.PathPrefix == filepath.ToSlash(dir)
 		}),
@@ -887,6 +1039,7 @@ func TestCmdRandom_DoubleSlashPathCleaned(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	// Expect the cleaned path (single slash) in the PathPrefix
 	mockMediaDB.On("RandomGameWithQuery",
+		mock.Anything,
 		mock.MatchedBy(func(q *database.MediaQuery) bool {
 			return q.PathPrefix == "/media/fat/_#Insert-Coin/_#Essentials"
 		}),
@@ -938,6 +1091,7 @@ func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	// Database has no entries for this path
 	mockMediaDB.On("RandomGameWithQuery",
+		mock.Anything,
 		mock.MatchedBy(func(q *database.MediaQuery) bool {
 			return q.PathPrefix == dir
 		}),
@@ -982,7 +1136,7 @@ func TestCmdRandom_AbsolutePathFallback_NonExistentPath(t *testing.T) {
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("RandomGameWithQuery", mock.Anything).
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
 		Return(database.SearchResult{}, sql.ErrNoRows)
 
 	env := platforms.CmdEnv{
@@ -1012,7 +1166,7 @@ func TestCmdRandom_AbsolutePathFallback_OnlySubdirectories(t *testing.T) {
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("RandomGameWithQuery", mock.Anything).
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
 		Return(database.SearchResult{}, sql.ErrNoRows)
 
 	env := platforms.CmdEnv{
@@ -1041,7 +1195,7 @@ func TestCmdRandom_AbsolutePathDBError_NoFallback(t *testing.T) {
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockMediaDB.On("RandomGameWithQuery", mock.Anything).
+	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
 		Return(database.SearchResult{}, errors.New("connection lost"))
 
 	env := platforms.CmdEnv{

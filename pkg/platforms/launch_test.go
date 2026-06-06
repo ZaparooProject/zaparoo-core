@@ -28,6 +28,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -475,6 +476,52 @@ func TestDoLaunch_NoSystemIDSkipsActiveMedia(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Nil(t, activeMedia, "ActiveMedia should NOT be set when no SystemID")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_ActiveMediaLookupUsesProvidedContext(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("SearchMediaPathExact",
+		mock.MatchedBy(func(ctx context.Context) bool {
+			return ctx.Err() != nil
+		}),
+		mock.Anything,
+		"/test/path.rom",
+	).Return([]database.SearchResult{}, context.Canceled).Once()
+
+	launcher := &platforms.Launcher{
+		ID:        "test-launcher",
+		SystemID:  "test-system",
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, nil
+		},
+	}
+
+	var activeMedia *models.ActiveMedia
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	params := &platforms.LaunchParams{
+		Context:        ctx,
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(media *models.ActiveMedia) { activeMedia = media },
+		Launcher:       launcher,
+		DB:             &database.Database{MediaDB: mockMediaDB},
+		Path:           "/test/path.rom",
+	}
+
+	err := platforms.DoLaunch(params, func(_ string) string { return "path" })
+
+	require.NoError(t, err)
+	require.NotNil(t, activeMedia)
+	assert.Equal(t, "path", activeMedia.Name)
+	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
 }
 

@@ -20,6 +20,7 @@
 package examples
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -413,7 +414,7 @@ func TestStateIntegrationWithServices(t *testing.T) {
 
 		// Setup database expectations
 		userDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
-		mediaDB.On("SearchMediaPathExact", fixtures.GetTestSystemDefs(),
+		mediaDB.On("SearchMediaPathExact", mock.Anything, fixtures.GetTestSystemDefs(),
 			helpers.TextMatcher()).Return(fixtures.SearchResults.Collection, nil)
 		platform.On("LaunchMedia",
 			mock.AnythingOfType("*config.Instance"),
@@ -442,7 +443,7 @@ func TestStateIntegrationWithServices(t *testing.T) {
 		assert.Equal(t, token.UID, lastToken.UID)
 
 		// 4. Simulate successful media launch
-		searchResults, err := mediaDB.SearchMediaPathExact(fixtures.GetTestSystemDefs(), token.Text)
+		searchResults, err := mediaDB.SearchMediaPathExact(context.Background(), fixtures.GetTestSystemDefs(), token.Text)
 		require.NoError(t, err)
 		require.NotEmpty(t, searchResults)
 

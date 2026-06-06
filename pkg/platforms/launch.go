@@ -20,10 +20,12 @@
 package platforms
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -34,8 +36,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const activeMediaLookupTimeout = 2 * time.Second
+
 // LaunchParams contains all dependencies required for launching media.
 type LaunchParams struct {
+	// Context scopes best-effort post-launch metadata lookups.
+	Context        context.Context
 	Platform       Platform
 	Config         *config.Instance
 	SetActiveMedia func(*models.ActiveMedia)
@@ -93,6 +99,13 @@ func nativeLaunchPath(path string) string {
 		return path
 	}
 	return filepath.FromSlash(path)
+}
+
+func activeMediaLookupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, activeMediaLookupTimeout)
 }
 
 // DoLaunch launches the given path and updates the active media with it if
@@ -181,7 +194,9 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 	displayName := tags.ParseTitleFromFilename(getDisplayName(params.Path), false)
 
 	if params.DB != nil && params.DB.MediaDB != nil {
-		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(nil, params.Path)
+		ctx, cancel := activeMediaLookupContext(params.Context)
+		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(ctx, nil, params.Path)
+		cancel()
 		if searchErr == nil && len(results) > 0 {
 			if systemID == "" && results[0].SystemID != "" {
 				systemID = results[0].SystemID

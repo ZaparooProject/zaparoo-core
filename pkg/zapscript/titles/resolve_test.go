@@ -23,7 +23,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -66,6 +68,79 @@ func setupCacheWrite(m *helpers.MockMediaDBI) {
 	m.On("SetCachedSlugResolution",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Return(nil)
+}
+
+func TestResolveTitle_StopsWhenContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+
+	mockMediaDB.On("GetCachedSlugResolution",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return(int64(0), "", false)
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Run(func(args mock.Arguments) {
+		ctx := args.Get(0).(context.Context)
+		<-ctx.Done()
+	}).Return([]database.SearchResultWithCursor{}, context.DeadlineExceeded)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+
+	result, err := ResolveTitle(ctx, &ResolveParams{
+		SystemID:  "NES",
+		GameName:  "Slow Game",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
+}
+
+func TestResolveTitle_CacheWriteTimeoutDoesNotFailLaunch(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	cfg, err := helpers.NewTestConfig(nil, t.TempDir())
+	require.NoError(t, err)
+
+	setupCacheMiss(mockMediaDB)
+	fastPath := filepath.Join("roms", "nes", "fast.nes")
+	mockMediaDB.On("SearchMediaBySlug",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return([]database.SearchResultWithCursor{{
+		SystemID: "nes",
+		Name:     "Fast Game",
+		Path:     fastPath,
+		MediaID:  1,
+	}}, nil)
+	mockMediaDB.On("SetCachedSlugResolution",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Run(func(args mock.Arguments) {
+		ctx := args.Get(0).(context.Context)
+		<-ctx.Done()
+	}).Return(context.DeadlineExceeded)
+
+	started := time.Now()
+	result, err := ResolveTitle(context.Background(), &ResolveParams{
+		SystemID:  "NES",
+		GameName:  "Fast Game",
+		MediaDB:   mockMediaDB,
+		Cfg:       cfg,
+		MediaType: slugs.MediaTypeGame,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, fastPath, result.Result.Path)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
 func TestResolveTitle_ErrNoMatch(t *testing.T) {

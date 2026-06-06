@@ -644,9 +644,9 @@ func (m *MockMediaDBI) GetLastGenerated() (time.Time, error) {
 
 // Search methods
 func (m *MockMediaDBI) SearchMediaPathExact(
-	systems []systemdefs.System, query string,
+	ctx context.Context, systems []systemdefs.System, query string,
 ) ([]database.SearchResult, error) {
-	args := m.Called(systems, query)
+	args := m.Called(ctx, systems, query)
 	if results, ok := args.Get(0).([]database.SearchResult); ok {
 		if err := args.Error(1); err != nil {
 			return results, fmt.Errorf("mock operation failed: %w", err)
@@ -861,8 +861,8 @@ func (m *MockMediaDBI) SystemIndexed(system *systemdefs.System) bool {
 	return args.Bool(0)
 }
 
-func (m *MockMediaDBI) RandomGame(systems []systemdefs.System) (database.SearchResult, error) {
-	args := m.Called(systems)
+func (m *MockMediaDBI) RandomGame(ctx context.Context, systems []systemdefs.System) (database.SearchResult, error) {
+	args := m.Called(ctx, systems)
 	if result, ok := args.Get(0).(database.SearchResult); ok {
 		if err := args.Error(1); err != nil {
 			return result, fmt.Errorf("mock operation failed: %w", err)
@@ -1915,8 +1915,8 @@ func (m *MockMediaDBI) GetZapScriptTagsBySystemAndPath(
 	return nil, nil
 }
 
-func (m *MockMediaDBI) RandomGameWithQuery(query *database.MediaQuery) (database.SearchResult, error) {
-	args := m.Called(query)
+func (m *MockMediaDBI) RandomGameWithQuery(ctx context.Context, query *database.MediaQuery) (database.SearchResult, error) {
+	args := m.Called(ctx, query)
 	if result, ok := args.Get(0).(database.SearchResult); ok {
 		if err := args.Error(1); err != nil {
 			return result, fmt.Errorf("mock operation failed: %w", err)

@@ -80,6 +80,8 @@ const defaultSlugSearchLimit = 50
 // logs during full-library indexing while preserving selective reindexing wins.
 const maxSelectiveInvalidationSystems = 32
 
+const mediaStatsCacheWriteTimeout = 100 * time.Millisecond
+
 // getSqliteConnParams constructs the SQLite connection string.
 func getSqliteConnParams() string {
 	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
@@ -139,8 +141,9 @@ func (db *MediaDB) conn() sqlQueryable {
 
 // invalidationScope describes what data was changed to determine cache invalidation scope
 type invalidationScope struct {
-	SystemIDs  []string
-	AllSystems bool
+	SystemIDs               []string
+	AllSystems              bool
+	PreserveSlugSearchCache bool
 }
 
 // invalidateCaches handles all cache invalidation in one place
@@ -148,7 +151,9 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	db.inMemoryTagCache.Store(nil)
 	switch {
 	case scope.AllSystems:
-		db.slugSearchCache.Store(nil)
+		if !scope.PreserveSlugSearchCache {
+			db.slugSearchCache.Store(nil)
+		}
 	case len(scope.SystemIDs) > 0:
 		if cache := db.slugSearchCache.Load(); cache != nil {
 			db.slugSearchCache.Store(cache.withoutSystems(scope.SystemIDs))
@@ -198,6 +203,12 @@ func invalidationScopeForSystemIDs(systemIDs []string) invalidationScope {
 		return invalidationScope{AllSystems: true}
 	}
 	return invalidationScope{SystemIDs: systemIDs}
+}
+
+func (db *MediaDB) DropSlugSearchCacheForSystems(systemIDs []string) {
+	if cache := db.slugSearchCache.Load(); cache != nil {
+		db.slugSearchCache.Store(cache.withoutSystems(systemIDs))
+	}
 }
 
 func (db *MediaDB) markBrowseCacheDirty() {
@@ -480,13 +491,18 @@ func (db *MediaDB) UpdateLastGenerated() error {
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
 	if err == nil && !db.inTransaction {
 		systemIDs, getSystemsErr := db.GetIndexingSystems()
+		indexingStatus, statusErr := db.GetIndexingStatus()
+		isIndexing := statusErr == nil &&
+			(indexingStatus == IndexingStatusRunning || indexingStatus == IndexingStatusPending)
 		switch {
 		case getSystemsErr != nil:
 			log.Warn().Err(getSystemsErr).
 				Msg("failed to load indexing systems for cache invalidation; clearing all caches")
 			db.invalidateCaches(invalidationScope{AllSystems: true})
 		default:
-			db.invalidateCaches(invalidationScopeForSystemIDs(systemIDs))
+			scope := invalidationScopeForSystemIDs(systemIDs)
+			scope.PreserveSlugSearchCache = isIndexing && !scope.AllSystems
+			db.invalidateCaches(scope)
 		}
 	}
 
@@ -1193,9 +1209,21 @@ func (db *MediaDB) CommitTransaction() error {
 	db.tx = nil
 	db.inTransaction = false
 
-	// During selective indexing, preserve unaffected in-memory slug cache coverage
-	// so post-index searches for untouched systems stay warm.
-	db.invalidateCaches(db.cacheInvalidationScopeForCommittedTransaction())
+	// During indexing, keep last-good slug search coverage available for
+	// foreground launches/searches, but still invalidate durable/count caches so
+	// random queries never trust stale MediaCountCache ranges after a commit.
+	indexingStatus, statusErr := sqlGetIndexingStatus(db.ctx, db.sql)
+	if statusErr != nil {
+		log.Warn().Err(statusErr).Msg("failed to determine indexing status for cache invalidation")
+		db.invalidateCaches(invalidationScope{AllSystems: true})
+	} else if indexingStatus == IndexingStatusRunning || indexingStatus == IndexingStatusPending {
+		scope := db.cacheInvalidationScopeForCommittedTransaction()
+		scope.PreserveSlugSearchCache = true
+		db.invalidateCaches(scope)
+		log.Debug().Str("status", indexingStatus).Msg("invalidated committed caches during indexing batch commit")
+	} else {
+		db.invalidateCaches(db.cacheInvalidationScopeForCommittedTransaction())
+	}
 	if err := db.flushBrowseCacheInvalidation(); err != nil {
 		return err
 	}
@@ -1267,7 +1295,7 @@ func (db *MediaDB) BrowseDirectories(
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlBrowseDirectories(ctx, db.conn(), opts)
+	return sqlBrowseDirectories(ctx, db.sql, opts)
 }
 
 // BrowseFiles returns indexed media files that are immediate children of the given path prefix.
@@ -1277,7 +1305,7 @@ func (db *MediaDB) BrowseFiles(
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlBrowseFiles(ctx, db.conn(), opts)
+	return sqlBrowseFiles(ctx, db.sql, opts)
 }
 
 // BrowseFileCount returns the total number of immediate child files under a path prefix.
@@ -1287,7 +1315,7 @@ func (db *MediaDB) BrowseFileCount(
 	if db.sql == nil {
 		return 0, ErrNullSQL
 	}
-	return sqlBrowseFileCount(ctx, db.conn(), opts)
+	return sqlBrowseFileCount(ctx, db.sql, opts)
 }
 
 // BrowseVirtualSchemes returns distinct URI schemes present in indexed media.
@@ -1297,7 +1325,7 @@ func (db *MediaDB) BrowseVirtualSchemes(
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlBrowseVirtualSchemes(ctx, db.conn(), opts)
+	return sqlBrowseVirtualSchemes(ctx, db.sql, opts)
 }
 
 // BrowseRootCounts returns a map of root directory to count of indexed media
@@ -1309,7 +1337,7 @@ func (db *MediaDB) BrowseRootCounts(
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlBrowseRootCounts(ctx, db.conn(), rootDirs)
+	return sqlBrowseRootCounts(ctx, db.sql, rootDirs)
 }
 
 // BrowseRouteCounts returns populated route counts for system-scoped browse roots.
@@ -1319,7 +1347,7 @@ func (db *MediaDB) BrowseRouteCounts(
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	return sqlBrowseRouteCounts(ctx, db.conn(), opts)
+	return sqlBrowseRouteCounts(ctx, db.sql, opts)
 }
 
 // BrowseSystemRootCandidates returns, in two batched queries, the immediate
@@ -1332,7 +1360,7 @@ func (db *MediaDB) BrowseSystemRootCandidates(
 	if db.sql == nil {
 		return database.BrowseSystemRootCandidates{}, false, ErrNullSQL
 	}
-	return sqlBrowseSystemRootCandidates(ctx, db.conn(), opts)
+	return sqlBrowseSystemRootCandidates(ctx, db.sql, opts)
 }
 
 // PopulateBrowseCache rebuilds the BrowseCache table from the current Media data.
@@ -1344,11 +1372,13 @@ func (db *MediaDB) PopulateBrowseCache(ctx context.Context) error {
 }
 
 // SearchMediaPathExact returns indexed names matching an exact query (case-insensitive).
-func (db *MediaDB) SearchMediaPathExact(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
+func (db *MediaDB) SearchMediaPathExact(
+	ctx context.Context, systems []systemdefs.System, query string,
+) ([]database.SearchResult, error) {
 	if db.sql == nil {
 		return make([]database.SearchResult, 0), ErrNullSQL
 	}
-	return sqlSearchMediaPathExact(db.ctx, db.conn(), systems, query)
+	return sqlSearchMediaPathExact(ctx, db.sql, systems, query)
 }
 
 func (db *MediaDB) SearchMediaWithFilters(
@@ -1432,7 +1462,7 @@ func (db *MediaDB) SearchMediaWithFilters(
 		}
 
 		return sqlSearchMediaByTitleDBIDs(
-			ctx, db.conn(), candidateIDs, filters.Tags,
+			ctx, db.sql, candidateIDs, filters.Tags,
 			filters.Letter, filters.Cursor, filters.Limit)
 	}
 
@@ -1445,7 +1475,7 @@ func (db *MediaDB) SearchMediaWithFilters(
 		Bool("includeName", includeName).
 		Msg("media search falling back to SQL LIKE path")
 	results, err := sqlSearchMediaWithFilters(
-		ctx, db.conn(), filters.Systems, variantGroups, qWords, filters.Tags,
+		ctx, db.sql, filters.Systems, variantGroups, qWords, filters.Tags,
 		filters.Letter, filters.Cursor, filters.Limit, includeName)
 
 	return results, err
@@ -1488,7 +1518,7 @@ func (db *MediaDB) slugCacheSearch(
 	// Skip SQL-level tag filters for cache path — the Go-side selection
 	// logic handles missing/conflicting tags gracefully, and the INTERSECT
 	// subqueries are the most expensive part of the query on slow storage.
-	results, err := sqlSearchMediaByTitleDBIDs(ctx, db.conn(), candidates, nil, nil, nil, defaultSlugSearchLimit)
+	results, err := sqlSearchMediaByTitleDBIDs(ctx, db.sql, candidates, nil, nil, nil, defaultSlugSearchLimit)
 	log.Debug().
 		Str("system", systemID).
 		Int("candidates", len(candidates)).
@@ -1509,7 +1539,7 @@ func (db *MediaDB) SearchMediaBySlug(
 	// SQL fallback (cache not ready) still applies tag filters in the query
 	// for performance. The cache path skips SQL tag filters — Go-side
 	// selection handles tag matching in both cases.
-	return sqlSearchMediaBySlug(ctx, db.conn(), systemID, slug, tags)
+	return sqlSearchMediaBySlug(ctx, db.sql, systemID, slug, tags)
 }
 
 func (db *MediaDB) SearchMediaBySecondarySlug(
@@ -1522,7 +1552,7 @@ func (db *MediaDB) SearchMediaBySecondarySlug(
 		(*SlugSearchCache).ExactSecondarySlugMatch); ok || err != nil {
 		return results, err
 	}
-	return sqlSearchMediaBySecondarySlug(ctx, db.conn(), systemID, secondarySlug, tags)
+	return sqlSearchMediaBySecondarySlug(ctx, db.sql, systemID, secondarySlug, tags)
 }
 
 func (db *MediaDB) SearchMediaBySlugPrefix(
@@ -1535,7 +1565,7 @@ func (db *MediaDB) SearchMediaBySlugPrefix(
 		(*SlugSearchCache).PrefixSlugMatch); ok || err != nil {
 		return results, err
 	}
-	return sqlSearchMediaBySlugPrefix(ctx, db.conn(), systemID, slugPrefix, tags)
+	return sqlSearchMediaBySlugPrefix(ctx, db.sql, systemID, slugPrefix, tags)
 }
 
 // SearchMediaBySlugIn searches for media items matching any of the provided slugs using an IN clause.
@@ -1571,10 +1601,10 @@ func (db *MediaDB) SearchMediaBySlugIn(
 		if len(candidates) == 0 {
 			return []database.SearchResultWithCursor{}, nil
 		}
-		return sqlSearchMediaByTitleDBIDs(ctx, db.conn(), candidates, tags, nil, nil, defaultSlugSearchLimit)
+		return sqlSearchMediaByTitleDBIDs(ctx, db.sql, candidates, tags, nil, nil, defaultSlugSearchLimit)
 	}
 
-	return sqlSearchMediaBySlugIn(ctx, db.conn(), systemID, slugList, tags)
+	return sqlSearchMediaBySlugIn(ctx, db.sql, systemID, slugList, tags)
 }
 
 // GetTitlesWithPreFilter retrieves media titles filtered by slug length and word count ranges.
@@ -1587,8 +1617,9 @@ func (db *MediaDB) GetTitlesWithPreFilter(
 		return make([]database.MediaTitle, 0), ErrNullSQL
 	}
 
-	// Look up system DBID
-	system, err := db.FindSystemBySystemID(systemID)
+	// Look up system DBID from committed state. This path is used by foreground
+	// title resolution and must not read the active indexing transaction.
+	system, err := sqlFindSystemBySystemID(ctx, db.sql, systemID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find system '%s': %w", systemID, err)
 	}
@@ -1746,7 +1777,7 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 
 	if len(variantGroups) == 0 {
 		// return random instead
-		rnd, err := db.RandomGame(systems)
+		rnd, err := db.RandomGame(db.ctx, systems)
 		if err != nil {
 			return nullResults, err
 		}
@@ -1755,7 +1786,7 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 
 	// TODO: since we approximated a glob, we should actually check
 	//       result paths against base glob to confirm
-	return sqlSearchMediaPathParts(db.ctx, db.conn(), systems, variantGroups)
+	return sqlSearchMediaPathParts(db.ctx, db.sql, systems, variantGroups)
 }
 
 // SystemIndexed returns true if a specific system is indexed in the media database.
@@ -1776,7 +1807,7 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 }
 
 // RandomGame returns a random game from specified systems.
-func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResult, error) {
+func (db *MediaDB) RandomGame(ctx context.Context, systems []systemdefs.System) (database.SearchResult, error) {
 	var result database.SearchResult
 	if db.sql == nil {
 		return result, ErrNullSQL
@@ -1803,7 +1834,7 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 			if !ok {
 				return result, sql.ErrNoRows
 			}
-			return sqlGetRandomMediaForTitle(db.ctx, db.conn(), titleDBID)
+			return sqlGetRandomMediaForTitle(ctx, db.sql, titleDBID)
 		}
 	}
 
@@ -1812,7 +1843,7 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 	for i, sys := range systems {
 		systemIDs[i] = sys.ID
 	}
-	indexedIDs, err := sqlFilterIndexedSystems(db.ctx, db.conn(), systemIDs)
+	indexedIDs, err := sqlFilterIndexedSystems(ctx, db.sql, systemIDs)
 	if err != nil {
 		return result, fmt.Errorf("failed to filter indexed systems: %w", err)
 	}
@@ -1829,11 +1860,11 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 		return result, fmt.Errorf("failed to get system definition: %w", sysErr)
 	}
 
-	return sqlRandomGame(db.ctx, db.conn(), sys)
+	return sqlRandomGame(ctx, db.sql, sys)
 }
 
 // RandomGameWithQuery returns a random game matching the specified MediaQuery.
-func (db *MediaDB) RandomGameWithQuery(query *database.MediaQuery) (database.SearchResult, error) {
+func (db *MediaDB) RandomGameWithQuery(ctx context.Context, query *database.MediaQuery) (database.SearchResult, error) {
 	var result database.SearchResult
 	if db.sql == nil {
 		return result, ErrNullSQL
@@ -1858,13 +1889,13 @@ func (db *MediaDB) RandomGameWithQuery(query *database.MediaQuery) (database.Sea
 			if !ok {
 				return result, sql.ErrNoRows
 			}
-			return sqlGetRandomMediaForTitle(db.ctx, db.conn(), titleDBID)
+			return sqlGetRandomMediaForTitle(ctx, db.sql, titleDBID)
 		}
 	}
 
 	// For SQL fallback, filter to indexed systems and pick one for equal weight
 	if len(query.Systems) > 1 {
-		indexedSystems, filterErr := sqlFilterIndexedSystems(db.ctx, db.conn(), query.Systems)
+		indexedSystems, filterErr := sqlFilterIndexedSystems(ctx, db.sql, query.Systems)
 		if filterErr != nil {
 			return result, fmt.Errorf("failed to filter indexed systems: %w", filterErr)
 		}
@@ -1881,25 +1912,31 @@ func (db *MediaDB) RandomGameWithQuery(query *database.MediaQuery) (database.Sea
 	}
 
 	// Check MediaCountCache for complex queries or when slug cache unavailable
-	if stats, found := db.GetCachedStats(db.ctx, query); found {
+	if stats, found := db.GetCachedStats(ctx, query); found {
 		if stats.Count == 0 {
 			return result, sql.ErrNoRows
 		}
-		return db.randomGameWithStats(query, stats)
+		return db.randomGameWithStats(ctx, query, stats)
 	}
 
 	// Cache miss - use the full SQL implementation and cache the stats
-	result, stats, err := sqlRandomGameWithQueryAndStats(db.ctx, db.conn(), query)
+	result, stats, err := sqlRandomGameWithQueryAndStats(ctx, db.sql, query)
 	if err != nil {
 		return result, err
 	}
 
 	// Cache the stats for future use (best effort - don't fail if caching fails)
-	if cacheErr := db.SetCachedStats(db.ctx, query, stats); cacheErr != nil {
-		log.Warn().Err(cacheErr).Msg("failed to cache media query stats")
-	}
+	db.cacheMediaStats(ctx, query, stats)
 
 	return result, nil
+}
+
+func (db *MediaDB) cacheMediaStats(ctx context.Context, query *database.MediaQuery, stats MediaStats) {
+	cacheCtx, cancel := context.WithTimeout(ctx, mediaStatsCacheWriteTimeout)
+	defer cancel()
+	if cacheErr := db.SetCachedStats(cacheCtx, query, stats); cacheErr != nil {
+		log.Warn().Err(cacheErr).Msg("failed to cache media query stats")
+	}
 }
 
 // GetTotalMediaCount returns the total number of media entries in the database.
@@ -1931,7 +1968,7 @@ func (db *MediaDB) GetCachedStats(ctx context.Context, query *database.MediaQuer
 	}
 
 	var stats MediaStats
-	err = db.conn().QueryRowContext(ctx,
+	err = db.sql.QueryRowContext(ctx,
 		"SELECT Count, MinDBID, MaxDBID FROM MediaCountCache WHERE QueryHash = ?",
 		queryHash).Scan(&stats.Count, &stats.MinDBID, &stats.MaxDBID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1946,7 +1983,9 @@ func (db *MediaDB) GetCachedStats(ctx context.Context, query *database.MediaQuer
 }
 
 // randomGameWithStats generates a random game selection using cached statistics.
-func (db *MediaDB) randomGameWithStats(query *database.MediaQuery, stats MediaStats) (database.SearchResult, error) {
+func (db *MediaDB) randomGameWithStats(
+	ctx context.Context, query *database.MediaQuery, stats MediaStats,
+) (database.SearchResult, error) {
 	var row database.SearchResult
 
 	// Generate random DBID within the range
@@ -1972,7 +2011,7 @@ func (db *MediaDB) randomGameWithStats(query *database.MediaQuery, stats MediaSt
 	`, whereClause)
 
 	args = append(args, targetDBID)
-	err = db.conn().QueryRowContext(db.ctx, selectQuery, args...).Scan(
+	err = db.sql.QueryRowContext(ctx, selectQuery, args...).Scan(
 		&row.SystemID,
 		&row.Path,
 	)
@@ -1988,7 +2027,7 @@ func (db *MediaDB) randomGameWithStats(query *database.MediaQuery, stats MediaSt
 			LIMIT 1
 		`, whereClause)
 		args[len(args)-1] = targetDBID // Replace the last argument
-		err = db.conn().QueryRowContext(db.ctx, selectQuery, args...).Scan(
+		err = db.sql.QueryRowContext(ctx, selectQuery, args...).Scan(
 			&row.SystemID,
 			&row.Path,
 		)
@@ -2005,6 +2044,9 @@ func (db *MediaDB) SetCachedStats(ctx context.Context, query *database.MediaQuer
 	if db.sql == nil {
 		return ErrNullSQL
 	}
+	if db.inTransaction {
+		return nil
+	}
 
 	queryHash, err := db.generateQueryHash(query)
 	if err != nil {
@@ -2016,7 +2058,7 @@ func (db *MediaDB) SetCachedStats(ctx context.Context, query *database.MediaQuer
 		return fmt.Errorf("failed to marshal query params: %w", err)
 	}
 
-	_, err = db.conn().ExecContext(ctx, `
+	_, err = db.sql.ExecContext(ctx, `
 		INSERT OR REPLACE INTO MediaCountCache (QueryHash, QueryParams, Count, MinDBID, MaxDBID, LastUpdated)
 		VALUES (?, ?, ?, ?, ?, ?)
 	`, queryHash, string(queryParams), stats.Count, stats.MinDBID, stats.MaxDBID, time.Now().Unix())

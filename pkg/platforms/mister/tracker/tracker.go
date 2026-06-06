@@ -30,7 +30,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const ArcadeSystem = "Arcade"
+const (
+	ArcadeSystem       = "Arcade"
+	mediaLookupTimeout = 2 * time.Second
+)
 
 // platformWithArcadeCache is an optional interface for platforms that support arcade card launch caching.
 type platformWithArcadeCache interface {
@@ -49,6 +52,7 @@ type Tracker struct {
 	pl               platforms.Platform
 	setActiveMedia   func(*models.ActiveMedia)
 	cfg              *config.Instance
+	serviceCtx       context.Context
 	activeMedia      func() *models.ActiveMedia
 	db               *database.Database
 	ActiveSystemName string
@@ -101,6 +105,7 @@ func generateNameMap(pl platforms.Platform) []NameMapping {
 }
 
 func NewTracker(
+	ctx context.Context,
 	pl platforms.Platform,
 	cfg *config.Instance,
 	activeMedia func() *models.ActiveMedia,
@@ -116,6 +121,7 @@ func NewTracker(
 	return &Tracker{
 		pl:               pl,
 		cfg:              cfg,
+		serviceCtx:       ctx,
 		db:               db,
 		ActiveCore:       "",
 		ActiveSystem:     "",
@@ -127,6 +133,14 @@ func NewTracker(
 		activeMedia:      activeMedia,
 		setActiveMedia:   setActiveMedia,
 	}, nil
+}
+
+func (tr *Tracker) mediaLookupContext() (context.Context, context.CancelFunc) {
+	parent := tr.serviceCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, mediaLookupTimeout)
 }
 
 func (tr *Tracker) ReloadNameMap() {
@@ -336,7 +350,9 @@ func (tr *Tracker) loadGame() {
 	name := tags.ParseTitleFromFilename(pathInfo.Name, false)
 	if tr.db != nil && tr.db.MediaDB != nil {
 		systems := []systemdefs.System{{ID: system.ID}}
-		results, searchErr := tr.db.MediaDB.SearchMediaPathExact(systems, path)
+		ctx, cancel := tr.mediaLookupContext()
+		results, searchErr := tr.db.MediaDB.SearchMediaPathExact(ctx, systems, path)
+		cancel()
 		if searchErr == nil && len(results) > 0 && results[0].Name != "" {
 			name = results[0].Name
 			log.Debug().Str("path", path).Msg("tracker using indexed display name")
@@ -578,13 +594,14 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 }
 
 func StartTracker(
+	ctx context.Context,
 	cfg *config.Instance,
 	pl platforms.Platform,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	db *database.Database,
 ) (*Tracker, func() error, error) {
-	tr, err := NewTracker(pl, cfg, activeMedia, setActiveMedia, db)
+	tr, err := NewTracker(ctx, pl, cfg, activeMedia, setActiveMedia, db)
 	if err != nil {
 		log.Error().Msgf("error creating tracker: %s", err)
 		return nil, nil, err
