@@ -289,31 +289,19 @@ func (s *Service) prepareBinary(binPath string) (string, error) {
 	if manifestErr != nil && !errors.Is(manifestErr, os.ErrNotExist) {
 		log.Debug().Err(manifestErr).Msg("error reading service binary manifest")
 	}
-	if manifest != nil && manifest.matchesSourceMetadata(binPath, sourceInfo, sourceChangeTimeNS) {
-		servicePath := serviceCachePath(dataDir, binPath, manifest.SourceHash)
-		if filepath.Clean(manifest.ServicePath) == filepath.Clean(servicePath) &&
-			serviceCachePathValid(manifest.ServicePath, dataDir) {
-			cachedInfo, statErr := fs.Stat(manifest.ServicePath)
-			switch {
-			case statErr == nil && manifest.matchesServiceMetadata(cachedInfo):
-				if chmodErr := ensureServiceBinaryExecutable(fs, manifest.ServicePath); chmodErr != nil {
-					return "", chmodErr
-				}
-				log.Debug().
-					Str("path", manifest.ServicePath).
-					Dur("duration", time.Since(started)).
-					Msg("using cached service binary from manifest")
-				s.cleanupServiceBinaries(manifest.ServicePath, "")
-				return manifest.ServicePath, nil
-			case statErr != nil && !errors.Is(statErr, os.ErrNotExist):
-				log.Debug().Err(statErr).Str("path", manifest.ServicePath).Msg("error checking cached service binary")
-			case statErr == nil:
-				log.Debug().
-					Str("path", manifest.ServicePath).
-					Int64("cachedSize", cachedInfo.Size()).
-					Int64("cachedModTimeNs", cachedInfo.ModTime().UnixNano()).
-					Msg("cached service binary metadata mismatch")
-			}
+	if manifest != nil {
+		if servicePath, ok, cacheErr := s.cachedServiceBinaryFromManifest(
+			binPath,
+			sourceInfo,
+			sourceChangeTimeNS,
+			manifest,
+			started,
+			true,
+		); cacheErr != nil {
+			return "", cacheErr
+		} else if ok {
+			s.cleanupServiceBinaries(servicePath, "")
+			return servicePath, nil
 		}
 	}
 
@@ -383,6 +371,61 @@ func (s *Service) prepareBinary(binPath string) (string, error) {
 
 	log.Debug().Str("path", servicePath).Dur("duration", time.Since(started)).Msg("prepared service binary")
 	return servicePath, nil
+}
+
+func (s *Service) cachedServiceBinaryFromManifest(
+	binPath string,
+	sourceInfo os.FileInfo,
+	sourceChangeTimeNS int64,
+	manifest *serviceBinaryManifest,
+	started time.Time,
+	launchValidation bool,
+) (path string, ok bool, err error) {
+	if manifest == nil || !manifest.matchesSourceMetadata(binPath, sourceInfo, sourceChangeTimeNS) {
+		return "", false, nil
+	}
+
+	fs := s.filesystem()
+	dataDir := helpers.DataDir(s.pl)
+	servicePath := serviceCachePath(dataDir, binPath, manifest.SourceHash)
+	if filepath.Clean(manifest.ServicePath) != filepath.Clean(servicePath) ||
+		!serviceCachePathValid(manifest.ServicePath, dataDir) {
+		return "", false, nil
+	}
+
+	cachedInfo, statErr := fs.Stat(manifest.ServicePath)
+	metadataMatches := false
+	if statErr == nil {
+		metadataMatches = manifest.matchesServiceMetadata(cachedInfo)
+		if launchValidation {
+			metadataMatches = manifest.matchesServiceMetadataForLaunch(cachedInfo)
+		}
+	}
+	switch {
+	case statErr == nil && metadataMatches:
+		if chmodErr := ensureServiceBinaryExecutable(fs, manifest.ServicePath); chmodErr != nil {
+			return "", false, chmodErr
+		}
+		log.Debug().
+			Str("path", manifest.ServicePath).
+			Dur("duration", time.Since(started)).
+			Msg("using cached service binary from manifest")
+		return manifest.ServicePath, true, nil
+	case statErr != nil && !errors.Is(statErr, os.ErrNotExist):
+		log.Debug().Err(statErr).Str("path", manifest.ServicePath).Msg("error checking cached service binary")
+	case statErr == nil:
+		log.Debug().
+			Str("path", manifest.ServicePath).
+			Int64("cachedSize", cachedInfo.Size()).
+			Int64("cachedModTimeNs", cachedInfo.ModTime().UnixNano()).
+			Int64("cachedChangeTimeNs", fileChangeTimeNS(cachedInfo)).
+			Int64("manifestSize", manifest.ServiceSize).
+			Int64("manifestModTimeNs", manifest.ServiceModTimeNS).
+			Int64("manifestChangeTimeNs", manifest.ServiceChangeTimeNS).
+			Msg("cached service binary metadata mismatch")
+	}
+
+	return "", false, nil
 }
 
 func ensureServiceBinaryExecutable(fs afero.Fs, servicePath string) error {
@@ -494,6 +537,13 @@ func (m *serviceBinaryManifest) matchesServiceMetadata(info os.FileInfo) bool {
 		m.ServiceModTimeNS == info.ModTime().UnixNano() &&
 		m.ServiceChangeTimeNS != 0 &&
 		m.ServiceChangeTimeNS == fileChangeTimeNS(info)
+}
+
+func (m *serviceBinaryManifest) matchesServiceMetadataForLaunch(info os.FileInfo) bool {
+	if info == nil || m.ServiceSize != info.Size() {
+		return false
+	}
+	return m.ServiceModTimeNS == 0 || m.ServiceModTimeNS == info.ModTime().UnixNano()
 }
 
 func fileChangeTimeNS(info os.FileInfo) int64 {
@@ -866,6 +916,7 @@ func (s *Service) restartExecConfig(
 	if err != nil {
 		return restartExecConfig{}, err
 	}
+	log.Debug().Str("path", serviceBin).Msg("selected service binary for restart exec")
 	return restartExecConfig{
 		serviceBin: serviceBin,
 		binPath:    binPath,
@@ -1008,7 +1059,10 @@ func (s *Service) Start() error {
 	if err != nil {
 		return err
 	}
-	log.Debug().Dur("duration", time.Since(prepareStarted)).Msg("service binary prepared")
+	log.Debug().
+		Str("path", serviceBin).
+		Dur("duration", time.Since(prepareStarted)).
+		Msg("service binary prepared")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

@@ -23,7 +23,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -59,17 +58,10 @@ func parseServerPort(t *testing.T, server *httptest.Server) int {
 	return port
 }
 
-// unusedPort returns a port that is guaranteed to not have anything listening.
-// It binds to port 0 (OS assigns a free port), gets the assigned port, then
-// closes the listener. There's a small race window but it's reliable for tests.
+// unusedPort returns port 0, which cannot have a listening TCP service.
 func unusedPort(t *testing.T) int {
 	t.Helper()
-	var lc net.ListenConfig
-	listener, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := listener.Addr().(*net.TCPAddr).Port
-	require.NoError(t, listener.Close())
-	return port
+	return 0
 }
 
 func waitForWebSocketSession(server *helpers.WebSocketTestServer, timeout time.Duration) bool {
