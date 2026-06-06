@@ -1041,6 +1041,64 @@ Returns `null` on success.
 }
 ```
 
+### media.history.latest
+
+Return the most recent played media entry from the user database only. This is intended for startup paths that need the last played game as quickly as possible, without media database enrichment.
+
+This method does not return tags, metadata, media IDs, relative paths, pagination, end time, or play time.
+
+#### Parameters
+
+None. Empty params may be omitted or sent as `{}`.
+
+#### Result
+
+| Key   | Type                                                         | Required | Description                                                   |
+| :---- | :----------------------------------------------------------- | :------- | :------------------------------------------------------------ |
+| entry | [MediaHistoryLatestEntry](#media-history-latest-entry-object) | Yes      | Most recent media play history entry, or `null` when none exists. |
+
+##### Media history latest entry object
+
+| Key        | Type   | Required | Description                                     |
+| :--------- | :----- | :------- | :---------------------------------------------- |
+| systemId   | string | Yes      | ID of the system.                               |
+| systemName | string | Yes      | Display name of the system from the history row. |
+| mediaName  | string | Yes      | Display name of the media from the history row. |
+| mediaPath  | string | Yes      | Path to the media file from the history row.    |
+| launcherId | string | Yes      | ID of the launcher used.                        |
+| startedAt  | string | Yes      | Timestamp when media started in RFC3339 format. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "9f2c6a52-7a5d-11ef-9c7b-020304050607",
+  "method": "media.history.latest"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "9f2c6a52-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "entry": {
+      "systemId": "SNES",
+      "systemName": "Super Nintendo Entertainment System",
+      "mediaName": "Super Mario World",
+      "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+      "launcherId": "SNES",
+      "startedAt": "2025-01-22T14:30:00Z"
+    }
+  }
+}
+```
+
 ### media.history
 
 Return paginated media play history.

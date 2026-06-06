@@ -22,6 +22,7 @@ package userdb
 import (
 	"context"
 	"math"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -298,6 +299,76 @@ func TestSqlGetMediaHistory_EmptyResult(t *testing.T) {
 	entries, err := sqlGetMediaHistory(context.Background(), db, nil, lastID, limit)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetLatestMediaHistory_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	startTime := time.Unix(1_770_000_000, 0).Unix()
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "snes", "game.sfc"))
+	rows := sqlmock.NewRows([]string{
+		"DBID", "StartTime", "SystemID", "SystemName", "MediaPath", "MediaName", "LauncherID",
+	}).AddRow(
+		int64(9), startTime, "SNES", "Super Nintendo Entertainment System",
+		mediaPath, "Game", "SNES",
+	)
+
+	mock.ExpectPrepare(`SELECT DBID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID.*`).
+		ExpectQuery().
+		WillReturnRows(rows)
+
+	entry, found, err := sqlGetLatestMediaHistory(context.Background(), db)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, int64(9), entry.DBID)
+	assert.Equal(t, "SNES", entry.SystemID)
+	assert.Equal(t, "Super Nintendo Entertainment System", entry.SystemName)
+	assert.Equal(t, "Game", entry.MediaName)
+	assert.Equal(t, mediaPath, entry.MediaPath)
+	assert.Equal(t, "SNES", entry.LauncherID)
+	assert.Equal(t, time.Unix(startTime, 0), entry.StartTime)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetLatestMediaHistory_EmptyResult(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	rows := sqlmock.NewRows([]string{
+		"DBID", "StartTime", "SystemID", "SystemName", "MediaPath", "MediaName", "LauncherID",
+	})
+
+	mock.ExpectPrepare(`SELECT DBID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID.*`).
+		ExpectQuery().
+		WillReturnRows(rows)
+
+	entry, found, err := sqlGetLatestMediaHistory(context.Background(), db)
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Empty(t, entry)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetLatestMediaHistory_DatabaseError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectPrepare(`SELECT DBID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID.*`).
+		WillReturnError(sqlmock.ErrCancelled)
+
+	entry, found, err := sqlGetLatestMediaHistory(context.Background(), db)
+	require.Error(t, err)
+	assert.False(t, found)
+	assert.Empty(t, entry)
+	assert.Contains(t, err.Error(), "failed to prepare latest media history query statement")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

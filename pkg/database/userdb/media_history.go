@@ -22,6 +22,7 @@ package userdb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -61,6 +62,14 @@ func (db *UserDB) GetMediaHistory(systemIDs []string, lastID int64, limit int) (
 		return nil, ErrNullSQL
 	}
 	return sqlGetMediaHistory(db.ctx, db.sql, systemIDs, lastID, limit)
+}
+
+// GetLatestMediaHistory retrieves the most recent media history entry with no enrichment.
+func (db *UserDB) GetLatestMediaHistory() (database.MediaHistoryEntry, bool, error) {
+	if db.sql == nil {
+		return database.MediaHistoryEntry{}, false, ErrNullSQL
+	}
+	return sqlGetLatestMediaHistory(db.ctx, db.sql)
 }
 
 // GetMediaHistoryTop returns aggregated media history grouped by SystemID+MediaName,
@@ -335,6 +344,45 @@ func sqlGetMediaHistory(
 	}
 
 	return list, nil
+}
+
+func sqlGetLatestMediaHistory(ctx context.Context, db *sql.DB) (database.MediaHistoryEntry, bool, error) {
+	stmt, err := db.PrepareContext(ctx, `
+		SELECT DBID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID
+		FROM MediaHistory
+		ORDER BY DBID DESC
+		LIMIT 1;
+	`)
+	if err != nil {
+		return database.MediaHistoryEntry{}, false,
+			fmt.Errorf("failed to prepare latest media history query statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	var entry database.MediaHistoryEntry
+	var startTimeUnix int64
+	err = stmt.QueryRowContext(ctx).Scan(
+		&entry.DBID,
+		&startTimeUnix,
+		&entry.SystemID,
+		&entry.SystemName,
+		&entry.MediaPath,
+		&entry.MediaName,
+		&entry.LauncherID,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return database.MediaHistoryEntry{}, false, nil
+		}
+		return database.MediaHistoryEntry{}, false, fmt.Errorf("failed to scan latest media history row: %w", err)
+	}
+
+	entry.StartTime = time.Unix(startTimeUnix, 0)
+	return entry, true, nil
 }
 
 func sqlCloseHangingMediaHistory(ctx context.Context, db *sql.DB) error {
