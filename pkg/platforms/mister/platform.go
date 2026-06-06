@@ -60,6 +60,7 @@ type arcadeCardLaunchCache struct {
 
 type Platform struct {
 	shared.LinuxInput
+	ctx                 context.Context
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
 	launcherManager     platforms.LauncherContextManager
@@ -264,11 +265,13 @@ func (p *Platform) StartPost(
 	db *database.Database,
 	scheduler *idle.Scheduler,
 ) error {
+	p.ctx = ctx
 	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 
 	tr, stopTr, err := tracker.StartTracker(
+		ctx,
 		cfg,
 		p,
 		activeMedia,
@@ -653,6 +656,7 @@ func (p *Platform) LaunchMedia(
 		Int("available_launchers", len(launchers)).
 		Msg("launching media")
 	err := platforms.DoLaunch(&platforms.LaunchParams{
+		Context:        p.ctx,
 		Config:         cfg,
 		Platform:       p,
 		SetActiveMedia: p.setActiveMedia,

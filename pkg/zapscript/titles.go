@@ -20,7 +20,6 @@
 package zapscript
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -92,7 +91,8 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		launchersForSystem = helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
 	}
 
-	ctx := context.Background() // TODO: use proper context from env when available
+	ctx, cancel := mediaDBLookupContext(&env)
+	defer cancel()
 
 	result, err := titles.ResolveTitle(ctx, &titles.ResolveParams{
 		SystemID:       system.ID,

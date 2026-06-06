@@ -70,6 +70,10 @@ type PathResult struct {
 	System systemdefs.System
 }
 
+type slugSearchCacheDropper interface {
+	DropSlugSearchCacheForSystems(systemIDs []string)
+}
+
 // FindPath case-insensitively finds a file/folder at a path and returns the actual filesystem case.
 // On case-insensitive filesystems (Windows, macOS), this ensures we get the real case from the filesystem
 // rather than preserving the input case, which prevents case-mismatch issues during string comparisons.
@@ -858,6 +862,10 @@ func NewNamesIndex(
 		if completedSystems[systemID] {
 			log.Debug().Msgf("skipping already indexed system: %s", systemID)
 			continue
+		}
+
+		if dropper, ok := db.(slugSearchCacheDropper); ok {
+			dropper.DropSlugSearchCacheForSystems([]string{systemID})
 		}
 
 		scanState.MissingMedia = make(map[int]struct{})

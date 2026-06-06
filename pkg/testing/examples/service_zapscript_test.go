@@ -20,6 +20,7 @@
 package examples
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -154,8 +155,10 @@ func TestZapScriptExecution(t *testing.T) {
 				switch tt.commands[0] {
 				case "LAUNCH":
 					// Mock media database search
-					mockMediaDB.On("SearchMediaPathExact", []systemdefs.System(nil), tt.commands[1]).
-						Return([]database.SearchResult{fixtures.SearchResults.Collection[0]}, nil)
+					mockMediaDB.On(
+						"SearchMediaPathExact",
+						context.Background(), []systemdefs.System(nil), tt.commands[1],
+					).Return([]database.SearchResult{fixtures.SearchResults.Collection[0]}, nil)
 					platform.On("LaunchMedia",
 						cfg,
 						fixtures.SearchResults.Collection[0].Path,
@@ -177,7 +180,9 @@ func TestZapScriptExecution(t *testing.T) {
 				switch tt.commands[0] {
 				case "LAUNCH":
 					// Simulate the workflow: search for media, then launch it
-					results, err := mockMediaDB.SearchMediaPathExact([]systemdefs.System(nil), tt.commands[1])
+					results, err := mockMediaDB.SearchMediaPathExact(
+						context.Background(), []systemdefs.System(nil), tt.commands[1],
+					)
 					require.NoError(t, err)
 					require.Len(t, results, 1, "Should find media")
 
@@ -290,7 +295,7 @@ func TestZapScriptComplexWorkflow(t *testing.T) {
 
 	// Set expectations for complex workflow
 	mockUserDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
-	mockMediaDB.On("SearchMediaPathExact", []systemdefs.System(nil), "Complex Game").
+	mockMediaDB.On("SearchMediaPathExact", context.Background(), []systemdefs.System(nil), "Complex Game").
 		Return([]database.SearchResult{fixtures.SearchResults.Collection[0]}, nil)
 	platform.On("LaunchMedia",
 		cfg,
@@ -304,7 +309,7 @@ func TestZapScriptComplexWorkflow(t *testing.T) {
 	// This demonstrates the TDD infrastructure capabilities
 
 	// Step 1: Search and launch media
-	results, err := mockMediaDB.SearchMediaPathExact([]systemdefs.System(nil), "Complex Game")
+	results, err := mockMediaDB.SearchMediaPathExact(context.Background(), []systemdefs.System(nil), "Complex Game")
 	require.NoError(t, err)
 	require.Len(t, results, 1, "Should find media")
 

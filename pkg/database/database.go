@@ -587,7 +587,7 @@ type MediaDBI interface {
 	GetIndexingSystems() ([]string, error)
 	TruncateSystems(systemIDs []string) error
 
-	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
+	SearchMediaPathExact(ctx context.Context, systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
 	SearchMediaBySlug(
 		ctx context.Context, systemID string, slug string, tags []zapscript.TagFilter,
@@ -628,8 +628,8 @@ type MediaDBI interface {
 
 	IndexedSystems() ([]string, error)
 	SystemIndexed(system *systemdefs.System) bool
-	RandomGame(systems []systemdefs.System) (SearchResult, error)
-	RandomGameWithQuery(query *MediaQuery) (SearchResult, error)
+	RandomGame(ctx context.Context, systems []systemdefs.System) (SearchResult, error)
+	RandomGameWithQuery(ctx context.Context, query *MediaQuery) (SearchResult, error)
 	GetTotalMediaCount() (int, error)
 	GetScrapedMediaCount(ctx context.Context, scraperID string) (int, error)
 	GetTotalScrapedMediaCount(ctx context.Context) (int, error)

@@ -20,7 +20,6 @@
 package zapscript
 
 import (
-	"context"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -140,7 +139,7 @@ func TestCmdTitle(t *testing.T) {
 					},
 				}
 				mockMediaDB.On("SearchMediaBySlug",
-					context.Background(), tt.expectedSystem, tt.expectedSlug, []zapscript.TagFilter(nil)).
+					mock.Anything, tt.expectedSystem, tt.expectedSlug, []zapscript.TagFilter(nil)).
 					Return(expectedResults, nil)
 				mockMediaDB.On("SetCachedSlugResolution",
 					mock.Anything, tt.expectedSystem, tt.expectedSlug, []zapscript.TagFilter(nil),
@@ -320,7 +319,7 @@ func TestCmdTitleWithTags(t *testing.T) {
 			Path:     "/test/path/super-mario-world.smc",
 		},
 	}
-	mockMediaDB.On("SearchMediaBySlug", context.Background(), expectedSystem, expectedSlug, expectedTags).
+	mockMediaDB.On("SearchMediaBySlug", mock.Anything, expectedSystem, expectedSlug, expectedTags).
 		Return(expectedResults, nil)
 	mockMediaDB.On("SetCachedSlugResolution",
 		mock.Anything, expectedSystem, expectedSlug, expectedTags,
@@ -471,20 +470,20 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 				Return(int64(0), "", false)
 
 			mockMediaDB.On("SearchMediaBySlug",
-				context.Background(), tt.systemID, tt.initialSearchSlug, []zapscript.TagFilter(nil)).
+				mock.Anything, tt.systemID, tt.initialSearchSlug, []zapscript.TagFilter(nil)).
 				Return(tt.initialResults, nil).Once()
 
 			if len(tt.initialResults) == 0 && tt.expectFallback {
 				// Strategy 2: Exact match without tags (same slug, different tag filter)
 				// This is the new strategy that tries without tag filters
 				mockMediaDB.On("SearchMediaBySlug",
-					context.Background(), tt.systemID, tt.initialSearchSlug, []zapscript.TagFilter(nil)).
+					mock.Anything, tt.systemID, tt.initialSearchSlug, []zapscript.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil).Once()
 
 				// Strategy 3: Secondary title-only search (for titles with subtitles)
 				// Exact match: Search DB's Slug column with secondary title slug
 				mockMediaDB.On("SearchMediaBySlug",
-					context.Background(), tt.systemID, tt.fallbackSearchSlug, []zapscript.TagFilter(nil)).
+					mock.Anything, tt.systemID, tt.fallbackSearchSlug, []zapscript.TagFilter(nil)).
 					Return(tt.fallbackResults, nil).Maybe()
 
 				// Partial match: Search DB's SecondarySlug column with secondary title slug
@@ -613,7 +612,7 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 
 			// Strategy 1 (exact match) fails
 			mockMediaDB.On("SearchMediaBySlug",
-				context.Background(), tt.systemID, tt.slug, []zapscript.TagFilter(nil)).
+				mock.Anything, tt.systemID, tt.slug, []zapscript.TagFilter(nil)).
 				Return([]database.SearchResultWithCursor{}, nil).Once()
 
 			// Strategies 2-4 don't apply (no secondary title in these test queries)
@@ -638,7 +637,7 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 				},
 			}
 			mockMediaDB.On("SearchMediaBySlug",
-				context.Background(), tt.systemID, tt.expectedMatch, []zapscript.TagFilter(nil)).
+				mock.Anything, tt.systemID, tt.expectedMatch, []zapscript.TagFilter(nil)).
 				Return(expectedResults, nil).Once()
 
 			// Secondary title searches also fail (no ':' or '-' in query)
@@ -1544,7 +1543,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			},
 		}
 		mockMediaDB.On("SearchMediaBySlug",
-			context.Background(), systemID, slug, []zapscript.TagFilter(nil)).
+			mock.Anything, systemID, slug, []zapscript.TagFilter(nil)).
 			Return(expectedResults, nil)
 
 		// Should update cache after successful search
@@ -1602,7 +1601,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			Return(int64(0), "", false).Once()
 
 		mockMediaDB.On("SearchMediaBySlug",
-			context.Background(), systemID, slug, tags1).
+			mock.Anything, systemID, slug, tags1).
 			Return([]database.SearchResultWithCursor{
 				{MediaID: 100, SystemID: systemID, Path: "/usa.smc"},
 			}, nil).Once()
@@ -1637,7 +1636,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			Return(int64(0), "", false).Once()
 
 		mockMediaDB.On("SearchMediaBySlug",
-			context.Background(), systemID, slug, tags2).
+			mock.Anything, systemID, slug, tags2).
 			Return([]database.SearchResultWithCursor{
 				{MediaID: 200, SystemID: systemID, Path: "/jp.smc"},
 			}, nil).Once()
@@ -1688,7 +1687,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 			Return(int64(0), "", false)
 
 		mockMediaDB.On("SearchMediaBySlug",
-			context.Background(), "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
+			mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
 			Return([]database.SearchResultWithCursor{}, assert.AnError)
 
 		_, err := cmdTitle(mockPlatform, env)
@@ -1728,7 +1727,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 			{MediaID: 123, SystemID: "SNES", Name: "Super Mario World", Path: "/test/smw.smc"},
 		}
 		mockMediaDB.On("SearchMediaBySlug",
-			context.Background(), "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
+			mock.Anything, "SNES", "supermarioworld", []zapscript.TagFilter(nil)).
 			Return(expectedResults, nil)
 
 		// Cache will be set before platform launch attempt
@@ -1874,7 +1873,7 @@ func TestCmdTitlePerformance(t *testing.T) {
 			Return(int64(0), "", false)
 
 		mockMediaDB.On("SearchMediaBySlug",
-			context.Background(), "SNES", "mario", []zapscript.TagFilter(nil)).
+			mock.Anything, "SNES", "mario", []zapscript.TagFilter(nil)).
 			Return(results, nil)
 
 		mockMediaDB.On("SetCachedSlugResolution",

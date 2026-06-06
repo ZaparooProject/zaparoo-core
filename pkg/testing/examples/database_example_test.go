@@ -20,6 +20,7 @@
 package examples
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -78,7 +79,7 @@ func TestDatabaseMockUsage(t *testing.T) {
 
 		// Set up expectations
 		mockMediaDB.On("IndexedSystems").Return([]string{"atari2600", "gb", "snes"}, nil)
-		mockMediaDB.On("SearchMediaPathExact", testSystemDefs, "Tetris").
+		mockMediaDB.On("SearchMediaPathExact", context.Background(), testSystemDefs, "Tetris").
 			Return([]database.SearchResult{expectedResults[1]}, nil)
 		mockMediaDB.On("FindSystem", fixtures.Systems.Atari2600).Return(fixtures.Systems.Atari2600, nil)
 
@@ -88,7 +89,7 @@ func TestDatabaseMockUsage(t *testing.T) {
 		assert.Len(t, systems, 3)
 		assert.Contains(t, systems, "atari2600")
 
-		results, err := mockMediaDB.SearchMediaPathExact(testSystemDefs, "Tetris")
+		results, err := mockMediaDB.SearchMediaPathExact(context.Background(), testSystemDefs, "Tetris")
 		require.NoError(t, err)
 		assert.Len(t, results, 1)
 		assert.Equal(t, "Tetris", results[0].Name)
@@ -328,7 +329,7 @@ func TestIntegrationExample(t *testing.T) {
 		mockUserDB.On("GetMapping", testMapping.DBID).Return(testMapping, nil)
 		mockUserDB.On("AddHistory", &testHistory).Return(nil)
 
-		mockMediaDB.On("SearchMediaPathExact", fixtures.GetTestSystemDefs(), "Pitfall").
+		mockMediaDB.On("SearchMediaPathExact", context.Background(), fixtures.GetTestSystemDefs(), "Pitfall").
 			Return(testResults, nil)
 		testSystems := fixtures.GetTestSystemDefs()
 		mockMediaDB.On("SystemIndexed", &testSystems[0]).Return(true)
@@ -344,7 +345,7 @@ func TestIntegrationExample(t *testing.T) {
 		assert.Equal(t, "zelda:*", mapping.Pattern)
 
 		// 2. Search for media in MediaDB
-		results, err := mockMediaDB.SearchMediaPathExact(testSystems, "Pitfall")
+		results, err := mockMediaDB.SearchMediaPathExact(context.Background(), testSystems, "Pitfall")
 		require.NoError(t, err)
 		assert.Len(t, results, 1)
 		assert.Equal(t, "Pitfall!", results[0].Name)

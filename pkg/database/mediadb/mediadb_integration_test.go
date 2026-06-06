@@ -255,6 +255,38 @@ func setupTempMediaDB(t *testing.T) (db *MediaDB, cleanup func()) {
 	return db, cleanup
 }
 
+func TestMediaDB_ForegroundSlugSearchIgnoresUncommittedIndexTransaction(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	system := insertSystemWithMedia(t, mediaDB, "NES", "Committed Game", filepath.Join("roms", "nes", "committed.nes"))
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	defer func() { _ = mediaDB.RollbackTransaction() }()
+
+	pendingTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: system.DBID,
+		Slug:       "pendinggame",
+		Name:       "Pending Game",
+	})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMedia(database.Media{
+		SystemDBID:     system.DBID,
+		MediaTitleDBID: pendingTitle.DBID,
+		Path:           filepath.Join("roms", "nes", "pending.nes"),
+	})
+	require.NoError(t, err)
+
+	results, err := mediaDB.SearchMediaBySlug(context.Background(), "NES", "pendinggame", nil)
+	require.NoError(t, err)
+	require.Empty(t, results)
+
+	results, err = mediaDB.SearchMediaBySlug(context.Background(), "NES", "committedgame", nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "Committed Game", results[0].Name)
+}
+
 func insertSystemWithMedia(t *testing.T, mediaDB *MediaDB, systemID, titleName, mediaPath string) database.System {
 	t.Helper()
 
@@ -586,14 +618,17 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create test media titles and media
+	superMarioPath := filepath.Join("roms", "nes", "Super Mario Bros.nes")
+	megaManPath := filepath.Join("roms", "nes", "Mega Man.nes")
+	zeldaPath := filepath.Join("roms", "nes", "Zelda.nes")
 	testGames := []struct {
 		name string
 		path string
 	}{
-		{"Super Mario Bros", "/roms/nes/Super Mario Bros.nes"},
-		{"Super Mario Bros 2", "/roms/nes/Super Mario Bros 2.nes"},
-		{"Mega Man", "/roms/nes/Mega Man.nes"},
-		{"Mega Man 2", "/roms/nes/Mega Man 2.nes"},
+		{"Super Mario Bros", superMarioPath},
+		{"Super Mario Bros 2", filepath.Join("roms", "nes", "Super Mario Bros 2.nes")},
+		{"Mega Man", megaManPath},
+		{"Mega Man 2", filepath.Join("roms", "nes", "Mega Man 2.nes")},
 	}
 
 	for _, game := range testGames {
@@ -618,19 +653,25 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test exact search - must match full path
-	results, err := mediaDB.SearchMediaPathExact([]systemdefs.System{*nesSystem}, "/roms/nes/Super Mario Bros.nes")
+	results, err := mediaDB.SearchMediaPathExact(
+		context.Background(), []systemdefs.System{*nesSystem}, superMarioPath,
+	)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "Super Mario Bros", results[0].Name)
 
 	// Test case-insensitive search - must match full path
-	results, err = mediaDB.SearchMediaPathExact([]systemdefs.System{*nesSystem}, "/roms/nes/Mega Man.nes")
+	results, err = mediaDB.SearchMediaPathExact(
+		context.Background(), []systemdefs.System{*nesSystem}, megaManPath,
+	)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "Mega Man", results[0].Name)
 
 	// Test no match
-	results, err = mediaDB.SearchMediaPathExact([]systemdefs.System{*nesSystem}, "/roms/nes/Zelda.nes")
+	results, err = mediaDB.SearchMediaPathExact(
+		context.Background(), []systemdefs.System{*nesSystem}, zeldaPath,
+	)
 	require.NoError(t, err)
 	assert.Empty(t, results)
 }
@@ -680,7 +721,7 @@ func TestMediaDB_RandomGame_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test random game
-	result, err := mediaDB.RandomGame([]systemdefs.System{*nesSystem})
+	result, err := mediaDB.RandomGame(context.Background(), []systemdefs.System{*nesSystem})
 	require.NoError(t, err)
 	assert.Equal(t, nesSystem.ID, result.SystemID)
 	assert.NotEmpty(t, result.Path)
@@ -689,14 +730,41 @@ func TestMediaDB_RandomGame_Integration(t *testing.T) {
 	query := database.MediaQuery{
 		Systems: []string{nesSystem.ID},
 	}
-	result, err = mediaDB.RandomGameWithQuery(&query)
+	result, err = mediaDB.RandomGameWithQuery(context.Background(), &query)
 	require.NoError(t, err)
 	assert.Equal(t, nesSystem.ID, result.SystemID)
 
 	// Test that cache is working - second call should use cache
-	result2, err := mediaDB.RandomGameWithQuery(&query)
+	result2, err := mediaDB.RandomGameWithQuery(context.Background(), &query)
 	require.NoError(t, err)
 	assert.Equal(t, nesSystem.ID, result2.SystemID)
+}
+
+func TestMediaDB_LookupsRespectCanceledContext(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = mediaDB.SearchMediaPathExact(
+		ctx, []systemdefs.System{*nesSystem}, filepath.Join("roms", "nes", "game.nes"),
+	)
+	require.Error(t, err)
+
+	_, err = mediaDB.RandomGame(ctx, []systemdefs.System{*nesSystem})
+	require.Error(t, err)
+
+	query := database.MediaQuery{Systems: []string{nesSystem.ID}}
+	_, err = mediaDB.RandomGameWithQuery(ctx, &query)
+	require.Error(t, err)
 }
 
 func TestMediaDB_CacheInvalidation_Integration(t *testing.T) {
@@ -751,7 +819,7 @@ func TestMediaDB_CacheInvalidation_Integration(t *testing.T) {
 	query := database.MediaQuery{
 		Systems: []string{nesSystem.ID},
 	}
-	_, err = mediaDB.RandomGameWithQuery(&query)
+	_, err = mediaDB.RandomGameWithQuery(context.Background(), &query)
 	require.NoError(t, err)
 
 	// Verify cache exists
@@ -793,9 +861,10 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	insertedNES, err := mediaDB.InsertSystem(nesSystemDB)
 	require.NoError(t, err)
 
+	nesPath := filepath.Join("roms", "nes", "game.nes")
 	nesTitle := database.MediaTitle{
 		SystemDBID: insertedNES.DBID,
-		Slug:       slugs.Slugify(slugs.MediaTypeGame, helpers.FilenameFromPath("/roms/nes/game.nes")),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, helpers.FilenameFromPath(nesPath)),
 		Name:       "NES Game",
 	}
 	insertedNESTitle, err := mediaDB.InsertMediaTitle(&nesTitle)
@@ -804,7 +873,7 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	nesMedia := database.Media{
 		SystemDBID:     insertedNES.DBID,
 		MediaTitleDBID: insertedNESTitle.DBID,
-		Path:           "/roms/nes/game.nes",
+		Path:           nesPath,
 	}
 	_, err = mediaDB.InsertMedia(nesMedia)
 	require.NoError(t, err)
@@ -817,9 +886,10 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	insertedSNES, err := mediaDB.InsertSystem(snesSystemDB)
 	require.NoError(t, err)
 
+	snesPath := filepath.Join("roms", "snes", "game.sfc")
 	snesTitle := database.MediaTitle{
 		SystemDBID: insertedSNES.DBID,
-		Slug:       slugs.Slugify(slugs.MediaTypeGame, helpers.FilenameFromPath("/roms/snes/game.sfc")),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, helpers.FilenameFromPath(snesPath)),
 		Name:       "SNES Game",
 	}
 	insertedSNESTitle, err := mediaDB.InsertMediaTitle(&snesTitle)
@@ -828,7 +898,7 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	snesMedia := database.Media{
 		SystemDBID:     insertedSNES.DBID,
 		MediaTitleDBID: insertedSNESTitle.DBID,
-		Path:           "/roms/snes/game.sfc",
+		Path:           snesPath,
 	}
 	_, err = mediaDB.InsertMedia(snesMedia)
 	require.NoError(t, err)
@@ -855,12 +925,16 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Indexed systems after truncate: %v", systems)
 
-	results, err := mediaDB.SearchMediaPathExact([]systemdefs.System{*snesSystem}, "/roms/snes/game.sfc")
+	results, err := mediaDB.SearchMediaPathExact(
+		context.Background(), []systemdefs.System{*snesSystem}, snesPath,
+	)
 	require.NoError(t, err)
 	t.Logf("Search results: %+v", results)
 	assert.Len(t, results, 1)
 
-	results, err = mediaDB.SearchMediaPathExact([]systemdefs.System{*nesSystem}, "/roms/nes/game.nes")
+	results, err = mediaDB.SearchMediaPathExact(
+		context.Background(), []systemdefs.System{*nesSystem}, nesPath,
+	)
 	require.NoError(t, err)
 	assert.Empty(t, results)
 }
@@ -1124,7 +1198,7 @@ func TestMediaDB_ConcurrentReads_Integration(t *testing.T) {
 
 	for range numReaders {
 		go func() {
-			result, err := mediaDB.RandomGame([]systemdefs.System{*nesSystem})
+			result, err := mediaDB.RandomGame(context.Background(), []systemdefs.System{*nesSystem})
 			if err != nil {
 				errChan <- err
 				return
@@ -2223,12 +2297,12 @@ func TestMediaDB_CacheFastPath_MatchesSQL_Integration(t *testing.T) {
 	}
 
 	// --- Phase 3: Verify RandomGame and RandomGameWithQuery via cache ---
-	result, err := mediaDB.RandomGame([]systemdefs.System{*nesSystem})
+	result, err := mediaDB.RandomGame(context.Background(), []systemdefs.System{*nesSystem})
 	require.NoError(t, err)
 	assert.Equal(t, nesSystem.ID, result.SystemID)
 	assert.NotEmpty(t, result.Path)
 
-	result, err = mediaDB.RandomGameWithQuery(&database.MediaQuery{
+	result, err = mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
 		Systems: []string{nesSystem.ID},
 	})
 	require.NoError(t, err)
@@ -2236,7 +2310,7 @@ func TestMediaDB_CacheFastPath_MatchesSQL_Integration(t *testing.T) {
 	assert.NotEmpty(t, result.Path)
 
 	// RandomGameWithQuery with multiple systems
-	result, err = mediaDB.RandomGameWithQuery(&database.MediaQuery{
+	result, err = mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
 		Systems: []string{nesSystem.ID, snesSystem.ID},
 	})
 	require.NoError(t, err)
@@ -2244,7 +2318,7 @@ func TestMediaDB_CacheFastPath_MatchesSQL_Integration(t *testing.T) {
 	assert.NotEmpty(t, result.Path)
 
 	// RandomGame with empty system filter should fail
-	_, err = mediaDB.RandomGame(nil)
+	_, err = mediaDB.RandomGame(context.Background(), nil)
 	require.Error(t, err)
 }
 
@@ -2320,7 +2394,7 @@ func TestMediaDB_RandomGame_MixedSystems_Integration(t *testing.T) {
 	assert.Nil(t, mediaDB.slugSearchCache.Load(), "cache should be nil before build")
 
 	for i := range 20 {
-		result, randErr := mediaDB.RandomGame(mixedSystems)
+		result, randErr := mediaDB.RandomGame(context.Background(), mixedSystems)
 		require.NoError(t, randErr, "RandomGame SQL path iteration %d", i)
 		assert.True(t, indexedIDs[result.SystemID],
 			"RandomGame SQL path returned non-indexed system %s", result.SystemID)
@@ -2328,7 +2402,9 @@ func TestMediaDB_RandomGame_MixedSystems_Integration(t *testing.T) {
 
 	mixedSystemIDs := []string{nesSystem.ID, snesSystem.ID, genesisSystem.ID, gbSystem.ID}
 	for i := range 20 {
-		result, randErr := mediaDB.RandomGameWithQuery(&database.MediaQuery{Systems: mixedSystemIDs})
+		result, randErr := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
+			Systems: mixedSystemIDs,
+		})
 		require.NoError(t, randErr, "RandomGameWithQuery SQL path iteration %d", i)
 		assert.True(t, indexedIDs[result.SystemID],
 			"RandomGameWithQuery SQL path returned non-indexed system %s", result.SystemID)
@@ -2340,14 +2416,16 @@ func TestMediaDB_RandomGame_MixedSystems_Integration(t *testing.T) {
 	require.NotNil(t, mediaDB.slugSearchCache.Load())
 
 	for i := range 20 {
-		result, randErr := mediaDB.RandomGame(mixedSystems)
+		result, randErr := mediaDB.RandomGame(context.Background(), mixedSystems)
 		require.NoError(t, randErr, "RandomGame cache path iteration %d", i)
 		assert.True(t, indexedIDs[result.SystemID],
 			"RandomGame cache path returned non-indexed system %s", result.SystemID)
 	}
 
 	for i := range 20 {
-		result, randErr := mediaDB.RandomGameWithQuery(&database.MediaQuery{Systems: mixedSystemIDs})
+		result, randErr := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
+			Systems: mixedSystemIDs,
+		})
 		require.NoError(t, randErr, "RandomGameWithQuery cache path iteration %d", i)
 		assert.True(t, indexedIDs[result.SystemID],
 			"RandomGameWithQuery cache path returned non-indexed system %s", result.SystemID)
@@ -2355,19 +2433,19 @@ func TestMediaDB_RandomGame_MixedSystems_Integration(t *testing.T) {
 
 	// --- Edge case: ALL systems non-indexed ---
 	nonIndexedSystems := []systemdefs.System{*genesisSystem, *gbSystem}
-	_, err = mediaDB.RandomGame(nonIndexedSystems)
+	_, err = mediaDB.RandomGame(context.Background(), nonIndexedSystems)
 	require.ErrorIs(t, err, sql.ErrNoRows, "RandomGame with all non-indexed systems should return ErrNoRows")
 
-	_, err = mediaDB.RandomGameWithQuery(&database.MediaQuery{
+	_, err = mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
 		Systems: []string{genesisSystem.ID, gbSystem.ID},
 	})
 	require.ErrorIs(t, err, sql.ErrNoRows, "RandomGameWithQuery with all non-indexed systems should return ErrNoRows")
 
 	// --- Edge case: single non-indexed system ---
-	_, err = mediaDB.RandomGame([]systemdefs.System{*genesisSystem})
+	_, err = mediaDB.RandomGame(context.Background(), []systemdefs.System{*genesisSystem})
 	require.ErrorIs(t, err, sql.ErrNoRows, "RandomGame with single non-indexed system should return ErrNoRows")
 
-	_, err = mediaDB.RandomGameWithQuery(&database.MediaQuery{
+	_, err = mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
 		Systems: []string{genesisSystem.ID},
 	})
 	require.ErrorIs(t, err, sql.ErrNoRows, "RandomGameWithQuery with single non-indexed system should return ErrNoRows")
@@ -2481,7 +2559,211 @@ func TestMediaDB_RefreshSlugSearchCacheForSystems_Integration(t *testing.T) {
 	assert.Equal(t, filepath.Join("roms", "snes", "zelda.sfc"), results[0].Path)
 }
 
-func TestMediaDB_CommitTransaction_SelectiveIndexingPreservesUnchangedSlugCache_Integration(t *testing.T) {
+func TestMediaDB_IndexingInvalidationPreservesSlugSearchCacheWhenRequested_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insertedSystem, err := mediaDB.FindOrInsertSystem(database.System{SystemID: nesSystem.ID, Name: nesSystem.ID})
+	require.NoError(t, err)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Super Mario Bros"),
+		Name:       "Super Mario Bros",
+	})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMedia(database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           filepath.Join("roms", "nes", "smb.nes"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+	require.NoError(t, mediaDB.RebuildSlugSearchCache())
+	require.NotNil(t, mediaDB.slugSearchCache.Load())
+
+	mediaDB.invalidateCaches(invalidationScope{AllSystems: true, PreserveSlugSearchCache: true})
+	require.NotNil(t, mediaDB.slugSearchCache.Load())
+	assert.True(t, mediaDB.slugSearchCache.Load().CanServeSystems([]string{nesSystem.ID}))
+
+	mediaDB.invalidateCaches(invalidationScope{AllSystems: true})
+	assert.Nil(t, mediaDB.slugSearchCache.Load())
+}
+
+func TestMediaDB_UpdateLastGenerated_FullIndexClearsSlugSearchCache_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	insertedSystem, err := mediaDB.FindOrInsertSystem(database.System{SystemID: nesSystem.ID, Name: nesSystem.ID})
+	require.NoError(t, err)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Super Mario Bros"),
+		Name:       "Super Mario Bros",
+	})
+	require.NoError(t, err)
+	_, err = mediaDB.InsertMedia(database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           filepath.Join("roms", "nes", "smb.nes"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+	require.NoError(t, mediaDB.RebuildSlugSearchCache())
+	require.NotNil(t, mediaDB.slugSearchCache.Load())
+
+	require.NoError(t, mediaDB.SetIndexingSystems(nil))
+	require.NoError(t, mediaDB.SetIndexingStatus(IndexingStatusRunning))
+	defer func() {
+		require.NoError(t, mediaDB.SetIndexingStatus(""))
+		require.NoError(t, mediaDB.SetIndexingSystems(nil))
+	}()
+
+	require.NoError(t, mediaDB.UpdateLastGenerated())
+	assert.Nil(t, mediaDB.slugSearchCache.Load())
+}
+
+func TestMediaDB_DropSlugSearchCacheForSystems_RemovesOnlyTouchedSystems_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	snesSystem, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	insertGame := func(system *systemdefs.System, titleName string, relPath string) {
+		t.Helper()
+
+		require.NoError(t, mediaDB.BeginTransaction(false))
+		insertedSystem, insertErr := mediaDB.FindOrInsertSystem(database.System{SystemID: system.ID, Name: system.ID})
+		require.NoError(t, insertErr)
+		insertedTitle, insertErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: insertedSystem.DBID,
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, titleName),
+			Name:       titleName,
+		})
+		require.NoError(t, insertErr)
+		_, insertErr = mediaDB.InsertMedia(database.Media{
+			SystemDBID:     insertedSystem.DBID,
+			MediaTitleDBID: insertedTitle.DBID,
+			Path:           relPath,
+		})
+		require.NoError(t, insertErr)
+		require.NoError(t, mediaDB.CommitTransaction())
+	}
+
+	insertGame(nesSystem, "Super Mario Bros", filepath.Join("roms", "nes", "smb.nes"))
+	insertGame(snesSystem, "The Legend of Zelda", filepath.Join("roms", "snes", "zelda.sfc"))
+	require.NoError(t, mediaDB.RebuildSlugSearchCache())
+
+	mediaDB.DropSlugSearchCacheForSystems([]string{nesSystem.ID})
+	cache := mediaDB.slugSearchCache.Load()
+	require.NotNil(t, cache)
+	assert.False(t, cache.complete)
+	assert.False(t, cache.CanServeSystems([]string{nesSystem.ID}))
+	assert.True(t, cache.CanServeSystems([]string{snesSystem.ID}))
+
+	results, err := mediaDB.SearchMediaBySlug(context.Background(), snesSystem.ID, "The Legend of Zelda", nil)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+
+	results, err = mediaDB.SearchMediaBySlug(context.Background(), nesSystem.ID, "Super Mario Bros", nil)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+}
+
+func TestMediaDB_RandomGameWithQuery_PartialSlugCacheFallsBackToSQL_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	snesSystem, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	insertGame := func(system *systemdefs.System, titleName string, relPath string) {
+		t.Helper()
+
+		require.NoError(t, mediaDB.BeginTransaction(false))
+		insertedSystem, insertErr := mediaDB.FindOrInsertSystem(database.System{SystemID: system.ID, Name: system.ID})
+		require.NoError(t, insertErr)
+		insertedTitle, insertErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+			SystemDBID: insertedSystem.DBID,
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, titleName),
+			Name:       titleName,
+		})
+		require.NoError(t, insertErr)
+		_, insertErr = mediaDB.InsertMedia(database.Media{
+			SystemDBID:     insertedSystem.DBID,
+			MediaTitleDBID: insertedTitle.DBID,
+			Path:           relPath,
+		})
+		require.NoError(t, insertErr)
+		require.NoError(t, mediaDB.CommitTransaction())
+	}
+
+	insertGame(nesSystem, "Super Mario Bros", filepath.Join("roms", "nes", "smb.nes"))
+	insertGame(snesSystem, "The Legend of Zelda", filepath.Join("roms", "snes", "zelda.sfc"))
+	require.NoError(t, mediaDB.RebuildSlugSearchCache())
+	mediaDB.DropSlugSearchCacheForSystems([]string{snesSystem.ID})
+
+	seenSNES := false
+	for range 100 {
+		result, randErr := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
+			Systems: []string{nesSystem.ID, snesSystem.ID},
+		})
+		require.NoError(t, randErr)
+		assert.Contains(t, []string{nesSystem.ID, snesSystem.ID}, result.SystemID)
+		if result.SystemID == snesSystem.ID {
+			seenSNES = true
+			break
+		}
+	}
+	assert.True(t, seenSNES, "partial slug cache should not silently exclude uncached requested systems")
+}
+
+func TestMediaDB_CacheMediaStats_CanceledContextIsNonFatal_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	query := &database.MediaQuery{Systems: []string{"NES"}}
+	mediaDB.cacheMediaStats(ctx, query, MediaStats{Count: 1, MinDBID: 1, MaxDBID: 1})
+
+	_, found := mediaDB.GetCachedStats(context.Background(), query)
+	assert.False(t, found)
+}
+
+func TestMediaDB_CommitTransaction_IndexingPreservesLastGoodSlugCache_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -2531,6 +2813,15 @@ func TestMediaDB_CommitTransaction_SelectiveIndexingPreservesUnchangedSlugCache_
 	assert.True(t, cache.complete)
 	assert.True(t, cache.CanServeSystems([]string{nesSystem.ID, snesSystem.ID}))
 
+	statsQuery := &database.MediaQuery{Systems: []string{nesSystem.ID}}
+	require.NoError(t, mediaDB.SetCachedStats(context.Background(), statsQuery, MediaStats{
+		Count:   1,
+		MinDBID: 1,
+		MaxDBID: 1,
+	}))
+	_, found := mediaDB.GetCachedStats(context.Background(), statsQuery)
+	require.True(t, found)
+
 	require.NoError(t, mediaDB.SetIndexingSystems([]string{nesSystem.ID}))
 	require.NoError(t, mediaDB.SetIndexingStatus(IndexingStatusRunning))
 	defer func() {
@@ -2545,6 +2836,8 @@ func TestMediaDB_CommitTransaction_SelectiveIndexingPreservesUnchangedSlugCache_
 	assert.False(t, cache.complete)
 	assert.False(t, cache.CanServeSystems([]string{nesSystem.ID}))
 	assert.True(t, cache.CanServeSystems([]string{snesSystem.ID}))
+	_, found = mediaDB.GetCachedStats(context.Background(), statsQuery)
+	assert.False(t, found, "indexing commits should invalidate stale MediaCountCache while preserving slug cache")
 }
 
 func TestMediaDB_CommitTransaction_ReturnsBatchFlushError_Integration(t *testing.T) {

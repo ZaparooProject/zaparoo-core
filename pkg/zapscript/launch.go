@@ -20,7 +20,6 @@
 package zapscript
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -206,6 +205,8 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	tagFilters := args.Tags
 
 	gamesdb := env.Database.MediaDB
+	ctx, cancel := mediaDBLookupContext(&env)
+	defer cancel()
 
 	if strings.EqualFold(query, "all") {
 		allSystems := systemdefs.AllSystems()
@@ -217,7 +218,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			Systems: systemIDs,
 			Tags:    tagFilters,
 		}
-		game, gameErr := gamesdb.RandomGameWithQuery(&mediaQuery)
+		game, gameErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
 		if gameErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", gameErr)
 		}
@@ -241,7 +242,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			PathPrefix: cleanedPath,
 			Tags:       tagFilters,
 		}
-		searchResult, searchErr := gamesdb.RandomGameWithQuery(&mediaQuery)
+		searchResult, searchErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
 		if errors.Is(searchErr, sql.ErrNoRows) {
 			// Fallback: pick random file directly from disk for unindexed paths
 			entries, readErr := os.ReadDir(cleanedPath)
@@ -315,7 +316,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 				Systems: systemIDs,
 				Tags:    tagFilters,
 			}
-			game, randomErr := gamesdb.RandomGameWithQuery(&mediaQuery)
+			game, randomErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
 			if randomErr != nil {
 				return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", randomErr)
 			}
@@ -340,7 +341,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			PathGlob: searchQuery,
 			Tags:     tagFilters,
 		}
-		game, randomErr := gamesdb.RandomGameWithQuery(&mediaQuery)
+		game, randomErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
 		if randomErr != nil {
 			return platforms.CmdResult{},
 				fmt.Errorf("failed to get random game matching '%s': %w", searchQuery, randomErr)
@@ -380,7 +381,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		Systems: systemIDs,
 		Tags:    tagFilters,
 	}
-	game, err := gamesdb.RandomGameWithQuery(&mediaQuery)
+	game, err := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", err)
 	}
@@ -609,7 +610,10 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}
 		log.Info().Msgf("searching in %s: %s", system.ID, lookupPath)
 		// treat as a direct title launch
+		ctx, cancel := mediaDBLookupContext(&env)
+		defer cancel()
 		res, err := gamesdb.SearchMediaPathExact(
+			ctx,
 			[]systemdefs.System{*system},
 			lookupPath,
 		)
@@ -665,8 +669,9 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			Tags:    tagFilters,
 			Limit:   1,
 		}
-		// TODO: context should come from service state
-		res, searchErr := gamesdb.SearchMediaWithFilters(context.Background(), &searchFilters)
+		ctx, cancel := mediaDBLookupContext(&env)
+		defer cancel()
+		res, searchErr := gamesdb.SearchMediaWithFilters(ctx, &searchFilters)
 		if searchErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to search all systems for '%s': %w", query, searchErr)
 		}
@@ -711,8 +716,9 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		Tags:    tagFilters,
 		Limit:   1,
 	}
-	// TODO: context should come from service state
-	res, searchErr := gamesdb.SearchMediaWithFilters(context.Background(), &searchFilters)
+	ctx, cancel := mediaDBLookupContext(&env)
+	defer cancel()
+	res, searchErr := gamesdb.SearchMediaWithFilters(ctx, &searchFilters)
 	if searchErr != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to search systems for '%s': %w", searchQuery, searchErr)
 	}
