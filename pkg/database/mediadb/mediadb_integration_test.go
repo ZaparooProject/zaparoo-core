@@ -650,19 +650,25 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test exact search - must match full path
-	results, err := mediaDB.SearchMediaPathExact(context.Background(), []systemdefs.System{*nesSystem}, "/roms/nes/Super Mario Bros.nes")
+	results, err := mediaDB.SearchMediaPathExact(
+		context.Background(), []systemdefs.System{*nesSystem}, "/roms/nes/Super Mario Bros.nes",
+	)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "Super Mario Bros", results[0].Name)
 
 	// Test case-insensitive search - must match full path
-	results, err = mediaDB.SearchMediaPathExact(context.Background(), []systemdefs.System{*nesSystem}, "/roms/nes/Mega Man.nes")
+	results, err = mediaDB.SearchMediaPathExact(
+		context.Background(), []systemdefs.System{*nesSystem}, "/roms/nes/Mega Man.nes",
+	)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "Mega Man", results[0].Name)
 
 	// Test no match
-	results, err = mediaDB.SearchMediaPathExact(context.Background(), []systemdefs.System{*nesSystem}, "/roms/nes/Zelda.nes")
+	results, err = mediaDB.SearchMediaPathExact(
+		context.Background(), []systemdefs.System{*nesSystem}, "/roms/nes/Zelda.nes",
+	)
 	require.NoError(t, err)
 	assert.Empty(t, results)
 }
@@ -912,12 +918,16 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Indexed systems after truncate: %v", systems)
 
-	results, err := mediaDB.SearchMediaPathExact(context.Background(), []systemdefs.System{*snesSystem}, "/roms/snes/game.sfc")
+	results, err := mediaDB.SearchMediaPathExact(
+		context.Background(), []systemdefs.System{*snesSystem}, "/roms/snes/game.sfc",
+	)
 	require.NoError(t, err)
 	t.Logf("Search results: %+v", results)
 	assert.Len(t, results, 1)
 
-	results, err = mediaDB.SearchMediaPathExact(context.Background(), []systemdefs.System{*nesSystem}, "/roms/nes/game.nes")
+	results, err = mediaDB.SearchMediaPathExact(
+		context.Background(), []systemdefs.System{*nesSystem}, "/roms/nes/game.nes",
+	)
 	require.NoError(t, err)
 	assert.Empty(t, results)
 }
@@ -2385,7 +2395,9 @@ func TestMediaDB_RandomGame_MixedSystems_Integration(t *testing.T) {
 
 	mixedSystemIDs := []string{nesSystem.ID, snesSystem.ID, genesisSystem.ID, gbSystem.ID}
 	for i := range 20 {
-		result, randErr := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{Systems: mixedSystemIDs})
+		result, randErr := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
+			Systems: mixedSystemIDs,
+		})
 		require.NoError(t, randErr, "RandomGameWithQuery SQL path iteration %d", i)
 		assert.True(t, indexedIDs[result.SystemID],
 			"RandomGameWithQuery SQL path returned non-indexed system %s", result.SystemID)
@@ -2404,7 +2416,9 @@ func TestMediaDB_RandomGame_MixedSystems_Integration(t *testing.T) {
 	}
 
 	for i := range 20 {
-		result, randErr := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{Systems: mixedSystemIDs})
+		result, randErr := mediaDB.RandomGameWithQuery(context.Background(), &database.MediaQuery{
+			Systems: mixedSystemIDs,
+		})
 		require.NoError(t, randErr, "RandomGameWithQuery cache path iteration %d", i)
 		assert.True(t, indexedIDs[result.SystemID],
 			"RandomGameWithQuery cache path returned non-indexed system %s", result.SystemID)

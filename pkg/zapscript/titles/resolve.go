@@ -70,7 +70,8 @@ func cacheSlugResolution(
 ) {
 	cacheCtx, cancel := context.WithTimeout(ctx, slugResolutionCacheWriteTimeout)
 	defer cancel()
-	if cacheErr := mediadb.SetCachedSlugResolution(cacheCtx, systemID, slug, tagFilters, mediaID, strategy); cacheErr != nil {
+	cacheErr := mediadb.SetCachedSlugResolution(cacheCtx, systemID, slug, tagFilters, mediaID, strategy)
+	if cacheErr != nil {
 		log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
 	}
 }

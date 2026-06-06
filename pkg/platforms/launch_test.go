@@ -499,7 +499,7 @@ func TestDoLaunch_ActiveMediaLookupUsesProvidedContext(t *testing.T) {
 		SystemID:  "test-system",
 		Lifecycle: platforms.LifecycleFireAndForget,
 		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-			return nil, nil
+			return &os.Process{}, nil
 		},
 	}
 

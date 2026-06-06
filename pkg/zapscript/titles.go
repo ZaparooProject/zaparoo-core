@@ -91,7 +91,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		launchersForSystem = helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
 	}
 
-	ctx, cancel := mediaDBLookupContext(env)
+	ctx, cancel := mediaDBLookupContext(&env)
 	defer cancel()
 
 	result, err := titles.ResolveTitle(ctx, &titles.ResolveParams{

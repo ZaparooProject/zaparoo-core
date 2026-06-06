@@ -1915,7 +1915,9 @@ func (m *MockMediaDBI) GetZapScriptTagsBySystemAndPath(
 	return nil, nil
 }
 
-func (m *MockMediaDBI) RandomGameWithQuery(ctx context.Context, query *database.MediaQuery) (database.SearchResult, error) {
+func (m *MockMediaDBI) RandomGameWithQuery(
+	ctx context.Context, query *database.MediaQuery,
+) (database.SearchResult, error) {
 	args := m.Called(ctx, query)
 	if result, ok := args.Get(0).(database.SearchResult); ok {
 		if err := args.Error(1); err != nil {

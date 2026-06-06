@@ -83,7 +83,8 @@ func TestResolveTitle_StopsWhenContextCancelled(t *testing.T) {
 	mockMediaDB.On("SearchMediaBySlug",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Run(func(args mock.Arguments) {
-		ctx := args.Get(0).(context.Context)
+		ctx, ok := args.Get(0).(context.Context)
+		require.True(t, ok)
 		<-ctx.Done()
 	}).Return([]database.SearchResultWithCursor{}, context.DeadlineExceeded)
 
@@ -124,7 +125,8 @@ func TestResolveTitle_CacheWriteTimeoutDoesNotFailLaunch(t *testing.T) {
 	mockMediaDB.On("SetCachedSlugResolution",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Run(func(args mock.Arguments) {
-		ctx := args.Get(0).(context.Context)
+		ctx, ok := args.Get(0).(context.Context)
+		require.True(t, ok)
 		<-ctx.Done()
 	}).Return(context.DeadlineExceeded)
 

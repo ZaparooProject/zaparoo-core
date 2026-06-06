@@ -676,7 +676,7 @@ func TestCmdLaunch_FileNotFound(t *testing.T) {
 func TestMediaDBLookupContext_UsesTimeoutWithoutServiceContext(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := mediaDBLookupContext(platforms.CmdEnv{})
+	ctx, cancel := mediaDBLookupContext(&platforms.CmdEnv{})
 	defer cancel()
 
 	deadline, ok := ctx.Deadline()
@@ -692,10 +692,11 @@ func TestMediaDBLookupContext_IgnoresCanceledLauncherContext(t *testing.T) {
 	serviceCtx, serviceCancel := context.WithCancel(context.Background())
 	defer serviceCancel()
 
-	ctx, cancel := mediaDBLookupContext(platforms.CmdEnv{
+	env := platforms.CmdEnv{
 		LauncherCtx: launcherCtx,
 		ServiceCtx:  serviceCtx,
-	})
+	}
+	ctx, cancel := mediaDBLookupContext(&env)
 	defer cancel()
 
 	select {
@@ -725,7 +726,8 @@ func TestCmdLaunch_ExactFallbackMediaDBLookupUsesServiceContext(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything, "Sonic\\Game").
 		Run(func(args mock.Arguments) {
-			ctx := args.Get(0).(context.Context)
+			ctx, ok := args.Get(0).(context.Context)
+			require.True(t, ok)
 			<-ctx.Done()
 		}).
 		Return([]database.SearchResult{}, context.DeadlineExceeded)
@@ -747,7 +749,9 @@ func TestCmdLaunch_ExactFallbackMediaDBLookupUsesServiceContext(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
-	mockPlatform.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockPlatform.AssertNotCalled(
+		t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	)
 	mockMediaDB.AssertExpectations(t)
 }
 
@@ -760,7 +764,8 @@ func TestCmdSearch_MediaDBLookupUsesServiceContext(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
-			ctx := args.Get(0).(context.Context)
+			ctx, ok := args.Get(0).(context.Context)
+			require.True(t, ok)
 			<-ctx.Done()
 		}).
 		Return([]database.SearchResultWithCursor{}, context.DeadlineExceeded)
@@ -782,7 +787,9 @@ func TestCmdSearch_MediaDBLookupUsesServiceContext(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
-	mockPlatform.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockPlatform.AssertNotCalled(
+		t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	)
 	mockMediaDB.AssertExpectations(t)
 }
 
@@ -844,7 +851,8 @@ func TestCmdRandom_MediaDBLookupUsesServiceContext(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("RandomGameWithQuery", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
-			ctx := args.Get(0).(context.Context)
+			ctx, ok := args.Get(0).(context.Context)
+			require.True(t, ok)
 			<-ctx.Done()
 		}).
 		Return(database.SearchResult{}, context.DeadlineExceeded)
@@ -866,7 +874,9 @@ func TestCmdRandom_MediaDBLookupUsesServiceContext(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
-	mockPlatform.AssertNotCalled(t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockPlatform.AssertNotCalled(
+		t, "LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	)
 	mockMediaDB.AssertExpectations(t)
 }
 

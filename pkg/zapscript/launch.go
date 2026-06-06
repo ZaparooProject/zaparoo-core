@@ -205,7 +205,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	tagFilters := args.Tags
 
 	gamesdb := env.Database.MediaDB
-	ctx, cancel := mediaDBLookupContext(env)
+	ctx, cancel := mediaDBLookupContext(&env)
 	defer cancel()
 
 	if strings.EqualFold(query, "all") {
@@ -610,7 +610,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}
 		log.Info().Msgf("searching in %s: %s", system.ID, lookupPath)
 		// treat as a direct title launch
-		ctx, cancel := mediaDBLookupContext(env)
+		ctx, cancel := mediaDBLookupContext(&env)
 		defer cancel()
 		res, err := gamesdb.SearchMediaPathExact(
 			ctx,
@@ -669,7 +669,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			Tags:    tagFilters,
 			Limit:   1,
 		}
-		ctx, cancel := mediaDBLookupContext(env)
+		ctx, cancel := mediaDBLookupContext(&env)
 		defer cancel()
 		res, searchErr := gamesdb.SearchMediaWithFilters(ctx, &searchFilters)
 		if searchErr != nil {
@@ -716,7 +716,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		Tags:    tagFilters,
 		Limit:   1,
 	}
-	ctx, cancel := mediaDBLookupContext(env)
+	ctx, cancel := mediaDBLookupContext(&env)
 	defer cancel()
 	res, searchErr := gamesdb.SearchMediaWithFilters(ctx, &searchFilters)
 	if searchErr != nil {

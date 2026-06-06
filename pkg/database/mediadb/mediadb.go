@@ -1213,15 +1213,16 @@ func (db *MediaDB) CommitTransaction() error {
 	// foreground launches/searches, but still invalidate durable/count caches so
 	// random queries never trust stale MediaCountCache ranges after a commit.
 	indexingStatus, statusErr := sqlGetIndexingStatus(db.ctx, db.sql)
-	if statusErr != nil {
+	switch {
+	case statusErr != nil:
 		log.Warn().Err(statusErr).Msg("failed to determine indexing status for cache invalidation")
 		db.invalidateCaches(invalidationScope{AllSystems: true})
-	} else if indexingStatus == IndexingStatusRunning || indexingStatus == IndexingStatusPending {
+	case indexingStatus == IndexingStatusRunning || indexingStatus == IndexingStatusPending:
 		scope := db.cacheInvalidationScopeForCommittedTransaction()
 		scope.PreserveSlugSearchCache = true
 		db.invalidateCaches(scope)
 		log.Debug().Str("status", indexingStatus).Msg("invalidated committed caches during indexing batch commit")
-	} else {
+	default:
 		db.invalidateCaches(db.cacheInvalidationScopeForCommittedTransaction())
 	}
 	if err := db.flushBrowseCacheInvalidation(); err != nil {

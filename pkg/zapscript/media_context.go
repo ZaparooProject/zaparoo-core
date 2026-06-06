@@ -28,7 +28,7 @@ import (
 
 const mediaDBLookupTimeout = 2 * time.Second
 
-func mediaDBLookupContext(env platforms.CmdEnv) (context.Context, context.CancelFunc) {
+func mediaDBLookupContext(env *platforms.CmdEnv) (context.Context, context.CancelFunc) {
 	parent := env.ServiceCtx
 	if parent == nil {
 		parent = context.Background()

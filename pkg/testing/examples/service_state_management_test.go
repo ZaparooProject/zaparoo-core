@@ -443,7 +443,9 @@ func TestStateIntegrationWithServices(t *testing.T) {
 		assert.Equal(t, token.UID, lastToken.UID)
 
 		// 4. Simulate successful media launch
-		searchResults, err := mediaDB.SearchMediaPathExact(context.Background(), fixtures.GetTestSystemDefs(), token.Text)
+		searchResults, err := mediaDB.SearchMediaPathExact(
+			context.Background(), fixtures.GetTestSystemDefs(), token.Text,
+		)
 		require.NoError(t, err)
 		require.NotEmpty(t, searchResults)
 

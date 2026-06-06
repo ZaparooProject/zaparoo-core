@@ -155,8 +155,10 @@ func TestZapScriptExecution(t *testing.T) {
 				switch tt.commands[0] {
 				case "LAUNCH":
 					// Mock media database search
-					mockMediaDB.On("SearchMediaPathExact", context.Background(), []systemdefs.System(nil), tt.commands[1]).
-						Return([]database.SearchResult{fixtures.SearchResults.Collection[0]}, nil)
+					mockMediaDB.On(
+						"SearchMediaPathExact",
+						context.Background(), []systemdefs.System(nil), tt.commands[1],
+					).Return([]database.SearchResult{fixtures.SearchResults.Collection[0]}, nil)
 					platform.On("LaunchMedia",
 						cfg,
 						fixtures.SearchResults.Collection[0].Path,
@@ -178,7 +180,9 @@ func TestZapScriptExecution(t *testing.T) {
 				switch tt.commands[0] {
 				case "LAUNCH":
 					// Simulate the workflow: search for media, then launch it
-					results, err := mockMediaDB.SearchMediaPathExact(context.Background(), []systemdefs.System(nil), tt.commands[1])
+					results, err := mockMediaDB.SearchMediaPathExact(
+						context.Background(), []systemdefs.System(nil), tt.commands[1],
+					)
 					require.NoError(t, err)
 					require.Len(t, results, 1, "Should find media")
 
