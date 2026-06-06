@@ -31,7 +31,8 @@ import (
 )
 
 func HandleMediaHistoryLatest(env requests.RequestEnv) (any, error) { //nolint:gocritic
-	if len(bytes.TrimSpace(env.Params)) > 0 && !bytes.Equal(bytes.TrimSpace(env.Params), []byte("{}")) {
+	trimmed := bytes.TrimSpace(env.Params)
+	if len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("{}")) {
 		return nil, models.ClientErr(validation.ErrInvalidParams)
 	}
 

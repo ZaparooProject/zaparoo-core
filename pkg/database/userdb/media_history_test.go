@@ -22,6 +22,7 @@ package userdb
 import (
 	"context"
 	"math"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -308,11 +309,12 @@ func TestSqlGetLatestMediaHistory_Success(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	startTime := time.Unix(1_770_000_000, 0).Unix()
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "snes", "game.sfc"))
 	rows := sqlmock.NewRows([]string{
 		"DBID", "StartTime", "SystemID", "SystemName", "MediaPath", "MediaName", "LauncherID",
 	}).AddRow(
 		int64(9), startTime, "SNES", "Super Nintendo Entertainment System",
-		"/roms/snes/game.sfc", "Game", "SNES",
+		mediaPath, "Game", "SNES",
 	)
 
 	mock.ExpectPrepare(`SELECT DBID, StartTime, SystemID, SystemName, MediaPath, MediaName, LauncherID.*`).
@@ -326,7 +328,7 @@ func TestSqlGetLatestMediaHistory_Success(t *testing.T) {
 	assert.Equal(t, "SNES", entry.SystemID)
 	assert.Equal(t, "Super Nintendo Entertainment System", entry.SystemName)
 	assert.Equal(t, "Game", entry.MediaName)
-	assert.Equal(t, "/roms/snes/game.sfc", entry.MediaPath)
+	assert.Equal(t, mediaPath, entry.MediaPath)
 	assert.Equal(t, "SNES", entry.LauncherID)
 	assert.Equal(t, time.Unix(startTime, 0), entry.StartTime)
 	assert.NoError(t, mock.ExpectationsWereMet())

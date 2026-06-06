@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -38,12 +39,13 @@ func TestHandleMediaHistoryLatest_Success(t *testing.T) {
 
 	mockUserDB := helpers.NewMockUserDBI()
 	startedAt := time.Unix(1_770_000_000, 0).UTC()
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "snes", "Super Mario World (USA).sfc"))
 	mockUserDB.On("GetLatestMediaHistory").Return(database.MediaHistoryEntry{
 		DBID:       12,
 		SystemID:   "SNES",
 		SystemName: "Super Nintendo Entertainment System",
 		MediaName:  "Super Mario World",
-		MediaPath:  "/roms/snes/Super Mario World (USA).sfc",
+		MediaPath:  mediaPath,
 		LauncherID: "SNES",
 		StartTime:  startedAt,
 	}, true, nil)
@@ -62,7 +64,7 @@ func TestHandleMediaHistoryLatest_Success(t *testing.T) {
 	assert.Equal(t, "SNES", resp.Entry.SystemID)
 	assert.Equal(t, "Super Nintendo Entertainment System", resp.Entry.SystemName)
 	assert.Equal(t, "Super Mario World", resp.Entry.MediaName)
-	assert.Equal(t, "/roms/snes/Super Mario World (USA).sfc", resp.Entry.MediaPath)
+	assert.Equal(t, mediaPath, resp.Entry.MediaPath)
 	assert.Equal(t, "SNES", resp.Entry.LauncherID)
 	assert.Equal(t, startedAt.Format(time.RFC3339), resp.Entry.StartedAt)
 	mockUserDB.AssertExpectations(t)
