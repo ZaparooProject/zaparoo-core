@@ -103,6 +103,7 @@ func TestResolveTitle_StopsWhenContextCancelled(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestResolveTitle_CacheWriteTimeoutDoesNotFailLaunch(t *testing.T) {
@@ -143,6 +144,7 @@ func TestResolveTitle_CacheWriteTimeoutDoesNotFailLaunch(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, fastPath, result.Result.Path)
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestResolveTitle_ErrNoMatch(t *testing.T) {

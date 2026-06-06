@@ -618,14 +618,17 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create test media titles and media
+	superMarioPath := filepath.Join("roms", "nes", "Super Mario Bros.nes")
+	megaManPath := filepath.Join("roms", "nes", "Mega Man.nes")
+	zeldaPath := filepath.Join("roms", "nes", "Zelda.nes")
 	testGames := []struct {
 		name string
 		path string
 	}{
-		{"Super Mario Bros", "/roms/nes/Super Mario Bros.nes"},
-		{"Super Mario Bros 2", "/roms/nes/Super Mario Bros 2.nes"},
-		{"Mega Man", "/roms/nes/Mega Man.nes"},
-		{"Mega Man 2", "/roms/nes/Mega Man 2.nes"},
+		{"Super Mario Bros", superMarioPath},
+		{"Super Mario Bros 2", filepath.Join("roms", "nes", "Super Mario Bros 2.nes")},
+		{"Mega Man", megaManPath},
+		{"Mega Man 2", filepath.Join("roms", "nes", "Mega Man 2.nes")},
 	}
 
 	for _, game := range testGames {
@@ -651,7 +654,7 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 
 	// Test exact search - must match full path
 	results, err := mediaDB.SearchMediaPathExact(
-		context.Background(), []systemdefs.System{*nesSystem}, "/roms/nes/Super Mario Bros.nes",
+		context.Background(), []systemdefs.System{*nesSystem}, superMarioPath,
 	)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
@@ -659,7 +662,7 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 
 	// Test case-insensitive search - must match full path
 	results, err = mediaDB.SearchMediaPathExact(
-		context.Background(), []systemdefs.System{*nesSystem}, "/roms/nes/Mega Man.nes",
+		context.Background(), []systemdefs.System{*nesSystem}, megaManPath,
 	)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
@@ -667,7 +670,7 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 
 	// Test no match
 	results, err = mediaDB.SearchMediaPathExact(
-		context.Background(), []systemdefs.System{*nesSystem}, "/roms/nes/Zelda.nes",
+		context.Background(), []systemdefs.System{*nesSystem}, zeldaPath,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, results)
@@ -751,7 +754,9 @@ func TestMediaDB_LookupsRespectCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = mediaDB.SearchMediaPathExact(ctx, []systemdefs.System{*nesSystem}, "/roms/nes/game.nes")
+	_, err = mediaDB.SearchMediaPathExact(
+		ctx, []systemdefs.System{*nesSystem}, filepath.Join("roms", "nes", "game.nes"),
+	)
 	require.Error(t, err)
 
 	_, err = mediaDB.RandomGame(ctx, []systemdefs.System{*nesSystem})
@@ -856,9 +861,10 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	insertedNES, err := mediaDB.InsertSystem(nesSystemDB)
 	require.NoError(t, err)
 
+	nesPath := filepath.Join("roms", "nes", "game.nes")
 	nesTitle := database.MediaTitle{
 		SystemDBID: insertedNES.DBID,
-		Slug:       slugs.Slugify(slugs.MediaTypeGame, helpers.FilenameFromPath("/roms/nes/game.nes")),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, helpers.FilenameFromPath(nesPath)),
 		Name:       "NES Game",
 	}
 	insertedNESTitle, err := mediaDB.InsertMediaTitle(&nesTitle)
@@ -867,7 +873,7 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	nesMedia := database.Media{
 		SystemDBID:     insertedNES.DBID,
 		MediaTitleDBID: insertedNESTitle.DBID,
-		Path:           "/roms/nes/game.nes",
+		Path:           nesPath,
 	}
 	_, err = mediaDB.InsertMedia(nesMedia)
 	require.NoError(t, err)
@@ -880,9 +886,10 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	insertedSNES, err := mediaDB.InsertSystem(snesSystemDB)
 	require.NoError(t, err)
 
+	snesPath := filepath.Join("roms", "snes", "game.sfc")
 	snesTitle := database.MediaTitle{
 		SystemDBID: insertedSNES.DBID,
-		Slug:       slugs.Slugify(slugs.MediaTypeGame, helpers.FilenameFromPath("/roms/snes/game.sfc")),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, helpers.FilenameFromPath(snesPath)),
 		Name:       "SNES Game",
 	}
 	insertedSNESTitle, err := mediaDB.InsertMediaTitle(&snesTitle)
@@ -891,7 +898,7 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	snesMedia := database.Media{
 		SystemDBID:     insertedSNES.DBID,
 		MediaTitleDBID: insertedSNESTitle.DBID,
-		Path:           "/roms/snes/game.sfc",
+		Path:           snesPath,
 	}
 	_, err = mediaDB.InsertMedia(snesMedia)
 	require.NoError(t, err)
@@ -919,14 +926,14 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	t.Logf("Indexed systems after truncate: %v", systems)
 
 	results, err := mediaDB.SearchMediaPathExact(
-		context.Background(), []systemdefs.System{*snesSystem}, "/roms/snes/game.sfc",
+		context.Background(), []systemdefs.System{*snesSystem}, snesPath,
 	)
 	require.NoError(t, err)
 	t.Logf("Search results: %+v", results)
 	assert.Len(t, results, 1)
 
 	results, err = mediaDB.SearchMediaPathExact(
-		context.Background(), []systemdefs.System{*nesSystem}, "/roms/nes/game.nes",
+		context.Background(), []systemdefs.System{*nesSystem}, nesPath,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, results)
