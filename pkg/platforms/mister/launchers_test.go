@@ -767,6 +767,28 @@ func TestConfigureAtari2600AltCore(t *testing.T) {
 	})
 }
 
+func TestRetroAchievementsAtari2600RejectsInvalidSetName(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	var found *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "RAAtari2600" {
+			found = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "RAAtari2600 launcher should exist")
+
+	_, err := found.Launch(nil, filepath.Join("roms", "Atari2600", "game.a26"), &platforms.LaunchOptions{
+		SetName: "!invalid",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid set_name")
+}
+
 func TestRetroAchievementsAtari7800LauncherRemoved(t *testing.T) {
 	t.Parallel()
 
