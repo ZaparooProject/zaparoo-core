@@ -335,7 +335,7 @@ func launchAltCoreWithSetName(
 
 func retroAchievementsSetName(launcherID string) (string, bool) {
 	switch launcherID {
-	case "RAAtari7800":
+	case "RAAtari2600":
 		return "RA_Atari7800", true
 	case "RAGameboy":
 		return "RA_Gameboy", true
@@ -491,9 +491,36 @@ func launchDOS() func(*config.Instance, string, *platforms.LaunchOptions) (*os.P
 	}
 }
 
+func atari2600BinTest(_ *config.Instance, path string) bool {
+	lowerPath := strings.ToLower(path)
+	// TODO: really, this should specifically check on the root dirs,
+	// 		 but we'd need to modify the test function to have access
+	//       to the platform interface. it's probably a safe enough bet
+	//       that something in an atari2600 subdir is for atari2600
+	if (strings.Contains(lowerPath, "/atari2600/") ||
+		strings.Contains(lowerPath, "/atari 2600/")) &&
+		filepath.Ext(lowerPath) == ".bin" {
+		return true
+	}
+	return false
+}
+
+func applyAtari2600Slots(core *cores.Core) {
+	core.Slots = []cores.Slot{
+		{
+			Exts: []string{".a26", ".bin"},
+			Mgl: &cores.MGLParams{
+				Delay:  1,
+				Method: "f",
+				Index:  1,
+			},
+		},
+	}
+}
+
 func launchAtari2600() func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
-		s, err := cores.GetCore("Atari2600")
+		s, err := cores.GetCore(systemdefs.SystemAtari2600)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get Atari2600 system: %w", err)
 		}
@@ -503,16 +530,45 @@ func launchAtari2600() func(*config.Instance, string, *platforms.LaunchOptions) 
 		if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
 			return nil, setNameErr
 		}
-		sn.Slots = []cores.Slot{
-			{
-				Exts: []string{".a26", ".bin"},
-				Mgl: &cores.MGLParams{
-					Delay:  1,
-					Method: "f",
-					Index:  1,
-				},
-			},
+		applyAtari2600Slots(&sn)
+
+		err = mgls.LaunchGame(cfg, &sn, path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to launch game: %w", err)
 		}
+
+		err = activegame.SetActiveGame(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to set active game: %w", err)
+		}
+		return nil, nil
+	}
+}
+
+func launchAtari2600AltCore(
+	launcherID string,
+	rbfPath string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	cores.GlobalRBFCache.RegisterAltCore(launcherID, rbfPath)
+
+	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
+		s, err := cores.GetCore(systemdefs.SystemAtari2600)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get Atari2600 system: %w", err)
+		}
+		path = checkInZip(path)
+
+		sn := *s
+		sn.LauncherID = launcherID
+		sn.RBF = rbfPath
+		if setName, ok := retroAchievementsSetName(launcherID); ok {
+			sn.SetName = setName
+			sn.SetNameSameDir = true
+		}
+		if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
+			return nil, setNameErr
+		}
+		applyAtari2600Slots(&sn)
 
 		err = mgls.LaunchGame(cfg, &sn, path)
 		if err != nil {
@@ -805,19 +861,15 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"ATARI7800", "Atari2600"},
 			Extensions: []string{".a26"},
 			Launch:     launchAtari2600(),
-			Test: func(_ *config.Instance, path string) bool {
-				lowerPath := strings.ToLower(path)
-				// TODO: really, this should specifically check on the root dirs,
-				// 		 but we'd need to modify the test function to have access
-				//       to the platform interface. it's probably a safe enough bet
-				//       that something in an atari2600 subdir is for atari2600
-				if (strings.Contains(lowerPath, "/atari2600/") ||
-					strings.Contains(lowerPath, "/atari 2600/")) &&
-					filepath.Ext(lowerPath) == ".bin" {
-					return true
-				}
-				return false
-			},
+			Test:       atari2600BinTest,
+		},
+		{
+			ID:         "RAAtari2600",
+			SystemID:   systemdefs.SystemAtari2600,
+			Folders:    []string{"ATARI7800", "Atari2600"},
+			Extensions: []string{".a26"},
+			Launch:     launchAtari2600AltCore("RAAtari2600", "_RA_Cores/Cores/Atari7800"),
+			Test:       atari2600BinTest,
 		},
 		{
 			ID:       "LLAPIAtari2600",
@@ -852,13 +904,6 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:       "LLAPIAtari7800",
 			SystemID: systemdefs.SystemAtari7800,
 			Launch:   launchAltCore("LLAPIAtari7800", systemdefs.SystemAtari7800, "_LLAPI/Atari7800_LLAPI"),
-		},
-		{
-			ID:       "RAAtari7800",
-			SystemID: systemdefs.SystemAtari7800,
-			Launch: launchRetroAchievementsCore(
-				"RAAtari7800", systemdefs.SystemAtari7800, "_RA_Cores/Cores/Atari7800",
-			),
 		},
 		{
 			ID:         systemdefs.SystemAtariLynx,
