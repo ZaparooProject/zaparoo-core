@@ -408,6 +408,39 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 	mockMediaDB.AssertNotCalled(t, "GetOptimizationStatus")
 }
 
+func TestCheckAndResumeScraping_MissingOperationMarksFailed(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("GetScrapingOperation").Return(database.ScrapingOperation{}, false, nil).Once()
+	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+
+	checkAndResumeScraping(
+		mocks.NewMockPlatform(), nil, &database.Database{MediaDB: mockMediaDB}, nil, nil,
+	)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestCheckAndResumeScraping_UnavailableScraperMarksFailed(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	operation := database.ScrapingOperation{ScraperID: "missing-scraper"}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("GetScrapingOperation").Return(operation, true, nil).Once()
+	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Scrapers", (*config.Instance)(nil)).Return(map[string]platforms.Scraper{}).Once()
+
+	checkAndResumeScraping(mockPlatform, nil, &database.Database{MediaDB: mockMediaDB}, nil, nil)
+
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestCheckAndResumeScraping_StartFailurePersistsTerminalState(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	methods.ClearScrapingStatus()

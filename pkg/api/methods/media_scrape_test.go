@@ -550,6 +550,27 @@ func TestHandleMediaScrapeStatus_UsesScrapePauser(t *testing.T) {
 // TestHandleMediaScrape_ScraperInitError verifies that when the scraper's
 // Scrape method returns an error, HandleMediaScrape propagates the error and
 // the global scraping status is cleared.
+func TestHandleMediaScrape_PersistOperationErrorClearsRunning(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", database.ScrapingOperation{ScraperID: "test-scraper"}).
+		Return(errors.New("persist failed")).Once()
+	env := makeScrapeEnv(t,
+		map[string]platforms.Scraper{"test-scraper": emptyPlatformScraper("test-scraper", "Test Scraper")},
+		mockDB,
+		models.MediaScrapeParams{ScraperID: "test-scraper"},
+	)
+
+	_, err := HandleMediaScrape(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to persist scraping operation")
+	assert.False(t, IsScrapingRunning())
+	mockDB.AssertExpectations(t)
+}
+
 func TestHandleMediaScrape_ScraperInitError(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()
