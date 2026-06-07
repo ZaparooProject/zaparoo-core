@@ -162,6 +162,35 @@ func TestCleanupHistoryRetention_CancelledBeforeMediaHistory(t *testing.T) {
 	mockUserDB.AssertNotCalled(t, "CleanupMediaHistory", mock.Anything)
 }
 
+func TestRebuildStartupSlugSearchCache_SkipsDuringIndexing(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+
+	rebuildStartupSlugSearchCache(mockMediaDB, false)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "TrackBackgroundOperation")
+	mockMediaDB.AssertNotCalled(t, "RebuildSlugSearchCache")
+	mockMediaDB.AssertNotCalled(t, "PersistSlugSearchCache")
+}
+
+func TestRebuildStartupSlugSearchCache_RebuildsWhenIdle(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	mockMediaDB.On("TrackBackgroundOperation").Return().Once()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Once()
+	mockMediaDB.On("PersistSlugSearchCache").Return(nil).Once()
+	mockMediaDB.On("BackgroundOperationDone").Return().Once()
+
+	rebuildStartupSlugSearchCache(mockMediaDB, false)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
 	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
 	methods.ClearIndexingStatus()

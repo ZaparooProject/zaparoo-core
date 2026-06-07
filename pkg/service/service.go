@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/groovyproxy"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -58,6 +59,32 @@ type StartResult struct {
 	Stop             func() error
 	Done             <-chan struct{}
 	RestartRequested func() bool
+}
+
+func rebuildStartupSlugSearchCache(mediaDB database.MediaDBI, slugCacheLoaded bool) {
+	if mediaDB == nil || slugCacheLoaded {
+		return
+	}
+	indexingStatus, statusErr := mediaDB.GetIndexingStatus()
+	if statusErr != nil {
+		log.Warn().Err(statusErr).Msg("failed to get indexing status before slug cache rebuild")
+		return
+	}
+	if indexingStatus == mediadb.IndexingStatusRunning || indexingStatus == mediadb.IndexingStatusPending {
+		log.Debug().Str("status", indexingStatus).Msg("skipping slug search cache rebuild during indexing")
+		return
+	}
+
+	mediaDB.TrackBackgroundOperation()
+	defer mediaDB.BackgroundOperationDone()
+	if cacheErr := mediaDB.RebuildSlugSearchCache(); cacheErr != nil {
+		log.Warn().Err(cacheErr).Msg("failed to build slug search cache")
+		return
+	}
+	if persistErr := mediaDB.PersistSlugSearchCache(); persistErr != nil {
+		log.Warn().Err(persistErr).
+			Msg("failed to persist slug search cache after startup rebuild")
+	}
 }
 
 func Start(
@@ -252,28 +279,7 @@ func Start(
 			checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
 			checkAndResumeOptimization(db, st.Notifications, indexPauser)
 
-			if db.MediaDB != nil && !slugCacheLoaded {
-				indexingStatus, statusErr := db.MediaDB.GetIndexingStatus()
-				if statusErr != nil {
-					log.Warn().Err(statusErr).Msg("failed to get indexing status before slug cache rebuild")
-					return
-				}
-				if indexingStatus == mediadb.IndexingStatusRunning || indexingStatus == mediadb.IndexingStatusPending {
-					log.Debug().Str("status", indexingStatus).Msg("skipping slug search cache rebuild during indexing")
-					return
-				}
-
-				db.MediaDB.TrackBackgroundOperation()
-				defer db.MediaDB.BackgroundOperationDone()
-				if cacheErr := db.MediaDB.RebuildSlugSearchCache(); cacheErr != nil {
-					log.Warn().Err(cacheErr).Msg("failed to build slug search cache")
-					return
-				}
-				if persistErr := db.MediaDB.PersistSlugSearchCache(); persistErr != nil {
-					log.Warn().Err(persistErr).
-						Msg("failed to persist slug search cache after startup rebuild")
-				}
-			}
+			rebuildStartupSlugSearchCache(db.MediaDB, slugCacheLoaded)
 		},
 	)
 
