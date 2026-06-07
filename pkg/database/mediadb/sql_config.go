@@ -27,6 +27,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
 const (
@@ -34,6 +36,8 @@ const (
 	DBConfigOptimizationStatus              = "OptimizationStatus"
 	DBConfigOptimizationStep                = "OptimizationStep"
 	DBConfigIndexingStatus                  = "IndexingStatus"
+	DBConfigScrapingStatus                  = "ScrapingStatus"
+	DBConfigScrapingOperation               = "ScrapingOperation"
 	DBConfigLastIndexedSystem               = "LastIndexedSystem"
 	DBConfigIndexingSystems                 = "IndexingSystems"
 	DBConfigBrowseIndexVersion              = "BrowseIndexVersion"
@@ -155,6 +159,75 @@ func sqlGetIndexingStatus(ctx context.Context, db *sql.DB) (string, error) {
 		return "", fmt.Errorf("failed to get indexing status: %w", err)
 	}
 	return status, nil
+}
+
+func sqlSetScrapingStatus(ctx context.Context, db sqlQueryable, status string) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigScrapingStatus,
+		status,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set scraping status: %w", err)
+	}
+	return nil
+}
+
+func sqlGetScrapingStatus(ctx context.Context, db *sql.DB) (string, error) {
+	var status string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigScrapingStatus,
+	).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("failed to get scraping status: %w", err)
+	}
+	return status, nil
+}
+
+func sqlSetScrapingOperation(ctx context.Context, db sqlQueryable, operation database.ScrapingOperation) error {
+	operationJSON, err := json.Marshal(operation)
+	if err != nil {
+		return fmt.Errorf("failed to marshal scraping operation: %w", err)
+	}
+	_, err = db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigScrapingOperation,
+		string(operationJSON),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set scraping operation: %w", err)
+	}
+	return nil
+}
+
+func sqlGetScrapingOperation(ctx context.Context, db *sql.DB) (database.ScrapingOperation, bool, error) {
+	var operationJSON string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigScrapingOperation,
+	).Scan(&operationJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return database.ScrapingOperation{}, false, nil
+	} else if err != nil {
+		return database.ScrapingOperation{}, false, fmt.Errorf("failed to get scraping operation: %w", err)
+	}
+
+	var operation database.ScrapingOperation
+	if err := json.Unmarshal([]byte(operationJSON), &operation); err != nil {
+		return database.ScrapingOperation{}, false, fmt.Errorf("failed to unmarshal scraping operation: %w", err)
+	}
+	return operation, true, nil
+}
+
+func sqlClearScrapingOperation(ctx context.Context, db sqlQueryable) error {
+	_, err := db.ExecContext(ctx, "DELETE FROM DBConfig WHERE Name = ?", DBConfigScrapingOperation)
+	if err != nil {
+		return fmt.Errorf("failed to clear scraping operation: %w", err)
+	}
+	return nil
 }
 
 func sqlSetLastIndexedSystem(ctx context.Context, db sqlQueryable, systemID string) error {

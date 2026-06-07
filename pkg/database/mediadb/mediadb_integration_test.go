@@ -1039,15 +1039,17 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 
 	// Create tags
 	actionTag := database.Tag{
-		TypeDBID: insertedTagType.DBID,
-		Tag:      "Action",
+		TypeDBID:    insertedTagType.DBID,
+		Tag:         "Action",
+		DisplayName: "Action",
 	}
 	insertedActionTag, err := mediaDB.FindOrInsertTag(actionTag)
 	require.NoError(t, err)
 
 	platformerTag := database.Tag{
-		TypeDBID: insertedTagType.DBID,
-		Tag:      "Platformer",
+		TypeDBID:    insertedTagType.DBID,
+		Tag:         "Platformer",
+		DisplayName: "Platformer",
 	}
 	insertedPlatformerTag, err := mediaDB.FindOrInsertTag(platformerTag)
 	require.NoError(t, err)
@@ -1117,6 +1119,9 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "Super Mario Bros", results[0].Name) // Name comes from MediaTitles.Name
+	require.Len(t, results[0].Tags, 2)
+	assert.Equal(t, "Action", results[0].Tags[0].Label)
+	assert.Equal(t, "Platformer", results[0].Tags[1].Label)
 }
 
 func TestMediaDB_RollbackTransaction_Integration(t *testing.T) {

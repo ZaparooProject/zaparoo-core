@@ -24,6 +24,7 @@ package service
 import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -92,6 +93,65 @@ func checkAndResumeIndexing(
 }
 
 // checkAndResumeOptimization checks if optimization was interrupted and automatically resumes it
+func checkAndResumeScraping(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	db *database.Database,
+	st *state.State,
+	pauser *syncutil.Pauser,
+) {
+	status, err := db.MediaDB.GetScrapingStatus()
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to get scraping status during startup check")
+		return
+	}
+	if status != mediadb.IndexingStatusRunning && status != mediadb.IndexingStatusPending {
+		log.Debug().Msgf("scraping status is '%s', no auto-resume needed", status)
+		return
+	}
+
+	operation, found, err := db.MediaDB.GetScrapingOperation()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get scraping operation during startup check")
+		return
+	}
+	if !found || operation.ScraperID == "" {
+		log.Warn().Msg("scraping marked incomplete but no scraping operation was stored")
+		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
+			log.Warn().Err(setErr).Msg("failed to mark incomplete scraping as failed")
+		}
+		return
+	}
+
+	if _, ok := pl.Scrapers(cfg)[operation.ScraperID]; !ok {
+		log.Warn().Str("scraper", operation.ScraperID).Msg("stored scraper not available; marking scrape failed")
+		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
+			log.Warn().Err(setErr).Msg("failed to mark unavailable scraper as failed")
+		}
+		return
+	}
+
+	log.Info().Str("scraper", operation.ScraperID).Msg("detected interrupted media scraping, automatically resuming")
+	env := requests.RequestEnv{
+		Context:      st.GetContext(),
+		Platform:     pl,
+		Config:       cfg,
+		State:        st,
+		Database:     db,
+		ScrapePauser: pauser,
+	}
+	err = methods.ResumeMediaScrape(&env, operation)
+	if err != nil {
+		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
+			log.Warn().Err(setErr).Msg("failed to persist scraping auto-resume failure status")
+		}
+		if clearErr := db.MediaDB.ClearScrapingOperation(); clearErr != nil {
+			log.Warn().Err(clearErr).Msg("failed to clear scraping operation after auto-resume failure")
+		}
+		log.Error().Err(err).Str("scraper", operation.ScraperID).Msg("failed to start auto-resume of media scraping")
+	}
+}
+
 func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notification, pauser *syncutil.Pauser) {
 	status, err := db.MediaDB.GetOptimizationStatus()
 	if err != nil {

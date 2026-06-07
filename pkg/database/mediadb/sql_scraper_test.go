@@ -1435,10 +1435,14 @@ func TestGetMediaBatchMetadata_RoundTrip(t *testing.T) {
 	`, zeldaPath)
 	require.NoError(t, err)
 
-	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "developer", Tag: "nintendo"}}))
-	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "developer", Tag: "capcom"}}))
-	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 1, []database.TagInfo{{Type: "developer", Tag: "title-one"}}))
-	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 2, []database.TagInfo{{Type: "developer", Tag: "title-two"}}))
+	nintendoTag := []database.TagInfo{{Type: "developer", Tag: "nintendo", Label: "Nintendo"}}
+	capcomTag := []database.TagInfo{{Type: "developer", Tag: "capcom", Label: "Capcom"}}
+	titleOneTag := []database.TagInfo{{Type: "developer", Tag: "title-one", Label: "Title One"}}
+	titleTwoTag := []database.TagInfo{{Type: "developer", Tag: "title-two", Label: "Title Two"}}
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, nintendoTag))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, capcomTag))
+	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 1, titleOneTag))
+	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 2, titleTwoTag))
 	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 1, []database.MediaProperty{{
 		TypeTag: "property:image-boxart",
 		Text:    filepath.Join("art", "mario.png"),
@@ -1465,15 +1469,23 @@ func TestGetMediaBatchMetadata_RoundTrip(t *testing.T) {
 	assert.Equal(t, zeldaPath, rows[2].Path)
 	assert.Equal(t, "Zelda", rows[2].Title.Name)
 
+	singleMediaTags, err := mediaDB.GetMediaTagsByMediaDBID(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, []database.TagInfo{{Tag: "nintendo", Type: "developer", Label: "Nintendo"}}, singleMediaTags)
+
+	singleTitleTags, err := mediaDB.GetMediaTitleTagsByMediaTitleDBID(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, []database.TagInfo{{Tag: "title-one", Type: "developer", Label: "Title One"}}, singleTitleTags)
+
 	mediaTags, err := mediaDB.GetMediaTagsByMediaDBIDs(ctx, []int64{1, 2})
 	require.NoError(t, err)
-	assert.Equal(t, []database.TagInfo{{Tag: "nintendo", Type: "developer"}}, mediaTags[1])
-	assert.Equal(t, []database.TagInfo{{Tag: "capcom", Type: "developer"}}, mediaTags[2])
+	assert.Equal(t, []database.TagInfo{{Tag: "nintendo", Type: "developer", Label: "Nintendo"}}, mediaTags[1])
+	assert.Equal(t, []database.TagInfo{{Tag: "capcom", Type: "developer", Label: "Capcom"}}, mediaTags[2])
 
 	titleTags, err := mediaDB.GetMediaTitleTagsByMediaTitleDBIDs(ctx, []int64{1, 2})
 	require.NoError(t, err)
-	assert.Equal(t, []database.TagInfo{{Tag: "title-one", Type: "developer"}}, titleTags[1])
-	assert.Equal(t, []database.TagInfo{{Tag: "title-two", Type: "developer"}}, titleTags[2])
+	assert.Equal(t, []database.TagInfo{{Tag: "title-one", Type: "developer", Label: "Title One"}}, titleTags[1])
+	assert.Equal(t, []database.TagInfo{{Tag: "title-two", Type: "developer", Label: "Title Two"}}, titleTags[2])
 
 	mediaProps, err := mediaDB.GetMediaPropertiesByMediaDBIDs(ctx, []int64{1, 2})
 	require.NoError(t, err)

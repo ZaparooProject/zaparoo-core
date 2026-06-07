@@ -40,6 +40,12 @@ type Database struct {
 	MediaDB MediaDBI
 }
 
+type ScrapingOperation struct {
+	ScraperID string   `json:"scraperId"`
+	Systems   []string `json:"systems"`
+	Force     bool     `json:"force"`
+}
+
 // Structs for SQL records
 
 type HistoryEntry struct {
@@ -582,6 +588,11 @@ type MediaDBI interface {
 	CreateSecondaryIndexes() error
 	SetIndexingStatus(status string) error
 	GetIndexingStatus() (string, error)
+	SetScrapingStatus(status string) error
+	GetScrapingStatus() (string, error)
+	SetScrapingOperation(operation ScrapingOperation) error
+	GetScrapingOperation() (ScrapingOperation, bool, error)
+	ClearScrapingOperation() error
 	SetLastIndexedSystem(systemID string) error
 	GetLastIndexedSystem() (string, error)
 	SetIndexingSystems(systemIDs []string) error

@@ -35,6 +35,7 @@ func TestClassifyAPIMethod(t *testing.T) {
 		want   apiRequestPriority
 	}{
 		{"high media tags update", models.MethodMediaTagsUpdate, apiPriorityHigh},
+		{"high media history latest", models.MethodMediaHistoryLatest, apiPriorityHigh},
 		{"high run case insensitive", "RUN", apiPriorityHigh},
 		{"low media generate", models.MethodMediaGenerate, apiPriorityLow},
 		{"low media image", models.MethodMediaImage, apiPriorityLow},
