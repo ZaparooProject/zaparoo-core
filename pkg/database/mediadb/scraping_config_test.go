@@ -71,6 +71,25 @@ func TestGetScrapingStatusNoRows(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetScrapingOperationNoRow(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mediaDB := &MediaDB{sql: db, ctx: context.Background()}
+	mock.ExpectQuery("SELECT Value FROM DBConfig WHERE Name = ?").
+		WithArgs(DBConfigScrapingOperation).
+		WillReturnRows(sqlmock.NewRows([]string{"Value"}))
+
+	operation, found, err := mediaDB.GetScrapingOperation()
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Equal(t, database.ScrapingOperation{}, operation)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSetGetClearScrapingOperation(t *testing.T) {
 	t.Parallel()
 

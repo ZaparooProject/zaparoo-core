@@ -142,6 +142,12 @@ func checkAndResumeScraping(
 	}
 	err = methods.ResumeMediaScrape(&env, operation)
 	if err != nil {
+		if setErr := db.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); setErr != nil {
+			log.Warn().Err(setErr).Msg("failed to persist scraping auto-resume failure status")
+		}
+		if clearErr := db.MediaDB.ClearScrapingOperation(); clearErr != nil {
+			log.Warn().Err(clearErr).Msg("failed to clear scraping operation after auto-resume failure")
+		}
 		log.Error().Err(err).Str("scraper", operation.ScraperID).Msg("failed to start auto-resume of media scraping")
 	}
 }

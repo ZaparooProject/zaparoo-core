@@ -481,11 +481,15 @@ func startMediaScrape(env *requests.RequestEnv, params models.MediaScrapeParams)
 			publishScrapingStatus(ns, &status)
 		}
 
-		// Only send a terminal notification if the channel closed without a
-		// Done=true update (e.g. scraper returned a pre-closed empty channel).
-		// Otherwise the channel already delivered the final counters and sending
-		// another zeroed-out Done would overwrite them for consumers.
-		if !receivedDone {
+		if scrapeCtx.Err() != nil {
+			finalStatus = mediadb.IndexingStatusCancelled
+		}
+
+		// Only synthesize a completed notification if the channel closed without
+		// a Done=true update and no failure/cancel status was observed.
+		// Otherwise the channel already delivered the terminal state, or there is
+		// no successful completion to announce.
+		if !receivedDone && finalStatus == mediadb.IndexingStatusCompleted {
 			terminalStatus := scrapingStatusInstance.getLatest()
 			terminalStatus.ScraperID = scraperID
 			terminalStatus.Force = params.Force
@@ -493,10 +497,6 @@ func startMediaScrape(env *requests.RequestEnv, params models.MediaScrapeParams)
 			terminalStatus.Done = true
 			terminalStatus.Paused = false
 			terminalStatus.State = scrapeStateCompleted
-			if scrapeCtx.Err() != nil {
-				terminalStatus.State = scrapeStateCancelled
-				finalStatus = mediadb.IndexingStatusCancelled
-			}
 			populateScrapedMediaCountExact(env.State.GetContext(), db, &terminalStatus)
 			mediaImageNoImages.clear()
 			publishScrapingStatus(ns, &terminalStatus)
