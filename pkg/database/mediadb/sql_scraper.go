@@ -2461,7 +2461,7 @@ func (db *MediaDB) GetMediaTagsByMediaDBID(ctx context.Context, mediaDBID int64)
 	}
 
 	stmt, err := db.sql.PrepareContext(ctx, `
-		SELECT Tags.Tag, TagTypes.Type
+		SELECT Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTags
 		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
 		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
@@ -2504,7 +2504,7 @@ func (db *MediaDB) GetMediaTagsByMediaDBIDs(
 	args := int64Args(mediaDBIDs)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
 	rows, err := db.sql.QueryContext(ctx, `
-		SELECT MediaTags.MediaDBID, Tags.Tag, TagTypes.Type
+		SELECT MediaTags.MediaDBID, Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTags
 		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
 		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
@@ -2533,7 +2533,7 @@ func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBID(
 	}
 
 	stmt, err := db.sql.PrepareContext(ctx, `
-		SELECT Tags.Tag, TagTypes.Type
+		SELECT Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTitleTags
 		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
 		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
@@ -2576,7 +2576,7 @@ func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBIDs(
 	args := int64Args(mediaTitleDBIDs)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
 	rows, err := db.sql.QueryContext(ctx, `
-		SELECT MediaTitleTags.MediaTitleDBID, Tags.Tag, TagTypes.Type
+		SELECT MediaTitleTags.MediaTitleDBID, Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTitleTags
 		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
 		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
@@ -2683,7 +2683,7 @@ func scanTagInfos(rows *sql.Rows) ([]database.TagInfo, error) {
 	result := make([]database.TagInfo, 0)
 	for rows.Next() {
 		var t database.TagInfo
-		if err := rows.Scan(&t.Tag, &t.Type); err != nil {
+		if err := rows.Scan(&t.Tag, &t.Type, &t.Label); err != nil {
 			return nil, fmt.Errorf("failed to scan TagInfo: %w", err)
 		}
 		t.Tag = tags.UnpadTagValue(t.Tag)
@@ -2697,7 +2697,7 @@ func scanGroupedTagInfos(rows *sql.Rows) (map[int64][]database.TagInfo, error) {
 	for rows.Next() {
 		var dbid int64
 		var t database.TagInfo
-		if err := rows.Scan(&dbid, &t.Tag, &t.Type); err != nil {
+		if err := rows.Scan(&dbid, &t.Tag, &t.Type, &t.Label); err != nil {
 			return nil, fmt.Errorf("failed to scan grouped TagInfo: %w", err)
 		}
 		t.Tag = tags.UnpadTagValue(t.Tag)

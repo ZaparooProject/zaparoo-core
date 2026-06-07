@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -197,6 +198,10 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	statusInstance.clear()
 
 	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", database.ScrapingOperation{ScraperID: "test-scraper"}).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	mockDB.On("ClearScrapingOperation").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)

@@ -1293,6 +1293,68 @@ func (m *MockMediaDBI) GetIndexingStatus() (string, error) {
 	return args.String(0), args.Error(1)
 }
 
+func (m *MockMediaDBI) hasExpectation(method string) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == method {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *MockMediaDBI) SetScrapingStatus(status string) error {
+	if !m.hasExpectation("SetScrapingStatus") {
+		return nil
+	}
+	args := m.Called(status)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetScrapingStatus() (string, error) {
+	if !m.hasExpectation("GetScrapingStatus") {
+		return "", nil
+	}
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) SetScrapingOperation(operation database.ScrapingOperation) error {
+	if !m.hasExpectation("SetScrapingOperation") {
+		return nil
+	}
+	args := m.Called(operation)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetScrapingOperation() (database.ScrapingOperation, bool, error) {
+	if !m.hasExpectation("GetScrapingOperation") {
+		return database.ScrapingOperation{}, false, nil
+	}
+	args := m.Called()
+	operation, ok := args.Get(0).(database.ScrapingOperation)
+	if !ok {
+		operation = database.ScrapingOperation{}
+	}
+	return operation, args.Bool(1), args.Error(2)
+}
+
+func (m *MockMediaDBI) ClearScrapingOperation() error {
+	if !m.hasExpectation("ClearScrapingOperation") {
+		return nil
+	}
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) SetLastIndexedSystem(systemID string) error {
 	args := m.Called(systemID)
 	if err := args.Error(0); err != nil {

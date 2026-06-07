@@ -459,7 +459,7 @@ func TestAnnotateSingletonDirectoryEntry_WhenZipsAsDirsEnabled(t *testing.T) {
 		Return(&row.Media, nil).Once()
 	mockMediaDB.On("GetMediaWithTitleAndSystem", mock.Anything, row.DBID).Return(row, nil).Once()
 	mockMediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, row.DBID).
-		Return([]database.TagInfo{{Type: "favorite", Tag: "true"}}, nil).Once()
+		Return([]database.TagInfo{{Type: "favorite", Tag: "true", Label: "Favorite"}}, nil).Once()
 	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "NES", row.Path).
 		Return([]database.TagInfo{}, nil).Once()
 
@@ -475,7 +475,7 @@ func TestAnnotateSingletonDirectoryEntry_WhenZipsAsDirsEnabled(t *testing.T) {
 	assert.Equal(t, "NES", *entry.SystemID)
 	require.NotNil(t, entry.ZapScript)
 	assert.NotEmpty(t, *entry.ZapScript)
-	assert.Equal(t, []database.TagInfo{{Type: "favorite", Tag: "true"}}, entry.Tags)
+	assert.Equal(t, []database.TagInfo{{Type: "favorite", Tag: "true", Label: "Favorite"}}, entry.Tags)
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
 }

@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
@@ -376,6 +377,20 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
+	return startMediaScrape(&env, params)
+}
+
+func ResumeMediaScrape(env *requests.RequestEnv, operation database.ScrapingOperation) error {
+	params := models.MediaScrapeParams{
+		ScraperID: operation.ScraperID,
+		Systems:   operation.Systems,
+		Force:     operation.Force,
+	}
+	_, err := startMediaScrape(env, params)
+	return err
+}
+
+func startMediaScrape(env *requests.RequestEnv, params models.MediaScrapeParams) (any, error) {
 	platformScrapers := env.Platform.Scrapers(env.Config)
 	s, ok := platformScrapers[params.ScraperID]
 	if !ok {
@@ -389,6 +404,20 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, err
 	}
 
+	operation := database.ScrapingOperation{
+		ScraperID: params.ScraperID,
+		Systems:   params.Systems,
+		Force:     params.Force,
+	}
+	if err := env.Database.MediaDB.SetScrapingOperation(operation); err != nil {
+		scrapingStatusInstance.clearIfOwner(params.ScraperID)
+		return nil, fmt.Errorf("failed to persist scraping operation: %w", err)
+	}
+	if err := env.Database.MediaDB.SetScrapingStatus(mediadb.IndexingStatusRunning); err != nil {
+		scrapingStatusInstance.clearIfOwner(params.ScraperID)
+		return nil, fmt.Errorf("failed to persist scraping status: %w", err)
+	}
+
 	// Use app-scoped context — scraping outlives the API request.
 	scrapeCtx, cancelFunc := context.WithCancel(env.State.GetContext())
 	scrapingStatusInstance.setCancelFunc(cancelFunc)
@@ -399,6 +428,9 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	if err := s.Scrape(scrapeCtx, env.Config, env.Platform, afero.NewOsFs(), env.Database, opts, nil, ch); err != nil {
 		cancelFunc()
 		scrapingStatusInstance.clear()
+		if statusErr := env.Database.MediaDB.SetScrapingStatus(mediadb.IndexingStatusFailed); statusErr != nil {
+			log.Warn().Err(statusErr).Msg("failed to persist scraping failure status")
+		}
 		return nil, fmt.Errorf("failed to start scraper: %w", err)
 	}
 
@@ -426,6 +458,7 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		defer cancelFunc()
 		defer db.MediaDB.BackgroundOperationDone()
 
+		finalStatus := mediadb.IndexingStatusCompleted
 		var receivedDone bool
 		for update := range ch {
 			if update.Done {
@@ -433,6 +466,12 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			}
 			paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
 			status := scrapingStatusFromUpdate(scrapeCtx, scraperID, params.Force, &update, paused)
+			if update.FatalErr != nil {
+				finalStatus = mediadb.IndexingStatusFailed
+			}
+			if update.Done && scrapeCtx.Err() != nil {
+				finalStatus = mediadb.IndexingStatusCancelled
+			}
 			if update.Done {
 				populateScrapedMediaCountExact(env.State.GetContext(), db, &status)
 				mediaImageNoImages.clear()
@@ -456,12 +495,21 @@ func HandleMediaScrape(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			terminalStatus.State = scrapeStateCompleted
 			if scrapeCtx.Err() != nil {
 				terminalStatus.State = scrapeStateCancelled
+				finalStatus = mediadb.IndexingStatusCancelled
 			}
 			populateScrapedMediaCountExact(env.State.GetContext(), db, &terminalStatus)
 			mediaImageNoImages.clear()
 			publishScrapingStatus(ns, &terminalStatus)
 		}
-		log.Info().Str("scraper", scraperID).Msg("scraper run complete")
+		if err := db.MediaDB.SetScrapingStatus(finalStatus); err != nil {
+			log.Warn().Err(err).Str("scraper", scraperID).Msg("failed to persist scraping terminal status")
+		}
+		if finalStatus == mediadb.IndexingStatusCompleted || finalStatus == mediadb.IndexingStatusCancelled {
+			if err := db.MediaDB.ClearScrapingOperation(); err != nil {
+				log.Warn().Err(err).Str("scraper", scraperID).Msg("failed to clear scraping operation")
+			}
+		}
+		log.Info().Str("scraper", scraperID).Str("status", finalStatus).Msg("scraper run complete")
 	}()
 
 	return nil, nil //nolint:nilnil // API handler returns nil result and nil error for async start
@@ -476,6 +524,8 @@ func HandleMediaScrapeStatus(env requests.RequestEnv) (any, error) {
 		status.State = scrapeStateIdle
 		if status.Scraping {
 			status.State = scrapeStateRunning
+		} else if persisted, ok := persistedScrapingStatus(env); ok {
+			status = persisted
 		}
 	}
 	if status.Scraping && env.ScrapePauser != nil {
@@ -499,8 +549,36 @@ func HandleMediaScrapeStatus(env requests.RequestEnv) (any, error) {
 // HandleMediaScrapeCancel cancels the currently running media.scrape operation.
 //
 //nolint:gocritic // API handler signature; large env param cannot be passed by pointer
-func HandleMediaScrapeCancel(_ requests.RequestEnv) (any, error) {
+func persistedScrapingStatus(env requests.RequestEnv) (models.ScrapingStatusResponse, bool) {
+	if env.Database == nil || env.Database.MediaDB == nil {
+		return models.ScrapingStatusResponse{}, false
+	}
+	status, err := env.Database.MediaDB.GetScrapingStatus()
+	if err != nil || (status != mediadb.IndexingStatusRunning && status != mediadb.IndexingStatusPending) {
+		return models.ScrapingStatusResponse{}, false
+	}
+	operation, found, err := env.Database.MediaDB.GetScrapingOperation()
+	if err != nil || !found || operation.ScraperID == "" {
+		return models.ScrapingStatusResponse{}, false
+	}
+	return models.ScrapingStatusResponse{
+		ScraperID: operation.ScraperID,
+		Scraping:  true,
+		State:     scrapeStateRunning,
+		Force:     operation.Force,
+	}, true
+}
+
+func HandleMediaScrapeCancel(env requests.RequestEnv) (any, error) { //nolint:gocritic // API handler signature
 	if scrapingStatusInstance.cancel() {
+		if env.Database != nil && env.Database.MediaDB != nil {
+			if err := env.Database.MediaDB.SetScrapingStatus(mediadb.IndexingStatusCancelled); err != nil {
+				log.Warn().Err(err).Msg("failed to persist scraping cancellation status")
+			}
+			if err := env.Database.MediaDB.ClearScrapingOperation(); err != nil {
+				log.Warn().Err(err).Msg("failed to clear scraping operation after cancellation")
+			}
+		}
 		return map[string]any{"message": "scraping cancelled"}, nil
 	}
 	return map[string]any{"message": "no scraping operation is currently running"}, nil

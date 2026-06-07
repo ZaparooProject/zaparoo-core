@@ -40,6 +40,7 @@ func classifyAPIMethod(method string) apiRequestPriority {
 
 	switch method {
 	case models.MethodMediaTagsUpdate,
+		models.MethodMediaHistoryLatest,
 		models.MethodRun,
 		models.MethodRunScript,
 		models.MethodLaunch,

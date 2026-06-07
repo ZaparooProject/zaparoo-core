@@ -572,6 +572,51 @@ func (db *MediaDB) GetIndexingStatus() (string, error) {
 	return sqlGetIndexingStatus(db.ctx, db.sql)
 }
 
+func (db *MediaDB) SetScrapingStatus(status string) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlSetScrapingStatus(db.ctx, db.conn(), status)
+}
+
+func (db *MediaDB) GetScrapingStatus() (string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+	if db.sql == nil {
+		return "", ErrNullSQL
+	}
+	return sqlGetScrapingStatus(db.ctx, db.sql)
+}
+
+func (db *MediaDB) SetScrapingOperation(operation database.ScrapingOperation) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlSetScrapingOperation(db.ctx, db.conn(), operation)
+}
+
+func (db *MediaDB) GetScrapingOperation() (database.ScrapingOperation, bool, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+	if db.sql == nil {
+		return database.ScrapingOperation{}, false, ErrNullSQL
+	}
+	return sqlGetScrapingOperation(db.ctx, db.sql)
+}
+
+func (db *MediaDB) ClearScrapingOperation() error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlClearScrapingOperation(db.ctx, db.conn())
+}
+
 func (db *MediaDB) SetLastIndexedSystem(systemID string) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()

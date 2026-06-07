@@ -211,43 +211,60 @@ func Start(
 		log.Warn().Err(discoveryErr).Msg("mDNS discovery initialization failed")
 	}
 
-	// Load persisted slug + tag caches before launching background work so
-	// the launcher's first media.browse hits a warm cache. Both fall
-	// through to (false, nil) on a missing/stale/version-mismatched file;
-	// the rebuild path below covers that case.
-	var tagCacheLoaded, slugCacheLoaded bool
-	if db.MediaDB != nil {
-		tagCacheStarted := time.Now()
-		loaded, loadErr := db.MediaDB.LoadCachedTagCache()
-		if loadErr != nil {
-			log.Warn().Err(loadErr).Msg("failed to load cached tag cache from disk")
-		}
-		log.Debug().
-			Bool("loaded", loaded).
-			Dur("duration", time.Since(tagCacheStarted)).
-			Msg("cached tag cache load completed")
-		tagCacheLoaded = loaded
-		slugCacheStarted := time.Now()
-		loaded, loadErr = db.MediaDB.LoadCachedSlugSearchCache()
-		if loadErr != nil {
-			log.Warn().Err(loadErr).Msg("failed to load cached slug search cache from disk")
-		}
-		log.Debug().
-			Bool("loaded", loaded).
-			Dur("duration", time.Since(slugCacheStarted)).
-			Msg("cached slug search cache load completed")
-		slugCacheLoaded = loaded
-	}
+	checkAndResumeScraping(pl, cfg, db, st, scrapePauser)
 
-	backgroundWG.Add(1)
-	go func() {
-		defer backgroundWG.Done()
-		if db == nil {
-			log.Warn().Msg("skipping startup maintenance: database is nil")
-			return
-		}
-		runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)
-	}()
+	idleSched.Schedule(
+		st.GetContext(), "startup-media-work",
+		5*time.Second, 300*time.Second,
+		func(_ context.Context) {
+			if db == nil {
+				log.Warn().Msg("skipping startup media work: database is nil")
+				return
+			}
+
+			var tagCacheLoaded, slugCacheLoaded bool
+			if db.MediaDB != nil {
+				tagCacheStarted := time.Now()
+				loaded, loadErr := db.MediaDB.LoadCachedTagCache()
+				if loadErr != nil {
+					log.Warn().Err(loadErr).Msg("failed to load cached tag cache from disk")
+				}
+				log.Debug().
+					Bool("loaded", loaded).
+					Dur("duration", time.Since(tagCacheStarted)).
+					Msg("cached tag cache load completed")
+				tagCacheLoaded = loaded
+
+				slugCacheStarted := time.Now()
+				loaded, loadErr = db.MediaDB.LoadCachedSlugSearchCache()
+				if loadErr != nil {
+					log.Warn().Err(loadErr).Msg("failed to load cached slug search cache from disk")
+				}
+				log.Debug().
+					Bool("loaded", loaded).
+					Dur("duration", time.Since(slugCacheStarted)).
+					Msg("cached slug search cache load completed")
+				slugCacheLoaded = loaded
+			}
+
+			runMediaDBStartupMaintenance(st.GetContext(), db.MediaDB, indexPauser, tagCacheLoaded)
+			checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
+			checkAndResumeOptimization(db, st.Notifications, indexPauser)
+
+			if db.MediaDB != nil && !slugCacheLoaded {
+				db.MediaDB.TrackBackgroundOperation()
+				defer db.MediaDB.BackgroundOperationDone()
+				if cacheErr := db.MediaDB.RebuildSlugSearchCache(); cacheErr != nil {
+					log.Warn().Err(cacheErr).Msg("failed to build slug search cache")
+					return
+				}
+				if persistErr := db.MediaDB.PersistSlugSearchCache(); persistErr != nil {
+					log.Warn().Err(persistErr).
+						Msg("failed to persist slug search cache after startup rebuild")
+				}
+			}
+		},
+	)
 
 	// Defer non-critical "run eventually" work to the idle scheduler so it
 	// doesn't compete with the launcher's first request for the single
@@ -287,40 +304,6 @@ func Start(
 	)
 	go watchGameForIndexPause(st.GetContext(), notifBroker, st, st.Notifications, indexPauser)
 	go watchGameForScrapePause(st.GetContext(), notifBroker, st, st.Notifications, scrapePauser)
-
-	log.Info().Msg("checking for interrupted media indexing")
-	backgroundWG.Add(1)
-	go func() {
-		defer backgroundWG.Done()
-		checkAndResumeIndexing(pl, cfg, db, st, indexPauser)
-	}()
-
-	log.Info().Msg("checking for interrupted media optimization")
-	backgroundWG.Add(1)
-	go func() {
-		defer backgroundWG.Done()
-		checkAndResumeOptimization(db, st.Notifications, indexPauser)
-	}()
-
-	// Build the slug search cache after the API is listening so it doesn't
-	// block startup. If LoadCachedSlugSearchCache already populated it from
-	// disk we skip the SQL rebuild — that's the whole point of persisting.
-	if db.MediaDB != nil && !slugCacheLoaded {
-		db.MediaDB.TrackBackgroundOperation()
-		go func() {
-			defer db.MediaDB.BackgroundOperationDone()
-			if cacheErr := db.MediaDB.RebuildSlugSearchCache(); cacheErr != nil {
-				log.Warn().Err(cacheErr).Msg("failed to build slug search cache")
-				return
-			}
-			// Best-effort persist so the next cold boot can skip the
-			// rebuild. A write failure leaves the running cache intact.
-			if persistErr := db.MediaDB.PersistSlugSearchCache(); persistErr != nil {
-				log.Warn().Err(persistErr).
-					Msg("failed to persist slug search cache after startup rebuild")
-			}
-		}()
-	}
 
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)
