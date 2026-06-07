@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -405,6 +406,44 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 
 	// Verify that no indexing was triggered for failed status
 	mockMediaDB.AssertNotCalled(t, "GetOptimizationStatus")
+}
+
+func TestCheckAndResumeScraping_StartFailurePersistsTerminalState(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	operation := database.ScrapingOperation{ScraperID: "test-scraper"}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("GetScrapingOperation").Return(operation, true, nil).Once()
+	mockMediaDB.On("SetScrapingOperation", operation).Return(assert.AnError).Once()
+	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+	mockMediaDB.On("ClearScrapingOperation").Return(nil).Once()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Scrapers", cfg).Return(map[string]platforms.Scraper{
+		"test-scraper": {
+			ID:   "test-scraper",
+			Name: "Test Scraper",
+			Scrape: func(
+				context.Context, *config.Instance, platforms.Platform, afero.Fs,
+				*database.Database, scraper.ScrapeOptions, platforms.ScraperCustomOptions,
+				chan<- scraper.ScrapeUpdate,
+			) error {
+				return nil
+			},
+		},
+	}).Twice()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	checkAndResumeScraping(mockPlatform, cfg, &database.Database{MediaDB: mockMediaDB}, st, nil)
+
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
 }
 
 func TestCheckAndResumeOptimization_RunningStatus(t *testing.T) {

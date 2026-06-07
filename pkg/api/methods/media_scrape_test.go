@@ -60,6 +60,24 @@ func emptyPlatformScraper(id, name string) platforms.Scraper {
 	}
 }
 
+func fatalUpdatePlatformScraper(id string) platforms.Scraper {
+	return platforms.Scraper{
+		ID:   id,
+		Name: "fatal update scraper",
+		Scrape: func(
+			_ context.Context, _ *config.Instance, _ platforms.Platform,
+			_ afero.Fs, _ *database.Database, _ scraper.ScrapeOptions,
+			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
+		) error {
+			go func() {
+				ch <- scraper.ScrapeUpdate{FatalErr: errors.New("scrape failed")}
+				close(ch)
+			}()
+			return nil
+		},
+	}
+}
+
 // errorPlatformScraper returns a platforms.Scraper whose Scrape always returns err.
 func errorPlatformScraper(id string, err error) platforms.Scraper {
 	return platforms.Scraper{
@@ -268,6 +286,64 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	assert.True(t, status.Done)
 
 	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+	statusInstance.clear()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("SetScrapingOperation", database.ScrapingOperation{ScraperID: "fail-scraper"}).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+	mockDB.On("TrackBackgroundOperation").Return()
+	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "fail-scraper").Return(0, nil)
+
+	pl := mocks.NewMockPlatform()
+	pl.On("Scrapers", assertmock.Anything).Return(map[string]platforms.Scraper{
+		"fail-scraper": fatalUpdatePlatformScraper("fail-scraper"),
+	})
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	t.Cleanup(st.StopService)
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		Platform: pl,
+		State:    st,
+		Database: &database.Database{MediaDB: mockDB},
+		Params:   json.RawMessage(`{"scraperId":"fail-scraper"}`),
+	}
+
+	result, err := HandleMediaScrape(env)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+
+	require.Eventually(t, func() bool {
+		return !IsScrapingRunning()
+	}, 2*time.Second, 10*time.Millisecond)
+
+	var sawFailure bool
+	for {
+		select {
+		case n := <-ns:
+			if n.Method != models.NotificationMediaScraping {
+				continue
+			}
+			var payload models.ScrapingStatusResponse
+			require.NoError(t, json.Unmarshal(n.Params, &payload))
+			assert.False(t, payload.Done, "fatal scrape must not synthesize a completed Done update")
+			if payload.State == scrapeStateFailed {
+				sawFailure = true
+			}
+		default:
+			assert.True(t, sawFailure, "expected failed scraping notification")
+			mockDB.AssertExpectations(t)
+			return
+		}
+	}
 }
 
 func TestHandleMediaScrapeStatus_NoRun(t *testing.T) {
