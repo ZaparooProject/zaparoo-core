@@ -260,8 +260,9 @@ func populateScrapedMediaCountCached(
 	}
 
 	count, ok := queryScrapedMediaCount(ctx, db, status.ScraperID)
+	queryDone := time.Now()
 	if !ok {
-		scrapingStatusInstance.updateCountFailure(status.ScraperID, now)
+		scrapingStatusInstance.updateCountFailure(status.ScraperID, queryDone)
 		if cached, cachedOK := scrapingStatusInstance.getAnyCountCache(status.ScraperID); cachedOK {
 			status.TotalScraped = cached
 		}
@@ -271,7 +272,7 @@ func populateScrapedMediaCountCached(
 		count = cached
 	}
 	status.TotalScraped = count
-	scrapingStatusInstance.updateCountCache(status.ScraperID, count, now)
+	scrapingStatusInstance.updateCountCache(status.ScraperID, count, queryDone)
 }
 
 func scrapeCountStatusContext(parent context.Context) (context.Context, context.CancelFunc) {

@@ -45,7 +45,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 	"golang.org/x/image/draw"
-	_ "golang.org/x/image/webp" // register WebP decoder for image.Decode
 )
 
 const (
@@ -98,7 +97,7 @@ func resizeImageIfNeeded(binary []byte, contentType string, maxSize int) (resize
 	if maxSize <= 0 || len(binary) == 0 {
 		return binary, contentType
 	}
-	src, _, err := image.Decode(bytes.NewReader(binary))
+	src, err := decodeResizableImage(binary, contentType)
 	if err != nil {
 		return binary, contentType
 	}
@@ -144,6 +143,38 @@ func resizeImageIfNeeded(binary []byte, contentType string, maxSize int) (resize
 		Int("resizedBytes", out.Len()).
 		Msg("media.image: resized image")
 	return out.Bytes(), outputType
+}
+
+func decodeResizableImage(binary []byte, contentType string) (image.Image, error) {
+	decodeJPEG := func() (image.Image, error) {
+		img, err := jpeg.Decode(bytes.NewReader(binary))
+		if err != nil {
+			return nil, fmt.Errorf("decode JPEG for resize: %w", err)
+		}
+		return img, nil
+	}
+	decodePNG := func() (image.Image, error) {
+		img, err := png.Decode(bytes.NewReader(binary))
+		if err != nil {
+			return nil, fmt.Errorf("decode PNG for resize: %w", err)
+		}
+		return img, nil
+	}
+
+	switch extensionFromContentType(contentType) {
+	case "jpg":
+		return decodeJPEG()
+	case "png":
+		return decodePNG()
+	}
+
+	if bytes.HasPrefix(binary, []byte("\x89PNG\r\n\x1a\n")) {
+		return decodePNG()
+	}
+	if len(binary) >= 2 && binary[0] == 0xff && binary[1] == 0xd8 {
+		return decodeJPEG()
+	}
+	return nil, fmt.Errorf("unsupported image type for resize: %s", contentType)
 }
 
 func imageHasTransparency(img image.Image) bool {

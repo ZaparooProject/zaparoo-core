@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/jpeg"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -136,8 +135,6 @@ func TestResizeImageIfNeeded_OpaqueImageUsesJPEG(t *testing.T) {
 	assert.Equal(t, "jpeg", decodedType)
 	assert.Equal(t, 2, decoded.Bounds().Dx())
 	assert.Equal(t, 2, decoded.Bounds().Dy())
-	_, err = jpeg.Decode(bytes.NewReader(resized))
-	assert.NoError(t, err)
 }
 
 // TestHandleMediaImage_DefaultPrefs_TitleBlobFound verifies that when no imageTypes
