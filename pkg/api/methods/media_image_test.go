@@ -418,7 +418,7 @@ func TestMediaImagePropSources_IncludesSingletonAliasSources(t *testing.T) {
 	parentPath := filepath.ToSlash(filepath.Join("roms", "Game.zip"))
 	parent := &database.Media{DBID: 10, Path: parentPath}
 
-	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, parentPath).
+	mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, row.System.DBID, parentPath).
 		Return(&row.Media, nil).Once()
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, parentPath).
 		Return(parent, nil).Once()

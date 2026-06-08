@@ -683,7 +683,7 @@ func buildBrowseResponse(
 			FileCount: &dir.FileCount,
 			SystemIDs: dir.SystemIDs,
 		}
-		if dir.FileCount == 1 {
+		if isSingletonDirectoryAliasCandidate(dir.FileCount) {
 			annotateSingletonDirectoryEntry(env, &entry, dirPath, dir.SystemIDs, rootDirs)
 		}
 		entries = append(entries, entry)
@@ -759,6 +759,11 @@ func buildMediaEntry(
 	return entry
 }
 
+func isSingletonDirectoryAliasCandidate(fileCount int) bool {
+	const maxSingletonAliasCandidateFiles = 64
+	return fileCount > 0 && fileCount <= maxSingletonAliasCandidateFiles
+}
+
 func annotateSingletonDirectoryEntry(
 	env *requests.RequestEnv,
 	entry *models.BrowseEntry,
@@ -776,7 +781,7 @@ func annotateSingletonDirectoryEntry(
 		log.Debug().Err(err).Str("system", systemIDs[0]).Msg("browse singleton directory system lookup failed")
 		return
 	}
-	media, err := db.FindSingleDescendantMedia(env.Context, system.DBID, dirPath)
+	media, err := db.FindSingleContainerLaunchMedia(env.Context, system.DBID, dirPath)
 	if err != nil {
 		log.Debug().Err(err).Str("path", dirPath).Msg("browse singleton directory lookup failed")
 		return

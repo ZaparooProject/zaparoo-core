@@ -41,7 +41,7 @@ func resolveSingletonMediaPath(
 		return nil, nil //nolint:nilnil // disabled aliasing has no singleton fallback
 	}
 
-	media, err := env.Database.MediaDB.FindSingleDescendantMedia(env.Context, system.DBID, mediaPath)
+	media, err := env.Database.MediaDB.FindSingleContainerLaunchMedia(env.Context, system.DBID, mediaPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve singleton media path: %w", err)
 	}
@@ -67,7 +67,7 @@ func equivalentMediaIDs(env *requests.RequestEnv, row *database.MediaFullRow) ([
 	}
 
 	if helpers.IsZip(row.Path) {
-		child, err := env.Database.MediaDB.FindSingleDescendantMedia(env.Context, row.System.DBID, row.Path)
+		child, err := env.Database.MediaDB.FindSingleContainerLaunchMedia(env.Context, row.System.DBID, row.Path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to find child alias media: %w", err)
 		}
@@ -79,7 +79,7 @@ func equivalentMediaIDs(env *requests.RequestEnv, row *database.MediaFullRow) ([
 		return ids, nil
 	}
 
-	onlyChild, err := env.Database.MediaDB.FindSingleDescendantMedia(env.Context, row.System.DBID, parentPath)
+	onlyChild, err := env.Database.MediaDB.FindSingleContainerLaunchMedia(env.Context, row.System.DBID, parentPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify parent alias media: %w", err)
 	}
