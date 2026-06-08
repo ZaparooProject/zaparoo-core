@@ -21,6 +21,7 @@ package methods
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -42,6 +43,8 @@ import (
 // management and safe concurrent access.
 const (
 	scrapeTotalScrapedRefreshInterval = 5 * time.Second
+	scrapeTotalScrapedFailureBackoff  = 60 * time.Second
+	scrapeTotalScrapedStatusTimeout   = 2 * time.Second
 	scrapeStateIdle                   = "idle"
 	scrapeStateRunning                = "running"
 	scrapeStatePaused                 = "paused"
@@ -52,6 +55,7 @@ const (
 
 type scrapedCountCache struct {
 	lastRefresh time.Time
+	lastFailure time.Time
 	scraperID   string
 	count       int
 	valid       bool
@@ -177,6 +181,15 @@ func (s *scrapingStatus) getAnyCountCache(scraperID string) (int, bool) {
 	return s.countCache.count, true
 }
 
+func (s *scrapingStatus) countRefreshBackedOff(scraperID string, now time.Time) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.countCache.scraperID != scraperID || s.countCache.lastFailure.IsZero() {
+		return false
+	}
+	return now.Sub(s.countCache.lastFailure) < scrapeTotalScrapedFailureBackoff
+}
+
 func (s *scrapingStatus) updateCountCache(scraperID string, count int, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -191,6 +204,15 @@ func (s *scrapingStatus) updateCountCache(scraperID string, count int, now time.
 	}
 }
 
+func (s *scrapingStatus) updateCountFailure(scraperID string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.countCache.scraperID != scraperID {
+		s.countCache = scrapedCountCache{scraperID: scraperID}
+	}
+	s.countCache.lastFailure = now
+}
+
 func publishScrapingStatus(ns chan<- models.Notification, status *models.ScrapingStatusResponse) {
 	scrapingStatusInstance.setLatest(status)
 	notifications.MediaScraping(ns, status)
@@ -201,7 +223,7 @@ func populateScrapedMediaCount(
 	db *database.Database,
 	status *models.ScrapingStatusResponse,
 ) {
-	populateScrapedMediaCountExact(ctx, db, status)
+	populateScrapedMediaCountCached(ctx, db, status)
 }
 
 func populateScrapedMediaCountExact(
@@ -225,13 +247,21 @@ func populateScrapedMediaCountCached(
 	db *database.Database,
 	status *models.ScrapingStatusResponse,
 ) {
-	if cached, ok := scrapingStatusInstance.getFreshCountCache(status.ScraperID, time.Now()); ok {
+	now := time.Now()
+	if cached, ok := scrapingStatusInstance.getFreshCountCache(status.ScraperID, now); ok {
 		status.TotalScraped = cached
+		return
+	}
+	if scrapingStatusInstance.countRefreshBackedOff(status.ScraperID, now) {
+		if cached, cachedOK := scrapingStatusInstance.getAnyCountCache(status.ScraperID); cachedOK {
+			status.TotalScraped = cached
+		}
 		return
 	}
 
 	count, ok := queryScrapedMediaCount(ctx, db, status.ScraperID)
 	if !ok {
+		scrapingStatusInstance.updateCountFailure(status.ScraperID, now)
 		if cached, cachedOK := scrapingStatusInstance.getAnyCountCache(status.ScraperID); cachedOK {
 			status.TotalScraped = cached
 		}
@@ -241,7 +271,14 @@ func populateScrapedMediaCountCached(
 		count = cached
 	}
 	status.TotalScraped = count
-	scrapingStatusInstance.updateCountCache(status.ScraperID, count, time.Now())
+	scrapingStatusInstance.updateCountCache(status.ScraperID, count, now)
+}
+
+func scrapeCountStatusContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, scrapeTotalScrapedStatusTimeout)
 }
 
 func queryScrapedMediaCount(ctx context.Context, db *database.Database, scraperID string) (int, bool) {
@@ -249,19 +286,35 @@ func queryScrapedMediaCount(ctx context.Context, db *database.Database, scraperI
 		return 0, false
 	}
 
+	started := time.Now()
+	queryKind := "total"
 	var (
 		count int
 		err   error
 	)
 	if scraperID != "" {
+		queryKind = "per_scraper"
 		count, err = db.MediaDB.GetScrapedMediaCount(ctx, scraperID)
 	} else {
 		count, err = db.MediaDB.GetTotalScrapedMediaCount(ctx)
 	}
+	duration := time.Since(started)
 	if err != nil {
-		log.Warn().Err(err).Str("scraper", scraperID).Msg("failed to get scraped media count")
+		timedOut := errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded)
+		log.Warn().Err(err).
+			Str("scraper", scraperID).
+			Str("queryKind", queryKind).
+			Int64("durationMs", duration.Milliseconds()).
+			Bool("timeout", timedOut).
+			Msg("failed to get scraped media count")
 		return 0, false
 	}
+	log.Debug().
+		Str("scraper", scraperID).
+		Str("queryKind", queryKind).
+		Int64("durationMs", duration.Milliseconds()).
+		Int("count", count).
+		Msg("got scraped media count")
 	return count, true
 }
 
@@ -539,7 +592,7 @@ func HandleMediaScrapeStatus(env requests.RequestEnv) (any, error) {
 		return status, nil
 	}
 
-	countCtx, cancel := optionalDBEnrichmentContext(env.Context)
+	countCtx, cancel := scrapeCountStatusContext(env.Context)
 	defer cancel()
 	populateScrapedMediaCount(countCtx, env.Database, &status)
 

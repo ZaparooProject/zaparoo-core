@@ -535,7 +535,7 @@ func TestGetTotalScrapedMediaCount_DistinctMedia(t *testing.T) {
 	assert.Equal(t, 2, count)
 }
 
-func TestGetTotalScrapedMediaCount_IncludesTitlePropertyCoverage(t *testing.T) {
+func TestGetTotalScrapedMediaCount_TitlePropertyOnlyDoesNotCount(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
@@ -552,10 +552,10 @@ func TestGetTotalScrapedMediaCount_IncludesTitlePropertyCoverage(t *testing.T) {
 
 	count, err := mediaDB.GetTotalScrapedMediaCount(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, count)
+	assert.Equal(t, 0, count)
 }
 
-func TestGetTotalScrapedMediaCount_IncludesOnlyMediaPropertyRow(t *testing.T) {
+func TestGetTotalScrapedMediaCount_MediaPropertyOnlyDoesNotCount(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
@@ -572,7 +572,7 @@ func TestGetTotalScrapedMediaCount_IncludesOnlyMediaPropertyRow(t *testing.T) {
 
 	count, err := mediaDB.GetTotalScrapedMediaCount(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count)
+	assert.Equal(t, 0, count)
 }
 
 func TestGetTotalScrapedMediaCount_MissingSentinelsReturnsZero(t *testing.T) {
