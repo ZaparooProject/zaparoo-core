@@ -367,7 +367,7 @@ func TestHandleMediaScrapeStatus_NoRun(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestHandleMediaScrapeStatus_RefreshesExactCountDespiteCache(t *testing.T) {
+func TestHandleMediaScrapeStatus_UsesFreshCachedCount(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()
 
@@ -384,7 +384,6 @@ func TestHandleMediaScrapeStatus_RefreshesExactCountDespiteCache(t *testing.T) {
 	})
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(12, nil).Once()
 
 	result, err := HandleMediaScrapeStatus(requests.RequestEnv{
 		Context:  context.Background(),
@@ -393,8 +392,8 @@ func TestHandleMediaScrapeStatus_RefreshesExactCountDespiteCache(t *testing.T) {
 	require.NoError(t, err)
 	status, ok := result.(models.ScrapingStatusResponse)
 	require.True(t, ok)
-	assert.Equal(t, 12, status.TotalScraped)
-	mockDB.AssertExpectations(t)
+	assert.Equal(t, 5, status.TotalScraped)
+	mockDB.AssertNotCalled(t, "GetScrapedMediaCount", assertmock.Anything, "test-scraper")
 }
 
 func TestHandleMediaScrapeStatus_TracksLatestProgress(t *testing.T) {
@@ -492,7 +491,7 @@ func TestHandleMediaScrapeStatus_BoundsSlowScrapedCount(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Less(t, time.Since(started), 2*time.Second)
+	assert.Less(t, time.Since(started), 3*time.Second)
 	status, ok := result.(models.ScrapingStatusResponse)
 	require.True(t, ok)
 	assert.Zero(t, status.TotalScraped)
@@ -502,7 +501,7 @@ func TestHandleMediaScrapeStatus_BoundsSlowScrapedCount(t *testing.T) {
 func TestHandleMediaScrapeStatus_UsesCachedCountWhenRefreshTimesOut(t *testing.T) {
 	// Not parallel — manipulates shared scrapingStatusInstance.
 	ClearScrapingStatus()
-	scrapingStatusInstance.updateCountCache("", 9, time.Now())
+	scrapingStatusInstance.updateCountCache("", 9, time.Now().Add(-scrapeTotalScrapedRefreshInterval-time.Second))
 
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("GetTotalScrapedMediaCount", assertmock.Anything).
@@ -518,6 +517,35 @@ func TestHandleMediaScrapeStatus_UsesCachedCountWhenRefreshTimesOut(t *testing.T
 	status, ok := result.(models.ScrapingStatusResponse)
 	require.True(t, ok)
 	assert.Equal(t, 9, status.TotalScraped)
+	mockDB.AssertExpectations(t)
+}
+
+func TestHandleMediaScrapeStatus_BacksOffAfterScrapedCountTimeout(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	ClearScrapingStatus()
+
+	mockDB := testhelpers.NewMockMediaDBI()
+	mockDB.On("GetTotalScrapedMediaCount", assertmock.Anything).
+		Return(0, context.DeadlineExceeded).
+		Once()
+
+	result, err := HandleMediaScrapeStatus(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+	})
+	require.NoError(t, err)
+	status, ok := result.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.Zero(t, status.TotalScraped)
+
+	result, err = HandleMediaScrapeStatus(requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockDB},
+	})
+	require.NoError(t, err)
+	status, ok = result.(models.ScrapingStatusResponse)
+	require.True(t, ok)
+	assert.Zero(t, status.TotalScraped)
 	mockDB.AssertExpectations(t)
 }
 

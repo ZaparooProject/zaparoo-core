@@ -20,10 +20,14 @@
 package methods
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,6 +87,54 @@ func mediaImageParams(row *database.MediaFullRow, extra string) json.RawMessage 
 		extra = ", " + extra
 	}
 	return json.RawMessage(fmt.Sprintf(`{"system": %q, "path": %q%s}`, row.System.SystemID, row.Path, extra))
+}
+
+func TestResizeImageIfNeeded_TransparentPNGPreservesAlpha(t *testing.T) {
+	t.Parallel()
+
+	src := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for y := range 4 {
+		for x := range 4 {
+			src.Set(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	src.Set(0, 0, color.RGBA{G: 255, A: 64})
+
+	var in bytes.Buffer
+	require.NoError(t, png.Encode(&in, src))
+
+	resized, contentType := resizeImageIfNeeded(in.Bytes(), "image/png", 2)
+	require.Equal(t, "image/png", contentType)
+
+	decoded, decodedType, err := image.Decode(bytes.NewReader(resized))
+	require.NoError(t, err)
+	assert.Equal(t, "png", decodedType)
+	assert.Equal(t, 2, decoded.Bounds().Dx())
+	assert.Equal(t, 2, decoded.Bounds().Dy())
+	assert.True(t, imageHasTransparency(decoded))
+}
+
+func TestResizeImageIfNeeded_OpaqueImageUsesJPEG(t *testing.T) {
+	t.Parallel()
+
+	src := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for y := range 4 {
+		for x := range 4 {
+			src.Set(x, y, color.RGBA{R: 255, G: 128, B: 64, A: 255})
+		}
+	}
+
+	var in bytes.Buffer
+	require.NoError(t, png.Encode(&in, src))
+
+	resized, contentType := resizeImageIfNeeded(in.Bytes(), "image/png", 2)
+	require.Equal(t, "image/jpeg", contentType)
+
+	decoded, decodedType, err := image.Decode(bytes.NewReader(resized))
+	require.NoError(t, err)
+	assert.Equal(t, "jpeg", decodedType)
+	assert.Equal(t, 2, decoded.Bounds().Dx())
+	assert.Equal(t, 2, decoded.Bounds().Dy())
 }
 
 // TestHandleMediaImage_DefaultPrefs_TitleBlobFound verifies that when no imageTypes
