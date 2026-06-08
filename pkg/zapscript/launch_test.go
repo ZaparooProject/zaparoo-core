@@ -25,6 +25,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1041,7 +1042,12 @@ launcher = "RA"
 
 // TestCmdRandom_DoubleSlashPathCleaned verifies that a double-slash prefix
 // (e.g. from **launch.random://path) is normalized before querying the DB.
+// On Windows, //media/fat is a UNC path and filepath.Clean preserves the double
+// slash, so the collapse to single slash is POSIX-only behavior.
 func TestCmdRandom_DoubleSlashPathCleaned(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("//media/fat is a UNC path on Windows; double-slash collapse is POSIX-only filepath.Clean behavior")
+	}
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
@@ -1082,6 +1088,58 @@ func TestCmdRandom_DoubleSlashPathCleaned(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.MediaChanged)
 	mockMediaDB.AssertExpectations(t)
+}
+
+// TestCmdRandom_UNCPathPrefixPreserved is a regression test against PR #921's approach.
+// On Windows, a UNC path such as \\server\share\games must be passed to the DB as
+// //server/share/games (via filepath.ToSlash(filepath.Clean(...))), matching how the
+// media scanner stores those paths. Collapsing the leading // to / would make the prefix
+// never match any stored media and silently return no results.
+func TestCmdRandom_UNCPathPrefixPreserved(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("UNC path handling is Windows-only")
+	}
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
+	// The scanner stores UNC paths as //server/share/... (via filepath.ToSlash).
+	// The DB prefix must preserve the leading // to match.
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("RandomGameWithQuery",
+		mock.Anything,
+		mock.MatchedBy(func(q *database.MediaQuery) bool {
+			return q.PathPrefix == "//server/share/games"
+		}),
+	).Return(database.SearchResult{
+		Path:     "//server/share/games/game.zip",
+		SystemID: "genesis",
+	}, nil)
+
+	mockPlatform.On("LaunchMedia", cfg,
+		"//server/share/games/game.zip",
+		(*platforms.Launcher)(nil),
+		mock.Anything,
+		(*platforms.LaunchOptions)(nil),
+	).Return(nil)
+
+	env := platforms.CmdEnv{
+		Cmd: zapscript.Command{
+			Name: "launch.random",
+			Args: []string{`\\server\share\games`},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := cmdRandom(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
 }
 
 // TestCmdRandom_AbsolutePathFallbackToFilesystem is a regression test for #576.
