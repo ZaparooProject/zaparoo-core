@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	posixpath "path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -237,9 +236,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// absolute path, use database query to find random media with this path prefix
 	// this includes virtual paths and zips as options
 	if filepath.IsAbs(query) {
-		cleanedPath := posixpath.Clean(query)
+		cleanedPath := filepath.Clean(query)
 		mediaQuery := database.MediaQuery{
-			PathPrefix: cleanedPath,
+			PathPrefix: filepath.ToSlash(cleanedPath),
 			Tags:       tagFilters,
 		}
 		searchResult, searchErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)

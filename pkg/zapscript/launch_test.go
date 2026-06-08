@@ -944,11 +944,12 @@ launcher = "RA"
 
 	queryPath := filepath.Join(launchTestAbsPath("games"), "GENESIS")
 	romPath := filepath.Join(queryPath, "Sonic.bin")
+	wantPathPrefix := filepath.ToSlash(queryPath)
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("RandomGameWithQuery",
 		mock.Anything,
 		mock.MatchedBy(func(q *database.MediaQuery) bool {
-			return q.PathPrefix == filepath.ToSlash(queryPath)
+			return q.PathPrefix == wantPathPrefix
 		}),
 	).Return(database.SearchResult{SystemID: "genesis", Path: romPath}, nil)
 
@@ -985,6 +986,7 @@ func TestCmdRandom_AbsolutePathFilesystemFallbackAppliesInferredGroupDefault(t *
 	require.NoError(t, os.MkdirAll(dir, 0o750))
 	romPath := filepath.Join(dir, "Sonic.bin")
 	require.NoError(t, os.WriteFile(romPath, []byte("x"), 0o600))
+	wantPathPrefix := filepath.ToSlash(dir)
 
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
@@ -1008,7 +1010,7 @@ launcher = "RA"
 	mockMediaDB.On("RandomGameWithQuery",
 		mock.Anything,
 		mock.MatchedBy(func(q *database.MediaQuery) bool {
-			return q.PathPrefix == filepath.ToSlash(dir)
+			return q.PathPrefix == wantPathPrefix
 		}),
 	).Return(database.SearchResult{}, sql.ErrNoRows)
 
