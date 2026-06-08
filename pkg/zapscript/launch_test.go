@@ -1095,6 +1095,7 @@ func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "game1.vhd"), []byte("x"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "game2.vhd"), []byte("x"), 0o600))
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o750))
+	wantPathPrefix := filepath.ToSlash(dir)
 
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
@@ -1105,7 +1106,7 @@ func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
 	mockMediaDB.On("RandomGameWithQuery",
 		mock.Anything,
 		mock.MatchedBy(func(q *database.MediaQuery) bool {
-			return q.PathPrefix == dir
+			return q.PathPrefix == wantPathPrefix
 		}),
 	).Return(database.SearchResult{}, sql.ErrNoRows)
 
