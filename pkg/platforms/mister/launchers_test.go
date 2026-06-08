@@ -522,6 +522,8 @@ func TestRetroAchievementsSetNameMapping(t *testing.T) {
 		"RANES":          "RA_NES",
 		"RASNES":         "RA_SNES",
 		"RAGameboy":      "RA_Gameboy",
+		"RAGameboyColor": "RA_GBC",
+		"RASuperGameboy": "RA_SGB",
 		"RAGBA":          "RA_GBA",
 		"RANintendo64":   "RA_N64",
 		"RAPSX":          "RA_PSX",
@@ -541,6 +543,49 @@ func TestRetroAchievementsSetNameMapping(t *testing.T) {
 			got, ok := retroAchievementsSetName(launcherID)
 			require.True(t, ok)
 			assert.Equal(t, want, got)
+		})
+	}
+}
+
+func TestRetroAchievementsSetNameSameDirRegression(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		launcherID  string
+		wantSetName string
+		wantSameDir bool
+	}{
+		{launcherID: "RANES", wantSetName: "RA_NES", wantSameDir: true},
+		{launcherID: "RASNES", wantSetName: "RA_SNES", wantSameDir: true},
+		{launcherID: "RAGameboy", wantSetName: "RA_Gameboy", wantSameDir: true},
+		{launcherID: "RAGBA", wantSetName: "RA_GBA", wantSameDir: true},
+		{launcherID: "RANintendo64", wantSetName: "RA_N64", wantSameDir: true},
+		{launcherID: "RAPSX", wantSetName: "RA_PSX", wantSameDir: true},
+		{launcherID: "RAMegaDrive", wantSetName: "RA_MegaDrive", wantSameDir: true},
+		{launcherID: "RAMegaCD", wantSetName: "RA_MegaCD", wantSameDir: true},
+		{launcherID: "RASMS", wantSetName: "RA_SMS", wantSameDir: true},
+		{launcherID: "RANeoGeo", wantSetName: "RA_NeoGeo", wantSameDir: true},
+		{launcherID: "RATurboGrafx16", wantSetName: "RA_TurboGrafx16", wantSameDir: true},
+		{launcherID: "RAAtari2600", wantSetName: "RA_Atari7800", wantSameDir: true},
+		{launcherID: "RAS32X", wantSetName: "RA_S32X", wantSameDir: true},
+		{launcherID: "RAGameboyColor", wantSetName: "RA_GBC", wantSameDir: false},
+		{launcherID: "RASuperGameboy", wantSetName: "RA_SGB", wantSameDir: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.launcherID, func(t *testing.T) {
+			t.Parallel()
+
+			core := cores.Core{ID: tc.launcherID}
+			err := configureAltCoreWithDefaultSetName(
+				&core, tc.launcherID, "_RA_Cores/Cores/Gameboy", tc.wantSetName, tc.wantSameDir, nil,
+			)
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.launcherID, core.LauncherID)
+			assert.Equal(t, "_RA_Cores/Cores/Gameboy", core.RBF)
+			assert.Equal(t, tc.wantSetName, core.SetName)
+			assert.Equal(t, tc.wantSameDir, core.SetNameSameDir)
 		})
 	}
 }
@@ -678,6 +723,8 @@ func TestRetroAchievementsLaunchersExist(t *testing.T) {
 		{"RANES", "NES"},
 		{"RASNES", "SNES"},
 		{"RAGameboy", "Gameboy"},
+		{"RAGameboyColor", "GameboyColor"},
+		{"RASuperGameboy", "SuperGameboy"},
 		{"RAGBA", "GBA"},
 		{"RANintendo64", "Nintendo64"},
 		{"RAPSX", "PSX"},

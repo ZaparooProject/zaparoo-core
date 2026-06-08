@@ -1658,10 +1658,6 @@ func matchMediaByResolvedPath(
 		return media, key, true
 	}
 
-	if !strings.EqualFold(filepath.Ext(resolved), ".zip") {
-		return database.Media{}, "", false
-	}
-
 	prefix := key + "/"
 	var matchedMedia database.Media
 	var matchedKey string
@@ -1682,7 +1678,7 @@ func matchMediaByResolvedPath(
 	}
 	if matches > 1 {
 		log.Warn().Str("path", resolved).Int("matches", matches).
-			Msg("gamelistxml: zip-as-dir path matched multiple indexed media rows, skipping")
+			Msg("gamelistxml: container path matched multiple indexed media rows, skipping")
 	}
 	return database.Media{}, "", false
 }
