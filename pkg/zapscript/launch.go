@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	posixpath "path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -38,6 +39,14 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
+
+func cleanRandomMediaQueryPath(path string) string {
+	cleaned := filepath.ToSlash(filepath.Clean(path))
+	if strings.HasPrefix(cleaned, "//") {
+		return posixpath.Clean(cleaned)
+	}
+	return cleaned
+}
 
 func applySystemDefaultLauncher(pl platforms.Platform, env *platforms.CmdEnv, systemID string) string {
 	current := env.Cmd.AdvArgs.Get(zapscript.KeyLauncher)
@@ -238,7 +247,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if filepath.IsAbs(query) {
 		cleanedPath := filepath.Clean(query)
 		mediaQuery := database.MediaQuery{
-			PathPrefix: filepath.ToSlash(cleanedPath),
+			PathPrefix: cleanRandomMediaQueryPath(query),
 			Tags:       tagFilters,
 		}
 		searchResult, searchErr := gamesdb.RandomGameWithQuery(ctx, &mediaQuery)

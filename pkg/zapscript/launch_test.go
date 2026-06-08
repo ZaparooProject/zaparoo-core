@@ -50,6 +50,41 @@ func launchTestAbsPath(parts ...string) string {
 	return filepath.Join(append([]string{root}, parts...)...)
 }
 
+func TestCleanRandomMediaQueryPath(t *testing.T) {
+	t.Parallel()
+
+	nativePath := filepath.Join(t.TempDir(), "GENESIS")
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "posix duplicate slash",
+			path: "//media/fat/foo",
+			want: "/media/fat/foo",
+		},
+		{
+			name: "posix redundant segments",
+			path: "/media/fat/../usb/foo",
+			want: "/media/usb/foo",
+		},
+		{
+			name: "native path",
+			path: nativePath,
+			want: filepath.ToSlash(filepath.Clean(nativePath)),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tc.want, cleanRandomMediaQueryPath(tc.path))
+		})
+	}
+}
+
 func TestVirtualStatPath_PreservesAbsoluteRoot(t *testing.T) {
 	t.Parallel()
 
@@ -944,7 +979,7 @@ launcher = "RA"
 
 	queryPath := filepath.Join(launchTestAbsPath("games"), "GENESIS")
 	romPath := filepath.Join(queryPath, "Sonic.bin")
-	wantPathPrefix := filepath.ToSlash(queryPath)
+	wantPathPrefix := filepath.ToSlash(filepath.Clean(queryPath))
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("RandomGameWithQuery",
 		mock.Anything,
@@ -986,7 +1021,7 @@ func TestCmdRandom_AbsolutePathFilesystemFallbackAppliesInferredGroupDefault(t *
 	require.NoError(t, os.MkdirAll(dir, 0o750))
 	romPath := filepath.Join(dir, "Sonic.bin")
 	require.NoError(t, os.WriteFile(romPath, []byte("x"), 0o600))
-	wantPathPrefix := filepath.ToSlash(dir)
+	wantPathPrefix := filepath.ToSlash(filepath.Clean(dir))
 
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
@@ -1095,7 +1130,7 @@ func TestCmdRandom_AbsolutePathFallbackToFilesystem(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "game1.vhd"), []byte("x"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "game2.vhd"), []byte("x"), 0o600))
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "subdir"), 0o750))
-	wantPathPrefix := filepath.ToSlash(dir)
+	wantPathPrefix := filepath.ToSlash(filepath.Clean(dir))
 
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
