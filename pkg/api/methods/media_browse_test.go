@@ -455,7 +455,7 @@ func TestAnnotateSingletonDirectoryEntry_WhenZipsAsDirsEnabled(t *testing.T) {
 	}
 
 	mockMediaDB.On("FindSystemBySystemID", "NES").Return(row.System, nil).Once()
-	mockMediaDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, entry.Path).
+	mockMediaDB.On("FindSingleContainerLaunchMedia", mock.Anything, row.System.DBID, entry.Path).
 		Return(&row.Media, nil).Once()
 	mockMediaDB.On("GetMediaWithTitleAndSystem", mock.Anything, row.DBID).Return(row, nil).Once()
 	mockMediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, row.DBID).
@@ -502,6 +502,86 @@ func TestAnnotateSingletonDirectoryEntry_WhenZipsAsDirsDisabledSkipsLookup(t *te
 	assert.Zero(t, entry.MediaID)
 	assert.Nil(t, entry.ZapScript)
 	mockMediaDB.AssertNotCalled(t, "FindSystemBySystemID", mock.Anything)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestBuildBrowseResponse_AnnotatesLogicalBinCueDirectory(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+	path := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	dirPath := filepath.ToSlash(filepath.Join(path, "Game"))
+	row := &database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join(dirPath, "Game.cue")),
+			ParentDir: dirPath + "/",
+		},
+		Title:  database.MediaTitle{DBID: 30, Name: "Game"},
+		System: database.System{DBID: 1, SystemID: "PSX"},
+	}
+
+	mockMediaDB.On("FindSystemBySystemID", "PSX").Return(row.System, nil).Once()
+	mockMediaDB.On("FindSingleContainerLaunchMedia", mock.Anything, row.System.DBID, dirPath).
+		Return(&row.Media, nil).Once()
+	mockMediaDB.On("GetMediaWithTitleAndSystem", mock.Anything, row.DBID).Return(row, nil).Once()
+	mockMediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, row.DBID).Return([]database.TagInfo{}, nil).Once()
+	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "PSX", row.Path).
+		Return([]database.TagInfo{}, nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{{Name: "Game", FileCount: 2, SystemIDs: []string{"PSX"}}},
+		nil, defaultMaxResults, 0, "")
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	entry := browseResults.Entries[0]
+	assert.Equal(t, "directory", entry.Type)
+	assert.Equal(t, row.DBID, entry.MediaID)
+	require.NotNil(t, entry.ZapScript)
+	assert.NotEmpty(t, *entry.ZapScript)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestBuildBrowseResponse_NestedOnlyDirectoryRemainsPlain(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+	path := filepath.ToSlash(filepath.Join("roms", "NES"))
+	dirPath := filepath.ToSlash(filepath.Join(path, "Collection"))
+
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 1, SystemID: "NES"}, nil).Once()
+	mockMediaDB.On("FindSingleContainerLaunchMedia", mock.Anything, int64(1), dirPath).
+		Return((*database.Media)(nil), nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{{Name: "Collection", FileCount: 1, SystemIDs: []string{"NES"}}},
+		nil, defaultMaxResults, 0, "")
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	entry := browseResults.Entries[0]
+	assert.Equal(t, "directory", entry.Type)
+	assert.Zero(t, entry.MediaID)
+	assert.Nil(t, entry.ZapScript)
+	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
 }
 
@@ -721,6 +801,7 @@ func TestHandleMediaBrowse_FilesystemFiltersBySystem(t *testing.T) {
 		Return([]string{romsRoot})
 	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
 		Return([]platforms.Launcher{})
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: false})
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("BrowseDirectories", mock.Anything, browseDirectoriesSystemOpts(sharedPrefix, "SNES")).

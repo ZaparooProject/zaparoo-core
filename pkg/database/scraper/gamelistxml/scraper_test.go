@@ -802,6 +802,59 @@ func TestLoadRecords_ZipAsDirChildMatch(t *testing.T) {
 	assert.Equal(t, int64(80), records[0].MatchedTitleDBID)
 }
 
+func TestLoadRecords_DarksoftFolderChildMatch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	setDir := filepath.Join(root, "2020bb")
+	mediaPath := filepath.Join(setDir, "2020bb.xml")
+	require.NoError(t, os.MkdirAll(setDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game>
+    <path>./2020bb</path>
+    <name>2020 Super Baseball</name>
+    <genre>Sports</genre>
+  </game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "NeoGeo", ROMPaths: []string{root}},
+		mediaByPath(database.Media{DBID: 70, MediaTitleDBID: 80, Path: mediaPath}),
+	)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, "2020 Super Baseball", records[0].Game.Name)
+	assert.Equal(t, int64(70), records[0].MatchedMediaDBID)
+	assert.Equal(t, int64(80), records[0].MatchedTitleDBID)
+	assert.Equal(t, gamelistMatchPathOnly, records[0].MatchKind)
+	assert.True(t, records[0].MediaLevelWriteSafe)
+}
+
+func TestLoadRecords_DarksoftFolderAmbiguousChildrenSkipped(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	setDir := filepath.Join(root, "2020bb")
+	require.NoError(t, os.MkdirAll(setDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./2020bb</path><name>2020 Super Baseball</name></game>
+</gameList>`), 0o600))
+
+	records, err := (&GamelistXMLScraper{}).LoadRecords(
+		context.Background(),
+		scraper.ScrapeSystem{ID: "NeoGeo", ROMPaths: []string{root}},
+		mediaByPath(
+			database.Media{DBID: 71, MediaTitleDBID: 81, Path: filepath.Join(setDir, "2020bb.xml")},
+			database.Media{DBID: 72, MediaTitleDBID: 82, Path: filepath.Join(setDir, "2020bb.mra")},
+		),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, records)
+}
+
 func TestLoadRecords_ZipAsDirAmbiguousChildrenSkipped(t *testing.T) {
 	t.Parallel()
 

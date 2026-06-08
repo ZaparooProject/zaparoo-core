@@ -728,9 +728,10 @@ type MediaDBI interface {
 	// or nil, nil when no row is found.
 	FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*Media, error)
 	FindMediaBySystemAndPaths(ctx context.Context, systemDBID int64, paths []string) (map[string]Media, error)
-	// FindSingleDescendantMedia returns the only non-missing Media row below dirPath
-	// for systemDBID, or nil, nil when dirPath has zero or multiple descendants.
-	FindSingleDescendantMedia(ctx context.Context, systemDBID int64, dirPath string) (*Media, error)
+	// FindSingleContainerLaunchMedia returns the one logical launch target in the
+	// direct contents of containerPath for systemDBID, or nil, nil when the
+	// container is empty, nested-only, or ambiguous.
+	FindSingleContainerLaunchMedia(ctx context.Context, systemDBID int64, containerPath string) (*Media, error)
 
 	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and
 	// path using a case-insensitive path comparison, or nil, nil when no row is

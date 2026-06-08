@@ -2355,13 +2355,13 @@ func (m *MockMediaDBI) FindMediaBySystemAndPaths(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
-func (m *MockMediaDBI) FindSingleDescendantMedia(
-	ctx context.Context, systemDBID int64, dirPath string,
+func (m *MockMediaDBI) FindSingleContainerLaunchMedia(
+	ctx context.Context, systemDBID int64, containerPath string,
 ) (*database.Media, error) {
-	if !m.hasExpectedCall("FindSingleDescendantMedia") {
+	if !m.hasExpectedCall("FindSingleContainerLaunchMedia") {
 		return nil, nil //nolint:nilnil // default mock behavior for tests that do not exercise aliasing
 	}
-	args := m.Called(ctx, systemDBID, dirPath)
+	args := m.Called(ctx, systemDBID, containerPath)
 	if result, ok := args.Get(0).(*database.Media); ok {
 		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 	}
