@@ -985,6 +985,7 @@ func TestCmdRandom_AbsolutePathFilesystemFallbackAppliesInferredGroupDefault(t *
 	require.NoError(t, os.MkdirAll(dir, 0o750))
 	romPath := filepath.Join(dir, "Sonic.bin")
 	require.NoError(t, os.WriteFile(romPath, []byte("x"), 0o600))
+	wantPathPrefix := dir
 
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
@@ -1008,7 +1009,7 @@ launcher = "RA"
 	mockMediaDB.On("RandomGameWithQuery",
 		mock.Anything,
 		mock.MatchedBy(func(q *database.MediaQuery) bool {
-			return q.PathPrefix == filepath.ToSlash(dir)
+			return q.PathPrefix == wantPathPrefix
 		}),
 	).Return(database.SearchResult{}, sql.ErrNoRows)
 
