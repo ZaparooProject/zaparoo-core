@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -431,105 +432,121 @@ func TestHandleMediaBrowse_SystemRootRoutesUsesCachedCandidates(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
-func TestAnnotateSingletonDirectoryEntry_WhenZipsAsDirsEnabled(t *testing.T) {
+func TestBuildBrowseResponse_SingletonAnnotation_WhenZipsAsDirsEnabled(t *testing.T) {
 	t.Parallel()
+
+	nesSystem := database.System{DBID: 1, SystemID: "NES"}
+	systems := []systemdefs.System{{ID: "NES"}}
+	path := filepath.ToSlash(filepath.Join("roms", "NES"))
+	dirName := "Game.zip"
+	dirPath := filepath.ToSlash(filepath.Join(path, dirName))
+	row := database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join(dirPath, "Game.nes")),
+			ParentDir: dirPath + "/",
+		},
+		Title:  database.MediaTitle{DBID: 30, Name: "Game"},
+		System: nesSystem,
+	}
+	tags := []database.TagInfo{{Type: "favorite", Tag: "true", Label: "Favorite"}}
+	alias := []database.SingletonContainerAlias{{
+		ChildDir:      dirPath + "/",
+		Row:           row,
+		Tags:          tags,
+		ZapScriptTags: []database.TagInfo{},
+	}}
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
-	entry := models.BrowseEntry{
-		Name:      "Game.zip",
-		Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip")),
-		Type:      "directory",
-		FileCount: intPtr(1),
-		SystemIDs: []string{"NES"},
-	}
-	row := &database.MediaFullRow{
-		Media: database.Media{
-			DBID:      20,
-			Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip", "Game.nes")),
-			ParentDir: filepath.ToSlash(filepath.Join("roms", "Game.zip")) + "/",
-		},
-		Title:  database.MediaTitle{DBID: 30, Name: "Game"},
-		System: database.System{DBID: 1, SystemID: "NES"},
-	}
-
-	mockMediaDB.On("FindSystemBySystemID", "NES").Return(row.System, nil).Once()
-	mockMediaDB.On("FindSingleContainerLaunchMedia", mock.Anything, row.System.DBID, entry.Path).
-		Return(&row.Media, nil).Once()
-	mockMediaDB.On("GetMediaWithTitleAndSystem", mock.Anything, row.DBID).Return(row, nil).Once()
-	mockMediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, row.DBID).
-		Return([]database.TagInfo{{Type: "favorite", Tag: "true", Label: "Favorite"}}, nil).Once()
-	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "NES", row.Path).
-		Return([]database.TagInfo{}, nil).Once()
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(nesSystem, nil).Once()
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, nesSystem.DBID, path+"/").
+		Return(alias, nil).Once()
 
 	env := &requests.RequestEnv{
 		Context:  context.Background(),
 		Database: &database.Database{MediaDB: mockMediaDB},
 		Platform: mockPlatform,
 	}
-	annotateSingletonDirectoryEntry(env, &entry, entry.Path, entry.SystemIDs, nil)
-
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{{Name: dirName, FileCount: 1, SystemIDs: []string{"NES"}}},
+		nil, defaultMaxResults, 0, "", systems)
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	entry := browseResults.Entries[0]
+	assert.Equal(t, "directory", entry.Type)
 	assert.Equal(t, row.DBID, entry.MediaID)
 	require.NotNil(t, entry.SystemID)
 	assert.Equal(t, "NES", *entry.SystemID)
 	require.NotNil(t, entry.ZapScript)
 	assert.NotEmpty(t, *entry.ZapScript)
-	assert.Equal(t, []database.TagInfo{{Type: "favorite", Tag: "true", Label: "Favorite"}}, entry.Tags)
+	assert.Equal(t, tags, entry.Tags)
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
 }
 
-func TestAnnotateSingletonDirectoryEntry_WhenZipsAsDirsDisabledSkipsLookup(t *testing.T) {
+func TestBuildBrowseResponse_SingletonAnnotation_WhenZipsAsDirsDisabledSkipsLookup(t *testing.T) {
 	t.Parallel()
+
+	systems := []systemdefs.System{{ID: "NES"}}
+	path := filepath.ToSlash(filepath.Join("roms", "NES"))
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: false}).Once()
-	entry := models.BrowseEntry{
-		Path:      filepath.ToSlash(filepath.Join("roms", "Game.zip")),
-		Type:      "directory",
-		FileCount: intPtr(1),
-		SystemIDs: []string{"NES"},
-	}
+
 	env := &requests.RequestEnv{
 		Context:  context.Background(),
 		Database: &database.Database{MediaDB: mockMediaDB},
 		Platform: mockPlatform,
 	}
-	annotateSingletonDirectoryEntry(env, &entry, entry.Path, entry.SystemIDs, nil)
-
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{{Name: "Game.zip", FileCount: 1, SystemIDs: []string{"NES"}}},
+		nil, defaultMaxResults, 0, "", systems)
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	entry := browseResults.Entries[0]
 	assert.Zero(t, entry.MediaID)
 	assert.Nil(t, entry.ZapScript)
 	mockMediaDB.AssertNotCalled(t, "FindSystemBySystemID", mock.Anything)
+	mockMediaDB.AssertNotCalled(t, "ResolveSingletonContainerAliases", mock.Anything)
 	mockPlatform.AssertExpectations(t)
 }
 
 func TestBuildBrowseResponse_AnnotatesLogicalBinCueDirectory(t *testing.T) {
 	t.Parallel()
 
-	mockMediaDB := helpers.NewMockMediaDBI()
-	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+	psxSystem := database.System{DBID: 1, SystemID: "PSX"}
+	systems := []systemdefs.System{{ID: "PSX"}}
 	path := filepath.ToSlash(filepath.Join("roms", "PSX"))
 	dirPath := filepath.ToSlash(filepath.Join(path, "Game"))
-	row := &database.MediaFullRow{
+	row := database.MediaFullRow{
 		Media: database.Media{
 			DBID:      20,
 			Path:      filepath.ToSlash(filepath.Join(dirPath, "Game.cue")),
 			ParentDir: dirPath + "/",
 		},
 		Title:  database.MediaTitle{DBID: 30, Name: "Game"},
-		System: database.System{DBID: 1, SystemID: "PSX"},
+		System: psxSystem,
 	}
+	alias := []database.SingletonContainerAlias{{
+		ChildDir:      dirPath + "/",
+		Row:           row,
+		Tags:          []database.TagInfo{},
+		ZapScriptTags: []database.TagInfo{},
+	}}
 
-	mockMediaDB.On("FindSystemBySystemID", "PSX").Return(row.System, nil).Once()
-	mockMediaDB.On("FindSingleContainerLaunchMedia", mock.Anything, row.System.DBID, dirPath).
-		Return(&row.Media, nil).Once()
-	mockMediaDB.On("GetMediaWithTitleAndSystem", mock.Anything, row.DBID).Return(row, nil).Once()
-	mockMediaDB.On("GetMediaTagsByMediaDBID", mock.Anything, row.DBID).Return([]database.TagInfo{}, nil).Once()
-	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "PSX", row.Path).
-		Return([]database.TagInfo{}, nil).Once()
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+	mockMediaDB.On("FindSystemBySystemID", "PSX").Return(psxSystem, nil).Once()
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, psxSystem.DBID, path+"/").
+		Return(alias, nil).Once()
 
 	env := &requests.RequestEnv{
 		Context:  context.Background(),
@@ -538,7 +555,7 @@ func TestBuildBrowseResponse_AnnotatesLogicalBinCueDirectory(t *testing.T) {
 	}
 	result, err := buildBrowseResponse(env, path,
 		[]database.BrowseDirectoryResult{{Name: "Game", FileCount: 2, SystemIDs: []string{"PSX"}}},
-		nil, defaultMaxResults, 0, "")
+		nil, defaultMaxResults, 0, "", systems)
 	require.NoError(t, err)
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)
@@ -555,15 +572,17 @@ func TestBuildBrowseResponse_AnnotatesLogicalBinCueDirectory(t *testing.T) {
 func TestBuildBrowseResponse_NestedOnlyDirectoryRemainsPlain(t *testing.T) {
 	t.Parallel()
 
+	nesSystem := database.System{DBID: 1, SystemID: "NES"}
+	systems := []systemdefs.System{{ID: "NES"}}
+	path := filepath.ToSlash(filepath.Join("roms", "NES"))
+
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
-	path := filepath.ToSlash(filepath.Join("roms", "NES"))
-	dirPath := filepath.ToSlash(filepath.Join(path, "Collection"))
-
-	mockMediaDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 1, SystemID: "NES"}, nil).Once()
-	mockMediaDB.On("FindSingleContainerLaunchMedia", mock.Anything, int64(1), dirPath).
-		Return((*database.Media)(nil), nil).Once()
+	// ResolveSingletonContainerAliases returns nil — no alias for the nested dir.
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(nesSystem, nil).Once()
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, nesSystem.DBID, path+"/").
+		Return([]database.SingletonContainerAlias(nil), nil).Once()
 
 	env := &requests.RequestEnv{
 		Context:  context.Background(),
@@ -572,7 +591,7 @@ func TestBuildBrowseResponse_NestedOnlyDirectoryRemainsPlain(t *testing.T) {
 	}
 	result, err := buildBrowseResponse(env, path,
 		[]database.BrowseDirectoryResult{{Name: "Collection", FileCount: 1, SystemIDs: []string{"NES"}}},
-		nil, defaultMaxResults, 0, "")
+		nil, defaultMaxResults, 0, "", systems)
 	require.NoError(t, err)
 	browseResults, ok := result.(models.BrowseResults)
 	require.True(t, ok)

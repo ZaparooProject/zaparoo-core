@@ -266,6 +266,15 @@ type BrowseDirectoryResult struct {
 	FileCount int
 }
 
+// SingletonContainerAlias is the resolved launch media for a child directory
+// whose contents collapse to a single logical launch target.
+type SingletonContainerAlias struct {
+	ChildDir      string
+	Tags          []TagInfo
+	ZapScriptTags []TagInfo
+	Row           MediaFullRow
+}
+
 // BrowseDirectoriesOptions contains parameters for the BrowseDirectories query.
 type BrowseDirectoriesOptions struct {
 	PathPrefix string
@@ -739,6 +748,15 @@ type MediaDBI interface {
 	// direct contents of containerPath for systemDBID, or nil, nil when the
 	// container is empty, nested-only, or ambiguous.
 	FindSingleContainerLaunchMedia(ctx context.Context, systemDBID int64, containerPath string) (*Media, error)
+	// ResolveSingletonContainerAliases resolves all child directories under
+	// parentPrefix for systemDBID in a single scan, returning one
+	// SingletonContainerAlias per child dir that collapses to a single launch
+	// target. Directories with nested subdirs or ambiguous contents are omitted.
+	// ZapScriptTags are populated via in-memory disambiguation (same approach
+	// as the search path) and will be empty for unambiguous titles.
+	ResolveSingletonContainerAliases(
+		ctx context.Context, systemDBID int64, parentPrefix string,
+	) ([]SingletonContainerAlias, error)
 
 	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and
 	// path using a case-insensitive path comparison, or nil, nil when no row is

@@ -2914,3 +2914,156 @@ func int64Args(values []int64) []any {
 	}
 	return args
 }
+
+// ResolveSingletonContainerAliases implements MediaDBI.
+// It scans all media under parentPrefix for systemDBID in a single query, groups
+// them by immediate child directory, and returns one SingletonContainerAlias per
+// child dir that collapses to a single logical launch target. Directories with
+// nested subdirectories or ambiguous file sets are omitted. Tags and
+// ZapScriptTags are populated via two batch queries plus in-memory
+// disambiguation — the same approach used by the search path.
+func (db *MediaDB) ResolveSingletonContainerAliases(
+	ctx context.Context,
+	systemDBID int64,
+	parentPrefix string,
+) ([]database.SingletonContainerAlias, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	if !strings.HasSuffix(parentPrefix, "/") {
+		parentPrefix += "/"
+	}
+
+	// One query for every media row under the parent for this system.
+	upper := stringPrefixUpperBound(parentPrefix)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if upper != "" {
+		rows, err = db.sql.QueryContext(ctx, `
+			SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
+			FROM Media
+			WHERE SystemDBID = ? AND IsMissing = 0 AND Path >= ? AND Path < ?
+			ORDER BY Path
+		`, systemDBID, parentPrefix, upper)
+	} else {
+		rows, err = db.sql.QueryContext(ctx, `
+			SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
+			FROM Media
+			WHERE SystemDBID = ? AND IsMissing = 0 AND substr(Path, 1, length(?)) = ?
+			ORDER BY Path
+		`, systemDBID, parentPrefix, parentPrefix)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve singleton aliases query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	// Group rows by the immediate child directory under parentPrefix.
+	// childDirRows maps "parentPrefix + childName + /" → contained Media rows.
+	childDirRows := make(map[string][]database.Media)
+	for rows.Next() {
+		var m database.Media
+		if scanErr := rows.Scan(
+			&m.DBID, &m.MediaTitleDBID, &m.SystemDBID, &m.Path, &m.ParentDir, &m.IsMissing,
+		); scanErr != nil {
+			return nil, fmt.Errorf("resolve singleton aliases scan: %w", scanErr)
+		}
+		rest := strings.TrimPrefix(m.Path, parentPrefix)
+		slash := strings.Index(rest, "/")
+		if slash < 0 {
+			// Direct file under parentPrefix, not inside a child dir — skip.
+			continue
+		}
+		childDir := parentPrefix + rest[:slash] + "/"
+		childDirRows[childDir] = append(childDirRows[childDir], m)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("resolve singleton aliases rows: %w", rowsErr)
+	}
+
+	// For each child dir: skip if any row has a different ParentDir (nested
+	// subdirectory). Otherwise apply selectContainerLaunchMedia to pick the
+	// launch target (mirrors the logic in FindSingleContainerLaunchMedia).
+	type candidate struct {
+		childDir string
+		media    database.Media
+	}
+	candidates := make([]candidate, 0, len(childDirRows))
+	for childDir, dirRows := range childDirRows {
+		hasNested := false
+		directRows := make([]database.Media, 0, len(dirRows))
+		for _, m := range dirRows {
+			if m.ParentDir != childDir {
+				hasNested = true
+				break
+			}
+			directRows = append(directRows, m)
+		}
+		if hasNested {
+			continue
+		}
+		chosen := selectContainerLaunchMedia(directRows)
+		if chosen == nil {
+			continue
+		}
+		candidates = append(candidates, candidate{childDir: childDir, media: *chosen})
+	}
+	if len(candidates) == 0 {
+		return nil, nil //nolint:nilnil // empty result is the "no aliases" sentinel, not an error
+	}
+
+	// Batch-fetch full rows (title + system) and file-level tags.
+	mediaDBIDs := make([]int64, 0, len(candidates))
+	for _, c := range candidates {
+		mediaDBIDs = append(mediaDBIDs, c.media.DBID)
+	}
+	fullRows, err := db.GetMediaWithTitleAndSystemByIDs(ctx, mediaDBIDs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve singleton aliases full rows: %w", err)
+	}
+	tagsMap, err := db.GetMediaTagsByMediaDBIDs(ctx, mediaDBIDs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve singleton aliases tags: %w", err)
+	}
+
+	// Build the alias list and a parallel synthetic results slice for in-memory
+	// ZapScript disambiguation (same approach as computeZapScriptTags in the
+	// search path — no extra DB queries).
+	aliases := make([]database.SingletonContainerAlias, 0, len(candidates))
+	synthetic := make([]database.SearchResultWithCursor, 0, len(candidates))
+	for _, c := range candidates {
+		row, ok := fullRows[c.media.DBID]
+		if !ok {
+			continue
+		}
+		mediaTags := tagsMap[c.media.DBID]
+		if mediaTags == nil {
+			mediaTags = []database.TagInfo{}
+		}
+		aliases = append(aliases, database.SingletonContainerAlias{
+			ChildDir: c.childDir,
+			Row:      row,
+			Tags:     mediaTags,
+		})
+		synthetic = append(synthetic, database.SearchResultWithCursor{
+			SystemID: row.System.SystemID,
+			Name:     row.Title.Name,
+			MediaID:  row.DBID,
+			Tags:     mediaTags,
+		})
+	}
+
+	// In-memory ZapScript disambiguation across the resolved set.
+	computeZapScriptTags(synthetic)
+	for i := range aliases {
+		aliases[i].ZapScriptTags = synthetic[i].ZapScriptTags
+	}
+
+	return aliases, nil
+}

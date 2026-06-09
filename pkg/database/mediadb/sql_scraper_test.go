@@ -2054,3 +2054,193 @@ func TestGetMediaTitleProperties_NoBlobIsNilBlobDBID(t *testing.T) {
 	assert.Empty(t, got[0].ContentType)
 	assert.Nil(t, got[0].Binary)
 }
+
+// --- ResolveSingletonContainerAliases ---
+
+// setupAliasTestDB returns a MediaDB seeded with:
+//   - Systems: NES (1), PSX (2)
+//   - TagTypes: "favorite" (additive, 10)
+//   - Tags: "favorite:true" (10)
+//
+// Callers insert their own MediaTitles and Media.
+func setupAliasTestDB(t *testing.T) (mediaDB *MediaDB, cleanup func()) {
+	t.Helper()
+	mediaDB, cleanup = setupTempMediaDB(t)
+	ctx := context.Background()
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES
+			(1, 'NES', 'Nintendo'),
+			(2, 'PSX', 'PlayStation');
+		INSERT INTO TagTypes (DBID, Type, IsExclusive) VALUES
+			(10, 'favorite', 0);
+		INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES
+			(10, 10, 'true');
+	`)
+	require.NoError(t, err)
+	return mediaDB, cleanup
+}
+
+func TestResolveSingletonContainerAliases_SingleFileIsAliased(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	gameDir := parent + "/Game/"
+	gamePath := filepath.ToSlash(filepath.Join(parent, "Game", "Game.chd"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'game', 'Game');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (1, 1, 2, ?, ?);
+	`, gamePath, gameDir)
+	require.NoError(t, err)
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, parent+"/")
+	require.NoError(t, err)
+	require.Len(t, aliases, 1)
+	assert.Equal(t, gameDir, aliases[0].ChildDir)
+	assert.Equal(t, int64(1), aliases[0].Row.DBID)
+	assert.Equal(t, "Game", aliases[0].Row.Title.Name)
+	assert.Equal(t, "PSX", aliases[0].Row.System.SystemID)
+	assert.Empty(t, aliases[0].ZapScriptTags)
+}
+
+func TestResolveSingletonContainerAliases_CueBinIsAliasedToCue(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	gameDir := parent + "/Disc/"
+	cuePath := filepath.ToSlash(filepath.Join(parent, "Disc", "Game.cue"))
+	binPath := filepath.ToSlash(filepath.Join(parent, "Disc", "Game.bin"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(1, 2, 'game-cue', 'Game'),
+			(2, 2, 'game-bin', 'Game Bin');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 2, ?, ?),
+			(2, 2, 2, ?, ?);
+	`, cuePath, gameDir, binPath, gameDir)
+	require.NoError(t, err)
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, parent+"/")
+	require.NoError(t, err)
+	require.Len(t, aliases, 1)
+	assert.Equal(t, gameDir, aliases[0].ChildDir)
+	assert.Equal(t, cuePath, aliases[0].Row.Path)
+}
+
+func TestResolveSingletonContainerAliases_NestedSubdirIsNotAliased(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "NES"))
+	collDir := parent + "/Collection/"
+	subDir := parent + "/Collection/Sub/"
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 1, 'game', 'Game');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 1, ?, ?);
+	`,
+		filepath.ToSlash(filepath.Join(parent, "Collection", "Sub", "game.nes")), subDir)
+	require.NoError(t, err)
+	_ = collDir
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 1, parent+"/")
+	require.NoError(t, err)
+	assert.Empty(t, aliases)
+}
+
+func TestResolveSingletonContainerAliases_M3UAliasedForMultiDisc(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	gameDir := parent + "/MultiDisc/"
+	m3uPath := filepath.ToSlash(filepath.Join(parent, "MultiDisc", "Game.m3u"))
+	cuePath := filepath.ToSlash(filepath.Join(parent, "MultiDisc", "Disc1.cue"))
+	binPath := filepath.ToSlash(filepath.Join(parent, "MultiDisc", "Disc1.bin"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(1, 2, 'game-m3u', 'Game'),
+			(2, 2, 'disc1-cue', 'Disc1 Cue'),
+			(3, 2, 'disc1-bin', 'Disc1 Bin');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 2, ?, ?),
+			(2, 2, 2, ?, ?),
+			(3, 3, 2, ?, ?);
+	`, m3uPath, gameDir, cuePath, gameDir, binPath, gameDir)
+	require.NoError(t, err)
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, parent+"/")
+	require.NoError(t, err)
+	require.Len(t, aliases, 1)
+	assert.Equal(t, m3uPath, aliases[0].Row.Path)
+}
+
+func TestResolveSingletonContainerAliases_TagsAttachedOnAlias(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	gameDir := parent + "/Tagged/"
+	gamePath := filepath.ToSlash(filepath.Join(parent, "Tagged", "game.chd"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'tagged-game', 'Tagged Game');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (1, 1, 2, ?, ?);
+		INSERT INTO MediaTags (MediaDBID, TagDBID) VALUES (1, 10);
+	`, gamePath, gameDir)
+	require.NoError(t, err)
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, parent+"/")
+	require.NoError(t, err)
+	require.Len(t, aliases, 1)
+	require.Len(t, aliases[0].Tags, 1)
+	assert.Equal(t, "true", aliases[0].Tags[0].Tag)
+	assert.Equal(t, "favorite", aliases[0].Tags[0].Type)
+}
+
+func TestResolveSingletonContainerAliases_MultipleDirsInOneScan(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	gameADir := parent + "/GameA/"
+	gameBDir := parent + "/GameB/"
+	gameAPath := filepath.ToSlash(filepath.Join(parent, "GameA", "GameA.chd"))
+	gameBPath := filepath.ToSlash(filepath.Join(parent, "GameB", "GameB.chd"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(1, 2, 'game-a', 'Game A'),
+			(2, 2, 'game-b', 'Game B');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 2, ?, ?),
+			(2, 2, 2, ?, ?);
+	`, gameAPath, gameADir, gameBPath, gameBDir)
+	require.NoError(t, err)
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, parent+"/")
+	require.NoError(t, err)
+	require.Len(t, aliases, 2)
+
+	byDir := make(map[string]database.SingletonContainerAlias, 2)
+	for _, a := range aliases {
+		byDir[a.ChildDir] = a
+	}
+	if a, ok := byDir[gameADir]; assert.True(t, ok, "missing GameA alias") {
+		assert.Equal(t, gameAPath, a.Row.Path)
+	}
+	if b, ok := byDir[gameBDir]; assert.True(t, ok, "missing GameB alias") {
+		assert.Equal(t, gameBPath, b.Row.Path)
+	}
+}

@@ -2368,6 +2368,19 @@ func (m *MockMediaDBI) FindSingleContainerLaunchMedia(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) ResolveSingletonContainerAliases(
+	ctx context.Context, systemDBID int64, parentPrefix string,
+) ([]database.SingletonContainerAlias, error) {
+	if !m.hasExpectedCall("ResolveSingletonContainerAliases") {
+		return nil, nil //nolint:nilnil // default mock behavior for tests that do not exercise batch aliasing
+	}
+	args := m.Called(ctx, systemDBID, parentPrefix)
+	if result, ok := args.Get(0).([]database.SingletonContainerAlias); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) FindMediaBySystemAndPathFold(
 	ctx context.Context, systemDBID int64, path string,
 ) (*database.Media, error) {
