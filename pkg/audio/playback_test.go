@@ -20,6 +20,8 @@
 package audio
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -27,6 +29,204 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newTestSource() *streamingSource {
+	return &streamingSource{
+		ring:        make([][2]float64, 100),
+		volume:      1.0,
+		totalFrames: int64(targetSampleRate), // 1 second
+		wakeCh:      make(chan struct{}, 1),
+	}
+}
+
+func TestSampleDuration(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, time.Duration(0), sampleDuration(0))
+	assert.Equal(t, time.Duration(0), sampleDuration(-1))
+	assert.Equal(t, time.Second, sampleDuration(targetSampleRate))
+	assert.Equal(t, 500*time.Millisecond, sampleDuration(targetSampleRate/2))
+}
+
+func TestStreamingSource_State_PlayingLogic(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSource()
+	s.played = targetSampleRate / 2 // 0.5 s in
+
+	// Default: not paused, not stopped, not eof → Playing
+	ps := s.state()
+	assert.True(t, ps.Playing)
+	assert.False(t, ps.Paused)
+	assert.Equal(t, 500*time.Millisecond, ps.Position)
+	assert.Equal(t, time.Second, ps.Duration)
+
+	// Paused → Playing=false
+	s.paused = true
+	assert.False(t, s.state().Playing)
+	assert.True(t, s.state().Paused)
+	s.paused = false
+
+	// Stopped → Playing=false
+	s.stopped = true
+	assert.False(t, s.state().Playing)
+	s.stopped = false
+
+	// EOF with ring drained → Playing=false
+	s.eof = true
+	s.filled = 0
+	assert.False(t, s.state().Playing)
+
+	// EOF but ring still has frames → Playing=true (tail draining)
+	s.filled = 10
+	assert.True(t, s.state().Playing)
+}
+
+func TestStreamingSource_IsActive(t *testing.T) {
+	t.Parallel()
+	s := newTestSource()
+
+	assert.True(t, s.isActive())
+	s.paused = true
+	assert.False(t, s.isActive())
+	s.paused = false
+	s.stopped = true
+	assert.False(t, s.isActive())
+}
+
+func TestStreamingSource_OnDrained(t *testing.T) {
+	t.Parallel()
+	s := newTestSource()
+
+	// No callback: no panic.
+	s.onDrained()
+
+	called := false
+	s.onDrain = func() { called = true }
+	s.onDrained()
+	assert.True(t, called)
+}
+
+func TestStreamingSource_SetPaused(t *testing.T) {
+	t.Parallel()
+	s := newTestSource()
+
+	s.setPaused(true)
+	s.mu.Lock()
+	assert.True(t, s.paused)
+	s.mu.Unlock()
+
+	// Resume writes to wakeCh.
+	s.setPaused(false)
+	s.mu.Lock()
+	assert.False(t, s.paused)
+	s.mu.Unlock()
+
+	select {
+	case <-s.wakeCh:
+	default:
+		t.Fatal("expected wake signal after resume")
+	}
+}
+
+func TestStreamingSource_TogglePause(t *testing.T) {
+	t.Parallel()
+	s := newTestSource()
+
+	nowPaused := s.togglePause()
+	assert.True(t, nowPaused)
+	s.mu.Lock()
+	assert.True(t, s.paused)
+	s.mu.Unlock()
+
+	nowPaused = s.togglePause()
+	assert.False(t, nowPaused)
+	s.mu.Lock()
+	assert.False(t, s.paused)
+	s.mu.Unlock()
+
+	// Resume writes to wakeCh.
+	select {
+	case <-s.wakeCh:
+	default:
+		t.Fatal("expected wake signal after toggle-to-unpaused")
+	}
+}
+
+func TestStreamingSource_Seek(t *testing.T) {
+	t.Parallel()
+	s := newTestSource()
+	// Pre-fill the ring to verify it is flushed on seek.
+	s.filled = 50
+	s.wpos = 50
+	s.played = int64(targetSampleRate) // 1 s
+
+	s.seek(0) // seek to current position (offset=0)
+
+	s.mu.Lock()
+	assert.True(t, s.seekPending, "seekPending must be set")
+	assert.Equal(t, 0, s.filled, "ring must be flushed")
+	assert.Equal(t, 0, s.wpos, "write pos must be reset")
+	assert.Equal(t, 0, s.rpos, "read pos must be reset")
+	s.mu.Unlock()
+
+	select {
+	case <-s.wakeCh:
+	default:
+		t.Fatal("expected wake signal after seek")
+	}
+}
+
+func TestStreamingSource_MixAdd(t *testing.T) {
+	t.Parallel()
+	s := newTestSource()
+
+	// Fill ring with known samples.
+	const nFrames = 10
+	for i := range nFrames {
+		s.ring[i] = [2]float64{float64(i+1) * 0.1, float64(i+1) * 0.1}
+	}
+	s.wpos = nFrames
+	s.filled = nFrames
+
+	buf := make([][2]float64, 20)
+	n, drained := s.mixAdd(buf, nFrames)
+
+	assert.Equal(t, nFrames, n)
+	assert.False(t, drained, "not drained — eof is false")
+	// Volume=1 so buf values should equal the ring values.
+	for i := range nFrames {
+		assert.InDelta(t, float64(i+1)*0.1, buf[i][0], 1e-9)
+	}
+
+	// Now drained: eof=true, ring empty after mix.
+	s.eof = true
+	buf2 := make([][2]float64, 5)
+	n2, drained2 := s.mixAdd(buf2, 5)
+	assert.Equal(t, 0, n2)
+	assert.True(t, drained2)
+
+	// Stopped: drains immediately.
+	s2 := newTestSource()
+	s2.stopped = true
+	_, stopped := s2.mixAdd(buf, 5)
+	assert.True(t, stopped)
+}
+
+func TestNewStreamingSource_UnsupportedExtension(t *testing.T) {
+	t.Parallel()
+	// The file must exist — the extension check happens after os.Open succeeds.
+	path := filepath.Join(t.TempDir(), "audio.xyz")
+	require.NoError(t, os.WriteFile(path, []byte("fake"), 0o600))
+	_, err := newStreamingSource(path, 1.0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported audio format")
+}
+
+func TestNewStreamingSource_FileNotFound(t *testing.T) {
+	t.Parallel()
+	_, err := newStreamingSource(filepath.Join(t.TempDir(), "missing.mp3"), 1.0)
+	require.Error(t, err)
+}
 
 func TestNewLongformPlaybackManager(t *testing.T) {
 	t.Parallel()

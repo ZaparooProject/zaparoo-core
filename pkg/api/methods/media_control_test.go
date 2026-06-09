@@ -442,6 +442,41 @@ func TestHandleMediaControl_BackgroundSlotNoMedia(t *testing.T) {
 	assert.Contains(t, err.Error(), "no active media")
 }
 
+func TestHandleMediaControl_NoImplementation(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher"))
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{
+			ID:       "test-launcher",
+			SystemID: "NES",
+			Controls: map[string]platforms.Control{
+				// Control exists in the map but has neither Func nor Script set.
+				"save_state": {},
+			},
+		},
+	})
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"action": "save_state"}`),
+	}
+
+	_, err := HandleMediaControl(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has no implementation")
+}
+
 // drainNotifications prevents goroutine leaks by draining the notification channel.
 func drainNotifications(t *testing.T, ns <-chan models.Notification) {
 	t.Helper()

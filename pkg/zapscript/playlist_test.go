@@ -334,6 +334,44 @@ func bgAdvArgs() zapscript.AdvArgs {
 	return aa.With("slot", "background")
 }
 
+// TestCommandSlot_InheritFromPlaylistSlot verifies that commandSlot inherits the
+// slot from the active playlist when no AdvArgs slot is set.
+func TestCommandSlot_InheritFromPlaylistSlot(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = "background"
+
+	// No AdvArgs slot → inherit from Active.Slot ("background").
+	// Background must also be set so activePlaylistForSlot("background") is non-nil.
+	result, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Background: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	<-queue
+}
+
+// TestCmdPlaylistPlay_ResumesActivePausedPlaylist covers the path where an active
+// paused playlist is resumed with no args (slot=primary, active != nil, no arg).
+func TestCmdPlaylistPlay_ResumesActivePausedPlaylist(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Playing = false // paused
+
+	result, err := cmdPlaylistPlay(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{}},
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.True(t, result.Playlist.Playing, "play must set Playing=true")
+	queued := <-queue
+	assert.True(t, queued.Playing)
+}
+
 func TestCmdPlaylistNext_AdvancesIndex(t *testing.T) {
 	t.Parallel()
 

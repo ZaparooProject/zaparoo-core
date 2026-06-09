@@ -78,6 +78,44 @@ func validWAVHeader() []byte {
 	return wav
 }
 
+func TestDetectAudioFormat(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		expect string
+		data   []byte
+	}{
+		{name: "wav riff", data: []byte("RIFF...."), expect: "wav"},
+		{name: "ogg", data: []byte("OggS...."), expect: "ogg"},
+		{name: "flac", data: []byte("fLaC...."), expect: "flac"},
+		{name: "mp3 id3", data: []byte("ID3....."), expect: "mp3"},
+		{name: "mp3 sync header", data: []byte{0xFF, 0xE0}, expect: "mp3"},
+		{name: "mp3 sync header variant", data: []byte{0xFF, 0xFF}, expect: "mp3"},
+		{name: "unknown", data: []byte("????...."), expect: ""},
+		{name: "empty", data: []byte{}, expect: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expect, detectAudioFormat(tt.data))
+		})
+	}
+}
+
+func TestDecodeBytesByMagic_UnknownFormat(t *testing.T) {
+	t.Parallel()
+	_, err := decodeBytesByMagic([]byte("????not audio"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported audio format")
+}
+
+func TestDecodeBytesByExt_UnsupportedExtension(t *testing.T) {
+	t.Parallel()
+	_, err := decodeBytesByExt([]byte("data"), ".aac")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported audio format")
+}
+
 func TestPlayWAV(t *testing.T) {
 	t.Parallel()
 
