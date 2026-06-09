@@ -31,6 +31,7 @@ type Playlist struct {
 	Items   []PlaylistItem
 	Index   int
 	Playing bool
+	Clear   bool // signals the queue handler to remove the active playlist for this slot
 }
 
 func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
@@ -84,7 +85,6 @@ func Goto(p Playlist, idx int) *Playlist { //nolint:gocritic // value copy prese
 	case idx < 0:
 		idx = 0
 	}
-	p.Index = idx
 	return &Playlist{
 		ID:      p.ID,
 		Name:    p.Name,

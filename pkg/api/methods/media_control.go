@@ -75,7 +75,7 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		for k, v := range params.Args {
 			controlArgs[k] = v
 		}
-		controlArgs["slot"] = slot
+		controlArgs[platforms.MediaSlotArg] = slot
 	}
 
 	switch {

@@ -109,6 +109,10 @@ const (
 	MediaSlotBackground = "background"
 )
 
+// MediaSlotArg is the ZapScript AdvArgs and media control API key for selecting
+// the target media slot. This constant should move to go-zapscript once released.
+const MediaSlotArg = "slot"
+
 // NormalizeMediaSlot returns the effective media slot for a user/API value.
 func NormalizeMediaSlot(raw string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {

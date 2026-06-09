@@ -76,8 +76,6 @@ func Start(
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
 
-	platforms.SetNativeAudioHooks(playbackManager, st.SetBackgroundMedia)
-
 	// Create and start notification broker to broadcast to all consumers.
 	// media.indexing is coalesceable: bursts during index/resume collapse to
 	// latest-wins so slow WebSocket consumers don't drop discrete events.
@@ -169,7 +167,10 @@ func Start(
 
 	log.Info().Msg("initializing launcher cache")
 	launcherCacheStarted := time.Now()
-	helpers.GlobalLauncherCache.Initialize(pl, cfg)
+	helpers.GlobalLauncherCache.Initialize(
+		pl, cfg,
+		platforms.NativeAudioLauncher(playbackManager, st.SetBackgroundMedia),
+	)
 	log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")
 
 	// Create pausers to pause heavy background media work while a game is running.

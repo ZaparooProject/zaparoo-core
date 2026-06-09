@@ -75,7 +75,7 @@ func activePlaylistForSlot(env *platforms.CmdEnv, slot string) *playlists.Playli
 }
 
 func commandSlot(env *platforms.CmdEnv) (string, error) {
-	slot, err := platforms.NormalizeMediaSlot(env.Cmd.AdvArgs.Get("slot"))
+	slot, err := platforms.NormalizeMediaSlot(env.Cmd.AdvArgs.Get(platforms.MediaSlotArg))
 	if err != nil {
 		return "", fmt.Errorf("normalize media slot: %w", err)
 	}
@@ -320,7 +320,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		}
 
 		pls := playlists.NewPlaylist(plsArg.ID, plsArg.Name, items)
-		slot, slotErr := platforms.NormalizeMediaSlot(env.Cmd.AdvArgs.Get("slot"))
+		slot, slotErr := platforms.NormalizeMediaSlot(env.Cmd.AdvArgs.Get(platforms.MediaSlotArg))
 		if slotErr != nil {
 			return nil, fmt.Errorf("normalize media slot: %w", slotErr)
 		}
@@ -605,7 +605,7 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
-	if err := queuePlaylistUpdate(&env, &playlists.Playlist{Slot: slot}); err != nil {
+	if err := queuePlaylistUpdate(&env, &playlists.Playlist{Slot: slot, Clear: true}); err != nil {
 		return platforms.CmdResult{}, err
 	}
 

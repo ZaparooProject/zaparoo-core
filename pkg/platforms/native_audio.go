@@ -37,21 +37,13 @@ import (
 
 const NativeAudioLauncherID = "native-audio"
 
-var nativeAudioHooks struct {
-	playback           audio.PlaybackManager
-	setBackgroundMedia func(*models.ActiveMedia)
-}
-
-func SetNativeAudioHooks(playback audio.PlaybackManager, setBackgroundMedia func(*models.ActiveMedia)) {
-	nativeAudioHooks.playback = playback
-	nativeAudioHooks.setBackgroundMedia = setBackgroundMedia
-}
-
-func NativeAudioEnabled() bool {
-	return nativeAudioHooks.playback != nil
-}
-
-func NativeAudioLauncher() Launcher {
+// NativeAudioLauncher returns the launcher that plays audio files in-process via the
+// shared malgo output device. Both playback and the background-media state setter are
+// injected so the launcher carries no package-level globals.
+func NativeAudioLauncher(
+	playback audio.PlaybackManager,
+	setBackgroundMedia func(*models.ActiveMedia),
+) Launcher {
 	return Launcher{
 		ID:       NativeAudioLauncherID,
 		SystemID: "Audio",
@@ -62,23 +54,31 @@ func NativeAudioLauncher() Launcher {
 			".ogg",
 			".flac",
 		},
-		Launch: launchNativeAudio,
+		Launch: func(cfg *config.Instance, path string, opts *LaunchOptions) (*os.Process, error) {
+			return launchNativeAudio(playback, setBackgroundMedia, cfg, path, opts)
+		},
 		Controls: map[string]Control{
-			ControlTogglePause: {Func: nativeAudioControl(ControlTogglePause)},
-			ControlPause:       {Func: nativeAudioControl(ControlPause)},
-			ControlResume:      {Func: nativeAudioControl(ControlResume)},
-			ControlStop:        {Func: nativeAudioControl(ControlStop)},
-			ControlFastForward: {Func: nativeAudioControl(ControlFastForward)},
-			ControlRewind:      {Func: nativeAudioControl(ControlRewind)},
+			ControlTogglePause: {Func: nativeAudioControl(playback, ControlTogglePause)},
+			ControlPause:       {Func: nativeAudioControl(playback, ControlPause)},
+			ControlResume:      {Func: nativeAudioControl(playback, ControlResume)},
+			ControlStop:        {Func: nativeAudioControl(playback, ControlStop)},
+			ControlFastForward: {Func: nativeAudioControl(playback, ControlFastForward)},
+			ControlRewind:      {Func: nativeAudioControl(playback, ControlRewind)},
 		},
 	}
 }
 
-func launchNativeAudio(cfg *config.Instance, path string, opts *LaunchOptions) (*os.Process, error) {
-	_ = cfg
-	if nativeAudioHooks.playback == nil {
+func launchNativeAudio(
+	playback audio.PlaybackManager,
+	setBackgroundMedia func(*models.ActiveMedia),
+	cfg *config.Instance,
+	path string,
+	opts *LaunchOptions,
+) (*os.Process, error) {
+	if playback == nil {
 		return nil, errors.New("native audio playback is not initialized")
 	}
+
 	slot := MediaSlotPrimary
 	if opts != nil {
 		var err error
@@ -88,45 +88,53 @@ func launchNativeAudio(cfg *config.Instance, path string, opts *LaunchOptions) (
 		}
 	}
 
-	if err := nativeAudioHooks.playback.Play(slot, path, audio.PlaybackOptions{}); err != nil {
+	volume := 1.0
+	if cfg != nil {
+		v := cfg.AudioVolume()
+		if v > 0 {
+			volume = float64(v) / 100.0
+		}
+	}
+
+	if err := playback.Play(slot, path, audio.PlaybackOptions{Volume: volume}); err != nil {
 		return nil, fmt.Errorf("play native audio: %w", err)
 	}
 
-	if slot == MediaSlotBackground && nativeAudioHooks.setBackgroundMedia != nil {
+	if slot == MediaSlotBackground && setBackgroundMedia != nil {
 		media := models.NewActiveMedia("Audio", "Audio", path, audioDisplayName(path), NativeAudioLauncherID)
-		nativeAudioHooks.setBackgroundMedia(media)
+		setBackgroundMedia(media)
 	}
 
 	return nil, nil //nolint:nilnil // native audio has no OS process to return
 }
 
-func nativeAudioControl(action string) ControlFunc {
+func nativeAudioControl(playback audio.PlaybackManager, action string) ControlFunc {
 	return func(_ context.Context, _ *config.Instance, params ControlParams) error {
-		if nativeAudioHooks.playback == nil {
+		if playback == nil {
 			return errors.New("native audio playback is not initialized")
 		}
-		slot := params.Args["slot"]
-		if slot == "" {
-			slot = MediaSlotPrimary
+		rawSlot := params.Args[MediaSlotArg]
+		if rawSlot == "" {
+			rawSlot = MediaSlotPrimary
 		}
-		slot, err := NormalizeMediaSlot(slot)
+		slot, err := NormalizeMediaSlot(rawSlot)
 		if err != nil {
 			return err
 		}
 
 		switch action {
 		case ControlTogglePause:
-			return nativeAudioHooks.playback.TogglePause(slot)
+			return playback.TogglePause(slot)
 		case ControlPause:
-			return nativeAudioHooks.playback.Pause(slot)
+			return playback.Pause(slot)
 		case ControlResume:
-			return nativeAudioHooks.playback.Resume(slot)
+			return playback.Resume(slot)
 		case ControlStop:
-			return nativeAudioHooks.playback.Stop(slot)
+			return playback.Stop(slot)
 		case ControlFastForward:
-			return nativeAudioHooks.playback.Seek(slot, controlSeekDuration(params.Args, 10*time.Second))
+			return playback.Seek(slot, controlSeekDuration(params.Args, 10*time.Second))
 		case ControlRewind:
-			return nativeAudioHooks.playback.Seek(slot, -controlSeekDuration(params.Args, 10*time.Second))
+			return playback.Seek(slot, -controlSeekDuration(params.Args, 10*time.Second))
 		default:
 			return fmt.Errorf("unsupported native audio control: %s", action)
 		}

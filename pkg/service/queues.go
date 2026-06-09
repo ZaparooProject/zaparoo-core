@@ -253,7 +253,7 @@ func handlePlaylist(
 	}
 
 	switch {
-	case pls == nil || (pls.ID == "" && len(pls.Items) == 0 && !pls.Playing):
+	case pls == nil || pls.Clear:
 		// request to clear playlist
 		if activePlaylist != nil {
 			log.Info().Str("slot", slot).Msg("clearing playlist")
