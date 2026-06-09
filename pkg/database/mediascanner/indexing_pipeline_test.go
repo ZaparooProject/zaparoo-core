@@ -391,10 +391,40 @@ func TestAddMediaPath_SkipsTitleAndTagWritesWhenExistingMetadataMatches(t *testi
 	assert.Equal(t, 10, titleIndex)
 	assert.Equal(t, 20, mediaIndex)
 	assert.NotContains(t, scanState.MissingMedia, 20)
-	mockDB.AssertNotCalled(t, "UpdateMediaTitle", mock.Anything, mock.Anything)
+	mockDB.AssertNotCalled(t, "UpdateMediaTitle", mock.Anything, mock.Anything, mock.Anything)
 	mockDB.AssertNotCalled(t, "DeleteMediaTag", mock.Anything, mock.Anything)
 	mockDB.AssertNotCalled(t, "DeleteMediaTags", mock.Anything)
 	mockDB.AssertNotCalled(t, "InsertMediaTag", mock.Anything)
+	mockDB.AssertExpectations(t)
+}
+
+func TestAddMediaPath_WritesSortNameWhenExistingMediaHasEmptySortName(t *testing.T) {
+	t.Parallel()
+
+	mockDB := helpers.NewMockMediaDBI()
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	pathKey := filepath.ToSlash(path)
+	scanState := &database.ScanState{
+		SystemIDs:          map[string]int{"NES": 1},
+		TitleIDs:           map[string]int{"NES:supermariobrothers": 10},
+		MediaIDs:           map[string]int{database.MediaKey("NES", pathKey): 20},
+		MediaTitleIDs:      map[int]int{20: 10}, // same title — would not normally trigger UpdateMediaTitle
+		MediaNeedsSortName: map[int]struct{}{20: {}},
+		MediaTagIDs:        map[int]map[int]struct{}{20: {8: {}}},
+		TagTypeIDs:         map[string]int{string(tags.TagTypeExtension): 7},
+		TagIDs:             map[string]int{database.TagKey(string(tags.TagTypeExtension), "nes"): 8},
+		MissingMedia:       map[int]struct{}{20: {}},
+	}
+
+	titleIndex, mediaIndex, err := AddMediaPath(
+		mockDB, scanState, "NES", path, "", false, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 10, titleIndex)
+	assert.Equal(t, 20, mediaIndex)
+	assert.NotContains(t, scanState.MissingMedia, 20)
+	mockDB.AssertCalled(t, "UpdateMediaTitle", int64(20), int64(10), mock.Anything)
+	assert.NotContains(t, scanState.MediaNeedsSortName, 20)
 	mockDB.AssertExpectations(t)
 }
 
@@ -427,7 +457,7 @@ func TestAddMediaPath_RepairsExistingMediaParentDir(t *testing.T) {
 	assert.Equal(t, 20, mediaIndex)
 	assert.Equal(t, wantParentDir, scanState.MediaParentDirs[20])
 	assert.NotContains(t, scanState.MissingMedia, 20)
-	mockDB.AssertNotCalled(t, "UpdateMediaTitle", mock.Anything, mock.Anything)
+	mockDB.AssertNotCalled(t, "UpdateMediaTitle", mock.Anything, mock.Anything, mock.Anything)
 	mockDB.AssertExpectations(t)
 }
 

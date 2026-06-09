@@ -28,7 +28,9 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -378,6 +380,113 @@ func TestSqlBrowseRootCountsFromCache_ReturnsZeroForMissingRoot(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestFetchAndAttachUtilityTags_EmptyResults(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{}
+	err = fetchAndAttachUtilityTags(context.Background(), db, results)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachUtilityTags_TagTypeAbsent(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, Name: "Game"},
+	}
+
+	// One sqlFindTagType prepare+query per entry in UtilityTags; empty rows =
+	// ErrNoRows = skip. Loop over all entries so the test stays valid if the list grows.
+	for _, ct := range tags.UtilityTags {
+		mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+			ExpectQuery().
+			WithArgs(int64(0), string(ct.Type)).
+			WillReturnRows(sqlmock.NewRows([]string{"DBID", "Type", "IsExclusive"}))
+	}
+
+	err = fetchAndAttachUtilityTags(context.Background(), db, results)
+	require.NoError(t, err)
+	assert.Empty(t, results[0].Tags)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachUtilityTags_NoFavorites(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 10, Name: "Game A"},
+		{MediaID: 11, Name: "Game B"},
+	}
+
+	mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+		ExpectQuery().
+		WithArgs(int64(0), "user").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID", "Type", "IsExclusive"}).AddRow(int64(5), "user", false))
+
+	tagRows := sqlmock.NewRows([]string{"DBID", "TypeDBID", "Tag", "DisplayName"}).
+		AddRow(int64(42), int64(5), "favorite", "")
+	mock.ExpectPrepare(`select.*DBID.*TypeDBID.*Tag.*DisplayName.*from Tags`).
+		ExpectQuery().
+		WillReturnRows(tagRows)
+
+	// MediaTags query returns no rows — neither entry has any utility tag.
+	mock.ExpectQuery(`SELECT mt\.MediaDBID, mt\.TagDBID FROM MediaTags`).
+		WithArgs(int64(10), int64(11), int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "TagDBID"}))
+
+	err = fetchAndAttachUtilityTags(context.Background(), db, results)
+	require.NoError(t, err)
+	assert.Empty(t, results[0].Tags)
+	assert.Empty(t, results[1].Tags)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachUtilityTags_WithFavorites(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 20, Name: "Favorited Game"},
+		{MediaID: 21, Name: "Regular Game"},
+	}
+
+	mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+		ExpectQuery().
+		WithArgs(int64(0), "user").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID", "Type", "IsExclusive"}).AddRow(int64(5), "user", false))
+
+	tagRows := sqlmock.NewRows([]string{"DBID", "TypeDBID", "Tag", "DisplayName"}).
+		AddRow(int64(42), int64(5), "favorite", "")
+	mock.ExpectPrepare(`select.*DBID.*TypeDBID.*Tag.*DisplayName.*from Tags`).
+		ExpectQuery().
+		WillReturnRows(tagRows)
+
+	// Only media ID 20 has the favorite utility tag.
+	mock.ExpectQuery(`SELECT mt\.MediaDBID, mt\.TagDBID FROM MediaTags`).
+		WithArgs(int64(20), int64(21), int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "TagDBID"}).AddRow(int64(20), int64(42)))
+
+	err = fetchAndAttachUtilityTags(context.Background(), db, results)
+	require.NoError(t, err)
+	require.Len(t, results[0].Tags, 1, "favorited entry should have one tag")
+	assert.Equal(t, "favorite", results[0].Tags[0].Tag)
+	assert.Equal(t, "user", results[0].Tags[0].Type)
+	assert.Empty(t, results[1].Tags, "non-favorited entry should have no tags")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestFetchAndAttachCoverFlags_EmptyResults(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
@@ -480,4 +589,131 @@ func TestFetchAndAttachCoverFlags_QueryError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "browse cover flags query")
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Integration tests use a real SQLite DB to verify the query joins correctly
+// against the canonical tag schema. These catch schema/prefix mismatches that
+// pure sqlmock tests cannot — sqlmock never executes real SQL.
+
+// seedImagePropertyTags inserts the minimal TagTypes/Tags rows needed to call
+// UpsertMediaProperties/UpsertMediaTitleProperties in a bare setupTempMediaDB.
+// A full index run would seed all canonical tags; these tests need only the
+// property type and image-boxart tag.
+func seedImagePropertyTags(t *testing.T, mediaDB *MediaDB) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT OR IGNORE INTO TagTypes (DBID, Type, IsExclusive) VALUES (900, 'property', 0);
+		INSERT OR IGNORE INTO Tags (DBID, TypeDBID, Tag) VALUES (901, 900, 'image-boxart');
+	`)
+	require.NoError(t, err)
+}
+
+func TestFetchAndAttachCoverFlags_Integration_MediaLevelProperty(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	seedImagePropertyTags(t, mediaDB)
+
+	ctx := context.Background()
+
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	// Insert two media rows: one will get an image property, one will not.
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	titleA, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Game With Cover"),
+		Name:       "Game With Cover",
+	})
+	require.NoError(t, err)
+	mediaA, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: titleA.DBID,
+		Path:           filepath.Join("roms", "nes", "with_cover.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+
+	titleB, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Game Without Cover"),
+		Name:       "Game Without Cover",
+	})
+	require.NoError(t, err)
+	mediaB, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: titleB.DBID,
+		Path:           filepath.Join("roms", "nes", "no_cover.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// Write a media-level image property only for mediaA.
+	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, mediaA.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: filepath.Join("art", "with_cover.png")},
+	}))
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: mediaA.DBID, MediaTitleID: titleA.DBID, Name: "Game With Cover"},
+		{MediaID: mediaB.DBID, MediaTitleID: titleB.DBID, Name: "Game Without Cover"},
+	}
+
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql, results))
+	assert.True(t, results[0].HasCover, "media with image property should have HasCover=true")
+	assert.False(t, results[1].HasCover, "media without image property should have HasCover=false")
+}
+
+func TestFetchAndAttachCoverFlags_Integration_TitleLevelProperty(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+	seedImagePropertyTags(t, mediaDB)
+
+	ctx := context.Background()
+
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	// Two media sharing one title; cover is on the title, not the media.
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Shared Title"),
+		Name:       "Shared Title",
+	})
+	require.NoError(t, err)
+	mediaA, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "rev_a.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	mediaB, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           filepath.Join("roms", "nes", "rev_b.nes"),
+		ParentDir:      filepath.ToSlash(filepath.Join("roms", "nes")) + "/",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// Write the image property at the title level only.
+	require.NoError(t, mediaDB.UpsertMediaTitleProperties(ctx, title.DBID, []database.MediaProperty{
+		{TypeTag: tags.PropertyTypeTag(tags.TagPropertyImageBoxart), Text: filepath.Join("art", "shared.png")},
+	}))
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: mediaA.DBID, MediaTitleID: title.DBID, Name: "Rev A"},
+		{MediaID: mediaB.DBID, MediaTitleID: title.DBID, Name: "Rev B"},
+	}
+
+	require.NoError(t, fetchAndAttachCoverFlags(ctx, mediaDB.sql, results))
+	assert.True(t, results[0].HasCover, "media whose title has an image property should have HasCover=true")
+	assert.True(t, results[1].HasCover, "media whose title has an image property should have HasCover=true")
 }

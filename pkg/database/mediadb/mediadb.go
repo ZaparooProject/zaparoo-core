@@ -386,6 +386,10 @@ var secondaryIndexes = []secondaryIndex{
 		name: "idx_media_parentdir_system",
 		ddl:  "CREATE INDEX IF NOT EXISTS idx_media_parentdir_system ON Media(ParentDir, SystemDBID)",
 	},
+	{
+		name: "idx_media_browse_sort",
+		ddl:  "CREATE INDEX IF NOT EXISTS idx_media_browse_sort ON Media(ParentDir, IsMissing, SortName, DBID)",
+	},
 }
 
 // DropSecondaryIndexes drops all secondary indexes to speed up bulk inserts.
@@ -1063,8 +1067,10 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 			return fmt.Errorf("failed to create batch inserter for media titles: %w", err)
 		}
 
-		if db.batchInsertMedia, err = NewBatchInserterWithOptions(db.ctx, tx, "Media",
-			[]string{"DBID", "MediaTitleDBID", "SystemDBID", "Path", "ParentDir"}, db.batchSize, false); err != nil {
+		mediaColumns := []string{"DBID", "MediaTitleDBID", "SystemDBID", "Path", "ParentDir", "SortName"}
+		if db.batchInsertMedia, err = NewBatchInserterWithOptions(
+			db.ctx, tx, "Media", mediaColumns, db.batchSize, false,
+		); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for media: %w", err)
 		}
@@ -1291,7 +1297,7 @@ func (db *MediaDB) insertMediaTitleWithPreparedStmt(row *database.MediaTitle) (d
 	return sqlInsertMediaTitleWithPreparedStmt(db.ctx, db.stmtInsertMediaTitle, row)
 }
 
-func (db *MediaDB) insertMediaWithPreparedStmt(row database.Media) (database.Media, error) {
+func (db *MediaDB) insertMediaWithPreparedStmt(row *database.Media) (database.Media, error) {
 	return sqlInsertMediaWithPreparedStmt(db.ctx, db.stmtInsertMedia, row)
 }
 
@@ -2252,11 +2258,13 @@ func (db *MediaDB) FindOrInsertMediaTitle(row *database.MediaTitle) (database.Me
 	return system, err
 }
 
-func (db *MediaDB) FindMedia(row database.Media) (database.Media, error) {
-	return sqlFindMedia(db.ctx, db.conn(), row)
+// FindMedia implements MediaDBI. Param is by value because the interface is.
+func (db *MediaDB) FindMedia(row database.Media) (database.Media, error) { //nolint:gocritic
+	return sqlFindMedia(db.ctx, db.conn(), &row)
 }
 
-func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
+// InsertMedia implements MediaDBI. Param is by value because the interface is.
+func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) { //nolint:gocritic
 	var result database.Media
 	var err error
 
@@ -2268,6 +2276,7 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 			row.SystemDBID,
 			row.Path,
 			row.ParentDir,
+			row.SortName,
 		)
 		if err != nil {
 			return row, fmt.Errorf("failed to add media to batch: %w", err)
@@ -2279,9 +2288,9 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 
 	// Use prepared statement if in transaction, otherwise fall back to original method
 	if db.stmtInsertMedia != nil {
-		result, err = db.insertMediaWithPreparedStmt(row)
+		result, err = db.insertMediaWithPreparedStmt(&row)
 	} else {
-		result, err = sqlInsertMedia(db.ctx, db.sql, row)
+		result, err = sqlInsertMedia(db.ctx, db.sql, &row)
 	}
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
@@ -2297,7 +2306,7 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 	return result, err
 }
 
-func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
+func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortName string) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -2307,7 +2316,7 @@ func (db *MediaDB) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
 		}
 	}
 
-	err := sqlUpdateMediaTitle(db.ctx, db.conn(), mediaDBID, mediaTitleDBID)
+	err := sqlUpdateMediaTitle(db.ctx, db.conn(), mediaDBID, mediaTitleDBID, sortName)
 	if err == nil && !db.inTransaction {
 		db.invalidateCaches(invalidationScope{AllSystems: true})
 		if invalidateErr := db.invalidateBrowseCacheForMediaChange(); invalidateErr != nil {
@@ -2431,7 +2440,8 @@ func (db *MediaDB) ResetMissingFlags(systemDBIDs []int) error {
 	return err
 }
 
-func (db *MediaDB) FindOrInsertMedia(row database.Media) (database.Media, error) {
+// FindOrInsertMedia implements MediaDBI. Param is by value because the interface is.
+func (db *MediaDB) FindOrInsertMedia(row database.Media) (database.Media, error) { //nolint:gocritic
 	system, err := db.FindMedia(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		system, err = db.InsertMedia(row)

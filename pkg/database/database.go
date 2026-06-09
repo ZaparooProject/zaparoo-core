@@ -153,6 +153,7 @@ type MediaTitle struct {
 type Media struct {
 	Path           string
 	ParentDir      string
+	SortName       string // write-once copy of MediaTitles.Name; titles never update so no propagation is needed
 	DBID           int64
 	MediaTitleDBID int64
 	SystemDBID     int64
@@ -407,6 +408,7 @@ type MediaWithFullPath struct {
 	ParentDir      string
 	TitleSlug      string
 	SystemID       string
+	SortName       string
 	DBID           int64
 	MediaTitleDBID int64
 }
@@ -461,21 +463,22 @@ type SearchFilters struct {
 }
 
 type ScanState struct {
-	SystemIDs       map[string]int
-	TitleIDs        map[string]int
-	MediaIDs        map[string]int
-	MediaTitleIDs   map[int]int // Existing media DBID -> MediaTitleDBID for persistent reconciliation
-	MediaParentDirs map[int]string
-	MediaTagIDs     map[int]map[int]struct{}
-	TagTypeIDs      map[string]int
-	TagIDs          map[string]int
-	UserOwnedTagIDs map[int]bool
-	MissingMedia    map[int]struct{} // DBIDs of media not yet re-found during scan
-	SystemsIndex    int
-	TitlesIndex     int
-	MediaIndex      int
-	TagTypesIndex   int
-	TagsIndex       int
+	SystemIDs          map[string]int
+	TitleIDs           map[string]int
+	MediaIDs           map[string]int
+	MediaTitleIDs      map[int]int      // Existing media DBID -> MediaTitleDBID for persistent reconciliation
+	MediaNeedsSortName map[int]struct{} // Media DBIDs with SortName='' needing a write on next title update
+	MediaParentDirs    map[int]string
+	MediaTagIDs        map[int]map[int]struct{}
+	TagTypeIDs         map[string]int
+	TagIDs             map[string]int
+	UserOwnedTagIDs    map[int]bool
+	MissingMedia       map[int]struct{} // DBIDs of media not yet re-found during scan
+	SystemsIndex       int
+	TitlesIndex        int
+	MediaIndex         int
+	TagTypesIndex      int
+	TagsIndex          int
 }
 
 // JournalMode represents SQLite journal mode
@@ -662,7 +665,7 @@ type MediaDBI interface {
 	FindMedia(row Media) (Media, error)
 	InsertMedia(row Media) (Media, error)
 	FindOrInsertMedia(row Media) (Media, error)
-	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error
+	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortName string) error
 	UpdateMediaParentDir(mediaDBID int64, parentDir string) error
 	DeleteMediaTags(mediaDBID int64) error
 	DeleteMediaTag(mediaDBID, tagDBID int64) error

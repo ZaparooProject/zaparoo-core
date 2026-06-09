@@ -991,7 +991,7 @@ func (m *MockMediaDBI) FindOrInsertMediaTitle(row *database.MediaTitle) (databas
 }
 
 // Media CRUD methods
-func (m *MockMediaDBI) FindMedia(row database.Media) (database.Media, error) {
+func (m *MockMediaDBI) FindMedia(row database.Media) (database.Media, error) { //nolint:gocritic
 	args := m.Called(row)
 	if media, ok := args.Get(0).(database.Media); ok {
 		if err := args.Error(1); err != nil {
@@ -1005,7 +1005,7 @@ func (m *MockMediaDBI) FindMedia(row database.Media) (database.Media, error) {
 	return database.Media{}, nil
 }
 
-func (m *MockMediaDBI) InsertMedia(row database.Media) (database.Media, error) {
+func (m *MockMediaDBI) InsertMedia(row database.Media) (database.Media, error) { //nolint:gocritic
 	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(row)
 	if media, ok := args.Get(0).(database.Media); ok {
@@ -1020,7 +1020,7 @@ func (m *MockMediaDBI) InsertMedia(row database.Media) (database.Media, error) {
 	return database.Media{}, nil
 }
 
-func (m *MockMediaDBI) FindOrInsertMedia(row database.Media) (database.Media, error) {
+func (m *MockMediaDBI) FindOrInsertMedia(row database.Media) (database.Media, error) { //nolint:gocritic
 	args := m.Called(row)
 	if media, ok := args.Get(0).(database.Media); ok {
 		if err := args.Error(1); err != nil {
@@ -1034,9 +1034,9 @@ func (m *MockMediaDBI) FindOrInsertMedia(row database.Media) (database.Media, er
 	return database.Media{}, nil
 }
 
-func (m *MockMediaDBI) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
+func (m *MockMediaDBI) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortName string) error {
 	m.trackDatabaseOperation() // Track if called outside transaction
-	args := m.Called(mediaDBID, mediaTitleDBID)
+	args := m.Called(mediaDBID, mediaTitleDBID, sortName)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
@@ -2116,7 +2116,7 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("DropSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("BulkSetMediaMissing", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("ResetMissingFlags", mock.Anything).Return(nil).Maybe()
-	mockMediaDB.On("UpdateMediaTitle", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("UpdateMediaTitle", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("DeleteMediaTags", mock.Anything).Return(nil).Maybe()
 	return mockMediaDB
 }

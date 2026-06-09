@@ -195,6 +195,7 @@ func AddMediaPathWithPrefixPolicy(
 			DBID:           int64(mediaIndex),
 			Path:           pf.Path,
 			ParentDir:      parentDir,
+			SortName:       pf.Title,
 			MediaTitleDBID: int64(titleIndex),
 			SystemDBID:     int64(systemIndex),
 		})
@@ -226,12 +227,17 @@ func AddMediaPathWithPrefixPolicy(
 				ss.MediaParentDirs[mediaIndex] = parentDir
 			}
 		}
-		if existingTitleIndex, ok := ss.MediaTitleIDs[mediaIndex]; !ok || existingTitleIndex != titleIndex {
-			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex)); err != nil {
+		_, needsSortName := ss.MediaNeedsSortName[mediaIndex]
+		existingTitleIndex, titleKnown := ss.MediaTitleIDs[mediaIndex]
+		if !titleKnown || existingTitleIndex != titleIndex || needsSortName {
+			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex), pf.Title); err != nil {
 				return 0, 0, fmt.Errorf("error updating media title %s: %w", pf.Path, err)
 			}
 			if ss.MediaTitleIDs != nil {
 				ss.MediaTitleIDs[mediaIndex] = titleIndex
+			}
+			if ss.MediaNeedsSortName != nil {
+				delete(ss.MediaNeedsSortName, mediaIndex)
 			}
 		}
 	}
@@ -819,6 +825,9 @@ func PopulateScanStateForSystem(
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
 		}
+		if ss.MediaNeedsSortName != nil && m.SortName == "" {
+			ss.MediaNeedsSortName[int(m.DBID)] = struct{}{}
+		}
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
 		}
@@ -914,6 +923,9 @@ func PopulatePersistentScanStateForSystem(
 		ss.MediaIDs[mediaKey] = int(m.DBID)
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
+		}
+		if ss.MediaNeedsSortName != nil && m.SortName == "" {
+			ss.MediaNeedsSortName[int(m.DBID)] = struct{}{}
 		}
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir

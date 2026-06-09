@@ -70,7 +70,7 @@ type BrowseEntry struct {
 	// property row. Only set for media-type entries. Omitted when false so
 	// older clients that don't know this field behave as if it is true (i.e.,
 	// they still request covers).
-	HasCover bool `json:"hasCover,omitempty"`
+	HasCover bool `json:"hasCover"`
 }
 
 type BrowseResults struct {
