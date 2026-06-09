@@ -487,6 +487,53 @@ func TestFetchAndAttachUtilityTags_WithFavorites(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestFetchAndAttachUtilityTags_TagTypeRealDBError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, Name: "Game"},
+	}
+
+	// Simulate a real DB error (not ErrNoRows) on the tag type lookup.
+	mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+		ExpectQuery().
+		WithArgs(int64(0), string(tags.UtilityTags[0].Type)).
+		WillReturnError(sql.ErrConnDone)
+
+	err = fetchAndAttachUtilityTags(context.Background(), db, results)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "browse utility tags")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachUtilityTags_TagRealDBError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, Name: "Game"},
+	}
+
+	// Tag type found; then a real DB error on the tag value lookup.
+	mock.ExpectPrepare(`select.*DBID.*Type.*IsExclusive.*from TagTypes`).
+		ExpectQuery().
+		WithArgs(int64(0), string(tags.UtilityTags[0].Type)).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID", "Type", "IsExclusive"}).AddRow(int64(5), "user", false))
+	mock.ExpectPrepare(`select.*DBID.*TypeDBID.*Tag.*DisplayName.*from Tags`).
+		ExpectQuery().
+		WillReturnError(sql.ErrConnDone)
+
+	err = fetchAndAttachUtilityTags(context.Background(), db, results)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "browse utility tags")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestFetchAndAttachCoverFlags_EmptyResults(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()

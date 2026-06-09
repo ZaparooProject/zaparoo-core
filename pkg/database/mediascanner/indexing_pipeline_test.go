@@ -1520,3 +1520,53 @@ func TestAddMediaPath_ExtensionTag_UniqueConstraintClassification(t *testing.T) 
 		mockDB.AssertExpectations(t)
 	})
 }
+
+func TestPopulateScanStateForSystem_TracksEmptySortNameInNeedsSortNameMap(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	// Insert a path that gets SortName populated normally.
+	insertState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
+	}
+	require.NoError(t, SeedCanonicalTags(mediaDB, insertState))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, populatedID, err := AddMediaPath(
+		mediaDB, insertState, "NES", filepath.Join("roms", "Zelda.nes"), "", false, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// Simulate a pre-migration row: clear SortName directly so it's empty.
+	sqlDB := mediaDB.UnsafeGetSQLDb()
+	_, err = sqlDB.ExecContext(ctx, `UPDATE Media SET SortName = '' WHERE DBID = ?`, populatedID)
+	require.NoError(t, err)
+
+	ss := &database.ScanState{
+		SystemIDs:          make(map[string]int),
+		TitleIDs:           make(map[string]int),
+		MediaIDs:           make(map[string]int),
+		MediaTitleIDs:      make(map[int]int),
+		MediaNeedsSortName: make(map[int]struct{}),
+		MediaParentDirs:    make(map[int]string),
+		MediaTagIDs:        make(map[int]map[int]struct{}),
+		TagTypeIDs:         make(map[string]int),
+		TagIDs:             make(map[string]int),
+		MissingMedia:       make(map[int]struct{}),
+	}
+
+	require.NoError(t, PopulateScanStateForSystem(ctx, mediaDB, ss, "NES"))
+
+	assert.Contains(t, ss.MediaNeedsSortName, populatedID,
+		"media with empty SortName must appear in MediaNeedsSortName")
+}
