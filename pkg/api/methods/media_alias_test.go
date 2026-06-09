@@ -72,7 +72,7 @@ func TestEquivalentMediaIDsParentChildAliases(t *testing.T) {
 	}
 	parent := &database.Media{DBID: 10, Path: "roms/Game.zip"}
 
-	mockDB.On("FindSingleDescendantMedia", mock.Anything, int64(1), "roms/Game.zip").
+	mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, int64(1), "roms/Game.zip").
 		Return(&database.Media{DBID: 20, Path: row.Path}, nil)
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, int64(1), "roms/Game.zip").Return(parent, nil)
 
@@ -107,13 +107,13 @@ func TestEquivalentMediaIDsSkipsEmptyOrSelfParent(t *testing.T) {
 	ids, err := equivalentMediaIDs(env, plain)
 	require.NoError(t, err)
 	assert.Equal(t, []int64{plain.DBID}, ids)
-	mockDB.AssertNumberOfCalls(t, "FindSingleDescendantMedia", 0)
+	mockDB.AssertNumberOfCalls(t, "FindSingleContainerLaunchMedia", 0)
 
 	zipSelf := &database.MediaFullRow{
 		Media:  database.Media{DBID: 21, Path: "roms/Game.zip", ParentDir: "roms/Game.zip/"},
 		System: database.System{DBID: 1},
 	}
-	mockDB.On("FindSingleDescendantMedia", mock.Anything, zipSelf.System.DBID, zipSelf.Path).
+	mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, zipSelf.System.DBID, zipSelf.Path).
 		Return((*database.Media)(nil), nil).Once()
 	ids, err = equivalentMediaIDs(env, zipSelf)
 	require.NoError(t, err)

@@ -322,6 +322,19 @@ func (m *MockUserDBI) GetMediaHistory(
 	return history, nil
 }
 
+func (m *MockUserDBI) GetLatestMediaHistory() (database.MediaHistoryEntry, bool, error) {
+	args := m.Called()
+	entry, ok := args.Get(0).(database.MediaHistoryEntry)
+	if !ok {
+		entry = database.MediaHistoryEntry{}
+	}
+	found := args.Bool(1)
+	if err := args.Error(2); err != nil {
+		return entry, found, fmt.Errorf("mock UserDBI get latest media history failed: %w", err)
+	}
+	return entry, found, nil
+}
+
 func (m *MockUserDBI) GetMediaHistoryTop(
 	systemIDs []string, since *time.Time, limit int,
 ) ([]database.MediaHistoryTopEntry, error) {
@@ -1278,6 +1291,68 @@ func (m *MockMediaDBI) SetIndexingStatus(status string) error {
 func (m *MockMediaDBI) GetIndexingStatus() (string, error) {
 	args := m.Called()
 	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) hasExpectation(method string) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == method {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *MockMediaDBI) SetScrapingStatus(status string) error {
+	if !m.hasExpectation("SetScrapingStatus") {
+		return nil
+	}
+	args := m.Called(status)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetScrapingStatus() (string, error) {
+	if !m.hasExpectation("GetScrapingStatus") {
+		return "", nil
+	}
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) SetScrapingOperation(operation database.ScrapingOperation) error {
+	if !m.hasExpectation("SetScrapingOperation") {
+		return nil
+	}
+	args := m.Called(operation)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetScrapingOperation() (database.ScrapingOperation, bool, error) {
+	if !m.hasExpectation("GetScrapingOperation") {
+		return database.ScrapingOperation{}, false, nil
+	}
+	args := m.Called()
+	operation, ok := args.Get(0).(database.ScrapingOperation)
+	if !ok {
+		operation = database.ScrapingOperation{}
+	}
+	return operation, args.Bool(1), args.Error(2)
+}
+
+func (m *MockMediaDBI) ClearScrapingOperation() error {
+	if !m.hasExpectation("ClearScrapingOperation") {
+		return nil
+	}
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
 }
 
 func (m *MockMediaDBI) SetLastIndexedSystem(systemID string) error {
@@ -2280,13 +2355,13 @@ func (m *MockMediaDBI) FindMediaBySystemAndPaths(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
-func (m *MockMediaDBI) FindSingleDescendantMedia(
-	ctx context.Context, systemDBID int64, dirPath string,
+func (m *MockMediaDBI) FindSingleContainerLaunchMedia(
+	ctx context.Context, systemDBID int64, containerPath string,
 ) (*database.Media, error) {
-	if !m.hasExpectedCall("FindSingleDescendantMedia") {
+	if !m.hasExpectedCall("FindSingleContainerLaunchMedia") {
 		return nil, nil //nolint:nilnil // default mock behavior for tests that do not exercise aliasing
 	}
-	args := m.Called(ctx, systemDBID, dirPath)
+	args := m.Called(ctx, systemDBID, containerPath)
 	if result, ok := args.Get(0).(*database.Media); ok {
 		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 	}

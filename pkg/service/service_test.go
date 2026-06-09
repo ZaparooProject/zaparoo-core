@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -159,6 +160,74 @@ func TestCleanupHistoryRetention_CancelledBeforeMediaHistory(t *testing.T) {
 
 	mockUserDB.AssertExpectations(t)
 	mockUserDB.AssertNotCalled(t, "CleanupMediaHistory", mock.Anything)
+}
+
+func TestRebuildStartupSlugSearchCache_SkipsWhenLoaded(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	rebuildStartupSlugSearchCache(mockMediaDB, true)
+
+	mockMediaDB.AssertNotCalled(t, "GetIndexingStatus")
+	mockMediaDB.AssertNotCalled(t, "RebuildSlugSearchCache")
+}
+
+func TestRebuildStartupSlugSearchCache_StatusErrorSkipsRebuild(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return("", assert.AnError).Once()
+
+	rebuildStartupSlugSearchCache(mockMediaDB, false)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "TrackBackgroundOperation")
+	mockMediaDB.AssertNotCalled(t, "RebuildSlugSearchCache")
+}
+
+func TestRebuildStartupSlugSearchCache_RebuildErrorReleasesBackgroundOperation(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	mockMediaDB.On("TrackBackgroundOperation").Return().Once()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(assert.AnError).Once()
+	mockMediaDB.On("BackgroundOperationDone").Return().Once()
+
+	rebuildStartupSlugSearchCache(mockMediaDB, false)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "PersistSlugSearchCache")
+}
+
+func TestRebuildStartupSlugSearchCache_SkipsDuringIndexing(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+
+	rebuildStartupSlugSearchCache(mockMediaDB, false)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "TrackBackgroundOperation")
+	mockMediaDB.AssertNotCalled(t, "RebuildSlugSearchCache")
+	mockMediaDB.AssertNotCalled(t, "PersistSlugSearchCache")
+}
+
+func TestRebuildStartupSlugSearchCache_RebuildsWhenIdle(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil).Once()
+	mockMediaDB.On("TrackBackgroundOperation").Return().Once()
+	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Once()
+	mockMediaDB.On("PersistSlugSearchCache").Return(nil).Once()
+	mockMediaDB.On("BackgroundOperationDone").Return().Once()
+
+	rebuildStartupSlugSearchCache(mockMediaDB, false)
+
+	mockMediaDB.AssertExpectations(t)
 }
 
 func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
@@ -405,6 +474,107 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 
 	// Verify that no indexing was triggered for failed status
 	mockMediaDB.AssertNotCalled(t, "GetOptimizationStatus")
+}
+
+func TestCheckAndResumeScraping_StatusErrorDoesNothing(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return("", assert.AnError).Once()
+
+	checkAndResumeScraping(
+		mocks.NewMockPlatform(), nil, &database.Database{MediaDB: mockMediaDB}, nil, nil,
+	)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "GetScrapingOperation")
+	mockMediaDB.AssertNotCalled(t, "SetScrapingStatus", mock.Anything)
+}
+
+func TestCheckAndResumeScraping_OperationReadErrorDoesNotMarkFailed(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("GetScrapingOperation").Return(database.ScrapingOperation{}, false, assert.AnError).Once()
+
+	checkAndResumeScraping(
+		mocks.NewMockPlatform(), nil, &database.Database{MediaDB: mockMediaDB}, nil, nil,
+	)
+
+	mockMediaDB.AssertExpectations(t)
+	mockMediaDB.AssertNotCalled(t, "SetScrapingStatus", mock.Anything)
+}
+
+func TestCheckAndResumeScraping_MissingOperationMarksFailed(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("GetScrapingOperation").Return(database.ScrapingOperation{}, false, nil).Once()
+	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+
+	checkAndResumeScraping(
+		mocks.NewMockPlatform(), nil, &database.Database{MediaDB: mockMediaDB}, nil, nil,
+	)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestCheckAndResumeScraping_UnavailableScraperMarksFailed(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	operation := database.ScrapingOperation{ScraperID: "missing-scraper"}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("GetScrapingOperation").Return(operation, true, nil).Once()
+	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Scrapers", (*config.Instance)(nil)).Return(map[string]platforms.Scraper{}).Once()
+
+	checkAndResumeScraping(mockPlatform, nil, &database.Database{MediaDB: mockMediaDB}, nil, nil)
+
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestCheckAndResumeScraping_StartFailurePersistsTerminalState(t *testing.T) {
+	// Not parallel — manipulates shared scrapingStatusInstance.
+	methods.ClearScrapingStatus()
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	operation := database.ScrapingOperation{ScraperID: "test-scraper"}
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetScrapingStatus").Return(mediadb.IndexingStatusRunning, nil).Once()
+	mockMediaDB.On("GetScrapingOperation").Return(operation, true, nil).Once()
+	mockMediaDB.On("SetScrapingOperation", operation).Return(assert.AnError).Once()
+	mockMediaDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+	mockMediaDB.On("ClearScrapingOperation").Return(nil).Once()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Scrapers", cfg).Return(map[string]platforms.Scraper{
+		"test-scraper": {
+			ID:   "test-scraper",
+			Name: "Test Scraper",
+			Scrape: func(
+				context.Context, *config.Instance, platforms.Platform, afero.Fs,
+				*database.Database, scraper.ScrapeOptions, platforms.ScraperCustomOptions,
+				chan<- scraper.ScrapeUpdate,
+			) error {
+				return nil
+			},
+		},
+	}).Twice()
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+	t.Cleanup(st.StopService)
+
+	checkAndResumeScraping(mockPlatform, cfg, &database.Database{MediaDB: mockMediaDB}, st, nil)
+
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
 }
 
 func TestCheckAndResumeOptimization_RunningStatus(t *testing.T) {

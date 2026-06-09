@@ -88,7 +88,7 @@ func TestResolveMediaRefs_UsesSingletonFallbackForBatchPath(t *testing.T) {
 	mockDB.On("FindSystemBySystemID", "NES").Return(system, nil).Once()
 	mockDB.On("FindMediaBySystemAndPaths", mock.Anything, system.DBID, []string{containerPath}).
 		Return(map[string]database.Media{}, nil).Once()
-	mockDB.On("FindSingleDescendantMedia", mock.Anything, system.DBID, containerPath).
+	mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, system.DBID, containerPath).
 		Return(&media, nil).Once()
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, []int64{media.DBID}).
 		Return(map[int64]database.MediaFullRow{media.DBID: row}, nil).Once()

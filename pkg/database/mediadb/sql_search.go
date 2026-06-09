@@ -68,6 +68,7 @@ func fetchAndAttachTags(
 		SELECT
 			Media.DBID as MediaDBID,
 			Tags.Tag,
+			Tags.DisplayName,
 			TagTypes.Type
 		FROM Media
 		JOIN MediaTags ON MediaTags.MediaDBID = Media.DBID
@@ -80,6 +81,7 @@ func fetchAndAttachTags(
 		SELECT
 			Media.DBID as MediaDBID,
 			Tags.Tag,
+			Tags.DisplayName,
 			TagTypes.Type
 		FROM Media
 		JOIN MediaTitleTags ON MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
@@ -120,14 +122,13 @@ func fetchAndAttachTags(
 	// Build per-mediaID tag lists. The same (Tag, Type) tuple can appear in
 	// both UNION ALL legs (file-level and title-level), so dedupe with a set.
 	tagsMap := make(map[int64][]database.TagInfo)
-	seen := make(map[int64]map[database.TagInfo]struct{})
+	seen := make(map[int64]map[tagKey]int)
 	for tagsRows.Next() {
-		var mediaID int64
-		var tag, tagType string
-		if scanErr := tagsRows.Scan(&mediaID, &tag, &tagType); scanErr != nil {
+		tagRow, scanErr := scanMediaTagRow(tagsRows)
+		if scanErr != nil {
 			return fmt.Errorf("failed to scan tags result: %w", scanErr)
 		}
-		appendTagInfo(tagsMap, seen, mediaID, tag, tagType)
+		appendTagInfo(tagsMap, seen, tagRow.mediaID, tagRow.tag, tagRow.tagType, tagRow.label)
 	}
 	if err = tagsRows.Err(); err != nil {
 		return fmt.Errorf("tags rows iteration error: %w", err)
@@ -172,6 +173,7 @@ func fetchAndAttachTagsByResultIDs(
 			0 as SourceKind,
 			MediaTags.MediaDBID as SourceDBID,
 			Tags.Tag,
+			Tags.DisplayName,
 			TagTypes.Type
 		FROM MediaTags
 		JOIN Tags ON Tags.DBID = MediaTags.TagDBID
@@ -184,6 +186,7 @@ func fetchAndAttachTagsByResultIDs(
 			1 as SourceKind,
 			MediaTitleTags.MediaTitleDBID as SourceDBID,
 			Tags.Tag,
+			Tags.DisplayName,
 			TagTypes.Type
 		FROM MediaTitleTags
 		JOIN Tags ON Tags.DBID = MediaTitleTags.TagDBID
@@ -219,21 +222,19 @@ func fetchAndAttachTagsByResultIDs(
 	}()
 
 	tagsMap := make(map[int64][]database.TagInfo)
-	seen := make(map[int64]map[database.TagInfo]struct{})
+	seen := make(map[int64]map[tagKey]int)
 	for tagsRows.Next() {
-		var sourceKind int
-		var sourceID int64
-		var tag, tagType string
-		if scanErr := tagsRows.Scan(&sourceKind, &sourceID, &tag, &tagType); scanErr != nil {
+		tagRow, scanErr := scanSourceTagRow(tagsRows)
+		if scanErr != nil {
 			return fmt.Errorf("failed to scan tags result: %w", scanErr)
 		}
 
-		mediaIDsForTag := []int64{sourceID}
-		if sourceKind == 1 {
-			mediaIDsForTag = tagIDs.titleToMediaIDs[sourceID]
+		mediaIDsForTag := []int64{tagRow.sourceID}
+		if tagRow.sourceKind == 1 {
+			mediaIDsForTag = tagIDs.titleToMediaIDs[tagRow.sourceID]
 		}
 		for _, mediaID := range mediaIDsForTag {
-			appendTagInfo(tagsMap, seen, mediaID, tag, tagType)
+			appendTagInfo(tagsMap, seen, mediaID, tagRow.tag, tagRow.tagType, tagRow.label)
 		}
 	}
 	if err = tagsRows.Err(); err != nil {
@@ -295,26 +296,99 @@ func resultIDsHaveTags(ctx context.Context, db sqlQueryable, mediaIDs, titleIDs 
 	return hasTags, nil
 }
 
+func scanMediaTagRow(rows *sql.Rows) (tagScanValues, error) {
+	dest, values, err := tagScanDest(rows)
+	if err != nil {
+		return tagScanValues{}, err
+	}
+	if err := rows.Scan(dest...); err != nil {
+		return tagScanValues{}, fmt.Errorf("scan media tag row: %w", err)
+	}
+	return *values, nil
+}
+
+func scanSourceTagRow(rows *sql.Rows) (tagScanValues, error) {
+	dest, values, err := tagScanDest(rows)
+	if err != nil {
+		return tagScanValues{}, err
+	}
+	if err := rows.Scan(dest...); err != nil {
+		return tagScanValues{}, fmt.Errorf("scan source tag row: %w", err)
+	}
+	return *values, nil
+}
+
+type tagScanValues struct {
+	tag        string
+	tagType    string
+	label      string
+	mediaID    int64
+	sourceID   int64
+	sourceKind int
+}
+
+func tagScanDest(rows *sql.Rows) ([]any, *tagScanValues, error) {
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, nil, fmt.Errorf("get tag row columns: %w", err)
+	}
+	values := &tagScanValues{}
+	dest := make([]any, len(columns))
+	hasTag := false
+	hasType := false
+	for i, column := range columns {
+		switch column {
+		case "MediaDBID":
+			dest[i] = &values.mediaID
+		case "SourceDBID":
+			dest[i] = &values.sourceID
+		case "SourceKind":
+			dest[i] = &values.sourceKind
+		case "Tag":
+			hasTag = true
+			dest[i] = &values.tag
+		case "Type":
+			hasType = true
+			dest[i] = &values.tagType
+		case "DisplayName":
+			dest[i] = &values.label
+		default:
+			var ignored any
+			dest[i] = &ignored
+		}
+	}
+	if !hasTag || !hasType {
+		return nil, nil, errors.New("tag rows missing Tag or Type column")
+	}
+	return dest, values, nil
+}
+
 func appendTagInfo(
 	tagsMap map[int64][]database.TagInfo,
-	seen map[int64]map[database.TagInfo]struct{},
+	seen map[int64]map[tagKey]int,
 	mediaID int64,
 	tag string,
 	tagType string,
+	label string,
 ) {
 	tagInfo := database.TagInfo{
-		Tag:  dbtags.UnpadTagValue(tag),
-		Type: tagType,
+		Tag:   dbtags.UnpadTagValue(tag),
+		Type:  tagType,
+		Label: label,
 	}
+	key := tagKey{typ: tagInfo.Type, tag: tagInfo.Tag}
 	mediaSeen, ok := seen[mediaID]
 	if !ok {
-		mediaSeen = make(map[database.TagInfo]struct{})
+		mediaSeen = make(map[tagKey]int)
 		seen[mediaID] = mediaSeen
 	}
-	if _, dup := mediaSeen[tagInfo]; dup {
+	if index, dup := mediaSeen[key]; dup {
+		if tagsMap[mediaID][index].Label == "" && label != "" {
+			tagsMap[mediaID][index].Label = label
+		}
 		return
 	}
-	mediaSeen[tagInfo] = struct{}{}
+	mediaSeen[key] = len(tagsMap[mediaID])
 	tagsMap[mediaID] = append(tagsMap[mediaID], tagInfo)
 }
 

@@ -313,7 +313,7 @@ func launchAltCore(
 	systemID string,
 	rbfPath string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, "")
+	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, "", false)
 }
 
 func launchDB9Core(
@@ -330,7 +330,17 @@ func launchAltCoreWithSetName(
 	rbfPath string,
 	setName string,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, setName)
+	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, setName, true)
+}
+
+func launchAltCoreWithSetNameSameDir(
+	launcherID string,
+	systemID string,
+	rbfPath string,
+	setName string,
+	sameDir bool,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return launchAltCoreWithDefaultSetName(launcherID, systemID, rbfPath, setName, sameDir)
 }
 
 func retroAchievementsSetName(launcherID string) (string, bool) {
@@ -339,6 +349,10 @@ func retroAchievementsSetName(launcherID string) (string, bool) {
 		return "RA_Atari7800", true
 	case "RAGameboy":
 		return "RA_Gameboy", true
+	case "RAGameboyColor":
+		return "RA_GBC", true
+	case "RASuperGameboy":
+		return "RA_SGB", true
 	case "RAGBA":
 		return "RA_GBA", true
 	case "RAMegaCD":
@@ -378,11 +392,41 @@ func launchRetroAchievementsCore(
 	return launchAltCoreWithSetName(launcherID, systemID, rbfPath, setName)
 }
 
+func launchRetroAchievementsCoreNoSameDir(
+	launcherID string,
+	systemID string,
+	rbfPath string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	setName, ok := retroAchievementsSetName(launcherID)
+	if !ok {
+		log.Warn().Str("launcher", launcherID).Msg("missing RetroAchievements set name")
+	}
+	return launchAltCoreWithSetNameSameDir(launcherID, systemID, rbfPath, setName, false)
+}
+
+func configureAltCoreWithDefaultSetName(
+	core *cores.Core,
+	launcherID string,
+	rbfPath string,
+	setName string,
+	setNameSameDir bool,
+	opts *platforms.LaunchOptions,
+) error {
+	core.LauncherID = launcherID
+	core.RBF = rbfPath
+	if setName != "" {
+		core.SetName = setName
+		core.SetNameSameDir = setNameSameDir
+	}
+	return applySetNameOptions(core, opts)
+}
+
 func launchAltCoreWithDefaultSetName(
 	launcherID string,
 	systemID string,
 	rbfPath string,
 	setName string,
+	setNameSameDir bool,
 ) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	// Register alt core during launcher creation
 	cores.GlobalRBFCache.RegisterAltCore(launcherID, rbfPath)
@@ -395,13 +439,9 @@ func launchAltCoreWithDefaultSetName(
 		path = checkInZip(path)
 
 		sn := *s
-		sn.LauncherID = launcherID
-		sn.RBF = rbfPath
-		if setName != "" {
-			sn.SetName = setName
-			sn.SetNameSameDir = true
-		}
-		if setNameErr := applySetNameOptions(&sn, opts); setNameErr != nil {
+		if setNameErr := configureAltCoreWithDefaultSetName(
+			&sn, launcherID, rbfPath, setName, setNameSameDir, opts,
+		); setNameErr != nil {
 			return nil, setNameErr
 		}
 
@@ -1030,6 +1070,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemGameboyColor),
 		},
 		{
+			ID:       "RAGameboyColor",
+			SystemID: systemdefs.SystemGameboyColor,
+			Launch: launchRetroAchievementsCoreNoSameDir(
+				"RAGameboyColor", systemdefs.SystemGameboyColor, "_RA_Cores/Cores/Gameboy",
+			),
+		},
+		{
 			ID:         systemdefs.SystemGameboy2P,
 			SystemID:   systemdefs.SystemGameboy2P,
 			Folders:    []string{"GAMEBOY2P"},
@@ -1469,6 +1516,13 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"SGB"},
 			Extensions: []string{".sgb", ".gb", ".gbc"},
 			Launch:     launch(pl, systemdefs.SystemSuperGameboy),
+		},
+		{
+			ID:       "RASuperGameboy",
+			SystemID: systemdefs.SystemSuperGameboy,
+			Launch: launchRetroAchievementsCoreNoSameDir(
+				"RASuperGameboy", systemdefs.SystemSuperGameboy, "_RA_Cores/Cores/Gameboy",
+			),
 		},
 		{
 			ID:       "DB9SuperGameboy",

@@ -72,9 +72,9 @@ func TestHandleMediaMeta_FullResult(t *testing.T) {
 	}
 	expectMediaMetaResolve(mockDB, row)
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).
-		Return([]database.TagInfo{{Tag: "genre:platformer", Type: "genre"}}, nil)
+		Return([]database.TagInfo{{Tag: "platformer", Type: "genre", Label: "Platformer"}}, nil)
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
-		Return([]database.TagInfo{{Tag: "developer:nintendo", Type: "developer"}}, nil)
+		Return([]database.TagInfo{{Tag: "nintendo", Type: "developer", Label: "Nintendo"}}, nil)
 	mockDB.On("GetMediaProperties", mock.Anything, int64(1)).
 		Return([]database.MediaProperty{}, nil)
 	mockDB.On("GetMediaTitleProperties", mock.Anything, int64(10)).
@@ -94,9 +94,11 @@ func TestHandleMediaMeta_FullResult(t *testing.T) {
 	assert.Equal(t, "NES", resp.Media.Title.System.Name)
 	assert.Equal(t, "super-mario-bros", resp.Media.Title.Slug)
 	assert.Len(t, resp.Media.Tags, 1)
-	assert.Equal(t, "genre:platformer", resp.Media.Tags[0].Tag)
+	assert.Equal(t, "platformer", resp.Media.Tags[0].Tag)
+	assert.Equal(t, "Platformer", resp.Media.Tags[0].Label)
 	assert.Len(t, resp.Media.Title.Tags, 1)
-	assert.Equal(t, "developer:nintendo", resp.Media.Title.Tags[0].Tag)
+	assert.Equal(t, "nintendo", resp.Media.Title.Tags[0].Tag)
+	assert.Equal(t, "Nintendo", resp.Media.Title.Tags[0].Label)
 	assert.Contains(t, resp.Media.Title.Properties, "property:description")
 	assert.Equal(t, "A classic platformer", resp.Media.Title.Properties["property:description"].Text)
 	mockDB.AssertExpectations(t)
@@ -263,13 +265,17 @@ func TestHandleMediaMeta_BatchByMediaIDPartialSuccess(t *testing.T) {
 	row := makeMediaFullRow(3, 30)
 	row.System = database.System{DBID: 100, SystemID: "NES", Name: "NES"}
 	row.Title.Name = "Batch Game"
+	mediaTags := map[int64][]database.TagInfo{
+		row.DBID: {{Tag: "platformer", Type: "genre", Label: "Platformer"}},
+	}
+	titleTags := map[int64][]database.TagInfo{
+		row.Title.DBID: {{Tag: "nintendo", Type: "publisher", Label: "Nintendo"}},
+	}
 
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, mock.Anything).
 		Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil)
-	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, mock.Anything).
-		Return(map[int64][]database.TagInfo{row.DBID: {{Tag: "genre:platformer", Type: "genre"}}}, nil)
-	mockDB.On("GetMediaTitleTagsByMediaTitleDBIDs", mock.Anything, mock.Anything).
-		Return(map[int64][]database.TagInfo{row.Title.DBID: {{Tag: "publisher:nintendo", Type: "publisher"}}}, nil)
+	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, mock.Anything).Return(mediaTags, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBIDs", mock.Anything, mock.Anything).Return(titleTags, nil)
 	mockDB.On("GetMediaPropertiesByMediaDBIDs", mock.Anything, mock.Anything).
 		Return(map[int64][]database.MediaProperty{
 			row.DBID: {{TypeTag: "property:description", Text: "media desc"}},
@@ -287,6 +293,10 @@ func TestHandleMediaMeta_BatchByMediaIDPartialSuccess(t *testing.T) {
 	require.NotNil(t, resp.Items[0].Media)
 	assert.Equal(t, row.Path, resp.Items[0].Media.Path)
 	assert.Equal(t, "Batch Game", resp.Items[0].Media.Title.Name)
+	require.Len(t, resp.Items[0].Media.Tags, 1)
+	assert.Equal(t, "Platformer", resp.Items[0].Media.Tags[0].Label)
+	require.Len(t, resp.Items[0].Media.Title.Tags, 1)
+	assert.Equal(t, "Nintendo", resp.Items[0].Media.Title.Tags[0].Label)
 	assert.Contains(t, resp.Items[0].Media.Properties, "property:description")
 	require.NotNil(t, resp.Items[1].Error)
 	assert.Contains(t, *resp.Items[1].Error, "mediaId 999")
@@ -300,13 +310,17 @@ func TestHandleMediaMeta_MediaIDSuccess(t *testing.T) {
 	row := makeMediaFullRow(3, 30)
 	row.System = database.System{DBID: 100, SystemID: "NES", Name: "NES"}
 	row.Title.Name = "Media ID Game"
+	mediaTags := map[int64][]database.TagInfo{
+		row.DBID: {{Tag: "platformer", Type: "genre", Label: "Platformer"}},
+	}
+	titleTags := map[int64][]database.TagInfo{
+		row.Title.DBID: {{Tag: "nintendo", Type: "publisher", Label: "Nintendo"}},
+	}
 
 	mockDB.On("GetMediaWithTitleAndSystemByIDs", mock.Anything, mock.Anything).
 		Return(map[int64]database.MediaFullRow{row.DBID: *row}, nil)
-	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, mock.Anything).
-		Return(map[int64][]database.TagInfo{row.DBID: {{Tag: "genre:platformer", Type: "genre"}}}, nil)
-	mockDB.On("GetMediaTitleTagsByMediaTitleDBIDs", mock.Anything, mock.Anything).
-		Return(map[int64][]database.TagInfo{row.Title.DBID: {{Tag: "publisher:nintendo", Type: "publisher"}}}, nil)
+	mockDB.On("GetMediaTagsByMediaDBIDs", mock.Anything, mock.Anything).Return(mediaTags, nil)
+	mockDB.On("GetMediaTitleTagsByMediaTitleDBIDs", mock.Anything, mock.Anything).Return(titleTags, nil)
 	mockDB.On("GetMediaPropertiesByMediaDBIDs", mock.Anything, mock.Anything).
 		Return(map[int64][]database.MediaProperty{
 			row.DBID: {{TypeTag: "property:description", Text: "media desc"}},
@@ -325,9 +339,11 @@ func TestHandleMediaMeta_MediaIDSuccess(t *testing.T) {
 	assert.Equal(t, row.Path, resp.Media.Path)
 	assert.Equal(t, "Media ID Game", resp.Media.Title.Name)
 	require.Len(t, resp.Media.Tags, 1)
-	assert.Equal(t, "genre:platformer", resp.Media.Tags[0].Tag)
+	assert.Equal(t, "platformer", resp.Media.Tags[0].Tag)
+	assert.Equal(t, "Platformer", resp.Media.Tags[0].Label)
 	require.Len(t, resp.Media.Title.Tags, 1)
-	assert.Equal(t, "publisher:nintendo", resp.Media.Title.Tags[0].Tag)
+	assert.Equal(t, "nintendo", resp.Media.Title.Tags[0].Tag)
+	assert.Equal(t, "Nintendo", resp.Media.Title.Tags[0].Label)
 	assert.Equal(t, "media desc", resp.Media.Properties["property:description"].Text)
 	assert.Equal(t, "title desc", resp.Media.Title.Properties["property:description"].Text)
 	mockDB.AssertExpectations(t)
@@ -434,7 +450,7 @@ func TestHandleMediaMeta_MediaIDMergesSingletonAliasMetadata(t *testing.T) {
 		Once()
 	mockDB.On("GetMediaTitlePropertyMetadataByMediaTitleDBIDs", mock.Anything, []int64{row.Title.DBID}).
 		Return(map[int64][]database.MediaProperty{}, nil).Once()
-	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, parentPath).
+	mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, row.System.DBID, parentPath).
 		Return(&row.Media, nil).Twice()
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, parentPath).
 		Return(parent, nil).Twice()
@@ -485,7 +501,7 @@ func TestMergedMediaMeta_MergesSingletonAliasMetadata(t *testing.T) {
 	parentPath := filepath.ToSlash(filepath.Join("roms", "Game.zip"))
 	parent := &database.Media{DBID: 10, Path: parentPath}
 
-	mockDB.On("FindSingleDescendantMedia", mock.Anything, row.System.DBID, parentPath).
+	mockDB.On("FindSingleContainerLaunchMedia", mock.Anything, row.System.DBID, parentPath).
 		Return(&row.Media, nil).Once()
 	mockDB.On("FindMediaBySystemAndPath", mock.Anything, row.System.DBID, parentPath).
 		Return(parent, nil).Once()

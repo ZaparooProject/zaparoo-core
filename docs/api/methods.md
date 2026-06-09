@@ -559,7 +559,7 @@ All parameters are optional. When called with no parameters, returns root entrie
 
 | Key          | Type     | Required | Description                                                                                      |
 | :----------- | :------- | :------- | :----------------------------------------------------------------------------------------------- |
-| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries, and on zip-as-directory platform `directory` entries that contain exactly one indexed media descendant, for efficient follow-up `media.meta` and `media.image` requests. |
+| mediaId      | number   | No       | Opaque media database row ID. Present on `media` entries, and on zip-as-directory platform `directory` entries whose direct contents collapse to one logical launch target, for efficient follow-up `media.meta` and `media.image` requests. |
 | name         | string   | Yes      | Display name of the entry.                                                                       |
 | path         | string   | Yes      | Full path to the entry.                                                                          |
 | type         | string   | Yes      | Entry type: `root`, `directory`, or `media`.                                                     |
@@ -567,9 +567,9 @@ All parameters are optional. When called with no parameters, returns root entrie
 | group        | string   | No       | Launcher group name. Present on virtual scheme `root` entries.                                   |
 | systemId     | string   | No       | System ID for the media or single-system filtered route (e.g. `SNES`). Present on `media` entries and filtered `root` entries when exactly one system applies. |
 | systemIds    | string[] | No       | System IDs represented by a filtered `root` or `directory` entry.                                |
-| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and singleton media-container `directory` entries on zip-as-directory platforms. |
-| relativePath | string   | No       | Relative path from root directory. Present on `media` entries and singleton media-container `directory` entries on zip-as-directory platforms. |
-| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and singleton media-container `directory` entries on zip-as-directory platforms. |
+| zapScript    | string   | No       | ZapScript command to launch this media. Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
+| relativePath | string   | No       | Relative path from root directory. Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
+| tags         | object[] | No       | Tags attached to the media. Each object has `tag` (string) and `type` (string). Present on `media` entries and logical single-game container `directory` entries on zip-as-directory platforms. |
 
 ##### Browse pagination object
 
@@ -1038,6 +1038,64 @@ Returns `null` on success.
   "jsonrpc": "2.0",
   "id": "47f80537-7a5d-11ef-9c7b-020304050607",
   "result": null
+}
+```
+
+### media.history.latest
+
+Return the most recent played media entry from the user database only. This is intended for startup paths that need the last played game as quickly as possible, without media database enrichment.
+
+This method does not return tags, metadata, media IDs, relative paths, pagination, end time, or play time.
+
+#### Parameters
+
+None. Empty params may be omitted or sent as `{}`.
+
+#### Result
+
+| Key   | Type                                                         | Required | Description                                                   |
+| :---- | :----------------------------------------------------------- | :------- | :------------------------------------------------------------ |
+| entry | [MediaHistoryLatestEntry](#media-history-latest-entry-object) | Yes      | Most recent media play history entry, or `null` when none exists. |
+
+##### Media history latest entry object
+
+| Key        | Type   | Required | Description                                     |
+| :--------- | :----- | :------- | :---------------------------------------------- |
+| systemId   | string | Yes      | ID of the system.                               |
+| systemName | string | Yes      | Display name of the system from the history row. |
+| mediaName  | string | Yes      | Display name of the media from the history row. |
+| mediaPath  | string | Yes      | Path to the media file from the history row.    |
+| launcherId | string | Yes      | ID of the launcher used.                        |
+| startedAt  | string | Yes      | Timestamp when media started in RFC3339 format. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "9f2c6a52-7a5d-11ef-9c7b-020304050607",
+  "method": "media.history.latest"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "9f2c6a52-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "entry": {
+      "systemId": "SNES",
+      "systemName": "Super Nintendo Entertainment System",
+      "mediaName": "Super Mario World",
+      "mediaPath": "/roms/snes/Super Mario World (USA).sfc",
+      "launcherId": "SNES",
+      "startedAt": "2025-01-22T14:30:00Z"
+    }
+  }
 }
 ```
 

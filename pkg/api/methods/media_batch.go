@@ -38,6 +38,7 @@ const (
 
 type mediaRefParam struct {
 	MediaID    *int64   `json:"mediaId,omitempty"`
+	MaxSize    *int32   `json:"maxSize,omitempty"`
 	System     string   `json:"system,omitempty"`
 	Path       string   `json:"path,omitempty"`
 	ImageTypes []string `json:"imageTypes,omitempty"`

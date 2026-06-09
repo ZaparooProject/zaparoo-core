@@ -532,11 +532,11 @@ func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 	expectedResults := []database.SearchResultWithCursor{
 		{
 			SystemID: "NES", Name: "RPG Game 1", Path: "/games/rpg1.nes", MediaID: 1,
-			Tags: []database.TagInfo{{Tag: "RPG", Type: "genre"}},
+			Tags: []database.TagInfo{{Tag: "rpg", Type: "genre", Label: "RPG"}},
 		},
 		{
 			SystemID: "SNES", Name: "RPG Game 2", Path: "/games/rpg2.sfc", MediaID: 2,
-			Tags: []database.TagInfo{{Tag: "RPG", Type: "genre"}},
+			Tags: []database.TagInfo{{Tag: "rpg", Type: "genre", Label: "RPG"}},
 		},
 	}
 
@@ -586,8 +586,9 @@ func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 	require.True(t, ok, "Should return SearchResults")
 	assert.Len(t, searchResults.Results, 2, "Should return all tagged results")
 	assert.Len(t, searchResults.Results[0].Tags, 1, "Results should have tags")
-	assert.Equal(t, "RPG", searchResults.Results[0].Tags[0].Tag)
+	assert.Equal(t, "rpg", searchResults.Results[0].Tags[0].Tag)
 	assert.Equal(t, "genre", searchResults.Results[0].Tags[0].Type)
+	assert.Equal(t, "RPG", searchResults.Results[0].Tags[0].Label)
 
 	// Verify mock was called
 	mockMediaDB.AssertExpectations(t)

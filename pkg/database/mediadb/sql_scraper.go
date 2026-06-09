@@ -122,36 +122,30 @@ func (db *MediaDB) FindMediaBySystemAndPaths(
 	return results, rows.Err()
 }
 
-func (db *MediaDB) FindSingleDescendantMedia(
-	ctx context.Context, systemDBID int64, dirPath string,
+func (db *MediaDB) FindSingleContainerLaunchMedia(
+	ctx context.Context, systemDBID int64, containerPath string,
 ) (*database.Media, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
 
-	prefix := strings.TrimRight(dirPath, "/") + "/"
-	upper := stringPrefixUpperBound(prefix)
-	query := `
+	prefix := strings.TrimRight(containerPath, "/") + "/"
+	hasNested, err := containerHasNestedMedia(ctx, db.sql, systemDBID, prefix)
+	if err != nil {
+		return nil, err
+	}
+	if hasNested {
+		return nil, nil //nolint:nilnil // nested containers remain browseable, not launch aliases
+	}
+
+	rows, err := db.sql.QueryContext(ctx, `
 		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
 		FROM Media
-		WHERE SystemDBID = ? AND IsMissing = 0 AND Path >= ? AND Path < ?
+		WHERE SystemDBID = ? AND IsMissing = 0 AND ParentDir = ?
 		ORDER BY Path ASC, DBID ASC
-		LIMIT 2
-	`
-	args := []any{systemDBID, prefix, upper}
-	if upper == "" {
-		query = `
-			SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
-			FROM Media
-			WHERE SystemDBID = ? AND IsMissing = 0 AND Path >= ? AND substr(Path, 1, length(?)) = ?
-			ORDER BY Path ASC, DBID ASC
-			LIMIT 2
-		`
-		args = []any{systemDBID, prefix, prefix, prefix}
-	}
-	rows, err := db.sql.QueryContext(ctx, query, args...)
+	`, systemDBID, prefix)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query FindSingleDescendantMedia: %w", err)
+		return nil, fmt.Errorf("failed to query FindSingleContainerLaunchMedia: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -170,17 +164,124 @@ func (db *MediaDB) FindSingleDescendantMedia(
 			&row.ParentDir,
 			&row.IsMissing,
 		); scanErr != nil {
-			return nil, fmt.Errorf("failed to scan FindSingleDescendantMedia: %w", scanErr)
+			return nil, fmt.Errorf("failed to scan FindSingleContainerLaunchMedia: %w", scanErr)
 		}
 		matches = append(matches, row)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("failed to iterate FindSingleDescendantMedia: %w", rowsErr)
+		return nil, fmt.Errorf("failed to iterate FindSingleContainerLaunchMedia: %w", rowsErr)
 	}
-	if len(matches) != 1 {
-		return nil, nil //nolint:nilnil // zero or ambiguous descendants are not singleton aliases
+	return selectContainerLaunchMedia(matches), nil
+}
+
+func containerHasNestedMedia(ctx context.Context, db sqlQueryable, systemDBID int64, prefix string) (bool, error) {
+	upper := stringPrefixUpperBound(prefix)
+	query := `
+		SELECT 1
+		FROM Media
+		WHERE SystemDBID = ? AND IsMissing = 0 AND Path >= ? AND Path < ? AND ParentDir != ?
+		LIMIT 1
+	`
+	args := []any{systemDBID, prefix, upper, prefix}
+	if upper == "" {
+		query = `
+			SELECT 1
+			FROM Media
+			WHERE SystemDBID = ? AND IsMissing = 0 AND Path >= ?
+				AND substr(Path, 1, length(?)) = ? AND ParentDir != ?
+			LIMIT 1
+		`
+		args = []any{systemDBID, prefix, prefix, prefix, prefix}
 	}
-	return &matches[0], nil
+
+	var exists int
+	err := db.QueryRowContext(ctx, query, args...).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to check nested container media: %w", err)
+	}
+	return true, nil
+}
+
+func selectContainerLaunchMedia(rows []database.Media) *database.Media {
+	if len(rows) == 0 {
+		return nil
+	}
+	if len(rows) == 1 {
+		return &rows[0]
+	}
+
+	m3u := singleMediaWithExt(rows, ".m3u")
+	if m3u != nil && allOtherExtsMatch(rows, m3u.DBID, isM3UCompanionExt) {
+		return m3u
+	}
+
+	cue := singleMediaWithExt(rows, ".cue")
+	if cue != nil && allOtherExtsMatch(rows, cue.DBID, isCueCompanionExt) {
+		return cue
+	}
+
+	return nil
+}
+
+func singleMediaWithExt(rows []database.Media, ext string) *database.Media {
+	var match *database.Media
+	for i := range rows {
+		if mediaExt(rows[i].Path) != ext {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = &rows[i]
+	}
+	return match
+}
+
+func allOtherExtsMatch(rows []database.Media, mediaDBID int64, allowed func(string) bool) bool {
+	for i := range rows {
+		if rows[i].DBID == mediaDBID {
+			continue
+		}
+		if !allowed(mediaExt(rows[i].Path)) {
+			return false
+		}
+	}
+	return true
+}
+
+func mediaExt(mediaPath string) string {
+	name := mediaPath
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+	if idx := strings.LastIndex(name, "."); idx >= 0 {
+		return strings.ToLower(name[idx:])
+	}
+	return ""
+}
+
+func isCueCompanionExt(ext string) bool {
+	switch ext {
+	case ".bin", ".wav", ".mp3", ".ogg", ".flac", ".ape":
+		return true
+	default:
+		return false
+	}
+}
+
+func isM3UCompanionExt(ext string) bool {
+	if isCueCompanionExt(ext) {
+		return true
+	}
+	switch ext {
+	case ".cue", ".chd", ".iso":
+		return true
+	default:
+		return false
+	}
 }
 
 func stringPrefixUpperBound(prefix string) string {
@@ -350,10 +451,8 @@ func (db *MediaDB) GetScrapedMediaCount(ctx context.Context, scraperID string) (
 	return count, nil
 }
 
-// GetTotalScrapedMediaCount returns the number of distinct media rows with
-// scraper metadata. Sentinel tags are included, but the count also covers rows
-// whose title/media properties were written by scrapers so metadata remains
-// reflected after reindex paths that preserve properties but rebuild media tags.
+// GetTotalScrapedMediaCount returns the number of distinct media rows marked
+// as successfully scraped by any scraper sentinel tag.
 func (db *MediaDB) GetTotalScrapedMediaCount(ctx context.Context) (int, error) {
 	if db.sql == nil {
 		return 0, ErrNullSQL
@@ -363,7 +462,7 @@ func (db *MediaDB) GetTotalScrapedMediaCount(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to find scraper sentinel tags: %w", err)
 	}
-	count, err := countScrapedMediaCoverage(ctx, db.sql, tagDBIDs)
+	count, err := countMediaTagsForTagDBIDs(ctx, db.sql, tagDBIDs)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count scraped media: %w", err)
 	}
@@ -483,31 +582,6 @@ func countMediaTagsForTagDBIDs(ctx context.Context, db *sql.DB, tagDBIDs []int64
 	query := `SELECT COUNT(DISTINCT MediaDBID) FROM MediaTags WHERE TagDBID IN (` + placeholders + `)`
 	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("failed to count media tag rows: %w", err)
-	}
-	return count, nil
-}
-
-func countScrapedMediaCoverage(ctx context.Context, db *sql.DB, tagDBIDs []int64) (int, error) {
-	queries := []string{
-		`SELECT MediaDBID FROM MediaProperties`,
-		`SELECT m.DBID
-			FROM Media m
-			JOIN MediaTitleProperties p ON p.MediaTitleDBID = m.MediaTitleDBID`,
-	}
-	args := make([]any, 0, len(tagDBIDs))
-	if len(tagDBIDs) > 0 {
-		placeholders := prepareVariadic("?", ",", len(tagDBIDs))
-		queries = append(queries, `SELECT MediaDBID FROM MediaTags WHERE TagDBID IN (`+placeholders+`)`)
-		for _, tagDBID := range tagDBIDs {
-			args = append(args, tagDBID)
-		}
-	}
-
-	var count int
-	//nolint:gosec // Safe: queries are static plus generated placeholders.
-	query := `SELECT COUNT(*) FROM (` + strings.Join(queries, ` UNION `) + `)`
-	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
-		return 0, fmt.Errorf("failed to count scraped media coverage: %w", err)
 	}
 	return count, nil
 }
@@ -2461,7 +2535,7 @@ func (db *MediaDB) GetMediaTagsByMediaDBID(ctx context.Context, mediaDBID int64)
 	}
 
 	stmt, err := db.sql.PrepareContext(ctx, `
-		SELECT Tags.Tag, TagTypes.Type
+		SELECT Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTags
 		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
 		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
@@ -2504,7 +2578,7 @@ func (db *MediaDB) GetMediaTagsByMediaDBIDs(
 	args := int64Args(mediaDBIDs)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
 	rows, err := db.sql.QueryContext(ctx, `
-		SELECT MediaTags.MediaDBID, Tags.Tag, TagTypes.Type
+		SELECT MediaTags.MediaDBID, Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTags
 		JOIN Tags ON MediaTags.TagDBID = Tags.DBID
 		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
@@ -2533,7 +2607,7 @@ func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBID(
 	}
 
 	stmt, err := db.sql.PrepareContext(ctx, `
-		SELECT Tags.Tag, TagTypes.Type
+		SELECT Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTitleTags
 		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
 		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
@@ -2576,7 +2650,7 @@ func (db *MediaDB) GetMediaTitleTagsByMediaTitleDBIDs(
 	args := int64Args(mediaTitleDBIDs)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
 	rows, err := db.sql.QueryContext(ctx, `
-		SELECT MediaTitleTags.MediaTitleDBID, Tags.Tag, TagTypes.Type
+		SELECT MediaTitleTags.MediaTitleDBID, Tags.Tag, TagTypes.Type, Tags.DisplayName
 		FROM MediaTitleTags
 		JOIN Tags ON MediaTitleTags.TagDBID = Tags.DBID
 		JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
@@ -2683,7 +2757,7 @@ func scanTagInfos(rows *sql.Rows) ([]database.TagInfo, error) {
 	result := make([]database.TagInfo, 0)
 	for rows.Next() {
 		var t database.TagInfo
-		if err := rows.Scan(&t.Tag, &t.Type); err != nil {
+		if err := rows.Scan(&t.Tag, &t.Type, &t.Label); err != nil {
 			return nil, fmt.Errorf("failed to scan TagInfo: %w", err)
 		}
 		t.Tag = tags.UnpadTagValue(t.Tag)
@@ -2697,7 +2771,7 @@ func scanGroupedTagInfos(rows *sql.Rows) (map[int64][]database.TagInfo, error) {
 	for rows.Next() {
 		var dbid int64
 		var t database.TagInfo
-		if err := rows.Scan(&dbid, &t.Tag, &t.Type); err != nil {
+		if err := rows.Scan(&dbid, &t.Tag, &t.Type, &t.Label); err != nil {
 			return nil, fmt.Errorf("failed to scan grouped TagInfo: %w", err)
 		}
 		t.Tag = tags.UnpadTagValue(t.Tag)

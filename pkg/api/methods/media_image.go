@@ -26,6 +26,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -40,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
+	"golang.org/x/image/draw"
 )
 
 const (
@@ -73,6 +78,116 @@ var imageTypeTags = map[string]string{
 	"map":        tags.PropertyTypeTag(tags.TagPropertyImageMap),
 	"marquee":    tags.PropertyTypeTag(tags.TagPropertyImageMarquee),
 	"fanart":     tags.PropertyTypeTag(tags.TagPropertyImageFanart),
+}
+
+// rawMediaImage carries raw image bytes and metadata before base64-encoding.
+// Used to allow the semaphore to be released before CPU-intensive resize/encode.
+type rawMediaImage struct {
+	contentType string
+	text        string // original file path, for extension derivation fallback
+	typeTag     string
+	binary      []byte
+}
+
+// resizeImageIfNeeded decodes binary, and if either dimension exceeds maxSize,
+// scales it down to fit within a maxSize×maxSize bounding box and re-encodes
+// opaque images as JPEG (q85) or transparent images as PNG. Returns the original
+// bytes unchanged when no resize is needed or when the source cannot be decoded.
+func resizeImageIfNeeded(binary []byte, contentType string, maxSize int) (resized []byte, resizedType string) {
+	if maxSize <= 0 || len(binary) == 0 {
+		return binary, contentType
+	}
+	src, err := decodeResizableImage(binary, contentType)
+	if err != nil {
+		return binary, contentType
+	}
+	bounds := src.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	if w <= maxSize && h <= maxSize {
+		return binary, contentType
+	}
+	larger := w
+	if h > larger {
+		larger = h
+	}
+	scale := float64(maxSize) / float64(larger)
+	newW := int(math.Round(float64(w) * scale))
+	newH := int(math.Round(float64(h) * scale))
+	if newW < 1 {
+		newW = 1
+	}
+	if newH < 1 {
+		newH = 1
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, bounds, draw.Over, nil)
+	var out bytes.Buffer
+	outputType := "image/jpeg"
+	if imageHasTransparency(src) {
+		outputType = "image/png"
+		if err := png.Encode(&out, dst); err != nil {
+			return binary, contentType
+		}
+	} else if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 85}); err != nil {
+		return binary, contentType
+	}
+	log.Debug().
+		Str("contentType", contentType).
+		Str("resizedContentType", outputType).
+		Int("maxSize", maxSize).
+		Int("width", w).
+		Int("height", h).
+		Int("resizedWidth", newW).
+		Int("resizedHeight", newH).
+		Int("inputBytes", len(binary)).
+		Int("resizedBytes", out.Len()).
+		Msg("media.image: resized image")
+	return out.Bytes(), outputType
+}
+
+func decodeResizableImage(binary []byte, contentType string) (image.Image, error) {
+	decodeJPEG := func() (image.Image, error) {
+		img, err := jpeg.Decode(bytes.NewReader(binary))
+		if err != nil {
+			return nil, fmt.Errorf("decode JPEG for resize: %w", err)
+		}
+		return img, nil
+	}
+	decodePNG := func() (image.Image, error) {
+		img, err := png.Decode(bytes.NewReader(binary))
+		if err != nil {
+			return nil, fmt.Errorf("decode PNG for resize: %w", err)
+		}
+		return img, nil
+	}
+
+	switch extensionFromContentType(contentType) {
+	case "jpg":
+		return decodeJPEG()
+	case "png":
+		return decodePNG()
+	}
+
+	if bytes.HasPrefix(binary, []byte("\x89PNG\r\n\x1a\n")) {
+		return decodePNG()
+	}
+	if len(binary) >= 2 && binary[0] == 0xff && binary[1] == 0xd8 {
+		return decodeJPEG()
+	}
+	return nil, fmt.Errorf("unsupported image type for resize: %s", contentType)
+}
+
+func imageHasTransparency(img image.Image) bool {
+	bounds := img.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			_, _, _, alpha := img.At(x, y).RGBA()
+			if alpha != 0xffff {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type mediaBinaryTooLargeError struct {
@@ -227,45 +342,42 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 
 	select {
 	case mediaImageSem <- struct{}{}:
-		defer func() { <-mediaImageSem }()
 	case <-env.Context.Done():
 		return nil, env.Context.Err()
 	}
 	if ok, cachedErr := mediaImageNoImages.get(noImageKey); ok {
+		<-mediaImageSem
 		return nil, cachedMediaImageNoImageError(cachedErr)
 	}
 
 	maxBytes := mediaImageMaxBytes(env.Platform)
+	var raw *rawMediaImage
 	if ref.MediaID == nil {
-		return handleMediaImageSinglePath(&env, ref, prefs, noImageKey, maxBytes)
+		raw, err = loadRawMediaImageSinglePath(&env, ref, prefs, maxBytes)
+	} else {
+		raw, err = loadRawMediaImageByID(&env, ref, prefs, maxBytes)
 	}
-
-	resolved, err := resolveMediaRefs(&env, []mediaRefParam{ref})
-	if err != nil {
-		return nil, err
-	}
-	if resolved[0].Err != nil {
-		return nil, resolved[0].Err
-	}
-
-	db := env.Database.MediaDB
-	row := resolved[0].Row
-	mediaPropSources, err := mediaImagePropSources(&env, row)
-	if err != nil {
-		return nil, err
-	}
-	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get title properties: %w", err)
-	}
-
-	image, err := selectMediaImageFromSources(
-		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, prefs, maxBytes,
-	)
+	// Cache the no-image result while holding the semaphore so concurrent
+	// waiters see it immediately after sem release.
 	if isCacheableMediaImageNoImageError(err) {
 		mediaImageNoImages.add(noImageKey, err)
 	}
-	return image, err
+	<-mediaImageSem // release before CPU-intensive decode/resize/encode
+
+	if err != nil {
+		return nil, err
+	}
+
+	binary, ct := raw.binary, raw.contentType
+	if ref.MaxSize != nil && *ref.MaxSize > 0 {
+		binary, ct = resizeImageIfNeeded(binary, ct, int(*ref.MaxSize))
+	}
+	return models.MediaImageResponse{
+		Extension:   mediaContentExtension(ct, raw.text),
+		ContentType: ct,
+		Data:        base64.StdEncoding.EncodeToString(binary),
+		TypeTag:     raw.typeTag,
+	}, nil
 }
 
 func parseMediaImageRequest(raw json.RawMessage) (mediaRefParam, error) {
@@ -284,19 +396,17 @@ func parseMediaImageRequest(raw json.RawMessage) (mediaRefParam, error) {
 	return ref, nil
 }
 
-func handleMediaImageSinglePath(
+func loadRawMediaImageSinglePath(
 	env *requests.RequestEnv,
 	ref mediaRefParam,
 	prefs []string,
-	noImageKey string,
 	maxBytes int64,
-) (any, error) {
+) (*rawMediaImage, error) {
 	db := env.Database.MediaDB
 	row, err := resolveMediaBySystemAndPath(env, ref.System, ref.Path)
 	if err != nil {
 		return nil, err
 	}
-
 	mediaPropSources, err := mediaImagePropSources(env, row)
 	if err != nil {
 		return nil, err
@@ -305,14 +415,37 @@ func handleMediaImageSinglePath(
 	if err != nil {
 		return nil, fmt.Errorf("failed to get title properties: %w", err)
 	}
-
-	image, err := selectMediaImageFromSources(
+	return selectRawMediaImageFromSources(
 		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, prefs, maxBytes,
 	)
-	if isCacheableMediaImageNoImageError(err) {
-		mediaImageNoImages.add(noImageKey, err)
+}
+
+func loadRawMediaImageByID(
+	env *requests.RequestEnv,
+	ref mediaRefParam,
+	prefs []string,
+	maxBytes int64,
+) (*rawMediaImage, error) {
+	resolved, err := resolveMediaRefs(env, []mediaRefParam{ref})
+	if err != nil {
+		return nil, err
 	}
-	return image, err
+	if resolved[0].Err != nil {
+		return nil, resolved[0].Err
+	}
+	db := env.Database.MediaDB
+	row := resolved[0].Row
+	mediaPropSources, err := mediaImagePropSources(env, row)
+	if err != nil {
+		return nil, err
+	}
+	titleProps, err := db.GetMediaTitleProperties(env.Context, row.Title.DBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get title properties: %w", err)
+	}
+	return selectRawMediaImageFromSources(
+		env.Context, afero.NewOsFs(), db, row, mediaPropSources, titleProps, prefs, maxBytes,
+	)
 }
 
 func imagePrefs(topLevel, itemLevel []string) []string {
@@ -386,7 +519,7 @@ func mediaImagePropSources(env *requests.RequestEnv, row *database.MediaFullRow)
 	return sources, nil
 }
 
-func selectMediaImageFromSources(
+func selectRawMediaImageFromSources(
 	ctx context.Context,
 	fs afero.Fs,
 	db database.MediaDBI,
@@ -395,7 +528,7 @@ func selectMediaImageFromSources(
 	titleProps []database.MediaProperty,
 	prefs []string,
 	maxBytes int64,
-) (models.MediaImageResponse, error) {
+) (*rawMediaImage, error) {
 	sources := make([]mediaImageSource, 0, len(mediaPropSources)+1)
 	for _, props := range mediaPropSources {
 		sources = append(sources, mediaImageSource{buildPropsMap(props), true})
@@ -420,16 +553,16 @@ func selectMediaImageFromSources(
 			if prop.Text != "" {
 				fileBackedCandidatesChecked = true
 			}
-			image, stale, err := loadMediaImageProperty(ctx, fs, db, row, &prop, src, typeTag, maxBytes)
+			raw, stale, err := loadRawMediaImageProperty(ctx, fs, db, row, &prop, src, typeTag, maxBytes)
 			if stale {
 				delete(src.propMap, typeTag)
 				continue
 			}
 			if err != nil {
-				return models.MediaImageResponse{}, err
+				return nil, err
 			}
-			if image != nil {
-				return *image, nil
+			if raw != nil {
+				return raw, nil
 			}
 		}
 	}
@@ -448,10 +581,10 @@ func selectMediaImageFromSources(
 		Strs("titleImageProps", imagePropertyTypeTags(titleProps)).
 		Msg("media.image: no image found")
 
-	return models.MediaImageResponse{}, mediaImageNoImageError(row, fileBackedCandidatesChecked)
+	return nil, mediaImageNoImageError(row, fileBackedCandidatesChecked)
 }
 
-func loadMediaImageProperty(
+func loadRawMediaImageProperty(
 	ctx context.Context,
 	fs afero.Fs,
 	db database.MediaDBI,
@@ -460,7 +593,7 @@ func loadMediaImageProperty(
 	src mediaImageSource,
 	typeTag string,
 	maxBytes int64,
-) (*models.MediaImageResponse, bool, error) {
+) (*rawMediaImage, bool, error) {
 	var binary []byte
 	contentType := mediaContentType(prop.ContentType, prop.Text)
 
@@ -499,11 +632,11 @@ func loadMediaImageProperty(
 		return nil, false, nil
 	}
 
-	return &models.MediaImageResponse{
-		Extension:   mediaContentExtension(contentType, prop.Text),
-		ContentType: contentType,
-		Data:        base64.StdEncoding.EncodeToString(binary),
-		TypeTag:     typeTag,
+	return &rawMediaImage{
+		binary:      binary,
+		contentType: contentType,
+		text:        prop.Text,
+		typeTag:     typeTag,
 	}, false, nil
 }
 

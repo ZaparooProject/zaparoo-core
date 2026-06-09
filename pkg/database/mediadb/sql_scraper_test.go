@@ -128,36 +128,94 @@ func TestFindMediaBySystemAndPaths_EmptyInput(t *testing.T) {
 	assert.Empty(t, results)
 }
 
-func TestFindSingleDescendantMedia_ReturnsOnlyChild(t *testing.T) {
+func TestFindSingleContainerLaunchMedia_ReturnsOnlyDirectChild(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	childPath := filepath.ToSlash(filepath.Join("roms", "Zelda", "zelda.nes"))
+	container := filepath.ToSlash(filepath.Join("roms", "Zelda"))
+	childPath := filepath.ToSlash(filepath.Join(container, "zelda.nes"))
 	_, err := mediaDB.sql.ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (2, 2, 1, ?, ?);
-	`, childPath, filepath.ToSlash(filepath.Join("roms", "Zelda"))+"/")
+	`, childPath, container+"/")
 	require.NoError(t, err)
 
-	media, err := mediaDB.FindSingleDescendantMedia(ctx, 1, filepath.ToSlash(filepath.Join("roms", "Zelda")))
+	media, err := mediaDB.FindSingleContainerLaunchMedia(ctx, 1, container)
 	require.NoError(t, err)
 	require.NotNil(t, media)
 	assert.Equal(t, int64(2), media.DBID)
 	assert.Equal(t, childPath, media.Path)
 }
 
-func TestFindSingleDescendantMedia_RejectsMultipleChildren(t *testing.T) {
+func TestFindSingleContainerLaunchMedia_ReturnsCueForCueBinFolder(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	parent := filepath.ToSlash(filepath.Join("roms", "Collection"))
-	parentDir := filepath.ToSlash(filepath.Join(parent, "")) + "/"
-	onePath := filepath.ToSlash(filepath.Join(parent, "one.nes"))
-	twoPath := filepath.ToSlash(filepath.Join(parent, "two.nes"))
+	container := filepath.ToSlash(filepath.Join("roms", "PSX", "Game"))
+	parentDir := container + "/"
+	cuePath := filepath.ToSlash(filepath.Join(container, "Game.cue"))
+	binPath := filepath.ToSlash(filepath.Join(container, "Game.bin"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(2, 1, 'game-cue', 'Game Cue'),
+			(3, 1, 'game-bin', 'Game Bin');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(2, 2, 1, ?, ?),
+			(3, 3, 1, ?, ?);
+	`, cuePath, parentDir, binPath, parentDir)
+	require.NoError(t, err)
+
+	media, err := mediaDB.FindSingleContainerLaunchMedia(ctx, 1, container)
+	require.NoError(t, err)
+	require.NotNil(t, media)
+	assert.Equal(t, int64(2), media.DBID)
+	assert.Equal(t, cuePath, media.Path)
+}
+
+func TestFindSingleContainerLaunchMedia_ReturnsM3UForDiscFolder(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	container := filepath.ToSlash(filepath.Join("roms", "PSX", "Multi Disc"))
+	parentDir := container + "/"
+	m3uPath := filepath.ToSlash(filepath.Join(container, "Game.m3u"))
+	cuePath := filepath.ToSlash(filepath.Join(container, "Disc 1.cue"))
+	binPath := filepath.ToSlash(filepath.Join(container, "Disc 1.bin"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(2, 1, 'game-m3u', 'Game M3U'),
+			(3, 1, 'disc-cue', 'Disc Cue'),
+			(4, 1, 'disc-bin', 'Disc Bin');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(2, 2, 1, ?, ?),
+			(3, 3, 1, ?, ?),
+			(4, 4, 1, ?, ?);
+	`, m3uPath, parentDir, cuePath, parentDir, binPath, parentDir)
+	require.NoError(t, err)
+
+	media, err := mediaDB.FindSingleContainerLaunchMedia(ctx, 1, container)
+	require.NoError(t, err)
+	require.NotNil(t, media)
+	assert.Equal(t, int64(2), media.DBID)
+	assert.Equal(t, m3uPath, media.Path)
+}
+
+func TestFindSingleContainerLaunchMedia_RejectsAmbiguousDirectChildren(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	container := filepath.ToSlash(filepath.Join("roms", "Collection"))
+	parentDir := container + "/"
+	onePath := filepath.ToSlash(filepath.Join(container, "one.cue"))
+	twoPath := filepath.ToSlash(filepath.Join(container, "two.cue"))
 	_, err := mediaDB.sql.ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(2, 1, 'one', 'One'),
@@ -168,22 +226,52 @@ func TestFindSingleDescendantMedia_RejectsMultipleChildren(t *testing.T) {
 	`, onePath, parentDir, twoPath, parentDir)
 	require.NoError(t, err)
 
-	media, err := mediaDB.FindSingleDescendantMedia(ctx, 1, parent)
+	media, err := mediaDB.FindSingleContainerLaunchMedia(ctx, 1, container)
 	require.NoError(t, err)
 	assert.Nil(t, media)
 }
 
-func TestFindSingleDescendantMedia_IgnoresMissingAndOtherSystems(t *testing.T) {
+func TestFindSingleContainerLaunchMedia_RejectsNestedOnlyOrMixedNestedMedia(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	parent := filepath.ToSlash(filepath.Join("roms", "Shared"))
-	parentDir := filepath.ToSlash(filepath.Join(parent, "")) + "/"
-	nesPath := filepath.ToSlash(filepath.Join(parent, "nes.nes"))
-	snesPath := filepath.ToSlash(filepath.Join(parent, "snes.sfc"))
-	missingPath := filepath.ToSlash(filepath.Join(parent, "missing.nes"))
+	parent := filepath.ToSlash(filepath.Join("roms", "Parent"))
+	childDir := filepath.ToSlash(filepath.Join(parent, "Child"))
+	directPath := filepath.ToSlash(filepath.Join(parent, "direct.nes"))
+	nestedPath := filepath.ToSlash(filepath.Join(childDir, "nested.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(2, 1, 'direct', 'Direct'),
+			(3, 1, 'nested', 'Nested');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(2, 2, 1, ?, ?),
+			(3, 3, 1, ?, ?);
+	`, directPath, parent+"/", nestedPath, childDir+"/")
+	require.NoError(t, err)
+
+	media, err := mediaDB.FindSingleContainerLaunchMedia(ctx, 1, parent)
+	require.NoError(t, err)
+	assert.Nil(t, media)
+
+	media, err = mediaDB.FindSingleContainerLaunchMedia(ctx, 1, childDir)
+	require.NoError(t, err)
+	require.NotNil(t, media)
+	assert.Equal(t, int64(3), media.DBID)
+}
+
+func TestFindSingleContainerLaunchMedia_IgnoresMissingAndOtherSystems(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	container := filepath.ToSlash(filepath.Join("roms", "Shared"))
+	parentDir := container + "/"
+	nesPath := filepath.ToSlash(filepath.Join(container, "nes.nes"))
+	snesPath := filepath.ToSlash(filepath.Join(container, "snes.sfc"))
+	missingPath := filepath.ToSlash(filepath.Join(container, "missing.nes"))
 	_, err := mediaDB.sql.ExecContext(ctx, `
 		INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'SNES', 'Super Nintendo');
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
@@ -197,18 +285,24 @@ func TestFindSingleDescendantMedia_IgnoresMissingAndOtherSystems(t *testing.T) {
 	`, nesPath, parentDir, snesPath, parentDir, missingPath, parentDir)
 	require.NoError(t, err)
 
-	media, err := mediaDB.FindSingleDescendantMedia(ctx, 1, parentDir)
+	media, err := mediaDB.FindSingleContainerLaunchMedia(ctx, 1, container)
 	require.NoError(t, err)
 	require.NotNil(t, media)
 	assert.Equal(t, int64(2), media.DBID)
 }
 
-func TestFindSingleDescendantMedia_UsesByteExactPrefix(t *testing.T) {
+func TestFindSingleContainerLaunchMedia_UsesByteExactPrefix(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
 
+	gameUnderscore := filepath.ToSlash(filepath.Join("roms", "Game_1"))
+	gameA := filepath.ToSlash(filepath.Join("roms", "GameA1"))
+	gamePercent := filepath.ToSlash(filepath.Join("roms", "Game%1"))
+	gameXYZ := filepath.ToSlash(filepath.Join("roms", "GameXYZ1"))
+	caseUpper := filepath.ToSlash(filepath.Join("roms", "CaseGame"))
+	caseLower := filepath.ToSlash(filepath.Join("roms", "casegame"))
 	_, err := mediaDB.sql.ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
 			(2, 1, 'underscore', 'Underscore'),
@@ -218,26 +312,33 @@ func TestFindSingleDescendantMedia_UsesByteExactPrefix(t *testing.T) {
 			(6, 1, 'case-upper', 'Case Upper'),
 			(7, 1, 'case-lower', 'Case Lower');
 		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing) VALUES
-			(2, 2, 1, 'roms/Game_1/game.nes', 'roms/Game_1/', 0),
-			(3, 3, 1, 'roms/GameA1/game.nes', 'roms/GameA1/', 0),
-			(4, 4, 1, 'roms/Game%1/game.nes', 'roms/Game%1/', 0),
-			(5, 5, 1, 'roms/GameXYZ1/game.nes', 'roms/GameXYZ1/', 0),
-			(6, 6, 1, 'roms/CaseGame/game.nes', 'roms/CaseGame/', 0),
-			(7, 7, 1, 'roms/casegame/game.nes', 'roms/casegame/', 0);
-	`)
+			(2, 2, 1, ?, ?, 0),
+			(3, 3, 1, ?, ?, 0),
+			(4, 4, 1, ?, ?, 0),
+			(5, 5, 1, ?, ?, 0),
+			(6, 6, 1, ?, ?, 0),
+			(7, 7, 1, ?, ?, 0);
+	`,
+		filepath.ToSlash(filepath.Join(gameUnderscore, "game.nes")), gameUnderscore+"/",
+		filepath.ToSlash(filepath.Join(gameA, "game.nes")), gameA+"/",
+		filepath.ToSlash(filepath.Join(gamePercent, "game.nes")), gamePercent+"/",
+		filepath.ToSlash(filepath.Join(gameXYZ, "game.nes")), gameXYZ+"/",
+		filepath.ToSlash(filepath.Join(caseUpper, "game.nes")), caseUpper+"/",
+		filepath.ToSlash(filepath.Join(caseLower, "game.nes")), caseLower+"/",
+	)
 	require.NoError(t, err)
 
-	underscore, err := mediaDB.FindSingleDescendantMedia(ctx, 1, "roms/Game_1")
+	underscore, err := mediaDB.FindSingleContainerLaunchMedia(ctx, 1, gameUnderscore)
 	require.NoError(t, err)
 	require.NotNil(t, underscore)
 	assert.Equal(t, int64(2), underscore.DBID)
 
-	percent, err := mediaDB.FindSingleDescendantMedia(ctx, 1, "roms/Game%1")
+	percent, err := mediaDB.FindSingleContainerLaunchMedia(ctx, 1, gamePercent)
 	require.NoError(t, err)
 	require.NotNil(t, percent)
 	assert.Equal(t, int64(4), percent.DBID)
 
-	caseExact, err := mediaDB.FindSingleDescendantMedia(ctx, 1, "roms/CaseGame")
+	caseExact, err := mediaDB.FindSingleContainerLaunchMedia(ctx, 1, caseUpper)
 	require.NoError(t, err)
 	require.NotNil(t, caseExact)
 	assert.Equal(t, int64(6), caseExact.DBID)
@@ -535,7 +636,7 @@ func TestGetTotalScrapedMediaCount_DistinctMedia(t *testing.T) {
 	assert.Equal(t, 2, count)
 }
 
-func TestGetTotalScrapedMediaCount_IncludesTitlePropertyCoverage(t *testing.T) {
+func TestGetTotalScrapedMediaCount_TitlePropertyOnlyDoesNotCount(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
@@ -552,10 +653,10 @@ func TestGetTotalScrapedMediaCount_IncludesTitlePropertyCoverage(t *testing.T) {
 
 	count, err := mediaDB.GetTotalScrapedMediaCount(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, count)
+	assert.Equal(t, 0, count)
 }
 
-func TestGetTotalScrapedMediaCount_IncludesOnlyMediaPropertyRow(t *testing.T) {
+func TestGetTotalScrapedMediaCount_MediaPropertyOnlyDoesNotCount(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)
 	defer cleanup()
@@ -572,7 +673,7 @@ func TestGetTotalScrapedMediaCount_IncludesOnlyMediaPropertyRow(t *testing.T) {
 
 	count, err := mediaDB.GetTotalScrapedMediaCount(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count)
+	assert.Equal(t, 0, count)
 }
 
 func TestGetTotalScrapedMediaCount_MissingSentinelsReturnsZero(t *testing.T) {
@@ -1435,10 +1536,14 @@ func TestGetMediaBatchMetadata_RoundTrip(t *testing.T) {
 	`, zeldaPath)
 	require.NoError(t, err)
 
-	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{Type: "developer", Tag: "nintendo"}}))
-	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{Type: "developer", Tag: "capcom"}}))
-	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 1, []database.TagInfo{{Type: "developer", Tag: "title-one"}}))
-	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 2, []database.TagInfo{{Type: "developer", Tag: "title-two"}}))
+	nintendoTag := []database.TagInfo{{Type: "developer", Tag: "nintendo", Label: "Nintendo"}}
+	capcomTag := []database.TagInfo{{Type: "developer", Tag: "capcom", Label: "Capcom"}}
+	titleOneTag := []database.TagInfo{{Type: "developer", Tag: "title-one", Label: "Title One"}}
+	titleTwoTag := []database.TagInfo{{Type: "developer", Tag: "title-two", Label: "Title Two"}}
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, nintendoTag))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, capcomTag))
+	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 1, titleOneTag))
+	require.NoError(t, mediaDB.UpsertMediaTitleTags(ctx, 2, titleTwoTag))
 	require.NoError(t, mediaDB.UpsertMediaProperties(ctx, 1, []database.MediaProperty{{
 		TypeTag: "property:image-boxart",
 		Text:    filepath.Join("art", "mario.png"),
@@ -1465,15 +1570,23 @@ func TestGetMediaBatchMetadata_RoundTrip(t *testing.T) {
 	assert.Equal(t, zeldaPath, rows[2].Path)
 	assert.Equal(t, "Zelda", rows[2].Title.Name)
 
+	singleMediaTags, err := mediaDB.GetMediaTagsByMediaDBID(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, []database.TagInfo{{Tag: "nintendo", Type: "developer", Label: "Nintendo"}}, singleMediaTags)
+
+	singleTitleTags, err := mediaDB.GetMediaTitleTagsByMediaTitleDBID(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, []database.TagInfo{{Tag: "title-one", Type: "developer", Label: "Title One"}}, singleTitleTags)
+
 	mediaTags, err := mediaDB.GetMediaTagsByMediaDBIDs(ctx, []int64{1, 2})
 	require.NoError(t, err)
-	assert.Equal(t, []database.TagInfo{{Tag: "nintendo", Type: "developer"}}, mediaTags[1])
-	assert.Equal(t, []database.TagInfo{{Tag: "capcom", Type: "developer"}}, mediaTags[2])
+	assert.Equal(t, []database.TagInfo{{Tag: "nintendo", Type: "developer", Label: "Nintendo"}}, mediaTags[1])
+	assert.Equal(t, []database.TagInfo{{Tag: "capcom", Type: "developer", Label: "Capcom"}}, mediaTags[2])
 
 	titleTags, err := mediaDB.GetMediaTitleTagsByMediaTitleDBIDs(ctx, []int64{1, 2})
 	require.NoError(t, err)
-	assert.Equal(t, []database.TagInfo{{Tag: "title-one", Type: "developer"}}, titleTags[1])
-	assert.Equal(t, []database.TagInfo{{Tag: "title-two", Type: "developer"}}, titleTags[2])
+	assert.Equal(t, []database.TagInfo{{Tag: "title-one", Type: "developer", Label: "Title One"}}, titleTags[1])
+	assert.Equal(t, []database.TagInfo{{Tag: "title-two", Type: "developer", Label: "Title Two"}}, titleTags[2])
 
 	mediaProps, err := mediaDB.GetMediaPropertiesByMediaDBIDs(ctx, []int64{1, 2})
 	require.NoError(t, err)

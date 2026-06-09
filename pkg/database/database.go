@@ -40,6 +40,12 @@ type Database struct {
 	MediaDB MediaDBI
 }
 
+type ScrapingOperation struct {
+	ScraperID string   `json:"scraperId"`
+	Systems   []string `json:"systems"`
+	Force     bool     `json:"force"`
+}
+
 // Structs for SQL records
 
 type HistoryEntry struct {
@@ -499,6 +505,7 @@ type UserDBI interface {
 	UpdateMediaHistoryTime(dbid int64, playTime int) error
 	CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error
 	GetMediaHistory(systemIDs []string, lastID int64, limit int) ([]MediaHistoryEntry, error)
+	GetLatestMediaHistory() (MediaHistoryEntry, bool, error)
 	GetMediaHistoryTop(systemIDs []string, since *time.Time, limit int) ([]MediaHistoryTopEntry, error)
 	CloseHangingMediaHistory() error
 	CleanupMediaHistory(retentionDays int) (int64, error)
@@ -581,6 +588,11 @@ type MediaDBI interface {
 	CreateSecondaryIndexes() error
 	SetIndexingStatus(status string) error
 	GetIndexingStatus() (string, error)
+	SetScrapingStatus(status string) error
+	GetScrapingStatus() (string, error)
+	SetScrapingOperation(operation ScrapingOperation) error
+	GetScrapingOperation() (ScrapingOperation, bool, error)
+	ClearScrapingOperation() error
 	SetLastIndexedSystem(systemID string) error
 	GetLastIndexedSystem() (string, error)
 	SetIndexingSystems(systemIDs []string) error
@@ -716,9 +728,10 @@ type MediaDBI interface {
 	// or nil, nil when no row is found.
 	FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*Media, error)
 	FindMediaBySystemAndPaths(ctx context.Context, systemDBID int64, paths []string) (map[string]Media, error)
-	// FindSingleDescendantMedia returns the only non-missing Media row below dirPath
-	// for systemDBID, or nil, nil when dirPath has zero or multiple descendants.
-	FindSingleDescendantMedia(ctx context.Context, systemDBID int64, dirPath string) (*Media, error)
+	// FindSingleContainerLaunchMedia returns the one logical launch target in the
+	// direct contents of containerPath for systemDBID, or nil, nil when the
+	// container is empty, nested-only, or ambiguous.
+	FindSingleContainerLaunchMedia(ctx context.Context, systemDBID int64, containerPath string) (*Media, error)
 
 	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and
 	// path using a case-insensitive path comparison, or nil, nil when no row is
