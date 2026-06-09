@@ -488,6 +488,61 @@ func TestBuildBrowseResponse_SingletonAnnotation_WhenZipsAsDirsEnabled(t *testin
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestBuildBrowseResponse_SingletonAnnotation_InferredFromDirSystemIDs(t *testing.T) {
+	t.Parallel()
+
+	// systems filter is empty — system must be inferred from dir.SystemIDs.
+	nesSystem := database.System{DBID: 1, SystemID: "NES"}
+	path := filepath.ToSlash(filepath.Join("roms", "NES"))
+	dirName := "Game.zip"
+	dirPath := filepath.ToSlash(filepath.Join(path, dirName))
+	row := database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join(dirPath, "Game.nes")),
+			ParentDir: dirPath + "/",
+		},
+		Title:  database.MediaTitle{DBID: 30, Name: "Game"},
+		System: nesSystem,
+	}
+	alias := []database.SingletonContainerAlias{{
+		ChildDir:      dirPath + "/",
+		Row:           row,
+		Tags:          []database.TagInfo{},
+		ZapScriptTags: []database.TagInfo{},
+	}}
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(nesSystem, nil).Once()
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, nesSystem.DBID, path+"/").
+		Return(alias, nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	// No systems filter passed — inferred from dir.SystemIDs.
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{{Name: dirName, FileCount: 1, SystemIDs: []string{"NES"}}},
+		nil, defaultMaxResults, 0, "", nil)
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	entry := browseResults.Entries[0]
+	assert.Equal(t, "directory", entry.Type)
+	assert.Equal(t, row.DBID, entry.MediaID)
+	require.NotNil(t, entry.SystemID)
+	assert.Equal(t, "NES", *entry.SystemID)
+	require.NotNil(t, entry.ZapScript)
+	assert.NotEmpty(t, *entry.ZapScript)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestBuildBrowseResponse_SingletonAnnotation_WhenZipsAsDirsDisabledSkipsLookup(t *testing.T) {
 	t.Parallel()
 

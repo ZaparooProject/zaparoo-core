@@ -678,28 +678,46 @@ func buildBrowseResponse(
 	// browsing a single system. This replaces the previous per-directory query
 	// loop (~5 DB queries × N dirs) with a fixed handful of batch queries.
 	var singletonAliases map[string]database.SingletonContainerAlias
-	if len(dirs) > 0 && len(systems) == 1 &&
-		singletonMediaAliasesEnabled(env) &&
-		env.Database != nil && env.Database.MediaDB != nil {
-		prefix := path
-		if !strings.HasSuffix(prefix, "/") {
-			prefix += "/"
-		}
-		system, sysErr := env.Database.MediaDB.FindSystemBySystemID(systems[0].ID)
-		if sysErr == nil {
-			aliases, aliasErr := env.Database.MediaDB.ResolveSingletonContainerAliases(
-				env.Context, system.DBID, prefix,
-			)
-			if aliasErr == nil && len(aliases) > 0 {
-				singletonAliases = make(map[string]database.SingletonContainerAlias, len(aliases))
-				for i := range aliases {
-					singletonAliases[aliases[i].ChildDir] = aliases[i]
+	if len(dirs) > 0 && env.Database != nil && env.Database.MediaDB != nil {
+		// Determine which system to resolve against. Use the explicit filter if
+		// exactly one system was requested; otherwise infer from the directory
+		// entries (all dirs with media must belong to the same single system).
+		var systemID string
+		if len(systems) == 1 {
+			systemID = systems[0].ID
+		} else if len(systems) == 0 {
+			for _, dir := range dirs {
+				if len(dir.SystemIDs) == 0 {
+					continue
 				}
-			} else if aliasErr != nil {
-				log.Debug().Err(aliasErr).Str("path", path).Msg("browse singleton alias batch resolution failed")
+				if len(dir.SystemIDs) > 1 || (systemID != "" && systemID != dir.SystemIDs[0]) {
+					systemID = ""
+					break
+				}
+				systemID = dir.SystemIDs[0]
 			}
-		} else {
-			log.Debug().Err(sysErr).Str("system", systems[0].ID).Msg("browse singleton alias system lookup failed")
+		}
+		if systemID != "" && singletonMediaAliasesEnabled(env) {
+			prefix := path
+			if !strings.HasSuffix(prefix, "/") {
+				prefix += "/"
+			}
+			system, sysErr := env.Database.MediaDB.FindSystemBySystemID(systemID)
+			if sysErr == nil {
+				aliases, aliasErr := env.Database.MediaDB.ResolveSingletonContainerAliases(
+					env.Context, system.DBID, prefix,
+				)
+				if aliasErr == nil && len(aliases) > 0 {
+					singletonAliases = make(map[string]database.SingletonContainerAlias, len(aliases))
+					for i := range aliases {
+						singletonAliases[aliases[i].ChildDir] = aliases[i]
+					}
+				} else if aliasErr != nil {
+					log.Debug().Err(aliasErr).Str("path", path).Msg("browse singleton alias batch resolution failed")
+				}
+			} else {
+				log.Debug().Err(sysErr).Str("system", systemID).Msg("browse singleton alias system lookup failed")
+			}
 		}
 	}
 
