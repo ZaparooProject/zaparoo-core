@@ -301,6 +301,147 @@ func TestHandleMediaControl_ScriptExecution(t *testing.T) {
 	pl.AssertCalled(t, "KeyboardPress", "{f2}")
 }
 
+func TestHandleMediaControl_BackgroundSlot(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	// Only background media is active; primary slot is empty.
+	background := models.NewActiveMedia("Audio", "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID)
+	st.SetBackgroundMedia(background)
+
+	called := false
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{
+			ID: platforms.NativeAudioLauncherID,
+			Controls: map[string]platforms.Control{
+				"pause": {Func: func(_ context.Context, _ *config.Instance, _ platforms.ControlParams) error {
+					called = true
+					return nil
+				}},
+			},
+		},
+	})
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"action":"pause","slot":"background"}`),
+	}
+
+	result, err := HandleMediaControl(env)
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.NotNil(t, result)
+}
+
+func TestHandleMediaControl_NativeAudioInjectsSlotArg(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	st.SetActiveMedia(models.NewActiveMedia("Audio", "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID))
+
+	var receivedArgs map[string]string
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{
+			ID: platforms.NativeAudioLauncherID,
+			Controls: map[string]platforms.Control{
+				"pause": {Func: func(_ context.Context, _ *config.Instance, cp platforms.ControlParams) error {
+					receivedArgs = cp.Args
+					return nil
+				}},
+			},
+		},
+	})
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"action":"pause"}`),
+	}
+
+	_, err := HandleMediaControl(env)
+	require.NoError(t, err)
+	require.NotNil(t, receivedArgs)
+	// The slot must be injected even though the caller didn't pass it explicitly.
+	assert.Equal(t, "primary", receivedArgs["slot"])
+}
+
+func TestHandleMediaControl_StopBackgroundClearsMedia(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	background := models.NewActiveMedia("Audio", "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID)
+	st.SetBackgroundMedia(background)
+	require.NotNil(t, st.BackgroundMedia())
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{
+			ID: platforms.NativeAudioLauncherID,
+			Controls: map[string]platforms.Control{
+				platforms.ControlStop: {
+					Func: func(_ context.Context, _ *config.Instance, _ platforms.ControlParams) error {
+						return nil
+					},
+				},
+			},
+		},
+	})
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"action":"stop","slot":"background"}`),
+	}
+
+	_, err := HandleMediaControl(env)
+	require.NoError(t, err)
+	assert.Nil(t, st.BackgroundMedia(), "stop on background slot must clear background media")
+}
+
+func TestHandleMediaControl_BackgroundSlotNoMedia(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	// No background media set; slot=background → "no active media" error.
+	cache := &helpers.LauncherCache{}
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"action":"pause","slot":"background"}`),
+	}
+
+	_, err := HandleMediaControl(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no active media")
+}
+
 // drainNotifications prevents goroutine leaks by draining the notification channel.
 func drainNotifications(t *testing.T, ns <-chan models.Notification) {
 	t.Helper()

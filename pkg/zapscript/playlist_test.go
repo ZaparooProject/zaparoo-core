@@ -315,3 +315,221 @@ Title3=Item 3`
 
 	mockPlatform.AssertExpectations(t)
 }
+
+// makePlaylistEnv returns a 3-item playlist and a buffered queue channel for use in tests.
+func makePlaylistEnv() (pls *playlists.Playlist, queue chan *playlists.Playlist) {
+	items := []playlists.PlaylistItem{
+		{Name: "Item 1", ZapScript: "**test1"},
+		{Name: "Item 2", ZapScript: "**test2"},
+		{Name: "Item 3", ZapScript: "**test3"},
+	}
+	pls = playlists.NewPlaylist("id", "name", items)
+	queue = make(chan *playlists.Playlist, 1)
+	return pls, queue
+}
+
+// bgAdvArgs returns an AdvArgs with slot=background set.
+func bgAdvArgs() zapscript.AdvArgs {
+	var aa zapscript.AdvArgs
+	return aa.With("slot", "background")
+}
+
+func TestCmdPlaylistNext_AdvancesIndex(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+
+	result, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	assert.Equal(t, 1, result.Playlist.Index)
+	assert.Equal(t, 1, (<-queue).Index)
+}
+
+func TestCmdPlaylistNext_WrapsAround(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Index = 2
+
+	result, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Playlist.Index, "next from last item wraps to first")
+	<-queue
+}
+
+func TestCmdPlaylistNext_NoActivePlaylist(t *testing.T) {
+	t.Parallel()
+
+	_, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)},
+	})
+	require.Error(t, err)
+}
+
+func TestCmdPlaylistPrevious_DecrementsIndex(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Index = 2
+
+	result, err := cmdPlaylistPrevious(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Playlist.Index)
+	<-queue
+}
+
+func TestCmdPlaylistPrevious_WrapsAround(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Index = 0
+
+	result, err := cmdPlaylistPrevious(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Playlist.Index, "previous from first item wraps to last")
+	<-queue
+}
+
+func TestCmdPlaylistGoto_JumpsToIndex(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+
+	// Goto is 1-based: "3" → index 2.
+	result, err := cmdPlaylistGoto(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{"3"}},
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	assert.Equal(t, 2, result.Playlist.Index)
+	<-queue
+}
+
+func TestCmdPlaylistGoto_SameIndexNoOp(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Index = 1
+
+	result, err := cmdPlaylistGoto(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{"2"}},
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.False(t, result.PlaylistChanged, "already at target index — no-op")
+}
+
+func TestCmdPlaylistGoto_InvalidArg(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	_, err := cmdPlaylistGoto(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{"notanumber"}},
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.Error(t, err)
+}
+
+func TestCmdPlaylistStop_BackgroundSlot(t *testing.T) {
+	t.Parallel()
+
+	// StopActiveLauncher is NOT mocked — a call to it would panic the test.
+	mp := newPlaylistTestPlatform()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = "background"
+
+	result, err := cmdPlaylistStop(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{AdvArgs: bgAdvArgs()},
+		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	assert.Nil(t, result.Playlist)
+
+	queued := <-queue
+	require.NotNil(t, queued)
+	assert.True(t, queued.Clear, "clear sentinel must be set for background stop")
+}
+
+func TestCmdPlaylistPause_BackgroundSlot(t *testing.T) {
+	t.Parallel()
+
+	// StopActiveLauncher is NOT mocked — a call to it would panic the test.
+	mp := newPlaylistTestPlatform()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = "background"
+	pls.Playing = true
+
+	result, err := cmdPlaylistPause(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{AdvArgs: bgAdvArgs()},
+		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.False(t, result.Playlist.Playing, "paused playlist must have Playing=false")
+	<-queue
+}
+
+func TestReadPlaylistFolder_ReturnsItems(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	for _, name := range []string{"alpha.nes", "beta.sfc", "gamma.md"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte{}, 0o600))
+	}
+
+	items, err := readPlaylistFolder(dir)
+	require.NoError(t, err)
+	require.Len(t, items, 3)
+	assert.Equal(t, "alpha", items[0].Name)
+	assert.Equal(t, filepath.Join(dir, "alpha.nes"), items[0].ZapScript)
+}
+
+func TestReadPlaylistFolder_HiddenFilesSkipped(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".hidden"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "visible.rom"), []byte{}, 0o600))
+
+	items, err := readPlaylistFolder(dir)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "visible", items[0].Name)
+}
+
+func TestReadPlaylistFolder_EmptyDir(t *testing.T) {
+	t.Parallel()
+
+	_, err := readPlaylistFolder(t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no valid files found")
+}
+
+func TestReadPlaylistFolder_EmptyPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := readPlaylistFolder("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no playlist path specified")
+}
+
+func TestReadPlaylistFolder_NonexistentPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := readPlaylistFolder("/nonexistent/path/12345")
+	require.Error(t, err)
+}

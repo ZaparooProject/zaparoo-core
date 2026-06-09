@@ -24,7 +24,9 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -215,4 +217,45 @@ func TestToRelativePath_SkipFilesystemScan(t *testing.T) {
 	// Launcher with SkipFilesystemScan should not be used for matching.
 	got := cache.ToRelativePath([]string{"/roms"}, "snes", "/roms/SNES/game.sfc")
 	assert.Equal(t, "/roms/SNES/game.sfc", got)
+}
+
+func TestInitialize_DeduplicatesExtraLaunchers(t *testing.T) {
+	t.Parallel()
+
+	mp := mocks.NewMockPlatform()
+	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{
+		{ID: "platform-launcher", SystemID: "NES"},
+	})
+
+	extra := platforms.Launcher{ID: "extra-launcher", SystemID: "SNES"}
+	duplicate := platforms.Launcher{ID: "platform-launcher", SystemID: "NES"} // same ID as platform launcher
+
+	cache := &LauncherCache{}
+	cache.Initialize(mp, nil, extra, duplicate)
+
+	all := cache.GetAllLaunchers()
+	require.Len(t, all, 2, "duplicate extra launcher must not be added twice")
+
+	ids := make([]string, 0, len(all))
+	for _, l := range all {
+		ids = append(ids, l.ID)
+	}
+	assert.Contains(t, ids, "platform-launcher")
+	assert.Contains(t, ids, "extra-launcher")
+}
+
+func TestInitialize_ExtraLauncherIsRetrievable(t *testing.T) {
+	t.Parallel()
+
+	mp := mocks.NewMockPlatform()
+	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+
+	extra := platforms.Launcher{ID: "native-audio", SystemID: "Audio"}
+
+	cache := &LauncherCache{}
+	cache.Initialize(mp, nil, extra)
+
+	found := cache.GetLauncherByID("native-audio")
+	require.NotNil(t, found)
+	assert.Equal(t, "Audio", found.SystemID)
 }
