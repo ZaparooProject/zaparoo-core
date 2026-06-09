@@ -216,7 +216,6 @@ func (d *sharedDevice) open() {
 	d.cancelFn = cancelFn
 	d.devDone = done
 	d.prevDone = done // next open waits for this one
-	d.opening = false
 	d.mixBuf = mixBuf
 	d.toRemove = d.toRemove[:0]
 	d.devMu.Unlock()
@@ -235,6 +234,9 @@ func (d *sharedDevice) open() {
 	})
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to initialize audio device")
+		d.devMu.Lock()
+		d.opening = false
+		d.devMu.Unlock()
 		cancelFn()
 		go d.cleanup(done, malgoCtx, nil)
 		return
@@ -243,13 +245,19 @@ func (d *sharedDevice) open() {
 	if err := device.Start(); err != nil {
 		log.Warn().Err(err).Msg("failed to start audio device")
 		device.Uninit()
+		d.devMu.Lock()
+		d.opening = false
+		d.devMu.Unlock()
 		cancelFn()
 		go d.cleanup(done, malgoCtx, nil)
 		return
 	}
 
+	// Clear opening and publish the device pointer atomically so no concurrent
+	// register/openIfNeeded can observe opening==false && device==nil.
 	d.devMu.Lock()
 	d.device = device
+	d.opening = false
 	d.devMu.Unlock()
 
 	go d.manage(ctx, device, malgoCtx, done)

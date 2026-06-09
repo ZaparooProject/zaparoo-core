@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
@@ -36,13 +37,13 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		return nil, models.ClientErrf("invalid params: %w", err)
 	}
 
-	slot, err := platforms.NormalizeMediaSlot(params.Slot)
+	slot, err := mediaslot.Normalize(params.Slot)
 	if err != nil {
 		return nil, models.ClientErrf("invalid slot: %w", err)
 	}
 
 	media := env.State.ActiveMedia()
-	if slot == platforms.MediaSlotBackground {
+	if slot == mediaslot.Background {
 		media = env.State.BackgroundMedia()
 	}
 	if media == nil {
@@ -75,7 +76,7 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		for k, v := range params.Args {
 			controlArgs[k] = v
 		}
-		controlArgs[platforms.MediaSlotArg] = slot
+		controlArgs[mediaslot.Arg] = slot
 	}
 
 	switch {
@@ -90,7 +91,7 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	if err != nil {
 		return nil, fmt.Errorf("control action %q failed: %w", params.Action, err)
 	}
-	if slot == platforms.MediaSlotBackground && params.Action == platforms.ControlStop {
+	if slot == mediaslot.Background && params.Action == platforms.ControlStop {
 		env.State.SetBackgroundMedia(nil)
 	}
 

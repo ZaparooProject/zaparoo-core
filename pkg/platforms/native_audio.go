@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 )
 
 const NativeAudioLauncherID = "native-audio"
@@ -79,10 +80,10 @@ func launchNativeAudio(
 		return nil, errors.New("native audio playback is not initialized")
 	}
 
-	slot := MediaSlotPrimary
+	slot := mediaslot.Primary
 	if opts != nil {
 		var err error
-		slot, err = NormalizeMediaSlot(opts.Slot)
+		slot, err = mediaslot.Normalize(opts.Slot)
 		if err != nil {
 			return nil, fmt.Errorf("normalize native audio slot: %w", err)
 		}
@@ -100,7 +101,7 @@ func launchNativeAudio(
 		return nil, fmt.Errorf("play native audio: %w", err)
 	}
 
-	if slot == MediaSlotBackground && setBackgroundMedia != nil {
+	if slot == mediaslot.Background && setBackgroundMedia != nil {
 		media := models.NewActiveMedia("Audio", "Audio", path, audioDisplayName(path), NativeAudioLauncherID)
 		setBackgroundMedia(media)
 	}
@@ -113,13 +114,13 @@ func nativeAudioControl(playback audio.PlaybackManager, action string) ControlFu
 		if playback == nil {
 			return errors.New("native audio playback is not initialized")
 		}
-		rawSlot := params.Args[MediaSlotArg]
+		rawSlot := params.Args[mediaslot.Arg]
 		if rawSlot == "" {
-			rawSlot = MediaSlotPrimary
+			rawSlot = mediaslot.Primary
 		}
-		slot, err := NormalizeMediaSlot(rawSlot)
+		slot, err := mediaslot.Normalize(rawSlot)
 		if err != nil {
-			return err
+			return fmt.Errorf("normalize slot: %w", err)
 		}
 
 		switch action {

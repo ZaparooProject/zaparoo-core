@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
@@ -387,6 +388,13 @@ func Start(
 		log.Info().Msg("service context cancelled, running cleanup")
 		indexPauser.Resume()
 		scrapePauser.Resume()
+
+		if stopErr := playbackManager.Stop(mediaslot.Primary); stopErr != nil {
+			log.Warn().Err(stopErr).Msg("error stopping primary playback during cleanup")
+		}
+		if stopErr := playbackManager.Stop(mediaslot.Background); stopErr != nil {
+			log.Warn().Err(stopErr).Msg("error stopping background playback during cleanup")
+		}
 
 		discoveryService.Stop()
 		cancelPublisherFanOut()

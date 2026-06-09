@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/gopxl/beep/v2"
 	"github.com/gopxl/beep/v2/flac"
 	"github.com/gopxl/beep/v2/mp3"
@@ -228,9 +229,9 @@ func (m *LongformPlaybackManager) readSource(slot string) *streamingSource {
 
 func (m *LongformPlaybackManager) getSourceLocked(slot string) *streamingSource {
 	switch slot {
-	case "", "primary":
+	case "", mediaslot.Primary:
 		return m.primary
-	case "background":
+	case mediaslot.Background:
 		return m.background
 	}
 	return nil
@@ -238,19 +239,19 @@ func (m *LongformPlaybackManager) getSourceLocked(slot string) *streamingSource 
 
 func (m *LongformPlaybackManager) setSourceLocked(slot string, src *streamingSource) {
 	switch slot {
-	case "", "primary":
+	case "", mediaslot.Primary:
 		m.primary = src
-	case "background":
+	case mediaslot.Background:
 		m.background = src
 	}
 }
 
 func (*LongformPlaybackManager) slotKey(slot string) (string, error) {
 	switch slot {
-	case "", "primary":
-		return "primary", nil
-	case "background":
-		return "background", nil
+	case "", mediaslot.Primary:
+		return mediaslot.Primary, nil
+	case mediaslot.Background:
+		return mediaslot.Background, nil
 	default:
 		return "", fmt.Errorf("unsupported media slot: %s", slot)
 	}
@@ -564,7 +565,7 @@ func (s *streamingSource) state() PlaybackState {
 		Path:     s.path,
 		Position: sampleDuration(int(s.played)),
 		Duration: sampleDuration(int(s.totalFrames)),
-		Playing:  !s.paused && !s.stopped && !s.eof,
+		Playing:  !s.paused && !s.stopped && (!s.eof || s.filled != 0),
 		Paused:   s.paused,
 	}
 }

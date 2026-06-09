@@ -22,9 +22,7 @@ package platforms
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -102,28 +100,6 @@ const (
 	// InstanceKodi identifies launchers that send commands to a running Kodi instance
 	InstanceKodi = "kodi"
 )
-
-// Media slot identifiers for launch and control routing.
-const (
-	MediaSlotPrimary    = "primary"
-	MediaSlotBackground = "background"
-)
-
-// MediaSlotArg is the ZapScript AdvArgs and media control API key for selecting
-// the target media slot. This constant should move to go-zapscript once released.
-const MediaSlotArg = "slot"
-
-// NormalizeMediaSlot returns the effective media slot for a user/API value.
-func NormalizeMediaSlot(raw string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", MediaSlotPrimary:
-		return MediaSlotPrimary, nil
-	case MediaSlotBackground:
-		return MediaSlotBackground, nil
-	default:
-		return "", fmt.Errorf("unsupported media slot: %s", raw)
-	}
-}
 
 // Control action identifiers for active media control.
 const (

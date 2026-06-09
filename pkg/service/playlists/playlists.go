@@ -19,6 +19,8 @@
 
 package playlists
 
+import "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+
 type PlaylistItem struct {
 	ZapScript string
 	Name      string
@@ -38,7 +40,7 @@ func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
 	return &Playlist{
 		ID:      id,
 		Name:    name,
-		Slot:    "primary",
+		Slot:    mediaslot.Primary,
 		Items:   item,
 		Index:   0,
 		Playing: false,

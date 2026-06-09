@@ -17,17 +17,17 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package platforms_test
+package mediaslot_test
 
 import (
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNormalizeMediaSlot(t *testing.T) {
+func TestNormalize(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -35,26 +35,26 @@ func TestNormalizeMediaSlot(t *testing.T) {
 		raw  string
 		want string
 	}{
-		{name: "empty defaults primary", raw: "", want: platforms.MediaSlotPrimary},
-		{name: "primary", raw: "primary", want: platforms.MediaSlotPrimary},
-		{name: "background", raw: "background", want: platforms.MediaSlotBackground},
-		{name: "trims case", raw: " Background ", want: platforms.MediaSlotBackground},
+		{name: "empty defaults primary", raw: "", want: mediaslot.Primary},
+		{name: "primary", raw: "primary", want: mediaslot.Primary},
+		{name: "background", raw: "background", want: mediaslot.Background},
+		{name: "trims case", raw: " Background ", want: mediaslot.Background},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := platforms.NormalizeMediaSlot(tt.raw)
+			got, err := mediaslot.Normalize(tt.raw)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
-func TestNormalizeMediaSlot_Invalid(t *testing.T) {
+func TestNormalize_Invalid(t *testing.T) {
 	t.Parallel()
 
-	_, err := platforms.NormalizeMediaSlot("tertiary")
+	_, err := mediaslot.Normalize("tertiary")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported media slot")
 }

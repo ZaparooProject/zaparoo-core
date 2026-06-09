@@ -32,7 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
@@ -190,7 +190,7 @@ func launchPlaylistMedia(
 		Background: svc.State.GetBackgroundPlaylist(),
 		Queue:      svc.PlaylistQueue,
 	}
-	if pls.Slot == platforms.MediaSlotBackground {
+	if pls.Slot == mediaslot.Background {
 		plsc.Active = pls
 		plsc.Background = pls
 	}
@@ -202,7 +202,7 @@ func launchPlaylistMedia(
 		helpers.PlayConfiguredSound(player, path, enabled, assets.FailSound, "fail")
 	}
 
-	if pls.Slot == platforms.MediaSlotBackground {
+	if pls.Slot == mediaslot.Background {
 		return
 	}
 
@@ -238,17 +238,17 @@ func handlePlaylist(
 	pls *playlists.Playlist,
 	player audio.Player,
 ) {
-	slot := platforms.MediaSlotPrimary
+	slot := mediaslot.Primary
 	if pls != nil && pls.Slot != "" {
 		var err error
-		slot, err = platforms.NormalizeMediaSlot(pls.Slot)
+		slot, err = mediaslot.Normalize(pls.Slot)
 		if err != nil {
 			log.Warn().Err(err).Str("slot", pls.Slot).Msg("ignoring playlist update with invalid slot")
 			return
 		}
 	}
 	activePlaylist := svc.State.GetActivePlaylist()
-	if slot == platforms.MediaSlotBackground {
+	if slot == mediaslot.Background {
 		activePlaylist = svc.State.GetBackgroundPlaylist()
 	}
 
@@ -258,7 +258,7 @@ func handlePlaylist(
 		if activePlaylist != nil {
 			log.Info().Str("slot", slot).Msg("clearing playlist")
 		}
-		if slot == platforms.MediaSlotBackground {
+		if slot == mediaslot.Background {
 			svc.State.SetBackgroundPlaylist(nil)
 			svc.State.SetBackgroundMedia(nil)
 		} else {
@@ -270,7 +270,7 @@ func handlePlaylist(
 		if pls.Slot == "" {
 			pls.Slot = slot
 		}
-		if slot == platforms.MediaSlotBackground {
+		if slot == mediaslot.Background {
 			svc.State.SetBackgroundPlaylist(pls)
 		} else {
 			svc.State.SetActivePlaylist(pls)
@@ -300,7 +300,7 @@ func handlePlaylist(
 		if pls.Slot == "" {
 			pls.Slot = slot
 		}
-		if slot == platforms.MediaSlotBackground {
+		if slot == mediaslot.Background {
 			svc.State.SetBackgroundPlaylist(pls)
 		} else {
 			svc.State.SetActivePlaylist(pls)

@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,8 +43,8 @@ func TestSetBackgroundMedia_DoesNotReplacePrimary(t *testing.T) {
 
 	assert.Equal(t, primary, st.ActiveMedia())
 	assert.Equal(t, background, st.BackgroundMedia())
-	assert.Equal(t, platforms.MediaSlotPrimary, st.ActiveMedia().Slot)
-	assert.Equal(t, platforms.MediaSlotBackground, st.BackgroundMedia().Slot)
+	assert.Equal(t, mediaslot.Primary, st.ActiveMedia().Slot)
+	assert.Equal(t, mediaslot.Background, st.BackgroundMedia().Slot)
 }
 
 func TestSetBackgroundMedia_NotificationsIncludeSlot(t *testing.T) {
@@ -57,12 +58,12 @@ func TestSetBackgroundMedia_NotificationsIncludeSlot(t *testing.T) {
 	assert.Equal(t, models.NotificationStarted, started.Method)
 	var startedParams models.MediaStartedParams
 	require.NoError(t, json.Unmarshal(started.Params, &startedParams))
-	assert.Equal(t, platforms.MediaSlotBackground, startedParams.Slot)
+	assert.Equal(t, mediaslot.Background, startedParams.Slot)
 
 	st.SetBackgroundMedia(nil)
 	stopped := <-ns
 	assert.Equal(t, models.NotificationStopped, stopped.Method)
 	var stoppedParams models.MediaStoppedParams
 	require.NoError(t, json.Unmarshal(stopped.Params, &stoppedParams))
-	assert.Equal(t, platforms.MediaSlotBackground, stoppedParams.Slot)
+	assert.Equal(t, mediaslot.Background, stoppedParams.Slot)
 }

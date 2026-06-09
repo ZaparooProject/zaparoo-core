@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -470,13 +471,13 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		}
 
 		// Send notifications outside lock to prevent deadlock
-		stoppedParams := buildMediaStoppedParams(oldMedia, platforms.MediaSlotPrimary)
+		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Primary)
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		s.notifyDisplayReaders(media)
 		return
 	}
 
-	media.Slot = platforms.MediaSlotPrimary
+	media.Slot = mediaslot.Primary
 	if oldMedia == nil {
 		// media has started
 		s.activeMedia = media
@@ -492,7 +493,7 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 			SystemName: media.SystemName,
 			MediaName:  media.Name,
 			MediaPath:  media.Path,
-			Slot:       platforms.MediaSlotPrimary,
+			Slot:       mediaslot.Primary,
 		})
 		s.notifyDisplayReaders(media)
 
@@ -518,14 +519,14 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		}
 
 		// Send notifications outside lock to prevent deadlock
-		changedStoppedParams := buildMediaStoppedParams(oldMedia, platforms.MediaSlotPrimary)
+		changedStoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Primary)
 		notifications.MediaStopped(s.Notifications, &changedStoppedParams)
 		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
 			SystemID:   media.SystemID,
 			SystemName: media.SystemName,
 			MediaName:  media.Name,
 			MediaPath:  media.Path,
-			Slot:       platforms.MediaSlotPrimary,
+			Slot:       mediaslot.Primary,
 		})
 		s.notifyDisplayReaders(media)
 
@@ -551,12 +552,12 @@ func (s *State) SetBackgroundMedia(media *models.ActiveMedia) {
 	if media == nil {
 		s.backgroundMedia = nil
 		s.mu.Unlock()
-		stoppedParams := buildMediaStoppedParams(oldMedia, platforms.MediaSlotBackground)
+		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Background)
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		return
 	}
 
-	media.Slot = platforms.MediaSlotBackground
+	media.Slot = mediaslot.Background
 	if oldMedia == nil {
 		s.backgroundMedia = media
 		s.mu.Unlock()
@@ -565,7 +566,7 @@ func (s *State) SetBackgroundMedia(media *models.ActiveMedia) {
 			SystemName: media.SystemName,
 			MediaName:  media.Name,
 			MediaPath:  media.Path,
-			Slot:       platforms.MediaSlotBackground,
+			Slot:       mediaslot.Background,
 		})
 		return
 	}
@@ -573,14 +574,14 @@ func (s *State) SetBackgroundMedia(media *models.ActiveMedia) {
 	if !oldMedia.Equal(media) {
 		s.backgroundMedia = media
 		s.mu.Unlock()
-		stoppedParams := buildMediaStoppedParams(oldMedia, platforms.MediaSlotBackground)
+		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Background)
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
 			SystemID:   media.SystemID,
 			SystemName: media.SystemName,
 			MediaName:  media.Name,
 			MediaPath:  media.Path,
-			Slot:       platforms.MediaSlotBackground,
+			Slot:       mediaslot.Background,
 		})
 		return
 	}

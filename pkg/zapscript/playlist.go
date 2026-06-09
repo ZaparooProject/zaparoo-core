@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
@@ -68,14 +69,14 @@ type ArgPlaylist struct {
 }
 
 func activePlaylistForSlot(env *platforms.CmdEnv, slot string) *playlists.Playlist {
-	if slot == platforms.MediaSlotBackground {
+	if slot == mediaslot.Background {
 		return env.Playlist.Background
 	}
 	return env.Playlist.Active
 }
 
 func commandSlot(env *platforms.CmdEnv) (string, error) {
-	slot, err := platforms.NormalizeMediaSlot(env.Cmd.AdvArgs.Get(platforms.MediaSlotArg))
+	slot, err := mediaslot.Normalize(env.Cmd.AdvArgs.Get(mediaslot.Arg))
 	if err != nil {
 		return "", fmt.Errorf("normalize media slot: %w", err)
 	}
@@ -83,7 +84,7 @@ func commandSlot(env *platforms.CmdEnv) (string, error) {
 }
 
 func queuePlaylistUpdate(env *platforms.CmdEnv, pls *playlists.Playlist) error {
-	slot := platforms.MediaSlotPrimary
+	slot := mediaslot.Primary
 	if pls != nil && pls.Slot != "" {
 		slot = pls.Slot
 	} else if cmdSlot, err := commandSlot(env); err == nil {
@@ -320,7 +321,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		}
 
 		pls := playlists.NewPlaylist(plsArg.ID, plsArg.Name, items)
-		slot, slotErr := platforms.NormalizeMediaSlot(env.Cmd.AdvArgs.Get(platforms.MediaSlotArg))
+		slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(mediaslot.Arg))
 		if slotErr != nil {
 			return nil, fmt.Errorf("normalize media slot: %w", slotErr)
 		}
@@ -361,7 +362,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	}
 
 	pls := playlists.NewPlaylist(env.Cmd.Args[0], name, items)
-	slot, slotErr := platforms.NormalizeMediaSlot(env.Cmd.AdvArgs.Get("slot"))
+	slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(mediaslot.Arg))
 	if slotErr != nil {
 		return nil, fmt.Errorf("normalize media slot: %w", slotErr)
 	}
@@ -609,7 +610,7 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, err
 	}
 
-	if slot == platforms.MediaSlotBackground {
+	if slot == mediaslot.Background {
 		return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        nil,
@@ -643,7 +644,7 @@ func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cm
 		return platforms.CmdResult{}, err
 	}
 
-	if slot == platforms.MediaSlotBackground {
+	if slot == mediaslot.Background {
 		return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        pls,

@@ -47,6 +47,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/rs/zerolog/log"
 )
 
@@ -844,7 +845,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 				SystemName:       system.Name,
 				Name:             activeMedia.Name,
 				Path:             activeMedia.Path,
-				Slot:             platforms.MediaSlotPrimary,
+				Slot:             mediaslot.Primary,
 				LauncherControls: activeMedia.LauncherControls,
 			},
 			ZapScript: zapScript,
@@ -863,7 +864,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 				SystemName:       backgroundMedia.SystemName,
 				Name:             backgroundMedia.Name,
 				Path:             backgroundMedia.Path,
-				Slot:             platforms.MediaSlotBackground,
+				Slot:             mediaslot.Background,
 				LauncherControls: backgroundMedia.LauncherControls,
 			},
 			ZapScript: backgroundMedia.Path,
