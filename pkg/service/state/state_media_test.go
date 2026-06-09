@@ -183,7 +183,10 @@ func TestWaitForActiveMediaReady_NoMedia(t *testing.T) {
 	st, _ := NewState(nil, "boot")
 	defer st.StopService()
 
-	err := st.WaitForActiveMediaReady(context.Background(), 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := st.WaitForActiveMediaReady(ctx, 1)
 	require.ErrorIs(t, err, ErrNoActiveMedia)
 }
 
@@ -193,11 +196,14 @@ func TestWaitForActiveMediaReady_WrongGeneration(t *testing.T) {
 	st, ns := NewState(nil, "boot")
 	drainState(t, st, ns)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	media := models.NewActiveMedia("NES", "NES", "game.nes", "Game", "retroarch")
 	st.SetActiveMedia(media)
 	select {
 	case <-ns:
-	case <-time.After(time.Second):
+	case <-ctx.Done():
 		t.Fatal("timeout waiting for MediaStarted")
 	}
 
@@ -208,16 +214,16 @@ func TestWaitForActiveMediaReady_WrongGeneration(t *testing.T) {
 	st.SetActiveMedia(media2)
 	select {
 	case <-ns:
-	case <-time.After(time.Second):
+	case <-ctx.Done():
 		t.Fatal("timeout waiting for MediaStopped")
 	}
 	select {
 	case <-ns:
-	case <-time.After(time.Second):
+	case <-ctx.Done():
 		t.Fatal("timeout waiting for MediaStarted")
 	}
 
-	err := st.WaitForActiveMediaReady(context.Background(), gen)
+	err := st.WaitForActiveMediaReady(ctx, gen)
 	require.ErrorIs(t, err, ErrActiveMediaChanged)
 }
 

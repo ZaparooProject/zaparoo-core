@@ -399,6 +399,15 @@ func TestCmdPlaylistPrevious_WrapsAround(t *testing.T) {
 	<-queue
 }
 
+func TestCmdPlaylistPrevious_NoActivePlaylist(t *testing.T) {
+	t.Parallel()
+
+	_, err := cmdPlaylistPrevious(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)},
+	})
+	require.Error(t, err)
+}
+
 func TestCmdPlaylistGoto_JumpsToIndex(t *testing.T) {
 	t.Parallel()
 
@@ -436,6 +445,16 @@ func TestCmdPlaylistGoto_InvalidArg(t *testing.T) {
 	_, err := cmdPlaylistGoto(nil, platforms.CmdEnv{
 		Cmd:      zapscript.Command{Args: []string{"notanumber"}},
 		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.Error(t, err)
+}
+
+func TestCmdPlaylistGoto_NoActivePlaylist(t *testing.T) {
+	t.Parallel()
+
+	_, err := cmdPlaylistGoto(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{"1"}},
+		Playlist: playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)},
 	})
 	require.Error(t, err)
 }
@@ -530,6 +549,6 @@ func TestReadPlaylistFolder_EmptyPath(t *testing.T) {
 func TestReadPlaylistFolder_NonexistentPath(t *testing.T) {
 	t.Parallel()
 
-	_, err := readPlaylistFolder("/nonexistent/path/12345")
+	_, err := readPlaylistFolder(filepath.Join("nonexistent", "path", "12345"))
 	require.Error(t, err)
 }

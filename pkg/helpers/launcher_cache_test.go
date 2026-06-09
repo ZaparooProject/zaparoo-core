@@ -232,6 +232,7 @@ func TestInitialize_DeduplicatesExtraLaunchers(t *testing.T) {
 
 	cache := &LauncherCache{}
 	cache.Initialize(mp, nil, extra, duplicate)
+	mp.AssertExpectations(t)
 
 	all := cache.GetAllLaunchers()
 	require.Len(t, all, 2, "duplicate extra launcher must not be added twice")
@@ -254,6 +255,7 @@ func TestInitialize_ExtraLauncherIsRetrievable(t *testing.T) {
 
 	cache := &LauncherCache{}
 	cache.Initialize(mp, nil, extra)
+	mp.AssertExpectations(t)
 
 	found := cache.GetLauncherByID("native-audio")
 	require.NotNil(t, found)
