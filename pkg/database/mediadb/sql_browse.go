@@ -33,6 +33,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// imagePropertyTagPrefix is the common prefix for all image property TypeTag
+// values (e.g. "property:image-image", "property:image-boxart", …).
+// All image type tags in the Tags table start with this string, so a LIKE
+// filter with this prefix selects exactly the set of image property types.
+const imagePropertyTagPrefix = "property:image-"
+
 const (
 	browseSortRankPrefixAsc  = "rank-prefix-asc"
 	browseSortRankPrefixDesc = "rank-prefix-desc"
@@ -526,6 +532,10 @@ func sqlBrowseFilesFromMedia(
 	}
 	tagsElapsed := time.Since(tagsStarted)
 
+	if err := fetchAndAttachCoverFlags(ctx, db, results); err != nil {
+		return nil, fmt.Errorf("browse files cover flags: %w", err)
+	}
+
 	log.Debug().
 		Str("pathPrefix", opts.PathPrefix).
 		Strs("systems", browseSystemIDsForLog(opts.Systems)).
@@ -534,6 +544,79 @@ func sqlBrowseFilesFromMedia(
 		Dur("tagsDuration", tagsElapsed).
 		Msg("browse files step timing")
 	return results, nil
+}
+
+// fetchAndAttachCoverFlags sets HasCover on each result based on whether the
+// media or its title has at least one image property row. A single UNION ALL
+// query covers both MediaProperties (media-level) and MediaTitleProperties
+// (title-level), both of which are indexed by their respective IDs. Results
+// with no image property get HasCover=false; the browse response omits that
+// field so that older clients (without this field) continue to request covers.
+func fetchAndAttachCoverFlags(
+	ctx context.Context,
+	db sqlQueryable,
+	results []database.SearchResultWithCursor,
+) error {
+	if len(results) == 0 {
+		return nil
+	}
+
+	mediaIDs := make([]int64, len(results))
+	for i := range results {
+		mediaIDs[i] = results[i].MediaID
+	}
+
+	placeholders := prepareVariadic("?", ",", len(mediaIDs))
+	args := make([]any, 0, len(mediaIDs)*2)
+	for _, id := range mediaIDs {
+		args = append(args, id)
+	}
+	for _, id := range mediaIDs {
+		args = append(args, id)
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
+	query := `
+		SELECT DISTINCT sub.MediaDBID
+		FROM (
+			SELECT mp.MediaDBID
+			FROM MediaProperties mp
+			JOIN Tags t ON t.DBID = mp.TypeTagDBID
+			WHERE mp.MediaDBID IN (` + placeholders + `)
+			  AND t.Tag LIKE '` + imagePropertyTagPrefix + `%'
+
+			UNION ALL
+
+			SELECT m.DBID AS MediaDBID
+			FROM Media m
+			JOIN MediaTitleProperties mtp ON mtp.MediaTitleDBID = m.MediaTitleDBID
+			JOIN Tags t ON t.DBID = mtp.TypeTagDBID
+			WHERE m.DBID IN (` + placeholders + `)
+			  AND t.Tag LIKE '` + imagePropertyTagPrefix + `%'
+		) sub`
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("browse cover flags query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	withCover := make(map[int64]bool, len(results))
+	for rows.Next() {
+		var id int64
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return fmt.Errorf("browse cover flags scan: %w", scanErr)
+		}
+		withCover[id] = true
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("browse cover flags rows: %w", err)
+	}
+
+	for i := range results {
+		results[i].HasCover = withCover[results[i].MediaID]
+	}
+	return nil
 }
 
 func sqlBrowseFileCount(

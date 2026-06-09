@@ -746,6 +746,7 @@ func buildMediaEntry(
 		Type:     "media",
 		SystemID: &result.SystemID,
 		Tags:     result.Tags,
+		HasCover: result.HasCover,
 	}
 
 	zapScript := result.ZapScript()

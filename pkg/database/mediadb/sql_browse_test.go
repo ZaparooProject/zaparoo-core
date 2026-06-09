@@ -29,6 +29,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -375,4 +376,108 @@ func TestSqlBrowseRootCountsFromCache_ReturnsZeroForMissingRoot(t *testing.T) {
 	require.NotNil(t, counts[nesRoot])
 	assert.Equal(t, 0, *counts[nesRoot])
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachCoverFlags_EmptyResults(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{}
+	err = fetchAndAttachCoverFlags(context.Background(), db, results)
+	assert.NoError(t, err)
+	// No DB operations should occur for empty input.
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachCoverFlags_NoCoverEntries(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, Name: "NoCoverGame"},
+		{MediaID: 2, Name: "AnotherNoCoverGame"},
+	}
+
+	// Query returns no rows — neither media ID has any image property.
+	mock.ExpectQuery(`SELECT DISTINCT sub\.MediaDBID`).
+		WithArgs(int64(1), int64(2), int64(1), int64(2)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}))
+
+	err = fetchAndAttachCoverFlags(context.Background(), db, results)
+	require.NoError(t, err)
+	assert.False(t, results[0].HasCover, "entry with no image property should have HasCover=false")
+	assert.False(t, results[1].HasCover, "entry with no image property should have HasCover=false")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachCoverFlags_MediaLevelCover(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 10, Name: "GameWithCover"},
+		{MediaID: 20, Name: "GameWithoutCover"},
+	}
+
+	// Query returns mediaID 10 as having a cover (media-level property).
+	mock.ExpectQuery(`SELECT DISTINCT sub\.MediaDBID`).
+		WithArgs(int64(10), int64(20), int64(10), int64(20)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}).AddRow(int64(10)))
+
+	err = fetchAndAttachCoverFlags(context.Background(), db, results)
+	require.NoError(t, err)
+	assert.True(t, results[0].HasCover, "entry with image property should have HasCover=true")
+	assert.False(t, results[1].HasCover, "entry without image property should have HasCover=false")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachCoverFlags_TitleLevelCover(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Both media share a title; the title-level cover property means both
+	// should be marked as having a cover.
+	results := []database.SearchResultWithCursor{
+		{MediaID: 30, MediaTitleID: 100, Name: "GameA"},
+		{MediaID: 31, MediaTitleID: 100, Name: "GameA (Rev B)"},
+	}
+
+	// Query returns both media IDs (via the title-level UNION ALL leg).
+	mock.ExpectQuery(`SELECT DISTINCT sub\.MediaDBID`).
+		WithArgs(int64(30), int64(31), int64(30), int64(31)).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}).AddRow(int64(30)).AddRow(int64(31)))
+
+	err = fetchAndAttachCoverFlags(context.Background(), db, results)
+	require.NoError(t, err)
+	assert.True(t, results[0].HasCover)
+	assert.True(t, results[1].HasCover)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFetchAndAttachCoverFlags_QueryError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 5, Name: "SomeGame"},
+	}
+
+	mock.ExpectQuery(`SELECT DISTINCT sub\.MediaDBID`).
+		WithArgs(int64(5), int64(5)).
+		WillReturnError(errors.New("db unavailable"))
+
+	err = fetchAndAttachCoverFlags(context.Background(), db, results)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "browse cover flags query")
+	assert.NoError(t, mock.ExpectationsWereMet())
 }

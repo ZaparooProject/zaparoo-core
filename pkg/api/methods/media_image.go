@@ -22,7 +22,9 @@ package methods
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,11 +36,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/ids"
@@ -51,6 +56,9 @@ const (
 	misterMediaImageMaxBytes  = int64(2 * 1024 * 1024)
 	defaultMediaImageMaxBytes = int64(8 * 1024 * 1024)
 	mediaImageNoImageMax      = 4096
+	// mediaThumbCacheDirName is the sub-directory under the core cache dir where
+	// resized thumbnail files are persisted across restarts.
+	mediaThumbCacheDirName = "thumbs"
 )
 
 // mediaImageSem limits concurrent image lookups so high-volume image misses do
@@ -58,6 +66,113 @@ const (
 var mediaImageSem = make(chan struct{}, 1)
 
 var mediaImageBeforeSemAcquire func()
+
+// mediaThumbCachePointer is the process-wide thumbnail disk cache stored as an
+// atomic pointer so concurrent StartWithReady calls in tests do not race on it.
+var mediaThumbCachePointer atomic.Pointer[mediaThumbCache]
+
+// mediaThumbCache persists resized cover images to disk so that the expensive
+// decode+bilinear-resize+transparency-scan is only performed once per unique
+// (identity, imageType, maxSize) triple. The cache survives core restarts and
+// reboots; it is wiped entirely when a full media reindex completes (because
+// MediaDB row IDs change and file-backed image paths may have moved).
+//
+// Keys are SHA-256 hashes of the logical identity string; values are stored as
+// <hash>.jpg or <hash>.png to encode the content-type implicitly.
+type mediaThumbCache struct {
+	dir string
+}
+
+func newMediaThumbCache(pl platforms.Platform) *mediaThumbCache {
+	dir := filepath.Join(helpers.DataDir(pl), config.CacheDir, mediaThumbCacheDirName)
+	return &mediaThumbCache{dir: dir}
+}
+
+// thumbKey returns the cache key string for a resize request. The key encodes
+// the stable identity (media-ID or system+path) plus the resolved image-type tag
+// and target size. Media IDs change on reindex, but the whole cache is wiped
+// then, so they are safe to use here.
+func thumbKey(ref mediaRefParam, typeTag string, maxSize int) string {
+	var identity string
+	if ref.MediaID != nil {
+		identity = fmt.Sprintf("id:%d", *ref.MediaID)
+	} else {
+		identity = fmt.Sprintf("path:%s:%s", ref.System, filepath.ToSlash(ref.Path))
+	}
+	return fmt.Sprintf("%s:%s:%d", identity, typeTag, maxSize)
+}
+
+// hashThumbKey converts a key string to the 64-character hex filename prefix
+// used on disk.
+func hashThumbKey(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:])
+}
+
+// get looks up a cached resized image. Returns (data, contentType, true) on
+// hit, or (nil, "", false) on miss or any I/O error.
+func (c *mediaThumbCache) get(
+	ref mediaRefParam, typeTag string, maxSize int,
+) (data []byte, contentType string, found bool) {
+	hash := hashThumbKey(thumbKey(ref, typeTag, maxSize))
+	for _, ext := range []string{".jpg", ".png"} {
+		//nolint:gosec // path is constructed from a controlled dir + SHA-256 hash + fixed extension
+		b, err := os.ReadFile(filepath.Join(c.dir, hash+ext))
+		if err == nil {
+			ct := "image/jpeg"
+			if ext == ".png" {
+				ct = "image/png"
+			}
+			return b, ct, true
+		}
+	}
+	return nil, "", false
+}
+
+// set writes resized image bytes to the disk cache. Failures are logged and
+// ignored — the caller always has the bytes in memory and must not fail on a
+// cache write error.
+func (c *mediaThumbCache) set(ref mediaRefParam, typeTag string, maxSize int, data []byte, contentType string) {
+	ext := ".jpg"
+	if strings.Contains(contentType, "png") {
+		ext = ".png"
+	}
+	if err := os.MkdirAll(c.dir, 0o750); err != nil { //nolint:gosec // cache dir, 0o750 is intentional
+		log.Debug().Err(err).Str("dir", c.dir).Msg("media.image: thumb cache: failed to create dir")
+		return
+	}
+	hash := hashThumbKey(thumbKey(ref, typeTag, maxSize))
+	path := filepath.Join(c.dir, hash+ext)
+	if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // cache file, 0o600 is intentional
+		log.Debug().Err(err).Str("path", path).Msg("media.image: thumb cache: failed to write")
+	}
+}
+
+// wipe removes the entire thumbnail cache directory. Called after a successful
+// full media reindex so stale entries do not accumulate.
+func (c *mediaThumbCache) wipe() {
+	if err := os.RemoveAll(c.dir); err != nil {
+		log.Warn().Err(err).Str("dir", c.dir).Msg("media.image: failed to wipe thumb cache after reindex")
+	} else {
+		log.Info().Str("dir", c.dir).Msg("media.image: thumb cache wiped after reindex")
+	}
+}
+
+// InitMediaThumbCache creates or replaces the process-wide thumb cache for the
+// given platform. Must be called once during service start, before any
+// media.image requests are handled. Uses atomic store so concurrent
+// StartWithReady calls in tests do not race.
+func InitMediaThumbCache(pl platforms.Platform) {
+	mediaThumbCachePointer.Store(newMediaThumbCache(pl))
+}
+
+// WipeMediaThumbCache removes all cached thumbnails. Called after a successful
+// full reindex so the cache does not serve stale art.
+func WipeMediaThumbCache() {
+	if tc := mediaThumbCachePointer.Load(); tc != nil {
+		tc.wipe()
+	}
+}
 
 // defaultImageTypes is the preference order used when no imageTypes param is provided.
 var defaultImageTypes = []string{
@@ -177,7 +292,22 @@ func decodeResizableImage(binary []byte, contentType string) (image.Image, error
 	return nil, fmt.Errorf("unsupported image type for resize: %s", contentType)
 }
 
+// imageHasTransparency reports whether img contains any non-opaque pixel.
+// It short-circuits for common opaque types before falling back to a
+// pixel-by-pixel scan — avoiding O(w×h) work on ARM for JPEG sources.
 func imageHasTransparency(img image.Image) bool {
+	// Types that are always fully opaque — no alpha channel possible.
+	switch img.(type) {
+	case *image.YCbCr, *image.Gray, *image.Gray16, *image.CMYK:
+		return false
+	}
+	// Types that have an Opaque() helper — use it to avoid a pixel scan when
+	// the image was decoded with a known-opaque palette or alpha mask.
+	type opaque interface{ Opaque() bool }
+	if o, ok := img.(opaque); ok {
+		return !o.Opaque()
+	}
+	// Fallback: per-pixel scan for any remaining type (e.g. *image.Paletted).
 	bounds := img.Bounds()
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
@@ -370,7 +500,23 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 
 	binary, ct := raw.binary, raw.contentType
 	if ref.MaxSize != nil && *ref.MaxSize > 0 {
-		binary, ct = resizeImageIfNeeded(binary, ct, int(*ref.MaxSize))
+		maxSize := int(*ref.MaxSize)
+		// Check the disk thumb cache before doing the expensive decode+resize.
+		if tc := mediaThumbCachePointer.Load(); tc != nil {
+			if cached, cachedCT, ok := tc.get(ref, raw.typeTag, maxSize); ok {
+				return models.MediaImageResponse{
+					Extension:   mediaContentExtension(cachedCT, raw.text),
+					ContentType: cachedCT,
+					Data:        base64.StdEncoding.EncodeToString(cached),
+					TypeTag:     raw.typeTag,
+				}, nil
+			}
+		}
+		binary, ct = resizeImageIfNeeded(binary, ct, maxSize)
+		// Write to the disk cache on a miss so future requests skip the resize.
+		if tc := mediaThumbCachePointer.Load(); tc != nil {
+			tc.set(ref, raw.typeTag, maxSize, binary, ct)
+		}
 	}
 	return models.MediaImageResponse{
 		Extension:   mediaContentExtension(ct, raw.text),
