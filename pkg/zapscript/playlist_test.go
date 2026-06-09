@@ -576,6 +576,42 @@ func TestReadPlaylistFolder_EmptyDir(t *testing.T) {
 	assert.Contains(t, err.Error(), "no valid files found")
 }
 
+func TestCommandSlot_InvalidSlotReturnsError(t *testing.T) {
+	t.Parallel()
+
+	var aa zapscript.AdvArgs
+	aa = aa.With("slot", "badvalue")
+	_, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{AdvArgs: aa},
+		Playlist: playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "normalize media slot")
+}
+
+func TestLoadPlaylist_JSONArg(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+
+	jsonArg := `{"id":"list-1","name":"My List",` +
+		`"items":[{"name":"Track A","zapscript":"**test.a"},{"name":"Track B","zapscript":"**test.b"}]}`
+	result, err := cmdPlaylistLoad(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{jsonArg}},
+		Cfg:      &config.Instance{},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, "list-1", result.Playlist.ID)
+	assert.Equal(t, "My List", result.Playlist.Name)
+	require.Len(t, result.Playlist.Items, 2)
+	assert.Equal(t, "Track A", result.Playlist.Items[0].Name)
+	<-queue
+}
+
 func TestReadPlaylistFolder_EmptyPath(t *testing.T) {
 	t.Parallel()
 

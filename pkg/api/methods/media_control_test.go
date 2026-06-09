@@ -22,6 +22,7 @@ package methods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -440,6 +441,121 @@ func TestHandleMediaControl_BackgroundSlotNoMedia(t *testing.T) {
 	_, err := HandleMediaControl(env)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no active media")
+}
+
+func TestHandleMediaControl_InvalidSlot(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher"))
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		State:   st,
+		Params:  json.RawMessage(`{"action":"save_state","slot":"badslot"}`),
+	}
+
+	_, err := HandleMediaControl(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid slot")
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+}
+
+func TestHandleMediaControl_NilLauncherCache(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher"))
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		LauncherCache: nil,
+		Params:        json.RawMessage(`{"action":"save_state"}`),
+	}
+
+	_, err := HandleMediaControl(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no launcher associated")
+
+	var clientErr *models.ClientError
+	require.ErrorAs(t, err, &clientErr)
+}
+
+func TestHandleMediaControl_LauncherNotFound(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "missing-launcher"))
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "other-launcher", SystemID: "NES"},
+	})
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"action":"save_state"}`),
+	}
+
+	_, err := HandleMediaControl(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "launcher not found")
+}
+
+func TestHandleMediaControl_FuncReturnsError(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher"))
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{
+			ID:       "test-launcher",
+			SystemID: "NES",
+			Controls: map[string]platforms.Control{
+				"save_state": {Func: func(_ context.Context, _ *config.Instance, _ platforms.ControlParams) error {
+					return errors.New("save failed")
+				}},
+			},
+		},
+	})
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"action":"save_state"}`),
+	}
+
+	_, err := HandleMediaControl(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "save failed")
 }
 
 func TestHandleMediaControl_NoImplementation(t *testing.T) {

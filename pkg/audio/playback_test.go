@@ -267,6 +267,86 @@ func TestLongformPlaybackManager_NoSourceOps(t *testing.T) {
 	}
 }
 
+// TestLongformPlaybackManager_WithSourcePrimary exercises Stop/Pause/Resume/TogglePause/Seek/State
+// on the primary slot when a source has been directly injected (no audio hardware needed).
+func TestLongformPlaybackManager_WithSourcePrimary(t *testing.T) {
+	t.Parallel()
+	m := NewLongformPlaybackManager()
+	s := newTestSource()
+	s.played = int64(targetSampleRate / 2) // 0.5 s in
+	m.mu.Lock()
+	m.primary = s
+	m.mu.Unlock()
+
+	// State returns the source's current state.
+	ps := m.State(mediaslot.Primary)
+	assert.Equal(t, 500*time.Millisecond, ps.Position)
+	assert.True(t, ps.Playing)
+
+	// Seek schedules a seek.
+	require.NoError(t, m.Seek(mediaslot.Primary, 0))
+	s.mu.Lock()
+	assert.True(t, s.seekPending)
+	s.mu.Unlock()
+
+	// Pause sets the paused flag.
+	require.NoError(t, m.Pause(mediaslot.Primary))
+	s.mu.Lock()
+	assert.True(t, s.paused)
+	s.mu.Unlock()
+
+	// TogglePause unpauses.
+	require.NoError(t, m.TogglePause(mediaslot.Primary))
+	s.mu.Lock()
+	assert.False(t, s.paused)
+	s.mu.Unlock()
+
+	// Resume is a no-error call when already unpaused.
+	require.NoError(t, m.Resume(mediaslot.Primary))
+
+	// Stop sets stopped, clears the slot, and returns no error.
+	require.NoError(t, m.Stop(mediaslot.Primary))
+	s.mu.Lock()
+	assert.True(t, s.stopped)
+	s.mu.Unlock()
+	assert.Equal(t, PlaybackState{}, m.State(mediaslot.Primary))
+}
+
+// TestLongformPlaybackManager_WithSourceBackground exercises the same operations
+// on the background slot.
+func TestLongformPlaybackManager_WithSourceBackground(t *testing.T) {
+	t.Parallel()
+	m := NewLongformPlaybackManager()
+	s := newTestSource()
+	m.mu.Lock()
+	m.background = s
+	m.mu.Unlock()
+
+	// State reflects background source.
+	ps := m.State(mediaslot.Background)
+	assert.True(t, ps.Playing)
+
+	// Pause/TogglePause/Resume cycle.
+	require.NoError(t, m.Pause(mediaslot.Background))
+	s.mu.Lock()
+	assert.True(t, s.paused)
+	s.mu.Unlock()
+
+	require.NoError(t, m.TogglePause(mediaslot.Background))
+	s.mu.Lock()
+	assert.False(t, s.paused)
+	s.mu.Unlock()
+
+	require.NoError(t, m.Resume(mediaslot.Background))
+
+	// Stop clears background slot.
+	require.NoError(t, m.Stop(mediaslot.Background))
+	s.mu.Lock()
+	assert.True(t, s.stopped)
+	s.mu.Unlock()
+	assert.Equal(t, PlaybackState{}, m.State(mediaslot.Background))
+}
+
 // TestLongformPlaybackManager_SetDrainCallback verifies callbacks can be registered and invoked.
 func TestLongformPlaybackManager_SetDrainCallback(t *testing.T) {
 	t.Parallel()

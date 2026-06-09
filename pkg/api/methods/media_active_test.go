@@ -21,6 +21,7 @@ package methods
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -32,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	phelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -463,4 +465,125 @@ func TestHandleActiveMedia_WithoutLauncherControls(t *testing.T) {
 	resp, ok := result.(models.ActiveMediaResponse)
 	require.True(t, ok)
 	assert.Nil(t, resp.LauncherControls)
+}
+
+func TestHandleMedia_WithBackgroundMedia(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	background := models.NewActiveMedia(
+		platforms.NativeAudioLauncherID, "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID,
+	)
+	st.SetBackgroundMedia(background)
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
+	mockMediaDB.On("GetTotalMediaCount").Return(0, nil)
+	ClearIndexingStatus()
+
+	env := requests.RequestEnv{
+		Context:  context.Background(),
+		State:    st,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	result, err := HandleMedia(env)
+	require.NoError(t, err)
+
+	resp, ok := result.(models.MediaResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Active, 1, "only background media")
+	assert.Equal(t, mediaslot.Background, resp.Active[0].Slot)
+	assert.Equal(t, "song.mp3", resp.Active[0].Path)
+	assert.Equal(t, "Song", resp.Active[0].Name)
+	assert.Equal(t, "song.mp3", resp.Active[0].ZapScript)
+
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleUpdateActiveMedia_ClearMedia(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "launcher"))
+
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		State:   st,
+		Params:  json.RawMessage{},
+	}
+
+	result, err := HandleUpdateActiveMedia(env)
+	require.NoError(t, err)
+	_, ok := result.(NoContent)
+	require.True(t, ok)
+	assert.Nil(t, st.ActiveMedia(), "active media must be cleared")
+}
+
+func TestHandleUpdateActiveMedia_SetMedia(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	params, _ := json.Marshal(map[string]string{
+		"systemId":  "NES",
+		"mediaPath": "/game.nes",
+		"mediaName": "My Game",
+	})
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		State:   st,
+		Params:  json.RawMessage(params),
+	}
+
+	result, err := HandleUpdateActiveMedia(env)
+	require.NoError(t, err)
+	_, ok := result.(NoContent)
+	require.True(t, ok)
+
+	active := st.ActiveMedia()
+	require.NotNil(t, active)
+	assert.Equal(t, "NES", active.SystemID)
+	assert.Equal(t, "/game.nes", active.Path)
+	assert.Equal(t, "My Game", active.Name)
+}
+
+func TestHandleUpdateActiveMedia_InvalidSystem(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	params, _ := json.Marshal(map[string]string{
+		"systemId":  "UNKNOWN_SYSTEM_XYZ_12345",
+		"mediaPath": "/game",
+		"mediaName": "Game",
+	})
+	env := requests.RequestEnv{
+		Context: context.Background(),
+		State:   st,
+		Params:  json.RawMessage(params),
+	}
+
+	_, err := HandleUpdateActiveMedia(env)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "looking up system")
 }
