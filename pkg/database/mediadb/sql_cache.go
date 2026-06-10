@@ -33,50 +33,46 @@ import (
 
 // buildPopulateTagsSQL returns the INSERT INTO SystemTagsCache SQL with an
 // optional system filter injected into both UNION ALL branches. Pass "" for the
-// full-database variant; pass a filter expression such as `s.DBID IN (?, ?)` for
-// selective rebuilds.
+// full-database variant; pass a placeholder list such as `(?, ?)` for selective
+// rebuilds (matched against SystemDBID in both branches).
+//
+// The big tables (MediaTags, MediaTitleTags) are aggregated on integer keys
+// first and Tags/TagTypes are joined onto the much smaller aggregate. Joining
+// tag metadata per base row needed several B-tree probes for every MediaTags
+// row, which dominated the post-indexing cache build on slow hardware.
 func buildPopulateTagsSQL(systemFilter string) string {
 	mediaWhere := "WHERE m.IsMissing = 0"
 	titleWhere := "WHERE EXISTS(SELECT 1 FROM Media m WHERE m.MediaTitleDBID = mtl.DBID AND m.IsMissing = 0)"
 	if systemFilter != "" {
-		mediaWhere = "WHERE " + systemFilter + " AND m.IsMissing = 0"
-		titleWhere = "WHERE " + systemFilter +
+		mediaWhere = "WHERE m.SystemDBID IN " + systemFilter + " AND m.IsMissing = 0"
+		titleWhere = "WHERE mtl.SystemDBID IN " + systemFilter +
 			" AND EXISTS(SELECT 1 FROM Media m WHERE m.MediaTitleDBID = mtl.DBID AND m.IsMissing = 0)"
 	}
 	return fmt.Sprintf(`
 		INSERT INTO SystemTagsCache (SystemDBID, TagDBID, TagType, Tag, Count)
-		SELECT SystemDBID, TagDBID, TagType, Tag, SUM(Cnt) AS Count
+		SELECT agg.SystemDBID, agg.TagDBID, tt.Type, t.Tag, SUM(agg.Cnt) AS Count
 		FROM (
 			SELECT
-				s.DBID AS SystemDBID,
-				t.DBID AS TagDBID,
-				tt.Type AS TagType,
-				t.Tag AS Tag,
+				m.SystemDBID AS SystemDBID,
+				mt.TagDBID AS TagDBID,
 				COUNT(*) AS Cnt
-			FROM Systems s
-			JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
-			JOIN Media m ON mtl.DBID = m.MediaTitleDBID
-			JOIN MediaTags mt ON m.DBID = mt.MediaDBID
-			JOIN Tags t ON mt.TagDBID = t.DBID
-			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			FROM MediaTags mt
+			JOIN Media m ON mt.MediaDBID = m.DBID
 			%s
-			GROUP BY s.DBID, t.DBID, tt.Type, t.Tag
+			GROUP BY m.SystemDBID, mt.TagDBID
 			UNION ALL
 			SELECT
-				s.DBID AS SystemDBID,
-				t.DBID AS TagDBID,
-				tt.Type AS TagType,
-				t.Tag AS Tag,
+				mtl.SystemDBID AS SystemDBID,
+				mtt.TagDBID AS TagDBID,
 				COUNT(*) AS Cnt
-			FROM Systems s
-			JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
-			JOIN MediaTitleTags mtt ON mtl.DBID = mtt.MediaTitleDBID
-			JOIN Tags t ON mtt.TagDBID = t.DBID
-			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			FROM MediaTitleTags mtt
+			JOIN MediaTitles mtl ON mtt.MediaTitleDBID = mtl.DBID
 			%s
-			GROUP BY s.DBID, t.DBID, tt.Type, t.Tag
-		)
-		GROUP BY SystemDBID, TagDBID, TagType, Tag`, mediaWhere, titleWhere)
+			GROUP BY mtl.SystemDBID, mtt.TagDBID
+		) agg
+		JOIN Tags t ON agg.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		GROUP BY agg.SystemDBID, agg.TagDBID, tt.Type, t.Tag`, mediaWhere, titleWhere)
 }
 
 // sqlPopulateSystemTagsCache - Populates the SystemTagsCache table for fast tag lookups
@@ -175,8 +171,8 @@ func sqlPopulateSystemTagsCacheForSystems(
 	}
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	whereClause := fmt.Sprintf("s.DBID IN (%s)", placeholders)
-	populateStmt, err := db.PrepareContext(ctx, buildPopulateTagsSQL(whereClause))
+	placeholderList := fmt.Sprintf("(%s)", placeholders)
+	populateStmt, err := db.PrepareContext(ctx, buildPopulateTagsSQL(placeholderList))
 	if err != nil {
 		return fmt.Errorf("failed to prepare selective cache populate statement: %w", err)
 	}

@@ -309,7 +309,6 @@ func sqlGetTitlesBySystemID(ctx context.Context, db *sql.DB, systemID string) ([
 		FROM MediaTitles t
 		JOIN Systems s ON t.SystemDBID = s.DBID
 		WHERE s.SystemID = ?
-		ORDER BY t.DBID
 	`
 	rows, err := db.QueryContext(ctx, query, systemID)
 	if err != nil {

@@ -1964,7 +1964,6 @@ func TestMediaDB_GetMediaBySystemID_Integration(t *testing.T) {
 	for _, m := range nesMedia {
 		assert.Equal(t, nesSystem.ID, m.SystemID, "all media should be NES")
 		assert.NotEmpty(t, m.Path, "path should not be empty")
-		assert.NotEmpty(t, m.TitleSlug, "slug should not be empty")
 		assert.Positive(t, m.DBID, "DBID should be positive")
 		assert.Positive(t, m.MediaTitleDBID, "MediaTitleDBID should be positive")
 	}
@@ -1991,11 +1990,6 @@ func TestMediaDB_GetMediaBySystemID_Integration(t *testing.T) {
 	emptyMedia, err := mediaDB.GetMediaBySystemID("nonexistent")
 	require.NoError(t, err)
 	assert.Empty(t, emptyMedia, "non-existent system should return empty slice")
-
-	// Test: Results are ordered by DBID
-	for i := 1; i < len(nesMedia); i++ {
-		assert.Greater(t, nesMedia[i].DBID, nesMedia[i-1].DBID, "results should be ordered by DBID")
-	}
 }
 
 // TestMediaDB_GetTitlesBySystemID_Integration tests retrieving titles for a specific system.
@@ -2108,11 +2102,6 @@ func TestMediaDB_GetTitlesBySystemID_Integration(t *testing.T) {
 	emptyTitles, err := mediaDB.GetTitlesBySystemID("nonexistent")
 	require.NoError(t, err)
 	assert.Empty(t, emptyTitles, "non-existent system should return empty slice")
-
-	// Test: Results are ordered by DBID
-	for i := 1; i < len(nesTitleResults); i++ {
-		assert.Greater(t, nesTitleResults[i].DBID, nesTitleResults[i-1].DBID, "results should be ordered by DBID")
-	}
 }
 
 // TestMediaDB_CacheFastPath_MatchesSQL_Integration verifies that cache fast-paths
@@ -3620,6 +3609,127 @@ func TestMediaDB_PopulateSystemTagsCache_CountAggregation_Integration(t *testing
 		"SELECT Count FROM SystemTagsCache WHERE TagDBID = ?", platformTag.DBID).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), count, "Count must sum file-level and title-level contributions")
+}
+
+// TestMediaDB_PopulateSystemTagsCache_LegacyQueryEquivalence_Integration verifies the
+// aggregate-first populate query produces identical rows to the previous formulation
+// that joined Tags/TagTypes per base row, across multiple systems, file-level and
+// title-level tags, shared tags, and IsMissing media.
+func TestMediaDB_PopulateSystemTagsCache_LegacyQueryEquivalence_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	genreType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "genre"})
+	require.NoError(t, err)
+	regionType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "region"})
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+
+	platformTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: genreType.DBID, Tag: "platform"})
+	require.NoError(t, err)
+	usaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionType.DBID, Tag: "usa"})
+	require.NoError(t, err)
+
+	for sysIdx, sysID := range []string{"NES", "SNES"} {
+		insertedSystem, sysErr := mediaDB.InsertSystem(database.System{SystemID: sysID, Name: sysID})
+		require.NoError(t, sysErr)
+
+		for i := range 3 {
+			title, titleErr := mediaDB.InsertMediaTitle(&database.MediaTitle{
+				SystemDBID: insertedSystem.DBID,
+				Slug:       fmt.Sprintf("game-%d-%d", sysIdx, i),
+				Name:       fmt.Sprintf("Game %d %d", sysIdx, i),
+			})
+			require.NoError(t, titleErr)
+
+			media, mediaErr := mediaDB.InsertMedia(database.Media{
+				SystemDBID:     insertedSystem.DBID,
+				MediaTitleDBID: title.DBID,
+				Path:           filepath.Join("roms", sysID, fmt.Sprintf("game%d.rom", i)),
+			})
+			require.NoError(t, mediaErr)
+
+			_, tagErr := mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: media.DBID, TagDBID: platformTag.DBID})
+			require.NoError(t, tagErr)
+			if i%2 == 0 {
+				_, tagErr = mediaDB.InsertMediaTag(database.MediaTag{MediaDBID: media.DBID, TagDBID: usaTag.DBID})
+				require.NoError(t, tagErr)
+			}
+		}
+	}
+
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	rawDB := mediaDB.UnsafeGetSQLDb()
+
+	// Title-level tag and an IsMissing media row (must be excluded from counts).
+	var anyTitleDBID int64
+	require.NoError(t, rawDB.QueryRowContext(ctx, "SELECT DBID FROM MediaTitles LIMIT 1").Scan(&anyTitleDBID))
+	_, err = rawDB.ExecContext(ctx,
+		"INSERT INTO MediaTitleTags (MediaTitleDBID, TagDBID) VALUES (?, ?)", anyTitleDBID, usaTag.DBID)
+	require.NoError(t, err)
+	_, err = rawDB.ExecContext(ctx, "UPDATE Media SET IsMissing = 1 WHERE DBID = (SELECT MIN(DBID) FROM Media)")
+	require.NoError(t, err)
+
+	collectCache := func() map[string]int64 {
+		rows, queryErr := rawDB.QueryContext(ctx,
+			"SELECT SystemDBID, TagDBID, TagType, Tag, Count FROM SystemTagsCache ORDER BY SystemDBID, TagDBID")
+		require.NoError(t, queryErr)
+		defer func() { _ = rows.Close() }()
+		result := make(map[string]int64)
+		for rows.Next() {
+			var systemDBID, tagDBID, rowCount int64
+			var tagType, tag string
+			require.NoError(t, rows.Scan(&systemDBID, &tagDBID, &tagType, &tag, &rowCount))
+			result[fmt.Sprintf("%d|%d|%s|%s", systemDBID, tagDBID, tagType, tag)] = rowCount
+		}
+		require.NoError(t, rows.Err())
+		return result
+	}
+
+	// Legacy formulation (pre-optimization), kept here as the behavioral oracle.
+	legacySQL := `
+		INSERT INTO SystemTagsCache (SystemDBID, TagDBID, TagType, Tag, Count)
+		SELECT SystemDBID, TagDBID, TagType, Tag, SUM(Cnt) AS Count
+		FROM (
+			SELECT s.DBID AS SystemDBID, t.DBID AS TagDBID, tt.Type AS TagType, t.Tag AS Tag, COUNT(*) AS Cnt
+			FROM Systems s
+			JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
+			JOIN Media m ON mtl.DBID = m.MediaTitleDBID
+			JOIN MediaTags mt ON m.DBID = mt.MediaDBID
+			JOIN Tags t ON mt.TagDBID = t.DBID
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			WHERE m.IsMissing = 0
+			GROUP BY s.DBID, t.DBID, tt.Type, t.Tag
+			UNION ALL
+			SELECT s.DBID, t.DBID, tt.Type, t.Tag, COUNT(*)
+			FROM Systems s
+			JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
+			JOIN MediaTitleTags mtt ON mtl.DBID = mtt.MediaTitleDBID
+			JOIN Tags t ON mtt.TagDBID = t.DBID
+			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			WHERE EXISTS(SELECT 1 FROM Media m WHERE m.MediaTitleDBID = mtl.DBID AND m.IsMissing = 0)
+			GROUP BY s.DBID, t.DBID, tt.Type, t.Tag
+		)
+		GROUP BY SystemDBID, TagDBID, TagType, Tag`
+	_, err = rawDB.ExecContext(ctx, "DELETE FROM SystemTagsCache")
+	require.NoError(t, err)
+	_, err = rawDB.ExecContext(ctx, legacySQL)
+	require.NoError(t, err)
+	legacyResult := collectCache()
+	require.NotEmpty(t, legacyResult)
+
+	require.NoError(t, mediaDB.PopulateSystemTagsCache(ctx))
+	newResult := collectCache()
+
+	assert.Equal(t, legacyResult, newResult, "aggregate-first populate must match the legacy query output")
 }
 
 func TestMediaDB_BrowseSystemRootCandidates_CacheNotReadyReturnsFalse_Integration(t *testing.T) {

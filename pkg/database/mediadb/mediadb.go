@@ -93,8 +93,8 @@ type MediaDB struct {
 	clock                 clockwork.Clock
 	ctx                   context.Context
 	pl                    platforms.Platform
-	batchInsertMediaTitle *BatchInserter
-	stmtInsertMediaTitle  *sql.Stmt
+	batchInsertMedia      *BatchInserter
+	batchInsertSystem     *BatchInserter
 	stmtInsertMedia       *sql.Stmt
 	tx                    *sql.Tx
 	stmtInsertSystem      *sql.Stmt
@@ -102,13 +102,13 @@ type MediaDB struct {
 	stmtInsertTag         *sql.Stmt
 	stmtInsertTagType     *sql.Stmt
 	batchInsertMediaTag   *BatchInserter
-	batchInsertSystem     *BatchInserter
+	inMemoryTagCache      atomic.Pointer[tagCache]
 	batchInsertTag        *BatchInserter
 	batchInsertTagType    *BatchInserter
 	stmtInsertMediaTag    *sql.Stmt
-	batchInsertMedia      *BatchInserter
+	batchInsertMediaTitle *BatchInserter
+	stmtInsertMediaTitle  *sql.Stmt
 	slugSearchCache       atomic.Pointer[SlugSearchCache]
-	inMemoryTagCache      atomic.Pointer[tagCache]
 	dbPath                string
 	backgroundOps         sync.WaitGroup
 	vacuumRetryDelay      time.Duration
@@ -312,20 +312,52 @@ func (db *MediaDB) GetDBPath() string {
 // Call with enable=true before indexing starts, and enable=false after it completes.
 // When enabled, sets 32MB cache (vs default 8MB) to reduce page eviction during
 // heavy insert workloads with non-sequential index keys.
+//
+// Also switches temp_store to MEMORY for the duration: the GROUP BY temp B-trees
+// built by the post-indexing cache population are only a few MB, and the default
+// temp_store=FILE writes them to slow storage (SD card) on embedded devices.
 func (db *MediaDB) SetIndexingCacheSize(enable bool) {
 	if db.sql == nil {
 		return
 	}
 
 	cacheSize := "-8192" // 8MB default
+	tempStore := "FILE"
 	if enable {
 		cacheSize = "-32768" // 32MB for indexing
+		tempStore = "MEMORY"
 	}
 
 	_, err := db.sql.ExecContext(db.ctx, "PRAGMA cache_size = "+cacheSize)
 	if err != nil {
 		log.Warn().Err(err).Bool("enable", enable).Msg("failed to set indexing cache size")
 	}
+	_, err = db.sql.ExecContext(db.ctx, "PRAGMA temp_store = "+tempStore)
+	if err != nil {
+		log.Warn().Err(err).Bool("enable", enable).Msg("failed to set indexing temp_store")
+	}
+}
+
+// AnalyzeApproximate refreshes query-planner statistics with a bounded row sample
+// (PRAGMA analysis_limit). Used right after bulk indexing, before the synchronous
+// cache builds, so their queries plan against fresh stats instead of waiting for
+// the full ANALYZE in background optimization.
+func (db *MediaDB) AnalyzeApproximate() error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	if _, err := db.sql.ExecContext(db.ctx, "PRAGMA analysis_limit = 400"); err != nil {
+		return fmt.Errorf("failed to set analysis_limit: %w", err)
+	}
+	defer func() {
+		if _, err := db.sql.ExecContext(db.ctx, "PRAGMA analysis_limit = 0"); err != nil {
+			log.Warn().Err(err).Msg("failed to reset analysis_limit")
+		}
+	}()
+	if _, err := db.sql.ExecContext(db.ctx, "ANALYZE"); err != nil {
+		return fmt.Errorf("failed to run approximate analyze: %w", err)
+	}
+	return nil
 }
 
 type secondaryIndex struct {
@@ -2670,14 +2702,22 @@ func (db *MediaDB) GetMediaWithFullPath() ([]database.MediaWithFullPath, error) 
 
 // GetTitlesBySystemID retrieves all media titles for a specific system with their associated system information.
 // This is used for lazy loading during resume to avoid loading ALL titles upfront.
+//
+// Uses a non-cancellable context: with a cancellable context, mattn/go-sqlite3
+// spawns a goroutine + channel per rows.Next() call, which is significant
+// overhead on the scanner's bulk per-system reads. The scanner checks for
+// cancellation between queries instead.
 func (db *MediaDB) GetTitlesBySystemID(systemID string) ([]database.TitleWithSystem, error) {
-	return sqlGetTitlesBySystemID(db.ctx, db.sql, systemID)
+	return sqlGetTitlesBySystemID(context.WithoutCancel(db.ctx), db.sql, systemID)
 }
 
-// GetMediaBySystemID retrieves all media for a specific system with their associated title and system information.
+// GetMediaBySystemID retrieves all media for a specific system.
 // This is used for lazy loading during resume to avoid loading ALL media upfront.
+// TitleSlug is NOT populated: no caller uses it, and fetching it would add a
+// MediaTitles probe per media row to the scanner's hottest state-load query.
+// Non-cancellable context: see GetTitlesBySystemID.
 func (db *MediaDB) GetMediaBySystemID(systemID string) ([]database.MediaWithFullPath, error) {
-	return sqlGetMediaBySystemID(db.ctx, db.sql, systemID)
+	return sqlGetMediaBySystemID(context.WithoutCancel(db.ctx), db.sql, systemID)
 }
 
 // GetMediaTagsBySystemID retrieves all media-tag links for a specific system.
@@ -2690,12 +2730,13 @@ func (db *MediaDB) GetMediaTagsBySystemID(systemID string) ([]database.MediaTagL
 }
 
 // GetScannerMediaTagsBySystemID retrieves scanner-managed media-tag links for a specific system.
+// Non-cancellable context: see GetTitlesBySystemID.
 func (db *MediaDB) GetScannerMediaTagsBySystemID(systemID string) ([]database.MediaTagLink, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
 
-	return sqlGetScannerMediaTagsBySystemID(db.ctx, db.sql, systemID)
+	return sqlGetScannerMediaTagsBySystemID(context.WithoutCancel(db.ctx), db.sql, systemID)
 }
 
 // GetSystemsExcluding retrieves all systems except those in the excludeSystemIDs list.

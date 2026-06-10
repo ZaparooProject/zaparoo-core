@@ -853,7 +853,7 @@ func TestSqlPopulateSystemTagsCacheForSystems_Success(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 10)) // Deleted 10 old cache entries
 
 	// Mock selective INSERT for these systems (args doubled for UNION)
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE s.DBID IN.*`).
+	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
 		ExpectExec().WithArgs(1, 2, 1, 2).
 		WillReturnResult(sqlmock.NewResult(1, 15)) // Inserted 15 new cache entries
 
@@ -895,7 +895,7 @@ func TestSqlPopulateSystemTagsCacheForSystems_SingleSystem(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 5))
 
 	// Mock selective INSERT (args doubled for UNION)
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE s.DBID IN.*`).
+	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
 		ExpectExec().WithArgs(1, 1).
 		WillReturnResult(sqlmock.NewResult(1, 8))
 
@@ -928,7 +928,7 @@ func TestSqlPopulateSystemTagsCacheForSystems_NonExistentSystem(t *testing.T) {
 		ExpectExec().WithArgs(1).
 		WillReturnResult(sqlmock.NewResult(0, 5))
 
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE s.DBID IN.*`).
+	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
 		ExpectExec().WithArgs(1, 1).
 		WillReturnResult(sqlmock.NewResult(1, 8))
 
@@ -982,7 +982,7 @@ func TestSqlPopulateSystemTagsCacheForSystems_InsertError(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 5))
 
 	// Mock insert failure (args doubled for UNION)
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE s.DBID IN.*`).
+	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
 		ExpectExec().WithArgs(1, 1).
 		WillReturnError(sql.ErrTxDone)
 
@@ -1367,20 +1367,18 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 
 	systemID := "nes"
 
-	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "SystemDBID", "Slug", "SystemID"}
+	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName"}
 	gamesDir := filepath.Join(string(filepath.Separator), "games")
 	marioPath := filepath.Join(gamesDir, "mario.nes")
 	zeldaPath := filepath.Join(gamesDir, "zelda.nes")
 	metroidPath := filepath.Join(gamesDir, "metroid.nes")
 	rows := sqlmock.NewRows(cols).
-		AddRow(int64(1), marioPath, gamesDir, int64(10),
-			"Super Mario Bros.", int64(100), "supermariobros", "nes").
-		AddRow(int64(2), zeldaPath, gamesDir, int64(11),
-			"The Legend of Zelda", int64(100), "legendofzelda", "nes").
-		AddRow(int64(3), metroidPath, gamesDir, int64(12), "Metroid", int64(100), "metroid", "nes")
+		AddRow(int64(1), marioPath, gamesDir, int64(10), "Super Mario Bros.").
+		AddRow(int64(2), zeldaPath, gamesDir, int64(11), "The Legend of Zelda").
+		AddRow(int64(3), metroidPath, gamesDir, int64(12), "Metroid")
 
-	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName, m\.SystemDBID, ` +
-		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
+	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName ` +
+		`FROM Media m.*WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.DBID`
 	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
@@ -1394,18 +1392,15 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 	assert.Equal(t, gamesDir, results[0].ParentDir)
 	assert.Equal(t, int64(10), results[0].MediaTitleDBID)
 	assert.Equal(t, "Super Mario Bros.", results[0].SortName)
-	assert.Equal(t, "supermariobros", results[0].TitleSlug)
 	assert.Equal(t, "nes", results[0].SystemID)
 
 	// Check second result
 	assert.Equal(t, int64(2), results[1].DBID)
 	assert.Equal(t, zeldaPath, results[1].Path)
-	assert.Equal(t, "legendofzelda", results[1].TitleSlug)
 
 	// Check third result
 	assert.Equal(t, int64(3), results[2].DBID)
 	assert.Equal(t, metroidPath, results[2].Path)
-	assert.Equal(t, "metroid", results[2].TitleSlug)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -1418,11 +1413,11 @@ func TestSqlGetMediaBySystemID_EmptyResult(t *testing.T) {
 
 	systemID := "nonexistent"
 
-	emptyCols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "SystemDBID", "Slug", "SystemID"}
+	emptyCols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName"}
 	rows := sqlmock.NewRows(emptyCols)
 
-	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName, m\.SystemDBID, ` +
-		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
+	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName ` +
+		`FROM Media m.*WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.DBID`
 	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
@@ -1440,8 +1435,8 @@ func TestSqlGetMediaBySystemID_QueryError(t *testing.T) {
 
 	systemID := "nes"
 
-	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName, m\.SystemDBID, ` +
-		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
+	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName ` +
+		`FROM Media m.*WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.DBID`
 	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnError(sql.ErrConnDone)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
@@ -1464,8 +1459,8 @@ func TestSqlGetMediaBySystemID_ScanError(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"DBID", "Path"}).
 		AddRow(int64(1), "/games/mario.nes")
 
-	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName, m\.SystemDBID, ` +
-		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
+	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName ` +
+		`FROM Media m.*WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.DBID`
 	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)

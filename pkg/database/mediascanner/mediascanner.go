@@ -578,6 +578,11 @@ func NewNamesIndex(
 	tags.SetNormalizeTagCache(make(map[string]string))
 	defer tags.SetNormalizeTagCache(nil)
 
+	// Same lifecycle for company-name normalization, which runs the slug word
+	// pipeline per developer/publisher paren tag and repeats heavily.
+	tags.SetCompanyNameCache(make(map[string]tags.TagValue))
+	defer tags.SetCompanyNameCache(nil)
+
 	// Temporarily increase SQLite cache to 32MB for bulk indexing
 	db.SetIndexingCacheSize(true)
 	defer db.SetIndexingCacheSize(false)
@@ -834,6 +839,12 @@ func NewNamesIndex(
 	filesInBatch := 0
 	batchStarted := false
 
+	// TODO: skip unchanged systems via a per-system fingerprint — store
+	// hash(sorted walked paths) + parser version + media row count after each
+	// system completes; on match at the next run, skip the state load, parse,
+	// and reconcile phases entirely. Needs its own design pass for
+	// invalidation rules (parser/config changes) and a forced-reindex path.
+	//
 	// Unified loop: each system is processed exactly once regardless of source.
 	// Filesystem scan, per-system launcher scanners, and any-scanners are all
 	// collected before the AddMediaPath phase. Populate* and FlushScanStateMaps
@@ -1224,6 +1235,16 @@ func NewNamesIndex(
 	}
 
 	selectiveRun := len(requestedSystemIDs) > 0 && !fullRun
+
+	// Refresh planner statistics before the synchronous cache builds: their
+	// aggregate queries otherwise plan against stats from before the bulk
+	// (re)index, since the full ANALYZE only runs later in background
+	// optimization.
+	t0 = time.Now()
+	if analyzeErr := db.AnalyzeApproximate(); analyzeErr != nil {
+		log.Warn().Err(analyzeErr).Msg("failed to refresh planner statistics before cache builds")
+	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("AnalyzeApproximate complete")
 
 	// Populate caches after UpdateLastGenerated. For selective scans we rebuild
 	// the persisted per-system SQL cache, refresh in-memory slug coverage for the
