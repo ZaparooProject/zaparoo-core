@@ -2158,7 +2158,9 @@ func TestResolveSingletonContainerAliases_SingleFileIsAliased(t *testing.T) {
 	gamePath := filepath.ToSlash(filepath.Join(parent, "Game", "Game.chd"))
 	_, err := mediaDB.sql.ExecContext(ctx, `
 		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (1, 2, 'game', 'Game');
-		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (1, 1, 2, ?, ?);
+		INSERT INTO Media (
+			DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, SortName
+		) VALUES (1, 1, 2, ?, ?, 'Game (Disc 1)');
 	`, gamePath, gameDir)
 	require.NoError(t, err)
 
@@ -2170,6 +2172,7 @@ func TestResolveSingletonContainerAliases_SingleFileIsAliased(t *testing.T) {
 	assert.Equal(t, gameDir, aliases[0].ChildDir)
 	assert.Equal(t, int64(1), aliases[0].Row.DBID)
 	assert.Equal(t, "Game", aliases[0].Row.Title.Name)
+	assert.Equal(t, "Game (Disc 1)", aliases[0].Row.SortName)
 	assert.Equal(t, "PSX", aliases[0].Row.System.SystemID)
 	assert.Empty(t, aliases[0].ZapScriptTags)
 }

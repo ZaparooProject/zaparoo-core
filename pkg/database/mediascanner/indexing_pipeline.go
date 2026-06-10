@@ -92,6 +92,9 @@ func FlushScanStateMaps(ss *database.ScanState) {
 	for k := range ss.MediaTitleIDs {
 		delete(ss.MediaTitleIDs, k)
 	}
+	for k := range ss.MediaSortNames {
+		delete(ss.MediaSortNames, k)
+	}
 	for mediaID := range ss.MediaTagIDs {
 		delete(ss.MediaTagIDs, mediaID)
 	}
@@ -160,6 +163,10 @@ func AddMediaPathWithPrefixPolicy(
 
 	titleKey := database.TitleKey(systemID, pf.Slug)
 	canonicalTitleName := pf.Title
+	displayTitleName := pf.DisplayTitle
+	if displayTitleName == "" {
+		displayTitleName = canonicalTitleName
+	}
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
@@ -186,11 +193,6 @@ func AddMediaPathWithPrefixPolicy(
 		}
 	} else {
 		titleIndex = foundTitleIndex
-		if ss.TitleNames != nil {
-			if existingName, ok := ss.TitleNames[titleIndex]; ok && existingName != "" {
-				canonicalTitleName = existingName
-			}
-		}
 	}
 
 	mediaKey := database.MediaKey(systemID, pf.Path)
@@ -204,7 +206,7 @@ func AddMediaPathWithPrefixPolicy(
 			DBID:           int64(mediaIndex),
 			Path:           pf.Path,
 			ParentDir:      parentDir,
-			SortName:       canonicalTitleName,
+			SortName:       displayTitleName,
 			MediaTitleDBID: int64(titleIndex),
 			SystemDBID:     int64(systemIndex),
 		})
@@ -215,6 +217,9 @@ func AddMediaPathWithPrefixPolicy(
 		ss.MediaIDs[mediaKey] = mediaIndex
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[mediaIndex] = titleIndex
+		}
+		if ss.MediaSortNames != nil {
+			ss.MediaSortNames[mediaIndex] = displayTitleName
 		}
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[mediaIndex] = parentDir
@@ -238,12 +243,17 @@ func AddMediaPathWithPrefixPolicy(
 		}
 		_, needsSortName := ss.MediaNeedsSortName[mediaIndex]
 		existingTitleIndex, titleKnown := ss.MediaTitleIDs[mediaIndex]
-		if !titleKnown || existingTitleIndex != titleIndex || needsSortName {
-			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex), canonicalTitleName); err != nil {
+		existingSortName, sortNameKnown := ss.MediaSortNames[mediaIndex]
+		sortNameChanged := ss.MediaSortNames != nil && (!sortNameKnown || existingSortName != displayTitleName)
+		if !titleKnown || existingTitleIndex != titleIndex || needsSortName || sortNameChanged {
+			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex), displayTitleName); err != nil {
 				return 0, 0, fmt.Errorf("error updating media title %s: %w", pf.Path, err)
 			}
 			if ss.MediaTitleIDs != nil {
 				ss.MediaTitleIDs[mediaIndex] = titleIndex
+			}
+			if ss.MediaSortNames != nil {
+				ss.MediaSortNames[mediaIndex] = displayTitleName
 			}
 			if ss.MediaNeedsSortName != nil {
 				delete(ss.MediaNeedsSortName, mediaIndex)
@@ -522,13 +532,14 @@ func cloneMediaTagSet(tagIDs map[int]struct{}) map[int]struct{} {
 }
 
 type MediaPathFragments struct {
-	Path       string
-	FileName   string
-	Title      string
-	Slug       string
-	SlugTokens []string
-	Ext        string
-	Tags       []string
+	Path         string
+	FileName     string
+	Title        string
+	DisplayTitle string
+	Slug         string
+	SlugTokens   []string
+	Ext          string
+	Tags         []string
 }
 
 func getTagsFromFileName(filename string, mediaType slugs.MediaType) []string {
@@ -840,6 +851,9 @@ func PopulateScanStateForSystem(
 		if ss.MediaNeedsSortName != nil && m.SortName == "" {
 			ss.MediaNeedsSortName[int(m.DBID)] = struct{}{}
 		}
+		if ss.MediaSortNames != nil {
+			ss.MediaSortNames[int(m.DBID)] = m.SortName
+		}
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
 		}
@@ -941,6 +955,9 @@ func PopulatePersistentScanStateForSystem(
 		}
 		if ss.MediaNeedsSortName != nil && m.SortName == "" {
 			ss.MediaNeedsSortName[int(m.DBID)] = struct{}{}
+		}
+		if ss.MediaSortNames != nil {
+			ss.MediaSortNames[int(m.DBID)] = m.SortName
 		}
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
@@ -1181,6 +1198,7 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 	trimmedName := strings.TrimSpace(params.ProvidedName)
 	if trimmedName != "" {
 		f.Title = trimmedName
+		f.DisplayTitle = trimmedName
 	} else {
 		prefixPolicy := params.PrefixPolicy
 		if !prefixPolicy.Enabled && params.StripLeadingNumbers {
@@ -1190,6 +1208,10 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 			fileNameForTitle = stripped
 		}
 		f.Title = tags.ParseTitleFromFilename(fileNameForTitle, false)
+		f.DisplayTitle = tags.ParseDisplayTitleFromFilename(fileNameForTitle, false)
+	}
+	if f.DisplayTitle == "" {
+		f.DisplayTitle = f.Title
 	}
 
 	// Use pre-resolved media type if provided, otherwise look up from system ID

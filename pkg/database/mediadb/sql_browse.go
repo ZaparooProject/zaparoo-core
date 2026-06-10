@@ -53,11 +53,12 @@ const (
 
 // utilityTagCache memoises resolved utility tag DBIDs per DB connection so
 // fetchAndAttachUtilityTags avoids 2 PK-lookup queries per browse page.
-// Keyed by the db pointer identity so test mocks with different addresses stay
-// isolated. Cleared by clearUtilityTagCache when utility tag DBIDs can change.
+// Keyed by the db handle itself so closed handles cannot be confused with later
+// handles that reuse the same pointer address. Cleared by clearUtilityTagCache
+// when utility tag DBIDs can change.
 var (
 	utilityTagCacheMu  syncutil.RWMutex
-	utilityTagCacheMap map[string]map[int64]database.TagInfo
+	utilityTagCacheMap map[sqlQueryable]map[int64]database.TagInfo
 )
 
 func clearUtilityTagCache() {
@@ -66,16 +67,30 @@ func clearUtilityTagCache() {
 	utilityTagCacheMap = nil
 }
 
+func clearUtilityTagCacheFor(db sqlQueryable) {
+	if db == nil {
+		return
+	}
+
+	utilityTagCacheMu.Lock()
+	defer utilityTagCacheMu.Unlock()
+	if utilityTagCacheMap == nil {
+		return
+	}
+	delete(utilityTagCacheMap, db)
+	if len(utilityTagCacheMap) == 0 {
+		utilityTagCacheMap = nil
+	}
+}
+
 // resolveUtilityTagDBIDs returns a map from DB tag DBID → TagInfo for each
-// entry in tags.UtilityTags. Results are memoised per db pointer so each
+// entry in tags.UtilityTags. Results are memoised per db handle so each
 // MediaDB instance (or test mock) has its own cache slot, and
 // clearUtilityTagCache clears all slots when utility tag DBIDs can change.
 func resolveUtilityTagDBIDs(ctx context.Context, db sqlQueryable) (map[int64]database.TagInfo, error) {
-	dbKey := fmt.Sprintf("%p", db)
-
 	utilityTagCacheMu.RLock()
 	if utilityTagCacheMap != nil {
-		if cached, ok := utilityTagCacheMap[dbKey]; ok {
+		if cached, ok := utilityTagCacheMap[db]; ok {
 			utilityTagCacheMu.RUnlock()
 			return cached, nil
 		}
@@ -109,9 +124,9 @@ func resolveUtilityTagDBIDs(ctx context.Context, db sqlQueryable) (map[int64]dat
 
 	utilityTagCacheMu.Lock()
 	if utilityTagCacheMap == nil {
-		utilityTagCacheMap = make(map[string]map[int64]database.TagInfo)
+		utilityTagCacheMap = make(map[sqlQueryable]map[int64]database.TagInfo)
 	}
-	utilityTagCacheMap[dbKey] = tagInfoByDBID
+	utilityTagCacheMap[db] = tagInfoByDBID
 	utilityTagCacheMu.Unlock()
 	return tagInfoByDBID, nil
 }
@@ -774,7 +789,7 @@ func fetchAndAttachCoverFlags(
 // intentionally excluded from browse — the grid only needs utility tags; the
 // detail pane fetches everything via media.meta.
 //
-// Utility tag DBID resolution is memoised in utilityTagCacheVal and only re-run
+// Utility tag DBID resolution is memoised in utilityTagCacheMap and only re-run
 // when clearUtilityTagCache is called after tag dictionary changes.
 //
 // Assumption: utility tags are media-level user tags — no title-level join is

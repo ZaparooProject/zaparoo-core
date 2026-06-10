@@ -148,14 +148,14 @@ func TestWALCheckpointing(t *testing.T) {
 	require.Equal(t, 4, count) // 1 initial + 3 additional
 }
 
-// TestConnectionParameters verifies the memory-safe connection parameters
+// TestConnectionParameters verifies the durable, memory-safe connection parameters.
 func TestConnectionParameters(t *testing.T) {
 	connParams := getSqliteConnParams()
 
-	// Verify key memory-safe parameters are present
-	// These settings are optimized for all platforms including low-RAM devices (e.g. MiSTer 256MB)
+	// Verify key durable and memory-safe parameters are present.
+	// MediaDB can contain user-owned metadata, so commits must survive hard power loss.
 	require.Contains(t, connParams, "_journal_mode=WAL")
-	require.Contains(t, connParams, "_synchronous=NORMAL")
+	require.Contains(t, connParams, "_synchronous=FULL")
 	require.Contains(t, connParams, "_cache_size=-8192") // 8MB cache (safe on 256MB systems)
 	require.Contains(t, connParams, "_temp_store=FILE")  // temp tables on disk for safe VACUUM
 	require.Contains(t, connParams, "_mmap_size=0")      // disabled to avoid memory pressure

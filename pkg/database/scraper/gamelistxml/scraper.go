@@ -245,6 +245,32 @@ func NewPlatformScraper() platforms.Scraper {
 	}
 }
 
+func orderedScrapeSystemIDs(indexed, requested []string) []string {
+	indexedSet := make(map[string]struct{}, len(indexed))
+	for _, id := range indexed {
+		indexedSet[id] = struct{}{}
+	}
+
+	candidateIDs := indexed
+	if len(requested) > 0 {
+		candidateIDs = requested
+	}
+
+	seen := make(map[string]struct{}, len(candidateIDs))
+	ordered := make([]string, 0, len(candidateIDs))
+	for _, id := range candidateIDs {
+		if _, ok := indexedSet[id]; !ok {
+			continue
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		ordered = append(ordered, id)
+	}
+	return ordered
+}
+
 // resolveSystemsFromPlatform builds the list of ScrapeSystem values by
 // querying the indexed systems from mdb, looking up their definitions, and
 // resolving ROM root paths via the platform launcher configuration.
@@ -260,26 +286,11 @@ func resolveSystemsFromPlatform(
 		return nil, fmt.Errorf("resolveSystemsFromPlatform: list indexed systems: %w", err)
 	}
 
-	want := make(map[string]struct{}, len(indexed))
-	if len(systemIDs) == 0 {
-		for _, id := range indexed {
-			want[id] = struct{}{}
-		}
-	} else {
-		indexedSet := make(map[string]struct{}, len(indexed))
-		for _, id := range indexed {
-			indexedSet[id] = struct{}{}
-		}
-		for _, id := range systemIDs {
-			if _, ok := indexedSet[id]; ok {
-				want[id] = struct{}{}
-			}
-		}
-	}
+	wantedIDs := orderedScrapeSystemIDs(indexed, systemIDs)
 
-	dbSystems := make(map[string]database.System, len(want))
-	sysDefs := make([]systemdefs.System, 0, len(want))
-	for sysID := range want {
+	dbSystems := make(map[string]database.System, len(wantedIDs))
+	sysDefs := make([]systemdefs.System, 0, len(wantedIDs))
+	for _, sysID := range wantedIDs {
 		sys, err := mdb.FindSystemBySystemID(sysID)
 		if err != nil {
 			return nil, fmt.Errorf("resolveSystemsFromPlatform: look up system %q: %w", sysID, err)

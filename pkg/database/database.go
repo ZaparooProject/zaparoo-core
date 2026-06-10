@@ -491,17 +491,19 @@ type ScanState struct {
 	MediaIDs           map[string]int
 	MediaTitleIDs      map[int]int      // Existing media DBID -> MediaTitleDBID for persistent reconciliation
 	MediaNeedsSortName map[int]struct{} // Media DBIDs with SortName='' needing a write on next title update
-	MediaParentDirs    map[int]string
-	MediaTagIDs        map[int]map[int]struct{}
-	TagTypeIDs         map[string]int
-	TagIDs             map[string]int
-	UserOwnedTagIDs    map[int]bool
-	MissingMedia       map[int]struct{} // DBIDs of media not yet re-found during scan
-	SystemsIndex       int
-	TitlesIndex        int
-	MediaIndex         int
-	TagTypesIndex      int
-	TagsIndex          int
+	// Existing media DBID -> per-file display/sort title for persistent reconciliation.
+	MediaSortNames  map[int]string
+	MediaParentDirs map[int]string
+	MediaTagIDs     map[int]map[int]struct{}
+	TagTypeIDs      map[string]int
+	TagIDs          map[string]int
+	UserOwnedTagIDs map[int]bool
+	MissingMedia    map[int]struct{} // DBIDs of media not yet re-found during scan
+	SystemsIndex    int
+	TitlesIndex     int
+	MediaIndex      int
+	TagTypesIndex   int
+	TagsIndex       int
 }
 
 // JournalMode represents SQLite journal mode

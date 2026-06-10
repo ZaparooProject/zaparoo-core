@@ -1245,7 +1245,7 @@ func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
 		{
 			name:         "TOSEC Final dev-status",
 			filename:     "The Fall (Final)(2018)(Disk 2 of 2).adf",
-			wantContains: []string{"unfinished:final", "year:2018", "media:disc", "disc:2", "disctotal:2"},
+			wantContains: []string{"unfinished:final", "year:2018", "media:disk", "disc:2", "disctotal:2"},
 		},
 		{
 			name:         "TOSEC Final without year",
@@ -1256,7 +1256,7 @@ func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
 			name:     "Disk N of M with Side A - publisher from TOSEC slot",
 			filename: "Alter Ego (1985)(Activision)(Disk 1 of 3 Side A)[cr].do",
 			wantContains: []string{
-				"publisher:activision", "media:disc", "disc:1", "disctotal:3", "media:side-a", "dump:cracked",
+				"publisher:activision", "media:disk", "disc:1", "disctotal:3", "media:side-a", "dump:cracked",
 			},
 		},
 		{
@@ -1918,7 +1918,139 @@ func TestParseTitleFromFilename_SceneReleases(t *testing.T) {
 	}
 }
 
-// TestExtractSpecialPatterns_MediaMetadata tests extraction of TV show, comic, and music metadata.
+func TestParseDisplayTitleFromFilename_PreservesOnlyStructuralSetMarkers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		display   string
+		canonical string
+	}{
+		{
+			name:      "disc number preserved for display only",
+			input:     "Final Fantasy VII (Disc 1).cue",
+			display:   "Final Fantasy VII (Disc 1)",
+			canonical: "Final Fantasy VII",
+		},
+		{
+			name:      "disk total preserved and region stripped",
+			input:     "Adventure (Disk 2 of 4) (USA).dsk",
+			display:   "Adventure (Disk 2 of 4)",
+			canonical: "Adventure",
+		},
+		{
+			name:      "file number preserved and dump tag stripped",
+			input:     "Magazine (File 3) [!].zip",
+			display:   "Magazine (File 3)",
+			canonical: "Magazine",
+		},
+		{
+			name:      "side marker preserved",
+			input:     "Cassette Game (Side A) (Europe).tap",
+			display:   "Cassette Game (Side A)",
+			canonical: "Cassette Game",
+		},
+		{
+			name:      "compact cd marker preserved",
+			input:     "Album (CD1) [FLAC].chd",
+			display:   "Album (CD1)",
+			canonical: "Album",
+		},
+		{
+			name:      "normal metadata stripped",
+			input:     "Super Mario Bros (USA) [!].sfc",
+			display:   "Super Mario Bros",
+			canonical: "Super Mario Bros",
+		},
+		{
+			name:      "nonnumeric structural word stripped",
+			input:     "Famicom Game (Disk Writer).fds",
+			display:   "Famicom Game",
+			canonical: "Famicom Game",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.display, ParseDisplayTitleFromFilename(tt.input, false), "display title mismatch")
+			assert.Equal(t, tt.canonical, ParseTitleFromFilename(tt.input, false), "canonical title mismatch")
+		})
+	}
+}
+
+func TestParseFilenameToCanonicalTags_StructuralSetMarkers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		filename        string
+		wantContains    []string
+		wantNotContains []string
+	}{
+		{
+			name:         "disc number",
+			filename:     "Final Fantasy VII (Disc 1).cue",
+			wantContains: []string{"media:disc", "disc:1"},
+		},
+		{
+			name:         "zero-padded disc number and total",
+			filename:     "Final Fantasy VIII (Disc 02 of 04).cue",
+			wantContains: []string{"media:disc", "disc:2", "disctotal:4"},
+		},
+		{
+			name:            "disk number with total",
+			filename:        "Adventure (Disk 2 of 4).dsk",
+			wantContains:    []string{"media:disk", "disc:2", "disctotal:4"},
+			wantNotContains: []string{"media:disc"},
+		},
+		{
+			name:         "file number",
+			filename:     "Magazine (File 3).zip",
+			wantContains: []string{"media:file", "disc:3"},
+		},
+		{
+			name:         "roman part number",
+			filename:     "Story (Part II).bin",
+			wantContains: []string{"media:part", "disc:2"},
+		},
+		{
+			name:         "side marker",
+			filename:     "Cassette Game (Side B).tap",
+			wantContains: []string{"media:side-b"},
+		},
+		{
+			name:         "compact cd marker",
+			filename:     "Album (CD1).chd",
+			wantContains: []string{"media:disc", "disc:1"},
+		},
+		{
+			name:            "nonnumeric disk phrase is not structural",
+			filename:        "Famicom Game (Disk Writer).fds",
+			wantContains:    []string{"distribution:disk-writer"},
+			wantNotContains: []string{"media:disk", "disc:writer"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+			for _, want := range tt.wantContains {
+				assert.Contains(t, gotStrings, want)
+			}
+			for _, unexpected := range tt.wantNotContains {
+				assert.NotContains(t, gotStrings, unexpected)
+			}
+		})
+	}
+}
+
 func TestExtractSpecialPatterns_MediaMetadata(t *testing.T) {
 	t.Parallel()
 

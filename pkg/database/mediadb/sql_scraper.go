@@ -2520,7 +2520,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 
 	stmt, err := db.sql.PrepareContext(ctx, `
 		SELECT
-			m.DBID, m.Path, m.ParentDir, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
+			m.DBID, m.Path, m.ParentDir, m.SortName, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
 			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
 			s.DBID, s.SystemID, s.Name
 		FROM Media m
@@ -2540,7 +2540,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 
 	var row database.MediaFullRow
 	err = stmt.QueryRowContext(ctx, mediaDBID).Scan(
-		&row.DBID, &row.Path, &row.ParentDir, &row.IsMissing,
+		&row.DBID, &row.Path, &row.ParentDir, &row.SortName, &row.IsMissing,
 		&row.MediaTitleDBID, &row.SystemDBID,
 		&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
 		&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,
@@ -2570,7 +2570,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
 	rows, err := db.sql.QueryContext(ctx, `
 		SELECT
-			m.DBID, m.Path, m.ParentDir, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
+			m.DBID, m.Path, m.ParentDir, m.SortName, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
 			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
 			s.DBID, s.SystemID, s.Name
 		FROM Media m
@@ -2590,7 +2590,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 	for rows.Next() {
 		var row database.MediaFullRow
 		if err := rows.Scan(
-			&row.DBID, &row.Path, &row.ParentDir, &row.IsMissing,
+			&row.DBID, &row.Path, &row.ParentDir, &row.SortName, &row.IsMissing,
 			&row.MediaTitleDBID, &row.SystemDBID,
 			&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
 			&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,

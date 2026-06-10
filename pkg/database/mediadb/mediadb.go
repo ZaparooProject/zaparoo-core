@@ -71,6 +71,7 @@ const (
 	IndexingStatusCompleted = "completed"
 	IndexingStatusFailed    = "failed"
 	IndexingStatusCancelled = "cancelled"
+	IndexingStatusCorrupt   = "corrupt"
 )
 
 // defaultSlugSearchLimit is the max results returned by slug-based search methods.
@@ -82,9 +83,11 @@ const maxSelectiveInvalidationSystems = 32
 
 const mediaStatsCacheWriteTimeout = 100 * time.Millisecond
 
-// getSqliteConnParams constructs the SQLite connection string.
+// getSqliteConnParams constructs the SQLite connection string. MediaDB stores
+// user-owned metadata as well as rebuildable index rows, so use synchronous=FULL
+// even in WAL mode; power loss during MiSTer indexing must not corrupt committed data.
 func getSqliteConnParams() string {
-	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
+	return "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000" +
 		"&_cache_size=-8192&_temp_store=FILE&_mmap_size=0" +
 		"&_page_size=8192&_foreign_keys=ON&_txlock=immediate"
 }
@@ -870,6 +873,7 @@ func (db *MediaDB) Close() error {
 	db.WaitForBackgroundOperations()
 
 	logSQLTraceSummary()
+	clearUtilityTagCacheFor(db.sql)
 
 	err := db.sql.Close()
 	if err != nil {

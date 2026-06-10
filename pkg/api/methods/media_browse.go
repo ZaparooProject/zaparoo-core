@@ -758,13 +758,14 @@ func buildBrowseResponse(
 			result := database.SearchResultWithCursor{
 				MediaID:       alias.Row.DBID,
 				SystemID:      alias.Row.System.SystemID,
-				Name:          alias.Row.Title.Name,
+				Name:          browseMediaDisplayName(alias.Row.Path, alias.Row.SortName, alias.Row.Title.Name),
 				Path:          alias.Row.Path,
 				Tags:          alias.Tags,
 				ZapScriptTags: alias.ZapScriptTags,
 				HasCover:      alias.HasCover,
 			}
 			mediaEntry := buildMediaEntry(&result, env, rootDirs)
+			entry.Name = mediaEntry.Name
 			entry.MediaID = mediaEntry.MediaID
 			entry.SystemID = mediaEntry.SystemID
 			entry.RelPath = mediaEntry.RelPath
@@ -817,6 +818,24 @@ func buildBrowseResponse(
 		Pagination: pagination,
 		TotalFiles: totalFiles,
 	}, nil
+}
+
+func browseMediaDisplayName(path, sortName, titleName string) string {
+	if sortName != "" {
+		return sortName
+	}
+
+	base := filepath.Base(path)
+	if base != "." && base != string(filepath.Separator) {
+		if ext := filepath.Ext(base); ext != "" {
+			base = base[:len(base)-len(ext)]
+		}
+		if base != "" {
+			return base
+		}
+	}
+
+	return titleName
 }
 
 // buildMediaEntry converts a SearchResultWithCursor into a BrowseEntry of type "media".

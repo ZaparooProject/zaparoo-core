@@ -1021,6 +1021,25 @@ func TestScrape_DBError(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestOrderedScrapeSystemIDs_DefaultPreservesIndexedOrder(t *testing.T) {
+	t.Parallel()
+
+	indexed := []string{"atari2600", "gb", "nes", "snes"}
+	got := orderedScrapeSystemIDs(indexed, nil)
+
+	assert.Equal(t, []string{"atari2600", "gb", "nes", "snes"}, got)
+}
+
+func TestOrderedScrapeSystemIDs_RequestedPreservesRequestedOrder(t *testing.T) {
+	t.Parallel()
+
+	indexed := []string{"atari2600", "gb", "nes", "snes"}
+	requested := []string{"snes", "missing", "nes", "snes", "gb"}
+	got := orderedScrapeSystemIDs(indexed, requested)
+
+	assert.Equal(t, []string{"snes", "nes", "gb"}, got)
+}
+
 // --- MapToDB ---
 
 func TestMapToDB_FullGame(t *testing.T) {
