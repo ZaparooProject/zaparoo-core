@@ -455,6 +455,26 @@ func TestLLAPISuperGrafxLauncherExists(t *testing.T) {
 		"LLAPISuperGrafx must use SystemSuperGrafx so .sgx slots are found")
 }
 
+func TestArcadeLauncherExtensions(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	var arcadeLauncher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "Arcade" {
+			arcadeLauncher = &launchers[i]
+			break
+		}
+	}
+
+	require.NotNil(t, arcadeLauncher, "Arcade launcher should exist")
+	assert.Equal(t, []string{"_Arcade"}, arcadeLauncher.Folders)
+	assert.Contains(t, arcadeLauncher.Extensions, ".mra")
+	assert.Contains(t, arcadeLauncher.Extensions, ".mgl")
+}
+
 // Regression test: N64 launcher should support .v64 extension (byte-swapped ROM format)
 func TestN64LauncherExtensions(t *testing.T) {
 	t.Parallel()
