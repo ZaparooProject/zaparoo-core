@@ -674,9 +674,10 @@ func buildBrowseResponse(
 		rootDirs = env.Platform.RootDirs(env.Config)
 	}
 
-	// Batch-resolve singleton container aliases for the whole directory page when
-	// browsing a single system. This replaces the previous per-directory query
-	// loop (~5 DB queries × N dirs) with a fixed handful of batch queries.
+	// Batch-resolve singleton container aliases for the page's candidate
+	// directories when browsing a single system. Only small dirs (recursive
+	// FileCount <= maxSingletonAliasCandidateFiles) are considered, so large
+	// trees like MiSTer's _Arcade/_alternatives are never scanned.
 	var singletonAliases map[string]database.SingletonContainerAlias
 	if len(dirs) > 0 && env.Database != nil && env.Database.MediaDB != nil {
 		// Determine which system to resolve against. Use the explicit filter if
@@ -697,15 +698,31 @@ func buildBrowseResponse(
 				systemID = dir.SystemIDs[0]
 			}
 		}
-		if systemID != "" && singletonMediaAliasesEnabled(env) {
+		var candidates []database.SingletonAliasCandidate
+		if systemID != "" {
 			prefix := path
 			if !strings.HasSuffix(prefix, "/") {
 				prefix += "/"
 			}
+			for _, dir := range dirs {
+				if !isSingletonDirectoryAliasCandidate(dir.FileCount) {
+					continue
+				}
+				if len(dir.SystemIDs) > 0 && (len(dir.SystemIDs) != 1 || dir.SystemIDs[0] != systemID) {
+					continue
+				}
+				candidates = append(candidates, database.SingletonAliasCandidate{
+					ChildDir:  prefix + dir.Name + "/",
+					FileCount: dir.FileCount,
+				})
+			}
+		}
+		if len(candidates) > 0 && singletonMediaAliasesEnabled(env) {
+			started := time.Now()
 			system, sysErr := env.Database.MediaDB.FindSystemBySystemID(systemID)
 			if sysErr == nil {
 				aliases, aliasErr := env.Database.MediaDB.ResolveSingletonContainerAliases(
-					env.Context, system.DBID, prefix,
+					env.Context, system.DBID, candidates,
 				)
 				if aliasErr == nil && len(aliases) > 0 {
 					singletonAliases = make(map[string]database.SingletonContainerAlias, len(aliases))
@@ -718,6 +735,12 @@ func buildBrowseResponse(
 			} else {
 				log.Debug().Err(sysErr).Str("system", systemID).Msg("browse singleton alias system lookup failed")
 			}
+			log.Debug().
+				Str("path", path).
+				Int("candidates", len(candidates)).
+				Int("aliases", len(singletonAliases)).
+				Dur("duration", time.Since(started)).
+				Msg("browse singleton alias resolution timing")
 		}
 	}
 
@@ -739,6 +762,7 @@ func buildBrowseResponse(
 				Path:          alias.Row.Path,
 				Tags:          alias.Tags,
 				ZapScriptTags: alias.ZapScriptTags,
+				HasCover:      alias.HasCover,
 			}
 			mediaEntry := buildMediaEntry(&result, env, rootDirs)
 			entry.MediaID = mediaEntry.MediaID
@@ -746,6 +770,7 @@ func buildBrowseResponse(
 			entry.RelPath = mediaEntry.RelPath
 			entry.ZapScript = mediaEntry.ZapScript
 			entry.Tags = mediaEntry.Tags
+			entry.HasCover = mediaEntry.HasCover
 		}
 		entries = append(entries, entry)
 	}
@@ -819,6 +844,14 @@ func buildMediaEntry(
 	}
 
 	return entry
+}
+
+// isSingletonDirectoryAliasCandidate bounds the dirs considered for singleton
+// alias resolution: real disc-folder containers hold a handful of files, and
+// the cap keeps the batch query from fetching rows for large directory trees.
+func isSingletonDirectoryAliasCandidate(fileCount int) bool {
+	const maxSingletonAliasCandidateFiles = 64
+	return fileCount > 0 && fileCount <= maxSingletonAliasCandidateFiles
 }
 
 // isPathUnderRoots checks if the given path is at or under one of the allowed root directories.

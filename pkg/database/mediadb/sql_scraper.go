@@ -2916,45 +2916,45 @@ func int64Args(values []int64) []any {
 }
 
 // ResolveSingletonContainerAliases implements MediaDBI.
-// It scans all media under parentPrefix for systemDBID in a single query, groups
-// them by immediate child directory, and returns one SingletonContainerAlias per
-// child dir that collapses to a single logical launch target. Directories with
-// nested subdirectories or ambiguous file sets are omitted. Tags and
+// It fetches the direct media rows of every candidate child directory in a
+// single ParentDir IN query and returns one SingletonContainerAlias per
+// candidate that collapses to a single logical launch target. Candidates whose
+// recursive FileCount exceeds their direct row count contain nested
+// subdirectories and are omitted, as are ambiguous file sets. Tags and
 // ZapScriptTags are populated via two batch queries plus in-memory
 // disambiguation — the same approach used by the search path.
 func (db *MediaDB) ResolveSingletonContainerAliases(
 	ctx context.Context,
 	systemDBID int64,
-	parentPrefix string,
+	dirCandidates []database.SingletonAliasCandidate,
 ) ([]database.SingletonContainerAlias, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
-	if !strings.HasSuffix(parentPrefix, "/") {
-		parentPrefix += "/"
+	if len(dirCandidates) == 0 {
+		return nil, nil //nolint:nilnil // empty result is the "no aliases" sentinel, not an error
 	}
 
-	// One query for every media row under the parent for this system.
-	upper := stringPrefixUpperBound(parentPrefix)
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if upper != "" {
-		rows, err = db.sql.QueryContext(ctx, `
-			SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
-			FROM Media
-			WHERE SystemDBID = ? AND IsMissing = 0 AND Path >= ? AND Path < ?
-			ORDER BY Path
-		`, systemDBID, parentPrefix, upper)
-	} else {
-		rows, err = db.sql.QueryContext(ctx, `
-			SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
-			FROM Media
-			WHERE SystemDBID = ? AND IsMissing = 0 AND substr(Path, 1, length(?)) = ?
-			ORDER BY Path
-		`, systemDBID, parentPrefix, parentPrefix)
+	expectedCounts := make(map[string]int, len(dirCandidates))
+	args := make([]any, 0, 1+len(dirCandidates))
+	args = append(args, systemDBID)
+	for _, c := range dirCandidates {
+		childDir := c.ChildDir
+		if !strings.HasSuffix(childDir, "/") {
+			childDir += "/"
+		}
+		expectedCounts[childDir] = c.FileCount
+		args = append(args, childDir)
 	}
+
+	// One query for the direct media rows of all candidate dirs, served by
+	// idx_media_parentdir_system.
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
+	rows, err := db.sql.QueryContext(ctx, `
+		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
+		FROM Media
+		WHERE SystemDBID = ? AND IsMissing = 0 AND ParentDir IN (`+
+		prepareVariadic("?", ",", len(dirCandidates))+`)`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("resolve singleton aliases query: %w", err)
 	}
@@ -2964,9 +2964,7 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 		}
 	}()
 
-	// Group rows by the immediate child directory under parentPrefix.
-	// childDirRows maps "parentPrefix + childName + /" → contained Media rows.
-	childDirRows := make(map[string][]database.Media)
+	childDirRows := make(map[string][]database.Media, len(dirCandidates))
 	for rows.Next() {
 		var m database.Media
 		if scanErr := rows.Scan(
@@ -2974,45 +2972,30 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 		); scanErr != nil {
 			return nil, fmt.Errorf("resolve singleton aliases scan: %w", scanErr)
 		}
-		rest := strings.TrimPrefix(m.Path, parentPrefix)
-		slash := strings.Index(rest, "/")
-		if slash < 0 {
-			// Direct file under parentPrefix, not inside a child dir — skip.
-			continue
-		}
-		childDir := parentPrefix + rest[:slash] + "/"
-		childDirRows[childDir] = append(childDirRows[childDir], m)
+		childDirRows[m.ParentDir] = append(childDirRows[m.ParentDir], m)
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return nil, fmt.Errorf("resolve singleton aliases rows: %w", rowsErr)
 	}
 
-	// For each child dir: skip if any row has a different ParentDir (nested
-	// subdirectory). Otherwise apply selectContainerLaunchMedia to pick the
-	// launch target (mirrors the logic in FindSingleContainerLaunchMedia).
-	type candidate struct {
+	// For each candidate dir: skip if the recursive FileCount exceeds the
+	// direct rows (media in nested subdirectories). Otherwise apply
+	// selectContainerLaunchMedia to pick the launch target (mirrors the logic
+	// in FindSingleContainerLaunchMedia).
+	type resolved struct {
 		childDir string
 		media    database.Media
 	}
-	candidates := make([]candidate, 0, len(childDirRows))
-	for childDir, dirRows := range childDirRows {
-		hasNested := false
-		directRows := make([]database.Media, 0, len(dirRows))
-		for _, m := range dirRows {
-			if m.ParentDir != childDir {
-				hasNested = true
-				break
-			}
-			directRows = append(directRows, m)
-		}
-		if hasNested {
+	candidates := make([]resolved, 0, len(childDirRows))
+	for childDir, directRows := range childDirRows {
+		if len(directRows) != expectedCounts[childDir] {
 			continue
 		}
 		chosen := selectContainerLaunchMedia(directRows)
 		if chosen == nil {
 			continue
 		}
-		candidates = append(candidates, candidate{childDir: childDir, media: *chosen})
+		candidates = append(candidates, resolved{childDir: childDir, media: *chosen})
 	}
 	if len(candidates) == 0 {
 		return nil, nil //nolint:nilnil // empty result is the "no aliases" sentinel, not an error
@@ -3063,6 +3046,15 @@ func (db *MediaDB) ResolveSingletonContainerAliases(
 	computeZapScriptTags(synthetic)
 	for i := range aliases {
 		aliases[i].ZapScriptTags = synthetic[i].ZapScriptTags
+	}
+
+	// Batch cover-flag check: one indexed UNION ALL query for all alias media.
+	// Populates HasCover so aliased directory entries show art in the grid.
+	if err := fetchAndAttachCoverFlags(ctx, db.sql, synthetic); err != nil {
+		return nil, fmt.Errorf("resolve singleton aliases cover flags: %w", err)
+	}
+	for i := range aliases {
+		aliases[i].HasCover = synthetic[i].HasCover
 	}
 
 	return aliases, nil

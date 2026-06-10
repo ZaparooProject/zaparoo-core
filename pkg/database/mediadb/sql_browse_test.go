@@ -764,3 +764,86 @@ func TestFetchAndAttachCoverFlags_Integration_TitleLevelProperty(t *testing.T) {
 	assert.True(t, results[0].HasCover, "media whose title has an image property should have HasCover=true")
 	assert.True(t, results[1].HasCover, "media whose title has an image property should have HasCover=true")
 }
+
+// TestFetchAndDisambiguateSiblings_NoSiblings verifies that when all entries on
+// the page have unique names, ZapScriptTags is set to an empty slice with no
+// DB queries.
+func TestFetchAndDisambiguateSiblings_NoSiblings(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, MediaTitleID: 10, SystemID: "NES", Name: "Game A"},
+		{MediaID: 2, MediaTitleID: 11, SystemID: "NES", Name: "Game B"},
+		{MediaID: 3, MediaTitleID: 12, SystemID: "NES", Name: "Game C"},
+	}
+
+	// No DB queries should be issued — grouping is pure in-memory.
+	err = fetchAndDisambiguateSiblings(context.Background(), db, results)
+	require.NoError(t, err)
+	for i, r := range results {
+		assert.Equal(t, []database.TagInfo{}, r.ZapScriptTags, "entry %d should have empty ZapScriptTags", i)
+	}
+	assert.NoError(t, mock.ExpectationsWereMet(), "no DB queries expected")
+}
+
+// TestFetchAndDisambiguateSiblings_EmptyResults verifies the empty-input guard.
+func TestFetchAndDisambiguateSiblings_EmptyResults(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	err = fetchAndDisambiguateSiblings(context.Background(), db, nil)
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestBrowseFiles_SortNameFallback_Integration verifies that a media row with
+// SortName=” (pre-migration) gets its display name derived from the file path
+// rather than emitting an empty Name field.
+func TestBrowseFiles_SortNameFallback_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sys, err := mediaDB.FindOrInsertSystem(database.System{SystemID: "NES", Name: "NES"})
+	require.NoError(t, err)
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.BeginTransaction(false))
+	title, err := mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: sys.DBID,
+		Slug:       slugs.Slugify(nesSystem.GetMediaType(), "Expected Name"),
+		Name:       "Expected Name",
+	})
+	require.NoError(t, err)
+
+	parentDir := "/roms/nes/"
+	media, err := mediaDB.InsertMedia(database.Media{
+		SystemDBID:     sys.DBID,
+		MediaTitleDBID: title.DBID,
+		Path:           "/roms/nes/mygame.nes",
+		ParentDir:      parentDir,
+		SortName:       "", // intentionally empty — simulates a pre-migration row
+	})
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// Blank out SortName directly so the scan loop hits the fallback path.
+	_, err = mediaDB.sql.ExecContext(ctx, `UPDATE Media SET SortName = '' WHERE DBID = ?`, media.DBID)
+	require.NoError(t, err)
+
+	results, err := mediaDB.BrowseFiles(ctx, &database.BrowseFilesOptions{
+		PathPrefix: parentDir,
+		Limit:      10,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "mygame", results[0].Name,
+		"SortName='' should fall back to filename-without-extension")
+}

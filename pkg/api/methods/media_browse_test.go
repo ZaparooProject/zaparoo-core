@@ -461,7 +461,8 @@ func TestBuildBrowseResponse_SingletonAnnotation_WhenZipsAsDirsEnabled(t *testin
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
 	mockMediaDB.On("FindSystemBySystemID", "NES").Return(nesSystem, nil).Once()
-	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, nesSystem.DBID, path+"/").
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, nesSystem.DBID,
+		[]database.SingletonAliasCandidate{{ChildDir: dirPath + "/", FileCount: 1}}).
 		Return(alias, nil).Once()
 
 	env := &requests.RequestEnv{
@@ -516,7 +517,8 @@ func TestBuildBrowseResponse_SingletonAnnotation_InferredFromDirSystemIDs(t *tes
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
 	mockMediaDB.On("FindSystemBySystemID", "NES").Return(nesSystem, nil).Once()
-	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, nesSystem.DBID, path+"/").
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, nesSystem.DBID,
+		[]database.SingletonAliasCandidate{{ChildDir: dirPath + "/", FileCount: 1}}).
 		Return(alias, nil).Once()
 
 	env := &requests.RequestEnv{
@@ -600,7 +602,8 @@ func TestBuildBrowseResponse_AnnotatesLogicalBinCueDirectory(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
 	mockMediaDB.On("FindSystemBySystemID", "PSX").Return(psxSystem, nil).Once()
-	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, psxSystem.DBID, path+"/").
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, psxSystem.DBID,
+		[]database.SingletonAliasCandidate{{ChildDir: dirPath + "/", FileCount: 2}}).
 		Return(alias, nil).Once()
 
 	env := &requests.RequestEnv{
@@ -636,7 +639,8 @@ func TestBuildBrowseResponse_NestedOnlyDirectoryRemainsPlain(t *testing.T) {
 	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
 	// ResolveSingletonContainerAliases returns nil — no alias for the nested dir.
 	mockMediaDB.On("FindSystemBySystemID", "NES").Return(nesSystem, nil).Once()
-	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, nesSystem.DBID, path+"/").
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, nesSystem.DBID,
+		[]database.SingletonAliasCandidate{{ChildDir: path + "/Collection/", FileCount: 1}}).
 		Return([]database.SingletonContainerAlias(nil), nil).Once()
 
 	env := &requests.RequestEnv{
@@ -657,6 +661,160 @@ func TestBuildBrowseResponse_NestedOnlyDirectoryRemainsPlain(t *testing.T) {
 	assert.Nil(t, entry.ZapScript)
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
+}
+
+func TestBuildBrowseResponse_SingletonAnnotation_OversizedDirSkipsLookup(t *testing.T) {
+	t.Parallel()
+
+	// A directory above the candidate file cap (e.g. MiSTer's
+	// _Arcade/_alternatives tree) must not trigger any alias resolution —
+	// no Settings, system lookup, or resolver calls at all.
+	systems := []systemdefs.System{{ID: "Arcade"}}
+	path := filepath.ToSlash(filepath.Join("media", "fat", "_Arcade"))
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{{Name: "_alternatives", FileCount: 5000, SystemIDs: []string{"Arcade"}}},
+		nil, defaultMaxResults, 0, "", systems)
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	entry := browseResults.Entries[0]
+	assert.Zero(t, entry.MediaID)
+	assert.Nil(t, entry.ZapScript)
+	mockMediaDB.AssertNotCalled(t, "FindSystemBySystemID", mock.Anything)
+	mockMediaDB.AssertNotCalled(t, "ResolveSingletonContainerAliases", mock.Anything)
+	mockPlatform.AssertNotCalled(t, "Settings")
+}
+
+func TestBuildBrowseResponse_SingletonAnnotation_OversizedDirExcludedFromCandidates(t *testing.T) {
+	t.Parallel()
+
+	// When the page mixes small candidate dirs with an oversized one, only
+	// the small dirs are passed to the resolver.
+	nesSystem := database.System{DBID: 1, SystemID: "NES"}
+	systems := []systemdefs.System{{ID: "NES"}}
+	path := filepath.ToSlash(filepath.Join("roms", "NES"))
+	dirPath := filepath.ToSlash(filepath.Join(path, "Game"))
+	row := database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join(dirPath, "Game.nes")),
+			ParentDir: dirPath + "/",
+		},
+		Title:  database.MediaTitle{DBID: 30, Name: "Game"},
+		System: nesSystem,
+	}
+	alias := []database.SingletonContainerAlias{{
+		ChildDir:      dirPath + "/",
+		Row:           row,
+		Tags:          []database.TagInfo{},
+		ZapScriptTags: []database.TagInfo{},
+	}}
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+	mockMediaDB.On("FindSystemBySystemID", "NES").Return(nesSystem, nil).Once()
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, nesSystem.DBID,
+		[]database.SingletonAliasCandidate{{ChildDir: dirPath + "/", FileCount: 1}}).
+		Return(alias, nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{
+			{Name: "Game", FileCount: 1, SystemIDs: []string{"NES"}},
+			{Name: "Collection", FileCount: 500, SystemIDs: []string{"NES"}},
+		},
+		nil, defaultMaxResults, 0, "", systems)
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 2)
+	assert.Equal(t, row.DBID, browseResults.Entries[0].MediaID)
+	assert.Zero(t, browseResults.Entries[1].MediaID)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestBuildBrowseResponse_SingletonAnnotation_HasCoverPropagated(t *testing.T) {
+	t.Parallel()
+
+	nesSystem := database.System{DBID: 1, SystemID: "NES"}
+	systems := []systemdefs.System{{ID: "NES"}}
+	path := filepath.ToSlash(filepath.Join("roms", "NES"))
+	dirName := "Game.zip"
+	dirPath := filepath.ToSlash(filepath.Join(path, dirName))
+	row := database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join(dirPath, "Game.nes")),
+			ParentDir: dirPath + "/",
+		},
+		Title:  database.MediaTitle{DBID: 30, Name: "Game"},
+		System: nesSystem,
+	}
+
+	tests := []struct {
+		name          string
+		aliasHasCover bool
+	}{
+		{name: "HasCover true propagates", aliasHasCover: true},
+		{name: "HasCover false propagates", aliasHasCover: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			alias := []database.SingletonContainerAlias{{
+				ChildDir:      dirPath + "/",
+				Row:           row,
+				Tags:          []database.TagInfo{},
+				ZapScriptTags: []database.TagInfo{},
+				HasCover:      tt.aliasHasCover,
+			}}
+
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+			mockMediaDB.On("FindSystemBySystemID", "NES").Return(nesSystem, nil).Once()
+			mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, nesSystem.DBID,
+				[]database.SingletonAliasCandidate{{ChildDir: dirPath + "/", FileCount: 1}}).
+				Return(alias, nil).Once()
+
+			env := &requests.RequestEnv{
+				Context:  context.Background(),
+				Database: &database.Database{MediaDB: mockMediaDB},
+				Platform: mockPlatform,
+			}
+			result, err := buildBrowseResponse(env, path,
+				[]database.BrowseDirectoryResult{{Name: dirName, FileCount: 1, SystemIDs: []string{"NES"}}},
+				nil, defaultMaxResults, 0, "", systems)
+			require.NoError(t, err)
+			browseResults, ok := result.(models.BrowseResults)
+			require.True(t, ok)
+			require.Len(t, browseResults.Entries, 1)
+			entry := browseResults.Entries[0]
+			assert.Equal(t, "directory", entry.Type)
+			assert.Equal(t, row.DBID, entry.MediaID)
+			assert.Equal(t, tt.aliasHasCover, entry.HasCover)
+			mockMediaDB.AssertExpectations(t)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
 }
 
 func TestDedupeSystemRootEntries(t *testing.T) {

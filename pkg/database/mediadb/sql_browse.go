@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -48,6 +50,71 @@ const (
 	browseSortDatePrefixAsc  = "date-prefix-asc"
 	browseSortDatePrefixDesc = "date-prefix-desc"
 )
+
+// utilityTagCache memoises resolved utility tag DBIDs per DB connection so
+// fetchAndAttachUtilityTags avoids 2 PK-lookup queries per browse page.
+// Keyed by the db pointer identity so test mocks with different addresses stay
+// isolated. Cleared entirely by clearUtilityTagCache via invalidateCaches.
+var (
+	utilityTagCacheMu  syncutil.RWMutex
+	utilityTagCacheMap map[string]map[int64]database.TagInfo
+)
+
+func clearUtilityTagCache() {
+	utilityTagCacheMu.Lock()
+	defer utilityTagCacheMu.Unlock()
+	utilityTagCacheMap = nil
+}
+
+// resolveUtilityTagDBIDs returns a map from DB tag DBID → TagInfo for each
+// entry in tags.UtilityTags. Results are memoised per db pointer so each
+// MediaDB instance (or test mock) has its own cache slot, and
+// clearUtilityTagCache (called from invalidateCaches) clears all slots.
+func resolveUtilityTagDBIDs(ctx context.Context, db sqlQueryable) (map[int64]database.TagInfo, error) {
+	dbKey := fmt.Sprintf("%p", db)
+
+	utilityTagCacheMu.RLock()
+	if utilityTagCacheMap != nil {
+		if cached, ok := utilityTagCacheMap[dbKey]; ok {
+			utilityTagCacheMu.RUnlock()
+			return cached, nil
+		}
+	}
+	utilityTagCacheMu.RUnlock()
+
+	tagInfoByDBID := make(map[int64]database.TagInfo, len(tags.UtilityTags))
+	for _, ct := range tags.UtilityTags {
+		tagTypeRow, err := sqlFindTagType(ctx, db, database.TagType{Type: string(ct.Type)})
+		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return nil, fmt.Errorf("browse utility tags: look up tag type %q: %w", ct.Type, err)
+			}
+			continue
+		}
+		tagRow, err := sqlFindTag(ctx, db, database.Tag{
+			TypeDBID: tagTypeRow.DBID,
+			Tag:      string(ct.Value),
+		})
+		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return nil, fmt.Errorf("browse utility tags: look up tag %q: %w", ct.Value, err)
+			}
+			continue
+		}
+		tagInfoByDBID[tagRow.DBID] = database.TagInfo{
+			Tag:  string(ct.Value),
+			Type: string(ct.Type),
+		}
+	}
+
+	utilityTagCacheMu.Lock()
+	if utilityTagCacheMap == nil {
+		utilityTagCacheMap = make(map[string]map[int64]database.TagInfo)
+	}
+	utilityTagCacheMap[dbKey] = tagInfoByDBID
+	utilityTagCacheMu.Unlock()
+	return tagInfoByDBID, nil
+}
 
 func browseSystemFilterClause(column string, systems []systemdefs.System) (clause string, args []any) {
 	if len(systems) == 0 {
@@ -520,6 +587,15 @@ func sqlBrowseFilesFromMedia(
 		); scanErr != nil {
 			return nil, fmt.Errorf("browse files scan: %w", scanErr)
 		}
+		// SortName is '' on rows that pre-date the migration; derive a display
+		// name from the filename so the grid is never empty until reindex.
+		if r.Name == "" {
+			base := filepath.Base(r.Path)
+			if ext := filepath.Ext(base); ext != "" {
+				base = base[:len(base)-len(ext)]
+			}
+			r.Name = base
+		}
 		r.SortMode = sortMode
 		results = append(results, r)
 	}
@@ -538,6 +614,13 @@ func sqlBrowseFilesFromMedia(
 		return nil, fmt.Errorf("browse files cover flags: %w", err)
 	}
 
+	// Disambiguate sibling variants: same SystemID+Name within the page get
+	// ZapScriptTags populated so the tag-write path can produce unambiguous
+	// ZapScript strings. Zero extra queries when there are no siblings (typical).
+	if err := fetchAndDisambiguateSiblings(ctx, db, results); err != nil {
+		return nil, fmt.Errorf("browse files sibling disambiguation: %w", err)
+	}
+
 	log.Debug().
 		Str("pathPrefix", opts.PathPrefix).
 		Strs("systems", browseSystemIDsForLog(opts.Systems)).
@@ -548,12 +631,71 @@ func sqlBrowseFilesFromMedia(
 	return results, nil
 }
 
+// fetchAndDisambiguateSiblings populates ZapScriptTags on results that share
+// the same SystemID+Name (disc variants, regional editions, etc.) so the
+// tag-write path can build an unambiguous ZapScript string. For pages with no
+// sibling groups — the common case — the function returns immediately after the
+// grouping check with no DB queries. When siblings are present, a single batch
+// tag fetch is issued only for the affected media IDs.
+func fetchAndDisambiguateSiblings(
+	ctx context.Context,
+	db sqlQueryable,
+	results []database.SearchResultWithCursor,
+) error {
+	if len(results) == 0 {
+		return nil
+	}
+
+	nameGroups := make(map[string][]int, len(results))
+	for i := range results {
+		key := results[i].SystemID + "\x00" + results[i].Name
+		nameGroups[key] = append(nameGroups[key], i)
+	}
+
+	var siblingIndices []int
+	for _, indices := range nameGroups {
+		if len(indices) >= 2 {
+			siblingIndices = append(siblingIndices, indices...)
+		}
+	}
+
+	if len(siblingIndices) == 0 {
+		for i := range results {
+			results[i].ZapScriptTags = []database.TagInfo{}
+		}
+		return nil
+	}
+
+	// Fetch full tags only for the sibling results (single batch query).
+	siblingResults := make([]database.SearchResultWithCursor, len(siblingIndices))
+	for i, idx := range siblingIndices {
+		siblingResults[i] = results[idx]
+	}
+	if err := fetchAndAttachTagsByResultIDs(ctx, db, siblingResults); err != nil {
+		return fmt.Errorf("sibling tag fetch: %w", err)
+	}
+	computeZapScriptTags(siblingResults)
+
+	// Write ZapScriptTags back; non-sibling entries get an empty slice.
+	siblingTagMap := make(map[int64][]database.TagInfo, len(siblingIndices))
+	for i, idx := range siblingIndices {
+		siblingTagMap[results[idx].MediaID] = siblingResults[i].ZapScriptTags
+	}
+	for i := range results {
+		if zapTags, ok := siblingTagMap[results[i].MediaID]; ok {
+			results[i].ZapScriptTags = zapTags
+		} else {
+			results[i].ZapScriptTags = []database.TagInfo{}
+		}
+	}
+	return nil
+}
+
 // fetchAndAttachCoverFlags sets HasCover on each result based on whether the
 // media or its title has at least one image property row. A single UNION ALL
 // query covers both MediaProperties (media-level) and MediaTitleProperties
 // (title-level), both of which are indexed by their respective IDs. Results
-// with no image property get HasCover=false; the browse response omits that
-// field so that older clients (without this field) continue to request covers.
+// with no image property get HasCover=false.
 func fetchAndAttachCoverFlags(
 	ctx context.Context,
 	db sqlQueryable,
@@ -632,6 +774,9 @@ func fetchAndAttachCoverFlags(
 // intentionally excluded from browse — the grid only needs utility tags; the
 // detail pane fetches everything via media.meta.
 //
+// Utility tag DBID resolution is memoised in utilityTagCacheVal and only re-run
+// when clearUtilityTagCache is called (via invalidateCaches on any tag write).
+//
 // Assumption: utility tags are media-level user tags — no title-level join is
 // needed. Add a title-level leg here if a future utility tag lives at the title
 // level.
@@ -644,30 +789,9 @@ func fetchAndAttachUtilityTags(
 		return nil
 	}
 
-	// Resolve each utility tag entry to its database DBID.
-	tagInfoByDBID := make(map[int64]database.TagInfo, len(tags.UtilityTags))
-	for _, ct := range tags.UtilityTags {
-		tagTypeRow, err := sqlFindTagType(ctx, db, database.TagType{Type: string(ct.Type)})
-		if err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("browse utility tags: look up tag type %q: %w", ct.Type, err)
-			}
-			continue
-		}
-		tagRow, err := sqlFindTag(ctx, db, database.Tag{
-			TypeDBID: tagTypeRow.DBID,
-			Tag:      string(ct.Value),
-		})
-		if err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("browse utility tags: look up tag %q: %w", ct.Value, err)
-			}
-			continue
-		}
-		tagInfoByDBID[tagRow.DBID] = database.TagInfo{
-			Tag:  string(ct.Value),
-			Type: string(ct.Type),
-		}
+	tagInfoByDBID, err := resolveUtilityTagDBIDs(ctx, db)
+	if err != nil {
+		return err
 	}
 	if len(tagInfoByDBID) == 0 {
 		// None of the utility tags exist in the DB yet — nothing to attach.

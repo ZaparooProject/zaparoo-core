@@ -149,6 +149,7 @@ type invalidationScope struct {
 // invalidateCaches handles all cache invalidation in one place
 func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	db.inMemoryTagCache.Store(nil)
+	clearUtilityTagCache()
 	switch {
 	case scope.AllSystems:
 		if !scope.PreserveSlugSearchCache {

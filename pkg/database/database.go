@@ -273,6 +273,18 @@ type SingletonContainerAlias struct {
 	Tags          []TagInfo
 	ZapScriptTags []TagInfo
 	Row           MediaFullRow
+	HasCover      bool
+}
+
+// SingletonAliasCandidate identifies a child directory to consider for
+// singleton-container alias resolution. ChildDir must end with a trailing
+// slash. FileCount is the recursive per-system media count for the directory
+// (from the browse cache) — when it exceeds the number of direct media rows,
+// the directory contains nested subdirectories and is not a singleton
+// container.
+type SingletonAliasCandidate struct {
+	ChildDir  string
+	FileCount int
 }
 
 // BrowseDirectoriesOptions contains parameters for the BrowseDirectories query.
@@ -748,14 +760,15 @@ type MediaDBI interface {
 	// direct contents of containerPath for systemDBID, or nil, nil when the
 	// container is empty, nested-only, or ambiguous.
 	FindSingleContainerLaunchMedia(ctx context.Context, systemDBID int64, containerPath string) (*Media, error)
-	// ResolveSingletonContainerAliases resolves all child directories under
-	// parentPrefix for systemDBID in a single scan, returning one
-	// SingletonContainerAlias per child dir that collapses to a single launch
-	// target. Directories with nested subdirs or ambiguous contents are omitted.
+	// ResolveSingletonContainerAliases resolves the given candidate child
+	// directories for systemDBID in a single batch query, returning one
+	// SingletonContainerAlias per candidate that collapses to a single launch
+	// target. Candidates with nested subdirs (recursive FileCount exceeding
+	// their direct media rows) or ambiguous contents are omitted.
 	// ZapScriptTags are populated via in-memory disambiguation (same approach
 	// as the search path) and will be empty for unambiguous titles.
 	ResolveSingletonContainerAliases(
-		ctx context.Context, systemDBID int64, parentPrefix string,
+		ctx context.Context, systemDBID int64, candidates []SingletonAliasCandidate,
 	) ([]SingletonContainerAlias, error)
 
 	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and

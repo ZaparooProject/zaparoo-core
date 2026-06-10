@@ -79,13 +79,47 @@ var mediaThumbCachePointer atomic.Pointer[mediaThumbCache]
 //
 // Keys are SHA-256 hashes of the logical identity string; values are stored as
 // <hash>.jpg or <hash>.png to encode the content-type implicitly.
+//
+// resolvedTypes is an in-memory map from early key (identity+prefs+maxSize) to
+// resolved typeTag. It enables a pre-semaphore cache hit that skips the entire
+// image-load pipeline for warm repeat requests.
 type mediaThumbCache struct {
-	dir string
+	resolvedTypes map[string]string
+	dir           string
+	resolvedMu    syncutil.RWMutex
 }
 
 func newMediaThumbCache(pl platforms.Platform) *mediaThumbCache {
 	dir := filepath.Join(helpers.DataDir(pl), config.CacheDir, mediaThumbCacheDirName)
-	return &mediaThumbCache{dir: dir}
+	return &mediaThumbCache{dir: dir, resolvedTypes: make(map[string]string)}
+}
+
+// earlyThumbKey returns a cache key derived only from request-time parameters
+// (no typeTag needed). Used for the pre-semaphore resolved-type memo.
+func earlyThumbKey(ref mediaRefParam, prefs []string, maxSize int) string {
+	var identity string
+	if ref.MediaID != nil {
+		identity = fmt.Sprintf("id:%d", *ref.MediaID)
+	} else {
+		identity = fmt.Sprintf("path:%s:%s", ref.System, filepath.ToSlash(ref.Path))
+	}
+	return fmt.Sprintf("early:%s:[%s]:%d", identity, strings.Join(prefs, ","), maxSize)
+}
+
+// getResolvedTypeTag returns the previously resolved typeTag for this request,
+// or "" and false when not yet memoised.
+func (c *mediaThumbCache) getResolvedTypeTag(ref mediaRefParam, prefs []string, maxSize int) (string, bool) {
+	c.resolvedMu.RLock()
+	defer c.resolvedMu.RUnlock()
+	tag, ok := c.resolvedTypes[earlyThumbKey(ref, prefs, maxSize)]
+	return tag, ok
+}
+
+// setResolvedTypeTag records the resolved typeTag for future pre-semaphore hits.
+func (c *mediaThumbCache) setResolvedTypeTag(ref mediaRefParam, prefs []string, maxSize int, typeTag string) {
+	c.resolvedMu.Lock()
+	defer c.resolvedMu.Unlock()
+	c.resolvedTypes[earlyThumbKey(ref, prefs, maxSize)] = typeTag
 }
 
 // thumbKey returns the cache key string for a resize request. The key encodes
@@ -148,14 +182,18 @@ func (c *mediaThumbCache) set(ref mediaRefParam, typeTag string, maxSize int, da
 	}
 }
 
-// wipe removes the entire thumbnail cache directory. Called after a successful
-// full media reindex so stale entries do not accumulate.
+// wipe removes the entire thumbnail cache directory and clears the in-memory
+// resolved-type memo. Called after a successful full media reindex so stale
+// entries do not accumulate.
 func (c *mediaThumbCache) wipe() {
 	if err := os.RemoveAll(c.dir); err != nil {
 		log.Warn().Err(err).Str("dir", c.dir).Msg("media.image: failed to wipe thumb cache after reindex")
 	} else {
 		log.Info().Str("dir", c.dir).Msg("media.image: thumb cache wiped after reindex")
 	}
+	c.resolvedMu.Lock()
+	c.resolvedTypes = make(map[string]string)
+	c.resolvedMu.Unlock()
 }
 
 // InitMediaThumbCache creates or replaces the process-wide thumb cache for the
@@ -462,6 +500,26 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		return nil, err
 	}
 	prefs := imagePrefs(nil, ref.ImageTypes)
+
+	// Pre-semaphore fast path: if this exact request was served before and the
+	// disk thumbnail is still present, return it without ever acquiring the
+	// semaphore or loading the original full-size image from disk.
+	if ref.MaxSize != nil && *ref.MaxSize > 0 {
+		maxSize := int(*ref.MaxSize)
+		if tc := mediaThumbCachePointer.Load(); tc != nil {
+			if resolvedTag, ok := tc.getResolvedTypeTag(ref, prefs, maxSize); ok {
+				if cached, cachedCT, cacheHit := tc.get(ref, resolvedTag, maxSize); cacheHit {
+					return models.MediaImageResponse{
+						Extension:   mediaContentExtension(cachedCT, ""),
+						ContentType: cachedCT,
+						Data:        base64.StdEncoding.EncodeToString(cached),
+						TypeTag:     resolvedTag,
+					}, nil
+				}
+			}
+		}
+	}
+
 	noImageKey := mediaImageNoImageRequestKey(ref, prefs)
 	if ok, cachedErr := mediaImageNoImages.get(noImageKey); ok {
 		return nil, cachedMediaImageNoImageError(cachedErr)
@@ -501,8 +559,14 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	binary, ct := raw.binary, raw.contentType
 	if ref.MaxSize != nil && *ref.MaxSize > 0 {
 		maxSize := int(*ref.MaxSize)
+		tc := mediaThumbCachePointer.Load()
+		// Record the resolved typeTag so the pre-semaphore path can find the
+		// disk file on the next request without loading the original image.
+		if tc != nil {
+			tc.setResolvedTypeTag(ref, prefs, maxSize, raw.typeTag)
+		}
 		// Check the disk thumb cache before doing the expensive decode+resize.
-		if tc := mediaThumbCachePointer.Load(); tc != nil {
+		if tc != nil {
 			if cached, cachedCT, ok := tc.get(ref, raw.typeTag, maxSize); ok {
 				return models.MediaImageResponse{
 					Extension:   mediaContentExtension(cachedCT, raw.text),
@@ -514,7 +578,7 @@ func HandleMediaImage(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		}
 		binary, ct = resizeImageIfNeeded(binary, ct, maxSize)
 		// Write to the disk cache on a miss so future requests skip the resize.
-		if tc := mediaThumbCachePointer.Load(); tc != nil {
+		if tc != nil {
 			tc.set(ref, raw.typeTag, maxSize, binary, ct)
 		}
 	}

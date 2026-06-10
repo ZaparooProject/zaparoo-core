@@ -2095,7 +2095,9 @@ func TestResolveSingletonContainerAliases_SingleFileIsAliased(t *testing.T) {
 	`, gamePath, gameDir)
 	require.NoError(t, err)
 
-	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, parent+"/")
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, []database.SingletonAliasCandidate{
+		{ChildDir: gameDir, FileCount: 1},
+	})
 	require.NoError(t, err)
 	require.Len(t, aliases, 1)
 	assert.Equal(t, gameDir, aliases[0].ChildDir)
@@ -2125,7 +2127,9 @@ func TestResolveSingletonContainerAliases_CueBinIsAliasedToCue(t *testing.T) {
 	`, cuePath, gameDir, binPath, gameDir)
 	require.NoError(t, err)
 
-	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, parent+"/")
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, []database.SingletonAliasCandidate{
+		{ChildDir: gameDir, FileCount: 2},
+	})
 	require.NoError(t, err)
 	require.Len(t, aliases, 1)
 	assert.Equal(t, gameDir, aliases[0].ChildDir)
@@ -2148,9 +2152,12 @@ func TestResolveSingletonContainerAliases_NestedSubdirIsNotAliased(t *testing.T)
 	`,
 		filepath.ToSlash(filepath.Join(parent, "Collection", "Sub", "game.nes")), subDir)
 	require.NoError(t, err)
-	_ = collDir
 
-	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 1, parent+"/")
+	// Collection's recursive FileCount is 1 but it has no direct media rows —
+	// the count mismatch marks it as nested and it must not be aliased.
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 1, []database.SingletonAliasCandidate{
+		{ChildDir: collDir, FileCount: 1},
+	})
 	require.NoError(t, err)
 	assert.Empty(t, aliases)
 }
@@ -2178,7 +2185,9 @@ func TestResolveSingletonContainerAliases_M3UAliasedForMultiDisc(t *testing.T) {
 	`, m3uPath, gameDir, cuePath, gameDir, binPath, gameDir)
 	require.NoError(t, err)
 
-	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, parent+"/")
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, []database.SingletonAliasCandidate{
+		{ChildDir: gameDir, FileCount: 3},
+	})
 	require.NoError(t, err)
 	require.Len(t, aliases, 1)
 	assert.Equal(t, m3uPath, aliases[0].Row.Path)
@@ -2200,7 +2209,9 @@ func TestResolveSingletonContainerAliases_TagsAttachedOnAlias(t *testing.T) {
 	`, gamePath, gameDir)
 	require.NoError(t, err)
 
-	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, parent+"/")
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, []database.SingletonAliasCandidate{
+		{ChildDir: gameDir, FileCount: 1},
+	})
 	require.NoError(t, err)
 	require.Len(t, aliases, 1)
 	require.Len(t, aliases[0].Tags, 1)
@@ -2229,7 +2240,10 @@ func TestResolveSingletonContainerAliases_MultipleDirsInOneScan(t *testing.T) {
 	`, gameAPath, gameADir, gameBPath, gameBDir)
 	require.NoError(t, err)
 
-	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, parent+"/")
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, []database.SingletonAliasCandidate{
+		{ChildDir: gameADir, FileCount: 1},
+		{ChildDir: gameBDir, FileCount: 1},
+	})
 	require.NoError(t, err)
 	require.Len(t, aliases, 2)
 
@@ -2243,4 +2257,108 @@ func TestResolveSingletonContainerAliases_MultipleDirsInOneScan(t *testing.T) {
 	if b, ok := byDir[gameBDir]; assert.True(t, ok, "missing GameB alias") {
 		assert.Equal(t, gameBPath, b.Row.Path)
 	}
+
+	// A dir not passed as a candidate must not be resolved even though its
+	// media rows exist in the table.
+	aliases, err = mediaDB.ResolveSingletonContainerAliases(ctx, 2, []database.SingletonAliasCandidate{
+		{ChildDir: gameADir, FileCount: 1},
+	})
+	require.NoError(t, err)
+	require.Len(t, aliases, 1)
+	assert.Equal(t, gameADir, aliases[0].ChildDir)
+}
+
+func TestResolveSingletonContainerAliases_CountMismatchSkipsDir(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	gameDir := parent + "/Game/"
+	subDir := parent + "/Game/Extras/"
+	gamePath := filepath.ToSlash(filepath.Join(parent, "Game", "Game.chd"))
+	extraPath := filepath.ToSlash(filepath.Join(parent, "Game", "Extras", "bonus.chd"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(1, 2, 'game', 'Game'),
+			(2, 2, 'bonus', 'Bonus');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 2, ?, ?),
+			(2, 2, 2, ?, ?);
+	`, gamePath, gameDir, extraPath, subDir)
+	require.NoError(t, err)
+
+	// Game has one direct row but a recursive FileCount of 2 (the nested
+	// Extras file), so it must be skipped.
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, []database.SingletonAliasCandidate{
+		{ChildDir: gameDir, FileCount: 2},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, aliases)
+}
+
+func TestResolveSingletonContainerAliases_NoCandidatesReturnsNil(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(context.Background(), 2, nil)
+	require.NoError(t, err)
+	assert.Empty(t, aliases)
+}
+
+// TestResolveSingletonContainerAliases_HasCoverSet verifies that HasCover is
+// true when the aliased media's title has a scraped image property, and false
+// when it does not.
+func TestResolveSingletonContainerAliases_HasCoverSet(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupAliasTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Seed the minimal tag rows needed by fetchAndAttachCoverFlags.
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT OR IGNORE INTO TagTypes (DBID, Type, IsExclusive) VALUES (900, 'property', 0);
+		INSERT OR IGNORE INTO Tags    (DBID, TypeDBID, Tag)      VALUES (901, 900, 'image-boxart');
+	`)
+	require.NoError(t, err)
+
+	parent := filepath.ToSlash(filepath.Join("roms", "PSX"))
+
+	// gameWithCover — media-level image property inserted below.
+	coverDir := parent + "/WithCover/"
+	coverPath := filepath.ToSlash(filepath.Join(parent, "WithCover", "cover.chd"))
+	// gameNoCover — no property.
+	noCoverDir := parent + "/NoCover/"
+	noCoverPath := filepath.ToSlash(filepath.Join(parent, "NoCover", "nocov.chd"))
+
+	_, err = mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES
+			(1, 2, 'with-cover', 'With Cover'),
+			(2, 2, 'no-cover',   'No Cover');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES
+			(1, 1, 2, ?, ?),
+			(2, 2, 2, ?, ?);
+	`, coverPath, coverDir, noCoverPath, noCoverDir)
+	require.NoError(t, err)
+
+	// MediaProperties row for media DBID=1.
+	_, err = mediaDB.sql.ExecContext(ctx,
+		`INSERT INTO MediaProperties (MediaDBID, TypeTagDBID, Text) VALUES (1, 901, 'cover.jpg')`)
+	require.NoError(t, err)
+
+	aliases, err := mediaDB.ResolveSingletonContainerAliases(ctx, 2, []database.SingletonAliasCandidate{
+		{ChildDir: coverDir, FileCount: 1},
+		{ChildDir: noCoverDir, FileCount: 1},
+	})
+	require.NoError(t, err)
+	require.Len(t, aliases, 2)
+
+	byDir := make(map[string]database.SingletonContainerAlias, 2)
+	for _, a := range aliases {
+		byDir[a.ChildDir] = a
+	}
+	assert.True(t, byDir[coverDir].HasCover, "aliased dir with image property should have HasCover=true")
+	assert.False(t, byDir[noCoverDir].HasCover, "aliased dir without image property should have HasCover=false")
 }
