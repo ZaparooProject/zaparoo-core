@@ -491,6 +491,62 @@ func TestBuildBrowseResponse_SingletonAnnotation_WhenZipsAsDirsEnabled(t *testin
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestBuildBrowseResponse_SingletonAnnotation_UsesMediaSortName(t *testing.T) {
+	t.Parallel()
+
+	psxSystem := database.System{DBID: 1, SystemID: "PSX"}
+	systems := []systemdefs.System{{ID: "PSX"}}
+	path := filepath.ToSlash(filepath.Join("roms", "PSX"))
+	dirName := "D (USA)"
+	dirPath := filepath.ToSlash(filepath.Join(path, dirName))
+	row := database.MediaFullRow{
+		Media: database.Media{
+			DBID:      20,
+			Path:      filepath.ToSlash(filepath.Join(dirPath, "D (USA) (Disc 1).chd")),
+			ParentDir: dirPath + "/",
+			SortName:  "D (Disc 1)",
+		},
+		Title:  database.MediaTitle{DBID: 30, Name: "D"},
+		System: psxSystem,
+	}
+	alias := []database.SingletonContainerAlias{{
+		ChildDir:      dirPath + "/",
+		Row:           row,
+		Tags:          []database.TagInfo{},
+		ZapScriptTags: []database.TagInfo{},
+	}}
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true}).Once()
+	mockMediaDB.On("FindSystemBySystemID", "PSX").Return(psxSystem, nil).Once()
+	mockMediaDB.On("ResolveSingletonContainerAliases", mock.Anything, psxSystem.DBID,
+		[]database.SingletonAliasCandidate{{ChildDir: dirPath + "/", FileCount: 1}}).
+		Return(alias, nil).Once()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{{Name: dirName, FileCount: 1, SystemIDs: []string{"PSX"}}},
+		nil, defaultMaxResults, 0, "", systems)
+	require.NoError(t, err)
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 1)
+	entry := browseResults.Entries[0]
+	assert.Equal(t, "directory", entry.Type)
+	assert.Equal(t, "D (Disc 1)", entry.Name)
+	assert.Equal(t, dirPath, entry.Path)
+	assert.Equal(t, row.DBID, entry.MediaID)
+	require.NotNil(t, entry.SystemID)
+	assert.Equal(t, "PSX", *entry.SystemID)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 func TestBuildBrowseResponse_SingletonAnnotation_InferredFromDirSystemIDs(t *testing.T) {
 	t.Parallel()
 

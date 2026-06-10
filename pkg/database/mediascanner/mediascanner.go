@@ -48,7 +48,9 @@ import (
 
 // Batch configuration for transaction optimization
 const (
-	maxFilesPerTransaction = 10000
+	maxFilesPerTransaction      = 10000
+	mediaDatabaseCorruptMessage = "media database is corrupt; manual repair or rebuild required; " +
+		"original database left untouched"
 )
 
 func detectBrowsePrefixPolicy(files []platforms.ScanResult, threshold float64, minFiles int) browseprefix.Policy {
@@ -63,6 +65,17 @@ func detectBrowsePrefixPolicy(files []platforms.ScanResult, threshold float64, m
 // Kept for focused scanner tests; production code uses detectBrowsePrefixPolicy.
 func detectNumberingPattern(files []platforms.ScanResult, threshold float64, minFiles int) bool {
 	return detectBrowsePrefixPolicy(files, threshold, minFiles).Kind == browseprefix.KindRank
+}
+
+func isSQLiteDatabaseCorrupt(err error) bool {
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.Code == sqlite3.ErrCorrupt || sqliteErr.Code == sqlite3.ErrNotADB
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "database disk image is malformed") ||
+		strings.Contains(msg, "file is not a database")
 }
 
 type PathResult struct {
@@ -658,6 +671,8 @@ func NewNamesIndex(
 		if setErr := db.SetIndexingStatus(""); setErr != nil {
 			log.Error().Err(setErr).Msg("failed to clear indexing status after failed run")
 		}
+	case mediadb.IndexingStatusCorrupt:
+		return 0, errors.New(mediaDatabaseCorruptMessage)
 	}
 
 	// Build launcher metadata once so runnable-system filtering and scanner
@@ -763,10 +778,23 @@ func NewNamesIndex(
 	}
 	log.Info().Msgf("starting indexing for requested systems: %v (runnable: %v)", requestedSystemIDs, currentSystemIDs)
 
-	// Populate scan state from existing DB (max IDs, system map, tag maps)
+	// Populate scan state from existing DB (max IDs, system map, tag maps).
+	// TODO: Design a salvage-safe update-index path that does not require a
+	// full existing Tags scan before any rebuild can start. A corrupt Tags table
+	// currently blocks all update-index attempts, even when the caller would be
+	// willing to regenerate scanner-owned data.
 	if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, []string{}); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return handleCancellation(ctx, db, "Media indexing cancelled during scan state population")
+		}
+		if isSQLiteDatabaseCorrupt(err) {
+			if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
+				log.Error().Err(setErr).Msg("failed to mark media database as corrupt")
+			}
+			if setErr := db.SetLastIndexedSystem(""); setErr != nil {
+				log.Error().Err(setErr).Msg("failed to clear last indexed system after corrupt database detection")
+			}
+			return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, err)
 		}
 		return 0, fmt.Errorf("failed to populate scan state: %w", err)
 	}
