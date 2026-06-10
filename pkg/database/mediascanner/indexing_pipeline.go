@@ -193,11 +193,6 @@ func AddMediaPathWithPrefixPolicy(
 		}
 	} else {
 		titleIndex = foundTitleIndex
-		if ss.TitleNames != nil {
-			if existingName, ok := ss.TitleNames[titleIndex]; ok && existingName != "" {
-				canonicalTitleName = existingName
-			}
-		}
 	}
 
 	mediaKey := database.MediaKey(systemID, pf.Path)

@@ -251,14 +251,14 @@ func orderedScrapeSystemIDs(indexed, requested []string) []string {
 		indexedSet[id] = struct{}{}
 	}
 
-	ids := indexed
+	candidateIDs := indexed
 	if len(requested) > 0 {
-		ids = requested
+		candidateIDs = requested
 	}
 
-	seen := make(map[string]struct{}, len(ids))
-	ordered := make([]string, 0, len(ids))
-	for _, id := range ids {
+	seen := make(map[string]struct{}, len(candidateIDs))
+	ordered := make([]string, 0, len(candidateIDs))
+	for _, id := range candidateIDs {
 		if _, ok := indexedSet[id]; !ok {
 			continue
 		}

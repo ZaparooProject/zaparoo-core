@@ -1580,16 +1580,16 @@ func stripMetadataBracketsForDisplay(s string) string {
 
 	for i := 0; i < len(s); i++ {
 		open := s[i]
-		var close byte
+		var closeBracket byte
 		switch open {
 		case '(':
-			close = ')'
+			closeBracket = ')'
 		case '[':
-			close = ']'
+			closeBracket = ']'
 		case '{':
-			close = '}'
+			closeBracket = '}'
 		case '<':
-			close = '>'
+			closeBracket = '>'
 		default:
 			_ = result.WriteByte(open)
 			continue
@@ -1601,14 +1601,13 @@ func stripMetadataBracketsForDisplay(s string) string {
 			switch s[i] {
 			case open:
 				depth++
-			case close:
+			case closeBracket:
 				depth--
 				if depth == 0 {
 					content := s[start+1 : i]
 					if _, ok := parseStructuralSetTag(cachedNormalizeTag(content), TagSourceBracketed); ok {
 						_, _ = result.WriteString(s[start : i+1])
 					}
-					break
 				}
 			}
 			if depth == 0 {
@@ -1648,17 +1647,17 @@ func stripMetadataBracketsForDisplay(s string) string {
 // code duplication. However, it only applies transformations appropriate for display
 // titles (no Roman numeral conversion, edition stripping, etc.).
 func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
-	return parseTitleFromFilename(filename, stripLeadingNumbers, false)
+	return parseFilenameTitle(filename, stripLeadingNumbers, false)
 }
 
 // ParseDisplayTitleFromFilename extracts a per-file display title while preserving
 // structural set markers such as "(Disc 1)", "(Disk 2 of 4)", and "(File 3)".
 // The canonical title parser still strips those markers before slug generation.
 func ParseDisplayTitleFromFilename(filename string, stripLeadingNumbers bool) string {
-	return parseTitleFromFilename(filename, stripLeadingNumbers, true)
+	return parseFilenameTitle(filename, stripLeadingNumbers, true)
 }
 
-func parseTitleFromFilename(filename string, stripLeadingNumbers bool, preserveStructuralTags bool) string {
+func parseFilenameTitle(filename string, stripLeadingNumbers, preserveStructuralTags bool) string {
 	// Import the slugs package for shared normalization functions
 	// This eliminates code duplication while keeping display-appropriate behavior
 	title := filename
