@@ -290,15 +290,16 @@ func sqlGetMediaWithFullPathExcluding(
 	return media, rows.Err()
 }
 
-// sqlGetMediaBySystemID retrieves all media for a specific system with their associated title and system information.
+// sqlGetMediaBySystemID retrieves all media for a specific system.
 // This is used for lazy loading during resume to avoid loading ALL media upfront.
+// Single-table query on Media: this runs once per system over every media row,
+// and no caller reads TitleSlug, so the MediaTitles join would only add a
+// per-row B-tree probe. SystemID is filled from the argument.
 func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.MediaWithFullPath, error) {
 	query := `
-		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName, m.SystemDBID, t.Slug, s.SystemID
+		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName
 		FROM Media m
-		JOIN MediaTitles t ON m.MediaTitleDBID = t.DBID
-		JOIN Systems s ON t.SystemDBID = s.DBID
-		WHERE s.SystemID = ?
+		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
 		ORDER BY m.DBID
 	`
 	rows, err := db.QueryContext(ctx, query, systemID)
@@ -314,12 +315,12 @@ func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]
 	media := make([]database.MediaWithFullPath, 0)
 	for rows.Next() {
 		var m database.MediaWithFullPath
-		var systemDBID int64 // Temporary variable for the extra field
 		if err := rows.Scan(
-			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &m.SortName, &systemDBID, &m.TitleSlug, &m.SystemID,
+			&m.DBID, &m.Path, &m.ParentDir, &m.MediaTitleDBID, &m.SortName,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan media for system %s: %w", systemID, err)
 		}
+		m.SystemID = systemID
 		media = append(media, m)
 	}
 	return media, rows.Err()

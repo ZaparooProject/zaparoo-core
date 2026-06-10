@@ -813,6 +813,15 @@ func (m *MockMediaDBI) PopulateSystemTagsCache(ctx context.Context) error {
 	return nil
 }
 
+// AnalyzeApproximate mock method
+func (m *MockMediaDBI) AnalyzeApproximate() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) GetSystemTagsCached(
 	ctx context.Context,
 	systems []systemdefs.System,
@@ -2102,6 +2111,8 @@ func NewMockMediaDBI() *MockMediaDBI {
 	// Set default expectation for PopulateSystemTagsCache to return success
 	// This is called during media indexing completion and should succeed by default
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	// Planner-statistics refresh before cache builds; succeeds by default
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	// Set default expectation for InvalidateSystemTagsCache to return success
 	// This is called during media inserts and should succeed by default
 	mockMediaDB.On("InvalidateSystemTagsCache", mock.Anything, mock.Anything).Return(nil).Maybe()

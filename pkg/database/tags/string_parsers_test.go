@@ -20,6 +20,8 @@
 package tags
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -179,6 +181,11 @@ func TestFindRevPattern(t *testing.T) {
 	m = findRevPattern("Game (rev a)")
 	assert.True(t, m.ok)
 
+	input = "Game (Review Copy) (Rev B)"
+	m = findRevPattern(input)
+	assert.True(t, m.ok)
+	assert.Equal(t, "B", input[m.cap1s:m.cap1e])
+
 	assert.False(t, findRevPattern("Game (Review)").ok)
 	assert.False(t, findRevPattern("Game (RevA)").ok)
 	assert.False(t, findRevPattern("Game (Rev )").ok)
@@ -214,6 +221,7 @@ func TestFindBracketlessVersion(t *testing.T) {
 	m = findBracketlessVersion("v2 game")
 	assert.True(t, m.ok)
 
+	assert.False(t, findBracketlessVersion("game_v1.2").ok)
 	assert.False(t, findBracketlessVersion("review something").ok)
 	assert.False(t, findBracketlessVersion("game v").ok)
 	assert.False(t, findBracketlessVersion("evolve something").ok)
@@ -296,6 +304,7 @@ func TestFindUnbracketedYear(t *testing.T) {
 	assert.True(t, m.ok)
 
 	assert.False(t, findUnbracketedYear("abc2018def").ok)
+	assert.False(t, findUnbracketedYear("title_2018_cut").ok)
 	assert.False(t, findUnbracketedYear("title 1969 stuff").ok)
 	assert.False(t, findUnbracketedYear("title 1234 stuff").ok)
 	assert.False(t, findUnbracketedYear("").ok)
@@ -310,4 +319,179 @@ func TestWordBoundary(t *testing.T) {
 	assert.True(t, isWordBoundaryAfter(s, 5))
 	assert.False(t, isWordBoundaryAfter(s, 4))
 	assert.True(t, isWordBoundaryAfter(s, len(s)))
+
+	s = "hello_world"
+	assert.False(t, isWordBoundaryBefore(s, 6))
+	assert.False(t, isWordBoundaryAfter(s, 5))
+}
+
+// transOracleRegex is the regex that findBracketlessTranslation replaced,
+// kept here as a behavioral oracle.
+var transOracleRegex = regexp.MustCompile(
+	`(^|\s)(T)([+-])([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`,
+)
+
+func TestFindBracketlessTranslation_RegexEquivalence(t *testing.T) {
+	t.Parallel()
+	inputs := []string{
+		"",
+		"Final Fantasy V T+Eng",
+		"T+Eng",
+		"T-Ger",
+		"Game T-Ger v1.0",
+		"Game T+Spa v2.1.3 extra",
+		"T+Eng v1.2x",
+		"T+Engl",
+		"FTL Faster Than Light",
+		"The Legend of Zelda",
+		"T+E",
+		"AT+Eng",
+		" T+Eng.",
+		"T+eng v1.",
+		"Game T+Fra version",
+		"T-Chi v12.34.56",
+		"T+Eng v1..2",
+		"x T+Xxx T+Eng ",
+		"Mother 3 (Japan) T+Eng v1.3",
+		"T+Eng  v2",
+		"T+Eng v",
+		"T+Eng vx1",
+		"T*Eng",
+		"T+En.",
+		"T+EngT+Fra",
+		"Tales of Phantasia T-Eng.sfc",
+		"T+Por v1.0 T+Eng",
+		"\tT+Eng\t",
+		"T+ABC v007.0042",
+		"T+ab",
+		"game.T+Eng.rom",
+	}
+	for _, in := range inputs {
+		got := findBracketlessTranslation(in)
+		indices := transOracleRegex.FindStringSubmatchIndex(in)
+		if indices == nil {
+			assert.False(t, got.ok, "input %q: regex found no match but parser did", in)
+			continue
+		}
+		if !assert.True(t, got.ok, "input %q: regex matched but parser did not", in) {
+			continue
+		}
+		assert.Equal(t, indices[0], got.start, "input %q: start", in)
+		assert.Equal(t, indices[1], got.end, "input %q: end", in)
+		assert.Equal(t, in[indices[6]], got.plusMinus, "input %q: plusMinus", in)
+		assert.Equal(t, indices[8], got.langS, "input %q: langS", in)
+		assert.Equal(t, indices[9], got.langE, "input %q: langE", in)
+		assert.Equal(t, indices[10], got.verS, "input %q: verS", in)
+		assert.Equal(t, indices[11], got.verE, "input %q: verE", in)
+	}
+}
+
+// editionWordOracleRegex is the regex that findEditionWord replaced, kept here
+// as a behavioral oracle.
+var editionWordOracleRegex = regexp.MustCompile(
+	`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|バージョン|エディション|ヴァージョン)(\s*[\(\[{<]|\s*$)`,
+)
+
+func TestFindEditionWord_RegexEquivalence(t *testing.T) {
+	t.Parallel()
+	inputs := []string{
+		"",
+		"Pokemon Red Version",
+		"Pokemon Red Version (USA)",
+		"Game Edition",
+		"Special Edition (Rev 1)",
+		"Game VERSIONE (It)",
+		"versione italiana",
+		"Game Version2",
+		"Game Versions (USA)",
+		"ゲーム バージョン (Japan)",
+		"Game エディション",
+		"Game edicao",
+		"Game Editions",
+		"Game Ausgabe  [b]",
+		"Game version  ",
+		" edition",
+		"edition",
+		"Game Edizione <jp>",
+		"Game eDiTiOn {x}",
+		"Game ヴァージョン",
+		"Game versao(br)",
+		"Game version edition",
+		"Limited Edition Version (USA)",
+		"Game\tEdition",
+		"Game Editionversion",
+	}
+	for _, in := range inputs {
+		gotWord, gotOK := findEditionWord(in)
+		indices := editionWordOracleRegex.FindStringSubmatchIndex(in)
+		if indices == nil {
+			assert.False(t, gotOK, "input %q: regex found no match but parser did", in)
+			continue
+		}
+		if !assert.True(t, gotOK, "input %q: regex matched but parser did not", in) {
+			continue
+		}
+		wantWord := strings.ToLower(in[indices[2]:indices[3]])
+		assert.Equal(t, wantWord, gotWord, "input %q: word", in)
+	}
+}
+
+// FuzzFindBracketlessTranslationEquivalence cross-checks the manual parser
+// against the regex it replaced.
+func FuzzFindBracketlessTranslationEquivalence(f *testing.F) {
+	seeds := []string{
+		"Final Fantasy V T+Eng", "T+Eng v1.2x", "T+Engl", " T+Eng.",
+		"T-Chi v12.34.56", "x T+Xxx T+Eng ", "game.T+Eng.rom", "T+ABC v007.0042",
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, in string) {
+		got := findBracketlessTranslation(in)
+		indices := transOracleRegex.FindStringSubmatchIndex(in)
+		if indices == nil {
+			if got.ok {
+				t.Fatalf("input %q: regex found no match but parser matched %+v", in, got)
+			}
+			return
+		}
+		if !got.ok {
+			t.Fatalf("input %q: regex matched %v but parser did not", in, indices)
+		}
+		if got.start != indices[0] || got.end != indices[1] ||
+			got.langS != indices[8] || got.langE != indices[9] ||
+			got.verS != indices[10] || got.verE != indices[11] ||
+			got.plusMinus != in[indices[6]] {
+			t.Fatalf("input %q: parser %+v != regex %v", in, got, indices)
+		}
+	})
+}
+
+// FuzzFindEditionWordEquivalence cross-checks the manual parser against the
+// regex it replaced.
+func FuzzFindEditionWordEquivalence(f *testing.F) {
+	seeds := []string{
+		"Pokemon Red Version (USA)", "Game eDiTiOn {x}", "ゲーム バージョン (Japan)",
+		"Game versao(br)", "Game version edition", "Game Editionversion",
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, in string) {
+		gotWord, gotOK := findEditionWord(in)
+		indices := editionWordOracleRegex.FindStringSubmatchIndex(in)
+		if indices == nil {
+			if gotOK {
+				t.Fatalf("input %q: regex found no match but parser matched %q", in, gotWord)
+			}
+			return
+		}
+		if !gotOK {
+			t.Fatalf("input %q: regex matched but parser did not", in)
+		}
+		wantWord := strings.ToLower(in[indices[2]:indices[3]])
+		if gotWord != wantWord {
+			t.Fatalf("input %q: parser word %q != regex word %q", in, gotWord, wantWord)
+		}
+	})
 }

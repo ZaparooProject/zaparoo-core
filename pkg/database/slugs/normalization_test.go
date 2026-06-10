@@ -20,6 +20,8 @@
 package slugs
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -547,4 +549,146 @@ func TestPunctuationNormalizationIdempotency(t *testing.T) {
 			assert.Equal(t, first, second, "Punctuation normalization should maintain idempotency")
 		})
 	}
+}
+
+// Oracle regexes for the manual parsers that replaced them.
+var (
+	editionSuffixOracleRegex = regexp.MustCompile(
+		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|` +
+			`バージョン|エディション|ヴァージョン)$`,
+	)
+	versionSuffixOracleRegex    = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
+	ordinalSuffixOracleRegex    = regexp.MustCompile(`\b(\d+)(?:st|nd|rd|th)\b`)
+	ordinalCamelCaseOracleRegex = regexp.MustCompile(`\b(\d+(?:st|nd|rd|th))([A-Z])`)
+)
+
+func TestNormalizeOrdinals_RegexEquivalence(t *testing.T) {
+	t.Parallel()
+	inputs := []string{
+		"",
+		"Street Fighter 2nd Impact",
+		"Beatmania 2ndMix",
+		"21st Century",
+		"3rd Strike",
+		"From 1st to 3rd Place",
+		"2nd3rd",
+		"1stx",
+		"42 cards",
+		"x2nd",
+		"2ND Mix",
+		"100th",
+		"1st",
+		"2nd_",
+		"5th-Element",
+		"12thMan",
+		"The 4th of July 2003rd",
+		"3 rd",
+		"103rd Street",
+		"2nd 3rd 4th 5th",
+		"a1st",
+		"_2nd",
+		"2ndsting",
+		"日本2nd", //nolint:gosmopolitan // testing Unicode
+		"2nd日本", //nolint:gosmopolitan // testing Unicode
+	}
+	oracle := func(s string) string {
+		s = ordinalCamelCaseOracleRegex.ReplaceAllString(s, "$1 $2")
+		return ordinalSuffixOracleRegex.ReplaceAllString(s, "$1")
+	}
+	for _, in := range inputs {
+		assert.Equal(t, oracle(in), NormalizeOrdinals(in), "input %q", in)
+	}
+}
+
+func TestStripEditionAndVersionSuffixes_RegexEquivalence(t *testing.T) {
+	t.Parallel()
+	inputs := []string{
+		"",
+		"Pokemon Red Version",
+		"Game Edition",
+		"Game Special Edition",
+		"Game v1.0",
+		"Game v2.3.1",
+		"Game vII",
+		"Game vIV",
+		"Game v1234",
+		"Game v1.12345",
+		"Game V2",
+		"Game v",
+		"Game v.",
+		"Game v.2",
+		"Game vX",
+		"Game vIVX",
+		"Game vIIIII",
+		"Game vIIIIII",
+		"Gamev2",
+		"Game  EDITION",
+		"Game versione",
+		"ゲーム バージョン",
+		"Game edicao ",
+		"Game Version v1.2",
+		"Game Edition vII",
+		"Game v1.",
+		"Game v1..2",
+		"Game v0",
+		"Game v007.0042",
+		"Game viv",
+		"Game AUSGABE",
+		"Edition",
+		"v1.0",
+		" v1.0",
+		"Game\tEdition",
+		"Game Edizione",
+		"Game ヴァージョン",
+		"Game エディション",
+	}
+	oracle := func(s string) string {
+		s = editionSuffixOracleRegex.ReplaceAllString(s, "")
+		s = strings.TrimSpace(s)
+		s = versionSuffixOracleRegex.ReplaceAllString(s, "")
+		return strings.TrimSpace(s)
+	}
+	for _, in := range inputs {
+		assert.Equal(t, oracle(in), StripEditionAndVersionSuffixes(in), "input %q", in)
+	}
+}
+
+// FuzzNormalizeOrdinalsEquivalence cross-checks the manual implementation
+// against the regexes it replaced.
+func FuzzNormalizeOrdinalsEquivalence(f *testing.F) {
+	seeds := []string{
+		"Beatmania 2ndMix", "2nd3rd", "1stx", "2ND Mix", "12thMan",
+		"The 4th of July 2003rd", "日本2nd", "_2nd", //nolint:gosmopolitan // testing Unicode
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, in string) {
+		want := ordinalCamelCaseOracleRegex.ReplaceAllString(in, "$1 $2")
+		want = ordinalSuffixOracleRegex.ReplaceAllString(want, "$1")
+		if got := NormalizeOrdinals(in); got != want {
+			t.Fatalf("input %q: manual %q != regex %q", in, got, want)
+		}
+	})
+}
+
+// FuzzStripEditionAndVersionSuffixesEquivalence cross-checks the manual
+// implementation against the regexes it replaced.
+func FuzzStripEditionAndVersionSuffixesEquivalence(f *testing.F) {
+	seeds := []string{
+		"Pokemon Red Version", "Game v1.12345", "Game vIVX", "Game  EDITION",
+		"ゲーム バージョン", "Game v007.0042", "Game Edition vII", " v1.0",
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, in string) {
+		want := editionSuffixOracleRegex.ReplaceAllString(in, "")
+		want = strings.TrimSpace(want)
+		want = versionSuffixOracleRegex.ReplaceAllString(want, "")
+		want = strings.TrimSpace(want)
+		if got := StripEditionAndVersionSuffixes(in); got != want {
+			t.Fatalf("input %q: manual %q != regex %q", in, got, want)
+		}
+	})
 }

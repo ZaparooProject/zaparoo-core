@@ -161,25 +161,74 @@ func sqlGetMediaTagsBySystemID(ctx context.Context, db *sql.DB, systemID string)
 		JOIN Media m ON mt.MediaDBID = m.DBID
 		JOIN Systems s ON m.SystemDBID = s.DBID
 		WHERE s.SystemID = ?
-		ORDER BY mt.MediaDBID, mt.TagDBID
 	`
 	return sqlQueryMediaTagLinksBySystemID(ctx, db, query, systemID, systemID)
 }
 
+// sqlGetTagDBIDsByType returns the DBIDs of all tags belonging to the given tag type.
+func sqlGetTagDBIDsByType(ctx context.Context, db *sql.DB, tagType string) (map[int64]struct{}, error) {
+	query := `
+		SELECT t.DBID
+		FROM Tags t
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE tt.Type = ?
+	`
+	rows, err := db.QueryContext(ctx, query, tagType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tag DBIDs for type %s: %w", tagType, err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	ids := make(map[int64]struct{})
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan tag DBID for type %s: %w", tagType, err)
+		}
+		ids[id] = struct{}{}
+	}
+	return ids, rows.Err()
+}
+
+// sqlGetScannerMediaTagsBySystemID returns media-tag links excluding user-owned tags.
+// User tags are filtered in Go against a pre-fetched DBID set rather than joining
+// Tags/TagTypes in SQL: the link query is the hottest scanner read (it walks every
+// MediaTags row for the system), and the extra per-row B-tree probes dominated its cost.
 func sqlGetScannerMediaTagsBySystemID(
 	ctx context.Context, db *sql.DB, systemID string,
 ) ([]database.MediaTagLink, error) {
+	userTagIDs, err := sqlGetTagDBIDsByType(ctx, db, string(tags.TagTypeUser))
+	if err != nil {
+		return nil, err
+	}
+
 	query := `
 		SELECT mt.MediaDBID, mt.TagDBID
 		FROM MediaTags mt
 		JOIN Media m ON mt.MediaDBID = m.DBID
 		JOIN Systems s ON m.SystemDBID = s.DBID
-		JOIN Tags t ON mt.TagDBID = t.DBID
-		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-		WHERE s.SystemID = ? AND tt.Type != ?
-		ORDER BY mt.MediaDBID, mt.TagDBID
+		WHERE s.SystemID = ?
 	`
-	return sqlQueryMediaTagLinksBySystemID(ctx, db, query, systemID, systemID, string(tags.TagTypeUser))
+	links, err := sqlQueryMediaTagLinksBySystemID(ctx, db, query, systemID, systemID)
+	if err != nil {
+		return nil, err
+	}
+	if len(userTagIDs) == 0 {
+		return links, nil
+	}
+
+	filtered := links[:0]
+	for _, link := range links {
+		if _, isUserTag := userTagIDs[link.TagDBID]; isUserTag {
+			continue
+		}
+		filtered = append(filtered, link)
+	}
+	return filtered, nil
 }
 
 func sqlQueryMediaTagLinksBySystemID(

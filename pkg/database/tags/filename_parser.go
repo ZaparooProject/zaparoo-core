@@ -33,11 +33,7 @@ import (
 // These are compiled once at initialization for optimal performance.
 var (
 	// Special pattern extraction (complex patterns that still use regex)
-	reTrans          = regexp.MustCompile(`(^|\s)(T)([+-])([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
 	reTransBracketed = regexp.MustCompile(`^T([+-]?)([A-Za-z]{2,3})(?:.*?v(\d+(?:\.\d+)*))?`)
-	reEditionWord    = regexp.MustCompile(
-		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|バージョン|エディション|ヴァージョン)(\s*[\(\[{<]|\s*$)`,
-	)
 
 	// Scene release artifact patterns (for modern media: movies, TV shows)
 	// Note: These patterns match AFTER separator normalization, so hyphens have become spaces
@@ -702,18 +698,12 @@ func extractSpecialPatternsForMedia(
 	// Must be standalone: preceded by space (captured) OR at start, followed by space/dot/end
 	// Skipped for non-Game types when mediaType is specified (ROM-specific naming convention).
 	if mediaType == "" || mediaType == slugs.MediaTypeGame {
-		if indices := reTrans.FindStringSubmatchIndex(remaining); len(indices) >= 10 {
-			// indices[0:2] = full match
-			// indices[2:4] = prefix (^ or space)
-			// indices[4:6] = "T"
-			// indices[6:8] = +/- (required)
-			// indices[8:10] = language code
-			// indices[10:12] = version number or empty (if present)
-			plusMinus := remaining[indices[6]:indices[7]]
-			langCode := strings.ToLower(remaining[indices[8]:indices[9]])
+		if m := findBracketlessTranslation(remaining); m.ok {
+			plusMinus := string(m.plusMinus)
+			langCode := strings.ToLower(remaining[m.langS:m.langE])
 			versionNum := ""
-			if len(indices) > 11 && indices[10] != -1 {
-				versionNum = remaining[indices[10]:indices[11]]
+			if m.verS != -1 {
+				versionNum = remaining[m.verS:m.verE]
 			}
 
 			// Use shared tag building logic (inferred from plain text, not bracketed)
@@ -721,7 +711,7 @@ func extractSpecialPatternsForMedia(
 			tags = append(tags, transTags...)
 
 			// Replace the matched pattern with a space to preserve word boundaries
-			remaining = remaining[:indices[0]] + " " + remaining[indices[1]:]
+			remaining = remaining[:m.start] + " " + remaining[m.end:]
 		}
 	}
 
@@ -749,8 +739,8 @@ func extractSpecialPatternsForMedia(
 
 	// Pattern 8: Edition/Version word detection - "Version", "Edition", and multi-language equivalents
 	// Detects standalone edition words that will be stripped by slugification
-	if indices := reEditionWord.FindStringSubmatchIndex(remaining); len(indices) > 0 {
-		editionWord := strings.ToLower(remaining[indices[2]:indices[3]])
+	if word, found := findEditionWord(remaining); found {
+		editionWord := word
 
 		// Determine if this is a "version" word or "edition" word
 		// Version words: version, versione, versao, バージョン, ヴァージョン

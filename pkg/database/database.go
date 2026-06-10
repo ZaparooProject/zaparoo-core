@@ -650,6 +650,7 @@ type MediaDBI interface {
 	GetAllUsedTags(ctx context.Context) ([]TagInfo, error)
 	PopulateSystemTagsCache(ctx context.Context) error
 	PopulateSystemTagsCacheForSystems(ctx context.Context, systems []systemdefs.System) error
+	AnalyzeApproximate() error
 	RefreshSlugSearchCacheForSystems(ctx context.Context, systemIDs []string) error
 	GetSystemTagsCached(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	InvalidateSystemTagsCache(ctx context.Context, systems []systemdefs.System) error
