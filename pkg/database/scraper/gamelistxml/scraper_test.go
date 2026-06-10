@@ -2447,15 +2447,22 @@ func TestProcessCompanionEntries_ForceRewritesAlreadyScraped(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(companionXML), 0o600))
 
+	const runID = "companion-run"
 	resolvedPath := filepath.ToSlash(filepath.Join(root, "child.rom"))
+	runMarkerMatcher := mock.MatchedBy(func(w *database.ScrapeWrite) bool {
+		return w != nil && assert.Contains(t, w.MediaTags, database.TagInfo{
+			Type: string(tags.ScraperRunType("gamelist.xml")),
+			Tag:  runID,
+		})
+	})
 	mockDB := helpers.NewMockMediaDBI()
-	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20), mock.Anything).Return(nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, int64(10), int64(20), runMarkerMatcher).Return(nil)
 
 	s := &GamelistXMLScraper{db: mockDB}
 	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: 1}
 	indexes := mediaByPath(database.Media{DBID: 10, MediaTitleDBID: 20, Path: resolvedPath})
 	stats := s.processCompanionEntries(
-		context.Background(), scraper.ScrapeOptions{Force: true}, system, mockDB, indexes, nil,
+		context.Background(), scraper.ScrapeOptions{RunID: runID, Force: true}, system, mockDB, indexes, nil,
 	)
 	assertCompanionCounts(t, &stats, 1, 1, 0)
 	mockDB.AssertExpectations(t)

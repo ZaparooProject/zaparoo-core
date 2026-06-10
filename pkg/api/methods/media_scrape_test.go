@@ -1010,11 +1010,24 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 	statusInstance.clear()
 
 	mockDB := testhelpers.NewMockMediaDBI()
+	var persistedRunID string
+	mockDB.On("SetScrapingOperation", assertmock.MatchedBy(func(operation database.ScrapingOperation) bool {
+		persistedRunID = operation.RunID
+		return operation.ScraperID == "progress-scraper" && operation.Force && operation.RunID != ""
+	})).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	runIDMatcher := assertmock.MatchedBy(func(runID string) bool {
+		return runID != "" && runID == persistedRunID
+	})
+	mockDB.On("ClearScrapeRunMarkers", assertmock.Anything, "progress-scraper", runIDMatcher).
+		Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "progress-scraper").Return(3, nil)
 
 	var gotForceOption bool
+	var gotRunID string
 	progressScraper := platforms.Scraper{
 		ID:   "progress-scraper",
 		Name: "Progress Scraper",
@@ -1024,6 +1037,7 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
 		) error {
 			gotForceOption = opts.Force
+			gotRunID = opts.RunID
 			go func() {
 				defer close(ch)
 				ch <- scraper.ScrapeUpdate{
@@ -1098,6 +1112,8 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 	}
 
 	assert.True(t, gotForceOption, "force option should be passed to scraper")
+	assert.Equal(t, persistedRunID, gotRunID, "generated run ID should be passed to scraper")
+	assert.NotEmpty(t, gotRunID, "force scrape should get a resumable run ID")
 	assert.True(t, sawForce, "scrape status should expose active force scrape")
 	assert.Equal(t, 10, maxProcessed, "progress updates should reflect actual processed count")
 	assert.True(t, sawCurrentSystem, "progress updates should expose currentSystem and step fields")
