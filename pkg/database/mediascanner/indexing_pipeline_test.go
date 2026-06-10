@@ -391,10 +391,41 @@ func TestAddMediaPath_SkipsTitleAndTagWritesWhenExistingMetadataMatches(t *testi
 	assert.Equal(t, 10, titleIndex)
 	assert.Equal(t, 20, mediaIndex)
 	assert.NotContains(t, scanState.MissingMedia, 20)
-	mockDB.AssertNotCalled(t, "UpdateMediaTitle", mock.Anything, mock.Anything)
+	mockDB.AssertNotCalled(t, "UpdateMediaTitle", mock.Anything, mock.Anything, mock.Anything)
 	mockDB.AssertNotCalled(t, "DeleteMediaTag", mock.Anything, mock.Anything)
 	mockDB.AssertNotCalled(t, "DeleteMediaTags", mock.Anything)
 	mockDB.AssertNotCalled(t, "InsertMediaTag", mock.Anything)
+	mockDB.AssertExpectations(t)
+}
+
+func TestAddMediaPath_WritesSortNameWhenExistingMediaHasEmptySortName(t *testing.T) {
+	t.Parallel()
+
+	mockDB := helpers.NewMockMediaDBI()
+	path := filepath.Join("roms", "NES", "Super Mario Bros.nes")
+	pathKey := filepath.ToSlash(path)
+	scanState := &database.ScanState{
+		SystemIDs:          map[string]int{"NES": 1},
+		TitleIDs:           map[string]int{"NES:supermariobrothers": 10},
+		TitleNames:         map[int]string{10: "Super Mario Bros"},
+		MediaIDs:           map[string]int{database.MediaKey("NES", pathKey): 20},
+		MediaTitleIDs:      map[int]int{20: 10}, // same title — would not normally trigger UpdateMediaTitle
+		MediaNeedsSortName: map[int]struct{}{20: {}},
+		MediaTagIDs:        map[int]map[int]struct{}{20: {8: {}}},
+		TagTypeIDs:         map[string]int{string(tags.TagTypeExtension): 7},
+		TagIDs:             map[string]int{database.TagKey(string(tags.TagTypeExtension), "nes"): 8},
+		MissingMedia:       map[int]struct{}{20: {}},
+	}
+
+	titleIndex, mediaIndex, err := AddMediaPath(
+		mockDB, scanState, "NES", path, "", false, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 10, titleIndex)
+	assert.Equal(t, 20, mediaIndex)
+	assert.NotContains(t, scanState.MissingMedia, 20)
+	mockDB.AssertCalled(t, "UpdateMediaTitle", int64(20), int64(10), "Super Mario Bros")
+	assert.NotContains(t, scanState.MediaNeedsSortName, 20)
 	mockDB.AssertExpectations(t)
 }
 
@@ -427,7 +458,7 @@ func TestAddMediaPath_RepairsExistingMediaParentDir(t *testing.T) {
 	assert.Equal(t, 20, mediaIndex)
 	assert.Equal(t, wantParentDir, scanState.MediaParentDirs[20])
 	assert.NotContains(t, scanState.MissingMedia, 20)
-	mockDB.AssertNotCalled(t, "UpdateMediaTitle", mock.Anything, mock.Anything)
+	mockDB.AssertNotCalled(t, "UpdateMediaTitle", mock.Anything, mock.Anything, mock.Anything)
 	mockDB.AssertExpectations(t)
 }
 
@@ -1489,4 +1520,54 @@ func TestAddMediaPath_ExtensionTag_UniqueConstraintClassification(t *testing.T) 
 			"must not classify dep-flush error as a recoverable duplicate")
 		mockDB.AssertExpectations(t)
 	})
+}
+
+func TestPopulateScanStateForSystem_TracksEmptySortNameInNeedsSortNameMap(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mediaDB, cleanup := helpers.NewInMemoryMediaDB(t)
+	t.Cleanup(cleanup)
+
+	// Insert a path that gets SortName populated normally.
+	insertState := &database.ScanState{
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		MediaTitleIDs: make(map[int]int),
+		MediaTagIDs:   make(map[int]map[int]struct{}),
+		TagTypeIDs:    make(map[string]int),
+		TagIDs:        make(map[string]int),
+		MissingMedia:  make(map[int]struct{}),
+	}
+	require.NoError(t, SeedCanonicalTags(mediaDB, insertState))
+	require.NoError(t, mediaDB.BeginTransaction(true))
+	_, populatedID, err := AddMediaPath(
+		mediaDB, insertState, "NES", filepath.Join("roms", "Zelda.nes"), "", false, false, nil, slugs.MediaTypeGame,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mediaDB.CommitTransaction())
+
+	// Simulate a pre-migration row: clear SortName directly so it's empty.
+	sqlDB := mediaDB.UnsafeGetSQLDb()
+	_, err = sqlDB.ExecContext(ctx, `UPDATE Media SET SortName = '' WHERE DBID = ?`, populatedID)
+	require.NoError(t, err)
+
+	ss := &database.ScanState{
+		SystemIDs:          make(map[string]int),
+		TitleIDs:           make(map[string]int),
+		MediaIDs:           make(map[string]int),
+		MediaTitleIDs:      make(map[int]int),
+		MediaNeedsSortName: make(map[int]struct{}),
+		MediaParentDirs:    make(map[int]string),
+		MediaTagIDs:        make(map[int]map[int]struct{}),
+		TagTypeIDs:         make(map[string]int),
+		TagIDs:             make(map[string]int),
+		MissingMedia:       make(map[int]struct{}),
+	}
+
+	require.NoError(t, PopulateScanStateForSystem(ctx, mediaDB, ss, "NES"))
+
+	assert.Contains(t, ss.MediaNeedsSortName, populatedID,
+		"media with empty SortName must appear in MediaNeedsSortName")
 }

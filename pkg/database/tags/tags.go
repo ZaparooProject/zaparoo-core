@@ -136,6 +136,14 @@ const (
 	TagUserFavorite TagValue = "favorite"
 )
 
+// UtilityTags are non-metadata tags the browse grid renders directly
+// (currently the favorite star) and are therefore always attached to browse
+// results. All other (metadata) tags are excluded from browse and fetched on
+// demand via media.meta. Add an entry here when the grid renders a new tag.
+var UtilityTags = []CanonicalTag{
+	{Type: TagTypeUser, Value: TagUserFavorite},
+}
+
 // Tag Format:
 //   - Flat tags: Just the value (e.g., "trackball", "quiz")
 //   - Hierarchical tags: Colon-separated (e.g., "joystick:4", "sports:wrestling")

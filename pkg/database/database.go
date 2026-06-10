@@ -153,6 +153,7 @@ type MediaTitle struct {
 type Media struct {
 	Path           string
 	ParentDir      string
+	SortName       string // write-once copy of MediaTitles.Name; titles never update so no propagation is needed
 	DBID           int64
 	MediaTitleDBID int64
 	SystemDBID     int64
@@ -265,6 +266,27 @@ type BrowseDirectoryResult struct {
 	FileCount int
 }
 
+// SingletonContainerAlias is the resolved launch media for a child directory
+// whose contents collapse to a single logical launch target.
+type SingletonContainerAlias struct {
+	ChildDir      string
+	Tags          []TagInfo
+	ZapScriptTags []TagInfo
+	Row           MediaFullRow
+	HasCover      bool
+}
+
+// SingletonAliasCandidate identifies a child directory to consider for
+// singleton-container alias resolution. ChildDir must end with a trailing
+// slash. FileCount is the recursive per-system media count for the directory
+// (from the browse cache) — when it exceeds the number of direct media rows,
+// the directory contains nested subdirectories and is not a singleton
+// container.
+type SingletonAliasCandidate struct {
+	ChildDir  string
+	FileCount int
+}
+
 // BrowseDirectoriesOptions contains parameters for the BrowseDirectories query.
 type BrowseDirectoriesOptions struct {
 	PathPrefix string
@@ -353,6 +375,10 @@ type SearchResultWithCursor struct {
 	ZapScriptTags []TagInfo // Disambiguating tags only (tags that differ across sibling variants)
 	MediaID       int64
 	MediaTitleID  int64 `json:"-"`
+	// HasCover is true when the media or its title has at least one image
+	// property row in MediaProperties or MediaTitleProperties. Set by the
+	// browse files path; not populated by search/other paths.
+	HasCover bool
 }
 
 // ZapScriptTagTypes defines which tag types are eligible for inclusion in ZapScript
@@ -403,6 +429,7 @@ type MediaWithFullPath struct {
 	ParentDir      string
 	TitleSlug      string
 	SystemID       string
+	SortName       string
 	DBID           int64
 	MediaTitleDBID int64
 }
@@ -457,21 +484,23 @@ type SearchFilters struct {
 }
 
 type ScanState struct {
-	SystemIDs       map[string]int
-	TitleIDs        map[string]int
-	MediaIDs        map[string]int
-	MediaTitleIDs   map[int]int // Existing media DBID -> MediaTitleDBID for persistent reconciliation
-	MediaParentDirs map[int]string
-	MediaTagIDs     map[int]map[int]struct{}
-	TagTypeIDs      map[string]int
-	TagIDs          map[string]int
-	UserOwnedTagIDs map[int]bool
-	MissingMedia    map[int]struct{} // DBIDs of media not yet re-found during scan
-	SystemsIndex    int
-	TitlesIndex     int
-	MediaIndex      int
-	TagTypesIndex   int
-	TagsIndex       int
+	SystemIDs          map[string]int
+	TitleIDs           map[string]int
+	TitleNames         map[int]string
+	MediaIDs           map[string]int
+	MediaTitleIDs      map[int]int      // Existing media DBID -> MediaTitleDBID for persistent reconciliation
+	MediaNeedsSortName map[int]struct{} // Media DBIDs with SortName='' needing a write on next title update
+	MediaParentDirs    map[int]string
+	MediaTagIDs        map[int]map[int]struct{}
+	TagTypeIDs         map[string]int
+	TagIDs             map[string]int
+	UserOwnedTagIDs    map[int]bool
+	MissingMedia       map[int]struct{} // DBIDs of media not yet re-found during scan
+	SystemsIndex       int
+	TitlesIndex        int
+	MediaIndex         int
+	TagTypesIndex      int
+	TagsIndex          int
 }
 
 // JournalMode represents SQLite journal mode
@@ -658,7 +687,7 @@ type MediaDBI interface {
 	FindMedia(row Media) (Media, error)
 	InsertMedia(row Media) (Media, error)
 	FindOrInsertMedia(row Media) (Media, error)
-	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error
+	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortName string) error
 	UpdateMediaParentDir(mediaDBID int64, parentDir string) error
 	DeleteMediaTags(mediaDBID int64) error
 	DeleteMediaTag(mediaDBID, tagDBID int64) error
@@ -732,6 +761,16 @@ type MediaDBI interface {
 	// direct contents of containerPath for systemDBID, or nil, nil when the
 	// container is empty, nested-only, or ambiguous.
 	FindSingleContainerLaunchMedia(ctx context.Context, systemDBID int64, containerPath string) (*Media, error)
+	// ResolveSingletonContainerAliases resolves the given candidate child
+	// directories for systemDBID in a single batch query, returning one
+	// SingletonContainerAlias per candidate that collapses to a single launch
+	// target. Candidates with nested subdirs (recursive FileCount exceeding
+	// their direct media rows) or ambiguous contents are omitted.
+	// ZapScriptTags are populated via in-memory disambiguation (same approach
+	// as the search path) and will be empty for unambiguous titles.
+	ResolveSingletonContainerAliases(
+		ctx context.Context, systemDBID int64, candidates []SingletonAliasCandidate,
+	) ([]SingletonContainerAlias, error)
 
 	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and
 	// path using a case-insensitive path comparison, or nil, nil when no row is

@@ -236,6 +236,15 @@ func buildMediaMetaResponse(
 	if row.Title.SecondarySlug.Valid {
 		secondarySlug = &row.Title.SecondarySlug.String
 	}
+	// Guard nil slices so they marshal to [] not null. The grouped tag scanner
+	// omits DBIDs with zero tags from its map, so callers may receive nil from
+	// a map lookup when no tags exist.
+	if mediaTags == nil {
+		mediaTags = []database.TagInfo{}
+	}
+	if titleTags == nil {
+		titleTags = []database.TagInfo{}
+	}
 
 	return models.MediaMetaResponse{Media: models.MediaMetaMediaResponse{
 		Path:                row.Path,
@@ -274,7 +283,7 @@ func availableImageTypes(props []database.MediaProperty) []string {
 		}
 	}
 	if len(seen) == 0 {
-		return nil
+		return []string{}
 	}
 
 	result := make([]string, 0, len(seen))

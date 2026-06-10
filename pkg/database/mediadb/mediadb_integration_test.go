@@ -320,6 +320,7 @@ func insertSystemMedia(t *testing.T, mediaDB *MediaDB, system database.System, t
 		MediaTitleDBID: insertedTitle.DBID,
 		Path:           mediaPath,
 		ParentDir:      parentDir,
+		SortName:       titleName,
 	})
 	require.NoError(t, err)
 	require.NoError(t, mediaDB.CommitTransaction())
@@ -2896,12 +2897,14 @@ func TestMediaDB_UpdateMediaTitle_FlushesPendingTitleBatch_Integration(t *testin
 		Name:       "New Title",
 	})
 	require.NoError(t, err)
-	require.NoError(t, mediaDB.UpdateMediaTitle(insertedMedia.DBID, newTitleDBID))
+	expectedSortName := "New Title"
+	require.NoError(t, mediaDB.UpdateMediaTitle(insertedMedia.DBID, newTitleDBID, expectedSortName))
 	require.NoError(t, mediaDB.CommitTransaction())
 
 	updatedMedia, err := mediaDB.FindMedia(database.Media{DBID: insertedMedia.DBID})
 	require.NoError(t, err)
 	assert.Equal(t, newTitleDBID, updatedMedia.MediaTitleDBID)
+	assert.Equal(t, expectedSortName, updatedMedia.SortName)
 }
 
 func TestMediaDB_TemporaryParentDirRepair_RestoresDirectBrowse_Integration(t *testing.T) {
@@ -3844,6 +3847,7 @@ func TestMediaDB_BrowseFiles_UsesRankPrefixSortForNumberedCollections(t *testing
 			MediaTitleDBID: title.DBID,
 			Path:           entry.path,
 			ParentDir:      dir,
+			SortName:       entry.name,
 		})
 		require.NoError(t, insertErr)
 	}

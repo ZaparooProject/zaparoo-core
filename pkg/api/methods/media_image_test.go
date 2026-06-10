@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -87,6 +88,68 @@ func mediaImageParams(row *database.MediaFullRow, extra string) json.RawMessage 
 		extra = ", " + extra
 	}
 	return json.RawMessage(fmt.Sprintf(`{"system": %q, "path": %q%s}`, row.System.SystemID, row.Path, extra))
+}
+
+func TestMediaThumbCache_GetSetAndWipe(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	cache := &mediaThumbCache{
+		fs:            fs,
+		dir:           filepath.Join("cache", "thumbs", "current"),
+		resolvedTypes: make(map[string]string),
+	}
+	mediaID := int64(1)
+	ref := mediaRefParam{MediaID: &mediaID}
+
+	_, _, found := cache.get(ref, "property:image-boxart", 100)
+	assert.False(t, found)
+
+	cache.set(ref, "property:image-boxart", 100, []byte("png-data"), "image/png")
+	data, contentType, found := cache.get(ref, "property:image-boxart", 100)
+	require.True(t, found)
+	assert.Equal(t, []byte("png-data"), data)
+	assert.Equal(t, "image/png", contentType)
+
+	cache.wipe()
+	_, _, found = cache.get(ref, "property:image-boxart", 100)
+	assert.False(t, found)
+}
+
+func TestMediaThumbCache_SkipsUnsupportedContentType(t *testing.T) {
+	t.Parallel()
+
+	fs := afero.NewMemMapFs()
+	cache := &mediaThumbCache{
+		fs:            fs,
+		dir:           filepath.Join("cache", "thumbs", "current"),
+		resolvedTypes: make(map[string]string),
+	}
+	mediaID := int64(1)
+	ref := mediaRefParam{MediaID: &mediaID}
+
+	cache.set(ref, "property:image-boxart", 100, []byte("not an image"), "text/plain")
+	_, _, found := cache.get(ref, "property:image-boxart", 100)
+	assert.False(t, found)
+}
+
+func TestWipeMediaThumbCache_SwapsGenerationBeforeWiping(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	oldCache := &mediaThumbCache{
+		fs:            fs,
+		dir:           filepath.Join("cache", "thumbs", "current"),
+		resolvedTypes: make(map[string]string),
+	}
+	mediaThumbCachePointer.Store(oldCache)
+	t.Cleanup(func() { mediaThumbCachePointer.Store(nil) })
+
+	WipeMediaThumbCache()
+
+	newCache := mediaThumbCachePointer.Load()
+	require.NotNil(t, newCache)
+	assert.NotEqual(t, oldCache.dir, newCache.dir)
+	_, err := fs.Stat(oldCache.dir)
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestResizeImageIfNeeded_TransparentPNGPreservesAlpha(t *testing.T) {

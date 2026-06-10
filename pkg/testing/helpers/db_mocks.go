@@ -991,6 +991,8 @@ func (m *MockMediaDBI) FindOrInsertMediaTitle(row *database.MediaTitle) (databas
 }
 
 // Media CRUD methods
+//
+//nolint:gocritic // matches MediaDBI value-parameter signature
 func (m *MockMediaDBI) FindMedia(row database.Media) (database.Media, error) {
 	args := m.Called(row)
 	if media, ok := args.Get(0).(database.Media); ok {
@@ -1005,6 +1007,7 @@ func (m *MockMediaDBI) FindMedia(row database.Media) (database.Media, error) {
 	return database.Media{}, nil
 }
 
+//nolint:gocritic // matches MediaDBI value-parameter signature
 func (m *MockMediaDBI) InsertMedia(row database.Media) (database.Media, error) {
 	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(row)
@@ -1020,6 +1023,7 @@ func (m *MockMediaDBI) InsertMedia(row database.Media) (database.Media, error) {
 	return database.Media{}, nil
 }
 
+//nolint:gocritic // matches MediaDBI value-parameter signature
 func (m *MockMediaDBI) FindOrInsertMedia(row database.Media) (database.Media, error) {
 	args := m.Called(row)
 	if media, ok := args.Get(0).(database.Media); ok {
@@ -1034,9 +1038,9 @@ func (m *MockMediaDBI) FindOrInsertMedia(row database.Media) (database.Media, er
 	return database.Media{}, nil
 }
 
-func (m *MockMediaDBI) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error {
+func (m *MockMediaDBI) UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortName string) error {
 	m.trackDatabaseOperation() // Track if called outside transaction
-	args := m.Called(mediaDBID, mediaTitleDBID)
+	args := m.Called(mediaDBID, mediaTitleDBID, sortName)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
@@ -2116,7 +2120,7 @@ func NewMockMediaDBI() *MockMediaDBI {
 	mockMediaDB.On("DropSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("BulkSetMediaMissing", mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("ResetMissingFlags", mock.Anything).Return(nil).Maybe()
-	mockMediaDB.On("UpdateMediaTitle", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("UpdateMediaTitle", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("DeleteMediaTags", mock.Anything).Return(nil).Maybe()
 	return mockMediaDB
 }
@@ -2363,6 +2367,19 @@ func (m *MockMediaDBI) FindSingleContainerLaunchMedia(
 	}
 	args := m.Called(ctx, systemDBID, containerPath)
 	if result, ok := args.Get(0).(*database.Media); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) ResolveSingletonContainerAliases(
+	ctx context.Context, systemDBID int64, candidates []database.SingletonAliasCandidate,
+) ([]database.SingletonContainerAlias, error) {
+	if !m.hasExpectedCall("ResolveSingletonContainerAliases") {
+		return nil, nil //nolint:nilnil // default mock behavior for tests that do not exercise batch aliasing
+	}
+	args := m.Called(ctx, systemDBID, candidates)
+	if result, ok := args.Get(0).([]database.SingletonContainerAlias); ok {
 		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 	}
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design

@@ -113,7 +113,7 @@ func seedBenchBrowseDB(b *testing.B, mediaDB *MediaDB, rows int, withTags bool) 
 	defer func() { require.NoError(b, titleStmt.Close()) }()
 
 	mediaStmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir) VALUES (?, ?, 1, ?, ?)
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, SortName) VALUES (?, ?, 1, ?, ?, ?)
 	`)
 	require.NoError(b, err)
 	defer func() { require.NoError(b, mediaStmt.Close()) }()
@@ -133,7 +133,7 @@ func seedBenchBrowseDB(b *testing.B, mediaDB *MediaDB, rows int, withTags bool) 
 		path := filepath.ToSlash(filepath.Join(parentDir, fmt.Sprintf("browse-game-%05d.zip", i)))
 		_, err = titleStmt.ExecContext(ctx, mediaID, slug, name)
 		require.NoError(b, err)
-		_, err = mediaStmt.ExecContext(ctx, mediaID, mediaID, path, parentDir)
+		_, err = mediaStmt.ExecContext(ctx, mediaID, mediaID, path, parentDir, name)
 		require.NoError(b, err)
 		if !withTags {
 			continue

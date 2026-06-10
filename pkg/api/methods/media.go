@@ -471,6 +471,7 @@ func GenerateMediaDB(
 		}
 		log.Info().Msg("finished generating media db successfully")
 		mediaImageNoImages.clear()
+		WipeMediaThumbCache()
 		notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,

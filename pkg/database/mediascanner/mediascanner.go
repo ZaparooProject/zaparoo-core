@@ -733,20 +733,22 @@ func NewNamesIndex(
 
 	// Initialize scan state
 	scanState := database.ScanState{
-		SystemsIndex:    0,
-		SystemIDs:       make(map[string]int),
-		TitlesIndex:     0,
-		TitleIDs:        make(map[string]int),
-		MediaIndex:      0,
-		MediaIDs:        make(map[string]int),
-		MediaTitleIDs:   make(map[int]int),
-		MediaParentDirs: make(map[int]string),
-		MediaTagIDs:     make(map[int]map[int]struct{}),
-		TagTypesIndex:   0,
-		TagTypeIDs:      make(map[string]int),
-		TagsIndex:       0,
-		TagIDs:          make(map[string]int),
-		MissingMedia:    make(map[int]struct{}),
+		SystemsIndex:       0,
+		SystemIDs:          make(map[string]int),
+		TitlesIndex:        0,
+		TitleIDs:           make(map[string]int),
+		TitleNames:         make(map[int]string),
+		MediaIndex:         0,
+		MediaIDs:           make(map[string]int),
+		MediaTitleIDs:      make(map[int]int),
+		MediaNeedsSortName: make(map[int]struct{}),
+		MediaParentDirs:    make(map[int]string),
+		MediaTagIDs:        make(map[int]map[int]struct{}),
+		TagTypesIndex:      0,
+		TagTypeIDs:         make(map[string]int),
+		TagsIndex:          0,
+		TagIDs:             make(map[string]int),
+		MissingMedia:       make(map[int]struct{}),
 	}
 
 	// 3. Set up scan state — persistent mode is always active
@@ -1172,6 +1174,7 @@ func NewNamesIndex(
 	scanState.TitleIDs = nil
 	scanState.MediaIDs = nil
 	scanState.MediaTitleIDs = nil
+	scanState.MediaNeedsSortName = nil
 	scanState.MediaParentDirs = nil
 	scanState.MediaTagIDs = nil
 	scanState.TagTypeIDs = nil

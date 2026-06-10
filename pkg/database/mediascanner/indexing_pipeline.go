@@ -159,6 +159,7 @@ func AddMediaPathWithPrefixPolicy(
 	}
 
 	titleKey := database.TitleKey(systemID, pf.Slug)
+	canonicalTitleName := pf.Title
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
@@ -180,8 +181,16 @@ func AddMediaPathWithPrefixPolicy(
 			return 0, 0, fmt.Errorf("error inserting media title %s: %w", pf.Title, err)
 		}
 		ss.TitleIDs[titleKey] = titleIndex
+		if ss.TitleNames != nil {
+			ss.TitleNames[titleIndex] = canonicalTitleName
+		}
 	} else {
 		titleIndex = foundTitleIndex
+		if ss.TitleNames != nil {
+			if existingName, ok := ss.TitleNames[titleIndex]; ok && existingName != "" {
+				canonicalTitleName = existingName
+			}
+		}
 	}
 
 	mediaKey := database.MediaKey(systemID, pf.Path)
@@ -195,6 +204,7 @@ func AddMediaPathWithPrefixPolicy(
 			DBID:           int64(mediaIndex),
 			Path:           pf.Path,
 			ParentDir:      parentDir,
+			SortName:       canonicalTitleName,
 			MediaTitleDBID: int64(titleIndex),
 			SystemDBID:     int64(systemIndex),
 		})
@@ -226,12 +236,17 @@ func AddMediaPathWithPrefixPolicy(
 				ss.MediaParentDirs[mediaIndex] = parentDir
 			}
 		}
-		if existingTitleIndex, ok := ss.MediaTitleIDs[mediaIndex]; !ok || existingTitleIndex != titleIndex {
-			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex)); err != nil {
+		_, needsSortName := ss.MediaNeedsSortName[mediaIndex]
+		existingTitleIndex, titleKnown := ss.MediaTitleIDs[mediaIndex]
+		if !titleKnown || existingTitleIndex != titleIndex || needsSortName {
+			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex), canonicalTitleName); err != nil {
 				return 0, 0, fmt.Errorf("error updating media title %s: %w", pf.Path, err)
 			}
 			if ss.MediaTitleIDs != nil {
 				ss.MediaTitleIDs[mediaIndex] = titleIndex
+			}
+			if ss.MediaNeedsSortName != nil {
+				delete(ss.MediaNeedsSortName, mediaIndex)
 			}
 		}
 	}
@@ -811,6 +826,9 @@ func PopulateScanStateForSystem(
 	for _, title := range stateData.titles {
 		titleKey := database.TitleKey(title.SystemID, title.Slug)
 		ss.TitleIDs[titleKey] = int(title.DBID)
+		if ss.TitleNames != nil {
+			ss.TitleNames[int(title.DBID)] = title.Name
+		}
 	}
 
 	for _, m := range stateData.media {
@@ -818,6 +836,9 @@ func PopulateScanStateForSystem(
 		ss.MediaIDs[mediaKey] = int(m.DBID)
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
+		}
+		if ss.MediaNeedsSortName != nil && m.SortName == "" {
+			ss.MediaNeedsSortName[int(m.DBID)] = struct{}{}
 		}
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
@@ -907,6 +928,9 @@ func PopulatePersistentScanStateForSystem(
 	for _, title := range stateData.titles {
 		titleKey := database.TitleKey(title.SystemID, title.Slug)
 		ss.TitleIDs[titleKey] = int(title.DBID)
+		if ss.TitleNames != nil {
+			ss.TitleNames[int(title.DBID)] = title.Name
+		}
 	}
 
 	for _, m := range stateData.media {
@@ -914,6 +938,9 @@ func PopulatePersistentScanStateForSystem(
 		ss.MediaIDs[mediaKey] = int(m.DBID)
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
+		}
+		if ss.MediaNeedsSortName != nil && m.SortName == "" {
+			ss.MediaNeedsSortName[int(m.DBID)] = struct{}{}
 		}
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir

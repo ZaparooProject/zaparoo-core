@@ -236,9 +236,12 @@ func TestScheduler_WaitForIdle_QuietWindowResetsOnRequest(t *testing.T) {
 		// Expected — still waiting.
 	}
 
-	// Advance past the reset quiet window.
+	// Advance well past the reset quiet window. WaitForIdle may briefly
+	// observe the mid-test request in flight and park on its in-flight poll
+	// interval before the RequestEnded wake arrives, so this must cover both
+	// the quiet-window timer and that poll path.
 	require.NoError(t, fc.BlockUntilContext(ctx, 1))
-	fc.Advance(70 * time.Millisecond)
+	fc.Advance(300 * time.Millisecond)
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
