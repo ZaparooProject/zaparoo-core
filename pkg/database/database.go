@@ -243,6 +243,18 @@ type TagInfo struct {
 	Count int64  `json:"count,omitempty"`
 }
 
+type WALCheckpointMode int
+
+const (
+	WALCheckpointAuto WALCheckpointMode = iota
+	WALCheckpointSkip
+	WALCheckpointForce
+)
+
+type TransactionOptions struct {
+	WALCheckpoint WALCheckpointMode
+}
+
 // GroupTagFiltersByOperator groups tag filters by operator type for consistent processing.
 // Returns (andFilters, notFilters, orFilters) to enable both SQL generation and in-memory filtering
 // to use the same grouping logic.
@@ -570,6 +582,7 @@ type MediaDBI interface {
 	GenericDBI
 	BeginTransaction(batchEnabled bool) error
 	CommitTransaction() error
+	CommitTransactionWithOptions(options TransactionOptions) error
 	RollbackTransaction() error
 	Exists() bool
 	UpdateLastGenerated() error
@@ -587,6 +600,7 @@ type MediaDBI interface {
 	InvalidateCountCache() error
 	RebuildSlugSearchCache() error
 	RebuildTagCache() error
+	WALCheckpoint() error
 
 	// On-disk persistence for the rebuilt caches. Persist* writes the
 	// current in-memory cache atomically; LoadCached* reads it back at

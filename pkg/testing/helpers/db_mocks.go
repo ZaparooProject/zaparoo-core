@@ -618,6 +618,16 @@ func (m *MockMediaDBI) CommitTransaction() error {
 	return nil
 }
 
+func (m *MockMediaDBI) CommitTransactionWithOptions(options database.TransactionOptions) error {
+	args := m.Called(options)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	// Track transaction state for tests
+	m.ActiveTransaction = false
+	return nil
+}
+
 func (m *MockMediaDBI) RollbackTransaction() error {
 	args := m.Called()
 	if err := args.Error(0); err != nil {
@@ -631,6 +641,17 @@ func (m *MockMediaDBI) RollbackTransaction() error {
 func (m *MockMediaDBI) Exists() bool {
 	args := m.Called()
 	return args.Bool(0)
+}
+
+func (m *MockMediaDBI) WALCheckpoint() error {
+	if !m.hasExpectation("WALCheckpoint") {
+		return nil
+	}
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
 }
 
 func (m *MockMediaDBI) UpdateLastGenerated() error {
