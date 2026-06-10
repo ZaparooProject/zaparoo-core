@@ -214,6 +214,17 @@ func invalidationScopeForSystemIDs(systemIDs []string) invalidationScope {
 	return invalidationScope{SystemIDs: systemIDs}
 }
 
+func shouldCheckpointAfterCommit(mode database.WALCheckpointMode, indexingStatus string, statusErr error) bool {
+	switch mode {
+	case database.WALCheckpointSkip:
+		return false
+	case database.WALCheckpointForce:
+		return true
+	default:
+		return statusErr != nil || indexingStatus == IndexingStatusRunning || indexingStatus == IndexingStatusPending
+	}
+}
+
 func (db *MediaDB) DropSlugSearchCacheForSystems(systemIDs []string) {
 	if cache := db.slugSearchCache.Load(); cache != nil {
 		db.slugSearchCache.Store(cache.withoutSystems(systemIDs))
@@ -1273,6 +1284,10 @@ func (db *MediaDB) validateInserterDependencies() error {
 }
 
 func (db *MediaDB) CommitTransaction() error {
+	return db.CommitTransactionWithOptions(database.TransactionOptions{WALCheckpoint: database.WALCheckpointAuto})
+}
+
+func (db *MediaDB) CommitTransactionWithOptions(options database.TransactionOptions) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
 
@@ -1328,6 +1343,7 @@ func (db *MediaDB) CommitTransaction() error {
 	// foreground launches/searches, but still invalidate durable/count caches so
 	// random queries never trust stale MediaCountCache ranges after a commit.
 	indexingStatus, statusErr := sqlGetIndexingStatus(db.ctx, db.sql)
+	checkpointAfterCommit := shouldCheckpointAfterCommit(options.WALCheckpoint, indexingStatus, statusErr)
 	switch {
 	case statusErr != nil:
 		log.Warn().Err(statusErr).Msg("failed to determine indexing status for cache invalidation")
@@ -1344,10 +1360,14 @@ func (db *MediaDB) CommitTransaction() error {
 		return err
 	}
 
-	// Run manual WAL checkpoint after commit to keep WAL size bounded during indexing
-	// Use TRUNCATE to reset the WAL file after commit, keeping reads fast
-	if _, chkErr := db.sql.ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);"); chkErr != nil {
-		log.Warn().Err(chkErr).Msg("failed to run WAL checkpoint after transaction commit")
+	// Manual TRUNCATE checkpoint is only needed during indexing, where batch
+	// commits can grow the WAL quickly. Foreground metadata writes (favorite
+	// toggles) should not block on a full checkpoint; SQLite's autocheckpoint and
+	// background optimization still bound normal WAL growth.
+	if checkpointAfterCommit {
+		if _, chkErr := db.sql.ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);"); chkErr != nil {
+			log.Warn().Err(chkErr).Msg("failed to run WAL checkpoint after transaction commit")
+		}
 	}
 
 	return nil

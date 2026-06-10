@@ -580,10 +580,20 @@ func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScra
 				log.Warn().Err(err).Str("scraper", scraperID).Msg("failed to clear scraping operation")
 			}
 		}
+		checkpointScrapingWAL(db.MediaDB, scraperID)
 		log.Info().Str("scraper", scraperID).Str("status", finalStatus).Msg("scraper run complete")
 	}()
 
 	return nil, nil //nolint:nilnil // API handler returns nil result and nil error for async start
+}
+
+func checkpointScrapingWAL(mediaDB database.MediaDBI, scraperID string) {
+	started := time.Now()
+	if err := mediaDB.WALCheckpoint(); err != nil {
+		log.Warn().Err(err).Str("scraper", scraperID).Msg("failed to checkpoint WAL after scraper run")
+		return
+	}
+	log.Debug().Str("scraper", scraperID).Dur("duration", time.Since(started)).Msg("checkpointed WAL after scraper run")
 }
 
 // HandleMediaScrapeStatus returns the latest known media.scrape status snapshot.

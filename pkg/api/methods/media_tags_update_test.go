@@ -69,7 +69,8 @@ func TestHandleMediaTagsUpdate_AddsFavoriteTag(t *testing.T) {
 		Return(database.Tag{DBID: 12, TypeDBID: 11, Tag: string(tags.TagUserFavorite)}, nil).Once()
 	mockDB.On("FindOrInsertMediaTag", database.MediaTag{MediaDBID: 1, TagDBID: 12}).
 		Return(database.MediaTag{DBID: 13, MediaDBID: 1, TagDBID: 12}, nil).Once()
-	mockDB.On("CommitTransaction").Return(nil).Once()
+	commitOptions := database.TransactionOptions{WALCheckpoint: database.WALCheckpointSkip}
+	mockDB.On("CommitTransactionWithOptions", commitOptions).Return(nil).Once()
 	mockDB.On("GetMediaTagsByMediaDBID", mock.Anything, int64(1)).
 		Return([]database.TagInfo{{Type: string(tags.TagTypeUser), Tag: string(tags.TagUserFavorite)}}, nil).Once()
 	mockDB.On("GetMediaTitleTagsByMediaTitleDBID", mock.Anything, int64(10)).
@@ -144,7 +145,8 @@ func TestHandleMediaTagsUpdate_RollsBackWhenCommitFails(t *testing.T) {
 		Return(database.Tag{DBID: 12, TypeDBID: 11, Tag: string(tags.TagUserFavorite)}, nil).Once()
 	mockDB.On("FindOrInsertMediaTag", database.MediaTag{MediaDBID: 1, TagDBID: 12}).
 		Return(database.MediaTag{MediaDBID: 1, TagDBID: 12}, nil).Once()
-	mockDB.On("CommitTransaction").Return(errors.New("commit failed")).Once()
+	commitOptions := database.TransactionOptions{WALCheckpoint: database.WALCheckpointSkip}
+	mockDB.On("CommitTransactionWithOptions", commitOptions).Return(errors.New("commit failed")).Once()
 	mockDB.On("RollbackTransaction").Return(nil).Once()
 
 	_, err := HandleMediaTagsUpdate(makeMediaTagsUpdateEnv(mockDB, `{"mediaId":1,"add":["user:favorite"]}`))

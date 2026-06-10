@@ -460,6 +460,18 @@ type ScrapeResultBatchApplier interface {
 	ApplyScrapeResults(ctx context.Context, targets []ScrapeWriteTarget) error
 }
 
+type WALCheckpointMode int
+
+const (
+	WALCheckpointAuto WALCheckpointMode = iota
+	WALCheckpointSkip
+	WALCheckpointForce
+)
+
+type TransactionOptions struct {
+	WALCheckpoint WALCheckpointMode
+}
+
 type FileInfo struct {
 	SystemID string
 	Path     string
@@ -570,6 +582,7 @@ type MediaDBI interface {
 	GenericDBI
 	BeginTransaction(batchEnabled bool) error
 	CommitTransaction() error
+	CommitTransactionWithOptions(options TransactionOptions) error
 	RollbackTransaction() error
 	Exists() bool
 	UpdateLastGenerated() error
@@ -587,6 +600,7 @@ type MediaDBI interface {
 	InvalidateCountCache() error
 	RebuildSlugSearchCache() error
 	RebuildTagCache() error
+	WALCheckpoint() error
 
 	// On-disk persistence for the rebuilt caches. Persist* writes the
 	// current in-memory cache atomically; LoadCached* reads it back at
