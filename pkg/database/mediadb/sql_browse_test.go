@@ -801,6 +801,36 @@ func TestFetchAndDisambiguateSiblings_EmptyResults(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestFetchAndDisambiguateSiblings_DuplicateNamesFetchTags(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	results := []database.SearchResultWithCursor{
+		{MediaID: 1, MediaTitleID: 10, SystemID: "NES", Name: "Same Game"},
+		{MediaID: 2, MediaTitleID: 11, SystemID: "NES", Name: "Same Game"},
+	}
+
+	mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM MediaTags`).
+		WithArgs(int64(1), int64(2), int64(10), int64(11)).
+		WillReturnRows(sqlmock.NewRows([]string{"HasTags"}).AddRow(true))
+	mock.ExpectPrepare(`SELECT\s+0 as SourceKind`).
+		ExpectQuery().
+		WithArgs(int64(1), int64(2), int64(10), int64(11)).
+		WillReturnRows(sqlmock.NewRows([]string{"SourceKind", "SourceDBID", "Tag", "DisplayName", "Type"}).
+			AddRow(0, int64(1), "USA", "United States", "release").
+			AddRow(0, int64(2), "Japan", "Japan", "release"))
+
+	err = fetchAndDisambiguateSiblings(context.Background(), db, results)
+	require.NoError(t, err)
+	require.Len(t, results[0].ZapScriptTags, 1)
+	require.Len(t, results[1].ZapScriptTags, 1)
+	assert.Equal(t, database.TagInfo{Tag: "USA", Type: "release", Label: "United States"}, results[0].ZapScriptTags[0])
+	assert.Equal(t, database.TagInfo{Tag: "Japan", Type: "release", Label: "Japan"}, results[1].ZapScriptTags[0])
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestBrowseFiles_SortNameFallback_Integration verifies that a media row with
 // SortName=” (pre-migration) gets its display name derived from the file path
 // rather than emitting an empty Name field.
@@ -823,11 +853,11 @@ func TestBrowseFiles_SortNameFallback_Integration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	parentDir := "/roms/nes/"
+	parentDir := browseTestDir("roms", "nes")
 	media, err := mediaDB.InsertMedia(database.Media{
 		SystemDBID:     sys.DBID,
 		MediaTitleDBID: title.DBID,
-		Path:           "/roms/nes/mygame.nes",
+		Path:           browseTestPath("roms", "nes", "mygame.nes"),
 		ParentDir:      parentDir,
 		SortName:       "", // intentionally empty — simulates a pre-migration row
 	})

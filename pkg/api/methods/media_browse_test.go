@@ -455,6 +455,7 @@ func TestBuildBrowseResponse_SingletonAnnotation_WhenZipsAsDirsEnabled(t *testin
 		Row:           row,
 		Tags:          tags,
 		ZapScriptTags: []database.TagInfo{},
+		HasCover:      true,
 	}}
 
 	mockMediaDB := helpers.NewMockMediaDBI()
@@ -485,6 +486,7 @@ func TestBuildBrowseResponse_SingletonAnnotation_WhenZipsAsDirsEnabled(t *testin
 	require.NotNil(t, entry.ZapScript)
 	assert.NotEmpty(t, *entry.ZapScript)
 	assert.Equal(t, tags, entry.Tags)
+	assert.True(t, entry.HasCover)
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
 }
@@ -545,6 +547,38 @@ func TestBuildBrowseResponse_SingletonAnnotation_InferredFromDirSystemIDs(t *tes
 	mockPlatform.AssertExpectations(t)
 }
 
+func TestBuildBrowseResponse_SingletonAnnotation_SkipsLookupForMixedDirSystems(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.ToSlash(filepath.Join("roms", "shared"))
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+
+	env := &requests.RequestEnv{
+		Context:  context.Background(),
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Platform: mockPlatform,
+	}
+	result, err := buildBrowseResponse(env, path,
+		[]database.BrowseDirectoryResult{
+			{Name: "NES", FileCount: 1, SystemIDs: []string{"NES"}},
+			{Name: "SNES", FileCount: 1, SystemIDs: []string{"SNES"}},
+		},
+		nil, defaultMaxResults, 0, "", nil)
+	require.NoError(t, err)
+
+	browseResults, ok := result.(models.BrowseResults)
+	require.True(t, ok)
+	require.Len(t, browseResults.Entries, 2)
+	for _, entry := range browseResults.Entries {
+		assert.Zero(t, entry.MediaID)
+		assert.Nil(t, entry.ZapScript)
+	}
+	mockPlatform.AssertNotCalled(t, "Settings")
+	mockMediaDB.AssertNotCalled(t, "FindSystemBySystemID", mock.Anything)
+	mockMediaDB.AssertNotCalled(t, "ResolveSingletonContainerAliases", mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestBuildBrowseResponse_SingletonAnnotation_WhenZipsAsDirsDisabledSkipsLookup(t *testing.T) {
 	t.Parallel()
 
@@ -596,6 +630,7 @@ func TestBuildBrowseResponse_AnnotatesLogicalBinCueDirectory(t *testing.T) {
 		Row:           row,
 		Tags:          []database.TagInfo{},
 		ZapScriptTags: []database.TagInfo{},
+		HasCover:      true,
 	}}
 
 	mockMediaDB := helpers.NewMockMediaDBI()
@@ -623,6 +658,7 @@ func TestBuildBrowseResponse_AnnotatesLogicalBinCueDirectory(t *testing.T) {
 	assert.Equal(t, row.DBID, entry.MediaID)
 	require.NotNil(t, entry.ZapScript)
 	assert.NotEmpty(t, *entry.ZapScript)
+	assert.True(t, entry.HasCover)
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
 }

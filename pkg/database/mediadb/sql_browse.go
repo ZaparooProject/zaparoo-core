@@ -54,7 +54,7 @@ const (
 // utilityTagCache memoises resolved utility tag DBIDs per DB connection so
 // fetchAndAttachUtilityTags avoids 2 PK-lookup queries per browse page.
 // Keyed by the db pointer identity so test mocks with different addresses stay
-// isolated. Cleared entirely by clearUtilityTagCache via invalidateCaches.
+// isolated. Cleared by clearUtilityTagCache when utility tag DBIDs can change.
 var (
 	utilityTagCacheMu  syncutil.RWMutex
 	utilityTagCacheMap map[string]map[int64]database.TagInfo
@@ -69,7 +69,7 @@ func clearUtilityTagCache() {
 // resolveUtilityTagDBIDs returns a map from DB tag DBID → TagInfo for each
 // entry in tags.UtilityTags. Results are memoised per db pointer so each
 // MediaDB instance (or test mock) has its own cache slot, and
-// clearUtilityTagCache (called from invalidateCaches) clears all slots.
+// clearUtilityTagCache clears all slots when utility tag DBIDs can change.
 func resolveUtilityTagDBIDs(ctx context.Context, db sqlQueryable) (map[int64]database.TagInfo, error) {
 	dbKey := fmt.Sprintf("%p", db)
 
@@ -775,7 +775,7 @@ func fetchAndAttachCoverFlags(
 // detail pane fetches everything via media.meta.
 //
 // Utility tag DBID resolution is memoised in utilityTagCacheVal and only re-run
-// when clearUtilityTagCache is called (via invalidateCaches on any tag write).
+// when clearUtilityTagCache is called after tag dictionary changes.
 //
 // Assumption: utility tags are media-level user tags — no title-level join is
 // needed. Add a title-level leg here if a future utility tag lives at the title

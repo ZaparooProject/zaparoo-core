@@ -1368,12 +1368,16 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 	systemID := "nes"
 
 	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "SystemDBID", "Slug", "SystemID"}
+	gamesDir := filepath.Join(string(filepath.Separator), "games")
+	marioPath := filepath.Join(gamesDir, "mario.nes")
+	zeldaPath := filepath.Join(gamesDir, "zelda.nes")
+	metroidPath := filepath.Join(gamesDir, "metroid.nes")
 	rows := sqlmock.NewRows(cols).
-		AddRow(int64(1), "/games/mario.nes", "/games/", int64(10),
+		AddRow(int64(1), marioPath, gamesDir, int64(10),
 			"Super Mario Bros.", int64(100), "supermariobros", "nes").
-		AddRow(int64(2), "/games/zelda.nes", "/games/", int64(11),
+		AddRow(int64(2), zeldaPath, gamesDir, int64(11),
 			"The Legend of Zelda", int64(100), "legendofzelda", "nes").
-		AddRow(int64(3), "/games/metroid.nes", "/games/", int64(12), "Metroid", int64(100), "metroid", "nes")
+		AddRow(int64(3), metroidPath, gamesDir, int64(12), "Metroid", int64(100), "metroid", "nes")
 
 	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName, m\.SystemDBID, ` +
 		`t\.Slug, s\.SystemID.*FROM Media m.*WHERE s\.SystemID = \?`
@@ -1386,8 +1390,8 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 
 	// Check first result
 	assert.Equal(t, int64(1), results[0].DBID)
-	assert.Equal(t, "/games/mario.nes", results[0].Path)
-	assert.Equal(t, "/games/", results[0].ParentDir)
+	assert.Equal(t, marioPath, results[0].Path)
+	assert.Equal(t, gamesDir, results[0].ParentDir)
 	assert.Equal(t, int64(10), results[0].MediaTitleDBID)
 	assert.Equal(t, "Super Mario Bros.", results[0].SortName)
 	assert.Equal(t, "supermariobros", results[0].TitleSlug)
@@ -1395,12 +1399,12 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 
 	// Check second result
 	assert.Equal(t, int64(2), results[1].DBID)
-	assert.Equal(t, "/games/zelda.nes", results[1].Path)
+	assert.Equal(t, zeldaPath, results[1].Path)
 	assert.Equal(t, "legendofzelda", results[1].TitleSlug)
 
 	// Check third result
 	assert.Equal(t, int64(3), results[2].DBID)
-	assert.Equal(t, "/games/metroid.nes", results[2].Path)
+	assert.Equal(t, metroidPath, results[2].Path)
 	assert.Equal(t, "metroid", results[2].TitleSlug)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -1720,10 +1724,12 @@ func TestSqlGetMediaWithFullPath_Success(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "SystemDBID", "Slug", "SystemID"}
+	gamesDir := filepath.Join(string(filepath.Separator), "games")
 	rows := sqlmock.NewRows(cols).
-		AddRow(int64(1), "/games/mario.nes", "/games/", int64(10),
+		AddRow(int64(1), filepath.Join(gamesDir, "mario.nes"), gamesDir, int64(10),
 			"Super Mario Bros.", int64(100), "supermariobros", "nes").
-		AddRow(int64(2), "/games/zelda.nes", "/games/", int64(11), "Zelda", int64(100), "legendofzelda", "nes")
+		AddRow(int64(2), filepath.Join(gamesDir, "zelda.nes"), gamesDir, int64(11),
+			"Zelda", int64(100), "legendofzelda", "nes")
 
 	mock.ExpectQuery(`SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName`).
 		WillReturnRows(rows)
@@ -1779,8 +1785,9 @@ func TestSqlGetMediaWithFullPathExcluding_EmptyExcludes(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "SystemDBID", "Slug", "SystemID"}
+	gamesDir := filepath.Join(string(filepath.Separator), "games")
 	rows := sqlmock.NewRows(cols).
-		AddRow(int64(1), "/games/mario.nes", "/games/", int64(10),
+		AddRow(int64(1), filepath.Join(gamesDir, "mario.nes"), gamesDir, int64(10),
 			"Super Mario Bros.", int64(100), "supermariobros", "nes")
 
 	mock.ExpectQuery(`SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName`).
@@ -1800,8 +1807,10 @@ func TestSqlGetMediaWithFullPathExcluding_WithExcludes(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	cols := []string{"DBID", "Path", "ParentDir", "MediaTitleDBID", "SortName", "SystemDBID", "Slug", "SystemID"}
+	gamesDir := filepath.Join(string(filepath.Separator), "games")
 	rows := sqlmock.NewRows(cols).
-		AddRow(int64(2), "/games/zelda.snes", "/games/", int64(11), "Zelda", int64(101), "legendofzelda", "snes")
+		AddRow(int64(2), filepath.Join(gamesDir, "zelda.snes"), gamesDir, int64(11),
+			"Zelda", int64(101), "legendofzelda", "snes")
 
 	mock.ExpectQuery(`SELECT m\.DBID.*WHERE s\.SystemID NOT IN`).
 		WithArgs("nes").

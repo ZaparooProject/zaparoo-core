@@ -737,6 +737,7 @@ func NewNamesIndex(
 		SystemIDs:          make(map[string]int),
 		TitlesIndex:        0,
 		TitleIDs:           make(map[string]int),
+		TitleNames:         make(map[int]string),
 		MediaIndex:         0,
 		MediaIDs:           make(map[string]int),
 		MediaTitleIDs:      make(map[int]int),

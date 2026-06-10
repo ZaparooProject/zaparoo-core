@@ -486,6 +486,7 @@ type SearchFilters struct {
 type ScanState struct {
 	SystemIDs          map[string]int
 	TitleIDs           map[string]int
+	TitleNames         map[int]string
 	MediaIDs           map[string]int
 	MediaTitleIDs      map[int]int      // Existing media DBID -> MediaTitleDBID for persistent reconciliation
 	MediaNeedsSortName map[int]struct{} // Media DBIDs with SortName='' needing a write on next title update

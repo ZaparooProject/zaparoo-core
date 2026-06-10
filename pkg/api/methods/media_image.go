@@ -32,6 +32,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -69,7 +70,10 @@ var mediaImageBeforeSemAcquire func()
 
 // mediaThumbCachePointer is the process-wide thumbnail disk cache stored as an
 // atomic pointer so concurrent StartWithReady calls in tests do not race on it.
-var mediaThumbCachePointer atomic.Pointer[mediaThumbCache]
+var (
+	mediaThumbCachePointer    atomic.Pointer[mediaThumbCache]
+	mediaThumbCacheGeneration atomic.Uint64
+)
 
 // mediaThumbCache persists resized cover images to disk so that the expensive
 // decode+bilinear-resize+transparency-scan is only performed once per unique
@@ -84,14 +88,28 @@ var mediaThumbCachePointer atomic.Pointer[mediaThumbCache]
 // resolved typeTag. It enables a pre-semaphore cache hit that skips the entire
 // image-load pipeline for warm repeat requests.
 type mediaThumbCache struct {
+	fs            afero.Fs
 	resolvedTypes map[string]string
 	dir           string
 	resolvedMu    syncutil.RWMutex
 }
 
 func newMediaThumbCache(pl platforms.Platform) *mediaThumbCache {
-	dir := filepath.Join(helpers.DataDir(pl), config.CacheDir, mediaThumbCacheDirName)
-	return &mediaThumbCache{dir: dir, resolvedTypes: make(map[string]string)}
+	return newMediaThumbCacheWithFS(pl, nil)
+}
+
+func newMediaThumbCacheWithFS(pl platforms.Platform, fs afero.Fs) *mediaThumbCache {
+	if fs == nil {
+		fs = afero.NewOsFs()
+	}
+	dir := filepath.Join(helpers.DataDir(pl), config.CacheDir, mediaThumbCacheDirName, "current")
+	return &mediaThumbCache{fs: fs, dir: dir, resolvedTypes: make(map[string]string)}
+}
+
+func (c *mediaThumbCache) nextGeneration() *mediaThumbCache {
+	generation := mediaThumbCacheGeneration.Add(1)
+	dir := filepath.Join(filepath.Dir(c.dir), fmt.Sprintf("gen-%d", generation))
+	return &mediaThumbCache{fs: c.fs, dir: dir, resolvedTypes: make(map[string]string)}
 }
 
 // earlyThumbKey returns a cache key derived only from request-time parameters
@@ -143,21 +161,42 @@ func hashThumbKey(key string) string {
 	return hex.EncodeToString(h[:])
 }
 
+type thumbCacheFormat struct {
+	ext         string
+	contentType string
+}
+
+var thumbCacheFormats = []thumbCacheFormat{
+	{ext: ".jpg", contentType: "image/jpeg"},
+	{ext: ".png", contentType: "image/png"},
+	{ext: ".gif", contentType: "image/gif"},
+	{ext: ".webp", contentType: "image/webp"},
+}
+
+func thumbCacheExtension(contentType string, data []byte) string {
+	ext := extensionFromContentType(contentType)
+	if ext == "" && len(data) > 0 {
+		ext = extensionFromContentType(http.DetectContentType(data))
+	}
+	for _, format := range thumbCacheFormats {
+		if strings.TrimPrefix(format.ext, ".") == ext {
+			return format.ext
+		}
+	}
+	return ""
+}
+
 // get looks up a cached resized image. Returns (data, contentType, true) on
 // hit, or (nil, "", false) on miss or any I/O error.
 func (c *mediaThumbCache) get(
 	ref mediaRefParam, typeTag string, maxSize int,
 ) (data []byte, contentType string, found bool) {
 	hash := hashThumbKey(thumbKey(ref, typeTag, maxSize))
-	for _, ext := range []string{".jpg", ".png"} {
+	for _, format := range thumbCacheFormats {
 		//nolint:gosec // path is constructed from a controlled dir + SHA-256 hash + fixed extension
-		b, err := os.ReadFile(filepath.Join(c.dir, hash+ext))
+		b, err := afero.ReadFile(c.fs, filepath.Join(c.dir, hash+format.ext))
 		if err == nil {
-			ct := "image/jpeg"
-			if ext == ".png" {
-				ct = "image/png"
-			}
-			return b, ct, true
+			return b, format.contentType, true
 		}
 	}
 	return nil, "", false
@@ -167,17 +206,17 @@ func (c *mediaThumbCache) get(
 // ignored — the caller always has the bytes in memory and must not fail on a
 // cache write error.
 func (c *mediaThumbCache) set(ref mediaRefParam, typeTag string, maxSize int, data []byte, contentType string) {
-	ext := ".jpg"
-	if strings.Contains(contentType, "png") {
-		ext = ".png"
+	ext := thumbCacheExtension(contentType, data)
+	if ext == "" {
+		return
 	}
-	if err := os.MkdirAll(c.dir, 0o750); err != nil { //nolint:gosec // cache dir, 0o750 is intentional
+	if err := c.fs.MkdirAll(c.dir, 0o750); err != nil { //nolint:gosec // cache dir, 0o750 is intentional
 		log.Debug().Err(err).Str("dir", c.dir).Msg("media.image: thumb cache: failed to create dir")
 		return
 	}
 	hash := hashThumbKey(thumbKey(ref, typeTag, maxSize))
 	path := filepath.Join(c.dir, hash+ext)
-	if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // cache file, 0o600 is intentional
+	if err := afero.WriteFile(c.fs, path, data, 0o600); err != nil { //nolint:gosec // cache file, 0o600 is intentional
 		log.Debug().Err(err).Str("path", path).Msg("media.image: thumb cache: failed to write")
 	}
 }
@@ -186,7 +225,7 @@ func (c *mediaThumbCache) set(ref mediaRefParam, typeTag string, maxSize int, da
 // resolved-type memo. Called after a successful full media reindex so stale
 // entries do not accumulate.
 func (c *mediaThumbCache) wipe() {
-	if err := os.RemoveAll(c.dir); err != nil {
+	if err := c.fs.RemoveAll(c.dir); err != nil {
 		log.Warn().Err(err).Str("dir", c.dir).Msg("media.image: failed to wipe thumb cache after reindex")
 	} else {
 		log.Info().Str("dir", c.dir).Msg("media.image: thumb cache wiped after reindex")
@@ -207,8 +246,9 @@ func InitMediaThumbCache(pl platforms.Platform) {
 // WipeMediaThumbCache removes all cached thumbnails. Called after a successful
 // full reindex so the cache does not serve stale art.
 func WipeMediaThumbCache() {
-	if tc := mediaThumbCachePointer.Load(); tc != nil {
-		tc.wipe()
+	if old := mediaThumbCachePointer.Load(); old != nil {
+		mediaThumbCachePointer.Store(old.nextGeneration())
+		old.wipe()
 	}
 }
 

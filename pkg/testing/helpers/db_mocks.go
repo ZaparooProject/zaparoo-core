@@ -991,7 +991,9 @@ func (m *MockMediaDBI) FindOrInsertMediaTitle(row *database.MediaTitle) (databas
 }
 
 // Media CRUD methods
-func (m *MockMediaDBI) FindMedia(row database.Media) (database.Media, error) { //nolint:gocritic
+//
+//nolint:gocritic // matches MediaDBI value-parameter signature
+func (m *MockMediaDBI) FindMedia(row database.Media) (database.Media, error) {
 	args := m.Called(row)
 	if media, ok := args.Get(0).(database.Media); ok {
 		if err := args.Error(1); err != nil {
@@ -1005,7 +1007,8 @@ func (m *MockMediaDBI) FindMedia(row database.Media) (database.Media, error) { /
 	return database.Media{}, nil
 }
 
-func (m *MockMediaDBI) InsertMedia(row database.Media) (database.Media, error) { //nolint:gocritic
+//nolint:gocritic // matches MediaDBI value-parameter signature
+func (m *MockMediaDBI) InsertMedia(row database.Media) (database.Media, error) {
 	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(row)
 	if media, ok := args.Get(0).(database.Media); ok {
@@ -1020,7 +1023,8 @@ func (m *MockMediaDBI) InsertMedia(row database.Media) (database.Media, error) {
 	return database.Media{}, nil
 }
 
-func (m *MockMediaDBI) FindOrInsertMedia(row database.Media) (database.Media, error) { //nolint:gocritic
+//nolint:gocritic // matches MediaDBI value-parameter signature
+func (m *MockMediaDBI) FindOrInsertMedia(row database.Media) (database.Media, error) {
 	args := m.Called(row)
 	if media, ok := args.Get(0).(database.Media); ok {
 		if err := args.Error(1); err != nil {

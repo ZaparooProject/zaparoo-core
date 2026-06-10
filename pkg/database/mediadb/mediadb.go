@@ -119,6 +119,7 @@ type MediaDB struct {
 	needsIndexRebuild     atomic.Bool
 	inTransaction         bool
 	browseCacheDirty      bool
+	utilityTagCacheDirty  bool
 }
 
 // sqlQueryable is the subset of *sql.DB and *sql.Tx needed by SQL helpers.
@@ -144,12 +145,16 @@ type invalidationScope struct {
 	SystemIDs               []string
 	AllSystems              bool
 	PreserveSlugSearchCache bool
+	UtilityTagDBIDsChanged  bool
 }
 
 // invalidateCaches handles all cache invalidation in one place
 func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	db.inMemoryTagCache.Store(nil)
-	clearUtilityTagCache()
+	if scope.UtilityTagDBIDsChanged {
+		clearUtilityTagCache()
+		db.utilityTagCacheDirty = false
+	}
 	switch {
 	case scope.AllSystems:
 		if !scope.PreserveSlugSearchCache {
@@ -214,6 +219,10 @@ func (db *MediaDB) DropSlugSearchCacheForSystems(systemIDs []string) {
 
 func (db *MediaDB) markBrowseCacheDirty() {
 	db.browseCacheDirty = true
+}
+
+func (db *MediaDB) markUtilityTagCacheDirty() {
+	db.utilityTagCacheDirty = true
 }
 
 func (db *MediaDB) invalidateBrowseCacheForMediaChange() error {
@@ -282,6 +291,7 @@ func (db *MediaDB) Open() error {
 	}
 	sqlInstance.SetMaxOpenConns(2)
 	db.sql = sqlInstance
+	clearUtilityTagCache()
 
 	if !exists {
 		log.Debug().Msg("media database is new, allocating schema")
@@ -700,7 +710,7 @@ func (db *MediaDB) Truncate() error {
 	}
 
 	// Invalidate all caches after full truncation
-	db.invalidateCaches(invalidationScope{AllSystems: true})
+	db.invalidateCaches(invalidationScope{AllSystems: true, UtilityTagDBIDsChanged: true})
 
 	// Reclaim disk space freed by the truncation
 	if err := sqlVacuum(db.ctx, db.sql); err != nil {
@@ -723,7 +733,9 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 	}
 
 	// Invalidate caches for the affected systems
-	db.invalidateCaches(invalidationScopeForSystemIDs(systemIDs))
+	scope := invalidationScopeForSystemIDs(systemIDs)
+	scope.UtilityTagDBIDsChanged = true
+	db.invalidateCaches(scope)
 	return nil
 }
 
@@ -807,7 +819,7 @@ func (db *MediaDB) CleanMediaOrphans(ctx context.Context) (int64, error) {
 	}
 
 	if deleted > 0 {
-		db.invalidateCaches(invalidationScope{AllSystems: true})
+		db.invalidateCaches(invalidationScope{AllSystems: true, UtilityTagDBIDsChanged: true})
 		if err := sqlInvalidateBrowseCache(ctx, db.sql); err != nil {
 			log.Warn().Err(err).Msg("failed to invalidate browse cache after orphan cleanup")
 		}
@@ -840,26 +852,35 @@ func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationS
 	status, statusErr := sqlGetIndexingStatus(db.ctx, db.sql)
 	if statusErr != nil {
 		log.Warn().Err(statusErr).Msg("failed to determine indexing status for cache invalidation")
-		return invalidationScope{AllSystems: true}
+		scope := invalidationScope{AllSystems: true}
+		scope.UtilityTagDBIDsChanged = db.utilityTagCacheDirty
+		return scope
 	}
 
 	if status != IndexingStatusRunning && status != IndexingStatusPending {
-		return invalidationScope{AllSystems: true}
+		scope := invalidationScope{AllSystems: true}
+		scope.UtilityTagDBIDsChanged = db.utilityTagCacheDirty
+		return scope
 	}
 
 	systemIDs, getSystemsErr := sqlGetIndexingSystems(db.ctx, db.sql)
 	if getSystemsErr != nil {
 		log.Warn().Err(getSystemsErr).Msg("failed to load indexing systems for cache invalidation")
-		return invalidationScope{AllSystems: true}
+		scope := invalidationScope{AllSystems: true}
+		scope.UtilityTagDBIDsChanged = db.utilityTagCacheDirty
+		return scope
 	}
 
-	return invalidationScopeForSystemIDs(systemIDs)
+	scope := invalidationScopeForSystemIDs(systemIDs)
+	scope.UtilityTagDBIDsChanged = db.utilityTagCacheDirty
+	return scope
 }
 
 // SetSQLForTesting allows injection of a sql.DB instance for testing purposes.
 // This method should only be used in tests to set up in-memory databases.
 func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform platforms.Platform) error {
 	db.sql = sqlDB
+	clearUtilityTagCache()
 	db.ctx = ctx
 	db.pl = platform
 	db.clock = clockwork.NewRealClock()
@@ -991,6 +1012,7 @@ func (db *MediaDB) RollbackTransaction() error {
 	db.tx = nil
 	db.inTransaction = false // Clear transaction flag (no cache invalidation needed on rollback)
 	db.clearBrowseCacheInvalidation()
+	db.utilityTagCacheDirty = false
 	if err != nil {
 		return fmt.Errorf("failed to rollback transaction: %w", err)
 	}
@@ -1017,6 +1039,7 @@ func (db *MediaDB) rollbackAndLogError() {
 	db.tx = nil
 	db.inTransaction = false
 	db.clearBrowseCacheInvalidation()
+	db.utilityTagCacheDirty = false
 }
 
 func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
@@ -1229,11 +1252,13 @@ func (db *MediaDB) CommitTransaction() error {
 				db.tx = nil
 				db.inTransaction = false
 				db.clearBrowseCacheInvalidation()
+				db.utilityTagCacheDirty = false
 				return fmt.Errorf("failed to flush batch inserts: %w; rollback also failed: %w", closeErr, rbErr)
 			}
 			db.tx = nil
 			db.inTransaction = false
 			db.clearBrowseCacheInvalidation()
+			db.utilityTagCacheDirty = false
 			return fmt.Errorf("failed to flush batch inserts: %w", closeErr)
 		}
 	} else {
@@ -1249,11 +1274,13 @@ func (db *MediaDB) CommitTransaction() error {
 			db.tx = nil
 			db.inTransaction = false
 			db.clearBrowseCacheInvalidation()
+			db.utilityTagCacheDirty = false
 			return fmt.Errorf("commit failed: %w; rollback also failed: %w", err, rbErr)
 		}
 		db.tx = nil
 		db.inTransaction = false
 		db.clearBrowseCacheInvalidation()
+		db.utilityTagCacheDirty = false
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -2469,6 +2496,7 @@ func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error)
 		if err != nil {
 			return row, fmt.Errorf("failed to add tag type to batch: %w", err)
 		}
+		db.markUtilityTagCacheDirty()
 		// Return row as-is (DBID is already set by caller)
 		return row, nil
 	}
@@ -2482,7 +2510,9 @@ func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error)
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
 	if err == nil && !db.inTransaction {
-		db.invalidateCaches(invalidationScope{AllSystems: true})
+		db.invalidateCaches(invalidationScope{AllSystems: true, UtilityTagDBIDsChanged: true})
+	} else if err == nil {
+		db.markUtilityTagCacheDirty()
 	}
 
 	return result, err
@@ -2510,6 +2540,7 @@ func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
 		if err != nil {
 			return row, fmt.Errorf("failed to add tag to batch: %w", err)
 		}
+		db.markUtilityTagCacheDirty()
 		// Return row as-is (DBID is already set by caller)
 		return row, nil
 	}
@@ -2523,7 +2554,9 @@ func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
 	if err == nil && !db.inTransaction {
-		db.invalidateCaches(invalidationScope{AllSystems: true})
+		db.invalidateCaches(invalidationScope{AllSystems: true, UtilityTagDBIDsChanged: true})
+	} else if err == nil {
+		db.markUtilityTagCacheDirty()
 	}
 
 	return result, err

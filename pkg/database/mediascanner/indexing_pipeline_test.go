@@ -407,6 +407,7 @@ func TestAddMediaPath_WritesSortNameWhenExistingMediaHasEmptySortName(t *testing
 	scanState := &database.ScanState{
 		SystemIDs:          map[string]int{"NES": 1},
 		TitleIDs:           map[string]int{"NES:supermariobrothers": 10},
+		TitleNames:         map[int]string{10: "Super Mario Bros"},
 		MediaIDs:           map[string]int{database.MediaKey("NES", pathKey): 20},
 		MediaTitleIDs:      map[int]int{20: 10}, // same title — would not normally trigger UpdateMediaTitle
 		MediaNeedsSortName: map[int]struct{}{20: {}},
@@ -423,7 +424,7 @@ func TestAddMediaPath_WritesSortNameWhenExistingMediaHasEmptySortName(t *testing
 	assert.Equal(t, 10, titleIndex)
 	assert.Equal(t, 20, mediaIndex)
 	assert.NotContains(t, scanState.MissingMedia, 20)
-	mockDB.AssertCalled(t, "UpdateMediaTitle", int64(20), int64(10), mock.Anything)
+	mockDB.AssertCalled(t, "UpdateMediaTitle", int64(20), int64(10), "Super Mario Bros")
 	assert.NotContains(t, scanState.MediaNeedsSortName, 20)
 	mockDB.AssertExpectations(t)
 }

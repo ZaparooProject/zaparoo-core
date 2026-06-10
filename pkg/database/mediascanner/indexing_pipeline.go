@@ -159,6 +159,7 @@ func AddMediaPathWithPrefixPolicy(
 	}
 
 	titleKey := database.TitleKey(systemID, pf.Slug)
+	canonicalTitleName := pf.Title
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
@@ -180,8 +181,16 @@ func AddMediaPathWithPrefixPolicy(
 			return 0, 0, fmt.Errorf("error inserting media title %s: %w", pf.Title, err)
 		}
 		ss.TitleIDs[titleKey] = titleIndex
+		if ss.TitleNames != nil {
+			ss.TitleNames[titleIndex] = canonicalTitleName
+		}
 	} else {
 		titleIndex = foundTitleIndex
+		if ss.TitleNames != nil {
+			if existingName, ok := ss.TitleNames[titleIndex]; ok && existingName != "" {
+				canonicalTitleName = existingName
+			}
+		}
 	}
 
 	mediaKey := database.MediaKey(systemID, pf.Path)
@@ -195,7 +204,7 @@ func AddMediaPathWithPrefixPolicy(
 			DBID:           int64(mediaIndex),
 			Path:           pf.Path,
 			ParentDir:      parentDir,
-			SortName:       pf.Title,
+			SortName:       canonicalTitleName,
 			MediaTitleDBID: int64(titleIndex),
 			SystemDBID:     int64(systemIndex),
 		})
@@ -230,7 +239,7 @@ func AddMediaPathWithPrefixPolicy(
 		_, needsSortName := ss.MediaNeedsSortName[mediaIndex]
 		existingTitleIndex, titleKnown := ss.MediaTitleIDs[mediaIndex]
 		if !titleKnown || existingTitleIndex != titleIndex || needsSortName {
-			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex), pf.Title); err != nil {
+			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex), canonicalTitleName); err != nil {
 				return 0, 0, fmt.Errorf("error updating media title %s: %w", pf.Path, err)
 			}
 			if ss.MediaTitleIDs != nil {
@@ -817,6 +826,9 @@ func PopulateScanStateForSystem(
 	for _, title := range stateData.titles {
 		titleKey := database.TitleKey(title.SystemID, title.Slug)
 		ss.TitleIDs[titleKey] = int(title.DBID)
+		if ss.TitleNames != nil {
+			ss.TitleNames[int(title.DBID)] = title.Name
+		}
 	}
 
 	for _, m := range stateData.media {
@@ -916,6 +928,9 @@ func PopulatePersistentScanStateForSystem(
 	for _, title := range stateData.titles {
 		titleKey := database.TitleKey(title.SystemID, title.Slug)
 		ss.TitleIDs[titleKey] = int(title.DBID)
+		if ss.TitleNames != nil {
+			ss.TitleNames[int(title.DBID)] = title.Name
+		}
 	}
 
 	for _, m := range stateData.media {

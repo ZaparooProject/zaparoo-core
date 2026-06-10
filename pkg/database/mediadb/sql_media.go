@@ -173,7 +173,7 @@ func sqlDeleteMediaTags(ctx context.Context, db sqlQueryable, mediaDBID int64) e
 
 func sqlGetAllMedia(ctx context.Context, db *sql.DB) ([]database.Media, error) {
 	rows, err := db.QueryContext(ctx,
-		"SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir FROM Media ORDER BY DBID")
+		"SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, SortName FROM Media ORDER BY DBID")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query media: %w", err)
 	}
@@ -186,7 +186,7 @@ func sqlGetAllMedia(ctx context.Context, db *sql.DB) ([]database.Media, error) {
 	media := make([]database.Media, 0)
 	for rows.Next() {
 		var m database.Media
-		if err := rows.Scan(&m.DBID, &m.MediaTitleDBID, &m.SystemDBID, &m.Path, &m.ParentDir); err != nil {
+		if err := rows.Scan(&m.DBID, &m.MediaTitleDBID, &m.SystemDBID, &m.Path, &m.ParentDir, &m.SortName); err != nil {
 			return nil, fmt.Errorf("failed to scan media: %w", err)
 		}
 		media = append(media, m)
