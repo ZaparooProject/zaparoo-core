@@ -747,6 +747,7 @@ func NewNamesIndex(
 		MediaIDs:           make(map[string]int),
 		MediaTitleIDs:      make(map[int]int),
 		MediaNeedsSortName: make(map[int]struct{}),
+		MediaSortNames:     make(map[int]string),
 		MediaParentDirs:    make(map[int]string),
 		MediaTagIDs:        make(map[int]map[int]struct{}),
 		TagTypesIndex:      0,
@@ -1186,6 +1187,7 @@ func NewNamesIndex(
 	scanState.MediaIDs = nil
 	scanState.MediaTitleIDs = nil
 	scanState.MediaNeedsSortName = nil
+	scanState.MediaSortNames = nil
 	scanState.MediaParentDirs = nil
 	scanState.MediaTagIDs = nil
 	scanState.TagTypeIDs = nil

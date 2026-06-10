@@ -491,6 +491,7 @@ type ScanState struct {
 	MediaIDs           map[string]int
 	MediaTitleIDs      map[int]int      // Existing media DBID -> MediaTitleDBID for persistent reconciliation
 	MediaNeedsSortName map[int]struct{} // Media DBIDs with SortName='' needing a write on next title update
+	MediaSortNames     map[int]string   // Existing media DBID -> per-file display/sort title for persistent reconciliation
 	MediaParentDirs    map[int]string
 	MediaTagIDs        map[int]map[int]struct{}
 	TagTypeIDs         map[string]int
