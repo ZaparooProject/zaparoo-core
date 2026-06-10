@@ -598,6 +598,7 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	mockDB.On("ClearScrapeRunMarkers", assertmock.Anything, "resume-scraper", "resume-run").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return().Once()
 	mockDB.On("BackgroundOperationDone").Return().Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "resume-scraper").Return(0, nil)
 	mockDB.On("ClearScrapingOperation").Return(nil).Once()
 
@@ -863,6 +864,7 @@ func TestHandleMediaScrape_CachesProgressScrapedCountAndRefreshesDone(t *testing
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "cached-progress").Return(5, nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "cached-progress").Return(9, nil).Once()
 
@@ -945,6 +947,7 @@ func TestHandleMediaScrape_EmitsFatalStatus(t *testing.T) {
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "fatal-scraper").Return(0, nil)
 
 	scrapeErr := errors.New("parse failed")
@@ -1026,6 +1029,7 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 		Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "progress-scraper").Return(3, nil)
 
 	var gotForceOption bool

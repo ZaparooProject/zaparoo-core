@@ -243,6 +243,18 @@ type TagInfo struct {
 	Count int64  `json:"count,omitempty"`
 }
 
+type WALCheckpointMode int
+
+const (
+	WALCheckpointAuto WALCheckpointMode = iota
+	WALCheckpointSkip
+	WALCheckpointForce
+)
+
+type TransactionOptions struct {
+	WALCheckpoint WALCheckpointMode
+}
+
 // GroupTagFiltersByOperator groups tag filters by operator type for consistent processing.
 // Returns (andFilters, notFilters, orFilters) to enable both SQL generation and in-memory filtering
 // to use the same grouping logic.
@@ -458,18 +470,6 @@ type ScrapeWriteTarget struct {
 // implementations that can keep multiple targets in one transaction.
 type ScrapeResultBatchApplier interface {
 	ApplyScrapeResults(ctx context.Context, targets []ScrapeWriteTarget) error
-}
-
-type WALCheckpointMode int
-
-const (
-	WALCheckpointAuto WALCheckpointMode = iota
-	WALCheckpointSkip
-	WALCheckpointForce
-)
-
-type TransactionOptions struct {
-	WALCheckpoint WALCheckpointMode
 }
 
 type FileInfo struct {

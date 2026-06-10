@@ -20,6 +20,7 @@
 package mediadb
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -45,6 +46,7 @@ func TestShouldCheckpointAfterCommit(t *testing.T) {
 			name: "auto status error", mode: database.WALCheckpointAuto,
 			status: "", err: errors.New("status failed"), want: true,
 		},
+		{name: "auto no rows", mode: database.WALCheckpointAuto, status: "", err: sql.ErrNoRows, want: false},
 		{name: "skip running", mode: database.WALCheckpointSkip, status: IndexingStatusRunning, want: false},
 		{name: "force completed", mode: database.WALCheckpointForce, status: IndexingStatusCompleted, want: true},
 	}

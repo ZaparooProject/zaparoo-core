@@ -221,7 +221,8 @@ func shouldCheckpointAfterCommit(mode database.WALCheckpointMode, indexingStatus
 	case database.WALCheckpointForce:
 		return true
 	default:
-		return statusErr != nil || indexingStatus == IndexingStatusRunning || indexingStatus == IndexingStatusPending
+		return (statusErr != nil && !errors.Is(statusErr, sql.ErrNoRows)) ||
+			indexingStatus == IndexingStatusRunning || indexingStatus == IndexingStatusPending
 	}
 }
 
