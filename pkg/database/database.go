@@ -42,6 +42,7 @@ type Database struct {
 
 type ScrapingOperation struct {
 	ScraperID string   `json:"scraperId"`
+	RunID     string   `json:"runId,omitempty"`
 	Systems   []string `json:"systems"`
 	Force     bool     `json:"force"`
 }
@@ -792,6 +793,14 @@ type MediaDBI interface {
 	// GetScrapedMediaIDs returns media DBIDs in a system already marked as scraped
 	// by scraperID.
 	GetScrapedMediaIDs(ctx context.Context, scraperID string, systemDBID int64) (map[int64]struct{}, error)
+
+	// GetScrapeRunMediaIDs returns media DBIDs in a system completed during a
+	// specific scraper run.
+	GetScrapeRunMediaIDs(ctx context.Context, scraperID, runID string, systemDBID int64) (map[int64]struct{}, error)
+
+	// ClearScrapeRunMarkers removes per-run completion markers after a scraper
+	// operation reaches a terminal state.
+	ClearScrapeRunMarkers(ctx context.Context, scraperID, runID string) error
 
 	// UpsertMediaTags writes tags to MediaTags for a specific Media row.
 	// Exclusive types (TagTypes.IsExclusive=1) delete existing tags of that type

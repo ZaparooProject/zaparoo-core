@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
 )
@@ -440,11 +441,15 @@ func ResumeMediaScrape(env *requests.RequestEnv, operation database.ScrapingOper
 		Systems:   operation.Systems,
 		Force:     operation.Force,
 	}
-	_, err := startMediaScrape(env, params)
+	_, err := startMediaScrapeWithRunID(env, params, operation.RunID)
 	return err
 }
 
 func startMediaScrape(env *requests.RequestEnv, params models.MediaScrapeParams) (any, error) {
+	return startMediaScrapeWithRunID(env, params, "")
+}
+
+func startMediaScrapeWithRunID(env *requests.RequestEnv, params models.MediaScrapeParams, runID string) (any, error) {
 	platformScrapers := env.Platform.Scrapers(env.Config)
 	s, ok := platformScrapers[params.ScraperID]
 	if !ok {
@@ -458,9 +463,13 @@ func startMediaScrape(env *requests.RequestEnv, params models.MediaScrapeParams)
 		return nil, err
 	}
 
+	if params.Force && runID == "" {
+		runID = uuid.NewString()
+	}
 	operation := database.ScrapingOperation{
 		ScraperID: params.ScraperID,
 		Systems:   params.Systems,
+		RunID:     runID,
 		Force:     params.Force,
 	}
 	if err := env.Database.MediaDB.SetScrapingOperation(operation); err != nil {
@@ -477,7 +486,7 @@ func startMediaScrape(env *requests.RequestEnv, params models.MediaScrapeParams)
 	scrapingStatusInstance.setCancelFunc(cancelFunc)
 
 	paused := env.ScrapePauser != nil && env.ScrapePauser.IsPaused()
-	opts := scraper.ScrapeOptions{Systems: params.Systems, Force: params.Force, Pauser: env.ScrapePauser}
+	opts := scraper.ScrapeOptions{Systems: params.Systems, RunID: runID, Force: params.Force, Pauser: env.ScrapePauser}
 	ch := make(chan scraper.ScrapeUpdate, 32)
 	if err := s.Scrape(scrapeCtx, env.Config, env.Platform, afero.NewOsFs(), env.Database, opts, nil, ch); err != nil {
 		cancelFunc()
@@ -557,6 +566,14 @@ func startMediaScrape(env *requests.RequestEnv, params models.MediaScrapeParams)
 		}
 		if err := db.MediaDB.SetScrapingStatus(finalStatus); err != nil {
 			log.Warn().Err(err).Str("scraper", scraperID).Msg("failed to persist scraping terminal status")
+		}
+		if params.Force && runID != "" {
+			if err := db.MediaDB.ClearScrapeRunMarkers(env.State.GetContext(), scraperID, runID); err != nil {
+				log.Warn().Err(err).
+					Str("scraper", scraperID).
+					Str("runID", runID).
+					Msg("failed to clear scrape run markers")
+			}
 		}
 		if finalStatus == mediadb.IndexingStatusCompleted || finalStatus == mediadb.IndexingStatusCancelled {
 			if err := db.MediaDB.ClearScrapingOperation(); err != nil {

@@ -725,6 +725,69 @@ func TestGetScrapedMediaIDs_MissingSentinelReturnsEmptySet(t *testing.T) {
 	assert.Empty(t, ids)
 }
 
+func TestGetScrapeRunMediaIDs(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath2 := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, mediaPath2)
+	require.NoError(t, err)
+
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 1, []database.TagInfo{{
+		Type: string(tags.ScraperRunType("test")),
+		Tag:  "run-1",
+	}}))
+	require.NoError(t, mediaDB.UpsertMediaTags(ctx, 2, []database.TagInfo{{
+		Type: string(tags.ScraperRunType("test")),
+		Tag:  "run-2",
+	}}))
+
+	ids, err := mediaDB.GetScrapeRunMediaIDs(ctx, "test", "run-1", 1)
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]struct{}{1: {}}, ids)
+
+	require.NoError(t, mediaDB.ClearScrapeRunMarkers(ctx, "test", "run-1"))
+	ids, err = mediaDB.GetScrapeRunMediaIDs(ctx, "test", "run-1", 1)
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+
+	var remainingRunTags int
+	err = mediaDB.sql.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM Tags t
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE tt.Type = 'scraper-run.test'
+	`).Scan(&remainingRunTags)
+	require.NoError(t, err)
+	assert.Equal(t, 1, remainingRunTags, "only the unrelated run marker should remain")
+}
+
+func TestScrapeRunMarkers_EmptyRunIDIsNoop(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	ids, err := mediaDB.GetScrapeRunMediaIDs(ctx, "test", "", 1)
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+	require.NoError(t, mediaDB.ClearScrapeRunMarkers(ctx, "test", ""))
+}
+
+func TestClearScrapeRunMarkers_MissingRunIsNoop(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, mediaDB.ClearScrapeRunMarkers(ctx, "test", "missing-run"))
+}
+
 func TestApplyScrapeResult_WritesSentinelLastPayload(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupScraperTestDB(t)

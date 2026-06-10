@@ -70,3 +70,9 @@ func TestSentinelTagInfo(t *testing.T) {
 	tag := scraper.SentinelTagInfo("myscr")
 	assert.Equal(t, database.TagInfo{Type: "scraper.myscr", Tag: "scraped"}, tag)
 }
+
+func TestRunTagInfo(t *testing.T) {
+	t.Parallel()
+	tag := scraper.RunTagInfo("myscr", "run-123")
+	assert.Equal(t, database.TagInfo{Type: "scraper-run.myscr", Tag: "run-123"}, tag)
+}
