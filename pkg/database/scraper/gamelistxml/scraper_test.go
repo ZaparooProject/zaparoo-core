@@ -3167,6 +3167,69 @@ func TestScrapeLoop_NormalMode_Success(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
+func TestScrapeLoop_ForceResumeSkipsCompletedRunMedia(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	firstPath := filepath.Join(root, "first.nes")
+	secondPath := filepath.Join(root, "second.nes")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "gamelist.xml"), []byte(`
+<gameList>
+  <game><path>./first.nes</path><name>First</name></game>
+  <game><path>./second.nes</path><name>Second</name></game>
+</gameList>`), 0o600))
+
+	const (
+		firstTitleDBID  = int64(1)
+		firstMediaDBID  = int64(10)
+		secondTitleDBID = int64(2)
+		secondMediaDBID = int64(20)
+		systemDBID      = int64(100)
+		runID           = "resume-run"
+	)
+
+	writeMatcher := mock.MatchedBy(func(w *database.ScrapeWrite) bool {
+		return w != nil && assert.Contains(t, w.MediaTags, database.TagInfo{
+			Type: string(tags.ScraperRunType("gamelist.xml")),
+			Tag:  runID,
+		})
+	})
+	mockDB := helpers.NewMockMediaDBI()
+	mockDB.On("GetTitlesBySystemID", "nes").Return([]database.TitleWithSystem{
+		{DBID: firstTitleDBID, SystemDBID: systemDBID, Slug: "first", Name: "First"},
+		{DBID: secondTitleDBID, SystemDBID: systemDBID, Slug: "second", Name: "Second"},
+	}, nil)
+	mockDB.On("GetMediaBySystemID", "nes").Return([]database.MediaWithFullPath{
+		{DBID: firstMediaDBID, MediaTitleDBID: firstTitleDBID, Path: firstPath},
+		{DBID: secondMediaDBID, MediaTitleDBID: secondTitleDBID, Path: secondPath},
+	}, nil)
+	mockDB.On("GetScrapeRunMediaIDs", mock.Anything, "gamelist.xml", runID, systemDBID).
+		Return(map[int64]struct{}{firstMediaDBID: {}}, nil)
+	mockDB.On("ApplyScrapeResult", mock.Anything, secondMediaDBID, secondTitleDBID, writeMatcher).Return(nil)
+
+	s := &GamelistXMLScraper{db: mockDB}
+	system := scraper.ScrapeSystem{ID: "nes", ROMPaths: []string{root}, DBID: systemDBID}
+	ch := make(chan scraper.ScrapeUpdate, 128)
+
+	s.scrapeLoop(context.Background(), scraper.ScrapeOptions{
+		Pauser: syncutil.NewPauser(),
+		RunID:  runID,
+		Force:  true,
+	}, []scraper.ScrapeSystem{system}, mockDB, ch)
+
+	updates := drainChannel(ch)
+	var done scraper.ScrapeUpdate
+	for _, u := range updates {
+		if u.Done {
+			done = u
+		}
+	}
+	require.True(t, done.Done)
+	assert.Equal(t, 1, done.Processed)
+	assert.Equal(t, 1, done.Matched)
+	assert.Equal(t, 0, done.Skipped)
+	mockDB.AssertExpectations(t)
+}
+
 func TestScrapeLoop_Issue794ZipAsDirMedia(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

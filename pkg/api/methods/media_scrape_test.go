@@ -583,11 +583,17 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	ClearScrapingStatus()
 	statusInstance.clear()
 
-	operation := database.ScrapingOperation{ScraperID: "resume-scraper", Systems: []string{"SNES"}, Force: true}
+	operation := database.ScrapingOperation{
+		ScraperID: "resume-scraper",
+		Systems:   []string{"SNES"},
+		RunID:     "resume-run",
+		Force:     true,
+	}
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("SetScrapingOperation", operation).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	mockDB.On("ClearScrapeRunMarkers", assertmock.Anything, "resume-scraper", "resume-run").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return().Once()
 	mockDB.On("BackgroundOperationDone").Return().Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "resume-scraper").Return(0, nil)
@@ -618,6 +624,7 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 
 	require.NoError(t, ResumeMediaScrape(&env, operation))
 	assert.Equal(t, []string{"SNES"}, gotOptions.Systems)
+	assert.Equal(t, "resume-run", gotOptions.RunID)
 	assert.True(t, gotOptions.Force)
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()

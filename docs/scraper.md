@@ -53,6 +53,8 @@ For each system, the normal loop:
 
 The sentinel tag format is `scraper.<id>:scraped`, for example `scraper.gamelist.xml:scraped`. Writing it last is intentional: if a normal record write fails, the transaction rolls back and the missing sentinel leaves that media row eligible for retry.
 
+Force scrapes also persist a run ID and write `scraper-run.<id>:<run-id>` to each media row completed in that operation. If Core restarts mid-force-scrape, resume reuses that run ID and skips rows already marked for the same run while still refreshing older rows that only had the normal sentinel. Run markers are removed when the operation reaches a terminal state.
+
 Per-record write failures are non-fatal: they increment `Skipped`, emit `Err`, and continue. Fatal setup/load/database errors end the run with a terminal update unless caused by context cancellation.
 
 ## Tags And Properties

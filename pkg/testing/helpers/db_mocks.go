@@ -2431,6 +2431,27 @@ func (m *MockMediaDBI) GetScrapedMediaIDs(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) GetScrapeRunMediaIDs(
+	ctx context.Context, scraperID, runID string, systemDBID int64,
+) (map[int64]struct{}, error) {
+	args := m.Called(ctx, scraperID, runID, systemDBID)
+	if result, ok := args.Get(0).(map[int64]struct{}); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
+func (m *MockMediaDBI) ClearScrapeRunMarkers(ctx context.Context, scraperID, runID string) error {
+	if !m.hasExpectation("ClearScrapeRunMarkers") {
+		return nil
+	}
+	args := m.Called(ctx, scraperID, runID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) UpsertMediaTags(ctx context.Context, mediaDBID int64, tags []database.TagInfo) error {
 	args := m.Called(ctx, mediaDBID, tags)
 	if err := args.Error(0); err != nil {

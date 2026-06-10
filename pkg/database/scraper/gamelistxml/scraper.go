@@ -543,6 +543,17 @@ const (
 	companionWriteBatchSize = 10
 )
 
+func shouldUseRunMarker(opts scraper.ScrapeOptions) bool {
+	return opts.Force && opts.RunID != ""
+}
+
+func appendRunMarker(scraperID string, opts scraper.ScrapeOptions, write *database.ScrapeWrite) {
+	if !shouldUseRunMarker(opts) || write == nil {
+		return
+	}
+	write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(scraperID, opts.RunID))
+}
+
 // scrapeLoop runs the full load→match→write cycle for all systems, emitting
 // progress updates on ch. It closes ch when done.
 func (g *GamelistXMLScraper) scrapeLoop(
@@ -657,7 +668,20 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			return
 		}
 		scrapedIDs := map[int64]struct{}{}
-		if !opts.Force {
+		if opts.Force {
+			if shouldUseRunMarker(opts) {
+				var scrapeRunErr error
+				scrapedIDs, scrapeRunErr = mdb.GetScrapeRunMediaIDs(ctx, id, opts.RunID, system.DBID)
+				if scrapeRunErr != nil {
+					if errors.Is(scrapeRunErr, context.Canceled) || errors.Is(scrapeRunErr, context.DeadlineExceeded) {
+						sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
+						return
+					}
+					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: scrapeRunErr, Done: true})
+					return
+				}
+			}
+		} else {
 			var scrapedErr error
 			scrapedIDs, scrapedErr = mdb.GetScrapedMediaIDs(ctx, id, system.DBID)
 			if scrapedErr != nil {
@@ -868,16 +892,18 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				return
 			}
 
+			write := &database.ScrapeWrite{
+				Sentinel:   scraper.SentinelTagInfo(id),
+				MediaTags:  mapped.MediaTags,
+				MediaProps: mapped.MediaProps,
+				TitleTags:  mapped.TitleTags,
+				TitleProps: mapped.TitleProps,
+			}
+			appendRunMarker(id, opts, write)
 			writeTarget := database.ScrapeWriteTarget{
 				MediaDBID:      record.MatchedMediaDBID,
 				MediaTitleDBID: record.MatchedTitleDBID,
-				Write: &database.ScrapeWrite{
-					Sentinel:   scraper.SentinelTagInfo(id),
-					MediaTags:  mapped.MediaTags,
-					MediaProps: mapped.MediaProps,
-					TitleTags:  mapped.TitleTags,
-					TitleProps: mapped.TitleProps,
-				},
+				Write:          write,
 			}
 			writeStart := time.Now()
 			writeErr := mdb.ApplyScrapeResult(ctx, writeTarget.MediaDBID, writeTarget.MediaTitleDBID, writeTarget.Write)
@@ -1979,6 +2005,7 @@ func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
 			if matched.MediaLevelWriteSafe {
 				write.MediaTags = companionChildTags(c)
 			}
+			appendRunMarker("gamelist.xml", opts, write)
 			titlePayloadKey := companionTitlePayloadKey(write)
 			if existingKey, ok := titlePayloadByTitleDBID[media.MediaTitleDBID]; !ok {
 				titlePayloadByTitleDBID[media.MediaTitleDBID] = titlePayloadKey

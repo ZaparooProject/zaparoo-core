@@ -484,6 +484,56 @@ func (db *MediaDB) GetScrapedMediaIDs(
 	if err != nil {
 		return nil, fmt.Errorf("failed to find scraper sentinel tag for scraper %q: %w", scraperID, err)
 	}
+	mediaIDs, err := getMediaIDsForTagDBIDs(ctx, db.sql, systemDBID, tagDBIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query scraped media IDs for scraper %q: %w", scraperID, err)
+	}
+	return mediaIDs, nil
+}
+
+// GetScrapeRunMediaIDs returns media DBIDs in systemDBID completed during a
+// specific persisted scraper run.
+func (db *MediaDB) GetScrapeRunMediaIDs(
+	ctx context.Context, scraperID, runID string, systemDBID int64,
+) (map[int64]struct{}, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	if runID == "" {
+		return map[int64]struct{}{}, nil
+	}
+
+	tagDBIDs, err := findScraperSentinelTagDBIDs(ctx, db.sql, string(tags.ScraperRunType(scraperID)), runID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find scraper run tag for scraper %q run %q: %w", scraperID, runID, err)
+	}
+	mediaIDs, err := getMediaIDsForTagDBIDs(ctx, db.sql, systemDBID, tagDBIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query scrape run media IDs for scraper %q run %q: %w", scraperID, runID, err)
+	}
+	return mediaIDs, nil
+}
+
+// ClearScrapeRunMarkers removes per-run completion markers after a scraper
+// operation reaches a terminal state.
+func (db *MediaDB) ClearScrapeRunMarkers(ctx context.Context, scraperID, runID string) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	if runID == "" {
+		return nil
+	}
+
+	tagDBIDs, err := findScraperSentinelTagDBIDs(ctx, db.sql, string(tags.ScraperRunType(scraperID)), runID)
+	if err != nil {
+		return fmt.Errorf("failed to find scraper run tag for scraper %q run %q: %w", scraperID, runID, err)
+	}
+	return clearMediaTagsForTagDBIDs(ctx, db.sql, tagDBIDs)
+}
+
+func getMediaIDsForTagDBIDs(
+	ctx context.Context, db *sql.DB, systemDBID int64, tagDBIDs []int64,
+) (map[int64]struct{}, error) {
 	if len(tagDBIDs) == 0 {
 		return map[int64]struct{}{}, nil
 	}
@@ -506,9 +556,9 @@ func (db *MediaDB) GetScrapedMediaIDs(
 		WHERE m.SystemDBID = ?
 		  AND mt.MediaDBID = m.DBID
 		  AND mt.TagDBID IN (` + placeholders + `)`
-	rows, err := db.sql.QueryContext(ctx, query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query scraped media IDs for scraper %q: %w", scraperID, err)
+		return nil, fmt.Errorf("failed to query media IDs for tag DBIDs: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -520,14 +570,40 @@ func (db *MediaDB) GetScrapedMediaIDs(
 	for rows.Next() {
 		var mediaDBID int64
 		if err := rows.Scan(&mediaDBID); err != nil {
-			return nil, fmt.Errorf("failed to scan scraped media ID: %w", err)
+			return nil, fmt.Errorf("failed to scan tagged media ID: %w", err)
 		}
 		mediaIDs[mediaDBID] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate scraped media IDs: %w", err)
+		return nil, fmt.Errorf("failed to iterate tagged media IDs: %w", err)
 	}
 	return mediaIDs, nil
+}
+
+func clearMediaTagsForTagDBIDs(ctx context.Context, db *sql.DB, tagDBIDs []int64) error {
+	if len(tagDBIDs) == 0 {
+		return nil
+	}
+
+	placeholders := prepareVariadic("?", ",", len(tagDBIDs))
+	args := make([]any, 0, len(tagDBIDs))
+	for _, tagDBID := range tagDBIDs {
+		args = append(args, tagDBID)
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
+	if _, err := db.ExecContext(ctx, `DELETE FROM MediaTags WHERE TagDBID IN (`+placeholders+`)`, args...); err != nil {
+		return fmt.Errorf("failed to delete media tag links: %w", err)
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
+	if _, err := db.ExecContext(ctx, `
+		DELETE FROM Tags
+		WHERE DBID IN (`+placeholders+`)
+		  AND NOT EXISTS (SELECT 1 FROM MediaTags WHERE MediaTags.TagDBID = Tags.DBID)
+	`, args...); err != nil {
+		return fmt.Errorf("failed to delete unreferenced tags: %w", err)
+	}
+	return nil
 }
 
 func findScraperSentinelTagDBIDs(ctx context.Context, db *sql.DB, scraperType, tagValue string) ([]int64, error) {

@@ -45,6 +45,9 @@ type ScrapeOptions struct {
 	// Pauser pauses scrape work while another foreground activity needs the system.
 	Pauser *syncutil.Pauser
 
+	// RunID identifies a persisted scraper operation across restarts.
+	RunID string
+
 	// Systems limits scraping to these system IDs. Nil or empty means all systems.
 	Systems []string
 

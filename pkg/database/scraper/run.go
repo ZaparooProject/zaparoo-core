@@ -33,6 +33,15 @@ func SentinelTagInfo(scraperID string) database.TagInfo {
 	}
 }
 
+// RunTagInfo returns the per-run marker written to media rows completed during
+// a persisted scraper operation.
+func RunTagInfo(scraperID, runID string) database.TagInfo {
+	return database.TagInfo{
+		Type: string(tags.ScraperRunType(scraperID)),
+		Tag:  runID,
+	}
+}
+
 // RunScraper creates a ScrapeUpdate channel, calls fn (which must start its own
 // goroutine and close the channel when done), and returns the read end.
 // If fn returns an error synchronously, a terminal FatalErr update is emitted
