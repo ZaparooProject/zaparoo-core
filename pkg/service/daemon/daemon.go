@@ -878,10 +878,9 @@ func (s *Service) startService() {
 	}
 
 	if result.RestartRequested != nil && result.RestartRequested() {
-		if execErr := s.restartServiceBinary(); execErr != nil {
-			log.Error().Err(execErr).Msg("failed to re-exec for restart")
-			os.Exit(1)
-		}
+		execErr := s.restartServiceBinary()
+		log.Error().Err(execErr).Msg("failed to re-exec for restart")
+		os.Exit(1)
 	}
 
 	os.Exit(0)
