@@ -616,6 +616,27 @@ func TestNewNamesIndex_ReportsSystemBeforeLoadingExistingData(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestNewNamesIndex_PreexistingCorruptFastFail(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCorrupt, nil).Twice()
+
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{{ID: "NES"}},
+		&database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}, func(IndexStatus) {}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "media database is corrupt")
+	assert.Contains(t, err.Error(), "original database left untouched")
+	mockMediaDB.AssertNotCalled(t, "GetAllSystems")
+	mockMediaDB.AssertNotCalled(t, "GetAllTags")
+	mockMediaDB.AssertNotCalled(t, "GetAllTagTypes")
+	mockMediaDB.AssertNotCalled(t, "SetIndexingSystems", mock.Anything)
+	mockMediaDB.AssertExpectations(t)
+}
+
 func TestNewNamesIndex_CorruptExistingTagsMarksDatabaseCorrupt(t *testing.T) {
 	t.Parallel()
 
