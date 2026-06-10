@@ -873,6 +873,7 @@ func (db *MediaDB) Close() error {
 	db.WaitForBackgroundOperations()
 
 	logSQLTraceSummary()
+	clearUtilityTagCacheFor(db.sql)
 
 	err := db.sql.Close()
 	if err != nil {
