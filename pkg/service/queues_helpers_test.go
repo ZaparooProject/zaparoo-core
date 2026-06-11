@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	gozapscript "github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -307,6 +308,10 @@ func TestScriptHasMediaLaunchingCommand(t *testing.T) {
 	}
 }
 
+func testSlotAdvArgs(slot string) gozapscript.AdvArgs {
+	return gozapscript.NewAdvArgs(map[string]string{string(gozapscript.KeySlot): slot})
+}
+
 func TestScriptHasMediaDisruptingCommand(t *testing.T) {
 	t.Parallel()
 
@@ -338,6 +343,36 @@ func TestScriptHasMediaDisruptingCommand(t *testing.T) {
 			name: "playlist.next is disrupting",
 			script: &gozapscript.Script{
 				Cmds: []gozapscript.Command{{Name: gozapscript.ZapScriptCmdPlaylistNext}},
+			},
+			expected: true,
+		},
+		{
+			name: "background launch is not disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{
+					Name:    gozapscript.ZapScriptCmdLaunch,
+					AdvArgs: testSlotAdvArgs(mediaslot.Background),
+				}},
+			},
+			expected: false,
+		},
+		{
+			name: "background playlist command is not disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{
+					Name:    gozapscript.ZapScriptCmdPlaylistNext,
+					AdvArgs: testSlotAdvArgs(mediaslot.Background),
+				}},
+			},
+			expected: false,
+		},
+		{
+			name: "invalid launch slot remains disrupting",
+			script: &gozapscript.Script{
+				Cmds: []gozapscript.Command{{
+					Name:    gozapscript.ZapScriptCmdLaunch,
+					AdvArgs: testSlotAdvArgs("badslot"),
+				}},
 			},
 			expected: true,
 		},

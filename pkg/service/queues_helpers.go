@@ -79,11 +79,23 @@ func scriptHasMediaDisruptingCommand(script *zapscript.Script) bool {
 		return false
 	}
 	for _, cmd := range script.Cmds {
-		if zscript.IsMediaDisruptingCommand(cmd.Name) {
-			return true
+		if !zscript.IsMediaDisruptingCommand(cmd.Name) {
+			continue
 		}
+		if commandTargetsBackgroundSlot(cmd) {
+			continue
+		}
+		return true
 	}
 	return false
+}
+
+func commandTargetsBackgroundSlot(cmd zapscript.Command) bool {
+	if !zscript.IsMediaLaunchingCommand(cmd.Name) && !zscript.IsPlaylistCommand(cmd.Name) {
+		return false
+	}
+	slot, err := mediaslot.Normalize(cmd.AdvArgs.Get(zapscript.KeySlot))
+	return err == nil && slot == mediaslot.Background
 }
 
 func shouldPlayScanSuccessSound(script *zapscript.Script) bool {
@@ -91,11 +103,7 @@ func shouldPlayScanSuccessSound(script *zapscript.Script) bool {
 		return true
 	}
 	for _, cmd := range script.Cmds {
-		if !zscript.IsMediaLaunchingCommand(cmd.Name) && !zscript.IsPlaylistCommand(cmd.Name) {
-			continue
-		}
-		slot, err := mediaslot.Normalize(cmd.AdvArgs.Get(zapscript.KeySlot))
-		if err == nil && slot == mediaslot.Background {
+		if commandTargetsBackgroundSlot(cmd) {
 			return false
 		}
 	}
