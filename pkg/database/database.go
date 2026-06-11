@@ -169,6 +169,14 @@ type MediaFullRow struct {
 	Title MediaTitle
 }
 
+// MediaPathID identifies a Media row by its system ID and path, used for batch
+// media-ID resolution of API responses.
+type MediaPathID struct {
+	SystemID string
+	Path     string
+	DBID     int64
+}
+
 type TagType struct {
 	Type        string
 	DBID        int64
@@ -775,6 +783,9 @@ type MediaDBI interface {
 	// or nil, nil when no row is found.
 	FindMediaBySystemAndPath(ctx context.Context, systemDBID int64, path string) (*Media, error)
 	FindMediaBySystemAndPaths(ctx context.Context, systemDBID int64, paths []string) (map[string]Media, error)
+	// FindMediaIDsByPaths returns the system ID, path, and DBID of every Media
+	// row whose Path is in paths, in a single query across all systems.
+	FindMediaIDsByPaths(ctx context.Context, paths []string) ([]MediaPathID, error)
 	// FindSingleContainerLaunchMedia returns the one logical launch target in the
 	// direct contents of containerPath for systemDBID, or nil, nil when the
 	// container is empty, nested-only, or ambiguous.

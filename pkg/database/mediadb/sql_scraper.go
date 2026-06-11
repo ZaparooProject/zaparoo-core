@@ -122,6 +122,71 @@ func (db *MediaDB) FindMediaBySystemAndPaths(
 	return results, rows.Err()
 }
 
+func (db *MediaDB) FindMediaIDsByPaths(
+	ctx context.Context, paths []string,
+) ([]database.MediaPathID, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	uniquePaths := make([]string, 0, len(paths))
+	seenPaths := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if _, ok := seenPaths[path]; ok {
+			continue
+		}
+		seenPaths[path] = struct{}{}
+		uniquePaths = append(uniquePaths, path)
+	}
+
+	results := make([]database.MediaPathID, 0, len(uniquePaths))
+	for start := 0; start < len(uniquePaths); start += sqliteMaxParams {
+		end := min(start+sqliteMaxParams, len(uniquePaths))
+		batchResults, err := findMediaIDsByPathBatch(ctx, db.sql, uniquePaths[start:end])
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, batchResults...)
+	}
+	return results, nil
+}
+
+func findMediaIDsByPathBatch(ctx context.Context, db sqlQueryable, paths []string) ([]database.MediaPathID, error) {
+	args := make([]any, 0, len(paths))
+	for _, path := range paths {
+		args = append(args, path)
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
+	rows, err := db.QueryContext(ctx, `
+		SELECT s.SystemID, m.Path, m.DBID
+		FROM Media m
+		INNER JOIN Systems s ON m.SystemDBID = s.DBID
+		WHERE m.Path IN (`+prepareVariadic("?", ",", len(paths))+`)
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query FindMediaIDsByPaths: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	results := make([]database.MediaPathID, 0, len(paths))
+	for rows.Next() {
+		var row database.MediaPathID
+		if err := rows.Scan(&row.SystemID, &row.Path, &row.DBID); err != nil {
+			return nil, fmt.Errorf("failed to scan FindMediaIDsByPaths: %w", err)
+		}
+		results = append(results, row)
+	}
+	return results, rows.Err()
+}
+
 func (db *MediaDB) FindSingleContainerLaunchMedia(
 	ctx context.Context, systemDBID int64, containerPath string,
 ) (*database.Media, error) {

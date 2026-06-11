@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -604,6 +605,164 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 	assert.Equal(t, "NES", results[0].SystemID)
 	assert.Equal(t, "/games/mario.nes", results[0].Path)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func systemIDsAsDriverValues(systems []systemdefs.System) []driver.Value {
+	args := make([]driver.Value, 0, len(systems))
+	for _, sys := range systems {
+		args = append(args, sys.ID)
+	}
+	return args
+}
+
+const searchSystemFilterPattern = `(?s)WHERE\s+Systems\.SystemID IN \(\?(,\?)*\) AND\s+` +
+	`Media\.IsMissing = 0.*LIMIT \?`
+
+const searchVariantSystemFilterPattern = `(?s)WHERE\s+Systems\.SystemID IN \(\?(,\?)*\) AND\s+` +
+	`Media\.IsMissing = 0.*MediaTitles\.Slug LIKE.*LIMIT \?`
+
+func expectSearchTagsQuery(mock sqlmock.Sqlmock, mediaID int64) {
+	mock.ExpectPrepare("(?s)SELECT.*MediaDBID.*Tags\\.Tag.*TagTypes\\.Type.*FROM Media").
+		ExpectQuery().
+		WithArgs(mediaID, mediaID).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "DisplayName", "Type"}))
+}
+
+func TestSqlSearchMediaWithFilters_AllSystemsTagOnlySkipsSystemFilter(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := systemdefs.AllSystems()
+	require.NotEmpty(t, systems)
+	tags := []zapscript.TagFilter{{Type: "user", Value: "favorite"}}
+
+	mock.ExpectPrepare("(?s)WHERE\\s+Media\\.IsMissing = 0.*ORDER BY Media\\.DBID ASC.*LIMIT \\?").
+		ExpectQuery().
+		WithArgs("user", "favorite", "user", "favorite", 10).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
+			AddRow(systems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), 7))
+	expectSearchTagsQuery(mock, 7)
+
+	results, err := sqlSearchMediaWithFilters(
+		context.Background(), db, systems, nil, nil, tags, nil, nil, 10, false,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, systems[0].ID, results[0].SystemID)
+	assert.Equal(t, filepath.ToSlash(filepath.Join("roms", "favorite.rom")), results[0].Path)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaWithFilters_DuplicateSystemsMissingOneKeepsSystemFilter(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	allSystems := systemdefs.AllSystems()
+	require.GreaterOrEqual(t, len(allSystems), 2)
+	systems := make([]systemdefs.System, 0, len(allSystems))
+	for range allSystems {
+		systems = append(systems, allSystems[0])
+	}
+	tags := []zapscript.TagFilter{{Type: "user", Value: "favorite"}}
+	args := systemIDsAsDriverValues(systems)
+	args = append(args, "user", "favorite", "user", "favorite", 10)
+
+	mock.ExpectPrepare(searchSystemFilterPattern).
+		ExpectQuery().
+		WithArgs(args...).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
+			AddRow(allSystems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), 8))
+	expectSearchTagsQuery(mock, 8)
+
+	results, err := sqlSearchMediaWithFilters(
+		context.Background(), db, systems, nil, nil, tags, nil, nil, 10, false,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, allSystems[0].ID, results[0].SystemID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaWithFilters_NonTagDrivenKeepsSystemFilter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("include name", func(t *testing.T) {
+		t.Parallel()
+		db, mock, err := testsqlmock.NewSQLMock()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		systems := systemdefs.AllSystems()
+		require.NotEmpty(t, systems)
+		tags := []zapscript.TagFilter{{Type: "user", Value: "favorite"}}
+		args := systemIDsAsDriverValues(systems)
+		args = append(args, "user", "favorite", "user", "favorite", 10)
+
+		mock.ExpectPrepare(searchSystemFilterPattern).
+			ExpectQuery().
+			WithArgs(args...).
+			WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
+				AddRow(systems[0].ID, "Favorite", filepath.ToSlash(filepath.Join("roms", "favorite.rom")), 9))
+		expectSearchTagsQuery(mock, 9)
+
+		results, err := sqlSearchMediaWithFilters(
+			context.Background(), db, systems, nil, nil, tags, nil, nil, 10, true,
+		)
+
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, systems[0].ID, results[0].SystemID)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("variant groups", func(t *testing.T) {
+		t.Parallel()
+		db, mock, err := testsqlmock.NewSQLMock()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		systems := systemdefs.AllSystems()
+		require.NotEmpty(t, systems)
+		tags := []zapscript.TagFilter{{Type: "user", Value: "favorite"}}
+		args := systemIDsAsDriverValues(systems)
+		args = append(args, "%mario%", "%mario%", "user", "favorite", "user", "favorite", 10)
+
+		mock.ExpectPrepare(searchVariantSystemFilterPattern).
+			ExpectQuery().
+			WithArgs(args...).
+			WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
+				AddRow(systems[0].ID, "Mario", filepath.ToSlash(filepath.Join("roms", "mario.rom")), 10))
+		expectSearchTagsQuery(mock, 10)
+
+		results, err := sqlSearchMediaWithFilters(
+			context.Background(), db, systems, [][]string{{"mario"}}, []string{"mario"}, tags, nil, nil, 10, false,
+		)
+
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, filepath.ToSlash(filepath.Join("roms", "mario.rom")), results[0].Path)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestRequestedAllSystemsRequiresUniqueSystemIDs(t *testing.T) {
+	t.Parallel()
+
+	allSystems := systemdefs.AllSystems()
+	require.GreaterOrEqual(t, len(allSystems), 2)
+	duplicatedFirst := make([]systemdefs.System, 0, len(allSystems))
+	for range allSystems {
+		duplicatedFirst = append(duplicatedFirst, allSystems[0])
+	}
+
+	assert.True(t, requestedAllSystems(allSystems))
+	assert.False(t, requestedAllSystems(duplicatedFirst))
 }
 
 func TestSqlGetTags(t *testing.T) {

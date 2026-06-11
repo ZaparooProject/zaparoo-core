@@ -154,6 +154,7 @@ type invalidationScope struct {
 // invalidateCaches handles all cache invalidation in one place
 func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 	db.inMemoryTagCache.Store(nil)
+	clearPrefixPolicyCache()
 	if scope.UtilityTagDBIDsChanged {
 		clearUtilityTagCache()
 		db.utilityTagCacheDirty = false
@@ -307,6 +308,7 @@ func (db *MediaDB) Open() error {
 	sqlInstance.SetMaxOpenConns(2)
 	db.sql = sqlInstance
 	clearUtilityTagCache()
+	clearPrefixPolicyCache()
 
 	if !exists {
 		log.Debug().Msg("media database is new, allocating schema")
@@ -879,6 +881,7 @@ func (db *MediaDB) Close() error {
 
 	logSQLTraceSummary()
 	clearUtilityTagCacheFor(db.sql)
+	clearPrefixPolicyCacheFor(db.sql)
 
 	err := db.sql.Close()
 	if err != nil {
@@ -922,6 +925,7 @@ func (db *MediaDB) cacheInvalidationScopeForCommittedTransaction() invalidationS
 func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform platforms.Platform) error {
 	db.sql = sqlDB
 	clearUtilityTagCache()
+	clearPrefixPolicyCache()
 	db.ctx = ctx
 	db.pl = platform
 	db.clock = clockwork.NewRealClock()
