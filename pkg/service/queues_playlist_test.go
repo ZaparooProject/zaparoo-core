@@ -23,8 +23,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -69,6 +71,15 @@ func setupPlaylistTestEnv(t *testing.T) *ServiceContext {
 		LaunchSoftwareQueue: make(chan *tokens.Token, 10),
 		PlaylistQueue:       make(chan *playlists.Playlist, 10),
 	}
+}
+
+func makeServicePlaylist() *playlists.Playlist {
+	items := []playlists.PlaylistItem{
+		{Name: "Item 1", ZapScript: "**test1"},
+		{Name: "Item 2", ZapScript: "**test2"},
+		{Name: "Item 3", ZapScript: "**test3"},
+	}
+	return playlists.NewPlaylist("id", "name", items)
 }
 
 func TestRunTokenZapScript_ClearsPlaylistOnMediaChange(t *testing.T) {
@@ -194,4 +205,55 @@ func TestRunTokenZapScript_NoPlaylistClearForNonMediaCommand(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		// expected: nothing sent
 	}
+}
+
+func TestHandlePlaylist_BackgroundSlotUpdatesBackgroundStateOnly(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	active := makeServicePlaylist()
+	svc.State.SetActivePlaylist(active)
+	background := makeServicePlaylist()
+	background.Slot = mediaslot.Background
+	background.Playing = false
+
+	handlePlaylist(svc, background, nil)
+
+	assert.Same(t, active, svc.State.GetActivePlaylist(), "background update must not replace active playlist")
+	assert.Same(t, background, svc.State.GetBackgroundPlaylist())
+	assert.Equal(t, mediaslot.Background, background.Slot)
+}
+
+func TestHandlePlaylist_BackgroundClearClearsBackgroundMediaOnly(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	active := makeServicePlaylist()
+	svc.State.SetActivePlaylist(active)
+	background := makeServicePlaylist()
+	background.Slot = mediaslot.Background
+	svc.State.SetBackgroundPlaylist(background)
+	svc.State.SetBackgroundMedia(models.NewActiveMedia("Audio", "Audio", "track.mp3", "Track", "native-audio"))
+	require.NotNil(t, svc.State.BackgroundMedia())
+
+	handlePlaylist(svc, &playlists.Playlist{Slot: mediaslot.Background, Clear: true}, nil)
+
+	assert.Same(t, active, svc.State.GetActivePlaylist(), "background clear must not clear active playlist")
+	assert.Nil(t, svc.State.GetBackgroundPlaylist())
+	assert.Nil(t, svc.State.BackgroundMedia())
+}
+
+func TestHandlePlaylist_InvalidSlotIgnored(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	active := makeServicePlaylist()
+	background := makeServicePlaylist()
+	svc.State.SetActivePlaylist(active)
+	svc.State.SetBackgroundPlaylist(background)
+
+	handlePlaylist(svc, &playlists.Playlist{Slot: "badslot", Clear: true}, nil)
+
+	assert.Same(t, active, svc.State.GetActivePlaylist())
+	assert.Same(t, background, svc.State.GetBackgroundPlaylist())
 }

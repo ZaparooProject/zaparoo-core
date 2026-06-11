@@ -176,6 +176,27 @@ func TestStreamingSource_Seek(t *testing.T) {
 	}
 }
 
+func TestStreamingSource_SeekClampsToTrackBounds(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSource()
+	s.sourceRate = targetSampleRate
+	s.played = int64(targetSampleRate / 2)
+	s.seek(-time.Second)
+	s.mu.Lock()
+	assert.Equal(t, int64(0), s.played)
+	assert.Equal(t, int64(0), s.seekSrcFrame)
+	s.mu.Unlock()
+	<-s.wakeCh
+
+	s.played = int64(targetSampleRate)
+	s.seek(time.Second)
+	s.mu.Lock()
+	assert.Equal(t, int64(targetSampleRate), s.played)
+	assert.Equal(t, int64(targetSampleRate), s.seekSrcFrame)
+	s.mu.Unlock()
+}
+
 func TestStreamingSource_MixAdd(t *testing.T) {
 	t.Parallel()
 	s := newTestSource()
@@ -228,6 +249,27 @@ func TestNewStreamingSource_FileNotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNewStreamingSource_WAVInitializesStreamingFields(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "audio.wav")
+	require.NoError(t, os.WriteFile(path, validWAVHeader(), 0o600))
+
+	s, err := newStreamingSource(path, 0.75)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, s.decoder.Close())
+	}()
+
+	assert.Equal(t, path, s.path)
+	assert.InDelta(t, 0.75, s.volume, 1e-9)
+	assert.Equal(t, 44100, s.sourceRate)
+	assert.Len(t, s.ring, ringBufferFrames)
+	assert.Len(t, s.chunk, decodeChunkFrames)
+	assert.NotNil(t, s.wakeCh)
+	assert.NotNil(t, s.resampler)
+}
+
 func TestNewLongformPlaybackManager(t *testing.T) {
 	t.Parallel()
 	m := NewLongformPlaybackManager()
@@ -237,12 +279,57 @@ func TestNewLongformPlaybackManager(t *testing.T) {
 	assert.Nil(t, m.background)
 }
 
+func TestLongformPlaybackManager_PlayReplacesSourceAndUsesDrainCallback(t *testing.T) {
+	oldDevice := globalDevice
+	testDevice := &sharedDevice{manageCh: make(chan struct{}, 1), opening: true}
+	globalDevice = testDevice
+	t.Cleanup(func() { globalDevice = oldDevice })
+
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "first.wav")
+	secondPath := filepath.Join(dir, "second.wav")
+	require.NoError(t, os.WriteFile(firstPath, validWAVHeader(), 0o600))
+	require.NoError(t, os.WriteFile(secondPath, validWAVHeader(), 0o600))
+
+	m := NewLongformPlaybackManager()
+	drainCalls := 0
+	m.SetDrainCallback(mediaslot.Primary, func() { drainCalls++ })
+
+	require.NoError(t, m.Play("", firstPath, PlaybackOptions{}))
+	first := m.primary
+	require.NotNil(t, first)
+	assert.InDelta(t, 1.0, first.volume, 1e-9, "zero volume option defaults to unity gain")
+
+	require.NoError(t, m.Play(mediaslot.Primary, secondPath, PlaybackOptions{Volume: 0.25}))
+	second := m.primary
+	require.NotNil(t, second)
+	assert.NotSame(t, first, second)
+	assert.InDelta(t, 0.25, second.volume, 1e-9)
+	first.mu.Lock()
+	assert.True(t, first.stopped, "replaced source must be stopped")
+	first.mu.Unlock()
+
+	testDevice.devMu.Lock()
+	require.Len(t, testDevice.sources, 1)
+	assert.Same(t, second, testDevice.sources[0])
+	testDevice.devMu.Unlock()
+
+	second.onDrained()
+	assert.Equal(t, 1, drainCalls)
+	assert.Nil(t, m.primary, "drained current source must clear slot")
+	second.stopAndDeregister()
+}
+
 // TestLongformPlaybackManager_InvalidSlot verifies every mutating method returns
 // an error when given a slot name that is neither primary nor background.
 func TestLongformPlaybackManager_InvalidSlot(t *testing.T) {
 	t.Parallel()
 	m := NewLongformPlaybackManager()
 
+	require.Error(t,
+		m.Play("badslot", filepath.Join("Music", "track.mp3"), PlaybackOptions{}),
+		"Play should error on invalid slot",
+	)
 	require.Error(t, m.Stop("badslot"), "Stop should error on invalid slot")
 	require.Error(t, m.Pause("badslot"), "Pause should error on invalid slot")
 	require.Error(t, m.Resume("badslot"), "Resume should error on invalid slot")

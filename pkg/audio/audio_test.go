@@ -470,3 +470,44 @@ func TestPCMCache_ConcurrentAccess(t *testing.T) {
 	p.pcmCacheMu.RUnlock()
 	assert.True(t, ok, "concurrent loads should populate cache exactly once")
 }
+
+func TestOneshotSource_MixAddAddsWithVolumeAndDrains(t *testing.T) {
+	t.Parallel()
+
+	s := &oneshotSource{
+		samples: [][2]float64{{1, -1}, {0.5, 0.25}},
+		volume:  0.5,
+	}
+	buf := [][2]float64{{0.25, 0.25}, {}, {9, 9}}
+
+	n, drained := s.mixAdd(buf, 1)
+	require.Equal(t, 1, n)
+	assert.False(t, drained)
+	assert.InDelta(t, 0.75, buf[0][0], 1e-9)
+	assert.InDelta(t, -0.25, buf[0][1], 1e-9)
+
+	n, drained = s.mixAdd(buf[1:], 2)
+	require.Equal(t, 1, n)
+	assert.True(t, drained)
+	assert.InDelta(t, 0.25, buf[1][0], 1e-9)
+	assert.InDelta(t, 0.125, buf[1][1], 1e-9)
+	assert.Equal(t, [2]float64{9, 9}, buf[2], "mixAdd must not write beyond available samples")
+}
+
+func TestOneshotSource_CancelAndDrainCallback(t *testing.T) {
+	t.Parallel()
+
+	s := &oneshotSource{samples: [][2]float64{{1, 1}}, volume: 1}
+	s.cancel()
+	n, drained := s.mixAdd(make([][2]float64, 1), 1)
+	assert.Equal(t, 0, n)
+	assert.True(t, drained)
+
+	// No callback: no panic.
+	s.onDrained()
+
+	called := false
+	s.onDrain = func() { called = true }
+	s.onDrained()
+	assert.True(t, called)
+}

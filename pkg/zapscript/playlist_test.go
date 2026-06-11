@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
@@ -370,6 +371,41 @@ func TestCmdPlaylistPlay_ResumesActivePausedPlaylist(t *testing.T) {
 	assert.True(t, result.Playlist.Playing, "play must set Playing=true")
 	queued := <-queue
 	assert.True(t, queued.Playing)
+}
+
+func TestCmdPlaylistPlay_BackgroundSlotResumesBackgroundPlaylist(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = mediaslot.Background
+	pls.Playing = false
+
+	result, err := cmdPlaylistPlay(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{AdvArgs: bgAdvArgs(), Args: []string{}},
+		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.True(t, result.Playlist.Playing)
+	assert.Equal(t, mediaslot.Background, result.Playlist.Slot)
+	queued := <-queue
+	assert.Equal(t, mediaslot.Background, queued.Slot)
+}
+
+func TestQueuePlaylistUpdate_SetsSlotFromCommandArgs(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = ""
+	err := queuePlaylistUpdate(&platforms.CmdEnv{
+		Cmd:      zapscript.Command{AdvArgs: bgAdvArgs()},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	}, pls)
+	require.NoError(t, err)
+	queued := <-queue
+	assert.Same(t, pls, queued)
+	assert.Equal(t, mediaslot.Background, queued.Slot)
 }
 
 func TestCmdPlaylistNext_AdvancesIndex(t *testing.T) {
