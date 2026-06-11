@@ -25,13 +25,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/rs/zerolog"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -61,11 +61,12 @@ func TestReadDBStats_CombinesFileAndSQLiteStats(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
+	fs := afero.NewOsFs()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "media.db")
-	require.NoError(t, writeSizedFile(dbPath, 11))
-	require.NoError(t, writeSizedFile(dbPath+"-wal", 17))
-	require.NoError(t, writeSizedFile(dbPath+"-shm", 23))
+	require.NoError(t, writeSizedFile(fs, dbPath, 11))
+	require.NoError(t, writeSizedFile(fs, dbPath+"-wal", 17))
+	require.NoError(t, writeSizedFile(fs, dbPath+"-shm", 23))
 
 	mock.ExpectQuery(`PRAGMA page_count;`).
 		WillReturnRows(sqlmock.NewRows([]string{"page_count"}).AddRow(101))
@@ -203,8 +204,8 @@ func assertJSONNumber(t *testing.T, fields map[string]any, name, expected string
 	assert.Equal(t, expected, number.String())
 }
 
-func writeSizedFile(path string, size int) error {
-	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), size), 0o600); err != nil {
+func writeSizedFile(fs afero.Fs, path string, size int) error {
+	if err := afero.WriteFile(fs, path, bytes.Repeat([]byte("x"), size), 0o600); err != nil {
 		return fmt.Errorf("write sized file: %w", err)
 	}
 	return nil

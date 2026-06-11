@@ -36,6 +36,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const mediaBySystemIDQueryPattern = `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName ` +
+	`FROM Media m INDEXED BY media_system_path_idx.*` +
+	`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*` +
+	`ORDER BY m\.Path`
+
 func TestSqlUpdateLastGenerated_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
@@ -1063,6 +1068,36 @@ func TestSqlPopulateSystemTagsCacheForSystems_InsertError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlPopulateSystemTagsCacheForSystems_CommitError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{{ID: "nes"}}
+
+	mock.ExpectPrepare("SELECT DBID FROM Systems WHERE SystemID = ?").
+		ExpectQuery().WithArgs("nes").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE mtl.SystemDBID IN.*`).
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 3))
+	mock.ExpectCommit().WillReturnError(sql.ErrTxDone)
+
+	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to commit selective system tags cache transaction")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlSearchMediaBySlug_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
@@ -1429,11 +1464,6 @@ func TestCheckForDuplicateMediaTitles_WithDuplicates(t *testing.T) {
 	assert.Contains(t, duplicates[1], "count=3")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
-
-const mediaBySystemIDQueryPattern = `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName ` +
-	`FROM Media m INDEXED BY media_system_path_idx.*` +
-	`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*` +
-	`ORDER BY m\.Path`
 
 func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 	t.Parallel()
