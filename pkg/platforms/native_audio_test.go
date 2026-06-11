@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -217,7 +218,7 @@ func TestNativeAudioControl_BadSlot(t *testing.T) {
 	fp := &fakePlayback{}
 	fn := nativeAudioControl(fp, ControlPause)
 	err := fn(context.Background(), nil, ControlParams{
-		Args: map[string]string{mediaslot.Arg: "badslot"},
+		Args: map[string]string{string(gozapscript.KeySlot): "badslot"},
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "normalize slot")

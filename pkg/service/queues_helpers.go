@@ -21,6 +21,7 @@ package service
 
 import (
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	zscript "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 )
@@ -83,6 +84,22 @@ func scriptHasMediaDisruptingCommand(script *zapscript.Script) bool {
 		}
 	}
 	return false
+}
+
+func shouldPlayScanSuccessSound(script *zapscript.Script) bool {
+	if script == nil {
+		return true
+	}
+	for _, cmd := range script.Cmds {
+		if !zscript.IsMediaLaunchingCommand(cmd.Name) && !zscript.IsPlaylistCommand(cmd.Name) {
+			continue
+		}
+		slot, err := mediaslot.Normalize(cmd.AdvArgs.Get(zapscript.KeySlot))
+		if err == nil && slot == mediaslot.Background {
+			return false
+		}
+	}
+	return true
 }
 
 // injectCommands inserts new commands into the command slice after the given index.

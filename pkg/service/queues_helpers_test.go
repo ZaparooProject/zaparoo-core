@@ -25,6 +25,7 @@ import (
 	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestShouldRunBeforeMediaStartHook(t *testing.T) {
@@ -382,6 +383,54 @@ func TestScriptHasMediaDisruptingCommand(t *testing.T) {
 			t.Parallel()
 			result := scriptHasMediaDisruptingCommand(tt.script)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestShouldPlayScanSuccessSound(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		script   string
+		expected bool
+	}{
+		{
+			name:     "primary launch plays success",
+			script:   "**launch:/games/song.mp3",
+			expected: true,
+		},
+		{
+			name:     "background launch suppresses success",
+			script:   "**launch:/games/song.mp3?slot=background",
+			expected: false,
+		},
+		{
+			name:     "background playlist command suppresses success",
+			script:   "**playlist.play:/games/music.pls?slot=background",
+			expected: false,
+		},
+		{
+			name:     "non-media background arg still plays success",
+			script:   "**echo:hello?slot=background",
+			expected: true,
+		},
+		{
+			name:     "invalid slot falls back to normal success",
+			script:   "**launch:/games/song.mp3?slot=badslot",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			parser := gozapscript.NewParser(tt.script)
+			script, err := parser.ParseScript()
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expected, shouldPlayScanSuccessSound(&script))
 		})
 	}
 }

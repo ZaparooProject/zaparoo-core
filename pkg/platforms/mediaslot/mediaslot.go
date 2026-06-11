@@ -33,10 +33,6 @@ const (
 	Background = "background"
 )
 
-// Arg is the ZapScript AdvArgs and media-control API key for selecting the
-// target media slot.
-const Arg = "slot"
-
 // Normalize returns the canonical slot name for raw, which may be empty,
 // mixed-case, or padded with whitespace. An empty raw value resolves to
 // Primary. Returns an error for any unrecognised slot name.

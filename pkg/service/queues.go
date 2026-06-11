@@ -194,7 +194,7 @@ func stopNativePlaybackBeforePrimaryCommand(
 		return nil
 	}
 
-	slot := cmd.AdvArgs.Get(mediaslot.Arg)
+	slot := cmd.AdvArgs.Get(gozapscript.KeySlot)
 	if slot == "" && activePlaylist != nil && activePlaylist.Slot != "" {
 		slot = activePlaylist.Slot
 	}
@@ -396,9 +396,6 @@ func processTokenQueue(
 
 			log.Info().Msgf("processing token: %v", t)
 
-			path, enabled := svc.Config.SuccessSoundPath(helpers.DataDir(svc.Platform))
-			helpers.PlayConfiguredSound(player, path, enabled, assets.SuccessSound, "success")
-
 			err := svc.Platform.ScanHook(&t)
 			if err != nil {
 				log.Error().Err(err).Msgf("error writing tmp scan result")
@@ -425,8 +422,6 @@ func processTokenQueue(
 				CreatedAt:      now,
 			}
 
-			// Parse script early to check if playtime limits apply
-			// Only block media-launching commands, not utility commands (execute, delay, echo, etc.)
 			mappedValue, hasMapping := getMapping(svc.Config, svc.DB, svc.Platform, t)
 			scriptText := t.Text
 			if hasMapping {
@@ -438,6 +433,11 @@ func processTokenQueue(
 			if parseErr != nil {
 				log.Debug().Err(parseErr).Msg("failed to parse script for playtime check")
 				// Continue anyway - the error will be caught in runTokenZapScript
+			}
+
+			if parseErr != nil || shouldPlayScanSuccessSound(&script) {
+				path, enabled := svc.Config.SuccessSoundPath(helpers.DataDir(svc.Platform))
+				helpers.PlayConfiguredSound(player, path, enabled, assets.SuccessSound, "success")
 			}
 
 			if parseErr == nil {

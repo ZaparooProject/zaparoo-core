@@ -76,7 +76,7 @@ func activePlaylistForSlot(env *platforms.CmdEnv, slot string) *playlists.Playli
 }
 
 func commandSlot(env *platforms.CmdEnv) (string, error) {
-	slot, err := mediaslot.Normalize(env.Cmd.AdvArgs.Get(mediaslot.Arg))
+	slot, err := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
 	if err != nil {
 		return "", fmt.Errorf("normalize media slot: %w", err)
 	}
@@ -321,7 +321,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		}
 
 		pls := playlists.NewPlaylist(plsArg.ID, plsArg.Name, items)
-		slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(mediaslot.Arg))
+		slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
 		if slotErr != nil {
 			return nil, fmt.Errorf("normalize media slot: %w", slotErr)
 		}
@@ -362,7 +362,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	}
 
 	pls := playlists.NewPlaylist(env.Cmd.Args[0], name, items)
-	slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(mediaslot.Arg))
+	slot, slotErr := mediaslot.Normalize(env.Cmd.AdvArgs.Get(zapscript.KeySlot))
 	if slotErr != nil {
 		return nil, fmt.Errorf("normalize media slot: %w", slotErr)
 	}

@@ -22,6 +22,7 @@ package methods
 import (
 	"fmt"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
@@ -76,7 +77,7 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 		for k, v := range params.Args {
 			controlArgs[k] = v
 		}
-		controlArgs[mediaslot.Arg] = slot
+		controlArgs[string(gozapscript.KeySlot)] = slot
 	}
 
 	switch {

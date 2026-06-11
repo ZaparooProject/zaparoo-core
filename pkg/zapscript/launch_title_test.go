@@ -20,6 +20,8 @@
 package zapscript
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/go-zapscript"
@@ -28,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -42,6 +45,44 @@ func newMockPlatformWithLaunchers() *mocks.MockPlatform {
 	mp := mocks.NewMockPlatform()
 	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
 	return mp
+}
+
+func TestCmdTitlePassesSlotToLaunchOptions(t *testing.T) {
+	t.Parallel()
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := newMockPlatformWithLaunchers()
+	mediaPath := filepath.Join(string(os.PathSeparator), "music", "F-Zero - Big Blue.mp3")
+	cmd := zapscript.Command{
+		Name: "launch.title",
+		Args: []string{"Audio/F-Zero - Big Blue"},
+		AdvArgs: zapscript.NewAdvArgs(map[string]string{
+			string(zapscript.KeySlot): mediaslot.Background,
+		}),
+	}
+	mockMediaDB.On("GetCachedSlugResolution", mock.Anything, "Audio", mock.Anything, []zapscript.TagFilter(nil)).
+		Return(int64(0), "", false)
+	mockMediaDB.On("SearchMediaBySlug", mock.Anything, "Audio", mock.Anything, []zapscript.TagFilter(nil)).
+		Return([]database.SearchResultWithCursor{{SystemID: "Audio", Name: "F-Zero - Big Blue", Path: mediaPath}}, nil)
+	mockMediaDB.On("SetCachedSlugResolution", mock.Anything, "Audio", mock.Anything, []zapscript.TagFilter(nil),
+		mock.AnythingOfType("int64"), mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockPlatform.On("LaunchMedia", mock.Anything, mediaPath, mock.Anything, mock.Anything, mock.MatchedBy(
+		func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.Slot == mediaslot.Background
+		},
+	)).Return(nil)
+
+	result, err := cmdTitle(mockPlatform, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{},
+		Cfg:      &config.Instance{},
+		Database: &database.Database{MediaDB: mockMediaDB},
+		Cmd:      cmd,
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.MediaChanged)
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
 }
 
 func TestCmdTitle(t *testing.T) {

@@ -332,7 +332,7 @@ func makePlaylistEnv() (pls *playlists.Playlist, queue chan *playlists.Playlist)
 // bgAdvArgs returns an AdvArgs with slot=background set.
 func bgAdvArgs() zapscript.AdvArgs {
 	var aa zapscript.AdvArgs
-	return aa.With("slot", "background")
+	return aa.With(zapscript.KeySlot, "background")
 }
 
 // TestCommandSlot_InheritFromPlaylistSlot verifies that commandSlot inherits the
@@ -616,7 +616,7 @@ func TestCommandSlot_InvalidSlotReturnsError(t *testing.T) {
 	t.Parallel()
 
 	var aa zapscript.AdvArgs
-	aa = aa.With("slot", "badvalue")
+	aa = aa.With(zapscript.KeySlot, "badvalue")
 	_, err := cmdPlaylistNext(nil, platforms.CmdEnv{
 		Cmd:      zapscript.Command{AdvArgs: aa},
 		Playlist: playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)},

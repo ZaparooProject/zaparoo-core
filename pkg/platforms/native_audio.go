@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -114,7 +115,7 @@ func nativeAudioControl(playback audio.PlaybackManager, action string) ControlFu
 		if playback == nil {
 			return errors.New("native audio playback is not initialized")
 		}
-		rawSlot := params.Args[mediaslot.Arg]
+		rawSlot := params.Args[string(gozapscript.KeySlot)]
 		if rawSlot == "" {
 			rawSlot = mediaslot.Primary
 		}

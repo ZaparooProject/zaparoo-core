@@ -356,7 +356,7 @@ func TestStopNativePlaybackBeforePrimaryCommandSkipsBackgroundLaunch(t *testing.
 
 	err := stopNativePlaybackBeforePrimaryCommand(svc, gozapscript.Command{
 		Name:    gozapscript.ZapScriptCmdLaunch,
-		AdvArgs: gozapscript.NewAdvArgs(map[string]string{mediaslot.Arg: mediaslot.Background}),
+		AdvArgs: gozapscript.NewAdvArgs(map[string]string{string(gozapscript.KeySlot): mediaslot.Background}),
 	}, nil)
 
 	require.NoError(t, err)
