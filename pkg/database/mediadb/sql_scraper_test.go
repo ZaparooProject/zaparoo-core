@@ -21,6 +21,7 @@ package mediadb
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -126,6 +127,67 @@ func TestFindMediaBySystemAndPaths_EmptyInput(t *testing.T) {
 	results, err := mediaDB.FindMediaBySystemAndPaths(context.Background(), 1, nil)
 	require.NoError(t, err)
 	assert.Empty(t, results)
+}
+
+func TestFindMediaIDsByPaths_EmptyInput(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+
+	results, err := mediaDB.FindMediaIDsByPaths(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Nil(t, results)
+}
+
+func TestFindMediaIDsByPaths_ReturnsSamePathAcrossSystems(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mediaPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (2, 'SNES', 'Super Nintendo');
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 2, 'mario', 'Mario');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 2, ?);
+	`, mediaPath)
+	require.NoError(t, err)
+
+	results, err := mediaDB.FindMediaIDsByPaths(ctx, []string{mediaPath})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []database.MediaPathID{
+		{SystemID: "NES", Path: mediaPath, DBID: 1},
+		{SystemID: "SNES", Path: mediaPath, DBID: 2},
+	}, results)
+}
+
+func TestFindMediaIDsByPaths_ChunksLargeInput(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupScraperTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	marioPath := filepath.ToSlash(filepath.Join("roms", "mario.nes"))
+	zeldaPath := filepath.ToSlash(filepath.Join("roms", "zelda.nes"))
+	_, err := mediaDB.sql.ExecContext(ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (2, 1, 'zelda', 'Zelda');
+		INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, ?);
+	`, zeldaPath)
+	require.NoError(t, err)
+
+	paths := make([]string, 0, sqliteMaxParams+2)
+	paths = append(paths, marioPath)
+	for i := range sqliteMaxParams {
+		paths = append(paths, filepath.ToSlash(filepath.Join("roms", "missing", fmt.Sprintf("game-%04d.nes", i))))
+	}
+	paths = append(paths, zeldaPath)
+
+	results, err := mediaDB.FindMediaIDsByPaths(ctx, paths)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []database.MediaPathID{
+		{SystemID: "NES", Path: marioPath, DBID: 1},
+		{SystemID: "NES", Path: zeldaPath, DBID: 2},
+	}, results)
 }
 
 func TestFindSingleContainerLaunchMedia_ReturnsOnlyDirectChild(t *testing.T) {

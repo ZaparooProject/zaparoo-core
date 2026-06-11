@@ -687,6 +687,19 @@ func sqlSearchMediaPathParts(
 	return results, nil
 }
 
+func requestedAllSystems(systems []systemdefs.System) bool {
+	requested := make(map[string]struct{}, len(systems))
+	for _, sys := range systems {
+		requested[sys.ID] = struct{}{}
+	}
+	for _, sys := range systemdefs.AllSystems() {
+		if _, ok := requested[sys.ID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func sqlSearchMediaWithFilters(
 	ctx context.Context,
 	db sqlQueryable,
@@ -710,7 +723,7 @@ func sqlSearchMediaWithFilters(
 	// but its presence makes SQLite drive the join from Systems and scan every
 	// title instead of the handful of tag matches. Omit it in that case.
 	skipSystemFilter := len(variantGroups) == 0 && !includeName && len(tags) > 0 &&
-		len(systems) >= len(systemdefs.AllSystems())
+		requestedAllSystems(systems)
 
 	// Build system ID args
 	args := make([]any, 0)

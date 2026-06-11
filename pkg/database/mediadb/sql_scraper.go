@@ -132,13 +132,36 @@ func (db *MediaDB) FindMediaIDsByPaths(
 		return nil, ErrNullSQL
 	}
 
+	uniquePaths := make([]string, 0, len(paths))
+	seenPaths := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if _, ok := seenPaths[path]; ok {
+			continue
+		}
+		seenPaths[path] = struct{}{}
+		uniquePaths = append(uniquePaths, path)
+	}
+
+	results := make([]database.MediaPathID, 0, len(uniquePaths))
+	for start := 0; start < len(uniquePaths); start += sqliteMaxParams {
+		end := min(start+sqliteMaxParams, len(uniquePaths))
+		batchResults, err := findMediaIDsByPathBatch(ctx, db.sql, uniquePaths[start:end])
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, batchResults...)
+	}
+	return results, nil
+}
+
+func findMediaIDsByPathBatch(ctx context.Context, db sqlQueryable, paths []string) ([]database.MediaPathID, error) {
 	args := make([]any, 0, len(paths))
 	for _, path := range paths {
 		args = append(args, path)
 	}
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
-	rows, err := db.sql.QueryContext(ctx, `
+	rows, err := db.QueryContext(ctx, `
 		SELECT s.SystemID, m.Path, m.DBID
 		FROM Media m
 		INNER JOIN Systems s ON m.SystemDBID = s.DBID
