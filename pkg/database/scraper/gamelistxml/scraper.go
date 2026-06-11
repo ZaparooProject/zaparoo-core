@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -577,6 +578,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 	defer close(ch)
 
 	const id = "gamelist.xml"
+	metrics := perfmetrics.NewRecorderForDB(mdb)
 	var totalProcessed, totalMatched, totalSkipped int
 	totalSteps := len(systems)
 
@@ -598,6 +600,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 
 	for i, system := range systems {
 		currentStep := i + 1
+		systemStart := time.Now()
+		systemMetricsStart := metrics.Capture(ctx, false)
+		var titleLoadDuration, allTitlesLoadDuration, mediaLoadDuration time.Duration
+		var scrapedIDsLoadDuration, parseDuration, recordLoadDuration time.Duration
 		sendUpdate := func(update scraper.ScrapeUpdate) {
 			update.TotalSteps = totalSteps
 			update.CurrentStep = currentStep
@@ -622,7 +628,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		titlesBySlug := make(map[string]database.MediaTitle)
 		allTitlesBySlug := make(map[string]database.MediaTitle)
 		if opts.Force {
+			titlesStart := time.Now()
 			allTitles, titlesErr := mdb.GetTitlesBySystemID(system.ID)
+			titleLoadDuration = time.Since(titlesStart)
 			if titlesErr != nil {
 				if errors.Is(titlesErr, context.Canceled) || errors.Is(titlesErr, context.DeadlineExceeded) {
 					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -641,7 +649,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		} else {
 			sentinel := scraper.SentinelTagInfo(id)
 			sentinelTag := sentinel.Type + ":" + sentinel.Tag
+			titlesStart := time.Now()
 			unscraped, titlesErr := mdb.FindMediaTitlesWithoutSentinel(ctx, system.DBID, sentinelTag)
+			titleLoadDuration = time.Since(titlesStart)
 			if titlesErr != nil {
 				if errors.Is(titlesErr, context.Canceled) || errors.Is(titlesErr, context.DeadlineExceeded) {
 					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -653,7 +663,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			for _, t := range unscraped {
 				titlesBySlug[t.Slug] = t
 			}
+			allTitlesStart := time.Now()
 			allTitles, allTitlesErr := mdb.GetTitlesBySystemID(system.ID)
+			allTitlesLoadDuration = time.Since(allTitlesStart)
 			if allTitlesErr != nil {
 				if errors.Is(allTitlesErr, context.Canceled) || errors.Is(allTitlesErr, context.DeadlineExceeded) {
 					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -669,7 +681,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 		}
 
+		mediaStart := time.Now()
 		allMedia, mediaErr := mdb.GetMediaBySystemID(system.ID)
+		mediaLoadDuration = time.Since(mediaStart)
 		if mediaErr != nil {
 			if errors.Is(mediaErr, context.Canceled) || errors.Is(mediaErr, context.DeadlineExceeded) {
 				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -682,7 +696,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		if opts.Force {
 			if shouldUseRunMarker(opts) {
 				var scrapeRunErr error
+				scrapedIDsStart := time.Now()
 				scrapedIDs, scrapeRunErr = mdb.GetScrapeRunMediaIDs(ctx, id, opts.RunID, system.DBID)
+				scrapedIDsLoadDuration = time.Since(scrapedIDsStart)
 				if scrapeRunErr != nil {
 					if errors.Is(scrapeRunErr, context.Canceled) || errors.Is(scrapeRunErr, context.DeadlineExceeded) {
 						sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -694,7 +710,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 		} else {
 			var scrapedErr error
+			scrapedIDsStart := time.Now()
 			scrapedIDs, scrapedErr = mdb.GetScrapedMediaIDs(ctx, id, system.DBID)
+			scrapedIDsLoadDuration = time.Since(scrapedIDsStart)
 			if scrapedErr != nil {
 				if errors.Is(scrapedErr, context.Canceled) || errors.Is(scrapedErr, context.DeadlineExceeded) {
 					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -728,7 +746,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 		}
 
+		parseStart := time.Now()
 		parsed, parseErr := g.loadParsedGamelistSystem(ctx, system)
+		parseDuration = time.Since(parseStart)
 		if parseErr != nil {
 			if errors.Is(parseErr, context.Canceled) || errors.Is(parseErr, context.DeadlineExceeded) {
 				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -763,7 +783,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			continue
 		}
 
+		recordLoadStart := time.Now()
 		records, loadErr := g.loadRecordsFromParsed(ctx, system, indexes, parsed)
+		recordLoadDuration = time.Since(recordLoadStart)
 		if loadErr != nil {
 			if errors.Is(loadErr, context.Canceled) || errors.Is(loadErr, context.DeadlineExceeded) {
 				sendUpdate(scraper.ScrapeUpdate{
@@ -944,6 +966,32 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			return
 		}
 		logScrapeWriteStats("gamelistxml: regular write stats", system.ID, &regularWriteStats)
+		systemMetricsEnd := metrics.Capture(ctx, false)
+		perfmetrics.AddDelta(
+			log.Info().
+				Str("scraper", id).
+				Str("system", system.ID).
+				Int("records", totalRecords).
+				Int("companionProcessed", companion.Processed).
+				Int("processed", companion.Processed+processed).
+				Int("matched", companion.Matched+matched).
+				Int("skipped", companion.Skipped+skipped).
+				Int("titleCandidates", len(titlesBySlug)).
+				Int("mediaCandidates", len(indexes.MediaByPathFold)).
+				Dur("elapsed", time.Since(systemStart)).
+				Dur("titleLoadDuration", titleLoadDuration).
+				Dur("allTitlesLoadDuration", allTitlesLoadDuration).
+				Dur("mediaLoadDuration", mediaLoadDuration).
+				Dur("scrapedIDsLoadDuration", scrapedIDsLoadDuration).
+				Dur("parseDuration", parseDuration).
+				Dur("recordLoadDuration", recordLoadDuration).
+				Dur("writeDuration", regularWriteStats.TotalDuration).
+				Dur("avgWriteDuration", regularWriteStats.averageDuration()).
+				Dur("maxWriteDuration", regularWriteStats.MaxDuration).
+				Int("writes", regularWriteStats.Writes),
+			&systemMetricsStart,
+			&systemMetricsEnd,
+		).Msg("gamelistxml: completed system scrape")
 		totalProcessed += companion.Processed + processed
 		totalMatched += companion.Matched + matched
 		totalSkipped += companion.Skipped + skipped

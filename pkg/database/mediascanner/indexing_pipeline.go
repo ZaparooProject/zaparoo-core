@@ -885,7 +885,9 @@ func loadSystemStateData(
 	}
 
 	// Load titles for this system
+	titlesStart := time.Now()
 	titles, err := db.GetTitlesBySystemID(systemID)
+	titlesElapsed := time.Since(titlesStart)
 	if err != nil {
 		return systemStateData{}, fmt.Errorf("failed to get titles for system %s: %w", systemID, err)
 	}
@@ -898,14 +900,19 @@ func loadSystemStateData(
 	}
 
 	// Load media for this system
+	mediaStart := time.Now()
 	media, err := db.GetMediaBySystemID(systemID)
+	mediaElapsed := time.Since(mediaStart)
 	if err != nil {
 		return systemStateData{}, fmt.Errorf("failed to get media for system %s: %w", systemID, err)
 	}
 
 	mediaTags := []database.MediaTagLink(nil)
+	mediaTagsElapsed := time.Duration(0)
 	if loadMediaTags {
+		mediaTagsStart := time.Now()
 		mediaTags, err = db.GetScannerMediaTagsBySystemID(systemID)
+		mediaTagsElapsed = time.Since(mediaTagsStart)
 		if err != nil {
 			return systemStateData{}, fmt.Errorf("failed to get scanner media tags for system %s: %w", systemID, err)
 		}
@@ -916,6 +923,9 @@ func loadSystemStateData(
 		Int("titles", len(titles)).
 		Int("media", len(media)).
 		Int("mediaTags", len(mediaTags)).
+		Dur("titlesDuration", titlesElapsed).
+		Dur("mediaDuration", mediaElapsed).
+		Dur("mediaTagsDuration", mediaTagsElapsed).
 		Dur("elapsed", time.Since(startTime)).
 		Msg("loaded existing data for system resume")
 

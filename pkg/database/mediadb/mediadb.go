@@ -353,24 +353,17 @@ func (db *MediaDB) SetIndexingCacheSize(enable bool) {
 	}
 }
 
-// AnalyzeApproximate refreshes query-planner statistics with a bounded row sample
-// (PRAGMA analysis_limit). Used right after bulk indexing, before the synchronous
-// cache builds, so their queries plan against fresh stats instead of waiting for
-// the full ANALYZE in background optimization.
+// AnalyzeApproximate refreshes query-planner statistics before synchronous
+// cache builds. PRAGMA optimize is intentionally used instead of raw ANALYZE:
+// on modern SQLite it bounds analysis work automatically and only refreshes
+// tables likely to benefit, which avoids multi-minute full-index scans on slow
+// MiSTer storage.
 func (db *MediaDB) AnalyzeApproximate() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	if _, err := db.sql.ExecContext(db.ctx, "PRAGMA analysis_limit = 400"); err != nil {
-		return fmt.Errorf("failed to set analysis_limit: %w", err)
-	}
-	defer func() {
-		if _, err := db.sql.ExecContext(db.ctx, "PRAGMA analysis_limit = 0"); err != nil {
-			log.Warn().Err(err).Msg("failed to reset analysis_limit")
-		}
-	}()
-	if _, err := db.sql.ExecContext(db.ctx, "ANALYZE"); err != nil {
-		return fmt.Errorf("failed to run approximate analyze: %w", err)
+	if _, err := db.sql.ExecContext(db.ctx, "PRAGMA optimize=0x10002"); err != nil {
+		return fmt.Errorf("failed to run pragma optimize: %w", err)
 	}
 	return nil
 }
@@ -2853,10 +2846,10 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 	// after the database is already open for searches.
 	//
 	// Step order matters: temporary repair jobs run before cache rebuilds so
-	// upgraded databases are corrected without blocking startup. ANALYZE then
-	// updates query-planner statistics, the page-prefetch warms the OS buffer
-	// cache for the tables the search path joins, and BrowseCache/WAL checkpoint
-	// follow as non-critical housekeeping.
+	// upgraded databases are corrected without blocking startup. PRAGMA optimize
+	// refreshes planner statistics only where SQLite decides it is useful, the
+	// page-prefetch warms the OS buffer cache for the tables the search path
+	// joins, and BrowseCache/WAL checkpoint follow as non-critical housekeeping.
 	db.needsIndexRebuild.Store(false)
 
 	steps = append(steps,
@@ -2867,7 +2860,7 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 			maxRetries: 0, retryDelay: rd,
 		},
 		optimizationStep{
-			name: "analyze", fn: db.Analyze,
+			name: "pragma_optimize", fn: db.AnalyzeApproximate,
 			maxRetries: 2, retryDelay: rd,
 		},
 		optimizationStep{
@@ -2895,7 +2888,7 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 		},
 		// NOTE: VACUUM is intentionally omitted. It takes an exclusive lock
 		// for the entire duration, blocking all reads (including card scans).
-		// ANALYZE alone is sufficient for query planner performance. SQLite
+		// PRAGMA optimize is sufficient for planner maintenance here. SQLite
 		// reuses free pages on the next INSERT, so disk reclamation is not needed.
 	)
 

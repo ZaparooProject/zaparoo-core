@@ -157,10 +157,10 @@ func sqlDeleteMediaTagsByTagIDs(ctx context.Context, db sqlQueryable, mediaDBID 
 func sqlGetMediaTagsBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.MediaTagLink, error) {
 	query := `
 		SELECT mt.MediaDBID, mt.TagDBID
-		FROM MediaTags mt
-		JOIN Media m ON mt.MediaDBID = m.DBID
-		JOIN Systems s ON m.SystemDBID = s.DBID
-		WHERE s.SystemID = ?
+		FROM Media m INDEXED BY media_system_path_idx
+		CROSS JOIN MediaTags mt
+		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
+		  AND mt.MediaDBID = m.DBID
 	`
 	return sqlQueryMediaTagLinksBySystemID(ctx, db, query, systemID, systemID)
 }
@@ -208,10 +208,10 @@ func sqlGetScannerMediaTagsBySystemID(
 
 	query := `
 		SELECT mt.MediaDBID, mt.TagDBID
-		FROM MediaTags mt
-		JOIN Media m ON mt.MediaDBID = m.DBID
-		JOIN Systems s ON m.SystemDBID = s.DBID
-		WHERE s.SystemID = ?
+		FROM Media m INDEXED BY media_system_path_idx
+		CROSS JOIN MediaTags mt
+		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
+		  AND mt.MediaDBID = m.DBID
 	`
 	links, err := sqlQueryMediaTagLinksBySystemID(ctx, db, query, systemID, systemID)
 	if err != nil {
