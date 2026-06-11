@@ -989,8 +989,8 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				Dur("avgWriteDuration", regularWriteStats.averageDuration()).
 				Dur("maxWriteDuration", regularWriteStats.MaxDuration).
 				Int("writes", regularWriteStats.Writes),
-			systemMetricsStart,
-			systemMetricsEnd,
+			&systemMetricsStart,
+			&systemMetricsEnd,
 		).Msg("gamelistxml: completed system scrape")
 		totalProcessed += companion.Processed + processed
 		totalMatched += companion.Matched + matched

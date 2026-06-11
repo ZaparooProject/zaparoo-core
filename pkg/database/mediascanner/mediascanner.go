@@ -590,7 +590,7 @@ func NewNamesIndex(
 	phaseMetricsStart := runMetricsStart
 	logPhaseMetrics := func(phase string) {
 		phaseMetricsEnd := metrics.Capture(ctx, true)
-		perfmetrics.AddDelta(log.Info().Str("phase", phase), phaseMetricsStart, phaseMetricsEnd).
+		perfmetrics.AddDelta(log.Info().Str("phase", phase), &phaseMetricsStart, &phaseMetricsEnd).
 			Msg("media indexing phase metrics")
 		phaseMetricsStart = phaseMetricsEnd
 	}
@@ -1203,8 +1203,8 @@ func NewNamesIndex(
 				Str("system", systemID).
 				Int("files", len(files)).
 				Dur("elapsed", systemElapsed),
-			systemMetricsStart,
-			systemMetricsEnd,
+			&systemMetricsStart,
+			&systemMetricsEnd,
 		).Msg("completed system indexing")
 
 		if systemElapsed > 30*time.Second {
@@ -1416,8 +1416,8 @@ func NewNamesIndex(
 			Int("files", indexedFiles).
 			Int("systemsCompleted", len(indexedSystems)).
 			Dur("elapsed", indexElapsed),
-		runMetricsStart,
-		indexMetricsEnd,
+		&runMetricsStart,
+		&indexMetricsEnd,
 	).Msg("media indexing resource summary")
 
 	if err != nil {

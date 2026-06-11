@@ -1,6 +1,21 @@
 // Zaparoo Core
 // Copyright (c) 2026 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 // Package perfmetrics captures coarse process and SQLite resource counters for
 // long media operations. Snapshots are best-effort: missing /proc support or
@@ -68,8 +83,8 @@ type Snapshot struct {
 }
 
 type Recorder struct {
-	dbPath string
 	sqlDB  *sql.DB
+	dbPath string
 }
 
 func NewRecorder(dbPath string, sqlDB *sql.DB) Recorder {
@@ -109,7 +124,7 @@ func (r Recorder) Capture(ctx context.Context, includeDB bool) Snapshot {
 	return s
 }
 
-func AddDelta(event *zerolog.Event, start Snapshot, end Snapshot) *zerolog.Event {
+func AddDelta(event *zerolog.Event, start, end *Snapshot) *zerolog.Event {
 	event.Dur("wallDuration", end.At.Sub(start.At))
 
 	if start.IOOK && end.IOOK {
@@ -238,10 +253,10 @@ func readDBStats(ctx context.Context, dbPath string, sqlDB *sql.DB) (DBStats, bo
 	if v, ok := querySingleInt(ctx, sqlDB, "PRAGMA cache_size;"); ok {
 		stats.CacheSize = v
 	}
-	if busy, frames, checkpointed, ok := queryWALStats(ctx, sqlDB); ok {
-		stats.WALBusy = busy
-		stats.WALFrames = frames
-		stats.WALCheckpointedFrames = checkpointed
+	if walStats, ok := queryWALStats(ctx, sqlDB); ok {
+		stats.WALBusy = walStats.busy
+		stats.WALFrames = walStats.frames
+		stats.WALCheckpointedFrames = walStats.checkpointed
 	}
 	return stats, true
 }
@@ -262,10 +277,20 @@ func querySingleInt(ctx context.Context, db *sql.DB, query string) (int64, bool)
 	return value, true
 }
 
-func queryWALStats(ctx context.Context, db *sql.DB) (int64, int64, int64, bool) {
-	var busy, frames, checkpointed int64
-	if err := db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(NOOP);").Scan(&busy, &frames, &checkpointed); err != nil {
-		return 0, 0, 0, false
+type walCheckpointStats struct {
+	busy         int64
+	frames       int64
+	checkpointed int64
+}
+
+func queryWALStats(ctx context.Context, db *sql.DB) (walCheckpointStats, bool) {
+	var stats walCheckpointStats
+	if err := db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(NOOP);").Scan(
+		&stats.busy,
+		&stats.frames,
+		&stats.checkpointed,
+	); err != nil {
+		return walCheckpointStats{}, false
 	}
-	return busy, frames, checkpointed, true
+	return stats, true
 }

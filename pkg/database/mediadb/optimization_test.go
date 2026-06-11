@@ -301,7 +301,8 @@ func TestRunBackgroundOptimization_Success(t *testing.T) {
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
-	// Steps run in order: temporary_repair_parent_dirs → pragma_optimize → page_prefetch → browse_cache → wal_checkpoint
+	// Steps run in order: temporary_repair_parent_dirs → pragma_optimize →
+	// page_prefetch → browse_cache → wal_checkpoint.
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
