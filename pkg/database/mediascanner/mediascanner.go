@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/browseprefix"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -48,7 +49,9 @@ import (
 
 // Batch configuration for transaction optimization
 const (
-	maxFilesPerTransaction = 10000
+	maxFilesPerTransaction      = 10000
+	mediaDatabaseCorruptMessage = "media database is corrupt; manual repair or rebuild required; " +
+		"original database left untouched"
 )
 
 func detectBrowsePrefixPolicy(files []platforms.ScanResult, threshold float64, minFiles int) browseprefix.Policy {
@@ -63,6 +66,17 @@ func detectBrowsePrefixPolicy(files []platforms.ScanResult, threshold float64, m
 // Kept for focused scanner tests; production code uses detectBrowsePrefixPolicy.
 func detectNumberingPattern(files []platforms.ScanResult, threshold float64, minFiles int) bool {
 	return detectBrowsePrefixPolicy(files, threshold, minFiles).Kind == browseprefix.KindRank
+}
+
+func isSQLiteDatabaseCorrupt(err error) bool {
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.Code == sqlite3.ErrCorrupt || sqliteErr.Code == sqlite3.ErrNotADB
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "database disk image is malformed") ||
+		strings.Contains(msg, "file is not a database")
 }
 
 type PathResult struct {
@@ -571,12 +585,26 @@ func NewNamesIndex(
 ) (int, error) {
 	db := fdb.MediaDB
 	indexStartTime := time.Now()
+	metrics := perfmetrics.NewRecorderForDB(db)
+	runMetricsStart := metrics.Capture(ctx, true)
+	phaseMetricsStart := runMetricsStart
+	logPhaseMetrics := func(phase string) {
+		phaseMetricsEnd := metrics.Capture(ctx, true)
+		perfmetrics.AddDelta(log.Info().Str("phase", phase), &phaseMetricsStart, &phaseMetricsEnd).
+			Msg("media indexing phase metrics")
+		phaseMetricsStart = phaseMetricsEnd
+	}
 
 	// Activate the NormalizeTag cache for the duration of this indexing run.
 	// The bracket vocabulary is small (~200–400 unique strings), so the cache
 	// stabilises early and collapses the repeated regex cost across 100k+ files.
 	tags.SetNormalizeTagCache(make(map[string]string))
 	defer tags.SetNormalizeTagCache(nil)
+
+	// Same lifecycle for company-name normalization, which runs the slug word
+	// pipeline per developer/publisher paren tag and repeats heavily.
+	tags.SetCompanyNameCache(make(map[string]tags.TagValue))
+	defer tags.SetCompanyNameCache(nil)
 
 	// Temporarily increase SQLite cache to 32MB for bulk indexing
 	db.SetIndexingCacheSize(true)
@@ -653,6 +681,8 @@ func NewNamesIndex(
 		if setErr := db.SetIndexingStatus(""); setErr != nil {
 			log.Error().Err(setErr).Msg("failed to clear indexing status after failed run")
 		}
+	case mediadb.IndexingStatusCorrupt:
+		return 0, errors.New(mediaDatabaseCorruptMessage)
 	}
 
 	// Build launcher metadata once so runnable-system filtering and scanner
@@ -667,6 +697,7 @@ func NewNamesIndex(
 	for _, v := range getSystemPathsForLauncherCache(ctx, platform.RootDirs(cfg), systems, launcherCache) {
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
+	logPhaseMetrics("path_discovery")
 	update(IndexStatus{Phase: PhaseInitializing})
 
 	systemsWithScanners := make(map[string]bool, len(allLaunchers))
@@ -733,20 +764,23 @@ func NewNamesIndex(
 
 	// Initialize scan state
 	scanState := database.ScanState{
-		SystemsIndex:    0,
-		SystemIDs:       make(map[string]int),
-		TitlesIndex:     0,
-		TitleIDs:        make(map[string]int),
-		MediaIndex:      0,
-		MediaIDs:        make(map[string]int),
-		MediaTitleIDs:   make(map[int]int),
-		MediaParentDirs: make(map[int]string),
-		MediaTagIDs:     make(map[int]map[int]struct{}),
-		TagTypesIndex:   0,
-		TagTypeIDs:      make(map[string]int),
-		TagsIndex:       0,
-		TagIDs:          make(map[string]int),
-		MissingMedia:    make(map[int]struct{}),
+		SystemsIndex:       0,
+		SystemIDs:          make(map[string]int),
+		TitlesIndex:        0,
+		TitleIDs:           make(map[string]int),
+		TitleNames:         make(map[int]string),
+		MediaIndex:         0,
+		MediaIDs:           make(map[string]int),
+		MediaTitleIDs:      make(map[int]int),
+		MediaNeedsSortName: make(map[int]struct{}),
+		MediaSortNames:     make(map[int]string),
+		MediaParentDirs:    make(map[int]string),
+		MediaTagIDs:        make(map[int]map[int]struct{}),
+		TagTypesIndex:      0,
+		TagTypeIDs:         make(map[string]int),
+		TagsIndex:          0,
+		TagIDs:             make(map[string]int),
+		MissingMedia:       make(map[int]struct{}),
 	}
 
 	// 3. Set up scan state — persistent mode is always active
@@ -755,13 +789,28 @@ func NewNamesIndex(
 	}
 	log.Info().Msgf("starting indexing for requested systems: %v (runnable: %v)", requestedSystemIDs, currentSystemIDs)
 
-	// Populate scan state from existing DB (max IDs, system map, tag maps)
+	// Populate scan state from existing DB (max IDs, system map, tag maps).
+	// TODO: Design a salvage-safe update-index path that does not require a
+	// full existing Tags scan before any rebuild can start. A corrupt Tags table
+	// currently blocks all update-index attempts, even when the caller would be
+	// willing to regenerate scanner-owned data.
 	if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, []string{}); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return handleCancellation(ctx, db, "Media indexing cancelled during scan state population")
 		}
+		if isSQLiteDatabaseCorrupt(err) {
+			if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCorrupt); setErr != nil {
+				log.Error().Err(setErr).Msg("failed to mark media database as corrupt")
+			}
+			if setErr := db.SetLastIndexedSystem(""); setErr != nil {
+				log.Error().Err(setErr).Msg("failed to clear last indexed system after corrupt database detection")
+			}
+			return 0, fmt.Errorf("%s: %w", mediaDatabaseCorruptMessage, err)
+		}
 		return 0, fmt.Errorf("failed to populate scan state: %w", err)
 	}
+
+	logPhaseMetrics("initial_state_population")
 
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
 		log.Error().Err(setErr).Msg("failed to set indexing status to running")
@@ -832,6 +881,12 @@ func NewNamesIndex(
 	filesInBatch := 0
 	batchStarted := false
 
+	// TODO: skip unchanged systems via a per-system fingerprint — store
+	// hash(sorted walked paths) + parser version + media row count after each
+	// system completes; on match at the next run, skip the state load, parse,
+	// and reconcile phases entirely. Needs its own design pass for
+	// invalidation rules (parser/config changes) and a forced-reindex path.
+	//
 	// Unified loop: each system is processed exactly once regardless of source.
 	// Filesystem scan, per-system launcher scanners, and any-scanners are all
 	// collected before the AddMediaPath phase. Populate* and FlushScanStateMaps
@@ -848,6 +903,7 @@ func NewNamesIndex(
 			return handleCancellationWithRollback(ctx, db, "Media indexing cancelled while paused")
 		}
 
+		systemMetricsStart := metrics.Capture(ctx, false)
 		systemID := sys.ID
 		status.SystemID = systemID
 		status.Step++
@@ -1141,11 +1197,15 @@ func NewNamesIndex(
 		completedSystems[systemID] = true
 
 		systemElapsed := time.Since(systemStartTime)
-		log.Info().
-			Str("system", systemID).
-			Int("files", len(files)).
-			Dur("elapsed", systemElapsed).
-			Msg("completed system indexing")
+		systemMetricsEnd := metrics.Capture(ctx, false)
+		perfmetrics.AddDelta(
+			log.Info().
+				Str("system", systemID).
+				Int("files", len(files)).
+				Dur("elapsed", systemElapsed),
+			&systemMetricsStart,
+			&systemMetricsEnd,
+		).Msg("completed system indexing")
 
 		if systemElapsed > 30*time.Second {
 			log.Warn().
@@ -1160,6 +1220,8 @@ func NewNamesIndex(
 		FlushScanStateMaps(&scanState)
 	}
 
+	logPhaseMetrics("systems")
+
 	status.Step++
 	status.SystemID = ""
 	update(status)
@@ -1172,6 +1234,8 @@ func NewNamesIndex(
 	scanState.TitleIDs = nil
 	scanState.MediaIDs = nil
 	scanState.MediaTitleIDs = nil
+	scanState.MediaNeedsSortName = nil
+	scanState.MediaSortNames = nil
 	scanState.MediaParentDirs = nil
 	scanState.MediaTagIDs = nil
 	scanState.TagTypeIDs = nil
@@ -1188,6 +1252,7 @@ func NewNamesIndex(
 		log.Error().Err(idxErr).Msg("failed to create secondary indexes")
 	}
 	log.Info().Dur("elapsed", time.Since(t0)).Msg("CreateSecondaryIndexes complete")
+	logPhaseMetrics("create_secondary_indexes")
 
 	// Mark database as complete and ready for use. UpdateLastGenerated clears
 	// SystemTagsCache and SlugResolutionCache via invalidateCaches, so cache
@@ -1196,6 +1261,7 @@ func NewNamesIndex(
 	if err != nil {
 		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
 	}
+	logPhaseMetrics("update_last_generated")
 
 	status.Phase = PhaseBuildingCaches
 	update(status)
@@ -1222,6 +1288,17 @@ func NewNamesIndex(
 
 	selectiveRun := len(requestedSystemIDs) > 0 && !fullRun
 
+	// Refresh planner statistics before the synchronous cache builds: their
+	// aggregate queries otherwise plan against stats from before the bulk
+	// (re)index, since the full ANALYZE only runs later in background
+	// optimization.
+	t0 = time.Now()
+	if analyzeErr := db.AnalyzeApproximate(); analyzeErr != nil {
+		log.Warn().Err(analyzeErr).Msg("failed to refresh planner statistics before cache builds")
+	}
+	log.Info().Dur("elapsed", time.Since(t0)).Msg("PragmaOptimize complete")
+	logPhaseMetrics("pragma_optimize")
+
 	// Populate caches after UpdateLastGenerated. For selective scans we rebuild
 	// the persisted per-system SQL cache, refresh in-memory slug coverage for the
 	// indexed systems, and rebuild the in-memory tag cache from the mixed
@@ -1236,12 +1313,14 @@ func NewNamesIndex(
 			Dur("elapsed", time.Since(t0)).
 			Int("systems", len(indexedSystemDefs)).
 			Msg("PopulateSystemTagsCacheForSystems complete")
+		logPhaseMetrics("populate_system_tags_cache")
 
 		t0 = time.Now()
 		if cacheErr := db.RebuildTagCache(); cacheErr != nil {
 			log.Error().Err(cacheErr).Msg("failed to rebuild tag cache after selective indexing")
 		}
 		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
+		logPhaseMetrics("rebuild_tag_cache")
 
 		t0 = time.Now()
 		if cacheErr := db.RefreshSlugSearchCacheForSystems(ctx, indexedSystems); cacheErr != nil {
@@ -1251,23 +1330,27 @@ func NewNamesIndex(
 			Dur("elapsed", time.Since(t0)).
 			Int("systems", len(indexedSystems)).
 			Msg("RefreshSlugSearchCacheForSystems complete")
+		logPhaseMetrics("refresh_slug_search_cache")
 	} else {
 		if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
 			log.Error().Err(cacheErr).Msg("failed to populate system tags cache")
 		}
 		log.Info().Dur("elapsed", time.Since(t0)).Msg("PopulateSystemTagsCache complete")
+		logPhaseMetrics("populate_system_tags_cache")
 
 		t0 = time.Now()
 		if cacheErr := db.RebuildSlugSearchCache(); cacheErr != nil {
 			log.Error().Err(cacheErr).Msg("failed to rebuild slug search cache")
 		}
 		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildSlugSearchCache complete")
+		logPhaseMetrics("rebuild_slug_search_cache")
 
 		t0 = time.Now()
 		if cacheErr := db.RebuildTagCache(); cacheErr != nil {
 			log.Error().Err(cacheErr).Msg("failed to rebuild tag cache")
 		}
 		log.Info().Dur("elapsed", time.Since(t0)).Msg("RebuildTagCache complete")
+		logPhaseMetrics("rebuild_tag_cache")
 	}
 
 	// Bump the index generation counter so persisted cache files written
@@ -1293,6 +1376,7 @@ func NewNamesIndex(
 			log.Error().Err(persistErr).Msg("failed to persist slug search cache to disk")
 		}
 	}
+	logPhaseMetrics("persist_caches")
 
 	// Mark indexing as completed and clear indexing metadata
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {
@@ -1326,6 +1410,15 @@ func NewNamesIndex(
 
 	indexedFiles = status.Files
 	indexElapsed := time.Since(indexStartTime)
+	indexMetricsEnd := metrics.Capture(ctx, true)
+	perfmetrics.AddDelta(
+		log.Info().
+			Int("files", indexedFiles).
+			Int("systemsCompleted", len(indexedSystems)).
+			Dur("elapsed", indexElapsed),
+		&runMetricsStart,
+		&indexMetricsEnd,
+	).Msg("media indexing resource summary")
 
 	if err != nil {
 		log.Error().

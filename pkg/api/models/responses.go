@@ -66,6 +66,11 @@ type BrowseEntry struct {
 	SystemIDs []string           `json:"systemIds,omitempty"`
 	Tags      []database.TagInfo `json:"tags,omitempty"`
 	MediaID   int64              `json:"mediaId,omitempty"`
+	// HasCover is true when the media or its title has at least one image
+	// property row. Only set for media-type entries and singleton-aliased
+	// directory entries. Always emitted (never omitempty) so clients can
+	// skip cover requests for entries without art.
+	HasCover bool `json:"hasCover"`
 }
 
 type BrowseResults struct {

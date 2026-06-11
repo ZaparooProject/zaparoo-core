@@ -38,19 +38,24 @@ func isWhitespace(b byte) bool {
 }
 
 // isWordBoundary checks if the position i in s is at a word boundary.
-// A word boundary exists between a word char and a non-word char (or start/end).
+// A word boundary exists between a regexp word char and a non-word char (or start/end).
 func isWordBoundaryBefore(s string, i int) bool {
 	if i == 0 {
 		return true
 	}
-	return !isAlphanumeric(s[i-1])
+	return !isRegexWordByte(s[i-1])
 }
 
 func isWordBoundaryAfter(s string, i int) bool {
 	if i >= len(s) {
 		return true
 	}
-	return !isAlphanumeric(s[i])
+	return !isRegexWordByte(s[i])
+}
+
+// isRegexWordByte matches Go regexp's ASCII `\w` class used by `\b`.
+func isRegexWordByte(b byte) bool {
+	return isAlphanumeric(b) || b == '_'
 }
 
 // collapseSpaces replaces runs of whitespace with a single space.
@@ -293,32 +298,43 @@ func findDiscPattern(s string) parseMatch {
 // Replaces: reRev = regexp.MustCompile(`(?i)\(Rev[\s-]([A-Z0-9]+)\)`)
 func findRevPattern(s string) parseMatch {
 	lower := strings.ToLower(s)
-	idx := strings.Index(lower, "(rev")
-	if idx == -1 || idx+4 >= len(s) {
-		return parseMatch{}
-	}
-	pos := idx + 4
-	// expect whitespace or '-'
-	if !isWhitespace(s[pos]) && s[pos] != '-' {
-		return parseMatch{}
-	}
-	pos++
-	// parse alphanumeric value
-	valStart := pos
-	for pos < len(s) && isAlphanumeric(s[pos]) {
+	searchFrom := 0
+	for {
+		idx := strings.Index(lower[searchFrom:], "(rev")
+		if idx == -1 {
+			return parseMatch{}
+		}
+		idx += searchFrom
+		if idx+4 >= len(s) {
+			return parseMatch{}
+		}
+
+		pos := idx + 4
+		// expect whitespace or '-'
+		if !isWhitespace(s[pos]) && s[pos] != '-' {
+			searchFrom = idx + 1
+			continue
+		}
 		pos++
-	}
-	if pos == valStart {
-		return parseMatch{}
-	}
-	// expect ")"
-	if pos >= len(s) || s[pos] != ')' {
-		return parseMatch{}
-	}
-	return parseMatch{
-		start: idx, end: pos + 1,
-		cap1s: valStart, cap1e: pos,
-		ok: true,
+		// parse alphanumeric value
+		valStart := pos
+		for pos < len(s) && isAlphanumeric(s[pos]) {
+			pos++
+		}
+		if pos == valStart {
+			searchFrom = idx + 1
+			continue
+		}
+		// expect ")"
+		if pos >= len(s) || s[pos] != ')' {
+			searchFrom = idx + 1
+			continue
+		}
+		return parseMatch{
+			start: idx, end: pos + 1,
+			cap1s: valStart, cap1e: pos,
+			ok: true,
+		}
 	}
 }
 
@@ -566,4 +582,201 @@ func findUnbracketedYear(s string) parseMatch {
 		}
 	}
 	return parseMatch{}
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
+}
+
+// isRegexSpace matches the regexp `\s` character class exactly ([\t\n\f\r ]).
+// Unlike isWhitespace it excludes '\v', which Go's regexp `\s` does not match.
+func isRegexSpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\f' || b == '\r'
+}
+
+// transMatch holds the result of bracketless translation tag matching.
+// Fields are indices into the original string; verS/verE are -1 when no
+// version suffix is present.
+type transMatch struct {
+	start, end   int  // full match bounds (incl. leading whitespace and trailing separator)
+	langS, langE int  // language code bounds
+	verS, verE   int  // version number bounds, -1 if absent
+	plusMinus    byte // '+' or '-'
+	ok           bool
+}
+
+// findBracketlessTranslation finds standalone translation tags like "T+Eng",
+// "T-Ger", or "T+Spa v1.2". The tag must be at the start of the string or
+// preceded by whitespace, and followed by whitespace, '.', or end of string.
+// Mirrors the regex engine's backtracking: longest language code first (3 then
+// 2 letters), version branch preferred over no-version, and greedy version
+// digit groups dropped one at a time until the trailing separator matches.
+// Replaces: reTrans = regexp.MustCompile(
+//
+//	`(^|\s)(T)([+-])([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
+func findBracketlessTranslation(s string) transMatch {
+	for i := range len(s) {
+		if s[i] != 'T' {
+			continue
+		}
+		if i > 0 && !isRegexSpace(s[i-1]) {
+			continue
+		}
+		if i+1 >= len(s) || (s[i+1] != '+' && s[i+1] != '-') {
+			continue
+		}
+		langStart := i + 2
+		maxLetters := 0
+		for langStart+maxLetters < len(s) && maxLetters < 3 && isASCIILetter(s[langStart+maxLetters]) {
+			maxLetters++
+		}
+		for letters := maxLetters; letters >= 2; letters-- {
+			langEnd := langStart + letters
+			tail, matched := matchTransTail(s, langEnd)
+			if !matched {
+				continue
+			}
+			start := i
+			if i > 0 {
+				start = i - 1 // include the single preceding whitespace char, like (^|\s)
+			}
+			return transMatch{
+				start: start, end: tail.end,
+				langS: langStart, langE: langEnd,
+				verS: tail.verS, verE: tail.verE,
+				plusMinus: s[i+1],
+				ok:        true,
+			}
+		}
+	}
+	return transMatch{}
+}
+
+// transTail holds the result of matching a translation tag's tail: the full
+// match end and version number bounds (-1 when absent).
+type transTail struct {
+	end, verS, verE int
+}
+
+// matchTransTail matches `(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)` at position p.
+func matchTransTail(s string, p int) (transTail, bool) {
+	// Version branch first: the optional group is greedy.
+	q := p
+	for q < len(s) && isRegexSpace(s[q]) {
+		q++
+	}
+	if q > p && q < len(s) && s[q] == 'v' {
+		digitsStart := q + 1
+		digitsEnd := digitsStart
+		for digitsEnd < len(s) && isDigit(s[digitsEnd]) {
+			digitsEnd++
+		}
+		if digitsEnd > digitsStart {
+			// Collect candidate version ends: base digits plus each ".digits" group.
+			ends := []int{digitsEnd}
+			r := digitsEnd
+			for r < len(s) && s[r] == '.' {
+				g := r + 1
+				for g < len(s) && isDigit(s[g]) {
+					g++
+				}
+				if g == r+1 {
+					break
+				}
+				ends = append(ends, g)
+				r = g
+			}
+			// Greedy first: try the longest version, dropping groups until the
+			// separator matches.
+			for k := len(ends) - 1; k >= 0; k-- {
+				if sepOK, e := matchTransSeparator(s, ends[k]); sepOK {
+					return transTail{end: e, verS: digitsStart, verE: ends[k]}, true
+				}
+			}
+		}
+	}
+	// No-version branch.
+	if sepOK, e := matchTransSeparator(s, p); sepOK {
+		return transTail{end: e, verS: -1, verE: -1}, true
+	}
+	return transTail{}, false
+}
+
+// matchTransSeparator matches `(?:\s|[.]|$)` at position p, returning the
+// position after the consumed separator (p itself at end of string).
+func matchTransSeparator(s string, p int) (ok bool, end int) {
+	if p == len(s) {
+		return true, p
+	}
+	if isRegexSpace(s[p]) || s[p] == '.' {
+		return true, p + 1
+	}
+	return false, 0
+}
+
+// editionWordList mirrors the alternation order of the regex this replaces.
+// All entries are lowercase; Latin words are matched ASCII case-insensitively,
+// katakana words byte-exactly.
+var editionWordList = []string{
+	"version", "edition", "ausgabe", "versione", "edizione", "versao", "edicao",
+	"バージョン", "エディション", "ヴァージョン",
+}
+
+// findEditionWord finds a standalone edition/version word preceded by
+// whitespace and followed by an opening bracket or end of string (with
+// optional whitespace between). Returns the canonical lowercase word.
+// Replaces: reEditionWord = regexp.MustCompile(
+//
+//	`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|バージョン|エディション|ヴァージョン)(\s*[\(\[{<]|\s*$)`)
+func findEditionWord(s string) (string, bool) {
+	for i := 1; i < len(s); i++ {
+		if !isRegexSpace(s[i-1]) {
+			continue
+		}
+		for _, w := range editionWordList {
+			if !matchFoldedWordAt(s, i, w) {
+				continue
+			}
+			if editionWordTailOK(s, i+len(w)) {
+				return w, true
+			}
+		}
+	}
+	return "", false
+}
+
+// matchFoldedWordAt reports whether s[i:] starts with w, comparing ASCII
+// letters case-insensitively and all other bytes exactly.
+func matchFoldedWordAt(s string, i int, w string) bool {
+	if i+len(w) > len(s) {
+		return false
+	}
+	for j := range len(w) {
+		a := s[i+j]
+		b := w[j]
+		if a == b {
+			continue
+		}
+		if a >= 'A' && a <= 'Z' && a+'a'-'A' == b {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// editionWordTailOK matches `(\s*[\(\[{<]|\s*$)` at position p.
+func editionWordTailOK(s string, p int) bool {
+	for p < len(s) && isRegexSpace(s[p]) {
+		p++
+	}
+	if p == len(s) {
+		return true
+	}
+	switch s[p] {
+	case '(', '[', '{', '<':
+		return true
+	default:
+		return false
+	}
 }

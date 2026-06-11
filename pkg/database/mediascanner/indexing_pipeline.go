@@ -92,6 +92,9 @@ func FlushScanStateMaps(ss *database.ScanState) {
 	for k := range ss.MediaTitleIDs {
 		delete(ss.MediaTitleIDs, k)
 	}
+	for k := range ss.MediaSortNames {
+		delete(ss.MediaSortNames, k)
+	}
 	for mediaID := range ss.MediaTagIDs {
 		delete(ss.MediaTagIDs, mediaID)
 	}
@@ -159,6 +162,11 @@ func AddMediaPathWithPrefixPolicy(
 	}
 
 	titleKey := database.TitleKey(systemID, pf.Slug)
+	canonicalTitleName := pf.Title
+	displayTitleName := pf.DisplayTitle
+	if displayTitleName == "" {
+		displayTitleName = canonicalTitleName
+	}
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
@@ -180,6 +188,9 @@ func AddMediaPathWithPrefixPolicy(
 			return 0, 0, fmt.Errorf("error inserting media title %s: %w", pf.Title, err)
 		}
 		ss.TitleIDs[titleKey] = titleIndex
+		if ss.TitleNames != nil {
+			ss.TitleNames[titleIndex] = canonicalTitleName
+		}
 	} else {
 		titleIndex = foundTitleIndex
 	}
@@ -195,6 +206,7 @@ func AddMediaPathWithPrefixPolicy(
 			DBID:           int64(mediaIndex),
 			Path:           pf.Path,
 			ParentDir:      parentDir,
+			SortName:       displayTitleName,
 			MediaTitleDBID: int64(titleIndex),
 			SystemDBID:     int64(systemIndex),
 		})
@@ -205,6 +217,9 @@ func AddMediaPathWithPrefixPolicy(
 		ss.MediaIDs[mediaKey] = mediaIndex
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[mediaIndex] = titleIndex
+		}
+		if ss.MediaSortNames != nil {
+			ss.MediaSortNames[mediaIndex] = displayTitleName
 		}
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[mediaIndex] = parentDir
@@ -226,12 +241,22 @@ func AddMediaPathWithPrefixPolicy(
 				ss.MediaParentDirs[mediaIndex] = parentDir
 			}
 		}
-		if existingTitleIndex, ok := ss.MediaTitleIDs[mediaIndex]; !ok || existingTitleIndex != titleIndex {
-			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex)); err != nil {
+		_, needsSortName := ss.MediaNeedsSortName[mediaIndex]
+		existingTitleIndex, titleKnown := ss.MediaTitleIDs[mediaIndex]
+		existingSortName, sortNameKnown := ss.MediaSortNames[mediaIndex]
+		sortNameChanged := ss.MediaSortNames != nil && (!sortNameKnown || existingSortName != displayTitleName)
+		if !titleKnown || existingTitleIndex != titleIndex || needsSortName || sortNameChanged {
+			if err := db.UpdateMediaTitle(int64(mediaIndex), int64(titleIndex), displayTitleName); err != nil {
 				return 0, 0, fmt.Errorf("error updating media title %s: %w", pf.Path, err)
 			}
 			if ss.MediaTitleIDs != nil {
 				ss.MediaTitleIDs[mediaIndex] = titleIndex
+			}
+			if ss.MediaSortNames != nil {
+				ss.MediaSortNames[mediaIndex] = displayTitleName
+			}
+			if ss.MediaNeedsSortName != nil {
+				delete(ss.MediaNeedsSortName, mediaIndex)
 			}
 		}
 	}
@@ -507,13 +532,14 @@ func cloneMediaTagSet(tagIDs map[int]struct{}) map[int]struct{} {
 }
 
 type MediaPathFragments struct {
-	Path       string
-	FileName   string
-	Title      string
-	Slug       string
-	SlugTokens []string
-	Ext        string
-	Tags       []string
+	Path         string
+	FileName     string
+	Title        string
+	DisplayTitle string
+	Slug         string
+	SlugTokens   []string
+	Ext          string
+	Tags         []string
 }
 
 func getTagsFromFileName(filename string, mediaType slugs.MediaType) []string {
@@ -811,6 +837,9 @@ func PopulateScanStateForSystem(
 	for _, title := range stateData.titles {
 		titleKey := database.TitleKey(title.SystemID, title.Slug)
 		ss.TitleIDs[titleKey] = int(title.DBID)
+		if ss.TitleNames != nil {
+			ss.TitleNames[int(title.DBID)] = title.Name
+		}
 	}
 
 	for _, m := range stateData.media {
@@ -818,6 +847,12 @@ func PopulateScanStateForSystem(
 		ss.MediaIDs[mediaKey] = int(m.DBID)
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
+		}
+		if ss.MediaNeedsSortName != nil && m.SortName == "" {
+			ss.MediaNeedsSortName[int(m.DBID)] = struct{}{}
+		}
+		if ss.MediaSortNames != nil {
+			ss.MediaSortNames[int(m.DBID)] = m.SortName
 		}
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
@@ -850,7 +885,9 @@ func loadSystemStateData(
 	}
 
 	// Load titles for this system
+	titlesStart := time.Now()
 	titles, err := db.GetTitlesBySystemID(systemID)
+	titlesElapsed := time.Since(titlesStart)
 	if err != nil {
 		return systemStateData{}, fmt.Errorf("failed to get titles for system %s: %w", systemID, err)
 	}
@@ -863,14 +900,19 @@ func loadSystemStateData(
 	}
 
 	// Load media for this system
+	mediaStart := time.Now()
 	media, err := db.GetMediaBySystemID(systemID)
+	mediaElapsed := time.Since(mediaStart)
 	if err != nil {
 		return systemStateData{}, fmt.Errorf("failed to get media for system %s: %w", systemID, err)
 	}
 
 	mediaTags := []database.MediaTagLink(nil)
+	mediaTagsElapsed := time.Duration(0)
 	if loadMediaTags {
+		mediaTagsStart := time.Now()
 		mediaTags, err = db.GetScannerMediaTagsBySystemID(systemID)
+		mediaTagsElapsed = time.Since(mediaTagsStart)
 		if err != nil {
 			return systemStateData{}, fmt.Errorf("failed to get scanner media tags for system %s: %w", systemID, err)
 		}
@@ -881,6 +923,9 @@ func loadSystemStateData(
 		Int("titles", len(titles)).
 		Int("media", len(media)).
 		Int("mediaTags", len(mediaTags)).
+		Dur("titlesDuration", titlesElapsed).
+		Dur("mediaDuration", mediaElapsed).
+		Dur("mediaTagsDuration", mediaTagsElapsed).
 		Dur("elapsed", time.Since(startTime)).
 		Msg("loaded existing data for system resume")
 
@@ -907,6 +952,9 @@ func PopulatePersistentScanStateForSystem(
 	for _, title := range stateData.titles {
 		titleKey := database.TitleKey(title.SystemID, title.Slug)
 		ss.TitleIDs[titleKey] = int(title.DBID)
+		if ss.TitleNames != nil {
+			ss.TitleNames[int(title.DBID)] = title.Name
+		}
 	}
 
 	for _, m := range stateData.media {
@@ -914,6 +962,12 @@ func PopulatePersistentScanStateForSystem(
 		ss.MediaIDs[mediaKey] = int(m.DBID)
 		if ss.MediaTitleIDs != nil {
 			ss.MediaTitleIDs[int(m.DBID)] = int(m.MediaTitleDBID)
+		}
+		if ss.MediaNeedsSortName != nil && m.SortName == "" {
+			ss.MediaNeedsSortName[int(m.DBID)] = struct{}{}
+		}
+		if ss.MediaSortNames != nil {
+			ss.MediaSortNames[int(m.DBID)] = m.SortName
 		}
 		if ss.MediaParentDirs != nil {
 			ss.MediaParentDirs[int(m.DBID)] = m.ParentDir
@@ -1154,6 +1208,7 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 	trimmedName := strings.TrimSpace(params.ProvidedName)
 	if trimmedName != "" {
 		f.Title = trimmedName
+		f.DisplayTitle = trimmedName
 	} else {
 		prefixPolicy := params.PrefixPolicy
 		if !prefixPolicy.Enabled && params.StripLeadingNumbers {
@@ -1163,6 +1218,10 @@ func GetPathFragments(params *PathFragmentParams) MediaPathFragments {
 			fileNameForTitle = stripped
 		}
 		f.Title = tags.ParseTitleFromFilename(fileNameForTitle, false)
+		f.DisplayTitle = tags.ParseDisplayTitleFromFilename(fileNameForTitle, false)
+	}
+	if f.DisplayTitle == "" {
+		f.DisplayTitle = f.Title
 	}
 
 	// Use pre-resolved media type if provided, otherwise look up from system ID

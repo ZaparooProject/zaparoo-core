@@ -220,6 +220,7 @@ func TestHandleMediaScrape_HappyPath(t *testing.T) {
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
 	mockDB.On("ClearScrapingOperation").Return(nil).Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "test-scraper").Return(5, nil)
@@ -297,6 +298,7 @@ func TestHandleMediaScrape_FatalUpdateDoesNotSynthesizeDone(t *testing.T) {
 	mockDB.On("SetScrapingOperation", database.ScrapingOperation{ScraperID: "fail-scraper"}).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusFailed).Return(nil).Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "fail-scraper").Return(0, nil)
@@ -583,13 +585,20 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 	ClearScrapingStatus()
 	statusInstance.clear()
 
-	operation := database.ScrapingOperation{ScraperID: "resume-scraper", Systems: []string{"SNES"}, Force: true}
+	operation := database.ScrapingOperation{
+		ScraperID: "resume-scraper",
+		Systems:   []string{"SNES"},
+		RunID:     "resume-run",
+		Force:     true,
+	}
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("SetScrapingOperation", operation).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
 	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	mockDB.On("ClearScrapeRunMarkers", assertmock.Anything, "resume-scraper", "resume-run").Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return().Once()
 	mockDB.On("BackgroundOperationDone").Return().Once()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "resume-scraper").Return(0, nil)
 	mockDB.On("ClearScrapingOperation").Return(nil).Once()
 
@@ -618,6 +627,7 @@ func TestResumeMediaScrape_RestoresStoredOptions(t *testing.T) {
 
 	require.NoError(t, ResumeMediaScrape(&env, operation))
 	assert.Equal(t, []string{"SNES"}, gotOptions.Systems)
+	assert.Equal(t, "resume-run", gotOptions.RunID)
 	assert.True(t, gotOptions.Force)
 	require.Eventually(t, func() bool {
 		return !IsScrapingRunning()
@@ -854,6 +864,7 @@ func TestHandleMediaScrape_CachesProgressScrapedCountAndRefreshesDone(t *testing
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "cached-progress").Return(5, nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "cached-progress").Return(9, nil).Once()
 
@@ -936,6 +947,7 @@ func TestHandleMediaScrape_EmitsFatalStatus(t *testing.T) {
 	mockDB := testhelpers.NewMockMediaDBI()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "fatal-scraper").Return(0, nil)
 
 	scrapeErr := errors.New("parse failed")
@@ -1003,11 +1015,25 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 	statusInstance.clear()
 
 	mockDB := testhelpers.NewMockMediaDBI()
+	var persistedRunID string
+	mockDB.On("SetScrapingOperation", assertmock.MatchedBy(func(operation database.ScrapingOperation) bool {
+		persistedRunID = operation.RunID
+		return operation.ScraperID == "progress-scraper" && operation.Force && operation.RunID != ""
+	})).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusRunning).Return(nil).Once()
+	mockDB.On("SetScrapingStatus", mediadb.IndexingStatusCompleted).Return(nil).Once()
+	runIDMatcher := assertmock.MatchedBy(func(runID string) bool {
+		return runID != "" && runID == persistedRunID
+	})
+	mockDB.On("ClearScrapeRunMarkers", assertmock.Anything, "progress-scraper", runIDMatcher).
+		Return(nil).Once()
 	mockDB.On("TrackBackgroundOperation").Return()
 	mockDB.On("BackgroundOperationDone").Return()
+	mockDB.On("WALCheckpoint").Return(nil).Once()
 	mockDB.On("GetScrapedMediaCount", assertmock.Anything, "progress-scraper").Return(3, nil)
 
 	var gotForceOption bool
+	var gotRunID string
 	progressScraper := platforms.Scraper{
 		ID:   "progress-scraper",
 		Name: "Progress Scraper",
@@ -1017,6 +1043,7 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 			_ platforms.ScraperCustomOptions, ch chan<- scraper.ScrapeUpdate,
 		) error {
 			gotForceOption = opts.Force
+			gotRunID = opts.RunID
 			go func() {
 				defer close(ch)
 				ch <- scraper.ScrapeUpdate{
@@ -1091,6 +1118,8 @@ func TestHandleMediaScrape_EmitsProgressUpdates(t *testing.T) {
 	}
 
 	assert.True(t, gotForceOption, "force option should be passed to scraper")
+	assert.Equal(t, persistedRunID, gotRunID, "generated run ID should be passed to scraper")
+	assert.NotEmpty(t, gotRunID, "force scrape should get a resumable run ID")
 	assert.True(t, sawForce, "scrape status should expose active force scrape")
 	assert.Equal(t, 10, maxProcessed, "progress updates should reflect actual processed count")
 	assert.True(t, sawCurrentSystem, "progress updates should expose currentSystem and step fields")

@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/perfmetrics"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -245,6 +246,32 @@ func NewPlatformScraper() platforms.Scraper {
 	}
 }
 
+func orderedScrapeSystemIDs(indexed, requested []string) []string {
+	indexedSet := make(map[string]struct{}, len(indexed))
+	for _, id := range indexed {
+		indexedSet[id] = struct{}{}
+	}
+
+	candidateIDs := indexed
+	if len(requested) > 0 {
+		candidateIDs = requested
+	}
+
+	seen := make(map[string]struct{}, len(candidateIDs))
+	ordered := make([]string, 0, len(candidateIDs))
+	for _, id := range candidateIDs {
+		if _, ok := indexedSet[id]; !ok {
+			continue
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		ordered = append(ordered, id)
+	}
+	return ordered
+}
+
 // resolveSystemsFromPlatform builds the list of ScrapeSystem values by
 // querying the indexed systems from mdb, looking up their definitions, and
 // resolving ROM root paths via the platform launcher configuration.
@@ -260,26 +287,11 @@ func resolveSystemsFromPlatform(
 		return nil, fmt.Errorf("resolveSystemsFromPlatform: list indexed systems: %w", err)
 	}
 
-	want := make(map[string]struct{}, len(indexed))
-	if len(systemIDs) == 0 {
-		for _, id := range indexed {
-			want[id] = struct{}{}
-		}
-	} else {
-		indexedSet := make(map[string]struct{}, len(indexed))
-		for _, id := range indexed {
-			indexedSet[id] = struct{}{}
-		}
-		for _, id := range systemIDs {
-			if _, ok := indexedSet[id]; ok {
-				want[id] = struct{}{}
-			}
-		}
-	}
+	wantedIDs := orderedScrapeSystemIDs(indexed, systemIDs)
 
-	dbSystems := make(map[string]database.System, len(want))
-	sysDefs := make([]systemdefs.System, 0, len(want))
-	for sysID := range want {
+	dbSystems := make(map[string]database.System, len(wantedIDs))
+	sysDefs := make([]systemdefs.System, 0, len(wantedIDs))
+	for _, sysID := range wantedIDs {
 		sys, err := mdb.FindSystemBySystemID(sysID)
 		if err != nil {
 			return nil, fmt.Errorf("resolveSystemsFromPlatform: look up system %q: %w", sysID, err)
@@ -543,6 +555,17 @@ const (
 	companionWriteBatchSize = 10
 )
 
+func shouldUseRunMarker(opts scraper.ScrapeOptions) bool {
+	return opts.Force && opts.RunID != ""
+}
+
+func appendRunMarker(scraperID string, opts scraper.ScrapeOptions, write *database.ScrapeWrite) {
+	if !shouldUseRunMarker(opts) || write == nil {
+		return
+	}
+	write.MediaTags = append(write.MediaTags, scraper.RunTagInfo(scraperID, opts.RunID))
+}
+
 // scrapeLoop runs the full load→match→write cycle for all systems, emitting
 // progress updates on ch. It closes ch when done.
 func (g *GamelistXMLScraper) scrapeLoop(
@@ -555,6 +578,7 @@ func (g *GamelistXMLScraper) scrapeLoop(
 	defer close(ch)
 
 	const id = "gamelist.xml"
+	metrics := perfmetrics.NewRecorderForDB(mdb)
 	var totalProcessed, totalMatched, totalSkipped int
 	totalSteps := len(systems)
 
@@ -576,6 +600,10 @@ func (g *GamelistXMLScraper) scrapeLoop(
 
 	for i, system := range systems {
 		currentStep := i + 1
+		systemStart := time.Now()
+		systemMetricsStart := metrics.Capture(ctx, false)
+		var titleLoadDuration, allTitlesLoadDuration, mediaLoadDuration time.Duration
+		var scrapedIDsLoadDuration, parseDuration, recordLoadDuration time.Duration
 		sendUpdate := func(update scraper.ScrapeUpdate) {
 			update.TotalSteps = totalSteps
 			update.CurrentStep = currentStep
@@ -600,7 +628,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		titlesBySlug := make(map[string]database.MediaTitle)
 		allTitlesBySlug := make(map[string]database.MediaTitle)
 		if opts.Force {
+			titlesStart := time.Now()
 			allTitles, titlesErr := mdb.GetTitlesBySystemID(system.ID)
+			titleLoadDuration = time.Since(titlesStart)
 			if titlesErr != nil {
 				if errors.Is(titlesErr, context.Canceled) || errors.Is(titlesErr, context.DeadlineExceeded) {
 					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -619,7 +649,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 		} else {
 			sentinel := scraper.SentinelTagInfo(id)
 			sentinelTag := sentinel.Type + ":" + sentinel.Tag
+			titlesStart := time.Now()
 			unscraped, titlesErr := mdb.FindMediaTitlesWithoutSentinel(ctx, system.DBID, sentinelTag)
+			titleLoadDuration = time.Since(titlesStart)
 			if titlesErr != nil {
 				if errors.Is(titlesErr, context.Canceled) || errors.Is(titlesErr, context.DeadlineExceeded) {
 					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -631,7 +663,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			for _, t := range unscraped {
 				titlesBySlug[t.Slug] = t
 			}
+			allTitlesStart := time.Now()
 			allTitles, allTitlesErr := mdb.GetTitlesBySystemID(system.ID)
+			allTitlesLoadDuration = time.Since(allTitlesStart)
 			if allTitlesErr != nil {
 				if errors.Is(allTitlesErr, context.Canceled) || errors.Is(allTitlesErr, context.DeadlineExceeded) {
 					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -647,7 +681,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 		}
 
+		mediaStart := time.Now()
 		allMedia, mediaErr := mdb.GetMediaBySystemID(system.ID)
+		mediaLoadDuration = time.Since(mediaStart)
 		if mediaErr != nil {
 			if errors.Is(mediaErr, context.Canceled) || errors.Is(mediaErr, context.DeadlineExceeded) {
 				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -657,9 +693,26 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			return
 		}
 		scrapedIDs := map[int64]struct{}{}
-		if !opts.Force {
+		if opts.Force {
+			if shouldUseRunMarker(opts) {
+				var scrapeRunErr error
+				scrapedIDsStart := time.Now()
+				scrapedIDs, scrapeRunErr = mdb.GetScrapeRunMediaIDs(ctx, id, opts.RunID, system.DBID)
+				scrapedIDsLoadDuration = time.Since(scrapedIDsStart)
+				if scrapeRunErr != nil {
+					if errors.Is(scrapeRunErr, context.Canceled) || errors.Is(scrapeRunErr, context.DeadlineExceeded) {
+						sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
+						return
+					}
+					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, FatalErr: scrapeRunErr, Done: true})
+					return
+				}
+			}
+		} else {
 			var scrapedErr error
+			scrapedIDsStart := time.Now()
 			scrapedIDs, scrapedErr = mdb.GetScrapedMediaIDs(ctx, id, system.DBID)
+			scrapedIDsLoadDuration = time.Since(scrapedIDsStart)
 			if scrapedErr != nil {
 				if errors.Is(scrapedErr, context.Canceled) || errors.Is(scrapedErr, context.DeadlineExceeded) {
 					sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -693,7 +746,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			}
 		}
 
+		parseStart := time.Now()
 		parsed, parseErr := g.loadParsedGamelistSystem(ctx, system)
+		parseDuration = time.Since(parseStart)
 		if parseErr != nil {
 			if errors.Is(parseErr, context.Canceled) || errors.Is(parseErr, context.DeadlineExceeded) {
 				sendUpdate(scraper.ScrapeUpdate{SystemID: system.ID, Done: true})
@@ -728,7 +783,9 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			continue
 		}
 
+		recordLoadStart := time.Now()
 		records, loadErr := g.loadRecordsFromParsed(ctx, system, indexes, parsed)
+		recordLoadDuration = time.Since(recordLoadStart)
 		if loadErr != nil {
 			if errors.Is(loadErr, context.Canceled) || errors.Is(loadErr, context.DeadlineExceeded) {
 				sendUpdate(scraper.ScrapeUpdate{
@@ -868,16 +925,18 @@ func (g *GamelistXMLScraper) scrapeLoop(
 				return
 			}
 
+			write := &database.ScrapeWrite{
+				Sentinel:   scraper.SentinelTagInfo(id),
+				MediaTags:  mapped.MediaTags,
+				MediaProps: mapped.MediaProps,
+				TitleTags:  mapped.TitleTags,
+				TitleProps: mapped.TitleProps,
+			}
+			appendRunMarker(id, opts, write)
 			writeTarget := database.ScrapeWriteTarget{
 				MediaDBID:      record.MatchedMediaDBID,
 				MediaTitleDBID: record.MatchedTitleDBID,
-				Write: &database.ScrapeWrite{
-					Sentinel:   scraper.SentinelTagInfo(id),
-					MediaTags:  mapped.MediaTags,
-					MediaProps: mapped.MediaProps,
-					TitleTags:  mapped.TitleTags,
-					TitleProps: mapped.TitleProps,
-				},
+				Write:          write,
 			}
 			writeStart := time.Now()
 			writeErr := mdb.ApplyScrapeResult(ctx, writeTarget.MediaDBID, writeTarget.MediaTitleDBID, writeTarget.Write)
@@ -907,6 +966,32 @@ func (g *GamelistXMLScraper) scrapeLoop(
 			return
 		}
 		logScrapeWriteStats("gamelistxml: regular write stats", system.ID, &regularWriteStats)
+		systemMetricsEnd := metrics.Capture(ctx, false)
+		perfmetrics.AddDelta(
+			log.Info().
+				Str("scraper", id).
+				Str("system", system.ID).
+				Int("records", totalRecords).
+				Int("companionProcessed", companion.Processed).
+				Int("processed", companion.Processed+processed).
+				Int("matched", companion.Matched+matched).
+				Int("skipped", companion.Skipped+skipped).
+				Int("titleCandidates", len(titlesBySlug)).
+				Int("mediaCandidates", len(indexes.MediaByPathFold)).
+				Dur("elapsed", time.Since(systemStart)).
+				Dur("titleLoadDuration", titleLoadDuration).
+				Dur("allTitlesLoadDuration", allTitlesLoadDuration).
+				Dur("mediaLoadDuration", mediaLoadDuration).
+				Dur("scrapedIDsLoadDuration", scrapedIDsLoadDuration).
+				Dur("parseDuration", parseDuration).
+				Dur("recordLoadDuration", recordLoadDuration).
+				Dur("writeDuration", regularWriteStats.TotalDuration).
+				Dur("avgWriteDuration", regularWriteStats.averageDuration()).
+				Dur("maxWriteDuration", regularWriteStats.MaxDuration).
+				Int("writes", regularWriteStats.Writes),
+			&systemMetricsStart,
+			&systemMetricsEnd,
+		).Msg("gamelistxml: completed system scrape")
 		totalProcessed += companion.Processed + processed
 		totalMatched += companion.Matched + matched
 		totalSkipped += companion.Skipped + skipped
@@ -1979,6 +2064,7 @@ func (g *GamelistXMLScraper) processCompanionEntriesFromParsed(
 			if matched.MediaLevelWriteSafe {
 				write.MediaTags = companionChildTags(c)
 			}
+			appendRunMarker("gamelist.xml", opts, write)
 			titlePayloadKey := companionTitlePayloadKey(write)
 			if existingKey, ok := titlePayloadByTitleDBID[media.MediaTitleDBID]; !ok {
 				titlePayloadByTitleDBID[media.MediaTitleDBID] = titlePayloadKey

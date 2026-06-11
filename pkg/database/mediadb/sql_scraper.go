@@ -484,6 +484,56 @@ func (db *MediaDB) GetScrapedMediaIDs(
 	if err != nil {
 		return nil, fmt.Errorf("failed to find scraper sentinel tag for scraper %q: %w", scraperID, err)
 	}
+	mediaIDs, err := getMediaIDsForTagDBIDs(ctx, db.sql, systemDBID, tagDBIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query scraped media IDs for scraper %q: %w", scraperID, err)
+	}
+	return mediaIDs, nil
+}
+
+// GetScrapeRunMediaIDs returns media DBIDs in systemDBID completed during a
+// specific persisted scraper run.
+func (db *MediaDB) GetScrapeRunMediaIDs(
+	ctx context.Context, scraperID, runID string, systemDBID int64,
+) (map[int64]struct{}, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	if runID == "" {
+		return map[int64]struct{}{}, nil
+	}
+
+	tagDBIDs, err := findScraperSentinelTagDBIDs(ctx, db.sql, string(tags.ScraperRunType(scraperID)), runID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find scraper run tag for scraper %q run %q: %w", scraperID, runID, err)
+	}
+	mediaIDs, err := getMediaIDsForTagDBIDs(ctx, db.sql, systemDBID, tagDBIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query scrape run media IDs for scraper %q run %q: %w", scraperID, runID, err)
+	}
+	return mediaIDs, nil
+}
+
+// ClearScrapeRunMarkers removes per-run completion markers after a scraper
+// operation reaches a terminal state.
+func (db *MediaDB) ClearScrapeRunMarkers(ctx context.Context, scraperID, runID string) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	if runID == "" {
+		return nil
+	}
+
+	tagDBIDs, err := findScraperSentinelTagDBIDs(ctx, db.sql, string(tags.ScraperRunType(scraperID)), runID)
+	if err != nil {
+		return fmt.Errorf("failed to find scraper run tag for scraper %q run %q: %w", scraperID, runID, err)
+	}
+	return clearMediaTagsForTagDBIDs(ctx, db.sql, tagDBIDs)
+}
+
+func getMediaIDsForTagDBIDs(
+	ctx context.Context, db *sql.DB, systemDBID int64, tagDBIDs []int64,
+) (map[int64]struct{}, error) {
 	if len(tagDBIDs) == 0 {
 		return map[int64]struct{}{}, nil
 	}
@@ -506,9 +556,9 @@ func (db *MediaDB) GetScrapedMediaIDs(
 		WHERE m.SystemDBID = ?
 		  AND mt.MediaDBID = m.DBID
 		  AND mt.TagDBID IN (` + placeholders + `)`
-	rows, err := db.sql.QueryContext(ctx, query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query scraped media IDs for scraper %q: %w", scraperID, err)
+		return nil, fmt.Errorf("failed to query media IDs for tag DBIDs: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -520,14 +570,40 @@ func (db *MediaDB) GetScrapedMediaIDs(
 	for rows.Next() {
 		var mediaDBID int64
 		if err := rows.Scan(&mediaDBID); err != nil {
-			return nil, fmt.Errorf("failed to scan scraped media ID: %w", err)
+			return nil, fmt.Errorf("failed to scan tagged media ID: %w", err)
 		}
 		mediaIDs[mediaDBID] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate scraped media IDs: %w", err)
+		return nil, fmt.Errorf("failed to iterate tagged media IDs: %w", err)
 	}
 	return mediaIDs, nil
+}
+
+func clearMediaTagsForTagDBIDs(ctx context.Context, db *sql.DB, tagDBIDs []int64) error {
+	if len(tagDBIDs) == 0 {
+		return nil
+	}
+
+	placeholders := prepareVariadic("?", ",", len(tagDBIDs))
+	args := make([]any, 0, len(tagDBIDs))
+	for _, tagDBID := range tagDBIDs {
+		args = append(args, tagDBID)
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
+	if _, err := db.ExecContext(ctx, `DELETE FROM MediaTags WHERE TagDBID IN (`+placeholders+`)`, args...); err != nil {
+		return fmt.Errorf("failed to delete media tag links: %w", err)
+	}
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
+	if _, err := db.ExecContext(ctx, `
+		DELETE FROM Tags
+		WHERE DBID IN (`+placeholders+`)
+		  AND NOT EXISTS (SELECT 1 FROM MediaTags WHERE MediaTags.TagDBID = Tags.DBID)
+	`, args...); err != nil {
+		return fmt.Errorf("failed to delete unreferenced tags: %w", err)
+	}
+	return nil
 }
 
 func findScraperSentinelTagDBIDs(ctx context.Context, db *sql.DB, scraperType, tagValue string) ([]int64, error) {
@@ -2444,7 +2520,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 
 	stmt, err := db.sql.PrepareContext(ctx, `
 		SELECT
-			m.DBID, m.Path, m.ParentDir, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
+			m.DBID, m.Path, m.ParentDir, m.SortName, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
 			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
 			s.DBID, s.SystemID, s.Name
 		FROM Media m
@@ -2464,7 +2540,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystem(ctx context.Context, mediaDBID int
 
 	var row database.MediaFullRow
 	err = stmt.QueryRowContext(ctx, mediaDBID).Scan(
-		&row.DBID, &row.Path, &row.ParentDir, &row.IsMissing,
+		&row.DBID, &row.Path, &row.ParentDir, &row.SortName, &row.IsMissing,
 		&row.MediaTitleDBID, &row.SystemDBID,
 		&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
 		&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,
@@ -2494,7 +2570,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?".
 	rows, err := db.sql.QueryContext(ctx, `
 		SELECT
-			m.DBID, m.Path, m.ParentDir, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
+			m.DBID, m.Path, m.ParentDir, m.SortName, m.IsMissing, m.MediaTitleDBID, m.SystemDBID,
 			mt.DBID, mt.Slug, mt.SecondarySlug, mt.Name, mt.SlugLength, mt.SlugWordCount, mt.SystemDBID,
 			s.DBID, s.SystemID, s.Name
 		FROM Media m
@@ -2514,7 +2590,7 @@ func (db *MediaDB) GetMediaWithTitleAndSystemByIDs(
 	for rows.Next() {
 		var row database.MediaFullRow
 		if err := rows.Scan(
-			&row.DBID, &row.Path, &row.ParentDir, &row.IsMissing,
+			&row.DBID, &row.Path, &row.ParentDir, &row.SortName, &row.IsMissing,
 			&row.MediaTitleDBID, &row.SystemDBID,
 			&row.Title.DBID, &row.Title.Slug, &row.Title.SecondarySlug, &row.Title.Name,
 			&row.Title.SlugLength, &row.Title.SlugWordCount, &row.Title.SystemDBID,
@@ -2913,4 +2989,149 @@ func int64Args(values []int64) []any {
 		args[i] = value
 	}
 	return args
+}
+
+// ResolveSingletonContainerAliases implements MediaDBI.
+// It fetches the direct media rows of every candidate child directory in a
+// single ParentDir IN query and returns one SingletonContainerAlias per
+// candidate that collapses to a single logical launch target. Candidates whose
+// recursive FileCount exceeds their direct row count contain nested
+// subdirectories and are omitted, as are ambiguous file sets. Tags and
+// ZapScriptTags are populated via two batch queries plus in-memory
+// disambiguation — the same approach used by the search path.
+func (db *MediaDB) ResolveSingletonContainerAliases(
+	ctx context.Context,
+	systemDBID int64,
+	dirCandidates []database.SingletonAliasCandidate,
+) ([]database.SingletonContainerAlias, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	if len(dirCandidates) == 0 {
+		return nil, nil //nolint:nilnil // empty result is the "no aliases" sentinel, not an error
+	}
+
+	expectedCounts := make(map[string]int, len(dirCandidates))
+	args := make([]any, 0, 1+len(dirCandidates))
+	args = append(args, systemDBID)
+	for _, c := range dirCandidates {
+		childDir := c.ChildDir
+		if !strings.HasSuffix(childDir, "/") {
+			childDir += "/"
+		}
+		expectedCounts[childDir] = c.FileCount
+		args = append(args, childDir)
+	}
+
+	// One query for the direct media rows of all candidate dirs, served by
+	// idx_media_parentdir_system.
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders.
+	rows, err := db.sql.QueryContext(ctx, `
+		SELECT DBID, MediaTitleDBID, SystemDBID, Path, ParentDir, IsMissing
+		FROM Media
+		WHERE SystemDBID = ? AND IsMissing = 0 AND ParentDir IN (`+
+		prepareVariadic("?", ",", len(dirCandidates))+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("resolve singleton aliases query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	childDirRows := make(map[string][]database.Media, len(dirCandidates))
+	for rows.Next() {
+		var m database.Media
+		if scanErr := rows.Scan(
+			&m.DBID, &m.MediaTitleDBID, &m.SystemDBID, &m.Path, &m.ParentDir, &m.IsMissing,
+		); scanErr != nil {
+			return nil, fmt.Errorf("resolve singleton aliases scan: %w", scanErr)
+		}
+		childDirRows[m.ParentDir] = append(childDirRows[m.ParentDir], m)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("resolve singleton aliases rows: %w", rowsErr)
+	}
+
+	// For each candidate dir: skip if the recursive FileCount exceeds the
+	// direct rows (media in nested subdirectories). Otherwise apply
+	// selectContainerLaunchMedia to pick the launch target (mirrors the logic
+	// in FindSingleContainerLaunchMedia).
+	type resolved struct {
+		childDir string
+		media    database.Media
+	}
+	candidates := make([]resolved, 0, len(childDirRows))
+	for childDir, directRows := range childDirRows {
+		if len(directRows) != expectedCounts[childDir] {
+			continue
+		}
+		chosen := selectContainerLaunchMedia(directRows)
+		if chosen == nil {
+			continue
+		}
+		candidates = append(candidates, resolved{childDir: childDir, media: *chosen})
+	}
+	if len(candidates) == 0 {
+		return nil, nil //nolint:nilnil // empty result is the "no aliases" sentinel, not an error
+	}
+
+	// Batch-fetch full rows (title + system) and file-level tags.
+	mediaDBIDs := make([]int64, 0, len(candidates))
+	for _, c := range candidates {
+		mediaDBIDs = append(mediaDBIDs, c.media.DBID)
+	}
+	fullRows, err := db.GetMediaWithTitleAndSystemByIDs(ctx, mediaDBIDs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve singleton aliases full rows: %w", err)
+	}
+	tagsMap, err := db.GetMediaTagsByMediaDBIDs(ctx, mediaDBIDs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve singleton aliases tags: %w", err)
+	}
+
+	// Build the alias list and a parallel synthetic results slice for in-memory
+	// ZapScript disambiguation (same approach as computeZapScriptTags in the
+	// search path — no extra DB queries).
+	aliases := make([]database.SingletonContainerAlias, 0, len(candidates))
+	synthetic := make([]database.SearchResultWithCursor, 0, len(candidates))
+	for _, c := range candidates {
+		row, ok := fullRows[c.media.DBID]
+		if !ok {
+			continue
+		}
+		mediaTags := tagsMap[c.media.DBID]
+		if mediaTags == nil {
+			mediaTags = []database.TagInfo{}
+		}
+		aliases = append(aliases, database.SingletonContainerAlias{
+			ChildDir: c.childDir,
+			Row:      row,
+			Tags:     mediaTags,
+		})
+		synthetic = append(synthetic, database.SearchResultWithCursor{
+			SystemID: row.System.SystemID,
+			Name:     row.Title.Name,
+			MediaID:  row.DBID,
+			Tags:     mediaTags,
+		})
+	}
+
+	// In-memory ZapScript disambiguation across the resolved set.
+	computeZapScriptTags(synthetic)
+	for i := range aliases {
+		aliases[i].ZapScriptTags = synthetic[i].ZapScriptTags
+	}
+
+	// Batch cover-flag check: one indexed UNION ALL query for all alias media.
+	// Populates HasCover so aliased directory entries show art in the grid.
+	if err := fetchAndAttachCoverFlags(ctx, db.sql, synthetic); err != nil {
+		return nil, fmt.Errorf("resolve singleton aliases cover flags: %w", err)
+	}
+	for i := range aliases {
+		aliases[i].HasCover = synthetic[i].HasCover
+	}
+
+	return aliases, nil
 }

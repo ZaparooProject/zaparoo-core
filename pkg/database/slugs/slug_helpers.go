@@ -30,14 +30,7 @@ import (
 // to perform common normalization operations.
 
 var (
-	editionSuffixRegex = regexp.MustCompile(
-		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|` +
-			`バージョン|エディション|ヴァージョン)$`,
-	)
-	versionSuffixRegex    = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
-	ordinalSuffixRegex    = regexp.MustCompile(`\b(\d+)(?:st|nd|rd|th)\b`)
-	ordinalCamelCaseRegex = regexp.MustCompile(`\b(\d+(?:st|nd|rd|th))([A-Z])`)
-	trailingArticleRegex  = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
+	trailingArticleRegex = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
 
 	// Scene release tag patterns for TV shows
 	sceneQualityRegex = regexp.MustCompile(`(?i)\b(480p|576p|720p|1080p|2160p|4k|hd|sd|uhd)\b`)
@@ -214,14 +207,141 @@ func StripMetadataBrackets(s string) string {
 //   - "Game Special Edition" → "Game Special" (Edition stripped, Special kept)
 func StripEditionAndVersionSuffixes(s string) string {
 	// Strip edition/version suffix words
-	s = editionSuffixRegex.ReplaceAllString(s, "")
+	s = stripEditionSuffixWord(s)
 	s = strings.TrimSpace(s)
 
 	// Strip version numbers (v1.0, v2.3, vII, etc.)
-	s = versionSuffixRegex.ReplaceAllString(s, "")
+	s = stripVersionSuffix(s)
 	s = strings.TrimSpace(s)
 
 	return s
+}
+
+// editionSuffixWords are trailing words removed by stripEditionSuffixWord.
+// All entries are lowercase; Latin words match ASCII case-insensitively,
+// katakana words byte-exactly. No entry is a suffix of another, so at most
+// one can match a given string ending.
+var editionSuffixWords = []string{
+	"version", "edition", "ausgabe", "versione", "edizione", "versao", "edicao",
+	"バージョン", "エディション", "ヴァージョン",
+}
+
+// stripEditionSuffixWord removes a trailing edition/version word preceded by
+// whitespace. Trailing whitespace left behind is handled by the caller's
+// TrimSpace, matching the regex's greedy `\s+` removal.
+// Replaces: editionSuffixRegex = regexp.MustCompile(
+//
+//	`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|バージョン|エディション|ヴァージョン)$`)
+func stripEditionSuffixWord(s string) string {
+	for _, w := range editionSuffixWords {
+		if len(s) < len(w)+1 {
+			continue
+		}
+		wordStart := len(s) - len(w)
+		if !foldedSuffixMatch(s, wordStart, w) {
+			continue
+		}
+		if !isSpaceByteClass(s[wordStart-1]) {
+			continue
+		}
+		return s[:wordStart-1]
+	}
+	return s
+}
+
+// foldedSuffixMatch reports whether s[i:] equals w, comparing ASCII letters
+// case-insensitively and all other bytes exactly.
+func foldedSuffixMatch(s string, i int, w string) bool {
+	for j := range len(w) {
+		a := s[i+j]
+		b := w[j]
+		if a == b {
+			continue
+		}
+		if a >= 'A' && a <= 'Z' && a+'a'-'A' == b {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// stripVersionSuffix removes a trailing version token: lowercase 'v' with an
+// optional period, followed by dotted digit groups (v1, v1.0, v2.3.1) or an
+// uppercase Roman numeral run (vII, vIX).
+// Replaces: versionSuffixRegex = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
+func stripVersionSuffix(s string) string {
+	tokenStart := len(s)
+	for tokenStart > 0 && !isSpaceByteClass(s[tokenStart-1]) {
+		tokenStart--
+	}
+	// No preceding whitespace, or empty trailing token
+	if tokenStart == 0 || tokenStart == len(s) {
+		return s
+	}
+	token := s[tokenStart:]
+	if token[0] != 'v' {
+		return s
+	}
+	rest := token[1:]
+	if rest != "" && rest[0] == '.' {
+		rest = rest[1:]
+	}
+	if isVersionDigits(rest) || isRomanIVXRun(rest) {
+		return s[:tokenStart-1]
+	}
+	return s
+}
+
+// isVersionDigits matches `\d{1,3}(?:[.]\d{1,4})*` anchored to the whole string.
+func isVersionDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	maxLen := 3 // first group is 1-3 digits, subsequent groups 1-4
+	digits := 0
+	for i := range len(s) {
+		switch {
+		case s[i] >= '0' && s[i] <= '9':
+			digits++
+			if digits > maxLen {
+				return false
+			}
+		case s[i] == '.':
+			if digits == 0 {
+				return false
+			}
+			digits = 0
+			maxLen = 4
+		default:
+			return false
+		}
+	}
+	return digits > 0
+}
+
+// isRomanIVXRun matches `[IVX]{1,5}` anchored to the whole string.
+func isRomanIVXRun(s string) bool {
+	if s == "" || len(s) > 5 {
+		return false
+	}
+	for i := range len(s) {
+		if s[i] != 'I' && s[i] != 'V' && s[i] != 'X' {
+			return false
+		}
+	}
+	return true
+}
+
+// isSpaceByteClass matches the regexp `\s` character class ([\t\n\f\r ]).
+func isSpaceByteClass(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\f' || b == '\r'
+}
+
+// isWordByte matches the regexp `\w` character class ([0-9A-Za-z_]) used for
+// `\b` word-boundary checks.
+func isWordByte(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || b == '_'
 }
 
 // CollapseDottedInitialisms removes internal periods from dotted single-letter
@@ -368,9 +488,66 @@ func expandAbbreviationsAndNumbers(s string) string {
 //   - "Beatmania 2ndMix" → "Beatmania 2 Mix" → "Beatmania 2"
 //   - "21st Century" → "21 Century"
 //   - "3rd Strike" → "3 Strike"
+//
+// Replaces: ordinalCamelCaseRegex = regexp.MustCompile(`\b(\d+(?:st|nd|rd|th))([A-Z])`) ("$1 $2")
+// followed by: ordinalSuffixRegex = regexp.MustCompile(`\b(\d+)(?:st|nd|rd|th)\b`) ("$1")
 func NormalizeOrdinals(s string) string {
-	s = ordinalCamelCaseRegex.ReplaceAllString(s, "$1 $2")
-	return ordinalSuffixRegex.ReplaceAllString(s, "$1")
+	if !strings.ContainsAny(s, "0123456789") {
+		return s
+	}
+
+	var b strings.Builder
+	b.Grow(len(s))
+	changed := false
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		// Digit run must start at a word boundary
+		if c < '0' || c > '9' || (i > 0 && isWordByte(s[i-1])) {
+			_ = b.WriteByte(c)
+			i++
+			continue
+		}
+		digitsEnd := i
+		for digitsEnd < len(s) && s[digitsEnd] >= '0' && s[digitsEnd] <= '9' {
+			digitsEnd++
+		}
+		suffixEnd := digitsEnd + 2
+		if suffixEnd <= len(s) && isOrdinalSuffix(s[digitsEnd:suffixEnd]) {
+			switch {
+			case suffixEnd == len(s) || !isWordByte(s[suffixEnd]):
+				// "2nd Mix" / "21st" → drop the suffix
+				_, _ = b.WriteString(s[i:digitsEnd])
+				changed = true
+				i = suffixEnd
+				continue
+			case s[suffixEnd] >= 'A' && s[suffixEnd] <= 'Z':
+				// camelCase compound "2ndMix" → "2 Mix"
+				_, _ = b.WriteString(s[i:digitsEnd])
+				_ = b.WriteByte(' ')
+				changed = true
+				i = suffixEnd
+				continue
+			}
+		}
+		_, _ = b.WriteString(s[i:digitsEnd])
+		i = digitsEnd
+	}
+	if !changed {
+		return s
+	}
+	return b.String()
+}
+
+// isOrdinalSuffix reports whether the two-byte string is a lowercase English
+// ordinal suffix (st, nd, rd, th).
+func isOrdinalSuffix(s string) bool {
+	switch s {
+	case "st", "nd", "rd", "th":
+		return true
+	default:
+		return false
+	}
 }
 
 // ConvertRomanNumerals converts Roman numerals (II-XIX) to Arabic numbers.

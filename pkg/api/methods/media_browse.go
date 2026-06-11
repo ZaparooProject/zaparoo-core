@@ -597,7 +597,7 @@ func browseFilesystem(
 		}
 	}
 
-	return buildBrowseResponse(env, cleaned, dirs, files, maxResults, totalFiles, sort)
+	return buildBrowseResponse(env, cleaned, dirs, files, maxResults, totalFiles, sort, systems)
 }
 
 // browseVirtual lists all indexed media entries under a virtual URI scheme.
@@ -648,7 +648,7 @@ func browseVirtual(
 		}
 	}
 
-	return buildBrowseResponse(env, schemePath, nil, files, maxResults, totalFiles, sort)
+	return buildBrowseResponse(env, schemePath, nil, files, maxResults, totalFiles, sort, systems)
 }
 
 // buildBrowseResponse assembles the BrowseResults from directories, files, and pagination info.
@@ -660,6 +660,7 @@ func buildBrowseResponse(
 	maxResults int,
 	totalFiles int,
 	sort string,
+	systems []systemdefs.System,
 ) (any, error) {
 	hasNextPage := len(files) > maxResults
 	if hasNextPage {
@@ -673,6 +674,76 @@ func buildBrowseResponse(
 		rootDirs = env.Platform.RootDirs(env.Config)
 	}
 
+	// Batch-resolve singleton container aliases for the page's candidate
+	// directories when browsing a single system. Only small dirs (recursive
+	// FileCount <= maxSingletonAliasCandidateFiles) are considered, so large
+	// trees like MiSTer's _Arcade/_alternatives are never scanned.
+	var singletonAliases map[string]database.SingletonContainerAlias
+	if len(dirs) > 0 && env.Database != nil && env.Database.MediaDB != nil {
+		// Determine which system to resolve against. Use the explicit filter if
+		// exactly one system was requested; otherwise infer from the directory
+		// entries (all dirs with media must belong to the same single system).
+		var systemID string
+		if len(systems) == 1 {
+			systemID = systems[0].ID
+		} else if len(systems) == 0 {
+			for _, dir := range dirs {
+				if len(dir.SystemIDs) == 0 {
+					continue
+				}
+				if len(dir.SystemIDs) > 1 || (systemID != "" && systemID != dir.SystemIDs[0]) {
+					systemID = ""
+					break
+				}
+				systemID = dir.SystemIDs[0]
+			}
+		}
+		var candidates []database.SingletonAliasCandidate
+		if systemID != "" {
+			prefix := path
+			if !strings.HasSuffix(prefix, "/") {
+				prefix += "/"
+			}
+			for _, dir := range dirs {
+				if !isSingletonDirectoryAliasCandidate(dir.FileCount) {
+					continue
+				}
+				if len(dir.SystemIDs) > 0 && (len(dir.SystemIDs) != 1 || dir.SystemIDs[0] != systemID) {
+					continue
+				}
+				candidates = append(candidates, database.SingletonAliasCandidate{
+					ChildDir:  prefix + dir.Name + "/",
+					FileCount: dir.FileCount,
+				})
+			}
+		}
+		if len(candidates) > 0 && singletonMediaAliasesEnabled(env) {
+			started := time.Now()
+			system, sysErr := env.Database.MediaDB.FindSystemBySystemID(systemID)
+			if sysErr == nil {
+				aliases, aliasErr := env.Database.MediaDB.ResolveSingletonContainerAliases(
+					env.Context, system.DBID, candidates,
+				)
+				if aliasErr == nil && len(aliases) > 0 {
+					singletonAliases = make(map[string]database.SingletonContainerAlias, len(aliases))
+					for i := range aliases {
+						singletonAliases[aliases[i].ChildDir] = aliases[i]
+					}
+				} else if aliasErr != nil {
+					log.Debug().Err(aliasErr).Str("path", path).Msg("browse singleton alias batch resolution failed")
+				}
+			} else {
+				log.Debug().Err(sysErr).Str("system", systemID).Msg("browse singleton alias system lookup failed")
+			}
+			log.Debug().
+				Str("path", path).
+				Int("candidates", len(candidates)).
+				Int("aliases", len(singletonAliases)).
+				Dur("duration", time.Since(started)).
+				Msg("browse singleton alias resolution timing")
+		}
+	}
+
 	// Add directory entries
 	for _, dir := range dirs {
 		dirPath := filepath.ToSlash(filepath.Join(path, dir.Name))
@@ -683,8 +754,24 @@ func buildBrowseResponse(
 			FileCount: &dir.FileCount,
 			SystemIDs: dir.SystemIDs,
 		}
-		if isSingletonDirectoryAliasCandidate(dir.FileCount) {
-			annotateSingletonDirectoryEntry(env, &entry, dirPath, dir.SystemIDs, rootDirs)
+		if alias, ok := singletonAliases[dirPath+"/"]; ok {
+			result := database.SearchResultWithCursor{
+				MediaID:       alias.Row.DBID,
+				SystemID:      alias.Row.System.SystemID,
+				Name:          browseMediaDisplayName(alias.Row.Path, alias.Row.SortName, alias.Row.Title.Name),
+				Path:          alias.Row.Path,
+				Tags:          alias.Tags,
+				ZapScriptTags: alias.ZapScriptTags,
+				HasCover:      alias.HasCover,
+			}
+			mediaEntry := buildMediaEntry(&result, env, rootDirs)
+			entry.Name = mediaEntry.Name
+			entry.MediaID = mediaEntry.MediaID
+			entry.SystemID = mediaEntry.SystemID
+			entry.RelPath = mediaEntry.RelPath
+			entry.ZapScript = mediaEntry.ZapScript
+			entry.Tags = mediaEntry.Tags
+			entry.HasCover = mediaEntry.HasCover
 		}
 		entries = append(entries, entry)
 	}
@@ -733,6 +820,24 @@ func buildBrowseResponse(
 	}, nil
 }
 
+func browseMediaDisplayName(path, sortName, titleName string) string {
+	if sortName != "" {
+		return sortName
+	}
+
+	base := filepath.Base(path)
+	if base != "." && base != string(filepath.Separator) {
+		if ext := filepath.Ext(base); ext != "" {
+			base = base[:len(base)-len(ext)]
+		}
+		if base != "" {
+			return base
+		}
+	}
+
+	return titleName
+}
+
 // buildMediaEntry converts a SearchResultWithCursor into a BrowseEntry of type "media".
 func buildMediaEntry(
 	result *database.SearchResultWithCursor,
@@ -746,6 +851,7 @@ func buildMediaEntry(
 		Type:     "media",
 		SystemID: &result.SystemID,
 		Tags:     result.Tags,
+		HasCover: result.HasCover,
 	}
 
 	zapScript := result.ZapScript()
@@ -759,67 +865,12 @@ func buildMediaEntry(
 	return entry
 }
 
+// isSingletonDirectoryAliasCandidate bounds the dirs considered for singleton
+// alias resolution: real disc-folder containers hold a handful of files, and
+// the cap keeps the batch query from fetching rows for large directory trees.
 func isSingletonDirectoryAliasCandidate(fileCount int) bool {
 	const maxSingletonAliasCandidateFiles = 64
 	return fileCount > 0 && fileCount <= maxSingletonAliasCandidateFiles
-}
-
-func annotateSingletonDirectoryEntry(
-	env *requests.RequestEnv,
-	entry *models.BrowseEntry,
-	dirPath string,
-	systemIDs []string,
-	rootDirs []string,
-) {
-	if env == nil || entry == nil || env.Database == nil || len(systemIDs) != 1 || !singletonMediaAliasesEnabled(env) {
-		return
-	}
-
-	db := env.Database.MediaDB
-	system, err := db.FindSystemBySystemID(systemIDs[0])
-	if err != nil {
-		log.Debug().Err(err).Str("system", systemIDs[0]).Msg("browse singleton directory system lookup failed")
-		return
-	}
-	media, err := db.FindSingleContainerLaunchMedia(env.Context, system.DBID, dirPath)
-	if err != nil {
-		log.Debug().Err(err).Str("path", dirPath).Msg("browse singleton directory lookup failed")
-		return
-	}
-	if media == nil {
-		return
-	}
-
-	row, err := db.GetMediaWithTitleAndSystem(env.Context, media.DBID)
-	if err != nil || row == nil {
-		log.Debug().Err(err).Int64("mediaDBID", media.DBID).Msg("browse singleton directory media lookup failed")
-		return
-	}
-	tags, err := db.GetMediaTagsByMediaDBID(env.Context, row.DBID)
-	if err != nil {
-		log.Debug().Err(err).Int64("mediaDBID", row.DBID).Msg("browse singleton directory tag lookup failed")
-		return
-	}
-	zapTags, err := db.GetZapScriptTagsBySystemAndPath(env.Context, row.System.SystemID, row.Path)
-	if err != nil {
-		log.Debug().Err(err).Int64("mediaDBID", row.DBID).Msg("browse singleton directory zapscript tag lookup failed")
-		return
-	}
-
-	result := database.SearchResultWithCursor{
-		MediaID:       row.DBID,
-		SystemID:      row.System.SystemID,
-		Name:          row.Title.Name,
-		Path:          row.Path,
-		Tags:          tags,
-		ZapScriptTags: zapTags,
-	}
-	mediaEntry := buildMediaEntry(&result, env, rootDirs)
-	entry.MediaID = mediaEntry.MediaID
-	entry.SystemID = mediaEntry.SystemID
-	entry.RelPath = mediaEntry.RelPath
-	entry.ZapScript = mediaEntry.ZapScript
-	entry.Tags = mediaEntry.Tags
 }
 
 // isPathUnderRoots checks if the given path is at or under one of the allowed root directories.

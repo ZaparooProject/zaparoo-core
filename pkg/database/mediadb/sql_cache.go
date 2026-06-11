@@ -31,86 +31,87 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// buildPopulateTagsSQL returns the INSERT INTO SystemTagsCache SQL with an
-// optional system filter injected into both UNION ALL branches. Pass "" for the
-// full-database variant; pass a filter expression such as `s.DBID IN (?, ?)` for
-// selective rebuilds.
-func buildPopulateTagsSQL(systemFilter string) string {
+const systemTagsCacheUpsertClause = `
+		ON CONFLICT(SystemDBID, TagDBID) DO UPDATE SET
+			Count = SystemTagsCache.Count + excluded.Count`
+
+// buildPopulateMediaTagsSQL and buildPopulateTitleTagsSQL populate the cache in
+// two smaller upserts instead of one UNION ALL + final GROUP BY. The prior shape
+// built an extra temp B-tree over already-aggregated rows; splitting preserves
+// results while reducing sort/merge work on slow storage.
+func buildPopulateMediaTagsSQL(systemFilter string) string {
 	mediaWhere := "WHERE m.IsMissing = 0"
+	if systemFilter != "" {
+		mediaWhere = "WHERE m.SystemDBID IN " + systemFilter + " AND m.IsMissing = 0"
+	}
+	return fmt.Sprintf(`
+		INSERT INTO SystemTagsCache (SystemDBID, TagDBID, TagType, Tag, Count)
+		SELECT agg.SystemDBID, agg.TagDBID, tt.Type, t.Tag, agg.Cnt AS Count
+		FROM (
+			SELECT
+				m.SystemDBID AS SystemDBID,
+				mt.TagDBID AS TagDBID,
+				COUNT(*) AS Cnt
+			FROM Media m INDEXED BY media_system_path_idx
+			CROSS JOIN MediaTags mt
+			%s
+			  AND mt.MediaDBID = m.DBID
+			GROUP BY m.SystemDBID, mt.TagDBID
+		) agg
+		JOIN Tags t ON agg.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID`+systemTagsCacheUpsertClause, mediaWhere)
+}
+
+func buildPopulateTitleTagsSQL(systemFilter string) string {
 	titleWhere := "WHERE EXISTS(SELECT 1 FROM Media m WHERE m.MediaTitleDBID = mtl.DBID AND m.IsMissing = 0)"
 	if systemFilter != "" {
-		mediaWhere = "WHERE " + systemFilter + " AND m.IsMissing = 0"
-		titleWhere = "WHERE " + systemFilter +
+		titleWhere = "WHERE mtl.SystemDBID IN " + systemFilter +
 			" AND EXISTS(SELECT 1 FROM Media m WHERE m.MediaTitleDBID = mtl.DBID AND m.IsMissing = 0)"
 	}
 	return fmt.Sprintf(`
 		INSERT INTO SystemTagsCache (SystemDBID, TagDBID, TagType, Tag, Count)
-		SELECT SystemDBID, TagDBID, TagType, Tag, SUM(Cnt) AS Count
+		SELECT agg.SystemDBID, agg.TagDBID, tt.Type, t.Tag, agg.Cnt AS Count
 		FROM (
 			SELECT
-				s.DBID AS SystemDBID,
-				t.DBID AS TagDBID,
-				tt.Type AS TagType,
-				t.Tag AS Tag,
+				mtl.SystemDBID AS SystemDBID,
+				mtt.TagDBID AS TagDBID,
 				COUNT(*) AS Cnt
-			FROM Systems s
-			JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
-			JOIN Media m ON mtl.DBID = m.MediaTitleDBID
-			JOIN MediaTags mt ON m.DBID = mt.MediaDBID
-			JOIN Tags t ON mt.TagDBID = t.DBID
-			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+			FROM MediaTitleTags mtt
+			JOIN MediaTitles mtl ON mtt.MediaTitleDBID = mtl.DBID
 			%s
-			GROUP BY s.DBID, t.DBID, tt.Type, t.Tag
-			UNION ALL
-			SELECT
-				s.DBID AS SystemDBID,
-				t.DBID AS TagDBID,
-				tt.Type AS TagType,
-				t.Tag AS Tag,
-				COUNT(*) AS Cnt
-			FROM Systems s
-			JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
-			JOIN MediaTitleTags mtt ON mtl.DBID = mtt.MediaTitleDBID
-			JOIN Tags t ON mtt.TagDBID = t.DBID
-			JOIN TagTypes tt ON t.TypeDBID = tt.DBID
-			%s
-			GROUP BY s.DBID, t.DBID, tt.Type, t.Tag
-		)
-		GROUP BY SystemDBID, TagDBID, TagType, Tag`, mediaWhere, titleWhere)
+			GROUP BY mtl.SystemDBID, mtt.TagDBID
+		) agg
+		JOIN Tags t ON agg.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID`+systemTagsCacheUpsertClause, titleWhere)
 }
 
 // sqlPopulateSystemTagsCache - Populates the SystemTagsCache table for fast tag lookups
 // This should be called after media indexing to ensure cache is up to date
 func sqlPopulateSystemTagsCache(ctx context.Context, db *sql.DB) error {
-	// Clear existing cache
-	clearStmt, err := db.PrepareContext(ctx, "DELETE FROM SystemTagsCache")
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("failed to prepare clear cache statement: %w", err)
+		return fmt.Errorf("failed to begin system tags cache transaction: %w", err)
 	}
+	committed := false
 	defer func() {
-		if closeErr := clearStmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close clear cache statement")
+		if !committed {
+			_ = tx.Rollback()
 		}
 	}()
 
-	if _, execErr := clearStmt.ExecContext(ctx); execErr != nil {
+	if _, execErr := tx.ExecContext(ctx, "DELETE FROM SystemTagsCache"); execErr != nil {
 		return fmt.Errorf("failed to clear system tags cache: %w", execErr)
 	}
-
-	populateStmt, err := db.PrepareContext(ctx, buildPopulateTagsSQL(""))
-	if err != nil {
-		return fmt.Errorf("failed to prepare populate cache statement: %w", err)
+	if _, execErr := tx.ExecContext(ctx, buildPopulateMediaTagsSQL("")); execErr != nil {
+		return fmt.Errorf("failed to populate media tags cache rows: %w", execErr)
 	}
-	defer func() {
-		if closeErr := populateStmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close populate cache statement")
-		}
-	}()
-
-	if _, err := populateStmt.ExecContext(ctx); err != nil {
-		return fmt.Errorf("failed to populate system tags cache: %w", err)
+	if _, execErr := tx.ExecContext(ctx, buildPopulateTitleTagsSQL("")); execErr != nil {
+		return fmt.Errorf("failed to populate title tags cache rows: %w", execErr)
 	}
-
+	if commitErr := tx.Commit(); commitErr != nil {
+		return fmt.Errorf("failed to commit system tags cache transaction: %w", commitErr)
+	}
+	committed = true
 	return nil
 }
 
@@ -151,49 +152,44 @@ func sqlPopulateSystemTagsCacheForSystems(
 		return nil // No systems found in database
 	}
 
-	// Step 2: Delete cache entries for these systems
+	// Step 2: Delete cache entries for these systems and repopulate them in
+	// one transaction. This keeps WAL FULL durability while avoiding separate
+	// fsyncs for clear/media/title phases.
 	placeholders := prepareVariadic("?", ",", len(systemDBIDs))
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	deleteSQL := fmt.Sprintf("DELETE FROM SystemTagsCache WHERE SystemDBID IN (%s)", placeholders)
-	deleteStmt, err := db.PrepareContext(ctx, deleteSQL)
-	if err != nil {
-		return fmt.Errorf("failed to prepare selective cache clear statement: %w", err)
-	}
-	defer func() {
-		if closeErr := deleteStmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close selective cache clear statement")
-		}
-	}()
-
 	args := make([]any, len(systemDBIDs))
 	for i, id := range systemDBIDs {
 		args[i] = id
 	}
 
-	if _, execErr := deleteStmt.ExecContext(ctx, args...); execErr != nil {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin selective system tags cache transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	deleteSQL := fmt.Sprintf("DELETE FROM SystemTagsCache WHERE SystemDBID IN (%s)", placeholders)
+	if _, execErr := tx.ExecContext(ctx, deleteSQL, args...); execErr != nil {
 		return fmt.Errorf("failed to clear cache for specific systems: %w", execErr)
 	}
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	whereClause := fmt.Sprintf("s.DBID IN (%s)", placeholders)
-	populateStmt, err := db.PrepareContext(ctx, buildPopulateTagsSQL(whereClause))
-	if err != nil {
-		return fmt.Errorf("failed to prepare selective cache populate statement: %w", err)
+	placeholderList := fmt.Sprintf("(%s)", placeholders)
+	if _, execErr := tx.ExecContext(ctx, buildPopulateMediaTagsSQL(placeholderList), args...); execErr != nil {
+		return fmt.Errorf("failed to populate media cache rows for specific systems: %w", execErr)
 	}
-	defer func() {
-		if closeErr := populateStmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close selective cache populate statement")
-		}
-	}()
-
-	// Double args for the UNION's second WHERE clause
-	populateArgs := make([]any, 0, len(args)*2)
-	populateArgs = append(populateArgs, args...)
-	populateArgs = append(populateArgs, args...)
-
-	if _, execErr := populateStmt.ExecContext(ctx, populateArgs...); execErr != nil {
-		return fmt.Errorf("failed to populate cache for specific systems: %w", execErr)
+	if _, execErr := tx.ExecContext(ctx, buildPopulateTitleTagsSQL(placeholderList), args...); execErr != nil {
+		return fmt.Errorf("failed to populate title cache rows for specific systems: %w", execErr)
 	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return fmt.Errorf("failed to commit selective system tags cache transaction: %w", commitErr)
+	}
+	committed = true
 
 	log.Debug().Int("system_count", len(systems)).Msg("populated system tags cache for specific systems")
 	return nil

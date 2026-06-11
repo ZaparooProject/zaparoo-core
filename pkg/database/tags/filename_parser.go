@@ -33,11 +33,7 @@ import (
 // These are compiled once at initialization for optimal performance.
 var (
 	// Special pattern extraction (complex patterns that still use regex)
-	reTrans          = regexp.MustCompile(`(^|\s)(T)([+-])([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
 	reTransBracketed = regexp.MustCompile(`^T([+-]?)([A-Za-z]{2,3})(?:.*?v(\d+(?:\.\d+)*))?`)
-	reEditionWord    = regexp.MustCompile(
-		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|バージョン|エディション|ヴァージョン)(\s*[\(\[{<]|\s*$)`,
-	)
 
 	// Scene release artifact patterns (for modern media: movies, TV shows)
 	// Note: These patterns match AFTER separator normalization, so hyphens have become spaces
@@ -106,7 +102,12 @@ func resolveEditionTag(qualifier, suffix string, src TagSource) CanonicalTag {
 // group has two or more tokens (e.g. "disc-3", not bare "disc" which allTagMappings handles).
 var structuralPrefixes = map[string]bool{
 	"disc":    true,
+	"disk":    true,
+	"file":    true,
 	"part":    true,
+	"tape":    true,
+	"cd":      true,
+	"side":    true,
 	"book":    true,
 	"program": true,
 	"chapter": true,
@@ -115,6 +116,28 @@ var structuralPrefixes = map[string]bool{
 	"track":   true,
 	"vol":     true,
 	"volume":  true,
+}
+
+var structuralMediaPrefixes = map[string]TagValue{
+	"disc": TagMediaDisc,
+	"disk": TagMediaDisk,
+	"file": TagMediaFile,
+	"part": TagMediaPart,
+	"tape": TagMediaTape,
+	"cd":   TagMediaDisc,
+}
+
+var structuralRomanNumbers = map[string]string{
+	"i":    "1",
+	"ii":   "2",
+	"iii":  "3",
+	"iv":   "4",
+	"v":    "5",
+	"vi":   "6",
+	"vii":  "7",
+	"viii": "8",
+	"ix":   "9",
+	"x":    "10",
 }
 
 // catalogNumberRE matches catalog/part-number shapes like "kd02", "ap009", "pbpx-95205", "v512".
@@ -253,6 +276,111 @@ func hasTagType(ts []CanonicalTag, tt TagType) bool {
 		}
 	}
 	return false
+}
+
+func normalizeStructuralNumber(s string) (string, bool) {
+	if s == "" {
+		return "", false
+	}
+	if roman, ok := structuralRomanNumbers[s]; ok {
+		return roman, true
+	}
+	for i := range len(s) {
+		if !isDigit(s[i]) {
+			return "", false
+		}
+	}
+	normalized := strings.TrimLeft(s, "0")
+	if normalized == "" {
+		normalized = "0"
+	}
+	return normalized, true
+}
+
+func structuralSideValue(s string) (TagValue, bool) {
+	switch s {
+	case "a", "1":
+		return TagMediaSideA, true
+	case "b", "2":
+		return TagMediaSideB, true
+	case "c", "3":
+		return TagMediaSideC, true
+	case "d", "4":
+		return TagMediaSideD, true
+	default:
+		return "", false
+	}
+}
+
+func compactStructuralMediaTag(normalized string, source TagSource) ([]CanonicalTag, bool) {
+	for prefix, mediaValue := range structuralMediaPrefixes {
+		if !strings.HasPrefix(normalized, prefix) || len(normalized) == len(prefix) {
+			continue
+		}
+		number, ok := normalizeStructuralNumber(normalized[len(prefix):])
+		if !ok {
+			continue
+		}
+		return []CanonicalTag{
+			{Type: TagTypeMedia, Value: mediaValue, Source: source},
+			{Type: TagTypeDisc, Value: TagValue(number), Source: source},
+		}, true
+	}
+	return nil, false
+}
+
+func parseStructuralSetTag(normalized string, source TagSource) ([]CanonicalTag, bool) {
+	if normalized == "" {
+		return nil, false
+	}
+
+	if strings.HasPrefix(normalized, "side-") {
+		if sideValue, ok := structuralSideValue(strings.TrimPrefix(normalized, "side-")); ok {
+			return []CanonicalTag{{Type: TagTypeMedia, Value: sideValue, Source: source}}, true
+		}
+	}
+
+	tokens := strings.Split(normalized, "-")
+	if len(tokens) < 2 {
+		return compactStructuralMediaTag(normalized, source)
+	}
+
+	mediaValue, ok := structuralMediaPrefixes[tokens[0]]
+	if !ok {
+		return nil, false
+	}
+	number, ok := normalizeStructuralNumber(tokens[1])
+	if !ok {
+		return nil, false
+	}
+
+	results := []CanonicalTag{
+		{Type: TagTypeMedia, Value: mediaValue, Source: source},
+		{Type: TagTypeDisc, Value: TagValue(number), Source: source},
+	}
+
+	next := 2
+	if len(tokens) >= next+2 && tokens[next] == "of" {
+		total, totalOK := normalizeStructuralNumber(tokens[next+1])
+		if !totalOK {
+			return nil, false
+		}
+		results = append(results, CanonicalTag{Type: TagTypeDiscTotal, Value: TagValue(total), Source: source})
+		next += 2
+	}
+	if len(tokens) >= next+2 && tokens[next] == "side" {
+		sideValue, sideOK := structuralSideValue(tokens[next+1])
+		if !sideOK {
+			return nil, false
+		}
+		results = append(results, CanonicalTag{Type: TagTypeMedia, Value: sideValue, Source: source})
+		next += 2
+	}
+	if next != len(tokens) {
+		return nil, false
+	}
+
+	return results, true
 }
 
 // langMap maps 3-letter ROM language codes to 2-letter ISO 639-1 codes.
@@ -499,20 +627,26 @@ func extractSpecialPatternsForMedia(
 
 	// Pattern 1: "Disc/Disk X of Y [Side A/B/C/D]" - most common multi-disc format
 	if m := findDiscPattern(remaining); m.ok {
+		mediaValue := TagMediaDisc
+		if strings.HasPrefix(strings.ToLower(remaining[m.start:m.start+5]), "(disk") {
+			mediaValue = TagMediaDisk
+		}
+		discNumber, _ := normalizeStructuralNumber(remaining[m.cap1s:m.cap1e])
+		discTotal, _ := normalizeStructuralNumber(remaining[m.cap2s:m.cap2e])
 		tags = append(tags,
 			CanonicalTag{
 				Type:   TagTypeMedia,
-				Value:  TagValue("disc"),
+				Value:  mediaValue,
 				Source: TagSourceBracketed,
 			},
 			CanonicalTag{
 				Type:   TagTypeDisc,
-				Value:  TagValue(remaining[m.cap1s:m.cap1e]),
+				Value:  TagValue(discNumber),
 				Source: TagSourceBracketed,
 			},
 			CanonicalTag{
 				Type:   TagTypeDiscTotal,
-				Value:  TagValue(remaining[m.cap2s:m.cap2e]),
+				Value:  TagValue(discTotal),
 				Source: TagSourceBracketed,
 			},
 		)
@@ -702,18 +836,12 @@ func extractSpecialPatternsForMedia(
 	// Must be standalone: preceded by space (captured) OR at start, followed by space/dot/end
 	// Skipped for non-Game types when mediaType is specified (ROM-specific naming convention).
 	if mediaType == "" || mediaType == slugs.MediaTypeGame {
-		if indices := reTrans.FindStringSubmatchIndex(remaining); len(indices) >= 10 {
-			// indices[0:2] = full match
-			// indices[2:4] = prefix (^ or space)
-			// indices[4:6] = "T"
-			// indices[6:8] = +/- (required)
-			// indices[8:10] = language code
-			// indices[10:12] = version number or empty (if present)
-			plusMinus := remaining[indices[6]:indices[7]]
-			langCode := strings.ToLower(remaining[indices[8]:indices[9]])
+		if m := findBracketlessTranslation(remaining); m.ok {
+			plusMinus := string(m.plusMinus)
+			langCode := strings.ToLower(remaining[m.langS:m.langE])
 			versionNum := ""
-			if len(indices) > 11 && indices[10] != -1 {
-				versionNum = remaining[indices[10]:indices[11]]
+			if m.verS != -1 {
+				versionNum = remaining[m.verS:m.verE]
 			}
 
 			// Use shared tag building logic (inferred from plain text, not bracketed)
@@ -721,7 +849,7 @@ func extractSpecialPatternsForMedia(
 			tags = append(tags, transTags...)
 
 			// Replace the matched pattern with a space to preserve word boundaries
-			remaining = remaining[:indices[0]] + " " + remaining[indices[1]:]
+			remaining = remaining[:m.start] + " " + remaining[m.end:]
 		}
 	}
 
@@ -749,8 +877,8 @@ func extractSpecialPatternsForMedia(
 
 	// Pattern 8: Edition/Version word detection - "Version", "Edition", and multi-language equivalents
 	// Detects standalone edition words that will be stripped by slugification
-	if indices := reEditionWord.FindStringSubmatchIndex(remaining); len(indices) > 0 {
-		editionWord := strings.ToLower(remaining[indices[2]:indices[3]])
+	if word, found := findEditionWord(remaining); found {
+		editionWord := word
 
 		// Determine if this is a "version" word or "edition" word
 		// Version words: version, versione, versao, バージョン, ヴァージョン
@@ -949,6 +1077,10 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 	// For parentheses tags, normalize and process
 	normalized := cachedNormalizeTag(ctx.CurrentTag)
 
+	if structuralTags, ok := parseStructuralSetTag(normalized, TagSourceBracketed); ok {
+		return structuralTags
+	}
+
 	// First check if it's a multi-language tag (En,Fr,De)
 	if multiLang := parseMultiLanguageTag(normalized); multiLang != nil {
 		return multiLang
@@ -1018,6 +1150,10 @@ func mapBracketTag(tag string, mediaType slugs.MediaType) []CanonicalTag {
 
 	// Normalize the tag for regular processing
 	normalized := cachedNormalizeTag(tag)
+
+	if structuralTags, ok := parseStructuralSetTag(normalized, TagSourceBracketed); ok {
+		return structuralTags
+	}
 
 	// Check for multi-language patterns (en-fr-de, En,Fr,De, En+Fr)
 	if langTags := parseMultiLanguageTag(normalized); langTags != nil {
@@ -1438,6 +1574,51 @@ func stripSceneArtifacts(input string) string {
 	return result
 }
 
+func stripMetadataBracketsForDisplay(s string) string {
+	var result strings.Builder
+	result.Grow(len(s))
+
+	for i := 0; i < len(s); i++ {
+		open := s[i]
+		var closeBracket byte
+		switch open {
+		case '(':
+			closeBracket = ')'
+		case '[':
+			closeBracket = ']'
+		case '{':
+			closeBracket = '}'
+		case '<':
+			closeBracket = '>'
+		default:
+			_ = result.WriteByte(open)
+			continue
+		}
+
+		start := i
+		depth := 1
+		for i++; i < len(s); i++ {
+			switch s[i] {
+			case open:
+				depth++
+			case closeBracket:
+				depth--
+				if depth == 0 {
+					content := s[start+1 : i]
+					if _, ok := parseStructuralSetTag(cachedNormalizeTag(content), TagSourceBracketed); ok {
+						_, _ = result.WriteString(s[start : i+1])
+					}
+				}
+			}
+			if depth == 0 {
+				break
+			}
+		}
+	}
+
+	return strings.TrimSpace(result.String())
+}
+
 // ParseTitleFromFilename extracts a clean, human-readable display title from a filename.
 // It removes metadata brackets and normalizes common filename artifacts for better presentation.
 //
@@ -1466,6 +1647,17 @@ func stripSceneArtifacts(input string) string {
 // code duplication. However, it only applies transformations appropriate for display
 // titles (no Roman numeral conversion, edition stripping, etc.).
 func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
+	return parseFilenameTitle(filename, stripLeadingNumbers, false)
+}
+
+// ParseDisplayTitleFromFilename extracts a per-file display title while preserving
+// structural set markers such as "(Disc 1)", "(Disk 2 of 4)", and "(File 3)".
+// The canonical title parser still strips those markers before slug generation.
+func ParseDisplayTitleFromFilename(filename string, stripLeadingNumbers bool) string {
+	return parseFilenameTitle(filename, stripLeadingNumbers, true)
+}
+
+func parseFilenameTitle(filename string, stripLeadingNumbers, preserveStructuralTags bool) string {
 	// Import the slugs package for shared normalization functions
 	// This eliminates code duplication while keeping display-appropriate behavior
 	title := filename
@@ -1530,9 +1722,13 @@ func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
 		title = strings.TrimSpace(title)
 	}
 
-	// Step 7: Remove all bracket content using shared function from slugs package
-	// This handles nested brackets and all bracket types uniformly
-	title = slugs.StripMetadataBrackets(title)
+	// Step 7: Remove bracket metadata. Per-file display titles retain
+	// structural set markers, while canonical titles strip every bracket group.
+	if preserveStructuralTags {
+		title = stripMetadataBracketsForDisplay(title)
+	} else {
+		title = slugs.StripMetadataBrackets(title)
+	}
 	title = strings.TrimSpace(title)
 
 	// Step 8: Normalize multiple spaces to single space

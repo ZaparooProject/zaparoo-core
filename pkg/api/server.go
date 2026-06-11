@@ -1427,6 +1427,8 @@ func StartWithReady(
 		}
 	}
 
+	methods.InitMediaThumbCache(platform)
+
 	// Extract port from listen address or use default
 	port := cfg.APIPort()
 	listenAddr := cfg.APIListen()

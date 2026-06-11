@@ -42,6 +42,7 @@ type Database struct {
 
 type ScrapingOperation struct {
 	ScraperID string   `json:"scraperId"`
+	RunID     string   `json:"runId,omitempty"`
 	Systems   []string `json:"systems"`
 	Force     bool     `json:"force"`
 }
@@ -153,6 +154,7 @@ type MediaTitle struct {
 type Media struct {
 	Path           string
 	ParentDir      string
+	SortName       string // write-once copy of MediaTitles.Name; titles never update so no propagation is needed
 	DBID           int64
 	MediaTitleDBID int64
 	SystemDBID     int64
@@ -241,6 +243,18 @@ type TagInfo struct {
 	Count int64  `json:"count,omitempty"`
 }
 
+type WALCheckpointMode int
+
+const (
+	WALCheckpointAuto WALCheckpointMode = iota
+	WALCheckpointSkip
+	WALCheckpointForce
+)
+
+type TransactionOptions struct {
+	WALCheckpoint WALCheckpointMode
+}
+
 // GroupTagFiltersByOperator groups tag filters by operator type for consistent processing.
 // Returns (andFilters, notFilters, orFilters) to enable both SQL generation and in-memory filtering
 // to use the same grouping logic.
@@ -262,6 +276,27 @@ func GroupTagFiltersByOperator(filters []zapscript.TagFilter) (and, not, or []za
 type BrowseDirectoryResult struct {
 	Name      string
 	SystemIDs []string
+	FileCount int
+}
+
+// SingletonContainerAlias is the resolved launch media for a child directory
+// whose contents collapse to a single logical launch target.
+type SingletonContainerAlias struct {
+	ChildDir      string
+	Tags          []TagInfo
+	ZapScriptTags []TagInfo
+	Row           MediaFullRow
+	HasCover      bool
+}
+
+// SingletonAliasCandidate identifies a child directory to consider for
+// singleton-container alias resolution. ChildDir must end with a trailing
+// slash. FileCount is the recursive per-system media count for the directory
+// (from the browse cache) — when it exceeds the number of direct media rows,
+// the directory contains nested subdirectories and is not a singleton
+// container.
+type SingletonAliasCandidate struct {
+	ChildDir  string
 	FileCount int
 }
 
@@ -353,6 +388,10 @@ type SearchResultWithCursor struct {
 	ZapScriptTags []TagInfo // Disambiguating tags only (tags that differ across sibling variants)
 	MediaID       int64
 	MediaTitleID  int64 `json:"-"`
+	// HasCover is true when the media or its title has at least one image
+	// property row in MediaProperties or MediaTitleProperties. Set by the
+	// browse files path; not populated by search/other paths.
+	HasCover bool
 }
 
 // ZapScriptTagTypes defines which tag types are eligible for inclusion in ZapScript
@@ -403,6 +442,7 @@ type MediaWithFullPath struct {
 	ParentDir      string
 	TitleSlug      string
 	SystemID       string
+	SortName       string
 	DBID           int64
 	MediaTitleDBID int64
 }
@@ -457,10 +497,14 @@ type SearchFilters struct {
 }
 
 type ScanState struct {
-	SystemIDs       map[string]int
-	TitleIDs        map[string]int
-	MediaIDs        map[string]int
-	MediaTitleIDs   map[int]int // Existing media DBID -> MediaTitleDBID for persistent reconciliation
+	SystemIDs          map[string]int
+	TitleIDs           map[string]int
+	TitleNames         map[int]string
+	MediaIDs           map[string]int
+	MediaTitleIDs      map[int]int      // Existing media DBID -> MediaTitleDBID for persistent reconciliation
+	MediaNeedsSortName map[int]struct{} // Media DBIDs with SortName='' needing a write on next title update
+	// Existing media DBID -> per-file display/sort title for persistent reconciliation.
+	MediaSortNames  map[int]string
 	MediaParentDirs map[int]string
 	MediaTagIDs     map[int]map[int]struct{}
 	TagTypeIDs      map[string]int
@@ -538,6 +582,7 @@ type MediaDBI interface {
 	GenericDBI
 	BeginTransaction(batchEnabled bool) error
 	CommitTransaction() error
+	CommitTransactionWithOptions(options TransactionOptions) error
 	RollbackTransaction() error
 	Exists() bool
 	UpdateLastGenerated() error
@@ -555,6 +600,7 @@ type MediaDBI interface {
 	InvalidateCountCache() error
 	RebuildSlugSearchCache() error
 	RebuildTagCache() error
+	WALCheckpoint() error
 
 	// On-disk persistence for the rebuilt caches. Persist* writes the
 	// current in-memory cache atomically; LoadCached* reads it back at
@@ -621,6 +667,7 @@ type MediaDBI interface {
 	GetAllUsedTags(ctx context.Context) ([]TagInfo, error)
 	PopulateSystemTagsCache(ctx context.Context) error
 	PopulateSystemTagsCacheForSystems(ctx context.Context, systems []systemdefs.System) error
+	AnalyzeApproximate() error
 	RefreshSlugSearchCacheForSystems(ctx context.Context, systemIDs []string) error
 	GetSystemTagsCached(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	InvalidateSystemTagsCache(ctx context.Context, systems []systemdefs.System) error
@@ -658,7 +705,7 @@ type MediaDBI interface {
 	FindMedia(row Media) (Media, error)
 	InsertMedia(row Media) (Media, error)
 	FindOrInsertMedia(row Media) (Media, error)
-	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64) error
+	UpdateMediaTitle(mediaDBID, mediaTitleDBID int64, sortName string) error
 	UpdateMediaParentDir(mediaDBID int64, parentDir string) error
 	DeleteMediaTags(mediaDBID int64) error
 	DeleteMediaTag(mediaDBID, tagDBID int64) error
@@ -732,6 +779,16 @@ type MediaDBI interface {
 	// direct contents of containerPath for systemDBID, or nil, nil when the
 	// container is empty, nested-only, or ambiguous.
 	FindSingleContainerLaunchMedia(ctx context.Context, systemDBID int64, containerPath string) (*Media, error)
+	// ResolveSingletonContainerAliases resolves the given candidate child
+	// directories for systemDBID in a single batch query, returning one
+	// SingletonContainerAlias per candidate that collapses to a single launch
+	// target. Candidates with nested subdirs (recursive FileCount exceeding
+	// their direct media rows) or ambiguous contents are omitted.
+	// ZapScriptTags are populated via in-memory disambiguation (same approach
+	// as the search path) and will be empty for unambiguous titles.
+	ResolveSingletonContainerAliases(
+		ctx context.Context, systemDBID int64, candidates []SingletonAliasCandidate,
+	) ([]SingletonContainerAlias, error)
 
 	// FindMediaBySystemAndPathFold returns the Media row matching systemDBID and
 	// path using a case-insensitive path comparison, or nil, nil when no row is
@@ -752,6 +809,14 @@ type MediaDBI interface {
 	// GetScrapedMediaIDs returns media DBIDs in a system already marked as scraped
 	// by scraperID.
 	GetScrapedMediaIDs(ctx context.Context, scraperID string, systemDBID int64) (map[int64]struct{}, error)
+
+	// GetScrapeRunMediaIDs returns media DBIDs in a system completed during a
+	// specific scraper run.
+	GetScrapeRunMediaIDs(ctx context.Context, scraperID, runID string, systemDBID int64) (map[int64]struct{}, error)
+
+	// ClearScrapeRunMarkers removes per-run completion markers after a scraper
+	// operation reaches a terminal state.
+	ClearScrapeRunMarkers(ctx context.Context, scraperID, runID string) error
 
 	// UpsertMediaTags writes tags to MediaTags for a specific Media row.
 	// Exclusive types (TagTypes.IsExclusive=1) delete existing tags of that type

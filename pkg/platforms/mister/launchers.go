@@ -2053,7 +2053,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:         systemdefs.SystemArcade,
 			SystemID:   systemdefs.SystemArcade,
 			Folders:    []string{"_Arcade"},
-			Extensions: []string{".mra"},
+			Extensions: []string{".mra", ".mgl"},
 			Launch:     launchArcade(pl, systemdefs.SystemArcade),
 		},
 		{

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -36,6 +37,7 @@ import (
 )
 
 func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocritic // API handler shape
+	started := time.Now()
 	log.Info().Msg("received media tags update request")
 
 	var params models.MediaTagsUpdateParams
@@ -64,6 +66,7 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 		return nil, models.ClientErrf("invalid remove tags: %w", err)
 	}
 
+	resolveStarted := time.Now()
 	resolved, err := resolveMediaRefs(&env, []mediaRefParam{mediaRef})
 	if err != nil {
 		return nil, err
@@ -76,10 +79,14 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	}
 
 	row := resolved[0].Row
+	resolveDuration := time.Since(resolveStarted)
+	updateStarted := time.Now()
 	if updateErr := updateMediaUserTags(env.Database.MediaDB, row.DBID, remove, add); updateErr != nil {
 		return nil, updateErr
 	}
+	updateDuration := time.Since(updateStarted)
 
+	fetchStarted := time.Now()
 	fileTags, err := env.Database.MediaDB.GetMediaTagsByMediaDBID(env.Context, row.DBID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media tags: %w", err)
@@ -88,6 +95,15 @@ func HandleMediaTagsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocr
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media title tags: %w", err)
 	}
+	fetchDuration := time.Since(fetchStarted)
+
+	log.Debug().
+		Int64("mediaDBID", row.DBID).
+		Dur("resolveDuration", resolveDuration).
+		Dur("updateDuration", updateDuration).
+		Dur("fetchDuration", fetchDuration).
+		Dur("totalDuration", time.Since(started)).
+		Msg("media tags update timing")
 
 	return models.TagsResponse{Tags: append(fileTags, titleTags...)}, nil
 }
@@ -142,7 +158,8 @@ func updateMediaUserTags(
 		}
 	}
 
-	if err := mediaDB.CommitTransaction(); err != nil {
+	commitOptions := database.TransactionOptions{WALCheckpoint: database.WALCheckpointSkip}
+	if err := mediaDB.CommitTransactionWithOptions(commitOptions); err != nil {
 		rollbackMediaTagUpdate(mediaDB)
 		return fmt.Errorf("failed to commit media tag update transaction: %w", err)
 	}

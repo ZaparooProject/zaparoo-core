@@ -30,12 +30,14 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -415,6 +417,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
@@ -613,6 +616,59 @@ func TestNewNamesIndex_ReportsSystemBeforeLoadingExistingData(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 }
 
+func TestNewNamesIndex_PreexistingCorruptFastFail(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCorrupt, nil).Twice()
+
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{{ID: "NES"}},
+		&database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}, func(IndexStatus) {}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "media database is corrupt")
+	assert.Contains(t, err.Error(), "original database left untouched")
+	mockMediaDB.AssertNotCalled(t, "GetAllSystems")
+	mockMediaDB.AssertNotCalled(t, "GetAllTags")
+	mockMediaDB.AssertNotCalled(t, "GetAllTagTypes")
+	mockMediaDB.AssertNotCalled(t, "SetIndexingSystems", mock.Anything)
+	mockMediaDB.AssertExpectations(t)
+}
+
+func TestNewNamesIndex_CorruptExistingTagsMarksDatabaseCorrupt(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	mockUserDB := testhelpers.NewMockUserDBI()
+	mockMediaDB := testhelpers.NewMockMediaDBI()
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Twice()
+	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Twice()
+	mockMediaDB.On("SetIndexingSystems", []string{"NES"}).Return(nil).Once()
+	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetAllTagTypes").Return([]database.TagType{}, nil).Once()
+	mockMediaDB.On("GetAllTags").Return(nil, sqlite3.Error{Code: sqlite3.ErrCorrupt}).Once()
+	mockMediaDB.On("SetIndexingStatus", mediadb.IndexingStatusCorrupt).Return(nil).Once()
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()
+
+	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, []systemdefs.System{{ID: "NES"}},
+		&database.Database{UserDB: mockUserDB, MediaDB: mockMediaDB}, func(IndexStatus) {}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "media database is corrupt")
+	assert.Contains(t, err.Error(), "original database left untouched")
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
 // TestNewNamesIndex_ResumeSystemNotFound tests handling when last indexed system is no longer available
 func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	t.Parallel()
@@ -656,6 +712,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
@@ -776,6 +833,7 @@ func TestNewNamesIndex_FullFreshRunDoesNotDropSecondaryIndexes(t *testing.T) {
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Once()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil).Once()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("RebuildSlugSearchCache").Return(nil).Once()
 	mockMediaDB.On("RebuildTagCache").Return(nil).Once()
 	mockMediaDB.On("PersistTagCache").Return(nil).Once()
@@ -825,6 +883,7 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
@@ -991,6 +1050,7 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
@@ -1100,6 +1160,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()
@@ -1180,6 +1241,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("CreateSecondaryIndexes").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	mockMediaDB.On("AnalyzeApproximate").Return(nil).Maybe()
 	mockMediaDB.On("PopulateSystemTagsCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("RefreshSlugSearchCacheForSystems", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockMediaDB.On("PopulateBrowseCache", mock.Anything).Return(nil).Maybe()

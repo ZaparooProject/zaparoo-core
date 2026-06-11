@@ -76,6 +76,17 @@ func ScraperTypeTag(scraperID string) string {
 	return CanonicalTag{Type: ScraperType(scraperID), Value: TagScraperScraped}.String()
 }
 
+// ScraperRunType returns the dynamic tag type used to mark media completed
+// during one persisted scraper run.
+func ScraperRunType(scraperID string) TagType {
+	return TagType("scraper-run." + scraperID)
+}
+
+// ScraperRunTypeTag returns the full run marker TypeTag string for a scraper run.
+func ScraperRunTypeTag(scraperID, runID string) string {
+	return CanonicalTag{Type: ScraperRunType(scraperID), Value: TagValue(runID)}.String()
+}
+
 // Tag type constants - these define the top-level categories for our hierarchical tag system
 // Format: Type defines the category, tags within each type use colon-separated hierarchies
 const (
@@ -135,6 +146,14 @@ const (
 const (
 	TagUserFavorite TagValue = "favorite"
 )
+
+// UtilityTags are non-metadata tags the browse grid renders directly
+// (currently the favorite star) and are therefore always attached to browse
+// results. All other (metadata) tags are excluded from browse and fetched on
+// demand via media.meta. Add an entry here when the grid renders a new tag.
+var UtilityTags = []CanonicalTag{
+	{Type: TagTypeUser, Value: TagUserFavorite},
+}
 
 // Tag Format:
 //   - Flat tags: Just the value (e.g., "trackball", "quiz")

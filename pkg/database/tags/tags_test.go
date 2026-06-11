@@ -115,6 +115,15 @@ func TestTagTypeNaming(t *testing.T) {
 	}
 }
 
+func TestScraperTagHelpers(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, TagType("scraper.gamelist.xml"), ScraperType("gamelist.xml"))
+	assert.Equal(t, "scraper.gamelist.xml:scraped", ScraperTypeTag("gamelist.xml"))
+	assert.Equal(t, TagType("scraper-run.gamelist.xml"), ScraperRunType("gamelist.xml"))
+	assert.Equal(t, "scraper-run.gamelist.xml:run-123", ScraperRunTypeTag("gamelist.xml", "run-123"))
+}
+
 func TestIsUserOwnedType(t *testing.T) {
 	t.Parallel()
 

@@ -23,13 +23,54 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
+
+// companyNameCache and its mutex protect cached NormalizeCompanyName results for
+// the duration of an indexing run. Company names repeat heavily across a library
+// and the slug word pipeline behind them is expensive. nil map means caching is
+// disabled.
+var (
+	companyNameCacheMu syncutil.RWMutex
+	companyNameCache   map[string]TagValue
+)
+
+// SetCompanyNameCache replaces the NormalizeCompanyName cache. Pass a freshly
+// allocated map before each indexing run; pass nil to disable caching.
+func SetCompanyNameCache(m map[string]TagValue) {
+	companyNameCacheMu.Lock()
+	companyNameCache = m
+	companyNameCacheMu.Unlock()
+}
 
 // NormalizeCompanyName converts a raw company/person name to a dash-joined slug
 // suitable for open-valued company tags (publisher, developer, credit). Uses the
 // full slug word pipeline so ampersands, accents, and punctuation are handled
 // consistently ("T&E Soft" → "t-and-e-soft").
 func NormalizeCompanyName(raw string) TagValue {
+	companyNameCacheMu.RLock()
+	m := companyNameCache
+	if m != nil {
+		if v, ok := m[raw]; ok {
+			companyNameCacheMu.RUnlock()
+			return v
+		}
+	}
+	companyNameCacheMu.RUnlock()
+
+	v := computeCompanyName(raw)
+
+	if m != nil {
+		companyNameCacheMu.Lock()
+		if companyNameCache != nil {
+			companyNameCache[raw] = v
+		}
+		companyNameCacheMu.Unlock()
+	}
+	return v
+}
+
+func computeCompanyName(raw string) TagValue {
 	words := slugs.NormalizeToWords(raw)
 	if len(words) == 0 {
 		return TagValue(NormalizeTag(raw))
