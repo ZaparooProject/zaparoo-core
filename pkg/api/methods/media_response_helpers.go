@@ -69,36 +69,47 @@ func mediaIDsByPath(ctx context.Context, db database.MediaDBI, refs []mediaPathR
 		return nil
 	}
 
-	pathsBySystem := make(map[string][]string)
-	seen := make(map[mediaPathRef]bool)
+	wanted := make(map[mediaPathRef]bool, len(refs))
+	paths := make([]string, 0, len(refs))
+	seenPaths := make(map[string]bool, len(refs))
 	for _, ref := range refs {
-		if ref.SystemID == "" || ref.Path == "" || seen[ref] {
+		if ref.SystemID == "" || ref.Path == "" || wanted[ref] {
 			continue
 		}
-		seen[ref] = true
-		pathsBySystem[ref.SystemID] = append(pathsBySystem[ref.SystemID], ref.Path)
-	}
-
-	mediaIDs := make(map[mediaPathRef]int64)
-	for systemID, paths := range pathsBySystem {
-		system, err := db.FindSystemBySystemID(systemID)
-		if err != nil {
-			log.Debug().Err(err).Str("system", systemID).Msg("could not resolve media IDs for system")
-			continue
-		}
-
-		mediaByPath, err := db.FindMediaBySystemAndPaths(ctx, system.DBID, paths)
-		if err != nil {
-			log.Debug().Err(err).Str("system", systemID).Msg("could not resolve media IDs by path")
-			continue
-		}
-
-		for path, media := range mediaByPath {
-			if media.DBID > 0 {
-				mediaIDs[mediaPathRef{SystemID: systemID, Path: path}] = media.DBID
-			}
+		wanted[ref] = true
+		if !seenPaths[ref.Path] {
+			seenPaths[ref.Path] = true
+			paths = append(paths, ref.Path)
 		}
 	}
+	if len(paths) == 0 {
+		return nil
+	}
+
+	started := time.Now()
+	rows, err := db.FindMediaIDsByPaths(ctx, paths)
+	if err != nil {
+		log.Debug().Err(err).Msg("could not resolve media IDs by path")
+		return nil
+	}
+
+	mediaIDs := make(map[mediaPathRef]int64, len(rows))
+	for _, row := range rows {
+		if row.DBID <= 0 {
+			continue
+		}
+		ref := mediaPathRef{SystemID: row.SystemID, Path: row.Path}
+		if wanted[ref] {
+			mediaIDs[ref] = row.DBID
+		}
+	}
+
+	log.Debug().
+		Int("refs", len(refs)).
+		Int("paths", len(paths)).
+		Int("resolved", len(mediaIDs)).
+		Dur("duration", time.Since(started)).
+		Msg("media ID enrichment timing")
 
 	return mediaIDs
 }

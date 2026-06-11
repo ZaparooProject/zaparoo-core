@@ -74,11 +74,13 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	}
 
 	// Fetch one extra to detect next page
+	queryStarted := time.Now()
 	entries, err := env.Database.UserDB.GetMediaHistory(systemIDs, lastID, limit+1)
 	if err != nil {
 		log.Error().Err(err).Msg("error getting media history")
 		return nil, fmt.Errorf("error getting media history: %w", err)
 	}
+	queryElapsed := time.Since(queryStarted)
 
 	hasNextPage := len(entries) > limit
 	if hasNextPage {
@@ -91,8 +93,11 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			Path:     entries[i].MediaPath,
 		})
 	}
+	enrichStarted := time.Now()
 	mediaIDs := mediaResponseMediaIDs(&env, mediaRefs)
+	enrichElapsed := time.Since(enrichStarted)
 
+	buildStarted := time.Now()
 	responseEntries := make([]models.MediaHistoryResponseEntry, 0, len(entries))
 	for i := range entries {
 		entry := &entries[i]
@@ -118,6 +123,13 @@ func HandleMediaHistory(env requests.RequestEnv) (any, error) { //nolint:gocriti
 			PlayTime:   entry.PlayTime,
 		})
 	}
+
+	log.Debug().
+		Int("entries", len(responseEntries)).
+		Dur("queryDuration", queryElapsed).
+		Dur("enrichDuration", enrichElapsed).
+		Dur("buildDuration", time.Since(buildStarted)).
+		Msg("media history handler step timing")
 
 	var pagination *models.PaginationInfo
 	if len(responseEntries) > 0 {
