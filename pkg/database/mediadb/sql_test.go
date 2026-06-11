@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	dbtags "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -729,6 +730,67 @@ func TestSqlPopulateSystemTagsCache_ClearError(t *testing.T) {
 	err = sqlPopulateSystemTagsCache(context.Background(), db)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to clear system tags cache")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlPopulateSystemTagsCache_MediaInsertError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache").
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY media_system_path_idx.*`).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	err = sqlPopulateSystemTagsCache(context.Background(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to populate media tags cache rows")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlPopulateSystemTagsCache_TitleInsertError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache").
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY media_system_path_idx.*`).
+		WillReturnResult(sqlmock.NewResult(1, 6))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM MediaTitleTags.*`).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	err = sqlPopulateSystemTagsCache(context.Background(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to populate title tags cache rows")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlPopulateSystemTagsCache_CommitError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache").
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY media_system_path_idx.*`).
+		WillReturnResult(sqlmock.NewResult(1, 6))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM MediaTitleTags.*`).
+		WillReturnResult(sqlmock.NewResult(1, 4))
+	mock.ExpectCommit().WillReturnError(sql.ErrTxDone)
+
+	err = sqlPopulateSystemTagsCache(context.Background(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to commit system tags cache transaction")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1474,6 +1536,88 @@ func TestSqlGetMediaBySystemID_ScanError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to scan media for system nes")
 	assert.Nil(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetMediaTagsBySystemID_UsesSystemMediaIndex(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	rows := sqlmock.NewRows([]string{"MediaDBID", "TagDBID"}).
+		AddRow(int64(1), int64(10)).
+		AddRow(int64(2), int64(11))
+
+	mediaTagsBySystemQuery := `SELECT mt\.MediaDBID, mt\.TagDBID.*` +
+		`FROM Media m INDEXED BY media_system_path_idx.*` +
+		`CROSS JOIN MediaTags mt.*` +
+		`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*` +
+		`AND mt\.MediaDBID = m\.DBID`
+	mock.ExpectQuery(mediaTagsBySystemQuery).WithArgs("nes").WillReturnRows(rows)
+
+	links, err := sqlGetMediaTagsBySystemID(context.Background(), db, "nes")
+
+	require.NoError(t, err)
+	assert.Equal(t, []database.MediaTagLink{
+		{MediaDBID: 1, TagDBID: 10},
+		{MediaDBID: 2, TagDBID: 11},
+	}, links)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetScannerMediaTagsBySystemID_FiltersUserTags(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(`SELECT t\.DBID.*FROM Tags t.*JOIN TagTypes tt.*WHERE tt\.Type = \?`).
+		WithArgs(string(dbtags.TagTypeUser)).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(int64(99)))
+	rows := sqlmock.NewRows([]string{"MediaDBID", "TagDBID"}).
+		AddRow(int64(1), int64(10)).
+		AddRow(int64(1), int64(99)).
+		AddRow(int64(2), int64(11))
+	mediaTagsBySystemQuery := `SELECT mt\.MediaDBID, mt\.TagDBID.*` +
+		`FROM Media m INDEXED BY media_system_path_idx.*` +
+		`CROSS JOIN MediaTags mt.*` +
+		`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*` +
+		`AND mt\.MediaDBID = m\.DBID`
+	mock.ExpectQuery(mediaTagsBySystemQuery).WithArgs("nes").WillReturnRows(rows)
+
+	links, err := sqlGetScannerMediaTagsBySystemID(context.Background(), db, "nes")
+
+	require.NoError(t, err)
+	assert.Equal(t, []database.MediaTagLink{
+		{MediaDBID: 1, TagDBID: 10},
+		{MediaDBID: 2, TagDBID: 11},
+	}, links)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetScannerMediaTagsBySystemID_ReturnsLinksWhenNoUserTags(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(`SELECT t\.DBID.*FROM Tags t.*JOIN TagTypes tt.*WHERE tt\.Type = \?`).
+		WithArgs(string(dbtags.TagTypeUser)).
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}))
+	rows := sqlmock.NewRows([]string{"MediaDBID", "TagDBID"}).
+		AddRow(int64(1), int64(10))
+	mediaTagsBySystemQuery := `SELECT mt\.MediaDBID, mt\.TagDBID.*` +
+		`FROM Media m INDEXED BY media_system_path_idx.*` +
+		`CROSS JOIN MediaTags mt.*` +
+		`WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*` +
+		`AND mt\.MediaDBID = m\.DBID`
+	mock.ExpectQuery(mediaTagsBySystemQuery).WithArgs("nes").WillReturnRows(rows)
+
+	links, err := sqlGetScannerMediaTagsBySystemID(context.Background(), db, "nes")
+
+	require.NoError(t, err)
+	assert.Equal(t, []database.MediaTagLink{{MediaDBID: 1, TagDBID: 10}}, links)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

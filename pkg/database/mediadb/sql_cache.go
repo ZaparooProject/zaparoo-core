@@ -32,7 +32,6 @@ import (
 )
 
 const systemTagsCacheUpsertClause = `
-		WHERE true
 		ON CONFLICT(SystemDBID, TagDBID) DO UPDATE SET
 			Count = SystemTagsCache.Count + excluded.Count`
 
