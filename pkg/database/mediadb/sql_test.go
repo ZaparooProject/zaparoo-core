@@ -701,15 +701,14 @@ func TestSqlPopulateSystemTagsCache_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	// Expect DELETE statement to clear cache
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache").
-		ExpectExec().
-		WillReturnResult(sqlmock.NewResult(0, 5)) // Deleted 5 rows
-
-	// Expect INSERT statement to populate cache
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*`).
-		ExpectExec().
-		WillReturnResult(sqlmock.NewResult(1, 10)) // Inserted 10 rows
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache").
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM Media m INDEXED BY media_system_path_idx.*`).
+		WillReturnResult(sqlmock.NewResult(1, 6))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*FROM MediaTitleTags.*`).
+		WillReturnResult(sqlmock.NewResult(1, 4))
+	mock.ExpectCommit()
 
 	err = sqlPopulateSystemTagsCache(context.Background(), db)
 	assert.NoError(t, err)
@@ -722,10 +721,10 @@ func TestSqlPopulateSystemTagsCache_ClearError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	// Expect DELETE statement to fail
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache").
-		ExpectExec().
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache").
 		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
 
 	err = sqlPopulateSystemTagsCache(context.Background(), db)
 	require.Error(t, err)
@@ -847,15 +846,17 @@ func TestSqlPopulateSystemTagsCacheForSystems_Success(t *testing.T) {
 	systemStmt.ExpectQuery().WithArgs("snes").
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(2))
 
-	// Mock selective delete for these systems
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
-		ExpectExec().WithArgs(1, 2).
-		WillReturnResult(sqlmock.NewResult(0, 10)) // Deleted 10 old cache entries
-
-	// Mock selective INSERT for these systems (args doubled for UNION)
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
-		ExpectExec().WithArgs(1, 2, 1, 2).
-		WillReturnResult(sqlmock.NewResult(1, 15)) // Inserted 15 new cache entries
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(0, 10))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
+		WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(1, 9))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE mtl.SystemDBID IN.*`).
+		WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(1, 6))
+	mock.ExpectCommit()
 
 	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
 	assert.NoError(t, err)
@@ -889,15 +890,17 @@ func TestSqlPopulateSystemTagsCacheForSystems_SingleSystem(t *testing.T) {
 		ExpectQuery().WithArgs("nes").
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
 
-	// Mock selective delete
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
-		ExpectExec().WithArgs(1).
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		WithArgs(1).
 		WillReturnResult(sqlmock.NewResult(0, 5))
-
-	// Mock selective INSERT (args doubled for UNION)
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
-		ExpectExec().WithArgs(1, 1).
-		WillReturnResult(sqlmock.NewResult(1, 8))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE mtl.SystemDBID IN.*`).
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 3))
+	mock.ExpectCommit()
 
 	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
 	assert.NoError(t, err)
@@ -924,13 +927,17 @@ func TestSqlPopulateSystemTagsCacheForSystems_NonExistentSystem(t *testing.T) {
 		WillReturnError(sql.ErrNoRows) // System not found
 
 	// Should still process NES successfully
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
-		ExpectExec().WithArgs(1).
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		WithArgs(1).
 		WillReturnResult(sqlmock.NewResult(0, 5))
-
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
-		ExpectExec().WithArgs(1, 1).
-		WillReturnResult(sqlmock.NewResult(1, 8))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 5))
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE mtl.SystemDBID IN.*`).
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 3))
+	mock.ExpectCommit()
 
 	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
 	assert.NoError(t, err, "should continue processing valid systems even if some don't exist")
@@ -952,9 +959,11 @@ func TestSqlPopulateSystemTagsCacheForSystems_DeleteError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
 
 	// Mock delete failure
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
-		ExpectExec().WithArgs(1).
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		WithArgs(1).
 		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
 
 	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
 	require.Error(t, err)
@@ -977,18 +986,18 @@ func TestSqlPopulateSystemTagsCacheForSystems_InsertError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
 
 	// Mock delete success
-	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
-		ExpectExec().WithArgs(1).
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		WithArgs(1).
 		WillReturnResult(sqlmock.NewResult(0, 5))
-
-	// Mock insert failure (args doubled for UNION)
-	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
-		ExpectExec().WithArgs(1, 1).
+	mock.ExpectExec(`INSERT INTO SystemTagsCache.*WHERE m.SystemDBID IN.*`).
+		WithArgs(1).
 		WillReturnError(sql.ErrTxDone)
+	mock.ExpectRollback()
 
 	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to populate cache for specific systems")
+	assert.Contains(t, err.Error(), "failed to populate media cache rows for specific systems")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1378,7 +1387,7 @@ func TestSqlGetMediaBySystemID_Success(t *testing.T) {
 		AddRow(int64(3), metroidPath, gamesDir, int64(12), "Metroid")
 
 	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName ` +
-		`FROM Media m.*WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.DBID`
+		`FROM Media m INDEXED BY media_system_path_idx.*WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.Path`
 	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
@@ -1417,7 +1426,7 @@ func TestSqlGetMediaBySystemID_EmptyResult(t *testing.T) {
 	rows := sqlmock.NewRows(emptyCols)
 
 	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName ` +
-		`FROM Media m.*WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.DBID`
+		`FROM Media m INDEXED BY media_system_path_idx.*WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.Path`
 	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
@@ -1436,7 +1445,7 @@ func TestSqlGetMediaBySystemID_QueryError(t *testing.T) {
 	systemID := "nes"
 
 	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName ` +
-		`FROM Media m.*WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.DBID`
+		`FROM Media m INDEXED BY media_system_path_idx.*WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.Path`
 	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnError(sql.ErrConnDone)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)
@@ -1460,7 +1469,7 @@ func TestSqlGetMediaBySystemID_ScanError(t *testing.T) {
 		AddRow(int64(1), "/games/mario.nes")
 
 	mediaBySystemQuery := `SELECT m\.DBID, m\.Path, m\.ParentDir, m\.MediaTitleDBID, m\.SortName ` +
-		`FROM Media m.*WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.DBID`
+		`FROM Media m INDEXED BY media_system_path_idx.*WHERE m\.SystemDBID = \(SELECT DBID FROM Systems WHERE SystemID = \?\).*ORDER BY m\.Path`
 	mock.ExpectQuery(mediaBySystemQuery).WithArgs(systemID).WillReturnRows(rows)
 
 	results, err := sqlGetMediaBySystemID(context.Background(), db, systemID)

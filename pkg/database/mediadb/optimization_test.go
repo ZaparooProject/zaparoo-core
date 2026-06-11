@@ -36,9 +36,9 @@ import (
 
 func expectAnalyzeStep(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "analyze").
+		WithArgs(DBConfigOptimizationStep, "pragma_optimize").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("(?i)analyze;?").
+	mock.ExpectExec("(?i)PRAGMA optimize").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 }
 
@@ -93,7 +93,7 @@ func expectWALCheckpointStep(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 }
 
-// expectPostAnalyzeSteps mocks all steps that run after analyze in the
+// expectPostAnalyzeSteps mocks all steps that run after PRAGMA optimize in the
 // background optimization sequence: page_prefetch, browse_cache, wal_checkpoint.
 func expectPostAnalyzeSteps(mock sqlmock.Sqlmock) {
 	expectPagePrefetchStep(mock)
@@ -198,8 +198,8 @@ func TestSetGetOptimizationStep(t *testing.T) {
 			step: "indexes",
 		},
 		{
-			name: "analyze step",
-			step: "analyze",
+			name: "pragma optimize step",
+			step: "pragma_optimize",
 		},
 		{
 			name: "vacuum step",
@@ -301,7 +301,7 @@ func TestRunBackgroundOptimization_Success(t *testing.T) {
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
-	// Steps run in order: temporary_repair_parent_dirs → analyze → page_prefetch → browse_cache → wal_checkpoint
+	// Steps run in order: temporary_repair_parent_dirs → pragma_optimize → page_prefetch → browse_cache → wal_checkpoint
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -335,19 +335,19 @@ func TestRunBackgroundOptimization_FailureHandling(t *testing.T) {
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
-	// temporary repair runs first; analyze failure aborts before page_prefetch/browse_cache
+	// temporary repair runs first; pragma_optimize failure aborts before page_prefetch/browse_cache
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	expectTemporaryParentDirRepairStepNoop(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "analyze").
+		WithArgs(DBConfigOptimizationStep, "pragma_optimize").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	analyzeError := errors.New("analyze failed")
-	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
-	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
-	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError) // all retries exhausted
+	analyzeError := errors.New("pragma optimize failed")
+	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
+	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
+	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError) // all retries exhausted
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "failed").
@@ -563,19 +563,19 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 			vacuumRetryDelay:  1 * time.Millisecond,
 		}
 
-		// temporary repair runs first; analyze failure aborts before page_prefetch/browse_cache
+		// temporary repair runs first; pragma_optimize failure aborts before page_prefetch/browse_cache
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "running").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 		expectTemporaryParentDirRepairStepNoop(mock)
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-			WithArgs(DBConfigOptimizationStep, "analyze").
+			WithArgs(DBConfigOptimizationStep, "pragma_optimize").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		analyzeError := errors.New("analyze failed")
-		mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
-		mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
-		mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
+		analyzeError := errors.New("pragma optimize failed")
+		mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
+		mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
+		mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
 
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 			WithArgs(DBConfigOptimizationStatus, "failed").

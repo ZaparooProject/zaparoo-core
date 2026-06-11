@@ -87,7 +87,6 @@ func sqlPopulateBrowseCache(ctx context.Context, db *sql.DB) error {
 		Int("media", builder.mediaRows).
 		Int("counts", len(builder.counts)).
 		Msg("browse cache media scan complete")
-	logBrowseMediaCountsBySystem(ctx, tx)
 
 	deleteStarted := time.Now()
 	for _, stmt := range []string{

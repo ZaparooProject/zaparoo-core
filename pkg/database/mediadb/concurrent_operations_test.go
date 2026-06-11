@@ -328,19 +328,19 @@ func TestOptimizationInterruption(t *testing.T) {
 		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
-	// temporary repair runs first; analyze failure aborts before page_prefetch/browse_cache
+	// temporary repair runs first; pragma_optimize failure aborts before page_prefetch/browse_cache
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	expectTemporaryParentDirRepairStepNoop(mock)
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "analyze").
+		WithArgs(DBConfigOptimizationStep, "pragma_optimize").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	analyzeError := errors.New("database locked")
-	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
-	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError)
-	mock.ExpectExec("(?i)analyze;?").WillReturnError(analyzeError) // Final failure
+	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
+	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError)
+	mock.ExpectExec("(?i)PRAGMA optimize").WillReturnError(analyzeError) // Final failure
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "failed").

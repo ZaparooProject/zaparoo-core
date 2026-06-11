@@ -294,13 +294,15 @@ func sqlGetMediaWithFullPathExcluding(
 // This is used for lazy loading during resume to avoid loading ALL media upfront.
 // Single-table query on Media: this runs once per system over every media row,
 // and no caller reads TitleSlug, so the MediaTitles join would only add a
-// per-row B-tree probe. SystemID is filled from the argument.
+// per-row B-tree probe. SystemID is filled from the argument. Ordering by Path
+// lets SQLite stream from media_system_path_idx instead of filtering by system
+// and then building a temp sort by DBID for large systems.
 func sqlGetMediaBySystemID(ctx context.Context, db *sql.DB, systemID string) ([]database.MediaWithFullPath, error) {
 	query := `
 		SELECT m.DBID, m.Path, m.ParentDir, m.MediaTitleDBID, m.SortName
-		FROM Media m
+		FROM Media m INDEXED BY media_system_path_idx
 		WHERE m.SystemDBID = (SELECT DBID FROM Systems WHERE SystemID = ?)
-		ORDER BY m.DBID
+		ORDER BY m.Path
 	`
 	rows, err := db.QueryContext(ctx, query, systemID)
 	if err != nil {
