@@ -292,6 +292,7 @@ None.
 | mediaPath        | string   | Yes      | Path to the media file.                    |
 | relativePath     | string   | No       | Launcher-relative convenience path, when it can be derived. Not a stable media identity. |
 | mediaName        | string   | Yes      | Display name of the media.                 |
+| slot             | string   | No       | Media slot for the item. Omitted or `primary` is foreground media; `background` is background audio. |
 | started          | string   | Yes      | Timestamp when media started in RFC3339 format. |
 | zapScript        | string   | Yes      | ZapScript command to launch this media item. |
 | launcherControls | string[] | No       | List of control action names supported by the active launcher. Only present if the launcher supports controls. See [media.control](#mediacontrol). |
@@ -1856,6 +1857,7 @@ An object:
 | Key    | Type   | Required | Description                                                       |
 | :----- | :----- | :------- | :---------------------------------------------------------------- |
 | action | string | Yes      | The control action to execute (e.g., `"save_state"`, `"toggle_pause"`). |
+| slot   | string | No       | Target media slot. Omit for primary media; use `"background"` to control background audio. |
 | args   | object | No       | Optional key-value arguments for the control action. Values are strings. |
 
 #### Result
@@ -1884,6 +1886,25 @@ Returns an empty object `{}` on success.
   "jsonrpc": "2.0",
   "id": "c3d4e5f6-7a5d-11ef-9c7b-020304050607",
   "result": {}
+}
+```
+
+##### Background audio example
+
+Native audio supports `toggle_pause`, `pause`, `resume`, `stop`, `fast_forward`, and `rewind` controls on the `background` slot. `fast_forward` and `rewind` accept an optional `seconds` argument; default is 10 seconds.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "d4e5f6a7-7a5d-11ef-9c7b-020304050607",
+  "method": "media.control",
+  "params": {
+    "action": "fast_forward",
+    "slot": "background",
+    "args": {
+      "seconds": "30"
+    }
+  }
 }
 ```
 

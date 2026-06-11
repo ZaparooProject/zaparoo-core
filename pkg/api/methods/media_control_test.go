@@ -23,6 +23,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -452,7 +454,9 @@ func TestHandleMediaControl_InvalidSlot(t *testing.T) {
 	defer st.StopService()
 	drainNotifications(t, ns)
 
-	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher"))
+	st.SetActiveMedia(models.NewActiveMedia(
+		"NES", "NES", filepath.Join(string(os.PathSeparator), "game.nes"), "Game", "test-launcher",
+	))
 
 	env := requests.RequestEnv{
 		Context: context.Background(),
@@ -477,7 +481,9 @@ func TestHandleMediaControl_NilLauncherCache(t *testing.T) {
 	defer st.StopService()
 	drainNotifications(t, ns)
 
-	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher"))
+	st.SetActiveMedia(models.NewActiveMedia(
+		"NES", "NES", filepath.Join(string(os.PathSeparator), "game.nes"), "Game", "test-launcher",
+	))
 
 	env := requests.RequestEnv{
 		Context:       context.Background(),
@@ -503,7 +509,9 @@ func TestHandleMediaControl_LauncherNotFound(t *testing.T) {
 	defer st.StopService()
 	drainNotifications(t, ns)
 
-	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "missing-launcher"))
+	st.SetActiveMedia(models.NewActiveMedia(
+		"NES", "NES", filepath.Join(string(os.PathSeparator), "game.nes"), "Game", "missing-launcher",
+	))
 
 	cache := &helpers.LauncherCache{}
 	cache.InitializeFromSlice([]platforms.Launcher{
@@ -531,7 +539,9 @@ func TestHandleMediaControl_FuncReturnsError(t *testing.T) {
 	defer st.StopService()
 	drainNotifications(t, ns)
 
-	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher"))
+	st.SetActiveMedia(models.NewActiveMedia(
+		"NES", "NES", filepath.Join(string(os.PathSeparator), "game.nes"), "Game", "test-launcher",
+	))
 
 	cache := &helpers.LauncherCache{}
 	cache.InitializeFromSlice([]platforms.Launcher{
@@ -567,7 +577,9 @@ func TestHandleMediaControl_NoImplementation(t *testing.T) {
 	defer st.StopService()
 	drainNotifications(t, ns)
 
-	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "test-launcher"))
+	st.SetActiveMedia(models.NewActiveMedia(
+		"NES", "NES", filepath.Join(string(os.PathSeparator), "game.nes"), "Game", "test-launcher",
+	))
 
 	cache := &helpers.LauncherCache{}
 	cache.InitializeFromSlice([]platforms.Launcher{

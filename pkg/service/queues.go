@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -112,6 +113,10 @@ func runTokenZapScript(
 			}
 		}
 
+		if stopErr := stopNativePlaybackBeforePrimaryCommand(svc, cmd, pls); stopErr != nil {
+			return stopErr
+		}
+
 		result, err := zapscript.RunCommand(
 			svc.State.GetContext(),
 			svc.Platform, svc.Config,
@@ -171,6 +176,44 @@ func runTokenZapScript(
 		}
 	}
 
+	return nil
+}
+
+func stopNativePlaybackBeforePrimaryCommand(
+	svc *ServiceContext,
+	cmd gozapscript.Command,
+	activePlaylist *playlists.Playlist,
+) error {
+	if svc.PlaybackManager == nil {
+		return nil
+	}
+	stopsPrimaryMedia := cmd.Name == gozapscript.ZapScriptCmdStop ||
+		cmd.Name == gozapscript.ZapScriptCmdPlaylistStop ||
+		cmd.Name == gozapscript.ZapScriptCmdPlaylistPause
+	if !zapscript.IsMediaLaunchingCommand(cmd.Name) && !stopsPrimaryMedia {
+		return nil
+	}
+
+	slot := cmd.AdvArgs.Get(mediaslot.Arg)
+	if slot == "" && activePlaylist != nil && activePlaylist.Slot != "" {
+		slot = activePlaylist.Slot
+	}
+	normalizedSlot, err := mediaslot.Normalize(slot)
+	if err != nil {
+		return fmt.Errorf("normalize media slot: %w", err)
+	}
+	if normalizedSlot != mediaslot.Primary {
+		return nil
+	}
+
+	media := svc.State.ActiveMedia()
+	if media == nil || media.LauncherID != platforms.NativeAudioLauncherID {
+		return nil
+	}
+	if err := svc.PlaybackManager.Stop(mediaslot.Primary); err != nil {
+		return fmt.Errorf("stop native audio before primary command: %w", err)
+	}
+	svc.State.SetActiveMedia(nil)
 	return nil
 }
 
@@ -259,6 +302,11 @@ func handlePlaylist(
 			log.Info().Str("slot", slot).Msg("clearing playlist")
 		}
 		if slot == mediaslot.Background {
+			if svc.PlaybackManager != nil {
+				if err := svc.PlaybackManager.Stop(mediaslot.Background); err != nil {
+					log.Warn().Err(err).Msg("failed to stop background playlist playback")
+				}
+			}
 			svc.State.SetBackgroundPlaylist(nil)
 			svc.State.SetBackgroundMedia(nil)
 		} else {
@@ -317,6 +365,11 @@ func handlePlaylist(
 				launchPlaylistMedia(svc, pls, activePlaylist, player)
 			}()
 		} else {
+			if slot == mediaslot.Background && svc.PlaybackManager != nil {
+				if err := svc.PlaybackManager.Pause(mediaslot.Background); err != nil {
+					log.Warn().Err(err).Msg("failed to pause background playlist playback")
+				}
+			}
 			log.Info().Any("pls", pls).Msg("updating playlist")
 		}
 		return

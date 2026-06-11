@@ -23,9 +23,12 @@ import (
 	"testing"
 	"time"
 
+	gozapscript "github.com/ZaparooProject/go-zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -80,6 +83,43 @@ func makeServicePlaylist() *playlists.Playlist {
 		{Name: "Item 3", ZapScript: "**test3"},
 	}
 	return playlists.NewPlaylist("id", "name", items)
+}
+
+type servicePlaybackRecorder struct {
+	played  []string
+	stopped []string
+	paused  []string
+}
+
+func (r *servicePlaybackRecorder) Play(slot, _ string, _ audio.PlaybackOptions) error {
+	r.played = append(r.played, slot)
+	return nil
+}
+
+func (r *servicePlaybackRecorder) Stop(slot string) error {
+	r.stopped = append(r.stopped, slot)
+	return nil
+}
+
+func (r *servicePlaybackRecorder) Pause(slot string) error {
+	r.paused = append(r.paused, slot)
+	return nil
+}
+
+func (*servicePlaybackRecorder) Resume(string) error {
+	return nil
+}
+
+func (*servicePlaybackRecorder) TogglePause(string) error {
+	return nil
+}
+
+func (*servicePlaybackRecorder) Seek(string, time.Duration) error {
+	return nil
+}
+
+func (*servicePlaybackRecorder) State(string) audio.PlaybackState {
+	return audio.PlaybackState{}
 }
 
 func TestRunTokenZapScript_ClearsPlaylistOnMediaChange(t *testing.T) {
@@ -224,16 +264,20 @@ func TestHandlePlaylist_BackgroundSlotUpdatesBackgroundStateOnly(t *testing.T) {
 	assert.Equal(t, mediaslot.Background, background.Slot)
 }
 
-func TestHandlePlaylist_BackgroundClearClearsBackgroundMediaOnly(t *testing.T) {
+func TestHandlePlaylist_BackgroundClearStopsPlaybackAndClearsBackgroundOnly(t *testing.T) {
 	t.Parallel()
 
 	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{}
+	svc.PlaybackManager = recorder
 	active := makeServicePlaylist()
 	svc.State.SetActivePlaylist(active)
 	background := makeServicePlaylist()
 	background.Slot = mediaslot.Background
 	svc.State.SetBackgroundPlaylist(background)
-	svc.State.SetBackgroundMedia(models.NewActiveMedia("Audio", "Audio", "track.mp3", "Track", "native-audio"))
+	svc.State.SetBackgroundMedia(models.NewActiveMedia(
+		"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+	))
 	require.NotNil(t, svc.State.BackgroundMedia())
 
 	handlePlaylist(svc, &playlists.Playlist{Slot: mediaslot.Background, Clear: true}, nil)
@@ -241,6 +285,83 @@ func TestHandlePlaylist_BackgroundClearClearsBackgroundMediaOnly(t *testing.T) {
 	assert.Same(t, active, svc.State.GetActivePlaylist(), "background clear must not clear active playlist")
 	assert.Nil(t, svc.State.GetBackgroundPlaylist())
 	assert.Nil(t, svc.State.BackgroundMedia())
+	assert.Equal(t, []string{mediaslot.Background}, recorder.stopped)
+}
+
+func TestHandlePlaylist_BackgroundPausePausesPlayback(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{}
+	svc.PlaybackManager = recorder
+	background := makeServicePlaylist()
+	background.Slot = mediaslot.Background
+	background.Playing = true
+	svc.State.SetBackgroundPlaylist(background)
+
+	paused := playlists.Pause(*background)
+	handlePlaylist(svc, paused, nil)
+
+	assert.Equal(t, []string{mediaslot.Background}, recorder.paused)
+	assert.False(t, svc.State.GetBackgroundPlaylist().Playing)
+}
+
+func TestStopNativePlaybackBeforePrimaryCommandStopsAndClearsPrimaryNativeAudio(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{}
+	svc.PlaybackManager = recorder
+	svc.State.SetActiveMedia(models.NewActiveMedia(
+		"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+	))
+
+	err := stopNativePlaybackBeforePrimaryCommand(svc, gozapscript.Command{
+		Name: gozapscript.ZapScriptCmdLaunch,
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{mediaslot.Primary}, recorder.stopped)
+	assert.Nil(t, svc.State.ActiveMedia())
+}
+
+func TestStopNativePlaybackBeforePrimaryCommandStopsPrimaryPlaylistStop(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{}
+	svc.PlaybackManager = recorder
+	svc.State.SetActiveMedia(models.NewActiveMedia(
+		"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+	))
+
+	err := stopNativePlaybackBeforePrimaryCommand(svc, gozapscript.Command{
+		Name: gozapscript.ZapScriptCmdPlaylistStop,
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{mediaslot.Primary}, recorder.stopped)
+	assert.Nil(t, svc.State.ActiveMedia())
+}
+
+func TestStopNativePlaybackBeforePrimaryCommandSkipsBackgroundLaunch(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	recorder := &servicePlaybackRecorder{}
+	svc.PlaybackManager = recorder
+	svc.State.SetActiveMedia(models.NewActiveMedia(
+		"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+	))
+
+	err := stopNativePlaybackBeforePrimaryCommand(svc, gozapscript.Command{
+		Name:    gozapscript.ZapScriptCmdLaunch,
+		AdvArgs: gozapscript.NewAdvArgs(map[string]string{mediaslot.Arg: mediaslot.Background}),
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, recorder.stopped)
+	assert.NotNil(t, svc.State.ActiveMedia())
 }
 
 func TestHandlePlaylist_InvalidSlotIgnored(t *testing.T) {

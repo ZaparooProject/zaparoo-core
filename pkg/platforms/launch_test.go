@@ -670,7 +670,7 @@ func TestDoLaunch_InvalidSlotReturnsError(t *testing.T) {
 		Config:         &config.Instance{},
 		SetActiveMedia: func(*models.ActiveMedia) {},
 		Launcher:       launcher,
-		Path:           "/song.mp3",
+		Path:           filepath.Join(string(os.PathSeparator), "song.mp3"),
 		Options:        &platforms.LaunchOptions{Slot: "invalid-slot-value"},
 	}
 
@@ -698,7 +698,7 @@ func TestDoLaunch_BackgroundSlotWrongLauncherReturnsError(t *testing.T) {
 		Config:         &config.Instance{},
 		SetActiveMedia: func(*models.ActiveMedia) {},
 		Launcher:       launcher,
-		Path:           "/game.nes",
+		Path:           filepath.Join(string(os.PathSeparator), "game.nes"),
 		Options:        &platforms.LaunchOptions{Slot: "background"},
 	}
 
@@ -727,7 +727,7 @@ func TestDoLaunch_BackgroundSlotReturnsEarlyWithoutSettingActiveMedia(t *testing
 		Config:         &config.Instance{},
 		SetActiveMedia: func(m *models.ActiveMedia) { activeMedia = m },
 		Launcher:       launcher,
-		Path:           "/song.mp3",
+		Path:           filepath.Join(string(os.PathSeparator), "song.mp3"),
 		Options:        &platforms.LaunchOptions{Slot: "background"},
 	}
 

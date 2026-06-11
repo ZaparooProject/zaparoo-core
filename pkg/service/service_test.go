@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -160,6 +161,51 @@ func TestCleanupHistoryRetention_CancelledBeforeMediaHistory(t *testing.T) {
 
 	mockUserDB.AssertExpectations(t)
 	mockUserDB.AssertNotCalled(t, "CleanupMediaHistory", mock.Anything)
+}
+
+type testDrainCallbackRegistrar struct {
+	callbacks map[string]func()
+}
+
+func (r *testDrainCallbackRegistrar) SetDrainCallback(slot string, fn func()) {
+	if r.callbacks == nil {
+		r.callbacks = make(map[string]func())
+	}
+	r.callbacks[slot] = fn
+}
+
+func TestWireNativeAudioDrainCallbacksClearsMediaState(t *testing.T) {
+	t.Parallel()
+
+	st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+	st.SetActiveMedia(models.NewActiveMedia(
+		"Audio", "Audio", "primary.mp3", "Primary", platforms.NativeAudioLauncherID,
+	))
+	st.SetBackgroundMedia(models.NewActiveMedia(
+		"Audio", "Audio", "background.mp3", "Background", platforms.NativeAudioLauncherID,
+	))
+	require.NotNil(t, st.ActiveMedia())
+	require.NotNil(t, st.BackgroundMedia())
+
+	registrar := &testDrainCallbackRegistrar{}
+	wireNativeAudioDrainCallbacks(registrar, st)
+
+	require.Contains(t, registrar.callbacks, mediaslot.Primary)
+	require.Contains(t, registrar.callbacks, mediaslot.Background)
+	registrar.callbacks[mediaslot.Primary]()
+	registrar.callbacks[mediaslot.Background]()
+	assert.Nil(t, st.ActiveMedia())
+	assert.Nil(t, st.BackgroundMedia())
 }
 
 func TestRebuildStartupSlugSearchCache_SkipsWhenLoaded(t *testing.T) {

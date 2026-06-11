@@ -88,6 +88,19 @@ func rebuildStartupSlugSearchCache(mediaDB database.MediaDBI, slugCacheLoaded bo
 	}
 }
 
+type drainCallbackRegistrar interface {
+	SetDrainCallback(slot string, fn func())
+}
+
+func wireNativeAudioDrainCallbacks(playbackManager drainCallbackRegistrar, st *state.State) {
+	playbackManager.SetDrainCallback(mediaslot.Primary, func() {
+		st.SetActiveMedia(nil)
+	})
+	playbackManager.SetDrainCallback(mediaslot.Background, func() {
+		st.SetBackgroundMedia(nil)
+	})
+}
+
 func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -162,11 +175,13 @@ func Start(
 		Config:              cfg,
 		State:               st,
 		DB:                  db,
+		PlaybackManager:     playbackManager,
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
 		ConfirmQueue:        cfq,
 		BackgroundWG:        backgroundWG,
 	}
+	wireNativeAudioDrainCallbacks(playbackManager, st)
 
 	// Set up media readiness and the OnMediaStart hook.
 	st.SetOnMediaStartHook(func(media *models.ActiveMedia, gen uint64) {

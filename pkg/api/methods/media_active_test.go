@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -516,7 +517,9 @@ func TestHandleUpdateActiveMedia_ClearMedia(t *testing.T) {
 	defer st.StopService()
 	drainNotifications(t, ns)
 
-	st.SetActiveMedia(models.NewActiveMedia("NES", "NES", "/game.nes", "Game", "launcher"))
+	st.SetActiveMedia(models.NewActiveMedia(
+		"NES", "NES", filepath.Join(string(os.PathSeparator), "game.nes"), "Game", "launcher",
+	))
 
 	env := requests.RequestEnv{
 		Context: context.Background(),
@@ -540,9 +543,10 @@ func TestHandleUpdateActiveMedia_SetMedia(t *testing.T) {
 	defer st.StopService()
 	drainNotifications(t, ns)
 
+	mediaPath := filepath.Join(string(os.PathSeparator), "game.nes")
 	params, _ := json.Marshal(map[string]string{
 		"systemId":  "NES",
-		"mediaPath": "/game.nes",
+		"mediaPath": mediaPath,
 		"mediaName": "My Game",
 	})
 	env := requests.RequestEnv{
@@ -559,7 +563,7 @@ func TestHandleUpdateActiveMedia_SetMedia(t *testing.T) {
 	active := st.ActiveMedia()
 	require.NotNil(t, active)
 	assert.Equal(t, "NES", active.SystemID)
-	assert.Equal(t, "/game.nes", active.Path)
+	assert.Equal(t, mediaPath, active.Path)
 	assert.Equal(t, "My Game", active.Name)
 }
 
@@ -572,9 +576,10 @@ func TestHandleUpdateActiveMedia_InvalidSystem(t *testing.T) {
 	defer st.StopService()
 	drainNotifications(t, ns)
 
+	mediaPath := filepath.Join(".", "game")
 	params, _ := json.Marshal(map[string]string{
 		"systemId":  "UNKNOWN_SYSTEM_XYZ_12345",
-		"mediaPath": "/game",
+		"mediaPath": mediaPath,
 		"mediaName": "Game",
 	})
 	env := requests.RequestEnv{
