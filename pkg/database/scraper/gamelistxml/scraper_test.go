@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/scraper"
@@ -3069,10 +3070,25 @@ func TestScrapeLoop_PauseCancelBeforeNextSystemPreservesProgress(t *testing.T) {
 	}()
 
 	<-paused
+
+	updates := make([]scraper.ScrapeUpdate, 0)
+	waitCtx, stopWaiting := context.WithTimeout(context.Background(), time.Second)
+	defer stopWaiting()
+	for waiting := true; waiting; {
+		select {
+		case update, ok := <-ch:
+			require.True(t, ok, "scrape loop ended before completing nes progress")
+			updates = append(updates, update)
+			waiting = update.SystemID != "nes" || update.Processed != 1 || update.Matched != 1 || update.Done
+		case <-waitCtx.Done():
+			require.FailNow(t, "timed out waiting for completed nes progress")
+		}
+	}
+
 	cancel()
 	<-done
+	updates = append(updates, drainChannel(ch)...)
 
-	updates := drainChannel(ch)
 	var doneUpdate scraper.ScrapeUpdate
 	for _, update := range updates {
 		if update.Done {
