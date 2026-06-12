@@ -98,16 +98,25 @@ func commandTargetsBackgroundSlot(cmd zapscript.Command) bool {
 	return err == nil && slot == mediaslot.Background
 }
 
+// shouldPlayScanSuccessSound reports whether scan feedback should play for the
+// script. Suppressed only when the script's media commands all target the
+// background slot, so the sound doesn't clash with background music starting; a
+// mixed script that also launches primary media keeps normal feedback.
 func shouldPlayScanSuccessSound(script *zapscript.Script) bool {
 	if script == nil {
 		return true
 	}
+	hasBackground := false
 	for _, cmd := range script.Cmds {
 		if commandTargetsBackgroundSlot(cmd) {
-			return false
+			hasBackground = true
+			continue
+		}
+		if zscript.IsMediaDisruptingCommand(cmd.Name) {
+			return true
 		}
 	}
-	return true
+	return !hasBackground
 }
 
 // injectCommands inserts new commands into the command slice after the given index.

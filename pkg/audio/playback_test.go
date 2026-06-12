@@ -20,6 +20,7 @@
 package audio
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -281,6 +282,48 @@ func TestNewStreamingSource_WAVInitializesStreamingFields(t *testing.T) {
 	assert.NotNil(t, s.resampler)
 }
 
+// wavWithSamples builds a minimal mono 16-bit 44.1 kHz WAV containing n silent samples.
+func wavWithSamples(n uint16) []byte {
+	dataSize := uint32(n) * 2
+	header := validWAVHeader()
+	// Patch RIFF size and data chunk size for the sample payload.
+	binary.LittleEndian.PutUint32(header[4:8], 36+dataSize)
+	binary.LittleEndian.PutUint32(header[40:44], dataSize)
+	return append(header, make([]byte, dataSize)...)
+}
+
+func TestStreamingSource_SeekAfterEOFRefillsRing(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "audio.wav")
+	require.NoError(t, os.WriteFile(path, wavWithSamples(4410), 0o600)) // 0.1 s of audio
+
+	s, err := newStreamingSource(path, 1.0)
+	require.NoError(t, err)
+	s.startPrefetch()
+	t.Cleanup(s.stopAndDeregister)
+
+	// Wait for the prefetch goroutine to fully decode the file.
+	require.Eventually(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.eof
+	}, 5*time.Second, 5*time.Millisecond, "prefetch should reach EOF")
+
+	// Simulate the tail playing out, then seek back to the start. Before the
+	// parked-prefetch fix the goroutine had already exited and the flushed ring
+	// stayed empty forever, wedging the slot in silence.
+	buf := make([][2]float64, 64)
+	s.mixAdd(buf, len(buf))
+	s.seek(-time.Second)
+
+	require.Eventually(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.filled > 0
+	}, 5*time.Second, 5*time.Millisecond, "seek after EOF should refill the ring")
+}
+
 func TestNewLongformPlaybackManager(t *testing.T) {
 	t.Parallel()
 	m := NewLongformPlaybackManager()
@@ -441,6 +484,32 @@ func TestLongformPlaybackManager_WithSourceBackground(t *testing.T) {
 	require.NoError(t, m.Stop(mediaslot.Background))
 	s.mu.Lock()
 	assert.True(t, s.stopped)
+	s.mu.Unlock()
+	assert.Equal(t, PlaybackState{}, m.State(mediaslot.Background))
+}
+
+// TestLongformPlaybackManager_SlotAliasesResolve verifies that slot aliases and
+// formatting variants ("bg", mixed case, whitespace) reach the same source as
+// the canonical name.
+func TestLongformPlaybackManager_SlotAliasesResolve(t *testing.T) {
+	t.Parallel()
+	m := NewLongformPlaybackManager()
+	s := newTestSource()
+	m.mu.Lock()
+	m.background = s
+	m.mu.Unlock()
+
+	for _, alias := range []string{"bg", "Background", " background "} {
+		require.NoError(t, m.Pause(alias))
+		s.mu.Lock()
+		assert.True(t, s.paused, "alias %q must resolve to the background source", alias)
+		s.paused = false
+		s.mu.Unlock()
+	}
+
+	require.NoError(t, m.Stop("bg"))
+	s.mu.Lock()
+	assert.True(t, s.stopped, "Stop via alias must stop the background source")
 	s.mu.Unlock()
 	assert.Equal(t, PlaybackState{}, m.State(mediaslot.Background))
 }

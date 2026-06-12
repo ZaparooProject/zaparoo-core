@@ -141,7 +141,11 @@ func runTokenZapScript(
 			return fmt.Errorf("failed to run zapscript command: %w", err)
 		}
 
-		if result.MediaChanged && token.Source != tokens.SourcePlaylist {
+		// Background slot commands don't disturb primary media, so they must not
+		// clear the primary playlist or replace the hold-mode software token.
+		primaryMediaChanged := result.MediaChanged && !commandTargetsBackgroundSlot(cmd)
+
+		if primaryMediaChanged && token.Source != tokens.SourcePlaylist {
 			log.Debug().Any("token", token).Msg("cmd launch: clearing current playlist")
 			select {
 			case plsc.Queue <- nil:
@@ -150,7 +154,7 @@ func runTokenZapScript(
 			}
 		}
 
-		if result.MediaChanged && token.ReaderID != "" {
+		if primaryMediaChanged && token.ReaderID != "" {
 			r, ok := svc.State.GetReader(token.ReaderID)
 			if ok && readers.HasCapability(r, readers.CapabilityRemovable) {
 				log.Debug().Any("token", token).Msg("media changed, updating software token")

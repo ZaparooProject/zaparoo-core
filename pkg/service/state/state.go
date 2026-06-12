@@ -495,8 +495,12 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Primary)
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		s.notifyDisplayReaders(media)
+		// Run the hook synchronously (outside the lock) so callers observe its
+		// effects before their next step — the launch path stops native audio and
+		// then decides whether to pause background music, which must happen after
+		// any auto-resume the hook performs.
 		if stopHook != nil {
-			go stopHook()
+			stopHook()
 		}
 		return
 	}

@@ -371,8 +371,10 @@ type ScrapersResponse struct {
 }
 
 type ActiveMedia struct {
-	RelPath          *string   `json:"relativePath,omitempty"`
 	Started          time.Time `json:"started"`
+	RelPath          *string   `json:"relativePath,omitempty"`
+	PositionMs       *int64    `json:"positionMs,omitempty"`
+	DurationMs       *int64    `json:"durationMs,omitempty"`
 	LauncherID       string    `json:"launcherId"`
 	SystemID         string    `json:"systemId"`
 	SystemName       string    `json:"systemName"`
@@ -458,9 +460,29 @@ type HealthCheckResponse struct {
 	Status string `json:"status"`
 }
 
+// PlaylistItemInfo is one entry in a PlaylistState.
+type PlaylistItemInfo struct {
+	Name      string `json:"name"`
+	ZapScript string `json:"zapScript"`
+}
+
+// PlaylistState describes the current state of a playlist slot as exposed by
+// the media response. Repeat is one of "none", "all", or "one".
+type PlaylistState struct {
+	ID      string             `json:"id"`
+	Name    string             `json:"name"`
+	Slot    string             `json:"slot"`
+	Repeat  string             `json:"repeat"`
+	Items   []PlaylistItemInfo `json:"items"`
+	Index   int                `json:"index"`
+	Total   int                `json:"total"`
+	Playing bool               `json:"playing"`
+}
+
 type MediaResponse struct {
-	Database IndexingStatusResponse `json:"database"`
-	Active   []ActiveMediaResponse  `json:"active"`
+	Database  IndexingStatusResponse `json:"database"`
+	Active    []ActiveMediaResponse  `json:"active"`
+	Playlists []PlaylistState        `json:"playlists,omitempty"`
 }
 
 type TokensResponse struct {

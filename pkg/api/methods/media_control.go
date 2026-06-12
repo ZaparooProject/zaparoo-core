@@ -92,9 +92,17 @@ func HandleMediaControl(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	if err != nil {
 		return nil, fmt.Errorf("control action %q failed: %w", params.Action, err)
 	}
-	if slot == mediaslot.Background && params.Action == platforms.ControlStop {
-		env.State.SetBackgroundMedia(nil)
-		env.State.SetBackgroundPlaylist(nil)
+	if params.Action == platforms.ControlStop {
+		switch {
+		case slot == mediaslot.Background:
+			env.State.SetBackgroundMedia(nil)
+			env.State.SetBackgroundPlaylist(nil)
+		case media.LauncherID == platforms.NativeAudioLauncherID:
+			// Native audio has no OS process, so no platform tracker clears the
+			// primary media on an explicit stop, and the drain callback ignores
+			// non-natural drains.
+			env.State.SetActiveMedia(nil)
+		}
 	}
 
 	return NoContent{}, nil

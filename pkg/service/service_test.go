@@ -205,12 +205,39 @@ func TestWireNativeAudioDrainCallbacks_ClearsMediaOnNaturalDrain(t *testing.T) {
 
 	require.Contains(t, registrar.callbacks, mediaslot.Primary)
 	require.Contains(t, registrar.callbacks, mediaslot.Background)
-	// Primary callback clears ActiveMedia regardless of natural.
+	// Primary callback clears ActiveMedia when native audio still owns it.
 	registrar.callbacks[mediaslot.Primary](true)
 	// Background callback with natural=true and no playlist clears BackgroundMedia.
 	registrar.callbacks[mediaslot.Background](true)
 	assert.Nil(t, st.ActiveMedia())
 	assert.Nil(t, st.BackgroundMedia())
+}
+
+func TestWireNativeAudioDrainCallbacks_PrimaryDrainKeepsOtherLaunchersMedia(t *testing.T) {
+	t.Parallel()
+
+	st, ns := state.NewState(mocks.NewMockPlatform(), "test-boot-uuid")
+	t.Cleanup(func() {
+		st.StopService()
+		for {
+			select {
+			case <-ns:
+			default:
+				return
+			}
+		}
+	})
+	// A game launched out-of-band owns active media while the audio track drains.
+	st.SetActiveMedia(models.NewActiveMedia(
+		"SNES", "SNES", "game.sfc", "Game", "mister-launcher",
+	))
+
+	svc := &ServiceContext{State: st, PlaylistQueue: make(chan *playlists.Playlist, 1)}
+	registrar := &testDrainCallbackRegistrar{}
+	wireNativeAudioDrainCallbacks(registrar, svc)
+
+	registrar.callbacks[mediaslot.Primary](true)
+	assert.NotNil(t, st.ActiveMedia(), "natural audio drain must not clear another launcher's media")
 }
 
 func TestWireNativeAudioDrainCallbacks_NonNaturalBackgroundNoOp(t *testing.T) {

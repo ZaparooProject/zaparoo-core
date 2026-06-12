@@ -20,6 +20,7 @@
 package service
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -362,6 +364,144 @@ func TestStopNativePlaybackBeforePrimaryCommandSkipsBackgroundLaunch(t *testing.
 	require.NoError(t, err)
 	assert.Empty(t, recorder.stopped)
 	assert.NotNil(t, svc.State.ActiveMedia())
+}
+
+func TestRunTokenZapScript_BackgroundLaunchPreservesPrimaryPlaylist(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	mockPlatform, ok := svc.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+
+	path := filepath.Join(t.TempDir(), "track.mp3")
+	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
+		mock.MatchedBy(func(opts *platforms.LaunchOptions) bool {
+			return opts != nil && opts.Slot == mediaslot.Background
+		})).Return(nil).Once()
+
+	plq := make(chan *playlists.Playlist, 10)
+	plsc := playlists.PlaylistController{Queue: plq}
+	token := tokens.Token{
+		Text:     "**launch:" + path + "?slot=background",
+		ScanTime: time.Now(),
+	}
+
+	err := runTokenZapScript(svc, token, plsc, nil, false)
+	require.NoError(t, err)
+
+	select {
+	case pls := <-plq:
+		t.Fatalf("background launch must not clear the primary playlist, got: %v", pls)
+	default:
+	}
+	mockPlatform.AssertNumberOfCalls(t, "LaunchMedia", 1)
+}
+
+func TestRunTokenZapScript_BackgroundLaunchSkipsSoftwareToken(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	mockPlatform, ok := svc.Platform.(*mocks.MockPlatform)
+	require.True(t, ok)
+
+	const readerID = "mock-removable-reader"
+	mockReader := mocks.NewMockReader()
+	mockReader.On("Metadata").Return(readers.DriverMetadata{ID: "mock-reader"}).Maybe()
+	mockReader.On("Path").Return("/dev/mock-device").Maybe()
+	mockReader.On("Capabilities").Return([]readers.Capability{
+		readers.CapabilityRemovable,
+	}).Maybe()
+	mockReader.On("ReaderID").Return(readerID).Maybe()
+	svc.State.SetReader(mockReader)
+
+	path := filepath.Join(t.TempDir(), "track.mp3")
+	mockPlatform.On("LaunchMedia", svc.Config, path, (*platforms.Launcher)(nil), svc.DB,
+		mock.Anything).Return(nil).Once()
+
+	plsc := playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 10)}
+	token := tokens.Token{
+		Text:     "**launch:" + path + "?slot=background",
+		ScanTime: time.Now(),
+		ReaderID: readerID,
+	}
+
+	err := runTokenZapScript(svc, token, plsc, nil, false)
+	require.NoError(t, err)
+
+	select {
+	case st := <-svc.LaunchSoftwareQueue:
+		t.Fatalf("background launch must not update the software token, got: %v", st)
+	default:
+	}
+	mockPlatform.AssertNumberOfCalls(t, "LaunchMedia", 1)
+}
+
+// statefulPlaybackStub tracks per-slot playing state so tests can observe the
+// pause/resume ordering of the launch path.
+type statefulPlaybackStub struct {
+	playing map[string]bool
+}
+
+func (s *statefulPlaybackStub) Play(slot, _ string, _ audio.PlaybackOptions) error {
+	s.playing[slot] = true
+	return nil
+}
+
+func (s *statefulPlaybackStub) Stop(slot string) error {
+	delete(s.playing, slot)
+	return nil
+}
+
+func (s *statefulPlaybackStub) Pause(slot string) error {
+	s.playing[slot] = false
+	return nil
+}
+
+func (s *statefulPlaybackStub) Resume(slot string) error {
+	s.playing[slot] = true
+	return nil
+}
+
+func (s *statefulPlaybackStub) TogglePause(slot string) error {
+	s.playing[slot] = !s.playing[slot]
+	return nil
+}
+
+func (*statefulPlaybackStub) Seek(string, time.Duration) error {
+	return nil
+}
+
+func (s *statefulPlaybackStub) State(slot string) audio.PlaybackState {
+	return audio.PlaybackState{Playing: s.playing[slot]}
+}
+
+func TestGameReplacingPrimaryAudioKeepsBackgroundPaused(t *testing.T) {
+	t.Parallel()
+
+	svc := setupPlaylistTestEnv(t)
+	pm := &statefulPlaybackStub{playing: map[string]bool{
+		mediaslot.Background: false, // auto-paused by an earlier primary launch
+	}}
+	svc.PlaybackManager = pm
+	svc.State.SetBackgroundAutoPaused(true)
+	svc.State.SetOnMediaStopHook(func() { resumeBackgroundAfterMediaStop(svc) })
+	svc.State.SetActiveMedia(models.NewActiveMedia(
+		"Audio", "Audio", "track.mp3", "Track", platforms.NativeAudioLauncherID,
+	))
+
+	// A game token replaces the playing primary audio: the native audio stop fires
+	// the media-stop hook (resuming auto-paused background), and the pause step
+	// must then run after that resume so the background ends up paused again.
+	launchCmd := gozapscript.Command{
+		Name:    gozapscript.ZapScriptCmdLaunch,
+		AdvArgs: gozapscript.NewAdvArgs(map[string]string{}),
+	}
+	require.NoError(t, stopNativePlaybackBeforePrimaryCommand(svc, launchCmd, nil))
+	require.NoError(t, pauseBackgroundForPrimaryLaunch(svc, launchCmd, nil))
+
+	assert.False(t, pm.playing[mediaslot.Background], "background must be paused while the game runs")
+	assert.True(t, svc.State.BackgroundAutoPaused(), "auto-pause flag must be re-armed for resume on game exit")
+	assert.Nil(t, svc.State.ActiveMedia())
 }
 
 func TestHandlePlaylist_InvalidSlotIgnored(t *testing.T) {

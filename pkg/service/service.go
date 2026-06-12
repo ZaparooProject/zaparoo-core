@@ -97,6 +97,13 @@ func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContex
 		if !natural {
 			return
 		}
+		// Another launcher may have taken over active media while the track was
+		// still playing (e.g. a game started outside Zaparoo); only clear it if
+		// native audio still owns it.
+		media := svc.State.ActiveMedia()
+		if media == nil || media.LauncherID != platforms.NativeAudioLauncherID {
+			return
+		}
 		svc.State.SetActiveMedia(nil)
 	})
 	pm.SetDrainCallback(mediaslot.Background, func(natural bool) {
@@ -156,6 +163,19 @@ func advanceBackgroundPlaylist(svc *ServiceContext) {
 	case svc.PlaylistQueue <- next:
 	case <-svc.State.GetContext().Done():
 	}
+}
+
+// resumeBackgroundAfterMediaStop resumes auto-paused background music when primary
+// media stops. Runs synchronously from the media-stop hook so that launch-path code
+// running after a SetActiveMedia(nil) observes the resumed state.
+func resumeBackgroundAfterMediaStop(svc *ServiceContext) {
+	if svc.PlaybackManager == nil || !svc.State.BackgroundAutoPaused() {
+		return
+	}
+	if resumeErr := svc.PlaybackManager.Resume(mediaslot.Background); resumeErr != nil {
+		log.Warn().Err(resumeErr).Msg("failed to resume background audio after game stop")
+	}
+	svc.State.SetBackgroundAutoPaused(false)
 }
 
 func Start(
@@ -252,13 +272,7 @@ func Start(
 
 	// Resume background music when a game quits, but only if we auto-paused it.
 	st.SetOnMediaStopHook(func() {
-		if svc.PlaybackManager == nil || !svc.State.BackgroundAutoPaused() {
-			return
-		}
-		if resumeErr := svc.PlaybackManager.Resume(mediaslot.Background); resumeErr != nil {
-			log.Warn().Err(resumeErr).Msg("failed to resume background audio after game stop")
-		}
-		svc.State.SetBackgroundAutoPaused(false)
+		resumeBackgroundAfterMediaStop(svc)
 	})
 
 	log.Info().Msg("loading mapping files")
@@ -301,7 +315,7 @@ func Start(
 	go func() {
 		apiDone <- api.StartWithReady(
 			pl, cfg, st, itq, cfq, db, limitsManager,
-			notifBroker, discoveryService.InstanceName(), player, indexPauser, scrapePauser,
+			notifBroker, discoveryService.InstanceName(), player, playbackManager, indexPauser, scrapePauser,
 			idleSched, apiReady,
 		)
 	}()

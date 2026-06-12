@@ -422,6 +422,44 @@ func TestHandleMediaControl_StopBackgroundClearsMedia(t *testing.T) {
 	assert.Nil(t, st.BackgroundMedia(), "stop on background slot must clear background media")
 }
 
+func TestHandleMediaControl_StopPrimaryNativeAudioClearsMedia(t *testing.T) {
+	t.Parallel()
+
+	pl := mocks.NewMockPlatform()
+	pl.SetupBasicMock()
+	st, ns := state.NewState(pl, "test")
+	defer st.StopService()
+	drainNotifications(t, ns)
+
+	st.SetActiveMedia(models.NewActiveMedia("Audio", "Audio", "song.mp3", "Song", platforms.NativeAudioLauncherID))
+	require.NotNil(t, st.ActiveMedia())
+
+	cache := &helpers.LauncherCache{}
+	cache.InitializeFromSlice([]platforms.Launcher{
+		{
+			ID: platforms.NativeAudioLauncherID,
+			Controls: map[string]platforms.Control{
+				platforms.ControlStop: {
+					Func: func(_ context.Context, _ *config.Instance, _ platforms.ControlParams) error {
+						return nil
+					},
+				},
+			},
+		},
+	})
+
+	env := requests.RequestEnv{
+		Context:       context.Background(),
+		State:         st,
+		LauncherCache: cache,
+		Params:        json.RawMessage(`{"action":"stop"}`),
+	}
+
+	_, err := HandleMediaControl(env)
+	require.NoError(t, err)
+	assert.Nil(t, st.ActiveMedia(), "stop on primary native audio must clear active media")
+}
+
 func TestHandleMediaControl_BackgroundSlotNoMedia(t *testing.T) {
 	t.Parallel()
 

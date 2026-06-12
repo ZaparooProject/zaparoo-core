@@ -455,6 +455,16 @@ func TestShouldPlayScanSuccessSound(t *testing.T) {
 			script:   "**launch:/games/song.mp3?slot=badslot",
 			expected: true,
 		},
+		{
+			name:     "mixed primary launch and background music plays success",
+			script:   "**launch:/games/game.sfc||**launch:/games/song.mp3?slot=background",
+			expected: true,
+		},
+		{
+			name:     "background launch with utility command suppresses success",
+			script:   "**launch:/games/song.mp3?slot=background||**echo:hello",
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {

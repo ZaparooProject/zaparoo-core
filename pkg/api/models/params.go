@@ -157,6 +157,12 @@ type MediaStartedParams struct {
 	Slot       string `json:"slot,omitempty"`
 }
 
+// ActiveMediaQueryParams holds the optional filter parameters for the media.active method.
+// Slot selects which slot to read; defaults to primary when empty.
+type ActiveMediaQueryParams struct {
+	Slot string `json:"slot,omitempty"`
+}
+
 type UpdateActiveMediaParams struct {
 	SystemID  string `json:"systemId" validate:"required"`
 	MediaPath string `json:"mediaPath" validate:"required"`

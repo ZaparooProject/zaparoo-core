@@ -118,16 +118,16 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 	}
 
 	m.mu.Lock()
-	old := m.getSourceLocked(slot)
-	m.setSourceLocked(slot, src)
+	old := m.getSourceLocked(key)
+	m.setSourceLocked(key, src)
 	m.mu.Unlock()
 
 	// Wire the drain callback on the source before registering with the device,
 	// so the callback is in place before the source could possibly drain.
 	src.onDrain = func(natural bool) {
 		m.mu.Lock()
-		if m.getSourceLocked(slot) == src {
-			m.setSourceLocked(slot, nil)
+		if m.getSourceLocked(key) == src {
+			m.setSourceLocked(key, nil)
 		}
 		cb := m.drainCallbacks[key]
 		m.mu.Unlock()
@@ -147,12 +147,13 @@ func (m *LongformPlaybackManager) Play(slot, path string, opts PlaybackOptions) 
 }
 
 func (m *LongformPlaybackManager) Stop(slot string) error {
-	if _, err := m.slotKey(slot); err != nil {
+	key, err := m.slotKey(slot)
+	if err != nil {
 		return err
 	}
 	m.mu.Lock()
-	src := m.getSourceLocked(slot)
-	m.setSourceLocked(slot, nil)
+	src := m.getSourceLocked(key)
+	m.setSourceLocked(key, nil)
 	m.mu.Unlock()
 	if src != nil {
 		src.stopAndDeregister()
@@ -161,10 +162,10 @@ func (m *LongformPlaybackManager) Stop(slot string) error {
 }
 
 func (m *LongformPlaybackManager) Pause(slot string) error {
-	if _, err := m.slotKey(slot); err != nil {
+	src, err := m.readSource(slot)
+	if err != nil {
 		return err
 	}
-	src := m.readSource(slot)
 	if src == nil {
 		return nil
 	}
@@ -174,10 +175,10 @@ func (m *LongformPlaybackManager) Pause(slot string) error {
 }
 
 func (m *LongformPlaybackManager) Resume(slot string) error {
-	if _, err := m.slotKey(slot); err != nil {
+	src, err := m.readSource(slot)
+	if err != nil {
 		return err
 	}
-	src := m.readSource(slot)
 	if src == nil {
 		return nil
 	}
@@ -187,10 +188,10 @@ func (m *LongformPlaybackManager) Resume(slot string) error {
 }
 
 func (m *LongformPlaybackManager) TogglePause(slot string) error {
-	if _, err := m.slotKey(slot); err != nil {
+	src, err := m.readSource(slot)
+	if err != nil {
 		return err
 	}
-	src := m.readSource(slot)
 	if src == nil {
 		return nil
 	}
@@ -204,10 +205,10 @@ func (m *LongformPlaybackManager) TogglePause(slot string) error {
 }
 
 func (m *LongformPlaybackManager) Seek(slot string, offset time.Duration) error {
-	if _, err := m.slotKey(slot); err != nil {
+	src, err := m.readSource(slot)
+	if err != nil {
 		return err
 	}
-	src := m.readSource(slot)
 	if src == nil {
 		return nil
 	}
@@ -216,24 +217,30 @@ func (m *LongformPlaybackManager) Seek(slot string, offset time.Duration) error 
 }
 
 func (m *LongformPlaybackManager) State(slot string) PlaybackState {
-	src := m.readSource(slot)
-	if src == nil {
+	src, err := m.readSource(slot)
+	if err != nil || src == nil {
 		return PlaybackState{}
 	}
 	return src.state()
 }
 
 // readSource returns the current source for slot without holding the lock long.
-func (m *LongformPlaybackManager) readSource(slot string) *streamingSource {
+func (m *LongformPlaybackManager) readSource(slot string) (*streamingSource, error) {
+	key, err := m.slotKey(slot)
+	if err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
-	s := m.getSourceLocked(slot)
+	s := m.getSourceLocked(key)
 	m.mu.Unlock()
-	return s
+	return s, nil
 }
 
-func (m *LongformPlaybackManager) getSourceLocked(slot string) *streamingSource {
-	switch slot {
-	case "", mediaslot.Primary:
+// getSourceLocked and setSourceLocked take a normalized slot key from slotKey,
+// never a raw slot string (aliases like "bg" would silently miss otherwise).
+func (m *LongformPlaybackManager) getSourceLocked(key string) *streamingSource {
+	switch key {
+	case mediaslot.Primary:
 		return m.primary
 	case mediaslot.Background:
 		return m.background
@@ -241,9 +248,9 @@ func (m *LongformPlaybackManager) getSourceLocked(slot string) *streamingSource 
 	return nil
 }
 
-func (m *LongformPlaybackManager) setSourceLocked(slot string, src *streamingSource) {
-	switch slot {
-	case "", mediaslot.Primary:
+func (m *LongformPlaybackManager) setSourceLocked(key string, src *streamingSource) {
+	switch key {
+	case mediaslot.Primary:
 		m.primary = src
 	case mediaslot.Background:
 		m.background = src
@@ -382,6 +389,7 @@ func (s *streamingSource) prefetch(ctx context.Context, done chan struct{}) {
 		}
 		paused := s.paused
 		stopped := s.stopped
+		eof := s.eof
 		space := len(s.ring) - s.filled
 		s.mu.Unlock()
 
@@ -396,7 +404,7 @@ func (s *streamingSource) prefetch(ctx context.Context, done chan struct{}) {
 				beep.SampleRate(targetSampleRate), s.decoder)
 		}
 
-		if !paused && space > 0 {
+		if !paused && !eof && space > 0 {
 			n := min(space, len(s.chunk))
 			written, ok := s.resampler.Stream(s.chunk[:n])
 			if written > 0 {
@@ -412,11 +420,13 @@ func (s *streamingSource) prefetch(ctx context.Context, done chan struct{}) {
 				if err := s.decoder.Err(); err != nil {
 					log.Warn().Err(err).Str("path", s.path).Msg("audio decode error")
 				}
-				// Decoder exhausted or errored; let ring drain naturally.
+				// Decoder exhausted or errored; let the ring drain naturally.
+				// Don't exit: a seek can still arrive while the tail plays out
+				// (it clears eof and repositions the decoder). The goroutine is
+				// cancelled on stop or when the drained source is deregistered.
 				s.mu.Lock()
 				s.eof = true
 				s.mu.Unlock()
-				return
 			}
 		}
 
@@ -487,15 +497,22 @@ func (s *streamingSource) fail() {
 }
 
 // onDrained is called by the device manager goroutine when this source drains.
-// It determines whether the drain was natural (track reached EOF) or explicit (Stop/replace).
+// It determines whether the drain was natural (track reached EOF) or explicit
+// (Stop/replace), then cancels the prefetch goroutine, which parks at EOF while
+// the ring tail plays out and would otherwise leak.
 func (s *streamingSource) onDrained() {
-	if s.onDrain == nil {
-		return
-	}
 	s.mu.Lock()
 	natural := !s.stopped
+	s.stopped = true
+	cancelFn := s.cancelFn
 	s.mu.Unlock()
-	s.onDrain(natural)
+
+	if cancelFn != nil {
+		cancelFn()
+	}
+	if s.onDrain != nil {
+		s.onDrain(natural)
+	}
 }
 
 // setPaused sets the paused flag.

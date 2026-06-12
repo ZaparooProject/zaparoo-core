@@ -39,19 +39,20 @@ type RequestEnv struct {
 	// state context (st.GetContext()) with config.APIRequestTimeout, so it
 	// cancels on app shutdown and on timeout. For HTTP, it should also cancel
 	// when the HTTP connection closes.
-	Context       context.Context
-	Platform      platforms.Platform
-	Config        *config.Instance
-	State         *state.State
-	Database      *database.Database
-	LimitsManager *playtime.LimitsManager
-	LauncherCache *helpers.LauncherCache
-	Player        audio.Player
-	TokenQueue    chan<- tokens.Token
-	ConfirmQueue  chan<- chan error
-	IndexPauser   *syncutil.Pauser
-	ScrapePauser  *syncutil.Pauser
-	ClientID      string
-	Params        json.RawMessage
-	IsLocal       bool
+	Context         context.Context
+	Platform        platforms.Platform
+	Config          *config.Instance
+	State           *state.State
+	Database        *database.Database
+	LimitsManager   *playtime.LimitsManager
+	LauncherCache   *helpers.LauncherCache
+	Player          audio.Player
+	PlaybackManager audio.PlaybackManager
+	TokenQueue      chan<- tokens.Token
+	ConfirmQueue    chan<- chan error
+	IndexPauser     *syncutil.Pauser
+	ScrapePauser    *syncutil.Pauser
+	ClientID        string
+	Params          json.RawMessage
+	IsLocal         bool
 }
