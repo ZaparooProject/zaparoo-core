@@ -475,6 +475,48 @@ func TestArcadeLauncherExtensions(t *testing.T) {
 	assert.Contains(t, arcadeLauncher.Extensions, ".mgl")
 }
 
+func TestMGLIndexingAddedToFolderLaunchers(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	findLauncher := func(id string) *platforms.Launcher {
+		for i := range launchers {
+			if launchers[i].ID == id {
+				return &launchers[i]
+			}
+		}
+		return nil
+	}
+
+	snesLauncher := findLauncher("SNES")
+	require.NotNil(t, snesLauncher, "SNES launcher should exist")
+	assert.Contains(t, snesLauncher.Extensions, ".mgl")
+
+	dualRAMLauncher := findLauncher("DualRAM3DO")
+	require.NotNil(t, dualRAMLauncher, "DualRAM3DO launcher should exist")
+	assert.NotContains(t, dualRAMLauncher.Extensions, ".mgl")
+
+	genericLauncher := findLauncher("Generic")
+	require.NotNil(t, genericLauncher, "Generic launcher should exist")
+	assert.Equal(t, 1, countExtension(genericLauncher.Extensions, ".mgl"))
+
+	arcadeLauncher := findLauncher("Arcade")
+	require.NotNil(t, arcadeLauncher, "Arcade launcher should exist")
+	assert.Equal(t, 1, countExtension(arcadeLauncher.Extensions, ".mgl"))
+}
+
+func countExtension(extensions []string, want string) int {
+	count := 0
+	for _, extension := range extensions {
+		if strings.EqualFold(extension, want) {
+			count++
+		}
+	}
+	return count
+}
+
 // Regression test: N64 launcher should support .v64 extension (byte-swapped ROM format)
 func TestN64LauncherExtensions(t *testing.T) {
 	t.Parallel()

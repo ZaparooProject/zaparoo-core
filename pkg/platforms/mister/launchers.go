@@ -33,6 +33,11 @@ const (
 	scriptConsoleVT   = "3"
 )
 
+var mglIndexingSkippedLaunchers = map[string]struct{}{
+	"GenericVideo": {},
+	"ScummVM":      {},
+}
+
 func checkInZip(path string) string {
 	if !strings.HasSuffix(strings.ToLower(path), ".zip") {
 		return path
@@ -852,10 +857,39 @@ func createVideoLauncher(pl *Platform) platforms.Launcher {
 	}
 }
 
+func enableMGLIndexing(launchers []platforms.Launcher) []platforms.Launcher {
+	for i := range launchers {
+		launcher := &launchers[i]
+		if !launcherSupportsFolderMGL(launcher) || launcherHasExtension(launcher, ".mgl") {
+			continue
+		}
+		launcher.Extensions = append(launcher.Extensions, ".mgl")
+	}
+
+	return launchers
+}
+
+func launcherSupportsFolderMGL(launcher *platforms.Launcher) bool {
+	if launcher.SystemID == "" || len(launcher.Folders) == 0 || launcher.SkipFilesystemScan || launcher.Launch == nil {
+		return false
+	}
+	_, skipped := mglIndexingSkippedLaunchers[launcher.ID]
+	return !skipped
+}
+
+func launcherHasExtension(launcher *platforms.Launcher, extension string) bool {
+	for _, ext := range launcher.Extensions {
+		if strings.EqualFold(ext, extension) {
+			return true
+		}
+	}
+	return false
+}
+
 // CreateLaunchers creates all standard MiSTer launchers for the given platform.
 // This is exported for use by MiSTeX and other MiSTer variants.
 func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
-	return []platforms.Launcher{
+	launchers := []platforms.Launcher{
 		// Consoles
 		{
 			ID:         systemdefs.System3DO,
@@ -2090,8 +2124,10 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 				if err != nil {
 					return nil, fmt.Errorf("failed to set active game: %w", err)
 				}
-				return nil, nil
+				return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
 			},
 		},
 	}
+
+	return enableMGLIndexing(launchers)
 }
