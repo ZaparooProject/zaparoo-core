@@ -78,7 +78,7 @@ func TestStartWithReadyReportsBindFailure(t *testing.T) {
 	go func() {
 		serverErr <- StartWithReady(
 			platform, cfg, st, tokenQueue, nil, db,
-			nil, notifBroker, "", nil, nil, nil, nil, ready,
+			nil, notifBroker, "", nil, nil, nil, nil, nil, ready,
 		)
 	}()
 
@@ -139,7 +139,10 @@ func TestServerStartupConcurrency(t *testing.T) {
 			serverErr := make(chan error, 1)
 			go func() {
 				defer close(serverDone)
-				serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, nil, nil)
+				serverErr <- Start(
+					platform, cfg, st, tokenQueue, nil, db,
+					nil, notifBroker, "", nil, nil, nil, nil, nil,
+				)
 			}()
 			// Cleanup: stop service first, then wait for server goroutine to fully exit
 			defer func() {
@@ -210,7 +213,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	serverErr := make(chan error, 1)
 	go func() {
 		defer close(serverDone)
-		serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, nil, nil)
+		serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, nil, nil, nil)
 	}()
 	// Cleanup: stop service first, then wait for server goroutine to fully exit
 	defer func() {
@@ -295,7 +298,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, nil, nil)
+		serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, nil, nil, nil)
 	}()
 
 	// Wait for completion or timeout
@@ -659,7 +662,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	server1Err := make(chan error, 1)
 	go func() {
 		defer close(server1Done)
-		server1Err <- Start(platform1, cfg1, st1, tokenQueue1, nil, db1, nil, notifBroker1, "", nil, nil, nil, nil)
+		server1Err <- Start(platform1, cfg1, st1, tokenQueue1, nil, db1, nil, notifBroker1, "", nil, nil, nil, nil, nil)
 	}()
 
 	// Wait for first server to be ready
@@ -703,7 +706,7 @@ func TestServerBindFailureStopsService(t *testing.T) {
 	server2Err := make(chan error, 1)
 	go func() {
 		defer close(server2Done)
-		server2Err <- Start(platform2, cfg2, st2, tokenQueue2, nil, db2, nil, notifBroker2, "", nil, nil, nil, nil)
+		server2Err <- Start(platform2, cfg2, st2, tokenQueue2, nil, db2, nil, notifBroker2, "", nil, nil, nil, nil, nil)
 	}()
 
 	// Wait for the second server's context to be cancelled (StopService called)
@@ -976,7 +979,7 @@ func TestSSE_ReceivesNotifications(t *testing.T) {
 	serverErr := make(chan error, 1)
 	go func() {
 		defer close(serverDone)
-		serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, nil, nil)
+		serverErr <- Start(platform, cfg, st, tokenQueue, nil, db, nil, notifBroker, "", nil, nil, nil, nil, nil)
 	}()
 	defer func() {
 		st.StopService()

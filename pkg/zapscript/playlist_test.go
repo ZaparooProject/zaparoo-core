@@ -24,10 +24,14 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
@@ -314,4 +318,609 @@ Title3=Item 3`
 	assert.Equal(t, 2, result.Playlist.Index, "should preserve current position")
 
 	mockPlatform.AssertExpectations(t)
+}
+
+// makePlaylistEnv returns a 3-item playlist and a buffered queue channel for use in tests.
+func makePlaylistEnv() (pls *playlists.Playlist, queue chan *playlists.Playlist) {
+	items := []playlists.PlaylistItem{
+		{Name: "Item 1", ZapScript: "**test1"},
+		{Name: "Item 2", ZapScript: "**test2"},
+		{Name: "Item 3", ZapScript: "**test3"},
+	}
+	pls = playlists.NewPlaylist("id", "name", items)
+	queue = make(chan *playlists.Playlist, 1)
+	return pls, queue
+}
+
+// bgAdvArgs returns an AdvArgs with slot=background set.
+func bgAdvArgs() zapscript.AdvArgs {
+	var aa zapscript.AdvArgs
+	return aa.With(zapscript.KeySlot, "background")
+}
+
+type playlistPlaybackStub struct {
+	seekSlot   string
+	state      audio.PlaybackState
+	seekOffset time.Duration
+	seekCalled bool
+}
+
+func (*playlistPlaybackStub) Play(_, _ string, _ audio.PlaybackOptions) error { return nil }
+func (*playlistPlaybackStub) Stop(_ string) error                             { return nil }
+func (*playlistPlaybackStub) Pause(_ string) error                            { return nil }
+func (*playlistPlaybackStub) Resume(_ string) error                           { return nil }
+func (*playlistPlaybackStub) TogglePause(_ string) error                      { return nil }
+func (p *playlistPlaybackStub) State(_ string) audio.PlaybackState            { return p.state }
+func (p *playlistPlaybackStub) Seek(slot string, offset time.Duration) error {
+	p.seekCalled = true
+	p.seekSlot = slot
+	p.seekOffset = offset
+	return nil
+}
+
+// TestCommandSlot_InheritFromPlaylistSlot verifies that commandSlot inherits the
+// slot from the active playlist when no AdvArgs slot is set.
+func TestCommandSlot_InheritFromPlaylistSlot(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = "background"
+
+	// No AdvArgs slot → inherit from Active.Slot ("background").
+	// Background must also be set so activePlaylistForSlot("background") is non-nil.
+	result, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Background: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	<-queue
+}
+
+// TestCmdPlaylistPlay_ResumesActivePausedPlaylist covers the path where an active
+// paused playlist is resumed with no args (slot=primary, active != nil, no arg).
+func TestCmdPlaylistPlay_ResumesActivePausedPlaylist(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Playing = false // paused
+
+	result, err := cmdPlaylistPlay(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{}},
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.True(t, result.Playlist.Playing, "play must set Playing=true")
+	queued := <-queue
+	assert.True(t, queued.Playing)
+}
+
+func TestCmdPlaylistPlay_BackgroundSlotResumesBackgroundPlaylist(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = mediaslot.Background
+	pls.Playing = false
+
+	result, err := cmdPlaylistPlay(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{AdvArgs: bgAdvArgs(), Args: []string{}},
+		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.True(t, result.Playlist.Playing)
+	assert.Equal(t, mediaslot.Background, result.Playlist.Slot)
+	queued := <-queue
+	assert.Equal(t, mediaslot.Background, queued.Slot)
+}
+
+func TestCmdPlaylistPlay_FallsBackToBackgroundPlaylist(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = mediaslot.Background
+	pls.Playing = false
+
+	result, err := cmdPlaylistPlay(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{}},
+		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.True(t, result.Playlist.Playing)
+	assert.Equal(t, mediaslot.Background, result.Playlist.Slot)
+	queued := <-queue
+	assert.Equal(t, mediaslot.Background, queued.Slot)
+}
+
+func TestQueuePlaylistUpdate_SetsSlotFromCommandArgs(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = ""
+	err := queuePlaylistUpdate(&platforms.CmdEnv{
+		Cmd:      zapscript.Command{AdvArgs: bgAdvArgs()},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	}, pls)
+	require.NoError(t, err)
+	queued := <-queue
+	assert.Same(t, pls, queued)
+	assert.Equal(t, mediaslot.Background, queued.Slot)
+}
+
+func TestCmdPlaylistNext_AdvancesIndex(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+
+	result, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	assert.Equal(t, 1, result.Playlist.Index)
+	assert.Equal(t, 1, (<-queue).Index)
+}
+
+func TestCmdPlaylistNext_WrapsAround(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Index = 2
+
+	result, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Playlist.Index, "next from last item wraps to first")
+	<-queue
+}
+
+func TestCmdPlaylistNext_NoActivePlaylist(t *testing.T) {
+	t.Parallel()
+
+	_, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)},
+	})
+	require.Error(t, err)
+}
+
+func TestCmdPlaylistNext_FallsBackToBackgroundPlaylist(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = mediaslot.Background
+
+	result, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	assert.Equal(t, 1, result.Playlist.Index)
+	assert.Equal(t, mediaslot.Background, result.Playlist.Slot)
+	queued := <-queue
+	assert.Equal(t, mediaslot.Background, queued.Slot)
+}
+
+func TestCmdPlaylistNext_ExplicitPrimaryDoesNotFallback(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = mediaslot.Background
+	var aa zapscript.AdvArgs
+	aa = aa.With(zapscript.KeySlot, mediaslot.Primary)
+
+	_, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{AdvArgs: aa},
+		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
+	})
+	require.Error(t, err)
+}
+
+func TestCmdPlaylistPrevious_DecrementsIndex(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Index = 2
+
+	result, err := cmdPlaylistPrevious(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Playlist.Index)
+	<-queue
+}
+
+func TestCmdPlaylistPrevious_WrapsAround(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Index = 0
+
+	result, err := cmdPlaylistPrevious(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Playlist.Index, "previous from first item wraps to last")
+	<-queue
+}
+
+func TestCmdPlaylistPrevious_RestartsCurrentAudioTrack(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Index = 2
+	playback := &playlistPlaybackStub{state: audio.PlaybackState{
+		Path:     "track.mp3",
+		Position: 5 * time.Second,
+		Duration: time.Minute,
+		Playing:  true,
+	}}
+
+	result, err := cmdPlaylistPrevious(nil, platforms.CmdEnv{
+		PlaybackManager: playback,
+		Playlist:        playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.False(t, result.PlaylistChanged)
+	assert.True(t, playback.seekCalled)
+	assert.Equal(t, mediaslot.Primary, playback.seekSlot)
+	assert.Equal(t, -5*time.Second, playback.seekOffset)
+	select {
+	case queued := <-queue:
+		t.Fatalf("unexpected playlist queue update: %#v", queued)
+	default:
+	}
+}
+
+func TestCmdPlaylistPrevious_NearStartGoesToPreviousTrack(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Index = 2
+	playback := &playlistPlaybackStub{state: audio.PlaybackState{
+		Path:     "track.mp3",
+		Position: time.Second,
+		Duration: time.Minute,
+		Playing:  true,
+	}}
+
+	result, err := cmdPlaylistPrevious(nil, platforms.CmdEnv{
+		PlaybackManager: playback,
+		Playlist:        playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	assert.False(t, playback.seekCalled)
+	assert.Equal(t, 1, result.Playlist.Index)
+	<-queue
+}
+
+func TestCmdPlaylistPrevious_NoActivePlaylist(t *testing.T) {
+	t.Parallel()
+
+	_, err := cmdPlaylistPrevious(nil, platforms.CmdEnv{
+		Playlist: playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)},
+	})
+	require.Error(t, err)
+}
+
+func TestCmdPlaylistGoto_JumpsToIndex(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+
+	// Goto is 1-based: "3" → index 2.
+	result, err := cmdPlaylistGoto(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{"3"}},
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	assert.Equal(t, 2, result.Playlist.Index)
+	<-queue
+}
+
+func TestCmdPlaylistGoto_SameIndexNoOp(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	pls.Index = 1
+
+	result, err := cmdPlaylistGoto(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{"2"}},
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.False(t, result.PlaylistChanged, "already at target index — no-op")
+}
+
+func TestCmdPlaylistGoto_InvalidArg(t *testing.T) {
+	t.Parallel()
+
+	pls, queue := makePlaylistEnv()
+	_, err := cmdPlaylistGoto(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{"notanumber"}},
+		Playlist: playlists.PlaylistController{Active: pls, Queue: queue},
+	})
+	require.Error(t, err)
+}
+
+func TestCmdPlaylistGoto_NoActivePlaylist(t *testing.T) {
+	t.Parallel()
+
+	_, err := cmdPlaylistGoto(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{"1"}},
+		Playlist: playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)},
+	})
+	require.Error(t, err)
+}
+
+func TestCmdPlaylistStop_BackgroundSlot(t *testing.T) {
+	t.Parallel()
+
+	// StopActiveLauncher is NOT mocked — a call to it would panic the test.
+	mp := newPlaylistTestPlatform()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = "background"
+
+	result, err := cmdPlaylistStop(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{AdvArgs: bgAdvArgs()},
+		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	assert.Nil(t, result.Playlist)
+
+	queued := <-queue
+	require.NotNil(t, queued)
+	assert.True(t, queued.Clear, "clear sentinel must be set for background stop")
+}
+
+func TestCmdPlaylistPause_BackgroundSlot(t *testing.T) {
+	t.Parallel()
+
+	// StopActiveLauncher is NOT mocked — a call to it would panic the test.
+	mp := newPlaylistTestPlatform()
+
+	pls, queue := makePlaylistEnv()
+	pls.Slot = "background"
+	pls.Playing = true
+
+	result, err := cmdPlaylistPause(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{AdvArgs: bgAdvArgs()},
+		Playlist: playlists.PlaylistController{Background: pls, Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.False(t, result.Playlist.Playing, "paused playlist must have Playing=false")
+	<-queue
+}
+
+// initTestLauncherCache seeds GlobalLauncherCache with a launcher that accepts
+// the given extensions (no folder restriction) and cleans up after the test.
+// Call from non-parallel tests only, since the cache is global.
+func initTestLauncherCache(t *testing.T, extensions []string) {
+	t.Helper()
+	helpers.GlobalLauncherCache.InitializeFromSlice([]platforms.Launcher{
+		{ID: "test-launcher", Extensions: extensions},
+	})
+	t.Cleanup(func() { helpers.GlobalLauncherCache.InitializeFromSlice(nil) })
+}
+
+func TestReadPlaylistFolder_ReturnsItems(t *testing.T) {
+	initTestLauncherCache(t, []string{".nes", ".sfc", ".md"})
+
+	dir := t.TempDir()
+	for _, name := range []string{"alpha.nes", "beta.sfc", "gamma.md"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte{}, 0o600))
+	}
+
+	mp := mocks.NewMockPlatform()
+	items, err := readPlaylistFolder(&config.Instance{}, mp, dir)
+	require.NoError(t, err)
+	require.Len(t, items, 3)
+	assert.Equal(t, "alpha", items[0].Name)
+	assert.Equal(t, filepath.Join(dir, "alpha.nes"), items[0].ZapScript)
+}
+
+func TestReadPlaylistFolder_HiddenFilesSkipped(t *testing.T) {
+	initTestLauncherCache(t, []string{".rom"})
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".hidden"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "visible.rom"), []byte{}, 0o600))
+
+	mp := mocks.NewMockPlatform()
+	items, err := readPlaylistFolder(&config.Instance{}, mp, dir)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "visible", items[0].Name)
+}
+
+func TestReadPlaylistFolder_NonPlayableFilesFiltered(t *testing.T) {
+	initTestLauncherCache(t, []string{".mp3", ".ogg", ".flac"})
+
+	dir := t.TempDir()
+	for _, name := range []string{"track1.mp3", "track2.ogg", "cover.jpg", "notes.txt"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte{}, 0o600))
+	}
+
+	mp := mocks.NewMockPlatform()
+	items, err := readPlaylistFolder(&config.Instance{}, mp, dir)
+	require.NoError(t, err)
+	require.Len(t, items, 2, "only .mp3 and .ogg should survive the launcher filter")
+	assert.Equal(t, "track1", items[0].Name)
+	assert.Equal(t, "track2", items[1].Name)
+}
+
+func TestReadPlaylistFolder_AllFilesFilteredReturnsError(t *testing.T) {
+	initTestLauncherCache(t, []string{".mp3"})
+
+	dir := t.TempDir()
+	// Only cover art — no matching audio files
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cover.jpg"), []byte{}, 0o600))
+
+	mp := mocks.NewMockPlatform()
+	_, err := readPlaylistFolder(&config.Instance{}, mp, dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no valid files found")
+}
+
+func TestReadPlaylistFolder_EmptyDir(t *testing.T) {
+	t.Parallel()
+
+	_, err := readPlaylistFolder(nil, nil, t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no valid files found")
+}
+
+func TestCommandSlot_InvalidSlotReturnsError(t *testing.T) {
+	t.Parallel()
+
+	var aa zapscript.AdvArgs
+	aa = aa.With(zapscript.KeySlot, "badvalue")
+	_, err := cmdPlaylistNext(nil, platforms.CmdEnv{
+		Cmd:      zapscript.Command{AdvArgs: aa},
+		Playlist: playlists.PlaylistController{Queue: make(chan *playlists.Playlist, 1)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "normalize media slot")
+}
+
+func TestLoadPlaylist_JSONArg(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+
+	jsonArg := `{"id":"list-1","name":"My List",` +
+		`"items":[{"name":"Track A","zapscript":"**test.a"},{"name":"Track B","zapscript":"**test.b"}]}`
+	result, err := cmdPlaylistLoad(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{jsonArg}},
+		Cfg:      &config.Instance{},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	require.NotNil(t, result.Playlist)
+	assert.Equal(t, "list-1", result.Playlist.ID)
+	assert.Equal(t, "My List", result.Playlist.Name)
+	require.Len(t, result.Playlist.Items, 2)
+	assert.Equal(t, "Track A", result.Playlist.Items[0].Name)
+	<-queue
+}
+
+// repeatAdvArgs returns AdvArgs with the repeat key set.
+func repeatAdvArgs(repeat string) zapscript.AdvArgs {
+	var aa zapscript.AdvArgs
+	return aa.With(zapscript.KeyRepeat, repeat)
+}
+
+// jsonPlaylistArg is a minimal playlist JSON arg for repeat tests.
+const jsonPlaylistArg = `{"id":"rpt","name":"Repeat Test",` +
+	`"items":[{"name":"T1","zapscript":"**t1"},{"name":"T2","zapscript":"**t2"}]}`
+
+func TestLoadPlaylist_RepeatOff_DefaultBehaviourNoLoop(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+	result, err := cmdPlaylistLoad(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{jsonPlaylistArg}},
+		Cfg:      &config.Instance{},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.False(t, result.Playlist.Loop, "absent repeat means no loop")
+	assert.False(t, result.Playlist.LoopOne)
+	<-queue
+}
+
+func TestLoadPlaylist_RepeatAll_SetsLoop(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+	result, err := cmdPlaylistLoad(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{jsonPlaylistArg}, AdvArgs: repeatAdvArgs("all")},
+		Cfg:      &config.Instance{},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.True(t, result.Playlist.Loop)
+	assert.False(t, result.Playlist.LoopOne)
+	<-queue
+}
+
+func TestLoadPlaylist_RepeatOne_SetsLoopOne(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+	result, err := cmdPlaylistLoad(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{jsonPlaylistArg}, AdvArgs: repeatAdvArgs("one")},
+		Cfg:      &config.Instance{},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.False(t, result.Playlist.Loop)
+	assert.True(t, result.Playlist.LoopOne)
+	<-queue
+}
+
+func TestLoadPlaylist_RepeatAllWithShuffle_BothApply(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+	var aa zapscript.AdvArgs
+	aa = aa.With(zapscript.KeyRepeat, "all")
+	aa = aa.With(zapscript.KeyMode, "shuffle")
+	result, err := cmdPlaylistLoad(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{jsonPlaylistArg}, AdvArgs: aa},
+		Cfg:      &config.Instance{},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.Playlist)
+	assert.True(t, result.Playlist.Loop, "repeat=all should set Loop")
+	assert.False(t, result.Playlist.LoopOne)
+	<-queue
+}
+
+func TestLoadPlaylist_InvalidRepeat_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	mp := newPlaylistTestPlatform()
+	queue := make(chan *playlists.Playlist, 1)
+	_, err := cmdPlaylistLoad(mp, platforms.CmdEnv{
+		Cmd:      zapscript.Command{Args: []string{jsonPlaylistArg}, AdvArgs: repeatAdvArgs("forever")},
+		Cfg:      &config.Instance{},
+		Playlist: playlists.PlaylistController{Queue: queue},
+	})
+	require.Error(t, err, "invalid repeat value must be rejected")
+}
+
+func TestReadPlaylistFolder_EmptyPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := readPlaylistFolder(nil, nil, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no playlist path specified")
+}
+
+func TestReadPlaylistFolder_NonexistentPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := readPlaylistFolder(nil, nil, filepath.Join("nonexistent", "path", "12345"))
+	require.Error(t, err)
 }

@@ -215,6 +215,26 @@ func TestSetSystemDefaultsReplacesAllEntries(t *testing.T) {
 	assert.Equal(t, "mupen64plus", got[1].Launcher)
 }
 
+func TestSystemDefaultsCopiesPauseOnLaunchPointers(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{}
+	pauseOnLaunch := false
+	cfg.SetSystemDefaults([]SystemsDefault{{System: "Audio", PauseOnLaunch: &pauseOnLaunch}})
+	pauseOnLaunch = true
+
+	got := cfg.SystemDefaults()
+	require.Len(t, got, 1)
+	require.NotNil(t, got[0].PauseOnLaunch)
+	assert.False(t, *got[0].PauseOnLaunch)
+
+	*got[0].PauseOnLaunch = true
+	again := cfg.SystemDefaults()
+	require.Len(t, again, 1)
+	require.NotNil(t, again[0].PauseOnLaunch)
+	assert.False(t, *again[0].PauseOnLaunch)
+}
+
 func TestSetSystemDefaultsClearsList(t *testing.T) {
 	t.Parallel()
 

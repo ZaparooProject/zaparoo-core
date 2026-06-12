@@ -966,6 +966,7 @@ func handleWSMessage(
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
+	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
 	encGateway *apimiddleware.EncryptionGateway,
@@ -1068,20 +1069,21 @@ func handleWSMessage(
 		}
 
 		env := requests.RequestEnv{
-			Context:       st.GetContext(),
-			Platform:      platform,
-			Config:        cfg,
-			State:         st,
-			Database:      db,
-			LimitsManager: limitsManager,
-			LauncherCache: helpers.GlobalLauncherCache,
-			Player:        player,
-			TokenQueue:    inTokenQueue,
-			ConfirmQueue:  confirmQueue,
-			IndexPauser:   indexPauser,
-			ScrapePauser:  scrapePauser,
-			IsLocal:       isLocal,
-			ClientID:      session.Request.RemoteAddr,
+			Context:         st.GetContext(),
+			Platform:        platform,
+			Config:          cfg,
+			State:           st,
+			Database:        db,
+			LimitsManager:   limitsManager,
+			LauncherCache:   helpers.GlobalLauncherCache,
+			Player:          player,
+			PlaybackManager: playbackManager,
+			TokenQueue:      inTokenQueue,
+			ConfirmQueue:    confirmQueue,
+			IndexPauser:     indexPauser,
+			ScrapePauser:    scrapePauser,
+			IsLocal:         isLocal,
+			ClientID:        session.Request.RemoteAddr,
 		}
 
 		if err := enqueueWSRequest(dispatcher, methodMap, &env, plaintext, cs, tracker); err != nil {
@@ -1274,6 +1276,7 @@ func handlePostRequest(
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
 	player audio.Player,
+	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
 	tracker RequestTracker,
@@ -1321,20 +1324,21 @@ func handlePostRequest(
 		defer reqCancel()
 
 		env := requests.RequestEnv{
-			Context:       reqCtx,
-			Platform:      platform,
-			Config:        cfg,
-			State:         st,
-			Database:      db,
-			LimitsManager: limitsManager,
-			LauncherCache: helpers.GlobalLauncherCache,
-			Player:        player,
-			TokenQueue:    inTokenQueue,
-			ConfirmQueue:  confirmQueue,
-			IndexPauser:   indexPauser,
-			ScrapePauser:  scrapePauser,
-			IsLocal:       apimiddleware.IsLoopbackAddr(r.RemoteAddr),
-			ClientID:      r.RemoteAddr,
+			Context:         reqCtx,
+			Platform:        platform,
+			Config:          cfg,
+			State:           st,
+			Database:        db,
+			LimitsManager:   limitsManager,
+			LauncherCache:   helpers.GlobalLauncherCache,
+			Player:          player,
+			PlaybackManager: playbackManager,
+			TokenQueue:      inTokenQueue,
+			ConfirmQueue:    confirmQueue,
+			IndexPauser:     indexPauser,
+			ScrapePauser:    scrapePauser,
+			IsLocal:         apimiddleware.IsLoopbackAddr(r.RemoteAddr),
+			ClientID:        r.RemoteAddr,
 		}
 
 		result := processRequestObject(methodMap, env, body)
@@ -1398,13 +1402,14 @@ func Start(
 	notifBroker *broker.Broker,
 	mdnsHostname string,
 	player audio.Player,
+	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
 	tracker RequestTracker,
 ) error {
 	return StartWithReady(
 		platform, cfg, st, inTokenQueue, confirmQueue, db, limitsManager,
-		notifBroker, mdnsHostname, player, indexPauser, scrapePauser, tracker, nil,
+		notifBroker, mdnsHostname, player, playbackManager, indexPauser, scrapePauser, tracker, nil,
 	)
 }
 
@@ -1422,6 +1427,7 @@ func StartWithReady(
 	notifBroker *broker.Broker,
 	mdnsHostname string,
 	player audio.Player,
+	playbackManager audio.PlaybackManager,
 	indexPauser *syncutil.Pauser,
 	scrapePauser *syncutil.Pauser,
 	tracker RequestTracker,
@@ -1688,7 +1694,7 @@ func StartWithReady(
 		postHandler := handlePostRequest(
 			methodMap, platform, cfg, st,
 			inTokenQueue, confirmQueue,
-			db, limitsManager, player,
+			db, limitsManager, player, playbackManager,
 			indexPauser, scrapePauser, tracker,
 		)
 		r.Post("/api", postHandler)
@@ -1731,7 +1737,7 @@ func StartWithReady(
 		rateLimiter,
 		handleWSMessage(
 			methodMap, platform, cfg, st, inTokenQueue, confirmQueue,
-			db, limitsManager, player, indexPauser, scrapePauser, encGateway,
+			db, limitsManager, player, playbackManager, indexPauser, scrapePauser, encGateway,
 			lastSeenTracker, tracker,
 		),
 	))

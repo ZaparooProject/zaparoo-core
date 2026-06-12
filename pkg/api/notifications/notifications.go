@@ -85,6 +85,7 @@ func MediaStopped(ns chan<- models.Notification, payload *models.MediaStoppedPar
 	sendNotification(ns, models.NotificationStopped, payload)
 }
 
+//nolint:gocritic // notification payload is copied before async send
 func MediaStarted(ns chan<- models.Notification, payload models.MediaStartedParams) {
 	sendNotification(ns, models.NotificationStarted, payload)
 }

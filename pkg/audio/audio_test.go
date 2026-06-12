@@ -78,6 +78,44 @@ func validWAVHeader() []byte {
 	return wav
 }
 
+func TestDetectAudioFormat(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		expect string
+		data   []byte
+	}{
+		{name: "wav riff", data: []byte("RIFF...."), expect: "wav"},
+		{name: "ogg", data: []byte("OggS...."), expect: "ogg"},
+		{name: "flac", data: []byte("fLaC...."), expect: "flac"},
+		{name: "mp3 id3", data: []byte("ID3....."), expect: "mp3"},
+		{name: "mp3 sync header", data: []byte{0xFF, 0xE0}, expect: "mp3"},
+		{name: "mp3 sync header variant", data: []byte{0xFF, 0xFF}, expect: "mp3"},
+		{name: "unknown", data: []byte("????...."), expect: ""},
+		{name: "empty", data: []byte{}, expect: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expect, detectAudioFormat(tt.data))
+		})
+	}
+}
+
+func TestDecodeBytesByMagic_UnknownFormat(t *testing.T) {
+	t.Parallel()
+	_, err := decodeBytesByMagic([]byte("????not audio"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported audio format")
+}
+
+func TestDecodeBytesByExt_UnsupportedExtension(t *testing.T) {
+	t.Parallel()
+	_, err := decodeBytesByExt([]byte("data"), ".aac")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported audio format")
+}
+
 func TestPlayWAV(t *testing.T) {
 	t.Parallel()
 
@@ -431,4 +469,45 @@ func TestPCMCache_ConcurrentAccess(t *testing.T) {
 	_, ok := p.pcmCache[wavPath]
 	p.pcmCacheMu.RUnlock()
 	assert.True(t, ok, "concurrent loads should populate cache exactly once")
+}
+
+func TestOneshotSource_MixAddAddsWithVolumeAndDrains(t *testing.T) {
+	t.Parallel()
+
+	s := &oneshotSource{
+		samples: [][2]float64{{1, -1}, {0.5, 0.25}},
+		volume:  0.5,
+	}
+	buf := [][2]float64{{0.25, 0.25}, {}, {9, 9}}
+
+	n, drained := s.mixAdd(buf, 1)
+	require.Equal(t, 1, n)
+	assert.False(t, drained)
+	assert.InDelta(t, 0.75, buf[0][0], 1e-9)
+	assert.InDelta(t, -0.25, buf[0][1], 1e-9)
+
+	n, drained = s.mixAdd(buf[1:], 2)
+	require.Equal(t, 1, n)
+	assert.True(t, drained)
+	assert.InDelta(t, 0.25, buf[1][0], 1e-9)
+	assert.InDelta(t, 0.125, buf[1][1], 1e-9)
+	assert.Equal(t, [2]float64{9, 9}, buf[2], "mixAdd must not write beyond available samples")
+}
+
+func TestOneshotSource_CancelAndDrainCallback(t *testing.T) {
+	t.Parallel()
+
+	s := &oneshotSource{samples: [][2]float64{{1, 1}}, volume: 1}
+	s.cancel()
+	n, drained := s.mixAdd(make([][2]float64, 1), 1)
+	assert.Equal(t, 0, n)
+	assert.True(t, drained)
+
+	// No callback: no panic.
+	s.onDrained()
+
+	called := false
+	s.onDrain = func() { called = true }
+	s.onDrained()
+	assert.True(t, called)
 }

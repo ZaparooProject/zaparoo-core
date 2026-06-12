@@ -154,6 +154,13 @@ type MediaStartedParams struct {
 	SystemName string `json:"systemName" validate:"required"`
 	MediaPath  string `json:"mediaPath" validate:"required"`
 	MediaName  string `json:"mediaName" validate:"required"`
+	Slot       string `json:"slot,omitempty"`
+}
+
+// ActiveMediaQueryParams holds the optional filter parameters for the media.active method.
+// Slot selects which slot to read; defaults to primary when empty.
+type ActiveMediaQueryParams struct {
+	Slot string `json:"slot,omitempty"`
 }
 
 type UpdateActiveMediaParams struct {
@@ -168,6 +175,7 @@ type MediaStoppedParams struct {
 	MediaName  string `json:"mediaName"`
 	MediaPath  string `json:"mediaPath"`
 	LauncherID string `json:"launcherId"`
+	Slot       string `json:"slot,omitempty"`
 	Elapsed    int    `json:"elapsed"`
 }
 
@@ -221,6 +229,7 @@ type MediaLookupParams struct {
 type MediaControlParams struct {
 	Args   map[string]string `json:"args,omitempty"`
 	Action string            `json:"action" validate:"required,min=1"`
+	Slot   string            `json:"slot,omitempty"`
 }
 
 type DeleteInboxParams struct {

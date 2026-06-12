@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -67,10 +68,13 @@ type State struct {
 	readers               map[string]readers.Reader
 	Notifications         chan<- models.Notification
 	activeMedia           *models.ActiveMedia
+	backgroundMedia       *models.ActiveMedia
 	activePlaylist        *playlists.Playlist
+	backgroundPlaylist    *playlists.Playlist
 	activeMediaReadyCh    chan struct{}
 	inbox                 *inbox.Service
 	onMediaStartHook      func(*models.ActiveMedia, uint64)
+	onMediaStopHook       func()
 	launcherManager       *LauncherManager
 	bootUUID              string
 	lastScanned           tokens.Token
@@ -81,6 +85,7 @@ type State struct {
 	stopService           bool
 	restartRequested      bool
 	runZapScript          bool
+	backgroundAutoPaused  bool
 }
 
 func NewState(platform platforms.Platform, bootUUID string) (state *State, notificationCh <-chan models.Notification) {
@@ -188,6 +193,24 @@ func (s *State) SetOnMediaStartHook(hook func(*models.ActiveMedia, uint64)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onMediaStartHook = hook
+}
+
+func (s *State) SetOnMediaStopHook(hook func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onMediaStopHook = hook
+}
+
+func (s *State) BackgroundAutoPaused() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backgroundAutoPaused
+}
+
+func (s *State) SetBackgroundAutoPaused(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.backgroundAutoPaused = v
 }
 
 // GetReader returns the Reader for a given ReaderID.
@@ -352,6 +375,18 @@ func (s *State) SetActivePlaylist(playlist *playlists.Playlist) {
 	s.mu.Unlock()
 }
 
+func (s *State) GetBackgroundPlaylist() *playlists.Playlist {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backgroundPlaylist
+}
+
+func (s *State) SetBackgroundPlaylist(playlist *playlists.Playlist) {
+	s.mu.Lock()
+	s.backgroundPlaylist = playlist
+	s.mu.Unlock()
+}
+
 var (
 	ErrNoActiveMedia      = errors.New("no active media")
 	ErrActiveMediaChanged = errors.New("active media changed")
@@ -361,6 +396,12 @@ func (s *State) ActiveMedia() *models.ActiveMedia {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.activeMedia
+}
+
+func (s *State) BackgroundMedia() *models.ActiveMedia {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backgroundMedia
 }
 
 func (s *State) ActiveMediaReady() bool {
@@ -433,8 +474,9 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		return
 	}
 
-	// Capture hook reference inside lock
+	// Capture hook references inside lock
 	hook := s.onMediaStartHook
+	stopHook := s.onMediaStopHook
 
 	if media == nil {
 		// media has stopped
@@ -450,12 +492,20 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		}
 
 		// Send notifications outside lock to prevent deadlock
-		stoppedParams := buildMediaStoppedParams(oldMedia)
+		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Primary)
 		notifications.MediaStopped(s.Notifications, &stoppedParams)
 		s.notifyDisplayReaders(media)
+		// Run the hook synchronously (outside the lock) so callers observe its
+		// effects before their next step — the launch path stops native audio and
+		// then decides whether to pause background music, which must happen after
+		// any auto-resume the hook performs.
+		if stopHook != nil {
+			stopHook()
+		}
 		return
 	}
 
+	media.Slot = mediaslot.Primary
 	if oldMedia == nil {
 		// media has started
 		s.activeMedia = media
@@ -471,6 +521,7 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 			SystemName: media.SystemName,
 			MediaName:  media.Name,
 			MediaPath:  media.Path,
+			Slot:       mediaslot.Primary,
 		})
 		s.notifyDisplayReaders(media)
 
@@ -496,13 +547,14 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		}
 
 		// Send notifications outside lock to prevent deadlock
-		changedStoppedParams := buildMediaStoppedParams(oldMedia)
+		changedStoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Primary)
 		notifications.MediaStopped(s.Notifications, &changedStoppedParams)
 		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
 			SystemID:   media.SystemID,
 			SystemName: media.SystemName,
 			MediaName:  media.Name,
 			MediaPath:  media.Path,
+			Slot:       mediaslot.Primary,
 		})
 		s.notifyDisplayReaders(media)
 
@@ -517,7 +569,55 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 	s.mu.Unlock()
 }
 
-func buildMediaStoppedParams(media *models.ActiveMedia) models.MediaStoppedParams {
+func (s *State) SetBackgroundMedia(media *models.ActiveMedia) {
+	s.mu.Lock()
+	oldMedia := s.backgroundMedia
+	if oldMedia == nil && media == nil {
+		s.mu.Unlock()
+		return
+	}
+
+	if media == nil {
+		s.backgroundMedia = nil
+		s.mu.Unlock()
+		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Background)
+		notifications.MediaStopped(s.Notifications, &stoppedParams)
+		return
+	}
+
+	media.Slot = mediaslot.Background
+	if oldMedia == nil {
+		s.backgroundMedia = media
+		s.mu.Unlock()
+		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
+			SystemID:   media.SystemID,
+			SystemName: media.SystemName,
+			MediaName:  media.Name,
+			MediaPath:  media.Path,
+			Slot:       mediaslot.Background,
+		})
+		return
+	}
+
+	if !oldMedia.Equal(media) {
+		s.backgroundMedia = media
+		s.mu.Unlock()
+		stoppedParams := buildMediaStoppedParams(oldMedia, mediaslot.Background)
+		notifications.MediaStopped(s.Notifications, &stoppedParams)
+		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
+			SystemID:   media.SystemID,
+			SystemName: media.SystemName,
+			MediaName:  media.Name,
+			MediaPath:  media.Path,
+			Slot:       mediaslot.Background,
+		})
+		return
+	}
+
+	s.mu.Unlock()
+}
+
+func buildMediaStoppedParams(media *models.ActiveMedia, slot string) models.MediaStoppedParams {
 	elapsed := max(0, int(time.Since(media.Started).Seconds()))
 	return models.MediaStoppedParams{
 		SystemID:   media.SystemID,
@@ -525,6 +625,7 @@ func buildMediaStoppedParams(media *models.ActiveMedia) models.MediaStoppedParam
 		MediaName:  media.Name,
 		MediaPath:  media.Path,
 		LauncherID: media.LauncherID,
+		Slot:       slot,
 		Elapsed:    elapsed,
 	}
 }

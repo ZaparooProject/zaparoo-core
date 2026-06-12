@@ -47,6 +47,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/rs/zerolog/log"
 )
 
@@ -835,22 +836,51 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		}})
 		ref := mediaPathRef{SystemID: system.ID, Path: activeMedia.Path}
 
-		activeResp := models.ActiveMediaResponse{
-			ActiveMedia: models.ActiveMedia{
-				MediaID:          mediaIDs[ref],
-				RelPath:          mediaResponseRelativePath(&env, system.ID, activeMedia.Path),
-				Started:          activeMedia.Started,
-				LauncherID:       activeMedia.LauncherID,
-				SystemID:         system.ID,
-				SystemName:       system.Name,
-				Name:             activeMedia.Name,
-				Path:             activeMedia.Path,
-				LauncherControls: activeMedia.LauncherControls,
-			},
-			ZapScript: zapScript,
+		primaryEntry := models.ActiveMedia{
+			MediaID:          mediaIDs[ref],
+			RelPath:          mediaResponseRelativePath(&env, system.ID, activeMedia.Path),
+			Started:          activeMedia.Started,
+			LauncherID:       activeMedia.LauncherID,
+			SystemID:         system.ID,
+			SystemName:       system.Name,
+			Name:             activeMedia.Name,
+			Path:             activeMedia.Path,
+			Slot:             mediaslot.Primary,
+			LauncherControls: activeMedia.LauncherControls,
 		}
+		enrichPlaybackPosition(&env, &primaryEntry, mediaslot.Primary)
+		resp.Active = append(resp.Active, models.ActiveMediaResponse{
+			ActiveMedia: primaryEntry,
+			ZapScript:   zapScript,
+		})
+	}
 
-		resp.Active = append(resp.Active, activeResp)
+	backgroundMedia := env.State.BackgroundMedia()
+	if backgroundMedia != nil && backgroundMedia.Path != "" {
+		bgEntry := models.ActiveMedia{
+			RelPath:          backgroundMedia.RelPath,
+			Started:          backgroundMedia.Started,
+			LauncherID:       backgroundMedia.LauncherID,
+			SystemID:         backgroundMedia.SystemID,
+			SystemName:       backgroundMedia.SystemName,
+			Name:             backgroundMedia.Name,
+			Path:             backgroundMedia.Path,
+			Slot:             mediaslot.Background,
+			LauncherControls: backgroundMedia.LauncherControls,
+		}
+		enrichPlaybackPosition(&env, &bgEntry, mediaslot.Background)
+		resp.Active = append(resp.Active, models.ActiveMediaResponse{
+			ActiveMedia: bgEntry,
+			ZapScript:   database.BuildTitleZapScript(backgroundMedia.SystemID, backgroundMedia.Name, nil),
+		})
+	}
+
+	// Populate active playlist state for both slots.
+	if activePL := env.State.GetActivePlaylist(); activePL != nil {
+		resp.Playlists = append(resp.Playlists, toPlaylistState(activePL))
+	}
+	if bgPL := env.State.GetBackgroundPlaylist(); bgPL != nil {
+		resp.Playlists = append(resp.Playlists, toPlaylistState(bgPL))
 	}
 
 	status := statusInstance.get()
@@ -956,14 +986,36 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received active media request")
 
-	media := env.State.ActiveMedia()
+	// Optional slot param — defaults to primary when absent.
+	slot := mediaslot.Primary
+	if len(env.Params) > 0 {
+		var params models.ActiveMediaQueryParams
+		if err := json.Unmarshal(env.Params, &params); err != nil {
+			return nil, models.ClientErrf("invalid params: %w", err)
+		}
+		if params.Slot != "" {
+			var normalizeErr error
+			slot, normalizeErr = mediaslot.Normalize(params.Slot)
+			if normalizeErr != nil {
+				return nil, models.ClientErrf("invalid slot: %w", normalizeErr)
+			}
+		}
+	}
+
+	var media *models.ActiveMedia
+	if slot == mediaslot.Background {
+		media = env.State.BackgroundMedia()
+	} else {
+		media = env.State.ActiveMedia()
+	}
 	if media == nil {
 		return nil, nil //nolint:nilnil // nil response means no active media
 	}
 
-	// Build zapScript with disambiguating tags from MediaDB
+	// Build zapScript with disambiguating tags from MediaDB (primary slot only — background
+	// audio has no media DB entry to look up).
 	var zapScriptTags []database.TagInfo
-	if env.Database.MediaDB != nil {
+	if slot != mediaslot.Background && env.Database.MediaDB != nil {
 		tags, tagsErr := env.Database.MediaDB.GetZapScriptTagsBySystemAndPath(
 			env.Context, media.SystemID, media.Path,
 		)
@@ -974,28 +1026,35 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 	zapScript := database.BuildTitleZapScript(media.SystemID, media.Name, zapScriptTags)
-	mediaIDs := mediaResponseMediaIDs(&env, []mediaPathRef{{
-		SystemID: media.SystemID,
-		Path:     media.Path,
-	}})
-	ref := mediaPathRef{SystemID: media.SystemID, Path: media.Path}
 
-	resp := models.ActiveMediaResponse{
-		ActiveMedia: models.ActiveMedia{
-			MediaID:          mediaIDs[ref],
-			RelPath:          mediaResponseRelativePath(&env, media.SystemID, media.Path),
-			Started:          media.Started,
-			LauncherID:       media.LauncherID,
-			SystemID:         media.SystemID,
-			SystemName:       media.SystemName,
-			Name:             media.Name,
-			Path:             media.Path,
-			LauncherControls: media.LauncherControls,
-		},
-		ZapScript: zapScript,
+	entry := models.ActiveMedia{
+		RelPath:          mediaResponseRelativePath(&env, media.SystemID, media.Path),
+		Started:          media.Started,
+		LauncherID:       media.LauncherID,
+		SystemID:         media.SystemID,
+		SystemName:       media.SystemName,
+		Name:             media.Name,
+		Path:             media.Path,
+		Slot:             slot,
+		LauncherControls: media.LauncherControls,
 	}
 
-	return resp, nil
+	// Populate MediaID only for the primary slot (background audio has no DB entry).
+	if slot != mediaslot.Background {
+		mediaIDs := mediaResponseMediaIDs(&env, []mediaPathRef{{
+			SystemID: media.SystemID,
+			Path:     media.Path,
+		}})
+		ref := mediaPathRef{SystemID: media.SystemID, Path: media.Path}
+		entry.MediaID = mediaIDs[ref]
+	}
+
+	enrichPlaybackPosition(&env, &entry, slot)
+
+	return models.ActiveMediaResponse{
+		ActiveMedia: entry,
+		ZapScript:   zapScript,
+	}, nil
 }
 
 //nolint:gocritic,revive // single-use parameter in API handler

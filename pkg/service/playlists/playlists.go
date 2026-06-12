@@ -19,6 +19,8 @@
 
 package playlists
 
+import "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
+
 type PlaylistItem struct {
 	ZapScript string
 	Name      string
@@ -27,48 +29,66 @@ type PlaylistItem struct {
 type Playlist struct {
 	ID      string
 	Name    string
+	Slot    string
 	Items   []PlaylistItem
 	Index   int
 	Playing bool
+	Clear   bool // signals the queue handler to remove the active playlist for this slot
+	// Loop and LoopOne control end-of-playlist behaviour set at load time.
+	// Loop wraps back to the start; LoopOne repeats the current track.
+	Loop    bool
+	LoopOne bool
+	// ForceRelaunch bypasses the playlistNeedsUpdate dedup so the same track can be
+	// relaunched (needed for LoopOne and single-item Loop).
+	ForceRelaunch bool
 }
 
 func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
 	return &Playlist{
 		ID:      id,
 		Name:    name,
+		Slot:    mediaslot.Primary,
 		Items:   item,
 		Index:   0,
 		Playing: false,
 	}
 }
 
-func Next(p Playlist) *Playlist {
+func Next(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	idx := p.Index + 1
 	if idx >= len(p.Items) {
 		idx = 0
 	}
 	return &Playlist{
 		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
 		Items:   p.Items,
 		Index:   idx,
 		Playing: p.Playing,
+		Loop:    p.Loop,
+		LoopOne: p.LoopOne,
 	}
 }
 
-func Previous(p Playlist) *Playlist {
+func Previous(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	idx := p.Index - 1
 	if idx < 0 {
 		idx = len(p.Items) - 1
 	}
 	return &Playlist{
 		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
 		Items:   p.Items,
 		Index:   idx,
 		Playing: p.Playing,
+		Loop:    p.Loop,
+		LoopOne: p.LoopOne,
 	}
 }
 
-func Goto(p Playlist, idx int) *Playlist {
+func Goto(p Playlist, idx int) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	// Handle empty playlist case
 	switch {
 	case len(p.Items) == 0:
@@ -78,30 +98,41 @@ func Goto(p Playlist, idx int) *Playlist {
 	case idx < 0:
 		idx = 0
 	}
-	p.Index = idx
 	return &Playlist{
 		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
 		Items:   p.Items,
 		Index:   idx,
 		Playing: p.Playing,
+		Loop:    p.Loop,
+		LoopOne: p.LoopOne,
 	}
 }
 
-func Play(p Playlist) *Playlist {
+func Play(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	return &Playlist{
 		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
 		Items:   p.Items,
 		Index:   p.Index,
 		Playing: true,
+		Loop:    p.Loop,
+		LoopOne: p.LoopOne,
 	}
 }
 
-func Pause(p Playlist) *Playlist {
+func Pause(p Playlist) *Playlist { //nolint:gocritic // value copy preserves immutable-style playlist updates
 	return &Playlist{
 		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
 		Items:   p.Items,
 		Index:   p.Index,
 		Playing: false,
+		Loop:    p.Loop,
+		LoopOne: p.LoopOne,
 	}
 }
 
@@ -122,6 +153,8 @@ func (p *Playlist) Current() PlaylistItem {
 }
 
 type PlaylistController struct {
-	Active *Playlist
-	Queue  chan<- *Playlist
+	Active     *Playlist
+	Background *Playlist
+	Current    *Playlist
+	Queue      chan<- *Playlist
 }

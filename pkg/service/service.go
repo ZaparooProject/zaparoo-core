@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
@@ -87,6 +88,97 @@ func rebuildStartupSlugSearchCache(mediaDB database.MediaDBI, slugCacheLoaded bo
 	}
 }
 
+type drainCallbackRegistrar interface {
+	SetDrainCallback(slot string, fn func(natural bool))
+}
+
+func wireNativeAudioDrainCallbacks(pm drainCallbackRegistrar, svc *ServiceContext) {
+	pm.SetDrainCallback(mediaslot.Primary, func(natural bool) {
+		if !natural {
+			return
+		}
+		// Another launcher may have taken over active media while the track was
+		// still playing (e.g. a game started outside Zaparoo); only clear it if
+		// native audio still owns it.
+		media := svc.State.ActiveMedia()
+		if media == nil || media.LauncherID != platforms.NativeAudioLauncherID {
+			return
+		}
+		svc.State.SetActiveMedia(nil)
+	})
+	pm.SetDrainCallback(mediaslot.Background, func(natural bool) {
+		if !natural {
+			return
+		}
+		advanceBackgroundPlaylist(svc)
+	})
+}
+
+// advanceBackgroundPlaylist is called when a background track ends naturally.
+// It advances to the next track according to the playlist's repeat mode, or clears
+// the background state when the playlist has finished and repeat is off.
+func advanceBackgroundPlaylist(svc *ServiceContext) {
+	pls := svc.State.GetBackgroundPlaylist()
+	if pls == nil {
+		// Single-track background (not a playlist) — just clear media state.
+		svc.State.SetBackgroundMedia(nil)
+		return
+	}
+
+	var next *playlists.Playlist
+	switch {
+	case pls.LoopOne:
+		// Repeat the same track. ForceRelaunch bypasses the playlistNeedsUpdate dedup.
+		next = &playlists.Playlist{
+			ID:            pls.ID,
+			Name:          pls.Name,
+			Slot:          pls.Slot,
+			Items:         pls.Items,
+			Index:         pls.Index,
+			Playing:       true,
+			Loop:          pls.Loop,
+			LoopOne:       pls.LoopOne,
+			ForceRelaunch: true,
+		}
+	case pls.Index+1 < len(pls.Items):
+		// More tracks remain — advance normally.
+		next = playlists.Next(*pls)
+		next.Playing = true
+	case pls.Loop:
+		// Last track finished and repeat=all — wrap back to the start.
+		next = playlists.Next(*pls) // Next already wraps to 0
+		next.Playing = true
+		if len(pls.Items) <= 1 {
+			// Single-item loop: same index after wrap, need ForceRelaunch.
+			next.ForceRelaunch = true
+		}
+	default:
+		// repeat=off, end of playlist — clear state and stop.
+		svc.State.SetBackgroundPlaylist(nil)
+		svc.State.SetBackgroundMedia(nil)
+		return
+	}
+
+	select {
+	case svc.PlaylistQueue <- next:
+	case <-svc.State.GetContext().Done():
+	}
+}
+
+// resumeBackgroundAfterMediaStop resumes auto-paused background music when primary
+// media stops. Runs synchronously from the media-stop hook so that launch-path code
+// running after a SetActiveMedia(nil) observes the resumed state.
+func resumeBackgroundAfterMediaStop(svc *ServiceContext) {
+	if svc.PlaybackManager == nil || !svc.State.BackgroundAutoPaused() {
+		return
+	}
+	if resumeErr := svc.PlaybackManager.Resume(mediaslot.Background); resumeErr != nil {
+		log.Warn().Err(resumeErr).Msg("failed to resume background audio after game stop")
+		return
+	}
+	svc.State.SetBackgroundAutoPaused(false)
+}
+
 func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -99,6 +191,7 @@ func Start(
 
 	player := audio.NewMalgoPlayer()
 	player.SetVolume(float64(cfg.AudioVolume()) / 100.0)
+	playbackManager := audio.NewLongformPlaybackManager()
 
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
@@ -160,11 +253,13 @@ func Start(
 		Config:              cfg,
 		State:               st,
 		DB:                  db,
+		PlaybackManager:     playbackManager,
 		LaunchSoftwareQueue: lsq,
 		PlaylistQueue:       plq,
 		ConfirmQueue:        cfq,
 		BackgroundWG:        backgroundWG,
 	}
+	wireNativeAudioDrainCallbacks(playbackManager, svc)
 
 	// Set up media readiness and the OnMediaStart hook.
 	st.SetOnMediaStartHook(func(media *models.ActiveMedia, gen uint64) {
@@ -174,6 +269,11 @@ func Start(
 				log.Error().Err(hookErr).Msg("error running on_media_start script")
 			}
 		}
+	})
+
+	// Resume background music when a game quits, but only if we auto-paused it.
+	st.SetOnMediaStopHook(func() {
+		resumeBackgroundAfterMediaStop(svc)
 	})
 
 	log.Info().Msg("loading mapping files")
@@ -194,7 +294,10 @@ func Start(
 
 	log.Info().Msg("initializing launcher cache")
 	launcherCacheStarted := time.Now()
-	helpers.GlobalLauncherCache.Initialize(pl, cfg)
+	helpers.GlobalLauncherCache.Initialize(
+		pl, cfg,
+		platforms.NativeAudioLauncher(playbackManager, st.SetBackgroundMedia),
+	)
 	log.Debug().Dur("duration", time.Since(launcherCacheStarted)).Msg("launcher cache initialized")
 
 	// Create pausers to pause heavy background media work while a game is running.
@@ -213,7 +316,7 @@ func Start(
 	go func() {
 		apiDone <- api.StartWithReady(
 			pl, cfg, st, itq, cfq, db, limitsManager,
-			notifBroker, discoveryService.InstanceName(), player, indexPauser, scrapePauser,
+			notifBroker, discoveryService.InstanceName(), player, playbackManager, indexPauser, scrapePauser,
 			idleSched, apiReady,
 		)
 	}()
@@ -383,6 +486,13 @@ func Start(
 		log.Info().Msg("service context cancelled, running cleanup")
 		indexPauser.Resume()
 		scrapePauser.Resume()
+
+		if stopErr := playbackManager.Stop(mediaslot.Primary); stopErr != nil {
+			log.Warn().Err(stopErr).Msg("error stopping primary playback during cleanup")
+		}
+		if stopErr := playbackManager.Stop(mediaslot.Background); stopErr != nil {
+			log.Warn().Err(stopErr).Msg("error stopping background playback during cleanup")
+		}
 
 		discoveryService.Stop()
 		cancelPublisherFanOut()

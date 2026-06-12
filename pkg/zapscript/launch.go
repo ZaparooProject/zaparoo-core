@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/afero"
@@ -406,7 +407,7 @@ func findLauncher(pl platforms.Platform, cfg *platforms.CmdEnv, launcherID strin
 			return &launchers[i]
 		}
 	}
-	return nil
+	return helpers.GlobalLauncherCache.GetLauncherByID(launcherID)
 }
 
 func getLaunchClosure(
@@ -418,13 +419,22 @@ func getLaunchClosure(
 		action := env.Cmd.AdvArgs.Get(zapscript.KeyAction)
 		setName := env.Cmd.AdvArgs.Get(zapscript.KeySetName)
 		setNameSameDir := env.Cmd.AdvArgs.Get(zapscript.KeySetNameSameDir)
+		slot := env.Cmd.AdvArgs.Get(zapscript.KeySlot)
+		if slot == "" && env.Playlist.Active != nil && env.Playlist.Active.Slot != "" {
+			slot = env.Playlist.Active.Slot
+		}
+		normalizedSlot, err := mediaslot.Normalize(slot)
+		if err != nil {
+			return fmt.Errorf("normalize media slot: %w", err)
+		}
 
 		var opts *platforms.LaunchOptions
-		if action != "" || setName != "" || setNameSameDir != "" {
+		if action != "" || setName != "" || setNameSameDir != "" || normalizedSlot != mediaslot.Primary {
 			opts = &platforms.LaunchOptions{
 				Action:         action,
 				SetName:        setName,
 				SetNameSameDir: setNameSameDir,
+				Slot:           normalizedSlot,
 			}
 		}
 

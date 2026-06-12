@@ -32,6 +32,7 @@ import (
 	"sync"
 
 	"github.com/ZaparooProject/go-zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -400,6 +401,7 @@ func RunCommand(
 	db *database.Database,
 	lm *state.LauncherManager,
 	waitForMediaReady func(context.Context) error,
+	playbackManager audio.PlaybackManager,
 	exprEnv *zapscript.ArgExprEnv,
 ) (platforms.CmdResult, error) {
 	unsafe := token.Unsafe
@@ -465,6 +467,7 @@ func RunCommand(
 		Cfg:               cfg,
 		ServiceCtx:        serviceCtx,
 		WaitForMediaReady: waitForMediaReady,
+		PlaybackManager:   playbackManager,
 		Playlist:          plsc,
 		Source:            token.Source,
 		TotalCommands:     totalCmds,

@@ -654,6 +654,89 @@ func TestDoLaunch_NativeLaunchPath(t *testing.T) {
 	}
 }
 
+func TestDoLaunch_InvalidSlotReturnsError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	launcher := &platforms.Launcher{
+		ID:        platforms.NativeAudioLauncherID,
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return &os.Process{Pid: os.Getpid()}, nil
+		},
+	}
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) {},
+		Launcher:       launcher,
+		Path:           filepath.Join(string(os.PathSeparator), "song.mp3"),
+		Options:        &platforms.LaunchOptions{Slot: "invalid-slot-value"},
+	}
+
+	err := platforms.DoLaunch(params, func(s string) string { return s })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "normalize slot")
+}
+
+func TestDoLaunch_BackgroundSlotWrongLauncherReturnsError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Maybe()
+
+	launcher := &platforms.Launcher{
+		ID:        "some-other-launcher",
+		SystemID:  "NES",
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return &os.Process{Pid: os.Getpid()}, nil
+		},
+	}
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) {},
+		Launcher:       launcher,
+		Path:           filepath.Join(string(os.PathSeparator), "game.nes"),
+		Options:        &platforms.LaunchOptions{Slot: "background"},
+	}
+
+	err := platforms.DoLaunch(params, func(s string) string { return s })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), platforms.NativeAudioLauncherID)
+}
+
+func TestDoLaunch_BackgroundSlotReturnsEarlyWithoutSettingActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+
+	launched := false
+	launcher := &platforms.Launcher{
+		ID:        platforms.NativeAudioLauncherID,
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			launched = true
+			return &os.Process{Pid: os.Getpid()}, nil
+		},
+	}
+	var activeMedia *models.ActiveMedia
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(m *models.ActiveMedia) { activeMedia = m },
+		Launcher:       launcher,
+		Path:           filepath.Join(string(os.PathSeparator), "song.mp3"),
+		Options:        &platforms.LaunchOptions{Slot: "background"},
+	}
+
+	err := platforms.DoLaunch(params, func(s string) string { return s })
+	require.NoError(t, err)
+	assert.True(t, launched, "launcher must be called")
+	assert.Nil(t, activeMedia, "background slot must not set active media")
+}
+
 func TestKeyboardControls_EmptyActions(t *testing.T) {
 	t.Parallel()
 	pl := mocks.NewMockPlatform()

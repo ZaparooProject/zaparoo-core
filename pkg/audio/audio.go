@@ -24,19 +24,14 @@ package audio
 
 import (
 	"bytes"
-	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
-	"github.com/gen2brain/malgo"
 	"github.com/gopxl/beep/v2"
 	"github.com/gopxl/beep/v2/flac"
 	"github.com/gopxl/beep/v2/mp3"
@@ -60,18 +55,19 @@ type Player interface {
 	SetVolume(volume float64)
 }
 
-// MalgoPlayer plays audio via malgo. Decoded and resampled PCM samples are
-// cached per file path so repeated playback (e.g. scan feedback sounds) does
-// not re-decode or re-resample, and the realtime audio callback only needs
-// to copy already-prepared samples to the output buffer.
+// MalgoPlayer plays short audio via the shared malgo output device. Decoded and
+// resampled PCM samples are cached per file path so repeated playback (e.g. scan
+// feedback sounds) does not re-decode or re-resample; the realtime audio callback
+// only sums already-prepared samples into the mix buffer.
+//
+// A new Play call cancels the previous one-shot; only one scan sound plays at a time.
 type MalgoPlayer struct {
-	currentCancel context.CancelFunc
-	currentDone   <-chan struct{} // closed when current playback goroutine finishes
-	pcmCache      map[string][][2]float64
-	volume        float64 // 0.0-2.0, protected by playbackMu
-	playbackGen   uint64
-	pcmCacheMu    syncutil.RWMutex
-	playbackMu    syncutil.Mutex
+	currentSrc  *oneshotSource
+	pcmCache    map[string][][2]float64
+	volume      float64
+	playbackGen uint64
+	pcmCacheMu  syncutil.RWMutex
+	playbackMu  syncutil.Mutex
 }
 
 // NewMalgoPlayer creates a new MalgoPlayer instance.
@@ -82,15 +78,15 @@ func NewMalgoPlayer() *MalgoPlayer {
 	}
 }
 
-// SetVolume sets the playback volume (0.0-2.0). Applies to subsequent playback calls.
+// SetVolume sets the playback volume (0.0–2.0). Applies to subsequent playback calls.
 func (p *MalgoPlayer) SetVolume(volume float64) {
 	p.playbackMu.Lock()
 	defer p.playbackMu.Unlock()
 	p.volume = volume
 }
 
-// playWAV decodes a WAV stream to PCM and plays it asynchronously. The reader
-// is closed before this function returns.
+// playWAV decodes a WAV stream to PCM and plays it through the shared device.
+// The reader is closed before this function returns.
 func (p *MalgoPlayer) playWAV(r io.ReadCloser) error {
 	samples, err := decodeWAV(r)
 	if err != nil {
@@ -99,8 +95,8 @@ func (p *MalgoPlayer) playWAV(r io.ReadCloser) error {
 	return p.playPCM(samples)
 }
 
-// PlayBytes plays audio from a byte slice asynchronously, detecting format
-// from magic bytes. Supports WAV, OGG (Vorbis), MP3, and FLAC.
+// PlayBytes plays audio from a byte slice asynchronously, detecting format from
+// magic bytes. Supports WAV, OGG (Vorbis), MP3, and FLAC.
 func (p *MalgoPlayer) PlayBytes(data []byte) error {
 	samples, err := decodeBytesByMagic(data)
 	if err != nil {
@@ -155,6 +151,92 @@ func (p *MalgoPlayer) loadPCMFromFile(path string) ([][2]float64, error) {
 	p.pcmCacheMu.Unlock()
 
 	return samples, nil
+}
+
+// playPCM registers a one-shot source for the given pre-decoded samples on the
+// shared output device. Any previously playing sound is cancelled.
+func (p *MalgoPlayer) playPCM(samples [][2]float64) error {
+	p.playbackMu.Lock()
+	vol := p.volume
+	oldSrc := p.currentSrc
+	p.playbackGen++
+	src := &oneshotSource{
+		samples: samples,
+		volume:  vol,
+	}
+	// Self-clearing: remove reference when this source finishes naturally.
+	src.onDrain = func() {
+		p.playbackMu.Lock()
+		if p.currentSrc == src {
+			p.currentSrc = nil
+		}
+		p.playbackMu.Unlock()
+	}
+	p.currentSrc = src
+	p.playbackMu.Unlock()
+
+	// Cancel the previous source. It will drain immediately on the next callback
+	// and be removed by the manager, keeping the device open for the new source.
+	if oldSrc != nil {
+		oldSrc.cancel()
+	}
+
+	globalDevice.register(src)
+	return nil
+}
+
+// oneshotSource is a pre-decoded PCM buffer that plays once through the shared device.
+// It implements mixSource; the callback sums it into the mix buffer until exhausted.
+type oneshotSource struct {
+	onDrain func()
+	samples [][2]float64
+	pos     int
+	volume  float64
+	mu      syncutil.Mutex
+	stopped bool
+}
+
+// mixAdd sums up to n frames from the buffer into buf. Returns drained when exhausted.
+// Called on the malgo audio thread under devMu — must not block or alloc.
+func (s *oneshotSource) mixAdd(buf [][2]float64, n int) (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return 0, true
+	}
+	written := 0
+	for written < n && s.pos < len(s.samples) {
+		buf[written][0] += s.samples[s.pos][0] * s.volume
+		buf[written][1] += s.samples[s.pos][1] * s.volume
+		s.pos++
+		written++
+	}
+	return written, s.pos >= len(s.samples)
+}
+
+// isActive always returns true: one-shot sources are active until drained or cancelled.
+func (*oneshotSource) isActive() bool {
+	return true
+}
+
+// cancel marks the source as stopped so it drains immediately on the next callback.
+func (s *oneshotSource) cancel() {
+	s.mu.Lock()
+	s.stopped = true
+	s.mu.Unlock()
+}
+
+// onDrained implements the optional drainCallback interface used by the device manager.
+func (s *oneshotSource) onDrained() {
+	if s.onDrain != nil {
+		s.onDrain()
+	}
+}
+
+// fail cancels playback and fires the drain callback, used when the device fails to open.
+func (s *oneshotSource) fail() {
+	s.cancel()
+	s.onDrained()
 }
 
 // decodeWAV decodes a WAV reader fully into PCM samples and closes the reader.
@@ -286,183 +368,4 @@ func detectAudioFormat(data []byte) string {
 		return "mp3"
 	}
 	return ""
-}
-
-// playPCM plays an already-decoded buffer of stereo samples (at
-// targetSampleRate) asynchronously, cancelling any in-flight playback first.
-func (p *MalgoPlayer) playPCM(samples [][2]float64) error {
-	p.playbackMu.Lock()
-	if p.currentCancel != nil {
-		p.currentCancel()
-	}
-	prevDone := p.currentDone
-	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: stored in p.currentCancel
-	p.currentCancel = cancel
-	done := make(chan struct{})
-	p.currentDone = done
-	p.playbackGen++
-	thisGen := p.playbackGen
-	vol := p.volume
-	p.playbackMu.Unlock()
-
-	// Wait for the previous playback goroutine to fully release the audio
-	// device before initializing a new one. Concurrent ALSA device access
-	// from overlapping init/uninit calls crashes miniaudio on MiSTer.
-	if prevDone != nil {
-		select {
-		case <-prevDone:
-		case <-time.After(3 * time.Second):
-			log.Warn().Msg("timeout waiting for previous audio playback cleanup")
-		}
-	}
-
-	go func() {
-		// Outermost: recover from any panic so audio issues never kill the service.
-		defer func() {
-			if rec := recover(); rec != nil {
-				log.Error().Any("panic", rec).Msg("recovered panic in audio playback")
-			}
-		}()
-
-		// Signal that this goroutine has finished and the device is released.
-		defer close(done)
-
-		defer func() {
-			p.playbackMu.Lock()
-			if p.playbackGen == thisGen {
-				p.currentCancel = nil
-			}
-			p.playbackMu.Unlock()
-		}()
-
-		if err := playPCMWithMalgo(ctx, samples, vol); err != nil {
-			if !errors.Is(err, context.Canceled) {
-				log.Warn().Err(err).Msg("failed to play audio")
-			}
-			return
-		}
-
-		log.Debug().Msg("completed audio playback")
-	}()
-
-	return nil
-}
-
-// playPCMWithMalgo plays a pre-decoded sample buffer through malgo, blocking
-// until complete or ctx is cancelled. The realtime callback only copies
-// already-resampled samples to the output buffer with volume scaling — no
-// decoding, no resampling, no allocation on the audio thread.
-//
-// The device is opened, played, and closed for each sound. Holding it open
-// would block other audio sources on the system (FPGA cores on MiSTer, system
-// audio elsewhere), which is unacceptable.
-func playPCMWithMalgo(ctx context.Context, samples [][2]float64, volume float64) error {
-	malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
-	if err != nil {
-		return fmt.Errorf("failed to initialize malgo context: %w", err)
-	}
-	if malgoCtx == nil {
-		return errors.New("malgo context is nil after initialization")
-	}
-	defer func() {
-		_ = malgoCtx.Uninit()
-		malgoCtx.Free()
-	}()
-
-	// F32 format avoids buggy S16->S32 conversion in miniaudio on PulseAudio.
-	deviceConfig := malgo.DefaultDeviceConfig(malgo.Playback)
-	deviceConfig.Playback.Format = malgo.FormatF32
-	deviceConfig.Playback.Channels = 2
-	deviceConfig.SampleRate = targetSampleRate
-	// MiSTer has shown high CPU and core stutter when miniaudio uses ALSA mmap
-	// while other audio clients (for example mpg123 BGM) are active.
-	deviceConfig.Alsa.NoMMap = 1
-	// Larger period gives the audio thread headroom on CPU-constrained devices
-	// (e.g. MiSTer Cortex-A9 sharing CPU with a running core), where
-	// miniaudio's small default period underruns and produces audible crackle.
-	deviceConfig.PeriodSizeInMilliseconds = periodSizeInMilliseconds
-	deviceConfig.Periods = periodCount
-
-	done := make(chan struct{})
-
-	var (
-		mu       syncutil.Mutex
-		finished bool
-		pos      int
-	)
-
-	onSamples := func(pOutputSample, _ []byte, frameCount uint32) {
-		mu.Lock()
-		defer mu.Unlock()
-
-		if finished {
-			return
-		}
-
-		select {
-		case <-ctx.Done():
-			finished = true
-			close(done)
-			return
-		default:
-		}
-
-		offset := 0
-		written := 0
-		for written < int(frameCount) && pos < len(samples) {
-			l := float32(samples[pos][0] * volume)
-			r := float32(samples[pos][1] * volume)
-			binary.LittleEndian.PutUint32(pOutputSample[offset:], math.Float32bits(l))
-			offset += 4
-			binary.LittleEndian.PutUint32(pOutputSample[offset:], math.Float32bits(r))
-			offset += 4
-			pos++
-			written++
-		}
-
-		// Zero any frames in the output buffer we didn't fill.
-		for i := offset; i < len(pOutputSample); i++ {
-			pOutputSample[i] = 0
-		}
-
-		// If this period drained the buffer (and so has zeros at the tail),
-		// finish playback. The hardware ring buffer still drains the real
-		// samples we just wrote before device.Stop() takes effect.
-		if pos >= len(samples) && written < int(frameCount) {
-			finished = true
-			close(done)
-		}
-	}
-
-	device, err := malgo.InitDevice(malgoCtx.Context, deviceConfig, malgo.DeviceCallbacks{
-		Data: onSamples,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to initialize audio device: %w", err)
-	}
-	defer device.Uninit()
-
-	if err := device.Start(); err != nil {
-		return fmt.Errorf("failed to start audio device: %w", err)
-	}
-
-	select {
-	case <-done:
-	case <-ctx.Done():
-		mu.Lock()
-		if !finished {
-			finished = true
-		}
-		mu.Unlock()
-	}
-
-	if err := device.Stop(); err != nil {
-		log.Warn().Err(err).Msg("failed to stop audio device")
-	}
-
-	if errors.Is(ctx.Err(), context.Canceled) {
-		return context.Canceled
-	}
-
-	return nil
 }

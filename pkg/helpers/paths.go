@@ -244,14 +244,31 @@ type LauncherMatcher struct {
 // NewLauncherMatcher creates a matcher with pre-normalized root dirs and folder paths.
 // Call once before a file walk and reuse for all files to avoid redundant normalization.
 func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMatcher {
-	rawRoots := pl.RootDirs(cfg)
+	allLaunchers := GlobalLauncherCache.GetAllLaunchers()
+	needsRoots := false
+	needsDataDir := false
+	for i := range allLaunchers {
+		if allLaunchers[i].SystemID != "" {
+			needsDataDir = true
+		}
+		for _, f := range allLaunchers[i].Folders {
+			if !filepath.IsAbs(f) {
+				needsRoots = true
+				break
+			}
+		}
+	}
+
+	var rawRoots []string
+	if needsRoots && pl != nil {
+		rawRoots = pl.RootDirs(cfg)
+	}
 	normRoots := make([]string, len(rawRoots))
 	for i, r := range rawRoots {
 		normRoots[i] = NormalizePathForComparison(r)
 	}
 
 	folderCache := make(map[string]string)
-	allLaunchers := GlobalLauncherCache.GetAllLaunchers()
 	for i := range allLaunchers {
 		for _, f := range allLaunchers[i].Folders {
 			if _, ok := folderCache[f]; !ok {
@@ -260,15 +277,21 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 		}
 	}
 
-	normDataDir := NormalizePathForComparison(DataDir(pl))
-	normMediaPrefix := NormalizePathForComparison(filepath.Join(normDataDir, config.MediaDir))
+	normDataDir := ""
+	if needsDataDir && pl != nil {
+		normDataDir = NormalizePathForComparison(DataDir(pl))
+	}
+	normMediaPrefix := ""
+	if normDataDir != "" {
+		normMediaPrefix = NormalizePathForComparison(filepath.Join(normDataDir, config.MediaDir))
+	}
 
 	precomp := make(map[string]*launcherPrecomp, len(allLaunchers))
 	for i := range allLaunchers {
 		l := &allLaunchers[i]
 		lp := &launcherPrecomp{}
 
-		if l.SystemID != "" {
+		if l.SystemID != "" && normMediaPrefix != "" {
 			lp.normMediaPath = NormalizePathForComparison(filepath.Join(normMediaPrefix, strings.ToLower(l.SystemID)))
 		}
 
@@ -352,7 +375,7 @@ func (m *LauncherMatcher) pathIsLauncher(
 		if pathHasPrefixNormalized(normPath, lc.normMediaPath) {
 			inDataDir = true
 		}
-	} else if l.SystemID != "" {
+	} else if l.SystemID != "" && m.normDataDir != "" {
 		normZaparooMedia := NormalizePathForComparison(
 			filepath.Join(m.normDataDir, config.MediaDir, strings.ToLower(l.SystemID)),
 		)
@@ -471,6 +494,55 @@ func PathToLaunchers(
 		}
 	}
 	return launchers
+}
+
+// PathToLaunchers returns all launchers matching path using precomputed matcher state.
+func (m *LauncherMatcher) PathToLaunchers(path string) []platforms.Launcher {
+	var launchers []platforms.Launcher
+	lowerPath := strings.ToLower(path)
+	normPath := NormalizePathForComparison(path)
+	allLaunchers := GlobalLauncherCache.GetAllLaunchers()
+	for i := range allLaunchers {
+		if m.pathIsLauncher(&allLaunchers[i], path, lowerPath, normPath) {
+			launchers = append(launchers, allLaunchers[i])
+		}
+	}
+	return launchers
+}
+
+// FindLauncher returns the most specific launcher for path using precomputed matcher state.
+func (m *LauncherMatcher) FindLauncher(path string) (platforms.Launcher, error) {
+	launchers := m.PathToLaunchers(path)
+	if len(launchers) == 0 {
+		log.Debug().Str("path", path).Int("launchersChecked", len(GlobalLauncherCache.GetAllLaunchers())).
+			Msg("no launcher matched path")
+		return platforms.Launcher{}, errors.New("no launcher found for: " + path)
+	}
+
+	best := 0
+	bestScore := launcherSpecificity(&launchers[0])
+	for i := 1; i < len(launchers); i++ {
+		score := launcherSpecificity(&launchers[i])
+		if score > bestScore {
+			best = i
+			bestScore = score
+		}
+	}
+
+	launcher := launchers[best]
+
+	log.Debug().
+		Str("path", path).
+		Str("launcher", launcher.ID).
+		Int("specificity", bestScore).
+		Int("candidates", len(launchers)).
+		Msg("selected launcher by specificity")
+
+	if launcher.AllowListOnly && !m.cfg.IsLauncherFileAllowed(path) {
+		return platforms.Launcher{}, errors.New("file not allowed: " + path)
+	}
+
+	return launcher, nil
 }
 
 func ExeDir() string {

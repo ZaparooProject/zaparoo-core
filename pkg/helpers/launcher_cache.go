@@ -41,9 +41,16 @@ type LauncherCache struct {
 var GlobalLauncherCache = &LauncherCache{}
 
 // Initialize builds the launcher cache from platform launchers.
-// This should be called once at startup after custom launchers are loaded.
-func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance) {
-	lc.InitializeFromSlice(pl.Launchers(cfg))
+// Optional extra launchers (e.g. the native-audio launcher) are appended after
+// deduplication. This should be called once at startup after custom launchers are loaded.
+func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance, extra ...platforms.Launcher) {
+	all := pl.Launchers(cfg)
+	for i := range extra {
+		if !launcherInSlice(all, extra[i].ID) {
+			all = append(all, extra[i])
+		}
+	}
+	lc.rebuildFromSlice(all)
 
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
@@ -55,6 +62,15 @@ func (lc *LauncherCache) Initialize(pl platforms.Platform, cfg *config.Instance)
 
 	log.Info().Int("totalLaunchers", len(lc.allLaunchers)).Int("systemIDs", len(lc.bySystemID)).
 		Msg("launcher cache initialized")
+}
+
+func launcherInSlice(launchers []platforms.Launcher, id string) bool {
+	for i := range launchers {
+		if launchers[i].ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // GetLaunchersBySystem returns all launchers for a specific system ID.
@@ -79,9 +95,12 @@ func (lc *LauncherCache) GetAllLaunchers() []platforms.Launcher {
 // InitializeFromSlice builds the launcher cache from a pre-built slice of launchers.
 // This is useful for testing or when launchers are already available.
 func (lc *LauncherCache) InitializeFromSlice(launchers []platforms.Launcher) {
+	lc.rebuildFromSlice(launchers)
+}
+
+func (lc *LauncherCache) rebuildFromSlice(launchers []platforms.Launcher) {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
-
 	lc.allLaunchers = make([]platforms.Launcher, len(launchers))
 	copy(lc.allLaunchers, launchers)
 

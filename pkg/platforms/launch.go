@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mediaslot"
 	"github.com/rs/zerolog/log"
 )
 
@@ -123,12 +124,20 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		params.Options.Action = action
 	}
 
+	slot, slotErr := mediaslot.Normalize(params.Options.Slot)
+	if slotErr != nil {
+		return fmt.Errorf("normalize slot: %w", slotErr)
+	}
+	if slot == mediaslot.Background && params.Launcher.ID != NativeAudioLauncherID {
+		return fmt.Errorf("background slot only supports %s launcher", NativeAudioLauncherID)
+	}
+
 	// Stop any currently running launcher before starting new one
 	// This ensures tracked processes (like videos) are stopped even when
 	// FireAndForget launches (like MGL files) start. UNLESS the new launcher
 	// uses a running instance (e.g., Kodi), in which case the platform's
 	// shouldKeepRunningInstance logic will handle stopping if needed.
-	if params.Launcher.UsesRunningInstance == "" {
+	if slot == mediaslot.Primary && params.Launcher.UsesRunningInstance == "" {
 		if stopErr := params.Platform.StopActiveLauncher(StopForPreemption); stopErr != nil {
 			log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
 		}
@@ -181,6 +190,10 @@ func DoLaunch(params *LaunchParams, getDisplayName func(string) string) error {
 		if err != nil {
 			return fmt.Errorf("failed to launch: %w", err)
 		}
+	}
+
+	if slot == mediaslot.Background {
+		return nil
 	}
 
 	// "details" action just shows info page, doesn't launch a game

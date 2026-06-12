@@ -23,8 +23,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/rs/zerolog/log"
 )
 
@@ -62,6 +65,53 @@ func optionalDBEnrichmentContext(parent context.Context) (context.Context, conte
 		parent = context.Background()
 	}
 	return context.WithTimeout(parent, optionalDBEnrichmentTimeout)
+}
+
+// enrichPlaybackPosition fills PositionMs and DurationMs on an ActiveMedia entry
+// when the entry belongs to the native-audio launcher and a PlaybackManager is available.
+// slot is the normalized slot string ("primary" or "background").
+func enrichPlaybackPosition(env *requests.RequestEnv, entry *models.ActiveMedia, slot string) {
+	if env.PlaybackManager == nil {
+		return
+	}
+	if entry.LauncherID != platforms.NativeAudioLauncherID {
+		return
+	}
+	state := env.PlaybackManager.State(slot)
+	posMs := state.Position.Milliseconds()
+	durMs := state.Duration.Milliseconds()
+	entry.PositionMs = &posMs
+	entry.DurationMs = &durMs
+}
+
+// toPlaylistState converts the internal Playlist representation to the API model.
+func toPlaylistState(p *playlists.Playlist) models.PlaylistState {
+	items := make([]models.PlaylistItemInfo, 0, len(p.Items))
+	for _, item := range p.Items {
+		items = append(items, models.PlaylistItemInfo{
+			Name:      item.Name,
+			ZapScript: item.ZapScript,
+		})
+	}
+
+	repeat := "none"
+	switch {
+	case p.LoopOne:
+		repeat = "one"
+	case p.Loop:
+		repeat = "all"
+	}
+
+	return models.PlaylistState{
+		ID:      p.ID,
+		Name:    p.Name,
+		Slot:    p.Slot,
+		Items:   items,
+		Index:   p.Index,
+		Total:   len(p.Items),
+		Playing: p.Playing,
+		Repeat:  repeat,
+	}
 }
 
 func mediaIDsByPath(ctx context.Context, db database.MediaDBI, refs []mediaPathRef) map[mediaPathRef]int64 {
