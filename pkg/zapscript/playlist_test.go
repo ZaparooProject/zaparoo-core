@@ -339,8 +339,8 @@ func bgAdvArgs() zapscript.AdvArgs {
 }
 
 type playlistPlaybackStub struct {
-	state      audio.PlaybackState
 	seekSlot   string
+	state      audio.PlaybackState
 	seekOffset time.Duration
 	seekCalled bool
 }

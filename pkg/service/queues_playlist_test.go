@@ -88,11 +88,11 @@ func makeServicePlaylist() *playlists.Playlist {
 }
 
 type servicePlaybackRecorder struct {
+	states  map[string]audio.PlaybackState
 	played  []string
 	stopped []string
 	paused  []string
 	resumed []string
-	states  map[string]audio.PlaybackState
 }
 
 func (r *servicePlaybackRecorder) Play(slot, _ string, _ audio.PlaybackOptions) error {

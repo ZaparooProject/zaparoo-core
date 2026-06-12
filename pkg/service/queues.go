@@ -50,16 +50,16 @@ type playlistLogEntry struct {
 	ID            string                   `json:"id"`
 	Name          string                   `json:"name"`
 	Slot          string                   `json:"slot"`
+	Items         []playlists.PlaylistItem `json:"items"`
+	Total         int                      `json:"total"`
+	Showing       int                      `json:"showing"`
+	Truncated     int                      `json:"truncated,omitempty"`
 	Index         int                      `json:"index"`
-	Playing       bool                     `json:"playing"`
 	Clear         bool                     `json:"clear,omitempty"`
 	Loop          bool                     `json:"loop,omitempty"`
 	LoopOne       bool                     `json:"loopOne,omitempty"`
 	ForceRelaunch bool                     `json:"forceRelaunch,omitempty"`
-	Total         int                      `json:"total"`
-	Showing       int                      `json:"showing"`
-	Truncated     int                      `json:"truncated,omitempty"`
-	Items         []playlists.PlaylistItem `json:"items"`
+	Playing       bool                     `json:"playing"`
 }
 
 func playlistForLog(pls *playlists.Playlist) any {
