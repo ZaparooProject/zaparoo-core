@@ -2391,6 +2391,19 @@ func (m *MockMediaDBI) FindMediaBySystemAndPaths(
 	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
 }
 
+func (m *MockMediaDBI) FindMediaIDsByPaths(
+	ctx context.Context, paths []string,
+) ([]database.MediaPathID, error) {
+	if !m.hasExpectedCall("FindMediaIDsByPaths") {
+		return nil, nil
+	}
+	args := m.Called(ctx, paths)
+	if result, ok := args.Get(0).([]database.MediaPathID); ok {
+		return result, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+	}
+	return nil, args.Error(1) //nolint:wrapcheck // mock passes testify errors through unwrapped by design
+}
+
 func (m *MockMediaDBI) FindSingleContainerLaunchMedia(
 	ctx context.Context, systemDBID int64, containerPath string,
 ) (*database.Media, error) {

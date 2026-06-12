@@ -106,9 +106,8 @@ func TestHandleMediaHistoryTop_WithMediaIDAndRelativePath(t *testing.T) {
 			LastPlayedAt:  now,
 		},
 	}, nil)
-	mockMediaDB.On("FindSystemBySystemID", "SNES").Return(database.System{DBID: 10}, nil)
-	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(10), []string{mediaPath}).
-		Return(map[string]database.Media{mediaPath: {DBID: 42}}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+		Return([]database.MediaPathID{{SystemID: "SNES", Path: mediaPath, DBID: 42}}, nil)
 
 	env := requests.RequestEnv{
 		Context:       context.Background(),

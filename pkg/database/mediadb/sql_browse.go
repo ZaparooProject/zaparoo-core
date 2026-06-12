@@ -83,6 +83,72 @@ func clearUtilityTagCacheFor(db sqlQueryable) {
 	}
 }
 
+// prefixPolicyCache memoises detected browse prefix policies per DB handle and
+// directory. Detection reads every Media.Path in the directory, which costs
+// 40-70ms per browse on SD-card hardware; the policy only changes when media
+// is reindexed, so it is cached until invalidateCaches clears it. Keyed by the
+// db handle itself for the same reason as utilityTagCacheMap.
+var (
+	prefixPolicyCacheMu  syncutil.RWMutex
+	prefixPolicyCacheMap map[sqlQueryable]map[string]browseprefix.Policy
+)
+
+func clearPrefixPolicyCache() {
+	prefixPolicyCacheMu.Lock()
+	defer prefixPolicyCacheMu.Unlock()
+	prefixPolicyCacheMap = nil
+}
+
+func clearPrefixPolicyCacheFor(db sqlQueryable) {
+	if db == nil {
+		return
+	}
+
+	prefixPolicyCacheMu.Lock()
+	defer prefixPolicyCacheMu.Unlock()
+	if prefixPolicyCacheMap == nil {
+		return
+	}
+	delete(prefixPolicyCacheMap, db)
+	if len(prefixPolicyCacheMap) == 0 {
+		prefixPolicyCacheMap = nil
+	}
+}
+
+func prefixPolicyCacheKey(pathPrefix string, systems []systemdefs.System) string {
+	if len(systems) == 0 {
+		return pathPrefix
+	}
+	ids := make([]string, len(systems))
+	for i, sys := range systems {
+		ids[i] = sys.ID
+	}
+	sort.Strings(ids)
+	return pathPrefix + "\x00" + strings.Join(ids, "\x00")
+}
+
+func cachedPrefixPolicy(db sqlQueryable, key string) (browseprefix.Policy, bool) {
+	prefixPolicyCacheMu.RLock()
+	defer prefixPolicyCacheMu.RUnlock()
+	if prefixPolicyCacheMap == nil {
+		return browseprefix.Policy{}, false
+	}
+	policy, ok := prefixPolicyCacheMap[db][key]
+	return policy, ok
+}
+
+func storePrefixPolicy(db sqlQueryable, key string, policy browseprefix.Policy) {
+	prefixPolicyCacheMu.Lock()
+	defer prefixPolicyCacheMu.Unlock()
+	if prefixPolicyCacheMap == nil {
+		prefixPolicyCacheMap = make(map[sqlQueryable]map[string]browseprefix.Policy)
+	}
+	if prefixPolicyCacheMap[db] == nil {
+		prefixPolicyCacheMap[db] = make(map[string]browseprefix.Policy)
+	}
+	prefixPolicyCacheMap[db][key] = policy
+}
+
 // resolveUtilityTagDBIDs returns a map from DB tag DBID → TagInfo for each
 // entry in tags.UtilityTags. Results are memoised per db handle so each
 // MediaDB instance (or test mock) has its own cache slot, and
@@ -498,10 +564,16 @@ func resolveBrowseSortMode(ctx context.Context, db sqlQueryable, opts *database.
 		return opts.Sort
 	}
 
-	policy, err := detectBrowsePrefixPolicy(ctx, db, opts.PathPrefix, opts.Systems)
-	if err != nil {
-		log.Debug().Err(err).Str("path", opts.PathPrefix).Msg("browse prefix policy detection failed")
-		return opts.Sort
+	cacheKey := prefixPolicyCacheKey(opts.PathPrefix, opts.Systems)
+	policy, cached := cachedPrefixPolicy(db, cacheKey)
+	if !cached {
+		var err error
+		policy, err = detectBrowsePrefixPolicy(ctx, db, opts.PathPrefix, opts.Systems)
+		if err != nil {
+			log.Debug().Err(err).Str("path", opts.PathPrefix).Msg("browse prefix policy detection failed")
+			return opts.Sort
+		}
+		storePrefixPolicy(db, cacheKey, policy)
 	}
 	if !policy.Enabled {
 		return opts.Sort
@@ -574,7 +646,9 @@ func sqlBrowseFilesFromMedia(
 	opts *database.BrowseFilesOptions,
 ) ([]database.SearchResultWithCursor, error) {
 	where, args := browseFilesBaseCondition(opts)
+	sortModeStarted := time.Now()
 	sortMode := resolveBrowseSortMode(ctx, db, opts)
+	sortModeElapsed := time.Since(sortModeStarted)
 	sortExpr := browseSortExpr(sortMode)
 	query := `SELECT s.SystemID, m.SortName, m.Path, m.DBID, m.MediaTitleDBID, ` + sortExpr + ` AS SortValue
 		FROM Media m
@@ -625,13 +699,16 @@ func sqlBrowseFilesFromMedia(
 	}
 	tagsElapsed := time.Since(tagsStarted)
 
+	coverFlagsStarted := time.Now()
 	if err := fetchAndAttachCoverFlags(ctx, db, results); err != nil {
 		return nil, fmt.Errorf("browse files cover flags: %w", err)
 	}
+	coverFlagsElapsed := time.Since(coverFlagsStarted)
 
 	// Disambiguate sibling variants: same SystemID+Name within the page get
 	// ZapScriptTags populated so the tag-write path can produce unambiguous
 	// ZapScript strings. Zero extra queries when there are no siblings (typical).
+	siblingsStarted := time.Now()
 	if err := fetchAndDisambiguateSiblings(ctx, db, results); err != nil {
 		return nil, fmt.Errorf("browse files sibling disambiguation: %w", err)
 	}
@@ -640,8 +717,11 @@ func sqlBrowseFilesFromMedia(
 		Str("pathPrefix", opts.PathPrefix).
 		Strs("systems", browseSystemIDsForLog(opts.Systems)).
 		Int("rows", len(results)).
+		Dur("sortModeDuration", sortModeElapsed).
 		Dur("queryDuration", queryElapsed).
 		Dur("tagsDuration", tagsElapsed).
+		Dur("coverFlagsDuration", coverFlagsElapsed).
+		Dur("siblingsDuration", time.Since(siblingsStarted)).
 		Msg("browse files step timing")
 	return results, nil
 }

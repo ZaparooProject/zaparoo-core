@@ -125,9 +125,8 @@ func TestHandleMediaHistory_WithMediaIDAndRelativePath(t *testing.T) {
 			PlayTime:   60,
 		},
 	}, nil)
-	mockMediaDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 10}, nil)
-	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(10), []string{mediaPath, missingPath}).
-		Return(map[string]database.Media{mediaPath: {DBID: 42}}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath, missingPath}).
+		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42}}, nil)
 
 	env := requests.RequestEnv{
 		Context:       context.Background(),
@@ -159,8 +158,7 @@ func TestMediaResponseMediaIDs_BoundsSlowLookup(t *testing.T) {
 
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mediaPath := filepath.Join(string(filepath.Separator), "games", "slow.nes")
-	mockMediaDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 10}, nil).Once()
-	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(10), []string{mediaPath}).
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
 		Run(func(args mock.Arguments) {
 			ctx, ok := args.Get(0).(context.Context)
 			require.True(t, ok)

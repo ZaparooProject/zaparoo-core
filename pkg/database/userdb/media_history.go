@@ -249,6 +249,7 @@ func sqlGetMediaHistory(
 
 	where := strings.Join(conditions, " AND ")
 	args = append(args, limit)
+	queryStarted := time.Now()
 
 	//nolint:gosec // where clause uses only hardcoded column names, not user input
 	query := fmt.Sprintf(`
@@ -342,6 +343,12 @@ func sqlGetMediaHistory(
 	if err = rows.Err(); err != nil {
 		return list, fmt.Errorf("error iterating media history rows: %w", err)
 	}
+
+	log.Debug().
+		Int("systems", len(systemIDs)).
+		Int("rows", len(list)).
+		Dur("queryDuration", time.Since(queryStarted)).
+		Msg("media history query timing")
 
 	return list, nil
 }
@@ -570,6 +577,7 @@ func sqlGetMediaHistoryTop(
 	args = append(args, limit)
 
 	list := make([]database.MediaHistoryTopEntry, 0, limit)
+	queryStarted := time.Now()
 
 	q, err := db.PrepareContext(ctx, query)
 	if err != nil {
@@ -615,6 +623,12 @@ func sqlGetMediaHistoryTop(
 	if err = rows.Err(); err != nil {
 		return list, fmt.Errorf("error iterating media history top rows: %w", err)
 	}
+
+	log.Debug().
+		Int("systems", len(systemIDs)).
+		Int("rows", len(list)).
+		Dur("queryDuration", time.Since(queryStarted)).
+		Msg("media history top query timing")
 
 	return list, nil
 }

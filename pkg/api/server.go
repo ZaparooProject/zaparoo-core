@@ -911,7 +911,13 @@ func processRequestObject(
 		}
 
 		// ID is present (could be null or valid value) - this is a request that needs a response
+		started := time.Now()
 		resp, rpcError := handleRequest(methodMap, env, req)
+		log.Debug().
+			Str("method", req.Method).
+			Dur("duration", time.Since(started)).
+			Bool("error", rpcError != nil).
+			Msg("api request handled")
 		if rpcError != nil {
 			return requestResult{ID: req.ID, Error: rpcError, ShouldReply: true}
 		}

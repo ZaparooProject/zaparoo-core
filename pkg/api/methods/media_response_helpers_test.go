@@ -21,7 +21,6 @@ package methods
 
 import (
 	"context"
-	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -45,11 +44,10 @@ func TestMediaIDsByPath_DeduplicatesRefsAndSkipsInvalidRefs(t *testing.T) {
 		{SystemID: "NES", Path: ""},
 	}
 
-	mockDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 7, SystemID: "NES"}, nil)
-	mockDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(7), []string{pathOne, pathTwo}).Return(
-		map[string]database.Media{
-			pathOne: {DBID: 10, Path: pathOne},
-			pathTwo: {DBID: 11, Path: pathTwo},
+	mockDB.On("FindMediaIDsByPaths", mock.Anything, []string{pathOne, pathTwo}).Return(
+		[]database.MediaPathID{
+			{SystemID: "NES", Path: pathOne, DBID: 10},
+			{SystemID: "NES", Path: pathTwo, DBID: 11},
 		}, nil,
 	)
 
@@ -62,15 +60,25 @@ func TestMediaIDsByPath_DeduplicatesRefsAndSkipsInvalidRefs(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestMediaIDsByPath_SkipsUnresolvableSystems(t *testing.T) {
+func TestMediaIDsByPath_IgnoresRowsForUnrequestedSystems(t *testing.T) {
 	t.Parallel()
 
 	mockDB := testhelpers.NewMockMediaDBI()
-	path := filepath.Join("games", "missing.rom")
-	mockDB.On("FindSystemBySystemID", "NES").Return(database.System{}, sql.ErrNoRows)
+	path := filepath.Join("games", "shared.rom")
+
+	// The same path can exist under multiple systems; only the requested
+	// (system, path) pair should be resolved.
+	mockDB.On("FindMediaIDsByPaths", mock.Anything, []string{path}).Return(
+		[]database.MediaPathID{
+			{SystemID: "NES", Path: path, DBID: 10},
+			{SystemID: "FDS", Path: path, DBID: 22},
+		}, nil,
+	)
 
 	ids := mediaIDsByPath(context.Background(), mockDB, []mediaPathRef{{SystemID: "NES", Path: path}})
 
-	assert.Empty(t, ids)
+	assert.Equal(t, map[mediaPathRef]int64{
+		{SystemID: "NES", Path: path}: 10,
+	}, ids)
 	mockDB.AssertExpectations(t)
 }

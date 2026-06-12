@@ -120,10 +120,8 @@ func TestHandleActiveMedia_WithZapScript(t *testing.T) {
 			if tt.setupMock != nil {
 				tt.setupMock(mockMediaDB)
 			}
-			mockMediaDB.On("FindSystemBySystemID", mock.Anything).
-				Return(database.System{}, errors.New("not found")).Maybe()
-			mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, mock.Anything, mock.Anything).
-				Return(map[string]database.Media{}, nil).Maybe()
+			mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).
+				Return([]database.MediaPathID{}, nil).Maybe()
 
 			// Create state and set active media
 			appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
@@ -245,10 +243,8 @@ func TestHandleMedia_WithActiveMediaZapScript(t *testing.T) {
 			if tt.setupMock != nil {
 				tt.setupMock(mockMediaDB)
 			}
-			mockMediaDB.On("FindSystemBySystemID", mock.Anything).
-				Return(database.System{}, errors.New("not found")).Maybe()
-			mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, mock.Anything, mock.Anything).
-				Return(map[string]database.Media{}, nil).Maybe()
+			mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, mock.Anything).
+				Return([]database.MediaPathID{}, nil).Maybe()
 
 			// Standard mocks needed for HandleMedia to work
 			// GetOptimizationStatus is always called
@@ -319,9 +315,8 @@ func TestHandleActiveMedia_WithMediaIDAndRelativePath(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "NES", mediaPath).
 		Return([]database.TagInfo{}, nil)
-	mockMediaDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 10}, nil)
-	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(10), []string{mediaPath}).
-		Return(map[string]database.Media{mediaPath: {DBID: 42}}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42}}, nil)
 
 	env := requests.RequestEnv{
 		Context:       context.Background(),
@@ -367,9 +362,8 @@ func TestHandleMedia_WithActiveMediaIDAndRelativePath(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockMediaDB.On("GetZapScriptTagsBySystemAndPath", mock.Anything, "NES", mediaPath).
 		Return([]database.TagInfo{}, nil)
-	mockMediaDB.On("FindSystemBySystemID", "NES").Return(database.System{DBID: 10}, nil)
-	mockMediaDB.On("FindMediaBySystemAndPaths", mock.Anything, int64(10), []string{mediaPath}).
-		Return(map[string]database.Media{mediaPath: {DBID: 42}}, nil)
+	mockMediaDB.On("FindMediaIDsByPaths", mock.Anything, []string{mediaPath}).
+		Return([]database.MediaPathID{{SystemID: "NES", Path: mediaPath, DBID: 42}}, nil)
 	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
 	mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
 	mockMediaDB.On("GetTotalMediaCount").Return(100, nil)

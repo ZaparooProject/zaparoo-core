@@ -687,6 +687,19 @@ func sqlSearchMediaPathParts(
 	return results, nil
 }
 
+func requestedAllSystems(systems []systemdefs.System) bool {
+	requested := make(map[string]struct{}, len(systems))
+	for _, sys := range systems {
+		requested[sys.ID] = struct{}{}
+	}
+	for _, sys := range systemdefs.AllSystems() {
+		if _, ok := requested[sys.ID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func sqlSearchMediaWithFilters(
 	ctx context.Context,
 	db sqlQueryable,
@@ -704,10 +717,20 @@ func sqlSearchMediaWithFilters(
 		return nil, errors.New("no systems provided for media search")
 	}
 
+	// Tag-only browses (e.g. favorites: empty query + user:favorite) constrain
+	// Media directly via the tag subquery's rowid IN-list. When the system list
+	// covers every defined system the SystemID IN (...) clause filters nothing,
+	// but its presence makes SQLite drive the join from Systems and scan every
+	// title instead of the handful of tag matches. Omit it in that case.
+	skipSystemFilter := len(variantGroups) == 0 && !includeName && len(tags) > 0 &&
+		requestedAllSystems(systems)
+
 	// Build system ID args
 	args := make([]any, 0)
-	for _, sys := range systems {
-		args = append(args, sys.ID)
+	if !skipSystemFilter {
+		for _, sys := range systems {
+			args = append(args, sys.ID)
+		}
 	}
 
 	// Build AND-of-ORs WHERE clause for variant groups
@@ -770,6 +793,19 @@ func sqlSearchMediaWithFilters(
 		variantArgs = append(variantArgs, letterArgs...)
 	}
 
+	systemCondition := ""
+	if !skipSystemFilter {
+		systemCondition = `Systems.SystemID IN (` +
+			prepareVariadic("?", ",", len(systems)) + `) AND `
+	}
+
+	orderCondition := ""
+	if skipSystemFilter {
+		// The tag-driven plan iterates Media rowids from the IN-list; make the
+		// cursor pagination order explicit rather than relying on scan order.
+		orderCondition = ` ORDER BY Media.DBID ASC`
+	}
+
 	//nolint:gosec // Safe: WHERE clause built from sanitized components, no direct user input interpolation
 	mediaQuery := `
 		SELECT
@@ -780,14 +816,13 @@ func sqlSearchMediaWithFilters(
 		FROM Systems
 		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
-		WHERE Systems.SystemID IN (` +
-		prepareVariadic("?", ",", len(systems)) +
-		`)
-		AND Media.IsMissing = 0` +
+		WHERE ` + systemCondition +
+		`Media.IsMissing = 0` +
 		variantCondition +
 		cursorCondition +
 		tagFilterCondition +
 		letterFilterCondition +
+		orderCondition +
 		` LIMIT ?`
 
 	// Assemble final args: systems → variants → tag filters → limit
@@ -796,6 +831,7 @@ func sqlSearchMediaWithFilters(
 	mediaArgs = append(mediaArgs, tagFilterArgs...) // Add tag filter args
 	mediaArgs = append(mediaArgs, limit)
 
+	queryStarted := time.Now()
 	mediaStmt, err := db.PrepareContext(ctx, mediaQuery)
 	if err != nil {
 		return results, fmt.Errorf("failed to prepare media query: %w", err)
@@ -827,11 +863,23 @@ func sqlSearchMediaWithFilters(
 	if err = mediaRows.Err(); err != nil {
 		return results, fmt.Errorf("media rows iteration error: %w", err)
 	}
+	queryElapsed := time.Since(queryStarted)
 
 	// Fetch and attach tags for all results
+	tagsStarted := time.Now()
 	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return results, err
 	}
+
+	log.Debug().
+		Int("systems", len(systems)).
+		Int("variantGroups", len(variantGroups)).
+		Int("tagFilters", len(tags)).
+		Bool("tagDriven", skipSystemFilter).
+		Int("rows", len(results)).
+		Dur("queryDuration", queryElapsed).
+		Dur("tagsDuration", time.Since(tagsStarted)).
+		Msg("search media filters step timing")
 
 	return results, nil
 }
@@ -897,6 +945,7 @@ func sqlSearchMediaByTitleDBIDs(
 	finalArgs = append(finalArgs, extraArgs...)
 	finalArgs = append(finalArgs, limit)
 
+	queryStarted := time.Now()
 	rows, err := db.QueryContext(ctx, query, finalArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query by title DBIDs: %w", err)
@@ -914,10 +963,20 @@ func sqlSearchMediaByTitleDBIDs(
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
+	queryElapsed := time.Since(queryStarted)
 
+	tagsStarted := time.Now()
 	if err := fetchAndAttachTags(ctx, db, results); err != nil {
 		return nil, err
 	}
+
+	log.Debug().
+		Int("titleDBIDs", len(titleDBIDs)).
+		Int("tagFilters", len(tags)).
+		Int("rows", len(results)).
+		Dur("queryDuration", queryElapsed).
+		Dur("tagsDuration", time.Since(tagsStarted)).
+		Msg("search media by title DBIDs step timing")
 
 	return results, nil
 }
