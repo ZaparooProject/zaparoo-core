@@ -469,12 +469,12 @@ func GetFiles(
 			mu.Lock()
 			for i := range zipFiles {
 				abs := filepath.Join(p, zipFiles[i])
-				if matcher.MatchSystemFile(system.ID, abs) {
+				if matcher.MatchSystemFileForScan(system.ID, abs) {
 					results = append(results, abs)
 				}
 			}
 			mu.Unlock()
-		} else if matcher.MatchSystemFile(system.ID, p) {
+		} else if matcher.MatchSystemFileForScan(system.ID, p) {
 			mu.Lock()
 			results = append(results, p)
 			mu.Unlock()

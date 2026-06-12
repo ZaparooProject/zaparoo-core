@@ -260,6 +260,11 @@ type Launcher struct {
 	Schemes []string
 	// Extensions to match for files during a standard scan.
 	Extensions []string
+	// ScanExcludes are case-insensitive slash-normalized glob patterns that
+	// prevent matched files from being indexed. Patterns without a slash match
+	// the base filename; patterns with a slash can match any path suffix. They
+	// only affect media scanning; direct path launches can still match the launcher.
+	ScanExcludes []string
 	// Folders to scan for files, relative to the root folders of the platform.
 	Folders []string
 	// Lifecycle determines how the launcher process is managed.

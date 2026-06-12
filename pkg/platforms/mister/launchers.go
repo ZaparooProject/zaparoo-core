@@ -38,6 +38,15 @@ var mglIndexingSkippedLaunchers = map[string]struct{}{
 	"ScummVM":      {},
 }
 
+var misterDefaultScanExcludes = []string{
+	"boot.rom",
+	"boot.vhd",
+	"boot.zip/boot.vhd",
+	"blank.vhd",
+	"blank.zip/blank.vhd",
+	"empty_hdd.zip/boot.vhd",
+}
+
 func checkInZip(path string) string {
 	if !strings.HasSuffix(strings.ToLower(path), ".zip") {
 		return path
@@ -866,6 +875,17 @@ func enableMGLIndexing(launchers []platforms.Launcher) []platforms.Launcher {
 		launcher.Extensions = append(launcher.Extensions, ".mgl")
 	}
 
+	return launchers
+}
+
+func applyDefaultScanExcludes(launchers []platforms.Launcher) []platforms.Launcher {
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SystemID == "" || len(launcher.Folders) == 0 || launcher.SkipFilesystemScan {
+			continue
+		}
+		launcher.ScanExcludes = append(launcher.ScanExcludes, misterDefaultScanExcludes...)
+	}
 	return launchers
 }
 
@@ -2129,5 +2149,5 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		},
 	}
 
-	return enableMGLIndexing(launchers)
+	return applyDefaultScanExcludes(enableMGLIndexing(launchers))
 }

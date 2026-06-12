@@ -2279,6 +2279,58 @@ func TestGetFiles_ZipsAsDirs(t *testing.T) {
 	assert.False(t, foundFiles["readme.txt"])
 }
 
+func TestGetFiles_RespectsLauncherScanExcludes(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	rootDir := t.TempDir()
+	gamesDir := filepath.Join(rootDir, "nes")
+	require.NoError(t, os.MkdirAll(gamesDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(gamesDir, "game.rom"), []byte("game"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(gamesDir, "boot.rom"), []byte("boot"), 0o600))
+
+	zipPath := filepath.Join(gamesDir, "boot.zip")
+	zipFile, err := os.Create(zipPath) //nolint:gosec // test file in t.TempDir()
+	require.NoError(t, err)
+	w := zip.NewWriter(zipFile)
+	fw, createErr := w.Create("boot.vhd")
+	require.NoError(t, createErr)
+	_, writeErr := fw.Write([]byte("boot"))
+	require.NoError(t, writeErr)
+	require.NoError(t, w.Close())
+	require.NoError(t, zipFile.Close())
+
+	launcher := platforms.Launcher{
+		ID:           "nes-launcher",
+		SystemID:     systemdefs.SystemNES,
+		Folders:      []string{"nes"},
+		Extensions:   []string{".rom", ".vhd"},
+		ScanExcludes: []string{"boot.rom", "boot.zip/boot.vhd"},
+	}
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := mocks.NewMockPlatform()
+	platform.On("ID").Return("test-platform")
+	platform.On("Settings").Return(platforms.Settings{ZipsAsDirs: true})
+	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{rootDir})
+	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+	testLauncherCacheMutex.Lock()
+	originalCache := helpers.GlobalLauncherCache
+	testCache := &helpers.LauncherCache{}
+	testCache.Initialize(platform, cfg)
+	helpers.GlobalLauncherCache = testCache
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	files, err := GetFiles(context.Background(), cfg, platform, systemdefs.SystemNES, gamesDir)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.Join(gamesDir, "game.rom")}, files)
+}
+
 func TestNewNamesIndex_PausesAndResumes(t *testing.T) {
 	t.Parallel()
 

@@ -29,6 +29,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
@@ -453,6 +454,26 @@ func TestLLAPISuperGrafxLauncherExists(t *testing.T) {
 	require.NotNil(t, found, "LLAPISuperGrafx launcher should exist")
 	assert.Equal(t, "SuperGrafx", found.SystemID,
 		"LLAPISuperGrafx must use SystemSuperGrafx so .sgx slots are found")
+}
+
+func TestCreateLaunchersAppliesDefaultScanExcludes(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	var colecoLauncher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == systemdefs.SystemColecoVision {
+			colecoLauncher = &launchers[i]
+			break
+		}
+	}
+
+	require.NotNil(t, colecoLauncher, "ColecoVision launcher should exist")
+	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.rom")
+	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.vhd")
+	assert.Contains(t, colecoLauncher.ScanExcludes, "boot.zip/boot.vhd")
 }
 
 func TestArcadeLauncherExtensions(t *testing.T) {
