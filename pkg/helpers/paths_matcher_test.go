@@ -179,6 +179,46 @@ func TestLauncherMatcher_MatchSystemFile(t *testing.T) {
 	assert.False(t, matcher.MatchSystemFile("NES", "/roms/nes/.hidden.nes"))
 }
 
+func TestLauncherMatcher_MatchSystemFileForScanExcludes(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/roms"})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{
+		{
+			ID:           "NESLauncher",
+			SystemID:     "NES",
+			Folders:      []string{"nes"},
+			Extensions:   []string{".rom", ".vhd"},
+			ScanExcludes: []string{"boot.rom", "boot.zip/boot.vhd"},
+		},
+	})
+
+	cfg := &config.Instance{}
+
+	testLauncherCacheMutex.Lock()
+	originalCache := GlobalLauncherCache
+	testCache := &LauncherCache{}
+	testCache.Initialize(mockPlatform, cfg)
+	GlobalLauncherCache = testCache
+	defer func() {
+		GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
+
+	matcher := NewLauncherMatcher(cfg, mockPlatform)
+
+	assert.True(t, matcher.MatchSystemFile("NES", "/roms/nes/game.rom"))
+	assert.True(t, matcher.MatchSystemFileForScan("NES", "/roms/nes/game.rom"))
+
+	assert.True(t, matcher.MatchSystemFile("NES", "/roms/nes/boot.rom"))
+	assert.False(t, matcher.MatchSystemFileForScan("NES", "/roms/nes/boot.rom"))
+
+	zipBootPath := "/roms/nes/boot.zip/boot.vhd"
+	assert.True(t, matcher.MatchSystemFile("NES", zipBootPath))
+	assert.False(t, matcher.MatchSystemFileForScan("NES", zipBootPath))
+}
+
 func TestLauncherMatcher_RootSlashAndDotFolder(t *testing.T) {
 	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 	mockPlatform := mocks.NewMockPlatform()

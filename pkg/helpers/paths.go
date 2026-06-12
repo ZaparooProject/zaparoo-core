@@ -22,6 +22,7 @@ package helpers
 import (
 	"errors"
 	"os"
+	stdpath "path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -227,6 +228,7 @@ type launcherPrecomp struct {
 	rootPairs     []string // normRoot + "/" + normFolder for every root × relative-folder combination
 	absFolders    []string // normalized absolute folder paths (already normalized from folderCache)
 	extensions    []string // pre-lowercased extensions
+	scanExcludes  []string // pre-normalized scan-only exclude patterns
 }
 
 // LauncherMatcher provides optimized path matching with pre-normalized paths.
@@ -313,6 +315,9 @@ func NewLauncherMatcher(cfg *config.Instance, pl platforms.Platform) *LauncherMa
 		for _, e := range l.Extensions {
 			lp.extensions = append(lp.extensions, strings.ToLower(e))
 		}
+		for _, exclude := range l.ScanExcludes {
+			lp.scanExcludes = append(lp.scanExcludes, NormalizePathForComparison(exclude))
+		}
 
 		precomp[l.ID] = lp
 	}
@@ -346,6 +351,93 @@ func (m *LauncherMatcher) MatchSystemFile(systemID, path string) bool {
 		Int("launchersChecked", len(launchers)).
 		Msg("no launcher matched file")
 
+	return false
+}
+
+// MatchSystemFileForScan returns true if path matches a launcher for the given
+// system and is not blocked by that launcher's scan-only exclude patterns.
+func (m *LauncherMatcher) MatchSystemFileForScan(systemID, path string) bool {
+	lowerPath := strings.ToLower(path)
+	normPath := NormalizePathForComparison(path)
+
+	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
+	matchedExcluded := false
+	for i := range launchers {
+		launcher := &launchers[i]
+		if !m.pathIsLauncher(launcher, path, lowerPath, normPath) {
+			continue
+		}
+		if m.pathIsExcludedFromScan(launcher, normPath) {
+			matchedExcluded = true
+			continue
+		}
+		return true
+	}
+
+	if matchedExcluded {
+		log.Trace().
+			Str("system", systemID).
+			Str("path", path).
+			Msg("file matched launcher but was excluded from media scan")
+		return false
+	}
+
+	log.Trace().
+		Str("system", systemID).
+		Str("path", path).
+		Int("launchersChecked", len(launchers)).
+		Msg("no launcher matched file")
+
+	return false
+}
+
+func (m *LauncherMatcher) pathIsExcludedFromScan(l *platforms.Launcher, normPath string) bool {
+	var excludes []string
+	if lc := m.precomp[l.ID]; lc != nil {
+		excludes = lc.scanExcludes
+	} else {
+		for _, exclude := range l.ScanExcludes {
+			excludes = append(excludes, NormalizePathForComparison(exclude))
+		}
+	}
+
+	if len(excludes) == 0 {
+		return false
+	}
+
+	base := stdpath.Base(normPath)
+	trimmedPath := strings.TrimPrefix(normPath, "/")
+	for _, pattern := range excludes {
+		if pattern == "" || pattern == "." {
+			continue
+		}
+		if scanExcludePatternMatches(trimmedPath, base, pattern) {
+			log.Trace().
+				Str("launcher", l.ID).
+				Str("path", normPath).
+				Str("pattern", pattern).
+				Msg("file excluded from media scan")
+			return true
+		}
+	}
+	return false
+}
+
+func scanExcludePatternMatches(trimmedPath, base, pattern string) bool {
+	pattern = strings.TrimPrefix(pattern, "/")
+	if !strings.Contains(pattern, "/") {
+		matched, err := stdpath.Match(pattern, base)
+		return err == nil && matched
+	}
+
+	parts := strings.Split(trimmedPath, "/")
+	for i := range parts {
+		suffix := strings.Join(parts[i:], "/")
+		matched, err := stdpath.Match(pattern, suffix)
+		if err == nil && matched {
+			return true
+		}
+	}
 	return false
 }
 
