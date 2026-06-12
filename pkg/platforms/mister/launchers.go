@@ -870,11 +870,11 @@ func enableMGLIndexing(launchers []platforms.Launcher) []platforms.Launcher {
 }
 
 func launcherSupportsFolderMGL(launcher *platforms.Launcher) bool {
-	if launcher.SystemID == "" || len(launcher.Folders) == 0 || launcher.SkipFilesystemScan || launcher.Launch == nil {
+	if _, skipped := mglIndexingSkippedLaunchers[launcher.ID]; skipped {
 		return false
 	}
-	_, skipped := mglIndexingSkippedLaunchers[launcher.ID]
-	return !skipped
+	return launcher.SystemID != "" && len(launcher.Folders) > 0 &&
+		!launcher.SkipFilesystemScan && launcher.Launch != nil
 }
 
 func launcherHasExtension(launcher *platforms.Launcher, extension string) bool {

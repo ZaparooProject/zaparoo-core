@@ -480,6 +480,8 @@ func TestMGLIndexingAddedToFolderLaunchers(t *testing.T) {
 
 	pl := NewPlatform()
 	launchers := CreateLaunchers(pl)
+	launchers = append(launchers, createVideoLauncher(pl), createScummVMLauncher(pl))
+	launchers = enableMGLIndexing(launchers)
 
 	findLauncher := func(id string) *platforms.Launcher {
 		for i := range launchers {
@@ -505,6 +507,14 @@ func TestMGLIndexingAddedToFolderLaunchers(t *testing.T) {
 	arcadeLauncher := findLauncher("Arcade")
 	require.NotNil(t, arcadeLauncher, "Arcade launcher should exist")
 	assert.Equal(t, 1, countExtension(arcadeLauncher.Extensions, ".mgl"))
+
+	videoLauncher := findLauncher("GenericVideo")
+	require.NotNil(t, videoLauncher, "GenericVideo launcher should exist")
+	assert.NotContains(t, videoLauncher.Extensions, ".mgl")
+
+	scummVMLauncher := findLauncher("ScummVM")
+	require.NotNil(t, scummVMLauncher, "ScummVM launcher should exist")
+	assert.NotContains(t, scummVMLauncher.Extensions, ".mgl")
 }
 
 func countExtension(extensions []string, want string) int {
